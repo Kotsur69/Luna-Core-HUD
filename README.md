@@ -1,4 +1,3 @@
-  ---
   LunaCore
 
   Visual GUI Wrapper for Claude Code CLI
@@ -101,3 +100,5 @@
   - claude-code-templates (https://github.com/davila7/claude-code-templates) by davila7
   - Current state: User already has advanced CLI dashboard showing metrics (context window %,
   operation time, active MCP servers, estimated cost)
+
+  ---
