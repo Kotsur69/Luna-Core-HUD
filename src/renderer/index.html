@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LunaCore</title>
+
+  <!-- Styl terminala xterm.js (z node_modules, korzen projektu = ../../) -->
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+  <!-- Motyw LunaCore -->
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- ================= LEWY PANEL: Kontrola i Akcje ================= -->
+    <aside class="panel panel--left">
+      <div class="brand">
+        <span class="brand__glyph">☾</span>
+        <span class="brand__name">Luna<span class="brand__core">Core</span></span>
+      </div>
+
+      <div class="panel__section">
+        <h2 class="panel__title">Akcje</h2>
+        <!-- FIZYCZNY przycisk Action Injector: wysyla /compact do PTY -->
+        <button id="btn-compact" class="action-btn" title="Wyslij /compact do Claude CLI">
+          <span class="action-btn__icon">⚡</span>
+          <span class="action-btn__label">COMPACT CONTEXT</span>
+        </button>
+      </div>
+
+      <div class="panel__section">
+        <h2 class="panel__title">Profil</h2>
+        <!-- Przelacznik profili - pelna logika w Fazie 4 -->
+        <select id="profile-switcher" class="profile-select" disabled>
+          <option>Claude Cloud</option>
+          <option>LM Studio (lokalnie)</option>
+        </select>
+        <p class="hint">Przelaczanie srodowisk - Faza 4.</p>
+      </div>
+
+      <div class="panel__spacer"></div>
+      <div class="status-line">
+        <span id="pty-status-dot" class="dot dot--live"></span>
+        <span id="pty-status-text">PTY: laczenie...</span>
+      </div>
+    </aside>
+
+    <!-- ================= CENTRUM: Terminal ================= -->
+    <main class="panel panel--center">
+      <div class="terminal-bar">
+        <span class="terminal-bar__title">Claude Code CLI</span>
+        <span class="terminal-bar__hint">interaktywna sesja</span>
+      </div>
+      <!-- Kontener, w ktorym xterm.js wyrenderuje terminal -->
+      <div id="terminal" class="terminal"></div>
+    </main>
+
+    <!-- ================= PRAWY PANEL: Monitor Statusu ================= -->
+    <aside class="panel panel--right">
+      <div class="panel__section">
+        <h2 class="panel__title">Context Window</h2>
+        <!-- Pasek zapelnia sie w Fazie 3 (parser metryk). Na razie placeholder. -->
+        <div class="ctx-bar">
+          <div id="ctx-fill" class="ctx-bar__fill" style="--ctx: 0"></div>
+        </div>
+        <div class="ctx-meta">
+          <span id="ctx-percent">--%</span>
+          <span id="ctx-warn" class="ctx-warn"></span>
+        </div>
+        <p class="hint">Metryki na zywo - Faza 3.</p>
+      </div>
+
+      <div class="panel__section panel__section--grow">
+        <h2 class="panel__title">Skill Tracker</h2>
+        <!-- Kafelki podswietla parser stdout w Fazie 3 (Running tool: [nazwa]) -->
+        <ul id="skill-list" class="skill-list">
+          <li class="skill-tile" data-skill="filesystem">filesystem</li>
+          <li class="skill-tile" data-skill="graphify">graphify</li>
+          <li class="skill-tile" data-skill="context7">context7</li>
+          <li class="skill-tile" data-skill="playwright">playwright</li>
+          <li class="skill-tile" data-skill="firecrawl">firecrawl</li>
+        </ul>
+        <p class="hint">Kafelki zaswieca sie w Fazie 3.</p>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Biblioteki xterm.js (UMD -> globalne Terminal, FitAddon) -->
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <!-- Logika renderera LunaCore -->
+  <script src="renderer.js"></script>
+</body>
+</html>

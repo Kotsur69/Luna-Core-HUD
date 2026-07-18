@@ -1,0 +1,19 @@
+{
+  "name": "lunacore",
+  "version": "0.1.0",
+  "description": "LunaCore - wizualna nakladka (dashboard) na Claude Code CLI. Passive Observer + Action Injector, zero dodatkowych tokenow.",
+  "main": "src/main.js",
+  "author": "Mateusz Mazur",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.12",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

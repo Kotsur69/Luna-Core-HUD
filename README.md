@@ -1,104 +1,127 @@
-  LunaCore
+# LunaCore
 
-  Visual GUI Wrapper for Claude Code CLI
+**Visual GUI wrapper (dashboard) for the Claude Code CLI.**
 
-  Status: Planning Phase (https://img.shields.io/badge/status-planning-blue)
+LunaCore wraps the real `claude` CLI in an Electron window: a live terminal in the
+center, clickable action buttons on the left, and a status monitor on the right.
+It adds control and visibility **without spending a single extra token** — it never
+injects prompts or touches the `claude` binary.
 
-  LunaCore is a desktop application that provides a visual dashboard overlay on top of the Claude Code
-  CLI, enabling interactive control through clickable buttons and real-time visualization of active
-  skills/MCP servers.
+> Status: **Phase 1 & 2 implemented** (interactive terminal + Action Injector).
+> Phases 3–4 (metrics parser, profile switching) are scaffolded, not yet wired.
 
-  Overview
+---
 
-  LunaCore solves two main problems:
-  1. No interactive control - No way to click physical buttons instead of typing commands manually
-  2. Poor visibility - Hard to visualize which of ~300 skills are currently being used by the model
+## ⚠️ Core constraint: zero extra tokens
 
-  The application operates as a Passive Observer (monitors stdout via regex parsing) and Action
-  Injector (simulates keyboard input to stdin).
+LunaCore **must not** inject hidden system prompts, middleware, or modify the
+`claude` binary. Any "smart" context analysis by an extra agent would burn the
+user's context window. It works only as:
 
-  ---
-  ⚠️ Critical Constraint: Zero Extra Tokens
+- **Passive Observer** — listens to the CLI's `stdout` stream and extracts data via
+  regex on the Node.js backend (no round-trips to any model).
+- **Action Injector** — GUI buttons write plain text directly to the PTY `stdin`,
+  exactly as if the user typed it.
 
-  LunaCore MUST NOT inject any hidden system prompts, middleware, or modify the claude binary. Every
-  attempt at "intelligent" context analysis by an additional agent burns the user's context window.
+---
 
-  The application works exclusively as:
-  - Passive Observer: Listens to CLI stdout stream and extracts data via regex on Node.js backend
-  - Action Injector: Physical GUI buttons simulate direct text input to the PTY stdin stream
+## Architecture
 
-  ---
-  Tech Stack
+```
+┌─────────────────────┬───────────────────────────────┬─────────────────────┐
+│  LEFT PANEL         │       CENTER (Terminal)       │   RIGHT PANEL       │
+│  (Controls)         │                               │   (Status Monitor)  │
+├─────────────────────┤     xterm.js render area      ├─────────────────────┤
+│ [⚡ COMPACT CONTEXT]│  Claude CLI interactive        │  Context Window bar │
+│                     │  session (node-pty process)   │  Skill Tracker      │
+│ Profile switcher    │                               │  tiles              │
+└─────────────────────┴───────────────────────────────┴─────────────────────┘
+```
 
-  ┌───────────────────┬─────────────────────────────────────────────┐
-  │     Component     │                 Technology                  │
-  ├───────────────────┼─────────────────────────────────────────────┤
-  │ Desktop Framework │ Electron (stable, well-configured) or Tauri │
-  ├───────────────────┼─────────────────────────────────────────────┤
-  │ Terminal Core     │ node-pty + xterm.js + xterm-addon-fit       │
-  ├───────────────────┼─────────────────────────────────────────────┤
-  │ Frontend          │ HTML/CSS/JS (Vanilla, React, or Svelte)     │
-  └───────────────────┴─────────────────────────────────────────────┘
+**Data flow (Phase 1 & 2):**
 
-  Design Theme: Dark cyberpunk dashboard matching LunaCore branding
+| Direction | Path |
+|-----------|------|
+| Passive Observer | `ptyProcess.onData` → IPC `pty:data` → `xterm.write()` |
+| Action Injector (keyboard) | `xterm.onData` → IPC `pty:write` → `ptyProcess.write()` |
+| Action Injector (button) | `runCommand('/compact')` → IPC `pty:command` → writes `/compact\r` |
 
-  ---
-  Architecture
+Security: the renderer has **no** direct Node.js access. All IPC goes through a
+`contextBridge` preload (`contextIsolation: true`, `nodeIntegration: false`).
 
-  ┌─────────────────────┬───────────────────────────────┬─────────────────────┐
-  │  LEFT PANEL         │       CENTER (Terminal)       │   RIGHT PANEL       │
-  │  (Controls)         │                               │   (Status Monitor)  │
-  ├─────────────────────┤     xterm.js Render Area        ├─────────────────────┤
-  │ [⚡ COMPACT CONTEXT]│  ┌─────────────────────────┐  │  Skill Tracker:     │
-  │                     │  │ Claude CLI interaction  │  │  - Active skills  │
-  │ Profile Switcher    │  │ (PTY process)           │  │  - MCP servers    │
-  └─────────────────────┘  └─────────────────────────┘  └─────────────────────┘
+---
 
-  Panel Descriptions
+## Tech stack
 
-  1. Left Panel (Controls)
-    - ⚡ COMPACT CONTEXT button - sends /compact\n to PTY
-    - Profile/Environment switcher (Claude Cloud vs LM Studio)
-  2. Center (Terminal)
-    - Rendered xterm.js window for normal Claude CLI conversation
-  3. Right Panel (Status Monitor)
-    - Skill Tracker: Tiles showing key skills/MCP servers; lights up green when regex detects Running
-  tool: [name]
-    - Context Window Indicator: Progress bar with color coding:
-        - Green < 60%
-      - Yellow 60-85%
-      - Red > 85% (with "Compact this shit!" warning)
+| Component | Technology |
+|-----------|------------|
+| Desktop framework | Electron |
+| Terminal core | [`@lydell/node-pty`](https://www.npmjs.com/package/@lydell/node-pty) + [`@xterm/xterm`](https://www.npmjs.com/package/@xterm/xterm) + `@xterm/addon-fit` |
+| Frontend | Vanilla HTML / CSS / JS (dark cyberpunk theme) |
 
-  ---
-  Project Phases
+> **Why `@lydell/node-pty` instead of `node-pty`?** It ships prebuilt N-API
+> binaries, so it installs **without** node-gyp / Visual Studio Build Tools — one
+> binary works across Node and Electron versions. The original `node-pty` requires
+> a working C++ toolchain and fails to detect very new Visual Studio releases.
 
-  ┌─────────┬──────────────────────────────────────────────────────────────────────────────────────┐
-  │  Phase  │                                        Focus                                         │
-  ├─────────┼──────────────────────────────────────────────────────────────────────────────────────┤
-  │ Phase 1 │ Initialize Electron project, set up PTY with node-pty, embed and style xterm.js      │
-  ├─────────┼──────────────────────────────────────────────────────────────────────────────────────┤
-  │ Phase 2 │ Implement IPC channel, add [Compact Context] button that writes to ptyProcess        │
-  ├─────────┼──────────────────────────────────────────────────────────────────────────────────────┤
-  │ Phase 3 │ Add stream parser (regex-based), extract metrics (tokens, active tools) in real-time │
-  ├─────────┼──────────────────────────────────────────────────────────────────────────────────────┤
-  │ Phase 4 │ Add profile management (LM Studio/Codex endpoints via JSON config)                   │
-  └─────────┴──────────────────────────────────────────────────────────────────────────────────────┘
+---
 
-  ---
-  Getting Started (Phase 1 & 2)
+## Getting started
 
-  To be implemented:
-  1. Directory structure for Electron project
-  2. Complete package.json with dependencies (node-pty, xterm, xterm-addon-fit, electron)
-  3. Main process code (main.js) - PTY configuration and IPC handling
-  4. Frontend code (index.html + renderer.js) - xterm.js display with functional [⚡ COMPACT CONTEXT]
-  button
+Requirements: **Node.js 18+** (tested on 24) and **Git**. No C++ build tools needed.
 
-  ---
-  Inspiration
+```bash
+git clone https://github.com/Kotsur69/Luna-Core-HUD.git
+cd Luna-Core-HUD
+npm install
+npm start
+```
 
-  - claude-code-templates (https://github.com/davila7/claude-code-templates) by davila7
-  - Current state: User already has advanced CLI dashboard showing metrics (context window %,
-  operation time, active MCP servers, estimated cost)
+On launch, LunaCore spawns your default shell (`powershell.exe` on Windows,
+`$SHELL` elsewhere) and auto-runs `claude`. Make sure the Claude Code CLI is
+installed and on your `PATH`.
 
-  ---
+To disable auto-launch (start in a bare shell instead), set
+`AUTO_LAUNCH_CLAUDE = false` at the top of [`src/main.js`](src/main.js).
+
+---
+
+## Project layout
+
+```
+Luna-Core-HUD/
+├── package.json
+├── src/
+│   ├── main.js            # main process: window + PTY + IPC channels
+│   ├── preload.js         # secure contextBridge → window.lunacore
+│   └── renderer/
+│       ├── index.html     # 3-panel layout
+│       ├── renderer.js    # xterm.js ↔ PTY wiring + COMPACT button
+│       └── styles.css     # LunaCore cyberpunk theme
+├── master_prompt.md       # original build brief
+└── README.md
+```
+
+---
+
+## Roadmap
+
+| Phase | Focus | Status |
+|-------|-------|--------|
+| 1 | Electron + `node-pty` + `xterm.js` interactive terminal | ✅ done |
+| 2 | IPC channel + working `⚡ COMPACT CONTEXT` button | ✅ done |
+| 3 | Regex stdout parser → context % bar + Skill Tracker tiles | 🔜 scaffolded |
+| 4 | Profile management (LM Studio / Codex endpoints via JSON) | 🔜 planned |
+
+The right panel (Context Window bar, Skill Tracker tiles) is present in the layout
+as placeholders; it lights up once the Phase 3 parser is wired.
+
+---
+
+## Inspiration
+
+- [`claude-code-templates`](https://github.com/davila7/claude-code-templates) by davila7 — command center for a rich set of skills, MCP servers, and agents.
+
+## License
+
+MIT © Mateusz Mazur

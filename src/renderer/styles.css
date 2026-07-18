@@ -1,0 +1,232 @@
+/* ==========================================================================
+   LunaCore - motyw (mroczny cyberpunk dashboard)
+   ========================================================================== */
+
+:root {
+  --bg: #0a0710;
+  --bg-panel: #120c1c;
+  --bg-panel-2: #170f24;
+  --edge: #2a1e3d;
+  --edge-glow: #5a2ea0;
+  --text: #e6dcff;
+  --text-dim: #9b8bc0;
+  --neon-magenta: #c774ff;
+  --neon-cyan: #5ff2d6;
+  --good: #7cff9b;
+  --warn: #ffd86b;
+  --bad: #ff6b8a;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  overflow: hidden;
+}
+
+/* ---- Layout: 3 kolumny ---------------------------------------------------- */
+
+.app {
+  display: grid;
+  grid-template-columns: 260px 1fr 280px;
+  height: 100vh;
+  gap: 1px;
+  background: var(--edge);
+}
+
+.panel {
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.panel--left,
+.panel--right { padding: 18px 16px; gap: 22px; }
+
+.panel--center { padding: 0; background: #0c0912; }
+
+/* ---- Branding ------------------------------------------------------------- */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding-bottom: 6px;
+}
+.brand__glyph {
+  color: var(--neon-magenta);
+  filter: drop-shadow(0 0 6px var(--neon-magenta));
+  font-size: 24px;
+}
+.brand__core { color: var(--neon-cyan); }
+
+/* ---- Sekcje paneli -------------------------------------------------------- */
+
+.panel__section { display: flex; flex-direction: column; gap: 10px; }
+.panel__section--grow { flex: 1; min-height: 0; }
+.panel__spacer { flex: 1; }
+
+.panel__title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+}
+
+.hint { margin: 0; font-size: 11px; color: var(--text-dim); opacity: 0.7; }
+
+/* ---- Przycisk akcji (COMPACT CONTEXT) ------------------------------------- */
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--edge-glow);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, #1e1030, #2a1548);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: transform 0.08s ease, box-shadow 0.2s ease, background 0.2s ease;
+  box-shadow: 0 0 0 rgba(199, 116, 255, 0);
+}
+.action-btn:hover {
+  background: linear-gradient(135deg, #2a1548, #3a1d60);
+  box-shadow: 0 0 18px rgba(199, 116, 255, 0.35);
+}
+.action-btn:active { transform: translateY(1px) scale(0.99); }
+.action-btn__icon {
+  color: var(--warn);
+  filter: drop-shadow(0 0 5px var(--warn));
+  font-size: 16px;
+}
+
+/* puls po kliknieciu */
+.action-btn.is-pulsing { animation: pulse 0.45s ease; }
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(95, 242, 214, 0.5); }
+  100% { box-shadow: 0 0 0 16px rgba(95, 242, 214, 0); }
+}
+
+/* ---- Przelacznik profili -------------------------------------------------- */
+
+.profile-select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--edge);
+  background: var(--bg-panel-2);
+  color: var(--text);
+  font-size: 13px;
+}
+.profile-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---- Status PTY ----------------------------------------------------------- */
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--text-dim);
+}
+.dot--live { background: var(--good); box-shadow: 0 0 8px var(--good); animation: blink 1.6s infinite; }
+.dot--dead { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+@keyframes blink { 50% { opacity: 0.4; } }
+
+/* ---- Terminal (centrum) --------------------------------------------------- */
+
+.terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--edge);
+}
+.terminal-bar__title { font-size: 13px; font-weight: 600; color: var(--neon-cyan); }
+.terminal-bar__hint { font-size: 11px; color: var(--text-dim); }
+
+.terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px;
+}
+/* xterm sam zarzadza wnetrzem; upewnijmy sie, ze wypelnia kontener */
+.terminal .xterm { height: 100%; }
+
+/* ---- Context Window bar --------------------------------------------------- */
+
+.ctx-bar {
+  width: 100%;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--edge);
+  overflow: hidden;
+}
+.ctx-bar__fill {
+  height: 100%;
+  width: 100%;
+  /* Wypelnienie sterujemy przez scaleX (transform) - brak layout thrash.
+     Faza 3 ustawia --ctx w zakresie 0..1 (np. 0.72 = 72%). */
+  transform: scaleX(var(--ctx, 0));
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--good), var(--neon-cyan));
+  transition: transform 0.4s ease, background 0.4s ease;
+}
+.ctx-meta { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+#ctx-percent { font-weight: 700; }
+.ctx-warn { color: var(--bad); font-size: 11px; font-weight: 600; }
+
+/* ---- Skill Tracker -------------------------------------------------------- */
+
+.skill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+.skill-tile {
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--edge);
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: all 0.25s ease;
+}
+/* Aktywny kafelek - zaswieci go parser w Fazie 3 (klasa .is-active) */
+.skill-tile.is-active {
+  color: var(--good);
+  border-color: var(--good);
+  box-shadow: 0 0 12px rgba(124, 255, 155, 0.3);
+}
+
+/* subtelny scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-thumb { background: var(--edge-glow); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }

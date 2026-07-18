@@ -1,0 +1,21 @@
+# Zaleznosci
+node_modules/
+
+# Buildy / artefakty
+dist/
+out/
+build/
+
+# Logi
+*.log
+npm-debug.log*
+
+# System / edytor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Lokalne profile / sekrety (Faza 4)
+config/profiles.local.json
+.env
