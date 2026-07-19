@@ -7,8 +7,9 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> Status: **Phases 1–3 implemented** (interactive terminal + Action Injector +
-> live Passive Observer). Phase 4 (profile switching) is scaffolded, not yet wired.
+> Status: **Phases 1–4 implemented** — interactive terminal + Action Injector +
+> live Passive Observer + runtime profile switching (Claude Cloud / LM Studio /
+> bare shell, defined in `config/profiles.json`).
 
 ---
 
@@ -100,11 +101,14 @@ Luna-Core-HUD/
 ├── src/
 │   ├── main.js            # main process: window + PTY + IPC channels
 │   ├── observer.js        # Passive Observer: tool detection + transcript tailing
+│   ├── profiles.js        # load/validate launch profiles from config/
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
-│       ├── renderer.js    # xterm.js ↔ PTY wiring + COMPACT button
+│       ├── renderer.js    # xterm.js ↔ PTY wiring + COMPACT button + profiles
 │       └── styles.css     # LunaCore cyberpunk theme
+├── config/
+│   └── profiles.json      # launch profiles (profiles.local.json overrides, gitignored)
 ├── master_prompt.md       # original build brief
 └── README.md
 ```
@@ -118,11 +122,28 @@ Luna-Core-HUD/
 | 1 | Electron + `node-pty` + `xterm.js` interactive terminal | ✅ done |
 | 2 | IPC channel + working `⚡ COMPACT CONTEXT` button | ✅ done |
 | 3 | Passive Observer → context % bar (real tokens) + Skill Tracker tiles | ✅ done |
-| 4 | Profile management (LM Studio / Codex endpoints via JSON) | 🔜 planned |
+| 4 | Profile management (LM Studio / Codex endpoints via JSON) | ✅ done |
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
 the matching tool (Read, Edit, Write, Bash, Grep, Glob, Web, Task).
+
+## Launch profiles
+
+The left-panel switcher restarts the PTY session under a different profile,
+defined in [`config/profiles.json`](config/profiles.json):
+
+| Field | Meaning |
+|-------|---------|
+| `command` | what to run in the shell (`claude`, or empty for a bare shell) |
+| `args` | extra CLI arguments appended to the command |
+| `env` | environment overrides for the session (e.g. `ANTHROPIC_BASE_URL` for a local LM Studio endpoint) |
+
+Ship-safe defaults: **Claude Cloud**, **LM Studio (local)**, **bare shell**.
+Drop a `config/profiles.local.json` (gitignored) to add or override profiles
+by `id` without touching the committed file — handy for machine-specific keys.
+Switching a profile kills the current session and starts a fresh one with the
+selected environment; no extra tokens are spent.
 
 ---
 

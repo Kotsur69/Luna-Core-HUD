@@ -2,15 +2,15 @@
 
 ## STATUS (punkt startu następnej sesji)
 
-> ✅ **FAZA 1, 2 i 3 — ZROBIONE** (2026-07-19).
+> ✅ **FAZA 1, 2, 3 i 4 — ZROBIONE** (2026-07-19).
 > Działa: okno Electron, interaktywny terminal `claude` na PTY, bezpieczny IPC,
-> przycisk **⚡ COMPACT CONTEXT**, oraz **Passive Observer** (Faza 3): pasek
-> Context Window z realnych tokenów (tailowanie transcript JSONL) + kafelki Skill
-> Tracker zapalane detekcją narzędzi ze stdout. Kod: `src/observer.js` + wpięcia
-> w `src/main.js`, `src/preload.js`, `src/renderer/`.
+> przycisk **⚡ COMPACT CONTEXT**, **Passive Observer** (pasek Context Window z
+> realnych tokenów + kafelki Skill Tracker), oraz **profile uruchomieniowe**
+> (przełącznik w lewym panelu → restart sesji z env z `config/profiles.json`).
+> Kod: `src/observer.js`, `src/profiles.js` + wpięcia w `main.js`/`preload.js`/`renderer/`.
 >
-> 👉 **NASTĘPNY KROK = FAZA 4** (profile LM Studio / Codex) — albo backlog z sekcji
-> 7 (ściągawki: skille / porty / akcje-przyciski). Szczegóły w „ZADANIE DLA CIEBIE".
+> 👉 **NASTĘPNY KROK = backlog z sekcji 7** (ściągawki: 7A skille wg kategorii /
+> 7B tracker portów localhost / 7C zwijki + przyciski komend — 7C najważniejsze).
 
 ---
 
@@ -110,10 +110,12 @@ Aplikacja podzielona na 3 sekcje:
   (`{tokens, limit, percent}` → pasek + kolory progów + alarm > 85%).
 * Uwaga: `CONTEXT_LIMIT` w `observer.js` = 200k (default). Dla okna 1M podbij ręcznie.
 
-### FAZA 4: Zarządzanie Profilami (LM Studio / Codex) — NASTĘPNA
-* Definiowanie profili uruchomieniowych w pliku JSON (`config/profiles.json`).
-* Restart sesji PTY z flagami wskazującymi lokalny endpoint LM Studio
-  (`--api-url http://localhost:1234/v1`).
+### FAZA 4: Zarządzanie Profilami (LM Studio / Codex) — ✅ ZROBIONE
+* `config/profiles.json` (+ opcjonalny `config/profiles.local.json`, gitignore):
+  profile `{id,label,command,args,env}`. `src/profiles.js` ładuje/waliduje/scalają.
+* Przełącznik w lewym panelu → IPC `pty:restart` → `restartPty()` ubija sesję i
+  startuje nową z nadpisaniami env (np. `ANTHROPIC_BASE_URL` dla LM Studio).
+* Profile domyślne: Claude Cloud / LM Studio (lokalnie) / Sama powłoka.
 
 ---
 
@@ -148,18 +150,18 @@ kroki. Chcemy ten sam feel wbudowany natywnie w prawym/dolnym panelu LunaCore.
 
 ---
 
-## ZADANIE DLA CIEBIE (NASTĘPNY KROK = FAZA 4 lub backlog)
+## ZADANIE DLA CIEBIE (NASTĘPNY KROK = backlog sekcja 7)
 
-Nie zaczynamy od zera — **Fazy 1, 2 i 3 są gotowe** (patrz STATUS + `README.md` +
-`src/observer.js`). Do wyboru następny krok:
+Nie zaczynamy od zera — **Fazy 1–4 są gotowe** (patrz STATUS + `README.md` +
+`src/`). Rdzeń działa: terminal, COMPACT, Passive Observer, profile. Teraz
+warstwa „quality of life" — backlog z sekcji 7. Rekomendowana kolejność:
 
-**Opcja A — FAZA 4 (profile LM Studio / Codex):**
-1. `config/profiles.json` z definicjami profili uruchomieniowych (nazwa, komenda,
-   flagi, np. `--api-url http://localhost:1234/v1`).
-2. Przełącznik profili w lewym panelu (dziś `disabled`) → restart sesji PTY z
-   wybranym profilem. Nowy kanał IPC `pty:restart` + logika w `main.js`.
-
-**Opcja B — backlog z sekcji 7** (ściągawki: skille wg kategorii / porty localhost /
-akcje-przyciski). Najbardziej „user-facing" jest 7C (zwijki + przyciski komend).
+1. **7C (najważniejsze)** — ściągawki akcji: zwijki `<details>` + rząd przycisków
+   wysyłających komendy przez Action Injector (`window.lunacore.runCommand(...)`).
+   Zacznij od „Review przed commitem": `/code-review`, `/security-review`,
+   `npm test`, `git diff`, `git status`. Reuse wzorca wizualnego z ecc-sciagawki.
+2. **7B** — tracker portów localhost (backend `Get-NetTCPConnection`/`netstat`,
+   PID→proces, auto-refresh; nowy kanał IPC read-only, w duchu Passive Observera).
+3. **7A** — zwijana ściągawka skilli wg kategorii.
 
 Pisz kod czysty, skomentowany, gotowy do uruchomienia lokalnie. Let's continue LunaCore!

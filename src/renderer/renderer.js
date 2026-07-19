@@ -133,6 +133,45 @@ window.lunacore.onTools((tiles) => {
   }
 });
 
+// ---- Faza 4: Przelacznik profili --------------------------------------------
+
+const profileSwitcher = document.getElementById('profile-switcher');
+
+// Wypelnij liste profilami z config/ i zaznacz aktywny.
+async function initProfiles() {
+  try {
+    const { profiles, activeProfile } = await window.lunacore.getProfiles();
+    profileSwitcher.innerHTML = '';
+    for (const p of profiles) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.label;
+      if (p.id === activeProfile) opt.selected = true;
+      profileSwitcher.appendChild(opt);
+    }
+  } catch (err) {
+    // Gdy nie uda sie pobrac profili - zostaw przelacznik pusty (nieblokujace).
+  }
+}
+
+// Zmiana profilu -> restart sesji PTY z nowym srodowiskiem.
+profileSwitcher.addEventListener('change', () => {
+  window.lunacore.switchProfile(profileSwitcher.value);
+});
+
+// Po restarcie: wyczysc terminal i pokaz, ktory profil jest aktywny.
+window.lunacore.onRestarted((profile) => {
+  term.reset();
+  term.write(
+    `\x1b[38;5;80m[LunaCore] Sesja przelaczona na profil: ${profile.label}\x1b[0m\r\n`
+  );
+  setPtyStatus(true, 'PTY: aktywne');
+  fitAndResize();
+  term.focus();
+});
+
+initProfiles();
+
 // ---- Wskaznik statusu PTY ----------------------------------------------------
 
 function setPtyStatus(isLive, text) {

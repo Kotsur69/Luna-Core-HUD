@@ -21,6 +21,8 @@ const pty = require('@lydell/node-pty');
 // Passive Observer (Faza 3): detekcja narzedzi ze stdout + tailowanie
 // transcriptu JSONL po realne zuzycie context window. Tylko czyta, zero tokenow.
 const { detectTools, TranscriptWatcher } = require('./observer');
+// Profile uruchomieniowe (Faza 4): definicje "jak wystartowac sesje" z JSON.
+const { loadProfiles, getProfile } = require('./profiles');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
@@ -30,10 +32,6 @@ const IS_WINDOWS = process.platform === 'win32';
 const DEFAULT_SHELL = IS_WINDOWS
   ? 'powershell.exe'
   : process.env.SHELL || 'bash';
-
-// Po starcie powloki automatycznie odpalamy `claude`. Ustaw na false, jesli
-// wolisz recznie wpisac komende w terminalu (np. gdy CLI nie jest na PATH).
-const AUTO_LAUNCH_CLAUDE = true;
 
 // Katalog startowy sesji - domowy uzytkownika.
 const START_CWD = os.homedir();
@@ -46,6 +44,11 @@ let ptyProcess = null;
 let mainWindow = null;
 /** @type {TranscriptWatcher | null} */
 let transcriptWatcher = null;
+// Profile wczytane z config/ oraz id aktualnie aktywnego.
+let profiles = [];
+let activeProfileId = null;
+// Ostatni znany rozmiar terminala - odtwarzany przy restarcie sesji.
+let lastSize = { cols: 80, rows: 24 };
 
 // ---- Okno aplikacji ---------------------------------------------------------
 
@@ -76,17 +79,27 @@ function createWindow() {
 
 // ---- Pseudoterminal (node-pty) ----------------------------------------------
 
-function startPty() {
-  ptyProcess = pty.spawn(DEFAULT_SHELL, [], {
+/**
+ * Startuje sesje PTY wg wybranego profilu: spawnuje powloke z nadpisaniami env
+ * i (jesli profil ma komende, np. "claude") wpisuje ja po krotkim opoznieniu.
+ * @param {{id:string,label:string,command:string,args:string[],env:Object}} profile
+ */
+function launchProfile(profile) {
+  activeProfileId = profile.id;
+  // Nadpisania srodowiska z profilu (np. ANTHROPIC_BASE_URL dla LM Studio).
+  const env = { ...process.env, ...(profile.env || {}) };
+
+  const proc = pty.spawn(DEFAULT_SHELL, [], {
     name: 'xterm-color',
-    cols: 80,
-    rows: 24,
+    cols: lastSize.cols,
+    rows: lastSize.rows,
     cwd: START_CWD,
-    env: process.env,
+    env,
   });
+  ptyProcess = proc;
 
   // PASSIVE OBSERVER: caly surowy stdout PTY -> renderer (xterm.js) + detekcja narzedzi.
-  ptyProcess.onData((data) => {
+  proc.onData((data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       // 1. Surowy strumien na ekran terminala (bez zmian - user widzi 1:1).
       mainWindow.webContents.send('pty:data', data);
@@ -98,21 +111,58 @@ function startPty() {
     }
   });
 
-  // Gdy proces PTY sie zakonczy - informujemy renderer.
-  ptyProcess.onExit(({ exitCode }) => {
+  // Gdy proces PTY sie zakonczy - informujemy renderer. Guard: ignorujemy exit
+  // starego procesu po restarcie (proc !== ptyProcess), zeby nie wysylac falszywego
+  // "sesja zakonczona" i nie zerowac nowej sesji.
+  proc.onExit(({ exitCode }) => {
+    if (proc !== ptyProcess) return; // to stary proces po przelaczeniu profilu
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('pty:exit', exitCode);
     }
     ptyProcess = null;
   });
 
-  // Auto-start Claude CLI. PTY buforuje wejscie, wiec komenda wykona sie,
-  // gdy tylko powloka bedzie gotowa. Krotkie opoznienie = czystszy prompt.
-  if (AUTO_LAUNCH_CLAUDE) {
+  // Wpisz komende startowa profilu (pusta = sama powloka, bez auto-startu).
+  // PTY buforuje wejscie, wiec komenda wykona sie, gdy powloka bedzie gotowa.
+  const command = [profile.command, ...(profile.args || [])].join(' ').trim();
+  if (command) {
     setTimeout(() => {
-      if (ptyProcess) ptyProcess.write('claude\r');
+      if (ptyProcess === proc) proc.write(`${command}\r`);
     }, 600);
   }
+}
+
+/**
+ * Restart sesji PTY z innym profilem: ubija biezacy proces i startuje nowy.
+ * Renderer dostaje 'pty:restarted' (czysci terminal + pokazuje aktywny profil).
+ * @param {string} profileId
+ */
+function restartPty(profileId) {
+  const profile = getProfile(profiles, profileId);
+  if (!profile) return;
+
+  if (ptyProcess) {
+    const old = ptyProcess;
+    ptyProcess = null; // odcinamy stary proces (jego onExit sie zignoruje)
+    try {
+      old.kill();
+    } catch {
+      /* proces mogl juz nie zyc */
+    }
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('pty:restarted', { id: profile.id, label: profile.label });
+  }
+  launchProfile(profile);
+}
+
+/** Startuje sesje z aktywnym profilem (przy pierwszym uruchomieniu). */
+function startActiveProfile() {
+  const loaded = loadProfiles();
+  profiles = loaded.profiles;
+  const profile = getProfile(profiles, loaded.activeProfile) || profiles[0];
+  launchProfile(profile);
 }
 
 // ---- Passive Observer: metryki context window (transcript JSONL) ------------
@@ -144,10 +194,19 @@ function registerIpc() {
 
   // Dopasowanie rozmiaru PTY do rozmiaru terminala w oknie (xterm-addon-fit).
   ipcMain.on('pty:resize', (_event, size) => {
-    if (!ptyProcess || !size) return;
+    if (!size) return;
     const cols = Math.max(1, size.cols | 0);
     const rows = Math.max(1, size.rows | 0);
-    ptyProcess.resize(cols, rows);
+    lastSize = { cols, rows }; // zapamietaj do odtworzenia przy restarcie
+    if (ptyProcess) ptyProcess.resize(cols, rows);
+  });
+
+  // FAZA 4: renderer pyta o dostepne profile (do wypelnienia przelacznika).
+  ipcMain.handle('profiles:list', () => ({ profiles, activeProfile: activeProfileId }));
+
+  // FAZA 4: przelaczenie profilu -> restart sesji PTY z nowym srodowiskiem.
+  ipcMain.on('pty:restart', (_event, profileId) => {
+    if (typeof profileId === 'string') restartPty(profileId);
   });
 }
 
@@ -156,14 +215,14 @@ function registerIpc() {
 app.whenReady().then(() => {
   registerIpc();
   createWindow();
-  startPty();
+  startActiveProfile();
   startTranscriptWatcher();
 
   app.on('activate', () => {
     // macOS: odtworz okno po kliknieciu w Dock, jesli wszystkie zamkniete.
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
-      if (!ptyProcess) startPty();
+      if (!ptyProcess) startActiveProfile();
     }
   });
 });

@@ -31,12 +31,9 @@
 
       <div class="panel__section">
         <h2 class="panel__title">Profil</h2>
-        <!-- Przelacznik profili - pelna logika w Fazie 4 -->
-        <select id="profile-switcher" class="profile-select" disabled>
-          <option>Claude Cloud</option>
-          <option>LM Studio (lokalnie)</option>
-        </select>
-        <p class="hint">Przelaczanie srodowisk - Faza 4.</p>
+        <!-- Opcje wypelnia renderer.js z config/profiles.json (Faza 4). -->
+        <select id="profile-switcher" class="profile-select"></select>
+        <p class="hint">Zmiana profilu restartuje sesje z nowym srodowiskiem.</p>
       </div>
 
       <div class="panel__spacer"></div>

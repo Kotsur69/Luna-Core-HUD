@@ -1,0 +1,28 @@
+{
+  "activeProfile": "claude-cloud",
+  "profiles": [
+    {
+      "id": "claude-cloud",
+      "label": "Claude Cloud",
+      "command": "claude",
+      "args": [],
+      "env": {}
+    },
+    {
+      "id": "lm-studio",
+      "label": "LM Studio (lokalnie)",
+      "command": "claude",
+      "args": [],
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:1234/v1"
+      }
+    },
+    {
+      "id": "bare-shell",
+      "label": "Sama powloka (bez claude)",
+      "command": "",
+      "args": [],
+      "env": {}
+    }
+  ]
+}

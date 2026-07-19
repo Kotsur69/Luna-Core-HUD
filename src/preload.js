@@ -29,6 +29,16 @@ contextBridge.exposeInMainWorld('lunacore', {
     ipcRenderer.on('metrics:tools', (_event, tiles) => callback(tiles));
   },
 
+  // --- FAZA 4: profile uruchomieniowe ---
+  /** Pobiera { profiles, activeProfile } do wypelnienia przelacznika. */
+  getProfiles: () => ipcRenderer.invoke('profiles:list'),
+  /** Przelacza profil -> restart sesji PTY z nowym srodowiskiem. */
+  switchProfile: (id) => ipcRenderer.send('pty:restart', id),
+  /** Powiadomienie o restarcie sesji: { id, label } nowego profilu. */
+  onRestarted: (callback) => {
+    ipcRenderer.on('pty:restarted', (_event, profile) => callback(profile));
+  },
+
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
   /** Surowe wejscie z klawiatury (xterm.js onData) do PTY. */
   write: (data) => ipcRenderer.send('pty:write', data),
