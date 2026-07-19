@@ -85,6 +85,54 @@ function pulse(el) {
   el.classList.add('is-pulsing');
 }
 
+// ---- Faza 3: Context Window (transcript JSONL) ------------------------------
+
+const ctxFill = document.getElementById('ctx-fill');
+const ctxPercent = document.getElementById('ctx-percent');
+const ctxWarn = document.getElementById('ctx-warn');
+const ctxTokens = document.getElementById('ctx-tokens');
+
+// Progi kolorow paska: < 60% zielony, 60-85% zolty, > 85% czerwony + alarm.
+const CTX_WARN_HIGH = 0.85;
+const CTX_WARN_MID = 0.6;
+
+window.lunacore.onContext((metrics) => {
+  if (!metrics || typeof metrics.percent !== 'number') return;
+  const pct = Math.max(0, Math.min(1, metrics.percent));
+
+  // Pasek: scaleX 0..1 (bez layout thrash) + kolor zalezny od progu.
+  ctxFill.style.setProperty('--ctx', pct.toFixed(3));
+  ctxFill.classList.toggle('is-mid', pct >= CTX_WARN_MID && pct < CTX_WARN_HIGH);
+  ctxFill.classList.toggle('is-high', pct >= CTX_WARN_HIGH);
+
+  ctxPercent.textContent = `${Math.round(pct * 100)}%`;
+  ctxWarn.textContent = pct >= CTX_WARN_HIGH ? 'Compact this shit!' : '';
+
+  const k = (n) => `${Math.round(n / 1000)}k`;
+  ctxTokens.textContent = `${k(metrics.tokens)} / ${k(metrics.limit)} tokenow`;
+});
+
+// ---- Faza 3: Skill Tracker (nazwy narzedzi ze stdout) -----------------------
+
+// Kafelek zapala sie po wykryciu narzedzia i gasnie po chwili bezczynnosci.
+const TILE_ACTIVE_MS = 1500;
+const tileTimers = new Map();
+
+window.lunacore.onTools((tiles) => {
+  if (!Array.isArray(tiles)) return;
+  for (const name of tiles) {
+    const tile = document.querySelector(`.skill-tile[data-skill="${name}"]`);
+    if (!tile) continue;
+    tile.classList.add('is-active');
+    // Odswiez timer wygaszenia (kolejne wykrycie przedluza swiecenie).
+    clearTimeout(tileTimers.get(name));
+    tileTimers.set(
+      name,
+      setTimeout(() => tile.classList.remove('is-active'), TILE_ACTIVE_MS)
+    );
+  }
+});
+
 // ---- Wskaznik statusu PTY ----------------------------------------------------
 
 function setPtyStatus(isLive, text) {

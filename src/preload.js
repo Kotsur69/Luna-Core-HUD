@@ -19,6 +19,16 @@ contextBridge.exposeInMainWorld('lunacore', {
     ipcRenderer.on('pty:exit', (_event, code) => callback(code));
   },
 
+  // --- PASSIVE OBSERVER: metryki Fazy 3 (tylko odczyt) ---
+  /** Metryki context window: { tokens, limit, percent } z transcriptu JSONL. */
+  onContext: (callback) => {
+    ipcRenderer.on('metrics:context', (_event, metrics) => callback(metrics));
+  },
+  /** Lista kafelkow Skill Trackera do zapalenia (np. ["Bash", "Read"]). */
+  onTools: (callback) => {
+    ipcRenderer.on('metrics:tools', (_event, tiles) => callback(tiles));
+  },
+
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
   /** Surowe wejscie z klawiatury (xterm.js onData) do PTY. */
   write: (data) => ipcRenderer.send('pty:write', data),

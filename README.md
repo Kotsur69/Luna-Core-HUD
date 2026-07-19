@@ -7,8 +7,8 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> Status: **Phase 1 & 2 implemented** (interactive terminal + Action Injector).
-> Phases 3–4 (metrics parser, profile switching) are scaffolded, not yet wired.
+> Status: **Phases 1–3 implemented** (interactive terminal + Action Injector +
+> live Passive Observer). Phase 4 (profile switching) is scaffolded, not yet wired.
 
 ---
 
@@ -38,13 +38,19 @@ user's context window. It works only as:
 └─────────────────────┴───────────────────────────────┴─────────────────────┘
 ```
 
-**Data flow (Phase 1 & 2):**
+**Data flow:**
 
 | Direction | Path |
 |-----------|------|
-| Passive Observer | `ptyProcess.onData` → IPC `pty:data` → `xterm.write()` |
+| Passive Observer (terminal) | `ptyProcess.onData` → IPC `pty:data` → `xterm.write()` |
+| Passive Observer (Skill Tracker) | `ptyProcess.onData` → `detectTools()` (ANSI strip + regex) → IPC `metrics:tools` → tiles light up |
+| Passive Observer (Context %) | `TranscriptWatcher` tails `~/.claude/projects/**/*.jsonl` → real `usage` tokens → IPC `metrics:context` → bar |
 | Action Injector (keyboard) | `xterm.onData` → IPC `pty:write` → `ptyProcess.write()` |
 | Action Injector (button) | `runCommand('/compact')` → IPC `pty:command` → writes `/compact\r` |
+
+The Context Window % divides live `usage` tokens by a `CONTEXT_LIMIT` constant
+(200k default, in [`src/observer.js`](src/observer.js) — raise it for 1M-context
+sessions).
 
 Security: the renderer has **no** direct Node.js access. All IPC goes through a
 `contextBridge` preload (`contextIsolation: true`, `nodeIntegration: false`).
@@ -93,6 +99,7 @@ Luna-Core-HUD/
 ├── package.json
 ├── src/
 │   ├── main.js            # main process: window + PTY + IPC channels
+│   ├── observer.js        # Passive Observer: tool detection + transcript tailing
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
@@ -110,11 +117,12 @@ Luna-Core-HUD/
 |-------|-------|--------|
 | 1 | Electron + `node-pty` + `xterm.js` interactive terminal | ✅ done |
 | 2 | IPC channel + working `⚡ COMPACT CONTEXT` button | ✅ done |
-| 3 | Regex stdout parser → context % bar + Skill Tracker tiles | 🔜 scaffolded |
+| 3 | Passive Observer → context % bar (real tokens) + Skill Tracker tiles | ✅ done |
 | 4 | Profile management (LM Studio / Codex endpoints via JSON) | 🔜 planned |
 
-The right panel (Context Window bar, Skill Tracker tiles) is present in the layout
-as placeholders; it lights up once the Phase 3 parser is wired.
+The right panel lights up live: the Context Window bar reflects real `usage`
+tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
+the matching tool (Read, Edit, Write, Bash, Grep, Glob, Web, Task).
 
 ---
 

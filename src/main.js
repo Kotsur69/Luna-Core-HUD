@@ -18,6 +18,9 @@ const os = require('os');
 // @lydell/node-pty: utrzymywany fork node-pty z prebuildami (N-API),
 // dziala bez kompilacji node-gyp / Visual Studio. API zgodne z node-pty.
 const pty = require('@lydell/node-pty');
+// Passive Observer (Faza 3): detekcja narzedzi ze stdout + tailowanie
+// transcriptu JSONL po realne zuzycie context window. Tylko czyta, zero tokenow.
+const { detectTools, TranscriptWatcher } = require('./observer');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
@@ -41,6 +44,8 @@ const START_CWD = os.homedir();
 let ptyProcess = null;
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
+/** @type {TranscriptWatcher | null} */
+let transcriptWatcher = null;
 
 // ---- Okno aplikacji ---------------------------------------------------------
 
@@ -80,10 +85,16 @@ function startPty() {
     env: process.env,
   });
 
-  // PASSIVE OBSERVER: caly surowy stdout PTY -> renderer (xterm.js + przyszly parser).
+  // PASSIVE OBSERVER: caly surowy stdout PTY -> renderer (xterm.js) + detekcja narzedzi.
   ptyProcess.onData((data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
+      // 1. Surowy strumien na ekran terminala (bez zmian - user widzi 1:1).
       mainWindow.webContents.send('pty:data', data);
+      // 2. Skill Tracker: wykryj nazwy narzedzi i zapal odpowiednie kafelki.
+      const tiles = detectTools(data);
+      if (tiles.length > 0) {
+        mainWindow.webContents.send('metrics:tools', tiles);
+      }
     }
   });
 
@@ -102,6 +113,17 @@ function startPty() {
       if (ptyProcess) ptyProcess.write('claude\r');
     }, 600);
   }
+}
+
+// ---- Passive Observer: metryki context window (transcript JSONL) ------------
+
+function startTranscriptWatcher() {
+  transcriptWatcher = new TranscriptWatcher((metrics) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('metrics:context', metrics);
+    }
+  });
+  transcriptWatcher.start();
 }
 
 // ---- Kanaly IPC -------------------------------------------------------------
@@ -135,6 +157,7 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   startPty();
+  startTranscriptWatcher();
 
   app.on('activate', () => {
     // macOS: odtworz okno po kliknieciu w Dock, jesli wszystkie zamkniete.
@@ -146,6 +169,10 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  if (transcriptWatcher) {
+    transcriptWatcher.stop();
+    transcriptWatcher = null;
+  }
   if (ptyProcess) {
     ptyProcess.kill();
     ptyProcess = null;

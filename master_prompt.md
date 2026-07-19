@@ -2,13 +2,15 @@
 
 ## STATUS (punkt startu następnej sesji)
 
-> ✅ **FAZA 1 i FAZA 2 — ZROBIONE** (2026-07-18, commit `13294e0`, wypushowane na
-> `main`: https://github.com/Kotsur69/Luna-Core-HUD).
+> ✅ **FAZA 1, 2 i 3 — ZROBIONE** (2026-07-19).
 > Działa: okno Electron, interaktywny terminal `claude` na PTY, bezpieczny IPC,
-> fizyczny przycisk **⚡ COMPACT CONTEXT**.
+> przycisk **⚡ COMPACT CONTEXT**, oraz **Passive Observer** (Faza 3): pasek
+> Context Window z realnych tokenów (tailowanie transcript JSONL) + kafelki Skill
+> Tracker zapalane detekcją narzędzi ze stdout. Kod: `src/observer.js` + wpięcia
+> w `src/main.js`, `src/preload.js`, `src/renderer/`.
 >
-> 👉 **NASTĘPNY KROK = FAZA 3** (parser strumienia i metryki). Szczegóły w sekcji
-> „ZADANIE DLA CIEBIE" na dole. Kod i architektura: patrz `README.md` + `src/`.
+> 👉 **NASTĘPNY KROK = FAZA 4** (profile LM Studio / Codex) — albo backlog z sekcji
+> 7 (ściągawki: skille / porty / akcje-przyciski). Szczegóły w „ZADANIE DLA CIEBIE".
 
 ---
 
@@ -100,15 +102,15 @@ Aplikacja podzielona na 3 sekcje:
 
 ## 6. FAZY DALSZE (ROADMAP)
 
-### FAZA 3: Parser Strumienia i Metryki (Passive Observer) — NASTĘPNA
-* Listener na `ptyProcess.onData(...)` po stronie backendu.
-* Parser Regex wyciągający z logów: zużycie kontekstu/tokenów (→ pasek %),
-  aktywne narzędzia MCP / `Running tool: [nazwa]` (→ podświetlanie kafelków),
-  status (np. „manual mode on").
-* Przesyłanie sparsowanych metryk w czasie rzeczywistym do frontendu (nowy kanał
-  IPC, np. `metrics:update`) → aktualizacja widgetów bocznych.
+### FAZA 3: Parser Strumienia i Metryki (Passive Observer) — ✅ ZROBIONE
+* `src/observer.js`: `detectTools()` (strip ANSI + regex nazw narzędzi) oraz
+  `TranscriptWatcher` (tailowanie `~/.claude/projects/**/*.jsonl`, realne tokeny
+  z pola `message.usage`).
+* Kanały IPC: `metrics:tools` (kafelki Skill Tracker), `metrics:context`
+  (`{tokens, limit, percent}` → pasek + kolory progów + alarm > 85%).
+* Uwaga: `CONTEXT_LIMIT` w `observer.js` = 200k (default). Dla okna 1M podbij ręcznie.
 
-### FAZA 4: Zarządzanie Profilami (LM Studio / Codex)
+### FAZA 4: Zarządzanie Profilami (LM Studio / Codex) — NASTĘPNA
 * Definiowanie profili uruchomieniowych w pliku JSON (`config/profiles.json`).
 * Restart sesji PTY z flagami wskazującymi lokalny endpoint LM Studio
   (`--api-url http://localhost:1234/v1`).
@@ -146,19 +148,18 @@ kroki. Chcemy ten sam feel wbudowany natywnie w prawym/dolnym panelu LunaCore.
 
 ---
 
-## ZADANIE DLA CIEBIE (NASTĘPNY KROK = FAZA 3)
+## ZADANIE DLA CIEBIE (NASTĘPNY KROK = FAZA 4 lub backlog)
 
-Nie zaczynamy od zera — **Faza 1 i 2 są gotowe i wypushowane** (patrz STATUS +
-`README.md`). Zajmij się **Fazą 3 (Passive Observer / parser metryk)**:
+Nie zaczynamy od zera — **Fazy 1, 2 i 3 są gotowe** (patrz STATUS + `README.md` +
+`src/observer.js`). Do wyboru następny krok:
 
-1. Dodaj po stronie `src/main.js` przechwytywanie i parsowanie `stdout` PTY
-   (Regex) — bez wpływu na to, co widzi użytkownik w terminalu.
-2. Wyślij sparsowane metryki nowym kanałem IPC do renderera.
-3. W rendererze podłącz: pasek **Context Window** (`--ctx` 0..1 + kolory progów +
-   ostrzeżenie > 85%) oraz podświetlanie kafelków **Skill Trackera**
-   (`.is-active`) na podstawie `Running tool: [nazwa]`.
+**Opcja A — FAZA 4 (profile LM Studio / Codex):**
+1. `config/profiles.json` z definicjami profili uruchomieniowych (nazwa, komenda,
+   flagi, np. `--api-url http://localhost:1234/v1`).
+2. Przełącznik profili w lewym panelu (dziś `disabled`) → restart sesji PTY z
+   wybranym profilem. Nowy kanał IPC `pty:restart` + logika w `main.js`.
 
-Najpierw zaproponuj konkretne wzorce Regex (na bazie realnego formatu outputu
-Claude CLI / dashboardu w terminalu), zanim zaczniesz kodować parser.
+**Opcja B — backlog z sekcji 7** (ściągawki: skille wg kategorii / porty localhost /
+akcje-przyciski). Najbardziej „user-facing" jest 7C (zwijki + przyciski komend).
 
 Pisz kod czysty, skomentowany, gotowy do uruchomienia lokalnie. Let's continue LunaCore!

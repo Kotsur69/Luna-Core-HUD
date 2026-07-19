@@ -195,6 +195,14 @@ html, body {
   background: linear-gradient(90deg, var(--good), var(--neon-cyan));
   transition: transform 0.4s ease, background 0.4s ease;
 }
+/* Progi context window ustawiane przez renderer.js (Faza 3). */
+.ctx-bar__fill.is-mid { background: linear-gradient(90deg, var(--warn), #ffb347); }
+.ctx-bar__fill.is-high {
+  background: linear-gradient(90deg, var(--bad), #ff3b6b);
+  animation: ctx-alarm 1s ease-in-out infinite;
+}
+@keyframes ctx-alarm { 50% { filter: brightness(1.4); } }
+
 .ctx-meta { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
 #ctx-percent { font-weight: 700; }
 .ctx-warn { color: var(--bad); font-size: 11px; font-weight: 600; }
