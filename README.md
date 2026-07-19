@@ -104,6 +104,7 @@ Luna-Core-HUD/
 │   ├── profiles.js        # load/validate launch profiles from config/
 │   ├── ports.js           # localhost port scanner (listen ports + PID→process)
 │   ├── cheatsheets.js     # load/validate action cheat-sheets from config/
+│   ├── skills.js          # scan skill dirs → categorized skill cheat-sheet
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
@@ -126,6 +127,7 @@ Luna-Core-HUD/
 | 2 | IPC channel + working `⚡ COMPACT CONTEXT` button | ✅ done |
 | 3 | Passive Observer → context % bar (real tokens) + Skill Tracker tiles | ✅ done |
 | 4 | Profile management (LM Studio / Codex endpoints via JSON) | ✅ done |
+| + | Backlog: localhost ports tracker, action cheat-sheets, skill cheat-sheet | ✅ done |
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
@@ -169,6 +171,16 @@ Claude session (e.g. `!git diff`), while an unprefixed command is typed verbatim
 (slash commands like `/compact`, `/code-review`). Add a
 `config/cheatsheets.local.json` (gitignored) to override groups by `title` or add
 your own.
+
+## Skill cheat-sheet
+
+The left panel also auto-scans your Claude Code skill directories
+(`~/.claude/skills`, `~/.claude/plugins`) for `SKILL.md` files, reads each one's
+`name`/`description` from frontmatter, and groups them into collapsible
+categories (Frontend, Backend, Data/ML, DevOps, Tests, Security, Database,
+Git/Review, Docs, Other). Click a category to expand its skills; click a skill
+to copy its name. Categorisation is keyword-heuristic (rough by design) and the
+scan result is cached per session. Read-only, zero tokens.
 
 ---
 

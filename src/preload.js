@@ -53,6 +53,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Pobiera { groups: [{ title, note, commands: [{label, command}] }] }. */
   getCheatsheets: () => ipcRenderer.invoke('cheatsheets:list'),
 
+  // --- 7A: sciagawka skilli wg kategorii ---
+  /** Pobiera { categories: [{ name, skills: [{name, description}] }], total }. */
+  getSkills: () => ipcRenderer.invoke('skills:list'),
+
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
   /** Surowe wejscie z klawiatury (xterm.js onData) do PTY. */
   write: (data) => ipcRenderer.send('pty:write', data),

@@ -9,11 +9,14 @@
 > (przełącznik w lewym panelu → restart sesji z env z `config/profiles.json`).
 > Kod: `src/observer.js`, `src/profiles.js` + wpięcia w `main.js`/`preload.js`/`renderer/`.
 >
-> ✅ **7B i 7C — ZROBIONE** (2026-07-19). 7B: `src/ports.js` + sekcja portów
-> (otwórz/kopiuj/kill). 7C: `src/cheatsheets.js` + `config/cheatsheets.json` +
-> zwijki `<details>` z przyciskami komend w lewym panelu (`!` = bash w Claude).
+> ✅ **7A, 7B i 7C — ZROBIONE** (2026-07-19). Cały backlog domknięty. 7A:
+> `src/skills.js` (auto-skan `~/.claude/skills` + `plugins`, frontmatter SKILL.md,
+> kategoryzacja heurystyczna, ~339 skilli, cache) + sekcja zwijek w lewym panelu.
+> 7B: `src/ports.js` + porty. 7C: `src/cheatsheets.js` + przyciski komend.
 >
-> 👉 **NASTĘPNY KROK = 7A** (zwijana ściągawka skilli wg kategorii) — ostatni z backlogu.
+> 👉 **BRAK dalszych zaplanowanych zadań** — Fazy 1–4 + backlog 7A/7B/7C gotowe.
+> Kolejne pomysły (np. persystencja aktywnego profilu, filtr portów systemowych,
+> lepsza kategoryzacja skilli) do ustalenia z Matim.
 
 ---
 
@@ -129,12 +132,12 @@ Wzorzec wizualny dla wszystkich „ściągawek" poniżej:
 — zwijane sekcje (`<details>`/`<summary>`), badge'y (cmd / skill / hook), czytelne
 kroki. Chcemy ten sam feel wbudowany natywnie w prawym/dolnym panelu LunaCore.
 
-### 7A. Zwijana ściągawka skilli (Skill Cheat-Sheet)
-* Zwijki wg kategorii: klikam **FRONTEND** → rozwija się lista skilli do frontendu;
-  **BACKEND** → lista backendowych; itd. (Design, DevOps/Deploy, Testing, Git,
-  Data/ML, Security, Docs...).
-* Źródło listy: ~300 skilli (katalog skilli / plugin cache Claude Code).
-* Cel: szybki podgląd „co mam pod ręką", bez scrollowania całej płaskiej listy.
+### 7A. Zwijana ściągawka skilli (Skill Cheat-Sheet) — ✅ ZROBIONE
+* `src/skills.js`: auto-skan `~/.claude/skills` + `~/.claude/plugins` (rekursywnie,
+  SKILL.md → frontmatter name/description), dedupe, kategoryzacja heurystyczna
+  (Frontend/Backend/Data-ML/DevOps/Testy/Security/Database/Git/Docs/Inne), cache.
+* Lewy panel: zwijki per kategoria; klik skilla = kopiuj nazwę. ~339 skilli.
+* UWAGA: kategoryzacja słowami-kluczami jest zgrubna (świadomy wybór auto-skanu).
 
 ### 7B. Tracker otwartych portów localhost — ✅ ZROBIONE
 * `src/ports.js`: `scanPorts()` (`Get-NetTCPConnection` na Win / `lsof` na POSIX),
@@ -151,16 +154,17 @@ kroki. Chcemy ten sam feel wbudowany natywnie w prawym/dolnym panelu LunaCore.
 
 ---
 
-## ZADANIE DLA CIEBIE (NASTĘPNY KROK = backlog sekcja 7)
+## ZADANIE DLA CIEBIE — wszystko z planu ZROBIONE
 
-Nie zaczynamy od zera — **Fazy 1–4 są gotowe** (patrz STATUS + `README.md` +
-`src/`). Rdzeń działa: terminal, COMPACT, Passive Observer, profile. Teraz
-warstwa „quality of life" — backlog z sekcji 7. Rekomendowana kolejność:
+**Fazy 1–4 oraz cały backlog (7A/7B/7C) są gotowe i wypushowane** (patrz STATUS +
+`README.md` + `src/`). LunaCore ma: terminal PTY, COMPACT, Passive Observer
+(context + Skill Tracker), profile, tracker portów, ściągi akcji, ściągawkę skilli.
 
-1. **7A (OSTATNI z backlogu)** — zwijana ściągawka skilli wg kategorii: klik
-   `FRONTEND` → lista skilli frontendowych, `BACKEND` → backendowe itd. Źródło:
-   katalog skilli / plugin cache Claude Code (~300 skilli). Wzorzec wizualny jak
-   ściągi 7C (`<details>` + wpisy). Rozważ ładowanie z JSON (jak cheatsheets).
-   (7B tracker portów + 7C ściągi akcji — ✅ już zrobione.)
+Brak dalszych zaplanowanych zadań. Możliwe kierunki (do ustalenia z Matim, nie
+zaczynaj bez potwierdzenia):
+* persystencja aktywnego profilu (zapis do `profiles.local.json`),
+* filtr portów systemowych (ukryj svchost/System, pokaż tylko dev-serwery),
+* lepsza kategoryzacja skilli (np. mapowanie ręczne w JSON zamiast heurystyki),
+* pakowanie do instalatora (electron-builder) — Faza 5.
 
 Pisz kod czysty, skomentowany, gotowy do uruchomienia lokalnie. Let's continue LunaCore!

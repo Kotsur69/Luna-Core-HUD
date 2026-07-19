@@ -27,6 +27,8 @@ const { loadProfiles, getProfile } = require('./profiles');
 const { killProcess, PortWatcher } = require('./ports');
 // Sciagawki akcji (7C): grupy komend wysylanych przez Action Injector.
 const { loadCheatsheets } = require('./cheatsheets');
+// Sciagawka skilli (7A): auto-skan katalogow skilli -> kategorie.
+const { loadSkills } = require('./skills');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
@@ -241,6 +243,9 @@ function registerIpc() {
 
   // 7C: renderer pobiera grupy sciagawek do zbudowania zwijek + przyciskow.
   ipcMain.handle('cheatsheets:list', () => loadCheatsheets());
+
+  // 7A: renderer pobiera skille pogrupowane w kategorie (wynik cache'owany).
+  ipcMain.handle('skills:list', () => loadSkills());
 }
 
 // ---- Cykl zycia aplikacji ---------------------------------------------------
@@ -251,6 +256,9 @@ app.whenReady().then(() => {
   startActiveProfile();
   startTranscriptWatcher();
   startPortWatcher();
+  // Pre-warm skanu skilli (7A) po chwili, zeby jednorazowy koszt ~2s nie
+  // opoznial startu okna. Wynik trafia do cache i pozniej odpowiada natychmiast.
+  setTimeout(() => loadSkills(), 3000);
 
   app.on('activate', () => {
     // macOS: odtworz okno po kliknieciu w Dock, jesli wszystkie zamkniete.
