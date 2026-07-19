@@ -68,7 +68,7 @@
         <p id="ctx-tokens" class="hint">Oczekiwanie na transcript sesji...</p>
       </div>
 
-      <div class="panel__section panel__section--grow">
+      <div class="panel__section">
         <h2 class="panel__title">Skill Tracker</h2>
         <!-- Kafelki zapala parser stdout (nazwa narzedzia -> kafelek). -->
         <ul id="skill-list" class="skill-list">
@@ -82,6 +82,13 @@
           <li class="skill-tile" data-skill="Task">Task</li>
         </ul>
         <p class="hint">Kafelek swieci, gdy Claude uzywa narzedzia.</p>
+      </div>
+
+      <div class="panel__section panel__section--grow">
+        <h2 class="panel__title">Porty localhost</h2>
+        <!-- Wypelnia renderer.js z pasywnego skanu (7B). -->
+        <ul id="ports-list" class="ports-list"></ul>
+        <p id="ports-empty" class="hint">Skanowanie portow...</p>
       </div>
     </aside>
 

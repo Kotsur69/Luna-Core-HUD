@@ -12,7 +12,7 @@
 //   - odsyla surowy strumien stdout PTY do renderera do wyswietlenia/parsowania.
 // ============================================================================
 
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 // @lydell/node-pty: utrzymywany fork node-pty z prebuildami (N-API),
@@ -23,6 +23,8 @@ const pty = require('@lydell/node-pty');
 const { detectTools, TranscriptWatcher } = require('./observer');
 // Profile uruchomieniowe (Faza 4): definicje "jak wystartowac sesje" z JSON.
 const { loadProfiles, getProfile } = require('./profiles');
+// Tracker portow localhost (7B): pasywny skan nasluchujacych portow + kill.
+const { killProcess, PortWatcher } = require('./ports');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
@@ -44,6 +46,8 @@ let ptyProcess = null;
 let mainWindow = null;
 /** @type {TranscriptWatcher | null} */
 let transcriptWatcher = null;
+/** @type {PortWatcher | null} */
+let portWatcher = null;
 // Profile wczytane z config/ oraz id aktualnie aktywnego.
 let profiles = [];
 let activeProfileId = null;
@@ -176,6 +180,17 @@ function startTranscriptWatcher() {
   transcriptWatcher.start();
 }
 
+// ---- Passive Observer: porty localhost (7B) ---------------------------------
+
+function startPortWatcher() {
+  portWatcher = new PortWatcher((ports) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('ports:update', ports);
+    }
+  });
+  portWatcher.start();
+}
+
 // ---- Kanaly IPC -------------------------------------------------------------
 
 function registerIpc() {
@@ -208,6 +223,19 @@ function registerIpc() {
   ipcMain.on('pty:restart', (_event, profileId) => {
     if (typeof profileId === 'string') restartPty(profileId);
   });
+
+  // 7B: otworz http://localhost:PORT w domyslnej przegladarce.
+  ipcMain.on('ports:open', (_event, port) => {
+    const p = port | 0;
+    if (p > 0 && p <= 65535) shell.openExternal(`http://localhost:${p}`);
+  });
+
+  // 7B: ubij proces po PID (na wyrazne klikniecie usera) + odswiez liste.
+  ipcMain.handle('ports:kill', async (_event, pid) => {
+    const ok = await killProcess(pid);
+    if (ok && portWatcher) portWatcher.refresh();
+    return ok;
+  });
 }
 
 // ---- Cykl zycia aplikacji ---------------------------------------------------
@@ -217,6 +245,7 @@ app.whenReady().then(() => {
   createWindow();
   startActiveProfile();
   startTranscriptWatcher();
+  startPortWatcher();
 
   app.on('activate', () => {
     // macOS: odtworz okno po kliknieciu w Dock, jesli wszystkie zamkniete.
@@ -231,6 +260,10 @@ app.on('window-all-closed', () => {
   if (transcriptWatcher) {
     transcriptWatcher.stop();
     transcriptWatcher = null;
+  }
+  if (portWatcher) {
+    portWatcher.stop();
+    portWatcher = null;
   }
   if (ptyProcess) {
     ptyProcess.kill();

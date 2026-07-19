@@ -9,8 +9,11 @@
 > (przełącznik w lewym panelu → restart sesji z env z `config/profiles.json`).
 > Kod: `src/observer.js`, `src/profiles.js` + wpięcia w `main.js`/`preload.js`/`renderer/`.
 >
-> 👉 **NASTĘPNY KROK = backlog z sekcji 7** (ściągawki: 7A skille wg kategorii /
-> 7B tracker portów localhost / 7C zwijki + przyciski komend — 7C najważniejsze).
+> ✅ **7B (tracker portów localhost) — ZROBIONE** (2026-07-19). `src/ports.js`
+> (skan `Get-NetTCPConnection`/`lsof`, PID→proces, kill) + sekcja w prawym panelu
+> (otwórz / kopiuj / kill). Zero tokenów, read-only.
+>
+> 👉 **NASTĘPNY KROK = 7C** (zwijki + przyciski komend, najważniejsze) → potem 7A.
 
 ---
 
@@ -133,11 +136,11 @@ kroki. Chcemy ten sam feel wbudowany natywnie w prawym/dolnym panelu LunaCore.
 * Źródło listy: ~300 skilli (katalog skilli / plugin cache Claude Code).
 * Cel: szybki podgląd „co mam pod ręką", bez scrollowania całej płaskiej listy.
 
-### 7B. Tracker otwartych portów localhost
-* Panel pokazujący nasłuchujące porty localhost na żywo (backend: `netstat -ano` /
-  `Get-NetTCPConnection`, mapowanie PID → nazwa procesu), z auto-odświeżaniem.
-* Akcje przy wpisie: otwórz `http://localhost:PORT`, kopiuj, opcjonalnie kill PID.
-* W duchu Passive Observer — czysto lokalne, zero tokenów.
+### 7B. Tracker otwartych portów localhost — ✅ ZROBIONE
+* `src/ports.js`: `scanPorts()` (`Get-NetTCPConnection` na Win / `lsof` na POSIX),
+  `PortWatcher` (polling 4s, emisja tylko przy zmianie), `killProcess()` (taskkill).
+* Prawy panel: lista port · proces · PID + akcje otwórz/kopiuj/kill (z confirm).
+* IPC: `ports:update`, `ports:open` (shell.openExternal), `ports:kill`. Read-only.
 
 ### 7C. Ściągawki akcji ze „zwijką + przyciskami komend" (NAJWAŻNIEJSZE)
 * Zwijane sekcje tematyczne (à la ecc-sciagawka), a **pod każdą zwijką rząd
@@ -156,12 +159,11 @@ Nie zaczynamy od zera — **Fazy 1–4 są gotowe** (patrz STATUS + `README.md` 
 `src/`). Rdzeń działa: terminal, COMPACT, Passive Observer, profile. Teraz
 warstwa „quality of life" — backlog z sekcji 7. Rekomendowana kolejność:
 
-1. **7C (najważniejsze)** — ściągawki akcji: zwijki `<details>` + rząd przycisków
-   wysyłających komendy przez Action Injector (`window.lunacore.runCommand(...)`).
+1. **7C (najważniejsze, NASTĘPNE)** — ściągawki akcji: zwijki `<details>` + rząd
+   przycisków wysyłających komendy przez Action Injector (`window.lunacore.runCommand(...)`).
    Zacznij od „Review przed commitem": `/code-review`, `/security-review`,
    `npm test`, `git diff`, `git status`. Reuse wzorca wizualnego z ecc-sciagawki.
-2. **7B** — tracker portów localhost (backend `Get-NetTCPConnection`/`netstat`,
-   PID→proces, auto-refresh; nowy kanał IPC read-only, w duchu Passive Observera).
-3. **7A** — zwijana ściągawka skilli wg kategorii.
+2. **7A** — zwijana ściągawka skilli wg kategorii.
+   (7B — tracker portów localhost — ✅ już zrobione.)
 
 Pisz kod czysty, skomentowany, gotowy do uruchomienia lokalnie. Let's continue LunaCore!

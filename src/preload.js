@@ -39,6 +39,16 @@ contextBridge.exposeInMainWorld('lunacore', {
     ipcRenderer.on('pty:restarted', (_event, profile) => callback(profile));
   },
 
+  // --- 7B: tracker portow localhost ---
+  /** Lista nasluchujacych portow: [{ port, procId, name }]. */
+  onPorts: (callback) => {
+    ipcRenderer.on('ports:update', (_event, ports) => callback(ports));
+  },
+  /** Otwiera http://localhost:PORT w przegladarce. */
+  openPort: (port) => ipcRenderer.send('ports:open', port),
+  /** Ubija proces po PID; zwraca Promise<boolean>. */
+  killPort: (pid) => ipcRenderer.invoke('ports:kill', pid),
+
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
   /** Surowe wejscie z klawiatury (xterm.js onData) do PTY. */
   write: (data) => ipcRenderer.send('pty:write', data),

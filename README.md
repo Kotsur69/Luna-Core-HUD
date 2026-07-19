@@ -102,6 +102,7 @@ Luna-Core-HUD/
 │   ├── main.js            # main process: window + PTY + IPC channels
 │   ├── observer.js        # Passive Observer: tool detection + transcript tailing
 │   ├── profiles.js        # load/validate launch profiles from config/
+│   ├── ports.js           # localhost port scanner (listen ports + PID→process)
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
@@ -144,6 +145,14 @@ Drop a `config/profiles.local.json` (gitignored) to add or override profiles
 by `id` without touching the committed file — handy for machine-specific keys.
 Switching a profile kills the current session and starts a fresh one with the
 selected environment; no extra tokens are spent.
+
+## Localhost ports tracker
+
+The right panel lists listening TCP ports (dev servers and everything else),
+scanned every few seconds via `Get-NetTCPConnection` on Windows (`lsof` on
+macOS/Linux), each mapped to its owning process and PID. Per row you can open
+`http://localhost:PORT` in the browser, copy the URL, or kill the process (with
+a confirm). Purely local, read-only observation — no tokens spent.
 
 ---
 

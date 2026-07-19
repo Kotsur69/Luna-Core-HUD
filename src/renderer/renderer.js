@@ -172,6 +172,71 @@ window.lunacore.onRestarted((profile) => {
 
 initProfiles();
 
+// ---- 7B: Tracker portow localhost -------------------------------------------
+
+const portsList = document.getElementById('ports-list');
+const portsEmpty = document.getElementById('ports-empty');
+
+// Buduje jeden przycisk akcji (bezpiecznie, bez wstrzykiwania HTML).
+function portButton(label, act, title, dataset) {
+  const b = document.createElement('button');
+  b.className = act === 'kill' ? 'port-btn port-btn--kill' : 'port-btn';
+  b.textContent = label;
+  b.title = title;
+  b.dataset.act = act;
+  Object.assign(b.dataset, dataset);
+  return b;
+}
+
+window.lunacore.onPorts((ports) => {
+  portsList.innerHTML = '';
+  portsEmpty.style.display = ports.length ? 'none' : '';
+  if (!ports.length) {
+    portsEmpty.textContent = 'Brak nasluchujacych portow.';
+    return;
+  }
+  for (const p of ports) {
+    const li = document.createElement('li');
+    li.className = 'port-item';
+
+    const port = document.createElement('span');
+    port.className = 'port-item__port';
+    port.textContent = p.port;
+
+    const proc = document.createElement('span');
+    proc.className = 'port-item__proc';
+    proc.textContent = `${p.name} · ${p.procId}`;
+    proc.title = `PID ${p.procId}`;
+
+    const actions = document.createElement('span');
+    actions.className = 'port-item__actions';
+    actions.appendChild(portButton('↗', 'open', 'Otworz w przegladarce', { port: p.port }));
+    actions.appendChild(portButton('⧉', 'copy', 'Kopiuj URL', { port: p.port }));
+    actions.appendChild(
+      portButton('✕', 'kill', 'Zabij proces', { pid: p.procId, name: p.name, port: p.port })
+    );
+
+    li.append(port, proc, actions);
+    portsList.appendChild(li);
+  }
+});
+
+// Delegacja akcji: otworz / kopiuj / kill.
+portsList.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.port-btn');
+  if (!btn) return;
+  const { act, port, pid, name } = btn.dataset;
+  if (act === 'open') {
+    window.lunacore.openPort(Number(port));
+  } else if (act === 'copy') {
+    navigator.clipboard.writeText(`http://localhost:${port}`).catch(() => {});
+    pulse(btn);
+  } else if (act === 'kill') {
+    if (!confirm(`Zabic proces ${name} (PID ${pid}) na porcie ${port}?`)) return;
+    await window.lunacore.killPort(Number(pid));
+  }
+});
+
 // ---- Wskaznik statusu PTY ----------------------------------------------------
 
 function setPtyStatus(isLive, text) {
