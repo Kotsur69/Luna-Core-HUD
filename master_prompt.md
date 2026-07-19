@@ -1,156 +1,164 @@
-\# MASTER PROMPT: Budowa aplikacji LunaCore (Wizualny GUI Wrapper dla Claude CLI)
+# MASTER PROMPT: Budowa aplikacji LunaCore (Wizualny GUI Wrapper dla Claude CLI)
 
+## STATUS (punkt startu następnej sesji)
 
-
-\## ROLA I CEL
-
-Jesteś wybitnym inżynierem oprogramowania specjalizującym się w aplikacjach desktopowych (Electron/Tauri), emulatorach terminali oraz integracji z procesami systemowymi (node-pty). 
-
-Twoim celem jest zaprojektowanie i napisanie lokalnej aplikacji desktopowej o nazwie \*\*LunaCore\*\*. Będzie to wizualna nakładka (dashboard) na oficjalne narzędzie Claude Code CLI.
-
-
-
-\---
-
-
-
-\## 1. INSPIRACJA I KONTEKST
-
-\* \*\*Główna inspiracja:\*\* Projekt szablonów i agentów \[https://github.com/davila7/claude-code-templates](https://github.com/davila7/claude-code-templates). Chcemy stworzyć "centrum dowodzenia" dla bogatego zestawu skilli, mcp i agentów.
-
-\* \*\*Obecny stan:\*\* Użytkownik posiada już zaawansowany CLI dashboard w terminalu wyświetlający metryki: użycie Context Window w %, czas operacji, aktywne serwery MCP oraz estymowany koszt.
-
-\* \*\*Problem do rozwiązania:\*\* Brak możliwości interaktywnego sterowania (np. kliknięcia fizycznego przycisku zamiast wpisywania komend z palca) oraz potrzeba lepszej wizualizacji, które z \~300 skilli są w danej chwili używane przez model.
-
-
-
-\---
-
-
-
-\## 2. KLUCZOWE ZAŁOŻENIE I OGRANICZENIE (MUST-HAVE)
-
-> ⚠️ \*\*STRICT CONSTRAINT: ZERO DODATKOWYCH TOKENÓW\*\*
-
-> Aplikacja \*\*NIE MOŻE\*\* wstrzykiwać do Claude żadnych ukrytych promptów systemowych, middleware ani modyfikować binarnego pliku `claude`. Każda próba "inteligentnej" analizy kontekstu przez dodatkowego agenta spali context window użytkownika.
-
+> ✅ **FAZA 1 i FAZA 2 — ZROBIONE** (2026-07-18, commit `13294e0`, wypushowane na
+> `main`: https://github.com/Kotsur69/Luna-Core-HUD).
+> Działa: okno Electron, interaktywny terminal `claude` na PTY, bezpieczny IPC,
+> fizyczny przycisk **⚡ COMPACT CONTEXT**.
 >
-
-> \*\*Jak to ma działać:\*\*
-
-> Aplikacja działa wyłącznie jako \*\*Passive Observer\*\* (nasłuchuje strumienia `stdout` procesu CLI i wyciąga z niego dane za pomocą Regexów na poziomie backendu Node.js) oraz \*\*Action Injector\*\* (fizyczne przyciski na GUI symulują wpisanie tekstu przez użytkownika bezpośrednio do strumienia `stdin` działającego procesu terminala).
-
-
-
-\---
-
-
-
-\## 3. STOS TECHNOLOGICZNY (TECH STACK)
-
-\* \*\*Środowisko:\*\* Electron (lub Tauri) – do wyboru stabilne i łatwe w konfiguracji środowisko z dostępem do Node.js API.
-
-\* \*\*Terminal Core:\*\* `node-pty` (do wielowątkowego zarządzania procesem Claude CLI jako pseudoterminal) + `xterm.js` wraz z pluginem `xterm-addon-fit` (do renderowania pięknego terminala w oknie aplikacji).
-
-\* \*\*Frontend:\*\* HTML, CSS, JavaScript (Vanilla, React lub Svelte) stylizowany na mroczny, cyberpunkowy dashboard dopasowany do motywu LunaCore.
-
-
-
-\---
-
-
-
-\## 4. ARCHITEKTURA INTERFEJSU (LAYOUT)
-
-Aplikacja ma być podzielona na 3 sekcje:
-
-1\. \*\*Lewy Panel (Kontrola i Akcje):\*\*
-
-&#x20;  \* Przycisk `\[⚡ COMPACT CONTEXT]` – jego kliknięcie natychmiast wysyła `/compact\\n` do procesu PTY.
-
-&#x20;  \* Przełącznik Profili / Środowisk (np. Claude Cloud vs Lokalne LM Studio).
-
-2\. \*\*Centrum (Główny Terminal):\*\*
-
-&#x20;  \* Wyrenderowane okno `xterm.js`, w którym normalnie toczy się rozmowa z Claude CLI.
-
-3\. \*\*Prawy Panel (Monitor Statusu):\*\*
-
-&#x20;  \* \*\*Skill Tracker:\*\* Lista kafelków reprezentujących najważniejsze skille / serwery MCP. Na podstawie przechwyconych logów stdout (np. gdy regex wykryje `Running tool: \[nazwa]`), odpowiedni kafelek podświetla się na zielono.
-
-&#x20;  \* \*\*Wskaźnik Context Window:\*\* Wizualny pasek postępu (Progress Bar) zmieniający kolor w zależności od zużycia (Zielony < 60%, Żółty 60-85%, Czerwony > 85% z ostrzeżeniem "Compact this shit!").
-
-
-
-\---
-
-
-
-\## 5. FAZY WDROŻENIA PROJEKTU
-
-
-
-Zbudujemy ten projekt krok po kroku. Na tym etapie skupmy się na przygotowaniu architektury i pierwszych plików konfiguracyjnych.
-
-
-
-\### FAZA 1: Inicjalizacja i uruchomienie PTY
-
-\* Konfiguracja projektu Electron.
-
-\* Spięcie procesu głównego (`main.js`) z procesem renderowania.
-
-\* Implementacja `node-pty` uruchamiającego domyślną powłokę z komendą `claude`.
-
-\* Osadzenie i stylizacja `xterm.js` w oknie głównym, aby terminal działał płynnie i interaktywnie.
-
-
-
-\### FAZA 2: Kanał Akcji (Action Injector)
-
-\* Implementacja mechanizmu IPC (Inter-Process Communication) w Electronie.
-
-\* Stworzenie przycisku na froncie `\[Compact Context]`.
-
-\* Zaprogramowanie backendu tak, aby po kliknięciu przycisku pisał bezpośrednio do aktywnego strumienia: `ptyProcess.write('/compact\\r')`.
-
-
-
-\### FAZA 3: Parser Strumienia i Metryki (Passive Observer)
-
-\* Dodanie listenera na dane wyjściowe z PTY (`ptyProcess.onData(...)`).
-
-\* Stworzenie parsera Regex, który wyciąga z logów informacje o zużyciu tokenów/kontekstu, aktywnych narzędziach MCP oraz statusie (np. "manual mode on").
-
-\* Przesyłanie sparsowanych metryk w czasie rzeczywistym do frontendu w celu aktualizacji widgetów bocznych.
-
-
-
-\### FAZA 4: Zarządzanie Profilami (LM Studio / Codex)
-
-\* Dodanie możliwości definiowania profili uruchomieniowych w pliku JSON.
-
-\* Opcja automatycznego restartu sesji PTY z flagami wskazującymi na lokalny endpoint LM Studio (`--api-url http://localhost:1234/v1`).
-
-
-
-\---
-
-
-
-\## ZADANIE DLA CIEBIE (KROK 1)
-
-Zaczynamy od \*\*Fazy 1 i Fazy 2\*\*. Wygeneruj dla mnie:
-
-1\. Strukturę katalogów dla projektu opartego na Electronie.
-
-2\. Kompletny plik `package.json` z niezbędnymi zależnościami (`node-pty`, `xterm`, `xterm-addon-fit`, `electron`).
-
-3\. Kod procesu głównego (`main.js`), który poprawnie konfiguruje pseudoterminal i obsługuje kanał IPC do wysyłania komend (takich jak `/compact`).
-
-4\. Kod prostego frontendu (`index.html` + `renderer.js`), który wyświetla terminal `xterm.js` na środku oraz boczny panel z fizycznym, działającym przyciskiem `⚡ COMPACT CONTEXT`.
-
-
-
-Pisz kod czysty, skomentowany, gotowy do uruchomienia lokalnie. Let's build LunaCore!
-
+> 👉 **NASTĘPNY KROK = FAZA 3** (parser strumienia i metryki). Szczegóły w sekcji
+> „ZADANIE DLA CIEBIE" na dole. Kod i architektura: patrz `README.md` + `src/`.
+
+---
+
+## ROLA I CEL
+
+Jesteś wybitnym inżynierem oprogramowania specjalizującym się w aplikacjach
+desktopowych (Electron/Tauri), emulatorach terminali oraz integracji z procesami
+systemowymi (node-pty).
+
+Twoim celem jest rozwijanie lokalnej aplikacji desktopowej **LunaCore** — wizualnej
+nakładki (dashboard) na oficjalne narzędzie Claude Code CLI.
+
+---
+
+## 1. INSPIRACJA I KONTEKST
+
+* **Główna inspiracja:** projekt szablonów i agentów
+  [claude-code-templates](https://github.com/davila7/claude-code-templates).
+  Chcemy „centrum dowodzenia" dla bogatego zestawu skilli, MCP i agentów.
+* **Obecny stan:** użytkownik posiada zaawansowany CLI dashboard w terminalu
+  (Context Window w %, czas operacji, aktywne serwery MCP, estymowany koszt).
+* **Problem do rozwiązania:** brak interaktywnego sterowania (klikalne przyciski
+  zamiast wpisywania komend) oraz potrzeba lepszej wizualizacji, które z ~300
+  skilli są w danej chwili używane przez model.
+
+---
+
+## 2. KLUCZOWE ZAŁOŻENIE I OGRANICZENIE (MUST-HAVE)
+
+> ⚠️ **STRICT CONSTRAINT: ZERO DODATKOWYCH TOKENÓW**
+> Aplikacja **NIE MOŻE** wstrzykiwać do Claude żadnych ukrytych promptów,
+> middleware ani modyfikować binarki `claude`. Każda „inteligentna" analiza
+> kontekstu przez dodatkowego agenta spali context window użytkownika.
+>
+> **Jak to ma działać:**
+> * **Passive Observer** — nasłuchuje `stdout` procesu CLI i wyciąga dane Regexami
+>   na poziomie backendu Node.js.
+> * **Action Injector** — fizyczne przyciski GUI symulują wpisanie tekstu przez
+>   użytkownika bezpośrednio do `stdin` działającego procesu terminala.
+
+---
+
+## 3. STOS TECHNOLOGICZNY (TECH STACK)
+
+* **Środowisko:** Electron (33.x) z bezpiecznymi ustawieniami — `contextIsolation`
+  włączone, `nodeIntegration` wyłączone, most IPC przez `preload.js`
+  (`contextBridge` → `window.lunacore`). Renderer NIE ma bezpośredniego dostępu do
+  Node.js.
+* **Terminal Core:** **`@lydell/node-pty`** (prebuilt N-API — działa bez node-gyp /
+  Visual Studio Build Tools; oryginalny `node-pty` nie kompiluje się, bo node-gyp
+  nie wykrywa VS Build Tools 2026 na tej maszynie) + `@xterm/xterm` z pluginem
+  `@xterm/addon-fit`.
+* **Frontend:** Vanilla HTML/CSS/JS, styl mrocznego cyberpunkowego dashboardu
+  LunaCore (neonowy fiolet + cyan).
+
+---
+
+## 4. ARCHITEKTURA INTERFEJSU (LAYOUT)
+
+Aplikacja podzielona na 3 sekcje:
+
+1. **Lewy Panel (Kontrola i Akcje):**
+   * Przycisk `[⚡ COMPACT CONTEXT]` — kliknięcie wysyła `/compact\r` do PTY. ✅
+   * Przełącznik Profili / Środowisk (Claude Cloud vs lokalne LM Studio) — Faza 4.
+2. **Centrum (Główny Terminal):**
+   * Wyrenderowane okno `xterm.js` z interaktywną sesją Claude CLI. ✅
+3. **Prawy Panel (Monitor Statusu):**
+   * **Skill Tracker:** kafelki skilli / MCP; kafelek zapala się na zielono, gdy
+     regex wykryje `Running tool: [nazwa]`. (layout gotowy, logika = Faza 3)
+   * **Wskaźnik Context Window:** pasek postępu zmieniający kolor (Zielony < 60%,
+     Żółty 60–85%, Czerwony > 85% z ostrzeżeniem „Compact this shit!").
+     (layout gotowy, logika = Faza 3)
+
+---
+
+## 5. CO JUŻ ZROBIONE (Faza 1 + 2)
+
+* Konfiguracja projektu Electron, spięcie main ↔ renderer przez preload.
+* `@lydell/node-pty` uruchamia powłokę (`powershell.exe` na Win) + auto-`claude`
+  (flaga `AUTO_LAUNCH_CLAUDE` w `src/main.js`).
+* Osadzony i ostylowany `xterm.js` + `addon-fit` (płynny, interaktywny terminal).
+* Kanały IPC: `pty:data` (observer), `pty:write` (klawiatura), `pty:command`
+  (przyciski), `pty:resize`.
+* Działający przycisk **⚡ COMPACT CONTEXT** → `runCommand('/compact')`.
+* Prawy panel (pasek Context Window + kafelki Skill Trackera) obecny w layoucie
+  jako placeholdery, gotowy pod podpięcie parsera.
+
+---
+
+## 6. FAZY DALSZE (ROADMAP)
+
+### FAZA 3: Parser Strumienia i Metryki (Passive Observer) — NASTĘPNA
+* Listener na `ptyProcess.onData(...)` po stronie backendu.
+* Parser Regex wyciągający z logów: zużycie kontekstu/tokenów (→ pasek %),
+  aktywne narzędzia MCP / `Running tool: [nazwa]` (→ podświetlanie kafelków),
+  status (np. „manual mode on").
+* Przesyłanie sparsowanych metryk w czasie rzeczywistym do frontendu (nowy kanał
+  IPC, np. `metrics:update`) → aktualizacja widgetów bocznych.
+
+### FAZA 4: Zarządzanie Profilami (LM Studio / Codex)
+* Definiowanie profili uruchomieniowych w pliku JSON (`config/profiles.json`).
+* Restart sesji PTY z flagami wskazującymi lokalny endpoint LM Studio
+  (`--api-url http://localhost:1234/v1`).
+
+---
+
+## 7. PLANY / POMYSŁY DO ZAPROJEKTOWANIA (backlog)
+
+Wzorzec wizualny dla wszystkich „ściągawek" poniżej:
+`file:///C:/Users/Kotsur69/.claude/helpers/ecc-sciagawka-mati.html`
+— zwijane sekcje (`<details>`/`<summary>`), badge'y (cmd / skill / hook), czytelne
+kroki. Chcemy ten sam feel wbudowany natywnie w prawym/dolnym panelu LunaCore.
+
+### 7A. Zwijana ściągawka skilli (Skill Cheat-Sheet)
+* Zwijki wg kategorii: klikam **FRONTEND** → rozwija się lista skilli do frontendu;
+  **BACKEND** → lista backendowych; itd. (Design, DevOps/Deploy, Testing, Git,
+  Data/ML, Security, Docs...).
+* Źródło listy: ~300 skilli (katalog skilli / plugin cache Claude Code).
+* Cel: szybki podgląd „co mam pod ręką", bez scrollowania całej płaskiej listy.
+
+### 7B. Tracker otwartych portów localhost
+* Panel pokazujący nasłuchujące porty localhost na żywo (backend: `netstat -ano` /
+  `Get-NetTCPConnection`, mapowanie PID → nazwa procesu), z auto-odświeżaniem.
+* Akcje przy wpisie: otwórz `http://localhost:PORT`, kopiuj, opcjonalnie kill PID.
+* W duchu Passive Observer — czysto lokalne, zero tokenów.
+
+### 7C. Ściągawki akcji ze „zwijką + przyciskami komend" (NAJWAŻNIEJSZE)
+* Zwijane sekcje tematyczne (à la ecc-sciagawka), a **pod każdą zwijką rząd
+  przycisków**, które przez Action Injector wysyłają konkretne komendy do CLI.
+* Przykład — zwijka **„Review przed commitem"**: checklista/ściąga na górze, a pod
+  nią przyciski: `/code-review`, `/security-review`, `npm test`, `git diff`,
+  `git status` itp. — każdy przycisk = jedno wstrzyknięcie komendy do stdin.
+* Docelowo zestaw gotowych zwijek (Review, Git, Testy, Deploy...), każda z własnym
+  zestawem przycisków-komend. To najwygodniejszy wariant sterowania.
+
+---
+
+## ZADANIE DLA CIEBIE (NASTĘPNY KROK = FAZA 3)
+
+Nie zaczynamy od zera — **Faza 1 i 2 są gotowe i wypushowane** (patrz STATUS +
+`README.md`). Zajmij się **Fazą 3 (Passive Observer / parser metryk)**:
+
+1. Dodaj po stronie `src/main.js` przechwytywanie i parsowanie `stdout` PTY
+   (Regex) — bez wpływu na to, co widzi użytkownik w terminalu.
+2. Wyślij sparsowane metryki nowym kanałem IPC do renderera.
+3. W rendererze podłącz: pasek **Context Window** (`--ctx` 0..1 + kolory progów +
+   ostrzeżenie > 85%) oraz podświetlanie kafelków **Skill Trackera**
+   (`.is-active`) na podstawie `Running tool: [nazwa]`.
+
+Najpierw zaproponuj konkretne wzorce Regex (na bazie realnego formatu outputu
+Claude CLI / dashboardu w terminalu), zanim zaczniesz kodować parser.
+
+Pisz kod czysty, skomentowany, gotowy do uruchomienia lokalnie. Let's continue LunaCore!
