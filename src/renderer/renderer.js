@@ -237,6 +237,62 @@ portsList.addEventListener('click', async (e) => {
   }
 });
 
+// ---- 7C: Sciagawki akcji (zwijki + przyciski komend) ------------------------
+
+const cheatsContainer = document.getElementById('cheatsheets');
+
+async function initCheatsheets() {
+  let data;
+  try {
+    data = await window.lunacore.getCheatsheets();
+  } catch {
+    return; // brak configu - sekcja zostaje pusta
+  }
+  const groups = (data && data.groups) || [];
+  cheatsContainer.innerHTML = '';
+  groups.forEach((group, i) => {
+    const details = document.createElement('details');
+    details.className = 'cheat';
+    if (i === 0) details.open = true; // pierwsza grupa rozwinieta
+
+    const summary = document.createElement('summary');
+    summary.className = 'cheat__summary';
+    summary.textContent = group.title;
+    details.appendChild(summary);
+
+    if (group.note) {
+      const note = document.createElement('p');
+      note.className = 'cheat__note';
+      note.textContent = group.note;
+      details.appendChild(note);
+    }
+
+    const cmds = document.createElement('div');
+    cmds.className = 'cheat__cmds';
+    for (const c of group.commands) {
+      const btn = document.createElement('button');
+      btn.className = 'cheat__btn';
+      btn.textContent = c.label;
+      btn.title = c.command; // pelna komenda w tooltipie
+      btn.dataset.cmd = c.command;
+      cmds.appendChild(btn);
+    }
+    details.appendChild(cmds);
+    cheatsContainer.appendChild(details);
+  });
+}
+
+// Delegacja: klik przycisku = wstrzykniecie komendy do PTY (Action Injector).
+cheatsContainer.addEventListener('click', (e) => {
+  const btn = e.target.closest('.cheat__btn');
+  if (!btn) return;
+  window.lunacore.runCommand(btn.dataset.cmd);
+  pulse(btn);
+  term.focus();
+});
+
+initCheatsheets();
+
 // ---- Wskaznik statusu PTY ----------------------------------------------------
 
 function setPtyStatus(isLive, text) {

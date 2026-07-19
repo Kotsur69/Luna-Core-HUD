@@ -9,11 +9,11 @@
 > (przełącznik w lewym panelu → restart sesji z env z `config/profiles.json`).
 > Kod: `src/observer.js`, `src/profiles.js` + wpięcia w `main.js`/`preload.js`/`renderer/`.
 >
-> ✅ **7B (tracker portów localhost) — ZROBIONE** (2026-07-19). `src/ports.js`
-> (skan `Get-NetTCPConnection`/`lsof`, PID→proces, kill) + sekcja w prawym panelu
-> (otwórz / kopiuj / kill). Zero tokenów, read-only.
+> ✅ **7B i 7C — ZROBIONE** (2026-07-19). 7B: `src/ports.js` + sekcja portów
+> (otwórz/kopiuj/kill). 7C: `src/cheatsheets.js` + `config/cheatsheets.json` +
+> zwijki `<details>` z przyciskami komend w lewym panelu (`!` = bash w Claude).
 >
-> 👉 **NASTĘPNY KROK = 7C** (zwijki + przyciski komend, najważniejsze) → potem 7A.
+> 👉 **NASTĘPNY KROK = 7A** (zwijana ściągawka skilli wg kategorii) — ostatni z backlogu.
 
 ---
 
@@ -142,14 +142,12 @@ kroki. Chcemy ten sam feel wbudowany natywnie w prawym/dolnym panelu LunaCore.
 * Prawy panel: lista port · proces · PID + akcje otwórz/kopiuj/kill (z confirm).
 * IPC: `ports:update`, `ports:open` (shell.openExternal), `ports:kill`. Read-only.
 
-### 7C. Ściągawki akcji ze „zwijką + przyciskami komend" (NAJWAŻNIEJSZE)
-* Zwijane sekcje tematyczne (à la ecc-sciagawka), a **pod każdą zwijką rząd
-  przycisków**, które przez Action Injector wysyłają konkretne komendy do CLI.
-* Przykład — zwijka **„Review przed commitem"**: checklista/ściąga na górze, a pod
-  nią przyciski: `/code-review`, `/security-review`, `npm test`, `git diff`,
-  `git status` itp. — każdy przycisk = jedno wstrzyknięcie komendy do stdin.
-* Docelowo zestaw gotowych zwijek (Review, Git, Testy, Deploy...), każda z własnym
-  zestawem przycisków-komend. To najwygodniejszy wariant sterowania.
+### 7C. Ściągawki akcji ze „zwijką + przyciskami komend" — ✅ ZROBIONE
+* `config/cheatsheets.json` (+ `cheatsheets.local.json`) → `src/cheatsheets.js`
+  (load/walidacja/merge). Renderer buduje `<details>` z rzędem przycisków; klik =
+  `runCommand()` przez Action Injector (kanał `pty:command`).
+* Konwencja: `!cmd` = powłoka (bash) w sesji Claude; `cmd` bez prefiksu = wprost.
+* Grupy domyślne: Review przed commitem, Git, Sesja Claude, Testy/Build.
 
 ---
 
@@ -159,11 +157,10 @@ Nie zaczynamy od zera — **Fazy 1–4 są gotowe** (patrz STATUS + `README.md` 
 `src/`). Rdzeń działa: terminal, COMPACT, Passive Observer, profile. Teraz
 warstwa „quality of life" — backlog z sekcji 7. Rekomendowana kolejność:
 
-1. **7C (najważniejsze, NASTĘPNE)** — ściągawki akcji: zwijki `<details>` + rząd
-   przycisków wysyłających komendy przez Action Injector (`window.lunacore.runCommand(...)`).
-   Zacznij od „Review przed commitem": `/code-review`, `/security-review`,
-   `npm test`, `git diff`, `git status`. Reuse wzorca wizualnego z ecc-sciagawki.
-2. **7A** — zwijana ściągawka skilli wg kategorii.
-   (7B — tracker portów localhost — ✅ już zrobione.)
+1. **7A (OSTATNI z backlogu)** — zwijana ściągawka skilli wg kategorii: klik
+   `FRONTEND` → lista skilli frontendowych, `BACKEND` → backendowe itd. Źródło:
+   katalog skilli / plugin cache Claude Code (~300 skilli). Wzorzec wizualny jak
+   ściągi 7C (`<details>` + wpisy). Rozważ ładowanie z JSON (jak cheatsheets).
+   (7B tracker portów + 7C ściągi akcji — ✅ już zrobione.)
 
 Pisz kod czysty, skomentowany, gotowy do uruchomienia lokalnie. Let's continue LunaCore!

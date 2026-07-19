@@ -1,0 +1,41 @@
+{
+  "groups": [
+    {
+      "title": "Review przed commitem",
+      "note": "Prefiks ! = komenda powloki (bash) w sesji Claude.",
+      "commands": [
+        { "label": "/code-review", "command": "/code-review" },
+        { "label": "/security-review", "command": "/security-review" },
+        { "label": "npm test", "command": "!npm test" },
+        { "label": "git diff", "command": "!git diff" },
+        { "label": "git status", "command": "!git status" }
+      ]
+    },
+    {
+      "title": "Git",
+      "commands": [
+        { "label": "status", "command": "!git status" },
+        { "label": "add -A", "command": "!git add -A" },
+        { "label": "diff --staged", "command": "!git diff --staged" },
+        { "label": "log -10", "command": "!git log --oneline -10" }
+      ]
+    },
+    {
+      "title": "Sesja Claude",
+      "commands": [
+        { "label": "/compact", "command": "/compact" },
+        { "label": "/context", "command": "/context" },
+        { "label": "/cost", "command": "/cost" },
+        { "label": "/clear", "command": "/clear" }
+      ]
+    },
+    {
+      "title": "Testy / Build",
+      "commands": [
+        { "label": "npm test", "command": "!npm test" },
+        { "label": "npm run build", "command": "!npm run build" },
+        { "label": "npm run lint", "command": "!npm run lint" }
+      ]
+    }
+  ]
+}

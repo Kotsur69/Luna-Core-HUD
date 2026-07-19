@@ -49,6 +49,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Ubija proces po PID; zwraca Promise<boolean>. */
   killPort: (pid) => ipcRenderer.invoke('ports:kill', pid),
 
+  // --- 7C: sciagawki akcji ---
+  /** Pobiera { groups: [{ title, note, commands: [{label, command}] }] }. */
+  getCheatsheets: () => ipcRenderer.invoke('cheatsheets:list'),
+
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
   /** Surowe wejscie z klawiatury (xterm.js onData) do PTY. */
   write: (data) => ipcRenderer.send('pty:write', data),

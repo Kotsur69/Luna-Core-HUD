@@ -103,13 +103,15 @@ Luna-Core-HUD/
 │   ├── observer.js        # Passive Observer: tool detection + transcript tailing
 │   ├── profiles.js        # load/validate launch profiles from config/
 │   ├── ports.js           # localhost port scanner (listen ports + PID→process)
+│   ├── cheatsheets.js     # load/validate action cheat-sheets from config/
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
 │       ├── renderer.js    # xterm.js ↔ PTY wiring + COMPACT button + profiles
 │       └── styles.css     # LunaCore cyberpunk theme
 ├── config/
-│   └── profiles.json      # launch profiles (profiles.local.json overrides, gitignored)
+│   ├── profiles.json      # launch profiles (profiles.local.json overrides, gitignored)
+│   └── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
 ├── master_prompt.md       # original build brief
 └── README.md
 ```
@@ -153,6 +155,20 @@ scanned every few seconds via `Get-NetTCPConnection` on Windows (`lsof` on
 macOS/Linux), each mapped to its owning process and PID. Per row you can open
 `http://localhost:PORT` in the browser, copy the URL, or kill the process (with
 a confirm). Purely local, read-only observation — no tokens spent.
+
+## Action cheat-sheets
+
+Collapsible command groups in the left panel, defined in
+[`config/cheatsheets.json`](config/cheatsheets.json). Each group is a `<details>`
+section with a row of buttons; clicking one injects its command straight into the
+session via the Action Injector — one click, one command. Defaults cover "Review
+before commit", Git, Claude session, and test/build.
+
+Convention: a command prefixed with `!` runs as a **shell** command inside the
+Claude session (e.g. `!git diff`), while an unprefixed command is typed verbatim
+(slash commands like `/compact`, `/code-review`). Add a
+`config/cheatsheets.local.json` (gitignored) to override groups by `title` or add
+your own.
 
 ---
 

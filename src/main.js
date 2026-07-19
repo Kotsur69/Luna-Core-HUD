@@ -25,6 +25,8 @@ const { detectTools, TranscriptWatcher } = require('./observer');
 const { loadProfiles, getProfile } = require('./profiles');
 // Tracker portow localhost (7B): pasywny skan nasluchujacych portow + kill.
 const { killProcess, PortWatcher } = require('./ports');
+// Sciagawki akcji (7C): grupy komend wysylanych przez Action Injector.
+const { loadCheatsheets } = require('./cheatsheets');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
@@ -236,6 +238,9 @@ function registerIpc() {
     if (ok && portWatcher) portWatcher.refresh();
     return ok;
   });
+
+  // 7C: renderer pobiera grupy sciagawek do zbudowania zwijek + przyciskow.
+  ipcMain.handle('cheatsheets:list', () => loadCheatsheets());
 }
 
 // ---- Cykl zycia aplikacji ---------------------------------------------------

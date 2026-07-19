@@ -287,6 +287,70 @@ html, body {
 .port-btn.is-pulsing { animation: pulse 0.45s ease; }
 .port-btn--kill:hover { color: var(--bad); border-color: var(--bad); }
 
+/* ---- Sciagawki akcji (7C) ------------------------------------------------- */
+
+.cheats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.cheat {
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--bg-panel-2);
+  overflow: hidden;
+}
+.cheat__summary {
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.cheat__summary::-webkit-details-marker { display: none; }
+.cheat__summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--neon-magenta);
+  transition: transform 0.15s ease;
+}
+.cheat[open] .cheat__summary::before { transform: rotate(90deg); }
+.cheat__summary:hover { color: var(--neon-cyan); }
+.cheat__note {
+  margin: 0;
+  padding: 0 12px 6px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  opacity: 0.8;
+}
+.cheat__cmds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 10px 10px;
+}
+.cheat__btn {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--edge-glow);
+  background: linear-gradient(135deg, #1a1030, #241442);
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+.cheat__btn:hover {
+  background: linear-gradient(135deg, #241442, #341d5c);
+  box-shadow: 0 0 12px rgba(199, 116, 255, 0.3);
+}
+.cheat__btn.is-pulsing { animation: pulse 0.45s ease; }
+
 /* subtelny scrollbar */
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--edge-glow); border-radius: 4px; }
