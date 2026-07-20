@@ -7,9 +7,10 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> Status: **Phases 1–4 implemented** — interactive terminal + Action Injector +
-> live Passive Observer + runtime profile switching (Claude Cloud / LM Studio /
-> bare shell, defined in `config/profiles.json`).
+> Status: **Phases 1–4 + full backlog implemented** — interactive terminal,
+> Action Injector, live Passive Observer, runtime profile switching, localhost
+> ports tracker, action cheat-sheets, skill cheat-sheet, and a multi-line
+> **prompt library**.
 
 ---
 
@@ -34,8 +35,10 @@ user's context window. It works only as:
 │  (Controls)         │                               │   (Status Monitor)  │
 ├─────────────────────┤     xterm.js render area      ├─────────────────────┤
 │ [⚡ COMPACT CONTEXT]│  Claude CLI interactive        │  Context Window bar │
-│                     │  session (node-pty process)   │  Skill Tracker      │
-│ Profile switcher    │                               │  tiles              │
+│ Profile switcher    │  session (node-pty process)   │  Skill Tracker      │
+│ Action cheat-sheets │                               │  tiles              │
+│ Prompt library      │                               │  Localhost ports    │
+│ Skill cheat-sheet   │                               │                     │
 └─────────────────────┴───────────────────────────────┴─────────────────────┘
 ```
 
@@ -48,6 +51,7 @@ user's context window. It works only as:
 | Passive Observer (Context %) | `TranscriptWatcher` tails `~/.claude/projects/**/*.jsonl` → real `usage` tokens → IPC `metrics:context` → bar |
 | Action Injector (keyboard) | `xterm.onData` → IPC `pty:write` → `ptyProcess.write()` |
 | Action Injector (button) | `runCommand('/compact')` → IPC `pty:command` → writes `/compact\r` |
+| Action Injector (prompt) | `pastePrompt(text, submit)` → IPC `pty:paste` → writes `ESC[200~ text ESC[201~` (bracketed paste), then `\r` only if `submit` |
 
 The Context Window % divides live `usage` tokens by a `CONTEXT_LIMIT` constant
 (200k default, in [`src/observer.js`](src/observer.js) — raise it for 1M-context
@@ -105,6 +109,7 @@ Luna-Core-HUD/
 │   ├── ports.js           # localhost port scanner (listen ports + PID→process)
 │   ├── cheatsheets.js     # load/validate action cheat-sheets from config/
 │   ├── skills.js          # scan skill dirs → categorized skill cheat-sheet
+│   ├── prompts.js         # load/validate multi-line prompt library from config/
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
@@ -112,8 +117,10 @@ Luna-Core-HUD/
 │       └── styles.css     # LunaCore cyberpunk theme
 ├── config/
 │   ├── profiles.json      # launch profiles (profiles.local.json overrides, gitignored)
-│   └── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
+│   ├── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
+│   └── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
 ├── master_prompt.md       # original build brief
+├── FUTURE_PLAN.md         # roadmap: themes, layout engine, feature shortlist
 └── README.md
 ```
 
@@ -128,6 +135,11 @@ Luna-Core-HUD/
 | 3 | Passive Observer → context % bar (real tokens) + Skill Tracker tiles | ✅ done |
 | 4 | Profile management (LM Studio / Codex endpoints via JSON) | ✅ done |
 | + | Backlog: localhost ports tracker, action cheat-sheets, skill cheat-sheet | ✅ done |
+| + | Prompt library (multi-line reusable prompts, bracketed-paste injection) | ✅ done |
+
+Next up (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §5.5): command palette (Ctrl+K),
+armed auto-compact toggle, token burn-rate sparkline, working-vs-waiting LED,
+CWD/project switcher, local scratchpad.
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
@@ -181,6 +193,23 @@ categories (Frontend, Backend, Data/ML, DevOps, Tests, Security, Database,
 Git/Review, Docs, Other). Click a category to expand its skills; click a skill
 to copy its name. Categorisation is keyword-heuristic (rough by design) and the
 scan result is cached per session. Read-only, zero tokens.
+
+## Prompt library
+
+Action cheat-sheets handle one-liners; the prompt library handles the **multi-line
+prompts you retype constantly**. Groups live in
+[`config/prompts.json`](config/prompts.json), each prompt being
+`{ label, text, note }` where `text` is a string *or* an array of lines (easier to
+read in JSON). Clicking a prompt **pastes it without sending**, so you can append
+specifics before hitting Enter; the small `⏎` button pastes and sends immediately.
+
+Injection uses **bracketed paste mode** (`ESC[200~ … ESC[201~`) rather than a raw
+write. This matters: in the Claude TUI every newline is an Enter, so a raw
+multi-line write would submit at the first line and scatter the rest across
+several messages. Bracketed paste tells the terminal "this is a paste, not
+keystrokes" — the whole block lands in the input buffer with its line breaks
+intact and nothing is sent until you say so. Drop a `config/prompts.local.json`
+(gitignored) for private prompts; it overrides base groups by `title`.
 
 ---
 

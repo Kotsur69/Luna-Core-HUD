@@ -293,6 +293,90 @@ cheatsContainer.addEventListener('click', (e) => {
 
 initCheatsheets();
 
+// ---- Biblioteka promptow (wielolinijkowe, wklejane) -------------------------
+
+const promptsContainer = document.getElementById('prompts');
+
+// Prompty trzymamy tutaj (dataset w DOM nie znosi wielolinijkowego tekstu
+// dobrze); przycisk niesie tylko indeks "grupa:prompt".
+const promptIndex = new Map();
+
+async function initPrompts() {
+  let data;
+  try {
+    data = await window.lunacore.getPrompts();
+  } catch {
+    return; // brak configu - sekcja zostaje pusta
+  }
+  const groups = (data && data.groups) || [];
+  promptsContainer.innerHTML = '';
+  promptIndex.clear();
+
+  groups.forEach((group, gi) => {
+    const details = document.createElement('details');
+    details.className = 'cheat';
+    if (gi === 0) details.open = true;
+
+    const summary = document.createElement('summary');
+    summary.className = 'cheat__summary';
+    summary.textContent = group.title;
+    details.appendChild(summary);
+
+    if (group.note) {
+      const note = document.createElement('p');
+      note.className = 'cheat__note';
+      note.textContent = group.note;
+      details.appendChild(note);
+    }
+
+    const list = document.createElement('div');
+    list.className = 'prompt-list';
+
+    group.prompts.forEach((p, pi) => {
+      const key = `${gi}:${pi}`;
+      promptIndex.set(key, p.text);
+
+      const row = document.createElement('div');
+      row.className = 'prompt-row';
+
+      // Glowny przycisk: wkleja prompt BEZ wyslania (mozna dopisac szczegoly).
+      const insert = document.createElement('button');
+      insert.className = 'prompt-btn';
+      insert.textContent = p.label;
+      insert.title = p.note ? `${p.note}\n\n${p.text}` : p.text;
+      insert.dataset.key = key;
+      insert.dataset.act = 'insert';
+
+      // Maly przycisk: wklej i od razu wyslij.
+      const send = document.createElement('button');
+      send.className = 'prompt-send';
+      send.textContent = '⏎';
+      send.title = 'Wklej i wyslij od razu';
+      send.dataset.key = key;
+      send.dataset.act = 'send';
+
+      row.append(insert, send);
+      list.appendChild(row);
+    });
+
+    details.appendChild(list);
+    promptsContainer.appendChild(details);
+  });
+}
+
+// Delegacja: wklejenie prompta do sesji przez Action Injector (bracketed paste).
+promptsContainer.addEventListener('click', (e) => {
+  const btn = e.target.closest('.prompt-btn, .prompt-send');
+  if (!btn) return;
+  const text = promptIndex.get(btn.dataset.key);
+  if (typeof text !== 'string') return;
+  window.lunacore.pastePrompt(text, btn.dataset.act === 'send');
+  pulse(btn);
+  term.focus();
+});
+
+initPrompts();
+
 // ---- 7A: Sciagawka skilli wg kategorii --------------------------------------
 
 const skillsContainer = document.getElementById('skills');

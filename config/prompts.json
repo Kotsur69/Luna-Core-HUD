@@ -1,0 +1,89 @@
+{
+  "groups": [
+    {
+      "title": "Start sesji",
+      "note": "Wklejane bez wyslania - mozesz dopisac szczegoly przed Enterem.",
+      "prompts": [
+        {
+          "label": "Kontekst projektu",
+          "note": "Rozgrzewka na poczatek pracy w nowym repo.",
+          "text": [
+            "Przeczytaj CLAUDE.md, README i strukture repo, potem powiedz mi:",
+            "1. co ten projekt robi (2-3 zdania),",
+            "2. gdzie jest punkt wejscia i jak to uruchomic,",
+            "3. jakie sa 3 najwieksze ryzyka / dlugi techniczne.",
+            "Nie zmieniaj jeszcze zadnego pliku."
+          ]
+        },
+        {
+          "label": "Wznow prace",
+          "note": "Odtworzenie stanu po przerwie.",
+          "text": [
+            "Sprawdz `git log --oneline -10` i `git status`, potem streszcz:",
+            "co bylo ostatnio robione, co jest niezacommitowane i jaki jest",
+            "najsensowniejszy nastepny krok. Zaproponuj, nie wykonuj."
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Implementacja",
+      "prompts": [
+        {
+          "label": "Plan przed kodem",
+          "note": "Wymusza plan zamiast natychmiastowego pisania kodu.",
+          "text": [
+            "Zanim napiszesz kod: pokaz plan zmian - ktore pliki, jakie funkcje,",
+            "w jakiej kolejnosci i co moze sie zepsuc. Poczekaj na moje OK."
+          ]
+        },
+        {
+          "label": "TDD",
+          "text": [
+            "Zrob to metoda TDD: najpierw test, ktory nie przechodzi (pokaz mi",
+            "wynik na czerwono), potem minimalna implementacja, potem refaktor.",
+            "Nie przechodz do implementacji zanim nie zobaczysz czerwonego testu."
+          ]
+        },
+        {
+          "label": "Minimalny diff",
+          "text": [
+            "Napraw to najmniejsza mozliwa zmiana. Zadnych refaktorow przy okazji,",
+            "zadnych nowych plikow, zadnych zmian formatowania poza dotknietymi liniami.",
+            "Pokaz diff przed zapisem."
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Review / debug",
+      "prompts": [
+        {
+          "label": "Review zmian",
+          "text": [
+            "Zrob review moich niezacommitowanych zmian (`git diff`). Skup sie na:",
+            "bledach logicznych, przypadkach brzegowych, obsludze bledow i bezpieczenstwie.",
+            "Podaj znaleziska posortowane wg wagi, kazde z plikiem i numerem linii.",
+            "Nie poprawiaj nic bez mojej zgody."
+          ]
+        },
+        {
+          "label": "Root cause",
+          "note": "Zamiast lepienia objawow.",
+          "text": [
+            "Nie lataj objawu. Ustal przyczyne zrodlowa: pokaz sciezke wykonania,",
+            "wypisz co dokladnie zawodzi i dlaczego, a dopiero potem zaproponuj fix.",
+            "Jesli masz wiecej niz jedna hipoteze - wypisz je i powiedz jak je odroznic."
+          ]
+        },
+        {
+          "label": "Wyjasnij ten kod",
+          "text": [
+            "Wyjasnij mi ten fragment: co robi, dlaczego tak, jakie sa zalozenia",
+            "i co sie stanie, gdy zostana zlamane. Bez lania wody."
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -14,9 +14,18 @@
 > kategoryzacja heurystyczna, ~339 skilli, cache) + sekcja zwijek w lewym panelu.
 > 7B: `src/ports.js` + porty. 7C: `src/cheatsheets.js` + przyciski komend.
 >
-> 👉 **BRAK dalszych zaplanowanych zadań** — Fazy 1–4 + backlog 7A/7B/7C gotowe.
-> Kolejne pomysły (np. persystencja aktywnego profilu, filtr portów systemowych,
-> lepsza kategoryzacja skilli) do ustalenia z Matim.
+> ✅ **BIBLIOTEKA PROMPTÓW — ZROBIONE** (2026-07-20). `src/prompts.js` +
+> `config/prompts.json` (+ gitignorowany `.local.json`) + sekcja „Prompty" w lewym
+> panelu. Wielolinijkowe prompty wklejane przez **bracketed paste** (`ESC[200~ …
+> ESC[201~`, kanał IPC `pty:paste`) — surowy zapis wysłałby prompt po pierwszej
+> linii i rozbił go na kilka wiadomości. Główny przycisk wkleja BEZ wysłania,
+> przycisk `⏎` wkleja i wysyła.
+>
+> 👉 **NASTĘPNY KROK:** kolejne pozycje z shortlisty `FUTURE_PLAN.md` §5.5 —
+> najbliższa to **command palette (Ctrl+K)** (fuzzy search po wszystkich akcjach:
+> przyciski, ściągi, skille, prompty), dalej **armed auto-compact**, **sparkline
+> burn-rate**, **LED working-vs-waiting**, **przełącznik CWD/projektu**,
+> **scratchpad**. Do decyzji: multi-terminal workspace (multi-PTY tabs).
 
 ---
 
@@ -154,17 +163,40 @@ kroki. Chcemy ten sam feel wbudowany natywnie w prawym/dolnym panelu LunaCore.
 
 ---
 
-## ZADANIE DLA CIEBIE — wszystko z planu ZROBIONE
+### 7D. Biblioteka promptów (wielolinijkowych) — ✅ ZROBIONE
 
-**Fazy 1–4 oraz cały backlog (7A/7B/7C) są gotowe i wypushowane** (patrz STATUS +
-`README.md` + `src/`). LunaCore ma: terminal PTY, COMPACT, Passive Observer
-(context + Skill Tracker), profile, tracker portów, ściągi akcji, ściągawkę skilli.
+* `config/prompts.json` (+ `prompts.local.json`, gitignore) → `src/prompts.js`
+  (load/walidacja/merge po `title`). Pole `text` = string albo tablica linii.
+* Lewy panel, sekcja „Prompty": zwijki per grupa, w środku wiersze
+  `[etykieta][⏎]`. Główny przycisk **wkleja bez wysyłania** (można dopisać
+  szczegóły), `⏎` wkleja i wysyła.
+* Kanał IPC `pty:paste` → **bracketed paste** `ESC[200~ … ESC[201~` + normalizacja
+  `\r\n` → `\n`. Powód: w TUI Claude każdy newline to Enter, więc surowy write
+  wysłałby prompt po pierwszej linii.
 
-Brak dalszych zaplanowanych zadań. Możliwe kierunki (do ustalenia z Matim, nie
-zaczynaj bez potwierdzenia):
-* persystencja aktywnego profilu (zapis do `profiles.local.json`),
-* filtr portów systemowych (ukryj svchost/System, pokaż tylko dev-serwery),
-* lepsza kategoryzacja skilli (np. mapowanie ręczne w JSON zamiast heurystyki),
-* pakowanie do instalatora (electron-builder) — Faza 5.
+---
+
+## ZADANIE DLA CIEBIE — następny krok
+
+**Fazy 1–4, backlog 7A/7B/7C oraz biblioteka promptów (7D) są gotowe** (patrz
+STATUS + `README.md` + `src/`). LunaCore ma: terminal PTY, COMPACT, Passive
+Observer (context + Skill Tracker), profile, tracker portów, ściągi akcji,
+ściągawkę skilli i bibliotekę promptów.
+
+Dalszy kierunek = shortlista z `FUTURE_PLAN.md` §5.5, w kolejności (nie zaczynaj
+bez potwierdzenia Matiego):
+1. **Command palette (Ctrl+K)** — fuzzy search po wszystkich akcjach naraz
+   (przyciski, ściągi, skille, prompty), obsługa z klawiatury.
+2. **Armed auto-compact** — przełącznik armed/off; po przekroczeniu progu sam
+   wstrzykuje `/compact` (domyślnie WYŁĄCZONY, świadomy koszt tokenów).
+3. **Sparkline burn-rate** — wykres zużycia kontekstu w czasie.
+4. **LED working-vs-waiting** — status „Claude myśli" vs „czeka na input".
+5. **Przełącznik CWD / projektu** — start `claude` w wybranym repo. Projektować
+   tak, by nie blokował późniejszych multi-PTY tabs (decyzja Matiego odłożona).
+6. **Scratchpad** — notatki per projekt, `config/scratchpad.local.json`.
+
+Poza shortlistą, wciąż otwarte: wskaźnik **% sesji / limitów tygodniowych**
+(pomysł Matiego — dziś sprawdzany ręcznie na drugim monitorze), persystencja
+aktywnego profilu, filtr portów systemowych, electron-builder (Faza 5).
 
 Pisz kod czysty, skomentowany, gotowy do uruchomienia lokalnie. Let's continue LunaCore!

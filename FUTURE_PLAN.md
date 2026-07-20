@@ -230,9 +230,12 @@ to the Google Calendar API.
 The ideas below are the ones picked to actually build. All Observer/Injector,
 token-safe. Priority order roughly top-to-bottom.
 
-- ⭐ **Prompt library (MUST).** Cheat-sheets but for freeform **multi-line
-  prompts** you reuse. Save to JSON (`config/prompts.json` + `.local.json`),
-  inject with one click via the Action Injector. Highest priority.
+- ✅ ~~⭐ **Prompt library (MUST).**~~ **BUILT 2026-07-20.** `src/prompts.js` +
+  `config/prompts.json` (+ gitignored `.local.json`), left-panel "Prompty"
+  section. Injection uses **bracketed paste** (`ESC[200~ … ESC[201~`) over a new
+  `pty:paste` IPC channel — a raw write would submit at the first newline and
+  split the prompt into several messages. Main button pastes *without* sending
+  (you can still edit); the `⏎` button pastes and sends.
 - **Command palette (Ctrl+K).** Fuzzy-search every injectable action — buttons,
   cheat-sheets, skills, prompts — and fire it keyboard-first.
 - **Armed auto-compact button.** A left-panel *toggle* (armed / off). When armed
@@ -250,6 +253,11 @@ token-safe. Priority order roughly top-to-bottom.
 - **Local scratchpad.** Per-project notes tile, persisted across restarts
   (`config/scratchpad.local.json` keyed by cwd).
 - **Cyberpunk boot sequence.** Short themed startup animation — pure polish.
+- **Session % + weekly limit gauge.** Mati's older note (`dalszeplany.txt`): he
+  keeps a usage view open on the left monitor and refreshes it by hand. A native
+  tile would show current-session usage and remaining Claude weekly limit.
+  ⚠️ Unlike everything else here, this data is **not** in the transcript or
+  stdout — it needs an authenticated usage source. Scope it before building.
 
 **Far-future (not now):**
 - **Voice inject.** Speak → transcribe locally → inject as stdin. Cross-links the

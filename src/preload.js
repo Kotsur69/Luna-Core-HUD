@@ -57,7 +57,17 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Pobiera { categories: [{ name, skills: [{name, description}] }], total }. */
   getSkills: () => ipcRenderer.invoke('skills:list'),
 
+  // --- Biblioteka promptow ---
+  /** Pobiera { groups: [{ title, note, prompts: [{label, text, note}] }] }. */
+  getPrompts: () => ipcRenderer.invoke('prompts:list'),
+
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
+  /**
+   * Wkleja wielolinijkowy tekst (bracketed paste) do sesji.
+   * @param {string} text tresc prompta
+   * @param {boolean} [submit=false] czy od razu wyslac (dopisac Enter)
+   */
+  pastePrompt: (text, submit = false) => ipcRenderer.send('pty:paste', { text, submit }),
   /** Surowe wejscie z klawiatury (xterm.js onData) do PTY. */
   write: (data) => ipcRenderer.send('pty:write', data),
   /** Gotowa komenda z przycisku GUI (dopisze Enter). Np. runCommand('/compact'). */

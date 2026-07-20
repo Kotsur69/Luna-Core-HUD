@@ -29,6 +29,8 @@ const { killProcess, PortWatcher } = require('./ports');
 const { loadCheatsheets } = require('./cheatsheets');
 // Sciagawka skilli (7A): auto-skan katalogow skilli -> kategorie.
 const { loadSkills } = require('./skills');
+// Biblioteka promptow: wielolinijkowe prompty do wielokrotnego uzycia.
+const { loadPrompts } = require('./prompts');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
@@ -211,6 +213,24 @@ function registerIpc() {
     ptyProcess.write(line);
   });
 
+  // ACTION INJECTOR (biblioteka promptow): wkleja WIELOLINIJKOWY tekst.
+  //
+  // Dlaczego nie zwykly write(): w TUI Claude Code kazdy "\r"/"\n" to Enter,
+  // wiec wielolinijkowy prompt wyslany surowo zostalby wyslany po pierwszej
+  // linii (reszta poszlaby jako osobne wiadomosci). Uzywamy wiec bracketed
+  // paste mode (ESC[200~ ... ESC[201~) - terminalowy standard sygnalizujacy
+  // "to jest wklejka, nie klawisze". TUI wstawia calosc do bufora wejscia,
+  // zachowujac lamania linii i NIE wysylajac.
+  //
+  // { text: string, submit?: boolean } - submit dopiero dopisuje Enter.
+  ipcMain.on('pty:paste', (_event, payload) => {
+    if (!ptyProcess || !payload || typeof payload.text !== 'string') return;
+    // Normalizacja koncow linii: w bufor wejscia wchodza wylacznie "\n".
+    const text = payload.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    ptyProcess.write(`\x1b[200~${text}\x1b[201~`);
+    if (payload.submit) ptyProcess.write('\r');
+  });
+
   // Dopasowanie rozmiaru PTY do rozmiaru terminala w oknie (xterm-addon-fit).
   ipcMain.on('pty:resize', (_event, size) => {
     if (!size) return;
@@ -246,6 +266,9 @@ function registerIpc() {
 
   // 7A: renderer pobiera skille pogrupowane w kategorie (wynik cache'owany).
   ipcMain.handle('skills:list', () => loadSkills());
+
+  // Biblioteka promptow: grupy wielolinijkowych promptow do wklejenia.
+  ipcMain.handle('prompts:list', () => loadPrompts());
 }
 
 // ---- Cykl zycia aplikacji ---------------------------------------------------
