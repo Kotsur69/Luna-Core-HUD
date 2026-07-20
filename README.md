@@ -9,8 +9,8 @@ injects prompts or touches the `claude` binary.
 
 > Status: **Phases 1–4 + full backlog implemented** — interactive terminal,
 > Action Injector, live Passive Observer, runtime profile switching, localhost
-> ports tracker, action cheat-sheets, skill cheat-sheet, and a multi-line
-> **prompt library**.
+> ports tracker, action cheat-sheets, skill cheat-sheet, a multi-line
+> **prompt library**, a **working/waiting LED**, and a local **scratchpad**.
 
 ---
 
@@ -33,12 +33,13 @@ user's context window. It works only as:
 ┌─────────────────────┬───────────────────────────────┬─────────────────────┐
 │  LEFT PANEL         │       CENTER (Terminal)       │   RIGHT PANEL       │
 │  (Controls)         │                               │   (Status Monitor)  │
-├─────────────────────┤     xterm.js render area      ├─────────────────────┤
-│ [⚡ COMPACT CONTEXT]│  Claude CLI interactive        │  Context Window bar │
-│ Profile switcher    │  session (node-pty process)   │  Skill Tracker      │
-│ Action cheat-sheets │                               │  tiles              │
-│ Prompt library      │                               │  Localhost ports    │
-│ Skill cheat-sheet   │                               │                     │
+├─────────────────────┤  ● LED: working / waiting     ├─────────────────────┤
+│ [⚡ COMPACT CONTEXT]│     xterm.js render area      │  Context Window bar │
+│ Profile switcher    │                               │  Skill Tracker      │
+│ Action cheat-sheets │  Claude CLI interactive        │  tiles              │
+│ Prompt library      │  session (node-pty process)   │  Localhost ports    │
+│ Skill cheat-sheet   │                               │  Scratchpad         │
+│ (panel scrolls)     │                               │                     │
 └─────────────────────┴───────────────────────────────┴─────────────────────┘
 ```
 
@@ -110,6 +111,7 @@ Luna-Core-HUD/
 │   ├── cheatsheets.js     # load/validate action cheat-sheets from config/
 │   ├── skills.js          # scan skill dirs → categorized skill cheat-sheet
 │   ├── prompts.js         # load/validate multi-line prompt library from config/
+│   ├── scratchpad.js      # read/write the local scratchpad note file
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
@@ -118,7 +120,8 @@ Luna-Core-HUD/
 ├── config/
 │   ├── profiles.json      # launch profiles (profiles.local.json overrides, gitignored)
 │   ├── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
-│   └── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
+│   ├── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
+│   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
 ├── master_prompt.md       # original build brief
 ├── FUTURE_PLAN.md         # roadmap: themes, layout engine, feature shortlist
 └── README.md
@@ -136,10 +139,10 @@ Luna-Core-HUD/
 | 4 | Profile management (LM Studio / Codex endpoints via JSON) | ✅ done |
 | + | Backlog: localhost ports tracker, action cheat-sheets, skill cheat-sheet | ✅ done |
 | + | Prompt library (multi-line reusable prompts, bracketed-paste injection) | ✅ done |
+| + | Working/waiting LED + local scratchpad | ✅ done |
 
 Next up (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §5.5): command palette (Ctrl+K),
-armed auto-compact toggle, token burn-rate sparkline, working-vs-waiting LED,
-CWD/project switcher, local scratchpad.
+armed auto-compact toggle, token burn-rate sparkline, CWD/project switcher.
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
@@ -210,6 +213,25 @@ several messages. Bracketed paste tells the terminal "this is a paste, not
 keystrokes" — the whole block lands in the input buffer with its line breaks
 intact and nothing is sent until you say so. Drop a `config/prompts.local.json`
 (gitignored) for private prompts; it overrides base groups by `title`.
+
+## Working/waiting LED
+
+A small dot in the terminal bar: **amber and pulsing** while Claude works,
+**steady green** once it's your turn, **red** when the session ends. It adds no
+IPC and no new process — the signal was already in the stream you're rendering.
+The TUI streams stdout continuously while it thinks and falls quiet when it wants
+input, so *data = working* and *silence past 800 ms = waiting on you*. The
+threshold sits deliberately above the spinner frame rate so the LED doesn't
+strobe between states.
+
+## Scratchpad
+
+A notepad in the right panel for snippets, TODOs and fragments you want to keep
+next to the session. It autosaves 500 ms after you stop typing to
+`config/scratchpad.local.md` — a plain file (gitignored, 256 KB cap) rather than
+`localStorage`, so you can open and grep it outside the app. **Wklej do sesji**
+injects the notes through the same bracketed-paste channel as the prompt library,
+without sending, so you can still add to them first.
 
 ---
 

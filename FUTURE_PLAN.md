@@ -243,15 +243,20 @@ token-safe. Priority order roughly top-to-bottom.
   clearly user-armed. The compact itself costs tokens (expected + explicit).
 - **Token burn-rate sparkline.** Plot `usage` samples over time so you *see*
   context creeping toward compact, not just the static bar.
-- **Working-vs-waiting LED.** One big status light driven by stdout activity —
-  is Claude thinking or idle-waiting for input. Pairs with OS notifications.
+- ✅ ~~**Working-vs-waiting LED.**~~ **BUILT 2026-07-20.** Dot in the terminal
+  bar, driven entirely by stdout activity in the renderer — amber pulsing while
+  data flows, steady green after 800 ms of silence, red on exit. No new IPC:
+  the signal was already in the stream. OS notifications still open as a pairing.
 - **CWD / project switcher.** Launch `claude` in different repos from a picker
   (location, complementing profiles which are environment).
   ↳ **Note:** possible stepping-stone toward a **multi-terminal workspace** —
   Mati is deciding on that separately (revisit **tomorrow, ~2026-07-21**). Design
   the CWD switcher so it doesn't block a later multi-PTY tabs feature.
-- **Local scratchpad.** Per-project notes tile, persisted across restarts
-  (`config/scratchpad.local.json` keyed by cwd).
+- ✅ ~~**Local scratchpad.**~~ **BUILT 2026-07-20.** Right-panel notepad,
+  autosaved to `config/scratchpad.local.md` (plain file, gitignored, 256 KB cap)
+  with a button that injects the notes via bracketed paste. Shipped **global,
+  not per-cwd** — keying notes by project only makes sense once the CWD switcher
+  exists; revisit then.
 - **Cyberpunk boot sequence.** Short themed startup animation — pure polish.
 - **Session % + weekly limit gauge.** Mati's older note (`dalszeplany.txt`): he
   keeps a usage view open on the left monitor and refreshes it by hand. A native

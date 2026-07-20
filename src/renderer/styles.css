@@ -310,6 +310,7 @@ html, body {
 }
 .port-item {
   display: grid;
+  flex: none; /* jak w .skill-entry: nie sciskaj wierszy, przewijaj */
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
@@ -425,6 +426,10 @@ html, body {
   overflow-y: auto;
 }
 .skill-entry {
+  /* KRYTYCZNE: bez tego dzieci flexa sciskaja sie zamiast przewijac.
+     Przy 140 skillach w kontenerze max-height 220px kazdy wpis zostawal
+     zgnieciony do ~1.5px i widac bylo tylko poziome sciezki liter. */
+  flex: none;
   text-align: left;
   padding: 5px 9px;
   border-radius: 5px;
@@ -456,6 +461,7 @@ html, body {
 }
 .prompt-row {
   display: flex;
+  flex: none; /* jak w .skill-entry: nie sciskaj wierszy, przewijaj */
   gap: 4px;
 }
 .prompt-btn {

@@ -21,11 +21,22 @@
 > linii i rozbił go na kilka wiadomości. Główny przycisk wkleja BEZ wysłania,
 > przycisk `⏎` wkleja i wysyła.
 >
+> ✅ **LED WORKING/WAITING + SCRATCHPAD — ZROBIONE** (2026-07-20). LED w pasku
+> terminala liczony wyłącznie z aktywności stdout w rendererze (bursztyn = leci
+> strumień, zielony po 800 ms ciszy, czerwony po wyjściu) — zero nowych kanałów
+> IPC. Scratchpad w prawym panelu: `src/scratchpad.js` + autozapis do
+> `config/scratchpad.local.md` (gitignore, limit 256 KB), przycisk wkleja notatki
+> przez ten sam bracketed paste co prompty.
+>
+> 🐛 **FIX (2026-07-20):** lewy panel przewija się (`.panel__scroll`), a wpisy
+> list mają `flex: none` — bez tego 140 skilli w kontenerze `max-height: 220px`
+> ściskało się do ~1.5px zamiast przewijać (tekst nieczytelny, patrz 7E).
+>
 > 👉 **NASTĘPNY KROK:** kolejne pozycje z shortlisty `FUTURE_PLAN.md` §5.5 —
 > najbliższa to **command palette (Ctrl+K)** (fuzzy search po wszystkich akcjach:
 > przyciski, ściągi, skille, prompty), dalej **armed auto-compact**, **sparkline
-> burn-rate**, **LED working-vs-waiting**, **przełącznik CWD/projektu**,
-> **scratchpad**. Do decyzji: multi-terminal workspace (multi-PTY tabs).
+> burn-rate**, **przełącznik CWD/projektu**. Do decyzji: multi-terminal workspace
+> (multi-PTY tabs) — miało być rozstrzygnięte ~2026-07-21.
 
 ---
 
@@ -176,12 +187,30 @@ kroki. Chcemy ten sam feel wbudowany natywnie w prawym/dolnym panelu LunaCore.
 
 ---
 
+### 7E. LED working/waiting + scratchpad — ✅ ZROBIONE
+
+* **LED** (`renderer.js`, pasek terminala): czysty Passive Observer, bez nowego
+  IPC. Sygnał już był w strumieniu — TUI leje stdout, dopóki myśli, i milknie,
+  gdy czeka na wejście. Dane = pracuje, cisza > `LED_IDLE_MS` (800 ms) = tura
+  użytkownika. Próg świadomie powyżej klatki spinnera, żeby LED nie migotał.
+* **Scratchpad** (`src/scratchpad.js` + prawy panel): zwykły plik
+  `config/scratchpad.local.md` (nie `localStorage` — ma się dać otworzyć i
+  zgrepować poza aplikacją), walidacja na granicy (typ + 256 KB), autozapis po
+  500 ms bezczynności, przycisk wkleja treść przez `pastePrompt` bez wysyłania.
+* **Fix layoutu przy okazji:** trzy sekcje lewego panelu miały `flex: 1` i
+  dzieliły stałą wysokość, przycinając zawartość → `.panel__scroll`. Dodatkowo
+  wpisy list dostały `flex: none`: dzieci flexa domyślnie się kurczą, więc 140
+  skilli w `max-height: 220px` ściskało się do ~1.5px na wpis (widać było tylko
+  poziome ścinki liter) zamiast włączyć pasek przewijania.
+
+---
+
 ## ZADANIE DLA CIEBIE — następny krok
 
-**Fazy 1–4, backlog 7A/7B/7C oraz biblioteka promptów (7D) są gotowe** (patrz
-STATUS + `README.md` + `src/`). LunaCore ma: terminal PTY, COMPACT, Passive
-Observer (context + Skill Tracker), profile, tracker portów, ściągi akcji,
-ściągawkę skilli i bibliotekę promptów.
+**Fazy 1–4, backlog 7A/7B/7C, biblioteka promptów (7D) oraz LED + scratchpad
+(7E) są gotowe** (patrz STATUS + `README.md` + `src/`). LunaCore ma: terminal
+PTY, COMPACT, Passive Observer (context + Skill Tracker), profile, tracker
+portów, ściągi akcji, ściągawkę skilli, bibliotekę promptów, LED i scratchpad.
 
 Dalszy kierunek = shortlista z `FUTURE_PLAN.md` §5.5, w kolejności (nie zaczynaj
 bez potwierdzenia Matiego):
@@ -190,10 +219,10 @@ bez potwierdzenia Matiego):
 2. **Armed auto-compact** — przełącznik armed/off; po przekroczeniu progu sam
    wstrzykuje `/compact` (domyślnie WYŁĄCZONY, świadomy koszt tokenów).
 3. **Sparkline burn-rate** — wykres zużycia kontekstu w czasie.
-4. **LED working-vs-waiting** — status „Claude myśli" vs „czeka na input".
-5. **Przełącznik CWD / projektu** — start `claude` w wybranym repo. Projektować
+4. **Przełącznik CWD / projektu** — start `claude` w wybranym repo. Projektować
    tak, by nie blokował późniejszych multi-PTY tabs (decyzja Matiego odłożona).
-6. **Scratchpad** — notatki per projekt, `config/scratchpad.local.json`.
+   ↳ Wtedy warto wrócić do scratchpada i rozważyć notatki per projekt (dziś są
+   globalne — kluczowanie po cwd ma sens dopiero z przełącznikiem).
 
 Poza shortlistą, wciąż otwarte: wskaźnik **% sesji / limitów tygodniowych**
 (pomysł Matiego — dziś sprawdzany ręcznie na drugim monitorze), persystencja
