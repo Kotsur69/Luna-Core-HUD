@@ -31,6 +31,8 @@ const { loadCheatsheets } = require('./cheatsheets');
 const { loadSkills } = require('./skills');
 // Biblioteka promptow: wielolinijkowe prompty do wielokrotnego uzycia.
 const { loadPrompts } = require('./prompts');
+// Brudnopis: lokalny notatnik trzymany jako zwykly plik tekstowy.
+const { readScratchpad, writeScratchpad } = require('./scratchpad');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
@@ -269,6 +271,10 @@ function registerIpc() {
 
   // Biblioteka promptow: grupy wielolinijkowych promptow do wklejenia.
   ipcMain.handle('prompts:list', () => loadPrompts());
+
+  // Brudnopis: odczyt i zapis lokalnego notatnika (walidacja w scratchpad.js).
+  ipcMain.handle('scratchpad:read', () => readScratchpad());
+  ipcMain.handle('scratchpad:write', (_event, text) => writeScratchpad(text));
 }
 
 // ---- Cykl zycia aplikacji ---------------------------------------------------

@@ -61,6 +61,12 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Pobiera { groups: [{ title, note, prompts: [{label, text, note}] }] }. */
   getPrompts: () => ipcRenderer.invoke('prompts:list'),
 
+  // --- Brudnopis (lokalny notatnik) ---
+  /** Wczytuje tresc brudnopisu; Promise<string> ('' gdy pusty). */
+  getScratchpad: () => ipcRenderer.invoke('scratchpad:read'),
+  /** Zapisuje tresc brudnopisu; Promise<boolean>. */
+  saveScratchpad: (text) => ipcRenderer.invoke('scratchpad:write', text),
+
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
   /**
    * Wkleja wielolinijkowy tekst (bracketed paste) do sesji.

@@ -64,7 +64,9 @@
     <main class="panel panel--center">
       <div class="terminal-bar">
         <span class="terminal-bar__title">Claude Code CLI</span>
-        <span class="terminal-bar__hint">interaktywna sesja</span>
+        <!-- LED: zolty puls = leci stdout (pracuje), zielony = cisza (Twoja tura). -->
+        <span id="led" class="led led--waiting"></span>
+        <span id="led-label" class="terminal-bar__hint">czeka na Ciebie</span>
       </div>
       <!-- Kontener, w ktorym xterm.js wyrenderuje terminal -->
       <div id="terminal" class="terminal"></div>
@@ -106,6 +108,20 @@
         <!-- Wypelnia renderer.js z pasywnego skanu (7B). -->
         <ul id="ports-list" class="ports-list"></ul>
         <p id="ports-empty" class="hint">Skanowanie portow...</p>
+      </div>
+
+      <div class="panel__section panel__section--grow">
+        <h2 class="panel__title">Brudnopis <span id="pad-status" class="count"></span></h2>
+        <!-- Lokalny notatnik: autozapis do config/scratchpad.local.md (gitignore). -->
+        <textarea
+          id="pad-text"
+          class="pad"
+          spellcheck="false"
+          placeholder="Notatki, sniplety, TODO na pozniej..."
+        ></textarea>
+        <button id="pad-send" class="pad-send" title="Wklej tresc brudnopisu do sesji">
+          Wklej do sesji
+        </button>
       </div>
     </aside>
 

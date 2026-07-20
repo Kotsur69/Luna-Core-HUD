@@ -154,6 +154,51 @@ html, body {
 .dot--dead { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
 @keyframes blink { 50% { opacity: 0.4; } }
 
+/* ---- LED: pracuje vs czeka na Ciebie -------------------------------------- */
+
+.led {
+  width: 9px; height: 9px; border-radius: 50%;
+  flex: none;
+  background: var(--text-dim);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+/* zolty puls = Claude pracuje (leci strumien stdout) */
+.led--working { background: var(--warn); box-shadow: 0 0 10px var(--warn); animation: blink 0.9s infinite; }
+/* zielony spokojny = cisza na stdout, tura po stronie uzytkownika */
+.led--waiting { background: var(--good); box-shadow: 0 0 8px var(--good); }
+.led--dead { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+
+/* ---- Brudnopis ------------------------------------------------------------ */
+
+.pad {
+  flex: 1;
+  min-height: 90px;
+  resize: none;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--edge);
+  background: var(--bg-panel-2);
+  color: var(--text);
+  font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pad:focus { outline: none; border-color: var(--edge-glow); }
+.pad::placeholder { color: var(--text-dim); opacity: 0.5; }
+
+.pad-send {
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--edge-glow);
+  background: linear-gradient(135deg, #1e1030, #2a1548);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease;
+}
+.pad-send:hover { box-shadow: 0 0 12px rgba(199, 116, 255, 0.3); }
+.pad-send.is-pulsing { animation: pulse 0.45s ease; }
+
 /* ---- Terminal (centrum) --------------------------------------------------- */
 
 .terminal-bar {

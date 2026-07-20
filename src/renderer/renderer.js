@@ -54,6 +54,7 @@ function fitAndResize() {
 // PASSIVE OBSERVER: dane z procesu Claude CLI -> ekran terminala.
 window.lunacore.onData((data) => {
   term.write(data);
+  markWorking(); // LED: strumien plynie = Claude pracuje
 });
 
 // ACTION INJECTOR: kazde nacisniecie klawisza -> stdin PTY.
@@ -63,6 +64,7 @@ term.onData((data) => {
 
 // Status polaczenia PTY.
 window.lunacore.onExit((code) => {
+  setLedDead();
   setPtyStatus(false, `PTY: zakonczono (kod ${code})`);
   term.write(`\r\n\x1b[38;5;203m[LunaCore] Sesja PTY zakonczona (kod ${code}).\x1b[0m\r\n`);
 });
@@ -83,6 +85,40 @@ function pulse(el) {
   // wymus reflow, aby animacja odpalila sie ponownie
   void el.offsetWidth;
   el.classList.add('is-pulsing');
+}
+
+// ---- LED: pracuje vs czeka na Ciebie ----------------------------------------
+//
+// PASSIVE OBSERVER w najczystszej postaci - zero nowych kanalow, zero tokenow.
+// Sygnal jest juz w strumieniu: TUI Claude Code leje stdout, dopoki mysli
+// (spinner, tokeny, wynik narzedzia), a milknie, gdy czeka na wejscie.
+// Wiec: dane = pracuje, cisza dluzsza niz prog = tura po Twojej stronie.
+//
+// Prog swiadomie > niz klatka spinnera, zeby LED nie migotal miedzy stanami.
+const LED_IDLE_MS = 800;
+
+const led = document.getElementById('led');
+const ledLabel = document.getElementById('led-label');
+let ledTimer = null;
+let ledDead = false;
+
+function setLed(state, text) {
+  led.className = `led led--${state}`;
+  ledLabel.textContent = text;
+}
+
+// Wywolywane przy kazdej porcji stdout; timer przesuwa sie do przodu.
+function markWorking() {
+  if (ledDead) return;
+  setLed('working', 'pracuje...');
+  clearTimeout(ledTimer);
+  ledTimer = setTimeout(() => setLed('waiting', 'czeka na Ciebie'), LED_IDLE_MS);
+}
+
+function setLedDead() {
+  ledDead = true;
+  clearTimeout(ledTimer);
+  setLed('dead', 'sesja zakonczona');
 }
 
 // ---- Faza 3: Context Window (transcript JSONL) ------------------------------
@@ -161,6 +197,8 @@ profileSwitcher.addEventListener('change', () => {
 
 // Po restarcie: wyczysc terminal i pokaz, ktory profil jest aktywny.
 window.lunacore.onRestarted((profile) => {
+  ledDead = false; // nowa sesja - LED znowu zyje
+  setLed('waiting', 'czeka na Ciebie');
   term.reset();
   term.write(
     `\x1b[38;5;80m[LunaCore] Sesja przelaczona na profil: ${profile.label}\x1b[0m\r\n`
@@ -426,6 +464,43 @@ skillsContainer.addEventListener('click', (e) => {
 });
 
 initSkills();
+
+// ---- Brudnopis (lokalny notatnik) -------------------------------------------
+
+const padText = document.getElementById('pad-text');
+const padStatus = document.getElementById('pad-status');
+const padSend = document.getElementById('pad-send');
+
+// Autozapis po chwili bezczynnosci - nie na kazdym klawiszu.
+const PAD_SAVE_MS = 500;
+let padTimer = null;
+
+window.lunacore
+  .getScratchpad()
+  .then((text) => {
+    padText.value = typeof text === 'string' ? text : '';
+  })
+  .catch(() => {
+    // brak pliku / blad odczytu - zostaw pusty notatnik (nieblokujace)
+  });
+
+padText.addEventListener('input', () => {
+  padStatus.textContent = '·';
+  clearTimeout(padTimer);
+  padTimer = setTimeout(async () => {
+    const ok = await window.lunacore.saveScratchpad(padText.value);
+    padStatus.textContent = ok ? 'zapisano' : 'blad zapisu';
+  }, PAD_SAVE_MS);
+});
+
+// Wklejenie notatek do sesji: bez wysylania, zeby dalo sie jeszcze dopisac.
+padSend.addEventListener('click', () => {
+  const text = padText.value.trim();
+  if (!text) return;
+  window.lunacore.pastePrompt(text, false);
+  pulse(padSend);
+  term.focus();
+});
 
 // ---- Wskaznik statusu PTY ----------------------------------------------------
 
