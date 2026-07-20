@@ -75,6 +75,23 @@ html, body {
 .panel__section--grow { flex: 1; min-height: 0; }
 .panel__spacer { flex: 1; }
 
+/* Przewijalny srodek panelu (lewy): sekcje biora naturalna wysokosc i
+   przewijaja sie razem, zamiast dzielic sie stala wysokoscia i przycinac
+   zawartosc. Brand na gorze i status PTY na dole zostaja przypiete. */
+.panel__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  /* miejsce na pasek przewijania, zeby nie zachodzil na przyciski */
+  padding-right: 4px;
+  margin-right: -4px;
+}
+/* W przewijanym kontenerze "grow" nie ma sensu - liczy sie tresc. */
+.panel__scroll .panel__section--grow { flex: none; }
+
 .panel__title {
   margin: 0;
   font-size: 11px;
