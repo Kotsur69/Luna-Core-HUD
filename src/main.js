@@ -134,11 +134,33 @@ function withClaudeOnPath(env) {
   return env;
 }
 
+/**
+ * Gdy LunaCore samo zostalo uruchomione z wnetrza sesji Claude Code (np. `npm
+ * start` odpalone z terminala Claude), proces dziedziczy markery sesji w env:
+ * CLAUDE_CODE_CHILD_SESSION, CLAUDECODE, CLAUDE_CODE_SESSION_ID itd. Zagniezdzony
+ * `claude` widzi je i startuje jako "child session" -> WYLACZA zapis transkryptu
+ * ("transcript saving is off - inherited claude_code_child_session marker").
+ * A bez transkryptu nie dziala pasek Context Window ani sparkline (czytaja JSONL).
+ * Czyscimy wiec markery, by sesja w LunaCore byla zawsze pelnoprawna, top-level -
+ * niezaleznie od tego, skad LunaCore odpalono. Nie ruszamy configu (ANTHROPIC_*).
+ * @param {Record<string,string>} env
+ */
+function stripClaudeSessionMarkers(env) {
+  const EXPLICIT = new Set(['CLAUDECODE', 'CLAUDE_PID', 'AI_AGENT', 'CLAUDE_EFFORT']);
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('CLAUDE_CODE') || EXPLICIT.has(key)) delete env[key];
+  }
+  return env;
+}
+
 function launchProfile(profile) {
   activeProfileId = profile.id;
-  // Nadpisania srodowiska z profilu (np. ANTHROPIC_BASE_URL dla LM Studio) +
-  // gwarancja, ze `claude` z ~/.local/bin jest na PATH sesji.
-  const env = withClaudeOnPath({ ...process.env, ...(profile.env || {}) });
+  // Nadpisania srodowiska z profilu (np. ANTHROPIC_BASE_URL dla LM Studio),
+  // czyszczenie markerow sesji-rodzica (transkrypt!) + gwarancja, ze `claude`
+  // z ~/.local/bin jest na PATH sesji.
+  const env = withClaudeOnPath(
+    stripClaudeSessionMarkers({ ...process.env, ...(profile.env || {}) }),
+  );
 
   const proc = pty.spawn(DEFAULT_SHELL, [], {
     name: 'xterm-color',
