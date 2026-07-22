@@ -24,6 +24,8 @@ const pty = require('@lydell/node-pty');
 const { detectTools, TranscriptWatcher } = require('./observer');
 // Profile uruchomieniowe (Faza 4): definicje "jak wystartowac sesje" z JSON.
 const { loadProfiles, getProfile } = require('./profiles');
+// Przelacznik projektu: katalogi robocze (cwd) sesji z config/projects.json.
+const { loadProjects, getProject } = require('./projects');
 // Tracker portow localhost (7B): pasywny skan nasluchujacych portow + kill.
 const { killProcess, PortWatcher } = require('./ports');
 // Sciagawki akcji (7C): grupy komend wysylanych przez Action Injector.
@@ -54,8 +56,24 @@ const DEFAULT_SHELL = IS_WINDOWS
   ? 'powershell.exe'
   : process.env.SHELL || 'bash';
 
-// Katalog startowy sesji - domowy uzytkownika.
+// Domyslny (awaryjny) katalog startowy sesji - domowy uzytkownika. Realny cwd
+// trzyma mutowalne `activeCwd` ponizej i zmienia je przelacznik projektu.
 const START_CWD = os.homedir();
+
+/**
+ * Zwraca sciezke, jesli to istniejacy katalog; inaczej katalog domowy.
+ * Chroni pty.spawn przed rzuceniem, gdy projekt wskazuje nieistniejacy folder
+ * (np. repo jest tylko na innej maszynie - LunaCore ma byc przenosne).
+ * @param {string} dir
+ */
+function safeCwd(dir) {
+  try {
+    if (dir && fs.statSync(dir).isDirectory()) return dir;
+  } catch {
+    /* nie istnieje / brak dostepu */
+  }
+  return START_CWD;
+}
 
 // ---- Stan globalny ----------------------------------------------------------
 
@@ -72,6 +90,10 @@ let usageWatcher = null;
 // Profile wczytane z config/ oraz id aktualnie aktywnego.
 let profiles = [];
 let activeProfileId = null;
+// Projekty (katalogi robocze) wczytane z config/ + id aktywnego i realny cwd.
+let projects = [];
+let activeProjectId = null;
+let activeCwd = START_CWD;
 // Ostatni znany rozmiar terminala - odtwarzany przy restarcie sesji.
 let lastSize = { cols: 80, rows: 24 };
 
@@ -166,7 +188,7 @@ function launchProfile(profile) {
     name: 'xterm-color',
     cols: lastSize.cols,
     rows: lastSize.rows,
-    cwd: START_CWD,
+    cwd: safeCwd(activeCwd),
     env,
   });
   ptyProcess = proc;
@@ -225,9 +247,24 @@ function restartPty(profileId) {
   }
 
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('pty:restarted', { id: profile.id, label: profile.label });
+    mainWindow.webContents.send('pty:restarted', {
+      id: profile.id,
+      label: profile.label,
+      folder: path.basename(safeCwd(activeCwd)),
+    });
   }
   launchProfile(profile);
+}
+
+/** Wczytuje projekty z config/ i ustawia aktywny katalog roboczy (cwd). */
+function startActiveProjects() {
+  const loaded = loadProjects();
+  projects = loaded.projects;
+  const proj = getProject(projects, loaded.activeProject) || projects[0];
+  if (proj) {
+    activeProjectId = proj.id;
+    activeCwd = proj.path;
+  }
 }
 
 /** Startuje sesje z aktywnym profilem (przy pierwszym uruchomieniu). */
@@ -323,6 +360,19 @@ function registerIpc() {
     if (typeof profileId === 'string') restartPty(profileId);
   });
 
+  // Przelacznik projektu: renderer pobiera liste katalogow roboczych.
+  ipcMain.handle('projects:list', () => ({ projects, activeProject: activeProjectId }));
+
+  // Przelaczenie projektu -> zmiana cwd + restart sesji z BIEZACYM profilem.
+  // (Ten sam mechanizm restartu co profil; rozni sie tylko katalogiem startowym.)
+  ipcMain.on('pty:switch-project', (_event, projectId) => {
+    const proj = getProject(projects, projectId);
+    if (!proj || !activeProfileId) return;
+    activeCwd = proj.path;
+    activeProjectId = proj.id;
+    restartPty(activeProfileId);
+  });
+
   // 7B: otworz http://localhost:PORT w domyslnej przegladarce.
   ipcMain.on('ports:open', (_event, port) => {
     const p = port | 0;
@@ -371,6 +421,7 @@ function registerIpc() {
 app.whenReady().then(() => {
   registerIpc();
   createWindow();
+  startActiveProjects(); // ustala cwd, zanim wystartuje pierwsza sesja
   startActiveProfile();
   startTranscriptWatcher();
   startPortWatcher();

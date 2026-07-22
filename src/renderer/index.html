@@ -62,6 +62,14 @@
       </div>
 
       <div class="panel__section">
+        <h2 class="panel__title" data-i18n="project.title">Projekt</h2>
+        <!-- Katalog roboczy (cwd) sesji. Opcje wypelnia renderer.js z
+             config/projects.json; zmiana restartuje PTY w nowym folderze. -->
+        <select id="project-switcher" class="profile-select"></select>
+        <p class="hint" data-i18n="project.hint">Zmiana katalogu restartuje sesje w nowym folderze.</p>
+      </div>
+
+      <div class="panel__section">
         <h2 class="panel__title" data-i18n="profile.title">Profil</h2>
         <!-- Opcje wypelnia renderer.js z config/profiles.json (Faza 4). -->
         <select id="profile-switcher" class="profile-select"></select>

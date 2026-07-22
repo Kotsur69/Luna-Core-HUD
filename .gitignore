@@ -18,6 +18,8 @@ Thumbs.db
 
 # Lokalne profile / sekrety (Faza 4)
 config/profiles.local.json
+# Lokalne nadpisania listy projektow (katalogi robocze, prywatne)
+config/projects.local.json
 # Lokalne nadpisania sciagawek i promptow (prywatne, nie do repo)
 config/cheatsheets.local.json
 config/prompts.local.json

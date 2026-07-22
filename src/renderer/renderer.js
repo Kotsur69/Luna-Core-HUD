@@ -283,19 +283,50 @@ profileSwitcher.addEventListener('change', () => {
   window.lunacore.switchProfile(profileSwitcher.value);
 });
 
-// Po restarcie: wyczysc terminal i pokaz, ktory profil jest aktywny.
+// Po restarcie: wyczysc terminal i pokaz, ktory profil + folder sa aktywne.
 window.lunacore.onRestarted((profile) => {
   ledDead = false; // nowa sesja - LED znowu zyje
   ledState = 'waiting';
   renderLed();
   term.reset();
-  term.write(`\x1b[38;5;80m${t('log.session.switched', { label: profile.label })}\x1b[0m\r\n`);
+  const msg = profile.folder
+    ? t('log.session.project', { label: profile.label, folder: profile.folder })
+    : t('log.session.switched', { label: profile.label });
+  term.write(`\x1b[38;5;80m${msg}\x1b[0m\r\n`);
   setPtyStatus(true, 'ptystatus.active');
   fitAndResize();
   term.focus();
 });
 
 initProfiles();
+
+// ---- Przelacznik projektu (katalog roboczy) ---------------------------------
+
+const projectSwitcher = document.getElementById('project-switcher');
+
+// Wypelnij liste katalogami z config/projects.json i zaznacz aktywny.
+async function initProjects() {
+  try {
+    const { projects, activeProject } = await window.lunacore.getProjects();
+    projectSwitcher.innerHTML = '';
+    for (const p of projects) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.label;
+      if (p.id === activeProject) opt.selected = true;
+      projectSwitcher.appendChild(opt);
+    }
+  } catch (err) {
+    // Nie udalo sie pobrac projektow - zostaw przelacznik pusty (nieblokujace).
+  }
+}
+
+// Zmiana katalogu -> restart sesji PTY w nowym folderze (ten sam profil).
+projectSwitcher.addEventListener('change', () => {
+  window.lunacore.switchProject(projectSwitcher.value);
+});
+
+initProjects();
 
 // ---- 7B: Tracker portow localhost -------------------------------------------
 

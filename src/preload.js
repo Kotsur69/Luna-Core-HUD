@@ -34,10 +34,16 @@ contextBridge.exposeInMainWorld('lunacore', {
   getProfiles: () => ipcRenderer.invoke('profiles:list'),
   /** Przelacza profil -> restart sesji PTY z nowym srodowiskiem. */
   switchProfile: (id) => ipcRenderer.send('pty:restart', id),
-  /** Powiadomienie o restarcie sesji: { id, label } nowego profilu. */
+  /** Powiadomienie o restarcie sesji: { id, label, folder } nowej sesji. */
   onRestarted: (callback) => {
     ipcRenderer.on('pty:restarted', (_event, profile) => callback(profile));
   },
+
+  // --- Przelacznik projektu (katalog roboczy) ---
+  /** Pobiera { projects, activeProject } do wypelnienia przelacznika. */
+  getProjects: () => ipcRenderer.invoke('projects:list'),
+  /** Przelacza katalog roboczy -> restart sesji PTY w nowym folderze. */
+  switchProject: (id) => ipcRenderer.send('pty:switch-project', id),
 
   // --- 7B: tracker portow localhost ---
   /** Lista nasluchujacych portow: [{ port, procId, name }]. */
