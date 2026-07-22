@@ -125,6 +125,23 @@
       </div>
 
       <div class="panel__section">
+        <h2 class="panel__title usage-head">
+          <span data-i18n="usage.title">Limity uzycia</span>
+          <button
+            id="usage-refresh"
+            class="usage-refresh"
+            data-i18n-title="usage.refresh.title"
+            title="Odswiez zuzycie"
+          >&#8635;</button>
+        </h2>
+        <!-- Kafelek zuzycia (5h + tydzien). Paski buduje renderer.js z IPC
+             usage:update (odczyt GET z endpointu OAuth CLI, zero tokenow). -->
+        <div id="usage-body" class="usage">
+          <p class="hint" data-i18n="usage.loading">Sprawdzanie limitow...</p>
+        </div>
+      </div>
+
+      <div class="panel__section">
         <h2 class="panel__title" data-i18n="skilltracker.title">Skill Tracker</h2>
         <!-- Kafelki zapala parser stdout (nazwa narzedzia -> kafelek). -->
         <ul id="skill-list" class="skill-list">

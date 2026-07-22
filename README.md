@@ -12,7 +12,8 @@ injects prompts or touches the `claude` binary.
 > ports tracker, action cheat-sheets, skill cheat-sheet, a multi-line
 > **prompt library**, a **working/waiting LED**, a local **scratchpad**, a
 > **command palette (Ctrl+K)**, a **token burn-rate sparkline**, a swappable
-> **theming system**, and a **PL/EN language switch**.
+> **theming system**, a **PL/EN language switch**, and a live
+> **usage-limits gauge** (5-hour + weekly subscription windows).
 
 ---
 
@@ -58,6 +59,7 @@ user's context window. It works only as:
 | Action Injector (prompt) | `pastePrompt(text, submit)` → IPC `pty:paste` → writes `ESC[200~ text ESC[201~` (bracketed paste), then `\r` only if `submit` |
 | Action Injector (palette) | Ctrl+K overlay aggregates actions/cheat-sheets/prompts/skills → fires the **existing** injector for the chosen row (no new PTY channel) |
 | Passive Observer (sparkline) | second `metrics:context` listener buffers the same `usage` samples → SVG sparkline + tok/min + ETA to 85% |
+| Passive Observer (usage gauge) | `UsageWatcher` reads the CLI's OAuth token from `~/.claude/.credentials.json` → **GET** `api.anthropic.com/api/oauth/usage` → IPC `usage:update` → 5h + weekly bars (read-only, never `/v1/messages`) |
 | Prefs (theme/language) | `getThemes()`/`getUiPrefs()`/`setUiPrefs()` → IPC `themes:list` / `ui:get` / `ui:set` → reads `config/themes.json`, persists `config/ui.local.json`; renderer writes CSS tokens + xterm palette live |
 
 The Context Window % divides live `usage` tokens by a `CONTEXT_LIMIT` constant
@@ -96,11 +98,16 @@ npm start
 ```
 
 On launch, LunaCore spawns your default shell (`powershell.exe` on Windows,
-`$SHELL` elsewhere) and auto-runs `claude`. Make sure the Claude Code CLI is
-installed and on your `PATH`.
+`$SHELL` elsewhere) and auto-runs `claude` (the active profile's `command`).
+Make sure the Claude Code CLI is installed. If it was installed to
+`~/.local/bin` (the native-installer default) and that directory isn't on your
+`PATH`, LunaCore prepends it to the session `PATH` automatically — so `claude`,
+the profile auto-start, and the cheat-sheet buttons all resolve without you
+having to fix `PATH` by hand.
 
-To disable auto-launch (start in a bare shell instead), set
-`AUTO_LAUNCH_CLAUDE = false` at the top of [`src/main.js`](src/main.js).
+To start in a bare shell instead of auto-launching `claude`, pick the
+**Sama powloka (bez claude)** profile in the left panel, or set the active
+profile's `command` to `""` in [`config/profiles.json`](config/profiles.json).
 
 ---
 
@@ -120,6 +127,7 @@ Luna-Core-HUD/
 │   ├── scratchpad.js      # read/write the local scratchpad note file
 │   ├── theme.js           # load/validate themes from config/ (FALLBACK cyberpunk)
 │   ├── uiprefs.js         # read/write UI prefs (theme + language) → ui.local.json
+│   ├── usage.js           # UsageWatcher: GET OAuth /usage endpoint → 5h + weekly limits
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
@@ -153,9 +161,10 @@ Luna-Core-HUD/
 | + | Working/waiting LED + local scratchpad | ✅ done |
 | + | Command palette (Ctrl+K), token burn-rate sparkline | ✅ done |
 | + | Theming system (5 themes, live switch) + PL/EN language switch | ✅ done |
+| + | Usage-limits gauge (5-hour + weekly windows, OAuth `/usage` read) | ✅ done |
 
 Next up (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §5.5): armed auto-compact toggle,
-CWD/project switcher, cyberpunk boot sequence, session %/weekly-limit gauge.
+CWD/project switcher, cyberpunk boot sequence.
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
@@ -263,6 +272,28 @@ you can *see* the trend, not just the current number — plus a **tok/min** burn
 rate and an **ETA to 85%** (the compact zone). It piggybacks on the same `usage`
 samples the bar already receives (a second `metrics:context` listener), so it adds
 no polling and no tokens. The dashed line marks the 85% threshold.
+
+## Usage-limits gauge
+
+A right-panel tile showing how much of your Claude **subscription** limits you've
+burned: the **5-hour** window and the **weekly** window (plus Opus/Sonnet weekly
+splits when present), each as a bar with a percentage and a "resets in …"
+countdown. This is the one piece of data that is genuinely **not** in the session
+transcript or stdout, so it needs an authenticated source — but it stays
+**zero-token** by design.
+
+How it stays token-safe: `src/usage.js` reads the CLI's own OAuth access token
+from `~/.claude/.credentials.json` and makes a plain **GET** to
+`api.anthropic.com/api/oauth/usage` — the same read-only usage endpoint the
+account uses, **never** `/v1/messages`. No prompt, no model round-trip, nothing
+that spends tokens or context. LunaCore never writes to the credentials file; it
+just reads the token fresh on each poll, so when the `claude` CLI refreshes and
+rewrites that file, LunaCore rides the refresh for free. If the token is missing
+or expired the tile shows a **reauth** hint ("run `claude` to refresh it"); a 90 s
+poll plus a manual ↻ button keep it current, and a live 30 s tick updates the
+reset countdown between polls. Set `ENABLE_USAGE_METER = false` at the top of
+[`src/main.js`](src/main.js) to disable the network call entirely (tile shows
+"off"). The bars animate via `transform: scaleX(var(--usage))` — no layout thrash.
 
 ## Theming
 

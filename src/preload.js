@@ -67,6 +67,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Zapisuje tresc brudnopisu; Promise<boolean>. */
   saveScratchpad: (text) => ipcRenderer.invoke('scratchpad:write', text),
 
+  // --- Licznik zuzycia limitow (5h + tydzien) ---
+  /** Rejestruje callback ze stanem zuzycia: {fiveHour, sevenDay, ...} lub {error}. */
+  onUsage: (callback) => {
+    ipcRenderer.on('usage:update', (_event, usage) => callback(usage));
+  },
+  /** Wymusza odswiezenie zuzycia; Promise ze swiezym stanem. */
+  refreshUsage: () => ipcRenderer.invoke('usage:refresh'),
+
   // --- Motywy + preferencje UI (motyw/jezyk) ---
   /** Pobiera { themes: [{id,label,vars,terminal}] }. */
   getThemes: () => ipcRenderer.invoke('themes:list'),

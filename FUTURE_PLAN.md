@@ -2,8 +2,8 @@
 
 > Status baseline: Phases 1–4 + backlog 7A/7B/7C are **done and pushed**, plus
 > the **command palette (Ctrl+K)**, **token burn-rate sparkline**, **theming
-> system** (§2), and **PL/EN language switch**. Remaining items below are
-> *future* work. Order is a suggestion, not a contract. The one hard rule that
+> system** (§2), **PL/EN language switch**, and the **usage-limits gauge**
+> (§5.5). Remaining items below are *future* work. Order is a suggestion, not a contract. The one hard rule that
 > never changes:
 >
 > ⚠️ **ZERO EXTRA TOKENS.** Every idea here must stay a **Passive Observer**
@@ -284,11 +284,15 @@ token-safe. Priority order roughly top-to-bottom.
   not per-cwd** — keying notes by project only makes sense once the CWD switcher
   exists; revisit then.
 - **Cyberpunk boot sequence.** Short themed startup animation — pure polish.
-- **Session % + weekly limit gauge.** Mati's older note (`dalszeplany.txt`): he
-  keeps a usage view open on the left monitor and refreshes it by hand. A native
-  tile would show current-session usage and remaining Claude weekly limit.
-  ⚠️ Unlike everything else here, this data is **not** in the transcript or
-  stdout — it needs an authenticated usage source. Scope it before building.
+- ✅ ~~**Session % + weekly limit gauge.**~~ **BUILT 2026-07-22.** Right-panel
+  tile showing the **5-hour** and **weekly** subscription windows (+ Opus/Sonnet
+  weekly splits) as `scaleX` bars with % and a "resets in …" countdown. Solved
+  the "not in transcript/stdout" problem token-safely: `src/usage.js`
+  (`UsageWatcher`) reads the CLI's OAuth token from `~/.claude/.credentials.json`
+  and does a plain **GET** to `api.anthropic.com/api/oauth/usage` — read-only,
+  never `/v1/messages`, zero tokens. Rides the CLI's own token refresh (never
+  writes the creds file); 90 s poll + manual ↻ + 30 s countdown tick; `reauth` /
+  `off` / `unavailable` states. Kill switch: `ENABLE_USAGE_METER` in `main.js`.
 
 **Far-future (not now):**
 - **Voice inject.** Speak → transcribe locally → inject as stdin. Cross-links the

@@ -15,6 +15,7 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 // @lydell/node-pty: utrzymywany fork node-pty z prebuildami (N-API),
 // dziala bez kompilacji node-gyp / Visual Studio. API zgodne z node-pty.
 const pty = require('@lydell/node-pty');
@@ -37,10 +38,16 @@ const { readScratchpad, writeScratchpad } = require('./scratchpad');
 const { loadThemes } = require('./theme');
 // Preferencje UI (motyw + jezyk) trwale w config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
+// Licznik zuzycia limitow (5h + tydzien) - odczyt GET z endpointu OAuth CLI.
+const { fetchUsage, UsageWatcher } = require('./usage');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
 const IS_WINDOWS = process.platform === 'win32';
+
+// Licznik zuzycia limitow subskrypcji. Ustaw false, by CALKOWICIE wylaczyc
+// zapytania sieciowe do endpointu usage (kafelek pokaze wtedy stan 'off').
+const ENABLE_USAGE_METER = true;
 
 // Domyslna powloka dla danego systemu.
 const DEFAULT_SHELL = IS_WINDOWS
@@ -60,6 +67,8 @@ let mainWindow = null;
 let transcriptWatcher = null;
 /** @type {PortWatcher | null} */
 let portWatcher = null;
+/** @type {UsageWatcher | null} */
+let usageWatcher = null;
 // Profile wczytane z config/ oraz id aktualnie aktywnego.
 let profiles = [];
 let activeProfileId = null;
@@ -100,10 +109,36 @@ function createWindow() {
  * i (jesli profil ma komende, np. "claude") wpisuje ja po krotkim opoznieniu.
  * @param {{id:string,label:string,command:string,args:string[],env:Object}} profile
  */
+/**
+ * Native install Claude Code laduje sie do ~/.local/bin, a instalator nie zawsze
+ * dodaje ten katalog do PATH. Jesli lezy tam binarka `claude`, dopisujemy katalog
+ * na poczatek PATH spawnowanej sesji - dzieki temu auto-start profilu, wpisanie
+ * `claude` i sciagawki dzialaja bez recznego podawania pelnej sciezki.
+ * @param {Record<string,string>} env
+ */
+function withClaudeOnPath(env) {
+  try {
+    const binDir = path.join(os.homedir(), '.local', 'bin');
+    const exe = path.join(binDir, IS_WINDOWS ? 'claude.exe' : 'claude');
+    if (!fs.existsSync(exe)) return env;
+    // Na Windows zmienna PATH bywa jako "Path" - znajdz istniejacy klucz.
+    const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+    const sep = IS_WINDOWS ? ';' : ':';
+    const parts = (env[key] || '').split(sep);
+    if (!parts.some((p) => p.toLowerCase() === binDir.toLowerCase())) {
+      env[key] = binDir + sep + (env[key] || '');
+    }
+  } catch {
+    /* nie blokuj startu sesji, gdyby cokolwiek poszlo nie tak */
+  }
+  return env;
+}
+
 function launchProfile(profile) {
   activeProfileId = profile.id;
-  // Nadpisania srodowiska z profilu (np. ANTHROPIC_BASE_URL dla LM Studio).
-  const env = { ...process.env, ...(profile.env || {}) };
+  // Nadpisania srodowiska z profilu (np. ANTHROPIC_BASE_URL dla LM Studio) +
+  // gwarancja, ze `claude` z ~/.local/bin jest na PATH sesji.
+  const env = withClaudeOnPath({ ...process.env, ...(profile.env || {}) });
 
   const proc = pty.spawn(DEFAULT_SHELL, [], {
     name: 'xterm-color',
@@ -203,6 +238,18 @@ function startPortWatcher() {
   portWatcher.start();
 }
 
+// ---- Passive Observer: zuzycie limitow subskrypcji (5h + tydzien) -----------
+
+function startUsageWatcher() {
+  if (!ENABLE_USAGE_METER) return;
+  usageWatcher = new UsageWatcher((usage) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('usage:update', usage);
+    }
+  });
+  usageWatcher.start();
+}
+
 // ---- Kanaly IPC -------------------------------------------------------------
 
 function registerIpc() {
@@ -286,6 +333,15 @@ function registerIpc() {
   // Preferencje UI: odczyt {theme, lang} i zapis czesciowy (zwraca nowy stan).
   ipcMain.handle('ui:get', () => readUiPrefs());
   ipcMain.handle('ui:set', (_event, partial) => writeUiPrefs(partial));
+
+  // Zuzycie limitow: wymuszony odczyt (przycisk odswiezania). Gdy wylaczony -
+  // zwroc stan 'off'; gdy watcher chodzi - odswiez go (wyemituje usage:update),
+  // a rownolegle zwroc swiezy odczyt na potrzeby wywolania.
+  ipcMain.handle('usage:refresh', async () => {
+    if (!ENABLE_USAGE_METER) return { error: 'off' };
+    if (usageWatcher) usageWatcher.refresh();
+    return fetchUsage();
+  });
 }
 
 // ---- Cykl zycia aplikacji ---------------------------------------------------
@@ -296,6 +352,7 @@ app.whenReady().then(() => {
   startActiveProfile();
   startTranscriptWatcher();
   startPortWatcher();
+  startUsageWatcher();
   // Pre-warm skanu skilli (7A) po chwili, zeby jednorazowy koszt ~2s nie
   // opoznial startu okna. Wynik trafia do cache i pozniej odpowiada natychmiast.
   setTimeout(() => loadSkills(), 3000);
@@ -317,6 +374,10 @@ app.on('window-all-closed', () => {
   if (portWatcher) {
     portWatcher.stop();
     portWatcher = null;
+  }
+  if (usageWatcher) {
+    usageWatcher.stop();
+    usageWatcher = null;
   }
   if (ptyProcess) {
     ptyProcess.kill();

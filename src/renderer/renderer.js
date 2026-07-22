@@ -927,6 +927,131 @@ window.lunacore.onRestarted(() => {
   renderBurn();
 });
 
+// ---- Licznik zuzycia limitow (5h + tydzien) --------------------------------
+//
+// Dane z IPC usage:update (odczyt GET z endpointu OAuth CLI - zero tokenow).
+// Renderer trzyma ostatni stan i odlicza czas do resetu z resetsAt na biezaco,
+// wiec przelaczenie jezyka i tykanie zegara odswiezaja UI bez nowego zapytania.
+
+const usageBody = document.getElementById('usage-body');
+const usageRefreshBtn = document.getElementById('usage-refresh');
+let lastUsage = null;
+
+// Humanizuje czas do resetu (ISO -> "4d 2h" / "3h 12m" / "9m"). null gdy minal.
+function fmtResetWhen(resetsAt) {
+  if (!resetsAt) return null;
+  const ms = new Date(resetsAt).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const min = Math.floor(ms / 60000);
+  const d = Math.floor(min / 1440);
+  const h = Math.floor((min % 1440) / 60);
+  const m = min % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// Buduje jeden wiersz paska zuzycia (etykieta + pasek + % + czas do resetu).
+function usageRow(labelKey, win) {
+  const row = document.createElement('div');
+  row.className = 'usage-row';
+
+  const head = document.createElement('div');
+  head.className = 'usage-row__head';
+  const label = document.createElement('span');
+  label.className = 'usage-row__label';
+  label.textContent = t(labelKey);
+  const pct = document.createElement('span');
+  pct.className = 'usage-row__pct';
+  pct.textContent = `${win.pct}%`;
+  head.append(label, pct);
+
+  const bar = document.createElement('div');
+  bar.className = 'usage-bar';
+  const fill = document.createElement('div');
+  fill.className = 'usage-bar__fill';
+  // Wypelnienie przez scaleX (--usage 0..1), spojnie z .ctx-bar__fill.
+  fill.style.setProperty('--usage', String(win.pct / 100));
+  // Prog kolorow: >=90 zle (czerwony), >=70 uwaga (pomaranczowy), reszta ok.
+  fill.dataset.level = win.pct >= 90 ? 'bad' : win.pct >= 70 ? 'warn' : 'good';
+  bar.appendChild(fill);
+
+  const reset = document.createElement('div');
+  reset.className = 'usage-row__reset hint';
+  const when = fmtResetWhen(win.resetsAt);
+  reset.textContent = when ? t('usage.resetIn', { when }) : t('usage.resetting');
+
+  row.append(head, bar, reset);
+  return row;
+}
+
+function usageMessage(key) {
+  const p = document.createElement('p');
+  p.className = 'hint';
+  p.textContent = t(key);
+  return p;
+}
+
+// Renderuje kafelek z aktualnego stanu (lastUsage). Stany bledu -> komunikat.
+function renderUsage() {
+  usageBody.innerHTML = '';
+  const u = lastUsage;
+  if (!u) {
+    usageBody.appendChild(usageMessage('usage.loading'));
+    return;
+  }
+  if (u.error) {
+    const key =
+      u.error === 'reauth' ? 'usage.reauth' : u.error === 'off' ? 'usage.off' : 'usage.unavailable';
+    usageBody.appendChild(usageMessage(key));
+    return;
+  }
+  const windows = [
+    ['usage.window.5h', u.fiveHour],
+    ['usage.window.week', u.sevenDay],
+    ['usage.window.opus', u.sevenDayOpus],
+    ['usage.window.sonnet', u.sevenDaySonnet],
+  ];
+  let any = false;
+  for (const [key, win] of windows) {
+    if (win && typeof win.pct === 'number') {
+      usageBody.appendChild(usageRow(key, win));
+      any = true;
+    }
+  }
+  if (!any) {
+    usageBody.appendChild(usageMessage('usage.unavailable'));
+    return;
+  }
+  if (u.extraUsage) usageBody.appendChild(usageMessage('usage.extra'));
+}
+
+window.lunacore.onUsage((usage) => {
+  lastUsage = usage;
+  renderUsage();
+});
+
+usageRefreshBtn.addEventListener('click', async () => {
+  usageRefreshBtn.classList.add('is-spinning');
+  try {
+    const u = await window.lunacore.refreshUsage();
+    if (u) {
+      lastUsage = u;
+      renderUsage();
+    }
+  } catch {
+    /* ignoruj - watcher i tak wyemituje przy kolejnym ticku */
+  } finally {
+    setTimeout(() => usageRefreshBtn.classList.remove('is-spinning'), 400);
+  }
+});
+
+// Odswiezaj etykiety resetu co 30 s (odliczanie liczone z resetsAt lokalnie,
+// bez nowego zapytania sieciowego).
+setInterval(() => {
+  if (lastUsage && !lastUsage.error) renderUsage();
+}, 30000);
+
 // ---- Wyglad: motyw (theming) + jezyk (i18n) ---------------------------------
 //
 // Motywy pochodza z config/themes.json (mapy tokenow CSS + kolory xterm), jezyk
@@ -956,6 +1081,7 @@ function applyLang(lang) {
   renderPtyStatus();
   renderCtxText();
   renderBurn();
+  renderUsage();
   paletteItems = null; // odbuduje z nowymi tlumaczeniami przy nastepnym otwarciu
 }
 

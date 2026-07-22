@@ -284,6 +284,61 @@ html, body {
 #ctx-percent { font-weight: 700; }
 .ctx-warn { color: var(--bad); font-size: 11px; font-weight: 600; }
 
+/* ---- Licznik zuzycia limitow (5h + tydzien) -------------------------------- */
+.usage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.usage-refresh {
+  background: none;
+  border: 1px solid var(--edge);
+  color: var(--text-dim);
+  border-radius: 6px;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  font-size: 13px;
+  cursor: pointer;
+  flex: none;
+  transition: color 0.2s ease, border-color 0.2s ease, transform 0.4s ease;
+}
+.usage-refresh:hover { color: var(--neon-cyan); border-color: var(--neon-cyan); }
+.usage-refresh.is-spinning { animation: usage-spin 0.6s linear infinite; }
+@keyframes usage-spin { to { transform: rotate(360deg); } }
+
+.usage { display: flex; flex-direction: column; gap: 10px; }
+.usage-row { display: flex; flex-direction: column; gap: 3px; }
+.usage-row__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+}
+.usage-row__label { color: var(--text-dim); }
+.usage-row__pct { font-weight: 700; font-variant-numeric: tabular-nums; }
+.usage-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 5px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--edge);
+  overflow: hidden;
+}
+.usage-bar__fill {
+  height: 100%;
+  width: 100%;
+  border-radius: 5px 0 0 5px;
+  /* Jak .ctx-bar__fill: wypelnienie przez scaleX (transform), nie width -
+     brak layout thrash. renderer.js ustawia --usage w zakresie 0..1. */
+  transform: scaleX(var(--usage, 0));
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--good), var(--neon-cyan));
+  transition: transform 0.4s ease, background 0.3s ease;
+}
+.usage-bar__fill[data-level='warn'] { background: linear-gradient(90deg, var(--warn), #ffb347); }
+.usage-bar__fill[data-level='bad'] {
+  background: linear-gradient(90deg, var(--bad), #ff3b6b);
+  animation: ctx-alarm 1s ease-in-out infinite;
+}
+.usage-row__reset { font-size: 10px; opacity: 0.6; }
+
 /* ---- Sparkline burn-rate (procent context window w czasie) ---------------- */
 
 .ctx-spark {
