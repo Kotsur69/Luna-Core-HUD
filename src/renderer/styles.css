@@ -231,6 +231,55 @@ html, body {
 .pad-send:hover { box-shadow: 0 0 12px var(--glow); }
 .pad-send.is-pulsing { animation: pulse 0.45s ease; }
 
+/* ---- Switch (toggle) + uzbrojony auto-compact ----------------------------- */
+
+.switch-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--edge);
+  background: var(--bg-panel-2);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.switch-field.is-armed { border-color: var(--edge-glow); box-shadow: 0 0 10px var(--glow); }
+.switch-field.is-fired { border-color: var(--warn); box-shadow: 0 0 12px rgba(255, 216, 107, 0.35); }
+
+.switch-field__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.switch-field__label { font-size: 12px; color: var(--text); }
+.switch-field__status { font-size: 10.5px; color: var(--text-dim); letter-spacing: 0.3px; }
+.switch-field.is-armed .switch-field__status { color: var(--neon-cyan); }
+.switch-field.is-fired .switch-field__status { color: var(--warn); }
+
+.switch { position: relative; flex: none; width: 38px; height: 22px; }
+.switch__input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch__track {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.switch__thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+.switch__input:checked + .switch__track { background: var(--btn-grad); border-color: var(--edge-glow); }
+.switch__input:checked + .switch__track .switch__thumb { transform: translateX(16px); background: var(--text); }
+.switch__input:focus-visible + .switch__track { box-shadow: 0 0 0 2px var(--edge-glow); }
+
 /* ---- Terminal (centrum) --------------------------------------------------- */
 
 .terminal-bar {

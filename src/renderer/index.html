@@ -30,6 +30,18 @@
           <span class="action-btn__icon">⚡</span>
           <span class="action-btn__label">COMPACT CONTEXT</span>
         </button>
+        <!-- Uzbrojony auto-compact: gdy kontekst przekroczy prog, renderer sam
+             wstrzykuje /compact (ten sam Action Injector). Domyslnie OFF. -->
+        <label id="autocompact-field" class="switch-field" data-i18n-title="autocompact.hint" title="Gdy kontekst przekroczy prog 85%, LunaCore sam wysle /compact.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="autocompact.label">Auto-compact</span>
+            <span id="autocompact-status" class="switch-field__status" data-i18n="autocompact.off">wylaczone</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="autocompact-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
       </div>
 
       <div class="panel__section">
@@ -100,6 +112,10 @@
 
     <!-- ================= PRAWY PANEL: Monitor Statusu ================= -->
     <aside class="panel panel--right">
+      <!-- Przewijalny kontener: na malych ekranach sekcje (zwlaszcza brudnopis
+           na dole) nie miescily sie i byly przycinane. Ten sam wzorzec co lewy
+           panel - sekcje biora naturalna wysokosc i przewijaja sie razem. -->
+      <div class="panel__scroll">
       <div class="panel__section">
         <h2 class="panel__title" data-i18n="ctxwin.title">Context Window</h2>
         <!-- Pasek zapelnia sie w Fazie 3 (parser metryk). Na razie placeholder. -->
@@ -178,6 +194,7 @@
           Wklej do sesji
         </button>
       </div>
+      </div><!-- /panel__scroll -->
     </aside>
 
   </div>

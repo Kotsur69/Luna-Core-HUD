@@ -21,6 +21,11 @@ const I18N_DICT = {
   pl: {
     'actions.title': 'Akcje',
     'compact.title': 'Wyslij /compact do Claude CLI',
+    'autocompact.label': 'Auto-compact',
+    'autocompact.hint': 'Gdy kontekst przekroczy prog 85%, LunaCore sam wysle /compact. Domyslnie wylaczone - uzbrajasz swiadomie.',
+    'autocompact.off': 'wylaczone',
+    'autocompact.armed': 'uzbrojone · prog 85%',
+    'autocompact.fired': 'wyslano /compact',
     'appearance.title': 'Wyglad',
     'appearance.theme': 'Motyw',
     'appearance.lang': 'Jezyk',
@@ -93,6 +98,11 @@ const I18N_DICT = {
   en: {
     'actions.title': 'Actions',
     'compact.title': 'Send /compact to the Claude CLI',
+    'autocompact.label': 'Auto-compact',
+    'autocompact.hint': 'When context crosses the 85% threshold, LunaCore sends /compact for you. Off by default - you arm it deliberately.',
+    'autocompact.off': 'off',
+    'autocompact.armed': 'armed · 85% threshold',
+    'autocompact.fired': '/compact sent',
     'appearance.title': 'Appearance',
     'appearance.theme': 'Theme',
     'appearance.lang': 'Language',

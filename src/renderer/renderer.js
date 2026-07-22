@@ -158,6 +158,7 @@ window.lunacore.onContext((metrics) => {
 
   ctxPercent.textContent = `${Math.round(pct * 100)}%`;
   renderCtxText();
+  maybeAutoCompact(pct);
 });
 
 // Napisy tekstowe context window (ostrzezenie + tokeny) - i18n-aware.
@@ -171,6 +172,69 @@ function renderCtxText() {
     limit: k(lastCtxMetrics.limit),
   });
 }
+
+// ---- Uzbrojony auto-compact (§5.5) ------------------------------------------
+//
+// Toggle w sekcji Akcje. Gdy UZBROJONY i kontekst przekroczy prog, renderer sam
+// wstrzykuje "/compact" przez ISTNIEJACY Action Injector (runCommand) - zero
+// nowych kanalow IPC. Sam /compact kosztuje tokeny, ale to koszt jawny i
+// swiadomie uzbrojony przez uzytkownika (domyslnie OFF).
+//
+// Wyzwalacz zboczowy z histereza: strzela RAZ, gdy kontekst przekroczy AT (85%),
+// i uzbraja sie ponownie dopiero, gdy spadnie ponizej REARM (60%) - inaczej po
+// compakcie oscylowalby wokol progu i spamowal. Dodatkowy cooldown to pas
+// bezpieczenstwa, gdyby metryka byla chwilowo szumna tuz po compakcie.
+const AUTO_COMPACT_AT = CTX_WARN_HIGH;      // prog wyzwolenia (0.85)
+const AUTO_COMPACT_REARM = CTX_WARN_MID;    // ponizej tego znow gotowy (0.60)
+const AUTO_COMPACT_COOLDOWN_MS = 60000;     // nigdy dwa razy w ciagu 60 s
+
+const autoCompactToggle = document.getElementById('autocompact-toggle');
+const autoCompactStatus = document.getElementById('autocompact-status');
+const autoCompactField = document.getElementById('autocompact-field');
+
+let autoCompactArmed = false;   // stan togglea (domyslnie OFF, nietrwaly - swiadome uzbrojenie co sesje)
+let autoCompactFired = false;   // flaga zbocza: juz strzelilismy w tym cyklu
+let autoCompactFiredAt = 0;     // znacznik ostatniego strzalu (cooldown)
+let autoCompactFlashTimer = null;
+
+function maybeAutoCompact(pct) {
+  if (!autoCompactArmed) return;
+  // Histereza: po spadku ponizej progu ponownego uzbrojenia kasujemy zbocze.
+  if (pct < AUTO_COMPACT_REARM) autoCompactFired = false;
+  if (pct < AUTO_COMPACT_AT || autoCompactFired) return;
+  if (ledDead) return; // martwa sesja - nie ma gdzie wstrzykiwac
+  if (Date.now() - autoCompactFiredAt < AUTO_COMPACT_COOLDOWN_MS) return;
+
+  autoCompactFired = true;
+  autoCompactFiredAt = Date.now();
+  window.lunacore.runCommand('/compact'); // ten sam injector co fizyczny przycisk
+  pulse(compactBtn);
+  flashAutoCompactFired();
+}
+
+// Krotki blysk statusu "wyslano /compact", potem powrot do "uzbrojone".
+function flashAutoCompactFired() {
+  clearTimeout(autoCompactFlashTimer);
+  autoCompactField.classList.add('is-fired');
+  autoCompactStatus.textContent = t('autocompact.fired');
+  autoCompactFlashTimer = setTimeout(() => {
+    autoCompactField.classList.remove('is-fired');
+    renderAutoCompact();
+  }, 2500);
+}
+
+// Odswieza etykiete statusu wg stanu (i18n-aware, wolane tez przy zmianie jezyka).
+function renderAutoCompact() {
+  if (autoCompactField.classList.contains('is-fired')) return; // nie nadpisuj blysku
+  autoCompactStatus.textContent = autoCompactArmed ? t('autocompact.armed') : t('autocompact.off');
+}
+
+autoCompactToggle.addEventListener('change', () => {
+  autoCompactArmed = autoCompactToggle.checked;
+  autoCompactFired = false; // przy (roz)uzbrojeniu zaczynamy cykl od nowa
+  autoCompactField.classList.toggle('is-armed', autoCompactArmed);
+  renderAutoCompact();
+});
 
 // ---- Faza 3: Skill Tracker (nazwy narzedzi ze stdout) -----------------------
 
@@ -1082,6 +1146,7 @@ function applyLang(lang) {
   renderCtxText();
   renderBurn();
   renderUsage();
+  renderAutoCompact();
   paletteItems = null; // odbuduje z nowymi tlumaczeniami przy nastepnym otwarciu
 }
 
