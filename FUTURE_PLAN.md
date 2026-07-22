@@ -1,8 +1,10 @@
 # LunaCore — Future Plan (Visual Templates, Layout & Ideas)
 
-> Status baseline: Phases 1–4 + backlog 7A/7B/7C are **done and pushed**.
-> Everything below is *future* work — nothing here is started. Order is a
-> suggestion, not a contract. The one hard rule that never changes:
+> Status baseline: Phases 1–4 + backlog 7A/7B/7C are **done and pushed**, plus
+> the **command palette (Ctrl+K)**, **token burn-rate sparkline**, **theming
+> system** (§2), and **PL/EN language switch**. Remaining items below are
+> *future* work. Order is a suggestion, not a contract. The one hard rule that
+> never changes:
 >
 > ⚠️ **ZERO EXTRA TOKENS.** Every idea here must stay a **Passive Observer**
 > (read/regex on stdout + files) or an **Action Injector** (write plain text to
@@ -39,6 +41,19 @@
 ---
 
 ## 2. Theming system (visual templates)
+
+> ✅ **BUILT 2026-07-22** — §2.1 (token extraction) and §2.2 (theme picker) are
+> shipped. `styles.css` is now fully tokenised (`:root` custom properties incl.
+> `--btn-grad`, `--btn-grad-hover`, `--glow`, `--term-bg`). Themes live in a
+> single `config/themes.json` (not a `themes/` dir as sketched below):
+> **cyberpunk / synthwave / matrix / nord / light**, each `{ id, label, vars,
+> terminal }`. `src/theme.js` loads + validates them (FALLBACK cyberpunk).
+> The **Appearance** section in the left panel switches live via IPC
+> `themes:list`, rewriting `documentElement` CSS vars **and** the xterm ANSI
+> palette; choice persists to `config/ui.local.json` (`src/uiprefs.js`).
+> A `config/themes.local.json` (gitignored) overrides by `id`.
+> **Still future:** §2.3 presets (density / font pack / glow toggle) and a
+> cycle-theme hotkey.
 
 Right now the theme is a fixed `:root { … }` block in `styles.css` (neon magenta +
 cyan cyberpunk). Goal: make the whole look a **swappable template**.
@@ -236,13 +251,24 @@ token-safe. Priority order roughly top-to-bottom.
   `pty:paste` IPC channel — a raw write would submit at the first newline and
   split the prompt into several messages. Main button pastes *without* sending
   (you can still edit); the `⏎` button pastes and sends.
-- **Command palette (Ctrl+K).** Fuzzy-search every injectable action — buttons,
-  cheat-sheets, skills, prompts — and fire it keyboard-first.
+- ✅ ~~**Command palette (Ctrl+K).**~~ **BUILT 2026-07-22.** Renderer-only overlay
+  fuzzy-searching every injectable action — the COMPACT button, cheat-sheets,
+  prompts, skills — keyboard-first (`↑↓`/`Enter`/`Esc`). Firing routes to the
+  **existing** injector per row (command types, prompt pastes / ⇧ sends, skill
+  copies its name). No new PTY channel, no tokens.
 - **Armed auto-compact button.** A left-panel *toggle* (armed / off). When armed
   and context crosses the threshold, auto-inject `/compact`. Off by default,
   clearly user-armed. The compact itself costs tokens (expected + explicit).
-- **Token burn-rate sparkline.** Plot `usage` samples over time so you *see*
-  context creeping toward compact, not just the static bar.
+- ✅ ~~**Token burn-rate sparkline.**~~ **BUILT 2026-07-22.** SVG sparkline of
+  context % over time under the Context Window bar + tok/min + ETA to 85%, from a
+  second `metrics:context` listener on the same `usage` samples (no new IPC,
+  no polling). Dashed line marks the 85% threshold.
+- ✅ ~~**Theme + language switch.**~~ **BUILT 2026-07-22.** Full theming system
+  (see §2) — 5 live-swappable themes — plus a **PL/EN language switch**
+  (`src/renderer/i18n.js`, `data-i18n*` attrs + `t()` for dynamic strings). Both
+  persist to `config/ui.local.json`. Translates LunaCore's chrome only, not the
+  `claude` CLI output. (Language wasn't on the original shortlist — added on
+  request alongside theming.)
 - ✅ ~~**Working-vs-waiting LED.**~~ **BUILT 2026-07-20.** Dot in the terminal
   bar, driven entirely by stdout activity in the renderer — amber pulsing while
   data flows, steady green after 800 ms of silence, red on exit. No new IPC:

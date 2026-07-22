@@ -10,7 +10,9 @@ injects prompts or touches the `claude` binary.
 > Status: **Phases 1–4 + full backlog implemented** — interactive terminal,
 > Action Injector, live Passive Observer, runtime profile switching, localhost
 > ports tracker, action cheat-sheets, skill cheat-sheet, a multi-line
-> **prompt library**, a **working/waiting LED**, and a local **scratchpad**.
+> **prompt library**, a **working/waiting LED**, a local **scratchpad**, a
+> **command palette (Ctrl+K)**, a **token burn-rate sparkline**, a swappable
+> **theming system**, and a **PL/EN language switch**.
 
 ---
 
@@ -34,7 +36,8 @@ user's context window. It works only as:
 │  LEFT PANEL         │       CENTER (Terminal)       │   RIGHT PANEL       │
 │  (Controls)         │                               │   (Status Monitor)  │
 ├─────────────────────┤  ● LED: working / waiting     ├─────────────────────┤
-│ [⚡ COMPACT CONTEXT]│     xterm.js render area      │  Context Window bar │
+│ [⚡ COMPACT CONTEXT]│  [Ctrl+K] command palette     │  Context Window bar │
+│ Theme + language    │     xterm.js render area      │  + burn sparkline   │
 │ Profile switcher    │                               │  Skill Tracker      │
 │ Action cheat-sheets │  Claude CLI interactive        │  tiles              │
 │ Prompt library      │  session (node-pty process)   │  Localhost ports    │
@@ -53,6 +56,9 @@ user's context window. It works only as:
 | Action Injector (keyboard) | `xterm.onData` → IPC `pty:write` → `ptyProcess.write()` |
 | Action Injector (button) | `runCommand('/compact')` → IPC `pty:command` → writes `/compact\r` |
 | Action Injector (prompt) | `pastePrompt(text, submit)` → IPC `pty:paste` → writes `ESC[200~ text ESC[201~` (bracketed paste), then `\r` only if `submit` |
+| Action Injector (palette) | Ctrl+K overlay aggregates actions/cheat-sheets/prompts/skills → fires the **existing** injector for the chosen row (no new PTY channel) |
+| Passive Observer (sparkline) | second `metrics:context` listener buffers the same `usage` samples → SVG sparkline + tok/min + ETA to 85% |
+| Prefs (theme/language) | `getThemes()`/`getUiPrefs()`/`setUiPrefs()` → IPC `themes:list` / `ui:get` / `ui:set` → reads `config/themes.json`, persists `config/ui.local.json`; renderer writes CSS tokens + xterm palette live |
 
 The Context Window % divides live `usage` tokens by a `CONTEXT_LIMIT` constant
 (200k default, in [`src/observer.js`](src/observer.js) — raise it for 1M-context
@@ -69,7 +75,7 @@ Security: the renderer has **no** direct Node.js access. All IPC goes through a
 |-----------|------------|
 | Desktop framework | Electron |
 | Terminal core | [`@lydell/node-pty`](https://www.npmjs.com/package/@lydell/node-pty) + [`@xterm/xterm`](https://www.npmjs.com/package/@xterm/xterm) + `@xterm/addon-fit` |
-| Frontend | Vanilla HTML / CSS / JS (dark cyberpunk theme) |
+| Frontend | Vanilla HTML / CSS / JS (swappable themes via CSS custom properties, PL/EN i18n) |
 
 > **Why `@lydell/node-pty` instead of `node-pty`?** It ships prebuilt N-API
 > binaries, so it installs **without** node-gyp / Visual Studio Build Tools — one
@@ -112,15 +118,20 @@ Luna-Core-HUD/
 │   ├── skills.js          # scan skill dirs → categorized skill cheat-sheet
 │   ├── prompts.js         # load/validate multi-line prompt library from config/
 │   ├── scratchpad.js      # read/write the local scratchpad note file
+│   ├── theme.js           # load/validate themes from config/ (FALLBACK cyberpunk)
+│   ├── uiprefs.js         # read/write UI prefs (theme + language) → ui.local.json
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
-│       ├── renderer.js    # xterm.js ↔ PTY wiring + COMPACT button + profiles
-│       └── styles.css     # LunaCore cyberpunk theme
+│       ├── i18n.js        # PL/EN dictionary + t() (IIFE → window.i18n only)
+│       ├── renderer.js    # xterm.js ↔ PTY wiring + COMPACT + profiles + palette + themes
+│       └── styles.css     # LunaCore theme tokens (:root custom properties)
 ├── config/
 │   ├── profiles.json      # launch profiles (profiles.local.json overrides, gitignored)
 │   ├── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
 │   ├── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
+│   ├── themes.json        # visual themes (themes.local.json overrides, gitignored)
+│   ├── ui.local.json      # persisted theme + language (created on first change, gitignored)
 │   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
 ├── master_prompt.md       # original build brief
 ├── FUTURE_PLAN.md         # roadmap: themes, layout engine, feature shortlist
@@ -140,9 +151,11 @@ Luna-Core-HUD/
 | + | Backlog: localhost ports tracker, action cheat-sheets, skill cheat-sheet | ✅ done |
 | + | Prompt library (multi-line reusable prompts, bracketed-paste injection) | ✅ done |
 | + | Working/waiting LED + local scratchpad | ✅ done |
+| + | Command palette (Ctrl+K), token burn-rate sparkline | ✅ done |
+| + | Theming system (5 themes, live switch) + PL/EN language switch | ✅ done |
 
-Next up (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §5.5): command palette (Ctrl+K),
-armed auto-compact toggle, token burn-rate sparkline, CWD/project switcher.
+Next up (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §5.5): armed auto-compact toggle,
+CWD/project switcher, cyberpunk boot sequence, session %/weekly-limit gauge.
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
@@ -232,6 +245,48 @@ next to the session. It autosaves 500 ms after you stop typing to
 `localStorage`, so you can open and grep it outside the app. **Wklej do sesji**
 injects the notes through the same bracketed-paste channel as the prompt library,
 without sending, so you can still add to them first.
+
+## Command palette (Ctrl+K)
+
+Press **Ctrl+K** (or the chip in the terminal bar) to open a fuzzy-search overlay
+over everything injectable: the COMPACT action, every cheat-sheet command, every
+prompt, and every scanned skill. Type to filter (subsequence match, matched
+letters highlighted), `↑`/`↓` to move, `Enter` to fire, `Esc` to close. Firing
+routes to the **existing** injector for that row — a command types itself into the
+session, a prompt pastes (⇧`Enter` pastes *and* sends), a skill copies its name.
+Pure renderer overlay: no new PTY channel, no tokens.
+
+## Token burn-rate sparkline
+
+Under the Context Window bar, a small SVG sparkline plots context % over time so
+you can *see* the trend, not just the current number — plus a **tok/min** burn
+rate and an **ETA to 85%** (the compact zone). It piggybacks on the same `usage`
+samples the bar already receives (a second `metrics:context` listener), so it adds
+no polling and no tokens. The dashed line marks the 85% threshold.
+
+## Theming
+
+The whole look is a set of CSS custom-property tokens, so a "theme" is just a
+values file. Ships with **cyberpunk** (default), **synthwave**, **matrix**,
+**nord**, and **light**, defined in [`config/themes.json`](config/themes.json);
+`src/theme.js` loads and validates them (falling back to a built-in cyberpunk if
+the file is broken, same as `profiles.js`). Pick one from the **Appearance**
+section in the left panel — it applies live, rewriting the CSS tokens on
+`documentElement` *and* the xterm terminal palette, no reload. Each theme sets
+both the UI vars (`--bg`, `--neon-magenta`, `--btn-grad`, `--glow`…) and the
+terminal's ANSI colours. Drop a `config/themes.local.json` (gitignored) to add or
+override themes by `id`.
+
+## Language (PL / EN)
+
+An **Appearance → Language** switch flips the whole UI between Polish and English
+live. Static labels carry `data-i18n` / `data-i18n-ph` / `data-i18n-title`
+attributes filled from [`src/renderer/i18n.js`](src/renderer/i18n.js); dynamic
+strings (LED state, token counts, burn rate, palette rows) go through `t()`. Note
+this translates **LunaCore's own chrome** only — the `claude` CLI output in the
+terminal is whatever the CLI itself emits. Both the theme and language choice
+persist to `config/ui.local.json` (gitignored) via `src/uiprefs.js`, so the app
+reopens exactly how you left it.
 
 ---
 
