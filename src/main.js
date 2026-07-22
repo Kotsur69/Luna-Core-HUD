@@ -33,6 +33,10 @@ const { loadSkills } = require('./skills');
 const { loadPrompts } = require('./prompts');
 // Brudnopis: lokalny notatnik trzymany jako zwykly plik tekstowy.
 const { readScratchpad, writeScratchpad } = require('./scratchpad');
+// Motywy (theming): mapy tokenow CSS + kolory xterm z config/themes.json.
+const { loadThemes } = require('./theme');
+// Preferencje UI (motyw + jezyk) trwale w config/ui.local.json.
+const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
@@ -275,6 +279,13 @@ function registerIpc() {
   // Brudnopis: odczyt i zapis lokalnego notatnika (walidacja w scratchpad.js).
   ipcMain.handle('scratchpad:read', () => readScratchpad());
   ipcMain.handle('scratchpad:write', (_event, text) => writeScratchpad(text));
+
+  // Motywy: lista dostepnych motywow (tokeny CSS + kolory xterm).
+  ipcMain.handle('themes:list', () => loadThemes());
+
+  // Preferencje UI: odczyt {theme, lang} i zapis czesciowy (zwraca nowy stan).
+  ipcMain.handle('ui:get', () => readUiPrefs());
+  ipcMain.handle('ui:set', (_event, partial) => writeUiPrefs(partial));
 }
 
 // ---- Cykl zycia aplikacji ---------------------------------------------------

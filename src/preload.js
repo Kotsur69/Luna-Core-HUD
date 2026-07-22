@@ -67,6 +67,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Zapisuje tresc brudnopisu; Promise<boolean>. */
   saveScratchpad: (text) => ipcRenderer.invoke('scratchpad:write', text),
 
+  // --- Motywy + preferencje UI (motyw/jezyk) ---
+  /** Pobiera { themes: [{id,label,vars,terminal}] }. */
+  getThemes: () => ipcRenderer.invoke('themes:list'),
+  /** Pobiera zapamietane preferencje { theme, lang }. */
+  getUiPrefs: () => ipcRenderer.invoke('ui:get'),
+  /** Zapisuje czesciowe preferencje { theme?, lang? }; zwraca nowy stan. */
+  setUiPrefs: (partial) => ipcRenderer.invoke('ui:set', partial),
+
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
   /**
    * Wkleja wielolinijkowy tekst (bracketed paste) do sesji.

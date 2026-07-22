@@ -24,35 +24,52 @@
       <div class="panel__scroll">
 
       <div class="panel__section">
-        <h2 class="panel__title">Akcje</h2>
+        <h2 class="panel__title" data-i18n="actions.title">Akcje</h2>
         <!-- FIZYCZNY przycisk Action Injector: wysyla /compact do PTY -->
-        <button id="btn-compact" class="action-btn" title="Wyslij /compact do Claude CLI">
+        <button id="btn-compact" class="action-btn" data-i18n-title="compact.title" title="Wyslij /compact do Claude CLI">
           <span class="action-btn__icon">⚡</span>
           <span class="action-btn__label">COMPACT CONTEXT</span>
         </button>
       </div>
 
       <div class="panel__section">
-        <h2 class="panel__title">Profil</h2>
+        <h2 class="panel__title" data-i18n="appearance.title">Wyglad</h2>
+        <!-- Motyw: opcje wypelnia renderer.js z config/themes.json. -->
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="appearance.theme">Motyw</span>
+          <select id="theme-switcher" class="profile-select"></select>
+        </label>
+        <!-- Jezyk UI: PL/EN, przelaczenie na zywo (i18n.js). -->
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="appearance.lang">Jezyk</span>
+          <select id="lang-switcher" class="profile-select">
+            <option value="pl">Polski</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="panel__section">
+        <h2 class="panel__title" data-i18n="profile.title">Profil</h2>
         <!-- Opcje wypelnia renderer.js z config/profiles.json (Faza 4). -->
         <select id="profile-switcher" class="profile-select"></select>
-        <p class="hint">Zmiana profilu restartuje sesje z nowym srodowiskiem.</p>
+        <p class="hint" data-i18n="profile.hint">Zmiana profilu restartuje sesje z nowym srodowiskiem.</p>
       </div>
 
       <div class="panel__section panel__section--grow">
-        <h2 class="panel__title">Sciagi / Komendy</h2>
+        <h2 class="panel__title" data-i18n="cheats.title">Sciagi / Komendy</h2>
         <!-- Zwijki + przyciski wypelnia renderer.js z config/cheatsheets.json (7C). -->
         <div id="cheatsheets" class="cheats"></div>
       </div>
 
       <div class="panel__section panel__section--grow">
-        <h2 class="panel__title">Prompty</h2>
+        <h2 class="panel__title" data-i18n="prompts.title">Prompty</h2>
         <!-- Wielolinijkowe prompty z config/prompts.json; klik = wklejenie do sesji. -->
         <div id="prompts" class="cheats"></div>
       </div>
 
       <div class="panel__section panel__section--grow">
-        <h2 class="panel__title">Skille <span id="skills-count" class="count"></span></h2>
+        <h2 class="panel__title"><span data-i18n="skills.title">Skille</span> <span id="skills-count" class="count"></span></h2>
         <!-- Auto-skan katalogow skilli, pogrupowany w kategorie (7A). -->
         <div id="skills" class="cheats"></div>
       </div>
@@ -61,7 +78,7 @@
 
       <div class="status-line">
         <span id="pty-status-dot" class="dot dot--live"></span>
-        <span id="pty-status-text">PTY: laczenie...</span>
+        <span id="pty-status-text" data-i18n="ptystatus.connecting">PTY: laczenie...</span>
       </div>
     </aside>
 
@@ -71,7 +88,11 @@
         <span class="terminal-bar__title">Claude Code CLI</span>
         <!-- LED: zolty puls = leci stdout (pracuje), zielony = cisza (Twoja tura). -->
         <span id="led" class="led led--waiting"></span>
-        <span id="led-label" class="terminal-bar__hint">czeka na Ciebie</span>
+        <span id="led-label" class="terminal-bar__hint" data-i18n="led.waiting">czeka na Ciebie</span>
+        <!-- Podpowiedz + skrot do palety komend (Ctrl+K). -->
+        <button id="palette-open" class="palette-chip" data-i18n-title="palette.chip.title" title="Paleta komend (Ctrl+K)">
+          <kbd>Ctrl</kbd><kbd>K</kbd>
+        </button>
       </div>
       <!-- Kontener, w ktorym xterm.js wyrenderuje terminal -->
       <div id="terminal" class="terminal"></div>
@@ -89,7 +110,18 @@
           <span id="ctx-percent">--%</span>
           <span id="ctx-warn" class="ctx-warn"></span>
         </div>
-        <p id="ctx-tokens" class="hint">Oczekiwanie na transcript sesji...</p>
+        <p id="ctx-tokens" class="hint" data-i18n="ctx.waiting">Oczekiwanie na transcript sesji...</p>
+
+        <!-- Sparkline zuzycia: procent context window w czasie (Passive Observer,
+             te same probki `usage` co pasek wyzej). Linia kreskowana = prog 85%. -->
+        <div class="ctx-spark" aria-hidden="true">
+          <svg class="ctx-spark__svg" viewBox="0 0 100 30" preserveAspectRatio="none">
+            <line class="ctx-spark__thresh" x1="0" y1="4.5" x2="100" y2="4.5" />
+            <path id="ctx-spark-area" class="ctx-spark__area" d="" />
+            <polyline id="ctx-spark-line" class="ctx-spark__line" points="" />
+          </svg>
+        </div>
+        <p id="ctx-burn" class="hint ctx-burn" data-i18n="burn.collecting">Zbieranie probek...</p>
       </div>
 
       <div class="panel__section">
@@ -105,26 +137,27 @@
           <li class="skill-tile" data-skill="Web">Web</li>
           <li class="skill-tile" data-skill="Task">Task</li>
         </ul>
-        <p class="hint">Kafelek swieci, gdy Claude uzywa narzedzia.</p>
+        <p class="hint" data-i18n="skilltracker.hint">Kafelek swieci, gdy Claude uzywa narzedzia.</p>
       </div>
 
       <div class="panel__section panel__section--grow">
-        <h2 class="panel__title">Porty localhost</h2>
+        <h2 class="panel__title" data-i18n="ports.title">Porty localhost</h2>
         <!-- Wypelnia renderer.js z pasywnego skanu (7B). -->
         <ul id="ports-list" class="ports-list"></ul>
-        <p id="ports-empty" class="hint">Skanowanie portow...</p>
+        <p id="ports-empty" class="hint" data-i18n="ports.scanning">Skanowanie portow...</p>
       </div>
 
       <div class="panel__section panel__section--grow">
-        <h2 class="panel__title">Brudnopis <span id="pad-status" class="count"></span></h2>
+        <h2 class="panel__title"><span data-i18n="pad.title">Brudnopis</span> <span id="pad-status" class="count"></span></h2>
         <!-- Lokalny notatnik: autozapis do config/scratchpad.local.md (gitignore). -->
         <textarea
           id="pad-text"
           class="pad"
           spellcheck="false"
+          data-i18n-ph="pad.placeholder"
           placeholder="Notatki, sniplety, TODO na pozniej..."
         ></textarea>
-        <button id="pad-send" class="pad-send" title="Wklej tresc brudnopisu do sesji">
+        <button id="pad-send" class="pad-send" data-i18n="pad.send" data-i18n-title="pad.send.title" title="Wklej tresc brudnopisu do sesji">
           Wklej do sesji
         </button>
       </div>
@@ -132,9 +165,40 @@
 
   </div>
 
+  <!-- ================= Paleta komend (Ctrl+K) ================= -->
+  <!-- Nakladka pusta w HTML; renderer.js buduje wiersze z agregatu akcji. -->
+  <div id="palette" class="palette" hidden>
+    <div class="palette__backdrop" data-palette-close></div>
+    <div class="palette__modal" role="dialog" aria-modal="true" aria-label="Paleta komend">
+      <div class="palette__bar">
+        <span class="palette__glyph">⌘</span>
+        <input
+          id="palette-input"
+          class="palette__input"
+          type="text"
+          data-i18n-ph="palette.input.ph"
+          placeholder="Szukaj akcji, komend, promptow, skilli..."
+          autocomplete="off"
+          spellcheck="false"
+          aria-controls="palette-list"
+          aria-expanded="true"
+        />
+      </div>
+      <ul id="palette-list" class="palette__list" role="listbox" aria-label="Wyniki"></ul>
+      <div class="palette__foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.nav">nawigacja</span></span>
+        <span><kbd>Enter</kbd> <span data-i18n="palette.foot.use">uzyj</span></span>
+        <span><kbd>Shift</kbd>+<kbd>Enter</kbd> <span data-i18n="palette.foot.send">wyslij prompt</span></span>
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
   <!-- Biblioteki xterm.js (UMD -> globalne Terminal, FitAddon) -->
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <!-- i18n (PL/EN) - musi zaladowac sie przed renderer.js -->
+  <script src="i18n.js"></script>
   <!-- Logika renderera LunaCore -->
   <script src="renderer.js"></script>
 </body>

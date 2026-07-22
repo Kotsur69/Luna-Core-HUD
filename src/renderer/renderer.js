@@ -3,12 +3,17 @@
 // ----------------------------------------------------------------------------
 // * Renderuje terminal xterm.js i spina go z PTY przez most window.lunacore.
 // * Obsluguje fizyczny przycisk COMPACT CONTEXT (Action Injector).
+// * Motyw (theming) + jezyk (i18n) przelaczane na zywo z lewego panelu.
 //
 // Dostep do procesu glownego wylacznie przez `window.lunacore` (patrz preload.js).
 // Globale `Terminal` i `FitAddon` pochodza z bibliotek xterm zaladowanych w HTML.
+// Global `window.i18n` pochodzi z i18n.js (laduje sie przed tym plikiem).
 // ============================================================================
 
 'use strict';
+
+// Skrot do tlumaczen. i18n.js wystawia window.i18n zanim ten plik sie wykona.
+const t = (key, params) => window.i18n.t(key, params);
 
 // ---- Inicjalizacja terminala ------------------------------------------------
 
@@ -17,7 +22,7 @@ const term = new Terminal({
   fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
   fontSize: 14,
   scrollback: 5000,
-  // Paleta dopasowana do motywu LunaCore (mroczny fiolet + neon).
+  // Paleta startowa (cyberpunk); motyw moze ja nadpisac przez term.options.theme.
   theme: {
     background: '#0c0912',
     foreground: '#e6dcff',
@@ -65,8 +70,8 @@ term.onData((data) => {
 // Status polaczenia PTY.
 window.lunacore.onExit((code) => {
   setLedDead();
-  setPtyStatus(false, `PTY: zakonczono (kod ${code})`);
-  term.write(`\r\n\x1b[38;5;203m[LunaCore] Sesja PTY zakonczona (kod ${code}).\x1b[0m\r\n`);
+  setPtyStatus(false, 'ptystatus.ended', { code });
+  term.write(`\r\n\x1b[38;5;203m${t('log.session.ended', { code })}\x1b[0m\r\n`);
 });
 
 // ---- Przycisk COMPACT CONTEXT (Faza 2) --------------------------------------
@@ -101,24 +106,31 @@ const led = document.getElementById('led');
 const ledLabel = document.getElementById('led-label');
 let ledTimer = null;
 let ledDead = false;
+let ledState = 'waiting'; // 'working' | 'waiting' | 'dead' - etykiete daje i18n
 
-function setLed(state, text) {
-  led.className = `led led--${state}`;
-  ledLabel.textContent = text;
+// Rysuje LED wg stanu (napis pobierany z i18n, wiec zmiana jezyka go odswieza).
+function renderLed() {
+  led.className = `led led--${ledState}`;
+  ledLabel.textContent = t(`led.${ledState}`);
 }
 
 // Wywolywane przy kazdej porcji stdout; timer przesuwa sie do przodu.
 function markWorking() {
   if (ledDead) return;
-  setLed('working', 'pracuje...');
+  ledState = 'working';
+  renderLed();
   clearTimeout(ledTimer);
-  ledTimer = setTimeout(() => setLed('waiting', 'czeka na Ciebie'), LED_IDLE_MS);
+  ledTimer = setTimeout(() => {
+    ledState = 'waiting';
+    renderLed();
+  }, LED_IDLE_MS);
 }
 
 function setLedDead() {
   ledDead = true;
   clearTimeout(ledTimer);
-  setLed('dead', 'sesja zakonczona');
+  ledState = 'dead';
+  renderLed();
 }
 
 // ---- Faza 3: Context Window (transcript JSONL) ------------------------------
@@ -132,8 +144,11 @@ const ctxTokens = document.getElementById('ctx-tokens');
 const CTX_WARN_HIGH = 0.85;
 const CTX_WARN_MID = 0.6;
 
+let lastCtxMetrics = null; // trzymamy ostatnie metryki, by odswiezyc napis po zmianie jezyka
+
 window.lunacore.onContext((metrics) => {
   if (!metrics || typeof metrics.percent !== 'number') return;
+  lastCtxMetrics = metrics;
   const pct = Math.max(0, Math.min(1, metrics.percent));
 
   // Pasek: scaleX 0..1 (bez layout thrash) + kolor zalezny od progu.
@@ -142,11 +157,20 @@ window.lunacore.onContext((metrics) => {
   ctxFill.classList.toggle('is-high', pct >= CTX_WARN_HIGH);
 
   ctxPercent.textContent = `${Math.round(pct * 100)}%`;
-  ctxWarn.textContent = pct >= CTX_WARN_HIGH ? 'Compact this shit!' : '';
-
-  const k = (n) => `${Math.round(n / 1000)}k`;
-  ctxTokens.textContent = `${k(metrics.tokens)} / ${k(metrics.limit)} tokenow`;
+  renderCtxText();
 });
+
+// Napisy tekstowe context window (ostrzezenie + tokeny) - i18n-aware.
+function renderCtxText() {
+  if (!lastCtxMetrics) return;
+  const pct = Math.max(0, Math.min(1, lastCtxMetrics.percent));
+  ctxWarn.textContent = pct >= CTX_WARN_HIGH ? t('ctx.warn.compact') : '';
+  const k = (n) => `${Math.round(n / 1000)}k`;
+  ctxTokens.textContent = t('ctx.tokens', {
+    used: k(lastCtxMetrics.tokens),
+    limit: k(lastCtxMetrics.limit),
+  });
+}
 
 // ---- Faza 3: Skill Tracker (nazwy narzedzi ze stdout) -----------------------
 
@@ -198,12 +222,11 @@ profileSwitcher.addEventListener('change', () => {
 // Po restarcie: wyczysc terminal i pokaz, ktory profil jest aktywny.
 window.lunacore.onRestarted((profile) => {
   ledDead = false; // nowa sesja - LED znowu zyje
-  setLed('waiting', 'czeka na Ciebie');
+  ledState = 'waiting';
+  renderLed();
   term.reset();
-  term.write(
-    `\x1b[38;5;80m[LunaCore] Sesja przelaczona na profil: ${profile.label}\x1b[0m\r\n`
-  );
-  setPtyStatus(true, 'PTY: aktywne');
+  term.write(`\x1b[38;5;80m${t('log.session.switched', { label: profile.label })}\x1b[0m\r\n`);
+  setPtyStatus(true, 'ptystatus.active');
   fitAndResize();
   term.focus();
 });
@@ -230,7 +253,7 @@ window.lunacore.onPorts((ports) => {
   portsList.innerHTML = '';
   portsEmpty.style.display = ports.length ? 'none' : '';
   if (!ports.length) {
-    portsEmpty.textContent = 'Brak nasluchujacych portow.';
+    portsEmpty.textContent = t('ports.empty');
     return;
   }
   for (const p of ports) {
@@ -248,10 +271,10 @@ window.lunacore.onPorts((ports) => {
 
     const actions = document.createElement('span');
     actions.className = 'port-item__actions';
-    actions.appendChild(portButton('↗', 'open', 'Otworz w przegladarce', { port: p.port }));
-    actions.appendChild(portButton('⧉', 'copy', 'Kopiuj URL', { port: p.port }));
+    actions.appendChild(portButton('↗', 'open', t('ports.open.title'), { port: p.port }));
+    actions.appendChild(portButton('⧉', 'copy', t('ports.copy.title'), { port: p.port }));
     actions.appendChild(
-      portButton('✕', 'kill', 'Zabij proces', { pid: p.procId, name: p.name, port: p.port })
+      portButton('✕', 'kill', t('ports.kill.title'), { pid: p.procId, name: p.name, port: p.port })
     );
 
     li.append(port, proc, actions);
@@ -270,7 +293,7 @@ portsList.addEventListener('click', async (e) => {
     navigator.clipboard.writeText(`http://localhost:${port}`).catch(() => {});
     pulse(btn);
   } else if (act === 'kill') {
-    if (!confirm(`Zabic proces ${name} (PID ${pid}) na porcie ${port}?`)) return;
+    if (!confirm(t('ports.kill.confirm', { name, pid, port }))) return;
     await window.lunacore.killPort(Number(pid));
   }
 });
@@ -489,7 +512,7 @@ padText.addEventListener('input', () => {
   clearTimeout(padTimer);
   padTimer = setTimeout(async () => {
     const ok = await window.lunacore.saveScratchpad(padText.value);
-    padStatus.textContent = ok ? 'zapisano' : 'blad zapisu';
+    padStatus.textContent = ok ? t('pad.saved') : t('pad.saveError');
   }, PAD_SAVE_MS);
 });
 
@@ -502,14 +525,503 @@ padSend.addEventListener('click', () => {
   term.focus();
 });
 
+// ---- Paleta komend (Ctrl+K) -------------------------------------------------
+//
+// Klawiaturowy agregat WSZYSTKICH wstrzykiwalnych akcji: fizyczny COMPACT,
+// sciagawki (7C), prompty i skille. Czysto rendererowa - zero nowych kanalow
+// IPC, zero dodatkowych tokenow: kazdy wpis odpala sie dokladnie tak, jak jego
+// oryginalny przycisk (runCommand / pastePrompt / kopiuj do schowka).
+//
+// Enter = akcja glowna wpisu (komenda: wyslij; prompt: wklej bez wysylki;
+// skill: kopiuj nazwe). Shift+Enter na promptcie wkleja I wysyla.
+
+const paletteEl = document.getElementById('palette');
+const paletteInput = document.getElementById('palette-input');
+const paletteList = document.getElementById('palette-list');
+const paletteOpenBtn = document.getElementById('palette-open');
+
+const PALETTE_MAX = 50; // ile wierszy renderujemy (lista skilli bywa 300+)
+
+let paletteItems = null; // leniwie zbudowany, plaski agregat wszystkich akcji
+let paletteFiltered = []; // aktualnie widoczne wpisy (po filtrze)
+let paletteSel = 0; // indeks zaznaczonego wiersza
+let paletteOpen = false;
+
+// Zbiera akcje ze wszystkich zrodel do jednej plaskiej listy `{ kind, label,
+// sub, hint, run(opts) }`. Dane pochodza z tych samych mostkow co panele.
+async function buildPaletteActions() {
+  const items = [];
+
+  // Statyczna akcja: fizyczny przycisk COMPACT.
+  items.push({
+    kind: 'action',
+    label: 'COMPACT CONTEXT',
+    sub: t('palette.action.sub'),
+    hint: '/compact',
+    run: () => window.lunacore.runCommand('/compact'),
+  });
+
+  const [cheats, prompts, skills] = await Promise.all([
+    window.lunacore.getCheatsheets().catch(() => null),
+    window.lunacore.getPrompts().catch(() => null),
+    window.lunacore.getSkills().catch(() => null),
+  ]);
+
+  for (const g of (cheats && cheats.groups) || []) {
+    for (const c of g.commands || []) {
+      items.push({
+        kind: 'command',
+        label: c.label,
+        sub: g.title,
+        hint: c.command,
+        run: () => window.lunacore.runCommand(c.command),
+      });
+    }
+  }
+
+  for (const g of (prompts && prompts.groups) || []) {
+    for (const p of g.prompts || []) {
+      // Main normalizuje `text` do stringa; join defensywnie na wszelki wypadek.
+      const text = Array.isArray(p.text) ? p.text.join('\n') : p.text;
+      items.push({
+        kind: 'prompt',
+        label: p.label,
+        sub: g.title,
+        hint: t('palette.hint.promptPaste'),
+        run: (opts) => window.lunacore.pastePrompt(text, !!(opts && opts.send)),
+      });
+    }
+  }
+
+  for (const cat of (skills && skills.categories) || []) {
+    for (const s of cat.skills || []) {
+      items.push({
+        kind: 'skill',
+        label: s.name,
+        sub: cat.name,
+        hint: t('palette.hint.skillCopy'),
+        run: () => navigator.clipboard.writeText(s.name).catch(() => {}),
+      });
+    }
+  }
+
+  return items;
+}
+
+// Dopasowanie fuzzy (podciag): zwraca { score, indices } lub null.
+// Premiuje trafienia ciagle i na granicy slowa; krotszy tekst wyzej.
+function fuzzyMatch(query, text) {
+  const tx = text.toLowerCase();
+  const q = query.toLowerCase();
+  if (!q) return { score: 0, indices: [] };
+
+  const indices = [];
+  let ti = 0;
+  let score = 0;
+  let prev = -2;
+  let streak = 0;
+
+  for (let qi = 0; qi < q.length; qi++) {
+    let found = -1;
+    for (let k = ti; k < tx.length; k++) {
+      if (tx[k] === q[qi]) { found = k; break; }
+    }
+    if (found === -1) return null;
+    indices.push(found);
+
+    if (found === prev + 1) { streak++; score += 5 + streak * 3; }
+    else { streak = 0; score += 1; }
+    if (found === 0 || /[\s/_\-:.]/.test(tx[found - 1])) score += 8; // start slowa
+
+    prev = found;
+    ti = found + 1;
+  }
+
+  if (tx.includes(q)) score += 15; // ciagly podciag = mocny bonus
+  score -= tx.length * 0.05; // przy remisie krotszy wygrywa
+  return { score, indices };
+}
+
+// Filtruje i sortuje wpisy dla zapytania. Highlight tylko na etykiecie;
+// dopasowanie moze tez wpasc przez `sub`/`hint`, ale z nizszym priorytetem.
+function filterPalette(query) {
+  const q = query.trim();
+  if (!q) return paletteItems.slice(0, PALETTE_MAX).map((item) => ({ item, indices: [] }));
+
+  const scored = [];
+  for (const item of paletteItems) {
+    const onLabel = fuzzyMatch(q, item.label);
+    if (onLabel) {
+      scored.push({ item, indices: onLabel.indices, score: onLabel.score + 1000 });
+      continue;
+    }
+    const onMeta = fuzzyMatch(q, `${item.sub} ${item.hint}`);
+    if (onMeta) scored.push({ item, indices: [], score: onMeta.score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, PALETTE_MAX);
+}
+
+// Buduje etykiete z podswietleniem trafionych znakow (bezpiecznie, bez innerHTML).
+function labelWithMarks(label, indices) {
+  const frag = document.createDocumentFragment();
+  const set = new Set(indices);
+  let buf = '';
+  const flush = (mark) => {
+    if (!buf) return;
+    if (mark) {
+      const m = document.createElement('mark');
+      m.textContent = buf;
+      frag.appendChild(m);
+    } else {
+      frag.appendChild(document.createTextNode(buf));
+    }
+    buf = '';
+  };
+  for (let i = 0; i < label.length; i++) {
+    const hit = set.has(i);
+    const prevHit = set.has(i - 1);
+    if (i > 0 && hit !== prevHit) flush(prevHit);
+    buf += label[i];
+  }
+  flush(set.has(label.length - 1));
+  return frag;
+}
+
+function renderPalette() {
+  paletteList.innerHTML = '';
+
+  if (!paletteFiltered.length) {
+    const empty = document.createElement('li');
+    empty.className = 'palette__empty';
+    empty.textContent = t('palette.empty');
+    paletteList.appendChild(empty);
+    return;
+  }
+
+  paletteFiltered.forEach(({ item, indices }, i) => {
+    const li = document.createElement('li');
+    li.className = 'palette-item' + (i === paletteSel ? ' is-active' : '');
+    li.setAttribute('role', 'option');
+    li.setAttribute('aria-selected', i === paletteSel ? 'true' : 'false');
+    li.dataset.idx = i;
+
+    const kind = document.createElement('span');
+    kind.className = 'palette-item__kind';
+    kind.dataset.kind = item.kind;
+    kind.textContent = t(`palette.kind.${item.kind}`);
+
+    const body = document.createElement('span');
+    body.className = 'palette-item__body';
+    const label = document.createElement('div');
+    label.className = 'palette-item__label';
+    label.appendChild(labelWithMarks(item.label, indices));
+    const sub = document.createElement('div');
+    sub.className = 'palette-item__sub';
+    sub.textContent = item.sub;
+    body.append(label, sub);
+
+    const hint = document.createElement('span');
+    hint.className = 'palette-item__hint';
+    hint.textContent = item.hint;
+
+    li.append(kind, body, hint);
+    paletteList.appendChild(li);
+  });
+}
+
+// Trzyma zaznaczenie w zakresie i przewija do widocznego wiersza.
+function setPaletteSel(idx) {
+  const len = paletteFiltered.length;
+  if (!len) return;
+  paletteSel = ((idx % len) + len) % len; // zawijanie gora/dol
+  renderPalette();
+  const active = paletteList.querySelector('.palette-item.is-active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+function updatePalette() {
+  paletteFiltered = filterPalette(paletteInput.value);
+  paletteSel = 0;
+  renderPalette();
+}
+
+// Odpala zaznaczony (lub wskazany) wpis i zamyka palete.
+function firePalette(idx, opts) {
+  const row = paletteFiltered[idx];
+  if (!row) return;
+  try {
+    row.item.run(opts);
+  } catch {
+    // pojedyncza akcja nie moze wywalic palety
+  }
+  closePalette();
+  term.focus();
+}
+
+async function openPalette() {
+  if (paletteOpen) return;
+  paletteOpen = true;
+  paletteEl.hidden = false;
+
+  // Leniwe zbudowanie agregatu przy pierwszym otwarciu (getSkills bywa wolne,
+  // ale main cache'uje je na sesje). Kolejne otwarcia sa natychmiastowe.
+  if (!paletteItems) {
+    paletteItems = [];
+    try {
+      paletteItems = await buildPaletteActions();
+    } catch {
+      paletteItems = [];
+    }
+  }
+
+  paletteInput.value = '';
+  updatePalette();
+  paletteInput.focus();
+}
+
+function closePalette() {
+  if (!paletteOpen) return;
+  paletteOpen = false;
+  paletteEl.hidden = true;
+}
+
+// Klawiatura wewnatrz pola wyszukiwania.
+paletteInput.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); setPaletteSel(paletteSel + 1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); setPaletteSel(paletteSel - 1); }
+  else if (e.key === 'Enter') { e.preventDefault(); firePalette(paletteSel, { send: e.shiftKey }); }
+  else if (e.key === 'Escape') { e.preventDefault(); closePalette(); term.focus(); }
+});
+
+paletteInput.addEventListener('input', updatePalette);
+
+// Mysz: hover zaznacza, klik odpala (Shift+klik wysyla prompt).
+paletteList.addEventListener('mousemove', (e) => {
+  const row = e.target.closest('.palette-item');
+  if (!row) return;
+  const idx = Number(row.dataset.idx);
+  if (idx !== paletteSel) { paletteSel = idx; renderPalette(); }
+});
+paletteList.addEventListener('click', (e) => {
+  const row = e.target.closest('.palette-item');
+  if (!row) return;
+  firePalette(Number(row.dataset.idx), { send: e.shiftKey });
+});
+
+// Klik w tlo zamyka.
+paletteEl.addEventListener('click', (e) => {
+  if (e.target.hasAttribute('data-palette-close')) { closePalette(); term.focus(); }
+});
+
+// Chip w pasku terminala otwiera palete.
+if (paletteOpenBtn) paletteOpenBtn.addEventListener('click', openPalette);
+
+// Globalny skrot Ctrl/Cmd+K (capture, by wyprzedzic terminal xterm.js).
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (paletteOpen) { closePalette(); term.focus(); }
+      else openPalette();
+    }
+  },
+  true
+);
+
+// ---- Sparkline burn-rate (context window w czasie) --------------------------
+//
+// PASSIVE OBSERVER: te same probki `usage`, ktore zasilaja pasek Context Window,
+// tyle ze zapamietane w czasie. Widac, jak kontekst pelznie ku compactowi -
+// plus tempo (tok/min) i szacowany czas do progu 85%. Zero nowych kanalow IPC
+// (dopinamy sie drugim listenerem `onContext`), zero dodatkowych tokenow.
+
+const sparkLine = document.getElementById('ctx-spark-line');
+const sparkArea = document.getElementById('ctx-spark-area');
+const ctxBurn = document.getElementById('ctx-burn');
+
+const SPARK_MAX = 80; // ile probek trzymamy na wykresie
+const BURN_WINDOW_MS = 5 * 60 * 1000; // okno liczenia tempa (5 min)
+
+let sparkBuf = []; // [{ t, tokens, percent }]
+
+// Rysuje linie + wypelnienie w ukladzie viewBox 0..100 (x) / 0..30 (y, odwrocony).
+function renderSpark() {
+  const n = sparkBuf.length;
+  if (n < 2) {
+    sparkLine.setAttribute('points', '');
+    sparkArea.setAttribute('d', '');
+    return;
+  }
+  const pts = sparkBuf.map((s, i) => {
+    const x = (i / (n - 1)) * 100;
+    const y = (1 - Math.max(0, Math.min(1, s.percent))) * 30;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  sparkLine.setAttribute('points', pts.join(' '));
+  sparkArea.setAttribute('d', `M0,30 L${pts.join(' L')} L100,30 Z`);
+}
+
+// Formatuje tempo: ponizej 1k jako liczba, wyzej jako "1.8k".
+function fmtRate(r) {
+  const a = Math.abs(r);
+  return a >= 1000 ? `${(a / 1000).toFixed(1)}k` : `${Math.round(a)}`;
+}
+
+// Liczy tempo z okna czasowego i wypisuje tekst + ETA do progu 85%.
+function renderBurn() {
+  const n = sparkBuf.length;
+  if (n < 2) {
+    ctxBurn.textContent = t('burn.collecting');
+    return;
+  }
+  const last = sparkBuf[n - 1];
+  // Najstarsza probka mieszczaca sie w oknie BURN_WINDOW_MS.
+  let first = sparkBuf[0];
+  for (const s of sparkBuf) {
+    if (last.t - s.t <= BURN_WINDOW_MS) { first = s; break; }
+  }
+  const dtMin = (last.t - first.t) / 60000;
+  if (dtMin <= 0) { ctxBurn.textContent = '—'; return; }
+
+  const rate = (last.tokens - first.tokens) / dtMin; // tokeny / min
+  if (rate > 5) {
+    const thresholdTokens = CTX_WARN_HIGH * last.limit;
+    const remaining = thresholdTokens - last.tokens;
+    let eta;
+    if (remaining > 0) {
+      const min = remaining / rate;
+      eta = t('burn.eta.to85', { min: min < 1 ? '<1' : Math.round(min) });
+    } else {
+      eta = t('burn.eta.zone');
+    }
+    ctxBurn.textContent = t('burn.up', { rate: fmtRate(rate), eta });
+  } else if (rate < -5) {
+    ctxBurn.textContent = t('burn.down', { rate: fmtRate(rate) });
+  } else {
+    ctxBurn.textContent = t('burn.stable');
+  }
+}
+
+// Drugi listener metryk - probkuje bez ruszania bloku Fazy 3 wyzej.
+window.lunacore.onContext((metrics) => {
+  if (!metrics || typeof metrics.tokens !== 'number') return;
+  const now = Date.now();
+  const prev = sparkBuf[sparkBuf.length - 1];
+  if (prev && prev.tokens === metrics.tokens) {
+    prev.t = now; // ta sama wartosc: odswiez czas, nie mnoz punktow
+  } else {
+    sparkBuf.push({ t: now, tokens: metrics.tokens, percent: metrics.percent });
+    if (sparkBuf.length > SPARK_MAX) sparkBuf.shift();
+  }
+  renderSpark();
+  renderBurn();
+});
+
+// Restart sesji = nowy kontekst: czyscimy historie sparkline.
+window.lunacore.onRestarted(() => {
+  sparkBuf = [];
+  renderSpark();
+  renderBurn();
+});
+
+// ---- Wyglad: motyw (theming) + jezyk (i18n) ---------------------------------
+//
+// Motywy pochodza z config/themes.json (mapy tokenow CSS + kolory xterm), jezyk
+// ze slownika i18n.js. Wybor jest trwaly w config/ui.local.json. Przelaczenie
+// dziala na zywo: tokeny leca na documentElement, palety xterm przez term.options,
+// a napisy przez applyStatic() + ponowne wyrenderowanie dynamicznych.
+
+const themeSwitcher = document.getElementById('theme-switcher');
+const langSwitcher = document.getElementById('lang-switcher');
+let themesById = new Map();
+
+// Naklada tokeny motywu na :root oraz palete terminala.
+function applyThemeVars(theme) {
+  if (!theme) return;
+  const root = document.documentElement;
+  for (const [k, v] of Object.entries(theme.vars || {})) root.style.setProperty(k, v);
+  if (theme.terminal && typeof theme.terminal === 'object') {
+    term.options.theme = { ...term.options.theme, ...theme.terminal };
+  }
+}
+
+// Zmienia jezyk: statyczne etykiety + wszystkie dynamiczne trzymane w stanie.
+function applyLang(lang) {
+  window.i18n.setLang(lang);
+  window.i18n.applyStatic();
+  renderLed();
+  renderPtyStatus();
+  renderCtxText();
+  renderBurn();
+  paletteItems = null; // odbuduje z nowymi tlumaczeniami przy nastepnym otwarciu
+}
+
+async function initAppearance() {
+  let prefs = { theme: 'cyberpunk', lang: 'pl' };
+  try {
+    prefs = (await window.lunacore.getUiPrefs()) || prefs;
+  } catch {
+    /* brak preferencji - zostajemy przy domyslnych */
+  }
+
+  // Jezyk najpierw, zeby applyStatic zlapal caly DOM przy starcie.
+  applyLang(prefs.lang);
+  langSwitcher.value = prefs.lang;
+
+  // Motywy: wypelnij liste i nalozony aktywny (lub pierwszy dostepny).
+  try {
+    const { themes } = await window.lunacore.getThemes();
+    themesById = new Map((themes || []).map((th) => [th.id, th]));
+    themeSwitcher.innerHTML = '';
+    for (const th of themes || []) {
+      const opt = document.createElement('option');
+      opt.value = th.id;
+      opt.textContent = th.label;
+      themeSwitcher.appendChild(opt);
+    }
+    const active = themesById.has(prefs.theme)
+      ? prefs.theme
+      : themes && themes[0] && themes[0].id;
+    if (active) {
+      themeSwitcher.value = active;
+      applyThemeVars(themesById.get(active));
+    }
+  } catch {
+    /* brak motywow - zostaje wbudowany styl z styles.css */
+  }
+}
+
+themeSwitcher.addEventListener('change', () => {
+  applyThemeVars(themesById.get(themeSwitcher.value));
+  window.lunacore.setUiPrefs({ theme: themeSwitcher.value });
+});
+
+langSwitcher.addEventListener('change', () => {
+  applyLang(langSwitcher.value);
+  window.lunacore.setUiPrefs({ lang: langSwitcher.value });
+});
+
+initAppearance();
+
 // ---- Wskaznik statusu PTY ----------------------------------------------------
 
-function setPtyStatus(isLive, text) {
+// Stan trzymany semantycznie (klucz i18n), by zmiana jezyka go odswiezyla.
+let ptyStatusState = { live: true, key: 'ptystatus.connecting', params: {} };
+
+function setPtyStatus(isLive, key, params = {}) {
+  ptyStatusState = { live: isLive, key, params };
+  renderPtyStatus();
+}
+
+function renderPtyStatus() {
   const dot = document.getElementById('pty-status-dot');
   const label = document.getElementById('pty-status-text');
-  dot.classList.toggle('dot--live', isLive);
-  dot.classList.toggle('dot--dead', !isLive);
-  label.textContent = text;
+  dot.classList.toggle('dot--live', ptyStatusState.live);
+  dot.classList.toggle('dot--dead', !ptyStatusState.live);
+  label.textContent = t(ptyStatusState.key, ptyStatusState.params);
 }
 
 // ---- Zdarzenia okna ---------------------------------------------------------
@@ -523,6 +1035,6 @@ window.addEventListener('DOMContentLoaded', () => {
 // Pierwsze dopasowanie po pelnym ulozeniu layoutu + oznaczenie sesji jako aktywnej.
 requestAnimationFrame(() => {
   fitAndResize();
-  setPtyStatus(true, 'PTY: aktywne');
+  setPtyStatus(true, 'ptystatus.active');
   term.focus();
 });

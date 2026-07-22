@@ -23,4 +23,8 @@ config/cheatsheets.local.json
 config/prompts.local.json
 # Brudnopis - prywatne notatki sesji
 config/scratchpad.local.md
+# Preferencje UI (motyw + jezyk) - lokalny stan
+config/ui.local.json
+# Lokalne nadpisania motywow (prywatne)
+config/themes.local.json
 .env
