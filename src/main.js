@@ -77,25 +77,86 @@ function safeCwd(dir) {
 
 // ---- Stan globalny ----------------------------------------------------------
 
-/** @type {import('node-pty').IPty | null} */
-let ptyProcess = null;
+/**
+ * Sesja = jedna zakladka: wlasny PTY, wlasny profil, wlasny katalog roboczy i
+ * WLASNY TranscriptWatcher. To ostatnie jest istota trybu wielosesyjnego - przy
+ * dwoch zywych sesjach globalny watcher pokazywalby metryki tej, w ktorej cos
+ * ostatnio drgnelo, czyli cudze liczby w pasku kontekstu.
+ *
+ * @typedef {{
+ *   id: string, proc: import('node-pty').IPty|null, profileId: string,
+ *   projectId: string|null, cwd: string, size: {cols:number,rows:number},
+ *   watcher: TranscriptWatcher|null, alive: boolean
+ * }} Session
+ */
+
+/** @type {Map<string, Session>} */
+const sessions = new Map();
+/** @type {string|null} id sesji pokazywanej w oknie */
+let activeSessionId = null;
+let sessionSeq = 0;
+
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
-/** @type {TranscriptWatcher | null} */
-let transcriptWatcher = null;
 /** @type {PortWatcher | null} */
 let portWatcher = null;
 /** @type {UsageWatcher | null} */
 let usageWatcher = null;
-// Profile wczytane z config/ oraz id aktualnie aktywnego.
+// Profile wczytane z config/ oraz id domyslnego (dla nowych sesji).
 let profiles = [];
 let activeProfileId = null;
-// Projekty (katalogi robocze) wczytane z config/ + id aktywnego i realny cwd.
+// Projekty (katalogi robocze) wczytane z config/ + id domyslnego i realny cwd.
 let projects = [];
 let activeProjectId = null;
 let activeCwd = START_CWD;
-// Ostatni znany rozmiar terminala - odtwarzany przy restarcie sesji.
+// Ostatni znany rozmiar terminala - punkt startowy dla nowo tworzonych sesji.
 let lastSize = { cols: 80, rows: 24 };
+
+/** Sesja aktualnie pokazywana w oknie (lub null). */
+function activeSession() {
+  return activeSessionId ? sessions.get(activeSessionId) || null : null;
+}
+
+/**
+ * Rozwiazuje sesje z payloadu IPC. Brak/nieznane id => sesja aktywna, dzieki
+ * czemu wywolanie bez sessionId zachowuje sie jak w wersji jednosesyjnej.
+ * @param {unknown} sessionId
+ */
+function resolveSession(sessionId) {
+  if (typeof sessionId === 'string' && sessions.has(sessionId)) {
+    return sessions.get(sessionId);
+  }
+  return activeSession();
+}
+
+/** Wysyla zdarzenie do renderera, jesli okno zyje. */
+function send(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+/** Serializowalny opis sesji dla renderera (bez uchwytow procesu). */
+function sessionSummary(s) {
+  const profile = getProfile(profiles, s.profileId);
+  return {
+    id: s.id,
+    profileId: s.profileId,
+    profileLabel: profile ? profile.label : s.profileId,
+    projectId: s.projectId,
+    cwd: s.cwd,
+    folder: path.basename(s.cwd) || s.cwd,
+    alive: s.alive,
+  };
+}
+
+/** Rozsyla pelna liste zakladek + wskazanie aktywnej. */
+function broadcastSessions() {
+  send('sessions:update', {
+    sessions: [...sessions.values()].map(sessionSummary),
+    activeSessionId,
+  });
+}
 
 // ---- Okno aplikacji ---------------------------------------------------------
 
@@ -175,8 +236,14 @@ function stripClaudeSessionMarkers(env) {
   return env;
 }
 
-function launchProfile(profile) {
-  activeProfileId = profile.id;
+/**
+ * Podpina PTY + TranscriptWatcher do istniejacego rekordu sesji. Wydzielone,
+ * bo uzywa tego zarowno tworzenie zakladki, jak i restart pod nowym profilem
+ * lub katalogiem - zawsze tak samo.
+ * @param {Session} session
+ * @param {{id:string,label:string,command:string,args:string[],env:Object}} profile
+ */
+function spawnInto(session, profile) {
   // Nadpisania srodowiska z profilu (np. ANTHROPIC_BASE_URL dla LM Studio),
   // czyszczenie markerow sesji-rodzica (transkrypt!) + gwarancja, ze `claude`
   // z ~/.local/bin jest na PATH sesji.
@@ -184,76 +251,153 @@ function launchProfile(profile) {
     stripClaudeSessionMarkers({ ...process.env, ...(profile.env || {}) }),
   );
 
+  const cwd = safeCwd(session.cwd);
+  session.cwd = cwd;
+  session.profileId = profile.id;
+
   const proc = pty.spawn(DEFAULT_SHELL, [], {
     name: 'xterm-color',
-    cols: lastSize.cols,
-    rows: lastSize.rows,
-    cwd: safeCwd(activeCwd),
+    cols: session.size.cols,
+    rows: session.size.rows,
+    cwd,
     env,
   });
-  ptyProcess = proc;
+  session.proc = proc;
+  session.alive = true;
 
-  // PASSIVE OBSERVER: caly surowy stdout PTY -> renderer (xterm.js) + detekcja narzedzi.
+  // PASSIVE OBSERVER: surowy stdout tej sesji -> renderer + detekcja narzedzi.
+  // Kazde zdarzenie niesie sessionId, bo renderer trzyma osobny bufor na zakladke.
   proc.onData((data) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      // 1. Surowy strumien na ekran terminala (bez zmian - user widzi 1:1).
-      mainWindow.webContents.send('pty:data', data);
-      // 2. Skill Tracker: wykryj nazwy narzedzi i zapal odpowiednie kafelki.
-      const tiles = detectTools(data);
-      if (tiles.length > 0) {
-        mainWindow.webContents.send('metrics:tools', tiles);
-      }
-    }
+    send('pty:data', { sessionId: session.id, data });
+    const tiles = detectTools(data);
+    if (tiles.length > 0) send('metrics:tools', { sessionId: session.id, tiles });
   });
 
-  // Gdy proces PTY sie zakonczy - informujemy renderer. Guard: ignorujemy exit
-  // starego procesu po restarcie (proc !== ptyProcess), zeby nie wysylac falszywego
-  // "sesja zakonczona" i nie zerowac nowej sesji.
+  // Guard: ignorujemy exit procesu juz odpietego od sesji (restart profilu /
+  // zamkniecie zakladki), zeby nie wyslac falszywego "sesja zakonczona".
   proc.onExit(({ exitCode }) => {
-    if (proc !== ptyProcess) return; // to stary proces po przelaczeniu profilu
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('pty:exit', exitCode);
-    }
-    ptyProcess = null;
+    if (session.proc !== proc) return;
+    session.proc = null;
+    session.alive = false;
+    send('pty:exit', { sessionId: session.id, code: exitCode });
+    broadcastSessions();
   });
+
+  // Wlasny watcher transcriptu, zawezony do katalogu tej sesji.
+  if (session.watcher) session.watcher.stop();
+  session.watcher = new TranscriptWatcher(
+    (metrics) => send('metrics:context', { sessionId: session.id, metrics }),
+    { cwd },
+  );
+  session.watcher.start();
 
   // Wpisz komende startowa profilu (pusta = sama powloka, bez auto-startu).
   // PTY buforuje wejscie, wiec komenda wykona sie, gdy powloka bedzie gotowa.
   const command = [profile.command, ...(profile.args || [])].join(' ').trim();
   if (command) {
     setTimeout(() => {
-      if (ptyProcess === proc) proc.write(`${command}\r`);
+      if (session.proc === proc) proc.write(`${command}\r`);
     }, 600);
   }
 }
 
 /**
- * Restart sesji PTY z innym profilem: ubija biezacy proces i startuje nowy.
- * Renderer dostaje 'pty:restarted' (czysci terminal + pokazuje aktywny profil).
- * @param {string} profileId
+ * Tworzy nowa zakladke i czyni ja aktywna.
+ * @param {{profileId?:string, projectId?:string}} [opts]
+ * @returns {Session|null}
  */
-function restartPty(profileId) {
-  const profile = getProfile(profiles, profileId);
-  if (!profile) return;
+function createSession(opts = {}) {
+  const profile =
+    getProfile(profiles, opts.profileId || activeProfileId) || profiles[0];
+  if (!profile) return null;
 
-  if (ptyProcess) {
-    const old = ptyProcess;
-    ptyProcess = null; // odcinamy stary proces (jego onExit sie zignoruje)
+  const project = getProject(projects, opts.projectId || activeProjectId);
+  const session = {
+    id: `s${++sessionSeq}`,
+    proc: null,
+    profileId: profile.id,
+    projectId: project ? project.id : null,
+    cwd: project ? project.path : activeCwd,
+    size: { ...lastSize },
+    watcher: null,
+    alive: false,
+  };
+
+  sessions.set(session.id, session);
+  spawnInto(session, profile);
+  activeSessionId = session.id;
+  broadcastSessions();
+  return session;
+}
+
+/** Ubija proces i watcher sesji, nie usuwajac jej z mapy. */
+function teardownSession(session) {
+  if (session.watcher) {
+    session.watcher.stop();
+    session.watcher = null;
+  }
+  if (session.proc) {
+    const old = session.proc;
+    session.proc = null; // odpinamy, zeby onExit sie zignorowal
     try {
       old.kill();
     } catch {
       /* proces mogl juz nie zyc */
     }
   }
+  session.alive = false;
+}
 
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('pty:restarted', {
-      id: profile.id,
-      label: profile.label,
-      folder: path.basename(safeCwd(activeCwd)),
-    });
+/**
+ * Zamyka zakladke. Ostatniej nie usuwamy w pustke - od razu tworzymy swiaza,
+ * zeby okno nigdy nie zostalo bez terminala.
+ * @param {string} sessionId
+ */
+function closeSession(sessionId) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+
+  teardownSession(session);
+  sessions.delete(sessionId);
+
+  if (sessions.size === 0) {
+    createSession();
+    return;
   }
-  launchProfile(profile);
+  if (activeSessionId === sessionId) {
+    activeSessionId = [...sessions.keys()][sessions.size - 1];
+  }
+  broadcastSessions();
+}
+
+/**
+ * Restart JEDNEJ sesji pod (byc moze innym) profilem i katalogiem.
+ * Renderer dostaje 'pty:restarted' i czysci bufor tej zakladki.
+ * @param {Session} session
+ * @param {{profileId?:string, projectId?:string}} [opts]
+ */
+function restartSession(session, opts = {}) {
+  const profile =
+    getProfile(profiles, opts.profileId || session.profileId) || profiles[0];
+  if (!profile) return;
+
+  if (opts.projectId) {
+    const project = getProject(projects, opts.projectId);
+    if (project) {
+      session.projectId = project.id;
+      session.cwd = project.path;
+    }
+  }
+
+  teardownSession(session);
+  send('pty:restarted', {
+    sessionId: session.id,
+    id: profile.id,
+    label: profile.label,
+    folder: path.basename(safeCwd(session.cwd)),
+  });
+  spawnInto(session, profile);
+  broadcastSessions();
 }
 
 /** Wczytuje projekty z config/ i ustawia aktywny katalog roboczy (cwd). */
@@ -267,23 +411,13 @@ function startActiveProjects() {
   }
 }
 
-/** Startuje sesje z aktywnym profilem (przy pierwszym uruchomieniu). */
+/** Wczytuje profile i otwiera pierwsza zakladke (przy starcie aplikacji). */
 function startActiveProfile() {
   const loaded = loadProfiles();
   profiles = loaded.profiles;
   const profile = getProfile(profiles, loaded.activeProfile) || profiles[0];
-  launchProfile(profile);
-}
-
-// ---- Passive Observer: metryki context window (transcript JSONL) ------------
-
-function startTranscriptWatcher() {
-  transcriptWatcher = new TranscriptWatcher((metrics) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('metrics:context', metrics);
-    }
-  });
-  transcriptWatcher.start();
+  if (profile) activeProfileId = profile.id;
+  createSession();
 }
 
 // ---- Passive Observer: porty localhost (7B) ---------------------------------
@@ -313,16 +447,21 @@ function startUsageWatcher() {
 
 function registerIpc() {
   // ACTION INJECTOR (klawiatura): surowe wejscie z xterm.js -> stdin PTY.
-  ipcMain.on('pty:write', (_event, data) => {
-    if (ptyProcess) ptyProcess.write(data);
+  // Payload: { sessionId?, data } - brak sessionId trafia do sesji aktywnej.
+  ipcMain.on('pty:write', (_event, payload) => {
+    const p = payload && typeof payload === 'object' ? payload : { data: payload };
+    const session = resolveSession(p.sessionId);
+    if (session && session.proc) session.proc.write(p.data);
   });
 
   // ACTION INJECTOR (przyciski GUI): wysyla gotowa komende + Enter (\r).
   // To wlasnie tego uzywa przycisk COMPACT CONTEXT -> "/compact".
-  ipcMain.on('pty:command', (_event, text) => {
-    if (!ptyProcess || typeof text !== 'string') return;
-    const line = text.endsWith('\r') ? text : `${text}\r`;
-    ptyProcess.write(line);
+  ipcMain.on('pty:command', (_event, payload) => {
+    const p = payload && typeof payload === 'object' ? payload : { text: payload };
+    const session = resolveSession(p.sessionId);
+    if (!session || !session.proc || typeof p.text !== 'string') return;
+    const line = p.text.endsWith('\r') ? p.text : `${p.text}\r`;
+    session.proc.write(line);
   });
 
   // ACTION INJECTOR (biblioteka promptow): wkleja WIELOLINIJKOWY tekst.
@@ -336,28 +475,62 @@ function registerIpc() {
   //
   // { text: string, submit?: boolean } - submit dopiero dopisuje Enter.
   ipcMain.on('pty:paste', (_event, payload) => {
-    if (!ptyProcess || !payload || typeof payload.text !== 'string') return;
+    const session = resolveSession(payload && payload.sessionId);
+    if (!session || !session.proc || !payload || typeof payload.text !== 'string') return;
     // Normalizacja koncow linii: w bufor wejscia wchodza wylacznie "\n".
     const text = payload.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    ptyProcess.write(`\x1b[200~${text}\x1b[201~`);
-    if (payload.submit) ptyProcess.write('\r');
+    session.proc.write(`\x1b[200~${text}\x1b[201~`);
+    if (payload.submit) session.proc.write('\r');
   });
 
   // Dopasowanie rozmiaru PTY do rozmiaru terminala w oknie (xterm-addon-fit).
+  // Rozmiar zapamietujemy per sesja - kazda zakladka ma wlasny bufor xterm.
   ipcMain.on('pty:resize', (_event, size) => {
     if (!size) return;
     const cols = Math.max(1, size.cols | 0);
     const rows = Math.max(1, size.rows | 0);
-    lastSize = { cols, rows }; // zapamietaj do odtworzenia przy restarcie
-    if (ptyProcess) ptyProcess.resize(cols, rows);
+    lastSize = { cols, rows }; // punkt startowy dla kolejnych zakladek
+    const session = resolveSession(size.sessionId);
+    if (!session) return;
+    session.size = { cols, rows };
+    if (session.proc) session.proc.resize(cols, rows);
+  });
+
+  // ---- Zakladki (multi-sesja) ----------------------------------------------
+
+  ipcMain.handle('sessions:list', () => ({
+    sessions: [...sessions.values()].map(sessionSummary),
+    activeSessionId,
+  }));
+
+  // Nowa zakladka: domyslnie ten sam profil i projekt co aktualnie wybrane.
+  ipcMain.on('sessions:create', (_event, opts) => {
+    createSession(opts && typeof opts === 'object' ? opts : {});
+  });
+
+  ipcMain.on('sessions:close', (_event, sessionId) => {
+    if (typeof sessionId === 'string') closeSession(sessionId);
+  });
+
+  // Przelaczenie widocznej zakladki. Procesy pozostalych zyja dalej w tle -
+  // to jest caly sens zakladek: dlugi bieg w jednej, praca w drugiej.
+  ipcMain.on('sessions:activate', (_event, sessionId) => {
+    if (typeof sessionId !== 'string' || !sessions.has(sessionId)) return;
+    activeSessionId = sessionId;
+    broadcastSessions();
   });
 
   // FAZA 4: renderer pyta o dostepne profile (do wypelnienia przelacznika).
   ipcMain.handle('profiles:list', () => ({ profiles, activeProfile: activeProfileId }));
 
-  // FAZA 4: przelaczenie profilu -> restart sesji PTY z nowym srodowiskiem.
-  ipcMain.on('pty:restart', (_event, profileId) => {
-    if (typeof profileId === 'string') restartPty(profileId);
+  // FAZA 4: przelaczenie profilu -> restart TEJ zakladki z nowym srodowiskiem.
+  // Pozostale zakladki zostaja nietkniete; profil jest cecha sesji, nie aplikacji.
+  ipcMain.on('pty:restart', (_event, payload) => {
+    const p = payload && typeof payload === 'object' ? payload : { profileId: payload };
+    const session = resolveSession(p.sessionId);
+    if (!session || typeof p.profileId !== 'string') return;
+    activeProfileId = p.profileId; // domyslny profil dla kolejnych zakladek
+    restartSession(session, { profileId: p.profileId });
   });
 
   // Przelacznik projektu: renderer pobiera liste katalogow roboczych.
@@ -365,12 +538,14 @@ function registerIpc() {
 
   // Przelaczenie projektu -> zmiana cwd + restart sesji z BIEZACYM profilem.
   // (Ten sam mechanizm restartu co profil; rozni sie tylko katalogiem startowym.)
-  ipcMain.on('pty:switch-project', (_event, projectId) => {
-    const proj = getProject(projects, projectId);
-    if (!proj || !activeProfileId) return;
-    activeCwd = proj.path;
+  ipcMain.on('pty:switch-project', (_event, payload) => {
+    const p = payload && typeof payload === 'object' ? payload : { projectId: payload };
+    const proj = getProject(projects, p.projectId);
+    const session = resolveSession(p.sessionId);
+    if (!proj || !session) return;
+    activeCwd = proj.path; // domyslny katalog dla kolejnych zakladek
     activeProjectId = proj.id;
-    restartPty(activeProfileId);
+    restartSession(session, { projectId: proj.id });
   });
 
   // 7B: otworz http://localhost:PORT w domyslnej przegladarce.
@@ -422,8 +597,7 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   startActiveProjects(); // ustala cwd, zanim wystartuje pierwsza sesja
-  startActiveProfile();
-  startTranscriptWatcher();
+  startActiveProfile(); // otwiera pierwsza zakladke (wraz z jej watcherem)
   startPortWatcher();
   startUsageWatcher();
   // Pre-warm skanu skilli (7A) po chwili, zeby jednorazowy koszt ~2s nie
@@ -434,16 +608,17 @@ app.whenReady().then(() => {
     // macOS: odtworz okno po kliknieciu w Dock, jesli wszystkie zamkniete.
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
-      if (!ptyProcess) startActiveProfile();
+      if (sessions.size === 0) startActiveProfile();
     }
   });
 });
 
 app.on('window-all-closed', () => {
-  if (transcriptWatcher) {
-    transcriptWatcher.stop();
-    transcriptWatcher = null;
-  }
+  // Kazda zakladka ma wlasny proces i wlasny watcher - sprzatamy wszystkie.
+  for (const session of sessions.values()) teardownSession(session);
+  sessions.clear();
+  activeSessionId = null;
+
   if (portWatcher) {
     portWatcher.stop();
     portWatcher = null;
@@ -451,10 +626,6 @@ app.on('window-all-closed', () => {
   if (usageWatcher) {
     usageWatcher.stop();
     usageWatcher = null;
-  }
-  if (ptyProcess) {
-    ptyProcess.kill();
-    ptyProcess = null;
   }
   if (process.platform !== 'darwin') app.quit();
 });

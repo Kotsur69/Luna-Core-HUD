@@ -126,7 +126,13 @@
           <kbd>Ctrl</kbd><kbd>K</kbd>
         </button>
       </div>
-      <!-- Kontener, w ktorym xterm.js wyrenderuje terminal -->
+      <!-- Zakladki sesji. Kazda ma wlasny proces PTY, wlasny kontekst i wlasny
+           bufor xterm; tu renderujemy tylko ich naglowki (budowane z JS). -->
+      <div class="tabs">
+        <div id="tabs-list" class="tabs__list" role="tablist"></div>
+        <button id="tab-new" class="tabs__new" data-i18n-title="tabs.new" title="Nowa sesja">+</button>
+      </div>
+      <!-- Host terminali: jeden .terminal__pane na sesje, widoczny tylko aktywny -->
       <div id="terminal" class="terminal"></div>
     </main>
 

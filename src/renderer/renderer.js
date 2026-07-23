@@ -15,9 +15,15 @@
 // Skrot do tlumaczen. i18n.js wystawia window.i18n zanim ten plik sie wykona.
 const t = (key, params) => window.i18n.t(key, params);
 
-// ---- Inicjalizacja terminala ------------------------------------------------
+// ---- Zakladki sesji: jeden xterm na sesje ------------------------------------
+//
+// Kazda zakladka ma WLASNY proces PTY, wlasny bufor xterm i wlasne metryki.
+// Zeby nie przepisywac calego pliku, `term` nizej to fasada: kieruje kazde
+// wywolanie do terminala AKTYWNEJ zakladki. Dzieki temu wszystkie istniejace
+// miejsca (term.write / term.focus / term.reset / term.cols) dzialaja bez zmian,
+// a przelaczenie zakladki automatycznie przekierowuje je gdzie indziej.
 
-const term = new Terminal({
+const TERM_OPTIONS = {
   cursorBlink: true,
   fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
   fontSize: 14,
@@ -38,41 +44,299 @@ const term = new Terminal({
     yellow: '#ffd86b',
     red: '#ff6b8a',
   },
-});
+};
 
-const fitAddon = new FitAddon.FitAddon();
-term.loadAddon(fitAddon);
-term.open(document.getElementById('terminal'));
+const termHost = document.getElementById('terminal');
+const tabsList = document.getElementById('tabs-list');
+const tabNewBtn = document.getElementById('tab-new');
 
-// Dopasuj terminal do kontenera i zsynchronizuj rozmiar PTY.
+/** id sesji -> { term, fitAddon, el, sparkBuf, lastCtx, ledState, ledDead, alive } */
+const termsBySession = new Map();
+let activeSessionId = null;
+// Ostatnio ustawiona paleta xterm z motywu - nowe zakladki musza ja dostac
+// od razu, inaczej rodzilyby sie w domyslnym cyberpunku mimo innego motywu.
+let currentTermTheme = null;
+
+/** Tworzy (lub zwraca istniejacy) terminal dla danej sesji. */
+function ensureTerm(sessionId) {
+  let s = termsBySession.get(sessionId);
+  if (s) return s;
+
+  const el = document.createElement('div');
+  el.className = 'terminal__pane';
+  termHost.appendChild(el);
+
+  const instance = new Terminal(TERM_OPTIONS);
+  const addon = new FitAddon.FitAddon();
+  instance.loadAddon(addon);
+  instance.open(el);
+  if (currentTermTheme) {
+    instance.options.theme = { ...instance.options.theme, ...currentTermTheme };
+  }
+  // ACTION INJECTOR: klawisze z TEGO terminala ida do JEGO wlasnego PTY.
+  instance.onData((data) => window.lunacore.write(data, sessionId));
+
+  s = {
+    term: instance,
+    fitAddon: addon,
+    el,
+    sparkBuf: [],
+    lastCtx: null,
+    ledState: 'waiting',
+    ledDead: false,
+    alive: true,
+  };
+  termsBySession.set(sessionId, s);
+  return s;
+}
+
+/** Fasada kierujaca do terminala aktywnej zakladki (patrz komentarz wyzej). */
+const term = {
+  get _t() {
+    const s = activeSessionId ? termsBySession.get(activeSessionId) : null;
+    return s ? s.term : null;
+  },
+  write(data) { const x = this._t; if (x) x.write(data); },
+  reset() { const x = this._t; if (x) x.reset(); },
+  focus() { const x = this._t; if (x) x.focus(); },
+  get cols() { const x = this._t; return x ? x.cols : 80; },
+  get rows() { const x = this._t; return x ? x.rows : 24; },
+  get options() { const x = this._t; return x ? x.options : {}; },
+};
+
+/** Nowa paleta xterm z motywu -> na WSZYSTKIE zakladki, nie tylko widoczna. */
+function applyTerminalTheme(palette) {
+  if (!palette) return;
+  currentTermTheme = palette;
+  for (const s of termsBySession.values()) {
+    s.term.options = { ...s.term.options, theme: { ...s.term.options.theme, ...palette } };
+  }
+}
+
+// Dopasuj AKTYWNY terminal do kontenera i zsynchronizuj rozmiar jego PTY.
+// Zakladki w tle maja zerowe wymiary (display:none), wiec fit() dalby im
+// bezsensowne 1x1 - dostana swoj rozmiar przy pierwszym pokazaniu.
 function fitAndResize() {
+  const s = activeSessionId ? termsBySession.get(activeSessionId) : null;
+  if (!s) return;
   try {
-    fitAddon.fit();
-    window.lunacore.resize(term.cols, term.rows);
+    s.fitAddon.fit();
+    window.lunacore.resize(s.term.cols, s.term.rows, activeSessionId);
   } catch (err) {
     // Ignoruj bledy dopasowania, gdy okno jest chwilowo o zerowym rozmiarze.
   }
 }
 
-// ---- Spiecie z PTY ----------------------------------------------------------
+// ---- Rozglaszanie metryk do konsumentow aktywnej zakladki -------------------
+//
+// Nizej w pliku sa dwa niezalezne odbiorniki metryk kontekstu (pasek Fazy 3 i
+// sparkline). Rejestrujemy JEDEN nasluch IPC i rozsylamy im wylacznie zdarzenia
+// aktywnej zakladki - dane sesji w tle ladują do jej wlasnego kubelka.
+const ctxSubscribers = [];
+function onActiveContext(cb) { ctxSubscribers.push(cb); }
 
-// PASSIVE OBSERVER: dane z procesu Claude CLI -> ekran terminala.
-window.lunacore.onData((data) => {
-  term.write(data);
-  markWorking(); // LED: strumien plynie = Claude pracuje
+const restartSubscribers = [];
+function onSessionRestarted(cb) { restartSubscribers.push(cb); }
+
+// ---- Spiecie z PTY (routing po sessionId) -----------------------------------
+
+// PASSIVE OBSERVER: dane z procesu Claude CLI -> ekran WLASCIWEJ zakladki.
+window.lunacore.onData(({ sessionId, data }) => {
+  const s = ensureTerm(sessionId);
+  s.term.write(data);
+  // LED opisuje to, na co patrzysz. Zakladka w tle miga wlasnym znacznikiem.
+  if (sessionId === activeSessionId) markWorking();
+  else s.ledState = 'working';
 });
 
-// ACTION INJECTOR: kazde nacisniecie klawisza -> stdin PTY.
-term.onData((data) => {
-  window.lunacore.write(data);
+// Status polaczenia PTY danej zakladki.
+window.lunacore.onExit(({ sessionId, code }) => {
+  const s = ensureTerm(sessionId);
+  s.alive = false;
+  s.ledDead = true;
+  s.ledState = 'dead';
+  s.term.write(`\r\n\x1b[38;5;203m${t('log.session.ended', { code })}\x1b[0m\r\n`);
+  if (sessionId === activeSessionId) {
+    setLedDead();
+    setPtyStatus(false, 'ptystatus.ended', { code });
+  }
+  renderTabs();
 });
 
-// Status polaczenia PTY.
-window.lunacore.onExit((code) => {
-  setLedDead();
-  setPtyStatus(false, 'ptystatus.ended', { code });
-  term.write(`\r\n\x1b[38;5;203m${t('log.session.ended', { code })}\x1b[0m\r\n`);
+// Metryki kontekstu: KAZDA zakladka ma swoje wlasne okno 200k.
+window.lunacore.onContext(({ sessionId, metrics }) => {
+  const s = ensureTerm(sessionId);
+  if (!metrics || typeof metrics.percent !== 'number') return;
+  if (sessionId === activeSessionId) {
+    for (const cb of ctxSubscribers) cb(metrics);
+  } else {
+    // Sesja w tle: zbieramy do jej kubelka, zeby po przelaczeniu pasek i
+    // sparkline pokazaly jej wlasna historie, a nie cudza.
+    s.lastCtx = metrics;
+    const prev = s.sparkBuf[s.sparkBuf.length - 1];
+    if (prev && prev.tokens === metrics.tokens) prev.t = Date.now();
+    else s.sparkBuf.push({ t: Date.now(), tokens: metrics.tokens, percent: metrics.percent });
+    if (s.sparkBuf.length > SPARK_MAX) s.sparkBuf.shift();
+  }
+  renderTabs();
 });
+
+// Kafelki Skill Trackera sa chwilowe - pokazujemy tylko dla aktywnej zakladki.
+window.lunacore.onTools(({ sessionId, tiles }) => {
+  if (sessionId !== activeSessionId) return;
+  lightTiles(tiles);
+});
+
+// Restart (zmiana profilu/projektu) dotyczy konkretnej zakladki.
+window.lunacore.onRestarted((profile) => {
+  const sessionId = profile.sessionId;
+  const s = termsBySession.get(sessionId);
+  if (s) {
+    s.term.reset();
+    s.sparkBuf = [];
+    s.lastCtx = null;
+    s.ledDead = false;
+    s.ledState = 'waiting';
+    s.alive = true;
+    const msg = profile.folder
+      ? t('log.session.project', { label: profile.label, folder: profile.folder })
+      : t('log.session.switched', { label: profile.label });
+    s.term.write(`\x1b[38;5;80m${msg}\x1b[0m\r\n`);
+  }
+  if (sessionId === activeSessionId) {
+    ledDead = false;
+    ledState = 'waiting';
+    renderLed();
+    setPtyStatus(true, 'ptystatus.active');
+    for (const cb of restartSubscribers) cb(profile);
+    fitAndResize();
+    term.focus();
+  }
+});
+
+// ---- Pasek zakladek ---------------------------------------------------------
+
+let sessionList = [];
+
+/** Przenosi metryki miedzy globalami widoku a kubelkiem zakladki. */
+function stashActive() {
+  const s = activeSessionId ? termsBySession.get(activeSessionId) : null;
+  if (!s) return;
+  s.sparkBuf = sparkBuf;
+  s.lastCtx = lastCtxMetrics;
+  s.ledState = ledState;
+  s.ledDead = ledDead;
+}
+
+function restoreActive() {
+  const s = activeSessionId ? termsBySession.get(activeSessionId) : null;
+  if (!s) return;
+  sparkBuf = s.sparkBuf || [];
+  lastCtxMetrics = s.lastCtx || null;
+  ledState = s.ledState || 'waiting';
+  ledDead = !!s.ledDead;
+  renderLed();
+  setPtyStatus(s.alive, s.alive ? 'ptystatus.active' : 'ptystatus.ended', { code: 0 });
+  if (lastCtxMetrics) applyCtxMetrics(lastCtxMetrics, false);
+  else resetCtxUI();
+  renderSpark();
+  renderBurn();
+}
+
+/** Pokazuje wybrana zakladke; procesy pozostalych zyja dalej w tle. */
+function showSession(sessionId) {
+  if (!sessionId || sessionId === activeSessionId) return;
+  stashActive();
+  activeSessionId = sessionId;
+  for (const [id, s] of termsBySession) s.el.classList.toggle('is-active', id === sessionId);
+  restoreActive();
+  syncSwitchers();
+  renderTabs();
+  fitAndResize(); // zakladka w tle nie znala swojego rozmiaru
+  term.focus();
+}
+
+/** Ustawia przelaczniki profilu/projektu na wartosci AKTYWNEJ zakladki. */
+function syncSwitchers() {
+  const meta = sessionList.find((x) => x.id === activeSessionId);
+  if (!meta) return;
+  if (meta.profileId) profileSwitcher.value = meta.profileId;
+  if (meta.projectId) projectSwitcher.value = meta.projectId;
+}
+
+function renderTabs() {
+  tabsList.innerHTML = '';
+  for (const meta of sessionList) {
+    const s = termsBySession.get(meta.id);
+    const tab = document.createElement('div');
+    tab.className = 'tab' + (meta.id === activeSessionId ? ' is-active' : '');
+    if (s && !s.alive) tab.classList.add('is-dead');
+
+    const btn = document.createElement('button');
+    btn.className = 'tab__label';
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-selected', String(meta.id === activeSessionId));
+    btn.textContent = meta.folder || meta.profileLabel || meta.id;
+    btn.title = `${meta.profileLabel || ''} - ${meta.cwd || ''}`.trim();
+    btn.addEventListener('click', () => window.lunacore.activateSession(meta.id));
+    tab.appendChild(btn);
+
+    // Znacznik zapelnienia kontekstu TEJ zakladki - widac zagrozenie w tle.
+    const pct = s && s.lastCtx ? Math.round(s.lastCtx.percent * 100) : null;
+    if (pct !== null) {
+      const dot = document.createElement('span');
+      dot.className = 'tab__ctx';
+      if (pct >= CTX_WARN_HIGH * 100) dot.classList.add('is-high');
+      else if (pct >= CTX_WARN_MID * 100) dot.classList.add('is-mid');
+      dot.textContent = `${pct}%`;
+      tab.appendChild(dot);
+    }
+
+    const close = document.createElement('button');
+    close.className = 'tab__close';
+    close.textContent = '×';
+    close.title = t('tabs.close');
+    close.setAttribute('aria-label', t('tabs.close'));
+    close.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.lunacore.closeSession(meta.id);
+    });
+    tab.appendChild(close);
+
+    tabsList.appendChild(tab);
+  }
+}
+
+// Lista zakladek z procesu glownego - zrodlo prawdy o tym, co zyje.
+window.lunacore.onSessions(({ sessions, activeSessionId: activeId }) => {
+  sessionList = sessions || [];
+  for (const meta of sessionList) {
+    const s = ensureTerm(meta.id);
+    s.alive = meta.alive;
+  }
+  // Sprzataj terminale sesji, ktorych juz nie ma.
+  for (const [id, s] of [...termsBySession]) {
+    if (sessionList.some((m) => m.id === id)) continue;
+    s.term.dispose();
+    s.el.remove();
+    termsBySession.delete(id);
+  }
+  if (activeId && activeId !== activeSessionId) {
+    if (activeSessionId === null) {
+      // Pierwsze rozglosienie: nie ma czego zapisywac, tylko pokaz.
+      activeSessionId = activeId;
+      for (const [id, s] of termsBySession) s.el.classList.toggle('is-active', id === activeId);
+      restoreActive();
+      syncSwitchers();
+      fitAndResize();
+    } else {
+      showSession(activeId);
+    }
+  }
+  renderTabs();
+});
+
+tabNewBtn.addEventListener('click', () => window.lunacore.createSession({}));
 
 // ---- Przycisk COMPACT CONTEXT (Faza 2) --------------------------------------
 
@@ -146,7 +410,9 @@ const CTX_WARN_MID = 0.6;
 
 let lastCtxMetrics = null; // trzymamy ostatnie metryki, by odswiezyc napis po zmianie jezyka
 
-window.lunacore.onContext((metrics) => {
+// Rysuje pasek kontekstu. `live` = swieza metryka (moze uzbroic auto-compact);
+// przy zwyklym przelaczeniu zakladki tylko odtwarzamy widok, nic nie strzela.
+function applyCtxMetrics(metrics, live = true) {
   if (!metrics || typeof metrics.percent !== 'number') return;
   lastCtxMetrics = metrics;
   const pct = Math.max(0, Math.min(1, metrics.percent));
@@ -158,8 +424,20 @@ window.lunacore.onContext((metrics) => {
 
   ctxPercent.textContent = `${Math.round(pct * 100)}%`;
   renderCtxText();
-  maybeAutoCompact(pct);
-});
+  if (live) maybeAutoCompact(pct);
+}
+
+/** Czysci pasek, gdy zakladka nie ma jeszcze zadnych metryk. */
+function resetCtxUI() {
+  lastCtxMetrics = null;
+  ctxFill.style.setProperty('--ctx', '0');
+  ctxFill.classList.remove('is-mid', 'is-high');
+  ctxPercent.textContent = '0%';
+  ctxWarn.textContent = '';
+  ctxTokens.textContent = '';
+}
+
+onActiveContext((metrics) => applyCtxMetrics(metrics, true));
 
 // Napisy tekstowe context window (ostrzezenie + tokeny) - i18n-aware.
 function renderCtxText() {
@@ -242,7 +520,7 @@ autoCompactToggle.addEventListener('change', () => {
 const TILE_ACTIVE_MS = 1500;
 const tileTimers = new Map();
 
-window.lunacore.onTools((tiles) => {
+function lightTiles(tiles) {
   if (!Array.isArray(tiles)) return;
   for (const name of tiles) {
     const tile = document.querySelector(`.skill-tile[data-skill="${name}"]`);
@@ -255,7 +533,7 @@ window.lunacore.onTools((tiles) => {
       setTimeout(() => tile.classList.remove('is-active'), TILE_ACTIVE_MS)
     );
   }
-});
+}
 
 // ---- Faza 4: Przelacznik profili --------------------------------------------
 
@@ -278,24 +556,9 @@ async function initProfiles() {
   }
 }
 
-// Zmiana profilu -> restart sesji PTY z nowym srodowiskiem.
+// Zmiana profilu -> restart TEJ zakladki; pozostale sesje zostaja nietkniete.
 profileSwitcher.addEventListener('change', () => {
-  window.lunacore.switchProfile(profileSwitcher.value);
-});
-
-// Po restarcie: wyczysc terminal i pokaz, ktory profil + folder sa aktywne.
-window.lunacore.onRestarted((profile) => {
-  ledDead = false; // nowa sesja - LED znowu zyje
-  ledState = 'waiting';
-  renderLed();
-  term.reset();
-  const msg = profile.folder
-    ? t('log.session.project', { label: profile.label, folder: profile.folder })
-    : t('log.session.switched', { label: profile.label });
-  term.write(`\x1b[38;5;80m${msg}\x1b[0m\r\n`);
-  setPtyStatus(true, 'ptystatus.active');
-  fitAndResize();
-  term.focus();
+  window.lunacore.switchProfile(profileSwitcher.value, activeSessionId);
 });
 
 initProfiles();
@@ -323,7 +586,7 @@ async function initProjects() {
 
 // Zmiana katalogu -> restart sesji PTY w nowym folderze (ten sam profil).
 projectSwitcher.addEventListener('change', () => {
-  window.lunacore.switchProject(projectSwitcher.value);
+  window.lunacore.switchProject(projectSwitcher.value, activeSessionId);
 });
 
 initProjects();
@@ -1000,8 +1263,8 @@ function renderBurn() {
   }
 }
 
-// Drugi listener metryk - probkuje bez ruszania bloku Fazy 3 wyzej.
-window.lunacore.onContext((metrics) => {
+// Drugi odbiornik metryk - probkuje bez ruszania bloku Fazy 3 wyzej.
+onActiveContext((metrics) => {
   if (!metrics || typeof metrics.tokens !== 'number') return;
   const now = Date.now();
   const prev = sparkBuf[sparkBuf.length - 1];
@@ -1016,7 +1279,7 @@ window.lunacore.onContext((metrics) => {
 });
 
 // Restart sesji = nowy kontekst: czyscimy historie sparkline.
-window.lunacore.onRestarted(() => {
+onSessionRestarted(() => {
   sparkBuf = [];
   renderSpark();
   renderBurn();
@@ -1275,7 +1538,7 @@ function applyThemeVars(theme) {
   const root = document.documentElement;
   for (const [k, v] of Object.entries(theme.vars || {})) root.style.setProperty(k, v);
   if (theme.terminal && typeof theme.terminal === 'object') {
-    term.options.theme = { ...term.options.theme, ...theme.terminal };
+    applyTerminalTheme(theme.terminal);
   }
 }
 
@@ -1369,9 +1632,25 @@ window.addEventListener('DOMContentLoaded', () => {
   fitAndResize();
 });
 
-// Pierwsze dopasowanie po pelnym ulozeniu layoutu + oznaczenie sesji jako aktywnej.
-requestAnimationFrame(() => {
-  fitAndResize();
-  setPtyStatus(true, 'ptystatus.active');
-  term.focus();
-});
+// Pierwsze pobranie listy zakladek. Proces glowny rozglasza ja przy tworzeniu
+// sesji - czyli zanim ten renderer zdazy sie podpiac - wiec stan poczatkowy
+// musimy sobie odebrac sami, inaczej pasek zakladek zostalby pusty do pierwszej
+// zmiany.
+window.lunacore
+  .getSessions()
+  .then(({ sessions, activeSessionId: activeId }) => {
+    sessionList = sessions || [];
+    for (const meta of sessionList) ensureTerm(meta.id).alive = meta.alive;
+    if (activeId) {
+      activeSessionId = activeId;
+      for (const [id, s] of termsBySession) s.el.classList.toggle('is-active', id === activeId);
+      syncSwitchers();
+    }
+    renderTabs();
+    fitAndResize();
+    setPtyStatus(true, 'ptystatus.active');
+    term.focus();
+  })
+  .catch(() => {
+    // Nie udalo sie pobrac sesji - nie blokujemy startu HUD.
+  });

@@ -78,6 +78,48 @@ const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 // Ile bajtow z konca pliku czytamy, szukajac ostatniego wpisu z usage.
 const TAIL_BYTES = 128 * 1024;
 
+/**
+ * Zamienia katalog roboczy na nazwe katalogu, w ktorym Claude Code trzyma jego
+ * transcripty. CLI koduje sciezke, zastepujac kazdy znak niealfanumeryczny
+ * mysinikiem, np.:
+ *   C:\Users\mmazur\.local\bin  ->  C--Users-mmazur--local-bin
+ * (podwojny mysinik bierze sie z pary separator + kropka).
+ *
+ * To jest sedno obslugi wielu sesji naraz: bez tego nie da sie powiedziec,
+ * ktory transcript nalezy do ktorej zakladki.
+ * @param {string} cwd
+ * @returns {string}
+ */
+function encodeProjectDir(cwd) {
+  return String(cwd || '').replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+/** Znajduje najswiezszy plik .jsonl w JEDNYM katalogu (lub null). */
+function newestJsonlIn(dir) {
+  let newest = null;
+  let newestMtime = 0;
+  let files;
+  try {
+    files = fs.readdirSync(dir);
+  } catch {
+    return null; // katalog sesji jeszcze nie powstal
+  }
+  for (const file of files) {
+    if (!file.endsWith('.jsonl')) continue;
+    const full = path.join(dir, file);
+    try {
+      const st = fs.statSync(full);
+      if (st.mtimeMs > newestMtime) {
+        newestMtime = st.mtimeMs;
+        newest = full;
+      }
+    } catch {
+      /* plik zniknal miedzy readdir a stat - ignoruj */
+    }
+  }
+  return newest;
+}
+
 /** Znajduje najswiezszy plik .jsonl w drzewie ~/.claude/projects. */
 function findNewestTranscript() {
   let newest = null;
@@ -158,17 +200,47 @@ function usageToMetrics(usage) {
 }
 
 /**
- * Cyklicznie sprawdza najswiezszy transcript i emituje metryki context window,
- * gdy plik sie zmieni. Czysto lokalne, zadnych zadan do modelu.
+ * Cyklicznie sprawdza transcript i emituje metryki context window, gdy plik sie
+ * zmieni. Czysto lokalne, zadnych zadan do modelu.
+ *
+ * Dwa tryby:
+ *   * z `cwd`  - patrzy WYLACZNIE w katalog transcriptow tego katalogu roboczego.
+ *                Tego wymaga tryb wielu sesji: przy dwoch zywych zakladkach
+ *                "najswiezszy w calym drzewie" pokazywalby metryki tej, w ktorej
+ *                ostatnio cos sie dzialo - czyli cudze liczby.
+ *   * bez cwd  - stare zachowanie (najswiezszy w calym drzewie). Sluzy tez jako
+ *                zapasowe wyjscie, dopoki katalog sesji nie powstanie: CLI tworzy
+ *                go dopiero przy pierwszej wymianie zdan, a do tego czasu nie
+ *                mamy czego tailowac.
  */
 class TranscriptWatcher {
-  /** @param {(metrics: {tokens:number,limit:number,percent:number}) => void} onMetrics */
-  constructor(onMetrics, intervalMs = 1500) {
+  /**
+   * @param {(metrics: {tokens:number,limit:number,percent:number}) => void} onMetrics
+   * @param {{cwd?: string, intervalMs?: number}} [options]
+   */
+  constructor(onMetrics, options = {}) {
+    // Zgodnosc wstecz: kiedys drugim argumentem byl goly interwal w ms.
+    const opts = typeof options === 'number' ? { intervalMs: options } : options || {};
     this.onMetrics = onMetrics;
-    this.intervalMs = intervalMs;
+    this.intervalMs = opts.intervalMs || 1500;
+    this.scopeDir = opts.cwd
+      ? path.join(PROJECTS_DIR, encodeProjectDir(opts.cwd))
+      : null;
     this.timer = null;
     this.currentFile = null;
     this.lastMtime = 0;
+  }
+
+  /**
+   * Wybiera plik do tailowania. Przy sesji z cwd trzymamy sie jej katalogu;
+   * globalny fallback dziala tylko dopoki ten katalog nie istnieje, zeby po
+   * jego powstaniu metryki nigdy nie przeciekly z innej zakladki.
+   */
+  pickFile() {
+    if (!this.scopeDir) return findNewestTranscript();
+    const scoped = newestJsonlIn(this.scopeDir);
+    if (scoped) return scoped;
+    return fs.existsSync(this.scopeDir) ? null : findNewestTranscript();
   }
 
   start() {
@@ -183,7 +255,7 @@ class TranscriptWatcher {
   }
 
   tick() {
-    const file = findNewestTranscript();
+    const file = this.pickFile();
     if (!file) return;
     let mtime;
     try {
@@ -201,4 +273,11 @@ class TranscriptWatcher {
   }
 }
 
-module.exports = { detectTools, TranscriptWatcher, CONTEXT_LIMIT, TOOL_TILES };
+module.exports = {
+  detectTools,
+  TranscriptWatcher,
+  encodeProjectDir,
+  usageToMetrics,
+  CONTEXT_LIMIT,
+  TOOL_TILES,
+};

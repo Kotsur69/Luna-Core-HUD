@@ -10,31 +10,49 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('lunacore', {
   // --- PASSIVE OBSERVER: strumien stdout PTY -> renderer ---
-  /** Rejestruje callback wywolywany dla kazdej porcji danych z terminala. */
+  // UWAGA: od wersji z zakladkami kazde zdarzenie niesie sessionId. Renderer
+  // trzyma osobny bufor xterm na zakladke, wiec musi wiedziec, czyje to dane -
+  // inaczej wyjscie sesji w tle wsypaloby sie do terminala, na ktory patrzysz.
+  /** Porcja danych z terminala: ({ sessionId, data }). */
   onData: (callback) => {
-    ipcRenderer.on('pty:data', (_event, data) => callback(data));
+    ipcRenderer.on('pty:data', (_event, payload) => callback(payload));
   },
-  /** Powiadomienie o zakonczeniu procesu PTY (np. wyjscie z `claude`/powloki). */
+  /** Zakonczenie procesu PTY danej zakladki: ({ sessionId, code }). */
   onExit: (callback) => {
-    ipcRenderer.on('pty:exit', (_event, code) => callback(code));
+    ipcRenderer.on('pty:exit', (_event, payload) => callback(payload));
   },
 
   // --- PASSIVE OBSERVER: metryki Fazy 3 (tylko odczyt) ---
-  /** Metryki context window: { tokens, limit, percent } z transcriptu JSONL. */
+  /** Metryki context window: ({ sessionId, metrics: {tokens,limit,percent} }). */
   onContext: (callback) => {
-    ipcRenderer.on('metrics:context', (_event, metrics) => callback(metrics));
+    ipcRenderer.on('metrics:context', (_event, payload) => callback(payload));
   },
-  /** Lista kafelkow Skill Trackera do zapalenia (np. ["Bash", "Read"]). */
+  /** Kafelki Skill Trackera do zapalenia: ({ sessionId, tiles: ["Bash",...] }). */
   onTools: (callback) => {
-    ipcRenderer.on('metrics:tools', (_event, tiles) => callback(tiles));
+    ipcRenderer.on('metrics:tools', (_event, payload) => callback(payload));
   },
+
+  // --- Zakladki (multi-sesja) ---
+  /** Pobiera { sessions: [{id,profileId,profileLabel,folder,alive}], activeSessionId }. */
+  getSessions: () => ipcRenderer.invoke('sessions:list'),
+  /** Zmiana listy zakladek lub aktywnej: ({ sessions, activeSessionId }). */
+  onSessions: (callback) => {
+    ipcRenderer.on('sessions:update', (_event, payload) => callback(payload));
+  },
+  /** Nowa zakladka (domyslnie biezacy profil + projekt). */
+  createSession: (opts = {}) => ipcRenderer.send('sessions:create', opts),
+  /** Zamyka zakladke; ostatnia jest zastepowana swieza, nie usuwana w pustke. */
+  closeSession: (sessionId) => ipcRenderer.send('sessions:close', sessionId),
+  /** Pokazuje wybrana zakladke. Procesy pozostalych zyja dalej w tle. */
+  activateSession: (sessionId) => ipcRenderer.send('sessions:activate', sessionId),
 
   // --- FAZA 4: profile uruchomieniowe ---
   /** Pobiera { profiles, activeProfile } do wypelnienia przelacznika. */
   getProfiles: () => ipcRenderer.invoke('profiles:list'),
-  /** Przelacza profil -> restart sesji PTY z nowym srodowiskiem. */
-  switchProfile: (id) => ipcRenderer.send('pty:restart', id),
-  /** Powiadomienie o restarcie sesji: { id, label, folder } nowej sesji. */
+  /** Przelacza profil -> restart TEJ zakladki; pozostale zostaja nietkniete. */
+  switchProfile: (id, sessionId) =>
+    ipcRenderer.send('pty:restart', { profileId: id, sessionId }),
+  /** Restart sesji: ({ sessionId, id, label, folder }). */
   onRestarted: (callback) => {
     ipcRenderer.on('pty:restarted', (_event, profile) => callback(profile));
   },
@@ -42,8 +60,9 @@ contextBridge.exposeInMainWorld('lunacore', {
   // --- Przelacznik projektu (katalog roboczy) ---
   /** Pobiera { projects, activeProject } do wypelnienia przelacznika. */
   getProjects: () => ipcRenderer.invoke('projects:list'),
-  /** Przelacza katalog roboczy -> restart sesji PTY w nowym folderze. */
-  switchProject: (id) => ipcRenderer.send('pty:switch-project', id),
+  /** Przelacza katalog roboczy -> restart TEJ zakladki w nowym folderze. */
+  switchProject: (id, sessionId) =>
+    ipcRenderer.send('pty:switch-project', { projectId: id, sessionId }),
 
   // --- 7B: tracker portow localhost ---
   /** Lista nasluchujacych portow: [{ port, procId, name }]. */
@@ -95,11 +114,15 @@ contextBridge.exposeInMainWorld('lunacore', {
    * @param {string} text tresc prompta
    * @param {boolean} [submit=false] czy od razu wyslac (dopisac Enter)
    */
-  pastePrompt: (text, submit = false) => ipcRenderer.send('pty:paste', { text, submit }),
-  /** Surowe wejscie z klawiatury (xterm.js onData) do PTY. */
-  write: (data) => ipcRenderer.send('pty:write', data),
+  // Wszystkie wstrzykiwacze przyjmuja opcjonalne sessionId. Pominiecie go trafia
+  // do zakladki aktywnej - czyli dokladnie tam, na co uzytkownik patrzy.
+  pastePrompt: (text, submit = false, sessionId) =>
+    ipcRenderer.send('pty:paste', { text, submit, sessionId }),
+  /** Surowe wejscie z klawiatury (xterm.js onData) do PTY danej zakladki. */
+  write: (data, sessionId) => ipcRenderer.send('pty:write', { data, sessionId }),
   /** Gotowa komenda z przycisku GUI (dopisze Enter). Np. runCommand('/compact'). */
-  runCommand: (text) => ipcRenderer.send('pty:command', text),
-  /** Dopasowanie rozmiaru PTY do liczby kolumn/wierszy terminala. */
-  resize: (cols, rows) => ipcRenderer.send('pty:resize', { cols, rows }),
+  runCommand: (text, sessionId) => ipcRenderer.send('pty:command', { text, sessionId }),
+  /** Dopasowanie rozmiaru PTY do liczby kolumn/wierszy terminala zakladki. */
+  resize: (cols, rows, sessionId) =>
+    ipcRenderer.send('pty:resize', { cols, rows, sessionId }),
 });

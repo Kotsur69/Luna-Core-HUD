@@ -293,11 +293,83 @@ html, body {
 .terminal-bar__title { font-size: 13px; font-weight: 600; color: var(--neon-cyan); }
 .terminal-bar__hint { font-size: 11px; color: var(--text-dim); }
 
+/* ---- Zakladki sesji -------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 10px 0;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--edge);
+}
+.tabs__list { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; }
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--edge);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: var(--bg-panel-2);
+  color: var(--text-dim);
+  max-width: 220px;
+  transition: background 160ms ease, color 160ms ease;
+}
+.tab.is-active { background: var(--bg); color: var(--neon-cyan); border-color: var(--neon-cyan); }
+.tab.is-dead .tab__label { text-decoration: line-through; opacity: 0.6; }
+
+.tab__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+/* Zapelnienie kontekstu TEJ zakladki - ostrzega o sesji, na ktora nie patrzysz */
+.tab__ctx { font-size: 10px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.tab__ctx.is-mid { color: var(--warn, #ffd86b); }
+.tab__ctx.is-high { color: var(--danger, #ff6b8a); }
+
+.tab__close,
+.tabs__new {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  line-height: 1;
+  border-radius: 4px;
+  transition: color 160ms ease, background 160ms ease;
+}
+/* 24px to minimum, na jakie pozwala wysokosc zakladki; cel klikniecia
+   powiekszamy paddingiem, zeby trafiac w krzyzyk bez celowania w piksel. */
+.tab__close { font-size: 14px; padding: 4px 6px; }
+.tabs__new { font-size: 16px; padding: 4px 12px; align-self: center; }
+.tab__close:hover { color: var(--danger, #ff6b8a); background: var(--bg-panel-2); }
+.tabs__new:hover { color: var(--neon-cyan); background: var(--bg-panel-2); }
+.tab__label:focus-visible,
+.tab__close:focus-visible,
+.tabs__new:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
+
 .terminal {
   flex: 1;
   min-height: 0;
   padding: 8px 10px;
+  position: relative;
 }
+/* Jeden pane na sesje; w tle zostaja zamontowane, ale niewidoczne, wiec
+   xterm zachowuje ich scrollback bez ponownego renderowania. */
+.terminal__pane { position: absolute; inset: 8px 10px; display: none; }
+.terminal__pane.is-active { display: block; }
 /* xterm sam zarzadza wnetrzem; upewnijmy sie, ze wypelnia kontener */
 .terminal .xterm { height: 100%; }
 
