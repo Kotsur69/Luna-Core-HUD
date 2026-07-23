@@ -451,13 +451,31 @@ pleasant, not about building new plumbing.
 | 3 | **Backend health tile** | S | Ping the active profile's `/v1/models` (LM Studio, Ollama, vLLM) → up/down + loaded model. Local HTTP only. | Slow poll, guard against a hung endpoint blocking the UI. |
 | 4 | **Model-swap without losing the session** | S–M | Palette rows for "restart this cwd on profile X" — the plumbing exists (profile + project switchers), this is just one fused action. | Restart is still a restart; be honest in the UI that context is lost. |
 | 5 | **GPU / VRAM meters** | M | `nvidia-smi` on a slow poll. Genuinely useful next to a local model — you can *see* whether the 70B fits. | Windows/NVIDIA-specific; degrade to hidden, never to a broken tile. |
-| 6 | **Multi-session tabs (multi-PTY)** | M–L | N terminals, each with its own profile + cwd. The switchers were built not to block this. **This is the single highest-value item in §9.** | `TranscriptWatcher` currently follows the *globally newest* jsonl — with two live sessions that heuristic breaks. It must become per-session (match by cwd → project dir). This is the real work; the tabs themselves are easy. |
+| 6 | **Multi-session tabs (multi-PTY)** | M–L | ✅ **BUILT** (`1e5e307` + `7c732e7`). N terminals, each with its own PTY, profile, cwd, xterm buffer and context metrics. Background tabs keep running and keep scrollback; tabs carry their own context %. | The predicted blocker was real and was the bulk of the work. Solved in two steps: scope the watcher to the session's cwd (`encodeProjectDir`), then **pin** it to a single file — transcript dirs are keyed by *folder*, files by *session*, so two tabs on one repo still collided. See §6a. |
 | 7 | **Side-by-side model duel** | L | Same prompt, two backends, two panes, compare answers. Killer demo for "which model do I actually need". | Costs real tokens on every paid pane — must be explicit, opt-in, never automatic. Violates "zero extra tokens" unless the user initiates each run. |
 | 8 | **Local prompt/response archive + search** | L | Index your own `~/.claude/projects/**/*.jsonl` into a searchable local history ("when did I solve this before?"). Read-only, zero tokens, and it's *your* data already on disk. | Index size and staleness; needs a real store (SQLite) rather than JSON. |
 | 9 | **Cross-provider usage ledger** | L | One dashboard for Claude subscription limits + Kimi spend + local runtime hours. Extends the existing usage gauge to a multi-vendor picture. | Every vendor has a different (or no) usage endpoint. Design for "unavailable" as a first-class state, like the current gauge already does. |
 | 10 | **Voice inject** | XL | Speak → transcribe locally → inject as stdin. Cross-links the Luna Voice project. | Still explicitly a "future future" item. |
 
-**If only one gets built: #6.** Multi-session tabs is what turns LunaCore from a
-nice window into an actual command center, and it's the only item whose absence
-limits everything else. It is also the one with a real technical prerequisite
-(per-session transcript attachment), so it should not be started casually.
+**#6 is built.** Multi-session tabs is what turns LunaCore from a nice window
+into an actual command center. The predicted prerequisite (per-session transcript
+attachment) was indeed the whole job — see below.
+
+### 6a. Two scopes, and why it matters
+
+The lesson worth keeping: **context window is per-process, usage limits are
+per-account.** Each `claude` has its own 200k window, so the context bar,
+sparkline and tool tiles are per tab. The 5h/weekly limits are one shared quota
+across every tab (and every session run outside the HUD), so they stay a single
+global readout and must never be summed per tab.
+
+The trap this creates: N tabs can each show a calm green context bar while
+draining one quota N times faster. Per-tab metrics *structurally cannot* warn
+about this — only the global gauge can. Worth adding an "N active sessions" badge
+next to the 5h readout so the burn rate is attributable to tab count.
+
+Known remaining gap: two tabs both **resuming** (`--continue`) into the same
+folder. Pinning distinguishes sessions by "new file after startup" or "existing
+file that grew after startup"; two resumed sessions offer neither signal
+cleanly. Fixing it properly needs the session UUID, which means parsing it out of
+the CLI's stdout — still zero-token, but a bigger change.
