@@ -94,30 +94,37 @@ function encodeProjectDir(cwd) {
   return String(cwd || '').replace(/[^a-zA-Z0-9]/g, '-');
 }
 
-/** Znajduje najswiezszy plik .jsonl w JEDNYM katalogu (lub null). */
-function newestJsonlIn(dir) {
-  let newest = null;
-  let newestMtime = 0;
+/**
+ * Pliki transcriptow juz przypisane do zyjacych watcherow.
+ *
+ * Katalog transcriptow jest kluczowany FOLDEREM, a plik SESJA - wiec dwie
+ * zakladki otwarte na tym samym repo widza ten sam katalog z dwoma plikami.
+ * Bez rezerwacji obie wybralyby "najswiezszy" i pokazywalyby te sama sesje.
+ * Wszystkie watchery zyja w tym samym procesie glownym, wiec zwykly Set
+ * wystarcza za rejestr: kazdy plik moze miec tylko jednego wlasciciela.
+ */
+const claimedTranscripts = new Set();
+
+/** Zwraca [{ full, mtimeMs, birthMs }] dla plikow .jsonl w katalogu. */
+function listJsonl(dir) {
   let files;
   try {
     files = fs.readdirSync(dir);
   } catch {
-    return null; // katalog sesji jeszcze nie powstal
+    return []; // katalog sesji jeszcze nie powstal
   }
+  const out = [];
   for (const file of files) {
     if (!file.endsWith('.jsonl')) continue;
     const full = path.join(dir, file);
     try {
       const st = fs.statSync(full);
-      if (st.mtimeMs > newestMtime) {
-        newestMtime = st.mtimeMs;
-        newest = full;
-      }
+      out.push({ full, mtimeMs: st.mtimeMs, birthMs: st.birthtimeMs || st.ctimeMs });
     } catch {
       /* plik zniknal miedzy readdir a stat - ignoruj */
     }
   }
-  return newest;
+  return out;
 }
 
 /** Znajduje najswiezszy plik .jsonl w drzewie ~/.claude/projects. */
@@ -229,22 +236,63 @@ class TranscriptWatcher {
     this.timer = null;
     this.currentFile = null;
     this.lastMtime = 0;
+    // Plik przypisany tej sesji na stale (patrz pickFile).
+    this.pinned = null;
+    this.baseline = new Map();
+    this.startedAt = 0;
   }
 
   /**
-   * Wybiera plik do tailowania. Przy sesji z cwd trzymamy sie jej katalogu;
-   * globalny fallback dziala tylko dopoki ten katalog nie istnieje, zeby po
-   * jego powstaniu metryki nigdy nie przeciekly z innej zakladki.
+   * Zdjecie stanu katalogu w chwili startu sesji. Wszystko, co bylo tu
+   * wczesniej, nalezy do cudzych sesji - chyba ze zacznie rosnac po naszym
+   * starcie, co oznacza wznowienie (--continue) wlasnie do tego pliku.
+   */
+  snapshotBaseline() {
+    this.startedAt = Date.now();
+    this.baseline = new Map();
+    if (!this.scopeDir) return;
+    for (const f of listJsonl(this.scopeDir)) this.baseline.set(f.full, f.mtimeMs);
+  }
+
+  /**
+   * Wybiera plik do tailowania i PRZYPINA go na stale.
+   *
+   * Bez przypiecia kazdy tick bralby "najswiezszy w katalogu" - a przy dwoch
+   * zakladkach na tym samym folderze najswiezszy jest ten, w ktorym ostatnio
+   * cos napisano, czyli czesto cudzy. Wtedy pasek kontekstu klamie, a uzbrojony
+   * auto-compact potrafi strzelic /compact w sesje, ktora wcale nie jest pelna.
+   *
+   * Kolejnosc wyboru:
+   *   1. plik utworzony PO starcie sesji  -> nowa sesja, na pewno nasz
+   *   2. plik z baseline, ktory urosl PO starcie -> wznowienie (--continue)
+   * Pliki zajete przez inne watchery pomijamy. Gdy nie ma kandydata, zwracamy
+   * null: swieza sesja, ktora jeszcze nie wymienila zdania, naprawde ma 0%.
    */
   pickFile() {
+    if (this.pinned) return this.pinned;
     if (!this.scopeDir) return findNewestTranscript();
-    const scoped = newestJsonlIn(this.scopeDir);
-    if (scoped) return scoped;
-    return fs.existsSync(this.scopeDir) ? null : findNewestTranscript();
+
+    const free = listJsonl(this.scopeDir).filter((f) => !claimedTranscripts.has(f.full));
+    const fresh = free.filter((f) => !this.baseline.has(f.full) || f.birthMs >= this.startedAt);
+    const resumed = free.filter(
+      (f) => this.baseline.has(f.full) && f.mtimeMs > this.baseline.get(f.full)
+    );
+    const pool = fresh.length > 0 ? fresh : resumed;
+    if (pool.length === 0) {
+      // Katalog jeszcze nie istnieje - dopoki tak jest, stary globalny fallback
+      // nie moze pomylic sesji, bo innych zakladek na tym folderze nie ma.
+      return fs.existsSync(this.scopeDir) ? null : findNewestTranscript();
+    }
+
+    pool.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    this.pinned = pool[0].full;
+    claimedTranscripts.add(this.pinned);
+    return this.pinned;
   }
 
   start() {
     if (this.timer) return;
+    this.snapshotBaseline();
     this.timer = setInterval(() => this.tick(), this.intervalMs);
     this.tick(); // pierwsza proba od razu
   }
@@ -252,6 +300,9 @@ class TranscriptWatcher {
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    // Zwolnij rezerwacje, zeby restart tej samej zakladki mogl ja odzyskac.
+    if (this.pinned) claimedTranscripts.delete(this.pinned);
+    this.pinned = null;
   }
 
   tick() {
