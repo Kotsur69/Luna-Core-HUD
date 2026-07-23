@@ -848,3 +848,183 @@ html, body {
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 10px;
 }
+
+/* ---- Sekwencja startowa (boot) ----------------------------------------------
+   Ozdobna nakladka nad gotowym UI. Nie blokuje sesji (PTY leci pod spodem) i nie
+   kosztuje ani jednego tokenu - to czysty CSS + kilka wierszy w rendererze.
+   Kolory wylacznie z tokenow motywu, wiec wyglada spojnie we wszystkich 5
+   motywach bez zadnej dodatkowej konfiguracji. Animujemy tylko transform i
+   opacity - ta sama zasada "zero layout thrash" co pasek kontekstu.
+   ---------------------------------------------------------------------------- */
+
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 200; /* nad paleta (100) - to pierwsza rzecz na ekranie */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+  /* 60 ms zwloki: jesli prefs mowia "wylaczona", renderer zdejmuje nakladke
+     zanim cokolwiek zdazy sie namalowac - zero mrugniecia. */
+  opacity: 0;
+  animation: boot-in 200ms 60ms ease-out forwards;
+}
+.boot[hidden] { display: none; }
+
+/* Wyjscie krotsze niz wejscie - zamykanie ma byc szybsze niz otwieranie. */
+.boot.is-out { animation: boot-out 240ms ease-in forwards; }
+
+@keyframes boot-in  { to { opacity: 1; } }
+@keyframes boot-out { from { opacity: 1; } to { opacity: 0; } }
+
+/* Siatka w tle - lekki dryf, zeby ekran nie byl martwy. */
+.boot__grid {
+  position: absolute;
+  inset: -20%;
+  background:
+    repeating-linear-gradient(0deg, var(--edge) 0 1px, transparent 1px 44px),
+    repeating-linear-gradient(90deg, var(--edge) 0 1px, transparent 1px 44px);
+  opacity: 0.22;
+  animation: boot-drift 1.4s linear;
+}
+@keyframes boot-drift {
+  from { transform: translateY(-22px); }
+  to   { transform: translateY(0); }
+}
+
+/* Smuga skanujaca (CRT) - jedyny duzy ruch na ekranie. */
+.boot__scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 150px;
+  background: linear-gradient(to bottom, transparent, var(--glow), transparent);
+  transform: translateY(-150px);
+  animation: boot-scan 1.15s 120ms cubic-bezier(0.33, 0, 0.2, 1) forwards;
+}
+@keyframes boot-scan { to { transform: translateY(100vh); } }
+
+.boot__core {
+  position: relative;
+  width: min(460px, 84vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.boot__mark {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  opacity: 0;
+  animation: boot-rise 380ms 120ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.boot__glyph {
+  color: var(--neon-magenta);
+  filter: drop-shadow(0 0 14px var(--neon-magenta));
+}
+.boot__word-core { color: var(--neon-cyan); }
+
+@keyframes boot-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+.boot__tagline {
+  margin: 0;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10.5px;
+  letter-spacing: 2.4px;
+  color: var(--text-dim);
+  opacity: 0;
+  animation: boot-rise 320ms 300ms ease-out forwards;
+}
+
+/* Log startowy - wiersze wstawia renderer.js, kaskade robi animation-delay. */
+.boot__log {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.boot__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  animation: boot-rise 240ms ease-out forwards; /* delay ustawia JS */
+}
+.boot__line::before { content: '\203A'; color: var(--neon-magenta); }
+.boot__line-ok {
+  margin-left: auto;
+  color: var(--good);
+  letter-spacing: 1px;
+}
+.boot__line--ready { color: var(--neon-cyan); }
+.boot__line--ready::before { content: '\25A0'; color: var(--neon-cyan); }
+
+/* Pasek postepu - scaleX, tak jak pasek kontekstu i paski limitow. */
+.boot__rule {
+  width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--edge);
+  overflow: hidden;
+}
+.boot__rule-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--neon-magenta), var(--neon-cyan));
+  transform: scaleX(0);
+  transform-origin: left;
+  animation: boot-fill 720ms 340ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+@keyframes boot-fill { to { transform: scaleX(1); } }
+
+.boot__skip {
+  margin: 2px 0 0;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  opacity: 0;
+  animation: boot-rise 300ms 700ms ease-out forwards;
+}
+
+/* ---- Preferencja ograniczonego ruchu ---------------------------------------
+   Systemowe "reduce motion" wylacza cala ozdobna animacje w HUD: boot w ogole
+   sie nie pokazuje, a pulsy i mrugania spadaja do zera. Wyjatek: spinner
+   odswiezania limitow zostaje - to wskaznik ladowania, czyli jedyny sensowny
+   ruch ciagly. Sygnaly stanu nic nie traca, bo nosnikiem znaczenia jest u nas
+   KOLOR (LED, kropka PTY, alarm kontekstu), a ruch byl tylko wzmocnieniem.
+   ---------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .boot { display: none; }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .usage-refresh.is-spinning {
+    animation-duration: 0.9s !important;
+    animation-iteration-count: infinite !important;
+  }
+}

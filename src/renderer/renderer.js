@@ -1147,6 +1147,117 @@ setInterval(() => {
   if (lastUsage && !lastUsage.error) renderUsage();
 }, 30000);
 
+// ---- Sekwencja startowa (boot) ----------------------------------------------
+//
+// Czysta ozdoba nad gotowym UI: log "podsystemow", smuga skanujaca i pasek
+// postepu. Zero IPC i zero tokenow - caly ruch robi CSS, JS tylko wstawia
+// wiersze (przetlumaczone), ustawia kaskade opoznien i sprzata po sobie.
+//
+// Zasada nadrzedna: NIGDY nie blokuje. PTY startuje i leje stdout pod spodem,
+// a klik albo dowolny klawisz natychmiast zdejmuje nakladke. Swiadomie bez
+// preventDefault - wcisniety klawisz ma poleciec dalej do terminala, wiec
+// "pominiecie" nie gubi pierwszego znaku, ktory wpisujesz.
+
+const BOOT_LINE_KEYS = [
+  'boot.line.pty',
+  'boot.line.observer',
+  'boot.line.injector',
+  'boot.line.theme',
+  'boot.line.skills',
+];
+const BOOT_FIRST_LINE_MS = 340; // start kaskady (po odslonieciu znaku firmowego)
+const BOOT_LINE_STEP_MS = 120; // odstep miedzy kolejnymi wierszami
+const BOOT_HOLD_MS = 1150; // moment automatycznego zejscia nakladki
+const BOOT_FADE_MS = 240; // MUSI zgadzac sie z .boot.is-out w styles.css
+
+const bootEl = document.getElementById('boot');
+const bootLogEl = document.getElementById('boot-log');
+const bootToggle = document.getElementById('boot-toggle');
+const bootStatus = document.getElementById('boot-status');
+let bootTimers = [];
+let bootDone = false;
+
+// Zdejmuje nakladke. Idempotentne - klik i timer moga trafic w to samo miejsce.
+function endBoot(instant = false) {
+  if (bootDone) return;
+  bootDone = true;
+  bootTimers.forEach(clearTimeout);
+  bootTimers = [];
+  document.removeEventListener('keydown', skipBoot, true);
+  bootEl.removeEventListener('click', skipBoot);
+
+  if (instant) {
+    bootEl.hidden = true;
+  } else {
+    bootEl.classList.add('is-out');
+    bootTimers.push(setTimeout(() => { bootEl.hidden = true; }, BOOT_FADE_MS));
+  }
+  term.focus();
+}
+
+function skipBoot() {
+  endBoot();
+}
+
+// Buduje jeden wiersz logu. Wiersz "ready" nie ma znacznika OK - to podsumowanie.
+function bootLine(key, isReady) {
+  const li = document.createElement('li');
+  li.className = isReady ? 'boot__line boot__line--ready' : 'boot__line';
+  const name = document.createElement('span');
+  name.textContent = t(key);
+  li.appendChild(name);
+  if (!isReady) {
+    const ok = document.createElement('span');
+    ok.className = 'boot__line-ok';
+    ok.textContent = t('boot.line.ok');
+    li.appendChild(ok);
+  }
+  return li;
+}
+
+function runBootSequence() {
+  bootLogEl.replaceChildren();
+  // Jeden zapis do DOM; kaskade robi animation-delay, nie lancuch setTimeoutow.
+  BOOT_LINE_KEYS.forEach((key, i) => {
+    const li = bootLine(key, false);
+    li.style.animationDelay = `${BOOT_FIRST_LINE_MS + i * BOOT_LINE_STEP_MS}ms`;
+    bootLogEl.appendChild(li);
+  });
+  const ready = bootLine('boot.line.ready', true);
+  ready.style.animationDelay =
+    `${BOOT_FIRST_LINE_MS + BOOT_LINE_KEYS.length * BOOT_LINE_STEP_MS}ms`;
+  bootLogEl.appendChild(ready);
+
+  document.addEventListener('keydown', skipBoot, true);
+  bootEl.addEventListener('click', skipBoot);
+  bootTimers.push(setTimeout(endBoot, BOOT_HOLD_MS));
+}
+
+// Etykieta przelacznika (osobno, bo musi przezyc zmiane jezyka).
+function renderBootPref(enabled) {
+  bootToggle.checked = enabled;
+  bootStatus.textContent = t(enabled ? 'boot.on' : 'boot.off');
+}
+
+// Wywolywane raz z initAppearance(), juz PO ustawieniu jezyka i motywu: log
+// jest wtedy w dobrym jezyku, a kolory od razu z wybranego motywu, wiec nic nie
+// przeskakuje w trakcie animacji. Systemowe "ogranicz ruch" pomija ja calkiem.
+function startBoot(enabled) {
+  renderBootPref(enabled);
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!enabled || reducedMotion) {
+    endBoot(true);
+    return;
+  }
+  runBootSequence();
+}
+
+bootToggle.addEventListener('change', () => {
+  renderBootPref(bootToggle.checked);
+  // Zmiana dziala od nastepnego uruchomienia - biezacej animacji nie cofamy.
+  window.lunacore.setUiPrefs({ boot: bootToggle.checked });
+});
+
 // ---- Wyglad: motyw (theming) + jezyk (i18n) ---------------------------------
 //
 // Motywy pochodza z config/themes.json (mapy tokenow CSS + kolory xterm), jezyk
@@ -1178,11 +1289,12 @@ function applyLang(lang) {
   renderBurn();
   renderUsage();
   renderAutoCompact();
+  renderBootPref(bootToggle.checked);
   paletteItems = null; // odbuduje z nowymi tlumaczeniami przy nastepnym otwarciu
 }
 
 async function initAppearance() {
-  let prefs = { theme: 'cyberpunk', lang: 'pl' };
+  let prefs = { theme: 'cyberpunk', lang: 'pl', boot: true };
   try {
     prefs = (await window.lunacore.getUiPrefs()) || prefs;
   } catch {
@@ -1214,6 +1326,9 @@ async function initAppearance() {
   } catch {
     /* brak motywow - zostaje wbudowany styl z styles.css */
   }
+
+  // Na koncu, bo sekwencja ma juz znac jezyk i kolory wybranego motywu.
+  startBoot(prefs.boot !== false);
 }
 
 themeSwitcher.addEventListener('change', () => {

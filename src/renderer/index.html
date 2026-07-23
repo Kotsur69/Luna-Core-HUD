@@ -59,6 +59,18 @@
             <option value="en">English</option>
           </select>
         </label>
+        <!-- Sekwencja startowa: czysta ozdoba, mozna wylaczyc. Nie blokuje
+             sesji - PTY startuje pod spodem niezaleznie od animacji. -->
+        <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="boot.label">Sekwencja startowa</span>
+            <span id="boot-status" class="switch-field__status" data-i18n="boot.on">wlaczona</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="boot-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
       </div>
 
       <div class="panel__section">
@@ -206,6 +218,38 @@
     </aside>
 
   </div>
+
+  <!-- ================= Sekwencja startowa (boot) =================
+       Czysta ozdoba: nakladka nad gotowym UI. NIE blokuje niczego - PTY startuje
+       i leje stdout pod spodem, a kazdy klawisz/klik natychmiast ja zdejmuje.
+       Widoczna od razu (bez `hidden`), ale animacja wejscia ma 60 ms opoznienia,
+       wiec gdy prefs mowia "wylaczona", renderer zdejmuje ja zanim cokolwiek
+       zdazy sie namalowac. aria-hidden: dla czytnika ekranu to dekoracja. -->
+  <div id="boot" class="boot" aria-hidden="true">
+    <div class="boot__grid"></div>
+    <div class="boot__scan"></div>
+    <div class="boot__core">
+      <div class="boot__mark">
+        <span class="boot__glyph">☾</span>
+        <span class="boot__word">Luna<span class="boot__word-core">Core</span></span>
+      </div>
+      <p class="boot__tagline">COMMAND CENTER // CLAUDE CODE CLI</p>
+      <!-- Wiersze logu dopisuje renderer.js (i18n), zeby PL/EN dzialalo. -->
+      <ul id="boot-log" class="boot__log"></ul>
+      <div class="boot__rule"><span id="boot-rule" class="boot__rule-fill"></span></div>
+      <p class="boot__skip" data-i18n="boot.skip">klik / dowolny klawisz = pomin</p>
+    </div>
+  </div>
+  <script>
+    // Bezpiecznik nakladki startowej. Celowo INLINE i przed renderer.js: gdyby
+    // renderer wywalil sie przy parsowaniu (tak zrobila kiedys kolizja `t` z
+    // i18n.js), nikt by tej nakladki nie zdjal i zaslonilaby caly HUD na stale.
+    // Ten timer jest jedynym kodem, ktory przezyje taka awarie.
+    setTimeout(function () {
+      var b = document.getElementById('boot');
+      if (b && !b.hidden) b.hidden = true;
+    }, 4000);
+  </script>
 
   <!-- ================= Paleta komend (Ctrl+K) ================= -->
   <!-- Nakladka pusta w HTML; renderer.js buduje wiersze z agregatu akcji. -->

@@ -12,8 +12,9 @@ injects prompts or touches the `claude` binary.
 > ports tracker, action cheat-sheets, skill cheat-sheet, a multi-line
 > **prompt library**, a **working/waiting LED**, a local **scratchpad**, a
 > **command palette (Ctrl+K)**, a **token burn-rate sparkline**, a swappable
-> **theming system**, a **PL/EN language switch**, and a live
-> **usage-limits gauge** (5-hour + weekly subscription windows).
+> **theming system**, a **PL/EN language switch**, a live **usage-limits gauge**
+> (5-hour + weekly subscription windows), an **armed auto-compact** toggle, a
+> **CWD/project switcher**, and a **cyberpunk boot sequence**.
 
 ---
 
@@ -38,12 +39,14 @@ user's context window. It works only as:
 │  (Controls)         │                               │   (Status Monitor)  │
 ├─────────────────────┤  ● LED: working / waiting     ├─────────────────────┤
 │ [⚡ COMPACT CONTEXT]│  [Ctrl+K] command palette     │  Context Window bar │
-│ Theme + language    │     xterm.js render area      │  + burn sparkline   │
-│ Profile switcher    │                               │  Skill Tracker      │
-│ Action cheat-sheets │  Claude CLI interactive        │  tiles              │
-│ Prompt library      │  session (node-pty process)   │  Localhost ports    │
-│ Skill cheat-sheet   │                               │  Scratchpad         │
-│ (panel scrolls)     │                               │                     │
+│ Auto-compact toggle │     xterm.js render area      │  + burn sparkline   │
+│ Theme/lang/boot     │                               │  Usage limits       │
+│ Project (cwd)       │  Claude CLI interactive       │  Skill Tracker      │
+│ Profile switcher    │  session (node-pty process)   │  tiles              │
+│ Action cheat-sheets │                               │  Localhost ports    │
+│ Prompt library      │                               │  Scratchpad         │
+│ Skill cheat-sheet   │                               │                     │
+│ (panel scrolls)     │                               │  (panel scrolls)    │
 └─────────────────────┴───────────────────────────────┴─────────────────────┘
 ```
 
@@ -60,7 +63,8 @@ user's context window. It works only as:
 | Action Injector (palette) | Ctrl+K overlay aggregates actions/cheat-sheets/prompts/skills → fires the **existing** injector for the chosen row (no new PTY channel) |
 | Passive Observer (sparkline) | second `metrics:context` listener buffers the same `usage` samples → SVG sparkline + tok/min + ETA to 85% |
 | Passive Observer (usage gauge) | `UsageWatcher` reads the CLI's OAuth token from `~/.claude/.credentials.json` → **GET** `api.anthropic.com/api/oauth/usage` → IPC `usage:update` → 5h + weekly bars (read-only, never `/v1/messages`) |
-| Prefs (theme/language) | `getThemes()`/`getUiPrefs()`/`setUiPrefs()` → IPC `themes:list` / `ui:get` / `ui:set` → reads `config/themes.json`, persists `config/ui.local.json`; renderer writes CSS tokens + xterm palette live |
+| Prefs (theme/language/boot) | `getThemes()`/`getUiPrefs()`/`setUiPrefs()` → IPC `themes:list` / `ui:get` / `ui:set` → reads `config/themes.json`, persists `config/ui.local.json`; renderer writes CSS tokens + xterm palette live |
+| Boot sequence | renderer-only overlay: CSS drives every pixel of motion, JS only stamps `animation-delay` on the log rows and removes the node. No IPC, no PTY, no tokens |
 
 The Context Window % divides live `usage` tokens by a `CONTEXT_LIMIT` constant
 (200k default, in [`src/observer.js`](src/observer.js) — raise it for 1M-context
@@ -125,8 +129,9 @@ Luna-Core-HUD/
 │   ├── skills.js          # scan skill dirs → categorized skill cheat-sheet
 │   ├── prompts.js         # load/validate multi-line prompt library from config/
 │   ├── scratchpad.js      # read/write the local scratchpad note file
+│   ├── projects.js        # load/validate working directories (~ expansion)
 │   ├── theme.js           # load/validate themes from config/ (FALLBACK cyberpunk)
-│   ├── uiprefs.js         # read/write UI prefs (theme + language) → ui.local.json
+│   ├── uiprefs.js         # read/write UI prefs (theme + language + boot) → ui.local.json
 │   ├── usage.js           # UsageWatcher: GET OAuth /usage endpoint → 5h + weekly limits
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
@@ -136,10 +141,11 @@ Luna-Core-HUD/
 │       └── styles.css     # LunaCore theme tokens (:root custom properties)
 ├── config/
 │   ├── profiles.json      # launch profiles (profiles.local.json overrides, gitignored)
+│   ├── projects.json      # working directories (projects.local.json overrides, gitignored)
 │   ├── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
 │   ├── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
 │   ├── themes.json        # visual themes (themes.local.json overrides, gitignored)
-│   ├── ui.local.json      # persisted theme + language (created on first change, gitignored)
+│   ├── ui.local.json      # persisted theme + language + boot (created on first change, gitignored)
 │   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
 ├── master_prompt.md       # original build brief
 ├── FUTURE_PLAN.md         # roadmap: themes, layout engine, feature shortlist
@@ -162,9 +168,16 @@ Luna-Core-HUD/
 | + | Command palette (Ctrl+K), token burn-rate sparkline | ✅ done |
 | + | Theming system (5 themes, live switch) + PL/EN language switch | ✅ done |
 | + | Usage-limits gauge (5-hour + weekly windows, OAuth `/usage` read) | ✅ done |
+| + | Armed auto-compact toggle + scrollable right panel | ✅ done |
+| + | CWD / project switcher (per-repo working directory) | ✅ done |
+| + | Cyberpunk boot sequence + global reduced-motion support | ✅ done |
 
-Next up (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §5.5): armed auto-compact toggle,
-CWD/project switcher, cyberpunk boot sequence.
+That closes the whole approved shortlist. **Next up** (see
+[`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8): split the ~1370-line `renderer.js` into
+modules and introduce a widget contract — the structural work that unblocks
+layout presets, movable panels and everything after them. §9 sketches the bigger
+open question: turning LunaCore into a multi-model console (Claude / Kimi /
+local LM Studio) rather than a Claude-only HUD.
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
@@ -318,6 +331,42 @@ this translates **LunaCore's own chrome** only — the `claude` CLI output in th
 terminal is whatever the CLI itself emits. Both the theme and language choice
 persist to `config/ui.local.json` (gitignored) via `src/uiprefs.js`, so the app
 reopens exactly how you left it.
+
+## Boot sequence
+
+A ~1.4-second themed overlay on launch: the wordmark resolves, a drifting grid
+and a CRT scan sweep pass behind it, a five-line subsystem log fills in, and a
+progress rule closes it out. Every colour comes from the theme tokens, so it
+inherits all five themes for free, and the log is translated like the rest of the
+chrome.
+
+It is decoration, and it behaves like decoration. It **never blocks**: the PTY
+launches and streams underneath while it plays, and a click or any keypress
+dismisses it instantly. The keypress is deliberately not consumed — it travels on
+to the terminal, so skipping the animation doesn't eat the first character you
+type. All the motion is CSS (`transform`/`opacity` only, no layout thrash); the
+renderer just stamps `animation-delay` on the log rows and removes the node.
+
+Turn it off under **Appearance → Boot sequence**; the choice persists to
+`ui.local.json` and applies from the next launch. If your OS asks for reduced
+motion, it never runs at all.
+
+> One deliberate oddity: a small **inline** `<script>` in `index.html` force-hides
+> the overlay after 4 seconds. It's there because a renderer parse error would
+> otherwise leave the overlay covering the entire HUD forever — that inline timer
+> is the only code that survives such a crash. LunaCore has been bricked by
+> exactly that class of bug before (an i18n global colliding with `renderer.js`).
+
+## Reduced motion
+
+LunaCore honours the system "reduce motion" setting. The boot sequence is skipped
+entirely and the decorative pulses, blinks and glow alarms collapse to nothing.
+The usage-refresh spinner is the one exemption — a loading indicator is the only
+continuous motion worth keeping, because it's reporting real state.
+
+Nothing is lost by turning motion off: every signal in the HUD carries its meaning
+in **colour** — the working/waiting LED, the PTY dot, the context alarm — with
+movement only ever as reinforcement.
 
 ---
 
