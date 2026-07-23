@@ -38,7 +38,8 @@ user's context window. It works only as:
 │  LEFT PANEL         │       CENTER (Terminal)       │   RIGHT PANEL       │
 │  (Controls)         │                               │   (Status Monitor)  │
 ├─────────────────────┤  ● LED: working / waiting     ├─────────────────────┤
-│ [⚡ COMPACT CONTEXT]│  [Ctrl+K] command palette     │  Context Window bar │
+│ [⚡ COMPACT CONTEXT]│  [tab][tab][tab]          [+] │  Context Window bar │
+│                     │  [Ctrl+K] command palette     │  (of the ACTIVE tab)│
 │ Auto-compact toggle │     xterm.js render area      │  + burn sparkline   │
 │ Theme/lang/boot     │                               │  Usage limits       │
 │ Project (cwd)       │  Claude CLI interactive       │  Skill Tracker      │
@@ -54,9 +55,10 @@ user's context window. It works only as:
 
 | Direction | Path |
 |-----------|------|
-| Passive Observer (terminal) | `ptyProcess.onData` → IPC `pty:data` → `xterm.write()` |
-| Passive Observer (Skill Tracker) | `ptyProcess.onData` → `detectTools()` (ANSI strip + regex) → IPC `metrics:tools` → tiles light up |
-| Passive Observer (Context %) | `TranscriptWatcher` tails `~/.claude/projects/**/*.jsonl` → real `usage` tokens → IPC `metrics:context` → bar |
+| Passive Observer (terminal) | `session.proc.onData` → IPC `pty:data` `{sessionId, data}` → that tab's `xterm.write()` |
+| Passive Observer (Skill Tracker) | `session.proc.onData` → `detectTools()` (ANSI strip + regex) → IPC `metrics:tools` → tiles light up (active tab only) |
+| Passive Observer (Context %) | per-session `TranscriptWatcher` tails **one pinned** `~/.claude/projects/<cwd>/<session>.jsonl` → real `usage` tokens → IPC `metrics:context` → that tab's bar |
+| Session control | `sessions:create` / `:close` / `:activate` → main owns the `sessions` Map → broadcast `sessions:update` → tab bar rebuilds |
 | Action Injector (keyboard) | `xterm.onData` → IPC `pty:write` → `ptyProcess.write()` |
 | Action Injector (button) | `runCommand('/compact')` → IPC `pty:command` → writes `/compact\r` |
 | Action Injector (prompt) | `pastePrompt(text, submit)` → IPC `pty:paste` → writes `ESC[200~ text ESC[201~` (bracketed paste), then `\r` only if `submit` |
@@ -171,6 +173,7 @@ Luna-Core-HUD/
 | + | Armed auto-compact toggle + scrollable right panel | ✅ done |
 | + | CWD / project switcher (per-repo working directory) | ✅ done |
 | + | Cyberpunk boot sequence + global reduced-motion support | ✅ done |
+| + | Multi-session tabs (N PTYs, per-tab profile / cwd / context) | ✅ done |
 
 That closes the whole approved shortlist. **Next up** (see
 [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8): split the ~1370-line `renderer.js` into
@@ -182,6 +185,55 @@ local LM Studio) rather than a Claude-only HUD.
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
 the matching tool (Read, Edit, Write, Bash, Grep, Glob, Web, Task).
+
+## Multi-session tabs
+
+Run more than one `claude` at a time. Each tab owns its **own PTY process,
+profile, working directory, xterm buffer and context metrics**. Background tabs
+keep running and keep their scrollback — only the active pane is rendered.
+
+- `+` opens a new tab (inherits the current profile + project).
+- `×` closes one. Closing the **last** tab spawns a fresh session rather than
+  leaving an empty window.
+- The profile and project switchers act on the **active tab only**; the others
+  are untouched.
+- Each tab shows its own context `%` in its label, so a background session
+  filling up is visible without switching to it.
+
+### Two scopes — the thing to understand
+
+| Metric | Scope | With N tabs |
+|--------|-------|-------------|
+| Context window (%, tokens, sparkline) | **per process** — each `claude` has its own 200k | N independent windows, one per tab |
+| 5-hour / weekly usage limits | **per account** — one shared quota | one number, drained N× faster |
+
+So the context bar follows the active tab, while the usage gauge stays a single
+global readout and is never summed per tab — it counts sessions you run outside
+LunaCore too.
+
+**The trap:** every tab can show a calm green context bar while the shared quota
+burns N times faster. Per-tab metrics structurally cannot warn you about this —
+only the global usage gauge can. Watch it when running several tabs.
+
+### How a tab finds its own transcript
+
+Claude Code stores transcripts as `~/.claude/projects/<encoded-cwd>/<session>.jsonl`
+— the **directory is keyed by folder, the file by session**. Two tabs on the same
+repo therefore share one directory containing two files.
+
+Each `TranscriptWatcher` snapshots that directory at startup and **pins** the
+first file that is genuinely its own: one created after startup (new session), or
+a pre-existing one that grows after startup (`--continue`). A process-wide claim
+registry stops two watchers taking the same file. With no candidate it reports
+nothing rather than a neighbour's file — a session that hasn't exchanged anything
+yet really is at 0%.
+
+Without this the bars lie, and armed auto-compact can read another session's 90%
+and inject `/compact` into the tab you're looking at.
+
+**Known gap:** two tabs both *resuming* (`--continue`) into the same folder offer
+neither pinning signal cleanly. Fixing it needs the session UUID parsed from
+stdout — still zero-token, but a larger change.
 
 ## Launch profiles
 
