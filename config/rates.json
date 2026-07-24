@@ -1,0 +1,15 @@
+{
+  "_comment": "Cennik do szacowania kosztu sesji (B4). USD za MILION tokenow. CENY SIE STARZEJA - dlatego siedza w configu, nie w kodzie. Nadpisuj w config/rates.local.json (gitignore), nie tutaj. Stan na 2026-07-24.",
+  "_cacheComment": "Cache liczymy MNOZNIKAMI od ceny wejscia, bo tak jest zdefiniowany: odczyt ~0.1x, zapis 1.25x (TTL 5 min) lub 2x (TTL 1h). LunaCore zaklada domyslne 5 min.",
+  "cacheReadMultiplier": 0.1,
+  "cacheWriteMultiplier": 1.25,
+  "rates": [
+    { "id": "claude-opus-4-8", "input": 5.0, "output": 25.0 },
+    { "id": "claude-opus-4-7", "input": 5.0, "output": 25.0 },
+    { "id": "claude-opus-4-6", "input": 5.0, "output": 25.0 },
+    { "id": "claude-sonnet-5", "input": 3.0, "output": 15.0 },
+    { "id": "claude-sonnet-4-6", "input": 3.0, "output": 15.0 },
+    { "id": "claude-haiku-4-5", "input": 1.0, "output": 5.0 },
+    { "id": "claude-fable-5", "input": 10.0, "output": 50.0 }
+  ]
+}

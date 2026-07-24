@@ -42,11 +42,13 @@ test('usageToMetrics nadal przycina percent do 1 powyzej najwiekszego znanego ok
   assert.equal(m.tokens, 5000000);
 });
 
-test('usageToMetrics przenosi model i jego etykiete do metryk (B3)', () => {
+test('usageToMetrics carries the model and its label into the metrics (B3)', () => {
   const m = usageToMetrics({ input_tokens: 1000 }, 'claude-opus-4-8');
   assert.equal(m.model, 'claude-opus-4-8');
   assert.equal(m.modelLabel, 'Opus 4.8');
-  assert.equal(m.limit, 200000);
+  // 1M, not 200k: Opus 4.8 really does have a 1M window. The earlier 200k
+  // assertion here was the bug, not the fix.
+  assert.equal(m.limit, 1000000);
 });
 
 test('usageToMetrics bez modelu zachowuje domyslne okno 200k', () => {

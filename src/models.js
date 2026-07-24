@@ -25,6 +25,37 @@ const DEFAULT_CONTEXT_LIMIT = 200000;
 /** Znane progi okien kontekstu, rosnaco. */
 const KNOWN_TIERS = [200000, 1000000];
 
+/**
+ * Realne okna kontekstu znanych modeli (prefiks id -> limit).
+ *
+ * POPRAWKA 2026-07-24: pierwsza wersja tego pliku zakladala 200k dla wszystkiego
+ * i awansowala dopiero z obserwacji. To bylo zle: biezaca rodzina Claude ma okno
+ * 1M (wyjatek: Haiku 4.5 = 200k), wiec pasek pokazywalby 100% przy 20% i
+ * uzbrojony auto-compact strzelalby duzo za wczesnie. Obserwacja zostaje jako
+ * druga linia obrony, ale nie moze byc pierwsza - zanim zadziala, pasek juz sklamal.
+ */
+const MODEL_WINDOWS = [
+  { prefix: 'claude-haiku-4-5', limit: 200000 },
+  { prefix: 'claude-opus-4-8', limit: 1000000 },
+  { prefix: 'claude-opus-4-7', limit: 1000000 },
+  { prefix: 'claude-opus-4-6', limit: 1000000 },
+  { prefix: 'claude-sonnet-5', limit: 1000000 },
+  { prefix: 'claude-sonnet-4-6', limit: 1000000 },
+  { prefix: 'claude-fable-5', limit: 1000000 },
+  { prefix: 'claude-mythos-5', limit: 1000000 },
+];
+
+/** Szuka okna po najdluzszym pasujacym prefiksie id. Zwraca null, gdy brak. */
+function windowFromTable(id) {
+  let best = null;
+  for (const row of MODEL_WINDOWS) {
+    if (id.startsWith(row.prefix) && (!best || row.prefix.length > best.prefix.length)) {
+      best = row;
+    }
+  }
+  return best ? best.limit : null;
+}
+
 /** Rodziny modeli rozpoznawane przy budowaniu etykiety. */
 const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable'];
 
@@ -42,7 +73,8 @@ function hasOneMillionMarker(id) {
  */
 function contextLimitFor(model, observedTokens = 0) {
   const id = String(model || '').toLowerCase();
-  let limit = hasOneMillionMarker(id) ? 1000000 : DEFAULT_CONTEXT_LIMIT;
+  // Kolejnosc sygnalow: jawny marker 1m > tablica znanych modeli > domyslne 200k.
+  let limit = hasOneMillionMarker(id) ? 1000000 : windowFromTable(id) || DEFAULT_CONTEXT_LIMIT;
 
   // Korekta z obserwacji: kontekst nie moze byc wiekszy niz jego wlasne okno.
   if (observedTokens > limit) {
@@ -84,4 +116,10 @@ function modelLabel(model) {
   return oneM ? `${label} 1M` : label;
 }
 
-module.exports = { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT, KNOWN_TIERS };
+module.exports = {
+  contextLimitFor,
+  modelLabel,
+  DEFAULT_CONTEXT_LIMIT,
+  KNOWN_TIERS,
+  MODEL_WINDOWS,
+};

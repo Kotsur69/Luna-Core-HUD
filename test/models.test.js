@@ -9,8 +9,27 @@ const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('../src/m
 
 // ---- contextLimitFor --------------------------------------------------------
 
-test('contextLimitFor domyslnie zwraca 200k', () => {
-  assert.equal(contextLimitFor('claude-opus-4-8'), DEFAULT_CONTEXT_LIMIT);
+test('contextLimitFor zna realne okna biezacych modeli (1M)', () => {
+  // Poprawka 2026-07-24: te modele maja okno 1M, nie 200k. Poprzednia wersja
+  // zwracala tu 200k, przez co pasek pokazywalby 100% przy okolo 20%.
+  assert.equal(contextLimitFor('claude-opus-4-8'), 1000000);
+  assert.equal(contextLimitFor('claude-opus-4-7'), 1000000);
+  assert.equal(contextLimitFor('claude-sonnet-5'), 1000000);
+  assert.equal(contextLimitFor('claude-fable-5'), 1000000);
+});
+
+test('contextLimitFor zna wyjatek: Haiku 4.5 ma 200k', () => {
+  assert.equal(contextLimitFor('claude-haiku-4-5'), 200000);
+  assert.equal(contextLimitFor('claude-haiku-4-5-20251001'), 200000);
+});
+
+test('contextLimitFor dopasowuje modele z sufiksem daty', () => {
+  assert.equal(contextLimitFor('claude-opus-4-8-20260115'), 1000000);
+});
+
+test('contextLimitFor spada do 200k dla nieznanego modelu', () => {
+  // Nieznany backend (LM Studio, Kimi): zaklada ostroznie, obserwacja poprawi.
+  assert.equal(contextLimitFor('qwen2.5-coder-32b-instruct'), DEFAULT_CONTEXT_LIMIT);
   assert.equal(contextLimitFor('claude-sonnet-4-5-20250929'), 200000);
 });
 
@@ -31,14 +50,15 @@ test('contextLimitFor nie myli sie o zwykla cyfre 1 w id', () => {
 });
 
 test('contextLimitFor awansuje okno, gdy obserwacja przeczy zalozeniu', () => {
-  // To jest wlasciwa naprawa buga "pasek klamie na sesji 1M": kontekst nie moze
-  // przekroczyc wlasnego okna, wiec 600k tokenow dowodzi, ze okno to nie 200k.
+  // Druga linia obrony dla modeli spoza tablicy: kontekst nie moze przekroczyc
+  // wlasnego okna, wiec 600k tokenow dowodzi, ze okno to nie 200k.
   assert.equal(contextLimitFor('claude-sonnet-4-5', 600000), 1000000);
+  assert.equal(contextLimitFor('nieznany-lokalny-model', 600000), 1000000);
 });
 
 test('contextLimitFor nie awansuje, dopoki miescimy sie w oknie', () => {
-  assert.equal(contextLimitFor('claude-opus-4-8', 199999), 200000);
-  assert.equal(contextLimitFor('claude-opus-4-8', 200000), 200000);
+  assert.equal(contextLimitFor('claude-haiku-4-5', 199999), 200000);
+  assert.equal(contextLimitFor('claude-haiku-4-5', 200000), 200000);
 });
 
 test('contextLimitFor zatrzymuje sie na najwiekszym znanym progu', () => {

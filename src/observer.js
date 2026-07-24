@@ -17,6 +17,8 @@ const path = require('path');
 const os = require('os');
 // Wiedza o modelach: realne okno kontekstu + krotka etykieta do kafelka.
 const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('./models');
+// Cennik do szacowania kosztu sesji (B4). Czyta wylacznie config/, zero sieci.
+const { loadRates, rateFor, estimateCost } = require('./rates');
 
 // ---- 1. Detekcja narzedzi ze stdout ----------------------------------------
 
@@ -207,6 +209,49 @@ function readLatestSample(file) {
 }
 
 /**
+ * Sumuje zuzycie tokenow z fragmentu JSONL (B4).
+ *
+ * Czemu osobno od readLatestSample: pasek kontekstu potrzebuje OSTATNIEGO wpisu
+ * (biezacy sklad okna), a koszt potrzebuje SUMY po calej sesji. To dwie rozne
+ * liczby z tego samego pliku - mylenie ich zanizyloby koszt do jednej tury.
+ * Czysta funkcja: tekst -> liczniki, zeby dalo sie ja przetestowac bez dysku.
+ * @param {string} text fragment pliku JSONL (cale linie)
+ */
+function sumUsageLines(text) {
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || !line.includes('"usage"')) continue;
+    try {
+      const obj = JSON.parse(line);
+      const usage = obj && obj.message && obj.message.usage;
+      if (!usage) continue;
+      totals.input += usage.input_tokens || 0;
+      totals.output += usage.output_tokens || 0;
+      totals.cacheRead += usage.cache_read_input_tokens || 0;
+      totals.cacheWrite += usage.cache_creation_input_tokens || 0;
+    } catch {
+      /* niepelna/uszkodzona linia - pomijamy */
+    }
+  }
+  return totals;
+}
+
+// Cennik ladujemy raz na proces (plik configu nie zmienia sie w trakcie sesji).
+let ratesCache = null;
+
+/** Szacuje koszt sesji; null, gdy modelu nie ma w cenniku. */
+function estimateSessionCost(totals, model) {
+  if (!ratesCache) ratesCache = loadRates();
+  const rate = rateFor(model, ratesCache.rates);
+  if (!rate) return null;
+  return estimateCost(totals, rate, {
+    cacheReadMultiplier: ratesCache.cacheReadMultiplier,
+    cacheWriteMultiplier: ratesCache.cacheWriteMultiplier,
+  });
+}
+
+/**
  * Zamienia obiekt usage na metryki context window.
  * @param {object} usage pole `usage` z transkryptu
  * @param {string} [model] id modelu z tej samej linii - wyznacza realne okno
@@ -256,6 +301,54 @@ class TranscriptWatcher {
     this.pinned = null;
     this.baseline = new Map();
     this.startedAt = 0;
+    // B4: sumaryczne zuzycie tej sesji + pozycja, do ktorej juz zsumowalismy.
+    this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    this.costOffset = 0;
+    this.costFile = null;
+  }
+
+  /**
+   * Doczytuje TYLKO to, co dopisano od ostatniego ticku, i dolicza do sumy.
+   * Czytanie calego pliku co 1.5 s byloby marnotrawstwem przy dlugiej sesji,
+   * a suma i tak jest przyrostowa. Offset przesuwamy wylacznie do ostatniego
+   * pelnego "\n" - urwana linia doliczy sie przy nastepnym ticku.
+   * @param {string} file
+   */
+  accumulate(file) {
+    // Zmiana pliku (restart/przypiecie innej sesji) = liczymy od zera.
+    if (file !== this.costFile) {
+      this.costFile = file;
+      this.costOffset = 0;
+      this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    }
+    let fd;
+    try {
+      fd = fs.openSync(file, 'r');
+      const size = fs.fstatSync(fd).size;
+      // Plik skrocony (rzadkie, ale nie zakladajmy) - przelicz od nowa.
+      if (size < this.costOffset) {
+        this.costOffset = 0;
+        this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      }
+      const length = size - this.costOffset;
+      if (length <= 0) return;
+      const buf = Buffer.alloc(length);
+      fs.readSync(fd, buf, 0, length, this.costOffset);
+      const text = buf.toString('utf8');
+      const lastNewline = text.lastIndexOf('\n');
+      if (lastNewline < 0) return; // jeszcze ani jednej pelnej linii
+      const complete = text.slice(0, lastNewline);
+      this.costOffset += Buffer.byteLength(complete, 'utf8') + 1;
+      const add = sumUsageLines(complete);
+      this.totals.input += add.input;
+      this.totals.output += add.output;
+      this.totals.cacheRead += add.cacheRead;
+      this.totals.cacheWrite += add.cacheWrite;
+    } catch {
+      /* plik zniknal / brak dostepu - koszt po prostu sie nie zaktualizuje */
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
   }
 
   /**
@@ -335,8 +428,17 @@ class TranscriptWatcher {
     this.currentFile = file;
     this.lastMtime = mtime;
 
+    this.accumulate(file); // B4: dolicz nowe linie do sumy sesji
     const sample = readLatestSample(file);
-    if (sample) this.onMetrics(usageToMetrics(sample.usage, sample.model));
+    if (!sample) return;
+
+    const metrics = usageToMetrics(sample.usage, sample.model);
+    metrics.totals = { ...this.totals };
+    metrics.elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
+    // Koszt tylko dla modeli z cennika - nieznany backend nie dostaje zmyslonej kwoty.
+    const cost = estimateSessionCost(this.totals, sample.model);
+    if (cost) metrics.cost = cost;
+    this.onMetrics(metrics);
   }
 }
 
@@ -345,6 +447,7 @@ module.exports = {
   TranscriptWatcher,
   encodeProjectDir,
   usageToMetrics,
+  sumUsageLines,
   CONTEXT_LIMIT,
   TOOL_TILES,
 };
