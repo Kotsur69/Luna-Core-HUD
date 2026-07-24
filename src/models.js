@@ -39,6 +39,7 @@ const KNOWN_TIERS = [200000, 1000000];
  */
 const MODEL_WINDOWS = [
   { prefix: 'claude-haiku-4-5', limit: 200000 },
+  { prefix: 'claude-opus-5', limit: 1000000 },
   { prefix: 'claude-opus-4-8', limit: 1000000 },
   { prefix: 'claude-opus-4-7', limit: 1000000 },
   { prefix: 'claude-opus-4-6', limit: 1000000 },

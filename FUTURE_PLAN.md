@@ -22,6 +22,25 @@
 > table consulted *before* the default. The A3 net caught it (a B3 test asserting
 > `opus-4-8 → 200k` failed — the assertion was the bug, not the fix).
 >
+> ⚠️ **The same bug, second variant, found on first hand-launch (2026-07-24):**
+> the window table fixed above was still **missing `claude-opus-5` entirely**, so
+> Opus 5 fell through to the 200k default — the identical lying bar, from config
+> drift rather than wrong logic. `config/rates.json` was missing it too, which
+> (correctly, by design) meant *no* cost figure at all. Sonnet 5 was in both
+> tables and worked, which is what made the fault look model-specific. **Lesson:
+> a new model needs two entries, and fixture-based tests cannot see a stale
+> table** — `npm test` now asserts the shipped config covers every current model
+> (90 → 92 tests).
+>
+> ⚠️ **Colourless terminal (same launch):** Claude Code exports `NO_COLOR=1`, and
+> `stripClaudeSessionMarkers()` scrubbed only `CLAUDE*`. The nested `claude`
+> inherited it and rendered with no colour at all (white logo instead of orange).
+> Looked like a theming bug; it was not — xterm was receiving plain text, so no
+> theme could have fixed it. New `withColorSupport()` clears the colour-suppressing
+> vars and declares `xterm-256color` + `truecolor`; the PTY was also still asking
+> for 8-colour `xterm-color`. Applied *before* the profile merge so a profile that
+> deliberately sets `TERM`/`NO_COLOR` still wins.
+>
 > **Code comments are English from 2026-07-24 onward** (international project).
 > Translation of the older Polish comments is in progress, module by module.
 > The one hard rule that never changes:
@@ -425,7 +444,7 @@ feature set is stable and nothing is half-finished.
 |---|------|-----|-------|
 | A1 | **Split `renderer.js` into modules** | §6 | Mechanical, behaviour-preserving. One file per concern: `terminal`, `context`, `usage`, `ports`, `palette`, `appearance`, `boot`. Plain `<script>`s share one global scope — the i18n `t` collision proved that the hard way — so either wrap each in an IIFE **or** switch to `<script type="module">` and stop relying on globals. Prefer modules. |
 | A2 | **Widget contract** | §4 | `{ id, title, mount(el), unmount() }`. Convert existing blocks one at a time; the app keeps working after every single step. |
-| A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, 71 tests, ~0.4 s, no new deps. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that makes A1 safe — **do A1 next, while it's fresh.** |
+| A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, now 92 tests, ~0.4 s, no new deps. Includes two **data** tests asserting the shipped rate/window tables cover every current model — logic tests on fixtures cannot catch a stale table. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that makes A1 safe — **do A1 next, while it's fresh.** |
 | A4 | 🟡 **Kill the dead bits** | §6 | Half done: `CONTEXT_LIMIT` is no longer a magic number (now an alias of `models.DEFAULT_CONTEXT_LIMIT`). **Still open:** the dead `.panel__spacer` CSS rule. |
 | A5 | **Async skill scan** | §6 | `scanSkills()` still blocks main ~2.4 s; pre-warm only hides it. Worker thread or async fs walk. |
 

@@ -68,9 +68,12 @@ user's context window. It works only as:
 | Prefs (theme/language/boot) | `getThemes()`/`getUiPrefs()`/`setUiPrefs()` → IPC `themes:list` / `ui:get` / `ui:set` → reads `config/themes.json`, persists `config/ui.local.json`; renderer writes CSS tokens + xterm palette live |
 | Boot sequence | renderer-only overlay: CSS drives every pixel of motion, JS only stamps `animation-delay` on the log rows and removes the node. No IPC, no PTY, no tokens |
 
-The Context Window % divides live `usage` tokens by a `CONTEXT_LIMIT` constant
-(200k default, in [`src/observer.js`](src/observer.js) — raise it for 1M-context
-sessions).
+The Context Window % divides live `usage` tokens by the window
+[`src/models.js`](src/models.js) reports for the detected model — **not** a fixed
+constant. Current Claude models are 1M (Opus 5, Opus 4.8/4.7/4.6, Sonnet 5,
+Sonnet 4.6, Fable 5); Haiku 4.5 is the 200k exception. A model missing from that
+table falls back to 200k, so the bar reads far too high — see
+[Keeping the model tables current](#keeping-the-model-tables-current).
 
 Security: the renderer has **no** direct Node.js access. All IPC goes through a
 `contextBridge` preload (`contextIsolation: true`, `nodeIntegration: false`).
@@ -195,12 +198,37 @@ multi-model console (Claude / Kimi / local LM Studio) rather than a Claude-only 
 ### Tests
 
 ```bash
-npm test        # node --test — 90 tests, ~0.5s, no extra dependencies
+npm test        # node --test — 92 tests, ~0.5s, no extra dependencies
 ```
 
 Covers the side-effect-free modules only: context metrics, transcript-dir
 encoding, tool detection, profile/project validation, port parsing, skill
 categorisation, and model/context-window inference.
+
+Two of them are **data** tests rather than logic tests: they assert that the
+shipped `config/rates.json` and the `MODEL_WINDOWS` table actually know every
+current model. Logic can be green while the tables lag a model release — that is
+a real bug this project shipped (see below), and it is invisible to the fixture-based
+tests around it.
+
+### Keeping the model tables current
+
+A new Claude model needs **two** entries, or the HUD degrades quietly:
+
+| File | Missing entry causes |
+|---|---|
+| [`src/models.js`](src/models.js) → `MODEL_WINDOWS` | window falls back to 200k → context bar reads ~5× too high, and armed auto-compact fires far too early |
+| [`config/rates.json`](config/rates.json) | no rate → **no cost figure at all** (deliberate: a confident wrong number is worse than none) |
+
+This bit on 2026-07-24: `claude-opus-5` was in neither table, so Opus 5 tabs showed
+`200k` and no session cost while Sonnet 5 — which was in both — worked fine. The
+`npm test` data tests above now fail loudly instead.
+
+Prices and windows go stale, which is why they live in config, not code. Use
+`config/rates.local.json` (gitignored) for local overrides rather than editing the
+shipped table. Note the table carries **standard** list prices — introductory
+promotional pricing is deliberately not tracked, so an estimate can run high while
+a promo is active.
 
 ⚠️ **Passing tests do not mean the app boots.** Nothing here launches Electron,
 and `node --check` cannot catch the failure mode that has actually bricked this
@@ -230,7 +258,7 @@ keep running and keep their scrollback — only the active pane is rendered.
 
 | Metric | Scope | With N tabs |
 |--------|-------|-------------|
-| Context window (%, tokens, sparkline) | **per process** — each `claude` has its own 200k | N independent windows, one per tab |
+| Context window (%, tokens, sparkline) | **per process** — each `claude` has its own window (1M on current models) | N independent windows, one per tab |
 | 5-hour / weekly usage limits | **per account** — one shared quota | one number, drained N× faster |
 
 So the context bar follows the active tab, while the usage gauge stays a single
@@ -277,6 +305,17 @@ Drop a `config/profiles.local.json` (gitignored) to add or override profiles
 by `id` without touching the committed file — handy for machine-specific keys.
 Switching a profile kills the current session and starts a fresh one with the
 selected environment; no extra tokens are spent.
+
+### What LunaCore does to the spawned environment
+
+Three fixes are applied to the inherited env before `pty.spawn`, in this order —
+then your profile's `env` is merged on top, so a profile always wins:
+
+| Step | Why |
+|---|---|
+| `withColorSupport()` | drops `NO_COLOR` / `FORCE_COLOR=0` and sets `TERM=xterm-256color` + `COLORTERM=truecolor`. **Claude Code sets `NO_COLOR=1`**, so launching LunaCore from a Claude Code terminal otherwise produced a completely colourless HUD — a white Claude logo instead of orange. No theme can fix that: xterm receives plain text. |
+| `stripClaudeSessionMarkers()` | removes `CLAUDE_CODE*`, `CLAUDECODE`, `CLAUDE_PID` etc. A nested `claude` that sees them starts as a *child session* and **disables transcript writing** — which silently kills the context bar, sparkline, and cost HUD, since all three read the JSONL. |
+| `withClaudeOnPath()` | prepends `~/.local/bin` when `claude` lives there but is not on `PATH` (native-installer machines). |
 
 ## Localhost ports tracker
 

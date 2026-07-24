@@ -12,6 +12,9 @@ const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('../src/m
 test('contextLimitFor zna realne okna biezacych modeli (1M)', () => {
   // Poprawka 2026-07-24: te modele maja okno 1M, nie 200k. Poprzednia wersja
   // zwracala tu 200k, przez co pasek pokazywalby 100% przy okolo 20%.
+  // Opus 5 doszedl pozniej tego samego dnia - brak wpisu oznaczal spadek do
+  // domyslnych 200k, czyli dokladnie ten sam klamiacy pasek co wyzej.
+  assert.equal(contextLimitFor('claude-opus-5'), 1000000);
   assert.equal(contextLimitFor('claude-opus-4-8'), 1000000);
   assert.equal(contextLimitFor('claude-opus-4-7'), 1000000);
   assert.equal(contextLimitFor('claude-sonnet-5'), 1000000);
@@ -69,6 +72,7 @@ test('contextLimitFor zatrzymuje sie na najwiekszym znanym progu', () => {
 // ---- modelLabel -------------------------------------------------------------
 
 test('modelLabel skraca id modelu do rodziny i wersji', () => {
+  assert.equal(modelLabel('claude-opus-5'), 'Opus 5');
   assert.equal(modelLabel('claude-opus-4-8'), 'Opus 4.8');
   assert.equal(modelLabel('claude-sonnet-4-5-20250929'), 'Sonnet 4.5');
   assert.equal(modelLabel('claude-haiku-4-5-20251001'), 'Haiku 4.5');

@@ -237,6 +237,28 @@ function stripClaudeSessionMarkers(env) {
 }
 
 /**
+ * Gwarantuje kolory w sesji PTY.
+ *
+ * Powod: gdy LunaCore odpalono z terminala, ktory wylacza kolory (Claude Code
+ * ustawia NO_COLOR=1, zeby jego wlasny output byl czysty), zagniezdzony `claude`
+ * dziedziczy ta zmienna i renderuje sie CALKOWICIE BEZ KOLOROW - logo Claude
+ * wychodzi biale zamiast pomaranczowego. To nie jest usterka motywu: xterm dostaje
+ * czysty tekst, wiec zaden theme tego nie naprawi.
+ *
+ * Czyscimy wiec zmienne tlumiace kolor i deklarujemy terminal 256-kolorowy +
+ * truecolor. NIE nadpisujemy COLORTERM, jesli uzytkownik ustawil go swiadomie.
+ * @param {Record<string,string>} env
+ */
+function withColorSupport(env) {
+  delete env.NO_COLOR;
+  // FORCE_COLOR=0 to jawne "bez kolorow"; kazda inna wartosc zostawiamy.
+  if (env.FORCE_COLOR === '0') delete env.FORCE_COLOR;
+  env.TERM = 'xterm-256color';
+  if (!env.COLORTERM) env.COLORTERM = 'truecolor';
+  return env;
+}
+
+/**
  * Podpina PTY + TranscriptWatcher do istniejacego rekordu sesji. Wydzielone,
  * bo uzywa tego zarowno tworzenie zakladki, jak i restart pod nowym profilem
  * lub katalogiem - zawsze tak samo.
@@ -247,8 +269,14 @@ function spawnInto(session, profile) {
   // Nadpisania srodowiska z profilu (np. ANTHROPIC_BASE_URL dla LM Studio),
   // czyszczenie markerow sesji-rodzica (transkrypt!) + gwarancja, ze `claude`
   // z ~/.local/bin jest na PATH sesji.
+  // Kolejnosc ma znaczenie: kolory ustawiamy na ODZIEDZICZONYM env, a dopiero
+  // potem nakladamy profil - dzieki temu profil, ktory swiadomie ustawia TERM
+  // albo NO_COLOR, nadal wygrywa.
   const env = withClaudeOnPath(
-    stripClaudeSessionMarkers({ ...process.env, ...(profile.env || {}) }),
+    stripClaudeSessionMarkers({
+      ...withColorSupport({ ...process.env }),
+      ...(profile.env || {}),
+    }),
   );
 
   const cwd = safeCwd(session.cwd);
@@ -256,7 +284,7 @@ function spawnInto(session, profile) {
   session.profileId = profile.id;
 
   const proc = pty.spawn(DEFAULT_SHELL, [], {
-    name: 'xterm-color',
+    name: 'xterm-256color',
     cols: session.size.cols,
     rows: session.size.rows,
     cwd,

@@ -5,13 +5,45 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { rateFor, estimateCost, formatUsd, normalizeRate } = require('../src/rates');
+const { loadRates, rateFor, estimateCost, formatUsd, normalizeRate } = require('../src/rates');
+const { MODEL_WINDOWS } = require('../src/models');
 
 const RATES = [
   { id: 'claude-opus-4-8', input: 5, output: 25 },
   { id: 'claude-sonnet-5', input: 3, output: 15 },
   { id: 'claude-haiku-4-5', input: 1, output: 5 },
 ];
+
+// ---- pokrycie WYSYLANEGO configu -------------------------------------------
+// Powyzsze testy uzywaja atrapy RATES, wiec logika moze byc zielona, a mimo to
+// realny config/rates.json nie zna aktualnego modelu. Dokladnie to sie stalo:
+// Opus 5 nie mial wpisu ani w cenniku (brak kwoty w HUD), ani w MODEL_WINDOWS
+// (pasek spadal do 200k). To sa testy DANYCH, nie logiki - pilnuja, by tabele
+// nie zostawaly w tyle za rodzina modeli.
+
+const CURRENT_MODELS = [
+  'claude-opus-5',
+  'claude-opus-4-8',
+  'claude-sonnet-5',
+  'claude-haiku-4-5',
+  'claude-fable-5',
+];
+
+test('config/rates.json zna wszystkie biezace modele', () => {
+  const { rates } = loadRates();
+  for (const id of CURRENT_MODELS) {
+    assert.ok(rateFor(id, rates), `brak ceny dla ${id} - HUD nie pokaze kosztu`);
+  }
+});
+
+test('MODEL_WINDOWS zna wszystkie biezace modele', () => {
+  for (const id of CURRENT_MODELS) {
+    assert.ok(
+      MODEL_WINDOWS.some((row) => id.startsWith(row.prefix)),
+      `brak okna dla ${id} - pasek kontekstu spadnie do domyslnych 200k`,
+    );
+  }
+});
 
 // ---- normalizeRate ----------------------------------------------------------
 
