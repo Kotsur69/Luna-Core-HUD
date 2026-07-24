@@ -126,6 +126,7 @@ Luna-Core-HUD/
 │   ├── main.js            # main process: window + PTY + IPC channels
 │   ├── observer.js        # Passive Observer: tool detection + transcript tailing
 │   ├── models.js          # context-window size + pretty model label (pure, no I/O)
+│   ├── rates.js           # per-model price table → session cost estimate (pure + config read)
 │   ├── profiles.js        # load/validate launch profiles from config/
 │   ├── ports.js           # localhost port scanner (listen ports + PID→process)
 │   ├── cheatsheets.js     # load/validate action cheat-sheets from config/
@@ -148,6 +149,7 @@ Luna-Core-HUD/
 │   ├── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
 │   ├── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
 │   ├── themes.json        # visual themes (themes.local.json overrides, gitignored)
+│   ├── rates.json         # per-model token prices for the cost HUD (rates.local.json overrides)
 │   ├── ui.local.json      # persisted theme + language + boot + last profile (gitignored)
 │   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
 ├── test/                  # unit tests over the pure modules (`npm test`, node --test)
@@ -180,6 +182,7 @@ Luna-Core-HUD/
 | B1 | Persist active profile (relaunch into the last-used one) | ✅ done |
 | B2 | Context-limit auto-detect (200k vs 1M, self-correcting) | ✅ done |
 | B3 | Model badge — model + detected window, all 5 themes | ✅ done |
+| B4 | Session cost/time HUD — elapsed time + token→$ estimate | ✅ done |
 
 That closes the whole approved shortlist, plus the first slice of the structural
 plan. **Next up** (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8): split the
@@ -192,7 +195,7 @@ multi-model console (Claude / Kimi / local LM Studio) rather than a Claude-only 
 ### Tests
 
 ```bash
-npm test        # node --test — 71 tests, ~0.4s, no extra dependencies
+npm test        # node --test — 90 tests, ~0.5s, no extra dependencies
 ```
 
 Covers the side-effect-free modules only: context metrics, transcript-dir

@@ -1,13 +1,14 @@
 // ============================================================================
-// LunaCore - szacowanie kosztu sesji (B4)
+// LunaCore - session cost estimation (B4)
 // ----------------------------------------------------------------------------
-// Laduje cennik z config/rates.json (+ gitignorowany rates.local.json) i liczy
-// koszt z LICZNIKOW TOKENOW, ktore i tak juz czytamy z transkryptu. Zero sieci,
-// zero tokenow - to nadal Passive Observer, tylko z mnozeniem.
+// Loads a price table from config/rates.json (plus a gitignored
+// config/rates.local.json override) and computes cost from the TOKEN COUNTERS we
+// already read out of the transcript. No network, no tokens - still a Passive
+// Observer, just with multiplication.
 //
-// DLACZEGO CENNIK JEST W CONFIGU: ceny sie zmieniaja, a kod nie powinien klamac.
-// Nieznany model => BRAK szacunku (null), nigdy zgadywana liczba. Falszywa kwota
-// jest gorsza niz zadna, bo wyglada na prawdziwa.
+// WHY THE PRICE TABLE LIVES IN CONFIG: prices go stale, and code should not lie.
+// An unknown model yields NO estimate (null), never a guessed number. A wrong
+// amount is worse than none, because it looks authoritative.
 // ============================================================================
 
 'use strict';
@@ -19,13 +20,13 @@ const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const BASE_FILE = path.join(CONFIG_DIR, 'rates.json');
 const LOCAL_FILE = path.join(CONFIG_DIR, 'rates.local.json');
 
-const TOKENS_PER_UNIT = 1000000; // ceny sa "za milion tokenow"
+const TOKENS_PER_UNIT = 1000000; // prices are quoted "per million tokens"
 
-// Awaryjne mnozniki cache, gdy config ich nie poda.
+// Fallback cache multipliers used when the config does not supply them.
 const FALLBACK_CACHE_READ = 0.1;
 const FALLBACK_CACHE_WRITE = 1.25;
 
-/** Bezpieczny odczyt + parse JSON. Zwraca null przy braku/bledzie. */
+/** Safe read + JSON parse. Returns null when the file is missing or invalid. */
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -34,7 +35,7 @@ function readJson(file) {
   }
 }
 
-/** Waliduje pojedynczy wpis cennika. Zwraca obiekt lub null. */
+/** Validates a single price-table entry. Returns an object or null. */
 function normalizeRate(r) {
   if (!r || typeof r !== 'object') return null;
   if (typeof r.id !== 'string' || !r.id) return null;
@@ -44,7 +45,7 @@ function normalizeRate(r) {
 }
 
 /**
- * Laduje cennik: base scalony z local (local nadpisuje po id).
+ * Loads the price table: base merged with local (local overrides by id).
  * @returns {{rates: Array, cacheReadMultiplier: number, cacheWriteMultiplier: number}}
  */
 function loadRates() {
@@ -77,9 +78,10 @@ function loadRates() {
 }
 
 /**
- * Dobiera stawke do id modelu. Dopasowanie dokladne, a jak nie ma - najdluzszy
- * pasujacy prefiks (transkrypt bywa z sufiksem daty: "claude-opus-4-8-20260115").
- * Brak dopasowania => null (patrz naglowek: wolimy brak liczby niz zla liczbe).
+ * Finds the rate for a model id. Exact match first, then the longest matching
+ * prefix (transcripts sometimes carry a date suffix, e.g.
+ * "claude-opus-4-8-20260115"). No match returns null - see the header: we prefer
+ * no number over a wrong one.
  * @returns {{id:string,input:number,output:number}|null}
  */
 function rateFor(model, rates) {
@@ -98,7 +100,7 @@ function rateFor(model, rates) {
 }
 
 /**
- * Szacuje koszt z sumarycznych licznikow tokenow.
+ * Estimates cost from cumulative token counters.
  * @param {{input?:number,output?:number,cacheRead?:number,cacheWrite?:number}} totals
  * @param {{input:number,output:number}} rate
  * @param {{cacheReadMultiplier?:number,cacheWriteMultiplier?:number}} [mult]
@@ -114,14 +116,14 @@ function estimateCost(totals, rate, mult = {}) {
   const per = (tokens, price) => ((tokens || 0) / TOKENS_PER_UNIT) * price;
   const input = per(totals.input, rate.input);
   const output = per(totals.output, rate.output);
-  // Cache wycenia sie od stawki WEJSCIOWEJ, przemnozonej przez mnoznik.
+  // Cache is priced off the INPUT rate, scaled by its multiplier.
   const cacheRead = per(totals.cacheRead, rate.input * readMult);
   const cacheWrite = per(totals.cacheWrite, rate.input * writeMult);
 
   return { usd: input + output + cacheRead + cacheWrite, input, output, cacheRead, cacheWrite };
 }
 
-/** Formatuje kwote do kafelka: male kwoty potrzebuja wiecej miejsc po przecinku. */
+/** Formats a USD amount, widening precision for small numbers. */
 function formatUsd(usd) {
   if (typeof usd !== 'number' || !isFinite(usd) || usd < 0) return '';
   if (usd === 0) return '$0.00';

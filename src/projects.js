@@ -1,14 +1,16 @@
 // ============================================================================
-// LunaCore - Przelacznik projektu / katalogu roboczego
+// LunaCore - project / working-directory switcher
 // ----------------------------------------------------------------------------
-// Laduje liste katalogow roboczych z config/projects.json (+ opcjonalny override
-// z config/projects.local.json, gitignore). Kazdy wpis mowi, W JAKIM FOLDERZE
-// wystartowac sesje PTY. Przelaczenie projektu = restart sesji z nowym `cwd`.
+// Loads the list of working directories from config/projects.json (plus an
+// optional config/projects.local.json override, gitignored). Each entry says
+// WHICH FOLDER to start a PTY session in. Switching project = restart the
+// session with a new `cwd`.
 //
-// Sciezki moga zaczynac sie od "~" (rozwijane na katalog domowy) - dzieki temu
-// config jest PRZENOSNY miedzy maszynami (rozne litery dyskow / nazwy userow).
-// Walidacja na granicy: odrzucamy wpisy bez id/label/path. Istnienie katalogu
-// sprawdza dopiero main.js tuz przed spawnem (repo moze byc tylko na 1 maszynie).
+// Paths may start with "~" (expanded to the home directory), which is what makes
+// the config PORTABLE across machines (different drive letters / user names).
+// Validate at the boundary: entries without id/label/path are rejected. Whether
+// the directory actually exists is checked by main.js just before spawning -
+// a repo may only exist on one machine.
 // ============================================================================
 
 'use strict';
@@ -21,22 +23,23 @@ const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const BASE_FILE = path.join(CONFIG_DIR, 'projects.json');
 const LOCAL_FILE = path.join(CONFIG_DIR, 'projects.local.json');
 
-// Awaryjna lista, gdy brak/uszkodzony config - zawsze mamy dokad wystartowac.
+// Emergency list used when the config is missing or broken - we always have
+// somewhere to start.
 const FALLBACK = {
   activeProject: 'home',
   projects: [{ id: 'home', label: 'Home (~)', path: '~' }],
 };
 
-/** Bezpieczny odczyt + parse JSON. Zwraca null przy braku/bledzie. */
+/** Safe read + JSON parse. Returns null when the file is missing or invalid. */
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
-    return null; // plik nie istnieje lub niepoprawny JSON
+    return null; // file does not exist, or is not valid JSON
   }
 }
 
-/** Rozwija wiodace "~" na katalog domowy; zwraca znormalizowana sciezke. */
+/** Expands a leading "~" to the home directory; returns a normalized path. */
 function expandHome(p) {
   if (p === '~') return os.homedir();
   if (p.startsWith('~/') || p.startsWith('~\\')) {
@@ -45,7 +48,7 @@ function expandHome(p) {
   return p;
 }
 
-/** Waliduje i normalizuje pojedynczy wpis projektu. Zwraca obiekt lub null. */
+/** Validates and normalizes a single project entry. Returns an object or null. */
 function normalizeProject(p) {
   if (!p || typeof p !== 'object') return null;
   if (typeof p.id !== 'string' || !p.id) return null;
@@ -55,15 +58,16 @@ function normalizeProject(p) {
 }
 
 /**
- * Laduje projekty: base (projects.json) scalony z local (projects.local.json).
- * Local moze nadpisac activeProject oraz dodac/podmienic projekt po id.
+ * Loads projects: base (projects.json) merged with local (projects.local.json).
+ * Local may override activeProject and add or replace entries by id.
  * @returns {{projects: Array<{id:string,label:string,path:string}>, activeProject: string}}
  */
 function loadProjects() {
   const base = readJson(BASE_FILE) || FALLBACK;
   const local = readJson(LOCAL_FILE);
 
-  // Mapa po id, zeby local nadpisywal wpisy o tym samym id (zachowana kolejnosc).
+  // Keyed by id so local entries replace base entries with the same id
+  // (insertion order is preserved).
   const byId = new Map();
   const collect = (src) => {
     if (!src || !Array.isArray(src.projects)) return;
@@ -80,7 +84,7 @@ function loadProjects() {
     projects = [{ id: 'home', label: 'Home (~)', path: os.homedir() }];
   }
 
-  // activeProject: local > base > pierwszy dostepny.
+  // activeProject precedence: local > base > first available.
   let activeProject =
     (local && typeof local.activeProject === 'string' && local.activeProject) ||
     (typeof base.activeProject === 'string' && base.activeProject) ||
@@ -90,10 +94,10 @@ function loadProjects() {
   return { projects, activeProject };
 }
 
-/** Zwraca projekt po id (lub null). */
+/** Returns the project with the given id, or null. */
 function getProject(projects, id) {
   return projects.find((p) => p.id === id) || null;
 }
 
-// expandHome + normalizeProject sa czyste (bez I/O) - eksport na potrzeby testow.
+// expandHome + normalizeProject are pure (no I/O) - exported for the tests.
 module.exports = { loadProjects, getProject, normalizeProject, expandHome };

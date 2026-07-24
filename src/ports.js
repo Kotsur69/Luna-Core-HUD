@@ -1,13 +1,13 @@
 // ============================================================================
-// LunaCore - Tracker portow localhost (Faza 7B / backlog)
+// LunaCore - localhost port tracker (Phase 7B / backlog)
 // ----------------------------------------------------------------------------
-// Pasywny podglad nasluchujacych portow na maszynie (dev serwery itp.):
-//   * scanPorts()   - jednorazowy skan -> lista { port, procId, name }.
-//   * PortWatcher   - cykliczny skan z callbackiem (jak TranscriptWatcher).
-//   * killProcess() - ubija proces po PID (akcja na wyrazne zadanie usera).
+// Passive view of listening ports on this machine (dev servers etc.):
+//   * scanPorts()   - one-shot scan -> list of { port, procId, name }.
+//   * PortWatcher   - periodic scan with a callback (like TranscriptWatcher).
+//   * killProcess() - kills a process by PID (only on an explicit user action).
 //
-// W duchu Passive Observera: tylko czyta stan systemu (Get-NetTCPConnection /
-// lsof). Zero tokenow, nic nie idzie do modelu.
+// In the spirit of the Passive Observer: this only reads system state
+// (Get-NetTCPConnection / lsof). Zero tokens, nothing reaches the model.
 // ============================================================================
 
 'use strict';
@@ -16,10 +16,10 @@ const { execFile } = require('child_process');
 
 const IS_WINDOWS = process.platform === 'win32';
 
-// Adresy uznawane za "localhost / dostepne lokalnie".
+// Addresses treated as "localhost / locally reachable".
 const LOCAL_ADDRS = new Set(['127.0.0.1', '::1', '0.0.0.0', '::']);
 
-// PowerShell: nasluchujace porty TCP + nazwa procesu, jako JSON.
+// PowerShell: listening TCP ports plus the owning process name, as JSON.
 const PS_SCRIPT = `
 $ErrorActionPreference='SilentlyContinue'
 $c = Get-NetTCPConnection -State Listen
@@ -30,7 +30,7 @@ $out = foreach ($x in $c) {
 $out | ConvertTo-Json -Compress
 `;
 
-/** Uruchamia komende i zwraca stdout (Promise). Odrzuca cicho na blad. */
+/** Runs a command and resolves with stdout. Resolves empty on failure. */
 function run(cmd, args) {
   return new Promise((resolve) => {
     execFile(cmd, args, { windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
@@ -39,7 +39,7 @@ function run(cmd, args) {
   });
 }
 
-/** Parsuje wynik PowerShell (obiekt lub tablica) na znormalizowana liste. */
+/** Parses PowerShell output (object or array) into a normalized list. */
 function parseWindows(stdout) {
   if (!stdout.trim()) return [];
   let data;
@@ -48,7 +48,7 @@ function parseWindows(stdout) {
   } catch {
     return [];
   }
-  // ConvertTo-Json zwraca pojedynczy obiekt dla 1 elementu - ujednolic do tablicy.
+  // ConvertTo-Json emits a bare object for a single element - normalize to array.
   const rows = Array.isArray(data) ? data : [data];
   return dedupeByPort(
     rows
@@ -57,7 +57,7 @@ function parseWindows(stdout) {
   );
 }
 
-/** Parsuje `lsof` (macOS/Linux) na znormalizowana liste. */
+/** Parses `lsof` output (macOS/Linux) into a normalized list. */
 function parsePosix(stdout) {
   const rows = [];
   for (const line of stdout.split('\n')) {
@@ -66,7 +66,7 @@ function parsePosix(stdout) {
     if (parts.length < 9 || parts[0] === 'COMMAND') continue;
     const name = parts[0];
     const procId = parts[1] | 0;
-    const addr = parts[8]; // np. 127.0.0.1:3000 lub *:8080
+    const addr = parts[8]; // e.g. 127.0.0.1:3000 or *:8080
     const m = addr.match(/:(\d+)$/);
     if (!m) continue;
     rows.push({ port: m[1] | 0, procId, name });
@@ -74,7 +74,7 @@ function parsePosix(stdout) {
   return dedupeByPort(rows);
 }
 
-/** Usuwa duplikaty portow (ten sam port na kilku interfejsach) i sortuje. */
+/** Drops duplicate ports (same port on several interfaces) and sorts. */
 function dedupeByPort(rows) {
   const byPort = new Map();
   for (const r of rows) {
@@ -83,18 +83,18 @@ function dedupeByPort(rows) {
   return [...byPort.values()].sort((a, b) => a.port - b.port);
 }
 
-/** Jednorazowy skan nasluchujacych portow localhost. */
+/** One-shot scan of listening localhost ports. */
 async function scanPorts() {
   if (IS_WINDOWS) {
     const out = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PS_SCRIPT]);
     return parseWindows(out);
   }
-  // macOS / Linux: lsof nasluchujacych gniazd TCP.
+  // macOS / Linux: lsof over listening TCP sockets.
   const out = await run('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN']);
   return parsePosix(out);
 }
 
-/** Ubija proces po PID. Zwraca Promise<boolean> (czy sie udalo). */
+/** Kills a process by PID. Resolves to whether it worked. */
 function killProcess(pid) {
   const id = Number(pid);
   if (!Number.isInteger(id) || id <= 0) return Promise.resolve(false);
@@ -115,8 +115,8 @@ function killProcess(pid) {
 }
 
 /**
- * Cyklicznie skanuje porty i emituje liste, gdy sie zmieni.
- * Emisja tylko przy realnej zmianie (mniej ruchu w IPC/DOM).
+ * Periodically scans ports and emits the list whenever it changes.
+ * Emitting only on a real change keeps IPC and DOM churn down.
  */
 class PortWatcher {
   /** @param {(ports: Array<{port:number,procId:number,name:string}>) => void} onUpdate */
@@ -131,7 +131,7 @@ class PortWatcher {
   start() {
     if (this.timer) return;
     this.timer = setInterval(() => this.tick(), this.intervalMs);
-    this.tick(); // pierwszy skan od razu
+    this.tick(); // first scan immediately
   }
 
   stop() {
@@ -140,7 +140,7 @@ class PortWatcher {
   }
 
   async tick() {
-    if (this.busy) return; // nie nakladaj skanow, jesli poprzedni trwa
+    if (this.busy) return; // do not overlap scans if the previous one is running
     this.busy = true;
     try {
       const ports = await scanPorts();
@@ -154,13 +154,13 @@ class PortWatcher {
     }
   }
 
-  /** Wymusza natychmiastowy skan (np. po zabiciu procesu). */
+  /** Forces an immediate scan (e.g. right after killing a process). */
   refresh() {
-    this.lastJson = ''; // wymus emisje przy nastepnym skanie
+    this.lastJson = ''; // force an emit on the next scan
     this.tick();
   }
 }
 
-// Parsery sa czyste (string -> lista) - eksport na potrzeby testow. Sam skan
-// (scanPorts) odpala procesy systemowe, wiec testujemy wylacznie parsowanie.
+// The parsers are pure (string -> list) - exported for the tests. The scan
+// itself spawns system processes, so only the parsing is unit-tested.
 module.exports = { scanPorts, killProcess, PortWatcher, parseWindows, parsePosix, dedupeByPort };

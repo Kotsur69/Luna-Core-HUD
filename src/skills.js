@@ -1,11 +1,16 @@
 // ============================================================================
-// LunaCore - Sciagawka skilli wg kategorii (7A)
+// LunaCore - skill cheat-sheet by category (7A)
 // ----------------------------------------------------------------------------
-// Auto-skan katalogow skilli Claude Code: znajduje pliki SKILL.md, czyta z
-// frontmatter `name` i `description`, i grupuje skille heurystycznie w kategorie
-// (FRONTEND / BACKEND / DevOps / Testy / Data-ML / Security / Git / Docs / Inne).
+// Auto-scans the Claude Code skill directories: finds SKILL.md files, reads
+// `name` and `description` out of the frontmatter, and groups skills
+// heuristically into categories (Frontend / Backend / DevOps / Testy / Data-ML /
+// Security / Git / Docs / Inne).
 //
-// Read-only, czysto lokalne - zero tokenow. Wynik cache'owany po pierwszym skanie.
+// Read-only and purely local - zero tokens. The result is cached after the
+// first scan.
+//
+// NOTE: the category names below are user-visible labels in the HUD, not
+// comments - they stay in Polish until the UI itself is translated.
 // ============================================================================
 
 'use strict';
@@ -14,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// Katalogi, w ktorych szukamy SKILL.md (rekursywnie, z limitem glebokosci).
+// Roots to search for SKILL.md (recursively, with a depth limit).
 const SCAN_ROOTS = [
   path.join(os.homedir(), '.claude', 'skills'),
   path.join(os.homedir(), '.claude', 'plugins'),
@@ -22,8 +27,8 @@ const SCAN_ROOTS = [
 const MAX_DEPTH = 7;
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out']);
 
-// Kategorie w kolejnosci dopasowania (pierwsze trafienie wygrywa). Slowa-klucze
-// szukane w nazwie + opisie + sciezce skilla (lowercase).
+// Categories in match order (first hit wins). Keywords are searched in the
+// skill's name + description + file path (lowercased).
 const CATEGORIES = [
   { name: 'Frontend', keys: ['frontend', 'react', 'vue', 'svelte', 'css', 'tailwind', 'ui', 'ux', 'component', 'landing', 'motion', 'animation', 'design'] },
   { name: 'Backend', keys: ['backend', 'api', 'server', 'endpoint', 'fastapi', 'django', 'express', 'rest', 'graphql', 'microservice'] },
@@ -37,14 +42,14 @@ const CATEGORIES = [
 ];
 const FALLBACK_CATEGORY = 'Inne';
 
-/** Rekursywnie zbiera sciezki plikow SKILL.md w danym korzeniu. */
+/** Recursively collects SKILL.md paths under a root. */
 function findSkillFiles(root, depth, acc) {
   if (depth > MAX_DEPTH) return;
   let entries;
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
   } catch {
-    return; // katalog nie istnieje / brak dostepu
+    return; // directory missing / not readable
   }
   for (const e of entries) {
     if (e.isDirectory()) {
@@ -56,17 +61,17 @@ function findSkillFiles(root, depth, acc) {
   }
 }
 
-/** Wyciaga name + description z frontmatter SKILL.md. */
+/** Extracts name + description from a SKILL.md frontmatter block. */
 function parseSkill(file) {
   let text;
   try {
-    text = fs.readFileSync(file, 'utf8').slice(0, 4096); // frontmatter jest na gorze
+    text = fs.readFileSync(file, 'utf8').slice(0, 4096); // frontmatter is at the top
   } catch {
     return null;
   }
   const nameM = text.match(/^name:\s*(.+?)\s*$/m);
   const descM = text.match(/^description:\s*(.+?)\s*$/m);
-  // Nazwa z frontmatter, a jak brak - z nazwy katalogu skilla.
+  // Name from the frontmatter, falling back to the skill's directory name.
   const name = (nameM && stripQuotes(nameM[1])) || path.basename(path.dirname(file));
   const description = descM ? stripQuotes(descM[1]) : '';
   return { name, description, file };
@@ -76,7 +81,7 @@ function stripQuotes(s) {
   return s.replace(/^["']|["']$/g, '').trim();
 }
 
-/** Dobiera kategorie po slowach-kluczach (name + description + sciezka). */
+/** Picks a category by keyword match (name + description + path). */
 function categorize(skill) {
   const hay = ` ${skill.name} ${skill.description} ${skill.file} `.toLowerCase();
   for (const cat of CATEGORIES) {
@@ -86,14 +91,14 @@ function categorize(skill) {
 }
 
 /**
- * Skanuje katalogi skilli i zwraca skille pogrupowane w kategorie.
+ * Scans the skill directories and returns skills grouped into categories.
  * @returns {{categories: Array<{name:string, skills:Array}>, total:number}}
  */
 function scanSkills() {
   const files = [];
   for (const root of SCAN_ROOTS) findSkillFiles(root, 0, files);
 
-  // Parsuj + deduplikuj po nazwie (ta sama skill moze byc w kilku miejscach).
+  // Parse + dedupe by name (the same skill can live in several places).
   const byName = new Map();
   for (const file of files) {
     const skill = parseSkill(file);
@@ -102,7 +107,7 @@ function scanSkills() {
     }
   }
 
-  // Grupuj w kategorie (zachowana kolejnosc CATEGORIES + Inne na koncu).
+  // Group into categories (CATEGORIES order preserved, fallback last).
   const groups = new Map();
   for (const cat of CATEGORIES) groups.set(cat.name, []);
   groups.set(FALLBACK_CATEGORY, []);
@@ -120,14 +125,14 @@ function scanSkills() {
   return { categories, total: byName.size };
 }
 
-// Cache - skan robimy raz (katalogi skilli nie zmieniaja sie w trakcie sesji).
+// Cache - we scan once (skill directories do not change mid-session).
 let cache = null;
 
-/** Zwraca (i cache'uje) wynik skanu. */
+/** Returns (and caches) the scan result. */
 function loadSkills() {
   if (!cache) cache = scanSkills();
   return cache;
 }
 
-// categorize jest czysta (obiekt -> nazwa kategorii) - eksport na potrzeby testow.
+// categorize is pure (object -> category name) - exported for the tests.
 module.exports = { loadSkills, scanSkills, categorize };

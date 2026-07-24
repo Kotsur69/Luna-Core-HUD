@@ -1,11 +1,13 @@
 // ============================================================================
-// LunaCore - Preferencje UI (motyw + jezyk + sekwencja startowa)
+// LunaCore - UI preferences (theme + language + boot sequence + last profile)
 // ----------------------------------------------------------------------------
-// Trwaly, drobny stan interfejsu w config/ui.local.json (gitignore) - jak
-// brudnopis, zwykly plik zamiast localStorage. Trzyma { theme, lang, boot }.
-// Renderer czyta na starcie (ui:get) i zapisuje przy zmianie (ui:set).
+// Small persistent slice of interface state in config/ui.local.json (gitignored)
+// - like the scratchpad, a plain file rather than localStorage. Holds
+// { theme, lang, boot, profile }. The renderer reads it at startup (ui:get) and
+// writes on change (ui:set).
 //
-// Walidacja na granicy: nieznany jezyk => domyslny 'pl'; brak pliku => DEFAULTS.
+// Validate at the boundary: an unknown language falls back to 'pl'; a missing
+// file falls back to DEFAULTS.
 // ============================================================================
 
 'use strict';
@@ -17,20 +19,21 @@ const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const FILE = path.join(CONFIG_DIR, 'ui.local.json');
 
 const LANGS = ['pl', 'en'];
-// profile: id ostatnio uzytego profilu (B1). null = brak wyboru, wtedy decyduje
-// activeProfile z config/profiles.json - jak przed ta zmiana.
+// profile: id of the last used launch profile (B1). null = no choice recorded,
+// in which case activeProfile from config/profiles.json decides, as before.
 const DEFAULTS = { theme: 'cyberpunk', lang: 'pl', boot: true, profile: null };
 
-/** Czyta preferencje UI; brak/uszkodzony plik => DEFAULTS. */
+/** Reads UI preferences; a missing or corrupt file falls back to DEFAULTS. */
 function readUiPrefs() {
   try {
     const obj = JSON.parse(fs.readFileSync(FILE, 'utf8'));
     return {
       theme: typeof obj.theme === 'string' && obj.theme ? obj.theme : DEFAULTS.theme,
       lang: LANGS.includes(obj.lang) ? obj.lang : DEFAULTS.lang,
-      // Brak klucza => wlaczona (plik prefs zapisany przed ta opcja).
+      // Missing key => enabled (prefs file written before this option existed).
       boot: typeof obj.boot === 'boolean' ? obj.boot : DEFAULTS.boot,
-      // Nieznany profil odsiewa dopiero main.js (getProfile) - tu tylko typ.
+      // An unknown profile id is filtered out later by main.js (getProfile);
+      // here we only check the type.
       profile: typeof obj.profile === 'string' && obj.profile ? obj.profile : DEFAULTS.profile,
     };
   } catch {
@@ -39,8 +42,9 @@ function readUiPrefs() {
 }
 
 /**
- * Scala i zapisuje preferencje. Przyjmuje czesciowy obiekt { theme?, lang?, boot? }.
- * @returns {{theme:string,lang:string,boot:boolean}|null} nowy stan lub null przy bledzie zapisu
+ * Merges and writes preferences. Accepts a partial { theme?, lang?, boot?, profile? }.
+ * @returns {{theme:string,lang:string,boot:boolean,profile:string|null}|null} the new
+ *   state, or null if the write failed
  */
 function writeUiPrefs(partial) {
   try {

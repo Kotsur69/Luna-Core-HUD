@@ -7,12 +7,23 @@
 > sequence**. That closes the entire §5.5 shortlist — everything below is now
 > *future* work, and §8 is the live plan. Order is a suggestion, not a contract.
 >
-> **Update 2026-07-24:** **A3** (test harness — 71 unit tests over the pure
-> modules, `npm test`, zero new deps), **B1** (persist active profile), **B2**
-> (context-limit auto-detect) and **B3** (model badge) are done. Phase A is now
-> 1½ of 5; Phase B is 3 of 7. The remaining structural work — **A1 (split
-> `renderer.js`) and A2 (widget contract)** — is still the gate in front of all
-> of Phase C. **None of it has been hand-launched yet.**
+> **Update 2026-07-24:** **A3** (test harness — now 90 unit tests, `npm test`,
+> zero new deps), **B1** (persist active profile), **B2** (context-limit
+> auto-detect), **B3** (model badge) and **B4** (session cost/time HUD) are done.
+> Phase A is 1½ of 5; Phase B is 4 of 7. The remaining structural work — **A1
+> (split `renderer.js`) and A2 (widget contract)** — is still the gate in front
+> of all of Phase C. **None of it has been hand-launched yet.**
+>
+> ⚠️ **Bug found and fixed the same day (commit `cba1d4b`):** B2 originally
+> defaulted *every* Claude model to a 200k context window. Wrong — the current
+> family is **1M** (Opus 4.8/4.7/4.6, Sonnet 5/4.6, Fable 5); only Haiku 4.5 is
+> 200k. The bar would have read 100% at roughly 20%, and armed auto-compact
+> would have fired far too early. `models.js` now carries a per-model window
+> table consulted *before* the default. The A3 net caught it (a B3 test asserting
+> `opus-4-8 → 200k` failed — the assertion was the bug, not the fix).
+>
+> **Code comments are English from 2026-07-24 onward** (international project).
+> Translation of the older Polish comments is in progress, module by module.
 > The one hard rule that never changes:
 >
 > ⚠️ **ZERO EXTRA TOKENS.** Every idea here must stay a **Passive Observer**
@@ -428,7 +439,7 @@ Phase A is done — or before it, if you want a break from refactoring.
 | B1 | ✅ **Persist active profile** | **DONE 2026-07-24.** `ui.local.json` `profile` key; unknown id falls back silently to config. |
 | B2 | ✅ **Context-limit auto-detect** | **DONE 2026-07-24** — see §5.1 for the correction: the model id alone is *not* a sufficient signal, so `src/models.js` also promotes the window when observed tokens exceed it. Kills the "bar lies on 1M sessions" bug. |
 | B3 | ✅ **Model badge** | **DONE 2026-07-24.** Pill showing model + detected window (`Opus 4.8 · 200k`), theme-token-only, hidden until a model is known. Same parse as B2 — two payoffs, as predicted. |
-| B4 | **Session cost/time HUD** | Elapsed time + token→$ estimate from a per-model rate table in config. Pure read. |
+| B4 | ✅ **Session cost/time HUD** | **DONE 2026-07-24.** `config/rates.json` (+ gitignored local override) + pure `src/rates.js`. Observer accumulates cumulative session usage incrementally (reads only bytes appended since the last tick). Renderer shows `12m 4s · ~$0.83`. **An unknown model gets no estimate at all** — a confident wrong number is worse than none. |
 | B5 | **Port filter toggle** | Hide system noise (svchost/System) — a *toggle*, never a permanent silent filter. |
 | B6 | **Copy-transcript-path button** | One click to copy the `.jsonl` path. |
 | B7 | **Skill search box** | Filter the ~339-skill list as you type. The list is already in memory. |

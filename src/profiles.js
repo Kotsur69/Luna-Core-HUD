@@ -1,13 +1,13 @@
 // ============================================================================
-// LunaCore - Profile uruchomieniowe (Faza 4)
+// LunaCore - launch profiles (Phase 4)
 // ----------------------------------------------------------------------------
-// Laduje definicje profili z config/profiles.json (+ opcjonalny override z
-// config/profiles.local.json, gitignore). Kazdy profil opisuje JAK wystartowac
-// sesje: komenda do wpisania w powloce (np. "claude") oraz nadpisania srodowiska
-// (np. ANTHROPIC_BASE_URL dla lokalnego endpointu LM Studio).
+// Loads profile definitions from config/profiles.json (plus an optional
+// config/profiles.local.json override, gitignored). A profile describes HOW to
+// start a session: the command to type into the shell (e.g. "claude") and any
+// environment overrides (e.g. ANTHROPIC_BASE_URL for a local LM Studio endpoint).
 //
-// Walidacja na granicy: odrzucamy profile bez id/label/command. Gdy config jest
-// pusty lub uszkodzony - wracamy do wbudowanego profilu domyslnego.
+// Validate at the boundary: profiles without id/label/command are rejected. If
+// the config is empty or corrupt we fall back to the built-in default profile.
 // ============================================================================
 
 'use strict';
@@ -19,7 +19,8 @@ const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const BASE_FILE = path.join(CONFIG_DIR, 'profiles.json');
 const LOCAL_FILE = path.join(CONFIG_DIR, 'profiles.local.json');
 
-// Awaryjny profil, gdy brak/uszkodzony config - zawsze cos dziala.
+// Emergency profile used when the config is missing or broken - something
+// always works.
 const FALLBACK = {
   activeProfile: 'claude-cloud',
   profiles: [
@@ -27,21 +28,21 @@ const FALLBACK = {
   ],
 };
 
-/** Bezpieczny odczyt + parse JSON. Zwraca null przy braku/bledzie. */
+/** Safe read + JSON parse. Returns null when the file is missing or invalid. */
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
-    return null; // plik nie istnieje lub niepoprawny JSON
+    return null; // file does not exist, or is not valid JSON
   }
 }
 
-/** Waliduje i normalizuje pojedynczy profil. Zwraca obiekt lub null. */
+/** Validates and normalizes a single profile. Returns an object or null. */
 function normalizeProfile(p) {
   if (!p || typeof p !== 'object') return null;
   if (typeof p.id !== 'string' || !p.id) return null;
   if (typeof p.label !== 'string' || !p.label) return null;
-  // command moze byc pusty ("" = sama powloka), ale musi byc stringiem.
+  // command may be empty ("" = bare shell, no auto-start) but must be a string.
   const command = typeof p.command === 'string' ? p.command : '';
   const args = Array.isArray(p.args) ? p.args.filter((a) => typeof a === 'string') : [];
   const env =
@@ -54,15 +55,15 @@ function normalizeProfile(p) {
 }
 
 /**
- * Laduje profile: base (profiles.json) scalone z local (profiles.local.json).
- * Local moze nadpisac activeProfile oraz dodac/podmienic profile po id.
+ * Loads profiles: base (profiles.json) merged with local (profiles.local.json).
+ * Local may override activeProfile and add or replace profiles by id.
  * @returns {{profiles: Array, activeProfile: string}}
  */
 function loadProfiles() {
   const base = readJson(BASE_FILE) || FALLBACK;
   const local = readJson(LOCAL_FILE);
 
-  // Mapa po id, zeby local nadpisywal profile o tym samym id.
+  // Keyed by id so local entries replace base entries with the same id.
   const byId = new Map();
   const collect = (src) => {
     if (!src || !Array.isArray(src.profiles)) return;
@@ -77,21 +78,21 @@ function loadProfiles() {
   let profiles = [...byId.values()];
   if (profiles.length === 0) profiles = [...FALLBACK.profiles];
 
-  // activeProfile: local > base > pierwszy dostepny.
+  // activeProfile precedence: local > base > first available.
   let activeProfile =
     (local && typeof local.activeProfile === 'string' && local.activeProfile) ||
     (typeof base.activeProfile === 'string' && base.activeProfile) ||
     profiles[0].id;
-  // Upewnij sie, ze wskazany aktywny profil istnieje.
+  // Make sure the named active profile actually exists.
   if (!byId.has(activeProfile)) activeProfile = profiles[0].id;
 
   return { profiles, activeProfile };
 }
 
-/** Zwraca profil po id (lub null). */
+/** Returns the profile with the given id, or null. */
 function getProfile(profiles, id) {
   return profiles.find((p) => p.id === id) || null;
 }
 
-// normalizeProfile jest czysta (bez I/O) - eksportujemy ja na potrzeby testow.
+// normalizeProfile is pure (no I/O) - exported so the tests can reach it.
 module.exports = { loadProfiles, getProfile, normalizeProfile };
