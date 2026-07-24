@@ -403,6 +403,7 @@ const ctxFill = document.getElementById('ctx-fill');
 const ctxPercent = document.getElementById('ctx-percent');
 const ctxWarn = document.getElementById('ctx-warn');
 const ctxTokens = document.getElementById('ctx-tokens');
+const ctxModel = document.getElementById('ctx-model');
 
 // Progi kolorow paska: < 60% zielony, 60-85% zolty, > 85% czerwony + alarm.
 const CTX_WARN_HIGH = 0.85;
@@ -423,8 +424,38 @@ function applyCtxMetrics(metrics, live = true) {
   ctxFill.classList.toggle('is-high', pct >= CTX_WARN_HIGH);
 
   ctxPercent.textContent = `${Math.round(pct * 100)}%`;
+  renderModelBadge(metrics);
   renderCtxText();
   if (live) maybeAutoCompact(pct);
+}
+
+/** Formatuje okno kontekstu do postaci "200k" / "1M". */
+function formatLimit(limit) {
+  if (!limit || typeof limit !== 'number') return '';
+  return limit >= 1000000 ? `${limit / 1000000}M` : `${Math.round(limit / 1000)}k`;
+}
+
+/**
+ * Plakietka modelu (B3) wraz z wykrytym oknem kontekstu (B2).
+ * Okno pokazujemy CELOWO: skoro limit nie jest juz stala, to bez tego napisu
+ * awans 200k -> 1M byloby niewidoczny i nie do zweryfikowania okiem.
+ * Brak modelu (swieza sesja, lokalny backend bez pola model) => chowamy
+ * plakietke zamiast pokazywac pusty dymek.
+ */
+function renderModelBadge(metrics) {
+  if (!ctxModel) return;
+  const label = (metrics && metrics.modelLabel) || '';
+  if (!label) {
+    ctxModel.hidden = true;
+    ctxModel.textContent = '';
+    ctxModel.removeAttribute('title');
+    return;
+  }
+  const limit = formatLimit(metrics.limit);
+  ctxModel.textContent = limit ? `${label} · ${limit}` : label;
+  // Pelne id modelu w dymku - etykieta jest skrocona, oryginal bywa potrzebny.
+  ctxModel.title = metrics.model || label;
+  ctxModel.hidden = false;
 }
 
 /** Czysci pasek, gdy zakladka nie ma jeszcze zadnych metryk. */
@@ -435,6 +466,7 @@ function resetCtxUI() {
   ctxPercent.textContent = '0%';
   ctxWarn.textContent = '';
   ctxTokens.textContent = '';
+  renderModelBadge(null);
 }
 
 onActiveContext((metrics) => applyCtxMetrics(metrics, true));

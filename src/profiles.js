@@ -93,4 +93,5 @@ function getProfile(profiles, id) {
   return profiles.find((p) => p.id === id) || null;
 }
 
-module.exports = { loadProfiles, getProfile };
+// normalizeProfile jest czysta (bez I/O) - eksportujemy ja na potrzeby testow.
+module.exports = { loadProfiles, getProfile, normalizeProfile };

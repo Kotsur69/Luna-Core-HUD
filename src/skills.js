@@ -129,4 +129,5 @@ function loadSkills() {
   return cache;
 }
 
-module.exports = { loadSkills, scanSkills };
+// categorize jest czysta (obiekt -> nazwa kategorii) - eksport na potrzeby testow.
+module.exports = { loadSkills, scanSkills, categorize };

@@ -161,4 +161,6 @@ class PortWatcher {
   }
 }
 
-module.exports = { scanPorts, killProcess, PortWatcher };
+// Parsery sa czyste (string -> lista) - eksport na potrzeby testow. Sam skan
+// (scanPorts) odpala procesy systemowe, wiec testujemy wylacznie parsowanie.
+module.exports = { scanPorts, killProcess, PortWatcher, parseWindows, parsePosix, dedupeByPort };

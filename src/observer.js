@@ -15,6 +15,8 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+// Wiedza o modelach: realne okno kontekstu + krotka etykieta do kafelka.
+const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('./models');
 
 // ---- 1. Detekcja narzedzi ze stdout ----------------------------------------
 
@@ -68,9 +70,10 @@ function detectTools(raw) {
 
 // ---- 2. Tailowanie transcript JSONL (realne tokeny) ------------------------
 
-// Limit okna kontekstu modelu. 200k = domyslne dla Claude (Opus/Sonnet).
-// Zmien, jesli uzywasz wariantu 1M-context.
-const CONTEXT_LIMIT = 200000;
+// Domyslne okno kontekstu. NIE jest juz twarda stala uzywana do liczenia -
+// realny limit wyznacza models.contextLimitFor() na podstawie modelu z
+// transkryptu i obserwowanego zuzycia. Zostaje jako wartosc domyslna/eksport.
+const CONTEXT_LIMIT = DEFAULT_CONTEXT_LIMIT;
 
 // Katalog, w ktorym Claude Code trzyma transcripty sesji (per-projekt).
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
@@ -163,8 +166,12 @@ function findNewestTranscript() {
   return newest;
 }
 
-/** Czyta koncowke pliku i zwraca ostatni obiekt usage (lub null). */
-function readLatestUsage(file) {
+/**
+ * Czyta koncowke pliku i zwraca ostatnia probke: { usage, model } (lub null).
+ * Model bierzemy z tej samej linii co usage - jedno parsowanie, dwa pozytki:
+ * realne okno kontekstu (B2) i plakietka modelu (B3).
+ */
+function readLatestSample(file) {
   let fd;
   try {
     fd = fs.openSync(file, 'r');
@@ -182,8 +189,11 @@ function readLatestUsage(file) {
       if (!line || !line.includes('"usage"')) continue;
       try {
         const obj = JSON.parse(line);
-        const usage = obj && obj.message && obj.message.usage;
-        if (usage && typeof usage.input_tokens === 'number') return usage;
+        const message = obj && obj.message;
+        const usage = message && message.usage;
+        if (usage && typeof usage.input_tokens === 'number') {
+          return { usage, model: typeof message.model === 'string' ? message.model : '' };
+        }
       } catch {
         /* niepelna/uszkodzona linia (np. urwany zapis) - probuj dalej */
       }
@@ -196,14 +206,20 @@ function readLatestUsage(file) {
   return null;
 }
 
-/** Zamienia obiekt usage na metryki context window. */
-function usageToMetrics(usage) {
+/**
+ * Zamienia obiekt usage na metryki context window.
+ * @param {object} usage pole `usage` z transkryptu
+ * @param {string} [model] id modelu z tej samej linii - wyznacza realne okno
+ */
+function usageToMetrics(usage, model = '') {
   const tokens =
     (usage.input_tokens || 0) +
     (usage.cache_read_input_tokens || 0) +
     (usage.cache_creation_input_tokens || 0);
-  const percent = Math.min(1, tokens / CONTEXT_LIMIT);
-  return { tokens, limit: CONTEXT_LIMIT, percent };
+  // Okno liczone z modelu I z obserwacji - patrz komentarz w models.js.
+  const limit = contextLimitFor(model, tokens);
+  const percent = Math.min(1, tokens / limit);
+  return { tokens, limit, percent, model: String(model || ''), modelLabel: modelLabel(model) };
 }
 
 /**
@@ -319,8 +335,8 @@ class TranscriptWatcher {
     this.currentFile = file;
     this.lastMtime = mtime;
 
-    const usage = readLatestUsage(file);
-    if (usage) this.onMetrics(usageToMetrics(usage));
+    const sample = readLatestSample(file);
+    if (sample) this.onMetrics(usageToMetrics(sample.usage, sample.model));
   }
 }
 

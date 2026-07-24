@@ -402,6 +402,29 @@ html, body {
 @keyframes ctx-alarm { 50% { filter: brightness(1.4); } }
 
 .ctx-meta { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+/* Lewa grupa: procent + plakietka modelu. Dzieki niej ctx-meta nadal ma DWOJE
+   dzieci, wiec space-between zachowuje sie jak przed dodaniem plakietki. */
+.ctx-meta__left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+/* Plakietka modelu (B3). Wylacznie tokeny motywu - inaczej 4 z 5 motywow by sie
+   rozjechaly. Kolor --text (nie --text-dim) trzyma kontrast; znaczenie niesie
+   TEKST, nie barwa, wiec plakietka nic nie traci przy daltonizmie ani w trybie
+   ograniczonego ruchu (nie animuje sie wcale). */
+.badge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--bg-panel-2);
+  color: var(--text);
+  font-size: 10.5px;
+  line-height: 1.4;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+/* Dziecko flexa ignoruje domyslne [hidden] - trzeba wymusic. */
+.badge[hidden] { display: none; }
 #ctx-percent { font-weight: 700; }
 .ctx-warn { color: var(--bad); font-size: 11px; font-weight: 600; }
 

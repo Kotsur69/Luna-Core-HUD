@@ -149,7 +149,11 @@
           <div id="ctx-fill" class="ctx-bar__fill" style="--ctx: 0"></div>
         </div>
         <div class="ctx-meta">
-          <span id="ctx-percent">--%</span>
+          <span class="ctx-meta__left">
+            <span id="ctx-percent">--%</span>
+            <!-- B3: plakietka modelu + realne okno (B2). Ukryta, dopoki nie znamy modelu. -->
+            <span id="ctx-model" class="badge" hidden></span>
+          </span>
           <span id="ctx-warn" class="ctx-warn"></span>
         </div>
         <p id="ctx-tokens" class="hint" data-i18n="ctx.waiting">Oczekiwanie na transcript sesji...</p>

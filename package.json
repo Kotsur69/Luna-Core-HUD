@@ -6,7 +6,8 @@
   "author": "Mateusz Mazur",
   "license": "MIT",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test": "node --test"
   },
   "dependencies": {
     "@lydell/node-pty": "1.2.0-beta.12",

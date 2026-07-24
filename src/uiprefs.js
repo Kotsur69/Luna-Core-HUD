@@ -17,7 +17,9 @@ const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const FILE = path.join(CONFIG_DIR, 'ui.local.json');
 
 const LANGS = ['pl', 'en'];
-const DEFAULTS = { theme: 'cyberpunk', lang: 'pl', boot: true };
+// profile: id ostatnio uzytego profilu (B1). null = brak wyboru, wtedy decyduje
+// activeProfile z config/profiles.json - jak przed ta zmiana.
+const DEFAULTS = { theme: 'cyberpunk', lang: 'pl', boot: true, profile: null };
 
 /** Czyta preferencje UI; brak/uszkodzony plik => DEFAULTS. */
 function readUiPrefs() {
@@ -28,6 +30,8 @@ function readUiPrefs() {
       lang: LANGS.includes(obj.lang) ? obj.lang : DEFAULTS.lang,
       // Brak klucza => wlaczona (plik prefs zapisany przed ta opcja).
       boot: typeof obj.boot === 'boolean' ? obj.boot : DEFAULTS.boot,
+      // Nieznany profil odsiewa dopiero main.js (getProfile) - tu tylko typ.
+      profile: typeof obj.profile === 'string' && obj.profile ? obj.profile : DEFAULTS.profile,
     };
   } catch {
     return { ...DEFAULTS };
@@ -44,6 +48,9 @@ function writeUiPrefs(partial) {
     if (partial && typeof partial.theme === 'string' && partial.theme) next.theme = partial.theme;
     if (partial && LANGS.includes(partial.lang)) next.lang = partial.lang;
     if (partial && typeof partial.boot === 'boolean') next.boot = partial.boot;
+    if (partial && typeof partial.profile === 'string' && partial.profile) {
+      next.profile = partial.profile;
+    }
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
     fs.writeFileSync(FILE, JSON.stringify(next, null, 2) + '\n', 'utf8');
     return next;

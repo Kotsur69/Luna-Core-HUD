@@ -125,6 +125,7 @@ Luna-Core-HUD/
 ├── src/
 │   ├── main.js            # main process: window + PTY + IPC channels
 │   ├── observer.js        # Passive Observer: tool detection + transcript tailing
+│   ├── models.js          # context-window size + pretty model label (pure, no I/O)
 │   ├── profiles.js        # load/validate launch profiles from config/
 │   ├── ports.js           # localhost port scanner (listen ports + PID→process)
 │   ├── cheatsheets.js     # load/validate action cheat-sheets from config/
@@ -133,7 +134,7 @@ Luna-Core-HUD/
 │   ├── scratchpad.js      # read/write the local scratchpad note file
 │   ├── projects.js        # load/validate working directories (~ expansion)
 │   ├── theme.js           # load/validate themes from config/ (FALLBACK cyberpunk)
-│   ├── uiprefs.js         # read/write UI prefs (theme + language + boot) → ui.local.json
+│   ├── uiprefs.js         # read/write UI prefs (theme + language + boot + profile) → ui.local.json
 │   ├── usage.js           # UsageWatcher: GET OAuth /usage endpoint → 5h + weekly limits
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
@@ -147,8 +148,9 @@ Luna-Core-HUD/
 │   ├── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
 │   ├── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
 │   ├── themes.json        # visual themes (themes.local.json overrides, gitignored)
-│   ├── ui.local.json      # persisted theme + language + boot (created on first change, gitignored)
+│   ├── ui.local.json      # persisted theme + language + boot + last profile (gitignored)
 │   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
+├── test/                  # unit tests over the pure modules (`npm test`, node --test)
 ├── master_prompt.md       # original build brief
 ├── FUTURE_PLAN.md         # roadmap: themes, layout engine, feature shortlist
 └── README.md
@@ -174,13 +176,34 @@ Luna-Core-HUD/
 | + | CWD / project switcher (per-repo working directory) | ✅ done |
 | + | Cyberpunk boot sequence + global reduced-motion support | ✅ done |
 | + | Multi-session tabs (N PTYs, per-tab profile / cwd / context) | ✅ done |
+| A3 | Test harness — `npm test` → 71 unit tests over the pure modules | ✅ done |
+| B1 | Persist active profile (relaunch into the last-used one) | ✅ done |
+| B2 | Context-limit auto-detect (200k vs 1M, self-correcting) | ✅ done |
+| B3 | Model badge — model + detected window, all 5 themes | ✅ done |
 
-That closes the whole approved shortlist. **Next up** (see
-[`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8): split the ~1370-line `renderer.js` into
-modules and introduce a widget contract — the structural work that unblocks
-layout presets, movable panels and everything after them. §9 sketches the bigger
-open question: turning LunaCore into a multi-model console (Claude / Kimi /
-local LM Studio) rather than a Claude-only HUD.
+That closes the whole approved shortlist, plus the first slice of the structural
+plan. **Next up** (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8): split the
+~1400-line `renderer.js` into modules (**A1**) and introduce a widget contract
+(**A2**) — the structural work that unblocks layout presets, movable panels and
+everything after them. The A3 test net now exists specifically to make that split
+verifiable. §9 sketches the bigger open question: turning LunaCore into a
+multi-model console (Claude / Kimi / local LM Studio) rather than a Claude-only HUD.
+
+### Tests
+
+```bash
+npm test        # node --test — 71 tests, ~0.4s, no extra dependencies
+```
+
+Covers the side-effect-free modules only: context metrics, transcript-dir
+encoding, tool detection, profile/project validation, port parsing, skill
+categorisation, and model/context-window inference.
+
+⚠️ **Passing tests do not mean the app boots.** Nothing here launches Electron,
+and `node --check` cannot catch the failure mode that has actually bricked this
+app before — plain `<script>`s share one global scope, so a name collision
+between `renderer.js` and `i18n.js` only explodes at runtime. Launch it by hand
+before trusting a renderer change.
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs

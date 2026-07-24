@@ -411,11 +411,20 @@ function startActiveProjects() {
   }
 }
 
-/** Wczytuje profile i otwiera pierwsza zakladke (przy starcie aplikacji). */
+/**
+ * Wczytuje profile i otwiera pierwsza zakladke (przy starcie aplikacji).
+ * B1: pierwszenstwo ma profil zapamietany w ui.local.json - startujemy tam,
+ * gdzie sie skonczylo. Gdy zapamietanego profilu juz nie ma w configu (ktos go
+ * usunal / inna maszyna), cicho wracamy do activeProfile z profiles.json.
+ */
 function startActiveProfile() {
   const loaded = loadProfiles();
   profiles = loaded.profiles;
-  const profile = getProfile(profiles, loaded.activeProfile) || profiles[0];
+  const remembered = readUiPrefs().profile;
+  const profile =
+    getProfile(profiles, remembered) ||
+    getProfile(profiles, loaded.activeProfile) ||
+    profiles[0];
   if (profile) activeProfileId = profile.id;
   createSession();
 }
@@ -530,6 +539,7 @@ function registerIpc() {
     const session = resolveSession(p.sessionId);
     if (!session || typeof p.profileId !== 'string') return;
     activeProfileId = p.profileId; // domyslny profil dla kolejnych zakladek
+    writeUiPrefs({ profile: p.profileId }); // B1: zapamietaj na nastepny start
     restartSession(session, { profileId: p.profileId });
   });
 

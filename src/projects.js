@@ -95,4 +95,5 @@ function getProject(projects, id) {
   return projects.find((p) => p.id === id) || null;
 }
 
-module.exports = { loadProjects, getProject };
+// expandHome + normalizeProject sa czyste (bez I/O) - eksport na potrzeby testow.
+module.exports = { loadProjects, getProject, normalizeProject, expandHome };

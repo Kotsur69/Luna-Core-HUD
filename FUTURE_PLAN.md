@@ -6,6 +6,13 @@
 > **armed auto-compact**, **CWD/project switcher**, and the **cyberpunk boot
 > sequence**. That closes the entire §5.5 shortlist — everything below is now
 > *future* work, and §8 is the live plan. Order is a suggestion, not a contract.
+>
+> **Update 2026-07-24:** **A3** (test harness — 71 unit tests over the pure
+> modules, `npm test`, zero new deps), **B1** (persist active profile), **B2**
+> (context-limit auto-detect) and **B3** (model badge) are done. Phase A is now
+> 1½ of 5; Phase B is 3 of 7. The remaining structural work — **A1 (split
+> `renderer.js`) and A2 (widget contract)** — is still the gate in front of all
+> of Phase C. **None of it has been hand-launched yet.**
 > The one hard rule that never changes:
 >
 > ⚠️ **ZERO EXTRA TOKENS.** Every idea here must stay a **Passive Observer**
@@ -163,16 +170,30 @@ Injector-only.
 
 ### 5.1 Quick wins (small, high value)
 
-- **Persist active profile** to `profiles.local.json` (already flagged) — start
-  in the last-used profile instead of the default.
+- ✅ ~~**Persist active profile**~~ **BUILT 2026-07-24.** Landed in
+  `ui.local.json` (`profile` key) rather than `profiles.local.json` as sketched
+  here — `uiprefs.js` already existed, already took arbitrary keys, and is
+  already gitignored, so it needed no new file or loader. Switching a profile
+  saves it; startup prefers it; an id that no longer exists in the config falls
+  back silently to `activeProfile` (so a config copied from another machine
+  still boots).
 - **Session cost/time HUD.** Parse the transcript's `usage` you already read and
   show elapsed session time + a rough token→$ estimate (per-model rate table in
   config). Pure read, zero tokens. This was an original inspiration item.
-- **Model badge.** Show which model the current session is on (read from
-  transcript / stdout), so profile switches are visually obvious.
-- **Context-limit auto-detect.** Fix the `CONTEXT_LIMIT=200000` gotcha: infer the
-  real window (200k vs 1M) from the model id in the transcript instead of a
-  hardcoded const.
+- ✅ ~~**Model badge.**~~ **BUILT 2026-07-24.** Pill next to the context %,
+  showing model **and** detected window (`Opus 4.8 · 200k`); full model id in the
+  tooltip. Theme-token-only (`--bg-panel-2` / `--text`), so it inherits all five
+  themes; hidden until a model is actually known, so a fresh tab shows no empty
+  pill. Unknown ids (local LM Studio models) render **verbatim** instead of being
+  guessed at.
+- ✅ ~~**Context-limit auto-detect.**~~ **BUILT 2026-07-24**, but *not* the way
+  this line assumed. Inferring 200k vs 1M from the model id alone does **not**
+  work: 1M is largely a session/beta property and often isn't in the transcript's
+  model field at all. `src/models.js` therefore uses two signals: (1) a `1m`
+  marker in the id when present, and (2) — the one that actually fixes it —
+  **observation**: context cannot exceed its own window, so tokens above the
+  assumed limit prove the assumption wrong and promote it to the next known tier.
+  Self-healing, and needs no knowledge of beta flags.
 - **Port filter toggle.** The "hide system noise (svchost/System), show only dev
   servers" switch — a toggle, not a permanent filter, so nothing is hidden by
   surprise.
@@ -335,7 +356,7 @@ beyond read-only.
 
 ## 6. Technical debt & cleanup
 
-- **`renderer.js` is ~1370 lines.** The single biggest debt item now. Split by
+- **`renderer.js` is ~1400 lines** (it grew again with B3). The single biggest debt item now. Split by
   concern (terminal / context / usage / ports / palette / appearance / boot).
   Beware: plain `<script>`s share one global scope — the i18n `t` collision
   bricked the whole renderer once. Prefer `<script type="module">` over more
@@ -344,12 +365,22 @@ beyond read-only.
 - **Skill scan is synchronous (~2.4s).** Pre-warm hides it, but move
   `scanSkills()` to a worker thread or async fs walk so it never blocks main.
 - **Refactor `index.html` static panels → widget mounts** (blocks §3/§4).
-- **Tests.** None yet (deferred by design). When ready: unit-test the pure
-  modules first — `observer.usageToMetrics`, `ports.scanPorts` parsing,
-  `skills.categorize`, `profiles.normalizeProfile`, `projects` `~`-expansion —
-  they're side-effect-free and cheap to cover. Then a smoke test that the window
-  boots. Doing these *before* the split (§8 A1) is what makes the split verifiable.
-- **`CONTEXT_LIMIT` const** → superseded by auto-detect (§5.1).
+- ✅ ~~**Tests.**~~ **BUILT 2026-07-24 (A3).** `npm test` → `node --test`, no new
+  dependencies. **71 tests** across `test/{observer,profiles,projects,ports,skills,models}.test.js`,
+  ~0.4 s. To make them reachable, the module-private pure helpers are now exported
+  (`normalizeProfile`, `normalizeProject`/`expandHome`, `parseWindows`/`parsePosix`/
+  `dedupeByPort`, `categorize`) — additive only.
+  ↳ It earned its keep the same day: the B2 change broke an existing assertion
+  (`600k tokens → 100%`, true only while the limit was hardcoded), which is
+  exactly the signal a refactor net is for.
+  ↳ **Still missing: a smoke test that the window boots.** `node --check` cannot
+  catch the one failure mode that has actually bricked this app (the i18n `t`
+  global collision) — plain `<script>`s share one scope and only fail at runtime.
+  Until A1 moves the renderer to `<script type="module">`, launching by hand
+  remains the only real check.
+- ✅ ~~**`CONTEXT_LIMIT` const**~~ superseded by auto-detect (§5.1) on 2026-07-24.
+  It survives only as a re-export alias of `models.DEFAULT_CONTEXT_LIMIT` for
+  back-compat; no arithmetic uses it any more.
 - **Boot timings are duplicated** in `styles.css` and `renderer.js`
   (`BOOT_FADE_MS` must match `.boot.is-out`). Small, but if the fade is ever
   retuned, change both.
@@ -383,8 +414,8 @@ feature set is stable and nothing is half-finished.
 |---|------|-----|-------|
 | A1 | **Split `renderer.js` into modules** | §6 | Mechanical, behaviour-preserving. One file per concern: `terminal`, `context`, `usage`, `ports`, `palette`, `appearance`, `boot`. Plain `<script>`s share one global scope — the i18n `t` collision proved that the hard way — so either wrap each in an IIFE **or** switch to `<script type="module">` and stop relying on globals. Prefer modules. |
 | A2 | **Widget contract** | §4 | `{ id, title, mount(el), unmount() }`. Convert existing blocks one at a time; the app keeps working after every single step. |
-| A3 | **Tests on the pure modules** | §6 | `observer.usageToMetrics`, `ports.scanPorts` parsing, `skills.categorize`, `profiles.normalizeProfile`, `projects` `~`-expansion. Side-effect-free, cheap, and they're the safety net that makes A1 safe to do at all. Do these *before* A1 if you want the refactor to be genuinely verifiable. |
-| A4 | **Kill the dead bits** | §6 | `.panel__spacer` CSS rule, `CONTEXT_LIMIT` const (superseded by auto-detect, B2). |
+| A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, 71 tests, ~0.4 s, no new deps. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that makes A1 safe — **do A1 next, while it's fresh.** |
+| A4 | 🟡 **Kill the dead bits** | §6 | Half done: `CONTEXT_LIMIT` is no longer a magic number (now an alias of `models.DEFAULT_CONTEXT_LIMIT`). **Still open:** the dead `.panel__spacer` CSS rule. |
 | A5 | **Async skill scan** | §6 | `scanSkills()` still blocks main ~2.4 s; pre-warm only hides it. Worker thread or async fs walk. |
 
 ### Phase B — Daily-driver quick wins (§5.1)
@@ -394,9 +425,9 @@ Phase A is done — or before it, if you want a break from refactoring.
 
 | # | Item | Notes |
 |---|------|-------|
-| B1 | **Persist active profile** | Start in the last-used profile. `ui.local.json` already exists and now takes arbitrary keys — trivial. |
-| B2 | **Context-limit auto-detect** | Read the model id from the transcript, infer 200k vs 1M. Removes the `CONTEXT_LIMIT` gotcha that currently makes the bar lie on 1M sessions. |
-| B3 | **Model badge** | Show the model the session is actually on. Makes profile switches visually obvious and pairs naturally with B2 — same parse, two payoffs. |
+| B1 | ✅ **Persist active profile** | **DONE 2026-07-24.** `ui.local.json` `profile` key; unknown id falls back silently to config. |
+| B2 | ✅ **Context-limit auto-detect** | **DONE 2026-07-24** — see §5.1 for the correction: the model id alone is *not* a sufficient signal, so `src/models.js` also promotes the window when observed tokens exceed it. Kills the "bar lies on 1M sessions" bug. |
+| B3 | ✅ **Model badge** | **DONE 2026-07-24.** Pill showing model + detected window (`Opus 4.8 · 200k`), theme-token-only, hidden until a model is known. Same parse as B2 — two payoffs, as predicted. |
 | B4 | **Session cost/time HUD** | Elapsed time + token→$ estimate from a per-model rate table in config. Pure read. |
 | B5 | **Port filter toggle** | Hide system noise (svchost/System) — a *toggle*, never a permanent silent filter. |
 | B6 | **Copy-transcript-path button** | One click to copy the `.jsonl` path. |
