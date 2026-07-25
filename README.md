@@ -56,7 +56,7 @@ user's context window. It works only as:
 | Direction | Path |
 |-----------|------|
 | Passive Observer (terminal) | `session.proc.onData` → IPC `pty:data` `{sessionId, data}` → that tab's `xterm.write()` |
-| Passive Observer (Skill Tracker) | `TranscriptWatcher` → `toolsFromLines()` reads structured `tool_use` entries from the JSONL → IPC `metrics:tools` → tiles light up (active tab only). The old `detectTools()` stdout scan (ANSI strip + `Name(` regex) stays as a backstop — it broke silently when the TUI changed how it renders a tool call. **Tiles currently flash for 1.5 s and do not show how long a tool ran — see FUTURE_PLAN B8.** |
+| Passive Observer (Skill Tracker) | `TranscriptWatcher` → `toolEventsFromLines()` + `foldToolEvents()` pair each `tool_use` id with the `tool_result` that closes it → IPC `metrics:tools` `{events:[{phase,id,tile,at}]}` → `skilltracker.js` sweeps a tile for the tool's **real duration**. The old `detectTools()` stdout scan (ANSI strip + `Name(` regex) stays as a backstop — it broke silently when the TUI changed how it renders a tool call — and still sends the flat `{tiles}` blink. |
 | Passive Observer (Context %) | per-session `TranscriptWatcher` tails **one pinned** `~/.claude/projects/<cwd>/<session>.jsonl` → real `usage` tokens → IPC `metrics:context` → that tab's bar |
 | Session control | `sessions:create` / `:close` / `:activate` → main owns the `sessions` Map → broadcast `sessions:update` → tab bar rebuilds |
 | Action Injector (keyboard) | `xterm.onData` → IPC `pty:write` → `ptyProcess.write()` |
@@ -272,6 +272,14 @@ click handlers are wired — that still needs clicking.
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
 the matching tool (Read, Edit, Write, Bash, Grep, Glob, Web, Task).
+
+A tile **sweeps left→right for as long as the tool actually runs** and flashes
+once when it returns, because the transcript pairs a `tool_use` id with the
+`tool_result` that closes it. The sweep loops rather than filling to a
+percentage: a tool's runtime is unknowable in advance, so a progress bar would
+be inventing a total. Measured over one real session, 27 of 48 tool calls
+finished in under 1.5 s while a `Bash` ran 23 s — which is exactly the spread
+the old fixed-duration blink could not show.
 
 ## Multi-session tabs
 

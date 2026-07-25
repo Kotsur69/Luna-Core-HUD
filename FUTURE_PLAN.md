@@ -489,38 +489,48 @@ Phase A is done — or before it, if you want a break from refactoring.
 | B5 | **Port filter toggle** | Hide system noise (svchost/System) — a *toggle*, never a permanent silent filter. |
 | B6 | **Copy-transcript-path button** | One click to copy the `.jsonl` path. |
 | B7 | **Skill search box** | Filter the ~339-skill list as you type. The list is already in memory. |
-| B8 | 🔴 **Skill Tracker: show duration, not a blink** | **Wanted (Mati, 2026-07-25) — needs real work, see below.** A tile should light for as long as the tool actually runs, filling **left → right** while it does, instead of flashing for a fixed 1500 ms. |
+| B8 | ✅ **Skill Tracker: duration, not a blink** | **DONE 2026-07-25.** A tile sweeps left→right for as long as the tool actually runs and flashes once when it returns. Built as sketched: the watcher emits a `{phase,id,tile,at}` lifecycle on the existing `metrics:tools` channel and the renderer owns the visual state machine. See below for how each of the four obstacles was answered. |
 
-#### B8 — why this is not just CSS
+#### B8 — how the four obstacles were answered
 
-The tracker currently has **no concept of a tool finishing**. `lightTiles()`
-adds `.is-active` and sets a `TILE_ACTIVE_MS = 1500` timer; each new detection
-merely restarts that timer. A long `Bash` and an instant `Read` look identical,
-and a two-minute tool blinks off after 1.5 s while still running.
+The tracker had **no concept of a tool finishing**. `lightTiles()` added
+`.is-active` and set a `TILE_ACTIVE_MS = 1500` timer that each new detection
+merely restarted, so a long `Bash` and an instant `Read` looked identical.
 
-To light "for the whole time", we need an **end signal**, and the transcript has
-one: a `tool_use` block carries an `id`, and the following user message carries a
-`tool_result` with a matching `tool_use_id`. Duration is the gap between them.
-That keeps the whole thing Passive Observer — still zero extra tokens.
+The end signal was in the transcript all along: a `tool_use` block carries an
+`id`, and a later user message carries a `tool_result` with a matching
+`tool_use_id`. `toolEventsFromLines()` reads both shapes and `foldToolEvents()`
+pairs them — still Passive Observer, still zero extra tokens. `toolsFromLines()`
+is now derived from the same parser, so one place understands the transcript
+instead of two.
 
-Four things that make it more than a cosmetic change:
+1. **Poll granularity.** Both halves of a fast tool arrive in one 1.5 s tick.
+   Answered on two axes: duration comes from the entries' own `timestamp`, never
+   from when we happened to read them, and the tile honours a
+   `MIN_ACTIVE_MS = 900` floor measured from when it *lit* (the start may have
+   been read seconds late). Replaying a real session showed **27 of 48 calls
+   finished under 1.5 s** — over half would otherwise have been invisible.
+2. **The fill is indeterminate.** `.is-running::after` is a looping gradient
+   sweep, not a percentage. It stops on `tool_result`, then `.is-done` flashes
+   for 450 ms.
+3. **Tools that never return.** A `MAX_ACTIVE_MS = 10 min` watchdog. A first
+   pass over an existing transcript folds its events and then **drops** the open
+   map: a tool left dangling by a killed session is history, not live activity.
+4. **Concurrency.** The renderer keeps `id -> {tile, startedAt}` and counts per
+   tile, so `Edit`/`MultiEdit`/`NotebookEdit` share one tile that goes dark only
+   when the last outstanding id closes.
 
-1. **Poll granularity.** The watcher ticks every 1.5 s, so a fast tool starts
-   *and* finishes inside one tick and would never render as active at all. Needs
-   a minimum visible duration, or the pairing must be derived from timestamps in
-   the entries rather than from when we happened to read them.
-2. **The fill is indeterminate.** We cannot know a tool's runtime in advance, so
-   this must be a looping left→right sweep that *resolves* on `tool_result` —
-   not a percentage bar, which would require a total we do not have.
-3. **Tools that never return.** A killed or crashed session leaves a `tool_use`
-   with no matching result. Needs a timeout so a tile cannot glow forever.
-4. **Concurrency.** Several tools can be in flight at once, and multiple names
-   map to one tile (`Edit`/`MultiEdit`/`NotebookEdit`). The tile has to track a
-   *set* of outstanding ids and only go dark when the last one closes.
+Two decisions worth remembering. **A background tab's events are folded onto its
+bucket, not dropped** — a tool that starts while you are looking elsewhere has to
+still be running when you come back, and that is only true if we tracked its
+start; stale ids are pruned when the bucket loads, since a background tab runs no
+watchdog. And the whole thing is driven by **one reconcile loop** that ticks only
+while a tile is lit: per-tile and per-id timers were the obvious alternative and
+would have meant four timer maps to keep in sync.
 
-Suggested shape: have the watcher emit `{tile, id, phase:'start'|'end'}` instead
-of today's flat name list, and let the renderer own the visual state machine.
-The IPC channel (`metrics:tools`) can stay; only the payload grows.
+Under `prefers-reduced-motion` the sweep becomes a **static fill** rather than
+being exempted from the global block — the "running" state still reads, nothing
+moves.
 
 ### Phase C — Layout & visual templates (§2.3, §3)
 

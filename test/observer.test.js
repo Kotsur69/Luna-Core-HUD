@@ -13,6 +13,8 @@ const {
   sumUsageLines,
   sumUsageByModel,
   toolsFromLines,
+  toolEventsFromLines,
+  foldToolEvents,
   CONTEXT_LIMIT,
 } = require('../src/observer');
 
@@ -235,4 +237,120 @@ test('sumUsageLines still returns the flat aggregate across models', () => {
     cacheRead: 0,
     cacheWrite: 0,
   });
+});
+
+// ---- toolEventsFromLines / foldToolEvents (B8: duration, not a blink) -------
+
+const TS = '2026-01-01T00:00:00.000Z';
+
+/** Assistant line opening one or more tool calls, as the CLI writes them. */
+const useLine = (...pairs) =>
+  JSON.stringify({
+    timestamp: TS,
+    message: {
+      role: 'assistant',
+      content: pairs.map(([id, name]) => ({ type: 'tool_use', id, name, input: {} })),
+    },
+  });
+
+/** User line closing tool calls. Note it carries NO tool name - only the id. */
+const resLine = (...ids) =>
+  JSON.stringify({
+    timestamp: TS,
+    message: {
+      role: 'user',
+      content: ids.map((id) => ({ type: 'tool_result', tool_use_id: id, content: 'ok' })),
+    },
+  });
+
+test('toolEventsFromLines pairs a tool_use with the tool_result that closes it', () => {
+  const events = toolEventsFromLines([useLine(['t0', 'Bash']), resLine('t0')].join('\n'));
+  assert.deepEqual(
+    events.map((e) => [e.phase, e.id, e.tile]),
+    [
+      ['start', 't0', 'Bash'],
+      ['end', 't0', undefined],
+    ]
+  );
+});
+
+test('toolEventsFromLines takes the time from the entry, not from when we read it', () => {
+  // The watcher polls every 1.5 s, so read time is far too coarse to time a tool.
+  const [start] = toolEventsFromLines(useLine(['t0', 'Read']));
+  assert.equal(start.at, Date.parse(TS));
+});
+
+test('toolEventsFromLines skips a start with no tile, so its end is an orphan', () => {
+  const text = [useLine(['t0', 'mcp__shadcn__search_items']), resLine('t0')].join('\n');
+  assert.deepEqual(
+    toolEventsFromLines(text).map((e) => e.phase),
+    ['end']
+  );
+  // ...and the fold drops that orphan rather than inventing a tile for it.
+  assert.deepEqual(foldToolEvents(new Map(), toolEventsFromLines(text)), []);
+});
+
+test('toolEventsFromLines survives a torn line mid-write', () => {
+  const text = [useLine(['t0', 'Grep']), '{"message":{"content":[{"type":"tool_'].join('\n');
+  assert.equal(toolEventsFromLines(text).length, 1);
+});
+
+test('foldToolEvents resolves an end tile from the id that opened it', () => {
+  const open = new Map();
+  const out = foldToolEvents(open, toolEventsFromLines(useLine(['t0', 'MultiEdit'])));
+  assert.deepEqual(out, [{ phase: 'start', id: 't0', tile: 'Edit', at: Date.parse(TS) }]);
+
+  const closed = foldToolEvents(open, toolEventsFromLines(resLine('t0')));
+  assert.equal(closed[0].tile, 'Edit'); // the alias still maps to the Edit tile
+  assert.equal(open.size, 0);
+});
+
+test('foldToolEvents keeps a tool open ACROSS chunks', () => {
+  // The whole point: a long Bash starts in one appended chunk and ends in a
+  // later one. If the map did not survive the tick, the tile could never stay
+  // lit for the tool's real duration.
+  const open = new Map();
+  foldToolEvents(open, toolEventsFromLines(useLine(['t0', 'Bash'])));
+  foldToolEvents(open, toolEventsFromLines(''));
+  assert.equal(open.size, 1, 'still running after an empty tick');
+  foldToolEvents(open, toolEventsFromLines(resLine('t0')));
+  assert.equal(open.size, 0);
+});
+
+test('foldToolEvents drops a duplicate start and an end for an unknown id', () => {
+  const open = new Map();
+  const starts = toolEventsFromLines(useLine(['t0', 'Read']));
+  assert.equal(foldToolEvents(open, starts).length, 1);
+  assert.equal(foldToolEvents(open, starts).length, 0, 're-read of the same line');
+  assert.equal(foldToolEvents(open, toolEventsFromLines(resLine('nope'))).length, 0);
+  assert.equal(open.size, 1);
+});
+
+test('foldToolEvents tracks concurrent tools sharing one tile', () => {
+  // Edit / MultiEdit / NotebookEdit all light the Edit tile, so the tile may
+  // only go dark when the LAST of them closes.
+  const open = new Map();
+  foldToolEvents(open, toolEventsFromLines(useLine(['t0', 'Edit'], ['t1', 'NotebookEdit'])));
+  assert.equal(open.size, 2);
+  assert.deepEqual([...open.values()], ['Edit', 'Edit']);
+
+  foldToolEvents(open, toolEventsFromLines(resLine('t0')));
+  assert.equal(open.size, 1, 'one Edit call is still outstanding');
+  foldToolEvents(open, toolEventsFromLines(resLine('t1')));
+  assert.equal(open.size, 0);
+});
+
+test('foldToolEvents handles a tool that starts and ends inside one tick', () => {
+  // Fast tools do this constantly; both events arrive in the same chunk and the
+  // renderer needs the pair, not a silent no-op.
+  const open = new Map();
+  const out = foldToolEvents(
+    open,
+    toolEventsFromLines([useLine(['t0', 'Read']), resLine('t0')].join('\n'))
+  );
+  assert.deepEqual(
+    out.map((e) => e.phase),
+    ['start', 'end']
+  );
+  assert.equal(open.size, 0);
 });

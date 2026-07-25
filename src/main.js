@@ -332,8 +332,10 @@ function spawnInto(session, profile) {
       cwd,
       sessionUuid: session.transcriptId,
       // Skill Tracker fed from the transcript's structured tool_use entries.
-      // Same IPC channel as the stdout scan, so the renderer is unchanged.
-      onTools: (tiles) => send('metrics:tools', { sessionId: session.id, tiles }),
+      // Same IPC channel as the stdout scan - the payload differs: `events`
+      // carries a start/end lifecycle (B8), `tiles` is the old flat blink the
+      // stdout backstop above still sends.
+      onTools: (events) => send('metrics:tools', { sessionId: session.id, events }),
     },
   );
   session.watcher.start();

@@ -270,23 +270,89 @@ function sumUsageByModel(text) {
  */
 function toolsFromLines(text) {
   const tiles = new Set();
+  for (const ev of toolEventsFromLines(text)) {
+    if (ev.phase === 'start') tiles.add(ev.tile);
+  }
+  return [...tiles];
+}
+
+/**
+ * Extracts the tool LIFECYCLE from a JSONL fragment (B8).
+ *
+ * The tiles above answer "which tool ran". They cannot answer "is it still
+ * running", which is why a two-minute Bash used to look exactly like an instant
+ * Read. The transcript does carry the missing half: a `tool_use` block has an
+ * `id`, and the tool_result that closes it - in a later user message - carries
+ * the same value as `tool_use_id`. Pairing them gives a real start and a real
+ * end, still purely by reading, so this stays Passive Observer.
+ *
+ * A `tool_result` does NOT repeat the tool's name, so an end event has no tile
+ * of its own; foldToolEvents() resolves it from the id that opened it.
+ *
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {{phase:'start'|'end', id:string, tile?:string, at:number|null}[]}
+ *   events in file order
+ */
+function toolEventsFromLines(text) {
+  const events = [];
   for (const raw of String(text || '').split('\n')) {
     const line = raw.trim();
-    if (!line || !line.includes('"tool_use"')) continue;
+    // Cheap pre-filter: most transcript lines carry neither shape.
+    if (!line || (!line.includes('"tool_use"') && !line.includes('"tool_result"'))) continue;
     try {
       const obj = JSON.parse(line);
       const content = obj && obj.message && obj.message.content;
       if (!Array.isArray(content)) continue;
+      // Wall-clock from the entry itself, not from when we happened to read it:
+      // the watcher polls every 1.5 s, so read time is far too coarse to time a
+      // tool with.
+      const at = Date.parse(obj.timestamp) || null;
       for (const part of content) {
-        if (!part || part.type !== 'tool_use' || typeof part.name !== 'string') continue;
-        const tile = TOOL_TO_TILE.get(part.name);
-        if (tile) tiles.add(tile);
+        if (!part) continue;
+        if (part.type === 'tool_use' && typeof part.id === 'string') {
+          const tile = TOOL_TO_TILE.get(part.name);
+          // No tile (an MCP tool, say) means nothing to light - and skipping the
+          // start means its end is later ignored as an orphan, which is correct.
+          if (tile) events.push({ phase: 'start', id: part.id, tile, at });
+        } else if (part.type === 'tool_result' && typeof part.tool_use_id === 'string') {
+          events.push({ phase: 'end', id: part.tool_use_id, at });
+        }
       }
     } catch {
       /* incomplete/corrupt line - skip */
     }
   }
-  return [...tiles];
+  return events;
+}
+
+/**
+ * Folds raw events into the set of tools currently in flight and returns the
+ * transitions worth sending to the renderer.
+ *
+ * `open` is the caller's id -> tile map and IS mutated: it has to survive across
+ * ticks, because a tool routinely starts in one appended chunk and ends in
+ * another. Duplicate starts, and ends for ids we never saw open, are dropped -
+ * so the renderer only ever receives balanced pairs.
+ *
+ * @param {Map<string,string>} open live id -> tile map, mutated in place
+ * @param {{phase:string, id:string, tile?:string, at:number|null}[]} events
+ * @returns {{phase:'start'|'end', id:string, tile:string, at:number|null}[]}
+ */
+function foldToolEvents(open, events) {
+  const out = [];
+  for (const ev of events || []) {
+    if (ev.phase === 'start') {
+      if (open.has(ev.id)) continue; // already counted - re-read of the same line
+      open.set(ev.id, ev.tile);
+      out.push({ phase: 'start', id: ev.id, tile: ev.tile, at: ev.at });
+    } else {
+      const tile = open.get(ev.id);
+      if (!tile) continue; // orphan: started before we attached, or has no tile
+      open.delete(ev.id);
+      out.push({ phase: 'end', id: ev.id, tile, at: ev.at });
+    }
+  }
+  return out;
 }
 
 /** Aggregate across every model - the plain token counters shown in the UI. */
@@ -380,8 +446,12 @@ class TranscriptWatcher {
     // Zgodnosc wstecz: kiedys drugim argumentem byl goly interwal w ms.
     const opts = typeof options === 'number' ? { intervalMs: options } : options || {};
     this.onMetrics = onMetrics;
-    // Optional: called with Skill Tracker tiles found in newly appended lines.
+    // Optional: called with Skill Tracker start/end events from newly appended
+    // lines - never a bare tile list, the renderer needs both halves (B8).
     this.onTools = typeof opts.onTools === 'function' ? opts.onTools : null;
+    // B8: tools currently in flight, id -> tile. Spans ticks by design - a tool
+    // routinely starts in one appended chunk and finishes in a later one.
+    this.openTools = new Map();
     this.intervalMs = opts.intervalMs || 1500;
     this.scopeDir = opts.cwd
       ? path.join(PROJECTS_DIR, encodeProjectDir(opts.cwd))
@@ -417,6 +487,7 @@ class TranscriptWatcher {
       this.costOffset = 0;
       this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       this.byModel = new Map();
+      this.openTools.clear();
     }
     // A first pass over an existing file is HISTORY, not live activity: it would
     // flash every tile the session ever used. Tokens still count (the spend is
@@ -453,9 +524,16 @@ class TranscriptWatcher {
         }
       }
 
-      if (!firstPass && this.onTools) {
-        const tiles = toolsFromLines(complete);
-        if (tiles.length > 0) this.onTools(tiles);
+      if (this.onTools) {
+        const events = foldToolEvents(this.openTools, toolEventsFromLines(complete));
+        if (firstPass) {
+          // Everything in that first pass already happened; a tool left open by
+          // a killed session must not light a tile now. Fold it (so the map
+          // stays balanced) and then forget it - history is history.
+          this.openTools.clear();
+        } else if (events.length > 0) {
+          this.onTools(events);
+        }
       }
     } catch {
       /* plik zniknal / brak dostepu - koszt po prostu sie nie zaktualizuje */
@@ -579,6 +657,8 @@ module.exports = {
   sumUsageLines,
   sumUsageByModel,
   toolsFromLines,
+  toolEventsFromLines,
+  foldToolEvents,
   CONTEXT_LIMIT,
   TOOL_TILES,
 };

@@ -532,6 +532,8 @@ html, body {
   overflow-y: auto;
 }
 .skill-tile {
+  position: relative;
+  overflow: hidden; /* clips the running sweep to the tile */
   padding: 9px 12px;
   border-radius: 8px;
   background: var(--bg-panel-2);
@@ -540,11 +542,52 @@ html, body {
   color: var(--text-dim);
   transition: all 0.25s ease;
 }
-/* Aktywny kafelek - zaswieci go parser w Fazie 3 (klasa .is-active) */
+/* A tool mapped to this tile is running, or has just finished (B8). */
 .skill-tile.is-active {
   color: var(--good);
   border-color: var(--good);
   box-shadow: 0 0 12px rgba(124, 255, 155, 0.3);
+}
+
+/*
+ * The sweep means "still working", and it LOOPS on purpose: a tool's runtime is
+ * unknowable in advance, so a percentage bar would be inventing a total. It
+ * stops only when the transcript's tool_result closes the call.
+ */
+.skill-tile.is-running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--good) 22%, transparent) 50%,
+    transparent 100%
+  );
+  animation: skill-sweep 1.15s linear infinite;
+}
+@keyframes skill-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+/* Resolved: a short flash so a finish is visible, then back to dark. */
+.skill-tile.is-done {
+  background: color-mix(in srgb, var(--good) 14%, var(--bg-panel-2));
+}
+
+/*
+ * The global reduced-motion block further down would collapse the sweep to a
+ * single 0.01 ms pass - i.e. no "running" signal at all. Substitute a STATIC
+ * fill instead of exempting the animation: the state still reads, nothing moves.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .skill-tile.is-running::after {
+    animation: none !important;
+    transform: none;
+    background: color-mix(in srgb, var(--good) 14%, transparent);
+  }
 }
 
 /* ---- Tracker portow localhost (7B) ---------------------------------------- */

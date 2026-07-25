@@ -41,7 +41,7 @@ import {
 } from './led.js';
 import { setPtyStatus } from './ptystatus.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './context.js';
-import { lightTiles } from './skilltracker.js';
+import { lightTiles, applyToolEvents, trackBucketTools, resetTiles } from './skilltracker.js';
 import { syncSwitchers } from './switchers.js';
 
 const tabsList = document.getElementById('tabs-list');
@@ -88,10 +88,21 @@ window.lunacore.onContext(({ sessionId, metrics }) => {
   renderTabs();
 });
 
-// Skill Tracker tiles are momentary - only shown for the active tab.
-window.lunacore.onTools(({ sessionId, tiles }) => {
-  if (sessionId !== getActiveSessionId()) return;
-  lightTiles(tiles);
+// Skill Tracker. Two payload shapes share this channel: `events` is the
+// transcript's tool_use/tool_result lifecycle (B8), `tiles` the older flat list
+// the stdout backstop still emits.
+//
+// A background tab's events are folded onto its bucket rather than dropped: a
+// tool that starts while you are on another tab must still be running when you
+// come back, and that is only true if we tracked its start.
+window.lunacore.onTools(({ sessionId, events, tiles }) => {
+  const active = sessionId === getActiveSessionId();
+  if (Array.isArray(events)) {
+    if (active) applyToolEvents(events);
+    else trackBucketTools(ensureTerm(sessionId), events);
+  }
+  // The blink has no end signal, so it is only worth showing live.
+  if (tiles && active) lightTiles(tiles);
 });
 
 // A restart (profile / project change) concerns one specific tab.
@@ -109,6 +120,9 @@ window.lunacore.onRestarted((profile) => {
   }
   if (sessionId === getActiveSessionId()) {
     resetLed();
+    // clearSessionView() above only wiped the bucket; the tiles on screen are
+    // still showing tools that belonged to the process we just replaced.
+    resetTiles();
     setPtyStatus(true, 'ptystatus.active');
     emitSessionRestarted(profile);
     fitAndResize();
