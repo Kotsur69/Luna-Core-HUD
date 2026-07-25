@@ -102,6 +102,17 @@
 
       <div class="panel__section panel__section--grow">
         <h2 class="panel__title"><span data-i18n="skills.title">Skille</span> <span id="skills-count" class="count"></span></h2>
+        <!-- B7: filtr listy skilli. Lista jest juz w pamieci, wiec to czysto
+             rendererowe zawezenie - bez IPC i bez ponownego skanu. -->
+        <input
+          id="skills-search"
+          class="filter-input"
+          type="search"
+          autocomplete="off"
+          spellcheck="false"
+          data-i18n-ph="skills.search.ph"
+          placeholder="Filtruj skille..."
+        />
         <!-- Auto-skan katalogow skilli, pogrupowany w kategorie (7A). -->
         <div id="skills" class="cheats"></div>
       </div>
@@ -143,7 +154,18 @@
            panel - sekcje biora naturalna wysokosc i przewijaja sie razem. -->
       <div class="panel__scroll">
       <div class="panel__section">
-        <h2 class="panel__title" data-i18n="ctxwin.title">Context Window</h2>
+        <h2 class="panel__title usage-head">
+          <span data-i18n="ctxwin.title">Context Window</span>
+          <!-- B6: kopiuje sciezke transcriptu TEJ zakladki. Ukryty, dopoki
+               obserwator nie przypnie pliku - nie ma czego kopiowac. -->
+          <button
+            id="ctx-copy-path"
+            class="usage-refresh"
+            data-i18n-title="ctx.copyPath.title"
+            title="Kopiuj sciezke transcriptu"
+            hidden
+          >&#10697;</button>
+        </h2>
         <!-- Pasek zapelnia sie w Fazie 3 (parser metryk). Na razie placeholder. -->
         <div class="ctx-bar">
           <div id="ctx-fill" class="ctx-bar__fill" style="--ctx: 0"></div>
@@ -206,7 +228,18 @@
       </div>
 
       <div class="panel__section panel__section--grow">
-        <h2 class="panel__title" data-i18n="ports.title">Porty localhost</h2>
+        <h2 class="panel__title usage-head">
+          <span data-i18n="ports.title">Porty localhost</span>
+          <!-- B5: przelacznik szumu systemowego. Ukrywanie jest ZAWSZE widoczne -
+               licznik ponizej mowi, ile wierszy zwinieto. -->
+          <button
+            id="ports-filter"
+            class="usage-refresh ports-filter"
+            aria-pressed="true"
+            data-i18n-title="ports.filter.title"
+            title="Ukryj procesy systemowe"
+          >&#9673;</button>
+        </h2>
         <!-- Wypelnia renderer.js z pasywnego skanu (7B). -->
         <ul id="ports-list" class="ports-list"></ul>
         <p id="ports-empty" class="hint" data-i18n="ports.scanning">Skanowanie portow...</p>

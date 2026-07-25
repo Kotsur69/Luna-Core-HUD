@@ -39,7 +39,7 @@ import './modules/palette.js';
 
 // -- Left panel: switchers, ports, appearance ---------------------------------
 import { initProfiles, initProjects } from './modules/switchers.js';
-import './modules/ports.js';
+import { initPorts } from './modules/ports.js';
 import { initAppearance } from './modules/appearance.js';
 
 // ---- Startup ----------------------------------------------------------------
@@ -55,6 +55,7 @@ initCheatsheets();
 initPrompts();
 initSkills();
 initScratchpad();
+initPorts();
 initAppearance();
 initSessions();
 

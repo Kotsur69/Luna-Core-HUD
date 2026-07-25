@@ -1,16 +1,28 @@
 // ============================================================================
-// LunaCore - localhost port tracker (7B)
+// LunaCore - localhost port tracker (7B) + system-noise filter (B5)
 // ----------------------------------------------------------------------------
 // A passive scan in the main process lists listening ports; here they become
 // rows with open / copy / kill actions.
+//
+// B5: the scan tags every row with `system` (see src/ports.js). This module
+// only decides whether to SHOW them. The full list is always kept in memory, so
+// flipping the toggle is a re-render rather than a re-scan, and the line under
+// the list always states how many rows were folded away - a filter that hides
+// things silently is worse than no filter.
 // ============================================================================
 
 'use strict';
 
 import { t, pulse } from './util.js';
+import { onLangChange } from './bus.js';
 
 const portsList = document.getElementById('ports-list');
 const portsEmpty = document.getElementById('ports-empty');
+const portsFilter = document.getElementById('ports-filter');
+
+// null = no scan has landed yet, so the static "scanning..." hint stays put.
+let lastPorts = null;
+let hideSystem = true; // persisted in config/ui.local.json
 
 /** Builds one action button (safely, without injecting HTML). */
 function portButton(label, act, title, dataset) {
@@ -23,16 +35,19 @@ function portButton(label, act, title, dataset) {
   return b;
 }
 
-window.lunacore.onPorts((ports) => {
+/** Draws the current list through the filter and reports what it folded. */
+function renderPorts() {
+  if (!lastPorts) return;
+
+  const rows = hideSystem ? lastPorts.filter((p) => !p.system) : lastPorts;
+  const hidden = lastPorts.length - rows.length;
+
   portsList.innerHTML = '';
-  portsEmpty.style.display = ports.length ? 'none' : '';
-  if (!ports.length) {
-    portsEmpty.textContent = t('ports.empty');
-    return;
-  }
-  for (const p of ports) {
+  for (const p of rows) {
     const li = document.createElement('li');
-    li.className = 'port-item';
+    // A system row is dimmed rather than styled like a dev server - when the
+    // filter is off you still want your own processes to stand out.
+    li.className = p.system ? 'port-item port-item--system' : 'port-item';
 
     const port = document.createElement('span');
     port.className = 'port-item__port';
@@ -54,7 +69,51 @@ window.lunacore.onPorts((ports) => {
     li.append(port, proc, actions);
     portsList.appendChild(li);
   }
+
+  // One line carrying the whole truth: nothing is listening, everything visible
+  // was filtered, or N rows are hidden behind the toggle.
+  let note = '';
+  if (!lastPorts.length) note = t('ports.empty');
+  else if (!rows.length) note = t('ports.allHidden', { n: hidden });
+  else if (hidden) note = t('ports.hidden', { n: hidden });
+
+  portsEmpty.textContent = note;
+  portsEmpty.style.display = note ? '' : 'none';
+}
+
+/** Keeps the toggle's glyph and pressed state in sync with the flag. */
+function syncFilterButton() {
+  if (!portsFilter) return;
+  portsFilter.setAttribute('aria-pressed', hideSystem ? 'true' : 'false');
+  portsFilter.classList.toggle('is-on', hideSystem);
+  portsFilter.textContent = hideSystem ? '◉' : '◎';
+}
+
+/** Restores the remembered toggle state before the first scan arrives. */
+export async function initPorts() {
+  try {
+    const prefs = await window.lunacore.getUiPrefs();
+    if (prefs && typeof prefs.hideSystemPorts === 'boolean') hideSystem = prefs.hideSystemPorts;
+  } catch {
+    /* no preferences - keep the default (filtered) */
+  }
+  syncFilterButton();
+  renderPorts();
+}
+
+window.lunacore.onPorts((ports) => {
+  lastPorts = Array.isArray(ports) ? ports : [];
+  renderPorts();
 });
+
+if (portsFilter) {
+  portsFilter.addEventListener('click', () => {
+    hideSystem = !hideSystem;
+    syncFilterButton();
+    renderPorts();
+    window.lunacore.setUiPrefs({ hideSystemPorts: hideSystem });
+  });
+}
 
 // Delegated actions: open / copy / kill.
 portsList.addEventListener('click', async (e) => {
@@ -71,3 +130,6 @@ portsList.addEventListener('click', async (e) => {
     await window.lunacore.killPort(Number(pid));
   }
 });
+
+// Button titles and the hidden-count line are dynamic strings - re-render them.
+onLangChange(renderPorts);

@@ -8,7 +8,7 @@
 
 'use strict';
 
-import { t } from './util.js';
+import { t, pulse } from './util.js';
 import { onActiveContext, onBackgroundContext, onLangChange, registerSessionView } from './bus.js';
 
 // Bar colour thresholds: < 60% green, 60-85% amber, > 85% red + alarm.
@@ -21,6 +21,7 @@ const ctxWarn = document.getElementById('ctx-warn');
 const ctxTokens = document.getElementById('ctx-tokens');
 const ctxModel = document.getElementById('ctx-model');
 const ctxCost = document.getElementById('ctx-cost');
+const ctxCopyPath = document.getElementById('ctx-copy-path');
 
 // Last metrics kept so a language switch can re-render the text.
 let lastCtxMetrics = null;
@@ -43,7 +44,32 @@ export function applyCtxMetrics(metrics, live = true) {
   ctxPercent.textContent = `${Math.round(pct * 100)}%`;
   renderModelBadge(metrics);
   renderCostLine(metrics);
+  renderCopyPath(metrics);
   renderCtxText();
+}
+
+/**
+ * B6: the copy-transcript-path button.
+ *
+ * Hidden until the observer has actually pinned a file - before that there is
+ * no path to copy and a dead button would only invite a click. The path rides
+ * along on the metrics, so it is per tab for free: switching tabs restores that
+ * tab's metrics, and with them ITS transcript.
+ */
+function renderCopyPath(metrics) {
+  if (!ctxCopyPath) return;
+  const file = (metrics && metrics.file) || '';
+  ctxCopyPath.hidden = !file;
+  if (!file) {
+    delete ctxCopyPath.dataset.path;
+    return;
+  }
+  ctxCopyPath.dataset.path = file;
+  // The path itself in the tooltip - often all you wanted, without pasting it
+  // anywhere. Set here rather than left to data-i18n-title, so a language
+  // switch (which re-runs applyStatic) does not drop it: renderCtxText's
+  // subscriber re-renders this too.
+  ctxCopyPath.title = `${t('ctx.copyPath.title')}\n${file}`;
 }
 
 /** Formats a context window as "200k" / "1M". */
@@ -143,6 +169,7 @@ export function resetCtxUI() {
   ctxTokens.textContent = '';
   renderModelBadge(null);
   renderCostLine(null);
+  renderCopyPath(null);
 }
 
 /** The two text lines under the bar (warning + token counts) - i18n-aware. */
@@ -165,7 +192,20 @@ onBackgroundContext((bucket, metrics) => {
   bucket.lastCtx = metrics;
 });
 
-onLangChange(renderCtxText);
+// Copy the pinned transcript path (B6).
+if (ctxCopyPath) {
+  ctxCopyPath.addEventListener('click', () => {
+    const file = ctxCopyPath.dataset.path;
+    if (!file) return;
+    navigator.clipboard.writeText(file).catch(() => {});
+    pulse(ctxCopyPath);
+  });
+}
+
+onLangChange(() => {
+  renderCtxText();
+  renderCopyPath(lastCtxMetrics); // applyStatic just reset this button's title
+});
 
 registerSessionView({
   save(bucket) {

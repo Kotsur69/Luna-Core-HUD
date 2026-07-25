@@ -592,6 +592,10 @@ html, body {
 
 /* ---- Tracker portow localhost (7B) ---------------------------------------- */
 
+/* B5: przelacznik szumu systemowego. Wlaczony = swieci, zeby bylo widac, ze
+   lista jest zawezona (licznik pod lista podaje ile wierszy zwinieto). */
+.ports-filter.is-on { color: var(--neon-cyan); border-color: var(--edge-glow); }
+
 .ports-list {
   list-style: none;
   margin: 0;
@@ -614,6 +618,11 @@ html, body {
   border: 1px solid var(--edge);
   font-size: 12px;
 }
+/* Wiersz systemowy (widoczny tylko przy wylaczonym filtrze) - przygaszony,
+   zeby wlasne procesy nadal odcinaly sie od tla. */
+.port-item--system { opacity: 0.55; }
+.port-item--system .port-item__port { color: var(--text-dim); }
+
 .port-item__port {
   font-weight: 700;
   color: var(--neon-cyan);
@@ -711,6 +720,27 @@ html, body {
 /* ---- Sciagawka skilli (7A) ------------------------------------------------ */
 
 .count { font-weight: 400; color: var(--text-dim); opacity: 0.7; }
+
+/* B7: pole filtra listy skilli. Wyglada jak reszta panelu (tokeny motywu),
+   nie jak natywny input systemu. */
+.filter-input {
+  width: 100%;
+  margin: 8px 0 6px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--edge);
+  background: var(--bg-panel-2);
+  color: var(--text);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11.5px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.filter-input::placeholder { color: var(--text-dim); opacity: 0.6; }
+.filter-input:focus {
+  outline: none;
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 8px var(--glow);
+}
 .skill-cat {
   display: flex;
   flex-direction: column;

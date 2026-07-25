@@ -643,6 +643,10 @@ class TranscriptWatcher {
     if (!sample) return;
 
     const metrics = usageToMetrics(sample.usage, sample.model);
+    // B6: which file these numbers came from. The renderer offers it as a
+    // copy button - the pinning rules make "which transcript is this tab on"
+    // a real question, and the answer is worth one click instead of a hunt.
+    metrics.file = file;
     metrics.totals = { ...this.totals };
     metrics.elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
     // Koszt tylko dla modeli z cennika - nieznany backend nie dostaje zmyslonej kwoty.

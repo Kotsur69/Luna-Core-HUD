@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseWindows, parsePosix, dedupeByPort } = require('../src/ports');
+const { parseWindows, parsePosix, dedupeByPort, isSystemPort } = require('../src/ports');
 
 // ---- parseWindows (wyjscie PowerShella jako JSON) ---------------------------
 
@@ -113,4 +113,38 @@ test('dedupeByPort sortuje rosnaco', () => {
     { port: 3000, procId: 3, name: 'b' },
   ]);
   assert.deepEqual(out.map((r) => r.port), [80, 3000, 9000]);
+});
+
+// ---- isSystemPort (B5 noise filter) -----------------------------------------
+// New tests are in English: the project switched to English comments in 8ddeba0
+// and this file is on the list still to be translated.
+
+test('isSystemPort flags known OS process names', () => {
+  assert.equal(isSystemPort({ port: 5040, name: 'svchost' }), true);
+  assert.equal(isSystemPort({ port: 7680, name: 'System' }), true); // case-insensitive
+  assert.equal(isSystemPort({ port: 5000, name: 'ControlCenter' }), false); // dev port wins
+});
+
+test('isSystemPort flags the privileged and ephemeral ranges', () => {
+  assert.equal(isSystemPort({ port: 135, name: 'unknown' }), true); // < 1024
+  assert.equal(isSystemPort({ port: 49664, name: 'unknown' }), true); // >= 49152
+  assert.equal(isSystemPort({ port: 4321, name: 'unknown' }), false); // ordinary range
+});
+
+test('isSystemPort never hides a well-known dev port', () => {
+  // The whole point of the panel: a local server must stay visible even when a
+  // range rule would otherwise sweep it away (80/443 are below 1024).
+  for (const port of [80, 443, 3000, 5173, 8080, 11434]) {
+    assert.equal(isSystemPort({ port, name: 'nginx' }), false, `port ${port}`);
+  }
+});
+
+test('isSystemPort keeps ordinary dev processes visible', () => {
+  assert.equal(isSystemPort({ port: 3000, name: 'node' }), false);
+  assert.equal(isSystemPort({ port: 8501, name: 'python' }), false);
+});
+
+test('isSystemPort survives junk input', () => {
+  assert.equal(isSystemPort(null), false);
+  assert.equal(isSystemPort({ port: 3000 }), false); // no name
 });

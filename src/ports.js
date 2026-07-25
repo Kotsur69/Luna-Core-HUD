@@ -19,6 +19,49 @@ const IS_WINDOWS = process.platform === 'win32';
 // Addresses treated as "localhost / locally reachable".
 const LOCAL_ADDRS = new Set(['127.0.0.1', '::1', '0.0.0.0', '::']);
 
+// B5: processes that listen on a dev machine but are never the thing you are
+// looking for. The panel answers "where is my app running" - svchost and its
+// friends only bury the answer. Classified HERE (one place, unit-tested) and
+// shipped as a flag; whether to hide them stays a renderer-side view decision,
+// so the filter is a toggle and never a silent drop.
+const SYSTEM_PROCS = new Set([
+  // Windows
+  'system', 'idle', 'svchost', 'services', 'lsass', 'wininit', 'smss', 'csrss',
+  'winlogon', 'spoolsv', 'dashost', 'searchapp', 'searchhost', 'sihost',
+  'msmpeng', 'wslservice', 'vmms', 'vmcompute', 'mssense', 'officeclicktorun',
+  // macOS / Linux
+  'launchd', 'systemd', 'systemd-resolve', 'systemd-resolved', 'rapportd',
+  'controlce', 'controlcenter', 'sshd', 'cupsd', 'mdnsresponder',
+  'avahi-daemon', 'rpcbind', 'rpc.statd', 'dnsmasq',
+]);
+
+// Ports that belong to the user even when the range rule below says otherwise -
+// a local nginx/Caddy/Docker on 80 or 443 is exactly what you want to see.
+const DEV_PORTS = new Set([
+  80, 443, 3000, 3001, 4000, 4200, 5000, 5173, 5174, 5432, 6379, 7860,
+  8000, 8080, 8081, 8888, 9000, 11434,
+]);
+
+/**
+ * B5: is this row OS noise rather than something the user started?
+ *
+ * Three signals, cheapest first: a known system process name, the privileged
+ * range below 1024 (binding it needs admin, so on a dev box it is the OS), and
+ * the dynamic/ephemeral range from 49152 up, which on Windows is almost all
+ * RPC. DEV_PORTS wins over both ranges - a heuristic that hides your own web
+ * server is worse than no heuristic at all.
+ *
+ * @param {{port:number, name?:string}} row
+ * @returns {boolean}
+ */
+function isSystemPort(row) {
+  if (!row) return false;
+  const port = row.port | 0;
+  if (DEV_PORTS.has(port)) return false;
+  if (SYSTEM_PROCS.has(String(row.name || '').toLowerCase())) return true;
+  return port < 1024 || port >= 49152;
+}
+
 // PowerShell: listening TCP ports plus the owning process name, as JSON.
 const PS_SCRIPT = `
 $ErrorActionPreference='SilentlyContinue'
@@ -83,15 +126,22 @@ function dedupeByPort(rows) {
   return [...byPort.values()].sort((a, b) => a.port - b.port);
 }
 
-/** One-shot scan of listening localhost ports. */
+/**
+ * One-shot scan of listening localhost ports.
+ * Rows carry the B5 `system` flag; the parsers stay untagged so they remain
+ * pure text -> rows, and the classification lives in exactly one place.
+ */
 async function scanPorts() {
+  let rows;
   if (IS_WINDOWS) {
     const out = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PS_SCRIPT]);
-    return parseWindows(out);
+    rows = parseWindows(out);
+  } else {
+    // macOS / Linux: lsof over listening TCP sockets.
+    const out = await run('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN']);
+    rows = parsePosix(out);
   }
-  // macOS / Linux: lsof over listening TCP sockets.
-  const out = await run('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN']);
-  return parsePosix(out);
+  return rows.map((r) => ({ ...r, system: isSystemPort(r) }));
 }
 
 /** Kills a process by PID. Resolves to whether it worked. */
@@ -163,4 +213,12 @@ class PortWatcher {
 
 // The parsers are pure (string -> list) - exported for the tests. The scan
 // itself spawns system processes, so only the parsing is unit-tested.
-module.exports = { scanPorts, killProcess, PortWatcher, parseWindows, parsePosix, dedupeByPort };
+module.exports = {
+  scanPorts,
+  killProcess,
+  PortWatcher,
+  parseWindows,
+  parsePosix,
+  dedupeByPort,
+  isSystemPort,
+};
