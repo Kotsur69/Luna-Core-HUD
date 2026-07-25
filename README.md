@@ -271,7 +271,7 @@ click handlers are wired — that still needs clicking.
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs
-the matching tool (Read, Edit, Write, Bash, Grep, Glob, Web, Task).
+the matching tool (Read, Edit, Write, Shell, Grep, Glob, Web, Task — the Shell tile covers both the Bash and PowerShell tools).
 
 A tile **sweeps left→right for as long as the tool actually runs** and flashes
 once when it returns, because the transcript pairs a `tool_use` id with the

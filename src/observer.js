@@ -36,7 +36,11 @@ const TOOL_TILES = {
   Read: ['Read'],
   Edit: ['Edit', 'MultiEdit', 'NotebookEdit'],
   Write: ['Write'],
-  Bash: ['Bash', 'BashOutput', 'KillShell'],
+  // "Shell", not "Bash": on Windows the CLI reaches for the PowerShell tool for
+  // most shell work. Counted across recent transcripts on this machine it was
+  // PowerShell 49 vs Bash 19 - and PowerShell mapped to no tile at all, so the
+  // shell tile simply never lit. One tile covers both; the label follows.
+  Shell: ['Bash', 'BashOutput', 'KillShell', 'PowerShell'],
   Grep: ['Grep'],
   Glob: ['Glob'],
   Web: ['WebFetch', 'WebSearch'],
@@ -55,7 +59,7 @@ const TOOL_RE = new RegExp('\\b(' + ALL_TOOL_NAMES.join('|') + ')\\(', 'g');
 /**
  * Zwraca liste kafelkow, ktore powinny sie zapalic dla danej porcji stdout.
  * @param {string} raw surowe dane z ptyProcess.onData
- * @returns {string[]} unikalne etykiety kafelkow (np. ["Bash", "Read"])
+ * @returns {string[]} unikalne etykiety kafelkow (np. ["Shell", "Read"])
  */
 function detectTools(raw) {
   if (!raw) return [];

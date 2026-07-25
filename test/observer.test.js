@@ -87,7 +87,7 @@ test('encodeProjectDir nie wywraca sie na pustym/niepoprawnym wejsciu', () => {
 // ---- detectTools ------------------------------------------------------------
 
 test('detectTools wykrywa narzedzie w surowym stdout', () => {
-  assert.deepEqual(detectTools('Bash(ls -la)'), ['Bash']);
+  assert.deepEqual(detectTools('Bash(ls -la)'), ['Shell']);
 });
 
 test('detectTools zdejmuje sekwencje ANSI przed dopasowaniem', () => {
@@ -101,7 +101,7 @@ test('detectTools mapuje aliasy na wspolny kafelek', () => {
   assert.deepEqual(detectTools('NotebookEdit(a)'), ['Edit']);
   assert.deepEqual(detectTools('WebFetch(url)'), ['Web']);
   assert.deepEqual(detectTools('WebSearch(q)'), ['Web']);
-  assert.deepEqual(detectTools('BashOutput(id)'), ['Bash']);
+  assert.deepEqual(detectTools('BashOutput(id)'), ['Shell']);
 });
 
 test('detectTools deduplikuje powtorzenia', () => {
@@ -110,7 +110,7 @@ test('detectTools deduplikuje powtorzenia', () => {
 
 test('detectTools zwraca wiele kafelkow z jednej porcji danych', () => {
   const tiles = detectTools('Read(a) then Bash(ls) then Write(b)');
-  assert.deepEqual(tiles.sort(), ['Bash', 'Read', 'Write']);
+  assert.deepEqual(tiles.sort(), ['Read', 'Shell', 'Write']);
 });
 
 test('detectTools wymaga nawiasu - sama nazwa w zdaniu nie zapala kafelka', () => {
@@ -126,9 +126,9 @@ test('detectTools nie wywraca sie na pustym wejsciu', () => {
 test('detectTools jest odporny na powtorne wywolania (regex /g ma stan)', () => {
   // TOOL_RE zyje na poziomie modulu - bez resetu lastIndex drugie wywolanie
   // gubiloby trafienia. Ten test pilnuje wlasnie tego.
-  assert.deepEqual(detectTools('Bash(ls)'), ['Bash']);
-  assert.deepEqual(detectTools('Bash(ls)'), ['Bash']);
-  assert.deepEqual(detectTools('Bash(ls)'), ['Bash']);
+  assert.deepEqual(detectTools('Bash(ls)'), ['Shell']);
+  assert.deepEqual(detectTools('Bash(ls)'), ['Shell']);
+  assert.deepEqual(detectTools('Bash(ls)'), ['Shell']);
 });
 
 // ---- sumUsageByModel / sumUsageLines (B4) -----------------------------------
@@ -194,13 +194,22 @@ test('toolsFromLines reads a tool call from structured transcript data', () => {
   assert.deepEqual(toolsFromLines(toolLine('Read')), ['Read']);
 });
 
+test('toolsFromLines lights the Shell tile for PowerShell, not just Bash', () => {
+  // The tile map predated the PowerShell tool, so on Windows the shell tile
+  // never lit at all: counted across recent transcripts on this machine it was
+  // PowerShell 49 vs Bash 19. Nothing in the suite noticed, because every test
+  // fed it the name it already knew.
+  assert.deepEqual(toolsFromLines(toolLine('PowerShell')), ['Shell']);
+  assert.deepEqual(toolsFromLines(toolLine('Bash')), ['Shell']);
+});
+
 test('toolsFromLines maps aliases onto their shared tile', () => {
   assert.deepEqual(toolsFromLines(toolLine('MultiEdit')), ['Edit']);
   assert.deepEqual(toolsFromLines(toolLine('WebSearch')), ['Web']);
 });
 
 test('toolsFromLines deduplicates and handles several calls in one line', () => {
-  assert.deepEqual(toolsFromLines(toolLine('Read', 'Read', 'Bash')), ['Read', 'Bash']);
+  assert.deepEqual(toolsFromLines(toolLine('Read', 'Read', 'Bash')), ['Read', 'Shell']);
 });
 
 test('toolsFromLines ignores tools with no tile, such as MCP servers', () => {
@@ -217,7 +226,7 @@ test('toolsFromLines ignores lines that are not tool calls', () => {
 
 test('toolsFromLines survives a torn line mid-write', () => {
   const text = [toolLine('Bash'), '{"message":{"content":[{"type":"tool_'].join('\n');
-  assert.deepEqual(toolsFromLines(text), ['Bash']);
+  assert.deepEqual(toolsFromLines(text), ['Shell']);
 });
 
 test('toolsFromLines returns nothing for empty input', () => {
@@ -268,7 +277,7 @@ test('toolEventsFromLines pairs a tool_use with the tool_result that closes it',
   assert.deepEqual(
     events.map((e) => [e.phase, e.id, e.tile]),
     [
-      ['start', 't0', 'Bash'],
+      ['start', 't0', 'Shell'],
       ['end', 't0', undefined],
     ]
   );

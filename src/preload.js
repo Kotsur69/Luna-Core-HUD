@@ -27,7 +27,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   onContext: (callback) => {
     ipcRenderer.on('metrics:context', (_event, payload) => callback(payload));
   },
-  /** Kafelki Skill Trackera do zapalenia: ({ sessionId, tiles: ["Bash",...] }). */
+  /** Kafelki Skill Trackera do zapalenia: ({ sessionId, tiles: ["Shell",...] }). */
   onTools: (callback) => {
     ipcRenderer.on('metrics:tools', (_event, payload) => callback(payload));
   },
