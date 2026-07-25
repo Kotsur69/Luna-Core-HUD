@@ -14,7 +14,8 @@ injects prompts or touches the `claude` binary.
 > **command palette (Ctrl+K)**, a **token burn-rate sparkline**, a swappable
 > **theming system**, a **PL/EN language switch**, a live **usage-limits gauge**
 > (5-hour + weekly subscription windows), an **armed auto-compact** toggle, a
-> **CWD/project switcher**, and a **cyberpunk boot sequence**.
+> **CWD/project switcher**, a **cyberpunk boot sequence**, and a **Skill Tracker
+> that shows how long each tool actually ran**.
 
 ---
 
@@ -208,6 +209,8 @@ Luna-Core-HUD/
 | B2 | Context-limit auto-detect (200k vs 1M, self-correcting) | ✅ done |
 | B3 | Model badge — model + detected window, all 5 themes | ✅ done |
 | B4 | Session cost/time HUD — elapsed time + token→$ estimate | ✅ done |
+| A1 | Split `renderer.js` → 57-line entry point + 21 ES modules | ✅ done |
+| B8 | Skill Tracker shows a tool's **real duration** (sweep, not a blink) | ✅ done |
 
 That closes the whole approved shortlist, plus the first slice of the structural
 plan. **A1 is now done too**: the 1554-line `renderer.js` is a 57-line entry

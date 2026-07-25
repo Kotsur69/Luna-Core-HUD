@@ -532,6 +532,28 @@ Under `prefers-reduced-motion` the sweep becomes a **static fill** rather than
 being exempted from the global block — the "running" state still reads, nothing
 moves.
 
+#### What B8 exposed: the shell tile had never lit on Windows
+
+First hand-launch found the Shell tile dead while every other tile worked. Not a
+B8 bug — `TOOL_TILES` predated Claude Code's **PowerShell** tool and only listed
+`Bash`/`BashOutput`/`KillShell`. On Windows the CLI reaches for PowerShell for
+most shell work, so the tile had probably never lit on this machine. Counting
+tool names across recent transcripts: **PowerShell 49, Bash 19**. The tile is now
+`Shell` and covers both.
+
+Two things worth keeping from that:
+
+- **The duration sweep is what made it visible.** While every tile was a 1.5 s
+  flicker, a missing flicker read as "I must have blinked". A tile that stays lit
+  for seconds makes an absent one obvious. Better feedback finds bugs that better
+  tests did not.
+- **The suite could not have caught it, for the same reason the stale rate table
+  slipped through** (see A3): every test fed the parser a name it already knew.
+  Fixture-shaped tests verify the *logic*, never the *table*. The durable check
+  is the one that found it — scan real transcripts for tool names the map has no
+  entry for. Worth re-running whenever the CLI ships new tools; `AskUserQuestion`
+  is currently tile-less too, deliberately.
+
 ### Phase C — Layout & visual templates (§2.3, §3)
 
 The original "move the elements around" ask. Only sane **after** A2.
