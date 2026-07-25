@@ -462,6 +462,38 @@ Phase A is done — or before it, if you want a break from refactoring.
 | B5 | **Port filter toggle** | Hide system noise (svchost/System) — a *toggle*, never a permanent silent filter. |
 | B6 | **Copy-transcript-path button** | One click to copy the `.jsonl` path. |
 | B7 | **Skill search box** | Filter the ~339-skill list as you type. The list is already in memory. |
+| B8 | 🔴 **Skill Tracker: show duration, not a blink** | **Wanted (Mati, 2026-07-25) — needs real work, see below.** A tile should light for as long as the tool actually runs, filling **left → right** while it does, instead of flashing for a fixed 1500 ms. |
+
+#### B8 — why this is not just CSS
+
+The tracker currently has **no concept of a tool finishing**. `lightTiles()`
+adds `.is-active` and sets a `TILE_ACTIVE_MS = 1500` timer; each new detection
+merely restarts that timer. A long `Bash` and an instant `Read` look identical,
+and a two-minute tool blinks off after 1.5 s while still running.
+
+To light "for the whole time", we need an **end signal**, and the transcript has
+one: a `tool_use` block carries an `id`, and the following user message carries a
+`tool_result` with a matching `tool_use_id`. Duration is the gap between them.
+That keeps the whole thing Passive Observer — still zero extra tokens.
+
+Four things that make it more than a cosmetic change:
+
+1. **Poll granularity.** The watcher ticks every 1.5 s, so a fast tool starts
+   *and* finishes inside one tick and would never render as active at all. Needs
+   a minimum visible duration, or the pairing must be derived from timestamps in
+   the entries rather than from when we happened to read them.
+2. **The fill is indeterminate.** We cannot know a tool's runtime in advance, so
+   this must be a looping left→right sweep that *resolves* on `tool_result` —
+   not a percentage bar, which would require a total we do not have.
+3. **Tools that never return.** A killed or crashed session leaves a `tool_use`
+   with no matching result. Needs a timeout so a tile cannot glow forever.
+4. **Concurrency.** Several tools can be in flight at once, and multiple names
+   map to one tile (`Edit`/`MultiEdit`/`NotebookEdit`). The tile has to track a
+   *set* of outstanding ids and only go dark when the last one closes.
+
+Suggested shape: have the watcher emit `{tile, id, phase:'start'|'end'}` instead
+of today's flat name list, and let the renderer own the visual state machine.
+The IPC channel (`metrics:tools`) can stay; only the payload grows.
 
 ### Phase C — Layout & visual templates (§2.3, §3)
 
@@ -525,7 +557,8 @@ attachment) was indeed the whole job — see below.
 ### 6a. Two scopes, and why it matters
 
 The lesson worth keeping: **context window is per-process, usage limits are
-per-account.** Each `claude` has its own 200k window, so the context bar,
+per-account.** Each `claude` has its own window (model-detected since B2 — 1M for
+the current family, 200k only for Haiku 4.5), so the context bar,
 sparkline and tool tiles are per tab. The 5h/weekly limits are one shared quota
 across every tab (and every session run outside the HUD), so they stay a single
 global readout and must never be summed per tab.
@@ -535,8 +568,23 @@ draining one quota N times faster. Per-tab metrics *structurally cannot* warn
 about this — only the global gauge can. Worth adding an "N active sessions" badge
 next to the 5h readout so the burn rate is attributable to tab count.
 
-Known remaining gap: two tabs both **resuming** (`--continue`) into the same
-folder. Pinning distinguishes sessions by "new file after startup" or "existing
-file that grew after startup"; two resumed sessions offer neither signal
-cleanly. Fixing it properly needs the session UUID, which means parsing it out of
-the CLI's stdout — still zero-token, but a bigger change.
+**Fixed 2026-07-25 — and it was worse than described here.** The old note assumed
+only two *resuming* tabs were ambiguous. In fact two **fresh** sessions in one
+folder raced too: both watchers poll on independent 1.5 s timers, and whichever
+ticked first claimed any newly appeared transcript — regardless of which PTY
+created it. Hand-testing an Opus tab beside a Sonnet tab showed each displaying
+the other's model, context and cost. `claimedTranscripts` guaranteed no two
+watchers shared a file, so the result was a clean bijection that was simply the
+wrong way round — which is why it looked half-working instead of obviously broken.
+
+The fix turned the guess into a lookup: `main.js` mints a UUID per spawn and
+passes `--session-id <uuid>` to the CLI, and since a transcript is named after
+its session id (verified: the `sessionId` field equals the filename), the watcher
+opens `<uuid>.jsonl` by name. No stdout parsing was needed after all. The
+timestamp heuristic survives only as a fallback for bare-shell profiles and
+hand-typed `claude`, where we do not control the launch.
+
+Lesson for the test suite: 92 tests were green throughout. `scratchpad/check-pin.js`
+drove watcher ticks **sequentially**, so the interleaving that caused the bug
+could never occur. `test/pinning.test.js` now ticks two watchers in the
+adversarial order on purpose.

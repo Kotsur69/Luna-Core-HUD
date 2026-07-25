@@ -56,7 +56,7 @@ user's context window. It works only as:
 | Direction | Path |
 |-----------|------|
 | Passive Observer (terminal) | `session.proc.onData` → IPC `pty:data` `{sessionId, data}` → that tab's `xterm.write()` |
-| Passive Observer (Skill Tracker) | `session.proc.onData` → `detectTools()` (ANSI strip + regex) → IPC `metrics:tools` → tiles light up (active tab only) |
+| Passive Observer (Skill Tracker) | `TranscriptWatcher` → `toolsFromLines()` reads structured `tool_use` entries from the JSONL → IPC `metrics:tools` → tiles light up (active tab only). The old `detectTools()` stdout scan (ANSI strip + `Name(` regex) stays as a backstop — it broke silently when the TUI changed how it renders a tool call. **Tiles currently flash for 1.5 s and do not show how long a tool ran — see FUTURE_PLAN B8.** |
 | Passive Observer (Context %) | per-session `TranscriptWatcher` tails **one pinned** `~/.claude/projects/<cwd>/<session>.jsonl` → real `usage` tokens → IPC `metrics:context` → that tab's bar |
 | Session control | `sessions:create` / `:close` / `:activate` → main owns the `sessions` Map → broadcast `sessions:update` → tab bar rebuilds |
 | Action Injector (keyboard) | `xterm.onData` → IPC `pty:write` → `ptyProcess.write()` |
@@ -275,19 +275,27 @@ Claude Code stores transcripts as `~/.claude/projects/<encoded-cwd>/<session>.js
 — the **directory is keyed by folder, the file by session**. Two tabs on the same
 repo therefore share one directory containing two files.
 
-Each `TranscriptWatcher` snapshots that directory at startup and **pins** the
-first file that is genuinely its own: one created after startup (new session), or
-a pre-existing one that grows after startup (`--continue`). A process-wide claim
-registry stops two watchers taking the same file. With no candidate it reports
-nothing rather than a neighbour's file — a session that hasn't exchanged anything
-yet really is at 0%.
+LunaCore therefore **names the session itself**: every spawn mints a UUID and
+starts the CLI as `claude --session-id <uuid>`. A transcript is named after its
+session id, so the watcher opens `<uuid>.jsonl` directly instead of inferring
+ownership. Deterministic — there is nothing left to race.
 
 Without this the bars lie, and armed auto-compact can read another session's 90%
 and inject `/compact` into the tab you're looking at.
 
-**Known gap:** two tabs both *resuming* (`--continue`) into the same folder offer
-neither pinning signal cleanly. Fixing it needs the session UUID parsed from
-stdout — still zero-token, but a larger change.
+**Fallback:** when LunaCore doesn't issue the start command — a bare-shell
+profile, a hand-typed `claude`, or a `--resume` that brings its own id — there is
+no UUID to pin. Those sessions fall back to the older heuristic: snapshot the
+directory at startup and claim the first file created (or grown) afterwards, with
+a process-wide registry stopping two watchers taking the same file. With no
+candidate it reports nothing rather than a neighbour's file — a session that
+hasn't exchanged anything yet really is at 0%.
+
+That heuristic is what used to run for *every* session, and it had a race: two
+watchers poll on independent 1.5 s timers, so whichever ticked first claimed any
+new transcript, no matter which tab created it. An Opus tab and a Sonnet tab
+opened on one folder showed each other's numbers. Pinning by UUID removes the
+guess for every session LunaCore launches itself.
 
 ## Launch profiles
 
@@ -402,6 +410,14 @@ you can *see* the trend, not just the current number — plus a **tok/min** burn
 rate and an **ETA to 85%** (the compact zone). It piggybacks on the same `usage`
 samples the bar already receives (a second `metrics:context` listener), so it adds
 no polling and no tokens. The dashed line marks the 85% threshold.
+
+**The Y axis is relative, not 0–100%.** On a fixed axis a typical drift (4% → 7%)
+is about one pixel in a 30-pixel box — technically correct and useless, which is
+exactly how it looked. The axis now fits the samples on screen, with a **2
+percentage-point minimum span** so a genuinely flat session stays flat instead of
+magnifying rounding noise into a mountain range. Read the shape for the trend and
+the **tok/min + ETA** text beside it for the absolute level — a steep-looking line
+does not by itself mean the window is filling fast.
 
 ## Usage-limits gauge
 
