@@ -335,6 +335,13 @@ a process-wide registry stopping two watchers taking the same file. With no
 candidate it reports nothing rather than a neighbour's file — a session that
 hasn't exchanged anything yet really is at 0%.
 
+Because "which transcript is this tab actually on" is a real question, the
+Context Window header carries a **copy-path button** (B6). The observer sends the
+file it pinned along with the metrics, so the path is per tab for free — switching
+tabs restores that tab's metrics and with them *its* transcript. The button hides
+itself until a file is pinned (before that there is nothing to copy) and the full
+path sits in its tooltip, which is often all you wanted.
+
 That heuristic is what used to run for *every* session, and it had a race: two
 watchers poll on independent 1.5 s timers, so whichever ticked first claimed any
 new transcript, no matter which tab created it. An Opus tab and a Sonnet tab
@@ -377,6 +384,18 @@ macOS/Linux), each mapped to its owning process and PID. Per row you can open
 `http://localhost:PORT` in the browser, copy the URL, or kill the process (with
 a confirm). Purely local, read-only observation — no tokens spent.
 
+The ◉ button in the section header folds away **system noise** (B5): known OS
+process names, the privileged range below 1024, and the ephemeral range from
+49152 up, which on Windows is nearly all RPC. A short list of well-known dev
+ports (80, 443, 3000, 5173, 8080, 11434 …) always wins over the range rules — a
+heuristic that hides your own web server is worse than no heuristic. The
+classifier is `isSystemPort()` in [`src/ports.js`](src/ports.js) (one place,
+unit-tested) and ships as a `system` flag per row; hiding is a *view* decision in
+the renderer, so nothing is re-scanned when you toggle. The line under the list
+always reports how many rows were folded — the filter can hide things, but never
+silently. The choice persists in `config/ui.local.json` (`hideSystemPorts`,
+default on).
+
 ## Action cheat-sheets
 
 Collapsible command groups in the left panel, defined in
@@ -400,6 +419,14 @@ categories (Frontend, Backend, Data/ML, DevOps, Tests, Security, Database,
 Git/Review, Docs, Other). Click a category to expand its skills; click a skill
 to copy its name. Categorisation is keyword-heuristic (rough by design) and the
 scan result is cached per session. Read-only, zero tokens.
+
+With 300+ skills the list is only useful if you can narrow it, so a filter box
+sits above it (B7). A query matches the **name and the description** — half of
+what you remember about a skill is what it does, not its slug — and every
+surviving category expands, since a list of collapsed headers is not an answer.
+The counter next to the title shows `12/339` while filtering, so you can always
+tell you are looking at a subset. The list is already in memory, so this is a
+local re-render: no IPC, no re-scan. Escape clears the box.
 
 ## Prompt library
 
