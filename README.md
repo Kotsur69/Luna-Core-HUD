@@ -186,6 +186,58 @@ Luna-Core-HUD/
 
 ---
 
+## Widgets
+
+A panel block that can be mounted into any slot and taken back out:
+
+```js
+defineWidget({
+  id: 'ports',
+  titleKey: 'ports.title',   // i18n key — a literal would freeze the HUD into one language
+  template: 'w-ports',       // <template> in index.html
+  mount(root) {              // root.querySelector only — ids exist only once mounted
+    const off = onPortsUpdate(render);
+    return () => off();      // cleanup: undo every subscription and timer
+  },
+});
+```
+
+Markup stays authored as HTML inside `<template id="w-…">` and is cloned on
+mount, so the live DOM is identical to what static markup produced — the
+conversion needs no CSS changes. Each template holds **exactly one root
+element**, which becomes the widget root.
+
+**IPC listeners never live in a widget.** `preload.js` exposes subscriptions as
+`ipcRenderer.on(...)` with no removal, so a remounted widget could never undo
+one. `modules/feeds.js` owns one listener per process-wide channel and re-emits
+on the bus, whose subscriptions *do* return disposers. The feed channels replay
+their last payload, so a widget mounted between two polls paints immediately
+instead of waiting up to 90 s for the next usage tick.
+
+### Checking a widget really tears down
+
+Nothing in normal use unmounts anything, so a forgotten disposer is invisible —
+the widget simply renders twice per event forever. Two handles:
+
+```
+npx electron . --luna-probe     # remounts every widget 3×, prints bus
+                                # subscriber counts before/after, quits
+```
+
+```js
+__luna.stats()            // subscribers per bus channel (DevTools console)
+__luna.remount('ports')   // then compare — counts that grew mean a leak
+```
+
+Equal counts mean clean teardown; `rows: 1` in the probe means the widget
+mounted exactly once, neither missing nor duplicated.
+
+`src/renderer/package.json` marks the folder `"type": "module"`, which lets Node
+load these files directly — `node --check src/renderer/modules/*.js` works, and
+the test suite can reach renderer modules.
+
+---
+
 ## Roadmap
 
 | Phase | Focus | Status |

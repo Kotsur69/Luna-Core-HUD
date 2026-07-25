@@ -443,7 +443,7 @@ feature set is stable and nothing is half-finished.
 | # | Item | Ref | Notes |
 |---|------|-----|-------|
 | A1 | ✅ **Split `renderer.js` into modules** | §6 | **DONE 2026-07-25.** 1554 lines → a 60-line entry point + 21 modules in `src/renderer/modules/`, loaded as `<script type="module">`. Verified first: Chromium blocks ESM over `file://`, but **Electron 33 does not** — probed with a throwaway app before committing to the approach, so no bundler and no custom protocol. See A1a below for the two couplings that had to be broken. |
-| A2 | **Widget contract** | §4 | `{ id, title, mount(el), unmount() }`. Convert existing blocks one at a time; the app keeps working after every single step. |
+| A2 | 🟡 **Widget contract** | §4 | **Contract DONE 2026-07-25**, `ports` converted as the first block; the remaining blocks are mechanical. Shape is `{ id, titleKey, template, mount(root) -> cleanup? }` — see A2a for why it is not quite the `{title, mount, unmount}` sketched here. |
 | A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, now 92 tests, ~0.4 s, no new deps. Includes two **data** tests asserting the shipped rate/window tables cover every current model — logic tests on fixtures cannot catch a stale table. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that made A1 safe — it caught nothing during the split, which is the point: the suite covers the *pure* modules, and A1 never touched them. Now 117 tests. |
 | A4 | 🟡 **Kill the dead bits** | §6 | Half done: `CONTEXT_LIMIT` is no longer a magic number (now an alias of `models.DEFAULT_CONTEXT_LIMIT`). **Still open:** the dead `.panel__spacer` CSS rule. |
 | A5 | **Async skill scan** | §6 | `scanSkills()` still blocks main ~2.4 s; pre-warm only hides it. Worker thread or async fs walk. |
@@ -474,6 +474,78 @@ makes "never fires on a tab restore" structural instead of a `live` flag.
 switching language does not re-render the tab strip, so a tab's close-button
 tooltip keeps the old language until the next `renderTabs()`. One line —
 `onLangChange(renderTabs)` in `sessions.js` — whenever someone wants it.
+
+#### A2a — the contract, and the two things the one-liner hid
+
+The sketch was `{ id, title, mount(el), unmount() }`. What shipped is
+`{ id, titleKey, template, mount(root) -> cleanup? }`, and each difference is
+load-bearing:
+
+- **`titleKey`, not `title`.** Once a layout preset renders block headers, a
+  literal string freezes the HUD into one language. The key is resolved through
+  i18n at render time.
+- **`template`, not markup in JS.** Each block's HTML moves into a
+  `<template id="w-…">` at the end of `index.html` and is cloned on mount, so the
+  live DOM is identical to what the static markup produced — **this whole
+  refactor needed no CSS changes**. Building blocks with `createElement` would
+  have thrown away the `data-i18n` attributes and the ability to read the HUD's
+  structure as HTML. Rule: a template holds **exactly one root element**, which
+  becomes the widget root — an extra wrapper would be one more level for the
+  panel's flex layout to trip over.
+- **`mount()` returns its cleanup** instead of a separate `unmount()`. The
+  disposers are closed over by the function that created them; a sibling method
+  would have to re-find them in module state.
+
+**The blocker the plan did not mention: nothing could unsubscribe.** `bus.js`
+subscriber functions returned `void`, and renderer modules subscribed to IPC
+directly — where preload exposes only `ipcRenderer.on(...)` with **no removal**
+(`preload.js` `onPorts`/`onUsage`). A remounted widget would therefore leave its
+old handler behind and render twice per tick, permanently, with no way to undo
+it. Two changes fix it, and they are the actual prerequisites:
+
+1. Every `bus.js` subscribe call now returns a disposer.
+2. New `modules/feeds.js` owns one IPC listener per process-wide channel and
+   re-emits on the bus. **The rule: IPC listeners live at module scope; widgets
+   only ever touch the bus.** `sessions.js` keeps its own because it is the
+   session router — it demultiplexes by `sessionId` before anyone can use a
+   payload, and already fans out through the bus.
+
+The feed channels **replay** their last payload to a late subscriber. Without
+that, a widget mounted between two polls would sit empty for up to 90 s (usage).
+
+**Verifying it is the hard part, and needed new tooling.** Nothing in normal use
+unmounts anything, so a forgotten disposer is invisible — it would first show up
+in Phase C, looking like a layout bug. Three things now make it checkable:
+
+- `busStats()` reports subscriber counts per channel.
+- `window.__luna` in the renderer: `remount(id)`, `mounted()`, `widgets()`, `stats()`.
+- **`npx electron . --luna-probe`** — mounts the HUD, remounts every widget three
+  times, prints counts before/after, and quits. Equal counts = clean teardown;
+  `rows: 1` = mounted exactly once, neither missing nor duplicated.
+
+First run was clean on all counts.
+
+**Hand-verified by Mati the same day** (app launched, not just probed): the block
+mounts in its old position and still grows; filter toggle, the folded-count line,
+open / copy / kill and the PL↔EN switch all behave; the usage tile still fills
+through the rewired feed; and the whole HUD is unregressed — context bar, badge,
+cost, sparkline, tabs, themes, palette, skills search, scratchpad. **The B8
+duration sweep was watched for the first time here too, and works** — including
+a tool still running after a tab switch, which had also only ever been unit-proven.
+
+Two smaller notes. `src/renderer/package.json` (`{"type": "module"}`) lets Node
+load these ESM files directly — **the `.mjs` copy trick used to `node --check` the
+renderer in A1 is retired**, and `test/` can now reach renderer modules, which is
+what makes `registry.js` testable (142 tests). And the transitional
+`[data-slot]` placeholder is `display: contents`, so it contributes nothing to
+layout while converted and unconverted blocks sit side by side; Phase C replaces
+it with real named slots.
+
+**Conversion order for the rest** (each one leaves the app working):
+`scratchpad` → `skilltracker` (timers must stop on unmount) → `usage` (30 s tick)
+→ `context`+`spark`+`autocompact` (coupled trio, three session views) →
+`cheatsheets`/`prompts`/`skills` → `switchers`/`actions`/`appearance` →
+`terminal` last, since it owns the xterm panes.
 
 ### Phase B — Daily-driver quick wins (§5.1)
 
