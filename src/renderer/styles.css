@@ -80,6 +80,12 @@ html, body {
 .panel__section--grow { flex: 1; min-height: 0; }
 .panel__spacer { flex: 1; }
 
+/* A2: placeholder marking where a widget mounts. `display: contents` removes
+   the wrapper itself from layout, so the mounted .panel__section stays a direct
+   flex child of the panel - exactly what the static markup was. Without this,
+   panel__section--grow would stretch the placeholder instead of the widget. */
+.widget-slot { display: contents; }
+
 /* Przewijalny srodek panelu (lewy): sekcje biora naturalna wysokosc i
    przewijaja sie razem, zamiast dzielic sie stala wysokoscia i przycinac
    zawartosc. Brand na gorze i status PTY na dole zostaja przypiete. */

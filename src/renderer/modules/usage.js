@@ -10,7 +10,7 @@
 'use strict';
 
 import { t } from './util.js';
-import { onLangChange } from './bus.js';
+import { onLangChange, onUsageUpdate } from './bus.js';
 
 const usageBody = document.getElementById('usage-body');
 const usageRefreshBtn = document.getElementById('usage-refresh');
@@ -106,7 +106,8 @@ function renderUsage() {
   if (u.extraUsage) usageBody.appendChild(usageMessage('usage.extra'));
 }
 
-window.lunacore.onUsage((usage) => {
+// Via feeds.js, not straight off IPC - see the note there on disposability.
+onUsageUpdate((usage) => {
   lastUsage = usage;
   renderUsage();
 });

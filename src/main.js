@@ -183,9 +183,51 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // A2: headless check of the widget contract, off unless asked for.
+  if (process.argv.includes('--luna-probe')) {
+    mainWindow.webContents.once('did-finish-load', () => runWidgetProbe(mainWindow));
+  }
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+/**
+ * Runs the widget probe and quits: `npx electron . --luna-probe`.
+ *
+ * Remounts every mounted widget several times and prints the bus subscriber
+ * counts before and after. This exists because a widget whose cleanup forgets a
+ * disposer looks perfectly normal - it just renders twice per event, for the
+ * rest of the session, and nothing on screen says so. Counts that grew are the
+ * only visible symptom, and until Phase C starts moving panels around nothing
+ * else would ever exercise unmount() at all.
+ *
+ * `rows` is the positive half: exactly one #ports-list means the widget mounted
+ * once - neither missing nor duplicated.
+ */
+async function runWidgetProbe(win) {
+  const script = `(() => {
+    if (!window.__luna) return JSON.stringify({ error: 'no __luna - renderer never finished importing' });
+    const mounted = __luna.mounted();
+    const before = __luna.stats();
+    for (let pass = 0; pass < 3; pass++) for (const id of mounted) __luna.remount(id);
+    return JSON.stringify({
+      widgets: __luna.widgets(),
+      mounted,
+      remountedTo: __luna.mounted(),
+      before,
+      after: __luna.stats(),
+      rows: document.querySelectorAll('#ports-list').length,
+    });
+  })()`;
+
+  try {
+    console.log('[luna-probe]', await win.webContents.executeJavaScript(script, true));
+  } catch (err) {
+    console.error('[luna-probe] FAILED', err);
+  }
+  app.quit();
 }
 
 // ---- Pseudoterminal (node-pty) ----------------------------------------------

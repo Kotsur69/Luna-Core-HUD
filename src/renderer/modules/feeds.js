@@ -1,0 +1,34 @@
+// ============================================================================
+// LunaCore - IPC feeds (A2)
+// ----------------------------------------------------------------------------
+// One listener per process-wide IPC channel, re-emitted on the bus.
+//
+// WHY this module exists at all: preload exposes subscriptions as bare
+// `ipcRenderer.on(...)` with NO way to remove them (see preload.js onPorts /
+// onUsage). Before widgets that was harmless - nothing was ever torn down. The
+// moment a block can be unmounted and mounted again, a widget subscribing to IPC
+// directly would leave the old handler behind and end up rendering twice per
+// tick, with no way to undo it.
+//
+// So the rule A2 establishes is: IPC listeners live HERE, at module scope, and
+// widgets only ever touch the bus - whose subscriptions do come with disposers.
+//
+// sessions.js keeps its own IPC listeners deliberately. It is not a widget but
+// the session router: it has to demultiplex every payload by sessionId before
+// anyone else can use it, and it already fans the result out through the bus.
+// ============================================================================
+
+'use strict';
+
+import { emitPortsUpdate, emitUsageUpdate } from './bus.js';
+
+// 7B: passive scan of listening localhost ports.
+window.lunacore.onPorts((ports) => {
+  emitPortsUpdate(Array.isArray(ports) ? ports : []);
+});
+
+// Usage limits (5h + weekly). Account-scoped, NOT per tab - see the scope rule
+// in README: context window is per process, usage limits are per account.
+window.lunacore.onUsage((usage) => {
+  emitUsageUpdate(usage);
+});

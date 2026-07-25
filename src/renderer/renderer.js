@@ -16,6 +16,12 @@
 
 'use strict';
 
+// -- IPC feeds ----------------------------------------------------------------
+// One listener per process-wide channel, fanned out on the bus. First, so the
+// feeds exist before anything subscribes - though they replay their last
+// payload anyway, which is what lets a widget mount late (A2).
+import './modules/feeds.js';
+
 // -- Terminal, tabs and session routing ---------------------------------------
 import { fitAndResize } from './modules/terminals.js';
 import { initSessions } from './modules/sessions.js';
@@ -42,12 +48,27 @@ import { initProfiles, initProjects } from './modules/switchers.js';
 import { initPorts } from './modules/ports.js';
 import { initAppearance } from './modules/appearance.js';
 
+// -- Widgets (A2) -------------------------------------------------------------
+// Blocks converted to the widget contract. They self-register at import time
+// (the imports above are what pull them in) and are mounted below, into the
+// [data-slot] placeholder that marks their spot in index.html.
+import { mountIntoSlot, remountWidget, mountedWidgets } from './modules/host.js';
+import { listWidgets } from './modules/registry.js';
+import { busStats } from './modules/bus.js';
+
+const WIDGETS = ['ports'];
+
 // ---- Startup ----------------------------------------------------------------
 //
 // Everything above only registers listeners and bus subscriptions. Nothing has
 // hit IPC yet, so every subscriber is in place before the first payload lands -
 // in particular initAppearance() broadcasts a language change, and each module
 // must already be listening for it.
+
+// Widgets go up FIRST: their DOM has to exist before the init calls below
+// (initPorts) reach for it, and before initAppearance() broadcasts the first
+// language change.
+for (const id of WIDGETS) mountIntoSlot(id);
 
 initProfiles();
 initProjects();
@@ -58,6 +79,25 @@ initScratchpad();
 initPorts();
 initAppearance();
 initSessions();
+
+// ---- Dev hooks (A2) ---------------------------------------------------------
+//
+// The whole point of the widget contract is that unmount() undoes everything a
+// widget did, and nothing in normal use ever unmounts anything - so a leaked
+// subscription would stay invisible until Phase C moved a panel, where it would
+// look like a layout bug instead. This is the handle for exercising it:
+//
+//   __luna.remount('ports')   // then check renders/clicks still happen ONCE
+//
+// Cheap enough to keep shipped; it also lists what is registered vs mounted.
+window.__luna = {
+  remount: remountWidget,
+  mounted: mountedWidgets,
+  widgets: () => listWidgets().map((w) => w.id),
+  // Subscriber counts per bus channel - see busStats(). Remount, compare, and a
+  // forgotten disposer shows up as a number that grew.
+  stats: busStats,
+};
 
 // ---- Window events ----------------------------------------------------------
 
