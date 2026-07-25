@@ -144,8 +144,30 @@ Luna-Core-HUD/
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
 │       ├── i18n.js        # PL/EN dictionary + t() (IIFE → window.i18n only)
-│       ├── renderer.js    # xterm.js ↔ PTY wiring + COMPACT + profiles + palette + themes
-│       └── styles.css     # LunaCore theme tokens (:root custom properties)
+│       ├── renderer.js    # entry point only: imports the modules, runs the initialisers
+│       ├── styles.css     # LunaCore theme tokens (:root custom properties)
+│       └── modules/       # one file per concern, ES modules (see A1 below)
+│           ├── bus.js         # subscriber lists: context / language / per-tab view state
+│           ├── util.js        # t() shortcut + pulse()
+│           ├── terminals.js   # one xterm per tab + the `term` facade + fit/resize
+│           ├── sessions.js    # tab bar + the ONLY place pty IPC is routed
+│           ├── context.js     # Context Window bar, model badge, cost line
+│           ├── spark.js       # burn-rate sparkline + tok/min + ETA
+│           ├── usage.js       # 5h / weekly limit meter
+│           ├── led.js         # working-vs-waiting LED
+│           ├── ptystatus.js   # pty status line
+│           ├── skilltracker.js# tool tiles
+│           ├── actions.js     # the physical COMPACT button
+│           ├── autocompact.js # armed auto-compact
+│           ├── palette.js     # Ctrl+K command palette
+│           ├── switchers.js   # profile + project selects
+│           ├── ports.js       # localhost port tracker
+│           ├── cheatsheets.js # config-driven command buttons
+│           ├── prompts.js     # prompt library
+│           ├── skills.js      # skill cheatsheet
+│           ├── scratchpad.js  # local notepad
+│           ├── appearance.js  # theme + language
+│           └── boot.js        # startup sequence
 ├── config/
 │   ├── profiles.json      # launch profiles (profiles.local.json overrides, gitignored)
 │   ├── projects.json      # working directories (projects.local.json overrides, gitignored)
@@ -188,12 +210,14 @@ Luna-Core-HUD/
 | B4 | Session cost/time HUD — elapsed time + token→$ estimate | ✅ done |
 
 That closes the whole approved shortlist, plus the first slice of the structural
-plan. **Next up** (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8): split the
-~1400-line `renderer.js` into modules (**A1**) and introduce a widget contract
-(**A2**) — the structural work that unblocks layout presets, movable panels and
-everything after them. The A3 test net now exists specifically to make that split
-verifiable. §9 sketches the bigger open question: turning LunaCore into a
-multi-model console (Claude / Kimi / local LM Studio) rather than a Claude-only HUD.
+plan. **A1 is now done too**: the 1554-line `renderer.js` is a 57-line entry
+point plus 21 modules under `src/renderer/modules/`, loaded as
+`<script type="module">`. Worth knowing if you fork this: Chromium blocks ES
+modules over `file://`, but **Electron does not** — so this needs no bundler and
+no build step. **Next up** (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8): the
+widget contract (**A2**), which unblocks layout presets and movable panels. §9
+sketches the bigger open question: turning LunaCore into a multi-model console
+(Claude / Kimi / local LM Studio) rather than a Claude-only HUD.
 
 ### Tests
 
@@ -232,9 +256,18 @@ a promo is active.
 
 ⚠️ **Passing tests do not mean the app boots.** Nothing here launches Electron,
 and `node --check` cannot catch the failure mode that has actually bricked this
-app before — plain `<script>`s share one global scope, so a name collision
-between `renderer.js` and `i18n.js` only explodes at runtime. Launch it by hand
-before trusting a renderer change.
+app before — a name collision between `renderer.js` and `i18n.js`, back when
+both were plain `<script>`s sharing one global scope. The renderer is ES modules
+now, so that specific trap is gone (each module has its own scope), but a bad
+import path or a missing export still fails only at runtime. Launch it by hand
+before trusting a renderer change:
+
+```bash
+npx electron . --enable-logging   # pipes the renderer console to your terminal
+```
+
+A clean log means every module resolved and executed. It does **not** mean the
+click handlers are wired — that still needs clicking.
 
 The right panel lights up live: the Context Window bar reflects real `usage`
 tokens from the session transcript, and Skill Tracker tiles glow when Claude runs

@@ -442,11 +442,38 @@ feature set is stable and nothing is half-finished.
 
 | # | Item | Ref | Notes |
 |---|------|-----|-------|
-| A1 | **Split `renderer.js` into modules** | §6 | Mechanical, behaviour-preserving. One file per concern: `terminal`, `context`, `usage`, `ports`, `palette`, `appearance`, `boot`. Plain `<script>`s share one global scope — the i18n `t` collision proved that the hard way — so either wrap each in an IIFE **or** switch to `<script type="module">` and stop relying on globals. Prefer modules. |
+| A1 | ✅ **Split `renderer.js` into modules** | §6 | **DONE 2026-07-25.** 1554 lines → a 60-line entry point + 21 modules in `src/renderer/modules/`, loaded as `<script type="module">`. Verified first: Chromium blocks ESM over `file://`, but **Electron 33 does not** — probed with a throwaway app before committing to the approach, so no bundler and no custom protocol. See A1a below for the two couplings that had to be broken. |
 | A2 | **Widget contract** | §4 | `{ id, title, mount(el), unmount() }`. Convert existing blocks one at a time; the app keeps working after every single step. |
-| A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, now 92 tests, ~0.4 s, no new deps. Includes two **data** tests asserting the shipped rate/window tables cover every current model — logic tests on fixtures cannot catch a stale table. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that makes A1 safe — **do A1 next, while it's fresh.** |
+| A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, now 92 tests, ~0.4 s, no new deps. Includes two **data** tests asserting the shipped rate/window tables cover every current model — logic tests on fixtures cannot catch a stale table. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that made A1 safe — it caught nothing during the split, which is the point: the suite covers the *pure* modules, and A1 never touched them. Now 117 tests. |
 | A4 | 🟡 **Kill the dead bits** | §6 | Half done: `CONTEXT_LIMIT` is no longer a magic number (now an alias of `models.DEFAULT_CONTEXT_LIMIT`). **Still open:** the dead `.panel__spacer` CSS rule. |
 | A5 | **Async skill scan** | §6 | `scanSkills()` still blocks main ~2.4 s; pre-warm only hides it. Worker thread or async fs walk. |
+
+#### A1a — what the split actually cost
+
+Moving code was the easy half. The single file hid **two couplings** that only
+became visible once modules had to name their dependencies, and both are now
+tiny subscriber lists in `src/renderer/modules/bus.js` rather than direct calls:
+
+1. **`applyLang()` was a hub.** It hard-called `renderLed`, `renderPtyStatus`,
+   `renderCtxText`, `renderBurn`, `renderUsage`, `renderAutoCompact`,
+   `renderBootPref` and reset the palette cache — i.e. the appearance section had
+   to import eight other modules. Now `appearance.js` emits one language change
+   and each module re-renders **its own** text.
+2. **Tab switching reached into three sections' globals.** `stashActive()` /
+   `restoreActive()` read and wrote `sparkBuf`, `lastCtxMetrics`, `ledState`,
+   `ledDead` directly. Now each module registers a `{save, load, clear}` view on
+   the bus, so **no module writes another's keys** on a session bucket.
+
+Two smaller wins fell out of it: the sparkline sampling rule existed twice
+(active tab and background tab, subtly different) and is now one `pushSample()`;
+and auto-compact stopped being called from inside `applyCtxMetrics` — it
+subscribes to the live-metrics stream itself, which removes an import cycle and
+makes "never fires on a tab restore" structural instead of a `live` flag.
+
+**Known papercut, deliberately not fixed here** (behaviour-preserving refactor):
+switching language does not re-render the tab strip, so a tab's close-button
+tooltip keeps the old language until the next `renderTabs()`. One line —
+`onLangChange(renderTabs)` in `sessions.js` — whenever someone wants it.
 
 ### Phase B — Daily-driver quick wins (§5.1)
 

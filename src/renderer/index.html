@@ -297,7 +297,10 @@
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <!-- i18n (PL/EN) - musi zaladowac sie przed renderer.js -->
   <script src="i18n.js"></script>
-  <!-- Logika renderera LunaCore -->
-  <script src="renderer.js"></script>
+  <!-- Logika renderera LunaCore. type="module" - renderer.js jest juz tylko
+       punktem wejscia, a kod siedzi w modules/*.js (patrz FUTURE_PLAN §8 A1).
+       Modul jest odroczony (defer), wiec wykonuje sie po sparsowaniu DOM i po
+       klasycznych <script> wyzej - xterm i window.i18n sa juz gotowe. -->
+  <script type="module" src="renderer.js"></script>
 </body>
 </html>
