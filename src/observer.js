@@ -209,23 +209,39 @@ function readLatestSample(file) {
 }
 
 /**
- * Sumuje zuzycie tokenow z fragmentu JSONL (B4).
+ * Sums token usage from a JSONL fragment, bucketed BY MODEL (B4).
  *
- * Czemu osobno od readLatestSample: pasek kontekstu potrzebuje OSTATNIEGO wpisu
- * (biezacy sklad okna), a koszt potrzebuje SUMY po calej sesji. To dwie rozne
- * liczby z tego samego pliku - mylenie ich zanizyloby koszt do jednej tury.
- * Czysta funkcja: tekst -> liczniki, zeby dalo sie ja przetestowac bez dysku.
- * @param {string} text fragment pliku JSONL (cale linie)
+ * Why separate from readLatestSample: the context bar needs the LAST entry (the
+ * current composition of the window), while cost needs the SUM over the whole
+ * session. Two different numbers from one file - confusing them would shrink the
+ * cost down to a single turn.
+ *
+ * Why per model: switching with `/model` mid-session is normal, and the session
+ * then holds turns billed at different rates. Pricing one cumulative total at
+ * the LAST seen model's rate re-prices history on every switch - the displayed
+ * cost would visibly DROP going Opus -> Sonnet, which is nonsense: spent money
+ * does not come back.
+ *
+ * Pure function: text -> counters, so it is testable without touching disk.
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {Map<string, {input:number,output:number,cacheRead:number,cacheWrite:number}>}
  */
-function sumUsageLines(text) {
-  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+function sumUsageByModel(text) {
+  const byModel = new Map();
   for (const raw of String(text || '').split('\n')) {
     const line = raw.trim();
     if (!line || !line.includes('"usage"')) continue;
     try {
       const obj = JSON.parse(line);
-      const usage = obj && obj.message && obj.message.usage;
+      const message = obj && obj.message;
+      const usage = message && message.usage;
       if (!usage) continue;
+      const model = typeof message.model === 'string' ? message.model : '';
+      let totals = byModel.get(model);
+      if (!totals) {
+        totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+        byModel.set(model, totals);
+      }
       totals.input += usage.input_tokens || 0;
       totals.output += usage.output_tokens || 0;
       totals.cacheRead += usage.cache_read_input_tokens || 0;
@@ -234,21 +250,95 @@ function sumUsageLines(text) {
       /* niepelna/uszkodzona linia - pomijamy */
     }
   }
+  return byModel;
+}
+
+/**
+ * Extracts Skill Tracker tiles from `tool_use` entries in a JSONL fragment.
+ *
+ * Why not stdout: detectTools() scrapes the TUI for the literal "Name(" shape,
+ * which ties us to how Claude Code happens to render a tool call this release -
+ * change the rendering and the tiles silently stop lighting. The transcript
+ * carries the same fact as structured data (`message.content[].type ===
+ * "tool_use"`, with `name`), so we read that instead and keep the stdout scan
+ * only as a backstop.
+ *
+ * Unknown names (MCP tools like `mcp__server__thing`) map to no tile and are
+ * skipped - the tracker shows the built-in tools it has tiles for.
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {string[]} unique tile labels
+ */
+function toolsFromLines(text) {
+  const tiles = new Set();
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || !line.includes('"tool_use"')) continue;
+    try {
+      const obj = JSON.parse(line);
+      const content = obj && obj.message && obj.message.content;
+      if (!Array.isArray(content)) continue;
+      for (const part of content) {
+        if (!part || part.type !== 'tool_use' || typeof part.name !== 'string') continue;
+        const tile = TOOL_TO_TILE.get(part.name);
+        if (tile) tiles.add(tile);
+      }
+    } catch {
+      /* incomplete/corrupt line - skip */
+    }
+  }
+  return [...tiles];
+}
+
+/** Aggregate across every model - the plain token counters shown in the UI. */
+function sumUsageLines(text) {
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const t of sumUsageByModel(text).values()) {
+    totals.input += t.input;
+    totals.output += t.output;
+    totals.cacheRead += t.cacheRead;
+    totals.cacheWrite += t.cacheWrite;
+  }
   return totals;
 }
 
 // Cennik ladujemy raz na proces (plik configu nie zmienia sie w trakcie sesji).
 let ratesCache = null;
 
-/** Szacuje koszt sesji; null, gdy modelu nie ma w cenniku. */
-function estimateSessionCost(totals, model) {
+/**
+ * Estimates session cost from per-model buckets.
+ *
+ * Each bucket is priced with ITS OWN model's rate and the results are summed, so
+ * a mid-session `/model` switch keeps the earlier turns at the price actually
+ * paid for them. A model missing from the price table contributes nothing and
+ * flags the result `partial` - a silently incomplete number would read as a
+ * complete one.
+ * @param {Map<string, object>} byModel
+ * @returns {{usd:number, partial:boolean}|null} null when nothing could be priced
+ */
+function estimateSessionCost(byModel) {
   if (!ratesCache) ratesCache = loadRates();
-  const rate = rateFor(model, ratesCache.rates);
-  if (!rate) return null;
-  return estimateCost(totals, rate, {
+  const mult = {
     cacheReadMultiplier: ratesCache.cacheReadMultiplier,
     cacheWriteMultiplier: ratesCache.cacheWriteMultiplier,
-  });
+  };
+
+  let usd = 0;
+  let priced = 0;
+  let unpriced = 0;
+  for (const [model, totals] of byModel) {
+    const rate = rateFor(model, ratesCache.rates);
+    if (!rate) {
+      unpriced++;
+      continue;
+    }
+    const part = estimateCost(totals, rate, mult);
+    if (part) {
+      usd += part.usd;
+      priced++;
+    }
+  }
+  if (priced === 0) return null;
+  return { usd, partial: unpriced > 0 };
 }
 
 /**
@@ -290,10 +380,15 @@ class TranscriptWatcher {
     // Zgodnosc wstecz: kiedys drugim argumentem byl goly interwal w ms.
     const opts = typeof options === 'number' ? { intervalMs: options } : options || {};
     this.onMetrics = onMetrics;
+    // Optional: called with Skill Tracker tiles found in newly appended lines.
+    this.onTools = typeof opts.onTools === 'function' ? opts.onTools : null;
     this.intervalMs = opts.intervalMs || 1500;
     this.scopeDir = opts.cwd
       ? path.join(PROJECTS_DIR, encodeProjectDir(opts.cwd))
       : null;
+    // Session id we asked the CLI for via `--session-id`. The transcript is
+    // named after it, so this turns file selection from a guess into a lookup.
+    this.sessionUuid = opts.sessionUuid || null;
     this.timer = null;
     this.currentFile = null;
     this.lastMtime = 0;
@@ -301,7 +396,8 @@ class TranscriptWatcher {
     this.pinned = null;
     this.baseline = new Map();
     this.startedAt = 0;
-    // B4: sumaryczne zuzycie tej sesji + pozycja, do ktorej juz zsumowalismy.
+    // B4: per-model usage for this session + how far we have already summed.
+    this.byModel = new Map();
     this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     this.costOffset = 0;
     this.costFile = null;
@@ -320,7 +416,12 @@ class TranscriptWatcher {
       this.costFile = file;
       this.costOffset = 0;
       this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      this.byModel = new Map();
     }
+    // A first pass over an existing file is HISTORY, not live activity: it would
+    // flash every tile the session ever used. Tokens still count (the spend is
+    // real); tiles do not.
+    const firstPass = this.costOffset === 0;
     let fd;
     try {
       fd = fs.openSync(file, 'r');
@@ -329,6 +430,7 @@ class TranscriptWatcher {
       if (size < this.costOffset) {
         this.costOffset = 0;
         this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+        this.byModel = new Map();
       }
       const length = size - this.costOffset;
       if (length <= 0) return;
@@ -339,11 +441,22 @@ class TranscriptWatcher {
       if (lastNewline < 0) return; // jeszcze ani jednej pelnej linii
       const complete = text.slice(0, lastNewline);
       this.costOffset += Buffer.byteLength(complete, 'utf8') + 1;
-      const add = sumUsageLines(complete);
-      this.totals.input += add.input;
-      this.totals.output += add.output;
-      this.totals.cacheRead += add.cacheRead;
-      this.totals.cacheWrite += add.cacheWrite;
+      for (const [model, add] of sumUsageByModel(complete)) {
+        let bucket = this.byModel.get(model);
+        if (!bucket) {
+          bucket = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+          this.byModel.set(model, bucket);
+        }
+        for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) {
+          bucket[key] += add[key];
+          this.totals[key] += add[key];
+        }
+      }
+
+      if (!firstPass && this.onTools) {
+        const tiles = toolsFromLines(complete);
+        if (tiles.length > 0) this.onTools(tiles);
+      }
     } catch {
       /* plik zniknal / brak dostepu - koszt po prostu sie nie zaktualizuje */
     } finally {
@@ -379,6 +492,21 @@ class TranscriptWatcher {
    */
   pickFile() {
     if (this.pinned) return this.pinned;
+
+    // Deterministic path: we told the CLI which session id to use, and the
+    // transcript is named `<session-id>.jsonl`, so there is nothing to infer.
+    // The heuristics below cannot distinguish two sessions started moments
+    // apart in ONE folder - whichever watcher happens to tick first claims the
+    // new file, regardless of which PTY actually created it. That race is what
+    // swapped the readings between an Opus tab and a Sonnet tab.
+    if (this.sessionUuid && this.scopeDir) {
+      const target = path.join(this.scopeDir, `${this.sessionUuid}.jsonl`);
+      if (!fs.existsSync(target)) return null; // not written yet - a fresh session really is 0%
+      this.pinned = target;
+      claimedTranscripts.add(target);
+      return this.pinned;
+    }
+
     if (!this.scopeDir) return findNewestTranscript();
 
     const free = listJsonl(this.scopeDir).filter((f) => !claimedTranscripts.has(f.full));
@@ -436,7 +564,8 @@ class TranscriptWatcher {
     metrics.totals = { ...this.totals };
     metrics.elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
     // Koszt tylko dla modeli z cennika - nieznany backend nie dostaje zmyslonej kwoty.
-    const cost = estimateSessionCost(this.totals, sample.model);
+    // Priced per model, so switching mid-session does not re-price the history.
+    const cost = estimateSessionCost(this.byModel);
     if (cost) metrics.cost = cost;
     this.onMetrics(metrics);
   }
@@ -448,6 +577,8 @@ module.exports = {
   encodeProjectDir,
   usageToMetrics,
   sumUsageLines,
+  sumUsageByModel,
+  toolsFromLines,
   CONTEXT_LIMIT,
   TOOL_TILES,
 };

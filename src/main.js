@@ -16,6 +16,7 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { randomUUID } = require('crypto');
 // @lydell/node-pty: utrzymywany fork node-pty z prebuildami (N-API),
 // dziala bez kompilacji node-gyp / Visual Studio. API zgodne z node-pty.
 const pty = require('@lydell/node-pty');
@@ -24,6 +25,8 @@ const pty = require('@lydell/node-pty');
 const { detectTools, TranscriptWatcher } = require('./observer');
 // Profile uruchomieniowe (Faza 4): definicje "jak wystartowac sesje" z JSON.
 const { loadProfiles, getProfile } = require('./profiles');
+// Budowanie komendy startowej: decyduje, czy sesje da sie przypiac po id.
+const { withSessionId } = require('./launch');
 // Przelacznik projektu: katalogi robocze (cwd) sesji z config/projects.json.
 const { loadProjects, getProject } = require('./projects');
 // Tracker portow localhost (7B): pasywny skan nasluchujacych portow + kill.
@@ -311,20 +314,35 @@ function spawnInto(session, profile) {
     broadcastSessions();
   });
 
+  // Komenda startowa profilu (pusta = sama powloka, bez auto-startu).
+  const command = [profile.command, ...(profile.args || [])].join(' ').trim();
+  // When WE launch `claude`, we dictate the session id - the transcript is then
+  // named exactly <uuid>.jsonl and the watcher looks it up instead of inferring
+  // ownership from file timestamps. Null = this session cannot be pinned (bare
+  // shell, foreign command, or a resume that brings its own id).
+  const transcriptId = randomUUID();
+  const pinnedCommand = withSessionId(command, transcriptId);
+  session.transcriptId = pinnedCommand ? transcriptId : null;
+
   // Wlasny watcher transcriptu, zawezony do katalogu tej sesji.
   if (session.watcher) session.watcher.stop();
   session.watcher = new TranscriptWatcher(
     (metrics) => send('metrics:context', { sessionId: session.id, metrics }),
-    { cwd },
+    {
+      cwd,
+      sessionUuid: session.transcriptId,
+      // Skill Tracker fed from the transcript's structured tool_use entries.
+      // Same IPC channel as the stdout scan, so the renderer is unchanged.
+      onTools: (tiles) => send('metrics:tools', { sessionId: session.id, tiles }),
+    },
   );
   session.watcher.start();
 
-  // Wpisz komende startowa profilu (pusta = sama powloka, bez auto-startu).
   // PTY buforuje wejscie, wiec komenda wykona sie, gdy powloka bedzie gotowa.
-  const command = [profile.command, ...(profile.args || [])].join(' ').trim();
-  if (command) {
+  const startCommand = pinnedCommand || command;
+  if (startCommand) {
     setTimeout(() => {
-      if (session.proc === proc) proc.write(`${command}\r`);
+      if (session.proc === proc) proc.write(`${startCommand}\r`);
     }, 600);
   }
 }
@@ -348,6 +366,9 @@ function createSession(opts = {}) {
     cwd: project ? project.path : activeCwd,
     size: { ...lastSize },
     watcher: null,
+    // Session id handed to `claude --session-id`; null when it could not be
+    // pinned. Set by spawnInto, which owns the start command.
+    transcriptId: null,
     alive: false,
   };
 

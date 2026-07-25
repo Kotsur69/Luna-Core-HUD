@@ -6,7 +6,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { detectTools, encodeProjectDir, usageToMetrics, CONTEXT_LIMIT } = require('../src/observer');
+const {
+  detectTools,
+  encodeProjectDir,
+  usageToMetrics,
+  sumUsageLines,
+  sumUsageByModel,
+  toolsFromLines,
+  CONTEXT_LIMIT,
+} = require('../src/observer');
 
 // ---- usageToMetrics ---------------------------------------------------------
 
@@ -119,4 +127,112 @@ test('detectTools jest odporny na powtorne wywolania (regex /g ma stan)', () => 
   assert.deepEqual(detectTools('Bash(ls)'), ['Bash']);
   assert.deepEqual(detectTools('Bash(ls)'), ['Bash']);
   assert.deepEqual(detectTools('Bash(ls)'), ['Bash']);
+});
+
+// ---- sumUsageByModel / sumUsageLines (B4) -----------------------------------
+
+/** Builds one transcript line the way Claude Code writes it. */
+const line = (model, usage) => JSON.stringify({ message: { model, usage } });
+
+test('sumUsageByModel keeps each model in its own bucket', () => {
+  const text = [
+    line('claude-opus-5', { input_tokens: 100, output_tokens: 10 }),
+    line('claude-sonnet-5', { input_tokens: 200, output_tokens: 20 }),
+    line('claude-opus-5', { input_tokens: 5, output_tokens: 1 }),
+  ].join('\n');
+
+  const byModel = sumUsageByModel(text);
+  assert.equal(byModel.size, 2);
+  assert.equal(byModel.get('claude-opus-5').input, 105);
+  assert.equal(byModel.get('claude-opus-5').output, 11);
+  assert.equal(byModel.get('claude-sonnet-5').input, 200);
+});
+
+test('sumUsageByModel counts both kinds of cache tokens per model', () => {
+  const text = line('claude-opus-5', {
+    input_tokens: 1,
+    output_tokens: 2,
+    cache_read_input_tokens: 300,
+    cache_creation_input_tokens: 40,
+  });
+  const bucket = sumUsageByModel(text).get('claude-opus-5');
+  assert.deepEqual(bucket, { input: 1, output: 2, cacheRead: 300, cacheWrite: 40 });
+});
+
+test('sumUsageByModel files an entry without a model under the empty key', () => {
+  // A local backend may not report a model at all. It still burns tokens, so it
+  // must be counted - it simply cannot be priced later.
+  const byModel = sumUsageByModel(line(undefined, { input_tokens: 7 }));
+  assert.equal(byModel.get('').input, 7);
+});
+
+test('sumUsageByModel skips malformed lines instead of throwing', () => {
+  const text = [
+    line('claude-opus-5', { input_tokens: 10 }),
+    '{"message":{"usage":', // torn write, mid-flush
+    '',
+    line('claude-opus-5', { input_tokens: 5 }),
+  ].join('\n');
+  assert.equal(sumUsageByModel(text).get('claude-opus-5').input, 15);
+});
+
+// ---- toolsFromLines (Skill Tracker from the transcript) ---------------------
+
+/** Builds an assistant line carrying tool_use blocks, as the CLI writes them. */
+const toolLine = (...names) =>
+  JSON.stringify({
+    message: {
+      role: 'assistant',
+      content: names.map((name, i) => ({ type: 'tool_use', id: `t${i}`, name, input: {} })),
+    },
+  });
+
+test('toolsFromLines reads a tool call from structured transcript data', () => {
+  // The stdout scan missed these because it matched the TUI's "Name(" shape.
+  assert.deepEqual(toolsFromLines(toolLine('Read')), ['Read']);
+});
+
+test('toolsFromLines maps aliases onto their shared tile', () => {
+  assert.deepEqual(toolsFromLines(toolLine('MultiEdit')), ['Edit']);
+  assert.deepEqual(toolsFromLines(toolLine('WebSearch')), ['Web']);
+});
+
+test('toolsFromLines deduplicates and handles several calls in one line', () => {
+  assert.deepEqual(toolsFromLines(toolLine('Read', 'Read', 'Bash')), ['Read', 'Bash']);
+});
+
+test('toolsFromLines ignores tools with no tile, such as MCP servers', () => {
+  assert.deepEqual(toolsFromLines(toolLine('mcp__shadcn__search_items')), []);
+});
+
+test('toolsFromLines ignores lines that are not tool calls', () => {
+  const text = [
+    JSON.stringify({ message: { role: 'user', content: 'Read the file please' } }),
+    line('claude-opus-5', { input_tokens: 10 }),
+  ].join('\n');
+  assert.deepEqual(toolsFromLines(text), []);
+});
+
+test('toolsFromLines survives a torn line mid-write', () => {
+  const text = [toolLine('Bash'), '{"message":{"content":[{"type":"tool_'].join('\n');
+  assert.deepEqual(toolsFromLines(text), ['Bash']);
+});
+
+test('toolsFromLines returns nothing for empty input', () => {
+  assert.deepEqual(toolsFromLines(''), []);
+  assert.deepEqual(toolsFromLines(null), []);
+});
+
+test('sumUsageLines still returns the flat aggregate across models', () => {
+  // Guards the older contract: per-model bucketing must not change this number.
+  const text = [
+    line('claude-opus-5', { input_tokens: 100, output_tokens: 10 }),
+    line('claude-sonnet-5', { input_tokens: 200, output_tokens: 20 }),
+  ].join('\n');
+  assert.deepEqual(sumUsageLines(text), {
+    input: 300,
+    output: 30,
+    cacheRead: 0,
+    cacheWrite: 0,
+  });
 });

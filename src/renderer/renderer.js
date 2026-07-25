@@ -1305,9 +1305,36 @@ function renderSpark() {
     sparkArea.setAttribute('d', '');
     return;
   }
+  // Skala Y dobierana do danych, nie 0-100%.
+  //
+  // Na sztywnej osi 0-100% typowy przyrost kontekstu (np. 4% -> 7%) to jeden
+  // piksel w 30-pikselowym pudelku - wykres byl "poprawny" i bezuzyteczny.
+  // MIN_SPAN pilnuje drugiej strony: bez niego plaska sesja rozciagnelaby szum
+  // zaokraglen na cala wysokosc i wygladalaby jak lawina. Liczby bezwzgledne
+  // (tok/min, ETA) sa w renderBurn tuz obok, wiec wykres moze byc wzgledny.
+  const MIN_SPAN = 0.02; // 2 punkty procentowe
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const s of sparkBuf) {
+    const p = Math.max(0, Math.min(1, s.percent));
+    if (p < lo) lo = p;
+    if (p > hi) hi = p;
+  }
+  if (hi - lo < MIN_SPAN) {
+    const mid = (lo + hi) / 2;
+    lo = mid - MIN_SPAN / 2;
+    hi = mid + MIN_SPAN / 2;
+  }
+  // Oddech u gory i u dolu, zeby linia nie kleila sie do krawedzi.
+  const pad = (hi - lo) * 0.12;
+  lo -= pad;
+  hi += pad;
+  const range = hi - lo || 1;
+
   const pts = sparkBuf.map((s, i) => {
     const x = (i / (n - 1)) * 100;
-    const y = (1 - Math.max(0, Math.min(1, s.percent))) * 30;
+    const p = Math.max(0, Math.min(1, s.percent));
+    const y = Math.max(0, Math.min(30, (1 - (p - lo) / range) * 30));
     return `${x.toFixed(2)},${y.toFixed(2)}`;
   });
   sparkLine.setAttribute('points', pts.join(' '));
