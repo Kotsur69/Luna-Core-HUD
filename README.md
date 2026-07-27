@@ -245,6 +245,12 @@ purely visual ticks just stop.
 load these files directly — `node --check src/renderer/modules/*.js` works, and
 the test suite can reach renderer modules.
 
+**Converted so far: `ports`, `scratchpad`.** The rest of the panel blocks are
+still static markup; a `[data-slot]` placeholder is `display: contents`, so
+converted and unconverted blocks sit side by side without disturbing the flex
+layout. Conversion order and the reasoning behind the contract are in
+[`FUTURE_PLAN.md`](FUTURE_PLAN.md) §A2a–§A2b.
+
 ---
 
 ## Roadmap
@@ -272,21 +278,27 @@ the test suite can reach renderer modules.
 | B4 | Session cost/time HUD — elapsed time + token→$ estimate | ✅ done |
 | A1 | Split `renderer.js` → 57-line entry point + 21 ES modules | ✅ done |
 | B8 | Skill Tracker shows a tool's **real duration** (sweep, not a blink) | ✅ done |
+| B5–B7 | Port filter toggle, copy-transcript-path, skill search box | ✅ done |
+| A2 | Widget contract + teardown probe — `ports` and `scratchpad` converted | 🟡 2 of ~13 |
+| + | PL/EN localization of `config/*.json`, not just the UI chrome | ✅ done |
 
-That closes the whole approved shortlist, plus the first slice of the structural
-plan. **A1 is now done too**: the 1554-line `renderer.js` is a 57-line entry
-point plus 21 modules under `src/renderer/modules/`, loaded as
-`<script type="module">`. Worth knowing if you fork this: Chromium blocks ES
-modules over `file://`, but **Electron does not** — so this needs no bundler and
-no build step. **Next up** (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8): the
-widget contract (**A2**), which unblocks layout presets and movable panels. §9
-sketches the bigger open question: turning LunaCore into a multi-model console
-(Claude / Kimi / local LM Studio) rather than a Claude-only HUD.
+That closes the whole approved shortlist and the first slice of the structural
+plan. **A1 is done**: the 1554-line `renderer.js` is a 57-line entry point plus
+21 modules under `src/renderer/modules/`, loaded as `<script type="module">`.
+Worth knowing if you fork this: Chromium blocks ES modules over `file://`, but
+**Electron does not** — so this needs no bundler and no build step.
+
+**Next up** (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8, which opens with a
+*START HERE* box): finish the **A2** conversions — `skilltracker` is next — then
+**A5**, an async skill scan, since `scanSkills()` blocks the main process ~2.4 s
+today. A2 is what unblocks layout presets and movable panels. §9 sketches the
+bigger open question: turning LunaCore into a multi-model console (Claude / Kimi
+/ local LM Studio) rather than a Claude-only HUD.
 
 ### Tests
 
 ```bash
-npm test        # node --test — 92 tests, ~0.5s, no extra dependencies
+npm test        # node --test — 159 tests, ~1.4s, no extra dependencies
 ```
 
 Covers the side-effect-free modules only: context metrics, transcript-dir

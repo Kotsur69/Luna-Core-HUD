@@ -1,6 +1,15 @@
 # MASTER PROMPT: Budowa aplikacji LunaCore (Wizualny GUI Wrapper dla Claude CLI)
 
-## STATUS (punkt startu następnej sesji)
+> ⛔ **TO NIE JEST PUNKT STARTU — dokument historyczny (zamrożony 2026-07-20).**
+> To oryginalny brief, z którego powstała aplikacja. Zostaje, bo tłumaczy
+> *dlaczego* pewne rzeczy wyglądają tak, jak wyglądają, ale opisany niżej stan
+> jest **nieaktualny o kilkanaście sesji**.
+>
+> **Zaczynasz nową sesję? Idź do [`FUTURE_PLAN.md`](FUTURE_PLAN.md) → sekcja
+> *START HERE*.** Aktualny stan i następny krok są tam. `README.md` opisuje
+> działającą aplikację.
+
+## STATUS (historyczny — stan na 2026-07-20)
 
 > ✅ **FAZA 1, 2, 3 i 4 — ZROBIONE** (2026-07-19).
 > Działa: okno Electron, interaktywny terminal `claude` na PTY, bezpieczny IPC,

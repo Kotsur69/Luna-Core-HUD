@@ -1,5 +1,48 @@
 # LunaCore — Future Plan (Visual Templates, Layout & Ideas)
 
+## START HERE — where things stand (2026-07-27)
+
+Everything below this box is either **live plan** (§8) or **history**. Read this
+box, then §8's Phase A table, then jump to §A2a/§A2b for the widget contract.
+
+| | State |
+|---|---|
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (159 tests), the A2 **contract**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*) |
+| **In flight** | **A2 conversions — 2 of ~13 blocks** (`ports`, `scratchpad`) |
+| **Next action** | Convert **`skilltracker`** to a widget. Then `usage`. |
+| **After A2** | **A5** (async skill scan — the one you can feel) → **A4** (dead CSS) → Phase C |
+| **Branch** | `main`, clean and pushed through `0abb705` |
+
+Two facts that decide most design questions here, both learned the hard way:
+
+- **ZERO EXTRA TOKENS.** Every idea in this file must stay a **Passive Observer**
+  (read/regex on stdout + files) or an **Action Injector** (write plain text to
+  PTY stdin). No hidden prompts, no middleware, no touching the `claude` binary.
+  This is the one rule that never changes.
+- **Nothing in normal use unmounts a widget**, so a forgotten disposer is
+  invisible until Phase C, where it will look like a layout bug. Run
+  `npx electron . --luna-probe` after every conversion — equal subscriber counts
+  before/after and `rows: 1` means clean. §A2a explains what it checks;
+  **§A2b explains what it cannot** (that one cost a near-miss data-loss bug).
+
+Verification commands, in the order they earn their keep:
+
+```bash
+npm test                          # 159 tests, ~1.4 s, no extra deps
+npx electron . --luna-probe       # remounts every widget 3×, prints bus counts, quits
+npx electron . --enable-logging   # renderer console → stdout (smoke test, no DevTools)
+npm start                         # the only way to check anything interactive
+```
+
+`--enable-logging` prints **"Renderer process crashed"** on teardown and a CSP
+warning. Both are noise — the crash line tracks the `timeout` value. Don't chase
+them.
+
+---
+
+<details>
+<summary><strong>Historical status log (2026-07-23 → 07-24) — kept for the bug post-mortems</strong></summary>
+
 > Status baseline (2026-07-23): Phases 1–4 + backlog 7A/7B/7C are **done and
 > pushed**, plus the **command palette (Ctrl+K)**, **token burn-rate sparkline**,
 > **theming system** (§2), **PL/EN language switch**, **usage-limits gauge**,
@@ -48,6 +91,8 @@
 > ⚠️ **ZERO EXTRA TOKENS.** Every idea here must stay a **Passive Observer**
 > (read/regex on stdout + files) or an **Action Injector** (write plain text to
 > PTY stdin). No hidden prompts, no middleware, no touching the `claude` binary.
+
+</details>
 
 ---
 
@@ -446,7 +491,7 @@ feature set is stable and nothing is half-finished.
 | A2 | 🟡 **Widget contract** | §4 | **Contract DONE 2026-07-25**, `ports` + `scratchpad` converted; the remaining blocks are mechanical. Shape is `{ id, titleKey, template, mount(root) -> cleanup? }` — see A2a for why it is not quite the `{title, mount, unmount}` sketched here, and A2b for the one thing a mechanical port still got wrong. |
 | A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, now 92 tests, ~0.4 s, no new deps. Includes two **data** tests asserting the shipped rate/window tables cover every current model — logic tests on fixtures cannot catch a stale table. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that made A1 safe — it caught nothing during the split, which is the point: the suite covers the *pure* modules, and A1 never touched them. Now 117 tests. |
 | A4 | 🟡 **Kill the dead bits** | §6 | Half done: `CONTEXT_LIMIT` is no longer a magic number (now an alias of `models.DEFAULT_CONTEXT_LIMIT`). **Still open:** the dead `.panel__spacer` CSS rule. |
-| A5 | **Async skill scan** | §6 | `scanSkills()` still blocks main ~2.4 s; pre-warm only hides it. Worker thread or async fs walk. |
+| A5 | **Async skill scan** | §6 | `scanSkills()` (`src/skills.js`) is a `readdirSync` 7 levels deep + `readFileSync` over ~339 `SKILL.md` files — **~2.4 s on the main process, i.e. the event loop**. `main.js`'s `setTimeout(…, 3000)` pre-warm does not fix it, it only moves the freeze past window creation (that is the hitch you feel after the boot overlay). **Prefer an async `fs.promises` walk over `worker_threads` — the work is I/O-bound, not CPU-bound.** Unlocks dropping the pre-warm delay and adding a rescan button; today a new skill needs an app restart. |
 
 #### A1a — what the split actually cost
 
