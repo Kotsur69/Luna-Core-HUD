@@ -16,6 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { hasText, normalizeText, mergeKey } = require('./localized');
 
 const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const BASE_FILE = path.join(CONFIG_DIR, 'cheatsheets.json');
@@ -30,24 +31,28 @@ function readJson(file) {
   }
 }
 
-/** Waliduje pojedyncza komende. Zwraca { label, command } lub null. */
+/**
+ * Waliduje pojedyncza komende. Zwraca { label, command } lub null.
+ * `label` moze byc stringiem albo obiektem { pl, en } - patrz src/localized.js.
+ * Sama `command` NIE jest tlumaczona: `!npm test` znaczy to samo w kazdym jezyku.
+ */
 function normalizeCommand(c) {
   if (!c || typeof c !== 'object') return null;
   if (typeof c.command !== 'string' || !c.command) return null;
-  const label = typeof c.label === 'string' && c.label ? c.label : c.command;
+  const label = hasText(c.label) ? normalizeText(c.label) : c.command;
   return { label, command: c.command };
 }
 
 /** Waliduje grupe. Zwraca { title, note, commands } lub null (gdy brak komend). */
 function normalizeGroup(g) {
   if (!g || typeof g !== 'object') return null;
-  if (typeof g.title !== 'string' || !g.title) return null;
+  if (!hasText(g.title)) return null;
   const commands = Array.isArray(g.commands)
     ? g.commands.map(normalizeCommand).filter(Boolean)
     : [];
   if (commands.length === 0) return null;
-  const note = typeof g.note === 'string' ? g.note : '';
-  return { title: g.title, note, commands };
+  const note = hasText(g.note) ? normalizeText(g.note) : '';
+  return { title: normalizeText(g.title), note, commands };
 }
 
 /**
@@ -64,7 +69,10 @@ function loadCheatsheets() {
     if (!src || !Array.isArray(src.groups)) return;
     for (const raw of src.groups) {
       const g = normalizeGroup(raw);
-      if (g) byTitle.set(g.title, g);
+      // Klucz przez mergeKey(): zlokalizowany tytul to OBIEKT, a obiekty w Mapie
+      // porownuja sie przez tozsamosc - kazda grupa wygladalaby na unikalna
+      // i override z *.local.json po cichu przestalby dzialac.
+      if (g) byTitle.set(mergeKey(g.title), g);
     }
   };
   collect(base);

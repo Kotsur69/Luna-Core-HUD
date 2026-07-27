@@ -10,7 +10,7 @@
     },
     {
       "id": "lm-studio",
-      "label": "LM Studio (lokalnie)",
+      "label": { "pl": "LM Studio (lokalnie)", "en": "LM Studio (local)" },
       "command": "claude",
       "args": [],
       "env": {
@@ -19,7 +19,7 @@
     },
     {
       "id": "bare-shell",
-      "label": "Sama powloka (bez claude)",
+      "label": { "pl": "Sama powloka (bez claude)", "en": "Bare shell (no claude)" },
       "command": "",
       "args": [],
       "env": {}

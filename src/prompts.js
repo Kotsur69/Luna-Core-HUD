@@ -17,6 +17,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { hasText, normalizeText, mergeKey, isLocalized, LANGS } = require('./localized');
 
 const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const BASE_FILE = path.join(CONFIG_DIR, 'prompts.json');
@@ -38,27 +39,40 @@ function readJson(file) {
 function normalizePrompt(p) {
   if (!p || typeof p !== 'object') return null;
 
-  let text = p.text;
-  if (Array.isArray(text)) {
-    text = text.filter((line) => typeof line === 'string').join('\n');
-  }
-  if (typeof text !== 'string' || !text.trim()) return null;
+  // normalizeText() sklada tablice linii w string - osobno dla kazdego jezyka,
+  // gdy tresc jest zlokalizowana. Jezyk wybiera dopiero renderer.
+  const text = normalizeText(p.text);
+  if (!text) return null;
 
-  const label = typeof p.label === 'string' && p.label ? p.label : text.slice(0, 40);
-  const note = typeof p.note === 'string' ? p.note : '';
+  const label = hasText(p.label) ? normalizeText(p.label) : fallbackLabel(text);
+  const note = hasText(p.note) ? normalizeText(p.note) : '';
   return { label, text, note };
+}
+
+/**
+ * Etykieta zastepcza, gdy prompt jej nie ma: poczatek tresci. Dla tresci
+ * zlokalizowanej robimy skrot PER JEZYK - inaczej przycisk w wersji EN
+ * pokazywalby polski poczatek prompta.
+ */
+function fallbackLabel(text) {
+  if (!isLocalized(text)) return text.slice(0, 40);
+  const out = {};
+  for (const l of LANGS) {
+    if (typeof text[l] === 'string') out[l] = text[l].slice(0, 40);
+  }
+  return out;
 }
 
 /** Waliduje grupe. Zwraca { title, note, prompts } lub null (gdy brak promptow). */
 function normalizeGroup(g) {
   if (!g || typeof g !== 'object') return null;
-  if (typeof g.title !== 'string' || !g.title) return null;
+  if (!hasText(g.title)) return null;
   const prompts = Array.isArray(g.prompts)
     ? g.prompts.map(normalizePrompt).filter(Boolean)
     : [];
   if (prompts.length === 0) return null;
-  const note = typeof g.note === 'string' ? g.note : '';
-  return { title: g.title, note, prompts };
+  const note = hasText(g.note) ? normalizeText(g.note) : '';
+  return { title: normalizeText(g.title), note, prompts };
 }
 
 /**
@@ -72,7 +86,9 @@ function loadPrompts() {
     if (!src || !Array.isArray(src.groups)) return;
     for (const raw of src.groups) {
       const g = normalizeGroup(raw);
-      if (g) byTitle.set(g.title, g);
+      // Patrz komentarz w src/cheatsheets.js: zlokalizowany tytul to obiekt,
+      // wiec klucz scalania musi byc stringiem.
+      if (g) byTitle.set(mergeKey(g.title), g);
     }
   };
   collect(readJson(BASE_FILE));

@@ -12,7 +12,7 @@
 
 'use strict';
 
-import { t } from './util.js';
+import { t, loc } from './util.js';
 import { onLangChange } from './bus.js';
 import { term } from './terminals.js';
 
@@ -53,8 +53,8 @@ async function buildPaletteActions() {
     for (const c of g.commands || []) {
       items.push({
         kind: 'command',
-        label: c.label,
-        sub: g.title,
+        label: loc(c.label),
+        sub: loc(g.title),
         hint: c.command,
         run: () => window.lunacore.runCommand(c.command),
       });
@@ -63,12 +63,13 @@ async function buildPaletteActions() {
 
   for (const g of (prompts && prompts.groups) || []) {
     for (const p of g.prompts || []) {
-      // Main normalises `text` to a string; join defensively just in case.
-      const text = Array.isArray(p.text) ? p.text.join('\n') : p.text;
+      // loc() also flattens an authored line-array, so the defensive join the
+      // old code did is covered.
+      const text = loc(p.text);
       items.push({
         kind: 'prompt',
-        label: p.label,
-        sub: g.title,
+        label: loc(p.label),
+        sub: loc(g.title),
         hint: t('palette.hint.promptPaste'),
         run: (opts) => window.lunacore.pastePrompt(text, !!(opts && opts.send)),
       });

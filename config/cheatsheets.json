@@ -1,8 +1,11 @@
 {
   "groups": [
     {
-      "title": "Review przed commitem",
-      "note": "Prefiks ! = komenda powloki (bash) w sesji Claude.",
+      "title": { "pl": "Review przed commitem", "en": "Pre-commit review" },
+      "note": {
+        "pl": "Prefiks ! = komenda powloki (bash) w sesji Claude.",
+        "en": "The ! prefix = a shell (bash) command inside the Claude session."
+      },
       "commands": [
         { "label": "/code-review", "command": "/code-review" },
         { "label": "/security-review", "command": "/security-review" },
@@ -21,7 +24,7 @@
       ]
     },
     {
-      "title": "Sesja Claude",
+      "title": { "pl": "Sesja Claude", "en": "Claude session" },
       "commands": [
         { "label": "/compact", "command": "/compact" },
         { "label": "/context", "command": "/context" },
@@ -30,7 +33,7 @@
       ]
     },
     {
-      "title": "Testy / Build",
+      "title": { "pl": "Testy / Build", "en": "Tests / Build" },
       "commands": [
         { "label": "npm test", "command": "!npm test" },
         { "label": "npm run build", "command": "!npm run build" },

@@ -3,14 +3,14 @@
 // ----------------------------------------------------------------------------
 // Auto-scans the Claude Code skill directories: finds SKILL.md files, reads
 // `name` and `description` out of the frontmatter, and groups skills
-// heuristically into categories (Frontend / Backend / DevOps / Testy / Data-ML /
-// Security / Git / Docs / Inne).
+// heuristically into categories (frontend / backend / devops / tests / data-ml /
+// security / git-review / docs / other).
 //
 // Read-only and purely local - zero tokens. The result is cached after the
 // first scan.
 //
-// NOTE: the category names below are user-visible labels in the HUD, not
-// comments - they stay in Polish until the UI itself is translated.
+// NOTE: categories are emitted as language-neutral ids, never as display text.
+// The renderer translates them through `skills.cat.<id>`.
 // ============================================================================
 
 'use strict';
@@ -29,18 +29,24 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out']);
 
 // Categories in match order (first hit wins). Keywords are searched in the
 // skill's name + description + file path (lowercased).
+//
+// `id` is a stable, language-neutral slug - NOT a display name. The renderer
+// resolves it through i18n (`skills.cat.<id>`), which is what lets the category
+// headers switch language with the rest of the HUD. Two of them used to be
+// Polish literals ("Testy", "Inne") and showed up untranslated in the English
+// UI; an id also means renaming a category for display never breaks a test.
 const CATEGORIES = [
-  { name: 'Frontend', keys: ['frontend', 'react', 'vue', 'svelte', 'css', 'tailwind', 'ui', 'ux', 'component', 'landing', 'motion', 'animation', 'design'] },
-  { name: 'Backend', keys: ['backend', 'api', 'server', 'endpoint', 'fastapi', 'django', 'express', 'rest', 'graphql', 'microservice'] },
-  { name: 'Data / ML', keys: ['machine learning', ' ml ', 'mlops', 'model', 'dataset', 'pytorch', 'tensor', 'embedding', 'llm', 'graph', 'data ', 'pandas'] },
-  { name: 'DevOps / Deploy', keys: ['deploy', 'docker', 'kubernetes', 'k8s', 'terraform', 'ci/cd', 'pipeline', 'infra', 'cloud', 'aws', 'vercel'] },
-  { name: 'Testy', keys: ['test', 'tdd', 'e2e', 'playwright', 'jest', 'pytest', 'coverage', 'qa'] },
-  { name: 'Security', keys: ['security', 'auth', 'owasp', 'vulnerab', 'secret', 'crypto', 'pentest'] },
-  { name: 'Database', keys: ['database', 'sql', 'postgres', 'mysql', 'mongo', 'redis', 'migration', 'schema'] },
-  { name: 'Git / Review', keys: ['git', 'commit', 'pull request', ' pr ', 'review', 'branch', 'merge'] },
-  { name: 'Docs', keys: ['documentation', 'docs', 'readme', 'markdown', 'changelog'] },
+  { id: 'frontend', keys: ['frontend', 'react', 'vue', 'svelte', 'css', 'tailwind', 'ui', 'ux', 'component', 'landing', 'motion', 'animation', 'design'] },
+  { id: 'backend', keys: ['backend', 'api', 'server', 'endpoint', 'fastapi', 'django', 'express', 'rest', 'graphql', 'microservice'] },
+  { id: 'data-ml', keys: ['machine learning', ' ml ', 'mlops', 'model', 'dataset', 'pytorch', 'tensor', 'embedding', 'llm', 'graph', 'data ', 'pandas'] },
+  { id: 'devops', keys: ['deploy', 'docker', 'kubernetes', 'k8s', 'terraform', 'ci/cd', 'pipeline', 'infra', 'cloud', 'aws', 'vercel'] },
+  { id: 'tests', keys: ['test', 'tdd', 'e2e', 'playwright', 'jest', 'pytest', 'coverage', 'qa'] },
+  { id: 'security', keys: ['security', 'auth', 'owasp', 'vulnerab', 'secret', 'crypto', 'pentest'] },
+  { id: 'database', keys: ['database', 'sql', 'postgres', 'mysql', 'mongo', 'redis', 'migration', 'schema'] },
+  { id: 'git-review', keys: ['git', 'commit', 'pull request', ' pr ', 'review', 'branch', 'merge'] },
+  { id: 'docs', keys: ['documentation', 'docs', 'readme', 'markdown', 'changelog'] },
 ];
-const FALLBACK_CATEGORY = 'Inne';
+const FALLBACK_CATEGORY = 'other';
 
 /** Recursively collects SKILL.md paths under a root. */
 function findSkillFiles(root, depth, acc) {
@@ -85,14 +91,15 @@ function stripQuotes(s) {
 function categorize(skill) {
   const hay = ` ${skill.name} ${skill.description} ${skill.file} `.toLowerCase();
   for (const cat of CATEGORIES) {
-    if (cat.keys.some((k) => hay.includes(k))) return cat.name;
+    if (cat.keys.some((k) => hay.includes(k))) return cat.id;
   }
   return FALLBACK_CATEGORY;
 }
 
 /**
  * Scans the skill directories and returns skills grouped into categories.
- * @returns {{categories: Array<{name:string, skills:Array}>, total:number}}
+ * `id` is a slug, not a label - the renderer translates it. See CATEGORIES.
+ * @returns {{categories: Array<{id:string, skills:Array}>, total:number}}
  */
 function scanSkills() {
   const files = [];
@@ -109,7 +116,7 @@ function scanSkills() {
 
   // Group into categories (CATEGORIES order preserved, fallback last).
   const groups = new Map();
-  for (const cat of CATEGORIES) groups.set(cat.name, []);
+  for (const cat of CATEGORIES) groups.set(cat.id, []);
   groups.set(FALLBACK_CATEGORY, []);
   for (const skill of byName.values()) {
     groups.get(categorize(skill)).push({ name: skill.name, description: skill.description });
@@ -117,8 +124,8 @@ function scanSkills() {
 
   const categories = [...groups.entries()]
     .filter(([, skills]) => skills.length > 0)
-    .map(([name, skills]) => ({
-      name,
+    .map(([id, skills]) => ({
+      id,
       skills: skills.sort((a, b) => a.name.localeCompare(b.name)),
     }));
 

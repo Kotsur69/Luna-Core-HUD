@@ -14,6 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { hasText, normalizeText } = require('./localized');
 
 const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const BASE_FILE = path.join(CONFIG_DIR, 'profiles.json');
@@ -41,7 +42,9 @@ function readJson(file) {
 function normalizeProfile(p) {
   if (!p || typeof p !== 'object') return null;
   if (typeof p.id !== 'string' || !p.id) return null;
-  if (typeof p.label !== 'string' || !p.label) return null;
+  // Etykieta moze byc stringiem albo obiektem { pl, en } - patrz src/localized.js.
+  // Jezyk wybiera renderer, nie loader (przelacznik dziala na zywo).
+  if (!hasText(p.label)) return null;
   // command may be empty ("" = bare shell, no auto-start) but must be a string.
   const command = typeof p.command === 'string' ? p.command : '';
   const args = Array.isArray(p.args) ? p.args.filter((a) => typeof a === 'string') : [];
@@ -51,7 +54,7 @@ function normalizeProfile(p) {
           Object.entries(p.env).filter(([, v]) => typeof v === 'string')
         )
       : {};
-  return { id: p.id, label: p.label, command, args, env };
+  return { id: p.id, label: normalizeText(p.label), command, args, env };
 }
 
 /**

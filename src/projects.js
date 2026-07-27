@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { hasText, normalizeText } = require('./localized');
 
 const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const BASE_FILE = path.join(CONFIG_DIR, 'projects.json');
@@ -52,9 +53,14 @@ function expandHome(p) {
 function normalizeProject(p) {
   if (!p || typeof p !== 'object') return null;
   if (typeof p.id !== 'string' || !p.id) return null;
-  if (typeof p.label !== 'string' || !p.label) return null;
+  // Label may be a string or a { pl, en } object - see src/localized.js.
+  if (!hasText(p.label)) return null;
   if (typeof p.path !== 'string' || !p.path) return null;
-  return { id: p.id, label: p.label, path: path.normalize(expandHome(p.path)) };
+  return {
+    id: p.id,
+    label: normalizeText(p.label),
+    path: path.normalize(expandHome(p.path)),
+  };
 }
 
 /**

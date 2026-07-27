@@ -58,7 +58,8 @@ function renderSkills() {
 
     const summary = document.createElement('summary');
     summary.className = 'cheat__summary';
-    summary.textContent = `${cat.name} · ${skills.length}`;
+    // cat.id is a language-neutral slug; the label comes from the dictionary.
+    summary.textContent = `${t(`skills.cat.${cat.id}`)} · ${skills.length}`;
     details.appendChild(summary);
 
     const list = document.createElement('div');

@@ -7,10 +7,14 @@
 
 'use strict';
 
-import { pulse } from './util.js';
+import { pulse, loc, t } from './util.js';
 import { term } from './terminals.js';
+import { onLangChange } from './bus.js';
 
 const promptsContainer = document.getElementById('prompts');
+
+// Kept so a language switch re-renders from memory instead of re-reading config.
+let lastGroups = [];
 
 // Prompt bodies live here (a DOM dataset does not take multi-line text well);
 // the button only carries a "group:prompt" index.
@@ -23,24 +27,32 @@ export async function initPrompts() {
   } catch {
     return; // no config - the section stays empty
   }
-  const groups = (data && data.groups) || [];
+  lastGroups = (data && data.groups) || [];
+  renderPrompts();
+}
+
+function renderPrompts() {
+  const groups = lastGroups;
+  // Preserve which groups the user had expanded across a language switch.
+  const open = [...promptsContainer.querySelectorAll('.cheat')].map((d) => d.open);
   promptsContainer.innerHTML = '';
   promptIndex.clear();
 
   groups.forEach((group, gi) => {
     const details = document.createElement('details');
     details.className = 'cheat';
-    if (gi === 0) details.open = true;
+    details.open = open.length ? !!open[gi] : gi === 0;
 
     const summary = document.createElement('summary');
     summary.className = 'cheat__summary';
-    summary.textContent = group.title;
+    summary.textContent = loc(group.title);
     details.appendChild(summary);
 
-    if (group.note) {
+    const groupNote = loc(group.note);
+    if (groupNote) {
       const note = document.createElement('p');
       note.className = 'cheat__note';
-      note.textContent = group.note;
+      note.textContent = groupNote;
       details.appendChild(note);
     }
 
@@ -49,7 +61,11 @@ export async function initPrompts() {
 
     group.prompts.forEach((p, pi) => {
       const key = `${gi}:${pi}`;
-      promptIndex.set(key, p.text);
+      // Resolve the body ONCE per render and index the resolved string: this is
+      // what actually gets pasted, so switching to EN must paste the English
+      // prompt, not merely relabel the button.
+      const text = loc(p.text);
+      promptIndex.set(key, text);
 
       const row = document.createElement('div');
       row.className = 'prompt-row';
@@ -57,8 +73,9 @@ export async function initPrompts() {
       // Main button: pastes the prompt WITHOUT sending it.
       const insert = document.createElement('button');
       insert.className = 'prompt-btn';
-      insert.textContent = p.label;
-      insert.title = p.note ? `${p.note}\n\n${p.text}` : p.text;
+      insert.textContent = loc(p.label);
+      const promptNote = loc(p.note);
+      insert.title = promptNote ? `${promptNote}\n\n${text}` : text;
       insert.dataset.key = key;
       insert.dataset.act = 'insert';
 
@@ -66,7 +83,7 @@ export async function initPrompts() {
       const send = document.createElement('button');
       send.className = 'prompt-send';
       send.textContent = '⏎';
-      send.title = 'Paste and send immediately';
+      send.title = t('prompts.send.title');
       send.dataset.key = key;
       send.dataset.act = 'send';
 
@@ -78,6 +95,10 @@ export async function initPrompts() {
     promptsContainer.appendChild(details);
   });
 }
+
+// Titles, notes, labels AND the prompt bodies themselves are localized, so a
+// language switch has to rebuild the index, not just the labels.
+onLangChange(renderPrompts);
 
 // Delegated: paste the prompt into the session (bracketed paste).
 promptsContainer.addEventListener('click', (e) => {

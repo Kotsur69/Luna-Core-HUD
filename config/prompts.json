@@ -1,87 +1,159 @@
 {
   "groups": [
     {
-      "title": "Start sesji",
-      "note": "Wklejane bez wyslania - mozesz dopisac szczegoly przed Enterem.",
+      "title": { "pl": "Start sesji", "en": "Session start" },
+      "note": {
+        "pl": "Wklejane bez wyslania - mozesz dopisac szczegoly przed Enterem.",
+        "en": "Pasted without sending - you can add details before hitting Enter."
+      },
       "prompts": [
         {
-          "label": "Kontekst projektu",
-          "note": "Rozgrzewka na poczatek pracy w nowym repo.",
-          "text": [
-            "Przeczytaj CLAUDE.md, README i strukture repo, potem powiedz mi:",
-            "1. co ten projekt robi (2-3 zdania),",
-            "2. gdzie jest punkt wejscia i jak to uruchomic,",
-            "3. jakie sa 3 najwieksze ryzyka / dlugi techniczne.",
-            "Nie zmieniaj jeszcze zadnego pliku."
-          ]
+          "label": { "pl": "Kontekst projektu", "en": "Project context" },
+          "note": {
+            "pl": "Rozgrzewka na poczatek pracy w nowym repo.",
+            "en": "A warm-up when starting work in a new repo."
+          },
+          "text": {
+            "pl": [
+              "Przeczytaj CLAUDE.md, README i strukture repo, potem powiedz mi:",
+              "1. co ten projekt robi (2-3 zdania),",
+              "2. gdzie jest punkt wejscia i jak to uruchomic,",
+              "3. jakie sa 3 najwieksze ryzyka / dlugi techniczne.",
+              "Nie zmieniaj jeszcze zadnego pliku."
+            ],
+            "en": [
+              "Read CLAUDE.md, the README and the repo structure, then tell me:",
+              "1. what this project does (2-3 sentences),",
+              "2. where the entry point is and how to run it,",
+              "3. the 3 biggest risks / pieces of technical debt.",
+              "Do not change any file yet."
+            ]
+          }
         },
         {
-          "label": "Wznow prace",
-          "note": "Odtworzenie stanu po przerwie.",
-          "text": [
-            "Sprawdz `git log --oneline -10` i `git status`, potem streszcz:",
-            "co bylo ostatnio robione, co jest niezacommitowane i jaki jest",
-            "najsensowniejszy nastepny krok. Zaproponuj, nie wykonuj."
-          ]
+          "label": { "pl": "Wznow prace", "en": "Resume work" },
+          "note": {
+            "pl": "Odtworzenie stanu po przerwie.",
+            "en": "Rebuilding context after a break."
+          },
+          "text": {
+            "pl": [
+              "Sprawdz `git log --oneline -10` i `git status`, potem streszcz:",
+              "co bylo ostatnio robione, co jest niezacommitowane i jaki jest",
+              "najsensowniejszy nastepny krok. Zaproponuj, nie wykonuj."
+            ],
+            "en": [
+              "Check `git log --oneline -10` and `git status`, then summarise:",
+              "what was last worked on, what is uncommitted and what the most",
+              "sensible next step is. Propose it, do not execute it."
+            ]
+          }
         }
       ]
     },
     {
-      "title": "Implementacja",
+      "title": { "pl": "Implementacja", "en": "Implementation" },
       "prompts": [
         {
-          "label": "Plan przed kodem",
-          "note": "Wymusza plan zamiast natychmiastowego pisania kodu.",
-          "text": [
-            "Zanim napiszesz kod: pokaz plan zmian - ktore pliki, jakie funkcje,",
-            "w jakiej kolejnosci i co moze sie zepsuc. Poczekaj na moje OK."
-          ]
+          "label": { "pl": "Plan przed kodem", "en": "Plan before code" },
+          "note": {
+            "pl": "Wymusza plan zamiast natychmiastowego pisania kodu.",
+            "en": "Forces a plan instead of jumping straight into code."
+          },
+          "text": {
+            "pl": [
+              "Zanim napiszesz kod: pokaz plan zmian - ktore pliki, jakie funkcje,",
+              "w jakiej kolejnosci i co moze sie zepsuc. Poczekaj na moje OK."
+            ],
+            "en": [
+              "Before you write any code: show me the plan - which files, which",
+              "functions, in what order, and what could break. Wait for my OK."
+            ]
+          }
         },
         {
           "label": "TDD",
-          "text": [
-            "Zrob to metoda TDD: najpierw test, ktory nie przechodzi (pokaz mi",
-            "wynik na czerwono), potem minimalna implementacja, potem refaktor.",
-            "Nie przechodz do implementacji zanim nie zobaczysz czerwonego testu."
-          ]
+          "text": {
+            "pl": [
+              "Zrob to metoda TDD: najpierw test, ktory nie przechodzi (pokaz mi",
+              "wynik na czerwono), potem minimalna implementacja, potem refaktor.",
+              "Nie przechodz do implementacji zanim nie zobaczysz czerwonego testu."
+            ],
+            "en": [
+              "Do this TDD-style: first a failing test (show me the red result),",
+              "then the minimal implementation, then refactor.",
+              "Do not move to the implementation before you see the test go red."
+            ]
+          }
         },
         {
-          "label": "Minimalny diff",
-          "text": [
-            "Napraw to najmniejsza mozliwa zmiana. Zadnych refaktorow przy okazji,",
-            "zadnych nowych plikow, zadnych zmian formatowania poza dotknietymi liniami.",
-            "Pokaz diff przed zapisem."
-          ]
+          "label": { "pl": "Minimalny diff", "en": "Minimal diff" },
+          "text": {
+            "pl": [
+              "Napraw to najmniejsza mozliwa zmiana. Zadnych refaktorow przy okazji,",
+              "zadnych nowych plikow, zadnych zmian formatowania poza dotknietymi liniami.",
+              "Pokaz diff przed zapisem."
+            ],
+            "en": [
+              "Fix this with the smallest possible change. No drive-by refactors,",
+              "no new files, no formatting changes outside the lines you touch.",
+              "Show me the diff before writing it."
+            ]
+          }
         }
       ]
     },
     {
-      "title": "Review / debug",
+      "title": { "pl": "Review / debug", "en": "Review / debug" },
       "prompts": [
         {
-          "label": "Review zmian",
-          "text": [
-            "Zrob review moich niezacommitowanych zmian (`git diff`). Skup sie na:",
-            "bledach logicznych, przypadkach brzegowych, obsludze bledow i bezpieczenstwie.",
-            "Podaj znaleziska posortowane wg wagi, kazde z plikiem i numerem linii.",
-            "Nie poprawiaj nic bez mojej zgody."
-          ]
+          "label": { "pl": "Review zmian", "en": "Review my changes" },
+          "text": {
+            "pl": [
+              "Zrob review moich niezacommitowanych zmian (`git diff`). Skup sie na:",
+              "bledach logicznych, przypadkach brzegowych, obsludze bledow i bezpieczenstwie.",
+              "Podaj znaleziska posortowane wg wagi, kazde z plikiem i numerem linii.",
+              "Nie poprawiaj nic bez mojej zgody."
+            ],
+            "en": [
+              "Review my uncommitted changes (`git diff`). Focus on:",
+              "logic errors, edge cases, error handling and security.",
+              "List findings sorted by severity, each with a file and line number.",
+              "Do not fix anything without my approval."
+            ]
+          }
         },
         {
           "label": "Root cause",
-          "note": "Zamiast lepienia objawow.",
-          "text": [
-            "Nie lataj objawu. Ustal przyczyne zrodlowa: pokaz sciezke wykonania,",
-            "wypisz co dokladnie zawodzi i dlaczego, a dopiero potem zaproponuj fix.",
-            "Jesli masz wiecej niz jedna hipoteze - wypisz je i powiedz jak je odroznic."
-          ]
+          "note": {
+            "pl": "Zamiast lepienia objawow.",
+            "en": "Instead of patching symptoms."
+          },
+          "text": {
+            "pl": [
+              "Nie lataj objawu. Ustal przyczyne zrodlowa: pokaz sciezke wykonania,",
+              "wypisz co dokladnie zawodzi i dlaczego, a dopiero potem zaproponuj fix.",
+              "Jesli masz wiecej niz jedna hipoteze - wypisz je i powiedz jak je odroznic."
+            ],
+            "en": [
+              "Do not patch the symptom. Find the root cause: show the execution path,",
+              "state exactly what fails and why, and only then propose a fix.",
+              "If you have more than one hypothesis - list them and say how to tell them apart."
+            ]
+          }
         },
         {
-          "label": "Wyjasnij ten kod",
-          "text": [
-            "Wyjasnij mi ten fragment: co robi, dlaczego tak, jakie sa zalozenia",
-            "i co sie stanie, gdy zostana zlamane. Bez lania wody."
-          ]
+          "label": { "pl": "Wyjasnij ten kod", "en": "Explain this code" },
+          "text": {
+            "pl": [
+              "Wyjasnij mi ten fragment: co robi, dlaczego tak, jakie sa zalozenia",
+              "i co sie stanie, gdy zostana zlamane. Bez lania wody."
+            ],
+            "en": [
+              "Explain this snippet to me: what it does, why it is written this way,",
+              "what it assumes and what happens when those assumptions break. No waffle."
+            ]
+          }
         }
       ]
     }

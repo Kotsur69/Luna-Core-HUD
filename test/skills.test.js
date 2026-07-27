@@ -16,38 +16,38 @@ const { categorize } = require('../src/skills');
 const skill = (name, description = '', file = '') => ({ name, description, file });
 
 test('categorize rozpoznaje kategorie po nazwie', () => {
-  assert.equal(categorize(skill('react-patterns')), 'Frontend');
-  assert.equal(categorize(skill('fastapi-patterns')), 'Backend');
-  assert.equal(categorize(skill('pytest-runner')), 'Testy');
-  assert.equal(categorize(skill('postgres-patterns')), 'Database');
-  assert.equal(categorize(skill('docker-compose-helper')), 'DevOps / Deploy');
-  assert.equal(categorize(skill('owasp-checklist')), 'Security');
+  assert.equal(categorize(skill('react-patterns')), 'frontend');
+  assert.equal(categorize(skill('fastapi-patterns')), 'backend');
+  assert.equal(categorize(skill('pytest-runner')), 'tests');
+  assert.equal(categorize(skill('postgres-patterns')), 'database');
+  assert.equal(categorize(skill('docker-compose-helper')), 'devops');
+  assert.equal(categorize(skill('owasp-checklist')), 'security');
 });
 
 test('categorize czyta rowniez opis, nie tylko nazwe', () => {
-  assert.equal(categorize(skill('cos-tam', 'Buduje komponenty i style CSS')), 'Frontend');
+  assert.equal(categorize(skill('cos-tam', 'Buduje komponenty i style CSS')), 'frontend');
 });
 
 test('categorize czyta rowniez sciezke pliku', () => {
-  assert.equal(categorize(skill('aaa', '', '/home/mati/.claude/skills/react-thing/SKILL.md')), 'Frontend');
+  assert.equal(categorize(skill('aaa', '', '/home/mati/.claude/skills/react-thing/SKILL.md')), 'frontend');
 });
 
 test('categorize jest niewrazliwa na wielkosc liter', () => {
-  assert.equal(categorize(skill('REACT-Patterns')), 'Frontend');
-  assert.equal(categorize(skill('Docker')), 'DevOps / Deploy');
+  assert.equal(categorize(skill('REACT-Patterns')), 'frontend');
+  assert.equal(categorize(skill('Docker')), 'devops');
 });
 
 test('categorize stosuje zasade "pierwsze trafienie wygrywa"', () => {
   // 'react' (Frontend) jest sprawdzany przed 'api' (Backend) - kolejnosc
   // CATEGORIES jest tu zachowaniem, nie przypadkiem.
-  assert.equal(categorize(skill('react-api-client')), 'Frontend');
+  assert.equal(categorize(skill('react-api-client')), 'frontend');
 });
 
-test('categorize wrzuca niedopasowane skille do kategorii "Inne"', () => {
-  assert.equal(categorize(skill('aaa')), 'Inne');
-  assert.equal(categorize(skill('zzz', 'zupelnie nieokreslony opis')), 'Inne');
+test('categorize wrzuca niedopasowane skille do kategorii "other"', () => {
+  assert.equal(categorize(skill('aaa')), 'other');
+  assert.equal(categorize(skill('zzz', 'zupelnie nieokreslony opis')), 'other');
 });
 
 test('categorize nie wywraca sie na pustych polach', () => {
-  assert.equal(categorize(skill('', '', '')), 'Inne');
+  assert.equal(categorize(skill('', '', '')), 'other');
 });
