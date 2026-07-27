@@ -233,20 +233,11 @@
            the panel's layout. -->
       <div class="widget-slot" data-slot="ports"></div>
 
-      <div class="panel__section panel__section--grow">
-        <h2 class="panel__title"><span data-i18n="pad.title">Brudnopis</span> <span id="pad-status" class="count"></span></h2>
-        <!-- Lokalny notatnik: autozapis do config/scratchpad.local.md (gitignore). -->
-        <textarea
-          id="pad-text"
-          class="pad"
-          spellcheck="false"
-          data-i18n-ph="pad.placeholder"
-          placeholder="Notatki, sniplety, TODO na pozniej..."
-        ></textarea>
-        <button id="pad-send" class="pad-send" data-i18n="pad.send" data-i18n-title="pad.send.title" title="Wklej tresc brudnopisu do sesji">
-          Wklej do sesji
-        </button>
-      </div>
+      <!-- A2: second block converted to the widget contract. Its markup lives in
+           <template id="w-scratchpad"> at the end of <body>; the host clones it
+           in here. The placeholder is `display: contents`, so it adds nothing to
+           the panel's layout. -->
+      <div class="widget-slot" data-slot="scratchpad"></div>
       </div><!-- /panel__scroll -->
     </aside>
 
@@ -308,6 +299,23 @@
       <!-- Wypelnia modules/ports.js z pasywnego skanu (7B). -->
       <ul id="ports-list" class="ports-list"></ul>
       <p id="ports-empty" class="hint" data-i18n="ports.scanning">Skanowanie portow...</p>
+    </div>
+  </template>
+
+  <template id="w-scratchpad">
+    <div class="panel__section panel__section--grow">
+      <h2 class="panel__title"><span data-i18n="pad.title">Brudnopis</span> <span id="pad-status" class="count"></span></h2>
+      <!-- Lokalny notatnik: autozapis do config/scratchpad.local.md (gitignore). -->
+      <textarea
+        id="pad-text"
+        class="pad"
+        spellcheck="false"
+        data-i18n-ph="pad.placeholder"
+        placeholder="Notatki, sniplety, TODO na pozniej..."
+      ></textarea>
+      <button id="pad-send" class="pad-send" data-i18n="pad.send" data-i18n-title="pad.send.title" title="Wklej tresc brudnopisu do sesji">
+        Wklej do sesji
+      </button>
     </div>
   </template>
 

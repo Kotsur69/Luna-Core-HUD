@@ -40,7 +40,7 @@ import './modules/autocompact.js';
 import { initCheatsheets } from './modules/cheatsheets.js';
 import { initPrompts } from './modules/prompts.js';
 import { initSkills } from './modules/skills.js';
-import { initScratchpad } from './modules/scratchpad.js';
+import './modules/scratchpad.js';
 import './modules/palette.js';
 
 // -- Left panel: switchers, ports, appearance ---------------------------------
@@ -56,7 +56,7 @@ import { mountIntoSlot, remountWidget, mountedWidgets } from './modules/host.js'
 import { listWidgets } from './modules/registry.js';
 import { busStats } from './modules/bus.js';
 
-const WIDGETS = ['ports'];
+const WIDGETS = ['ports', 'scratchpad'];
 
 // ---- Startup ----------------------------------------------------------------
 //
@@ -75,7 +75,6 @@ initProjects();
 initCheatsheets();
 initPrompts();
 initSkills();
-initScratchpad();
 initPorts();
 initAppearance();
 initSessions();
