@@ -17,14 +17,15 @@ import {
   onLangChange,
   registerSessionView,
 } from './bus.js';
-import { CTX_WARN_HIGH } from './context.js';
+import { CTX_WARN_HIGH } from './thresholds.js';
 
 export const SPARK_MAX = 80; // how many samples the chart keeps
 const BURN_WINDOW_MS = 5 * 60 * 1000; // rate is measured over this window
 
-const sparkLine = document.getElementById('ctx-spark-line');
-const sparkArea = document.getElementById('ctx-spark-area');
-const ctxBurn = document.getElementById('ctx-burn');
+// Elements of the current mount, or null when this half is not on screen. The
+// markup belongs to the `context` widget (one panel section, two modules), so
+// they arrive via mountSpark(root) rather than from document.getElementById.
+let els = null;
 
 let sparkBuf = []; // [{ t, tokens, percent }]
 
@@ -49,10 +50,11 @@ export function pushSample(buf, metrics) {
 
 /** Draws the line + fill in a 0..100 (x) / 0..30 (y, inverted) viewBox. */
 function renderSpark() {
+  if (!els) return;
   const n = sparkBuf.length;
   if (n < 2) {
-    sparkLine.setAttribute('points', '');
-    sparkArea.setAttribute('d', '');
+    els.line.setAttribute('points', '');
+    els.area.setAttribute('d', '');
     return;
   }
   // The Y scale follows the data, not a fixed 0-100%.
@@ -88,8 +90,8 @@ function renderSpark() {
     const y = Math.max(0, Math.min(30, (1 - (p - lo) / range) * 30));
     return `${x.toFixed(2)},${y.toFixed(2)}`;
   });
-  sparkLine.setAttribute('points', pts.join(' '));
-  sparkArea.setAttribute('d', `M0,30 L${pts.join(' L')} L100,30 Z`);
+  els.line.setAttribute('points', pts.join(' '));
+  els.area.setAttribute('d', `M0,30 L${pts.join(' L')} L100,30 Z`);
 }
 
 /** Formats a rate: below 1k as a number, above as "1.8k". */
@@ -100,6 +102,8 @@ function fmtRate(r) {
 
 /** Computes the rate over the time window and writes the text + ETA to 85%. */
 function renderBurn() {
+  if (!els) return;
+  const ctxBurn = els.burn;
   const n = sparkBuf.length;
   if (n < 2) {
     ctxBurn.textContent = t('burn.collecting');
@@ -132,6 +136,44 @@ function renderBurn() {
     ctxBurn.textContent = t('burn.stable');
   }
 }
+
+/**
+ * Mounts this module's half of the `context` widget.
+ *
+ * The Context Window section is one panel block owned by two modules, and a
+ * widget root can only have one mount(). context.js therefore defines the
+ * widget and calls this from inside its mount(), composing the two cleanups.
+ *
+ * Only the DOM is mounted here: the sample buffer and every subscription below
+ * stay at module scope, so the chart's history survives an unmount.
+ *
+ * @param {Element} root the widget root
+ * @returns {() => void} disposer
+ */
+export function mountSpark(root) {
+  els = {
+    line: root.querySelector('#ctx-spark-line'),
+    area: root.querySelector('#ctx-spark-area'),
+    burn: root.querySelector('#ctx-burn'),
+  };
+
+  // Paint the history we already have rather than an empty chart.
+  renderSpark();
+  renderBurn();
+
+  return () => {
+    els = null;
+  };
+}
+
+// ---- Subscriptions that maintain STATE stay at module scope -----------------
+//
+// NOT disposed on unmount, and deliberately unlike the ports/usage widgets.
+// `activeContext` is a non-replaying channel, so a disposed subscription would
+// lose samples permanently - and because renderBurn() measures a rate across a
+// 5-minute window, a hole in the buffer does not just lose pixels, it makes the
+// tok/min figure and the ETA wrong. The renders are no-ops while unmounted,
+// which gives the same teardown guarantee without dropping data.
 
 onActiveContext((metrics) => {
   if (!metrics || typeof metrics.tokens !== 'number') return;

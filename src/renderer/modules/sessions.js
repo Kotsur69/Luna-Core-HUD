@@ -40,7 +40,7 @@ import {
   resetLed,
 } from './led.js';
 import { setPtyStatus } from './ptystatus.js';
-import { CTX_WARN_HIGH, CTX_WARN_MID } from './context.js';
+import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
 import { lightTiles, applyToolEvents, trackBucketTools, resetTiles } from './skilltracker.js';
 import { syncSwitchers } from './switchers.js';
 

@@ -22,7 +22,7 @@ import { t } from './util.js';
 import { onActiveContext, onLangChange } from './bus.js';
 import { pulseCompact } from './actions.js';
 import { isLedDead } from './led.js';
-import { CTX_WARN_HIGH, CTX_WARN_MID } from './context.js';
+import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
 
 const AUTO_COMPACT_AT = CTX_WARN_HIGH;      // trigger threshold (0.85)
 const AUTO_COMPACT_REARM = CTX_WARN_MID;    // ready again below this (0.60)

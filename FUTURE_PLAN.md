@@ -8,10 +8,10 @@ box, then §8's Phase A table, then jump to §A2a/§A2b for the widget contract.
 | | State |
 |---|---|
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (159 tests), the A2 **contract**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*) |
-| **In flight** | **A2 conversions — 2 of ~13 blocks** (`ports`, `scratchpad`) |
-| **Next action** | Convert **`skilltracker`** to a widget. Then `usage`. |
+| **In flight** | **A2 conversions — 5 of ~13 blocks**: the **whole right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) |
+| **Next action** | Start the **left panel**. `autocompact` first — Step 0 of the `context` conversion already cut its only tie to a DOM-heavy module (it now imports `thresholds.js`). ⚠️ `context` is machine-verified but **not yet checked by hand** — run the checklist below before building on it. |
 | **After A2** | **A5** (async skill scan — the one you can feel) → **A4** (dead CSS) → Phase C |
-| **Branch** | `main`, clean and pushed through `0abb705` |
+| **Branch** | `main`, clean and pushed through the `context` conversion |
 
 Two facts that decide most design questions here, both learned the hard way:
 
@@ -37,6 +37,30 @@ npm start                         # the only way to check anything interactive
 `--enable-logging` prints **"Renderer process crashed"** on teardown and a CSP
 warning. Both are noise — the crash line tracks the `timeout` value. Don't chase
 them.
+
+### ⚠️ Owed: the by-hand pass on `context` (nothing else is blocked on it)
+
+The `context` conversion shipped **machine-verified only**: 159/159 tests green,
+`node --check` clean, and a probe run with `activeContext: 3` / `sessionViews: 4`
+**unchanged** before/after (those two numbers are the whole point — if either had
+moved, a state-keeping subscription had wrongly been moved into `mount()`), plus
+`rows: {…, context: 1, spark: 1}`. None of that can see a pixel. Run `npm start`
+and check:
+
+- [ ] Bar fills, shows `%`, tokens, the model badge and the `~$` cost line.
+- [ ] Run a few prompts — the sparkline draws and the tok/min text updates.
+- [ ] Click ⧉ copy-path → path on the clipboard; **toggle PL/EN and re-check the
+      button's tooltip still carries the path** (`applyStatic` resets `title`;
+      the `onLangChange` handler is what puts it back).
+- [ ] Two tabs: each shows its own `%`, its own sparkline, its own path.
+- [ ] Let a tab pass 60% → bar goes amber **and the tab dot goes amber too**
+      (that dot is the `thresholds.js` regression check — `sessions.js` reads it).
+- [ ] DevTools: `__luna.stats()` → `__luna.remount('context')` ×3 → `stats()`
+      identical, and the bar **and** sparkline repaint immediately with real
+      numbers, not `0%`.
+
+The half-dead failure mode is the one to look for: a bar that works perfectly
+above a sparkline that never draws (or the reverse). Two modules share that root.
 
 ---
 

@@ -153,79 +153,19 @@
            na dole) nie miescily sie i byly przycinane. Ten sam wzorzec co lewy
            panel - sekcje biora naturalna wysokosc i przewijaja sie razem. -->
       <div class="panel__scroll">
-      <div class="panel__section">
-        <h2 class="panel__title usage-head">
-          <span data-i18n="ctxwin.title">Context Window</span>
-          <!-- B6: kopiuje sciezke transcriptu TEJ zakladki. Ukryty, dopoki
-               obserwator nie przypnie pliku - nie ma czego kopiowac. -->
-          <button
-            id="ctx-copy-path"
-            class="usage-refresh"
-            data-i18n-title="ctx.copyPath.title"
-            title="Kopiuj sciezke transcriptu"
-            hidden
-          >&#10697;</button>
-        </h2>
-        <!-- Pasek zapelnia sie w Fazie 3 (parser metryk). Na razie placeholder. -->
-        <div class="ctx-bar">
-          <div id="ctx-fill" class="ctx-bar__fill" style="--ctx: 0"></div>
-        </div>
-        <div class="ctx-meta">
-          <span class="ctx-meta__left">
-            <span id="ctx-percent">--%</span>
-            <!-- B3: plakietka modelu + realne okno (B2). Ukryta, dopoki nie znamy modelu. -->
-            <span id="ctx-model" class="badge" hidden></span>
-          </span>
-          <span id="ctx-warn" class="ctx-warn"></span>
-        </div>
-        <p id="ctx-tokens" class="hint" data-i18n="ctx.waiting">Oczekiwanie na transcript sesji...</p>
+      <!-- A2: converted to the widget contract. Its markup lives in
+           <template id="w-context"> at the end of <body>. Two modules share
+           that one block: context.js (bar, badge, cost, copy-path) and
+           spark.js (sparkline, burn rate) - see mountSpark(). -->
+      <div class="widget-slot" data-slot="context"></div>
 
-        <!-- Sparkline zuzycia: procent context window w czasie (Passive Observer,
-             te same probki `usage` co pasek wyzej). Linia kreskowana = prog 85%. -->
-        <div class="ctx-spark" aria-hidden="true">
-          <svg class="ctx-spark__svg" viewBox="0 0 100 30" preserveAspectRatio="none">
-            <line class="ctx-spark__thresh" x1="0" y1="4.5" x2="100" y2="4.5" />
-            <path id="ctx-spark-area" class="ctx-spark__area" d="" />
-            <polyline id="ctx-spark-line" class="ctx-spark__line" points="" />
-          </svg>
-        </div>
-        <p id="ctx-burn" class="hint ctx-burn" data-i18n="burn.collecting">Zbieranie probek...</p>
-        <!-- B4: elapsed session time + estimated spend. Hidden until we have both. -->
-        <p id="ctx-cost" class="hint" hidden></p>
-      </div>
+      <!-- A2: converted to the widget contract. Its markup lives in
+           <template id="w-usage"> at the end of <body>. -->
+      <div class="widget-slot" data-slot="usage"></div>
 
-      <div class="panel__section">
-        <h2 class="panel__title usage-head">
-          <span data-i18n="usage.title">Limity uzycia</span>
-          <button
-            id="usage-refresh"
-            class="usage-refresh"
-            data-i18n-title="usage.refresh.title"
-            title="Odswiez zuzycie"
-          >&#8635;</button>
-        </h2>
-        <!-- Kafelek zuzycia (5h + tydzien). Paski buduje renderer.js z IPC
-             usage:update (odczyt GET z endpointu OAuth CLI, zero tokenow). -->
-        <div id="usage-body" class="usage">
-          <p class="hint" data-i18n="usage.loading">Sprawdzanie limitow...</p>
-        </div>
-      </div>
-
-      <div class="panel__section">
-        <h2 class="panel__title" data-i18n="skilltracker.title">Skill Tracker</h2>
-        <!-- Kafelki zapala parser stdout (nazwa narzedzia -> kafelek). -->
-        <ul id="skill-list" class="skill-list">
-          <li class="skill-tile" data-skill="Read">Read</li>
-          <li class="skill-tile" data-skill="Edit">Edit</li>
-          <li class="skill-tile" data-skill="Write">Write</li>
-          <li class="skill-tile" data-skill="Shell">Shell</li>
-          <li class="skill-tile" data-skill="Grep">Grep</li>
-          <li class="skill-tile" data-skill="Glob">Glob</li>
-          <li class="skill-tile" data-skill="Web">Web</li>
-          <li class="skill-tile" data-skill="Task">Task</li>
-        </ul>
-        <p class="hint" data-i18n="skilltracker.hint">Kafelek swieci, gdy Claude uzywa narzedzia.</p>
-      </div>
+      <!-- A2: converted to the widget contract. Its markup lives in
+           <template id="w-skilltracker"> at the end of <body>. -->
+      <div class="widget-slot" data-slot="skilltracker"></div>
 
       <!-- A2: first block converted to the widget contract. Its markup lives in
            <template id="w-ports"> at the end of <body>; the host clones it in
@@ -282,6 +222,51 @@
        Each template must hold EXACTLY ONE root element - that element becomes
        the widget's root, with no extra wrapper to disturb the flex layout. -->
 
+  <!-- One block, two owners: context.js takes the bar / badge / cost / copy-path,
+       spark.js takes the sparkline and burn line. A widget root gets exactly one
+       mount(), so context.js mounts spark's half from inside its own. -->
+  <template id="w-context">
+    <div class="panel__section">
+      <h2 class="panel__title usage-head">
+        <span data-i18n="ctxwin.title">Context Window</span>
+        <!-- B6: kopiuje sciezke transcriptu TEJ zakladki. Ukryty, dopoki
+             obserwator nie przypnie pliku - nie ma czego kopiowac. -->
+        <button
+          id="ctx-copy-path"
+          class="usage-refresh"
+          data-i18n-title="ctx.copyPath.title"
+          title="Kopiuj sciezke transcriptu"
+          hidden
+        >&#10697;</button>
+      </h2>
+      <div class="ctx-bar">
+        <div id="ctx-fill" class="ctx-bar__fill" style="--ctx: 0"></div>
+      </div>
+      <div class="ctx-meta">
+        <span class="ctx-meta__left">
+          <span id="ctx-percent">--%</span>
+          <!-- B3: plakietka modelu + realne okno (B2). Ukryta, dopoki nie znamy modelu. -->
+          <span id="ctx-model" class="badge" hidden></span>
+        </span>
+        <span id="ctx-warn" class="ctx-warn"></span>
+      </div>
+      <p id="ctx-tokens" class="hint" data-i18n="ctx.waiting">Oczekiwanie na transcript sesji...</p>
+
+      <!-- Sparkline zuzycia: procent context window w czasie (Passive Observer,
+           te same probki `usage` co pasek wyzej). Linia kreskowana = prog 85%. -->
+      <div class="ctx-spark" aria-hidden="true">
+        <svg class="ctx-spark__svg" viewBox="0 0 100 30" preserveAspectRatio="none">
+          <line class="ctx-spark__thresh" x1="0" y1="4.5" x2="100" y2="4.5" />
+          <path id="ctx-spark-area" class="ctx-spark__area" d="" />
+          <polyline id="ctx-spark-line" class="ctx-spark__line" points="" />
+        </svg>
+      </div>
+      <p id="ctx-burn" class="hint ctx-burn" data-i18n="burn.collecting">Zbieranie probek...</p>
+      <!-- B4: elapsed session time + estimated spend. Hidden until we have both. -->
+      <p id="ctx-cost" class="hint" hidden></p>
+    </div>
+  </template>
+
   <template id="w-ports">
     <div class="panel__section panel__section--grow">
       <h2 class="panel__title usage-head">
@@ -316,6 +301,46 @@
       <button id="pad-send" class="pad-send" data-i18n="pad.send" data-i18n-title="pad.send.title" title="Wklej tresc brudnopisu do sesji">
         Wklej do sesji
       </button>
+    </div>
+  </template>
+
+  <!-- NOTE: `.panel__section` WITHOUT `--grow`, exactly as this block was authored
+       as static markup. The two templates above happen to grow; copying one of them
+       here would quietly redistribute the right panel's height. -->
+  <template id="w-usage">
+    <div class="panel__section">
+      <h2 class="panel__title usage-head">
+        <span data-i18n="usage.title">Limity uzycia</span>
+        <button
+          id="usage-refresh"
+          class="usage-refresh"
+          data-i18n-title="usage.refresh.title"
+          title="Odswiez zuzycie"
+        >&#8635;</button>
+      </h2>
+      <!-- Kafelek zuzycia (5h + tydzien). Paski buduje modules/usage.js z IPC
+           usage:update (odczyt GET z endpointu OAuth CLI, zero tokenow). -->
+      <div id="usage-body" class="usage">
+        <p class="hint" data-i18n="usage.loading">Sprawdzanie limitow...</p>
+      </div>
+    </div>
+  </template>
+
+  <template id="w-skilltracker">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="skilltracker.title">Skill Tracker</h2>
+      <!-- Kafelki zapala transcript (tool_use/tool_result) + backstop ze stdout. -->
+      <ul id="skill-list" class="skill-list">
+        <li class="skill-tile" data-skill="Read">Read</li>
+        <li class="skill-tile" data-skill="Edit">Edit</li>
+        <li class="skill-tile" data-skill="Write">Write</li>
+        <li class="skill-tile" data-skill="Shell">Shell</li>
+        <li class="skill-tile" data-skill="Grep">Grep</li>
+        <li class="skill-tile" data-skill="Glob">Glob</li>
+        <li class="skill-tile" data-skill="Web">Web</li>
+        <li class="skill-tile" data-skill="Task">Task</li>
+      </ul>
+      <p class="hint" data-i18n="skilltracker.hint">Kafelek swieci, gdy Claude uzywa narzedzia.</p>
     </div>
   </template>
 

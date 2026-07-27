@@ -56,7 +56,9 @@ import { mountIntoSlot, remountWidget, mountedWidgets } from './modules/host.js'
 import { listWidgets } from './modules/registry.js';
 import { busStats } from './modules/bus.js';
 
-const WIDGETS = ['ports', 'scratchpad'];
+// Order here is cosmetic: each widget lands in its own [data-slot], so the
+// panel's layout comes from index.html, not from this list.
+const WIDGETS = ['ports', 'scratchpad', 'usage', 'skilltracker', 'context'];
 
 // ---- Startup ----------------------------------------------------------------
 //

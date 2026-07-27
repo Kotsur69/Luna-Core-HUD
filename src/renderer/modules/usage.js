@@ -5,16 +5,28 @@
 // zero tokens). The renderer keeps the last payload and counts down to the
 // reset from resetsAt locally, so a language switch and the ticking clock
 // refresh the UI without a new request.
+//
+// A2: converted to the widget contract, following modules/ports.js. The split
+// is the one every conversion uses - `lastUsage` is APP state and stays at
+// module scope (the bus channel replays, so a remount repaints from it at once
+// instead of flashing "checking limits..."), while `els` belongs to the mount
+// and is null whenever this block is off screen.
+//
+// The one real leak this fixes: the 30 s countdown used to be a module-level
+// setInterval that nothing could ever stop.
 // ============================================================================
 
 'use strict';
 
 import { t } from './util.js';
 import { onLangChange, onUsageUpdate } from './bus.js';
+import { defineWidget } from './registry.js';
 
-const usageBody = document.getElementById('usage-body');
-const usageRefreshBtn = document.getElementById('usage-refresh');
+/** How often the "resets in ..." labels are recomputed (locally, no request). */
+const COUNTDOWN_MS = 30000;
 
+// Elements of the current mount, or null when this widget is not on screen.
+let els = null;
 let lastUsage = null;
 
 /** Humanises the time to reset (ISO -> "4d 2h" / "3h 12m" / "9m"). null once past. */
@@ -74,6 +86,8 @@ function usageMessage(key) {
 
 /** Renders the tile from the current state. Error states become a message. */
 function renderUsage() {
+  if (!els) return; // not mounted - lastUsage is kept, the DOM is not ours
+  const usageBody = els.body;
   usageBody.innerHTML = '';
   const u = lastUsage;
   if (!u) {
@@ -106,31 +120,58 @@ function renderUsage() {
   if (u.extraUsage) usageBody.appendChild(usageMessage('usage.extra'));
 }
 
-// Via feeds.js, not straight off IPC - see the note there on disposability.
-onUsageUpdate((usage) => {
-  lastUsage = usage;
-  renderUsage();
-});
+defineWidget({
+  id: 'usage',
+  titleKey: 'usage.title',
+  template: 'w-usage',
+  mount(root) {
+    els = {
+      body: root.querySelector('#usage-body'),
+      refresh: root.querySelector('#usage-refresh'),
+    };
 
-usageRefreshBtn.addEventListener('click', async () => {
-  usageRefreshBtn.classList.add('is-spinning');
-  try {
-    const u = await window.lunacore.refreshUsage();
-    if (u) {
-      lastUsage = u;
+    // Via feeds.js, not straight off IPC - see the note there on disposability.
+    // It replays, so a remount repaints from the last poll instead of waiting
+    // up to 90 s for the next one.
+    const offUsage = onUsageUpdate((usage) => {
+      lastUsage = usage;
       renderUsage();
-    }
-  } catch {
-    /* ignore - the watcher will emit on its next tick anyway */
-  } finally {
-    setTimeout(() => usageRefreshBtn.classList.remove('is-spinning'), 400);
-  }
+    });
+
+    const offLang = onLangChange(renderUsage);
+
+    els.refresh.addEventListener('click', async () => {
+      const btn = els.refresh;
+      btn.classList.add('is-spinning');
+      try {
+        const u = await window.lunacore.refreshUsage();
+        if (u) {
+          lastUsage = u;
+          renderUsage(); // no-op if we were unmounted while awaiting
+        }
+      } catch {
+        /* ignore - the watcher will emit on its next tick anyway */
+      } finally {
+        // Purely decorative, and bound to a node inside root: if this widget is
+        // gone by now the element goes with it. Nothing to flush (cf. the
+        // scratchpad debounce, which does carry user intent).
+        setTimeout(() => btn.classList.remove('is-spinning'), 400);
+      }
+    });
+
+    // Refresh the reset labels every 30 s (the countdown is computed locally
+    // from resetsAt, with no new network request).
+    const countdown = setInterval(() => {
+      if (lastUsage && !lastUsage.error) renderUsage();
+    }, COUNTDOWN_MS);
+
+    renderUsage();
+
+    return () => {
+      offUsage();
+      offLang();
+      clearInterval(countdown);
+      els = null;
+    };
+  },
 });
-
-// Refresh the reset labels every 30 s (the countdown is computed locally from
-// resetsAt, with no new network request).
-setInterval(() => {
-  if (lastUsage && !lastUsage.error) renderUsage();
-}, 30000);
-
-onLangChange(renderUsage);

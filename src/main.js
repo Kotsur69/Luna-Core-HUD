@@ -203,8 +203,10 @@ function createWindow() {
  * only visible symptom, and until Phase C starts moving panels around nothing
  * else would ever exercise unmount() at all.
  *
- * `rows` is the positive half: exactly one #ports-list means the widget mounted
- * once - neither missing nor duplicated.
+ * `rows` is the positive half: one marker element per converted widget means it
+ * mounted exactly once - neither missing nor duplicated. It is counted per
+ * widget rather than for `ports` alone, or the probe would keep proving the one
+ * case while staying silent about every widget added after it.
  */
 async function runWidgetProbe(win) {
   const script = `(() => {
@@ -218,7 +220,16 @@ async function runWidgetProbe(win) {
       remountedTo: __luna.mounted(),
       before,
       after: __luna.stats(),
-      rows: document.querySelectorAll('#ports-list').length,
+      rows: {
+        ports: document.querySelectorAll('#ports-list').length,
+        scratchpad: document.querySelectorAll('#pad-text').length,
+        usage: document.querySelectorAll('#usage-body').length,
+        skilltracker: document.querySelectorAll('#skill-list').length,
+        context: document.querySelectorAll('#ctx-fill').length,
+        // spark.js shares the context widget's root - counted separately so a
+        // half-mounted block (bar without chart) cannot pass unnoticed.
+        spark: document.querySelectorAll('#ctx-spark-line').length,
+      },
     });
   })()`;
 

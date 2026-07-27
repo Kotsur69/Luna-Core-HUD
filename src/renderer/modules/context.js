@@ -10,20 +10,17 @@
 
 import { t, pulse } from './util.js';
 import { onActiveContext, onBackgroundContext, onLangChange, registerSessionView } from './bus.js';
+// Bar colour thresholds: < 60% green, 60-85% amber, > 85% red + alarm. They live
+// in their own module so this one can import spark.js without forming a cycle.
+import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
+import { defineWidget } from './registry.js';
+import { mountSpark } from './spark.js';
 
-// Bar colour thresholds: < 60% green, 60-85% amber, > 85% red + alarm.
-export const CTX_WARN_HIGH = 0.85;
-export const CTX_WARN_MID = 0.6;
+// Elements of the current mount, or null when this widget is not on screen.
+let els = null;
 
-const ctxFill = document.getElementById('ctx-fill');
-const ctxPercent = document.getElementById('ctx-percent');
-const ctxWarn = document.getElementById('ctx-warn');
-const ctxTokens = document.getElementById('ctx-tokens');
-const ctxModel = document.getElementById('ctx-model');
-const ctxCost = document.getElementById('ctx-cost');
-const ctxCopyPath = document.getElementById('ctx-copy-path');
-
-// Last metrics kept so a language switch can re-render the text.
+// Last metrics kept so a language switch can re-render the text - and so a
+// remount can repaint the real numbers instead of starting again from 0%.
 let lastCtxMetrics = null;
 
 /**
@@ -33,15 +30,18 @@ let lastCtxMetrics = null;
  */
 export function applyCtxMetrics(metrics, live = true) {
   if (!metrics || typeof metrics.percent !== 'number') return;
+  // The metrics are remembered even while unmounted - only the painting stops.
+  // That is what lets a remount show the session's real state immediately.
   lastCtxMetrics = metrics;
+  if (!els) return;
   const pct = Math.max(0, Math.min(1, metrics.percent));
 
   // Bar: scaleX 0..1 (no layout thrash) + colour by threshold.
-  ctxFill.style.setProperty('--ctx', pct.toFixed(3));
-  ctxFill.classList.toggle('is-mid', pct >= CTX_WARN_MID && pct < CTX_WARN_HIGH);
-  ctxFill.classList.toggle('is-high', pct >= CTX_WARN_HIGH);
+  els.fill.style.setProperty('--ctx', pct.toFixed(3));
+  els.fill.classList.toggle('is-mid', pct >= CTX_WARN_MID && pct < CTX_WARN_HIGH);
+  els.fill.classList.toggle('is-high', pct >= CTX_WARN_HIGH);
 
-  ctxPercent.textContent = `${Math.round(pct * 100)}%`;
+  els.percent.textContent = `${Math.round(pct * 100)}%`;
   renderModelBadge(metrics);
   renderCostLine(metrics);
   renderCopyPath(metrics);
@@ -57,7 +57,8 @@ export function applyCtxMetrics(metrics, live = true) {
  * tab's metrics, and with them ITS transcript.
  */
 function renderCopyPath(metrics) {
-  if (!ctxCopyPath) return;
+  if (!els || !els.copyPath) return;
+  const ctxCopyPath = els.copyPath;
   const file = (metrics && metrics.file) || '';
   ctxCopyPath.hidden = !file;
   if (!file) {
@@ -86,7 +87,8 @@ function formatLimit(limit) {
  * hides the badge rather than showing an empty pill.
  */
 function renderModelBadge(metrics) {
-  if (!ctxModel) return;
+  if (!els || !els.model) return;
+  const ctxModel = els.model;
   const label = (metrics && metrics.modelLabel) || '';
   if (!label) {
     ctxModel.hidden = true;
@@ -139,7 +141,8 @@ function formatUsd(usd) {
  * part is true regardless of whether we can price the session.
  */
 function renderCostLine(metrics) {
-  if (!ctxCost) return;
+  if (!els || !els.cost) return;
+  const ctxCost = els.cost;
   const parts = [];
   const elapsed = formatElapsed(metrics && metrics.elapsedMs);
   if (elapsed) parts.push(elapsed);
@@ -162,11 +165,12 @@ function renderCostLine(metrics) {
 /** Clears the bar when a tab has no metrics yet. */
 export function resetCtxUI() {
   lastCtxMetrics = null;
-  ctxFill.style.setProperty('--ctx', '0');
-  ctxFill.classList.remove('is-mid', 'is-high');
-  ctxPercent.textContent = '0%';
-  ctxWarn.textContent = '';
-  ctxTokens.textContent = '';
+  if (!els) return;
+  els.fill.style.setProperty('--ctx', '0');
+  els.fill.classList.remove('is-mid', 'is-high');
+  els.percent.textContent = '0%';
+  els.warn.textContent = '';
+  els.tokens.textContent = '';
   renderModelBadge(null);
   renderCostLine(null);
   renderCopyPath(null);
@@ -174,15 +178,23 @@ export function resetCtxUI() {
 
 /** The two text lines under the bar (warning + token counts) - i18n-aware. */
 function renderCtxText() {
-  if (!lastCtxMetrics) return;
+  if (!els || !lastCtxMetrics) return;
   const pct = Math.max(0, Math.min(1, lastCtxMetrics.percent));
-  ctxWarn.textContent = pct >= CTX_WARN_HIGH ? t('ctx.warn.compact') : '';
+  els.warn.textContent = pct >= CTX_WARN_HIGH ? t('ctx.warn.compact') : '';
   const k = (n) => `${Math.round(n / 1000)}k`;
-  ctxTokens.textContent = t('ctx.tokens', {
+  els.tokens.textContent = t('ctx.tokens', {
     used: k(lastCtxMetrics.tokens),
     limit: k(lastCtxMetrics.limit),
   });
 }
+
+// ---- Subscriptions that maintain STATE stay at module scope ----------------
+//
+// Deliberately not disposed on unmount, unlike the ports/usage widgets. Those
+// listen to REPLAYING bus channels, so a remount recovers the last payload;
+// `activeContext` does not replay (bus.js), so disposing it here would drop
+// samples for good. The renders above are already no-ops while unmounted, which
+// gets the same teardown guarantee without losing the data.
 
 onActiveContext((metrics) => applyCtxMetrics(metrics, true));
 
@@ -192,19 +204,55 @@ onBackgroundContext((bucket, metrics) => {
   bucket.lastCtx = metrics;
 });
 
-// Copy the pinned transcript path (B6).
-if (ctxCopyPath) {
-  ctxCopyPath.addEventListener('click', () => {
-    const file = ctxCopyPath.dataset.path;
-    if (!file) return;
-    navigator.clipboard.writeText(file).catch(() => {});
-    pulse(ctxCopyPath);
-  });
-}
+// ---- The widget -------------------------------------------------------------
+//
+// First widget whose markup is owned by TWO modules: the bar, badge, cost line
+// and copy-path button here, the sparkline and burn text in spark.js. One root
+// can only have one mount(), so this one mounts spark's half too and hands back
+// a cleanup that undoes both. spark.js keeps its own state and subscriptions -
+// only its DOM is mounted from here.
 
-onLangChange(() => {
-  renderCtxText();
-  renderCopyPath(lastCtxMetrics); // applyStatic just reset this button's title
+defineWidget({
+  id: 'context',
+  titleKey: 'ctxwin.title',
+  template: 'w-context',
+  mount(root) {
+    els = {
+      fill: root.querySelector('#ctx-fill'),
+      percent: root.querySelector('#ctx-percent'),
+      warn: root.querySelector('#ctx-warn'),
+      tokens: root.querySelector('#ctx-tokens'),
+      model: root.querySelector('#ctx-model'),
+      cost: root.querySelector('#ctx-cost'),
+      copyPath: root.querySelector('#ctx-copy-path'),
+    };
+
+    const offSpark = mountSpark(root);
+
+    // Copy the pinned transcript path (B6). Bound inside root, so the host
+    // removes it with the subtree - no disposer needed.
+    els.copyPath.addEventListener('click', () => {
+      const file = els.copyPath.dataset.path;
+      if (!file) return;
+      navigator.clipboard.writeText(file).catch(() => {});
+      pulse(els.copyPath);
+    });
+
+    const offLang = onLangChange(() => {
+      renderCtxText();
+      renderCopyPath(lastCtxMetrics); // applyStatic just reset this button's title
+    });
+
+    // Repaint from what the session is actually at, not from zero.
+    if (lastCtxMetrics) applyCtxMetrics(lastCtxMetrics, false);
+    else resetCtxUI();
+
+    return () => {
+      offSpark();
+      offLang();
+      els = null;
+    };
+  },
 });
 
 registerSessionView({

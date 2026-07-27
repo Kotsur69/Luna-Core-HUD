@@ -204,6 +204,39 @@ defineWidget({
 });
 ```
 
+**A module that grabs its elements at import time cannot be a widget.** This is
+the trap every remaining conversion will hit: `skilltracker.js` used to fill its
+tile map from `document.querySelectorAll('.skill-tile')` at import, which matches
+nothing once the markup lives in an inert `<template>` — no error, no console
+output, the tiles just never light again. Look up elements in `mount(root)`, and
+prefer leaving the collection **empty** rather than `null` while unmounted, so
+the render loops degrade to no-ops instead of needing a guard each.
+
+**Not every subscription belongs in `mount()`.** The rule that survived the
+`context` conversion: *subscriptions that maintain state stay module-scope; only
+DOM work is per-mount.* `activeContext` is a **non-replaying** channel, unlike
+`portsUpdate` / `usageUpdate` — disposing it on unmount would drop samples for
+good, and `spark.js` measures a rate across a 5-minute window, so a gap does not
+just lose pixels, it makes the tok/min figure and the ETA **wrong**. Keep the
+subscription, make the *render* a no-op. Same reasoning keeps `skilltracker`'s
+`open` map alive while its tiles are gone.
+
+**One section can be owned by two modules.** `context` is the first such widget:
+`context.js` owns the bar, badge and cost line, `spark.js` owns the sparkline and
+burn rate, both inside one `.panel__section`. The contract gives one root to one
+`mount()`, so `context.js` composes it — `spark.js` exports `mountSpark(root)`
+returning its own disposer. The failure mode to watch for is *half* a block going
+inert: a bar that works perfectly above a permanently empty sparkline, which is
+easy to skim straight past. The probe counts them separately (`rows.spark`) for
+exactly that reason.
+
+That composition is also why `CTX_WARN_HIGH` / `CTX_WARN_MID` now live in
+**`modules/thresholds.js`** (no imports, no DOM) with four readers — `context`,
+`spark`, `autocompact`, `sessions`. Left in `context.js`, importing `mountSpark`
+would have closed a genuine import cycle that worked only by accident, and its
+near-miss form is silent: thresholds arriving `undefined` mean a bar that never
+turns red and an auto-compact that never fires, with nothing on screen saying so.
+
 Markup stays authored as HTML inside `<template id="w-…">` and is cloned on
 mount, so the live DOM is identical to what static markup produced — the
 conversion needs no CSS changes. Each template holds **exactly one root
@@ -231,8 +264,15 @@ __luna.stats()            // subscribers per bus channel (DevTools console)
 __luna.remount('ports')   // then compare — counts that grew mean a leak
 ```
 
-Equal counts mean clean teardown; `rows: 1` in the probe means the widget
-mounted exactly once, neither missing nor duplicated.
+Equal counts mean clean teardown; `rows` carries one entry per converted widget,
+and a `1` there means that widget mounted exactly once, neither missing nor
+duplicated.
+
+The probe has a blind spot worth remembering: it counts **bus subscribers**, so a
+leaked `setInterval` is invisible to it. `usage` (a 30 s countdown) and
+`skilltracker` (its reconcile loop) both own timers that cleanup has to clear —
+the symptom of getting that wrong is a tile sweeping faster after a remount, not
+a number the probe reports.
 
 **A disposer cancels effects but commits pending user intent.** The probe cannot
 catch the difference. The scratchpad autosaves on a 500 ms debounce, so a
@@ -245,10 +285,11 @@ purely visual ticks just stop.
 load these files directly — `node --check src/renderer/modules/*.js` works, and
 the test suite can reach renderer modules.
 
-**Converted so far: `ports`, `scratchpad`.** The rest of the panel blocks are
-still static markup; a `[data-slot]` placeholder is `display: contents`, so
-converted and unconverted blocks sit side by side without disturbing the flex
-layout. Conversion order and the reasoning behind the contract are in
+**Converted so far: `ports`, `scratchpad`, `usage`, `skilltracker`, `context` —
+the entire right panel.** The left-panel blocks are still static markup; a
+`[data-slot]` placeholder is `display: contents`, so converted and unconverted
+blocks sit side by side without disturbing the flex layout. Conversion order and
+the reasoning behind the contract are in
 [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §A2a–§A2b.
 
 ---
@@ -279,7 +320,7 @@ layout. Conversion order and the reasoning behind the contract are in
 | A1 | Split `renderer.js` → 57-line entry point + 21 ES modules | ✅ done |
 | B8 | Skill Tracker shows a tool's **real duration** (sweep, not a blink) | ✅ done |
 | B5–B7 | Port filter toggle, copy-transcript-path, skill search box | ✅ done |
-| A2 | Widget contract + teardown probe — `ports` and `scratchpad` converted | 🟡 2 of ~13 |
+| A2 | Widget contract + teardown probe — whole **right panel** converted (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) | 🟡 5 of ~13 |
 | + | PL/EN localization of `config/*.json`, not just the UI chrome | ✅ done |
 
 That closes the whole approved shortlist and the first slice of the structural

@@ -28,11 +28,26 @@
 //
 // One reconcile loop drives all of it. Per-tile and per-id timers were the
 // obvious alternative and would have meant four timer maps to keep in sync.
+//
+// A2: converted to the widget contract. The trap here was `tileEls`, which used
+// to be filled by document.querySelectorAll AT IMPORT TIME. Once the markup
+// lives in an inert <template> that query matches nothing - no error, no console
+// output, the tiles simply never light again. It is filled per mount instead.
+//
+// `tileEls` is left EMPTY rather than null while unmounted, which makes every
+// DOM loop below a natural no-op: reconcile() then reports "not busy", so pump()
+// never starts a timer for a widget that is off screen, and the session-view
+// repaint has nothing to paint. That beats guarding each loop by hand.
+//
+// What stays at module scope is what belongs to the app rather than the mount:
+// `open` (which tools are running right now) and the session-view registration,
+// which keeps per-tab bookkeeping correct even while this block is not shown.
 // ============================================================================
 
 'use strict';
 
 import { registerSessionView } from './bus.js';
+import { defineWidget } from './registry.js';
 
 /** Minimum time a tile stays lit once shown, so a sub-tick tool is visible. */
 const MIN_ACTIVE_MS = 900;
@@ -53,10 +68,8 @@ const display = new Map();
 let loopTimer = null;
 let blinkSeq = 0;
 
+/** tile name -> element. Filled on mount, emptied on unmount (see the header). */
 const tileEls = new Map();
-for (const el of document.querySelectorAll('.skill-tile')) {
-  tileEls.set(el.dataset.skill, el);
-}
 
 /** How many tools are in flight for each tile right now. */
 function countsByTile() {
@@ -195,6 +208,37 @@ export function resetTiles() {
   pump();
 }
 
+defineWidget({
+  id: 'skilltracker',
+  titleKey: 'skilltracker.title',
+  template: 'w-skilltracker',
+  mount(root) {
+    for (const el of root.querySelectorAll('.skill-tile')) {
+      tileEls.set(el.dataset.skill, el);
+    }
+
+    // Repaint from whatever is running right now: `open` survived the unmount,
+    // so a remount mid-tool shows that tool still sweeping rather than dark.
+    pump();
+
+    return () => {
+      if (loopTimer) {
+        clearInterval(loopTimer);
+        loopTimer = null;
+      }
+      // `display` is visual state keyed to elements that are about to be
+      // removed; keeping it would resume a fade against a dead node on the next
+      // mount. `open` is deliberately NOT cleared - it is app state.
+      display.clear();
+      tileEls.clear();
+    };
+  },
+});
+
+// Module scope on purpose: this keeps each tab's set of running tools accurate
+// even while the widget is off screen, and its repaint loop below is already a
+// no-op through the empty `tileEls`. It also means the subscriber count the
+// probe watches stays constant across remounts.
 registerSessionView({
   save(bucket) {
     bucket.toolsOpen = new Map(open);
