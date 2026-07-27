@@ -443,7 +443,7 @@ feature set is stable and nothing is half-finished.
 | # | Item | Ref | Notes |
 |---|------|-----|-------|
 | A1 | ✅ **Split `renderer.js` into modules** | §6 | **DONE 2026-07-25.** 1554 lines → a 60-line entry point + 21 modules in `src/renderer/modules/`, loaded as `<script type="module">`. Verified first: Chromium blocks ESM over `file://`, but **Electron 33 does not** — probed with a throwaway app before committing to the approach, so no bundler and no custom protocol. See A1a below for the two couplings that had to be broken. |
-| A2 | 🟡 **Widget contract** | §4 | **Contract DONE 2026-07-25**, `ports` converted as the first block; the remaining blocks are mechanical. Shape is `{ id, titleKey, template, mount(root) -> cleanup? }` — see A2a for why it is not quite the `{title, mount, unmount}` sketched here. |
+| A2 | 🟡 **Widget contract** | §4 | **Contract DONE 2026-07-25**, `ports` + `scratchpad` converted; the remaining blocks are mechanical. Shape is `{ id, titleKey, template, mount(root) -> cleanup? }` — see A2a for why it is not quite the `{title, mount, unmount}` sketched here, and A2b for the one thing a mechanical port still got wrong. |
 | A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, now 92 tests, ~0.4 s, no new deps. Includes two **data** tests asserting the shipped rate/window tables cover every current model — logic tests on fixtures cannot catch a stale table. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that made A1 safe — it caught nothing during the split, which is the point: the suite covers the *pure* modules, and A1 never touched them. Now 117 tests. |
 | A4 | 🟡 **Kill the dead bits** | §6 | Half done: `CONTEXT_LIMIT` is no longer a magic number (now an alias of `models.DEFAULT_CONTEXT_LIMIT`). **Still open:** the dead `.panel__spacer` CSS rule. |
 | A5 | **Async skill scan** | §6 | `scanSkills()` still blocks main ~2.4 s; pre-warm only hides it. Worker thread or async fs walk. |
@@ -542,10 +542,28 @@ layout while converted and unconverted blocks sit side by side; Phase C replaces
 it with real named slots.
 
 **Conversion order for the rest** (each one leaves the app working):
-`scratchpad` → `skilltracker` (timers must stop on unmount) → `usage` (30 s tick)
-→ `context`+`spark`+`autocompact` (coupled trio, three session views) →
+~~`scratchpad`~~ → `skilltracker` (timers must stop on unmount) → `usage` (30 s
+tick) → `context`+`spark`+`autocompact` (coupled trio, three session views) →
 `cheatsheets`/`prompts`/`skills` → `switchers`/`actions`/`appearance` →
 `terminal` last, since it owns the xterm panes.
+
+#### A2b — `scratchpad` (2026-07-27): cleanup is not always "undo"
+
+The second conversion was meant to be the mechanical one, and the markup half
+was: template + slot, zero CSS. But a straight port would have introduced a
+**data-loss bug that the probe cannot see**.
+
+The autosave is debounced 500 ms. Cleanup's job is usually to *cancel* pending
+work — and cancelling here silently throws away the user's last edit if the
+widget unmounts mid-pause. So `cleanup()` **flushes**: it clears the timer, then
+fires the save it was waiting on.
+
+The general rule, worth carrying into the remaining conversions: a disposer must
+cancel *effects*, but commit *pending user intent*. `skilltracker` and `usage`
+are next and their timers are pure display — those genuinely just cancel.
+
+Cheap tell for which kind you have: if the timer's callback writes anything the
+user typed, it needs a flush.
 
 ### Phase B — Daily-driver quick wins (§5.1)
 

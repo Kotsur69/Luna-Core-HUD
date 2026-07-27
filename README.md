@@ -138,6 +138,7 @@ Luna-Core-HUD/
 │   ├── prompts.js         # load/validate multi-line prompt library from config/
 │   ├── scratchpad.js      # read/write the local scratchpad note file
 │   ├── projects.js        # load/validate working directories (~ expansion)
+│   ├── localized.js       # {pl,en} config values: validate/normalize + merge keys (never resolves)
 │   ├── theme.js           # load/validate themes from config/ (FALLBACK cyberpunk)
 │   ├── uiprefs.js         # read/write UI prefs (theme + language + boot + profile) → ui.local.json
 │   ├── usage.js           # UsageWatcher: GET OAuth /usage endpoint → 5h + weekly limits
@@ -149,7 +150,8 @@ Luna-Core-HUD/
 │       ├── styles.css     # LunaCore theme tokens (:root custom properties)
 │       └── modules/       # one file per concern, ES modules (see A1 below)
 │           ├── bus.js         # subscriber lists: context / language / per-tab view state
-│           ├── util.js        # t() shortcut + pulse()
+│           ├── util.js        # t() shortcut + loc() for config values + pulse()
+│           ├── localize.js    # pickLocalized(): resolve a {pl,en} config value (pure)
 │           ├── terminals.js   # one xterm per tab + the `term` facade + fit/resize
 │           ├── sessions.js    # tab bar + the ONLY place pty IPC is routed
 │           ├── context.js     # Context Window bar, model badge, cost line
@@ -231,6 +233,13 @@ __luna.remount('ports')   // then compare — counts that grew mean a leak
 
 Equal counts mean clean teardown; `rows: 1` in the probe means the widget
 mounted exactly once, neither missing nor duplicated.
+
+**A disposer cancels effects but commits pending user intent.** The probe cannot
+catch the difference. The scratchpad autosaves on a 500 ms debounce, so a
+cleanup that merely cleared the timer would silently drop whatever you typed last
+if the widget unmounted mid-pause — it flushes the save instead. Rule of thumb:
+if a timer's callback writes something the user typed, cleanup must flush it;
+purely visual ticks just stop.
 
 `src/renderer/package.json` marks the folder `"type": "module"`, which lets Node
 load these files directly — `node --check src/renderer/modules/*.js` works, and
@@ -582,11 +591,31 @@ override themes by `id`.
 An **Appearance → Language** switch flips the whole UI between Polish and English
 live. Static labels carry `data-i18n` / `data-i18n-ph` / `data-i18n-title`
 attributes filled from [`src/renderer/i18n.js`](src/renderer/i18n.js); dynamic
-strings (LED state, token counts, burn rate, palette rows) go through `t()`. Note
-this translates **LunaCore's own chrome** only — the `claude` CLI output in the
-terminal is whatever the CLI itself emits. Both the theme and language choice
-persist to `config/ui.local.json` (gitignored) via `src/uiprefs.js`, so the app
-reopens exactly how you left it.
+strings (LED state, token counts, burn rate, palette rows) go through `t()`.
+
+**Your config follows the switch too.** Anything you write in `config/*.json`
+that ends up on screen — cheat-sheet groups, prompt labels *and prompt bodies*,
+profile and project names — can be given per language:
+
+```jsonc
+"title": "Git",                                      // plain string = same in every language
+"title": { "pl": "Testy / Build", "en": "Tests / Build" },
+"text":  { "pl": ["linia 1", "linia 2"],             // arrays still join with newlines,
+           "en": ["line 1", "line 2"] }              // per language
+```
+
+A **plain string is language-neutral**, not "untranslated": `git status`,
+`/compact` and `Cyberpunk` read the same either way, and every `*.local.json` you
+wrote before this keeps working unchanged. Missing languages fall back
+(requested → `pl` → `en`) rather than rendering blank. Resolution happens in the
+renderer, so switching language re-renders in place — and a prompt clicked in EN
+pastes the **English body**, not just an English button. Commands are never
+translated. See [`src/renderer/modules/localize.js`](src/renderer/modules/localize.js).
+
+The one thing this does not cover is the `claude` CLI output in the terminal —
+that is whatever the CLI itself emits. Both the theme and language choice persist
+to `config/ui.local.json` (gitignored) via `src/uiprefs.js`, so the app reopens
+exactly how you left it.
 
 ## Boot sequence
 
