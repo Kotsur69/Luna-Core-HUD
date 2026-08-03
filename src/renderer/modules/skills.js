@@ -108,7 +108,25 @@ defineWidget({
       list: root.querySelector('#skills'),
       count: root.querySelector('#skills-count'),
       search: root.querySelector('#skills-search'),
+      rescan: root.querySelector('#skills-rescan'),
     };
+
+    // A5: forces a fresh disk scan, bypassing main.js's cache - a newly added
+    // SKILL.md no longer needs a full app restart to show up.
+    els.rescan.addEventListener('click', async () => {
+      const btn = els.rescan;
+      btn.classList.add('is-spinning');
+      try {
+        const data = await window.lunacore.rescanSkills();
+        allCategories = (data && data.categories) || [];
+        total = (data && data.total) || 0;
+        renderSkills(); // no-op if we were unmounted while awaiting
+      } catch {
+        /* ignore - the stale list stays on screen */
+      } finally {
+        setTimeout(() => btn.classList.remove('is-spinning'), 400);
+      }
+    });
 
     if (els.search) {
       // Restore what was typed - see the header. Setting .value fires no input

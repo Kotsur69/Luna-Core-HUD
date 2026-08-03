@@ -81,6 +81,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   // --- 7A: sciagawka skilli wg kategorii ---
   /** Pobiera { categories: [{ name, skills: [{name, description}] }], total }. */
   getSkills: () => ipcRenderer.invoke('skills:list'),
+  /** A5: wymusza swiezy skan katalogow skilli, pomijajac cache. */
+  rescanSkills: () => ipcRenderer.invoke('skills:rescan'),
 
   // --- Biblioteka promptow ---
   /** Pobiera { groups: [{ title, note, prompts: [{label, text, note}] }] }. */

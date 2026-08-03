@@ -48,30 +48,38 @@ const CATEGORIES = [
 ];
 const FALLBACK_CATEGORY = 'other';
 
-/** Recursively collects SKILL.md paths under a root. */
-function findSkillFiles(root, depth, acc) {
+/**
+ * Recursively collects SKILL.md paths under a root.
+ *
+ * A5: async and concurrent (not sequential) - the ~2.4s this used to cost was
+ * I/O latency across ~339 files, not CPU, so fanning subdirectories out with
+ * Promise.all makes this both non-blocking AND faster, not just the former.
+ */
+async function findSkillFiles(root, depth, acc) {
   if (depth > MAX_DEPTH) return;
   let entries;
   try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
+    entries = await fs.promises.readdir(root, { withFileTypes: true });
   } catch {
     return; // directory missing / not readable
   }
+  const subdirs = [];
   for (const e of entries) {
     if (e.isDirectory()) {
       if (SKIP_DIRS.has(e.name)) continue;
-      findSkillFiles(path.join(root, e.name), depth + 1, acc);
+      subdirs.push(findSkillFiles(path.join(root, e.name), depth + 1, acc));
     } else if (e.name.toLowerCase() === 'skill.md') {
       acc.push(path.join(root, e.name));
     }
   }
+  await Promise.all(subdirs);
 }
 
 /** Extracts name + description from a SKILL.md frontmatter block. */
-function parseSkill(file) {
+async function parseSkill(file) {
   let text;
   try {
-    text = fs.readFileSync(file, 'utf8').slice(0, 4096); // frontmatter is at the top
+    text = (await fs.promises.readFile(file, 'utf8')).slice(0, 4096); // frontmatter is at the top
   } catch {
     return null;
   }
@@ -99,16 +107,16 @@ function categorize(skill) {
 /**
  * Scans the skill directories and returns skills grouped into categories.
  * `id` is a slug, not a label - the renderer translates it. See CATEGORIES.
- * @returns {{categories: Array<{id:string, skills:Array}>, total:number}}
+ * @returns {Promise<{categories: Array<{id:string, skills:Array}>, total:number}>}
  */
-function scanSkills() {
+async function scanSkills() {
   const files = [];
-  for (const root of SCAN_ROOTS) findSkillFiles(root, 0, files);
+  await Promise.all(SCAN_ROOTS.map((root) => findSkillFiles(root, 0, files)));
 
   // Parse + dedupe by name (the same skill can live in several places).
+  const parsed = await Promise.all(files.map(parseSkill));
   const byName = new Map();
-  for (const file of files) {
-    const skill = parseSkill(file);
+  for (const skill of parsed) {
     if (skill && skill.name && !byName.has(skill.name)) {
       byName.set(skill.name, skill);
     }
@@ -132,14 +140,23 @@ function scanSkills() {
   return { categories, total: byName.size };
 }
 
-// Cache - we scan once (skill directories do not change mid-session).
-let cache = null;
+// Cache is the PROMISE, not the resolved value: this dedupes concurrent
+// callers that land while a scan is still in flight (first IPC call during
+// startup, plus whatever else asks before it resolves), so two callers never
+// trigger two walks.
+let cachePromise = null;
 
 /** Returns (and caches) the scan result. */
 function loadSkills() {
-  if (!cache) cache = scanSkills();
-  return cache;
+  if (!cachePromise) cachePromise = scanSkills();
+  return cachePromise;
+}
+
+/** Forces a fresh scan (rescan button - A5), replacing the cache. */
+function rescanSkills() {
+  cachePromise = scanSkills();
+  return cachePromise;
 }
 
 // categorize is pure (object -> category name) - exported for the tests.
-module.exports = { loadSkills, scanSkills, categorize };
+module.exports = { loadSkills, rescanSkills, scanSkills, categorize };

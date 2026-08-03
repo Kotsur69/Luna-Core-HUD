@@ -34,7 +34,7 @@ const { killProcess, PortWatcher } = require('./ports');
 // Sciagawki akcji (7C): grupy komend wysylanych przez Action Injector.
 const { loadCheatsheets } = require('./cheatsheets');
 // Sciagawka skilli (7A): auto-skan katalogow skilli -> kategorie.
-const { loadSkills } = require('./skills');
+const { loadSkills, rescanSkills } = require('./skills');
 // Biblioteka promptow: wielolinijkowe prompty do wielokrotnego uzycia.
 const { loadPrompts } = require('./prompts');
 // Brudnopis: lokalny notatnik trzymany jako zwykly plik tekstowy.
@@ -688,6 +688,9 @@ function registerIpc() {
   // 7A: renderer pobiera skille pogrupowane w kategorie (wynik cache'owany).
   ipcMain.handle('skills:list', () => loadSkills());
 
+  // A5: wymuszony re-skan (przycisk w UI) - nowy skill nie wymaga juz restartu.
+  ipcMain.handle('skills:rescan', () => rescanSkills());
+
   // Biblioteka promptow: grupy wielolinijkowych promptow do wklejenia.
   ipcMain.handle('prompts:list', () => loadPrompts());
 
@@ -721,9 +724,10 @@ app.whenReady().then(() => {
   startActiveProfile(); // otwiera pierwsza zakladke (wraz z jej watcherem)
   startPortWatcher();
   startUsageWatcher();
-  // Pre-warm skanu skilli (7A) po chwili, zeby jednorazowy koszt ~2s nie
-  // opoznial startu okna. Wynik trafia do cache i pozniej odpowiada natychmiast.
-  setTimeout(() => loadSkills(), 3000);
+  // A5: skan skilli (7A) jest teraz async (fs.promises) i nie blokuje event
+  // loopa, wiec nie trzeba juz go opozniac za oknem - im wczesniej wystartuje,
+  // tym wieksza szansa, ze cache bedzie gotowy zanim widget skills go poprosi.
+  loadSkills();
 
   app.on('activate', () => {
     // macOS: odtworz okno po kliknieciu w Dock, jesli wszystkie zamkniete.

@@ -375,7 +375,17 @@
 
   <template id="w-skills">
     <div class="panel__section panel__section--grow">
-      <h2 class="panel__title"><span data-i18n="skills.title">Skille</span> <span id="skills-count" class="count"></span></h2>
+      <h2 class="panel__title usage-head">
+        <span><span data-i18n="skills.title">Skille</span> <span id="skills-count" class="count"></span></span>
+        <!-- A5: re-skan katalogow skilli na zadanie - nowy plik SKILL.md nie
+             wymaga juz restartu calej aplikacji. -->
+        <button
+          id="skills-rescan"
+          class="usage-refresh"
+          data-i18n-title="skills.rescan.title"
+          title="Odswiez liste skilli"
+        >&#8635;</button>
+      </h2>
       <!-- B7: filtr listy skilli. Lista jest juz w pamieci, wiec to czysto
            rendererowe zawezenie - bez IPC i bez ponownego skanu. Wpisana fraza
            zyje w module, nie w tym polu: klon szablonu zawsze wraca pusty, wiec
