@@ -27,7 +27,7 @@ const BURN_WINDOW_MS = 5 * 60 * 1000; // rate is measured over this window
 // they arrive via mountSpark(root) rather than from document.getElementById.
 let els = null;
 
-let sparkBuf = []; // [{ t, tokens, percent }]
+let sparkBuf = []; // [{ t, tokens, percent, limit }]
 
 /**
  * Appends a sample to a buffer, trimming it to SPARK_MAX. Shared by the active
@@ -35,17 +35,49 @@ let sparkBuf = []; // [{ t, tokens, percent }]
  *
  * An unchanged token count only refreshes the timestamp instead of adding a
  * point - otherwise a quiet session would fill the chart with duplicates.
+ *
+ * `limit` rides along because renderBurn needs it to place the 85% threshold.
+ * It is refreshed on the no-change path too: B2 promotes the window mid-session
+ * when observed tokens exceed it, so a sample can outlive the limit it was born
+ * with.
  */
 export function pushSample(buf, metrics) {
   const now = Date.now();
   const prev = buf[buf.length - 1];
   if (prev && prev.tokens === metrics.tokens) {
     prev.t = now;
+    prev.limit = metrics.limit;
   } else {
-    buf.push({ t: now, tokens: metrics.tokens, percent: metrics.percent });
+    buf.push({
+      t: now,
+      tokens: metrics.tokens,
+      percent: metrics.percent,
+      limit: metrics.limit,
+    });
     if (buf.length > SPARK_MAX) buf.shift();
   }
   return buf;
+}
+
+/**
+ * Minutes until the 85% threshold at the current rate.
+ *
+ * @returns {number|null} minutes, 0 when already past the threshold, or null
+ *   when it cannot be known (no limit yet, or the context is not growing).
+ *
+ * Exported and pure because of the bug it exists to prevent. This used to be
+ * inline in renderBurn as `CTX_WARN_HIGH * last.limit`, and `limit` was never
+ * put in the sample - so the product was NaN, `remaining > 0` was false, and the
+ * code took the else branch and announced "in compact zone" at 6% context. A
+ * wrong ETA is worse than none, which is the rule B4 already set for cost: an
+ * unknown model gets no estimate at all. Hence null rather than a guess.
+ */
+export function etaMinutes(last, rate) {
+  if (!last || typeof last.limit !== 'number' || !(last.limit > 0)) return null;
+  if (typeof last.tokens !== 'number' || !(rate > 0)) return null;
+  const remaining = CTX_WARN_HIGH * last.limit - last.tokens;
+  if (!(remaining > 0)) return 0; // already inside the compact zone
+  return remaining / rate;
 }
 
 /** Draws the line + fill in a 0..100 (x) / 0..30 (y, inverted) viewBox. */
@@ -120,14 +152,14 @@ function renderBurn() {
 
   const rate = (last.tokens - first.tokens) / dtMin; // tokens / min
   if (rate > 5) {
-    const thresholdTokens = CTX_WARN_HIGH * last.limit;
-    const remaining = thresholdTokens - last.tokens;
-    let eta;
-    if (remaining > 0) {
-      const min = remaining / rate;
-      eta = t('burn.eta.to85', { min: min < 1 ? '<1' : Math.round(min) });
-    } else {
+    const min = etaMinutes(last, rate);
+    // null = the limit is not known yet: show the rate and claim nothing. The
+    // old code could not express this and guessed "in compact zone" instead.
+    let eta = '';
+    if (min === 0) {
       eta = t('burn.eta.zone');
+    } else if (min !== null) {
+      eta = t('burn.eta.to85', { min: min < 1 ? '<1' : Math.round(min) });
     }
     ctxBurn.textContent = t('burn.up', { rate: fmtRate(rate), eta });
   } else if (rate < -5) {

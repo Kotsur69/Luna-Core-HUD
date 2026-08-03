@@ -9,7 +9,7 @@ box, then §8's Phase A table, then jump to §A2a/§A2b for the widget contract.
 |---|---|
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (159 tests), the A2 **contract**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*) |
 | **In flight** | **A2 conversions — 6 of ~13 blocks**: the **whole right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) plus the first left-panel block, `autocompact` |
-| **Next action** | Continue the **left panel**: `cheatsheets` / `prompts` / `skills` (all three are list-builders with an `init*()` entry point, so they convert as a group), then `switchers`/`actions`/`appearance`, `terminal` last. ⚠️ `context` is still **machine-verified only** — its checklist below is the one hand-check still owed. `autocompact` is hand-verified (§A2c). |
+| **Next action** | Continue the **left panel**: `cheatsheets` / `prompts` / `skills` (all three are list-builders with an `init*()` entry point, so they convert as a group), then `switchers`/`actions`/`appearance`, `terminal` last. Both `context` and `autocompact` are now **hand-verified** — no by-hand passes owed. The `context` pass found and fixed a bug that had been live since `55ac9e5` (the ETA to 85% never worked); see the box above. |
 | **After A2** | **A5** (async skill scan — the one you can feel) → **A4** (dead CSS) → Phase C |
 | **Branch** | `main`, clean and pushed through the `autocompact` conversion (§A2c) |
 
@@ -38,7 +38,41 @@ npm start                         # the only way to check anything interactive
 warning. Both are noise — the crash line tracks the `timeout` value. Don't chase
 them.
 
-### ⚠️ Owed: the by-hand pass on `context` (nothing else is blocked on it)
+### ✅ Done: the by-hand pass on `context` (2026-08-03) — and it caught a 3-refactor-old bug
+
+**Result: the conversion is clean.** Bar, `%`, tokens, `Sonnet 5 · 1M` badge and
+the `~$` cost line all render; the sparkline draws and the tok/min text updates;
+copy-path keeps its path through a PL→EN→PL round-trip; and
+`__luna.remount('context')` ×3 leaves `busStats()` identical while bar *and*
+sparkline repaint with real numbers (`6% -> 6%`, `spark 2 -> 2`). The half-dead
+failure mode did not appear. Two items are still unchecked and cost nothing to
+leave open: two tabs holding independent state, and the amber bar + amber tab dot
+past 60%.
+
+**What it found is the point.** The burn line read `▲ 2.0k tok/min · w strefie
+compact` at **6%** context. Cause: `pushSample()` stored `{t, tokens, percent}`
+while `renderBurn()` computed `CTX_WARN_HIGH * last.limit` — `limit` was never in
+the sample, so the product was `NaN`, `remaining > 0` was `false`, and it took the
+else branch. **The ETA to 85% had never worked once**, in any session, since
+`55ac9e5` shipped the sparkline. It survived A1 and A2 because `NaN` comparisons
+do not throw — they quietly pick the wrong branch — and nothing in `test/` touched
+either function.
+
+Fixed the same day: `limit` now rides in the sample (refreshed on the no-change
+path too, since B2 promotes the window mid-session), and the arithmetic moved into
+a pure exported `etaMinutes()` that returns **null** when the limit is unknown, so
+the UI shows the rate and claims nothing — the rule B4 already set for cost. Nine
+tests in `test/spark.test.js` (159 → 168), the last of which feeds a real
+`pushSample()` output into `etaMinutes()`: testing them separately would have
+passed while the field was still being dropped.
+
+**The transferable lesson:** a value read but never written fails silently when
+`NaN` is the intermediate. Unit tests on either half in isolation cannot see it;
+only the seam can. Worth a look wherever else one module produces a record another
+consumes by field name.
+
+<details>
+<summary>The original checklist, kept for the next conversion that needs one</summary>
 
 The `context` conversion shipped **machine-verified only**: 159/159 tests green,
 `node --check` clean, and a probe run with `activeContext: 3` / `sessionViews: 4`
@@ -61,6 +95,8 @@ and check:
 
 The half-dead failure mode is the one to look for: a bar that works perfectly
 above a sparkline that never draws (or the reverse). Two modules share that root.
+
+</details>
 
 ---
 
