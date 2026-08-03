@@ -23,63 +23,27 @@
       <!-- Przewijalny srodek: brand i status PTY zostaja przypiete. -->
       <div class="panel__scroll">
 
-      <div class="panel__section">
-        <h2 class="panel__title" data-i18n="actions.title">Akcje</h2>
-        <!-- FIZYCZNY przycisk Action Injector: wysyla /compact do PTY -->
-        <button id="btn-compact" class="action-btn" data-i18n-title="compact.title" title="Wyslij /compact do Claude CLI">
-          <span class="action-btn__icon">⚡</span>
-          <span class="action-btn__label">COMPACT CONTEXT</span>
-        </button>
-        <!-- A2: uzbrojony auto-compact jest widgetem - markup siedzi w
-             <template id="w-autocompact"> na koncu <body>. Slot jest
-             `display: contents`, wiec label zostaje bezposrednim dzieckiem tej
-             sekcji, dokladnie tam gdzie byl. -->
-        <div class="widget-slot" data-slot="autocompact"></div>
-      </div>
+      <!-- A2: "Akcje" (fizyczny COMPACT + zagniezdzony autocompact) jest
+           widgetem - markup siedzi w <template id="w-actions"> na koncu
+           <body>. `actions` musi montowac sie PRZED `autocompact` (patrz
+           WIDGETS w renderer.js), bo autocompact laduje w slocie zagniezdzonym
+           w tym szablonie. -->
+      <div class="widget-slot" data-slot="actions"></div>
 
-      <div class="panel__section">
-        <h2 class="panel__title" data-i18n="appearance.title">Wyglad</h2>
-        <!-- Motyw: opcje wypelnia renderer.js z config/themes.json. -->
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="appearance.theme">Motyw</span>
-          <select id="theme-switcher" class="profile-select"></select>
-        </label>
-        <!-- Jezyk UI: PL/EN, przelaczenie na zywo (i18n.js). -->
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="appearance.lang">Jezyk</span>
-          <select id="lang-switcher" class="profile-select">
-            <option value="pl">Polski</option>
-            <option value="en">English</option>
-          </select>
-        </label>
-        <!-- Sekwencja startowa: czysta ozdoba, mozna wylaczyc. Nie blokuje
-             sesji - PTY startuje pod spodem niezaleznie od animacji. -->
-        <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="boot.label">Sekwencja startowa</span>
-            <span id="boot-status" class="switch-field__status" data-i18n="boot.on">wlaczona</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="boot-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-      </div>
+      <!-- A2: "Wyglad" (motyw / jezyk / sekwencja startowa) jest widgetem -
+           markup siedzi w <template id="w-appearance"> na koncu <body>.
+           boot-field ma ten sam ksztalt <label>-jako-korzen co autocompact
+           (A2c), ale tutaj jest jednym z trzech pol sekcji, nie calym
+           korzeniem - jego toggle montuje boot.js (mountBoot). -->
+      <div class="widget-slot" data-slot="appearance"></div>
 
-      <div class="panel__section">
-        <h2 class="panel__title" data-i18n="project.title">Projekt</h2>
-        <!-- Katalog roboczy (cwd) sesji. Opcje wypelnia renderer.js z
-             config/projects.json; zmiana restartuje PTY w nowym folderze. -->
-        <select id="project-switcher" class="profile-select"></select>
-        <p class="hint" data-i18n="project.hint">Zmiana katalogu restartuje sesje w nowym folderze.</p>
-      </div>
+      <!-- A2: "Projekt" jest widgetem - markup siedzi w
+           <template id="w-project"> na koncu <body>. -->
+      <div class="widget-slot" data-slot="project"></div>
 
-      <div class="panel__section">
-        <h2 class="panel__title" data-i18n="profile.title">Profil</h2>
-        <!-- Opcje wypelnia renderer.js z config/profiles.json (Faza 4). -->
-        <select id="profile-switcher" class="profile-select"></select>
-        <p class="hint" data-i18n="profile.hint">Zmiana profilu restartuje sesje z nowym srodowiskiem.</p>
-      </div>
+      <!-- A2: "Profil" jest widgetem - markup siedzi w
+           <template id="w-profile"> na koncu <body>. -->
+      <div class="widget-slot" data-slot="profile"></div>
 
       <!-- A2: trzy budowniczowie list z lewego panelu. Ich markup siedzi w
            <template id="w-cheatsheets|w-prompts|w-skills"> na koncu <body>.
@@ -100,26 +64,13 @@
     </aside>
 
     <!-- ================= CENTRUM: Terminal ================= -->
-    <main class="panel panel--center">
-      <div class="terminal-bar">
-        <span class="terminal-bar__title">Claude Code CLI</span>
-        <!-- LED: zolty puls = leci stdout (pracuje), zielony = cisza (Twoja tura). -->
-        <span id="led" class="led led--waiting"></span>
-        <span id="led-label" class="terminal-bar__hint" data-i18n="led.waiting">czeka na Ciebie</span>
-        <!-- Podpowiedz + skrot do palety komend (Ctrl+K). -->
-        <button id="palette-open" class="palette-chip" data-i18n-title="palette.chip.title" title="Paleta komend (Ctrl+K)">
-          <kbd>Ctrl</kbd><kbd>K</kbd>
-        </button>
-      </div>
-      <!-- Zakladki sesji. Kazda ma wlasny proces PTY, wlasny kontekst i wlasny
-           bufor xterm; tu renderujemy tylko ich naglowki (budowane z JS). -->
-      <div class="tabs">
-        <div id="tabs-list" class="tabs__list" role="tablist"></div>
-        <button id="tab-new" class="tabs__new" data-i18n-title="tabs.new" title="Nowa sesja">+</button>
-      </div>
-      <!-- Host terminali: jeden .terminal__pane na sesje, widoczny tylko aktywny -->
-      <div id="terminal" class="terminal"></div>
-    </main>
+    <!-- A2f: converted to the widget contract, but UNLIKE every other widget it
+         must never remount (registry.js: remountable: false) - its children are
+         live xterm instances wired to real PTY processes, and a fresh template
+         clone would orphan them from the DOM. Its markup lives in
+         <template id="w-terminal"> at the end of <body>; four modules share it
+         (terminals.js, led.js, sessions.js, palette.js) - see modules/terminal.js. -->
+    <div class="widget-slot" data-slot="terminal"></div>
 
     <!-- ================= PRAWY PANEL: Monitor Statusu ================= -->
     <aside class="panel panel--right">
@@ -335,6 +286,73 @@
     </label>
   </template>
 
+  <!-- The nested [data-slot="autocompact"] here is what makes `actions` a
+       mounting dependency for `autocompact` - see actions.js and the WIDGETS
+       comment in renderer.js. -->
+  <template id="w-actions">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="actions.title">Akcje</h2>
+      <!-- FIZYCZNY przycisk Action Injector: wysyla /compact do PTY -->
+      <button id="btn-compact" class="action-btn" data-i18n-title="compact.title" title="Wyslij /compact do Claude CLI">
+        <span class="action-btn__icon">⚡</span>
+        <span class="action-btn__label">COMPACT CONTEXT</span>
+      </button>
+      <div class="widget-slot" data-slot="autocompact"></div>
+    </div>
+  </template>
+
+  <!-- boot.js's mountBoot(root) owns #boot-toggle / #boot-status - same
+       one-root-two-owners shape as w-context (context.js + spark.js). -->
+  <template id="w-appearance">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="appearance.title">Wyglad</h2>
+      <!-- Motyw: opcje wypelnia appearance.js z config/themes.json. -->
+      <label class="ui-field">
+        <span class="ui-field__label" data-i18n="appearance.theme">Motyw</span>
+        <select id="theme-switcher" class="profile-select"></select>
+      </label>
+      <!-- Jezyk UI: PL/EN, przelaczenie na zywo (i18n.js). -->
+      <label class="ui-field">
+        <span class="ui-field__label" data-i18n="appearance.lang">Jezyk</span>
+        <select id="lang-switcher" class="profile-select">
+          <option value="pl">Polski</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+      <!-- Sekwencja startowa: czysta ozdoba, mozna wylaczyc. Nie blokuje
+           sesji - PTY startuje pod spodem niezaleznie od animacji. -->
+      <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">
+        <span class="switch-field__text">
+          <span class="switch-field__label" data-i18n="boot.label">Sekwencja startowa</span>
+          <span id="boot-status" class="switch-field__status" data-i18n="boot.on">wlaczona</span>
+        </span>
+        <span class="switch">
+          <input type="checkbox" id="boot-toggle" class="switch__input" />
+          <span class="switch__track"><span class="switch__thumb"></span></span>
+        </span>
+      </label>
+    </div>
+  </template>
+
+  <template id="w-project">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="project.title">Projekt</h2>
+      <!-- Katalog roboczy (cwd) sesji. Opcje wypelnia switchers.js z
+           config/projects.json; zmiana restartuje PTY w nowym folderze. -->
+      <select id="project-switcher" class="profile-select"></select>
+      <p class="hint" data-i18n="project.hint">Zmiana katalogu restartuje sesje w nowym folderze.</p>
+    </div>
+  </template>
+
+  <template id="w-profile">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="profile.title">Profil</h2>
+      <!-- Opcje wypelnia switchers.js z config/profiles.json (Faza 4). -->
+      <select id="profile-switcher" class="profile-select"></select>
+      <p class="hint" data-i18n="profile.hint">Zmiana profilu restartuje sesje z nowym srodowiskiem.</p>
+    </div>
+  </template>
+
   <!-- Trzej budowniczowie list z lewego panelu (A2). Kazdy zachowuje
        `--grow`, ktore mial jako statyczny markup - to one dziela wolna wysokosc
        panelu miedzy siebie. Wnetrze `.cheats` buduje modul; tutaj zostaje tylko
@@ -374,6 +392,29 @@
       <!-- Auto-skan katalogow skilli, pogrupowany w kategorie (7A). -->
       <div id="skills" class="cheats"></div>
     </div>
+  </template>
+
+  <template id="w-terminal">
+    <main class="panel panel--center">
+      <div class="terminal-bar">
+        <span class="terminal-bar__title">Claude Code CLI</span>
+        <!-- LED: zolty puls = leci stdout (pracuje), zielony = cisza (Twoja tura). -->
+        <span id="led" class="led led--waiting"></span>
+        <span id="led-label" class="terminal-bar__hint" data-i18n="led.waiting">czeka na Ciebie</span>
+        <!-- Podpowiedz + skrot do palety komend (Ctrl+K). -->
+        <button id="palette-open" class="palette-chip" data-i18n-title="palette.chip.title" title="Paleta komend (Ctrl+K)">
+          <kbd>Ctrl</kbd><kbd>K</kbd>
+        </button>
+      </div>
+      <!-- Zakladki sesji. Kazda ma wlasny proces PTY, wlasny kontekst i wlasny
+           bufor xterm; tu renderujemy tylko ich naglowki (budowane z JS). -->
+      <div class="tabs">
+        <div id="tabs-list" class="tabs__list" role="tablist"></div>
+        <button id="tab-new" class="tabs__new" data-i18n-title="tabs.new" title="Nowa sesja">+</button>
+      </div>
+      <!-- Host terminali: jeden .terminal__pane na sesje, widoczny tylko aktywny -->
+      <div id="terminal" class="terminal"></div>
+    </main>
   </template>
 
   <!-- ================= Paleta komend (Ctrl+K) ================= -->

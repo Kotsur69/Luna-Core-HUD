@@ -3,6 +3,14 @@
 // ----------------------------------------------------------------------------
 // Twins: both restart THIS tab with new settings and leave every other session
 // untouched. Options come from config/profiles.json and config/projects.json.
+//
+// A2: two widgets (`profile`, `project`) - each <select> is its own
+// .panel__section, and a widget template holds exactly one root, so they
+// cannot share a single definition. `currentProfileId` / `currentProjectId`
+// track whichever tab is ACTIVE right now (updated by both a user's own
+// change and by syncSwitchers() on a tab switch); a remount repaints from
+// them, not from `lastProfiles.activeId`, which only ever reflects the config
+// file's default and would otherwise reset the pick on every remount.
 // ============================================================================
 
 'use strict';
@@ -10,14 +18,21 @@
 import { getActiveSessionId } from './terminals.js';
 import { loc } from './util.js';
 import { onLangChange } from './bus.js';
+import { defineWidget } from './registry.js';
 
-const profileSwitcher = document.getElementById('profile-switcher');
-const projectSwitcher = document.getElementById('project-switcher');
-
-// Kept so a language switch relabels the options without re-reading config.
-// Labels may be localized ("Sama powloka" / "Bare shell"); ids never are.
+// Kept so a language switch (and a remount) relabels the options without
+// re-reading config. Labels may be localized ("Sama powloka" / "Bare shell");
+// ids never are.
 let lastProfiles = null;
 let lastProjects = null;
+
+// Whichever tab is active right now - must survive a remount (see header).
+let currentProfileId = null;
+let currentProjectId = null;
+
+// Elements of the current mount, or null when that widget is not on screen.
+let profileEls = null;
+let projectEls = null;
 
 /** Fills a <select> from a list and marks the active entry. */
 function fillSelect(select, items, activeId) {
@@ -31,11 +46,22 @@ function fillSelect(select, items, activeId) {
   }
 }
 
+function renderProfileSwitcher() {
+  if (!profileEls || !lastProfiles) return;
+  fillSelect(profileEls.select, lastProfiles.items, currentProfileId ?? lastProfiles.activeId);
+}
+
+function renderProjectSwitcher() {
+  if (!projectEls || !lastProjects) return;
+  fillSelect(projectEls.select, lastProjects.items, currentProjectId ?? lastProjects.activeId);
+}
+
 export async function initProfiles() {
   try {
     const { profiles, activeProfile } = await window.lunacore.getProfiles();
     lastProfiles = { items: profiles, activeId: activeProfile };
-    fillSelect(profileSwitcher, profiles, activeProfile);
+    currentProfileId = activeProfile;
+    renderProfileSwitcher();
   } catch (err) {
     // Could not read the profiles - leave the switcher empty (non-blocking).
   }
@@ -45,32 +71,68 @@ export async function initProjects() {
   try {
     const { projects, activeProject } = await window.lunacore.getProjects();
     lastProjects = { items: projects, activeId: activeProject };
-    fillSelect(projectSwitcher, projects, activeProject);
+    currentProjectId = activeProject;
+    renderProjectSwitcher();
   } catch (err) {
     // Could not read the projects - leave the switcher empty (non-blocking).
   }
 }
 
-// Relabel on a language change, keeping whatever the user currently has
-// selected rather than the value config booted with.
-onLangChange(() => {
-  if (lastProfiles) fillSelect(profileSwitcher, lastProfiles.items, profileSwitcher.value);
-  if (lastProjects) fillSelect(projectSwitcher, lastProjects.items, projectSwitcher.value);
-});
-
 /** Points both switchers at the ACTIVE tab's values. */
 export function syncSwitchers(meta) {
   if (!meta) return;
-  if (meta.profileId) profileSwitcher.value = meta.profileId;
-  if (meta.projectId) projectSwitcher.value = meta.projectId;
+  if (meta.profileId) {
+    currentProfileId = meta.profileId;
+    if (profileEls) profileEls.select.value = meta.profileId;
+  }
+  if (meta.projectId) {
+    currentProjectId = meta.projectId;
+    if (projectEls) projectEls.select.value = meta.projectId;
+  }
 }
 
-// Profile change -> restart THIS tab; the other sessions are left alone.
-profileSwitcher.addEventListener('change', () => {
-  window.lunacore.switchProfile(profileSwitcher.value, getActiveSessionId());
+defineWidget({
+  id: 'profile',
+  titleKey: 'profile.title',
+  template: 'w-profile',
+  mount(root) {
+    profileEls = { select: root.querySelector('#profile-switcher') };
+    renderProfileSwitcher();
+
+    // Profile change -> restart THIS tab; the other sessions are left alone.
+    profileEls.select.addEventListener('change', () => {
+      currentProfileId = profileEls.select.value;
+      window.lunacore.switchProfile(currentProfileId, getActiveSessionId());
+    });
+
+    const offLang = onLangChange(renderProfileSwitcher);
+
+    return () => {
+      offLang();
+      profileEls = null;
+    };
+  },
 });
 
-// Directory change -> restart the pty in the new folder (same profile).
-projectSwitcher.addEventListener('change', () => {
-  window.lunacore.switchProject(projectSwitcher.value, getActiveSessionId());
+defineWidget({
+  id: 'project',
+  titleKey: 'project.title',
+  template: 'w-project',
+  mount(root) {
+    projectEls = { select: root.querySelector('#project-switcher') };
+    renderProjectSwitcher();
+
+    // Directory change -> restart the pty in the new folder (same profile).
+    projectEls.select.addEventListener('change', () => {
+      currentProjectId = projectEls.select.value;
+      window.lunacore.switchProject(currentProjectId, getActiveSessionId());
+    });
+
+    const offLang = onLangChange(renderProjectSwitcher);
+
+    return () => {
+      offLang();
+      projectEls = null;
+    };
+  },
 });

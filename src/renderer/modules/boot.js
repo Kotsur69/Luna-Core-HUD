@@ -29,10 +29,20 @@ const BOOT_LINE_STEP_MS = 120; // gap between lines
 const BOOT_HOLD_MS = 1150; // when the overlay leaves on its own
 const BOOT_FADE_MS = 240; // MUST match .boot.is-out in styles.css
 
+// The overlay itself: always in the static DOM, never part of a widget.
 const bootEl = document.getElementById('boot');
 const bootLogEl = document.getElementById('boot-log');
-const bootToggle = document.getElementById('boot-toggle');
-const bootStatus = document.getElementById('boot-status');
+
+// A2: boot-toggle / boot-status moved into the `appearance` widget's template
+// (they are the "Sekwencja startowa" switch-field in the Wyglad section), so
+// they no longer exist at import time - looked up in mountBoot() instead.
+// Elements of the current mount, or null when `appearance` is not on screen.
+let bootEls = null;
+
+// Mirrors config/ui.local.json's `boot`. Kept at module scope, like
+// autocompact's armed flag, so a remount of `appearance` repaints the toggle
+// from truth instead of the template's authored default (A2c).
+let bootEnabled = true;
 
 let bootTimers = [];
 let bootDone = false;
@@ -94,9 +104,10 @@ function runBootSequence() {
 }
 
 /** The toggle label (separate, because it has to survive a language switch). */
-function renderBootPref(enabled) {
-  bootToggle.checked = enabled;
-  bootStatus.textContent = t(enabled ? 'boot.on' : 'boot.off');
+function renderBootPref() {
+  if (!bootEls) return;
+  bootEls.toggle.checked = bootEnabled;
+  bootEls.status.textContent = t(bootEnabled ? 'boot.on' : 'boot.off');
 }
 
 /**
@@ -106,7 +117,8 @@ function renderBootPref(enabled) {
  * setting skips it entirely.
  */
 export function startBoot(enabled) {
-  renderBootPref(enabled);
+  bootEnabled = enabled;
+  renderBootPref();
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (!enabled || reducedMotion) {
     endBoot(true);
@@ -115,10 +127,32 @@ export function startBoot(enabled) {
   runBootSequence();
 }
 
-bootToggle.addEventListener('change', () => {
-  renderBootPref(bootToggle.checked);
-  // Takes effect from the next launch - we do not rewind the current animation.
-  window.lunacore.setUiPrefs({ boot: bootToggle.checked });
-});
+/**
+ * Mounts the boot-sequence toggle inside the `appearance` widget's root.
+ * Mirrors context.js's mountSpark(): one root, two owning modules.
+ */
+export function mountBoot(root) {
+  bootEls = {
+    toggle: root.querySelector('#boot-toggle'),
+    status: root.querySelector('#boot-status'),
+  };
 
-onLangChange(() => renderBootPref(bootToggle.checked));
+  // Repaint from module state - startBoot() only runs once at app launch, a
+  // remount must not fall back to the template's authored default (A2c).
+  renderBootPref();
+
+  // Bound inside root, so the host removes it with the subtree.
+  bootEls.toggle.addEventListener('change', () => {
+    bootEnabled = bootEls.toggle.checked;
+    renderBootPref();
+    // Takes effect from the next launch - we do not rewind the current animation.
+    window.lunacore.setUiPrefs({ boot: bootEnabled });
+  });
+
+  const offLang = onLangChange(renderBootPref);
+
+  return () => {
+    offLang();
+    bootEls = null;
+  };
+}

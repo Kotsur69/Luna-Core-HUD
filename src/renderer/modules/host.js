@@ -122,6 +122,14 @@ export function unmountWidget(id) {
 export function remountWidget(id) {
   const rec = mounted.get(id);
   if (!rec) return false;
+  const widget = getWidget(id);
+  if (widget && widget.remountable === false) {
+    // `terminal` (A2f): a remount would clone a fresh, empty host and orphan
+    // every running session's live xterm buffer from the DOM. Refuse instead
+    // of doing that - see FUTURE_PLAN.md §A2f.
+    console.warn(`widget "${id}": remount is unsupported for this widget - ignored`);
+    return false;
+  }
   const slot = rec.root.parentNode;
   const before = rec.root.nextElementSibling;
   unmountWidget(id);

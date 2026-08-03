@@ -44,8 +44,8 @@ import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
 import { lightTiles, applyToolEvents, trackBucketTools, resetTiles } from './skilltracker.js';
 import { syncSwitchers } from './switchers.js';
 
-const tabsList = document.getElementById('tabs-list');
-const tabNewBtn = document.getElementById('tab-new');
+// A2f: set once by mountTabs() - see modules/terminal.js.
+let tabEls = null;
 
 /** Session metadata from the main process - the source of truth for what lives. */
 let sessionList = [];
@@ -161,7 +161,8 @@ function showSession(sessionId) {
 }
 
 function renderTabs() {
-  tabsList.innerHTML = '';
+  if (!tabEls) return;
+  tabEls.list.innerHTML = '';
   for (const meta of sessionList) {
     const s = getBucket(meta.id);
     const tab = document.createElement('div');
@@ -200,7 +201,7 @@ function renderTabs() {
     });
     tab.appendChild(close);
 
-    tabsList.appendChild(tab);
+    tabEls.list.appendChild(tab);
   }
 }
 
@@ -228,7 +229,12 @@ window.lunacore.onSessions(({ sessions, activeSessionId: activeId }) => {
   renderTabs();
 });
 
-tabNewBtn.addEventListener('click', () => window.lunacore.createSession({}));
+/** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
+export function mountTabs(root) {
+  tabEls = { list: root.querySelector('#tabs-list') };
+  root.querySelector('#tab-new').addEventListener('click', () => window.lunacore.createSession({}));
+  renderTabs();
+}
 
 /**
  * First fetch of the tab list.

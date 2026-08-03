@@ -3,16 +3,16 @@
 ## START HERE — where things stand (2026-08-03)
 
 Everything below this box is either **live plan** (§8) or **history**. Read this
-box, then §8's Phase A table, then jump to §A2a–§A2d for the widget contract and
-the four lessons the conversions have cost so far.
+box, then §8's Phase A table, then jump to §A2a–§A2f for the widget contract and
+the six lessons the conversions have cost so far.
 
 | | State |
 |---|---|
-| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (**168 tests**), the A2 **contract**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*) |
-| **In flight** | **A2 conversions — 9 of ~13 blocks**: the **whole right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) plus four left-panel blocks — `autocompact`, then the three list builders `cheatsheets` / `prompts` / `skills` |
-| **Next action** | Finish the **left panel**: `switchers` / `actions` / `appearance`, then `terminal` last (it owns the xterm panes). `boot-field` in the Wyglad section has the same `<label>`-as-root shape as `autocompact` (§A2c), so it should convert almost verbatim. Nothing owes a by-hand pass — `context`, `autocompact` and the three list builders are all **hand-verified**. |
-| **After A2** | **A5** (async skill scan — the one you can feel) → **A4** (dead CSS) → Phase C |
-| **Branch** | `main`, clean and pushed through the list-builder conversions (§A2d) |
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (**168 tests**), the A2 **contract**, **A2 conversions — 13 of 13 blocks, DONE**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*) |
+| **In flight** | Nothing — A2 is fully converted. `terminal` (§A2f) was the last block; it is `remountable: false` (see below), so it is structurally a widget but its `mount()` only ever runs once in practice. |
+| **Next action** | **A5** (async skill scan — the one you can feel), then **A4** (dead CSS), then manual smoke-test the full A2 conversion (theme/language/profile/project switches, COMPACT + auto-compact, boot toggle, and terminal tabs/LED/palette) before moving on. |
+| **After A2** | **A5** → **A4** → Phase C |
+| **Branch** | `main`, clean and pushed through the `terminal` conversion (§A2f) |
 
 Two facts that decide most design questions here, both learned the hard way:
 
@@ -549,7 +549,7 @@ feature set is stable and nothing is half-finished.
 | # | Item | Ref | Notes |
 |---|------|-----|-------|
 | A1 | ✅ **Split `renderer.js` into modules** | §6 | **DONE 2026-07-25.** 1554 lines → a 60-line entry point + 21 modules in `src/renderer/modules/`, loaded as `<script type="module">`. Verified first: Chromium blocks ESM over `file://`, but **Electron 33 does not** — probed with a throwaway app before committing to the approach, so no bundler and no custom protocol. See A1a below for the two couplings that had to be broken. |
-| A2 | 🟡 **Widget contract** | §4 | **Contract DONE 2026-07-25**, `ports` + `scratchpad` converted; the remaining blocks are mechanical. Shape is `{ id, titleKey, template, mount(root) -> cleanup? }` — see A2a for why it is not quite the `{title, mount, unmount}` sketched here, and A2b for the one thing a mechanical port still got wrong. |
+| A2 | 🟢 **Widget contract** | §4 | **Contract DONE 2026-07-25, all 13/13 blocks converted 2026-08-03.** Shape is `{ id, titleKey, template, mount(root) -> cleanup? }` — see A2a for why it is not quite the `{title, mount, unmount}` sketched here, A2b for the one thing a mechanical port still got wrong, A2e for the first mounting-order dependency between two widgets, and A2f for the one widget (`terminal`) that opts out of remounting entirely. |
 | A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, now 92 tests, ~0.4 s, no new deps. Includes two **data** tests asserting the shipped rate/window tables cover every current model — logic tests on fixtures cannot catch a stale table. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that made A1 safe — it caught nothing during the split, which is the point: the suite covers the *pure* modules, and A1 never touched them. Now 117 tests. |
 | A4 | 🟡 **Kill the dead bits** | §6 | Half done: `CONTEXT_LIMIT` is no longer a magic number (now an alias of `models.DEFAULT_CONTEXT_LIMIT`). **Still open:** the dead `.panel__spacer` CSS rule. |
 | A5 | **Async skill scan** | §6 | `scanSkills()` (`src/skills.js`) is a `readdirSync` 7 levels deep + `readFileSync` over ~339 `SKILL.md` files — **~2.4 s on the main process, i.e. the event loop**. `main.js`'s `setTimeout(…, 3000)` pre-warm does not fix it, it only moves the freeze past window creation (that is the hitch you feel after the boot overlay). **Prefer an async `fs.promises` walk over `worker_threads` — the work is I/O-bound, not CPU-bound.** Unlocks dropping the pre-warm delay and adding a rescan button; today a new skill needs an app restart. |
@@ -650,8 +650,9 @@ it with real named slots.
 **Conversion order for the rest** (each one leaves the app working):
 ~~`scratchpad`~~ → ~~`skilltracker`~~ (timers must stop on unmount) → ~~`usage`~~
 (30 s tick) → ~~`context`+`spark`+`autocompact`~~ (coupled trio, three session
-views) → ~~`cheatsheets`/`prompts`/`skills`~~ → `switchers`/`actions`/`appearance` →
-`terminal` last, since it owns the xterm panes.
+views) → ~~`cheatsheets`/`prompts`/`skills`~~ → ~~`switchers`/`actions`/`appearance`~~
+(§A2e) → ~~`terminal`~~ (§A2f), last, since it owns the xterm panes. **A2 is now
+fully converted, 13/13.**
 
 #### A2b — `scratchpad` (2026-07-27): cleanup is not always "undo"
 
@@ -802,6 +803,115 @@ that matters is the round-trip the old code would have failed:
       titles, category names and the count.
 - [x] One click on a cheat button injects **exactly one** command — the failure
       mode subscriber counts cannot see, since these listeners live inside `root`.
+
+#### A2e — `actions`, `appearance`, `project`, `profile` (2026-08-03): a nested slot, and a second one-root-two-owners widget
+
+Four widgets, one new structural wrinkle each has since made moot for whoever
+does `terminal`:
+
+**A mounting-order dependency, for the first time.** `autocompact`'s
+`[data-slot]` used to sit directly in `index.html`'s static markup; converting
+`actions` moved that slot *inside* `w-actions`'s `<template>`, since the toggle
+and the physical COMPACT button share one `.panel__section`. That makes
+`actions` a hard prerequisite for `autocompact`: `mountIntoSlot('autocompact')`
+does `document.querySelector('[data-slot="autocompact"]')`, and that element
+does not exist until `actions` has already been mounted and cloned its
+template into the DOM. `renderer.js`'s `WIDGETS` array was previously only
+order-sensitive for the bus (`autocompact` after `context`); it is now also
+order-sensitive for **DOM existence**, and the comment above the array says so.
+Nothing else nests like this yet, but `terminal` owning the xterm panes means
+it is worth checking before assuming order there is cosmetic too.
+
+**`boot.js` needed the `mountSpark()` treatment.** `#boot-toggle` /
+`#boot-status` live in the Wyglad section, which became the `appearance`
+widget — but `boot.js` also owns the always-present `#boot` overlay, which is
+static markup outside any widget and must stay that way. Splitting the file
+in two would have been the wrong fix (the overlay and the toggle share
+`bootEnabled`/`renderBootPref`). Instead `boot.js` grew a `mountBoot(root)`
+export that `appearance.js` calls from its own `mount()`, identical in shape to
+`context.js` calling `mountSpark(root)` — one root, two owning modules, one
+`return` composing both disposers.
+
+**The repaint-from-state rule (§A2c) applies to `<select>`s too.** A remount
+clones the template fresh, so `<select>` comes back with whatever `<option>`
+was authored first selected — not the theme or profile actually active.
+`appearance.js` now keeps `activeThemeId` at module scope (language needed no
+twin: `window.i18n.lang` is already the global source of truth) and repaints
+the theme `<select>`'s options and value from it on every mount, not just at
+first launch. `switchers.js` has the sharper version: the profile/project
+`<select>`s reflect **whichever tab is active**, which changes on every tab
+switch via `syncSwitchers()`, not just once at startup — so it tracks
+`currentProfileId`/`currentProjectId` separately from `lastProfiles.activeId`/
+`lastProjects.activeId` (the latter is only ever the config file's default and
+would have silently reverted the pick on a remount otherwise).
+
+**Two widgets from one file, again.** `switchers.js` splits into `profile` and
+`project` for the same reason `cheatsheets`/`prompts`/`skills` are three
+separate `defineWidget()` calls in one file (§A2d): each `<select>` is its own
+`.panel__section`, and a template holds exactly one root.
+
+Verified: 168/168 tests, and a probe run with **13 widgets** mounted, each
+remounted 3×, reporting identical bus counts before and after (`langChange`
+unchanged) and every `rows` marker at 1. Hand-launched and confirmed by Mati
+2026-08-03 (theme swap, PL/EN, profile/project switch mid-session, the COMPACT
+button, the boot toggle).
+
+#### A2f — `terminal` (2026-08-03): the one widget that must never remount
+
+The last block, and the one the whole conversion order (§A2a) was built around
+avoiding until everything else was proven out.
+
+**The risk.** `terminal`'s children are not just in-memory JS state like every
+other widget converted so far — `terminals.js`'s `ensureTerm()`/`termsBySession`
+own real `xterm.Terminal` instances wired to real PTY child processes. The
+standard widget contract clones a fresh `<template>` on every `mount()`, which
+is exactly what makes `unmount()`/`remount()` safe to exercise elsewhere (§4's
+whole reason for existing: catch a leaked subscriber). For `terminal` that same
+clone would produce a brand-new, **empty** `#terminal` div — every running
+session's live xterm buffer would be silently detached from the DOM while its
+process kept running headless in the background. No error, no console warning
+(before this fix) — tabs would just appear to vanish.
+
+**The fix: `remountable: false`, not "skip the conversion."** Presented with
+this to Mati directly rather than picking silently; his call (recorded verbatim
+as "Adapted widget, remount excluded") was to keep `terminal` a real, registered
+widget — so Phase C can still treat it structurally like everything else — but
+make `unmount`/`remount` explicitly refuse instead of running:
+- `registry.js`'s `normalizeWidget()` gained a `remountable` field, defaulting
+  to `true`; `terminal` is the only spec that sets it to `false`.
+- `host.js`'s `remountWidget()` checks the flag first and, if `false`, logs a
+  `console.warn` and returns `false` instead of unmounting/remounting.
+- No change was needed to `--luna-probe` itself (`src/main.js`) — it only calls
+  `remountWidget()` on whatever `__luna.mounted()` reports, and that call is now
+  a harmless no-op for `terminal`.
+
+**Composition needed a new file, not an extension of `terminals.js`.** Four
+modules share the one `<main>` root: `terminals.js` (the xterm host),
+`led.js` (working/waiting indicator), `sessions.js` (tab bar), `palette.js`
+(the Ctrl+K chip). `sessions.js` and `palette.js` already import FROM
+`terminals.js` — importing back would cycle, the exact thing A1a's history
+warns against — so the composition (`defineWidget({id:'terminal', ...})`) lives
+in a new `modules/terminal.js` instead, calling `mountTerminalHost(root)` /
+`mountLed(root)` / `mountTabs(root)` / `mountPaletteChip(root)` and returning no
+cleanup at all (there is nothing to undo — this widget is never meant to come
+back down).
+
+**Each of the four modules got the same small surgery**: the element(s) it
+used to grab via top-level `document.getElementById()` moved into a
+`mountX(root)`-style export using `root.querySelector()`, with a null-guard
+added to whatever render function reads them. `sessions.js`'s IPC listeners
+(`onData`/`onExit`/`onContext`/`onTools`/`onRestarted`/`onSessions`) stay at
+module scope, unchanged — ES module imports run synchronously before any real
+IPC event can fire, so by the time one lands, the widget-mount loop (which runs
+before any `initX()` call, see `renderer.js`) has already set every `els`/
+`tabEls` binding.
+
+Verified: 168/168 tests, and a probe run with **all 14 widgets** listed and
+mounted (`terminal` included), each of the 13 remountable ones remounted 3× with
+identical bus counts before/after, and `terminal` staying mounted and untouched
+by the sweep (refused internally, no crash, no count drift). **A2 is now fully
+converted — 13/13 blocks.** Hand-launched and confirmed by Mati 2026-08-03
+(tabs, LED, Ctrl+K palette, no session ever went blank).
 
 ### Phase B — Daily-driver quick wins (§5.1)
 

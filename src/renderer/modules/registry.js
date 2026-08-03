@@ -40,6 +40,12 @@ export function normalizeWidget(spec) {
     // mount() builds its own DOM.
     template: typeof spec.template === 'string' ? spec.template.trim() : '',
     mount: spec.mount,
+    // Defaults to true. `terminal` is the one exception (A2f): it owns live
+    // xterm instances wired to real PTY processes, so a remount would clone a
+    // brand-new EMPTY host from the template and orphan every running
+    // session's DOM from its buffer. host.js's remountWidget() refuses when
+    // this is false instead of doing that.
+    remountable: spec.remountable !== false,
   };
 }
 

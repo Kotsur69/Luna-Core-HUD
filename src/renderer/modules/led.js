@@ -17,8 +17,8 @@ import { onLangChange, registerSessionView } from './bus.js';
 
 const LED_IDLE_MS = 800;
 
-const led = document.getElementById('led');
-const ledLabel = document.getElementById('led-label');
+// A2f: set once by mountLed() - see modules/terminal.js.
+let els = null;
 
 let ledTimer = null;
 let ledDead = false;
@@ -26,8 +26,18 @@ let ledState = 'waiting'; // 'working' | 'waiting' | 'dead' - the label comes fr
 
 /** Paints the LED from its state (text via i18n, so a language switch refreshes it). */
 export function renderLed() {
-  led.className = `led led--${ledState}`;
-  ledLabel.textContent = t(`led.${ledState}`);
+  if (!els) return;
+  els.led.className = `led led--${ledState}`;
+  els.ledLabel.textContent = t(`led.${ledState}`);
+}
+
+/** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
+export function mountLed(root) {
+  els = {
+    led: root.querySelector('#led'),
+    ledLabel: root.querySelector('#led-label'),
+  };
+  renderLed();
 }
 
 /** Called on every chunk of stdout; the idle timer slides forward. */

@@ -25,6 +25,7 @@ import './modules/feeds.js';
 // -- Terminal, tabs and session routing ---------------------------------------
 import { fitAndResize } from './modules/terminals.js';
 import { initSessions } from './modules/sessions.js';
+import './modules/terminal.js';
 
 // -- Right panel: metrics -----------------------------------------------------
 // context before spark and autocompact: both read its thresholds, and this is
@@ -65,19 +66,36 @@ import { busStats } from './modules/bus.js';
 // import comment above) - context updates the bar, then autocompact decides
 // whether that reading is worth injecting /compact over.
 //
+// It is also NOT cosmetic for `actions`: its template holds the
+// [data-slot="autocompact"] placeholder nested inside it (see w-actions in
+// index.html), so `actions` MUST mount before `autocompact` or that slot will
+// not exist yet when mountIntoSlot('autocompact') looks for it.
+//
 // The three list builders are ordered as the left panel shows them, purely so
 // this line reads like the UI. They only subscribe to `langChange`, and that
 // channel repaints all three from memory, so nothing here depends on it.
+// `project` / `profile` / `appearance` are the same: order among themselves
+// and relative to everything above is cosmetic.
+//
+// `terminal` (A2f) is the one exception to ALL of this: it is `remountable:
+// false` (see registry.js/host.js), so it never rejoins this list's ordering
+// concerns after the first mount - it just needs to be on screen before
+// initSessions() runs below, same as every other widget here.
 const WIDGETS = [
+  'terminal',
   'ports',
   'scratchpad',
   'usage',
   'skilltracker',
   'context',
+  'actions',
   'autocompact',
   'cheatsheets',
   'prompts',
   'skills',
+  'project',
+  'profile',
+  'appearance',
 ];
 
 // ---- Startup ----------------------------------------------------------------

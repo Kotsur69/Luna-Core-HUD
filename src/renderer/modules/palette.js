@@ -19,8 +19,6 @@ import { term } from './terminals.js';
 const paletteEl = document.getElementById('palette');
 const paletteInput = document.getElementById('palette-input');
 const paletteList = document.getElementById('palette-list');
-const paletteOpenBtn = document.getElementById('palette-open');
-
 const PALETTE_MAX = 50; // how many rows we render (the skill list runs to 300+)
 
 let paletteItems = null; // lazily built flat aggregate of every action
@@ -298,7 +296,11 @@ paletteEl.addEventListener('click', (e) => {
 });
 
 // The chip in the terminal bar opens the palette.
-if (paletteOpenBtn) paletteOpenBtn.addEventListener('click', openPalette);
+/** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
+export function mountPaletteChip(root) {
+  const btn = root.querySelector('#palette-open');
+  if (btn) btn.addEventListener('click', openPalette);
+}
 
 // Global Ctrl/Cmd+K (capture, to get ahead of xterm.js).
 window.addEventListener(

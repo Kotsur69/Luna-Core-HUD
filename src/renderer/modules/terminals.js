@@ -35,7 +35,15 @@ const TERM_OPTIONS = {
   },
 };
 
-const termHost = document.getElementById('terminal');
+// A2f: `#terminal` lives inside the `terminal` widget's template now, so it is
+// looked up in mountTerminalHost() instead of at import time. In practice it
+// is set exactly once and never cleared - see modules/terminal.js.
+let termHost = null;
+
+/** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
+export function mountTerminalHost(root) {
+  termHost = root.querySelector('#terminal');
+}
 
 /**
  * sessionId -> session bucket.
