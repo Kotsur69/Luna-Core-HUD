@@ -9,8 +9,8 @@ the six lessons the conversions have cost so far.
 | | State |
 |---|---|
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (**168 tests**), the A2 **contract**, **A2 conversions — 13 of 13 blocks, DONE**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **A5 (async skill scan + rescan button)**, **A4 (dead `.panel__spacer` CSS dropped)** |
-| **In flight** | Nothing — A2, A5, and A4 are all done. |
-| **Next action** | Manual smoke-test the full A2 conversion (theme/language/profile/project switches, COMPACT + auto-compact, boot toggle, and terminal tabs/LED/palette), then move on to Phase C. |
+| **In flight** | Nothing — A2, A5, and A4 are all done, and the full A2 conversion has been hand-smoke-tested by Mati 2026-08-03 (theme/language/profile/project switches, COMPACT + auto-compact, boot toggle, terminal tabs/LED/palette). |
+| **Next action** | Scope and start **Phase C**. |
 | **After A2** | Phase C |
 | **Branch** | `main`, clean through A4 (dead CSS) |
 
