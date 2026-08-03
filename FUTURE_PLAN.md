@@ -9,9 +9,9 @@ box, then §8's Phase A table, then jump to §A2a/§A2b for the widget contract.
 |---|---|
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (159 tests), the A2 **contract**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*) |
 | **In flight** | **A2 conversions — 6 of ~13 blocks**: the **whole right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) plus the first left-panel block, `autocompact` |
-| **Next action** | Continue the **left panel**: `cheatsheets` / `prompts` / `skills` (all three are list-builders with an `init*()` entry point, so they convert as a group), then `switchers`/`actions`/`appearance`, `terminal` last. ⚠️ **Two hand-checks are now owed** — `context` (checklist below) and `autocompact` (§A2c). Both are machine-verified only. |
+| **Next action** | Continue the **left panel**: `cheatsheets` / `prompts` / `skills` (all three are list-builders with an `init*()` entry point, so they convert as a group), then `switchers`/`actions`/`appearance`, `terminal` last. ⚠️ `context` is still **machine-verified only** — its checklist below is the one hand-check still owed. `autocompact` is hand-verified (§A2c). |
 | **After A2** | **A5** (async skill scan — the one you can feel) → **A4** (dead CSS) → Phase C |
-| **Branch** | `main`, pushed through the `context` conversion; the `autocompact` conversion (§A2c) is **uncommitted in the working tree** |
+| **Branch** | `main`, clean and pushed through the `autocompact` conversion (§A2c) |
 
 Two facts that decide most design questions here, both learned the hard way:
 
@@ -683,18 +683,24 @@ matching the pre-change baseline, which is what proves the subscription moved in
 `mount()` rather than being duplicated. `rows.autocompact: 1` (the probe gained
 that counter; its own doc says every converted widget owes one).
 
-⚠️ **Owed: the by-hand pass.** Run `npm start` and check:
+**Hand-verified by Mati (2026-08-03)**, app launched, not just probed:
 
-- [ ] The toggle sits exactly where it did, under COMPACT CONTEXT, same spacing.
-- [ ] Arm it → border/glow goes `is-armed`, status reads `uzbrojone · prog 85%`.
-- [ ] Toggle PL/EN while armed → the status text follows the language and does
-      **not** fall back to "off" (that is the `onLangChange` disposer working;
-      `applyStatic` overwrites the span first, the handler puts it back).
-- [ ] DevTools: arm it, then `__luna.remount('autocompact')` → the toggle comes
-      back **still armed**, still glowing. This is failure mode 1 above; if it
-      comes back unchecked, the restore in `mount()` is broken.
-- [ ] Let an armed session cross 85% → `/compact` is injected once, the field
-      flashes `wyslano /compact`, then settles back to `uzbrojone`.
+- [x] Placement unchanged — the toggle sits flush under COMPACT CONTEXT with the
+      same spacing. This is the check for the `<label>`-as-root decision: a
+      `.panel__section` wrapper would have shown up as a seam splitting Akcje.
+- [x] Arming works — `.is-armed` glow, status `uzbrojone · prog 85%`.
+- [x] PL/EN round-trip **while armed** is exact: `uzbrojone · prog 85%` →
+      `armed · 85% threshold` → back. The `onLangChange` disposer is correct.
+- [x] `__luna.remount('autocompact')` while armed → `{checked, armed, status}`
+      **identical** before and after, `activeContext` still 3. Failure mode 1 is
+      closed: the state restore in `mount()` works and nothing leaked.
+
+**Not exercised by hand:** the live 85% crossing, i.e. an actual `/compact`
+injection and the `wyslano /compact` flash. Deliberately skipped — it costs a
+real compact, and this refactor did not touch `maybeAutoCompact()`'s logic or the
+injector it calls. The hysteresis/cooldown arithmetic is unit-covered; what was
+*not* re-proven end-to-end is that the flash still paints on the remounted DOM.
+Cheap to fold into the next session that legitimately hits 85%.
 
 ### Phase B — Daily-driver quick wins (§5.1)
 
