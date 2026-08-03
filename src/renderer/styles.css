@@ -78,7 +78,6 @@ html, body {
 
 .panel__section { display: flex; flex-direction: column; gap: 10px; }
 .panel__section--grow { flex: 1; min-height: 0; }
-.panel__spacer { flex: 1; }
 
 /* A2: placeholder marking where a widget mounts. `display: contents` removes
    the wrapper itself from layout, so the mounted .panel__section stays a direct

@@ -8,11 +8,11 @@ the six lessons the conversions have cost so far.
 
 | | State |
 |---|---|
-| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (**168 tests**), the A2 **contract**, **A2 conversions — 13 of 13 blocks, DONE**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **A5 (async skill scan + rescan button)** |
-| **In flight** | Nothing — A2 is fully converted and A5 is done and hand-confirmed. |
-| **Next action** | **A4** (dead CSS), then manual smoke-test the full A2 conversion (theme/language/profile/project switches, COMPACT + auto-compact, boot toggle, and terminal tabs/LED/palette) before moving on. |
-| **After A2** | **A4** → Phase C |
-| **Branch** | `main`, clean and pushed through A5 (async skill scan) |
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (**168 tests**), the A2 **contract**, **A2 conversions — 13 of 13 blocks, DONE**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **A5 (async skill scan + rescan button)**, **A4 (dead `.panel__spacer` CSS dropped)** |
+| **In flight** | Nothing — A2, A5, and A4 are all done. |
+| **Next action** | Manual smoke-test the full A2 conversion (theme/language/profile/project switches, COMPACT + auto-compact, boot toggle, and terminal tabs/LED/palette), then move on to Phase C. |
+| **After A2** | Phase C |
+| **Branch** | `main`, clean through A4 (dead CSS) |
 
 Two facts that decide most design questions here, both learned the hard way:
 
@@ -497,9 +497,8 @@ beyond read-only.
   Beware: plain `<script>`s share one global scope — the i18n `t` collision
   bricked the whole renderer once. Prefer `<script type="module">` over more
   IIFEs. This is Phase A1 in §8.
-- **Dead `.panel__spacer` CSS** — the div was removed in 7C; drop the rule.
-- **Skill scan is synchronous (~2.4s).** Pre-warm hides it, but move
-  `scanSkills()` to a worker thread or async fs walk so it never blocks main.
+- ✅ ~~**Dead `.panel__spacer` CSS**~~ — **DROPPED 2026-08-03 (A4).**
+- ✅ ~~**Skill scan is synchronous (~2.4s).**~~ **BUILT 2026-08-03 (A5).**
 - **Refactor `index.html` static panels → widget mounts** (blocks §3/§4).
 - ✅ ~~**Tests.**~~ **BUILT 2026-07-24 (A3).** `npm test` → `node --test`, no new
   dependencies. **71 tests** across `test/{observer,profiles,projects,ports,skills,models}.test.js`,
@@ -551,7 +550,7 @@ feature set is stable and nothing is half-finished.
 | A1 | ✅ **Split `renderer.js` into modules** | §6 | **DONE 2026-07-25.** 1554 lines → a 60-line entry point + 21 modules in `src/renderer/modules/`, loaded as `<script type="module">`. Verified first: Chromium blocks ESM over `file://`, but **Electron 33 does not** — probed with a throwaway app before committing to the approach, so no bundler and no custom protocol. See A1a below for the two couplings that had to be broken. |
 | A2 | 🟢 **Widget contract** | §4 | **Contract DONE 2026-07-25, all 13/13 blocks converted 2026-08-03.** Shape is `{ id, titleKey, template, mount(root) -> cleanup? }` — see A2a for why it is not quite the `{title, mount, unmount}` sketched here, A2b for the one thing a mechanical port still got wrong, A2e for the first mounting-order dependency between two widgets, and A2f for the one widget (`terminal`) that opts out of remounting entirely. |
 | A3 | ✅ **Tests on the pure modules** | §6 | **DONE 2026-07-24.** `npm test` → `node --test`, now 92 tests, ~0.4 s, no new deps. Includes two **data** tests asserting the shipped rate/window tables cover every current model — logic tests on fixtures cannot catch a stale table. Covers `usageToMetrics`, `encodeProjectDir`, `detectTools`, `normalizeProfile`, `expandHome`/`normalizeProject`, `parseWindows`/`parsePosix`/`dedupeByPort`, `categorize`, `contextLimitFor`/`modelLabel`. This is the net that made A1 safe — it caught nothing during the split, which is the point: the suite covers the *pure* modules, and A1 never touched them. Now 117 tests. |
-| A4 | 🟡 **Kill the dead bits** | §6 | Half done: `CONTEXT_LIMIT` is no longer a magic number (now an alias of `models.DEFAULT_CONTEXT_LIMIT`). **Still open:** the dead `.panel__spacer` CSS rule. |
+| A4 | 🟢 **Kill the dead bits** | §6 | **DONE 2026-08-03.** `CONTEXT_LIMIT` is no longer a magic number (now an alias of `models.DEFAULT_CONTEXT_LIMIT`), and the dead `.panel__spacer` CSS rule (`src/renderer/styles.css`) — unused since its div was removed in 7C — is dropped. |
 | A5 | **Async skill scan** | §6 | 🟢 **DONE 2026-08-03.** `scanSkills()` (`src/skills.js`) walks with `fs.promises.readdir`/`readFile` and fans out concurrently (`Promise.all` across subdirs and files) instead of blocking the event loop with `readdirSync`/`readFileSync`. `loadSkills()` caches the in-flight **Promise** (not a resolved value) so concurrent callers dedupe; a new `rescanSkills()` (IPC `skills:rescan`, `preload.js`) replaces that cached promise to force a fresh scan. `main.js` dropped the `setTimeout(…, 3000)` pre-warm — `loadSkills()` now fires immediately since it no longer blocks. UI: a `.usage-refresh`-style ↻ button next to "Skille" in `w-skills` (`skills.js`), spinning via `is-spinning` while awaiting. Verified: 168/168 tests, `--luna-probe` unchanged (main-process-only change), and hand-confirmed by Mati — rescan works without an app restart. |
 
 #### A1a — what the split actually cost
