@@ -8,10 +8,10 @@ box, then §8's Phase A table, then jump to §A2a/§A2b for the widget contract.
 | | State |
 |---|---|
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (159 tests), the A2 **contract**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*) |
-| **In flight** | **A2 conversions — 5 of ~13 blocks**: the **whole right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) |
-| **Next action** | Start the **left panel**. `autocompact` first — Step 0 of the `context` conversion already cut its only tie to a DOM-heavy module (it now imports `thresholds.js`). ⚠️ `context` is machine-verified but **not yet checked by hand** — run the checklist below before building on it. |
+| **In flight** | **A2 conversions — 6 of ~13 blocks**: the **whole right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) plus the first left-panel block, `autocompact` |
+| **Next action** | Continue the **left panel**: `cheatsheets` / `prompts` / `skills` (all three are list-builders with an `init*()` entry point, so they convert as a group), then `switchers`/`actions`/`appearance`, `terminal` last. ⚠️ **Two hand-checks are now owed** — `context` (checklist below) and `autocompact` (§A2c). Both are machine-verified only. |
 | **After A2** | **A5** (async skill scan — the one you can feel) → **A4** (dead CSS) → Phase C |
-| **Branch** | `main`, clean and pushed through the `context` conversion |
+| **Branch** | `main`, pushed through the `context` conversion; the `autocompact` conversion (§A2c) is **uncommitted in the working tree** |
 
 Two facts that decide most design questions here, both learned the hard way:
 
@@ -611,9 +611,9 @@ layout while converted and unconverted blocks sit side by side; Phase C replaces
 it with real named slots.
 
 **Conversion order for the rest** (each one leaves the app working):
-~~`scratchpad`~~ → `skilltracker` (timers must stop on unmount) → `usage` (30 s
-tick) → `context`+`spark`+`autocompact` (coupled trio, three session views) →
-`cheatsheets`/`prompts`/`skills` → `switchers`/`actions`/`appearance` →
+~~`scratchpad`~~ → ~~`skilltracker`~~ (timers must stop on unmount) → ~~`usage`~~
+(30 s tick) → ~~`context`+`spark`+`autocompact`~~ (coupled trio, three session
+views) → `cheatsheets`/`prompts`/`skills` → `switchers`/`actions`/`appearance` →
 `terminal` last, since it owns the xterm panes.
 
 #### A2b — `scratchpad` (2026-07-27): cleanup is not always "undo"
@@ -633,6 +633,68 @@ are next and their timers are pure display — those genuinely just cancel.
 
 Cheap tell for which kind you have: if the timer's callback writes anything the
 user typed, it needs a flush.
+
+#### A2c — `autocompact` (2026-08-03): the first widget whose state is not in its DOM
+
+The right-panel five were all, in the end, painters: hand them a payload and they
+redraw. `autocompact` is the first converted block that **owns state the DOM does
+not hold** — `autoCompactArmed` is a module variable, and the `<template>` clone
+always arrives unchecked. Three things fell out of that, in rising order of how
+badly they bite.
+
+1. **mount() must repaint from module state.** A remount rebuilds the toggle in
+   its authored state, so without an explicit restore the HUD would read *off*
+   while the module kept firing `/compact`. Not a cosmetic bug: a wrong label on
+   the one control in the app that **spends tokens on its own**. The probe cannot
+   see this — it counts subscribers, not pixels.
+2. **The edge/cooldown flags must NOT be per-mount.** `autoCompactFired` and
+   `autoCompactFiredAt` are the entire anti-spam mechanism. Had they moved into
+   `mount()`, a remount would re-arm the edge and clear the 60 s cooldown, i.e.
+   hand you a second `/compact` seconds after the first. They stay module-level;
+   only the *view* is rebuilt.
+3. **The injecting subscription belongs in `mount()`, not at module scope.**
+   Tempting to leave `onActiveContext` at import time "so it keeps working" — but
+   unmounted means there is no visible toggle, and an injector the user can
+   neither see nor disarm is precisely what the zero-surprise-spend rule exists
+   to prevent. Unmounted auto-compact is *off*, and remounting restores the armed
+   state it had.
+
+The generalised rule, next to A2b's: **a disposer cancels effects and commits
+pending user intent; a mount restores view from state, and must never reset the
+state itself.** The flash timer here is the easy half — it only repaints a label,
+so it cancels, exactly as A2b predicted for "pure display" timers.
+
+One shape note for whoever does `actions`/`appearance` next: this widget's root
+is **not** a `.panel__section` — it is the `<label class="switch-field">` itself,
+because the block shares the "Akcje" section with the physical COMPACT button.
+Wrapping it in a section would have turned one panel section into two and changed
+the spacing. The "exactly one root element" rule says nothing about *which*
+element, and `boot-field` in the Wyglad section will have the same shape.
+
+Also worth knowing: the `WIDGETS` list in `renderer.js` used to be documented as
+cosmetic. It is cosmetic **for layout** only — a widget that subscribes in
+`mount()` joins its bus channel in mount order, so `autocompact` has to be
+mounted after `context` to keep the subscriber order the old import order gave
+them. The comment there now says so.
+
+Verified: 159/159 tests, `node --check` clean, and a probe run with
+`activeContext: 3` / `langChange: 13` **identical before and after** 3× remounts —
+matching the pre-change baseline, which is what proves the subscription moved into
+`mount()` rather than being duplicated. `rows.autocompact: 1` (the probe gained
+that counter; its own doc says every converted widget owes one).
+
+⚠️ **Owed: the by-hand pass.** Run `npm start` and check:
+
+- [ ] The toggle sits exactly where it did, under COMPACT CONTEXT, same spacing.
+- [ ] Arm it → border/glow goes `is-armed`, status reads `uzbrojone · prog 85%`.
+- [ ] Toggle PL/EN while armed → the status text follows the language and does
+      **not** fall back to "off" (that is the `onLangChange` disposer working;
+      `applyStatic` overwrites the span first, the handler puts it back).
+- [ ] DevTools: arm it, then `__luna.remount('autocompact')` → the toggle comes
+      back **still armed**, still glowing. This is failure mode 1 above; if it
+      comes back unchecked, the restore in `mount()` is broken.
+- [ ] Let an armed session cross 85% → `/compact` is injected once, the field
+      flashes `wyslano /compact`, then settles back to `uzbrojone`.
 
 ### Phase B — Daily-driver quick wins (§5.1)
 

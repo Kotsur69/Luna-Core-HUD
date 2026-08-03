@@ -14,6 +14,18 @@
 // It listens to the ACTIVE context stream, which is exactly the "live metric"
 // path - restoring a tab replays metrics through a different route and must
 // never fire an injection.
+//
+// A2: first LEFT-panel conversion, and the first widget whose visible state does
+// NOT live in its own DOM. Two consequences, both load-bearing:
+//
+//  1. `autoCompactArmed` is module state, so a fresh clone of the template comes
+//     back UNCHECKED. mount() has to repaint the armed look from module state -
+//     see the note there for why getting this wrong is worse than a cosmetic bug.
+//  2. The subscription that can inject /compact lives in mount(), not at module
+//     scope. Unmounted means no visible toggle, and an injector the user cannot
+//     see or disarm is exactly what "zero surprise token spend" rules out.
+//
+// The edge/cooldown flags stay at module scope on purpose - see below.
 // ============================================================================
 
 'use strict';
@@ -23,15 +35,21 @@ import { onActiveContext, onLangChange } from './bus.js';
 import { pulseCompact } from './actions.js';
 import { isLedDead } from './led.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
+import { defineWidget } from './registry.js';
 
 const AUTO_COMPACT_AT = CTX_WARN_HIGH;      // trigger threshold (0.85)
 const AUTO_COMPACT_REARM = CTX_WARN_MID;    // ready again below this (0.60)
 const AUTO_COMPACT_COOLDOWN_MS = 60000;     // never twice within 60 s
 
-const autoCompactToggle = document.getElementById('autocompact-toggle');
-const autoCompactStatus = document.getElementById('autocompact-status');
-const autoCompactField = document.getElementById('autocompact-field');
+// Elements of the current mount, or null when this widget is not on screen.
+let els = null;
 
+// ---- State that must OUTLIVE a remount --------------------------------------
+//
+// autoCompactFired / autoCompactFiredAt are the whole anti-spam mechanism. If a
+// remount reset them, taking the block down and putting it back would re-arm the
+// edge and clear the cooldown - i.e. hand you a second /compact seconds after
+// the first. They are deliberately module-level, not per-mount.
 let autoCompactArmed = false; // toggle state (off by default, not persisted - you arm it each session)
 let autoCompactFired = false; // edge flag: already fired in this cycle
 let autoCompactFiredAt = 0;   // timestamp of the last shot (cooldown)
@@ -54,31 +72,75 @@ function maybeAutoCompact(pct) {
 
 /** Brief "/compact sent" flash, then back to "armed". */
 function flashAutoCompactFired() {
+  if (!els) return;
   clearTimeout(autoCompactFlashTimer);
-  autoCompactField.classList.add('is-fired');
-  autoCompactStatus.textContent = t('autocompact.fired');
+  els.field.classList.add('is-fired');
+  els.status.textContent = t('autocompact.fired');
   autoCompactFlashTimer = setTimeout(() => {
-    autoCompactField.classList.remove('is-fired');
+    autoCompactFlashTimer = null;
+    if (!els) return;
+    els.field.classList.remove('is-fired');
     renderAutoCompact();
   }, 2500);
 }
 
 /** Refreshes the status label (i18n-aware, also called on a language switch). */
 function renderAutoCompact() {
-  if (autoCompactField.classList.contains('is-fired')) return; // do not overwrite the flash
-  autoCompactStatus.textContent = autoCompactArmed ? t('autocompact.armed') : t('autocompact.off');
+  if (!els) return;
+  if (els.field.classList.contains('is-fired')) return; // do not overwrite the flash
+  els.status.textContent = autoCompactArmed ? t('autocompact.armed') : t('autocompact.off');
 }
 
-autoCompactToggle.addEventListener('change', () => {
-  autoCompactArmed = autoCompactToggle.checked;
-  autoCompactFired = false; // (dis)arming starts the cycle over
-  autoCompactField.classList.toggle('is-armed', autoCompactArmed);
-  renderAutoCompact();
-});
+defineWidget({
+  id: 'autocompact',
+  // No titleKey: this block has no header of its own - it sits under the
+  // "Akcje" title next to the physical COMPACT button, which owns that heading.
+  titleKey: '',
+  template: 'w-autocompact',
+  mount(root) {
+    // NOTE: the root IS the control here, not a .panel__section wrapping one -
+    // so `field` is root itself. root.querySelector() would not find it (it only
+    // searches descendants), which is the one way this mount differs in shape
+    // from the right-panel widgets.
+    els = {
+      field: root,
+      status: root.querySelector('#autocompact-status'),
+      toggle: root.querySelector('#autocompact-toggle'),
+    };
 
-onActiveContext((metrics) => {
-  if (!metrics || typeof metrics.percent !== 'number') return;
-  maybeAutoCompact(Math.max(0, Math.min(1, metrics.percent)));
-});
+    // Repaint the armed look from module state. The clone always arrives in its
+    // authored state - unchecked, no .is-armed, status reading "off" (applyStatic
+    // ran just before us). Skipping this would leave the HUD saying auto-compact
+    // is OFF while this module happily keeps firing /compact: a wrong label on a
+    // control that spends tokens, which is worse than a control that just looks
+    // stale. The probe cannot see it - it counts subscribers, not pixels.
+    els.toggle.checked = autoCompactArmed;
+    els.field.classList.toggle('is-armed', autoCompactArmed);
+    renderAutoCompact();
 
-onLangChange(renderAutoCompact);
+    // Bound to an element INSIDE root, so it goes away with the subtree.
+    els.toggle.addEventListener('change', () => {
+      autoCompactArmed = els.toggle.checked;
+      autoCompactFired = false; // (dis)arming starts the cycle over
+      els.field.classList.toggle('is-armed', autoCompactArmed);
+      renderAutoCompact();
+    });
+
+    const offContext = onActiveContext((metrics) => {
+      if (!metrics || typeof metrics.percent !== 'number') return;
+      maybeAutoCompact(Math.max(0, Math.min(1, metrics.percent)));
+    });
+    const offLang = onLangChange(renderAutoCompact);
+
+    return () => {
+      offContext();
+      offLang();
+      // A2b, the other half of the rule: this timer only repaints a label, it
+      // carries no user intent, so it CANCELS - unlike the scratchpad's autosave,
+      // which had to flush. Nothing is lost by dropping the flash.
+      clearTimeout(autoCompactFlashTimer);
+      autoCompactFlashTimer = null;
+      els = null;
+    };
+  },
+});

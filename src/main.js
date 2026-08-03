@@ -229,6 +229,7 @@ async function runWidgetProbe(win) {
         // spark.js shares the context widget's root - counted separately so a
         // half-mounted block (bar without chart) cannot pass unnoticed.
         spark: document.querySelectorAll('#ctx-spark-line').length,
+        autocompact: document.querySelectorAll('#autocompact-toggle').length,
       },
     });
   })()`;

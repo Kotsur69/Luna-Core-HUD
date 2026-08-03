@@ -56,9 +56,15 @@ import { mountIntoSlot, remountWidget, mountedWidgets } from './modules/host.js'
 import { listWidgets } from './modules/registry.js';
 import { busStats } from './modules/bus.js';
 
-// Order here is cosmetic: each widget lands in its own [data-slot], so the
-// panel's layout comes from index.html, not from this list.
-const WIDGETS = ['ports', 'scratchpad', 'usage', 'skilltracker', 'context'];
+// Order here is cosmetic FOR LAYOUT - each widget lands in its own [data-slot],
+// so the panel's arrangement comes from index.html, not from this list.
+//
+// It is NOT cosmetic for the bus, though: a widget that subscribes in mount()
+// joins a channel in mount order. `autocompact` therefore has to come after
+// `context`, which is the same order their imports used to give them (see the
+// import comment above) - context updates the bar, then autocompact decides
+// whether that reading is worth injecting /compact over.
+const WIDGETS = ['ports', 'scratchpad', 'usage', 'skilltracker', 'context', 'autocompact'];
 
 // ---- Startup ----------------------------------------------------------------
 //
