@@ -150,6 +150,10 @@ Luna-Core-HUD/
 │       ├── styles.css     # LunaCore theme tokens (:root custom properties)
 │       └── modules/       # one file per concern, ES modules (see A1 below)
 │           ├── bus.js         # subscriber lists: context / language / per-tab view state
+│           ├── feeds.js       # one IPC listener per process-wide channel, fanned out on the bus
+│           ├── registry.js    # widget table + spec validation (DOM-free, unit-tested)
+│           ├── host.js        # mounts a widget from its <template> into a slot, and back out
+│           ├── thresholds.js  # the context-percentage thresholds every meter reads
 │           ├── util.js        # t() shortcut + loc() for config values + pulse()
 │           ├── localize.js    # pickLocalized(): resolve a {pl,en} config value (pure)
 │           ├── terminals.js   # one xterm per tab + the `term` facade + fit/resize
@@ -285,12 +289,23 @@ purely visual ticks just stop.
 load these files directly — `node --check src/renderer/modules/*.js` works, and
 the test suite can reach renderer modules.
 
-**Converted so far: `ports`, `scratchpad`, `usage`, `skilltracker`, `context` —
-the entire right panel.** The left-panel blocks are still static markup; a
-`[data-slot]` placeholder is `display: contents`, so converted and unconverted
-blocks sit side by side without disturbing the flex layout. Conversion order and
-the reasoning behind the contract are in
-[`FUTURE_PLAN.md`](FUTURE_PLAN.md) §A2a–§A2b.
+**A render may write to the DOM, never read from it.** The list builders
+(`cheatsheets`, `prompts`) used to recover which groups you had expanded by
+querying the live nodes just before replacing them. That is fine for a language
+switch, where the old nodes are still there — and loses everything on a remount,
+where they are not. If a render needs to know something, that something is state
+and belongs at module scope; the DOM is an output. The corollary is worth keeping
+too: **chosen state must be stored, derived state must not be.** The skill
+filter's query is chosen (you typed it, so it survives a remount); which
+categories are expanded is derived from it, so it rebuilds itself.
+
+**Converted so far: `ports`, `scratchpad`, `usage`, `skilltracker`, `context`
+(the entire right panel), plus `autocompact`, `cheatsheets`, `prompts` and
+`skills` — 9 of ~13.** What is left is `switchers`, `actions`, `appearance` and
+`terminal`. A `[data-slot]` placeholder is `display: contents`, so converted and
+unconverted blocks sit side by side without disturbing the flex layout.
+Conversion order and the reasoning behind the contract are in
+[`FUTURE_PLAN.md`](FUTURE_PLAN.md) §A2a–§A2d.
 
 ---
 
@@ -320,7 +335,7 @@ the reasoning behind the contract are in
 | A1 | Split `renderer.js` → 57-line entry point + 21 ES modules | ✅ done |
 | B8 | Skill Tracker shows a tool's **real duration** (sweep, not a blink) | ✅ done |
 | B5–B7 | Port filter toggle, copy-transcript-path, skill search box | ✅ done |
-| A2 | Widget contract + teardown probe — whole **right panel** converted (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) | 🟡 5 of ~13 |
+| A2 | Widget contract + teardown probe — whole **right panel** converted (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`), plus `autocompact` and the left-panel list builders (`cheatsheets`, `prompts`, `skills`) | 🟡 9 of ~13 |
 | + | PL/EN localization of `config/*.json`, not just the UI chrome | ✅ done |
 
 That closes the whole approved shortlist and the first slice of the structural
@@ -330,21 +345,24 @@ Worth knowing if you fork this: Chromium blocks ES modules over `file://`, but
 **Electron does not** — so this needs no bundler and no build step.
 
 **Next up** (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8, which opens with a
-*START HERE* box): finish the **A2** conversions — `skilltracker` is next — then
-**A5**, an async skill scan, since `scanSkills()` blocks the main process ~2.4 s
-today. A2 is what unblocks layout presets and movable panels. §9 sketches the
+*START HERE* box): finish the **A2** conversions — **9 of ~13 blocks** are done
+(the whole right panel, plus `autocompact` and the three left-panel list
+builders); what is left is `switchers`/`actions`/`appearance`, then `terminal`,
+which owns the xterm panes and goes last. After that **A5**, an async skill scan,
+since `scanSkills()` blocks the main process ~2.4 s today. A2 is what unblocks layout presets and movable panels. §9 sketches the
 bigger open question: turning LunaCore into a multi-model console (Claude / Kimi
 / local LM Studio) rather than a Claude-only HUD.
 
 ### Tests
 
 ```bash
-npm test        # node --test — 159 tests, ~1.4s, no extra dependencies
+npm test        # node --test — 168 tests, ~1.4s, no extra dependencies
 ```
 
 Covers the side-effect-free modules only: context metrics, transcript-dir
 encoding, tool detection, profile/project validation, port parsing, skill
-categorisation, and model/context-window inference.
+categorisation, model/context-window inference, and the burn-rate sampler with
+its ETA arithmetic.
 
 Two of them are **data** tests rather than logic tests: they assert that the
 shipped `config/rates.json` and the `MODEL_WINDOWS` table actually know every

@@ -1,17 +1,18 @@
 # LunaCore — Future Plan (Visual Templates, Layout & Ideas)
 
-## START HERE — where things stand (2026-07-27)
+## START HERE — where things stand (2026-08-03)
 
 Everything below this box is either **live plan** (§8) or **history**. Read this
-box, then §8's Phase A table, then jump to §A2a/§A2b for the widget contract.
+box, then §8's Phase A table, then jump to §A2a–§A2d for the widget contract and
+the four lessons the conversions have cost so far.
 
 | | State |
 |---|---|
-| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (159 tests), the A2 **contract**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*) |
-| **In flight** | **A2 conversions — 6 of ~13 blocks**: the **whole right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) plus the first left-panel block, `autocompact` |
-| **Next action** | Continue the **left panel**: `cheatsheets` / `prompts` / `skills` (all three are list-builders with an `init*()` entry point, so they convert as a group), then `switchers`/`actions`/`appearance`, `terminal` last. Both `context` and `autocompact` are now **hand-verified** — no by-hand passes owed. The `context` pass found and fixed a bug that had been live since `55ac9e5` (the ETA to 85% never worked); see the box above. |
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (**168 tests**), the A2 **contract**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*) |
+| **In flight** | **A2 conversions — 9 of ~13 blocks**: the **whole right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`) plus four left-panel blocks — `autocompact`, then the three list builders `cheatsheets` / `prompts` / `skills` |
+| **Next action** | Finish the **left panel**: `switchers` / `actions` / `appearance`, then `terminal` last (it owns the xterm panes). `boot-field` in the Wyglad section has the same `<label>`-as-root shape as `autocompact` (§A2c), so it should convert almost verbatim. Nothing owes a by-hand pass — `context`, `autocompact` and the three list builders are all **hand-verified**. |
 | **After A2** | **A5** (async skill scan — the one you can feel) → **A4** (dead CSS) → Phase C |
-| **Branch** | `main`, clean and pushed through the `autocompact` conversion (§A2c) |
+| **Branch** | `main`, clean and pushed through the list-builder conversions (§A2d) |
 
 Two facts that decide most design questions here, both learned the hard way:
 
@@ -28,7 +29,7 @@ Two facts that decide most design questions here, both learned the hard way:
 Verification commands, in the order they earn their keep:
 
 ```bash
-npm test                          # 159 tests, ~1.4 s, no extra deps
+npm test                          # 168 tests, ~1.4 s, no extra deps
 npx electron . --luna-probe       # remounts every widget 3×, prints bus counts, quits
 npx electron . --enable-logging   # renderer console → stdout (smoke test, no DevTools)
 npm start                         # the only way to check anything interactive
@@ -649,7 +650,7 @@ it with real named slots.
 **Conversion order for the rest** (each one leaves the app working):
 ~~`scratchpad`~~ → ~~`skilltracker`~~ (timers must stop on unmount) → ~~`usage`~~
 (30 s tick) → ~~`context`+`spark`+`autocompact`~~ (coupled trio, three session
-views) → `cheatsheets`/`prompts`/`skills` → `switchers`/`actions`/`appearance` →
+views) → ~~`cheatsheets`/`prompts`/`skills`~~ → `switchers`/`actions`/`appearance` →
 `terminal` last, since it owns the xterm panes.
 
 #### A2b — `scratchpad` (2026-07-27): cleanup is not always "undo"
@@ -737,6 +738,70 @@ real compact, and this refactor did not touch `maybeAutoCompact()`'s logic or th
 injector it calls. The hysteresis/cooldown arithmetic is unit-covered; what was
 *not* re-proven end-to-end is that the flash still paints on the remounted DOM.
 Cheap to fold into the next session that legitimately hits 85%.
+
+#### A2d — the three list builders (2026-08-03): renders that read state out of the DOM
+
+`cheatsheets`, `prompts` and `skills` converted as one group because they are one
+shape: an async `init*()` that loads config into module state, a render that
+rebuilds a `.cheats` container from it, and a delegated click that injects into
+the pty. Converting them together meant the second and third cost almost nothing.
+
+The trap they share is new, and it is the natural sequel to §A2c. There the
+question was *"is this state or view?"*. Here the render **answered that question
+by asking the DOM** — `cheatsheets` and `prompts` recovered which `<details>` the
+user had expanded by querying the live nodes, then rebuilt from what they found:
+
+```js
+const open = [...container.querySelectorAll('.cheat')].map((d) => d.open);
+container.innerHTML = '';   // …and now the only copy of that state is gone
+```
+
+That is correct for the case it was written for — a language switch, where the
+old nodes are still standing when the render begins. On a **remount** they are
+not: the nodes were dropped by `unmountWidget`, the read returns `[]`, and every
+group snaps back to "first one only". Nothing throws, nothing logs; you just find
+the panel collapsed and blame yourself for having closed it.
+
+**The rule: a render may write to the DOM, never read from it.** If a render needs
+to know something, that something is state and belongs at module scope. The DOM is
+an output.
+
+`skills` had the sharper version of the same question, because its filter query is
+not a preference — it is something you **typed**. §A2b's rule decides it: a
+disposer cancels effects but commits pending user intent, and a query is intent.
+It lives at module scope, `mount()` restores the input from it, and a remount
+finds the same narrowed list you left. That change also fixed `currentQuery()`,
+which read the box directly and therefore answered `''` for any render happening
+while the widget was off screen. Its `<details>` state needed none of this: it is
+*derived* (`open = Boolean(q)`), not chosen, so it rebuilds itself — the useful
+distinction being **chosen state must be stored, derived state must not be**.
+
+Two smaller notes for the conversions still to come:
+
+- **Keep `--grow`.** All three sections carry `.panel__section--grow`, and they
+  are what divide the left panel's free height between them. Dropping it from any
+  one would silently redistribute the other two. (`w-usage` already carries the
+  mirror-image note: it does *not* grow, and copying a growing template would have
+  done the same damage in reverse.)
+- **The probe's `rows` counter should point at the container, not the content.**
+  These three fill themselves from async config that may not have landed when the
+  probe runs. `#cheatsheets` / `#prompts` / `#skills-search` always exist once
+  mounted; counting entries would have made the probe flaky for no benefit.
+
+Verified: 168/168 tests, and a probe run with **9 widgets** mounted, each remounted
+3×, reporting identical bus counts before and after (`langChange 13 → 13`) and
+every `rows` marker at 1.
+
+**Hand-verified by Mati (2026-08-03)**, app launched, not just probed. The check
+that matters is the round-trip the old code would have failed:
+
+- [x] Expand a group, type a filter, `remount` all three → `open true -> true`,
+      `query "react"` intact, `count (16/335) -> (16/335)`, bus stats identical,
+      one container each. Both halves of the lesson above, closed.
+- [x] Placement, order and shared height unchanged; PL/EN relabels headers, group
+      titles, category names and the count.
+- [x] One click on a cheat button injects **exactly one** command — the failure
+      mode subscriber counts cannot see, since these listeners live inside `root`.
 
 ### Phase B — Daily-driver quick wins (§5.1)
 
