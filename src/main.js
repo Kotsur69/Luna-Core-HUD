@@ -230,6 +230,12 @@ async function runWidgetProbe(win) {
         // half-mounted block (bar without chart) cannot pass unnoticed.
         spark: document.querySelectorAll('#ctx-spark-line').length,
         autocompact: document.querySelectorAll('#autocompact-toggle').length,
+        // The three list builders: their CONTENT is async config, which may not
+        // have landed yet, so the marker is the container the module renders
+        // into - that is what has to exist exactly once.
+        cheatsheets: document.querySelectorAll('#cheatsheets').length,
+        prompts: document.querySelectorAll('#prompts').length,
+        skills: document.querySelectorAll('#skills-search').length,
       },
     });
   })()`;

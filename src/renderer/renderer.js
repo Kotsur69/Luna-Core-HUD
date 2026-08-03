@@ -64,7 +64,21 @@ import { busStats } from './modules/bus.js';
 // `context`, which is the same order their imports used to give them (see the
 // import comment above) - context updates the bar, then autocompact decides
 // whether that reading is worth injecting /compact over.
-const WIDGETS = ['ports', 'scratchpad', 'usage', 'skilltracker', 'context', 'autocompact'];
+//
+// The three list builders are ordered as the left panel shows them, purely so
+// this line reads like the UI. They only subscribe to `langChange`, and that
+// channel repaints all three from memory, so nothing here depends on it.
+const WIDGETS = [
+  'ports',
+  'scratchpad',
+  'usage',
+  'skilltracker',
+  'context',
+  'autocompact',
+  'cheatsheets',
+  'prompts',
+  'skills',
+];
 
 // ---- Startup ----------------------------------------------------------------
 //
@@ -73,9 +87,11 @@ const WIDGETS = ['ports', 'scratchpad', 'usage', 'skilltracker', 'context', 'aut
 // in particular initAppearance() broadcasts a language change, and each module
 // must already be listening for it.
 
-// Widgets go up FIRST: their DOM has to exist before the init calls below
-// (initPorts) reach for it, and before initAppearance() broadcasts the first
-// language change.
+// Widgets go up FIRST: their DOM has to exist before the init calls below reach
+// for it, and before initAppearance() broadcasts the first language change.
+// initCheatsheets / initPrompts / initSkills / initPorts all render into a
+// mounted widget - they load config into module state and repaint, which is a
+// no-op if the widget is not on screen yet.
 for (const id of WIDGETS) mountIntoSlot(id);
 
 initProfiles();

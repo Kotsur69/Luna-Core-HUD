@@ -7,19 +7,33 @@
 // B7: the scan result is kept in memory, so filtering is a local re-render -
 // no IPC, no re-scan. A query matches the name AND the description, because
 // half of what you remember about a skill is what it does, not its slug.
+//
+// A2: converted to the widget contract. The state question here is sharper than
+// in its two siblings, because the filter query is not a preference - it is
+// something you TYPED. A2b's rule is that a disposer cancels effects but commits
+// user intent, so the query lives at module scope and the input is restored from
+// it on mount; a remount finds the same 12 skills on screen you had narrowed to.
+// It also means currentQuery() no longer reads the DOM, which used to make it
+// answer "" whenever the box was not on screen.
+//
+// The <details> open state needs no such treatment: unlike cheatsheets/prompts
+// it is derived (`open = Boolean(q)`), not chosen, so it rebuilds itself.
 // ============================================================================
 
 'use strict';
 
 import { t, pulse } from './util.js';
 import { onLangChange } from './bus.js';
+import { defineWidget } from './registry.js';
 
-const skillsContainer = document.getElementById('skills');
-const skillsCount = document.getElementById('skills-count');
-const skillsSearch = document.getElementById('skills-search');
+// Elements of the current mount, or null when this widget is not on screen.
+let els = null;
 
 let allCategories = [];
 let total = 0;
+
+/** What the user typed, normalised. Empty string = show everything. */
+let query = '';
 
 export async function initSkills() {
   let data;
@@ -33,14 +47,10 @@ export async function initSkills() {
   renderSkills();
 }
 
-/** Current query, normalised. Empty string = show everything. */
-function currentQuery() {
-  return skillsSearch ? skillsSearch.value.trim().toLowerCase() : '';
-}
-
 function renderSkills() {
-  const q = currentQuery();
-  skillsContainer.innerHTML = '';
+  if (!els) return;
+  const q = query;
+  els.list.innerHTML = '';
   let shown = 0;
 
   for (const cat of allCategories) {
@@ -73,42 +83,70 @@ function renderSkills() {
       list.appendChild(item);
     }
     details.appendChild(list);
-    skillsContainer.appendChild(details);
+    els.list.appendChild(details);
   }
 
   if (q && shown === 0) {
     const empty = document.createElement('p');
     empty.className = 'hint';
     empty.textContent = t('skills.search.empty');
-    skillsContainer.appendChild(empty);
+    els.list.appendChild(empty);
   }
 
   // The counter doubles as filter feedback: "12/339" says both how much matched
   // and that you are looking at a subset.
-  if (!total) skillsCount.textContent = '';
-  else skillsCount.textContent = q ? `(${shown}/${total})` : `(${total})`;
+  if (!total) els.count.textContent = '';
+  else els.count.textContent = q ? `(${shown}/${total})` : `(${total})`;
 }
 
-if (skillsSearch) {
-  skillsSearch.addEventListener('input', renderSkills);
-  skillsSearch.addEventListener('keydown', (e) => {
-    // Escape clears rather than closing anything - there is nothing to close.
-    if (e.key === 'Escape' && skillsSearch.value) {
-      e.preventDefault();
-      e.stopPropagation();
-      skillsSearch.value = '';
-      renderSkills();
+defineWidget({
+  id: 'skills',
+  titleKey: 'skills.title',
+  template: 'w-skills',
+  mount(root) {
+    els = {
+      list: root.querySelector('#skills'),
+      count: root.querySelector('#skills-count'),
+      search: root.querySelector('#skills-search'),
+    };
+
+    if (els.search) {
+      // Restore what was typed - see the header. Setting .value fires no input
+      // event, so `query` and the box cannot drift apart here.
+      els.search.value = query;
+      els.search.addEventListener('input', () => {
+        query = els.search.value.trim().toLowerCase();
+        renderSkills();
+      });
+      els.search.addEventListener('keydown', (e) => {
+        // Escape clears rather than closing anything - there is nothing to close.
+        if (e.key === 'Escape' && els.search.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          els.search.value = '';
+          query = '';
+          renderSkills();
+        }
+      });
     }
-  });
-}
 
-// Clicking a skill copies its name to the clipboard (to paste / invoke).
-skillsContainer.addEventListener('click', (e) => {
-  const btn = e.target.closest('.skill-entry');
-  if (!btn) return;
-  navigator.clipboard.writeText(btn.dataset.name).catch(() => {});
-  pulse(btn);
+    // Clicking a skill copies its name to the clipboard (to paste / invoke).
+    els.list.addEventListener('click', (e) => {
+      const btn = e.target.closest('.skill-entry');
+      if (!btn) return;
+      navigator.clipboard.writeText(btn.dataset.name).catch(() => {});
+      pulse(btn);
+    });
+
+    // Only the "no matches" line and the category labels are translated, but
+    // both have to follow the language.
+    const offLang = onLangChange(renderSkills);
+
+    renderSkills();
+
+    return () => {
+      offLang();
+      els = null;
+    };
+  },
 });
-
-// Only the "no matches" line is translated, but it has to follow the language.
-onLangChange(renderSkills);

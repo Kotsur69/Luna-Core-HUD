@@ -81,34 +81,15 @@
         <p class="hint" data-i18n="profile.hint">Zmiana profilu restartuje sesje z nowym srodowiskiem.</p>
       </div>
 
-      <div class="panel__section panel__section--grow">
-        <h2 class="panel__title" data-i18n="cheats.title">Sciagi / Komendy</h2>
-        <!-- Zwijki + przyciski wypelnia renderer.js z config/cheatsheets.json (7C). -->
-        <div id="cheatsheets" class="cheats"></div>
-      </div>
+      <!-- A2: trzy budowniczowie list z lewego panelu. Ich markup siedzi w
+           <template id="w-cheatsheets|w-prompts|w-skills"> na koncu <body>.
+           Sloty sa `display: contents`, wiec kolejnosc i odstepy sekcji zostaja
+           dokladnie takie, jakie byly. -->
+      <div class="widget-slot" data-slot="cheatsheets"></div>
 
-      <div class="panel__section panel__section--grow">
-        <h2 class="panel__title" data-i18n="prompts.title">Prompty</h2>
-        <!-- Wielolinijkowe prompty z config/prompts.json; klik = wklejenie do sesji. -->
-        <div id="prompts" class="cheats"></div>
-      </div>
+      <div class="widget-slot" data-slot="prompts"></div>
 
-      <div class="panel__section panel__section--grow">
-        <h2 class="panel__title"><span data-i18n="skills.title">Skille</span> <span id="skills-count" class="count"></span></h2>
-        <!-- B7: filtr listy skilli. Lista jest juz w pamieci, wiec to czysto
-             rendererowe zawezenie - bez IPC i bez ponownego skanu. -->
-        <input
-          id="skills-search"
-          class="filter-input"
-          type="search"
-          autocomplete="off"
-          spellcheck="false"
-          data-i18n-ph="skills.search.ph"
-          placeholder="Filtruj skille..."
-        />
-        <!-- Auto-skan katalogow skilli, pogrupowany w kategorie (7A). -->
-        <div id="skills" class="cheats"></div>
-      </div>
+      <div class="widget-slot" data-slot="skills"></div>
 
       </div><!-- /panel__scroll -->
 
@@ -352,6 +333,47 @@
         <span class="switch__track"><span class="switch__thumb"></span></span>
       </span>
     </label>
+  </template>
+
+  <!-- Trzej budowniczowie list z lewego panelu (A2). Kazdy zachowuje
+       `--grow`, ktore mial jako statyczny markup - to one dziela wolna wysokosc
+       panelu miedzy siebie. Wnetrze `.cheats` buduje modul; tutaj zostaje tylko
+       naglowek, kontrolki i pusty kontener. -->
+  <template id="w-cheatsheets">
+    <div class="panel__section panel__section--grow">
+      <h2 class="panel__title" data-i18n="cheats.title">Sciagi / Komendy</h2>
+      <!-- Zwijki + przyciski wypelnia modules/cheatsheets.js z config/cheatsheets.json (7C). -->
+      <div id="cheatsheets" class="cheats"></div>
+    </div>
+  </template>
+
+  <template id="w-prompts">
+    <div class="panel__section panel__section--grow">
+      <h2 class="panel__title" data-i18n="prompts.title">Prompty</h2>
+      <!-- Wielolinijkowe prompty z config/prompts.json; klik = wklejenie do sesji. -->
+      <div id="prompts" class="cheats"></div>
+    </div>
+  </template>
+
+  <template id="w-skills">
+    <div class="panel__section panel__section--grow">
+      <h2 class="panel__title"><span data-i18n="skills.title">Skille</span> <span id="skills-count" class="count"></span></h2>
+      <!-- B7: filtr listy skilli. Lista jest juz w pamieci, wiec to czysto
+           rendererowe zawezenie - bez IPC i bez ponownego skanu. Wpisana fraza
+           zyje w module, nie w tym polu: klon szablonu zawsze wraca pusty, wiec
+           mount() odtwarza `value` z pamieci (A2b - intencja uzytkownika). -->
+      <input
+        id="skills-search"
+        class="filter-input"
+        type="search"
+        autocomplete="off"
+        spellcheck="false"
+        data-i18n-ph="skills.search.ph"
+        placeholder="Filtruj skille..."
+      />
+      <!-- Auto-skan katalogow skilli, pogrupowany w kategorie (7A). -->
+      <div id="skills" class="cheats"></div>
+    </div>
   </template>
 
   <!-- ================= Paleta komend (Ctrl+K) ================= -->

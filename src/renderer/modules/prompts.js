@@ -3,6 +3,16 @@
 // ----------------------------------------------------------------------------
 // The main button pastes a prompt WITHOUT sending it, so you can still add
 // details; the small one pastes and sends immediately.
+//
+// A2: converted to the widget contract. Same shape as cheatsheets.js, including
+// the open-groups fix described in its header - a remount must not collapse the
+// library back to its first group.
+//
+// One thing here that cheatsheets does not have: `promptIndex` is derived state,
+// not DOM. It maps a button's key to the RESOLVED prompt body, and it is what
+// actually gets pasted. It is rebuilt by every render and kept at module scope,
+// so an unmount does not have to clear it - a click can only come from a button
+// that the same render created.
 // ============================================================================
 
 'use strict';
@@ -10,11 +20,16 @@
 import { pulse, loc, t } from './util.js';
 import { term } from './terminals.js';
 import { onLangChange } from './bus.js';
+import { defineWidget } from './registry.js';
 
-const promptsContainer = document.getElementById('prompts');
+// Elements of the current mount, or null when this widget is not on screen.
+let els = null;
 
 // Kept so a language switch re-renders from memory instead of re-reading config.
 let lastGroups = [];
+
+// Which groups the user has expanded, by index. Survives a remount.
+let openGroups = [];
 
 // Prompt bodies live here (a DOM dataset does not take multi-line text well);
 // the button only carries a "group:prompt" index.
@@ -32,16 +47,20 @@ export async function initPrompts() {
 }
 
 function renderPrompts() {
+  if (!els) return;
   const groups = lastGroups;
-  // Preserve which groups the user had expanded across a language switch.
-  const open = [...promptsContainer.querySelectorAll('.cheat')].map((d) => d.open);
-  promptsContainer.innerHTML = '';
+  els.list.innerHTML = '';
   promptIndex.clear();
 
   groups.forEach((group, gi) => {
     const details = document.createElement('details');
     details.className = 'cheat';
-    details.open = open.length ? !!open[gi] : gi === 0;
+    details.open = gi < openGroups.length ? Boolean(openGroups[gi]) : gi === 0;
+    openGroups[gi] = details.open;
+    // `toggle` does not bubble - bound per group, inside root.
+    details.addEventListener('toggle', () => {
+      openGroups[gi] = details.open;
+    });
 
     const summary = document.createElement('summary');
     summary.className = 'cheat__summary';
@@ -92,21 +111,37 @@ function renderPrompts() {
     });
 
     details.appendChild(list);
-    promptsContainer.appendChild(details);
+    els.list.appendChild(details);
   });
 }
 
-// Titles, notes, labels AND the prompt bodies themselves are localized, so a
-// language switch has to rebuild the index, not just the labels.
-onLangChange(renderPrompts);
+defineWidget({
+  id: 'prompts',
+  titleKey: 'prompts.title',
+  template: 'w-prompts',
+  mount(root) {
+    els = { list: root.querySelector('#prompts') };
 
-// Delegated: paste the prompt into the session (bracketed paste).
-promptsContainer.addEventListener('click', (e) => {
-  const btn = e.target.closest('.prompt-btn, .prompt-send');
-  if (!btn) return;
-  const text = promptIndex.get(btn.dataset.key);
-  if (typeof text !== 'string') return;
-  window.lunacore.pastePrompt(text, btn.dataset.act === 'send');
-  pulse(btn);
-  term.focus();
+    // Delegated: paste the prompt into the session (bracketed paste).
+    els.list.addEventListener('click', (e) => {
+      const btn = e.target.closest('.prompt-btn, .prompt-send');
+      if (!btn) return;
+      const text = promptIndex.get(btn.dataset.key);
+      if (typeof text !== 'string') return;
+      window.lunacore.pastePrompt(text, btn.dataset.act === 'send');
+      pulse(btn);
+      term.focus();
+    });
+
+    // Titles, notes, labels AND the prompt bodies themselves are localized, so a
+    // language switch has to rebuild the index, not just the labels.
+    const offLang = onLangChange(renderPrompts);
+
+    renderPrompts();
+
+    return () => {
+      offLang();
+      els = null;
+    };
+  },
 });
