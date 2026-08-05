@@ -41,6 +41,7 @@ const { loadPrompts } = require('./prompts');
 const { readScratchpad, writeScratchpad } = require('./scratchpad');
 // Motywy (theming): mapy tokenow CSS + kolory xterm z config/themes.json.
 const { loadThemes } = require('./theme');
+const { loadLayouts } = require('./layouts');
 // Preferencje UI (motyw + jezyk) trwale w config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
 // Licznik zuzycia limitow (5h + tydzien) - odczyt GET z endpointu OAuth CLI.
@@ -207,19 +208,55 @@ function createWindow() {
  * mounted exactly once - neither missing nor duplicated. It is counted per
  * widget rather than for `ports` alone, or the probe would keep proving the one
  * case while staying silent about every widget added after it.
+ *
+ * C1 added the second pass: cycling every layout preset. That is the operation
+ * this whole contract was built for - it moves every widget root at once and
+ * genuinely unmounts the ones the next preset has no region for - so the counts
+ * either come back where they started or a disposer is missing.
  */
 async function runWidgetProbe(win) {
-  const script = `(() => {
+  const script = `(async () => {
+    // renderer.js has a top-level await now (the layout presets arrive over
+    // IPC), so it is still importing when did-finish-load fires. Wait for it
+    // instead of declaring the renderer broken.
+    const deadline = Date.now() + 10000;
+    while (!window.__luna && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     if (!window.__luna) return JSON.stringify({ error: 'no __luna - renderer never finished importing' });
     const mounted = __luna.mounted();
     const before = __luna.stats();
+    // Marker count on the untouched first paint, so a later 0 can be blamed on
+    // the right pass instead of on "somewhere in the probe".
+    const rowsAtStart = {
+      autocompact: document.querySelectorAll('#autocompact-toggle').length,
+      context: document.querySelectorAll('#ctx-fill').length,
+    };
     for (let pass = 0; pass < 3; pass++) for (const id of mounted) __luna.remount(id);
+    const afterRemounts = __luna.stats();
+    const rowsAfterRemounts = {
+      autocompact: document.querySelectorAll('#autocompact-toggle').length,
+      context: document.querySelectorAll('#ctx-fill').length,
+    };
+
+    // Every preset, twice round, then back to where we started.
+    const startedOn = __luna.activeLayout();
+    const presets = __luna.layouts();
+    for (let pass = 0; pass < 2; pass++) for (const id of presets) __luna.layout(id);
+    __luna.layout(startedOn);
+
     return JSON.stringify({
       widgets: __luna.widgets(),
       mounted,
       remountedTo: __luna.mounted(),
+      presets,
+      startedOn,
+      endedOn: __luna.activeLayout(),
       before,
+      afterRemounts,
       after: __luna.stats(),
+      rowsAtStart,
+      rowsAfterRemounts,
       rows: {
         ports: document.querySelectorAll('#ports-list').length,
         scratchpad: document.querySelectorAll('#pad-text').length,
@@ -700,6 +737,9 @@ function registerIpc() {
 
   // Motywy: lista dostepnych motywow (tokeny CSS + kolory xterm).
   ipcMain.handle('themes:list', () => loadThemes());
+
+  // C1: presety ukladu (siatka + przydzial widgetow do regionow).
+  ipcMain.handle('layouts:list', () => loadLayouts());
 
   // Preferencje UI: odczyt {theme, lang} i zapis czesciowy (zwraca nowy stan).
   ipcMain.handle('ui:get', () => readUiPrefs());

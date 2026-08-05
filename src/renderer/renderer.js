@@ -53,50 +53,14 @@ import { initAppearance } from './modules/appearance.js';
 // Blocks converted to the widget contract. They self-register at import time
 // (the imports above are what pull them in) and are mounted below, into the
 // [data-slot] placeholder that marks their spot in index.html.
-import { mountIntoSlot, remountWidget, mountedWidgets } from './modules/host.js';
+import { remountWidget, mountedWidgets } from './modules/host.js';
 import { listWidgets } from './modules/registry.js';
 import { busStats } from './modules/bus.js';
 
-// Order here is cosmetic FOR LAYOUT - each widget lands in its own [data-slot],
-// so the panel's arrangement comes from index.html, not from this list.
-//
-// It is NOT cosmetic for the bus, though: a widget that subscribes in mount()
-// joins a channel in mount order. `autocompact` therefore has to come after
-// `context`, which is the same order their imports used to give them (see the
-// import comment above) - context updates the bar, then autocompact decides
-// whether that reading is worth injecting /compact over.
-//
-// It is also NOT cosmetic for `actions`: its template holds the
-// [data-slot="autocompact"] placeholder nested inside it (see w-actions in
-// index.html), so `actions` MUST mount before `autocompact` or that slot will
-// not exist yet when mountIntoSlot('autocompact') looks for it.
-//
-// The three list builders are ordered as the left panel shows them, purely so
-// this line reads like the UI. They only subscribe to `langChange`, and that
-// channel repaints all three from memory, so nothing here depends on it.
-// `project` / `profile` / `appearance` are the same: order among themselves
-// and relative to everything above is cosmetic.
-//
-// `terminal` (A2f) is the one exception to ALL of this: it is `remountable:
-// false` (see registry.js/host.js), so it never rejoins this list's ordering
-// concerns after the first mount - it just needs to be on screen before
-// initSessions() runs below, same as every other widget here.
-const WIDGETS = [
-  'terminal',
-  'ports',
-  'scratchpad',
-  'usage',
-  'skilltracker',
-  'context',
-  'actions',
-  'autocompact',
-  'cheatsheets',
-  'prompts',
-  'skills',
-  'project',
-  'profile',
-  'appearance',
-];
+// -- Layout presets (C1) ------------------------------------------------------
+// Which widgets exist and where they go is data now (config/layouts.json), not
+// a list in this file - see modules/layout.js.
+import { initLayout, applyLayout, getLayouts, getActiveLayoutId } from './modules/layout.js';
 
 // ---- Startup ----------------------------------------------------------------
 //
@@ -104,13 +68,31 @@ const WIDGETS = [
 // hit IPC yet, so every subscriber is in place before the first payload lands -
 // in particular initAppearance() broadcasts a language change, and each module
 // must already be listening for it.
-
-// Widgets go up FIRST: their DOM has to exist before the init calls below reach
-// for it, and before initAppearance() broadcasts the first language change.
-// initCheatsheets / initPrompts / initSkills / initPorts all render into a
-// mounted widget - they load config into module state and repaint, which is a
+//
+// The HUD goes up FIRST: widget DOM has to exist before the init calls below
+// reach for it, and before initAppearance() broadcasts the first language
+// change. initCheatsheets / initPrompts / initSkills / initPorts all render into
+// a mounted widget - they load config into module state and repaint, which is a
 // no-op if the widget is not on screen yet.
-for (const id of WIDGETS) mountIntoSlot(id);
+//
+// This used to be a hand-maintained WIDGETS array mounted into [data-slot]
+// placeholders. C1 replaced it with the active layout preset, which carries two
+// ordering constraints that used to live in that array's comment - both are now
+// enforced by modules/layout.js rather than by list order:
+//
+//   * BUS ORDER. A widget that subscribes in mount() joins a channel in mount
+//     order, and `autocompact` must come after `context`: context updates the
+//     bar, then autocompact decides whether that reading is worth injecting
+//     /compact over. Nested widgets mount last, so this holds for every preset.
+//   * DOM ORDER. `autocompact`'s placeholder is nested INSIDE the w-actions
+//     template, so `actions` must be on screen before it. Same rule, same reason
+//     it holds: nested last. This is also why a layout cannot place autocompact
+//     itself - it has no region of its own.
+//
+// Top-level await: this is the entry module, so nothing is being held up, but it
+// does mean the code below runs after DOMContentLoaded rather than before it -
+// hence the direct fitAndResize() at the bottom instead of a listener.
+await initLayout();
 
 initProfiles();
 initProjects();
@@ -138,12 +120,17 @@ window.__luna = {
   // Subscriber counts per bus channel - see busStats(). Remount, compare, and a
   // forgotten disposer shows up as a number that grew.
   stats: busStats,
+  // C1: __luna.layout('focus') switches presets from the console, and is the
+  // harsher version of remount() - it moves every widget root at once, and
+  // unmounts whatever the new preset has no region for.
+  layout: applyLayout,
+  layouts: () => getLayouts().map((l) => l.id),
+  activeLayout: getActiveLayoutId,
 };
 
 // ---- Window events ----------------------------------------------------------
 
 window.addEventListener('resize', fitAndResize);
 
-window.addEventListener('DOMContentLoaded', () => {
-  fitAndResize();
-});
+// Not DOMContentLoaded: the top-level await above almost certainly outlives it.
+fitAndResize();

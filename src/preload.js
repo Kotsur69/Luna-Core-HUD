@@ -105,6 +105,9 @@ contextBridge.exposeInMainWorld('lunacore', {
   // --- Motywy + preferencje UI (motyw/jezyk) ---
   /** Pobiera { themes: [{id,label,vars,terminal}] }. */
   getThemes: () => ipcRenderer.invoke('themes:list'),
+  // --- C1: presety ukladu HUD ---
+  /** Pobiera { layouts: [{id,label,columns,rows,areas,regionOrder,chrome,slots}], activeLayout }. */
+  getLayouts: () => ipcRenderer.invoke('layouts:list'),
   /** Pobiera zapamietane preferencje { theme, lang }. */
   getUiPrefs: () => ipcRenderer.invoke('ui:get'),
   /** Zapisuje czesciowe preferencje { theme?, lang? }; zwraca nowy stan. */

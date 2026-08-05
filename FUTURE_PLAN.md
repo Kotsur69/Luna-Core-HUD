@@ -8,11 +8,10 @@ the six lessons the conversions have cost so far.
 
 | | State |
 |---|---|
-| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, A1 (renderer split), A3 (**168 tests**), the A2 **contract**, **A2 conversions — 13 of 13 blocks, DONE**, full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **A5 (async skill scan + rescan button)**, **A4 (dead `.panel__spacer` CSS dropped)** |
-| **In flight** | Nothing — A2, A5, and A4 are all done, and the full A2 conversion has been hand-smoke-tested by Mati 2026-08-03 (theme/language/profile/project switches, COMPACT + auto-compact, boot toggle, terminal tabs/LED/palette). |
-| **Next action** | Scope and start **Phase C**. |
-| **After A2** | Phase C |
-| **Branch** | `main`, clean through A4 (dead CSS) |
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), and **C1 (layout presets) DONE** — 4 presets, switchable live, **192 tests** |
+| **In flight** | Nothing. |
+| **Next action** | **C3** (§C1b/§C1c) — the theme token vocabulary + the CSS-only motion system. That is what actually makes the themes stop looking like hue swaps, and C2's collapse/splitter animation should read from those tokens rather than hardcode, so C3 goes **before** C2. |
+| **Branch** | `main` |
 
 Two facts that decide most design questions here, both learned the hard way:
 
@@ -29,8 +28,9 @@ Two facts that decide most design questions here, both learned the hard way:
 Verification commands, in the order they earn their keep:
 
 ```bash
-npm test                          # 168 tests, ~1.4 s, no extra deps
-npx electron . --luna-probe       # remounts every widget 3×, prints bus counts, quits
+npm test                          # 192 tests, ~1.5 s, no extra deps
+npx electron . --luna-probe       # remounts every widget 3×, then cycles every
+                                  # layout preset 2× and returns; prints bus counts
 npx electron . --enable-logging   # renderer console → stdout (smoke test, no DevTools)
 npm start                         # the only way to check anything interactive
 ```
@@ -995,10 +995,162 @@ Two things worth keeping from that:
 
 The original "move the elements around" ask. Only sane **after** A2.
 
-1. **Layout presets** (§3.1) — `classic` / `focus` / `monitor-heavy` / `bottom-dock`, as data.
-2. **Collapsible + resizable panels** (§3.2) — chevron collapse, two drag splitters, no library.
-3. **Density / font / glow presets** (§2.3) — the `reduce-glow` half is now partly free, since the reduced-motion block landed with the boot sequence.
-4. **Drag-and-drop rearrange** (§3.3) — stretch. Evaluate a dep honestly before pulling one in.
+| # | Item | Ref | State |
+|---|------|-----|-------|
+| C1 | **Layout presets** as data | §3.1 | ✅ **DONE 2026-08-05** — 4 presets, live switching, 24 tests. See §C1a. |
+| C2 | **Collapsible + resizable panels** | §3.2 | ⬜ chevron collapse, two drag splitters, no library. |
+| C3 | **Theme vocabulary + motion tokens** | §2.3, §C1b | ⬜ **The "matrix is just a green filter" fix.** Do the tokens BEFORE C2 — collapse/splitter animation should read from them, not hardcode. |
+| C4 | **Drag-and-drop rearrange** | §3.3 | ⬜ stretch. Evaluate a dep honestly before pulling one in. |
+
+#### C1a — layout presets: the design, and the one rule that makes it safe
+
+**Shipped so far (2026-08-05):** `src/layouts.js` + `test/layouts.test.js` (168 → **184 tests**).
+Pure, DOM-free, same base+local merge and reject-don't-repair validation as
+`themes`/`profiles`/`projects`. Schema:
+
+```json
+{ "id": "classic", "label": { "pl": "Klasyczny", "en": "Classic" },
+  "grid": { "columns": "260px 1fr 280px", "rows": "1fr", "areas": ["left main right"] },
+  "chrome": { "brand": "left", "status": "left" },
+  "slots": { "left": ["actions", "…"], "main": ["terminal"], "right": ["context", "…"] } }
+```
+
+`areas` is `grid-template-areas` as an array of rows, and **region names come out
+of the areas themselves** — there is no fixed left/center/right vocabulary, so a
+preset can be three columns, two columns, or a terminal-over-dock without the
+loader knowing those shapes exist.
+
+**The rule the whole feature rests on: a layout switch MOVES widget roots between
+slots, it never remounts them.** `terminal` is `remountable: false` (§A2f) because
+its children are live xterm instances wired to real PTYs; a re-clone would orphan
+every running session. A DOM move (`slot.appendChild(existingRoot)`) preserves the
+subtree, so the same code path is safe for every widget — and it sidesteps every
+state-restore concern §A2c/§A2d catalogued, because nothing is ever rebuilt.
+Follow the move with `fitAndResize()`; xterm needs to re-measure, not re-create.
+
+A widget the *new* layout has no region for is genuinely unmounted — and that is
+safe precisely because of the A2 discipline: §A2c makes `mount()` repaint from
+module state, §A2d keeps chosen state (filter query, open groups) at module
+scope. **The conversion work is what makes layout switching cheap.**
+
+**Two validation rules protect the user from a config they cannot escape**
+(`REQUIRED_WIDGETS`, both unit-pinned): a layout must place `terminal` (or the
+HUD has no terminal) and must place `appearance` (or it hides the layout
+`<select>` and locks you into itself until you hand-edit JSON). Both failures are
+silent and total, which is exactly what boundary validation is for.
+
+**Built (2026-08-05).** Four presets in `config/layouts.json`: `classic` (today's
+HUD, unchanged), `focus` (terminal + one 250px rail, monitor blocks unmounted),
+`monitor-heavy` (380px right column with every list in it), `bottom-dock`
+(terminal on top, three docks under it). `layouts:list` IPC beside `themes:list`,
+a `layout` key in `uiprefs.js`, `src/renderer/modules/layout.js`, a layout
+`<select>` in Appearance, and `.app` emptied out in `index.html`.
+
+Four things that turned out to matter, none of them obvious from the schema:
+
+- **Chrome is not a widget, and cannot become one.** `ptystatus.js` captures
+  `#pty-status-dot` **at import time**, and `<template>` content is not part of
+  the document — so the brand mark and the PTY status line can never live in one.
+  They sit in `<div id="app-chrome" hidden>` and `layout.js` *moves* them into
+  whichever region `layout.chrome` names, parking them back there while the shell
+  is rebuilt. A preset that points chrome at the terminal's region is **corrected,
+  not honoured** (that region is rendered bare, so the nodes would be dropped) —
+  the one place in this loader that repairs instead of rejecting, because losing
+  the connection indicator has an obviously right answer.
+- **The terminal's region is rendered bare** — no padding, no `.panel__scroll`.
+  Its root is already a full `.panel--center`, and xterm measures against a fixed
+  box: put it in an `overflow-y` container and it grows instead of fitting.
+- **`renderer.js`'s two ordering constraints are now enforced structurally**,
+  not by list order. Nested widgets mount **last**, which satisfies both at once:
+  `autocompact` joins the context channel after `context` (bus order) and after
+  `actions` exists (its slot is inside `w-actions`). A layout still cannot place
+  it, and `planRegions()` warns and skips if one tries.
+- **Top-level `await`.** The presets arrive over IPC, so `renderer.js` is still
+  importing when `did-finish-load` fires. The bottom `DOMContentLoaded` listener
+  became a direct `fitAndResize()`, and `--luna-probe` now polls for `__luna`
+  instead of concluding the renderer died.
+
+**A pre-existing bug this surfaced.** `remountWidget()` re-clones the host's
+template, whose nested placeholder is empty — so `__luna.remount('actions')` left
+`autocompact` registered as mounted with its root in a detached subtree. Invisible
+before C1 because nothing ever remounted `actions` in anger. `NESTED` now lives in
+`host.js` (not `layout.js`) and `remountWidget()` takes nested children down and
+puts them back. The probe gained `rowsAtStart` / `rowsAfterRemounts` so a future
+zero can be blamed on the right pass.
+
+**Verified:** 192/192 tests; probe cycles all four presets twice and returns to
+`classic` with `activeContext: 3` / `langChange: 14` **identical** at all three
+checkpoints and every `rows` marker at 1.
+
+⬜ **Not hand-checked by Mati yet** — the probe cannot see a pixel. Run `npm start`
+and look at `focus` and `bottom-dock`: region gaps, whether the docks are tall
+enough at 270px, and whether the terminal still fits after each switch.
+
+#### C1b — why every theme looks like the same HUD in a different hue
+
+**The diagnosis, and it is not architectural.** `applyThemeVars()`
+(`appearance.js`) does `root.style.setProperty(k, v)` for *any* `--*` key, so a
+theme can already carry any token at all — `--radius` proves it (matrix ships
+`4px`, everything else `10px`). The problem is that **the vocabulary is 17
+tokens and 15 of them are colours.** Everything that gives a look its identity —
+typography, border treatment, glow strength, texture, motion character — is
+hardcoded in `styles.css`. A theme therefore *cannot* be more than a hue swap.
+
+**So C3 is mostly additive: grow the vocabulary, have `styles.css` consume it.
+`theme.js` and `applyThemeVars()` need no changes.** Five groups:
+
+| Group | Tokens | What it buys |
+|---|---|---|
+| **Form** | `--radius`, `--radius-sm`, `--border-w`, `--panel-gap`, `--pad-panel` | matrix reads as a terminal (0px, hairline), nord as an IDE (12px, soft) |
+| **Typography** | `--font-ui`, `--font-mono`, `--font-display`, `--tracking-title`, `--case-title` | the single biggest identity lever, and currently 100% hardcoded |
+| **Depth** | `--glow-strength`, `--text-glow`, `--shadow-panel` | neon vs. flat, without touching a colour |
+| **Texture** | `--texture` (a `background-image` on an `.app::before` layer), `--texture-opacity` | scanlines / bloom / grain / none — biggest per-token payoff |
+| **Motion** | `--dur-*`, `--ease-*`, `--motion-scale` | a calm theme and a snappy theme can differ in *feel*, not just colour |
+
+**Font constraint:** the renderer runs on `file://` with no network. Any non-system
+font must be a **bundled local woff2** — no Google Fonts `@import`, which would
+fail silently offline and fall back mid-launch. Ship at most two faces.
+
+**New presets worth having** (each a different *shape*, not a different hue):
+`tokyo-night` (muted indigo, soft radius, no scanlines, calm motion — the
+work-all-day theme), `amber-crt` (mono-amber phosphor, radius 0, heavy scanlines,
+text-glow), `paper` (a real light mode: serif display, zero glow, hairline rules),
+`void` (OLED near-black, one accent, maximum contrast, minimum chrome).
+
+#### C1c — the motion system (CSS-only, zero deps)
+
+The project ships no animation library and should keep it that way; GSAP/motion
+would be a dependency for effects CSS already does. What transfers from the
+motion-foundations discipline is the **token table and the rules**, not the API.
+
+```css
+--dur-instant: 80ms;  --dur-fast: 180ms;  --dur-normal: 350ms;  --dur-slow: 600ms;
+--ease-smooth: cubic-bezier(.22, 1, .36, 1);   /* enter, settle */
+--ease-sharp:  cubic-bezier(.4, 0, .2, 1);     /* exit, dismiss */
+--ease-bounce: cubic-bezier(.34, 1.56, .64, 1);/* arm / confirm, sparingly */
+```
+
+Four rules, all of which the HUD already half-follows:
+
+1. **Motion must guide attention, communicate state, or preserve spatial
+   continuity.** Anything else gets cut, not tuned.
+2. **`transform` and `opacity` only** — never `width`/`height`/`top`/`left`. The
+   context bar already obeys this (`scaleX(var(--ctx))`); the panel collapse in
+   C2 is the one legitimate exception, and it animates `grid-template-columns` on
+   the container rather than the panels.
+3. **Every duration comes from a token.** Hardcoded `0.3s` in a rule is the same
+   class of bug as a hardcoded colour — it is why the boot timings are currently
+   duplicated between `styles.css` and `boot.js` (§6).
+4. **Reduced motion overrides everything.** The global block already exists (it
+   landed with the boot sequence); the pattern to copy is B8's — *substitute* a
+   static state, don't exempt or blank it.
+
+Where it actually pays off, in priority order: **layout switch** (a staggered
+fade+rise as the HUD reassembles — C1's whole payoff, and the reason C3 should
+land near C1), **tab switch** (crossfade + slide for spatial continuity),
+**context-bar threshold crossings** (60%/85% are colour-only today; a single
+pulse makes them felt), **panel collapse** (C2), and **widget mount** (the
+stagger, reused).
 
 ### Phase D — Make it a product (§7)
 

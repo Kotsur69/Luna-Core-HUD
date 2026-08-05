@@ -36,9 +36,12 @@ html, body {
 
 /* ---- Layout: 3 kolumny ---------------------------------------------------- */
 
+/* C1: grid-template-columns / -rows / -areas land here as INLINE styles, written
+   by modules/layout.js from the active preset in config/layouts.json. The value
+   below is only what the HUD looks like for the frame before that runs. */
 .app {
   display: grid;
-  grid-template-columns: 260px 1fr 280px;
+  grid-template-columns: 1fr;
   height: 100vh;
   gap: 1px;
   background: var(--edge);
@@ -51,8 +54,16 @@ html, body {
   min-height: 0;
 }
 
-.panel--left,
-.panel--right { padding: 18px 16px; gap: 22px; }
+/* C1: every non-terminal region is one of these. `grid-area` is set inline from
+   the preset's area name, so this class carries only the panel's own chrome. */
+.panel--region { padding: 18px 16px; gap: 22px; min-width: 0; }
+
+/* The region that holds the terminal is BARE: no padding and no scroller, because
+   the terminal widget's root is itself a full .panel--center and xterm measures
+   against a fixed box. As a grid item it used to stretch on its own; as a flex
+   child of this wrapper it needs to be told to. */
+.region--bare { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.region--bare > .panel--center { flex: 1; min-height: 0; }
 
 .panel--center { padding: 0; background: var(--term-bg); }
 

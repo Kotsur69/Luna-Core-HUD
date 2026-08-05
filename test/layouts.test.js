@@ -1,0 +1,223 @@
+// Layout preset tests (C1). Pure loader + validation, no DOM.
+//
+// The two validation rules worth having tests for are the ones that protect the
+// user from a config they cannot recover from by hand:
+//
+//   * a layout that never places `terminal` is a HUD with no terminal;
+//   * a layout that never places `appearance` hides the layout <select>, i.e.
+//     it locks you into itself with no way back short of editing JSON.
+//
+// Both are rejected at the boundary so the FALLBACK takes over, exactly like a
+// malformed profile or project entry.
+
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { loadLayouts, getLayout, normalizeLayout, gridAreas, REQUIRED_WIDGETS } = require('../src/layouts.js');
+
+/** A minimal valid layout; individual tests override one field at a time. */
+function base(over = {}) {
+  return {
+    id: 'classic',
+    label: 'Classic',
+    grid: { columns: '260px 1fr 280px', rows: '1fr', areas: ['left main right'] },
+    slots: {
+      left: ['appearance'],
+      main: ['terminal'],
+      right: ['context'],
+    },
+    ...over,
+  };
+}
+
+// ---- normalizeLayout: happy path -------------------------------------------
+
+test('normalizeLayout przepuszcza poprawny uklad', () => {
+  const l = normalizeLayout(base());
+  assert.equal(l.id, 'classic');
+  assert.equal(l.label, 'Classic');
+  assert.equal(l.columns, '260px 1fr 280px');
+  assert.equal(l.rows, '1fr');
+  assert.deepEqual(l.areas, ['left main right']);
+  assert.equal(l.gridTemplateAreas, '"left main right"');
+  assert.deepEqual(l.slots.main, ['terminal']);
+});
+
+test('normalizeLayout przyjmuje zlokalizowana etykiete {pl,en}', () => {
+  const l = normalizeLayout(base({ label: { pl: 'Klasyczny', en: 'Classic' } }));
+  // normalizeText keeps the object so the renderer can pick a language later.
+  assert.equal(typeof l.label, 'object');
+  assert.equal(l.label.pl, 'Klasyczny');
+  assert.equal(l.label.en, 'Classic');
+});
+
+test('normalizeLayout uzupelnia brakujaca etykiete id-kiem', () => {
+  const raw = base();
+  delete raw.label;
+  assert.equal(normalizeLayout(raw).label, 'classic');
+});
+
+// ---- normalizeLayout: the two lock-out rules -------------------------------
+
+test('normalizeLayout odrzuca uklad bez terminala', () => {
+  const l = base({ slots: { left: ['appearance'], main: ['context'], right: [] } });
+  assert.equal(normalizeLayout(l), null);
+});
+
+test('normalizeLayout odrzuca uklad bez appearance (zamknelby droge powrotu)', () => {
+  const l = base({ slots: { left: ['profile'], main: ['terminal'], right: [] } });
+  assert.equal(normalizeLayout(l), null);
+});
+
+test('REQUIRED_WIDGETS wymienia dokladnie te dwa', () => {
+  assert.deepEqual([...REQUIRED_WIDGETS].sort(), ['appearance', 'terminal']);
+});
+
+// ---- normalizeLayout: grid shape -------------------------------------------
+
+test('normalizeLayout odrzuca poszarpane wiersze grid-template-areas', () => {
+  // Rows of different token counts are invalid CSS - the whole grid would be
+  // dropped by the engine and the HUD would collapse into one column.
+  const l = base({
+    grid: { columns: '1fr 1fr', rows: '1fr 1fr', areas: ['left main', 'right'] },
+  });
+  assert.equal(normalizeLayout(l), null);
+});
+
+test('normalizeLayout odrzuca uklad bez obszarow', () => {
+  assert.equal(normalizeLayout(base({ grid: { columns: '1fr', rows: '1fr', areas: [] } })), null);
+});
+
+test('normalizeLayout akceptuje kropke jako pusta komorke', () => {
+  const l = normalizeLayout(
+    base({
+      grid: { columns: '1fr 1fr', rows: '1fr 1fr', areas: ['main main', 'left .'] },
+      slots: { left: ['appearance'], main: ['terminal'] },
+    })
+  );
+  assert.notEqual(l, null);
+  assert.deepEqual(l.areas, ['main main', 'left .']);
+});
+
+// ---- normalizeLayout: slots ------------------------------------------------
+
+test('normalizeLayout usuwa sloty spoza obszarow', () => {
+  const l = normalizeLayout(
+    base({ slots: { left: ['appearance'], main: ['terminal'], nope: ['ports'] } })
+  );
+  assert.equal(l.slots.nope, undefined);
+  assert.deepEqual(Object.keys(l.slots).sort(), ['left', 'main']);
+});
+
+test('normalizeLayout odrzuca ten sam widget w dwoch slotach', () => {
+  // One widget has one root element; two slots would fight over it.
+  const l = base({
+    slots: { left: ['appearance', 'ports'], main: ['terminal'], right: ['ports'] },
+  });
+  assert.equal(normalizeLayout(l), null);
+});
+
+test('normalizeLayout odrzuca powtorzenie w jednym slocie', () => {
+  const l = base({ slots: { left: ['appearance', 'appearance'], main: ['terminal'] } });
+  assert.equal(normalizeLayout(l), null);
+});
+
+test('normalizeLayout zachowuje kolejnosc widgetow w slocie', () => {
+  const l = normalizeLayout(
+    base({ slots: { left: ['appearance', 'profile', 'project'], main: ['terminal'] } })
+  );
+  assert.deepEqual(l.slots.left, ['appearance', 'profile', 'project']);
+});
+
+// ---- normalizeLayout: region order + chrome --------------------------------
+
+test('normalizeLayout zwraca regiony w kolejnosci pierwszego wystapienia', () => {
+  const l = normalizeLayout(
+    base({
+      grid: { columns: '1fr 1fr', rows: '1fr 1fr', areas: ['main main', 'left right'] },
+      slots: { left: ['appearance'], main: ['terminal'], right: ['ports'] },
+    })
+  );
+  assert.deepEqual(l.regionOrder, ['main', 'left', 'right']);
+});
+
+test('chrome domyslnie ląduje w pierwszym regionie bez terminala', () => {
+  // areas start with `main`, but `main` holds the terminal - chrome would be
+  // dropped there, so it falls to `left`.
+  const l = normalizeLayout(
+    base({
+      grid: { columns: '1fr 1fr', rows: '1fr 1fr', areas: ['main main', 'left right'] },
+      slots: { left: ['appearance'], main: ['terminal'], right: ['ports'] },
+    })
+  );
+  assert.deepEqual(l.chrome, { brand: 'left', status: 'left' });
+});
+
+test('chrome respektuje jawny wybor regionu', () => {
+  const l = normalizeLayout(base({ chrome: { brand: 'right', status: 'left' } }));
+  assert.deepEqual(l.chrome, { brand: 'right', status: 'left' });
+});
+
+test('chrome wskazujacy region terminala jest poprawiany, nie gubiony', () => {
+  const l = normalizeLayout(base({ chrome: { brand: 'main', status: 'main' } }));
+  assert.deepEqual(l.chrome, { brand: 'left', status: 'left' });
+});
+
+test('chrome wskazujacy nieistniejacy region wraca do domyslnego', () => {
+  const l = normalizeLayout(base({ chrome: { brand: 'nope', status: 42 } }));
+  assert.deepEqual(l.chrome, { brand: 'left', status: 'left' });
+});
+
+// ---- normalizeLayout: junk --------------------------------------------------
+
+test('normalizeLayout odrzuca to, co nie jest obiektem', () => {
+  for (const junk of [null, undefined, 'classic', 42, []]) {
+    assert.equal(normalizeLayout(junk), null);
+  }
+});
+
+test('normalizeLayout odrzuca uklad bez id', () => {
+  const raw = base();
+  delete raw.id;
+  assert.equal(normalizeLayout(raw), null);
+});
+
+// ---- the shipped config -----------------------------------------------------
+//
+// A preset that fails validation disappears silently, so the HUD would just come
+// up on a different layout than the one config/layouts.json names. Pin it.
+
+test('config/layouts.json - kazdy preset przechodzi walidacje', () => {
+  const { layouts, activeLayout } = loadLayouts();
+  const ids = layouts.map((l) => l.id);
+  assert.deepEqual(ids, ['classic', 'focus', 'monitor-heavy', 'bottom-dock']);
+  assert.equal(activeLayout, 'classic');
+  assert.notEqual(getLayout(layouts, 'classic'), null);
+});
+
+test('config/layouts.json - zaden preset nie umieszcza autocompact', () => {
+  // autocompact mounts into a slot nested INSIDE the actions template, so it is
+  // not independently placeable - see the WIDGETS comment in renderer.js.
+  for (const l of loadLayouts().layouts) {
+    for (const ids of Object.values(l.slots)) {
+      assert.equal(ids.includes('autocompact'), false, `${l.id} places autocompact`);
+    }
+  }
+});
+
+test('config/layouts.json - klasyczny odtwarza dzisiejszy uklad', () => {
+  const l = getLayout(loadLayouts().layouts, 'classic');
+  assert.equal(l.columns, '260px 1fr 280px');
+  assert.deepEqual(l.slots.main, ['terminal']);
+  assert.deepEqual(l.slots.right, ['context', 'usage', 'skilltracker', 'ports', 'scratchpad']);
+  assert.deepEqual(l.chrome, { brand: 'left', status: 'left' });
+});
+
+// ---- gridAreas --------------------------------------------------------------
+
+test('gridAreas cytuje kazdy wiersz dla CSS', () => {
+  assert.equal(gridAreas(['left main right']), '"left main right"');
+  assert.equal(gridAreas(['main main', 'left right']), '"main main" "left right"');
+});

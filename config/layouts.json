@@ -1,0 +1,74 @@
+{
+  "activeLayout": "classic",
+  "layouts": [
+    {
+      "id": "classic",
+      "label": { "pl": "Klasyczny", "en": "Classic" },
+      "grid": {
+        "columns": "260px 1fr 280px",
+        "rows": "1fr",
+        "areas": ["left main right"]
+      },
+      "chrome": { "brand": "left", "status": "left" },
+      "slots": {
+        "left": ["actions", "appearance", "project", "profile", "cheatsheets", "prompts", "skills"],
+        "main": ["terminal"],
+        "right": ["context", "usage", "skilltracker", "ports", "scratchpad"]
+      }
+    },
+    {
+      "id": "focus",
+      "label": { "pl": "Skupienie", "en": "Focus" },
+      "grid": {
+        "columns": "1fr 250px",
+        "rows": "1fr",
+        "areas": ["main side"]
+      },
+      "chrome": { "brand": "side", "status": "side" },
+      "slots": {
+        "main": ["terminal"],
+        "side": ["actions", "context", "appearance", "project", "profile"]
+      }
+    },
+    {
+      "id": "monitor-heavy",
+      "label": { "pl": "Monitoring", "en": "Monitor heavy" },
+      "grid": {
+        "columns": "210px 1fr 380px",
+        "rows": "1fr",
+        "areas": ["left main right"]
+      },
+      "chrome": { "brand": "left", "status": "left" },
+      "slots": {
+        "left": ["actions", "appearance", "project", "profile"],
+        "main": ["terminal"],
+        "right": [
+          "context",
+          "usage",
+          "skilltracker",
+          "ports",
+          "scratchpad",
+          "cheatsheets",
+          "prompts",
+          "skills"
+        ]
+      }
+    },
+    {
+      "id": "bottom-dock",
+      "label": { "pl": "Dok na dole", "en": "Bottom dock" },
+      "grid": {
+        "columns": "1fr 1fr 1fr",
+        "rows": "1fr 270px",
+        "areas": ["main main main", "dock-a dock-b dock-c"]
+      },
+      "chrome": { "brand": "dock-a", "status": "dock-a" },
+      "slots": {
+        "main": ["terminal"],
+        "dock-a": ["actions", "appearance", "project", "profile"],
+        "dock-b": ["context", "usage", "skilltracker"],
+        "dock-c": ["ports", "scratchpad", "cheatsheets", "prompts", "skills"]
+      }
+    }
+  ]
+}

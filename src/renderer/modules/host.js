@@ -34,6 +34,23 @@ import { getWidget } from './registry.js';
 const mounted = new Map();
 
 /**
+ * Widgets whose placeholder is nested INSIDE another widget's template, keyed by
+ * the widget that owns it.
+ *
+ * `autocompact` lives in [data-slot="autocompact"] inside w-actions, so it has
+ * no place of its own: it cannot be positioned by a layout, and - the reason
+ * this map is here rather than in layout.js - it cannot survive its host being
+ * rebuilt. Anything that takes `actions` down has to take autocompact with it
+ * and put it back afterwards; see remountWidget().
+ */
+export const NESTED = Object.freeze({ autocompact: 'actions' });
+
+/** Mounted widgets nested inside `id`'s subtree. */
+function nestedIn(id) {
+  return Object.keys(NESTED).filter((n) => NESTED[n] === id && mounted.has(n));
+}
+
+/**
  * Builds a widget's root element from its <template>, or an empty section when
  * the widget has none and builds its own DOM.
  */
@@ -132,14 +149,37 @@ export function remountWidget(id) {
   }
   const slot = rec.root.parentNode;
   const before = rec.root.nextElementSibling;
+
+  // A nested widget's DOM lives inside this one's subtree, and mountWidget()
+  // below clones a FRESH template whose nested placeholder is empty. Without
+  // this, remounting `actions` would leave `autocompact` registered as mounted
+  // while its root sits in a detached subtree nothing can reach - the toggle
+  // just disappears, and the widget goes on subscribing from off-screen.
+  const nested = nestedIn(id);
+  for (const n of nested) unmountWidget(n);
+
   unmountWidget(id);
   mountWidget(id, slot, { before });
+  for (const n of nested) mountIntoSlot(n);
   return true;
 }
 
 /** Is this widget on screen right now? */
 export function isMounted(id) {
   return mounted.has(id);
+}
+
+/**
+ * The live root element of a mounted widget, or null.
+ *
+ * C1 needs this because switching layouts MOVES roots between regions instead
+ * of remounting them: a DOM move keeps the subtree - and therefore `terminal`'s
+ * running xterm instances (A2f) - intact, so one code path is safe for every
+ * widget. Nothing else should reach for a widget's DOM from outside.
+ */
+export function widgetRoot(id) {
+  const rec = mounted.get(id);
+  return rec ? rec.root : null;
 }
 
 /** Ids of everything currently mounted, in mount order. */

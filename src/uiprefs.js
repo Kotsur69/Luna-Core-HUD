@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 // Small persistent slice of interface state in config/ui.local.json (gitignored)
 // - like the scratchpad, a plain file rather than localStorage. Holds
-// { theme, lang, boot, profile, hideSystemPorts }. The renderer reads it at startup (ui:get) and
+// { theme, lang, boot, profile, layout, hideSystemPorts }. The renderer reads it at startup (ui:get) and
 // writes on change (ui:set).
 //
 // Validate at the boundary: an unknown language falls back to 'pl'; a missing
@@ -24,11 +24,15 @@ const LANGS = ['pl', 'en'];
 // hideSystemPorts: B5 view toggle. Defaults to ON because the unfiltered list is
 // mostly svchost - and the panel always prints how many rows it folded, so the
 // filter can never hide something without saying so.
+// layout: id of the last chosen layout preset (C1). null = no choice recorded,
+// in which case activeLayout from config/layouts.json decides - same shape as
+// `profile` above.
 const DEFAULTS = {
   theme: 'cyberpunk',
   lang: 'pl',
   boot: true,
   profile: null,
+  layout: null,
   hideSystemPorts: true,
 };
 
@@ -44,6 +48,9 @@ function readUiPrefs() {
       // An unknown profile id is filtered out later by main.js (getProfile);
       // here we only check the type.
       profile: typeof obj.profile === 'string' && obj.profile ? obj.profile : DEFAULTS.profile,
+      // An unknown layout id is filtered out in the renderer (getLayout returns
+      // null -> fall back to activeLayout); here we only check the type.
+      layout: typeof obj.layout === 'string' && obj.layout ? obj.layout : DEFAULTS.layout,
       // Missing key => filtered (prefs file written before this option existed).
       hideSystemPorts:
         typeof obj.hideSystemPorts === 'boolean' ? obj.hideSystemPorts : DEFAULTS.hideSystemPorts,
@@ -55,9 +62,10 @@ function readUiPrefs() {
 
 /**
  * Merges and writes preferences. Accepts a partial
- * { theme?, lang?, boot?, profile?, hideSystemPorts? }.
+ * { theme?, lang?, boot?, profile?, layout?, hideSystemPorts? }.
  * @returns {{theme:string,lang:string,boot:boolean,profile:string|null,
- *   hideSystemPorts:boolean}|null} the new state, or null if the write failed
+ *   layout:string|null,hideSystemPorts:boolean}|null} the new state, or null if
+ *   the write failed
  */
 function writeUiPrefs(partial) {
   try {
@@ -67,6 +75,9 @@ function writeUiPrefs(partial) {
     if (partial && typeof partial.boot === 'boolean') next.boot = partial.boot;
     if (partial && typeof partial.profile === 'string' && partial.profile) {
       next.profile = partial.profile;
+    }
+    if (partial && typeof partial.layout === 'string' && partial.layout) {
+      next.layout = partial.layout;
     }
     if (partial && typeof partial.hideSystemPorts === 'boolean') {
       next.hideSystemPorts = partial.hideSystemPorts;

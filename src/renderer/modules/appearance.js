@@ -21,6 +21,8 @@ import { emitLangChange } from './bus.js';
 import { applyTerminalTheme } from './terminals.js';
 import { defineWidget } from './registry.js';
 import { mountBoot, startBoot } from './boot.js';
+import { getLayouts, getActiveLayoutId, selectLayout } from './layout.js';
+import { loc } from './util.js';
 
 let themesById = new Map();
 let activeThemeId = null;
@@ -64,6 +66,28 @@ function renderThemeSwitcher() {
   els.themeSwitcher.value = activeThemeId;
 }
 
+/**
+ * Rebuilds the layout select from layout.js's state (C1).
+ *
+ * No local mirror of the active id: unlike the theme, a layout can also change
+ * from the console (__luna.layout) or be corrected at startup when the
+ * remembered preset no longer exists, so the single source of truth is
+ * getActiveLayoutId(). Labels are localized, hence the repaint on langChange.
+ */
+function renderLayoutSwitcher() {
+  if (!els) return;
+  const layouts = getLayouts();
+  els.layoutSwitcher.innerHTML = '';
+  for (const l of layouts) {
+    const opt = document.createElement('option');
+    opt.value = l.id;
+    opt.textContent = loc(l.label);
+    els.layoutSwitcher.appendChild(opt);
+  }
+  const active = getActiveLayoutId();
+  if (active) els.layoutSwitcher.value = active;
+}
+
 export async function initAppearance() {
   let prefs = { theme: 'cyberpunk', lang: 'pl', boot: true };
   try {
@@ -75,6 +99,9 @@ export async function initAppearance() {
   // Language first, so applyStatic catches the whole DOM on startup.
   applyLang(prefs.lang);
   renderLangSwitcher();
+  // The widget already mounted (initLayout runs first), so its layout options
+  // were built in the authored language - relabel them now that we know better.
+  renderLayoutSwitcher();
 
   // Themes: fill the list and apply the active one (or the first available).
   try {
@@ -104,6 +131,7 @@ defineWidget({
   mount(root) {
     els = {
       themeSwitcher: root.querySelector('#theme-switcher'),
+      layoutSwitcher: root.querySelector('#layout-switcher'),
       langSwitcher: root.querySelector('#lang-switcher'),
     };
 
@@ -111,6 +139,7 @@ defineWidget({
     // a remount must not fall back to the template's authored defaults.
     renderLangSwitcher();
     renderThemeSwitcher();
+    renderLayoutSwitcher();
 
     els.themeSwitcher.addEventListener('change', () => {
       activeThemeId = els.themeSwitcher.value;
@@ -118,9 +147,22 @@ defineWidget({
       window.lunacore.setUiPrefs({ theme: activeThemeId });
     });
 
+    // C1. Two things to know about this one handler:
+    //   * selectLayout() MOVES this very widget's root into the new region while
+    //     this listener is on the stack. That is safe precisely because it is a
+    //     DOM move, not a remount - the element, its listeners and `els` all
+    //     survive (see modules/layout.js).
+    //   * on a preset this widget is not part of we could never come back, which
+    //     is why src/layouts.js rejects any layout that fails to place it.
+    els.layoutSwitcher.addEventListener('change', () => {
+      if (!selectLayout(els.layoutSwitcher.value)) renderLayoutSwitcher();
+    });
+
     els.langSwitcher.addEventListener('change', () => {
       applyLang(els.langSwitcher.value);
       window.lunacore.setUiPrefs({ lang: els.langSwitcher.value });
+      // Layout labels are localized, unlike the theme labels above.
+      renderLayoutSwitcher();
     });
 
     const offBoot = mountBoot(root);

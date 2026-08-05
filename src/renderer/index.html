@@ -11,101 +11,31 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="app">
+  <!-- ================= HUD =================
+       C1: pusty z premedytacja. Regiony (kolumny/wiersze siatki) i przydzial
+       widgetow buduje modules/layout.js z presetu w config/layouts.json -
+       `grid-template-*` laduje tu jako styl inline. Zadnego panelu ani slotu
+       nie ma juz na sztywno w markupie. -->
+  <div class="app"></div>
 
-    <!-- ================= LEWY PANEL: Kontrola i Akcje ================= -->
-    <aside class="panel panel--left">
-      <div class="brand">
-        <span class="brand__glyph">☾</span>
-        <span class="brand__name">Luna<span class="brand__core">Core</span></span>
-      </div>
+  <!-- ================= Chrome HUD (parking) =================
+       Znak firmowy i linia statusu PTY NIE sa widgetami: ptystatus.js chwyta
+       #pty-status-dot w czasie importu modulu, wiec nie moga siedziec w
+       <template> (jego tresc nie jest czescia dokumentu). Zyja wiec tutaj, a
+       layout.js PRZENOSI te dwa wezly do regionu wskazanego przez preset
+       (layout.chrome) i odklada je z powrotem tutaj na czas przebudowy.
+       Kontener jest `hidden`, wiec dopoki nie zostana przeniesione - nie widac
+       ich; po przeniesieniu dziedzicza widocznosc regionu. -->
+  <div id="app-chrome" hidden>
+    <div class="brand">
+      <span class="brand__glyph">☾</span>
+      <span class="brand__name">Luna<span class="brand__core">Core</span></span>
+    </div>
 
-      <!-- Przewijalny srodek: brand i status PTY zostaja przypiete. -->
-      <div class="panel__scroll">
-
-      <!-- A2: "Akcje" (fizyczny COMPACT + zagniezdzony autocompact) jest
-           widgetem - markup siedzi w <template id="w-actions"> na koncu
-           <body>. `actions` musi montowac sie PRZED `autocompact` (patrz
-           WIDGETS w renderer.js), bo autocompact laduje w slocie zagniezdzonym
-           w tym szablonie. -->
-      <div class="widget-slot" data-slot="actions"></div>
-
-      <!-- A2: "Wyglad" (motyw / jezyk / sekwencja startowa) jest widgetem -
-           markup siedzi w <template id="w-appearance"> na koncu <body>.
-           boot-field ma ten sam ksztalt <label>-jako-korzen co autocompact
-           (A2c), ale tutaj jest jednym z trzech pol sekcji, nie calym
-           korzeniem - jego toggle montuje boot.js (mountBoot). -->
-      <div class="widget-slot" data-slot="appearance"></div>
-
-      <!-- A2: "Projekt" jest widgetem - markup siedzi w
-           <template id="w-project"> na koncu <body>. -->
-      <div class="widget-slot" data-slot="project"></div>
-
-      <!-- A2: "Profil" jest widgetem - markup siedzi w
-           <template id="w-profile"> na koncu <body>. -->
-      <div class="widget-slot" data-slot="profile"></div>
-
-      <!-- A2: trzy budowniczowie list z lewego panelu. Ich markup siedzi w
-           <template id="w-cheatsheets|w-prompts|w-skills"> na koncu <body>.
-           Sloty sa `display: contents`, wiec kolejnosc i odstepy sekcji zostaja
-           dokladnie takie, jakie byly. -->
-      <div class="widget-slot" data-slot="cheatsheets"></div>
-
-      <div class="widget-slot" data-slot="prompts"></div>
-
-      <div class="widget-slot" data-slot="skills"></div>
-
-      </div><!-- /panel__scroll -->
-
-      <div class="status-line">
-        <span id="pty-status-dot" class="dot dot--live"></span>
-        <span id="pty-status-text" data-i18n="ptystatus.connecting">PTY: laczenie...</span>
-      </div>
-    </aside>
-
-    <!-- ================= CENTRUM: Terminal ================= -->
-    <!-- A2f: converted to the widget contract, but UNLIKE every other widget it
-         must never remount (registry.js: remountable: false) - its children are
-         live xterm instances wired to real PTY processes, and a fresh template
-         clone would orphan them from the DOM. Its markup lives in
-         <template id="w-terminal"> at the end of <body>; four modules share it
-         (terminals.js, led.js, sessions.js, palette.js) - see modules/terminal.js. -->
-    <div class="widget-slot" data-slot="terminal"></div>
-
-    <!-- ================= PRAWY PANEL: Monitor Statusu ================= -->
-    <aside class="panel panel--right">
-      <!-- Przewijalny kontener: na malych ekranach sekcje (zwlaszcza brudnopis
-           na dole) nie miescily sie i byly przycinane. Ten sam wzorzec co lewy
-           panel - sekcje biora naturalna wysokosc i przewijaja sie razem. -->
-      <div class="panel__scroll">
-      <!-- A2: converted to the widget contract. Its markup lives in
-           <template id="w-context"> at the end of <body>. Two modules share
-           that one block: context.js (bar, badge, cost, copy-path) and
-           spark.js (sparkline, burn rate) - see mountSpark(). -->
-      <div class="widget-slot" data-slot="context"></div>
-
-      <!-- A2: converted to the widget contract. Its markup lives in
-           <template id="w-usage"> at the end of <body>. -->
-      <div class="widget-slot" data-slot="usage"></div>
-
-      <!-- A2: converted to the widget contract. Its markup lives in
-           <template id="w-skilltracker"> at the end of <body>. -->
-      <div class="widget-slot" data-slot="skilltracker"></div>
-
-      <!-- A2: first block converted to the widget contract. Its markup lives in
-           <template id="w-ports"> at the end of <body>; the host clones it in
-           here. The placeholder is `display: contents`, so it adds nothing to
-           the panel's layout. -->
-      <div class="widget-slot" data-slot="ports"></div>
-
-      <!-- A2: second block converted to the widget contract. Its markup lives in
-           <template id="w-scratchpad"> at the end of <body>; the host clones it
-           in here. The placeholder is `display: contents`, so it adds nothing to
-           the panel's layout. -->
-      <div class="widget-slot" data-slot="scratchpad"></div>
-      </div><!-- /panel__scroll -->
-    </aside>
-
+    <div class="status-line">
+      <span id="pty-status-dot" class="dot dot--live"></span>
+      <span id="pty-status-text" data-i18n="ptystatus.connecting">PTY: laczenie...</span>
+    </div>
   </div>
 
   <!-- ================= Sekwencja startowa (boot) =================
@@ -310,6 +240,13 @@
       <label class="ui-field">
         <span class="ui-field__label" data-i18n="appearance.theme">Motyw</span>
         <select id="theme-switcher" class="profile-select"></select>
+      </label>
+      <!-- C1: preset ukladu HUD. Opcje wypelnia appearance.js z
+           config/layouts.json; zmiana PRZENOSI widgety miedzy regionami, nie
+           montuje ich od nowa (modules/layout.js). -->
+      <label class="ui-field">
+        <span class="ui-field__label" data-i18n="appearance.layout">Uklad</span>
+        <select id="layout-switcher" class="profile-select"></select>
       </label>
       <!-- Jezyk UI: PL/EN, przelaczenie na zywo (i18n.js). -->
       <label class="ui-field">
