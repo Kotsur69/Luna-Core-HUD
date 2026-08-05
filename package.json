@@ -1,13 +1,15 @@
 {
   "name": "lunacore",
   "version": "0.1.0",
-  "description": "LunaCore - wizualna nakladka (dashboard) na Claude Code CLI. Passive Observer + Action Injector, zero dodatkowych tokenow.",
+  "description": "Visual GUI dashboard for the Claude Code CLI. Passive Observer + Action Injector, zero extra tokens.",
   "main": "src/main.js",
   "author": "Mateusz Mazur",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "test": "node --test"
+    "test": "node --test",
+    "dist": "electron-builder --win",
+    "pack": "electron-builder --win --dir"
   },
   "dependencies": {
     "@lydell/node-pty": "1.2.0-beta.12",
@@ -15,9 +17,56 @@
     "@xterm/xterm": "^5.5.0"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^26.15.3"
   },
   "allowScripts": {
     "electron@33.4.11": true
+  },
+  "build": {
+    "appId": "com.mateuszmazur.lunacore",
+    "productName": "LunaCore",
+    "copyright": "Copyright (c) 2026 Mateusz Mazur",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "src/**/*",
+      "config/**/*",
+      "assets/**/*",
+      "package.json",
+      "LICENSE",
+      "!config/*.local.json",
+      "!config/*.local.md",
+      "!**/*.map"
+    ],
+    "asarUnpack": [
+      "**/node_modules/@lydell/node-pty/**"
+    ],
+    "win": {
+      "icon": "assets/icon-yellow.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LunaCore"
+    },
+    "portable": {
+      "artifactName": "LunaCore-${version}-portable.exe"
+    }
   }
 }

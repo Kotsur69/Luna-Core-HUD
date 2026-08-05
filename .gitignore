@@ -16,17 +16,12 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Lokalne profile / sekrety (Faza 4)
-config/profiles.local.json
-# Lokalne nadpisania listy projektow (katalogi robocze, prywatne)
-config/projects.local.json
-# Lokalne nadpisania sciagawek i promptow (prywatne, nie do repo)
-config/cheatsheets.local.json
-config/prompts.local.json
-# Brudnopis - prywatne notatki sesji
-config/scratchpad.local.md
-# Preferencje UI (motyw + jezyk) - lokalny stan
-config/ui.local.json
-# Lokalne nadpisania motywow (prywatne)
-config/themes.local.json
+# Stan i nadpisania per-maszyna. WZORZEC, nie lista - wersja wyliczana gubila
+# layouts.local.json i rates.local.json (C1/B4 dolozyly je i nikt nie dopisal
+# ich tutaj), wiec prywatny override mogl trafic do repo. Konwencja jest jedna:
+# *.local.* w config/ nigdy nie idzie do gita.
+#   profiles (sekrety/klucze), projects, cheatsheets, prompts, themes, layouts,
+#   rates, ui (motyw/jezyk/uklad), scratchpad (prywatne notatki)
+config/*.local.json
+config/*.local.md
 .env

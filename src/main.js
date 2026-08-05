@@ -302,10 +302,25 @@ async function runWidgetProbe(win) {
     });
   })()`;
 
+  // Also written to a FILE, not just stdout. A packaged Windows app is a GUI
+  // subsystem binary: it never attaches to the parent console, so console.log
+  // vanishes and the probe appears to pass silently - which is the one thing a
+  // probe must never do. D2 needs this exact check to work on the built .exe,
+  // because that is where packaging faults live and no test can reach them.
+  const outFile = path.join(app.getPath('userData'), 'luna-probe.json');
+  let payload;
   try {
-    console.log('[luna-probe]', await win.webContents.executeJavaScript(script, true));
+    payload = await win.webContents.executeJavaScript(script, true);
+    console.log('[luna-probe]', payload);
   } catch (err) {
+    payload = JSON.stringify({ error: String((err && err.message) || err) });
     console.error('[luna-probe] FAILED', err);
+  }
+  try {
+    fs.writeFileSync(outFile, payload, 'utf8');
+    console.log('[luna-probe] wrote', outFile);
+  } catch {
+    /* stdout already carried it in the unpackaged case */
   }
   app.quit();
 }
