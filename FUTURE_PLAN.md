@@ -1,6 +1,6 @@
 # LunaCore — Future Plan (Visual Templates, Layout & Ideas)
 
-## START HERE — where things stand (2026-08-03)
+## START HERE — where things stand (2026-08-05)
 
 Everything below this box is either **live plan** (§8) or **history**. Read this
 box, then §8's Phase A table, then jump to §A2a–§A2f for the widget contract and
@@ -8,9 +8,10 @@ the six lessons the conversions have cost so far.
 
 | | State |
 |---|---|
-| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces, **208 tests** |
-| **In flight** | Nothing. |
-| **Next action** | **C2** — collapsible + resizable panels. It was deliberately sequenced after C3 so its collapse/splitter animation reads `--dur-*`/`--ease-*`/`--stagger` instead of hardcoding them; that vocabulary now exists. **Not yet hand-checked by Mati:** C3 has never been looked at with human eyes — the probe cannot see a pixel. Nine themes × four layouts is the sweep; `amber-crt`, `paper` and `void` are brand new and `matrix` changed shape completely. |
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D1 (config relocation) DONE**, **216 tests** |
+| **In flight** | **Phase D — make it a product.** D0 (packaging pre-flight audit) and D1 (config relocation) are done; **D2 (electron-builder) is the next build step.** |
+| **Next action** | **D2 — electron-builder.** `build` block with `asarUnpack` for `@lydell/node-pty` (a native module; packed into asar it will not load and the terminal never spawns), a `files` allowlist that includes `assets/` and `config/`, an app icon, then NSIS **and** portable targets. **Verification means installing the built artifact and running it** — `npm test` cannot see a single packaging failure. |
+| **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
 Two facts that decide most design questions here, both learned the hard way:
@@ -28,7 +29,7 @@ Two facts that decide most design questions here, both learned the hard way:
 Verification commands, in the order they earn their keep:
 
 ```bash
-npm test                          # 208 tests, ~1.5 s, no extra deps
+npm test                          # 216 tests, ~1 s, no extra deps
 npx electron . --luna-probe       # remounts every widget 3×, then cycles every
                                   # layout preset 2× and returns; prints bus counts
 npx electron . --enable-logging   # renderer console → stdout (smoke test, no DevTools)
@@ -527,8 +528,13 @@ beyond read-only.
 - **electron-builder** (the old "Phase 5"): produce a real Windows installer
   (`.exe` / NSIS) + portable build, with the LunaCore icon. Then optionally
   auto-update via GitHub releases (repo is already `Kotsur69/Luna-Core-HUD`).
-- **First-run config bootstrap.** On first launch, copy shipped `config/*.json`
-  defaults into a user config dir so updates don't clobber local edits.
+- ~~**First-run config bootstrap.** On first launch, copy shipped `config/*.json`
+  defaults into a user config dir so updates don't clobber local edits.~~
+  **SUPERSEDED 2026-08-05 (D1) — and the original advice here was wrong.** Copying
+  defaults into the user directory would *shadow* them, so an update could never
+  deliver a new theme or a corrected rate table. Base and local are already
+  separated by filename (`themes.json` ships, `themes.local.json` is yours), so
+  the user directory holds **overrides only**. See §D1a.
 
 ---
 
@@ -998,9 +1004,9 @@ The original "move the elements around" ask. Only sane **after** A2.
 | # | Item | Ref | State |
 |---|------|-----|-------|
 | C1 | **Layout presets** as data | §3.1 | ✅ **DONE 2026-08-05** — 4 presets, live switching, 24 tests. See §C1a. |
-| C2 | **Collapsible + resizable panels** | §3.2 | ⬜ chevron collapse, two drag splitters, no library. |
+| C2 | **Collapsible + resizable panels** | §3.2 | ⏸ **DEFERRED 2026-08-05 by decision** — chevron collapse, two drag splitters, no library. Not blocked and nothing depends on it; Phase D took priority. When it lands it persists panel sizes into `ui.local.json`, which rides along on the existing merge — no ordering trap with D1. |
 | C3 | **Theme vocabulary + motion tokens** | §2.3, §C1b | ✅ **DONE 2026-08-05** — 17 → 45 tokens, 5 → 9 themes, 2 bundled faces, layout-switch stagger, 16 tests. See §C1d. |
-| C4 | **Drag-and-drop rearrange** | §3.3 | ⬜ stretch. Evaluate a dep honestly before pulling one in. |
+| C4 | **Drag-and-drop rearrange** | §3.3 | ⏸ **DEFERRED 2026-08-05 by decision** — stretch. Evaluate a dep honestly before pulling one in. |
 
 #### C1a — layout presets: the design, and the one rule that makes it safe
 
@@ -1225,9 +1231,116 @@ the CSS side (`--dur-*`, `--ease-bounce`) is ready for whoever builds it.
 
 ### Phase D — Make it a product (§7)
 
-1. **electron-builder** → real NSIS installer + portable `.exe`, LunaCore icon.
-2. **First-run config bootstrap** → copy shipped `config/*.json` into a user config dir so updates never clobber local edits. **Do this before the first release, not after** — retrofitting it once people have local edits is painful.
-3. Optional auto-update via GitHub releases (repo is already `Kotsur69/Luna-Core-HUD`).
+**Promoted to the live plan 2026-08-05.** Target agreed with Mati: a **public
+GitHub release**, shipping **both** an NSIS installer and a portable `.exe`,
+**Windows now** while keeping Linux/macOS possible.
+
+| # | Item | State |
+|---|------|-------|
+| D0 | **Packaging pre-flight audit** | ✅ **DONE 2026-08-05.** Findings below. |
+| D1 | **Config relocation** (bundled defaults vs writable user dir) | ✅ **DONE 2026-08-05** — `src/paths.js`, 9 modules converted, 208 → 216 tests. See §D1a. |
+| D2 | **electron-builder** | ⬜ **NEXT.** `asarUnpack` for node-pty, `files` allowlist with `assets/` + `config/`, icon, NSIS + portable. |
+| D3 | **Degrade honestly** | ⬜ missing `claude`, corrupt config, absent credentials file. Also: **default language must become `en`** (see below). |
+| D4 | **Release hygiene** | ⬜ README download section + the read-only disclosure, version bump, CSP. |
+| D5 | **Auto-update** | ⬜ optional, GitHub releases (repo is already `Kotsur69/Luna-Core-HUD`). |
+
+#### D0 — what the pre-flight audit found
+
+Read-only sweep of every filesystem path for "does this survive being inside an
+asar". Four results, two of them corrections to assumptions in this very file:
+
+- **The write surface is 2 files, not 10.** Only `uiprefs.js` and `scratchpad.js`
+  ever write. The other eight config modules are read-only, and reading from
+  inside an asar works fine — so their `*.local.json` resolving into the bundle
+  merely means *no override applies*, and a packaged app still works correctly on
+  shipped defaults. That is what let D1 split into a blocking half and a
+  feature half.
+- **`withClaudeOnPath()` (`main.js:327`) already handles an un-PATHed install**,
+  and if `claude` is genuinely absent the PTY still spawns a working shell with a
+  `command not found`. So D3 is "make that legible to a newcomer", **not** "rescue
+  a dead app" — the earlier guess that it would be a dead black terminal was wrong.
+- **Confirmed read-only**, matching the standing constraint: `usage.js:27`
+  (`~/.claude/.credentials.json`, a single `readFileSync`), `observer.js:85`
+  (`~/.claude/projects`), `skills.js:24` (`~/.claude/skills`, `~/.claude/plugins`).
+- **`contextIsolation: true` / `nodeIntegration: false` are already correct**
+  (`main.js:179`). Missing: a Content-Security-Policy — that is the warning
+  `--enable-logging` prints. Folded into D4.
+
+**Four things outside Phase D that a *public* release needs.** One is a trap:
+
+1. **The app defaults to Polish** (`uiprefs.js` `DEFAULTS.lang: 'pl'`). Every
+   stranger who downloads it gets a Polish UI on first launch. One line, large
+   consequence, and invisible to us — Mati's own `ui.local.json` already records
+   a choice, so it can never be reproduced on this machine. → D3.
+2. **README needs a download section and a plain disclosure** of what the app
+   reads. An app that reads a credentials file *without saying so* reads as
+   malware on a public repo. → D4.
+3. **No CSP.** → D4.
+4. **Polish comments in `main.js`/`theme.js`/`scratchpad.js`/`cheatsheets.js`,
+   and a Polish `package.json` description.** Only the description is
+   user-visible (it lands in installer metadata). The rest is polish, not a
+   blocker.
+
+**Cannot be solved, only documented:** an unsigned Windows binary triggers
+SmartScreen. A code-signing certificate is a few hundred a year. The README
+should make the warning expected rather than alarming.
+
+#### D1a — config relocation: the two roots, and what §7 got wrong
+
+Shipped as `4fe6d87` (writers) + `f79d506` (readers). `src/paths.js` owns:
+
+```
+bundled(name) -> shipped defaults, read-only, fine inside app.asar
+local(name)   -> per-machine overrides and state, MUST be writable
+```
+
+**The bug this fixes.** Ten modules resolved `CONFIG_DIR` as
+`__dirname/../config`. Inside `app.asar` that path is readable but **not
+writable**, so every `*.local.json` write would have failed silently in a built
+app — theme, language, layout, active profile, port filter and scratchpad all
+forgotten on restart. The app would have looked completely fine.
+
+**In a dev clone nothing changes.** Unpackaged, both roots are the repo's own
+`config/`, so `npm start` and `npm test` behave exactly as before and there is
+nothing to migrate for anyone running from source. Only `app.isPackaged` sends
+the writable root elsewhere: `PORTABLE_EXECUTABLE_DIR` next to the `.exe` for the
+portable target, else `app.getPath('userData')/config`. Gating on `isPackaged`
+also means a stray env var in a dev shell cannot redirect config out from under
+you.
+
+**§7's "copy shipped `config/*.json` into a user config dir on first run" was
+wrong, and this is the interesting part.** It solves a problem this codebase does
+not have: the two concerns are already separated **by filename** — `themes.json`
+ships, `themes.local.json` is yours, and every loader merges base then local.
+Copying defaults across would *shadow* them, so an update could never deliver a
+new theme or a corrected rate table. **The user directory holds overrides only**,
+and a missing override file was already a no-op everywhere
+(`readJson` → `null` → `collect()` returns early). The right fix was smaller than
+the planned one, not bigger.
+
+Three implementation notes worth keeping:
+
+- **`resolveUserDir()` is pure** — every environment (dev / portable / installed /
+  degraded) is a plain input object, so `node --test` covers all four branches
+  with no Electron and no new deps. Same A3 convention that made `etaMinutes()`
+  testable.
+- **It caught a bug during the write.** `userDir()` memoized unconditionally,
+  which would have pinned the whole session to the fallback directory if the
+  first call landed before `app.whenReady()`. The degraded branch is no longer
+  cached; two tests cover it.
+- **The override path is a function, not a const.** These modules are required at
+  the top of `main.js`, *before* `app.whenReady()`, so a path captured at import
+  time could bake in the wrong directory even where `userDir()` would later
+  resolve correctly. Costs one pair of parens per call site.
+- **`projects.js` is the only file that keeps `require('path')`** — `expandHome()`
+  still needs `path.join`/`path.normalize`. `paths` vs `path` in one file is a
+  genuine reading trap, so there is a comment there saying so.
+
+**The probe earned its keep again.** `cheatsheets.js` and `prompts.js` have **no
+test file**, so `--luna-probe` is the only thing that loads them; a missing
+`require` would have been invisible to all 216 tests. It reports
+`rows: {cheatsheets: 1, prompts: 1}` plus all 9 themes and all 4 presets, which is
+what makes the conversion verified rather than merely green.
 
 ### What is deliberately *not* scheduled
 
