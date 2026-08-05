@@ -13,10 +13,14 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
+const paths = require('./paths');
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const FILE = path.join(CONFIG_DIR, 'ui.local.json');
+// Per-machine state, so it lives in the WRITABLE root - which in a dev clone is
+// still the repo's config/, and in a packaged build is %APPDATA%/LunaCore/config
+// (or the portable folder next to the .exe). Resolved on each call rather than
+// captured at import time: this module is required before app.whenReady(), and
+// app.getPath('userData') is not dependable that early.
+const file = () => paths.local('ui.local.json');
 
 const LANGS = ['pl', 'en'];
 // profile: id of the last used launch profile (B1). null = no choice recorded,
@@ -39,7 +43,7 @@ const DEFAULTS = {
 /** Reads UI preferences; a missing or corrupt file falls back to DEFAULTS. */
 function readUiPrefs() {
   try {
-    const obj = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    const obj = JSON.parse(fs.readFileSync(file(), 'utf8'));
     return {
       theme: typeof obj.theme === 'string' && obj.theme ? obj.theme : DEFAULTS.theme,
       lang: LANGS.includes(obj.lang) ? obj.lang : DEFAULTS.lang,
@@ -82,8 +86,8 @@ function writeUiPrefs(partial) {
     if (partial && typeof partial.hideSystemPorts === 'boolean') {
       next.hideSystemPorts = partial.hideSystemPorts;
     }
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(next, null, 2) + '\n', 'utf8');
+    paths.ensureUserDir();
+    fs.writeFileSync(file(), JSON.stringify(next, null, 2) + '\n', 'utf8');
     return next;
   } catch {
     return null;

@@ -11,10 +11,13 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
+const paths = require('./paths');
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const FILE = path.join(CONFIG_DIR, 'scratchpad.local.md');
+// Prywatne notatki = stan per-maszyna, wiec plik lezy w KATALOGU ZAPISYWALNYM:
+// w klonie dev to nadal repo config/, w wersji spakowanej %APPDATA%/LunaCore/
+// config (albo folder obok .exe w wersji portable). Sciezka liczona przy kazdym
+// wywolaniu, bo modul jest wymagany przed app.whenReady().
+const file = () => paths.local('scratchpad.local.md');
 
 // Gorna granica zapisu: brudnopis to notatnik, nie magazyn plikow.
 // Chroni przed przypadkowym wklejeniem kilkunastu MB do panelu.
@@ -23,7 +26,7 @@ const MAX_BYTES = 256 * 1024;
 /** Zwraca tresc brudnopisu; pusty string, gdy pliku jeszcze nie ma. */
 function readScratchpad() {
   try {
-    return fs.readFileSync(FILE, 'utf8');
+    return fs.readFileSync(file(), 'utf8');
   } catch {
     return '';
   }
@@ -38,8 +41,8 @@ function writeScratchpad(text) {
   if (typeof text !== 'string') return false;
   if (Buffer.byteLength(text, 'utf8') > MAX_BYTES) return false;
   try {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(FILE, text, 'utf8');
+    paths.ensureUserDir();
+    fs.writeFileSync(file(), text, 'utf8');
     return true;
   } catch {
     return false;
