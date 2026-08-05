@@ -8,9 +8,9 @@ the six lessons the conversions have cost so far.
 
 | | State |
 |---|---|
-| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), and **C1 (layout presets) DONE** — 4 presets, switchable live, **192 tests** |
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces, **208 tests** |
 | **In flight** | Nothing. |
-| **Next action** | **C3** (§C1b/§C1c) — the theme token vocabulary + the CSS-only motion system. That is what actually makes the themes stop looking like hue swaps, and C2's collapse/splitter animation should read from those tokens rather than hardcode, so C3 goes **before** C2. |
+| **Next action** | **C2** — collapsible + resizable panels. It was deliberately sequenced after C3 so its collapse/splitter animation reads `--dur-*`/`--ease-*`/`--stagger` instead of hardcoding them; that vocabulary now exists. **Not yet hand-checked by Mati:** C3 has never been looked at with human eyes — the probe cannot see a pixel. Nine themes × four layouts is the sweep; `amber-crt`, `paper` and `void` are brand new and `matrix` changed shape completely. |
 | **Branch** | `main` |
 
 Two facts that decide most design questions here, both learned the hard way:
@@ -28,7 +28,7 @@ Two facts that decide most design questions here, both learned the hard way:
 Verification commands, in the order they earn their keep:
 
 ```bash
-npm test                          # 192 tests, ~1.5 s, no extra deps
+npm test                          # 208 tests, ~1.5 s, no extra deps
 npx electron . --luna-probe       # remounts every widget 3×, then cycles every
                                   # layout preset 2× and returns; prints bus counts
 npx electron . --enable-logging   # renderer console → stdout (smoke test, no DevTools)
@@ -999,7 +999,7 @@ The original "move the elements around" ask. Only sane **after** A2.
 |---|------|-----|-------|
 | C1 | **Layout presets** as data | §3.1 | ✅ **DONE 2026-08-05** — 4 presets, live switching, 24 tests. See §C1a. |
 | C2 | **Collapsible + resizable panels** | §3.2 | ⬜ chevron collapse, two drag splitters, no library. |
-| C3 | **Theme vocabulary + motion tokens** | §2.3, §C1b | ⬜ **The "matrix is just a green filter" fix.** Do the tokens BEFORE C2 — collapse/splitter animation should read from them, not hardcode. |
+| C3 | **Theme vocabulary + motion tokens** | §2.3, §C1b | ✅ **DONE 2026-08-05** — 17 → 45 tokens, 5 → 9 themes, 2 bundled faces, layout-switch stagger, 16 tests. See §C1d. |
 | C4 | **Drag-and-drop rearrange** | §3.3 | ⬜ stretch. Evaluate a dep honestly before pulling one in. |
 
 #### C1a — layout presets: the design, and the one rule that makes it safe
@@ -1151,6 +1151,77 @@ land near C1), **tab switch** (crossfade + slide for spatial continuity),
 **context-bar threshold crossings** (60%/85% are colour-only today; a single
 pulse makes them felt), **panel collapse** (C2), and **widget mount** (the
 stagger, reused).
+
+#### C1d — C3 as built (2026-08-05)
+
+**The vocabulary went 17 tokens → 45**, and the shape of the work was exactly as
+§C1b predicted: additive. `applyThemeVars()` already did `setProperty()` for any
+`--*` key, so nothing in the theme *pipeline* needed rewriting — the tokens had
+to be declared in `:root` and then actually consumed by `styles.css`, which was
+~60 hardcoded values (9 font stacks, 24 radii, 18 borders, 30 durations).
+
+**Four things worth knowing:**
+
+1. **The texture layer lives on `body::after`, not `.app::before`.** An
+   `::before` on a grid container is laid out **as a grid item** and would eat a
+   cell of whatever layout preset is active. It sits at `z-index: 50` — above the
+   HUD, below the palette (100) and boot (200), because the palette is a surface
+   you read and type on, and boot already runs its own CRT sweep.
+
+2. **Themes now `extend` each other.** With 45 tokens, every variant of a look
+   would otherwise restate all of them and drift apart on first edit.
+   `amber-crt` declares 20 tokens and resolves to 39 by extending `matrix` —
+   same CRT *form*, entirely different colour. A missing parent or a cycle costs
+   the theme its inheritance, not its existence.
+
+3. **`KNOWN_TOKENS` in `theme.js` is guarded against drift by a test that parses
+   the `:root` block out of `styles.css`.** That is what makes duplicating the
+   list safe. It caught its first real drift within a minute of being written
+   (`--stagger` declared in CSS, missing from the list).
+
+4. **Reduced motion is handled once, at the token layer**: the media query zeroes
+   `--dur-*` and `--stagger`, so every transition in the HUD collapses to an
+   instant jump to its end state. `--stagger` **must** go to zero with them — a
+   delay on a zero-length animation with `backwards` fill does not shorten
+   anything, it just holds each region invisible until its turn.
+
+**Two pre-existing bugs the work surfaced**, neither introduced by C3:
+
+- **Stale theme tokens.** `applyThemeVars()` only ever *set* tokens. That was
+  invisible while all five themes carried the same 17 keys and overwrote each
+  other; with themes that deliberately set only what they care about,
+  `matrix` (`--radius: 0`) → `light` (silent on radius) left every corner square
+  and the bug looked like it belonged to `light`. Now the outgoing theme's keys
+  are `removeProperty`'d, falling back to `:root` rather than to a second copy of
+  the defaults kept in JS.
+- **`applyTerminalTheme()` threw on every theme switch with a live session.**
+  `term.options = { ...term.options, theme }` carries `cols`/`rows` along in the
+  spread, and xterm throws `Option "cols" can only be set in the constructor`.
+  Fixed by assigning the `theme` sub-option alone.
+
+**How the second one was found is the point:** the probe's first theme pass
+reported `"themes": []` and a clean sweep. That was a **false pass** —
+`initAppearance()` is async and not awaited, so `__luna` existed while the theme
+map was still empty. The probe now waits for it and errors out rather than
+reporting success over an empty list. A probe that cannot fail is worse than no
+probe.
+
+**Verification:** 192 → **208 tests**. Probe clean: 9 themes cycled with
+`themeTokensLeaked: []` / `themeTokensLost: []`, bus subscriber counts identical
+at all three checkpoints, every `rows` marker at 1, all four presets cycled twice
+and returned.
+
+- [ ] **Not hand-checked by Mati yet — the probe cannot see a pixel.** Sweep is
+      nine themes × four layouts. Specifically: is the scanline texture on
+      `matrix`/`amber-crt` readable over the terminal or does it fight xterm; do
+      `paper` and `void` have enough contrast on the dim text; does the
+      layout-switch stagger feel right or is 45 ms too slow at four regions.
+
+**Deliberately not built:** the tab-switch crossfade and the context-bar
+threshold pulse from §C1c. Tabs are `display: none` panes, so a crossfade needs
+JS to hold the outgoing pane alive — and xterm must not be animated while it
+measures. The threshold pulse needs a JS edge-detector for the 60%/85% crossings;
+the CSS side (`--dur-*`, `--ease-bounce`) is ready for whoever builds it.
 
 ### Phase D — Make it a product (§7)
 

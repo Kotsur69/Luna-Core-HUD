@@ -30,11 +30,35 @@ let activeThemeId = null;
 // Elements of the current mount, or null when this widget is not on screen.
 let els = null;
 
-/** Puts a theme's tokens on :root and its palette on the terminals. */
+// Tokens the previous theme wrote onto documentElement. See applyThemeVars().
+let appliedTokens = [];
+
+/**
+ * Puts a theme's tokens on :root and its palette on the terminals.
+ *
+ * Tokens the OUTGOING theme set and the incoming one does not are removed, not
+ * left in place. This matters much more since C3: when every theme carried the
+ * same 17 colour tokens they all overwrote each other and nothing could go
+ * stale, but the vocabulary is ~45 now and themes deliberately set only what
+ * they care about. Without this, switching `matrix` (--radius: 0) -> `light`
+ * (silent on radius) would leave every corner square, and the bug would look
+ * like it belonged to `light`.
+ *
+ * Removing rather than resetting is the point: styles.css's :root block is the
+ * one source of default values, so a cleared token falls back to it instead of
+ * to a second copy of the defaults maintained over here.
+ */
 function applyThemeVars(theme) {
   if (!theme) return;
   const root = document.documentElement;
-  for (const [k, v] of Object.entries(theme.vars || {})) root.style.setProperty(k, v);
+  const vars = theme.vars || {};
+
+  for (const k of appliedTokens) {
+    if (!(k in vars)) root.style.removeProperty(k);
+  }
+  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+  appliedTokens = Object.keys(vars);
+
   if (theme.terminal && typeof theme.terminal === 'object') {
     applyTerminalTheme(theme.terminal);
   }
@@ -86,6 +110,27 @@ function renderLayoutSwitcher() {
   }
   const active = getActiveLayoutId();
   if (active) els.layoutSwitcher.value = active;
+}
+
+/** Ids of every loaded theme, for the console hook and the probe. */
+export function getThemeIds() {
+  return [...themesById.keys()];
+}
+
+/**
+ * Switches theme from outside the widget (console hook, --luna-probe).
+ *
+ * Goes through the same path the select does, including the repaint, so a theme
+ * chosen this way cannot leave the switcher showing the previous one. Does NOT
+ * persist: this is a look-at-it tool, and the probe cycling all nine themes
+ * should not end up rewriting Mati's saved choice.
+ */
+export function selectTheme(id) {
+  if (!themesById.has(id)) return false;
+  activeThemeId = id;
+  applyThemeVars(themesById.get(id));
+  renderThemeSwitcher();
+  return true;
 }
 
 export async function initAppearance() {

@@ -245,6 +245,25 @@ async function runWidgetProbe(win) {
     for (let pass = 0; pass < 2; pass++) for (const id of presets) __luna.layout(id);
     __luna.layout(startedOn);
 
+    // Every theme, then back to the first. A theme sets only the tokens it
+    // cares about, so the set of inline properties on :root has to come back to
+    // exactly what it was - anything extra is a token the previous theme wrote
+    // and this one never cleared, which silently changes the HUD from here on.
+    // initAppearance() is async and is NOT awaited by renderer.js, so __luna
+    // can exist while themesById is still empty. Without this wait the whole
+    // theme pass runs over an empty list and reports a clean sweep it never
+    // took - the one probe result worse than a failure.
+    const themeDeadline = Date.now() + 10000;
+    while (__luna.themes().length === 0 && Date.now() < themeDeadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const themes = __luna.themes();
+    if (themes.length === 0) return JSON.stringify({ error: 'no themes - initAppearance never resolved' });
+    const tokensAtStart = __luna.tokens();
+    for (const id of themes) __luna.theme(id);
+    __luna.theme(themes[0]);
+    const tokensAfterThemes = __luna.tokens();
+
     return JSON.stringify({
       widgets: __luna.widgets(),
       mounted,
@@ -257,6 +276,12 @@ async function runWidgetProbe(win) {
       after: __luna.stats(),
       rowsAtStart,
       rowsAfterRemounts,
+      themes,
+      // Equal = no theme leaked a token past its own switch. Printed as a
+      // difference rather than two long lists, because the lists are ~45 entries
+      // and only the delta is ever interesting.
+      themeTokensLeaked: tokensAfterThemes.filter((t) => !tokensAtStart.includes(t)),
+      themeTokensLost: tokensAtStart.filter((t) => !tokensAfterThemes.includes(t)),
       rows: {
         ports: document.querySelectorAll('#ports-list').length,
         scratchpad: document.querySelectorAll('#pad-text').length,

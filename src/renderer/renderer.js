@@ -47,7 +47,7 @@ import './modules/palette.js';
 // -- Left panel: switchers, ports, appearance ---------------------------------
 import { initProfiles, initProjects } from './modules/switchers.js';
 import { initPorts } from './modules/ports.js';
-import { initAppearance } from './modules/appearance.js';
+import { initAppearance, getThemeIds, selectTheme } from './modules/appearance.js';
 
 // -- Widgets (A2) -------------------------------------------------------------
 // Blocks converted to the widget contract. They self-register at import time
@@ -126,6 +126,15 @@ window.__luna = {
   layout: applyLayout,
   layouts: () => getLayouts().map((l) => l.id),
   activeLayout: getActiveLayoutId,
+  // C3: __luna.theme('amber-crt'). Applies without persisting, so cycling the
+  // list here cannot overwrite the saved choice in ui.local.json.
+  theme: selectTheme,
+  themes: getThemeIds,
+  // The inline custom properties a theme has written onto :root. The probe
+  // compares this set before and after cycling every theme: a token left behind
+  // by a theme the next one does not mention is invisible on screen but changes
+  // how the HUD looks for the rest of the session.
+  tokens: () => [...document.documentElement.style].filter((p) => p.startsWith('--')).sort(),
 };
 
 // ---- Window events ----------------------------------------------------------

@@ -130,12 +130,21 @@ export const term = {
   get options() { const x = this._t; return x ? x.options : {}; },
 };
 
-/** A theme's new xterm palette -> ALL tabs, not just the visible one. */
+/**
+ * A theme's new xterm palette -> ALL tabs, not just the visible one.
+ *
+ * Assigns the `theme` sub-option only. Writing the whole options object back
+ * (`term.options = { ...term.options, theme }`) looks equivalent but is not:
+ * the spread carries `cols` and `rows` along with everything else, and xterm
+ * throws `Option "cols" can only be set in the constructor` on any attempt to
+ * set them afterwards. Surfaced by --luna-probe the first time it cycled themes
+ * with live sessions open.
+ */
 export function applyTerminalTheme(palette) {
   if (!palette) return;
   currentTermTheme = palette;
   for (const s of termsBySession.values()) {
-    s.term.options = { ...s.term.options, theme: { ...s.term.options.theme, ...palette } };
+    s.term.options.theme = { ...s.term.options.theme, ...palette };
   }
 }
 

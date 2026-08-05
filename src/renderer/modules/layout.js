@@ -46,6 +46,8 @@ const statusEl = chromeEl && chromeEl.querySelector('.status-line');
 
 let layouts = [];
 let activeLayoutId = null;
+// False until the HUD has been drawn once; gates the switch animation (C3.7).
+let firstPaintDone = false;
 
 /** All available presets (for the switcher in Appearance). */
 export function getLayouts() {
@@ -91,19 +93,25 @@ function planRegions(layout) {
  * xterm measures against a fixed box: put it in an overflow-y container and it
  * would grow instead of fitting.
  */
-function buildRegion(name, ids, layout) {
+function buildRegion(name, ids, layout, { index = 0, animate = false } = {}) {
   const holdsTerminal = ids.includes('terminal');
   const el = document.createElement(holdsTerminal ? 'div' : 'aside');
   el.dataset.region = name;
   el.style.gridArea = name;
+  // C3.7: position in the reassembly stagger. Regions come out of regionOrder,
+  // so the HUD rebuilds itself left to right, top to bottom.
+  if (animate) {
+    el.style.setProperty('--region-i', String(index));
+    el.classList.add('region--enter');
+  }
   appEl.appendChild(el);
 
   if (holdsTerminal) {
-    el.className = 'region region--bare';
+    el.classList.add('region', 'region--bare');
     return el;
   }
 
-  el.className = 'panel panel--region';
+  el.classList.add('region', 'panel', 'panel--region');
   // Brand above the scroller and the status line below it, both pinned - the
   // same chrome the hardcoded left panel had.
   if (layout.chrome.brand === name && brandEl) el.appendChild(brandEl);
@@ -161,8 +169,13 @@ export function applyLayout(id) {
   appEl.style.gridTemplateAreas = layout.gridTemplateAreas;
   document.body.dataset.layout = layout.id;
 
+  // Animate the reassembly on a real switch only. On first paint the boot
+  // overlay covers the HUD, so the stagger would play where nobody can see it -
+  // and would still cost its full delay before the terminal was interactive.
+  const animate = firstPaintDone;
+  let index = 0;
   for (const [region, ids] of plan) {
-    const host = buildRegion(region, ids, layout);
+    const host = buildRegion(region, ids, layout, { index: index++, animate });
     for (const wid of ids) {
       const root = widgetRoot(wid);
       if (root) host.appendChild(root);
@@ -178,8 +191,10 @@ export function applyLayout(id) {
   }
 
   // The terminal's box just changed size (or moved between grid areas); xterm
-  // only re-measures when told to.
+  // only re-measures when told to. Safe to do while the stagger is playing: the
+  // animation is transform/opacity, which never changes a layout box.
   fitAndResize();
+  firstPaintDone = true;
   return true;
 }
 

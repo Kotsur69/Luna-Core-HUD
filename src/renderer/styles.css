@@ -2,7 +2,98 @@
    LunaCore - motyw (mroczny cyberpunk dashboard)
    ========================================================================== */
 
+/* ---- Bundled faces (C3) ---------------------------------------------------
+   BUNDLED, not linked. The renderer loads over file:// with no network, so a
+   Google Fonts @import would fail silently offline and the HUD would fall back
+   to a system face partway through launch - a bug you only ever see on the one
+   machine that matters. These are local woff2 in assets/fonts/, and if the
+   files are missing the stacks below simply fall through to the system face.
+
+   Both OFL 1.1. Two families, no more: type is the strongest identity lever a
+   theme has, and two faces plus the system stacks already give every preset in
+   config/themes.json a distinct voice.
+
+   Latin and latin-ext are split exactly as Google subsets them (the ranges are
+   disjoint - latin-ext alone has no ASCII in it), so the browser fetches ~10 KB
+   for a Polish label instead of a whole face.
+   -------------------------------------------------------------------------- */
+
+/* JetBrains Mono - the mono/terminal voice. Ships one file per weight; it is
+   not subset, hence ~92 KB each, which is the price of a real mono face. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('../../assets/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('../../assets/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+}
+
+/* Chakra Petch - the display voice: angular, technical, reads as a HUD. */
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url('../../assets/fonts/ChakraPetch-600-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url('../../assets/fonts/ChakraPetch-600-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('../../assets/fonts/ChakraPetch-700-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('../../assets/fonts/ChakraPetch-700-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ---------------------------------------------------------------------------
+   THE THEME VOCABULARY (C3)
+   ---------------------------------------------------------------------------
+   Every token below can be overridden by a theme: applyThemeVars() in
+   appearance.js does setProperty() for ANY `--*` key a theme carries, so this
+   list is the entire surface a theme can reach.
+
+   Until C3 it was 17 tokens and 15 of them were colours - which is exactly why
+   every theme looked like the same HUD in a different hue. Typography, border
+   treatment, glow strength, texture and motion character were all hardcoded
+   below, so a theme literally *could not* be more than a filter.
+
+   The values here reproduce cyberpunk, i.e. they are what the HUD looked like
+   before C3. A theme that overrides nothing renders identically.
+   --------------------------------------------------------------------------- */
 :root {
+  /* ---- Colour ------------------------------------------------------------ */
   --bg: #0a0710;
   --bg-panel: #120c1c;
   --bg-panel-2: #170f24;
@@ -15,12 +106,88 @@
   --good: #7cff9b;
   --warn: #ffd86b;
   --bad: #ff6b8a;
-  --radius: 10px;
-  /* Tokeny sterowane przez motyw (theme.js nadpisuje na documentElement). */
   --term-bg: #0c0912;
   --btn-grad: linear-gradient(135deg, #1a1030, #241442);
   --btn-grad-hover: linear-gradient(135deg, #241442, #341d5c);
   --glow: rgba(199, 116, 255, 0.32);
+
+  /* ---- Form: how sharp or soft the HUD is -------------------------------- */
+  /* A scale, not five unrelated numbers: a theme sets all of them to 0 and the
+     whole HUD reads as a terminal, or raises them together and it reads as an
+     IDE. `--radius` keeps its old name and value - it is the only one of these
+     that already existed and themes.json already ships overrides for it. */
+  --radius: 10px;      /* primary buttons */
+  --radius-lg: 14px;   /* the command palette overlay */
+  --radius-md: 8px;    /* fields, list rows, selects */
+  --radius-sm: 6px;    /* small buttons, chips, tabs */
+  --radius-xs: 4px;    /* scrollbar thumb, tab close, kbd */
+  --radius-pill: 999px;/* toggle track, context percentage badge */
+  --border-w: 1px;     /* every border in the HUD; hairline vs. chunky */
+  --pad-panel: 18px 16px;
+  --panel-gap: 22px;
+
+  /* ---- Typography: the biggest identity lever, previously 100% hardcoded -- */
+  --font-ui: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', Consolas, 'Courier New', monospace;
+  /* Brand mark and panel titles. Defaults to the UI face so nothing changes;
+     a theme pointing it at --font-mono turns the whole HUD into a terminal
+     readout, and that one swap does more than any colour ever did. */
+  --font-display: var(--font-ui);
+  --tracking-title: 1.5px;
+  --tracking-brand: 0.5px;
+  --case-title: uppercase;
+
+  /* ---- Depth: neon vs. flat, without touching a colour ------------------- */
+  /* These are the blur radii of the glow shadows. A theme with no neon in it
+     sets them to 0 and every `0 0 var(--glow-size) var(--glow)` goes quiet -
+     no rule has to be written twice for a flat theme. */
+  --glow-size: 18px;
+  --glow-size-md: 12px;
+  --glow-size-sm: 8px;
+  --text-glow: none;    /* a text-shadow; phosphor themes set a real one */
+  --shadow-panel: none; /* drop shadow between regions, for non-flat themes */
+
+  /* ---- Texture: painted over the whole app by .app::before --------------- */
+  --texture: none;         /* any background-image: repeating-linear-gradient, etc. */
+  --texture-size: auto;
+  --texture-opacity: 1;
+  --texture-blend: normal;
+
+  /* ---- Motion (C1c) ------------------------------------------------------ */
+  /* Four durations and three curves, and nothing in the HUD may hardcode one.
+     A hardcoded 0.3s is the same class of bug as a hardcoded colour: it is a
+     design decision welded shut where no theme can reach it.
+
+     Themes retune feel by overriding these directly - there is deliberately no
+     --motion-scale multiplier, because `calc(var(--dur-fast) * var(--scale))`
+     at every call site buys nothing over just setting --dur-fast. */
+  --dur-instant: 80ms;  /* press feedback, focus ring */
+  --dur-fast: 180ms;    /* hover, toggle, tab switch */
+  --dur-normal: 350ms;  /* panel enter, bar fill, layout switch */
+  --dur-slow: 600ms;    /* deliberate, rare */
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);   /* enter, settle */
+  --ease-sharp: cubic-bezier(0.4, 0, 0.2, 1);      /* exit, dismiss */
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);/* arm / confirm, sparingly */
+  --stagger: 45ms; /* gap between successive regions on a layout switch */
+}
+
+/* Reduced motion, done once at the token layer: every transition in the HUD
+   collapses to an instant jump to its END state. That is a substitution, not a
+   removal - the state still reads, nothing moves (B8's pattern). Keyframe
+   animations that loop or convey state need their own handling; see the
+   explicit blocks further down. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-instant: 0ms;
+    --dur-fast: 0ms;
+    --dur-normal: 0ms;
+    --dur-slow: 0ms;
+    /* Must go to zero with the durations. A stagger delay on a zero-length
+       animation with `backwards` fill does not shorten anything - it just holds
+       each region invisible until its turn, which is the one outcome reduced
+       motion is meant to prevent. */
+    --stagger: 0ms;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -30,7 +197,7 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-family: var(--font-ui);
   overflow: hidden;
 }
 
@@ -47,6 +214,32 @@ html, body {
   background: var(--edge);
 }
 
+/* ---- Texture overlay (C3) -------------------------------------------------
+   One fixed, non-interactive layer painted over the whole HUD, driven entirely
+   by theme tokens. This is the single biggest per-token payoff in the theme
+   vocabulary: it is what lets `matrix` be a phosphor CRT rather than green text
+   on black, and it costs every other theme exactly nothing (`--texture: none`).
+
+   On body rather than .app::before because an ::before on a grid container
+   would be laid out as a grid item and eat a cell of the layout preset.
+
+   z-index 50 puts it above the HUD but below the command palette (100) and the
+   boot sequence (200), on purpose: the palette is a place you read and type, so
+   legibility wins over atmosphere there, and boot already runs its own CRT
+   sweep. Nothing under this layer can be clicked away by it - pointer-events is
+   none, so the terminal keeps every event. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  background-image: var(--texture);
+  background-size: var(--texture-size);
+  opacity: var(--texture-opacity);
+  mix-blend-mode: var(--texture-blend);
+}
+
 .panel {
   background: var(--bg-panel);
   display: flex;
@@ -56,7 +249,12 @@ html, body {
 
 /* C1: every non-terminal region is one of these. `grid-area` is set inline from
    the preset's area name, so this class carries only the panel's own chrome. */
-.panel--region { padding: 18px 16px; gap: 22px; min-width: 0; }
+.panel--region {
+  padding: var(--pad-panel);
+  gap: var(--panel-gap);
+  min-width: 0;
+  box-shadow: var(--shadow-panel);
+}
 
 /* The region that holds the terminal is BARE: no padding and no scroller, because
    the terminal widget's root is itself a full .panel--center and xterm measures
@@ -64,6 +262,27 @@ html, body {
    child of this wrapper it needs to be told to. */
 .region--bare { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .region--bare > .panel--center { flex: 1; min-height: 0; }
+
+/* ---- Layout switch (C3.7) -------------------------------------------------
+   The HUD reassembles instead of teleporting: each region fades and rises in
+   turn, in the order the preset's grid-template-areas names them.
+
+   Applied by layout.js only when SWITCHING, never on first paint - the boot
+   overlay is on top at that point, so the whole thing would play unseen.
+   Regions are rebuilt from scratch on every switch, so the animation retriggers
+   by construction and there is no class to add and later take off.
+
+   transform + opacity only, so this is compositor work: it cannot reflow the
+   terminal underneath it mid-flight. `backwards` fill is what makes a staggered
+   region stay hidden during its delay rather than flashing at full opacity
+   first. */
+@keyframes region-in {
+  from { opacity: 0; transform: translateY(10px); }
+}
+.region--enter {
+  animation: region-in var(--dur-normal) var(--ease-smooth) backwards;
+  animation-delay: calc(var(--region-i, 0) * var(--stagger));
+}
 
 .panel--center { padding: 0; background: var(--term-bg); }
 
@@ -73,14 +292,19 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
+  font-family: var(--font-display);
   font-size: 22px;
   font-weight: 700;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--tracking-brand);
+  text-shadow: var(--text-glow);
   padding-bottom: 6px;
 }
 .brand__glyph {
   color: var(--neon-magenta);
-  filter: drop-shadow(0 0 6px var(--neon-magenta));
+  /* Tied to --glow-size-sm rather than its own token: this is the same "is this
+     theme neon or flat" decision as every box-shadow above, and a flat theme
+     that zeroes the glows should not have to remember one lone drop-shadow. */
+  filter: drop-shadow(0 0 var(--glow-size-sm) var(--neon-magenta));
   font-size: 24px;
 }
 .brand__core { color: var(--neon-cyan); }
@@ -105,7 +329,7 @@ html, body {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: var(--panel-gap);
   /* miejsce na pasek przewijania, zeby nie zachodzil na przyciski */
   padding-right: 4px;
   margin-right: -4px;
@@ -115,10 +339,11 @@ html, body {
 
 .panel__title {
   margin: 0;
+  font-family: var(--font-display);
   font-size: 11px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
+  text-transform: var(--case-title);
+  letter-spacing: var(--tracking-title);
   color: var(--text-dim);
 }
 
@@ -133,7 +358,7 @@ html, body {
   gap: 10px;
   width: 100%;
   padding: 14px 16px;
-  border: 1px solid var(--edge-glow);
+  border: var(--border-w) solid var(--edge-glow);
   border-radius: var(--radius);
   background: var(--btn-grad);
   color: var(--text);
@@ -141,12 +366,12 @@ html, body {
   font-weight: 700;
   letter-spacing: 1px;
   cursor: pointer;
-  transition: transform 0.08s ease, box-shadow 0.2s ease, background 0.2s ease;
+  transition: transform var(--dur-instant) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
   box-shadow: 0 0 0 rgba(199, 116, 255, 0);
 }
 .action-btn:hover {
   background: var(--btn-grad-hover);
-  box-shadow: 0 0 18px var(--glow);
+  box-shadow: 0 0 var(--glow-size) var(--glow);
 }
 .action-btn:active { transform: translateY(1px) scale(0.99); }
 .action-btn__icon {
@@ -156,7 +381,7 @@ html, body {
 }
 
 /* puls po kliknieciu */
-.action-btn.is-pulsing { animation: pulse 0.45s ease; }
+.action-btn.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 @keyframes pulse {
   0%   { box-shadow: 0 0 0 0 rgba(95, 242, 214, 0.5); }
   100% { box-shadow: 0 0 0 16px rgba(95, 242, 214, 0); }
@@ -167,8 +392,8 @@ html, body {
 .profile-select {
   width: 100%;
   padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text);
   font-size: 13px;
@@ -198,8 +423,8 @@ html, body {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--text-dim);
 }
-.dot--live { background: var(--good); box-shadow: 0 0 8px var(--good); animation: blink 1.6s infinite; }
-.dot--dead { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+.dot--live { background: var(--good); box-shadow: 0 0 var(--glow-size-sm) var(--good); animation: blink 1.6s infinite; }
+.dot--dead { background: var(--bad); box-shadow: 0 0 var(--glow-size-sm) var(--bad); }
 @keyframes blink { 50% { opacity: 0.4; } }
 
 /* ---- LED: pracuje vs czeka na Ciebie -------------------------------------- */
@@ -208,13 +433,13 @@ html, body {
   width: 9px; height: 9px; border-radius: 50%;
   flex: none;
   background: var(--text-dim);
-  transition: background 0.15s ease, box-shadow 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
 }
 /* zolty puls = Claude pracuje (leci strumien stdout) */
-.led--working { background: var(--warn); box-shadow: 0 0 10px var(--warn); animation: blink 0.9s infinite; }
+.led--working { background: var(--warn); box-shadow: 0 0 var(--glow-size-md) var(--warn); animation: blink 0.9s infinite; }
 /* zielony spokojny = cisza na stdout, tura po stronie uzytkownika */
-.led--waiting { background: var(--good); box-shadow: 0 0 8px var(--good); }
-.led--dead { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+.led--waiting { background: var(--good); box-shadow: 0 0 var(--glow-size-sm) var(--good); }
+.led--dead { background: var(--bad); box-shadow: 0 0 var(--glow-size-sm) var(--bad); }
 
 /* ---- Brudnopis ------------------------------------------------------------ */
 
@@ -223,11 +448,11 @@ html, body {
   min-height: 90px;
   resize: none;
   padding: 10px;
-  border-radius: 8px;
-  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text);
-  font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -236,16 +461,16 @@ html, body {
 
 .pad-send {
   padding: 8px;
-  border-radius: 8px;
-  border: 1px solid var(--edge-glow);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--edge-glow);
   background: var(--btn-grad);
   color: var(--text);
   font-size: 12px;
   cursor: pointer;
-  transition: box-shadow 0.2s ease;
+  transition: box-shadow var(--dur-fast) var(--ease-sharp);
 }
-.pad-send:hover { box-shadow: 0 0 12px var(--glow); }
-.pad-send.is-pulsing { animation: pulse 0.45s ease; }
+.pad-send:hover { box-shadow: 0 0 var(--glow-size-md) var(--glow); }
+.pad-send.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 
 /* ---- Switch (toggle) + uzbrojony auto-compact ----------------------------- */
 
@@ -255,14 +480,14 @@ html, body {
   justify-content: space-between;
   gap: 12px;
   padding: 9px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   cursor: pointer;
   user-select: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
 }
-.switch-field.is-armed { border-color: var(--edge-glow); box-shadow: 0 0 10px var(--glow); }
+.switch-field.is-armed { border-color: var(--edge-glow); box-shadow: 0 0 var(--glow-size-md) var(--glow); }
 .switch-field.is-fired { border-color: var(--warn); box-shadow: 0 0 12px rgba(255, 216, 107, 0.35); }
 
 .switch-field__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -277,10 +502,10 @@ html, body {
   display: block;
   width: 100%;
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg);
-  border: 1px solid var(--edge);
-  transition: background 0.2s ease, border-color 0.2s ease;
+  border: var(--border-w) solid var(--edge);
+  transition: background var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
 }
 .switch__thumb {
   position: absolute;
@@ -290,7 +515,7 @@ html, body {
   height: 14px;
   border-radius: 50%;
   background: var(--text-dim);
-  transition: transform 0.2s ease, background 0.2s ease;
+  transition: transform var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
 }
 .switch__input:checked + .switch__track { background: var(--btn-grad); border-color: var(--edge-glow); }
 .switch__input:checked + .switch__track .switch__thumb { transform: translateX(16px); background: var(--text); }
@@ -304,7 +529,7 @@ html, body {
   gap: 12px;
   padding: 10px 16px;
   background: var(--bg-panel);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: var(--border-w) solid var(--edge);
 }
 .terminal-bar__title { font-size: 13px; font-weight: 600; color: var(--neon-cyan); }
 .terminal-bar__hint { font-size: 11px; color: var(--text-dim); }
@@ -317,7 +542,7 @@ html, body {
   gap: 6px;
   padding: 6px 10px 0;
   background: var(--bg-panel);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: var(--border-w) solid var(--edge);
 }
 .tabs__list { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; }
 
@@ -326,13 +551,13 @@ html, body {
   align-items: center;
   gap: 6px;
   padding: 5px 8px;
-  border: 1px solid var(--edge);
+  border: var(--border-w) solid var(--edge);
   border-bottom: none;
-  border-radius: 6px 6px 0 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   background: var(--bg-panel-2);
   color: var(--text-dim);
   max-width: 220px;
-  transition: background 160ms ease, color 160ms ease;
+  transition: background var(--dur-fast) var(--ease-sharp), color var(--dur-fast) var(--ease-sharp);
 }
 .tab.is-active { background: var(--bg); color: var(--neon-cyan); border-color: var(--neon-cyan); }
 .tab.is-dead .tab__label { text-decoration: line-through; opacity: 0.6; }
@@ -363,8 +588,8 @@ html, body {
   color: var(--text-dim);
   cursor: pointer;
   line-height: 1;
-  border-radius: 4px;
-  transition: color 160ms ease, background 160ms ease;
+  border-radius: var(--radius-xs);
+  transition: color var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
 }
 /* 24px to minimum, na jakie pozwala wysokosc zakladki; cel klikniecia
    powiekszamy paddingiem, zeby trafiac w krzyzyk bez celowania w piksel. */
@@ -394,9 +619,9 @@ html, body {
 .ctx-bar {
   width: 100%;
   height: 14px;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-2);
-  border: 1px solid var(--edge);
+  border: var(--border-w) solid var(--edge);
   overflow: hidden;
 }
 .ctx-bar__fill {
@@ -407,7 +632,7 @@ html, body {
   transform: scaleX(var(--ctx, 0));
   transform-origin: left center;
   background: linear-gradient(90deg, var(--good), var(--neon-cyan));
-  transition: transform 0.4s ease, background 0.4s ease;
+  transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
 /* Progi context window ustawiane przez renderer.js (Faza 3). */
 .ctx-bar__fill.is-mid { background: linear-gradient(90deg, var(--warn), #ffb347); }
@@ -428,7 +653,7 @@ html, body {
    ograniczonego ruchu (nie animuje sie wcale). */
 .badge {
   padding: 3px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-panel-2);
   color: var(--text);
   font-size: 10.5px;
@@ -448,16 +673,16 @@ html, body {
 .usage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .usage-refresh {
   background: none;
-  border: 1px solid var(--edge);
+  border: var(--border-w) solid var(--edge);
   color: var(--text-dim);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   width: 22px;
   height: 22px;
   line-height: 1;
   font-size: 13px;
   cursor: pointer;
   flex: none;
-  transition: color 0.2s ease, border-color 0.2s ease, transform 0.4s ease;
+  transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp), transform var(--dur-normal) var(--ease-smooth);
 }
 .usage-refresh:hover { color: var(--neon-cyan); border-color: var(--neon-cyan); }
 .usage-refresh.is-spinning { animation: usage-spin 0.6s linear infinite; }
@@ -476,21 +701,21 @@ html, body {
 .usage-bar {
   width: 100%;
   height: 8px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel-2);
-  border: 1px solid var(--edge);
+  border: var(--border-w) solid var(--edge);
   overflow: hidden;
 }
 .usage-bar__fill {
   height: 100%;
   width: 100%;
-  border-radius: 5px 0 0 5px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
   /* Jak .ctx-bar__fill: wypelnienie przez scaleX (transform), nie width -
      brak layout thrash. renderer.js ustawia --usage w zakresie 0..1. */
   transform: scaleX(var(--usage, 0));
   transform-origin: left center;
   background: linear-gradient(90deg, var(--good), var(--neon-cyan));
-  transition: transform 0.4s ease, background 0.3s ease;
+  transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
 .usage-bar__fill[data-level='warn'] { background: linear-gradient(90deg, var(--warn), #ffb347); }
 .usage-bar__fill[data-level='bad'] {
@@ -551,18 +776,23 @@ html, body {
   position: relative;
   overflow: hidden; /* clips the running sweep to the tile */
   padding: 9px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-2);
-  border: 1px solid var(--edge);
+  border: var(--border-w) solid var(--edge);
   font-size: 12px;
   color: var(--text-dim);
-  transition: all 0.25s ease;
+  /* Named properties, not `all`: `all` also transitions padding and border-width,
+     which are theme tokens now - switching theme would animate every tile's box
+     instead of just recolouring it, and a layout switch would do the same. */
+  transition: color var(--dur-fast) var(--ease-sharp),
+              border-color var(--dur-fast) var(--ease-sharp),
+              box-shadow var(--dur-fast) var(--ease-sharp);
 }
 /* A tool mapped to this tile is running, or has just finished (B8). */
 .skill-tile.is-active {
   color: var(--good);
   border-color: var(--good);
-  box-shadow: 0 0 12px rgba(124, 255, 155, 0.3);
+  box-shadow: 0 0 var(--glow-size-md) rgba(124, 255, 155, 0.3);
 }
 
 /*
@@ -629,9 +859,9 @@ html, body {
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel-2);
-  border: 1px solid var(--edge);
+  border: var(--border-w) solid var(--edge);
   font-size: 12px;
 }
 /* Wiersz systemowy (widoczny tylko przy wylaczonym filtrze) - przygaszony,
@@ -657,16 +887,17 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
-  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
   background: transparent;
   color: var(--text-dim);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color var(--dur-fast) var(--ease-sharp),
+              border-color var(--dur-fast) var(--ease-sharp);
 }
 .port-btn:hover { color: var(--neon-cyan); border-color: var(--edge-glow); }
-.port-btn.is-pulsing { animation: pulse 0.45s ease; }
+.port-btn.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 .port-btn--kill:hover { color: var(--bad); border-color: var(--bad); }
 
 /* ---- Sciagawki akcji (7C) ------------------------------------------------- */
@@ -679,8 +910,8 @@ html, body {
   min-height: 0;
 }
 .cheat {
-  border: 1px solid var(--edge);
-  border-radius: 8px;
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
   background: var(--bg-panel-2);
   overflow: hidden;
 }
@@ -699,7 +930,7 @@ html, body {
   display: inline-block;
   margin-right: 8px;
   color: var(--neon-magenta);
-  transition: transform 0.15s ease;
+  transition: transform var(--dur-fast) var(--ease-sharp);
 }
 .cheat[open] .cheat__summary::before { transform: rotate(90deg); }
 .cheat__summary:hover { color: var(--neon-cyan); }
@@ -718,20 +949,20 @@ html, body {
 }
 .cheat__btn {
   padding: 6px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--edge-glow);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge-glow);
   background: var(--btn-grad);
   color: var(--text);
   font-size: 11.5px;
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   cursor: pointer;
-  transition: box-shadow 0.15s ease, background 0.15s ease;
+  transition: box-shadow var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
 }
 .cheat__btn:hover {
   background: var(--btn-grad-hover);
-  box-shadow: 0 0 12px var(--glow);
+  box-shadow: 0 0 var(--glow-size-md) var(--glow);
 }
-.cheat__btn.is-pulsing { animation: pulse 0.45s ease; }
+.cheat__btn.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 
 /* ---- Sciagawka skilli (7A) ------------------------------------------------ */
 
@@ -743,19 +974,19 @@ html, body {
   width: 100%;
   margin: 8px 0 6px;
   padding: 6px 9px;
-  border-radius: 6px;
-  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text);
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
 }
 .filter-input::placeholder { color: var(--text-dim); opacity: 0.6; }
 .filter-input:focus {
   outline: none;
   border-color: var(--neon-cyan);
-  box-shadow: 0 0 8px var(--glow);
+  box-shadow: 0 0 var(--glow-size-sm) var(--glow);
 }
 .skill-cat {
   display: flex;
@@ -772,24 +1003,24 @@ html, body {
   flex: none;
   text-align: left;
   padding: 5px 9px;
-  border-radius: 5px;
-  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid transparent;
   background: transparent;
   color: var(--text-dim);
   font-size: 11.5px;
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: color 0.12s ease, background 0.12s ease;
+  transition: color var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
 }
 .skill-entry:hover {
   color: var(--neon-cyan);
   background: var(--bg-panel-2);
   border-color: var(--edge);
 }
-.skill-entry.is-pulsing { animation: pulse 0.45s ease; }
+.skill-entry.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 
 /* ---- Biblioteka promptow --------------------------------------------------- */
 
@@ -809,40 +1040,40 @@ html, body {
   min-width: 0;
   text-align: left;
   padding: 7px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--edge-glow);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge-glow);
   background: var(--btn-grad);
   color: var(--text);
   font-size: 11.5px;
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: box-shadow 0.15s ease, background 0.15s ease;
+  transition: box-shadow var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
 }
 .prompt-btn:hover {
   background: var(--btn-grad-hover);
-  box-shadow: 0 0 12px var(--glow);
+  box-shadow: 0 0 var(--glow-size-md) var(--glow);
 }
 .prompt-send {
   flex: 0 0 auto;
   width: 30px;
-  border-radius: 6px;
-  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text-dim);
   font-size: 12px;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
 }
 .prompt-send:hover { color: var(--neon-cyan); border-color: var(--edge-glow); }
 .prompt-btn.is-pulsing,
-.prompt-send.is-pulsing { animation: pulse 0.45s ease; }
+.prompt-send.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 
 /* subtelny scrollbar */
 ::-webkit-scrollbar { width: 8px; }
-::-webkit-scrollbar-thumb { background: var(--edge-glow); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: var(--edge-glow); border-radius: var(--radius-xs); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ---- Chip Ctrl+K w pasku terminala ---------------------------------------- */
@@ -853,20 +1084,20 @@ html, body {
   align-items: center;
   gap: 3px;
   padding: 3px 7px;
-  border-radius: 6px;
-  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text-dim);
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
 }
 .palette-chip:hover {
   color: var(--neon-cyan);
   border-color: var(--edge-glow);
-  box-shadow: 0 0 12px var(--glow);
+  box-shadow: 0 0 var(--glow-size-md) var(--glow);
 }
 .palette-chip kbd {
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   line-height: 1;
   color: inherit;
@@ -898,12 +1129,12 @@ html, body {
   max-height: 68vh;
   display: flex;
   flex-direction: column;
-  border-radius: 14px;
-  border: 1px solid var(--edge-glow);
+  border-radius: var(--radius-lg);
+  border: var(--border-w) solid var(--edge-glow);
   background: linear-gradient(160deg, var(--bg-panel), var(--bg-panel-2));
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6), 0 0 40px var(--glow);
   overflow: hidden;
-  animation: palette-in 0.12s ease;
+  animation: palette-in var(--dur-fast) var(--ease-sharp);
 }
 @keyframes palette-in {
   from { opacity: 0; transform: translateY(-8px) scale(0.985); }
@@ -915,7 +1146,7 @@ html, body {
   align-items: center;
   gap: 10px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--edge);
+  border-bottom: var(--border-w) solid var(--edge);
 }
 .palette__glyph {
   color: var(--neon-magenta);
@@ -927,7 +1158,7 @@ html, body {
   border: none;
   background: transparent;
   color: var(--text);
-  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-family: var(--font-ui);
   font-size: 15px;
 }
 .palette__input:focus { outline: none; }
@@ -951,8 +1182,8 @@ html, body {
   gap: 10px;
   flex: none;
   padding: 9px 12px;
-  border-radius: 8px;
-  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid transparent;
   cursor: pointer;
 }
 .palette-item.is-active {
@@ -969,8 +1200,8 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.8px;
   padding: 3px 7px;
-  border-radius: 5px;
-  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -1003,7 +1234,7 @@ html, body {
   font-size: 10.5px;
   color: var(--text-dim);
   opacity: 0.7;
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   white-space: nowrap;
 }
 
@@ -1019,17 +1250,17 @@ html, body {
   flex-wrap: wrap;
   gap: 14px;
   padding: 9px 16px;
-  border-top: 1px solid var(--edge);
+  border-top: var(--border-w) solid var(--edge);
   font-size: 11px;
   color: var(--text-dim);
 }
 .palette__foot kbd {
   display: inline-block;
   padding: 1px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--edge);
+  border-radius: var(--radius-xs);
+  border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
 }
 
@@ -1125,7 +1356,7 @@ html, body {
 
 .boot__tagline {
   margin: 0;
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   letter-spacing: 2.4px;
   color: var(--text-dim);
@@ -1142,7 +1373,7 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  font-family: 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
   color: var(--text-dim);
 }
