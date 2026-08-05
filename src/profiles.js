@@ -13,12 +13,15 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
+const paths = require('./paths');
 const { hasText, normalizeText } = require('./localized');
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const BASE_FILE = path.join(CONFIG_DIR, 'profiles.json');
-const LOCAL_FILE = path.join(CONFIG_DIR, 'profiles.local.json');
+// Shipped profiles come from the bundled root; the user's override - which is
+// where API keys live, hence gitignored - lives in the WRITABLE root and is
+// resolved lazily, since this module is required before app.whenReady().
+// See paths.js.
+const BASE_FILE = paths.bundled('profiles.json');
+const localFile = () => paths.local('profiles.local.json');
 
 // Emergency profile used when the config is missing or broken - something
 // always works.
@@ -64,7 +67,7 @@ function normalizeProfile(p) {
  */
 function loadProfiles() {
   const base = readJson(BASE_FILE) || FALLBACK;
-  const local = readJson(LOCAL_FILE);
+  const local = readJson(localFile());
 
   // Keyed by id so local entries replace base entries with the same id.
   const byId = new Map();

@@ -14,11 +14,14 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
+const paths = require('./paths');
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const BASE_FILE = path.join(CONFIG_DIR, 'rates.json');
-const LOCAL_FILE = path.join(CONFIG_DIR, 'rates.local.json');
+// Wysylany cennik czytamy z katalogu bundled - dzieki temu aktualizacja aplikacji
+// realnie dowozi poprawione stawki. Prywatna korekta uzytkownika lezy w katalogu
+// ZAPISYWALNYM i liczymy ja leniwie, bo modul jest wymagany przed
+// app.whenReady(). Szczegoly w paths.js.
+const BASE_FILE = paths.bundled('rates.json');
+const localFile = () => paths.local('rates.local.json');
 
 const TOKENS_PER_UNIT = 1000000; // prices are quoted "per million tokens"
 
@@ -50,7 +53,7 @@ function normalizeRate(r) {
  */
 function loadRates() {
   const base = readJson(BASE_FILE) || {};
-  const local = readJson(LOCAL_FILE);
+  const local = readJson(localFile());
 
   const byId = new Map();
   const collect = (src) => {

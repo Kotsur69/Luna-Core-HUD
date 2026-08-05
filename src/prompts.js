@@ -16,12 +16,14 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
+const paths = require('./paths');
 const { hasText, normalizeText, mergeKey, isLocalized, LANGS } = require('./localized');
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const BASE_FILE = path.join(CONFIG_DIR, 'prompts.json');
-const LOCAL_FILE = path.join(CONFIG_DIR, 'prompts.local.json');
+// Wysylane prompty czytamy z katalogu bundled; prywatne (gitignore) leza w
+// katalogu ZAPISYWALNYM i liczymy je leniwie, bo modul jest wymagany przed
+// app.whenReady(). Szczegoly w paths.js.
+const BASE_FILE = paths.bundled('prompts.json');
+const localFile = () => paths.local('prompts.local.json');
 
 /** Bezpieczny odczyt + parse JSON. Zwraca null przy braku/bledzie. */
 function readJson(file) {
@@ -92,7 +94,7 @@ function loadPrompts() {
     }
   };
   collect(readJson(BASE_FILE));
-  collect(readJson(LOCAL_FILE));
+  collect(readJson(localFile()));
 
   return { groups: [...byTitle.values()] };
 }

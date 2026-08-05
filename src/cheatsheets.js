@@ -15,12 +15,14 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
+const paths = require('./paths');
 const { hasText, normalizeText, mergeKey } = require('./localized');
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const BASE_FILE = path.join(CONFIG_DIR, 'cheatsheets.json');
-const LOCAL_FILE = path.join(CONFIG_DIR, 'cheatsheets.local.json');
+// Wysylane sciagawki czytamy z katalogu bundled; override uzytkownika lezy w
+// katalogu ZAPISYWALNYM i liczymy go leniwie, bo modul jest wymagany przed
+// app.whenReady(). Szczegoly w paths.js.
+const BASE_FILE = paths.bundled('cheatsheets.json');
+const localFile = () => paths.local('cheatsheets.local.json');
 
 /** Bezpieczny odczyt + parse JSON. Zwraca null przy braku/bledzie. */
 function readJson(file) {
@@ -62,7 +64,7 @@ function normalizeGroup(g) {
  */
 function loadCheatsheets() {
   const base = readJson(BASE_FILE);
-  const local = readJson(LOCAL_FILE);
+  const local = readJson(localFile());
 
   const byTitle = new Map();
   const collect = (src) => {

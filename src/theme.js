@@ -13,11 +13,14 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
+const paths = require('./paths');
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const BASE_FILE = path.join(CONFIG_DIR, 'themes.json');
-const LOCAL_FILE = path.join(CONFIG_DIR, 'themes.local.json');
+// Motywy wysylane z aplikacja czytamy z katalogu bundled - w wersji spakowanej
+// siedzi w app.asar, co do odczytu w zupelnosci wystarcza. Override uzytkownika
+// lezy w katalogu ZAPISYWALNYM i liczymy go leniwie, bo modul jest wymagany
+// przed app.whenReady(). Szczegoly w paths.js.
+const BASE_FILE = paths.bundled('themes.json');
+const localFile = () => paths.local('themes.local.json');
 
 // Awaryjny motyw, gdy brak/uszkodzony config - zawsze cos dziala.
 const FALLBACK = {
@@ -198,7 +201,7 @@ function loadThemes(warn = (msg) => console.warn(msg)) {
     }
   };
   collect(readJson(BASE_FILE) || FALLBACK);
-  collect(readJson(LOCAL_FILE));
+  collect(readJson(localFile()));
 
   let themes = resolveInheritance(byId, warn);
   if (themes.length === 0) themes = [...FALLBACK.themes];

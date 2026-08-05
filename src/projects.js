@@ -17,12 +17,16 @@
 
 const fs = require('fs');
 const path = require('path');
+const paths = require('./paths');
 const os = require('os');
 const { hasText, normalizeText } = require('./localized');
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const BASE_FILE = path.join(CONFIG_DIR, 'projects.json');
-const LOCAL_FILE = path.join(CONFIG_DIR, 'projects.local.json');
+// `paths` (config roots) is not `path` (the node module) - this file needs both,
+// and it is the only one that does. Shipped projects come from the bundled root;
+// the user's override lives in the WRITABLE root, resolved lazily because this
+// module is required before app.whenReady(). See paths.js.
+const BASE_FILE = paths.bundled('projects.json');
+const localFile = () => paths.local('projects.local.json');
 
 // Emergency list used when the config is missing or broken - we always have
 // somewhere to start.
@@ -70,7 +74,7 @@ function normalizeProject(p) {
  */
 function loadProjects() {
   const base = readJson(BASE_FILE) || FALLBACK;
-  const local = readJson(LOCAL_FILE);
+  const local = readJson(localFile());
 
   // Keyed by id so local entries replace base entries with the same id
   // (insertion order is preserved).

@@ -22,12 +22,15 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
+const paths = require('./paths');
 const { hasText, normalizeText } = require('./localized');
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const BASE_FILE = path.join(CONFIG_DIR, 'layouts.json');
-const LOCAL_FILE = path.join(CONFIG_DIR, 'layouts.local.json');
+// Shipped presets come from the bundled root (inside app.asar once packaged -
+// read-only is all we need). The user's override lives in the WRITABLE root and
+// is resolved lazily, because this module is required before app.whenReady().
+// See paths.js.
+const BASE_FILE = paths.bundled('layouts.json');
+const localFile = () => paths.local('layouts.local.json');
 
 /**
  * Widgets every layout MUST place somewhere, or it is rejected.
@@ -180,7 +183,7 @@ const FALLBACK = {
  */
 function loadLayouts() {
   const base = readJson(BASE_FILE) || FALLBACK;
-  const local = readJson(LOCAL_FILE);
+  const local = readJson(localFile());
 
   const byId = new Map();
   const collect = (src) => {
