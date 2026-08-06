@@ -5,6 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LunaCore</title>
 
+  <!-- D4: Content-Security-Policy. The renderer pulls nothing from the network -
+       every script, style, font and image lives on disk - so the default is
+       `none` and each directive is opened only where something real needs it.
+
+       style-src must keep 'unsafe-inline': xterm.js creates its own <style>
+       elements for dimensions and theme, and the context bar ships a
+       style="--ctx: 0" attribute. script-src needs no such escape - the boot
+       failsafe moved to boot-failsafe.js precisely so this can stay strict.
+
+       connect-src 'none' is the load-bearing one: the usage gauge's HTTPS call
+       lives in the MAIN process, which CSP does not govern. The renderer has no
+       business reaching the network, and now it structurally cannot. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 script-src 'self';
+                 style-src 'self' 'unsafe-inline';
+                 img-src 'self' data:;
+                 font-src 'self';
+                 connect-src 'none';
+                 object-src 'none';
+                 base-uri 'none';
+                 form-action 'none';
+                 frame-src 'none'" />
+
   <!-- Styl terminala xterm.js (z node_modules, korzen projektu = ../../) -->
   <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
   <!-- Motyw LunaCore -->
@@ -74,16 +98,10 @@
       <p class="boot__skip" data-i18n="boot.skip">klik / dowolny klawisz = pomin</p>
     </div>
   </div>
-  <script>
-    // Bezpiecznik nakladki startowej. Celowo INLINE i przed renderer.js: gdyby
-    // renderer wywalil sie przy parsowaniu (tak zrobila kiedys kolizja `t` z
-    // i18n.js), nikt by tej nakladki nie zdjal i zaslonilaby caly HUD na stale.
-    // Ten timer jest jedynym kodem, ktory przezyje taka awarie.
-    setTimeout(function () {
-      var b = document.getElementById('boot');
-      if (b && !b.hidden) b.hidden = true;
-    }, 4000);
-  </script>
+  <!-- Boot overlay failsafe. Classic script, loaded before renderer.js so it
+       survives a module parse error - see boot-failsafe.js for why. It was
+       inline until D4; the CSP is what moved it out. -->
+  <script src="boot-failsafe.js"></script>
 
   <!-- ================= Widget templates (A2) =================
        One <template> per converted block. The host (modules/host.js) clones a

@@ -19,6 +19,83 @@ injects prompts or touches the `claude` binary.
 
 ---
 
+## Download
+
+**[Latest release →](https://github.com/Kotsur69/Luna-Core-HUD/releases/latest)** — Windows x64.
+
+| File | What it is |
+|------|------------|
+| `LunaCore Setup 0.9.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.9.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+
+You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
+real `claude`, it does not replace or reimplement it. If `claude` is not on your
+`PATH`, LunaCore still opens a working shell and says so in the corner instead of
+handing you a dead black rectangle.
+
+### Windows will warn you on first launch
+
+The binary is **not code-signed**, so SmartScreen shows *"Windows protected your
+PC"*. That message means *unknown publisher*, not *malware found* — every
+unsigned application gets it, and a signing certificate costs a few hundred a
+year. To continue: **More info → Run anyway**.
+
+If you would rather not trust a stranger's binary, don't: `npm install && npm run
+dist` builds the exact same two files from this source tree.
+
+---
+
+## What LunaCore reads, writes and sends
+
+LunaCore reads your Claude Code **credentials file**. An application that does
+that without saying so plainly has no business on anyone's machine, so here is
+the complete list — all of it verifiable in the linked source.
+
+**Reads — never modifies:**
+
+| Path | Why | Source |
+|------|-----|--------|
+| `~/.claude/.credentials.json` | Borrows the OAuth token the CLI already stores, to ask the API how much of your 5-hour and weekly limits are gone. A single `readFileSync`. LunaCore **never writes this file** and never refreshes the token — it rides whatever the CLI last put there. | [`src/usage.js`](src/usage.js) |
+| `~/.claude/projects/**/*.jsonl` | The CLI's own transcripts. The context %, the cost estimate and the Skill Tracker durations all come from the `usage` numbers the API itself reported — measured, not guessed. | [`src/observer.js`](src/observer.js) |
+| `~/.claude/skills`, `~/.claude/plugins` | Builds the skill cheat-sheet by scanning for `SKILL.md`. LunaCore **shows** what that machine has; it never installs, edits or removes a skill. | [`src/skills.js`](src/skills.js) |
+
+**Writes — exactly two files**, both inside one directory:
+
+| Build | Directory |
+|-------|-----------|
+| Installed | `%APPDATA%\LunaCore\config\` |
+| Portable | `LunaCore-config\`, next to the `.exe` |
+| Running from a clone | the repo's own `config/` |
+
+- `ui.local.json` — theme, language, active profile, layout preset, boot toggle
+  ([`src/uiprefs.js`](src/uiprefs.js))
+- `scratchpad.local.md` — whatever you typed into the scratchpad
+  ([`src/scratchpad.js`](src/scratchpad.js))
+
+Nothing else anywhere on your disk is written. The shipped `config/*.json`
+defaults are read-only; your overrides live beside them as `*.local.json` and are
+merged on top, which is why an update can still deliver a new theme or a
+corrected rate table.
+
+**Network — one endpoint, one verb:**
+
+`GET https://api.anthropic.com/api/oauth/usage`, polled every 90 seconds to draw
+the usage gauge. That is the *only* outbound request LunaCore makes. It never
+calls `/v1/messages`, which is precisely why it **cannot spend your tokens** —
+see *Core constraint* below. Setting `ENABLE_USAGE_METER` to `false` in
+[`src/main.js`](src/main.js) turns the gauge off and leaves the app making no
+network requests at all.
+
+The UI process is additionally locked down with a Content-Security-Policy of
+`connect-src 'none'`: the renderer **structurally cannot** reach the network, no
+matter what it is asked to display.
+
+**Runs:** your default shell (`powershell.exe` on Windows, `$SHELL` elsewhere)
+and, inside it, the active profile's command — normally `claude`. That is the
+terminal in the middle of the window, and it is a real one.
+
+---
+
 ## ⚠️ Core constraint: zero extra tokens
 
 LunaCore **must not** inject hidden system prompts, middleware, or modify the
@@ -77,7 +154,12 @@ table falls back to 200k, so the bar reads far too high — see
 [Keeping the model tables current](#keeping-the-model-tables-current).
 
 Security: the renderer has **no** direct Node.js access. All IPC goes through a
-`contextBridge` preload (`contextIsolation: true`, `nodeIntegration: false`).
+`contextBridge` preload (`contextIsolation: true`, `nodeIntegration: false`), and
+a Content-Security-Policy in `index.html` starts from `default-src 'none'`,
+opening only what is genuinely needed — `script-src 'self'`, `connect-src 'none'`.
+`style-src` keeps `'unsafe-inline'` because xterm.js injects its own `<style>`
+elements; scripts need no such exemption, which is why the boot failsafe lives in
+`boot-failsafe.js` rather than inline.
 
 ---
 

@@ -9,8 +9,8 @@ the six lessons the conversions have cost so far.
 | | State |
 |---|---|
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation. **222 tests** |
-| **In flight** | **Phase D — make it a product.** D0, D1, D2 and D3 are done. **D4 (release hygiene: README download section + read-only disclosure, CSP) is what stands between here and a public release.** |
-| **Next action** | **D4 — release hygiene.** README download section + a plain statement of every file the app reads, a Content-Security-Policy, then tag `v0.9.0`. **Blocked on one thing only: Mati has not yet installed the built artifact.** The probe verified the packaged build's config, widgets and themes, but it cannot see a pixel or spawn a real PTY — the hand-check list is in §D2a. |
+| **In flight** | **Phase D — make it a product. D0–D4 are all done.** The installer has been built, installed and machine-verified (§D2a), and the release disclosure + CSP shipped (§D4a). |
+| **Next action** | **Tag `v0.9.0` and cut the GitHub release.** The only thing between here and that tag is the four-item eyes-only check in §D2a — a real `claude` session in the terminal, Chakra Petch actually rendering, the theme round-trip through a restart, and the taskbar icon. Everything a machine could verify has been. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -1245,7 +1245,7 @@ GitHub release**, shipping **both** an NSIS installer and a portable `.exe`,
 | D1 | **Config relocation** (bundled defaults vs writable user dir) | ✅ **DONE 2026-08-05** — `src/paths.js`, 9 modules converted, 208 → 216 tests. See §D1a. |
 | D2 | **electron-builder** | ✅ **DONE 2026-08-05** — NSIS (per-user) + portable, LUNA/CORE icon, packaged probe. See §D2a. |
 | D3 | **Degrade honestly** | ✅ **DONE 2026-08-05** — English default, "Claude Code not found" notice, version 0.9.0. See §D3a. |
-| D4 | **Release hygiene** | ⬜ **NEXT.** README download section + the read-only disclosure, CSP, tag `v0.9.0`. |
+| D4 | **Release hygiene** | ✅ **DONE 2026-08-06** — README download section + full read/write/network disclosure, CSP (`default-src 'none'`), boot failsafe moved out of inline. Tagging `v0.9.0` is the one step left. See §D4a. |
 | D5 | **Auto-update** | ⬜ optional, GitHub releases (repo is already `Kotsur69/Luna-Core-HUD`). |
 
 #### D0 — what the pre-flight audit found
@@ -1330,16 +1330,33 @@ smudge — legible as *which* app, not as text.
 
 <h5>Still unverified by human eyes</h5>
 
-The probe cannot see a pixel or spawn a real PTY. Install
-`dist\LunaCore Setup 0.9.0.exe` and check:
+The probe cannot see a pixel or spawn a real PTY. **Installed and machine-checked
+2026-08-06** (silent `/S` install, per-user, no admin prompt); what a machine
+could settle is settled, and what is left genuinely needs eyes:
 
-- [ ] Terminal spawns and `claude` actually runs — what `asarUnpack` exists for.
+- [x] **Installer works.** `%LOCALAPPDATA%\Programs\lunacore\` populated, exit 0.
+- [x] **Packaged app boots and mounts everything** — probe from the installed
+      `.exe`: 14 widgets mounted + remounted, identical bus counts, 9 themes read
+      from inside `app.asar`, every `rows` at 1.
+- [x] **`asarUnpack` did its job.**
+      `resources\app.asar.unpacked\...\@lydell\node-pty-win32-x64\prebuilds\win32-x64\conpty.node`
+      exists **outside** the archive. Worth noting: electron-builder unpacked the
+      *platform* package (`node-pty-win32-x64`), which the configured glob
+      (`@lydell/node-pty/**`) does not literally match — it auto-unpacks `.node`
+      binaries. The setting is still right to keep; it just was not what saved us.
+- [x] **Portable config really does land next to the `.exe`** — proved rather
+      than assumed: a `themes.local.json` planted in `dist\LunaCore-config\`
+      appeared in the portable probe's theme list (`portable-probe-test`) and in
+      no other build, so `PORTABLE_EXECUTABLE_DIR` resolves as §D1a claims.
+      **Note the folder is created lazily on first write**, so a fresh portable
+      run that changes nothing correctly leaves no folder — that absence is not a
+      bug, and it is why the injected-theme test was needed at all.
+- [ ] **Terminal spawns and `claude` actually runs.** The native module loading
+      is proven; a real PTY session is not.
 - [ ] Headings render in Chakra Petch, not Segoe — a fallback means `assets/`
       did not ship (the asar listing says it did; eyes beat listings).
-- [ ] **Change theme → close → reopen → it remembered.** The direct proof D1
-      worked; before D1 this silently forgot.
-- [ ] Portable `.exe`: a `LunaCore-config` folder appears *next to it*, not in
-      `%APPDATA%`.
+- [ ] **Change theme → close → reopen → it remembered.** Needs a click: the
+      write only happens on a real preference change, so no probe can reach it.
 - [ ] Icon reads acceptably in the taskbar and Start Menu.
 
 #### D3a — degrading honestly for someone who is not Mati
@@ -1374,8 +1391,54 @@ installed would send someone to reinstall a working tool. Only a definite
 
 **Not done in D3:** surfacing *corrupt config* in the UI. The loaders already
 reject-don't-repair and warn to the main-process console, but a user never sees
-that console. Needs a warn channel from main to the renderer; folded into D4 or
-later, and called out here so it is not mistaken for finished.
+that console. Needs a warn channel from main to the renderer; **not** picked up by
+D4 either — carried forward, and called out here so it is not mistaken for
+finished.
+
+#### D4a — release hygiene: the disclosure, and a CSP that had to move code
+
+**The README disclosure was the point of D4, not the CSP.** LunaCore reads
+`~/.claude/.credentials.json`. On Mati's own machine that is a convenience; on a
+public repo, an app that reads a credentials file *without saying so* is
+indistinguishable from malware, and "the source is right there" does not repair a
+first impression. The new *What LunaCore reads, writes and sends* section lists
+every path read, the two files written, and the single network endpoint — each
+linked to the source that does it. **Every claim was re-derived from `src/` this
+session rather than from this file**, which matters: the write surface really is
+two files (`uiprefs.js:96`, `scratchpad.js:45`), and that is what makes the claim
+defensible rather than merely reassuring.
+
+**The CSP forced a code change, and it was the interesting part.** `script-src
+'self'` cannot coexist with the inline boot failsafe — and that failsafe is
+load-bearing: it is the only thing that removes the boot overlay if the renderer
+dies while parsing, which the `t` collision with `i18n.js` once did for real.
+Granting `'unsafe-inline'` to keep it would have made the directive decorative.
+It moved to `boot-failsafe.js`, still a **classic** script, still outside the
+module graph, so the guarantee it exists for is unchanged.
+
+`style-src` keeps `'unsafe-inline'`, and that is not laziness: xterm.js creates
+its own `<style>` elements for dimensions and theme, and the context bar ships a
+`style="--ctx: 0"` attribute. The theme tokens written through
+`el.style.setProperty()` — most of the theming system — are CSSOM and never
+needed the exemption at all.
+
+**`connect-src 'none'` is the directive that earns its keep.** The usage gauge's
+HTTPS call lives in the MAIN process, which CSP does not govern, so forbidding
+the renderer outright costs nothing — and the renderer is the half that renders
+config-driven content.
+
+**The question that actually needed answering: does `'self'` match `file://`?**
+Chromium file: origins are opaque, and a CSP that quietly blocked every script
+would have produced a blank window — the failure mode this project has hit twice.
+It works, verified in both trees: `--enable-logging` shows no violation and no
+`Refused to`, and `--luna-probe` reports 14 widgets mounted and remounted with
+identical bus counts, 9 themes, every `rows` at 1. **Electron's own CSP warning
+disappearing is the cheap tell that the header parsed at all** — a malformed CSP
+would have left that warning up while enforcing nothing, which is the same
+"looks like a pass" trap as §D2a's silent probe.
+
+**Already done, contrary to §D0's list:** the `package.json` description is
+English (`"Visual GUI dashboard for the Claude Code CLI…"`). No change needed.
 
 #### D1a — config relocation: the two roots, and what §7 got wrong
 
