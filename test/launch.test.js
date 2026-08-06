@@ -9,9 +9,60 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { withSessionId } = require('../src/launch');
+const { withSessionId, findExecutable } = require('../src/launch');
 
 const UUID = '00000000-0000-0000-0000-000000000000';
+
+// ---- findExecutable (D3) ----------------------------------------------------
+// Drives the "Claude Code not found" notice. A false negative nags someone whose
+// install is fine; a false positive leaves a newcomer with no explanation at all.
+
+/** Fake filesystem: only the listed paths exist. */
+const fsWith = (...present) => {
+  const set = new Set(present.map((p) => p.toLowerCase()));
+  return (p) => set.has(String(p).toLowerCase());
+};
+
+test('findExecutable znajduje claude.cmd na Windows (instalacja przez npm)', () => {
+  const PATH = 'C:\\Windows;C:\\Users\\x\\AppData\\Roaming\\npm';
+  const hit = 'C:\\Users\\x\\AppData\\Roaming\\npm\\claude.cmd';
+  assert.equal(findExecutable('claude', PATH, true, fsWith(hit)), hit);
+});
+
+test('findExecutable znajduje bezrozszerzeniowy plik na POSIX', () => {
+  const hit = '/home/x/.local/bin/claude';
+  assert.equal(findExecutable('claude', '/usr/bin:/home/x/.local/bin', false, fsWith(hit)), hit);
+});
+
+test('findExecutable zwraca null, gdy binarki nigdzie nie ma', () => {
+  assert.equal(findExecutable('claude', 'C:\\Windows;C:\\Temp', true, fsWith()), null);
+});
+
+test('findExecutable przezywa pusty i uszkodzony PATH', () => {
+  // Puste segmenty i cudzyslowy wokol katalogow to normalny widok w PATH na
+  // Windows - nie moga przerwac szukania.
+  const hit = 'C:\\bin\\claude.exe';
+  assert.equal(findExecutable('claude', ';;"C:\\bin";', true, fsWith(hit)), hit);
+  assert.equal(findExecutable('claude', '', true, fsWith(hit)), null);
+  assert.equal(findExecutable('claude', undefined, true, fsWith(hit)), null);
+});
+
+test('findExecutable nie przewraca sie na wpisie, ktory rzuca wyjatkiem', () => {
+  // Jeden nieczytelny katalog nie moze sprawic, ze obecna binarka wyglada na
+  // nieobecna - inaczej pokazalibysmy ostrzezenie komus, kto ma wszystko dobrze.
+  const hit = 'C:\\good\\claude.exe';
+  const exists = (p) => {
+    if (String(p).startsWith('C:\\bad')) throw new Error('EACCES');
+    return p === hit;
+  };
+  assert.equal(findExecutable('claude', 'C:\\bad;C:\\good', true, exists), hit);
+});
+
+test('findExecutable woli .exe/.cmd od wariantu bez rozszerzenia', () => {
+  const dir = 'C:\\bin';
+  const both = fsWith('C:\\bin\\claude.exe', 'C:\\bin\\claude');
+  assert.equal(findExecutable('claude', dir, true, both), 'C:\\bin\\claude.exe');
+});
 
 test('withSessionId pins a plain claude launch', () => {
   // The default profile (config/profiles.json -> "claude-cloud") is exactly this

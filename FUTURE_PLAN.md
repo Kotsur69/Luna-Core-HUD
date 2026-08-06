@@ -8,9 +8,9 @@ the six lessons the conversions have cost so far.
 
 | | State |
 |---|---|
-| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D1 (config relocation) DONE**, **216 tests** |
-| **In flight** | **Phase D — make it a product.** D0 (packaging pre-flight audit) and D1 (config relocation) are done; **D2 (electron-builder) is the next build step.** |
-| **Next action** | **D2 — electron-builder.** `build` block with `asarUnpack` for `@lydell/node-pty` (a native module; packed into asar it will not load and the terminal never spawns), a `files` allowlist that includes `assets/` and `config/`, an app icon, then NSIS **and** portable targets. **Verification means installing the built artifact and running it** — `npm test` cannot see a single packaging failure. |
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation. **222 tests** |
+| **In flight** | **Phase D — make it a product.** D0, D1, D2 and D3 are done. **D4 (release hygiene: README download section + read-only disclosure, CSP) is what stands between here and a public release.** |
+| **Next action** | **D4 — release hygiene.** README download section + a plain statement of every file the app reads, a Content-Security-Policy, then tag `v0.9.0`. **Blocked on one thing only: Mati has not yet installed the built artifact.** The probe verified the packaged build's config, widgets and themes, but it cannot see a pixel or spawn a real PTY — the hand-check list is in §D2a. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -29,7 +29,11 @@ Two facts that decide most design questions here, both learned the hard way:
 Verification commands, in the order they earn their keep:
 
 ```bash
-npm test                          # 216 tests, ~1 s, no extra deps
+npm test                          # 222 tests, ~1 s, no extra deps
+npm run dist                      # D2: NSIS installer + portable .exe -> dist/
+dist\win-unpacked\LunaCore.exe --luna-probe   # probe the PACKAGED build; result
+                                  # lands in %APPDATA%\LunaCore\luna-probe.json
+                                  # (a packaged GUI app has no stdout)
 npx electron . --luna-probe       # remounts every widget 3×, then cycles every
                                   # layout preset 2× and returns; prints bus counts
 npx electron . --enable-logging   # renderer console → stdout (smoke test, no DevTools)
@@ -1239,9 +1243,9 @@ GitHub release**, shipping **both** an NSIS installer and a portable `.exe`,
 |---|------|-------|
 | D0 | **Packaging pre-flight audit** | ✅ **DONE 2026-08-05.** Findings below. |
 | D1 | **Config relocation** (bundled defaults vs writable user dir) | ✅ **DONE 2026-08-05** — `src/paths.js`, 9 modules converted, 208 → 216 tests. See §D1a. |
-| D2 | **electron-builder** | ⬜ **NEXT.** `asarUnpack` for node-pty, `files` allowlist with `assets/` + `config/`, icon, NSIS + portable. |
-| D3 | **Degrade honestly** | ⬜ missing `claude`, corrupt config, absent credentials file. Also: **default language must become `en`** (see below). |
-| D4 | **Release hygiene** | ⬜ README download section + the read-only disclosure, version bump, CSP. |
+| D2 | **electron-builder** | ✅ **DONE 2026-08-05** — NSIS (per-user) + portable, LUNA/CORE icon, packaged probe. See §D2a. |
+| D3 | **Degrade honestly** | ✅ **DONE 2026-08-05** — English default, "Claude Code not found" notice, version 0.9.0. See §D3a. |
+| D4 | **Release hygiene** | ⬜ **NEXT.** README download section + the read-only disclosure, CSP, tag `v0.9.0`. |
 | D5 | **Auto-update** | ⬜ optional, GitHub releases (repo is already `Kotsur69/Luna-Core-HUD`). |
 
 #### D0 — what the pre-flight audit found
@@ -1284,6 +1288,94 @@ asar". Four results, two of them corrections to assumptions in this very file:
 **Cannot be solved, only documented:** an unsigned Windows binary triggers
 SmartScreen. A code-signing certificate is a few hundred a year. The README
 should make the warning expected rather than alarming.
+
+#### D2a — packaging, and the probe that went silent
+
+Shipped as `042d9c4`. `npm run dist` produces `LunaCore Setup 0.9.0.exe` (NSIS,
+per-user, no UAC) and `LunaCore-0.9.0-portable.exe`, ~77 MB each.
+
+Three settings carry the whole thing:
+
+- **`asarUnpack` for `@lydell/node-pty`.** A native module will not load from
+  inside an asar. Without this the terminal never spawns — the one failure that
+  makes the entire app pointless, and one no test can reach.
+- **`files` allowlist excludes `config/*.local.json`.** Verified by listing the
+  built archive rather than by trusting the glob: all 6 woff2 faces and all 7
+  base configs present, **zero `*.local.json`**. `profiles.local.json` holds API
+  keys, so this is the difference between a release and an incident.
+- **`perMachine: false`.** No UAC prompt, which matters when the binary is
+  already unsigned and facing SmartScreen. Stacking two scary dialogs on a first
+  run is how people decide not to bother.
+
+**The lesson worth keeping: the probe went silent on the packaged build and
+looked like a pass.** A packaged Windows app is a GUI-subsystem binary and never
+attaches to the parent console, so `console.log` went nowhere — `--luna-probe`
+on the `.exe` printed nothing at all and exited 0. This is the *same* failure the
+theme probe taught us in §C1d, in a new disguise: **a probe that cannot report is
+indistinguishable from a probe that passed.** It now writes `luna-probe.json` to
+`userData` as well, and the packaged build then reported the full clean sweep —
+14 widgets mounted, 4 presets cycled, all 9 themes loaded *from inside the asar*,
+identical bus counts, `rows` all 1.
+
+**The icon** is LUNA over CORE in the 04b_30 pixel font, yellow on the cyberpunk
+plate. `scripts/make-icon.js` renders it with Electron — already a devDependency,
+so no new packages — by drawing into a 64px canvas and upscaling 8× with
+`imageSmoothingEnabled = false`; drawing straight at 512px would antialias a
+pixel font into mush. The `.ttf` is only rasterized, never copied into the repo
+or the shipped app, so the release redistributes no font. The script **hard-fails
+if the face did not load**, because a silently-missing pixel font produces a
+smooth icon that looks deliberate rather than broken. Known limitation, accepted:
+a wordmark cannot survive downscaling to 16×16, so the taskbar icon is a yellow
+smudge — legible as *which* app, not as text.
+
+<h5>Still unverified by human eyes</h5>
+
+The probe cannot see a pixel or spawn a real PTY. Install
+`dist\LunaCore Setup 0.9.0.exe` and check:
+
+- [ ] Terminal spawns and `claude` actually runs — what `asarUnpack` exists for.
+- [ ] Headings render in Chakra Petch, not Segoe — a fallback means `assets/`
+      did not ship (the asar listing says it did; eyes beat listings).
+- [ ] **Change theme → close → reopen → it remembered.** The direct proof D1
+      worked; before D1 this silently forgot.
+- [ ] Portable `.exe`: a `LunaCore-config` folder appears *next to it*, not in
+      `%APPDATA%`.
+- [ ] Icon reads acceptably in the taskbar and Start Menu.
+
+#### D3a — degrading honestly for someone who is not Mati
+
+Three changes, all aimed at a first-time user rather than at us:
+
+- **Default language is now `en`** (`uiprefs.js`). This was the audit's trap: it
+  is a *first-run* value only, so a machine whose `ui.local.json` already records
+  a choice can never reproduce the bug — it was invisible here by construction
+  while handing every stranger a UI they could not read.
+- **"Claude Code not found" notice.** `findExecutable()` in `launch.js` searches
+  PATH *after* `withClaudeOnPath()` has had its say, so a native install in
+  `~/.local/bin` still counts as found. The notice is a sibling of `.app`, not a
+  child — a child would be laid out as a grid item and swallow a region of the
+  active preset, the same trap C3's texture layer hit. Dismissible, not blocking:
+  LunaCore is perfectly usable as a plain terminal or with a non-Claude profile.
+- **The docs URL lives in `main.js`, not the renderer.** `shell.openExternal` on
+  a renderer-supplied string is an open redirect into the user's browser; the
+  renderer can only ask for the one page we chose.
+
+**`findExecutable` is pure and the tests caught a real flaw in it.** It took
+`isWindows` as a parameter but used the *host* platform's `path.join`, so on
+Windows the flag and the separator could disagree — harmless while we ship
+Windows only, and a silent wrong answer the first time anyone runs it elsewhere.
+Now it selects `path.win32.join` / `path.posix.join` explicitly. Six tests
+(216 → 222).
+
+**Its failure mode is silence.** If the check itself throws, the notice does not
+appear: a banner claiming Claude Code is missing on a machine where it is
+installed would send someone to reinstall a working tool. Only a definite
+"not found" is worth interrupting anyone for.
+
+**Not done in D3:** surfacing *corrupt config* in the UI. The loaders already
+reject-don't-repair and warn to the main-process console, but a user never sees
+that console. Needs a warn channel from main to the renderer; folded into D4 or
+later, and called out here so it is not mistaken for finished.
 
 #### D1a — config relocation: the two roots, and what §7 got wrong
 

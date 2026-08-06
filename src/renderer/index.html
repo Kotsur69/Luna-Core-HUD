@@ -18,6 +18,21 @@
        nie ma juz na sztywno w markupie. -->
   <div class="app"></div>
 
+  <!--
+    D3: shown only when the `claude` binary is nowhere on PATH. Deliberately a
+    SIBLING of .app, not a child: .app is the layout grid, and a child would be
+    laid out as a grid item and swallow a region of whatever preset is active.
+    Hidden by default so it can never flash during boot.
+  -->
+  <div id="claude-missing" class="notice" hidden>
+    <div class="notice__body">
+      <strong data-i18n="claude.missing.title">Claude Code not found</strong>
+      <span data-i18n="claude.missing.body">The terminal works, but the "claude" command is not on your PATH.</span>
+    </div>
+    <button id="claude-missing-docs" class="notice__link" type="button" data-i18n="claude.missing.install">How to install</button>
+    <button id="claude-missing-close" class="notice__close" type="button" data-i18n-title="claude.missing.dismiss" title="Dismiss">×</button>
+  </div>
+
   <!-- ================= Chrome HUD (parking) =================
        Znak firmowy i linia statusu PTY NIE sa widgetami: ptystatus.js chwyta
        #pty-status-dot w czasie importu modulu, wiec nie moga siedziec w

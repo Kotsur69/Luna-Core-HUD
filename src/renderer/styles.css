@@ -276,6 +276,83 @@ body::after {
    terminal underneath it mid-flight. `backwards` fill is what makes a staggered
    region stay hidden during its delay rather than flashing at full opacity
    first. */
+/* ---- D3: "Claude Code not found" notice -----------------------------------
+ * z-index 90 sits ABOVE the texture overlay (50) so scanline themes cannot
+ * wash it out, and BELOW the palette (100) and boot (200) - during boot it is
+ * covered, which is correct: nothing should compete with the boot sequence.
+ * Tokens only, no new custom properties (the :root block is drift-guarded by
+ * test/theme.test.js).
+ */
+.notice {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-panel-2);
+  border-bottom: var(--border-w) solid var(--warn);
+  box-shadow: 0 0 var(--glow-size-md) var(--glow);
+  font-family: var(--font-ui);
+  color: var(--text);
+  animation: region-in var(--dur-normal) var(--ease-smooth) backwards;
+}
+
+.notice[hidden] {
+  display: none;
+}
+
+.notice__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.notice__body strong {
+  color: var(--warn);
+  letter-spacing: var(--tracking-brand);
+}
+
+.notice__body span {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.notice__link,
+.notice__close {
+  flex: none;
+  cursor: pointer;
+  background: var(--btn-grad);
+  color: var(--text);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  transition: border-color var(--dur-fast) var(--ease-sharp),
+    background var(--dur-fast) var(--ease-sharp);
+}
+
+.notice__link {
+  padding: 6px 12px;
+}
+
+.notice__close {
+  width: 28px;
+  height: 28px;
+  line-height: 1;
+  font-size: 16px;
+}
+
+.notice__link:hover,
+.notice__close:hover {
+  background: var(--btn-grad-hover);
+  border-color: var(--warn);
+}
+
 @keyframes region-in {
   from { opacity: 0; transform: translateY(10px); }
 }

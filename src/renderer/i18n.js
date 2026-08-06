@@ -26,6 +26,11 @@ const I18N_DICT = {
     'autocompact.off': 'wylaczone',
     'autocompact.armed': 'uzbrojone · prog 85%',
     'autocompact.fired': 'wyslano /compact',
+    'claude.missing.title': 'Nie znaleziono Claude Code',
+    'claude.missing.body':
+      'Terminal dziala, ale komenda "claude" nie jest na PATH. Zainstaluj Claude Code, aby korzystac z pelnego HUD-a.',
+    'claude.missing.install': 'Jak zainstalowac',
+    'claude.missing.dismiss': 'Zamknij',
     'appearance.title': 'Wyglad',
     'appearance.theme': 'Motyw',
     'appearance.layout': 'Uklad',
@@ -143,6 +148,11 @@ const I18N_DICT = {
     'autocompact.off': 'off',
     'autocompact.armed': 'armed · 85% threshold',
     'autocompact.fired': '/compact sent',
+    'claude.missing.title': 'Claude Code not found',
+    'claude.missing.body':
+      'The terminal works, but the "claude" command is not on your PATH. Install Claude Code to use the full HUD.',
+    'claude.missing.install': 'How to install',
+    'claude.missing.dismiss': 'Dismiss',
     'appearance.title': 'Appearance',
     'appearance.theme': 'Theme',
     'appearance.layout': 'Layout',

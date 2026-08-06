@@ -26,7 +26,7 @@ const { detectTools, TranscriptWatcher } = require('./observer');
 // Profile uruchomieniowe (Faza 4): definicje "jak wystartowac sesje" z JSON.
 const { loadProfiles, getProfile } = require('./profiles');
 // Budowanie komendy startowej: decyduje, czy sesje da sie przypiac po id.
-const { withSessionId } = require('./launch');
+const { withSessionId, findExecutable } = require('./launch');
 // Przelacznik projektu: katalogi robocze (cwd) sesji z config/projects.json.
 const { loadProjects, getProject } = require('./projects');
 // Tracker portow localhost (7B): pasywny skan nasluchujacych portow + kill.
@@ -776,6 +776,24 @@ function registerIpc() {
   ipcMain.handle('scratchpad:write', (_event, text) => writeScratchpad(text));
 
   // Motywy: lista dostepnych motywow (tokeny CSS + kolory xterm).
+  // D3. Answers "is Claude Code installed at all?" so the HUD can say so in
+  // words instead of leaving a newcomer staring at `command not found`.
+  // Searched on the env AFTER withClaudeOnPath(), so a native install in
+  // ~/.local/bin that never made it onto PATH still counts as found.
+  ipcMain.handle('claude:status', () => {
+    const env = withClaudeOnPath({ ...process.env });
+    const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+    const found = findExecutable('claude', env[key], IS_WINDOWS, fs.existsSync);
+    return { found: Boolean(found), path: found };
+  });
+
+  // The URL lives HERE, not in the renderer. openExternal on a renderer-supplied
+  // string would be an open redirect straight into the user's browser; this way
+  // the renderer can only ask for the one page we chose.
+  ipcMain.on('claude:docs', () => {
+    shell.openExternal('https://docs.claude.com/en/docs/claude-code/overview');
+  });
+
   ipcMain.handle('themes:list', () => loadThemes());
 
   // C1: presety ukladu (siatka + przydzial widgetow do regionow).

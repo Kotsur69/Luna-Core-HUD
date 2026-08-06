@@ -31,9 +31,15 @@ const LANGS = ['pl', 'en'];
 // layout: id of the last chosen layout preset (C1). null = no choice recorded,
 // in which case activeLayout from config/layouts.json decides - same shape as
 // `profile` above.
+// lang: English is the default because LunaCore ships publicly (D3). This is
+// only the FIRST-RUN value - once anyone picks a language it is remembered in
+// ui.local.json, so switching the default cannot change an existing setup. It
+// was 'pl' until 2026-08-05, which was invisible on a developer machine whose
+// prefs file already recorded a choice, and would have handed every stranger a
+// UI they could not read.
 const DEFAULTS = {
   theme: 'cyberpunk',
-  lang: 'pl',
+  lang: 'en',
   boot: true,
   profile: null,
   layout: null,

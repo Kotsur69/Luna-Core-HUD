@@ -102,6 +102,16 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Wymusza odswiezenie zuzycia; Promise ze swiezym stanem. */
   refreshUsage: () => ipcRenderer.invoke('usage:refresh'),
 
+  // --- D3: czy Claude Code jest w ogole zainstalowane ---
+  /** Pobiera { found: boolean, path: string|null }. */
+  getClaudeStatus: () => ipcRenderer.invoke('claude:status'),
+  /**
+   * Otwiera oficjalna instrukcje instalacji w przegladarce.
+   * Bez argumentu celowo - adres jest zaszyty w main.js, wiec renderer nie moze
+   * wskazac dowolnego URL-a do otwarcia w systemowej przegladarce.
+   */
+  openClaudeDocs: () => ipcRenderer.send('claude:docs'),
+
   // --- Motywy + preferencje UI (motyw/jezyk) ---
   /** Pobiera { themes: [{id,label,vars,terminal}] }. */
   getThemes: () => ipcRenderer.invoke('themes:list'),

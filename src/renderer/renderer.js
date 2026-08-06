@@ -48,6 +48,7 @@ import './modules/palette.js';
 import { initProfiles, initProjects } from './modules/switchers.js';
 import { initPorts } from './modules/ports.js';
 import { initAppearance, getThemeIds, selectTheme } from './modules/appearance.js';
+import { initClaudeCheck } from './modules/claudecheck.js';
 
 // -- Widgets (A2) -------------------------------------------------------------
 // Blocks converted to the widget contract. They self-register at import time
@@ -102,6 +103,12 @@ initSkills();
 initPorts();
 initAppearance();
 initSessions();
+
+// D3. After initAppearance() so applyStatic() has already resolved the notice's
+// data-i18n keys - showing it earlier would flash the authored English strings
+// at a user who chose Polish. Not awaited: it is an IPC round trip, and nothing
+// below depends on its answer.
+initClaudeCheck();
 
 // ---- Dev hooks (A2) ---------------------------------------------------------
 //
