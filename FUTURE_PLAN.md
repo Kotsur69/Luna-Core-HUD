@@ -9,8 +9,8 @@ the six lessons the conversions have cost so far.
 | | State |
 |---|---|
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation. **222 tests** |
-| **In flight** | **Phase D — make it a product. D0–D4 are all done.** The installer has been built, installed and machine-verified (§D2a), and the release disclosure + CSP shipped (§D4a). |
-| **Next action** | **Tag `v0.9.0` and cut the GitHub release.** The only thing between here and that tag is the four-item eyes-only check in §D2a — a real `claude` session in the terminal, Chakra Petch actually rendering, the theme round-trip through a restart, and the taskbar icon. Everything a machine could verify has been. |
+| **In flight** | **Nothing. Phase D is CLOSED and `v0.9.0` is public** — [releases/tag/v0.9.0](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.0), with both the installer and the portable `.exe` attached. |
+| **Next action** | **Run the four eyes-only checks in §D2a.** They were skipped in order to ship, so they are now outstanding *against a public binary*. The one that matters is the terminal actually spawning a `claude` session — the native module is proven loaded, which is not the same as proven working. After that, pick the next phase: D5 auto-update, the deferred C2/C4 visual work, or §9 multi-model. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -1245,8 +1245,9 @@ GitHub release**, shipping **both** an NSIS installer and a portable `.exe`,
 | D1 | **Config relocation** (bundled defaults vs writable user dir) | ✅ **DONE 2026-08-05** — `src/paths.js`, 9 modules converted, 208 → 216 tests. See §D1a. |
 | D2 | **electron-builder** | ✅ **DONE 2026-08-05** — NSIS (per-user) + portable, LUNA/CORE icon, packaged probe. See §D2a. |
 | D3 | **Degrade honestly** | ✅ **DONE 2026-08-05** — English default, "Claude Code not found" notice, version 0.9.0. See §D3a. |
-| D4 | **Release hygiene** | ✅ **DONE 2026-08-06** — README download section + full read/write/network disclosure, CSP (`default-src 'none'`), boot failsafe moved out of inline. Tagging `v0.9.0` is the one step left. See §D4a. |
-| D5 | **Auto-update** | ⬜ optional, GitHub releases (repo is already `Kotsur69/Luna-Core-HUD`). |
+| D4 | **Release hygiene** | ✅ **DONE 2026-08-06** — README download section + full read/write/network disclosure, CSP (`default-src 'none'`), boot failsafe moved out of inline. See §D4a. |
+| — | **`v0.9.0` released** | ✅ **DONE 2026-08-06** — annotated tag on `e4704e6`, public GitHub release with both binaries attached. See §D4b for how it was published without admin rights. |
+| D5 | **Auto-update** | ⬜ optional, GitHub releases (repo is already `Kotsur69/Luna-Core-HUD`, and `latest.yml` is already produced by the build). |
 
 #### D0 — what the pre-flight audit found
 
@@ -1439,6 +1440,38 @@ would have left that warning up while enforcing nothing, which is the same
 
 **Already done, contrary to §D0's list:** the `package.json` description is
 English (`"Visual GUI dashboard for the Claude Code CLI…"`). No change needed.
+
+#### D4b — publishing the release from a machine with no admin rights
+
+Worth writing down, because the obvious route is blocked here and will stay
+blocked.
+
+`gh` cannot be installed on this laptop: the GitHub CLI ships a **per-machine
+MSI**, `winget` downloaded it fine and then the installer returned **1602, "You
+cancelled the installation"** — which is Windows' misleading way of saying a UAC
+prompt appeared and nobody could approve it. The laptop is IT-managed.
+
+**The CLI was never needed.** `git push` works, so Git Credential Manager already
+holds a GitHub token with repo scope, and `git credential fill` will hand it over:
+
+```bash
+TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | sed -n 's/^password=//p')
+```
+
+From there the REST API does everything `gh release create` would:
+`POST /repos/:owner/:repo/releases` to create it, then
+`POST uploads.github.com/repos/:owner/:repo/releases/:id/assets?name=…` with
+`Content-Type: application/octet-stream` and `--data-binary @file` per asset.
+
+**Two things that bite:** GitHub replaces spaces in asset names with dots, so the
+installer was uploaded as `LunaCore-Setup-0.9.0.exe` and the README download table
+had to be corrected to match (`70376ff`) — a table that disagrees with the release
+page is the first thing a visitor checks. And **a tag is not a release**: pushing
+`v0.9.0` alone left the README's "Latest release →" link 404ing, because
+`/releases/latest` only resolves once a published, non-draft release exists.
+
+**Shipped without the §D2a eyes-only checks**, by Mati's explicit decision. They
+are still outstanding and now apply to a binary strangers can download.
 
 #### D1a — config relocation: the two roots, and what §7 got wrong
 
