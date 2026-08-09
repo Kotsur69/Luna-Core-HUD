@@ -135,6 +135,21 @@ export function emitUsageUpdate(usage) {
   usageUpdate.emit(usage);
 }
 
+// D5. Replayed for a stronger reason than the two above: the update check runs
+// ONCE, at launch, so its answer usually lands before the widget exists. Without
+// replay the notice would stay blank until the user pressed the manual check -
+// i.e. exactly never, since nobody presses a button they have no reason to.
+const updateState = channel({ replay: true });
+
+/** Update availability: cb({state, info, percent, error, reason}) -> disposer */
+export function onUpdateState(cb) {
+  return updateState.on(cb);
+}
+
+export function emitUpdateState(state) {
+  updateState.emit(state);
+}
+
 // ---- Per-tab view state -----------------------------------------------------
 
 const sessionViews = [];
@@ -185,6 +200,7 @@ export function busStats() {
     langChange: langChange.size,
     portsUpdate: portsUpdate.size,
     usageUpdate: usageUpdate.size,
+    updateState: updateState.size,
     sessionViews: sessionViews.length,
   };
 }

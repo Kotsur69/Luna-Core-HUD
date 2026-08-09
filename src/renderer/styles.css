@@ -1503,6 +1503,91 @@ body::after {
    ruch ciagly. Sygnaly stanu nic nie traca, bo nosnikiem znaczenia jest u nas
    KOLOR (LED, kropka PTY, alarm kontekstu), a ruch byl tylko wzmocnieniem.
    ---------------------------------------------------------------------------- */
+/* ---- D5: powiadomienie o aktualizacji --------------------------------------
+   Zyje w widgecie `appearance` (patrz modules/update.js). Same tokeny motywu,
+   wiec dziala w kazdym z 9 motywow bez dopisywania czegokolwiek do nich.
+
+   Celowo BEZ animacji: globalny blok prefers-reduced-motion nizej i tak
+   zdusilby ja do 0.01 ms, a w tym HUD-zie nosnikiem znaczenia jest KOLOR.
+   Pasek postepu to transform sterowany danymi, nie animacja - przy ograniczonym
+   ruchu straci tylko plynnosc przejscia, nigdy sama informacje.
+---------------------------------------------------------------------------- */
+.update {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg-panel-2);
+  border: var(--border-w) solid transparent;
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+
+/* Jest co pobrac / zainstalowac - jedyny stan, ktory wolno wyroznic. */
+.update.is-available {
+  border-color: var(--warn);
+}
+
+.update__text {
+  flex: 1 1 100%;
+  color: var(--text-dim);
+}
+
+.update.is-available .update__text {
+  color: var(--warn);
+}
+
+.update__bar {
+  flex: 1 1 100%;
+  height: 3px;
+  background: var(--bg-panel);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.update__bar::after {
+  content: '';
+  display: block;
+  height: 100%;
+  background: var(--warn);
+  transform: scaleX(var(--update-progress, 0));
+  transform-origin: left center;
+  transition: transform 0.2s linear;
+}
+
+.update__buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.update__btn,
+.update__link {
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  padding: 3px 8px;
+  border: var(--border-w) solid var(--edge);
+  background: var(--bg-panel);
+  color: var(--text);
+}
+
+.update__btn:hover,
+.update__link:hover {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.update__link {
+  border-color: transparent;
+  background: none;
+  color: var(--text-dim);
+  text-decoration: underline;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .boot { display: none; }
 

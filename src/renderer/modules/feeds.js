@@ -20,7 +20,7 @@
 
 'use strict';
 
-import { emitPortsUpdate, emitUsageUpdate } from './bus.js';
+import { emitPortsUpdate, emitUsageUpdate, emitUpdateState } from './bus.js';
 
 // 7B: passive scan of listening localhost ports.
 window.lunacore.onPorts((ports) => {
@@ -31,4 +31,10 @@ window.lunacore.onPorts((ports) => {
 // in README: context window is per process, usage limits are per account.
 window.lunacore.onUsage((usage) => {
   emitUsageUpdate(usage);
+});
+
+// D5: update availability. App-scoped like usage, not per tab - there is one
+// LunaCore binary no matter how many sessions are open.
+window.lunacore.onUpdateState((state) => {
+  emitUpdateState(state);
 });

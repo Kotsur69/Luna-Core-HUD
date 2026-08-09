@@ -301,6 +301,18 @@
           <span class="switch__track"><span class="switch__thumb"></span></span>
         </span>
       </label>
+      <!-- D5: powiadomienie o aktualizacji. Mieszka TUTAJ, bo `appearance` jest
+           w REQUIRED_WIDGETS (src/layouts.js), wiec zaden preset ukladu nie moze
+           go pominac - w odroznieniu od osobnego widgetu. Tresc wypelnia
+           modules/update.js; domyslnie ukryte (klon deweloperski nic nie mowi). -->
+      <div id="update-notice" class="update" hidden>
+        <span id="update-text" class="update__text"></span>
+        <span id="update-bar" class="update__bar" hidden></span>
+        <span class="update__buttons">
+          <button type="button" id="update-action" class="update__btn" hidden></button>
+          <button type="button" id="update-notes" class="update__link" hidden></button>
+        </span>
+      </div>
     </div>
   </template>
 

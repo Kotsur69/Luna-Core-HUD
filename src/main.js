@@ -46,6 +46,16 @@ const { loadLayouts } = require('./layouts');
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
 // Licznik zuzycia limitow (5h + tydzien) - odczyt GET z endpointu OAuth CLI.
 const { fetchUsage, UsageWatcher } = require('./usage');
+// D5: aktualizacje. Same CZYSTE decyzje - `electron-updater` doladowywany jest
+// leniwie w getAutoUpdater(), dopiero gdy wiadomo, ze ta kompilacja moze sie
+// aktualizowac.
+const {
+  supportsUpdates,
+  normalizeUpdateInfo,
+  releaseUrl,
+  releasesUrl,
+  progressPercent,
+} = require('./update');
 
 // ---- Konfiguracja -----------------------------------------------------------
 
@@ -640,6 +650,134 @@ function startUsageWatcher() {
   usageWatcher.start();
 }
 
+// ---- D5: aktualizacje (tryb "powiadom, nie pobieraj") -----------------------
+// Sprawdzenie rusza raz, przy starcie. POBIERANIE NIE RUSZA SAMO - dopiero po
+// klinieciu uzytkownika. Uzasadnienie jest w naglowku src/update.js: binarka
+// jest niepodpisana, a aplikacja, ktorej cala obietnica to "czytam wylacznie to,
+// co wymieniam w README", nie ma prawa sciagac 80 MB w tle.
+//
+// Stan trzymamy TUTAJ, bo renderer moze sie podlaczyc pozniej niz przyjdzie
+// odpowiedz z sieci. Kanal `update:status` odgrywa ostatni stan na zadanie -
+// dokladnie ta sama zasada, co "feed replays its last payload" z §A2: widget
+// zamontowany miedzy odpytaniami inaczej stalby pusty.
+
+const ENABLE_AUTO_UPDATE = true;
+
+/** Ostatni znany stan aktualizacji. Kanal update:state rozsyla kazda zmiane. */
+let updateState = { state: 'idle', info: null, percent: 0, error: null, reason: null };
+
+/** Instancja electron-updater. null, dopoki nie okaze sie potrzebna. */
+let updaterInstance = null;
+
+// Wersja doklejana jest przy KAZDYM rozeslaniu, a nie trzymana osobno w
+// rendererze: "aktualna" to zdanie o dwoch liczbach naraz, wiec gdyby przyszly
+// dwoma kanalami, HUD mialby stan posredni, w ktorym pokazuje jedna bez drugiej.
+function setUpdateState(patch) {
+  updateState = { ...updateState, ...patch };
+  send('update:state', { ...updateState, version: app.getVersion() });
+}
+
+/** Fakty o srodowisku dla czystej decyzji supportsUpdates(). */
+function updateEnv() {
+  return {
+    isPackaged: app.isPackaged,
+    portableDir: process.env.PORTABLE_EXECUTABLE_DIR || null,
+  };
+}
+
+function errorText(err) {
+  if (!err) return 'unknown';
+  return String(err.message || err);
+}
+
+/**
+ * Leniwie tworzy i konfiguruje electron-updater.
+ *
+ * Wywolywane WYLACZNIE po tym, jak supportsUpdates() powie "tak" - w klonie
+ * deweloperskim modul szuka dev-app-update.yml i rzuca wyjatkiem, wiec samo jego
+ * zaladowanie na dev byloby bledem.
+ */
+function getAutoUpdater() {
+  if (updaterInstance) return updaterInstance;
+
+  const { autoUpdater } = require('electron-updater');
+
+  // Dwie linie, ktore realizuja wybor "powiadom, uzytkownik klika". Bez nich
+  // electron-updater domyslnie pobiera od razu i instaluje przy wyjsciu.
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  autoUpdater.on('update-available', (info) => {
+    setUpdateState({
+      state: 'available',
+      info: normalizeUpdateInfo(info),
+      percent: 0,
+      error: null,
+    });
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    setUpdateState({ state: 'none', info: null, percent: 0, error: null });
+  });
+
+  autoUpdater.on('download-progress', (p) => {
+    setUpdateState({ state: 'downloading', percent: progressPercent(p), error: null });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    setUpdateState({ state: 'ready', info: normalizeUpdateInfo(info), percent: 100 });
+  });
+
+  // Brak sieci, firewall, prywatne repo - wszystko trafia tutaj. Stan bledu jest
+  // widoczny w HUD, bo cicha porazka aktualizacji jest gorsza niz zadna: uzytkownik
+  // myslalby, ze ma najnowsza wersje.
+  autoUpdater.on('error', (err) => {
+    setUpdateState({ state: 'error', error: errorText(err) });
+  });
+
+  updaterInstance = autoUpdater;
+  return autoUpdater;
+}
+
+/** Odpytuje GitHuba o nowsze wydanie. Nic nie pobiera. */
+function checkForUpdate() {
+  const support = supportsUpdates(updateEnv());
+  if (!ENABLE_AUTO_UPDATE || !support.supported) return;
+
+  setUpdateState({ state: 'checking', error: null });
+  try {
+    // checkForUpdates() zwraca obietnice, ktora potrafi odrzucic ROWNOLEGLE do
+    // zdarzenia 'error'. Bez tego .catch() brak sieci to unhandled rejection.
+    Promise.resolve(getAutoUpdater().checkForUpdates()).catch((err) => {
+      setUpdateState({ state: 'error', error: errorText(err) });
+    });
+  } catch (err) {
+    setUpdateState({ state: 'error', error: errorText(err) });
+  }
+}
+
+/**
+ * Ustala stan startowy i - o ile wolno - odpytuje o aktualizacje.
+ *
+ * Kompilacja, ktora nie moze sie aktualizowac, dostaje stan 'unsupported' wraz z
+ * POWODEM (kodem, nie zdaniem - tlumaczy renderer), zeby HUD mogl pokazac
+ * "wersja portable: pobierz recznie" zamiast udawac, ze wszystko jest aktualne.
+ */
+function startUpdateCheck() {
+  if (!ENABLE_AUTO_UPDATE) {
+    setUpdateState({ state: 'unsupported', reason: 'off' });
+    return;
+  }
+
+  const support = supportsUpdates(updateEnv());
+  if (!support.supported) {
+    setUpdateState({ state: 'unsupported', reason: support.reason });
+    return;
+  }
+
+  checkForUpdate();
+}
+
 // ---- Kanaly IPC -------------------------------------------------------------
 
 function registerIpc() {
@@ -811,6 +949,52 @@ function registerIpc() {
     if (usageWatcher) usageWatcher.refresh();
     return fetchUsage();
   });
+
+  // ---- D5: aktualizacje ------------------------------------------------------
+
+  // Odgrywka stanu. Widget montuje sie pozniej, niz przychodzi odpowiedz z
+  // sieci, wiec bez tego kanalu pokazywalby 'idle' az do nastepnej zmiany.
+  ipcMain.handle('update:status', () => ({ ...updateState, version: app.getVersion() }));
+
+  // Reczne sprawdzenie (przycisk odswiezania).
+  ipcMain.on('update:check', () => checkForUpdate());
+
+  // Zgoda uzytkownika na pobranie. To JEDYNE miejsce, w ktorym cokolwiek jest
+  // sciagane - autoDownload zostaje na false.
+  ipcMain.on('update:download', () => {
+    const support = supportsUpdates(updateEnv());
+    if (!ENABLE_AUTO_UPDATE || !support.supported) return;
+
+    setUpdateState({ state: 'downloading', percent: 0, error: null });
+    try {
+      Promise.resolve(getAutoUpdater().downloadUpdate()).catch((err) => {
+        setUpdateState({ state: 'error', error: errorText(err) });
+      });
+    } catch (err) {
+      setUpdateState({ state: 'error', error: errorText(err) });
+    }
+  });
+
+  // Zgoda na restart i instalacje. Dopiero tutaj cokolwiek zmienia sie na dysku.
+  ipcMain.on('update:install', () => {
+    if (updateState.state !== 'ready') return;
+    try {
+      // isSilent=false: instalator ma byc widoczny. Binarka jest niepodpisana,
+      // wiec moze pojawic sie SmartScreen - cicha instalacja zostawilaby
+      // uzytkownika przed niewyjasnionym oknem systemowym.
+      getAutoUpdater().quitAndInstall(false, true);
+    } catch (err) {
+      setUpdateState({ state: 'error', error: errorText(err) });
+    }
+  });
+
+  // Strona wydania. Adres skladany jest TUTAJ, nigdy nie przychodzi z renderera:
+  // shell.openExternal na stringu z UI to otwarte przekierowanie prosto do
+  // przegladarki uzytkownika (ta sama zasada, co przy linku do dokumentacji).
+  ipcMain.on('update:open-releases', () => {
+    const version = updateState.info && updateState.info.version;
+    shell.openExternal(version ? releaseUrl(version) : releasesUrl());
+  });
 }
 
 // ---- Cykl zycia aplikacji ---------------------------------------------------
@@ -822,6 +1006,10 @@ app.whenReady().then(() => {
   startActiveProfile(); // otwiera pierwsza zakladke (wraz z jej watcherem)
   startPortWatcher();
   startUsageWatcher();
+  // D5. Jedno zapytanie HTTPS przy starcie, nic nie pobiera. Odpalane po
+  // createWindow(), zeby HUD zdazyl sie narysowac; samo zapytanie i tak jest
+  // asynchroniczne i nie blokuje event loopa.
+  startUpdateCheck();
   // A5: skan skilli (7A) jest teraz async (fs.promises) i nie blokuje event
   // loopa, wiec nie trzeba juz go opozniac za oknem - im wczesniej wystartuje,
   // tym wieksza szansa, ze cache bedzie gotowy zanim widget skills go poprosi.

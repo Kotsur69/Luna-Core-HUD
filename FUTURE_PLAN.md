@@ -10,7 +10,7 @@ the six lessons the conversions have cost so far.
 |---|---|
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation. **222 tests** |
 | **In flight** | **Nothing. Phase D is CLOSED and `v0.9.0` is public** — [releases/tag/v0.9.0](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.0), with both the installer and the portable `.exe` attached. |
-| **Next action** | **Run the four eyes-only checks in §D2a.** They were skipped in order to ship, so they are now outstanding *against a public binary*. The one that matters is the terminal actually spawning a `claude` session — the native module is proven loaded, which is not the same as proven working. After that, pick the next phase: D5 auto-update, the deferred C2/C4 visual work, or §9 multi-model. |
+| **Next action** | **The four eyes-only checks in §D2a are still outstanding** against a public binary — the one that matters is the terminal actually spawning a `claude` session. Then: **D5 auto-update is BUILT but cannot be proven end-to-end until a v0.9.1 exists to update *to*** (see §D5a) — the honest test is to release one and watch a v0.9.0 install find it. Remaining choices after that: the deferred C2/C4 visual work, §9 multi-model, or the **Electron 33 CVEs** §D5a flags. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -1247,7 +1247,7 @@ GitHub release**, shipping **both** an NSIS installer and a portable `.exe`,
 | D3 | **Degrade honestly** | ✅ **DONE 2026-08-05** — English default, "Claude Code not found" notice, version 0.9.0. See §D3a. |
 | D4 | **Release hygiene** | ✅ **DONE 2026-08-06** — README download section + full read/write/network disclosure, CSP (`default-src 'none'`), boot failsafe moved out of inline. See §D4a. |
 | — | **`v0.9.0` released** | ✅ **DONE 2026-08-06** — annotated tag on `e4704e6`, public GitHub release with both binaries attached. See §D4b for how it was published without admin rights. |
-| D5 | **Auto-update** | ⬜ optional, GitHub releases (repo is already `Kotsur69/Luna-Core-HUD`, and `latest.yml` is already produced by the build). |
+| D5 | **Auto-update** | ✅ **DONE 2026-08-09** — notify-only via electron-updater; `build.publish` → GitHub. See §D5a. |
 
 #### D0 — what the pre-flight audit found
 
@@ -1359,6 +1359,52 @@ could settle is settled, and what is left genuinely needs eyes:
 - [ ] **Change theme → close → reopen → it remembered.** Needs a click: the
       write only happens on a real preference change, so no probe can reach it.
 - [ ] Icon reads acceptably in the taskbar and Start Menu.
+
+#### D5a — auto-update, and the three things that shaped it
+
+Built 2026-08-09. **222 → 240 tests** (18 new in `test/update.test.js`).
+Notify-only by Mati's choice: check on launch, download only
+on a click, install only on a second click (`autoDownload = false`,
+`autoInstallOnAppQuit = false`).
+
+- **A portable build must REFUSE to update, and that is a correctness bug
+  waiting to happen, not a missing feature.** `dist/latest.yml` lists only
+  `LunaCore-Setup-<v>.exe` — the portable `.exe` is not in it. An NSIS update
+  works by running that installer, and a portable copy has no installation to
+  replace, so "updating" one would install a SECOND, installed LunaCore beside
+  it while the user keeps launching the old portable exe. `supportsUpdates()`
+  refuses and the HUD says so; silence would have read as "you are current".
+- **D5 breaks D4's headline claim, so the README edit is PART of D5.** The
+  disclosure section said *"Network — one endpoint, one verb … the only outbound
+  request LunaCore makes"*. That sentence is false the moment the updater ships.
+  It is now a two-row table with an off switch each (`ENABLE_AUTO_UPDATE`), plus
+  a plain statement that the SHA-512 check in `latest.yml` is **not** a
+  code-signing check, because the binary is still unsigned. On a public repo the
+  disclosure is the product; shipping the feature without it would have been the
+  actual regression.
+- **The notice lives in the `appearance` widget, not a widget of its own** —
+  because C1 made widget placement DATA, and a preset is free to drop a widget.
+  An update notice that a layout can drop is invisible exactly to the people who
+  need it. `appearance` is in `REQUIRED_WIDGETS`, so every valid preset carries
+  it by construction. Same one-root-two-owners shape as `mountBoot()`.
+
+**A blind spot found and closed:** `busStats()` had a hardcoded channel list, so
+the new `updateState` channel was invisible to `--luna-probe` — the one tool
+whose entire job is catching a forgotten disposer. Adding a bus channel without
+adding it to `busStats()` silently opts it out of the check. Now covered:
+`updateState: 1` before, after 3× remounts, and after cycling all four presets.
+
+**CSP needed no change**, and that is worth stating: the updater runs in MAIN,
+which CSP does not govern — the same reason the usage gauge's HTTPS call
+coexists with `connect-src 'none'` in the renderer.
+
+**Found in passing, NOT fixed:** `npm audit` reports **Electron 33 as a high**
+(ASAR integrity bypass, context-isolation bypass, and ~25 more), i.e. the
+shipped `v0.9.0` binary carries them. D5 is the mechanism that can now deliver
+the fix to people who already downloaded it. Note the trap before upgrading:
+§A1 established ESM-over-`file://` works in Electron 33 and explicitly says to
+**re-verify it on any Electron upgrade** — a wrong answer there is a blank
+window, not a warning.
 
 #### D3a — degrading honestly for someone who is not Mati
 

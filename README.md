@@ -77,14 +77,33 @@ defaults are read-only; your overrides live beside them as `*.local.json` and ar
 merged on top, which is why an update can still deliver a new theme or a
 corrected rate table.
 
-**Network — one endpoint, one verb:**
+**Network — two endpoints, both reads:**
 
-`GET https://api.anthropic.com/api/oauth/usage`, polled every 90 seconds to draw
-the usage gauge. That is the *only* outbound request LunaCore makes. It never
-calls `/v1/messages`, which is precisely why it **cannot spend your tokens** —
-see *Core constraint* below. Setting `ENABLE_USAGE_METER` to `false` in
-[`src/main.js`](src/main.js) turns the gauge off and leaves the app making no
-network requests at all.
+| Request | When | Why | Off switch |
+|---------|------|-----|------------|
+| `GET https://api.anthropic.com/api/oauth/usage` | every 90 s | Draws the usage gauge (5-hour + weekly limits). | `ENABLE_USAGE_METER = false` in [`src/main.js`](src/main.js) |
+| `GET https://api.github.com/repos/Kotsur69/Luna-Core-HUD/releases/…` | **once, at launch** | Asks whether a newer LunaCore exists. | `ENABLE_AUTO_UPDATE = false` in [`src/main.js`](src/main.js) |
+
+Set both to `false` and the app makes **no network requests at all**.
+
+Neither request ever calls `/v1/messages`, which is precisely why LunaCore
+**cannot spend your tokens** — see *Core constraint* below.
+
+**About the update check specifically.** It only *asks*. Nothing is downloaded
+until you click **Download**, and nothing is installed until you click **Install
+and restart** — `autoDownload` and `autoInstallOnAppQuit` are both off
+([`src/update.js`](src/update.js), [`src/main.js`](src/main.js)). That is
+deliberate: the release binary is **unsigned**, so an 80 MB installer arriving in
+the background would be exactly the behaviour this section exists to rule out.
+When you do accept an update, it is verified against the SHA-512 in `latest.yml`
+fetched over HTTPS — but understand that this is *not* the same as a
+code-signing check. If you would rather not rely on that, turn the check off and
+download releases by hand.
+
+The **portable build never updates itself** and says so in the UI. It has no
+installation to replace, so an in-place update would silently leave a *second*,
+installed copy of LunaCore on your disk — it points you at the Releases page
+instead.
 
 The UI process is additionally locked down with a Content-Security-Policy of
 `connect-src 'none'`: the renderer **structurally cannot** reach the network, no

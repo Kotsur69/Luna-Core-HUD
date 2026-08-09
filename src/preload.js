@@ -112,6 +112,29 @@ contextBridge.exposeInMainWorld('lunacore', {
    */
   openClaudeDocs: () => ipcRenderer.send('claude:docs'),
 
+  // --- D5: aktualizacje (powiadom, uzytkownik klika) ---
+  /**
+   * Rejestruje callback ze stanem aktualizacji:
+   * { state, info: {version, releaseDate, url}|null, percent, error, reason }
+   * gdzie state = idle|checking|none|available|downloading|ready|error|unsupported.
+   */
+  onUpdateState: (callback) => {
+    ipcRenderer.on('update:state', (_event, state) => callback(state));
+  },
+  /** Odgrywa ostatni znany stan (+ biezaca wersje aplikacji); Promise. */
+  getUpdateStatus: () => ipcRenderer.invoke('update:status'),
+  /** Reczne sprawdzenie dostepnosci nowej wersji. Nic nie pobiera. */
+  checkUpdate: () => ipcRenderer.send('update:check'),
+  /** Zgoda uzytkownika na POBRANIE aktualizacji. */
+  downloadUpdate: () => ipcRenderer.send('update:download'),
+  /** Zgoda na restart i instalacje pobranej aktualizacji. */
+  installUpdate: () => ipcRenderer.send('update:install'),
+  /**
+   * Otwiera strone wydania w przegladarce.
+   * Bez argumentu celowo - adres sklada main.js (patrz openClaudeDocs).
+   */
+  openReleases: () => ipcRenderer.send('update:open-releases'),
+
   // --- Motywy + preferencje UI (motyw/jezyk) ---
   /** Pobiera { themes: [{id,label,vars,terminal}] }. */
   getThemes: () => ipcRenderer.invoke('themes:list'),

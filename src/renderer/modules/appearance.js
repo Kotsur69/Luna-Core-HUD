@@ -21,6 +21,7 @@ import { emitLangChange } from './bus.js';
 import { applyTerminalTheme } from './terminals.js';
 import { defineWidget } from './registry.js';
 import { mountBoot, startBoot } from './boot.js';
+import { mountUpdate } from './update.js';
 import { getLayouts, getActiveLayoutId, selectLayout } from './layout.js';
 import { loc } from './util.js';
 
@@ -211,9 +212,13 @@ defineWidget({
     });
 
     const offBoot = mountBoot(root);
+    // D5. Same one-root-two-owners shape as boot above; see modules/update.js
+    // for why the update notice lives in THIS widget and not one of its own.
+    const offUpdate = mountUpdate(root);
 
     return () => {
       offBoot();
+      offUpdate();
       els = null;
     };
   },
