@@ -18,11 +18,11 @@
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
+    "electron": "^43.0.0",
     "electron-builder": "^26.15.3"
   },
   "allowScripts": {
-    "electron@33.4.11": true
+    "electron@43.3.0": true
   },
   "build": {
     "appId": "com.mateuszmazur.lunacore",
