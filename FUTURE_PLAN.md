@@ -8,9 +8,10 @@ the six lessons the conversions have cost so far.
 
 | | State |
 |---|---|
-| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation. **222 tests** |
-| **In flight** | **Nothing. Phase D is CLOSED and `v0.9.0` is public** — [releases/tag/v0.9.0](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.0), with both the installer and the portable `.exe` attached. |
-| **Next action** | **The four eyes-only checks in §D2a are still outstanding** against a public binary — the one that matters is the terminal actually spawning a `claude` session. Then: **D5 auto-update is BUILT but cannot be proven end-to-end until a v0.9.1 exists to update *to*** (see §D5a) — the honest test is to release one and watch a v0.9.0 install find it. Remaining choices after that: the deferred C2/C4 visual work, §9 multi-model, or the **Electron 33 CVEs** §D5a flags. |
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation — **D4–D5 DONE**: release hygiene, `v0.9.0` public, notify-and-click auto-update — and **E1/E3 DONE**: machine telemetry widget, threshold pulse, pane fade-in. **285 tests** |
+| **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED and `v0.9.0` is public — [releases/tag/v0.9.0](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.0). |
+| **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build. |
+| **Next action** | **E1/E3 need Mati's eyes** (§E1a, §E3a) — the probe cannot see a pixel. Then the open choices, in the order I'd take them: **Electron 33 → 43** (still HIGH severity in `npm audit`; `@lydell/node-pty` is a beta pin and its ABI is the go/no-go, and §A1's ESM-over-`file://` finding must be re-verified) → cut **v0.9.1**, which is also the only way to prove **D5** end-to-end. After that: **E2/C2 panels**, or §9 multi-model. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -1575,6 +1576,101 @@ test file**, so `--luna-probe` is the only thing that loads them; a missing
 `require` would have been invisible to all 216 tests. It reports
 `rows: {cheatsheets: 1, prompts: 1}` plus all 9 themes and all 4 presets, which is
 what makes the conversion verified rather than merely green.
+
+### Phase E — Telemetry & motion (§4, §C1c leftovers)
+
+**Started 2026-08-09**, after Mati confirmed the §D2a eyes-only checks pass
+("yes everything spawns"). Chosen shape: *streaming chart + big KPI*,
+**machine-wide**, RAM + CPU + uptime/load/cores.
+
+| # | Item | State |
+|---|------|-------|
+| E1 | **`telemetry` widget** (RAM / CPU / uptime) | ✅ **DONE 2026-08-09** — `src/telemetry.js` + widget, 39 tests. See §E1a. |
+| E2 | **C2 collapsible + resizable panels** | ⏸ still deferred — next candidate. |
+| E3 | **The two motions C1c left unbuilt** | ✅ **DONE 2026-08-09** — threshold pulse + pane fade-in. See §E3a. |
+| E4 | **C4 drag-and-drop rearrange** | ⏸ still deferred — stretch. |
+
+#### E1a — telemetry, and the three readings that would have been lies
+
+Sampling the machine is easy; sampling it *honestly* is where the work went.
+
+1. **CPU percent is a delta, not a reading.** `os.cpus()` returns cumulative
+   tick counters since boot. Sample once and divide and you get the average load
+   since the machine started — a number that is both wrong and almost perfectly
+   stable, which is the worst possible combination because it looks like it
+   works. `cpuPercent()` needs two samples and returns **null** until it has
+   them; `TelemetryWatcher.start()` takes a baseline without emitting, so the
+   chart never opens on an empty column.
+2. **`os.loadavg()` returns `[0,0,0]` on Windows, by documentation.** This is a
+   Windows-first app, so rendering "0.00 0.00 0.00" would be a fabricated
+   reading dressed as a measurement. The payload carries `null` and the widget
+   says nothing — the D3 rule, and B4's costing rule, applied to a third case.
+3. **Unknown is not zero.** A missing reading draws as an *empty* tick, never a
+   floor-level bar, and `barLevel(null)` is its own band. A zero-height bar in a
+   chart of percentages reads as "0%", which is a claim.
+
+**The watcher deliberately breaks PortWatcher's rule.** `PortWatcher` only emits
+when the scan changed; this one emits every tick, unchanged or not. A time series
+that suppresses repeats leaves gaps that render as "flat" when they actually mean
+"no sample" — the chart would silently lie about its own time axis.
+
+**Pause freezes the picture, not the feed.** Samples keep accumulating while
+paused, so resuming shows the present rather than replaying a backlog. The
+alternative — freezing the buffer — puts a real gap in the series while the axis
+still claims even spacing, i.e. exactly the lie the previous paragraph avoids.
+
+**Where the widget lives:** all four presets, between `usage` and `skilltracker`.
+That broke `test/layouts.test.js`, which pins `classic`'s slot list — working as
+intended; the assertion moved with the data.
+
+#### E3a — the motion C1c deferred, and the a11y bug it was hiding
+
+C1c listed two effects as "deliberately not built". Building them turned up a
+third thing that was already wrong.
+
+**The context bar had an infinite alarm with a hardcoded duration.**
+`.ctx-bar__fill.is-high` ran `animation: ctx-alarm 1s ease-in-out infinite`, and
+the same rule sat on `.usage-bar__fill[data-level='bad']`. The
+`prefers-reduced-motion` block works at the **token** layer (§C1d) — it zeroes
+`--dur-*` — so a hardcoded `1s` sails straight past it. Anyone who had switched
+motion off still got a bar throbbing at them forever. It also violated C1c rule 3
+("every duration comes from a token") and the general guidance that continuous
+animation is for loading indicators only: after ten seconds the eye filters it
+out, and the *event* was never "being above 85%" — it was **crossing** 85%.
+
+Replaced by a single pulse on an upward crossing, `var(--dur-slow)` +
+`var(--ease-bounce)`, animating `filter` because the element already owns
+`transform` for its `scaleX`. Three conditions gate it, each load-bearing:
+`live` (a tab switch replays remembered metrics and a replay is not an event),
+a previous band exists (a session that *opens* at 90% crossed nothing), and
+strictly greater (coming down after a compact is relief, and relief does not need
+to grab your eye). `ctxLevel()` went into `thresholds.js` — ordered `0|1|2`, so
+the direction of travel is comparable; band *names* would have made
+`level > lastLevel` quietly meaningless.
+
+**The tab crossfade shipped as half of itself, on purpose.** C1c was right that a
+true crossfade needs JS to hold the outgoing pane alive, and that xterm must not
+be animated while it measures. So only the **incoming** pane animates, and only
+`opacity` — which touches neither layout nor `clientWidth/Height`, so
+`fitAndResize()` sees exactly the dimensions it saw before. `display: none →
+block` restarts a CSS animation by itself, so no JS was needed at all. The
+outgoing pane still vanishes instantly. Spatial continuity is not fully solved;
+the hard swap is gone.
+
+**One more stale token, same class as `--border`:** `.tab__ctx.is-high` read
+`var(--danger, #ff6b8a)`. `--danger` has never existed (`--bad` is the token), so
+that dot rendered hardcoded pink in all nine themes and no test could see it.
+
+**Verification:** 266 → **285 tests**. Probe clean: 15 widgets mounted and
+remounted, `telemetryUpdate` stable at 1 across all three checkpoints, 4 presets
+cycled, 9 themes with no token leaks. `--enable-logging` shows no CSP violation
+and no module-resolution failure.
+
+- [ ] **Not hand-checked by Mati yet — the probe cannot see a pixel.** Worth a
+      look: does the sparkline read at 210 px (the `monitor-heavy` left rail is
+      narrower than `classic`'s right); is the pulse on a threshold crossing
+      visible without being startling; does the pane fade-in feel like polish or
+      like lag on a slow machine.
 
 ### What is deliberately *not* scheduled
 

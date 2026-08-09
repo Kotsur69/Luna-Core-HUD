@@ -58,6 +58,7 @@ the complete list — all of it verifiable in the linked source.
 | `~/.claude/.credentials.json` | Borrows the OAuth token the CLI already stores, to ask the API how much of your 5-hour and weekly limits are gone. A single `readFileSync`. LunaCore **never writes this file** and never refreshes the token — it rides whatever the CLI last put there. | [`src/usage.js`](src/usage.js) |
 | `~/.claude/projects/**/*.jsonl` | The CLI's own transcripts. The context %, the cost estimate and the Skill Tracker durations all come from the `usage` numbers the API itself reported — measured, not guessed. | [`src/observer.js`](src/observer.js) |
 | `~/.claude/skills`, `~/.claude/plugins` | Builds the skill cheat-sheet by scanning for `SKILL.md`. LunaCore **shows** what that machine has; it never installs, edits or removes a skill. | [`src/skills.js`](src/skills.js) |
+| *(no file)* — node's own `os` module | Total/free RAM, per-core CPU tick counters, uptime, every 2 s, for the System widget. No file, no shell command, no process list — LunaCore can tell you the machine is at 80% RAM, never **what** is using it. Off switch: `ENABLE_TELEMETRY = false` in [`src/main.js`](src/main.js). | [`src/telemetry.js`](src/telemetry.js) |
 
 **Writes — exactly two files**, both inside one directory:
 

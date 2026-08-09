@@ -25,3 +25,25 @@ export const CTX_WARN_HIGH = 0.85;
 
 /** At and above this: amber bar. Also where armed auto-compact re-arms. */
 export const CTX_WARN_MID = 0.6;
+
+/**
+ * E3: which of the three bands a share falls in, as an ORDERED number.
+ *
+ * Ordered because the pulse fires on an UPWARD crossing only. Passing 85% is
+ * news; dropping back to 40% after a compact is relief, and relief does not need
+ * to grab your eye - it is already visible in the bar collapsing. Comparing band
+ * NAMES would not tell you which direction you moved.
+ *
+ * Lives here rather than in context.js for the reason this file exists at all:
+ * the usage gauge wants the same edge detection, and importing a DOM-heavy
+ * module for one comparison is what created the near-cycle documented above.
+ *
+ * @param {number} pct 0..1
+ * @returns {0|1|2} 0 = calm, 1 = mid, 2 = high
+ */
+export function ctxLevel(pct) {
+  if (typeof pct !== 'number' || !Number.isFinite(pct)) return 0;
+  if (pct >= CTX_WARN_HIGH) return 2;
+  if (pct >= CTX_WARN_MID) return 1;
+  return 0;
+}

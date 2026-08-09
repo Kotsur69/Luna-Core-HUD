@@ -102,6 +102,17 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Wymusza odswiezenie zuzycia; Promise ze swiezym stanem. */
   refreshUsage: () => ipcRenderer.invoke('usage:refresh'),
 
+  // --- E1: telemetria maszyny (RAM / CPU / uptime) ---
+  /**
+   * Rejestruje callback z probka:
+   * { at, mem:{total,free,used,percent}|null, cpu:{percent|null,cores,speedMhz|null},
+   *   uptime:number|null, load:[1,5,15]|null }.
+   * Jednokierunkowy strumien - renderer nigdy nie odpytuje maszyny sam.
+   */
+  onTelemetry: (callback) => {
+    ipcRenderer.on('telemetry:update', (_event, payload) => callback(payload));
+  },
+
   // --- D3: czy Claude Code jest w ogole zainstalowane ---
   /** Pobiera { found: boolean, path: string|null }. */
   getClaudeStatus: () => ipcRenderer.invoke('claude:status'),

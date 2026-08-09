@@ -175,6 +175,46 @@
     </div>
   </template>
 
+  <!-- E1: telemetria maszyny. Duza liczba niesie prawde, wykres niesie kontekst;
+       pauza zamraza OBRAZ, a nie strumien - probki lecą dalej w tle. -->
+  <template id="w-telemetry">
+    <div class="panel__section telem">
+      <h2 class="panel__title usage-head">
+        <span data-i18n="telemetry.title">System</span>
+        <button
+          id="telem-pause"
+          class="usage-refresh telem__pause"
+          aria-pressed="false"
+          data-i18n-title="telemetry.pause"
+          title="Zatrzymaj wykres"
+        >&#9208;</button>
+      </h2>
+
+      <div class="telem__row" id="telem-ram" data-level="unknown">
+        <div class="telem__head">
+          <span class="telem__label" data-i18n="telemetry.ram">RAM</span>
+          <span class="telem__value" id="telem-ram-value">--</span>
+        </div>
+        <div class="telem__bar"><i id="telem-ram-bar" class="telem__fill"></i></div>
+        <!-- Slupki buduje modules/telemetry.js raz, przy montowaniu. -->
+        <div class="telem__spark" id="telem-ram-spark" aria-hidden="true"></div>
+        <p class="telem__note" id="telem-ram-note"></p>
+      </div>
+
+      <div class="telem__row" id="telem-cpu" data-level="unknown">
+        <div class="telem__head">
+          <span class="telem__label" data-i18n="telemetry.cpu">CPU</span>
+          <span class="telem__value" id="telem-cpu-value">--</span>
+        </div>
+        <div class="telem__bar"><i id="telem-cpu-bar" class="telem__fill"></i></div>
+        <div class="telem__spark" id="telem-cpu-spark" aria-hidden="true"></div>
+        <p class="telem__note" id="telem-cpu-note"></p>
+      </div>
+
+      <p class="telem__foot hint" id="telem-foot"></p>
+    </div>
+  </template>
+
   <template id="w-scratchpad">
     <div class="panel__section panel__section--grow">
       <h2 class="panel__title"><span data-i18n="pad.title">Brudnopis</span> <span id="pad-status" class="count"></span></h2>

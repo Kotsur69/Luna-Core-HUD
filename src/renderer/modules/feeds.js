@@ -20,7 +20,12 @@
 
 'use strict';
 
-import { emitPortsUpdate, emitUsageUpdate, emitUpdateState } from './bus.js';
+import {
+  emitPortsUpdate,
+  emitUsageUpdate,
+  emitUpdateState,
+  emitTelemetryUpdate,
+} from './bus.js';
 
 // 7B: passive scan of listening localhost ports.
 window.lunacore.onPorts((ports) => {
@@ -37,4 +42,10 @@ window.lunacore.onUsage((usage) => {
 // LunaCore binary no matter how many sessions are open.
 window.lunacore.onUpdateState((state) => {
   emitUpdateState(state);
+});
+
+// E1: telemetria maszyny. App-scoped like the two above - there is one machine
+// no matter how many tabs are open, so this must NOT go through sessions.js.
+window.lunacore.onTelemetry((sample) => {
+  emitTelemetryUpdate(sample);
 });

@@ -656,7 +656,10 @@ body::after {
 /* Zapelnienie kontekstu TEJ zakladki - ostrzega o sesji, na ktora nie patrzysz */
 .tab__ctx { font-size: 10px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .tab__ctx.is-mid { color: var(--warn, #ffd86b); }
-.tab__ctx.is-high { color: var(--danger, #ff6b8a); }
+/* --danger nigdy nie istnialo jako token (jest --bad), wiec ta kropka swiecila
+   zahardkodowanym rozem we WSZYSTKICH dziewieciu motywach. Ta sama klasa bledu,
+   co nieaktualny rates.json: nic nie krzyczy, po prostu jest zle. */
+.tab__ctx.is-high { color: var(--bad); }
 
 .tab__close,
 .tabs__new {
@@ -687,7 +690,22 @@ body::after {
 /* Jeden pane na sesje; w tle zostaja zamontowane, ale niewidoczne, wiec
    xterm zachowuje ich scrollback bez ponownego renderowania. */
 .terminal__pane { position: absolute; inset: 8px 10px; display: none; }
-.terminal__pane.is-active { display: block; }
+/* E3: miekkie wejscie panelu przy zmianie zakladki.
+   C1c odlozylo pelny crossfade, bo wymagalby JS-a trzymajacego stary panel przy
+   zyciu, a xterm NIE MOZE byc animowany w trakcie mierzenia sie. Tu wchodzi
+   tylko panel przychodzacy i tylko przez `opacity` - nie rusza ani layoutu, ani
+   clientWidth/Height, wiec fitAndResize() widzi dokladnie te same wymiary, co
+   przy twardej podmianie. Wyjscie zostaje natychmiastowe.
+   Przejscie display:none -> block samo restartuje animacje, wiec nie trzeba
+   niczego dodawac w JS. Reduced motion zeruje --dur-fast i zostaje skok. */
+.terminal__pane.is-active {
+  display: block;
+  animation: pane-in var(--dur-fast) var(--ease-smooth);
+}
+@keyframes pane-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 /* xterm sam zarzadza wnetrzem; upewnijmy sie, ze wypelnia kontener */
 .terminal .xterm { height: 100%; }
 
@@ -713,11 +731,28 @@ body::after {
 }
 /* Progi context window ustawiane przez renderer.js (Faza 3). */
 .ctx-bar__fill.is-mid { background: linear-gradient(90deg, var(--warn), #ffb347); }
-.ctx-bar__fill.is-high {
-  background: linear-gradient(90deg, var(--bad), #ff3b6b);
-  animation: ctx-alarm 1s ease-in-out infinite;
+.ctx-bar__fill.is-high { background: linear-gradient(90deg, var(--bad), #ff3b6b); }
+
+/* E3: JEDEN puls przy przekroczeniu progu w gore - zamiast dawnego
+   `ctx-alarm 1s infinite`. Powody, po kolei:
+
+   1. Animacja w nieskonczonosc miala WPISANE NA SZTYWNO 1s, wiec blok
+      prefers-reduced-motion (ktory zeruje --dur-*) w ogole jej nie dotykal.
+      Pasek pulsowal bez konca takze komus, kto ruch wylaczyl.
+   2. Ruch ciagly przestaje cokolwiek znaczyc po kilkunastu sekundach - oko go
+      odfiltrowuje. Zdarzeniem jest PRZEKROCZENIE progu, nie bycie powyzej niego.
+   3. Czas trwania idzie teraz z tokenu, wiec reduced motion skraca go do zera i
+      zostaje sam kolor - dokladnie ta podmiana, ktora zaleca C1c.
+
+   Nie ruszamy `transform` - element trzyma na nim scaleX(--ctx). */
+.ctx-bar__fill.is-crossing {
+  animation: ctx-cross var(--dur-slow) var(--ease-bounce);
 }
-@keyframes ctx-alarm { 50% { filter: brightness(1.4); } }
+@keyframes ctx-cross {
+  0% { filter: brightness(1); }
+  35% { filter: brightness(1.85); }
+  100% { filter: brightness(1); }
+}
 
 .ctx-meta { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
 /* Lewa grupa: procent + plakietka modelu. Dzieki niej ctx-meta nadal ma DWOJE
@@ -795,10 +830,9 @@ body::after {
   transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
 .usage-bar__fill[data-level='warn'] { background: linear-gradient(90deg, var(--warn), #ffb347); }
-.usage-bar__fill[data-level='bad'] {
-  background: linear-gradient(90deg, var(--bad), #ff3b6b);
-  animation: ctx-alarm 1s ease-in-out infinite;
-}
+/* Ten sam powod, co przy .ctx-bar__fill.is-high - `ctx-alarm 1s infinite` mial
+   sztywny czas, wiec przezywal prefers-reduced-motion. Zostaje sam kolor. */
+.usage-bar__fill[data-level='bad'] { background: linear-gradient(90deg, var(--bad), #ff3b6b); }
 .usage-row__reset { font-size: 10px; opacity: 0.6; }
 
 /* ---- Sparkline burn-rate (procent context window w czasie) ---------------- */
@@ -911,6 +945,143 @@ body::after {
     transform: none;
     background: color-mix(in srgb, var(--good) 14%, transparent);
   }
+}
+
+/* ---- E1: telemetria maszyny (RAM / CPU) ------------------------------------
+   Kolor niesie znaczenie, ale NIGDY sam: kazdy poziom ma tez liczbe i wysokosc
+   slupka. Ruch jest wylacznie przejsciem miedzy stanami - nic tu nie animuje sie
+   w petli, wiec zamrozony wykres (reduced motion zeruje --dur-*) jest nadal
+   pelnoprawnym wykresem, a nie pusta ramka. */
+
+.telem__row {
+  /* Jeden token na wiersz; data-level tylko go przestawia. Dzieki temu pasek,
+     liczba i slupki nie moga sie rozjechac kolorystycznie. */
+  --telem-color: var(--good);
+  --telem-fill: 0;
+  margin-bottom: 14px;
+  transition: opacity var(--dur-fast) var(--ease-smooth);
+}
+
+.telem__row:last-of-type {
+  margin-bottom: 8px;
+}
+
+.telem__row[data-level='warn'] {
+  --telem-color: var(--warn);
+}
+.telem__row[data-level='crit'] {
+  --telem-color: var(--bad);
+}
+.telem__row[data-level='unknown'] {
+  --telem-color: var(--text-dim);
+}
+
+.telem__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.telem__label {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: var(--tracking-title);
+  text-transform: var(--case-title);
+  color: var(--text-dim);
+}
+
+/* Duza liczba jest nosnikiem prawdy - wykres tylko ja kontekstualizuje.
+   Cyfry tabelaryczne, zeby wartosc nie skakala w poziomie przy kazdej zmianie. */
+.telem__value {
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--telem-color);
+  text-shadow: var(--text-glow);
+  transition: color var(--dur-normal) var(--ease-smooth);
+}
+
+.telem__bar {
+  position: relative;
+  height: 6px;
+  margin-top: 6px;
+  overflow: hidden;
+  background: var(--bg-panel-2);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-pill);
+}
+
+/* scaleX, nie width - regula C1c nr 2. */
+.telem__fill {
+  display: block;
+  height: 100%;
+  transform: scaleX(var(--telem-fill, 0));
+  transform-origin: left center;
+  background: var(--telem-color);
+  box-shadow: 0 0 var(--glow-size-sm) var(--telem-color);
+  transition: transform var(--dur-normal) var(--ease-smooth),
+    background-color var(--dur-normal) var(--ease-smooth);
+}
+
+/* Seria czasowa: staly zestaw slupkow, przerysowywany przez podmiane jednej
+   zmiennej. Slupki nie sa tworzone na nowo co probke - to byloby 40 wezlow DOM
+   co 2 sekundy bez zadnego powodu. */
+.telem__spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 26px;
+  margin-top: 6px;
+}
+
+.telem__tick {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  transform: scaleY(var(--telem-tick, 0));
+  transform-origin: bottom center;
+  background: var(--telem-color);
+  border-radius: var(--radius-xs);
+  opacity: 0.55;
+  transition: transform var(--dur-fast) var(--ease-smooth);
+}
+
+/* Ostatni slupek to "teraz" - pelna moc, zeby oko wiedzialo, gdzie patrzec. */
+.telem__tick:last-child {
+  opacity: 1;
+  box-shadow: 0 0 var(--glow-size-sm) var(--telem-color);
+}
+
+/* Brak odczytu rysuje sie jako NIC, nie jako slupek przy podlodze. */
+.telem__tick[data-level='unknown'] {
+  background: var(--edge);
+  box-shadow: none;
+}
+
+.telem__note {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.telem__foot {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: pre;
+}
+
+/* Pauza zatrzymuje OBRAZ, nie pomiar - dlatego panel przygasa (widac, ze to
+   stopklatka), ale nic nie znika. */
+.telem.is-paused .telem__row {
+  opacity: 0.55;
+}
+
+.telem__pause.is-on {
+  color: var(--neon-cyan);
 }
 
 /* ---- Tracker portow localhost (7B) ---------------------------------------- */

@@ -31,10 +31,22 @@ export const t = (key, params) => window.i18n.t(key, params);
  */
 export const loc = (value) => pickLocalized(value, window.i18n.lang);
 
-/** Short visual acknowledgement of a click. */
-export function pulse(el) {
-  el.classList.remove('is-pulsing');
+/**
+ * Short visual acknowledgement - of a click by default, of a threshold crossing
+ * when E3 passes its own class.
+ *
+ * The class is a parameter because the two mean different things and must look
+ * different: a click is a reply to something the user just did, a crossing is
+ * the HUD volunteering news. One shared animation would make the bar look like
+ * it had been pressed.
+ *
+ * @param {Element} el
+ * @param {string} [cls] class carrying the @keyframes
+ */
+export function pulse(el, cls = 'is-pulsing') {
+  if (!el) return;
+  el.classList.remove(cls);
   // force a reflow so the animation can restart
   void el.offsetWidth;
-  el.classList.add('is-pulsing');
+  el.classList.add(cls);
 }

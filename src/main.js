@@ -46,6 +46,9 @@ const { loadLayouts } = require('./layouts');
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
 // Licznik zuzycia limitow (5h + tydzien) - odczyt GET z endpointu OAuth CLI.
 const { fetchUsage, UsageWatcher } = require('./usage');
+// E1: telemetria maszyny (RAM / CPU / uptime). Czyste `os`, zero zaleznosci,
+// zero sieci - Passive Observer w najscislejszym mozliwym sensie.
+const { TelemetryWatcher } = require('./telemetry');
 // D5: aktualizacje. Same CZYSTE decyzje - `electron-updater` doladowywany jest
 // leniwie w getAutoUpdater(), dopiero gdy wiadomo, ze ta kompilacja moze sie
 // aktualizowac.
@@ -116,6 +119,8 @@ let mainWindow = null;
 let portWatcher = null;
 /** @type {UsageWatcher | null} */
 let usageWatcher = null;
+/** @type {TelemetryWatcher | null} */
+let telemetryWatcher = null;
 // Profile wczytane z config/ oraz id domyslnego (dla nowych sesji).
 let profiles = [];
 let activeProfileId = null;
@@ -650,6 +655,25 @@ function startUsageWatcher() {
   usageWatcher.start();
 }
 
+// ---- E1: Passive Observer: telemetria maszyny (RAM / CPU / uptime) ----------
+//
+// Wlacznik istnieje z tego samego powodu, co ENABLE_USAGE_METER: README obiecuje,
+// ze kazdy pomiar da sie wylaczyc. Ten akurat nie dotyka ani sieci, ani dysku -
+// to cztery wywolania do `os` - wiec wylaczenie go jest kwestia gustu, a nie
+// prywatnosci. Sam wybor ma jednak nalezec do uzytkownika, nie do nas.
+
+const ENABLE_TELEMETRY = true;
+
+function startTelemetryWatcher() {
+  if (!ENABLE_TELEMETRY) return;
+  telemetryWatcher = new TelemetryWatcher((payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('telemetry:update', payload);
+    }
+  });
+  telemetryWatcher.start();
+}
+
 // ---- D5: aktualizacje (tryb "powiadom, nie pobieraj") -----------------------
 // Sprawdzenie rusza raz, przy starcie. POBIERANIE NIE RUSZA SAMO - dopiero po
 // klinieciu uzytkownika. Uzasadnienie jest w naglowku src/update.js: binarka
@@ -1006,6 +1030,7 @@ app.whenReady().then(() => {
   startActiveProfile(); // otwiera pierwsza zakladke (wraz z jej watcherem)
   startPortWatcher();
   startUsageWatcher();
+  startTelemetryWatcher();
   // D5. Jedno zapytanie HTTPS przy starcie, nic nie pobiera. Odpalane po
   // createWindow(), zeby HUD zdazyl sie narysowac; samo zapytanie i tak jest
   // asynchroniczne i nie blokuje event loopa.
@@ -1037,6 +1062,10 @@ app.on('window-all-closed', () => {
   if (usageWatcher) {
     usageWatcher.stop();
     usageWatcher = null;
+  }
+  if (telemetryWatcher) {
+    telemetryWatcher.stop();
+    telemetryWatcher = null;
   }
   if (process.platform !== 'darwin') app.quit();
 });

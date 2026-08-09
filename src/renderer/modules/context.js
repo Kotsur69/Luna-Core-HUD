@@ -12,7 +12,7 @@ import { t, pulse } from './util.js';
 import { onActiveContext, onBackgroundContext, onLangChange, registerSessionView } from './bus.js';
 // Bar colour thresholds: < 60% green, 60-85% amber, > 85% red + alarm. They live
 // in their own module so this one can import spark.js without forming a cycle.
-import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
+import { CTX_WARN_HIGH, CTX_WARN_MID, ctxLevel } from './thresholds.js';
 import { defineWidget } from './registry.js';
 import { mountSpark } from './spark.js';
 
@@ -22,6 +22,11 @@ let els = null;
 // Last metrics kept so a language switch can re-render the text - and so a
 // remount can repaint the real numbers instead of starting again from 0%.
 let lastCtxMetrics = null;
+
+// E3: the band the bar was in at the previous LIVE reading, so a crossing can be
+// told from a steady state. null means "nothing to compare against yet" - which
+// is why it is null and not 0: a session that opens at 90% must not pulse.
+let lastCtxLevel = null;
 
 /**
  * Paints the context bar.
@@ -40,6 +45,21 @@ export function applyCtxMetrics(metrics, live = true) {
   els.fill.style.setProperty('--ctx', pct.toFixed(3));
   els.fill.classList.toggle('is-mid', pct >= CTX_WARN_MID && pct < CTX_WARN_HIGH);
   els.fill.classList.toggle('is-high', pct >= CTX_WARN_HIGH);
+
+  // E3: one pulse when the bar crosses UPWARD into a worse band. The colour
+  // change alone is easy to miss in peripheral vision, which is where this bar
+  // lives while you are reading the terminal.
+  //
+  // Three conditions, each of them load-bearing:
+  //   * `live` - a tab switch replays remembered metrics, and a replay is not an
+  //     event. Without this, clicking between two tabs would fire alarms.
+  //   * a previous level exists - the FIRST reading of a session that is already
+  //     at 90% has not crossed anything; it merely arrived that way.
+  //   * strictly greater - coming back down after a compact is relief, and
+  //     relief does not need to grab your eye.
+  const level = ctxLevel(pct);
+  if (live && lastCtxLevel !== null && level > lastCtxLevel) pulse(els.fill, 'is-crossing');
+  lastCtxLevel = level;
 
   els.percent.textContent = `${Math.round(pct * 100)}%`;
   renderModelBadge(metrics);
@@ -165,9 +185,12 @@ function renderCostLine(metrics) {
 /** Clears the bar when a tab has no metrics yet. */
 export function resetCtxUI() {
   lastCtxMetrics = null;
+  // A restarted session starts a new history. Keeping the old band would make
+  // the first reading of the new one look like a crossing.
+  lastCtxLevel = null;
   if (!els) return;
   els.fill.style.setProperty('--ctx', '0');
-  els.fill.classList.remove('is-mid', 'is-high');
+  els.fill.classList.remove('is-mid', 'is-high', 'is-crossing');
   els.percent.textContent = '0%';
   els.warn.textContent = '';
   els.tokens.textContent = '';

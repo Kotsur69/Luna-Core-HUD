@@ -150,6 +150,22 @@ export function emitUpdateState(state) {
   updateState.emit(state);
 }
 
+// E1. Replayed for the ordinary reason: samples land every 2 s and a widget
+// mounted between two ticks must not open on an empty chart. Note this channel
+// carries ONE sample, not the history - the series is kept in telemetry.js at
+// module scope, so it survives an unmount (the ports.js rule: state that is not
+// the DOM stays at module scope).
+const telemetryUpdate = channel({ replay: true });
+
+/** One machine sample: cb({at, mem, cpu, uptime, load}) -> disposer */
+export function onTelemetryUpdate(cb) {
+  return telemetryUpdate.on(cb);
+}
+
+export function emitTelemetryUpdate(sample) {
+  telemetryUpdate.emit(sample);
+}
+
 // ---- Per-tab view state -----------------------------------------------------
 
 const sessionViews = [];
@@ -201,6 +217,7 @@ export function busStats() {
     portsUpdate: portsUpdate.size,
     usageUpdate: usageUpdate.size,
     updateState: updateState.size,
+    telemetryUpdate: telemetryUpdate.size,
     sessionViews: sessionViews.length,
   };
 }

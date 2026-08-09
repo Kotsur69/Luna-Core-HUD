@@ -211,7 +211,16 @@ test('config/layouts.json - klasyczny odtwarza dzisiejszy uklad', () => {
   const l = getLayout(loadLayouts().layouts, 'classic');
   assert.equal(l.columns, '260px 1fr 280px');
   assert.deepEqual(l.slots.main, ['terminal']);
-  assert.deepEqual(l.slots.right, ['context', 'usage', 'skilltracker', 'ports', 'scratchpad']);
+  // E1 wsunelo `telemetry` miedzy usage a skilltracker we WSZYSTKICH presetach.
+  // Ta asercja jest tu po to, zeby taka zmiana nie przeszla niezauwazona.
+  assert.deepEqual(l.slots.right, [
+    'context',
+    'usage',
+    'telemetry',
+    'skilltracker',
+    'ports',
+    'scratchpad',
+  ]);
   assert.deepEqual(l.chrome, { brand: 'left', status: 'left' });
 });
 
