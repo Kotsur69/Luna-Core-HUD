@@ -8,10 +8,10 @@ the six lessons the conversions have cost so far.
 
 | | State |
 |---|---|
-| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation — **D4–D5 DONE**: release hygiene, `v0.9.0` public, notify-and-click auto-update — and **E1/E3 DONE**: machine telemetry widget, threshold pulse, pane fade-in. **285 tests** |
+| **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation — **D4–D6 DONE**: release hygiene, `v0.9.0` public, notify-and-click auto-update, **Electron 33 → 43 (`npm audit` clean)** — and **E1/E3 DONE**: machine telemetry widget, threshold pulse, pane fade-in. **285 tests** |
 | **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED and `v0.9.0` is public — [releases/tag/v0.9.0](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.0). |
 | **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build. |
-| **Next action** | **E1/E3 need Mati's eyes** (§E1a, §E3a) — the probe cannot see a pixel. Then the open choices, in the order I'd take them: **Electron 33 → 43** (still HIGH severity in `npm audit`; `@lydell/node-pty` is a beta pin and its ABI is the go/no-go, and §A1's ESM-over-`file://` finding must be re-verified) → cut **v0.9.1**, which is also the only way to prove **D5** end-to-end. After that: **E2/C2 panels**, or §9 multi-model. |
+| **Next action** | **Cut `v0.9.1`.** Everything it needs is now in place and it is the only way to prove **D5** end-to-end — auto-update code that has never performed an update is a hypothesis, not a tested path. It also ships the D6 security fix to whoever already downloaded `v0.9.0`. Sequence: bump `version`, `npm run dist`, tag, publish, then let the *installed* `v0.9.0` discover it. After that: **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -1249,6 +1249,7 @@ GitHub release**, shipping **both** an NSIS installer and a portable `.exe`,
 | D4 | **Release hygiene** | ✅ **DONE 2026-08-06** — README download section + full read/write/network disclosure, CSP (`default-src 'none'`), boot failsafe moved out of inline. See §D4a. |
 | — | **`v0.9.0` released** | ✅ **DONE 2026-08-06** — annotated tag on `e4704e6`, public GitHub release with both binaries attached. See §D4b for how it was published without admin rights. |
 | D5 | **Auto-update** | ✅ **DONE 2026-08-09** — notify-only via electron-updater; `build.publish` → GitHub. See §D5a. |
+| D6 | **Electron 33 → 43** | ✅ **DONE 2026-08-09** — `npm audit` 1 high / 17 advisories → **0**. ABI 125 → 148 survived because the pty addon is Node-API. See §D6a. |
 
 #### D0 — what the pre-flight audit found
 
@@ -1399,13 +1400,17 @@ adding it to `busStats()` silently opts it out of the check. Now covered:
 which CSP does not govern — the same reason the usage gauge's HTTPS call
 coexists with `connect-src 'none'` in the renderer.
 
-**Found in passing, NOT fixed:** `npm audit` reports **Electron 33 as a high**
-(ASAR integrity bypass, context-isolation bypass, and ~25 more), i.e. the
-shipped `v0.9.0` binary carries them. D5 is the mechanism that can now deliver
-the fix to people who already downloaded it. Note the trap before upgrading:
-§A1 established ESM-over-`file://` works in Electron 33 and explicitly says to
-**re-verify it on any Electron upgrade** — a wrong answer there is a blank
-window, not a warning.
+**Found in passing, NOT fixed** *(→ fixed the same day by D6, §D6a)*: `npm audit`
+reports **Electron 33 as a high** (ASAR integrity bypass, context-isolation
+bypass, and ~25 more), i.e. the shipped `v0.9.0` binary carries them. D5 is the
+mechanism that can now deliver the fix to people who already downloaded it.
+Note the trap before upgrading: §A1 established ESM-over-`file://` works in
+Electron 33 and explicitly says to **re-verify it on any Electron upgrade** — a
+wrong answer there is a blank window, not a warning.
+
+> The upgrade landed in `a773edb`. `v0.9.0` in the wild still carries these; only
+> a released `v0.9.1` actually delivers the fix. That is why cutting it is the
+> next action and not a nice-to-have.
 
 #### D3a — degrading honestly for someone who is not Mati
 
@@ -1576,6 +1581,65 @@ test file**, so `--luna-probe` is the only thing that loads them; a missing
 `require` would have been invisible to all 216 tests. It reports
 `rows: {cheatsheets: 1, prompts: 1}` plus all 9 themes and all 4 presets, which is
 what makes the conversion verified rather than merely green.
+
+#### D6a — ten majors of Electron, and why the terminal did not break
+
+**Shipped as `a773edb`, 2026-08-09.** `electron ^33.0.0` → `^43.0.0` (43.3.0),
+`allowScripts` repinned. Two lines of `package.json` and a lockfile; the work was
+entirely in proving it was safe.
+
+**What it bought.** `npm audit`: **1 high / 17 Electron advisories → 0**. Three of
+those seventeen sit on code paths this app actually uses, which is the reason it
+was worth doing now rather than "eventually":
+
+- `shell.openPath` path-validation bypass via embedded null byte — and §D4a's
+  whole open-redirect defence is *"never let the renderer supply the string"*.
+  That defence assumes the shell API itself is sound.
+- **Context-isolation bypass via `Function.prototype.bind` hijack.**
+- **`contextBridge` honouring prototype setters** — an attack on the preload
+  boundary, which is the single wall between the renderer and Node.
+
+The last two are not "a dependency has a CVE". They are attacks on the exact
+mechanism the security model is built from.
+
+**The gamble was `@lydell/node-pty` 1.2.0-beta.12.** Node ABI moved **125 → 148**;
+that shatters any V8-bound native addon, and a dead pty means a dead app. It was
+resolved by *looking at the binary* rather than trusting the README:
+
+```
+prebuilds/win32-x64/conpty.node
+  napi_ / node_api      → present
+  v8:: / NODE_MODULE_VERSION → absent
+```
+
+One binary per **platform**, not per **ABI**. That is the Node-API signature, and
+Node-API is ABI-stable by contract. Then verified live rather than inferred — a
+throwaway Electron 43 main process loaded the addon and round-tripped stdout from
+a real spawned pty. *Reading the shape of an artifact beats reading its docs; both
+beat assuming.*
+
+**§A1's trap was the other risk, and the packaged probe is what closed it.**
+A1 says ESM-over-`file://` works in Electron **33** and to re-verify on any
+upgrade, because a wrong answer is a blank window rather than an error. Running
+`--luna-probe` **from `dist/win-unpacked/`** answers it properly: asar-packed ESM
+resolving under a Chromium ten majors newer, 15 widgets mounted and remounted,
+identical bus counts at all three checkpoints, 4 presets, 9 themes, no token
+leaks, every `rows` at 1. Running it from source would only have tested the
+easier half.
+
+**Two things worth knowing on a fresh clone:**
+
+- `npm rebuild electron` reported success **without fetching the binary**, despite
+  `allowScripts` naming the exact version. `node node_modules/electron/install.js`
+  had to be run directly. A silent no-op that claims success is worse than a
+  failure.
+- `npm install` failed `EBUSY` on `icudtl.dat` while a dev instance was running.
+  Obvious in hindsight; not obvious at 21:49.
+
+**Not covered by any of this:** whether `claude` still spawns *in the GUI* under
+43. The pty check proves the addon works and the probe proves the widgets mount,
+but the §D2a eyes-only check was performed against an Electron **33** build. It is
+cheap to redo and belongs in the `v0.9.1` pre-flight.
 
 ### Phase E — Telemetry & motion (§4, §C1c leftovers)
 

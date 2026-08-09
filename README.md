@@ -187,7 +187,7 @@ elements; scripts need no such exemption, which is why the boot failsafe lives i
 
 | Component | Technology |
 |-----------|------------|
-| Desktop framework | Electron |
+| Desktop framework | Electron 43 |
 | Terminal core | [`@lydell/node-pty`](https://www.npmjs.com/package/@lydell/node-pty) + [`@xterm/xterm`](https://www.npmjs.com/package/@xterm/xterm) + `@xterm/addon-fit` |
 | Frontend | Vanilla HTML / CSS / JS (swappable themes via CSS custom properties, PL/EN i18n) |
 
@@ -195,6 +195,11 @@ elements; scripts need no such exemption, which is why the boot failsafe lives i
 > binaries, so it installs **without** node-gyp / Visual Studio Build Tools — one
 > binary works across Node and Electron versions. The original `node-pty` requires
 > a working C++ toolchain and fails to detect very new Visual Studio releases.
+>
+> That "works across versions" claim was cashed in on 2026-08-09: the Electron
+> 33 → 43 upgrade moved the Node ABI from **125 to 148**, which breaks any
+> V8-bound addon. This one did not notice, because N-API is ABI-stable by
+> contract — one prebuilt binary per *platform*, not per *ABI*.
 
 ---
 
@@ -444,7 +449,9 @@ That closes the whole approved shortlist and the first slice of the structural
 plan. **A1 is done**: the 1554-line `renderer.js` is a 57-line entry point plus
 21 modules under `src/renderer/modules/`, loaded as `<script type="module">`.
 Worth knowing if you fork this: Chromium blocks ES modules over `file://`, but
-**Electron does not** — so this needs no bundler and no build step.
+**Electron does not** — so this needs no bundler and no build step. Re-verified on
+the Electron 43 upgrade, and verified *from the packaged build*, not just from
+source — inside an asar is the case that would actually have broken.
 
 **Next up** (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8, which opens with a
 *START HERE* box): finish the **A2** conversions — **9 of ~13 blocks** are done
