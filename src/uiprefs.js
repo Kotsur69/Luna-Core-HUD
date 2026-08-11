@@ -3,8 +3,9 @@
 // ----------------------------------------------------------------------------
 // Small persistent slice of interface state in config/ui.local.json (gitignored)
 // - like the scratchpad, a plain file rather than localStorage. Holds
-// { theme, lang, boot, profile, layout, hideSystemPorts }. The renderer reads it at startup (ui:get) and
-// writes on change (ui:set).
+// { theme, lang, boot, profile, layout, hideSystemPorts, soundEnabled,
+// soundVolume, soundKeystrokeVariant }. The renderer reads it at startup
+// (ui:get) and writes on change (ui:set).
 //
 // Validate at the boundary: an unknown language falls back to 'pl'; a missing
 // file falls back to DEFAULTS.
@@ -23,6 +24,12 @@ const paths = require('./paths');
 const file = () => paths.local('ui.local.json');
 
 const LANGS = ['pl', 'en'];
+const KEYSTROKE_VARIANT_IDS = ['mechanical', 'soft', 'scifi', 'typewriter'];
+
+function clampVolume(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 70;
+}
 // profile: id of the last used launch profile (B1). null = no choice recorded,
 // in which case activeProfile from config/profiles.json decides, as before.
 // hideSystemPorts: B5 view toggle. Defaults to ON because the unfiltered list is
@@ -44,6 +51,9 @@ const DEFAULTS = {
   profile: null,
   layout: null,
   hideSystemPorts: true,
+  soundEnabled: true,
+  soundVolume: 70,
+  soundKeystrokeVariant: 'mechanical',
 };
 
 /** Reads UI preferences; a missing or corrupt file falls back to DEFAULTS. */
@@ -64,6 +74,14 @@ function readUiPrefs() {
       // Missing key => filtered (prefs file written before this option existed).
       hideSystemPorts:
         typeof obj.hideSystemPorts === 'boolean' ? obj.hideSystemPorts : DEFAULTS.hideSystemPorts,
+      // Missing key => enabled (prefs file written before this option existed).
+      soundEnabled: typeof obj.soundEnabled === 'boolean' ? obj.soundEnabled : DEFAULTS.soundEnabled,
+      soundVolume: typeof obj.soundVolume === 'number' ? clampVolume(obj.soundVolume) : DEFAULTS.soundVolume,
+      soundKeystrokeVariant:
+        typeof obj.soundKeystrokeVariant === 'string' &&
+        KEYSTROKE_VARIANT_IDS.includes(obj.soundKeystrokeVariant)
+          ? obj.soundKeystrokeVariant
+          : DEFAULTS.soundKeystrokeVariant,
     };
   } catch {
     return { ...DEFAULTS };
@@ -72,10 +90,12 @@ function readUiPrefs() {
 
 /**
  * Merges and writes preferences. Accepts a partial
- * { theme?, lang?, boot?, profile?, layout?, hideSystemPorts? }.
+ * { theme?, lang?, boot?, profile?, layout?, hideSystemPorts?, soundEnabled?,
+ *   soundVolume?, soundKeystrokeVariant? }.
  * @returns {{theme:string,lang:string,boot:boolean,profile:string|null,
- *   layout:string|null,hideSystemPorts:boolean}|null} the new state, or null if
- *   the write failed
+ *   layout:string|null,hideSystemPorts:boolean,soundEnabled:boolean,
+ *   soundVolume:number,soundKeystrokeVariant:string}|null} the new state, or
+ *   null if the write failed
  */
 function writeUiPrefs(partial) {
   try {
@@ -91,6 +111,15 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.hideSystemPorts === 'boolean') {
       next.hideSystemPorts = partial.hideSystemPorts;
+    }
+    if (partial && typeof partial.soundEnabled === 'boolean') next.soundEnabled = partial.soundEnabled;
+    if (partial && typeof partial.soundVolume === 'number') next.soundVolume = clampVolume(partial.soundVolume);
+    if (
+      partial &&
+      typeof partial.soundKeystrokeVariant === 'string' &&
+      KEYSTROKE_VARIANT_IDS.includes(partial.soundKeystrokeVariant)
+    ) {
+      next.soundKeystrokeVariant = partial.soundKeystrokeVariant;
     }
     paths.ensureUserDir();
     fs.writeFileSync(file(), JSON.stringify(next, null, 2) + '\n', 'utf8');

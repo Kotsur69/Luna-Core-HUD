@@ -45,10 +45,13 @@ const { loadLayouts } = require('./layouts');
 // Preferencje UI (motyw + jezyk) trwale w config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
 // Licznik zuzycia limitow (5h + tydzien) - odczyt GET z endpointu OAuth CLI.
-const { fetchUsage, UsageWatcher } = require('./usage');
+const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
 // E1: telemetria maszyny (RAM / CPU / uptime). Czyste `os`, zero zaleznosci,
 // zero sieci - Passive Observer w najscislejszym mozliwym sensie.
 const { TelemetryWatcher } = require('./telemetry');
+// Sound feedback: persistent `mpv --idle` process + JSON IPC.
+const { SoundManager } = require('./soundManager');
+const { resolveSoundFile } = require('./sounds');
 // D5: aktualizacje. Same CZYSTE decyzje - `electron-updater` doladowywany jest
 // leniwie w getAutoUpdater(), dopiero gdy wiadomo, ze ta kompilacja moze sie
 // aktualizowac.
@@ -121,6 +124,12 @@ let portWatcher = null;
 let usageWatcher = null;
 /** @type {TelemetryWatcher | null} */
 let telemetryWatcher = null;
+/** @type {SoundManager | null} */
+let soundManager = null;
+// 50%/80% voice announcements (§4.4) - which thresholds already fired for the
+// CURRENT 5h window. nextUsageAnnounced() (usage.js) re-arms both once usage
+// drops back below 40%.
+let usageAnnounced = { at50: false, at80: false };
 // Profile wczytane z config/ oraz id domyslnego (dla nowych sesji).
 let profiles = [];
 let activeProfileId = null;
@@ -645,9 +654,21 @@ function startPortWatcher() {
 
 // ---- Passive Observer: zuzycie limitow subskrypcji (5h + tydzien) -----------
 
+/** Plays voice.usage50/usage80 on a fresh threshold crossing (§4.4). */
+function checkUsageThresholds(usage) {
+  const pct =
+    usage && usage.fiveHour && typeof usage.fiveHour.pct === 'number' ? usage.fiveHour.pct : null;
+  const { next, fire } = nextUsageAnnounced(pct, usageAnnounced);
+  usageAnnounced = next;
+  if (!fire || !soundManager) return;
+  const resolved = resolveSoundFile(`voice.${fire}`);
+  if (resolved) soundManager.play(resolved.path);
+}
+
 function startUsageWatcher() {
   if (!ENABLE_USAGE_METER) return;
   usageWatcher = new UsageWatcher((usage) => {
+    checkUsageThresholds(usage);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('usage:update', usage);
     }
@@ -963,7 +984,27 @@ function registerIpc() {
 
   // Preferencje UI: odczyt {theme, lang} i zapis czesciowy (zwraca nowy stan).
   ipcMain.handle('ui:get', () => readUiPrefs());
-  ipcMain.handle('ui:set', (_event, partial) => writeUiPrefs(partial));
+  ipcMain.handle('ui:set', (_event, partial) => {
+    const next = writeUiPrefs(partial);
+    // Sound prefs take effect immediately, no restart - same live-apply as
+    // theme/lang. soundManager may still be null if this fires before
+    // app.whenReady()'s init line runs.
+    if (next && soundManager) {
+      soundManager.setEnabled(next.soundEnabled);
+      soundManager.setVolume(next.soundVolume);
+    }
+    return next;
+  });
+
+  // Sound feedback: renderer never touches mpv directly (contextIsolation).
+  // Missing key, disabled entry, or missing asset file all resolve to null in
+  // resolveSoundFile() - a silent no-op, matching soundManager's own
+  // degrade-gracefully rule for a missing mpv.
+  ipcMain.on('sound:play', (_event, payload) => {
+    if (!soundManager || !payload || typeof payload.key !== 'string') return;
+    const resolved = resolveSoundFile(payload.key, payload.opts || {});
+    if (resolved) soundManager.play(resolved.path);
+  });
 
   // Zuzycie limitow: wymuszony odczyt (przycisk odswiezania). Gdy wylaczony -
   // zwroc stan 'off'; gdy watcher chodzi - odswiez go (wyemituje usage:update),
@@ -1031,6 +1072,12 @@ app.whenReady().then(() => {
   startPortWatcher();
   startUsageWatcher();
   startTelemetryWatcher();
+  // Sound feedback: volume/enabled come from the persisted prefs (Appearance
+  // panel); readUiPrefs() already falls back to SoundManager-matching
+  // defaults (volume 70, enabled true) if ui.local.json predates these keys.
+  soundManager = new SoundManager({ volume: readUiPrefs().soundVolume });
+  soundManager.setEnabled(readUiPrefs().soundEnabled !== false);
+  soundManager.start();
   // D5. Jedno zapytanie HTTPS przy starcie, nic nie pobiera. Odpalane po
   // createWindow(), zeby HUD zdazyl sie narysowac; samo zapytanie i tak jest
   // asynchroniczne i nie blokuje event loopa.
@@ -1066,6 +1113,10 @@ app.on('window-all-closed', () => {
   if (telemetryWatcher) {
     telemetryWatcher.stop();
     telemetryWatcher = null;
+  }
+  if (soundManager) {
+    soundManager.stop();
+    soundManager = null;
   }
   if (process.platform !== 'darwin') app.quit();
 });

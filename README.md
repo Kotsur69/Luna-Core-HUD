@@ -14,8 +14,9 @@ injects prompts or touches the `claude` binary.
 > **command palette (Ctrl+K)**, a **token burn-rate sparkline**, a swappable
 > **theming system**, a **PL/EN language switch**, a live **usage-limits gauge**
 > (5-hour + weekly subscription windows), an **armed auto-compact** toggle, a
-> **CWD/project switcher**, a **cyberpunk boot sequence**, and a **Skill Tracker
-> that shows how long each tool actually ran**.
+> **CWD/project switcher**, a **cyberpunk boot sequence**, a **Skill Tracker
+> that shows how long each tool actually ran**, and optional **sound & voice
+> feedback** (mpv-based, degrades silently if mpv isn't installed).
 
 ---
 
@@ -112,7 +113,11 @@ matter what it is asked to display.
 
 **Runs:** your default shell (`powershell.exe` on Windows, `$SHELL` elsewhere)
 and, inside it, the active profile's command — normally `claude`. That is the
-terminal in the middle of the window, and it is a real one.
+terminal in the middle of the window, and it is a real one. If `mpv` is on
+`PATH`, LunaCore also spawns one persistent `mpv --idle` process for UI sound
+feedback — entirely optional and entirely local, controlled over a JSON IPC
+pipe (no per-event process spawn). Without `mpv`, the HUD is identical; every
+sound call becomes a silent no-op.
 
 ---
 
@@ -126,6 +131,11 @@ user's context window. It works only as:
   regex on the Node.js backend (no round-trips to any model).
 - **Action Injector** — GUI buttons write plain text directly to the PTY `stdin`,
   exactly as if the user typed it.
+
+Sound/voice feedback (below) is a third, purely local category: short UI cues
+and TTS voice lines played by `mpv` on interaction/threshold events. It reads
+nothing from the CLI and calls no API — zero tokens for a different reason than
+the two categories above: there is no model or network involved at all.
 
 ---
 
@@ -165,6 +175,7 @@ user's context window. It works only as:
 | Passive Observer (usage gauge) | `UsageWatcher` reads the CLI's OAuth token from `~/.claude/.credentials.json` → **GET** `api.anthropic.com/api/oauth/usage` → IPC `usage:update` → 5h + weekly bars (read-only, never `/v1/messages`) |
 | Prefs (theme/language/boot) | `getThemes()`/`getUiPrefs()`/`setUiPrefs()` → IPC `themes:list` / `ui:get` / `ui:set` → reads `config/themes.json`, persists `config/ui.local.json`; renderer writes CSS tokens + xterm palette live |
 | Boot sequence | renderer-only overlay: CSS drives every pixel of motion, JS only stamps `animation-delay` on the log rows and removes the node. No IPC, no PTY, no tokens |
+| Sound/voice feedback | UI event → `sfx.*()`/`voice.*()` (renderer, throttled) → IPC `sound:play` `{key, opts}` → `resolveSoundFile()` (`config/sounds.json`) → `soundManager.play()` (persistent `mpv --idle` process, JSON IPC socket) |
 
 The Context Window % divides live `usage` tokens by the window
 [`src/models.js`](src/models.js) reports for the detected model — **not** a fixed
@@ -190,6 +201,7 @@ elements; scripts need no such exemption, which is why the boot failsafe lives i
 | Desktop framework | Electron 43 |
 | Terminal core | [`@lydell/node-pty`](https://www.npmjs.com/package/@lydell/node-pty) + [`@xterm/xterm`](https://www.npmjs.com/package/@xterm/xterm) + `@xterm/addon-fit` |
 | Frontend | Vanilla HTML / CSS / JS (swappable themes via CSS custom properties, PL/EN i18n) |
+| Audio (optional) | [`mpv`](https://mpv.io/) — persistent `--idle` process, controlled over a JSON IPC socket. Not an npm dependency and not bundled; LunaCore just looks for it on `PATH` at launch. |
 
 > **Why `@lydell/node-pty` instead of `node-pty`?** It ships prebuilt N-API
 > binaries, so it installs **without** node-gyp / Visual Studio Build Tools — one
@@ -247,8 +259,10 @@ Luna-Core-HUD/
 │   ├── projects.js        # load/validate working directories (~ expansion)
 │   ├── localized.js       # {pl,en} config values: validate/normalize + merge keys (never resolves)
 │   ├── theme.js           # load/validate themes from config/ (FALLBACK cyberpunk)
-│   ├── uiprefs.js         # read/write UI prefs (theme + language + boot + profile) → ui.local.json
-│   ├── usage.js           # UsageWatcher: GET OAuth /usage endpoint → 5h + weekly limits
+│   ├── uiprefs.js         # read/write UI prefs (theme + language + boot + profile + sound) → ui.local.json
+│   ├── usage.js           # UsageWatcher: GET OAuth /usage endpoint → 5h + weekly limits; nextUsageAnnounced() (pure)
+│   ├── sounds.js          # load config/sounds.json → resolveSoundFile(key, opts) (pure + config read)
+│   ├── soundManager.js    # persistent `mpv --idle` process + its JSON IPC socket
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
@@ -280,7 +294,8 @@ Luna-Core-HUD/
 │           ├── prompts.js     # prompt library
 │           ├── skills.js      # skill cheatsheet
 │           ├── scratchpad.js  # local notepad
-│           ├── appearance.js  # theme + language
+│           ├── appearance.js  # theme + language + sound prefs (toggle, volume, keystroke variant)
+│           ├── sound.js       # sfx.*()/voice.*() triggers → window.lunacore.playSound(); owns keystroke throttle
 │           └── boot.js        # startup sequence
 ├── config/
 │   ├── profiles.json      # launch profiles (profiles.local.json overrides, gitignored)
@@ -289,11 +304,14 @@ Luna-Core-HUD/
 │   ├── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
 │   ├── themes.json        # visual themes (themes.local.json overrides, gitignored)
 │   ├── rates.json         # per-model token prices for the cost HUD (rates.local.json overrides)
-│   ├── ui.local.json      # persisted theme + language + boot + last profile (gitignored)
+│   ├── sounds.json        # sfx/voice event → file + volume (keystroke: 4-way variant list)
+│   ├── ui.local.json      # persisted theme + language + boot + last profile + sound prefs (gitignored)
 │   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
+├── helpers/sounds/        # bundled audio: sfx/*.wav (placeholders), voice/*.mp3 (real, Edge-TTS)
 ├── test/                  # unit tests over the pure modules (`npm test`, node --test)
 ├── master_prompt.md       # original build brief
 ├── FUTURE_PLAN.md         # roadmap: themes, layout engine, feature shortlist
+├── SOUNDS_IMPLEMENTATION_PLAN.md # sound feature: design, decisions, build order
 └── README.md
 ```
 
@@ -444,6 +462,7 @@ Conversion order and the reasoning behind the contract are in
 | B5–B7 | Port filter toggle, copy-transcript-path, skill search box | ✅ done |
 | A2 | Widget contract + teardown probe — whole **right panel** converted (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`), plus `autocompact` and the left-panel list builders (`cheatsheets`, `prompts`, `skills`) | 🟡 9 of ~13 |
 | + | PL/EN localization of `config/*.json`, not just the UI chrome | ✅ done |
+| + | Optional sound & voice feedback (mpv-based sfx cues + TTS voice lines, Appearance panel controls) | 🟡 core done — click/keystroke sfx + usage-threshold voice cues live; task-complete, approval-prompt and startup-greeting triggers still open (see [`SOUNDS_IMPLEMENTATION_PLAN.md`](SOUNDS_IMPLEMENTATION_PLAN.md)) |
 
 That closes the whole approved shortlist and the first slice of the structural
 plan. **A1 is done**: the 1554-line `renderer.js` is a 57-line entry point plus
@@ -465,13 +484,15 @@ bigger open question: turning LunaCore into a multi-model console (Claude / Kimi
 ### Tests
 
 ```bash
-npm test        # node --test — 168 tests, ~1.4s, no extra dependencies
+npm test        # node --test — 304 tests, ~0.3s, no extra dependencies
 ```
 
 Covers the side-effect-free modules only: context metrics, transcript-dir
 encoding, tool detection, profile/project validation, port parsing, skill
-categorisation, model/context-window inference, and the burn-rate sampler with
-its ETA arithmetic.
+categorisation, model/context-window inference, the burn-rate sampler with
+its ETA arithmetic, sound-config resolution (`resolveSoundFile`, including the
+keystroke variant lookup), and the usage-threshold voice announcer's state
+machine (`nextUsageAnnounced`).
 
 Two of them are **data** tests rather than logic tests: they assert that the
 shipped `config/rates.json` and the `MODEL_WINDOWS` table actually know every
@@ -832,6 +853,58 @@ continuous motion worth keeping, because it's reporting real state.
 Nothing is lost by turning motion off: every signal in the HUD carries its meaning
 in **colour** — the working/waiting LED, the PTY dot, the context alarm — with
 movement only ever as reinforcement.
+
+## Sound & voice feedback
+
+Optional UI sound cues (tab actions, theme/lang/compact toggles, keystrokes)
+and short TTS voice lines, driven by a **persistent `mpv --idle` process**
+controlled over its JSON IPC socket — one process absorbs mpv's ~50–150 ms
+startup cost once, at app launch, instead of spawning it per event (a keystroke
+sound fired at typing speed would otherwise mean 10–20 new OS processes a
+second).
+
+**Fully optional and fails silent.** If `mpv` isn't on `PATH`, LunaCore logs one
+warning line (visible with `--enable-logging`) and every sound call becomes a
+no-op — the HUD is otherwise identical, nothing blocks, nothing errors. Install
+it with `winget install mpv-player.mpv-CI.MSVC` (Windows), `brew install mpv`
+(macOS), or your distro's package manager (Linux); no config changes needed
+beyond having it on `PATH`.
+
+Config-driven, same shape as `cheatsheets.json`/`themes.json`:
+[`config/sounds.json`](config/sounds.json) maps each event key to a file under
+`helpers/sounds/` plus a volume, [`src/sounds.js`](src/sounds.js) resolves and
+validates it (no `*.local.json` override yet — unlike themes/cheatsheets, this
+config has none). The four keystroke clips are a **variant list**, not a single
+file — pick one in **Appearance → Dzwiek klawiszy**, previewed immediately on
+change so choosing is by ear, not trial-and-error via actual typing.
+
+**Appearance panel controls** (persisted to `ui.local.json`, live-applied with
+no restart, same as theme/language): a sound on/off toggle, a volume slider,
+and the keystroke-variant picker (Mechanical / Soft / Sci-fi / Typewriter).
+
+**Currently wired:** new tab, tab switch, tab close, theme toggle, language
+toggle, compact-mode toggle, keystrokes (throttled, single-character guard so
+pasted bursts and arrow-key escape sequences don't fire it), and the usage
+gauge's 50%/80% threshold crossings — the only two voice lines actually
+triggered today, debounced both ways (re-arms only once usage drops back under
+40%, so a five-hour window that never re-crosses 50% doesn't repeat the
+announcement). `welcome`/`needYou`/`done` have real generated audio waiting but
+nothing calls them yet — startup greeting, approval-prompt detection and
+task-complete detection are still open build-order steps; see
+[`SOUNDS_IMPLEMENTATION_PLAN.md`](SOUNDS_IMPLEMENTATION_PLAN.md).
+
+The five voice lines are real, generated via
+[Edge-TTS](https://github.com/rany2/edge-tts) (`en-US-AriaNeural`,
+`--rate=+5% --pitch=+15Hz`) — free, offline-scriptable, easy to regenerate with
+a different voice; see [`helpers/sounds/README.md`](helpers/sounds/README.md)
+for the exact command and line text. The four keystroke `.wav` clips still ship
+as silent placeholders and need real short (<80 ms) recordings before they're
+audible.
+
+Zero tokens, zero API calls: as noted under *Core constraint* above, this is a
+third category alongside the Passive Observer / Action Injector split — it
+reads nothing from the CLI and calls no network endpoint, it just plays a local
+file when a UI event fires.
 
 ---
 

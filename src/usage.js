@@ -161,4 +161,32 @@ class UsageWatcher {
   }
 }
 
-module.exports = { fetchUsage, UsageWatcher };
+/**
+ * Pure decision for the 50%/80% voice announcements: given the current
+ * fiveHour pct and the previous announce state, says whether a threshold was
+ * just crossed. No I/O here - main.js's checkUsageThresholds() does the
+ * actual soundManager.play() with whatever this returns as `fire`.
+ *
+ * Re-arms at 40 (not 50) so hovering exactly at the 50% line across two polls
+ * can't flip announced/un-announced and spam the sound.
+ * @param {number|null} pct
+ * @param {{at50: boolean, at80: boolean}} announced
+ * @returns {{next: {at50: boolean, at80: boolean}, fire: 'usage50'|'usage80'|null}}
+ */
+function nextUsageAnnounced(pct, announced) {
+  if (typeof pct !== 'number') return { next: announced, fire: null };
+  if (pct >= 80 && !announced.at80) {
+    // Crossing 80 necessarily crossed 50 too - mark both so a later poll
+    // can't fire the (now redundant, and out-of-order) usage50 afterwards.
+    return { next: { at50: true, at80: true }, fire: 'usage80' };
+  }
+  if (pct >= 50 && !announced.at50) {
+    return { next: { ...announced, at50: true }, fire: 'usage50' };
+  }
+  if (pct < 40 && (announced.at50 || announced.at80)) {
+    return { next: { at50: false, at80: false }, fire: null };
+  }
+  return { next: announced, fire: null };
+}
+
+module.exports = { fetchUsage, UsageWatcher, nextUsageAnnounced };

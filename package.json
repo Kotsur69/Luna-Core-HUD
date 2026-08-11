@@ -36,6 +36,7 @@
       "src/**/*",
       "config/**/*",
       "assets/**/*",
+      "helpers/**/*",
       "package.json",
       "LICENSE",
       "!config/*.local.json",
@@ -43,7 +44,8 @@
       "!**/*.map"
     ],
     "asarUnpack": [
-      "**/node_modules/@lydell/node-pty/**"
+      "**/node_modules/@lydell/node-pty/**",
+      "helpers/**/*"
     ],
     "publish": [
       {

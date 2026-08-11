@@ -1,0 +1,26 @@
+{
+  "sfx": {
+    "keystroke": {
+      "volume": 35,
+      "throttleMs": 55,
+      "enabled": true,
+      "variants": [
+        { "id": "mechanical", "label": "Mechanical", "file": "sfx/keystroke-mechanical.wav" },
+        { "id": "soft", "label": "Soft", "file": "sfx/keystroke-soft.wav" },
+        { "id": "scifi", "label": "Sci-fi", "file": "sfx/keystroke-scifi.wav" },
+        { "id": "typewriter", "label": "Typewriter", "file": "sfx/keystroke-typewriter.wav" }
+      ]
+    },
+    "navClick": { "file": "sfx/nav-click.wav", "volume": 55 },
+    "modeToggle": { "file": "sfx/mode-toggle.wav", "volume": 60 },
+    "terminalNew": { "file": "sfx/terminal-new.wav", "volume": 65 },
+    "terminalClose": { "file": "sfx/terminal-close.wav", "volume": 65 }
+  },
+  "voice": {
+    "welcome": { "file": "voice/welcome-mati.mp3", "volume": 85 },
+    "needYou": { "file": "voice/need-you.mp3", "volume": 90 },
+    "done": { "file": "voice/done.mp3", "volume": 80 },
+    "usage50": { "file": "voice/usage-50.mp3", "volume": 90 },
+    "usage80": { "file": "voice/usage-80.mp3", "volume": 95 }
+  }
+}

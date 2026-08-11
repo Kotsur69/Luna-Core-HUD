@@ -174,4 +174,13 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Dopasowanie rozmiaru PTY do liczby kolumn/wierszy terminala zakladki. */
   resize: (cols, rows, sessionId) =>
     ipcRenderer.send('pty:resize', { cols, rows, sessionId }),
+
+  // --- Sound feedback ---
+  /**
+   * Fires a UI sound/voice cue by key, e.g. 'sfx.navClick', 'voice.done'.
+   * @param {string} key
+   * @param {{variant?: string}} [opts] variant: for 'sfx.keystroke', which of
+   *   the 4 clips to play (id from config/sounds.json's variants list).
+   */
+  playSound: (key, opts) => ipcRenderer.send('sound:play', { key, opts }),
 });

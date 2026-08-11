@@ -36,6 +36,7 @@ import { pulseCompact } from './actions.js';
 import { isLedDead } from './led.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
 import { defineWidget } from './registry.js';
+import { sfx } from './sound.js';
 
 const AUTO_COMPACT_AT = CTX_WARN_HIGH;      // trigger threshold (0.85)
 const AUTO_COMPACT_REARM = CTX_WARN_MID;    // ready again below this (0.60)
@@ -120,6 +121,7 @@ defineWidget({
 
     // Bound to an element INSIDE root, so it goes away with the subtree.
     els.toggle.addEventListener('change', () => {
+      sfx.modeToggle();
       autoCompactArmed = els.toggle.checked;
       autoCompactFired = false; // (dis)arming starts the cycle over
       els.field.classList.toggle('is-armed', autoCompactArmed);

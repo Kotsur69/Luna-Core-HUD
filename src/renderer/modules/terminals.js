@@ -12,6 +12,8 @@
 
 'use strict';
 
+import { sfx } from './sound.js';
+
 const TERM_OPTIONS = {
   cursorBlink: true,
   fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
@@ -94,7 +96,13 @@ export function ensureTerm(sessionId) {
     instance.options.theme = { ...instance.options.theme, ...currentTermTheme };
   }
   // ACTION INJECTOR: keystrokes from THIS terminal go to ITS OWN pty.
-  instance.onData((data) => window.lunacore.write(data, sessionId));
+  instance.onData((data) => {
+    // Single printable char only - onData also fires for pasted bursts and
+    // xterm's own multi-byte escape sequences (e.g. arrow keys send
+    // \x1b[A), neither of which is "a keystroke" for sound purposes.
+    if (data.length === 1 && data >= ' ') sfx.keystroke();
+    window.lunacore.write(data, sessionId);
+  });
 
   s = { term: instance, fitAddon: addon, el, alive: true };
   termsBySession.set(sessionId, s);

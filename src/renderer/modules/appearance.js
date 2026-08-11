@@ -24,9 +24,14 @@ import { mountBoot, startBoot } from './boot.js';
 import { mountUpdate } from './update.js';
 import { getLayouts, getActiveLayoutId, selectLayout } from './layout.js';
 import { loc } from './util.js';
+import { sfx, setKeystrokeVariant } from './sound.js';
 
 let themesById = new Map();
 let activeThemeId = null;
+
+// Mirrors activeThemeId's role: module state so a remount repaints the
+// controls from truth instead of the template's authored defaults.
+let soundPrefs = { enabled: true, volume: 70, keystrokeVariant: 'mechanical' };
 
 // Elements of the current mount, or null when this widget is not on screen.
 let els = null;
@@ -113,6 +118,14 @@ function renderLayoutSwitcher() {
   if (active) els.layoutSwitcher.value = active;
 }
 
+/** Repaints the sound controls (toggle, volume, keystroke variant) from module state. */
+function renderSoundSwitcher() {
+  if (!els) return;
+  els.soundToggle.checked = soundPrefs.enabled;
+  els.soundVolume.value = soundPrefs.volume;
+  els.soundKeystrokeVariant.value = soundPrefs.keystrokeVariant;
+}
+
 /** Ids of every loaded theme, for the console hook and the probe. */
 export function getThemeIds() {
   return [...themesById.keys()];
@@ -135,7 +148,14 @@ export function selectTheme(id) {
 }
 
 export async function initAppearance() {
-  let prefs = { theme: 'cyberpunk', lang: 'pl', boot: true };
+  let prefs = {
+    theme: 'cyberpunk',
+    lang: 'pl',
+    boot: true,
+    soundEnabled: true,
+    soundVolume: 70,
+    soundKeystrokeVariant: 'mechanical',
+  };
   try {
     prefs = (await window.lunacore.getUiPrefs()) || prefs;
   } catch {
@@ -148,6 +168,14 @@ export async function initAppearance() {
   // The widget already mounted (initLayout runs first), so its layout options
   // were built in the authored language - relabel them now that we know better.
   renderLayoutSwitcher();
+
+  soundPrefs = {
+    enabled: prefs.soundEnabled !== false,
+    volume: typeof prefs.soundVolume === 'number' ? prefs.soundVolume : 70,
+    keystrokeVariant: prefs.soundKeystrokeVariant || 'mechanical',
+  };
+  setKeystrokeVariant(soundPrefs.keystrokeVariant);
+  renderSoundSwitcher();
 
   // Themes: fill the list and apply the active one (or the first available).
   try {
@@ -179,6 +207,9 @@ defineWidget({
       themeSwitcher: root.querySelector('#theme-switcher'),
       layoutSwitcher: root.querySelector('#layout-switcher'),
       langSwitcher: root.querySelector('#lang-switcher'),
+      soundToggle: root.querySelector('#sound-toggle'),
+      soundVolume: root.querySelector('#sound-volume'),
+      soundKeystrokeVariant: root.querySelector('#sound-keystroke-variant'),
     };
 
     // Repaint from module state - initAppearance() only runs once at launch,
@@ -186,8 +217,10 @@ defineWidget({
     renderLangSwitcher();
     renderThemeSwitcher();
     renderLayoutSwitcher();
+    renderSoundSwitcher();
 
     els.themeSwitcher.addEventListener('change', () => {
+      sfx.modeToggle();
       activeThemeId = els.themeSwitcher.value;
       applyThemeVars(themesById.get(activeThemeId));
       window.lunacore.setUiPrefs({ theme: activeThemeId });
@@ -205,10 +238,29 @@ defineWidget({
     });
 
     els.langSwitcher.addEventListener('change', () => {
+      sfx.modeToggle();
       applyLang(els.langSwitcher.value);
       window.lunacore.setUiPrefs({ lang: els.langSwitcher.value });
       // Layout labels are localized, unlike the theme labels above.
       renderLayoutSwitcher();
+    });
+
+    els.soundToggle.addEventListener('change', () => {
+      soundPrefs.enabled = els.soundToggle.checked;
+      window.lunacore.setUiPrefs({ soundEnabled: soundPrefs.enabled });
+    });
+
+    els.soundVolume.addEventListener('change', () => {
+      soundPrefs.volume = Number(els.soundVolume.value);
+      window.lunacore.setUiPrefs({ soundVolume: soundPrefs.volume });
+    });
+
+    els.soundKeystrokeVariant.addEventListener('change', () => {
+      soundPrefs.keystrokeVariant = els.soundKeystrokeVariant.value;
+      setKeystrokeVariant(soundPrefs.keystrokeVariant);
+      window.lunacore.setUiPrefs({ soundKeystrokeVariant: soundPrefs.keystrokeVariant });
+      // Audition-by-ear: hear the clip you just picked, not just its label.
+      sfx.keystroke();
     });
 
     const offBoot = mountBoot(root);
