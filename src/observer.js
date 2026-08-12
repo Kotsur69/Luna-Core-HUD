@@ -77,7 +77,7 @@ function detectTools(raw) {
 /**
  * Wykrywa, czy surowy fragment stdout zawiera monit o zgode (y/n TUI Claude
  * Code). Heurystyka na LITERALNYCH podciagach z config/sound-triggers.json -
- * patrz src/soundTriggers.js i SOUNDS_IMPLEMENTATION_PLAN.md §4.2. Wersyjnie
+ * patrz src/soundTriggers.js i SOUNDS_IMPLEMENTATION_PLAN.md §3. Wersyjnie
  * krucha z zalozenia: tekst TUI moze sie zmienic miedzy wydaniami CLI, dlatego
  * to dane (config), nie stala w kodzie.
  * @param {string} raw surowe dane z ptyProcess.onData
@@ -375,7 +375,7 @@ function foldToolEvents(open, events) {
   return out;
 }
 
-// ---- 3. Task-complete detection (turn start/end, SOUNDS_IMPLEMENTATION_PLAN.md §4.3/§11.1) --
+// ---- 3. Task-complete detection (turn start/end, SOUNDS_IMPLEMENTATION_PLAN.md §3) --
 
 /**
  * True if this fragment contains an assistant message whose turn is fully

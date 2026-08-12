@@ -419,7 +419,7 @@ test('foldToolEvents handles a tool that starts and ends inside one tick', () =>
   assert.equal(open.size, 0);
 });
 
-// ---- hasTurnEnd / hasUserPromptStart / isLongTurn (SOUNDS_IMPLEMENTATION_PLAN.md §4.3/§11.1) --
+// ---- hasTurnEnd / hasUserPromptStart / isLongTurn (SOUNDS_IMPLEMENTATION_PLAN.md §3) --
 
 const endLine = (reason) =>
   JSON.stringify({ timestamp: TS, message: { role: 'assistant', stop_reason: reason } });

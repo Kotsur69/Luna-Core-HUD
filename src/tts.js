@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 // Synthesizes arbitrary text to a WAV file via helpers/tts/sapi-speak.ps1
 // (System.Speech, fully offline - ZERO EXTRA TOKENS, see
-// SOUNDS_IMPLEMENTATION_PLAN.md #11.2 and ttsExtract.js). `text` never
+// SOUNDS_IMPLEMENTATION_PLAN.md §2 and ttsExtract.js). `text` never
 // touches a command line: it is written to a temp .txt file the fixed
 // PowerShell script reads with Get-Content, and spawn() is called with an
 // args array (no shell), so nothing in Claude's own output - quotes,

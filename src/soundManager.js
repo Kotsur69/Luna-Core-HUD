@@ -6,7 +6,7 @@
 // process spawn. A key-click sound fired at typing speed (10-20/sec) would
 // spawn 10-20 OS processes per second; one process absorbs mpv's ~50-150ms
 // startup cost once at app boot, and every trigger after that is a
-// sub-millisecond local IPC write. See SOUNDS_IMPLEMENTATION_PLAN.md §1.
+// sub-millisecond local IPC write. See SOUNDS_IMPLEMENTATION_PLAN.md §2.
 //
 // Fails silent + loud-once: if mpv is not on PATH, start() logs ONE warning
 // and every play() call becomes a no-op. The HUD must never crash or block

@@ -5,7 +5,7 @@
 // theme.js/rates.js/cheatsheets.js) and resolves an event key ('sfx.navClick',
 // 'voice.done') to an absolute asset path + volume. `sfx.keystroke` is special:
 // it holds a `variants` array instead of a single `file` (4-way picker, see
-// SOUNDS_IMPLEMENTATION_PLAN.md §2.4) - callers pass { variant } to pick one.
+// SOUNDS_IMPLEMENTATION_PLAN.md §3) - callers pass { variant } to pick one.
 //
 // Assets live in helpers/sounds/, sitting next to config/ as pure data, same
 // reasoning as assets/fonts and assets/icon-*.png living outside src/. Unlike

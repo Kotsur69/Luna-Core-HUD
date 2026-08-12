@@ -9,7 +9,7 @@
 //
 // ZERO EXTRA TOKENS: this is plain regex/string stripping, never a
 // "summarize this turn" model call - see SOUNDS_IMPLEMENTATION_PLAN.md
-// #11.2. Whatever comes out is a pure substring of what Claude already
+// §1. Whatever comes out is a pure substring of what Claude already
 // wrote; no rephrasing, no LLM-in-the-loop.
 // ============================================================================
 

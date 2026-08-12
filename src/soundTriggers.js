@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 // Loads config/sound-triggers.json (shipped defaults, read via paths.bundled()
 // same as sounds.js/theme.js/rates.js/cheatsheets.js). Right now this only
-// holds the approval-prompt patterns (SOUNDS_IMPLEMENTATION_PLAN.md §4.2) -
+// holds the approval-prompt patterns (SOUNDS_IMPLEMENTATION_PLAN.md §3) -
 // literal substrings matched against ANSI-stripped stdout in
 // observer.js's detectApprovalPrompt(). Data, not code: Claude Code's TUI text
 // can change between CLI releases, and Mati should be able to fix a broken

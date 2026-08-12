@@ -309,9 +309,8 @@ Luna-Core-HUD/
 │   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
 ├── helpers/sounds/        # bundled audio: sfx/*.wav (placeholders), voice/*.mp3 (real, Edge-TTS)
 ├── test/                  # unit tests over the pure modules (`npm test`, node --test)
-├── master_prompt.md       # original build brief
 ├── FUTURE_PLAN.md         # roadmap: themes, layout engine, feature shortlist
-├── SOUNDS_IMPLEMENTATION_PLAN.md # sound feature: design, decisions, build order
+├── SOUNDS_IMPLEMENTATION_PLAN.md # sound & voice feature: what it does, which files, how to touch it
 └── README.md
 ```
 

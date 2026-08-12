@@ -701,9 +701,9 @@ function checkUsageThresholds(usage) {
   if (resolved) soundManager.play(resolved.path);
 }
 
-// ---- Passive Observer: koniec dlugiego zadania (SOUNDS_IMPLEMENTATION_PLAN.md §4.3/§11.1) --
+// ---- Passive Observer: koniec dlugiego zadania (SOUNDS_IMPLEMENTATION_PLAN.md §3) --
 
-/** Plays voice.done, but only when the completed turn ran long enough (§11.1). */
+/** Plays voice.done, but only when the completed turn ran long enough (§3). */
 function checkTurnEnd({ startedAt, endedAt, text }) {
   if (soundManager && isLongTurn(startedAt, endedAt, readUiPrefs().soundLongTaskMinutes)) {
     const resolved = resolveSoundFile('voice.done');
@@ -1158,7 +1158,7 @@ app.whenReady().then(() => {
   narrationManager = new SoundManager({ volume: readUiPrefs().soundVolume, channel: 'voice' });
   narrationManager.setEnabled(readUiPrefs().soundEnabled !== false);
   narrationManager.start();
-  // Startup greeting (SOUNDS_IMPLEMENTATION_PLAN.md §4/§9 step 10) - delayed
+  // Startup greeting (SOUNDS_IMPLEMENTATION_PLAN.md §3) - delayed
   // so it fires after the mpv IPC socket is actually up (see
   // STARTUP_GREETING_DELAY_MS above); play() is a silent no-op if mpv never
   // came up or the user disabled sound in the meantime.

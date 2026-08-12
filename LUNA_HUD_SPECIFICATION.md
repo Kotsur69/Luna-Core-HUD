@@ -16,7 +16,7 @@ content and will drift out of date the moment it tries to. Instead:
 
 - **`README.md`** — current architecture, exact IPC data flow, tech stack, install/build instructions.
 - **`FUTURE_PLAN.md`** — the phased roadmap, including its own §9 "Multi-model command center" backlog (explicit, user-initiated provider switching — a different idea from anything below).
-- **`SOUNDS_IMPLEMENTATION_PLAN.md`** — the sound/voice feature plan specifically (§4.2 event cues, §11.2 read-output-aloud).
+- **`SOUNDS_IMPLEMENTATION_PLAN.md`** — the sound/voice feature reference (§3 event triggers, §2 read-output-aloud engine).
 - **This document** — §1–4 are a short, accurate *orientation* (kept intentionally thin so it can't contradict README), and §5 onward is the actual payload: a reusable recipe for adding a new widget, plus a filtered, scored backlog of module ideas for future sessions to pick up.
 
 **`LUNA_HARNESS_TREE_SPEC.md`** (multi-model task auto-routing across Kimi/Codex/LM
@@ -58,7 +58,7 @@ construction. See §6 for ideas that got cut on exactly this basis.
 | Terminal core | [`@lydell/node-pty`](https://www.npmjs.com/package/@lydell/node-pty) + [`@xterm/xterm`](https://www.npmjs.com/package/@xterm/xterm) + `@xterm/addon-fit` | N-API prebuilt binaries — survives Electron's Node-ABI jumps (e.g. 33→43 moved ABI 125→148) without a rebuild |
 | Frontend | Vanilla HTML / CSS / JS | CSS custom-property theming (9 themes), PL/EN i18n, no framework, no bundler-required build step for the renderer |
 | Audio (optional) | [`mpv`](https://mpv.io/) | Persistent `--idle` process controlled over a JSON IPC socket/pipe. Not bundled — looked up on `PATH`; every sound feature degrades silently if it's missing |
-| Voice synthesis (optional) | Windows SAPI via `System.Speech`, driven by a fixed PowerShell script | Fully offline, no network, no npm dependency — see §11.2 in `SOUNDS_IMPLEMENTATION_PLAN.md` |
+| Voice synthesis (optional) | Windows SAPI via `System.Speech`, driven by a fixed PowerShell script | Fully offline, no network, no npm dependency — see §2 in `SOUNDS_IMPLEMENTATION_PLAN.md` |
 
 Go, Bubbletea, Lipgloss, `gopsutil`, and a tmux/zellij launcher — everything v1.0.0
 of this document proposed — do not apply. They described a different project
