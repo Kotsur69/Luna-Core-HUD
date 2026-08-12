@@ -114,36 +114,58 @@ async function fetchUsage() {
 }
 
 /**
+ * Pure decision behind the heartbeat: normal cadence when the last read was
+ * healthy, a faster retry cadence right after an error so a network blip
+ * (or a HUD that just regained connectivity) recovers in ~15 s instead of
+ * waiting out the full 90 s window.
+ * @param {{error?: string}} usage
+ * @param {number} intervalMs
+ * @param {number} heartbeatMs
+ */
+function nextPollDelay(usage, intervalMs, heartbeatMs) {
+  return usage && usage.error ? heartbeatMs : intervalMs;
+}
+
+/**
  * Cyklicznie pobiera zuzycie i emituje, gdy sie zmieni (jak PortWatcher).
  * Odliczanie do resetu liczy renderer z resetsAt, wiec porownujemy stan BEZ
  * pol pochodnych (fetchedAt) - inaczej emitowaloby co tick bez realnej zmiany.
+ *
+ * Heartbeat: po odczycie z bledem nastepny tick przychodzi po heartbeatMs
+ * (domyslnie 15 s) zamiast pelnego intervalMs (90 s), az odczyt sie znow
+ * powiedzie - wtedy wraca normalny, wolniejszy rytm. To zwykle GET-y bez
+ * zuzycia tokenow Claude, wiec proba co 15 s bez limitu prob jest tania.
  */
 class UsageWatcher {
   /** @param {(usage: object) => void} onUpdate */
-  constructor(onUpdate, intervalMs = 90000) {
+  constructor(onUpdate, intervalMs = 90000, heartbeatMs = 15000) {
     this.onUpdate = onUpdate;
     this.intervalMs = intervalMs;
+    this.heartbeatMs = heartbeatMs;
     this.timer = null;
     this.lastJson = '';
     this.busy = false;
+    this.running = false;
   }
 
   start() {
-    if (this.timer) return;
-    this.timer = setInterval(() => this.tick(), this.intervalMs);
+    if (this.running) return;
+    this.running = true;
     this.tick(); // pierwszy odczyt od razu
   }
 
   stop() {
-    if (this.timer) clearInterval(this.timer);
+    this.running = false;
+    if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
 
   async tick() {
     if (this.busy) return; // nie nakladaj zapytan
     this.busy = true;
+    let usage;
     try {
-      const usage = await fetchUsage();
+      usage = await fetchUsage();
       const cmp = JSON.stringify({ ...usage, fetchedAt: 0 });
       if (cmp !== this.lastJson) {
         this.lastJson = cmp;
@@ -151,12 +173,19 @@ class UsageWatcher {
       }
     } finally {
       this.busy = false;
+      if (this.running) {
+        this.timer = setTimeout(() => this.tick(), nextPollDelay(usage, this.intervalMs, this.heartbeatMs));
+      }
     }
   }
 
   /** Wymusza natychmiastowy odczyt + emisje (przycisk odswiezania w UI). */
   refresh() {
     this.lastJson = ''; // wymus emisje przy nastepnym odczycie
+    if (this.timer) {
+      clearTimeout(this.timer); // nie zdublowac zaplanowanego kolejnego ticku
+      this.timer = null;
+    }
     return this.tick();
   }
 }
@@ -189,4 +218,4 @@ function nextUsageAnnounced(pct, announced) {
   return { next: announced, fire: null };
 }
 
-module.exports = { fetchUsage, UsageWatcher, nextUsageAnnounced };
+module.exports = { fetchUsage, UsageWatcher, nextUsageAnnounced, nextPollDelay };

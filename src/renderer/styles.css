@@ -800,6 +800,12 @@ body::after {
 .usage-refresh.is-spinning { animation: usage-spin 0.6s linear infinite; }
 @keyframes usage-spin { to { transform: rotate(360deg); } }
 
+/* Freshness readout ("updated Xs ago") so the tile never has to blank itself
+   to say something changed - see modules/usage.js renderFreshness(). Empty
+   text collapses via :empty so it costs no layout space before first data. */
+.usage-updated { font-size: 10px; margin: -4px 0 2px; }
+.usage-updated:empty { display: none; }
+
 .usage { display: flex; flex-direction: column; gap: 10px; }
 .usage-row { display: flex; flex-direction: column; gap: 3px; }
 .usage-row__head {

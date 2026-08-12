@@ -7,13 +7,23 @@
 // refresh the UI without a new request.
 //
 // A2: converted to the widget contract, following modules/ports.js. The split
-// is the one every conversion uses - `lastUsage` is APP state and stays at
+// is the one every conversion uses - `lastGoodUsage` is APP state and stays at
 // module scope (the bus channel replays, so a remount repaints from it at once
 // instead of flashing "checking limits..."), while `els` belongs to the mount
 // and is null whenever this block is off screen.
 //
 // The one real leak this fixes: the 30 s countdown used to be a module-level
 // setInterval that nothing could ever stop.
+//
+// STALE-WHILE-ERROR: a transient 'unavailable' read (network blip, one bad
+// poll) used to wipe the bars and show an error sentence instead, so the tile
+// looked like it kept disappearing every few polls. Now the bars always
+// render from the last GOOD payload (lastGoodUsage); a transient error only
+// leaves the "updated Xs ago" label to grow instead of resetting - see
+// renderFreshness(). Only 'reauth' (no valid token) and 'off' (feature
+// disabled) still take over the whole tile, because those are real, lasting
+// states the next 15 s heartbeat (src/usage.js UsageWatcher) can't fix on
+// its own - the user has to do something (run `claude`, flip the flag).
 // ============================================================================
 
 'use strict';
@@ -25,9 +35,23 @@ import { defineWidget } from './registry.js';
 /** How often the "resets in ..." labels are recomputed (locally, no request). */
 const COUNTDOWN_MS = 30000;
 
+/** How often the "updated Xs ago" label ticks (locally, no request). */
+const FRESHNESS_MS = 1000;
+
 // Elements of the current mount, or null when this widget is not on screen.
 let els = null;
-let lastUsage = null;
+let lastGoodUsage = null; // last payload WITHOUT .error - what the bars render from
+let lastError = null; // .error of the most recent payload, or null if it was good
+
+/** Applies a fresh payload to module state. Pure state update, no render. */
+function applyUsage(usage) {
+  if (usage && !usage.error) {
+    lastGoodUsage = usage;
+    lastError = null;
+  } else {
+    lastError = (usage && usage.error) || null;
+  }
+}
 
 /** Humanises the time to reset (ISO -> "4d 2h" / "3h 12m" / "9m"). null once past. */
 function fmtResetWhen(resetsAt) {
@@ -41,6 +65,23 @@ function fmtResetWhen(resetsAt) {
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+/**
+ * Humanises elapsed time since fetchedAt (ms epoch) -> "3s" / "42s" / "5m" /
+ * "2h 5m". null when fetchedAt is missing/invalid (nothing to show yet).
+ * `now` is a param (not Date.now() inline) so this stays a pure, testable
+ * function - same shape as formatBytes/formatUptime in modules/telemetry.js.
+ */
+export function fmtAgo(fetchedAt, now = Date.now()) {
+  if (typeof fetchedAt !== 'number' || !Number.isFinite(fetchedAt)) return null;
+  const sec = Math.max(0, Math.round((now - fetchedAt) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${h}h ${m}m`;
 }
 
 /** Builds one usage row (label + bar + % + time to reset). */
@@ -84,22 +125,48 @@ function usageMessage(key) {
   return p;
 }
 
+/**
+ * Updates the "updated Xs ago" hint from lastGoodUsage.fetchedAt. Only ever
+ * touches one textContent - never rebuilds the tile - so it is safe to call
+ * every second without risking the flicker a full renderUsage() would cause.
+ */
+function renderFreshness() {
+  if (!els || !els.updated) return;
+  const when = lastGoodUsage ? fmtAgo(lastGoodUsage.fetchedAt) : null;
+  els.updated.textContent = when ? t('usage.updatedAgo', { when }) : '';
+}
+
 /** Renders the tile from the current state. Error states become a message. */
 function renderUsage() {
-  if (!els) return; // not mounted - lastUsage is kept, the DOM is not ours
+  if (!els) return; // not mounted - state is kept, the DOM is not ours
   const usageBody = els.body;
   usageBody.innerHTML = '';
-  const u = lastUsage;
-  if (!u) {
-    usageBody.appendChild(usageMessage('usage.loading'));
-    return;
-  }
-  if (u.error) {
+
+  if (!lastGoodUsage) {
+    // Never had good data yet: 'reauth'/'off' are worth naming explicitly,
+    // anything else (incl. no payload at all) just reads as "still checking".
     const key =
-      u.error === 'reauth' ? 'usage.reauth' : u.error === 'off' ? 'usage.off' : 'usage.unavailable';
+      lastError === 'reauth'
+        ? 'usage.reauth'
+        : lastError === 'off'
+          ? 'usage.off'
+          : lastError
+            ? 'usage.unavailable'
+            : 'usage.loading';
     usageBody.appendChild(usageMessage(key));
+    renderFreshness();
     return;
   }
+
+  if (lastError === 'reauth' || lastError === 'off') {
+    // Persistent, real states - not a blip the 15 s heartbeat will quietly
+    // fix on its own, so this is the one case still worth swapping the tile.
+    usageBody.appendChild(usageMessage(lastError === 'reauth' ? 'usage.reauth' : 'usage.off'));
+    renderFreshness();
+    return;
+  }
+
+  const u = lastGoodUsage;
   const windows = [
     ['usage.window.5h', u.fiveHour],
     ['usage.window.week', u.sevenDay],
@@ -115,9 +182,11 @@ function renderUsage() {
   }
   if (!any) {
     usageBody.appendChild(usageMessage('usage.unavailable'));
+    renderFreshness();
     return;
   }
   if (u.extraUsage) usageBody.appendChild(usageMessage('usage.extra'));
+  renderFreshness();
 }
 
 defineWidget({
@@ -128,13 +197,14 @@ defineWidget({
     els = {
       body: root.querySelector('#usage-body'),
       refresh: root.querySelector('#usage-refresh'),
+      updated: root.querySelector('#usage-updated'),
     };
 
     // Via feeds.js, not straight off IPC - see the note there on disposability.
     // It replays, so a remount repaints from the last poll instead of waiting
     // up to 90 s for the next one.
     const offUsage = onUsageUpdate((usage) => {
-      lastUsage = usage;
+      applyUsage(usage);
       renderUsage();
     });
 
@@ -146,7 +216,7 @@ defineWidget({
       try {
         const u = await window.lunacore.refreshUsage();
         if (u) {
-          lastUsage = u;
+          applyUsage(u);
           renderUsage(); // no-op if we were unmounted while awaiting
         }
       } catch {
@@ -162,8 +232,13 @@ defineWidget({
     // Refresh the reset labels every 30 s (the countdown is computed locally
     // from resetsAt, with no new network request).
     const countdown = setInterval(() => {
-      if (lastUsage && !lastUsage.error) renderUsage();
+      if (lastGoodUsage) renderUsage();
     }, COUNTDOWN_MS);
+
+    // Tick the "updated Xs ago" label every second - a plain textContent
+    // write, not a body rebuild, so it can't cause the flicker a full
+    // renderUsage() on the same cadence would.
+    const freshness = setInterval(renderFreshness, FRESHNESS_MS);
 
     renderUsage();
 
@@ -171,6 +246,7 @@ defineWidget({
       offUsage();
       offLang();
       clearInterval(countdown);
+      clearInterval(freshness);
       els = null;
     };
   },
