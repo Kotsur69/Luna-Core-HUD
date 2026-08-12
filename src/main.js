@@ -22,7 +22,10 @@ const { randomUUID } = require('crypto');
 const pty = require('@lydell/node-pty');
 // Passive Observer (Faza 3): detekcja narzedzi ze stdout + tailowanie
 // transcriptu JSONL po realne zuzycie context window. Tylko czyta, zero tokenow.
-const { detectTools, TranscriptWatcher } = require('./observer');
+const { detectTools, detectApprovalPrompt, TranscriptWatcher, isLongTurn } = require('./observer');
+// §4.2: literalne podciagi TUI, po ktorych rozpoznajemy monit o zgode - dane,
+// nie kod, bo tekst CLI moze sie zmienic miedzy wydaniami (config/sound-triggers.json).
+const { loadSoundTriggers } = require('./soundTriggers');
 // Profile uruchomieniowe (Faza 4): definicje "jak wystartowac sesje" z JSON.
 const { loadProfiles, getProfile } = require('./profiles');
 // Budowanie komendy startowej: decyduje, czy sesje da sie przypiac po id.
@@ -52,6 +55,11 @@ const { TelemetryWatcher } = require('./telemetry');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
 const { SoundManager } = require('./soundManager');
 const { resolveSoundFile } = require('./sounds');
+// §11.2: read Claude's actual output aloud. Zero extra tokens - extraction is
+// plain regex on the same transcript fragment TranscriptWatcher already
+// tails, synthesis is offline Windows SAPI, no model call in either step.
+const { extractSpokenText } = require('./ttsExtract');
+const { synthesizeToWav } = require('./tts');
 // D5: aktualizacje. Same CZYSTE decyzje - `electron-updater` doladowywany jest
 // leniwie w getAutoUpdater(), dopiero gdy wiadomo, ze ta kompilacja moze sie
 // aktualizowac.
@@ -126,10 +134,20 @@ let usageWatcher = null;
 let telemetryWatcher = null;
 /** @type {SoundManager | null} */
 let soundManager = null;
+// §11.2: separate mpv instance for spoken narration, own IPC pipe (see
+// soundManager.js's `channel` opt) - so a multi-sentence readout gets its own
+// `append-play` queue and can't be cut off by an unrelated SFX `replace`.
+/** @type {SoundManager | null} */
+let narrationManager = null;
 // 50%/80% voice announcements (§4.4) - which thresholds already fired for the
 // CURRENT 5h window. nextUsageAnnounced() (usage.js) re-arms both once usage
 // drops back below 40%.
 let usageAnnounced = { at50: false, at80: false };
+// Worst-case time for soundManager's mpv IPC socket to come up: CONNECT_DELAY_MS
+// (400) + MAX_CONNECT_ATTEMPTS * RECONNECT_DELAY_MS (5 * 300) from soundManager.js.
+// play() silently no-ops while `available` is still false, so the startup
+// greeting is fired after this margin rather than right after start().
+const STARTUP_GREETING_DELAY_MS = 2000;
 // Profile wczytane z config/ oraz id domyslnego (dla nowych sesji).
 let profiles = [];
 let activeProfileId = null;
@@ -463,6 +481,18 @@ function spawnInto(session, profile) {
     send('pty:data', { sessionId: session.id, data });
     const tiles = detectTools(data);
     if (tiles.length > 0) send('metrics:tools', { sessionId: session.id, tiles });
+
+    // §4.2: fire voice.needYou once per prompt APPEARANCE, not once per stdout
+    // chunk - a TUI redraw repeats the same text while Mati is still reading
+    // it. approvalShowing clears on this session's next input (see registerIpc).
+    if (soundManager && !session.approvalShowing) {
+      const patterns = loadSoundTriggers().approvalPrompt;
+      if (detectApprovalPrompt(data, patterns)) {
+        session.approvalShowing = true;
+        const resolved = resolveSoundFile('voice.needYou');
+        if (resolved) soundManager.play(resolved.path);
+      }
+    }
   });
 
   // Guard: ignorujemy exit procesu juz odpietego od sesji (restart profilu /
@@ -497,6 +527,8 @@ function spawnInto(session, profile) {
       // carries a start/end lifecycle (B8), `tiles` is the old flat blink the
       // stdout backstop above still sends.
       onTools: (events) => send('metrics:tools', { sessionId: session.id, events }),
+      // §4.3/§11.1: "All done" voice line, gated on turn duration in checkTurnEnd.
+      onTurnEnd: (turn) => checkTurnEnd(turn),
     },
   );
   session.watcher.start();
@@ -533,6 +565,10 @@ function createSession(opts = {}) {
     // pinned. Set by spawnInto, which owns the start command.
     transcriptId: null,
     alive: false,
+    // §4.2: true while an approval-prompt match is still on screen for this
+    // session, so a TUI redraw repeating the same text doesn't replay the
+    // sound on every stdout chunk. Cleared on the session's next input.
+    approvalShowing: false,
   };
 
   sessions.set(session.id, session);
@@ -663,6 +699,36 @@ function checkUsageThresholds(usage) {
   if (!fire || !soundManager) return;
   const resolved = resolveSoundFile(`voice.${fire}`);
   if (resolved) soundManager.play(resolved.path);
+}
+
+// ---- Passive Observer: koniec dlugiego zadania (SOUNDS_IMPLEMENTATION_PLAN.md §4.3/§11.1) --
+
+/** Plays voice.done, but only when the completed turn ran long enough (§11.1). */
+function checkTurnEnd({ startedAt, endedAt, text }) {
+  if (soundManager && isLongTurn(startedAt, endedAt, readUiPrefs().soundLongTaskMinutes)) {
+    const resolved = resolveSoundFile('voice.done');
+    if (resolved) soundManager.play(resolved.path);
+  }
+  maybeReadOutputAloud(text);
+}
+
+/**
+ * §11.2: speaks the finished turn's prose aloud via Windows SAPI, gated
+ * solely by the soundReadOutputEnabled opt-in (default off) - unlike
+ * voice.done this is not also gated by soundLongTaskMinutes, since the point
+ * is reading back what Claude said regardless of how long the turn took.
+ * Fire-and-forget: synthesis is async and this must never block the PTY/IPC
+ * event loop it's called from.
+ * @param {string} [text] raw newly-appended transcript fragment from
+ *   TranscriptWatcher's onTurnEnd (observer.js)
+ */
+function maybeReadOutputAloud(text) {
+  if (!narrationManager || !readUiPrefs().soundReadOutputEnabled) return;
+  const spoken = extractSpokenText(text);
+  if (!spoken) return;
+  synthesizeToWav(spoken).then((wavFile) => {
+    if (wavFile && narrationManager) narrationManager.play(wavFile, { mode: 'append-play' });
+  });
 }
 
 function startUsageWatcher() {
@@ -832,6 +898,8 @@ function registerIpc() {
     const p = payload && typeof payload === 'object' ? payload : { data: payload };
     const session = resolveSession(p.sessionId);
     if (session && session.proc) session.proc.write(p.data);
+    // §4.2: any input from Mati means an approval prompt (if showing) got answered.
+    if (session) session.approvalShowing = false;
   });
 
   // ACTION INJECTOR (przyciski GUI): wysyla gotowa komende + Enter (\r).
@@ -842,6 +910,7 @@ function registerIpc() {
     if (!session || !session.proc || typeof p.text !== 'string') return;
     const line = p.text.endsWith('\r') ? p.text : `${p.text}\r`;
     session.proc.write(line);
+    session.approvalShowing = false;
   });
 
   // ACTION INJECTOR (biblioteka promptow): wkleja WIELOLINIJKOWY tekst.
@@ -861,6 +930,7 @@ function registerIpc() {
     const text = payload.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     session.proc.write(`\x1b[200~${text}\x1b[201~`);
     if (payload.submit) session.proc.write('\r');
+    session.approvalShowing = false;
   });
 
   // Dopasowanie rozmiaru PTY do rozmiaru terminala w oknie (xterm-addon-fit).
@@ -993,6 +1063,10 @@ function registerIpc() {
       soundManager.setEnabled(next.soundEnabled);
       soundManager.setVolume(next.soundVolume);
     }
+    if (next && narrationManager) {
+      narrationManager.setEnabled(next.soundEnabled);
+      narrationManager.setVolume(next.soundVolume);
+    }
     return next;
   });
 
@@ -1078,6 +1152,21 @@ app.whenReady().then(() => {
   soundManager = new SoundManager({ volume: readUiPrefs().soundVolume });
   soundManager.setEnabled(readUiPrefs().soundEnabled !== false);
   soundManager.start();
+  // §11.2 narration channel - own mpv instance/pipe, same enabled/volume as
+  // the SFX channel; whether it actually SPEAKS on a given turn is decided
+  // per-turn in maybeReadOutputAloud() via soundReadOutputEnabled.
+  narrationManager = new SoundManager({ volume: readUiPrefs().soundVolume, channel: 'voice' });
+  narrationManager.setEnabled(readUiPrefs().soundEnabled !== false);
+  narrationManager.start();
+  // Startup greeting (SOUNDS_IMPLEMENTATION_PLAN.md §4/§9 step 10) - delayed
+  // so it fires after the mpv IPC socket is actually up (see
+  // STARTUP_GREETING_DELAY_MS above); play() is a silent no-op if mpv never
+  // came up or the user disabled sound in the meantime.
+  setTimeout(() => {
+    if (!soundManager) return;
+    const resolved = resolveSoundFile('voice.welcome');
+    if (resolved) soundManager.play(resolved.path);
+  }, STARTUP_GREETING_DELAY_MS);
   // D5. Jedno zapytanie HTTPS przy starcie, nic nie pobiera. Odpalane po
   // createWindow(), zeby HUD zdazyl sie narysowac; samo zapytanie i tak jest
   // asynchroniczne i nie blokuje event loopa.
@@ -1117,6 +1206,10 @@ app.on('window-all-closed', () => {
   if (soundManager) {
     soundManager.stop();
     soundManager = null;
+  }
+  if (narrationManager) {
+    narrationManager.stop();
+    narrationManager = null;
   }
   if (process.platform !== 'darwin') app.quit();
 });

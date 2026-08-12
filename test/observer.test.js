@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 
 const {
   detectTools,
+  detectApprovalPrompt,
   encodeProjectDir,
   usageToMetrics,
   sumUsageLines,
@@ -15,6 +16,9 @@ const {
   toolsFromLines,
   toolEventsFromLines,
   foldToolEvents,
+  hasTurnEnd,
+  hasUserPromptStart,
+  isLongTurn,
   CONTEXT_LIMIT,
 } = require('../src/observer');
 
@@ -129,6 +133,57 @@ test('detectTools jest odporny na powtorne wywolania (regex /g ma stan)', () => 
   assert.deepEqual(detectTools('Bash(ls)'), ['Shell']);
   assert.deepEqual(detectTools('Bash(ls)'), ['Shell']);
   assert.deepEqual(detectTools('Bash(ls)'), ['Shell']);
+});
+
+// ---- detectApprovalPrompt (§4.2) --------------------------------------------
+
+const APPROVAL_PATTERNS = [
+  'Do you want to proceed',
+  'Do you want to make this edit',
+  'Do you want to create',
+  'Do you trust the files in this folder',
+];
+
+test('detectApprovalPrompt wykrywa dopasowanie literalnego podciagu', () => {
+  assert.equal(
+    detectApprovalPrompt('│ Do you want to proceed?          │', APPROVAL_PATTERNS),
+    true,
+  );
+});
+
+test('detectApprovalPrompt zdejmuje sekwencje ANSI przed dopasowaniem', () => {
+  assert.equal(
+    detectApprovalPrompt('\x1b[1mDo you want to make this edit\x1b[0m to file.js?', APPROVAL_PATTERNS),
+    true,
+  );
+});
+
+test('detectApprovalPrompt sprawdza kazdy wzorzec z listy', () => {
+  assert.equal(detectApprovalPrompt('Do you want to create foo.js?', APPROVAL_PATTERNS), true);
+  assert.equal(
+    detectApprovalPrompt('Do you trust the files in this folder?', APPROVAL_PATTERNS),
+    true,
+  );
+});
+
+test('detectApprovalPrompt zwraca false, gdy nic nie pasuje', () => {
+  assert.equal(detectApprovalPrompt('Reading file.js...', APPROVAL_PATTERNS), false);
+});
+
+test('detectApprovalPrompt nie wywraca sie na pustym/brakujacym wejsciu', () => {
+  assert.equal(detectApprovalPrompt('', APPROVAL_PATTERNS), false);
+  assert.equal(detectApprovalPrompt(null, APPROVAL_PATTERNS), false);
+  assert.equal(detectApprovalPrompt('Do you want to proceed?', null), false);
+  assert.equal(detectApprovalPrompt('Do you want to proceed?', []), false);
+  assert.equal(detectApprovalPrompt('Do you want to proceed?', undefined), false);
+});
+
+test('detectApprovalPrompt ignoruje wzorce spoza tablicy stringow', () => {
+  assert.equal(detectApprovalPrompt('Do you want to proceed?', ['Do you want to proceed', 42, null]), true);
+});
+
+test('detectApprovalPrompt jest case-sensitive (celowo - literalny podciag)', () => {
+  assert.equal(detectApprovalPrompt('do you want to proceed?', APPROVAL_PATTERNS), false);
 });
 
 // ---- sumUsageByModel / sumUsageLines (B4) -----------------------------------
@@ -362,4 +417,90 @@ test('foldToolEvents handles a tool that starts and ends inside one tick', () =>
     ['start', 'end']
   );
   assert.equal(open.size, 0);
+});
+
+// ---- hasTurnEnd / hasUserPromptStart / isLongTurn (SOUNDS_IMPLEMENTATION_PLAN.md §4.3/§11.1) --
+
+const endLine = (reason) =>
+  JSON.stringify({ timestamp: TS, message: { role: 'assistant', stop_reason: reason } });
+
+const promptLine = (text) => JSON.stringify({ timestamp: TS, message: { role: 'user', content: text } });
+
+const promptBlocksLine = (...types) =>
+  JSON.stringify({
+    timestamp: TS,
+    message: { role: 'user', content: types.map((type) => ({ type })) },
+  });
+
+test('hasTurnEnd is false when stop_reason is tool_use (turn still has a pending tool call)', () => {
+  assert.equal(hasTurnEnd(endLine('tool_use')), false);
+});
+
+test('hasTurnEnd is true for a terminal stop_reason', () => {
+  assert.equal(hasTurnEnd(endLine('end_turn')), true);
+});
+
+test('hasTurnEnd is false with no stop_reason at all', () => {
+  assert.equal(hasTurnEnd(useLine(['t0', 'Read'])), false);
+});
+
+test('hasTurnEnd survives a torn line mid-write', () => {
+  assert.equal(hasTurnEnd('{"message":{"stop_reason":"end_'), false);
+});
+
+test('hasUserPromptStart is true for a plain string prompt', () => {
+  assert.equal(hasUserPromptStart(promptLine('fix the bug')), true);
+});
+
+test('hasUserPromptStart is true for a text content block', () => {
+  assert.equal(hasUserPromptStart(promptBlocksLine('text')), true);
+});
+
+test('hasUserPromptStart is false for a tool_result-only user line (CLI re-injecting tool output)', () => {
+  assert.equal(hasUserPromptStart(resLine('t0')), false);
+});
+
+test('hasUserPromptStart is true when real text is mixed with a tool_result in one content array', () => {
+  const line = JSON.stringify({
+    timestamp: TS,
+    message: {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 't0', content: 'ok' },
+        { type: 'text', text: 'also do X' },
+      ],
+    },
+  });
+  assert.equal(hasUserPromptStart(line), true);
+});
+
+test('hasUserPromptStart is false for a blank string prompt', () => {
+  assert.equal(hasUserPromptStart(promptLine('   ')), false);
+});
+
+test('hasUserPromptStart is false for an assistant line', () => {
+  assert.equal(hasUserPromptStart(useLine(['t0', 'Read'])), false);
+});
+
+test('isLongTurn is false with no observed start (unknown duration)', () => {
+  assert.equal(isLongTurn(0, Date.now(), 10), false);
+});
+
+test('isLongTurn is false when the turn ran under the threshold', () => {
+  const start = 1_000_000;
+  assert.equal(isLongTurn(start, start + 5 * 60000, 10), false);
+});
+
+test('isLongTurn is true when the turn ran at/over the threshold', () => {
+  const start = 1_000_000;
+  assert.equal(isLongTurn(start, start + 10 * 60000, 10), true);
+});
+
+test('isLongTurn treats a 0-minute threshold as "announce every turn"', () => {
+  const start = 1_000_000;
+  assert.equal(isLongTurn(start, start + 1, 0), true);
+});
+
+test('isLongTurn is false if endedAt is before startedAt (clock oddity)', () => {
+  assert.equal(isLongTurn(2000, 1000, 10), false);
 });

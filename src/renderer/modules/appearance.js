@@ -31,7 +31,13 @@ let activeThemeId = null;
 
 // Mirrors activeThemeId's role: module state so a remount repaints the
 // controls from truth instead of the template's authored defaults.
-let soundPrefs = { enabled: true, volume: 70, keystrokeVariant: 'mechanical' };
+let soundPrefs = {
+  enabled: true,
+  volume: 70,
+  keystrokeVariant: 'mechanical',
+  longTaskMinutes: 10,
+  readOutputEnabled: false,
+};
 
 // Elements of the current mount, or null when this widget is not on screen.
 let els = null;
@@ -124,6 +130,8 @@ function renderSoundSwitcher() {
   els.soundToggle.checked = soundPrefs.enabled;
   els.soundVolume.value = soundPrefs.volume;
   els.soundKeystrokeVariant.value = soundPrefs.keystrokeVariant;
+  els.soundLongTaskMinutes.value = soundPrefs.longTaskMinutes;
+  els.soundReadOutputToggle.checked = soundPrefs.readOutputEnabled;
 }
 
 /** Ids of every loaded theme, for the console hook and the probe. */
@@ -155,6 +163,8 @@ export async function initAppearance() {
     soundEnabled: true,
     soundVolume: 70,
     soundKeystrokeVariant: 'mechanical',
+    soundLongTaskMinutes: 10,
+    soundReadOutputEnabled: false,
   };
   try {
     prefs = (await window.lunacore.getUiPrefs()) || prefs;
@@ -173,6 +183,9 @@ export async function initAppearance() {
     enabled: prefs.soundEnabled !== false,
     volume: typeof prefs.soundVolume === 'number' ? prefs.soundVolume : 70,
     keystrokeVariant: prefs.soundKeystrokeVariant || 'mechanical',
+    longTaskMinutes:
+      typeof prefs.soundLongTaskMinutes === 'number' ? prefs.soundLongTaskMinutes : 10,
+    readOutputEnabled: prefs.soundReadOutputEnabled === true,
   };
   setKeystrokeVariant(soundPrefs.keystrokeVariant);
   renderSoundSwitcher();
@@ -210,6 +223,8 @@ defineWidget({
       soundToggle: root.querySelector('#sound-toggle'),
       soundVolume: root.querySelector('#sound-volume'),
       soundKeystrokeVariant: root.querySelector('#sound-keystroke-variant'),
+      soundLongTaskMinutes: root.querySelector('#sound-long-task-minutes'),
+      soundReadOutputToggle: root.querySelector('#sound-read-output-toggle'),
     };
 
     // Repaint from module state - initAppearance() only runs once at launch,
@@ -261,6 +276,18 @@ defineWidget({
       window.lunacore.setUiPrefs({ soundKeystrokeVariant: soundPrefs.keystrokeVariant });
       // Audition-by-ear: hear the clip you just picked, not just its label.
       sfx.keystroke();
+    });
+
+    els.soundLongTaskMinutes.addEventListener('change', () => {
+      const n = Number(els.soundLongTaskMinutes.value);
+      soundPrefs.longTaskMinutes = Number.isFinite(n) && n >= 0 ? Math.round(n) : 10;
+      els.soundLongTaskMinutes.value = soundPrefs.longTaskMinutes;
+      window.lunacore.setUiPrefs({ soundLongTaskMinutes: soundPrefs.longTaskMinutes });
+    });
+
+    els.soundReadOutputToggle.addEventListener('change', () => {
+      soundPrefs.readOutputEnabled = els.soundReadOutputToggle.checked;
+      window.lunacore.setUiPrefs({ soundReadOutputEnabled: soundPrefs.readOutputEnabled });
     });
 
     const offBoot = mountBoot(root);

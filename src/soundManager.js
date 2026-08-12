@@ -35,10 +35,14 @@ const CONNECT_DELAY_MS = 400;
 const MAX_CONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 300;
 
-function ipcPath() {
+// `channel` distinguishes multiple SoundManager instances in the same process
+// (§11.2 runs SFX and narration on separate mpv processes so a keystroke tick
+// can't cut off a multi-sentence readout) - same pid, different pipe.
+function ipcPath(channel) {
+  const tag = channel ? `-${channel}` : '';
   return IS_WINDOWS
-    ? `\\\\.\\pipe\\lunacore-mpv-${process.pid}`
-    : path.join(os.tmpdir(), `lunacore-mpv-${process.pid}.sock`);
+    ? `\\\\.\\pipe\\lunacore-mpv-${process.pid}${tag}`
+    : path.join(os.tmpdir(), `lunacore-mpv-${process.pid}${tag}.sock`);
 }
 
 function clampVolume(v) {
@@ -64,7 +68,9 @@ function resolveMpv() {
 }
 
 class SoundManager {
-  /** @param {{volume?: number}} [opts] volume: 0..100, default 70 */
+  /** @param {{volume?: number, channel?: string}} [opts] volume: 0..100,
+   *   default 70; channel: pipe-name suffix so a second instance (§11.2
+   *   narration) doesn't collide with the default SFX instance */
   constructor(opts = {}) {
     this.volume = clampVolume(opts.volume);
     this.enabled = true; // user toggle (Preferences); wired from uiprefs by main.js
@@ -73,7 +79,7 @@ class SoundManager {
     this.sock = null;
     this.warned = false;
     this.pending = []; // commands queued while the IPC socket is still connecting
-    this.ipcPath = ipcPath();
+    this.ipcPath = ipcPath(opts.channel);
   }
 
   /** Spawns `mpv --idle` and opens the IPC socket. Call once at app startup. */

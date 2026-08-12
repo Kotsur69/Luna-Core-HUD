@@ -1,0 +1,8 @@
+{
+  "approvalPrompt": [
+    "Do you want to proceed",
+    "Do you want to make this edit",
+    "Do you want to create",
+    "Do you trust the files in this folder"
+  ]
+}

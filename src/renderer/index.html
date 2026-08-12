@@ -355,6 +355,21 @@
         <span class="ui-field__label" data-i18n="appearance.volume">Glosnosc</span>
         <input type="range" id="sound-volume" min="0" max="100" />
       </label>
+      <!-- SS11.1: minimalny czas tury przed odtworzeniem "All done" (turn-end
+           detection w observer.js / checkTurnEnd() w main.js). 0 = kazda tura. -->
+      <label class="ui-field" data-i18n-title="appearance.longTaskMinutes.hint" title="Minimalny czas trwania tury Claude, zanim odtworzy sie glos &quot;All done&quot;. 0 = ogloszaj kazda ture.">
+        <span class="ui-field__label" data-i18n="appearance.longTaskMinutes">Ogloszenie "Gotowe" po (min)</span>
+        <input type="number" id="sound-long-task-minutes" min="0" max="180" step="1" />
+      </label>
+      <!-- SS11.2: opcjonalne odczytywanie odpowiedzi Claude na glos (Windows
+           SAPI, offline - src/tts.js). Domyslnie wylaczone. -->
+      <label class="switch-field" data-i18n-title="appearance.readOutput.hint" title="Odczytuj odpowiedzi Claude na glos po kazdej turze (Windows SAPI, offline).">
+        <span class="switch-field__label" data-i18n="appearance.readOutput">Czytaj odpowiedzi na glos</span>
+        <span class="switch">
+          <input type="checkbox" id="sound-read-output-toggle" class="switch__input" />
+          <span class="switch__track"><span class="switch__thumb"></span></span>
+        </span>
+      </label>
       <!-- Sekwencja startowa: czysta ozdoba, mozna wylaczyc. Nie blokuje
            sesji - PTY startuje pod spodem niezaleznie od animacji. -->
       <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">

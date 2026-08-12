@@ -74,6 +74,22 @@ function detectTools(raw) {
   return [...tiles];
 }
 
+/**
+ * Wykrywa, czy surowy fragment stdout zawiera monit o zgode (y/n TUI Claude
+ * Code). Heurystyka na LITERALNYCH podciagach z config/sound-triggers.json -
+ * patrz src/soundTriggers.js i SOUNDS_IMPLEMENTATION_PLAN.md §4.2. Wersyjnie
+ * krucha z zalozenia: tekst TUI moze sie zmienic miedzy wydaniami CLI, dlatego
+ * to dane (config), nie stala w kodzie.
+ * @param {string} raw surowe dane z ptyProcess.onData
+ * @param {string[]} patterns literalne podciagi, case-sensitive
+ * @returns {boolean}
+ */
+function detectApprovalPrompt(raw, patterns) {
+  if (!raw || !Array.isArray(patterns) || patterns.length === 0) return false;
+  const clean = String(raw).replace(ANSI_RE, '');
+  return patterns.some((p) => typeof p === 'string' && p && clean.includes(p));
+}
+
 // ---- 2. Tailowanie transcript JSONL (realne tokeny) ------------------------
 
 // Domyslne okno kontekstu. NIE jest juz twarda stala uzywana do liczenia -
@@ -359,6 +375,80 @@ function foldToolEvents(open, events) {
   return out;
 }
 
+// ---- 3. Task-complete detection (turn start/end, SOUNDS_IMPLEMENTATION_PLAN.md §4.3/§11.1) --
+
+/**
+ * True if this fragment contains an assistant message whose turn is fully
+ * done - `stop_reason` present and not `"tool_use"` (which means the turn
+ * still has a pending tool call, control has not returned to Mati yet).
+ * More reliable than regexing stdout for "is Claude done talking", and reuses
+ * the same JSONL file TranscriptWatcher already tails - no new file I/O.
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {boolean}
+ */
+function hasTurnEnd(text) {
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || !line.includes('"stop_reason"')) continue;
+    try {
+      const obj = JSON.parse(line);
+      const reason = obj && obj.message && obj.message.stop_reason;
+      if (reason && reason !== 'tool_use') return true;
+    } catch {
+      /* incomplete line - skip */
+    }
+  }
+  return false;
+}
+
+/**
+ * True if this fragment contains a genuine user-authored prompt - a
+ * `role: 'user'` message whose content is NOT purely `tool_result` blocks.
+ * Claude Code also writes a `role: 'user'` entry to re-inject a finished
+ * tool's output (see `resLine()` in test/observer.test.js) - that is the CLI
+ * talking to itself, not Mati, so it must not reset the turn-start clock the
+ * long-task announcement (§11.1) times against.
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {boolean}
+ */
+function hasUserPromptStart(text) {
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || !line.includes('"role"')) continue;
+    try {
+      const obj = JSON.parse(line);
+      const message = obj && obj.message;
+      if (!message || message.role !== 'user') continue;
+      const content = message.content;
+      if (typeof content === 'string' && content.trim()) return true;
+      if (Array.isArray(content) && content.some((p) => p && p.type && p.type !== 'tool_result')) {
+        return true;
+      }
+    } catch {
+      /* incomplete line - skip */
+    }
+  }
+  return false;
+}
+
+/**
+ * Gate for the "All done" announcement (§11.1): only fire when the completed
+ * turn ran at least `thresholdMinutes` - Mati does not want a chime after
+ * every quick back-and-forth, only after a long one ("like 10 mins Claude
+ * cogitated"). `startedAt` of 0 means no user prompt was ever observed for
+ * this turn (e.g. the watcher attached mid-turn on app restart) - treated as
+ * unknown duration, so it does NOT announce rather than guessing.
+ * @param {number} startedAt Date.now() when hasUserPromptStart() last fired, or 0
+ * @param {number} endedAt Date.now() when hasTurnEnd() fired
+ * @param {number} thresholdMinutes from the soundLongTaskMinutes preference
+ * @returns {boolean}
+ */
+function isLongTurn(startedAt, endedAt, thresholdMinutes) {
+  if (!startedAt || !endedAt || endedAt < startedAt) return false;
+  const minutes = typeof thresholdMinutes === 'number' && thresholdMinutes >= 0 ? thresholdMinutes : 10;
+  return endedAt - startedAt >= minutes * 60000;
+}
+
 /** Aggregate across every model - the plain token counters shown in the UI. */
 function sumUsageLines(text) {
   const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -456,6 +546,13 @@ class TranscriptWatcher {
     // B8: tools currently in flight, id -> tile. Spans ticks by design - a tool
     // routinely starts in one appended chunk and finishes in a later one.
     this.openTools = new Map();
+    // Optional: called with { startedAt, endedAt } when hasTurnEnd() fires on
+    // newly appended lines (§4.3/§11.1's "All done" announcement).
+    this.onTurnEnd = typeof opts.onTurnEnd === 'function' ? opts.onTurnEnd : null;
+    // Wall-clock of the last genuine user prompt seen (hasUserPromptStart()).
+    // 0 = none observed yet this session/tick-history, so a turn end right
+    // now has an unknown duration (isLongTurn() treats that as "don't fire").
+    this.turnStartedAt = 0;
     this.intervalMs = opts.intervalMs || 1500;
     this.scopeDir = opts.cwd
       ? path.join(PROJECTS_DIR, encodeProjectDir(opts.cwd))
@@ -492,6 +589,7 @@ class TranscriptWatcher {
       this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       this.byModel = new Map();
       this.openTools.clear();
+      this.turnStartedAt = 0;
     }
     // A first pass over an existing file is HISTORY, not live activity: it would
     // flash every tile the session ever used. Tokens still count (the spend is
@@ -537,6 +635,24 @@ class TranscriptWatcher {
           this.openTools.clear();
         } else if (events.length > 0) {
           this.onTools(events);
+        }
+      }
+
+      // §4.3/§11.1: guarded by !firstPass for the same reason as onTools above
+      // - a resumed session's PAST turns must not replay a stale start/end.
+      if (!firstPass) {
+        if (hasUserPromptStart(complete)) this.turnStartedAt = Date.now();
+        if (this.onTurnEnd && hasTurnEnd(complete)) {
+          const startedAt = this.turnStartedAt;
+          // Consumed: the NEXT end without a fresh start in between has an
+          // unknown duration (isLongTurn() then correctly refuses to fire).
+          this.turnStartedAt = 0;
+          // `text` is the raw newly-appended fragment - §11.2's
+          // ttsExtract.extractSpokenText() reads it to speak the turn aloud.
+          // Passed through verbatim rather than parsed here: this watcher
+          // stays a dumb signal source, the same split hasTurnEnd()/
+          // isLongTurn() already use (detect here, decide at the call site).
+          this.onTurnEnd({ startedAt, endedAt: Date.now(), text: complete });
         }
       }
     } catch {
@@ -659,6 +775,7 @@ class TranscriptWatcher {
 
 module.exports = {
   detectTools,
+  detectApprovalPrompt,
   TranscriptWatcher,
   encodeProjectDir,
   usageToMetrics,
@@ -667,6 +784,9 @@ module.exports = {
   toolsFromLines,
   toolEventsFromLines,
   foldToolEvents,
+  hasTurnEnd,
+  hasUserPromptStart,
+  isLongTurn,
   CONTEXT_LIMIT,
   TOOL_TILES,
 };

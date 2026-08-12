@@ -668,16 +668,63 @@ tests today; expect it to grow, not break).
    ahead of schedule since the voice choice got decided here), and `mpv` is
    installed on this machine (`winget install mpv-player.mpv-CI.MSVC`) —
    audible verification is pending, deferred to a home machine.
-8. Task-complete detection via `stop_reason` (§4.3).
-9. Approval-prompt detection (§4.2) — last, because it's the most likely to
-   need a follow-up config tweak once real CLI output is observed running
-   against it (the `sound-triggers.json` patterns are a best guess from the
-   current CLI's known prompt text, not something exercised against live
-   output yet).
-10. Startup greeting (§4 table, "Startup greeting" row) — trivial, ships last
-    only because it's the least useful for catching integration bugs. Voice
-    audio (`welcome-mati.mp3`) already exists; only the `main.js` wiring is
-    missing.
+8. ✅ **DONE** Task-complete detection via `stop_reason` (§4.3), built directly
+   to the §11.1-refined behavior rather than the bare "chime every turn"
+   version, since Mati had already said he only wants it for long tasks:
+   `observer.js` gained `hasTurnEnd()` (as originally spec'd), plus
+   `hasUserPromptStart()` — reads the SAME transcript for a genuine
+   Mati-authored prompt line (not a `tool_result`-only re-injection) to time
+   the turn's start, instead of hooking `pty:write`/`pty:command` as §11.1
+   first floated (raw keystroke/paste/command IPC has no clean single "prompt
+   submitted" edge; the transcript already does) — and `isLongTurn()`, the
+   pure duration gate. `TranscriptWatcher` threads these through a new
+   `onTurnEnd` option (`main.js`'s `checkTurnEnd()`), gated by the new
+   `soundLongTaskMinutes` pref (default 10, `uiprefs.js`). 15 new tests in
+   `test/observer.test.js`, 327/327 green. `voice/done.mp3` regenerated
+   2026-08-12 to actually say "All done" (same `en-US-AriaNeural`,
+   `--rate=+5% --pitch=+15Hz` params as the other 4 lines — command in
+   `helpers/sounds/README.md`). Ran a standalone smoke test instantiating
+   `SoundManager` outside Electron (mpv only needs a child process + a
+   socket): mpv connects, `available` goes true, `play()` sends the
+   `loadfile` command with no error — confirms the IPC path works
+   mechanically; **audible confirmation is still Mati's to make** (no ears
+   here — testing the actual clip at home). Appearance-panel UI for
+   `soundLongTaskMinutes` added 2026-08-12: new number input
+   `#sound-long-task-minutes` in `index.html`'s `w-appearance` template
+   (mirrors the `#sound-volume` field), wired in `appearance.js`
+   (`soundPrefs.longTaskMinutes`, `renderSoundSwitcher()`, `initAppearance()`,
+   change listener clamping to `>= 0` and persisting via
+   `window.lunacore.setUiPrefs`), i18n keys `appearance.longTaskMinutes(.hint)`
+   added PL+EN. No main-process changes needed — `ui:set`/`ui:get` already
+   forwarded arbitrary partials to `writeUiPrefs`/`readUiPrefs`, which already
+   supported this key. 327/327 still green (renderer DOM module, not
+   unit-tested, same as the rest of `appearance.js`).
+9. ✅ **DONE** Approval-prompt detection (§4.2), 2026-08-12. `config/sound-triggers.json`
+   (new) holds `approvalPrompt`, four literal substrings taken from Claude
+   Code's actual known permission-dialog text: "Do you want to proceed"
+   (Bash), "Do you want to make this edit" (Edit), "Do you want to create"
+   (Write, new file), "Do you trust the files in this folder" (startup trust
+   dialog). `src/soundTriggers.js` (new) loads it, same
+   cache/`paths.bundled()` pattern as `sounds.js`. `detectApprovalPrompt(raw,
+   patterns)` in `observer.js` strips ANSI and checks literal substring
+   inclusion — pure, unit-tested (7 new tests in `test/observer.test.js`).
+   Wired into `main.js`'s `proc.onData` (same spot `detectTools()` already
+   runs), debounced via a new `session.approvalShowing` flag: set on the
+   rising edge (fires `voice.needYou` once), cleared on that session's next
+   input (`pty:write`/`pty:command`/`pty:paste` handlers in `registerIpc()`) —
+   so a TUI redraw repeating the same prompt text across stdout chunks does
+   not replay the sound while Mati is still reading it. Still
+   version-fragile by design (data, not code) — if a future CLI release
+   changes the dialog wording, fix `config/sound-triggers.json`, no rebuild
+   needed. 334/334 tests green.
+10. ✅ **DONE** Startup greeting (§4 table, "Startup greeting" row) — wired out
+    of order (before 8/9) at Mati's request. `voice.welcome` fires from
+    `app.whenReady()` via a `setTimeout(STARTUP_GREETING_DELAY_MS)` (2000ms —
+    a margin over soundManager's own worst-case connect time: 400ms
+    `CONNECT_DELAY_MS` + 5 × 300ms `RECONNECT_DELAY_MS`), since `play()`
+    silently no-ops while `available` is still false right after `start()`.
+    Audible verification still pending (mpv playback overall untested — see
+    step 7's note), deferred to a home machine.
 
 ## 10. Open questions for Mati — decisions (2026-08-11)
 
@@ -771,3 +818,118 @@ instead of implying on/off, right above the volume slider:
 Changing it should preview-play the newly selected variant immediately (call
 `sfx.keystroke()` once right after `setUiPrefs`) so picking one is
 audition-by-ear, not trial-and-error via actual typing.
+
+## 11. New requests from Mati (2026-08-12)
+
+### 11.1 "All done" announcement, but only for long tasks — ✅ **DONE** (see step 8)
+
+Was a refinement of **build order step 8** (§4.3, `stop_reason`-based
+`hasTurnEnd()`); both landed together — see step 8's note for what actually
+shipped (turn-start detection ended up transcript-based, not the
+`pty:write`/`pty:command` hook originally sketched below — kept for the
+record). Mati's ask: he doesn't want a chime on every turn (that's noisy for
+quick back-and-forth), he wants Luna to say **"All done"** specifically when a
+turn that took a while — his example: "like 10 mins Claude cogitated" —
+finally ends.
+
+- Needs a turn **start** timestamp, not just the end signal §4.3 already
+  designs. Simplest source: the same place a prompt is submitted to the PTY
+  (`pty:write`/`pty:command` in `preload.js`/`main.js`, already referenced in
+  §4.2's debounce note as "the next input from that session"). Record
+  `turnStartedAt` per session when a prompt goes in; `hasTurnEnd()` firing is
+  the stop.
+- Gate the announcement on duration: only call
+  `soundManager.play(resolveSoundFile('voice.done').path)` if
+  `Date.now() - turnStartedAt >= LONG_TASK_THRESHOLD_MS`. Default **10
+  minutes** (600000ms) per Mati's own example — make it a preference
+  (`soundLongTaskMinutes`, same validate-at-boundary pattern as §5's other
+  `uiprefs.js` fields), not a hardcoded constant, since "long" is a personal
+  threshold.
+- The existing `voice/done.mp3` asset (§9 step 7, generated via Edge-TTS) may
+  already say "Done" rather than "All done" — check
+  `helpers/sounds/voice/README.md`'s regeneration command's `--text` value
+  before wiring this, and regenerate with `--text "All done"` if it doesn't
+  match. Same file, same `config/sounds.json` key (`voice.done`) — no schema
+  change needed, just confirming/redoing the asset content.
+- Short quick turns (well under 10 min) stay silent on completion, same as
+  today — this is additive, not a replacement for step 8's base signal; if
+  Mati later wants *any* turn-end chime too, that's a second sound key
+  (`voice.turnEnd`?), not a reason to lower this threshold.
+
+### 11.2 Option to read the output aloud (real TTS, not a canned clip)
+
+A materially different feature from everything else in this plan: §2–§10 all
+play **pre-generated, static** clips through the persistent `mpv --idle`
+instance — a fixed, known-in-advance set of phrases. Reading Claude's actual
+output means synthesizing **arbitrary text** speech on demand, which this
+architecture doesn't do yet.
+
+**✅ ENGINE DECIDED (2026-08-12): Windows SAPI.** Not Edge-TTS, not Kokoro.
+Decided against the repo's one hard rule — **ZERO EXTRA TOKENS**
+(`FUTURE_PLAN.md`; every feature is a Passive Observer or an Action Injector,
+nothing calls a model as hidden middleware). Two separate places that rule
+bites this specific feature:
+
+1. **The text-extraction step is plain regex, never a Claude call.** It was
+   already leaning this way (strip code fences/markdown, read the prose
+   portion of the final assistant message straight out of the same JSONL
+   transcript object §4.3's `hasTurnEnd()` already parses — no new I/O), but
+   now it's a hard constraint, not just the simplest option: a "summarize
+   this turn before speaking it" pass would be a second model call **per
+   turn**, which is exactly the hidden-middleware shape the rule exists to
+   forbid. Whatever text ends up spoken must be a pure substring/strip of
+   what Claude already wrote — no rephrasing, no LLM-in-the-loop.
+2. **The TTS engine itself should not become a second silent dependency the
+   feature leans on.** SAPI ships with Windows — nothing to install, nothing
+   that can go stale, nothing that phones out. Edge-TTS remains exactly
+   where it already is: the engine behind the 5 **static, Mati-authored** UI
+   phrases (§7/§9 step 7), which stay a one-time build-time synthesis, not a
+   per-turn cloud call. Reusing it here would mean **Claude's actual output**
+   (code, file paths, whatever's on screen) leaving the machine to Microsoft
+   on every long turn — a different, worse privacy posture than 5 short
+   phrases Mati himself wrote, and confirmed the wrong distinction between
+   voice-lines-as-data (fine to ship pre-baked) vs. output-as-data (should
+   stay local). Kokoro was already ruled out for the 5 static lines as
+   overkill; reintroducing it here just for a local *quality* upgrade adds a
+   whole model/runtime dependency for a feature whose bar is "understandable
+   TTS reading Claude's own words," not production voice quality — not worth
+   it for a lean solo-dev app.
+
+**✅ DONE (2026-08-12).** Built exactly the shape above, nothing more:
+
+- **Audio source** — `helpers/tts/sapi-speak.ps1` (fixed script, no user text
+  ever on its command line — text goes in via `-TextFile`, a temp `.txt`
+  `src/tts.js` writes with `fs.writeFileSync`) + `src/tts.js`'s
+  `synthesizeToWav(text)`, which spawns it with an args array (no shell) and
+  resolves to the synthesized WAV path, or `null` on any failure
+  (non-Windows, spawn error, timeout, non-zero exit) — same
+  degrade-gracefully rule as `soundManager.js`'s missing-mpv path. Not unit
+  tested, same reasoning as `soundManager.js` (thin OS-process wrapper).
+- **Text extraction** — `src/ttsExtract.js`'s `extractSpokenText(text)`:
+  finds the LAST assistant message with a terminal `stop_reason` (mirrors
+  `hasTurnEnd()`'s own scan), joins its `type: 'text'` content blocks
+  (`tool_use`/`thinking` blocks skipped), strips markdown (code fences
+  dropped entirely, inline code/links/headers/bold/italic/list markers
+  reduced to their inner text) and hard-caps at `MAX_SPOKEN_CHARS` (1500,
+  cut at the nearest sentence boundary) so one giant turn can't queue the
+  narration channel indefinitely. Pure function, fully unit tested
+  (`test/ttsExtract.test.js`, 16 tests).
+- **Wiring** — `observer.js`'s `TranscriptWatcher.accumulate()` now passes
+  `text: complete` (the raw newly-appended fragment) alongside
+  `startedAt`/`endedAt` on `onTurnEnd` — the watcher stays a dumb signal
+  source, same split as `hasTurnEnd()`/`isLongTurn()` already use.
+  `main.js`'s `checkTurnEnd()` forwards it to the new
+  `maybeReadOutputAloud(text)`, which is gated **solely** by
+  `soundReadOutputEnabled` (NOT also by `soundLongTaskMinutes` — the point of
+  this feature is reading back what Claude said regardless of turn length).
+- **Playback channel** — `soundManager.js`'s `ipcPath()` now takes an
+  optional `channel` suffix so a second `SoundManager` instance can run its
+  own `mpv --idle` process on its own named pipe. `main.js` instantiates
+  `narrationManager = new SoundManager({ channel: 'voice' })` alongside the
+  existing SFX `soundManager`, started/stopped/enabled/volume-synced in
+  lockstep with it; narration always plays with `{ mode: 'append-play' }` so
+  it can't be cut off by an unrelated `sfx.*` `replace` firing mid-sentence.
+- **Trigger + toggle** — `soundReadOutputEnabled` in `uiprefs.js`, default
+  **off**, its own Appearance-panel switch (`appearance.readOutput` /
+  `appearance.readOutput.hint` in `i18n.js`, `#sound-read-output-toggle` in
+  `index.html`) — same live-apply-no-restart pattern as `soundEnabled`.

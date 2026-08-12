@@ -4,8 +4,8 @@
 // Small persistent slice of interface state in config/ui.local.json (gitignored)
 // - like the scratchpad, a plain file rather than localStorage. Holds
 // { theme, lang, boot, profile, layout, hideSystemPorts, soundEnabled,
-// soundVolume, soundKeystrokeVariant }. The renderer reads it at startup
-// (ui:get) and writes on change (ui:set).
+// soundVolume, soundKeystrokeVariant, soundLongTaskMinutes }. The renderer
+// reads it at startup (ui:get) and writes on change (ui:set).
 //
 // Validate at the boundary: an unknown language falls back to 'pl'; a missing
 // file falls back to DEFAULTS.
@@ -29,6 +29,12 @@ const KEYSTROKE_VARIANT_IDS = ['mechanical', 'soft', 'scifi', 'typewriter'];
 function clampVolume(v) {
   const n = Number(v);
   return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 70;
+}
+// 0 is a valid, deliberate value (announce on every turn end); only reject
+// non-numbers and negatives.
+function clampLongTaskMinutes(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : 10;
 }
 // profile: id of the last used launch profile (B1). null = no choice recorded,
 // in which case activeProfile from config/profiles.json decides, as before.
@@ -54,6 +60,15 @@ const DEFAULTS = {
   soundEnabled: true,
   soundVolume: 70,
   soundKeystrokeVariant: 'mechanical',
+  // §11.1: minimum turn duration (minutes) before the "All done" voice line
+  // fires on turn-end. 10 matches Mati's own example ("like 10 mins Claude
+  // cogitated") - a quick back-and-forth should stay silent.
+  soundLongTaskMinutes: 10,
+  // §11.2: read Claude's actual output aloud via Windows SAPI on turn-end.
+  // Default OFF - unlike the other sound prefs this narrates arbitrary,
+  // potentially long/sensitive text, so it must never surprise-narrate a
+  // room; Mati opts in explicitly from the Appearance panel.
+  soundReadOutputEnabled: false,
 };
 
 /** Reads UI preferences; a missing or corrupt file falls back to DEFAULTS. */
@@ -82,6 +97,14 @@ function readUiPrefs() {
         KEYSTROKE_VARIANT_IDS.includes(obj.soundKeystrokeVariant)
           ? obj.soundKeystrokeVariant
           : DEFAULTS.soundKeystrokeVariant,
+      soundLongTaskMinutes:
+        typeof obj.soundLongTaskMinutes === 'number'
+          ? clampLongTaskMinutes(obj.soundLongTaskMinutes)
+          : DEFAULTS.soundLongTaskMinutes,
+      soundReadOutputEnabled:
+        typeof obj.soundReadOutputEnabled === 'boolean'
+          ? obj.soundReadOutputEnabled
+          : DEFAULTS.soundReadOutputEnabled,
     };
   } catch {
     return { ...DEFAULTS };
@@ -120,6 +143,12 @@ function writeUiPrefs(partial) {
       KEYSTROKE_VARIANT_IDS.includes(partial.soundKeystrokeVariant)
     ) {
       next.soundKeystrokeVariant = partial.soundKeystrokeVariant;
+    }
+    if (partial && typeof partial.soundLongTaskMinutes === 'number') {
+      next.soundLongTaskMinutes = clampLongTaskMinutes(partial.soundLongTaskMinutes);
+    }
+    if (partial && typeof partial.soundReadOutputEnabled === 'boolean') {
+      next.soundReadOutputEnabled = partial.soundReadOutputEnabled;
     }
     paths.ensureUserDir();
     fs.writeFileSync(file(), JSON.stringify(next, null, 2) + '\n', 'utf8');
