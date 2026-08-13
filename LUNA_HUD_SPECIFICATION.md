@@ -196,13 +196,15 @@ anything into `stdin`. Pure Passive Observer. Moderate build: mostly UI (an SVG
 or DOM timeline + a modal), the data is already being extracted for other
 widgets.
 
-### 6.2 Active-Files Edit Heatmap — Realistic, good fit
+### 6.2 Active-Files Edit Heatmap — SHIPPED 2026-08-13
 Extends the Skill Tracker's existing `tool_use`/`tool_result` pairing
 (`toolEventsFromLines()` / `foldToolEvents()` in `observer.js`) with
 file-path granularity: for `Read`/`Edit`/`Write` tool calls, extract the
 `input.file_path` and tally recency/frequency per file. Renders as a small
-glowing list or heatmap tile in the right panel. Zero new data source — it's a
-narrower read of data the app already parses. Low-to-moderate build.
+list in the right panel with real git-diff-stat `+`/`-` counts, a live
+"currently being edited" pulse, and a deleted-file indicator. Full build
+record, including two same-day amendments from manual-test feedback, in
+[`ACTIVE_FILES_HEATMAP_PLAN.md`](ACTIVE_FILES_HEATMAP_PLAN.md).
 
 ### 6.3 Spotify Now-Playing + Voice Ducking — Realistic, reframed
 The original idea (`LUNA_HUD_ADVANCED_SPEC.md` Idea 1) assumed DBus MPRIS /

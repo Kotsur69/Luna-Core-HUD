@@ -14,9 +14,12 @@ injects prompts or touches the `claude` binary.
 > **command palette (Ctrl+K)**, a **token burn-rate sparkline**, a swappable
 > **theming system**, a **PL/EN language switch**, a live **usage-limits gauge**
 > (5-hour + weekly subscription windows), an **armed auto-compact** toggle, a
-> **CWD/project switcher**, a **cyberpunk boot sequence**, a **Skill Tracker
-> that shows how long each tool actually ran**, and optional **sound & voice
-> feedback** (mpv-based, degrades silently if mpv isn't installed).
+> **CWD/project switcher** (now with a native "add repo folder" picker), a
+> **cyberpunk boot sequence**, a **Skill Tracker that shows how long each
+> tool actually ran**, an **Active-Files Edit Heatmap** (real diff-stat
+> counts, live-edit pulse, deleted-file flag), **GPU usage** next to CPU/RAM,
+> and optional **sound & voice feedback** (mpv-based, degrades silently if
+> mpv isn't installed).
 
 ---
 
@@ -60,6 +63,8 @@ the complete list — all of it verifiable in the linked source.
 | `~/.claude/projects/**/*.jsonl` | The CLI's own transcripts. The context %, the cost estimate and the Skill Tracker durations all come from the `usage` numbers the API itself reported — measured, not guessed. | [`src/observer.js`](src/observer.js) |
 | `~/.claude/skills`, `~/.claude/plugins` | Builds the skill cheat-sheet by scanning for `SKILL.md`. LunaCore **shows** what that machine has; it never installs, edits or removes a skill. | [`src/skills.js`](src/skills.js) |
 | *(no file)* — node's own `os` module | Total/free RAM, per-core CPU tick counters, uptime, every 2 s, for the System widget. No file, no shell command, no process list — LunaCore can tell you the machine is at 80% RAM, never **what** is using it. Off switch: `ENABLE_TELEMETRY = false` in [`src/main.js`](src/main.js). | [`src/telemetry.js`](src/telemetry.js) |
+| *(no file)* — `Get-Counter` via `powershell.exe` | GPU usage for the System widget, every 3 s. Windows-only, vendor-agnostic: the same DXGI "GPU Engine" counters Task Manager's own GPU column reads — no NVIDIA/AMD SDK. Resolves `null` (row shows `--`) off Windows or if the counter is unavailable. | [`src/gpu.js`](src/gpu.js) |
+| Whatever paths the Active-Files Heatmap is currently tracking | `fs.existsSync` per file, every ~5 s, so a file deleted outside an Edit/Write (e.g. a terminal `rm`) shows as **deleted** instead of silently keeping its last diff stat. The renderer has no `fs` access itself (context isolation) — this is a narrow, read-only IPC round trip, not a directory scan. | [`src/main.js`](src/main.js) (`files:check-exist`) |
 
 **Writes — exactly two files**, both inside one directory:
 
@@ -73,6 +78,12 @@ the complete list — all of it verifiable in the linked source.
   ([`src/uiprefs.js`](src/uiprefs.js))
 - `scratchpad.local.md` — whatever you typed into the scratchpad
   ([`src/scratchpad.js`](src/scratchpad.js))
+- `projects.local.json` — **only when you click the "+" next to the Project
+  switcher**: opens a native OS folder-picker dialog and appends the folder
+  you chose (label defaults to the folder's own name). Same
+  base-then-`.local.json`-override merge as every other config file — never
+  touches the shipped `config/projects.json`.
+  ([`src/projects.js`](src/projects.js))
 
 Nothing else anywhere on your disk is written. The shipped `config/*.json`
 defaults are read-only; your overrides live beside them as `*.local.json` and are
@@ -166,6 +177,8 @@ the two categories above: there is no model or network involved at all.
 | Passive Observer (terminal) | `session.proc.onData` → IPC `pty:data` `{sessionId, data}` → that tab's `xterm.write()` |
 | Passive Observer (Skill Tracker) | `TranscriptWatcher` → `toolEventsFromLines()` + `foldToolEvents()` pair each `tool_use` id with the `tool_result` that closes it → IPC `metrics:tools` `{events:[{phase,id,tile,at}]}` → `skilltracker.js` sweeps a tile for the tool's **real duration**. The old `detectTools()` stdout scan (ANSI strip + `Name(` regex) stays as a backstop — it broke silently when the TUI changed how it renders a tool call — and still sends the flat `{tiles}` blink. |
 | Passive Observer (Context %) | per-session `TranscriptWatcher` tails **one pinned** `~/.claude/projects/<cwd>/<session>.jsonl` → real `usage` tokens → IPC `metrics:context` → that tab's bar |
+| Passive Observer (Active-Files Heatmap) | rides the **same** `metrics:tools` events as the Skill Tracker (widened with `input.file_path` + the CLI's own `structuredPatch` diff stat) → `activefiles.js` folds `start`/`end` into per-file `+`/`-` counts and a live pulse. Two self-heal sweeps on its own 5 s timer: `clearStaleInProgress()` (a pulse can't outlive `MAX_LIVE_MS`) and `refreshDeleted()` (IPC `files:check-exist` → `fs.existsSync`, flags a row `.is-deleted` if the file is gone) |
+| Project add (button) | "+" next to the Project switcher → IPC `projects:pick-folder` (native OS dialog, main process) → IPC `projects:add` (writes `config/projects.local.json`) → switcher re-renders and immediately restarts the active tab into the new folder |
 | Session control | `sessions:create` / `:close` / `:activate` → main owns the `sessions` Map → broadcast `sessions:update` → tab bar rebuilds |
 | Action Injector (keyboard) | `xterm.onData` → IPC `pty:write` → `ptyProcess.write()` |
 | Action Injector (button) | `runCommand('/compact')` → IPC `pty:command` → writes `/compact\r` |
@@ -465,6 +478,9 @@ the reasoning behind the contract are in [`FUTURE_PLAN.md`](FUTURE_PLAN.md)
 | A2 | Widget contract + teardown probe — all 13 blocks converted: **right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`), `autocompact`, left-panel list builders (`cheatsheets`, `prompts`, `skills`), `switchers`/`actions`/`appearance`, and `terminal` last | ✅ done |
 | + | PL/EN localization of `config/*.json`, not just the UI chrome | ✅ done |
 | + | Optional sound & voice feedback (mpv-based sfx cues + TTS voice lines, Appearance panel controls) — click/keystroke sfx, usage-threshold voice cues, task-complete, approval-prompt and startup-greeting triggers, plus offline-SAPI read-output-aloud | ✅ done (see [`SOUNDS_IMPLEMENTATION_PLAN.md`](SOUNDS_IMPLEMENTATION_PLAN.md)) |
+| + | Active-Files Edit Heatmap — real `+`/`-` diff-stat counts per file, live-edit pulse, self-heal, deleted-file indicator | ✅ done (see [`ACTIVE_FILES_HEATMAP_PLAN.md`](ACTIVE_FILES_HEATMAP_PLAN.md)) |
+| + | Multi-repo project switching — "+" button, native folder picker, writes `projects.local.json` | ✅ done |
+| + | GPU usage row in the System widget (Windows, Task-Manager-style counters) | ✅ done |
 
 That closes the whole approved shortlist and the first slice of the structural
 plan. **A1 is done**: the 1554-line `renderer.js` is a 57-line entry point plus

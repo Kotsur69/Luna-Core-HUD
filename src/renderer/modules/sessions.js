@@ -42,6 +42,7 @@ import {
 import { setPtyStatus } from './ptystatus.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
 import { lightTiles, applyToolEvents, trackBucketTools, resetTiles } from './skilltracker.js';
+import { applyFileEvents, trackBucketFiles } from './activefiles.js';
 import { syncSwitchers } from './switchers.js';
 import { sfx } from './sound.js';
 
@@ -99,8 +100,14 @@ window.lunacore.onContext(({ sessionId, metrics }) => {
 window.lunacore.onTools(({ sessionId, events, tiles }) => {
   const active = sessionId === getActiveSessionId();
   if (Array.isArray(events)) {
-    if (active) applyToolEvents(events);
-    else trackBucketTools(ensureTerm(sessionId), events);
+    if (active) {
+      applyToolEvents(events);
+      applyFileEvents(events);
+    } else {
+      const bucket = ensureTerm(sessionId);
+      trackBucketTools(bucket, events);
+      trackBucketFiles(bucket, events);
+    }
   }
   // The blink has no end signal, so it is only worth showing live.
   if (tiles && active) lightTiles(tiles);

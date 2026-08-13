@@ -213,6 +213,15 @@ function render() {
     }
   );
 
+  // gpu.js stamps this onto the sample from its own slower timer (main.js);
+  // null forever on non-Windows or when the counter cannot be read - the row
+  // just reads "--" rather than claiming a number nobody measured.
+  renderRow(
+    els.gpu,
+    (s) => (s.gpu ? s.gpu.percent : null),
+    (s) => (s && s.gpu ? '' : t('telemetry.waiting'))
+  );
+
   renderFoot();
 }
 
@@ -262,6 +271,7 @@ defineWidget({
       root,
       ram: row('ram'),
       cpu: row('cpu'),
+      gpu: row('gpu'),
       foot: root.querySelector('#telem-foot'),
       pause: root.querySelector('#telem-pause'),
     };

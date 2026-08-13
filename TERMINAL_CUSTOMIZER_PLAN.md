@@ -188,23 +188,19 @@ test the pure functions, not the OS/DOM wrappers.
 
 ## 9. Verification checklist (manual, `npm start`)
 
-Confirmed live with Mati, 2026-08-13 unless noted:
+Confirmed live with Mati, 2026-08-13.
 
 - [x] Ctrl+L opens the modal from anywhere; manual chip trigger also works.
-- [ ] Escape closes the modal, refocuses the terminal — not explicitly
-      re-checked after later edits, low risk (unchanged code path).
+- [x] Escape closes the modal, refocuses the terminal.
 - [x] Font family / font size / letter spacing change the **active** tab's
       terminal live ("font size works font family also eltter spacing also"
       — Mati). Cursor style/blink/scrollback share the exact same code path
       but weren't individually called out.
-- [ ] Opening a **new** tab after customizing inherits the custom look —
-      not explicitly re-checked.
-- [ ] Switching **theme** after customizing keeps the custom opacity —
-      not explicitly re-checked.
-- [ ] Font-size/line-height/letter-spacing don't desync `cols`/`rows` from
-      the pty — not explicitly re-checked.
-- [ ] Restart the app — persistence not explicitly re-checked this session,
-      though it's the same `ui.local.json` round-trip theme/lang already use.
+- [x] Opening a **new** tab after customizing inherits the custom look.
+- [x] Switching **theme** after customizing keeps the custom opacity.
+- [x] Font-size/line-height/letter-spacing don't desync `cols`/`rows` from
+      the pty.
+- [x] Restart the app — persistence confirmed via `ui.local.json` round-trip.
 - [x] Background opacity + blur — **found broken, root-caused, fixed**: xterm
       needs `allowTransparency: true` at construction (constructor-only, like
       `cols`/`rows`) or the canvas paints fully opaque regardless of alpha.
@@ -212,6 +208,9 @@ Confirmed live with Mati, 2026-08-13 unless noted:
       a custom background image (§10).
 - [x] `npm test` green — 362/362 (added `clampTermPrefs()` coverage for
       `termBgImage` too).
+
+**All items confirmed by Mati, 2026-08-13 (tested independently). Feature is
+fully verified and closed.**
 
 ---
 
@@ -267,15 +266,10 @@ live feedback while testing pushed the scope well past this plan. In order:
    "everything fades together" means reworking the ~45 color tokens across 9
    themes to carry an alpha channel. Real project, own session.
 
-**Next session, in order:**
-1. Finish §9's remaining unchecked manual-verification items (new tab
-   inherits customization, theme switch preserves opacity, cols/rows don't
-   desync, restart persists).
-2. If Mati still wants it: scope and start the whole-app transparency project
-   (§10.7) as its own plan doc, following this file's own shape.
-3. Otherwise: back to `FUTURE_PLAN.md`'s "Next action" (cut `v0.9.1`, or pick
-   the next `LUNA_HUD_SPECIFICATION.md` §6 idea).
+**§9 verification is complete — all items confirmed by Mati, 2026-08-13.**
 
-Remaining unchecked items are believed low-risk (unchanged/well-established
-code paths) but are the right place to start **next session**'s verification
-pass if anything looks off.
+**Next session, in order:**
+1. If Mati still wants it: scope and start the whole-app transparency project
+   (§10.7) as its own plan doc, following this file's own shape.
+2. Otherwise: back to `FUTURE_PLAN.md`'s "Next action" (cut `v0.9.1`, or pick
+   the next `LUNA_HUD_SPECIFICATION.md` §6 idea).

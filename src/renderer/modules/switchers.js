@@ -114,12 +114,40 @@ defineWidget({
   },
 });
 
+/**
+ * "+" button: native folder picker -> persist to projects.local.json -> pick
+ * the new entry in the switcher -> restart THIS tab into it. Disabled for
+ * the round trip so a slow dialog/write cannot be double-fired by an
+ * impatient second click.
+ */
+async function addProjectFromDialog(button) {
+  if (!window.lunacore || button.disabled) return;
+  button.disabled = true;
+  try {
+    const dir = await window.lunacore.pickProjectFolder();
+    if (!dir) return; // cancelled
+
+    const result = await window.lunacore.addProject({ path: dir });
+    if (!result) return; // e.g. blank path - should not happen from a real dialog pick
+
+    lastProjects = { items: result.projects, activeId: result.activeProject };
+    currentProjectId = result.addedId;
+    renderProjectSwitcher();
+    window.lunacore.switchProject(result.addedId, getActiveSessionId());
+  } finally {
+    button.disabled = false;
+  }
+}
+
 defineWidget({
   id: 'project',
   titleKey: 'project.title',
   template: 'w-project',
   mount(root) {
-    projectEls = { select: root.querySelector('#project-switcher') };
+    projectEls = {
+      select: root.querySelector('#project-switcher'),
+      addBtn: root.querySelector('#project-add-btn'),
+    };
     renderProjectSwitcher();
 
     // Directory change -> restart the pty in the new folder (same profile).
@@ -127,6 +155,8 @@ defineWidget({
       currentProjectId = projectEls.select.value;
       window.lunacore.switchProject(currentProjectId, getActiveSessionId());
     });
+
+    projectEls.addBtn.addEventListener('click', () => addProjectFromDialog(projectEls.addBtn));
 
     const offLang = onLangChange(renderProjectSwitcher);
 

@@ -13,7 +13,7 @@
       "slots": {
         "left": ["actions", "appearance", "project", "profile", "cheatsheets", "prompts", "skills"],
         "main": ["terminal"],
-        "right": ["context", "usage", "telemetry", "skilltracker", "ports", "scratchpad"]
+        "right": ["context", "usage", "telemetry", "skilltracker", "activefiles", "ports", "scratchpad"]
       }
     },
     {
@@ -47,6 +47,7 @@
           "usage",
           "telemetry",
           "skilltracker",
+          "activefiles",
           "ports",
           "scratchpad",
           "cheatsheets",
@@ -67,7 +68,7 @@
       "slots": {
         "main": ["terminal"],
         "dock-a": ["actions", "appearance", "project", "profile"],
-        "dock-b": ["context", "usage", "telemetry", "skilltracker"],
+        "dock-b": ["context", "usage", "telemetry", "skilltracker", "activefiles"],
         "dock-c": ["ports", "scratchpad", "cheatsheets", "prompts", "skills"]
       }
     }

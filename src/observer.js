@@ -19,6 +19,8 @@ const os = require('os');
 const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('./models');
 // Cennik do szacowania kosztu sesji (B4). Czyta wylacznie config/, zero sieci.
 const { loadRates, rateFor, estimateCost } = require('./rates');
+// Diff-stat extraction dla Active-Files Heatmap (ACTIVE_FILES_HEATMAP_PLAN.md).
+const { fileStatFromEntry } = require('./filestat');
 
 // ---- 1. Detekcja narzedzi ze stdout ----------------------------------------
 
@@ -309,8 +311,19 @@ function toolsFromLines(text) {
  * A `tool_result` does NOT repeat the tool's name, so an end event has no tile
  * of its own; foldToolEvents() resolves it from the id that opened it.
  *
+ * Also carries file identity + diff stats for the Active-Files Heatmap
+ * (ACTIVE_FILES_HEATMAP_PLAN.md §3.2): a start event's `file` comes from the
+ * tool's own `input.file_path` (the documented tool schema); an end event's
+ * `added`/`removed` come from the entry's top-level `toolUseResult` (an
+ * undocumented CLI artefact - see plan §12/R4), read via fileStatFromEntry()
+ * ONLY when the entry holds exactly one tool_result block, since that is the
+ * only case where the single top-level `toolUseResult` is unambiguously
+ * attributable to it (plan §2.5). Ambiguous or resultless entries still emit
+ * their end event, just with file:'' and added/removed:0 - a dim row, not a
+ * missing one.
+ *
  * @param {string} text fragment of the JSONL file (whole lines)
- * @returns {{phase:'start'|'end', id:string, tile?:string, at:number|null}[]}
+ * @returns {{phase:'start'|'end', id:string, tile?:string, at:number|null, file:string, added?:number, removed?:number}[]}
  *   events in file order
  */
 function toolEventsFromLines(text) {
@@ -327,15 +340,27 @@ function toolEventsFromLines(text) {
       // the watcher polls every 1.5 s, so read time is far too coarse to time a
       // tool with.
       const at = Date.parse(obj.timestamp) || null;
+      const resultCount = content.reduce((n, p) => n + (p && p.type === 'tool_result' ? 1 : 0), 0);
+      const stat = resultCount === 1 ? fileStatFromEntry(obj.toolUseResult) : null;
       for (const part of content) {
         if (!part) continue;
         if (part.type === 'tool_use' && typeof part.id === 'string') {
           const tile = TOOL_TO_TILE.get(part.name);
           // No tile (an MCP tool, say) means nothing to light - and skipping the
           // start means its end is later ignored as an orphan, which is correct.
-          if (tile) events.push({ phase: 'start', id: part.id, tile, at });
+          if (tile) {
+            const file = part.input && typeof part.input.file_path === 'string' ? part.input.file_path : '';
+            events.push({ phase: 'start', id: part.id, tile, at, file });
+          }
         } else if (part.type === 'tool_result' && typeof part.tool_use_id === 'string') {
-          events.push({ phase: 'end', id: part.tool_use_id, at });
+          events.push({
+            phase: 'end',
+            id: part.tool_use_id,
+            at,
+            file: stat ? stat.file : '',
+            added: stat ? stat.added : 0,
+            removed: stat ? stat.removed : 0,
+          });
         }
       }
     } catch {
@@ -354,22 +379,39 @@ function toolEventsFromLines(text) {
  * another. Duplicate starts, and ends for ids we never saw open, are dropped -
  * so the renderer only ever receives balanced pairs.
  *
- * @param {Map<string,string>} open live id -> tile map, mutated in place
- * @param {{phase:string, id:string, tile?:string, at:number|null}[]} events
- * @returns {{phase:'start'|'end', id:string, tile:string, at:number|null}[]}
+ * `open`'s value is `{tile, file}`, not a bare tile string, so the file
+ * identity survives the same cross-chunk gap the tile already does - the
+ * file path is the identical "the end doesn't repeat what the start said"
+ * problem the tile has, so it belongs here rather than in a per-widget join
+ * map in the renderer (ACTIVE_FILES_HEATMAP_PLAN.md §3.2). The diff stat
+ * itself (`added`/`removed`) is NOT joined through `open` - it travels on
+ * the end event directly, straight from toolEventsFromLines().
+ *
+ * @param {Map<string,{tile:string, file:string}>} open live id -> {tile, file} map, mutated in place
+ * @param {{phase:string, id:string, tile?:string, at:number|null, file?:string, added?:number, removed?:number}[]} events
+ * @returns {{phase:'start'|'end', id:string, tile:string, at:number|null, file:string, added?:number, removed?:number}[]}
  */
 function foldToolEvents(open, events) {
   const out = [];
   for (const ev of events || []) {
     if (ev.phase === 'start') {
       if (open.has(ev.id)) continue; // already counted - re-read of the same line
-      open.set(ev.id, ev.tile);
-      out.push({ phase: 'start', id: ev.id, tile: ev.tile, at: ev.at });
+      const file = ev.file || '';
+      open.set(ev.id, { tile: ev.tile, file });
+      out.push({ phase: 'start', id: ev.id, tile: ev.tile, at: ev.at, file });
     } else {
-      const tile = open.get(ev.id);
-      if (!tile) continue; // orphan: started before we attached, or has no tile
+      const opened = open.get(ev.id);
+      if (!opened) continue; // orphan: started before we attached, or has no tile
       open.delete(ev.id);
-      out.push({ phase: 'end', id: ev.id, tile, at: ev.at });
+      out.push({
+        phase: 'end',
+        id: ev.id,
+        tile: opened.tile,
+        at: ev.at,
+        file: opened.file,
+        added: ev.added || 0,
+        removed: ev.removed || 0,
+      });
     }
   }
   return out;

@@ -109,5 +109,69 @@ function getProject(projects, id) {
   return projects.find((p) => p.id === id) || null;
 }
 
-// expandHome + normalizeProject are pure (no I/O) - exported for the tests.
-module.exports = { loadProjects, getProject, normalizeProject, expandHome };
+/** Turns a label into an id-safe slug. Falls back to "project" so an
+ *  all-symbol label (rare, but a folder can be named anything) never yields
+ *  an empty id. */
+function slugify(label) {
+  const slug = String(label)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'project';
+}
+
+/** First of base, base-2, base-3, ... not already in `existingIds`. */
+function uniqueId(base, existingIds) {
+  if (!existingIds.has(base)) return base;
+  let i = 2;
+  while (existingIds.has(`${base}-${i}`)) i++;
+  return `${base}-${i}`;
+}
+
+/**
+ * Adds one project to projects.local.json (creating it if missing) and
+ * returns the freshly reloaded { projects, activeProject } - same shape as
+ * loadProjects(), so main.js can drop the result straight into its `projects`
+ * list. Never touches activeProject: adding a folder must not silently
+ * switch the caller's tab away from wherever it currently is (main.js's
+ * switch-project IPC handles that separately, on the caller's request).
+ *
+ * The id is derived from the label (defaulting to the folder's own name) and
+ * de-duplicated against every existing project, base + local alike, so a
+ * second "my-app" on another drive does not collide with or overwrite the
+ * first.
+ * @param {{label?:string, path:string}} entry
+ * @returns {{projects, activeProject, addedId:string}|null} null when `path`
+ *   is missing/blank. `addedId` lets the caller select/switch to the new
+ *   entry without having to re-derive its slug from the label.
+ */
+function addProject(entry) {
+  if (!entry || typeof entry.path !== 'string' || !entry.path.trim()) return null;
+
+  const resolvedPath = path.normalize(expandHome(entry.path.trim()));
+  const label = typeof entry.label === 'string' && entry.label.trim()
+    ? entry.label.trim()
+    : path.basename(resolvedPath) || resolvedPath;
+
+  const existingIds = new Set(loadProjects().projects.map((p) => p.id));
+  const id = uniqueId(slugify(label), existingIds);
+
+  const local = readJson(localFile()) || {};
+  const list = Array.isArray(local.projects) ? local.projects.slice() : [];
+  list.push({ id, label, path: entry.path.trim() });
+
+  paths.ensureUserDir();
+  fs.writeFileSync(
+    localFile(),
+    JSON.stringify({ ...local, projects: list }, null, 2) + '\n',
+    'utf8'
+  );
+
+  return { ...loadProjects(), addedId: id };
+}
+
+// expandHome + normalizeProject + slugify + uniqueId are pure (no I/O) -
+// exported for the tests. addProject does real file I/O (writes
+// projects.local.json) and is covered by the manual checklist instead, same
+// as loadProjects() itself.
+module.exports = { loadProjects, getProject, normalizeProject, expandHome, addProject, slugify, uniqueId };

@@ -211,13 +211,15 @@ test('config/layouts.json - klasyczny odtwarza dzisiejszy uklad', () => {
   const l = getLayout(loadLayouts().layouts, 'classic');
   assert.equal(l.columns, '260px 1fr 280px');
   assert.deepEqual(l.slots.main, ['terminal']);
-  // E1 wsunelo `telemetry` miedzy usage a skilltracker we WSZYSTKICH presetach.
+  // E1 wsunelo `telemetry` miedzy usage a skilltracker we WSZYSTKICH presetach;
+  // Active-Files Heatmap dolozylo `activefiles` zaraz po skilltracker (plan §8).
   // Ta asercja jest tu po to, zeby taka zmiana nie przeszla niezauwazona.
   assert.deepEqual(l.slots.right, [
     'context',
     'usage',
     'telemetry',
     'skilltracker',
+    'activefiles',
     'ports',
     'scratchpad',
   ]);

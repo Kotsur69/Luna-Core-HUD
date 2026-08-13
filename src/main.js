@@ -31,7 +31,7 @@ const { loadProfiles, getProfile } = require('./profiles');
 // Budowanie komendy startowej: decyduje, czy sesje da sie przypiac po id.
 const { withSessionId, findExecutable } = require('./launch');
 // Przelacznik projektu: katalogi robocze (cwd) sesji z config/projects.json.
-const { loadProjects, getProject } = require('./projects');
+const { loadProjects, getProject, addProject } = require('./projects');
 // Tracker portow localhost (7B): pasywny skan nasluchujacych portow + kill.
 const { killProcess, PortWatcher } = require('./ports');
 // Sciagawki akcji (7C): grupy komend wysylanych przez Action Injector.
@@ -52,6 +52,9 @@ const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
 // E1: telemetria maszyny (RAM / CPU / uptime). Czyste `os`, zero zaleznosci,
 // zero sieci - Passive Observer w najscislejszym mozliwym sensie.
 const { TelemetryWatcher } = require('./telemetry');
+// GPU usage (System tab): own slow timer, shells out to Get-Counter. See
+// src/gpu.js's header for why it stays out of telemetry.js's pure sample().
+const { GpuSampler } = require('./gpu');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
 const { SoundManager } = require('./soundManager');
 const { resolveSoundFile } = require('./sounds');
@@ -132,6 +135,8 @@ let portWatcher = null;
 let usageWatcher = null;
 /** @type {TelemetryWatcher | null} */
 let telemetryWatcher = null;
+/** @type {GpuSampler | null} */
+let gpuSampler = null;
 /** @type {SoundManager | null} */
 let soundManager = null;
 // §11.2: separate mpv instance for spoken narration, own IPC pipe (see
@@ -329,6 +334,7 @@ async function runWidgetProbe(win) {
         scratchpad: document.querySelectorAll('#pad-text').length,
         usage: document.querySelectorAll('#usage-body').length,
         skilltracker: document.querySelectorAll('#skill-list').length,
+        activefiles: document.querySelectorAll('#afile-list').length,
         context: document.querySelectorAll('#ctx-fill').length,
         // spark.js shares the context widget's root - counted separately so a
         // half-mounted block (bar without chart) cannot pass unnoticed.
@@ -753,8 +759,14 @@ const ENABLE_TELEMETRY = true;
 
 function startTelemetryWatcher() {
   if (!ENABLE_TELEMETRY) return;
+  gpuSampler = new GpuSampler();
+  gpuSampler.start();
   telemetryWatcher = new TelemetryWatcher((payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
+      // Stamped on here, not inside telemetry.js: gpuSampler runs on its own
+      // slower timer (see src/gpu.js), so this is always whatever GPU reading
+      // is currently cached, not a fresh sample taken on this tick.
+      payload.gpu = gpuSampler.current();
       mainWindow.webContents.send('telemetry:update', payload);
     }
   });
@@ -986,6 +998,40 @@ function registerIpc() {
 
   // Przelacznik projektu: renderer pobiera liste katalogow roboczych.
   ipcMain.handle('projects:list', () => ({ projects, activeProject: activeProjectId }));
+
+  // "Add project": natywny wybor folderu (Windows/macOS/Linux), zeby dodanie
+  // repo z innego dysku/katalogu nie wymagalo recznej edycji configu. null =
+  // uzytkownik anulowal dialog.
+  ipcMain.handle('projects:pick-folder', async () => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+    if (result.canceled || !result.filePaths[0]) return null;
+    return result.filePaths[0];
+  });
+
+  // Active-Files Heatmap (Mati, 2026-08-13): renderer has no fs access (context
+  // isolation), so "is this file still on disk" has to be answered here. Read
+  // -only, no watcher - the widget polls this every few seconds on its own
+  // timer, same cadence as its live-indicator self-heal.
+  ipcMain.handle('files:check-exist', (_event, paths) => {
+    const out = {};
+    if (!Array.isArray(paths)) return out;
+    for (const p of paths) {
+      if (typeof p === 'string' && p) out[p] = fs.existsSync(p);
+    }
+    return out;
+  });
+
+  // Zapisuje nowy wpis do projects.local.json i oddaje swiezo przeladowana
+  // liste - ten sam ksztalt co projects:list, wiec renderer po prostu
+  // podmienia switcher. Nie zmienia activeProject: dodanie folderu nie ma
+  // przelaczac biezacej zakladki (na to sluzy osobne pty:switch-project).
+  ipcMain.handle('projects:add', (_event, entry) => {
+    const result = addProject(entry);
+    if (!result) return null;
+    projects = result.projects;
+    return result;
+  });
 
   // Przelaczenie projektu -> zmiana cwd + restart sesji z BIEZACYM profilem.
   // (Ten sam mechanizm restartu co profil; rozni sie tylko katalogiem startowym.)
@@ -1232,6 +1278,10 @@ app.on('window-all-closed', () => {
   if (telemetryWatcher) {
     telemetryWatcher.stop();
     telemetryWatcher = null;
+  }
+  if (gpuSampler) {
+    gpuSampler.stop();
+    gpuSampler = null;
   }
   if (soundManager) {
     soundManager.stop();

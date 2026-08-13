@@ -477,6 +477,33 @@ body::after {
 }
 .profile-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Project switcher's "+" add button (multi-repo, native folder picker). Same
+   22px-icon-button language as .port-btn, sized to sit next to the select. */
+.project-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.project-row .profile-select { flex: 1; min-width: 0; }
+.project-add-btn {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--edge);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
+}
+.project-add-btn:hover { color: var(--neon-cyan); border-color: var(--edge-glow); }
+.project-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* ---- Liczbowe / suwakowe pola (dotad bez stylu -> biale natywne kontrolki) -
    sound-volume, sound-long-task-minutes i kazde pole termcustom (§2). Jedna
    globalna regula po typie, bo zaden z tych inputow nie ma wlasnej klasy. */
@@ -1016,6 +1043,129 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
     animation: none !important;
     transform: none;
     background: color-mix(in srgb, var(--good) 14%, transparent);
+  }
+}
+
+/* ---- Active files (ACTIVE_FILES_HEATMAP_PLAN.md) ---------------------------
+   Glow is EXCLUSIVE to .is-live (Mati, 2026-08-13 manual test: an always-on
+   magnitude glow read as "still lit" long after the edit finished, even with
+   .is-live correctly off). A settled row is visually flat - its +/- numbers
+   already carry the magnitude, in text, so nothing is lost by not glowing it. */
+
+.afile-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.afile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-2);
+  border: var(--border-w) solid var(--edge);
+  font-size: 12px;
+  transition: box-shadow var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
+}
+
+.afile.is-read {
+  opacity: 0.55;
+}
+
+.afile__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+/* The live indicator: a file currently between its tool call and result -
+   the ONLY row state that glows. */
+.afile.is-live {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 var(--glow-size-md) rgba(0, 229, 255, 0.35);
+}
+.afile.is-live .afile__dot {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 var(--glow-size-sm) var(--neon-cyan);
+  animation: afile-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes afile-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.afile__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.afile.is-live .afile__name,
+.afile:not(.is-read) .afile__name {
+  color: var(--text);
+}
+
+.afile__stat {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.afile__add { color: var(--good); font-style: normal; }
+.afile__del { color: var(--bad); font-style: normal; }
+
+.afile__readonly {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* A tracked file that no longer exists on disk (files:check-exist, polled by
+   activefiles.js). Keeps its last known diff - the edit still happened - but
+   is unmistakably marked gone: struck-through name, dimmed, a red-tinted
+   border instead of a glow (static, not a pulse - nothing is "live" about a
+   deletion). Wins over .is-live's cyan border/glow: a file cannot plausibly
+   be both mid-edit and deleted, but if the observer ever saw it that way,
+   "gone" is the fact worth surfacing. */
+.afile.is-deleted {
+  opacity: 0.6;
+  border-color: var(--bad);
+  box-shadow: none;
+}
+.afile.is-deleted .afile__dot {
+  animation: none;
+  background: transparent;
+  box-shadow: none;
+}
+.afile.is-deleted .afile__name {
+  text-decoration: line-through;
+  color: var(--text-dim);
+}
+.afile__deleted {
+  flex: none;
+  color: var(--bad);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .afile.is-live .afile__dot {
+    animation: none !important;
+    opacity: 1;
   }
 }
 

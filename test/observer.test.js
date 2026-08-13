@@ -307,13 +307,14 @@ test('sumUsageLines still returns the flat aggregate across models', () => {
 
 const TS = '2026-01-01T00:00:00.000Z';
 
-/** Assistant line opening one or more tool calls, as the CLI writes them. */
+/** Assistant line opening one or more tool calls, as the CLI writes them.
+ *  Each pair is [id, name] or [id, name, input] when a file_path matters. */
 const useLine = (...pairs) =>
   JSON.stringify({
     timestamp: TS,
     message: {
       role: 'assistant',
-      content: pairs.map(([id, name]) => ({ type: 'tool_use', id, name, input: {} })),
+      content: pairs.map(([id, name, input]) => ({ type: 'tool_use', id, name, input: input || {} })),
     },
   });
 
@@ -325,6 +326,17 @@ const resLine = (...ids) =>
       role: 'user',
       content: ids.map((id) => ({ type: 'tool_result', tool_use_id: id, content: 'ok' })),
     },
+  });
+
+/** User line closing exactly ONE tool call, carrying the entry's top-level
+ *  `toolUseResult` (the CLI's diff-stat payload) - only ever single-id,
+ *  since toolEventsFromLines() only reads toolUseResult when the entry
+ *  holds exactly one tool_result block (plan §2.5). */
+const resLineWithResult = (id, toolUseResult) =>
+  JSON.stringify({
+    timestamp: TS,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] },
+    toolUseResult,
   });
 
 test('toolEventsFromLines pairs a tool_use with the tool_result that closes it', () => {
@@ -362,7 +374,7 @@ test('toolEventsFromLines survives a torn line mid-write', () => {
 test('foldToolEvents resolves an end tile from the id that opened it', () => {
   const open = new Map();
   const out = foldToolEvents(open, toolEventsFromLines(useLine(['t0', 'MultiEdit'])));
-  assert.deepEqual(out, [{ phase: 'start', id: 't0', tile: 'Edit', at: Date.parse(TS) }]);
+  assert.deepEqual(out, [{ phase: 'start', id: 't0', tile: 'Edit', at: Date.parse(TS), file: '' }]);
 
   const closed = foldToolEvents(open, toolEventsFromLines(resLine('t0')));
   assert.equal(closed[0].tile, 'Edit'); // the alias still maps to the Edit tile
@@ -396,7 +408,13 @@ test('foldToolEvents tracks concurrent tools sharing one tile', () => {
   const open = new Map();
   foldToolEvents(open, toolEventsFromLines(useLine(['t0', 'Edit'], ['t1', 'NotebookEdit'])));
   assert.equal(open.size, 2);
-  assert.deepEqual([...open.values()], ['Edit', 'Edit']);
+  assert.deepEqual(
+    [...open.values()],
+    [
+      { tile: 'Edit', file: '' },
+      { tile: 'Edit', file: '' },
+    ]
+  );
 
   foldToolEvents(open, toolEventsFromLines(resLine('t0')));
   assert.equal(open.size, 1, 'one Edit call is still outstanding');
@@ -417,6 +435,68 @@ test('foldToolEvents handles a tool that starts and ends inside one tick', () =>
     ['start', 'end']
   );
   assert.equal(open.size, 0);
+});
+
+// ---- file identity + diff stats (Active-Files Heatmap, ACTIVE_FILES_HEATMAP_PLAN.md §3.2) --
+
+test('toolEventsFromLines carries input.file_path onto the start event', () => {
+  const [start] = toolEventsFromLines(useLine(['t0', 'Edit', { file_path: 'C:\\repo\\a.js' }]));
+  assert.equal(start.file, 'C:\\repo\\a.js');
+});
+
+test('toolEventsFromLines yields file: "" for a tool with no file_path (Bash)', () => {
+  const [start] = toolEventsFromLines(useLine(['t0', 'Bash', { command: 'ls' }]));
+  assert.equal(start.file, '');
+});
+
+test('toolEventsFromLines carries added/removed onto the end event from toolUseResult', () => {
+  const toolUseResult = {
+    filePath: 'C:\\repo\\a.js',
+    structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['+one', '+two', '-three'] }],
+  };
+  const [end] = toolEventsFromLines(resLineWithResult('t0', toolUseResult));
+  assert.equal(end.file, 'C:\\repo\\a.js');
+  assert.equal(end.added, 2);
+  assert.equal(end.removed, 1);
+});
+
+test('toolEventsFromLines does not attribute toolUseResult when the entry holds two tool_result blocks (§2.5 guard)', () => {
+  const line = JSON.stringify({
+    timestamp: TS,
+    message: {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 't0', content: 'ok' },
+        { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+      ],
+    },
+    toolUseResult: { filePath: 'C:\\repo\\a.js', structuredPatch: [{ lines: ['+x'] }] },
+  });
+  const events = toolEventsFromLines(line);
+  assert.deepEqual(
+    events.map((e) => [e.file, e.added, e.removed]),
+    [
+      ['', 0, 0],
+      ['', 0, 0],
+    ]
+  );
+});
+
+test("foldToolEvents resolves the end event's file from the id that opened it, across chunks", () => {
+  const open = new Map();
+  foldToolEvents(open, toolEventsFromLines(useLine(['t0', 'Edit', { file_path: 'C:\\repo\\a.js' }])));
+  const toolUseResult = { filePath: 'C:\\repo\\a.js', structuredPatch: [{ lines: ['+one'] }] };
+  const [end] = foldToolEvents(open, toolEventsFromLines(resLineWithResult('t0', toolUseResult)));
+  assert.equal(end.file, 'C:\\repo\\a.js');
+  assert.equal(end.added, 1);
+  assert.equal(end.removed, 0);
+});
+
+test('foldToolEvents drops an orphan end, stat and all', () => {
+  const open = new Map();
+  const toolUseResult = { filePath: 'C:\\repo\\a.js', structuredPatch: [{ lines: ['+one'] }] };
+  const out = foldToolEvents(open, toolEventsFromLines(resLineWithResult('nope', toolUseResult)));
+  assert.deepEqual(out, []);
 });
 
 // ---- hasTurnEnd / hasUserPromptStart / isLongTurn (SOUNDS_IMPLEMENTATION_PLAN.md §3) --

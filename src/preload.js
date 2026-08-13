@@ -63,6 +63,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Przelacza katalog roboczy -> restart TEJ zakladki w nowym folderze. */
   switchProject: (id, sessionId) =>
     ipcRenderer.send('pty:switch-project', { projectId: id, sessionId }),
+  /** Natywny wybor folderu; zwraca sciezke albo null (anulowano). */
+  pickProjectFolder: () => ipcRenderer.invoke('projects:pick-folder'),
+  /** Dopisuje nowy projekt do projects.local.json; zwraca { projects, activeProject } albo null. */
+  addProject: (entry) => ipcRenderer.invoke('projects:add', entry),
+
+  // --- Active-Files Heatmap: czy plik nadal istnieje na dysku ---
+  /** Sprawdza fs.existsSync dla listy sciezek; zwraca { [path]: boolean }. */
+  checkFilesExist: (paths) => ipcRenderer.invoke('files:check-exist', paths),
 
   // --- 7B: tracker portow localhost ---
   /** Lista nasluchujacych portow: [{ port, procId, name }]. */

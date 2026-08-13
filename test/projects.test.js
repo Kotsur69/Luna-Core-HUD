@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
 
-const { expandHome, normalizeProject, getProject } = require('../src/projects');
+const { expandHome, normalizeProject, getProject, slugify, uniqueId } = require('../src/projects');
 
 // ---- expandHome -------------------------------------------------------------
 
@@ -68,4 +68,28 @@ test('getProject znajduje po id, inaczej null', () => {
   const list = [{ id: 'home', label: 'Home', path: '/home' }];
   assert.equal(getProject(list, 'home').label, 'Home');
   assert.equal(getProject(list, 'brak'), null);
+});
+
+// ---- slugify / uniqueId (Add Project, §"multi-repo switching") --------------
+
+test('slugify obnizy wielkosc liter i zamienia nie-alfanumeryki na myslniki', () => {
+  assert.equal(slugify('My Cool App'), 'my-cool-app');
+  assert.equal(slugify('AMSteel_Quote'), 'amsteel-quote');
+});
+
+test('slugify przycina myslniki na brzegach', () => {
+  assert.equal(slugify('--Foo--'), 'foo');
+});
+
+test('slugify na samych symbolach nie zwraca pustego stringa', () => {
+  assert.equal(slugify('!!!'), 'project');
+});
+
+test('uniqueId zwraca baze, gdy jest wolna', () => {
+  assert.equal(uniqueId('hud', new Set(['other'])), 'hud');
+});
+
+test('uniqueId dokleja -2, -3... przy kolizji', () => {
+  assert.equal(uniqueId('hud', new Set(['hud'])), 'hud-2');
+  assert.equal(uniqueId('hud', new Set(['hud', 'hud-2'])), 'hud-3');
 });

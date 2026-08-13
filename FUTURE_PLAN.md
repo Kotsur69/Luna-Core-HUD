@@ -1,6 +1,6 @@
 # LunaCore — Future Plan (Visual Templates, Layout & Ideas)
 
-## START HERE — where things stand (2026-08-12)
+## START HERE — where things stand (2026-08-13)
 
 Everything below this box is either **live plan** (§8) or **history**. Read this
 box, then §8's Phase A table, then jump to §A2a–§A2f for the widget contract and
@@ -15,10 +15,26 @@ the six lessons the conversions have cost so far.
 Mati's live feedback — see that plan's **§10 for the full list** (all 9
 terminal knobs incl. a custom background image; sound + boot-sequence moved
 out of the left panel to declutter it; a real `allowTransparency` bug found
-and fixed, which is what made opacity/blur actually work). **362 tests.** |
+and fixed, which is what made opacity/blur actually work) — and
+**Active-Files Edit Heatmap DONE 2026-08-13**
+([`ACTIVE_FILES_HEATMAP_PLAN.md`](ACTIVE_FILES_HEATMAP_PLAN.md), from
+`LUNA_HUD_SPECIFICATION.md` §6.2): real git-diff-stat `+`/`-` counts per
+file, a live "currently being edited" pulse, and (added same day from
+manual-test feedback) a bounded self-heal so the live pulse cannot get
+stuck lit, the permanent heat-glow removed so a settled row never reads as
+"still lit", and a deleted-file indicator (`files:check-exist` IPC,
+`fs.existsSync`, since a `rm`/`del` has no transcript event to ride) — and
+**multi-repo project switching DONE 2026-08-13**: a "+" button next to the
+Project switcher opens a native folder picker and writes the pick straight
+to `config/projects.local.json`, no more hand-editing JSON to add a repo on
+another drive — and **GPU usage DONE 2026-08-13**: a third row in the
+System tab next to CPU/RAM, Windows-only, reading the same DXGI "GPU
+Engine" counters Task Manager's own GPU column reads
+([`src/gpu.js`](src/gpu.js)), on its own slower timer so it never blocks
+`telemetry.js`'s pure 2 s sample. **413 tests.** |
 | **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED and `v0.9.0` is public — [releases/tag/v0.9.0](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.0) — but **`v0.9.1` has not been cut yet** (`package.json` still reads `0.9.0`, only `v0.9.0` is tagged): the sound/voice work, the Settings overlay, and the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite have all landed on `main` since the last release with nothing shipped to users yet. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `TERMINAL_CUSTOMIZER_PLAN.md` §10.7 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
 | **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build. |
-| **Next action** | Finish [`TERMINAL_CUSTOMIZER_PLAN.md`](TERMINAL_CUSTOMIZER_PLAN.md) **§9's remaining unchecked manual-verification items** (new tab inherits customization, theme switch preserves opacity, cols/rows don't desync, restart persists). If Mati still wants it, scope the whole-app transparency project (§10.7) as its own plan doc next. Otherwise: **cut `v0.9.1`** — still the only way to prove **D5** end-to-end — auto-update code that has never performed an update is a hypothesis, not a tested path — and it now also ships the sound/voice work and the Settings overlay to anyone who downloaded `v0.9.0`. Sequence: bump `version`, `npm run dist`, tag, publish, then let the *installed* `v0.9.0` discover it. After that: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (session timeline scrubber, active-files heatmap, Spotify now-playing, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. |
+| **Next action** | Finish [`TERMINAL_CUSTOMIZER_PLAN.md`](TERMINAL_CUSTOMIZER_PLAN.md) **§9's remaining unchecked manual-verification items** (new tab inherits customization, theme switch preserves opacity, cols/rows don't desync, restart persists). If Mati still wants it, scope the whole-app transparency project (§10.7) as its own plan doc next. Otherwise: **cut `v0.9.1`** — still the only way to prove **D5** end-to-end — auto-update code that has never performed an update is a hypothesis, not a tested path — and it now also ships the sound/voice work and the Settings overlay to anyone who downloaded `v0.9.0`. Sequence: bump `version`, `npm run dist`, tag, publish, then let the *installed* `v0.9.0` discover it — it now also ships the Active-Files Heatmap, multi-repo project switching and the GPU widget to anyone who downloaded `v0.9.0`. After that: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (session timeline scrubber, Spotify now-playing, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -37,7 +53,7 @@ Two facts that decide most design questions here, both learned the hard way:
 Verification commands, in the order they earn their keep:
 
 ```bash
-npm test                          # 222 tests, ~1 s, no extra deps
+npm test                          # 413 tests, ~1 s, no extra deps
 npm run dist                      # D2: NSIS installer + portable .exe -> dist/
 dist\win-unpacked\LunaCore.exe --luna-probe   # probe the PACKAGED build; result
                                   # lands in %APPDATA%\LunaCore\luna-probe.json

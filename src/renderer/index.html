@@ -211,6 +211,19 @@
         <p class="telem__note" id="telem-cpu-note"></p>
       </div>
 
+      <!-- Windows-only (src/gpu.js); off Windows or when the counter cannot
+           be read this row just stays at "--", same honest-null pattern as
+           RAM/CPU before their first sample. -->
+      <div class="telem__row" id="telem-gpu" data-level="unknown">
+        <div class="telem__head">
+          <span class="telem__label" data-i18n="telemetry.gpu">GPU</span>
+          <span class="telem__value" id="telem-gpu-value">--</span>
+        </div>
+        <div class="telem__bar"><i id="telem-gpu-bar" class="telem__fill"></i></div>
+        <div class="telem__spark" id="telem-gpu-spark" aria-hidden="true"></div>
+        <p class="telem__note" id="telem-gpu-note"></p>
+      </div>
+
       <p class="telem__foot hint" id="telem-foot"></p>
     </div>
   </template>
@@ -270,6 +283,16 @@
         <li class="skill-tile" data-skill="Task">Task</li>
       </ul>
       <p class="hint" data-i18n="skilltracker.hint">Kafelek swieci, gdy Claude uzywa narzedzia.</p>
+    </div>
+  </template>
+
+  <template id="w-activefiles">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="activefiles.title" data-i18n-title="activefiles.hint" title="+/- to realne linie z diffa transcriptu.">Aktywne pliki</h2>
+      <!-- Zasila obserwator z observer.js (tool_use/tool_result + structuredPatch)
+           przez modules/sessions.js - zero nowego I/O, zero nowego kanalu IPC. -->
+      <ul id="afile-list" class="afile-list"></ul>
+      <p id="afile-empty" class="hint" data-i18n="activefiles.empty">Zadnych zmian w plikach w tej sesji.</p>
     </div>
   </template>
 
@@ -348,7 +371,16 @@
       <h2 class="panel__title" data-i18n="project.title">Projekt</h2>
       <!-- Katalog roboczy (cwd) sesji. Opcje wypelnia switchers.js z
            config/projects.json; zmiana restartuje PTY w nowym folderze. -->
-      <select id="project-switcher" class="profile-select"></select>
+      <div class="project-row">
+        <select id="project-switcher" class="profile-select"></select>
+        <button
+          type="button"
+          id="project-add-btn"
+          class="project-add-btn"
+          data-i18n-title="project.add"
+          title="Dodaj projekt (wybierz folder)"
+        >+</button>
+      </div>
       <p class="hint" data-i18n="project.hint">Zmiana katalogu restartuje sesje w nowym folderze.</p>
     </div>
   </template>
