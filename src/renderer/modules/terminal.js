@@ -1,9 +1,10 @@
 // ============================================================================
 // LunaCore - the `terminal` widget (A2f): the center panel
 // ----------------------------------------------------------------------------
-// One root, FIVE owning modules - terminals.js (the xterm host), led.js (the
+// One root, SIX owning modules - terminals.js (the xterm host), led.js (the
 // working/waiting indicator), sessions.js (the tab bar), palette.js (the
-// Ctrl+K chip) and termcustom.js (the Ctrl+L chip). None of the five may
+// Ctrl+K chip), termcustom.js (the Ctrl+L chip) and update.js (the D5 update
+// chip, hidden unless there is an update to act on). None of the six may
 // import each other in a way that would cycle back here, which is exactly why
 // this composition lives in its own file instead of inside terminals.js:
 // sessions.js, palette.js and termcustom.js already import FROM terminals.js.
@@ -25,6 +26,7 @@ import { mountLed } from './led.js';
 import { mountTabs } from './sessions.js';
 import { mountPaletteChip } from './palette.js';
 import { mountTermcustomChip } from './termcustom.js';
+import { mountUpdateChip } from './update.js';
 
 defineWidget({
   id: 'terminal',
@@ -37,6 +39,7 @@ defineWidget({
     mountTabs(root);
     mountPaletteChip(root);
     mountTermcustomChip(root);
+    mountUpdateChip(root);
     // No cleanup: this widget is never meant to unmount (see header).
   },
 });

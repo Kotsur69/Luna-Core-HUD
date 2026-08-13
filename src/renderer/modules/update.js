@@ -1,15 +1,20 @@
 // ============================================================================
-// LunaCore - D5: the update notice
+// LunaCore - D5: the update chip
 // ----------------------------------------------------------------------------
-// Lives inside the `appearance` widget's root rather than being a widget of its
-// own, and that is a correctness choice, not laziness. Since C1, widget
-// placement is DATA (config/layouts.json) and a preset is free to leave a widget
-// out - so an update notice as its own widget would be invisible to anyone on a
-// preset that dropped it, which is the one message that must never be droppable.
-// `appearance` is in src/layouts.js REQUIRED_WIDGETS, so every valid preset has
-// it by construction. Same one-root-two-owners shape as mountBoot() (§A2).
+// Lives in the `terminal` widget's bar, next to the Ctrl+K / Ctrl+L chips,
+// rather than being a widget of its own or a permanent block in the left
+// panel (its original home through 2026-08-13). That move was a deliberate
+// declutter, not a relocation for its own sake: `terminal` - like `appearance`
+// - is in src/layouts.js REQUIRED_WIDGETS, so every valid layout preset still
+// carries it by construction, and it is now HIDDEN unless there is something
+// to actually do (`available` / `downloading` / `ready`). `checking`,
+// `current` and - on request - `error` are no longer rendered at all: a
+// permanently-visible "could not check for updates" was worse than useful
+// noise, since a build checks on every launch and normally has nothing to
+// report. The state machine still runs in full (see src/update.js); only what
+// this module chooses to SHOW changed.
 //
-// NOTHING here downloads or installs. The buttons ask main to; main is where the
+// NOTHING here downloads or installs. The chip asks main to; main is where the
 // consent lives (see src/update.js for why notify-only).
 // ============================================================================
 
@@ -23,68 +28,48 @@ const t = (key, params) => window.i18n.t(key, params);
 let els = null;
 
 // Last state from the bus. Module scope, so a remount repaints from truth
-// instead of from the template's authored markup (the §A2c rule).
+// instead of from the template's authored markup (the §A2c rule). `terminal`
+// never actually remounts (§A2f), but the state still has to survive a
+// language switch, which re-runs render() the same way.
 let last = { state: 'idle', info: null, percent: 0, error: null, reason: null, version: '' };
 
 /**
- * What the row says, and which buttons it offers, for one state.
+ * What the chip says, and what clicking it does, for one state. Returns null
+ * for every state that has nothing actionable to show - the chip stays
+ * hidden, which is the whole point of moving this out of the left panel.
  *
- * Returned as data rather than written straight to the DOM so the whole state
- * machine is readable in one screen - and so `render()` stays a function that
- * only WRITES to the DOM and never reads from it (§A2d).
+ * Returned as data rather than written straight to the DOM so `render()`
+ * stays a function that only WRITES to the DOM and never reads from it (§A2d).
  */
 function describe(s) {
-  const version = s.info && s.info.version;
+  const version = (s.info && s.info.version) || '?';
 
   switch (s.state) {
-    case 'checking':
-      return { text: t('update.checking'), busy: true };
-
     case 'available':
       return {
-        text: t('update.available', { v: version || '?' }),
-        highlight: true,
-        primary: { label: t('update.download'), action: 'download' },
-        notes: true,
+        text: t('update.chip.available', { v: version }),
+        title: t('update.available', { v: version }),
+        action: 'download',
       };
 
     case 'downloading':
-      return { text: t('update.downloading', { p: s.percent }), busy: true, percent: s.percent };
+      return {
+        text: t('update.chip.downloading', { p: s.percent }),
+        title: t('update.downloading', { p: s.percent }),
+        busy: true,
+      };
 
     case 'ready':
       return {
-        text: t('update.ready', { v: version || '?' }),
-        highlight: true,
-        primary: { label: t('update.install'), action: 'install' },
-        notes: true,
+        text: t('update.chip.ready', { v: version }),
+        title: t('update.ready', { v: version }),
+        action: 'install',
       };
 
-    case 'error':
-      // The message from electron-updater is deliberately NOT shown in the row:
-      // it is an English stack-ish string no translation covers, and "ENOTFOUND
-      // api.github.com" tells a user nothing they can act on. It stays in the
-      // title attribute for whoever is actually debugging.
-      return {
-        text: t('update.error'),
-        detail: s.error || '',
-        primary: { label: t('update.retry'), action: 'check' },
-      };
-
-    case 'none':
-      return {
-        text: t('update.current', { v: s.version || '' }),
-        primary: { label: t('update.check'), action: 'check' },
-      };
-
-    case 'unsupported':
-      // A dev clone says nothing at all - `git pull` is the update path and a
-      // notice would be noise. A portable build MUST speak up: it cannot update
-      // itself (see src/update.js), so silence would read as "you are current".
-      if (s.reason === 'portable') {
-        return { text: t('update.portable', { v: s.version || '' }), notes: true };
-      }
-      return null;
-
+    // 'checking', 'current'/'none', 'error' and 'unsupported' (dev clone or
+    // portable build) all resolve to "nothing to show here" on purpose - see
+    // the header comment. The real error still reaches main's console for
+    // whoever is actually debugging a failed check.
     default:
       return null;
   }
@@ -95,82 +80,44 @@ function render() {
 
   const view = describe(last);
 
-  // Hidden entirely rather than emptied: an empty row still costs a flex gap,
-  // and a dev clone should look exactly as it did before D5 existed.
   els.root.hidden = !view;
   if (!view) return;
 
-  els.text.textContent = view.text;
-  els.text.title = view.detail || '';
-  els.root.classList.toggle('is-available', Boolean(view.highlight));
+  els.root.textContent = view.text;
+  els.root.title = view.title;
+  els.root.disabled = Boolean(view.busy);
   els.root.classList.toggle('is-busy', Boolean(view.busy));
-
-  // Progress bar: scaleX like the usage bars, so there is no layout thrash.
-  const pct = typeof view.percent === 'number' ? view.percent : 0;
-  els.bar.hidden = typeof view.percent !== 'number';
-  els.bar.style.setProperty('--update-progress', String(pct / 100));
-
-  if (view.primary) {
-    els.action.hidden = false;
-    els.action.textContent = view.primary.label;
-    els.action.dataset.action = view.primary.action;
-  } else {
-    els.action.hidden = true;
-    delete els.action.dataset.action;
-  }
-
-  els.notes.hidden = !view.notes;
-  els.notes.textContent = t('update.notes');
+  els.root.dataset.action = view.action || '';
 }
 
-function onAction() {
-  const action = els && els.action.dataset.action;
+function onClick() {
+  const action = els && els.root.dataset.action;
   if (action === 'download') window.lunacore.downloadUpdate();
   else if (action === 'install') window.lunacore.installUpdate();
-  else if (action === 'check') window.lunacore.checkUpdate();
-}
-
-function onNotes() {
-  // No argument: main owns the address, so the renderer cannot aim
-  // shell.openExternal anywhere it likes.
-  window.lunacore.openReleases();
 }
 
 /**
- * Mounts the notice into the appearance widget's root.
+ * Mounts the chip into the terminal widget's bar.
  *
- * @param {HTMLElement} root the appearance widget root
- * @returns {() => void} disposer
+ * @param {HTMLElement} root the terminal widget root
  */
-export function mountUpdate(root) {
-  const container = root.querySelector('#update-notice');
-  if (!container) return () => {};
+export function mountUpdateChip(root) {
+  const btn = root.querySelector('#update-chip');
+  if (!btn) return;
 
-  els = {
-    root: container,
-    text: container.querySelector('#update-text'),
-    bar: container.querySelector('#update-bar'),
-    action: container.querySelector('#update-action'),
-    notes: container.querySelector('#update-notes'),
-  };
+  els = { root: btn };
 
-  els.action.addEventListener('click', onAction);
-  els.notes.addEventListener('click', onNotes);
+  btn.addEventListener('click', onClick);
 
   // Replayed channel, so a state that arrived before this mount still lands.
-  const offState = onUpdateState((state) => {
+  onUpdateState((state) => {
     last = state && typeof state === 'object' ? state : last;
     render();
   });
-  const offLang = onLangChange(render);
+  onLangChange(render);
 
   render();
 
-  // Pure display: the timers and requests all live in main, so this disposer
-  // genuinely only cancels - there is no pending user intent to flush (§A2b).
-  return () => {
-    offState();
-    offLang();
-    els = null;
-  };
+  // No returned disposer: `terminal` never unmounts (§A2f), same as this
+  // bar's other two chips (mountPaletteChip / mountTermcustomChip).
 }

@@ -31,10 +31,16 @@ another drive — and **GPU usage DONE 2026-08-13**: a third row in the
 System tab next to CPU/RAM, Windows-only, reading the same DXGI "GPU
 Engine" counters Task Manager's own GPU column reads
 ([`src/gpu.js`](src/gpu.js)), on its own slower timer so it never blocks
-`telemetry.js`'s pure 2 s sample. **413 tests.** |
-| **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED and `v0.9.0` is public — [releases/tag/v0.9.0](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.0) — but **`v0.9.1` has not been cut yet** (`package.json` still reads `0.9.0`, only `v0.9.0` is tagged): the sound/voice work, the Settings overlay, and the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite have all landed on `main` since the last release with nothing shipped to users yet. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `TERMINAL_CUSTOMIZER_PLAN.md` §10.7 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
+`telemetry.js`'s pure 2 s sample. **413 tests.** — and **the D5 update notice
+moved out of the left panel 2026-08-13**: now a chip next to the Ctrl+K /
+Ctrl+L chips in the terminal bar, hidden unless there is actually something to
+do (`available` / `downloading` / `ready`), so "could not check for updates"
+no longer sits there permanently. Caught the same flex-child `[hidden]` bug
+this file already hit for `.badge` and the original `.update` block, on first
+hand-launch — see §D5b. |
+| **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED and `v0.9.0` is public — [releases/tag/v0.9.0](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.0). **`package.json` now reads `0.9.1`** (bumped 2026-08-13, lands in the same commit as the D5 chip relocation), but **no `v0.9.1` release has been cut** — no `npm run dist`, no tag, no publish yet. The sound/voice work, the Settings overlay, the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite, the Active-Files Heatmap, multi-repo project switching, the GPU widget and now the D5 chip relocation have all landed on `main` since `v0.9.0` with nothing shipped to users yet. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `TERMINAL_CUSTOMIZER_PLAN.md` §10.7 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
 | **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build. |
-| **Next action** | Finish [`TERMINAL_CUSTOMIZER_PLAN.md`](TERMINAL_CUSTOMIZER_PLAN.md) **§9's remaining unchecked manual-verification items** (new tab inherits customization, theme switch preserves opacity, cols/rows don't desync, restart persists). If Mati still wants it, scope the whole-app transparency project (§10.7) as its own plan doc next. Otherwise: **cut `v0.9.1`** — still the only way to prove **D5** end-to-end — auto-update code that has never performed an update is a hypothesis, not a tested path — and it now also ships the sound/voice work and the Settings overlay to anyone who downloaded `v0.9.0`. Sequence: bump `version`, `npm run dist`, tag, publish, then let the *installed* `v0.9.0` discover it — it now also ships the Active-Files Heatmap, multi-repo project switching and the GPU widget to anyone who downloaded `v0.9.0`. After that: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (session timeline scrubber, Spotify now-playing, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. |
+| **Next action** | **Cut the `v0.9.1` release** — `npm run dist` → tag → publish, then let the *installed* `v0.9.0` discover it. Still the only way to prove **D5** end-to-end: auto-update code that has never performed an update is a hypothesis, not a tested path. After that: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (session timeline scrubber, Spotify now-playing, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -1407,11 +1413,15 @@ on a click, install only on a second click (`autoDownload = false`,
   code-signing check, because the binary is still unsigned. On a public repo the
   disclosure is the product; shipping the feature without it would have been the
   actual regression.
-- **The notice lives in the `appearance` widget, not a widget of its own** —
+- **The notice lived in the `appearance` widget, not a widget of its own** —
   because C1 made widget placement DATA, and a preset is free to drop a widget.
   An update notice that a layout can drop is invisible exactly to the people who
-  need it. `appearance` is in `REQUIRED_WIDGETS`, so every valid preset carries
+  need it. `appearance` is in `REQUIRED_WIDGETS`, so every valid preset carried
   it by construction. Same one-root-two-owners shape as `mountBoot()`.
+  ↳ **Moved 2026-08-13** to a chip in the `terminal` widget's bar instead — see
+  §D5b. The `REQUIRED_WIDGETS` guarantee still holds (`terminal` is in that list
+  too); what changed is that the notice is now hidden unless there is something
+  to actually do, instead of a permanent fixture.
 
 **A blind spot found and closed:** `busStats()` had a hardcoded channel list, so
 the new `updateState` channel was invisible to `--luna-probe` — the one tool
@@ -1434,6 +1444,50 @@ wrong answer there is a blank window, not a warning.
 > The upgrade landed in `a773edb`. `v0.9.0` in the wild still carries these; only
 > a released `v0.9.1` actually delivers the fix. That is why cutting it is the
 > next action and not a nice-to-have.
+
+#### D5b — moving the notice out of the left panel, and the [hidden] bug it re-triggered (2026-08-13)
+
+Mati's ask: put the update notice somewhere small and discoverable next to the
+Ctrl+K / Ctrl+L chips, and stop showing it — including "could not check for
+updates" — when there is nothing to do about it. The permanent left-panel block
+from D5a was correct but noisy: it rendered `checking` / `current` / `error`
+too, and a build checks on every launch, so most of the time it had nothing
+useful to say.
+
+- **`describe()` (`modules/update.js`) now returns `null` for everything except
+  `available`, `downloading` and `ready`.** `checking`, `current`/`none`,
+  `error` and `unsupported` (dev clone or portable build) all render nothing.
+  The state machine in `src/update.js` is unchanged and still runs in full on
+  every launch; only what the renderer chooses to SHOW got smaller. The manual
+  "Sprawdź"/"Ponów" (check/retry) buttons and the release-notes link went with
+  it — checking already happens automatically, so a manual re-check button was
+  the one piece of the old UI actually worth losing.
+- **The chip lives in `terminal`'s bar now, not `appearance`'s root** — see the
+  amended bullet in §D5a. `terminal` is also in `REQUIRED_WIDGETS`, so the
+  same "no layout preset can hide this" guarantee carries over unchanged;
+  `terminal.js` gained a sixth owning module (`mountUpdateChip`, alongside
+  `mountPaletteChip` / `mountTermcustomChip`) and, like those two, it returns no
+  disposer — `terminal` never unmounts (§A2f).
+- **Caught on first hand-launch: the chip was permanently visible, and empty.**
+  `.terminal-bar` is `display: flex`, and a flex child's own `display` rule (from
+  `.palette-chip`) beats the browser's default `[hidden] { display: none }`
+  unless an author rule forces it — the *exact* bug class this file already hit
+  for `.badge` (§6) and the original D5a `.update` block, and had already
+  pre-empted for `.notice`/`.palette`/`.termcustom`/`.boot`. Missed here on the
+  first pass: nothing overrode `[hidden]` for the new `.update-chip`, so it
+  showed unconditionally, and since `render()` only fills in text for a state
+  worth showing, what Mati actually saw was a mystery empty amber pill that
+  glowed on hover and meant nothing. Fixed with one rule,
+  `.update-chip[hidden] { display: none; }`. **The lesson repeats a third time
+  now: any hideable element inside a flex container in this codebase needs its
+  own `[hidden]` override, full stop — it is not something to rediscover by eye
+  each time.**
+
+No new tests: the renderer state machine here was already outside `npm test`'s
+reach before this change (only `src/update.js`'s pure functions are covered,
+per D5a) and still is — `413` stays `413`. Verified by hand only: Mati caught
+the `[hidden]` bug on the first `npm start` after the move, the fix landed, and
+a second launch was clean enough to move straight to committing.
 
 #### D3a — degrading honestly for someone who is not Mati
 

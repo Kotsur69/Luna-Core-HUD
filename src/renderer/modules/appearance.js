@@ -25,7 +25,6 @@
 import { emitLangChange } from './bus.js';
 import { applyTerminalTheme, applyTerminalAppearance } from './terminals.js';
 import { defineWidget } from './registry.js';
-import { mountUpdate } from './update.js';
 import { getLayouts, getActiveLayoutId, selectLayout } from './layout.js';
 import { loc } from './util.js';
 import { sfx } from './sound.js';
@@ -221,13 +220,7 @@ defineWidget({
       renderLayoutSwitcher();
     });
 
-    // D5. update.js's notice lives in THIS widget (not one of its own)
-    // because `appearance` is in REQUIRED_WIDGETS - no layout preset can omit
-    // it, unlike a standalone widget a preset might drop.
-    const offUpdate = mountUpdate(root);
-
     return () => {
-      offUpdate();
       els = null;
     };
   },

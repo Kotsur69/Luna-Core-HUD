@@ -351,18 +351,6 @@
           <option value="en">English</option>
         </select>
       </label>
-      <!-- D5: powiadomienie o aktualizacji. Mieszka TUTAJ, bo `appearance` jest
-           w REQUIRED_WIDGETS (src/layouts.js), wiec zaden preset ukladu nie moze
-           go pominac - w odroznieniu od osobnego widgetu. Tresc wypelnia
-           modules/update.js; domyslnie ukryte (klon deweloperski nic nie mowi). -->
-      <div id="update-notice" class="update" hidden>
-        <span id="update-text" class="update__text"></span>
-        <span id="update-bar" class="update__bar" hidden></span>
-        <span class="update__buttons">
-          <button type="button" id="update-action" class="update__btn" hidden></button>
-          <button type="button" id="update-notes" class="update__link" hidden></button>
-        </span>
-      </div>
     </div>
   </template>
 
@@ -460,6 +448,11 @@
         <button id="termcustom-open" class="palette-chip" data-i18n-title="termcustom.chip.title" title="Ustawienia (Ctrl+L)">
           <kbd>Ctrl</kbd><kbd>L</kbd>
         </button>
+        <!-- D5: ten sam chip-owy pasek co Ctrl+K/Ctrl+L, zamiast trwalego bloku
+             w lewym panelu (patrz modules/update.js). Widoczny tylko gdy jest
+             cos do zrobienia (dostepna/gotowa aktualizacja); ukryty inaczej -
+             wiec "nie udalo sie sprawdzic" juz nigdy nie straszy na stale. -->
+        <button id="update-chip" class="palette-chip update-chip" hidden></button>
       </div>
       <!-- Zakladki sesji. Kazda ma wlasny proces PTY, wlasny kontekst i wlasny
            bufor xterm; tu renderujemy tylko ich naglowki (budowane z JS). -->
