@@ -33,10 +33,11 @@ const BOOT_FADE_MS = 240; // MUST match .boot.is-out in styles.css
 const bootEl = document.getElementById('boot');
 const bootLogEl = document.getElementById('boot-log');
 
-// A2: boot-toggle / boot-status moved into the `appearance` widget's template
-// (they are the "Sekwencja startowa" switch-field in the Wyglad section), so
-// they no longer exist at import time - looked up in mountBoot() instead.
-// Elements of the current mount, or null when `appearance` is not on screen.
+// A2/2026-08-13: boot-toggle / boot-status live inside the #termcustom
+// Settings overlay's static markup (the "Sekwencja startowa" switch-field,
+// moved there from the `appearance` widget - see TERMINAL_CUSTOMIZER_PLAN.md),
+// so they don't exist at import time - looked up in mountBoot() instead.
+// Elements of the current mount, or null before that ever runs.
 let bootEls = null;
 
 // Mirrors config/ui.local.json's `boot`. Kept at module scope, like
@@ -128,8 +129,10 @@ export function startBoot(enabled) {
 }
 
 /**
- * Mounts the boot-sequence toggle inside the `appearance` widget's root.
- * Mirrors context.js's mountSpark(): one root, two owning modules.
+ * Mounts the boot-sequence toggle inside whatever root it's given - called
+ * once from termcustom.js with the #termcustom overlay as root (it is static
+ * markup, not a widget, so there's no remount to guard against here the way
+ * context.js's mountSpark() one-root-two-owners shape had to).
  */
 export function mountBoot(root) {
   bootEls = {

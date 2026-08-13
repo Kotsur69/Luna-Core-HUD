@@ -4,7 +4,10 @@
 // Small persistent slice of interface state in config/ui.local.json (gitignored)
 // - like the scratchpad, a plain file rather than localStorage. Holds
 // { theme, lang, boot, profile, layout, hideSystemPorts, soundEnabled,
-// soundVolume, soundKeystrokeVariant, soundLongTaskMinutes }. The renderer
+// soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, termFontFamily,
+// termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
+// termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage.
+// The renderer
 // reads it at startup (ui:get) and writes on change (ui:set).
 //
 // Validate at the boundary: an unknown language falls back to 'pl'; a missing
@@ -25,6 +28,7 @@ const file = () => paths.local('ui.local.json');
 
 const LANGS = ['pl', 'en'];
 const KEYSTROKE_VARIANT_IDS = ['mechanical', 'soft', 'scifi', 'typewriter'];
+const TERM_CURSOR_STYLES = ['block', 'underline', 'bar'];
 
 function clampVolume(v) {
   const n = Number(v);
@@ -69,7 +73,57 @@ const DEFAULTS = {
   // potentially long/sensitive text, so it must never surprise-narrate a
   // room; Mati opts in explicitly from the Appearance panel.
   soundReadOutputEnabled: false,
+  // Terminal Appearance Customizer (TERMINAL_CUSTOMIZER_PLAN.md). Global, not
+  // per-tab/per-profile - confirmed 2026-08-13, matches how theme/sound prefs
+  // already behave app-wide.
+  termFontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
+  termFontSize: 14,
+  termLineHeight: 1.0,
+  termLetterSpacing: 0,
+  termCursorStyle: 'block',
+  termCursorBlink: true,
+  termScrollback: 5000,
+  termBgOpacity: 100, // percent, 0-100
+  termBgBlur: 0, // px, 0-20
+  // data: URI (renderer's CSP only allows 'self'/data: for img-src, so a raw
+  // file path could never be used as a CSS background-image). null = none.
+  termBgImage: null,
 };
+
+/**
+ * Sanitizes a raw terminal-appearance prefs object (e.g. parsed from JSON, or
+ * a partial write payload). Every field is validated independently and falls
+ * back to DEFAULTS on a missing/wrong-typed/out-of-range value, so a garbage
+ * or partial input always yields a fully-populated, safe-to-apply result.
+ */
+function clampTermPrefs(raw) {
+  const obj = raw && typeof raw === 'object' ? raw : {};
+  const num = (v, min, max, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+  };
+  return {
+    termFontFamily:
+      typeof obj.termFontFamily === 'string' && obj.termFontFamily.trim()
+        ? obj.termFontFamily
+        : DEFAULTS.termFontFamily,
+    termFontSize: Math.round(num(obj.termFontSize, 8, 32, DEFAULTS.termFontSize)),
+    termLineHeight: num(obj.termLineHeight, 0.8, 3, DEFAULTS.termLineHeight),
+    termLetterSpacing: num(obj.termLetterSpacing, -5, 20, DEFAULTS.termLetterSpacing),
+    termCursorStyle: TERM_CURSOR_STYLES.includes(obj.termCursorStyle)
+      ? obj.termCursorStyle
+      : DEFAULTS.termCursorStyle,
+    termCursorBlink:
+      typeof obj.termCursorBlink === 'boolean' ? obj.termCursorBlink : DEFAULTS.termCursorBlink,
+    termScrollback: Math.round(num(obj.termScrollback, 0, 1000000, DEFAULTS.termScrollback)),
+    termBgOpacity: Math.round(num(obj.termBgOpacity, 0, 100, DEFAULTS.termBgOpacity)),
+    termBgBlur: Math.round(num(obj.termBgBlur, 0, 20, DEFAULTS.termBgBlur)),
+    termBgImage:
+      typeof obj.termBgImage === 'string' && obj.termBgImage.startsWith('data:image/')
+        ? obj.termBgImage
+        : null,
+  };
+}
 
 /** Reads UI preferences; a missing or corrupt file falls back to DEFAULTS. */
 function readUiPrefs() {
@@ -105,6 +159,7 @@ function readUiPrefs() {
         typeof obj.soundReadOutputEnabled === 'boolean'
           ? obj.soundReadOutputEnabled
           : DEFAULTS.soundReadOutputEnabled,
+      ...clampTermPrefs(obj),
     };
   } catch {
     return { ...DEFAULTS };
@@ -114,11 +169,11 @@ function readUiPrefs() {
 /**
  * Merges and writes preferences. Accepts a partial
  * { theme?, lang?, boot?, profile?, layout?, hideSystemPorts?, soundEnabled?,
- *   soundVolume?, soundKeystrokeVariant? }.
- * @returns {{theme:string,lang:string,boot:boolean,profile:string|null,
- *   layout:string|null,hideSystemPorts:boolean,soundEnabled:boolean,
- *   soundVolume:number,soundKeystrokeVariant:string}|null} the new state, or
- *   null if the write failed
+ *   soundVolume?, soundKeystrokeVariant?, soundLongTaskMinutes?,
+ *   soundReadOutputEnabled?, termFontFamily?, termFontSize?, termLineHeight?,
+ *   termLetterSpacing?, termCursorStyle?, termCursorBlink?, termScrollback?,
+ *   termBgOpacity?, termBgBlur?, termBgImage? }.
+ * @returns {object|null} the new state, or null if the write failed
  */
 function writeUiPrefs(partial) {
   try {
@@ -150,6 +205,29 @@ function writeUiPrefs(partial) {
     if (partial && typeof partial.soundReadOutputEnabled === 'boolean') {
       next.soundReadOutputEnabled = partial.soundReadOutputEnabled;
     }
+    // Only the term* keys actually present in `partial` should move; anything
+    // omitted keeps its current (already-validated) value from `next` rather
+    // than reverting to DEFAULTS - clampTermPrefs still re-validates the
+    // merged result, so a garbage value in `partial` can't corrupt the file.
+    const TERM_KEYS = [
+      'termFontFamily',
+      'termFontSize',
+      'termLineHeight',
+      'termLetterSpacing',
+      'termCursorStyle',
+      'termCursorBlink',
+      'termScrollback',
+      'termBgOpacity',
+      'termBgBlur',
+      'termBgImage',
+    ];
+    const mergedTerm = { ...next };
+    if (partial) {
+      for (const key of TERM_KEYS) {
+        if (key in partial) mergedTerm[key] = partial[key];
+      }
+    }
+    Object.assign(next, clampTermPrefs(mergedTerm));
     paths.ensureUserDir();
     fs.writeFileSync(file(), JSON.stringify(next, null, 2) + '\n', 'utf8');
     return next;
@@ -158,4 +236,4 @@ function writeUiPrefs(partial) {
   }
 }
 
-module.exports = { readUiPrefs, writeUiPrefs };
+module.exports = { readUiPrefs, writeUiPrefs, clampTermPrefs };

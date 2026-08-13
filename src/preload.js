@@ -156,6 +156,12 @@ contextBridge.exposeInMainWorld('lunacore', {
   getUiPrefs: () => ipcRenderer.invoke('ui:get'),
   /** Zapisuje czesciowe preferencje { theme?, lang? }; zwraca nowy stan. */
   setUiPrefs: (partial) => ipcRenderer.invoke('ui:set', partial),
+  /**
+   * Otwiera natywny picker obrazu tla terminala; czyta plik W MAIN (renderer
+   * nie ma dostepu do fs) i zwraca { dataUrl } (CSP: tylko data:/'self' w
+   * img-src), { error: 'tooLarge' | 'unsupported' }, lub null przy anulowaniu.
+   */
+  pickTermBgImage: () => ipcRenderer.invoke('termcustom:pickBgImage'),
 
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
   /**

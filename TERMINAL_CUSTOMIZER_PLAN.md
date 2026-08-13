@@ -1,9 +1,11 @@
 # Terminal Appearance Customizer — Implementation Plan
 
-**Status: PLANNING ONLY. No code written yet.** Source idea: `LUNA_HUD_SPECIFICATION.md`
-§6.6. This document is the "own short plan doc, same shape as
-`SOUNDS_IMPLEMENTATION_PLAN.md`" that §7 of that spec calls for once a §6 idea
-gets picked up.
+**Status: SHIPPED, 2026-08-13 — scope grew past this plan.** Source idea:
+`LUNA_HUD_SPECIFICATION.md` §6.6. What's below is the original plan as written
+before the build started; **§10 at the bottom records what actually shipped**,
+including everything this plan didn't anticipate (it grew into a general
+Settings overlay, not terminal-appearance-only). Read §10 first if you only
+want current truth — the rest of this file is historical.
 
 ---
 
@@ -16,7 +18,7 @@ gets picked up.
 | Open trigger | **Ctrl+L**, global keybind, plus presumably a manual click target too (see §3). |
 | Font input | **Both** — curated dropdown of known-good monospace fonts, with a "Custom…" option that reveals free text. |
 | Control style | **Raw granular controls**, no presets layer — matches how the existing sound panel works. |
-| Scope (global vs per-tab) | **Assumed global**, not per-tab/per-profile — matches how theme and sound prefs already behave app-wide. Flagging this as an assumption, not a locked decision — say if you want per-tab instead. |
+| Scope (global vs per-tab) | **Global**, not per-tab/per-profile — matches how theme and sound prefs already behave app-wide. Confirmed 2026-08-13. |
 
 **Known tradeoff, not a new risk category:** Ctrl+L is the readline/shell
 convention for "clear screen" and today reaches the shell exactly like any
@@ -186,19 +188,94 @@ test the pure functions, not the OS/DOM wrappers.
 
 ## 9. Verification checklist (manual, `npm start`)
 
-- [ ] Ctrl+L opens the modal from anywhere in the app; Ctrl+L **no longer**
-      reaches the shell while LunaCore has focus (confirm this is the
-      intended tradeoff, not a surprise, before shipping).
-- [ ] Escape closes the modal, refocuses the terminal.
-- [ ] Every knob changes the **active** tab's terminal live, no remount
-      needed.
-- [ ] Opening a **new** tab after customizing inherits the custom look
-      immediately (not the hardcoded `TERM_OPTIONS` defaults).
-- [ ] Switching **theme** after customizing keeps the custom opacity/font/etc
-      (theme change and customizer change compose, don't race/overwrite).
-- [ ] Font-size/line-height/letter-spacing changes don't desync `cols`/`rows`
-      from the pty — type something long, resize the window, confirm reflow
-      still matches what the shell thinks the terminal size is.
-- [ ] Restart the app — every customized value persists (round-trips through
-      `ui.local.json` via `ui:get`/`ui:set`, same file theme/sound prefs use).
-- [ ] `npm test` green, new `clampTermPrefs()` tests included.
+Confirmed live with Mati, 2026-08-13 unless noted:
+
+- [x] Ctrl+L opens the modal from anywhere; manual chip trigger also works.
+- [ ] Escape closes the modal, refocuses the terminal — not explicitly
+      re-checked after later edits, low risk (unchanged code path).
+- [x] Font family / font size / letter spacing change the **active** tab's
+      terminal live ("font size works font family also eltter spacing also"
+      — Mati). Cursor style/blink/scrollback share the exact same code path
+      but weren't individually called out.
+- [ ] Opening a **new** tab after customizing inherits the custom look —
+      not explicitly re-checked.
+- [ ] Switching **theme** after customizing keeps the custom opacity —
+      not explicitly re-checked.
+- [ ] Font-size/line-height/letter-spacing don't desync `cols`/`rows` from
+      the pty — not explicitly re-checked.
+- [ ] Restart the app — persistence not explicitly re-checked this session,
+      though it's the same `ui.local.json` round-trip theme/lang already use.
+- [x] Background opacity + blur — **found broken, root-caused, fixed**: xterm
+      needs `allowTransparency: true` at construction (constructor-only, like
+      `cols`/`rows`) or the canvas paints fully opaque regardless of alpha.
+      Confirmed working after the fix ("ye it works" — Mati), including with
+      a custom background image (§10).
+- [x] `npm test` green — 362/362 (added `clampTermPrefs()` coverage for
+      `termBgImage` too).
+
+---
+
+## 10. What actually shipped (2026-08-13) — current truth, read this first
+
+The build followed §8's order faithfully through step 7 (i18n), then Mati's
+live feedback while testing pushed the scope well past this plan. In order:
+
+1. **Input styling bug** (pre-existing, not introduced here): `input[type=
+   number]`/`input[type=range]` had zero CSS anywhere in the app — native
+   white Chromium controls clashing with every dark theme. Fixed globally
+   (`styles.css`), which also fixed the pre-existing sound-volume /
+   "all done" minutes fields Mati screenshotted.
+2. **No save feedback**: there's no Save button by design (matches how
+   theme/lang/sound already apply live) — but nothing told Mati a change had
+   landed, and Enter did nothing (no `<form>` in the modal). Added: Enter now
+   commits + refocuses the field, and every change flashes a brief cyan pulse
+   (`.is-confirmed`).
+3. **Settings overlay consolidation**: Mati asked to declutter the left
+   panel. Sound (toggle/volume/keystroke variant/"all done" minutes/
+   read-output) and the boot-sequence toggle moved from `appearance.js`'s
+   `w-appearance` template into this modal, as a second labelled section.
+   File/module/element ids kept the historical "termcustom" name — only
+   user-visible text changed (title → "Ustawienia"/"Settings", chip tooltip
+   likewise). `appearance.js` now only owns theme/layout/language + the
+   update notice.
+4. **Leftover empty panel bug**: `#update-notice`'s `.update` class sets
+   `display: flex` with no `.update[hidden] { display: none; }` override —
+   a flex child ignores the `[hidden]` attribute's default UA style. Exact
+   same bug class the codebase had already hit once for `.badge`. Fixed.
+5. **Opacity/blur were actually broken, not just subtle**: xterm's canvas
+   ignores any alpha channel in `theme.background` unless
+   `allowTransparency: true` is set **at construction** (constructor-only,
+   same category as `cols`/`rows`). This was never set. Root-caused and
+   fixed in `terminals.js`'s `TERM_OPTIONS`.
+6. **Custom background image** (new feature, not in the original plan):
+   `termBgImage` pref (a `data:` URI — the renderer's CSP only allows
+   `'self'`/`data:` for `img-src`, so a raw file path was never an option).
+   New IPC `termcustom:pickBgImage` (`main.js`) opens a native file dialog,
+   reads the chosen image (4MB cap), returns the encoded result — the
+   renderer never touches the filesystem. Lives on `#terminal` (the
+   *ancestor* of every `.terminal__pane`), not the panes themselves, so
+   opacity (via the now-working transparent canvas) and blur (via
+   `.terminal__pane`'s `backdrop-filter`) both compose with it correctly.
+7. **Whole-app OS-level window transparency — explicitly deferred, not
+   built.** Mati asked for the entire app (all panels, not just the
+   terminal) to fade to the real desktop. Scoped and declined for this
+   round: Electron's `transparent: true` needs `frame: false` on Windows too
+   (loses the native title bar — minimize/maximize/close/drag/Snap — needs a
+   custom-built replacement), the toggle itself would need to recreate the
+   window (renderer reload → open tabs' *visible* scrollback resets, even
+   though the underlying shell sessions survive in the main process), and
+   "everything fades together" means reworking the ~45 color tokens across 9
+   themes to carry an alpha channel. Real project, own session.
+
+**Next session, in order:**
+1. Finish §9's remaining unchecked manual-verification items (new tab
+   inherits customization, theme switch preserves opacity, cols/rows don't
+   desync, restart persists).
+2. If Mati still wants it: scope and start the whole-app transparency project
+   (§10.7) as its own plan doc, following this file's own shape.
+3. Otherwise: back to `FUTURE_PLAN.md`'s "Next action" (cut `v0.9.1`, or pick
+   the next `LUNA_HUD_SPECIFICATION.md` §6 idea).
+
+Remaining unchecked items are believed low-risk (unchanged/well-established
+code paths) but are the right place to start **next session**'s verification
+pass if anything looks off.

@@ -305,8 +305,6 @@
     </div>
   </template>
 
-  <!-- boot.js's mountBoot(root) owns #boot-toggle / #boot-status - same
-       one-root-two-owners shape as w-context (context.js + spark.js). -->
   <template id="w-appearance">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="appearance.title">Wyglad</h2>
@@ -329,58 +327,6 @@
           <option value="pl">Polski</option>
           <option value="en">English</option>
         </select>
-      </label>
-      <!-- Dzwiek: sfx/glosy przy interakcjach. mpv opcjonalny - brak na PATH
-           to cichy fallback (soundManager.js), ten toggle tylko wlacza/wylacza
-           odtwarzanie po stronie renderera + persystuje preferencje. -->
-      <label id="sound-field" class="switch-field" data-i18n-title="appearance.sound.hint" title="Dzwiekowe sprzezenie zwrotne (klawisze, zakladki, przelaczniki). Wymaga mpv na PATH - w przeciwnym razie cicho nic nie robi.">
-        <span class="switch-field__text">
-          <span class="switch-field__label" data-i18n="appearance.sound">Dzwiek</span>
-        </span>
-        <span class="switch">
-          <input type="checkbox" id="sound-toggle" class="switch__input" />
-          <span class="switch__track"><span class="switch__thumb"></span></span>
-        </span>
-      </label>
-      <label class="ui-field">
-        <span class="ui-field__label" data-i18n="appearance.keystrokeSound">Dzwiek klawiszy</span>
-        <select id="sound-keystroke-variant" class="profile-select">
-          <option value="mechanical">Mechanical</option>
-          <option value="soft">Soft</option>
-          <option value="scifi">Sci-fi</option>
-          <option value="typewriter">Typewriter</option>
-        </select>
-      </label>
-      <label class="ui-field">
-        <span class="ui-field__label" data-i18n="appearance.volume">Glosnosc</span>
-        <input type="range" id="sound-volume" min="0" max="100" />
-      </label>
-      <!-- SS11.1: minimalny czas tury przed odtworzeniem "All done" (turn-end
-           detection w observer.js / checkTurnEnd() w main.js). 0 = kazda tura. -->
-      <label class="ui-field" data-i18n-title="appearance.longTaskMinutes.hint" title="Minimalny czas trwania tury Claude, zanim odtworzy sie glos &quot;All done&quot;. 0 = ogloszaj kazda ture.">
-        <span class="ui-field__label" data-i18n="appearance.longTaskMinutes">Ogloszenie "Gotowe" po (min)</span>
-        <input type="number" id="sound-long-task-minutes" min="0" max="180" step="1" />
-      </label>
-      <!-- SS11.2: opcjonalne odczytywanie odpowiedzi Claude na glos (Windows
-           SAPI, offline - src/tts.js). Domyslnie wylaczone. -->
-      <label class="switch-field" data-i18n-title="appearance.readOutput.hint" title="Odczytuj odpowiedzi Claude na glos po kazdej turze (Windows SAPI, offline).">
-        <span class="switch-field__label" data-i18n="appearance.readOutput">Czytaj odpowiedzi na glos</span>
-        <span class="switch">
-          <input type="checkbox" id="sound-read-output-toggle" class="switch__input" />
-          <span class="switch__track"><span class="switch__thumb"></span></span>
-        </span>
-      </label>
-      <!-- Sekwencja startowa: czysta ozdoba, mozna wylaczyc. Nie blokuje
-           sesji - PTY startuje pod spodem niezaleznie od animacji. -->
-      <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">
-        <span class="switch-field__text">
-          <span class="switch-field__label" data-i18n="boot.label">Sekwencja startowa</span>
-          <span id="boot-status" class="switch-field__status" data-i18n="boot.on">wlaczona</span>
-        </span>
-        <span class="switch">
-          <input type="checkbox" id="boot-toggle" class="switch__input" />
-          <span class="switch__track"><span class="switch__thumb"></span></span>
-        </span>
       </label>
       <!-- D5: powiadomienie o aktualizacji. Mieszka TUTAJ, bo `appearance` jest
            w REQUIRED_WIDGETS (src/layouts.js), wiec zaden preset ukladu nie moze
@@ -478,6 +424,10 @@
         <button id="palette-open" class="palette-chip" data-i18n-title="palette.chip.title" title="Paleta komend (Ctrl+K)">
           <kbd>Ctrl</kbd><kbd>K</kbd>
         </button>
+        <!-- TERMINAL_CUSTOMIZER_PLAN.md §3: manualny trigger, zeby Ctrl+L nie byl jedyna droga wejscia. -->
+        <button id="termcustom-open" class="palette-chip" data-i18n-title="termcustom.chip.title" title="Ustawienia (Ctrl+L)">
+          <kbd>Ctrl</kbd><kbd>L</kbd>
+        </button>
       </div>
       <!-- Zakladki sesji. Kazda ma wlasny proces PTY, wlasny kontekst i wlasny
            bufor xterm; tu renderujemy tylko ich naglowki (budowane z JS). -->
@@ -514,6 +464,162 @@
         <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.nav">nawigacja</span></span>
         <span><kbd>Enter</kbd> <span data-i18n="palette.foot.use">uzyj</span></span>
         <span><kbd>Shift</kbd>+<kbd>Enter</kbd> <span data-i18n="palette.foot.send">wyslij prompt</span></span>
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Ustawienia (Ctrl+L) ================= -->
+  <!-- TERMINAL_CUSTOMIZER_PLAN.md - nakladka pusta w markupie tylko dla
+       statycznych pol (nie ma listy budowanej z JS jak paleta), ale otwieranie
+       /zamykanie /wiazanie zyje w modules/termcustom.js, tak jak paleta zyje w
+       modules/palette.js. Global, nie per-tab (§0).
+       Rozszerzone 2026-08-13 (Mati): przeniesiono tu dzwiek + sekwencje
+       startowa z w-appearance - odchudzenie lewego panelu. Modul/plik/ids
+       zostaly nazwane "termcustom" (historyczne), ale nakladka jest teraz
+       ogolnymi Ustawieniami, nie tylko wygladem terminala - stad dwie sekcje. -->
+  <div id="termcustom" class="termcustom" hidden>
+    <div class="termcustom__backdrop" data-termcustom-close></div>
+    <div class="termcustom__modal" role="dialog" aria-modal="true" aria-label="Ustawienia">
+      <div class="termcustom__bar">
+        <span class="termcustom__glyph">⌗</span>
+        <span class="termcustom__title" data-i18n="termcustom.title">Ustawienia</span>
+      </div>
+      <div class="termcustom__body">
+        <h3 class="termcustom__section" data-i18n="termcustom.section.appearance">Wyglad terminala</h3>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.fontFamily">Czcionka</span>
+          <select id="termcustom-font-family" class="profile-select">
+            <option value='Cascadia Code, Consolas, "Courier New", monospace'>Cascadia Code</option>
+            <option value="Consolas, monospace">Consolas</option>
+            <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
+            <option value="'Fira Code', monospace">Fira Code</option>
+            <option value="'Courier New', monospace">Courier New</option>
+            <option value="monospace">System default</option>
+            <option value="__custom__" data-i18n="termcustom.fontFamily.custom">Custom…</option>
+          </select>
+        </label>
+        <label id="termcustom-font-family-custom-field" class="ui-field" hidden>
+          <input
+            type="text"
+            id="termcustom-font-family-custom"
+            class="profile-select"
+            autocomplete="off"
+            spellcheck="false"
+            data-i18n-ph="termcustom.fontFamily.customPh"
+            placeholder="np. 'Iosevka', monospace"
+          />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.fontSize">Rozmiar czcionki</span>
+          <input type="number" id="termcustom-font-size" min="8" max="32" step="1" />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.lineHeight">Wysokosc linii</span>
+          <input type="number" id="termcustom-line-height" min="0.8" max="3" step="0.1" />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.letterSpacing">Odstepy liter (px)</span>
+          <input type="number" id="termcustom-letter-spacing" min="-5" max="20" step="1" />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.cursorStyle">Styl kursora</span>
+          <select id="termcustom-cursor-style" class="profile-select">
+            <option value="block" data-i18n="termcustom.cursorStyle.block">Blok</option>
+            <option value="underline" data-i18n="termcustom.cursorStyle.underline">Podkreslenie</option>
+            <option value="bar" data-i18n="termcustom.cursorStyle.bar">Kreska</option>
+          </select>
+        </label>
+        <label id="termcustom-cursor-blink-field" class="switch-field">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="termcustom.cursorBlink">Migajacy kursor</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="termcustom-cursor-blink" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.scrollback">Bufor przewijania (linie)</span>
+          <input type="number" id="termcustom-scrollback" min="0" max="1000000" step="500" />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.bgOpacity">Przezroczystosc tla (%)</span>
+          <input type="range" id="termcustom-bg-opacity" min="0" max="100" step="1" />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.bgBlur">Rozmycie tla (px)</span>
+          <input type="range" id="termcustom-bg-blur" min="0" max="20" step="1" />
+        </label>
+        <!-- 2026-08-13 (Mati): obraz tla - wymaga allowTransparency (terminals.js)
+             i data: URI (CSP img-src). Wybor i odczyt pliku zyje W MAIN
+             (main.js: termcustom:pickBgImage), renderer tylko dostaje dataUrl. -->
+        <div class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.bgImage">Obraz tla</span>
+          <div class="termcustom__bgimage-row">
+            <button type="button" id="termcustom-bg-image-pick" class="termcustom__reset" data-i18n="termcustom.bgImage.pick">Wybierz...</button>
+            <button type="button" id="termcustom-bg-image-clear" class="termcustom__reset" data-i18n="termcustom.bgImage.clear">Usun</button>
+          </div>
+          <span id="termcustom-bg-image-status" class="ui-field__label"></span>
+        </div>
+
+        <h3 class="termcustom__section" data-i18n="termcustom.section.sound">Dzwiek i start</h3>
+        <!-- Dzwiek: sfx/glosy przy interakcjach. mpv opcjonalny - brak na PATH
+             to cichy fallback (soundManager.js), ten toggle tylko wlacza/wylacza
+             odtwarzanie po stronie renderera + persystuje preferencje.
+             Przeniesione z w-appearance 2026-08-13 (Mati: odchudzenie panelu). -->
+        <label id="sound-field" class="switch-field" data-i18n-title="appearance.sound.hint" title="Dzwiekowe sprzezenie zwrotne (klawisze, zakladki, przelaczniki). Wymaga mpv na PATH - w przeciwnym razie cicho nic nie robi.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="appearance.sound">Dzwiek</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="sound-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="appearance.keystrokeSound">Dzwiek klawiszy</span>
+          <select id="sound-keystroke-variant" class="profile-select">
+            <option value="mechanical">Mechanical</option>
+            <option value="soft">Soft</option>
+            <option value="scifi">Sci-fi</option>
+            <option value="typewriter">Typewriter</option>
+          </select>
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="appearance.volume">Glosnosc</span>
+          <input type="range" id="sound-volume" min="0" max="100" />
+        </label>
+        <!-- SS11.1: minimalny czas tury przed odtworzeniem "All done" (turn-end
+             detection w observer.js / checkTurnEnd() w main.js). 0 = kazda tura. -->
+        <label class="ui-field" data-i18n-title="appearance.longTaskMinutes.hint" title="Minimalny czas trwania tury Claude, zanim odtworzy sie glos &quot;All done&quot;. 0 = ogloszaj kazda ture.">
+          <span class="ui-field__label" data-i18n="appearance.longTaskMinutes">Ogloszenie "Gotowe" po (min)</span>
+          <input type="number" id="sound-long-task-minutes" min="0" max="180" step="1" />
+        </label>
+        <!-- SS11.2: opcjonalne odczytywanie odpowiedzi Claude na glos (Windows
+             SAPI, offline - src/tts.js). Domyslnie wylaczone. -->
+        <label class="switch-field" data-i18n-title="appearance.readOutput.hint" title="Odczytuj odpowiedzi Claude na glos po kazdej turze (Windows SAPI, offline).">
+          <span class="switch-field__label" data-i18n="appearance.readOutput">Czytaj odpowiedzi na glos</span>
+          <span class="switch">
+            <input type="checkbox" id="sound-read-output-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+        <!-- Sekwencja startowa: czysta ozdoba, mozna wylaczyc. Nie blokuje
+             sesji - PTY startuje pod spodem niezaleznie od animacji. -->
+        <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="boot.label">Sekwencja startowa</span>
+            <span id="boot-status" class="switch-field__status" data-i18n="boot.on">wlaczona</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="boot-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+      </div>
+      <div class="termcustom__foot">
+        <button type="button" id="termcustom-reset" class="termcustom__reset" data-i18n="termcustom.reset">Przywroc domyslne</button>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>

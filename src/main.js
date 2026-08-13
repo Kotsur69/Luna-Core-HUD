@@ -12,7 +12,7 @@
 //   - odsyla surowy strumien stdout PTY do renderera do wyswietlenia/parsowania.
 // ============================================================================
 
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -1068,6 +1068,36 @@ function registerIpc() {
       narrationManager.setVolume(next.soundVolume);
     }
     return next;
+  });
+
+  // Terminal Appearance Customizer §2: background image. The renderer's CSP
+  // only allows 'self'/data: for img-src, so a raw file path could never be
+  // used as a CSS background-image - this reads the file HERE and hands back
+  // a data: URI. Capped at 4MB source size so ui.local.json (which stores the
+  // encoded result directly, same as every other pref) doesn't balloon.
+  const BG_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+  const BG_IMAGE_MIME = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+  };
+  ipcMain.handle('termcustom:pickBgImage', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Wybierz obraz tla terminala',
+      filters: [{ name: 'Obrazy', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+      properties: ['openFile'],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+
+    const filePath = result.filePaths[0];
+    const mime = BG_IMAGE_MIME[path.extname(filePath).toLowerCase()];
+    if (!mime) return { error: 'unsupported' };
+    if (fs.statSync(filePath).size > BG_IMAGE_MAX_BYTES) return { error: 'tooLarge' };
+
+    const dataUrl = `data:${mime};base64,${fs.readFileSync(filePath).toString('base64')}`;
+    return { dataUrl };
   });
 
   // Sound feedback: renderer never touches mpv directly (contextIsolation).

@@ -477,6 +477,49 @@ body::after {
 }
 .profile-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ---- Liczbowe / suwakowe pola (dotad bez stylu -> biale natywne kontrolki) -
+   sound-volume, sound-long-task-minutes i kazde pole termcustom (§2). Jedna
+   globalna regula po typie, bo zaden z tych inputow nie ma wlasnej klasy. */
+input[type="number"] {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--edge);
+  background: var(--bg-panel-2);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+input[type="number"]:focus { outline: none; border-color: var(--edge-glow); }
+
+input[type="range"] {
+  width: 100%;
+  height: 18px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-panel-2);
+  border: var(--border-w) solid var(--edge);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  border-radius: 50%;
+  border: none;
+  background: var(--neon-magenta);
+  box-shadow: 0 0 var(--glow-size-sm) var(--neon-magenta);
+}
+input[type="range"]:focus { outline: none; }
+input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-size-md) var(--neon-magenta); }
+
 /* ---- Pole z etykieta (motyw / jezyk) -------------------------------------- */
 
 .ui-field { display: flex; flex-direction: column; gap: 5px; }
@@ -485,6 +528,18 @@ body::after {
   font-size: 11px;
   color: var(--text-dim);
   letter-spacing: 0.3px;
+}
+
+/* Confirms a persisted value (termcustom.js's delegated 'change' listener) -
+   nothing here has a Save button, so this is the only feedback a knob landed. */
+.ui-field.is-confirmed .profile-select,
+.ui-field.is-confirmed input,
+.switch-field.is-confirmed .switch__track {
+  animation: field-confirm var(--dur-normal) var(--ease-smooth);
+}
+@keyframes field-confirm {
+  0%   { box-shadow: 0 0 0 0 rgba(95, 242, 214, 0.55); }
+  100% { box-shadow: 0 0 0 10px rgba(95, 242, 214, 0); }
 }
 
 /* ---- Status PTY ----------------------------------------------------------- */
@@ -686,10 +741,21 @@ body::after {
   min-height: 0;
   padding: 8px 10px;
   position: relative;
+  /* background-image is set inline by terminals.js (termHost.style) when a
+     custom background is chosen - empty by default, these three only matter
+     once that happens. Sits on the ANCESTOR of .terminal__pane on purpose:
+     see applyTerminalAppearance()'s termBgImage comment. */
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 /* Jeden pane na sesje; w tle zostaja zamontowane, ale niewidoczne, wiec
    xterm zachowuje ich scrollback bez ponownego renderowania. */
-.terminal__pane { position: absolute; inset: 8px 10px; display: none; }
+/* TERMINAL_CUSTOMIZER_PLAN.md §2/§4: pure CSS, no xterm involvement - the
+   value is a plain px length, set/removed by terminals.js's
+   applyTerminalAppearance(). Defaults to 0px (no blur) via the var() fallback
+   so a launch before that ever runs looks exactly as before this knob existed. */
+.terminal__pane { position: absolute; inset: 8px 10px; display: none; backdrop-filter: blur(var(--term-blur, 0px)); }
 /* E3: miekkie wejscie panelu przy zmianie zakladki.
    C1c odlozylo pelny crossfade, bo wymagalby JS-a trzymajacego stary panel przy
    zyciu, a xterm NIE MOZE byc animowany w trakcie mierzenia sie. Tu wchodzi
@@ -1518,6 +1584,119 @@ body::after {
   font-size: 10px;
 }
 
+/* ---- Personalizacja terminala (Ctrl+L) ------------------------------------
+   Ta sama nakladka co paleta (fixed + backdrop + wysrodkowany modal), ale
+   cialo to pionowa lista pol formularza zamiast budowanej z JS listy wynikow -
+   stad wlasna klasa zamiast .palette__list. TERMINAL_CUSTOMIZER_PLAN.md §3. */
+
+.termcustom {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 10vh;
+}
+.termcustom[hidden] { display: none; }
+
+.termcustom__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 4, 12, 0.66);
+  backdrop-filter: blur(2px);
+}
+
+.termcustom__modal {
+  position: relative;
+  width: min(420px, 92vw);
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  border: var(--border-w) solid var(--edge-glow);
+  background: linear-gradient(160deg, var(--bg-panel), var(--bg-panel-2));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6), 0 0 40px var(--glow);
+  overflow: hidden;
+  animation: palette-in var(--dur-fast) var(--ease-sharp);
+}
+
+.termcustom__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: var(--border-w) solid var(--edge);
+}
+.termcustom__glyph {
+  color: var(--neon-magenta);
+  filter: drop-shadow(0 0 6px var(--neon-magenta));
+  font-size: 16px;
+}
+.termcustom__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.termcustom__body {
+  padding: 14px 16px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Section divider (2026-08-13: the overlay grew a second section - Wyglad
+   terminala + Dzwiek i start - once sound/boot moved in from w-appearance). */
+.termcustom__section {
+  margin: 0 0 10px;
+  padding-top: 14px;
+  border-top: var(--border-w) solid var(--edge);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+.termcustom__body > .termcustom__section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.termcustom__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 16px;
+  border-top: var(--border-w) solid var(--edge);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.termcustom__foot kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  border: var(--border-w) solid var(--edge);
+  background: var(--bg-panel-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.termcustom__reset {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
+  background: var(--bg-panel-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
+}
+.termcustom__reset:hover { color: var(--neon-cyan); border-color: var(--edge-glow); }
+
+.termcustom__bgimage-row { display: flex; gap: 8px; }
+.termcustom__bgimage-row .termcustom__reset { flex: 1; }
+
 /* ---- Sekwencja startowa (boot) ----------------------------------------------
    Ozdobna nakladka nad gotowym UI. Nie blokuje sesji (PTY leci pod spodem) i nie
    kosztuje ani jednego tokenu - to czysty CSS + kilka wierszy w rendererze.
@@ -1701,6 +1880,10 @@ body::after {
   border-radius: var(--radius);
   font-size: 12px;
 }
+/* Child of a flex context ignores the default [hidden] - must force it, same
+   fix already applied to .badge above. Pre-existing bug, surfaced now that
+   fewer fields sit between #lang-switcher and this element (2026-08-13). */
+.update[hidden] { display: none; }
 
 /* Jest co pobrac / zainstalowac - jedyny stan, ktory wolno wyroznic. */
 .update.is-available {

@@ -7,37 +7,31 @@
 // xterm palettes through term.options, and the text through applyStatic() plus
 // a language broadcast that has every module re-render its own dynamic strings.
 //
-// A2: this widget's root also hosts boot.js's toggle (mountBoot) - same
-// one-root-two-owners shape as context.js + spark.js. `activeThemeId` is kept
-// at module scope (mirroring autocompact's armed flag / switchers'
-// currentProfileId) so a remount repaints the select from truth instead of
-// its template's first authored <option>; the language equivalent is already
-// available as window.i18n.lang, so no separate variable is needed for it.
+// `activeThemeId` is kept at module scope (mirroring autocompact's armed flag /
+// switchers' currentProfileId) so a remount repaints the select from truth
+// instead of its template's first authored <option>; the language equivalent
+// is already available as window.i18n.lang, so no separate variable is needed
+// for it.
+//
+// 2026-08-13: sound settings and the boot-sequence toggle (mountBoot) moved
+// OUT of this widget into termcustom.js's Settings overlay (Ctrl+L) - Mati
+// wanted the left panel decluttered down to theme/layout/language. This
+// module no longer imports sound.js's setKeystrokeVariant or boot.js at all.
+// See TERMINAL_CUSTOMIZER_PLAN.md.
 // ============================================================================
 
 'use strict';
 
 import { emitLangChange } from './bus.js';
-import { applyTerminalTheme } from './terminals.js';
+import { applyTerminalTheme, applyTerminalAppearance } from './terminals.js';
 import { defineWidget } from './registry.js';
-import { mountBoot, startBoot } from './boot.js';
 import { mountUpdate } from './update.js';
 import { getLayouts, getActiveLayoutId, selectLayout } from './layout.js';
 import { loc } from './util.js';
-import { sfx, setKeystrokeVariant } from './sound.js';
+import { sfx } from './sound.js';
 
 let themesById = new Map();
 let activeThemeId = null;
-
-// Mirrors activeThemeId's role: module state so a remount repaints the
-// controls from truth instead of the template's authored defaults.
-let soundPrefs = {
-  enabled: true,
-  volume: 70,
-  keystrokeVariant: 'mechanical',
-  longTaskMinutes: 10,
-  readOutputEnabled: false,
-};
 
 // Elements of the current mount, or null when this widget is not on screen.
 let els = null;
@@ -124,16 +118,6 @@ function renderLayoutSwitcher() {
   if (active) els.layoutSwitcher.value = active;
 }
 
-/** Repaints the sound controls (toggle, volume, keystroke variant) from module state. */
-function renderSoundSwitcher() {
-  if (!els) return;
-  els.soundToggle.checked = soundPrefs.enabled;
-  els.soundVolume.value = soundPrefs.volume;
-  els.soundKeystrokeVariant.value = soundPrefs.keystrokeVariant;
-  els.soundLongTaskMinutes.value = soundPrefs.longTaskMinutes;
-  els.soundReadOutputToggle.checked = soundPrefs.readOutputEnabled;
-}
-
 /** Ids of every loaded theme, for the console hook and the probe. */
 export function getThemeIds() {
   return [...themesById.keys()];
@@ -156,21 +140,19 @@ export function selectTheme(id) {
 }
 
 export async function initAppearance() {
-  let prefs = {
-    theme: 'cyberpunk',
-    lang: 'pl',
-    boot: true,
-    soundEnabled: true,
-    soundVolume: 70,
-    soundKeystrokeVariant: 'mechanical',
-    soundLongTaskMinutes: 10,
-    soundReadOutputEnabled: false,
-  };
+  let prefs = { theme: 'cyberpunk', lang: 'pl' };
   try {
     prefs = (await window.lunacore.getUiPrefs()) || prefs;
   } catch {
     /* no preferences - stay on the defaults */
   }
+
+  // Before any tab exists (initSessions() runs after initAppearance() in
+  // renderer.js), so this only updates terminals.js's currentTermAppearance -
+  // ensureTerm() then picks it up for the very first tab, same as
+  // currentTermTheme already does for the theme (TERMINAL_CUSTOMIZER_PLAN.md
+  // §4/§5). A fallback `prefs` with no term* keys is a safe no-op here.
+  applyTerminalAppearance(prefs);
 
   // Language first, so applyStatic catches the whole DOM on startup.
   applyLang(prefs.lang);
@@ -178,17 +160,6 @@ export async function initAppearance() {
   // The widget already mounted (initLayout runs first), so its layout options
   // were built in the authored language - relabel them now that we know better.
   renderLayoutSwitcher();
-
-  soundPrefs = {
-    enabled: prefs.soundEnabled !== false,
-    volume: typeof prefs.soundVolume === 'number' ? prefs.soundVolume : 70,
-    keystrokeVariant: prefs.soundKeystrokeVariant || 'mechanical',
-    longTaskMinutes:
-      typeof prefs.soundLongTaskMinutes === 'number' ? prefs.soundLongTaskMinutes : 10,
-    readOutputEnabled: prefs.soundReadOutputEnabled === true,
-  };
-  setKeystrokeVariant(soundPrefs.keystrokeVariant);
-  renderSoundSwitcher();
 
   // Themes: fill the list and apply the active one (or the first available).
   try {
@@ -205,10 +176,6 @@ export async function initAppearance() {
   } catch {
     /* no themes - the built-in styles.css look stays */
   }
-
-  // Last, because the sequence should already know the language and the colours
-  // of the chosen theme - nothing should jump mid-animation.
-  startBoot(prefs.boot !== false);
 }
 
 defineWidget({
@@ -220,11 +187,6 @@ defineWidget({
       themeSwitcher: root.querySelector('#theme-switcher'),
       layoutSwitcher: root.querySelector('#layout-switcher'),
       langSwitcher: root.querySelector('#lang-switcher'),
-      soundToggle: root.querySelector('#sound-toggle'),
-      soundVolume: root.querySelector('#sound-volume'),
-      soundKeystrokeVariant: root.querySelector('#sound-keystroke-variant'),
-      soundLongTaskMinutes: root.querySelector('#sound-long-task-minutes'),
-      soundReadOutputToggle: root.querySelector('#sound-read-output-toggle'),
     };
 
     // Repaint from module state - initAppearance() only runs once at launch,
@@ -232,7 +194,6 @@ defineWidget({
     renderLangSwitcher();
     renderThemeSwitcher();
     renderLayoutSwitcher();
-    renderSoundSwitcher();
 
     els.themeSwitcher.addEventListener('change', () => {
       sfx.modeToggle();
@@ -260,43 +221,12 @@ defineWidget({
       renderLayoutSwitcher();
     });
 
-    els.soundToggle.addEventListener('change', () => {
-      soundPrefs.enabled = els.soundToggle.checked;
-      window.lunacore.setUiPrefs({ soundEnabled: soundPrefs.enabled });
-    });
-
-    els.soundVolume.addEventListener('change', () => {
-      soundPrefs.volume = Number(els.soundVolume.value);
-      window.lunacore.setUiPrefs({ soundVolume: soundPrefs.volume });
-    });
-
-    els.soundKeystrokeVariant.addEventListener('change', () => {
-      soundPrefs.keystrokeVariant = els.soundKeystrokeVariant.value;
-      setKeystrokeVariant(soundPrefs.keystrokeVariant);
-      window.lunacore.setUiPrefs({ soundKeystrokeVariant: soundPrefs.keystrokeVariant });
-      // Audition-by-ear: hear the clip you just picked, not just its label.
-      sfx.keystroke();
-    });
-
-    els.soundLongTaskMinutes.addEventListener('change', () => {
-      const n = Number(els.soundLongTaskMinutes.value);
-      soundPrefs.longTaskMinutes = Number.isFinite(n) && n >= 0 ? Math.round(n) : 10;
-      els.soundLongTaskMinutes.value = soundPrefs.longTaskMinutes;
-      window.lunacore.setUiPrefs({ soundLongTaskMinutes: soundPrefs.longTaskMinutes });
-    });
-
-    els.soundReadOutputToggle.addEventListener('change', () => {
-      soundPrefs.readOutputEnabled = els.soundReadOutputToggle.checked;
-      window.lunacore.setUiPrefs({ soundReadOutputEnabled: soundPrefs.readOutputEnabled });
-    });
-
-    const offBoot = mountBoot(root);
-    // D5. Same one-root-two-owners shape as boot above; see modules/update.js
-    // for why the update notice lives in THIS widget and not one of its own.
+    // D5. update.js's notice lives in THIS widget (not one of its own)
+    // because `appearance` is in REQUIRED_WIDGETS - no layout preset can omit
+    // it, unlike a standalone widget a preset might drop.
     const offUpdate = mountUpdate(root);
 
     return () => {
-      offBoot();
       offUpdate();
       els = null;
     };
