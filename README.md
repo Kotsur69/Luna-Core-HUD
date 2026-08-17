@@ -65,8 +65,10 @@ the complete list — all of it verifiable in the linked source.
 | *(no file)* — node's own `os` module | Total/free RAM, per-core CPU tick counters, uptime, every 2 s, for the System widget. No file, no shell command, no process list — LunaCore can tell you the machine is at 80% RAM, never **what** is using it. Off switch: `ENABLE_TELEMETRY = false` in [`src/main.js`](src/main.js). | [`src/telemetry.js`](src/telemetry.js) |
 | *(no file)* — `Get-Counter` via `powershell.exe` | GPU usage for the System widget, every 3 s. Windows-only, vendor-agnostic: the same DXGI "GPU Engine" counters Task Manager's own GPU column reads — no NVIDIA/AMD SDK. Resolves `null` (row shows `--`) off Windows or if the counter is unavailable. | [`src/gpu.js`](src/gpu.js) |
 | Whatever paths the Active-Files Heatmap is currently tracking | `fs.existsSync` per file, every ~5 s, so a file deleted outside an Edit/Write (e.g. a terminal `rm`) shows as **deleted** instead of silently keeping its last diff stat. The renderer has no `fs` access itself (context isolation) — this is a narrow, read-only IPC round trip, not a directory scan. | [`src/main.js`](src/main.js) (`files:check-exist`) |
+| *(no file)* — the **system clipboard** — **OFF by default, opt-in** | The Clipboard widget's history. This is the only thing in this table LunaCore does **not** read unless you switch it on, and the reason is that it is the only one that would see things you never showed it — anything you copy anywhere on the machine, password managers included. Unchecked, the watcher is not running at all, not merely hidden. Checked, it polls `clipboard.readText()` every 1.2 s and keeps the last 20 text clips (clips over 4000 characters are skipped entirely). Pref: `clipboardEnabled` in `ui.local.json`. | [`src/clipboard.js`](src/clipboard.js) |
+| *(no file)* — the default **microphone's** mute flag via `powershell.exe` | The Devices widget reads whether your mic is muted — on mount, after you press the button, and when you press refresh. **No poller**, and nothing here can hear anything: it is the same Core Audio endpoint property Windows' own mic-mute key sets, not an audio stream. Mute is used precisely because it is reversible and readable; LunaCore never *disables* a device. | [`src/devices.js`](src/devices.js) |
 
-**Writes — exactly two files**, both inside one directory:
+**Writes — only inside one directory:**
 
 | Build | Directory |
 |-------|-----------|
@@ -74,7 +76,8 @@ the complete list — all of it verifiable in the linked source.
 | Portable | `LunaCore-config\`, next to the `.exe` |
 | Running from a clone | the repo's own `config/` |
 
-- `ui.local.json` — theme, language, active profile, layout preset, boot toggle
+- `ui.local.json` — theme, language, active profile, layout preset, boot toggle,
+  which panels you folded shut and any column widths you dragged
   ([`src/uiprefs.js`](src/uiprefs.js))
 - `scratchpad.local.md` — whatever you typed into the scratchpad
   ([`src/scratchpad.js`](src/scratchpad.js))
@@ -84,6 +87,12 @@ the complete list — all of it verifiable in the linked source.
   base-then-`.local.json`-override merge as every other config file — never
   touches the shipped `config/projects.json`.
   ([`src/projects.js`](src/projects.js))
+- `todo.local.json` — the pin-board todo list
+  ([`src/todo.js`](src/todo.js))
+- `clipboard.local.json` — **only while the Clipboard widget is switched on**:
+  the last 20 text clips, in plain text. Switching the widget off stops the
+  watcher; **Clear history** deletes this file.
+  ([`src/clipboard.js`](src/clipboard.js))
 
 Nothing else anywhere on your disk is written. The shipped `config/*.json`
 defaults are read-only; your overrides live beside them as `*.local.json` and are
@@ -791,18 +800,64 @@ reset countdown between polls. Set `ENABLE_USAGE_METER = false` at the top of
 [`src/main.js`](src/main.js) to disable the network call entirely (tile shows
 "off"). The bars animate via `transform: scaleX(var(--usage))` — no layout thrash.
 
+## Panels — folding and resizing
+
+**Click any panel title to fold it shut**, chevron and all; click again to open
+it. The whole title row is the handle, so controls that live in a title (the
+ports filter, the copy-transcript-path button) still work — a click that lands
+on a real control is left alone.
+
+**Drag the line between two columns to resize them.** Double-click that line to
+put the preset back where it started, and arrow keys nudge it 16px at a time
+once the handle has focus. One rule governs what is draggable, and it is what
+keeps a resized HUD from breaking the next time you resize the window:
+
+> An elastic (`fr`) track never becomes a fixed one.
+
+So a handle beside a fixed column drags that column and lets the elastic one
+absorb it; a handle between two elastic columns shifts the ratio and keeps
+their sum. A boundary that offers neither — nothing elastic left in the row, or
+a track the parser can't describe — gets no handle at all rather than a handle
+that does something surprising. Rows aren't resizable: presets stack regions by
+name, so a row border is rarely one continuous line to grab.
+
+Both are remembered in `ui.local.json`, widths per layout preset (a width
+dragged in `classic` means nothing in `focus`). Change a preset's column count
+in `config/layouts.json` and its saved widths are dropped rather than smeared
+across the wrong columns. See
+[`src/renderer/modules/panels.js`](src/renderer/modules/panels.js).
+
 ## Theming
 
 The whole look is a set of CSS custom-property tokens, so a "theme" is just a
-values file. Ships with **cyberpunk** (default), **synthwave**, **matrix**,
-**nord**, and **light**, defined in [`config/themes.json`](config/themes.json);
+values file. **18 ship**, defined in [`config/themes.json`](config/themes.json):
+
+| | |
+|---|---|
+| **Neon** | cyberpunk *(default)*, synthwave, vapor, crimson |
+| **Terminal** | matrix, amber-crt, blueprint |
+| **Editor** | nord, tokyo-night, dracula, gruvbox, solarized |
+| **Quiet** | void, glacier |
+| **Light** | light, paper, newsprint, e-ink |
+
 `src/theme.js` loads and validates them (falling back to a built-in cyberpunk if
 the file is broken, same as `profiles.js`). Pick one from the **Appearance**
 section in the left panel — it applies live, rewriting the CSS tokens on
-`documentElement` *and* the xterm terminal palette, no reload. Each theme sets
-both the UI vars (`--bg`, `--neon-magenta`, `--btn-grad`, `--glow`…) and the
-terminal's ANSI colours. Drop a `config/themes.local.json` (gitignored) to add or
-override themes by `id`.
+`documentElement` *and* the xterm terminal palette, no reload.
+
+A theme is not just a palette. The ~45-token vocabulary also covers **form**
+(radii, padding, panel gap), **typography** (three font stacks, letter spacing,
+whether titles are uppercased), **depth** (glow sizes, panel shadow), **motion**
+(four durations, three easings) and a full-screen **texture** layer — which is
+what makes `matrix` a phosphor CRT rather than green text on black, `blueprint`
+a drafting grid, `newsprint` a halftone print, and costs the flat themes
+nothing (`--texture: none`). A theme can also `extend` another and restate only
+what differs — `amber-crt` is `matrix` in amber, `vapor` is `synthwave` in
+pastel, `e-ink` is `paper` with the colour taken out.
+
+Drop a `config/themes.local.json` (gitignored) to add or override themes by
+`id`. An unknown token there is dropped with a warning rather than taking the
+whole theme down with it.
 
 ## Language (PL / EN)
 

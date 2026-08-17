@@ -214,18 +214,24 @@ test('config/layouts.json - classic reproduces today\'s layout', () => {
   // E1 inserted `telemetry` between usage and skilltracker in ALL presets;
   // the Active-Files Heatmap added `activefiles` right after skilltracker (plan §8);
   // §6.1 added `sessiontimeline` right after that; Media Deck added `media`
-  // right after `telemetry` (app-scoped like usage/telemetry, not per-session).
+  // right after `telemetry` (app-scoped like usage/telemetry, not per-session);
+  // the widget plan then added `devices` next to `media` (both app-scoped OS
+  // controls) and `todo`/`clipboard` after `scratchpad` (all three are the
+  // "things I keep on the side" group).
   // This assertion exists so that a change like that doesn't slip by unnoticed.
   assert.deepEqual(l.slots.right, [
     'context',
     'usage',
     'telemetry',
     'media',
+    'devices',
     'skilltracker',
     'activefiles',
     'sessiontimeline',
     'ports',
     'scratchpad',
+    'todo',
+    'clipboard',
   ]);
   assert.deepEqual(l.chrome, { brand: 'left', status: 'left' });
 });

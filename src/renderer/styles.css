@@ -212,6 +212,10 @@ html, body {
   height: 100vh;
   gap: 1px;
   background: var(--edge);
+  /* C2: the containing block for .splitter, which is absolutely positioned over
+     the grid gaps. Without this the handles would resolve against the viewport
+     and sit correctly only while .app happened to fill it. */
+  position: relative;
 }
 
 /* ---- Texture overlay (C3) -------------------------------------------------
@@ -2221,6 +2225,177 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    the carrier of meaning here is COLOR (the LED, the PTY dot, the context
    alarm), and motion was only ever reinforcement.
    ---------------------------------------------------------------------------- */
+
+/* ----------------------------------------------------------------------------
+   Clipboard history, pin-board todos, device panel
+   (LUNACORE_HUD_WIDGET_PLAN.md). Rows reuse .ports-list's shape - including
+   `flex: none`, without which a flex child collapses instead of scrolling,
+   which this stylesheet has now been bitten by three times (.skill-entry,
+   .prompt-row, .port-item).
+   ---------------------------------------------------------------------------- */
+
+.clip-toggle,
+.todo-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.clip-toggle input { flex: none; }
+.todo-form input[type='text'] { flex: 1; min-width: 0; }
+
+.clip-list,
+.todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.clip-item,
+.todo-item {
+  display: grid;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-2);
+  border: var(--border-w) solid var(--edge);
+  font-size: 12px;
+}
+.clip-item { grid-template-columns: 1fr auto; }
+.todo-item { grid-template-columns: auto 1fr auto; }
+
+.clip-item__text,
+.todo-item__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A ticked item stays readable rather than fading out: it is still a record of
+   what was done, and dimming it to near-invisibility is how a board quietly
+   loses its own history. */
+.todo-item--done .todo-item__text {
+  text-decoration: line-through;
+  color: var(--text-dim);
+}
+
+.clip-item__actions,
+.todo-item__actions {
+  display: flex;
+  gap: 4px;
+}
+
+.dev-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.dev-row__label { color: var(--text-dim); }
+.dev-row__state {
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* Colour carries the meaning on its own (the reduced-motion rule below relies
+   on exactly that), so these two never depend on an animation to be read. */
+.dev-row__state.is-muted { color: var(--neon-magenta, var(--text-dim)); }
+.dev-row__state.is-live { color: var(--neon-cyan); }
+
+/* ---- C2: collapsible panels ------------------------------------------------
+   The whole title row is the handle, so the target is the width of the panel
+   rather than a 12px chevron. Titles that already carry their own controls
+   (ports' filter, context's copy-path) keep working - modules/panels.js lets a
+   click through when it lands on a real control. */
+.panel__title--fold {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+/* `.usage-head` is also flex with `justify-content: space-between`, which would
+   push the chevron away from its own title text. Keeping the label as the
+   grower puts the space back where that rule wanted it - between the text and
+   the control on the right - with the chevron pinned to the label. */
+.panel__title--fold.usage-head > span:not(.panel__fold):not(.count) { flex: 1; }
+
+.panel__fold {
+  flex: none;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-dim);
+  transition: transform var(--dur-fast) var(--ease-sharp);
+}
+.panel__title--fold:hover { color: var(--text); }
+.panel__title--fold:focus-visible {
+  outline: var(--border-w) solid var(--edge-glow);
+  outline-offset: 2px;
+}
+
+/* The fold itself is a display switch, not an animation: the only way to
+   animate a section's height is to drive height/grid-rows, which §C1c rules
+   out, and wrapping every widget body in an extra element to get around that
+   would change the DOM 20 widgets already build against. So the chevron
+   carries the motion and the body just goes. */
+.panel__section[data-collapsed] { gap: 0; }
+.panel__section[data-collapsed] > *:not(.panel__title) { display: none; }
+.panel__section[data-collapsed] .panel__fold { transform: rotate(-90deg); }
+
+/* ---- C2: resizable regions -------------------------------------------------
+   A splitter is parked over the 1px grid gap that already separates two
+   regions. Absolute, so it is out of flow: a splitter left in flow would be
+   auto-placed into an implicit grid cell and shove the layout sideways. This
+   is also why .app needs a positioned ancestor - see the .app rule above.
+
+   z-index 40 keeps it under the texture overlay (50), which is
+   pointer-events: none and so cannot swallow the drag. */
+.splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  transform: translateX(-50%);
+  z-index: 40;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-sharp);
+}
+.splitter::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--border-w);
+  height: 28px;
+  transform: translate(-50%, -50%);
+  background: var(--edge-glow);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-sharp);
+}
+.splitter:hover,
+.splitter.is-dragging,
+.splitter:focus-visible { background: var(--glow); }
+.splitter:hover::after,
+.splitter.is-dragging::after,
+.splitter:focus-visible::after { opacity: 1; }
+.splitter:focus-visible { outline: none; }
+
+/* While a drag is live the cursor must not flicker as the pointer crosses the
+   terminal, and no text anywhere may start selecting. */
+body.is-resizing { cursor: col-resize; user-select: none; }
+body.is-resizing .splitter { background: var(--glow); }
 
 @media (prefers-reduced-motion: reduce) {
   .boot { display: none; }

@@ -107,6 +107,36 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Writes the scratchpad content; Promise<boolean>. */
   saveScratchpad: (text) => ipcRenderer.invoke('scratchpad:write', text),
 
+  // --- Clipboard history (opt-in; see src/clipboard.js) ---
+  /** Registers a callback with the history: [{text, at}] (newest first). */
+  onClipboard: (callback) => {
+    ipcRenderer.on('clipboard:update', (_event, list) => callback(list));
+  },
+  /** Fetches { enabled: boolean, entries: [{text, at}] }. */
+  getClipboardState: () => ipcRenderer.invoke('clipboard:state'),
+  /** Turns the watcher on/off (persists the pref); Promise<{enabled, entries}>. */
+  setClipboardEnabled: (enabled) => ipcRenderer.invoke('clipboard:enable', enabled),
+  /** Puts a stored clip back on the system clipboard; Promise<boolean>. */
+  copyClipboardEntry: (text) => ipcRenderer.invoke('clipboard:copy', text),
+  /** Drops one clip; Promise with the remaining list. */
+  removeClipboardEntry: (text) => ipcRenderer.invoke('clipboard:remove', text),
+  /** Drops the whole history (and its file); Promise with the empty list. */
+  clearClipboard: () => ipcRenderer.invoke('clipboard:clear'),
+
+  // --- Pin-board todos ---
+  /** Fetches the list: [{text, done, at}]. */
+  getTodos: () => ipcRenderer.invoke('todo:read'),
+  /** Writes the whole list; Promise<boolean>. */
+  saveTodos: (list) => ipcRenderer.invoke('todo:write', list),
+
+  // --- Device panel: microphone mute ---
+  /**
+   * Reads or changes the default mic's mute state.
+   * action: 'get' | 'toggle' | 'mute' | 'unmute'.
+   * Promise resolves { muted, available } or null when there is no mic.
+   */
+  micState: (action) => ipcRenderer.invoke('devices:mic', action),
+
   // --- Usage meter (5h + week) ---
   /** Registers a callback with usage state: {fiveHour, sevenDay, ...} or {error}. */
   onUsage: (callback) => {

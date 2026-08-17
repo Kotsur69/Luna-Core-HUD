@@ -1051,8 +1051,8 @@ The original "move the elements around" ask. Only sane **after** A2.
 | # | Item | Ref | State |
 |---|------|-----|-------|
 | C1 | **Layout presets** as data | §3.1 | ✅ **DONE 2026-08-05** — 4 presets, live switching, 24 tests. See §C1a. |
-| C2 | **Collapsible + resizable panels** | §3.2 | ⏸ **DEFERRED 2026-08-05 by decision** — chevron collapse, two drag splitters, no library. Not blocked and nothing depends on it; Phase D took priority. When it lands it persists panel sizes into `ui.local.json`, which rides along on the existing merge — no ordering trap with D1. |
-| C3 | **Theme vocabulary + motion tokens** | §2.3, §C1b | ✅ **DONE 2026-08-05** — 17 → 45 tokens, 5 → 9 themes, 2 bundled faces, layout-switch stagger, 16 tests. See §C1d. |
+| C2 | **Collapsible + resizable panels** | §3.2 | ✅ **DONE 2026-08-17** — chevron collapse on every widget title, drag splitters on the column boundaries, no library. Both persist into `ui.local.json` as predicted. `src/renderer/modules/panels.js` + 27 tests. See §C2a. |
+| C3 | **Theme vocabulary + motion tokens** | §2.3, §C1b | ✅ **DONE 2026-08-05** — 17 → 45 tokens, 5 → 9 themes, 2 bundled faces, layout-switch stagger, 16 tests. See §C1d. **2026-08-17: 9 → 18 themes**, no new tokens needed — see §C2b. |
 | C4 | **Drag-and-drop rearrange** | §3.3 | ⏸ **DEFERRED 2026-08-05 by decision** — stretch. Evaluate a dep honestly before pulling one in. |
 
 #### C1a — layout presets: the design, and the one rule that makes it safe
@@ -1275,6 +1275,103 @@ threshold pulse from §C1c. Tabs are `display: none` panes, so a crossfade needs
 JS to hold the outgoing pane alive — and xterm must not be animated while it
 measures. The threshold pulse needs a JS edge-detector for the 60%/85% crossings;
 the CSS side (`--dur-*`, `--ease-bounce`) is ready for whoever builds it.
+
+#### C2a — collapsible + resizable panels as built (2026-08-17)
+
+**512 tests** (was 479). One new module, `src/renderer/modules/panels.js`, plus
+two keys in `ui.local.json` (`collapsed`, `layoutSizes`) and one call at the end
+of `applyLayout()`. Nothing in the widget contract changed and no widget was
+touched — which is the point below.
+
+**FOLD rests on an invariant that already held.** Every widget root is a
+`.panel__section` whose first child is an `<h2 class="panel__title">`; 20
+widgets obey it because the template markup was written that way, not because
+anything enforced it. That is what makes the fold generic — one decorator over
+`.panel__section[data-widget]` — instead of 20 per-widget implementations. The
+whole title row is the handle so the target is panel-wide, and a click that
+lands on a real control inside a title (ports' filter, context's copy-path) is
+let through untouched.
+
+**The bug that would have shipped.** i18n's `applyStatic()` translates by
+assigning `el.textContent`, and a dozen titles carry `data-i18n` on the `<h2>`
+itself. That assignment drops every child — so switching PL↔EN would silently
+strip the chevron out of exactly those panels and leave it in the ones whose
+title wraps its label in a `<span>`. Caught by reading `applyStatic`, not by a
+test, and it is the reason decoration is split in two: `ensureChevron()` re-runs
+on every language change, the listener wiring runs once and is guarded by a
+`data-fold-wired` flag. Attributes and listeners survive `textContent`; children
+do not.
+
+**RESIZE has one rule, and it is the whole design:**
+
+> **An elastic (`fr`) track never becomes a fixed one.**
+
+The obvious implementation — read the used pixel widths, write them back as
+`px` — is what most hand-rolled splitters do, and it breaks the HUD the next
+time the window is resized: every column is now frozen and the terminal stops
+filling the space. So a handle beside a `px` track drags *that* track and lets
+the `fr` track absorb it, and a handle between two `fr` tracks shifts the ratio
+while **keeping their sum**, which is what stops a drag stealing width from a
+third column elsewhere in the row. A boundary that can offer neither — nothing
+elastic left to absorb, or a track the parser cannot describe — gets **no
+handle at all**, because a handle that silently does nothing is worse than no
+handle. `splitterPlan()` is that decision, and it is pure, so all four shipped
+presets are pinned by test.
+
+Three smaller decisions worth recording:
+
+* **Splitters are absolutely positioned over the grid gaps**, not grid items. A
+  splitter left in flow would be auto-placed into an implicit cell and shove the
+  layout sideways. Hence `position: relative` on `.app`.
+* **`parseTracks()` bails on any value containing `(`.** `minmax()`/`repeat()`
+  hold spaces of their own, so a whitespace split would corrupt them. Bailing
+  costs that layout its handles, which is the honest outcome — this module has
+  no idea how to resize a track it cannot describe.
+* **Stored widths are validated as a whitelist, not parsed.** `ui.local.json` is
+  hand-editable and the value goes straight into an inline `style`. Two gates:
+  a coarse one in `uiprefs.js` (don't persist a novel) and the strict track
+  grammar in `panels.js` (`isSafeColumns`), at the place that does the writing.
+  A stored value is also dropped when its track count no longer matches the
+  preset's — edit `layouts.json` and old widths die rather than smearing across
+  the wrong columns.
+
+**Rows are not resizable**, deliberately: presets stack regions into rows by
+name, so a row border is rarely one continuous line to grab.
+
+**What §C1c predicted, and what happened.** That section listed panel collapse
+as the one legitimate exception to "transform and opacity only", expecting it to
+animate `grid-template-columns`. It does not. Folding a *section* (not a region)
+can only be animated by driving `height`/`grid-template-rows`, and the trick for
+that needs an extra wrapper element around every widget body — a DOM change 20
+widgets are already written against. So the chevron carries the motion and the
+body just goes. The exception §C1c reserved was not needed.
+
+**Still owed:** manual `npm start` verification — drag feel, whether the 9px
+handle is comfortable, and whether a folded panel inside `.panel__scroll` leaves
+the gap looking right.
+
+#### C2b — 9 → 18 themes (2026-08-17)
+
+**No new tokens.** Every one of the nine additions is expressed in the C3
+vocabulary as it already stood, which is the first real evidence that §C1b's
+bet paid off: the vocabulary was sized for looks nobody had designed yet, and
+nine unplanned ones needed nothing added.
+
+Added: **dracula**, **gruvbox**, **solarized**, **blueprint**, **crimson**,
+**glacier**, **vapor**, **newsprint**, **e-ink**. Four use `extends` and are a
+few dozen lines each (`crimson` ← cyberpunk, `vapor` ← synthwave, `newsprint`
+and `e-ink` ← paper) — the inheritance C3 built and, until now, only `amber-crt`
+exercised.
+
+The interesting half is `--texture`, which was the single biggest per-token
+payoff in C3 and had been used for exactly one effect (scanlines) across three
+themes. It now carries four distinct motifs: **scanlines** (cyberpunk, matrix,
+amber-crt, crimson), a **drafting grid** built from two crossed
+`repeating-linear-gradient`s (blueprint), **halftone dots** from a tiled
+`radial-gradient` (vapor, and newsprint at `--texture-blend: multiply` over
+light paper), and **diagonal hatch** (gruvbox, glacier). `--texture-size` and
+`--texture-blend` had never been set by a shipped theme before; both are now
+load-bearing.
 
 ### Phase D — Make it a product (§7)
 
@@ -1740,7 +1837,7 @@ cheap to redo and belongs in the `v0.9.1` pre-flight.
 | # | Item | State |
 |---|------|-------|
 | E1 | **`telemetry` widget** (RAM / CPU / uptime) | ✅ **DONE 2026-08-09** — `src/telemetry.js` + widget, 39 tests. See §E1a. |
-| E2 | **C2 collapsible + resizable panels** | ⏸ still deferred — next candidate. |
+| E2 | **C2 collapsible + resizable panels** | ✅ **DONE 2026-08-17** — see C2 in Phase C and §C2a. |
 | E3 | **The two motions C1c left unbuilt** | ✅ **DONE 2026-08-09** — threshold pulse + pane fade-in. See §E3a. |
 | E4 | **C4 drag-and-drop rearrange** | ⏸ still deferred — stretch. |
 

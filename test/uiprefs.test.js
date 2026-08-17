@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { clampTermPrefs } = require('../src/uiprefs.js');
+const { clampTermPrefs, cleanCollapsed, cleanLayoutSizes } = require('../src/uiprefs.js');
 
 const DEFAULTS = {
   termFontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
@@ -111,4 +111,46 @@ test('termBgImage: only a data:image/ string, otherwise null (CSP img-src)', () 
     clampTermPrefs({ termBgImage: 'data:image/png;base64,AAAA' }).termBgImage,
     'data:image/png;base64,AAAA'
   );
+});
+
+// ---- C2: collapsed / layoutSizes -------------------------------------------
+//
+// Same reject-don't-repair boundary as clampTermPrefs above. Both of these come
+// out of a hand-editable file AND back in over IPC, and layoutSizes ends up in
+// an inline style, so neither may be trusted on the way through.
+
+test('cleanCollapsed: keeps ids, drops junk, dedupes', () => {
+  assert.deepEqual(cleanCollapsed(['ports', 'ports', '', null, 42, 'todo']), ['ports', 'todo']);
+});
+
+test('cleanCollapsed: a non-array is an empty list, never a crash', () => {
+  for (const bad of [null, undefined, 'ports', 42, {}]) {
+    assert.deepEqual(cleanCollapsed(bad), []);
+  }
+});
+
+test('cleanCollapsed: caps the list and the id length', () => {
+  const many = Array.from({ length: 200 }, (_v, i) => `w${i}`);
+  assert.equal(cleanCollapsed(many).length, 64);
+  assert.deepEqual(cleanCollapsed(['x'.repeat(65)]), []);
+});
+
+test('cleanLayoutSizes: keeps a plausible columns string', () => {
+  assert.deepEqual(cleanLayoutSizes({ classic: '300px 1fr 280px' }), {
+    classic: '300px 1fr 280px',
+  });
+});
+
+test('cleanLayoutSizes: drops anything that could carry CSS of its own', () => {
+  assert.deepEqual(cleanLayoutSizes({ classic: '1fr; background: url(http://x)' }), {});
+  assert.deepEqual(cleanLayoutSizes({ classic: 'var(--x) 1fr' }), {});
+  assert.deepEqual(cleanLayoutSizes({ classic: 'x'.repeat(200) }), {});
+  assert.deepEqual(cleanLayoutSizes({ classic: 42 }), {});
+  assert.deepEqual(cleanLayoutSizes({ classic: '' }), {});
+});
+
+test('cleanLayoutSizes: a non-object is an empty map', () => {
+  for (const bad of [null, undefined, 'classic', 42, ['1fr']]) {
+    assert.deepEqual(cleanLayoutSizes(bad), {});
+  }
 });

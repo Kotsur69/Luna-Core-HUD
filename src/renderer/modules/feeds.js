@@ -26,6 +26,7 @@ import {
   emitUpdateState,
   emitTelemetryUpdate,
   emitMediaUpdate,
+  emitClipboardUpdate,
 } from './bus.js';
 
 // 7B: passive scan of listening localhost ports.
@@ -56,4 +57,11 @@ window.lunacore.onTelemetry((sample) => {
 // tabs are open - so this must NOT go through sessions.js either.
 window.lunacore.onMedia((state) => {
   emitMediaUpdate(state);
+});
+
+// Clipboard history. App-scoped like the four above - one system clipboard, no
+// matter how many tabs are open. Fires only while the watcher is enabled; when
+// it is off this channel simply stays silent (see src/clipboard.js).
+window.lunacore.onClipboard((list) => {
+  emitClipboardUpdate(Array.isArray(list) ? list : []);
 });

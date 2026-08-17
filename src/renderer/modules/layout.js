@@ -38,6 +38,7 @@ import {
   NESTED,
 } from './host.js';
 import { fitAndResize } from './terminals.js';
+import { applyPanels } from './panels.js';
 
 const appEl = document.querySelector('.app');
 const chromeEl = document.getElementById('app-chrome');
@@ -189,6 +190,14 @@ export function applyLayout(id) {
   for (const [nested, host] of Object.entries(NESTED)) {
     if (wanted.has(host) && !isMounted(nested)) mountIntoSlot(nested);
   }
+
+  // C2, and it has to be here rather than anywhere earlier: this is the first
+  // moment the shell exists in its final shape, with every widget in its
+  // region. It re-folds the sections the user had folded, overrides the
+  // preset's column widths with any this preset was dragged to, and hangs the
+  // splitters on the grid lines. `.app` was emptied in step 4, so the previous
+  // set of splitters is already gone.
+  applyPanels(layout);
 
   // The terminal's box just changed size (or moved between grid areas); xterm
   // only re-measures when told to. Safe to do while the stagger is playing: the

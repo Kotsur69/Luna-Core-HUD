@@ -12,7 +12,7 @@
 //   - relays the raw PTY stdout stream to the renderer to display/parse.
 // ============================================================================
 
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -59,6 +59,19 @@ const { GpuSampler } = require('./gpu');
 // timer - see src/media.js's header for why it owns its own IPC push rather
 // than being stamped onto another watcher's tick like GpuSampler is.
 const { MediaSampler, sendTransportCommand, getVolume, setVolume, toggleMute } = require('./media');
+
+// Clipboard history + pin-board todos + device panel (LUNACORE_HUD_WIDGET_PLAN.md).
+const {
+  ClipboardWatcher,
+  readHistory,
+  writeHistory,
+  removeEntry,
+  clearHistory,
+} = require('./clipboard');
+
+const { readTodos, writeTodos } = require('./todo');
+
+const { micState } = require('./devices');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
 const { SoundManager } = require('./soundManager');
 const { resolveSoundFile } = require('./sounds');
@@ -145,6 +158,11 @@ let telemetryWatcher = null;
 let gpuSampler = null;
 /** @type {MediaSampler | null} */
 let mediaSampler = null;
+
+// Only ever non-null while the user has the clipboard history switched ON -
+// stopping it has to actually stop the reading, not just hide the widget.
+/** @type {ClipboardWatcher | null} */
+let clipboardWatcher = null;
 /** @type {SoundManager | null} */
 let soundManager = null;
 // §11.2: separate mpv instance for spoken narration, own IPC pipe (see
@@ -818,6 +836,33 @@ function startMediaWatcher() {
   mediaSampler.start();
 }
 
+// ---- Clipboard history ------------------------------------------------------
+//
+// Unlike every other watcher here this one is USER-GATED (uiprefs
+// `clipboardEnabled`, default false) and can be started and stopped at
+// runtime, because switching the widget off must stop LunaCore reading the
+// clipboard at all - see src/clipboard.js's header for why that matters more
+// here than anywhere else in the app.
+
+function startClipboardWatcher() {
+  if (clipboardWatcher) return;
+  clipboardWatcher = new ClipboardWatcher(
+    () => clipboard.readText(),
+    (list) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('clipboard:update', list);
+      }
+    }
+  );
+  clipboardWatcher.start();
+}
+
+function stopClipboardWatcher() {
+  if (!clipboardWatcher) return;
+  clipboardWatcher.stop();
+  clipboardWatcher = null;
+}
+
 // ---- D5: updates ("notify, don't download" mode) -----------------------
 // The check runs once, at startup. DOWNLOADING NEVER STARTS ON ITS OWN - only
 // after the user clicks. The reasoning is in src/update.js's header: the
@@ -1144,6 +1189,50 @@ function registerIpc() {
   ipcMain.handle('scratchpad:read', () => readScratchpad());
   ipcMain.handle('scratchpad:write', (_event, text) => writeScratchpad(text));
 
+  // Clipboard history. `enabled` is the switch the widget shows: it flips the
+  // persisted pref AND starts/stops the real watcher, so "off" means LunaCore
+  // is not reading the clipboard rather than merely not displaying it.
+  ipcMain.handle('clipboard:state', () => ({
+    enabled: readUiPrefs().clipboardEnabled,
+    entries: clipboardWatcher ? clipboardWatcher.current() : readHistory(),
+  }));
+  ipcMain.handle('clipboard:enable', (_event, enabled) => {
+    const on = enabled === true;
+    writeUiPrefs({ clipboardEnabled: on });
+    if (on) startClipboardWatcher();
+    else stopClipboardWatcher();
+    return { enabled: on, entries: clipboardWatcher ? clipboardWatcher.current() : readHistory() };
+  });
+  // Copying a stored clip back to the system clipboard. Writing (not reading)
+  // is unconditional: it is the user pressing a button, not a background watch.
+  ipcMain.handle('clipboard:copy', (_event, text) => {
+    if (typeof text !== 'string' || !text) return false;
+    clipboard.writeText(text);
+    return true;
+  });
+  ipcMain.handle('clipboard:remove', (_event, text) => {
+    const next = removeEntry(clipboardWatcher ? clipboardWatcher.current() : readHistory(), text);
+    if (clipboardWatcher) return clipboardWatcher.setList(next);
+    // Watcher off: the history is frozen but still readable/deletable, so the
+    // edit goes straight to the file rather than being silently dropped.
+    writeHistory(next);
+    return next;
+  });
+  ipcMain.handle('clipboard:clear', () => {
+    if (clipboardWatcher) return clipboardWatcher.setList([]);
+    clearHistory();
+    return [];
+  });
+
+  // Pin-board todos: whole-list read/write, the scratchpad's shape (the list
+  // operations themselves are pure and live in the renderer widget).
+  ipcMain.handle('todo:read', () => readTodos());
+  ipcMain.handle('todo:write', (_event, list) => writeTodos(list));
+
+  // Device panel: microphone mute. `action` is whitelisted inside devices.js
+  // before it can reach a shell argv, same discipline media:command uses.
+  ipcMain.handle('devices:mic', (_event, action) => micState(action));
+
   // Themes: list of available themes (CSS tokens + xterm colors).
   // D3. Answers "is Claude Code installed at all?" so the HUD can say so in
   // words instead of leaving a newcomer staring at `command not found`.
@@ -1294,6 +1383,9 @@ app.whenReady().then(() => {
   startUsageWatcher();
   startTelemetryWatcher();
   startMediaWatcher();
+  // Only if the user has previously opted in - the pref defaults to false, so
+  // a fresh install starts with nothing watching the clipboard.
+  if (readUiPrefs().clipboardEnabled) startClipboardWatcher();
   // Sound feedback: volume/enabled come from the persisted prefs (Appearance
   // panel); readUiPrefs() already falls back to SoundManager-matching
   // defaults (volume 70, enabled true) if ui.local.json predates these keys.
@@ -1356,6 +1448,7 @@ app.on('window-all-closed', () => {
     gpuSampler.stop();
     gpuSampler = null;
   }
+  stopClipboardWatcher();
   if (soundManager) {
     soundManager.stop();
     soundManager = null;

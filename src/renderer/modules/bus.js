@@ -179,6 +179,20 @@ export function emitMediaUpdate(state) {
   mediaUpdate.emit(state);
 }
 
+// Clipboard history. Replayed like the rest: clips arrive only when the user
+// copies something, so a widget mounted between two copies would otherwise sit
+// empty until the next one - which could be minutes away, or never.
+const clipboardUpdate = channel({ replay: true });
+
+/** Clipboard history: cb([{text, at}]) -> disposer */
+export function onClipboardUpdate(cb) {
+  return clipboardUpdate.on(cb);
+}
+
+export function emitClipboardUpdate(list) {
+  clipboardUpdate.emit(list);
+}
+
 // ---- Per-tab view state -----------------------------------------------------
 
 const sessionViews = [];
@@ -231,6 +245,8 @@ export function busStats() {
     usageUpdate: usageUpdate.size,
     updateState: updateState.size,
     telemetryUpdate: telemetryUpdate.size,
+    mediaUpdate: mediaUpdate.size,
+    clipboardUpdate: clipboardUpdate.size,
     sessionViews: sessionViews.length,
   };
 }

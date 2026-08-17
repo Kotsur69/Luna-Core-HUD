@@ -13,7 +13,20 @@
       "slots": {
         "left": ["actions", "appearance", "project", "profile", "cheatsheets", "prompts", "skills"],
         "main": ["terminal"],
-        "right": ["context", "usage", "telemetry", "media", "skilltracker", "activefiles", "sessiontimeline", "ports", "scratchpad"]
+        "right": [
+          "context",
+          "usage",
+          "telemetry",
+          "media",
+          "devices",
+          "skilltracker",
+          "activefiles",
+          "sessiontimeline",
+          "ports",
+          "scratchpad",
+          "todo",
+          "clipboard"
+        ]
       }
     },
     {
@@ -47,11 +60,14 @@
           "usage",
           "telemetry",
           "media",
+          "devices",
           "skilltracker",
           "activefiles",
           "sessiontimeline",
           "ports",
           "scratchpad",
+          "todo",
+          "clipboard",
           "cheatsheets",
           "prompts",
           "skills"
@@ -70,8 +86,17 @@
       "slots": {
         "main": ["terminal"],
         "dock-a": ["actions", "appearance", "project", "profile"],
-        "dock-b": ["context", "usage", "telemetry", "media", "skilltracker", "activefiles", "sessiontimeline"],
-        "dock-c": ["ports", "scratchpad", "cheatsheets", "prompts", "skills"]
+        "dock-b": [
+          "context",
+          "usage",
+          "telemetry",
+          "media",
+          "devices",
+          "skilltracker",
+          "activefiles",
+          "sessiontimeline"
+        ],
+        "dock-c": ["ports", "scratchpad", "todo", "clipboard", "cheatsheets", "prompts", "skills"]
       }
     }
   ]

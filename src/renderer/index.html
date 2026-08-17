@@ -294,6 +294,73 @@
     </div>
   </template>
 
+  <template id="w-clipboard">
+    <div class="panel__section panel__section--grow">
+      <h2 class="panel__title">
+        <span data-i18n="clip.title">Schowek</span> <span id="clip-count" class="count"></span>
+      </h2>
+      <!-- Opt-in by design: while the box is unchecked the watcher in the main
+           process is not merely hidden, it is not running - see src/clipboard.js. -->
+      <label class="clip-toggle">
+        <input type="checkbox" id="clip-enabled" />
+        <span data-i18n="clip.enable">Zapisuj historie schowka</span>
+      </label>
+      <p id="clip-off" class="hint" data-i18n="clip.off">Wylaczone - LunaCore nie czyta schowka.</p>
+      <p id="clip-empty" class="hint" data-i18n="clip.empty">Historia jest pusta.</p>
+      <ul id="clip-list" class="clip-list"></ul>
+      <button id="clip-clear" class="pad-send" data-i18n="clip.clear">Wyczysc historie</button>
+    </div>
+  </template>
+
+  <template id="w-todo">
+    <div class="panel__section panel__section--grow">
+      <h2 class="panel__title">
+        <span data-i18n="todo.title">Zadania</span> <span id="todo-count" class="count"></span>
+      </h2>
+      <!-- A <form> so Enter submits without a keydown handler, the same reason
+           the Settings modal grew one (TERMINAL_CUSTOMIZER_PLAN.md §10.2). -->
+      <form id="todo-form" class="todo-form">
+        <input
+          id="todo-input"
+          type="text"
+          maxlength="200"
+          spellcheck="false"
+          data-i18n-ph="todo.placeholder"
+          placeholder="Nowe zadanie..."
+        />
+        <button type="submit" class="port-btn" data-i18n-title="todo.add" title="Dodaj">+</button>
+      </form>
+      <p id="todo-empty" class="hint" data-i18n="todo.empty">Brak zadan.</p>
+      <ul id="todo-list" class="todo-list"></ul>
+      <button id="todo-clear" class="pad-send" data-i18n="todo.clearDone">Usun zrobione</button>
+    </div>
+  </template>
+
+  <template id="w-devices">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="dev.title">Urzadzenia</h2>
+      <!-- Mic mute only, and the reason it is only that is in src/devices.js. -->
+      <div class="dev-row">
+        <span class="dev-row__label" data-i18n="dev.mic">Mikrofon</span>
+        <span id="dev-mic-state" class="dev-row__state"></span>
+        <button
+          id="dev-mic-toggle"
+          class="media-btn"
+          data-i18n-title="dev.micToggle"
+          title="Wycisz/wlacz mikrofon"
+        >
+          🎙
+        </button>
+        <button id="dev-mic-refresh" class="port-btn" data-i18n-title="dev.refresh" title="Odswiez">
+          ↻
+        </button>
+      </div>
+      <p id="dev-unavailable" class="hint" data-i18n="dev.unavailable">
+        Brak mikrofonu lub niedostepne.
+      </p>
+    </div>
+  </template>
+
   <template id="w-skilltracker">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="skilltracker.title">Skill Tracker</h2>

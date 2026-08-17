@@ -6,7 +6,8 @@
 // { theme, lang, boot, profile, layout, hideSystemPorts, soundEnabled,
 // soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, termFontFamily,
 // termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
-// termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage.
+// termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
+// collapsed, layoutSizes.
 // The renderer
 // reads it at startup (ui:get) and writes on change (ui:set).
 //
@@ -94,7 +95,56 @@ const DEFAULTS = {
   // data: URI (renderer's CSP only allows 'self'/data: for img-src, so a raw
   // file path could never be used as a CSS background-image). null = none.
   termBgImage: null,
+  // Clipboard history widget. Default OFF, and for a stronger reason than
+  // soundReadOutputEnabled's: enabling it makes LunaCore read every text clip
+  // copied anywhere on the machine and persist it to disk. See src/clipboard.js's
+  // header - an app whose promise is "I only read what the README lists" has no
+  // business watching the clipboard until asked.
+  clipboardEnabled: false,
+  // C2 collapsible panels: ids of the widgets whose section is folded shut.
+  // A list rather than a map of booleans so an id that no longer exists simply
+  // stops matching anything instead of accumulating dead `false` entries.
+  collapsed: [],
+  // C2 resizable panels: layoutId -> the `grid-template-columns` the user
+  // dragged that preset to. Per layout because the presets have different
+  // column counts, and a width dragged in `classic` means nothing in `focus`.
+  layoutSizes: {},
 };
+
+const MAX_COLLAPSED = 64;
+const MAX_LAYOUT_SIZES = 32;
+
+/**
+ * Shape check for a stored columns string. Deliberately coarse: this is the
+ * "don't persist a novel" gate, while the strict track grammar that decides
+ * what may actually be written into an inline style lives in
+ * renderer/modules/panels.js (isSafeColumns) - the place that does the writing.
+ */
+function isColumnsish(v) {
+  return typeof v === 'string' && v.length > 0 && v.length <= 120 && /^[\d a-z.%]+$/i.test(v);
+}
+
+function cleanCollapsed(raw) {
+  if (!Array.isArray(raw)) return [...DEFAULTS.collapsed];
+  const out = [];
+  for (const id of raw) {
+    if (typeof id !== 'string' || !id || id.length > 64) continue;
+    if (!out.includes(id)) out.push(id);
+    if (out.length >= MAX_COLLAPSED) break;
+  }
+  return out;
+}
+
+function cleanLayoutSizes(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...DEFAULTS.layoutSizes };
+  const out = {};
+  for (const [id, cols] of Object.entries(raw)) {
+    if (!id || id.length > 64 || !isColumnsish(cols)) continue;
+    out[id] = cols;
+    if (Object.keys(out).length >= MAX_LAYOUT_SIZES) break;
+  }
+  return out;
+}
 
 /**
  * Sanitizes a raw terminal-appearance prefs object (e.g. parsed from JSON, or
@@ -166,6 +216,12 @@ function readUiPrefs() {
         typeof obj.soundReadOutputEnabled === 'boolean'
           ? obj.soundReadOutputEnabled
           : DEFAULTS.soundReadOutputEnabled,
+      // Missing key => disabled (prefs file written before this option existed).
+      clipboardEnabled:
+        typeof obj.clipboardEnabled === 'boolean' ? obj.clipboardEnabled : DEFAULTS.clipboardEnabled,
+      // Missing keys => nothing folded, every preset at its authored widths.
+      collapsed: cleanCollapsed(obj.collapsed),
+      layoutSizes: cleanLayoutSizes(obj.layoutSizes),
       ...clampTermPrefs(obj),
     };
   } catch {
@@ -179,7 +235,7 @@ function readUiPrefs() {
  *   soundVolume?, soundKeystrokeVariant?, soundLongTaskMinutes?,
  *   soundReadOutputEnabled?, termFontFamily?, termFontSize?, termLineHeight?,
  *   termLetterSpacing?, termCursorStyle?, termCursorBlink?, termScrollback?,
- *   termBgOpacity?, termBgBlur?, termBgImage? }.
+ *   termBgOpacity?, termBgBlur?, termBgImage?, collapsed?, layoutSizes? }.
  * @returns {object|null} the new state, or null if the write failed
  */
 function writeUiPrefs(partial) {
@@ -213,6 +269,18 @@ function writeUiPrefs(partial) {
     if (partial && typeof partial.soundReadOutputEnabled === 'boolean') {
       next.soundReadOutputEnabled = partial.soundReadOutputEnabled;
     }
+    if (partial && typeof partial.clipboardEnabled === 'boolean') {
+      next.clipboardEnabled = partial.clipboardEnabled;
+    }
+    // Both are sent WHOLE, not merged per entry: the renderer holds the live
+    // set/map and writes all of it. Merging here instead would make an unfolded
+    // panel or a reset width impossible to express.
+    if (partial && Array.isArray(partial.collapsed)) {
+      next.collapsed = cleanCollapsed(partial.collapsed);
+    }
+    if (partial && partial.layoutSizes && typeof partial.layoutSizes === 'object') {
+      next.layoutSizes = cleanLayoutSizes(partial.layoutSizes);
+    }
     // Only the term* keys actually present in `partial` should move; anything
     // omitted keeps its current (already-validated) value from `next` rather
     // than reverting to DEFAULTS - clampTermPrefs still re-validates the
@@ -244,4 +312,4 @@ function writeUiPrefs(partial) {
   }
 }
 
-module.exports = { readUiPrefs, writeUiPrefs, clampTermPrefs };
+module.exports = { readUiPrefs, writeUiPrefs, clampTermPrefs, cleanCollapsed, cleanLayoutSizes };

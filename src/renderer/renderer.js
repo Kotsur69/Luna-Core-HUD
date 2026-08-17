@@ -47,6 +47,9 @@ import { initCheatsheets } from './modules/cheatsheets.js';
 import { initPrompts } from './modules/prompts.js';
 import { initSkills } from './modules/skills.js';
 import './modules/scratchpad.js';
+import './modules/clipboard.js';
+import './modules/todo.js';
+import './modules/devices.js';
 import './modules/palette.js';
 
 // -- Left panel: switchers, ports, appearance ---------------------------------
@@ -67,6 +70,7 @@ import { busStats } from './modules/bus.js';
 // Which widgets exist and where they go is data now (config/layouts.json), not
 // a list in this file - see modules/layout.js.
 import { initLayout, applyLayout, getLayouts, getActiveLayoutId } from './modules/layout.js';
+import { initPanels, initPanelResizeTracking } from './modules/panels.js';
 
 // ---- Startup ----------------------------------------------------------------
 //
@@ -98,6 +102,13 @@ import { initLayout, applyLayout, getLayouts, getActiveLayoutId } from './module
 // Top-level await: this is the entry module, so nothing is being held up, but it
 // does mean the code below runs after DOMContentLoaded rather than before it -
 // hence the direct fitAndResize() at the bottom instead of a listener.
+// C2 before C1: initLayout() draws the HUD and ends by calling applyPanels(),
+// which needs the remembered fold state and column widths already in hand -
+// otherwise the first paint shows every panel open and every preset at its
+// authored widths, then corrects itself a frame later.
+await initPanels();
+initPanelResizeTracking();
+
 await initLayout();
 
 initProfiles();
