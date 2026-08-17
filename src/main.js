@@ -506,8 +506,10 @@ function spawnInto(session, profile) {
       const patterns = loadSoundTriggers().approvalPrompt;
       if (detectApprovalPrompt(data, patterns)) {
         session.approvalShowing = true;
-        const resolved = resolveSoundFile('voice.needYou');
-        if (resolved) soundManager.play(resolved.path);
+        if (readUiPrefs().voiceEnabled !== false) {
+          const resolved = resolveSoundFile('voice.needYou');
+          if (resolved) soundManager.play(resolved.path);
+        }
       }
     }
   });
@@ -719,7 +721,7 @@ function checkUsageThresholds(usage) {
     usage && usage.fiveHour && typeof usage.fiveHour.pct === 'number' ? usage.fiveHour.pct : null;
   const { next, fire } = nextUsageAnnounced(pct, usageAnnounced);
   usageAnnounced = next;
-  if (!fire || !soundManager) return;
+  if (!fire || !soundManager || readUiPrefs().voiceEnabled === false) return;
   const resolved = resolveSoundFile(`voice.${fire}`);
   if (resolved) soundManager.play(resolved.path);
 }
@@ -728,7 +730,12 @@ function checkUsageThresholds(usage) {
 
 /** Plays voice.done, but only when the completed turn ran long enough (§3). */
 function checkTurnEnd({ startedAt, endedAt, text }) {
-  if (soundManager && isLongTurn(startedAt, endedAt, readUiPrefs().soundLongTaskMinutes)) {
+  const prefs = readUiPrefs();
+  if (
+    soundManager &&
+    prefs.voiceEnabled !== false &&
+    isLongTurn(startedAt, endedAt, prefs.soundLongTaskMinutes)
+  ) {
     const resolved = resolveSoundFile('voice.done');
     if (resolved) soundManager.play(resolved.path);
   }
@@ -746,7 +753,8 @@ function checkTurnEnd({ startedAt, endedAt, text }) {
  *   TranscriptWatcher's onTurnEnd (observer.js)
  */
 function maybeReadOutputAloud(text) {
-  if (!narrationManager || !readUiPrefs().soundReadOutputEnabled) return;
+  const prefs = readUiPrefs();
+  if (!narrationManager || !prefs.soundReadOutputEnabled || prefs.voiceEnabled === false) return;
   const spoken = extractSpokenText(text);
   if (!spoken) return;
   synthesizeToWav(spoken).then((wavFile) => {
@@ -1105,7 +1113,12 @@ function registerIpc() {
     const { type, action, value } = payload;
     if (type === 'transport') {
       if (!['play', 'pause', 'toggle', 'next', 'prev'].includes(action)) return false;
-      return sendTransportCommand(action);
+      const ok = await sendTransportCommand(action);
+      // Force an immediate re-sample instead of waiting up to SAMPLE_MS for the
+      // next scheduled tick - without this the UI can lag a full poll interval
+      // behind a click even though the transport command itself already landed.
+      if (ok && mediaSampler) mediaSampler.tick();
+      return ok;
     }
     if (type === 'volume') {
       if (action === 'get') return getVolume();
@@ -1209,6 +1222,7 @@ function registerIpc() {
   // degrade-gracefully rule for a missing mpv.
   ipcMain.on('sound:play', (_event, payload) => {
     if (!soundManager || !payload || typeof payload.key !== 'string') return;
+    if (payload.key.startsWith('voice.') && readUiPrefs().voiceEnabled === false) return;
     const resolved = resolveSoundFile(payload.key, payload.opts || {});
     if (resolved) soundManager.play(resolved.path);
   });
@@ -1297,7 +1311,7 @@ app.whenReady().then(() => {
   // STARTUP_GREETING_DELAY_MS above); play() is a silent no-op if mpv never
   // came up or the user disabled sound in the meantime.
   setTimeout(() => {
-    if (!soundManager) return;
+    if (!soundManager || readUiPrefs().voiceEnabled === false) return;
     const resolved = resolveSoundFile('voice.welcome');
     if (resolved) soundManager.play(resolved.path);
   }, STARTUP_GREETING_DELAY_MS);

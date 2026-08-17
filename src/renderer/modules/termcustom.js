@@ -41,6 +41,7 @@ const els = {
   reset: document.getElementById('termcustom-reset'),
   // Moved from appearance.js's w-appearance template (2026-08-13).
   soundToggle: document.getElementById('sound-toggle'),
+  voiceToggle: document.getElementById('voice-toggle'),
   soundVolume: document.getElementById('sound-volume'),
   soundKeystrokeVariant: document.getElementById('sound-keystroke-variant'),
   soundLongTaskMinutes: document.getElementById('sound-long-task-minutes'),
@@ -77,6 +78,7 @@ let termcustomOpen = false;
 // instead of the template's authored defaults.
 let soundPrefs = {
   enabled: true,
+  voiceEnabled: true,
   volume: 70,
   keystrokeVariant: 'mechanical',
   longTaskMinutes: 10,
@@ -86,6 +88,7 @@ let soundPrefs = {
 /** Repaints the sound controls (toggle, volume, keystroke variant, ...). */
 function renderSoundSwitcher() {
   els.soundToggle.checked = soundPrefs.enabled;
+  els.voiceToggle.checked = soundPrefs.voiceEnabled;
   els.soundVolume.value = soundPrefs.volume;
   els.soundKeystrokeVariant.value = soundPrefs.keystrokeVariant;
   els.soundLongTaskMinutes.value = soundPrefs.longTaskMinutes;
@@ -228,6 +231,11 @@ els.soundToggle.addEventListener('change', () => {
   window.lunacore.setUiPrefs({ soundEnabled: soundPrefs.enabled });
 });
 
+els.voiceToggle.addEventListener('change', () => {
+  soundPrefs.voiceEnabled = els.voiceToggle.checked;
+  window.lunacore.setUiPrefs({ voiceEnabled: soundPrefs.voiceEnabled });
+});
+
 els.soundVolume.addEventListener('change', () => {
   soundPrefs.volume = Number(els.soundVolume.value);
   window.lunacore.setUiPrefs({ soundVolume: soundPrefs.volume });
@@ -304,6 +312,7 @@ export async function initTermcustomSettings() {
   let prefs = {
     boot: true,
     soundEnabled: true,
+    voiceEnabled: true,
     soundVolume: 70,
     soundKeystrokeVariant: 'mechanical',
     soundLongTaskMinutes: 10,
@@ -317,6 +326,7 @@ export async function initTermcustomSettings() {
 
   soundPrefs = {
     enabled: prefs.soundEnabled !== false,
+    voiceEnabled: prefs.voiceEnabled !== false,
     volume: typeof prefs.soundVolume === 'number' ? prefs.soundVolume : 70,
     keystrokeVariant: prefs.soundKeystrokeVariant || 'mechanical',
     longTaskMinutes:

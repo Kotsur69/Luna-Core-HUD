@@ -62,6 +62,12 @@ const DEFAULTS = {
   layout: null,
   hideSystemPorts: true,
   soundEnabled: true,
+  // Separate from soundEnabled: mutes only "Luna talking" (voice.* canned
+  // clips - welcome/needYou/done/usage50/usage80 - plus live read-aloud
+  // narration) while sfx.* (keystrokes, nav clicks, tab open/close) keeps
+  // playing. Mati asked for this specifically - the two were previously one
+  // shared on/off switch. Default true so existing installs stay unchanged.
+  voiceEnabled: true,
   soundVolume: 70,
   soundKeystrokeVariant: 'mechanical',
   // §11.1: minimum turn duration (minutes) before the "All done" voice line
@@ -145,6 +151,7 @@ function readUiPrefs() {
         typeof obj.hideSystemPorts === 'boolean' ? obj.hideSystemPorts : DEFAULTS.hideSystemPorts,
       // Missing key => enabled (prefs file written before this option existed).
       soundEnabled: typeof obj.soundEnabled === 'boolean' ? obj.soundEnabled : DEFAULTS.soundEnabled,
+      voiceEnabled: typeof obj.voiceEnabled === 'boolean' ? obj.voiceEnabled : DEFAULTS.voiceEnabled,
       soundVolume: typeof obj.soundVolume === 'number' ? clampVolume(obj.soundVolume) : DEFAULTS.soundVolume,
       soundKeystrokeVariant:
         typeof obj.soundKeystrokeVariant === 'string' &&
@@ -191,6 +198,7 @@ function writeUiPrefs(partial) {
       next.hideSystemPorts = partial.hideSystemPorts;
     }
     if (partial && typeof partial.soundEnabled === 'boolean') next.soundEnabled = partial.soundEnabled;
+    if (partial && typeof partial.voiceEnabled === 'boolean') next.voiceEnabled = partial.voiceEnabled;
     if (partial && typeof partial.soundVolume === 'number') next.soundVolume = clampVolume(partial.soundVolume);
     if (
       partial &&

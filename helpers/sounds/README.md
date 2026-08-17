@@ -8,7 +8,11 @@ python -m edge_tts --voice en-US-AriaNeural --rate=+5% --pitch=+15Hz \
   --text "..." --write-media helpers/sounds/voice/<name>.mp3
 ```
 
-`sfx/*.wav` are still 0-byte stubs — nothing plays them yet. Need real short
-clips (<80ms for the 4 keystroke variants) before they're audible; mpv/the
+`sfx/keystroke-*.wav` (the 4 variants) are real now — procedurally synthesized
+short clicks (30-55ms each, no external assets/libraries, just raw PCM +
+envelope math), generated 2026-08-17.
+
+The other four (`nav-click.wav`, `mode-toggle.wav`, `terminal-new.wav`,
+`terminal-close.wav`) are still 0-byte stubs — nothing plays them yet. mpv/the
 sound engine handle a missing/silent file the same as a missing one (no crash,
 just no sound).

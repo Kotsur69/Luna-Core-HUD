@@ -96,6 +96,14 @@ class SoundManager {
       mpvPath,
       [
         '--idle=yes',
+        // Without this, mpv fully unloads (tears down the audio device) the
+        // instant a clip finishes - and a keystroke click is often <50ms, so
+        // the NEXT loadfile has to cold-start WASAPI from scratch before any
+        // sample reaches the speaker. That cold-start latency alone can
+        // exceed the clip's own duration, so most rapid-fire SFX never
+        // actually become audible. keep-open pauses on the last frame
+        // instead, keeping the audio device warm between triggers.
+        '--keep-open=yes',
         '--no-video',
         '--no-terminal',
         '--no-config',

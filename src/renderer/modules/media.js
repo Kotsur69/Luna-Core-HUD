@@ -100,8 +100,20 @@ defineWidget({
     els.prev.addEventListener('click', () => {
       window.lunacore.mediaCommand({ type: 'transport', action: 'prev' });
     });
-    els.playpause.addEventListener('click', () => {
-      window.lunacore.mediaCommand({ type: 'transport', action: 'toggle' });
+    els.playpause.addEventListener('click', async () => {
+      // Optimistic flip: the real state confirmation now arrives fast (main.js
+      // forces an immediate re-poll after the command lands), but that's still
+      // a PowerShell round-trip away - flip the icon now so the click doesn't
+      // feel dead, and revert if the command actually failed.
+      if (!latest) return;
+      const prev = latest;
+      latest = { ...latest, isPlaying: !latest.isPlaying };
+      renderInfo();
+      const ok = await window.lunacore.mediaCommand({ type: 'transport', action: 'toggle' });
+      if (!ok) {
+        latest = prev;
+        renderInfo();
+      }
     });
     els.next.addEventListener('click', () => {
       window.lunacore.mediaCommand({ type: 'transport', action: 'next' });

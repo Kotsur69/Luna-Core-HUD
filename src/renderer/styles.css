@@ -1190,7 +1190,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: var(--border-w) solid var(--edge);
+  border: var(--border-w) solid var(--edge-glow);
   background: var(--bg-panel-2);
   cursor: pointer;
   padding: 0;
