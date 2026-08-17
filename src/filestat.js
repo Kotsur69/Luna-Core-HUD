@@ -9,6 +9,19 @@
 // git-diff-stat numbers; `countStringDiff` only exists as a fallback for the
 // (currently unobserved) case where a result carries old/new strings but no
 // patch - see plan §12/R4.
+//
+// PER-FILE CONTEXT WEIGHT (LUNA_HUD_ADVANCED_SPEC.md §2). A Read's result
+// carries `file.content`: the exact text the CLI placed in the context window.
+// That string is a better measure of what a file cost than its size on disk, in
+// two ways that matter - a partial read (offset + limit) charges only the slice
+// actually pasted, and a file read three times charges three times, which is
+// the truth and usually the surprise.
+//
+// ONLY READ COUNTS. Write's `content` is what the MODEL produced, so it was
+// output tokens rather than context weight; an Edit's result is a short
+// confirmation snippet, and its `originalFile` is CLI bookkeeping that never
+// reaches the model. Counting either would overstate things badly -
+// `originalFile` alone would charge a whole file for a one-line edit.
 // ============================================================================
 
 'use strict';
@@ -17,6 +30,40 @@
 // not worth an exact answer nobody asked for. Above this, report the whole
 // block as added/removed instead of hanging.
 const MAX_DIFF_LINES = 2000;
+
+/**
+ * Characters per token, by kind of file.
+ *
+ * THIS IS AN ESTIMATE, and the HUD has to say so wherever it shows the result.
+ * Everything else in LunaCore reports token counts the API itself returned
+ * (`message.usage`), which are exact; there is no per-tool-result breakdown in
+ * that data, so a per-file number cannot be. Mixing an exact gauge with an
+ * estimated breakdown is only honest if the estimate is labelled - hence the
+ * `≈` the widget prints, and the exact character count in the row's tooltip.
+ *
+ * Code tokenizes denser than prose: punctuation, indentation and camelCase all
+ * split. ~3.6 for source, ~4.0 for prose is the usual working range.
+ */
+const CHARS_PER_TOKEN_CODE = 3.6;
+const CHARS_PER_TOKEN_PROSE = 4.0;
+
+// Extensions whose contents read like prose rather than source.
+const PROSE_EXT = new Set(['.md', '.markdown', '.txt', '.rst', '.adoc']);
+
+/**
+ * Rough token count for a blob of file text.
+ * @param {number} chars length of the text that entered the context window
+ * @param {string} [file] path, used only to pick a ratio
+ * @returns {number} estimated tokens, rounded
+ */
+function estimateTokens(chars, file = '') {
+  const n = Number(chars);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  const dot = String(file).lastIndexOf('.');
+  const ext = dot > 0 ? String(file).slice(dot).toLowerCase() : '';
+  const ratio = PROSE_EXT.has(ext) ? CHARS_PER_TOKEN_PROSE : CHARS_PER_TOKEN_CODE;
+  return Math.round(n / ratio);
+}
 
 /**
  * Sums `+`/`-` prefixed lines across every hunk of a CLI-computed unified
@@ -101,16 +148,27 @@ function fileStatFromEntry(result) {
         : null;
   if (!file) return null;
 
+  // Only a Read pastes file text into the context window - see the header.
+  const contextChars =
+    result.file && typeof result.file.content === 'string' ? result.file.content.length : 0;
+
   if (Array.isArray(result.structuredPatch) && result.structuredPatch.length > 0) {
-    return { file, ...countPatch(result.structuredPatch) };
+    return { file, ...countPatch(result.structuredPatch), contextChars };
   }
   if (result.type === 'create' && typeof result.content === 'string') {
-    return { file, added: countLines(result.content), removed: 0 };
+    return { file, added: countLines(result.content), removed: 0, contextChars };
   }
   if (typeof result.oldString === 'string' && typeof result.newString === 'string') {
-    return { file, ...countStringDiff(result.oldString, result.newString) };
+    return { file, ...countStringDiff(result.oldString, result.newString), contextChars };
   }
-  return { file, added: 0, removed: 0 };
+  return { file, added: 0, removed: 0, contextChars };
 }
 
-module.exports = { countPatch, countLines, countStringDiff, fileStatFromEntry, MAX_DIFF_LINES };
+module.exports = {
+  countPatch,
+  countLines,
+  countStringDiff,
+  fileStatFromEntry,
+  estimateTokens,
+  MAX_DIFF_LINES,
+};

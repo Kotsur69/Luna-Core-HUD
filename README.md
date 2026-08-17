@@ -700,6 +700,40 @@ always reports how many rows were folded — the filter can hide things, but nev
 silently. The choice persists in `config/ui.local.json` (`hideSystemPorts`,
 default on).
 
+## Per-file context weight
+
+Each row of the Active-Files Heatmap also shows what that file cost the context
+window: `≈6.7k · 2.5%`.
+
+The number comes from the `content` string in a Read's `toolUseResult` — the
+exact text the CLI placed in the window. That beats the file's size on disk in
+the two cases that matter: a partial read (`offset` + `limit`) charges only the
+slice actually pasted, and **a file read three times charges three times**,
+which is the truth and usually the surprise.
+
+> **Only a Read counts.** A Write's `content` is what the *model* produced, so
+> it was output tokens, not context weight. An Edit's result is a short
+> confirmation snippet, and the `originalFile` sitting next to it is CLI
+> bookkeeping the model never sees — charging that would bill a whole file for a
+> one-line edit. `test/filestat.test.js` pins both.
+
+**The `≈` is not decoration.** Every other token figure in LunaCore comes
+straight from `message.usage` and is exact; the API reports usage per *message*,
+never per tool result, so a per-file number cannot be. The row hovers to a
+tooltip carrying the part that is not an estimate — the exact character count —
+plus how many reads it took. The chars-per-token ratio (3.6 for code, 4.0 for
+prose) lives in one place, `src/filestat.js`, and the estimate is computed once
+in the main process; the renderer only ever sums what it is handed, so the two
+halves of the HUD cannot drift into disagreeing.
+
+The percentage is that estimate against the **real** context limit for the
+active session's model, which the gauge already knows. Before a limit is known
+the row prints the token figure alone rather than a percentage of a guess.
+
+Measured on the session that built this feature: 41 files read, ≈63.6k tokens —
+**23.4% of peak context**, with `uiprefs.js` (read twice) the single heaviest
+file.
+
 ## MCP server health
 
 Answers a question Claude Code does not: **which of my MCP servers am I actually

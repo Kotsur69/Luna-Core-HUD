@@ -138,6 +138,8 @@ const I18N_DICT = {
     'activefiles.hint': '+/- to realne linie z diffa transcriptu.',
     'activefiles.more': '+{n} wiecej',
     'activefiles.readonly': 'tylko odczyt',
+    'activefiles.weight.title':
+      'Szacunkowy koszt kontekstu. Dokladnie {chars} znakow wczytanych do okna kontekstu w {reads} odczytach. Liczba tokenow jest przyblizona - wyliczona ze znakow, nie z API.',
     'activefiles.deleted': 'usuniety',
     'sessiontimeline.title': 'Oś czasu sesji',
     'sessiontimeline.empty': 'Brak tur w tej sesji.',
@@ -412,6 +414,8 @@ const I18N_DICT = {
     'activefiles.hint': '+/- are real diff lines from the transcript.',
     'activefiles.more': '+{n} more',
     'activefiles.readonly': 'read only',
+    'activefiles.weight.title':
+      'Estimated context cost. Exactly {chars} characters entered the context window across {reads} reads. The token figure is approximate - derived from characters, not reported by the API.',
     'activefiles.deleted': 'deleted',
     'sessiontimeline.title': 'Session timeline',
     'sessiontimeline.empty': 'No turns yet this session.',

@@ -185,3 +185,45 @@ test('applyFileEvent clears a stale deleted flag when the file is touched again'
   applyFileEvent(map, endEv('a.js', 1, 0, 2000)); // e.g. Write recreates it
   assert.equal(map.get('a.js').deleted, false);
 });
+
+// ---- per-file context weight -------------------------------------------------
+//
+// Cumulative on purpose. Reading one file three times costs three times, and a
+// row that reported the file's size instead would be answering "how big is it"
+// - a question nobody opened this panel to ask.
+
+test('applyFileEvent accumulates context weight across repeated reads', () => {
+  const map = new Map();
+  const ev = (contextChars, contextTokens) => ({
+    phase: 'end',
+    at: 1,
+    file: 'C:/a/main.js',
+    contextChars,
+    contextTokens,
+  });
+  applyFileEvent(map, ev(3600, 1000));
+  applyFileEvent(map, ev(1800, 500));
+  const row = map.get('C:/a/main.js');
+  assert.equal(row.contextChars, 5400);
+  assert.equal(row.contextTokens, 1500);
+  assert.equal(row.reads, 2);
+});
+
+// An Edit reports no context chars, so it must not inflate the read count -
+// otherwise "read 4x" would really mean "touched 4x" and quietly mislead.
+test('applyFileEvent does not count a zero-weight touch as a read', () => {
+  const map = new Map();
+  applyFileEvent(map, { phase: 'end', at: 1, file: 'C:/a/x.js', added: 3, removed: 1 });
+  const row = map.get('C:/a/x.js');
+  assert.equal(row.reads, 0);
+  assert.equal(row.contextChars, 0);
+  assert.equal(row.contextTokens, 0);
+  assert.equal(row.touches, 1, 'it is still a touch');
+});
+
+// A start event is not evidence of anything landing in context yet.
+test('applyFileEvent ignores context weight on a start event', () => {
+  const map = new Map();
+  applyFileEvent(map, { phase: 'start', at: 1, file: 'C:/a/x.js', contextChars: 999 });
+  assert.equal(map.get('C:/a/x.js').contextChars, 0);
+});

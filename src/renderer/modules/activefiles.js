@@ -34,7 +34,7 @@
 'use strict';
 
 import { t } from './util.js';
-import { onLangChange, onSessionRestarted, registerSessionView } from './bus.js';
+import { onLangChange, onSessionRestarted, onActiveContext, registerSessionView } from './bus.js';
 import { defineWidget } from './registry.js';
 
 /** Honest truncation (ports.js's rule): show this many, state the rest. */
@@ -103,6 +103,13 @@ export function applyFileEvent(map, ev) {
       file: ev.file,
       added: 0,
       removed: 0,
+      // Characters this file has put into the context window, summed across
+      // reads. Deliberately cumulative: reading one file three times costs
+      // three times, and a row that hid that would be answering a question
+      // nobody asked ("how big is it") instead of the one they did.
+      contextChars: 0,
+      contextTokens: 0,
+      reads: 0,
       touches: 0,
       lastAt: 0,
       inProgress: false,
@@ -119,6 +126,13 @@ export function applyFileEvent(map, ev) {
     row.added += ev.added || 0;
     row.removed += ev.removed || 0;
     row.touches += 1;
+    if (ev.contextChars > 0) {
+      row.contextChars += ev.contextChars;
+      // Summed, never re-derived: the chars-per-token ratio lives in
+      // src/filestat.js and the estimate is made once, in the main process.
+      row.contextTokens += ev.contextTokens || 0;
+      row.reads += 1;
+    }
   }
   row.lastAt = ev.at || Date.now();
   // A real tool call on this path is strong evidence it exists again (a Write
@@ -197,6 +211,18 @@ function sortedRows(map) {
   });
 }
 
+/**
+ * Context window of the ACTIVE session, so a file's weight can be shown as a
+ * share of the window it is competing for. 0 = not known yet, and then the row
+ * prints the token estimate alone rather than a percentage of a guess.
+ */
+let contextLimit = 0;
+
+/** Compact token count: 1928 -> "1.9k". */
+function formatTokens(n) {
+  return n >= 1000 ? `${Math.round(n / 100) / 10}k` : String(n);
+}
+
 /** One `<li class="afile">` - built by createElement, never innerHTML with
  *  data (ports.js:39-47's precedent; file paths are untrusted-ish text). */
 function buildRow(row) {
@@ -233,11 +259,34 @@ function buildRow(row) {
       stat.appendChild(del);
     }
     li.appendChild(stat);
-  } else {
+  } else if (row.contextTokens <= 0) {
+    // Touched but never actually read into context - keep the old label rather
+    // than an empty column.
     const ro = document.createElement('span');
     ro.className = 'afile__readonly';
     ro.textContent = t('activefiles.readonly');
     li.appendChild(ro);
+  }
+
+  // What this file cost the context window. `≈` is not decoration: every other
+  // token number in the HUD comes straight from the API and is exact, this one
+  // is derived from a chars-per-token ratio. The tooltip carries the datum that
+  // is not an estimate - the exact character count - plus how many reads it
+  // took, which is where the surprises are.
+  if (row.contextTokens > 0) {
+    const weight = document.createElement('span');
+    weight.className = 'afile__weight';
+    const share =
+      contextLimit > 0 ? Math.round((row.contextTokens / contextLimit) * 1000) / 10 : null;
+    weight.textContent =
+      share !== null
+        ? `≈${formatTokens(row.contextTokens)} · ${share}%`
+        : `≈${formatTokens(row.contextTokens)}`;
+    weight.title = t('activefiles.weight.title', {
+      chars: row.contextChars.toLocaleString(),
+      reads: row.reads,
+    });
+    li.appendChild(weight);
   }
 
   if (row.deleted) {
@@ -318,6 +367,16 @@ defineWidget({
     };
 
     const offLang = onLangChange(render);
+    // Only for the denominator of a row's share. Repainting on every context
+    // tick would be pointless churn, so this only redraws when the limit
+    // actually changes - which is once per session, or when the model does.
+    const offCtx = onActiveContext((m) => {
+      const limit = m && Number(m.limit) > 0 ? Number(m.limit) : 0;
+      if (limit && limit !== contextLimit) {
+        contextLimit = limit;
+        render();
+      }
+    });
     render();
     refreshDeleted(); // do not wait a full interval for the first check
 
@@ -328,6 +387,7 @@ defineWidget({
 
     return () => {
       offLang();
+      offCtx();
       clearInterval(staleTimer);
       els = null;
     };

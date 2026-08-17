@@ -87,6 +87,40 @@ npm start                         # the only way to check anything interactive
 warning. Both are noise — the crash line tracks the `timeout` value. Don't chase
 them.
 
+### ✅ Done: per-file context weight (2026-08-17) — LUNA_HUD_ADVANCED_SPEC §2
+
+The last unbuilt piece of the heatmap's spec. Each row now carries `≈6.7k · 2.5%`
+alongside its `+`/`-` counts. Full behaviour in README (*Per-file context
+weight*); what belongs here is why the number is what it is.
+
+**Measure what entered the window, not what is on disk.** A Read's
+`toolUseResult` carries `file.content` — the exact text the CLI pasted. Using it
+rather than the file's size gets two cases right for free: a partial read charges
+only its slice, and a file read three times charges three times. That second one
+is the whole value of the feature; on the session that built it, `uiprefs.js` was
+the heaviest file precisely because it was read twice.
+
+**Only a Read counts.** Write content is model *output*; an Edit's result is a
+snippet, and the `originalFile` beside it is CLI bookkeeping the model never
+sees. Charging `originalFile` would bill a whole file for a one-line edit — the
+kind of wrong number that looks plausible, so both cases are pinned in tests.
+
+**The `≈` is load-bearing.** Every other token figure in the HUD is exact,
+straight from `message.usage`; the API reports usage per message and never per
+tool result, so this one cannot be. It is labelled everywhere it appears, the
+tooltip carries the exact character count and the read count, and the ratio lives
+in exactly one place (`src/filestat.js`) with the estimate computed once in the
+main process — the renderer sums what it is handed and never re-derives it, so
+the two halves cannot drift apart.
+
+Validated before building rather than after: a scan of this session's transcript
+showed 41 files read, ≈63.6k tokens, **23.4% of peak context**. Worth knowing
+that the answer is a quarter and not a rounding error.
+
+Probe after the change: all 18 rows at 1, `activeContext` balanced at 4 before
+and after the remount passes (the new subscription disposes cleanly). 567 tests,
+up from 557.
+
 ### ✅ Done: MCP health + git station (2026-08-17) — two panels that answer questions nothing else does
 
 Both are new backlog items, not scheduled phases: they came out of asking what

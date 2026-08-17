@@ -1137,6 +1137,18 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+/* Per-file context weight. Dimmer than the +/- diff stat on purpose: the diff
+   is what you did, the weight is what it cost, and only one of those is the
+   reason you opened this panel. Tabular figures so the column does not jitter
+   as counts change. */
+.afile__weight {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 /* A tracked file that no longer exists on disk (files:check-exist, polled by
    activefiles.js). Keeps its last known diff - the edit still happened - but

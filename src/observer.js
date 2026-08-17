@@ -20,7 +20,7 @@ const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('./models
 // Price table for session cost estimation (B4). Reads only from config/, no network.
 const { loadRates, rateFor, estimateCost } = require('./rates');
 // Diff-stat extraction for the Active-Files Heatmap (ACTIVE_FILES_HEATMAP_PLAN.md).
-const { fileStatFromEntry } = require('./filestat');
+const { fileStatFromEntry, estimateTokens } = require('./filestat');
 
 // ---- 1. Tool detection from stdout -----------------------------------------
 
@@ -361,6 +361,15 @@ function toolEventsFromLines(text) {
             file: stat ? stat.file : '',
             added: stat ? stat.added : 0,
             removed: stat ? stat.removed : 0,
+            // What this call put into the context window - non-zero only for a
+            // Read. See the per-file weight note in src/filestat.js.
+            //
+            // The token ESTIMATE is made here rather than in the renderer so the
+            // chars-per-token ratio has exactly one home. The renderer only ever
+            // sums what it is given; it never re-derives the number, which is
+            // how two parts of one HUD end up disagreeing about it.
+            contextChars: stat ? stat.contextChars || 0 : 0,
+            contextTokens: stat ? estimateTokens(stat.contextChars || 0, stat.file) : 0,
           });
         }
       }

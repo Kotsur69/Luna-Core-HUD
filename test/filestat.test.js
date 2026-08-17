@@ -12,6 +12,7 @@ const {
   countLines,
   countStringDiff,
   fileStatFromEntry,
+  estimateTokens,
   MAX_DIFF_LINES,
 } = require('../src/filestat');
 
@@ -77,12 +78,12 @@ test('fileStatFromEntry prefers structuredPatch over oldString/newString when bo
     newString: 'a\nb\nCHANGED\nd\ne',
     structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['+one', '+two', '-three'] }],
   };
-  assert.deepEqual(fileStatFromEntry(obj), { file: 'C:\\repo\\src\\main.js', added: 2, removed: 1 });
+  assert.deepEqual(fileStatFromEntry(obj), { file: 'C:\\repo\\src\\main.js', added: 2, removed: 1, contextChars: 0 });
 });
 
 test('fileStatFromEntry on type:create with empty patch counts all-additions from content', () => {
   const obj = { type: 'create', filePath: 'C:\\repo\\new.md', content: 'line1\nline2\nline3\n', structuredPatch: [], originalFile: null };
-  assert.deepEqual(fileStatFromEntry(obj), { file: 'C:\\repo\\new.md', added: 3, removed: 0 });
+  assert.deepEqual(fileStatFromEntry(obj), { file: 'C:\\repo\\new.md', added: 3, removed: 0, contextChars: 0 });
 });
 
 test('fileStatFromEntry on type:update uses the real structuredPatch, not the whole file', () => {
@@ -92,12 +93,12 @@ test('fileStatFromEntry on type:update uses the real structuredPatch, not the wh
     content: 'whole new file content spanning many lines\nline2\nline3\n',
     structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['+onlyline'] }],
   };
-  assert.deepEqual(fileStatFromEntry(obj), { file: 'C:\\repo\\existing.md', added: 1, removed: 0 });
+  assert.deepEqual(fileStatFromEntry(obj), { file: 'C:\\repo\\existing.md', added: 1, removed: 0, contextChars: 0 });
 });
 
 test('fileStatFromEntry on a Read entry (nested file.filePath) returns touch-only {0,0}', () => {
   const obj = { type: 'text', file: { filePath: 'C:\\repo\\README.md', content: '...', numLines: 10, totalLines: 10 } };
-  assert.deepEqual(fileStatFromEntry(obj), { file: 'C:\\repo\\README.md', added: 0, removed: 0 });
+  assert.deepEqual(fileStatFromEntry(obj), { file: 'C:\\repo\\README.md', added: 0, removed: 0, contextChars: 3 });
 });
 
 test('fileStatFromEntry on a failed Edit (toolUseResult is an error string) returns null', () => {
@@ -109,4 +110,66 @@ test('fileStatFromEntry on an entry with no filePath returns null', () => {
   assert.equal(fileStatFromEntry({}), null);
   assert.equal(fileStatFromEntry(null), null);
   assert.equal(fileStatFromEntry(undefined), null);
+});
+
+// ---- per-file context weight -------------------------------------------------
+//
+// The rule these defend: ONLY A READ PUTS FILE TEXT IN THE CONTEXT WINDOW.
+// Write content is model output, and an Edit result carries `originalFile` -
+// the whole file - as CLI bookkeeping the model never sees. Charging either
+// would make the number wildly wrong in the direction that looks plausible.
+
+test('fileStatFromEntry counts the characters a Read put into context', () => {
+  const stat = fileStatFromEntry({
+    type: 'text',
+    file: { filePath: 'C:/a/uiprefs.js', content: 'x'.repeat(6940), numLines: 60, totalLines: 1907 },
+  });
+  assert.equal(stat.contextChars, 6940);
+  assert.equal(stat.added, 0, 'a read changes nothing');
+});
+
+// A partial read charges the slice that was pasted, not the file on disk.
+test('fileStatFromEntry charges only the slice a partial read pasted', () => {
+  const stat = fileStatFromEntry({
+    type: 'text',
+    file: { filePath: 'C:/a/big.js', content: 'y'.repeat(400), numLines: 20, totalLines: 5000 },
+  });
+  assert.equal(stat.contextChars, 400);
+});
+
+test('fileStatFromEntry does not charge an Edit for its originalFile', () => {
+  const stat = fileStatFromEntry({
+    filePath: 'C:/a/x.js',
+    structuredPatch: [{ lines: ['+one', '-two'] }],
+    originalFile: 'z'.repeat(50000),
+  });
+  assert.equal(stat.contextChars, 0);
+  assert.equal(stat.added, 1);
+  assert.equal(stat.removed, 1);
+});
+
+test('fileStatFromEntry does not charge a Write for the content it created', () => {
+  const body = ['a', 'b', 'c', ''].join(String.fromCharCode(10));
+  const stat = fileStatFromEntry({ filePath: 'C:/a/new.js', type: 'create', content: body });
+  assert.equal(stat.contextChars, 0);
+  assert.equal(stat.added, 3);
+});
+
+test('estimateTokens rates code denser than prose', () => {
+  assert.equal(estimateTokens(3600, 'a.js'), 1000);
+  assert.equal(estimateTokens(4000, 'a.md'), 1000);
+  assert.ok(estimateTokens(10000, 'a.js') > estimateTokens(10000, 'a.md'));
+});
+
+test('estimateTokens treats an unknown or missing extension as code', () => {
+  assert.equal(estimateTokens(3600, 'Makefile'), 1000);
+  assert.equal(estimateTokens(3600, ''), 1000);
+  assert.equal(estimateTokens(3600), 1000);
+});
+
+test('estimateTokens refuses to invent a number', () => {
+  assert.equal(estimateTokens(0, 'a.js'), 0);
+  assert.equal(estimateTokens(-5, 'a.js'), 0);
+  assert.equal(estimateTokens(NaN, 'a.js'), 0);
+  assert.equal(estimateTokens(null, 'a.js'), 0);
 });
