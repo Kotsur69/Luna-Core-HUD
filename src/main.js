@@ -378,6 +378,17 @@ async function runWidgetProbe(win) {
         cheatsheets: document.querySelectorAll('#cheatsheets').length,
         prompts: document.querySelectorAll('#prompts').length,
         skills: document.querySelectorAll('#skills-search').length,
+        // Everything below was added after the probe was written. The header
+        // says why they belong here: a marker list that stops growing keeps
+        // proving the same widgets while staying silent about every one added
+        // since, which is the failure mode this probe exists to catch.
+        media: document.querySelectorAll('#media-title').length,
+        sessiontimeline: document.querySelectorAll('#stimeline-track').length,
+        devices: document.querySelectorAll('#dev-mic-state').length,
+        todo: document.querySelectorAll('#todo-form').length,
+        clipboard: document.querySelectorAll('#clip-enabled').length,
+        mcp: document.querySelectorAll('#mcp-list').length,
+        git: document.querySelectorAll('#git-list').length,
       },
     });
   })()`;
