@@ -14,12 +14,12 @@ const { pickLocalized } = require('../src/renderer/modules/localize.js');
 
 // ---- isLocalized ------------------------------------------------------------
 
-test('isLocalized rozpoznaje obiekt z jezykami', () => {
+test('isLocalized recognizes an object with languages', () => {
   assert.equal(isLocalized({ pl: 'Testy', en: 'Tests' }), true);
   assert.equal(isLocalized({ en: 'Tests' }), true);
 });
 
-test('isLocalized odrzuca stringi, tablice i obce obiekty', () => {
+test('isLocalized rejects strings, arrays, and foreign objects', () => {
   assert.equal(isLocalized('Git'), false);
   assert.equal(isLocalized(['a', 'b']), false);
   assert.equal(isLocalized({ de: 'Tests' }), false);
@@ -28,13 +28,13 @@ test('isLocalized odrzuca stringi, tablice i obce obiekty', () => {
 
 // ---- hasText ----------------------------------------------------------------
 
-test('hasText akceptuje zwykly string i obiekt z trescia', () => {
+test('hasText accepts a plain string and an object with content', () => {
   assert.equal(hasText('Git'), true);
   assert.equal(hasText({ pl: 'Testy', en: 'Tests' }), true);
-  assert.equal(hasText({ en: ['linia'] }), true);
+  assert.equal(hasText({ en: ['line'] }), true);
 });
 
-test('hasText odrzuca puste wartosci', () => {
+test('hasText rejects empty values', () => {
   assert.equal(hasText(''), false);
   assert.equal(hasText('   '), false);
   assert.equal(hasText({ pl: '  ' }), false);
@@ -43,78 +43,78 @@ test('hasText odrzuca puste wartosci', () => {
 
 // ---- normalizeText ----------------------------------------------------------
 
-test('normalizeText sklada tablice linii w string', () => {
+test('normalizeText joins an array of lines into a string', () => {
   assert.equal(normalizeText(['a', 'b']), 'a\nb');
 });
 
-test('normalizeText sklada tablice OSOBNO dla kazdego jezyka', () => {
-  // To jest powod, dla ktorego loader nie moze po prostu wybrac jezyka:
-  // ksztalt { pl, en } musi przetrwac az do renderera.
+test('normalizeText joins arrays SEPARATELY for each language', () => {
+  // This is why the loader cannot simply pick a language up front:
+  // the { pl, en } shape must survive all the way to the renderer.
   assert.deepEqual(normalizeText({ pl: ['a', 'b'], en: ['x', 'y'] }), {
     pl: 'a\nb',
     en: 'x\ny',
   });
 });
 
-test('normalizeText przepuszcza zwykly string bez zmian', () => {
+test('normalizeText passes a plain string through unchanged', () => {
   assert.equal(normalizeText('Git'), 'Git');
 });
 
-test('normalizeText zwraca null, gdy nie ma zadnej tresci', () => {
+test('normalizeText returns null when there is no content at all', () => {
   assert.equal(normalizeText(''), null);
   assert.equal(normalizeText({ pl: '   ' }), null);
   assert.equal(normalizeText(null), null);
 });
 
-test('normalizeText pomija puste jezyki, zachowujac reszte', () => {
+test('normalizeText skips empty languages, keeping the rest', () => {
   assert.deepEqual(normalizeText({ pl: 'Testy', en: '' }), { pl: 'Testy' });
 });
 
 // ---- mergeKey ---------------------------------------------------------------
 
-test('mergeKey daje stabilny string dla tytulu zlokalizowanego', () => {
-  // Bez tego override z *.local.json po cichu przestaje dzialac: obiekty w
-  // Mapie porownuja sie przez tozsamosc, wiec kazda grupa bylaby unikalna.
+test('mergeKey gives a stable string for a localized title', () => {
+  // Without this, overriding from *.local.json silently stops working: objects
+  // in a Map compare by identity, so every group would end up unique.
   assert.equal(mergeKey({ pl: 'Testy / Build', en: 'Tests / Build' }), 'Testy / Build');
 });
 
-test('mergeKey pozwala staremu local override trafic w nowy base', () => {
-  // Base zlokalizowany, local napisany przed zmiana - musza dac ten sam klucz.
+test('mergeKey lets an old local override match the new base', () => {
+  // Base is localized, local was written before the change - they must produce the same key.
   assert.equal(mergeKey({ pl: 'Git', en: 'Git' }), mergeKey('Git'));
 });
 
-test('mergeKey spada na en, gdy nie ma pl', () => {
+test('mergeKey falls back to en when there is no pl', () => {
   assert.equal(mergeKey({ en: 'Tests' }), 'Tests');
 });
 
 // ---- pickLocalized (renderer) -----------------------------------------------
 
-test('pickLocalized wybiera zadany jezyk', () => {
+test('pickLocalized picks the requested language', () => {
   const v = { pl: 'Testy', en: 'Tests' };
   assert.equal(pickLocalized(v, 'pl'), 'Testy');
   assert.equal(pickLocalized(v, 'en'), 'Tests');
 });
 
-test('pickLocalized traktuje zwykly string jako neutralny jezykowo', () => {
-  // `git status` i `/compact` znacza to samo wszedzie - i tak wlasnie
-  // zostaja krotkimi wpisami w configu.
+test('pickLocalized treats a plain string as language-neutral', () => {
+  // `git status` and `/compact` mean the same thing everywhere - which is
+  // exactly why they stay as plain short entries in the config.
   assert.equal(pickLocalized('git status', 'en'), 'git status');
   assert.equal(pickLocalized('git status', 'pl'), 'git status');
 });
 
-test('pickLocalized spada na pl, potem na en', () => {
-  // Konfiguracja przetlumaczona w polowie ma pokazac drugi jezyk, nie pustke:
-  // pusta etykieta wyglada jak zepsuta aplikacja.
+test('pickLocalized falls back to pl, then to en', () => {
+  // A config translated only halfway should show the other language, not a blank:
+  // an empty label looks like a broken app.
   assert.equal(pickLocalized({ pl: 'Testy' }, 'en'), 'Testy');
   assert.equal(pickLocalized({ en: 'Tests' }, 'pl'), 'Tests');
 });
 
-test('pickLocalized sklada tablice linii', () => {
+test('pickLocalized joins arrays of lines', () => {
   assert.equal(pickLocalized(['a', 'b'], 'pl'), 'a\nb');
   assert.equal(pickLocalized({ en: ['x', 'y'] }, 'en'), 'x\ny');
 });
 
-test('pickLocalized zawsze zwraca string', () => {
+test('pickLocalized always returns a string', () => {
   assert.equal(pickLocalized(null, 'pl'), '');
   assert.equal(pickLocalized(undefined, 'pl'), '');
   assert.equal(pickLocalized({}, 'pl'), '');

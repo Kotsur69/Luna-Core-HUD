@@ -1,13 +1,13 @@
 // ============================================================================
-// LunaCore - Passive Observer (Faza 3)
+// LunaCore - Passive Observer (Phase 3)
 // ----------------------------------------------------------------------------
-// Czyste, pasywne wyciaganie metryk. ZERO dodatkowych tokenow:
-//   * detectTools()          - wykrywa nazwy narzedzi w surowym stdout PTY
-//                              (strip ANSI + dopasowanie znanych narzedzi).
-//   * TranscriptWatcher      - tailuje plik transcript JSONL Claude Code i
-//                              liczy realne zuzycie context window z pola usage.
+// Pure, passive metrics extraction. ZERO extra tokens:
+//   * detectTools()          - detects tool names in raw PTY stdout
+//                              (strip ANSI + match against known tools).
+//   * TranscriptWatcher      - tails Claude Code's JSONL transcript file and
+//                              computes real context-window usage from the usage field.
 //
-// Nic tu nie pisze do `claude` ani nie modyfikuje jego wejscia - tylko czyta.
+// Nothing here writes to `claude` or modifies its input - it only reads.
 // ============================================================================
 
 'use strict';
@@ -15,24 +15,24 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-// Wiedza o modelach: realne okno kontekstu + krotka etykieta do kafelka.
+// Model knowledge: the real context window + a short label for the tile.
 const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('./models');
-// Cennik do szacowania kosztu sesji (B4). Czyta wylacznie config/, zero sieci.
+// Price table for session cost estimation (B4). Reads only from config/, no network.
 const { loadRates, rateFor, estimateCost } = require('./rates');
-// Diff-stat extraction dla Active-Files Heatmap (ACTIVE_FILES_HEATMAP_PLAN.md).
+// Diff-stat extraction for the Active-Files Heatmap (ACTIVE_FILES_HEATMAP_PLAN.md).
 const { fileStatFromEntry } = require('./filestat');
 
-// ---- 1. Detekcja narzedzi ze stdout ----------------------------------------
+// ---- 1. Tool detection from stdout -----------------------------------------
 
-// Sekwencje ANSI/VT: CSI (\x1b[...X), OSC (\x1b]...BEL/ST), oraz proste \x1b(B itp.
-// Usuwamy je, zeby regex narzedzi dzialal na czystym tekscie TUI.
+// ANSI/VT sequences: CSI (\x1b[...X), OSC (\x1b]...BEL/ST), and simple \x1b(B etc.
+// We strip them so the tool regex works against clean TUI text.
 const ANSI_RE =
   /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|[\x00-\x08\x0b\x0c\x0e-\x1f]/g;
 
 /**
- * Znane narzedzia Claude Code. W TUI wywolanie renderuje sie jako "Nazwa(args)".
- * Klucz = etykieta kafelka w Skill Trackerze (data-skill w index.html).
- * Wartosc = regex-owa alternatywa nazw, ktore mapuja sie na ten kafelek.
+ * Known Claude Code tools. In the TUI a call renders as "Name(args)".
+ * Key = the tile label in the Skill Tracker (data-skill in index.html).
+ * Value = a regex alternation of names that map to this tile.
  */
 const TOOL_TILES = {
   Read: ['Read'],
@@ -49,19 +49,19 @@ const TOOL_TILES = {
   Task: ['Task', 'Agent'],
 };
 
-// Odwrotna mapa: nazwa narzedzia -> kafelek. Oraz jeden regex na wszystko.
+// Reverse map: tool name -> tile. Plus a single regex for all of them.
 const TOOL_TO_TILE = new Map();
 for (const [tile, names] of Object.entries(TOOL_TILES)) {
   for (const n of names) TOOL_TO_TILE.set(n, tile);
 }
 const ALL_TOOL_NAMES = [...TOOL_TO_TILE.keys()];
-// Dopasowanie "Nazwa(" - tak Claude Code wypisuje aktywne narzedzie w strumieniu.
+// Matches "Name(" - the shape Claude Code writes an active tool as in the stream.
 const TOOL_RE = new RegExp('\\b(' + ALL_TOOL_NAMES.join('|') + ')\\(', 'g');
 
 /**
- * Zwraca liste kafelkow, ktore powinny sie zapalic dla danej porcji stdout.
- * @param {string} raw surowe dane z ptyProcess.onData
- * @returns {string[]} unikalne etykiety kafelkow (np. ["Shell", "Read"])
+ * Returns the list of tiles that should light up for a given stdout chunk.
+ * @param {string} raw raw data from ptyProcess.onData
+ * @returns {string[]} unique tile labels (e.g. ["Shell", "Read"])
  */
 function detectTools(raw) {
   if (!raw) return [];
@@ -77,13 +77,14 @@ function detectTools(raw) {
 }
 
 /**
- * Wykrywa, czy surowy fragment stdout zawiera monit o zgode (y/n TUI Claude
- * Code). Heurystyka na LITERALNYCH podciagach z config/sound-triggers.json -
- * patrz src/soundTriggers.js i SOUNDS_IMPLEMENTATION_PLAN.md §3. Wersyjnie
- * krucha z zalozenia: tekst TUI moze sie zmienic miedzy wydaniami CLI, dlatego
- * to dane (config), nie stala w kodzie.
- * @param {string} raw surowe dane z ptyProcess.onData
- * @param {string[]} patterns literalne podciagi, case-sensitive
+ * Detects whether a raw stdout fragment contains an approval prompt (Claude
+ * Code's y/n TUI). A heuristic over LITERAL substrings from
+ * config/sound-triggers.json - see src/soundTriggers.js and
+ * SOUNDS_IMPLEMENTATION_PLAN.md §3. Deliberately version-fragile: the TUI text
+ * can change between CLI releases, which is why it is data (config), not a
+ * constant in code.
+ * @param {string} raw raw data from ptyProcess.onData
+ * @param {string[]} patterns literal substrings, case-sensitive
  * @returns {boolean}
  */
 function detectApprovalPrompt(raw, patterns) {
@@ -92,28 +93,28 @@ function detectApprovalPrompt(raw, patterns) {
   return patterns.some((p) => typeof p === 'string' && p && clean.includes(p));
 }
 
-// ---- 2. Tailowanie transcript JSONL (realne tokeny) ------------------------
+// ---- 2. Tailing the JSONL transcript (real tokens) -------------------------
 
-// Domyslne okno kontekstu. NIE jest juz twarda stala uzywana do liczenia -
-// realny limit wyznacza models.contextLimitFor() na podstawie modelu z
-// transkryptu i obserwowanego zuzycia. Zostaje jako wartosc domyslna/eksport.
+// Default context window. No longer a hard constant used for computation -
+// the real limit is determined by models.contextLimitFor() from the model in
+// the transcript and the observed usage. Kept as a default value/export.
 const CONTEXT_LIMIT = DEFAULT_CONTEXT_LIMIT;
 
-// Katalog, w ktorym Claude Code trzyma transcripty sesji (per-projekt).
+// Directory where Claude Code keeps session transcripts (per project).
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
-// Ile bajtow z konca pliku czytamy, szukajac ostatniego wpisu z usage.
+// How many bytes from the end of the file we read while looking for the last usage entry.
 const TAIL_BYTES = 128 * 1024;
 
 /**
- * Zamienia katalog roboczy na nazwe katalogu, w ktorym Claude Code trzyma jego
- * transcripty. CLI koduje sciezke, zastepujac kazdy znak niealfanumeryczny
- * mysinikiem, np.:
+ * Turns a working directory into the name of the directory where Claude Code
+ * keeps its transcripts. The CLI encodes the path by replacing every
+ * non-alphanumeric character with a hyphen, e.g.:
  *   C:\Users\mmazur\.local\bin  ->  C--Users-mmazur--local-bin
- * (podwojny mysinik bierze sie z pary separator + kropka).
+ * (the double hyphen comes from the separator + dot pair).
  *
- * To jest sedno obslugi wielu sesji naraz: bez tego nie da sie powiedziec,
- * ktory transcript nalezy do ktorej zakladki.
+ * This is the crux of handling multiple sessions at once: without it there is
+ * no way to tell which transcript belongs to which tab.
  * @param {string} cwd
  * @returns {string}
  */
@@ -122,23 +123,23 @@ function encodeProjectDir(cwd) {
 }
 
 /**
- * Pliki transcriptow juz przypisane do zyjacych watcherow.
+ * Transcript files already claimed by live watchers.
  *
- * Katalog transcriptow jest kluczowany FOLDEREM, a plik SESJA - wiec dwie
- * zakladki otwarte na tym samym repo widza ten sam katalog z dwoma plikami.
- * Bez rezerwacji obie wybralyby "najswiezszy" i pokazywalyby te sama sesje.
- * Wszystkie watchery zyja w tym samym procesie glownym, wiec zwykly Set
- * wystarcza za rejestr: kazdy plik moze miec tylko jednego wlasciciela.
+ * The transcript directory is keyed by FOLDER, and the file by SESSION - so
+ * two tabs open on the same repo see the same directory holding two files.
+ * Without a reservation both would pick the "newest one" and show the same
+ * session. All watchers live in the same main process, so a plain Set is
+ * enough as a registry: each file can have only one owner.
  */
 const claimedTranscripts = new Set();
 
-/** Zwraca [{ full, mtimeMs, birthMs }] dla plikow .jsonl w katalogu. */
+/** Returns [{ full, mtimeMs, birthMs }] for the .jsonl files in a directory. */
 function listJsonl(dir) {
   let files;
   try {
     files = fs.readdirSync(dir);
   } catch {
-    return []; // katalog sesji jeszcze nie powstal
+    return []; // the session directory does not exist yet
   }
   const out = [];
   for (const file of files) {
@@ -148,13 +149,13 @@ function listJsonl(dir) {
       const st = fs.statSync(full);
       out.push({ full, mtimeMs: st.mtimeMs, birthMs: st.birthtimeMs || st.ctimeMs });
     } catch {
-      /* plik zniknal miedzy readdir a stat - ignoruj */
+      /* file vanished between readdir and stat - ignore */
     }
   }
   return out;
 }
 
-/** Znajduje najswiezszy plik .jsonl w drzewie ~/.claude/projects. */
+/** Finds the newest .jsonl file across the ~/.claude/projects tree. */
 function findNewestTranscript() {
   let newest = null;
   let newestMtime = 0;
@@ -162,7 +163,7 @@ function findNewestTranscript() {
   try {
     projectDirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true });
   } catch {
-    return null; // katalog jeszcze nie istnieje
+    return null; // directory does not exist yet
   }
   for (const dirent of projectDirs) {
     if (!dirent.isDirectory()) continue;
@@ -183,7 +184,7 @@ function findNewestTranscript() {
           newest = full;
         }
       } catch {
-        /* plik zniknal miedzy readdir a stat - ignoruj */
+        /* file vanished between readdir and stat - ignore */
       }
     }
   }
@@ -191,9 +192,9 @@ function findNewestTranscript() {
 }
 
 /**
- * Czyta koncowke pliku i zwraca ostatnia probke: { usage, model } (lub null).
- * Model bierzemy z tej samej linii co usage - jedno parsowanie, dwa pozytki:
- * realne okno kontekstu (B2) i plakietka modelu (B3).
+ * Reads the tail of a file and returns the latest sample: { usage, model } (or null).
+ * The model is taken from the same line as usage - one parse, two payoffs:
+ * the real context window (B2) and the model badge (B3).
  */
 function readLatestSample(file) {
   let fd;
@@ -207,7 +208,7 @@ function readLatestSample(file) {
     fs.readSync(fd, buf, 0, length, start);
     const text = buf.toString('utf8');
     const lines = text.split('\n');
-    // Idziemy od konca - interesuje nas najswiezszy wpis z usage.
+    // Walk from the end - we want the most recent entry that carries usage.
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i].trim();
       if (!line || !line.includes('"usage"')) continue;
@@ -219,7 +220,7 @@ function readLatestSample(file) {
           return { usage, model: typeof message.model === 'string' ? message.model : '' };
         }
       } catch {
-        /* niepelna/uszkodzona linia (np. urwany zapis) - probuj dalej */
+        /* incomplete/corrupt line (e.g. a truncated write) - keep trying */
       }
     }
   } catch {
@@ -269,7 +270,7 @@ function sumUsageByModel(text) {
       totals.cacheRead += usage.cache_read_input_tokens || 0;
       totals.cacheWrite += usage.cache_creation_input_tokens || 0;
     } catch {
-      /* niepelna/uszkodzona linia - pomijamy */
+      /* incomplete/corrupt line - skip */
     }
   }
   return byModel;
@@ -503,7 +504,7 @@ function sumUsageLines(text) {
   return totals;
 }
 
-// Cennik ladujemy raz na proces (plik configu nie zmienia sie w trakcie sesji).
+// The price table is loaded once per process (the config file does not change mid-session).
 let ratesCache = null;
 
 /**
@@ -544,34 +545,34 @@ function estimateSessionCost(byModel) {
 }
 
 /**
- * Zamienia obiekt usage na metryki context window.
- * @param {object} usage pole `usage` z transkryptu
- * @param {string} [model] id modelu z tej samej linii - wyznacza realne okno
+ * Turns a usage object into context-window metrics.
+ * @param {object} usage the `usage` field from the transcript
+ * @param {string} [model] model id from the same line - determines the real window
  */
 function usageToMetrics(usage, model = '') {
   const tokens =
     (usage.input_tokens || 0) +
     (usage.cache_read_input_tokens || 0) +
     (usage.cache_creation_input_tokens || 0);
-  // Okno liczone z modelu I z obserwacji - patrz komentarz w models.js.
+  // Window computed from the model AND from observation - see the comment in models.js.
   const limit = contextLimitFor(model, tokens);
   const percent = Math.min(1, tokens / limit);
   return { tokens, limit, percent, model: String(model || ''), modelLabel: modelLabel(model) };
 }
 
 /**
- * Cyklicznie sprawdza transcript i emituje metryki context window, gdy plik sie
- * zmieni. Czysto lokalne, zadnych zadan do modelu.
+ * Periodically checks the transcript and emits context-window metrics when
+ * the file changes. Purely local, no calls to the model.
  *
- * Dwa tryby:
- *   * z `cwd`  - patrzy WYLACZNIE w katalog transcriptow tego katalogu roboczego.
- *                Tego wymaga tryb wielu sesji: przy dwoch zywych zakladkach
- *                "najswiezszy w calym drzewie" pokazywalby metryki tej, w ktorej
- *                ostatnio cos sie dzialo - czyli cudze liczby.
- *   * bez cwd  - stare zachowanie (najswiezszy w calym drzewie). Sluzy tez jako
- *                zapasowe wyjscie, dopoki katalog sesji nie powstanie: CLI tworzy
- *                go dopiero przy pierwszej wymianie zdan, a do tego czasu nie
- *                mamy czego tailowac.
+ * Two modes:
+ *   * with `cwd`    - looks ONLY in that working directory's transcript folder.
+ *                     Required by multi-session mode: with two live tabs, "the
+ *                     newest across the whole tree" would show the metrics of
+ *                     whichever one last did something - someone else's numbers.
+ *   * without cwd   - the old behaviour (newest across the whole tree). Also
+ *                     serves as a fallback until the session directory exists:
+ *                     the CLI only creates it on the first exchange, and until
+ *                     then there is nothing to tail.
  */
 class TranscriptWatcher {
   /**
@@ -579,7 +580,7 @@ class TranscriptWatcher {
    * @param {{cwd?: string, intervalMs?: number}} [options]
    */
   constructor(onMetrics, options = {}) {
-    // Zgodnosc wstecz: kiedys drugim argumentem byl goly interwal w ms.
+    // Backward compatibility: the second argument used to be a bare interval in ms.
     const opts = typeof options === 'number' ? { intervalMs: options } : options || {};
     this.onMetrics = onMetrics;
     // Optional: called with Skill Tracker start/end events from newly appended
@@ -605,7 +606,7 @@ class TranscriptWatcher {
     this.timer = null;
     this.currentFile = null;
     this.lastMtime = 0;
-    // Plik przypisany tej sesji na stale (patrz pickFile).
+    // The file permanently assigned to this session (see pickFile).
     this.pinned = null;
     this.baseline = new Map();
     this.startedAt = 0;
@@ -617,14 +618,14 @@ class TranscriptWatcher {
   }
 
   /**
-   * Doczytuje TYLKO to, co dopisano od ostatniego ticku, i dolicza do sumy.
-   * Czytanie calego pliku co 1.5 s byloby marnotrawstwem przy dlugiej sesji,
-   * a suma i tak jest przyrostowa. Offset przesuwamy wylacznie do ostatniego
-   * pelnego "\n" - urwana linia doliczy sie przy nastepnym ticku.
+   * Reads ONLY what was appended since the last tick and adds it to the total.
+   * Reading the whole file every 1.5 s would be wasteful over a long session,
+   * and the sum is incremental anyway. The offset only ever advances to the
+   * last complete "\n" - a truncated line gets picked up on the next tick.
    * @param {string} file
    */
   accumulate(file) {
-    // Zmiana pliku (restart/przypiecie innej sesji) = liczymy od zera.
+    // A file change (restart / claiming a different session) = start counting from zero.
     if (file !== this.costFile) {
       this.costFile = file;
       this.costOffset = 0;
@@ -641,7 +642,7 @@ class TranscriptWatcher {
     try {
       fd = fs.openSync(file, 'r');
       const size = fs.fstatSync(fd).size;
-      // Plik skrocony (rzadkie, ale nie zakladajmy) - przelicz od nowa.
+      // File got truncated (rare, but let's not assume otherwise) - recompute from scratch.
       if (size < this.costOffset) {
         this.costOffset = 0;
         this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -653,7 +654,7 @@ class TranscriptWatcher {
       fs.readSync(fd, buf, 0, length, this.costOffset);
       const text = buf.toString('utf8');
       const lastNewline = text.lastIndexOf('\n');
-      if (lastNewline < 0) return; // jeszcze ani jednej pelnej linii
+      if (lastNewline < 0) return; // not even one complete line yet
       const complete = text.slice(0, lastNewline);
       this.costOffset += Buffer.byteLength(complete, 'utf8') + 1;
       for (const [model, add] of sumUsageByModel(complete)) {
@@ -698,16 +699,16 @@ class TranscriptWatcher {
         }
       }
     } catch {
-      /* plik zniknal / brak dostepu - koszt po prostu sie nie zaktualizuje */
+      /* file vanished / no access - the cost simply does not get updated */
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
   }
 
   /**
-   * Zdjecie stanu katalogu w chwili startu sesji. Wszystko, co bylo tu
-   * wczesniej, nalezy do cudzych sesji - chyba ze zacznie rosnac po naszym
-   * starcie, co oznacza wznowienie (--continue) wlasnie do tego pliku.
+   * A snapshot of the directory's state at session start. Everything that was
+   * here already belongs to someone else's sessions - unless it starts growing
+   * after our start, which means a resume (--continue) into exactly this file.
    */
   snapshotBaseline() {
     this.startedAt = Date.now();
@@ -717,18 +718,19 @@ class TranscriptWatcher {
   }
 
   /**
-   * Wybiera plik do tailowania i PRZYPINA go na stale.
+   * Picks the file to tail and PINS it permanently.
    *
-   * Bez przypiecia kazdy tick bralby "najswiezszy w katalogu" - a przy dwoch
-   * zakladkach na tym samym folderze najswiezszy jest ten, w ktorym ostatnio
-   * cos napisano, czyli czesto cudzy. Wtedy pasek kontekstu klamie, a uzbrojony
-   * auto-compact potrafi strzelic /compact w sesje, ktora wcale nie jest pelna.
+   * Without pinning, every tick would pick "the newest in the directory" - and
+   * with two tabs on the same folder, the newest is whichever one last had
+   * something written to it, which is often someone else's. Then the context
+   * bar lies, and an armed auto-compact can fire /compact into a session that
+   * is not actually full.
    *
-   * Kolejnosc wyboru:
-   *   1. plik utworzony PO starcie sesji  -> nowa sesja, na pewno nasz
-   *   2. plik z baseline, ktory urosl PO starcie -> wznowienie (--continue)
-   * Pliki zajete przez inne watchery pomijamy. Gdy nie ma kandydata, zwracamy
-   * null: swieza sesja, ktora jeszcze nie wymienila zdania, naprawde ma 0%.
+   * Selection order:
+   *   1. a file created AFTER the session started  -> a new session, definitely ours
+   *   2. a baseline file that grew AFTER the start  -> a resume (--continue)
+   * Files claimed by other watchers are skipped. When there is no candidate,
+   * returns null: a fresh session that has not exchanged a message yet really is 0%.
    */
   pickFile() {
     if (this.pinned) return this.pinned;
@@ -756,8 +758,8 @@ class TranscriptWatcher {
     );
     const pool = fresh.length > 0 ? fresh : resumed;
     if (pool.length === 0) {
-      // Katalog jeszcze nie istnieje - dopoki tak jest, stary globalny fallback
-      // nie moze pomylic sesji, bo innych zakladek na tym folderze nie ma.
+      // Directory does not exist yet - as long as that holds, the old global
+      // fallback cannot mix up sessions, since there are no other tabs on this folder.
       return fs.existsSync(this.scopeDir) ? null : findNewestTranscript();
     }
 
@@ -771,13 +773,13 @@ class TranscriptWatcher {
     if (this.timer) return;
     this.snapshotBaseline();
     this.timer = setInterval(() => this.tick(), this.intervalMs);
-    this.tick(); // pierwsza proba od razu
+    this.tick(); // first attempt immediately
   }
 
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    // Zwolnij rezerwacje, zeby restart tej samej zakladki mogl ja odzyskac.
+    // Release the reservation so a restart of the same tab can reclaim it.
     if (this.pinned) claimedTranscripts.delete(this.pinned);
     this.pinned = null;
   }
@@ -791,12 +793,12 @@ class TranscriptWatcher {
     } catch {
       return;
     }
-    // Nic sie nie zmienilo od ostatniego odczytu - pomijamy parsowanie.
+    // Nothing changed since the last read - skip parsing.
     if (file === this.currentFile && mtime === this.lastMtime) return;
     this.currentFile = file;
     this.lastMtime = mtime;
 
-    this.accumulate(file); // B4: dolicz nowe linie do sumy sesji
+    this.accumulate(file); // B4: add the new lines to the session total
     const sample = readLatestSample(file);
     if (!sample) return;
 
@@ -807,7 +809,7 @@ class TranscriptWatcher {
     metrics.file = file;
     metrics.totals = { ...this.totals };
     metrics.elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
-    // Koszt tylko dla modeli z cennika - nieznany backend nie dostaje zmyslonej kwoty.
+    // Cost only for models in the price table - an unknown backend gets no made-up amount.
     // Priced per model, so switching mid-session does not re-price the history.
     const cost = estimateSessionCost(this.byModel);
     if (cost) metrics.cost = cost;

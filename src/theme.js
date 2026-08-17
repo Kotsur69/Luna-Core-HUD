@@ -1,13 +1,14 @@
 // ============================================================================
-// LunaCore - Motywy (theming system)
+// LunaCore - Themes (theming system)
 // ----------------------------------------------------------------------------
-// Laduje motywy z config/themes.json (+ opcjonalny override config/themes.local.json,
-// gitignore). Kazdy motyw = mapa tokenow CSS (`vars`) + kolory terminala xterm
-// (`terminal`). Renderer naklada `vars` na document.documentElement i ustawia
-// palete xterm - przelaczenie na zywo, bez reloadu.
+// Loads themes from config/themes.json (+ an optional override
+// config/themes.local.json, gitignored). Each theme is a map of CSS tokens
+// (`vars`) + xterm terminal colors (`terminal`). The renderer applies `vars` to
+// document.documentElement and sets the xterm palette - a live switch, no reload.
 //
-// Walidacja na granicy jak w profiles.js: odrzucamy motywy bez id/vars. Pusty lub
-// uszkodzony config => wbudowany FALLBACK (cyberpunk), nigdy puste okno.
+// Validation at the boundary, same as profiles.js: themes without id/vars are
+// rejected. An empty or broken config => the built-in FALLBACK (cyberpunk),
+// never an empty window.
 // ============================================================================
 
 'use strict';
@@ -15,14 +16,14 @@
 const fs = require('fs');
 const paths = require('./paths');
 
-// Motywy wysylane z aplikacja czytamy z katalogu bundled - w wersji spakowanej
-// siedzi w app.asar, co do odczytu w zupelnosci wystarcza. Override uzytkownika
-// lezy w katalogu ZAPISYWALNYM i liczymy go leniwie, bo modul jest wymagany
-// przed app.whenReady(). Szczegoly w paths.js.
+// The themes shipped with the app are read from the bundled directory - in a
+// packaged build it sits inside app.asar, which is plenty for reading. The
+// user's override lives in the WRITABLE directory and is resolved lazily, since
+// this module is required before app.whenReady(). Details in paths.js.
 const BASE_FILE = paths.bundled('themes.json');
 const localFile = () => paths.local('themes.local.json');
 
-// Awaryjny motyw, gdy brak/uszkodzony config - zawsze cos dziala.
+// Emergency theme for a missing or broken config - something always works.
 const FALLBACK = {
   themes: [
     {
@@ -56,7 +57,7 @@ const FALLBACK = {
   ],
 };
 
-/** Bezpieczny odczyt + parse JSON. Zwraca null przy braku/bledzie. */
+/** Safe read + JSON parse. Returns null when the file is missing or invalid. */
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -100,7 +101,7 @@ const KNOWN_TOKENS = new Set([
 ]);
 
 /**
- * Waliduje i normalizuje pojedynczy motyw. Zwraca obiekt lub null.
+ * Validates and normalizes a single theme. Returns an object or null.
  *
  * An unknown token is a warning, not a rejection: one typo should cost the
  * author that token, not the whole theme. Malformed *structure* (no id, no
@@ -133,7 +134,7 @@ function normalizeTheme(t, warn = () => {}) {
 }
 
 /**
- * Rozwiazuje `extends`: motyw dziedziczy tokeny rodzica, wlasne wygrywaja.
+ * Resolves `extends`: a theme inherits its parent's tokens, its own win.
  *
  * The vocabulary is ~45 tokens now. Without inheritance every variant of a look
  * (a dimmer cyberpunk, a sharper nord) has to restate all of them, and the
@@ -186,8 +187,8 @@ function resolveInheritance(byId, warn) {
 }
 
 /**
- * Laduje motywy: base (themes.json) scalone z local (themes.local.json).
- * Local nadpisuje/dodaje motywy po id.
+ * Loads themes: base (themes.json) merged with local (themes.local.json).
+ * Local overrides/adds themes by id.
  * @param {(msg: string) => void} [warn] where malformed-config complaints go
  * @returns {{themes: Array<{id:string,label:string,vars:Object,terminal:Object}>}}
  */

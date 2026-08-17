@@ -1,5 +1,5 @@
-// Testy D5 - decyzja "czy ta kompilacja moze sie zaktualizowac" + normalizacja
-// danych z sieci. Czyste funkcje, bez I/O i bez Electrona.
+// D5 tests - the "can this build update itself" decision + normalization of
+// data from the network. Pure functions, no I/O and no Electron.
 
 'use strict';
 
@@ -17,45 +17,45 @@ const {
   REPO_NAME,
 } = require('../src/update');
 
-// ---- supportsUpdates: trzy swiaty, trzy zachowania --------------------------
+// ---- supportsUpdates: three worlds, three behaviors --------------------------
 
-test('klon deweloperski nie aktualizuje sie sam', () => {
+test('a dev clone does not update itself', () => {
   const r = supportsUpdates({ isPackaged: false, portableDir: null });
   assert.equal(r.supported, false);
   assert.equal(r.reason, REASON.DEV);
 });
 
-// Ten przypadek jest wazniejszy, niz wyglada: latest.yml zawiera WYLACZNIE
-// instalator NSIS, wiec "aktualizacja" wersji portable zainstalowalaby DRUGA
-// kopie aplikacji obok pierwszej. Odmowa jest tu poprawnym zachowaniem.
-test('wersja portable odmawia aktualizacji (brak instalacji do podmiany)', () => {
+// This case matters more than it looks: latest.yml contains ONLY the NSIS
+// installer, so "updating" the portable version would install a SECOND copy
+// of the app alongside the first. Refusing is the correct behavior here.
+test('the portable version refuses to update (no installation to replace)', () => {
   const r = supportsUpdates({ isPackaged: true, portableDir: 'D:\\LunaCore' });
   assert.equal(r.supported, false);
   assert.equal(r.reason, REASON.PORTABLE);
 });
 
-test('instalacja NSIS moze sie aktualizowac', () => {
+test('an NSIS installation can update itself', () => {
   const r = supportsUpdates({ isPackaged: true, portableDir: null });
   assert.equal(r.supported, true);
   assert.equal(r.reason, REASON.OK);
 });
 
-// Kolejnosc ma znaczenie: portable JEST spakowany, wiec gdyby isPackaged
-// sprawdzac po portableDir, dev z ustawiona zmienna srodowiskowa udawalby
-// instalacje. paths.js ma dokladnie ten sam porzadek i z tego samego powodu.
-test('dev wygrywa nad portable, gdy PORTABLE_EXECUTABLE_DIR wycieknie do shella', () => {
+// Order matters: portable IS packaged, so if isPackaged were checked after
+// portableDir, a dev with the env var set would masquerade as an install.
+// paths.js has this exact same ordering and for the same reason.
+test('dev wins over portable when PORTABLE_EXECUTABLE_DIR leaks into the shell', () => {
   const r = supportsUpdates({ isPackaged: false, portableDir: 'D:\\LunaCore' });
   assert.equal(r.reason, REASON.DEV);
 });
 
-test('brak argumentu nie wywala sie, tylko odmawia', () => {
+test('a missing argument does not throw, it just refuses', () => {
   assert.equal(supportsUpdates(undefined).supported, false);
   assert.equal(supportsUpdates(null).reason, REASON.DEV);
 });
 
-// ---- normalizeUpdateInfo: dane z sieci sa nieufne ---------------------------
+// ---- normalizeUpdateInfo: data from the network is untrusted ---------------------
 
-test('normalizeUpdateInfo zwraca wersje, date i link', () => {
+test('normalizeUpdateInfo returns version, date and link', () => {
   const info = normalizeUpdateInfo({
     version: '0.9.1',
     releaseDate: '2026-08-09T10:00:00.000Z',
@@ -66,97 +66,97 @@ test('normalizeUpdateInfo zwraca wersje, date i link', () => {
   assert.match(info.url, /releases\/tag\/v0\.9\.1$/);
 });
 
-// Ta sama zasada co przy koszcie (B4): brak danych daje BRAK wyniku, nigdy
-// pewnie wygladajaca bzdure w rodzaju "Aktualizacja do undefined".
-test('brak wersji daje null zamiast pilki "undefined"', () => {
+// The same rule as with cost (B4): missing data gives NO result, never a
+// confident-looking nonsense value like "Update to undefined".
+test('a missing version gives null instead of an "undefined" pill', () => {
   assert.equal(normalizeUpdateInfo({ releaseDate: '2026-08-09T10:00:00.000Z' }), null);
   assert.equal(normalizeUpdateInfo({ version: '   ' }), null);
   assert.equal(normalizeUpdateInfo({ version: 42 }), null);
 });
 
-test('normalizeUpdateInfo znosi smieci na wejsciu', () => {
+test('normalizeUpdateInfo tolerates garbage input', () => {
   assert.equal(normalizeUpdateInfo(null), null);
   assert.equal(normalizeUpdateInfo(undefined), null);
   assert.equal(normalizeUpdateInfo('0.9.1'), null);
 });
 
-test('brak daty wydania to null, a nie pusty string', () => {
+test('a missing release date is null, not an empty string', () => {
   assert.equal(normalizeUpdateInfo({ version: '0.9.1' }).releaseDate, null);
 });
 
-// ---- adresy -----------------------------------------------------------------
+// ---- addresses -----------------------------------------------------------------
 
-test('releaseUrl bez wersji wskazuje na najnowsze wydanie', () => {
+test('releaseUrl without a version points at the latest release', () => {
   assert.match(releaseUrl(''), /releases\/latest$/);
   assert.match(releaseUrl(undefined), /releases\/latest$/);
 });
 
-test('releasesUrl wskazuje na indeks wydan', () => {
+test('releasesUrl points at the release index', () => {
   assert.equal(releasesUrl(), `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`);
 });
 
-// ---- progressPercent: NaN nigdy nie moze dojsc do paska ---------------------
-// Powod jest historyczny: zepsute ETA do 85% przezylo trzy refaktory wlasnie
-// dlatego, ze NaN nie rzuca wyjatkiem, tylko po cichu wybiera zla galaz.
+// ---- progressPercent: NaN must never reach the bar ---------------------
+// The reason is historical: a broken ETA stuck at 85% survived three
+// refactors precisely because NaN doesn't throw, it silently picks the wrong branch.
 
-test('progressPercent zaokragla w dol do calych procent', () => {
+test('progressPercent rounds down to whole percent', () => {
   assert.equal(progressPercent({ percent: 42.7 }), 42);
   assert.equal(progressPercent({ percent: 0 }), 0);
   assert.equal(progressPercent({ percent: 100 }), 100);
 });
 
-test('progressPercent przycina zakres do 0-100', () => {
+test('progressPercent clamps the range to 0-100', () => {
   assert.equal(progressPercent({ percent: -5 }), 0);
   assert.equal(progressPercent({ percent: 140 }), 100);
 });
 
-test('progressPercent nigdy nie zwraca NaN', () => {
-  for (const bad of [null, undefined, {}, { percent: 'polowa' }, { percent: NaN }, 'x']) {
+test('progressPercent never returns NaN', () => {
+  for (const bad of [null, undefined, {}, { percent: 'half' }, { percent: NaN }, 'x']) {
     const v = progressPercent(bad);
-    assert.ok(Number.isFinite(v), `progressPercent(${JSON.stringify(bad)}) dalo ${v}`);
+    assert.ok(Number.isFinite(v), `progressPercent(${JSON.stringify(bad)}) gave ${v}`);
     assert.equal(v, 0);
   }
 });
 
-// ---- pokrycie WYSYLANEGO configu -------------------------------------------
-// Testy DANYCH, nie logiki - dokladnie ten sam mechanizm, ktory zlapal brak
-// Opus 5 w rates.json. Logika aktualizacji moze byc zielona, a mimo to aplikacja
-// bedzie odpytywac nieistniejace repozytorium, bo publish w package.json
-// rozjechal sie ze stalymi w update.js. Tego zadna atrapa nie wykryje.
+// ---- coverage of the PUBLISHED config -------------------------------------
+// Tests of DATA, not logic - the exact same mechanism that caught the
+// missing Opus 5 entry in rates.json. Update logic can be all green while the
+// app still polls a nonexistent repository, because `publish` in package.json
+// drifted from the constants in update.js. No mock would ever catch this.
 
 const pkg = require('../package.json');
 
-test('package.json ma konfiguracje publish dla GitHuba', () => {
+test('package.json has a GitHub publish config', () => {
   const publish = pkg.build && pkg.build.publish;
-  assert.ok(publish, 'brak build.publish - electron-updater nie wie, gdzie szukac');
+  assert.ok(publish, 'no build.publish - electron-updater has no idea where to look');
 
   const entries = [].concat(publish);
   const github = entries.find((e) => e && e.provider === 'github');
-  assert.ok(github, 'brak dostawcy github w build.publish');
+  assert.ok(github, 'no github provider in build.publish');
 });
 
-test('publish w package.json zgadza sie z adresami w update.js', () => {
+test('package.json\'s publish matches the addresses in update.js', () => {
   const entries = [].concat(pkg.build.publish);
   const github = entries.find((e) => e && e.provider === 'github');
 
-  assert.equal(github.owner, REPO_OWNER, 'owner rozjechal sie z update.js');
-  assert.equal(github.repo, REPO_NAME, 'repo rozjechalo sie z update.js');
+  assert.equal(github.owner, REPO_OWNER, 'owner drifted from update.js');
+  assert.equal(github.repo, REPO_NAME, 'repo drifted from update.js');
 });
 
-// electron-updater porownuje wersje z latest.yml z ta z package.json. Gdyby
-// zabraklo jej lub byla nie-semver, aplikacja albo nigdy nie zobaczy
-// aktualizacji, albo zobaczy ja natychmiast po instalacji.
-test('package.json ma wersje w formacie semver', () => {
-  assert.match(pkg.version, /^\d+\.\d+\.\d+/, `wersja "${pkg.version}" nie jest semver`);
+// electron-updater compares the version from latest.yml against the one in
+// package.json. If it were missing or not semver, the app would either never
+// see an update, or see one immediately after installing.
+test('package.json has a semver-format version', () => {
+  assert.match(pkg.version, /^\d+\.\d+\.\d+/, `version "${pkg.version}" is not semver`);
 });
 
-test('electron-updater jest zaleznoscia produkcyjna, nie deweloperska', () => {
+test('electron-updater is a production dependency, not a dev one', () => {
   assert.ok(
     pkg.dependencies && pkg.dependencies['electron-updater'],
-    'electron-updater w devDependencies nie trafi do spakowanej aplikacji'
+    'electron-updater in devDependencies would not ship in the packaged app'
   );
   assert.ok(
     !(pkg.devDependencies && pkg.devDependencies['electron-updater']),
-    'electron-updater nie moze byc jednoczesnie w devDependencies'
+    'electron-updater cannot also be in devDependencies'
   );
 });

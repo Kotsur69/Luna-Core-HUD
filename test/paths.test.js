@@ -1,10 +1,10 @@
 // ============================================================================
-// LunaCore - testy rozwiazywania sciezek konfiguracji (D1)
+// LunaCore - config path resolution tests (D1)
 // ----------------------------------------------------------------------------
-// resolveUserDir() jest czysta wlasnie po to, zeby dalo sie ja przetestowac bez
-// Electrona: kazdy stan srodowiska (dev / portable / zainstalowany / awaryjny)
-// to zwykly obiekt wejsciowy. Testy uruchamiaja sie pod golym node, gdzie
-// require('electron') zawodzi - czyli dokladnie w galezi "klon dev".
+// resolveUserDir() is pure precisely so it can be tested without Electron:
+// every environment state (dev / portable / installed / fallback) is just a
+// plain input object. Tests run under bare node, where require('electron')
+// fails - i.e. exactly in the "dev clone" branch.
 // ============================================================================
 
 'use strict';
@@ -18,19 +18,19 @@ const paths = require('../src/paths');
 
 const BUNDLED = '/app/resources/app.asar/config';
 
-test('klon dev: nieopakowana aplikacja zawsze uzywa katalogu repo', () => {
+test('dev clone: an unpackaged app always uses the repo directory', () => {
   const dir = paths.resolveUserDir({
     isPackaged: false,
     userData: 'C:\\Users\\x\\AppData\\Roaming\\LunaCore',
     portableDir: 'D:\\LunaCore',
     bundledDir: BUNDLED,
   });
-  // Kluczowe: ani userData, ani portableDir nie moga przejac kontroli w devie -
-  // inaczej zabladzana zmienna srodowiskowa przeniosla by config pod stopami.
+  // Key: neither userData nor portableDir may take over control in dev -
+  // otherwise a stray environment variable would move the config out from under us.
   assert.strictEqual(dir, BUNDLED);
 });
 
-test('wersja portable: config laduje obok .exe', () => {
+test('portable version: config lives next to the .exe', () => {
   const dir = paths.resolveUserDir({
     isPackaged: true,
     userData: null,
@@ -40,7 +40,7 @@ test('wersja portable: config laduje obok .exe', () => {
   assert.strictEqual(dir, path.join('D:\\LunaCore', paths.PORTABLE_DIRNAME));
 });
 
-test('wersja zainstalowana: config w userData', () => {
+test('installed version: config in userData', () => {
   const userData = 'C:\\Users\\x\\AppData\\Roaming\\LunaCore';
   const dir = paths.resolveUserDir({
     isPackaged: true,
@@ -51,19 +51,19 @@ test('wersja zainstalowana: config w userData', () => {
   assert.strictEqual(dir, path.join(userData, 'config'));
 });
 
-test('portable wygrywa z userData, gdy oba sa znane', () => {
+test('portable wins over userData when both are known', () => {
   const dir = paths.resolveUserDir({
     isPackaged: true,
     userData: 'C:\\Users\\x\\AppData\\Roaming\\LunaCore',
     portableDir: 'D:\\LunaCore',
     bundledDir: BUNDLED,
   });
-  // Wersja portable ma z definicji byc samowystarczalna - jesli uzytkownik
-  // odpalil ja z pendrive'a, ustawienia maja jechac razem z nia.
+  // The portable version is by definition meant to be self-contained - if the
+  // user ran it from a USB drive, settings must travel along with it.
   assert.strictEqual(dir, path.join('D:\\LunaCore', paths.PORTABLE_DIRNAME));
 });
 
-test('awaryjnie: spakowana, ale bez zadnej informacji -> katalog bundled', () => {
+test('emergency case: packaged but with no information at all -> the bundled dir', () => {
   const dir = paths.resolveUserDir({
     isPackaged: true,
     userData: null,
@@ -73,32 +73,32 @@ test('awaryjnie: spakowana, ale bez zadnej informacji -> katalog bundled', () =>
   assert.strictEqual(dir, BUNDLED);
 });
 
-test('pod golym node (testy) local() i bundled() wskazuja ten sam katalog', () => {
-  // To jest gwarancja "nic sie nie zmienia w devie": ui.local.json zostaje
-  // dokladnie tam, gdzie byl przed D1.
+test('under plain node (tests) local() and bundled() point at the same directory', () => {
+  // This is the guarantee that "nothing changes in dev": ui.local.json stays
+  // exactly where it was before D1.
   assert.strictEqual(path.dirname(paths.local('ui.local.json')), paths.bundledDir());
   assert.strictEqual(path.dirname(paths.bundled('themes.json')), paths.bundledDir());
 });
 
-test('bundled() naprawde trafia w wysylane pliki konfiguracji', () => {
-  // Straznik dryfu: gdyby ktos przeniosl config/ albo zmienil uklad repo,
-  // paths.js musi sie przeniesc razem z nim. Bez tego testu blad ujawnilby sie
-  // dopiero w zbudowanej aplikacji, gdzie kazdy motyw po cichu wraca do
-  // wbudowanego fallbacku.
+test('bundled() genuinely resolves to the shipped config files', () => {
+  // Drift guard: if someone moves config/ or reshuffles the repo layout,
+  // paths.js must move along with it. Without this test the bug would only
+  // surface in the built app, where every theme would silently fall back to
+  // the bundled default.
   for (const name of ['themes.json', 'layouts.json', 'profiles.json']) {
-    assert.ok(fs.existsSync(paths.bundled(name)), `brak wysylanego pliku ${name}`);
+    assert.ok(fs.existsSync(paths.bundled(name)), `missing shipped file ${name}`);
   }
 });
 
-test('local() nie zwraca sciezki wewnatrz asar w zadnej galezi spakowanej', () => {
-  // Sedno D1: w zbudowanej aplikacji katalog zapisywalny nigdy nie moze wskazywac
-  // do wnetrza asar, bo kazdy zapis cicho przepada (ustawienia sie nie zapisuja).
+test('local() never returns a path inside the asar on any packaged branch', () => {
+  // The crux of D1: in the built app, the writable directory must never point
+  // inside the asar, because every write silently vanishes (settings don't save).
   const packed = [
     { isPackaged: true, userData: 'C:\\Users\\x\\AppData\\Roaming\\LunaCore', portableDir: null },
     { isPackaged: true, userData: null, portableDir: 'D:\\LunaCore' },
   ];
   for (const env of packed) {
     const dir = paths.resolveUserDir({ ...env, bundledDir: BUNDLED });
-    assert.ok(!dir.includes('.asar'), `katalog zapisywalny wpadl do asar: ${dir}`);
+    assert.ok(!dir.includes('.asar'), `writable directory landed in asar: ${dir}`);
   }
 });

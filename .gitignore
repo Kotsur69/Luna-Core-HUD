@@ -1,27 +1,28 @@
-# Zaleznosci
+# Dependencies
 node_modules/
 
-# Buildy / artefakty
+# Builds / artifacts
 dist/
 out/
 build/
 
-# Logi
+# Logs
 *.log
 npm-debug.log*
 
-# System / edytor
+# System / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# Stan i nadpisania per-maszyna. WZORZEC, nie lista - wersja wyliczana gubila
-# layouts.local.json i rates.local.json (C1/B4 dolozyly je i nikt nie dopisal
-# ich tutaj), wiec prywatny override mogl trafic do repo. Konwencja jest jedna:
-# *.local.* w config/ nigdy nie idzie do gita.
-#   profiles (sekrety/klucze), projects, cheatsheets, prompts, themes, layouts,
-#   rates, ui (motyw/jezyk/uklad), scratchpad (prywatne notatki)
+# Per-machine state and overrides. A PATTERN, not a list - an enumerated
+# version kept losing layouts.local.json and rates.local.json (C1/B4 added
+# them and nobody appended them here), so a private override could end up
+# in the repo. The convention is one rule:
+# *.local.* in config/ never goes to git.
+#   profiles (secrets/keys), projects, cheatsheets, prompts, themes, layouts,
+#   rates, ui (theme/language/layout), scratchpad (private notes)
 config/*.local.json
 config/*.local.md
 .env

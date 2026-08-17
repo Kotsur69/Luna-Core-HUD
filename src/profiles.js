@@ -45,8 +45,8 @@ function readJson(file) {
 function normalizeProfile(p) {
   if (!p || typeof p !== 'object') return null;
   if (typeof p.id !== 'string' || !p.id) return null;
-  // Etykieta moze byc stringiem albo obiektem { pl, en } - patrz src/localized.js.
-  // Jezyk wybiera renderer, nie loader (przelacznik dziala na zywo).
+  // Label may be a string or a { pl, en } object - see src/localized.js.
+  // The renderer picks the language, not the loader (the switch is live).
   if (!hasText(p.label)) return null;
   // command may be empty ("" = bare shell, no auto-start) but must be a string.
   const command = typeof p.command === 'string' ? p.command : '';

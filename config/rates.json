@@ -1,6 +1,6 @@
 {
-  "_comment": "Cennik do szacowania kosztu sesji (B4). USD za MILION tokenow. CENY SIE STARZEJA - dlatego siedza w configu, nie w kodzie. Nadpisuj w config/rates.local.json (gitignore), nie tutaj. Stan na 2026-07-24.",
-  "_cacheComment": "Cache liczymy MNOZNIKAMI od ceny wejscia, bo tak jest zdefiniowany: odczyt ~0.1x, zapis 1.25x (TTL 5 min) lub 2x (TTL 1h). LunaCore zaklada domyslne 5 min.",
+  "_comment": "Price table for session cost estimation (B4). USD per MILLION tokens. PRICES GO STALE - that's why they live in config, not in code. Override in config/rates.local.json (gitignored), not here. As of 2026-07-24.",
+  "_cacheComment": "Cache is priced with MULTIPLIERS off the input price, because that's how it's defined: read ~0.1x, write 1.25x (5 min TTL) or 2x (1h TTL). LunaCore assumes the default 5 min.",
   "cacheReadMultiplier": 0.1,
   "cacheWriteMultiplier": 1.25,
   "rates": [

@@ -1,11 +1,11 @@
 // ============================================================================
-// LunaCore - lokalny brudnopis (scratchpad)
+// LunaCore - local scratchpad
 // ----------------------------------------------------------------------------
-// Notatnik na uboczu sesji: wklejone sniplety, TODO na pozniej, fragmenty
-// odpowiedzi Claude. Trzymany jako zwykly plik tekstowy, zeby dalo sie go
-// otworzyc/zgrepowac poza aplikacja.
+// A notepad on the side of the session: pasted snippets, TODOs for later,
+// fragments of Claude's responses. Kept as a plain text file so it can be
+// opened/grepped outside the app.
 //
-// Plik jest w .gitignore (tresc = prywatne notatki, nie do repo).
+// The file is in .gitignore (its content is private notes, not for the repo).
 // ============================================================================
 
 'use strict';
@@ -13,17 +13,18 @@
 const fs = require('fs');
 const paths = require('./paths');
 
-// Prywatne notatki = stan per-maszyna, wiec plik lezy w KATALOGU ZAPISYWALNYM:
-// w klonie dev to nadal repo config/, w wersji spakowanej %APPDATA%/LunaCore/
-// config (albo folder obok .exe w wersji portable). Sciezka liczona przy kazdym
-// wywolaniu, bo modul jest wymagany przed app.whenReady().
+// Private notes are per-machine state, so the file lives in the WRITABLE
+// directory: in a dev clone that is still the repo's config/, in a packaged
+// build it is %APPDATA%/LunaCore/config (or the folder next to the .exe in the
+// portable version). The path is resolved on every call, since this module is
+// required before app.whenReady().
 const file = () => paths.local('scratchpad.local.md');
 
-// Gorna granica zapisu: brudnopis to notatnik, nie magazyn plikow.
-// Chroni przed przypadkowym wklejeniem kilkunastu MB do panelu.
+// Upper bound on the write size: the scratchpad is a notepad, not a file store.
+// Guards against accidentally pasting a dozen-odd MB into the panel.
 const MAX_BYTES = 256 * 1024;
 
-/** Zwraca tresc brudnopisu; pusty string, gdy pliku jeszcze nie ma. */
+/** Returns the scratchpad content; an empty string when the file does not exist yet. */
 function readScratchpad() {
   try {
     return fs.readFileSync(file(), 'utf8');
@@ -33,9 +34,9 @@ function readScratchpad() {
 }
 
 /**
- * Zapisuje tresc brudnopisu (walidacja na granicy: typ + rozmiar).
+ * Writes the scratchpad content (validation at the boundary: type + size).
  * @param {string} text
- * @returns {boolean} czy zapis sie powiodl
+ * @returns {boolean} whether the write succeeded
  */
 function writeScratchpad(text) {
   if (typeof text !== 'string') return false;

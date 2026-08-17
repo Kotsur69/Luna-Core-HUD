@@ -11,18 +11,18 @@ const { nextPollDelay } = require('../src/usage.js');
 const INTERVAL = 90000;
 const HEARTBEAT = 15000;
 
-test('brak bledu -> normalny interwal', () => {
+test('no error -> normal interval', () => {
   const usage = { fiveHour: { pct: 12, resetsAt: null } };
   assert.equal(nextPollDelay(usage, INTERVAL, HEARTBEAT), INTERVAL);
 });
 
-test('odczyt z bledem -> szybszy heartbeat', () => {
+test('a read with an error -> faster heartbeat', () => {
   for (const error of ['reauth', 'unavailable']) {
     assert.equal(nextPollDelay({ error }, INTERVAL, HEARTBEAT), HEARTBEAT);
   }
 });
 
-test('brak/pusty odczyt (np. tick jeszcze sie nie wykonal) -> normalny interwal', () => {
+test('missing/empty read (e.g. the tick has not run yet) -> normal interval', () => {
   assert.equal(nextPollDelay(undefined, INTERVAL, HEARTBEAT), INTERVAL);
   assert.equal(nextPollDelay(null, INTERVAL, HEARTBEAT), INTERVAL);
 });

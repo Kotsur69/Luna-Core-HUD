@@ -1,5 +1,5 @@
 /* ==========================================================================
-   LunaCore - motyw (mroczny cyberpunk dashboard)
+   LunaCore - theme (dark cyberpunk dashboard)
    ========================================================================== */
 
 /* ---- Bundled faces (C3) ---------------------------------------------------
@@ -201,7 +201,7 @@ html, body {
   overflow: hidden;
 }
 
-/* ---- Layout: 3 kolumny ---------------------------------------------------- */
+/* ---- Layout: 3 columns ---------------------------------------------------- */
 
 /* C1: grid-template-columns / -rows / -areas land here as INLINE styles, written
    by modules/layout.js from the active preset in config/layouts.json. The value
@@ -386,7 +386,7 @@ body::after {
 }
 .brand__core { color: var(--neon-cyan); }
 
-/* ---- Sekcje paneli -------------------------------------------------------- */
+/* ---- Panel sections -------------------------------------------------------- */
 
 .panel__section { display: flex; flex-direction: column; gap: 10px; }
 .panel__section--grow { flex: 1; min-height: 0; }
@@ -397,9 +397,9 @@ body::after {
    panel__section--grow would stretch the placeholder instead of the widget. */
 .widget-slot { display: contents; }
 
-/* Przewijalny srodek panelu (lewy): sekcje biora naturalna wysokosc i
-   przewijaja sie razem, zamiast dzielic sie stala wysokoscia i przycinac
-   zawartosc. Brand na gorze i status PTY na dole zostaja przypiete. */
+/* Scrollable middle of the panel (left): sections take their natural height
+   and scroll together, instead of splitting a fixed height and clipping
+   content. The brand at the top and the PTY status at the bottom stay pinned. */
 .panel__scroll {
   flex: 1;
   min-height: 0;
@@ -407,11 +407,11 @@ body::after {
   display: flex;
   flex-direction: column;
   gap: var(--panel-gap);
-  /* miejsce na pasek przewijania, zeby nie zachodzil na przyciski */
+  /* room for the scrollbar, so it doesn't overlap the buttons */
   padding-right: 4px;
   margin-right: -4px;
 }
-/* W przewijanym kontenerze "grow" nie ma sensu - liczy sie tresc. */
+/* In a scrolling container "grow" doesn't make sense - content dictates size. */
 .panel__scroll .panel__section--grow { flex: none; }
 
 .panel__title {
@@ -426,7 +426,7 @@ body::after {
 
 .hint { margin: 0; font-size: 11px; color: var(--text-dim); opacity: 0.7; }
 
-/* ---- Przycisk akcji (COMPACT CONTEXT) ------------------------------------- */
+/* ---- Action button (COMPACT CONTEXT) ------------------------------------- */
 
 .action-btn {
   display: flex;
@@ -457,14 +457,14 @@ body::after {
   font-size: 16px;
 }
 
-/* puls po kliknieciu */
+/* pulse on click */
 .action-btn.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 @keyframes pulse {
   0%   { box-shadow: 0 0 0 0 rgba(95, 242, 214, 0.5); }
   100% { box-shadow: 0 0 0 16px rgba(95, 242, 214, 0); }
 }
 
-/* ---- Przelacznik profili -------------------------------------------------- */
+/* ---- Profile switcher -------------------------------------------------- */
 
 .profile-select {
   width: 100%;
@@ -504,9 +504,9 @@ body::after {
 .project-add-btn:hover { color: var(--neon-cyan); border-color: var(--edge-glow); }
 .project-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* ---- Liczbowe / suwakowe pola (dotad bez stylu -> biale natywne kontrolki) -
-   sound-volume, sound-long-task-minutes i kazde pole termcustom (§2). Jedna
-   globalna regula po typie, bo zaden z tych inputow nie ma wlasnej klasy. */
+/* ---- Number / range fields (previously unstyled -> white native controls) -
+   sound-volume, sound-long-task-minutes and every termcustom field (§2). One
+   global rule by type, since none of these inputs has its own class. */
 input[type="number"] {
   width: 100%;
   padding: 10px 12px;
@@ -547,7 +547,7 @@ input[type="range"]::-webkit-slider-thumb {
 input[type="range"]:focus { outline: none; }
 input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-size-md) var(--neon-magenta); }
 
-/* ---- Pole z etykieta (motyw / jezyk) -------------------------------------- */
+/* ---- Labeled field (theme / language) -------------------------------------- */
 
 .ui-field { display: flex; flex-direction: column; gap: 5px; }
 .ui-field + .ui-field { margin-top: 10px; }
@@ -569,7 +569,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   100% { box-shadow: 0 0 0 10px rgba(95, 242, 214, 0); }
 }
 
-/* ---- Status PTY ----------------------------------------------------------- */
+/* ---- PTY status ----------------------------------------------------------- */
 
 .status-line {
   display: flex;
@@ -586,7 +586,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .dot--dead { background: var(--bad); box-shadow: 0 0 var(--glow-size-sm) var(--bad); }
 @keyframes blink { 50% { opacity: 0.4; } }
 
-/* ---- LED: pracuje vs czeka na Ciebie -------------------------------------- */
+/* ---- LED: working vs waiting on you -------------------------------------- */
 
 .led {
   width: 9px; height: 9px; border-radius: 50%;
@@ -594,13 +594,13 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   background: var(--text-dim);
   transition: background var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
 }
-/* zolty puls = Claude pracuje (leci strumien stdout) */
+/* yellow pulse = Claude is working (stdout streaming) */
 .led--working { background: var(--warn); box-shadow: 0 0 var(--glow-size-md) var(--warn); animation: blink 0.9s infinite; }
-/* zielony spokojny = cisza na stdout, tura po stronie uzytkownika */
+/* calm green = stdout is quiet, it's the user's turn */
 .led--waiting { background: var(--good); box-shadow: 0 0 var(--glow-size-sm) var(--good); }
 .led--dead { background: var(--bad); box-shadow: 0 0 var(--glow-size-sm) var(--bad); }
 
-/* ---- Brudnopis ------------------------------------------------------------ */
+/* ---- Scratchpad ------------------------------------------------------------ */
 
 .pad {
   flex: 1;
@@ -631,7 +631,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .pad-send:hover { box-shadow: 0 0 var(--glow-size-md) var(--glow); }
 .pad-send.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 
-/* ---- Switch (toggle) + uzbrojony auto-compact ----------------------------- */
+/* ---- Switch (toggle) + armed auto-compact ----------------------------- */
 
 .switch-field {
   display: flex;
@@ -680,7 +680,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .switch__input:checked + .switch__track .switch__thumb { transform: translateX(16px); background: var(--text); }
 .switch__input:focus-visible + .switch__track { box-shadow: 0 0 0 2px var(--edge-glow); }
 
-/* ---- Terminal (centrum) --------------------------------------------------- */
+/* ---- Terminal (center) --------------------------------------------------- */
 
 .terminal-bar {
   display: flex;
@@ -693,7 +693,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .terminal-bar__title { font-size: 13px; font-weight: 600; color: var(--neon-cyan); }
 .terminal-bar__hint { font-size: 11px; color: var(--text-dim); }
 
-/* ---- Zakladki sesji -------------------------------------------------------- */
+/* ---- Session tabs -------------------------------------------------------- */
 
 .tabs {
   display: flex;
@@ -735,12 +735,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   cursor: pointer;
   text-align: left;
 }
-/* Zapelnienie kontekstu TEJ zakladki - ostrzega o sesji, na ktora nie patrzysz */
+/* Context fill of THIS tab - warns about a session you're not looking at */
 .tab__ctx { font-size: 10px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .tab__ctx.is-mid { color: var(--warn, #ffd86b); }
-/* --danger nigdy nie istnialo jako token (jest --bad), wiec ta kropka swiecila
-   zahardkodowanym rozem we WSZYSTKICH dziewieciu motywach. Ta sama klasa bledu,
-   co nieaktualny rates.json: nic nie krzyczy, po prostu jest zle. */
+/* --danger never existed as a token (it's --bad), so this dot was glowing
+   a hardcoded pink in ALL nine themes. Same class of bug as a stale
+   rates.json: nothing shouts, it's just wrong. */
 .tab__ctx.is-high { color: var(--bad); }
 
 .tab__close,
@@ -753,8 +753,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   border-radius: var(--radius-xs);
   transition: color var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
 }
-/* 24px to minimum, na jakie pozwala wysokosc zakladki; cel klikniecia
-   powiekszamy paddingiem, zeby trafiac w krzyzyk bez celowania w piksel. */
+/* 24px is the minimum the tab's height allows; we enlarge the click target
+   with padding so you can hit the close button without aiming for a pixel. */
 .tab__close { font-size: 14px; padding: 4px 6px; }
 .tabs__new { font-size: 16px; padding: 4px 12px; align-self: center; }
 .tab__close:hover { color: var(--danger, #ff6b8a); background: var(--bg-panel-2); }
@@ -776,21 +776,22 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   background-position: center;
   background-repeat: no-repeat;
 }
-/* Jeden pane na sesje; w tle zostaja zamontowane, ale niewidoczne, wiec
-   xterm zachowuje ich scrollback bez ponownego renderowania. */
+/* One pane per session; the rest stay mounted in the background but hidden,
+   so xterm keeps their scrollback without re-rendering them. */
 /* TERMINAL_CUSTOMIZER_PLAN.md §2/§4: pure CSS, no xterm involvement - the
    value is a plain px length, set/removed by terminals.js's
    applyTerminalAppearance(). Defaults to 0px (no blur) via the var() fallback
    so a launch before that ever runs looks exactly as before this knob existed. */
 .terminal__pane { position: absolute; inset: 8px 10px; display: none; backdrop-filter: blur(var(--term-blur, 0px)); }
-/* E3: miekkie wejscie panelu przy zmianie zakladki.
-   C1c odlozylo pelny crossfade, bo wymagalby JS-a trzymajacego stary panel przy
-   zyciu, a xterm NIE MOZE byc animowany w trakcie mierzenia sie. Tu wchodzi
-   tylko panel przychodzacy i tylko przez `opacity` - nie rusza ani layoutu, ani
-   clientWidth/Height, wiec fitAndResize() widzi dokladnie te same wymiary, co
-   przy twardej podmianie. Wyjscie zostaje natychmiastowe.
-   Przejscie display:none -> block samo restartuje animacje, wiec nie trzeba
-   niczego dodawac w JS. Reduced motion zeruje --dur-fast i zostaje skok. */
+/* E3: soft panel entrance on tab switch.
+   C1c deferred a full crossfade, since it would need JS keeping the old panel
+   alive, and xterm CANNOT be animated while it's being measured. Only the
+   incoming panel animates here, and only via `opacity` - it doesn't touch
+   layout or clientWidth/Height, so fitAndResize() sees exactly the same
+   dimensions as with a hard swap. The exit stays instant.
+   The display:none -> block transition restarts the animation on its own, so
+   nothing needs to be added in JS. Reduced motion zeroes --dur-fast and it
+   becomes a jump cut. */
 .terminal__pane.is-active {
   display: block;
   animation: pane-in var(--dur-fast) var(--ease-smooth);
@@ -799,7 +800,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   from { opacity: 0; }
   to { opacity: 1; }
 }
-/* xterm sam zarzadza wnetrzem; upewnijmy sie, ze wypelnia kontener */
+/* xterm manages its own interior; make sure it fills the container */
 .terminal .xterm { height: 100%; }
 
 /* ---- Context Window bar --------------------------------------------------- */
@@ -815,29 +816,29 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .ctx-bar__fill {
   height: 100%;
   width: 100%;
-  /* Wypelnienie sterujemy przez scaleX (transform) - brak layout thrash.
-     Faza 3 ustawia --ctx w zakresie 0..1 (np. 0.72 = 72%). */
+  /* Fill is driven via scaleX (transform) - no layout thrash.
+     Phase 3 sets --ctx in the 0..1 range (e.g. 0.72 = 72%). */
   transform: scaleX(var(--ctx, 0));
   transform-origin: left center;
   background: linear-gradient(90deg, var(--good), var(--neon-cyan));
   transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
-/* Progi context window ustawiane przez renderer.js (Faza 3). */
+/* Context window thresholds, set by renderer.js (Phase 3). */
 .ctx-bar__fill.is-mid { background: linear-gradient(90deg, var(--warn), #ffb347); }
 .ctx-bar__fill.is-high { background: linear-gradient(90deg, var(--bad), #ff3b6b); }
 
-/* E3: JEDEN puls przy przekroczeniu progu w gore - zamiast dawnego
-   `ctx-alarm 1s infinite`. Powody, po kolei:
+/* E3: ONE pulse when crossing a threshold upward - replacing the old
+   `ctx-alarm 1s infinite`. Reasons, in order:
 
-   1. Animacja w nieskonczonosc miala WPISANE NA SZTYWNO 1s, wiec blok
-      prefers-reduced-motion (ktory zeruje --dur-*) w ogole jej nie dotykal.
-      Pasek pulsowal bez konca takze komus, kto ruch wylaczyl.
-   2. Ruch ciagly przestaje cokolwiek znaczyc po kilkunastu sekundach - oko go
-      odfiltrowuje. Zdarzeniem jest PRZEKROCZENIE progu, nie bycie powyzej niego.
-   3. Czas trwania idzie teraz z tokenu, wiec reduced motion skraca go do zera i
-      zostaje sam kolor - dokladnie ta podmiana, ktora zaleca C1c.
+   1. The infinite animation had 1s HARDCODED, so the prefers-reduced-motion
+      block (which zeroes --dur-*) never touched it at all. The bar kept
+      pulsing forever even for someone who turned motion off.
+   2. Continuous motion stops meaning anything after a dozen-odd seconds - the
+      eye filters it out. The event is CROSSING the threshold, not being above it.
+   3. Duration now comes from a token, so reduced motion shortens it to zero
+      and only the color remains - exactly the substitution C1c recommends.
 
-   Nie ruszamy `transform` - element trzyma na nim scaleX(--ctx). */
+   `transform` is left alone - the element holds scaleX(--ctx) on it. */
 .ctx-bar__fill.is-crossing {
   animation: ctx-cross var(--dur-slow) var(--ease-bounce);
 }
@@ -848,14 +849,14 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 
 .ctx-meta { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
-/* Lewa grupa: procent + plakietka modelu. Dzieki niej ctx-meta nadal ma DWOJE
-   dzieci, wiec space-between zachowuje sie jak przed dodaniem plakietki. */
+/* Left group: percentage + model badge. Thanks to it, ctx-meta still has TWO
+   children, so space-between behaves as it did before the badge was added. */
 .ctx-meta__left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
-/* Plakietka modelu (B3). Wylacznie tokeny motywu - inaczej 4 z 5 motywow by sie
-   rozjechaly. Kolor --text (nie --text-dim) trzyma kontrast; znaczenie niesie
-   TEKST, nie barwa, wiec plakietka nic nie traci przy daltonizmie ani w trybie
-   ograniczonego ruchu (nie animuje sie wcale). */
+/* Model badge (B3). Theme tokens only - otherwise 4 of 5 themes would drift
+   apart. Color --text (not --text-dim) keeps the contrast; meaning is carried
+   by the TEXT, not the color, so the badge loses nothing for colorblindness
+   or under reduced motion (it doesn't animate at all). */
 .badge {
   padding: 3px 7px;
   border-radius: var(--radius-pill);
@@ -869,12 +870,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
-/* Dziecko flexa ignoruje domyslne [hidden] - trzeba wymusic. */
+/* A flex child ignores the default [hidden] - must be forced. */
 .badge[hidden] { display: none; }
 #ctx-percent { font-weight: 700; }
 .ctx-warn { color: var(--bad); font-size: 11px; font-weight: 600; }
 
-/* ---- Licznik zuzycia limitow (5h + tydzien) -------------------------------- */
+/* ---- Usage limit counter (5h + week) -------------------------------- */
 .usage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .usage-refresh {
   background: none;
@@ -921,20 +922,20 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   height: 100%;
   width: 100%;
   border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  /* Jak .ctx-bar__fill: wypelnienie przez scaleX (transform), nie width -
-     brak layout thrash. renderer.js ustawia --usage w zakresie 0..1. */
+  /* Like .ctx-bar__fill: fill via scaleX (transform), not width -
+     no layout thrash. renderer.js sets --usage in the 0..1 range. */
   transform: scaleX(var(--usage, 0));
   transform-origin: left center;
   background: linear-gradient(90deg, var(--good), var(--neon-cyan));
   transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
 .usage-bar__fill[data-level='warn'] { background: linear-gradient(90deg, var(--warn), #ffb347); }
-/* Ten sam powod, co przy .ctx-bar__fill.is-high - `ctx-alarm 1s infinite` mial
-   sztywny czas, wiec przezywal prefers-reduced-motion. Zostaje sam kolor. */
+/* Same reason as .ctx-bar__fill.is-high - `ctx-alarm 1s infinite` had a fixed
+   duration, so it survived prefers-reduced-motion. Only the color remains. */
 .usage-bar__fill[data-level='bad'] { background: linear-gradient(90deg, var(--bad), #ff3b6b); }
 .usage-row__reset { font-size: 10px; opacity: 0.6; }
 
-/* ---- Sparkline burn-rate (procent context window w czasie) ---------------- */
+/* ---- Sparkline burn-rate (context window percentage over time) ---------------- */
 
 .ctx-spark {
   width: 100%;
@@ -947,7 +948,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   display: block;
   overflow: visible;
 }
-/* vector-effect: linia zostaje cienka mimo niejednorodnego skalowania viewBoxa */
+/* vector-effect: the line stays thin despite non-uniform viewBox scaling */
 .ctx-spark__line {
   fill: none;
   stroke: var(--neon-cyan);
@@ -1169,15 +1170,15 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   }
 }
 
-/* ---- E1: telemetria maszyny (RAM / CPU) ------------------------------------
-   Kolor niesie znaczenie, ale NIGDY sam: kazdy poziom ma tez liczbe i wysokosc
-   slupka. Ruch jest wylacznie przejsciem miedzy stanami - nic tu nie animuje sie
-   w petli, wiec zamrozony wykres (reduced motion zeruje --dur-*) jest nadal
-   pelnoprawnym wykresem, a nie pusta ramka. */
+/* ---- E1: machine telemetry (RAM / CPU) ------------------------------------
+   Color carries meaning, but NEVER alone: every level also has a number and a
+   bar height. Motion is only a transition between states - nothing here loops,
+   so a frozen chart (reduced motion zeroes --dur-*) is still a fully valid
+   chart, not an empty frame. */
 
 .telem__row {
-  /* Jeden token na wiersz; data-level tylko go przestawia. Dzieki temu pasek,
-     liczba i slupki nie moga sie rozjechac kolorystycznie. */
+  /* One token per row; data-level only reassigns it. This keeps the bar,
+     the number, and the ticks from drifting apart in color. */
   --telem-color: var(--good);
   --telem-fill: 0;
   margin-bottom: 14px;
@@ -1213,8 +1214,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   color: var(--text-dim);
 }
 
-/* Duza liczba jest nosnikiem prawdy - wykres tylko ja kontekstualizuje.
-   Cyfry tabelaryczne, zeby wartosc nie skakala w poziomie przy kazdej zmianie. */
+/* The big number is the source of truth - the chart only contextualizes it.
+   Tabular digits so the value doesn't shift horizontally on every change. */
 .telem__value {
   font-family: var(--font-display);
   font-size: 22px;
@@ -1235,7 +1236,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   border-radius: var(--radius-pill);
 }
 
-/* scaleX, nie width - regula C1c nr 2. */
+/* scaleX, not width - C1c rule #2. */
 .telem__fill {
   display: block;
   height: 100%;
@@ -1247,9 +1248,9 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
     background-color var(--dur-normal) var(--ease-smooth);
 }
 
-/* Seria czasowa: staly zestaw slupkow, przerysowywany przez podmiane jednej
-   zmiennej. Slupki nie sa tworzone na nowo co probke - to byloby 40 wezlow DOM
-   co 2 sekundy bez zadnego powodu. */
+/* Time series: a fixed set of bars, redrawn by swapping a single variable.
+   The bars aren't recreated on every sample - that would be 40 DOM nodes
+   every 2 seconds for no reason. */
 .telem__spark {
   display: flex;
   align-items: flex-end;
@@ -1270,13 +1271,13 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   transition: transform var(--dur-fast) var(--ease-smooth);
 }
 
-/* Ostatni slupek to "teraz" - pelna moc, zeby oko wiedzialo, gdzie patrzec. */
+/* The last bar is "now" - full strength so the eye knows where to look. */
 .telem__tick:last-child {
   opacity: 1;
   box-shadow: 0 0 var(--glow-size-sm) var(--telem-color);
 }
 
-/* Brak odczytu rysuje sie jako NIC, nie jako slupek przy podlodze. */
+/* A missing reading renders as NOTHING, not as a bar at the floor. */
 .telem__tick[data-level='unknown'] {
   background: var(--edge);
   box-shadow: none;
@@ -1296,8 +1297,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   white-space: pre;
 }
 
-/* Pauza zatrzymuje OBRAZ, nie pomiar - dlatego panel przygasa (widac, ze to
-   stopklatka), ale nic nie znika. */
+/* Pause freezes the DISPLAY, not the measurement - which is why the panel
+   dims (visibly a freeze-frame), but nothing disappears. */
 .telem.is-paused .telem__row {
   opacity: 0.55;
 }
@@ -1306,10 +1307,10 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   color: var(--neon-cyan);
 }
 
-/* ---- Tracker portow localhost (7B) ---------------------------------------- */
+/* ---- Localhost port tracker (7B) ---------------------------------------- */
 
-/* B5: przelacznik szumu systemowego. Wlaczony = swieci, zeby bylo widac, ze
-   lista jest zawezona (licznik pod lista podaje ile wierszy zwinieto). */
+/* B5: system-noise toggle. On = glows, so it's visible that the list is
+   narrowed (the counter under the list reports how many rows got collapsed). */
 .ports-filter.is-on { color: var(--neon-cyan); border-color: var(--edge-glow); }
 
 .ports-list {
@@ -1324,7 +1325,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .port-item {
   display: grid;
-  flex: none; /* jak w .skill-entry: nie sciskaj wierszy, przewijaj */
+  flex: none; /* like .skill-entry: don't squeeze rows, scroll instead */
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
@@ -1334,8 +1335,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   border: var(--border-w) solid var(--edge);
   font-size: 12px;
 }
-/* Wiersz systemowy (widoczny tylko przy wylaczonym filtrze) - przygaszony,
-   zeby wlasne procesy nadal odcinaly sie od tla. */
+/* System row (visible only when the filter is off) - dimmed, so your own
+   processes still stand out against the background. */
 .port-item--system { opacity: 0.55; }
 .port-item--system .port-item__port { color: var(--text-dim); }
 
@@ -1370,7 +1371,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .port-btn.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 .port-btn--kill:hover { color: var(--bad); border-color: var(--bad); }
 
-/* ---- Sciagawki akcji (7C) ------------------------------------------------- */
+/* ---- Action cheatsheets (7C) ------------------------------------------------- */
 
 .cheats {
   display: flex;
@@ -1434,12 +1435,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .cheat__btn.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 
-/* ---- Sciagawka skilli (7A) ------------------------------------------------ */
+/* ---- Skill cheatsheet (7A) ------------------------------------------------ */
 
 .count { font-weight: 400; color: var(--text-dim); opacity: 0.7; }
 
-/* B7: pole filtra listy skilli. Wyglada jak reszta panelu (tokeny motywu),
-   nie jak natywny input systemu. */
+/* B7: skill list filter field. Looks like the rest of the panel (theme
+   tokens), not like a native system input. */
 .filter-input {
   width: 100%;
   margin: 8px 0 6px;
@@ -1467,9 +1468,9 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   overflow-y: auto;
 }
 .skill-entry {
-  /* KRYTYCZNE: bez tego dzieci flexa sciskaja sie zamiast przewijac.
-     Przy 140 skillach w kontenerze max-height 220px kazdy wpis zostawal
-     zgnieciony do ~1.5px i widac bylo tylko poziome sciezki liter. */
+  /* CRITICAL: without this, flex children squeeze instead of scrolling.
+     With 140 skills in a max-height 220px container, every entry got
+     squashed to ~1.5px and all you saw were horizontal letter smears. */
   flex: none;
   text-align: left;
   padding: 5px 9px;
@@ -1492,7 +1493,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .skill-entry.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 
-/* ---- Biblioteka promptow --------------------------------------------------- */
+/* ---- Prompt library --------------------------------------------------- */
 
 .prompt-list {
   display: flex;
@@ -1502,7 +1503,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .prompt-row {
   display: flex;
-  flex: none; /* jak w .skill-entry: nie sciskaj wierszy, przewijaj */
+  flex: none; /* like .skill-entry: don't squeeze rows, scroll instead */
   gap: 4px;
 }
 .prompt-btn {
@@ -1541,15 +1542,15 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .prompt-btn.is-pulsing,
 .prompt-send.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 
-/* subtelny scrollbar */
+/* subtle scrollbar */
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--edge-glow); border-radius: var(--radius-xs); }
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* ---- Chip Ctrl+K w pasku terminala ---------------------------------------- */
+/* ---- Ctrl+K chip in the terminal bar ---------------------------------------- */
 
 .palette-chip {
-  margin-left: auto; /* dosun do prawej krawedzi paska */
+  margin-left: auto; /* push to the right edge of the bar */
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -1573,10 +1574,11 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   color: inherit;
 }
 
-/* D5: aktualizacja jako trzeci chip w tym samym pasku, zamiast trwalego bloku
-   w lewym panelu (patrz modules/update.js). `hidden` wiekszosc czasu - pokazuje
-   sie tylko gdy jest cos do zrobienia, wiec "nie udalo sie sprawdzic" juz nigdy
-   nie straszy na stale. `--warn` to ta sama konwencja co pasek kontekstu >60%. */
+/* D5: update as a third chip in the same bar, instead of a persistent block
+   in the left panel (see modules/update.js). `hidden` most of the time - it
+   only shows up when there's something to do, so "couldn't check" never
+   sits there permanently. `--warn` is the same convention as the >60%
+   context bar. */
 /* Flex-child [hidden] gets overridden by .palette-chip's own `display` unless
    forced - the exact bug this file already hit for .badge/.palette/.termcustom/
    .boot/.notice above. Missing it here left the chip permanently visible and
@@ -1601,7 +1603,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   box-shadow: none;
 }
 
-/* ---- Paleta komend (Ctrl+K) ----------------------------------------------- */
+/* ---- Command palette (Ctrl+K) ----------------------------------------------- */
 
 .palette {
   position: fixed;
@@ -1691,7 +1693,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .palette-item:hover { background: var(--bg-panel-2); }
 
-/* Odznaka zrodla akcji (kolor = typ). */
+/* Action source badge (color = type). */
 .palette-item__kind {
   font-size: 9.5px;
   font-weight: 700;
@@ -1762,10 +1764,10 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   font-size: 10px;
 }
 
-/* ---- Personalizacja terminala (Ctrl+L) ------------------------------------
-   Ta sama nakladka co paleta (fixed + backdrop + wysrodkowany modal), ale
-   cialo to pionowa lista pol formularza zamiast budowanej z JS listy wynikow -
-   stad wlasna klasa zamiast .palette__list. TERMINAL_CUSTOMIZER_PLAN.md §3. */
+/* ---- Terminal customization (Ctrl+L) ------------------------------------
+   Same overlay as the palette (fixed + backdrop + centered modal), but the
+   body is a vertical list of form fields instead of a JS-built results list -
+   hence its own class instead of .palette__list. TERMINAL_CUSTOMIZER_PLAN.md §3. */
 
 .termcustom {
   position: fixed;
@@ -1823,8 +1825,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   min-height: 0;
 }
 
-/* Section divider (2026-08-13: the overlay grew a second section - Wyglad
-   terminala + Dzwiek i start - once sound/boot moved in from w-appearance). */
+/* Section divider (2026-08-13: the overlay grew a second section - Terminal
+   appearance + Sound and startup - once sound/boot moved in from w-appearance). */
 .termcustom__section {
   margin: 0 0 10px;
   padding-top: 14px;
@@ -1875,18 +1877,19 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .termcustom__bgimage-row { display: flex; gap: 8px; }
 .termcustom__bgimage-row .termcustom__reset { flex: 1; }
 
-/* ---- Sekwencja startowa (boot) ----------------------------------------------
-   Ozdobna nakladka nad gotowym UI. Nie blokuje sesji (PTY leci pod spodem) i nie
-   kosztuje ani jednego tokenu - to czysty CSS + kilka wierszy w rendererze.
-   Kolory wylacznie z tokenow motywu, wiec wyglada spojnie we wszystkich 5
-   motywach bez zadnej dodatkowej konfiguracji. Animujemy tylko transform i
-   opacity - ta sama zasada "zero layout thrash" co pasek kontekstu.
+/* ---- Boot sequence ----------------------------------------------
+   A decorative overlay above the ready UI. Doesn't block the session (PTY
+   runs underneath) and doesn't cost a single token - it's pure CSS plus a
+   few lines in the renderer. Colors come exclusively from theme tokens, so
+   it looks consistent across all 5 themes with zero extra configuration.
+   Only transform and opacity are animated - the same "zero layout thrash"
+   rule as the context bar.
    ---------------------------------------------------------------------------- */
 
 .boot {
   position: fixed;
   inset: 0;
-  z-index: 200; /* nad paleta (100) - to pierwsza rzecz na ekranie */
+  z-index: 200; /* above the palette (100) - this is the first thing on screen */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1894,20 +1897,20 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   overflow: hidden;
   cursor: pointer;
   user-select: none;
-  /* 60 ms zwloki: jesli prefs mowia "wylaczona", renderer zdejmuje nakladke
-     zanim cokolwiek zdazy sie namalowac - zero mrugniecia. */
+  /* 60ms delay: if prefs say "disabled", the renderer removes the overlay
+     before anything gets a chance to paint - zero flicker. */
   opacity: 0;
   animation: boot-in 200ms 60ms ease-out forwards;
 }
 .boot[hidden] { display: none; }
 
-/* Wyjscie krotsze niz wejscie - zamykanie ma byc szybsze niz otwieranie. */
+/* Exit shorter than entrance - closing should be faster than opening. */
 .boot.is-out { animation: boot-out 240ms ease-in forwards; }
 
 @keyframes boot-in  { to { opacity: 1; } }
 @keyframes boot-out { from { opacity: 1; } to { opacity: 0; } }
 
-/* Siatka w tle - lekki dryf, zeby ekran nie byl martwy. */
+/* Background grid - a slight drift so the screen isn't static. */
 .boot__grid {
   position: absolute;
   inset: -20%;
@@ -1922,7 +1925,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   to   { transform: translateY(0); }
 }
 
-/* Smuga skanujaca (CRT) - jedyny duzy ruch na ekranie. */
+/* Scanning streak (CRT) - the only large-scale motion on screen. */
 .boot__scan {
   position: absolute;
   left: 0;
@@ -1975,7 +1978,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   animation: boot-rise 320ms 300ms ease-out forwards;
 }
 
-/* Log startowy - wiersze wstawia renderer.js, kaskade robi animation-delay. */
+/* Boot log - rows are inserted by renderer.js, the cascade is done via animation-delay. */
 .boot__log {
   list-style: none;
   margin: 6px 0 0;
@@ -1993,7 +1996,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   align-items: center;
   gap: 8px;
   opacity: 0;
-  animation: boot-rise 240ms ease-out forwards; /* delay ustawia JS */
+  animation: boot-rise 240ms ease-out forwards; /* delay is set by JS */
 }
 .boot__line::before { content: '\203A'; color: var(--neon-magenta); }
 .boot__line-ok {
@@ -2004,7 +2007,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .boot__line--ready { color: var(--neon-cyan); }
 .boot__line--ready::before { content: '\25A0'; color: var(--neon-cyan); }
 
-/* Pasek postepu - scaleX, tak jak pasek kontekstu i paski limitow. */
+/* Progress bar - scaleX, same as the context bar and usage limit bars. */
 .boot__rule {
   width: 100%;
   height: 2px;
@@ -2030,12 +2033,13 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   animation: boot-rise 300ms 700ms ease-out forwards;
 }
 
-/* ---- Preferencja ograniczonego ruchu ---------------------------------------
-   Systemowe "reduce motion" wylacza cala ozdobna animacje w HUD: boot w ogole
-   sie nie pokazuje, a pulsy i mrugania spadaja do zera. Wyjatek: spinner
-   odswiezania limitow zostaje - to wskaznik ladowania, czyli jedyny sensowny
-   ruch ciagly. Sygnaly stanu nic nie traca, bo nosnikiem znaczenia jest u nas
-   KOLOR (LED, kropka PTY, alarm kontekstu), a ruch byl tylko wzmocnieniem.
+/* ---- Reduced motion preference ---------------------------------------
+   System "reduce motion" disables all decorative animation in the HUD: boot
+   doesn't show at all, and pulses/blinks drop to zero. Exception: the usage
+   refresh spinner stays - it's a loading indicator, the one continuous
+   motion that's actually meaningful. State signals lose nothing, because
+   the carrier of meaning here is COLOR (the LED, the PTY dot, the context
+   alarm), and motion was only ever reinforcement.
    ---------------------------------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {

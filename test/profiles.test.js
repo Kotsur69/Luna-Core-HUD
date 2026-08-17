@@ -1,5 +1,5 @@
-// Testy walidacji profilu uruchomieniowego. normalizeProfile to granica
-// zaufania: config moze byc recznie edytowany, wiec smieci nie moga wejsc dalej.
+// Tests for launch profile validation. normalizeProfile is the trust
+// boundary: the config can be hand-edited, so garbage must not get through.
 
 'use strict';
 
@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 
 const { normalizeProfile, getProfile } = require('../src/profiles');
 
-test('normalizeProfile przepuszcza poprawny profil', () => {
+test('normalizeProfile passes a valid profile through', () => {
   assert.deepEqual(
     normalizeProfile({
       id: 'lm-studio',
@@ -27,66 +27,66 @@ test('normalizeProfile przepuszcza poprawny profil', () => {
   );
 });
 
-test('normalizeProfile odrzuca wpisy bez id lub label', () => {
-  assert.equal(normalizeProfile({ label: 'Bez id' }), null);
-  assert.equal(normalizeProfile({ id: 'bez-label' }), null);
-  assert.equal(normalizeProfile({ id: '', label: 'Puste id' }), null);
+test('normalizeProfile rejects entries without id or label', () => {
+  assert.equal(normalizeProfile({ label: 'No id' }), null);
+  assert.equal(normalizeProfile({ id: 'no-label' }), null);
+  assert.equal(normalizeProfile({ id: '', label: 'Empty id' }), null);
   assert.equal(normalizeProfile({ id: 'x', label: '' }), null);
 });
 
-test('normalizeProfile odrzuca nie-obiekty', () => {
+test('normalizeProfile rejects non-objects', () => {
   assert.equal(normalizeProfile(null), null);
   assert.equal(normalizeProfile(undefined), null);
   assert.equal(normalizeProfile('claude'), null);
   assert.equal(normalizeProfile(42), null);
 });
 
-test('normalizeProfile dopuszcza pusta komende (sama powloka)', () => {
+test('normalizeProfile allows an empty command (bare shell)', () => {
   const p = normalizeProfile({ id: 'shell', label: 'Shell', command: '' });
   assert.equal(p.command, '');
 });
 
-test('normalizeProfile zamienia niepoprawna komende na pusty string', () => {
+test('normalizeProfile turns an invalid command into an empty string', () => {
   assert.equal(normalizeProfile({ id: 'x', label: 'X', command: 123 }).command, '');
   assert.equal(normalizeProfile({ id: 'x', label: 'X' }).command, '');
 });
 
-test('normalizeProfile odfiltrowuje nie-stringi z args', () => {
+test('normalizeProfile filters out non-strings from args', () => {
   const p = normalizeProfile({ id: 'x', label: 'X', args: ['--a', 5, null, '--b'] });
   assert.deepEqual(p.args, ['--a', '--b']);
 });
 
-test('normalizeProfile zamienia args nie-tablice na pusta tablice', () => {
+test('normalizeProfile turns a non-array args into an empty array', () => {
   assert.deepEqual(normalizeProfile({ id: 'x', label: 'X', args: 'nope' }).args, []);
   assert.deepEqual(normalizeProfile({ id: 'x', label: 'X' }).args, []);
 });
 
-test('normalizeProfile przepuszcza tylko stringowe wartosci env', () => {
-  // Wazne: env leci prosto do pty.spawn - liczba lub obiekt moga wywrocic spawn.
+test('normalizeProfile passes through only string env values', () => {
+  // Important: env goes straight to pty.spawn - a number or object could crash the spawn.
   const p = normalizeProfile({
     id: 'x',
     label: 'X',
-    env: { OK: 'tak', LICZBA: 8080, ZAGNIEZDZONY: { a: 1 }, NIC: null },
+    env: { OK: 'yes', NUMBER: 8080, NESTED: { a: 1 }, NOTHING: null },
   });
-  assert.deepEqual(p.env, { OK: 'tak' });
+  assert.deepEqual(p.env, { OK: 'yes' });
 });
 
-test('normalizeProfile zamienia env nie-obiekt (w tym tablice) na pusty obiekt', () => {
+test('normalizeProfile turns a non-object env (including arrays) into an empty object', () => {
   assert.deepEqual(normalizeProfile({ id: 'x', label: 'X', env: ['A=1'] }).env, {});
   assert.deepEqual(normalizeProfile({ id: 'x', label: 'X', env: 'A=1' }).env, {});
 });
 
-test('normalizeProfile nie przenosi dalej nieznanych pol', () => {
-  const p = normalizeProfile({ id: 'x', label: 'X', cokolwiek: 'smiec' });
+test('normalizeProfile does not carry unknown fields forward', () => {
+  const p = normalizeProfile({ id: 'x', label: 'X', whatever: 'junk' });
   assert.deepEqual(Object.keys(p).sort(), ['args', 'command', 'env', 'id', 'label']);
 });
 
-test('getProfile znajduje po id, inaczej null', () => {
+test('getProfile finds by id, otherwise null', () => {
   const list = [
     { id: 'a', label: 'A' },
     { id: 'b', label: 'B' },
   ];
   assert.equal(getProfile(list, 'b').label, 'B');
-  assert.equal(getProfile(list, 'nie-ma'), null);
+  assert.equal(getProfile(list, 'no-such-id'), null);
   assert.equal(getProfile([], 'a'), null);
 });

@@ -16,10 +16,10 @@
 const fs = require('fs');
 const paths = require('./paths');
 
-// Wysylany cennik czytamy z katalogu bundled - dzieki temu aktualizacja aplikacji
-// realnie dowozi poprawione stawki. Prywatna korekta uzytkownika lezy w katalogu
-// ZAPISYWALNYM i liczymy ja leniwie, bo modul jest wymagany przed
-// app.whenReady(). Szczegoly w paths.js.
+// The shipped price table is read from the bundled directory - that way an app
+// update actually delivers corrected rates. The user's private override lives in
+// the WRITABLE directory and is resolved lazily, since this module is required
+// before app.whenReady(). Details in paths.js.
 const BASE_FILE = paths.bundled('rates.json');
 const localFile = () => paths.local('rates.local.json');
 

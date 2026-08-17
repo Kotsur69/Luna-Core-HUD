@@ -1,4 +1,4 @@
-// Testy budowania komendy startowej (src/launch.js).
+// Tests for building the start command (src/launch.js).
 //
 // Why this file matters: withSessionId is the switch that decides whether a tab
 // can be pinned to its transcript. A wrong `null` here does not fail loudly - it
@@ -23,33 +23,33 @@ const fsWith = (...present) => {
   return (p) => set.has(String(p).toLowerCase());
 };
 
-test('findExecutable znajduje claude.cmd na Windows (instalacja przez npm)', () => {
+test('findExecutable finds claude.cmd on Windows (npm install)', () => {
   const PATH = 'C:\\Windows;C:\\Users\\x\\AppData\\Roaming\\npm';
   const hit = 'C:\\Users\\x\\AppData\\Roaming\\npm\\claude.cmd';
   assert.equal(findExecutable('claude', PATH, true, fsWith(hit)), hit);
 });
 
-test('findExecutable znajduje bezrozszerzeniowy plik na POSIX', () => {
+test('findExecutable finds an extensionless file on POSIX', () => {
   const hit = '/home/x/.local/bin/claude';
   assert.equal(findExecutable('claude', '/usr/bin:/home/x/.local/bin', false, fsWith(hit)), hit);
 });
 
-test('findExecutable zwraca null, gdy binarki nigdzie nie ma', () => {
+test('findExecutable returns null when the binary is nowhere to be found', () => {
   assert.equal(findExecutable('claude', 'C:\\Windows;C:\\Temp', true, fsWith()), null);
 });
 
-test('findExecutable przezywa pusty i uszkodzony PATH', () => {
-  // Puste segmenty i cudzyslowy wokol katalogow to normalny widok w PATH na
-  // Windows - nie moga przerwac szukania.
+test('findExecutable survives an empty and a malformed PATH', () => {
+  // Empty segments and quotes around directories are a normal sight in PATH
+  // on Windows - they must not be able to break the search.
   const hit = 'C:\\bin\\claude.exe';
   assert.equal(findExecutable('claude', ';;"C:\\bin";', true, fsWith(hit)), hit);
   assert.equal(findExecutable('claude', '', true, fsWith(hit)), null);
   assert.equal(findExecutable('claude', undefined, true, fsWith(hit)), null);
 });
 
-test('findExecutable nie przewraca sie na wpisie, ktory rzuca wyjatkiem', () => {
-  // Jeden nieczytelny katalog nie moze sprawic, ze obecna binarka wyglada na
-  // nieobecna - inaczej pokazalibysmy ostrzezenie komus, kto ma wszystko dobrze.
+test('findExecutable does not choke on an entry that throws', () => {
+  // One unreadable directory must not make an existing binary look absent -
+  // otherwise we would show a warning to someone who has everything set up fine.
   const hit = 'C:\\good\\claude.exe';
   const exists = (p) => {
     if (String(p).startsWith('C:\\bad')) throw new Error('EACCES');
@@ -58,7 +58,7 @@ test('findExecutable nie przewraca sie na wpisie, ktory rzuca wyjatkiem', () => 
   assert.equal(findExecutable('claude', 'C:\\bad;C:\\good', true, exists), hit);
 });
 
-test('findExecutable woli .exe/.cmd od wariantu bez rozszerzenia', () => {
+test('findExecutable prefers .exe/.cmd over the extensionless variant', () => {
   const dir = 'C:\\bin';
   const both = fsWith('C:\\bin\\claude.exe', 'C:\\bin\\claude');
   assert.equal(findExecutable('claude', dir, true, both), 'C:\\bin\\claude.exe');

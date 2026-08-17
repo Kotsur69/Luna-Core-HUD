@@ -1,13 +1,13 @@
 // ============================================================================
-// LunaCore - testy motywow (C3)
+// LunaCore - theme tests (C3)
 // ----------------------------------------------------------------------------
-// Dwie rzeczy do sprawdzenia: normalizeTheme()/loadThemes() jako granica (co
-// przyjmuje, co odrzuca, co tylko ostrzega) oraz to, ze slownik tokenow w
-// theme.js nie rozjechal sie z :root w styles.css.
+// Two things to check: normalizeTheme()/loadThemes() as a boundary (what it
+// accepts, what it rejects, what it only warns about), and that the token
+// dictionary in theme.js hasn't drifted from :root in styles.css.
 //
-// Ten drugi test jest powodem, dla ktorego duplikacja listy tokenow jest w ogole
-// bezpieczna: KNOWN_TOKENS istnieje po to, by literowka w motywie byla widoczna,
-// ale sama lista tez moze sie zestarzec. Tu sie nie zestarzeje.
+// This second test is the whole reason duplicating the token list is safe at
+// all: KNOWN_TOKENS exists so a typo in a theme is visible, but the list
+// itself can also go stale. Here, it won't.
 // ============================================================================
 
 'use strict';
@@ -21,53 +21,53 @@ const { loadThemes, normalizeTheme, KNOWN_TOKENS } = require('../src/theme');
 
 const STYLES = path.join(__dirname, '..', 'src', 'renderer', 'styles.css');
 
-/** Tokeny zadeklarowane w bloku :root { ... } w styles.css. */
+/** Tokens declared in the :root { ... } block in styles.css. */
 function rootTokens() {
   const css = fs.readFileSync(STYLES, 'utf8');
   const start = css.indexOf(':root {');
-  assert.ok(start !== -1, 'styles.css musi miec blok :root');
+  assert.ok(start !== -1, 'styles.css must have a :root block');
   const end = css.indexOf('\n}', start);
   const block = css.slice(start, end);
   return new Set([...block.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gim)].map((m) => m[1]));
 }
 
-// ---- granica: co normalizeTheme przyjmuje, a co odrzuca ---------------------
+// ---- boundary: what normalizeTheme accepts vs rejects ---------------------
 
-test('normalizeTheme odrzuca to, co nie jest obiektem', () => {
-  for (const bad of [null, undefined, 42, 'motyw', []]) {
+test('normalizeTheme rejects anything that is not an object', () => {
+  for (const bad of [null, undefined, 42, 'theme', []]) {
     assert.strictEqual(normalizeTheme(bad), null);
   }
 });
 
-test('normalizeTheme odrzuca motyw bez id', () => {
+test('normalizeTheme rejects a theme without id', () => {
   assert.strictEqual(normalizeTheme({ vars: { '--bg': '#000' } }), null);
   assert.strictEqual(normalizeTheme({ id: '', vars: { '--bg': '#000' } }), null);
 });
 
-test('normalizeTheme odrzuca motyw bez tokenow i bez dziedziczenia', () => {
-  assert.strictEqual(normalizeTheme({ id: 'pusty', vars: {} }), null);
-  assert.strictEqual(normalizeTheme({ id: 'pusty' }), null);
+test('normalizeTheme rejects a theme without tokens and without inheritance', () => {
+  assert.strictEqual(normalizeTheme({ id: 'empty', vars: {} }), null);
+  assert.strictEqual(normalizeTheme({ id: 'empty' }), null);
 });
 
-test('normalizeTheme przyjmuje motyw bez tokenow, gdy dziedziczy', () => {
-  const t = normalizeTheme({ id: 'wariant', extends: 'matrix' });
+test('normalizeTheme accepts a theme without tokens when it inherits', () => {
+  const t = normalizeTheme({ id: 'variant', extends: 'matrix' });
   assert.ok(t);
   assert.strictEqual(t.extends, 'matrix');
 });
 
-test('normalizeTheme podstawia id jako label, gdy brak label', () => {
+test('normalizeTheme substitutes id as label when label is missing', () => {
   const t = normalizeTheme({ id: 'void', vars: { '--bg': '#000' } });
   assert.strictEqual(t.label, 'void');
 });
 
-test('normalizeTheme pomija wartosci, ktore nie sa stringami', () => {
+test('normalizeTheme skips values that are not strings', () => {
   const t = normalizeTheme({ id: 'x', vars: { '--bg': '#000', '--radius': 10 } });
   assert.deepStrictEqual(Object.keys(t.vars), ['--bg']);
 });
 
-test('normalizeTheme ostrzega o nieznanym tokenie i go pomija', () => {
+test('normalizeTheme warns about an unknown token and skips it', () => {
   const warns = [];
-  // "--radius-small" nie istnieje - poprawna nazwa to "--radius-sm".
+  // "--radius-small" doesn't exist - the correct name is "--radius-sm".
   const t = normalizeTheme(
     { id: 'x', vars: { '--bg': '#000', '--radius-small': '4px' } },
     (m) => warns.push(m)
@@ -77,15 +77,15 @@ test('normalizeTheme ostrzega o nieznanym tokenie i go pomija', () => {
   assert.match(warns[0], /--radius-small/);
 });
 
-test('literowka w tokenie nie odrzuca calego motywu', () => {
-  const t = normalizeTheme({ id: 'x', vars: { '--bg': '#000', '--nie-ma': 'x' } });
-  assert.ok(t, 'motyw ma przetrwac pojedyncza literowke');
+test('a typo in a token does not reject the whole theme', () => {
+  const t = normalizeTheme({ id: 'x', vars: { '--bg': '#000', '--not-real': 'x' } });
+  assert.ok(t, 'the theme should survive a single typo');
   assert.strictEqual(t.vars['--bg'], '#000');
 });
 
-// ---- slownik tokenow nie moze sie rozjechac ze stylami ---------------------
+// ---- the token dictionary must not drift from the styles ---------------------
 
-test('KNOWN_TOKENS pokrywa sie z blokiem :root w styles.css', () => {
+test('KNOWN_TOKENS matches the :root block in styles.css', () => {
   const inCss = rootTokens();
   const missingFromCss = [...KNOWN_TOKENS].filter((t) => !inCss.has(t));
   const missingFromList = [...inCss].filter((t) => !KNOWN_TOKENS.has(t));
@@ -93,81 +93,81 @@ test('KNOWN_TOKENS pokrywa sie z blokiem :root w styles.css', () => {
   assert.deepStrictEqual(
     missingFromCss,
     [],
-    `theme.js zna tokeny, ktorych nie ma w :root: ${missingFromCss.join(', ')}`
+    `theme.js knows tokens that are not in :root: ${missingFromCss.join(', ')}`
   );
   assert.deepStrictEqual(
     missingFromList,
     [],
-    `:root ma tokeny, ktorych motyw nie moze ustawic: ${missingFromList.join(', ')}`
+    `:root has tokens no theme can set: ${missingFromList.join(', ')}`
   );
 });
 
-// ---- dziedziczenie ---------------------------------------------------------
+// ---- inheritance ---------------------------------------------------------
 
-test('shipowane motywy laduja sie bez ostrzezen', () => {
+test('shipped themes load with no warnings', () => {
   const warns = [];
   const { themes } = loadThemes((m) => warns.push(m));
   assert.deepStrictEqual(warns, []);
-  assert.ok(themes.length >= 9, `spodziewane >=9 motywow, jest ${themes.length}`);
+  assert.ok(themes.length >= 9, `expected >=9 themes, got ${themes.length}`);
 });
 
-test('kazdy shipowany motyw ma komplet tokenow po rozwiazaniu extends', () => {
+test('every shipped theme has a full token set once extends is resolved', () => {
   const { themes } = loadThemes(() => {});
   for (const t of themes) {
-    // Kolory sa obowiazkowe - bez nich motyw nie jest motywem, tylko akcentem.
+    // Colors are mandatory - without them a theme is not a theme, just an accent.
     for (const must of ['--bg', '--bg-panel', '--text', '--text-dim', '--term-bg']) {
-      assert.ok(t.vars[must], `motyw "${t.id}" nie ustawia ${must}`);
+      assert.ok(t.vars[must], `theme "${t.id}" does not set ${must}`);
     }
-    assert.ok(t.terminal.background, `motyw "${t.id}" nie ustawia tla terminala`);
+    assert.ok(t.terminal.background, `theme "${t.id}" does not set the terminal background`);
   }
 });
 
-test('extends dziedziczy tokeny rodzica, wlasne wygrywaja', () => {
+test('extends inherits the parent tokens, its own win', () => {
   const { themes } = loadThemes(() => {});
   const matrix = themes.find((t) => t.id === 'matrix');
   const amber = themes.find((t) => t.id === 'amber-crt');
   assert.ok(matrix && amber);
-  // Forma przychodzi od matrixa...
+  // Form comes from matrix...
   assert.strictEqual(amber.vars['--radius'], matrix.vars['--radius']);
   assert.strictEqual(amber.vars['--font-ui'], matrix.vars['--font-ui']);
-  // ...ale kolory sa wlasne.
+  // ...but the colors are its own.
   assert.notStrictEqual(amber.vars['--bg'], matrix.vars['--bg']);
   assert.strictEqual(amber.vars['--bg'], '#0d0800');
 });
 
-test('rozwiazany motyw nie niesie juz klucza extends do renderera', () => {
+test('a resolved theme no longer carries the extends key to the renderer', () => {
   const { themes } = loadThemes(() => {});
   for (const t of themes) {
-    assert.ok(!('extends' in t), `motyw "${t.id}" wypuszcza extends do renderera`);
+    assert.ok(!('extends' in t), `theme "${t.id}" leaks extends to the renderer`);
   }
 });
 
-// ---- motywy, ktore Mati moze miec zapisane w ui.local.json -----------------
+// ---- themes that Mati may have saved in ui.local.json -----------------
 
-test('zadne z dotychczasowych id motywow nie zniknelo', () => {
+test('none of the existing theme ids have disappeared', () => {
   const { themes } = loadThemes(() => {});
   const ids = new Set(themes.map((t) => t.id));
-  // Usuniecie ktoregokolwiek osierociloby zapisany wybor w ui.local.json.
+  // Removing any of these would orphan a saved choice in ui.local.json.
   for (const id of ['cyberpunk', 'synthwave', 'matrix', 'nord', 'light']) {
-    assert.ok(ids.has(id), `motyw "${id}" zniknal z config/themes.json`);
+    assert.ok(ids.has(id), `theme "${id}" disappeared from config/themes.json`);
   }
 });
 
-test('matrix to juz nie sam zielony filtr', () => {
+test('matrix is no longer just a green filter', () => {
   const { themes } = loadThemes(() => {});
   const matrix = themes.find((t) => t.id === 'matrix');
-  // To jest cala teza C3: motyw ma zmieniac ksztalt, nie tylko barwe.
+  // This is C3's whole thesis: a theme should change shape, not just hue.
   assert.strictEqual(matrix.vars['--radius'], '0px');
   assert.match(matrix.vars['--font-ui'], /Mono|Consolas/);
   assert.notStrictEqual(matrix.vars['--texture'], 'none');
   assert.ok(matrix.vars['--text-glow'] && matrix.vars['--text-glow'] !== 'none');
 });
 
-test('plaskie motywy naprawde gasza poswiate', () => {
+test('flat themes genuinely turn off the glow', () => {
   const { themes } = loadThemes(() => {});
   for (const id of ['nord', 'paper', 'void', 'light']) {
     const t = themes.find((x) => x.id === id);
-    assert.strictEqual(t.vars['--glow-size'], '0px', `motyw "${id}"`);
-    assert.strictEqual(t.vars['--text-glow'], 'none', `motyw "${id}"`);
+    assert.strictEqual(t.vars['--glow-size'], '0px', `theme "${id}"`);
+    assert.strictEqual(t.vars['--text-glow'], 'none', `theme "${id}"`);
   }
 });

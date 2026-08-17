@@ -1,15 +1,18 @@
 // ============================================================================
-// LunaCore - Sciagawki akcji (7C)
+// LunaCore - Action cheat-sheets (7C)
 // ----------------------------------------------------------------------------
-// Laduje grupy komend z config/cheatsheets.json (+ opcjonalny override
-// config/cheatsheets.local.json, gitignore). Kazda grupa to zwijka z rzedem
-// przyciskow; klikniecie wysyla komende przez Action Injector (pty:command).
+// Loads command groups from config/cheatsheets.json (+ an optional override
+// config/cheatsheets.local.json, gitignored). Each group is a collapsible with a
+// row of buttons; clicking one sends the command through the Action Injector
+// (pty:command).
 //
-// Konwencja: command z prefiksem "!" = komenda powloki (bash) w sesji Claude;
-// bez prefiksu = wpisywane wprost (slash-komendy typu /compact, /code-review).
+// Convention: a command prefixed with "!" = a shell (bash) command in the Claude
+// session; without the prefix it is typed verbatim (slash commands like
+// /compact, /code-review).
 //
-// Walidacja na granicy: odrzucamy grupy/komendy bez wymaganych pol. Pusty/bledny
-// config => pusta lista (panel po prostu nic nie pokaze).
+// Validation at the boundary: groups/commands missing required fields are
+// rejected. An empty or broken config => an empty list (the panel simply shows
+// nothing).
 // ============================================================================
 
 'use strict';
@@ -18,13 +21,13 @@ const fs = require('fs');
 const paths = require('./paths');
 const { hasText, normalizeText, mergeKey } = require('./localized');
 
-// Wysylane sciagawki czytamy z katalogu bundled; override uzytkownika lezy w
-// katalogu ZAPISYWALNYM i liczymy go leniwie, bo modul jest wymagany przed
-// app.whenReady(). Szczegoly w paths.js.
+// The shipped cheat-sheets are read from the bundled directory; the user's
+// override lives in the WRITABLE directory and is resolved lazily, since this
+// module is required before app.whenReady(). Details in paths.js.
 const BASE_FILE = paths.bundled('cheatsheets.json');
 const localFile = () => paths.local('cheatsheets.local.json');
 
-/** Bezpieczny odczyt + parse JSON. Zwraca null przy braku/bledzie. */
+/** Safe read + JSON parse. Returns null when the file is missing or invalid. */
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -34,9 +37,9 @@ function readJson(file) {
 }
 
 /**
- * Waliduje pojedyncza komende. Zwraca { label, command } lub null.
- * `label` moze byc stringiem albo obiektem { pl, en } - patrz src/localized.js.
- * Sama `command` NIE jest tlumaczona: `!npm test` znaczy to samo w kazdym jezyku.
+ * Validates a single command. Returns { label, command } or null.
+ * `label` may be a string or a { pl, en } object - see src/localized.js.
+ * `command` itself is NOT translated: `!npm test` means the same in every language.
  */
 function normalizeCommand(c) {
   if (!c || typeof c !== 'object') return null;
@@ -45,7 +48,7 @@ function normalizeCommand(c) {
   return { label, command: c.command };
 }
 
-/** Waliduje grupe. Zwraca { title, note, commands } lub null (gdy brak komend). */
+/** Validates a group. Returns { title, note, commands } or null (when there are no commands). */
 function normalizeGroup(g) {
   if (!g || typeof g !== 'object') return null;
   if (!hasText(g.title)) return null;
@@ -58,8 +61,8 @@ function normalizeGroup(g) {
 }
 
 /**
- * Laduje grupy sciagawek: base scalone z local (local po title nadpisuje base,
- * dodatkowe grupy dopisane na koncu).
+ * Loads cheat-sheet groups: base merged with local (local overrides base by
+ * title, extra groups are appended at the end).
  * @returns {{groups: Array}}
  */
 function loadCheatsheets() {
@@ -71,9 +74,9 @@ function loadCheatsheets() {
     if (!src || !Array.isArray(src.groups)) return;
     for (const raw of src.groups) {
       const g = normalizeGroup(raw);
-      // Klucz przez mergeKey(): zlokalizowany tytul to OBIEKT, a obiekty w Mapie
-      // porownuja sie przez tozsamosc - kazda grupa wygladalaby na unikalna
-      // i override z *.local.json po cichu przestalby dzialac.
+      // Keyed through mergeKey(): a localized title is an OBJECT, and objects in
+      // a Map compare by identity - every group would look unique and the
+      // override from *.local.json would silently stop working.
       if (g) byTitle.set(mergeKey(g.title), g);
     }
   };

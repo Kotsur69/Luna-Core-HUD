@@ -44,7 +44,7 @@ window.lunacore.onUpdateState((state) => {
   emitUpdateState(state);
 });
 
-// E1: telemetria maszyny. App-scoped like the two above - there is one machine
+// E1: machine telemetry. App-scoped like the two above - there is one machine
 // no matter how many tabs are open, so this must NOT go through sessions.js.
 window.lunacore.onTelemetry((sample) => {
   emitTelemetryUpdate(sample);

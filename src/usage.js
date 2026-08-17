@@ -1,20 +1,21 @@
 // ============================================================================
-// LunaCore - Licznik zuzycia limitow subskrypcji (usage meter)
+// LunaCore - subscription usage meter
 // ----------------------------------------------------------------------------
-// Pobiera wykorzystanie okien limitu (5h + 7 dni) z prywatnego endpointu OAuth,
-// tego samego, z ktorego korzysta `claude` przy `/status`:
+// Fetches usage of the rate-limit windows (5h + 7 days) from the private OAuth
+// endpoint, the same one `claude` uses for `/status`:
 //   GET https://api.anthropic.com/api/oauth/usage
 //
-// ZERO TOKENOW CLAUDE: to zwykly odczyt (GET), NIE wywolanie modelu (/v1/messages
-// nie jest dotykane). Nie zjada ani sesji, ani limitu tygodniowego.
+// ZERO CLAUDE TOKENS: this is a plain read (GET), NOT a model call (/v1/messages
+// is never touched). It eats neither the session nor the weekly limit.
 //
-// AUTORYZACJA BEZ WLASNEGO REFRESHU: token czytamy ZA KAZDYM RAZEM na swiezo z
-// ~/.claude/.credentials.json. To sam `claude` CLI odswieza i nadpisuje ten plik,
-// wiec "jedziemy na jego refreshu" - nie implementujemy wlasnego OAuth. Gdy token
-// wygasl i nie ma jak go odswiezyc (CLI nie chodzi) -> 401 -> stan 'reauth'.
+// AUTH WITHOUT OUR OWN REFRESH: the token is read FRESH EVERY TIME from
+// ~/.claude/.credentials.json. The `claude` CLI itself refreshes and rewrites
+// that file, so we "ride its refresh" - we do not implement our own OAuth. When
+// the token has expired and there is no way to refresh it (the CLI is not
+// running) -> 401 -> 'reauth' state.
 //
-// UWAGA: endpoint jest nieudokumentowany/prywatny. Kod degraduje sie lagodnie
-// (stany 'reauth' / 'unavailable') zamiast pokazywac zmyslona liczbe.
+// NOTE: the endpoint is undocumented/private. The code degrades gracefully
+// (states 'reauth' / 'unavailable') instead of showing a made-up number.
 // ============================================================================
 
 'use strict';
@@ -28,7 +29,7 @@ const CRED_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 const USAGE_HOST = 'api.anthropic.com';
 const USAGE_PATH = '/api/oauth/usage';
 
-/** Czyta swiezy accessToken z pliku poswiadczen CLI. null = brak/zly plik. */
+/** Reads a fresh accessToken from the CLI's credentials file. null = file missing/bad. */
 function readToken() {
   try {
     const cred = JSON.parse(fs.readFileSync(CRED_PATH, 'utf8'));
@@ -37,12 +38,12 @@ function readToken() {
       return oauth.accessToken;
     }
   } catch {
-    /* brak pliku / niepoprawny JSON - traktujemy jak brak autoryzacji */
+    /* missing file / invalid JSON - treated as no authorization */
   }
   return null;
 }
 
-/** GET JSON z naglowkami OAuth Claude Code. Resolve zawsze ({status, body}). */
+/** GET JSON with Claude Code's OAuth headers. Always resolves ({status, body}). */
 function httpsGetJson(host, pathname, token) {
   return new Promise((resolve) => {
     const req = https.request(
@@ -74,7 +75,7 @@ function httpsGetJson(host, pathname, token) {
   });
 }
 
-/** Normalizuje jedno okno limitu ({utilization, resets_at}) -> {pct, resetsAt}. */
+/** Normalizes a single rate-limit window ({utilization, resets_at}) -> {pct, resetsAt}. */
 function pickWindow(w) {
   if (!w || typeof w.utilization !== 'number') return null;
   return {
@@ -84,9 +85,9 @@ function pickWindow(w) {
 }
 
 /**
- * Jednorazowy odczyt zuzycia. Zwraca albo znormalizowany stan, albo {error}:
- *   'reauth'      - brak/wygasly token (401/403 lub brak pliku)
- *   'unavailable' - siec/timeout/zmiana endpointu (inny status, zly JSON)
+ * One-shot usage read. Returns either a normalized state, or {error}:
+ *   'reauth'      - missing/expired token (401/403, or file missing)
+ *   'unavailable' - network/timeout/endpoint change (other status, bad JSON)
  */
 async function fetchUsage() {
   const token = readToken();
@@ -127,14 +128,15 @@ function nextPollDelay(usage, intervalMs, heartbeatMs) {
 }
 
 /**
- * Cyklicznie pobiera zuzycie i emituje, gdy sie zmieni (jak PortWatcher).
- * Odliczanie do resetu liczy renderer z resetsAt, wiec porownujemy stan BEZ
- * pol pochodnych (fetchedAt) - inaczej emitowaloby co tick bez realnej zmiany.
+ * Periodically fetches usage and emits when it changes (like PortWatcher).
+ * The renderer computes the countdown to reset from resetsAt, so we compare
+ * state WITHOUT the derived field (fetchedAt) - otherwise it would emit every
+ * tick with no real change.
  *
- * Heartbeat: po odczycie z bledem nastepny tick przychodzi po heartbeatMs
- * (domyslnie 15 s) zamiast pelnego intervalMs (90 s), az odczyt sie znow
- * powiedzie - wtedy wraca normalny, wolniejszy rytm. To zwykle GET-y bez
- * zuzycia tokenow Claude, wiec proba co 15 s bez limitu prob jest tania.
+ * Heartbeat: after a failed read the next tick arrives after heartbeatMs
+ * (default 15 s) instead of the full intervalMs (90 s), until a read succeeds
+ * again - then it returns to the normal, slower cadence. These are plain GETs
+ * that cost no Claude tokens, so retrying every 15 s with no attempt limit is cheap.
  */
 class UsageWatcher {
   /** @param {(usage: object) => void} onUpdate */
@@ -151,7 +153,7 @@ class UsageWatcher {
   start() {
     if (this.running) return;
     this.running = true;
-    this.tick(); // pierwszy odczyt od razu
+    this.tick(); // first read immediately
   }
 
   stop() {
@@ -161,7 +163,7 @@ class UsageWatcher {
   }
 
   async tick() {
-    if (this.busy) return; // nie nakladaj zapytan
+    if (this.busy) return; // do not overlap requests
     this.busy = true;
     let usage;
     try {
@@ -179,11 +181,11 @@ class UsageWatcher {
     }
   }
 
-  /** Wymusza natychmiastowy odczyt + emisje (przycisk odswiezania w UI). */
+  /** Forces an immediate read + emit (the refresh button in the UI). */
   refresh() {
-    this.lastJson = ''; // wymus emisje przy nastepnym odczycie
+    this.lastJson = ''; // force an emit on the next read
     if (this.timer) {
-      clearTimeout(this.timer); // nie zdublowac zaplanowanego kolejnego ticku
+      clearTimeout(this.timer); // avoid duplicating the already-scheduled next tick
       this.timer = null;
     }
     return this.tick();

@@ -1,4 +1,4 @@
-// Testy wiedzy o modelach: okno kontekstu + etykieta. Czyste funkcje, bez I/O.
+// Tests for model knowledge: context window + label. Pure functions, no I/O.
 
 'use strict';
 
@@ -9,11 +9,11 @@ const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('../src/m
 
 // ---- contextLimitFor --------------------------------------------------------
 
-test('contextLimitFor zna realne okna biezacych modeli (1M)', () => {
-  // Poprawka 2026-07-24: te modele maja okno 1M, nie 200k. Poprzednia wersja
-  // zwracala tu 200k, przez co pasek pokazywalby 100% przy okolo 20%.
-  // Opus 5 doszedl pozniej tego samego dnia - brak wpisu oznaczal spadek do
-  // domyslnych 200k, czyli dokladnie ten sam klamiacy pasek co wyzej.
+test('contextLimitFor knows the real windows of current models (1M)', () => {
+  // Fix 2026-07-24: these models have a 1M window, not 200k. The previous
+  // version returned 200k here, so the bar would show 100% at around 20%.
+  // Opus 5 was added later the same day - a missing entry meant falling back to
+  // the default 200k, i.e. the exact same lying bar as above.
   assert.equal(contextLimitFor('claude-opus-5'), 1000000);
   assert.equal(contextLimitFor('claude-opus-4-8'), 1000000);
   assert.equal(contextLimitFor('claude-opus-4-7'), 1000000);
@@ -21,57 +21,57 @@ test('contextLimitFor zna realne okna biezacych modeli (1M)', () => {
   assert.equal(contextLimitFor('claude-fable-5'), 1000000);
 });
 
-test('contextLimitFor zna wyjatek: Haiku 4.5 ma 200k', () => {
+test('contextLimitFor knows the exception: Haiku 4.5 has 200k', () => {
   assert.equal(contextLimitFor('claude-haiku-4-5'), 200000);
   assert.equal(contextLimitFor('claude-haiku-4-5-20251001'), 200000);
 });
 
-test('contextLimitFor dopasowuje modele z sufiksem daty', () => {
+test('contextLimitFor matches models with a date suffix', () => {
   assert.equal(contextLimitFor('claude-opus-4-8-20260115'), 1000000);
 });
 
-test('contextLimitFor spada do 200k dla nieznanego modelu', () => {
-  // Nieznany backend (LM Studio, Kimi): zaklada ostroznie, obserwacja poprawi.
+test('contextLimitFor falls back to 200k for an unknown model', () => {
+  // Unknown backend (LM Studio, Kimi): assume cautiously, observation will correct it.
   assert.equal(contextLimitFor('qwen2.5-coder-32b-instruct'), DEFAULT_CONTEXT_LIMIT);
   assert.equal(contextLimitFor('claude-sonnet-4-5-20250929'), 200000);
 });
 
-test('contextLimitFor jest odporny na brak/pusty model', () => {
+test('contextLimitFor is resilient to a missing/empty model', () => {
   assert.equal(contextLimitFor(''), 200000);
   assert.equal(contextLimitFor(null), 200000);
   assert.equal(contextLimitFor(undefined), 200000);
 });
 
-test('contextLimitFor rozpoznaje marker 1M w id modelu', () => {
+test('contextLimitFor recognizes the 1M marker in a model id', () => {
   assert.equal(contextLimitFor('claude-sonnet-4-5-1m'), 1000000);
   assert.equal(contextLimitFor('claude-sonnet-4-5[1m]'), 1000000);
 });
 
-test('contextLimitFor nie myli sie o zwykla cyfre 1 w id', () => {
+test('contextLimitFor is not fooled by a plain digit 1 in the id', () => {
   assert.equal(contextLimitFor('claude-opus-4-1'), 200000);
   assert.equal(contextLimitFor('claude-sonnet-4-5-20260115'), 200000);
 });
 
-test('contextLimitFor awansuje okno, gdy obserwacja przeczy zalozeniu', () => {
-  // Druga linia obrony dla modeli spoza tablicy: kontekst nie moze przekroczyc
-  // wlasnego okna, wiec 600k tokenow dowodzi, ze okno to nie 200k.
+test('contextLimitFor promotes the window when observation contradicts the assumption', () => {
+  // Second line of defense for models not in the table: context cannot exceed
+  // its own window, so 600k tokens proves the window is not 200k.
   assert.equal(contextLimitFor('claude-sonnet-4-5', 600000), 1000000);
-  assert.equal(contextLimitFor('nieznany-lokalny-model', 600000), 1000000);
+  assert.equal(contextLimitFor('unknown-local-model', 600000), 1000000);
 });
 
-test('contextLimitFor nie awansuje, dopoki miescimy sie w oknie', () => {
+test('contextLimitFor does not promote while we stay within the window', () => {
   assert.equal(contextLimitFor('claude-haiku-4-5', 199999), 200000);
   assert.equal(contextLimitFor('claude-haiku-4-5', 200000), 200000);
 });
 
-test('contextLimitFor zatrzymuje sie na najwiekszym znanym progu', () => {
-  // Nie znamy okna wiekszego niz 1M - lepiej pokazac 100% niz zmyslic prog.
-  assert.equal(contextLimitFor('cokolwiek', 5000000), 1000000);
+test('contextLimitFor stops at the largest known tier', () => {
+  // We don't know of a window bigger than 1M - better to show 100% than to make up a threshold.
+  assert.equal(contextLimitFor('anything', 5000000), 1000000);
 });
 
 // ---- modelLabel -------------------------------------------------------------
 
-test('modelLabel skraca id modelu do rodziny i wersji', () => {
+test('modelLabel shortens a model id to family and version', () => {
   assert.equal(modelLabel('claude-opus-5'), 'Opus 5');
   assert.equal(modelLabel('claude-opus-4-8'), 'Opus 4.8');
   assert.equal(modelLabel('claude-sonnet-4-5-20250929'), 'Sonnet 4.5');
@@ -79,21 +79,21 @@ test('modelLabel skraca id modelu do rodziny i wersji', () => {
   assert.equal(modelLabel('claude-fable-5'), 'Fable 5');
 });
 
-test('modelLabel radzi sobie ze stara kolejnoscia (wersja przed rodzina)', () => {
+test('modelLabel handles the old ordering (version before family)', () => {
   assert.equal(modelLabel('claude-3-5-sonnet-20241022'), 'Sonnet 3.5');
 });
 
-test('modelLabel dokleja znacznik 1M', () => {
+test('modelLabel appends the 1M marker', () => {
   assert.equal(modelLabel('claude-sonnet-4-5-1m'), 'Sonnet 4.5 1M');
 });
 
-test('modelLabel zwraca nieznane id BEZ ZMIAN (lokalne modele z LM Studio)', () => {
-  // Lepiej pokazac surowa nazwe niz zgadywac rodzine, ktorej nie znamy.
+test('modelLabel returns an unknown id UNCHANGED (local LM Studio models)', () => {
+  // Better to show the raw name than to guess at a family we don't know.
   assert.equal(modelLabel('qwen2.5-coder-32b-instruct'), 'qwen2.5-coder-32b-instruct');
   assert.equal(modelLabel('gpt-4o'), 'gpt-4o');
 });
 
-test('modelLabel zwraca pusty string dla braku modelu', () => {
+test('modelLabel returns an empty string for a missing model', () => {
   assert.equal(modelLabel(''), '');
   assert.equal(modelLabel(null), '');
   assert.equal(modelLabel(undefined), '');

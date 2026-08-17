@@ -29,17 +29,17 @@
                  form-action 'none';
                  frame-src 'none'" />
 
-  <!-- Styl terminala xterm.js (z node_modules, korzen projektu = ../../) -->
+  <!-- xterm.js stylesheet (from node_modules, project root = ../../) -->
   <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
-  <!-- Motyw LunaCore -->
+  <!-- LunaCore theme -->
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <!-- ================= HUD =================
-       C1: pusty z premedytacja. Regiony (kolumny/wiersze siatki) i przydzial
-       widgetow buduje modules/layout.js z presetu w config/layouts.json -
-       `grid-template-*` laduje tu jako styl inline. Zadnego panelu ani slotu
-       nie ma juz na sztywno w markupie. -->
+       C1: deliberately empty. Regions (grid columns/rows) and widget assignment
+       are built by modules/layout.js from a preset in config/layouts.json -
+       `grid-template-*` lands here as an inline style. No panel or slot
+       is hardcoded in the markup anymore. -->
   <div class="app"></div>
 
   <!--
@@ -58,13 +58,13 @@
   </div>
 
   <!-- ================= Chrome HUD (parking) =================
-       Znak firmowy i linia statusu PTY NIE sa widgetami: ptystatus.js chwyta
-       #pty-status-dot w czasie importu modulu, wiec nie moga siedziec w
-       <template> (jego tresc nie jest czescia dokumentu). Zyja wiec tutaj, a
-       layout.js PRZENOSI te dwa wezly do regionu wskazanego przez preset
-       (layout.chrome) i odklada je z powrotem tutaj na czas przebudowy.
-       Kontener jest `hidden`, wiec dopoki nie zostana przeniesione - nie widac
-       ich; po przeniesieniu dziedzicza widocznosc regionu. -->
+       The brand mark and PTY status line are NOT widgets: ptystatus.js grabs
+       #pty-status-dot at module-import time, so they can't live inside a
+       <template> (its content isn't part of the document). So they live here,
+       and layout.js MOVES these two nodes into the region the active preset
+       points to (layout.chrome), then parks them back here during a rebuild.
+       The container is `hidden`, so until they're moved they're invisible;
+       once moved they inherit the region's visibility. -->
   <div id="app-chrome" hidden>
     <div class="brand">
       <span class="brand__glyph">☾</span>
@@ -77,12 +77,13 @@
     </div>
   </div>
 
-  <!-- ================= Sekwencja startowa (boot) =================
-       Czysta ozdoba: nakladka nad gotowym UI. NIE blokuje niczego - PTY startuje
-       i leje stdout pod spodem, a kazdy klawisz/klik natychmiast ja zdejmuje.
-       Widoczna od razu (bez `hidden`), ale animacja wejscia ma 60 ms opoznienia,
-       wiec gdy prefs mowia "wylaczona", renderer zdejmuje ja zanim cokolwiek
-       zdazy sie namalowac. aria-hidden: dla czytnika ekranu to dekoracja. -->
+  <!-- ================= Boot sequence =================
+       Pure decoration: an overlay on top of the ready UI. It does NOT block
+       anything - the PTY starts and streams stdout underneath, and any
+       key press/click dismisses it instantly. Visible right away (no `hidden`),
+       but the entry animation has a 60ms delay, so when prefs say "off" the
+       renderer removes it before anything gets painted. aria-hidden: to a
+       screen reader this is decoration. -->
   <div id="boot" class="boot" aria-hidden="true">
     <div class="boot__grid"></div>
     <div class="boot__scan"></div>
@@ -92,7 +93,7 @@
         <span class="boot__word">Luna<span class="boot__word-core">Core</span></span>
       </div>
       <p class="boot__tagline">COMMAND CENTER // CLAUDE CODE CLI</p>
-      <!-- Wiersze logu dopisuje renderer.js (i18n), zeby PL/EN dzialalo. -->
+      <!-- Log lines are appended by renderer.js (i18n), so PL/EN both work. -->
       <ul id="boot-log" class="boot__log"></ul>
       <div class="boot__rule"><span id="boot-rule" class="boot__rule-fill"></span></div>
       <p class="boot__skip" data-i18n="boot.skip">klik / dowolny klawisz = pomin</p>
@@ -117,8 +118,8 @@
     <div class="panel__section">
       <h2 class="panel__title usage-head">
         <span data-i18n="ctxwin.title">Context Window</span>
-        <!-- B6: kopiuje sciezke transcriptu TEJ zakladki. Ukryty, dopoki
-             obserwator nie przypnie pliku - nie ma czego kopiowac. -->
+        <!-- B6: copies THIS tab's transcript path. Hidden until the
+             observer pins a file - nothing to copy yet. -->
         <button
           id="ctx-copy-path"
           class="usage-refresh"
@@ -133,15 +134,15 @@
       <div class="ctx-meta">
         <span class="ctx-meta__left">
           <span id="ctx-percent">--%</span>
-          <!-- B3: plakietka modelu + realne okno (B2). Ukryta, dopoki nie znamy modelu. -->
+          <!-- B3: model badge + real context window (B2). Hidden until we know the model. -->
           <span id="ctx-model" class="badge" hidden></span>
         </span>
         <span id="ctx-warn" class="ctx-warn"></span>
       </div>
       <p id="ctx-tokens" class="hint" data-i18n="ctx.waiting">Oczekiwanie na transcript sesji...</p>
 
-      <!-- Sparkline zuzycia: procent context window w czasie (Passive Observer,
-           te same probki `usage` co pasek wyzej). Linia kreskowana = prog 85%. -->
+      <!-- Usage sparkline: context-window percentage over time (Passive Observer,
+           the same `usage` samples as the bar above). Dashed line = 85% threshold. -->
       <div class="ctx-spark" aria-hidden="true">
         <svg class="ctx-spark__svg" viewBox="0 0 100 30" preserveAspectRatio="none">
           <line class="ctx-spark__thresh" x1="0" y1="4.5" x2="100" y2="4.5" />
@@ -159,8 +160,8 @@
     <div class="panel__section panel__section--grow">
       <h2 class="panel__title usage-head">
         <span data-i18n="ports.title">Porty localhost</span>
-        <!-- B5: przelacznik szumu systemowego. Ukrywanie jest ZAWSZE widoczne -
-             licznik ponizej mowi, ile wierszy zwinieto. -->
+        <!-- B5: system-noise toggle. The hide state is ALWAYS visible -
+             the counter below says how many rows got collapsed. -->
         <button
           id="ports-filter"
           class="usage-refresh ports-filter"
@@ -169,14 +170,15 @@
           title="Ukryj procesy systemowe"
         >&#9673;</button>
       </h2>
-      <!-- Wypelnia modules/ports.js z pasywnego skanu (7B). -->
+      <!-- Filled by modules/ports.js from the passive scan (7B). -->
       <ul id="ports-list" class="ports-list"></ul>
       <p id="ports-empty" class="hint" data-i18n="ports.scanning">Skanowanie portow...</p>
     </div>
   </template>
 
-  <!-- E1: telemetria maszyny. Duza liczba niesie prawde, wykres niesie kontekst;
-       pauza zamraza OBRAZ, a nie strumien - probki lecą dalej w tle. -->
+  <!-- E1: machine telemetry. The big number carries the truth, the chart carries
+       context; pause freezes the DISPLAY, not the stream - sampling continues
+       in the background. -->
   <template id="w-telemetry">
     <div class="panel__section telem">
       <h2 class="panel__title usage-head">
@@ -196,7 +198,7 @@
           <span class="telem__value" id="telem-ram-value">--</span>
         </div>
         <div class="telem__bar"><i id="telem-ram-bar" class="telem__fill"></i></div>
-        <!-- Slupki buduje modules/telemetry.js raz, przy montowaniu. -->
+        <!-- Bars are built by modules/telemetry.js once, at mount time. -->
         <div class="telem__spark" id="telem-ram-spark" aria-hidden="true"></div>
         <p class="telem__note" id="telem-ram-note"></p>
       </div>
@@ -231,7 +233,7 @@
   <template id="w-scratchpad">
     <div class="panel__section panel__section--grow">
       <h2 class="panel__title"><span data-i18n="pad.title">Brudnopis</span> <span id="pad-status" class="count"></span></h2>
-      <!-- Lokalny notatnik: autozapis do config/scratchpad.local.md (gitignore). -->
+      <!-- Local scratchpad: auto-saves to config/scratchpad.local.md (gitignored). -->
       <textarea
         id="pad-text"
         class="pad"
@@ -259,8 +261,8 @@
           title="Odswiez zuzycie"
         >&#8635;</button>
       </h2>
-      <!-- Kafelek zuzycia (5h + tydzien). Paski buduje modules/usage.js z IPC
-           usage:update (odczyt GET z endpointu OAuth CLI, zero tokenow). -->
+      <!-- Usage tile (5h + weekly). Bars are built by modules/usage.js from the IPC
+           usage:update event (a GET read from the OAuth CLI endpoint, zero tokens spent). -->
       <div id="usage-updated" class="usage-updated hint"></div>
       <div id="usage-body" class="usage">
         <p class="hint" data-i18n="usage.loading">Sprawdzanie limitow...</p>
@@ -271,7 +273,7 @@
   <template id="w-skilltracker">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="skilltracker.title">Skill Tracker</h2>
-      <!-- Kafelki zapala transcript (tool_use/tool_result) + backstop ze stdout. -->
+      <!-- Tiles are lit up by the transcript (tool_use/tool_result) + a stdout backstop. -->
       <ul id="skill-list" class="skill-list">
         <li class="skill-tile" data-skill="Read">Read</li>
         <li class="skill-tile" data-skill="Edit">Edit</li>
@@ -289,17 +291,17 @@
   <template id="w-activefiles">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="activefiles.title" data-i18n-title="activefiles.hint" title="+/- to realne linie z diffa transcriptu.">Aktywne pliki</h2>
-      <!-- Zasila obserwator z observer.js (tool_use/tool_result + structuredPatch)
-           przez modules/sessions.js - zero nowego I/O, zero nowego kanalu IPC. -->
+      <!-- Fed by the observer from observer.js (tool_use/tool_result + structuredPatch)
+           via modules/sessions.js - zero new I/O, zero new IPC channel. -->
       <ul id="afile-list" class="afile-list"></ul>
       <p id="afile-empty" class="hint" data-i18n="activefiles.empty">Zadnych zmian w plikach w tej sesji.</p>
     </div>
   </template>
 
-  <!-- NOTE: pierwszy widget z LEWEGO panelu, i jedyny, ktorego korzeniem NIE jest
-       .panel__section - to sam <label> kontrolki, bo blok dzieli sekcje "Akcje"
-       z fizycznym przyciskiem COMPACT. Dodanie tu wrappera .panel__section
-       zrobiloby z jednej sekcji dwie i rozjechaloby odstepy w panelu. -->
+  <!-- NOTE: the first widget from the LEFT panel, and the only one whose root is NOT
+       .panel__section - it's the control's <label> itself, because this block shares
+       the "Actions" section with the physical COMPACT button. Adding a .panel__section
+       wrapper here would turn one section into two and throw off the panel's spacing. -->
   <template id="w-autocompact">
     <label id="autocompact-field" class="switch-field" data-i18n-title="autocompact.hint" title="Gdy kontekst przekroczy prog 85%, LunaCore sam wysle /compact.">
       <span class="switch-field__text">
@@ -319,7 +321,7 @@
   <template id="w-actions">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="actions.title">Akcje</h2>
-      <!-- FIZYCZNY przycisk Action Injector: wysyla /compact do PTY -->
+      <!-- PHYSICAL Action Injector button: sends /compact to the PTY -->
       <button id="btn-compact" class="action-btn" data-i18n-title="compact.title" title="Wyslij /compact do Claude CLI">
         <span class="action-btn__icon">⚡</span>
         <span class="action-btn__label">COMPACT CONTEXT</span>
@@ -331,19 +333,19 @@
   <template id="w-appearance">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="appearance.title">Wyglad</h2>
-      <!-- Motyw: opcje wypelnia appearance.js z config/themes.json. -->
+      <!-- Theme: options are filled in by appearance.js from config/themes.json. -->
       <label class="ui-field">
         <span class="ui-field__label" data-i18n="appearance.theme">Motyw</span>
         <select id="theme-switcher" class="profile-select"></select>
       </label>
-      <!-- C1: preset ukladu HUD. Opcje wypelnia appearance.js z
-           config/layouts.json; zmiana PRZENOSI widgety miedzy regionami, nie
-           montuje ich od nowa (modules/layout.js). -->
+      <!-- C1: HUD layout preset. Options are filled in by appearance.js from
+           config/layouts.json; changing it MOVES widgets between regions, it doesn't
+           remount them from scratch (modules/layout.js). -->
       <label class="ui-field">
         <span class="ui-field__label" data-i18n="appearance.layout">Uklad</span>
         <select id="layout-switcher" class="profile-select"></select>
       </label>
-      <!-- Jezyk UI: PL/EN, przelaczenie na zywo (i18n.js). -->
+      <!-- UI language: PL/EN, switches live (i18n.js). -->
       <label class="ui-field">
         <span class="ui-field__label" data-i18n="appearance.lang">Jezyk</span>
         <select id="lang-switcher" class="profile-select">
@@ -357,8 +359,8 @@
   <template id="w-project">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="project.title">Projekt</h2>
-      <!-- Katalog roboczy (cwd) sesji. Opcje wypelnia switchers.js z
-           config/projects.json; zmiana restartuje PTY w nowym folderze. -->
+      <!-- Session working directory (cwd). Options are filled in by switchers.js from
+           config/projects.json; changing it restarts the PTY in the new folder. -->
       <div class="project-row">
         <select id="project-switcher" class="profile-select"></select>
         <button
@@ -376,20 +378,20 @@
   <template id="w-profile">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="profile.title">Profil</h2>
-      <!-- Opcje wypelnia switchers.js z config/profiles.json (Faza 4). -->
+      <!-- Options are filled in by switchers.js from config/profiles.json (Phase 4). -->
       <select id="profile-switcher" class="profile-select"></select>
       <p class="hint" data-i18n="profile.hint">Zmiana profilu restartuje sesje z nowym srodowiskiem.</p>
     </div>
   </template>
 
-  <!-- Trzej budowniczowie list z lewego panelu (A2). Kazdy zachowuje
-       `--grow`, ktore mial jako statyczny markup - to one dziela wolna wysokosc
-       panelu miedzy siebie. Wnetrze `.cheats` buduje modul; tutaj zostaje tylko
-       naglowek, kontrolki i pusty kontener. -->
+  <!-- The three list builders from the left panel (A2). Each keeps the
+       `--grow` it had as static markup - they're the ones that split the panel's
+       free height between themselves. The `.cheats` interior is built by the
+       module; only the header, controls, and empty container stay here. -->
   <template id="w-cheatsheets">
     <div class="panel__section panel__section--grow">
       <h2 class="panel__title" data-i18n="cheats.title">Sciagi / Komendy</h2>
-      <!-- Zwijki + przyciski wypelnia modules/cheatsheets.js z config/cheatsheets.json (7C). -->
+      <!-- Collapsibles + buttons are filled in by modules/cheatsheets.js from config/cheatsheets.json (7C). -->
       <div id="cheatsheets" class="cheats"></div>
     </div>
   </template>
@@ -397,7 +399,7 @@
   <template id="w-prompts">
     <div class="panel__section panel__section--grow">
       <h2 class="panel__title" data-i18n="prompts.title">Prompty</h2>
-      <!-- Wielolinijkowe prompty z config/prompts.json; klik = wklejenie do sesji. -->
+      <!-- Multi-line prompts from config/prompts.json; click = paste into the session. -->
       <div id="prompts" class="cheats"></div>
     </div>
   </template>
@@ -406,8 +408,8 @@
     <div class="panel__section panel__section--grow">
       <h2 class="panel__title usage-head">
         <span><span data-i18n="skills.title">Skille</span> <span id="skills-count" class="count"></span></span>
-        <!-- A5: re-skan katalogow skilli na zadanie - nowy plik SKILL.md nie
-             wymaga juz restartu calej aplikacji. -->
+        <!-- A5: on-demand rescan of skill directories - a new SKILL.md file no
+             longer requires restarting the whole app. -->
         <button
           id="skills-rescan"
           class="usage-refresh"
@@ -415,10 +417,10 @@
           title="Odswiez liste skilli"
         >&#8635;</button>
       </h2>
-      <!-- B7: filtr listy skilli. Lista jest juz w pamieci, wiec to czysto
-           rendererowe zawezenie - bez IPC i bez ponownego skanu. Wpisana fraza
-           zyje w module, nie w tym polu: klon szablonu zawsze wraca pusty, wiec
-           mount() odtwarza `value` z pamieci (A2b - intencja uzytkownika). -->
+      <!-- B7: skill-list filter. The list is already in memory, so this is a purely
+           renderer-side narrowing - no IPC, no rescan. The typed phrase lives
+           in the module, not in this field: the template clone always comes back empty, so
+           mount() restores `value` from memory (A2b - preserving user intent). -->
       <input
         id="skills-search"
         class="filter-input"
@@ -428,7 +430,7 @@
         data-i18n-ph="skills.search.ph"
         placeholder="Filtruj skille..."
       />
-      <!-- Auto-skan katalogow skilli, pogrupowany w kategorie (7A). -->
+      <!-- Auto-scan of skill directories, grouped into categories (7A). -->
       <div id="skills" class="cheats"></div>
     </div>
   </template>
@@ -437,36 +439,36 @@
     <main class="panel panel--center">
       <div class="terminal-bar">
         <span class="terminal-bar__title">Claude Code CLI</span>
-        <!-- LED: zolty puls = leci stdout (pracuje), zielony = cisza (Twoja tura). -->
+        <!-- LED: yellow pulse = stdout is flowing (working), green = quiet (your turn). -->
         <span id="led" class="led led--waiting"></span>
         <span id="led-label" class="terminal-bar__hint" data-i18n="led.waiting">czeka na Ciebie</span>
-        <!-- Podpowiedz + skrot do palety komend (Ctrl+K). -->
+        <!-- Hint + shortcut to the command palette (Ctrl+K). -->
         <button id="palette-open" class="palette-chip" data-i18n-title="palette.chip.title" title="Paleta komend (Ctrl+K)">
           <kbd>Ctrl</kbd><kbd>K</kbd>
         </button>
-        <!-- TERMINAL_CUSTOMIZER_PLAN.md §3: manualny trigger, zeby Ctrl+L nie byl jedyna droga wejscia. -->
+        <!-- TERMINAL_CUSTOMIZER_PLAN.md §3: manual trigger, so Ctrl+L isn't the only way in. -->
         <button id="termcustom-open" class="palette-chip" data-i18n-title="termcustom.chip.title" title="Ustawienia (Ctrl+L)">
           <kbd>Ctrl</kbd><kbd>L</kbd>
         </button>
-        <!-- D5: ten sam chip-owy pasek co Ctrl+K/Ctrl+L, zamiast trwalego bloku
-             w lewym panelu (patrz modules/update.js). Widoczny tylko gdy jest
-             cos do zrobienia (dostepna/gotowa aktualizacja); ukryty inaczej -
-             wiec "nie udalo sie sprawdzic" juz nigdy nie straszy na stale. -->
+        <!-- D5: the same chip-style bar as Ctrl+K/Ctrl+L, instead of a permanent block
+             in the left panel (see modules/update.js). Only visible when there's
+             something to act on (an update available/ready); hidden otherwise -
+             so "check failed" never lingers as a permanent scare. -->
         <button id="update-chip" class="palette-chip update-chip" hidden></button>
       </div>
-      <!-- Zakladki sesji. Kazda ma wlasny proces PTY, wlasny kontekst i wlasny
-           bufor xterm; tu renderujemy tylko ich naglowki (budowane z JS). -->
+      <!-- Session tabs. Each has its own PTY process, its own context, and its own
+           xterm buffer; here we only render their headers (built from JS). -->
       <div class="tabs">
         <div id="tabs-list" class="tabs__list" role="tablist"></div>
         <button id="tab-new" class="tabs__new" data-i18n-title="tabs.new" title="Nowa sesja">+</button>
       </div>
-      <!-- Host terminali: jeden .terminal__pane na sesje, widoczny tylko aktywny -->
+      <!-- Terminal host: one .terminal__pane per session, only the active one visible -->
       <div id="terminal" class="terminal"></div>
     </main>
   </template>
 
-  <!-- ================= Paleta komend (Ctrl+K) ================= -->
-  <!-- Nakladka pusta w HTML; renderer.js buduje wiersze z agregatu akcji. -->
+  <!-- ================= Command palette (Ctrl+K) ================= -->
+  <!-- Overlay is empty in HTML; renderer.js builds the rows from the action aggregate. -->
   <div id="palette" class="palette" hidden>
     <div class="palette__backdrop" data-palette-close></div>
     <div class="palette__modal" role="dialog" aria-modal="true" aria-label="Paleta komend">
@@ -494,15 +496,15 @@
     </div>
   </div>
 
-  <!-- ================= Ustawienia (Ctrl+L) ================= -->
-  <!-- TERMINAL_CUSTOMIZER_PLAN.md - nakladka pusta w markupie tylko dla
-       statycznych pol (nie ma listy budowanej z JS jak paleta), ale otwieranie
-       /zamykanie /wiazanie zyje w modules/termcustom.js, tak jak paleta zyje w
-       modules/palette.js. Global, nie per-tab (§0).
-       Rozszerzone 2026-08-13 (Mati): przeniesiono tu dzwiek + sekwencje
-       startowa z w-appearance - odchudzenie lewego panelu. Modul/plik/ids
-       zostaly nazwane "termcustom" (historyczne), ale nakladka jest teraz
-       ogolnymi Ustawieniami, nie tylko wygladem terminala - stad dwie sekcje. -->
+  <!-- ================= Settings (Ctrl+L) ================= -->
+  <!-- TERMINAL_CUSTOMIZER_PLAN.md - the overlay markup is empty and holds only
+       static fields (no JS-built list like the palette), but opening/closing/
+       binding lives in modules/termcustom.js, same as the palette lives in
+       modules/palette.js. Global, not per-tab (§0).
+       Extended 2026-08-13 (Mati): moved sound + boot-sequence settings here
+       from w-appearance - slimming down the left panel. The module/file/ids
+       are still named "termcustom" (historical), but the overlay is now
+       general Settings, not just terminal appearance - hence the two sections. -->
   <div id="termcustom" class="termcustom" hidden>
     <div class="termcustom__backdrop" data-termcustom-close></div>
     <div class="termcustom__modal" role="dialog" aria-modal="true" aria-label="Ustawienia">
@@ -576,9 +578,9 @@
           <span class="ui-field__label" data-i18n="termcustom.bgBlur">Rozmycie tla (px)</span>
           <input type="range" id="termcustom-bg-blur" min="0" max="20" step="1" />
         </label>
-        <!-- 2026-08-13 (Mati): obraz tla - wymaga allowTransparency (terminals.js)
-             i data: URI (CSP img-src). Wybor i odczyt pliku zyje W MAIN
-             (main.js: termcustom:pickBgImage), renderer tylko dostaje dataUrl. -->
+        <!-- 2026-08-13 (Mati): background image - requires allowTransparency (terminals.js)
+             and a data: URI (CSP img-src). Picking and reading the file lives IN MAIN
+             (main.js: termcustom:pickBgImage), the renderer only gets the dataUrl. -->
         <div class="ui-field">
           <span class="ui-field__label" data-i18n="termcustom.bgImage">Obraz tla</span>
           <div class="termcustom__bgimage-row">
@@ -589,10 +591,10 @@
         </div>
 
         <h3 class="termcustom__section" data-i18n="termcustom.section.sound">Dzwiek i start</h3>
-        <!-- Dzwiek: sfx/glosy przy interakcjach. mpv opcjonalny - brak na PATH
-             to cichy fallback (soundManager.js), ten toggle tylko wlacza/wylacza
-             odtwarzanie po stronie renderera + persystuje preferencje.
-             Przeniesione z w-appearance 2026-08-13 (Mati: odchudzenie panelu). -->
+        <!-- Sound: sfx/voice lines on interactions. mpv is optional - missing from
+             PATH means a silent fallback (soundManager.js); this toggle only enables/
+             disables renderer-side playback + persists the preference.
+             Moved from w-appearance 2026-08-13 (Mati: slimming down the panel). -->
         <label id="sound-field" class="switch-field" data-i18n-title="appearance.sound.hint" title="Dzwiekowe sprzezenie zwrotne (klawisze, zakladki, przelaczniki). Wymaga mpv na PATH - w przeciwnym razie cicho nic nie robi.">
           <span class="switch-field__text">
             <span class="switch-field__label" data-i18n="appearance.sound">Dzwiek</span>
@@ -615,14 +617,14 @@
           <span class="ui-field__label" data-i18n="appearance.volume">Glosnosc</span>
           <input type="range" id="sound-volume" min="0" max="100" />
         </label>
-        <!-- SS11.1: minimalny czas tury przed odtworzeniem "All done" (turn-end
-             detection w observer.js / checkTurnEnd() w main.js). 0 = kazda tura. -->
+        <!-- SS11.1: minimum turn duration before playing "All done" (turn-end
+             detection in observer.js / checkTurnEnd() in main.js). 0 = every turn. -->
         <label class="ui-field" data-i18n-title="appearance.longTaskMinutes.hint" title="Minimalny czas trwania tury Claude, zanim odtworzy sie glos &quot;All done&quot;. 0 = ogloszaj kazda ture.">
           <span class="ui-field__label" data-i18n="appearance.longTaskMinutes">Ogloszenie "Gotowe" po (min)</span>
           <input type="number" id="sound-long-task-minutes" min="0" max="180" step="1" />
         </label>
-        <!-- SS11.2: opcjonalne odczytywanie odpowiedzi Claude na glos (Windows
-             SAPI, offline - src/tts.js). Domyslnie wylaczone. -->
+        <!-- SS11.2: optional reading of Claude's replies aloud (Windows
+             SAPI, offline - src/tts.js). Off by default. -->
         <label class="switch-field" data-i18n-title="appearance.readOutput.hint" title="Odczytuj odpowiedzi Claude na glos po kazdej turze (Windows SAPI, offline).">
           <span class="switch-field__label" data-i18n="appearance.readOutput">Czytaj odpowiedzi na glos</span>
           <span class="switch">
@@ -630,8 +632,8 @@
             <span class="switch__track"><span class="switch__thumb"></span></span>
           </span>
         </label>
-        <!-- Sekwencja startowa: czysta ozdoba, mozna wylaczyc. Nie blokuje
-             sesji - PTY startuje pod spodem niezaleznie od animacji. -->
+        <!-- Boot sequence: pure decoration, can be turned off. Does not block
+             the session - the PTY starts underneath regardless of the animation. -->
         <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">
           <span class="switch-field__text">
             <span class="switch-field__label" data-i18n="boot.label">Sekwencja startowa</span>
@@ -650,15 +652,15 @@
     </div>
   </div>
 
-  <!-- Biblioteki xterm.js (UMD -> globalne Terminal, FitAddon) -->
+  <!-- xterm.js libraries (UMD -> global Terminal, FitAddon) -->
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <!-- i18n (PL/EN) - musi zaladowac sie przed renderer.js -->
+  <!-- i18n (PL/EN) - must load before renderer.js -->
   <script src="i18n.js"></script>
-  <!-- Logika renderera LunaCore. type="module" - renderer.js jest juz tylko
-       punktem wejscia, a kod siedzi w modules/*.js (patrz FUTURE_PLAN §8 A1).
-       Modul jest odroczony (defer), wiec wykonuje sie po sparsowaniu DOM i po
-       klasycznych <script> wyzej - xterm i window.i18n sa juz gotowe. -->
+  <!-- LunaCore renderer logic. type="module" - renderer.js is now just the
+       entry point, the actual code lives in modules/*.js (see FUTURE_PLAN §8 A1).
+       A module is deferred, so it runs after DOM parsing and after the
+       classic <script> tags above - xterm and window.i18n are already ready. -->
   <script type="module" src="renderer.js"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
-// Testy E1 - arytmetyka telemetrii maszyny (RAM / CPU / uptime). Czyste funkcje
-// karmione atrapa `os`, bez I/O i bez Electrona.
+// Tests for E1 - machine telemetry arithmetic (RAM / CPU / uptime). Pure
+// functions fed a fake `os`, no I/O and no Electron.
 
 'use strict';
 
@@ -20,12 +20,12 @@ const {
 
 const GB = 1024 * 1024 * 1024;
 
-/** Rdzen o zadanych licznikach tickow. */
+/** A core with the given tick counters. */
 function core(idle, busy, speed = 3400) {
   return { speed, times: { user: busy, nice: 0, sys: 0, idle, irq: 0 } };
 }
 
-/** Atrapa `os` - tylko to, czego dotyka telemetry.js. */
+/** A fake `os` - only what telemetry.js touches. */
 function fakeOs(over = {}) {
   return {
     totalmem: () => 32 * GB,
@@ -38,76 +38,76 @@ function fakeOs(over = {}) {
   };
 }
 
-// ---- cpuTotals: sumowanie i przypadki puste --------------------------------
+// ---- cpuTotals: summing and empty cases --------------------------------
 
-test('cpuTotals sumuje liczniki wszystkich rdzeni', () => {
+test('cpuTotals sums the counters of every core', () => {
   const r = cpuTotals([core(100, 300), core(200, 400)]);
   assert.equal(r.idle, 300);
   assert.equal(r.total, 1000);
 });
 
-test('cpuTotals zwraca null dla braku rdzeni', () => {
+test('cpuTotals returns null for no cores', () => {
   assert.equal(cpuTotals([]), null);
   assert.equal(cpuTotals(null), null);
   assert.equal(cpuTotals(undefined), null);
 });
 
-// Maszyna bez odczytu CPU to nie maszyna na 0% - null musi przejsc dalej,
-// bo linijke pozniej dzielilibysmy przez zero.
-test('cpuTotals odroznia brak odczytu od zerowego obciazenia', () => {
+// A machine with no CPU reading is not a machine at 0% - null must propagate,
+// because a line later we'd be dividing by zero.
+test('cpuTotals distinguishes a missing reading from zero load', () => {
   assert.equal(cpuTotals([{ times: { user: 0, idle: 0 } }]), null);
 });
 
-test('cpuTotals pomija rdzen bez pola times zamiast rzucac', () => {
+test('cpuTotals skips a core with no times field instead of throwing', () => {
   const r = cpuTotals([core(100, 100), {}, null]);
   assert.equal(r.total, 200);
 });
 
-// ---- cpuPercent: to jest DELTA, nie odczyt ---------------------------------
+// ---- cpuPercent: this is a DELTA, not a reading ---------------------------------
 
-test('cpuPercent liczy zajetosc z roznicy dwoch probek', () => {
+test('cpuPercent computes busy time from the difference of two samples', () => {
   const prev = { idle: 1000, total: 2000 };
-  const cur = { idle: 1100, total: 2200 }; // 200 tickow, z tego 100 bezczynnych
+  const cur = { idle: 1100, total: 2200 }; // 200 ticks, of which 100 idle
   assert.equal(cpuPercent(prev, cur), 50);
 });
 
-test('cpuPercent bez poprzedniej probki zwraca null, nie zero', () => {
+test('cpuPercent without a previous sample returns null, not zero', () => {
   assert.equal(cpuPercent(null, { idle: 1, total: 2 }), null);
 });
 
-test('cpuPercent zwraca null gdy licznik nie drgnal', () => {
+test('cpuPercent returns null when the counter did not move', () => {
   const same = { idle: 1000, total: 2000 };
   assert.equal(cpuPercent(same, same), null);
 });
 
-// Po uspieniu maszyny liczniki potrafia sie cofnac. To "nie wiadomo",
-// a nie "bezczynny".
-test('cpuPercent zwraca null gdy liczniki sie cofnely', () => {
+// After a machine sleeps, counters can go backward. That's "unknown",
+// not "idle".
+test('cpuPercent returns null when the counters went backward', () => {
   assert.equal(cpuPercent({ idle: 1000, total: 2000 }, { idle: 900, total: 1900 }), null);
 });
 
-test('cpuPercent trzyma sie zakresu 0-100', () => {
+test('cpuPercent stays within the 0-100 range', () => {
   const r = cpuPercent({ idle: 0, total: 0 }, { idle: 0, total: 1000 });
   assert.equal(r, 100);
 });
 
 // ---- memStats ---------------------------------------------------------------
 
-test('memStats liczy uzycie i procent', () => {
+test('memStats computes usage and percent', () => {
   const r = memStats(32 * GB, 12 * GB);
   assert.equal(r.used, 20 * GB);
   assert.equal(r.percent, 63);
 });
 
-test('memStats zwraca null dla bezsensownego totalu', () => {
+test('memStats returns null for a nonsensical total', () => {
   assert.equal(memStats(0, 0), null);
   assert.equal(memStats(-1, 0), null);
   assert.equal(memStats(NaN, 0), null);
 });
 
-// Odczyt "wiecej wolnego niz calosc" nie moze dac ujemnego uzycia ani paska
-// wychodzacego poza panel.
-test('memStats przycina absurdalny odczyt zamiast go propagowac', () => {
+// A reading of "more free than total" must not produce negative usage or a bar
+// running off the edge of the panel.
+test('memStats clamps an absurd reading instead of propagating it', () => {
   const r = memStats(8 * GB, 99 * GB);
   assert.equal(r.used, 0);
   assert.equal(r.percent, 0);
@@ -115,9 +115,9 @@ test('memStats przycina absurdalny odczyt zamiast go propagowac', () => {
   assert.equal(r2.percent, 100);
 });
 
-// ---- sample: kazde pole osobno moze byc nieznane ---------------------------
+// ---- sample: each field can individually be unknown ---------------------------
 
-test('sample sklada pelny odczyt', () => {
+test('sample assembles a full reading', () => {
   const s = sample(fakeOs(), { idle: 1000, total: 3000 });
   assert.equal(s.mem.percent, 63);
   assert.equal(s.cpu.cores, 2);
@@ -126,17 +126,17 @@ test('sample sklada pelny odczyt', () => {
   assert.deepEqual(s.load, [1.5, 1.2, 0.9]);
 });
 
-test('sample bez poprzednich tickow oddaje cpu.percent = null', () => {
+test('sample without previous ticks yields cpu.percent = null', () => {
   const s = sample(fakeOs(), null);
   assert.equal(s.cpu.percent, null);
-  assert.notEqual(s.mem, null, 'brak CPU nie moze zabrac odczytu RAM');
+  assert.notEqual(s.mem, null, 'a missing CPU reading must not take the RAM reading with it');
 });
 
-test('sample przezywa os, ktory rzuca', () => {
+test('sample survives an os that throws', () => {
   const s = sample(
     fakeOs({
       cpus: () => {
-        throw new Error('brak dostepu');
+        throw new Error('no access');
       },
     }),
     null
@@ -145,15 +145,15 @@ test('sample przezywa os, ktory rzuca', () => {
   assert.notEqual(s.mem, null);
 });
 
-test('sample uodparnia sie na ujemny uptime', () => {
+test('sample is resilient to a negative uptime', () => {
   assert.equal(sample(fakeOs({ uptime: () => -1 }), null).uptime, null);
   assert.equal(sample(fakeOs({ uptime: () => NaN }), null).uptime, null);
 });
 
-// TO JEST TEN WAZNY. os.loadavg() na Windows zwraca [0,0,0] z definicji, a to
-// aplikacja pisana pod Windows. Pokazanie "0.00 0.00 0.00" byloby zmyslonym
-// odczytem udajacym pomiar.
-test('load average jest null na Windows, a nie trzema zerami', () => {
+// THIS IS THE IMPORTANT ONE. os.loadavg() on Windows returns [0,0,0] by
+// definition, and this is an app written for Windows. Showing "0.00 0.00 0.00"
+// would be a made-up reading pretending to be a real measurement.
+test('load average is null on Windows, not three zeros', () => {
   const s = sample(fakeOs({ platform: () => 'win32', loadavg: () => [0, 0, 0] }), null);
   assert.equal(s.load, null);
   assert.equal(hasLoadAverage('win32'), false);
@@ -161,27 +161,27 @@ test('load average jest null na Windows, a nie trzema zerami', () => {
   assert.equal(hasLoadAverage('darwin'), true);
 });
 
-test('sample odrzuca niekompletny loadavg', () => {
+test('sample rejects an incomplete loadavg', () => {
   assert.equal(sample(fakeOs({ loadavg: () => [1.0] }), null).load, null);
-  assert.equal(sample(fakeOs({ loadavg: () => 'duzo' }), null).load, null);
+  assert.equal(sample(fakeOs({ loadavg: () => 'lots' }), null).load, null);
 });
 
-// ---- toPayload: liczniki nie przechodza przez IPC --------------------------
+// ---- toPayload: counters do not cross the IPC boundary --------------------------
 
-test('toPayload zdejmuje surowe liczniki tickow', () => {
+test('toPayload strips the raw tick counters', () => {
   const s = sample(fakeOs(), null);
-  assert.notEqual(s.ticks, undefined, 'sample() trzyma ticks na uzytek watchera');
-  assert.equal(toPayload(s).ticks, undefined, 'ale renderer ich nie dostaje');
+  assert.notEqual(s.ticks, undefined, 'sample() keeps ticks for the watcher to use');
+  assert.equal(toPayload(s).ticks, undefined, 'but the renderer never gets them');
   assert.notEqual(toPayload(s).mem, undefined);
 });
 
-test('toPayload zwraca null dla pustego wejscia', () => {
+test('toPayload returns null for empty input', () => {
   assert.equal(toPayload(null), null);
 });
 
 // ---- TelemetryWatcher -------------------------------------------------------
 
-test('watcher emituje probke na kazdy tick, takze niezmieniona', () => {
+test('the watcher emits a sample on every tick, even an unchanged one', () => {
   const seen = [];
   const w = new TelemetryWatcher((p) => seen.push(p), fakeOs());
   w.start();
@@ -189,16 +189,16 @@ test('watcher emituje probke na kazdy tick, takze niezmieniona', () => {
   w.tick();
   w.stop();
 
-  assert.equal(seen.length, 2, 'seria czasowa: identyczny odczyt to nadal punkt');
+  assert.equal(seen.length, 2, 'time series: an identical reading is still a data point');
   assert.equal(seen[0].ticks, undefined);
 });
 
-// Pierwszy odczyt CPU zawsze bylby nullem - watcher pobiera baseline w start(),
-// zeby wykres nie otwieral sie pusta kolumna.
-test('watcher pobiera baseline w start(), wiec pierwszy tick zna juz CPU', () => {
+// The first CPU reading would always be null - the watcher grabs a baseline in
+// start() so the chart doesn't open with an empty column.
+test('the watcher grabs a baseline in start(), so the first tick already knows CPU', () => {
   let n = 0;
   const osLike = fakeOs({
-    // Kazde wywolanie przesuwa liczniki, jak na zywej maszynie.
+    // Each call advances the counters, just like on a live machine.
     cpus: () => {
       n += 1;
       return [core(1000 * n, 1000 * n)];
@@ -211,10 +211,10 @@ test('watcher pobiera baseline w start(), wiec pierwszy tick zna juz CPU', () =>
   w.tick();
   w.stop();
 
-  assert.notEqual(seen[0].cpu.percent, null, 'baseline z start() musi juz dzialac');
+  assert.notEqual(seen[0].cpu.percent, null, 'the baseline from start() must already work');
 });
 
-test('watcher nie startuje dwoch timerow', () => {
+test('the watcher does not start two timers', () => {
   const w = new TelemetryWatcher(() => {}, fakeOs());
   w.start();
   const first = w.timer;
@@ -224,19 +224,19 @@ test('watcher nie startuje dwoch timerow', () => {
   assert.equal(w.timer, null);
 });
 
-// ---- Test danych: atrapa musi odpowiadac prawdziwemu `os` ------------------
+// ---- Data test: the fake must match the real `os` ------------------
 //
-// Suita na samych atrapach potrafi byc zielona, gdy ksztalt prawdziwego API jest
-// inny. To ten sam wzorzec, ktory wylapal brak Opusa 5 w rates.json.
+// A suite built entirely on fakes can be green while the shape of the real API
+// is different. This is the same pattern that caught the missing Opus 5 in rates.json.
 
-test('prawdziwy os.cpus() ma ksztalt, ktorego oczekuje cpuTotals', () => {
+test('the real os.cpus() has the shape cpuTotals expects', () => {
   const r = cpuTotals(os.cpus());
-  assert.notEqual(r, null, 'ta maszyna nie zaraportowala ani jednego rdzenia');
+  assert.notEqual(r, null, 'this machine reported not a single core');
   assert.ok(r.total > 0);
   assert.ok(r.idle >= 0 && r.idle <= r.total);
 });
 
-test('prawdziwy os daje kompletna probke', () => {
+test('the real os yields a complete sample', () => {
   const s = sample(os, null);
   assert.notEqual(s.mem, null);
   assert.ok(s.mem.total > 0);
@@ -244,7 +244,7 @@ test('prawdziwy os daje kompletna probke', () => {
   assert.equal(typeof s.uptime, 'number');
 });
 
-test('interwal probkowania jest sensowny', () => {
-  assert.ok(SAMPLE_MS >= 1000, 'czesciej niz raz na sekunde to juz koszt, nie pomiar');
-  assert.ok(SAMPLE_MS <= 10000, 'rzadziej niz co 10 s i wykres przestaje byc "na zywo"');
+test('the sampling interval is sensible', () => {
+  assert.ok(SAMPLE_MS >= 1000, 'more often than once a second is already a cost, not a measurement');
+  assert.ok(SAMPLE_MS <= 10000, 'less often than every 10s and the chart stops feeling "live"');
 });

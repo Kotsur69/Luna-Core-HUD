@@ -1,5 +1,5 @@
-// Testy parserow trackera portow. Testujemy WYLACZNIE parsowanie tekstu -
-// scanPorts() odpala powloke systemowa, wiec nie nadaje sie do testu jednostkowego.
+// Tests for the port tracker's parsers. We test ONLY text parsing -
+// scanPorts() spawns a system shell, so it is not suitable for a unit test.
 
 'use strict';
 
@@ -8,14 +8,14 @@ const assert = require('node:assert/strict');
 
 const { parseWindows, parsePosix, dedupeByPort, isSystemPort } = require('../src/ports');
 
-// ---- parseWindows (wyjscie PowerShella jako JSON) ---------------------------
+// ---- parseWindows (PowerShell output as JSON) ---------------------------
 
-test('parseWindows radzi sobie z pojedynczym obiektem (ConvertTo-Json nie opakowuje w tablice)', () => {
+test('parseWindows handles a single object (ConvertTo-Json does not wrap in an array)', () => {
   const out = parseWindows('{"port":3000,"procId":42,"name":"node","addr":"127.0.0.1"}');
   assert.deepEqual(out, [{ port: 3000, procId: 42, name: 'node' }]);
 });
 
-test('parseWindows czyta tablice i sortuje po numerze portu', () => {
+test('parseWindows reads an array and sorts by port number', () => {
   const json = JSON.stringify([
     { port: 8080, procId: 2, name: 'python', addr: '127.0.0.1' },
     { port: 3000, procId: 1, name: 'node', addr: '127.0.0.1' },
@@ -23,7 +23,7 @@ test('parseWindows czyta tablice i sortuje po numerze portu', () => {
   assert.deepEqual(parseWindows(json).map((r) => r.port), [3000, 8080]);
 });
 
-test('parseWindows odrzuca adresy spoza localhosta', () => {
+test('parseWindows rejects addresses outside localhost', () => {
   const json = JSON.stringify([
     { port: 3000, procId: 1, name: 'node', addr: '127.0.0.1' },
     { port: 445, procId: 4, name: 'System', addr: '192.168.1.10' },
@@ -31,7 +31,7 @@ test('parseWindows odrzuca adresy spoza localhosta', () => {
   assert.deepEqual(parseWindows(json).map((r) => r.port), [3000]);
 });
 
-test('parseWindows akceptuje wszystkie formy localhosta (IPv4, IPv6, wildcard)', () => {
+test('parseWindows accepts every form of localhost (IPv4, IPv6, wildcard)', () => {
   const json = JSON.stringify([
     { port: 1, procId: 1, name: 'a', addr: '127.0.0.1' },
     { port: 2, procId: 2, name: 'b', addr: '::1' },
@@ -41,7 +41,7 @@ test('parseWindows akceptuje wszystkie formy localhosta (IPv4, IPv6, wildcard)',
   assert.equal(parseWindows(json).length, 4);
 });
 
-test('parseWindows deduplikuje ten sam port na wielu interfejsach', () => {
+test('parseWindows deduplicates the same port across multiple interfaces', () => {
   const json = JSON.stringify([
     { port: 3000, procId: 1, name: 'node', addr: '0.0.0.0' },
     { port: 3000, procId: 1, name: 'node', addr: '::' },
@@ -49,20 +49,20 @@ test('parseWindows deduplikuje ten sam port na wielu interfejsach', () => {
   assert.equal(parseWindows(json).length, 1);
 });
 
-test('parseWindows podstawia "?" za brakujaca nazwe procesu', () => {
+test('parseWindows substitutes "?" for a missing process name', () => {
   const out = parseWindows('{"port":3000,"procId":42,"addr":"127.0.0.1"}');
   assert.equal(out[0].name, '?');
 });
 
-test('parseWindows zwraca pusta liste na pustym/uszkodzonym wejsciu', () => {
-  // Kafelek portow ma pokazac "brak", a nie wywrocic renderer.
+test('parseWindows returns an empty list for empty/corrupt input', () => {
+  // The ports tile should show "none", not crash the renderer.
   assert.deepEqual(parseWindows(''), []);
   assert.deepEqual(parseWindows('   \n  '), []);
-  assert.deepEqual(parseWindows('to nie jest JSON'), []);
-  assert.deepEqual(parseWindows('{"urwany":'), []);
+  assert.deepEqual(parseWindows('this is not JSON'), []);
+  assert.deepEqual(parseWindows('{"torn":'), []);
 });
 
-// ---- parsePosix (wyjscie lsof) ----------------------------------------------
+// ---- parsePosix (lsof output) ----------------------------------------------
 
 const LSOF = [
   'COMMAND   PID   USER   FD   TYPE DEVICE SIZE/OFF NODE NAME',
@@ -70,43 +70,43 @@ const LSOF = [
   'python     99 mmazur    5u  IPv6 0x2222      0t0  TCP *:8080 (LISTEN)',
 ].join('\n');
 
-test('parsePosix parsuje wiersze lsof i pomija naglowek', () => {
+test('parsePosix parses lsof rows and skips the header', () => {
   assert.deepEqual(parsePosix(LSOF), [
     { port: 3000, procId: 1234, name: 'node' },
     { port: 8080, procId: 99, name: 'python' },
   ]);
 });
 
-test('parsePosix pomija wiersze bez portu na koncu adresu', () => {
+test('parsePosix skips rows with no port at the end of the address', () => {
   const text = 'node 1 u 1u IPv4 0x1 0t0 TCP 127.0.0.1 (LISTEN)';
   assert.deepEqual(parsePosix(text), []);
 });
 
-test('parsePosix pomija wiersze za krotkie (urwane wyjscie)', () => {
+test('parsePosix skips rows that are too short (truncated output)', () => {
   assert.deepEqual(parsePosix('node 1234 mmazur'), []);
 });
 
-test('parsePosix zwraca pusta liste na pustym wejsciu', () => {
+test('parsePosix returns an empty list for empty input', () => {
   assert.deepEqual(parsePosix(''), []);
 });
 
 // ---- dedupeByPort -----------------------------------------------------------
 
-test('dedupeByPort zachowuje pierwsze wystapienie portu', () => {
+test('dedupeByPort keeps the first occurrence of a port', () => {
   const out = dedupeByPort([
-    { port: 3000, procId: 1, name: 'pierwszy' },
-    { port: 3000, procId: 2, name: 'drugi' },
+    { port: 3000, procId: 1, name: 'first' },
+    { port: 3000, procId: 2, name: 'second' },
   ]);
   assert.equal(out.length, 1);
-  assert.equal(out[0].name, 'pierwszy');
+  assert.equal(out[0].name, 'first');
 });
 
-test('dedupeByPort odrzuca porty niedodatnie', () => {
+test('dedupeByPort rejects non-positive ports', () => {
   assert.deepEqual(dedupeByPort([{ port: 0, procId: 1, name: 'x' }]), []);
   assert.deepEqual(dedupeByPort([{ port: -1, procId: 1, name: 'x' }]), []);
 });
 
-test('dedupeByPort sortuje rosnaco', () => {
+test('dedupeByPort sorts ascending', () => {
   const out = dedupeByPort([
     { port: 9000, procId: 1, name: 'c' },
     { port: 80, procId: 2, name: 'a' },

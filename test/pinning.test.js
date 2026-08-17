@@ -1,4 +1,4 @@
-// Testy przypinania transcriptu do sesji (TranscriptWatcher).
+// Tests for pinning the transcript to a session (TranscriptWatcher).
 //
 // Unlike observer.test.js these DO touch the filesystem: the whole point is
 // which file a watcher selects, and that cannot be faked with strings. Each test

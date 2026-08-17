@@ -1,5 +1,5 @@
-// Testy czystych funkcji ekstrakcji tekstu do odczytania na glos (§11.2).
-// Zero I/O - dziala na fragmentach JSONL, tak jak reszta observer.js.
+// Tests for the pure functions extracting text to read aloud (§11.2).
+// Zero I/O - works on JSONL fragments, same as the rest of observer.js.
 
 'use strict';
 

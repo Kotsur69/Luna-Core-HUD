@@ -1,5 +1,5 @@
-// Testy czystych funkcji Active-Files Heatmap (ACTIVE_FILES_HEATMAP_PLAN.md
-// §5.5, §5.6, §10). Zero DOM - `applyFileEvent`/`shortPath` are pure; the
+// Tests for the pure functions behind the Active-Files Heatmap
+// (ACTIVE_FILES_HEATMAP_PLAN.md §5.5, §5.6, §10). Zero DOM - `applyFileEvent`/`shortPath` are pure; the
 // widget rendering itself is covered by the manual checklist (plan §13).
 
 'use strict';

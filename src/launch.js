@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - budowanie komendy startowej sesji
+// LunaCore - building the session start command
 // ----------------------------------------------------------------------------
 // Pure string logic, deliberately kept out of main.js so it can be tested
 // without booting Electron.

@@ -23,17 +23,17 @@ const DEFAULTS = {
   termBgImage: null,
 };
 
-test('brak/zly obiekt wejsciowy -> same DEFAULTS', () => {
+test('a missing/bad input object -> pure DEFAULTS', () => {
   for (const bad of [null, undefined, 42, 'x', []]) {
     assert.deepEqual(clampTermPrefs(bad), DEFAULTS);
   }
 });
 
-test('pusty obiekt -> same DEFAULTS (kazde pole niezalezne)', () => {
+test('an empty object -> pure DEFAULTS (every field independent)', () => {
   assert.deepEqual(clampTermPrefs({}), DEFAULTS);
 });
 
-test('poprawne wartosci przechodza bez zmian', () => {
+test('valid values pass through unchanged', () => {
   const raw = {
     termFontFamily: 'JetBrains Mono, monospace',
     termFontSize: 18,
@@ -49,25 +49,25 @@ test('poprawne wartosci przechodza bez zmian', () => {
   assert.deepEqual(clampTermPrefs(raw), raw);
 });
 
-test('termFontSize: przycina do 8-32, zaokragla', () => {
+test('termFontSize: clamps to 8-32, rounds', () => {
   assert.equal(clampTermPrefs({ termFontSize: 4 }).termFontSize, 8);
   assert.equal(clampTermPrefs({ termFontSize: 999 }).termFontSize, 32);
   assert.equal(clampTermPrefs({ termFontSize: 20.6 }).termFontSize, 21);
   assert.equal(clampTermPrefs({ termFontSize: 'nan' }).termFontSize, DEFAULTS.termFontSize);
 });
 
-test('termLineHeight: przycina do 0.8-3, bez zaokraglania', () => {
+test('termLineHeight: clamps to 0.8-3, no rounding', () => {
   assert.equal(clampTermPrefs({ termLineHeight: 0.1 }).termLineHeight, 0.8);
   assert.equal(clampTermPrefs({ termLineHeight: 9 }).termLineHeight, 3);
   assert.equal(clampTermPrefs({ termLineHeight: 1.25 }).termLineHeight, 1.25);
 });
 
-test('termLetterSpacing: przycina do -5..20', () => {
+test('termLetterSpacing: clamps to -5..20', () => {
   assert.equal(clampTermPrefs({ termLetterSpacing: -100 }).termLetterSpacing, -5);
   assert.equal(clampTermPrefs({ termLetterSpacing: 100 }).termLetterSpacing, 20);
 });
 
-test('termScrollback: przycina ujemne do 0, odrzuca nie-liczby, zaokragla', () => {
+test('termScrollback: clamps negatives to 0, rejects non-numbers, rounds', () => {
   // Matches the existing clampVolume precedent: out-of-range numbers clamp
   // into range, only a non-number falls back to DEFAULT.
   assert.equal(clampTermPrefs({ termScrollback: -1 }).termScrollback, 0);
@@ -76,32 +76,32 @@ test('termScrollback: przycina ujemne do 0, odrzuca nie-liczby, zaokragla', () =
   assert.equal(clampTermPrefs({ termScrollback: 'lots' }).termScrollback, DEFAULTS.termScrollback);
 });
 
-test('termBgOpacity/termBgBlur: przycinaja do swoich zakresow', () => {
+test('termBgOpacity/termBgBlur: clamp to their own ranges', () => {
   assert.equal(clampTermPrefs({ termBgOpacity: -10 }).termBgOpacity, 0);
   assert.equal(clampTermPrefs({ termBgOpacity: 250 }).termBgOpacity, 100);
   assert.equal(clampTermPrefs({ termBgBlur: -5 }).termBgBlur, 0);
   assert.equal(clampTermPrefs({ termBgBlur: 50 }).termBgBlur, 20);
 });
 
-test('termCursorStyle: tylko block/underline/bar, inaczej DEFAULT', () => {
+test('termCursorStyle: only block/underline/bar, otherwise DEFAULT', () => {
   assert.equal(clampTermPrefs({ termCursorStyle: 'bar' }).termCursorStyle, 'bar');
   assert.equal(clampTermPrefs({ termCursorStyle: 'laser' }).termCursorStyle, DEFAULTS.termCursorStyle);
   assert.equal(clampTermPrefs({ termCursorStyle: 42 }).termCursorStyle, DEFAULTS.termCursorStyle);
 });
 
-test('termCursorBlink: tylko boolean, inaczej DEFAULT', () => {
+test('termCursorBlink: only boolean, otherwise DEFAULT', () => {
   assert.equal(clampTermPrefs({ termCursorBlink: false }).termCursorBlink, false);
   assert.equal(clampTermPrefs({ termCursorBlink: 'no' }).termCursorBlink, DEFAULTS.termCursorBlink);
 });
 
-test('termFontFamily: pusty/zly string -> DEFAULT, biale znaki tez odrzucone', () => {
+test('termFontFamily: empty/bad string -> DEFAULT, whitespace also rejected', () => {
   assert.equal(clampTermPrefs({ termFontFamily: '' }).termFontFamily, DEFAULTS.termFontFamily);
   assert.equal(clampTermPrefs({ termFontFamily: '   ' }).termFontFamily, DEFAULTS.termFontFamily);
   assert.equal(clampTermPrefs({ termFontFamily: 42 }).termFontFamily, DEFAULTS.termFontFamily);
   assert.equal(clampTermPrefs({ termFontFamily: 'Fira Code' }).termFontFamily, 'Fira Code');
 });
 
-test('termBgImage: tylko data:image/ string, inaczej null (CSP img-src)', () => {
+test('termBgImage: only a data:image/ string, otherwise null (CSP img-src)', () => {
   assert.equal(clampTermPrefs({}).termBgImage, null);
   assert.equal(clampTermPrefs({ termBgImage: null }).termBgImage, null);
   assert.equal(clampTermPrefs({ termBgImage: 'file:///C:/photo.png' }).termBgImage, null);

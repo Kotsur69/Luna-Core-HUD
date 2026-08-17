@@ -1,15 +1,15 @@
 // ============================================================================
-// LunaCore - proces glowny Electrona (main process)
+// LunaCore - Electron main process
 // ----------------------------------------------------------------------------
-// Odpowiada za:
-//   * utworzenie okna aplikacji,
-//   * uruchomienie pseudoterminala (node-pty) z powloka systemowa + `claude`,
-//   * most IPC: renderer <-> PTY (Action Injector + Passive Observer).
+// Responsible for:
+//   * creating the app window,
+//   * starting the pseudo-terminal (node-pty) with a system shell + `claude`,
+//   * the IPC bridge: renderer <-> PTY (Action Injector + Passive Observer).
 //
-// ZASADA "ZERO DODATKOWYCH TOKENOW":
-//   Ten plik NIE wstrzykuje zadnych ukrytych promptow. Jedynie:
-//   - przekazuje surowe wejscie uzytkownika (klawiatura + przyciski) do stdin PTY,
-//   - odsyla surowy strumien stdout PTY do renderera do wyswietlenia/parsowania.
+// THE "ZERO EXTRA TOKENS" RULE:
+//   This file injects NO hidden prompts. It only:
+//   - passes raw user input (keyboard + buttons) to PTY stdin,
+//   - relays the raw PTY stdout stream to the renderer to display/parse.
 // ============================================================================
 
 const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
@@ -17,40 +17,40 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { randomUUID } = require('crypto');
-// @lydell/node-pty: utrzymywany fork node-pty z prebuildami (N-API),
-// dziala bez kompilacji node-gyp / Visual Studio. API zgodne z node-pty.
+// @lydell/node-pty: a maintained fork of node-pty with prebuilds (N-API),
+// works without compiling node-gyp / Visual Studio. API-compatible with node-pty.
 const pty = require('@lydell/node-pty');
-// Passive Observer (Faza 3): detekcja narzedzi ze stdout + tailowanie
-// transcriptu JSONL po realne zuzycie context window. Tylko czyta, zero tokenow.
+// Passive Observer (Phase 3): tool detection from stdout + tailing the
+// JSONL transcript for real context-window usage. Read-only, zero tokens.
 const { detectTools, detectApprovalPrompt, TranscriptWatcher, isLongTurn } = require('./observer');
-// §4.2: literalne podciagi TUI, po ktorych rozpoznajemy monit o zgode - dane,
-// nie kod, bo tekst CLI moze sie zmienic miedzy wydaniami (config/sound-triggers.json).
+// §4.2: literal TUI substrings used to recognize an approval prompt - data,
+// not code, since the CLI text can change between releases (config/sound-triggers.json).
 const { loadSoundTriggers } = require('./soundTriggers');
-// Profile uruchomieniowe (Faza 4): definicje "jak wystartowac sesje" z JSON.
+// Launch profiles (Phase 4): "how to start a session" definitions from JSON.
 const { loadProfiles, getProfile } = require('./profiles');
-// Budowanie komendy startowej: decyduje, czy sesje da sie przypiac po id.
+// Building the start command: decides whether a session can be pinned by id.
 const { withSessionId, findExecutable } = require('./launch');
-// Przelacznik projektu: katalogi robocze (cwd) sesji z config/projects.json.
+// Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject } = require('./projects');
-// Tracker portow localhost (7B): pasywny skan nasluchujacych portow + kill.
+// Localhost port tracker (7B): passive scan of listening ports + kill.
 const { killProcess, PortWatcher } = require('./ports');
-// Sciagawki akcji (7C): grupy komend wysylanych przez Action Injector.
+// Action cheat-sheets (7C): command groups sent through the Action Injector.
 const { loadCheatsheets } = require('./cheatsheets');
-// Sciagawka skilli (7A): auto-skan katalogow skilli -> kategorie.
+// Skill cheat-sheet (7A): auto-scans skill directories -> categories.
 const { loadSkills, rescanSkills } = require('./skills');
-// Biblioteka promptow: wielolinijkowe prompty do wielokrotnego uzycia.
+// Prompt library: multi-line prompts for repeated use.
 const { loadPrompts } = require('./prompts');
-// Brudnopis: lokalny notatnik trzymany jako zwykly plik tekstowy.
+// Scratchpad: local notepad kept as a plain text file.
 const { readScratchpad, writeScratchpad } = require('./scratchpad');
-// Motywy (theming): mapy tokenow CSS + kolory xterm z config/themes.json.
+// Themes (theming): CSS token maps + xterm colors from config/themes.json.
 const { loadThemes } = require('./theme');
 const { loadLayouts } = require('./layouts');
-// Preferencje UI (motyw + jezyk) trwale w config/ui.local.json.
+// UI preferences (theme + language) persisted in config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
-// Licznik zuzycia limitow (5h + tydzien) - odczyt GET z endpointu OAuth CLI.
+// Usage limit counter (5h + week) - GET read from the CLI's OAuth endpoint.
 const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
-// E1: telemetria maszyny (RAM / CPU / uptime). Czyste `os`, zero zaleznosci,
-// zero sieci - Passive Observer w najscislejszym mozliwym sensie.
+// E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
+// zero network - Passive Observer in the strictest possible sense.
 const { TelemetryWatcher } = require('./telemetry');
 // GPU usage (System tab): own slow timer, shells out to Get-Counter. See
 // src/gpu.js's header for why it stays out of telemetry.js's pure sample().
@@ -63,9 +63,9 @@ const { resolveSoundFile } = require('./sounds');
 // tails, synthesis is offline Windows SAPI, no model call in either step.
 const { extractSpokenText } = require('./ttsExtract');
 const { synthesizeToWav } = require('./tts');
-// D5: aktualizacje. Same CZYSTE decyzje - `electron-updater` doladowywany jest
-// leniwie w getAutoUpdater(), dopiero gdy wiadomo, ze ta kompilacja moze sie
-// aktualizowac.
+// D5: updates. Same PURE decisions - `electron-updater` is loaded lazily in
+// getAutoUpdater(), only once it's known this build can actually update
+// itself.
 const {
   supportsUpdates,
   normalizeUpdateInfo,
@@ -74,45 +74,47 @@ const {
   progressPercent,
 } = require('./update');
 
-// ---- Konfiguracja -----------------------------------------------------------
+// ---- Configuration -----------------------------------------------------------
 
 const IS_WINDOWS = process.platform === 'win32';
 
-// Licznik zuzycia limitow subskrypcji. Ustaw false, by CALKOWICIE wylaczyc
-// zapytania sieciowe do endpointu usage (kafelek pokaze wtedy stan 'off').
+// Subscription usage limit counter. Set to false to COMPLETELY disable
+// network requests to the usage endpoint (the tile then shows an 'off' state).
 const ENABLE_USAGE_METER = true;
 
-// Domyslna powloka dla danego systemu.
+// Default shell for the current OS.
 const DEFAULT_SHELL = IS_WINDOWS
   ? 'powershell.exe'
   : process.env.SHELL || 'bash';
 
-// Domyslny (awaryjny) katalog startowy sesji - domowy uzytkownika. Realny cwd
-// trzyma mutowalne `activeCwd` ponizej i zmienia je przelacznik projektu.
+// Default (fallback) session start directory - the user's home. The real cwd
+// is held by the mutable `activeCwd` below and changed by the project switcher.
 const START_CWD = os.homedir();
 
 /**
- * Zwraca sciezke, jesli to istniejacy katalog; inaczej katalog domowy.
- * Chroni pty.spawn przed rzuceniem, gdy projekt wskazuje nieistniejacy folder
- * (np. repo jest tylko na innej maszynie - LunaCore ma byc przenosne).
+ * Returns the path if it's an existing directory; otherwise the home directory.
+ * Protects pty.spawn from throwing when a project points at a folder that
+ * doesn't exist (e.g. the repo only exists on another machine - LunaCore is
+ * meant to be portable).
  * @param {string} dir
  */
 function safeCwd(dir) {
   try {
     if (dir && fs.statSync(dir).isDirectory()) return dir;
   } catch {
-    /* nie istnieje / brak dostepu */
+    /* does not exist / no access */
   }
   return START_CWD;
 }
 
-// ---- Stan globalny ----------------------------------------------------------
+// ---- Global state ----------------------------------------------------------
 
 /**
- * Sesja = jedna zakladka: wlasny PTY, wlasny profil, wlasny katalog roboczy i
- * WLASNY TranscriptWatcher. To ostatnie jest istota trybu wielosesyjnego - przy
- * dwoch zywych sesjach globalny watcher pokazywalby metryki tej, w ktorej cos
- * ostatnio drgnelo, czyli cudze liczby w pasku kontekstu.
+ * A session = one tab: its own PTY, its own profile, its own working directory,
+ * and its OWN TranscriptWatcher. That last part is the whole point of
+ * multi-session mode - with two live sessions a global watcher would show the
+ * metrics of whichever one last twitched, i.e. someone else's numbers in the
+ * context bar.
  *
  * @typedef {{
  *   id: string, proc: import('node-pty').IPty|null, profileId: string,
@@ -123,7 +125,7 @@ function safeCwd(dir) {
 
 /** @type {Map<string, Session>} */
 const sessions = new Map();
-/** @type {string|null} id sesji pokazywanej w oknie */
+/** @type {string|null} id of the session shown in the window */
 let activeSessionId = null;
 let sessionSeq = 0;
 
@@ -153,24 +155,24 @@ let usageAnnounced = { at50: false, at80: false };
 // play() silently no-ops while `available` is still false, so the startup
 // greeting is fired after this margin rather than right after start().
 const STARTUP_GREETING_DELAY_MS = 2000;
-// Profile wczytane z config/ oraz id domyslnego (dla nowych sesji).
+// Profiles loaded from config/ plus the default id (for new sessions).
 let profiles = [];
 let activeProfileId = null;
-// Projekty (katalogi robocze) wczytane z config/ + id domyslnego i realny cwd.
+// Projects (working directories) loaded from config/ + the default id and the real cwd.
 let projects = [];
 let activeProjectId = null;
 let activeCwd = START_CWD;
-// Ostatni znany rozmiar terminala - punkt startowy dla nowo tworzonych sesji.
+// Last known terminal size - the starting point for newly created sessions.
 let lastSize = { cols: 80, rows: 24 };
 
-/** Sesja aktualnie pokazywana w oknie (lub null). */
+/** The session currently shown in the window (or null). */
 function activeSession() {
   return activeSessionId ? sessions.get(activeSessionId) || null : null;
 }
 
 /**
- * Rozwiazuje sesje z payloadu IPC. Brak/nieznane id => sesja aktywna, dzieki
- * czemu wywolanie bez sessionId zachowuje sie jak w wersji jednosesyjnej.
+ * Resolves a session from an IPC payload. A missing/unknown id => the active
+ * session, so a call without a sessionId behaves like the single-session version.
  * @param {unknown} sessionId
  */
 function resolveSession(sessionId) {
@@ -180,14 +182,14 @@ function resolveSession(sessionId) {
   return activeSession();
 }
 
-/** Wysyla zdarzenie do renderera, jesli okno zyje. */
+/** Sends an event to the renderer, if the window is alive. */
 function send(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload);
   }
 }
 
-/** Serializowalny opis sesji dla renderera (bez uchwytow procesu). */
+/** Serializable session description for the renderer (no process handles). */
 function sessionSummary(s) {
   const profile = getProfile(profiles, s.profileId);
   return {
@@ -201,7 +203,7 @@ function sessionSummary(s) {
   };
 }
 
-/** Rozsyla pelna liste zakladek + wskazanie aktywnej. */
+/** Broadcasts the full tab list + which one is active. */
 function broadcastSessions() {
   send('sessions:update', {
     sessions: [...sessions.values()].map(sessionSummary),
@@ -209,7 +211,7 @@ function broadcastSessions() {
   });
 }
 
-// ---- Okno aplikacji ---------------------------------------------------------
+// ---- App window ---------------------------------------------------------
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -217,15 +219,15 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 560,
-    backgroundColor: '#0a0710', // ciemne tlo zanim wczyta sie CSS (bez bialego blysku)
+    backgroundColor: '#0a0710', // dark background before CSS loads (no white flash)
     title: 'LunaCore',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      // Bezpieczne domyslne ustawienia: renderer nie ma bezposredniego dostepu
-      // do Node.js. Cala komunikacja idzie przez most contextBridge w preload.js.
+      // Safe defaults: the renderer has no direct access to Node.js. All
+      // communication goes through the contextBridge in preload.js.
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false, // preload musi miec dostep do ipcRenderer
+      sandbox: false, // preload needs access to ipcRenderer
     },
   });
 
@@ -373,18 +375,20 @@ async function runWidgetProbe(win) {
   app.quit();
 }
 
-// ---- Pseudoterminal (node-pty) ----------------------------------------------
+// ---- Pseudo-terminal (node-pty) ----------------------------------------------
 
 /**
- * Startuje sesje PTY wg wybranego profilu: spawnuje powloke z nadpisaniami env
- * i (jesli profil ma komende, np. "claude") wpisuje ja po krotkim opoznieniu.
+ * Starts a PTY session for the given profile: spawns a shell with env
+ * overrides and (if the profile has a command, e.g. "claude") types it in
+ * after a short delay.
  * @param {{id:string,label:string,command:string,args:string[],env:Object}} profile
  */
 /**
- * Native install Claude Code laduje sie do ~/.local/bin, a instalator nie zawsze
- * dodaje ten katalog do PATH. Jesli lezy tam binarka `claude`, dopisujemy katalog
- * na poczatek PATH spawnowanej sesji - dzieki temu auto-start profilu, wpisanie
- * `claude` i sciagawki dzialaja bez recznego podawania pelnej sciezki.
+ * The native Claude Code installer drops into ~/.local/bin, and the installer
+ * doesn't always add that folder to PATH. If a `claude` binary lives there, we
+ * prepend that directory to the spawned session's PATH - so profile
+ * auto-start, typing `claude`, and the cheat-sheets all work without a
+ * hand-typed full path.
  * @param {Record<string,string>} env
  */
 function withClaudeOnPath(env) {
@@ -392,7 +396,7 @@ function withClaudeOnPath(env) {
     const binDir = path.join(os.homedir(), '.local', 'bin');
     const exe = path.join(binDir, IS_WINDOWS ? 'claude.exe' : 'claude');
     if (!fs.existsSync(exe)) return env;
-    // Na Windows zmienna PATH bywa jako "Path" - znajdz istniejacy klucz.
+    // On Windows the PATH variable is sometimes named "Path" - find the existing key.
     const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
     const sep = IS_WINDOWS ? ';' : ':';
     const parts = (env[key] || '').split(sep);
@@ -400,20 +404,21 @@ function withClaudeOnPath(env) {
       env[key] = binDir + sep + (env[key] || '');
     }
   } catch {
-    /* nie blokuj startu sesji, gdyby cokolwiek poszlo nie tak */
+    /* don't block session start if anything goes wrong */
   }
   return env;
 }
 
 /**
- * Gdy LunaCore samo zostalo uruchomione z wnetrza sesji Claude Code (np. `npm
- * start` odpalone z terminala Claude), proces dziedziczy markery sesji w env:
- * CLAUDE_CODE_CHILD_SESSION, CLAUDECODE, CLAUDE_CODE_SESSION_ID itd. Zagniezdzony
- * `claude` widzi je i startuje jako "child session" -> WYLACZA zapis transkryptu
- * ("transcript saving is off - inherited claude_code_child_session marker").
- * A bez transkryptu nie dziala pasek Context Window ani sparkline (czytaja JSONL).
- * Czyscimy wiec markery, by sesja w LunaCore byla zawsze pelnoprawna, top-level -
- * niezaleznie od tego, skad LunaCore odpalono. Nie ruszamy configu (ANTHROPIC_*).
+ * When LunaCore itself was launched from inside a Claude Code session (e.g.
+ * `npm start` run from Claude's own terminal), the process inherits session
+ * markers in env: CLAUDE_CODE_CHILD_SESSION, CLAUDECODE, CLAUDE_CODE_SESSION_ID,
+ * etc. A nested `claude` sees them and starts as a "child session" -> DISABLES
+ * transcript saving ("transcript saving is off - inherited claude_code_child_session
+ * marker"). And without a transcript neither the Context Window bar nor the
+ * sparkline works (they read the JSONL). So we strip the markers, so a session
+ * inside LunaCore is always a full, top-level one - regardless of where
+ * LunaCore itself was launched from. We don't touch config (ANTHROPIC_*).
  * @param {Record<string,string>} env
  */
 function stripClaudeSessionMarkers(env) {
@@ -425,21 +430,21 @@ function stripClaudeSessionMarkers(env) {
 }
 
 /**
- * Gwarantuje kolory w sesji PTY.
+ * Guarantees color in the PTY session.
  *
- * Powod: gdy LunaCore odpalono z terminala, ktory wylacza kolory (Claude Code
- * ustawia NO_COLOR=1, zeby jego wlasny output byl czysty), zagniezdzony `claude`
- * dziedziczy ta zmienna i renderuje sie CALKOWICIE BEZ KOLOROW - logo Claude
- * wychodzi biale zamiast pomaranczowego. To nie jest usterka motywu: xterm dostaje
- * czysty tekst, wiec zaden theme tego nie naprawi.
+ * Reason: when LunaCore is launched from a terminal that disables color
+ * (Claude Code sets NO_COLOR=1 so its own output stays clean), a nested
+ * `claude` inherits that variable and renders COMPLETELY WITHOUT COLOR - the
+ * Claude logo comes out white instead of orange. This is not a theme bug:
+ * xterm receives plain text, so no theme can fix it.
  *
- * Czyscimy wiec zmienne tlumiace kolor i deklarujemy terminal 256-kolorowy +
- * truecolor. NIE nadpisujemy COLORTERM, jesli uzytkownik ustawil go swiadomie.
+ * So we clear the color-suppressing variables and declare a 256-color +
+ * truecolor terminal. We do NOT override COLORTERM if the user set it deliberately.
  * @param {Record<string,string>} env
  */
 function withColorSupport(env) {
   delete env.NO_COLOR;
-  // FORCE_COLOR=0 to jawne "bez kolorow"; kazda inna wartosc zostawiamy.
+  // FORCE_COLOR=0 is an explicit "no color"; any other value is left alone.
   if (env.FORCE_COLOR === '0') delete env.FORCE_COLOR;
   env.TERM = 'xterm-256color';
   if (!env.COLORTERM) env.COLORTERM = 'truecolor';
@@ -447,19 +452,19 @@ function withColorSupport(env) {
 }
 
 /**
- * Podpina PTY + TranscriptWatcher do istniejacego rekordu sesji. Wydzielone,
- * bo uzywa tego zarowno tworzenie zakladki, jak i restart pod nowym profilem
- * lub katalogiem - zawsze tak samo.
+ * Attaches a PTY + TranscriptWatcher to an existing session record. Split out
+ * because both creating a tab and restarting it under a new profile or
+ * directory use this, always the same way.
  * @param {Session} session
  * @param {{id:string,label:string,command:string,args:string[],env:Object}} profile
  */
 function spawnInto(session, profile) {
-  // Nadpisania srodowiska z profilu (np. ANTHROPIC_BASE_URL dla LM Studio),
-  // czyszczenie markerow sesji-rodzica (transkrypt!) + gwarancja, ze `claude`
-  // z ~/.local/bin jest na PATH sesji.
-  // Kolejnosc ma znaczenie: kolory ustawiamy na ODZIEDZICZONYM env, a dopiero
-  // potem nakladamy profil - dzieki temu profil, ktory swiadomie ustawia TERM
-  // albo NO_COLOR, nadal wygrywa.
+  // Environment overrides from the profile (e.g. ANTHROPIC_BASE_URL for LM
+  // Studio), clearing parent-session markers (transcript!) + guaranteeing
+  // `claude` from ~/.local/bin is on the session's PATH.
+  // Order matters: color is set on the INHERITED env first, and only then is
+  // the profile applied on top - so a profile that deliberately sets TERM or
+  // NO_COLOR still wins.
   const env = withClaudeOnPath(
     stripClaudeSessionMarkers({
       ...withColorSupport({ ...process.env }),
@@ -481,8 +486,8 @@ function spawnInto(session, profile) {
   session.proc = proc;
   session.alive = true;
 
-  // PASSIVE OBSERVER: surowy stdout tej sesji -> renderer + detekcja narzedzi.
-  // Kazde zdarzenie niesie sessionId, bo renderer trzyma osobny bufor na zakladke.
+  // PASSIVE OBSERVER: this session's raw stdout -> renderer + tool detection.
+  // Every event carries a sessionId, since the renderer keeps a separate buffer per tab.
   proc.onData((data) => {
     send('pty:data', { sessionId: session.id, data });
     const tiles = detectTools(data);
@@ -501,8 +506,8 @@ function spawnInto(session, profile) {
     }
   });
 
-  // Guard: ignorujemy exit procesu juz odpietego od sesji (restart profilu /
-  // zamkniecie zakladki), zeby nie wyslac falszywego "sesja zakonczona".
+  // Guard: ignore the exit of a process already detached from the session
+  // (profile restart / tab close), so we don't send a false "session ended".
   proc.onExit(({ exitCode }) => {
     if (session.proc !== proc) return;
     session.proc = null;
@@ -511,7 +516,7 @@ function spawnInto(session, profile) {
     broadcastSessions();
   });
 
-  // Komenda startowa profilu (pusta = sama powloka, bez auto-startu).
+  // The profile's start command (empty = bare shell, no auto-start).
   const command = [profile.command, ...(profile.args || [])].join(' ').trim();
   // When WE launch `claude`, we dictate the session id - the transcript is then
   // named exactly <uuid>.jsonl and the watcher looks it up instead of inferring
@@ -521,7 +526,7 @@ function spawnInto(session, profile) {
   const pinnedCommand = withSessionId(command, transcriptId);
   session.transcriptId = pinnedCommand ? transcriptId : null;
 
-  // Wlasny watcher transcriptu, zawezony do katalogu tej sesji.
+  // Its own transcript watcher, scoped to this session's directory.
   if (session.watcher) session.watcher.stop();
   session.watcher = new TranscriptWatcher(
     (metrics) => send('metrics:context', { sessionId: session.id, metrics }),
@@ -539,7 +544,7 @@ function spawnInto(session, profile) {
   );
   session.watcher.start();
 
-  // PTY buforuje wejscie, wiec komenda wykona sie, gdy powloka bedzie gotowa.
+  // PTY buffers input, so the command runs once the shell is ready.
   const startCommand = pinnedCommand || command;
   if (startCommand) {
     setTimeout(() => {
@@ -549,7 +554,7 @@ function spawnInto(session, profile) {
 }
 
 /**
- * Tworzy nowa zakladke i czyni ja aktywna.
+ * Creates a new tab and makes it active.
  * @param {{profileId?:string, projectId?:string}} [opts]
  * @returns {Session|null}
  */
@@ -584,7 +589,7 @@ function createSession(opts = {}) {
   return session;
 }
 
-/** Ubija proces i watcher sesji, nie usuwajac jej z mapy. */
+/** Kills a session's process and watcher, without removing it from the map. */
 function teardownSession(session) {
   if (session.watcher) {
     session.watcher.stop();
@@ -592,19 +597,19 @@ function teardownSession(session) {
   }
   if (session.proc) {
     const old = session.proc;
-    session.proc = null; // odpinamy, zeby onExit sie zignorowal
+    session.proc = null; // detach, so onExit ignores it
     try {
       old.kill();
     } catch {
-      /* proces mogl juz nie zyc */
+      /* the process may already be dead */
     }
   }
   session.alive = false;
 }
 
 /**
- * Zamyka zakladke. Ostatniej nie usuwamy w pustke - od razu tworzymy swiaza,
- * zeby okno nigdy nie zostalo bez terminala.
+ * Closes a tab. The last one is never left removed into a void - a fresh one
+ * is created immediately, so the window is never left without a terminal.
  * @param {string} sessionId
  */
 function closeSession(sessionId) {
@@ -625,8 +630,8 @@ function closeSession(sessionId) {
 }
 
 /**
- * Restart JEDNEJ sesji pod (byc moze innym) profilem i katalogiem.
- * Renderer dostaje 'pty:restarted' i czysci bufor tej zakladki.
+ * Restarts ONE session under a (possibly different) profile and directory.
+ * The renderer gets 'pty:restarted' and clears that tab's buffer.
  * @param {Session} session
  * @param {{profileId?:string, projectId?:string}} [opts]
  */
@@ -654,7 +659,7 @@ function restartSession(session, opts = {}) {
   broadcastSessions();
 }
 
-/** Wczytuje projekty z config/ i ustawia aktywny katalog roboczy (cwd). */
+/** Loads projects from config/ and sets the active working directory (cwd). */
 function startActiveProjects() {
   const loaded = loadProjects();
   projects = loaded.projects;
@@ -666,10 +671,11 @@ function startActiveProjects() {
 }
 
 /**
- * Wczytuje profile i otwiera pierwsza zakladke (przy starcie aplikacji).
- * B1: pierwszenstwo ma profil zapamietany w ui.local.json - startujemy tam,
- * gdzie sie skonczylo. Gdy zapamietanego profilu juz nie ma w configu (ktos go
- * usunal / inna maszyna), cicho wracamy do activeProfile z profiles.json.
+ * Loads profiles and opens the first tab (at app start).
+ * B1: the profile remembered in ui.local.json takes priority - we start
+ * where things left off. When the remembered profile no longer exists in the
+ * config (someone deleted it / a different machine), we silently fall back
+ * to activeProfile from profiles.json.
  */
 function startActiveProfile() {
   const loaded = loadProfiles();
@@ -683,7 +689,7 @@ function startActiveProfile() {
   createSession();
 }
 
-// ---- Passive Observer: porty localhost (7B) ---------------------------------
+// ---- Passive Observer: localhost ports (7B) ---------------------------------
 
 function startPortWatcher() {
   portWatcher = new PortWatcher((ports) => {
@@ -694,7 +700,7 @@ function startPortWatcher() {
   portWatcher.start();
 }
 
-// ---- Passive Observer: zuzycie limitow subskrypcji (5h + tydzien) -----------
+// ---- Passive Observer: subscription usage limits (5h + week) -----------
 
 /** Plays voice.usage50/usage80 on a fresh threshold crossing (§4.4). */
 function checkUsageThresholds(usage) {
@@ -707,7 +713,7 @@ function checkUsageThresholds(usage) {
   if (resolved) soundManager.play(resolved.path);
 }
 
-// ---- Passive Observer: koniec dlugiego zadania (SOUNDS_IMPLEMENTATION_PLAN.md §3) --
+// ---- Passive Observer: long task end (SOUNDS_IMPLEMENTATION_PLAN.md §3) --
 
 /** Plays voice.done, but only when the completed turn ran long enough (§3). */
 function checkTurnEnd({ startedAt, endedAt, text }) {
@@ -748,12 +754,13 @@ function startUsageWatcher() {
   usageWatcher.start();
 }
 
-// ---- E1: Passive Observer: telemetria maszyny (RAM / CPU / uptime) ----------
+// ---- E1: Passive Observer: machine telemetry (RAM / CPU / uptime) ----------
 //
-// Wlacznik istnieje z tego samego powodu, co ENABLE_USAGE_METER: README obiecuje,
-// ze kazdy pomiar da sie wylaczyc. Ten akurat nie dotyka ani sieci, ani dysku -
-// to cztery wywolania do `os` - wiec wylaczenie go jest kwestia gustu, a nie
-// prywatnosci. Sam wybor ma jednak nalezec do uzytkownika, nie do nas.
+// The toggle exists for the same reason as ENABLE_USAGE_METER: the README
+// promises every measurement can be disabled. This one in particular touches
+// neither network nor disk - it's four calls into `os` - so disabling it is a
+// matter of taste, not privacy. But the choice should still belong to the
+// user, not to us.
 
 const ENABLE_TELEMETRY = true;
 
@@ -773,34 +780,35 @@ function startTelemetryWatcher() {
   telemetryWatcher.start();
 }
 
-// ---- D5: aktualizacje (tryb "powiadom, nie pobieraj") -----------------------
-// Sprawdzenie rusza raz, przy starcie. POBIERANIE NIE RUSZA SAMO - dopiero po
-// klinieciu uzytkownika. Uzasadnienie jest w naglowku src/update.js: binarka
-// jest niepodpisana, a aplikacja, ktorej cala obietnica to "czytam wylacznie to,
-// co wymieniam w README", nie ma prawa sciagac 80 MB w tle.
+// ---- D5: updates ("notify, don't download" mode) -----------------------
+// The check runs once, at startup. DOWNLOADING NEVER STARTS ON ITS OWN - only
+// after the user clicks. The reasoning is in src/update.js's header: the
+// binary is unsigned, and an app whose entire promise is "I only read what I
+// list in the README" has no right to pull down 80 MB in the background.
 //
-// Stan trzymamy TUTAJ, bo renderer moze sie podlaczyc pozniej niz przyjdzie
-// odpowiedz z sieci. Kanal `update:status` odgrywa ostatni stan na zadanie -
-// dokladnie ta sama zasada, co "feed replays its last payload" z §A2: widget
-// zamontowany miedzy odpytaniami inaczej stalby pusty.
+// State is kept HERE, because the renderer may attach later than the network
+// response arrives. The `update:status` channel replays the last state on
+// request - the exact same rule as "feed replays its last payload" from §A2:
+// a widget mounted between polls would otherwise sit empty.
 
 const ENABLE_AUTO_UPDATE = true;
 
-/** Ostatni znany stan aktualizacji. Kanal update:state rozsyla kazda zmiane. */
+/** Last known update state. The update:state channel broadcasts every change. */
 let updateState = { state: 'idle', info: null, percent: 0, error: null, reason: null };
 
-/** Instancja electron-updater. null, dopoki nie okaze sie potrzebna. */
+/** electron-updater instance. null until it turns out to be needed. */
 let updaterInstance = null;
 
-// Wersja doklejana jest przy KAZDYM rozeslaniu, a nie trzymana osobno w
-// rendererze: "aktualna" to zdanie o dwoch liczbach naraz, wiec gdyby przyszly
-// dwoma kanalami, HUD mialby stan posredni, w ktorym pokazuje jedna bez drugiej.
+// The version is appended on EVERY broadcast, rather than kept separately in
+// the renderer: "current" is a statement about two numbers at once, so if
+// they arrived over two channels the HUD would have an in-between state
+// showing one without the other.
 function setUpdateState(patch) {
   updateState = { ...updateState, ...patch };
   send('update:state', { ...updateState, version: app.getVersion() });
 }
 
-/** Fakty o srodowisku dla czystej decyzji supportsUpdates(). */
+/** Environment facts for the pure supportsUpdates() decision. */
 function updateEnv() {
   return {
     isPackaged: app.isPackaged,
@@ -814,19 +822,19 @@ function errorText(err) {
 }
 
 /**
- * Leniwie tworzy i konfiguruje electron-updater.
+ * Lazily creates and configures electron-updater.
  *
- * Wywolywane WYLACZNIE po tym, jak supportsUpdates() powie "tak" - w klonie
- * deweloperskim modul szuka dev-app-update.yml i rzuca wyjatkiem, wiec samo jego
- * zaladowanie na dev byloby bledem.
+ * Called ONLY after supportsUpdates() says "yes" - in a dev clone the module
+ * looks for dev-app-update.yml and throws, so merely loading it in dev would
+ * be an error.
  */
 function getAutoUpdater() {
   if (updaterInstance) return updaterInstance;
 
   const { autoUpdater } = require('electron-updater');
 
-  // Dwie linie, ktore realizuja wybor "powiadom, uzytkownik klika". Bez nich
-  // electron-updater domyslnie pobiera od razu i instaluje przy wyjsciu.
+  // Two lines that implement the "notify, user clicks" choice. Without them
+  // electron-updater downloads immediately by default and installs on exit.
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
 
@@ -851,9 +859,9 @@ function getAutoUpdater() {
     setUpdateState({ state: 'ready', info: normalizeUpdateInfo(info), percent: 100 });
   });
 
-  // Brak sieci, firewall, prywatne repo - wszystko trafia tutaj. Stan bledu jest
-  // widoczny w HUD, bo cicha porazka aktualizacji jest gorsza niz zadna: uzytkownik
-  // myslalby, ze ma najnowsza wersje.
+  // No network, a firewall, a private repo - everything lands here. The error
+  // state is visible in the HUD, because a silent update failure is worse
+  // than none: the user would think they have the latest version.
   autoUpdater.on('error', (err) => {
     setUpdateState({ state: 'error', error: errorText(err) });
   });
@@ -862,15 +870,15 @@ function getAutoUpdater() {
   return autoUpdater;
 }
 
-/** Odpytuje GitHuba o nowsze wydanie. Nic nie pobiera. */
+/** Polls GitHub for a newer release. Downloads nothing. */
 function checkForUpdate() {
   const support = supportsUpdates(updateEnv());
   if (!ENABLE_AUTO_UPDATE || !support.supported) return;
 
   setUpdateState({ state: 'checking', error: null });
   try {
-    // checkForUpdates() zwraca obietnice, ktora potrafi odrzucic ROWNOLEGLE do
-    // zdarzenia 'error'. Bez tego .catch() brak sieci to unhandled rejection.
+    // checkForUpdates() returns a promise that can reject IN PARALLEL with the
+    // 'error' event. Without this .catch() a network failure is an unhandled rejection.
     Promise.resolve(getAutoUpdater().checkForUpdates()).catch((err) => {
       setUpdateState({ state: 'error', error: errorText(err) });
     });
@@ -880,11 +888,12 @@ function checkForUpdate() {
 }
 
 /**
- * Ustala stan startowy i - o ile wolno - odpytuje o aktualizacje.
+ * Sets the startup state and - as long as it's allowed to - polls for updates.
  *
- * Kompilacja, ktora nie moze sie aktualizowac, dostaje stan 'unsupported' wraz z
- * POWODEM (kodem, nie zdaniem - tlumaczy renderer), zeby HUD mogl pokazac
- * "wersja portable: pobierz recznie" zamiast udawac, ze wszystko jest aktualne.
+ * A build that cannot update itself gets the 'unsupported' state along with a
+ * REASON (a code, not a sentence - the renderer translates it), so the HUD
+ * can show "portable version: download manually" instead of pretending
+ * everything is up to date.
  */
 function startUpdateCheck() {
   if (!ENABLE_AUTO_UPDATE) {
@@ -901,11 +910,11 @@ function startUpdateCheck() {
   checkForUpdate();
 }
 
-// ---- Kanaly IPC -------------------------------------------------------------
+// ---- IPC channels -------------------------------------------------------------
 
 function registerIpc() {
-  // ACTION INJECTOR (klawiatura): surowe wejscie z xterm.js -> stdin PTY.
-  // Payload: { sessionId?, data } - brak sessionId trafia do sesji aktywnej.
+  // ACTION INJECTOR (keyboard): raw input from xterm.js -> PTY stdin.
+  // Payload: { sessionId?, data } - a missing sessionId lands on the active session.
   ipcMain.on('pty:write', (_event, payload) => {
     const p = payload && typeof payload === 'object' ? payload : { data: payload };
     const session = resolveSession(p.sessionId);
@@ -914,8 +923,8 @@ function registerIpc() {
     if (session) session.approvalShowing = false;
   });
 
-  // ACTION INJECTOR (przyciski GUI): wysyla gotowa komende + Enter (\r).
-  // To wlasnie tego uzywa przycisk COMPACT CONTEXT -> "/compact".
+  // ACTION INJECTOR (GUI buttons): sends a ready-made command + Enter (\r).
+  // This is exactly what the COMPACT CONTEXT button uses -> "/compact".
   ipcMain.on('pty:command', (_event, payload) => {
     const p = payload && typeof payload === 'object' ? payload : { text: payload };
     const session = resolveSession(p.sessionId);
@@ -925,47 +934,47 @@ function registerIpc() {
     session.approvalShowing = false;
   });
 
-  // ACTION INJECTOR (biblioteka promptow): wkleja WIELOLINIJKOWY tekst.
+  // ACTION INJECTOR (prompt library): pastes MULTI-LINE text.
   //
-  // Dlaczego nie zwykly write(): w TUI Claude Code kazdy "\r"/"\n" to Enter,
-  // wiec wielolinijkowy prompt wyslany surowo zostalby wyslany po pierwszej
-  // linii (reszta poszlaby jako osobne wiadomosci). Uzywamy wiec bracketed
-  // paste mode (ESC[200~ ... ESC[201~) - terminalowy standard sygnalizujacy
-  // "to jest wklejka, nie klawisze". TUI wstawia calosc do bufora wejscia,
-  // zachowujac lamania linii i NIE wysylajac.
+  // Why not a plain write(): in Claude Code's TUI every "\r"/"\n" is an Enter,
+  // so a multi-line prompt sent raw would submit after the first line (the
+  // rest would go as separate messages). So we use bracketed paste mode
+  // (ESC[200~ ... ESC[201~) - the terminal standard signaling "this is a
+  // paste, not keystrokes". The TUI inserts the whole thing into the input
+  // buffer, preserving line breaks and NOT submitting.
   //
-  // { text: string, submit?: boolean } - submit dopiero dopisuje Enter.
+  // { text: string, submit?: boolean } - submit only appends Enter.
   ipcMain.on('pty:paste', (_event, payload) => {
     const session = resolveSession(payload && payload.sessionId);
     if (!session || !session.proc || !payload || typeof payload.text !== 'string') return;
-    // Normalizacja koncow linii: w bufor wejscia wchodza wylacznie "\n".
+    // Line-ending normalization: only "\n" enters the input buffer.
     const text = payload.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     session.proc.write(`\x1b[200~${text}\x1b[201~`);
     if (payload.submit) session.proc.write('\r');
     session.approvalShowing = false;
   });
 
-  // Dopasowanie rozmiaru PTY do rozmiaru terminala w oknie (xterm-addon-fit).
-  // Rozmiar zapamietujemy per sesja - kazda zakladka ma wlasny bufor xterm.
+  // Matches the PTY size to the window's terminal size (xterm-addon-fit).
+  // Size is remembered per session - every tab has its own xterm buffer.
   ipcMain.on('pty:resize', (_event, size) => {
     if (!size) return;
     const cols = Math.max(1, size.cols | 0);
     const rows = Math.max(1, size.rows | 0);
-    lastSize = { cols, rows }; // punkt startowy dla kolejnych zakladek
+    lastSize = { cols, rows }; // starting point for the next tabs
     const session = resolveSession(size.sessionId);
     if (!session) return;
     session.size = { cols, rows };
     if (session.proc) session.proc.resize(cols, rows);
   });
 
-  // ---- Zakladki (multi-sesja) ----------------------------------------------
+  // ---- Tabs (multi-session) ----------------------------------------------
 
   ipcMain.handle('sessions:list', () => ({
     sessions: [...sessions.values()].map(sessionSummary),
     activeSessionId,
   }));
 
-  // Nowa zakladka: domyslnie ten sam profil i projekt co aktualnie wybrane.
+  // New tab: defaults to the same profile and project as currently selected.
   ipcMain.on('sessions:create', (_event, opts) => {
     createSession(opts && typeof opts === 'object' ? opts : {});
   });
@@ -974,34 +983,34 @@ function registerIpc() {
     if (typeof sessionId === 'string') closeSession(sessionId);
   });
 
-  // Przelaczenie widocznej zakladki. Procesy pozostalych zyja dalej w tle -
-  // to jest caly sens zakladek: dlugi bieg w jednej, praca w drugiej.
+  // Switches the visible tab. The other tabs' processes keep running in the
+  // background - that's the whole point of tabs: a long run in one, work in another.
   ipcMain.on('sessions:activate', (_event, sessionId) => {
     if (typeof sessionId !== 'string' || !sessions.has(sessionId)) return;
     activeSessionId = sessionId;
     broadcastSessions();
   });
 
-  // FAZA 4: renderer pyta o dostepne profile (do wypelnienia przelacznika).
+  // PHASE 4: the renderer asks for the available profiles (to fill the switcher).
   ipcMain.handle('profiles:list', () => ({ profiles, activeProfile: activeProfileId }));
 
-  // FAZA 4: przelaczenie profilu -> restart TEJ zakladki z nowym srodowiskiem.
-  // Pozostale zakladki zostaja nietkniete; profil jest cecha sesji, nie aplikacji.
+  // PHASE 4: switching profile -> restart THIS tab with the new environment.
+  // Other tabs are left untouched; a profile is a session's trait, not the app's.
   ipcMain.on('pty:restart', (_event, payload) => {
     const p = payload && typeof payload === 'object' ? payload : { profileId: payload };
     const session = resolveSession(p.sessionId);
     if (!session || typeof p.profileId !== 'string') return;
-    activeProfileId = p.profileId; // domyslny profil dla kolejnych zakladek
-    writeUiPrefs({ profile: p.profileId }); // B1: zapamietaj na nastepny start
+    activeProfileId = p.profileId; // default profile for the next tabs
+    writeUiPrefs({ profile: p.profileId }); // B1: remember for next start
     restartSession(session, { profileId: p.profileId });
   });
 
-  // Przelacznik projektu: renderer pobiera liste katalogow roboczych.
+  // Project switcher: the renderer fetches the list of working directories.
   ipcMain.handle('projects:list', () => ({ projects, activeProject: activeProjectId }));
 
-  // "Add project": natywny wybor folderu (Windows/macOS/Linux), zeby dodanie
-  // repo z innego dysku/katalogu nie wymagalo recznej edycji configu. null =
-  // uzytkownik anulowal dialog.
+  // "Add project": native folder picker (Windows/macOS/Linux), so adding a
+  // repo from another drive/directory doesn't require a manual config edit.
+  // null = the user cancelled the dialog.
   ipcMain.handle('projects:pick-folder', async () => {
     if (!mainWindow) return null;
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
@@ -1022,10 +1031,10 @@ function registerIpc() {
     return out;
   });
 
-  // Zapisuje nowy wpis do projects.local.json i oddaje swiezo przeladowana
-  // liste - ten sam ksztalt co projects:list, wiec renderer po prostu
-  // podmienia switcher. Nie zmienia activeProject: dodanie folderu nie ma
-  // przelaczac biezacej zakladki (na to sluzy osobne pty:switch-project).
+  // Writes a new entry to projects.local.json and returns the freshly reloaded
+  // list - the same shape as projects:list, so the renderer simply swaps the
+  // switcher's contents. Does not change activeProject: adding a folder should
+  // not switch the current tab away (that's what the separate pty:switch-project is for).
   ipcMain.handle('projects:add', (_event, entry) => {
     const result = addProject(entry);
     if (!result) return null;
@@ -1033,48 +1042,48 @@ function registerIpc() {
     return result;
   });
 
-  // Przelaczenie projektu -> zmiana cwd + restart sesji z BIEZACYM profilem.
-  // (Ten sam mechanizm restartu co profil; rozni sie tylko katalogiem startowym.)
+  // Project switch -> change cwd + restart the session with the CURRENT profile.
+  // (The same restart mechanism as a profile switch; only the starting directory differs.)
   ipcMain.on('pty:switch-project', (_event, payload) => {
     const p = payload && typeof payload === 'object' ? payload : { projectId: payload };
     const proj = getProject(projects, p.projectId);
     const session = resolveSession(p.sessionId);
     if (!proj || !session) return;
-    activeCwd = proj.path; // domyslny katalog dla kolejnych zakladek
+    activeCwd = proj.path; // default directory for the next tabs
     activeProjectId = proj.id;
     restartSession(session, { projectId: proj.id });
   });
 
-  // 7B: otworz http://localhost:PORT w domyslnej przegladarce.
+  // 7B: open http://localhost:PORT in the default browser.
   ipcMain.on('ports:open', (_event, port) => {
     const p = port | 0;
     if (p > 0 && p <= 65535) shell.openExternal(`http://localhost:${p}`);
   });
 
-  // 7B: ubij proces po PID (na wyrazne klikniecie usera) + odswiez liste.
+  // 7B: kill a process by PID (on an explicit user click) + refresh the list.
   ipcMain.handle('ports:kill', async (_event, pid) => {
     const ok = await killProcess(pid);
     if (ok && portWatcher) portWatcher.refresh();
     return ok;
   });
 
-  // 7C: renderer pobiera grupy sciagawek do zbudowania zwijek + przyciskow.
+  // 7C: the renderer fetches cheat-sheet groups to build the collapsibles + buttons.
   ipcMain.handle('cheatsheets:list', () => loadCheatsheets());
 
-  // 7A: renderer pobiera skille pogrupowane w kategorie (wynik cache'owany).
+  // 7A: the renderer fetches skills grouped into categories (cached result).
   ipcMain.handle('skills:list', () => loadSkills());
 
-  // A5: wymuszony re-skan (przycisk w UI) - nowy skill nie wymaga juz restartu.
+  // A5: forced re-scan (UI button) - a new skill no longer needs a restart.
   ipcMain.handle('skills:rescan', () => rescanSkills());
 
-  // Biblioteka promptow: grupy wielolinijkowych promptow do wklejenia.
+  // Prompt library: groups of multi-line prompts to paste.
   ipcMain.handle('prompts:list', () => loadPrompts());
 
-  // Brudnopis: odczyt i zapis lokalnego notatnika (walidacja w scratchpad.js).
+  // Scratchpad: reads and writes the local notepad (validated in scratchpad.js).
   ipcMain.handle('scratchpad:read', () => readScratchpad());
   ipcMain.handle('scratchpad:write', (_event, text) => writeScratchpad(text));
 
-  // Motywy: lista dostepnych motywow (tokeny CSS + kolory xterm).
+  // Themes: list of available themes (CSS tokens + xterm colors).
   // D3. Answers "is Claude Code installed at all?" so the HUD can say so in
   // words instead of leaving a newcomer staring at `command not found`.
   // Searched on the env AFTER withClaudeOnPath(), so a native install in
@@ -1095,10 +1104,10 @@ function registerIpc() {
 
   ipcMain.handle('themes:list', () => loadThemes());
 
-  // C1: presety ukladu (siatka + przydzial widgetow do regionow).
+  // C1: layout presets (grid + widget-to-region assignment).
   ipcMain.handle('layouts:list', () => loadLayouts());
 
-  // Preferencje UI: odczyt {theme, lang} i zapis czesciowy (zwraca nowy stan).
+  // UI preferences: reads {theme, lang} and writes a partial update (returns the new state).
   ipcMain.handle('ui:get', () => readUiPrefs());
   ipcMain.handle('ui:set', (_event, partial) => {
     const next = writeUiPrefs(partial);
@@ -1131,8 +1140,8 @@ function registerIpc() {
   };
   ipcMain.handle('termcustom:pickBgImage', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: 'Wybierz obraz tla terminala',
-      filters: [{ name: 'Obrazy', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+      title: 'Choose terminal background image',
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
       properties: ['openFile'],
     });
     if (result.canceled || !result.filePaths[0]) return null;
@@ -1156,26 +1165,26 @@ function registerIpc() {
     if (resolved) soundManager.play(resolved.path);
   });
 
-  // Zuzycie limitow: wymuszony odczyt (przycisk odswiezania). Gdy wylaczony -
-  // zwroc stan 'off'; gdy watcher chodzi - odswiez go (wyemituje usage:update),
-  // a rownolegle zwroc swiezy odczyt na potrzeby wywolania.
+  // Usage limits: forced read (refresh button). When disabled - return an
+  // 'off' state; when the watcher is running - refresh it (it will emit
+  // usage:update), and separately return a fresh read for the call itself.
   ipcMain.handle('usage:refresh', async () => {
     if (!ENABLE_USAGE_METER) return { error: 'off' };
     if (usageWatcher) usageWatcher.refresh();
     return fetchUsage();
   });
 
-  // ---- D5: aktualizacje ------------------------------------------------------
+  // ---- D5: updates ------------------------------------------------------
 
-  // Odgrywka stanu. Widget montuje sie pozniej, niz przychodzi odpowiedz z
-  // sieci, wiec bez tego kanalu pokazywalby 'idle' az do nastepnej zmiany.
+  // State replay. The widget mounts later than the network response arrives,
+  // so without this channel it would show 'idle' until the next change.
   ipcMain.handle('update:status', () => ({ ...updateState, version: app.getVersion() }));
 
-  // Reczne sprawdzenie (przycisk odswiezania).
+  // Manual check (refresh button).
   ipcMain.on('update:check', () => checkForUpdate());
 
-  // Zgoda uzytkownika na pobranie. To JEDYNE miejsce, w ktorym cokolwiek jest
-  // sciagane - autoDownload zostaje na false.
+  // The user's consent to download. This is the ONLY place anything is
+  // downloaded from - autoDownload stays false.
   ipcMain.on('update:download', () => {
     const support = supportsUpdates(updateEnv());
     if (!ENABLE_AUTO_UPDATE || !support.supported) return;
@@ -1190,35 +1199,35 @@ function registerIpc() {
     }
   });
 
-  // Zgoda na restart i instalacje. Dopiero tutaj cokolwiek zmienia sie na dysku.
+  // Consent to restart and install. Only here does anything on disk actually change.
   ipcMain.on('update:install', () => {
     if (updateState.state !== 'ready') return;
     try {
-      // isSilent=false: instalator ma byc widoczny. Binarka jest niepodpisana,
-      // wiec moze pojawic sie SmartScreen - cicha instalacja zostawilaby
-      // uzytkownika przed niewyjasnionym oknem systemowym.
+      // isSilent=false: the installer must be visible. The binary is unsigned,
+      // so SmartScreen may appear - a silent install would leave the user
+      // facing an unexplained system window.
       getAutoUpdater().quitAndInstall(false, true);
     } catch (err) {
       setUpdateState({ state: 'error', error: errorText(err) });
     }
   });
 
-  // Strona wydania. Adres skladany jest TUTAJ, nigdy nie przychodzi z renderera:
-  // shell.openExternal na stringu z UI to otwarte przekierowanie prosto do
-  // przegladarki uzytkownika (ta sama zasada, co przy linku do dokumentacji).
+  // Release page. The address is built HERE, never comes from the renderer:
+  // shell.openExternal on a UI string would be an open redirect straight into
+  // the user's browser (the same rule as the docs link).
   ipcMain.on('update:open-releases', () => {
     const version = updateState.info && updateState.info.version;
     shell.openExternal(version ? releaseUrl(version) : releasesUrl());
   });
 }
 
-// ---- Cykl zycia aplikacji ---------------------------------------------------
+// ---- App lifecycle ---------------------------------------------------
 
 app.whenReady().then(() => {
   registerIpc();
   createWindow();
-  startActiveProjects(); // ustala cwd, zanim wystartuje pierwsza sesja
-  startActiveProfile(); // otwiera pierwsza zakladke (wraz z jej watcherem)
+  startActiveProjects(); // sets cwd before the first session starts
+  startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();
   startUsageWatcher();
   startTelemetryWatcher();
@@ -1243,17 +1252,18 @@ app.whenReady().then(() => {
     const resolved = resolveSoundFile('voice.welcome');
     if (resolved) soundManager.play(resolved.path);
   }, STARTUP_GREETING_DELAY_MS);
-  // D5. Jedno zapytanie HTTPS przy starcie, nic nie pobiera. Odpalane po
-  // createWindow(), zeby HUD zdazyl sie narysowac; samo zapytanie i tak jest
-  // asynchroniczne i nie blokuje event loopa.
+  // D5. One HTTPS request at startup, downloads nothing. Fired after
+  // createWindow(), so the HUD has time to paint; the request itself is
+  // asynchronous anyway and doesn't block the event loop.
   startUpdateCheck();
-  // A5: skan skilli (7A) jest teraz async (fs.promises) i nie blokuje event
-  // loopa, wiec nie trzeba juz go opozniac za oknem - im wczesniej wystartuje,
-  // tym wieksza szansa, ze cache bedzie gotowy zanim widget skills go poprosi.
+  // A5: the skill scan (7A) is now async (fs.promises) and doesn't block the
+  // event loop, so it no longer needs to be delayed behind the window - the
+  // earlier it starts, the better the odds the cache is ready before the
+  // skills widget asks for it.
   loadSkills();
 
   app.on('activate', () => {
-    // macOS: odtworz okno po kliknieciu w Dock, jesli wszystkie zamkniete.
+    // macOS: recreate the window after a Dock click, if all were closed.
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
       if (sessions.size === 0) startActiveProfile();
@@ -1262,7 +1272,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  // Kazda zakladka ma wlasny proces i wlasny watcher - sprzatamy wszystkie.
+  // Every tab has its own process and its own watcher - clean up all of them.
   for (const session of sessions.values()) teardownSession(session);
   sessions.clear();
   activeSessionId = null;

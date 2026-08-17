@@ -1,20 +1,20 @@
 // ============================================================================
 // LunaCore - i18n (PL / EN)
 // ----------------------------------------------------------------------------
-// Lekki slownik tlumaczen dla warstwy UI. Statyczne etykiety w index.html nosza
-// atrybut data-i18n / data-i18n-ph / data-i18n-title; applyStatic() je uzupelnia.
-// Napisy dynamiczne w renderer.js ida przez t('klucz', { param }).
+// Lightweight translation dictionary for the UI layer. Static labels in index.html carry
+// the data-i18n / data-i18n-ph / data-i18n-title attribute; applyStatic() fills them in.
+// Dynamic strings in renderer.js go through t('key', { param }).
 //
-// Bez zaleznosci, bez IPC - czysto rendererowe. Brakujacy klucz => fallback do
-// PL, a jak i tego brak => sam klucz (widoczne, ze cos nie przetlumaczone).
+// No dependencies, no IPC - purely renderer-side. A missing key falls back to
+// PL, and if that's missing too, to the key itself (a visible sign something wasn't translated).
 // ============================================================================
 
 'use strict';
 
-// IIFE: nie wyciekamy zadnych nazw (t, I18N_DICT, setLang...) do globalnego
-// scope. renderer.js ma wlasne `const t`, wiec kolizja `t` w globalnym scope
-// zabijala CALY renderer (SyntaxError: Identifier 't' has already been
-// declared). Jedyny publiczny eksport to window.i18n na koncu.
+// IIFE: keeps names (t, I18N_DICT, setLang...) from leaking into the global
+// scope. renderer.js has its own `const t`, so a `t` collision in the global
+// scope used to kill the ENTIRE renderer (SyntaxError: Identifier 't' has already been
+// declared). The only public export is window.i18n at the end.
 (function () {
 
 const I18N_DICT = {
@@ -64,7 +64,7 @@ const I18N_DICT = {
     'boot.off': 'wylaczona',
     'boot.skip': 'klik lub dowolny klawisz = pomin',
 
-    // Zakladki sesji
+    // Session tabs
     'tabs.new': 'Nowa sesja',
     'tabs.close': 'Zamknij sesje',
     'boot.line.pty': 'mostek PTY',
@@ -83,8 +83,8 @@ const I18N_DICT = {
     'prompts.title': 'Prompty',
     'prompts.send.title': 'Wklej i wyslij od razu',
     'skills.title': 'Skille',
-    // Nazwy kategorii skilli. Klucz to slug z src/skills.js (CATEGORIES.id),
-    // a nie tekst - dzieki temu naglowki przelaczaja jezyk razem z reszta HUD.
+    // Skill category labels. The key is the slug from src/skills.js (CATEGORIES.id),
+    // not the display text - that's what lets headers switch language along with the rest of the HUD.
     'skills.cat.frontend': 'Frontend',
     'skills.cat.backend': 'Backend',
     'skills.cat.data-ml': 'Dane / ML',
@@ -400,25 +400,25 @@ const I18N_DICT = {
 
 let currentLang = 'pl';
 
-/** Podmienia {placeholdery} wartosciami z params. */
+/** Substitutes {placeholders} with values from params. */
 function interpolate(str, params) {
   if (!params) return str;
   return str.replace(/\{(\w+)\}/g, (m, key) => (key in params ? String(params[key]) : m));
 }
 
-/** Tlumaczy klucz na aktualny jezyk (fallback: PL -> sam klucz). */
+/** Translates a key into the current language (fallback: PL -> the key itself). */
 function t(key, params) {
   const dict = I18N_DICT[currentLang] || I18N_DICT.pl;
   const str = (key in dict ? dict[key] : I18N_DICT.pl[key]) ?? key;
   return interpolate(str, params);
 }
 
-/** Ustawia aktualny jezyk (nieznany => 'pl'). */
+/** Sets the current language (unknown => 'pl'). */
 function setLang(lang) {
   currentLang = I18N_DICT[lang] ? lang : 'pl';
 }
 
-/** Uzupelnia statyczne etykiety w DOM (textContent / placeholder / title). */
+/** Fills in static labels in the DOM (textContent / placeholder / title). */
 function applyStatic(root = document) {
   root.querySelectorAll('[data-i18n]').forEach((el) => {
     el.textContent = t(el.dataset.i18n);

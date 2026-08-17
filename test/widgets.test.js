@@ -20,7 +20,7 @@ const noop = () => {};
 
 // ---- normalizeWidget --------------------------------------------------------
 
-test('normalizeWidget wypelnia pola opcjonalne', () => {
+test('normalizeWidget fills in optional fields', () => {
   const w = normalizeWidget({ id: 'ports', mount: noop });
   assert.equal(w.id, 'ports');
   assert.equal(w.titleKey, '');
@@ -28,7 +28,7 @@ test('normalizeWidget wypelnia pola opcjonalne', () => {
   assert.equal(w.mount, noop);
 });
 
-test('normalizeWidget przycina biale znaki w id, titleKey i template', () => {
+test('normalizeWidget trims whitespace in id, titleKey and template', () => {
   const w = normalizeWidget({
     id: '  ports  ',
     titleKey: ' ports.title ',
@@ -40,26 +40,26 @@ test('normalizeWidget przycina biale znaki w id, titleKey i template', () => {
   assert.equal(w.template, 'w-ports');
 });
 
-test('normalizeWidget odrzuca spec bez id', () => {
+test('normalizeWidget rejects a spec without id', () => {
   assert.throws(() => normalizeWidget({ mount: noop }), TypeError);
   assert.throws(() => normalizeWidget({ id: '   ', mount: noop }), TypeError);
 });
 
-test('normalizeWidget odrzuca spec bez mount()', () => {
-  // Bez mount() widget nie ma jak sie pojawic - to blad programisty, wiec
-  // wyjatek leci od razu przy imporcie, a nie dopiero przy montowaniu.
+test('normalizeWidget rejects a spec without mount()', () => {
+  // Without mount() a widget has no way to appear - that's a programmer
+  // error, so the exception fires right at import, not only at mount time.
   assert.throws(() => normalizeWidget({ id: 'ports' }), TypeError);
   assert.throws(() => normalizeWidget({ id: 'ports', mount: 'nope' }), TypeError);
 });
 
-test('normalizeWidget odrzuca to, co nie jest obiektem', () => {
+test('normalizeWidget rejects anything that is not an object', () => {
   assert.throws(() => normalizeWidget(null), TypeError);
   assert.throws(() => normalizeWidget('ports'), TypeError);
 });
 
 // ---- createRegistry ---------------------------------------------------------
 
-test('registry oddaje zdefiniowany widget', () => {
+test('registry returns a defined widget', () => {
   const reg = createRegistry();
   reg.define({ id: 'ports', titleKey: 'ports.title', template: 'w-ports', mount: noop });
 
@@ -68,22 +68,22 @@ test('registry oddaje zdefiniowany widget', () => {
   assert.equal(reg.get('ports').titleKey, 'ports.title');
 });
 
-test('registry zwraca null dla nieznanego id', () => {
+test('registry returns null for an unknown id', () => {
   const reg = createRegistry();
-  assert.equal(reg.get('nie-ma-takiego'), null);
-  assert.equal(reg.has('nie-ma-takiego'), false);
+  assert.equal(reg.get('no-such-id'), null);
+  assert.equal(reg.has('no-such-id'), false);
 });
 
-test('registry odrzuca powtorzone id', () => {
-  // Duplikat oznacza dwa moduly walczace o to samo gniazdo - cicha wygrana
-  // ostatniego bylaby bardzo trudna do zauwazenia.
+test('registry rejects a repeated id', () => {
+  // A duplicate means two modules fighting over the same slot - a silent win
+  // for the latter would be very hard to notice.
   const reg = createRegistry();
   reg.define({ id: 'ports', mount: noop });
   assert.throws(() => reg.define({ id: 'ports', mount: noop }), /already defined/);
   assert.equal(reg.size, 1);
 });
 
-test('list() zachowuje kolejnosc definiowania', () => {
+test('list() preserves definition order', () => {
   const reg = createRegistry();
   reg.define({ id: 'ctx', mount: noop });
   reg.define({ id: 'usage', mount: noop });
@@ -94,9 +94,9 @@ test('list() zachowuje kolejnosc definiowania', () => {
   );
 });
 
-test('rejestry sa od siebie niezalezne', () => {
-  // Wlasnie po to createRegistry() jest fabryka: testy nie dziedzicza po sobie
-  // stanu i nie musza go resetowac.
+test('registries are independent of each other', () => {
+  // This is exactly why createRegistry() is a factory: tests don't inherit
+  // state from each other and don't have to reset it.
   const a = createRegistry();
   const b = createRegistry();
   a.define({ id: 'ports', mount: noop });

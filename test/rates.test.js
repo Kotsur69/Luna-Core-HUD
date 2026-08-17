@@ -1,4 +1,4 @@
-// Testy cennika i szacowania kosztu (B4). Czyste funkcje, bez I/O.
+// Tests for pricing and cost estimation (B4). Pure functions, no I/O.
 
 'use strict';
 
@@ -14,12 +14,12 @@ const RATES = [
   { id: 'claude-haiku-4-5', input: 1, output: 5 },
 ];
 
-// ---- pokrycie WYSYLANEGO configu -------------------------------------------
-// Powyzsze testy uzywaja atrapy RATES, wiec logika moze byc zielona, a mimo to
-// realny config/rates.json nie zna aktualnego modelu. Dokladnie to sie stalo:
-// Opus 5 nie mial wpisu ani w cenniku (brak kwoty w HUD), ani w MODEL_WINDOWS
-// (pasek spadal do 200k). To sa testy DANYCH, nie logiki - pilnuja, by tabele
-// nie zostawaly w tyle za rodzina modeli.
+// ---- coverage of the SHIPPED config -------------------------------------------
+// The tests above use a RATES stub, so the logic can be green while the real
+// config/rates.json is missing the current model. That is exactly what happened:
+// Opus 5 had no entry either in the price list (no amount shown in the HUD), or
+// in MODEL_WINDOWS (the bar fell back to 200k). These are DATA tests, not logic
+// tests - they guard against the tables falling behind the model family.
 
 const CURRENT_MODELS = [
   'claude-opus-5',
@@ -29,25 +29,25 @@ const CURRENT_MODELS = [
   'claude-fable-5',
 ];
 
-test('config/rates.json zna wszystkie biezace modele', () => {
+test('config/rates.json knows all current models', () => {
   const { rates } = loadRates();
   for (const id of CURRENT_MODELS) {
-    assert.ok(rateFor(id, rates), `brak ceny dla ${id} - HUD nie pokaze kosztu`);
+    assert.ok(rateFor(id, rates), `no price for ${id} - the HUD will not show a cost`);
   }
 });
 
-test('MODEL_WINDOWS zna wszystkie biezace modele', () => {
+test('MODEL_WINDOWS knows all current models', () => {
   for (const id of CURRENT_MODELS) {
     assert.ok(
       MODEL_WINDOWS.some((row) => id.startsWith(row.prefix)),
-      `brak okna dla ${id} - pasek kontekstu spadnie do domyslnych 200k`,
+      `no window for ${id} - the context bar will fall back to the default 200k`,
     );
   }
 });
 
 // ---- normalizeRate ----------------------------------------------------------
 
-test('normalizeRate przepuszcza poprawny wpis', () => {
+test('normalizeRate passes a valid entry through', () => {
   assert.deepEqual(normalizeRate({ id: 'x', input: 1, output: 2 }), {
     id: 'x',
     input: 1,
@@ -55,35 +55,35 @@ test('normalizeRate przepuszcza poprawny wpis', () => {
   });
 });
 
-test('normalizeRate odrzuca wpisy bez id lub z nieliczbowa cena', () => {
+test('normalizeRate rejects entries without id or with a non-numeric price', () => {
   assert.equal(normalizeRate({ input: 1, output: 2 }), null);
   assert.equal(normalizeRate({ id: 'x', input: '5', output: 2 }), null);
   assert.equal(normalizeRate({ id: 'x', input: 1 }), null);
   assert.equal(normalizeRate(null), null);
 });
 
-test('normalizeRate odrzuca ceny ujemne', () => {
+test('normalizeRate rejects negative prices', () => {
   assert.equal(normalizeRate({ id: 'x', input: -1, output: 2 }), null);
 });
 
 // ---- rateFor ----------------------------------------------------------------
 
-test('rateFor dopasowuje dokladnie', () => {
+test('rateFor matches exactly', () => {
   assert.equal(rateFor('claude-opus-4-8', RATES).input, 5);
   assert.equal(rateFor('claude-haiku-4-5', RATES).output, 5);
 });
 
-test('rateFor dopasowuje po prefiksie (id z sufiksem daty)', () => {
-  // Transkrypt potrafi zawierac "claude-sonnet-5-20260115".
+test('rateFor matches by prefix (id with a date suffix)', () => {
+  // A transcript can contain "claude-sonnet-5-20260115".
   assert.equal(rateFor('claude-sonnet-5-20260115', RATES).id, 'claude-sonnet-5');
 });
 
-test('rateFor jest niewrazliwy na wielkosc liter', () => {
+test('rateFor is case-insensitive', () => {
   assert.equal(rateFor('CLAUDE-OPUS-4-8', RATES).id, 'claude-opus-4-8');
 });
 
-test('rateFor zwraca null dla nieznanego modelu', () => {
-  // Kluczowe: brak szacunku jest lepszy niz zmyslona kwota.
+test('rateFor returns null for an unknown model', () => {
+  // Key: no estimate is better than a made-up amount.
   assert.equal(rateFor('qwen2.5-coder-32b', RATES), null);
   assert.equal(rateFor('', RATES), null);
   assert.equal(rateFor(null, RATES), null);
@@ -94,27 +94,27 @@ test('rateFor zwraca null dla nieznanego modelu', () => {
 
 const MULT = { cacheReadMultiplier: 0.1, cacheWriteMultiplier: 1.25 };
 
-test('estimateCost liczy wejscie i wyjscie po cenie za milion', () => {
+test('estimateCost prices input and output at the per-million rate', () => {
   const c = estimateCost({ input: 1000000, output: 1000000 }, RATES[0], MULT);
   assert.equal(c.input, 5);
   assert.equal(c.output, 25);
   assert.equal(c.usd, 30);
 });
 
-test('estimateCost wycenia cache mnoznikiem od stawki WEJSCIOWEJ', () => {
-  // 1M odczytu z cache przy stawce 5 USD i mnozniku 0.1 => 0.50 USD.
+test('estimateCost prices cache with a multiplier off the INPUT rate', () => {
+  // 1M of cache reads at a $5 rate and a 0.1 multiplier => $0.50.
   const c = estimateCost({ cacheRead: 1000000 }, RATES[0], MULT);
   assert.equal(c.cacheRead, 0.5);
   assert.equal(c.usd, 0.5);
 });
 
-test('estimateCost wycenia zapis cache drozej niz zwykle wejscie', () => {
-  // 1M zapisu przy stawce 5 USD i mnozniku 1.25 => 6.25 USD.
+test('estimateCost prices a cache write more expensively than a plain input', () => {
+  // 1M of cache writes at a $5 rate and a 1.25 multiplier => $6.25.
   const c = estimateCost({ cacheWrite: 1000000 }, RATES[0], MULT);
   assert.equal(c.cacheWrite, 6.25);
 });
 
-test('estimateCost sumuje wszystkie cztery skladniki', () => {
+test('estimateCost sums all four components', () => {
   const c = estimateCost(
     { input: 1000000, output: 1000000, cacheRead: 1000000, cacheWrite: 1000000 },
     RATES[0],
@@ -123,30 +123,30 @@ test('estimateCost sumuje wszystkie cztery skladniki', () => {
   assert.equal(c.usd, 5 + 25 + 0.5 + 6.25);
 });
 
-test('estimateCost traktuje brakujace liczniki jako zero', () => {
+test('estimateCost treats missing counters as zero', () => {
   assert.equal(estimateCost({}, RATES[0], MULT).usd, 0);
 });
 
-test('estimateCost zwraca null bez stawki (nieznany model)', () => {
+test('estimateCost returns null without a rate (unknown model)', () => {
   assert.equal(estimateCost({ input: 100 }, null, MULT), null);
   assert.equal(estimateCost(null, RATES[0], MULT), null);
 });
 
-test('estimateCost ma sensowne domyslne mnozniki cache', () => {
+test('estimateCost has sensible default cache multipliers', () => {
   const c = estimateCost({ cacheRead: 1000000 }, RATES[0]);
   assert.equal(c.cacheRead, 0.5);
 });
 
 // ---- formatUsd --------------------------------------------------------------
 
-test('formatUsd dobiera precyzje do rzedu wielkosci', () => {
+test('formatUsd picks precision based on order of magnitude', () => {
   assert.equal(formatUsd(0), '$0.00');
   assert.equal(formatUsd(0.0004), '$0.0004');
   assert.equal(formatUsd(0.25), '$0.250');
   assert.equal(formatUsd(12.5), '$12.50');
 });
 
-test('formatUsd zwraca pusty string dla niepoprawnej kwoty', () => {
+test('formatUsd returns an empty string for an invalid amount', () => {
   assert.equal(formatUsd(null), '');
   assert.equal(formatUsd(NaN), '');
   assert.equal(formatUsd(-1), '');

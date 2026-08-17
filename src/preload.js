@@ -1,191 +1,193 @@
 // ============================================================================
-// LunaCore - preload (bezpieczny most IPC)
+// LunaCore - preload (secure IPC bridge)
 // ----------------------------------------------------------------------------
-// Dziala w izolowanym kontekscie miedzy procesem glownym a rendererem.
-// Udostepnia stronie TYLKO waskie, jawne API `window.lunacore` - renderer
-// nie dostaje bezposredniego dostepu do Node.js ani ipcRenderer.
+// Runs in an isolated context between the main process and the renderer.
+// Exposes to the page ONLY a narrow, explicit `window.lunacore` API - the
+// renderer gets no direct access to Node.js or ipcRenderer.
 // ============================================================================
 
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('lunacore', {
-  // --- PASSIVE OBSERVER: strumien stdout PTY -> renderer ---
-  // UWAGA: od wersji z zakladkami kazde zdarzenie niesie sessionId. Renderer
-  // trzyma osobny bufor xterm na zakladke, wiec musi wiedziec, czyje to dane -
-  // inaczej wyjscie sesji w tle wsypaloby sie do terminala, na ktory patrzysz.
-  /** Porcja danych z terminala: ({ sessionId, data }). */
+  // --- PASSIVE OBSERVER: PTY stdout stream -> renderer ---
+  // NOTE: since the tabs version, every event carries a sessionId. The renderer
+  // keeps a separate xterm buffer per tab, so it needs to know whose data this
+  // is - otherwise a background session's output would spill into the terminal
+  // you're looking at.
+  /** A chunk of terminal data: ({ sessionId, data }). */
   onData: (callback) => {
     ipcRenderer.on('pty:data', (_event, payload) => callback(payload));
   },
-  /** Zakonczenie procesu PTY danej zakladki: ({ sessionId, code }). */
+  /** A given tab's PTY process exiting: ({ sessionId, code }). */
   onExit: (callback) => {
     ipcRenderer.on('pty:exit', (_event, payload) => callback(payload));
   },
 
-  // --- PASSIVE OBSERVER: metryki Fazy 3 (tylko odczyt) ---
-  /** Metryki context window: ({ sessionId, metrics: {tokens,limit,percent} }). */
+  // --- PASSIVE OBSERVER: Phase 3 metrics (read-only) ---
+  /** Context-window metrics: ({ sessionId, metrics: {tokens,limit,percent} }). */
   onContext: (callback) => {
     ipcRenderer.on('metrics:context', (_event, payload) => callback(payload));
   },
-  /** Kafelki Skill Trackera do zapalenia: ({ sessionId, tiles: ["Shell",...] }). */
+  /** Skill Tracker tiles to light up: ({ sessionId, tiles: ["Shell",...] }). */
   onTools: (callback) => {
     ipcRenderer.on('metrics:tools', (_event, payload) => callback(payload));
   },
 
-  // --- Zakladki (multi-sesja) ---
-  /** Pobiera { sessions: [{id,profileId,profileLabel,folder,alive}], activeSessionId }. */
+  // --- Tabs (multi-session) ---
+  /** Fetches { sessions: [{id,profileId,profileLabel,folder,alive}], activeSessionId }. */
   getSessions: () => ipcRenderer.invoke('sessions:list'),
-  /** Zmiana listy zakladek lub aktywnej: ({ sessions, activeSessionId }). */
+  /** Change to the tab list or the active one: ({ sessions, activeSessionId }). */
   onSessions: (callback) => {
     ipcRenderer.on('sessions:update', (_event, payload) => callback(payload));
   },
-  /** Nowa zakladka (domyslnie biezacy profil + projekt). */
+  /** New tab (defaults to the current profile + project). */
   createSession: (opts = {}) => ipcRenderer.send('sessions:create', opts),
-  /** Zamyka zakladke; ostatnia jest zastepowana swieza, nie usuwana w pustke. */
+  /** Closes a tab; the last one is replaced with a fresh one, never left empty. */
   closeSession: (sessionId) => ipcRenderer.send('sessions:close', sessionId),
-  /** Pokazuje wybrana zakladke. Procesy pozostalych zyja dalej w tle. */
+  /** Shows the chosen tab. The other tabs' processes keep running in the background. */
   activateSession: (sessionId) => ipcRenderer.send('sessions:activate', sessionId),
 
-  // --- FAZA 4: profile uruchomieniowe ---
-  /** Pobiera { profiles, activeProfile } do wypelnienia przelacznika. */
+  // --- PHASE 4: launch profiles ---
+  /** Fetches { profiles, activeProfile } to fill the switcher. */
   getProfiles: () => ipcRenderer.invoke('profiles:list'),
-  /** Przelacza profil -> restart TEJ zakladki; pozostale zostaja nietkniete. */
+  /** Switches profile -> restarts THIS tab; the others are left untouched. */
   switchProfile: (id, sessionId) =>
     ipcRenderer.send('pty:restart', { profileId: id, sessionId }),
-  /** Restart sesji: ({ sessionId, id, label, folder }). */
+  /** Session restart: ({ sessionId, id, label, folder }). */
   onRestarted: (callback) => {
     ipcRenderer.on('pty:restarted', (_event, profile) => callback(profile));
   },
 
-  // --- Przelacznik projektu (katalog roboczy) ---
-  /** Pobiera { projects, activeProject } do wypelnienia przelacznika. */
+  // --- Project switcher (working directory) ---
+  /** Fetches { projects, activeProject } to fill the switcher. */
   getProjects: () => ipcRenderer.invoke('projects:list'),
-  /** Przelacza katalog roboczy -> restart TEJ zakladki w nowym folderze. */
+  /** Switches the working directory -> restarts THIS tab in the new folder. */
   switchProject: (id, sessionId) =>
     ipcRenderer.send('pty:switch-project', { projectId: id, sessionId }),
-  /** Natywny wybor folderu; zwraca sciezke albo null (anulowano). */
+  /** Native folder picker; returns the path or null (cancelled). */
   pickProjectFolder: () => ipcRenderer.invoke('projects:pick-folder'),
-  /** Dopisuje nowy projekt do projects.local.json; zwraca { projects, activeProject } albo null. */
+  /** Appends a new project to projects.local.json; returns { projects, activeProject } or null. */
   addProject: (entry) => ipcRenderer.invoke('projects:add', entry),
 
-  // --- Active-Files Heatmap: czy plik nadal istnieje na dysku ---
-  /** Sprawdza fs.existsSync dla listy sciezek; zwraca { [path]: boolean }. */
+  // --- Active-Files Heatmap: does the file still exist on disk ---
+  /** Checks fs.existsSync for a list of paths; returns { [path]: boolean }. */
   checkFilesExist: (paths) => ipcRenderer.invoke('files:check-exist', paths),
 
-  // --- 7B: tracker portow localhost ---
-  /** Lista nasluchujacych portow: [{ port, procId, name }]. */
+  // --- 7B: localhost port tracker ---
+  /** List of listening ports: [{ port, procId, name }]. */
   onPorts: (callback) => {
     ipcRenderer.on('ports:update', (_event, ports) => callback(ports));
   },
-  /** Otwiera http://localhost:PORT w przegladarce. */
+  /** Opens http://localhost:PORT in the browser. */
   openPort: (port) => ipcRenderer.send('ports:open', port),
-  /** Ubija proces po PID; zwraca Promise<boolean>. */
+  /** Kills a process by PID; returns Promise<boolean>. */
   killPort: (pid) => ipcRenderer.invoke('ports:kill', pid),
 
-  // --- 7C: sciagawki akcji ---
-  /** Pobiera { groups: [{ title, note, commands: [{label, command}] }] }. */
+  // --- 7C: action cheat-sheets ---
+  /** Fetches { groups: [{ title, note, commands: [{label, command}] }] }. */
   getCheatsheets: () => ipcRenderer.invoke('cheatsheets:list'),
 
-  // --- 7A: sciagawka skilli wg kategorii ---
-  /** Pobiera { categories: [{ name, skills: [{name, description}] }], total }. */
+  // --- 7A: skill cheat-sheet by category ---
+  /** Fetches { categories: [{ name, skills: [{name, description}] }], total }. */
   getSkills: () => ipcRenderer.invoke('skills:list'),
-  /** A5: wymusza swiezy skan katalogow skilli, pomijajac cache. */
+  /** A5: forces a fresh scan of the skill directories, bypassing the cache. */
   rescanSkills: () => ipcRenderer.invoke('skills:rescan'),
 
-  // --- Biblioteka promptow ---
-  /** Pobiera { groups: [{ title, note, prompts: [{label, text, note}] }] }. */
+  // --- Prompt library ---
+  /** Fetches { groups: [{ title, note, prompts: [{label, text, note}] }] }. */
   getPrompts: () => ipcRenderer.invoke('prompts:list'),
 
-  // --- Brudnopis (lokalny notatnik) ---
-  /** Wczytuje tresc brudnopisu; Promise<string> ('' gdy pusty). */
+  // --- Scratchpad (local notepad) ---
+  /** Reads the scratchpad content; Promise<string> ('' when empty). */
   getScratchpad: () => ipcRenderer.invoke('scratchpad:read'),
-  /** Zapisuje tresc brudnopisu; Promise<boolean>. */
+  /** Writes the scratchpad content; Promise<boolean>. */
   saveScratchpad: (text) => ipcRenderer.invoke('scratchpad:write', text),
 
-  // --- Licznik zuzycia limitow (5h + tydzien) ---
-  /** Rejestruje callback ze stanem zuzycia: {fiveHour, sevenDay, ...} lub {error}. */
+  // --- Usage meter (5h + week) ---
+  /** Registers a callback with usage state: {fiveHour, sevenDay, ...} or {error}. */
   onUsage: (callback) => {
     ipcRenderer.on('usage:update', (_event, usage) => callback(usage));
   },
-  /** Wymusza odswiezenie zuzycia; Promise ze swiezym stanem. */
+  /** Forces a usage refresh; Promise with the fresh state. */
   refreshUsage: () => ipcRenderer.invoke('usage:refresh'),
 
-  // --- E1: telemetria maszyny (RAM / CPU / uptime) ---
+  // --- E1: machine telemetry (RAM / CPU / uptime) ---
   /**
-   * Rejestruje callback z probka:
+   * Registers a callback with a sample:
    * { at, mem:{total,free,used,percent}|null, cpu:{percent|null,cores,speedMhz|null},
    *   uptime:number|null, load:[1,5,15]|null }.
-   * Jednokierunkowy strumien - renderer nigdy nie odpytuje maszyny sam.
+   * A one-way stream - the renderer never polls the machine itself.
    */
   onTelemetry: (callback) => {
     ipcRenderer.on('telemetry:update', (_event, payload) => callback(payload));
   },
 
-  // --- D3: czy Claude Code jest w ogole zainstalowane ---
-  /** Pobiera { found: boolean, path: string|null }. */
+  // --- D3: whether Claude Code is installed at all ---
+  /** Fetches { found: boolean, path: string|null }. */
   getClaudeStatus: () => ipcRenderer.invoke('claude:status'),
   /**
-   * Otwiera oficjalna instrukcje instalacji w przegladarce.
-   * Bez argumentu celowo - adres jest zaszyty w main.js, wiec renderer nie moze
-   * wskazac dowolnego URL-a do otwarcia w systemowej przegladarce.
+   * Opens the official installation instructions in the browser.
+   * Deliberately takes no argument - the address is hardcoded in main.js, so
+   * the renderer cannot point at an arbitrary URL to open in the system browser.
    */
   openClaudeDocs: () => ipcRenderer.send('claude:docs'),
 
-  // --- D5: aktualizacje (powiadom, uzytkownik klika) ---
+  // --- D5: updates (notify, user clicks) ---
   /**
-   * Rejestruje callback ze stanem aktualizacji:
+   * Registers a callback with the update state:
    * { state, info: {version, releaseDate, url}|null, percent, error, reason }
-   * gdzie state = idle|checking|none|available|downloading|ready|error|unsupported.
+   * where state = idle|checking|none|available|downloading|ready|error|unsupported.
    */
   onUpdateState: (callback) => {
     ipcRenderer.on('update:state', (_event, state) => callback(state));
   },
-  /** Odgrywa ostatni znany stan (+ biezaca wersje aplikacji); Promise. */
+  /** Replays the last known state (+ the app's current version); Promise. */
   getUpdateStatus: () => ipcRenderer.invoke('update:status'),
-  /** Reczne sprawdzenie dostepnosci nowej wersji. Nic nie pobiera. */
+  /** Manual check for a newer version. Downloads nothing. */
   checkUpdate: () => ipcRenderer.send('update:check'),
-  /** Zgoda uzytkownika na POBRANIE aktualizacji. */
+  /** User's consent to DOWNLOAD the update. */
   downloadUpdate: () => ipcRenderer.send('update:download'),
-  /** Zgoda na restart i instalacje pobranej aktualizacji. */
+  /** Consent to restart and install the downloaded update. */
   installUpdate: () => ipcRenderer.send('update:install'),
   /**
-   * Otwiera strone wydania w przegladarce.
-   * Bez argumentu celowo - adres sklada main.js (patrz openClaudeDocs).
+   * Opens the release page in the browser.
+   * Deliberately takes no argument - the address is built in main.js (see openClaudeDocs).
    */
   openReleases: () => ipcRenderer.send('update:open-releases'),
 
-  // --- Motywy + preferencje UI (motyw/jezyk) ---
-  /** Pobiera { themes: [{id,label,vars,terminal}] }. */
+  // --- Themes + UI preferences (theme/language) ---
+  /** Fetches { themes: [{id,label,vars,terminal}] }. */
   getThemes: () => ipcRenderer.invoke('themes:list'),
-  // --- C1: presety ukladu HUD ---
-  /** Pobiera { layouts: [{id,label,columns,rows,areas,regionOrder,chrome,slots}], activeLayout }. */
+  // --- C1: HUD layout presets ---
+  /** Fetches { layouts: [{id,label,columns,rows,areas,regionOrder,chrome,slots}], activeLayout }. */
   getLayouts: () => ipcRenderer.invoke('layouts:list'),
-  /** Pobiera zapamietane preferencje { theme, lang }. */
+  /** Fetches the remembered preferences { theme, lang }. */
   getUiPrefs: () => ipcRenderer.invoke('ui:get'),
-  /** Zapisuje czesciowe preferencje { theme?, lang? }; zwraca nowy stan. */
+  /** Writes partial preferences { theme?, lang? }; returns the new state. */
   setUiPrefs: (partial) => ipcRenderer.invoke('ui:set', partial),
   /**
-   * Otwiera natywny picker obrazu tla terminala; czyta plik W MAIN (renderer
-   * nie ma dostepu do fs) i zwraca { dataUrl } (CSP: tylko data:/'self' w
-   * img-src), { error: 'tooLarge' | 'unsupported' }, lub null przy anulowaniu.
+   * Opens the native terminal background image picker; reads the file IN MAIN
+   * (the renderer has no fs access) and returns { dataUrl } (CSP: only
+   * data:/'self' in img-src), { error: 'tooLarge' | 'unsupported' }, or null
+   * on cancel.
    */
   pickTermBgImage: () => ipcRenderer.invoke('termcustom:pickBgImage'),
 
   // --- ACTION INJECTOR: renderer -> stdin PTY ---
   /**
-   * Wkleja wielolinijkowy tekst (bracketed paste) do sesji.
-   * @param {string} text tresc prompta
-   * @param {boolean} [submit=false] czy od razu wyslac (dopisac Enter)
+   * Pastes multi-line text (bracketed paste) into the session.
+   * @param {string} text prompt content
+   * @param {boolean} [submit=false] whether to send it right away (append Enter)
    */
-  // Wszystkie wstrzykiwacze przyjmuja opcjonalne sessionId. Pominiecie go trafia
-  // do zakladki aktywnej - czyli dokladnie tam, na co uzytkownik patrzy.
+  // All injectors accept an optional sessionId. Omitting it targets the active
+  // tab - exactly the one the user is looking at.
   pastePrompt: (text, submit = false, sessionId) =>
     ipcRenderer.send('pty:paste', { text, submit, sessionId }),
-  /** Surowe wejscie z klawiatury (xterm.js onData) do PTY danej zakladki. */
+  /** Raw keyboard input (xterm.js onData) into a given tab's PTY. */
   write: (data, sessionId) => ipcRenderer.send('pty:write', { data, sessionId }),
-  /** Gotowa komenda z przycisku GUI (dopisze Enter). Np. runCommand('/compact'). */
+  /** A ready-made command from a GUI button (appends Enter). E.g. runCommand('/compact'). */
   runCommand: (text, sessionId) => ipcRenderer.send('pty:command', { text, sessionId }),
-  /** Dopasowanie rozmiaru PTY do liczby kolumn/wierszy terminala zakladki. */
+  /** Matches the PTY size to a tab's terminal column/row count. */
   resize: (cols, rows, sessionId) =>
     ipcRenderer.send('pty:resize', { cols, rows, sessionId }),
 

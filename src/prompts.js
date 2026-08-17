@@ -1,16 +1,18 @@
 // ============================================================================
-// LunaCore - Biblioteka promptow (§5.5 shortlist, priorytet #1)
+// LunaCore - Prompt library (§5.5 shortlist, priority #1)
 // ----------------------------------------------------------------------------
-// To samo co sciagawki (7C), ale dla WIELOLINIJKOWYCH promptow do wielokrotnego
-// uzycia. Laduje config/prompts.json (+ opcjonalny, gitignorowany override
-// config/prompts.local.json na prywatne prompty).
+// The same idea as cheat-sheets (7C), but for MULTI-LINE, reusable prompts.
+// Loads config/prompts.json (+ an optional, gitignored override
+// config/prompts.local.json for private prompts).
 //
-// Format promptu:
-//   { "label": "Nazwa na przycisku", "text": "tresc\nprompta", "note": "opis" }
-// Pole `text` moze byc tez tablica linii - laczymy ja "\n" (czytelniejszy JSON).
+// Prompt format:
+//   { "label": "Button name", "text": "prompt\ncontent", "note": "description" }
+// The `text` field may also be an array of lines - we join it with "\n" (more
+// readable in JSON).
 //
-// Walidacja na granicy: odrzucamy grupy/prompty bez wymaganych pol. Pusty/bledny
-// config => pusta lista (sekcja po prostu nic nie pokaze).
+// Validation at the boundary: groups/prompts missing required fields are
+// rejected. An empty or broken config => an empty list (the section simply
+// shows nothing).
 // ============================================================================
 
 'use strict';
@@ -19,13 +21,13 @@ const fs = require('fs');
 const paths = require('./paths');
 const { hasText, normalizeText, mergeKey, isLocalized, LANGS } = require('./localized');
 
-// Wysylane prompty czytamy z katalogu bundled; prywatne (gitignore) leza w
-// katalogu ZAPISYWALNYM i liczymy je leniwie, bo modul jest wymagany przed
-// app.whenReady(). Szczegoly w paths.js.
+// The shipped prompts are read from the bundled directory; the private ones
+// (gitignored) live in the WRITABLE directory and are resolved lazily, since
+// this module is required before app.whenReady(). Details in paths.js.
 const BASE_FILE = paths.bundled('prompts.json');
 const localFile = () => paths.local('prompts.local.json');
 
-/** Bezpieczny odczyt + parse JSON. Zwraca null przy braku/bledzie. */
+/** Safe read + JSON parse. Returns null when the file is missing or invalid. */
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -35,14 +37,14 @@ function readJson(file) {
 }
 
 /**
- * Waliduje pojedynczy prompt. Zwraca { label, text, note } lub null.
- * `text` przyjmuje string albo tablice linii (wygodniejsze do pisania w JSON).
+ * Validates a single prompt. Returns { label, text, note } or null.
+ * `text` accepts a string or an array of lines (more convenient to write in JSON).
  */
 function normalizePrompt(p) {
   if (!p || typeof p !== 'object') return null;
 
-  // normalizeText() sklada tablice linii w string - osobno dla kazdego jezyka,
-  // gdy tresc jest zlokalizowana. Jezyk wybiera dopiero renderer.
+  // normalizeText() joins an array of lines into a string - separately for each
+  // language when the content is localized. The renderer picks the language later.
   const text = normalizeText(p.text);
   if (!text) return null;
 
@@ -52,9 +54,9 @@ function normalizePrompt(p) {
 }
 
 /**
- * Etykieta zastepcza, gdy prompt jej nie ma: poczatek tresci. Dla tresci
- * zlokalizowanej robimy skrot PER JEZYK - inaczej przycisk w wersji EN
- * pokazywalby polski poczatek prompta.
+ * Fallback label when a prompt has none: the start of its content. For
+ * localized content we truncate PER LANGUAGE - otherwise the EN button would
+ * show the Polish start of the prompt.
  */
 function fallbackLabel(text) {
   if (!isLocalized(text)) return text.slice(0, 40);
@@ -65,7 +67,7 @@ function fallbackLabel(text) {
   return out;
 }
 
-/** Waliduje grupe. Zwraca { title, note, prompts } lub null (gdy brak promptow). */
+/** Validates a group. Returns { title, note, prompts } or null (when there are no prompts). */
 function normalizeGroup(g) {
   if (!g || typeof g !== 'object') return null;
   if (!hasText(g.title)) return null;
@@ -78,8 +80,8 @@ function normalizeGroup(g) {
 }
 
 /**
- * Laduje grupy promptow: base scalone z local (local po title nadpisuje base,
- * dodatkowe grupy dopisane na koncu).
+ * Loads prompt groups: base merged with local (local overrides base by title,
+ * extra groups are appended at the end).
  * @returns {{groups: Array<{title:string,note:string,prompts:Array}>}}
  */
 function loadPrompts() {
@@ -88,8 +90,8 @@ function loadPrompts() {
     if (!src || !Array.isArray(src.groups)) return;
     for (const raw of src.groups) {
       const g = normalizeGroup(raw);
-      // Patrz komentarz w src/cheatsheets.js: zlokalizowany tytul to obiekt,
-      // wiec klucz scalania musi byc stringiem.
+      // See the comment in src/cheatsheets.js: a localized title is an object,
+      // so the merge key must be a string.
       if (g) byTitle.set(mergeKey(g.title), g);
     }
   };

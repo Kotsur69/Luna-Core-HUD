@@ -1,5 +1,5 @@
-// Testy czystych funkcji Passive Observera (bez I/O, bez PTY).
-// TranscriptWatcher celowo NIE jest tu testowany - dotyka systemu plikow.
+// Tests for the pure functions of the Passive Observer (no I/O, no PTY).
+// TranscriptWatcher is deliberately NOT tested here - it touches the filesystem.
 
 'use strict';
 
@@ -24,7 +24,7 @@ const {
 
 // ---- usageToMetrics ---------------------------------------------------------
 
-test('usageToMetrics sumuje input + oba rodzaje cache', () => {
+test('usageToMetrics sums input + both kinds of cache', () => {
   const m = usageToMetrics({
     input_tokens: 100,
     cache_read_input_tokens: 900,
@@ -35,24 +35,24 @@ test('usageToMetrics sumuje input + oba rodzaje cache', () => {
   assert.equal(m.percent, 2000 / CONTEXT_LIMIT);
 });
 
-test('usageToMetrics traktuje brakujace pola jako zero', () => {
+test('usageToMetrics treats missing fields as zero', () => {
   assert.equal(usageToMetrics({}).tokens, 0);
   assert.equal(usageToMetrics({}).percent, 0);
   assert.equal(usageToMetrics({ input_tokens: 5 }).tokens, 5);
 });
 
-test('usageToMetrics awansuje okno zamiast przypinac pasek do 100% (B2)', () => {
-  // Dawniej limit byl stala 200k, wiec 600k tokenow dawalo martwe 100%.
-  // Teraz sama obserwacja dowodzi, ze okno jest wieksze.
+test('usageToMetrics promotes the window instead of pinning the bar at 100% (B2)', () => {
+  // The limit used to be a constant 200k, so 600k tokens produced a dead 100%.
+  // Now the observation itself proves the window is bigger.
   const m = usageToMetrics({ input_tokens: 600000 });
   assert.equal(m.limit, 1000000);
   assert.equal(m.percent, 0.6);
 });
 
-test('usageToMetrics nadal przycina percent do 1 powyzej najwiekszego znanego okna', () => {
+test('usageToMetrics still clamps percent to 1 above the largest known window', () => {
   const m = usageToMetrics({ input_tokens: 5000000 });
   assert.equal(m.percent, 1);
-  // tokens zostaja surowe - przycinamy tylko to, co rysuje pasek.
+  // tokens stays raw - we only clamp the value that draws the bar.
   assert.equal(m.tokens, 5000000);
 });
 
@@ -65,24 +65,24 @@ test('usageToMetrics carries the model and its label into the metrics (B3)', () 
   assert.equal(m.limit, 1000000);
 });
 
-test('usageToMetrics bez modelu zachowuje domyslne okno 200k', () => {
+test('usageToMetrics without a model keeps the default 200k window', () => {
   const m = usageToMetrics({ input_tokens: 1000 });
   assert.equal(m.limit, CONTEXT_LIMIT);
   assert.equal(m.modelLabel, '');
 });
 
 // ---- encodeProjectDir -------------------------------------------------------
-// To jest sedno wielosesyjnosci: zla nazwa katalogu = metryki cudzej sesji.
+// This is the crux of multi-session support: a wrong directory name = someone else's session metrics.
 
-test('encodeProjectDir zamienia kazdy znak niealfanumeryczny na mysinik', () => {
+test('encodeProjectDir replaces every non-alphanumeric character with a hyphen', () => {
   assert.equal(encodeProjectDir('C:\\Users\\mmazur\\.local\\bin'), 'C--Users-mmazur--local-bin');
 });
 
-test('encodeProjectDir radzi sobie ze sciezka POSIX', () => {
+test('encodeProjectDir handles a POSIX path', () => {
   assert.equal(encodeProjectDir('/home/mati/repos/Luna-Core-HUD'), '-home-mati-repos-Luna-Core-HUD');
 });
 
-test('encodeProjectDir nie wywraca sie na pustym/niepoprawnym wejsciu', () => {
+test('encodeProjectDir does not choke on empty/invalid input', () => {
   assert.equal(encodeProjectDir(''), '');
   assert.equal(encodeProjectDir(null), '');
   assert.equal(encodeProjectDir(undefined), '');
@@ -90,17 +90,17 @@ test('encodeProjectDir nie wywraca sie na pustym/niepoprawnym wejsciu', () => {
 
 // ---- detectTools ------------------------------------------------------------
 
-test('detectTools wykrywa narzedzie w surowym stdout', () => {
+test('detectTools detects a tool in raw stdout', () => {
   assert.deepEqual(detectTools('Bash(ls -la)'), ['Shell']);
 });
 
-test('detectTools zdejmuje sekwencje ANSI przed dopasowaniem', () => {
-  // Tak wyglada realny strumien z TUI - nazwa narzedzia jest pokolorowana.
-  assert.deepEqual(detectTools('\x1b[32mGrep(wzor)'), ['Grep']);
-  assert.deepEqual(detectTools('\x1b[1m\x1b[38;5;208mRead(plik.js)'), ['Read']);
+test('detectTools strips ANSI sequences before matching', () => {
+  // This is what a real TUI stream looks like - the tool name is colored.
+  assert.deepEqual(detectTools('\x1b[32mGrep(pattern)'), ['Grep']);
+  assert.deepEqual(detectTools('\x1b[1m\x1b[38;5;208mRead(file.js)'), ['Read']);
 });
 
-test('detectTools mapuje aliasy na wspolny kafelek', () => {
+test('detectTools maps aliases onto a shared tile', () => {
   assert.deepEqual(detectTools('MultiEdit(a)'), ['Edit']);
   assert.deepEqual(detectTools('NotebookEdit(a)'), ['Edit']);
   assert.deepEqual(detectTools('WebFetch(url)'), ['Web']);
@@ -108,28 +108,28 @@ test('detectTools mapuje aliasy na wspolny kafelek', () => {
   assert.deepEqual(detectTools('BashOutput(id)'), ['Shell']);
 });
 
-test('detectTools deduplikuje powtorzenia', () => {
+test('detectTools deduplicates repeats', () => {
   assert.deepEqual(detectTools('Read(a) Read(b) Read(c)'), ['Read']);
 });
 
-test('detectTools zwraca wiele kafelkow z jednej porcji danych', () => {
+test('detectTools returns multiple tiles from one chunk of data', () => {
   const tiles = detectTools('Read(a) then Bash(ls) then Write(b)');
   assert.deepEqual(tiles.sort(), ['Read', 'Shell', 'Write']);
 });
 
-test('detectTools wymaga nawiasu - sama nazwa w zdaniu nie zapala kafelka', () => {
+test('detectTools requires a parenthesis - a bare name in a sentence does not light a tile', () => {
   assert.deepEqual(detectTools('I will read the file and write a summary'), []);
   assert.deepEqual(detectTools('Bash'), []);
 });
 
-test('detectTools nie wywraca sie na pustym wejsciu', () => {
+test('detectTools does not choke on empty input', () => {
   assert.deepEqual(detectTools(''), []);
   assert.deepEqual(detectTools(null), []);
 });
 
-test('detectTools jest odporny na powtorne wywolania (regex /g ma stan)', () => {
-  // TOOL_RE zyje na poziomie modulu - bez resetu lastIndex drugie wywolanie
-  // gubiloby trafienia. Ten test pilnuje wlasnie tego.
+test('detectTools is resilient to repeated calls (the /g regex has state)', () => {
+  // TOOL_RE lives at module scope - without resetting lastIndex, a second call
+  // would drop matches. This test guards exactly that.
   assert.deepEqual(detectTools('Bash(ls)'), ['Shell']);
   assert.deepEqual(detectTools('Bash(ls)'), ['Shell']);
   assert.deepEqual(detectTools('Bash(ls)'), ['Shell']);
@@ -144,21 +144,21 @@ const APPROVAL_PATTERNS = [
   'Do you trust the files in this folder',
 ];
 
-test('detectApprovalPrompt wykrywa dopasowanie literalnego podciagu', () => {
+test('detectApprovalPrompt detects a literal substring match', () => {
   assert.equal(
     detectApprovalPrompt('│ Do you want to proceed?          │', APPROVAL_PATTERNS),
     true,
   );
 });
 
-test('detectApprovalPrompt zdejmuje sekwencje ANSI przed dopasowaniem', () => {
+test('detectApprovalPrompt strips ANSI sequences before matching', () => {
   assert.equal(
     detectApprovalPrompt('\x1b[1mDo you want to make this edit\x1b[0m to file.js?', APPROVAL_PATTERNS),
     true,
   );
 });
 
-test('detectApprovalPrompt sprawdza kazdy wzorzec z listy', () => {
+test('detectApprovalPrompt checks every pattern in the list', () => {
   assert.equal(detectApprovalPrompt('Do you want to create foo.js?', APPROVAL_PATTERNS), true);
   assert.equal(
     detectApprovalPrompt('Do you trust the files in this folder?', APPROVAL_PATTERNS),
@@ -166,11 +166,11 @@ test('detectApprovalPrompt sprawdza kazdy wzorzec z listy', () => {
   );
 });
 
-test('detectApprovalPrompt zwraca false, gdy nic nie pasuje', () => {
+test('detectApprovalPrompt returns false when nothing matches', () => {
   assert.equal(detectApprovalPrompt('Reading file.js...', APPROVAL_PATTERNS), false);
 });
 
-test('detectApprovalPrompt nie wywraca sie na pustym/brakujacym wejsciu', () => {
+test('detectApprovalPrompt does not choke on empty/missing input', () => {
   assert.equal(detectApprovalPrompt('', APPROVAL_PATTERNS), false);
   assert.equal(detectApprovalPrompt(null, APPROVAL_PATTERNS), false);
   assert.equal(detectApprovalPrompt('Do you want to proceed?', null), false);
@@ -178,11 +178,11 @@ test('detectApprovalPrompt nie wywraca sie na pustym/brakujacym wejsciu', () => 
   assert.equal(detectApprovalPrompt('Do you want to proceed?', undefined), false);
 });
 
-test('detectApprovalPrompt ignoruje wzorce spoza tablicy stringow', () => {
+test('detectApprovalPrompt ignores patterns that are not strings', () => {
   assert.equal(detectApprovalPrompt('Do you want to proceed?', ['Do you want to proceed', 42, null]), true);
 });
 
-test('detectApprovalPrompt jest case-sensitive (celowo - literalny podciag)', () => {
+test('detectApprovalPrompt is case-sensitive (deliberately - a literal substring)', () => {
   assert.equal(detectApprovalPrompt('do you want to proceed?', APPROVAL_PATTERNS), false);
 });
 
