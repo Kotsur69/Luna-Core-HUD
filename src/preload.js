@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   onTools: (callback) => {
     ipcRenderer.on('metrics:tools', (_event, payload) => callback(payload));
   },
+  /** §6.1: a completed turn: ({ sessionId, turn: {startedAt,endedAt,text} }). */
+  onTurnEnd: (callback) => {
+    ipcRenderer.on('metrics:turnend', (_event, payload) => callback(payload));
+  },
 
   // --- Tabs (multi-session) ---
   /** Fetches { sessions: [{id,profileId,profileLabel,folder,alive}], activeSessionId }. */
@@ -121,6 +125,22 @@ contextBridge.exposeInMainWorld('lunacore', {
   onTelemetry: (callback) => {
     ipcRenderer.on('telemetry:update', (_event, payload) => callback(payload));
   },
+
+  // --- Media Deck: now-playing (GSMTC) + system volume ---
+  /**
+   * Registers a callback with a now-playing sample:
+   * {title, artist, appId, isPlaying} | null (nothing currently playing).
+   */
+  onMedia: (callback) => {
+    ipcRenderer.on('media:update', (_event, state) => callback(state));
+  },
+  /**
+   * Sends one play/pause/skip/volume command.
+   * {type:'transport', action:'play'|'pause'|'toggle'|'next'|'prev'} or
+   * {type:'volume', action:'get'|'set'|'mute', value?:number}.
+   * Promise resolves with the resulting state (or a boolean for transport).
+   */
+  mediaCommand: (payload) => ipcRenderer.invoke('media:command', payload),
 
   // --- D3: whether Claude Code is installed at all ---
   /** Fetches { found: boolean, path: string|null }. */

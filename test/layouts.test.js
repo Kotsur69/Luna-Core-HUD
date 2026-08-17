@@ -212,14 +212,18 @@ test('config/layouts.json - classic reproduces today\'s layout', () => {
   assert.equal(l.columns, '260px 1fr 280px');
   assert.deepEqual(l.slots.main, ['terminal']);
   // E1 inserted `telemetry` between usage and skilltracker in ALL presets;
-  // the Active-Files Heatmap added `activefiles` right after skilltracker (plan §8).
+  // the Active-Files Heatmap added `activefiles` right after skilltracker (plan §8);
+  // §6.1 added `sessiontimeline` right after that; Media Deck added `media`
+  // right after `telemetry` (app-scoped like usage/telemetry, not per-session).
   // This assertion exists so that a change like that doesn't slip by unnoticed.
   assert.deepEqual(l.slots.right, [
     'context',
     'usage',
     'telemetry',
+    'media',
     'skilltracker',
     'activefiles',
+    'sessiontimeline',
     'ports',
     'scratchpad',
   ]);

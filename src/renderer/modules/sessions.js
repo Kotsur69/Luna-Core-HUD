@@ -43,6 +43,7 @@ import { setPtyStatus } from './ptystatus.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
 import { lightTiles, applyToolEvents, trackBucketTools, resetTiles } from './skilltracker.js';
 import { applyFileEvents, trackBucketFiles } from './activefiles.js';
+import { applyTurnEnd, trackBucketTurn } from './sessiontimeline.js';
 import { syncSwitchers } from './switchers.js';
 import { sfx } from './sound.js';
 
@@ -111,6 +112,16 @@ window.lunacore.onTools(({ sessionId, events, tiles }) => {
   }
   // The blink has no end signal, so it is only worth showing live.
   if (tiles && active) lightTiles(tiles);
+});
+
+// §6.1: a turn just completed. Same active/background split as onTools above -
+// a turn finishing on a background tab must still show up when you switch to it.
+window.lunacore.onTurnEnd(({ sessionId, turn }) => {
+  if (sessionId === getActiveSessionId()) {
+    applyTurnEnd(turn);
+  } else {
+    trackBucketTurn(ensureTerm(sessionId), turn);
+  }
 });
 
 // A restart (profile / project change) concerns one specific tab.

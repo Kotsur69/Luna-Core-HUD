@@ -1170,6 +1170,107 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   }
 }
 
+/* ---- §6.1: Session timeline -------------------------------------------------
+   Narrow right-rail/dock slots (~260-380px) cannot fit a wide visual timeline,
+   so v1 is a compact horizontally-scrollable strip of markers rather than a
+   full chart. Clicking a marker opens the read-only preview modal (bottom of
+   this file, near the palette/termcustom overlays it mirrors). */
+
+.stimeline-track {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.stimeline__marker {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: var(--border-w) solid var(--edge);
+  background: var(--bg-panel-2);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
+}
+.stimeline__marker:hover,
+.stimeline__marker:focus-visible {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 var(--glow-size-sm) var(--neon-cyan);
+  outline: none;
+}
+.stimeline__marker.is-truncated {
+  border-style: dashed;
+}
+
+/* ---- Media Deck: now-playing + transport/volume controls --------------------
+   Action Injector - buttons cause real OS effects (play/pause/skip, volume),
+   never touches the PTY (see modules/media.js's header). The range input
+   itself already gets its themed thumb/track from the global
+   input[type="range"] rules above - nothing extra needed here. */
+
+.media-deck {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.media-deck__info {
+  min-width: 0;
+}
+.media-deck__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.media-deck__artist {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-deck__transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.media-btn {
+  background: none;
+  border: var(--border-w) solid var(--edge);
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  width: 26px;
+  height: 26px;
+  line-height: 1;
+  font-size: 13px;
+  cursor: pointer;
+  flex: none;
+  transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
+}
+.media-btn:hover { color: var(--neon-cyan); border-color: var(--neon-cyan); }
+.media-btn:disabled { opacity: 0.4; cursor: default; }
+.media-btn:disabled:hover { color: var(--text-dim); border-color: var(--edge); }
+.media-btn--main { width: 30px; height: 30px; font-size: 14px; }
+.media-btn.is-muted { color: var(--neon-cyan); border-color: var(--neon-cyan); }
+
+.media-deck__volume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.media-deck__volume input[type="range"] {
+  flex: 1;
+}
+
 /* ---- E1: machine telemetry (RAM / CPU) ------------------------------------
    Color carries meaning, but NEVER alone: every level also has a number and a
    bar height. Motion is only a transition between states - nothing here loops,
@@ -1876,6 +1977,85 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 .termcustom__bgimage-row { display: flex; gap: 8px; }
 .termcustom__bgimage-row .termcustom__reset { flex: 1; }
+
+/* ---- §6.1: Session timeline turn preview modal ------------------------------
+   Same overlay skeleton as .termcustom above (backdrop + centered panel) -
+   read-only by construction, nothing in here ever writes to the PTY. */
+
+.stimeline-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 10vh;
+}
+.stimeline-modal[hidden] { display: none; }
+
+.stimeline-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 4, 12, 0.66);
+  backdrop-filter: blur(2px);
+}
+
+.stimeline-modal__panel {
+  position: relative;
+  width: min(520px, 92vw);
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  border: var(--border-w) solid var(--edge-glow);
+  background: linear-gradient(160deg, var(--bg-panel), var(--bg-panel-2));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6), 0 0 40px var(--glow);
+  overflow: hidden;
+  animation: palette-in var(--dur-fast) var(--ease-sharp);
+}
+
+.stimeline-modal__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: var(--border-w) solid var(--edge);
+}
+.stimeline-modal__time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.stimeline-modal__closebtn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
+  background: var(--bg-panel-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  line-height: 1;
+}
+.stimeline-modal__closebtn:hover { color: var(--neon-cyan); border-color: var(--edge-glow); }
+
+.stimeline-modal__text {
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  min-height: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stimeline-modal__panel .hint {
+  margin: 0 16px 14px;
+}
 
 /* ---- Boot sequence ----------------------------------------------
    A decorative overlay above the ready UI. Doesn't block the session (PTY

@@ -166,6 +166,19 @@ export function emitTelemetryUpdate(sample) {
   telemetryUpdate.emit(sample);
 }
 
+// Media Deck. Replayed for the same reason as ports/usage above - polled
+// every 2 s, a widget mounted between two ticks must not sit blank.
+const mediaUpdate = channel({ replay: true });
+
+/** Now-playing sample: cb({title, artist, appId, isPlaying}|null) -> disposer */
+export function onMediaUpdate(cb) {
+  return mediaUpdate.on(cb);
+}
+
+export function emitMediaUpdate(state) {
+  mediaUpdate.emit(state);
+}
+
 // ---- Per-tab view state -----------------------------------------------------
 
 const sessionViews = [];

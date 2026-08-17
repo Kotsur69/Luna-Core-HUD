@@ -34,8 +34,10 @@ import { initTermcustomSettings } from './modules/termcustom.js';
 import './modules/context.js';
 import './modules/spark.js';
 import './modules/usage.js';
+import './modules/media.js';
 import './modules/skilltracker.js';
 import './modules/activefiles.js';
+import './modules/sessiontimeline.js';
 import './modules/telemetry.js';
 
 // -- Action Injector ----------------------------------------------------------

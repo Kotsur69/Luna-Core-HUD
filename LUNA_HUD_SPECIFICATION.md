@@ -186,15 +186,20 @@ Windows stack. Each is scored: zero-token compliance, rough complexity, and a
 priority read. "Realistic" means: buildable today with data LunaCore already
 has access to, no native dependency risk beyond what's already accepted (mpv).
 
-### 6.1 Session Timeline & Snapshot Scrubber — Realistic, good fit
-A horizontal timeline of turn boundaries for the active session, built entirely
-from `TranscriptWatcher`'s existing `hasTurnEnd()`/`hasUserPromptStart()` scan
-(already used for the sound triggers and the burn-rate sparkline). Scrubbing
-would jump the transcript *viewer* to that point — it should not touch the live
-PTY or session state; a diff/preview modal reads the JSONL, it doesn't replay
-anything into `stdin`. Pure Passive Observer. Moderate build: mostly UI (an SVG
-or DOM timeline + a modal), the data is already being extracted for other
-widgets.
+### 6.1 Session Timeline & Snapshot Scrubber — SHIPPED 2026-08-17
+Shipped close to as sketched, with one simplification: instead of a diff/JSONL
+reader, it rides `TranscriptWatcher.onTurnEnd({startedAt, endedAt, text})`
+directly (`src/observer.js`) — the same fragment `ttsExtract.js` already reads
+for read-aloud, so zero new IPC round trip and zero new file read. Renders as a
+compact, horizontally-scrollable strip of small markers (a narrow right-rail
+slot can't fit a wide visual timeline) in `src/renderer/modules/sessiontimeline.js`;
+clicking one opens a read-only preview modal (`#stimeline-modal` in
+`index.html`, same overlay skeleton as the palette/Settings modals) showing
+that turn's captured text, truncated past `MAX_TEXT_CHARS = 4000` with an
+honest "truncated" note, capped at the last `MAX_TURNS = 100`. Pure Passive
+Observer — the modal only ever displays already-captured text, nothing here
+writes to the PTY. Per-tab isolated via `registerSessionView` (each tab keeps
+its own timeline). 438 tests.
 
 ### 6.2 Active-Files Edit Heatmap — SHIPPED 2026-08-13
 Extends the Skill Tracker's existing `tool_use`/`tool_result` pairing
@@ -206,25 +211,33 @@ list in the right panel with real git-diff-stat `+`/`-` counts, a live
 record, including two same-day amendments from manual-test feedback, in
 [`ACTIVE_FILES_HEATMAP_PLAN.md`](ACTIVE_FILES_HEATMAP_PLAN.md).
 
-### 6.3 Spotify Now-Playing + Voice Ducking — Realistic, reframed
+### 6.3 Media Deck (now-playing + system volume) — SHIPPED 2026-08-17, reframed again
 The original idea (`LUNA_HUD_ADVANCED_SPEC.md` Idea 1) assumed DBus MPRIS /
-AppleScript, which doesn't apply on Windows. Reframed around the **Spotify Web
-API** instead — free, OAuth-based, no local media-session hooks needed, and
-Mati has already built against it before, so the integration pattern is
-familiar. Two independent pieces:
-- **Now-playing tile**: poll `GET /me/player/currently-playing` on an interval,
-  show track/artist in a small widget. Read-only, no new local process.
-- **Ducking**: when `narrationManager` starts an `append-play` (§11.2's
-  read-aloud), call Spotify's `PUT /me/player/volume` down before playback and
-  restore it after. This is a genuine network call, so it needs its own opt-in
-  pref (default off) and is honestly adjacent to, but outside, the strict
-  "zero tokens = no network at all" framing used for the *sound* system
-  specifically — it's still zero *Claude* tokens, just not zero-network. Worth
-  flagging explicitly in the UI copy ("connects to Spotify") rather than
-  quietly bundling it into the existing sound toggle.
-- Needs: a stored OAuth refresh token (small local credential-storage question
-  — reuse whatever pattern, if any, Mati's prior Spotify project already
-  solved, rather than inventing a new one).
+AppleScript; a first Windows reframe (kept below for the record) proposed the
+**Spotify Web API**. What actually shipped drops that entirely in favor of
+Windows' own **GlobalSystemMediaTransportControlsSessionManager** (GSMTC —
+the API behind Win11's own media flyout/lock-screen widget), reached from
+PowerShell via the standard WinRT `Await` helper
+(`helpers/media/now-playing.ps1`). This is strictly better for the goal: it
+targets whatever Windows itself considers the *current* session — any app
+(Spotify, a browser tab, anything), not just Spotify — needs **no OAuth, no
+stored credential, and no network call at all**, staying inside the strict
+"zero tokens = no network at all" framing instead of stepping outside it.
+System volume is a separate OS subsystem (Core Audio), read/written via the
+standard `IAudioEndpointVolume` COM interop snippet
+(`helpers/media/volume.ps1`). `src/media.js` wraps both the same way
+`gpu.js`/`tts.js` wrap their own OS shell-outs (args array, never a string,
+bounded timeout, degrade-to-null never-throw); polls now-playing every 2s and
+pushes only on change. Backend Windows caveat found and fixed during build:
+Windows PowerShell 5.1 needs an explicit
+`Add-Type -AssemblyName System.Runtime.WindowsRuntime` before the WinRT
+`Await` helper's types resolve — without it the script silently reports
+"nothing playing" forever, even with media active.
+**Not built: voice ducking.** Still a real idea (lower system volume while
+`narrationManager` speaks, restore after) but is now a much smaller lift than
+originally scoped, since the volume primitive (`setVolume`/`getVolume`) this
+shipped is exactly what ducking would call — no Spotify auth flow needed.
+Left as an open follow-up, not a blocker. 438 tests.
 
 ### 6.4 Multi-Agent (Subagent) Stream Visualizer — Needs a research spike first
 Side-by-side cards for concurrently running subagents (Task-tool spawns).

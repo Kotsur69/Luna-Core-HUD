@@ -13,7 +13,7 @@
       "slots": {
         "left": ["actions", "appearance", "project", "profile", "cheatsheets", "prompts", "skills"],
         "main": ["terminal"],
-        "right": ["context", "usage", "telemetry", "skilltracker", "activefiles", "ports", "scratchpad"]
+        "right": ["context", "usage", "telemetry", "media", "skilltracker", "activefiles", "sessiontimeline", "ports", "scratchpad"]
       }
     },
     {
@@ -27,7 +27,7 @@
       "chrome": { "brand": "side", "status": "side" },
       "slots": {
         "main": ["terminal"],
-        "side": ["actions", "context", "telemetry", "appearance", "project", "profile"]
+        "side": ["actions", "context", "telemetry", "media", "appearance", "project", "profile"]
       }
     },
     {
@@ -46,8 +46,10 @@
           "context",
           "usage",
           "telemetry",
+          "media",
           "skilltracker",
           "activefiles",
+          "sessiontimeline",
           "ports",
           "scratchpad",
           "cheatsheets",
@@ -68,7 +70,7 @@
       "slots": {
         "main": ["terminal"],
         "dock-a": ["actions", "appearance", "project", "profile"],
-        "dock-b": ["context", "usage", "telemetry", "skilltracker", "activefiles"],
+        "dock-b": ["context", "usage", "telemetry", "media", "skilltracker", "activefiles", "sessiontimeline"],
         "dock-c": ["ports", "scratchpad", "cheatsheets", "prompts", "skills"]
       }
     }

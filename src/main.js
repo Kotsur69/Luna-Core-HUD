@@ -55,6 +55,10 @@ const { TelemetryWatcher } = require('./telemetry');
 // GPU usage (System tab): own slow timer, shells out to Get-Counter. See
 // src/gpu.js's header for why it stays out of telemetry.js's pure sample().
 const { GpuSampler } = require('./gpu');
+// Media Deck: now-playing (GSMTC) polling + transport/volume commands, own
+// timer - see src/media.js's header for why it owns its own IPC push rather
+// than being stamped onto another watcher's tick like GpuSampler is.
+const { MediaSampler, sendTransportCommand, getVolume, setVolume, toggleMute } = require('./media');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
 const { SoundManager } = require('./soundManager');
 const { resolveSoundFile } = require('./sounds');
@@ -139,6 +143,8 @@ let usageWatcher = null;
 let telemetryWatcher = null;
 /** @type {GpuSampler | null} */
 let gpuSampler = null;
+/** @type {MediaSampler | null} */
+let mediaSampler = null;
 /** @type {SoundManager | null} */
 let soundManager = null;
 // §11.2: separate mpv instance for spoken narration, own IPC pipe (see
@@ -539,7 +545,12 @@ function spawnInto(session, profile) {
       // stdout backstop above still sends.
       onTools: (events) => send('metrics:tools', { sessionId: session.id, events }),
       // §4.3/§11.1: "All done" voice line, gated on turn duration in checkTurnEnd.
-      onTurnEnd: (turn) => checkTurnEnd(turn),
+      // §6.1: also forwarded to the renderer for the session timeline widget -
+      // checkTurnEnd only ever drove sound/TTS, it never reached the UI before.
+      onTurnEnd: (turn) => {
+        checkTurnEnd(turn);
+        send('metrics:turnend', { sessionId: session.id, turn });
+      },
     },
   );
   session.watcher.start();
@@ -778,6 +789,25 @@ function startTelemetryWatcher() {
     }
   });
   telemetryWatcher.start();
+}
+
+// ---- Media Deck: now-playing (GSMTC) + system volume ------------------------
+//
+// Action Injector, not Passive Observer - explicit user clicks cause explicit
+// OS-level effects (play/pause/skip, volume). Still never touches the PTY:
+// its whole IPC path (media:*) is entirely separate from pty:write/command.
+// No user-facing toggle for v1, same as GpuSampler/ENABLE_TELEMETRY below.
+
+const ENABLE_MEDIA_DECK = true;
+
+function startMediaWatcher() {
+  if (!ENABLE_MEDIA_DECK) return;
+  mediaSampler = new MediaSampler(2000, (state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('media:update', state);
+    }
+  });
+  mediaSampler.start();
 }
 
 // ---- D5: updates ("notify, don't download" mode) -----------------------
@@ -1067,6 +1097,24 @@ function registerIpc() {
     return ok;
   });
 
+  // Media Deck: play/pause/skip/volume. `type`/`action` are checked against a
+  // fixed whitelist and `value` is clamped inside media.js before it ever
+  // reaches a shell argv - same discipline ports:kill's pid argument gets.
+  ipcMain.handle('media:command', async (_event, payload) => {
+    if (!payload || typeof payload !== 'object') return null;
+    const { type, action, value } = payload;
+    if (type === 'transport') {
+      if (!['play', 'pause', 'toggle', 'next', 'prev'].includes(action)) return false;
+      return sendTransportCommand(action);
+    }
+    if (type === 'volume') {
+      if (action === 'get') return getVolume();
+      if (action === 'set') return setVolume(value);
+      if (action === 'mute') return toggleMute();
+    }
+    return null;
+  });
+
   // 7C: the renderer fetches cheat-sheet groups to build the collapsibles + buttons.
   ipcMain.handle('cheatsheets:list', () => loadCheatsheets());
 
@@ -1231,6 +1279,7 @@ app.whenReady().then(() => {
   startPortWatcher();
   startUsageWatcher();
   startTelemetryWatcher();
+  startMediaWatcher();
   // Sound feedback: volume/enabled come from the persisted prefs (Appearance
   // panel); readUiPrefs() already falls back to SoundManager-matching
   // defaults (volume 70, enabled true) if ui.local.json predates these keys.

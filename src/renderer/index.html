@@ -270,6 +270,30 @@
     </div>
   </template>
 
+  <template id="w-media">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="media.title">Odtwarzacz</h2>
+      <!-- Action Injector, not Passive Observer - see modules/media.js's header.
+           App-scoped (one Windows box), not per-tab - fed by IPC media:update. -->
+      <div class="media-deck">
+        <div class="media-deck__info">
+          <div id="media-title" class="media-deck__title"></div>
+          <div id="media-artist" class="media-deck__artist hint"></div>
+          <p id="media-empty" class="hint" data-i18n="media.empty">Nic nie jest odtwarzane.</p>
+        </div>
+        <div class="media-deck__transport">
+          <button id="media-prev" class="media-btn" data-i18n-title="media.prev" title="Poprzedni">⏮</button>
+          <button id="media-playpause" class="media-btn media-btn--main" data-i18n-title="media.play" title="Odtwarzaj/Pauza">▶</button>
+          <button id="media-next" class="media-btn" data-i18n-title="media.next" title="Nastepny">⏭</button>
+        </div>
+        <div class="media-deck__volume">
+          <button id="media-mute" class="media-btn" data-i18n-title="media.mute" title="Wycisz">🔊</button>
+          <input type="range" id="media-volume" min="0" max="100" />
+        </div>
+      </div>
+    </div>
+  </template>
+
   <template id="w-skilltracker">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="skilltracker.title">Skill Tracker</h2>
@@ -295,6 +319,18 @@
            via modules/sessions.js - zero new I/O, zero new IPC channel. -->
       <ul id="afile-list" class="afile-list"></ul>
       <p id="afile-empty" class="hint" data-i18n="activefiles.empty">Zadnych zmian w plikach w tej sesji.</p>
+    </div>
+  </template>
+
+  <template id="w-sessiontimeline">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="sessiontimeline.title" data-i18n-title="sessiontimeline.hint" title="Kliknij znacznik, aby zobaczyc fragment transkryptu tej tury.">Oś czasu sesji</h2>
+      <!-- Fed by TranscriptWatcher's onTurnEnd (observer.js) via modules/sessions.js -
+           reuses the already-captured transcript fragment, zero new IPC round trip,
+           zero new file read. PASSIVE OBSERVER: the preview modal only ever displays
+           this text, it never writes to the PTY. -->
+      <div id="stimeline-track" class="stimeline-track"></div>
+      <p id="stimeline-empty" class="hint" data-i18n="sessiontimeline.empty">Brak tur w tej sesji.</p>
     </div>
   </template>
 
@@ -649,6 +685,23 @@
         <button type="button" id="termcustom-reset" class="termcustom__reset" data-i18n="termcustom.reset">Przywroc domyslne</button>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
+    </div>
+  </div>
+
+  <!-- ================= §6.1 Session timeline: turn preview ================= -->
+  <!-- Read-only preview of one turn's already-captured transcript fragment.
+       PASSIVE OBSERVER: this never writes to the PTY. Markup is empty; opening,
+       closing and filling it in lives in modules/sessiontimeline.js, same split
+       as the palette/termcustom overlays above. -->
+  <div id="stimeline-modal" class="stimeline-modal" hidden>
+    <div class="stimeline-modal__backdrop" data-stimeline-close></div>
+    <div class="stimeline-modal__panel" role="dialog" aria-modal="true" aria-label="Podglad tury">
+      <div class="stimeline-modal__bar">
+        <span id="stimeline-modal-time" class="stimeline-modal__time"></span>
+        <button type="button" id="stimeline-modal-closebtn" class="stimeline-modal__closebtn" data-stimeline-close aria-label="Zamknij">×</button>
+      </div>
+      <pre id="stimeline-modal-text" class="stimeline-modal__text"></pre>
+      <p id="stimeline-modal-truncated" class="hint" data-i18n="sessiontimeline.truncated" hidden>...fragment obciety.</p>
     </div>
   </div>
 

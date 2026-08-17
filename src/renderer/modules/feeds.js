@@ -25,6 +25,7 @@ import {
   emitUsageUpdate,
   emitUpdateState,
   emitTelemetryUpdate,
+  emitMediaUpdate,
 } from './bus.js';
 
 // 7B: passive scan of listening localhost ports.
@@ -48,4 +49,11 @@ window.lunacore.onUpdateState((state) => {
 // no matter how many tabs are open, so this must NOT go through sessions.js.
 window.lunacore.onTelemetry((sample) => {
   emitTelemetryUpdate(sample);
+});
+
+// Media Deck: now-playing (GSMTC) + system volume. App-scoped like the three
+// above - one Windows box, one "current" media session, no matter how many
+// tabs are open - so this must NOT go through sessions.js either.
+window.lunacore.onMedia((state) => {
+  emitMediaUpdate(state);
 });
