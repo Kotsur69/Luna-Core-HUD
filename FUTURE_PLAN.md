@@ -143,9 +143,36 @@ Measured here: transcript scan 660 ms over 166 MB / 55 files (cached per file by
 size+mtime after that), repo discovery 8 ms for 12 repos, full status sweep
 1.1 s for 12. 552 tests, up from 512.
 
-**Still owed:** the same manual `npm start` the panels work is waiting on. Both
-panels are unit-tested and were driven end-to-end from node against real data,
-but neither has been on screen.
+**✅ The app ran (2026-08-17, later).** `npm install` first — `node_modules` was
+still on Electron 33.4.11 against a `^43.0.0` package; it resolved to 43.3.0 with
+the node-pty prebuilt intact and 0 vulnerabilities. Boot clean, then
+`--luna-probe` passed on every axis: **23/23 widgets mounted exactly once**
+(`mcp` and `git` included), three remount passes left every bus subscriber count
+identical, four presets cycled twice and landed back on `classic`, and all
+**18 themes** cycled with zero tokens leaked or lost.
+
+That run also caught the probe drifting: `rows` is hand-written, and it had
+stopped growing after `skills` — `media`, `sessiontimeline`, `devices`, `todo`,
+`clipboard`, `mcp` and `git` were never being checked, which is the exact blind
+spot its own header warns about. Markers added; the rule now lives in README
+(*Checking a widget really tears down*).
+
+**Open, small: `langChange` 24 → 25.** The counter grows by one across the
+*layout and theme* passes, not across the remount passes — which is where a
+missing widget disposer would show, so `mcp`/`git` are unlikely culprits. The
+baseline run that would have settled it failed for an unrelated reason worth
+recording: **a `git worktree` checkout cannot run the probe without its own
+`npm install`**, because Electron cannot resolve `@lydell/node-pty` and dies in
+a modal before the window paints.
+
+**Also found: `mpv` is not on PATH, so all sound feedback is silently disabled**
+(`[soundManager] ... silent fallback`). This reframes the four zero-byte `.wav`
+files still on the backlog — filling them changes nothing until there is a player,
+so the player comes first.
+
+**Still owed:** the human half. Nothing above tells us whether a 9 px splitter is
+comfortable to grab, how a folded panel sits inside `.panel__scroll`, or whether
+`mic.ps1` finds a capture endpoint on this machine.
 
 ### ✅ Done: the by-hand pass on `context` (2026-08-03) — and it caught a 3-refactor-old bug
 
@@ -1406,9 +1433,12 @@ that needs an extra wrapper element around every widget body — a DOM change 20
 widgets are already written against. So the chevron carries the motion and the
 body just goes. The exception §C1c reserved was not needed.
 
-**Still owed:** manual `npm start` verification — drag feel, whether the 9px
-handle is comfortable, and whether a folded panel inside `.panel__scroll` leaves
-the gap looking right.
+**Still owed:** the *feel*. The app has since run (see the MCP/git section near
+the top of this file): it boots on Electron 43.3.0 and `--luna-probe` cycles all
+four presets twice with every widget mounting exactly once, so the machinery is
+sound. What no probe can answer is whether the 9 px handle is comfortable to
+grab and whether a folded panel inside `.panel__scroll` leaves the gap looking
+right. Those need eyes.
 
 #### C2b — 9 → 18 themes (2026-08-17)
 

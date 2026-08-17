@@ -419,6 +419,22 @@ Equal counts mean clean teardown; `rows` carries one entry per converted widget,
 and a `1` there means that widget mounted exactly once, neither missing nor
 duplicated.
 
+**Add a marker when you add a widget.** `rows` is a hand-written list, so it
+degrades in the one direction nobody notices: it keeps proving the widgets that
+were there when it was written, and says nothing about any added since. It had
+drifted seven widgets behind by 2026-08-17 (`media`, `sessiontimeline`,
+`devices`, `todo`, `clipboard`, `mcp`, `git`) — all fine, but none of them
+checked. Last full run, with the list caught up: 23/23 widgets at `1`, bus counts
+identical across three remount passes, four presets cycled twice back to
+`classic`, and all 18 themes cycled with `themeTokensLeaked` and
+`themeTokensLost` both empty.
+
+One number is still open from that run: `langChange` goes 24 → 25 across the
+*layout and theme* passes (not the remount passes, where a widget disposer leak
+would show). Unattributed so far. Note that a worktree checkout cannot run the
+probe without its own `npm install` — Electron fails to resolve
+`@lydell/node-pty` and dies before the window paints.
+
 The probe has a blind spot worth remembering: it counts **bus subscribers**, so a
 leaked `setInterval` is invisible to it. `usage` (a 30 s countdown) and
 `skilltracker` (its reconcile loop) both own timers that cleanup has to clear —
