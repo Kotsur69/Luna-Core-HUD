@@ -1,6 +1,6 @@
 # LunaCore — Future Plan (Visual Templates, Layout & Ideas)
 
-## START HERE — where things stand (2026-08-13)
+## START HERE — where things stand (2026-08-17)
 
 Everything below this box is either **live plan** (§8) or **history**. Read this
 box, then §8's Phase A table, then jump to §A2a–§A2f for the widget contract and
@@ -37,10 +37,14 @@ Ctrl+L chips in the terminal bar, hidden unless there is actually something to
 do (`available` / `downloading` / `ready`), so "could not check for updates"
 no longer sits there permanently. Caught the same flex-child `[hidden]` bug
 this file already hit for `.badge` and the original `.update` block, on first
-hand-launch — see §D5b. |
-| **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED and `v0.9.0` is public — [releases/tag/v0.9.0](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.0). **`package.json` now reads `0.9.1`** (bumped 2026-08-13, lands in the same commit as the D5 chip relocation), but **no `v0.9.1` release has been cut** — no `npm run dist`, no tag, no publish yet. The sound/voice work, the Settings overlay, the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite, the Active-Files Heatmap, multi-repo project switching, the GPU widget and now the D5 chip relocation have all landed on `main` since `v0.9.0` with nothing shipped to users yet. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `TERMINAL_CUSTOMIZER_PLAN.md` §10.7 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
-| **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build. |
-| **Next action** | **Cut the `v0.9.1` release** — `npm run dist` → tag → publish, then let the *installed* `v0.9.0` discover it. Still the only way to prove **D5** end-to-end: auto-update code that has never performed an update is a hypothesis, not a tested path. After that: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (session timeline scrubber, Spotify now-playing, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
+hand-launch — see §D5b. Since then: all Polish code comments translated to
+English (`d5db8bb`, 2026-08-17), `package.json`/lockfile synced to `0.9.1`
+(`2b81bae`, 2026-08-17), and **`v0.9.1` cut and published**
+([releases/tag/v0.9.1](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.1),
+2026-08-17). |
+| **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED, `v0.9.0` is public, and **`v0.9.1` is now also public** — [releases/tag/v0.9.1](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.1). It carries everything that had landed on `main` since `v0.9.0` with nothing shipped: the sound/voice work, the Settings overlay, the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite, the Active-Files Heatmap, multi-repo project switching, the GPU widget, the D5 chip relocation, and the Electron 33→43 security fixes D5a flagged (§D5a: *"only a released `v0.9.1` actually delivers the fix"*). **D5 (auto-update) verified end-to-end**: an installed build discovers and applies an update going *from* `v0.9.1` onward. Updating *from* `v0.9.0` does not currently work — known, not blocking, not being chased. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `TERMINAL_CUSTOMIZER_PLAN.md` §10.7 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
+| **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build (checked against Electron **33**; §D6a flags that a redo under **43** is still owed — cheap, and belongs in the next pre-flight per §D6a). |
+| **Next action** | No forced next step — D5 is proven and `v0.9.1` is out. Pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (session timeline scrubber, Spotify now-playing, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. Redoing the §D2a eyes-only spawn check against the packaged Electron 43 build (never done — the original PASSED was against 33) is cheap and still owed whenever convenient. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
