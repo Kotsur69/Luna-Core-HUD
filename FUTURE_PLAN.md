@@ -165,6 +165,20 @@ recording: **a `git worktree` checkout cannot run the probe without its own
 `npm install`**, because Electron cannot resolve `@lydell/node-pty` and dies in
 a modal before the window paints.
 
+**✅ Fixed from that run: the probe was spawning with `shell: true`.** Electron's
+log carried a `DEP0190` deprecation, and it turned out to be the only
+`shell: true` in the whole codebase — mine, from the same day. With a shell the
+args array is concatenated into an unescaped command line, and those args can
+come from a `.mcp.json` inside a cloned repo. It was there for a real reason:
+Windows MCP launchers are `.cmd` shims and Node refuses to spawn one without a
+shell (`EINVAL`, not `ENOENT`, since CVE-2024-27980). `spawnPlan()` runs the
+shim through `cmd.exe /c` with the arguments still passed as an array, so Node
+escapes each one — verified that `x & echo PWNED` arrives as a single literal
+argv entry. Side effect: the **first successful live probe**, `npx
+@modelcontextprotocol/server-everything` → `{ok: true, tools: 13, ms: 6755}`.
+Worth noting how it surfaced — not from a test, but from reading the log of a
+run somebody made by clicking the button.
+
 **Also found: `mpv` is not on PATH, so all sound feedback is silently disabled**
 (`[soundManager] ... silent fallback`). This reframes the four zero-byte `.wav`
 files still on the backlog — filling them changes nothing until there is a player,

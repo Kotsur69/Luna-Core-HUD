@@ -14,6 +14,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  spawnPlan,
   collectServers,
   normalizeServer,
   parseUsageLine,
@@ -234,6 +235,49 @@ test('mergeUsage sorts the most neglected first', () => {
     rows.map((r) => r.name),
     ['never', 'stale', 'idle', 'fresh']
   );
+});
+
+// ---- spawnPlan --------------------------------------------------------------
+//
+// The probe originally ran with `shell: true`, which is the one way to start a
+// Windows .cmd shim - and also the way an args array stops being argv and
+// becomes a concatenated command line nobody escaped. Node deprecated exactly
+// that pairing (DEP0190), and these args can arrive from a .mcp.json inside a
+// cloned repo. These tests pin the replacement.
+
+test('spawnPlan runs a Windows shim through cmd.exe', () => {
+  assert.deepEqual(spawnPlan('npx', ['-y', 'pkg'], 'win32'), {
+    file: 'cmd.exe',
+    args: ['/c', 'npx', '-y', 'pkg'],
+  });
+});
+
+// A real executable needs no wrapper, and wrapping it anyway would put a
+// process between us and the server's stdio for no reason.
+test('spawnPlan leaves an explicit executable alone', () => {
+  assert.deepEqual(spawnPlan('node.exe', ['x'], 'win32'), { file: 'node.exe', args: ['x'] });
+  assert.deepEqual(spawnPlan('C:/py/python.exe', [], 'win32'), {
+    file: 'C:/py/python.exe',
+    args: [],
+  });
+});
+
+test('spawnPlan does nothing on platforms that can spawn a bare command', () => {
+  assert.deepEqual(spawnPlan('npx', ['-y'], 'linux'), { file: 'npx', args: ['-y'] });
+  assert.deepEqual(spawnPlan('uvx', [], 'darwin'), { file: 'uvx', args: [] });
+});
+
+// The argv stays an ARRAY at every step - that is what makes Node escape each
+// entry instead of pasting them into a command line.
+test('spawnPlan keeps a hostile argument as one argument', () => {
+  const plan = spawnPlan('npx', ['x & echo PWNED'], 'win32');
+  assert.deepEqual(plan.args, ['/c', 'npx', 'x & echo PWNED']);
+  assert.equal(Array.isArray(plan.args), true);
+});
+
+test('spawnPlan tolerates missing or junk args', () => {
+  assert.deepEqual(spawnPlan('npx', undefined, 'linux'), { file: 'npx', args: [] });
+  assert.deepEqual(spawnPlan('npx', 'nope', 'linux'), { file: 'npx', args: [] });
 });
 
 test('mergeUsage does not mutate the rows it was given', () => {

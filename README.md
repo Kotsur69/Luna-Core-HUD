@@ -739,6 +739,15 @@ never automatic: probing everything means ~20 processes at once, several of whic
 authenticate against a network on boot. Remote (http/sse) servers say so rather
 than offering a button that would measure something else.
 
+> **Never `shell: true`.** The probe's first version used it, because a Windows
+> `.cmd` shim (`npx`, `npm`, `uvx`) is the normal way MCP servers are launched
+> and Node refuses to spawn one without a shell — `EINVAL`, not `ENOENT`, since
+> CVE-2024-27980. But a shell turns the args array into a concatenated command
+> line nobody escaped (Node's DEP0190), and those args can come from a
+> `.mcp.json` inside a cloned repo. `spawnPlan()` runs the shim through
+> `cmd.exe /c` with the arguments still passed as an **array**, so Node escapes
+> each one: an arg of `x & echo PWNED` arrives as a single literal argv entry.
+
 Two things it deliberately does not do. It **never writes to `~/.claude.json`** —
 a bug in the HUD would break Claude Code itself, not just the panel. And it never
 reads an `env` **value**: server specs are where API keys live, so only key

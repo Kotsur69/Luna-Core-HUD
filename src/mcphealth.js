@@ -380,26 +380,27 @@ async function getMcpHealth({ home = os.homedir(), now = Date.now() } = {}) {
  * deciding whether to keep it - a server contributing 30 tool definitions to
  * every session is a different proposition from one contributing 3.
  */
-function probeServer(server, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+function handshake(command, args, timeoutMs) {
   return new Promise((resolve) => {
-    if (!server || server.transport !== 'stdio' || !server.command) {
-      resolve({ ok: false, reason: 'remote', tools: null, ms: 0 });
-      return;
-    }
-
     const started = Date.now();
     let child;
     try {
-      child = spawn(server.command, server.args || [], {
+      child = spawn(command, args, {
         stdio: ['pipe', 'pipe', 'ignore'],
         windowsHide: true,
         // The real server gets its keys from the same environment Claude Code
         // gives it. We never read them back out - see the SECRETS note.
         env: process.env,
-        shell: process.platform === 'win32',
+        // NEVER shell: true. With a shell the args array is concatenated into a
+        // command line instead of passed as argv, so an entry containing `&` or
+        // `|` in ~/.claude.json would execute - and Node deprecated exactly this
+        // combination (DEP0190). The only reason it was tempting is that `npx`
+        // and `npm` are .cmd wrappers on Windows; commandCandidates() resolves
+        // those by name instead, which is the narrow fix rather than a shell.
+        shell: false,
       });
     } catch (err) {
-      resolve({ ok: false, reason: String(err && err.message), tools: null, ms: 0 });
+      resolve({ ok: false, reason: String(err && err.message), tools: null, ms: 0, spawnFailed: true });
       return;
     }
 
@@ -429,7 +430,16 @@ function probeServer(server, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
       }
     };
 
-    child.on('error', (err) => finish({ ok: false, reason: String(err && err.message), tools }));
+    // ENOENT means this NAME does not exist, not that the server is broken -
+    // the caller retries the next candidate. Anything else is a real failure.
+    child.on('error', (err) =>
+      finish({
+        ok: false,
+        reason: String(err && err.message),
+        tools,
+        spawnFailed: err && err.code === 'ENOENT',
+      })
+    );
     child.on('exit', (code) => finish({ ok: false, reason: `exited (${code})`, tools }));
 
     child.stdout.on('data', (chunk) => {
@@ -471,12 +481,48 @@ function probeServer(server, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
   });
 }
 
+/**
+ * What to actually hand spawn() for a configured command. Pure, so the Windows
+ * rule below is pinned by a test on every platform.
+ *
+ * The MCP launchers people configure - `npx`, `npm`, `uvx`, `bunx` - are not
+ * executables on Windows but `.cmd` shims, and since CVE-2024-27980 Node
+ * REFUSES to spawn those without a shell: you get EINVAL, not ENOENT. So there
+ * is no shell-free way to start a bare `npx`.
+ *
+ * `shell: true` would work and is what the first version did. It is also how
+ * the args stop being argv and become a concatenated command line nobody
+ * escaped - Node deprecated exactly that combination (DEP0190), and these args
+ * can come from a `.mcp.json` inside a cloned repo.
+ *
+ * Running the shim through `cmd.exe /c` gets both: the shim starts, and because
+ * the arguments are still passed as an ARRAY with `shell: false`, Node escapes
+ * each one. Verified: an arg of `x & echo PWNED` arrives as a single literal
+ * argv entry rather than a second command.
+ */
+function spawnPlan(command, args = [], platform = process.platform) {
+  const argv = Array.isArray(args) ? args : [];
+  // An explicit path or a real .exe needs none of this.
+  if (platform !== 'win32' || path.extname(command)) return { file: command, args: argv };
+  return { file: 'cmd.exe', args: ['/c', command, ...argv] };
+}
+
+/** Handshakes one stdio server. */
+function probeServer(server, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+  if (!server || server.transport !== 'stdio' || !server.command) {
+    return Promise.resolve({ ok: false, reason: 'remote', tools: null, ms: 0 });
+  }
+  const plan = spawnPlan(server.command, server.args);
+  return handshake(plan.file, plan.args, timeoutMs);
+}
+
 // The parsers and the join are pure and carry every rule worth pinning; the
 // scan and the probe touch the disk and spawn processes, so only their inputs
 // and outputs are tested.
 module.exports = {
   getMcpHealth,
   probeServer,
+  spawnPlan,
   mineUsage,
   collectServers,
   normalizeServer,
