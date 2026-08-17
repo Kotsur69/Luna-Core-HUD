@@ -23,6 +23,8 @@
           "activefiles",
           "sessiontimeline",
           "ports",
+          "git",
+          "mcp",
           "scratchpad",
           "todo",
           "clipboard"
@@ -65,6 +67,8 @@
           "activefiles",
           "sessiontimeline",
           "ports",
+          "git",
+          "mcp",
           "scratchpad",
           "todo",
           "clipboard",
@@ -96,7 +100,17 @@
           "activefiles",
           "sessiontimeline"
         ],
-        "dock-c": ["ports", "scratchpad", "todo", "clipboard", "cheatsheets", "prompts", "skills"]
+        "dock-c": [
+          "ports",
+          "git",
+          "mcp",
+          "scratchpad",
+          "todo",
+          "clipboard",
+          "cheatsheets",
+          "prompts",
+          "skills"
+        ]
       }
     }
   ]

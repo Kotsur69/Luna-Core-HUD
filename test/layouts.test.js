@@ -217,7 +217,9 @@ test('config/layouts.json - classic reproduces today\'s layout', () => {
   // right after `telemetry` (app-scoped like usage/telemetry, not per-session);
   // the widget plan then added `devices` next to `media` (both app-scoped OS
   // controls) and `todo`/`clipboard` after `scratchpad` (all three are the
-  // "things I keep on the side" group).
+  // "things I keep on the side" group); `git`/`mcp` then went next to `ports`,
+  // because all three answer "what is the state of my machine right now" from a
+  // passive scan rather than from anything the session did.
   // This assertion exists so that a change like that doesn't slip by unnoticed.
   assert.deepEqual(l.slots.right, [
     'context',
@@ -229,6 +231,8 @@ test('config/layouts.json - classic reproduces today\'s layout', () => {
     'activefiles',
     'sessiontimeline',
     'ports',
+    'git',
+    'mcp',
     'scratchpad',
     'todo',
     'clipboard',

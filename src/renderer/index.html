@@ -176,6 +176,47 @@
     </div>
   </template>
 
+  <!-- MCP server health. The scan is lazy and manual: it streams every session
+       transcript on disk, which is a second of work for a number that changes
+       about once a day. -->
+  <template id="w-mcp">
+    <div class="panel__section panel__section--grow">
+      <h2 class="panel__title usage-head">
+        <span data-i18n="mcp.title">Serwery MCP</span>
+        <button
+          id="mcp-refresh"
+          class="usage-refresh"
+          data-i18n-title="mcp.refresh.title"
+          title="Przeskanuj ponownie"
+        >&#8635;</button>
+      </h2>
+      <p id="mcp-summary" class="hint mcp-summary"></p>
+      <!-- Filled by modules/mcp.js. -->
+      <ul id="mcp-list" class="mcp-list"></ul>
+      <p id="mcp-empty" class="hint" data-i18n="mcp.idle">Kliknij odswiez, aby przeskanowac.</p>
+    </div>
+  </template>
+
+  <!-- Git station. Read plus fetch; pull/commit/push belong in a terminal where
+       you can see what happened. -->
+  <template id="w-git">
+    <div class="panel__section panel__section--grow">
+      <h2 class="panel__title usage-head">
+        <span data-i18n="git.title">Repozytoria</span>
+        <button
+          id="git-refresh"
+          class="usage-refresh"
+          data-i18n-title="git.refresh.title"
+          title="Odswiez status"
+        >&#8635;</button>
+      </h2>
+      <!-- Filled by modules/git.js. -->
+      <ul id="git-list" class="git-list"></ul>
+      <p id="git-empty" class="hint" data-i18n="git.idle">Wczytywanie...</p>
+      <button id="git-scan" class="git-scan" data-i18n="git.scan">Znajdz repozytoria</button>
+    </div>
+  </template>
+
   <!-- E1: machine telemetry. The big number carries the truth, the chart carries
        context; pause freezes the DISPLAY, not the stream - sampling continues
        in the background. -->

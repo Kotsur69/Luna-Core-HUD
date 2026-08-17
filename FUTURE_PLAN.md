@@ -87,6 +87,66 @@ npm start                         # the only way to check anything interactive
 warning. Both are noise — the crash line tracks the `timeout` value. Don't chase
 them.
 
+### ✅ Done: MCP health + git station (2026-08-17) — two panels that answer questions nothing else does
+
+Both are new backlog items, not scheduled phases: they came out of asking what
+the HUD could tell you that Claude Code cannot. Both follow `ports.js` exactly —
+main-process scanner, pure parsers, widget contract, lazy load on first mount.
+Full behaviour is in README (*MCP server health*, *Git station*); what belongs
+here is what the build taught.
+
+**A mention is not a call.** The MCP panel's premise is "which servers am I
+actually using", and Claude Code stores no MCP usage — `skillUsage` and
+`pluginUsage` exist, MCP has nothing — so it has to be mined out of the
+transcripts. The first miner matched `mcp__` anywhere in a line and produced a
+confident, completely wrong answer: **every** server on this machine read as
+"used today, dozens of calls", and it invented one named `<server>` out of
+documentation that spells the pattern out literally. Transcripts are full of
+server names that were never invoked — tool definitions, the deferred-tool
+listing, prose. Anchoring on `"name":"mcp__…`, which only a `tool_use` block
+produces, dropped 23 servers to 17 and the call counts to the truth. Verified
+independently by `grep -roh '"name":"mcp__[^"]*"'` over all 55 transcripts
+before it was believed. Both failure modes are pinned in tests, because a panel
+that answers this question wrongly is worse than no panel.
+
+**And the answer, on this machine: 16 of 17 configured MCP servers have never
+been called. Once.** The only real usage in 166 MB of history is two Hugging
+Face connector tools, 16 calls. That is the harness audit the panel was built
+to make possible, and it paid for itself before shipping.
+
+**Read-only, on purpose.** The panel never writes `~/.claude.json`: a bug there
+breaks Claude Code itself, not just the HUD. It never reads an `env` *value*
+either — server specs are where API keys live, so only key names leave the main
+process.
+
+**The git station's number is `behind`, then `diverged`.** A dirty tree is
+self-inflicted and already known; two clones of one repo drifting apart is the
+one that stays invisible. LunaCore itself has been bitten (71 commits on the
+other PC) and so has money_printer_turbo. A branch with no upstream reports
+**noUpstream** rather than `clean`, because ahead/behind are unavailable there
+rather than zero — reporting a confident 0 is how divergence hides.
+
+**Fetch yes, pull no.** Fetch cannot touch a working tree, so it is safe from a
+panel you glance at; pull can leave a repo mid-merge from a stray click. The
+fetch path is checked against the configured list before it runs — the renderer
+names a repo, it does not name a directory. Same shape as the MCP probe, which
+takes a server *name* and looks the spec up from config the main process read
+itself.
+
+**Not on a timer.** The transcript scan is ~1 s and git status is a process per
+repo; both answer questions that change a few times a day. So: lazy on first
+mount, manual refresh, and a slow 120 s tick for git only. `discoverRepos` runs
+on a button, never on a schedule — a status board whose rows appear on their own
+is not a status board.
+
+Measured here: transcript scan 660 ms over 166 MB / 55 files (cached per file by
+size+mtime after that), repo discovery 8 ms for 12 repos, full status sweep
+1.1 s for 12. 552 tests, up from 512.
+
+**Still owed:** the same manual `npm start` the panels work is waiting on. Both
+panels are unit-tested and were driven end-to-end from node against real data,
+but neither has been on screen.
+
 ### ✅ Done: the by-hand pass on `context` (2026-08-03) — and it caught a 3-refactor-old bug
 
 **Result: the conversion is clean.** Bar, `%`, tokens, `Sonnet 5 · 1M` badge and

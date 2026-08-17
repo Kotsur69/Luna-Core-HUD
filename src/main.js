@@ -34,6 +34,12 @@ const { withSessionId, findExecutable } = require('./launch');
 const { loadProjects, getProject, addProject } = require('./projects');
 // Localhost port tracker (7B): passive scan of listening ports + kill.
 const { killProcess, PortWatcher } = require('./ports');
+
+// MCP server health: config + transcript-mined usage, and an on-demand probe.
+const { getMcpHealth, probeServer } = require('./mcphealth');
+
+// Git station: status for the watched repos, plus fetch.
+const { readAllRepos, fetchRepo, scanForRepos } = require('./gitstation');
 // Action cheat-sheets (7C): command groups sent through the Action Injector.
 const { loadCheatsheets } = require('./cheatsheets');
 // Skill cheat-sheet (7A): auto-scans skill directories -> categories.
@@ -1223,6 +1229,30 @@ function registerIpc() {
     clearHistory();
     return [];
   });
+
+  // MCP health. The scan streams every transcript on disk, so it is only ever
+  // run on request - never on a timer, and never at boot.
+  ipcMain.handle('mcp:health', () => getMcpHealth());
+  // Probing spawns a real server, so the renderer may only name one: it sends a
+  // NAME, and the spec that gets executed is looked up from the config we read
+  // ourselves. A path or argv arriving from the renderer is never run.
+  ipcMain.handle('mcp:probe', async (_event, name) => {
+    if (typeof name !== 'string' || !name) return { ok: false, reason: 'badName', tools: null, ms: 0 };
+    const { servers } = await getMcpHealth();
+    const server = servers.find((s) => s.name === name);
+    if (!server) return { ok: false, reason: 'unknown', tools: null, ms: 0 };
+    return probeServer(server);
+  });
+
+  // Git station: read + fetch. No pull, commit or push by design - see the
+  // header of src/gitstation.js.
+  ipcMain.handle('git:list', () => readAllRepos());
+  ipcMain.handle('git:fetch', (_event, dir) =>
+    typeof dir === 'string' && dir
+      ? fetchRepo(dir)
+      : Promise.resolve({ ok: false, error: 'badPath', repo: null })
+  );
+  ipcMain.handle('git:scan', () => scanForRepos());
 
   // Pin-board todos: whole-list read/write, the scratchpad's shape (the list
   // operations themselves are pure and live in the renderer widget).

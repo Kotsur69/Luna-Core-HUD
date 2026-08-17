@@ -1476,6 +1476,154 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .port-btn.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
 .port-btn--kill:hover { color: var(--bad); border-color: var(--bad); }
 
+/* ---- MCP server health --------------------------------------------------------
+   Two lines per row: identity on top, evidence underneath. The status dot is the
+   only colour, because the list is read by scanning down the left edge for the
+   ones that are not green. */
+
+.mcp-list,
+.git-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.mcp-summary { margin: 0 0 6px; }
+
+.mcp-item,
+.git-item {
+  flex: none; /* like .port-item: don't squeeze rows, scroll instead */
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-2);
+  border: var(--border-w) solid var(--edge);
+  font-size: 12px;
+}
+/* A disabled server still costs a config line but nothing else - dim it rather
+   than hiding it, or the panel stops explaining why the count differs. */
+.mcp-item--off { opacity: 0.55; }
+
+.mcp-item__head,
+.git-item__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.mcp-item__dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.mcp-item--fresh .mcp-item__dot { background: var(--good); }
+.mcp-item--idle .mcp-item__dot { background: var(--warn); }
+.mcp-item--stale .mcp-item__dot { background: var(--bad); }
+.mcp-item--never .mcp-item__dot {
+  background: transparent;
+  border: var(--border-w) solid var(--bad);
+}
+
+.mcp-item__name {
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-item__scope,
+.mcp-item__meta,
+.git-item__meta {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-item__scope { font-size: 11px; }
+.mcp-item__probe { font-size: 11px; }
+.mcp-item__probe.is-ok { color: var(--good); }
+.mcp-item__probe.is-bad { color: var(--bad); }
+
+.mcp-test,
+.git-fetch {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-sharp),
+    border-color var(--dur-fast) var(--ease-sharp);
+}
+.mcp-test:hover,
+.git-fetch:hover:not(:disabled) {
+  color: var(--neon-cyan);
+  border-color: var(--edge-glow);
+}
+.git-fetch:disabled { cursor: default; opacity: 0.5; }
+
+/* ---- Git station --------------------------------------------------------------
+   Sorted by urgency in gitstation.js, so the top row is always the one worth
+   looking at. Badges only appear when their count is non-zero: a row of zeroes
+   is noise you have to read past to find the one that isn't. */
+
+.git-item__name {
+  font-weight: 700;
+  color: var(--text);
+}
+.git-item__branch {
+  color: var(--neon-cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The two-machine trap gets the loudest treatment on the board. */
+.git-item--diverged,
+.git-item--conflict { border-color: var(--bad); }
+.git-item--behind { border-color: var(--warn); }
+
+.git-badge {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  border: var(--border-w) solid transparent;
+}
+.git-badge--behind { color: var(--warn); border-color: var(--warn); }
+.git-badge--ahead { color: var(--neon-cyan); border-color: var(--edge-glow); }
+.git-badge--dirty { color: var(--text-dim); border-color: var(--edge); }
+.git-badge--conflict { color: var(--bad); border-color: var(--bad); }
+
+.git-scan {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-sharp),
+    border-color var(--dur-fast) var(--ease-sharp);
+}
+.git-scan:hover { color: var(--neon-cyan); border-color: var(--edge-glow); }
+.git-scan.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
+
 /* ---- Action cheatsheets (7C) ------------------------------------------------- */
 
 .cheats {

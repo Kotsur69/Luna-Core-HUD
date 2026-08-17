@@ -22,7 +22,8 @@ Thumbs.db
 # in the repo. The convention is one rule:
 # *.local.* in config/ never goes to git.
 #   profiles (secrets/keys), projects, cheatsheets, prompts, themes, layouts,
-#   rates, ui (theme/language/layout), scratchpad (private notes)
+#   rates, ui (theme/language/layout), scratchpad (private notes),
+#   repos (which repos the git station watches)
 config/*.local.json
 config/*.local.md
 .env

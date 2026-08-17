@@ -87,6 +87,20 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Kills a process by PID; returns Promise<boolean>. */
   killPort: (pid) => ipcRenderer.invoke('ports:kill', pid),
 
+  // --- MCP server health ---
+  /** Fetches { servers: [{name, scope, transport, enabled, lastUsed, calls, status}] }. */
+  getMcpHealth: () => ipcRenderer.invoke('mcp:health'),
+  /** Handshakes ONE stdio server by name; Promise<{ok, reason, tools, ms}>. */
+  probeMcpServer: (name) => ipcRenderer.invoke('mcp:probe', name),
+
+  // --- Git station ---
+  /** Fetches the watched repos: [{path, name, status, lastCommit, state, error}]. */
+  getRepos: () => ipcRenderer.invoke('git:list'),
+  /** Fetches one repo and re-reads it; Promise<{ok, error, repo}>. */
+  fetchRepo: (dir) => ipcRenderer.invoke('git:fetch', dir),
+  /** Walks the configured roots for repos and saves what it finds; Promise<string[]>. */
+  scanRepos: () => ipcRenderer.invoke('git:scan'),
+
   // --- 7C: action cheat-sheets ---
   /** Fetches { groups: [{ title, note, commands: [{label, command}] }] }. */
   getCheatsheets: () => ipcRenderer.invoke('cheatsheets:list'),

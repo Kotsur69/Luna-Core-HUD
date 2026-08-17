@@ -50,6 +50,11 @@ import './modules/scratchpad.js';
 import './modules/clipboard.js';
 import './modules/todo.js';
 import './modules/devices.js';
+// Both load their own data on first mount rather than at boot: one streams the
+// transcripts, the other spawns a git process per repo, and neither is worth
+// paying for in a session where the panel is never looked at.
+import './modules/mcp.js';
+import './modules/git.js';
 import './modules/palette.js';
 
 // -- Left panel: switchers, ports, appearance ---------------------------------

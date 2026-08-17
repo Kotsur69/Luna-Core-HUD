@@ -684,6 +684,82 @@ always reports how many rows were folded — the filter can hide things, but nev
 silently. The choice persists in `config/ui.local.json` (`hideSystemPorts`,
 default on).
 
+## MCP server health
+
+Answers a question Claude Code does not: **which of my MCP servers am I actually
+using?** Adding one is a single config line; noticing that it has been dead for
+two months is not, and every configured server spends tool definitions in the
+context window of every session you open.
+
+Three layers, cheapest first ([`src/mcphealth.js`](src/mcphealth.js)):
+
+| Layer | Source | Cost |
+|---|---|---|
+| **Config** | `~/.claude.json` (global + per project) and each project's `.mcp.json` | instant |
+| **Usage** | mined from the session transcripts in `~/.claude/projects` | ~1 s, on request |
+| **Probe** | one server spawned on click, real MCP `initialize` + `tools/list` | seconds, explicit |
+
+Usage has to be mined because Claude Code records `skillUsage` and `pluginUsage`
+in its config but **not** MCP usage — the only evidence that a server was ever
+called is the call sitting in a transcript.
+
+> A mention is not a call. Transcripts are full of server names that were never
+> invoked: the tool definitions themselves, the deferred-tool listing, and
+> documentation that spells the pattern out as `mcp__<server>__<tool>`. The miner
+> is anchored on `"name":"mcp__…`, which only a `tool_use` block produces.
+> Counting mentions instead made every server on a real machine read as "used
+> today" and invented one called `<server>` — so both failures are pinned in
+> [`test/mcphealth.test.js`](test/mcphealth.test.js).
+
+Rows sort most-neglected first (never → stale → idle → fresh), and the header
+line says how many of the total are earning nothing. Servers that usage finds but
+config never mentions are listed too, labelled `plugin`, `connector` or
+`not in config` — plugin-provided servers appear in no local config file and
+would otherwise read as "not installed" while quietly costing context.
+
+The ⟳ button on a row spawns **that one server** and handshakes it, reporting
+whether it is alive, how many tools it contributes, and how long it took. It is
+never automatic: probing everything means ~20 processes at once, several of which
+authenticate against a network on boot. Remote (http/sse) servers say so rather
+than offering a button that would measure something else.
+
+Two things it deliberately does not do. It **never writes to `~/.claude.json`** —
+a bug in the HUD would break Claude Code itself, not just the panel. And it never
+reads an `env` **value**: server specs are where API keys live, so only key
+*names* leave the main process.
+
+Read the verdict as evidence, not judgement. The transcripts are Claude Code's,
+on this machine — a server called unused here may be busy in Codex, on your other
+PC, or in sessions since cleaned up.
+
+## Git station
+
+One row per watched repo: branch, working-tree counts, ahead/behind, last commit
+([`src/gitstation.js`](src/gitstation.js)). Rows needing attention sort to the
+top — conflict, then diverged, then behind, then dirty.
+
+> The number worth having on screen is **behind**, and after it **diverged**. A
+> dirty tree you already know about; you made the mess. Two clones of one repo
+> drifting apart is the failure that stays invisible until it costs an evening.
+
+Which repos: an explicit list in `config/repos.local.json`, gitignored like every
+other `config/*.local.*`. **Find repos** seeds it by walking a few usual roots
+(`~/source/repos`, `~/repos`, `~/projects`, `~/dev`, `~/.local/bin`) two levels
+deep, stopping at each repo rather than descending into it. Nothing is scanned on
+a timer: an autodiscovered list changes under you, and a status board whose
+contents move on their own is not a status board.
+
+What it does: **read, plus fetch**. Fetch updates ahead/behind and cannot touch a
+working tree, so it is safe from a panel you glance at. Pull, commit and push are
+absent by design — those belong in a terminal where you can see what happened,
+and this panel sits one stray click away from your afternoon. The path a fetch
+runs in is checked against the configured list first; the renderer cannot name an
+arbitrary directory.
+
+A branch with no upstream reports **no upstream branch** rather than "clean":
+ahead/behind are structurally unavailable there, not zero, and that is exactly
+the state that hides divergence.
+
 ## Action cheat-sheets
 
 Collapsible command groups in the left panel, defined in
