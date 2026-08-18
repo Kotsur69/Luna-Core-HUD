@@ -16,7 +16,7 @@ content and will drift out of date the moment it tries to. Instead:
 
 - **`README.md`** — current architecture, exact IPC data flow, tech stack, install/build instructions.
 - **`FUTURE_PLAN.md`** — the phased roadmap, including its own §9 "Multi-model command center" backlog (explicit, user-initiated provider switching — a different idea from anything below).
-- **`SOUNDS_IMPLEMENTATION_PLAN.md`** — the sound/voice feature reference (§3 event triggers, §2 read-output-aloud engine).
+- **`reference/SOUNDS_IMPLEMENTATION_PLAN.md`** — the sound/voice feature reference (§3 event triggers, §2 read-output-aloud engine).
 - **This document** — §1–4 are a short, accurate *orientation* (kept intentionally thin so it can't contradict README), and §5 onward is the actual payload: a reusable recipe for adding a new widget, plus a filtered, scored backlog of module ideas for future sessions to pick up.
 
 **`LUNA_HARNESS_TREE_SPEC.md`** (multi-model task auto-routing across Kimi/Codex/LM
@@ -209,7 +209,7 @@ file-path granularity: for `Read`/`Edit`/`Write` tool calls, extract the
 list in the right panel with real git-diff-stat `+`/`-` counts, a live
 "currently being edited" pulse, and a deleted-file indicator. Full build
 record, including two same-day amendments from manual-test feedback, in
-[`ACTIVE_FILES_HEATMAP_PLAN.md`](ACTIVE_FILES_HEATMAP_PLAN.md).
+[`ACTIVE_FILES_HEATMAP_PLAN.md`](reference/ACTIVE_FILES_HEATMAP_PLAN.md).
 
 ### 6.3 Media Deck (now-playing + system volume) — SHIPPED 2026-08-17, reframed again
 The original idea (`LUNA_HUD_ADVANCED_SPEC.md` Idea 1) assumed DBus MPRIS /
@@ -286,4 +286,4 @@ proposal. The real project already has `FUTURE_PLAN.md` for phase sequencing —
 duplicating that here would just be a second place for the schedule to go
 stale. When one of §6's ideas gets picked up, it should get a section in
 `FUTURE_PLAN.md`'s roadmap (or its own short plan doc, same shape as
-`SOUNDS_IMPLEMENTATION_PLAN.md`), not an expansion of this file.
+`reference/SOUNDS_IMPLEMENTATION_PLAN.md`), not an expansion of this file.

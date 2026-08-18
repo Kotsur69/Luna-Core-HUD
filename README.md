@@ -335,7 +335,7 @@ Luna-Core-HUD/
 ├── helpers/sounds/        # bundled audio: sfx/*.wav (placeholders), voice/*.mp3 (real, Edge-TTS)
 ├── test/                  # unit tests over the pure modules (`npm test`, node --test)
 ├── FUTURE_PLAN.md         # roadmap: themes, layout engine, feature shortlist
-├── SOUNDS_IMPLEMENTATION_PLAN.md # sound & voice feature: what it does, which files, how to touch it
+├── reference/             # compacted "what shipped" docs for finished features (see below)
 └── README.md
 ```
 
@@ -504,8 +504,8 @@ the reasoning behind the contract are in [`FUTURE_PLAN.md`](FUTURE_PLAN.md)
 | B5–B7 | Port filter toggle, copy-transcript-path, skill search box | ✅ done |
 | A2 | Widget contract + teardown probe — all 13 blocks converted: **right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`), `autocompact`, left-panel list builders (`cheatsheets`, `prompts`, `skills`), `switchers`/`actions`/`appearance`, and `terminal` last | ✅ done |
 | + | PL/EN localization of `config/*.json`, not just the UI chrome | ✅ done |
-| + | Optional sound & voice feedback (mpv-based sfx cues + TTS voice lines, Appearance panel controls) — click/keystroke sfx, usage-threshold voice cues, task-complete, approval-prompt and startup-greeting triggers, plus offline-SAPI read-output-aloud | ✅ done (see [`SOUNDS_IMPLEMENTATION_PLAN.md`](SOUNDS_IMPLEMENTATION_PLAN.md)) |
-| + | Active-Files Edit Heatmap — real `+`/`-` diff-stat counts per file, live-edit pulse, self-heal, deleted-file indicator | ✅ done (see [`ACTIVE_FILES_HEATMAP_PLAN.md`](ACTIVE_FILES_HEATMAP_PLAN.md)) |
+| + | Optional sound & voice feedback (mpv-based sfx cues + TTS voice lines, Appearance panel controls) — click/keystroke sfx, usage-threshold voice cues, task-complete, approval-prompt and startup-greeting triggers, plus offline-SAPI read-output-aloud | ✅ done (see [`SOUNDS_IMPLEMENTATION_PLAN.md`](reference/SOUNDS_IMPLEMENTATION_PLAN.md)) |
+| + | Active-Files Edit Heatmap — real `+`/`-` diff-stat counts per file, live-edit pulse, self-heal, deleted-file indicator | ✅ done (see [`ACTIVE_FILES_HEATMAP_PLAN.md`](reference/ACTIVE_FILES_HEATMAP_PLAN.md)) |
 | + | Multi-repo project switching — "+" button, native folder picker, writes `projects.local.json` | ✅ done |
 | + | GPU usage row in the System widget (Windows, Task-Manager-style counters) | ✅ done |
 
@@ -1100,7 +1100,7 @@ triggered today, debounced both ways (re-arms only once usage drops back under
 announcement). `welcome`/`needYou`/`done` have real generated audio waiting but
 nothing calls them yet — startup greeting, approval-prompt detection and
 task-complete detection are still open build-order steps; see
-[`SOUNDS_IMPLEMENTATION_PLAN.md`](SOUNDS_IMPLEMENTATION_PLAN.md).
+[`SOUNDS_IMPLEMENTATION_PLAN.md`](reference/SOUNDS_IMPLEMENTATION_PLAN.md).
 
 The five voice lines are real, generated via
 [Edge-TTS](https://github.com/rany2/edge-tts) (`en-US-AriaNeural`,

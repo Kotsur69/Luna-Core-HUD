@@ -10,14 +10,14 @@ the six lessons the conversions have cost so far.
 |---|---|
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation — **D4–D6 DONE**: release hygiene, `v0.9.0` public, notify-and-click auto-update, **Electron 33 → 43 (`npm audit` clean)** — and **E1/E3 DONE**: machine telemetry widget, threshold pulse, pane fade-in — and **sound & voice feedback DONE** (mpv sfx cues, all triggers incl. task-complete/approval-prompt/startup-greeting, offline-SAPI read-output-aloud — tracked separately in [`SOUNDS_IMPLEMENTATION_PLAN.md`](SOUNDS_IMPLEMENTATION_PLAN.md), not duplicated here) — and **Ctrl+L "Ustawienia" (Settings overlay) DONE
 2026-08-13**: started as the Terminal Appearance Customizer
-([`TERMINAL_CUSTOMIZER_PLAN.md`](TERMINAL_CUSTOMIZER_PLAN.md), from
+([`TERMINAL_CUSTOMIZER_PLAN.md`](reference/TERMINAL_CUSTOMIZER_PLAN.md), from
 `LUNA_HUD_SPECIFICATION.md` §6.6), grew into a general Settings overlay from
-Mati's live feedback — see that plan's **§10 for the full list** (all 9
+Mati's live feedback — see that plan's **§1 and §3 for the full list** (all 9
 terminal knobs incl. a custom background image; sound + boot-sequence moved
 out of the left panel to declutter it; a real `allowTransparency` bug found
 and fixed, which is what made opacity/blur actually work) — and
 **Active-Files Edit Heatmap DONE 2026-08-13**
-([`ACTIVE_FILES_HEATMAP_PLAN.md`](ACTIVE_FILES_HEATMAP_PLAN.md), from
+([`ACTIVE_FILES_HEATMAP_PLAN.md`](reference/ACTIVE_FILES_HEATMAP_PLAN.md), from
 `LUNA_HUD_SPECIFICATION.md` §6.2): real git-diff-stat `+`/`-` counts per
 file, a live "currently being edited" pulse, and (added same day from
 manual-test feedback) a bounded self-heal so the live pulse cannot get
@@ -51,7 +51,7 @@ volume via Windows' own GSMTC (not the Spotify Web API originally sketched —
 works with any app, needs no OAuth/network) for transport and a Core Audio
 COM interop for volume, `src/media.js`, polling every 2 s and pushing only on
 change. **438 tests.** — and, 2026-08-18: **per-project pin-board todo DONE**
-(§5.4 of `LUNACORE_HUD_WIDGET_PLAN.md` — was global, now keyed off each tab's
+(§2 of `reference/LUNACORE_HUD_WIDGET_PLAN.md` — was global, now keyed off each tab's
 `session.projectId`, `dcd7b3b`) and **Notifications DONE** (§5.2 below,
 `2a6079a`): an opt-in OS toast on a session going busy→idle (background tabs
 included — `led.js` never had an idle timer for them before this) or crossing
@@ -60,7 +60,7 @@ the window (new `window:focus` IPC) and jumps to that tab. **578 tests.** —
 and **`package.json`/lockfile synced to `0.9.2`, `v0.9.2` cut and published**
 ([releases/tag/v0.9.2](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.2),
 2026-08-18). |
-| **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED, `v0.9.0` is public, and **`v0.9.1` is now also public** — [releases/tag/v0.9.1](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.1). It carries everything that had landed on `main` since `v0.9.0` with nothing shipped: the sound/voice work, the Settings overlay, the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite, the Active-Files Heatmap, multi-repo project switching, the GPU widget, the D5 chip relocation, and the Electron 33→43 security fixes D5a flagged (§D5a: *"only a released `v0.9.1` actually delivers the fix"*). **D5 (auto-update) verified end-to-end**: an installed build discovers and applies an update going *from* `v0.9.1` onward. Updating *from* `v0.9.0` does not currently work — known, not blocking, not being chased. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `TERMINAL_CUSTOMIZER_PLAN.md` §10.7 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
+| **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED, `v0.9.0` is public, and **`v0.9.1` is now also public** — [releases/tag/v0.9.1](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.1). It carries everything that had landed on `main` since `v0.9.0` with nothing shipped: the sound/voice work, the Settings overlay, the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite, the Active-Files Heatmap, multi-repo project switching, the GPU widget, the D5 chip relocation, and the Electron 33→43 security fixes D5a flagged (§D5a: *"only a released `v0.9.1` actually delivers the fix"*). **D5 (auto-update) verified end-to-end**: an installed build discovers and applies an update going *from* `v0.9.1` onward. Updating *from* `v0.9.0` does not currently work — known, not blocking, not being chased. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `reference/TERMINAL_CUSTOMIZER_PLAN.md` §4 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
 | **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build (checked against Electron **33**; §D6a flags that a redo under **43** is still owed — cheap, and belongs in the next pre-flight per §D6a). |
 | **Next action** | No forced next step — D5 is proven, `v0.9.1` is out, and the session timeline + Media Deck picks are both done. Pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (voice ducking now that Media Deck's volume primitive exists, RGB sync, multi-agent visualizer, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. Redoing the §D2a eyes-only spawn check against the packaged Electron 43 build (never done — the original PASSED was against 33) is cheap and still owed whenever convenient. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
