@@ -27,7 +27,7 @@
 import { t, pulse } from './util.js';
 import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
-import { summarizeResult, buildMirrorText } from './gitquick-format.js';
+import { summarizeResult, buildMirrorText, resolveMenuKey } from './gitquick-format.js';
 
 const gitquickEl = document.getElementById('gitquick');
 const els = {
@@ -117,6 +117,10 @@ async function runAction(action, message) {
   if (mirror) term.write(mirror);
 
   pending = false;
+  // The commit path leaves focus in the now-hidden message input; anything
+  // else leaves it wherever the click landed. Either way the list stops
+  // answering arrows unless focus comes back here.
+  if (gitquickOpen) gitquickEl.focus();
 }
 
 function selectAction() {
@@ -139,12 +143,19 @@ function openGitQuick() {
   hideResult();
   gitquickEl.hidden = false;
   renderMenu();
+  // WHY: without this the keys go to xterm's textarea (still the active
+  // element) and get typed into the running `claude` session instead of
+  // driving the list - the overlay is a plain <div>, so it needs both the
+  // tabindex="-1" in index.html and this explicit focus(). palette.js gets
+  // away without it only because it focuses its search <input>.
+  gitquickEl.focus();
 }
 
 function closeGitQuick() {
   if (!gitquickOpen) return;
   gitquickOpen = false;
   hideMessageInput();
+  gitquickEl.hidden = true;
 }
 
 els.list.addEventListener('mousemove', (e) => {
@@ -173,21 +184,20 @@ els.messageInput.addEventListener('keydown', (e) => {
 // "one Escape backs out of the message, a second Escape closes" state
 // machine, matching how simple palette.js/termcustom.js keep their Escape.
 gitquickEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
+  const hit = resolveMenuKey(e.key, sel, ACTIONS);
+  if (hit.kind === 'close') {
     e.preventDefault();
     closeGitQuick();
     term.focus();
     return;
   }
   if (e.target === els.messageInput) return; // typing a message never drives the list
+  if (hit.kind === 'none') return; // swallowed: a modal owns the keyboard
 
-  if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % ACTIONS.length; renderMenu(); }
-  else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + ACTIONS.length) % ACTIONS.length; renderMenu(); }
-  else if (e.key === 'Enter') { e.preventDefault(); selectAction(); }
-  else {
-    const idx = ACTIONS.findIndex((a) => a[0] === e.key.toLowerCase());
-    if (idx >= 0) { e.preventDefault(); sel = idx; renderMenu(); selectAction(); }
-  }
+  e.preventDefault();
+  sel = hit.sel;
+  renderMenu();
+  if (hit.kind === 'select') selectAction();
 });
 
 gitquickEl.addEventListener('click', (e) => {
@@ -195,6 +205,13 @@ gitquickEl.addEventListener('click', (e) => {
 });
 
 onLangChange(() => { if (gitquickOpen) renderMenu(); });
+
+// The chip in the terminal bar opens the menu.
+/** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
+export function mountGitquickChip(root) {
+  const btn = root.querySelector('#gitquick-open');
+  if (btn) btn.addEventListener('click', openGitQuick);
+}
 
 // Global Ctrl/Cmd+G (capture, to get ahead of xterm.js) - same tradeoff and
 // precedent as palette.js's Ctrl+K and termcustom.js's Ctrl+L. Free at the

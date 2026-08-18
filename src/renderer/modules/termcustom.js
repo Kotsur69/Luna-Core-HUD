@@ -136,6 +136,10 @@ async function openTermcustom() {
     /* IPC failed - fall back to defaults, still lets the modal open */
   }
   renderFromPrefs(prefs);
+  // Same reason as gitquick.js's openGitQuick(): the overlay is a plain <div>,
+  // so until it holds focus its own keydown (Escape, :265) never fires and the
+  // keys keep going into the terminal. Needs the tabindex="-1" in index.html.
+  termcustomEl.focus();
 }
 
 function closeTermcustom() {

@@ -13,6 +13,7 @@ const {
   describeCommand,
   summarizeResult,
   buildMirrorText,
+  resolveMenuKey,
 } = require('../src/renderer/modules/gitquick-format.js');
 
 // Pass-through stub: returns the key itself (with params inlined), so an
@@ -119,4 +120,58 @@ test('buildMirrorText trims surrounding whitespace from git\'s output before joi
 test('buildMirrorText for status never appends output, even if the field is set', () => {
   const out = buildMirrorText('status', '', { ok: true, output: 'should not appear', repo: {} });
   assert.equal(out, '\r\n$ git status\r\n');
+});
+
+// ---- resolveMenuKey ---------------------------------------------------------
+// The keyboard logic behind the list. This is what actually broke: the handler
+// existed and was correct, but nothing ever focused the overlay, so it never
+// ran and every key went into the running `claude` session instead. Focus is a
+// DOM fact these tests cannot see (manual check), but the decision it feeds is
+// pure and pinned here.
+
+const ACTIONS = ['commit', 'push', 'fetch', 'status'];
+
+test('resolveMenuKey moves down and wraps past the last item', () => {
+  assert.deepEqual(resolveMenuKey('ArrowDown', 0, ACTIONS), { kind: 'move', sel: 1 });
+  assert.deepEqual(resolveMenuKey('ArrowDown', 3, ACTIONS), { kind: 'move', sel: 0 });
+});
+
+test('resolveMenuKey moves up and wraps past the first item', () => {
+  assert.deepEqual(resolveMenuKey('ArrowUp', 3, ACTIONS), { kind: 'move', sel: 2 });
+  assert.deepEqual(resolveMenuKey('ArrowUp', 0, ACTIONS), { kind: 'move', sel: 3 });
+});
+
+test('resolveMenuKey Enter selects the current row without moving it', () => {
+  assert.deepEqual(resolveMenuKey('Enter', 2, ACTIONS), { kind: 'select', sel: 2 });
+});
+
+test('resolveMenuKey maps each first-letter shortcut to its own row', () => {
+  assert.deepEqual(resolveMenuKey('c', 3, ACTIONS), { kind: 'select', sel: 0 });
+  assert.deepEqual(resolveMenuKey('p', 0, ACTIONS), { kind: 'select', sel: 1 });
+  assert.deepEqual(resolveMenuKey('f', 0, ACTIONS), { kind: 'select', sel: 2 });
+  assert.deepEqual(resolveMenuKey('s', 0, ACTIONS), { kind: 'select', sel: 3 });
+});
+
+test('resolveMenuKey letter shortcuts are case-insensitive (Shift held)', () => {
+  assert.deepEqual(resolveMenuKey('P', 0, ACTIONS), { kind: 'select', sel: 1 });
+});
+
+test('resolveMenuKey Escape closes from any row', () => {
+  assert.deepEqual(resolveMenuKey('Escape', 2, ACTIONS), { kind: 'close' });
+});
+
+test('resolveMenuKey swallows a key that matches nothing', () => {
+  assert.deepEqual(resolveMenuKey('x', 1, ACTIONS), { kind: 'none' });
+  assert.deepEqual(resolveMenuKey(' ', 1, ACTIONS), { kind: 'none' });
+});
+
+test('resolveMenuKey does not letter-match multi-char key names', () => {
+  // 'Tab'[0] is 't', which must not be read as a shortcut for anything.
+  assert.deepEqual(resolveMenuKey('Tab', 1, ACTIONS), { kind: 'none' });
+  assert.deepEqual(resolveMenuKey('F5', 1, ACTIONS), { kind: 'none' });
+});
+
+test('resolveMenuKey still closes on Escape with an empty action list', () => {
+  assert.deepEqual(resolveMenuKey('Escape', 0, []), { kind: 'close' });
+  assert.deepEqual(resolveMenuKey('ArrowDown', 0, []), { kind: 'none' });
 });

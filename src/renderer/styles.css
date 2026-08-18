@@ -1814,8 +1814,14 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 /* ---- Ctrl+K chip in the terminal bar ---------------------------------------- */
 
+/* Only the FIRST chip carries the auto margin. Flexbox splits free space
+   EQUALLY between every auto margin on the line, so leaving it on all of them
+   spread the chips across the bar instead of grouping them - visible the
+   moment a third chip (Ctrl+G) joined Ctrl+K/Ctrl+L. */
+.palette-chip ~ .palette-chip { margin-left: 0; }
+
 .palette-chip {
-  margin-left: auto; /* push to the right edge of the bar */
+  margin-left: auto; /* push the whole chip group to the right edge of the bar */
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -1880,6 +1886,11 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding-top: 12vh;
 }
 .palette[hidden] { display: none; }
+/* The overlay ROOT takes programmatic focus on open (gitquick.js /
+   termcustom.js) so its keydown handler owns the keyboard instead of the
+   terminal. It is a container, not a control - a UA focus ring drawn around
+   the whole viewport would just be noise. Real controls inside keep theirs. */
+.palette:focus, .termcustom:focus { outline: none; }
 
 .palette__backdrop {
   position: absolute;

@@ -1,13 +1,15 @@
 // ============================================================================
 // LunaCore - the `terminal` widget (A2f): the center panel
 // ----------------------------------------------------------------------------
-// One root, SIX owning modules - terminals.js (the xterm host), led.js (the
+// One root, SEVEN owning modules - terminals.js (the xterm host), led.js (the
 // working/waiting indicator), sessions.js (the tab bar), palette.js (the
-// Ctrl+K chip), termcustom.js (the Ctrl+L chip) and update.js (the D5 update
-// chip, hidden unless there is an update to act on). None of the six may
+// Ctrl+K chip), termcustom.js (the Ctrl+L chip), gitquick.js (the Ctrl+G
+// chip) and update.js (the D5 update chip, hidden unless there is an update
+// to act on). None of the seven may
 // import each other in a way that would cycle back here, which is exactly why
 // this composition lives in its own file instead of inside terminals.js:
-// sessions.js, palette.js and termcustom.js already import FROM terminals.js.
+// sessions.js, palette.js, termcustom.js and gitquick.js already import FROM
+// terminals.js.
 //
 // UNLIKE every other widget, this one's mount() must only ever run ONCE. Its
 // children are live xterm.Terminal instances wired to real PTY child
@@ -26,6 +28,7 @@ import { mountLed } from './led.js';
 import { mountTabs } from './sessions.js';
 import { mountPaletteChip } from './palette.js';
 import { mountTermcustomChip } from './termcustom.js';
+import { mountGitquickChip } from './gitquick.js';
 import { mountUpdateChip } from './update.js';
 
 defineWidget({
@@ -39,6 +42,7 @@ defineWidget({
     mountTabs(root);
     mountPaletteChip(root);
     mountTermcustomChip(root);
+    mountGitquickChip(root);
     mountUpdateChip(root);
     // No cleanup: this widget is never meant to unmount (see header).
   },

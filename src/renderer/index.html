@@ -613,6 +613,11 @@
         <button id="termcustom-open" class="palette-chip" data-i18n-title="termcustom.chip.title" title="Ustawienia (Ctrl+L)">
           <kbd>Ctrl</kbd><kbd>L</kbd>
         </button>
+        <!-- Third chip in the same bar: the git quick-menu, so Ctrl+G is
+             discoverable instead of being a shortcut you have to already know. -->
+        <button id="gitquick-open" class="palette-chip" data-i18n-title="gitquick.chip.title" title="Szybkie akcje Git (Ctrl+G)">
+          <kbd>Ctrl</kbd><kbd>G</kbd>
+        </button>
         <!-- D5: the same chip-style bar as Ctrl+K/Ctrl+L, instead of a permanent block
              in the left panel (see modules/update.js). Only visible when there's
              something to act on (an update available/ready); hidden otherwise -
@@ -667,7 +672,7 @@
        Deliberately separate from the read+fetch-only git-station panel (#git
        widget) - this is commit/push, reached only by an explicit keystroke +
        typed message, never a click. -->
-  <div id="gitquick" class="palette gitquick" hidden>
+  <div id="gitquick" class="palette gitquick" tabindex="-1" hidden>
     <div class="palette__backdrop" data-gitquick-close></div>
     <div class="palette__modal gitquick__modal" role="dialog" aria-modal="true" aria-label="Szybkie akcje Git">
       <div class="palette__bar">
@@ -705,7 +710,7 @@
        from w-appearance - slimming down the left panel. The module/file/ids
        are still named "termcustom" (historical), but the overlay is now
        general Settings, not just terminal appearance - hence the two sections. -->
-  <div id="termcustom" class="termcustom" hidden>
+  <div id="termcustom" class="termcustom" tabindex="-1" hidden>
     <div class="termcustom__backdrop" data-termcustom-close></div>
     <div class="termcustom__modal" role="dialog" aria-modal="true" aria-label="Ustawienia">
       <div class="termcustom__bar">
