@@ -50,7 +50,16 @@ and **Media Deck DONE 2026-08-17** (§6.3, reframed): play/pause/skip + system
 volume via Windows' own GSMTC (not the Spotify Web API originally sketched —
 works with any app, needs no OAuth/network) for transport and a Core Audio
 COM interop for volume, `src/media.js`, polling every 2 s and pushing only on
-change. **438 tests.** |
+change. **438 tests.** — and, 2026-08-18: **per-project pin-board todo DONE**
+(§5.4 of `LUNACORE_HUD_WIDGET_PLAN.md` — was global, now keyed off each tab's
+`session.projectId`, `dcd7b3b`) and **Notifications DONE** (§5.2 below,
+`2a6079a`): an opt-in OS toast on a session going busy→idle (background tabs
+included — `led.js` never had an idle timer for them before this) or crossing
+85% context, per-tab edge/hysteresis mirroring autocompact.js, click focuses
+the window (new `window:focus` IPC) and jumps to that tab. **578 tests.** —
+and **`package.json`/lockfile synced to `0.9.2`, `v0.9.2` cut and published**
+([releases/tag/v0.9.2](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.2),
+2026-08-18). |
 | **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED, `v0.9.0` is public, and **`v0.9.1` is now also public** — [releases/tag/v0.9.1](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.1). It carries everything that had landed on `main` since `v0.9.0` with nothing shipped: the sound/voice work, the Settings overlay, the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite, the Active-Files Heatmap, multi-repo project switching, the GPU widget, the D5 chip relocation, and the Electron 33→43 security fixes D5a flagged (§D5a: *"only a released `v0.9.1` actually delivers the fix"*). **D5 (auto-update) verified end-to-end**: an installed build discovers and applies an update going *from* `v0.9.1` onward. Updating *from* `v0.9.0` does not currently work — known, not blocking, not being chased. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `TERMINAL_CUSTOMIZER_PLAN.md` §10.7 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
 | **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build (checked against Electron **33**; §D6a flags that a redo under **43** is still owed — cheap, and belongs in the next pre-flight per §D6a). |
 | **Next action** | No forced next step — D5 is proven, `v0.9.1` is out, and the session timeline + Media Deck picks are both done. Pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (voice ducking now that Media Deck's volume primitive exists, RGB sync, multi-agent visualizer, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. Redoing the §D2a eyes-only spawn check against the packaged Electron 43 build (never done — the original PASSED was against 33) is cheap and still owed whenever convenient. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
@@ -534,8 +543,13 @@ Injector-only.
   own profile. Big but very much in the spirit of a "command center".
 - **Git widget.** Show current branch + dirty-file count for the cwd (read-only
   `git status --porcelain`), with quick-inject buttons for the git cheat-sheet.
-- **Notifications.** OS toast when context crosses 85%, or when the PTY goes idle
-  after being busy (parse stdout quiet-period). Uses Electron `Notification`.
+- ✅ ~~**Notifications.**~~ **BUILT 2026-08-18.** Opt-in OS toast (Electron
+  `Notification`, silent) when a session's context crosses 85% or it goes
+  busy→idle — active tab or a background one (`led.js` gained a per-bucket
+  idle timer for this; background tabs never had one). Per-tab edge/hysteresis
+  mirrors autocompact.js's; click focuses the window (new `window:focus` IPC)
+  and switches to that tab. Toggle: `notificationsEnabled` in
+  `ui.local.json`, its own widget next to Actions. `src/renderer/modules/notify.js`.
 
 ### 5.3 Bigger / exploratory
 
@@ -618,7 +632,8 @@ token-safe. Priority order roughly top-to-bottom.
 - ✅ ~~**Working-vs-waiting LED.**~~ **BUILT 2026-07-20.** Dot in the terminal
   bar, driven entirely by stdout activity in the renderer — amber pulsing while
   data flows, steady green after 800 ms of silence, red on exit. No new IPC:
-  the signal was already in the stream. OS notifications still open as a pairing.
+  the signal was already in the stream. Its busy→idle edge is what
+  Notifications (§5.2) rides, 2026-08-18.
 - ✅ ~~**CWD / project switcher.**~~ **BUILT 2026-07-22.** `config/projects.json`
   (+ gitignored `.local.json`) with `~`-prefixed portable paths, `src/projects.js`
   as the loader/validator (analog of `profiles.js`), a mutable `activeCwd` +

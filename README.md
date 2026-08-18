@@ -18,8 +18,10 @@ injects prompts or touches the `claude` binary.
 > **cyberpunk boot sequence**, a **Skill Tracker that shows how long each
 > tool actually ran**, an **Active-Files Edit Heatmap** (real diff-stat
 > counts, live-edit pulse, deleted-file flag), **GPU usage** next to CPU/RAM,
-> and optional **sound & voice feedback** (mpv-based, degrades silently if
-> mpv isn't installed).
+> optional **sound & voice feedback** (mpv-based, degrades silently if mpv
+> isn't installed), a **per-project pin-board todo list**, and opt-in **OS
+> notifications** (busy→idle, 85% context) that focus the window and jump to
+> the right tab when clicked.
 
 ---
 
@@ -29,8 +31,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.9.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.9.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.9.2.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.9.2-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your

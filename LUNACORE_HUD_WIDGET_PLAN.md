@@ -109,14 +109,23 @@ No poller here either, unlike Media Deck: every read is a ~200 ms PowerShell
 spawn and mute state only changes when someone changes it, so it reads on
 mount, after each toggle, and on demand.
 
-### 5.4 Pin-Board Todo — shipped as specified
-`src/todo.js` (validation + whole-list persistence, the scratchpad's IPC
-shape) and `src/renderer/modules/todo.js`, whose list operations are pure and
-exported so the ordering, the cap and what "clear done" removes are all
-unit-tested without a DOM. Global rather than per-project, the same call the
-scratchpad made and for the same reason. Debounced autosave, and `cleanup()`
-flushes a pending save instead of dropping the last edit — the one thing the
-scratchpad's own header warns about.
+### 5.4 Pin-Board Todo — shipped as specified, then promoted to per-project
+`src/todo.js` (validation + persistence, the scratchpad's IPC shape) and
+`src/renderer/modules/todo.js`, whose list operations are pure and exported
+so the ordering, the cap and what "clear done" removes are all unit-tested
+without a DOM. Debounced autosave, and `cleanup()` flushes a pending save
+instead of dropping the last edit — the one thing the scratchpad's own header
+warns about.
+
+Shipped global (the scratchpad's own call, for the same reason); promoted to
+**one list per project** on 2026-08-18 (`dcd7b3b`) — keyed by
+`session.projectId` (falling back to a default key when a session has none),
+same shape as `config/scratchpad.local.md`'s per-project cousin would need if
+it ever wanted the same treatment. `getTodos`/`saveTodos` now take a
+`sessionId`; the renderer re-fetches on every tab/project switch
+(`syncTodoProject()`), flushing any pending debounced save under the
+project it was typed for first, so a switch mid-edit cannot land text on the
+wrong project's list.
 
 ### 5.5 Still owed
 Manual `npm start` verification of all three new widgets on a real desktop —
