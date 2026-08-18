@@ -2029,6 +2029,59 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   font-size: 10px;
 }
 
+/* ---- Git quick-menu (Ctrl+G) --------------------------------------------
+   Reuses .palette's overlay/backdrop/modal/list/item/foot rules directly
+   (same fixed+backdrop+centered-modal shape) - only these narrow the modal
+   and style the bits the palette doesn't have (heading, message input,
+   result line). Same pairing as .termcustom reusing .palette below. */
+
+.gitquick .palette__modal { width: min(360px, 92vw); max-height: 60vh; }
+
+.gitquick__heading {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.gitquick-item__kind[data-kind='commit'] { color: var(--neon-cyan);    border-color: rgba(95, 242, 214, 0.4); }
+.gitquick-item__kind[data-kind='push']   { color: var(--warn);         border-color: rgba(255, 216, 107, 0.4); }
+.gitquick-item__kind[data-kind='fetch']  { color: var(--neon-magenta); border-color: rgba(199, 116, 255, 0.4); }
+.gitquick-item__kind[data-kind='status'] { color: var(--good);         border-color: rgba(124, 255, 155, 0.4); }
+
+.gitquick__message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  border-top: var(--border-w) solid var(--edge);
+}
+.gitquick__message[hidden] { display: none; }
+.gitquick__message-input {
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  background: var(--bg-panel-2);
+}
+.gitquick__hint {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.gitquick__result {
+  padding: 10px 16px;
+  border-top: var(--border-w) solid var(--edge);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 20vh;
+  overflow-y: auto;
+}
+.gitquick__result[hidden] { display: none; }
+.gitquick__result.is-ok { color: var(--good); }
+.gitquick__result.is-fail { color: var(--bad); }
+.gitquick__result.is-pending { color: var(--text-dim); }
+
 /* ---- Terminal customization (Ctrl+L) ------------------------------------
    Same overlay as the palette (fixed + backdrop + centered modal), but the
    body is a vertical list of form fields instead of a JS-built results list -

@@ -102,6 +102,9 @@ contextBridge.exposeInMainWorld('lunacore', {
   fetchRepo: (dir) => ipcRenderer.invoke('git:fetch', dir),
   /** Walks the configured roots for repos and saves what it finds; Promise<string[]>. */
   scanRepos: () => ipcRenderer.invoke('git:scan'),
+  /** Ctrl+G quick-menu: commit/push/fetch/status on the active tab's own repo. */
+  gitQuickAction: (sessionId, action, message) =>
+    ipcRenderer.invoke('git:quickAction', { sessionId, action, message }),
 
   // --- 7C: action cheat-sheets ---
   /** Fetches { groups: [{ title, note, commands: [{label, command}] }] }. */

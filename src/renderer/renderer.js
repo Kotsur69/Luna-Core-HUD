@@ -57,6 +57,7 @@ import './modules/devices.js';
 import './modules/mcp.js';
 import './modules/git.js';
 import './modules/palette.js';
+import './modules/gitquick.js';
 
 // -- Left panel: switchers, ports, appearance ---------------------------------
 import { initProfiles, initProjects } from './modules/switchers.js';

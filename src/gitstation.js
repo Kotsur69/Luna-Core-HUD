@@ -18,9 +18,14 @@
 //
 // WHAT IT DOES: reads, plus fetch. Fetch touches the network and updates
 // ahead/behind; it cannot alter a working tree, so it is safe to fire from a
-// glanceable panel. Pull, commit and push are deliberately absent - those
-// belong in a terminal where you can see what happened, and this panel sits one
-// stray click away from your whole afternoon.
+// glanceable panel. Pull, commit and push are deliberately absent from THIS
+// panel - those belong in a terminal where you can see what happened, and
+// this panel sits one stray click away from your whole afternoon.
+//
+// commitAll/pushCurrent/fetchDir (below) exist for a DIFFERENT caller: the
+// Ctrl+G quick-menu (modules/gitquick.js), a deliberate multi-keystroke path
+// (open menu, pick action, type a commit message) on the tab's own repo, not
+// a whitelist or a stray click. Same execFile safety, different UI contract.
 // ============================================================================
 
 'use strict';
@@ -63,14 +68,21 @@ function readJson(file) {
   }
 }
 
-/** Runs git in a directory. Resolves { ok, stdout } - never rejects. */
+/**
+ * Runs git in a directory. Resolves { ok, stdout, stderr } - never rejects.
+ *
+ * Captures stderr too, not just stdout: `git push`'s entire human-readable
+ * output (progress, "Everything up-to-date", rejection reasons) goes to
+ * stderr by convention - a helper that dropped it would make every push
+ * result look silently empty.
+ */
 function git(dir, args, timeout = STATUS_TIMEOUT_MS) {
   return new Promise((resolve) => {
     execFile(
       'git',
       ['-C', dir, ...args],
       { windowsHide: true, timeout, maxBuffer: 4 * 1024 * 1024 },
-      (err, stdout) => resolve({ ok: !err, stdout: stdout || '' })
+      (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout || '', stderr: stderr || '' })
     );
   });
 }
@@ -296,8 +308,41 @@ async function fetchRepo(dir) {
   // path back to us, and a fetch runs a network command in whatever directory
   // it names - so the list is the whitelist.
   if (!repos.includes(dir)) return { ok: false, error: 'notListed', repo: null };
+  return fetchDir(dir);
+}
+
+/**
+ * Fetches one repo with no whitelist check, then re-reads it.
+ *
+ * Used by the Ctrl+G quick-menu: the trust boundary there is the active tab's
+ * OWN working directory (resolved server-side from the session, never a path
+ * the renderer names directly), not the panel's `repos.local.json` list -
+ * see main.js's `git:quickAction` handler.
+ */
+async function fetchDir(dir) {
   const res = await git(dir, ['fetch', '--all', '--prune'], FETCH_TIMEOUT_MS);
-  return { ok: res.ok, error: res.ok ? '' : 'fetchFailed', repo: await readRepoStatus(dir) };
+  return { ok: res.ok, error: res.ok ? '' : 'fetchFailed', output: res.stderr || res.stdout, repo: await readRepoStatus(dir) };
+}
+
+/**
+ * Stages everything and commits. Two git calls, not `commit -a`: `-a` skips
+ * untracked files, and "quick save" should not quietly leave new files
+ * behind. Never throws - a failed add or commit becomes an error field.
+ */
+async function commitAll(dir, message) {
+  const add = await git(dir, ['add', '-A']);
+  if (!add.ok) return { ok: false, error: 'addFailed', output: add.stderr || add.stdout };
+  const commit = await git(dir, ['commit', '-m', message]);
+  return { ok: commit.ok, error: commit.ok ? '' : 'commitFailed', output: commit.stdout || commit.stderr };
+}
+
+/**
+ * Pushes the current branch to its upstream. Network call, same timeout as
+ * fetch. `output` reads from stderr first - see the git() header comment.
+ */
+async function pushCurrent(dir) {
+  const res = await git(dir, ['push'], FETCH_TIMEOUT_MS);
+  return { ok: res.ok, error: res.ok ? '' : 'pushFailed', output: res.stderr || res.stdout };
 }
 
 /** Runs the scan and merges what it finds into the saved list. */
@@ -315,6 +360,9 @@ module.exports = {
   readAllRepos,
   readRepoStatus,
   fetchRepo,
+  fetchDir,
+  commitAll,
+  pushCurrent,
   scanForRepos,
   loadRepoList,
   saveRepoList,

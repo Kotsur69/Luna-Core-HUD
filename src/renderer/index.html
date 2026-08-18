@@ -659,6 +659,43 @@
     </div>
   </div>
 
+  <!-- ================= Git quick-menu (Ctrl+G) ================= -->
+  <!-- modules/gitquick.js. Reuses .palette's overlay/backdrop/modal CSS (same
+       fixed+backdrop+centered-modal shape as the palette) - .gitquick only
+       narrows the modal and adds the message-input/result rows. Global, not
+       per-tab; acts on whichever tab is active when Ctrl+G is pressed.
+       Deliberately separate from the read+fetch-only git-station panel (#git
+       widget) - this is commit/push, reached only by an explicit keystroke +
+       typed message, never a click. -->
+  <div id="gitquick" class="palette gitquick" hidden>
+    <div class="palette__backdrop" data-gitquick-close></div>
+    <div class="palette__modal gitquick__modal" role="dialog" aria-modal="true" aria-label="Szybkie akcje Git">
+      <div class="palette__bar">
+        <span class="palette__glyph">⎇</span>
+        <span class="gitquick__heading" data-i18n="gitquick.title">Szybkie akcje Git</span>
+      </div>
+      <ul id="gitquick-list" class="palette__list" role="listbox" aria-label="Akcje"></ul>
+      <div id="gitquick-message" class="gitquick__message" hidden>
+        <input
+          id="gitquick-message-input"
+          class="palette__input gitquick__message-input"
+          type="text"
+          data-i18n-ph="gitquick.message.ph"
+          placeholder="Wiadomosc commita..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div class="gitquick__hint" data-i18n="gitquick.message.hint">Enter zatwierdza, Esc anuluje</div>
+      </div>
+      <div id="gitquick-result" class="gitquick__result" hidden></div>
+      <div class="palette__foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.nav">nawigacja</span></span>
+        <span><kbd>Enter</kbd> <span data-i18n="palette.foot.use">uzyj</span></span>
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= Settings (Ctrl+L) ================= -->
   <!-- TERMINAL_CUSTOMIZER_PLAN.md - the overlay markup is empty and holds only
        static fields (no JS-built list like the palette), but opening/closing/

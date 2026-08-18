@@ -39,7 +39,7 @@ const { killProcess, PortWatcher } = require('./ports');
 const { getMcpHealth, probeServer } = require('./mcphealth');
 
 // Git station: status for the watched repos, plus fetch.
-const { readAllRepos, fetchRepo, scanForRepos } = require('./gitstation');
+const { readAllRepos, fetchRepo, scanForRepos, readRepoStatus, fetchDir, commitAll, pushCurrent } = require('./gitstation');
 // Action cheat-sheets (7C): command groups sent through the Action Injector.
 const { loadCheatsheets } = require('./cheatsheets');
 // Skill cheat-sheet (7A): auto-scans skill directories -> categories.
@@ -1275,6 +1275,26 @@ function registerIpc() {
       : Promise.resolve({ ok: false, error: 'badPath', repo: null })
   );
   ipcMain.handle('git:scan', () => scanForRepos());
+
+  // Ctrl+G quick-menu (modules/gitquick.js): commit/push/fetch/status on the
+  // ACTIVE TAB'S OWN repo, resolved server-side via resolveSession() - same
+  // fallback-to-active-tab rule todo:read/todo:write use just below.
+  // Deliberately separate from git:list/git:fetch/git:scan above: those stay
+  // read+fetch-only by design (see gitstation.js's header); this path exists
+  // because Mati wants commit/push to work even when Claude Code itself is
+  // out of tokens, reached only via an explicit keystroke + typed message,
+  // never a click.
+  ipcMain.handle('git:quickAction', async (_event, payload) => {
+    const { sessionId, action, message } = payload || {};
+    const session = resolveSession(sessionId);
+    const dir = session ? session.cwd : null;
+    if (!dir) return { ok: false, error: 'noSession' };
+    if (action === 'status') return { ok: true, repo: await readRepoStatus(dir) };
+    if (action === 'fetch') return fetchDir(dir);
+    if (action === 'commit') return commitAll(dir, String(message || '').slice(0, 500));
+    if (action === 'push') return pushCurrent(dir);
+    return { ok: false, error: 'badAction' };
+  });
 
   // Pin-board todos: one list per project. `sessionId` names which tab's
   // project the call belongs to - resolveSession() falls back to the active
