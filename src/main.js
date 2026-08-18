@@ -389,6 +389,7 @@ async function runWidgetProbe(win) {
         clipboard: document.querySelectorAll('#clip-enabled').length,
         mcp: document.querySelectorAll('#mcp-list').length,
         git: document.querySelectorAll('#git-list').length,
+        notify: document.querySelectorAll('#notify-toggle').length,
       },
     });
   })()`;
@@ -1089,6 +1090,16 @@ function registerIpc() {
     if (typeof sessionId !== 'string' || !sessions.has(sessionId)) return;
     activeSessionId = sessionId;
     broadcastSessions();
+  });
+
+  // Notifications: clicking a toast should bring the HUD to the front, not
+  // just switch the tab underneath a window you still cannot see. A minimized
+  // window ignores focus() alone on Windows - restore() first is required.
+  ipcMain.on('window:focus', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   });
 
   // PHASE 4: the renderer asks for the available profiles (to fill the switcher).

@@ -459,6 +459,25 @@
     </label>
   </template>
 
+  <!-- Own layout slot (config/layouts.json), unlike autocompact above - this
+       one has no other widget to nest inside, so it carries its own
+       .panel__section + heading. See src/renderer/modules/notify.js. -->
+  <template id="w-notify">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="notify.title">Powiadomienia</h2>
+      <label id="notify-field" class="switch-field" data-i18n-title="notify.hint" title="Powiadomienie systemowe, gdy sesja skonczy prace lub przekroczy 85% kontekstu.">
+        <span class="switch-field__text">
+          <span class="switch-field__label" data-i18n="notify.label">Powiadomienia systemowe</span>
+          <span id="notify-status" class="switch-field__status" data-i18n="notify.off">wylaczone</span>
+        </span>
+        <span class="switch">
+          <input type="checkbox" id="notify-toggle" class="switch__input" />
+          <span class="switch__track"><span class="switch__thumb"></span></span>
+        </span>
+      </label>
+    </div>
+  </template>
+
   <!-- The nested [data-slot="autocompact"] here is what makes `actions` a
        mounting dependency for `autocompact` - see actions.js and the WIDGETS
        comment in renderer.js. -->

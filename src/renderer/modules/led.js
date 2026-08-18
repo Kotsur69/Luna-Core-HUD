@@ -13,7 +13,7 @@
 'use strict';
 
 import { t } from './util.js';
-import { onLangChange, registerSessionView } from './bus.js';
+import { onLangChange, registerSessionView, emitBusyIdle } from './bus.js';
 
 const LED_IDLE_MS = 800;
 
@@ -40,8 +40,12 @@ export function mountLed(root) {
   renderLed();
 }
 
-/** Called on every chunk of stdout; the idle timer slides forward. */
-export function markWorking() {
+/**
+ * Called on every chunk of stdout; the idle timer slides forward.
+ * `sessionId` names whose data this is, purely so the busy->idle edge fired
+ * below can say which session went quiet - it plays no part in the LED itself.
+ */
+export function markWorking(sessionId) {
   if (ledDead) return;
   ledState = 'working';
   renderLed();
@@ -49,6 +53,7 @@ export function markWorking() {
   ledTimer = setTimeout(() => {
     ledState = 'waiting';
     renderLed();
+    emitBusyIdle(sessionId);
   }, LED_IDLE_MS);
 }
 
@@ -71,11 +76,22 @@ export function isLedDead() {
 }
 
 // A background tab blinks on its own bucket - nothing is on screen to repaint.
+// Its idle timer is a per-bucket mirror of ledTimer above: markWorking() only
+// ever fires for the ACTIVE tab, so a background session never got an idle
+// transition at all until this - it just sat "working" forever once any data
+// had arrived, and notify.js has nothing to listen for without one.
 export function markBucketWorking(bucket) {
+  if (bucket.ledDead) return;
   bucket.ledState = 'working';
+  clearTimeout(bucket.ledIdleTimer);
+  bucket.ledIdleTimer = setTimeout(() => {
+    bucket.ledState = 'waiting';
+    emitBusyIdle(bucket.id);
+  }, LED_IDLE_MS);
 }
 
 export function markBucketDead(bucket) {
+  clearTimeout(bucket.ledIdleTimer);
   bucket.ledDead = true;
   bucket.ledState = 'dead';
 }

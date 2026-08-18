@@ -4,8 +4,8 @@
 // Small persistent slice of interface state in config/ui.local.json (gitignored)
 // - like the scratchpad, a plain file rather than localStorage. Holds
 // { theme, lang, boot, profile, layout, hideSystemPorts, soundEnabled,
-// soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, termFontFamily,
-// termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
+// soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, notificationsEnabled,
+// termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
 // collapsed, layoutSizes.
 // The renderer
@@ -101,6 +101,10 @@ const DEFAULTS = {
   // header - an app whose promise is "I only read what the README lists" has no
   // business watching the clipboard until asked.
   clipboardEnabled: false,
+  // OS toast when a session goes busy->idle or crosses 85% context. Off by
+  // default, same reasoning as soundReadOutputEnabled above: an unexpected
+  // desktop popup is a worse surprise than a quiet HUD, so this is opt-in.
+  notificationsEnabled: false,
   // C2 collapsible panels: ids of the widgets whose section is folded shut.
   // A list rather than a map of booleans so an id that no longer exists simply
   // stops matching anything instead of accumulating dead `false` entries.
@@ -219,6 +223,11 @@ function readUiPrefs() {
       // Missing key => disabled (prefs file written before this option existed).
       clipboardEnabled:
         typeof obj.clipboardEnabled === 'boolean' ? obj.clipboardEnabled : DEFAULTS.clipboardEnabled,
+      // Missing key => disabled (prefs file written before this option existed).
+      notificationsEnabled:
+        typeof obj.notificationsEnabled === 'boolean'
+          ? obj.notificationsEnabled
+          : DEFAULTS.notificationsEnabled,
       // Missing keys => nothing folded, every preset at its authored widths.
       collapsed: cleanCollapsed(obj.collapsed),
       layoutSizes: cleanLayoutSizes(obj.layoutSizes),
@@ -271,6 +280,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.clipboardEnabled === 'boolean') {
       next.clipboardEnabled = partial.clipboardEnabled;
+    }
+    if (partial && typeof partial.notificationsEnabled === 'boolean') {
+      next.notificationsEnabled = partial.notificationsEnabled;
     }
     // Both are sent WHOLE, not merged per entry: the renderer holds the live
     // set/map and writes all of it. Merging here instead would make an unfolded

@@ -56,10 +56,13 @@ export function mountTerminalHost(root) {
 /**
  * sessionId -> session bucket.
  *
- * This module owns `{ term, fitAddon, el, alive }`. Everything else on the
+ * This module owns `{ id, term, fitAddon, el, alive }`. Everything else on the
  * bucket belongs to whichever module registered a session view on the bus
  * (led.js adds ledState/ledDead, context.js adds lastCtx, spark.js adds
- * sparkBuf) - see bus.js. Nothing here reads those keys.
+ * sparkBuf) - see bus.js. Nothing here reads those keys. `id` mirrors the Map
+ * key onto the bucket itself so a module that only has the bucket (not the
+ * sessionId that looked it up) can still name which session it belongs to -
+ * led.js's background idle timer and notify.js both need this.
  */
 const termsBySession = new Map();
 
@@ -176,7 +179,7 @@ export function ensureTerm(sessionId) {
     window.lunacore.write(data, sessionId);
   });
 
-  s = { term: instance, fitAddon: addon, el, alive: true };
+  s = { id: sessionId, term: instance, fitAddon: addon, el, alive: true };
   termsBySession.set(sessionId, s);
   return s;
 }

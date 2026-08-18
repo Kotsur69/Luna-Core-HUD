@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   closeSession: (sessionId) => ipcRenderer.send('sessions:close', sessionId),
   /** Shows the chosen tab. The other tabs' processes keep running in the background. */
   activateSession: (sessionId) => ipcRenderer.send('sessions:activate', sessionId),
+  /** Restores + focuses the HUD window (a minimized/background window ignores a plain focus). */
+  focusWindow: () => ipcRenderer.send('window:focus'),
 
   // --- PHASE 4: launch profiles ---
   /** Fetches { profiles, activeProfile } to fill the switcher. */

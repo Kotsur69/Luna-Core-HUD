@@ -11,7 +11,7 @@
       },
       "chrome": { "brand": "left", "status": "left" },
       "slots": {
-        "left": ["actions", "appearance", "project", "profile", "cheatsheets", "prompts", "skills"],
+        "left": ["actions", "notify", "appearance", "project", "profile", "cheatsheets", "prompts", "skills"],
         "main": ["terminal"],
         "right": [
           "context",
@@ -42,7 +42,7 @@
       "chrome": { "brand": "side", "status": "side" },
       "slots": {
         "main": ["terminal"],
-        "side": ["actions", "context", "telemetry", "media", "appearance", "project", "profile"]
+        "side": ["actions", "notify", "context", "telemetry", "media", "appearance", "project", "profile"]
       }
     },
     {
@@ -55,7 +55,7 @@
       },
       "chrome": { "brand": "left", "status": "left" },
       "slots": {
-        "left": ["actions", "appearance", "project", "profile"],
+        "left": ["actions", "notify", "appearance", "project", "profile"],
         "main": ["terminal"],
         "right": [
           "context",
@@ -89,7 +89,7 @@
       "chrome": { "brand": "dock-a", "status": "dock-a" },
       "slots": {
         "main": ["terminal"],
-        "dock-a": ["actions", "appearance", "project", "profile"],
+        "dock-a": ["actions", "notify", "appearance", "project", "profile"],
         "dock-b": [
           "context",
           "usage",

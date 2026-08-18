@@ -193,6 +193,24 @@ export function emitClipboardUpdate(list) {
   clipboardUpdate.emit(list);
 }
 
+// ---- Busy -> idle transitions (Notifications) -------------------------------
+//
+// Fired by led.js the moment a session's LED flips from working to waiting -
+// active tab or background bucket alike, one shared channel either way. Not
+// replayed: a late subscriber (the notify widget mounting after the fact)
+// should not get handed a stale "session X went idle five minutes ago" toast.
+
+const busyIdle = channel();
+
+/** A session just went from working to waiting. cb(sessionId) -> disposer */
+export function onBusyIdle(cb) {
+  return busyIdle.on(cb);
+}
+
+export function emitBusyIdle(sessionId) {
+  if (sessionId) busyIdle.emit(sessionId);
+}
+
 // ---- Per-tab view state -----------------------------------------------------
 
 const sessionViews = [];
@@ -247,6 +265,7 @@ export function busStats() {
     telemetryUpdate: telemetryUpdate.size,
     mediaUpdate: mediaUpdate.size,
     clipboardUpdate: clipboardUpdate.size,
+    busyIdle: busyIdle.size,
     sessionViews: sessionViews.length,
   };
 }
