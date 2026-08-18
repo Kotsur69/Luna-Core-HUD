@@ -1,8 +1,15 @@
 // ============================================================================
 // LunaCore - pin-board todo widget
 // ----------------------------------------------------------------------------
-// Project-independent checklist. Persisted through todo:read/todo:write (whole
-// list, the scratchpad's IPC shape); src/todo.js re-validates on the way in.
+// Per-project checklist: main.js keys the stored list off whichever tab's
+// session is active (session.projectId), so the four things typed while
+// pointed at one repo are still there next time that project is active, and
+// switching to a different tab shows THAT project's list instead.
+//
+// `boundSessionId` names which session `items` currently reflects. It is set
+// on load (mount, or syncTodoProject() below) and read back by scheduleSave/
+// cleanup, so a save started before a tab switch still lands on the project
+// it was typed under, not whichever tab happens to be active 400ms later.
 //
 // The list operations are PURE and exported, so the interesting behaviour -
 // ordering, the cap, what "clear done" actually removes - is unit-testable
@@ -10,14 +17,15 @@
 //
 // State lives at module scope, not in the DOM, per the ports.js rule: a
 // remount must not lose unsaved edits. The save itself is debounced like the
-// scratchpad's, and cleanup() flushes a pending one rather than dropping it.
+// scratchpad's; cleanup() and syncTodoProject() both flush a pending one
+// rather than dropping it or letting it land on the wrong project.
 // ============================================================================
 
 'use strict';
 
 import { t, pulse } from './util.js';
 import { onLangChange } from './bus.js';
-import { term } from './terminals.js';
+import { term, getActiveSessionId } from './terminals.js';
 import { defineWidget } from './registry.js';
 
 const SAVE_MS = 400;
@@ -26,6 +34,8 @@ const MAX_TEXT_CHARS = 200;
 let els = null;
 let items = [];
 let saveTimer = null;
+// Which session's project `items` currently reflects - see header.
+let boundSessionId = null;
 
 /**
  * Appends an item. Returns a NEW array (immutability rule) and rejects
@@ -68,15 +78,44 @@ export function openCount(list) {
 function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    window.lunacore.saveTodos(items).catch(() => {});
+    window.lunacore.saveTodos(items, boundSessionId).catch(() => {});
     saveTimer = null;
   }, SAVE_MS);
+}
+
+/** Writes a pending edit NOW, under the project it was typed for. Called
+ *  before switching projects (or unmounting) so a debounce in flight is
+ *  never silently dropped, nor left to land on the WRONG project's list. */
+function flushPendingSave() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  window.lunacore.saveTodos(items, boundSessionId).catch(() => {});
 }
 
 function commit(next) {
   items = next;
   render();
   scheduleSave();
+}
+
+/**
+ * Reloads the checklist for whichever tab is active now - the active
+ * project may have changed (tab switch, or the project switcher on the
+ * current tab). Called by sessions.js; a no-op while the widget is unmounted.
+ */
+export function syncTodoProject() {
+  if (!els) return;
+  flushPendingSave();
+  boundSessionId = getActiveSessionId();
+  window.lunacore
+    .getTodos(boundSessionId)
+    .then((list) => {
+      if (!els) return;
+      items = Array.isArray(list) ? list : [];
+      render();
+    })
+    .catch(() => {});
 }
 
 function renderRows() {
@@ -162,8 +201,9 @@ defineWidget({
 
     els.clear.addEventListener('click', () => commit(clearDone(items)));
 
+    boundSessionId = getActiveSessionId();
     window.lunacore
-      .getTodos()
+      .getTodos(boundSessionId)
       .then((list) => {
         if (!els) return;
         // Only adopt the stored list if nothing was typed while it loaded -
@@ -176,11 +216,7 @@ defineWidget({
     render();
 
     return () => {
-      if (saveTimer) {
-        clearTimeout(saveTimer);
-        window.lunacore.saveTodos(items).catch(() => {});
-        saveTimer = null;
-      }
+      flushPendingSave();
       offLang();
       els = null;
     };

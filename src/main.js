@@ -1265,10 +1265,18 @@ function registerIpc() {
   );
   ipcMain.handle('git:scan', () => scanForRepos());
 
-  // Pin-board todos: whole-list read/write, the scratchpad's shape (the list
-  // operations themselves are pure and live in the renderer widget).
-  ipcMain.handle('todo:read', () => readTodos());
-  ipcMain.handle('todo:write', (_event, list) => writeTodos(list));
+  // Pin-board todos: one list per project. `sessionId` names which tab's
+  // project the call belongs to - resolveSession() falls back to the active
+  // tab when it is missing, same as every other per-tab IPC handler here.
+  // (List operations themselves are pure and live in the renderer widget.)
+  ipcMain.handle('todo:read', (_event, sessionId) => {
+    const session = resolveSession(sessionId);
+    return readTodos(session ? session.projectId : null);
+  });
+  ipcMain.handle('todo:write', (_event, list, sessionId) => {
+    const session = resolveSession(sessionId);
+    return writeTodos(session ? session.projectId : null, list);
+  });
 
   // Device panel: microphone mute. `action` is whitelisted inside devices.js
   // before it can reach a shell argv, same discipline media:command uses.

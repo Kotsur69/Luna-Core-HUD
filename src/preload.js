@@ -137,11 +137,11 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Drops the whole history (and its file); Promise with the empty list. */
   clearClipboard: () => ipcRenderer.invoke('clipboard:clear'),
 
-  // --- Pin-board todos ---
-  /** Fetches the list: [{text, done, at}]. */
-  getTodos: () => ipcRenderer.invoke('todo:read'),
-  /** Writes the whole list; Promise<boolean>. */
-  saveTodos: (list) => ipcRenderer.invoke('todo:write', list),
+  // --- Pin-board todos (one list per project) ---
+  /** Fetches the named (or active) tab's project list: [{text, done, at}]. */
+  getTodos: (sessionId) => ipcRenderer.invoke('todo:read', sessionId),
+  /** Writes that project's whole list; Promise<boolean>. */
+  saveTodos: (list, sessionId) => ipcRenderer.invoke('todo:write', list, sessionId),
 
   // --- Device panel: microphone mute ---
   /**

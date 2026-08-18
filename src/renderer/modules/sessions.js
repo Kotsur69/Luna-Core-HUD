@@ -45,6 +45,7 @@ import { lightTiles, applyToolEvents, trackBucketTools, resetTiles } from './ski
 import { applyFileEvents, trackBucketFiles } from './activefiles.js';
 import { applyTurnEnd, trackBucketTurn } from './sessiontimeline.js';
 import { syncSwitchers } from './switchers.js';
+import { syncTodoProject } from './todo.js';
 import { sfx } from './sound.js';
 
 // A2f: set once by mountTabs() - see modules/terminal.js.
@@ -65,7 +66,7 @@ window.lunacore.onData(({ sessionId, data }) => {
   s.term.write(data);
   // The LED describes what you are looking at. A background tab blinks on its
   // own marker instead.
-  if (sessionId === getActiveSessionId()) markWorking();
+  if (sessionId === getActiveSessionId()) markWorking(sessionId);
   else markBucketWorking(s);
 });
 
@@ -144,6 +145,9 @@ window.lunacore.onRestarted((profile) => {
     resetTiles();
     setPtyStatus(true, 'ptystatus.active');
     emitSessionRestarted(profile);
+    // The project switcher can restart THIS tab into a different project -
+    // the todo board needs to follow it, same as every project switch does.
+    syncTodoProject();
     fitAndResize();
     term.focus();
   }
@@ -174,6 +178,7 @@ function showSession(sessionId) {
   showPane(sessionId);
   restoreActive();
   syncSwitchers(activeMeta());
+  syncTodoProject();
   renderTabs();
   fitAndResize(); // a background tab did not know its own size
   term.focus();
@@ -244,6 +249,7 @@ window.lunacore.onSessions(({ sessions, activeSessionId: activeId }) => {
       showPane(activeId);
       restoreActive();
       syncSwitchers(activeMeta());
+      syncTodoProject();
       fitAndResize();
     } else {
       showSession(activeId);

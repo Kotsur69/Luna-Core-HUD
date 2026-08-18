@@ -8,7 +8,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { normalizeTodo, normalizeTodos, MAX_ITEMS, MAX_TEXT_CHARS } = require('../src/todo.js');
+const {
+  normalizeTodo,
+  normalizeTodos,
+  normalizeStore,
+  keyFor,
+  MAX_ITEMS,
+  MAX_TEXT_CHARS,
+  DEFAULT_KEY,
+} = require('../src/todo.js');
 const {
   addTodo,
   toggleTodo,
@@ -59,6 +67,49 @@ test('normalizeTodos applies the item cap', () => {
 
 test('normalizeTodos on a non-array returns an empty list', () => {
   assert.deepEqual(normalizeTodos(undefined), []);
+});
+
+// ---- keyFor -------------------------------------------------------------
+
+test('keyFor uses the projectId as-is when it is a non-empty string', () => {
+  assert.equal(keyFor('amsteelquote'), 'amsteelquote');
+});
+
+test('keyFor falls back to DEFAULT_KEY for null, undefined, empty or non-string', () => {
+  assert.equal(keyFor(null), DEFAULT_KEY);
+  assert.equal(keyFor(undefined), DEFAULT_KEY);
+  assert.equal(keyFor(''), DEFAULT_KEY);
+  assert.equal(keyFor(42), DEFAULT_KEY);
+});
+
+// ---- normalizeStore -----------------------------------------------------
+
+test('normalizeStore keeps each project under its own key', () => {
+  const store = normalizeStore({
+    amsteelquote: [{ text: 'fix pricing bug' }],
+    safetyhub: [{ text: 'redesign dashboard' }],
+  });
+  assert.deepEqual(
+    store.amsteelquote.map((i) => i.text),
+    ['fix pricing bug']
+  );
+  assert.deepEqual(
+    store.safetyhub.map((i) => i.text),
+    ['redesign dashboard']
+  );
+});
+
+test('normalizeStore drops a bad project list without touching the others', () => {
+  const store = normalizeStore({ good: [{ text: 'keep me' }], bad: 'not a list' });
+  assert.deepEqual(store.good.map((i) => i.text), ['keep me']);
+  assert.deepEqual(store.bad, []);
+});
+
+test('normalizeStore on garbage input (non-object, array, null) returns an empty store', () => {
+  assert.deepEqual(normalizeStore(null), {});
+  assert.deepEqual(normalizeStore(undefined), {});
+  assert.deepEqual(normalizeStore('todo'), {});
+  assert.deepEqual(normalizeStore([{ text: 'a' }]), {});
 });
 
 // ---- addTodo ----------------------------------------------------------------
