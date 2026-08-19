@@ -204,6 +204,16 @@ function handleConnectionError() {
   }, CONN_BACKOFF_MS);
 }
 
+/**
+ * True when THIS session's connection-drop recovery already belongs to an
+ * active God Mode run. Lets autoproceed.js (the always-available, non-God-Mode
+ * version of this same recovery) skip a tab godmode.js is already driving, so
+ * the two never both inject "continue" for the same drop.
+ */
+export function isBoundSession(sessionId) {
+  return sessionId === boundSessionId && phase !== 'idle' && phase !== 'stalled';
+}
+
 function handleTurnEnd({ sessionId } = {}) {
   if (!boundSessionId || sessionId !== boundSessionId) return;
   if (phase === 'idle' || phase === 'stalled') return;
@@ -234,8 +244,12 @@ function handleGodModeSignal({ sessionId, type } = {}) {
 
 // Module-scope on purpose - see the header note. Runs once, the first time
 // this module is imported (by todo.js), and stays live for the app's lifetime.
-window.lunacore.onTurnEnd(handleTurnEnd);
-window.lunacore.onGodModeSignal(handleGodModeSignal);
+// Guarded because todo.js's test suite requires this module in plain Node,
+// where window.lunacore doesn't exist.
+if (typeof window !== 'undefined' && window.lunacore) {
+  window.lunacore.onTurnEnd(handleTurnEnd);
+  window.lunacore.onGodModeSignal(handleGodModeSignal);
+}
 
 /**
  * The confirm-gated arm step (GODMODE_PLAN.md decision #5). Snapshots the

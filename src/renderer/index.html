@@ -474,6 +474,21 @@
     </label>
   </template>
 
+  <!-- Same shape as w-autocompact above - the control's own <label> is the root,
+       nested inside w-actions via [data-slot="autoproceed"]. See autoproceed.js. -->
+  <template id="w-autoproceed">
+    <label id="autoproceed-field" class="switch-field" data-i18n-title="autoproceed.hint" title="Gdy polaczenie sie zerwie, LunaCore samo wysle continue.">
+      <span class="switch-field__text">
+        <span class="switch-field__label" data-i18n="autoproceed.label">Auto-proceed</span>
+        <span id="autoproceed-status" class="switch-field__status" data-i18n="autoproceed.off">wylaczone</span>
+      </span>
+      <span class="switch">
+        <input type="checkbox" id="autoproceed-toggle" class="switch__input" />
+        <span class="switch__track"><span class="switch__thumb"></span></span>
+      </span>
+    </label>
+  </template>
+
   <!-- Own layout slot (config/layouts.json), unlike autocompact above - this
        one has no other widget to nest inside, so it carries its own
        .panel__section + heading. See src/renderer/modules/notify.js. -->
@@ -493,9 +508,9 @@
     </div>
   </template>
 
-  <!-- The nested [data-slot="autocompact"] here is what makes `actions` a
-       mounting dependency for `autocompact` - see actions.js and the WIDGETS
-       comment in renderer.js. -->
+  <!-- The nested [data-slot="autocompact"]/[data-slot="autoproceed"] here are
+       what make `actions` a mounting dependency for both - see actions.js and
+       the WIDGETS comment in renderer.js. -->
   <template id="w-actions">
     <div class="panel__section">
       <h2 class="panel__title" data-i18n="actions.title">Akcje</h2>
@@ -505,6 +520,7 @@
         <span class="action-btn__label">COMPACT CONTEXT</span>
       </button>
       <div class="widget-slot" data-slot="autocompact"></div>
+      <div class="widget-slot" data-slot="autoproceed"></div>
     </div>
   </template>
 

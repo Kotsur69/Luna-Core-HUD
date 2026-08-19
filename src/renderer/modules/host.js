@@ -43,7 +43,7 @@ const mounted = new Map();
  * rebuilt. Anything that takes `actions` down has to take autocompact with it
  * and put it back afterwards; see remountWidget().
  */
-export const NESTED = Object.freeze({ autocompact: 'actions' });
+export const NESTED = Object.freeze({ autocompact: 'actions', autoproceed: 'actions' });
 
 /** Mounted widgets nested inside `id`'s subtree. */
 function nestedIn(id) {

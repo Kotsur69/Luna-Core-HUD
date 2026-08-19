@@ -43,6 +43,7 @@ import './modules/telemetry.js';
 // -- Action Injector ----------------------------------------------------------
 import './modules/actions.js';
 import './modules/autocompact.js';
+import './modules/autoproceed.js';
 import './modules/notify.js';
 import { initCheatsheets } from './modules/cheatsheets.js';
 import { initPrompts } from './modules/prompts.js';

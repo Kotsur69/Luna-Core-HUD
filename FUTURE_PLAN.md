@@ -1,6 +1,6 @@
 # LunaCore — Future Plan (Visual Templates, Layout & Ideas)
 
-## START HERE — where things stand (2026-08-17)
+## START HERE — where things stand (2026-08-19)
 
 Everything below this box is either **live plan** (§8) or **history**. Read this
 box, then §8's Phase A table, then jump to §A2a–§A2f for the widget contract and
@@ -59,10 +59,24 @@ included — `led.js` never had an idle timer for them before this) or crossing
 the window (new `window:focus` IPC) and jumps to that tab. **578 tests.** —
 and **`package.json`/lockfile synced to `0.9.2`, `v0.9.2` cut and published**
 ([releases/tag/v0.9.2](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.2),
-2026-08-18). |
+2026-08-18) — and, 2026-08-19: **God Mode (unattended to-do runner) DONE**
+(`71610db`, [`reference/GODMODE_PLAN.md`](reference/GODMODE_PLAN.md)): arm a
+tab's to-do list and LunaCore injects each open item in turn, waits for
+`onTurnEnd`, ticks it done, injects the next — surviving usage-limit walls
+and dropped connections on its own — and **Ctrl+G git quick-menu DONE**
+(`4e81a52`, `2eda376`): commit/push/fetch/status per tab, second fix needed
+because the shortcut never actually received the keyboard the first time —
+and **Auto-proceed DONE 2026-08-19**
+([`reference/AUTOPROCEED_PLAN.md`](reference/AUTOPROCEED_PLAN.md)): a
+standalone toggle next to Auto-compact, generalizing godmode.js's own
+connection-drop recovery so it works on ANY open tab during ordinary work,
+not only a tab an active God Mode run owns — arms independently, skips a
+tab godmode.js is already handling, 3-retry cap with backoff. **604
+tests.** `package.json`/lockfile bumped to **`0.9.3`** (not yet released as
+a public build). |
 | **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED, `v0.9.0` is public, and **`v0.9.1` is now also public** — [releases/tag/v0.9.1](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.1). It carries everything that had landed on `main` since `v0.9.0` with nothing shipped: the sound/voice work, the Settings overlay, the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite, the Active-Files Heatmap, multi-repo project switching, the GPU widget, the D5 chip relocation, and the Electron 33→43 security fixes D5a flagged (§D5a: *"only a released `v0.9.1` actually delivers the fix"*). **D5 (auto-update) verified end-to-end**: an installed build discovers and applies an update going *from* `v0.9.1` onward. Updating *from* `v0.9.0` does not currently work — known, not blocking, not being chased. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `reference/TERMINAL_CUSTOMIZER_PLAN.md` §4 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
 | **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build (checked against Electron **33**; §D6a flags that a redo under **43** is still owed — cheap, and belongs in the next pre-flight per §D6a). |
-| **Next action** | No forced next step — D5 is proven, `v0.9.1` is out, and the session timeline + Media Deck picks are both done. Pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (voice ducking now that Media Deck's volume primitive exists, RGB sync, multi-agent visualizer, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. Redoing the §D2a eyes-only spawn check against the packaged Electron 43 build (never done — the original PASSED was against 33) is cheap and still owed whenever convenient. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
+| **Next action** | Typing Synth is **PAUSED** ([`reference/TYPING_SYNTH_PLAN.md`](reference/TYPING_SYNTH_PLAN.md)) mid-build: the "keystroke sound works once then goes silent" bug was root-caused as far as "not the `onData` gate" and then set aside for Auto-proceed, which shipped instead. Resume there by re-instrumenting downstream of `sfx.keystroke()` (IPC → `main.js` → `soundManager.play()` → mpv) rather than re-proving the gate is clean. Auto-proceed itself is unverified against a real connection drop in the wild — that's the actual test, not `npm test`. Otherwise: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (voice ducking now that Media Deck's volume primitive exists, RGB sync, multi-agent visualizer, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. Redoing the §D2a eyes-only spawn check against the packaged Electron 43 build (never done — the original PASSED was against 33) is cheap and still owed whenever convenient. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -81,7 +95,7 @@ Two facts that decide most design questions here, both learned the hard way:
 Verification commands, in the order they earn their keep:
 
 ```bash
-npm test                          # 438 tests, ~1 s, no extra deps
+npm test                          # 604 tests, ~1 s, no extra deps
 npm run dist                      # D2: NSIS installer + portable .exe -> dist/
 dist\win-unpacked\LunaCore.exe --luna-probe   # probe the PACKAGED build; result
                                   # lands in %APPDATA%\LunaCore\luna-probe.json
