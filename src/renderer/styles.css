@@ -2593,10 +2593,28 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   box-shadow: 0 0 var(--glow-size-sm) var(--glow);
 }
 
-/* Drag-to-reorder feedback. Dragging fades the source row (it's about to move,
-   not disappear); drag-over lights the row a drop would land it before. */
-.todo-item--dragging { opacity: 0.45; }
-.todo-item--drag-over {
+/* Drag-to-reorder. The whole effect is one transition on one property: as the
+   dragged row passes a neighbour, todo.js gives that neighbour a translateY of
+   exactly one row, and this slides it there instead of letting it jump. Uses
+   the standard settle curve at --dur-fast, which the token layer already
+   collapses to 0ms under prefers-reduced-motion - so reduced motion needs no
+   second code path here, the rows just arrive without the slide. */
+.todo-item {
+  transition: transform var(--dur-fast) var(--ease-smooth);
+  /* Every row is a drag handle, so dragging one must not paint a text
+     selection across the list on the way. (The old draggable="true" row
+     suppressed selection the same way, just implicitly.) */
+  user-select: none;
+}
+
+/* The row under the cursor is the exception: it must be glued to the pointer,
+   and a transition on it would read as lag. It also has to paint over the rows
+   it passes, which needs a position for z-index to bite on. */
+.todo-item--dragging {
+  transition: none;
+  position: relative;
+  z-index: 5;
+  cursor: grabbing;
   border-color: var(--edge-glow);
   box-shadow: 0 0 var(--glow-size-sm) var(--glow);
 }

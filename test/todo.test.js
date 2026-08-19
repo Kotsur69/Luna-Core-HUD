@@ -22,6 +22,7 @@ const {
   toggleTodo,
   removeTodo,
   reorderTodo,
+  resolveDrag,
   clearDone,
   openCount,
 } = require('../src/renderer/modules/todo.js');
@@ -232,4 +233,78 @@ test('the list operations tolerate a non-array (nothing loaded yet)', () => {
   assert.deepEqual(addTodo(null, 'a', 1), [{ text: 'a', done: false, at: 1 }]);
   assert.deepEqual(clearDone(undefined), []);
   assert.equal(openCount(null), 0);
+});
+
+
+// ---- resolveDrag (pointer drag geometry) ------------------------------------
+// A four-row list, each row 30px tall with the list's 5px gap between them, so
+// one row of travel is 35px and the midpoints land at 15 / 50 / 85 / 120. Every
+// case below drags one row and asks where the OTHERS have to go.
+
+const STEP = 35;
+const MIDS = [15, 50, 85, 120];
+
+/** The [{ index, mid }] rows resolveDrag() sees when `dragged` is picked up. */
+function siblingsFor(dragged) {
+  return MIDS.map((mid, index) => ({ index, mid })).filter((s) => s.index !== dragged);
+}
+
+test('resolveDrag leaves everything alone until the row crosses a neighbour', () => {
+  const { shifts, targetIndex } = resolveDrag(siblingsFor(0), 0, MIDS[0] + 10, STEP);
+  assert.deepEqual(shifts, [0, 0, 0]);
+  assert.equal(targetIndex, 0);
+});
+
+test('resolveDrag slides a passed row UP when the drag goes down', () => {
+  // Dragged just past the second row's midpoint (50): only that row moves.
+  const { shifts, targetIndex } = resolveDrag(siblingsFor(0), 0, 55, STEP);
+  assert.deepEqual(shifts, [-STEP, 0, 0]);
+  assert.equal(targetIndex, 1);
+});
+
+test('resolveDrag slides a passed row DOWN when the drag goes up', () => {
+  // Last row dragged up past the third row's midpoint (85), nothing further.
+  const { shifts, targetIndex } = resolveDrag(siblingsFor(3), 3, 80, STEP);
+  assert.deepEqual(shifts, [0, 0, STEP]);
+  assert.equal(targetIndex, 2);
+});
+
+test('resolveDrag moves every row the drag has passed, and only those', () => {
+  const down = resolveDrag(siblingsFor(0), 0, 200, STEP);
+  assert.deepEqual(down.shifts, [-STEP, -STEP, -STEP]);
+  assert.equal(down.targetIndex, 3); // dropped here it becomes the last item
+
+  const up = resolveDrag(siblingsFor(3), 3, 0, STEP);
+  assert.deepEqual(up.shifts, [STEP, STEP, STEP]);
+  assert.equal(up.targetIndex, 0); // ...and here, the first
+});
+
+test('resolveDrag handles a row dragged out of the middle', () => {
+  // Row 1 pulled down past row 2 (mid 85) but not past row 3 (mid 120).
+  const { shifts, targetIndex } = resolveDrag(siblingsFor(1), 1, 90, STEP);
+  assert.deepEqual(shifts, [0, -STEP, 0]); // siblings are rows 0, 2, 3
+  assert.equal(targetIndex, 2);
+});
+
+test('resolveDrag returns one shift per sibling, in the order it was given', () => {
+  const siblings = siblingsFor(2);
+  const { shifts } = resolveDrag(siblings, 2, 60, STEP);
+  assert.equal(shifts.length, siblings.length);
+});
+
+test('resolveDrag targetIndex feeds reorderTodo directly', () => {
+  // The contract the drag relies on: targetIndex counts the rows passed, which
+  // is an index into the list with the dragged item already removed.
+  let list = addTodo(addTodo(addTodo(addTodo([], 'a', 1), 'b', 2), 'c', 3), 'd', 4);
+  const { targetIndex } = resolveDrag(siblingsFor(0), 0, 200, STEP);
+  assert.deepEqual(
+    reorderTodo(list, 0, targetIndex).map((i) => i.text),
+    ['b', 'c', 'd', 'a']
+  );
+});
+
+test('resolveDrag on a one-item list has no siblings to move', () => {
+  const { shifts, targetIndex } = resolveDrag([], 0, 999, STEP);
+  assert.deepEqual(shifts, []);
+  assert.equal(targetIndex, 0);
 });
