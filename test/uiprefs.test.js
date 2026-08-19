@@ -9,6 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { clampTermPrefs, cleanCollapsed, cleanLayoutSizes } = require('../src/uiprefs.js');
+const { loadLayouts } = require('../src/layouts.js');
 
 const DEFAULTS = {
   termFontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
@@ -123,10 +124,41 @@ test('cleanCollapsed: keeps ids, drops junk, dedupes', () => {
   assert.deepEqual(cleanCollapsed(['ports', 'ports', '', null, 42, 'todo']), ['ports', 'todo']);
 });
 
-test('cleanCollapsed: a non-array is an empty list, never a crash', () => {
-  for (const bad of [null, undefined, 'ports', 42, {}]) {
-    assert.deepEqual(cleanCollapsed(bad), []);
+// The whole left rail of the `classic` layout. A fresh HUD opens tidy and the
+// user unfolds what they use; see the comment on DEFAULTS.collapsed.
+const LEFT_RAIL = ['actions', 'appearance', 'project', 'profile', 'cheatsheets', 'prompts', 'skills'];
+
+test('cleanCollapsed: nothing stored means the first-run left rail, folded', () => {
+  for (const missing of [null, undefined, 'ports', 42, {}]) {
+    assert.deepEqual(cleanCollapsed(missing), LEFT_RAIL);
   }
+});
+
+test('cleanCollapsed: the first-run defaults are the classic left rail exactly', () => {
+  // Read from the real layout config rather than a second copy of the list, so
+  // adding a widget to the left rail fails here instead of silently shipping
+  // that one panel open on every new install.
+  const classic = loadLayouts().layouts.find((l) => l.id === 'classic');
+  assert.deepEqual([...cleanCollapsed(null)].sort(), [...classic.slots.left].sort());
+});
+
+test('cleanCollapsed: the live readout is never folded by default', () => {
+  const first = cleanCollapsed(null);
+  for (const live of ['context', 'usage', 'telemetry', 'terminal']) {
+    assert.equal(first.includes(live), false, `${live} must ship open`);
+  }
+});
+
+test('cleanCollapsed: an arranged list wins over the defaults, empty included', () => {
+  // An empty array is "I opened everything", not "nothing stored" - the second
+  // launch after unfolding the rail must not fold it all back up.
+  assert.deepEqual(cleanCollapsed([]), []);
+  assert.deepEqual(cleanCollapsed(['skills']), ['skills']);
+});
+
+test('cleanCollapsed: the defaults array cannot be mutated by a caller', () => {
+  cleanCollapsed(null).push('terminal');
+  assert.equal(cleanCollapsed(null).includes('terminal'), false);
 });
 
 test('cleanCollapsed: caps the list and the id length', () => {

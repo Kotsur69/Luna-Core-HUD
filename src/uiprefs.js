@@ -108,7 +108,20 @@ const DEFAULTS = {
   // C2 collapsible panels: ids of the widgets whose section is folded shut.
   // A list rather than a map of booleans so an id that no longer exists simply
   // stops matching anything instead of accumulating dead `false` entries.
-  collapsed: [],
+  //
+  // The first-run value is the whole LEFT rail of the `classic` layout. That
+  // rail is a drawer of things you open deliberately - actions, the appearance
+  // and project and profile switchers, the cheatsheets, the prompt library,
+  // three hundred-odd skills. Unfolded all at once it is a wall of headings,
+  // and folding six of them away by hand is the first thing anyone does. So the
+  // HUD ships tidy and each person opens the two or three they actually use.
+  //
+  // The RIGHT rail is deliberately absent: it is the live readout (context
+  // window, usage, telemetry), and shipping that folded would gut the point of
+  // a HUD. Like `lang` above, this is only the FIRST-RUN value - cleanCollapsed
+  // returns a stored list untouched, including an empty one, so nobody who has
+  // arranged their own panels ever gets re-folded.
+  collapsed: ['actions', 'appearance', 'project', 'profile', 'cheatsheets', 'prompts', 'skills'],
   // C2 resizable panels: layoutId -> the `grid-template-columns` the user
   // dragged that preset to. Per layout because the presets have different
   // column counts, and a width dragged in `classic` means nothing in `focus`.
