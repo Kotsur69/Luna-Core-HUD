@@ -178,6 +178,114 @@ export function ensureTerm(sessionId) {
     if (data.length === 1 && data >= ' ') sfx.keystroke();
     window.lunacore.write(data, sessionId);
   });
+  // MARK MODE + COPY: xterm has no built-in copy binding or keyboard
+  // selection, so both live in ONE attachCustomKeyEventHandler (xterm only
+  // keeps the last handler attached - a second call would silently replace
+  // this one, not add to it).
+  //
+  // Ctrl+Shift+Arrow extends a keyboard-driven selection one cell/row at a
+  // time from an anchor - the keyboard equivalent of Shift+dragging with the
+  // mouse, for selecting without fighting xterm's mouse-capture (Mati's
+  // request, 2026-08-19). markAnchor/markFocus are absolute buffer
+  // coordinates, 0-based to match buffer.cursorX/cursorY/baseY and select() -
+  // NOT getSelectionPosition(), which is 1-based (an xterm.js
+  // inconsistency), hence the -1 in selectionEdges() below.
+  //
+  // Ctrl+C (and Ctrl+Shift+C) copies via the same clipboard IPC clipboard.js
+  // uses for stored clips - only when there IS a selection; with none, it
+  // falls through to onData above and interrupts exactly as before.
+  let markAnchor = null;
+  let markFocus = null;
+
+  const absCursor = () => {
+    const buf = instance.buffer.active;
+    return { x: buf.cursorX, y: buf.baseY + buf.cursorY };
+  };
+
+  const selectionEdges = () => {
+    const pos = instance.getSelectionPosition();
+    if (!pos) return null;
+    return {
+      start: { x: pos.start.x - 1, y: pos.start.y - 1 },
+      end: { x: pos.end.x - 1, y: pos.end.y - 1 },
+    };
+  };
+
+  // Only scrolls when the focus cell actually left the viewport, rather than
+  // re-snapping it to the top on every move (which would fight the user
+  // extending a selection that is already fully on screen).
+  const scrollIntoView = (y) => {
+    const buf = instance.buffer.active;
+    if (y < buf.viewportY) instance.scrollToLine(y);
+    else if (y > buf.viewportY + instance.rows - 1) instance.scrollToLine(y - instance.rows + 1);
+  };
+
+  const applyMarkSelection = () => {
+    const cols = instance.cols;
+    const [start, end] =
+      markAnchor.y < markFocus.y || (markAnchor.y === markFocus.y && markAnchor.x <= markFocus.x)
+        ? [markAnchor, markFocus]
+        : [markFocus, markAnchor];
+    // select()'s length is a flat row-major count, so it wraps across rows
+    // on its own - no need to special-case a same-row vs. multi-row range.
+    instance.select(start.x, start.y, (end.y - start.y) * cols + (end.x - start.x) + 1);
+    scrollIntoView(markFocus.y);
+  };
+
+  const MARK_ARROWS = {
+    ArrowLeft: { dx: -1, dy: 0 },
+    ArrowRight: { dx: 1, dy: 0 },
+    ArrowUp: { dx: 0, dy: -1 },
+    ArrowDown: { dx: 0, dy: 1 },
+  };
+
+  instance.attachCustomKeyEventHandler((event) => {
+    if (event.type !== 'keydown') return true;
+
+    const arrow = MARK_ARROWS[event.key];
+    if (event.ctrlKey && event.shiftKey && !event.altKey && arrow) {
+      if (!markAnchor) {
+        // Continue an existing mouse/Shift-drag selection if there is one,
+        // rather than discarding it and starting over from the cursor.
+        const existing = selectionEdges();
+        markAnchor = existing ? existing.start : absCursor();
+        markFocus = existing ? existing.end : absCursor();
+      }
+      const maxY = instance.buffer.active.length - 1;
+      if (arrow.dx !== 0) {
+        markFocus.x += arrow.dx;
+        if (markFocus.x < 0) {
+          markFocus.x = instance.cols - 1;
+          markFocus.y = Math.max(0, markFocus.y - 1);
+        } else if (markFocus.x >= instance.cols) {
+          markFocus.x = 0;
+          markFocus.y = Math.min(maxY, markFocus.y + 1);
+        }
+      } else {
+        markFocus.y = Math.max(0, Math.min(maxY, markFocus.y + arrow.dy));
+      }
+      applyMarkSelection();
+      return false;
+    }
+
+    const isCopyChord = (event.ctrlKey || event.metaKey) && !event.altKey && (event.key === 'c' || event.key === 'C');
+    if (isCopyChord) {
+      if (!instance.hasSelection()) return true;
+      window.lunacore.copyClipboardEntry(instance.getSelection());
+      return false;
+    }
+
+    // Any other real key drops the anchor, so the next Ctrl+Shift+Arrow
+    // starts fresh from the cursor instead of resuming a stale one. Bare
+    // Control/Shift keydowns (mid-chord, before the arrow lands) must NOT
+    // count as "another key" or the chord could never complete.
+    if (!['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) {
+      if (markAnchor) instance.clearSelection();
+      markAnchor = null;
+      markFocus = null;
+    }
+    return true;
+  });
 
   s = { id: sessionId, term: instance, fitAddon: addon, el, alive: true };
   termsBySession.set(sessionId, s);
