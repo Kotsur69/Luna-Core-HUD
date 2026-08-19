@@ -21,6 +21,30 @@ const { loadThemes, normalizeTheme, KNOWN_TOKENS } = require('../src/theme');
 
 const STYLES = path.join(__dirname, '..', 'src', 'renderer', 'styles.css');
 
+/** The declaration lines inside the :root { ... } block of styles.css. */
+function rootBlockLines() {
+  const lines = fs.readFileSync(STYLES, 'utf8').split(/\r?\n/);
+  const start = lines.findIndex((l) => l.trim() === ':root {');
+  assert.ok(start !== -1, 'styles.css must have a :root block');
+  const end = lines.findIndex((l, i) => i > start && l.trim() === '}');
+  assert.ok(end !== -1, ':root block must be closed');
+  return lines.slice(start + 1, end);
+}
+
+/** The value a token defaults to in :root, with any trailing comment cut off. */
+function rootValue(token) {
+  for (const line of rootBlockLines()) {
+    // `token + ':'` and not just the token, so --glow-size does not match the
+    // --glow-size-md line two rows below it.
+    const at = line.indexOf(token + ':');
+    if (at === -1) continue;
+    const rest = line.slice(at + token.length + 1);
+    const semi = rest.indexOf(';');
+    return (semi === -1 ? rest : rest.slice(0, semi)).trim();
+  }
+  return assert.fail(`${token} must be declared in :root`);
+}
+
 /** Tokens declared in the :root { ... } block in styles.css. */
 function rootTokens() {
   const css = fs.readFileSync(STYLES, 'utf8');
@@ -165,9 +189,51 @@ test('matrix is no longer just a green filter', () => {
 
 test('flat themes genuinely turn off the glow', () => {
   const { themes } = loadThemes(() => {});
-  for (const id of ['nord', 'paper', 'void', 'light']) {
+  // Nord used to be in this list. It moved to the neon group below on a
+  // deliberate call - a Nord with no glow and light slate surfaces read as
+  // grey rather than as a colour scheme. The themes left here are flat by
+  // PURPOSE (paper and light are lit surfaces; void is an absence), and a
+  // glow on any of them would be a bug, not a preference.
+  for (const id of ['paper', 'void', 'light']) {
     const t = themes.find((x) => x.id === id);
     assert.strictEqual(t.vars['--glow-size'], '0px', `theme "${id}"`);
     assert.strictEqual(t.vars['--text-glow'], 'none', `theme "${id}"`);
   }
+});
+
+/** A theme's effective --glow-size, honouring the :root default when unset. */
+function glowSize(theme) {
+  return parseFloat(theme.vars['--glow-size'] ?? rootValue('--glow-size'));
+}
+
+test('the neon themes actually glow, on boxes AND on type', () => {
+  const { themes } = loadThemes(() => {});
+  // The failure this guards against is specific and had already happened: a
+  // theme carrying a --glow-size but leaving --text-glow at "none", so the
+  // bloom appears on every border and never once on the text - which reads as
+  // a rendering fault rather than a style.
+  for (const id of ['cyberpunk', 'synthwave', 'nord', 'dracula', 'solarized', 'tokyo-night']) {
+    const t = themes.find((x) => x.id === id);
+    // An absent --glow-size is not a missing glow: :root's own default IS the
+    // cyberpunk look, and cyberpunk is the one theme that inherits it rather
+    // than restating it. What must never appear here is an explicit 0.
+    assert.ok(glowSize(t) > 0, `theme "${id}" has --glow-size ${t.vars['--glow-size']}`);
+    // --text-glow is different: its :root default really is `none`, so a neon
+    // theme has to say so itself or the bloom lands on every border and never
+    // once on the type, which reads as a rendering fault rather than a style.
+    assert.ok(
+      t.vars['--text-glow'] && t.vars['--text-glow'] !== 'none',
+      `theme "${id}" glows on boxes but not on type`
+    );
+  }
+});
+
+test('solarized stays restrained while the others burn', () => {
+  const { themes } = loadThemes(() => {});
+  const size = (id) => glowSize(themes.find((t) => t.id === id));
+  // Solarized's identity is a deliberately narrow contrast range; it earns a
+  // glow but must never out-bloom the themes built for neon.
+  assert.ok(size('solarized') < size('cyberpunk'), 'solarized must stay under cyberpunk');
+  assert.ok(size('solarized') < size('synthwave'), 'solarized must stay under synthwave');
+  assert.ok(size('synthwave') >= size('cyberpunk'), 'synthwave is the loudest by design');
 });
