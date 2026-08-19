@@ -55,7 +55,9 @@ function renderPrompts() {
   groups.forEach((group, gi) => {
     const details = document.createElement('details');
     details.className = 'cheat';
-    details.open = gi < openGroups.length ? Boolean(openGroups[gi]) : gi === 0;
+    // Same fix as cheatsheets.js (2026-08-19): every group starts collapsed
+    // instead of the first one popping open uninvited.
+    details.open = gi < openGroups.length ? Boolean(openGroups[gi]) : false;
     openGroups[gi] = details.open;
     // `toggle` does not bubble - bound per group, inside root.
     details.addEventListener('toggle', () => {
