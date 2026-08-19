@@ -23,8 +23,17 @@ test('normalizeProfile passes a valid profile through', () => {
       command: 'claude',
       args: ['--continue'],
       env: { ANTHROPIC_BASE_URL: 'http://localhost:1234' },
+      // Absent in the input, so it defaults off - a profile has to ASK for its
+      // model to be filled in from a local endpoint (src/lmstudio.js).
+      autoModel: false,
     }
   );
+});
+
+test('normalizeProfile carries autoModel through only when it is exactly true', () => {
+  assert.equal(normalizeProfile({ id: 'x', label: 'X', autoModel: true }).autoModel, true);
+  assert.equal(normalizeProfile({ id: 'x', label: 'X', autoModel: 'yes' }).autoModel, false);
+  assert.equal(normalizeProfile({ id: 'x', label: 'X' }).autoModel, false);
 });
 
 test('normalizeProfile rejects entries without id or label', () => {
@@ -78,7 +87,7 @@ test('normalizeProfile turns a non-object env (including arrays) into an empty o
 
 test('normalizeProfile does not carry unknown fields forward', () => {
   const p = normalizeProfile({ id: 'x', label: 'X', whatever: 'junk' });
-  assert.deepEqual(Object.keys(p).sort(), ['args', 'command', 'env', 'id', 'label']);
+  assert.deepEqual(Object.keys(p).sort(), ['args', 'autoModel', 'command', 'env', 'id', 'label']);
 });
 
 test('getProfile finds by id, otherwise null', () => {

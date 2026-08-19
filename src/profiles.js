@@ -57,7 +57,12 @@ function normalizeProfile(p) {
           Object.entries(p.env).filter(([, v]) => typeof v === 'string')
         )
       : {};
-  return { id: p.id, label: normalizeText(p.label), command, args, env };
+  // autoModel: opt in to having ANTHROPIC_MODEL filled from whatever model the
+  // profile's LOCAL endpoint currently has loaded (src/lmstudio.js). Opt-in per
+  // profile rather than inferred from the base URL, because "point at a local
+  // server" and "let LunaCore choose the model" are separate decisions - a
+  // profile can legitimately want the first without the second.
+  return { id: p.id, label: normalizeText(p.label), command, args, env, autoModel: p.autoModel === true };
 }
 
 /**
