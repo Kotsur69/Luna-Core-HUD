@@ -16,7 +16,7 @@
 'use strict';
 
 import { getActiveSessionId } from './terminals.js';
-import { loc } from './util.js';
+import { loc, t } from './util.js';
 import { onLangChange } from './bus.js';
 import { defineWidget } from './registry.js';
 
@@ -139,6 +139,37 @@ async function addProjectFromDialog(button) {
   }
 }
 
+/**
+ * "-" button: confirm -> delete the SELECTED entry (local-added or a shipped
+ * default alike, see projects.js removeProject) -> repaint the switcher.
+ * Deliberately does NOT restart the current tab: the entry disappearing from
+ * the list has no bearing on a session already running in that folder,
+ * unless the removed entry was the one currently active - then the select's
+ * value just needs to land on whatever loadProjects() now resolves to,
+ * mirroring the fallback main.js already applies on its side.
+ */
+async function removeSelectedProject(button) {
+  if (!window.lunacore || button.disabled || !projectEls) return;
+  const id = projectEls.select.value;
+  if (!id) return;
+
+  const item = lastProjects?.items.find((p) => p.id === id);
+  const label = item ? loc(item.label) : id;
+  if (!confirm(t('project.remove.confirm', { label }))) return;
+
+  button.disabled = true;
+  try {
+    const result = await window.lunacore.removeProject(id);
+    if (!result) return;
+
+    lastProjects = { items: result.projects, activeId: result.activeProject };
+    if (currentProjectId === id) currentProjectId = result.activeProject;
+    renderProjectSwitcher();
+  } finally {
+    button.disabled = false;
+  }
+}
+
 defineWidget({
   id: 'project',
   titleKey: 'project.title',
@@ -147,6 +178,7 @@ defineWidget({
     projectEls = {
       select: root.querySelector('#project-switcher'),
       addBtn: root.querySelector('#project-add-btn'),
+      removeBtn: root.querySelector('#project-remove-btn'),
     };
     renderProjectSwitcher();
 
@@ -157,6 +189,7 @@ defineWidget({
     });
 
     projectEls.addBtn.addEventListener('click', () => addProjectFromDialog(projectEls.addBtn));
+    projectEls.removeBtn.addEventListener('click', () => removeSelectedProject(projectEls.removeBtn));
 
     const offLang = onLangChange(renderProjectSwitcher);
 

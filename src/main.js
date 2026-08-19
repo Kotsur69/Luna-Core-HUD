@@ -31,7 +31,7 @@ const { loadProfiles, getProfile } = require('./profiles');
 // Building the start command: decides whether a session can be pinned by id.
 const { withSessionId, findExecutable } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
-const { loadProjects, getProject, addProject } = require('./projects');
+const { loadProjects, getProject, addProject, removeProject } = require('./projects');
 // Localhost port tracker (7B): passive scan of listening ports + kill.
 const { killProcess, PortWatcher } = require('./ports');
 
@@ -1165,6 +1165,21 @@ function registerIpc() {
     const result = addProject(entry);
     if (!result) return null;
     projects = result.projects;
+    return result;
+  });
+
+  // Removes an entry (local-added OR a shipped default) and returns the
+  // freshly reloaded list, same shape as projects:add/projects:list. Only
+  // reassigns activeProjectId when the removed entry WAS the active one -
+  // same "don't silently switch the caller's tab away" rule projects:add
+  // follows, just for deletion: removing some other, inactive entry must
+  // not touch the active tab's tracked project.
+  ipcMain.handle('projects:remove', (_event, id) => {
+    const wasActive = id === activeProjectId;
+    const result = removeProject(id);
+    if (!result) return null;
+    projects = result.projects;
+    if (wasActive) activeProjectId = result.activeProject;
     return result;
   });
 

@@ -76,6 +76,13 @@ function loadProjects() {
   const base = readJson(BASE_FILE) || FALLBACK;
   const local = readJson(localFile());
 
+  // Ids the user deleted via the UI. Needed because a deleted entry may come
+  // from the READ-ONLY base file - removeProject() cannot erase it there, so
+  // it records the id here instead and every load filters it back out.
+  const removed = new Set(
+    local && Array.isArray(local.removedIds) ? local.removedIds : []
+  );
+
   // Keyed by id so local entries replace base entries with the same id
   // (insertion order is preserved).
   const byId = new Map();
@@ -83,7 +90,7 @@ function loadProjects() {
     if (!src || !Array.isArray(src.projects)) return;
     for (const raw of src.projects) {
       const p = normalizeProject(raw);
-      if (p) byId.set(p.id, p);
+      if (p && !removed.has(p.id)) byId.set(p.id, p);
     }
   };
   collect(base);
@@ -140,20 +147,35 @@ function uniqueId(base, existingIds) {
  * de-duplicated against every existing project, base + local alike, so a
  * second "my-app" on another drive does not collide with or overwrite the
  * first.
+ *
+ * Re-adding a folder that is ALREADY in the list (same resolved path, e.g.
+ * the "+" dialog pointed at a folder twice) is a no-op: the existing entry
+ * is returned as-is rather than creating a second switcher option for the
+ * same directory.
  * @param {{label?:string, path:string}} entry
  * @returns {{projects, activeProject, addedId:string}|null} null when `path`
  *   is missing/blank. `addedId` lets the caller select/switch to the new
- *   entry without having to re-derive its slug from the label.
+ *   (or matching pre-existing) entry without having to re-derive its slug
+ *   from the label.
  */
 function addProject(entry) {
   if (!entry || typeof entry.path !== 'string' || !entry.path.trim()) return null;
 
   const resolvedPath = path.normalize(expandHome(entry.path.trim()));
+  const current = loadProjects();
+
+  // Case-insensitive compare: Windows paths differing only by case are the
+  // same directory on disk, and would otherwise pass as "distinct".
+  const dupe = current.projects.find(
+    (p) => p.path.toLowerCase() === resolvedPath.toLowerCase()
+  );
+  if (dupe) return { ...current, addedId: dupe.id };
+
   const label = typeof entry.label === 'string' && entry.label.trim()
     ? entry.label.trim()
     : path.basename(resolvedPath) || resolvedPath;
 
-  const existingIds = new Set(loadProjects().projects.map((p) => p.id));
+  const existingIds = new Set(current.projects.map((p) => p.id));
   const id = uniqueId(slugify(label), existingIds);
 
   const local = readJson(localFile()) || {};
@@ -170,8 +192,54 @@ function addProject(entry) {
   return { ...loadProjects(), addedId: id };
 }
 
+/**
+ * Removes one project by id and returns the freshly reloaded
+ * { projects, activeProject } - same shape as loadProjects().
+ *
+ * Works for BOTH kinds of entry:
+ *   - local-only (added via the "+" dialog): dropped straight out of
+ *     projects.local.json's `projects` array.
+ *   - shipped in the read-only base file (config/projects.json): the base
+ *     file itself is never touched, so the id is recorded in local's
+ *     `removedIds` instead - loadProjects() filters it back out on every
+ *     read. This is how a stale/duplicate DEFAULT entry (not just a
+ *     user-added one) becomes deletable from the app.
+ *
+ * Never picks a new activeProject itself: if the removed entry was active,
+ * loadProjects()'s existing "activeProject not in byId -> first available"
+ * fallback takes over, same as it already does for a bad/missing id.
+ * @param {string} id
+ * @returns {{projects, activeProject}|null} null when `id` is missing/blank.
+ */
+function removeProject(id) {
+  if (typeof id !== 'string' || !id) return null;
+
+  const local = readJson(localFile()) || {};
+  const list = Array.isArray(local.projects) ? local.projects.filter((p) => p && p.id !== id) : [];
+  const removedIds = new Set(Array.isArray(local.removedIds) ? local.removedIds : []);
+  removedIds.add(id);
+
+  paths.ensureUserDir();
+  fs.writeFileSync(
+    localFile(),
+    JSON.stringify({ ...local, projects: list, removedIds: [...removedIds] }, null, 2) + '\n',
+    'utf8'
+  );
+
+  return loadProjects();
+}
+
 // expandHome + normalizeProject + slugify + uniqueId are pure (no I/O) -
-// exported for the tests. addProject does real file I/O (writes
-// projects.local.json) and is covered by the manual checklist instead, same
+// exported for the tests. addProject/removeProject do real file I/O (write
+// projects.local.json) and are covered by the manual checklist instead, same
 // as loadProjects() itself.
-module.exports = { loadProjects, getProject, normalizeProject, expandHome, addProject, slugify, uniqueId };
+module.exports = {
+  loadProjects,
+  getProject,
+  normalizeProject,
+  expandHome,
+  addProject,
+  removeProject,
+  slugify,
+  uniqueId,
+};

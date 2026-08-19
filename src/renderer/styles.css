@@ -507,6 +507,8 @@ body::after {
 }
 .project-add-btn:hover { color: var(--neon-cyan); border-color: var(--edge-glow); }
 .project-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* "-" remove button: same shape, destructive-red hover instead of cyan. */
+.project-remove-btn:hover { color: var(--bad); border-color: var(--bad); }
 
 /* ---- Number / range fields (previously unstyled -> white native controls) -
    sound-volume, sound-long-task-minutes and every termcustom field (§2). One

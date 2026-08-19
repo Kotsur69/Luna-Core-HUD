@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   pickProjectFolder: () => ipcRenderer.invoke('projects:pick-folder'),
   /** Appends a new project to projects.local.json; returns { projects, activeProject } or null. */
   addProject: (entry) => ipcRenderer.invoke('projects:add', entry),
+  /** Removes a project by id (local-added or a shipped default); returns { projects, activeProject } or null. */
+  removeProject: (id) => ipcRenderer.invoke('projects:remove', id),
 
   // --- Active-Files Heatmap: does the file still exist on disk ---
   /** Checks fs.existsSync for a list of paths; returns { [path]: boolean }. */
