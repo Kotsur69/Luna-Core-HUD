@@ -19,11 +19,15 @@
 
 import { term, applyTerminalAppearance } from './terminals.js';
 import { mountBoot, startBoot } from './boot.js';
+import { mountNotify } from './notify.js';
+import { applyLang } from './appearance.js';
 import { sfx, setKeystrokeVariant } from './sound.js';
 import { t } from './util.js';
 
 const termcustomEl = document.getElementById('termcustom');
 const els = {
+  // Moved from appearance.js's w-appearance template (2026-08-19).
+  langSwitcher: document.getElementById('termcustom-lang-switcher'),
   fontFamily: document.getElementById('termcustom-font-family'),
   fontFamilyCustomField: document.getElementById('termcustom-font-family-custom-field'),
   fontFamilyCustom: document.getElementById('termcustom-font-family-custom'),
@@ -124,10 +128,16 @@ function renderBgImageStatus(termBgImage) {
   els.bgImageStatus.textContent = termBgImage ? t('termcustom.bgImage.set') : t('termcustom.bgImage.none');
 }
 
+/** Repaints the language select from the live i18n state (appearance.js owns applying it). */
+function renderLangSwitcher() {
+  els.langSwitcher.value = window.i18n.lang;
+}
+
 async function openTermcustom() {
   if (termcustomOpen) return;
   termcustomOpen = true;
   termcustomEl.hidden = false;
+  renderLangSwitcher();
 
   let prefs = TERM_DEFAULTS;
   try {
@@ -147,6 +157,14 @@ function closeTermcustom() {
   termcustomOpen = false;
   termcustomEl.hidden = true;
 }
+
+// -- Language (moved from appearance.js, 2026-08-19) -------------------------
+
+els.langSwitcher.addEventListener('change', () => {
+  sfx.modeToggle();
+  applyLang(els.langSwitcher.value);
+  window.lunacore.setUiPrefs({ lang: els.langSwitcher.value });
+});
 
 // -- Persistence: each control writes its own term* key on change -----------
 
@@ -345,6 +363,10 @@ export async function initTermcustomSettings() {
   // as terminal.js's "No cleanup: this widget is never meant to unmount".
   mountBoot(termcustomEl);
   startBoot(prefs.boot !== false);
+
+  // Notifications: same "static overlay, never unmounted" shape as boot above
+  // - moved out of the widget registry entirely (2026-08-19), see notify.js.
+  mountNotify(termcustomEl);
 }
 
 // Global Ctrl/Cmd+L (capture, to get ahead of xterm.js) - same tradeoff and

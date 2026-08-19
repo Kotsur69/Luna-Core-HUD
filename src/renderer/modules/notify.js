@@ -15,6 +15,13 @@
 // Off by default (uiprefs.js's notificationsEnabled) - like
 // soundReadOutputEnabled, an unannounced desktop popup is a worse surprise
 // than a quiet HUD, so this is opt-in.
+//
+// 2026-08-19 (Mati): moved out of the widget registry into the Settings
+// overlay (Ctrl+L) - same "static overlay, never unmounted" shape boot.js's
+// mountBoot() already established, and for the same reason (decluttering the
+// left panel). mountNotify(root) is called once from termcustom.js's
+// initTermcustomSettings() with #termcustom as root; the bus subscriptions
+// below are permanent for the rest of the app's life, same as boot's.
 // ============================================================================
 
 'use strict';
@@ -23,10 +30,9 @@ import { t } from './util.js';
 import { onActiveContext, onBackgroundContext, onBusyIdle, onLangChange } from './bus.js';
 import { getActiveBucket, getActiveSessionId } from './terminals.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
-import { defineWidget } from './registry.js';
 import { sfx } from './sound.js';
 
-// Elements of the current mount, or null when this widget is not on screen.
+// Elements of the current mount, or null before mountNotify() has run.
 let els = null;
 
 // Loaded from ui.local.json on mount, written back on every toggle - see
@@ -107,59 +113,60 @@ function renderStatus() {
   els.status.textContent = t(notifyEnabled ? 'notify.armed' : 'notify.off');
 }
 
-defineWidget({
-  id: 'notify',
-  // No titleKey: the template carries its own <h2>, same reason todo/clipboard do.
-  titleKey: '',
-  template: 'w-notify',
-  mount(root) {
-    els = {
-      field: root.querySelector('#notify-field'),
-      status: root.querySelector('#notify-status'),
-      toggle: root.querySelector('#notify-toggle'),
-    };
+/**
+ * Wires the notification toggle inside whatever root it's given - called once
+ * from termcustom.js with the #termcustom overlay as root (static markup, not
+ * a widget, so there's no remount to guard against - see boot.js's mountBoot
+ * for the identical shape this mirrors).
+ */
+export function mountNotify(root) {
+  els = {
+    field: root.querySelector('#notify-field'),
+    status: root.querySelector('#notify-status'),
+    toggle: root.querySelector('#notify-toggle'),
+  };
 
-    // Clone always arrives unchecked (authored state) - repaint from the
-    // module flag immediately, same reasoning as autocompact.js's mount().
-    els.toggle.checked = notifyEnabled;
+  // Repaint from module state - notifyEnabled only changes via a toggle or the
+  // async prefs load below, never from the (now nonexistent) template clone.
+  els.toggle.checked = notifyEnabled;
+  els.field.classList.toggle('is-armed', notifyEnabled);
+  renderStatus();
+
+  els.toggle.addEventListener('change', () => {
+    sfx.modeToggle();
+    notifyEnabled = els.toggle.checked;
     els.field.classList.toggle('is-armed', notifyEnabled);
     renderStatus();
+    window.lunacore.setUiPrefs({ notificationsEnabled: notifyEnabled });
+  });
 
-    els.toggle.addEventListener('change', () => {
-      sfx.modeToggle();
-      notifyEnabled = els.toggle.checked;
+  // The real, persisted value arrives async - a mount before it lands shows
+  // the (safe) off default rather than blocking on it.
+  window.lunacore
+    .getUiPrefs()
+    .then((prefs) => {
+      if (!els || !prefs) return;
+      notifyEnabled = prefs.notificationsEnabled === true;
+      els.toggle.checked = notifyEnabled;
       els.field.classList.toggle('is-armed', notifyEnabled);
       renderStatus();
-      window.lunacore.setUiPrefs({ notificationsEnabled: notifyEnabled });
-    });
+    })
+    .catch(() => {});
 
-    // The real, persisted value arrives async - a mount before it lands shows
-    // the (safe) off default rather than blocking on it.
-    window.lunacore
-      .getUiPrefs()
-      .then((prefs) => {
-        if (!els || !prefs) return;
-        notifyEnabled = prefs.notificationsEnabled === true;
-        els.toggle.checked = notifyEnabled;
-        els.field.classList.toggle('is-armed', notifyEnabled);
-        renderStatus();
-      })
-      .catch(() => {});
+  const offLang = onLangChange(renderStatus);
+  // The overlay being closed does not mean the user cannot see a toast - a
+  // notification is exactly for a tab they are NOT currently looking at - so
+  // unlike the old widget's mount()/unmount(), these subscriptions are
+  // permanent for the app's lifetime, same as boot.js's mountBoot().
+  const offBusyIdle = onBusyIdle(handleBusyIdle);
+  const offActiveCtx = onActiveContext(handleActiveContext);
+  const offBackgroundCtx = onBackgroundContext(handleBackgroundContext);
 
-    const offLang = onLangChange(renderStatus);
-    // Subscribed here, not at module scope: unmounted means no visible toggle,
-    // and a toast the user cannot see or disarm is exactly what "no surprise
-    // behind your back" rules out - the same call autocompact.js makes.
-    const offBusyIdle = onBusyIdle(handleBusyIdle);
-    const offActiveCtx = onActiveContext(handleActiveContext);
-    const offBackgroundCtx = onBackgroundContext(handleBackgroundContext);
-
-    return () => {
-      offLang();
-      offBusyIdle();
-      offActiveCtx();
-      offBackgroundCtx();
-      els = null;
-    };
-  },
-});
+  return () => {
+    offLang();
+    offBusyIdle();
+    offActiveCtx();
+    offBackgroundCtx();
+    els = null;
+  };
+}

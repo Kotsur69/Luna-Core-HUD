@@ -22,7 +22,7 @@
 
 'use strict';
 
-import { emitLangChange } from './bus.js';
+import { emitLangChange, onLangChange } from './bus.js';
 import { applyTerminalTheme, applyTerminalAppearance } from './terminals.js';
 import { defineWidget } from './registry.js';
 import { getLayouts, getActiveLayoutId, selectLayout } from './layout.js';
@@ -69,17 +69,18 @@ function applyThemeVars(theme) {
   }
 }
 
-/** Switches language: static labels, then everything held in module state. */
-function applyLang(lang) {
+/**
+ * Switches language: static labels, then everything held in module state.
+ *
+ * Exported: the language <select> itself now lives in the Settings overlay
+ * (Ctrl+L, 2026-08-19) - modules/termcustom.js calls this on change, this
+ * module keeps owning the apply/persist logic since it's what boots the HUD
+ * into the right language in the first place (see initAppearance() below).
+ */
+export function applyLang(lang) {
   window.i18n.setLang(lang);
   window.i18n.applyStatic();
   emitLangChange();
-}
-
-/** Repaints the language select from the live i18n state. */
-function renderLangSwitcher() {
-  if (!els) return;
-  els.langSwitcher.value = window.i18n.lang;
 }
 
 /** Rebuilds the theme select's options and repaints it from module state. */
@@ -155,7 +156,6 @@ export async function initAppearance() {
 
   // Language first, so applyStatic catches the whole DOM on startup.
   applyLang(prefs.lang);
-  renderLangSwitcher();
   // The widget already mounted (initLayout runs first), so its layout options
   // were built in the authored language - relabel them now that we know better.
   renderLayoutSwitcher();
@@ -185,14 +185,19 @@ defineWidget({
     els = {
       themeSwitcher: root.querySelector('#theme-switcher'),
       layoutSwitcher: root.querySelector('#layout-switcher'),
-      langSwitcher: root.querySelector('#lang-switcher'),
     };
 
     // Repaint from module state - initAppearance() only runs once at launch,
     // a remount must not fall back to the template's authored defaults.
-    renderLangSwitcher();
     renderThemeSwitcher();
     renderLayoutSwitcher();
+
+    // Layout labels are localized - relabel them on every language change, not
+    // just the one initAppearance() applies at boot. Used to be a direct call
+    // from the lang-select's own 'change' handler, but that select now lives in
+    // the Settings overlay (termcustom.js), so this widget needs the generic
+    // bus subscription every other widget already uses (see todo.js, etc.).
+    const offLang = onLangChange(renderLayoutSwitcher);
 
     els.themeSwitcher.addEventListener('change', () => {
       sfx.modeToggle();
@@ -212,15 +217,8 @@ defineWidget({
       if (!selectLayout(els.layoutSwitcher.value)) renderLayoutSwitcher();
     });
 
-    els.langSwitcher.addEventListener('change', () => {
-      sfx.modeToggle();
-      applyLang(els.langSwitcher.value);
-      window.lunacore.setUiPrefs({ lang: els.langSwitcher.value });
-      // Layout labels are localized, unlike the theme labels above.
-      renderLayoutSwitcher();
-    });
-
     return () => {
+      offLang();
       els = null;
     };
   },

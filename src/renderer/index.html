@@ -489,24 +489,9 @@
     </label>
   </template>
 
-  <!-- Own layout slot (config/layouts.json), unlike autocompact above - this
-       one has no other widget to nest inside, so it carries its own
-       .panel__section + heading. See src/renderer/modules/notify.js. -->
-  <template id="w-notify">
-    <div class="panel__section">
-      <h2 class="panel__title" data-i18n="notify.title">Powiadomienia</h2>
-      <label id="notify-field" class="switch-field" data-i18n-title="notify.hint" title="Powiadomienie systemowe, gdy sesja skonczy prace lub przekroczy 85% kontekstu.">
-        <span class="switch-field__text">
-          <span class="switch-field__label" data-i18n="notify.label">Powiadomienia systemowe</span>
-          <span id="notify-status" class="switch-field__status" data-i18n="notify.off">wylaczone</span>
-        </span>
-        <span class="switch">
-          <input type="checkbox" id="notify-toggle" class="switch__input" />
-          <span class="switch__track"><span class="switch__thumb"></span></span>
-        </span>
-      </label>
-    </div>
-  </template>
+  <!-- System notifications moved to the Settings overlay (Ctrl+L, 2026-08-19),
+       same reasoning as the lang-switcher move above - see #termcustom and
+       src/renderer/modules/notify.js. -->
 
   <!-- The nested [data-slot="autocompact"]/[data-slot="autoproceed"] here are
        what make `actions` a mounting dependency for both - see actions.js and
@@ -539,14 +524,8 @@
         <span class="ui-field__label" data-i18n="appearance.layout">Uklad</span>
         <select id="layout-switcher" class="profile-select"></select>
       </label>
-      <!-- UI language: PL/EN, switches live (i18n.js). -->
-      <label class="ui-field">
-        <span class="ui-field__label" data-i18n="appearance.lang">Jezyk</span>
-        <select id="lang-switcher" class="profile-select">
-          <option value="pl">Polski</option>
-          <option value="en">English</option>
-        </select>
-      </label>
+      <!-- UI language moved to the Settings overlay (Ctrl+L, 2026-08-19) -
+           same declutter reasoning as the sound/boot move (termcustom.js). -->
     </div>
   </template>
 
@@ -756,6 +735,18 @@
         <span class="termcustom__title" data-i18n="termcustom.title">Ustawienia</span>
       </div>
       <div class="termcustom__body">
+        <h3 class="termcustom__section" data-i18n="termcustom.section.general">Ogolne</h3>
+        <!-- UI language: PL/EN, switches live (i18n.js). Moved from w-appearance's
+             left panel (2026-08-19, Mati: wanted it under the same Ctrl shortcut
+             as the rest of Settings) - wiring lives in modules/termcustom.js,
+             the actual apply/persist logic stays in modules/appearance.js. -->
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="appearance.lang">Jezyk</span>
+          <select id="termcustom-lang-switcher" class="profile-select">
+            <option value="pl">Polski</option>
+            <option value="en">English</option>
+          </select>
+        </label>
         <h3 class="termcustom__section" data-i18n="termcustom.section.appearance">Wyglad terminala</h3>
         <label class="ui-field">
           <span class="ui-field__label" data-i18n="termcustom.fontFamily">Czcionka</span>
@@ -896,6 +887,19 @@
           </span>
           <span class="switch">
             <input type="checkbox" id="boot-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+        <h3 class="termcustom__section" data-i18n="notify.title">Powiadomienia</h3>
+        <!-- System notifications: moved from its own left-panel widget
+             (2026-08-19, Mati) - see src/renderer/modules/notify.js. -->
+        <label id="notify-field" class="switch-field" data-i18n-title="notify.hint" title="Powiadomienie systemowe, gdy sesja skonczy prace lub przekroczy 85% kontekstu.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="notify.label">Powiadomienia systemowe</span>
+            <span id="notify-status" class="switch-field__status" data-i18n="notify.off">wylaczone</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="notify-toggle" class="switch__input" />
             <span class="switch__track"><span class="switch__thumb"></span></span>
           </span>
         </label>

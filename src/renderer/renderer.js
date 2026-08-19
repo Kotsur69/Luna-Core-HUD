@@ -44,7 +44,9 @@ import './modules/telemetry.js';
 import './modules/actions.js';
 import './modules/autocompact.js';
 import './modules/autoproceed.js';
-import './modules/notify.js';
+// notify.js is no longer a self-registering widget - its mountNotify() is
+// called from termcustom.js's initTermcustomSettings() (2026-08-19, Settings
+// overlay decluttering), same shape as boot.js's mountBoot().
 import { initCheatsheets } from './modules/cheatsheets.js';
 import { initPrompts } from './modules/prompts.js';
 import { initSkills } from './modules/skills.js';

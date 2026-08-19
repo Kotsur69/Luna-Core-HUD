@@ -43,6 +43,12 @@ let boundSessionId = null;
 // item as a different item's expanded state.
 const expanded = new Set();
 
+// Index of the item currently being dragged for reorder, or null when no
+// drag is in progress. Module scope like `expanded` above - a renderRows()
+// rebuild wipes the DOM's own dataset, so the in-flight index has to live
+// somewhere that survives a repaint mid-drag (dragover fires many times).
+let dragIndex = null;
+
 /**
  * Appends an item. Returns a NEW array (immutability rule) and rejects
  * empty/whitespace text by returning the list unchanged, so the caller does
@@ -67,6 +73,27 @@ export function removeTodo(list, index) {
   const current = Array.isArray(list) ? list : [];
   if (index < 0 || index >= current.length) return current;
   return current.filter((_item, i) => i !== index);
+}
+
+/**
+ * Moves one item from `fromIndex` to `toIndex`, shifting the rest to make
+ * room - a drag-and-drop reorder. Out-of-range or a no-op move (same index)
+ * returns the SAME list, matching every other op here (the caller can detect
+ * "nothing changed" with a reference check, no deep-equal needed).
+ */
+export function reorderTodo(list, fromIndex, toIndex) {
+  const current = Array.isArray(list) ? list : [];
+  if (
+    fromIndex < 0 || fromIndex >= current.length ||
+    toIndex < 0 || toIndex >= current.length ||
+    fromIndex === toIndex
+  ) {
+    return current;
+  }
+  const next = [...current];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
 }
 
 /** Drops every completed item. */
@@ -129,7 +156,50 @@ function renderRows() {
   els.list.innerHTML = '';
   items.forEach((item, index) => {
     const li = document.createElement('li');
-    li.className = item.done ? 'todo-item todo-item--done' : 'todo-item';
+    const classes = ['todo-item'];
+    if (item.done) classes.push('todo-item--done');
+    // Lit up while its text is expanded, so the row you just clicked into
+    // stays visually "the one you're on" instead of blending back into the
+    // list the instant you look away from it.
+    if (expanded.has(item.at)) classes.push('todo-item--expanded');
+    li.className = classes.join(' ');
+
+    // Drag-to-reorder: grab any row, drop it on another to move it there.
+    li.draggable = true;
+    li.addEventListener('dragstart', (e) => {
+      dragIndex = index;
+      e.dataTransfer.effectAllowed = 'move';
+      // Text form so a drop outside the list (or onto another app) is a
+      // harmless no-op instead of pasting internal JSON.
+      e.dataTransfer.setData('text/plain', item.text);
+      li.classList.add('todo-item--dragging');
+    });
+    li.addEventListener('dragover', (e) => {
+      if (dragIndex === null || dragIndex === index) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      li.classList.add('todo-item--drag-over');
+    });
+    li.addEventListener('dragleave', () => {
+      li.classList.remove('todo-item--drag-over');
+    });
+    li.addEventListener('drop', (e) => {
+      e.preventDefault();
+      li.classList.remove('todo-item--drag-over');
+      if (dragIndex === null) return;
+      commit(reorderTodo(items, dragIndex, index));
+      dragIndex = null;
+    });
+    li.addEventListener('dragend', () => {
+      dragIndex = null;
+      li.classList.remove('todo-item--dragging');
+      // Belt-and-suspenders: a drop outside the list (or a cancelled drag)
+      // never fires dragleave on whichever row was last hovered, which would
+      // otherwise leave its highlight stuck until the next unrelated render.
+      els.list.querySelectorAll('.todo-item--drag-over').forEach((row) => {
+        row.classList.remove('todo-item--drag-over');
+      });
+    });
 
     const box = document.createElement('input');
     box.type = 'checkbox';

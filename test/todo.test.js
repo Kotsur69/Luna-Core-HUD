@@ -21,6 +21,7 @@ const {
   addTodo,
   toggleTodo,
   removeTodo,
+  reorderTodo,
   clearDone,
   openCount,
 } = require('../src/renderer/modules/todo.js');
@@ -165,6 +166,48 @@ test('removeTodo drops the addressed item and keeps order', () => {
 test('removeTodo with an out-of-range index is a no-op', () => {
   const list = addTodo([], 'a', 1);
   assert.equal(removeTodo(list, 9), list);
+});
+
+// ---- reorderTodo (drag-to-reorder) ------------------------------------------
+
+test('reorderTodo moves an item forward, shifting the ones in between back', () => {
+  let list = addTodo([], 'a', 1);
+  list = addTodo(list, 'b', 2);
+  list = addTodo(list, 'c', 3);
+  assert.deepEqual(
+    reorderTodo(list, 0, 2).map((i) => i.text),
+    ['b', 'c', 'a']
+  );
+});
+
+test('reorderTodo moves an item backward, shifting the ones in between forward', () => {
+  let list = addTodo([], 'a', 1);
+  list = addTodo(list, 'b', 2);
+  list = addTodo(list, 'c', 3);
+  assert.deepEqual(
+    reorderTodo(list, 2, 0).map((i) => i.text),
+    ['c', 'a', 'b']
+  );
+});
+
+test('reorderTodo to the same index is a no-op', () => {
+  const list = addTodo(addTodo([], 'a', 1), 'b', 2);
+  assert.equal(reorderTodo(list, 1, 1), list);
+});
+
+test('reorderTodo with an out-of-range index is a no-op', () => {
+  const list = addTodo([], 'a', 1);
+  assert.equal(reorderTodo(list, 0, 5), list);
+  assert.equal(reorderTodo(list, -1, 0), list);
+  assert.equal(reorderTodo(list, 5, 0), list);
+});
+
+test('reorderTodo does not mutate the list it was given', () => {
+  let list = addTodo([], 'a', 1);
+  list = addTodo(list, 'b', 2);
+  const copy = [...list];
+  reorderTodo(list, 0, 1);
+  assert.deepEqual(list, copy);
 });
 
 // ---- clearDone / openCount --------------------------------------------------

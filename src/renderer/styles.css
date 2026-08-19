@@ -2586,6 +2586,21 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   color: var(--text-dim);
 }
 
+/* Lit up while its text is click-expanded, same "armed" glow .switch-field.is-armed
+   uses elsewhere - the visual cue that this is the row you're currently reading. */
+.todo-item--expanded {
+  border-color: var(--edge-glow);
+  box-shadow: 0 0 var(--glow-size-sm) var(--glow);
+}
+
+/* Drag-to-reorder feedback. Dragging fades the source row (it's about to move,
+   not disappear); drag-over lights the row a drop would land it before. */
+.todo-item--dragging { opacity: 0.45; }
+.todo-item--drag-over {
+  border-color: var(--edge-glow);
+  box-shadow: 0 0 var(--glow-size-sm) var(--glow);
+}
+
 .clip-item__actions,
 .todo-item__actions {
   display: flex;

@@ -52,9 +52,10 @@ function renderCheatsheets() {
   groups.forEach((group, i) => {
     const details = document.createElement('details');
     details.className = 'cheat';
-    // Remembered state wins; on the very first render only the first group is
-    // expanded.
-    details.open = i < openGroups.length ? Boolean(openGroups[i]) : i === 0;
+    // Remembered state wins; on the very first render every group starts
+    // collapsed (2026-08-19, Mati: the panel used to pop the first group open
+    // uninvited - now nothing expands until you click a summary).
+    details.open = i < openGroups.length ? Boolean(openGroups[i]) : false;
     openGroups[i] = details.open;
     // `toggle` does not bubble, so it is bound per group rather than delegated.
     // Bound INSIDE root, so the host removes it with the subtree.
