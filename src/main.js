@@ -386,6 +386,7 @@ async function runWidgetProbe(win) {
         sessiontimeline: document.querySelectorAll('#stimeline-track').length,
         devices: document.querySelectorAll('#dev-mic-state').length,
         todo: document.querySelectorAll('#todo-form').length,
+        godmode: document.querySelectorAll('#godmode-toggle').length,
         clipboard: document.querySelectorAll('#clip-enabled').length,
         mcp: document.querySelectorAll('#mcp-list').length,
         git: document.querySelectorAll('#git-list').length,
@@ -535,18 +536,32 @@ function spawnInto(session, profile) {
     const tiles = detectTools(data);
     if (tiles.length > 0) send('metrics:tools', { sessionId: session.id, tiles });
 
+    const triggers = loadSoundTriggers();
+
     // §4.2: fire voice.needYou once per prompt APPEARANCE, not once per stdout
     // chunk - a TUI redraw repeats the same text while Mati is still reading
     // it. approvalShowing clears on this session's next input (see registerIpc).
     if (soundManager && !session.approvalShowing) {
-      const patterns = loadSoundTriggers().approvalPrompt;
-      if (detectApprovalPrompt(data, patterns)) {
+      if (detectApprovalPrompt(data, triggers.approvalPrompt)) {
         session.approvalShowing = true;
         if (readUiPrefs().voiceEnabled !== false) {
           const resolved = resolveSoundFile('voice.needYou');
           if (resolved) soundManager.play(resolved.path);
         }
       }
+    }
+
+    // God Mode (GODMODE_PLAN.md): same generic matcher as the approval-prompt
+    // scan above, two sibling config categories instead of a new detection
+    // mechanism. Fired on every matching chunk (no de-dupe here, unlike
+    // approvalShowing above) - de-duplication/cooldown lives in the renderer's
+    // godmode.js state machine, which already needs a phase check per signal,
+    // so a second flag on `session` would just be the same guard written twice.
+    if (detectApprovalPrompt(data, triggers.usageLimit)) {
+      send('godmode:signal', { sessionId: session.id, type: 'usageLimit' });
+    }
+    if (detectApprovalPrompt(data, triggers.connectionError)) {
+      send('godmode:signal', { sessionId: session.id, type: 'connectionError' });
     }
   });
 
@@ -1307,6 +1322,29 @@ function registerIpc() {
   ipcMain.handle('todo:write', (_event, list, sessionId) => {
     const session = resolveSession(sessionId);
     return writeTodos(session ? session.projectId : null, list);
+  });
+
+  // God Mode: the hard confirm gate (GODMODE_PLAN.md decision #5). A NATIVE
+  // OS dialog on purpose, not an in-page modal - it is genuinely modal (no
+  // stray click on the page behind it can double-fire an arm), and it is
+  // literally the "popup window with an are-you-sure message" Mati asked for,
+  // for less code than a hand-rolled overlay/focus-trap. Resolves true only
+  // on the explicit Yes button; closing the dialog any other way is a No.
+  ipcMain.handle('godmode:confirm', async (_event, openCount) => {
+    const pl = readUiPrefs().lang === 'pl';
+    const count = Number.isFinite(openCount) ? openCount : 0;
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: pl ? ['Tak', 'Nie'] : ['Yes', 'No'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'God Mode',
+      message: pl ? 'Uruchomic God Mode?' : 'Start God Mode?',
+      detail: pl
+        ? `LunaCore sam wykona ${count} ${count === 1 ? 'zadanie' : 'zadania'} z listy, jedno po drugim, bez pytania o zgode.`
+        : `LunaCore will run ${count} open ${count === 1 ? 'task' : 'tasks'} from this list, one by one, without asking again.`,
+    });
+    return response === 0;
   });
 
   // Device panel: microphone mute. `action` is whitelisted inside devices.js

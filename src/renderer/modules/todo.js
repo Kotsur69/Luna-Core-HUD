@@ -27,6 +27,7 @@ import { t, pulse } from './util.js';
 import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { defineWidget } from './registry.js';
+import { mountGodModeControl } from './godmode.js';
 
 const SAVE_MS = 400;
 const MAX_TEXT_CHARS = 200;
@@ -36,6 +37,11 @@ let items = [];
 let saveTimer = null;
 // Which session's project `items` currently reflects - see header.
 let boundSessionId = null;
+// UI-only, never persisted: which items are click-expanded past their
+// truncated width right now. Keyed by `at` (creation timestamp) rather than
+// index so removing/toggling some OTHER item doesn't relabel a still-open
+// item as a different item's expanded state.
+const expanded = new Set();
 
 /**
  * Appends an item. Returns a NEW array (immutability rule) and rejects
@@ -131,9 +137,16 @@ function renderRows() {
     box.addEventListener('change', () => commit(toggleTodo(items, index)));
 
     const text = document.createElement('span');
-    text.className = 'todo-item__text';
+    text.className = expanded.has(item.at)
+      ? 'todo-item__text todo-item__text--expanded'
+      : 'todo-item__text';
     text.textContent = item.text;
     text.title = item.text;
+    text.addEventListener('click', () => {
+      if (expanded.has(item.at)) expanded.delete(item.at);
+      else expanded.add(item.at);
+      renderRows();
+    });
 
     const actions = document.createElement('span');
     actions.className = 'todo-item__actions';
@@ -201,6 +214,8 @@ defineWidget({
 
     els.clear.addEventListener('click', () => commit(clearDone(items)));
 
+    const offGodMode = mountGodModeControl(root);
+
     boundSessionId = getActiveSessionId();
     window.lunacore
       .getTodos(boundSessionId)
@@ -218,6 +233,7 @@ defineWidget({
     return () => {
       flushPendingSave();
       offLang();
+      offGodMode();
       els = null;
     };
   },

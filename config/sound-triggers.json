@@ -4,5 +4,13 @@
     "Do you want to make this edit",
     "Do you want to create",
     "Do you trust the files in this folder"
+  ],
+  "usageLimit": [
+    "usage limit reached",
+    "Usage limit reached",
+    "5-hour limit reached"
+  ],
+  "connectionError": [
+    "API Error: Connection lost mid-response"
   ]
 }

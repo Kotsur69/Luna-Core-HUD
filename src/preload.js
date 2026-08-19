@@ -148,6 +148,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Writes that project's whole list; Promise<boolean>. */
   saveTodos: (list, sessionId) => ipcRenderer.invoke('todo:write', list, sessionId),
 
+  // --- God Mode (unattended to-do runner, see reference/GODMODE_PLAN.md) ---
+  /** Usage-limit / connection-drop signal from a session's raw stdout: ({ sessionId, type }). */
+  onGodModeSignal: (callback) => {
+    ipcRenderer.on('godmode:signal', (_event, payload) => callback(payload));
+  },
+  /** Native "are you sure" popup gating every arm; resolves true only on an explicit Yes. */
+  confirmGodMode: (openCount) => ipcRenderer.invoke('godmode:confirm', openCount),
+
   // --- Device panel: microphone mute ---
   /**
    * Reads or changes the default mic's mute state.
