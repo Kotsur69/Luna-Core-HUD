@@ -98,6 +98,8 @@ const KNOWN_TOKENS = new Set([
   // motion
   '--dur-instant', '--dur-fast', '--dur-normal', '--dur-slow',
   '--ease-smooth', '--ease-sharp', '--ease-bounce', '--stagger',
+  // interaction: how far a row rises on hover, how far a control sinks on press
+  '--lift', '--press-scale',
 ]);
 
 /**

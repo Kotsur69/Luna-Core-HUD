@@ -217,11 +217,122 @@ export async function initPanels() {
 
 // ---- Fold -------------------------------------------------------------------
 
+/** Travel, in px, that a fold takes exactly the base duration to cover. */
+export const FOLD_REF_PX = 260;
+/** Duration multipliers a fold is clamped between, whatever its height. */
+export const FOLD_MIN_SCALE = 0.55;
+export const FOLD_MAX_SCALE = 1.4;
+
+/**
+ * How long a fold of `delta` px should take, given the theme's base duration.
+ *
+ * A single duration for every panel is what makes a folding UI feel wrong: the
+ * two-line PTY status and the fourteen-row skill list are not the same gesture,
+ * and giving them the same 350ms makes the small one feel sticky and the big
+ * one feel yanked. Scaling by sqrt rather than linearly is the point - four
+ * times the distance takes twice the time, which is roughly how a real object
+ * covering that distance would behave, and it keeps the range narrow enough to
+ * clamp without the clamp doing all the work.
+ *
+ * `base` is passed in rather than read here so this stays a pure function: the
+ * caller resolves it from the live computed style, which is also what makes
+ * reduced motion free - the token layer zeroes the duration, base arrives as 0,
+ * and this returns 0, which the caller reads as "do not animate at all".
+ */
+export function foldDurationMs(delta, base, ref = FOLD_REF_PX) {
+  if (!(base > 0) || !(ref > 0)) return 0;
+  const travel = Math.abs(Number(delta)) || 0;
+  const scale = Math.min(FOLD_MAX_SCALE, Math.max(FOLD_MIN_SCALE, Math.sqrt(travel / ref)));
+  return Math.round(base * scale);
+}
+
 function setFolded(section, folded) {
   const title = section.querySelector(':scope > .panel__title');
   if (folded) section.setAttribute('data-collapsed', '');
   else section.removeAttribute('data-collapsed');
   if (title) title.setAttribute('aria-expanded', folded ? 'false' : 'true');
+}
+
+/** section -> the function that ends its in-flight fold early. */
+const folding = new WeakMap();
+
+/**
+ * Folds a section with the body sliding, rather than blinking out of layout.
+ *
+ * The measure-apply-measure shape is the same one the to-do drag uses: put the
+ * DOM in its FINAL state, read what that costs, then animate from where things
+ * actually were. Reading `to` while the children are display:none is the whole
+ * trick - it is the only way to learn the collapsed height without a wrapper
+ * element, and the browser never paints the intermediate state because nothing
+ * yields between the two reads.
+ *
+ * Only the click/keyboard toggle comes through here. decorate() still calls
+ * setFolded() directly, because a layout switch re-folds every section on
+ * screen at once and eighteen simultaneous height animations is not a
+ * transition, it is a seizure.
+ */
+function animateFold(section, folded) {
+  folding.get(section)?.();
+
+  // Measure the destination by actually going there and coming back. Two extra
+  // layout reads on a click is nothing, and it buys a `to` that is correct for
+  // both directions without this function needing to know a single thing about
+  // how a section is built - no title arithmetic, no assumptions about padding.
+  const from = section.getBoundingClientRect().height;
+  setFolded(section, folded);
+  const to = section.getBoundingClientRect().height;
+  setFolded(section, !folded);
+
+  // Enter the animating state BEFORE the real attribute change, and force a
+  // layout read while still in it. This ordering is the whole fade: a
+  // transition cannot start from `display: none`, so the body has to already
+  // be in flow AND have its starting opacity computed at least once before the
+  // rule that moves it engages. Setting the attribute first - which is what
+  // this did originally - made the body snap to its end state instead, and the
+  // panel read as being guillotined rather than closed.
+  section.classList.add('is-folding');
+  // Resolved from the live style rather than a constant, so a theme retuning
+  // --dur-normal retunes the fold with it, and prefers-reduced-motion (which
+  // zeroes it at the token layer) lands here as a plain 0.
+  const base = (parseFloat(getComputedStyle(section).transitionDuration) || 0) * 1000;
+  const ms = foldDurationMs(to - from, base);
+
+  const finish = () => {
+    folding.delete(section);
+    section.classList.remove('is-folding');
+    section.style.height = '';
+    section.style.removeProperty('--fold-ms');
+    // A folded panel changes how much room the terminal region has, and xterm
+    // only refits on a resize. Fired at the END: refitting against a height
+    // that is still moving just makes it refit against the wrong one.
+    window.dispatchEvent(new Event('resize'));
+  };
+
+  if (!ms || from === to) {
+    // Reduced motion, or a section whose height does not change. Either way the
+    // state still has to land - it is only the movement that is skipped.
+    setFolded(section, folded);
+    finish();
+    return;
+  }
+
+  section.style.setProperty('--fold-ms', `${ms}ms`);
+  section.style.height = `${from}px`;
+  // Without this read the browser coalesces every style change below into one
+  // and there is nothing for either property to transition FROM.
+  section.getBoundingClientRect();
+  setFolded(section, folded);
+  section.style.height = `${to}px`;
+
+  // Timer rather than transitionend: `height` on a flex child is not always the
+  // property that ends up animating (a --grow section can be sized by its
+  // parent instead), and a fold that never cleans up leaves an inline height
+  // welded to the panel.
+  const timer = setTimeout(() => finish(), ms + 40);
+  folding.set(section, () => {
+    clearTimeout(timer);
+    finish();
+  });
 }
 
 /**
@@ -269,12 +380,10 @@ function decorate(section) {
 
     const toggle = () => {
       const folded = !section.hasAttribute('data-collapsed');
-      setFolded(section, folded);
+      animateFold(section, folded);
       if (folded) collapsed.add(id);
       else collapsed.delete(id);
       persistCollapsed();
-      // A folded panel changes how much room the terminal region has.
-      window.dispatchEvent(new Event('resize'));
     };
 
     title.addEventListener('click', (e) => {

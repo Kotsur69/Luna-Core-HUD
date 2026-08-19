@@ -169,6 +169,18 @@
   --ease-sharp: cubic-bezier(0.4, 0, 0.2, 1);      /* exit, dismiss */
   --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);/* arm / confirm, sparingly */
   --stagger: 45ms; /* gap between successive regions on a layout switch */
+
+  /* ---- Interaction: how a surface answers the pointer (C1d) -------------- */
+  /* Outside the one big action button, hover and press were colour-only
+     everywhere - which is why the HUD read as a printout rather than a
+     surface you can touch. These two are the entire vocabulary: rows rise
+     toward the pointer, controls sink under it.
+
+     Tokens rather than literals for the usual reason: a theme that wants a
+     dead-flat terminal sets both to their no-op values (0 / 1) and the whole
+     HUD stops moving under the cursor, without one rule being written twice. */
+  --lift: 2px;          /* how far a hoverable row rises */
+  --press-scale: 0.985; /* how far a pressed control sinks */
 }
 
 /* Reduced motion, done once at the token layer: every transition in the HUD
@@ -187,6 +199,12 @@
        each region invisible until its turn, which is the one outcome reduced
        motion is meant to prevent. */
     --stagger: 0ms;
+    /* Zeroing the durations makes a transform instant, not absent - a hover
+       lift would become a 2px JUMP under the cursor, which is worse than no
+       lift at all. So the movement tokens go to their no-op values and the
+       colour half of every hover state carries the meaning on its own. */
+    --lift: 0px;
+    --press-scale: 1;
   }
 }
 
@@ -2600,7 +2618,13 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    collapses to 0ms under prefers-reduced-motion - so reduced motion needs no
    second code path here, the rows just arrive without the slide. */
 .todo-item {
-  transition: transform var(--dur-fast) var(--ease-smooth);
+  /* Border and shadow join transform here rather than in the shared row rule
+     below, because `.todo-item--dragging` has to keep winning `transition:
+     none` - and it can only do that if this declaration stays above it. */
+  transition:
+    transform var(--dur-fast) var(--ease-smooth),
+    border-color var(--dur-fast) var(--ease-sharp),
+    box-shadow var(--dur-fast) var(--ease-sharp);
   /* Every row is a drag handle, so dragging one must not paint a text
      selection across the list on the way. (The old draggable="true" row
      suppressed selection the same way, just implicitly.) */
@@ -2667,22 +2691,161 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   font-size: 9px;
   line-height: 1;
   color: var(--text-dim);
-  transition: transform var(--dur-fast) var(--ease-sharp);
+  /* Deliberately the same duration as the body's height, so the two read as
+     one gesture rather than two things that happen to fire together. The
+     overshoot curve is affordable on a 90 degree rotation of a 9px glyph -
+     it lands with a flick instead of a stop, and nothing else moves with it. */
+  transition:
+    transform var(--dur-normal) var(--ease-bounce),
+    color var(--dur-fast) var(--ease-sharp);
 }
 .panel__title--fold:hover { color: var(--text); }
+/* The chevron is the part you are aiming at, so it is the part that lights up. */
+.panel__title--fold:hover .panel__fold { color: var(--neon-cyan); }
 .panel__title--fold:focus-visible {
   outline: var(--border-w) solid var(--edge-glow);
   outline-offset: 2px;
 }
 
-/* The fold itself is a display switch, not an animation: the only way to
-   animate a section's height is to drive height/grid-rows, which §C1c rules
-   out, and wrapping every widget body in an extra element to get around that
-   would change the DOM 20 widgets already build against. So the chevron
-   carries the motion and the body just goes. */
-.panel__section[data-collapsed] { gap: 0; }
-.panel__section[data-collapsed] > *:not(.panel__title) { display: none; }
+/* At rest a folded section is still a display switch - the body is gone from
+   layout, from paint and from the tab order, which is what "folded" should
+   mean. The animation is a separate, temporary state: panels.js measures the
+   two heights, adds .is-folding and drives `height` between them for one
+   transition, then hands the section back to the rules below.
+
+   Hence `:not(.is-folding)` on both: for the length of the fold the children
+   have to stay in flow (they are what makes the box the height it is), and
+   they keep the display their own rules give them - overriding `display: none`
+   with a guess like `revert` would drop the author-level `display: flex` half
+   these bodies rely on and reflow them wrongly on the way out. */
+.panel__section[data-collapsed]:not(.is-folding) { gap: 0; }
+.panel__section[data-collapsed]:not(.is-folding) > *:not(.panel__title) { display: none; }
 .panel__section[data-collapsed] .panel__fold { transform: rotate(-90deg); }
+
+/* The in-flight state. `--fold-ms` is set inline per fold: panels.js scales the
+   duration by how far the section actually has to travel, so a two-line widget
+   snaps and a tall one takes its time. It falls back to the plain token if the
+   property is ever absent, so this rule is never duration-less.
+
+   `overflow: hidden` is what turns a height change into a reveal: the body is
+   full-size the whole time and the box wipes across it, which is why nothing
+   inside has to reflow per frame. */
+.panel__section.is-folding {
+  overflow: hidden;
+  transition: height var(--fold-ms, var(--dur-normal)) var(--ease-smooth);
+}
+/* The body fades with the wipe in both directions. Out on the way closed -
+   without it the content is still at full strength in the last 20px and reads
+   as being guillotined - and in on the way open, which comes free from the
+   same rule because panels.js establishes the collapsed opacity before it
+   removes the attribute. The fade runs at --dur-fast against a --dur-normal
+   height, so the content has finished arriving before the box stops moving. */
+.panel__section.is-folding > *:not(.panel__title) {
+  transition: opacity var(--dur-fast) var(--ease-sharp);
+}
+.panel__section.is-folding[data-collapsed] > *:not(.panel__title) { opacity: 0; }
+
+/* ---- C1d: the interaction layer --------------------------------------------
+   Everything below is cross-cutting, which is why it sits at the bottom of the
+   file: it has to win over the per-widget declarations it unifies.
+
+   Two rules, applied consistently, are what separate a HUD that feels live
+   from one that feels printed:
+
+     a row rises toward the pointer   (it is a thing, and you can pick it up)
+     a control sinks under the press  (the click landed, before anything loads)
+
+   Both are transform-only, so neither can reflow the list it lives in - a
+   hover state that nudges its neighbours is worse than no hover state at all.
+   -------------------------------------------------------------------------- */
+
+/* The card-row family. These five already share padding, radius, background
+   and border; they were simply never told how to react. `.todo-item` declares
+   its own transition further up (see the note there) and only joins in here
+   for the hover state itself. */
+.port-item,
+.git-item,
+.mcp-item,
+.clip-item {
+  transition:
+    transform var(--dur-fast) var(--ease-smooth),
+    border-color var(--dur-fast) var(--ease-sharp),
+    box-shadow var(--dur-fast) var(--ease-sharp),
+    background var(--dur-fast) var(--ease-sharp);
+}
+.port-item:hover,
+.git-item:hover,
+.mcp-item:hover,
+.clip-item:hover,
+.todo-item:hover {
+  transform: translateY(calc(var(--lift) * -1));
+  border-color: var(--edge-glow);
+  box-shadow: 0 0 var(--glow-size-sm) var(--glow);
+}
+/* A row already being dragged is glued to the pointer by an inline transform,
+   and a dimmed row is dimmed because it is not the thing you want - neither
+   should also be rising. */
+.todo-item--dragging:hover,
+.port-item--system:hover,
+.mcp-item--off:hover { transform: none; }
+
+/* Press feedback. One list, one rule: every one of these already transitioned
+   some subset of colour/border/shadow at the same duration and curve, so
+   restating the full set here is a consolidation rather than an override - and
+   it is the only way to add `transform` to a shorthand that is already spoken
+   for. `.action-btn` is deliberately absent: it has its own press and its own
+   faster clock, being the one button on screen that runs a command. */
+.notice__link,
+.notice__close,
+.pad-send,
+.project-add-btn,
+.project-remove-btn,
+.usage-refresh,
+.media-btn,
+.port-btn,
+.mcp-test,
+.git-fetch,
+.git-scan,
+.cheat__btn,
+.prompt-btn,
+.prompt-send,
+.palette-chip,
+.termcustom__reset,
+.stimeline-modal__closebtn,
+.tabs__new,
+.tab__close,
+.skill-entry {
+  transition:
+    color var(--dur-fast) var(--ease-sharp),
+    background var(--dur-fast) var(--ease-sharp),
+    border-color var(--dur-fast) var(--ease-sharp),
+    box-shadow var(--dur-fast) var(--ease-sharp),
+    transform var(--dur-instant) var(--ease-sharp);
+}
+/* :not(:disabled) matters - a disabled control that still sinks on click is
+   telling you the press landed when it did not. */
+.notice__link:active:not(:disabled),
+.notice__close:active:not(:disabled),
+.pad-send:active:not(:disabled),
+.project-add-btn:active:not(:disabled),
+.project-remove-btn:active:not(:disabled),
+.usage-refresh:active:not(:disabled),
+.media-btn:active:not(:disabled),
+.port-btn:active:not(:disabled),
+.mcp-test:active:not(:disabled),
+.git-fetch:active:not(:disabled),
+.git-scan:active:not(:disabled),
+.cheat__btn:active:not(:disabled),
+.prompt-btn:active:not(:disabled),
+.prompt-send:active:not(:disabled),
+.palette-chip:active:not(:disabled),
+.termcustom__reset:active:not(:disabled),
+.stimeline-modal__closebtn:active:not(:disabled),
+.tabs__new:active:not(:disabled),
+.tab__close:active:not(:disabled),
+.skill-entry:active:not(:disabled) {
+  transform: scale(var(--press-scale));
+}
 
 /* ---- C2: resizable regions -------------------------------------------------
    A splitter is parked over the 1px grid gap that already separates two

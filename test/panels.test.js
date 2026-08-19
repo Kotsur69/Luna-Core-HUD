@@ -24,6 +24,10 @@ const {
   resizeFlex,
   MIN_TRACK_PX,
   MAX_TRACK_PX,
+  foldDurationMs,
+  FOLD_REF_PX,
+  FOLD_MIN_SCALE,
+  FOLD_MAX_SCALE,
 } = require('../src/renderer/modules/panels.js');
 
 const { loadLayouts } = require('../src/layouts.js');
@@ -223,4 +227,70 @@ test('config/layouts.json - every preset offers at least one splitter', () => {
     const usable = tracks.map((_t, i) => splitterPlan(tracks, i)).filter(Boolean);
     assert.ok(usable.length > 0, `layout "${l.id}" has no resizable boundary`);
   }
+});
+
+// ---- foldDurationMs ---------------------------------------------------------
+// A fold's duration scales with how far the panel actually travels, so the
+// two-line status widget and the fourteen-row skill list do not share one
+// timing that is wrong for both.
+
+const BASE = 350;
+
+test('a fold of the reference distance takes exactly the base duration', () => {
+  assert.equal(foldDurationMs(FOLD_REF_PX, BASE), BASE);
+  assert.equal(foldDurationMs(-FOLD_REF_PX, BASE), BASE, 'direction must not matter');
+});
+
+test('four times the distance takes twice as long, not four times', () => {
+  // Both distances sit inside the unclamped band on purpose - the clamp is a
+  // safety rail for extremes, and testing through it would measure the rail
+  // instead of the curve.
+  const near = foldDurationMs(125, BASE);
+  const far = foldDurationMs(500, BASE);
+  // Approximate because the function rounds to whole milliseconds: 485/243 is
+  // the ratio a caller actually gets, and it is 2 for every purpose motion has.
+  assert.ok(Math.abs(far / near - 2) < 0.01, `${near}ms -> ${far}ms`);
+});
+
+test('duration is monotonic in distance', () => {
+  let prev = 0;
+  for (const px of [0, 60, 120, 260, 400, 700, 1200]) {
+    const ms = foldDurationMs(px, BASE);
+    assert.ok(ms >= prev, `${px}px gave ${ms}ms after ${prev}ms`);
+    prev = ms;
+  }
+});
+
+test('the clamp keeps every fold inside a believable range', () => {
+  // A one-line panel must not feel instant, and a full-height one must not
+  // turn into an event you sit through.
+  assert.equal(foldDurationMs(1, BASE), Math.round(BASE * FOLD_MIN_SCALE));
+  assert.equal(foldDurationMs(100000, BASE), Math.round(BASE * FOLD_MAX_SCALE));
+});
+
+test('a zero base duration means do not animate', () => {
+  // This is the whole of the reduced-motion path: the token layer zeroes
+  // --dur-normal, the caller resolves 0, and the fold becomes a plain jump.
+  for (const base of [0, -1, NaN, undefined, null]) {
+    assert.equal(foldDurationMs(300, base), 0, `base ${base}`);
+  }
+});
+
+test('a nonsense distance degrades to the shortest fold, never to NaN', () => {
+  for (const delta of [NaN, undefined, null, 'tall', {}]) {
+    const ms = foldDurationMs(delta, BASE);
+    assert.ok(Number.isFinite(ms), `${String(delta)} gave ${ms}`);
+    assert.equal(ms, Math.round(BASE * FOLD_MIN_SCALE));
+  }
+});
+
+test('the result is always a whole number of milliseconds', () => {
+  for (const px of [7, 33, 261, 999]) {
+    assert.equal(foldDurationMs(px, 333), Math.round(foldDurationMs(px, 333)));
+  }
+});
+
+test('a theme that speeds the HUD up speeds the fold up proportionally', () => {
+  assert.equal(foldDurationMs(FOLD_REF_PX, 120), 120);
+  assert.equal(foldDurationMs(FOLD_REF_PX, 600), 600);
 });
