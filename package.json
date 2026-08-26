@@ -1,6 +1,6 @@
 {
   "name": "lunacore",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Visual GUI dashboard for the Claude Code CLI. Passive Observer + Action Injector, zero extra tokens.",
   "main": "src/main.js",
   "author": "Mateusz Mazur",

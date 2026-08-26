@@ -145,6 +145,51 @@ export function applyFileEvent(map, ev) {
 }
 
 /**
+ * Folds one git-sourced stat (src/gitfiles.js's GitFileWatcher) into the file
+ * map. A file the transcript already has real touches for (`row.touches > 0`)
+ * is left alone - the transcript's structuredPatch-derived numbers are exact,
+ * git's are a second opinion, and this is a Bash/PowerShell-only backstop, not
+ * a source that should fight the more precise one for the same row (plan
+ * §12/R4's whole point about ONLY READ COUNTS applies here too: don't blend
+ * two measurements of the same thing).
+ *
+ * Unlike applyFileEvent's 'end' branch, this OVERWRITES added/removed rather
+ * than accumulating: `files:` git status/diff is polled repeatedly and each
+ * read is the file's CURRENT total diff, not a discrete new event - adding it
+ * every tick would multiply the same change by however many polls happened
+ * to catch it.
+ * @param {Map<string, object>} map mutated in place
+ * @param {{file:string, added:number, removed:number}} stat
+ * @returns {Map<string, object>} the same map, for chaining
+ */
+export function applyGitStat(map, stat) {
+  if (!stat || !stat.file) return map;
+  const existing = map.get(stat.file);
+  if (existing && existing.touches > 0) return map;
+
+  const row = existing || {
+    file: stat.file,
+    added: 0,
+    removed: 0,
+    contextChars: 0,
+    contextTokens: 0,
+    reads: 0,
+    touches: 0,
+    lastAt: 0,
+    inProgress: false,
+    liveSince: 0,
+    deleted: false,
+  };
+  row.added = stat.added || 0;
+  row.removed = stat.removed || 0;
+  row.lastAt = Date.now();
+  row.deleted = false;
+
+  map.set(stat.file, row);
+  return map;
+}
+
+/**
  * Applies a files:check-exist result ({path: boolean}) to the map: any
  * tracked row whose path came back `false` is marked deleted. Paths not
  * present in `existsMap` (e.g. the IPC call raced a row being added) are left
@@ -354,6 +399,20 @@ export function trackBucketFiles(bucket, events) {
   if (!Array.isArray(events) || events.length === 0) return;
   if (!bucket.activeFiles) bucket.activeFiles = new Map();
   for (const ev of events) applyFileEvent(bucket.activeFiles, ev);
+}
+
+/** Apply git-sourced stats (src/gitfiles.js) to the tab you are looking at. */
+export function applyGitFiles(stats) {
+  if (!Array.isArray(stats) || stats.length === 0) return;
+  for (const stat of stats) applyGitStat(files, stat);
+  render();
+}
+
+/** The same fold for a tab running in the background - mirrors trackBucketFiles(). */
+export function trackBucketGitFiles(bucket, stats) {
+  if (!Array.isArray(stats) || stats.length === 0) return;
+  if (!bucket.activeFiles) bucket.activeFiles = new Map();
+  for (const stat of stats) applyGitStat(bucket.activeFiles, stat);
 }
 
 defineWidget({

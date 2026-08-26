@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 
 const {
   applyFileEvent,
+  applyGitStat,
   shortPath,
   clearStaleInProgress,
   applyDeletedFlags,
@@ -103,6 +104,43 @@ test('applyFileEvent returns the same map it was given (mutated in place)', () =
   const map = new Map();
   const out = applyFileEvent(map, endEv('a.js', 1, 0));
   assert.equal(out, map);
+});
+
+// ---- applyGitStat (git-sourced signal, src/gitfiles.js) -----------------------
+
+test('applyGitStat adds a new row for a file the transcript never saw', () => {
+  const map = new Map();
+  applyGitStat(map, { file: 'a.js', added: 3, removed: 1 });
+  const row = map.get('a.js');
+  assert.equal(row.added, 3);
+  assert.equal(row.removed, 1);
+  assert.equal(row.touches, 0);
+});
+
+test('applyGitStat OVERWRITES rather than accumulates on a repeated poll', () => {
+  const map = new Map();
+  applyGitStat(map, { file: 'a.js', added: 3, removed: 1 });
+  applyGitStat(map, { file: 'a.js', added: 5, removed: 2 });
+  const row = map.get('a.js');
+  assert.equal(row.added, 5);
+  assert.equal(row.removed, 2);
+});
+
+test('applyGitStat leaves a transcript-tracked row (touches > 0) alone', () => {
+  const map = new Map();
+  applyFileEvent(map, startEv('a.js'));
+  applyFileEvent(map, endEv('a.js', 4, 2));
+  applyGitStat(map, { file: 'a.js', added: 999, removed: 999 });
+  const row = map.get('a.js');
+  assert.equal(row.added, 4);
+  assert.equal(row.removed, 2);
+});
+
+test('applyGitStat ignores a stat with no file', () => {
+  const map = new Map();
+  applyGitStat(map, { file: '', added: 1, removed: 0 });
+  applyGitStat(map, null);
+  assert.equal(map.size, 0);
 });
 
 // ---- clearStaleInProgress (self-heal for a lost end event) --------------------

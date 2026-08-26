@@ -40,6 +40,12 @@ contextBridge.exposeInMainWorld('lunacore', {
   onMcp: (callback) => {
     ipcRenderer.on('metrics:mcp', (_event, payload) => callback(payload));
   },
+  /** Active-Files Heatmap's git-sourced signal (src/gitfiles.js): files git
+   *  sees as changed that the transcript path missed (Bash/PowerShell writes).
+   *  ({ sessionId, files: [{file, added, removed}] }). */
+  onGitFiles: (callback) => {
+    ipcRenderer.on('metrics:gitfiles', (_event, payload) => callback(payload));
+  },
 
   // --- Tabs (multi-session) ---
   /** Fetches { sessions: [{id,profileId,profileLabel,folder,alive}], activeSessionId }. */

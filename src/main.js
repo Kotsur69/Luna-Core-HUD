@@ -40,6 +40,10 @@ const { getMcpHealth, probeServer } = require('./mcphealth');
 
 // Git station: status for the watched repos, plus fetch.
 const { readAllRepos, fetchRepo, scanForRepos, readRepoStatus, fetchDir, commitAll, pushCurrent } = require('./gitstation');
+// Active-Files Heatmap's second signal: git-sourced changes, for files a
+// session touched via Bash/PowerShell rather than Read/Edit/Write (see
+// src/gitfiles.js's header for why the transcript path alone misses these).
+const { GitFileWatcher } = require('./gitfiles');
 // Action cheat-sheets (7C): command groups sent through the Action Injector.
 const { loadCheatsheets } = require('./cheatsheets');
 // Skill cheat-sheet (7A): auto-scans skill directories -> categories.
@@ -611,6 +615,13 @@ function spawnInto(session, profile) {
   );
   session.watcher.start();
 
+  // Active-Files Heatmap's git-sourced signal, scoped to this session's own
+  // cwd - same lifecycle as the transcript watcher above (stopped + recreated
+  // on every restart, so a project switch re-baselines against the new repo).
+  if (session.gitWatcher) session.gitWatcher.stop();
+  session.gitWatcher = new GitFileWatcher(cwd, (files) => send('metrics:gitfiles', { sessionId: session.id, files }));
+  session.gitWatcher.start();
+
   // PTY buffers input, so the command runs once the shell is ready.
   const startCommand = pinnedCommand || command;
   if (startCommand) {
@@ -639,6 +650,7 @@ function createSession(opts = {}) {
     cwd: project ? project.path : activeCwd,
     size: { ...lastSize },
     watcher: null,
+    gitWatcher: null,
     // Session id handed to `claude --session-id`; null when it could not be
     // pinned. Set by spawnInto, which owns the start command.
     transcriptId: null,
@@ -661,6 +673,10 @@ function teardownSession(session) {
   if (session.watcher) {
     session.watcher.stop();
     session.watcher = null;
+  }
+  if (session.gitWatcher) {
+    session.gitWatcher.stop();
+    session.gitWatcher = null;
   }
   if (session.proc) {
     const old = session.proc;

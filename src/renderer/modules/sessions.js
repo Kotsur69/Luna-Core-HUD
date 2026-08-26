@@ -42,7 +42,7 @@ import {
 import { setPtyStatus } from './ptystatus.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
 import { lightTiles, applyToolEvents, trackBucketTools, resetTiles } from './skilltracker.js';
-import { applyFileEvents, trackBucketFiles } from './activefiles.js';
+import { applyFileEvents, trackBucketFiles, applyGitFiles, trackBucketGitFiles } from './activefiles.js';
 import { applyTurnEnd, trackBucketTurn } from './sessiontimeline.js';
 import { applyMcpEvents, trackBucketMcp } from './mcp.js';
 import { syncSwitchers } from './switchers.js';
@@ -126,6 +126,15 @@ window.lunacore.onMcp(({ sessionId, events }) => {
   if (!Array.isArray(events)) return;
   if (sessionId === getActiveSessionId()) applyMcpEvents(events);
   else trackBucketMcp(ensureTerm(sessionId), events);
+});
+
+// Active-Files Heatmap's git-sourced signal (src/gitfiles.js): catches files
+// a session changed via Bash/PowerShell, which carry no file_path for the
+// transcript path above to key a row on. Same active/background split.
+window.lunacore.onGitFiles(({ sessionId, files }) => {
+  if (!Array.isArray(files)) return;
+  if (sessionId === getActiveSessionId()) applyGitFiles(files);
+  else trackBucketGitFiles(ensureTerm(sessionId), files);
 });
 
 // §6.1: a turn just completed. Same active/background split as onTools above -
