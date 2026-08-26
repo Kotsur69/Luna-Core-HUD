@@ -44,6 +44,7 @@ import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
 import { lightTiles, applyToolEvents, trackBucketTools, resetTiles } from './skilltracker.js';
 import { applyFileEvents, trackBucketFiles } from './activefiles.js';
 import { applyTurnEnd, trackBucketTurn } from './sessiontimeline.js';
+import { applyMcpEvents, trackBucketMcp } from './mcp.js';
 import { syncSwitchers } from './switchers.js';
 import { syncTodoProject } from './todo.js';
 import { sfx } from './sound.js';
@@ -117,6 +118,14 @@ window.lunacore.onTools(({ sessionId, events, tiles }) => {
   }
   // The blink has no end signal, so it is only worth showing live.
   if (tiles && active) lightTiles(tiles);
+});
+
+// CONCEPT_MCP_DEBUGGER.md safe half: MCP call start/end lifecycle. Same
+// active/background split as onTools above.
+window.lunacore.onMcp(({ sessionId, events }) => {
+  if (!Array.isArray(events)) return;
+  if (sessionId === getActiveSessionId()) applyMcpEvents(events);
+  else trackBucketMcp(ensureTerm(sessionId), events);
 });
 
 // §6.1: a turn just completed. Same active/background split as onTools above -

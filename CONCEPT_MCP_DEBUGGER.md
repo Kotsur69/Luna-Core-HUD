@@ -1,5 +1,15 @@
 # Concept: Interactive MCP Server Visual Debugger & Gateway
 
+**Status: partially shipped 2026-08-26.** §2's "Live Connection Flow
+Mapping" and "Structured JSON-RPC Inspector" are built - see
+[`reference/MCP_DEBUGGER_PLAN.md`](reference/MCP_DEBUGGER_PLAN.md) for what
+shipped and why. §2's "Active Injection Control" (failure injector, restart
+button) and §3's stdio-interception implementation are **still unbuilt** -
+that piece needs LunaCore to proxy a server and rewrite `~/.claude.json` to
+point at the proxy, which breaks this project's read-only-config rule, so it
+was deliberately left as an open idea rather than built alongside the safe
+half. The rest of this file describes the ORIGINAL full concept, unchanged.
+
 This concept outlines a visual control center and diagnostic logger for local Model Context Protocol (MCP) servers integrated with your Claude session.
 
 ## 1. Core Mechanics

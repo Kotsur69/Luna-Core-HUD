@@ -194,6 +194,12 @@
       <!-- Filled by modules/mcp.js. -->
       <ul id="mcp-list" class="mcp-list"></ul>
       <p id="mcp-empty" class="hint" data-i18n="mcp.idle">Kliknij odswiez, aby przeskanowac.</p>
+
+      <!-- CONCEPT_MCP_DEBUGGER.md safe half: live flow pulse on the rows
+           above, JSON-RPC Inspector history here. Click a row -> #mcpcall-modal. -->
+      <h3 class="panel__title mcpcall-heading" data-i18n="mcp.calls.title">Ostatnie wywolania</h3>
+      <ul id="mcp-calls-list" class="mcpcall-list"></ul>
+      <p id="mcp-calls-empty" class="hint" data-i18n="mcp.calls.empty">Brak wywolan w tej karcie.</p>
     </div>
   </template>
 
@@ -928,6 +934,27 @@
       </div>
       <pre id="stimeline-modal-text" class="stimeline-modal__text"></pre>
       <p id="stimeline-modal-truncated" class="hint" data-i18n="sessiontimeline.truncated" hidden>...fragment obciety.</p>
+    </div>
+  </div>
+
+  <!-- CONCEPT_MCP_DEBUGGER.md safe half: the JSON-RPC Inspector's call detail.
+       Same overlay skeleton as #stimeline-modal above - opening/closing and
+       filling it in lives in modules/mcp.js. -->
+  <div id="mcpcall-modal" class="stimeline-modal" hidden>
+    <div class="stimeline-modal__backdrop" data-mcpcall-close></div>
+    <div class="stimeline-modal__panel" role="dialog" aria-modal="true" aria-label="Szczegoly wywolania MCP">
+      <div class="stimeline-modal__bar">
+        <span id="mcpcall-modal-title" class="mcpcall-modal__title"></span>
+        <span id="mcpcall-modal-badge" class="mcpcall-modal__badge"></span>
+        <span id="mcpcall-modal-time" class="stimeline-modal__time"></span>
+        <button type="button" id="mcpcall-modal-closebtn" class="stimeline-modal__closebtn" data-mcpcall-close aria-label="Zamknij">×</button>
+      </div>
+      <p class="mcpcall-modal__label" data-i18n="mcp.call.input">Zapytanie</p>
+      <pre id="mcpcall-modal-input" class="stimeline-modal__text mcpcall-modal__block"></pre>
+      <p id="mcpcall-modal-input-truncated" class="hint" data-i18n="mcp.call.truncated" hidden>...fragment obciety.</p>
+      <p class="mcpcall-modal__label" data-i18n="mcp.call.output">Odpowiedz</p>
+      <pre id="mcpcall-modal-output" class="stimeline-modal__text mcpcall-modal__block"></pre>
+      <p id="mcpcall-modal-output-truncated" class="hint" data-i18n="mcp.call.truncated" hidden>...fragment obciety.</p>
     </div>
   </div>
 

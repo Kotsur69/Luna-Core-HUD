@@ -427,6 +427,99 @@ function foldToolEvents(open, events) {
   return out;
 }
 
+// ---- MCP call lifecycle (CONCEPT_MCP_DEBUGGER.md, safe half: no interception,
+// no config writes - just the same transcript tailing every other Passive
+// Observer here already does) -------------------------------------------------
+
+// Non-greedy up to the first `__` - same rule mcphealth.js's NAME_RE anchors
+// on, so a server name containing its own single underscores (e.g.
+// `codebase-memory-mcp`, `claude_ai_Bigdata_com`) still splits correctly.
+const MCP_NAME_RE = /^mcp__(.+?)__(.+)$/;
+
+/**
+ * Extracts MCP tool call lifecycle from a JSONL fragment - the same start/end
+ * split as toolEventsFromLines()/foldToolEvents() (B8), but for MCP tools
+ * specifically. toolEventsFromLines() skips them outright (an MCP name maps
+ * to no Skill Tracker tile); this reads the same two entry shapes for the
+ * server/tool/input/result payload instead of a tile.
+ *
+ * A tool_result entry never repeats the call's name (toolEventsFromLines'
+ * own comment on this still applies), so every tool_result is emitted as an
+ * end CANDIDATE regardless of what closed it, and left for foldMcpEvents() to
+ * match against an open MCP call - or drop as an orphan when it closes some
+ * other (non-MCP) tool instead. There is deliberately no 'mcp__' prefilter on
+ * the whole line for this reason: a result line for an MCP call does not
+ * itself contain that substring.
+ *
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {{phase:'start', id:string, at:number|null, server:string, tool:string, input:object}
+ *         | {phase:'end', id:string, at:number|null, content:*, ok:boolean}[]}
+ */
+function mcpEventsFromLines(text) {
+  const events = [];
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || (!line.includes('"tool_use"') && !line.includes('"tool_result"'))) continue;
+    try {
+      const obj = JSON.parse(line);
+      const content = obj && obj.message && obj.message.content;
+      if (!Array.isArray(content)) continue;
+      const at = Date.parse(obj.timestamp) || null;
+      for (const part of content) {
+        if (!part) continue;
+        if (part.type === 'tool_use' && typeof part.id === 'string' && typeof part.name === 'string') {
+          const m = MCP_NAME_RE.exec(part.name);
+          if (!m) continue; // not an MCP tool - toolEventsFromLines() already covers those
+          events.push({ phase: 'start', id: part.id, server: m[1], tool: m[2], input: part.input || {}, at });
+        } else if (part.type === 'tool_result' && typeof part.tool_use_id === 'string') {
+          events.push({ phase: 'end', id: part.tool_use_id, at, content: part.content, ok: part.is_error !== true });
+        }
+      }
+    } catch {
+      /* incomplete/corrupt line - skip */
+    }
+  }
+  return events;
+}
+
+/**
+ * Folds raw mcpEventsFromLines() output into balanced start/end pairs,
+ * mirroring foldToolEvents()'s open-map-spans-ticks reasoning (a call
+ * routinely starts in one appended chunk and finishes in a later one), but
+ * carrying MCP payload (server/tool/input on start, content/ok/latency on
+ * end) instead of a tile.
+ *
+ * @param {Map<string,{server:string, tool:string, input:object, at:number|null}>} open mutated in place
+ * @param {ReturnType<typeof mcpEventsFromLines>} events
+ * @returns {object[]} balanced start/end events, in file order
+ */
+function foldMcpEvents(open, events) {
+  const out = [];
+  for (const ev of events || []) {
+    if (ev.phase === 'start') {
+      if (open.has(ev.id)) continue; // already counted - re-read of the same line
+      open.set(ev.id, { server: ev.server, tool: ev.tool, input: ev.input, at: ev.at });
+      out.push({ phase: 'start', id: ev.id, server: ev.server, tool: ev.tool, input: ev.input, at: ev.at });
+    } else {
+      const opened = open.get(ev.id);
+      if (!opened) continue; // orphan: this tool_result closed something else, or a call from before we attached
+      open.delete(ev.id);
+      out.push({
+        phase: 'end',
+        id: ev.id,
+        server: opened.server,
+        tool: opened.tool,
+        input: opened.input,
+        at: ev.at,
+        ms: ev.at && opened.at ? ev.at - opened.at : null,
+        ok: ev.ok !== false,
+        content: ev.content,
+      });
+    }
+  }
+  return out;
+}
+
 // ---- 3. Task-complete detection (turn start/end, SOUNDS_IMPLEMENTATION_PLAN.md §3) --
 
 /**
@@ -598,6 +691,10 @@ class TranscriptWatcher {
     // B8: tools currently in flight, id -> tile. Spans ticks by design - a tool
     // routinely starts in one appended chunk and finishes in a later one.
     this.openTools = new Map();
+    // Optional: called with MCP call start/end events (CONCEPT_MCP_DEBUGGER.md,
+    // safe half) - same shape/reasoning as onTools, for mcp__ calls specifically.
+    this.onMcp = typeof opts.onMcp === 'function' ? opts.onMcp : null;
+    this.openMcp = new Map();
     // Optional: called with { startedAt, endedAt } when hasTurnEnd() fires on
     // newly appended lines (§4.3/§11.1's "All done" announcement).
     this.onTurnEnd = typeof opts.onTurnEnd === 'function' ? opts.onTurnEnd : null;
@@ -641,6 +738,7 @@ class TranscriptWatcher {
       this.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       this.byModel = new Map();
       this.openTools.clear();
+      this.openMcp.clear();
       this.turnStartedAt = 0;
     }
     // A first pass over an existing file is HISTORY, not live activity: it would
@@ -687,6 +785,17 @@ class TranscriptWatcher {
           this.openTools.clear();
         } else if (events.length > 0) {
           this.onTools(events);
+        }
+      }
+
+      if (this.onMcp) {
+        const mcpEvents = foldMcpEvents(this.openMcp, mcpEventsFromLines(complete));
+        if (firstPass) {
+          // Same reasoning as onTools' firstPass guard above: a resumed
+          // session's PAST calls must not replay as live flow/history now.
+          this.openMcp.clear();
+        } else if (mcpEvents.length > 0) {
+          this.onMcp(mcpEvents);
         }
       }
 
@@ -837,6 +946,8 @@ module.exports = {
   toolsFromLines,
   toolEventsFromLines,
   foldToolEvents,
+  mcpEventsFromLines,
+  foldMcpEvents,
   hasTurnEnd,
   hasUserPromptStart,
   isLongTurn,

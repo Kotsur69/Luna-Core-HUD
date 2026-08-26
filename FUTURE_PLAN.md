@@ -84,10 +84,23 @@ sibling row it crosses slides aside live. **617 tests.** — and,
 shipped in one day across three passes — sample-based keystroke sounds (7
 variants, random pitch per hit) rather than the originally-planned
 oscillator synth, replacing the old mpv keystroke path entirely; see that
-doc for the full pivot and the CSP bug that was the actual root cause. |
+doc for the full pivot and the CSP bug that was the actual root cause —
+and, same day: **MCP debugger, safe half, DONE**
+([`reference/MCP_DEBUGGER_PLAN.md`](reference/MCP_DEBUGGER_PLAN.md), from
+`CONCEPT_MCP_DEBUGGER.md`): a server's row in the MCP health panel pulses
+while a call to it is in flight, and the last 30 completed calls per tab
+get a JSON-RPC Inspector list (server/tool/ok-fail/latency, click for the
+pretty-printed request/response, capped ~2KB). Deliberately NOT the whole
+concept — the failure-injector/restart piece would need LunaCore to proxy a
+server and rewrite `~/.claude.json`, which breaks the read-only-config rule
+`mcphealth.js` already established, so it stays an open idea in the concept
+doc rather than shipping half-safe. **678 tests.** Not yet manually
+verified against a real MCP call in the wild (Mati's own MCP usage is rare
+— see the health panel's own finding) — that's the actual test, not
+`npm test`. |
 | **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; E2 (C2 panels) and E4 (C4 drag-drop) still deferred. Phase D is CLOSED, `v0.9.0` is public, and **`v0.9.1` is now also public** — [releases/tag/v0.9.1](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.1). It carries everything that had landed on `main` since `v0.9.0` with nothing shipped: the sound/voice work, the Settings overlay, the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite, the Active-Files Heatmap, multi-repo project switching, the GPU widget, the D5 chip relocation, and the Electron 33→43 security fixes D5a flagged (§D5a: *"only a released `v0.9.1` actually delivers the fix"*). **D5 (auto-update) verified end-to-end**: an installed build discovers and applies an update going *from* `v0.9.1` onward. Updating *from* `v0.9.0` does not currently work — known, not blocking, not being chased. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `reference/TERMINAL_CUSTOMIZER_PLAN.md` §4 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
 | **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build (checked against Electron **33**; §D6a flags that a redo under **43** is still owed — cheap, and belongs in the next pre-flight per §D6a). |
-| **Next action** | Typing Synth **shipped 2026-08-26** (see [`reference/TYPING_SYNTH_PLAN.md`](reference/TYPING_SYNTH_PLAN.md)'s "Resolved" section) — no longer the pending item. Auto-proceed itself is still unverified against a real connection drop in the wild — that's the actual test, not `npm test`. Otherwise: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (voice ducking now that Media Deck's volume primitive exists, RGB sync, multi-agent visualizer, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. Redoing the §D2a eyes-only spawn check against the packaged Electron 43 build (never done — the original PASSED was against 33) is cheap and still owed whenever convenient. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
+| **Next action** | The MCP debugger's safe half needs a real MCP call to verify by hand (pulse + inspector, per `reference/MCP_DEBUGGER_PLAN.md`) — `npm start`, trigger any `mcp__*` tool, watch the panel. Typing Synth **shipped 2026-08-26** (see [`reference/TYPING_SYNTH_PLAN.md`](reference/TYPING_SYNTH_PLAN.md)'s "Resolved" section) — no longer the pending item. Auto-proceed itself is still unverified against a real connection drop in the wild — that's the actual test, not `npm test`. Otherwise: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (voice ducking now that Media Deck's volume primitive exists, RGB sync, multi-agent visualizer, …), or **E2/C2 panels**, **E4/C4 drag-drop**, or §9 multi-model. Redoing the §D2a eyes-only spawn check against the packaged Electron 43 build (never done — the original PASSED was against 33) is cheap and still owed whenever convenient. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C2 and C4 are deferred by decision, not blocked.** Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 

@@ -1616,6 +1616,80 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .git-fetch:disabled { cursor: default; opacity: 0.5; }
 
+/* ---- CONCEPT_MCP_DEBUGGER.md safe half: live flow + JSON-RPC Inspector ----
+   Glow is exclusive to --live, same rule .afile.is-live already established
+   (2026-08-13 manual test: an always-on glow reads as "still lit" long after
+   the call finished) - reuses that rule's afile-pulse keyframe rather than
+   defining a near-identical one. */
+.mcp-item--live {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 var(--glow-size-md) rgba(0, 229, 255, 0.35);
+}
+.mcp-item--live .mcp-item__dot {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 var(--glow-size-sm) var(--neon-cyan);
+  animation: afile-pulse 1.2s ease-in-out infinite;
+}
+
+.mcpcall-heading {
+  margin: 10px 0 6px;
+  font-size: 12px;
+}
+
+.mcpcall-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.mcpcall-item {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-2);
+  border: var(--border-w) solid var(--edge);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-sharp);
+}
+.mcpcall-item:hover { border-color: var(--edge-glow); }
+.mcpcall-item.is-bad { border-color: rgba(255, 90, 90, 0.4); }
+
+.mcpcall-item__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.mcpcall-item__name {
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcpcall-item__meta {
+  color: var(--text-dim);
+}
+.mcpcall-item__badge,
+.mcpcall-modal__badge {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+.mcpcall-item__badge.is-ok,
+.mcpcall-modal__badge.is-ok { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.mcpcall-item__badge.is-bad,
+.mcpcall-modal__badge.is-bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+
 /* ---- Git station --------------------------------------------------------------
    Sorted by urgency in gitstation.js, so the top row is always the one worth
    looking at. Badges only appear when their count is non-zero: a row of zeroes
@@ -2311,6 +2385,27 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 .stimeline-modal__panel .hint {
   margin: 0 16px 14px;
+}
+
+/* ---- CONCEPT_MCP_DEBUGGER.md safe half: JSON-RPC Inspector call modal -----
+   Reuses .stimeline-modal's overlay/backdrop/panel/bar/closebtn/text shape
+   directly (same fixed+backdrop+centered-modal precedent .gitquick's reuse
+   of .palette__modal already set) - only what differs (title, badge, two
+   labeled payload blocks instead of one) gets its own rules here. */
+.mcpcall-modal__title {
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcpcall-modal__label {
+  margin: 10px 16px 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.mcpcall-modal__block {
+  max-height: 26vh;
 }
 
 /* ---- Boot sequence ----------------------------------------------

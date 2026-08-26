@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   onTurnEnd: (callback) => {
     ipcRenderer.on('metrics:turnend', (_event, payload) => callback(payload));
   },
+  /** CONCEPT_MCP_DEBUGGER.md: an MCP call start/end: ({ sessionId, events }). */
+  onMcp: (callback) => {
+    ipcRenderer.on('metrics:mcp', (_event, payload) => callback(payload));
+  },
 
   // --- Tabs (multi-session) ---
   /** Fetches { sessions: [{id,profileId,profileLabel,folder,alive}], activeSessionId }. */

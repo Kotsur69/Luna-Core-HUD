@@ -16,6 +16,8 @@ const {
   toolsFromLines,
   toolEventsFromLines,
   foldToolEvents,
+  mcpEventsFromLines,
+  foldMcpEvents,
   hasTurnEnd,
   hasUserPromptStart,
   isLongTurn,
@@ -497,6 +499,95 @@ test('foldToolEvents drops an orphan end, stat and all', () => {
   const toolUseResult = { filePath: 'C:\\repo\\a.js', structuredPatch: [{ lines: ['+one'] }] };
   const out = foldToolEvents(open, toolEventsFromLines(resLineWithResult('nope', toolUseResult)));
   assert.deepEqual(out, []);
+});
+
+// ---- mcpEventsFromLines / foldMcpEvents (CONCEPT_MCP_DEBUGGER.md safe half) --
+
+/** User line closing one MCP tool call with a specific result payload and
+ *  error flag - resLine() above always writes content:'ok', ok:true. */
+const mcpResLine = (id, content, isError) =>
+  JSON.stringify({
+    timestamp: TS,
+    message: {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) }],
+    },
+  });
+
+test('mcpEventsFromLines splits an mcp__ name into server/tool, non-greedy on the first __', () => {
+  const [start] = mcpEventsFromLines(useLine(['t0', 'mcp__codebase-memory-mcp__list_projects', { a: 1 }]));
+  assert.deepEqual(start, {
+    phase: 'start',
+    id: 't0',
+    server: 'codebase-memory-mcp',
+    tool: 'list_projects',
+    input: { a: 1 },
+    at: Date.parse(TS),
+  });
+});
+
+test('mcpEventsFromLines ignores a non-mcp tool_use (toolEventsFromLines already covers those)', () => {
+  assert.deepEqual(mcpEventsFromLines(useLine(['t0', 'Bash'])), []);
+});
+
+test('mcpEventsFromLines emits every tool_result as an end candidate, mcp or not', () => {
+  // No 'mcp__' prefilter on the whole line - a result line never repeats the
+  // call's name, so this must not be gated on that substring.
+  const events = mcpEventsFromLines(resLine('t0'));
+  assert.deepEqual(events, [{ phase: 'end', id: 't0', at: Date.parse(TS), content: 'ok', ok: true }]);
+});
+
+test('mcpEventsFromLines reads is_error onto the end candidate', () => {
+  const [end] = mcpEventsFromLines(mcpResLine('t0', 'boom', true));
+  assert.equal(end.ok, false);
+  assert.equal(end.content, 'boom');
+});
+
+test('foldMcpEvents pairs a start with the end that closes it, computing latency', () => {
+  const open = new Map();
+  const text = [useLine(['t0', 'mcp__shadcn__search_items', { q: 'button' }]), mcpResLine('t0', '{"n":3}')].join(
+    '\n'
+  );
+  const out = foldMcpEvents(open, mcpEventsFromLines(text));
+  assert.deepEqual(out, [
+    { phase: 'start', id: 't0', server: 'shadcn', tool: 'search_items', input: { q: 'button' }, at: Date.parse(TS) },
+    {
+      phase: 'end',
+      id: 't0',
+      server: 'shadcn',
+      tool: 'search_items',
+      input: { q: 'button' },
+      at: Date.parse(TS),
+      ms: 0, // same fixture timestamp on both lines
+      ok: true,
+      content: '{"n":3}',
+    },
+  ]);
+  assert.equal(open.size, 0);
+});
+
+test('foldMcpEvents keeps a call open ACROSS chunks (starts in one appended fragment, ends in the next)', () => {
+  const open = new Map();
+  foldMcpEvents(open, mcpEventsFromLines(useLine(['t0', 'mcp__x__y'])));
+  assert.equal(open.size, 1);
+  const closed = foldMcpEvents(open, mcpEventsFromLines(mcpResLine('t0', 'ok')));
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0].phase, 'end');
+  assert.equal(open.size, 0);
+});
+
+test('foldMcpEvents drops a tool_result that closes some other (non-MCP) tool as an orphan', () => {
+  const open = new Map();
+  // Bash's own tool_result never opened anything in openMcp.
+  const out = foldMcpEvents(open, mcpEventsFromLines(resLine('bash-id')));
+  assert.deepEqual(out, []);
+});
+
+test('foldMcpEvents drops a duplicate start (re-read of the same appended line)', () => {
+  const open = new Map();
+  const starts = mcpEventsFromLines(useLine(['t0', 'mcp__x__y']));
+  assert.equal(foldMcpEvents(open, starts).length, 1);
+  assert.equal(foldMcpEvents(open, starts).length, 0);
 });
 
 // ---- hasTurnEnd / hasUserPromptStart / isLongTurn (SOUNDS_IMPLEMENTATION_PLAN.md §3) --
