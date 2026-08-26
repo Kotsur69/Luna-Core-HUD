@@ -278,4 +278,9 @@ contextBridge.exposeInMainWorld('lunacore', {
    *   the 4 clips to play (id from config/sounds.json's variants list).
    */
   playSound: (key, opts) => ipcRenderer.send('sound:play', { key, opts }),
+  /** Raw bytes of one file in assets/keysounds/ (keysynth.js's sample
+   * engine) - the renderer's CSP blocks fetch() outright, so this goes
+   * through the main process like every other local resource. Resolves to
+   * null if the file is missing. */
+  readKeysound: (name) => ipcRenderer.invoke('keysynth:read', name),
 });

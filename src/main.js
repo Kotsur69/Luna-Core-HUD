@@ -1449,6 +1449,25 @@ function registerIpc() {
     if (resolved) soundManager.play(resolved.path);
   });
 
+  // keysynth.js's sample engine needs the raw bytes of assets/keysounds/*
+  // to decode+slice in the renderer - the renderer's CSP has connect-src
+  // 'none' (D4, index.html: "the renderer... structurally cannot" reach the
+  // network), so fetch() of even a local file:// asset is blocked. This
+  // stays consistent with that invariant: the main process (not subject to
+  // renderer CSP) reads the file and hands the bytes over via IPC, the same
+  // shape sound:play already uses for mpv assets. path.basename() strips any
+  // directory component the renderer might send, so this can only ever read
+  // inside assets/keysounds/.
+  ipcMain.handle('keysynth:read', async (_event, name) => {
+    if (typeof name !== 'string') return null;
+    const file = path.join(__dirname, '..', 'assets', 'keysounds', path.basename(name));
+    try {
+      return await fs.promises.readFile(file);
+    } catch {
+      return null;
+    }
+  });
+
   // Usage limits: forced read (refresh button). When disabled - return an
   // 'off' state; when the watcher is running - refresh it (it will emit
   // usage:update), and separately return a fresh read for the call itself.

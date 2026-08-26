@@ -12,7 +12,7 @@
 
 'use strict';
 
-import { sfx } from './sound.js';
+import { userKeystroke } from './keysynth.js';
 
 const TERM_OPTIONS = {
   cursorBlink: true,
@@ -172,10 +172,13 @@ export function ensureTerm(sessionId) {
   };
   // ACTION INJECTOR: keystrokes from THIS terminal go to ITS OWN pty.
   instance.onData((data) => {
-    // Single printable char only - onData also fires for pasted bursts and
-    // xterm's own multi-byte escape sequences (e.g. arrow keys send
-    // \x1b[A), neither of which is "a keystroke" for sound purposes.
-    if (data.length === 1 && data >= ' ') sfx.keystroke();
+    // Single printable char only - onData also fires for terminal focus
+    // in/out escapes (\x1b[I / \x1b[O) and other multi-byte sequences (e.g.
+    // arrow keys send \x1b[A), neither of which is "a keystroke" for sound
+    // purposes. Confirmed via direct instrumentation (reference/
+    // TYPING_SYNTH_PLAN.md, 2026-08-19): real typing always arrives as a
+    // clean length-1 chunk here - this gate was never the bug, so it stays.
+    if (data.length === 1 && data >= ' ') userKeystroke();
     window.lunacore.write(data, sessionId);
   });
   // MARK MODE + COPY: xterm has no built-in copy binding or keyboard

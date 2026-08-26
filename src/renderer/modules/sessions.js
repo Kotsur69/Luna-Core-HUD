@@ -47,6 +47,7 @@ import { applyTurnEnd, trackBucketTurn } from './sessiontimeline.js';
 import { syncSwitchers } from './switchers.js';
 import { syncTodoProject } from './todo.js';
 import { sfx } from './sound.js';
+import { agentStream } from './keysynth.js';
 
 // A2f: set once by mountTabs() - see modules/terminal.js.
 let tabEls = null;
@@ -65,9 +66,12 @@ window.lunacore.onData(({ sessionId, data }) => {
   const s = ensureTerm(sessionId);
   s.term.write(data);
   // The LED describes what you are looking at. A background tab blinks on its
-  // own marker instead.
-  if (sessionId === getActiveSessionId()) markWorking(sessionId);
-  else markBucketWorking(s);
+  // own marker instead - same reasoning extends to the agent-stream sound
+  // (CONCEPT_TYPING_SYNTH.md §2): only the tab you're looking at gets audio.
+  if (sessionId === getActiveSessionId()) {
+    markWorking(sessionId);
+    agentStream(data.length);
+  } else markBucketWorking(s);
 });
 
 // Connection status of one tab's pty.

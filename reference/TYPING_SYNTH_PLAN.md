@@ -107,3 +107,61 @@ somewhere in the IPC→main→soundManager→mpv chain" and then set aside in
 favor of the Auto-proceed feature (`AUTOPROCEED_PLAN.md`), which Mati
 judged higher-value: connection drops during real work cost him time
 directly, a silent keystroke click does not. Pick up at §1 above.
+
+## Resolved 2026-08-26 — shipped, but not as planned above
+
+Picked back up and shipped in one day, in three passes. The final shape
+diverges from most of this plan's "New pieces" section — worth reading as
+history, not as what got built.
+
+**Pass 1 — bypass, not fix.** The IPC→main→soundManager→mpv break from §1
+was never found. Instead of hunting it further, `src/renderer/modules/
+keysynth.js` (new) replaced `sfx.keystroke()` outright for every install —
+not the planned `soundKeystrokeEngine: 'sample' | 'synth'` toggle (decision
+#2/§3 above). There is no synth/sample switch and no `uiprefs.js`/`i18n.js`
+change; the old mpv keystroke path (`config/sounds.json`'s 4 `.wav`
+variants, `helpers/sounds/sfx/keystroke-*.wav`) is simply dead now — see
+`helpers/sounds/README.md`. `terminals.js`'s `onData` gate stayed exactly
+as decision #3 said: not broken, not touched.
+
+**Pass 2 — sample-based, not oscillator-based.** Mati liked
+github.com/nathan-fiscaletti/keyboardsounds's mechanic (random pitch shift
+per hit from a real sample pack) more than a synthesized tone, however
+modulated. `keysynth.js` was rewritten around real recordings
+(`assets/keysounds/*.mp3`/`.wav`, new) instead of the
+`OscillatorNode`/`BiquadFilterNode` graph §2 describes — an onset-detecting
+RMS-envelope slicer cuts each multi-keystroke recording into individual
+~140ms hits at load time, normalized to a consistent peak (raw recordings
+sit well under full scale, unlike an oscillator's always-±1 output — silent
+otherwise regardless of gain). WPM-based pitch/decay (this doc's §2.1,
+"acoustic acceleration") became the base rate, with random jitter on top.
+The agent-output-stream texture from §2.2 (deferred as v2 in decision #1)
+*was* built this same day, staying oscillator-based as originally
+sketched — out of scope for the sample rework since it was never reported
+as "generic."
+
+**Pass 3 — the actual silent-audio bug, unrelated to either pass above.**
+After pass 2, Mati reported the sound as still barely audible. Two
+AI-proposed fixes (peak normalization, then reworking the slicer to be
+onset-triggered instead of duration-gated) were each verified against the
+real asset files via a headless-Electron diagnostic script - and were
+real, worthwhile fixes - but didn't change what Mati heard, because
+neither addressed the actual bug: `index.html`'s CSP (`connect-src
+'none'`, documented there as a deliberate "renderer structurally cannot
+reach the network" invariant) was silently blocking every `fetch()` of the
+local asset files, `.catch(() => [])` hiding the failure with no trace.
+Found by launching with `--enable-logging` and reading the console instead
+of guessing a third time. Fixed by routing the read through IPC instead of
+loosening that CSP invariant: `main.js` gained `ipcMain.handle('keysynth:
+read', ...)` (reads `assets/keysounds/<basename>`, sanitized), `preload.js`
+exposes `window.lunacore.readKeysound(name)`, `keysynth.js` calls that
+instead of `fetch()`. Load failures now `console.error` instead of
+disappearing.
+
+**Since then**: a mouse-click sound (same sample-pool/random-pitch
+mechanic, wired to every click in the HUD via `termcustom.js`) was added
+and then removed the same day - Mati found it "kinda annoying quickly."
+The 3 files it used (ATM/secret-code/security-code) were kept and became 3
+more keyboard variants instead (`atm`/`secretcode`/`securitycode`),
+sharing the same onset-slicer as the other 4 packs. **7 keyboard variants
+ship in total.** Full history: `lunacore_keystroke_sound_bug` memory.

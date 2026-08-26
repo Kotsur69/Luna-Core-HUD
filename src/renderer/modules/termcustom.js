@@ -21,7 +21,14 @@ import { term, applyTerminalAppearance } from './terminals.js';
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
 import { applyLang } from './appearance.js';
-import { sfx, setKeystrokeVariant } from './sound.js';
+import { sfx } from './sound.js';
+import {
+  setEnabled as setSynthEnabled,
+  setVolume as setSynthVolume,
+  setVariant as setSynthVariant,
+  userKeystroke,
+  preloadCurrentVariant,
+} from './keysynth.js';
 import { t } from './util.js';
 
 const termcustomEl = document.getElementById('termcustom');
@@ -250,6 +257,7 @@ els.reset.addEventListener('click', () => {
 
 els.soundToggle.addEventListener('change', () => {
   soundPrefs.enabled = els.soundToggle.checked;
+  setSynthEnabled(soundPrefs.enabled);
   window.lunacore.setUiPrefs({ soundEnabled: soundPrefs.enabled });
 });
 
@@ -260,15 +268,16 @@ els.voiceToggle.addEventListener('change', () => {
 
 els.soundVolume.addEventListener('change', () => {
   soundPrefs.volume = Number(els.soundVolume.value);
+  setSynthVolume(soundPrefs.volume);
   window.lunacore.setUiPrefs({ soundVolume: soundPrefs.volume });
 });
 
 els.soundKeystrokeVariant.addEventListener('change', () => {
   soundPrefs.keystrokeVariant = els.soundKeystrokeVariant.value;
-  setKeystrokeVariant(soundPrefs.keystrokeVariant);
+  setSynthVariant(soundPrefs.keystrokeVariant);
   window.lunacore.setUiPrefs({ soundKeystrokeVariant: soundPrefs.keystrokeVariant });
-  // Audition-by-ear: hear the clip you just picked, not just its label.
-  sfx.keystroke();
+  // Audition-by-ear: hear the click you just picked, not just its label.
+  userKeystroke();
 });
 
 els.soundLongTaskMinutes.addEventListener('change', () => {
@@ -355,7 +364,10 @@ export async function initTermcustomSettings() {
       typeof prefs.soundLongTaskMinutes === 'number' ? prefs.soundLongTaskMinutes : 10,
     readOutputEnabled: prefs.soundReadOutputEnabled === true,
   };
-  setKeystrokeVariant(soundPrefs.keystrokeVariant);
+  setSynthEnabled(soundPrefs.enabled);
+  setSynthVolume(soundPrefs.volume);
+  setSynthVariant(soundPrefs.keystrokeVariant);
+  preloadCurrentVariant(); // decode+slice is real work - don't do it for the first time on a keypress
   renderSoundSwitcher();
 
   // mountBoot(root) is root-agnostic (see boot.js) - #termcustom is static,
