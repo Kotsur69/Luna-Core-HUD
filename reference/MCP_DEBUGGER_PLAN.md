@@ -1,10 +1,13 @@
 # MCP debugger, safe half (Reference)
 
-**Status: shipped, partial.** `CONCEPT_MCP_DEBUGGER.md` sketched three pieces
-- live flow mapping, a JSON-RPC inspector, and a failure-injector/restart
-gateway. Only the first two shipped. This is the compact "what shipped and
-why the third piece didn't" doc; the concept file stays at root since §3 of
-it is still a live, unbuilt idea. Shipped 2026-08-26.
+**Status: shipped, partial - code-complete, NOT yet hand-verified.**
+`CONCEPT_MCP_DEBUGGER.md` sketched three pieces - live flow mapping, a
+JSON-RPC inspector, and a failure-injector/restart gateway. Only the first
+two shipped. This is the compact "what shipped and why the third piece
+didn't" doc; the concept file stays at root since §3 of it is still a live,
+unbuilt idea. Shipped 2026-08-26: 678/678 tests green and `--luna-probe`
+confirms a clean mount, but neither can see a real pulse or a real payload
+in the inspector - **§6 is the next session's actual work.**
 
 ---
 
@@ -82,3 +85,55 @@ names instead of built-in tool names.
 `~/.claude.json`-rewriting proxy described in §1 above. If revisited, it's
 its own scoped decision (opt-in per server, automatic backup/restore,
 restore-on-crash), not a small add to this shipped half.
+
+## 6. Verification checklist (do this before calling it done)
+
+Mati's own MCP usage is rare (the health panel's own finding: only
+`codebase-memory-mcp` and the Hugging Face connector have ever fired on
+this machine) - so unlike most features here, this one cannot be
+hand-verified just by using the app normally for a bit. Trigger a call on
+purpose.
+
+1. `npm test` - should still be 678/678 (or more, if this session added
+   anything else).
+2. `npm start`, open a tab, and make Claude actually call an MCP tool - the
+   codebase-memory-mcp server is the known-working one (e.g. ask it to list
+   indexed projects). While the call is in flight:
+   - the server's row in the MCP health panel (left panel or wherever it's
+     placed in the active layout preset) should glow cyan and pulse - if
+     the panel is folded/not on screen, open it first, the pulse does not
+     retroactively appear once you switch to the layout.
+   - once the call finishes, a new row should appear at the TOP of "Recent
+     calls" below the server list, and the pulse should stop.
+3. Click that new row - the modal should open showing:
+   - the server/tool name and an OK badge,
+   - a "Request" block with the pretty-printed input (or `{}` for a
+     no-argument call),
+   - a "Response" block with the pretty-printed result - readable indented
+     JSON, not one long escaped string (this is the exact thing
+     `formatPayload()`'s reparse step exists for - if it shows as one raw
+     line, that step regressed).
+   - Escape, the × button, and clicking the backdrop should all close it.
+4. Trigger a call that FAILS (e.g. ask for a nonexistent project/resource
+   from whichever server is available) - confirm the row and modal badge
+   both read as a failure, not silently as OK.
+5. Trigger a call whose result is large (a big list/read) - confirm the
+   inspector shows a "...fragment cut off" notice under the Response block
+   rather than silently truncating with no indication, and that the panel
+   does not visibly stutter/freeze while it renders.
+6. Background-tab correctness (the trickiest part to get right by
+   inspection alone): start an MCP call on tab A, switch to tab B BEFORE it
+   finishes, wait for it to finish, then switch back to A. Confirm:
+   - tab A's pulse is off (not stuck on) and the call shows up in A's
+     "Recent calls" - not tab B's.
+   - switching between A and B repeatedly does not mix their call
+     histories.
+7. Toggle PL/EN (per `data-i18n` keys `mcp.calls.title`, `mcp.calls.empty`,
+   `mcp.call.*`) - confirm both languages render sensibly, no leftover key
+   names on screen.
+8. If everything above holds: flip this doc's top status line to
+   **"shipped, hand-verified"** with the date, and update
+   `FUTURE_PLAN.md`'s "Next action" row to drop the "needs a real MCP call"
+   caveat. If something's off, fix it here rather than filing it as a
+   separate concept - this doc is the source of truth for what this
+   feature is supposed to do.
