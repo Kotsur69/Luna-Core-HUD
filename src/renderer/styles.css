@@ -436,7 +436,7 @@ body::after {
 /* In a scrolling container "grow" doesn't make sense - content dictates size. */
 .panel__scroll .panel__section--grow { flex: none; }
 
-.panel__title {
+.panel__title, .panel__subtitle {
   margin: 0;
   font-family: var(--font-display);
   font-size: 11px;
