@@ -203,6 +203,27 @@
     </div>
   </template>
 
+  <!-- Diagnostics tile. One list of the degraded states LunaCore otherwise only
+       mentions in passing: mpv missing, a wall of never-called MCP servers,
+       claude not on PATH. Verdicts come from src/diagnostics.js. -->
+  <template id="w-diagnostics">
+    <div class="panel__section panel__section--grow">
+      <h2 class="panel__title usage-head">
+        <span data-i18n="diag.title">Diagnostyka</span>
+        <button
+          id="diag-refresh"
+          class="usage-refresh"
+          data-i18n-title="diag.refresh.title"
+          title="Sprawdz ponownie"
+        >&#8635;</button>
+      </h2>
+      <p id="diag-summary" class="hint mcp-summary"></p>
+      <!-- Filled by modules/diagnostics.js. -->
+      <ul id="diag-list" class="diag-list"></ul>
+      <p id="diag-empty" class="hint" data-i18n="diag.checking">Sprawdzanie...</p>
+    </div>
+  </template>
+
   <!-- Git station. Read plus fetch; pull/commit/push belong in a terminal where
        you can see what happened. -->
   <template id="w-git">

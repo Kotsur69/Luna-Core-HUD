@@ -121,6 +121,16 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Handshakes ONE stdio server by name; Promise<{ok, reason, tools, ms}>. */
   probeMcpServer: (name) => ipcRenderer.invoke('mcp:probe', name),
 
+  // --- Diagnostics tile: consolidated self-checks (mpv, claude, MCP usage) ---
+  /** Fetches { rows:[...], status, issues }. Pass { rescan:true } to re-mine MCP usage. */
+  getDiagnostics: (opts) => ipcRenderer.invoke('diag:report', opts),
+  /**
+   * Opens the mpv installation page in the browser. Like openClaudeDocs, it
+   * takes no argument - the URL is hardcoded in main.js, so the renderer cannot
+   * point the system browser at an arbitrary address.
+   */
+  openMpvDocs: () => ipcRenderer.send('diag:mpv-docs'),
+
   // --- Git station ---
   /** Fetches the watched repos: [{path, name, status, lastCommit, state, error}]. */
   getRepos: () => ipcRenderer.invoke('git:list'),

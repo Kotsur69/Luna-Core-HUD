@@ -79,6 +79,12 @@ class SoundManager {
     this.volume = clampVolume(opts.volume);
     this.enabled = true; // user toggle (Preferences); wired from uiprefs by main.js
     this.available = false; // becomes true once mpv --idle is confirmed alive
+    // Why sound is (not) working, for the diagnostics tile (src/diagnostics.js).
+    // 'starting' until start() resolves it one way or the other. Recording the
+    // reason changes nothing about the silent-fallback behaviour below - it just
+    // lets the HUD finally say WHY every cue went quiet.
+    //   'starting' | 'ok' | 'not-found' | 'spawn-failed' | 'ipc-failed'
+    this.reason = 'starting';
     this.proc = null;
     this.sock = null;
     this.warned = false;
@@ -101,6 +107,7 @@ class SoundManager {
     try {
       mpvPath = resolveMpv();
     } catch {
+      this.reason = 'not-found';
       this._warnOnce('mpv not found on PATH - sound feedback disabled (silent fallback)');
       return;
     }
@@ -126,7 +133,10 @@ class SoundManager {
       { stdio: 'ignore' },
     );
 
-    this.proc.on('error', () => this._warnOnce('mpv failed to start - sound feedback disabled'));
+    this.proc.on('error', () => {
+      this.reason = 'spawn-failed';
+      this._warnOnce('mpv failed to start - sound feedback disabled');
+    });
     this.proc.on('exit', () => {
       this.available = false;
       this.sock = null;
@@ -140,6 +150,7 @@ class SoundManager {
     sock.on('connect', () => {
       this.sock = sock;
       this.available = true;
+      this.reason = 'ok';
       for (const cmd of this.pending.splice(0)) this._send(cmd);
     });
     if (this.onBusyChange) {
@@ -150,6 +161,7 @@ class SoundManager {
       if (attempt < MAX_CONNECT_ATTEMPTS) {
         setTimeout(() => this._connect(attempt + 1), RECONNECT_DELAY_MS);
       } else {
+        this.reason = 'ipc-failed';
         this._warnOnce('could not reach mpv IPC socket - sound feedback disabled');
       }
     });
@@ -222,6 +234,12 @@ class SoundManager {
 
   setEnabled(enabled) {
     this.enabled = !!enabled;
+  }
+
+  /** Snapshot for the diagnostics tile: is audio live, and if not, why not.
+   *  See the `reason` field in the constructor for the value set. */
+  getStatus() {
+    return { available: this.available, reason: this.reason };
   }
 
   setVolume(vol) {

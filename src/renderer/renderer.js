@@ -67,6 +67,9 @@ import { initProfiles, initProjects } from './modules/switchers.js';
 import { initPorts } from './modules/ports.js';
 import { initAppearance, getThemeIds, selectTheme } from './modules/appearance.js';
 import { initClaudeCheck } from './modules/claudecheck.js';
+// Diagnostics tile: consolidated self-checks (mpv, claude on PATH, MCP usage).
+// Self-registers as a widget on import; initDiagnostics() runs the first report.
+import { initDiagnostics } from './modules/diagnostics.js';
 
 // -- Widgets (A2) -------------------------------------------------------------
 // Blocks converted to the widget contract. They self-register at import time
@@ -146,6 +149,10 @@ initSessions();
 // at a user who chose Polish. Not awaited: it is an IPC round trip, and nothing
 // below depends on its answer.
 initClaudeCheck();
+
+// Diagnostics tile's first report. Not awaited, same reasoning as initClaudeCheck
+// above: an IPC round trip nothing below depends on.
+initDiagnostics();
 
 // ---- Dev hooks (A2) ---------------------------------------------------------
 //

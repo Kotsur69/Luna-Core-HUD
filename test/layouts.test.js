@@ -219,7 +219,9 @@ test('config/layouts.json - classic reproduces today\'s layout', () => {
   // controls) and `todo`/`clipboard` after `scratchpad` (all three are the
   // "things I keep on the side" group); `git`/`mcp` then went next to `ports`,
   // because all three answer "what is the state of my machine right now" from a
-  // passive scan rather than from anything the session did.
+  // passive scan rather than from anything the session did. The diagnostics
+  // tile then went right after `mcp`, for the same reason - it consolidates the
+  // machine's own degraded-state self-checks (mpv, claude on PATH, MCP usage).
   // This assertion exists so that a change like that doesn't slip by unnoticed.
   assert.deepEqual(l.slots.right, [
     'context',
@@ -233,6 +235,7 @@ test('config/layouts.json - classic reproduces today\'s layout', () => {
     'ports',
     'git',
     'mcp',
+    'diagnostics',
     'scratchpad',
     'todo',
     'clipboard',

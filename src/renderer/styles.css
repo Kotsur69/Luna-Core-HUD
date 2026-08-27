@@ -1728,6 +1728,81 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .mcpcall-item__badge.is-bad,
 .mcpcall-modal__badge.is-bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
 
+/* ---- Diagnostics tile -------------------------------------------------------
+   Deliberately the same density and structure as .mcp-item: identity + dot on
+   top, the evidence line under it. The dot is the only colour - the list is
+   read by scanning the left edge for the ones that are not green. */
+
+.diag-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.diag-item {
+  flex: none; /* like .mcp-item: don't squeeze rows, scroll instead */
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-2);
+  border: var(--border-w) solid var(--edge);
+  font-size: 12px;
+}
+
+.diag-item__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.diag-item__dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.diag-item__dot--ok { background: var(--good); }
+.diag-item__dot--warn { background: var(--warn); }
+.diag-item__dot--fail { background: var(--bad); }
+.diag-item__dot--unknown { background: var(--text-dim); }
+
+.diag-item__label {
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diag-item__detail {
+  color: var(--text-dim);
+}
+
+.diag-item__action {
+  margin-left: auto;
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-sharp),
+    border-color var(--dur-fast) var(--ease-sharp);
+}
+.diag-item__action:hover {
+  color: var(--neon-cyan);
+  border-color: var(--edge-glow);
+}
+.diag-item__action.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
+
 /* ---- Git station --------------------------------------------------------------
    Sorted by urgency in gitstation.js, so the top row is always the one worth
    looking at. Badges only appear when their count is non-zero: a row of zeroes

@@ -25,6 +25,7 @@
           "ports",
           "git",
           "mcp",
+          "diagnostics",
           "scratchpad",
           "todo",
           "clipboard"
@@ -42,7 +43,7 @@
       "chrome": { "brand": "side", "status": "side" },
       "slots": {
         "main": ["terminal"],
-        "side": ["actions", "context", "telemetry", "media", "appearance", "project", "profile"]
+        "side": ["actions", "context", "telemetry", "media", "diagnostics", "appearance", "project", "profile"]
       }
     },
     {
@@ -69,6 +70,7 @@
           "ports",
           "git",
           "mcp",
+          "diagnostics",
           "scratchpad",
           "todo",
           "clipboard",
@@ -104,6 +106,7 @@
           "ports",
           "git",
           "mcp",
+          "diagnostics",
           "scratchpad",
           "todo",
           "clipboard",

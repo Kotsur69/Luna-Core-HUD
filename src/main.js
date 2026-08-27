@@ -517,6 +517,30 @@ function withClaudeOnPath(env) {
 }
 
 /**
+ * D3: is Claude Code installed at all? One source of truth for both the
+ * claude:status IPC handler (used by claudecheck.js's first-run banner) and the
+ * diagnostics tile's claude row. Searched AFTER withClaudeOnPath(), so a native
+ * install in ~/.local/bin that never made it onto PATH still counts as found.
+ * @returns {{ found: boolean, path: string|null }}
+ */
+function claudeStatus() {
+  const env = withClaudeOnPath({ ...process.env });
+  const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+  const found = findExecutable('claude', env[key], IS_WINDOWS, fs.existsSync);
+  return { found: Boolean(found), path: found };
+}
+
+// The MCP health scan streams every transcript on disk (~1s, same cost note as
+// mcp.js). The diagnostics tile only needs the number of idle servers, and it
+// changes about once a day - so the result is memoized for the whole session
+// and only re-mined when the tile's refresh button asks for it (rescan: true).
+let mcpHealthPromise = null;
+function mcpHealthCached(rescan) {
+  if (rescan || !mcpHealthPromise) mcpHealthPromise = getMcpHealth();
+  return mcpHealthPromise;
+}
+
+/**
  * When LunaCore itself was launched from inside a Claude Code session (e.g.
  * `npm start` run from Claude's own terminal), the process inherits session
  * markers in env: CLAUDE_CODE_CHILD_SESSION, CLAUDECODE, CLAUDE_CODE_SESSION_ID,
@@ -1496,6 +1520,39 @@ function registerIpc() {
     return probeServer(server);
   });
 
+  // Diagnostics tile: gather the three live inputs and run them through the pure
+  // core (src/diagnostics.js). Each summarizer is wrapped on its own, so one
+  // throwing check degrades to an 'unknown' row rather than failing the whole
+  // report. The MCP scan is the only slow input and is memoized for the session
+  // (mcpHealthCached); { rescan: true } from the tile's refresh re-mines it.
+  ipcMain.handle('diag:report', async (_event, opts) => {
+    const rescan = Boolean(opts && opts.rescan === true);
+    const safeRow = (id, produce) => {
+      try {
+        const row = produce();
+        return row && row.id ? row : { id, status: 'unknown', detailKey: 'diag.unknown' };
+      } catch {
+        return { id, status: 'unknown', detailKey: 'diag.unknown' };
+      }
+    };
+
+    let mcpHealth = null;
+    try {
+      mcpHealth = await mcpHealthCached(rescan);
+    } catch {
+      mcpHealth = null; // summarizeMcp turns a null into an 'unknown' row
+    }
+
+    const rows = [
+      safeRow('sound', () =>
+        diagnostics.summarizeSound(soundManager ? soundManager.getStatus() : { reason: 'starting' })
+      ),
+      safeRow('claude', () => diagnostics.summarizeClaude(claudeStatus())),
+      safeRow('mcp', () => diagnostics.summarizeMcp(mcpHealth)),
+    ];
+    return { rows, ...diagnostics.rollup(rows) };
+  });
+
   // Git station: read + fetch. No pull, commit or push by design - see the
   // header of src/gitstation.js.
   ipcMain.handle('git:list', () => readAllRepos());
@@ -1566,17 +1623,10 @@ function registerIpc() {
   // before it can reach a shell argv, same discipline media:command uses.
   ipcMain.handle('devices:mic', (_event, action) => micState(action));
 
-  // Themes: list of available themes (CSS tokens + xterm colors).
   // D3. Answers "is Claude Code installed at all?" so the HUD can say so in
-  // words instead of leaving a newcomer staring at `command not found`.
-  // Searched on the env AFTER withClaudeOnPath(), so a native install in
-  // ~/.local/bin that never made it onto PATH still counts as found.
-  ipcMain.handle('claude:status', () => {
-    const env = withClaudeOnPath({ ...process.env });
-    const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
-    const found = findExecutable('claude', env[key], IS_WINDOWS, fs.existsSync);
-    return { found: Boolean(found), path: found };
-  });
+  // words instead of leaving a newcomer staring at `command not found`. Shares
+  // its body with the diagnostics tile - see claudeStatus().
+  ipcMain.handle('claude:status', () => claudeStatus());
 
   // The URL lives HERE, not in the renderer. openExternal on a renderer-supplied
   // string would be an open redirect straight into the user's browser; this way
