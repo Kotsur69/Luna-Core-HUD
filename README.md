@@ -234,7 +234,8 @@ elements; scripts need no such exemption, which is why the boot failsafe lives i
 | Desktop framework | Electron 43 |
 | Terminal core | [`@lydell/node-pty`](https://www.npmjs.com/package/@lydell/node-pty) + [`@xterm/xterm`](https://www.npmjs.com/package/@xterm/xterm) + `@xterm/addon-fit` |
 | Frontend | Vanilla HTML / CSS / JS (swappable themes via CSS custom properties, PL/EN i18n) |
-| Audio (optional) | [`mpv`](https://mpv.io/) — persistent `--idle` process, controlled over a JSON IPC socket. Not an npm dependency and not bundled; LunaCore just looks for it on `PATH` at launch. |
+| Audio — cues & voice (optional) | [`mpv`](https://mpv.io/) — persistent `--idle` process, controlled over a JSON IPC socket. Not an npm dependency and not bundled; LunaCore just looks for it on `PATH` at launch. |
+| Audio — keystrokes | Web Audio (`keysynth.js`) — real recordings in `assets/keysounds/` sliced into per-hit samples in-process. No `mpv`, no npm dependency. |
 
 > **Why `@lydell/node-pty` instead of `node-pty`?** It ships prebuilt N-API
 > binaries, so it installs **without** node-gyp / Visual Studio Build Tools — one
