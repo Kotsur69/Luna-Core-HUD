@@ -1,0 +1,5 @@
+# Shell scripts must keep LF. core.autocrlf=true is the norm on Windows, and
+# without this rule a fresh clone checks scripts/*.sh out with CRLF - bash then
+# rejects the shebang, because the interpreter path ends in a stray \r. The
+# blobs are already stored with LF; this is purely about what checkout writes.
+*.sh text eol=lf

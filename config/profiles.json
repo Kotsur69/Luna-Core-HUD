@@ -20,6 +20,23 @@
       }
     },
     {
+      "id": "glm-5.3",
+      "label": { "pl": "GLM-5.3 (Z.ai)", "en": "GLM-5.3 (Z.ai)" },
+      "command": "claude",
+      "args": [],
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+        "ANTHROPIC_MODEL": "glm-5.3",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash",
+        "ANTHROPIC_SMALL_FAST_MODEL": "glm-5.3-flash",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "glm-5.3",
+        "API_TIMEOUT_MS": "3000000"
+      }
+    },
+    {
       "id": "bare-shell",
       "label": { "pl": "Sama powloka (bez claude)", "en": "Bare shell (no claude)" },
       "command": "",

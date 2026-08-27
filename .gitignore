@@ -27,3 +27,7 @@ Thumbs.db
 config/*.local.json
 config/*.local.md
 .env
+
+# Dual-runner secrets (GLM key). The committed contract is
+# .env.luna.example - the filled-in copy never goes to git.
+.env.luna
