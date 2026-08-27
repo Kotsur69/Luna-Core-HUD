@@ -1,13 +1,17 @@
 # MCP debugger, safe half (Reference)
 
-**Status: shipped, partial - code-complete, NOT yet hand-verified.**
+**Status: shipped, hand-verified 2026-08-27.**
 `CONCEPT_MCP_DEBUGGER.md` sketched three pieces - live flow mapping, a
 JSON-RPC inspector, and a failure-injector/restart gateway. Only the first
 two shipped. This is the compact "what shipped and why the third piece
 didn't" doc; the concept file stays at root since §3 of it is still a live,
 unbuilt idea. Shipped 2026-08-26: 678/678 tests green and `--luna-probe`
-confirms a clean mount, but neither can see a real pulse or a real payload
-in the inspector - **§6 is the next session's actual work.**
+confirms a clean mount. Hand-verified 2026-08-27 against a real
+`codebase-memory-mcp` call (Mati: *"shipped hand verified"*) - §6's
+checklist walked end to end: live pulse, inspector row, modal
+request/response pretty-print, failure badge, large-payload truncation
+notice, background-tab correctness, PL/EN. The failure-injector/restart
+piece stays deferred (§1, §5).
 
 ---
 
