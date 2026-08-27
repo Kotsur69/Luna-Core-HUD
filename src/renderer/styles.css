@@ -3493,3 +3493,105 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   pointer-events: none;
   z-index: 0;
 }
+
+/* ---- 3.4 Region rail -------------------------------------------------------
+   C2 shipped per-WIDGET folding; this is the per-REGION version, and it is the
+   `focus` preset's original promise in FUTURE_PLAN.md 3.2 - "panels collapse to
+   a thin icon rail, terminal reclaims the space".
+
+   panels.js pins the region's grid track to RAIL_PX and sets [data-railed];
+   everything here is what that has to look like. The width change itself is
+   deliberately NOT transitioned: it lands on .app's grid-template-columns, and
+   1fr -> 44px is not an interpolable pair, so a transition there would snap
+   anyway. It is dissolved instead, through the same View Transition the theme
+   switch uses - see setRailed() in panels.js. */
+
+.region__rail {
+  flex: none;
+  align-self: flex-end;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-sharp),
+    border-color var(--dur-fast) var(--ease-sharp);
+}
+.region__rail:hover {
+  color: var(--neon-cyan);
+  border-color: var(--edge-glow);
+}
+.region__rail:focus-visible {
+  outline: var(--border-w) solid var(--edge-glow);
+  outline-offset: 2px;
+}
+
+/* Collapsed. The panels leave layout, paint and the tab order together, which
+   is the same thing [data-collapsed] means for a single section. The brand mark
+   and the PTY status line go with them: at 44px there is no room for either,
+   and a clipped wordmark reads as a rendering bug rather than as a choice. */
+.region[data-railed] {
+  overflow: hidden;
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+}
+.region[data-railed] > .panel__scroll,
+.region[data-railed] > .brand,
+.region[data-railed] > .status-line {
+  display: none;
+}
+.region[data-railed] > .region__rail {
+  align-self: center;
+}
+
+.region__glyphs {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  overflow-y: auto;
+}
+
+/* One glyph per panel, carrying the first letter of that panel's own title -
+   so there is no icon set to maintain, nothing to keep in step with the widget
+   registry, and it is already right in both languages. Clicking one opens the
+   region AND scrolls that panel into view, so collapsing a column is never a
+   way to lose track of what was in it. */
+.region__glyph {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(160deg, var(--bg-panel), var(--bg-panel-2));
+  color: var(--text-dim);
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-sharp),
+    border-color var(--dur-fast) var(--ease-sharp),
+    transform var(--dur-instant) var(--ease-sharp);
+}
+.region__glyph:hover {
+  color: var(--neon-cyan);
+  border-color: var(--edge-glow);
+  transform: translateY(calc(-1 * var(--lift)));
+}
+.region__glyph:active {
+  transform: scale(var(--press-scale));
+}
+.region__glyph:focus-visible {
+  outline: var(--border-w) solid var(--edge-glow);
+  outline-offset: 2px;
+}

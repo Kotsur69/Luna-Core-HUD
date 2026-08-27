@@ -13,6 +13,7 @@ const {
   clampAutoCompactPrefs,
   cleanCollapsed,
   cleanLayoutSizes,
+  cleanRailedRegions,
   clampModifierPrefs,
 } = require('../src/uiprefs.js');
 const { loadLayouts } = require('../src/layouts.js');
@@ -291,4 +292,42 @@ test('clampModifierPrefs: a value from the wrong axis is still rejected', () => 
   // `dense` is a real id - just not one this axis has a block for.
   assert.equal(clampModifierPrefs({ glow: 'dense' }).glow, 'full');
   assert.equal(clampModifierPrefs({ density: 'off' }).density, 'cozy');
+});
+
+// ---- v0.10 3.4: railedRegions ----------------------------------------------
+//
+// Same reject-don't-repair boundary as the rest of this file. A region name is
+// deliberately NOT checked against a preset here - panels.js resolves names
+// against the live layout and finds no column for a stale one, which is the
+// only place that actually knows which regions exist.
+
+test('cleanRailedRegions: a missing or bad input -> nothing railed', () => {
+  for (const bad of [null, undefined, 42, 'x', []]) {
+    assert.deepEqual(cleanRailedRegions(bad), {});
+  }
+});
+
+test('cleanRailedRegions keeps a well-formed map and dedupes within a preset', () => {
+  assert.deepEqual(cleanRailedRegions({ classic: ['right', 'right', 'left'] }), {
+    classic: ['right', 'left'],
+  });
+});
+
+test('cleanRailedRegions drops an empty list rather than persisting noise', () => {
+  // Otherwise the file grows one key per preset the user has ever opened.
+  assert.deepEqual(cleanRailedRegions({ classic: [], focus: ['side'] }), { focus: ['side'] });
+});
+
+test('cleanRailedRegions rejects anything that is not id-shaped', () => {
+  assert.deepEqual(cleanRailedRegions({ classic: ['ok', '', 42, 'x'.repeat(65)] }), {
+    classic: ['ok'],
+  });
+  assert.deepEqual(cleanRailedRegions({ '': ['side'] }), {});
+  assert.deepEqual(cleanRailedRegions({ classic: 'right' }), {});
+  assert.deepEqual(cleanRailedRegions({ classic: null }), {});
+});
+
+test('cleanRailedRegions caps how much one hand-edited preset may store', () => {
+  const many = [...Array(40)].map((_, i) => `r${i}`);
+  assert.equal(cleanRailedRegions({ classic: many }).classic.length, 16);
 });

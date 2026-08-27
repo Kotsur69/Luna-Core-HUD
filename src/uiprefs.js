@@ -9,7 +9,8 @@
 // autoCompactMode, autoCompactEveryTurns, autoCompactAfterMinutes,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
-// collapsed, layoutSizes, widgetSlots, density, fontPack, glow, motion.
+// collapsed, layoutSizes, widgetSlots, railedRegions, density, fontPack, glow,
+// motion.
 // The renderer
 // reads it at startup (ui:get) and writes on change (ui:set).
 //
@@ -164,6 +165,17 @@ const DEFAULTS = {
   // the preset (and healed) by renderer/modules/widgetarrange.js; `terminal` is
   // never stored here. Empty = every preset in its authored arrangement.
   widgetSlots: {},
+  // v0.10 3.4 collapse-to-rail: layoutId -> [regionName], the regions the user
+  // has folded down to a strip of glyphs in that preset. Per layout for the
+  // same reason as layoutSizes and widgetSlots - a region name belongs to the
+  // preset that defines it.
+  //
+  // Deliberately NOT stored as widths. layoutSizes always holds the UNRAILED
+  // columns and panels.js derives the narrow track from this list at apply
+  // time, so un-railing restores exactly the width the user had dragged to
+  // rather than an approximation of it, and a rail can never be mistaken for a
+  // deliberately narrow panel.
+  railedRegions: {},
   // v0.10 modifiers. Every default is the no-op value, i.e. exactly what the
   // HUD did before the axes existed: `cozy` IS the :root scale, `theme` means
   // the theme keeps choosing its own faces, and `full` glow/motion is the
@@ -187,6 +199,9 @@ const MAX_LAYOUT_SIZES = 32;
 const MAX_ARRANGED_LAYOUTS = 32;
 const MAX_ARRANGE_REGIONS = 16;
 const MAX_ARRANGE_IDS = 64;
+/** Regions one preset may have collapsed to a rail at once. A layout with more
+ *  than a dozen regions is not a layout; this caps a hand-edited file. */
+const MAX_RAILED_REGIONS = 16;
 
 /**
  * Shape check for a stored columns string. Deliberately coarse: this is the
@@ -222,6 +237,35 @@ function cleanLayoutSizes(raw) {
 
 function isIdish(v) {
   return typeof v === 'string' && v.length > 0 && v.length <= 64;
+}
+
+/**
+ * Sanitizes the v0.10 rail state: { layoutId -> [regionName] }.
+ *
+ * A region name this preset does not actually define is deliberately NOT
+ * filtered here. panels.js resolves every name against the live layout's
+ * `areas` and simply finds no column for a stale one, which is the safer place
+ * for that check: this module has no idea which regions exist, and guessing
+ * would silently drop a rail the moment layouts.json was read a beat later
+ * than the prefs file.
+ */
+function cleanRailedRegions(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...DEFAULTS.railedRegions };
+  const out = {};
+  for (const [layoutId, names] of Object.entries(raw)) {
+    if (!isIdish(layoutId) || !Array.isArray(names)) continue;
+    const list = [];
+    for (const name of names) {
+      if (!isIdish(name) || list.includes(name)) continue;
+      list.push(name);
+      if (list.length >= MAX_RAILED_REGIONS) break;
+    }
+    // An empty list means the same thing as no entry at all - do not persist
+    // noise that would grow one key per preset the user has ever opened.
+    if (list.length) out[layoutId] = list;
+    if (Object.keys(out).length >= MAX_ARRANGED_LAYOUTS) break;
+  }
+  return out;
 }
 
 /**
@@ -399,6 +443,7 @@ function readUiPrefs() {
       collapsed: cleanCollapsed(obj.collapsed),
       layoutSizes: cleanLayoutSizes(obj.layoutSizes),
       widgetSlots: cleanWidgetSlots(obj.widgetSlots),
+      railedRegions: cleanRailedRegions(obj.railedRegions),
       ...clampAutoCompactPrefs(obj),
       ...clampTermPrefs(obj),
       ...clampModifierPrefs(obj),
@@ -488,6 +533,9 @@ function writeUiPrefs(partial) {
     if (partial && partial.widgetSlots && typeof partial.widgetSlots === 'object') {
       next.widgetSlots = cleanWidgetSlots(partial.widgetSlots);
     }
+    if (partial && partial.railedRegions && typeof partial.railedRegions === 'object') {
+      next.railedRegions = cleanRailedRegions(partial.railedRegions);
+    }
     // Only the term* keys actually present in `partial` should move; anything
     // omitted keeps its current (already-validated) value from `next` rather
     // than reverting to DEFAULTS - clampTermPrefs still re-validates the
@@ -544,4 +592,5 @@ module.exports = {
   cleanCollapsed,
   cleanLayoutSizes,
   cleanWidgetSlots,
+  cleanRailedRegions,
 };

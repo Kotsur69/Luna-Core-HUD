@@ -33,6 +33,9 @@
 'use strict';
 
 import { onLangChange } from './bus.js';
+// DOM-free at module scope, so it does not break this file's require()-ability
+// from a plain CJS test (see the header). Used by the region rail only.
+import { crossfade } from './motion.js';
 
 /** Narrowest a panel may be dragged, and the widest a fixed track may grow. */
 export const MIN_TRACK_PX = 140;
@@ -162,16 +165,80 @@ export function resizeFlex(tracks, index, aPx, bPx, dxPx) {
   return next;
 }
 
+// ---- Region rail: the pure half (v0.10 3.4) ---------------------------------
+
+/** Width of a region collapsed to its glyph rail, in px. */
+export const RAIL_PX = 44;
+
+/**
+ * Which grid COLUMN a region occupies, or null when it must not be railed.
+ *
+ * `areas` is the preset's grid-template-areas as row strings ("left main
+ * right"), so the column is just the region's position in a row - see
+ * src/layouts.js, which validates that every row names the same count.
+ *
+ * Two shapes get null rather than an index, and for the same reason
+ * splitterPlan() refuses a boundary it cannot describe: there is no single
+ * track to shrink, and shrinking several would move neighbours in ways nothing
+ * here can predict. No handle beats a wrong one.
+ *
+ * @param {string[]} areas
+ * @param {string} name
+ * @returns {number|null}
+ */
+export function regionColumn(areas, name) {
+  if (!Array.isArray(areas) || typeof name !== 'string' || !name) return null;
+  let found = null;
+  for (const rowText of areas) {
+    if (typeof rowText !== 'string') return null;
+    const cells = rowText.trim().split(/\s+/);
+    const first = cells.indexOf(name);
+    if (first === -1) continue;
+    if (cells.lastIndexOf(name) !== first) return null; // spans columns
+    if (found !== null && found !== first) return null; // ragged across rows
+    found = first;
+  }
+  return found;
+}
+
+/**
+ * Replaces one track with the rail width, or null when that must not happen.
+ *
+ * The refusal is the interesting part. Railing the ONLY elastic track leaves a
+ * row of nothing but fixed widths, and the grid stops filling the window - a
+ * permanent gap down the side of the HUD that un-railing something else cannot
+ * repair, because there is nothing left to absorb the slack. That is the same
+ * invariant the splitters obey, arrived at from the other direction.
+ *
+ * @returns {string[]|null}
+ */
+export function railTracks(tracks, index, railPx = RAIL_PX) {
+  if (!Array.isArray(tracks) || !Number.isInteger(index)) return null;
+  if (index < 0 || index >= tracks.length) return null;
+  const elastic = tracks.filter((t) => trackFr(t) !== null);
+  if (elastic.length <= 1 && trackFr(tracks[index]) !== null) return null;
+  const next = [...tracks];
+  next[index] = `${Math.round(railPx)}px`;
+  return next;
+}
+
 // ---- Preference state -------------------------------------------------------
 
 /** Widget ids currently folded. */
 const collapsed = new Set();
-/** layoutId -> a `grid-template-columns` string the user dragged to. */
+/** layoutId -> a `grid-template-columns` string the user dragged to. Always the
+ *  UNRAILED widths; see railedRegions in src/uiprefs.js for why. */
 const sizes = new Map();
+/** layoutId -> the set of region names collapsed to a rail in that preset. */
+const railed = new Map();
 
 let appEl = null;
 let currentLayout = null;
+/** What is actually on screen, rails included. Splitters measure against this. */
 let currentTracks = null;
+/** The same row with every railed track restored - the widths the user would
+ *  see with everything open, and the only thing ever written to layoutSizes. */
+let currentBaseTracks = null;
 let splitters = [];
 
 function app() {
@@ -195,6 +262,26 @@ function persistSizes() {
   }
 }
 
+/** The rail set for a layout, created on demand. */
+function railedFor(layoutId) {
+  let set = railed.get(layoutId);
+  if (!set) {
+    set = new Set();
+    railed.set(layoutId, set);
+  }
+  return set;
+}
+
+function persistRailed() {
+  try {
+    const out = {};
+    for (const [id, names] of railed) if (names.size) out[id] = [...names];
+    window.lunacore.setUiPrefs({ railedRegions: out });
+  } catch {
+    /* as above */
+  }
+}
+
 /**
  * Loads the persisted fold/size state. Must run before initLayout(), which is
  * what triggers the first applyPanels().
@@ -210,6 +297,17 @@ export async function initPanels() {
         if (typeof id === 'string' && id && isSafeColumns(cols)) sizes.set(id, cols);
       }
     }
+    // v0.10 3.4. Region names are NOT checked against a preset here: layouts
+    // are loaded separately and a name is resolved against the live `areas`
+    // every time it is used, so a stale one costs nothing and a preset the
+    // user has not opened yet keeps its rails.
+    if (prefs.railedRegions && typeof prefs.railedRegions === 'object') {
+      for (const [id, names] of Object.entries(prefs.railedRegions)) {
+        if (typeof id !== 'string' || !id || !Array.isArray(names)) continue;
+        const set = railedFor(id);
+        for (const name of names) if (typeof name === 'string' && name) set.add(name);
+      }
+    }
   } catch {
     /* no preferences - every panel open, every preset at its authored widths */
   }
@@ -222,6 +320,15 @@ export const FOLD_REF_PX = 260;
 /** Duration multipliers a fold is clamped between, whatever its height. */
 export const FOLD_MIN_SCALE = 0.55;
 export const FOLD_MAX_SCALE = 1.4;
+/** How much of an OPENING fold a closing one takes (v0.10 3.4).
+ *
+ *  Opening is a reveal and you are waiting on what is behind it; closing is a
+ *  dismissal and nobody needs to watch it happen. Deliberately the same 0.65
+ *  the overlays leave at (motion.js's EXIT_RATIO) - not shared as one constant,
+ *  because these are two different gestures that happen to agree, and welding
+ *  them together would mean retuning a panel fold could not help but retune
+ *  every modal in the app. */
+export const FOLD_EXIT_SCALE = 0.65;
 
 /**
  * How long a fold of `delta` px should take, given the theme's base duration.
@@ -295,7 +402,11 @@ function animateFold(section, folded) {
   // --dur-normal retunes the fold with it, and prefers-reduced-motion (which
   // zeroes it at the token layer) lands here as a plain 0.
   const base = (parseFloat(getComputedStyle(section).transitionDuration) || 0) * 1000;
-  const ms = foldDurationMs(to - from, base);
+  // The direction scaling lives HERE rather than inside foldDurationMs() so
+  // that function stays a pure statement about distance, with no opinion about
+  // which way the panel is going. The easing swaps with it - see
+  // .panel__section.is-folding[data-collapsed] in styles.css.
+  const ms = Math.round(foldDurationMs(to - from, base) * (folded ? FOLD_EXIT_SCALE : 1));
 
   const finish = () => {
     folding.delete(section);
@@ -407,6 +518,237 @@ function decorateAll() {
   const el = app();
   if (!el) return;
   for (const section of el.querySelectorAll('.panel__section[data-widget]')) decorate(section);
+}
+
+// ---- Region rail: the DOM half (v0.10 3.4) ----------------------------------
+//
+// C2 shipped per-WIDGET folding; this is the per-REGION version, and it is the
+// `focus` preset's original promise in FUTURE_PLAN.md §3.2 - "panels collapse to
+// a thin icon rail, terminal reclaims the space". A railed region keeps one
+// glyph per widget, and clicking a glyph opens the region back up and scrolls
+// that widget into view, so collapsing is never a way to lose something.
+//
+// The rail is a VIEW over the widths, never a width itself. layoutSizes keeps
+// the unrailed columns and the narrow track is derived at apply time, which is
+// what makes un-railing restore exactly what the user dragged to instead of an
+// approximation - and what stops RAIL_PX being saved as a panel width the user
+// is then stuck with.
+
+/** Column indices currently pinned to the rail width. */
+function railedColumns() {
+  const cols = new Set();
+  if (!currentLayout) return cols;
+  for (const name of railedFor(currentLayout.id)) {
+    const col = regionColumn(currentLayout.areas, name);
+    if (col !== null) cols.add(col);
+  }
+  return cols;
+}
+
+/** Whether this region can be collapsed at all - see railTracks() for the no. */
+function canRail(name) {
+  if (!currentLayout || !currentTracks) return false;
+  const col = regionColumn(currentLayout.areas, name);
+  if (col === null) return false;
+  return railTracks(currentTracks, col) !== null;
+}
+
+/**
+ * `tracks` with every railed column put back to its pre-rail width.
+ *
+ * This is what keeps layoutSizes honest. A splitter drag while something is
+ * railed must persist the widths the user would see with everything OPEN;
+ * writing the row as it currently looks would save RAIL_PX as a real panel
+ * width, and un-railing would then have nothing to go back to.
+ */
+function unrailTracks(tracks) {
+  const out = [...tracks];
+  if (!currentLayout || !currentBaseTracks) return out;
+  for (const name of railedFor(currentLayout.id)) {
+    const col = regionColumn(currentLayout.areas, name);
+    if (col !== null && currentBaseTracks[col] !== undefined) out[col] = currentBaseTracks[col];
+  }
+  return out;
+}
+
+/**
+ * Persists the row as UNRAILED widths and re-bases the rails on top of it.
+ *
+ * Every place that used to write layoutSizes goes through here now. A drag can
+ * only ever touch a non-railed boundary (buildSplitters refuses the rest), so
+ * the railed columns in `currentTracks` are exactly the ones to put back.
+ */
+function commitTracks() {
+  if (!currentLayout || !currentTracks) return;
+  currentBaseTracks = unrailTracks(currentTracks);
+  sizes.set(currentLayout.id, serializeTracks(currentBaseTracks));
+  persistSizes();
+}
+
+/** Which way a region folds away: toward whichever edge it already sits nearer.
+ *  The grid's own middle, not the terminal's position - a preset is free to put
+ *  the terminal anywhere, and "away" is what the eye reads from the edge. */
+function railDirection(name) {
+  const width = currentTracks ? currentTracks.length : 0;
+  const col = currentLayout ? regionColumn(currentLayout.areas, name) : null;
+  if (col === null || width < 2) return 'right';
+  return col < (width - 1) / 2 ? 'left' : 'right';
+}
+
+function railLabel(isRailed) {
+  const key = isRailed ? 'panel.rail.expand' : 'panel.rail.collapse';
+  return window.i18n ? window.i18n.t(key) : '';
+}
+
+/**
+ * A section's own title text, minus the fold chevron.
+ *
+ * Read off the DOM rather than looked up in the widget registry, deliberately:
+ * this file has no import of registry.js (see the header - the pure half must
+ * stay require()-able), the title is already localized by whoever rendered it,
+ * and it therefore follows a language switch for free.
+ */
+function sectionLabel(section) {
+  const title = section.querySelector(':scope > .panel__title');
+  if (!title) return '';
+  let text = '';
+  for (const node of title.childNodes) {
+    if (node.nodeType === 1 && node.classList && node.classList.contains('panel__fold')) continue;
+    text += node.textContent || '';
+  }
+  return text.trim();
+}
+
+/** Rebuilds the strip of glyphs a railed region shows instead of its panels. */
+function buildRailStrip(region) {
+  const existing = region.querySelector(':scope > .region__glyphs');
+  if (existing) existing.remove();
+
+  const strip = document.createElement('div');
+  strip.className = 'region__glyphs';
+  for (const section of region.querySelectorAll('.panel__section[data-widget]')) {
+    const label = sectionLabel(section);
+    if (!label) continue;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'region__glyph';
+    // The first letter of the panel's own title. No icon set to maintain, no
+    // per-widget glyph table to keep in step with the registry, and it is
+    // already right in both languages.
+    btn.textContent = label.slice(0, 1).toUpperCase();
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.addEventListener('click', () => {
+      // The scroll has to be a CALLBACK, not the next statement: setRailed()
+      // hands the DOM change to a view transition, so at this point the region
+      // is still railed and its scroller is still display:none with no box to
+      // scroll within.
+      setRailed(region.dataset.region, false, () => {
+        section.scrollIntoView({ block: 'nearest' });
+      });
+    });
+    strip.appendChild(btn);
+  }
+  region.appendChild(strip);
+}
+
+/** Puts the toggle (and, when collapsed, the glyph strip) on every region. */
+function decorateRails() {
+  const el = app();
+  if (!el || !currentLayout) return;
+  const set = railedFor(currentLayout.id);
+
+  for (const region of el.querySelectorAll('.region[data-region]')) {
+    const name = region.dataset.region;
+    const strip = () => region.querySelector(':scope > .region__glyphs');
+    let btn = region.querySelector(':scope > .region__rail');
+
+    // The terminal region is bare - there are no panels in it to reduce to
+    // glyphs - and a region whose track cannot be shrunk gets no handle at all
+    // rather than one that does nothing.
+    if (region.classList.contains('region--bare') || !canRail(name)) {
+      if (btn) btn.remove();
+      strip()?.remove();
+      region.removeAttribute('data-railed');
+      continue;
+    }
+
+    const isRailed = set.has(name);
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'region__rail';
+      btn.addEventListener('click', () => setRailed(name, !railedFor(currentLayout.id).has(name)));
+      region.prepend(btn);
+    }
+    const away = railDirection(name) === 'left' ? '«' : '»';
+    const back = railDirection(name) === 'left' ? '»' : '«';
+    btn.textContent = isRailed ? back : away;
+    const label = railLabel(isRailed);
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('aria-expanded', isRailed ? 'false' : 'true');
+
+    if (isRailed) {
+      region.setAttribute('data-railed', '');
+      buildRailStrip(region);
+    } else {
+      region.removeAttribute('data-railed');
+      strip()?.remove();
+    }
+  }
+}
+
+/** Recomputes the grid from the unrailed base plus the current rail set. */
+function applyRailState() {
+  const el = app();
+  if (!el || !currentLayout || !currentBaseTracks) return;
+
+  let tracks = [...currentBaseTracks];
+  for (const name of railedFor(currentLayout.id)) {
+    const col = regionColumn(currentLayout.areas, name);
+    if (col === null) continue;
+    const next = railTracks(tracks, col);
+    if (next) tracks = next;
+  }
+
+  currentTracks = tracks;
+  el.style.gridTemplateColumns = serializeTracks(tracks);
+  decorateRails();
+  buildSplitters();
+  // The terminal's share of the window just changed; xterm only re-measures on
+  // a resize. Same reasoning as applyTracks().
+  window.dispatchEvent(new Event('resize'));
+}
+
+/**
+ * Collapses or restores one region.
+ *
+ * Dissolved rather than transitioned, and that is a deliberate choice about a
+ * real limitation: the width change lands on .app's grid-template-columns, and
+ * `1fr` -> `44px` is not an interpolable pair, so a CSS transition on the grid
+ * would snap regardless of what it was given. A view transition (3.1) does not
+ * care what changed - it cross-dissolves two pictures - which is exactly the
+ * class of problem it exists for. With no support, or with motion off, it falls
+ * through to the plain instant apply.
+ *
+ * @param {string} name region name
+ * @param {boolean} on
+ * @param {Function} [after] runs once the DOM has actually changed
+ * @returns {boolean} false when this region cannot be collapsed
+ */
+function setRailed(name, on, after) {
+  if (!currentLayout || !name) return false;
+  if (on && !canRail(name)) return false;
+  const set = railedFor(currentLayout.id);
+  if (on) set.add(name);
+  else set.delete(name);
+  persistRailed();
+  crossfade(() => {
+    applyRailState();
+    if (typeof after === 'function') after();
+  });
+  return true;
 }
 
 // ---- Resize -----------------------------------------------------------------
@@ -527,10 +869,7 @@ function wireSplitter(el, boundary) {
     drag = null;
     el.classList.remove('is-dragging');
     document.body.classList.remove('is-resizing');
-    if (currentLayout) {
-      sizes.set(currentLayout.id, serializeTracks(currentTracks));
-      persistSizes();
-    }
+    if (currentLayout) commitTracks();
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
@@ -542,7 +881,11 @@ function wireSplitter(el, boundary) {
     if (!preset) return;
     sizes.delete(currentLayout.id);
     persistSizes();
-    applyTracks(preset);
+    // Back to the authored WIDTHS, not to an un-collapsed HUD: resetting a drag
+    // and re-opening a panel you deliberately folded away are two different
+    // intentions, and this gesture only ever meant the first.
+    currentBaseTracks = [...preset];
+    applyRailState();
   });
 
   el.addEventListener('keydown', (e) => {
@@ -552,8 +895,7 @@ function wireSplitter(el, boundary) {
     if (!step) return;
     e.preventDefault();
     applyTracks(dragTo(step, boundary, dx));
-    sizes.set(currentLayout.id, serializeTracks(currentTracks));
-    persistSizes();
+    commitTracks();
   });
 }
 
@@ -564,9 +906,14 @@ function splitterLabel() {
 function buildSplitters() {
   removeSplitters();
   if (!currentTracks) return;
+  const rails = railedColumns();
   const label = splitterLabel();
   for (let b = 0; b < currentTracks.length - 1; b++) {
     if (!splitterPlan(currentTracks, b)) continue;
+    // No handle on either side of a rail. The track is pinned to RAIL_PX, so a
+    // drag there would either be overwritten by the next applyRailState() or
+    // quietly persist the rail width as a panel width the user never chose.
+    if (rails.has(b) || rails.has(b + 1)) continue;
     const el = document.createElement('div');
     el.className = 'splitter';
     el.dataset.boundary = String(b);
@@ -603,11 +950,17 @@ export function applyPanels(layout) {
   // rather than smeared across the wrong tracks.
   currentTracks =
     savedTracks && preset && savedTracks.length === preset.length ? savedTracks : preset;
-
-  if (currentTracks) el.style.gridTemplateColumns = serializeTracks(currentTracks);
+  // What is stored is the UNRAILED row by construction (see commitTracks), so
+  // it is the base every rail is derived FROM rather than something to undo.
+  currentBaseTracks = currentTracks ? [...currentTracks] : null;
 
   decorateAll();
-  buildSplitters();
+
+  // applyRailState() does the grid write, the rail toggles and the handles.
+  // A layout whose columns this file cannot parse (a minmax(), say) gets no
+  // rails and no splitters, exactly as it got no splitters before.
+  if (currentBaseTracks) applyRailState();
+  else buildSplitters();
 }
 
 /**
@@ -622,6 +975,9 @@ export function initPanelResizeTracking() {
   window.addEventListener('resize', positionSplitters);
   onLangChange(() => {
     decorateAll();
+    // decorateAll() first, deliberately: the rail glyphs are the first letter of
+    // each panel's own title, so they can only be right once the titles are.
+    decorateRails();
     const label = splitterLabel();
     for (const el of splitters) el.title = label;
   });

@@ -28,6 +28,10 @@ const {
   FOLD_REF_PX,
   FOLD_MIN_SCALE,
   FOLD_MAX_SCALE,
+  FOLD_EXIT_SCALE,
+  RAIL_PX,
+  regionColumn,
+  railTracks,
 } = require('../src/renderer/modules/panels.js');
 
 const { loadLayouts } = require('../src/layouts.js');
@@ -293,4 +297,96 @@ test('the result is always a whole number of milliseconds', () => {
 test('a theme that speeds the HUD up speeds the fold up proportionally', () => {
   assert.equal(foldDurationMs(FOLD_REF_PX, 120), 120);
   assert.equal(foldDurationMs(FOLD_REF_PX, 600), 600);
+});
+
+// ---- v0.10 3.4: fold direction ---------------------------------------------
+
+test('a fold closes faster than it opens', () => {
+  // Opening is a reveal and you are waiting on what is behind it; closing is a
+  // dismissal. Pinned as a band rather than a single number so a retune stays
+  // possible, but drifting out of "exit is shorter" would be a regression.
+  const open = foldDurationMs(FOLD_REF_PX, 350);
+  assert.ok(open > 0);
+  assert.ok(Math.round(open * FOLD_EXIT_SCALE) < open, 'closing must be shorter');
+  assert.ok(FOLD_EXIT_SCALE >= 0.6 && FOLD_EXIT_SCALE <= 0.7, 'stay in the 60-70% band');
+});
+
+// ---- v0.10 3.4: region rail -------------------------------------------------
+
+test('regionColumn locates a region in the preset grid', () => {
+  assert.equal(regionColumn(['left main right'], 'left'), 0);
+  assert.equal(regionColumn(['left main right'], 'main'), 1);
+  assert.equal(regionColumn(['left main right'], 'right'), 2);
+});
+
+test('regionColumn: the same column across several rows is fine', () => {
+  assert.equal(regionColumn(['left main', 'left dock'], 'left'), 0);
+});
+
+test('regionColumn: a region spanning columns has no single track to shrink', () => {
+  // Shrinking both would move the neighbours in ways nothing in panels.js can
+  // predict, so it offers no handle at all - splitterPlan()'s answer, reached
+  // from the other direction.
+  assert.equal(regionColumn(['dock dock main'], 'dock'), null);
+});
+
+test('regionColumn: a region that changes column between rows is refused', () => {
+  assert.equal(regionColumn(['left main', 'main left'], 'left'), null);
+});
+
+test('regionColumn: junk in, null out', () => {
+  assert.equal(regionColumn(['left main'], 'nope'), null);
+  assert.equal(regionColumn(['left main'], ''), null);
+  assert.equal(regionColumn(null, 'left'), null);
+  assert.equal(regionColumn([42], 'left'), null);
+});
+
+test('railTracks pins exactly one track to the rail width', () => {
+  assert.deepEqual(railTracks(['260px', '1fr', '280px'], 2), ['260px', '1fr', `${RAIL_PX}px`]);
+  assert.deepEqual(railTracks(['260px', '1fr', '280px'], 0), [`${RAIL_PX}px`, '1fr', '280px']);
+});
+
+test('railTracks refuses to rail the LAST elastic track', () => {
+  // A row of nothing but fixed widths stops filling the window, and un-railing
+  // something else cannot bring the slack back - there is nothing to bring.
+  assert.equal(railTracks(['260px', '1fr'], 1), null);
+  // Two elastic tracks: railing one still leaves something to absorb it.
+  assert.deepEqual(railTracks(['1fr', '1fr'], 0), [`${RAIL_PX}px`, '1fr']);
+  // A fixed track is always safe to rail, whatever else the row holds.
+  assert.deepEqual(railTracks(['260px', '1fr'], 0), [`${RAIL_PX}px`, '1fr']);
+});
+
+test('railTracks refuses an index that is not a track', () => {
+  assert.equal(railTracks(['1fr', '200px'], -1), null);
+  assert.equal(railTracks(['1fr', '200px'], 2), null);
+  assert.equal(railTracks(['1fr', '200px'], 1.5), null);
+  assert.equal(railTracks(null, 0), null);
+});
+
+test('railTracks does not mutate the row it was handed', () => {
+  const tracks = ['260px', '1fr'];
+  railTracks(tracks, 0);
+  assert.deepEqual(tracks, ['260px', '1fr'], 'applyRailState() re-derives from this');
+});
+
+test('every shipped preset can collapse at least one region', () => {
+  // The guard that earns its place. A preset whose only non-terminal region
+  // spans two columns, or holds the last elastic track, would ship a rail
+  // toggle that never appears - and nothing else in the suite would say so.
+  const { layouts } = loadLayouts();
+  for (const layout of layouts) {
+    const tracks = parseTracks(layout.columns);
+    if (!tracks) continue; // this preset gets no splitters either; see splitterPlan()
+    const termEntry = Object.entries(layout.slots).find(([, ids]) => ids.includes('terminal'));
+    const termRegion = termEntry ? termEntry[0] : null;
+
+    let railable = 0;
+    for (const name of layout.regionOrder) {
+      // The terminal region is bare - it has no panels to reduce to glyphs.
+      if (name === termRegion) continue;
+      const col = regionColumn(layout.areas, name);
+      if (col !== null && railTracks(tracks, col)) railable += 1;
+    }
+    assert.ok(railable > 0, `${layout.id} offers no region that can be collapsed`);
+  }
 });
