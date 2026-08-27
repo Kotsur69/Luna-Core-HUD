@@ -43,54 +43,30 @@ Two things still owed on it:
   shipped, measured; §0 of this plan excludes re-opening it). Suppressing either
   needs Mati to say so.
 
-### Phase 2 — IN PROGRESS, roughly half landed
+### Phase 2 — DONE, committed (`bd4284e` + `d27e6fa`)
 
-The four modifier axes. **Landed and committed:**
+The four modifier axes, end to end. 869 tests green.
 
-* `src/renderer/styles.css` — the whole `MODIFIERS (v0.10)` block:
-  `[data-density]`, `[data-font-pack]`, `[data-glow]`, `[data-motion]`, plus a
-  **rewritten** `prefers-reduced-motion` media block.
-* `src/uiprefs.js` — `DENSITIES` / `FONT_PACKS` / `GLOW_LEVELS` / `MOTION_LEVELS`,
-  four `DEFAULTS` entries, `clampModifierPrefs()` exported and wired into both
-  `readUiPrefs()` and `writeUiPrefs()`.
-* `src/renderer/modules/modifiers.js` — **new, complete**. `MODIFIER_AXES`,
-  `normalizeModifiers`, `applyModifiers`, `getModifiers`, `setModifier`,
-  `initModifiers`. Nothing imports it yet, which is why the tree is safe to
-  leave here: the axes exist but no UI reaches them, so the HUD renders exactly
-  as it did before.
-* `src/renderer/i18n.js` — all ~21 PL + EN keys for the new controls.
+| Axis | Values | Mechanism |
+|---|---|---|
+| Density | comfortable · **cozy** · compact · dense | `--density-space` / `--density-text` at `1.15/1.05`, `1/1`, `0.85/0.95`, `0.72/0.9` |
+| Font pack | **per theme** · mono · display · system | Overrides the three `--font-*`; bundled faces only, no network |
+| Glow | **full** · reduced · off | Scales `--glow-size*`, `--text-glow`, `--shadow-panel` |
+| Motion | **full** · reduced · off | Scales the four `--dur-*`, `--stagger`, `--lift`, `--press-scale` |
 
-**Still to do, in order:**
+Bold is the default, and every default is the no-op value: an existing install
+renders exactly as it did before v0.10, and `modifiers.js` writes no attribute
+at all until someone changes something.
 
-1. `src/renderer/index.html` — insert an `Interface` section in the Ctrl+L
-   Settings overlay, between the existing `termcustom.section.general`
-   (Language) and `termcustom.section.appearance` (Terminal appearance)
-   headings. Four `<label class="ui-field">` selects with ids
-   `termcustom-density`, `termcustom-font-pack`, `termcustom-glow`,
-   `termcustom-motion`, each `class="profile-select"`, options carrying the
-   `data-i18n` keys that already exist in `i18n.js`. The motion field also wants
-   `data-i18n-title="termcustom.motion.hint"` — that key exists too, and it
-   explains that the OS setting still wins. PL `data-i18n` fallback text stays
-   Polish (CLAUDE.md).
-2. `src/renderer/modules/termcustom.js` — add the four elements to `els`, a
-   `renderModifiers()` that paints them from `getModifiers()`, a call to it in
-   `openTermcustom()`, and four `change` listeners delegating to
-   `setModifier()`. Do **not** extend the Reset button to these — it is scoped
-   to `term*` fields only.
-3. `src/renderer/renderer.js` — `await initModifiers()` **before**
-   `initAppearance()`. Density changes every gap in the HUD, and applying it
-   after first paint is a visible relayout on every launch.
-4. `test/modifiers.test.js` — **new**. Three drift guards, all of them the point
-   of the file:
-   * every non-default value in `MODIFIER_AXES` has a matching
-     `[data-x='value']` block in `styles.css`, and every such block is in the
-     table;
-   * `[data-motion='off']` and the `prefers-reduced-motion` block declare an
-     identical token list (ignoring `!important`);
-   * `MODIFIER_AXES` values match `uiprefs.js`'s four whitelists.
-5. `test/uiprefs.test.js` — `clampModifierPrefs` cases, same shape as the
-   existing `clampAutoCompactPrefs` ones.
+Files: `styles.css` (the `MODIFIERS (v0.10)` block + a rewritten
+`prefers-reduced-motion` block), `src/uiprefs.js` (`clampModifierPrefs`),
+`modules/modifiers.js` (**new**), `modules/termcustom.js`, `renderer.js`,
+`index.html`, `i18n.js`, `test/modifiers.test.js` (**new**), `test/uiprefs.test.js`.
 
+**Not visually verified.** Same standing caveat as phase 1: the axes are
+test-green and the tokens resolve, but nobody has opened `npm start` and
+actually looked at `dense`, the font packs, or `glow: off` on a neon theme.
+That is the first thing to do at the next sitting, before phase 3 builds on it.
 ### Why the modifier CSS uses `!important` everywhere
 
 Not sloppiness — it is the only mechanism available. `applyThemeVars()` writes
@@ -106,7 +82,16 @@ nothing. It is now `!important`, and its selector list carries
 `:root[data-motion]` so that an OS accessibility setting still out-ranks the
 in-app motion preference.
 
-### Phases 3–6 are unstarted
+### NEXT: Phase 3 — the motion layer
+
+Unstarted. In order: the View Transitions crossfade for theme/density switches
+(terminal excluded via `view-transition-name: none`), a shared `closeWithExit()`
+for the overlays (exit only — they are keyboard-initiated and frequent, so they
+get no enter motion), a new pure `modules/flip.js` generalizing the todo-drag
+FLIP across ports/activefiles/mcp/sessiontimeline/git/skilltracker with a ~12-row
+stagger cap, and the fold easing retune plus collapse-region-to-icon-rail.
+
+### Phases 4–6 are unstarted
 
 See the phase sections below — written out in full and unchanged.
 
