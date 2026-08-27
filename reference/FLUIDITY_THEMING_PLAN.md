@@ -82,16 +82,58 @@ nothing. It is now `!important`, and its selector list carries
 `:root[data-motion]` so that an OS accessibility setting still out-ranks the
 in-app motion preference.
 
-### NEXT: Phase 3 — the motion layer
+### Phase 3 — DONE, committed (`f39e7ea` + `1bb5309` + `62b2ae8`)
 
-Unstarted. In order: the View Transitions crossfade for theme/density switches
-(terminal excluded via `view-transition-name: none`), a shared `closeWithExit()`
-for the overlays (exit only — they are keyboard-initiated and frequent, so they
-get no enter motion), a new pure `modules/flip.js` generalizing the todo-drag
-FLIP across ports/activefiles/mcp/sessiontimeline/git/skilltracker with a ~12-row
-stagger cap, and the fold easing retune plus collapse-region-to-icon-rail.
+The motion layer, all four items. 916 tests green (+47 over phase 2).
 
-### Phases 4–6 are unstarted
+| Item | Landed as |
+|---|---|
+| 3.1 Theme / density crossfade | `modules/motion.js` (**new**) — `crossfade()` over `document.startViewTransition()`, feature-detected, terminal opted out |
+| 3.2 Overlay exit | `closeWithExit()` / `cancelExit()` on all six overlays; **enter untouched** |
+| 3.3 List row enter / move / leave | `modules/flip.js` (**new**) — keyed FLIP across six lists |
+| 3.4 Fold direction + region rail | `FOLD_EXIT_SCALE`, and `[data-railed]` collapse-to-glyphs in `panels.js` |
+
+Four things worth knowing before touching any of it:
+
+* **The terminal's view-transition name goes on `#terminal`, not `.xterm`.** A
+  name must be unique in the document and tabs mean several `.xterm` exist. It
+  is excluded at all because a view transition shows *snapshots*, and
+  cross-dissolving two snapshots of a canvas mid-write is how you get a torn
+  line frozen on screen for a third of a second.
+* **`flip.js` measures against the list's own content box, not the viewport.**
+  `sessiontimeline` auto-scrolls to the newest turn on every render; in viewport
+  coordinates that reads as "every marker moved" and FLIP would faithfully
+  animate a slide that never happened.
+* **The rail is a *view* over the widths, never a width.** `layoutSizes` always
+  holds the UNRAILED columns; the 44px track is derived at apply time from
+  `railedRegions`. Every write goes through `commitTracks()`. Break this and
+  un-railing has nothing to restore.
+* **`EXIT_RATIO` (motion.js) and `FOLD_EXIT_SCALE` (panels.js) are both 0.65 and
+  deliberately NOT shared.** Two different gestures that happen to agree.
+
+Two items the plan named that this deliberately does not do, and why:
+
+* **`todo.js` got no FLIP.** It already has bespoke drag-reorder motion
+  (`TODO_DRAG_REORDER_PLAN.md`); a second animation system on top of a live
+  pointer gesture would fight it for the same transform.
+* **`skilltracker` got no FLIP.** It turned out to have no list at all — it
+  toggles classes on a fixed set of tiles. The plan assumed otherwise.
+
+**Still not visually verified.** The caveat from phases 1 and 2 now covers this
+one too, and it has grown: nobody has run `npm start` and looked at the
+sub-pixel normalization, the four axes, the theme crossfade, the overlay exits,
+the list motion, or the rail. Everything is test-green and every token resolves,
+but *none of it has been seen*. That is the first thing to do at the next
+sitting, before phase 4 builds on top.
+
+### NEXT: Phase 4 — templates
+
+Unstarted. Five new presets (`left-only`, `cockpit`, `ultrawide`, `stacked`,
+`zen`) plus the user layout builder writing `customLayouts` to `ui.local.json`.
+Note that the builder will be editing exactly the grid-track code phase 3.4 just
+extended — `regionColumn()` / `railTracks()` / `commitTracks()` are the seam.
+
+### Phases 5–6 are unstarted
 
 See the phase sections below — written out in full and unchanged.
 
