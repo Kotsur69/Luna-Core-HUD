@@ -588,6 +588,13 @@ Injector-only.
   mirrors autocompact.js's; click focuses the window (new `window:focus` IPC)
   and switches to that tab. Toggle: `notificationsEnabled` in
   `ui.local.json`, its own widget next to Actions. `src/renderer/modules/notify.js`.
+  ↳ **Extended 2026-08-27:** the same busy→idle edge now also flashes the
+  taskbar button (`window:flash` IPC → `BrowserWindow.flashFrame`) whenever the
+  window is unfocused — a milder companion to the toast, under the same opt-in.
+  `busyIdleCues()` is the pure split: toast for a tab you are not watching,
+  flash only when the whole window is unfocused (then for any tab); Windows
+  clears the flash on focus and a `focus` handler clears it after a clicked
+  toast. 721 tests.
 
 ### 5.3 Bigger / exploratory
 

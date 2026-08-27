@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   activateSession: (sessionId) => ipcRenderer.send('sessions:activate', sessionId),
   /** Restores + focuses the HUD window (a minimized/background window ignores a plain focus). */
   focusWindow: () => ipcRenderer.send('window:focus'),
+  /** Flashes the taskbar button until the window is focused (busy -> idle cue, opt-in). No-op if already focused. */
+  flashWindow: () => ipcRenderer.send('window:flash'),
 
   // --- PHASE 4: launch profiles ---
   /** Fetches { profiles, activeProfile } to fill the switcher. */

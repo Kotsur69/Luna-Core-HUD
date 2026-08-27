@@ -2,13 +2,15 @@
 // context-threshold toast, mirroring thresholds.test.js's reasoning for
 // autocompact.js: the arithmetic is what's worth pinning, since a toast that
 // silently stops firing (or spams) leaves nothing on screen to notice by eye.
+// busyIdleCues() below pins the same-file split between the toast and the
+// taskbar flash on the busy -> idle edge, for the same reason.
 
 'use strict';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { nextContextNotifyState } = require('../src/renderer/modules/notify.js');
+const { nextContextNotifyState, busyIdleCues } = require('../src/renderer/modules/notify.js');
 const { CTX_WARN_MID, CTX_WARN_HIGH } = require('../src/renderer/modules/thresholds.js');
 
 test('below CTX_WARN_MID: never fires, and clears a stale fired flag', () => {
@@ -54,4 +56,38 @@ test('re-arms only after dropping below CTX_WARN_MID, not merely below HIGH', ()
 test('an undefined/null fired flag is treated as false', () => {
   assert.deepEqual(nextContextNotifyState(undefined, 0.9), { fired: true, shouldFire: true });
   assert.deepEqual(nextContextNotifyState(null, 0.5), { fired: false, shouldFire: false });
+});
+
+// busyIdleCues() - the split between the toast and the taskbar flash on a
+// busy -> idle edge. Both regressions are silent (a cue that quietly stops, or
+// one that fires where it should not), so the four corners are pinned.
+
+test('active tab, window focused: neither cue - the LED already said it', () => {
+  assert.deepEqual(busyIdleCues({ isActiveTab: true, hasFocus: true }), {
+    toast: false,
+    flash: false,
+  });
+});
+
+test('active tab, window unfocused: both cues - you are off in another app', () => {
+  assert.deepEqual(busyIdleCues({ isActiveTab: true, hasFocus: false }), {
+    toast: true,
+    flash: true,
+  });
+});
+
+test('background tab, window focused: toast only, no flash', () => {
+  // You can see the HUD, just not that tab - a toast points you at it, but
+  // flashing a window that is already on top would be noise.
+  assert.deepEqual(busyIdleCues({ isActiveTab: false, hasFocus: true }), {
+    toast: true,
+    flash: false,
+  });
+});
+
+test('background tab, window unfocused: both cues', () => {
+  assert.deepEqual(busyIdleCues({ isActiveTab: false, hasFocus: false }), {
+    toast: true,
+    flash: true,
+  });
 });

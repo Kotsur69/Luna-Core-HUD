@@ -3,14 +3,19 @@
 // ----------------------------------------------------------------------------
 // PASSIVE OBSERVER: reacts to signals two other modules already produce
 // (led.js's busy/idle edge, context.js's threshold reading) and surfaces them
-// as a native Windows toast. No new IPC listener on the PTY, no model call -
-// this only decides whether to pop a `Notification`, same "zero extra tokens"
-// rule as autocompact.js, applied to noticing instead of acting.
+// as a native Windows toast - and, on the busy -> idle edge, a gentle taskbar
+// flash (window:flash IPC -> BrowserWindow.flashFrame). No new IPC listener on
+// the PTY, no model call - this only decides whether to pop a `Notification`,
+// same "zero extra tokens" rule as autocompact.js, applied to noticing instead
+// of acting.
 //
-// Two triggers, one purpose: tell you something changed on a tab you are NOT
+// Three cues, one purpose: tell you something changed on a tab you are NOT
 // currently looking at. A tab you have on screen with the window focused
 // already has the LED and the context bar right there - a toast on top of
-// that would just be noise, so both handlers below suppress that case.
+// that would just be noise, so both toast handlers below suppress that case.
+// The taskbar flash goes one step further: it fires only when the whole window
+// is unfocused (you are off in another app), and then for any tab - see
+// busyIdleCues() for the exact split.
 //
 // Off by default (uiprefs.js's notificationsEnabled) - like
 // soundReadOutputEnabled, an unannounced desktop popup is a worse surprise
@@ -72,12 +77,36 @@ function fireToast(title, body, sessionId) {
   };
 }
 
+/**
+ * Which cues a busy -> idle edge should trigger, given where the user's
+ * attention is. Pure so the split is pinned in a test - the two cues have
+ * deliberately different rules and a regression in either is silent:
+ *   - toast: for a tab you are NOT watching - a background tab, or any tab
+ *     while the window is unfocused. A toast over the tab you're staring at,
+ *     window focused, would just repeat the LED.
+ *   - flash: only ever when the whole window is unfocused, and then for any
+ *     tab - it is the "something finished while you were in another app" cue,
+ *     and Windows stops it the moment you focus the window.
+ *
+ * @param {{isActiveTab: boolean, hasFocus: boolean}} where
+ * @returns {{toast: boolean, flash: boolean}}
+ */
+export function busyIdleCues({ isActiveTab, hasFocus }) {
+  return {
+    toast: !(isActiveTab && hasFocus),
+    flash: !hasFocus,
+  };
+}
+
 /** A session just went from working to waiting - active tab or background. */
 function handleBusyIdle(sessionId) {
   if (!notifyEnabled) return;
-  // Already looking at it: the LED just told you the same thing on screen.
-  if (sessionId === getActiveSessionId() && document.hasFocus()) return;
-  fireToast(t('notify.busyIdle.title'), t('notify.busyIdle.body'), sessionId);
+  const { toast, flash } = busyIdleCues({
+    isActiveTab: sessionId === getActiveSessionId(),
+    hasFocus: document.hasFocus(),
+  });
+  if (flash) window.lunacore.flashWindow();
+  if (toast) fireToast(t('notify.busyIdle.title'), t('notify.busyIdle.body'), sessionId);
 }
 
 /**

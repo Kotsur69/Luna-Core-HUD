@@ -8,20 +8,26 @@ It adds control and visibility **without spending a single extra token** — it 
 injects prompts or touches the `claude` binary.
 
 > Status: **Phases 1–4 + full backlog implemented** — interactive terminal,
-> Action Injector, live Passive Observer, runtime profile switching, localhost
-> ports tracker, action cheat-sheets, skill cheat-sheet, a multi-line
-> **prompt library**, a **working/waiting LED**, a local **scratchpad**, a
-> **command palette (Ctrl+K)**, a **token burn-rate sparkline**, a swappable
-> **theming system**, a **PL/EN language switch**, a live **usage-limits gauge**
-> (5-hour + weekly subscription windows), an **armed auto-compact** toggle, a
-> **CWD/project switcher** (now with a native "add repo folder" picker), a
-> **cyberpunk boot sequence**, a **Skill Tracker that shows how long each
-> tool actually ran**, an **Active-Files Edit Heatmap** (real diff-stat
-> counts, live-edit pulse, deleted-file flag), **GPU usage** next to CPU/RAM,
-> optional **sound & voice feedback** (mpv-based, degrades silently if mpv
-> isn't installed), a **per-project pin-board todo list**, and opt-in **OS
-> notifications** (busy→idle, 85% context) that focus the window and jump to
-> the right tab when clicked.
+> multi-session tabs (browser-style **Ctrl+T / Ctrl+W**), Action Injector, live
+> Passive Observer, runtime profile switching, localhost ports tracker, action
+> cheat-sheets, skill cheat-sheet, a multi-line **prompt library**, a
+> **working/waiting LED**, a local **scratchpad**, a **command palette (Ctrl+K)**,
+> a **token burn-rate sparkline**, an **18-theme** system with a **PL/EN language
+> switch**, a live **usage-limits gauge** (5-hour + weekly subscription windows),
+> an **armed auto-compact** toggle, a **CWD/project switcher** (native "add repo
+> folder" picker), a **cyberpunk boot sequence**, a **Skill Tracker that shows how
+> long each tool actually ran**, an **Active-Files Edit Heatmap** (real diff-stat
+> counts, live-edit pulse, deleted-file flag, **per-file context weight**), an
+> **MCP server health panel**, a **Git station** (per-repo branch / ahead-behind /
+> dirty), a **Session Timeline scrubber + Media Deck**, **clipboard** and
+> **devices** widgets, **GPU usage** next to CPU/RAM, **foldable / resizable /
+> drag-to-rearrange panels**, a **Ctrl+G git quick-menu**, an **Auto-proceed**
+> connection-drop recovery toggle, a **God Mode** unattended to-do runner, a
+> **per-project pin-board todo list**, optional **sound & voice feedback** (mpv
+> cues + a Web Audio keystroke engine, degrades silently), and opt-in **OS
+> notifications** (busy→idle, 85% context) that focus the window and jump to the
+> right tab when clicked — plus a taskbar flash on the same busy→idle edge
+> whenever the window is unfocused.
 
 ---
 
@@ -31,8 +37,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.9.2.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.9.2-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.9.5.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.9.5-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
@@ -1044,7 +1050,7 @@ exactly how you left it.
 A ~1.4-second themed overlay on launch: the wordmark resolves, a drifting grid
 and a CRT scan sweep pass behind it, a five-line subsystem log fills in, and a
 progress rule closes it out. Every colour comes from the theme tokens, so it
-inherits all five themes for free, and the log is translated like the rest of the
+inherits every theme for free, and the log is translated like the rest of the
 chrome.
 
 It is decoration, and it behaves like decoration. It **never blocks**: the PTY
@@ -1095,13 +1101,22 @@ Config-driven, same shape as `cheatsheets.json`/`themes.json`:
 [`config/sounds.json`](config/sounds.json) maps each event key to a file under
 `helpers/sounds/` plus a volume, [`src/sounds.js`](src/sounds.js) resolves and
 validates it (no `*.local.json` override yet — unlike themes/cheatsheets, this
-config has none). The four keystroke clips are a **variant list**, not a single
-file — pick one in **Appearance → Dzwiek klawiszy**, previewed immediately on
-change so choosing is by ear, not trial-and-error via actual typing.
+config has none). That covers the cue and voice events, which play through `mpv`.
+
+**Keystroke sound is separate** and no longer touches `mpv`: it runs through a
+Web Audio engine ([`src/renderer/modules/keysynth.js`](src/renderer/modules/keysynth.js))
+that slices real recordings in `assets/keysounds/` into individual ~140 ms hits
+(onset-detecting RMS envelope, peak-normalized) and plays them back with
+WPM-based pitch and per-press jitter — so it works even without `mpv` installed.
+**7 variants** ship (Mechanical / Soft / Sci-fi / Typewriter / ATM / Secret code
+/ Security code); pick one in **Appearance → Dzwiek klawiszy**, previewed
+immediately on change so choosing is by ear. The agent-stdout stream keeps the
+existing synth texture. Asset bytes reach the renderer over IPC
+(`keysynth:read`), not `fetch()`, so the `connect-src 'none'` CSP stays intact.
 
 **Appearance panel controls** (persisted to `ui.local.json`, live-applied with
 no restart, same as theme/language): a sound on/off toggle, a volume slider,
-and the keystroke-variant picker (Mechanical / Soft / Sci-fi / Typewriter).
+and the 7-way keystroke-variant picker.
 
 **Currently wired:** new tab, tab switch, tab close, theme toggle, language
 toggle, compact-mode toggle, keystrokes (throttled, single-character guard so
@@ -1118,9 +1133,9 @@ The five voice lines are real, generated via
 [Edge-TTS](https://github.com/rany2/edge-tts) (`en-US-AriaNeural`,
 `--rate=+5% --pitch=+15Hz`) — free, offline-scriptable, easy to regenerate with
 a different voice; see [`helpers/sounds/README.md`](helpers/sounds/README.md)
-for the exact command and line text. The four keystroke `.wav` clips still ship
-as silent placeholders and need real short (<80 ms) recordings before they're
-audible.
+for the exact command and line text. The keystroke sounds are now real sampled
+recordings sliced on the fly by `keysynth.js` (see above), not the silent `.wav`
+placeholders they shipped as originally.
 
 Zero tokens, zero API calls: as noted under *Core constraint* above, this is a
 third category alongside the Passive Observer / Action Injector split — it

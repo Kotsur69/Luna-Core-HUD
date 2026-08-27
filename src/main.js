@@ -313,6 +313,14 @@ function createWindow() {
     mainWindow.webContents.once('did-finish-load', () => runWidgetProbe(mainWindow));
   }
 
+  // Notifications (opt-in): notify.js asks for a taskbar flash when a session
+  // goes busy -> idle while the window is unfocused. Windows clears the flash
+  // on its own once the window is activated by the user, but clear it here too
+  // so a programmatic show()/focus() - a clicked toast - doesn't leave it lit.
+  mainWindow.on('focus', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(false);
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -1175,6 +1183,17 @@ function registerIpc() {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
+  });
+
+  // Gentle attention cue on a session's busy -> idle edge (notify.js): the
+  // taskbar button flashes until the window is focused. Rides the same
+  // notificationsEnabled opt-in as the toast, and is a no-op if the window is
+  // already focused or the platform has no taskbar flashing. The 'focus'
+  // handler in createWindow() clears it.
+  ipcMain.on('window:flash', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isFocused()) return;
+    mainWindow.flashFrame(true);
   });
 
   // PHASE 4: the renderer asks for the available profiles (to fill the switcher).
