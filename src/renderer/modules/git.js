@@ -19,6 +19,7 @@
 import { t, pulse } from './util.js';
 import { onLangChange } from './bus.js';
 import { defineWidget } from './registry.js';
+import { beginListUpdate, endListUpdate } from './flip.js';
 
 // Slow enough to be free, often enough that a glance is worth trusting.
 const REFRESH_MS = 120000;
@@ -71,6 +72,9 @@ function badges(status) {
 function makeRow(r) {
   const li = document.createElement('li');
   li.className = `git-item git-item--${r.state}`;
+  // Identity across a rescan (v0.10 3.3): the path, not the name - two clones
+  // of the same repo in different folders are two rows.
+  li.dataset.flipKey = r.path;
 
   const head = document.createElement('span');
   head.className = 'git-item__head';
@@ -117,15 +121,21 @@ function makeRow(r) {
 function render() {
   if (!els) return;
 
+  // Bracketed around BOTH clears - the loading branch empties the list too, and
+  // a repo list that goes away should fade rather than blink out (v0.10 3.3).
+  const snap = beginListUpdate(els.list);
+
   if (!rows) {
     els.empty.textContent = loading ? t('git.loading') : t('git.idle');
     els.empty.style.display = '';
     els.list.innerHTML = '';
+    endListUpdate(els.list, snap);
     return;
   }
 
   els.list.innerHTML = '';
   for (const r of rows) els.list.appendChild(makeRow(r));
+  endListUpdate(els.list, snap);
 
   const note = rows.length ? '' : t('git.empty');
   els.empty.textContent = note;

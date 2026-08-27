@@ -20,6 +20,7 @@ import { t, pulse } from './util.js';
 import { onLangChange, onSessionRestarted, registerSessionView } from './bus.js';
 import { defineWidget } from './registry.js';
 import { closeWithExit, cancelExit } from './motion.js';
+import { beginListUpdate, endListUpdate } from './flip.js';
 
 // null = never scanned, so the static "scanning..." hint stays put.
 let rows = null;
@@ -202,6 +203,9 @@ function probeLabel(p) {
 function makeRow(s, live) {
   const li = document.createElement('li');
   li.className = `mcp-item mcp-item--${s.status}`;
+  // Identity across a rescan (v0.10 3.3). A server's status changes constantly;
+  // its name does not, which is exactly the distinction flip.js needs.
+  li.dataset.flipKey = s.name;
   if (!s.enabled) li.classList.add('mcp-item--off');
   // Live Connection Flow Mapping (CONCEPT_MCP_DEBUGGER.md §2.1): a call to
   // this server is in flight right now.
@@ -258,6 +262,7 @@ function render() {
   if (!els) return;
 
   const live = liveServers(mcpState);
+  const snap = beginListUpdate(els.list);
 
   if (!rows) {
     els.empty.textContent = scanning ? t('mcp.scanning') : t('mcp.idle');
@@ -278,6 +283,7 @@ function render() {
     els.empty.style.display = rows.length ? 'none' : '';
   }
 
+  endListUpdate(els.list, snap);
   renderCalls();
 }
 
@@ -288,6 +294,10 @@ function render() {
 function buildCallRow(call, idx) {
   const li = document.createElement('li');
   li.className = call.ok ? 'mcpcall-item' : 'mcpcall-item is-bad';
+  // Composite rather than the index: this list grows at one end, so an index
+  // would say "every row moved" on each new call. Timestamp plus target is
+  // stable per call, and a collision only costs that row its animation.
+  li.dataset.flipKey = `${call.at}:${call.server}:${call.tool}`;
 
   const head = document.createElement('span');
   head.className = 'mcpcall-item__head';
@@ -317,13 +327,16 @@ function buildCallRow(call, idx) {
 function renderCalls() {
   if (!els || !els.callsList) return;
 
+  const snap = beginListUpdate(els.callsList);
   els.callsList.innerHTML = '';
   if (!mcpState.calls.length) {
     els.callsEmpty.style.display = '';
+    endListUpdate(els.callsList, snap);
     return;
   }
   els.callsEmpty.style.display = 'none';
   mcpState.calls.forEach((call, idx) => els.callsList.appendChild(buildCallRow(call, idx)));
+  endListUpdate(els.callsList, snap);
 }
 
 function openCallModal(idx) {

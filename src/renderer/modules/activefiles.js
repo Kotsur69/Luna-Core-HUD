@@ -47,6 +47,7 @@ import { defineWidget } from './registry.js';
 import { getActiveSessionId } from './terminals.js';
 import { parseDiff } from '../../filediff.js';
 import { closeWithExit, cancelExit } from './motion.js';
+import { beginListUpdate, endListUpdate } from './flip.js';
 
 /** Honest truncation (ports.js's rule): show this many, state the rest. */
 const MAX_ROWS = 8;
@@ -400,6 +401,9 @@ function buildRow(row) {
 
   const li = document.createElement('li');
   li.className = changed ? 'afile' : 'afile is-read';
+  // Identity across a re-render (v0.10 3.3). This list re-sorts as line counts
+  // change, so rows genuinely move - the case FLIP exists for.
+  li.dataset.flipKey = row.file;
   li.classList.toggle('is-live', !!row.inProgress);
   li.classList.toggle('is-deleted', !!row.deleted);
 
@@ -494,16 +498,19 @@ function render() {
   if (!els) return;
 
   const rows = sortedRows(files);
+  const snap = beginListUpdate(els.list);
   els.list.innerHTML = '';
 
   if (!rows.length) {
     els.empty.textContent = t('activefiles.empty');
     els.empty.style.display = '';
+    endListUpdate(els.list, snap);
     return;
   }
 
   const shown = rows.slice(0, MAX_ROWS);
   for (const row of shown) els.list.appendChild(buildRow(row));
+  endListUpdate(els.list, snap);
 
   const extra = rows.length - shown.length;
   els.empty.textContent = extra > 0 ? t('activefiles.more', { n: extra }) : '';

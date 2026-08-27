@@ -20,6 +20,7 @@ import { t, pulse } from './util.js';
 import { onLangChange, onSessionRestarted, registerSessionView } from './bus.js';
 import { defineWidget } from './registry.js';
 import { closeWithExit, cancelExit } from './motion.js';
+import { beginListUpdate, endListUpdate } from './flip.js';
 
 /** Oldest turns are dropped past this - a session can run for hours, and
  *  nothing needs infinite history in memory or DOM. */
@@ -114,6 +115,9 @@ function buildMarker(turn, idx) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'stimeline__marker';
+  // When the turn ENDED, not its index: turns can be trimmed from the front,
+  // and then the markers really do shift - which is what should animate.
+  btn.dataset.flipKey = String(turn.endedAt || idx);
   if (turn.truncated) btn.classList.add('is-truncated');
   btn.title = formatTime(turn.endedAt);
   btn.setAttribute('aria-label', formatTime(turn.endedAt) || t('sessiontimeline.title'));
@@ -130,11 +134,13 @@ function render() {
   // opening a save dialog onto an empty (or not-yet-pinned) transcript.
   if (els.exportBtn) els.exportBtn.disabled = turns.length === 0;
 
+  const snap = beginListUpdate(els.track);
   els.track.innerHTML = '';
 
   if (!turns.length) {
     els.empty.textContent = t('sessiontimeline.empty');
     els.empty.style.display = '';
+    endListUpdate(els.track, snap, { axis: 'x' });
     return;
   }
 
@@ -143,6 +149,11 @@ function render() {
   // Newest turn scrolled into view - the reader is watching the session live,
   // not digging through history by default.
   els.track.scrollLeft = els.track.scrollWidth;
+  // AFTER that scroll, deliberately. flip.js measures against the track's own
+  // content box rather than the viewport, so the auto-scroll does not read as
+  // every marker having slid left - only a marker that really moved animates.
+  // Horizontal strip, so a new turn arrives from the side rather than below.
+  endListUpdate(els.track, snap, { axis: 'x' });
 }
 
 /** Transient line under the timeline for the export result, auto-clearing. */

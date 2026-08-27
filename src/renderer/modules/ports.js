@@ -27,6 +27,7 @@
 import { t, pulse } from './util.js';
 import { onLangChange, onPortsUpdate } from './bus.js';
 import { defineWidget } from './registry.js';
+import { beginListUpdate, endListUpdate } from './flip.js';
 
 // null = no scan has landed yet, so the static "scanning..." hint stays put.
 let lastPorts = null;
@@ -53,12 +54,19 @@ function renderPorts() {
   const rows = hideSystem ? lastPorts.filter((p) => !p.system) : lastPorts;
   const hidden = lastPorts.length - rows.length;
 
+  // v0.10 3.3: measured before the rows are thrown away, played once they are
+  // rebuilt. A rescan usually returns exactly the same ports, and the key is
+  // what lets flip.js know that and animate nothing at all - which is the
+  // whole point, because this list used to blink every five seconds.
+  const snap = beginListUpdate(els.list);
   els.list.innerHTML = '';
   for (const p of rows) {
     const li = document.createElement('li');
     // A system row is dimmed rather than styled like a dev server - when the
     // filter is off you still want your own processes to stand out.
     li.className = p.system ? 'port-item port-item--system' : 'port-item';
+    // The port number IS the row's identity - one listener per port.
+    li.dataset.flipKey = String(p.port);
 
     const port = document.createElement('span');
     port.className = 'port-item__port';
@@ -80,6 +88,7 @@ function renderPorts() {
     li.append(port, proc, actions);
     els.list.appendChild(li);
   }
+  endListUpdate(els.list, snap);
 
   // One line carrying the whole truth: nothing is listening, everything visible
   // was filtered, or N rows are hidden behind the toggle.
