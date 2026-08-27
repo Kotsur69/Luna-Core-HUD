@@ -28,6 +28,7 @@ import { t, pulse } from './util.js';
 import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { summarizeResult, buildMirrorText, resolveMenuKey } from './gitquick-format.js';
+import { closeWithExit, cancelExit } from './motion.js';
 
 const gitquickEl = document.getElementById('gitquick');
 const els = {
@@ -141,6 +142,7 @@ function openGitQuick() {
   pending = false;
   hideMessageInput();
   hideResult();
+  cancelExit(gitquickEl);
   gitquickEl.hidden = false;
   renderMenu();
   // WHY: without this the keys go to xterm's textarea (still the active
@@ -155,7 +157,7 @@ function closeGitQuick() {
   if (!gitquickOpen) return;
   gitquickOpen = false;
   hideMessageInput();
-  gitquickEl.hidden = true;
+  closeWithExit(gitquickEl);
 }
 
 els.list.addEventListener('mousemove', (e) => {

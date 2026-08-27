@@ -32,6 +32,7 @@ import {
   preloadCurrentVariant,
 } from './keysynth.js';
 import { t } from './util.js';
+import { closeWithExit, cancelExit } from './motion.js';
 
 const termcustomEl = document.getElementById('termcustom');
 const els = {
@@ -167,6 +168,7 @@ function renderLangSwitcher() {
 
 async function openTermcustom() {
   if (termcustomOpen) return;
+  cancelExit(termcustomEl);
   termcustomOpen = true;
   termcustomEl.hidden = false;
   renderLangSwitcher();
@@ -188,7 +190,7 @@ async function openTermcustom() {
 function closeTermcustom() {
   if (!termcustomOpen) return;
   termcustomOpen = false;
-  termcustomEl.hidden = true;
+  closeWithExit(termcustomEl);
 }
 
 // -- Language (moved from appearance.js, 2026-08-19) -------------------------

@@ -15,6 +15,7 @@
 import { t, loc } from './util.js';
 import { onLangChange } from './bus.js';
 import { term } from './terminals.js';
+import { closeWithExit, cancelExit } from './motion.js';
 
 const paletteEl = document.getElementById('palette');
 const paletteInput = document.getElementById('palette-input');
@@ -242,6 +243,9 @@ function firePalette(idx, opts) {
 
 async function openPalette() {
   if (paletteOpen) return;
+  // Esc-then-Ctrl+K inside the exit window is a real gesture on a keyboard-
+  // driven HUD; without this the pending timer would hide what was just opened.
+  cancelExit(paletteEl);
   paletteOpen = true;
   paletteEl.hidden = false;
 
@@ -263,8 +267,11 @@ async function openPalette() {
 
 function closePalette() {
   if (!paletteOpen) return;
+  // The flag drops NOW, the element leaves over the next ~120ms (v0.10 3.2).
+  // Everything that asks "is the palette open" has to get the answer the user
+  // just gave it, not the one the animation is still finishing.
   paletteOpen = false;
-  paletteEl.hidden = true;
+  closeWithExit(paletteEl);
 }
 
 // Keyboard inside the search field.

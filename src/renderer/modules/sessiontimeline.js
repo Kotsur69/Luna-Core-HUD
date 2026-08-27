@@ -19,6 +19,7 @@
 import { t, pulse } from './util.js';
 import { onLangChange, onSessionRestarted, registerSessionView } from './bus.js';
 import { defineWidget } from './registry.js';
+import { closeWithExit, cancelExit } from './motion.js';
 
 /** Oldest turns are dropped past this - a session can run for hours, and
  *  nothing needs infinite history in memory or DOM. */
@@ -189,6 +190,7 @@ function openModal(idx) {
   modal.time.textContent = formatTime(turn.endedAt);
   modal.text.textContent = turn.text;
   modal.truncated.hidden = !turn.truncated;
+  cancelExit(modal.el);
   modal.el.hidden = false;
   modalOpen = true;
 }
@@ -196,7 +198,7 @@ function openModal(idx) {
 function closeModal() {
   if (!modalOpen || !modal) return;
   modalOpen = false;
-  modal.el.hidden = true;
+  closeWithExit(modal.el);
 }
 
 /** Looked up once - the modal markup is static top-level HTML, not part of

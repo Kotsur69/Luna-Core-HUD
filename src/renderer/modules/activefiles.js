@@ -46,6 +46,7 @@ import { onLangChange, onSessionRestarted, onActiveContext, registerSessionView 
 import { defineWidget } from './registry.js';
 import { getActiveSessionId } from './terminals.js';
 import { parseDiff } from '../../filediff.js';
+import { closeWithExit, cancelExit } from './motion.js';
 
 /** Honest truncation (ports.js's rule): show this many, state the rest. */
 const MAX_ROWS = 8;
@@ -349,6 +350,7 @@ async function openDiffModal(file) {
   diffModal.title.textContent = `${t('activefiles.diff.title')} · ${shortPath(file)}`;
   diffModal.text.textContent = '';
   diffModal.truncated.hidden = true;
+  cancelExit(diffModal.el);
   diffModal.el.hidden = false;
   diffModalOpen = true;
 
@@ -382,8 +384,13 @@ async function openDiffModal(file) {
 function closeDiffModal() {
   if (!diffModalOpen || !diffModal) return;
   diffModalOpen = false;
-  diffModal.el.hidden = true;
-  diffModal.text.textContent = '';
+  // The <pre> is emptied on the way OUT, not now: blanking it while the panel
+  // is still fading turns a dismissal into a flash of an empty dialog.
+  closeWithExit(diffModal.el, {
+    done: () => {
+      diffModal.text.textContent = '';
+    },
+  });
 }
 
 /** One `<li class="afile">` - built by createElement, never innerHTML with

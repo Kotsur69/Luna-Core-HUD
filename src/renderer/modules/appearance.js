@@ -28,6 +28,7 @@ import { defineWidget } from './registry.js';
 import { getLayouts, getActiveLayoutId, selectLayout } from './layout.js';
 import { loc } from './util.js';
 import { sfx } from './sound.js';
+import { crossfade } from './motion.js';
 
 let themesById = new Map();
 let activeThemeId = null;
@@ -134,8 +135,13 @@ export function getThemeIds() {
 export function selectTheme(id) {
   if (!themesById.has(id)) return false;
   activeThemeId = id;
-  applyThemeVars(themesById.get(id));
-  renderThemeSwitcher();
+  // v0.10 3.1: dissolved rather than slammed. See modules/motion.js - with no
+  // View Transitions support, or with motion off, crossfade() just calls this
+  // straight through, so the old instant swap is still the fallback path.
+  crossfade(() => {
+    applyThemeVars(themesById.get(id));
+    renderThemeSwitcher();
+  });
   return true;
 }
 
@@ -202,7 +208,7 @@ defineWidget({
     els.themeSwitcher.addEventListener('change', () => {
       sfx.modeToggle();
       activeThemeId = els.themeSwitcher.value;
-      applyThemeVars(themesById.get(activeThemeId));
+      crossfade(() => applyThemeVars(themesById.get(activeThemeId)));
       window.lunacore.setUiPrefs({ theme: activeThemeId });
     });
 

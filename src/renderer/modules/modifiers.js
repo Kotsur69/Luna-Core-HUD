@@ -29,6 +29,8 @@
 
 'use strict';
 
+import { crossfade } from './motion.js';
+
 /**
  * The axis table. `key` is the ui.local.json field (and the setModifier()
  * argument), `attr` the attribute on <html>, `values` the whitelist in the order
@@ -115,7 +117,17 @@ export function getModifiers() {
 export function setModifier(key, value) {
   const axis = MODIFIER_AXES.find((a) => a.key === key);
   if (!axis || !axis.values.includes(value)) return false;
-  applyModifiers({ ...current, [key]: value });
+  const next = { ...current, [key]: value };
+  // v0.10 3.1. Density is the axis that earns this: it moves every gap and type
+  // size in the HUD at once, and applied in a single frame it reads as the
+  // window having been resized rather than as a setting having been changed.
+  //
+  // `current` is advanced HERE rather than being left to applyModifiers(),
+  // because crossfade()'s callback does not run until the browser has taken its
+  // snapshot - and a second axis changed in the meantime has to spread the
+  // state that is on its way in, not the one still on screen.
+  current = normalizeModifiers(next);
+  crossfade(() => applyModifiers(next));
   window.lunacore.setUiPrefs({ [key]: value });
   return true;
 }

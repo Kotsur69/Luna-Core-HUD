@@ -19,6 +19,7 @@
 import { t, pulse } from './util.js';
 import { onLangChange, onSessionRestarted, registerSessionView } from './bus.js';
 import { defineWidget } from './registry.js';
+import { closeWithExit, cancelExit } from './motion.js';
 
 // null = never scanned, so the static "scanning..." hint stays put.
 let rows = null;
@@ -338,6 +339,7 @@ function openCallModal(idx) {
   callModal.inputTruncated.hidden = !call.inputTruncated;
   callModal.output.textContent = call.output;
   callModal.outputTruncated.hidden = !call.outputTruncated;
+  cancelExit(callModal.el);
   callModal.el.hidden = false;
   callModalOpen = true;
 }
@@ -345,7 +347,7 @@ function openCallModal(idx) {
 function closeCallModal() {
   if (!callModalOpen || !callModal) return;
   callModalOpen = false;
-  callModal.el.hidden = true;
+  closeWithExit(callModal.el);
 }
 
 /** Looked up once - the modal markup is static top-level HTML, not part of

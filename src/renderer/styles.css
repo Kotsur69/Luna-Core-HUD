@@ -3156,6 +3156,15 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   overflow: hidden;
   transition: height var(--fold-ms, var(--dur-normal)) var(--ease-smooth);
 }
+/* v0.10 3.4: direction matters. Opening is a reveal and wants the settle curve;
+   closing is a dismissal, and --ease-smooth's long tail makes a collapse read
+   as reluctant. No extra state is needed for this - panels.js has already set
+   the attribute by the time the end height lands, so the section wears
+   [data-collapsed] for exactly the length of a close and never for an open.
+   Paired with FOLD_EXIT_SCALE over there, which shortens the close to match. */
+.panel__section.is-folding[data-collapsed] {
+  transition-timing-function: var(--ease-sharp);
+}
 /* The body fades with the wipe in both directions. Out on the way closed -
    without it the content is still at full strength in the last 20px and reads
    as being guillotined - and in on the way open, which comes free from the
@@ -3374,4 +3383,113 @@ body.is-arranging .panel__grip { cursor: grabbing; }
     animation-duration: 0.9s !important;
     animation-iteration-count: infinite !important;
   }
+}
+
+/* ============================================================================
+   MOTION (v0.10 phase 3)
+   ----------------------------------------------------------------------------
+   The CSS half of modules/motion.js and modules/flip.js. Everything here is
+   driven by the duration and easing tokens, never by a literal, which is what
+   makes the motion axis and prefers-reduced-motion free: both zero --dur-* at
+   the token layer, and a 0ms animation is not an animation.
+
+   Deliberately last in the file. These rules are cross-cutting - they decorate
+   surfaces defined hundreds of lines above - and putting them here means they
+   win on source order without anyone reaching for !important.
+   ========================================================================== */
+
+/* ---- 3.1 Theme / density crossfade ----------------------------------------
+   Switching theme rewrites ~45 tokens in one frame and switching density moves
+   every gap and type size at once. Both are correct, and both look like the app
+   glitched. document.startViewTransition() (modules/motion.js) turns each into
+   one dissolve of the whole HUD; these two rules are all the tuning it needs. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--dur-normal);
+  animation-timing-function: var(--ease-smooth);
+}
+
+/* The terminal is opted OUT of the dissolve.
+
+   A view transition freezes the page and shows SNAPSHOTS for its duration, and
+   xterm draws to a canvas that is very often mid-write. Cross-dissolving two
+   snapshots of a live canvas is how you get a torn or double-printed line
+   frozen on screen for a third of a second - during, of all things, a purely
+   cosmetic change the user made in a dropdown.
+
+   Giving it its own name is what excludes it: a named element is lifted out of
+   the root snapshot into its own group, and killing that group's animation
+   makes the new state simply be there while everything around it dissolves.
+   The name goes on #terminal - the single container of every pane - and NOT on
+   .xterm, because a name has to be unique in the document and tabs mean there
+   can be several of those. */
+#terminal {
+  view-transition-name: luna-terminal;
+}
+::view-transition-group(luna-terminal) {
+  animation: none;
+}
+::view-transition-old(luna-terminal) {
+  display: none;
+}
+::view-transition-new(luna-terminal) {
+  animation: none;
+  opacity: 1;
+}
+
+/* ---- 3.2 Overlay exit ------------------------------------------------------
+   Six overlays, three shapes: #command-palette and #gitquick are both .palette,
+   #termcustom is its own, and the turn preview / file diff / MCP call detail are
+   all .stimeline-modal. They already animate IN (`palette-in`); until now they
+   left by ceasing to exist, which is the most abrupt frame in the app.
+
+   Enter is deliberately untouched. These open from a keystroke, dozens of times
+   an hour - the frequency rule says such a thing should not animate at all, and
+   the 180ms already shipped is as far as that goes.
+
+   The 0.65 is EXIT_RATIO in modules/motion.js, which needs the same number in
+   JS to know when to actually set `hidden`. Two copies of one decision, so
+   test/motion.test.js reads this file and fails if they ever disagree. */
+.palette.is-leaving .palette__modal,
+.termcustom.is-leaving .termcustom__modal,
+.stimeline-modal.is-leaving .stimeline-modal__panel {
+  animation: overlay-out calc(var(--dur-fast) * 0.65) var(--ease-sharp) forwards;
+}
+.palette.is-leaving .palette__backdrop,
+.termcustom.is-leaving .termcustom__backdrop,
+.stimeline-modal.is-leaving .stimeline-modal__backdrop {
+  animation: overlay-fade-out calc(var(--dur-fast) * 0.65) var(--ease-sharp) forwards;
+}
+/* Retreats the way it arrived - `palette-in` enters from -8px, so leaving
+   toward -4px reads as the same object going back rather than a new one
+   falling over. Shorter travel than the enter: it is on its way out, and
+   nobody needs to watch it go. */
+@keyframes overlay-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+@keyframes overlay-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* ---- 3.3 List rows ---------------------------------------------------------
+   modules/flip.js adds .flip-list to any list it manages, so a widget cannot be
+   wired up and quietly miss the positioning context its ghosts need.
+
+   A ghost is a row that has just been removed, re-attached at its last measured
+   rect and faded out while its neighbours FLIP up into the space. It is out of
+   flow (so the list has already closed around it) and out of the pointer's way
+   (so a delegated click handler cannot fire on a row that no longer exists). */
+.flip-list {
+  position: relative;
+}
+.flip-ghost {
+  position: absolute;
+  margin: 0;
+  pointer-events: none;
+  z-index: 0;
 }
