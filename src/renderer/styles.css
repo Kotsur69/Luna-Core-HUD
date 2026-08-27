@@ -123,8 +123,63 @@
   --radius-xs: 4px;    /* scrollbar thumb, tab close, kbd */
   --radius-pill: 999px;/* toggle track, context percentage badge */
   --border-w: 1px;     /* every border in the HUD; hairline vs. chunky */
-  --pad-panel: 18px 16px;
-  --panel-gap: 22px;
+  --pad-panel: var(--space-9) var(--space-8);
+  --panel-gap: var(--space-10);
+
+  /* ---- Density: the multiplier the space and type scales below ride on ----
+     Until v0.10 every size in this file was a px literal, so a `--density`
+     token had nothing to multiply - which is why FUTURE_PLAN.md §2.3's density
+     presets sat unbuilt for a year. The scales below are what make the axis
+     real; the presets themselves are the [data-density] blocks further down.
+
+     TWO multipliers rather than one, because space and type do not want the
+     same treatment: at `dense` the useful move is to squeeze the gaps hard
+     (0.72) while barely touching the text (0.9), since a HUD stops being
+     readable long before it stops having room. One multiplier would force them
+     to move together and every preset would be a compromise. */
+  --density-space: 1;
+  --density-text: 1;
+
+  /* ---- Space scale (v0.10) -----------------------------------------------
+     Ten steps, normalized from the fourteen px values that were in use. The
+     normalization is deliberate and it is the whole point of having a scale:
+     3px rounds to 2, 5px and 7px to 6, 9px to 10. Nothing else moved.
+
+     --space-hair is NOT on the multiplier, and it is the one exception worth
+     knowing about: `.app { gap: var(--space-hair) }` is the panel BORDER, drawn
+     by letting the grid background show through. Scaled to 0.72px at `dense` it
+     renders as a grey smear rather than a line. A hairline is a hairline at
+     every density. */
+  --space-hair: 1px;
+  --space-1: calc(2px  * var(--density-space));
+  --space-2: calc(4px  * var(--density-space));
+  --space-3: calc(6px  * var(--density-space));
+  --space-4: calc(8px  * var(--density-space));
+  --space-5: calc(10px * var(--density-space));
+  --space-6: calc(12px * var(--density-space));
+  --space-7: calc(14px * var(--density-space));
+  --space-8: calc(16px * var(--density-space));
+  --space-9: calc(18px * var(--density-space));
+  --space-10: calc(22px * var(--density-space));
+
+  /* ---- Type scale (v0.10) ------------------------------------------------
+     Ten steps from the fifteen sizes that were in use; the half-pixel sizes
+     (9.5 / 10.5 / 11.5) collapse into their neighbours, and 15 -> 14, 24 -> 22.
+
+     max() floors every step. Without it `dense` (0.9) would put the smallest
+     labels at 8.1px, and a density preset that makes the HUD unreadable is not
+     a preset, it is a bug with a name. The floor is what lets the multiplier be
+     aggressive at the top of the scale without policing the bottom. */
+  --fs-3xs:  max(9px,  calc(9px  * var(--density-text)));
+  --fs-2xs:  max(9px,  calc(10px * var(--density-text)));
+  --fs-xs:   max(10px, calc(11px * var(--density-text)));
+  --fs-sm:   max(10px, calc(12px * var(--density-text)));
+  --fs-md:   max(11px, calc(13px * var(--density-text)));
+  --fs-base: max(12px, calc(14px * var(--density-text)));
+  --fs-lg:   max(13px, calc(16px * var(--density-text)));
+  --fs-xl:   max(14px, calc(18px * var(--density-text)));
+  --fs-2xl:  max(16px, calc(22px * var(--density-text)));
+  --fs-3xl:  max(24px, calc(40px * var(--density-text)));
 
   /* ---- Typography: the biggest identity lever, previously 100% hardcoded -- */
   --font-ui: 'Segoe UI', 'Inter', system-ui, sans-serif;
@@ -228,7 +283,7 @@ html, body {
   display: grid;
   grid-template-columns: 1fr;
   height: 100vh;
-  gap: 1px;
+  gap: var(--space-hair);
   background: var(--edge);
   /* C2: the containing block for .splitter, which is absolutely positioned over
      the grid gaps. Without this the handles would resolve against the viewport
@@ -313,8 +368,8 @@ body::after {
   z-index: 90;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-7);
   background: var(--bg-panel-2);
   border-bottom: var(--border-w) solid var(--warn);
   box-shadow: 0 0 var(--glow-size-md) var(--glow);
@@ -330,7 +385,7 @@ body::after {
 .notice__body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   flex: 1;
   min-width: 0;
 }
@@ -342,7 +397,7 @@ body::after {
 
 .notice__body span {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .notice__link,
@@ -359,14 +414,14 @@ body::after {
 }
 
 .notice__link {
-  padding: 6px 12px;
+  padding: var(--space-3) var(--space-6);
 }
 
 .notice__close {
   width: 28px;
   height: 28px;
   line-height: 1;
-  font-size: 16px;
+  font-size: var(--fs-lg);
 }
 
 .notice__link:hover,
@@ -390,13 +445,13 @@ body::after {
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-5);
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: var(--fs-2xl);
   font-weight: 700;
   letter-spacing: var(--tracking-brand);
   text-shadow: var(--text-glow);
-  padding-bottom: 6px;
+  padding-bottom: var(--space-3);
 }
 .brand__glyph {
   color: var(--neon-magenta);
@@ -404,7 +459,7 @@ body::after {
      theme neon or flat" decision as every box-shadow above, and a flat theme
      that zeroes the glows should not have to remember one lone drop-shadow. */
   filter: drop-shadow(0 0 var(--glow-size-sm) var(--neon-magenta));
-  font-size: 24px;
+  font-size: var(--fs-2xl);
 }
 .brand__core { color: var(--neon-cyan); }
 
@@ -430,8 +485,11 @@ body::after {
   flex-direction: column;
   gap: var(--panel-gap);
   /* room for the scrollbar, so it doesn't overlap the buttons */
-  padding-right: 4px;
-  margin-right: -4px;
+  padding-right: var(--space-2);
+  /* Must stay the exact negative of the padding above it, hence the calc()
+     rather than a literal: at `dense` the padding shrinks to 2.9px and a
+     hardcoded -4px would pull the gutter out of alignment. */
+  margin-right: calc(-1 * var(--space-2));
 }
 /* In a scrolling container "grow" doesn't make sense - content dictates size. */
 .panel__scroll .panel__section--grow { flex: none; }
@@ -439,7 +497,7 @@ body::after {
 .panel__title, .panel__subtitle {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: var(--case-title);
   letter-spacing: var(--tracking-title);
@@ -454,14 +512,14 @@ body::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: var(--space-5);
   width: 100%;
-  padding: 14px 16px;
+  padding: var(--space-7) var(--space-8);
   border: var(--border-w) solid var(--edge-glow);
   border-radius: var(--radius);
   background: var(--btn-grad);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 700;
   letter-spacing: 1px;
   cursor: pointer;
@@ -476,7 +534,7 @@ body::after {
 .action-btn__icon {
   color: var(--warn);
   filter: drop-shadow(0 0 5px var(--warn));
-  font-size: 16px;
+  font-size: var(--fs-lg);
 }
 
 /* pulse on click */
@@ -490,12 +548,12 @@ body::after {
 
 .profile-select {
   width: 100%;
-  padding: 10px 12px;
+  padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 .profile-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -503,7 +561,7 @@ body::after {
    22px-icon-button language as .port-btn, sized to sit next to the select. */
 .project-row {
   display: flex;
-  gap: 6px;
+  gap: var(--space-3);
   align-items: center;
 }
 .project-row .profile-select { flex: 1; min-width: 0; }
@@ -518,7 +576,7 @@ body::after {
   border: var(--border-w) solid var(--edge);
   background: transparent;
   color: var(--text-dim);
-  font-size: 18px;
+  font-size: var(--fs-xl);
   line-height: 1;
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
@@ -533,13 +591,13 @@ body::after {
    global rule by type, since none of these inputs has its own class. */
 input[type="number"] {
   width: 100%;
-  padding: 10px 12px;
+  padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 input[type="number"]:focus { outline: none; border-color: var(--edge-glow); }
 
@@ -576,7 +634,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .ui-field { display: flex; flex-direction: column; gap: 5px; }
 .ui-field + .ui-field { margin-top: 10px; }
 .ui-field__label {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
   letter-spacing: 0.3px;
 }
@@ -598,8 +656,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .status-line {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--space-4);
+  font-size: var(--fs-sm);
   color: var(--text-dim);
 }
 .dot {
@@ -630,25 +688,25 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   flex: 1;
   min-height: 90px;
   resize: none;
-  padding: 10px;
+  padding: var(--space-5);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
 }
 .pad:focus { outline: none; border-color: var(--edge-glow); }
 .pad::placeholder { color: var(--text-dim); opacity: 0.5; }
 
 .pad-send {
-  padding: 8px;
+  padding: var(--space-4);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge-glow);
   background: var(--btn-grad);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition: box-shadow var(--dur-fast) var(--ease-sharp);
 }
@@ -661,8 +719,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 9px 12px;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
@@ -717,8 +775,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .terminal-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-8);
   background: var(--bg-panel);
   border-bottom: var(--border-w) solid var(--edge);
 }
@@ -729,7 +787,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    bar. Auto-hidden by modules/termlinks.js after a few seconds. */
 .terminal-bar__note {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--neon-red, #ff6b8a);
   opacity: 0.9;
 }
@@ -740,8 +798,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .termlink-tip {
   position: fixed;
   z-index: 9999;
-  padding: 3px 7px;
-  font-size: 11px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-xs);
   line-height: 1.3;
   color: var(--text-bright, #e6dcff);
   background: var(--bg-panel, #16111f);
@@ -757,8 +815,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .tabs {
   display: flex;
   align-items: stretch;
-  gap: 6px;
-  padding: 6px 10px 0;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5) 0;
   background: var(--bg-panel);
   border-bottom: var(--border-w) solid var(--edge);
 }
@@ -767,8 +825,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .tab {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border: var(--border-w) solid var(--edge);
   border-bottom: none;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
@@ -790,7 +848,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   border: none;
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   text-align: left;
 }
@@ -825,7 +883,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .terminal {
   flex: 1;
   min-height: 0;
-  padding: 8px 10px;
+  padding: var(--space-4) var(--space-5);
   position: relative;
   /* background-image is set inline by terminals.js (termHost.style) when a
      custom background is chosen - empty by default, these three only matter
@@ -917,11 +975,11 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    by the TEXT, not the color, so the badge loses nothing for colorblindness
    or under reduced motion (it doesn't animate at all). */
 .badge {
-  padding: 3px 7px;
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-pill);
   background: var(--bg-panel-2);
   color: var(--text);
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   line-height: 1.4;
   letter-spacing: 0.3px;
   white-space: nowrap;
@@ -944,7 +1002,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   width: 22px;
   height: 22px;
   line-height: 1;
-  font-size: 13px;
+  font-size: var(--fs-md);
   cursor: pointer;
   flex: none;
   transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp), transform var(--dur-normal) var(--ease-smooth);
@@ -965,7 +1023,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .usage-row__label { color: var(--text-dim); }
 .usage-row__pct { font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -999,7 +1057,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .ctx-spark {
   width: 100%;
   height: 34px;
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 .ctx-spark__svg {
   width: 100%;
@@ -1039,17 +1097,17 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
   overflow-y: auto;
 }
 .skill-tile {
   position: relative;
   overflow: hidden; /* clips the running sweep to the tile */
-  padding: 9px 12px;
+  padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
   background: var(--bg-panel-2);
   border: var(--border-w) solid var(--edge);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   /* Named properties, not `all`: `all` also transitions padding and border-width,
      which are theme tokens now - switching theme would animate every tile's box
@@ -1118,7 +1176,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
   overflow-y: auto;
 }
 
@@ -1126,12 +1184,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
   background: var(--bg-panel-2);
   border: var(--border-w) solid var(--edge);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   transition: box-shadow var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
 }
 
@@ -1179,7 +1237,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .afile__stat {
   flex: none;
   display: flex;
-  gap: 6px;
+  gap: var(--space-3);
   font-variant-numeric: tabular-nums;
 }
 .afile__add { color: var(--good); font-style: normal; }
@@ -1188,7 +1246,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .afile__readonly {
   flex: none;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1200,7 +1258,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   flex: none;
   margin-left: auto;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1229,7 +1287,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .afile__deleted {
   flex: none;
   color: var(--bad);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1261,8 +1319,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .stimeline-track {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px;
+  gap: var(--space-3);
+  padding: var(--space-1);
   overflow-x: auto;
   scrollbar-width: thin;
 }
@@ -1297,14 +1355,14 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .media-deck {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .media-deck__info {
   min-width: 0;
 }
 .media-deck__title {
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
@@ -1312,7 +1370,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   text-overflow: ellipsis;
 }
 .media-deck__artist {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1322,7 +1380,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .media-btn {
@@ -1333,7 +1391,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   width: 26px;
   height: 26px;
   line-height: 1;
-  font-size: 13px;
+  font-size: var(--fs-md);
   cursor: pointer;
   flex: none;
   transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
@@ -1347,7 +1405,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .media-deck__volume {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 .media-deck__volume input[type="range"] {
   flex: 1;
@@ -1364,12 +1422,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
      the number, and the ticks from drifting apart in color. */
   --telem-color: var(--good);
   --telem-fill: 0;
-  margin-bottom: 14px;
+  margin-bottom: var(--space-7);
   transition: opacity var(--dur-fast) var(--ease-smooth);
 }
 
 .telem__row:last-of-type {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-4);
 }
 
 .telem__row[data-level='warn'] {
@@ -1386,12 +1444,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .telem__label {
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   letter-spacing: var(--tracking-title);
   text-transform: var(--case-title);
   color: var(--text-dim);
@@ -1401,7 +1459,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    Tabular digits so the value doesn't shift horizontally on every change. */
 .telem__value {
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: var(--fs-2xl);
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--telem-color);
@@ -1412,7 +1470,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .telem__bar {
   position: relative;
   height: 6px;
-  margin-top: 6px;
+  margin-top: var(--space-3);
   overflow: hidden;
   background: var(--bg-panel-2);
   border: var(--border-w) solid var(--edge);
@@ -1437,9 +1495,9 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .telem__spark {
   display: flex;
   align-items: flex-end;
-  gap: 1px;
+  gap: var(--space-hair);
   height: 26px;
-  margin-top: 6px;
+  margin-top: var(--space-3);
 }
 
 .telem__tick {
@@ -1467,16 +1525,16 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 
 .telem__note {
-  margin: 4px 0 0;
+  margin: var(--space-2) 0 0;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--text-dim);
 }
 
 .telem__foot {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   white-space: pre;
 }
 
@@ -1502,7 +1560,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-3);
   overflow-y: auto;
   min-height: 0;
 }
@@ -1511,12 +1569,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   flex: none; /* like .skill-entry: don't squeeze rows, scroll instead */
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
   background: var(--bg-panel-2);
   border: var(--border-w) solid var(--edge);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 /* System row (visible only when the filter is off) - dimmed, so your own
    processes still stand out against the background. */
@@ -1545,7 +1603,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   border: var(--border-w) solid var(--edge);
   background: transparent;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-sharp),
               border-color var(--dur-fast) var(--ease-sharp);
@@ -1566,7 +1624,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-3);
   overflow-y: auto;
   min-height: 0;
 }
@@ -1577,12 +1635,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   flex: none; /* like .port-item: don't squeeze rows, scroll instead */
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 7px 10px;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
   background: var(--bg-panel-2);
   border: var(--border-w) solid var(--edge);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 /* A disabled server still costs a config line but nothing else - dim it rather
    than hiding it, or the panel stops explaining why the count differs. */
@@ -1592,7 +1650,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .git-item__head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-3);
 }
 .mcp-item__dot {
   width: 7px;
@@ -1642,7 +1700,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   border: var(--border-w) solid var(--edge);
   background: transparent;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-sharp),
     border-color var(--dur-fast) var(--ease-sharp);
@@ -1670,8 +1728,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 
 .mcpcall-heading {
-  margin: 10px 0 6px;
-  font-size: 12px;
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: var(--fs-sm);
 }
 
 .mcpcall-list {
@@ -1680,7 +1738,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-3);
   overflow-y: auto;
   min-height: 0;
 }
@@ -1689,12 +1747,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 10px;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
   background: var(--bg-panel-2);
   border: var(--border-w) solid var(--edge);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease-sharp);
 }
@@ -1704,7 +1762,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .mcpcall-item__head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-3);
 }
 .mcpcall-item__name {
   font-weight: 700;
@@ -1719,8 +1777,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .mcpcall-item__badge,
 .mcpcall-modal__badge {
   margin-left: auto;
-  font-size: 10px;
-  padding: 1px 6px;
+  font-size: var(--fs-2xs);
+  padding: var(--space-hair) var(--space-3);
   border-radius: var(--radius-sm);
 }
 .mcpcall-item__badge.is-ok,
@@ -1739,7 +1797,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-3);
   overflow-y: auto;
   min-height: 0;
 }
@@ -1748,18 +1806,18 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   flex: none; /* like .mcp-item: don't squeeze rows, scroll instead */
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 7px 10px;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
   background: var(--bg-panel-2);
   border: var(--border-w) solid var(--edge);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .diag-item__head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-3);
 }
 .diag-item__dot {
   width: 7px;
@@ -1787,12 +1845,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .diag-item__action {
   margin-left: auto;
   flex: none;
-  padding: 2px 8px;
+  padding: var(--space-1) var(--space-4);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-sharp),
     border-color var(--dur-fast) var(--ease-sharp);
@@ -1825,9 +1883,9 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 .git-badge {
   flex: none;
-  padding: 1px 5px;
+  padding: var(--space-hair) var(--space-3);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   border: var(--border-w) solid transparent;
 }
@@ -1837,13 +1895,13 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .git-badge--conflict { color: var(--bad); border-color: var(--bad); }
 
 .git-scan {
-  margin-top: 8px;
-  padding: 6px 10px;
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
   background: transparent;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-sharp),
     border-color var(--dur-fast) var(--ease-sharp);
@@ -1856,7 +1914,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .cheats {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
   overflow-y: auto;
   min-height: 0;
 }
@@ -1867,8 +1925,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   overflow: hidden;
 }
 .cheat__summary {
-  padding: 9px 12px;
-  font-size: 12px;
+  padding: var(--space-5) var(--space-6);
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--text);
   cursor: pointer;
@@ -1879,7 +1937,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .cheat__summary::before {
   content: '▸';
   display: inline-block;
-  margin-right: 8px;
+  margin-right: var(--space-4);
   color: var(--neon-magenta);
   transition: transform var(--dur-fast) var(--ease-sharp);
 }
@@ -1887,24 +1945,24 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .cheat__summary:hover { color: var(--neon-cyan); }
 .cheat__note {
   margin: 0;
-  padding: 0 12px 6px;
-  font-size: 10.5px;
+  padding: 0 var(--space-6) var(--space-3);
+  font-size: var(--fs-2xs);
   color: var(--text-dim);
   opacity: 0.8;
 }
 .cheat__cmds {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
-  padding: 0 10px 10px;
+  gap: var(--space-3);
+  padding: 0 var(--space-5) var(--space-5);
 }
 .cheat__btn {
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge-glow);
   background: var(--btn-grad);
   color: var(--text);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   cursor: pointer;
   transition: box-shadow var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
@@ -1923,14 +1981,14 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    tokens), not like a native system input. */
 .filter-input {
   width: 100%;
-  margin: 8px 0 6px;
-  padding: 6px 9px;
+  margin: var(--space-4) 0 var(--space-3);
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
 }
 .filter-input::placeholder { color: var(--text-dim); opacity: 0.6; }
@@ -1942,8 +2000,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .skill-cat {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 0 8px 8px;
+  gap: var(--space-1);
+  padding: 0 var(--space-4) var(--space-4);
   max-height: 220px;
   overflow-y: auto;
 }
@@ -1953,12 +2011,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
      squashed to ~1.5px and all you saw were horizontal letter smears. */
   flex: none;
   text-align: left;
-  padding: 5px 9px;
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid transparent;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   cursor: pointer;
   white-space: nowrap;
@@ -1978,24 +2036,24 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .prompt-list {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 0 10px 10px;
+  gap: var(--space-3);
+  padding: 0 var(--space-5) var(--space-5);
 }
 .prompt-row {
   display: flex;
   flex: none; /* like .skill-entry: don't squeeze rows, scroll instead */
-  gap: 4px;
+  gap: var(--space-2);
 }
 .prompt-btn {
   flex: 1;
   min-width: 0;
   text-align: left;
-  padding: 7px 10px;
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge-glow);
   background: var(--btn-grad);
   color: var(--text);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   cursor: pointer;
   white-space: nowrap;
@@ -2014,7 +2072,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
 }
@@ -2039,8 +2097,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   margin-left: auto; /* push the whole chip group to the right edge of the bar */
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 3px 7px;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
@@ -2055,7 +2113,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .palette-chip kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   line-height: 1;
   color: inherit;
 }
@@ -2135,14 +2193,14 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .palette__bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: var(--space-5);
+  padding: var(--space-7) var(--space-8);
   border-bottom: var(--border-w) solid var(--edge);
 }
 .palette__glyph {
   color: var(--neon-magenta);
   filter: drop-shadow(0 0 6px var(--neon-magenta));
-  font-size: 16px;
+  font-size: var(--fs-lg);
 }
 .palette__input {
   flex: 1;
@@ -2150,7 +2208,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 15px;
+  font-size: var(--fs-base);
 }
 .palette__input:focus { outline: none; }
 .palette__input::placeholder { color: var(--text-dim); opacity: 0.6; }
@@ -2158,21 +2216,21 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .palette__list {
   list-style: none;
   margin: 0;
-  padding: 6px;
+  padding: var(--space-3);
   overflow-y: auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .palette-item {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-5);
   flex: none;
-  padding: 9px 12px;
+  padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
   border: var(--border-w) solid transparent;
   cursor: pointer;
@@ -2186,11 +2244,11 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 /* Action source badge (color = type). */
 .palette-item__kind {
-  font-size: 9.5px;
+  font-size: var(--fs-3xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  padding: 3px 7px;
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
   color: var(--text-dim);
@@ -2203,7 +2261,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 .palette-item__body { min-width: 0; }
 .palette-item__label {
-  font-size: 13px;
+  font-size: var(--fs-md);
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -2215,14 +2273,14 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   font-weight: 700;
 }
 .palette-item__sub {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .palette-item__hint {
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   color: var(--text-dim);
   opacity: 0.7;
   font-family: var(--font-mono);
@@ -2230,29 +2288,29 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 
 .palette__empty {
-  padding: 22px 16px;
+  padding: var(--space-10) var(--space-8);
   text-align: center;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 
 .palette__foot {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
-  padding: 9px 16px;
+  gap: var(--space-7);
+  padding: var(--space-5) var(--space-8);
   border-top: var(--border-w) solid var(--edge);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
 }
 .palette__foot kbd {
   display: inline-block;
-  padding: 1px 5px;
+  padding: var(--space-hair) var(--space-3);
   border-radius: var(--radius-xs);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
 }
 
 /* ---- Git quick-menu (Ctrl+G) --------------------------------------------
@@ -2265,7 +2323,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 .gitquick__heading {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
@@ -2277,26 +2335,26 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .gitquick__message {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 16px;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-8);
   border-top: var(--border-w) solid var(--edge);
 }
 .gitquick__message[hidden] { display: none; }
 .gitquick__message-input {
   border: var(--border-w) solid var(--edge);
   border-radius: var(--radius-sm);
-  padding: 7px 10px;
+  padding: var(--space-3) var(--space-5);
   background: var(--bg-panel-2);
 }
 .gitquick__hint {
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   color: var(--text-dim);
 }
 
 .gitquick__result {
-  padding: 10px 16px;
+  padding: var(--space-5) var(--space-8);
   border-top: var(--border-w) solid var(--edge);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   white-space: pre-wrap;
   word-break: break-word;
@@ -2348,23 +2406,23 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .termcustom__bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: var(--space-5);
+  padding: var(--space-7) var(--space-8);
   border-bottom: var(--border-w) solid var(--edge);
 }
 .termcustom__glyph {
   color: var(--neon-magenta);
   filter: drop-shadow(0 0 6px var(--neon-magenta));
-  font-size: 16px;
+  font-size: var(--fs-lg);
 }
 .termcustom__title {
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text);
 }
 
 .termcustom__body {
-  padding: 14px 16px;
+  padding: var(--space-7) var(--space-8);
   overflow-y: auto;
   min-height: 0;
 }
@@ -2372,10 +2430,10 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 /* Section divider (2026-08-13: the overlay grew a second section - Terminal
    appearance + Sound and startup - once sound/boot moved in from w-appearance). */
 .termcustom__section {
-  margin: 0 0 10px;
-  padding-top: 14px;
+  margin: 0 0 var(--space-5);
+  padding-top: var(--space-7);
   border-top: var(--border-w) solid var(--edge);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.6px;
@@ -2391,28 +2449,28 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 9px 16px;
+  gap: var(--space-7);
+  padding: var(--space-5) var(--space-8);
   border-top: var(--border-w) solid var(--edge);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
 }
 .termcustom__foot kbd {
   display: inline-block;
-  padding: 1px 5px;
+  padding: var(--space-hair) var(--space-3);
   border-radius: var(--radius-xs);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
 }
 .termcustom__reset {
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
 }
@@ -2461,13 +2519,13 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: var(--space-5);
+  padding: var(--space-7) var(--space-8);
   border-bottom: var(--border-w) solid var(--edge);
 }
 .stimeline-modal__time {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
 }
 .stimeline-modal__closebtn {
@@ -2485,11 +2543,11 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 .stimeline-modal__text {
   margin: 0;
-  padding: 14px 16px;
+  padding: var(--space-7) var(--space-8);
   overflow: auto;
   min-height: 0;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--text);
   white-space: pre-wrap;
@@ -2497,7 +2555,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 
 .stimeline-modal__panel .hint {
-  margin: 0 16px 14px;
+  margin: 0 var(--space-8) var(--space-7);
 }
 
 /* ---- CONCEPT_MCP_DEBUGGER.md safe half: JSON-RPC Inspector call modal -----
@@ -2513,8 +2571,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   white-space: nowrap;
 }
 .mcpcall-modal__label {
-  margin: 10px 16px 4px;
-  font-size: 11px;
+  margin: var(--space-5) var(--space-8) var(--space-2);
+  font-size: var(--fs-xs);
   color: var(--text-dim);
 }
 .mcpcall-modal__block {
@@ -2597,15 +2655,15 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-7);
   text-align: center;
 }
 
 .boot__mark {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 40px;
+  gap: var(--space-6);
+  font-size: var(--fs-3xl);
   font-weight: 700;
   letter-spacing: 1px;
   opacity: 0;
@@ -2625,7 +2683,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .boot__tagline {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   letter-spacing: 2.4px;
   color: var(--text-dim);
   opacity: 0;
@@ -2635,20 +2693,20 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 /* Boot log - rows are inserted by renderer.js, the cascade is done via animation-delay. */
 .boot__log {
   list-style: none;
-  margin: 6px 0 0;
+  margin: var(--space-3) 0 0;
   padding: 0;
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-3);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
 }
 .boot__line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   opacity: 0;
   animation: boot-rise 240ms ease-out forwards; /* delay is set by JS */
 }
@@ -2680,8 +2738,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 @keyframes boot-fill { to { transform: scaleX(1); } }
 
 .boot__skip {
-  margin: 2px 0 0;
-  font-size: 10.5px;
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-2xs);
   color: var(--text-dim);
   opacity: 0;
   animation: boot-rise 300ms 700ms ease-out forwards;
@@ -2708,9 +2766,9 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .todo-form {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  font-size: 12px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  font-size: var(--fs-sm);
   color: var(--text-dim);
 }
 .clip-toggle input { flex: none; }
@@ -2756,13 +2814,13 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .todo-form input[type='text'] {
   flex: 1;
   min-width: 0;
-  padding: 7px 10px;
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
   background: var(--bg-panel-2);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .todo-form input[type='text']:focus { outline: none; border-color: var(--edge-glow); }
 
@@ -2773,7 +2831,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-3);
   overflow-y: auto;
   min-height: 0;
 }
@@ -2783,12 +2841,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   display: grid;
   flex: none;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
   background: var(--bg-panel-2);
   border: var(--border-w) solid var(--edge);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .clip-item { grid-template-columns: 1fr auto; }
 .todo-item { grid-template-columns: auto 1fr auto; }
@@ -2864,20 +2922,20 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .clip-item__actions,
 .todo-item__actions {
   display: flex;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .dev-row {
   display: grid;
   grid-template-columns: auto 1fr auto auto;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--space-4);
+  font-size: var(--fs-sm);
 }
 .dev-row__label { color: var(--text-dim); }
 .dev-row__state {
   font-weight: 700;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -2894,7 +2952,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .panel__title--fold {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   cursor: pointer;
   user-select: none;
 }
@@ -2906,7 +2964,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 .panel__fold {
   flex: none;
-  font-size: 9px;
+  font-size: var(--fs-3xs);
   line-height: 1;
   color: var(--text-dim);
   /* Deliberately the same duration as the body's height, so the two read as
@@ -3117,7 +3175,7 @@ body.is-resizing .splitter { background: var(--glow); }
 .panel__grip {
   flex: none;
   cursor: grab;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1;
   letter-spacing: 1px;
   color: var(--text-dim);

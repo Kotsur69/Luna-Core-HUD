@@ -88,6 +88,15 @@ const KNOWN_TOKENS = new Set([
   // form
   '--radius', '--radius-lg', '--radius-md', '--radius-sm', '--radius-xs',
   '--radius-pill', '--border-w', '--pad-panel', '--panel-gap',
+  // density + the two scales it drives (v0.10). Themes may override any of
+  // these, which is how a preset gets to be "cyberpunk, but roomier" without a
+  // second copy of the palette - though in practice it is the density MODIFIER
+  // that moves them, not a theme.
+  '--density-space', '--density-text',
+  '--space-hair', '--space-1', '--space-2', '--space-3', '--space-4',
+  '--space-5', '--space-6', '--space-7', '--space-8', '--space-9', '--space-10',
+  '--fs-3xs', '--fs-2xs', '--fs-xs', '--fs-sm', '--fs-md',
+  '--fs-base', '--fs-lg', '--fs-xl', '--fs-2xl', '--fs-3xl',
   // typography
   '--font-ui', '--font-mono', '--font-display', '--tracking-title',
   '--tracking-brand', '--case-title',

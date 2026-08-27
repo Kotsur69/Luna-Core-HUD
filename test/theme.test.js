@@ -126,6 +126,63 @@ test('KNOWN_TOKENS matches the :root block in styles.css', () => {
   );
 });
 
+// ---- the space + type scales must not rot back into literals ----------------
+
+/**
+ * Declarations that must go through the v0.10 scales.
+ *
+ * `width`/`height` are deliberately NOT here: those are component geometry (a
+ * 14px range thumb, a 28px close button), not spacing, and forcing them onto
+ * the space scale would fit worse than a literal does.
+ */
+const SCALED_PROPS =
+  /^\s*(font-size|padding|margin|gap|row-gap|column-gap|(?:padding|margin)-(?:top|right|bottom|left))\s*:\s*([^;{}]+);/;
+
+/**
+ * Every scaled declaration outside :root that still carries a px literal.
+ *
+ * NEGATIVE values pass: the one that exists is an optical nudge pinned to
+ * non-scaled geometry (centring a fixed-size range thumb on its track). A
+ * negative offset that pairs with a SCALED padding is written as
+ * `calc(-1 * var(--space-n))`, which has no bare literal to catch anyway.
+ */
+function literalSizeDeclarations() {
+  const lines = fs.readFileSync(STYLES, 'utf8').split(/\r?\n/);
+  const start = lines.findIndex((l) => l.trim() === ':root {');
+  const end = lines.findIndex((l, i) => i > start && l.trim() === '}');
+
+  const hits = [];
+  let inComment = false;
+  lines.forEach((line, i) => {
+    const opens = (line.match(/\/\*/g) || []).length;
+    const closes = (line.match(/\*\//g) || []).length;
+    const wasInComment = inComment;
+    if (opens > closes) inComment = true;
+    else if (closes > opens) inComment = false;
+    if (wasInComment || (i >= start && i <= end)) return;
+
+    const m = SCALED_PROPS.exec(line);
+    if (m && /(^|[^-\w.])\d+(\.\d+)?px/.test(m[2])) {
+      hits.push(`${i + 1}: ${m[1]}: ${m[2].trim()}`);
+    }
+  });
+  return hits;
+}
+
+test('no size or spacing literals outside the :root scales', () => {
+  // This is the guard that makes the density modifier survive contact with the
+  // next twenty features. Without it the scale erodes one hurried `padding:
+  // 7px` at a time, and the erosion stays invisible until someone switches to
+  // `dense` and finds half the HUD ignored it. Same reasoning as the
+  // KNOWN_TOKENS drift test above: duplicating a decision is only safe when
+  // something fails loudly the moment the copies disagree.
+  assert.deepStrictEqual(
+    literalSizeDeclarations(),
+    [],
+    'use the --space-* / --fs-* scales instead of px literals'
+  );
+});
+
 // ---- inheritance ---------------------------------------------------------
 
 test('shipped themes load with no warnings', () => {
