@@ -1,0 +1,5 @@
+{
+  "_comment": "Editor opened when a file:line link in the terminal is clicked. {file} {line} {col} are substituted (':{col}' is dropped when the token had no column). Set command to \"\" to force the $VISUAL / $EDITOR fallback ('+line file'). Per-machine override: config/editor.local.json (gitignored).",
+  "command": "code",
+  "args": ["-g", "{file}:{line}:{col}"]
+}

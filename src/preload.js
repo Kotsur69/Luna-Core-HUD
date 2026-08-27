@@ -64,6 +64,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   focusWindow: () => ipcRenderer.send('window:focus'),
   /** Flashes the taskbar button until the window is focused (busy -> idle cue, opt-in). No-op if already focused. */
   flashWindow: () => ipcRenderer.send('window:flash'),
+  /**
+   * Opens a clicked `file:line` link from the terminal in the configured
+   * editor. Payload: { sessionId, file, line, col }. `file` is the raw token
+   * text - main resolves it against THAT session's own cwd and rejects
+   * anything that escapes it before spawning (see src/editor.js). Resolves
+   * { ok: true } or { ok: false, reason }.
+   */
+  openInEditor: (payload) => ipcRenderer.invoke('editor:open', payload),
 
   // --- PHASE 4: launch profiles ---
   /** Fetches { profiles, activeProfile } to fill the switcher. */

@@ -600,6 +600,25 @@ Injector-only.
   clears the flash on focus and a `focus` handler clears it after a clicked
   toast. 721 tests.
 
+- ✅ **Clickable `file:line` links in the terminal.** **BUILT 2026-08-27.**
+  Claude Code prints `src/foo.js:123` constantly; an xterm
+  `registerLinkProvider` (`src/renderer/modules/termlinks.js`,
+  `parseFileLinks()` pure + tested) underlines those on hover ("Open in
+  editor" / "Otworz w edytorze") and opens them in `code -g` / `$EDITOR` on
+  click. Zero tokens: no PTY write, no network — a detached `spawn` only.
+  **§D4a compensating control:** unlike `claude:docs` / `update:open-releases`
+  (which take no argument), this handler accepts a renderer-supplied candidate
+  path, so `src/editor.js`'s `resolveInRoot()` resolves it against **that
+  session's own `cwd`** and rejects `..` traversal, an absolute path elsewhere,
+  a NUL byte, or a non-file; `buildEditorInvocation()` only ever substitutes
+  `{file}`/`{line}`/`{col}`; and main spawns with an args array + `shell: false`
+  so the raw string never reaches a shell. Editor configurable in
+  `config/editor.json` (`command: ""` forces the `$VISUAL`/`$EDITOR` `+line`
+  fallback); `editor.local.json` overrides per machine. The link-provider
+  `IDisposable` is torn down in `terminals.js`'s `pruneTerms()` alongside
+  `term.dispose()`. Follow-ups left as backlog: the Python-traceback
+  `File "x.py", line 12` form, and opening a file that does not exist yet.
+
 ### 5.3 Bigger / exploratory
 
 - **GPU / system meters.** Small tiles for GPU/VRAM/CPU (relevant to your Synthara

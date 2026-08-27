@@ -660,6 +660,10 @@
              something to act on (an update available/ready); hidden otherwise -
              so "check failed" never lingers as a permanent scare. -->
         <button id="update-chip" class="palette-chip update-chip" hidden></button>
+        <!-- Transient failure notice for a clicked file:line link (traversal
+             string, vanished file, no editor configured). Filled + auto-hidden
+             by modules/termlinks.js. -->
+        <span id="termlink-note" class="terminal-bar__note" role="status" hidden></span>
       </div>
       <!-- Session tabs. Each has its own PTY process, its own context, and its own
            xterm buffer; here we only render their headers (built from JS). -->

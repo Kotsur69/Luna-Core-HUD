@@ -17,6 +17,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { randomUUID } = require('crypto');
+const { spawn } = require('child_process');
 // @lydell/node-pty: a maintained fork of node-pty with prebuilds (N-API),
 // works without compiling node-gyp / Visual Studio. API-compatible with node-pty.
 const pty = require('@lydell/node-pty');
@@ -63,6 +64,10 @@ const { loadThemes } = require('./theme');
 const { loadLayouts } = require('./layouts');
 // UI preferences (theme + language) persisted in config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
+// Clickable file:line links in the terminal: resolve a renderer-supplied
+// candidate path against the session cwd (reject anything that escapes it),
+// then build the editor argv. Pure helpers, see src/editor.js's header.
+const { loadEditorConfig, resolveInRoot, buildEditorInvocation } = require('./editor');
 // Usage limit counter (5h + week) - GET read from the CLI's OAuth endpoint.
 const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
 // E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
@@ -1580,6 +1585,64 @@ function registerIpc() {
     shell.openExternal('https://docs.claude.com/en/docs/claude-code/overview');
   });
 
+  // Diagnostics tile's "Install mpv" action. Same hardcoded-URL reasoning as
+  // claude:docs above: the renderer names an intent, never an address.
+  ipcMain.on('diag:mpv-docs', () => {
+    shell.openExternal('https://mpv.io/installation/');
+  });
+
+  // Clickable file:line links in the terminal. UNLIKE claude:docs /
+  // update:open-releases above, this handler DOES take a renderer-supplied
+  // string - so the §D4a compensating control applies (see src/editor.js):
+  // the candidate is resolved against THIS session's own cwd and rejected if
+  // it escapes it, then the editor is spawned with an args array + shell:false
+  // (the raw string never reaches a shell). Zero tokens: no PTY write, no
+  // network - just a detached child process.
+  ipcMain.handle('editor:open', (_event, payload) => {
+    const { sessionId, file, line, col } = payload || {};
+    const session =
+      typeof sessionId === 'string' && sessions.has(sessionId) ? sessions.get(sessionId) : null;
+    if (!session) return { ok: false, reason: 'noSession' };
+
+    const abs = resolveInRoot(session.cwd, typeof file === 'string' ? file : '');
+    if (!abs) return { ok: false, reason: 'badPath' };
+
+    const lineNum = Number.isFinite(line) && line > 0 ? Math.floor(line) : 1;
+    const colNum = Number.isFinite(col) && col > 0 ? Math.floor(col) : null;
+
+    const inv = buildEditorInvocation(loadEditorConfig(), { file: abs, line: lineNum, col: colNum });
+    if (!inv) return { ok: false, reason: 'noEditor' };
+
+    // VS Code ships as `code.cmd` on Windows; a bare "code" with shell:false
+    // resolves via CreateProcess, which appends ".exe" but never ".cmd". So on
+    // win32, for a bare (no-extension, non-absolute) command, try the ".cmd"
+    // form first and fall back to the bare name on ENOENT (covers e.g. an .exe
+    // editor on PATH).
+    const wantsCmdSuffix =
+      IS_WINDOWS && !path.isAbsolute(inv.cmd) && !path.extname(inv.cmd);
+    const opts = { cwd: session.cwd, shell: false, detached: true, stdio: 'ignore', windowsHide: true };
+
+    const launch = (cmd, allowRetry) => {
+      try {
+        const child = spawn(cmd, inv.args, opts);
+        child.on('error', (err) => {
+          if (allowRetry && err && err.code === 'ENOENT') {
+            launch(inv.cmd, false);
+          } else {
+            console.error('[editor:open] spawn failed:', err && err.message);
+          }
+        });
+        child.unref();
+      } catch (err) {
+        console.error('[editor:open] spawn threw:', err && err.message);
+      }
+    };
+    launch(wantsCmdSuffix ? inv.cmd + '.cmd' : inv.cmd, wantsCmdSuffix);
+
+    return { ok: true };
+  });
+
+  // Themes: list of available themes (CSS tokens + xterm colors).
   ipcMain.handle('themes:list', () => loadThemes());
 
   // C1: layout presets (grid + widget-to-region assignment).

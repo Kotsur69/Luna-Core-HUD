@@ -13,6 +13,7 @@
 'use strict';
 
 import { userKeystroke } from './keysynth.js';
+import { mountFileLinks } from './termlinks.js';
 
 const TERM_OPTIONS = {
   cursorBlink: true,
@@ -290,7 +291,13 @@ export function ensureTerm(sessionId) {
     return true;
   });
 
-  s = { id: sessionId, term: instance, fitAddon: addon, el, alive: true };
+  // Clickable file:line links. registerLinkProvider() returns an IDisposable
+  // that MUST be torn down with the instance (FUTURE_PLAN.md §A2a/§A2b) - see
+  // pruneTerms() below. Each tab resolves its own links against its own cwd,
+  // so the closure captures THIS sessionId.
+  const linkDisposer = mountFileLinks(instance, () => sessionId);
+
+  s = { id: sessionId, term: instance, fitAddon: addon, el, alive: true, linkDisposer };
   termsBySession.set(sessionId, s);
   return s;
 }
@@ -304,6 +311,7 @@ export function showPane(sessionId) {
 export function pruneTerms(liveIds) {
   for (const [id, s] of [...termsBySession]) {
     if (liveIds.has(id)) continue;
+    if (s.linkDisposer) s.linkDisposer.dispose();
     s.term.dispose();
     s.el.remove();
     termsBySession.delete(id);
