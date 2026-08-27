@@ -238,28 +238,174 @@
   --press-scale: 0.985; /* how far a pressed control sinks */
 }
 
+/* ===========================================================================
+   MODIFIERS (v0.10) - four axes that multiply across every theme
+   ---------------------------------------------------------------------------
+   Density, font pack, glow and motion are NOT themes. A theme is a look; these
+   are how you want that look served. Eighteen themes x four densities x four
+   font packs is not seventy-two presets to maintain - it is eighteen presets
+   and four small token blocks, and every future theme gets all four for free.
+
+   Applied as `data-*` attributes on <html> by modules/modifiers.js. The DEFAULT
+   value of every axis removes its attribute rather than writing it, so a stock
+   install carries no attributes at all and `:root` above is, by itself, the
+   default of all four. That is also why there is no [data-density="cozy"]
+   block below: cozy IS `:root`.
+
+   ---- Why every declaration here is !important -----------------------------
+   applyThemeVars() writes a theme's tokens as INLINE styles on <html> (that is
+   what lets a theme switch live without a reload). Normal author rules lose to
+   an inline style no matter how specific they are; the important-author tier is
+   the only thing in the cascade that sits above it. So a modifier that has to
+   beat a theme - "glow: off" on a theme that ships `--glow-size: 24px` - has
+   exactly one mechanism available, and this is it.
+
+   The precedence this buys, and it is deliberate:
+       :root defaults  ->  theme vars (inline)  ->  modifier blocks
+   A modifier wins over a theme because the modifier is the person sitting in
+   front of the HUD saying "not on this machine", and a theme author cannot
+   overrule that from a JSON file.
+
+   !important is applied uniformly rather than only to the tokens themes happen
+   to set today, so that adding a token to a theme later cannot silently punch
+   a hole in an axis.
+   =========================================================================== */
+
+/* ---- Density -------------------------------------------------------------
+   Two multipliers, for the reason documented at the scales themselves: gaps
+   and text do not want the same treatment. `comfortable` opens the space up
+   15% while nudging type only 5%; `dense` squeezes space 28% and type 10%.
+   The max() floors on the type scale keep the bottom of the range legible. */
+:root[data-density='comfortable'] {
+  --density-space: 1.15 !important;
+  --density-text: 1.05 !important;
+}
+:root[data-density='compact'] {
+  --density-space: 0.85 !important;
+  --density-text: 0.95 !important;
+}
+:root[data-density='dense'] {
+  --density-space: 0.72 !important;
+  --density-text: 0.9 !important;
+}
+
+/* ---- Font pack -----------------------------------------------------------
+   Only the two BUNDLED families (JetBrains Mono, Chakra Petch) and the system
+   stacks. Nothing here may name a face the app does not ship: the renderer runs
+   over file:// with no network, so a missing family is not a download, it is a
+   silent fallback to whatever the OS picks - which is the one failure mode the
+   bundled-fonts comment at the top of this file exists to prevent.
+
+   Each pack sets all three faces, never a subset, so switching packs can never
+   leave one face behind from the previous pack or from the theme. */
+:root[data-font-pack='mono'] {
+  /* The whole HUD as one terminal readout - labels, titles and output in the
+     same face as the shell. The most opinionated of the four. */
+  --font-ui: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace !important;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace !important;
+  --font-display: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace !important;
+}
+:root[data-font-pack='display'] {
+  /* Angular titles over a neutral UI face: the classic HUD split. Chakra Petch
+     ships 600/700 only, which is all --font-display is ever rendered at. */
+  --font-ui: 'Segoe UI', 'Inter', system-ui, sans-serif !important;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace !important;
+  --font-display: 'Chakra Petch', 'Segoe UI', system-ui, sans-serif !important;
+}
+:root[data-font-pack='system'] {
+  /* No bundled face anywhere - the calm, IDE-looking end of the range, and the
+     only pack that renders in the same faces as the host OS's own chrome. */
+  --font-ui: 'Segoe UI', 'Inter', system-ui, sans-serif !important;
+  --font-mono: 'Cascadia Code', Consolas, 'Courier New', monospace !important;
+  --font-display: 'Segoe UI', 'Inter', system-ui, sans-serif !important;
+}
+
+/* ---- Glow ----------------------------------------------------------------
+   The blur radii only. Colour is untouched on purpose: turning the glow off is
+   meant to calm a theme down, not to repaint it into a different one. A neon
+   theme at `off` is still that theme, just flat. */
+:root[data-glow='reduced'] {
+  --glow-size: 9px !important;
+  --glow-size-md: 6px !important;
+  --glow-size-sm: 4px !important;
+  --text-glow: none !important;
+  /* The panel shadow is depth, not neon, so `reduced` keeps whatever the theme
+     chose - only `off` below takes it away. */
+}
+:root[data-glow='off'] {
+  --glow-size: 0px !important;
+  --glow-size-md: 0px !important;
+  --glow-size-sm: 0px !important;
+  --text-glow: none !important;
+  --shadow-panel: none !important;
+}
+
+/* ---- Motion --------------------------------------------------------------
+   An IN-APP control, deliberately separate from the OS switch below. The OS
+   setting is an accessibility declaration and stays authoritative; this one is
+   a preference ("this machine is slow", "the panel fades bother me") that the
+   OS has no opinion about. `off` is defined to be exactly what the OS block
+   produces - test/modifiers.test.js compares the two declaration lists and
+   fails if they ever drift. */
+:root[data-motion='reduced'] {
+  /* Halved, not zeroed: the transitions still carry cause-and-effect, they just
+     stop being something you wait for. --lift/--press-scale keep a trace of
+     themselves so surfaces still answer the pointer. */
+  --dur-instant: 40ms !important;
+  --dur-fast: 90ms !important;
+  --dur-normal: 160ms !important;
+  --dur-slow: 260ms !important;
+  --stagger: 20ms !important;
+  --lift: 1px !important;
+  --press-scale: 0.995 !important;
+}
+:root[data-motion='off'] {
+  --dur-instant: 0ms !important;
+  --dur-fast: 0ms !important;
+  --dur-normal: 0ms !important;
+  --dur-slow: 0ms !important;
+  --stagger: 0ms !important;
+  --lift: 0px !important;
+  --press-scale: 1 !important;
+}
+
 /* Reduced motion, done once at the token layer: every transition in the HUD
    collapses to an instant jump to its END state. That is a substitution, not a
    removal - the state still reads, nothing moves (B8's pattern). Keyframe
    animations that loop or convey state need their own handling; see the
-   explicit blocks further down. */
+   explicit blocks further down.
+
+   Three things about the selector and the !important, all load-bearing:
+
+   * `:root[data-motion]` is listed alongside `:root` so this block matches the
+     in-app modifier's specificity (0,2,0) and, sitting later in the file, wins
+     the tie. Without it [data-motion='reduced'] would out-specify this block
+     and an OS-level accessibility setting would lose to an app preference.
+   * !important for the same reason the modifier blocks have it: twelve of the
+     eighteen shipped themes set --dur-fast/--dur-normal, and a theme's tokens
+     are inline styles. Until v0.10 this block silently did nothing on those
+     twelve - it was written before themes could reach the motion tokens at all
+     (C3), and the two changes never met.
+   * The declarations must stay identical to [data-motion='off'] above; the
+     drift test in test/modifiers.test.js is what keeps them that way. */
 @media (prefers-reduced-motion: reduce) {
-  :root {
-    --dur-instant: 0ms;
-    --dur-fast: 0ms;
-    --dur-normal: 0ms;
-    --dur-slow: 0ms;
+  :root,
+  :root[data-motion] {
+    --dur-instant: 0ms !important;
+    --dur-fast: 0ms !important;
+    --dur-normal: 0ms !important;
+    --dur-slow: 0ms !important;
     /* Must go to zero with the durations. A stagger delay on a zero-length
        animation with `backwards` fill does not shorten anything - it just holds
        each region invisible until its turn, which is the one outcome reduced
        motion is meant to prevent. */
-    --stagger: 0ms;
+    --stagger: 0ms !important;
     /* Zeroing the durations makes a transform instant, not absent - a hover
        lift would become a 2px JUMP under the cursor, which is worse than no
        lift at all. So the movement tokens go to their no-op values and the
        colour half of every hover state carries the meaning on its own. */
-    --lift: 0px;
-    --press-scale: 1;
+    --lift: 0px !important;
+    --press-scale: 1 !important;
   }
 }
 

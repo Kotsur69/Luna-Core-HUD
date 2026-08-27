@@ -9,7 +9,7 @@
 // autoCompactMode, autoCompactEveryTurns, autoCompactAfterMinutes,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
-// collapsed, layoutSizes, widgetSlots.
+// collapsed, layoutSizes, widgetSlots, density, fontPack, glow, motion.
 // The renderer
 // reads it at startup (ui:get) and writes on change (ui:set).
 //
@@ -38,6 +38,15 @@ const TERM_CURSOR_STYLES = ['block', 'underline', 'bar'];
 // past 60%. The arm TOGGLE itself is per-session (autocompact.js module state),
 // never persisted - only the mode + its N/M live here.
 const AUTO_COMPACT_MODES = ['context', 'turns', 'time'];
+// v0.10 modifiers: four axes that multiply across every theme rather than
+// adding to them. Ids only - the VALUES they stand for (multipliers, font
+// stacks, blur radii, durations) live in the [data-*] blocks in
+// renderer/styles.css, which is the only place that should know them. Main has
+// no business holding a second copy of a number it cannot apply.
+const DENSITIES = ['comfortable', 'cozy', 'compact', 'dense'];
+const FONT_PACKS = ['theme', 'mono', 'display', 'system'];
+const GLOW_LEVELS = ['full', 'reduced', 'off'];
+const MOTION_LEVELS = ['full', 'reduced', 'off'];
 
 function clampVolume(v) {
   const n = Number(v);
@@ -155,6 +164,19 @@ const DEFAULTS = {
   // the preset (and healed) by renderer/modules/widgetarrange.js; `terminal` is
   // never stored here. Empty = every preset in its authored arrangement.
   widgetSlots: {},
+  // v0.10 modifiers. Every default is the no-op value, i.e. exactly what the
+  // HUD did before the axes existed: `cozy` IS the :root scale, `theme` means
+  // the theme keeps choosing its own faces, and `full` glow/motion is the
+  // unmodified look. An existing install therefore reads identically to how it
+  // rendered yesterday, and modifiers.js writes no attribute at all for these.
+  //
+  // `motion` is NOT the OS prefers-reduced-motion setting and does not shadow
+  // it: the OS switch is an accessibility declaration and still wins outright
+  // (see the media block in styles.css). This one is a taste/perf preference.
+  density: 'cozy',
+  fontPack: 'theme',
+  glow: 'full',
+  motion: 'full',
 };
 
 const MAX_COLLAPSED = 64;
@@ -300,6 +322,30 @@ function clampAutoCompactPrefs(raw) {
   };
 }
 
+/**
+ * Sanitizes the v0.10 modifier axes: density, font pack, glow, motion.
+ *
+ * A pure whitelist per axis - the strictest of the three clamps in this file,
+ * and deliberately so. The numbers these ids stand for live in styles.css; an
+ * id that is not on the list has no block to match, so letting one through
+ * would not produce a wrong look, it would produce the DEFAULT look while
+ * ui.local.json and the Settings select both insist otherwise. Silent
+ * disagreement between the file and the screen is the failure worth blocking.
+ *
+ * Every axis falls back independently: one bad id costs that axis, not all four.
+ * @returns {{density: string, fontPack: string, glow: string, motion: string}}
+ */
+function clampModifierPrefs(raw) {
+  const obj = raw && typeof raw === 'object' ? raw : {};
+  const pick = (v, allowed, fallback) => (allowed.includes(v) ? v : fallback);
+  return {
+    density: pick(obj.density, DENSITIES, DEFAULTS.density),
+    fontPack: pick(obj.fontPack, FONT_PACKS, DEFAULTS.fontPack),
+    glow: pick(obj.glow, GLOW_LEVELS, DEFAULTS.glow),
+    motion: pick(obj.motion, MOTION_LEVELS, DEFAULTS.motion),
+  };
+}
+
 /** Reads UI preferences; a missing or corrupt file falls back to DEFAULTS. */
 function readUiPrefs() {
   try {
@@ -355,6 +401,7 @@ function readUiPrefs() {
       widgetSlots: cleanWidgetSlots(obj.widgetSlots),
       ...clampAutoCompactPrefs(obj),
       ...clampTermPrefs(obj),
+      ...clampModifierPrefs(obj),
     };
   } catch {
     return { ...DEFAULTS };
@@ -370,7 +417,7 @@ function readUiPrefs() {
  *   autoCompactAfterMinutes?, termFontFamily?, termFontSize?, termLineHeight?,
  *   termLetterSpacing?, termCursorStyle?, termCursorBlink?, termScrollback?,
  *   termBgOpacity?, termBgBlur?, termBgImage?, collapsed?, layoutSizes?,
- *   widgetSlots? }.
+ *   widgetSlots?, density?, fontPack?, glow?, motion? }.
  * @returns {object|null} the new state, or null if the write failed
  */
 function writeUiPrefs(partial) {
@@ -464,6 +511,22 @@ function writeUiPrefs(partial) {
       }
     }
     Object.assign(next, clampTermPrefs(mergedTerm));
+    // v0.10 modifiers: same merge-then-revalidate shape as the two blocks above.
+    // Each axis is independent, so a partial write ({ glow: 'off' }) must not
+    // reset the other three to their defaults.
+    const MOD_KEYS = ['density', 'fontPack', 'glow', 'motion'];
+    const mergedMods = {
+      density: next.density,
+      fontPack: next.fontPack,
+      glow: next.glow,
+      motion: next.motion,
+    };
+    if (partial) {
+      for (const key of MOD_KEYS) {
+        if (key in partial) mergedMods[key] = partial[key];
+      }
+    }
+    Object.assign(next, clampModifierPrefs(mergedMods));
     paths.ensureUserDir();
     fs.writeFileSync(file(), JSON.stringify(next, null, 2) + '\n', 'utf8');
     return next;
@@ -477,6 +540,7 @@ module.exports = {
   writeUiPrefs,
   clampTermPrefs,
   clampAutoCompactPrefs,
+  clampModifierPrefs,
   cleanCollapsed,
   cleanLayoutSizes,
   cleanWidgetSlots,
