@@ -201,6 +201,23 @@ Observer — the modal only ever displays already-captured text, nothing here
 writes to the PTY. Per-tab isolated via `registerSessionView` (each tab keeps
 its own timeline). 438 tests.
 
+**Export to Markdown (SHIPPED 2026-08-27).** A `⤓` button in the widget's title
+bar dumps the active tab's *whole* transcript (read fresh from disk, not the
+in-memory 100-turn cap) to a `.md` the user picks in a save dialog. Parsing is
+`src/sessionExport.js` — a pure `transcriptToMarkdown(jsonlText, meta)` with a
+sibling test (`test/sessionexport.test.js`), same text→text shape as
+`ttsExtract.js`; the disk read + `dialog.showSaveDialog` + write live in
+`main.js`'s `session:export` handler (source path confined under
+`~/.claude/projects`, read capped at 50 MB). Output: YAML frontmatter (session
+id, project, cwd, branch, model(s), time range, prompt count, token totals,
+estimated cost via `observer.estimateSessionCost`) then `## 🧑 Mati` / `## 🌙 Luna`
+sections; a run of assistant entries coalesces under one header, each tool call
+folds into a `<details>` block with its result truncated to 40 lines / 2000
+chars, thinking blocks dropped, slash commands rendered as a one-liner,
+sub-agent (sidechain) turns kept under a marked `### ⤷ Sub-agent` subsection.
+Still pure Passive Observer — the transcript is only read; the one write is the
+user-chosen file. Default name `LunaCore-<project>-<YYYYMMDD-HHMM>.md`.
+
 ### 6.2 Active-Files Edit Heatmap — SHIPPED 2026-08-13
 Extends the Skill Tracker's existing `tool_use`/`tool_result` pairing
 (`toolEventsFromLines()` / `foldToolEvents()` in `observer.js`) with

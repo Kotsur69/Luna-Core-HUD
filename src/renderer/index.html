@@ -453,13 +453,27 @@
 
   <template id="w-sessiontimeline">
     <div class="panel__section">
-      <h2 class="panel__title" data-i18n="sessiontimeline.title" data-i18n-title="sessiontimeline.hint" title="Kliknij znacznik, aby zobaczyc fragment transkryptu tej tury.">Oś czasu sesji</h2>
+      <h2 class="panel__title usage-head">
+        <span data-i18n="sessiontimeline.title" data-i18n-title="sessiontimeline.hint" title="Kliknij znacznik, aby zobaczyc fragment transkryptu tej tury.">Oś czasu sesji</span>
+        <!-- Export this tab's whole transcript to a Markdown file. The save
+             dialog + disk read live in main (session:export); disabled until
+             at least one turn has completed. PASSIVE OBSERVER: reads a file
+             already on disk, one user-picked .md written. -->
+        <button
+          id="stimeline-export"
+          class="usage-refresh"
+          data-i18n-title="sessiontimeline.export"
+          title="Eksportuj sesje do pliku Markdown"
+          disabled
+        >&#10515;</button>
+      </h2>
       <!-- Fed by TranscriptWatcher's onTurnEnd (observer.js) via modules/sessions.js -
            reuses the already-captured transcript fragment, zero new IPC round trip,
            zero new file read. PASSIVE OBSERVER: the preview modal only ever displays
            this text, it never writes to the PTY. -->
       <div id="stimeline-track" class="stimeline-track"></div>
       <p id="stimeline-empty" class="hint" data-i18n="sessiontimeline.empty">Brak tur w tej sesji.</p>
+      <p id="stimeline-export-status" class="hint" hidden></p>
     </div>
   </template>
 

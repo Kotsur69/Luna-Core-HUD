@@ -943,6 +943,9 @@ module.exports = {
   usageToMetrics,
   sumUsageLines,
   sumUsageByModel,
+  // Exported for the session -> Markdown export (src/sessionExport.js) so the
+  // per-model pricing loop has exactly one home, not a second copy.
+  estimateSessionCost,
   toolsFromLines,
   toolEventsFromLines,
   foldToolEvents,

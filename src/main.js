@@ -22,7 +22,10 @@ const { randomUUID } = require('crypto');
 const pty = require('@lydell/node-pty');
 // Passive Observer (Phase 3): tool detection from stdout + tailing the
 // JSONL transcript for real context-window usage. Read-only, zero tokens.
-const { detectTools, detectApprovalPrompt, TranscriptWatcher, isLongTurn } = require('./observer');
+const { detectTools, detectApprovalPrompt, TranscriptWatcher, isLongTurn, encodeProjectDir } = require('./observer');
+// Session -> Markdown export: pure transcript renderer. The disk read + save
+// dialog live here in main; the parsing is all in the module (unit-tested).
+const { transcriptToMarkdown } = require('./sessionExport');
 // §4.2: literal TUI substrings used to recognize an approval prompt - data,
 // not code, since the CLI text can change between releases (config/sound-triggers.json).
 const { loadSoundTriggers } = require('./soundTriggers');
@@ -1325,6 +1328,70 @@ function registerIpc() {
   // Scratchpad: reads and writes the local notepad (validated in scratchpad.js).
   ipcMain.handle('scratchpad:read', () => readScratchpad());
   ipcMain.handle('scratchpad:write', (_event, text) => writeScratchpad(text));
+
+  // Export the active tab's transcript to a Markdown file. PASSIVE OBSERVER:
+  // the transcript is already on disk (the watcher tails it); this only reads
+  // it, renders with sessionExport.js, and writes the ONE .md the user picks
+  // in the save dialog. No PTY writes, no model calls.
+  ipcMain.handle('session:export', async (_event, sessionId) => {
+    const session =
+      (sessionId && sessions.get(sessionId)) ||
+      (activeSessionId && sessions.get(activeSessionId)) ||
+      null;
+    if (!session) return { ok: false, reason: 'no-session' };
+
+    // The watcher pins the file; before its first tick, fall back to the
+    // deterministic <cwd-dir>/<uuid>.jsonl path (same naming observer.js uses).
+    let file =
+      (session.watcher && (session.watcher.pinned || session.watcher.currentFile)) || null;
+    if (!file && session.transcriptId && session.cwd) {
+      file = path.join(
+        os.homedir(),
+        '.claude',
+        'projects',
+        encodeProjectDir(session.cwd),
+        `${session.transcriptId}.jsonl`,
+      );
+    }
+
+    // Guard: only ever read from under ~/.claude/projects.
+    const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
+    if (!file || !path.resolve(file).startsWith(path.resolve(projectsRoot) + path.sep)) {
+      return { ok: false, reason: 'no-transcript' };
+    }
+
+    let jsonl;
+    try {
+      if (fs.statSync(file).size > 50 * 1024 * 1024) return { ok: false, reason: 'too-large' };
+      jsonl = fs.readFileSync(file, 'utf8');
+    } catch {
+      return { ok: false, reason: 'no-transcript' };
+    }
+
+    const project = (session.cwd || '').split(/[\\/]+/).filter(Boolean).pop() || 'session';
+    const md = transcriptToMarkdown(jsonl, {
+      cwd: session.cwd,
+      sessionId: session.transcriptId || undefined,
+      project,
+    });
+
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export session to Markdown',
+      defaultPath: path.join(app.getPath('documents'), `LunaCore-${project}-${stamp}.md`),
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    });
+    if (canceled || !filePath) return { ok: false, reason: 'canceled' };
+
+    try {
+      fs.writeFileSync(filePath, md, 'utf8');
+    } catch {
+      return { ok: false, reason: 'write-failed' };
+    }
+    return { ok: true, path: filePath };
+  });
 
   // Clipboard history. `enabled` is the switch the widget shows: it flips the
   // persisted pref AND starts/stops the real watcher, so "off" means LunaCore

@@ -140,6 +140,12 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Writes the scratchpad content; Promise<boolean>. */
   saveScratchpad: (text) => ipcRenderer.invoke('scratchpad:write', text),
 
+  // --- Session export (transcript -> Markdown) ---
+  /** Renders the given tab's transcript (defaults to the active tab) to a .md
+   *  file the user picks in a save dialog.
+   *  Promise<{ok:true, path:string} | {ok:false, reason:string}>. */
+  exportSession: (sessionId) => ipcRenderer.invoke('session:export', sessionId),
+
   // --- Clipboard history (opt-in; see src/clipboard.js) ---
   /** Registers a callback with the history: [{text, at}] (newest first). */
   onClipboard: (callback) => {

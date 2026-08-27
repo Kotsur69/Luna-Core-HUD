@@ -16,7 +16,7 @@
 
 'use strict';
 
-import { t } from './util.js';
+import { t, pulse } from './util.js';
 import { onLangChange, onSessionRestarted, registerSessionView } from './bus.js';
 import { defineWidget } from './registry.js';
 
@@ -45,6 +45,9 @@ let els = null;
  *  since the modal markup is static and never unmounts with the widget. */
 let modal = null;
 let modalOpen = false;
+
+/** Auto-clear timer for the export result line under the timeline. */
+let exportStatusTimer = null;
 
 /**
  * Caps text at maxChars, flagging whether anything was cut.
@@ -122,6 +125,10 @@ function buildMarker(turn, idx) {
 function render() {
   if (!els) return;
 
+  // Nothing to export until a turn has completed - keeps the button from
+  // opening a save dialog onto an empty (or not-yet-pinned) transcript.
+  if (els.exportBtn) els.exportBtn.disabled = turns.length === 0;
+
   els.track.innerHTML = '';
 
   if (!turns.length) {
@@ -135,6 +142,45 @@ function render() {
   // Newest turn scrolled into view - the reader is watching the session live,
   // not digging through history by default.
   els.track.scrollLeft = els.track.scrollWidth;
+}
+
+/** Transient line under the timeline for the export result, auto-clearing. */
+function showExportStatus(msg) {
+  if (!els || !els.exportStatus) return;
+  els.exportStatus.textContent = msg;
+  els.exportStatus.hidden = false;
+  if (exportStatusTimer) clearTimeout(exportStatusTimer);
+  exportStatusTimer = setTimeout(() => {
+    if (els && els.exportStatus) els.exportStatus.hidden = true;
+    exportStatusTimer = null;
+  }, 8000);
+}
+
+/**
+ * Asks main to render THIS tab's transcript to a Markdown file the user picks
+ * in a save dialog (session:export). Read-only on the transcript; the single
+ * write is that one .md - nothing here touches the PTY.
+ */
+async function runExport() {
+  if (!els || !els.exportBtn) return;
+  els.exportBtn.disabled = true;
+  try {
+    const res = await window.lunacore.exportSession();
+    if (res && res.ok) {
+      showExportStatus(t('sessiontimeline.exportDone', { path: res.path }));
+    } else if (res && res.reason === 'canceled') {
+      // user dismissed the save dialog - no message
+    } else if (res && res.reason === 'no-transcript') {
+      showExportStatus(t('sessiontimeline.exportEmpty'));
+    } else {
+      showExportStatus(t('sessiontimeline.exportFail'));
+    }
+  } catch {
+    showExportStatus(t('sessiontimeline.exportFail'));
+  } finally {
+    els.exportBtn.disabled = turns.length === 0;
+    pulse(els.exportBtn);
+  }
 }
 
 function openModal(idx) {
@@ -195,8 +241,12 @@ defineWidget({
     els = {
       track: root.querySelector('#stimeline-track'),
       empty: root.querySelector('#stimeline-empty'),
+      exportBtn: root.querySelector('#stimeline-export'),
+      exportStatus: root.querySelector('#stimeline-export-status'),
     };
     ensureModal();
+
+    if (els.exportBtn) els.exportBtn.addEventListener('click', runExport);
 
     const offLang = onLangChange(render);
     render();
@@ -204,6 +254,10 @@ defineWidget({
     return () => {
       offLang();
       closeModal();
+      if (exportStatusTimer) {
+        clearTimeout(exportStatusTimer);
+        exportStatusTimer = null;
+      }
       els = null;
     };
   },
