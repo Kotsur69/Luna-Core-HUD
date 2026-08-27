@@ -35,9 +35,19 @@ import { sfx } from './sound.js';
 import { isBoundSession } from './godmode.js';
 import { defineWidget } from './registry.js';
 
-const MAX_RETRIES = 3; // give up quietly after this many drops on the same turn
-const BACKOFF_MS = 5000; // wait this long before injecting "continue"
-const SIGNAL_COOLDOWN_MS = 4000; // a TUI redraw repeats the same stdout chunk
+// Stop after this many "continue"s on one turn that never recovers - past that
+// the session is dead, not slow, and poking it again is just noise.
+const MAX_RETRIES = 3;
+// Wait this long before injecting "continue" - a dropped turn often comes back
+// on the CLI's own retry within a second or two, and then we inject nothing.
+const BACKOFF_MS = 5000;
+// After a "continue" goes out, ignore the connectionError trigger for this
+// long. The error line the CLI already printed keeps getting repainted into
+// the TUI viewport for as long as it is on screen - the whole reconnect
+// included - so every repaint after our injection is the SAME drop, not a new
+// one. This window (comfortably longer than BACKOFF_MS) is what stops one drop
+// turning into three "continue"s. See test/autoproceed.test.js.
+const POST_INJECT_QUIET_MS = 30000;
 
 let els = null;
 let autoProceedArmed = false; // off by default, not persisted - armed each session, mirrors autocompact.js
@@ -49,7 +59,13 @@ const sessions = new Map();
 function sessionState(sessionId) {
   let s = sessions.get(sessionId);
   if (!s) {
-    s = { retryCount: 0, lastSignalAt: 0, timer: null };
+    // retryCount - "continue"s sent on the current unrecovered turn; the
+    //              circuit breaker trips at MAX_RETRIES.
+    // injectedAt - Date.now() of the last "continue" sent, for the
+    //              POST_INJECT_QUIET_MS silence window.
+    // timer      - the pending backoff timer, or null. A non-null timer also
+    //              means "an injection is already on the way, ignore repaints".
+    s = { retryCount: 0, injectedAt: 0, timer: null };
     sessions.set(sessionId, s);
   }
   return s;
@@ -60,6 +76,26 @@ function clearAllPending() {
     if (s.timer) clearTimeout(s.timer);
   }
   sessions.clear();
+}
+
+/**
+ * Pure decision: given a session's recovery state and the current time, should
+ * a "continue" be scheduled for this connectionError signal? The three guards
+ * that keep one connection drop from becoming a burst of "continue"s all live
+ * here so test/autoproceed.test.js can pin them without a DOM or fake timers.
+ *
+ * @param {{ retryCount?: number, injectedAt?: number, pending?: boolean }} state
+ *   pending = an injection is already scheduled (caller passes `timer != null`).
+ * @param {number} now Date.now()
+ * @returns {boolean}
+ */
+export function shouldScheduleRecovery(state, now) {
+  const retryCount = Number.isFinite(state?.retryCount) ? state.retryCount : 0;
+  const injectedAt = Number.isFinite(state?.injectedAt) ? state.injectedAt : 0;
+  if (state?.pending === true) return false; // one "continue" already on the way
+  if (now - injectedAt < POST_INJECT_QUIET_MS) return false; // same drop, error text still on screen
+  if (retryCount >= MAX_RETRIES) return false; // session is dead, stop poking it
+  return true;
 }
 
 let flashTimer = null;
@@ -87,21 +123,31 @@ function render() {
 
 function handleTurnEnd({ sessionId } = {}) {
   const s = sessions.get(sessionId);
-  if (s) s.retryCount = 0; // a real turn ended - this tab has recovered
+  if (!s) return;
+  // A real turn ended - the session recovered, on its own or off our
+  // "continue". Cancel any injection still sitting on the backoff timer
+  // (otherwise it fires "continue" into a healthy session moments later) and
+  // wipe recovery state so the next, unrelated drop starts from clean.
+  if (s.timer) {
+    clearTimeout(s.timer);
+    s.timer = null;
+  }
+  s.retryCount = 0;
+  s.injectedAt = 0;
 }
 
 function handleGodModeSignal({ sessionId, type } = {}) {
   if (!autoProceedArmed || type !== 'connectionError') return;
   if (isBoundSession(sessionId)) return; // godmode.js already owns this tab's recovery
   const s = sessionState(sessionId);
-  const now = Date.now();
-  if (now - s.lastSignalAt < SIGNAL_COOLDOWN_MS) return; // dedupe a repeated stdout redraw
-  s.lastSignalAt = now;
-  s.retryCount += 1;
-  if (s.retryCount > MAX_RETRIES) return;
-  clearTimeout(s.timer);
+  // main.js re-fires this signal for EVERY stdout chunk that still shows the
+  // error line - many times, over many seconds, for a single drop (no de-dupe
+  // there, by design). shouldScheduleRecovery() collapses that to one "continue".
+  if (!shouldScheduleRecovery({ ...s, pending: s.timer != null }, Date.now())) return;
   s.timer = setTimeout(() => {
     s.timer = null;
+    s.retryCount += 1;
+    s.injectedAt = Date.now();
     window.lunacore.pastePrompt('continue', true, sessionId);
     flashSent();
   }, BACKOFF_MS);

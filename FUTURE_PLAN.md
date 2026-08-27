@@ -23,7 +23,11 @@ file, a live "currently being edited" pulse, and (added same day from
 manual-test feedback) a bounded self-heal so the live pulse cannot get
 stuck lit, the permanent heat-glow removed so a settled row never reads as
 "still lit", and a deleted-file indicator (`files:check-exist` IPC,
-`fs.existsSync`, since a `rm`/`del` has no transcript event to ride) — and
+`fs.existsSync`, since a `rm`/`del` has no transcript event to ride);
+**accumulated diff viewer DONE 2026-08-27** (§6, same doc): clicking a
+changed or deleted row opens a read-only `git diff HEAD` modal — one local
+`git diff` on an explicit click, zero tokens, path-checked inside the
+session's repo — and
 **multi-repo project switching DONE 2026-08-13**: a "+" button next to the
 Project switcher opens a native folder picker and writes the pick straight
 to `config/projects.local.json`, no more hand-editing JSON to add a repo on

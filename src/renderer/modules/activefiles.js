@@ -14,6 +14,14 @@
 // the same timer as the live-indicator self-heal. Still just a local disk
 // read - no token, no PTY write, no hidden agent.
 //
+// A SECOND, opt-in read of the same class: clicking a CHANGED or DELETED row
+// opens #filediff-modal with that file's accumulated `git diff HEAD -- <file>`
+// (files:diff -> gitfiles.js's git() in main.js). `git diff` is a local disk
+// read - zero tokens, zero PTY writes, no watcher - and it happens ONLY on an
+// explicit user click, never on a timer. Pure read-only rows stay inert: there
+// is no diff behind them, so they get no affordance. The diff text is painted
+// line by line with createElement (never innerHTML with git output).
+//
 // Three things this shows that a plain "files touched" tally would not:
 //
 //  1. Real +/- line counts, straight from the CLI's own `structuredPatch`
@@ -36,6 +44,8 @@
 import { t } from './util.js';
 import { onLangChange, onSessionRestarted, onActiveContext, registerSessionView } from './bus.js';
 import { defineWidget } from './registry.js';
+import { getActiveSessionId } from './terminals.js';
+import { parseDiff } from '../../filediff.js';
 
 /** Honest truncation (ports.js's rule): show this many, state the rest. */
 const MAX_ROWS = 8;
@@ -268,6 +278,114 @@ function formatTokens(n) {
   return n >= 1000 ? `${Math.round(n / 100) / 10}k` : String(n);
 }
 
+// --- Accumulated diff viewer (#filediff-modal) ------------------------------
+// The modal markup is static top-level HTML (index.html), not part of this
+// widget's template, so it is looked up once and survives mount/unmount -
+// same rule as sessiontimeline.js / mcp.js.
+let diffModal = null;
+let diffModalOpen = false;
+// Bumped on every open; a slow git result whose token no longer matches (the
+// user clicked another row, or closed the modal) is dropped rather than
+// painted into the wrong or closed panel.
+let diffReqToken = 0;
+
+function ensureDiffModal() {
+  if (diffModal) return;
+  const el = document.getElementById('filediff-modal');
+  if (!el) return;
+  diffModal = {
+    el,
+    title: document.getElementById('filediff-modal-title'),
+    text: document.getElementById('filediff-modal-text'),
+    truncated: document.getElementById('filediff-modal-truncated'),
+  };
+  el.addEventListener('click', (e) => {
+    if (e.target.hasAttribute('data-filediff-close')) closeDiffModal();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && diffModalOpen) closeDiffModal();
+  });
+}
+
+/** Maps a parseDiff() line kind to its colour class. 'meta' shares the dim
+ *  'hunk' class (@@ headers and diff --git / index / +++ / --- headers read
+ *  alike); 'ctx' gets no class and keeps the panel's default text colour. */
+function diffLineClass(kind) {
+  if (kind === 'add') return 'filediff__add';
+  if (kind === 'del') return 'filediff__del';
+  if (kind === 'hunk' || kind === 'meta') return 'filediff__hunk';
+  return '';
+}
+
+/** Paints classified diff lines into the <pre> with createElement - never
+ *  innerHTML with git output. */
+function paintDiff(pre, lines) {
+  pre.textContent = '';
+  const frag = document.createDocumentFragment();
+  for (const line of lines) {
+    const span = document.createElement('span');
+    const cls = diffLineClass(line.kind);
+    if (cls) span.className = cls;
+    span.textContent = `${line.text}\n`;
+    frag.appendChild(span);
+  }
+  pre.appendChild(frag);
+}
+
+/** Fills the <pre> with a single message line (empty state / not-a-repo). */
+function showDiffMessage(msgKey) {
+  if (!diffModal) return;
+  diffModal.text.textContent = t(msgKey);
+  diffModal.truncated.hidden = true;
+}
+
+/** Opens #filediff-modal for one file and fills it with `git diff HEAD --
+ *  <file>` from main.js. Read-only: this only ever displays the diff text. */
+async function openDiffModal(file) {
+  ensureDiffModal();
+  if (!diffModal || !file) return;
+
+  const token = ++diffReqToken;
+  diffModal.title.textContent = `${t('activefiles.diff.title')} · ${shortPath(file)}`;
+  diffModal.text.textContent = '';
+  diffModal.truncated.hidden = true;
+  diffModal.el.hidden = false;
+  diffModalOpen = true;
+
+  if (!window.lunacore || typeof window.lunacore.getFileDiff !== 'function') {
+    showDiffMessage('activefiles.diff.empty');
+    return;
+  }
+
+  let res;
+  try {
+    res = await window.lunacore.getFileDiff(getActiveSessionId(), file);
+  } catch {
+    res = null;
+  }
+  // A newer open, or a close, happened while the IPC was in flight.
+  if (token !== diffReqToken || !diffModalOpen) return;
+
+  if (!res || !res.ok) {
+    showDiffMessage(res && res.reason === 'notRepo' ? 'activefiles.diff.notrepo' : 'activefiles.diff.empty');
+    return;
+  }
+  const { lines } = parseDiff(res.diff);
+  if (!lines.length) {
+    showDiffMessage('activefiles.diff.empty');
+    return;
+  }
+  paintDiff(diffModal.text, lines);
+  diffModal.truncated.hidden = !res.truncated;
+}
+
+function closeDiffModal() {
+  if (!diffModalOpen || !diffModal) return;
+  diffModalOpen = false;
+  diffModal.el.hidden = true;
+  diffModal.text.textContent = '';
+}
+
 /** One `<li class="afile">` - built by createElement, never innerHTML with
  *  data (ports.js:39-47's precedent; file paths are untrusted-ish text). */
 function buildRow(row) {
@@ -277,6 +395,25 @@ function buildRow(row) {
   li.className = changed ? 'afile' : 'afile is-read';
   li.classList.toggle('is-live', !!row.inProgress);
   li.classList.toggle('is-deleted', !!row.deleted);
+
+  // A CHANGED or DELETED row has an accumulated diff worth showing - make it
+  // open #filediff-modal. A pure read-only row (read, never changed, still on
+  // disk) has nothing to diff, so it stays inert - no cursor, no semantics.
+  const hasDiff = changed || !!row.deleted;
+  if (hasDiff) {
+    li.classList.add('is-clickable');
+    li.setAttribute('role', 'button');
+    li.tabIndex = 0;
+    li.setAttribute('aria-label', `${t('activefiles.diff.title')}: ${shortPath(row.file)}`);
+    const open = () => openDiffModal(row.file);
+    li.addEventListener('click', open);
+    li.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        open();
+      }
+    });
+  }
 
   const dot = document.createElement('i');
   dot.className = 'afile__dot';
@@ -424,6 +561,7 @@ defineWidget({
       list: root.querySelector('#afile-list'),
       empty: root.querySelector('#afile-empty'),
     };
+    ensureDiffModal();
 
     const offLang = onLangChange(render);
     // Only for the denominator of a row's share. Repainting on every context
@@ -448,6 +586,7 @@ defineWidget({
       offLang();
       offCtx();
       clearInterval(staleTimer);
+      closeDiffModal();
       els = null;
     };
   },
@@ -478,5 +617,6 @@ registerSessionView({
 // Restart = a new process: whatever was tracked belonged to the one that died.
 onSessionRestarted(() => {
   files = new Map();
+  closeDiffModal();
   render();
 });

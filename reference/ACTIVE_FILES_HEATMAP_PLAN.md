@@ -101,3 +101,61 @@ Three real gaps Mati found in his first `npm start` pass:
    self-heal timer (no second timer).
 
 **413 tests**, `--luna-probe` clean.
+
+## 6. Accumulated diff viewer (2026-08-27, follow-up to the git-sourced signal)
+
+Clicking a **CHANGED** or **DELETED** row opens a read-only modal
+(`#filediff-modal`, third instance of the `#stimeline-modal` overlay
+skeleton) showing that file's accumulated `git diff HEAD -- <file>` — the diff
+*behind* the `+`/`-` numbers the row already shows. Pure read-only rows stay
+inert: there is no diff to show, so they get no cursor and no button
+semantics.
+
+- **Scope / Passive Observer.** Same class as `files:check-exist`: `git diff`
+  is a local disk read — zero tokens, zero PTY writes, no watcher — and it
+  runs *only* on an explicit user click, never on a timer. Renderer has no
+  `child_process`, so the text comes over a new `files:diff` IPC channel from
+  main, which reuses `src/gitfiles.js`'s `git()` helper (no second way to
+  shell out).
+- **HEAD as the base.** `git diff HEAD -- <file>` matches the
+  `git diff HEAD --numstat` the numstat signal already uses, so the modal
+  shows the diff behind the *same* number. A deleted row's `git diff HEAD`
+  already renders the full removal — the click just has to still fire.
+- **Untracked files.** Nothing to diff against HEAD, so the handler falls back
+  to `git diff --no-index -- /dev/null <file>` (exits 1 by design, real
+  all-`+` output). Gated on `git ls-files --error-unmatch` first, so a
+  tracked-but-clean file shows the honest empty state instead.
+- **Security guard.** `file` is renderer-supplied. `pathInsideCwd()`
+  (`src/gitfiles.js`) `path.resolve`s it against `session.cwd` and rejects
+  anything that escapes (`reason: 'outside'`) — the handler never diffs an
+  arbitrary path. Non-git dir / no HEAD / git failure return
+  `{ ok: false, reason }` and the modal shows the empty / not-a-repo string,
+  never a crash.
+- **Size cap.** ~20000 chars (diffs run bigger than turn text); past that the
+  reply sets `truncated` and the modal shows the same truncated-hint pattern
+  as the timeline / MCP modals.
+- **Files.** `src/filediff.js` (new — pure `classifyDiffLine` / `parseDiff`,
+  raw stdout → `{ lines: [{ kind, text }], truncated }` for the renderer to
+  paint, `createElement` per line, never `innerHTML` with git output),
+  `src/gitfiles.js` (`git` + `pathInsideCwd` exports), `src/main.js`
+  (`files:diff` handler), `src/preload.js` (`getFileDiff`),
+  `src/renderer/index.html` (`#filediff-modal`), `src/renderer/styles.css`
+  (`.filediff__add` / `__del` / `__hunk`), `src/renderer/modules/activefiles.js`
+  (clickable rows + modal), `src/renderer/i18n.js` (`activefiles.diff.*`,
+  PL + EN).
+
+### Manual checklist (DOM / modal — same style as §5)
+
+- [ ] Click a **CHANGED** row → modal opens with the accumulated diff, add
+      lines green, del lines red, `@@` / `diff --git` headers dim, context
+      plain.
+- [ ] Click a **DELETED** row → modal shows the full removal diff.
+- [ ] Click a **pure read-only** row → nothing happens (no cursor, no modal).
+- [ ] Untracked file (created via Bash) → modal shows an all-`+` diff of the
+      new content.
+- [ ] Non-git directory / repo with no commits → modal shows
+      "No changes to show" / "Not a git repository", no crash.
+- [ ] **Esc**, the **×** button, and a **backdrop** click each close the modal.
+- [ ] A diff over ~20000 chars → the truncated hint shows under the `<pre>`.
+- [ ] PL / EN: title, empty string, not-a-repo string, truncated hint, close
+      tooltip all switch with the language.

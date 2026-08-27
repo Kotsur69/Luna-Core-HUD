@@ -10,8 +10,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 
-const { parseChangedPaths, parseNumstat, readUntrackedLineCount } = require('../src/gitfiles.js');
+const { parseChangedPaths, parseNumstat, readUntrackedLineCount, pathInsideCwd } = require('../src/gitfiles.js');
 
 const NUL = '\0';
 
@@ -98,4 +99,39 @@ test('parseNumstat on empty/missing input returns an empty array', () => {
 
 test('readUntrackedLineCount returns 0 for a path that does not exist', () => {
   assert.equal(readUntrackedLineCount('Z:\\nope\\does-not-exist.txt'), 0);
+});
+
+// ---- pathInsideCwd (the files:diff containment guard) -----------------------
+// `file` is renderer-supplied, so the diff handler must refuse anything that
+// resolves outside the session's own cwd. The guard returns the repo-relative
+// path when inside, null otherwise.
+
+const CWD = path.resolve('/repo/project');
+
+test('pathInsideCwd accepts a plain relative file inside cwd', () => {
+  assert.equal(pathInsideCwd(CWD, 'src/main.js'), path.join('src', 'main.js'));
+});
+
+test('pathInsideCwd accepts an absolute path that resolves inside cwd', () => {
+  assert.equal(pathInsideCwd(CWD, path.join(CWD, 'src', 'main.js')), path.join('src', 'main.js'));
+});
+
+test('pathInsideCwd rejects a ../ escape', () => {
+  assert.equal(pathInsideCwd(CWD, '../secret.txt'), null);
+  assert.equal(pathInsideCwd(CWD, '../../etc/hosts'), null);
+});
+
+test('pathInsideCwd rejects an absolute path outside cwd', () => {
+  assert.equal(pathInsideCwd(CWD, path.resolve('/etc/passwd')), null);
+});
+
+test('pathInsideCwd rejects cwd itself (no file to diff)', () => {
+  assert.equal(pathInsideCwd(CWD, '.'), null);
+});
+
+test('pathInsideCwd rejects empty or missing arguments', () => {
+  assert.equal(pathInsideCwd('', 'x'), null);
+  assert.equal(pathInsideCwd(CWD, ''), null);
+  assert.equal(pathInsideCwd(CWD, undefined), null);
+  assert.equal(pathInsideCwd(undefined, 'x'), null);
 });

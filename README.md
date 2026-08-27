@@ -29,7 +29,9 @@ injects prompts or touches the `claude` binary.
 > cues + a Web Audio keystroke engine, degrades silently), and opt-in **OS
 > notifications** (busy→idle, 85% context) that focus the window and jump to the
 > right tab when clicked — plus a taskbar flash on the same busy→idle edge
-> whenever the window is unfocused.
+> whenever the window is unfocused, and **clickable `file:line` links in the
+> terminal** (click `src/foo.js:123` → opens in `code -g` / `$EDITOR`, with the
+> path validated against that session's own project root, no network).
 
 ---
 
@@ -75,6 +77,7 @@ the complete list — all of it verifiable in the linked source.
 | *(no file)* — node's own `os` module | Total/free RAM, per-core CPU tick counters, uptime, every 2 s, for the System widget. No file, no shell command, no process list — LunaCore can tell you the machine is at 80% RAM, never **what** is using it. Off switch: `ENABLE_TELEMETRY = false` in [`src/main.js`](src/main.js). | [`src/telemetry.js`](src/telemetry.js) |
 | *(no file)* — `Get-Counter` via `powershell.exe` | GPU usage for the System widget, every 3 s. Windows-only, vendor-agnostic: the same DXGI "GPU Engine" counters Task Manager's own GPU column reads — no NVIDIA/AMD SDK. Resolves `null` (row shows `--`) off Windows or if the counter is unavailable. | [`src/gpu.js`](src/gpu.js) |
 | Whatever paths the Active-Files Heatmap is currently tracking | `fs.existsSync` per file, every ~5 s, so a file deleted outside an Edit/Write (e.g. a terminal `rm`) shows as **deleted** instead of silently keeping its last diff stat. The renderer has no `fs` access itself (context isolation) — this is a narrow, read-only IPC round trip, not a directory scan. | [`src/main.js`](src/main.js) (`files:check-exist`) |
+| One file in the Active-Files Heatmap, **only when you click its row** | Clicking a changed or deleted row opens a read-only modal with that file's accumulated `git diff HEAD` — the diff behind the `+`/`-` numbers. One local `git diff` (disk read, zero tokens, no PTY write, no watcher), path-checked to stay inside the session's own repo. | [`src/main.js`](src/main.js) (`files:diff`) |
 | *(no file)* — the **system clipboard** — **OFF by default, opt-in** | The Clipboard widget's history. This is the only thing in this table LunaCore does **not** read unless you switch it on, and the reason is that it is the only one that would see things you never showed it — anything you copy anywhere on the machine, password managers included. Unchecked, the watcher is not running at all, not merely hidden. Checked, it polls `clipboard.readText()` every 1.2 s and keeps the last 20 text clips (clips over 4000 characters are skipped entirely). Pref: `clipboardEnabled` in `ui.local.json`. | [`src/clipboard.js`](src/clipboard.js) |
 | *(no file)* — the default **microphone's** mute flag via `powershell.exe` | The Devices widget reads whether your mic is muted — on mount, after you press the button, and when you press refresh. **No poller**, and nothing here can hear anything: it is the same Core Audio endpoint property Windows' own mic-mute key sets, not an audio stream. Mute is used precisely because it is reversible and readable; LunaCore never *disables* a device. | [`src/devices.js`](src/devices.js) |
 
@@ -198,7 +201,7 @@ the two categories above: there is no model or network involved at all.
 | Passive Observer (terminal) | `session.proc.onData` → IPC `pty:data` `{sessionId, data}` → that tab's `xterm.write()` |
 | Passive Observer (Skill Tracker) | `TranscriptWatcher` → `toolEventsFromLines()` + `foldToolEvents()` pair each `tool_use` id with the `tool_result` that closes it → IPC `metrics:tools` `{events:[{phase,id,tile,at}]}` → `skilltracker.js` sweeps a tile for the tool's **real duration**. The old `detectTools()` stdout scan (ANSI strip + `Name(` regex) stays as a backstop — it broke silently when the TUI changed how it renders a tool call — and still sends the flat `{tiles}` blink. |
 | Passive Observer (Context %) | per-session `TranscriptWatcher` tails **one pinned** `~/.claude/projects/<cwd>/<session>.jsonl` → real `usage` tokens → IPC `metrics:context` → that tab's bar |
-| Passive Observer (Active-Files Heatmap) | rides the **same** `metrics:tools` events as the Skill Tracker (widened with `input.file_path` + the CLI's own `structuredPatch` diff stat) → `activefiles.js` folds `start`/`end` into per-file `+`/`-` counts and a live pulse. Two self-heal sweeps on its own 5 s timer: `clearStaleInProgress()` (a pulse can't outlive `MAX_LIVE_MS`) and `refreshDeleted()` (IPC `files:check-exist` → `fs.existsSync`, flags a row `.is-deleted` if the file is gone) |
+| Passive Observer (Active-Files Heatmap) | rides the **same** `metrics:tools` events as the Skill Tracker (widened with `input.file_path` + the CLI's own `structuredPatch` diff stat) → `activefiles.js` folds `start`/`end` into per-file `+`/`-` counts and a live pulse. Two self-heal sweeps on its own 5 s timer: `clearStaleInProgress()` (a pulse can't outlive `MAX_LIVE_MS`) and `refreshDeleted()` (IPC `files:check-exist` → `fs.existsSync`, flags a row `.is-deleted` if the file is gone). Clicking a changed or deleted row → IPC `files:diff` → read-only `git diff HEAD` modal (local read, zero tokens, path-checked inside the session's repo) |
 | Project add (button) | "+" next to the Project switcher → IPC `projects:pick-folder` (native OS dialog, main process) → IPC `projects:add` (writes `config/projects.local.json`) → switcher re-renders and immediately restarts the active tab into the new folder |
 | Session control | `sessions:create` / `:close` / `:activate` → main owns the `sessions` Map → broadcast `sessions:update` → tab bar rebuilds |
 | Action Injector (keyboard) | `xterm.onData` → IPC `pty:write` → `ptyProcess.write()` |
@@ -211,6 +214,7 @@ the two categories above: there is no model or network involved at all.
 | Settings overlay (Ctrl+L) | Ctrl+L / chip overlay (`termcustom.js`) → `getUiPrefs()`/`setUiPrefs()` (same `ui:get`/`ui:set` channel above). Two sections: **terminal appearance** — 10 `term*` keys, global not per-tab → `applyTerminalAppearance()` sets `term.options.*` on every tab (font/cursor/scrollback; needs `allowTransparency: true` at construction or alpha is ignored), composes background opacity into `theme.background`, writes CSS var `--term-blur` for the `backdrop-filter` on `.terminal__pane`, and a custom background image (`termBgImage`, a `data:` URI — CSP's `img-src` allows nothing else — via the new IPC `termcustom:pickBgImage`, which opens a native file dialog and reads the file **in main**, renderer never touches fs); and **sound & startup** — the sound toggle/volume/keystroke-variant/"all done"-minutes/read-output controls and the boot-sequence toggle, moved here from the left `appearance` panel (2026-08-13) to declutter it |
 | Boot sequence | renderer-only overlay: CSS drives every pixel of motion, JS only stamps `animation-delay` on the log rows and removes the node. No IPC, no PTY, no tokens |
 | Sound/voice feedback | UI event → `sfx.*()`/`voice.*()` (renderer, throttled) → IPC `sound:play` `{key, opts}` → `resolveSoundFile()` (`config/sounds.json`) → `soundManager.play()` (persistent `mpv --idle` process, JSON IPC socket) |
+| Clickable `file:line` links | `registerLinkProvider` (`termlinks.js`, `parseFileLinks()`) detects `src/foo.js:123` tokens per line → click → IPC `editor:open` `{sessionId, file, line, col}` → main runs `resolveInRoot(session.cwd, file)` (rejects `..`, absolute-outside, NUL, non-file) → `buildEditorInvocation()` (`config/editor.json`: `command` + `args` with `{file}`/`{line}`/`{col}`, or `""` → `$VISUAL`/`$EDITOR` `+line`) → `spawn(cmd, args, {shell:false, detached})`. No PTY write, no network |
 
 The Context Window % divides live `usage` tokens by the window
 [`src/models.js`](src/models.js) reports for the detected model — **not** a fixed
@@ -341,6 +345,7 @@ Luna-Core-HUD/
 │   ├── themes.json        # visual themes (themes.local.json overrides, gitignored)
 │   ├── rates.json         # per-model token prices for the cost HUD (rates.local.json overrides)
 │   ├── sounds.json        # sfx/voice event → file + volume (keystroke: 4-way variant list)
+│   ├── editor.json        # editor for clicked file:line links ({file}/{line}/{col}; editor.local.json overrides)
 │   ├── ui.local.json      # persisted theme + language + boot + last profile + sound prefs (gitignored)
 │   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
 ├── helpers/sounds/        # bundled audio: sfx/*.wav (placeholders), voice/*.mp3 (real, Edge-TTS)
@@ -723,6 +728,12 @@ exact text the CLI placed in the window. That beats the file's size on disk in
 the two cases that matter: a partial read (`offset` + `limit`) charges only the
 slice actually pasted, and **a file read three times charges three times**,
 which is the truth and usually the surprise.
+
+Clicking a **changed or deleted** row opens a read-only modal with that file's
+accumulated `git diff HEAD` — the diff behind those `+`/`-` numbers. It is one
+local `git diff` (disk read, zero tokens, no PTY write), fetched only on the
+click and path-checked to stay inside the session's own repo. Pure read-only
+rows aren't clickable — there is no diff to show.
 
 > **Only a Read counts.** A Write's `content` is what the *model* produced, so
 > it was output tokens, not context weight. An Edit's result is a short

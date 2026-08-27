@@ -36,7 +36,10 @@ const { countLines } = require('./filestat');
 const STATUS_TIMEOUT_MS = 8000;
 const DIFF_TIMEOUT_MS = 8000;
 
-/** Runs git in `dir`. Resolves { ok, stdout } - never rejects, same shape as gitstation.js's helper. */
+/** Runs git in `dir`. Resolves { ok, stdout } - never rejects, same shape as gitstation.js's helper.
+ *  Exported so main.js's `files:diff` handler runs `git diff HEAD -- <file>`
+ *  through the exact same spawn path this watcher uses (no second way to
+ *  shell out to git). */
 function git(dir, args, timeout = STATUS_TIMEOUT_MS) {
   return new Promise((resolve) => {
     execFile(
@@ -125,6 +128,27 @@ function parseNumstat(stdout) {
     });
   }
   return out;
+}
+
+/**
+ * Containment guard for the `files:diff` viewer. `file` is renderer-supplied,
+ * so it is resolved against the session's own `cwd` and only accepted when it
+ * stays INSIDE that directory - the handler must never diff an arbitrary path
+ * off the session's repo.
+ *
+ * Returns the repo-relative path (what `git diff -- <path>` should get, so a
+ * `..` never survives to the argv), or null when `file` resolves to cwd
+ * itself or anywhere outside it.
+ * @param {string} cwd absolute session directory
+ * @param {string} file renderer-supplied path (relative or absolute)
+ * @returns {string|null}
+ */
+function pathInsideCwd(cwd, file) {
+  if (typeof cwd !== 'string' || !cwd || typeof file !== 'string' || !file) return null;
+  const abs = path.resolve(cwd, file);
+  const rel = path.relative(cwd, abs);
+  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+  return rel;
 }
 
 /**
@@ -273,6 +297,8 @@ class GitFileWatcher {
 }
 
 module.exports = {
+  git,
+  pathInsideCwd,
   parseChangedPaths,
   parseNumstat,
   snapshotDirtyPaths,
