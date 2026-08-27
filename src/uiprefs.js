@@ -8,7 +8,7 @@
 // soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, notificationsEnabled,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
-// collapsed, layoutSizes.
+// collapsed, layoutSizes, widgetSlots.
 // The renderer
 // reads it at startup (ui:get) and writes on change (ui:set).
 //
@@ -134,10 +134,22 @@ const DEFAULTS = {
   // dragged that preset to. Per layout because the presets have different
   // column counts, and a width dragged in `classic` means nothing in `focus`.
   layoutSizes: {},
+  // C4 drag-a-widget-between-regions: layoutId -> { region -> [widgetId] }, the
+  // arrangement the user dragged that preset into. Per layout for the same
+  // reason as layoutSizes - a preset's regions are its own. Merged back over
+  // the preset (and healed) by renderer/modules/widgetarrange.js; `terminal` is
+  // never stored here. Empty = every preset in its authored arrangement.
+  widgetSlots: {},
 };
 
 const MAX_COLLAPSED = 64;
 const MAX_LAYOUT_SIZES = 32;
+// A layout has a handful of regions and a few dozen widgets; these caps only
+// exist so a hand-edited or corrupt file cannot make the renderer chew on a
+// pathological structure.
+const MAX_ARRANGED_LAYOUTS = 32;
+const MAX_ARRANGE_REGIONS = 16;
+const MAX_ARRANGE_IDS = 64;
 
 /**
  * Shape check for a stored columns string. Deliberately coarse: this is the
@@ -167,6 +179,44 @@ function cleanLayoutSizes(raw) {
     if (!id || id.length > 64 || !isColumnsish(cols)) continue;
     out[id] = cols;
     if (Object.keys(out).length >= MAX_LAYOUT_SIZES) break;
+  }
+  return out;
+}
+
+function isIdish(v) {
+  return typeof v === 'string' && v.length > 0 && v.length <= 64;
+}
+
+/**
+ * Sanitizes a stored C4 arrangement: { layoutId -> { region -> [widgetId] } }.
+ * Same reject-don't-repair boundary as the rest of this file - a garbage entry
+ * is dropped, not patched. widgetarrange.js re-validates against the live
+ * preset on top of this (an id the preset no longer places is filtered there),
+ * so this pass only has to guarantee shape and bound size.
+ */
+function cleanWidgetSlots(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...DEFAULTS.widgetSlots };
+  const out = {};
+  for (const [layoutId, regions] of Object.entries(raw)) {
+    if (!isIdish(layoutId) || !regions || typeof regions !== 'object' || Array.isArray(regions)) {
+      continue;
+    }
+    const cleanRegions = {};
+    const seen = new Set();
+    for (const [region, ids] of Object.entries(regions)) {
+      if (!isIdish(region) || !Array.isArray(ids)) continue;
+      const list = [];
+      for (const id of ids) {
+        if (!isIdish(id) || seen.has(id)) continue;
+        seen.add(id);
+        list.push(id);
+        if (list.length >= MAX_ARRANGE_IDS) break;
+      }
+      if (list.length) cleanRegions[region] = list;
+      if (Object.keys(cleanRegions).length >= MAX_ARRANGE_REGIONS) break;
+    }
+    if (Object.keys(cleanRegions).length) out[layoutId] = cleanRegions;
+    if (Object.keys(out).length >= MAX_ARRANGED_LAYOUTS) break;
   }
   return out;
 }
@@ -254,9 +304,11 @@ function readUiPrefs() {
         typeof obj.notificationsEnabled === 'boolean'
           ? obj.notificationsEnabled
           : DEFAULTS.notificationsEnabled,
-      // Missing keys => nothing folded, every preset at its authored widths.
+      // Missing keys => nothing folded, every preset at its authored widths and
+      // authored arrangement.
       collapsed: cleanCollapsed(obj.collapsed),
       layoutSizes: cleanLayoutSizes(obj.layoutSizes),
+      widgetSlots: cleanWidgetSlots(obj.widgetSlots),
       ...clampTermPrefs(obj),
     };
   } catch {
@@ -271,7 +323,8 @@ function readUiPrefs() {
  *   soundVolume?, soundKeystrokeVariant?, soundLongTaskMinutes?,
  *   soundReadOutputEnabled?, termFontFamily?, termFontSize?, termLineHeight?,
  *   termLetterSpacing?, termCursorStyle?, termCursorBlink?, termScrollback?,
- *   termBgOpacity?, termBgBlur?, termBgImage?, collapsed?, layoutSizes? }.
+ *   termBgOpacity?, termBgBlur?, termBgImage?, collapsed?, layoutSizes?,
+ *   widgetSlots? }.
  * @returns {object|null} the new state, or null if the write failed
  */
 function writeUiPrefs(partial) {
@@ -323,6 +376,9 @@ function writeUiPrefs(partial) {
     if (partial && partial.layoutSizes && typeof partial.layoutSizes === 'object') {
       next.layoutSizes = cleanLayoutSizes(partial.layoutSizes);
     }
+    if (partial && partial.widgetSlots && typeof partial.widgetSlots === 'object') {
+      next.widgetSlots = cleanWidgetSlots(partial.widgetSlots);
+    }
     // Only the term* keys actually present in `partial` should move; anything
     // omitted keeps its current (already-validated) value from `next` rather
     // than reverting to DEFAULTS - clampTermPrefs still re-validates the
@@ -354,4 +410,11 @@ function writeUiPrefs(partial) {
   }
 }
 
-module.exports = { readUiPrefs, writeUiPrefs, clampTermPrefs, cleanCollapsed, cleanLayoutSizes };
+module.exports = {
+  readUiPrefs,
+  writeUiPrefs,
+  clampTermPrefs,
+  cleanCollapsed,
+  cleanLayoutSizes,
+  cleanWidgetSlots,
+};

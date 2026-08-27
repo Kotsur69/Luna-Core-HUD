@@ -39,6 +39,7 @@ import {
 } from './host.js';
 import { fitAndResize } from './terminals.js';
 import { applyPanels } from './panels.js';
+import { slotsFor, applyWidgetArrange } from './widgetarrange.js';
 
 const appEl = document.querySelector('.app');
 const chromeEl = document.getElementById('app-chrome');
@@ -68,9 +69,12 @@ export function getActiveLayoutId() {
  */
 function planRegions(layout) {
   const plan = new Map();
+  // C4: the stored per-layout arrangement merged over the preset's slots. With
+  // no stored arrangement this is layout.slots unchanged.
+  const slots = slotsFor(layout);
   for (const region of layout.regionOrder) {
     const ids = [];
-    for (const id of layout.slots[region] || []) {
+    for (const id of slots[region] || []) {
       if (NESTED[id]) {
         console.warn(`layout "${layout.id}": "${id}" is nested in "${NESTED[id]}" - not placeable`);
         continue;
@@ -198,6 +202,11 @@ export function applyLayout(id) {
   // splitters on the grid lines. `.app` was emptied in step 4, so the previous
   // set of splitters is already gone.
   applyPanels(layout);
+
+  // C4: hang a drag grip on every movable widget title. After applyPanels() so
+  // the grip sits next to C2's fold chevron, and here rather than earlier
+  // because this is the first moment every widget is in its final region.
+  applyWidgetArrange(layout);
 
   // The terminal's box just changed size (or moved between grid areas); xterm
   // only re-measures when told to. Safe to do while the stagger is playing: the

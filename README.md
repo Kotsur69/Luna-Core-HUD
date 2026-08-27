@@ -79,7 +79,9 @@ the complete list — all of it verifiable in the linked source.
 | Running from a clone | the repo's own `config/` |
 
 - `ui.local.json` — theme, language, active profile, layout preset, boot toggle,
-  which panels you folded shut and any column widths you dragged
+  which panels you folded shut, any column widths you dragged, and any panels
+  you dragged into a different column (by their `⠿` title grip; double-click a
+  grip to put that preset's panels back)
   ([`src/uiprefs.js`](src/uiprefs.js))
 - `scratchpad.local.md` — whatever you typed into the scratchpad
   ([`src/scratchpad.js`](src/scratchpad.js))
@@ -937,7 +939,7 @@ reset countdown between polls. Set `ENABLE_USAGE_METER = false` at the top of
 [`src/main.js`](src/main.js) to disable the network call entirely (tile shows
 "off"). The bars animate via `transform: scaleX(var(--usage))` — no layout thrash.
 
-## Panels — folding and resizing
+## Panels — folding, resizing, rearranging
 
 **Click any panel title to fold it shut**, chevron and all; click again to open
 it. The whole title row is the handle, so controls that live in a title (the
@@ -958,11 +960,21 @@ a track the parser can't describe — gets no handle at all rather than a handle
 that does something surprising. Rows aren't resizable: presets stack regions by
 name, so a row border is rarely one continuous line to grab.
 
-Both are remembered in `ui.local.json`, widths per layout preset (a width
-dragged in `classic` means nothing in `focus`). Change a preset's column count
-in `config/layouts.json` and its saved widths are dropped rather than smeared
-across the wrong columns. See
-[`src/renderer/modules/panels.js`](src/renderer/modules/panels.js).
+**Drag a panel by the `⠿` grip in its title to move it** — to another column, or
+to a new spot in the same one. The other panels slide aside as you go and the
+dropped one drops into the gap they opened; nothing is torn down, so a panel
+carrying a live terminal keeps every running session intact across the move.
+`terminal` itself has no grip — it stays where the preset puts it. Double-click a
+grip to put that preset's panels back where it authored them.
+
+All three are remembered in `ui.local.json`, per layout preset (a width — or a
+position — set in `classic` means nothing in `focus`). Change a preset's columns
+or its widget list in `config/layouts.json` and the saved widths/arrangement are
+dropped rather than smeared across the wrong slots; a widget a newer build adds
+shows up in its authored region even over an older saved arrangement. See
+[`src/renderer/modules/panels.js`](src/renderer/modules/panels.js) (fold + resize)
+and [`src/renderer/modules/widgetarrange.js`](src/renderer/modules/widgetarrange.js)
+(move).
 
 ## Theming
 

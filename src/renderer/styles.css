@@ -2779,7 +2779,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    push the chevron away from its own title text. Keeping the label as the
    grower puts the space back where that rule wanted it - between the text and
    the control on the right - with the chevron pinned to the label. */
-.panel__title--fold.usage-head > span:not(.panel__fold):not(.count) { flex: 1; }
+.panel__title--fold.usage-head > span:not(.panel__fold):not(.panel__grip):not(.count) { flex: 1; }
 
 .panel__fold {
   flex: none;
@@ -2985,6 +2985,51 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    terminal, and no text anywhere may start selecting. */
 body.is-resizing { cursor: col-resize; user-select: none; }
 body.is-resizing .splitter { background: var(--glow); }
+
+/* ---- C4: drag a widget between regions -----------------------------------
+   The grip is a sibling of C2's fold chevron in the same title row. It is the
+   ONLY part of a widget that starts a move - grabbing the title itself would
+   fight the fold toggle panels.js wired on it - so it advertises that with its
+   own cursor and only lights up on title hover, the way the chevron does. */
+.panel__grip {
+  flex: none;
+  cursor: grab;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-sharp),
+    color var(--dur-fast) var(--ease-sharp);
+}
+.panel__title:hover .panel__grip,
+.panel__title--fold:hover .panel__grip { opacity: 0.6; }
+.panel__title .panel__grip:hover { opacity: 1; color: var(--neon-cyan); }
+
+/* The tile in flight. panels.js-style: position is set inline (fixed, following
+   the pointer), this rule only carries the look - lifted off the surface, its
+   own pointer events off so elementFromPoint() reads the region underneath. */
+.panel__section.is-arranging {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  margin: 0;
+  box-shadow: 0 12px 32px -8px var(--shadow-strong, rgba(0, 0, 0, 0.55));
+  opacity: 0.95;
+}
+
+/* The gap the tile will drop into, held open while the pointer hunts for a
+   slot. Same dashed-edge vocabulary as a focused splitter. */
+.panel__drop-placeholder {
+  border: var(--border-w) dashed var(--edge-glow);
+  border-radius: var(--radius);
+  background: var(--glow);
+  opacity: 0.5;
+}
+
+body.is-arranging { cursor: grabbing; user-select: none; }
+body.is-arranging .panel__grip { cursor: grabbing; }
 
 @media (prefers-reduced-motion: reduce) {
   .boot { display: none; }

@@ -81,6 +81,7 @@ import { busStats } from './modules/bus.js';
 // a list in this file - see modules/layout.js.
 import { initLayout, applyLayout, getLayouts, getActiveLayoutId } from './modules/layout.js';
 import { initPanels, initPanelResizeTracking } from './modules/panels.js';
+import { initWidgetArrange, initWidgetArrangeTracking } from './modules/widgetarrange.js';
 
 // ---- Startup ----------------------------------------------------------------
 //
@@ -118,6 +119,13 @@ import { initPanels, initPanelResizeTracking } from './modules/panels.js';
 // authored widths, then corrects itself a frame later.
 await initPanels();
 initPanelResizeTracking();
+
+// C4 before C1, same reason as C2: initLayout() ends by resolving each region's
+// widgets through slotsFor(), which needs the stored per-layout arrangement
+// already loaded - otherwise the first paint uses the preset order and then
+// re-shuffles a frame later.
+await initWidgetArrange();
+initWidgetArrangeTracking();
 
 await initLayout();
 

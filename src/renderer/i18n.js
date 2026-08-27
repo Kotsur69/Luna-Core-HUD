@@ -335,6 +335,8 @@ const I18N_DICT = {
 
     // C2 - panele skladane i rozciagane
     'panel.resize': 'Przeciagnij, aby zmienic szerokosc. Dwuklik przywraca ustawienie presetu.',
+    // C4 - przeciaganie panelu do innej kolumny
+    'panel.arrange': 'Przeciagnij, aby przeniesc panel do innej kolumny. Dwuklik przywraca uklad presetu.',
     'pad.saved': 'zapisano',
     'pad.saveError': 'blad zapisu',
     'palette.kind.action': 'AKCJA',
@@ -663,6 +665,8 @@ const I18N_DICT = {
 
     // C2 - collapsible + resizable panels
     'panel.resize': 'Drag to resize. Double-click to restore the preset width.',
+    // C4 - drag a panel to another column
+    'panel.arrange': 'Drag to move this panel to another column. Double-click to restore the preset layout.',
     'pad.saved': 'saved',
     'pad.saveError': 'save error',
     'palette.kind.action': 'ACTION',
