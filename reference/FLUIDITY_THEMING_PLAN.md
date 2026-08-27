@@ -13,6 +13,11 @@ Written because the work moves to a different machine and the work PC will be
 off for a week, so the session transcript on it is unreachable. Everything
 needed to pick this up cold is in this section, in the repo, on the branch.
 
+> **Start at [`RESUME.md`](RESUME.md)**, not here. That file is the operational
+> entry point — what to do first, how to run it, what to actually look at, and
+> the environment gotchas. This section is the design record: the locked
+> decisions and what each phase landed. Decisions live here and only here.
+
 ### Decisions already locked (do not re-ask)
 
 | Question | Answer |
