@@ -922,6 +922,26 @@
             <span class="switch__track"><span class="switch__thumb"></span></span>
           </span>
         </label>
+        <h3 class="termcustom__section" data-i18n="autocompact.settings.title">Auto-compact</h3>
+        <!-- Feature #4: the arm TOGGLE itself stays a left-panel widget (Actions,
+             next to the physical COMPACT button); this only picks WHAT an armed
+             auto-compact watches. Wiring: autocompact.js mountAutoCompactSettings(). -->
+        <label class="ui-field" data-i18n-title="autocompact.settings.hint" title="Wybierz, co wyzwala auto-compact, gdy jest uzbrojony.">
+          <span class="ui-field__label" data-i18n="autocompact.settings.mode">Wyzwalacz</span>
+          <select id="autocompact-mode" class="profile-select">
+            <option value="context" data-i18n="autocompact.mode.context">Prog 85% kontekstu</option>
+            <option value="turns" data-i18n="autocompact.mode.turns">Co N tur</option>
+            <option value="time" data-i18n="autocompact.mode.time">Po N minutach</option>
+          </select>
+        </label>
+        <label id="autocompact-turns-field" class="ui-field" hidden>
+          <span class="ui-field__label" data-i18n="autocompact.settings.everyTurns">Liczba tur (N)</span>
+          <input type="number" id="autocompact-turns" min="1" max="999" step="1" />
+        </label>
+        <label id="autocompact-minutes-field" class="ui-field" hidden>
+          <span class="ui-field__label" data-i18n="autocompact.settings.afterMinutes">Minuty (N)</span>
+          <input type="number" id="autocompact-minutes" min="1" max="1440" step="1" />
+        </label>
       </div>
       <div class="termcustom__foot">
         <button type="button" id="termcustom-reset" class="termcustom__reset" data-i18n="termcustom.reset">Przywroc domyslne</button>

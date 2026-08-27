@@ -8,7 +8,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { clampTermPrefs, cleanCollapsed, cleanLayoutSizes } = require('../src/uiprefs.js');
+const {
+  clampTermPrefs,
+  clampAutoCompactPrefs,
+  cleanCollapsed,
+  cleanLayoutSizes,
+} = require('../src/uiprefs.js');
 const { loadLayouts } = require('../src/layouts.js');
 
 const DEFAULTS = {
@@ -112,6 +117,60 @@ test('termBgImage: only a data:image/ string, otherwise null (CSP img-src)', () 
     clampTermPrefs({ termBgImage: 'data:image/png;base64,AAAA' }).termBgImage,
     'data:image/png;base64,AAAA'
   );
+});
+
+// ---- Feature #4: auto-compact trigger mode --------------------------------
+//
+// Same reject-and-repair boundary as clampTermPrefs: an out-of-range number
+// clamps into range, a non-number falls back to its default, every field
+// independent. The arm TOGGLE is not here - it stays per-session.
+
+const AC_DEFAULTS = {
+  autoCompactMode: 'context',
+  autoCompactEveryTurns: 20,
+  autoCompactAfterMinutes: 30,
+};
+
+test('clampAutoCompactPrefs: a missing/bad input object -> pure DEFAULTS', () => {
+  for (const bad of [null, undefined, 42, 'x', []]) {
+    assert.deepEqual(clampAutoCompactPrefs(bad), AC_DEFAULTS);
+  }
+});
+
+test('clampAutoCompactPrefs: an empty object -> pure DEFAULTS', () => {
+  assert.deepEqual(clampAutoCompactPrefs({}), AC_DEFAULTS);
+});
+
+test('clampAutoCompactPrefs: valid values pass through unchanged', () => {
+  const raw = {
+    autoCompactMode: 'turns',
+    autoCompactEveryTurns: 12,
+    autoCompactAfterMinutes: 45,
+  };
+  assert.deepEqual(clampAutoCompactPrefs(raw), raw);
+});
+
+test('clampAutoCompactPrefs: mode must be context/turns/time, else context', () => {
+  assert.equal(clampAutoCompactPrefs({ autoCompactMode: 'time' }).autoCompactMode, 'time');
+  assert.equal(clampAutoCompactPrefs({ autoCompactMode: 'nonsense' }).autoCompactMode, 'context');
+  assert.equal(clampAutoCompactPrefs({ autoCompactMode: 7 }).autoCompactMode, 'context');
+});
+
+test('clampAutoCompactPrefs: everyTurns clamps to 1..999, rounds, rejects non-numbers', () => {
+  assert.equal(clampAutoCompactPrefs({ autoCompactEveryTurns: 0 }).autoCompactEveryTurns, 1);
+  assert.equal(clampAutoCompactPrefs({ autoCompactEveryTurns: -5 }).autoCompactEveryTurns, 1);
+  assert.equal(clampAutoCompactPrefs({ autoCompactEveryTurns: 5000 }).autoCompactEveryTurns, 999);
+  assert.equal(clampAutoCompactPrefs({ autoCompactEveryTurns: 12.7 }).autoCompactEveryTurns, 13);
+  assert.equal(clampAutoCompactPrefs({ autoCompactEveryTurns: 'lots' }).autoCompactEveryTurns, 20);
+});
+
+test('clampAutoCompactPrefs: afterMinutes clamps to 1..1440, rounds, rejects non-numbers', () => {
+  assert.equal(clampAutoCompactPrefs({ autoCompactAfterMinutes: 0 }).autoCompactAfterMinutes, 1);
+  assert.equal(clampAutoCompactPrefs({ autoCompactAfterMinutes: 99999 }).autoCompactAfterMinutes, 1440);
+  assert.equal(clampAutoCompactPrefs({ autoCompactAfterMinutes: 30.4 }).autoCompactAfterMinutes, 30);
+  // Matches clampTermPrefs' precedent: Number('soon') is NaN -> fall back; a
+  // numeric-ish value clamps instead (readUiPrefs also type-guards the key).
+  assert.equal(clampAutoCompactPrefs({ autoCompactAfterMinutes: 'soon' }).autoCompactAfterMinutes, 30);
 });
 
 // ---- C2: collapsed / layoutSizes -------------------------------------------

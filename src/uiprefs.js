@@ -6,6 +6,7 @@
 // { theme, lang, boot, profile, layout, hideSystemPorts, soundEnabled,
 // voiceEnabled, voiceDuckingEnabled,
 // soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, notificationsEnabled,
+// autoCompactMode, autoCompactEveryTurns, autoCompactAfterMinutes,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
 // collapsed, layoutSizes, widgetSlots.
@@ -31,6 +32,12 @@ const file = () => paths.local('ui.local.json');
 const LANGS = ['pl', 'en'];
 const KEYSTROKE_VARIANT_IDS = ['mechanical', 'soft', 'scifi', 'typewriter'];
 const TERM_CURSOR_STYLES = ['block', 'underline', 'bar'];
+// Feature #4: what an ARMED auto-compact watches. 'context' = the original 85%
+// context-window threshold; 'turns' = every N completed turns on the active
+// tab; 'time' = N minutes since the last compact, gated by context also being
+// past 60%. The arm TOGGLE itself is per-session (autocompact.js module state),
+// never persisted - only the mode + its N/M live here.
+const AUTO_COMPACT_MODES = ['context', 'turns', 'time'];
 
 function clampVolume(v) {
   const n = Number(v);
@@ -113,6 +120,14 @@ const DEFAULTS = {
   // default, same reasoning as soundReadOutputEnabled above: an unexpected
   // desktop popup is a worse surprise than a quiet HUD, so this is opt-in.
   notificationsEnabled: false,
+  // Feature #4: which signal an ARMED auto-compact fires on. 'context' = the
+  // original 85% context-window threshold; 'turns' = every N completed turns on
+  // the active tab; 'time' = N minutes since the last compact, but only once
+  // context is also past 60% so a near-empty idle session is left alone. The
+  // arm toggle itself stays per-session (autocompact.js), not stored here.
+  autoCompactMode: 'context',
+  autoCompactEveryTurns: 20,
+  autoCompactAfterMinutes: 30,
   // C2 collapsible panels: ids of the widgets whose section is folded shut.
   // A list rather than a map of booleans so an id that no longer exists simply
   // stops matching anything instead of accumulating dead `false` entries.
@@ -256,6 +271,35 @@ function clampTermPrefs(raw) {
   };
 }
 
+/**
+ * Sanitizes the Feature #4 auto-compact trigger trio from a raw object (parsed
+ * JSON, or a partial write payload). Every field is validated independently and
+ * an out-of-range number clamps into range while a non-number falls back to its
+ * default - same reject-and-repair boundary as clampTermPrefs above.
+ * @returns {{autoCompactMode: string, autoCompactEveryTurns: number, autoCompactAfterMinutes: number}}
+ */
+function clampAutoCompactPrefs(raw) {
+  const obj = raw && typeof raw === 'object' ? raw : {};
+  const intIn = (v, min, max, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
+  };
+  return {
+    autoCompactMode: AUTO_COMPACT_MODES.includes(obj.autoCompactMode)
+      ? obj.autoCompactMode
+      : DEFAULTS.autoCompactMode,
+    // 1..999 turns and 1..1440 minutes (a day): below 1 is meaningless (fire
+    // every turn / every tick), above the cap is a hand-edit or a fat-finger.
+    autoCompactEveryTurns: intIn(obj.autoCompactEveryTurns, 1, 999, DEFAULTS.autoCompactEveryTurns),
+    autoCompactAfterMinutes: intIn(
+      obj.autoCompactAfterMinutes,
+      1,
+      1440,
+      DEFAULTS.autoCompactAfterMinutes
+    ),
+  };
+}
+
 /** Reads UI preferences; a missing or corrupt file falls back to DEFAULTS. */
 function readUiPrefs() {
   try {
@@ -309,6 +353,7 @@ function readUiPrefs() {
       collapsed: cleanCollapsed(obj.collapsed),
       layoutSizes: cleanLayoutSizes(obj.layoutSizes),
       widgetSlots: cleanWidgetSlots(obj.widgetSlots),
+      ...clampAutoCompactPrefs(obj),
       ...clampTermPrefs(obj),
     };
   } catch {
@@ -321,7 +366,8 @@ function readUiPrefs() {
  * { theme?, lang?, boot?, profile?, layout?, hideSystemPorts?, soundEnabled?,
  *   voiceEnabled?, voiceDuckingEnabled?,
  *   soundVolume?, soundKeystrokeVariant?, soundLongTaskMinutes?,
- *   soundReadOutputEnabled?, termFontFamily?, termFontSize?, termLineHeight?,
+ *   soundReadOutputEnabled?, autoCompactMode?, autoCompactEveryTurns?,
+ *   autoCompactAfterMinutes?, termFontFamily?, termFontSize?, termLineHeight?,
  *   termLetterSpacing?, termCursorStyle?, termCursorBlink?, termScrollback?,
  *   termBgOpacity?, termBgBlur?, termBgImage?, collapsed?, layoutSizes?,
  *   widgetSlots? }.
@@ -366,6 +412,22 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.notificationsEnabled === 'boolean') {
       next.notificationsEnabled = partial.notificationsEnabled;
+    }
+    // Feature #4: merge only the auto-compact keys actually present, then
+    // re-validate the trio as a unit (same shape as the term* block below) -
+    // `next` already holds validated values, so a garbage `partial` field can't
+    // corrupt the file and an omitted one keeps its current value.
+    const AC_KEYS = ['autoCompactMode', 'autoCompactEveryTurns', 'autoCompactAfterMinutes'];
+    if (partial && AC_KEYS.some((k) => k in partial)) {
+      const merged = {
+        autoCompactMode: next.autoCompactMode,
+        autoCompactEveryTurns: next.autoCompactEveryTurns,
+        autoCompactAfterMinutes: next.autoCompactAfterMinutes,
+      };
+      for (const key of AC_KEYS) {
+        if (key in partial) merged[key] = partial[key];
+      }
+      Object.assign(next, clampAutoCompactPrefs(merged));
     }
     // Both are sent WHOLE, not merged per entry: the renderer holds the live
     // set/map and writes all of it. Merging here instead would make an unfolded
@@ -414,6 +476,7 @@ module.exports = {
   readUiPrefs,
   writeUiPrefs,
   clampTermPrefs,
+  clampAutoCompactPrefs,
   cleanCollapsed,
   cleanLayoutSizes,
   cleanWidgetSlots,

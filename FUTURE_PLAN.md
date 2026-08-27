@@ -11,7 +11,7 @@ the six lessons the conversions have cost so far.
 | **Shipped** | Phases 1–4, the whole §5.5 shortlist, **Phase B 8/8**, **Phase A 5/5 DONE** (A1 renderer split, A2 contract + **13/13 conversions**, A3 tests, A4, A5), full **PL/EN localization of `config/*.json`** (schema in README → *Language*), **C1 (layout presets) DONE** — 4 presets, switchable live — and **C2 (fold + resize panels) DONE** — every widget title folds (persisted per widget id in `ui.local.json`), and the region borders drag to re-column any preset (persisted per layout id); 35 tests, shipped 2026-08-17 (`0749717`), interaction layer hardened 2026-08-19 (`43dbecf`) — and **C3 (theme vocabulary + motion) DONE** — 45 tokens, 9 themes, 2 bundled faces — and **D0–D3 DONE**: config relocation, **a real NSIS installer + portable .exe**, LUNA/CORE icon, honest degradation — **D4–D6 DONE**: release hygiene, `v0.9.0` public, notify-and-click auto-update, **Electron 33 → 43 (`npm audit` clean)** — and **E1/E3 DONE**: machine telemetry widget, threshold pulse, pane fade-in — and **sound & voice feedback DONE** (mpv sfx cues, all triggers incl. task-complete/approval-prompt/startup-greeting, offline-SAPI read-output-aloud — tracked separately in [`SOUNDS_IMPLEMENTATION_PLAN.md`](SOUNDS_IMPLEMENTATION_PLAN.md), not duplicated here) — and **Ctrl+L "Ustawienia" (Settings overlay) DONE
 2026-08-13**: started as the Terminal Appearance Customizer
 ([`TERMINAL_CUSTOMIZER_PLAN.md`](reference/TERMINAL_CUSTOMIZER_PLAN.md), from
-`LUNA_HUD_SPECIFICATION.md` §6.6), grew into a general Settings overlay from
+`LUNA_HUD_SPECIFICATION.md` §6.5), grew into a general Settings overlay from
 Mati's live feedback — see that plan's **§1 and §3 for the full list** (all 9
 terminal knobs incl. a custom background image; sound + boot-sequence moved
 out of the left panel to declutter it; a real `allowTransparency` bug found
@@ -100,7 +100,7 @@ verified against a real MCP call in the wild (Mati's own MCP usage is rare
 `npm test`. |
 | **In flight** | **Phase E** — E1 (telemetry widget) and E3 (the two motions C1c deferred) are **DONE 2026-08-09**; **E2/C2 (fold + resize panels) DONE 2026-08-17** (see the Shipped row); **E4/C4 (drag a widget tile between regions) is the one remaining panel-engine piece** — still deferred. Phase D is CLOSED, `v0.9.0` is public, and **`v0.9.1` is now also public** — [releases/tag/v0.9.1](https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.9.1). It carries everything that had landed on `main` since `v0.9.0` with nothing shipped: the sound/voice work, the Settings overlay, the `LUNA_HUD_SPECIFICATION.md` v2.0.0 rewrite, the Active-Files Heatmap, multi-repo project switching, the GPU widget, the D5 chip relocation, and the Electron 33→43 security fixes D5a flagged (§D5a: *"only a released `v0.9.1` actually delivers the fix"*). **D5 (auto-update) verified end-to-end**: an installed build discovers and applies an update going *from* `v0.9.1` onward. Updating *from* `v0.9.0` does not currently work — known, not blocking, not being chased. **Whole-app OS-level window transparency was requested by Mati and explicitly deferred** (not started) — see `reference/TERMINAL_CUSTOMIZER_PLAN.md` §4 for why (frameless-window + custom titlebar, window-recreation-on-toggle, 9-theme token rework — a project of its own). |
 | **§D2a checks** | ✅ **PASSED 2026-08-09** — Mati: *"yes everything spawns."* The terminal launches a real `claude` session from the installed build (checked against Electron **33**; §D6a flags that a redo under **43** is still owed — cheap, and belongs in the next pre-flight per §D6a). |
-| **Next action** | The MCP debugger's safe half is **shipped, hand-verified 2026-08-27** — `reference/MCP_DEBUGGER_PLAN.md` §6's checklist walked end to end against a real `codebase-memory-mcp` call (pulse, inspector row, modal pretty-print, failure badge, truncation notice, background-tab, PL/EN); no longer a pending item, and the failure-injector/restart piece stays deferred. Typing Synth **shipped 2026-08-26** (see [`reference/TYPING_SYNTH_PLAN.md`](reference/TYPING_SYNTH_PLAN.md)'s "Resolved" section). Auto-proceed itself is still unverified against a real connection drop in the wild — that's the actual test, not `npm test`. Otherwise: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (voice ducking now that Media Deck's volume primitive exists, RGB sync, multi-agent visualizer, …), or **E4/C4 drag-drop** (move a widget tile between regions — E2/C2 fold + resize is already shipped), or §9 multi-model. Redoing the §D2a eyes-only spawn check against the packaged Electron 43 build (never done — the original PASSED was against 33) is cheap and still owed whenever convenient. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
+| **Next action** | The MCP debugger's safe half is **shipped, hand-verified 2026-08-27** — `reference/MCP_DEBUGGER_PLAN.md` §6's checklist walked end to end against a real `codebase-memory-mcp` call (pulse, inspector row, modal pretty-print, failure badge, truncation notice, background-tab, PL/EN); no longer a pending item, and the failure-injector/restart piece stays deferred. Typing Synth **shipped 2026-08-26** (see [`reference/TYPING_SYNTH_PLAN.md`](reference/TYPING_SYNTH_PLAN.md)'s "Resolved" section). Auto-proceed itself is still unverified against a real connection drop in the wild — that's the actual test, not `npm test`. Otherwise: pick one of `LUNA_HUD_SPECIFICATION.md` §6's remaining scored module ideas (voice ducking now that Media Deck's volume primitive exists, multi-agent visualizer, …), or **E4/C4 drag-drop** (move a widget tile between regions — E2/C2 fold + resize is already shipped), or §9 multi-model. Redoing the §D2a eyes-only spawn check against the packaged Electron 43 build (never done — the original PASSED was against 33) is cheap and still owed whenever convenient. If Mati wants it, the whole-app transparency project (§10.7) is also still open as its own plan doc. |
 | **Direction changed 2026-08-05** | Mati: *"lets scratch the animations and templates work and lets proceed to make this as a working product … the fun stuff we can always make it later."* **C4 is deferred by decision, not blocked** (C2 was later un-deferred and shipped 2026-08-17). Target is a **public GitHub release**, **installer + portable**, **Windows now while keeping Linux/macOS possible**. |
 | **Branch** | `main` |
 
@@ -664,6 +664,18 @@ token-safe. Priority order roughly top-to-bottom.
   trigger with hysteresis (fires once at 0.85, re-arms only below 0.60) plus a
   60 s cooldown and a dead-session guard, so it can't loop. The compact itself
   costs tokens — expected, and only ever after you armed it.
+  - **Feature #4 (2026-08-27):** the armed toggle now has three *exclusive*
+    trigger modes, picked in the Settings overlay and persisted in
+    `ui.local.json` (`autoCompactMode` / `autoCompactEveryTurns` /
+    `autoCompactAfterMinutes`; the arm toggle itself stays per-session). `turns`
+    fires every N completed turns on the **active** tab (background turns never
+    count, same safety model as the threshold); `time` fires N minutes after the
+    last compact, but only once context is also past 60% so an idle near-empty
+    session is left alone. All three share the 60 s cooldown, the dead-session
+    guard, and a new "toggle must be on screen" guard. Four pure deciders
+    (`nextThresholdState` / `nextTurnState` / `nextTimeState` /
+    `canAutoCompactFire`), unit-covered in `test/autocompact.test.js`. Live
+    firing still wants a GUI hand-verification pass.
 - ✅ ~~**Token burn-rate sparkline.**~~ **BUILT 2026-07-22.** SVG sparkline of
   context % over time under the Context Window bar + tok/min + ETA to 85%, from a
   second `metrics:context` listener on the same `usage` samples (no new IPC,
@@ -986,6 +998,12 @@ real compact, and this refactor did not touch `maybeAutoCompact()`'s logic or th
 injector it calls. The hysteresis/cooldown arithmetic is unit-covered; what was
 *not* re-proven end-to-end is that the flash still paints on the remounted DOM.
 Cheap to fold into the next session that legitimately hits 85%.
+
+> **Update 2026-08-27 (Feature #4):** `maybeAutoCompact()` is gone — split into
+> `onContext()` plus the pure `nextThresholdState` / `nextTurnState` /
+> `nextTimeState` / `canAutoCompactFire` deciders (see §5.1's Feature #4 note).
+> The `context`-mode path is the same arithmetic; `turns` and `time` are new and
+> still owe the same live hand-verification.
 
 #### A2d — the three list builders (2026-08-03): renders that read state out of the DOM
 

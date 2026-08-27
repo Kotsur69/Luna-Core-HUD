@@ -20,6 +20,7 @@
 import { term, applyTerminalAppearance } from './terminals.js';
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
+import { mountAutoCompactSettings } from './autocompact.js';
 import { applyLang } from './appearance.js';
 import { sfx } from './sound.js';
 import {
@@ -388,6 +389,11 @@ export async function initTermcustomSettings() {
   // Notifications: same "static overlay, never unmounted" shape as boot above
   // - moved out of the widget registry entirely (2026-08-19), see notify.js.
   mountNotify(termcustomEl);
+
+  // Feature #4: the auto-compact trigger-mode picker (context / turns / time).
+  // Same static-overlay shape as mountNotify above - the arm toggle itself
+  // stays a left-panel widget (autocompact.js).
+  mountAutoCompactSettings(termcustomEl);
 }
 
 // Global Ctrl/Cmd+L (capture, to get ahead of xterm.js) - same tradeoff and

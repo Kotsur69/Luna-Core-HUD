@@ -14,7 +14,9 @@ injects prompts or touches the `claude` binary.
 > **working/waiting LED**, a local **scratchpad**, a **command palette (Ctrl+K)**,
 > a **token burn-rate sparkline**, an **18-theme** system with a **PL/EN language
 > switch**, a live **usage-limits gauge** (5-hour + weekly subscription windows),
-> an **armed auto-compact** toggle, a **CWD/project switcher** (native "add repo
+> an **armed auto-compact** toggle (trigger on the 85% context threshold, every
+> N turns, or N minutes since the last compact — picked in Settings), a
+> **CWD/project switcher** (native "add repo
 > folder" picker), a **cyberpunk boot sequence**, a **Skill Tracker that shows how
 > long each tool actually ran**, an **Active-Files Edit Heatmap** (real diff-stat
 > counts, live-edit pulse, deleted-file flag, **per-file context weight**), an
