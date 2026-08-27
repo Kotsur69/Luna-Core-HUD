@@ -792,6 +792,51 @@
             <option value="en">English</option>
           </select>
         </label>
+        <!-- v0.10 modifiers: four axes that multiply across every theme rather
+             than adding to them. They live here and not in the left rail because
+             that Appearance panel was deliberately slimmed to theme/layout/language
+             on 2026-08-13, and these are app-wide serving preferences - the same
+             category as Language above. Wiring: modules/termcustom.js -> modifiers.js,
+             which puts them on <html> as data-* attributes (never inline tokens,
+             which would collide with applyThemeVars). -->
+        <h3 class="termcustom__section" data-i18n="termcustom.section.interface">Interfejs</h3>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.density">Gestosc</span>
+          <select id="termcustom-density" class="profile-select">
+            <option value="comfortable" data-i18n="termcustom.density.comfortable">Przestronna</option>
+            <option value="cozy" data-i18n="termcustom.density.cozy">Zwykla</option>
+            <option value="compact" data-i18n="termcustom.density.compact">Kompaktowa</option>
+            <option value="dense" data-i18n="termcustom.density.dense">Gesta</option>
+          </select>
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.fontPack">Zestaw czcionek</span>
+          <select id="termcustom-font-pack" class="profile-select">
+            <option value="theme" data-i18n="termcustom.fontPack.theme">Wg motywu</option>
+            <option value="mono" data-i18n="termcustom.fontPack.mono">Monospace</option>
+            <option value="display" data-i18n="termcustom.fontPack.display">Techniczny</option>
+            <option value="system" data-i18n="termcustom.fontPack.system">Systemowy</option>
+          </select>
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="termcustom.glow">Poswiata</span>
+          <select id="termcustom-glow" class="profile-select">
+            <option value="full" data-i18n="termcustom.glow.full">Pelna</option>
+            <option value="reduced" data-i18n="termcustom.glow.reduced">Ograniczona</option>
+            <option value="off" data-i18n="termcustom.glow.off">Wylaczona</option>
+          </select>
+        </label>
+        <!-- The title spells out that the OS switch still wins: someone running
+             prefers-reduced-motion system-wide who picks "Pelne" here would
+             otherwise see nothing happen and have no way to find out why. -->
+        <label class="ui-field" data-i18n-title="termcustom.motion.hint" title="Wlasne ustawienie animacji. Systemowe ograniczenie ruchu (prefers-reduced-motion) ma pierwszenstwo i zawsze je wylaczy.">
+          <span class="ui-field__label" data-i18n="termcustom.motion">Animacje</span>
+          <select id="termcustom-motion" class="profile-select">
+            <option value="full" data-i18n="termcustom.motion.full">Pelne</option>
+            <option value="reduced" data-i18n="termcustom.motion.reduced">Ograniczone</option>
+            <option value="off" data-i18n="termcustom.motion.off">Wylaczone</option>
+          </select>
+        </label>
         <h3 class="termcustom__section" data-i18n="termcustom.section.appearance">Wyglad terminala</h3>
         <label class="ui-field">
           <span class="ui-field__label" data-i18n="termcustom.fontFamily">Czcionka</span>

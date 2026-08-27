@@ -22,6 +22,7 @@ import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
 import { mountAutoCompactSettings } from './autocompact.js';
 import { applyLang } from './appearance.js';
+import { MODIFIER_AXES, getModifiers, setModifier } from './modifiers.js';
 import { sfx } from './sound.js';
 import {
   setEnabled as setSynthEnabled,
@@ -36,6 +37,12 @@ const termcustomEl = document.getElementById('termcustom');
 const els = {
   // Moved from appearance.js's w-appearance template (2026-08-19).
   langSwitcher: document.getElementById('termcustom-lang-switcher'),
+  // v0.10 modifier axes. Keyed by MODIFIER_AXES[].key so the render and the
+  // listeners below can both walk the table instead of naming all four twice.
+  density: document.getElementById('termcustom-density'),
+  fontPack: document.getElementById('termcustom-font-pack'),
+  glow: document.getElementById('termcustom-glow'),
+  motion: document.getElementById('termcustom-motion'),
   fontFamily: document.getElementById('termcustom-font-family'),
   fontFamilyCustomField: document.getElementById('termcustom-font-family-custom-field'),
   fontFamilyCustom: document.getElementById('termcustom-font-family-custom'),
@@ -138,6 +145,21 @@ function renderBgImageStatus(termBgImage) {
   els.bgImageStatus.textContent = termBgImage ? t('termcustom.bgImage.set') : t('termcustom.bgImage.none');
 }
 
+/**
+ * Repaints the four modifier selects from modifiers.js's live state.
+ *
+ * From getModifiers(), never from a prefs object: modifiers.js already applied
+ * and normalized these at startup, and an axis can also move from the console.
+ * Reading its state is the only way the overlay cannot disagree with the screen.
+ */
+function renderModifiers() {
+  const mods = getModifiers();
+  for (const axis of MODIFIER_AXES) {
+    const el = els[axis.key];
+    if (el) el.value = mods[axis.key];
+  }
+}
+
 /** Repaints the language select from the live i18n state (appearance.js owns applying it). */
 function renderLangSwitcher() {
   els.langSwitcher.value = window.i18n.lang;
@@ -148,6 +170,7 @@ async function openTermcustom() {
   termcustomOpen = true;
   termcustomEl.hidden = false;
   renderLangSwitcher();
+  renderModifiers();
 
   let prefs = TERM_DEFAULTS;
   try {
@@ -175,6 +198,20 @@ els.langSwitcher.addEventListener('change', () => {
   applyLang(els.langSwitcher.value);
   window.lunacore.setUiPrefs({ lang: els.langSwitcher.value });
 });
+
+// -- Modifier axes (v0.10) ---------------------------------------------------
+// One loop rather than four near-identical handlers. setModifier() both applies
+// the attribute and persists the id, so there is nothing to do here but hand it
+// the value - and if it rejects one (an id no [data-*] block matches), repaint
+// from truth so the select cannot sit there showing something that never took.
+for (const axis of MODIFIER_AXES) {
+  const el = els[axis.key];
+  if (!el) continue;
+  el.addEventListener('change', () => {
+    sfx.modeToggle();
+    if (!setModifier(axis.key, el.value)) renderModifiers();
+  });
+}
 
 // -- Persistence: each control writes its own term* key on change -----------
 

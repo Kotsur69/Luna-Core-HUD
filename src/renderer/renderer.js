@@ -66,6 +66,7 @@ import './modules/gitquick.js';
 import { initProfiles, initProjects } from './modules/switchers.js';
 import { initPorts } from './modules/ports.js';
 import { initAppearance, getThemeIds, selectTheme } from './modules/appearance.js';
+import { initModifiers } from './modules/modifiers.js';
 import { initClaudeCheck } from './modules/claudecheck.js';
 // Diagnostics tile: consolidated self-checks (mpv, claude on PATH, MCP usage).
 // Self-registers as a widget on import; initDiagnostics() runs the first report.
@@ -138,6 +139,11 @@ initCheatsheets();
 initPrompts();
 initSkills();
 initPorts();
+// v0.10 modifiers BEFORE the theme, and the ordering is about paint, not
+// correctness: the two cannot collide (attributes vs. inline tokens), but
+// density moves every gap and font size in the HUD, so applying it after the
+// first paint would show a visible relayout on every single launch.
+await initModifiers();
 initAppearance();
 // After initAppearance(): boot's animation needs language + theme already
 // applied, same ordering constraint startBoot() has always documented.

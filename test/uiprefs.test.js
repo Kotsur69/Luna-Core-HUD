@@ -13,6 +13,7 @@ const {
   clampAutoCompactPrefs,
   cleanCollapsed,
   cleanLayoutSizes,
+  clampModifierPrefs,
 } = require('../src/uiprefs.js');
 const { loadLayouts } = require('../src/layouts.js');
 
@@ -244,4 +245,50 @@ test('cleanLayoutSizes: a non-object is an empty map', () => {
   for (const bad of [null, undefined, 'classic', 42, ['1fr']]) {
     assert.deepEqual(cleanLayoutSizes(bad), {});
   }
+});
+
+// ---- clampModifierPrefs (v0.10) -------------------------------------------
+// The four axes are a pure whitelist per axis, and deliberately the strictest
+// clamp in this file. An id that is not on the list has no [data-*] block in
+// styles.css to match, so letting one through would not produce a wrong look -
+// it would produce the DEFAULT look while the prefs file and the Settings
+// select both insist otherwise. Silent disagreement is the thing to block.
+
+const MOD_DEFAULTS = { density: 'cozy', fontPack: 'theme', glow: 'full', motion: 'full' };
+
+test('clampModifierPrefs: a missing/bad input object -> pure DEFAULTS', () => {
+  for (const bad of [null, undefined, 42, 'x', []]) {
+    assert.deepEqual(clampModifierPrefs(bad), MOD_DEFAULTS);
+  }
+});
+
+test('clampModifierPrefs: an empty object -> pure DEFAULTS', () => {
+  assert.deepEqual(clampModifierPrefs({}), MOD_DEFAULTS);
+});
+
+test('clampModifierPrefs: valid ids pass through unchanged', () => {
+  const raw = { density: 'dense', fontPack: 'mono', glow: 'off', motion: 'reduced' };
+  assert.deepEqual(clampModifierPrefs(raw), raw);
+});
+
+test('clampModifierPrefs: every default is the no-op value', () => {
+  // Not cosmetic: it is what makes an existing install render exactly as it did
+  // before v0.10, and what lets modifiers.js write no attribute at all.
+  assert.equal(MOD_DEFAULTS.density, 'cozy');
+  assert.equal(MOD_DEFAULTS.fontPack, 'theme');
+  assert.deepEqual(clampModifierPrefs({}), MOD_DEFAULTS);
+});
+
+test('clampModifierPrefs: an unknown id costs its own axis, not the others', () => {
+  const out = clampModifierPrefs({ density: 'ultra', fontPack: 'mono', glow: 'off' });
+  assert.equal(out.density, 'cozy');
+  assert.equal(out.fontPack, 'mono');
+  assert.equal(out.glow, 'off');
+  assert.equal(out.motion, 'full');
+});
+
+test('clampModifierPrefs: a value from the wrong axis is still rejected', () => {
+  // `dense` is a real id - just not one this axis has a block for.
+  assert.equal(clampModifierPrefs({ glow: 'dense' }).glow, 'full');
+  assert.equal(clampModifierPrefs({ density: 'off' }).density, 'cozy');
 });
