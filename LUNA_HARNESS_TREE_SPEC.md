@@ -115,9 +115,8 @@ A dedicated panel inside `Luna-Core-HUD` renders real-time status cards for each
 * **Step 3.1:** Create `internal/ui/widgets/harness_matrix.go` using Bubble Tea to render live status indicators and log streams for every sub-agent.
 * **Step 3.2:** Hook worker state updates into background tick updates (`200ms` refresh rate).
 
-### Phase 4: Expansion & Hardware Integrations (Future)
-* **Step 4.1 (Razer / MSI Hardware Lighting):** Hook build failure/success events into OpenRGB / Synapse APIs to trigger quick red/green flashes on system hardware.
-* **Step 4.2 (Voice Event Triggers):** Add voice notifications for harness events (e.g., *"Kimi completed UI component generation"*).
+### Phase 4: Expansion & Integrations (Future)
+* **Step 4.1 (Voice Event Triggers):** Add voice notifications for harness events (e.g., *"Kimi completed UI component generation"*).
 
 ---
 

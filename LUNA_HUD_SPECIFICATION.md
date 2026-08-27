@@ -264,14 +264,7 @@ transcript file? nested tool_use ids?), or would this require scraping
 something less stable? Don't commit to a build estimate until that's checked
 against a real multi-agent session's JSONL.
 
-### 6.5 RGB / Backlight Sync (OpenRGB) — Backlog, novelty
-Pulse keyboard/peripheral RGB with the working/waiting LED state via OpenRGB's
-local SDK/API. Zero-token compliant (pure local, no CLI data needed beyond
-what the LED already has), but it's a nice-to-have with a real dependency
-(OpenRGB installed and running) for a cosmetic payoff. Low priority — fine as
-a someday item, not worth scheduling.
-
-### 6.6 Terminal Appearance Customizer — Realistic, good fit, low complexity
+### 6.5 Terminal Appearance Customizer — Realistic, good fit, low complexity
 Extend the existing theme switcher rather than build a new subsystem:
 `@xterm/xterm` exposes live-settable `term.options` for font family/size, line
 height, letter spacing, cursor style/blink, and scrollback size, plus a CSS-layer
@@ -283,7 +276,7 @@ Appearance) is the whole scope. New prefs go in `uiprefs.js`'s `DEFAULTS`
 exactly like `soundReadOutputEnabled` did. No new data source, no IPC channel
 beyond what `ui:get`/`ui:set` already carries.
 
-### 6.7 Local-LLM Hybrid Router — Dropped
+### 6.6 Local-LLM Hybrid Router — Dropped
 The original idea (auto-route small/cheap tasks to a local Ollama/vLLM
 instance) fails §1's rule by construction: it's a background agent making a
 routing decision LunaCore itself would have to reason about, which is exactly

@@ -47,8 +47,6 @@ opens a read-only preview modal. See `LUNA_HUD_SPECIFICATION.md` §6.1.
 
 ## 5. Other ideas, not built
 
-- **RGB/backlight sync** — mirror HUD state (error/success/edit/compact)
-  to keyboard/desk LEDs via OpenRGB or similar hardware APIs.
 - **Local LLM fallback/hybrid router** — auto-route small tasks (line
   edits, formatting) to a local Ollama/vLLM instance under latency
   pressure. Overlaps with `FUTURE_PLAN.md` §9's multi-model backlog, which
