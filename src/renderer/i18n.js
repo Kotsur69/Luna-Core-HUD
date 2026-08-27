@@ -83,8 +83,8 @@ const I18N_DICT = {
     'boot.skip': 'klik lub dowolny klawisz = pomin',
 
     // Session tabs
-    'tabs.new': 'Nowa sesja',
-    'tabs.close': 'Zamknij sesje',
+    'tabs.new': 'Nowa sesja (Ctrl+T)',
+    'tabs.close': 'Zamknij sesje (Ctrl+W)',
     'boot.line.pty': 'mostek PTY',
     'boot.line.observer': 'pasywny obserwator',
     'boot.line.injector': 'wstrzykiwacz akcji',
@@ -413,8 +413,8 @@ const I18N_DICT = {
     'boot.skip': 'click or any key to skip',
 
     // Session tabs
-    'tabs.new': 'New session',
-    'tabs.close': 'Close session',
+    'tabs.new': 'New session (Ctrl+T)',
+    'tabs.close': 'Close session (Ctrl+W)',
     'boot.line.pty': 'PTY bridge',
     'boot.line.observer': 'passive observer',
     'boot.line.injector': 'action injector',

@@ -252,6 +252,18 @@ function broadcastSessions() {
 
 // ---- App window ---------------------------------------------------------
 
+/**
+ * Fires a UI sound cue by key (e.g. 'sfx.terminalNew'), the main-process
+ * equivalent of the renderer's sfx.* helpers. Missing key / disabled entry /
+ * missing asset all resolve to null and no-op, matching the 'sound:play' IPC
+ * handler's own degrade-gracefully behaviour.
+ */
+function playCue(key) {
+  if (!soundManager) return;
+  const resolved = resolveSoundFile(key);
+  if (resolved) soundManager.play(resolved.path);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -271,6 +283,30 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  // Browser-style terminal hotkeys: Ctrl/Cmd+T opens a new tab, Ctrl/Cmd+W
+  // closes the active one. Handled in main (not the renderer) so the same
+  // preventDefault() that stops the keystroke also swallows the default menu's
+  // Ctrl+W "Close window" accelerator - per Electron's docs, preventDefault on
+  // before-input-event blocks both the menu shortcut and the page event, which
+  // a renderer-side listener cannot do. isAutoRepeat is ignored so holding the
+  // chord does not spawn a burst of tabs. Trade-off: this shadows readline's
+  // Ctrl+W (delete-word) / Ctrl+T (transpose) inside the shell, same as a
+  // browser does.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.isAutoRepeat) return;
+    if (!(input.control || input.meta) || input.alt || input.shift) return;
+
+    if (input.code === 'KeyT') {
+      event.preventDefault();
+      createSession({});
+      playCue('sfx.terminalNew');
+    } else if (input.code === 'KeyW') {
+      event.preventDefault();
+      if (activeSessionId) closeSession(activeSessionId);
+      playCue('sfx.terminalClose');
+    }
+  });
 
   // A2: headless check of the widget contract, off unless asked for.
   if (process.argv.includes('--luna-probe')) {
