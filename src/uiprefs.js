@@ -4,6 +4,7 @@
 // Small persistent slice of interface state in config/ui.local.json (gitignored)
 // - like the scratchpad, a plain file rather than localStorage. Holds
 // { theme, lang, boot, profile, layout, hideSystemPorts, soundEnabled,
+// voiceEnabled, voiceDuckingEnabled,
 // soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, notificationsEnabled,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
@@ -69,6 +70,13 @@ const DEFAULTS = {
   // playing. Mati asked for this specifically - the two were previously one
   // shared on/off switch. Default true so existing installs stay unchanged.
   voiceEnabled: true,
+  // Auto-pause the now-playing media (Spotify, a browser tab, a podcast app -
+  // anything GSMTC controls) for the duration of the SAPI read-aloud
+  // narration, then resume it. Narration only. Default OFF: it reaches
+  // outside the HUD and moves another app's playback, so - like
+  // soundReadOutputEnabled and notificationsEnabled - it must be opted into,
+  // never a surprise. See src/voiceduck.js.
+  voiceDuckingEnabled: false,
   soundVolume: 70,
   soundKeystrokeVariant: 'mechanical',
   // §11.1: minimum turn duration (minutes) before the "All done" voice line
@@ -219,6 +227,11 @@ function readUiPrefs() {
       // Missing key => enabled (prefs file written before this option existed).
       soundEnabled: typeof obj.soundEnabled === 'boolean' ? obj.soundEnabled : DEFAULTS.soundEnabled,
       voiceEnabled: typeof obj.voiceEnabled === 'boolean' ? obj.voiceEnabled : DEFAULTS.voiceEnabled,
+      // Missing key => disabled (prefs file written before this option existed).
+      voiceDuckingEnabled:
+        typeof obj.voiceDuckingEnabled === 'boolean'
+          ? obj.voiceDuckingEnabled
+          : DEFAULTS.voiceDuckingEnabled,
       soundVolume: typeof obj.soundVolume === 'number' ? clampVolume(obj.soundVolume) : DEFAULTS.soundVolume,
       soundKeystrokeVariant:
         typeof obj.soundKeystrokeVariant === 'string' &&
@@ -254,6 +267,7 @@ function readUiPrefs() {
 /**
  * Merges and writes preferences. Accepts a partial
  * { theme?, lang?, boot?, profile?, layout?, hideSystemPorts?, soundEnabled?,
+ *   voiceEnabled?, voiceDuckingEnabled?,
  *   soundVolume?, soundKeystrokeVariant?, soundLongTaskMinutes?,
  *   soundReadOutputEnabled?, termFontFamily?, termFontSize?, termLineHeight?,
  *   termLetterSpacing?, termCursorStyle?, termCursorBlink?, termScrollback?,
@@ -277,6 +291,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.soundEnabled === 'boolean') next.soundEnabled = partial.soundEnabled;
     if (partial && typeof partial.voiceEnabled === 'boolean') next.voiceEnabled = partial.voiceEnabled;
+    if (partial && typeof partial.voiceDuckingEnabled === 'boolean') {
+      next.voiceDuckingEnabled = partial.voiceDuckingEnabled;
+    }
     if (partial && typeof partial.soundVolume === 'number') next.soundVolume = clampVolume(partial.soundVolume);
     if (
       partial &&

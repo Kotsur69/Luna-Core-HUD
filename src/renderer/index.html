@@ -887,6 +887,16 @@
             <span class="switch__track"><span class="switch__thumb"></span></span>
           </span>
         </label>
+        <!-- Auto-pause whatever is playing (Spotify, a podcast, a browser
+             tab) for the duration of the read-aloud narration, then resume
+             it. Narration only. Off by default - src/voiceduck.js. -->
+        <label class="switch-field" data-i18n-title="appearance.voiceDuck.hint" title="Gdy Luna czyta odpowiedz na glos, wstrzymaj odtwarzana muzyke lub podcast i wznow po zakonczeniu. Tylko odczyt na glos. Domyslnie wylaczone.">
+          <span class="switch-field__label" data-i18n="appearance.voiceDuck">Wstrzymaj muzyke na czas odczytu</span>
+          <span class="switch">
+            <input type="checkbox" id="sound-voiceduck-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
         <!-- Boot sequence: pure decoration, can be turned off. Does not block
              the session - the PTY starts underneath regardless of the animation. -->
         <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">

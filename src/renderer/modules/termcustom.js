@@ -57,6 +57,7 @@ const els = {
   soundKeystrokeVariant: document.getElementById('sound-keystroke-variant'),
   soundLongTaskMinutes: document.getElementById('sound-long-task-minutes'),
   soundReadOutputToggle: document.getElementById('sound-read-output-toggle'),
+  voiceDuckToggle: document.getElementById('sound-voiceduck-toggle'),
 };
 
 // The curated <option> values in index.html - anything else means "Custom…".
@@ -104,6 +105,7 @@ function renderSoundSwitcher() {
   els.soundKeystrokeVariant.value = soundPrefs.keystrokeVariant;
   els.soundLongTaskMinutes.value = soundPrefs.longTaskMinutes;
   els.soundReadOutputToggle.checked = soundPrefs.readOutputEnabled;
+  els.voiceDuckToggle.checked = soundPrefs.voiceDuckingEnabled;
 }
 
 /** Persists a partial prefs change AND repaints the live terminal (§4/§5). */
@@ -292,6 +294,11 @@ els.soundReadOutputToggle.addEventListener('change', () => {
   window.lunacore.setUiPrefs({ soundReadOutputEnabled: soundPrefs.readOutputEnabled });
 });
 
+els.voiceDuckToggle.addEventListener('change', () => {
+  soundPrefs.voiceDuckingEnabled = els.voiceDuckToggle.checked;
+  window.lunacore.setUiPrefs({ voiceDuckingEnabled: soundPrefs.voiceDuckingEnabled });
+});
+
 // Escape closes it, refocuses the terminal - same as palette's close path.
 termcustomEl.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
@@ -348,6 +355,7 @@ export async function initTermcustomSettings() {
     soundKeystrokeVariant: 'mechanical',
     soundLongTaskMinutes: 10,
     soundReadOutputEnabled: false,
+    voiceDuckingEnabled: false,
   };
   try {
     prefs = (await window.lunacore.getUiPrefs()) || prefs;
@@ -363,6 +371,7 @@ export async function initTermcustomSettings() {
     longTaskMinutes:
       typeof prefs.soundLongTaskMinutes === 'number' ? prefs.soundLongTaskMinutes : 10,
     readOutputEnabled: prefs.soundReadOutputEnabled === true,
+    voiceDuckingEnabled: prefs.voiceDuckingEnabled === true,
   };
   setSynthEnabled(soundPrefs.enabled);
   setSynthVolume(soundPrefs.volume);

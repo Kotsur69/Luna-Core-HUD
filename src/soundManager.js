@@ -68,9 +68,13 @@ function resolveMpv() {
 }
 
 class SoundManager {
-  /** @param {{volume?: number, channel?: string}} [opts] volume: 0..100,
-   *   default 70; channel: pipe-name suffix so a second instance (§11.2
-   *   narration) doesn't collide with the default SFX instance */
+  /** @param {{volume?: number, channel?: string, onBusyChange?: (busy: boolean) => void}} [opts]
+   *   volume: 0..100, default 70; channel: pipe-name suffix so a second
+   *   instance (§11.2 narration) doesn't collide with the default SFX
+   *   instance; onBusyChange: called with true when playback starts and
+   *   false when this instance goes fully idle again (voice ducking rides
+   *   this - see src/voiceduck.js). Omitted on the SFX instance, so it
+   *   never bothers reading mpv's event stream. */
   constructor(opts = {}) {
     this.volume = clampVolume(opts.volume);
     this.enabled = true; // user toggle (Preferences); wired from uiprefs by main.js
@@ -80,6 +84,15 @@ class SoundManager {
     this.warned = false;
     this.pending = []; // commands queued while the IPC socket is still connecting
     this.ipcPath = ipcPath(opts.channel);
+    // Playback-busy tracking, only when a listener asked for it. mpv emits
+    // one start-file and one end-file per loaded file over the same IPC
+    // socket; counting the pair tells us when the channel goes from silent
+    // to playing and back. `_evtBuf` reassembles newline-delimited JSON
+    // that a socket read can split mid-line.
+    this.onBusyChange = typeof opts.onBusyChange === 'function' ? opts.onBusyChange : null;
+    this.activeFiles = 0;
+    this.busy = false;
+    this._evtBuf = '';
   }
 
   /** Spawns `mpv --idle` and opens the IPC socket. Call once at app startup. */
@@ -129,6 +142,10 @@ class SoundManager {
       this.available = true;
       for (const cmd of this.pending.splice(0)) this._send(cmd);
     });
+    if (this.onBusyChange) {
+      sock.setEncoding('utf8');
+      sock.on('data', (chunk) => this._readEvents(chunk));
+    }
     sock.on('error', () => {
       if (attempt < MAX_CONNECT_ATTEMPTS) {
         setTimeout(() => this._connect(attempt + 1), RECONNECT_DELAY_MS);
@@ -154,6 +171,41 @@ class SoundManager {
     if (this.warned) return;
     this.warned = true;
     console.warn(`[soundManager] ${msg}`);
+  }
+
+  /**
+   * Feeds a raw socket chunk through the newline-delimited-JSON reassembler
+   * and acts on mpv's start-file / end-file events. Anything else (property
+   * changes, command replies, malformed lines) is ignored.
+   */
+  _readEvents(chunk) {
+    this._evtBuf += chunk;
+    const lines = this._evtBuf.split('\n');
+    this._evtBuf = lines.pop() || ''; // keep the trailing partial line
+    for (const line of lines) {
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg.event === 'start-file') this._setActive(this.activeFiles + 1);
+      else if (msg.event === 'end-file') this._setActive(this.activeFiles - 1);
+    }
+  }
+
+  /** Updates the in-flight-file count and fires onBusyChange on a 0<->1+ edge. */
+  _setActive(n) {
+    this.activeFiles = Math.max(0, n);
+    const busy = this.activeFiles > 0;
+    if (busy === this.busy) return;
+    this.busy = busy;
+    try {
+      this.onBusyChange(busy);
+    } catch {
+      /* a listener throwing must not take the audio channel down */
+    }
   }
 
   /**
@@ -195,6 +247,9 @@ class SoundManager {
     this.proc = null;
     this.sock = null;
     this.available = false;
+    this._evtBuf = '';
+    // Release a duck that was holding for a clip we're about to kill.
+    if (this.busy) this._setActive(0);
   }
 }
 

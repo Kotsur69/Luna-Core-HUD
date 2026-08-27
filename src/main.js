@@ -90,6 +90,9 @@ const { resolveSoundFile } = require('./sounds');
 // tails, synthesis is offline Windows SAPI, no model call in either step.
 const { extractSpokenText } = require('./ttsExtract');
 const { synthesizeToWav } = require('./tts');
+// Voice ducking: auto-pause the now-playing media while the read-aloud
+// narration speaks (src/voiceduck.js - pure policy, deps injected here).
+const { createVoiceDuck } = require('./voiceduck');
 // D5: updates. Same PURE decisions - `electron-updater` is loaded lazily in
 // getAutoUpdater(), only once it's known this build can actually update
 // itself.
@@ -180,6 +183,8 @@ let soundManager = null;
 // `append-play` queue and can't be cut off by an unrelated SFX `replace`.
 /** @type {SoundManager | null} */
 let narrationManager = null;
+/** @type {ReturnType<typeof createVoiceDuck> | null} */
+let voiceDuck = null;
 // 50%/80% voice announcements (§4.4) - which thresholds already fired for the
 // CURRENT 5h window. nextUsageAnnounced() (usage.js) re-arms both once usage
 // drops back below 40%.
@@ -1563,10 +1568,30 @@ app.whenReady().then(() => {
   soundManager = new SoundManager({ volume: readUiPrefs().soundVolume });
   soundManager.setEnabled(readUiPrefs().soundEnabled !== false);
   soundManager.start();
+  // Voice ducking: auto-pause the now-playing media while the read-aloud
+  // narration speaks, resume when it goes idle. Narration channel only; the
+  // toggle (voiceDuckingEnabled) defaults off. See src/voiceduck.js.
+  voiceDuck = createVoiceDuck({
+    isEnabled: () => readUiPrefs().voiceDuckingEnabled === true,
+    isMediaPlaying: () => {
+      const m = mediaSampler && mediaSampler.current();
+      return !!(m && m.isPlaying);
+    },
+    pauseMedia: () => sendTransportCommand('pause').catch(() => {}),
+    resumeMedia: () => sendTransportCommand('play').catch(() => {}),
+  });
   // §11.2 narration channel - own mpv instance/pipe, same enabled/volume as
   // the SFX channel; whether it actually SPEAKS on a given turn is decided
   // per-turn in maybeReadOutputAloud() via soundReadOutputEnabled.
-  narrationManager = new SoundManager({ volume: readUiPrefs().soundVolume, channel: 'voice' });
+  // onBusyChange rides mpv's own start-file/end-file events (SoundManager),
+  // giving voiceDuck a real "narration is / isn't playing" edge to act on.
+  narrationManager = new SoundManager({
+    volume: readUiPrefs().soundVolume,
+    channel: 'voice',
+    onBusyChange: (busy) => {
+      if (voiceDuck) voiceDuck.onVoiceActive(busy);
+    },
+  });
   narrationManager.setEnabled(readUiPrefs().soundEnabled !== false);
   narrationManager.start();
   // Startup greeting (SOUNDS_IMPLEMENTATION_PLAN.md §3) - delayed
@@ -1627,6 +1652,12 @@ app.on('window-all-closed', () => {
   if (narrationManager) {
     narrationManager.stop();
     narrationManager = null;
+  }
+  // If we quit mid-narration with the media paused, hand playback back before
+  // going - best effort, the transport call may not land before exit.
+  if (voiceDuck) {
+    voiceDuck.onVoiceActive(false);
+    voiceDuck = null;
   }
   if (process.platform !== 'darwin') app.quit();
 });
