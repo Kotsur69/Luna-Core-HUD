@@ -40,13 +40,16 @@ const { killProcess, PortWatcher } = require('./ports');
 
 // MCP server health: config + transcript-mined usage, and an on-demand probe.
 const { getMcpHealth, probeServer } = require('./mcphealth');
+// Diagnostics tile: pure functions that turn the three live self-checks (mpv,
+// claude on PATH, MCP idle-usage) into check rows. Composed below in diag:report.
+const diagnostics = require('./diagnostics');
 
 // Git station: status for the watched repos, plus fetch.
 const { readAllRepos, fetchRepo, scanForRepos, readRepoStatus, fetchDir, commitAll, pushCurrent } = require('./gitstation');
 // Active-Files Heatmap's second signal: git-sourced changes, for files a
 // session touched via Bash/PowerShell rather than Read/Edit/Write (see
 // src/gitfiles.js's header for why the transcript path alone misses these).
-const { GitFileWatcher } = require('./gitfiles');
+const { GitFileWatcher, git, pathInsideCwd } = require('./gitfiles');
 // Action cheat-sheets (7C): command groups sent through the Action Injector.
 const { loadCheatsheets } = require('./cheatsheets');
 // Skill cheat-sheet (7A): auto-scans skill directories -> categories.
@@ -1237,6 +1240,52 @@ function registerIpc() {
       if (typeof p === 'string' && p) out[p] = fs.existsSync(p);
     }
     return out;
+  });
+
+  // Active-Files Heatmap accumulated diff viewer: the read-only `git diff HEAD`
+  // behind a row's +/- numbers, fetched only when the user explicitly clicks a
+  // CHANGED or DELETED row. Still a Passive Observer - one local `git diff`
+  // (disk read, no PTY write, no watcher), same class as files:check-exist
+  // above, and it goes through gitfiles.js's shared git() so there is no second
+  // way to shell out to git.
+  //
+  // SECURITY: `file` is renderer-supplied. pathInsideCwd() resolves it against
+  // the session's own cwd and returns null ('outside') if it escapes - this
+  // handler will not diff an arbitrary path off the session's repo.
+  const MAX_DIFF_CHARS = 20000; // diffs run bigger than turn text; honest-truncate past this
+  const fail = (reason) => ({ ok: false, diff: '', truncated: false, reason });
+  ipcMain.handle('files:diff', async (_event, payload) => {
+    const { sessionId, file } = payload || {};
+    const session = resolveSession(sessionId);
+    if (!session || !session.cwd) return fail('noSession');
+
+    const rel = pathInsideCwd(session.cwd, file);
+    if (!rel) return fail('outside');
+
+    const cwd = session.cwd;
+    // No repo / no commits yet (no HEAD) / git missing -> reason, never a throw.
+    const head = await git(cwd, ['rev-parse', '--verify', 'HEAD']);
+    if (!head.ok) return fail('notRepo');
+
+    const res = await git(cwd, ['diff', 'HEAD', '--', rel]);
+    if (!res.ok) return fail('gitFailed');
+
+    let diff = res.stdout || '';
+    if (!diff) {
+      // Empty diff against HEAD is either "tracked, unchanged" (a real empty
+      // state) or "git has never heard of this path" (untracked). Only the
+      // untracked case gets the --no-index fallback: it exits 1 by design when
+      // the files differ, so its stdout is what matters, not its ok flag.
+      const tracked = await git(cwd, ['ls-files', '--error-unmatch', '--', rel]);
+      if (!tracked.ok) {
+        const untracked = await git(cwd, ['diff', '--no-index', '--', '/dev/null', rel]);
+        if (untracked.stdout) diff = untracked.stdout;
+      }
+    }
+
+    const truncated = diff.length > MAX_DIFF_CHARS;
+    if (truncated) diff = diff.slice(0, MAX_DIFF_CHARS);
+    return { ok: true, diff, truncated, reason: null };
   });
 
   // Writes a new entry to projects.local.json and returns the freshly reloaded

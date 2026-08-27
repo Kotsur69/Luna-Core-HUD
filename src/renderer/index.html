@@ -981,6 +981,24 @@
     </div>
   </div>
 
+  <!-- ===== Active-Files Heatmap: accumulated diff viewer ===================== -->
+  <!-- Read-only `git diff HEAD -- <file>` behind a heatmap row's +/- numbers,
+       opened only on an explicit click of a CHANGED/DELETED row. PASSIVE
+       OBSERVER: one local `git diff` (disk read), never a PTY write. Same
+       overlay skeleton as #stimeline-modal above; opening/closing and the
+       createElement line painting live in modules/activefiles.js. -->
+  <div id="filediff-modal" class="stimeline-modal" hidden>
+    <div class="stimeline-modal__backdrop" data-filediff-close></div>
+    <div class="stimeline-modal__panel" role="dialog" aria-modal="true" aria-label="Podglad diffa pliku">
+      <div class="stimeline-modal__bar">
+        <span id="filediff-modal-title" class="stimeline-modal__time"></span>
+        <button type="button" id="filediff-modal-closebtn" class="stimeline-modal__closebtn" data-filediff-close data-i18n-title="activefiles.diff.close" aria-label="Zamknij">×</button>
+      </div>
+      <pre id="filediff-modal-text" class="stimeline-modal__text filediff__text"></pre>
+      <p id="filediff-modal-truncated" class="hint" data-i18n="activefiles.diff.truncated" hidden>...diff obciety.</p>
+    </div>
+  </div>
+
   <!-- CONCEPT_MCP_DEBUGGER.md safe half: the JSON-RPC Inspector's call detail.
        Same overlay skeleton as #stimeline-modal above - opening/closing and
        filling it in lives in modules/mcp.js. -->

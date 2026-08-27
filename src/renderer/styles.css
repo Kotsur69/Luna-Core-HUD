@@ -1207,6 +1207,17 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   letter-spacing: 0.04em;
 }
 
+/* A CHANGED or DELETED row opens its accumulated `git diff HEAD` in
+   #filediff-modal (read-only, one local `git diff`). Pure read-only rows stay
+   inert - there is no diff to show, so they get no affordance. */
+.afile.is-clickable { cursor: pointer; }
+.afile.is-clickable:hover { border-color: var(--edge-glow); }
+.afile.is-clickable:focus-visible {
+  outline: none;
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 var(--glow-size-sm) rgba(95, 242, 214, 0.4);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .afile.is-live .afile__dot {
     animation: none !important;
@@ -2407,6 +2418,16 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .mcpcall-modal__block {
   max-height: 26vh;
 }
+
+/* ---- Active-Files Heatmap accumulated diff viewer -------------------------
+   #filediff-modal reuses .stimeline-modal's whole overlay/panel/bar/text
+   shape; the only thing that differs is per-line colour inside the <pre>.
+   Three classes: additions, deletions, and one dim for both the hunk (@@)
+   headers and the file headers (diff --git, ---/+++, index). Context lines
+   keep the panel's default --text. */
+.filediff__add  { color: var(--good); }
+.filediff__del  { color: var(--bad); }
+.filediff__hunk { color: var(--text-dim); }
 
 /* ---- Boot sequence ----------------------------------------------
    A decorative overlay above the ready UI. Doesn't block the session (PTY

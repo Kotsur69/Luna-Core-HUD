@@ -171,6 +171,11 @@ const I18N_DICT = {
     'activefiles.weight.title':
       'Szacunkowy koszt kontekstu. Dokladnie {chars} znakow wczytanych do okna kontekstu w {reads} odczytach. Liczba tokenow jest przyblizona - wyliczona ze znakow, nie z API.',
     'activefiles.deleted': 'usuniety',
+    'activefiles.diff.title': 'Diff pliku',
+    'activefiles.diff.empty': 'Nie ma zmian do pokazania',
+    'activefiles.diff.notrepo': 'To nie jest repozytorium git (albo brak HEAD).',
+    'activefiles.diff.truncated': '...diff obciety.',
+    'activefiles.diff.close': 'Zamknij',
     'sessiontimeline.title': 'Oś czasu sesji',
     'sessiontimeline.empty': 'Brak tur w tej sesji.',
     'sessiontimeline.hint': 'Kliknij znacznik, aby zobaczyc fragment transkryptu tej tury.',
@@ -515,6 +520,11 @@ const I18N_DICT = {
     'activefiles.weight.title':
       'Estimated context cost. Exactly {chars} characters entered the context window across {reads} reads. The token figure is approximate - derived from characters, not reported by the API.',
     'activefiles.deleted': 'deleted',
+    'activefiles.diff.title': 'File diff',
+    'activefiles.diff.empty': 'No changes to show',
+    'activefiles.diff.notrepo': 'Not a git repository (or no HEAD).',
+    'activefiles.diff.truncated': '...diff truncated.',
+    'activefiles.diff.close': 'Close',
     'sessiontimeline.title': 'Session timeline',
     'sessiontimeline.empty': 'No turns yet this session.',
     'sessiontimeline.hint': 'Click a marker to preview that turn\'s transcript fragment.',
