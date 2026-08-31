@@ -260,3 +260,80 @@ test('gridAreas quotes every row for CSS', () => {
   assert.equal(gridAreas(['left main right']), '"left main right"');
   assert.equal(gridAreas(['main main', 'left right']), '"main main" "left right"');
 });
+
+// ---- customLayouts merge (v0.10 4.2) ----------------------------------------
+//
+// The user's saved layouts are merged HERE rather than in the renderer, so they
+// are validated by the same normalizeLayout() as a shipped preset instead of by
+// a second copy of those rules that would have to be kept in step with it.
+
+/** A saved layout as uiprefs stores it - keyed by id, id not repeated inside. */
+function stored(over = {}) {
+  return {
+    label: { pl: 'Moj uklad', en: 'My setup' },
+    grid: { columns: '300px 1fr', rows: '1fr', areas: ['side main'] },
+    slots: { side: ['appearance'], main: ['terminal'] },
+    ...over,
+  };
+}
+
+test('loadLayouts with no argument is exactly the shipped list', () => {
+  // Every existing caller passes nothing; the builder must not change them.
+  assert.deepEqual(
+    loadLayouts().layouts.map((l) => l.id),
+    loadLayouts(undefined).layouts.map((l) => l.id)
+  );
+});
+
+test('loadLayouts appends a saved layout after the shipped presets', () => {
+  const { layouts } = loadLayouts({ 'my-setup': stored() });
+  const ids = layouts.map((l) => l.id);
+  assert.equal(ids.at(-1), 'my-setup');
+  assert.equal(ids.includes('classic'), true);
+});
+
+test('loadLayouts normalizes a saved layout like any other', () => {
+  const l = getLayout(loadLayouts({ mine: stored() }).layouts, 'mine');
+  assert.equal(l.gridTemplateAreas, '"side main"');
+  assert.deepEqual(l.regionOrder, ['side', 'main']);
+  // chrome defaults to the first region that does not hold the terminal.
+  assert.equal(l.chrome.brand, 'side');
+});
+
+test('a saved layout overrides a shipped preset with the same id', () => {
+  // Last source wins, and the user's own is last: a layout they built and named
+  // must not be silently replaced by a preset that later ships under that id.
+  const { layouts } = loadLayouts({ classic: stored({ label: 'Mine now' }) });
+  const classic = getLayout(layouts, 'classic');
+  assert.equal(classic.label, 'Mine now');
+  assert.equal(classic.columns, '300px 1fr');
+  assert.equal(layouts.filter((l) => l.id === 'classic').length, 1);
+});
+
+test('the map key wins over a stale id inside the entry', () => {
+  // Otherwise the map holds two names for one layout and which one wins depends
+  // on iteration order.
+  const { layouts } = loadLayouts({ mine: stored({ id: 'something-else' }) });
+  assert.notEqual(getLayout(layouts, 'mine'), null);
+  assert.equal(getLayout(layouts, 'something-else'), null);
+});
+
+test('an unloadable saved layout is dropped, the shipped presets survive', () => {
+  // Ragged areas pass the uiprefs write gate on purpose and die here instead,
+  // which is what lets the rules tighten without stranding a saved file.
+  const ragged = stored({ grid: { columns: '1fr 1fr', rows: '1fr 1fr', areas: ['a b', 'c'] } });
+  const { layouts } = loadLayouts({ mine: ragged });
+  assert.equal(getLayout(layouts, 'mine'), null);
+  assert.notEqual(getLayout(layouts, 'classic'), null);
+});
+
+test('a saved layout that places no terminal is dropped', () => {
+  const noTerm = stored({ slots: { side: ['appearance'], main: ['context'] } });
+  assert.equal(getLayout(loadLayouts({ mine: noTerm }).layouts, 'mine'), null);
+});
+
+test('loadLayouts ignores a customLayouts value that is not a map', () => {
+  for (const bad of [null, 42, 'x', [], true]) {
+    assert.equal(loadLayouts(bad).layouts.length, loadLayouts().layouts.length);
+  }
+});

@@ -177,11 +177,32 @@ const FALLBACK = {
 };
 
 /**
- * Loads layouts: base (layouts.json) merged with local (layouts.local.json).
- * Local overrides or adds presets by id.
+ * Turns the stored customLayouts map into something collect() can read.
+ *
+ * The KEY is the id (see src/uiprefs.js), and it is applied after the spread so
+ * a stale `id` inside a hand-edited entry cannot disagree with the key it is
+ * filed under - the map would then hold two names for one layout, and which one
+ * won would depend on iteration order.
+ */
+function customSource(custom) {
+  if (!custom || typeof custom !== 'object' || Array.isArray(custom)) return null;
+  return { layouts: Object.entries(custom).map(([id, spec]) => ({ ...spec, id })) };
+}
+
+/**
+ * Loads layouts: base (layouts.json) merged with local (layouts.local.json),
+ * then with the user's saved layouts. Each source overrides or adds by id.
+ *
+ * The user's own come last deliberately: a layout they built and named is the
+ * most specific statement of intent there is, and a preset that later ships
+ * under the same id must not silently replace it.
+ *
+ * @param {object} [custom] uiprefs' customLayouts map (v0.10 4.2). Omitted =
+ *   exactly the base+local behaviour that shipped before the builder existed,
+ *   which is what keeps this callable from the tests with no prefs at all.
  * @returns {{layouts: Array<object>, activeLayout: string}}
  */
-function loadLayouts() {
+function loadLayouts(custom) {
   const base = readJson(BASE_FILE) || FALLBACK;
   const local = readJson(localFile());
 
@@ -195,6 +216,7 @@ function loadLayouts() {
   };
   collect(base);
   collect(local);
+  collect(customSource(custom));
 
   let layouts = [...byId.values()];
   if (layouts.length === 0) {

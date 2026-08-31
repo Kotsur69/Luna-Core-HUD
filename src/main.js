@@ -1696,7 +1696,11 @@ function registerIpc() {
   ipcMain.handle('themes:list', () => loadThemes());
 
   // C1: layout presets (grid + widget-to-region assignment).
-  ipcMain.handle('layouts:list', () => loadLayouts());
+  // v0.10 4.2: the user's saved layouts are merged in here rather than in the
+  // renderer, so a custom layout is validated by the same normalizeLayout() as
+  // a shipped preset instead of by a second copy of those rules that would have
+  // to be kept in step with it.
+  ipcMain.handle('layouts:list', () => loadLayouts(readUiPrefs().customLayouts));
 
   // UI preferences: reads {theme, lang} and writes a partial update (returns the new state).
   ipcMain.handle('ui:get', () => readUiPrefs());

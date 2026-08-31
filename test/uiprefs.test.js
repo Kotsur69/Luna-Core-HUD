@@ -14,6 +14,7 @@ const {
   cleanCollapsed,
   cleanLayoutSizes,
   cleanRailedRegions,
+  cleanCustomLayouts,
   clampModifierPrefs,
 } = require('../src/uiprefs.js');
 const { loadLayouts } = require('../src/layouts.js');
@@ -330,4 +331,128 @@ test('cleanRailedRegions rejects anything that is not id-shaped', () => {
 test('cleanRailedRegions caps how much one hand-edited preset may store', () => {
   const many = [...Array(40)].map((_, i) => `r${i}`);
   assert.equal(cleanRailedRegions({ classic: many }).classic.length, 16);
+});
+
+// ---- cleanCustomLayouts (v0.10 4.2) -----------------------------------------
+//
+// The boundary this file draws is deliberately shallow: shape and size only.
+// Whether a saved layout MEANS anything is normalizeLayout()'s call, made when
+// it is loaded - so a spec that is structurally fine but semantically doomed
+// (ragged areas, no terminal) must still survive the write. Storing it and
+// dropping it at load is what lets the rules change without stranding a file.
+
+/** A structurally valid saved layout; tests override one field at a time. */
+function saved(over = {}) {
+  return {
+    label: { pl: 'Moj uklad', en: 'My setup' },
+    grid: { columns: '300px 1fr', rows: '1fr', areas: ['side main'] },
+    slots: { side: ['appearance'], main: ['terminal'] },
+    ...over,
+  };
+}
+
+test('cleanCustomLayouts: a missing or bad input -> nothing saved', () => {
+  for (const bad of [undefined, null, 42, 'x', [], true]) {
+    assert.deepEqual(cleanCustomLayouts(bad), {});
+  }
+});
+
+test('cleanCustomLayouts passes a valid entry through', () => {
+  const out = cleanCustomLayouts({ 'my-setup': saved() });
+  assert.deepEqual(out['my-setup'].grid.areas, ['side main']);
+  assert.deepEqual(out['my-setup'].label, { pl: 'Moj uklad', en: 'My setup' });
+  assert.deepEqual(out['my-setup'].slots, { side: ['appearance'], main: ['terminal'] });
+});
+
+test('cleanCustomLayouts accepts a plain string label', () => {
+  const out = cleanCustomLayouts({ mine: saved({ label: 'Mine' }) });
+  assert.equal(out.mine.label, 'Mine');
+});
+
+test('cleanCustomLayouts falls back to the id when the label is unusable', () => {
+  // An entry with no readable name is still a layout; losing it over its label
+  // would be a worse outcome than showing the id in the picker.
+  for (const label of [undefined, null, 42, {}, { de: 'Nein' }, '   ']) {
+    assert.equal(cleanCustomLayouts({ mine: saved({ label }) }).mine.label, 'mine');
+  }
+});
+
+test('cleanCustomLayouts requires a grid with columns, rows and areas', () => {
+  assert.deepEqual(cleanCustomLayouts({ mine: saved({ grid: undefined }) }), {});
+  assert.deepEqual(cleanCustomLayouts({ mine: saved({ grid: { columns: '1fr' } }) }), {});
+  assert.deepEqual(
+    cleanCustomLayouts({ mine: saved({ grid: { columns: '1fr', rows: '1fr', areas: [] } }) }),
+    {}
+  );
+});
+
+test('cleanCustomLayouts rejects a columns string that is not track-shaped', () => {
+  // Same coarse gate as layoutSizes: this is the "do not persist a novel" pass,
+  // not the strict grammar that decides what may reach an inline style.
+  const bad = saved({ grid: { columns: 'url(evil)', rows: '1fr', areas: ['side main'] } });
+  assert.deepEqual(cleanCustomLayouts({ mine: bad }), {});
+});
+
+test('cleanCustomLayouts drops area rows that are not area-shaped', () => {
+  const out = cleanCustomLayouts({
+    mine: saved({ grid: { columns: '1fr 1fr', rows: '1fr 1fr', areas: ['a b', 42, '', 'c d'] } }),
+  });
+  assert.deepEqual(out.mine.grid.areas, ['a b', 'c d']);
+});
+
+test('cleanCustomLayouts keeps the CSS null cell', () => {
+  const out = cleanCustomLayouts({
+    mine: saved({ grid: { columns: '1fr 1fr', rows: '1fr', areas: ['main .'] } }),
+  });
+  assert.deepEqual(out.mine.grid.areas, ['main .']);
+});
+
+test('cleanCustomLayouts requires at least one usable slot', () => {
+  assert.deepEqual(cleanCustomLayouts({ mine: saved({ slots: undefined }) }), {});
+  assert.deepEqual(cleanCustomLayouts({ mine: saved({ slots: {} }) }), {});
+});
+
+test('cleanCustomLayouts refuses to file one widget under two slots', () => {
+  // cleanWidgetSlots owns this rule; the reuse is the point of the test.
+  const out = cleanCustomLayouts({
+    mine: saved({ slots: { side: ['appearance'], main: ['terminal', 'appearance'] } }),
+  });
+  assert.deepEqual(out.mine.slots, { side: ['appearance'], main: ['terminal'] });
+});
+
+test('cleanCustomLayouts keeps chrome only when it names something', () => {
+  assert.equal(cleanCustomLayouts({ mine: saved() }).mine.chrome, undefined);
+  assert.deepEqual(cleanCustomLayouts({ mine: saved({ chrome: { brand: 'side' } }) }).mine.chrome, {
+    brand: 'side',
+  });
+  assert.equal(
+    cleanCustomLayouts({ mine: saved({ chrome: { brand: 42 } }) }).mine.chrome,
+    undefined
+  );
+});
+
+test('cleanCustomLayouts stores a spec normalizeLayout will later reject', () => {
+  // Ragged areas: valid shape, invalid layout. It must SURVIVE the write and be
+  // dropped at load, so tightening the rules later cannot strand a saved file.
+  const ragged = saved({ grid: { columns: '1fr 1fr', rows: '1fr 1fr', areas: ['a b', 'c'] } });
+  assert.deepEqual(cleanCustomLayouts({ mine: ragged }).mine.grid.areas, ['a b', 'c']);
+});
+
+test('cleanCustomLayouts caps how many layouts a hand-edited file may hold', () => {
+  const many = {};
+  for (let i = 0; i < 40; i += 1) many[`l${i}`] = saved();
+  assert.equal(Object.keys(cleanCustomLayouts(many)).length, 16);
+});
+
+test('cleanCustomLayouts caps how many area rows one layout may hold', () => {
+  const areas = [...Array(40)].map(() => 'side main');
+  const out = cleanCustomLayouts({
+    mine: saved({ grid: { columns: '1fr 1fr', rows: '1fr', areas } }),
+  });
+  assert.equal(out.mine.grid.areas.length, 12);
+});
+
+test('cleanCustomLayouts rejects an id that is not id-shaped', () => {
+  assert.deepEqual(cleanCustomLayouts({ '': saved() }), {});
+  assert.deepEqual(cleanCustomLayouts({ ['x'.repeat(65)]: saved() }), {});
 });

@@ -176,6 +176,17 @@ const DEFAULTS = {
   // rather than an approximation of it, and a rail can never be mistaken for a
   // deliberately narrow panel.
   railedRegions: {},
+  // v0.10 4.2 layout builder: layoutId -> a full layout spec the user saved,
+  // in exactly the shape config/layouts.json uses. Merged in by loadLayouts()
+  // as a third source after base and layouts.local.json, so a custom layout is
+  // validated by the same normalizeLayout() as a shipped preset and an id that
+  // collides with one overrides it.
+  //
+  // Stored whole rather than as a diff against a preset. A diff would have to
+  // be re-based every time the preset it derives from changes, and a saved
+  // layout is the one thing in this file the user expects to stay exactly as
+  // they left it.
+  customLayouts: {},
   // v0.10 modifiers. Every default is the no-op value, i.e. exactly what the
   // HUD did before the axes existed: `cozy` IS the :root scale, `theme` means
   // the theme keeps choosing its own faces, and `full` glow/motion is the
@@ -202,6 +213,12 @@ const MAX_ARRANGE_IDS = 64;
 /** Regions one preset may have collapsed to a rail at once. A layout with more
  *  than a dozen regions is not a layout; this caps a hand-edited file. */
 const MAX_RAILED_REGIONS = 16;
+// A saved layout is a handful of rows over a handful of columns. These bound a
+// hand-edited or corrupt file, nothing more - the semantic rules (rows of equal
+// width, `terminal` and `appearance` placed, no widget in two slots) belong to
+// normalizeLayout() and are applied when the layout is loaded, not stored.
+const MAX_CUSTOM_LAYOUTS = 16;
+const MAX_AREA_ROWS = 12;
 
 /**
  * Shape check for a stored columns string. Deliberately coarse: this is the
@@ -298,6 +315,84 @@ function cleanWidgetSlots(raw) {
     }
     if (Object.keys(cleanRegions).length) out[layoutId] = cleanRegions;
     if (Object.keys(out).length >= MAX_ARRANGED_LAYOUTS) break;
+  }
+  return out;
+}
+
+/** One row of grid-template-areas: region names, plus CSS's "." null cell. */
+function isAreaRow(v) {
+  return typeof v === 'string' && v.trim().length > 0 && v.length <= 240 && /^[\w.\- ]+$/.test(v);
+}
+
+/** A layout label is a plain string or a { pl, en } pair - see src/localized.js. */
+function cleanLayoutLabel(raw) {
+  if (typeof raw === 'string') return raw.trim().slice(0, 64) || null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const lang of LANGS) {
+    const v = raw[lang];
+    if (typeof v === 'string' && v.trim()) out[lang] = v.trim().slice(0, 64);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Sanitizes saved layouts: { layoutId -> { label, grid, chrome, slots } }.
+ *
+ * Shape and size only. Whether a layout MEANS anything - every row of `areas`
+ * naming the same number of columns, `terminal` and `appearance` actually
+ * placed, no widget claimed by two slots - is normalizeLayout()'s call, made
+ * when the layout is loaded rather than when it is written.
+ *
+ * Two reasons for that split. It is the single definition of a valid layout,
+ * and half of it restated here would be half that drifts. And a spec it rejects
+ * is simply absent from the list, which is the same outcome a bad entry gets
+ * here - so the strict pass buys nothing by running earlier, while running it
+ * at write time would let a layout saved against one version of the rules
+ * become unloadable under the next.
+ */
+function cleanCustomLayouts(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...DEFAULTS.customLayouts };
+  const out = {};
+  for (const [layoutId, spec] of Object.entries(raw)) {
+    if (!isIdish(layoutId) || !spec || typeof spec !== 'object' || Array.isArray(spec)) continue;
+
+    const grid = spec.grid;
+    if (!grid || typeof grid !== 'object' || Array.isArray(grid)) continue;
+    if (!isColumnsish(grid.columns) || !isColumnsish(grid.rows)) continue;
+    if (!Array.isArray(grid.areas)) continue;
+
+    const areas = [];
+    for (const row of grid.areas) {
+      if (!isAreaRow(row)) continue;
+      areas.push(row.trim());
+      if (areas.length >= MAX_AREA_ROWS) break;
+    }
+    if (!areas.length) continue;
+
+    // Slots are the same structure cleanWidgetSlots already bounds, one layout
+    // deep - reused rather than restated so both paths share one set of caps.
+    const slots = cleanWidgetSlots({ [layoutId]: spec.slots })[layoutId];
+    if (!slots) continue;
+
+    const entry = {
+      label: cleanLayoutLabel(spec.label) || layoutId,
+      grid: { columns: grid.columns, rows: grid.rows, areas },
+      slots,
+    };
+
+    // chrome is optional here exactly as it is in layouts.json: normalizeLayout()
+    // defaults it to the first region that does not hold the terminal.
+    const chrome = spec.chrome;
+    if (chrome && typeof chrome === 'object' && !Array.isArray(chrome)) {
+      const picked = {};
+      if (isIdish(chrome.brand)) picked.brand = chrome.brand;
+      if (isIdish(chrome.status)) picked.status = chrome.status;
+      if (Object.keys(picked).length) entry.chrome = picked;
+    }
+
+    out[layoutId] = entry;
+    if (Object.keys(out).length >= MAX_CUSTOM_LAYOUTS) break;
   }
   return out;
 }
@@ -444,6 +539,7 @@ function readUiPrefs() {
       layoutSizes: cleanLayoutSizes(obj.layoutSizes),
       widgetSlots: cleanWidgetSlots(obj.widgetSlots),
       railedRegions: cleanRailedRegions(obj.railedRegions),
+      customLayouts: cleanCustomLayouts(obj.customLayouts),
       ...clampAutoCompactPrefs(obj),
       ...clampTermPrefs(obj),
       ...clampModifierPrefs(obj),
@@ -536,6 +632,11 @@ function writeUiPrefs(partial) {
     if (partial && partial.railedRegions && typeof partial.railedRegions === 'object') {
       next.railedRegions = cleanRailedRegions(partial.railedRegions);
     }
+    // Whole map, same as the three above: the builder holds every saved layout
+    // and writes all of them, which is what makes deleting one expressible.
+    if (partial && partial.customLayouts && typeof partial.customLayouts === 'object') {
+      next.customLayouts = cleanCustomLayouts(partial.customLayouts);
+    }
     // Only the term* keys actually present in `partial` should move; anything
     // omitted keeps its current (already-validated) value from `next` rather
     // than reverting to DEFAULTS - clampTermPrefs still re-validates the
@@ -593,4 +694,5 @@ module.exports = {
   cleanLayoutSizes,
   cleanWidgetSlots,
   cleanRailedRegions,
+  cleanCustomLayouts,
 };
