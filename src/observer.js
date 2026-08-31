@@ -83,14 +83,28 @@ function detectTools(raw) {
  * SOUNDS_IMPLEMENTATION_PLAN.md §3. Deliberately version-fragile: the TUI text
  * can change between CLI releases, which is why it is data (config), not a
  * constant in code.
+ *
+ * Whitespace on both sides is collapsed to single spaces before matching. The
+ * TUI hard-wraps a long line at the viewport edge, so "API Error: Connection
+ * lost mid-response" can reach us as two lines plus indentation, which a raw
+ * includes() misses. Collapsing is what makes the match survive a reflow -
+ * without it the same error is detected at one window width and not at
+ * another, which is half of why auto-proceed only fired "sometimes".
  * @param {string} raw raw data from ptyProcess.onData
  * @param {string[]} patterns literal substrings, case-sensitive
  * @returns {boolean}
  */
 function detectApprovalPrompt(raw, patterns) {
   if (!raw || !Array.isArray(patterns) || patterns.length === 0) return false;
-  const clean = String(raw).replace(ANSI_RE, '');
-  return patterns.some((p) => typeof p === 'string' && p && clean.includes(p));
+  const clean = collapseWhitespace(String(raw).replace(ANSI_RE, ''));
+  return patterns.some(
+    (p) => typeof p === 'string' && p && clean.includes(collapseWhitespace(p)),
+  );
+}
+
+/** Every run of whitespace (newlines and TUI padding included) -> one space. */
+function collapseWhitespace(text) {
+  return text.replace(/\s+/g, ' ');
 }
 
 // ---- 2. Tailing the JSONL transcript (real tokens) -------------------------

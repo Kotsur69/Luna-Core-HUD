@@ -11,6 +11,12 @@
     "5-hour limit reached"
   ],
   "connectionError": [
-    "API Error: Connection lost mid-response"
+    "Connection lost mid-response",
+    "API Error: Connection error",
+    "API Error: Request timed out",
+    "API Error: fetch failed",
+    "API Error: 500",
+    "API Error: 503",
+    "API Error: 529"
   ]
 }

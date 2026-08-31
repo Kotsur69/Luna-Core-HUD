@@ -188,6 +188,34 @@ test('detectApprovalPrompt is case-sensitive (deliberately - a literal substring
   assert.equal(detectApprovalPrompt('do you want to proceed?', APPROVAL_PATTERNS), false);
 });
 
+// The TUI hard-wraps at the viewport edge and the PTY splits stdout at
+// arbitrary boundaries, so the same phrase reaches us reflowed or in halves.
+// Both used to miss, which is why auto-proceed fired only "sometimes".
+
+const CONNECTION_PATTERNS = ['Connection lost mid-response', 'API Error: Connection error'];
+
+test('detectApprovalPrompt matches across a TUI line wrap', () => {
+  assert.equal(
+    detectApprovalPrompt('API Error: Connection lost\n     mid-response', CONNECTION_PATTERNS),
+    true,
+  );
+});
+
+test('detectApprovalPrompt matches when the phrase is padded or split by a newline', () => {
+  assert.equal(detectApprovalPrompt('API Error:\nConnection error', CONNECTION_PATTERNS), true);
+  assert.equal(detectApprovalPrompt('  Connection   lost  mid-response  ', CONNECTION_PATTERNS), true);
+});
+
+test('detectApprovalPrompt still misses a phrase split across two chunks', () => {
+  // Guards main.js's scan tail: this function only ever sees the text it is
+  // handed, so joining the chunks is the CALLER's job (src/main.js SCAN_TAIL_CHARS).
+  assert.equal(detectApprovalPrompt('API Error: Connection lo', CONNECTION_PATTERNS), false);
+  assert.equal(
+    detectApprovalPrompt('API Error: Connection lo' + 'st mid-response', CONNECTION_PATTERNS),
+    true,
+  );
+});
+
 // ---- sumUsageByModel / sumUsageLines (B4) -----------------------------------
 
 /** Builds one transcript line the way Claude Code writes it. */

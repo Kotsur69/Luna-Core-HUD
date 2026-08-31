@@ -132,6 +132,12 @@ const DEFAULT_SHELL = IS_WINDOWS
 // is held by the mutable `activeCwd` below and changed by the project switcher.
 const START_CWD = os.homedir();
 
+// How much of a session's previous stdout chunk is prepended to the next one
+// before the sound/God-Mode trigger scan runs. Only has to comfortably exceed
+// the longest pattern in config/sound-triggers.json - it exists so a phrase
+// split across a PTY chunk boundary is still seen whole.
+const SCAN_TAIL_CHARS = 512;
+
 /**
  * Returns the path if it's an existing directory; otherwise the home directory.
  * Protects pty.spawn from throwing when a project points at a folder that
@@ -606,6 +612,10 @@ function spawnInto(session, profile) {
   const cwd = safeCwd(session.cwd);
   session.cwd = cwd;
   session.profileId = profile.id;
+  // A restart starts a fresh terminal: the old tail must not leak into the new
+  // process's first scan (and this also initialises the field for any session
+  // object built before it existed).
+  session.scanTail = '';
 
   const proc = pty.spawn(DEFAULT_SHELL, [], {
     name: 'xterm-256color',
@@ -626,11 +636,21 @@ function spawnInto(session, profile) {
 
     const triggers = loadSoundTriggers();
 
+    // The PTY hands us stdout in arbitrary chunks, so a phrase we are looking
+    // for ("API Error: Connection lost mid-response") can straddle a chunk
+    // boundary and match neither half. Scanning `tail + chunk` closes that
+    // gap. The tail is a fixed-size window of this session's own recent
+    // stdout; SCAN_TAIL_CHARS only has to exceed the longest pattern, and it
+    // is kept raw (not ANSI-stripped) because detectApprovalPrompt strips
+    // before matching anyway.
+    const scan = session.scanTail + data;
+    session.scanTail = scan.slice(-SCAN_TAIL_CHARS);
+
     // §4.2: fire voice.needYou once per prompt APPEARANCE, not once per stdout
     // chunk - a TUI redraw repeats the same text while Mati is still reading
     // it. approvalShowing clears on this session's next input (see registerIpc).
     if (soundManager && !session.approvalShowing) {
-      if (detectApprovalPrompt(data, triggers.approvalPrompt)) {
+      if (detectApprovalPrompt(scan, triggers.approvalPrompt)) {
         session.approvalShowing = true;
         if (readUiPrefs().voiceEnabled !== false) {
           const resolved = resolveSoundFile('voice.needYou');
@@ -645,10 +665,10 @@ function spawnInto(session, profile) {
     // approvalShowing above) - de-duplication/cooldown lives in the renderer's
     // godmode.js state machine, which already needs a phase check per signal,
     // so a second flag on `session` would just be the same guard written twice.
-    if (detectApprovalPrompt(data, triggers.usageLimit)) {
+    if (detectApprovalPrompt(scan, triggers.usageLimit)) {
       send('godmode:signal', { sessionId: session.id, type: 'usageLimit' });
     }
-    if (detectApprovalPrompt(data, triggers.connectionError)) {
+    if (detectApprovalPrompt(scan, triggers.connectionError)) {
       send('godmode:signal', { sessionId: session.id, type: 'connectionError' });
     }
   });
@@ -743,6 +763,9 @@ function createSession(opts = {}) {
     // session, so a TUI redraw repeating the same text doesn't replay the
     // sound on every stdout chunk. Cleared on the session's next input.
     approvalShowing: false,
+    // Tail of this session's recent stdout, so a trigger phrase split across
+    // two PTY chunks still matches. See the scan in spawnInto's onData.
+    scanTail: '',
   };
 
   sessions.set(session.id, session);

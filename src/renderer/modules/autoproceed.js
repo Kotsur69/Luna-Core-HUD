@@ -16,8 +16,8 @@
 //
 // Module-scope listeners, same deliberate deviation godmode.js documents for
 // itself: the whole point is surviving the "not looking at it" case, so
-// onTurnEnd/onGodModeSignal are wired ONCE at import time and stay live
-// whether or not this widget's DOM is mounted. The armed/disarmed check
+// onTurnEnd/onGodModeSignal/onTools are wired ONCE at import time and stay
+// live whether or not this widget's DOM is mounted. The armed/disarmed check
 // inside handleGodModeSignal is the actual gate; the visible toggle is the
 // up-front friction, not continuous visibility (same reasoning godmode.js
 // gives for its own listeners).
@@ -38,16 +38,28 @@ import { defineWidget } from './registry.js';
 // Stop after this many "continue"s on one turn that never recovers - past that
 // the session is dead, not slow, and poking it again is just noise.
 const MAX_RETRIES = 3;
-// Wait this long before injecting "continue" - a dropped turn often comes back
-// on the CLI's own retry within a second or two, and then we inject nothing.
-const BACKOFF_MS = 5000;
+// Wait this long before injecting "continue". The CLI retries a dropped
+// request on its own, and that retry is often slower than it looks: at 5s we
+// were regularly typing "continue" into a turn that had ALREADY resumed, which
+// is one of the two ways this ended up typing twice. Anything the CLI recovers
+// inside this window costs us nothing - handleProgress() below drops the timer
+// as soon as the transcript shows the turn moving again.
+const BACKOFF_MS = 15000;
 // After a "continue" goes out, ignore the connectionError trigger for this
 // long. The error line the CLI already printed keeps getting repainted into
 // the TUI viewport for as long as it is on screen - the whole reconnect
 // included - so every repaint after our injection is the SAME drop, not a new
 // one. This window (comfortably longer than BACKOFF_MS) is what stops one drop
 // turning into three "continue"s. See test/autoproceed.test.js.
-const POST_INJECT_QUIET_MS = 30000;
+const POST_INJECT_QUIET_MS = 45000;
+// The same idea, measured from the moment the session came back (a real
+// turn-end). A recovered turn does NOT scrub the error line out of the
+// viewport, so the very next repaint still carries it - and without this
+// window that repaint reads as a brand-new drop and injects a second
+// "continue" into a session that is already healthy. That was the other half
+// of the double-type: handleTurnEnd used to zero injectedAt, which threw the
+// window above away exactly when it was still needed.
+const POST_RECOVERY_QUIET_MS = 45000;
 
 let els = null;
 let autoProceedArmed = false; // off by default, not persisted - armed each session, mirrors autocompact.js
@@ -59,13 +71,15 @@ const sessions = new Map();
 function sessionState(sessionId) {
   let s = sessions.get(sessionId);
   if (!s) {
-    // retryCount - "continue"s sent on the current unrecovered turn; the
-    //              circuit breaker trips at MAX_RETRIES.
-    // injectedAt - Date.now() of the last "continue" sent, for the
-    //              POST_INJECT_QUIET_MS silence window.
-    // timer      - the pending backoff timer, or null. A non-null timer also
-    //              means "an injection is already on the way, ignore repaints".
-    s = { retryCount: 0, injectedAt: 0, timer: null };
+    // retryCount  - "continue"s sent on the current unrecovered turn; the
+    //               circuit breaker trips at MAX_RETRIES.
+    // injectedAt  - Date.now() of the last "continue" sent, for the
+    //               POST_INJECT_QUIET_MS silence window.
+    // recoveredAt - Date.now() of the last real turn-end, for the
+    //               POST_RECOVERY_QUIET_MS silence window.
+    // timer       - the pending backoff timer, or null. A non-null timer also
+    //               means "an injection is already on the way, ignore repaints".
+    s = { retryCount: 0, injectedAt: 0, recoveredAt: 0, timer: null };
     sessions.set(sessionId, s);
   }
   return s;
@@ -80,11 +94,12 @@ function clearAllPending() {
 
 /**
  * Pure decision: given a session's recovery state and the current time, should
- * a "continue" be scheduled for this connectionError signal? The three guards
+ * a "continue" be scheduled for this connectionError signal? The four guards
  * that keep one connection drop from becoming a burst of "continue"s all live
  * here so test/autoproceed.test.js can pin them without a DOM or fake timers.
  *
- * @param {{ retryCount?: number, injectedAt?: number, pending?: boolean }} state
+ * @param {{ retryCount?: number, injectedAt?: number, recoveredAt?: number,
+ *   pending?: boolean }} state
  *   pending = an injection is already scheduled (caller passes `timer != null`).
  * @param {number} now Date.now()
  * @returns {boolean}
@@ -92,8 +107,10 @@ function clearAllPending() {
 export function shouldScheduleRecovery(state, now) {
   const retryCount = Number.isFinite(state?.retryCount) ? state.retryCount : 0;
   const injectedAt = Number.isFinite(state?.injectedAt) ? state.injectedAt : 0;
+  const recoveredAt = Number.isFinite(state?.recoveredAt) ? state.recoveredAt : 0;
   if (state?.pending === true) return false; // one "continue" already on the way
   if (now - injectedAt < POST_INJECT_QUIET_MS) return false; // same drop, error text still on screen
+  if (now - recoveredAt < POST_RECOVERY_QUIET_MS) return false; // session just came back, this is the OLD error repainting
   if (retryCount >= MAX_RETRIES) return false; // session is dead, stop poking it
   return true;
 }
@@ -121,19 +138,49 @@ function render() {
   els.status.textContent = autoProceedArmed ? t('autoproceed.armed') : t('autoproceed.off');
 }
 
-function handleTurnEnd({ sessionId } = {}) {
+/** Drops a pending injection for one session. Returns its state, or null. */
+function cancelPending(sessionId) {
   const s = sessions.get(sessionId);
-  if (!s) return;
-  // A real turn ended - the session recovered, on its own or off our
-  // "continue". Cancel any injection still sitting on the backoff timer
-  // (otherwise it fires "continue" into a healthy session moments later) and
-  // wipe recovery state so the next, unrelated drop starts from clean.
+  if (!s) return null;
   if (s.timer) {
     clearTimeout(s.timer);
     s.timer = null;
   }
+  return s;
+}
+
+function handleTurnEnd({ sessionId } = {}) {
+  const s = cancelPending(sessionId);
+  if (!s) return;
+  // A real turn ended - the session recovered, on its own or off our
+  // "continue". The pending injection is gone (it would otherwise fire
+  // "continue" into a healthy session moments later) and the circuit breaker
+  // re-arms for the next, genuinely new drop.
+  //
+  // injectedAt is deliberately NOT zeroed here: recovering does not erase the
+  // error line from the viewport, so the repaints that follow are still the
+  // OLD drop and must stay inside the silence window. recoveredAt extends that
+  // silence from this moment, which is what makes one drop cost exactly one
+  // "continue".
   s.retryCount = 0;
-  s.injectedAt = 0;
+  s.recoveredAt = Date.now();
+}
+
+/**
+ * The session is demonstrably alive again: the transcript grew (a tool call
+ * started or finished), which only happens on real progress. If a "continue"
+ * is still sitting on the backoff timer, drop it - the CLI's own retry beat us
+ * to it, and injecting now would land mid-turn as a stray second message.
+ *
+ * Only transcript-sourced payloads count. main.js sends `tiles` from a raw
+ * stdout scan too (src/main.js, detectTools), and a TUI repaint replays old
+ * tool lines - that would "prove" liveness for a session that is doing
+ * nothing. `events` comes from TranscriptWatcher's structured entries, which
+ * cannot be replayed by a redraw.
+ */
+function handleProgress({ sessionId, events } = {}) {
+  if (!Array.isArray(events) || events.length === 0) return;
+  cancelPending(sessionId);
 }
 
 function handleGodModeSignal({ sessionId, type } = {}) {
@@ -159,6 +206,7 @@ function handleGodModeSignal({ sessionId, type } = {}) {
 if (typeof window !== 'undefined' && window.lunacore) {
   window.lunacore.onTurnEnd(handleTurnEnd);
   window.lunacore.onGodModeSignal(handleGodModeSignal);
+  window.lunacore.onTools(handleProgress);
 }
 
 defineWidget({
