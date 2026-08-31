@@ -4,7 +4,8 @@ Operational hand-off for the `feat/fluidity-theming` branch. Read this first,
 then `FLUIDITY_THEMING_PLAN.md` for the design record and the locked decisions
 (they live there, not here — one copy, no drift).
 
-Last updated: 2026-08-27, end of day. Phases 1–3 done, 4–6 unstarted.
+Last updated: 2026-08-31. Phases 1–3 done AND verified in a running app;
+4–6 unstarted.
 
 ---
 
@@ -29,57 +30,66 @@ e9fd3b0  feat: space + type scales on a density multiplier    (phase 1)
 
 ---
 
-## DO THIS FIRST: none of it has been looked at
+## DONE: walked in a running app, 2026-08-31
 
-Three phases are test-green with every token resolving, and **not one frame of
-it has been seen in a running app**. That is the single biggest risk on this
-branch. Phase 4 builds directly on top, so this comes before any new code.
+Every line below was checked by Mati against a live app, in the order written,
+and **all of it passed** — no artifact, no stall, nothing to fix. This was the
+branch's single biggest risk (three phases test-green that no one had watched
+run); it is now spent. Phase 4 is unblocked.
 
-`npm start`, then work down the list. Each line is something that could be
-silently wrong in a way no test can catch.
+Two things were confirmed from outside the app rather than by eye:
+
+- `config/ui.local.json` gained its `railedRegions` key, so the persistence
+  path in 3.4 really did fire.
+- `layoutSizes` still held the unrailed widths afterwards, with `44px` nowhere
+  in it — the invariant in note 3 below, verified rather than assumed.
+
+Kept ticked rather than deleted: this is the record of what the pass covered,
+and phase 4 edits the same grid-track code, so it doubles as the regression
+list to re-walk when 4 lands.
 
 **Phase 1 — the scales**
-- [ ] Nothing looks misaligned. The normalization moved some elements by half a
+- [x] Nothing looks misaligned. The normalization moved some elements by half a
       pixel on purpose (9.5→9, 15→14, 3→2, 7→6); look for anything that now
       reads as off-by-one rather than merely tighter.
 
 **Phase 2 — the four axes** (Ctrl+L → *Interface*)
-- [ ] `dense` — is the HUD still readable, or did something collapse?
-- [ ] each font pack — `mono`, `display`, `system`. All bundled, no network.
-- [ ] `glow: off` on a neon theme (`cyberpunk`) — is the glow actually gone?
-- [ ] `motion: off` — everything below should become instant, not janky.
+- [x] `dense` — is the HUD still readable, or did something collapse?
+- [x] each font pack — `mono`, `display`, `system`. All bundled, no network.
+- [x] `glow: off` on a neon theme (`cyberpunk`) — is the glow actually gone?
+- [x] `motion: off` — everything below should become instant, not janky.
 
 **Phase 3.1 — crossfade**
-- [ ] Switch theme (left Appearance panel). The whole HUD should *dissolve*.
-- [ ] **Watch the terminal while it does.** It must NOT freeze, tear, or
+- [x] Switch theme (left Appearance panel). The whole HUD should *dissolve*.
+- [x] **Watch the terminal while it does.** It must NOT freeze, tear, or
       double-print. It is excluded from the transition on purpose; if it
       misbehaves, the `#terminal` view-transition-name is the thing to look at.
-- [ ] Switch density with the terminal streaming output. Same check.
+- [x] Switch density with the terminal streaming output. Same check.
 
 **Phase 3.2 — overlay exit**
-- [ ] Ctrl+K then Esc. Ctrl+L then Esc. A file in Active Files, then Esc.
+- [x] Ctrl+K then Esc. Ctrl+L then Esc. A file in Active Files, then Esc.
       Each should fade and retreat, not vanish.
-- [ ] Esc then *immediately* reopen the same overlay. It must stay open — that
+- [x] Esc then *immediately* reopen the same overlay. It must stay open — that
       is `cancelExit()`; if it blinks shut a beat later, that call is missing.
-- [ ] Close the file-diff modal: the text must not blank before it fades.
+- [x] Close the file-diff modal: the text must not blank before it fades.
 
 **Phase 3.3 — list motion**
-- [ ] Leave the ports list alone through a rescan. It must be **completely
+- [x] Leave the ports list alone through a rescan. It must be **completely
       still**. Any blink means a key is wrong or missing.
-- [ ] Add/remove a repo so the git list changes — rows should slide, not jump.
-- [ ] Watch the session timeline gain a turn. The new marker arrives from the
+- [x] Add/remove a repo so the git list changes — rows should slide, not jump.
+- [x] Watch the session timeline gain a turn. The new marker arrives from the
       side; the existing ones must NOT slide when it auto-scrolls.
 
 **Phase 3.4 — fold + rail**
-- [ ] Fold a panel. Closing should feel quicker than opening.
-- [ ] Click the `«` / `»` button at the top of a side region. It should collapse
+- [x] Fold a panel. Closing should feel quicker than opening.
+- [x] Click the `«` / `»` button at the top of a side region. It should collapse
       to a 44px strip of letter glyphs, dissolving rather than snapping.
-- [ ] Click a glyph — the region reopens AND scrolls that panel into view.
-- [ ] Restart. The rail should still be collapsed.
-- [ ] Drag a splitter, then collapse, then expand: the width you dragged to must
+- [x] Click a glyph — the region reopens AND scrolls that panel into view.
+- [x] Restart. The rail should still be collapsed.
+- [x] Drag a splitter, then collapse, then expand: the width you dragged to must
       come back **exactly**. This is the invariant the whole rail design rests
       on (`layoutSizes` holds unrailed widths; see `commitTracks()`).
-- [ ] `config/ui.local.json` should now carry `railedRegions`.
+- [x] `config/ui.local.json` should now carry `railedRegions`.
 
 ---
 
