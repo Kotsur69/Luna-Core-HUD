@@ -238,6 +238,30 @@ function resolveSession(sessionId) {
   return activeSession();
 }
 
+/**
+ * Same as resolveSession, but for anything that WRITES INTO a terminal.
+ *
+ * The difference is what an unresolvable id means. resolveSession treats it as
+ * "no preference, use the active tab" - right for a GUI button that never
+ * passes an id. For a targeted write it is dangerous: an id that no longer
+ * resolves means the tab is GONE, and falling back sends that tab's text into
+ * whatever tab happens to be on screen. That is how a background session's
+ * auto-proceed "continue" landed in a healthy terminal that never dropped its
+ * connection - the tab was closed while the injection sat on its backoff timer.
+ *
+ * So: no id at all -> active tab (unchanged). An id that does not resolve ->
+ * null, and the caller drops the write.
+ * @param {unknown} sessionId
+ * @returns {Session|null}
+ */
+function resolveTargetSession(sessionId) {
+  if (sessionId === undefined || sessionId === null) return activeSession();
+  if (typeof sessionId === 'string' && sessions.has(sessionId)) {
+    return sessions.get(sessionId);
+  }
+  return null; // the tab this was meant for is gone - do not redirect it
+}
+
 /** Sends an event to the renderer, if the window is alive. */
 function send(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1159,7 +1183,7 @@ function registerIpc() {
   // Payload: { sessionId?, data } - a missing sessionId lands on the active session.
   ipcMain.on('pty:write', (_event, payload) => {
     const p = payload && typeof payload === 'object' ? payload : { data: payload };
-    const session = resolveSession(p.sessionId);
+    const session = resolveTargetSession(p.sessionId);
     if (session && session.proc) session.proc.write(p.data);
     // §4.2: any input from Mati means an approval prompt (if showing) got answered.
     if (session) session.approvalShowing = false;
@@ -1169,7 +1193,7 @@ function registerIpc() {
   // This is exactly what the COMPACT CONTEXT button uses -> "/compact".
   ipcMain.on('pty:command', (_event, payload) => {
     const p = payload && typeof payload === 'object' ? payload : { text: payload };
-    const session = resolveSession(p.sessionId);
+    const session = resolveTargetSession(p.sessionId);
     if (!session || !session.proc || typeof p.text !== 'string') return;
     const line = p.text.endsWith('\r') ? p.text : `${p.text}\r`;
     session.proc.write(line);
@@ -1187,7 +1211,7 @@ function registerIpc() {
   //
   // { text: string, submit?: boolean } - submit only appends Enter.
   ipcMain.on('pty:paste', (_event, payload) => {
-    const session = resolveSession(payload && payload.sessionId);
+    const session = resolveTargetSession(payload && payload.sessionId);
     if (!session || !session.proc || !payload || typeof payload.text !== 'string') return;
     // Line-ending normalization: only "\n" enters the input buffer.
     const text = payload.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');

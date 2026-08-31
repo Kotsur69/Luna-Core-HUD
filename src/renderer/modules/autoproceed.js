@@ -16,11 +16,11 @@
 //
 // Module-scope listeners, same deliberate deviation godmode.js documents for
 // itself: the whole point is surviving the "not looking at it" case, so
-// onTurnEnd/onGodModeSignal/onTools are wired ONCE at import time and stay
-// live whether or not this widget's DOM is mounted. The armed/disarmed check
-// inside handleGodModeSignal is the actual gate; the visible toggle is the
-// up-front friction, not continuous visibility (same reasoning godmode.js
-// gives for its own listeners).
+// onTurnEnd/onGodModeSignal/onTools/onSessions are wired ONCE at import time
+// and stay live whether or not this widget's DOM is mounted. The
+// armed/disarmed check inside handleGodModeSignal is the actual gate; the
+// visible toggle is the up-front friction, not continuous visibility (same
+// reasoning godmode.js gives for its own listeners).
 //
 // Skips any session isBoundSession() already claims for godmode.js's own
 // run, so an armed to-do-run and this toggle never both inject "continue"
@@ -183,6 +183,40 @@ function handleProgress({ sessionId, events } = {}) {
   cancelPending(sessionId);
 }
 
+/**
+ * Drops recovery state for tabs that no longer exist.
+ *
+ * Without this, closing a tab mid-backoff leaves its "continue" on the timer;
+ * it then fires against a session id main.js has already deleted. main.js
+ * refuses to redirect that write now (resolveTargetSession), so the injection
+ * is merely wasted rather than harmful - but the timer, the state entry and
+ * the misleading "'continue' sent" flash are all still pointless. Prune them.
+ */
+function handleSessionList({ sessions: list } = {}) {
+  for (const sessionId of staleSessionIds(sessions.keys(), list)) {
+    cancelPending(sessionId);
+    sessions.delete(sessionId);
+  }
+}
+
+/**
+ * Which of the ids we hold recovery state for are no longer open tabs. Pure,
+ * so test/autoproceed.test.js can pin it without a renderer.
+ *
+ * A payload that is not a list is treated as "tells us nothing" - every id
+ * survives. Dropping state on a malformed broadcast would cancel a legitimate
+ * pending "continue".
+ *
+ * @param {Iterable<string>} known ids with recovery state
+ * @param {unknown} list sessions[] from the sessions:update broadcast
+ * @returns {string[]}
+ */
+export function staleSessionIds(known, list) {
+  if (!Array.isArray(list)) return [];
+  const live = new Set(list.map((s) => s && s.id).filter(Boolean));
+  return [...known].filter((id) => !live.has(id));
+}
+
 function handleGodModeSignal({ sessionId, type } = {}) {
   if (!autoProceedArmed || type !== 'connectionError') return;
   if (isBoundSession(sessionId)) return; // godmode.js already owns this tab's recovery
@@ -207,6 +241,7 @@ if (typeof window !== 'undefined' && window.lunacore) {
   window.lunacore.onTurnEnd(handleTurnEnd);
   window.lunacore.onGodModeSignal(handleGodModeSignal);
   window.lunacore.onTools(handleProgress);
+  window.lunacore.onSessions(handleSessionList);
 }
 
 defineWidget({

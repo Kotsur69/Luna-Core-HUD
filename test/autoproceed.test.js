@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { shouldScheduleRecovery } = require('../src/renderer/modules/autoproceed.js');
+const { shouldScheduleRecovery, staleSessionIds } = require('../src/renderer/modules/autoproceed.js');
 
 // Mirror the module constants (kept in sync by eye, like COOLDOWN_MS in
 // autocompact.test.js).
@@ -108,4 +108,42 @@ test('missing or malformed state fields are treated as zero', () => {
   assert.equal(shouldScheduleRecovery({ retryCount: undefined, injectedAt: NaN }, T0), true);
   assert.equal(shouldScheduleRecovery({ recoveredAt: NaN }, T0), true);
   assert.equal(shouldScheduleRecovery(undefined, T0), true);
+});
+
+// ---- staleSessionIds (the "continue landed in the wrong terminal" bug) ------
+// A tab closed mid-backoff used to leave its injection on the timer; main.js
+// then could not resolve the id and fell back to the ACTIVE tab, so a
+// background session's "continue" was typed into a terminal that never
+// dropped its connection. main.js refuses to redirect now; this prunes the
+// leftover state that pointed at the dead tab.
+
+const openTabs = (...ids) => ids.map((id) => ({ id, alive: true }));
+
+test('staleSessionIds finds the tab that is no longer open', () => {
+  assert.deepEqual(staleSessionIds(['s1', 's2'], openTabs('s1')), ['s2']);
+});
+
+test('staleSessionIds keeps every id while all tabs are open', () => {
+  assert.deepEqual(staleSessionIds(['s1', 's2'], openTabs('s1', 's2')), []);
+});
+
+test('staleSessionIds accepts a Map keys() iterator, not just an array', () => {
+  const state = new Map([['s1', {}], ['s9', {}]]);
+  assert.deepEqual(staleSessionIds(state.keys(), openTabs('s1')), ['s9']);
+});
+
+test('staleSessionIds drops nothing when the broadcast is malformed', () => {
+  // "Tells us nothing" must not read as "every tab is gone" - that would
+  // cancel a legitimate pending "continue".
+  assert.deepEqual(staleSessionIds(['s1'], undefined), []);
+  assert.deepEqual(staleSessionIds(['s1'], null), []);
+  assert.deepEqual(staleSessionIds(['s1'], 'nonsense'), []);
+});
+
+test('staleSessionIds ignores junk entries in the tab list', () => {
+  assert.deepEqual(staleSessionIds(['s1', 's2'], [null, { id: 's1' }, {}, 42]), ['s2']);
+});
+
+test('staleSessionIds treats an empty tab list as everything gone', () => {
+  assert.deepEqual(staleSessionIds(['s1', 's2'], []), ['s1', 's2']);
 });
