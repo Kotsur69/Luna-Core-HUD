@@ -585,6 +585,44 @@ function commitTracks() {
   persistSizes();
 }
 
+/**
+ * The columns a saved layout should record: the widths with every region OPEN.
+ *
+ * currentBaseTracks, never currentTracks. A layout saved while something happens
+ * to be railed must not write 44px down as that region's width - opening the
+ * region in the saved layout would then leave a strip the user cannot widen, and
+ * the toggle would have nothing to restore. The same invariant layoutSizes obeys,
+ * reached from the builder's side. v0.10 4.2.
+ *
+ * @returns {string|null} null only when no layout has been applied yet.
+ */
+export function currentUnrailedColumns() {
+  if (currentBaseTracks) return serializeTracks(currentBaseTracks);
+  return currentLayout ? currentLayout.columns : null;
+}
+
+/**
+ * Copies the current layout's rails onto another layout id. v0.10 4.2.
+ *
+ * The builder saves what is on screen, and which columns are collapsed is part
+ * of that. Rails are deliberately not in the layout spec (see the header of
+ * modules/layoutbuilder.js), so the copy has to happen in here: handing the map
+ * to appearance.js would give railedRegions two owners, and the last writer
+ * would win by accident.
+ *
+ * A no-op when nothing is railed, so saving a fully open HUD does not persist an
+ * empty entry per layout the user has ever saved.
+ */
+export function copyRailsTo(targetId) {
+  if (!currentLayout || !targetId || targetId === currentLayout.id) return;
+  const from = railedFor(currentLayout.id);
+  if (from.size === 0) return;
+  const to = railedFor(targetId);
+  to.clear();
+  for (const name of from) to.add(name);
+  persistRailed();
+}
+
 /** Which way a region folds away: toward whichever edge it already sits nearer.
  *  The grid's own middle, not the terminal's position - a preset is free to put
  *  the terminal anywhere, and "away" is what the eye reads from the edge. */

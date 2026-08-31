@@ -565,6 +565,57 @@
         <span class="ui-field__label" data-i18n="appearance.layout">Uklad</span>
         <select id="layout-switcher" class="profile-select"></select>
       </label>
+      <!-- v0.10 4.2: the layout builder. Deliberately the same shape as
+           .project-row further down - the control it acts on, then icon buttons
+           that act on it - so it needs no CSS of its own.
+
+           Naming uses an inline input rather than a dialog because
+           window.prompt() does not exist in Electron's renderer. Rename and
+           delete are disabled unless the selected layout is one of the user's
+           own; a shipped preset is not theirs to remove. -->
+      <div class="project-row">
+        <input
+          type="text"
+          id="layout-name"
+          class="profile-select"
+          maxlength="64"
+          autocomplete="off"
+          spellcheck="false"
+          data-i18n-ph="appearance.layout.namePh"
+          placeholder="Nazwa ukladu"
+        />
+        <button
+          type="button"
+          id="layout-save-btn"
+          class="project-add-btn"
+          data-i18n-title="appearance.layout.save"
+          title="Zapisz obecny uklad pod ta nazwa"
+        >+</button>
+        <button
+          type="button"
+          id="layout-rename-btn"
+          class="project-add-btn"
+          data-i18n-title="appearance.layout.rename"
+          title="Zmien nazwe wybranego ukladu"
+        >&#9998;</button>
+        <button
+          type="button"
+          id="layout-dup-btn"
+          class="project-add-btn"
+          data-i18n-title="appearance.layout.duplicate"
+          title="Duplikuj wybrany uklad"
+        >&#10697;</button>
+        <button
+          type="button"
+          id="layout-del-btn"
+          class="project-add-btn project-remove-btn"
+          data-i18n-title="appearance.layout.delete"
+          title="Usun wybrany uklad"
+        >&minus;</button>
+      </div>
+      <p class="hint" data-i18n="appearance.layout.hint">
+        Zapisuje szerokosci kolumn, rozmieszczenie widzetow i zwiniete kolumny.
+      </p>
       <!-- UI language moved to the Settings overlay (Ctrl+L, 2026-08-19) -
            same declutter reasoning as the sound/boot move (termcustom.js). -->
     </div>

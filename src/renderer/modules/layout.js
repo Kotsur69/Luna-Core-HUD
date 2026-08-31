@@ -250,6 +250,30 @@ export async function initLayout() {
   if (!applyLayout(chosen)) applyLayout(layouts[0].id);
 }
 
+/**
+ * Re-fetches the preset list from the main process. v0.10 4.2.
+ *
+ * The builder needs this: a layout saved into ui.local.json does not exist for
+ * the renderer until layouts:list has been asked again, and having to restart
+ * the app to see your own layout appear in the picker would read as broken.
+ *
+ * Deliberately does NOT apply anything. Re-applying here would tear the HUD down
+ * on every save, including a rename that changed nothing but a label; the caller
+ * decides whether a switch is wanted.
+ *
+ * @returns {Promise<boolean>} false leaves the previous list in place.
+ */
+export async function refreshLayouts() {
+  try {
+    const res = (await window.lunacore.getLayouts()) || {};
+    if (!Array.isArray(res.layouts) || res.layouts.length === 0) return false;
+    layouts = res.layouts;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Switches preset and remembers the choice. Used by the Appearance widget. */
 export function selectLayout(id) {
   if (!applyLayout(id)) return false;

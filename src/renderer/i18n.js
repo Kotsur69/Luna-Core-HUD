@@ -58,6 +58,14 @@ const I18N_DICT = {
     'appearance.title': 'Wyglad',
     'appearance.theme': 'Motyw',
     'appearance.layout': 'Uklad',
+    // v0.10 4.2 layout builder.
+    'appearance.layout.namePh': 'Nazwa ukladu',
+    'appearance.layout.save': 'Zapisz obecny uklad pod ta nazwa',
+    'appearance.layout.rename': 'Zmien nazwe wybranego ukladu',
+    'appearance.layout.duplicate': 'Duplikuj wybrany uklad',
+    'appearance.layout.delete': 'Usun wybrany uklad',
+    'appearance.layout.hint':
+      'Zapisuje szerokosci kolumn, rozmieszczenie widzetow i zwiniete kolumny. Wlasne uklady mozesz zmieniac i usuwac, wbudowanych nie.',
     'appearance.lang': 'Jezyk',
     'appearance.sound': 'Dzwiek',
     'appearance.sound.hint': 'Dzwiekowe sprzezenie zwrotne (klawisze, zakladki, przelaczniki). Wymaga mpv na PATH - w przeciwnym razie cicho nic nie robi.',
@@ -457,6 +465,14 @@ const I18N_DICT = {
     'appearance.title': 'Appearance',
     'appearance.theme': 'Theme',
     'appearance.layout': 'Layout',
+    // v0.10 4.2 layout builder.
+    'appearance.layout.namePh': 'Layout name',
+    'appearance.layout.save': 'Save the current arrangement under this name',
+    'appearance.layout.rename': 'Rename the selected layout',
+    'appearance.layout.duplicate': 'Duplicate the selected layout',
+    'appearance.layout.delete': 'Delete the selected layout',
+    'appearance.layout.hint':
+      'Saves column widths, widget placement and collapsed columns. Your own layouts can be renamed and deleted; the built-in ones cannot.',
     'appearance.lang': 'Language',
     'appearance.sound': 'Sound',
     'appearance.sound.hint': 'Sound feedback (keystrokes, tabs, toggles). Needs mpv on PATH - silently does nothing otherwise.',

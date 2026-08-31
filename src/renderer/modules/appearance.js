@@ -25,7 +25,16 @@
 import { emitLangChange, onLangChange } from './bus.js';
 import { applyTerminalTheme, applyTerminalAppearance } from './terminals.js';
 import { defineWidget } from './registry.js';
-import { getLayouts, getActiveLayoutId, selectLayout } from './layout.js';
+import { getLayouts, getActiveLayoutId, selectLayout, refreshLayouts } from './layout.js';
+import { currentUnrailedColumns, copyRailsTo } from './panels.js';
+import { slotsFor } from './widgetarrange.js';
+import {
+  specFromLive,
+  saveCustomLayout,
+  renameCustomLayout,
+  duplicateCustomLayout,
+  deleteCustomLayout,
+} from './layoutbuilder.js';
 import { loc } from './util.js';
 import { sfx } from './sound.js';
 import { crossfade } from './motion.js';
@@ -105,6 +114,34 @@ function renderThemeSwitcher() {
  * remembered preset no longer exists, so the single source of truth is
  * getActiveLayoutId(). Labels are localized, hence the repaint on langChange.
  */
+/** layoutId -> saved layout spec, as ui.local.json holds it. v0.10 4.2.
+ *  Mirrored at module scope because every builder action is a whole-map write:
+ *  see the note on customLayouts in src/uiprefs.js. */
+let customLayouts = {};
+
+/** Whether an id belongs to one of the user's own layouts rather than a preset. */
+function isOwnLayout(id) {
+  return Object.prototype.hasOwnProperty.call(customLayouts, id);
+}
+
+/**
+ * Which builder buttons are usable right now. v0.10 4.2.
+ *
+ * Save works from any layout - it snapshots whatever is on screen. The other
+ * three act on a SAVED layout, so they stay disabled on a shipped preset: a
+ * preset is not the user's to rename or remove, and duplicating one is just Save
+ * under another name.
+ */
+function renderBuilderState() {
+  if (!els || !els.layoutName) return;
+  const named = els.layoutName.value.trim().length > 0;
+  const own = isOwnLayout(els.layoutSwitcher.value);
+  els.layoutSave.disabled = !named;
+  els.layoutRename.disabled = !named || !own;
+  els.layoutDup.disabled = !named || !own;
+  els.layoutDel.disabled = !own;
+}
+
 function renderLayoutSwitcher() {
   if (!els) return;
   const layouts = getLayouts();
@@ -117,6 +154,7 @@ function renderLayoutSwitcher() {
   }
   const active = getActiveLayoutId();
   if (active) els.layoutSwitcher.value = active;
+  renderBuilderState();
 }
 
 /** Ids of every loaded theme, for the console hook and the probe. */
@@ -160,6 +198,10 @@ export async function initAppearance() {
   // §4/§5). A fallback `prefs` with no term* keys is a safe no-op here.
   applyTerminalAppearance(prefs);
 
+  // v0.10 4.2. Read before renderLayoutSwitcher() below, which needs it to know
+  // which of the listed layouts the user is allowed to rename or delete.
+  customLayouts = (prefs && prefs.customLayouts) || {};
+
   // Language first, so applyStatic catches the whole DOM on startup.
   applyLang(prefs.lang);
   // The widget already mounted (initLayout runs first), so its layout options
@@ -191,6 +233,12 @@ defineWidget({
     els = {
       themeSwitcher: root.querySelector('#theme-switcher'),
       layoutSwitcher: root.querySelector('#layout-switcher'),
+      // v0.10 4.2 layout builder.
+      layoutName: root.querySelector('#layout-name'),
+      layoutSave: root.querySelector('#layout-save-btn'),
+      layoutRename: root.querySelector('#layout-rename-btn'),
+      layoutDup: root.querySelector('#layout-dup-btn'),
+      layoutDel: root.querySelector('#layout-del-btn'),
     };
 
     // Repaint from module state - initAppearance() only runs once at launch,
@@ -221,6 +269,93 @@ defineWidget({
     //     is why src/layouts.js rejects any layout that fails to place it.
     els.layoutSwitcher.addEventListener('change', () => {
       if (!selectLayout(els.layoutSwitcher.value)) renderLayoutSwitcher();
+      else renderBuilderState();
+    });
+
+    // ---- v0.10 4.2: the layout builder -------------------------------------
+    //
+    // Every action is the same three steps: transform the map, write it WHOLE
+    // (uiprefs merges nothing per entry, which is what makes a delete
+    // expressible), then ask the main process for the list again - a layout in
+    // ui.local.json does not exist for the renderer until layouts:list has been
+    // re-read.
+    const commit = async (next, selectId) => {
+      customLayouts = next;
+      window.lunacore.setUiPrefs({ customLayouts: next });
+      await refreshLayouts();
+      if (selectId) selectLayout(selectId);
+      renderLayoutSwitcher();
+    };
+
+    // Shipped ids as well as saved ones: loadLayouts lets the user's source win,
+    // so a name that slugged onto a preset's id would make that preset vanish
+    // from this very list with no hint why.
+    const takenIds = () => [...getLayouts().map((l) => l.id), ...Object.keys(customLayouts)];
+
+    els.layoutName.addEventListener('input', renderBuilderState);
+
+    els.layoutSave.addEventListener('click', async () => {
+      const active = getLayouts().find((l) => l.id === els.layoutSwitcher.value);
+      const spec = specFromLive({
+        layout: active,
+        columns: currentUnrailedColumns(),
+        slots: active ? slotsFor(active) : null,
+        label: els.layoutName.value,
+      });
+      const out = spec && saveCustomLayout(customLayouts, spec, takenIds());
+      if (!out) return;
+      sfx.modeToggle();
+      // Rails are panels.js's to move - keyed by layout id, deliberately not in
+      // the spec. Before the switch, while the current layout is still applied.
+      copyRailsTo(out.id);
+      els.layoutName.value = '';
+      await commit(out.map, out.id);
+    });
+
+    els.layoutRename.addEventListener('click', async () => {
+      const next = renameCustomLayout(
+        customLayouts,
+        els.layoutSwitcher.value,
+        els.layoutName.value
+      );
+      if (!next) return;
+      sfx.modeToggle();
+      els.layoutName.value = '';
+      // No selectId: a rename changes a label, not which layout is on screen.
+      await commit(next, null);
+    });
+
+    els.layoutDup.addEventListener('click', async () => {
+      const out = duplicateCustomLayout(
+        customLayouts,
+        els.layoutSwitcher.value,
+        els.layoutName.value,
+        takenIds()
+      );
+      if (!out) return;
+      sfx.modeToggle();
+      els.layoutName.value = '';
+      await commit(out.map, out.id);
+    });
+
+    els.layoutDel.addEventListener('click', async () => {
+      const doomed = els.layoutSwitcher.value;
+      const next = deleteCustomLayout(customLayouts, doomed);
+      if (!next) return;
+      sfx.modeToggle();
+
+      // Whether we are standing on it has to be decided BEFORE the list is
+      // re-read, or getActiveLayoutId() is answering about a layout that no
+      // longer appears in it.
+      const standingOnIt = getActiveLayoutId() === doomed;
+      customLayouts = next;
+      window.lunacore.setUiPrefs({ customLayouts: next });
+      await refreshLayouts();
+      if (standingOnIt) {
+        const fallback = getLayouts()[0];
+        if (fallback) selectLayout(fallback.id);
+      }
+      renderLayoutSwitcher();
     });
 
     return () => {

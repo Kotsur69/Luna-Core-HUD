@@ -155,6 +155,10 @@ function normalizeLayout(raw) {
     regionOrder,
     chrome: { brand: pickChrome(chromeRaw.brand), status: pickChrome(chromeRaw.status) },
     slots,
+    // Set only by customSource(). The renderer treats a saved layout differently
+    // in one place - widgetarrange.js appends widgets it places nowhere, which
+    // would undo a shipped preset's deliberate omissions (see `focus`).
+    custom: raw.custom === true,
   };
 }
 
@@ -186,7 +190,9 @@ const FALLBACK = {
  */
 function customSource(custom) {
   if (!custom || typeof custom !== 'object' || Array.isArray(custom)) return null;
-  return { layouts: Object.entries(custom).map(([id, spec]) => ({ ...spec, id })) };
+  return {
+    layouts: Object.entries(custom).map(([id, spec]) => ({ ...spec, id, custom: true })),
+  };
 }
 
 /**

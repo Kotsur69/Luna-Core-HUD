@@ -32,7 +32,7 @@
 'use strict';
 
 import { onLangChange } from './bus.js';
-import { getWidget } from './registry.js';
+import { getWidget, listWidgets } from './registry.js';
 
 /**
  * Widgets a layout may place but this feature must never move. `terminal` is
@@ -168,9 +168,41 @@ function app() {
   return appEl;
 }
 
+/**
+ * Appends any registered widget this layout places nowhere. CUSTOM layouts only.
+ *
+ * A shipped preset that omits a widget is making an authoring decision - `focus`
+ * leaves most of them out on purpose - so healing there would quietly undo the
+ * preset. A SAVED layout is a different thing: it froze the widget list as it
+ * stood on the day it was saved, and a widget added by a later version would
+ * otherwise be invisible in it forever, with no way to drag in something that is
+ * not on screen to begin with.
+ *
+ * They land at the end of the last region that does not hold the terminal, which
+ * is where the readouts already live. The next save writes them into the spec, so
+ * this heals once rather than on every load.
+ */
+function withUnplacedWidgets(slots) {
+  const placed = new Set();
+  for (const ids of Object.values(slots)) for (const id of ids) placed.add(id);
+
+  const missing = listWidgets()
+    .map((w) => w && w.id)
+    .filter((id) => id && !placed.has(id));
+  if (missing.length === 0) return slots;
+
+  const target = Object.keys(slots)
+    .reverse()
+    .find((r) => !(slots[r] || []).includes('terminal'));
+  if (!target) return slots;
+
+  return { ...slots, [target]: [...slots[target], ...missing] };
+}
+
 /** The effective slots for a layout, stored arrangement merged in. */
 export function slotsFor(layout) {
-  return effectiveSlots(layout, arrangements.get(layout.id) || null);
+  const slots = effectiveSlots(layout, arrangements.get(layout.id) || null);
+  return layout && layout.custom ? withUnplacedWidgets(slots) : slots;
 }
 
 function persist() {
