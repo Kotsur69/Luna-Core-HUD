@@ -115,6 +115,131 @@
           "skills"
         ]
       }
+    },
+    {
+      "id": "left-only",
+      "label": { "pl": "Tylko lewa", "en": "Left only" },
+      "grid": {
+        "columns": "320px 1fr",
+        "rows": "1fr",
+        "areas": ["side main"]
+      },
+      "chrome": { "brand": "side", "status": "side" },
+      "slots": {
+        "side": [
+          "actions",
+          "appearance",
+          "project",
+          "profile",
+          "context",
+          "usage",
+          "telemetry",
+          "media",
+          "devices",
+          "skilltracker",
+          "activefiles",
+          "sessiontimeline",
+          "ports",
+          "git",
+          "mcp",
+          "diagnostics",
+          "scratchpad",
+          "todo",
+          "clipboard",
+          "cheatsheets",
+          "prompts",
+          "skills"
+        ],
+        "main": ["terminal"]
+      }
+    },
+    {
+      "id": "cockpit",
+      "label": { "pl": "Kokpit", "en": "Cockpit" },
+      "grid": {
+        "columns": "240px 1fr 240px",
+        "rows": "1fr 200px",
+        "areas": ["port main starboard", "port dock starboard"]
+      },
+      "chrome": { "brand": "port", "status": "port" },
+      "slots": {
+        "port": ["actions", "appearance", "project", "profile", "cheatsheets", "prompts", "skills"],
+        "main": ["terminal"],
+        "starboard": ["context", "usage", "telemetry", "media", "devices", "skilltracker"],
+        "dock": ["activefiles", "sessiontimeline", "ports", "git", "mcp", "diagnostics", "scratchpad", "todo", "clipboard"]
+      }
+    },
+    {
+      "id": "ultrawide",
+      "label": { "pl": "Panorama", "en": "Ultrawide" },
+      "grid": {
+        "columns": "240px 1fr 300px 300px",
+        "rows": "1fr",
+        "areas": ["rail main mid far"]
+      },
+      "chrome": { "brand": "rail", "status": "rail" },
+      "slots": {
+        "rail": ["actions", "appearance", "project", "profile"],
+        "main": ["terminal"],
+        "mid": ["context", "usage", "telemetry", "media", "devices", "skilltracker"],
+        "far": [
+          "activefiles",
+          "sessiontimeline",
+          "ports",
+          "git",
+          "mcp",
+          "diagnostics",
+          "scratchpad",
+          "todo",
+          "clipboard",
+          "cheatsheets",
+          "prompts",
+          "skills"
+        ]
+      }
+    },
+    {
+      "id": "stacked",
+      "label": { "pl": "Pionowy", "en": "Stacked" },
+      "grid": {
+        "columns": "1fr 260px",
+        "rows": "1fr 230px 230px",
+        "areas": ["main side", "deck-a side", "deck-b side"]
+      },
+      "chrome": { "brand": "side", "status": "side" },
+      "slots": {
+        "main": ["terminal"],
+        "side": ["actions", "appearance", "project", "profile"],
+        "deck-a": ["context", "usage", "telemetry", "cheatsheets", "prompts", "skills"],
+        "deck-b": [
+          "media",
+          "devices",
+          "skilltracker",
+          "activefiles",
+          "sessiontimeline",
+          "ports",
+          "git",
+          "mcp",
+          "diagnostics",
+          "scratchpad",
+          "todo",
+          "clipboard"
+        ]
+      }
+    },
+    {
+      "id": "zen",
+      "label": { "pl": "Zen", "en": "Zen" },
+      "grid": {
+        "columns": "1fr 230px",
+        "rows": "1fr",
+        "areas": ["main side"]
+      },
+      "chrome": { "brand": "side", "status": "side" },
+      "slots": {
+        "main": ["terminal"],
+        "side": ["appearance", "actions", "context", "usage"]
+      }
     }
   ]
 }

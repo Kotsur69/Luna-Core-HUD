@@ -192,7 +192,18 @@ test('normalizeLayout rejects a layout without id', () => {
 test('config/layouts.json - every preset passes validation', () => {
   const { layouts, activeLayout } = loadLayouts();
   const ids = layouts.map((l) => l.id);
-  assert.deepEqual(ids, ['classic', 'focus', 'monitor-heavy', 'bottom-dock']);
+  assert.deepEqual(ids, [
+    'classic',
+    'focus',
+    'monitor-heavy',
+    'bottom-dock',
+    // v0.10 phase 4.1. Order here is the order they appear in the picker.
+    'left-only',
+    'cockpit',
+    'ultrawide',
+    'stacked',
+    'zen',
+  ]);
   assert.equal(activeLayout, 'classic');
   assert.notEqual(getLayout(layouts, 'classic'), null);
 });

@@ -215,7 +215,7 @@ test('resizeFlex only touches its own two tracks', () => {
 //
 // A preset whose columns this file cannot parse silently loses its splitters,
 // which is exactly the kind of regression nobody notices until they try to drag
-// one. Pin the shipped four.
+// one. Pin every shipped preset.
 
 test('config/layouts.json - every preset yields parseable tracks', () => {
   for (const l of loadLayouts().layouts) {
@@ -230,6 +230,39 @@ test('config/layouts.json - every preset offers at least one splitter', () => {
     const tracks = parseTracks(l.columns);
     const usable = tracks.map((_t, i) => splitterPlan(tracks, i)).filter(Boolean);
     assert.ok(usable.length > 0, `layout "${l.id}" has no resizable boundary`);
+  }
+});
+
+// The rail is applied to a grid COLUMN, but it is tracked by REGION NAME. Those
+// are the same thing only while no two railable regions sit in one column - put
+// `deck-a` and `deck-b` both in column 0 and railing either one squeezes the
+// other to 44px while nothing marks it railed, so its panels stay mounted in a
+// track too narrow to read them and the toggle that would restore it is on the
+// other region.
+//
+// Nothing in panels.js can catch this: regionColumn() answers per region and is
+// right both times. It is a property of the PRESET, which makes it this file's
+// job - and phase 4.2 generates layouts from whatever the user dragged into
+// place, so the rule needs a guard before the builder can lean on it.
+test('config/layouts.json - no two railable regions share a grid column', () => {
+  for (const l of loadLayouts().layouts) {
+    const tracks = parseTracks(l.columns);
+    const owner = new Map();
+    for (const name of l.regionOrder) {
+      const col = regionColumn(l.areas, name);
+      // Spans columns or sits in a different one per row: no handle either way.
+      if (col === null) continue;
+      // Railing it would leave no elastic track, so railTracks() already
+      // refuses and decorateRails() gives it no button.
+      if (railTracks(tracks, col) === null) continue;
+      const prev = owner.get(col);
+      assert.equal(
+        prev,
+        undefined,
+        `layout "${l.id}": regions "${prev}" and "${name}" both rail column ${col}`
+      );
+      owner.set(col, name);
+    }
   }
 });
 
