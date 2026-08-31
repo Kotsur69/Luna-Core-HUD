@@ -4,8 +4,8 @@ Operational hand-off for the `feat/fluidity-theming` branch. Read this first,
 then `FLUIDITY_THEMING_PLAN.md` for the design record and the locked decisions
 (they live there, not here — one copy, no drift).
 
-Last updated: 2026-08-31. Phases 1–3 done AND verified in a running app;
-4–6 unstarted.
+Last updated: 2026-08-31. Phases 1–3 done AND verified in a running app; phase 4
+done and test-green but NOT yet walked; 5–6 unstarted.
 
 ---
 
@@ -16,6 +16,11 @@ the bump to `0.10.0` is phase 6, deliberately at the end, one build for the
 whole release.
 
 ```
+91fd999  feat: wire the layout builder into Appearance     (4.2 complete)
+de17ba5  feat: the layout builder's pure half              (4.2, WIP)
+9ff0800  feat: saved layouts stored and loaded             (4.2, data half)
+f46d5c6  feat: five more layout presets                    (4.1)
+bbd6a4c  docs: record the phase 1-3 walkthrough as done
 5a6ad6a  docs: mark phase 3 done, point at phase 4
 62b2ae8  feat: fold direction + collapse a column to a rail   (3.4)
 1bb5309  feat: keyed list motion                              (3.3)
@@ -26,7 +31,7 @@ bd4284e  feat: modifier axes                                  (phase 2, WIP)
 e9fd3b0  feat: space + type scales on a density multiplier    (phase 1)
 ```
 
-`npm test` → **916 pass, 0 fail**, ~0.8s. `npm start` runs the app.
+`npm test` → **966 pass, 0 fail**, ~0.8s. `npm start` runs the app.
 
 ---
 
@@ -95,10 +100,50 @@ list to re-walk when 4 lands.
 
 ## What's next
 
-**Phase 4 — templates.** Five presets (`left-only`, `cockpit`, `ultrawide`,
-`stacked`, `zen`) plus the layout builder writing `customLayouts` to
-`ui.local.json`. It will be editing exactly the grid-track code 3.4 extended:
-`regionColumn()`, `railTracks()`, `commitTracks()` in `panels.js` are the seam.
+**Phase 4 — DONE** (`f46d5c6` + `9ff0800` + `de17ba5` + `91fd999`), 966 tests
+green. Five presets plus the builder. See the plan for the three decisions that
+departed from the original sketch. **Not yet seen running** — the checklist below
+is the outstanding work on it.
+
+### Phase 4 needs a walk, and part of it cannot be seen without a restart
+
+The DOM half is untested by `node --test` (the same line `layouts.test.js` and
+`panels.test.js` already draw), so this is its only verification.
+
+**The five presets** — pick each from Appearance → Layout.
+- [ ] `left-only`, `cockpit`, `ultrawide`, `stacked`, `zen` each render without a
+      collapsed or overlapping region.
+- [ ] In each, the `«`/`»` rail button appears only where a column can actually
+      shrink. `stacked` should offer it on `side` and nowhere else; `cockpit`
+      should NOT offer it on `dock`, whose column is the only elastic one.
+- [ ] `zen` is a thin side strip, not auto-hiding. Current-correct, not a bug —
+      auto-hide was never built.
+
+**The builder** — the name box and four buttons under the layout select.
+- [ ] With a preset selected, only `+` lights up once you type a name. Rename,
+      duplicate and delete stay disabled: a preset is not yours to change.
+- [ ] Drag a splitter somewhere odd, move a widget to another region, then type a
+      name and press `+`. The picker gains your layout and switches to it.
+- [ ] The widths and widget placement are the ones you had, not the preset's.
+- [ ] Rail a column, then save. The new layout opens with that column railed, and
+      un-railing it gives the width you dragged to, **not** 44px. That is the
+      `currentUnrailedColumns()` invariant.
+- [ ] With your own layout selected, all four buttons are usable.
+- [ ] Rename it: the label changes in the picker and the HUD does **not** rebuild.
+- [ ] Duplicate it: a second entry appears, and editing one must not change the
+      other (that is the deep copy).
+- [ ] Delete the one you are standing on. The HUD must land on another layout, not
+      sit on one nothing can name.
+- [ ] Name one `Classic`. It must save as `classic-2`, and the shipped `Classic`
+      must still be in the list.
+- [ ] Name one with Polish letters (`Mój Układ`). It should save fine, with the id
+      becoming `moj-uklad`.
+- [ ] `config/ui.local.json` carries `customLayouts` with your entries.
+
+**Restart-only** (do this last):
+- [ ] Saved layouts survive a restart and still apply.
+- [ ] The five new presets appear in the picker — they cannot show up before a
+      restart, since `layouts:list` is read once at startup.
 
 **Phase 5 — themes.** 8–10 new dark ones, plus a 4.5:1 contrast test over all
 themes (expect it to flag 1–2 existing ones; fixing those is in scope).

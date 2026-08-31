@@ -131,14 +131,36 @@ the list motion, or the rail. Everything is test-green and every token resolves,
 but *none of it has been seen*. That is the first thing to do at the next
 sitting, before phase 4 builds on top.
 
-### NEXT: Phase 4 — templates
+### Phase 4 — DONE, committed (`f46d5c6` + `9ff0800` + `de17ba5` + `91fd999`)
 
-Unstarted. Five new presets (`left-only`, `cockpit`, `ultrawide`, `stacked`,
-`zen`) plus the user layout builder writing `customLayouts` to `ui.local.json`.
-Note that the builder will be editing exactly the grid-track code phase 3.4 just
-extended — `regionColumn()` / `railTracks()` / `commitTracks()` are the seam.
+Five presets, plus the builder: save the arrangement on screen under a name, then
+rename, duplicate, delete. `customLayouts` in `ui.local.json`, merged by
+`loadLayouts()`.
 
-### Phases 5–6 are unstarted
+Three decisions that departed from what this section originally said:
+
+* **The merge happens in MAIN, not in the renderer's `getLayouts()`.**
+  `normalizeLayout()` is the only thing that knows the deep rules, and it is CJS
+  in main — merging renderer-side would mean a second validator that has to agree
+  with the first forever. `loadLayouts()` already had a `collect(src)` pipeline,
+  so custom is a third source and `modules/layout.js` changed not at all.
+* **`zen` ships as a thin side region, not auto-hiding.** Auto-hide is behaviour,
+  not data, so 4.1 could not deliver it; today the 3.4 rail collapses it by hand.
+  Still open if Mati wants the real thing.
+* **Folds are not stored in a saved layout.** `collapsed` is global rather than
+  per-layout and already survives a layout switch, so recording it would mean a
+  saved layout silently re-folding panels the user had opened since. Rails ARE
+  carried over, by copying `railedRegions` to the new id rather than adding a
+  field to the spec.
+
+Two things worth knowing before touching this code again. `normalizeLayout` now
+carries a `custom` flag, and `widgetarrange.js` uses it to append widgets a saved
+layout places nowhere — without that, a layout freezes the widget list as it stood
+the day it was saved and a widget added later would be invisible in it forever.
+And a preset must give each RAILABLE region a column of its own; `stacked` was
+written single-column first and two existing tests caught it.
+
+### NEXT: Phase 5 — themes. Phase 6 unstarted
 
 See the phase sections below — written out in full and unchanged.
 
