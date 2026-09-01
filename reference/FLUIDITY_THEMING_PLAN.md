@@ -160,7 +160,49 @@ the day it was saved and a widget added later would be invisible in it forever.
 And a preset must give each RAILABLE region a column of its own; `stacked` was
 written single-column first and two existing tests caught it.
 
-### NEXT: Phase 5 — themes. Phase 6 unstarted
+### Phase 5 — DONE, code + audit. Phase 6 unstarted
+
+Ten new dark themes, all three families the plan named, plus the contrast audit
+it asked for. `npm test` → **982 pass, 0 fail**.
+
+| Family | Shipped |
+|---|---|
+| Neon / sci-fi HUD | `eva-01` (0 radius, 2px borders, 4.5px tracking, purple + EVA green), `tron` (mono everywhere, 0 radius, cyan grid texture, no lift/press), `holo` (30px glow, soft 12px radius, slow smooth motion), `luna` (moon-silver on ink — the namesake finally has a theme) |
+| Seasonal / high-concept | `aurora` (green→violet gradient texture, 14px radius, 800ms slow), `abyss` (5px glow, no text-glow, heavy radial vignette, 900ms), `magma` (basalt + ember, warm `--bad: #ff6b3d`) |
+| Calm / professional | `catppuccin-mocha`, `rose-pine`, `everforest-dark` — all `--glow-size: 0`, `--text-glow: none`, `--case-title: none`, radius 12–14px |
+
+That last family is the point of the phase: 14 of the 18 pre-v0.10 themes were
+neon, so a long session had nowhere quiet to sit. All three turn the glow off at
+the token layer rather than picking duller colours, which is exactly what C3's
+vocabulary exists for.
+
+**The audit came back better than this plan predicted.** It expected 1–2 existing
+themes to fail 4.5:1 on body text; **none did** — the worst was `tokyo-night` at
+9.63:1. The real gap was `--text-dim`, which nothing had ever checked:
+
+* `tokyo-night` `#787c99` → `#8b90b5` (3.81:1 → 5.00:1)
+* `void` `#6e6e6e` → `#7d7d7d` (4.12:1 → 5.10:1)
+
+Held to 4.5:1 rather than 3:1 on purpose: 3:1 only ever covered large type and UI
+chrome, and a HUD's metadata rows are neither. Both were lifted with headroom
+instead of to the bare minimum, so a later half-step nudge does not re-break them.
+
+Five tests were added to `test/theme.test.js` — the WCAG helper's own reference
+anchors, a parse-coverage guard (so a theme written in `oklch()` fails loudly
+instead of silently opting out of every contrast check), text-on-surfaces,
+terminal foreground-on-background, and the light-group ordering below.
+
+**Also done, asked for mid-phase:** *"segregate light modes so every light mode
+i mean the whites would be on the bottom and rest from the top"*. The picker
+renders in `themes.json` array order (`appearance.js` walks the Map's insertion
+order), so this was a pure data reorder — `paper` and `light` had been sitting
+mid-list. Now 24 darks, then the 4 lights. A test measures the group boundary by
+`--bg` luminance rather than listing ids, so a new theme lands in the right group
+without anyone remembering to update an array; the darks top out at 0.026 and the
+lights start at 0.694, so the 0.5 threshold is nowhere near delicate.
+
+**Not yet seen running** — same standing caveat as phase 4. See RESUME.md for the
+walkthrough.
 
 See the phase sections below — written out in full and unchanged.
 

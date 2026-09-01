@@ -7,13 +7,15 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> Status: **Phases 1–4 + full backlog implemented** — interactive terminal,
-> multi-session tabs (browser-style **Ctrl+T / Ctrl+W**), Action Injector, live
+> Status: **Phases 1–4 + full backlog + the v0.10 fluidity pass implemented** —
+> interactive terminal, multi-session tabs (browser-style **Ctrl+T / Ctrl+W**),
+> Action Injector, live
 > Passive Observer, runtime profile switching, localhost ports tracker, action
 > cheat-sheets, skill cheat-sheet, a multi-line **prompt library**, a
 > **working/waiting LED**, a local **scratchpad**, a **command palette (Ctrl+K)**,
-> a **token burn-rate sparkline**, an **18-theme** system with a **PL/EN language
-> switch**, a live **usage-limits gauge** (5-hour + weekly subscription windows),
+> a **token burn-rate sparkline**, a **28-theme** system with four
+> **look-&-feel axes** (density · font pack · glow · motion) and a **PL/EN
+> language switch**, a live **usage-limits gauge** (5-hour + weekly subscription windows),
 > an **armed auto-compact** toggle (trigger on the 85% context threshold, every
 > N turns, or N minutes since the last compact — picked in Settings), a
 > **CWD/project switcher** (native "add repo
@@ -23,7 +25,8 @@ injects prompts or touches the `claude` binary.
 > **MCP server health panel**, a **Git station** (per-repo branch / ahead-behind /
 > dirty), a **Session Timeline scrubber + Media Deck**, **clipboard** and
 > **devices** widgets, **GPU usage** next to CPU/RAM, **foldable / resizable /
-> drag-to-rearrange panels**, a **Ctrl+G git quick-menu**, an **Auto-proceed**
+> drag-to-rearrange panels** across **nine layout presets plus a save-your-own
+> layout builder**, a **Ctrl+G git quick-menu**, an **Auto-proceed**
 > connection-drop recovery toggle, a **God Mode** unattended to-do runner, a
 > **per-project pin-board todo list**, optional **sound & voice feedback** (mpv
 > cues + a Web Audio keystroke engine, degrades silently), and opt-in **OS
@@ -41,8 +44,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.9.6.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.9.6-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.10.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.10.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
@@ -442,10 +445,10 @@ degrades in the one direction nobody notices: it keeps proving the widgets that
 were there when it was written, and says nothing about any added since. It had
 drifted seven widgets behind by 2026-08-17 (`media`, `sessiontimeline`,
 `devices`, `todo`, `clipboard`, `mcp`, `git`) — all fine, but none of them
-checked. Last full run, with the list caught up: 23/23 widgets at `1`, bus counts
-identical across three remount passes, four presets cycled twice back to
-`classic`, and all 18 themes cycled with `themeTokensLeaked` and
-`themeTokensLost` both empty.
+checked. Last full run (2026-08-31, v0.10): 25 widgets mounted and remounted
+with 20/20 row markers at `1`, bus counts identical across three remount passes,
+all nine presets cycled and back to `classic`, and all 28 themes cycled with
+`themeTokensLeaked` and `themeTokensLost` both empty.
 
 One number is still open from that run: `langChange` goes 24 → 25 across the
 *layout and theme* passes (not the remount passes, where a widget disposer leak
@@ -959,6 +962,44 @@ reset countdown between polls. Set `ENABLE_USAGE_METER = false` at the top of
 [`src/main.js`](src/main.js) to disable the network call entirely (tile shows
 "off"). The bars animate via `transform: scaleX(var(--usage))` — no layout thrash.
 
+## Layout presets & the builder
+
+The HUD's shape is data. Each preset in [`config/layouts.json`](config/layouts.json)
+is a CSS grid plus a list of which widgets live in which region, so **nine ship**,
+and switching one *moves* widgets between regions rather than remounting them — a
+panel carrying a live terminal keeps every running session across the switch.
+
+| Preset | Grid | For |
+|---|---|---|
+| **Classic** *(default)* | `260px 1fr 280px` | The original three-column HUD: actions left, terminal centre, monitors right. |
+| **Focus** | `1fr 250px` | Terminal takes the width, one narrow side rail. |
+| **Monitor heavy** | `210px 1fr 380px` | Thin action column, wide right stack — for watching rather than driving. |
+| **Bottom dock** | `1fr 1fr 1fr` + `270px` row | Full-width terminal over three docked panels. |
+| **Left only** | `320px 1fr` | Everything on one fat left column. |
+| **Cockpit** | `240px 1fr 240px` + `200px` row | Two side pillars plus a shared dock under the terminal. |
+| **Ultrawide** | `240px 1fr 300px 300px` | Four columns, for 21:9 and wider. |
+| **Stacked** | `1fr 260px`, three rows | Terminal on top, two decks beneath, side rail throughout. |
+| **Zen** | `1fr 230px` | The least chrome that still shows context. |
+
+Pick one from **Appearance → Layout** in the left panel.
+
+**The builder saves what is on screen.** Rearrange panels and resize columns to
+taste, type a name, and save it as your own preset; the same row will rename,
+duplicate and delete it. All three are disabled for the nine that ship, so a
+built-in cannot be edited out from under you. Custom presets live in
+`customLayouts` in `ui.local.json` and are merged in by `loadLayouts()` **in
+main**, not in the renderer: `normalizeLayout()` is the only thing that knows the
+deep validation rules, and merging renderer-side would mean a second validator
+that has to agree with the first forever.
+
+Two consequences worth knowing. A saved layout records widget placement and
+column widths and carries its rails over, but **not folds** — `collapsed` is
+global and already survives a layout switch, so storing it would mean a saved
+layout silently re-folding panels you had opened since. And a widget that a
+*newer build* adds is appended to its authored region rather than vanishing, so a
+preset saved today does not freeze the widget list as it stood the day you saved
+it.
+
 ## Panels — folding, resizing, rearranging
 
 **Click any panel title to fold it shut**, chevron and all; click again to open
@@ -999,15 +1040,21 @@ and [`src/renderer/modules/widgetarrange.js`](src/renderer/modules/widgetarrange
 ## Theming
 
 The whole look is a set of CSS custom-property tokens, so a "theme" is just a
-values file. **18 ship**, defined in [`config/themes.json`](config/themes.json):
+values file. **28 ship**, defined in [`config/themes.json`](config/themes.json):
 
 | | |
 |---|---|
 | **Neon** | cyberpunk *(default)*, synthwave, vapor, crimson |
+| **Sci-fi HUD** | eva-01, tron, holo, luna |
 | **Terminal** | matrix, amber-crt, blueprint |
 | **Editor** | nord, tokyo-night, dracula, gruvbox, solarized |
+| **Calm** | catppuccin-mocha, rose-pine, everforest-dark |
+| **Atmospheric** | aurora, abyss, magma |
 | **Quiet** | void, glacier |
-| **Light** | light, paper, newsprint, e-ink |
+| **Light** | paper, light, newsprint, eink |
+
+The picker lists every dark theme first and groups the four light ones at the
+bottom, so the list you scroll is the list you actually pick from.
 
 `src/theme.js` loads and validates them (falling back to a built-in cyberpunk if
 the file is broken, same as `profiles.js`). Pick one from the **Appearance**
@@ -1020,13 +1067,93 @@ whether titles are uppercased), **depth** (glow sizes, panel shadow), **motion**
 (four durations, three easings) and a full-screen **texture** layer — which is
 what makes `matrix` a phosphor CRT rather than green text on black, `blueprint`
 a drafting grid, `newsprint` a halftone print, and costs the flat themes
-nothing (`--texture: none`). A theme can also `extend` another and restate only
+nothing (`--texture: none`). The v0.10 themes lean on it hardest: `tron` is a
+cyan wireframe grid with square corners and no hover lift, `eva-01` is all
+2px borders and 4.5px title tracking at zero radius, `holo` runs the largest
+glow in the app at 30px, `abyss` is a 900ms vignette with the text glow taken
+out entirely, and the three calm themes (`catppuccin-mocha`, `rose-pine`,
+`everforest-dark`) turn glow off, drop the uppercasing and round every corner
+to 12-14px — the same vocabulary, aimed the opposite way.
+
+**Every theme is contrast-tested.** `test/theme.test.js` walks all 28 and fails
+the build if body or dim text drops under **4.5:1** against its own surfaces, or
+if the xterm palette's foreground does against its own background — the panel
+tokens and the terminal palette are separate blocks that nothing else forces to
+agree. A theme can also `extend` another and restate only
 what differs — `amber-crt` is `matrix` in amber, `vapor` is `synthwave` in
 pastel, `e-ink` is `paper` with the colour taken out.
 
 Drop a `config/themes.local.json` (gitignored) to add or override themes by
 `id`. An unknown token there is dropped with a warning rather than taking the
 whole theme down with it.
+
+## Look & feel modifiers
+
+A theme picks the look; four independent axes in the **Ctrl+L** Settings overlay
+adjust it without leaving the theme. Every default is the **no-op** value, so an
+install that upgrades to v0.10 renders exactly as it did before — `modifiers.js`
+writes no attribute at all until you change something.
+
+| Axis | Values | What it moves |
+|---|---|---|
+| **Density** | comfortable · **cozy** · compact · dense | The space and type scales together, `1.15/1.05` down to `0.72/0.9`. Not a zoom: spacing and text ride separate multipliers, so `dense` tightens the gaps harder than it shrinks the letters. |
+| **Font pack** | **per theme** · mono · display · system | Overrides all three `--font-*` stacks. Bundled faces only — nothing is fetched. |
+| **Glow** | **full** · reduced · off | Scales the glow sizes, `--text-glow` and the panel shadow. `off` makes a neon theme legible on a bad panel without touching its palette. |
+| **Motion** | **full** · reduced · off | Scales the four durations, the list stagger, the hover lift and the press scale. |
+
+The density axis is what v0.10 was really built for: **212 hardcoded
+declarations** moved onto a space and type scale, so one multiplier reaches every
+gap and every font size instead of a stylesheet's worth of exceptions. A drift
+guard in `test/theme.test.js` fails the build on any px literal that reappears
+in a scaled property outside `:root`.
+
+**Motion here is a preference, not an accessibility override.** The system
+`prefers-reduced-motion` setting still out-ranks it: that block is `!important`
+and its selector carries `:root[data-motion]` precisely so an OS accessibility
+setting cannot be overridden from inside the app.
+
+> **Why the modifier CSS is `!important` throughout.** Theme tokens are written
+> as *inline styles* on `<html>`, and a normal author rule loses to an inline
+> style at any specificity — the important-author tier is the one layer of the
+> cascade above it. The precedence is deliberate: `:root` defaults → theme vars
+> (inline) → modifiers.
+
+## Motion
+
+Four things move, and each is answering a question you would otherwise have to
+ask.
+
+**Theme and density changes crossfade.** `modules/motion.js` runs them through
+`document.startViewTransition()` where it exists and falls back to an instant
+swap where it does not. **The terminal is opted out deliberately:** a view
+transition cross-dissolves *snapshots*, and dissolving two snapshots of a canvas
+mid-write is how you get a torn line frozen on screen for a third of a second.
+The transition name goes on `#terminal` rather than `.xterm`, because a name has
+to be unique in the document and tabs mean several `.xterm` exist at once.
+
+**Overlays animate out, not just in.** All six close through `closeWithExit()`,
+so dismissing one reads as a dismissal instead of a disappearance. The *enter*
+animations were left exactly as they were.
+
+**List rows slide.** `modules/flip.js` runs keyed FLIP across six lists, so a row
+that is added, removed or reordered travels from where it was to where it now is.
+It measures against **the list's own content box, not the viewport** —
+`sessiontimeline` auto-scrolls to the newest turn on every render, which in
+viewport coordinates reads as "every marker moved" and would faithfully animate a
+slide that never happened. Two lists get none on purpose: `todo` already has
+bespoke drag-reorder motion that a second system would fight for the same
+transform, and `skilltracker` turned out to have no list at all — it toggles
+classes on a fixed set of tiles.
+
+**Folds close in the direction you clicked**, and a whole region can collapse to
+a 44px rail of glyphs (`[data-railed]` in `panels.js`). The rail is a *view* over
+the column widths and never a width itself: `layoutSizes` always holds the
+unrailed columns and the 44px track is derived at apply time, so un-railing
+always has something to restore.
+
+No duration is hardcoded in JS — every one is read from live computed style,
+which is what makes `motion: off` and `prefers-reduced-motion` free rather than a
+second code path.
 
 ## Language (PL / EN)
 
@@ -1086,7 +1213,8 @@ motion, it never runs at all.
 
 ## Reduced motion
 
-LunaCore honours the system "reduce motion" setting. The boot sequence is skipped
+LunaCore honours the system "reduce motion" setting — and it wins over the
+in-app **Motion** axis above, never the other way round. The boot sequence is skipped
 entirely and the decorative pulses, blinks and glow alarms collapse to nothing.
 The usage-refresh spinner is the one exemption — a loading indicator is the only
 continuous motion worth keeping, because it's reporting real state.

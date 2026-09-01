@@ -4,16 +4,19 @@ Operational hand-off for the `feat/fluidity-theming` branch. Read this first,
 then `FLUIDITY_THEMING_PLAN.md` for the design record and the locked decisions
 (they live there, not here — one copy, no drift).
 
-Last updated: 2026-08-31. Phases 1–3 done AND verified in a running app; phase 4
-done and test-green but NOT yet walked; 5–6 unstarted.
+Last updated: 2026-08-31. Phases 1–3 done AND verified in a running app; phases
+4 and 5 done and test-green but NOT yet walked; 6 unstarted.
 
 ---
 
 ## Where things stand
 
-Branch `feat/fluidity-theming`, pushed. `package.json` still says **0.9.6** —
-the bump to `0.10.0` is phase 6, deliberately at the end, one build for the
-whole release.
+Branch `feat/fluidity-theming`, pushed. **Phase 6 doc pass done 2026-08-31**:
+`package.json` + lockfile are at **`0.10.0`** (which also closed a pre-existing
+drift - the lockfile had been left at `0.9.5` while `package.json` said `0.9.6`),
+and README + FUTURE_PLAN are current for v0.10. What is deliberately NOT done:
+**merge, tag, build, publish** - all four wait on the walkthrough below, because
+an unseen release is the one thing `npm test` cannot clear.
 
 ```
 91fd999  feat: wire the layout builder into Appearance     (4.2 complete)
@@ -31,7 +34,7 @@ bd4284e  feat: modifier axes                                  (phase 2, WIP)
 e9fd3b0  feat: space + type scales on a density multiplier    (phase 1)
 ```
 
-`npm test` → **966 pass, 0 fail**, ~0.8s. `npm start` runs the app.
+`npm test` → **982 pass, 0 fail**, ~1.1s. `npm start` runs the app.
 
 ---
 
@@ -145,12 +148,123 @@ The DOM half is untested by `node --test` (the same line `layouts.test.js` and
 - [ ] The five new presets appear in the picker — they cannot show up before a
       restart, since `layouts:list` is read once at startup.
 
-**Phase 5 — themes.** 8–10 new dark ones, plus a 4.5:1 contrast test over all
-themes (expect it to flag 1–2 existing ones; fixing those is in scope).
-Standing constraint, verbatim: **"dont make new 'light' modes"**.
+**Phase 5 — DONE**, 982 tests green. Ten new dark themes, the contrast audit, and
+the light-group reorder. Details and the three families are in the plan; what is
+outstanding is the walk below.
 
-**Phase 6 — release.** README, FUTURE_PLAN START-HERE box, bump to `0.10.0`,
-merge, tag, one build.
+### Phase 5 needs a walk, and one part of it needs a restart
+
+Less exposed than phase 4, because a palette is data and two automated passes
+already cover the mechanical half:
+
+* `npm test` measures contrast over all 28 themes — body text, dim text and the
+  terminal foreground. **Contrast is deliberately NOT on the list below**; there
+  is no point squinting at what a test measures exactly.
+* `npx electron . --luna-probe` ran the real app against these themes and came
+  back `themes: 28`, `themeTokensLeaked: []`, `themeTokensLost: []`, equal
+  subscriber counts and `rows: 1`. So every new theme's tokens genuinely apply
+  and genuinely clean up on switch away — that is the failure this probe exists
+  to catch, and it did not fire.
+
+What is left is the half no probe can reach: **whether each theme actually looks
+like the thing it is named after**, and whether the shape-changing tokens landed
+where they were aimed.
+
+**The ordering** — open the theme picker (left Appearance panel).
+- [ ] 28 entries. The first 24 are dark; `Paper`, `Light (daylight)`, `Newsprint`
+      and `E-Ink` are the last four, in that order, with no dark below them.
+
+**The ten new themes** — switch to each. The question for every one is the C3
+thesis: does it change *shape*, or is it the same HUD in a new hue?
+- [ ] `EVA-01` — square corners, visibly **thicker** borders (2px), very wide
+      title tracking, purple panels with acid-green accents.
+- [ ] `Tron` — the whole HUD in mono, 0 radius, a faint cyan **grid** over the
+      background. Rows should NOT rise on hover and controls should NOT sink on
+      press: it sets `--lift: 0` and `--press-scale: 1` on purpose. If it still
+      moves, those two tokens are not reaching the interaction rules.
+- [ ] `Holo` — the largest glow in the app (30px) with soft 12px corners, and
+      motion noticeably slower than cyberpunk's.
+- [ ] `Luna` — moon-silver on near-black, wide brand tracking, a soft top-centre
+      radial wash. This is the namesake theme; it should feel like the app's own.
+- [ ] `Aurora` — a green→violet diagonal wash across the background, 14px radius,
+      the slowest stagger of the set (70ms) on a layout switch.
+- [ ] `Abyss` — almost no glow, **no** text glow, and a heavy dark vignette at the
+      edges. Deliberately the quietest neon-family theme.
+- [ ] `Magma` — basalt panels, ember accents, sharp 4px corners.
+- [ ] `Catppuccin Mocha`, `Rose Pine`, `Everforest Dark` — the calm family. All
+      three must be **completely flat**: no box glow, no text glow, and panel
+      titles in mixed case rather than uppercase (`--case-title: none`). A glow
+      on any of these is a bug, not a preference.
+
+**Cross-checks that have bitten before**
+- [ ] Switch between two of the calm themes with the terminal streaming output —
+      the 3.1 crossfade check, re-run because 10 new themes now go through it.
+- [ ] Set `glow: off` (Ctrl+L → Interface) on `Holo`, the highest-glow theme in
+      the app. The bloom must actually go.
+- [ ] Set `motion: off`, then switch to `Abyss` (900ms `--dur-slow`). The state
+      must land instantly rather than crawl — that is the token-layer zeroing.
+- [ ] Each new theme's terminal palette applies, not just the HUD: the xterm
+      background should match the panel it sits in.
+
+**Restart-only** (do this last):
+- [ ] Pick one of the new themes, restart. It comes back.
+- [ ] `config/ui.local.json` carries the chosen theme id.
+
+**Phase 6 — release.** README (theme/layout/modifier tables + download table —
+the theme table now has 28 rows, not 18), FUTURE_PLAN START-HERE box, bump to
+`0.10.0`, merge, tag, one build.
+
+---
+
+## Release notes draft — v0.10.0 (paste into the GitHub release)
+
+Written 2026-08-31, before the walkthrough. **Do not publish until the phase 4
+and 5 checklists above are walked** — every claim here is test- and probe-backed,
+none of it is eyeball-backed.
+
+---
+
+### LunaCore v0.10.0 — "Fluidity & Theming"
+
+The biggest visual release since `v0.9.0`. Nothing about the terminal, the token
+accounting or the zero-extra-tokens guarantee changed; this is entirely about how
+the HUD looks, moves and fits your screen.
+
+**Ten new dark themes — 18 to 28.** Three new families: sci-fi HUD (`eva-01`,
+`tron`, `holo`, `luna`), atmospheric (`aurora`, `abyss`, `magma`) and calm
+(`catppuccin-mocha`, `rose-pine`, `everforest-dark`). They use the whole ~45-token
+vocabulary rather than just swapping hexes, so `tron` is a square-cornered cyan
+wireframe with no hover lift and `abyss` is a slow vignette with the glow taken
+out. The calm family is the one that was missing: 14 of the previous 18 themes
+were neon. The picker now lists all darks first and groups the four light themes
+at the bottom.
+
+**Four look-and-feel axes** in the Ctrl+L Settings overlay, independent of the
+theme: **density** (comfortable to dense), **font pack**, **glow** and **motion**.
+Every default is a no-op, so an existing install renders exactly as it did
+before upgrading — nothing is written until you change something. `glow: off`
+finally makes the neon themes readable on a bad panel without leaving them.
+
+**Nine layout presets, plus a builder.** Five new presets (`monitor-heavy`,
+`bottom-dock`, `left-only`, `cockpit`, `ultrawide`, `stacked`, `zen` joining
+`classic` and `focus`), and you can now arrange the HUD yourself and save it
+under a name — rename, duplicate and delete it too. Switching a preset *moves*
+widgets rather than remounting them, so a running `claude` session survives it.
+
+**Motion.** Theme and density changes crossfade (via view transitions, with the
+terminal deliberately excluded so a canvas mid-write cannot tear), overlays now
+animate out as well as in, list rows slide when they are added, removed or
+reordered, and a whole region can collapse to a 44px rail of glyphs.
+
+**Accessibility.** All 28 themes are now contrast-tested at **4.5:1** in CI,
+which caught and fixed two long-standing offenders (`tokyo-night` and `void` had
+dim text at 3.81:1 and 4.12:1). The system `prefers-reduced-motion` setting also
+now actually works on the 12 themes that set their own motion tokens — it had
+been silently doing nothing on those since the theme vocabulary landed.
+
+**Under the hood:** 212 hardcoded CSS declarations moved onto a space/type scale
+so one multiplier reaches every gap and font size, with a drift guard in CI to
+keep it that way. 982 tests (up from 966).
 
 ---
 
