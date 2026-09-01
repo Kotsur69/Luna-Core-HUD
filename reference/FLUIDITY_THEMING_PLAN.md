@@ -160,7 +160,7 @@ the day it was saved and a widget added later would be invisible in it forever.
 And a preset must give each RAILABLE region a column of its own; `stacked` was
 written single-column first and two existing tests caught it.
 
-### Phase 5 — DONE, code + audit. Phase 6 unstarted
+### Phase 5 — DONE, code + audit. Phase 6 DONE, v0.10.0 released 2026-09-01
 
 Ten new dark themes, all three families the plan named, plus the contrast audit
 it asked for. `npm test` → **982 pass, 0 fail**.

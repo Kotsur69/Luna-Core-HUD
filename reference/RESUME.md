@@ -4,19 +4,21 @@ Operational hand-off for the `feat/fluidity-theming` branch. Read this first,
 then `FLUIDITY_THEMING_PLAN.md` for the design record and the locked decisions
 (they live there, not here — one copy, no drift).
 
-Last updated: 2026-08-31. Phases 1–3 done AND verified in a running app; phases
-4 and 5 done and test-green but NOT yet walked; 6 unstarted.
+Last updated: 2026-09-01. **All six phases are done and every one of them has
+been walked in a running app.** v0.10.0 is released; this file is now history
+rather than a to-do list.
 
 ---
 
 ## Where things stand
 
-Branch `feat/fluidity-theming`, pushed. **Phase 6 doc pass done 2026-08-31**:
-`package.json` + lockfile are at **`0.10.0`** (which also closed a pre-existing
-drift - the lockfile had been left at `0.9.5` while `package.json` said `0.9.6`),
-and README + FUTURE_PLAN are current for v0.10. What is deliberately NOT done:
-**merge, tag, build, publish** - all four wait on the walkthrough below, because
-an unseen release is the one thing `npm test` cannot clear.
+Branch `feat/fluidity-theming`, merged to `main` and tagged `v0.10.0` on
+2026-09-01. `package.json` + lockfile are at **`0.10.0`** (which also closed a
+pre-existing drift - the lockfile had been left at `0.9.5` while `package.json`
+said `0.9.6`), README + FUTURE_PLAN are current for v0.10, and the build is
+published to GitHub Releases with `latest.yml` beside it so existing installs
+auto-update. The walkthroughs below gated all of that, because an unseen release
+is the one thing `npm test` cannot clear.
 
 ```
 91fd999  feat: wire the layout builder into Appearance     (4.2 complete)
@@ -34,7 +36,7 @@ bd4284e  feat: modifier axes                                  (phase 2, WIP)
 e9fd3b0  feat: space + type scales on a density multiplier    (phase 1)
 ```
 
-`npm test` → **982 pass, 0 fail**, ~1.1s. `npm start` runs the app.
+`npm test` → **990 pass, 0 fail**, ~1.1s. `npm start` runs the app.
 
 ---
 
@@ -105,54 +107,55 @@ list to re-walk when 4 lands.
 
 **Phase 4 — DONE** (`f46d5c6` + `9ff0800` + `de17ba5` + `91fd999`), 966 tests
 green. Five presets plus the builder. See the plan for the three decisions that
-departed from the original sketch. **Not yet seen running** — the checklist below
-is the outstanding work on it.
+departed from the original sketch. **Walked in a running app on 2026-09-01** —
+the checklist below passed as written.
 
-### Phase 4 needs a walk, and part of it cannot be seen without a restart
+### Phase 4 — walked 2026-09-01, all of it passed
 
 The DOM half is untested by `node --test` (the same line `layouts.test.js` and
 `panels.test.js` already draw), so this is its only verification.
 
 **The five presets** — pick each from Appearance → Layout.
-- [ ] `left-only`, `cockpit`, `ultrawide`, `stacked`, `zen` each render without a
+- [x] `left-only`, `cockpit`, `ultrawide`, `stacked`, `zen` each render without a
       collapsed or overlapping region.
-- [ ] In each, the `«`/`»` rail button appears only where a column can actually
+- [x] In each, the `«`/`»` rail button appears only where a column can actually
       shrink. `stacked` should offer it on `side` and nowhere else; `cockpit`
       should NOT offer it on `dock`, whose column is the only elastic one.
-- [ ] `zen` is a thin side strip, not auto-hiding. Current-correct, not a bug —
+- [x] `zen` is a thin side strip, not auto-hiding. Current-correct, not a bug —
       auto-hide was never built.
 
 **The builder** — the name box and four buttons under the layout select.
-- [ ] With a preset selected, only `+` lights up once you type a name. Rename,
+- [x] With a preset selected, only `+` lights up once you type a name. Rename,
       duplicate and delete stay disabled: a preset is not yours to change.
-- [ ] Drag a splitter somewhere odd, move a widget to another region, then type a
+- [x] Drag a splitter somewhere odd, move a widget to another region, then type a
       name and press `+`. The picker gains your layout and switches to it.
-- [ ] The widths and widget placement are the ones you had, not the preset's.
-- [ ] Rail a column, then save. The new layout opens with that column railed, and
+- [x] The widths and widget placement are the ones you had, not the preset's.
+- [x] Rail a column, then save. The new layout opens with that column railed, and
       un-railing it gives the width you dragged to, **not** 44px. That is the
       `currentUnrailedColumns()` invariant.
-- [ ] With your own layout selected, all four buttons are usable.
-- [ ] Rename it: the label changes in the picker and the HUD does **not** rebuild.
-- [ ] Duplicate it: a second entry appears, and editing one must not change the
+- [x] With your own layout selected, all four buttons are usable.
+- [x] Rename it: the label changes in the picker and the HUD does **not** rebuild.
+- [x] Duplicate it: a second entry appears, and editing one must not change the
       other (that is the deep copy).
-- [ ] Delete the one you are standing on. The HUD must land on another layout, not
+- [x] Delete the one you are standing on. The HUD must land on another layout, not
       sit on one nothing can name.
-- [ ] Name one `Classic`. It must save as `classic-2`, and the shipped `Classic`
+- [x] Name one `Classic`. It must save as `classic-2`, and the shipped `Classic`
       must still be in the list.
-- [ ] Name one with Polish letters (`Mój Układ`). It should save fine, with the id
+- [x] Name one with Polish letters (`Mój Układ`). It should save fine, with the id
       becoming `moj-uklad`.
-- [ ] `config/ui.local.json` carries `customLayouts` with your entries.
+- [x] `config/ui.local.json` carries `customLayouts` with your entries.
 
 **Restart-only** (do this last):
-- [ ] Saved layouts survive a restart and still apply.
-- [ ] The five new presets appear in the picker — they cannot show up before a
+- [x] Saved layouts survive a restart and still apply.
+- [x] The five new presets appear in the picker — they cannot show up before a
       restart, since `layouts:list` is read once at startup.
 
 **Phase 5 — DONE**, 982 tests green. Ten new dark themes, the contrast audit, and
-the light-group reorder. Details and the three families are in the plan; what is
-outstanding is the walk below.
+the light-group reorder. Details and the three families are in the plan.
+**Walked in a running app on 2026-09-01** — the checklist below passed as
+written.
 
-### Phase 5 needs a walk, and one part of it needs a restart
+### Phase 5 — walked 2026-09-01, all of it passed
 
 Less exposed than phase 4, because a palette is data and two automated passes
 already cover the mechanical half:
@@ -171,56 +174,64 @@ like the thing it is named after**, and whether the shape-changing tokens landed
 where they were aimed.
 
 **The ordering** — open the theme picker (left Appearance panel).
-- [ ] 28 entries. The first 24 are dark; `Paper`, `Light (daylight)`, `Newsprint`
+- [x] 28 entries. The first 24 are dark; `Paper`, `Light (daylight)`, `Newsprint`
       and `E-Ink` are the last four, in that order, with no dark below them.
 
 **The ten new themes** — switch to each. The question for every one is the C3
 thesis: does it change *shape*, or is it the same HUD in a new hue?
-- [ ] `EVA-01` — square corners, visibly **thicker** borders (2px), very wide
+- [x] `EVA-01` — square corners, visibly **thicker** borders (2px), very wide
       title tracking, purple panels with acid-green accents.
-- [ ] `Tron` — the whole HUD in mono, 0 radius, a faint cyan **grid** over the
+- [x] `Tron` — the whole HUD in mono, 0 radius, a faint cyan **grid** over the
       background. Rows should NOT rise on hover and controls should NOT sink on
       press: it sets `--lift: 0` and `--press-scale: 1` on purpose. If it still
       moves, those two tokens are not reaching the interaction rules.
-- [ ] `Holo` — the largest glow in the app (30px) with soft 12px corners, and
+- [x] `Holo` — the largest glow in the app (30px) with soft 12px corners, and
       motion noticeably slower than cyberpunk's.
-- [ ] `Luna` — moon-silver on near-black, wide brand tracking, a soft top-centre
+- [x] `Luna` — moon-silver on near-black, wide brand tracking, a soft top-centre
       radial wash. This is the namesake theme; it should feel like the app's own.
-- [ ] `Aurora` — a green→violet diagonal wash across the background, 14px radius,
+- [x] `Aurora` — a green→violet diagonal wash across the background, 14px radius,
       the slowest stagger of the set (70ms) on a layout switch.
-- [ ] `Abyss` — almost no glow, **no** text glow, and a heavy dark vignette at the
+- [x] `Abyss` — almost no glow, **no** text glow, and a heavy dark vignette at the
       edges. Deliberately the quietest neon-family theme.
-- [ ] `Magma` — basalt panels, ember accents, sharp 4px corners.
-- [ ] `Catppuccin Mocha`, `Rose Pine`, `Everforest Dark` — the calm family. All
+- [x] `Magma` — basalt panels, ember accents, sharp 4px corners.
+- [x] `Catppuccin Mocha`, `Rose Pine`, `Everforest Dark` — the calm family. All
       three must be **completely flat**: no box glow, no text glow, and panel
       titles in mixed case rather than uppercase (`--case-title: none`). A glow
       on any of these is a bug, not a preference.
 
 **Cross-checks that have bitten before**
-- [ ] Switch between two of the calm themes with the terminal streaming output —
+- [x] Switch between two of the calm themes with the terminal streaming output —
       the 3.1 crossfade check, re-run because 10 new themes now go through it.
-- [ ] Set `glow: off` (Ctrl+L → Interface) on `Holo`, the highest-glow theme in
+- [x] Set `glow: off` (Ctrl+L → Interface) on `Holo`, the highest-glow theme in
       the app. The bloom must actually go.
-- [ ] Set `motion: off`, then switch to `Abyss` (900ms `--dur-slow`). The state
+- [x] Set `motion: off`, then switch to `Abyss` (900ms `--dur-slow`). The state
       must land instantly rather than crawl — that is the token-layer zeroing.
-- [ ] Each new theme's terminal palette applies, not just the HUD: the xterm
+- [x] Each new theme's terminal palette applies, not just the HUD: the xterm
       background should match the panel it sits in.
 
 **Restart-only** (do this last):
-- [ ] Pick one of the new themes, restart. It comes back.
-- [ ] `config/ui.local.json` carries the chosen theme id.
+- [x] Pick one of the new themes, restart. It comes back.
+- [x] `config/ui.local.json` carries the chosen theme id.
 
-**Phase 6 — release.** README (theme/layout/modifier tables + download table —
-the theme table now has 28 rows, not 18), FUTURE_PLAN START-HERE box, bump to
-`0.10.0`, merge, tag, one build.
+**Phase 6 — DONE, released 2026-09-01.** README (theme/layout/modifier tables +
+download table — the theme table now has 28 rows, not 18), FUTURE_PLAN
+START-HERE box, `0.10.0` in package.json and the lockfile, merged to `main`,
+tagged `v0.10.0`, one build published to GitHub Releases with `latest.yml` so
+auto-update sees it.
+
+One thing deliberately ships un-walked: the auto-proceed ghost-signal fix
+(`8ddb702`). It is test-covered and it is a main-process change, so it needed a
+restart Mati did not want mid-release — *"auto-proceed will be tested after
+release"*. If it misbehaves, the thing to watch is whether a healthy tab still
+receives a `connectionError` signal minutes after it recovered; that is the
+failure the edge guard exists to kill.
 
 ---
 
-## Release notes draft — v0.10.0 (paste into the GitHub release)
+## Release notes — v0.10.0 (published to the GitHub release)
 
-Written 2026-08-31, before the walkthrough. **Do not publish until the phase 4
-and 5 checklists above are walked** — every claim here is test- and probe-backed,
-none of it is eyeball-backed.
+Drafted 2026-08-31 before the walkthrough, published 2026-09-01 after phases 4
+and 5 were walked and passed.
 
 ---
 
@@ -264,7 +275,7 @@ been silently doing nothing on those since the theme vocabulary landed.
 
 **Under the hood:** 212 hardcoded CSS declarations moved onto a space/type scale
 so one multiplier reaches every gap and font size, with a drift guard in CI to
-keep it that way. 982 tests (up from 966).
+keep it that way. 990 tests (up from 966).
 
 ---
 
