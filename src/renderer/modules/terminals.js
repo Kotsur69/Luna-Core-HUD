@@ -182,6 +182,28 @@ export function ensureTerm(sessionId) {
     if (data.length === 1 && data >= ' ') userKeystroke();
     window.lunacore.write(data, sessionId);
   });
+  // SHIFT+WHEEL = page up / page down. A plain wheel on the ALTERNATE screen
+  // buffer (Claude Code, less, vim, git log, htop) dead-ends: that buffer has
+  // no scrollback, so xterm has nothing to move and wheel-down in particular
+  // feels frozen. Shift+wheel instead sends PageUp/PageDown to the pty, so the
+  // foreground TUI pages through its OWN content. On the normal buffer it jumps
+  // a whole page through xterm's scrollback instead of a few lines.
+  //
+  // Chromium turns a Shift + vertical wheel into a HORIZONTAL scroll, so the
+  // notch lands on deltaX, not deltaY - read whichever axis carries it.
+  // { passive: false } is required for preventDefault() to take.
+  el.addEventListener('wheel', (event) => {
+    if (!event.shiftKey) return;
+    const delta = event.deltaY || event.deltaX;
+    if (!delta) return;
+    event.preventDefault();
+    const goingDown = delta > 0;
+    if (instance.buffer.active.type === 'alternate') {
+      window.lunacore.write(goingDown ? '\x1b[6~' : '\x1b[5~', sessionId);
+    } else {
+      instance.scrollPages(goingDown ? 1 : -1);
+    }
+  }, { passive: false });
   // MARK MODE + COPY: xterm has no built-in copy binding or keyboard
   // selection, so both live in ONE attachCustomKeyEventHandler (xterm only
   // keeps the last handler attached - a second call would silently replace
