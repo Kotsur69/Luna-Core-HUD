@@ -627,7 +627,12 @@
       <!-- Session working directory (cwd). Options are filled in by switchers.js from
            config/projects.json; changing it restarts the PTY in the new folder. -->
       <div class="project-row">
-        <select id="project-switcher" class="profile-select"></select>
+        <select
+          id="project-switcher"
+          class="profile-select"
+          data-i18n-title="project.switcher"
+          title="Projekt sesji - zmiana restartuje te zakladke. Alt+1..9 zamiast tego otwiera lub przelacza zakladke"
+        ></select>
         <button
           type="button"
           id="project-add-btn"
@@ -740,7 +745,13 @@
       <!-- Session tabs. Each has its own PTY process, its own context, and its own
            xterm buffer; here we only render their headers (built from JS). -->
       <div class="tabs">
-        <div id="tabs-list" class="tabs__list" role="tablist"></div>
+        <div
+          id="tabs-list"
+          class="tabs__list"
+          role="tablist"
+          data-i18n-title="tabs.cycle"
+          title="Poprzednia / nastepna sesja (Alt+Left / Alt+Right)"
+        ></div>
         <button id="tab-new" class="tabs__new" data-i18n-title="tabs.new" title="Nowa sesja (Ctrl+T)">+</button>
       </div>
       <!-- Terminal host: one .terminal__pane per session, only the active one visible -->

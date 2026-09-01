@@ -8,7 +8,9 @@ It adds control and visibility **without spending a single extra token** — it 
 injects prompts or touches the `claude` binary.
 
 > Status: **Phases 1–4 + full backlog + the v0.10 fluidity pass implemented** —
-> interactive terminal, multi-session tabs (browser-style **Ctrl+T / Ctrl+W**),
+> interactive terminal, multi-session tabs (browser-style **Ctrl+T / Ctrl+W**,
+> **Alt+← / Alt+→** to walk the tab bar, **Alt+1..9** to open or focus a tab in
+> the Nth project),
 > Action Injector, live
 > Passive Observer, runtime profile switching, localhost ports tracker, action
 > cheat-sheets, skill cheat-sheet, a multi-line **prompt library**, a
@@ -300,6 +302,7 @@ Luna-Core-HUD/
 │   ├── prompts.js         # load/validate multi-line prompt library from config/
 │   ├── scratchpad.js      # read/write the local scratchpad note file
 │   ├── projects.js        # load/validate working directories (~ expansion)
+│   ├── hotkeys.js         # pure: which tab Alt+←/→ means, which project Alt+1..9 means
 │   ├── localized.js       # {pl,en} config values: validate/normalize + merge keys (never resolves)
 │   ├── theme.js           # load/validate themes from config/ (FALLBACK cyberpunk)
 │   ├── uiprefs.js         # read/write UI prefs (theme + language + boot + profile + sound) → ui.local.json

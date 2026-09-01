@@ -43,6 +43,12 @@ const { loadProfiles, getProfile } = require('./profiles');
 const { withSessionId, findExecutable } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject, removeProject } = require('./projects');
+const {
+  cycleSessionId,
+  parseDigitCode,
+  projectIdForDigit,
+  findSessionIdForProject,
+} = require('./hotkeys');
 // Localhost port tracker (7B): passive scan of listening ports + kill.
 const { killProcess, PortWatcher } = require('./ports');
 
@@ -332,28 +338,62 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  // Browser-style terminal hotkeys: Ctrl/Cmd+T opens a new tab, Ctrl/Cmd+W
-  // closes the active one. Handled in main (not the renderer) so the same
-  // preventDefault() that stops the keystroke also swallows the default menu's
-  // Ctrl+W "Close window" accelerator - per Electron's docs, preventDefault on
-  // before-input-event blocks both the menu shortcut and the page event, which
-  // a renderer-side listener cannot do. isAutoRepeat is ignored so holding the
-  // chord does not spawn a burst of tabs. Trade-off: this shadows readline's
-  // Ctrl+W (delete-word) / Ctrl+T (transpose) inside the shell, same as a
-  // browser does.
+  // Two keyboard namespaces, deliberately kept apart:
+  //
+  //   Ctrl/Cmd - "act on this window": Ctrl+T opens a tab, Ctrl+W closes one.
+  //   Alt      - "move around LunaCore": Alt+Left/Right walk the tab bar,
+  //              Alt+1..9 jump to a project.
+  //
+  // Navigation lives on Alt precisely so it does NOT shadow the Claude Code
+  // prompt line: Ctrl+Left/Right stays with the terminal and keeps working as
+  // jump-by-word, which is the whole reason the tab chords are not on Ctrl
+  // (Mati, 2026-09-01). Only Ctrl+T/Ctrl+W still shadow readline (transpose /
+  // delete-word), exactly as a browser shadows them.
+  //
+  // Handled in main rather than the renderer so the same preventDefault() that
+  // stops the keystroke also swallows the default menu's Ctrl+W "Close window"
+  // accelerator - per Electron's docs, preventDefault on before-input-event
+  // blocks both the menu shortcut and the page event, which a renderer-side
+  // listener cannot do. It is also what stops a bare Alt chord from opening the
+  // Windows window menu.
+  //
+  // isAutoRepeat is ignored so holding a chord does not spawn a burst of tabs.
+  // The `input.shift` bail-out is what keeps xterm's Ctrl+Shift+Arrow mark-mode
+  // selection (renderer/modules/terminals.js) reachable - it returns before any
+  // branch below can claim the chord.
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || input.isAutoRepeat) return;
-    if (!(input.control || input.meta) || input.alt || input.shift) return;
+    if (input.shift) return;
 
-    if (input.code === 'KeyT') {
-      event.preventDefault();
-      createSession({});
-      playCue('sfx.terminalNew');
-    } else if (input.code === 'KeyW') {
-      event.preventDefault();
-      if (activeSessionId) closeSession(activeSessionId);
-      playCue('sfx.terminalClose');
+    // Exactly one namespace at a time: Ctrl+Alt+X belongs to neither.
+    const isCtrl = (input.control || input.meta) && !input.alt;
+    const isAlt = input.alt && !input.control && !input.meta;
+
+    if (isCtrl) {
+      if (input.code === 'KeyT') {
+        event.preventDefault();
+        createSession({});
+        playCue('sfx.terminalNew');
+      } else if (input.code === 'KeyW') {
+        event.preventDefault();
+        if (activeSessionId) closeSession(activeSessionId);
+        playCue('sfx.terminalClose');
+      }
+      return;
     }
+
+    if (!isAlt) return;
+
+    if (input.code === 'ArrowLeft' || input.code === 'ArrowRight') {
+      event.preventDefault();
+      activateTabByStep(input.code === 'ArrowLeft' ? -1 : 1);
+      return;
+    }
+
+    const digit = parseDigitCode(input.code);
+    if (digit === null) return;
+    event.preventDefault();
+    jumpToProject(digit);
   });
 
   // A2: headless check of the widget contract, off unless asked for.
@@ -872,6 +912,67 @@ function closeSession(sessionId) {
     activeSessionId = [...sessions.keys()][sessions.size - 1];
   }
   broadcastSessions();
+}
+
+/**
+ * Alt+Left / Alt+Right: move one tab along the bar, wrapping at both ends.
+ *
+ * Nothing is spawned or torn down - this is the keyboard twin of clicking a
+ * tab, so every background pty keeps running exactly as it was. The Map's
+ * insertion order is the order renderTabs() paints, which is why "left" and
+ * "right" here mean the same thing they do on screen.
+ *
+ * @param {number} step -1 for the tab on the left, +1 for the one on the right
+ */
+function activateTabByStep(step) {
+  const next = cycleSessionId([...sessions.keys()], activeSessionId, step);
+  if (!next) return; // one tab open, or nowhere to move - stay put and stay silent
+
+  activeSessionId = next;
+  broadcastSessions();
+  playCue('sfx.navClick');
+}
+
+/**
+ * Alt+1..Alt+9: go to the Nth project - focusing the tab that is already
+ * running it, or opening a new one when none is.
+ *
+ * Deliberately NOT the keyboard twin of the project dropdown. The dropdown
+ * restarts the current tab in the new folder, which is fine for a slow,
+ * deliberate mouse click but wrong for a one-handed chord: a mistyped digit
+ * would kill whatever Claude was doing mid-turn. Focus-or-open cannot destroy
+ * a session at all, and focusing an existing tab is instant - no pty respawn,
+ * no second `claude` launch. Restart-in-place is still reachable, from the
+ * switcher where you meant it.
+ *
+ * @param {number} digit 1-9, as pressed
+ */
+function jumpToProject(digit) {
+  const projectId = projectIdForDigit(projects, digit);
+  if (!projectId) return; // no project in that slot
+
+  const project = getProject(projects, projectId);
+  if (!project) return;
+
+  const active = activeSessionId ? sessions.get(activeSessionId) : null;
+  if (active && active.projectId === projectId) return; // already looking at it
+
+  // Where the NEXT new tab should start, mirroring what the switcher sets.
+  activeCwd = project.path;
+  activeProjectId = project.id;
+
+  const entries = [...sessions.values()].map((s) => ({ id: s.id, projectId: s.projectId }));
+  const existing = findSessionIdForProject(entries, projectId);
+
+  if (existing) {
+    activeSessionId = existing;
+    broadcastSessions();
+    playCue('sfx.navClick');
+    return;
+  }
+
+  createSession({ projectId: project.id }); // sets activeSessionId + broadcasts
+  playCue('sfx.terminalNew');
 }
 
 /**

@@ -103,6 +103,8 @@ const I18N_DICT = {
     // Session tabs
     'tabs.new': 'Nowa sesja (Ctrl+T)',
     'tabs.close': 'Zamknij sesje (Ctrl+W)',
+    'tabs.cycle': 'Poprzednia / nastepna sesja (Alt+Left / Alt+Right)',
+    'project.switcher': 'Projekt sesji - zmiana restartuje te zakladke. Alt+1..9 zamiast tego otwiera lub przelacza zakladke',
     'boot.line.pty': 'mostek PTY',
     'boot.line.observer': 'pasywny obserwator',
     'boot.line.injector': 'wstrzykiwacz akcji',
@@ -510,6 +512,8 @@ const I18N_DICT = {
     // Session tabs
     'tabs.new': 'New session (Ctrl+T)',
     'tabs.close': 'Close session (Ctrl+W)',
+    'tabs.cycle': 'Previous / next session (Alt+Left / Alt+Right)',
+    'project.switcher': 'Session project - switching restarts this tab. Alt+1..9 opens or focuses a tab instead',
     'boot.line.pty': 'PTY bridge',
     'boot.line.observer': 'passive observer',
     'boot.line.injector': 'action injector',
