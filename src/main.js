@@ -23,7 +23,14 @@ const { spawn } = require('child_process');
 const pty = require('@lydell/node-pty');
 // Passive Observer (Phase 3): tool detection from stdout + tailing the
 // JSONL transcript for real context-window usage. Read-only, zero tokens.
-const { detectTools, detectApprovalPrompt, TranscriptWatcher, isLongTurn, encodeProjectDir } = require('./observer');
+const {
+  detectTools,
+  detectApprovalPrompt,
+  detectSignalEdges,
+  TranscriptWatcher,
+  isLongTurn,
+  encodeProjectDir,
+} = require('./observer');
 // Session -> Markdown export: pure transcript renderer. The disk read + save
 // dialog live here in main; the parsing is all in the module (unit-tested).
 const { transcriptToMarkdown } = require('./sessionExport');
@@ -640,6 +647,10 @@ function spawnInto(session, profile) {
   // process's first scan (and this also initialises the field for any session
   // object built before it existed).
   session.scanTail = '';
+  // Same reasoning for the signal edges: a new process has printed nothing
+  // yet, so nothing is "still showing" from the old one. Leaving these latched
+  // would swallow the first real drop after a profile restart.
+  session.signalShowing = {};
 
   const proc = pty.spawn(DEFAULT_SHELL, [], {
     name: 'xterm-256color',
@@ -685,15 +696,31 @@ function spawnInto(session, profile) {
 
     // God Mode (GODMODE_PLAN.md): same generic matcher as the approval-prompt
     // scan above, two sibling config categories instead of a new detection
-    // mechanism. Fired on every matching chunk (no de-dupe here, unlike
-    // approvalShowing above) - de-duplication/cooldown lives in the renderer's
-    // godmode.js state machine, which already needs a phase check per signal,
-    // so a second flag on `session` would just be the same guard written twice.
-    if (detectApprovalPrompt(scan, triggers.usageLimit)) {
-      send('godmode:signal', { sessionId: session.id, type: 'usageLimit' });
-    }
-    if (detectApprovalPrompt(scan, triggers.connectionError)) {
-      send('godmode:signal', { sessionId: session.id, type: 'connectionError' });
+    // mechanism - and, like that scan, fired once per APPEARANCE rather than
+    // once per matching chunk.
+    //
+    // These two used to fire on every chunk, on the theory that the renderer
+    // de-duplicates anyway. It does, but only on a timer, and a timer cannot
+    // tell a repaint from a relapse: the TUI redraws the whole viewport
+    // continuously, so one dropped connection kept signalling for as long as
+    // the error line sat in the scan window - minutes after the session had
+    // recovered. Once the renderer's silence window lapsed, that ghost typed
+    // "continue" into a terminal that was working fine, and each ghost also
+    // spent one of the real retries belonging to the session that had actually
+    // stalled. Both halves of "sometimes it types in the wrong window, and the
+    // stuck one gets nothing" were this.
+    //
+    // detectSignalEdges keeps the presence flags per session, so a category
+    // re-arms only when its text scrolls out - the session having produced
+    // that much new output is the evidence that the next match is a new event.
+    const edges = detectSignalEdges(
+      scan,
+      { usageLimit: triggers.usageLimit, connectionError: triggers.connectionError },
+      session.signalShowing,
+    );
+    session.signalShowing = edges.showing;
+    for (const type of edges.fire) {
+      send('godmode:signal', { sessionId: session.id, type });
     }
   });
 
@@ -790,6 +817,10 @@ function createSession(opts = {}) {
     // Tail of this session's recent stdout, so a trigger phrase split across
     // two PTY chunks still matches. See the scan in spawnInto's onData.
     scanTail: '',
+    // Which godmode:signal categories are currently showing in that tail, so
+    // each one is announced when it appears rather than on every repaint that
+    // still carries it. See detectSignalEdges (observer.js).
+    signalShowing: {},
   };
 
   sessions.set(session.id, session);

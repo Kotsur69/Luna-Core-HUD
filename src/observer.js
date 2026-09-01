@@ -107,6 +107,55 @@ function collapseWhitespace(text) {
   return text.replace(/\s+/g, ' ');
 }
 
+/**
+ * Edge detection over the trigger categories: which of them have just
+ * APPEARED in this session's scan window, as opposed to merely still being in
+ * it.
+ *
+ * This is the difference between an event and a state, and getting it wrong is
+ * what made auto-proceed feel haunted. detectApprovalPrompt answers "is this
+ * text on screen right now", and the TUI repaints its whole viewport on every
+ * frame, so a single dropped connection kept re-announcing itself for as long
+ * as the error line stayed in the 512-char window - long after the session had
+ * recovered and was happily working again. Two things fell out of that:
+ *
+ *  - The renderer's silence windows (45s) eventually lapse while the ghost is
+ *    still firing, so a healthy terminal gets a "continue" typed into it. That
+ *    is the "it landed in the wrong window" report; the write was aimed
+ *    correctly, the SIGNAL was the lie.
+ *  - Every ghost burns one of that session's 3 retries, so the tab that really
+ *    is stuck can find its budget already spent and sit there forever.
+ *
+ * The approval-prompt scan in main.js has had this guard from the start
+ * (`session.approvalShowing`); this is the same idea, generalized so the
+ * usage-limit and connection-error categories stop being the exception. A
+ * category re-arms when its text leaves the window, i.e. when the session has
+ * produced enough new output to scroll it away - which is exactly the evidence
+ * that the next occurrence is a new one.
+ *
+ * Pure, and returns a fresh state map rather than mutating the caller's, so
+ * the whole thing is pinnable without a PTY. `showing` for an unknown category
+ * reads as false, so a new entry in config/sound-triggers.json needs no
+ * migration.
+ *
+ * @param {string} scan tail + chunk, the same window detectApprovalPrompt sees
+ * @param {Record<string, string[]>} categories from config/sound-triggers.json
+ * @param {Record<string, boolean>} showing previous per-category presence
+ * @returns {{ fire: string[], showing: Record<string, boolean> }}
+ */
+function detectSignalEdges(scan, categories, showing) {
+  const prev = showing && typeof showing === 'object' ? showing : {};
+  const next = {};
+  const fire = [];
+  if (!categories || typeof categories !== 'object') return { fire, showing: next };
+  for (const [name, patterns] of Object.entries(categories)) {
+    const present = detectApprovalPrompt(scan, patterns);
+    if (present && prev[name] !== true) fire.push(name);
+    next[name] = present;
+  }
+  return { fire, showing: next };
+}
+
 // ---- 2. Tailing the JSONL transcript (real tokens) -------------------------
 
 // Default context window. No longer a hard constant used for computation -
@@ -952,6 +1001,7 @@ class TranscriptWatcher {
 module.exports = {
   detectTools,
   detectApprovalPrompt,
+  detectSignalEdges,
   TranscriptWatcher,
   encodeProjectDir,
   usageToMetrics,

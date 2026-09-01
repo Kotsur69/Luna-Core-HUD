@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const {
   detectTools,
   detectApprovalPrompt,
+  detectSignalEdges,
   encodeProjectDir,
   usageToMetrics,
   sumUsageLines,
@@ -186,6 +187,88 @@ test('detectApprovalPrompt ignores patterns that are not strings', () => {
 
 test('detectApprovalPrompt is case-sensitive (deliberately - a literal substring)', () => {
   assert.equal(detectApprovalPrompt('do you want to proceed?', APPROVAL_PATTERNS), false);
+});
+
+// ---- detectSignalEdges ------------------------------------------------------
+//
+// The guard that turns "this text is on screen" into "this text just
+// appeared". Without it a recovered session keeps signalling off the error
+// line still sitting in its scan window, and auto-proceed eventually injects
+// "continue" into a terminal that is perfectly healthy.
+
+const SIGNAL_CATEGORIES = {
+  usageLimit: ['usage limit reached'],
+  connectionError: ['Connection lost mid-response', 'API Error: 529'],
+};
+
+const DROPPED = 'API Error: Connection lost mid-response';
+
+test('detectSignalEdges fires on the first appearance', () => {
+  const out = detectSignalEdges(DROPPED, SIGNAL_CATEGORIES, {});
+  assert.deepEqual(out.fire, ['connectionError']);
+  assert.equal(out.showing.connectionError, true);
+});
+
+test('detectSignalEdges stays silent while the same text is repainted', () => {
+  const first = detectSignalEdges(DROPPED, SIGNAL_CATEGORIES, {});
+  // The TUI redraws its viewport constantly; every repaint carries the same
+  // error line, and each one used to be a fresh "continue" signal.
+  const repaint = detectSignalEdges(DROPPED, SIGNAL_CATEGORIES, first.showing);
+  assert.deepEqual(repaint.fire, []);
+  assert.equal(repaint.showing.connectionError, true);
+});
+
+test('detectSignalEdges re-arms once the text scrolls out of the window', () => {
+  const first = detectSignalEdges(DROPPED, SIGNAL_CATEGORIES, {});
+  const cleared = detectSignalEdges('Reading file.js...', SIGNAL_CATEGORIES, first.showing);
+  assert.deepEqual(cleared.fire, []);
+  assert.equal(cleared.showing.connectionError, false);
+
+  // A genuinely new drop, after the session moved on, must signal again.
+  const second = detectSignalEdges(DROPPED, SIGNAL_CATEGORIES, cleared.showing);
+  assert.deepEqual(second.fire, ['connectionError']);
+});
+
+test('detectSignalEdges tracks each category independently', () => {
+  const limit = detectSignalEdges('usage limit reached', SIGNAL_CATEGORIES, {});
+  assert.deepEqual(limit.fire, ['usageLimit']);
+
+  // The connection error arrives while the usage-limit line is still showing:
+  // one category being latched must not mask the other.
+  const both = detectSignalEdges(
+    `usage limit reached\n${DROPPED}`,
+    SIGNAL_CATEGORIES,
+    limit.showing,
+  );
+  assert.deepEqual(both.fire, ['connectionError']);
+  assert.equal(both.showing.usageLimit, true);
+  assert.equal(both.showing.connectionError, true);
+});
+
+test('detectSignalEdges matches any pattern in a category', () => {
+  const out = detectSignalEdges('API Error: 529 overloaded', SIGNAL_CATEGORIES, {});
+  assert.deepEqual(out.fire, ['connectionError']);
+});
+
+test('detectSignalEdges survives a reflow, like detectApprovalPrompt does', () => {
+  // Same hard-wrap the plain detector tolerates - the edge guard must not
+  // reintroduce the whitespace sensitivity that was fixed in 7c1edfe.
+  const wrapped = 'API Error: Connection lost\n     mid-response';
+  assert.deepEqual(detectSignalEdges(wrapped, SIGNAL_CATEGORIES, {}).fire, ['connectionError']);
+});
+
+test('detectSignalEdges does not choke on empty or missing input', () => {
+  assert.deepEqual(detectSignalEdges('', SIGNAL_CATEGORIES, {}).fire, []);
+  assert.deepEqual(detectSignalEdges(null, SIGNAL_CATEGORIES, {}).fire, []);
+  assert.deepEqual(detectSignalEdges(DROPPED, null, {}).fire, []);
+  assert.deepEqual(detectSignalEdges(DROPPED, SIGNAL_CATEGORIES, null).fire, ['connectionError']);
+});
+
+test('detectSignalEdges returns a fresh showing map, never mutating the caller\'s', () => {
+  const showing = {};
+  const out = detectSignalEdges(DROPPED, SIGNAL_CATEGORIES, showing);
+  assert.deepEqual(showing, {}, 'the state passed in must be left alone');
+  assert.notEqual(out.showing, showing);
 });
 
 // The TUI hard-wraps at the viewport edge and the PTY splits stdout at
