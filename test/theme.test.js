@@ -294,3 +294,169 @@ test('solarized stays restrained while the others burn', () => {
   assert.ok(size('solarized') < size('synthwave'), 'solarized must stay under synthwave');
   assert.ok(size('synthwave') >= size('cyberpunk'), 'synthwave is the loudest by design');
 });
+
+// ---- contrast: a theme has to be readable, not just good-looking ------------
+//
+// Phase 5 adds themes in bulk, and a palette is the one kind of change that
+// looks finished the moment it looks nice. This runs over EVERY theme, old and
+// new: the 18 that shipped before v0.10 were never audited, and the whole point
+// of auditing them with a test rather than by eye is that the next ten themes
+// inherit the check for free.
+
+/**
+ * WCAG 2.1 minimum for text. Small secondary text is still text, so --text-dim
+ * is held to the same bar; 3:1 only ever covered large type and UI chrome, and
+ * a HUD's metadata rows are neither.
+ */
+const MIN_CONTRAST = 4.5;
+
+/**
+ * A CSS colour string as [r, g, b], or null when it is not a flat colour.
+ *
+ * Only the forms themes.json actually uses are handled. Returning null is NOT
+ * treated as "skip" by the callers below - see the parse-coverage test, which
+ * exists so that a theme written in `oklch()` fails loudly instead of quietly
+ * opting itself out of every contrast check in this file.
+ */
+function parseColor(v) {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  let m = /^#([0-9a-f]{3})$/i.exec(s);
+  if (m) return m[1].split('').map((c) => parseInt(c + c, 16));
+  m = /^#([0-9a-f]{6})$/i.exec(s);
+  if (m) return [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16));
+  m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(s);
+  if (m) return [+m[1], +m[2], +m[3]];
+  return null;
+}
+
+/** WCAG relative luminance of an [r, g, b] triple. */
+function luminance([r, g, b]) {
+  const channel = (c) => {
+    const x = c / 255;
+    return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/** WCAG contrast ratio between two [r, g, b] triples: 1 (same) to 21 (b/w). */
+function contrastRatio(a, b) {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/** Every foreground/background pair the contrast test below walks, per theme. */
+const CONTRAST_PAIRS = [
+  { fg: '--text', bg: '--bg-panel', what: 'body text on a panel' },
+  { fg: '--text', bg: '--bg', what: 'body text on the page' },
+  { fg: '--text-dim', bg: '--bg-panel', what: 'dim text on a panel' },
+];
+
+// ---- the dark themes come first, the light ones last -----------------------
+
+/**
+ * Whether a theme reads as a light one, from its own page background.
+ *
+ * Measured rather than listed, so a new theme lands in the right group without
+ * anyone remembering to add it to an array. The threshold is nowhere near
+ * delicate: the darks top out around 0.02 and the lights start around 0.69,
+ * so the whole middle of the range is empty.
+ */
+function isLightTheme(theme) {
+  return luminance(parseColor(theme.vars['--bg'])) > 0.5;
+}
+
+test('the light themes are all at the bottom of the picker', () => {
+  const { themes } = loadThemes(() => {});
+  // The switcher renders themes in file order (appearance.js walks the Map's
+  // insertion order, which is the themes.json array order), so this array IS
+  // the menu. Mati's ask: darks from the top, whites grouped at the bottom -
+  // switching to a light theme mid-session is a deliberate act, not something
+  // to scroll past on the way to the next dark one.
+  const flipped = themes.findIndex(isLightTheme);
+  assert.notStrictEqual(flipped, -1, 'expected at least one light theme');
+  const strays = themes
+    .slice(flipped)
+    .filter((t) => !isLightTheme(t))
+    .map((t) => t.id);
+  assert.deepStrictEqual(
+    strays,
+    [],
+    `dark themes sitting below the first light one (${themes[flipped].id}): ${strays.join(', ')}`
+  );
+  // Guard the other direction too, so "move every theme to the light group"
+  // could never satisfy the test above.
+  assert.ok(flipped > 0, 'the picker must open on a dark theme, not a light one');
+});
+
+test('contrastRatio agrees with the WCAG reference values', () => {
+  // Anchors, not a reimplementation: without these the helper could be wrong in
+  // the same direction for every theme and the suite would still be green.
+  const black = [0, 0, 0];
+  const white = [255, 255, 255];
+  assert.strictEqual(Math.round(contrastRatio(black, white) * 100) / 100, 21);
+  assert.strictEqual(contrastRatio(white, white), 1);
+  // Symmetric - the ratio does not care which one is the ink.
+  assert.strictEqual(contrastRatio(black, white), contrastRatio(white, black));
+  // #767676 on white is the canonical "just passes 4.5:1" grey.
+  assert.ok(contrastRatio(parseColor('#767676'), white) >= MIN_CONTRAST);
+  assert.ok(contrastRatio(parseColor('#8a8a8a'), white) < MIN_CONTRAST);
+});
+
+test('parseColor reads every colour the contrast checks rely on', () => {
+  const { themes } = loadThemes(() => {});
+  const unparsed = [];
+  for (const t of themes) {
+    for (const { fg, bg } of CONTRAST_PAIRS) {
+      for (const token of [fg, bg]) {
+        if (!parseColor(t.vars[token])) unparsed.push(`${t.id} ${token}=${t.vars[token]}`);
+      }
+    }
+    for (const key of ['background', 'foreground']) {
+      if (!parseColor(t.terminal[key])) {
+        unparsed.push(`${t.id} terminal.${key}=${t.terminal[key]}`);
+      }
+    }
+  }
+  assert.deepStrictEqual(
+    unparsed,
+    [],
+    `unreadable to parseColor, so their contrast goes unchecked: ${unparsed.join('; ')}`
+  );
+});
+
+test('every theme clears 4.5:1 on text against its own surfaces', () => {
+  const { themes } = loadThemes(() => {});
+  const failures = [];
+  for (const t of themes) {
+    for (const { fg, bg, what } of CONTRAST_PAIRS) {
+      const ratio = contrastRatio(parseColor(t.vars[fg]), parseColor(t.vars[bg]));
+      if (ratio < MIN_CONTRAST) {
+        failures.push(
+          `${t.id}: ${what} (${fg} ${t.vars[fg]} on ${bg} ${t.vars[bg]}) = ${ratio.toFixed(2)}:1`
+        );
+      }
+    }
+  }
+  assert.deepStrictEqual(failures, [], `below ${MIN_CONTRAST}:1 -\n  ${failures.join('\n  ')}`);
+});
+
+test('every theme clears 4.5:1 in the terminal, where the output actually is', () => {
+  const { themes } = loadThemes(() => {});
+  // The panel tokens and the xterm palette are separate blocks that nothing
+  // forces to agree, so a theme can read perfectly in the HUD and still put
+  // grey-on-grey in the one pane the work is actually read from.
+  const failures = [];
+  for (const t of themes) {
+    const fg = parseColor(t.terminal.foreground);
+    const bg = parseColor(t.terminal.background);
+    const ratio = contrastRatio(fg, bg);
+    if (ratio < MIN_CONTRAST) {
+      failures.push(
+        `${t.id}: ${t.terminal.foreground} on ${t.terminal.background} = ${ratio.toFixed(2)}:1`
+      );
+    }
+  }
+  assert.deepStrictEqual(failures, [], `below ${MIN_CONTRAST}:1 -\n  ${failures.join('\n  ')}`);
+});
