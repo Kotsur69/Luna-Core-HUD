@@ -2625,6 +2625,64 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .termcustom__bgimage-row { display: flex; gap: 8px; }
 .termcustom__bgimage-row .termcustom__reset { flex: 1; }
 
+/* ---- Keyboard-shortcut reference (bottom of the Settings overlay) ----------
+   Read-only list, painted by modules/shortcuts.js. Two columns per row: the
+   chord (a cluster of <kbd>) and its description. Reuses the same kbd recipe
+   as .termcustom__foot kbd / .palette__foot kbd. */
+.shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.shortcuts__grouptitle {
+  margin-bottom: var(--space-3);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+}
+.shortcuts__row {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  align-items: baseline;
+  gap: var(--space-3) var(--space-5);
+  padding: var(--space-2) 0;
+}
+.shortcuts__row + .shortcuts__row {
+  border-top: var(--border-w) solid var(--edge);
+}
+.shortcuts__keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-hair);
+}
+.shortcuts__keys kbd {
+  display: inline-block;
+  padding: var(--space-hair) var(--space-3);
+  border-radius: var(--radius-xs);
+  border: var(--border-w) solid var(--edge);
+  background: var(--bg-panel-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text);
+}
+.shortcuts__plus,
+.shortcuts__or {
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+.shortcuts__or { margin: 0 var(--space-2); }
+.shortcuts__desc {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.shortcuts__note {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
 /* ---- §6.1: Session timeline turn preview modal ------------------------------
    Same overlay skeleton as .termcustom above (backdrop + centered panel) -
    read-only by construction, nothing in here ever writes to the PTY. */

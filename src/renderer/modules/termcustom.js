@@ -21,6 +21,7 @@ import { term, applyTerminalAppearance } from './terminals.js';
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
 import { mountAutoCompactSettings } from './autocompact.js';
+import { mountShortcuts } from './shortcuts.js';
 import { applyLang } from './appearance.js';
 import { MODIFIER_AXES, getModifiers, setModifier } from './modifiers.js';
 import { sfx } from './sound.js';
@@ -433,6 +434,10 @@ export async function initTermcustomSettings() {
   // Same static-overlay shape as mountNotify above - the arm toggle itself
   // stays a left-panel widget (autocompact.js).
   mountAutoCompactSettings(termcustomEl);
+
+  // Read-only keyboard-shortcut reference. Same static-overlay shape - the data
+  // and its drift-guard test live in shortcuts.js; this just asks it to paint.
+  mountShortcuts(termcustomEl);
 }
 
 // Global Ctrl/Cmd+L (capture, to get ahead of xterm.js) - same tradeoff and

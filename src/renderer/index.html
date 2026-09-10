@@ -1088,6 +1088,11 @@
           <span class="ui-field__label" data-i18n="autocompact.settings.afterMinutes">Minuty (N)</span>
           <input type="number" id="autocompact-minutes" min="1" max="1440" step="1" />
         </label>
+        <h3 class="termcustom__section" data-i18n="shortcuts.title">Skroty klawiszowe</h3>
+        <!-- Read-only reference. Rows are built in modules/shortcuts.js (data +
+             a drift-guard test), same overlay-owns-markup / module-owns-content
+             split as the palette. -->
+        <div id="shortcuts-list" class="shortcuts"></div>
       </div>
       <div class="termcustom__foot">
         <button type="button" id="termcustom-reset" class="termcustom__reset" data-i18n="termcustom.reset">Przywroc domyslne</button>
