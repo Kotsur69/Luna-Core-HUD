@@ -101,6 +101,14 @@ export const SHORTCUT_GROUPS = [
           marker: "e.key === 'g' || e.key === 'G'",
         },
       },
+      {
+        chords: [['Ctrl', '/']],
+        descKey: 'shortcuts.shortcutsRef',
+        source: {
+          file: 'src/renderer/modules/termcustom.js',
+          marker: "e.key === '/'",
+        },
+      },
     ],
   },
   {

@@ -21,6 +21,9 @@ export const sfx = {
   modeToggle: () => playSound('sfx.modeToggle'),
   terminalNew: () => playSound('sfx.terminalNew'),
   terminalClose: () => playSound('sfx.terminalClose'),
+  // Brand-mark easter egg: clicking the LunaCore moon triggers the full-moon
+  // flare. Only fires at data-motion="full" (brand.js gates the call).
+  moonFlare: () => playSound('sfx.moonFlare'),
 };
 
 export const voice = {

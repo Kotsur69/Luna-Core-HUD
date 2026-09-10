@@ -598,6 +598,9 @@ body::after {
   letter-spacing: var(--tracking-brand);
   text-shadow: var(--text-glow);
   padding-bottom: var(--space-3);
+  /* brand.js makes the whole mark interactive: hover time-lapses the moon,
+     click sets off the full-moon flare. */
+  cursor: pointer;
 }
 .brand__glyph {
   color: var(--neon-magenta);
@@ -608,6 +611,99 @@ body::after {
   font-size: var(--fs-2xl);
 }
 .brand__core { color: var(--neon-cyan); }
+
+/* ---- Brand moon (modules/brand.js) -------------------------------------------
+   The `.` text glyph is swapped for an inline SVG moon showing tonight's real
+   lunar phase. Everything animated here is decoration, so it is confined to the
+   full motion tier the same way styles.css:350 confines the rest: the hover
+   time-lapse, cursor parallax and click flare are JS-gated (eyeCandyOn()), and
+   the one ambient loop below is gated in CSS and paused on window blur. */
+.brand__glyph--moon {
+  display: inline-flex;
+  width: 1.15em;
+  height: 1.15em;
+  /* The text glyph's drop-shadow moves onto the SVG (which has room to bleed);
+     here it would just be clipped by the inline-flex box. */
+  filter: none;
+  /* Cursor parallax: brand.js writes --moon-shift-* per pointermove. */
+  transform: translate(var(--moon-shift-x, 0px), var(--moon-shift-y, 0px));
+  transition: transform var(--dur-fast) var(--ease-smooth);
+}
+.brand__moon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  /* Resting glow scales with how lit the disc is (brand.js sets --moon-illum
+     0..1): a full moon burns, a new moon barely smoulders. Zeroes with the
+     glow axis like every other neon accent. */
+  filter: drop-shadow(
+    0 0 calc(var(--glow-size-sm) * (0.35 + var(--moon-illum, 0.5))) var(--neon-magenta)
+  );
+}
+.moon__disc { fill: var(--edge-glow); opacity: 0.25; }
+.moon__lit { fill: var(--neon-magenta); }
+.moon__craters circle { fill: var(--term-bg); opacity: 0.4; }
+
+/* Ambient bob - the only loop. Gated to the full motion tier, written as
+   "neither off nor reduced" because full is the default and carries no
+   attribute at all - test/modifiers.test.js forbids a block keyed to a
+   default axis value. Also off under OS reduced-motion. */
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion='off']):not([data-motion='reduced']) .brand__moon {
+    animation: brand-bob 7s var(--ease-smooth) infinite;
+  }
+}
+/* brand.js toggles .is-blurred on <html> when the window loses focus.
+   !important because the bob selector above out-specifies this one. */
+:root.is-blurred .brand__moon { animation-play-state: paused !important; }
+
+/* Click flare: glow bloom + one spin. brand.js adds .brand--flare, morphs the
+   lit path to full and back in step, and removes the class on animationend.
+   Same tier gate as the bob so it out-specifies it and takes over cleanly. */
+:root:not([data-motion='off']):not([data-motion='reduced']) .brand--flare .brand__moon {
+  animation:
+    brand-spin var(--dur-slow) var(--ease-smooth),
+    brand-flare var(--dur-slow) var(--ease-smooth);
+}
+
+@keyframes brand-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+@keyframes brand-spin { to { transform: rotate(360deg); } }
+@keyframes brand-flare {
+  0% { filter: drop-shadow(0 0 var(--glow-size-sm) var(--neon-magenta)); }
+  40% {
+    filter:
+      drop-shadow(0 0 calc(var(--glow-size) * 2) var(--neon-cyan))
+      drop-shadow(0 0 var(--glow-size) var(--neon-magenta));
+  }
+  100% { filter: drop-shadow(0 0 var(--glow-size-sm) var(--neon-magenta)); }
+}
+
+/* Success ripple. brand.js adds .brand--ripple for one animation when a session
+   flips from working to idle (bus onBusyIdle) - one expanding moon-glow ring off
+   the mark, then gone. Ambient acknowledgement, no side effect. Full motion tier
+   only; the ::after does not exist at all otherwise. */
+.brand { position: relative; }
+:root:not([data-motion='off']):not([data-motion='reduced']) .brand--ripple::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1.15em;
+  height: 1.15em;
+  margin-top: -0.575em;
+  border-radius: 50%;
+  border: 1px solid var(--neon-cyan);
+  pointer-events: none;
+  animation: brand-ripple var(--dur-slow) var(--ease-smooth);
+}
+@keyframes brand-ripple {
+  from { transform: scale(0.6); opacity: 0.75; }
+  to { transform: scale(2.6); opacity: 0; }
+}
 
 /* ---- Panel sections -------------------------------------------------------- */
 
@@ -810,7 +906,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--text-dim);
 }
-.dot--live { background: var(--good); box-shadow: 0 0 var(--glow-size-sm) var(--good); animation: blink 1.6s infinite; }
+.dot--live { background: var(--good); box-shadow: 0 0 var(--glow-size-sm) var(--good); }
 .dot--dead { background: var(--bad); box-shadow: 0 0 var(--glow-size-sm) var(--bad); }
 @keyframes blink { 50% { opacity: 0.4; } }
 
@@ -822,11 +918,36 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   background: var(--text-dim);
   transition: background var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
 }
-/* yellow pulse = Claude is working (stdout streaming) */
-.led--working { background: var(--warn); box-shadow: 0 0 var(--glow-size-md) var(--warn); animation: blink 0.9s infinite; }
+/* yellow = Claude is working (stdout streaming) */
+.led--working { background: var(--warn); box-shadow: 0 0 var(--glow-size-md) var(--warn); }
 /* calm green = stdout is quiet, it's the user's turn */
 .led--waiting { background: var(--good); box-shadow: 0 0 var(--glow-size-sm) var(--good); }
 .led--dead { background: var(--bad); box-shadow: 0 0 var(--glow-size-sm) var(--bad); }
+
+/* Idle heartbeat. The PTY dot and the "working" LED used to carry
+   `blink <n>s infinite` inline - a hardcoded duration the motion tokens could
+   never reach, so both kept moving even for someone who had turned motion off
+   (the same miss E3 fixed on the context bar). Motion is now confined to the
+   full tier: the live dot breathes its glow, the working LED keeps its tighter
+   opacity blink. At every other tier the colour alone carries live / working,
+   which is how the rest of the HUD already reads that state. The breath scales
+   with --glow-size-sm, so a flat (glow: off) theme gets no pulse at all.
+   Paused while the window is blurred - brand.js owns .is-blurred on <html>. */
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion='off']):not([data-motion='reduced']) .dot--live {
+    animation: status-breathe 2.4s var(--ease-smooth) infinite;
+  }
+  :root:not([data-motion='off']):not([data-motion='reduced']) .led--working {
+    animation: blink 0.9s infinite;
+  }
+}
+:root.is-blurred .dot--live,
+:root.is-blurred .led--working { animation-play-state: paused !important; }
+
+@keyframes status-breathe {
+  0%, 100% { box-shadow: 0 0 var(--glow-size-sm) var(--good); }
+  50% { box-shadow: 0 0 calc(var(--glow-size-sm) * 2.4) var(--good); }
+}
 
 /* ---- Scratchpad ------------------------------------------------------------ */
 
@@ -981,8 +1102,29 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   max-width: 220px;
   transition: background var(--dur-fast) var(--ease-sharp), color var(--dur-fast) var(--ease-sharp);
 }
-.tab.is-active { background: var(--bg); color: var(--neon-cyan); border-color: var(--neon-cyan); }
+.tab.is-active { background: var(--bg); color: var(--neon-cyan); border-color: var(--neon-cyan); position: relative; }
 .tab.is-dead .tab__label { text-decoration: line-through; opacity: 0.6; }
+
+/* A 2px accent pinned under the active tab. The tab strip's baseline is a plain
+   --edge line (.tabs); this is the slice of it the active session owns, and it
+   stays put through the many repaints a context tick triggers. On a REAL switch
+   sessions.js tags the newly-active tab .tab--enter for exactly one paint and
+   the accent wipes in from the left - confined to the full motion tier, since
+   "strip almost everything" leaves only the resting line elsewhere. */
+.tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--neon-cyan);
+  transform-origin: left center;
+}
+:root:not([data-motion='off']):not([data-motion='reduced']) .tab--enter::after {
+  animation: tab-wipe var(--dur-normal) var(--ease-smooth);
+}
+@keyframes tab-wipe { from { transform: scaleX(0); } }
 
 .tab__label {
   flex: 1;
@@ -1136,6 +1278,21 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 /* A flex child ignores the default [hidden] - must be forced. */
 .badge[hidden] { display: none; }
 #ctx-percent { font-weight: 700; }
+/* A quick roll when the digits actually change. context.js adds .is-ticked on a
+   LIVE reading whose rounded percent differs from what is on screen (a plain tab
+   switch replays metrics and does not count). The bar's fill is a slow settle
+   and a one- or two-point step vanishes into it - this catches the eye for the
+   number. Full motion tier only; the token duration would already zero it under
+   reduced motion, but the decision was to strip even that. #ctx-percent is a
+   flex item (.ctx-meta__left) so it is already blockified - transform applies. */
+:root:not([data-motion='off']):not([data-motion='reduced']) #ctx-percent.is-ticked {
+  animation: digit-tick var(--dur-fast) var(--ease-smooth);
+}
+@keyframes digit-tick {
+  0% { transform: translateY(0.4em); opacity: 0.3; }
+  60% { transform: translateY(-0.08em); }
+  100% { transform: translateY(0); opacity: 1; }
+}
 .ctx-warn { color: var(--bad); font-size: 11px; font-weight: 600; }
 
 /* ---- Usage limit counter (5h + week) -------------------------------- */
@@ -2230,6 +2387,21 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--edge-glow); border-radius: var(--radius-xs); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* Left & right panel column scrollers (layout.js: `.panel__scroll`): the 8px
+   track gutter stays reserved either way - the negative-margin trick above it
+   already keeps that lane clear of the widgets - so the thumb only needs to
+   fade in while the pointer is in that column or a control inside it holds
+   focus. Nothing moves sideways on reveal; only the thumb colour crosses.
+   `--dur-fast` is zeroed under prefers-reduced-motion, so this is instant there. */
+.panel__scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-sharp);
+}
+.panel__scroll:hover::-webkit-scrollbar-thumb,
+.panel__scroll:focus-within::-webkit-scrollbar-thumb {
+  background: var(--edge-glow);
+}
 
 /* ---- Ctrl+K chip in the terminal bar ---------------------------------------- */
 

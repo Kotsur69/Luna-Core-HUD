@@ -206,13 +206,25 @@ function showSession(sessionId) {
   term.focus();
 }
 
+// The active id as of the last renderTabs paint. When it changes, the tab that
+// just became active gets .tab--enter for that one paint so the CSS accent
+// under it wipes in; the repeated repaints a context tick triggers see no
+// change and leave it at rest. null until the first paint - the opening tab
+// should not wipe, the same rule context.js's lastCtxLevel follows.
+let paintedActiveId = null;
+
 function renderTabs() {
   if (!tabEls) return;
+  const activeId = getActiveSessionId();
+  const switched = paintedActiveId !== null && activeId !== paintedActiveId;
+  paintedActiveId = activeId;
   tabEls.list.innerHTML = '';
   for (const meta of sessionList) {
     const s = getBucket(meta.id);
+    const isActive = meta.id === activeId;
     const tab = document.createElement('div');
-    tab.className = 'tab' + (meta.id === getActiveSessionId() ? ' is-active' : '');
+    tab.className = 'tab' + (isActive ? ' is-active' : '');
+    if (isActive && switched) tab.classList.add('tab--enter');
     if (s && !s.alive) tab.classList.add('is-dead');
 
     const btn = document.createElement('button');

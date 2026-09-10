@@ -13,6 +13,7 @@
     },
     "navClick": { "file": "sfx/nav-click.wav", "volume": 55 },
     "modeToggle": { "file": "sfx/mode-toggle.wav", "volume": 60 },
+    "moonFlare": { "file": "sfx/moon-flare.wav", "volume": 45 },
     "terminalNew": { "file": "sfx/terminal-new.wav", "volume": 65 },
     "terminalClose": { "file": "sfx/terminal-close.wav", "volume": 65 }
   },

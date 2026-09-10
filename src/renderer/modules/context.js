@@ -61,7 +61,12 @@ export function applyCtxMetrics(metrics, live = true) {
   if (live && lastCtxLevel !== null && level > lastCtxLevel) pulse(els.fill, 'is-crossing');
   lastCtxLevel = level;
 
-  els.percent.textContent = `${Math.round(pct * 100)}%`;
+  // A live reading whose displayed digits actually move gets a quick roll (CSS
+  // .is-ticked, full motion tier). A replayed tab switch passes live=false and
+  // never ticks; a reading that rounds to the same percent is not a change.
+  const pctText = `${Math.round(pct * 100)}%`;
+  if (live && els.percent.textContent !== pctText) pulse(els.percent, 'is-ticked');
+  els.percent.textContent = pctText;
   renderModelBadge(metrics);
   renderCostLine(metrics);
   renderCopyPath(metrics);

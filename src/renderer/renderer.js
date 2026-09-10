@@ -67,6 +67,7 @@ import { initProfiles, initProjects } from './modules/switchers.js';
 import { initPorts } from './modules/ports.js';
 import { initAppearance, getThemeIds, selectTheme } from './modules/appearance.js';
 import { initModifiers } from './modules/modifiers.js';
+import { mountBrand } from './modules/brand.js';
 import { initClaudeCheck } from './modules/claudecheck.js';
 // Diagnostics tile: consolidated self-checks (mpv, claude on PATH, MCP usage).
 // Self-registers as a widget on import; initDiagnostics() runs the first report.
@@ -145,6 +146,10 @@ initPorts();
 // first paint would show a visible relayout on every single launch.
 await initModifiers();
 initAppearance();
+// The brand mark's moon: real lunar phase, hover time-lapse, click flare. After
+// initAppearance() so the motion axis and theme tokens it reads are already on
+// :root, and after initLayout() (above) so the .brand node is in its region.
+mountBrand();
 // After initAppearance(): boot's animation needs language + theme already
 // applied, same ordering constraint startBoot() has always documented.
 initTermcustomSettings();
