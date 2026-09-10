@@ -29,6 +29,7 @@ import { mountTabs } from './sessions.js';
 import { mountPaletteChip } from './palette.js';
 import { mountTermcustomChip } from './termcustom.js';
 import { mountGitquickChip } from './gitquick.js';
+import { mountShortcutsChip } from './shortcutspanel.js';
 import { mountUpdateChip } from './update.js';
 
 defineWidget({
@@ -43,6 +44,7 @@ defineWidget({
     mountPaletteChip(root);
     mountTermcustomChip(root);
     mountGitquickChip(root);
+    mountShortcutsChip(root);
     mountUpdateChip(root);
     // No cleanup: this widget is never meant to unmount (see header).
   },

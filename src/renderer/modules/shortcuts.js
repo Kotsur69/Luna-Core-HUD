@@ -1,14 +1,14 @@
 // ============================================================================
-// LunaCore - the keyboard-shortcut reference (Ctrl+L Settings, bottom section)
+// LunaCore - the keyboard-shortcut reference (the list behind Ctrl+/)
 // ----------------------------------------------------------------------------
 // Every chord LunaCore claims is caught in one of four places: the window/tab
-// chords in main.js's before-input-event handler, and the three overlay toggles
+// chords in main.js's before-input-event handler, and the four overlay toggles
 // plus the terminal's own key/wheel handling in the renderer modules. Nothing
 // listed them for the user until now.
 //
 // This module owns the LIST, not the behaviour. It does not bind a single key -
-// it only describes the ones that already exist, so the Settings overlay can
-// print them. Each row carries a `source` marker string that test/shortcuts.test.js
+// it only describes the ones that already exist, so the Ctrl+/ overlay
+// (modules/shortcutspanel.js, which owns the DOM half) can print them. Each row carries a `source` marker string that test/shortcuts.test.js
 // greps for in the file that actually implements the chord: rename or drop a
 // binding and the test goes red until this table is brought back in step (the
 // same drift guard modifiers.js / test/modifiers.test.js run against styles.css).
@@ -105,7 +105,7 @@ export const SHORTCUT_GROUPS = [
         chords: [['Ctrl', '/']],
         descKey: 'shortcuts.shortcutsRef',
         source: {
-          file: 'src/renderer/modules/termcustom.js',
+          file: 'src/renderer/modules/shortcutspanel.js',
           marker: "e.key === '/'",
         },
       },
@@ -246,8 +246,8 @@ function render(container) {
 }
 
 /**
- * Fills `#shortcuts-list` inside the Settings overlay and re-renders it on a
- * language change. Called once from termcustom.js's initTermcustomSettings().
+ * Fills `#shortcuts-list` inside the Ctrl+/ overlay and re-renders it on a
+ * language change. Called once from shortcutspanel.js, on its first open.
  * A no-op when the container is absent (e.g. the --luna-probe harness), same
  * defensiveness as mountPaletteChip().
  *

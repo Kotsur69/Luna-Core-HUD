@@ -21,7 +21,6 @@ import { term, applyTerminalAppearance } from './terminals.js';
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
 import { mountAutoCompactSettings } from './autocompact.js';
-import { mountShortcuts } from './shortcuts.js';
 import { applyLang } from './appearance.js';
 import { MODIFIER_AXES, getModifiers, setModifier } from './modifiers.js';
 import { sfx } from './sound.js';
@@ -192,26 +191,6 @@ function closeTermcustom() {
   if (!termcustomOpen) return;
   termcustomOpen = false;
   closeWithExit(termcustomEl);
-}
-
-/**
- * Opens Settings (if it is not already up) and scrolls its keyboard-shortcut
- * reference into view. Backs the global Ctrl+/ handler at the bottom of this
- * file - a discoverable way in for anyone who does not already know the list
- * is parked under Ctrl+L.
- *
- * openTermcustom() is async (the prefs round-trip), but it flips
- * `termcustomEl.hidden` before its first await, so the section already has
- * layout by the time we get here. The rAF just lets the overlay's entrance
- * transform settle before scrollIntoView() reads an offset.
- *
- * Unlike Ctrl+L, this never toggles the overlay shut: the intent is "show me
- * the shortcuts", not "flip this panel". Escape still closes it.
- */
-async function revealShortcuts() {
-  if (!termcustomOpen) await openTermcustom();
-  const heading = termcustomEl.querySelector('#shortcuts-heading');
-  if (heading) requestAnimationFrame(() => heading.scrollIntoView({ block: 'start' }));
 }
 
 // -- Language (moved from appearance.js, 2026-08-19) -------------------------
@@ -454,10 +433,6 @@ export async function initTermcustomSettings() {
   // Same static-overlay shape as mountNotify above - the arm toggle itself
   // stays a left-panel widget (autocompact.js).
   mountAutoCompactSettings(termcustomEl);
-
-  // Read-only keyboard-shortcut reference. Same static-overlay shape - the data
-  // and its drift-guard test live in shortcuts.js; this just asks it to paint.
-  mountShortcuts(termcustomEl);
 }
 
 // Global Ctrl/Cmd+L (capture, to get ahead of xterm.js) - same tradeoff and
@@ -471,24 +446,6 @@ window.addEventListener(
       e.stopPropagation();
       if (termcustomOpen) { closeTermcustom(); term.focus(); }
       else openTermcustom();
-    }
-  },
-  true
-);
-
-// Global Ctrl/Cmd+/ - jump straight to the keyboard-shortcut reference that
-// lives at the bottom of this same overlay. Same capture-phase tradeoff as the
-// Ctrl+L handler above (it shadows readline's Ctrl+_ undo while LunaCore has
-// focus). `!e.shiftKey` keeps Ctrl+Shift+/ free; on the layouts where "/" is
-// itself a shifted key the chord simply will not fire, which is acceptable for
-// a pure convenience binding.
-window.addEventListener(
-  'keydown',
-  (e) => {
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === '/') {
-      e.preventDefault();
-      e.stopPropagation();
-      revealShortcuts();
     }
   },
   true

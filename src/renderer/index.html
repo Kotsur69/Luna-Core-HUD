@@ -732,6 +732,12 @@
         <button id="gitquick-open" class="palette-chip" data-i18n-title="gitquick.chip.title" title="Szybkie akcje Git (Ctrl+G)">
           <kbd>Ctrl</kbd><kbd>G</kbd>
         </button>
+        <!-- Fourth chip in the same bar: the keyboard-shortcut reference, so
+             Ctrl+/ is discoverable by eye instead of being a chord you have to
+             already know - same rationale as the Ctrl+G chip above. -->
+        <button id="shortcuts-open" class="palette-chip" data-i18n-title="shortcuts.chip.title" title="Skroty klawiszowe (Ctrl+/)">
+          <kbd>Ctrl</kbd><kbd>/</kbd>
+        </button>
         <!-- D5: the same chip-style bar as Ctrl+K/Ctrl+L, instead of a permanent block
              in the left panel (see modules/update.js). Only visible when there's
              something to act on (an update available/ready); hidden otherwise -
@@ -820,6 +826,27 @@
       <div class="palette__foot">
         <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.nav">nawigacja</span></span>
         <span><kbd>Enter</kbd> <span data-i18n="palette.foot.use">uzyj</span></span>
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Keyboard shortcuts (Ctrl+/) ================= -->
+  <!-- modules/shortcutspanel.js. Read-only list and nothing else: no field to
+       edit, no action to fire, so it is its own overlay rather than a section
+       buried in Settings (Mati, 2026-09-10 - Ctrl+/ used to open Settings and
+       scroll there, which read as "the wrong panel opened"). Reuses .palette's
+       overlay/backdrop/modal/foot CSS, same as .gitquick above; the rows are
+       built by modules/shortcuts.js, which still owns the table + drift guard. -->
+  <div id="shortcuts" class="palette shortcuts-overlay" tabindex="-1" hidden>
+    <div class="palette__backdrop" data-shortcuts-close></div>
+    <div class="palette__modal" role="dialog" aria-modal="true" aria-label="Skroty klawiszowe">
+      <div class="palette__bar">
+        <span class="palette__glyph">⌨</span>
+        <span class="shortcuts-overlay__heading" data-i18n="shortcuts.title">Skroty klawiszowe</span>
+      </div>
+      <div id="shortcuts-list" class="shortcuts shortcuts-overlay__body"></div>
+      <div class="palette__foot">
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>
@@ -1088,11 +1115,6 @@
           <span class="ui-field__label" data-i18n="autocompact.settings.afterMinutes">Minuty (N)</span>
           <input type="number" id="autocompact-minutes" min="1" max="1440" step="1" />
         </label>
-        <h3 id="shortcuts-heading" class="termcustom__section" data-i18n="shortcuts.title">Skroty klawiszowe</h3>
-        <!-- Read-only reference. Rows are built in modules/shortcuts.js (data +
-             a drift-guard test), same overlay-owns-markup / module-owns-content
-             split as the palette. -->
-        <div id="shortcuts-list" class="shortcuts"></div>
       </div>
       <div class="termcustom__foot">
         <button type="button" id="termcustom-reset" class="termcustom__reset" data-i18n="termcustom.reset">Przywroc domyslne</button>
