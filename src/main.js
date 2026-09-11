@@ -103,6 +103,10 @@ const {
   clearHistory,
 } = require('./clipboard');
 
+// Screenshots pasted into a session (Win+Shift+S -> Ctrl+V). See
+// src/screenshots.js for why a bitmap has to become a file path first.
+const { saveClip, pruneClips, clipsDir } = require('./screenshots');
+
 const { readTodos, writeTodos } = require('./todo');
 
 const { micState } = require('./devices');
@@ -1369,6 +1373,36 @@ function registerIpc() {
     session.proc.write(`\x1b[200~${text}\x1b[201~`);
     if (payload.submit) session.proc.write('\r');
     session.approvalShowing = false;
+  });
+
+  // ACTION INJECTOR (screenshot paste): a Ctrl+V that carried an IMAGE.
+  //
+  // Claude Code reads an image by PATH, so the bitmap has to become a file
+  // first - that is the whole job here, and src/screenshots.js's header has
+  // the background (it is what the external winclipshot helper did, minus its
+  // hardcoded list of terminal .exe names that LunaCore was never on).
+  //
+  // The renderer sends the bytes it already holds from the paste event rather
+  // than us reading the clipboard: nothing in LunaCore reads the clipboard
+  // unprompted, and this way an image copied from a browser or Explorer works
+  // the same as a Win+Shift+S snip.
+  //
+  // The path goes in as a bracketed paste WITHOUT Enter (same reasoning as
+  // pty:paste above): the user still gets to type the question that goes with
+  // the screenshot. The trailing space is so the next word they type does not
+  // glue itself onto ".png".
+  //
+  // { bytes: Uint8Array, mime: string, sessionId?: string } -> { ok, path? }
+  ipcMain.handle('pty:screenshot', (_event, payload) => {
+    const session = resolveTargetSession(payload && payload.sessionId);
+    if (!session || !session.proc || !payload) return { ok: false };
+    const file = saveClip(clipsDir(), payload.bytes, payload.mime);
+    if (!file) return { ok: false };
+    // After the write, so a failed save never costs the user an older clip.
+    pruneClips(clipsDir());
+    session.proc.write(`\x1b[200~${file} \x1b[201~`);
+    session.approvalShowing = false;
+    return { ok: true, path: file };
   });
 
   // Matches the PTY size to the window's terminal size (xterm-addon-fit).
