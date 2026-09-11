@@ -638,8 +638,44 @@ function hasTurnEnd(text) {
 }
 
 /**
+ * Wall-clock of the LAST API-error entry in this fragment, read from the
+ * entry's own `timestamp`, or null if there is none (or none carries a
+ * parseable one).
+ *
+ * The renderer needs the drop's own time, not the time we happened to read it:
+ * autoproceed.js compares it against the timestamps on tool events to tell
+ * "the session moved again" from "the dying turn is still flushing its tail".
+ * At read time those look identical - the watcher polls every 1.5s and can hand
+ * over a batch spanning several seconds of transcript - and mistaking the
+ * second for the first cancels a recovery that nothing will ever re-arm.
+ *
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {number|null} epoch ms
+ */
+function apiErrorAt(text) {
+  let at = null;
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || (!line.includes('isApiErrorMessage') && !line.includes('<synthetic>'))) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (!isApiErrorEntry(obj)) continue;
+      const t = Date.parse(obj.timestamp);
+      if (Number.isFinite(t) && (at === null || t > at)) at = t;
+    } catch {
+      /* incomplete line - skip */
+    }
+  }
+  return at;
+}
+
+/**
  * True if this fragment contains the synthetic entry the CLI writes when a
  * request dies mid-flight (isApiErrorEntry above).
+ *
+ * Kept separate from apiErrorAt() on purpose: an error entry whose timestamp is
+ * missing or malformed must still count as a drop, and folding the two would
+ * make "no usable timestamp" silently read as "no drop".
  *
  * @param {string} text fragment of the JSONL file (whole lines)
  * @returns {boolean}
@@ -968,7 +1004,13 @@ class TranscriptWatcher {
         // this very fragment; announcing the drop after them means that stale
         // liveness is consumed BEFORE recovery is armed, instead of cancelling
         // it a moment later.
-        if (this.onApiError && hasApiError(complete)) this.onApiError({ at: Date.now() });
+        // `at` is the ERROR ENTRY's own timestamp, not read time: the renderer
+        // compares it against tool-event timestamps from this same fragment to
+        // decide whether the session moved after the drop. Date.now() is only
+        // the fallback for an entry with no parseable timestamp.
+        if (this.onApiError && hasApiError(complete)) {
+          this.onApiError({ at: apiErrorAt(complete) ?? Date.now() });
+        }
       }
     } catch {
       /* file vanished / no access - the cost simply does not get updated */
@@ -1108,6 +1150,7 @@ module.exports = {
   foldMcpEvents,
   hasTurnEnd,
   hasApiError,
+  apiErrorAt,
   hasCompletedTurn,
   hasUserPromptStart,
   isLongTurn,

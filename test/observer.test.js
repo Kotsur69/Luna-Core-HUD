@@ -21,6 +21,7 @@ const {
   foldMcpEvents,
   hasTurnEnd,
   hasApiError,
+  apiErrorAt,
   hasCompletedTurn,
   hasUserPromptStart,
   isLongTurn,
@@ -774,6 +775,39 @@ test('hasApiError finds the error entry, and ignores an ordinary turn', () => {
   assert.equal(hasApiError(endLine('end_turn')), false);
   assert.equal(hasApiError(''), false);
   assert.equal(hasApiError('{"isApiErrorMessage":tr'), false); // torn line mid-write
+});
+
+// ---- apiErrorAt: WHEN the drop happened ------------------------------------
+// The renderer dates a drop against the tool events in the same fragment to
+// tell "the session moved again" from "the dying turn is still flushing its
+// tail" (src/renderer/modules/autoproceed.js). Read time is useless for that:
+// the watcher polls every 1.5s and hands over batches spanning several seconds
+// of transcript, so the timestamp has to come from the entry itself.
+
+test('apiErrorAt reads the error entry own timestamp', () => {
+  assert.equal(apiErrorAt(apiErrorLine()), Date.parse(TS));
+});
+
+test('apiErrorAt is null when there is no error entry', () => {
+  assert.equal(apiErrorAt(endLine('end_turn')), null);
+  assert.equal(apiErrorAt(''), null);
+  assert.equal(apiErrorAt('{"isApiErrorMessage":tr'), null); // torn line mid-write
+});
+
+test('apiErrorAt takes the NEWEST entry when a fragment carries several', () => {
+  // One dead request can write more than once inside a single 1.5s tick; the
+  // last of them is the one the recovery has to be dated against.
+  const older = apiErrorLine({ timestamp: '2026-01-01T00:00:00.000Z' });
+  const newer = apiErrorLine({ timestamp: '2026-01-01T00:00:05.000Z' });
+  assert.equal(apiErrorAt([newer, older].join('\n')), Date.parse('2026-01-01T00:00:05.000Z'));
+});
+
+test('apiErrorAt is null for an error entry with an unusable timestamp', () => {
+  // hasApiError must still call it a drop - the two are kept separate so a
+  // missing timestamp costs precision, never the recovery itself.
+  const undated = apiErrorLine({ timestamp: 'not-a-date' });
+  assert.equal(apiErrorAt(undated), null);
+  assert.equal(hasApiError(undated), true);
 });
 
 // ---- hasCompletedTurn: the actual "waited 20 minutes" regression ------------

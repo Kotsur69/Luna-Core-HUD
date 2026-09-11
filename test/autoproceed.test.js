@@ -11,7 +11,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { shouldScheduleRecovery, staleSessionIds } = require('../src/renderer/modules/autoproceed.js');
+const {
+  shouldScheduleRecovery,
+  isProgressAfterDrop,
+  staleSessionIds,
+} = require('../src/renderer/modules/autoproceed.js');
 
 // Mirror the module constants (kept in sync by eye, like COOLDOWN_MS in
 // autocompact.test.js).
@@ -104,6 +108,109 @@ test('one dead request writing several error entries costs exactly one continue'
 test('a second genuine drop after the quiet window schedules again', () => {
   const settled = { retryCount: 0, injectedAt: T0, pending: false };
   assert.equal(shouldScheduleRecovery(settled, T0 + QUIET_MS), true);
+});
+
+// ---- progress lifts the quiet window (the "waited six minutes" bug) --------
+// 2026-09-11, 08:11-08:19: a drop, auto-proceed's "continue" 15s later, four
+// tool calls off the back of it, then a second drop 44.3s after the first -
+// 0.7s inside POST_INJECT_QUIET_MS. The decider read that as "the same dead
+// request, still settling" and swallowed it, and because a session stuck at an
+// idle prompt writes nothing more, no further signal ever arrived. Mati sat in
+// front of a dead terminal until he gave up and came here.
+//
+// Elapsed time cannot tell those two apart. Work done since our own injection
+// can: it proves the "continue" landed, which means the drop behind it belongs
+// to the new turn, not the old one.
+
+test('a drop is recovered inside the quiet window once our continue produced work', () => {
+  // injected at T0, tool calls at T0+24s, second drop at T0+29s.
+  const worked = { retryCount: 1, injectedAt: T0, progressedAt: T0 + 24_000, pending: false };
+  assert.equal(shouldScheduleRecovery(worked, T0 + 29_000), true);
+});
+
+test('the real 44.3s case from the transcript is recovered, not swallowed', () => {
+  // Drop #1 -> "continue" at +15s -> Read/tool_result at +38.5s -> drop #2 at
+  // +44.3s. Clocks relative to drop #1.
+  const injectedAt = T0 + 15_000;
+  const state = { retryCount: 1, injectedAt, progressedAt: T0 + 38_500, pending: false };
+  assert.equal(shouldScheduleRecovery(state, T0 + 44_300), true);
+});
+
+test('progress OLDER than our continue does not lift the window', () => {
+  // The dying turn's own tail: work timestamped before the injection is not
+  // evidence the injection took, so the quiet window still applies.
+  const stale = { retryCount: 1, injectedAt: T0, progressedAt: T0 - 1, pending: false };
+  assert.equal(shouldScheduleRecovery(stale, T0 + 1000), false);
+  const exactlyLevel = { retryCount: 1, injectedAt: T0, progressedAt: T0, pending: false };
+  assert.equal(shouldScheduleRecovery(exactlyLevel, T0 + 1000), false);
+});
+
+test('progress does not defeat the circuit breaker', () => {
+  // A session that keeps working and keeps dropping still stops at MAX_RETRIES
+  // on the state the decider is handed; only handleProgress/handleTurnEnd
+  // re-arm the counter, and only on work newer than the injection.
+  const dead = { retryCount: MAX_RETRIES, injectedAt: T0, progressedAt: T0 + 1000, pending: false };
+  assert.equal(shouldScheduleRecovery(dead, T0 + 2000), false);
+});
+
+test('progress does not override a continue that is already pending', () => {
+  const pending = { retryCount: 1, injectedAt: T0, progressedAt: T0 + 1000, pending: true };
+  assert.equal(shouldScheduleRecovery(pending, T0 + 2000), false);
+});
+
+test('several error entries with no work between them still cost one continue', () => {
+  // The regression guard for the fix above: progressedAt never moves, so the
+  // quiet window does all the collapsing it always did.
+  let state = { retryCount: 0, injectedAt: 0, progressedAt: 0 };
+  let now = T0;
+  let sent = 0;
+  if (shouldScheduleRecovery({ ...state, pending: false }, now)) {
+    state = { ...state, retryCount: 1, injectedAt: now };
+    sent += 1;
+  }
+  for (let entry = 0; entry < 5; entry += 1) {
+    now += 5000;
+    if (shouldScheduleRecovery({ ...state, pending: false }, now)) sent += 1;
+  }
+  assert.equal(sent, 1);
+});
+
+// ---- isProgressAfterDrop (the dying turn's tail) ---------------------------
+// The watcher reads whole lines every 1.5s, so one batch of tool events can
+// span the seconds either side of the error entry - and the unfinished calls a
+// dying turn flushes look exactly like a session that came back to life. Taken
+// as liveness they cancel the pending "continue", and nothing re-arms it.
+
+const ev = (at) => ({ phase: 'end', id: 't1', tile: 'Read', at });
+
+test('work after the drop is proof of life', () => {
+  assert.equal(isProgressAfterDrop([ev(T0 + 1)], T0), true);
+});
+
+test('the dying turn tail - work at or before the drop - is not', () => {
+  assert.equal(isProgressAfterDrop([ev(T0 - 5000)], T0), false);
+  assert.equal(isProgressAfterDrop([ev(T0)], T0), false);
+});
+
+test('a batch straddling the drop counts by its newest event', () => {
+  // Same fragment, tool calls from both sides of the error entry: the one that
+  // came after is what matters.
+  assert.equal(isProgressAfterDrop([ev(T0 - 3000), ev(T0 + 2000)], T0), true);
+  assert.equal(isProgressAfterDrop([ev(T0 - 3000), ev(T0 - 1000)], T0), false);
+});
+
+test('events with no usable timestamp stay trusted as liveness', () => {
+  // Unknown must read as alive: that can only cost a stray "continue", where
+  // the opposite costs a session stuck until someone notices.
+  assert.equal(isProgressAfterDrop([{ phase: 'end', id: 't1' }], T0), true);
+  assert.equal(isProgressAfterDrop([ev(NaN), ev(undefined)], T0), true);
+  assert.equal(isProgressAfterDrop([], T0), true);
+  assert.equal(isProgressAfterDrop(undefined, T0), true);
+});
+
+test('a drop with no usable timestamp of its own accepts any work', () => {
+  assert.equal(isProgressAfterDrop([ev(T0)], undefined), true);
+  assert.equal(isProgressAfterDrop([ev(T0)], NaN), true);
 });
 
 test('missing or malformed state fields are treated as zero', () => {

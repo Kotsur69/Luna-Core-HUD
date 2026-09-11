@@ -58,7 +58,14 @@ const BACKOFF_MS = 15000;
 // CLI retries internally before giving up), and each of those entries is
 // genuine - just not a genuine second drop. This window, comfortably longer
 // than BACKOFF_MS, is what keeps one drop costing exactly one "continue".
-// See test/autoproceed.test.js.
+//
+// It is a FALLBACK, not the primary test: shouldScheduleRecovery() lifts it the
+// moment the transcript proves the injected "continue" got the session working
+// again. Time alone cannot separate "the same dead request, still spitting
+// error entries" from "my continue ran for half a minute and then the
+// connection died again" - and this 45s guess got that second case wrong, which
+// is exactly the drop Mati sat in front of for six minutes: two drops 44.3s
+// apart with four tool calls in between. See test/autoproceed.test.js.
 const POST_INJECT_QUIET_MS = 45000;
 
 let els = null;
@@ -71,13 +78,19 @@ const sessions = new Map();
 function sessionState(sessionId) {
   let s = sessions.get(sessionId);
   if (!s) {
-    // retryCount - "continue"s sent on the current unrecovered turn; the
-    //              circuit breaker trips at MAX_RETRIES.
-    // injectedAt - Date.now() of the last "continue" sent, for the
-    //              POST_INJECT_QUIET_MS silence window.
-    // timer      - the pending backoff timer, or null. A non-null timer also
-    //              means "an injection is already on the way".
-    s = { retryCount: 0, injectedAt: 0, timer: null };
+    // retryCount   - "continue"s sent on the current unrecovered turn; the
+    //                circuit breaker trips at MAX_RETRIES.
+    // injectedAt   - Date.now() of the last "continue" sent, for the
+    //                POST_INJECT_QUIET_MS silence window.
+    // dropAt       - transcript timestamp of the last drop announced for this
+    //                session. Tool events older than this belong to the turn
+    //                that died, so they are not proof it is alive.
+    // progressedAt - transcript timestamp of the last REAL progress seen. Past
+    //                injectedAt it means the injected "continue" took, which is
+    //                what lifts the quiet window for the next drop.
+    // timer        - the pending backoff timer, or null. A non-null timer also
+    //                means "an injection is already on the way".
+    s = { retryCount: 0, injectedAt: 0, dropAt: 0, progressedAt: 0, timer: null };
     sessions.set(sessionId, s);
   }
   return s;
@@ -105,7 +118,25 @@ function clearAllPending() {
  * transcripts on this machine, because the dying turn's own truncated flush
  * IS that turn end. See hasCompletedTurn() in src/observer.js.
  *
- * @param {{ retryCount?: number, injectedAt?: number, pending?: boolean }} state
+ * The quiet window is conditional, and that condition is the whole fix for the
+ * "armed, waited six minutes, nothing" case Mati hit on 2026-09-11. A drop is
+ * the same drop only while NOTHING has happened since our "continue" went out.
+ * Once the transcript shows the session working again (progressedAt past
+ * injectedAt - real tool calls, not a repaint), the injection demonstrably
+ * took, and any drop behind it belongs to the NEW turn it started. Holding the
+ * 45s silence over that one is fatal, because a session dead at an idle prompt
+ * emits nothing further: the swallowed signal was the last one that would ever
+ * arrive.
+ *
+ * His transcript is the case in point - drop, "continue", four tool calls, then
+ * a second drop 44.3s later: 0.7s inside the window, and the session sat there
+ * until he came back. Across the 242 drops on this machine, every pair of error
+ * entries that had real work between them is a genuine second drop, and every
+ * pair with no work between them is one dead request writing twice. Progress,
+ * not elapsed time, is what tells the two apart.
+ *
+ * @param {{ retryCount?: number, injectedAt?: number, progressedAt?: number,
+ *           pending?: boolean }} state
  *   pending = an injection is already scheduled (caller passes `timer != null`).
  * @param {number} now Date.now()
  * @returns {boolean}
@@ -113,10 +144,48 @@ function clearAllPending() {
 export function shouldScheduleRecovery(state, now) {
   const retryCount = Number.isFinite(state?.retryCount) ? state.retryCount : 0;
   const injectedAt = Number.isFinite(state?.injectedAt) ? state.injectedAt : 0;
+  const progressedAt = Number.isFinite(state?.progressedAt) ? state.progressedAt : 0;
   if (state?.pending === true) return false; // one "continue" already on the way
-  if (now - injectedAt < POST_INJECT_QUIET_MS) return false; // same drop, still settling
+  // Same drop, still settling - but only while the session has shown no sign of
+  // life since we answered the last one.
+  const recovered = progressedAt > injectedAt;
+  if (!recovered && now - injectedAt < POST_INJECT_QUIET_MS) return false;
   if (retryCount >= MAX_RETRIES) return false; // session is dead, stop poking it
   return true;
+}
+
+/**
+ * Do these transcript events prove the session is alive AFTER the drop?
+ *
+ * A turn that dies mid-flight flushes its unfinished tool calls too, and the
+ * watcher polls every 1.5s - so one batch of events can span the seconds either
+ * side of the error entry. Those trailing events are the dying turn's own tail,
+ * not a recovery, and treating them as liveness cancels the pending "continue"
+ * for a session that is already dead. Hence the comparison against the drop's
+ * own transcript timestamp rather than against read time.
+ *
+ * Events with no usable timestamp keep the old, trusting behaviour: unknown
+ * reads as alive, so a malformed batch can only cost a "continue", never a
+ * stuck session.
+ *
+ * @param {Array<{ at?: number }>} events
+ * @param {number} dropAt transcript timestamp of the last announced drop
+ * @returns {boolean}
+ */
+export function isProgressAfterDrop(events, dropAt) {
+  const at = newestEventAt(events);
+  if (at === 0) return true; // nothing to date it by - trust it
+  return at > (Number.isFinite(dropAt) ? dropAt : 0);
+}
+
+/** Newest transcript timestamp in a batch of events, or 0 if none carries one. */
+function newestEventAt(events) {
+  let newest = 0;
+  for (const ev of events || []) {
+    const at = Number.isFinite(ev?.at) ? ev.at : 0;
+    if (at > newest) newest = at;
+  }
+  return newest;
 }
 
 let flashTimer = null;
@@ -169,8 +238,11 @@ function handleTurnEnd({ sessionId } = {}) {
   // this safe.
   //
   // injectedAt is deliberately NOT zeroed: one dead request can write several
-  // error entries, and they must stay inside the silence window above.
+  // error entries, and they must stay inside the silence window above. What
+  // does move is progressedAt - a turn that genuinely finished is the strongest
+  // proof of life there is, so the next drop skips the window outright.
   s.retryCount = 0;
+  s.progressedAt = Date.now();
 }
 
 /**
@@ -190,9 +262,26 @@ function handleTurnEnd({ sessionId } = {}) {
  * the same instant. The watcher fires onApiError LAST for exactly this reason
  * (src/observer.js), so the stale liveness is consumed here BEFORE recovery is
  * armed, instead of cancelling it a moment after.
+ *
+ * That ordering only holds WITHIN one fragment, though. The watcher reads whole
+ * lines every 1.5s, so a dying turn's tail can just as easily land in the tick
+ * AFTER the one that carried the error - and then it arrives here as liveness
+ * for a session that is already sitting at an idle prompt, cancelling the very
+ * recovery that drop armed. Four of the closely-spaced error pairs in the
+ * transcripts on this machine have exactly that shape. isProgressAfterDrop()
+ * dates the events against the drop itself, so the tail can no longer pass.
  */
 function handleProgress({ sessionId, events } = {}) {
   if (!Array.isArray(events) || events.length === 0) return;
+  const s = sessions.get(sessionId);
+  if (!s) return; // no drop on record for this session - nothing to cancel or credit
+  if (!isProgressAfterDrop(events, s.dropAt)) return; // the dead turn's own tail
+  s.progressedAt = Math.max(s.progressedAt, newestEventAt(events) || Date.now());
+  // Work done since our own injection means the "continue" landed and the
+  // session is productive again - so the circuit breaker re-arms, exactly as it
+  // does on a finished turn. A session that burns MAX_RETRIES without producing
+  // a single tool call is still given up on.
+  if (s.progressedAt > s.injectedAt) s.retryCount = 0;
   cancelPending(sessionId);
 }
 
@@ -230,10 +319,15 @@ export function staleSessionIds(known, list) {
   return [...known].filter((id) => !live.has(id));
 }
 
-function handleGodModeSignal({ sessionId, type } = {}) {
+function handleGodModeSignal({ sessionId, type, at } = {}) {
   if (!autoProceedArmed || type !== 'connectionError') return;
   if (isBoundSession(sessionId)) return; // godmode.js already owns this tab's recovery
   const s = sessionState(sessionId);
+  // The drop's own transcript timestamp (src/observer.js, apiErrorAt), kept
+  // monotonic so a batch delivered out of order cannot move the line backwards.
+  // handleProgress() dates tool events against it to tell a real recovery from
+  // the dying turn's tail.
+  s.dropAt = Math.max(s.dropAt, Number.isFinite(at) ? at : Date.now());
   // One signal per API-error entry in this session's transcript (main.js wires
   // this to the watcher, not to the stdout scan), so it is a real dropped
   // request every time. shouldScheduleRecovery() only has to collapse the

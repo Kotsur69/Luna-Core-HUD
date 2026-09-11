@@ -815,7 +815,12 @@ function spawnInto(session, profile) {
       // autoproceed.js need no change - only the provenance is different, and
       // that is the whole point: this fires once per real dropped request
       // instead of once per repaint of some text that happens to say so.
-      onApiError: () => send('godmode:signal', { sessionId: session.id, type: 'connectionError' }),
+      //
+      // `at` rides along: the drop's OWN transcript timestamp, which
+      // autoproceed.js needs to date the drop against the tool events in the
+      // same fragment (a dying turn's tail must not read as "recovered").
+      onApiError: ({ at } = {}) =>
+        send('godmode:signal', { sessionId: session.id, type: 'connectionError', at }),
       onTurnEnd: (turn) => {
         checkTurnEnd(turn);
         send('metrics:turnend', { sessionId: session.id, turn });
