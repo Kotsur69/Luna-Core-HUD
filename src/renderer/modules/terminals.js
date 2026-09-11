@@ -140,6 +140,21 @@ export function getActiveBucket() {
 }
 
 /**
+ * Whether Ctrl+V of an IMAGE becomes a file path (uiprefs' screenshotPasteEnabled).
+ *
+ * Module state rather than a read per paste: the panes are created long before
+ * the prefs arrive and there is no per-tab variation. Mirrors the default in
+ * src/uiprefs.js - a mount that beats the async load takes the feature as ON,
+ * which is the same direction main.js resolves a missing key in.
+ */
+let screenshotPasteEnabled = true;
+
+/** Called by termcustom.js when the Settings toggle moves, and once at startup. */
+export function setScreenshotPasteEnabled(enabled) {
+  screenshotPasteEnabled = enabled !== false;
+}
+
+/**
  * The image a paste carried, or null when it was an ordinary text paste.
  *
  * A DataTransferItemList is index-addressed rather than iterable everywhere,
@@ -250,6 +265,7 @@ export function ensureTerm(sessionId) {
   // only for images - a text paste is never touched, so pasting text behaves
   // exactly as it did before this block existed.
   el.addEventListener('paste', (event) => {
+    if (!screenshotPasteEnabled) return; // switched off in Settings
     const image = imageItem(event.clipboardData);
     if (!image) return; // ordinary text: xterm's handler, untouched
     event.preventDefault();
@@ -363,6 +379,36 @@ export function ensureTerm(sessionId) {
       window.lunacore.copyClipboardEntry(instance.getSelection());
       return false;
     }
+
+    // CTRL+V HAS TO BE CLAIMED HERE, or the paste listener above can never run.
+    //
+    // xterm.js treats Ctrl+<letter> as a CONTROL CODE: left alone it turns
+    // Ctrl+V into \x16 (SYN), sends that to the pty and calls preventDefault()
+    // - so Chromium's native paste never happens and NO paste event is ever
+    // dispatched. That is why the screenshot paste looked dead on arrival: the
+    // listener was correct, the event simply never existed. It also means
+    // Ctrl+V never pasted TEXT in LunaCore either; \x16 is what a terminal was
+    // getting all along.
+    //
+    // Returning false makes xterm skip the key entirely WITHOUT calling
+    // preventDefault, which leaves Chromium's own paste command to run - the
+    // one path that hands the renderer a real image. Text then lands in the
+    // helper textarea and reaches the pty through xterm's own paste handler,
+    // exactly as it does in a browser; images reach the capture listener above.
+    // Nothing extra is sent here, so the two must not both fire.
+    //
+    // Measured in Electron 43 (scratchpad probe, 2026-09-11) - Ctrl+V with an
+    // image on the clipboard: xterm default -> onData "", no paste event;
+    // returning false -> one paste event carrying file:image/png. With text:
+    // one paste event, and onData "hello from the clipboard".
+    //
+    // NOT Ctrl+Shift+V: Chromium maps that to paste-as-plain-text, which
+    // strips the image outright (same probe: items=0). It reaches the pty as
+    // text on its own and needs nothing from us.
+    const isPasteChord =
+      (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
+      && (event.key === 'v' || event.key === 'V');
+    if (isPasteChord) return false;
 
     // Any other real key drops the anchor, so the next Ctrl+Shift+Arrow
     // starts fresh from the cursor instead of resuming a stale one. Bare

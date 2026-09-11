@@ -6,6 +6,7 @@
 // { theme, lang, boot, profile, layout, hideSystemPorts, soundEnabled,
 // voiceEnabled, voiceDuckingEnabled,
 // soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, notificationsEnabled,
+// screenshotPasteEnabled,
 // autoCompactMode, autoCompactEveryTurns, autoCompactAfterMinutes,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
@@ -130,6 +131,13 @@ const DEFAULTS = {
   // default, same reasoning as soundReadOutputEnabled above: an unexpected
   // desktop popup is a worse surprise than a quiet HUD, so this is opt-in.
   notificationsEnabled: false,
+  // Ctrl+V of an IMAGE writes a PNG under %TEMP% and pastes its PATH instead
+  // (see src/screenshots.js). Default ON, unlike clipboardEnabled above, and
+  // the difference is the whole point: this reads NOTHING on its own - it only
+  // ever touches the bytes an explicit Ctrl+V already handed the renderer, so
+  // there is no watching to opt into. Off, an image paste does nothing at all,
+  // which is what Ctrl+V did before the feature existed.
+  screenshotPasteEnabled: true,
   // Feature #4: which signal an ARMED auto-compact fires on. 'context' = the
   // original 85% context-window threshold; 'turns' = every N completed turns on
   // the active tab; 'time' = N minutes since the last compact, but only once
@@ -533,6 +541,13 @@ function readUiPrefs() {
         typeof obj.notificationsEnabled === 'boolean'
           ? obj.notificationsEnabled
           : DEFAULTS.notificationsEnabled,
+      // Missing key => ENABLED, the opposite of the two above: every prefs file
+      // written before today predates the feature, and defaulting those to off
+      // would hide it from exactly the installs it was built for.
+      screenshotPasteEnabled:
+        typeof obj.screenshotPasteEnabled === 'boolean'
+          ? obj.screenshotPasteEnabled
+          : DEFAULTS.screenshotPasteEnabled,
       // Missing keys => nothing folded, every preset at its authored widths and
       // authored arrangement.
       collapsed: cleanCollapsed(obj.collapsed),
@@ -600,6 +615,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.notificationsEnabled === 'boolean') {
       next.notificationsEnabled = partial.notificationsEnabled;
+    }
+    if (partial && typeof partial.screenshotPasteEnabled === 'boolean') {
+      next.screenshotPasteEnabled = partial.screenshotPasteEnabled;
     }
     // Feature #4: merge only the auto-compact keys actually present, then
     // re-validate the trio as a unit (same shape as the term* block below) -

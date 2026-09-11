@@ -180,3 +180,62 @@ test('clipsDir is a temp-directory folder of our own', () => {
 test('the cap is a sane, finite number', () => {
   assert.ok(Number.isInteger(MAX_CLIPS) && MAX_CLIPS > 0);
 });
+
+// ---- wiring drift guards ----------------------------------------------------
+// The pure half above was always correct - the feature still did nothing,
+// because the paste event it relies on was never dispatched: xterm.js turns
+// Ctrl+V into \x16 (SYN) and calls preventDefault(), so Chromium's native
+// paste never runs. Nothing in a unit test can observe that, so these read the
+// source and fail if the load-bearing lines are renamed away, the same drift
+// guard test/shortcuts.test.js uses for chord markers.
+
+const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+
+test('terminals.js still claims Ctrl+V away from xterm', () => {
+  const src = read('src/renderer/modules/terminals.js');
+  assert.match(src, /isPasteChord/, 'the Ctrl+V branch is gone - xterm will swallow the paste as \x16');
+  assert.match(src, /if \(isPasteChord\) return false;/, 'the branch must return false, not true');
+});
+
+test('the Ctrl+V claim excludes Shift, which Chromium maps to paste-as-plain-text', () => {
+  const src = read('src/renderer/modules/terminals.js');
+  const branch = src.slice(src.indexOf('const isPasteChord'), src.indexOf('if (isPasteChord)'));
+  assert.match(branch, /!event\.shiftKey/);
+  assert.match(branch, /!event\.altKey/);
+});
+
+test('the image branch is gated on the Settings switch', () => {
+  const src = read('src/renderer/modules/terminals.js');
+  assert.match(src, /if \(!screenshotPasteEnabled\) return;/);
+  assert.match(src, /export function setScreenshotPasteEnabled/);
+});
+
+test('screenshotPasteEnabled defaults to ON and survives a round trip', () => {
+  const { clampTermPrefs } = require('../src/uiprefs.js');
+  const src = read('src/uiprefs.js');
+  // Not clampTermPrefs' business (it owns term* only) - assert the three
+  // touchpoints a boolean pref needs, the shape notificationsEnabled has.
+  assert.ok(typeof clampTermPrefs === 'function');
+  assert.match(src, /screenshotPasteEnabled: true,/, 'default must be ON');
+  assert.match(src, /typeof obj\.screenshotPasteEnabled === 'boolean'/, 'missing read validation');
+  assert.match(src, /typeof partial\.screenshotPasteEnabled === 'boolean'/, 'missing write merge');
+});
+
+test('the Settings toggle exists in the markup the module queries', () => {
+  const html = read('src/renderer/index.html');
+  for (const id of ['shotpaste-toggle', 'shotpaste-status', 'shotpaste-field']) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} is missing from index.html`);
+  }
+  const js = read('src/renderer/modules/termcustom.js');
+  for (const id of ['shotpaste-toggle', 'shotpaste-status', 'shotpaste-field']) {
+    assert.ok(js.includes(`'${id}'`), `termcustom.js no longer queries #${id}`);
+  }
+});
+
+test('every shotpaste.* string is defined in BOTH languages', () => {
+  const i18n = read('src/renderer/i18n.js');
+  for (const key of ['shotpaste.label', 'shotpaste.hint', 'shotpaste.on', 'shotpaste.off']) {
+    const hits = i18n.split(`'${key}':`).length - 1;
+    assert.equal(hits, 2, `${key} must appear once in pl and once in en (found ${hits})`);
+  }
+});

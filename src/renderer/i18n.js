@@ -46,6 +46,11 @@ const I18N_DICT = {
     'notify.hint': 'Powiadomienie systemowe, gdy sesja skonczy prace lub przekroczy 85% kontekstu. Domyslnie wylaczone.',
     'notify.off': 'wylaczone',
     'notify.armed': 'wlaczone',
+    'shotpaste.label': 'Wklejanie zrzutow ekranu',
+    'shotpaste.hint':
+      'Ctrl+V ze zrzutem ekranu (Win+Shift+S) zapisuje PNG w %TEMP% i wkleja sciezke do pliku - w tej formie Claude Code czyta obrazy. Domyslnie wlaczone.',
+    'shotpaste.on': 'wlaczone',
+    'shotpaste.off': 'wylaczone',
     'notify.busyIdle.title': 'LunaCore',
     'notify.busyIdle.body': 'Sesja skonczyla prace i czeka na Ciebie.',
     'notify.context.title': 'LunaCore',
@@ -489,6 +494,11 @@ const I18N_DICT = {
     'notify.hint': 'A desktop notification when a session finishes work or crosses 85% context. Off by default.',
     'notify.off': 'off',
     'notify.armed': 'on',
+    'shotpaste.label': 'Screenshot paste',
+    'shotpaste.hint':
+      'Ctrl+V of a screenshot (Win+Shift+S) writes a PNG under %TEMP% and pastes its file path - the form Claude Code reads an image in. On by default.',
+    'shotpaste.on': 'on',
+    'shotpaste.off': 'off',
     'notify.busyIdle.title': 'LunaCore',
     'notify.busyIdle.body': 'A session finished and is waiting for you.',
     'notify.context.title': 'LunaCore',
