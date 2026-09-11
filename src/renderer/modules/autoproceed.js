@@ -69,7 +69,9 @@ const BACKOFF_MS = 15000;
 const POST_INJECT_QUIET_MS = 45000;
 
 let els = null;
-let autoProceedArmed = false; // off by default, not persisted - armed each session, mirrors autocompact.js
+// Off by default; the real, persisted value (ui.local.json's autoProceedArmed)
+// arrives async in mount() below - same pattern as notify.js's notifyEnabled.
+let autoProceedArmed = false;
 
 // Per-session recovery state - a backgrounded tab gets its own retry count
 // and timer, independent of every other open tab.
@@ -377,7 +379,23 @@ defineWidget({
       if (!autoProceedArmed) clearAllPending(); // disarming cancels any pending "continue"
       els.field.classList.toggle('is-armed', autoProceedArmed);
       render();
+      window.lunacore.setUiPrefs({ autoProceedArmed });
     });
+
+    // The real, persisted value arrives async - a mount before it lands shows
+    // the (safe) off default rather than blocking on it. Same pattern as
+    // notify.js's mountNotify().
+    window.lunacore
+      .getUiPrefs()
+      .then((prefs) => {
+        if (!els || !prefs || typeof prefs.autoProceedArmed !== 'boolean') return;
+        autoProceedArmed = prefs.autoProceedArmed;
+        if (!autoProceedArmed) clearAllPending();
+        els.toggle.checked = autoProceedArmed;
+        els.field.classList.toggle('is-armed', autoProceedArmed);
+        render();
+      })
+      .catch(() => {});
 
     const offLang = onLangChange(render);
 

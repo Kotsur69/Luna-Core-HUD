@@ -7,6 +7,7 @@
 // voiceEnabled, voiceDuckingEnabled,
 // soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, notificationsEnabled,
 // screenshotPasteEnabled,
+// autoProceedArmed, autoCompactArmed,
 // autoCompactMode, autoCompactEveryTurns, autoCompactAfterMinutes,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
@@ -37,8 +38,8 @@ const TERM_CURSOR_STYLES = ['block', 'underline', 'bar'];
 // Feature #4: what an ARMED auto-compact watches. 'context' = the original 85%
 // context-window threshold; 'turns' = every N completed turns on the active
 // tab; 'time' = N minutes since the last compact, gated by context also being
-// past 60%. The arm TOGGLE itself is per-session (autocompact.js module state),
-// never persisted - only the mode + its N/M live here.
+// past 60%. The arm toggle itself (autoCompactArmed, below) is persisted here
+// too as of 2026-09-11 - Mati kept forgetting to re-arm it every session.
 const AUTO_COMPACT_MODES = ['context', 'turns', 'time'];
 // v0.10 modifiers: four axes that multiply across every theme rather than
 // adding to them. Ids only - the VALUES they stand for (multipliers, font
@@ -138,6 +139,17 @@ const DEFAULTS = {
   // there is no watching to opt into. Off, an image paste does nothing at all,
   // which is what Ctrl+V did before the feature existed.
   screenshotPasteEnabled: true,
+  // Connection-error auto-recovery (autoproceed.js). Missing key => OFF, same
+  // reasoning as notificationsEnabled/clipboardEnabled above: injecting
+  // "continue" into a session costs a token round-trip, so it must be an
+  // explicit opt-in rather than something a prefs file silently turns on.
+  // Persisted as of 2026-09-11, at Mati's request - he kept forgetting to
+  // re-arm it every session; before that it was deliberately per-session state.
+  autoProceedArmed: false,
+  // Left-panel arm toggle for auto-compact (autocompact.js). Same reasoning
+  // and same date as autoProceedArmed above: /compact costs tokens too, so
+  // still off by default - but no longer reset to off on every restart.
+  autoCompactArmed: false,
   // Feature #4: which signal an ARMED auto-compact fires on. 'context' = the
   // original 85% context-window threshold; 'turns' = every N completed turns on
   // the active tab; 'time' = N minutes since the last compact, but only once
@@ -548,6 +560,12 @@ function readUiPrefs() {
         typeof obj.screenshotPasteEnabled === 'boolean'
           ? obj.screenshotPasteEnabled
           : DEFAULTS.screenshotPasteEnabled,
+      // Missing key => disabled (prefs file written before this option existed).
+      autoProceedArmed:
+        typeof obj.autoProceedArmed === 'boolean' ? obj.autoProceedArmed : DEFAULTS.autoProceedArmed,
+      // Missing key => disabled (prefs file written before this option existed).
+      autoCompactArmed:
+        typeof obj.autoCompactArmed === 'boolean' ? obj.autoCompactArmed : DEFAULTS.autoCompactArmed,
       // Missing keys => nothing folded, every preset at its authored widths and
       // authored arrangement.
       collapsed: cleanCollapsed(obj.collapsed),
@@ -569,7 +587,8 @@ function readUiPrefs() {
  * { theme?, lang?, boot?, profile?, layout?, hideSystemPorts?, soundEnabled?,
  *   voiceEnabled?, voiceDuckingEnabled?,
  *   soundVolume?, soundKeystrokeVariant?, soundLongTaskMinutes?,
- *   soundReadOutputEnabled?, autoCompactMode?, autoCompactEveryTurns?,
+ *   soundReadOutputEnabled?, autoProceedArmed?, autoCompactArmed?,
+ *   autoCompactMode?, autoCompactEveryTurns?,
  *   autoCompactAfterMinutes?, termFontFamily?, termFontSize?, termLineHeight?,
  *   termLetterSpacing?, termCursorStyle?, termCursorBlink?, termScrollback?,
  *   termBgOpacity?, termBgBlur?, termBgImage?, collapsed?, layoutSizes?,
@@ -618,6 +637,12 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.screenshotPasteEnabled === 'boolean') {
       next.screenshotPasteEnabled = partial.screenshotPasteEnabled;
+    }
+    if (partial && typeof partial.autoProceedArmed === 'boolean') {
+      next.autoProceedArmed = partial.autoProceedArmed;
+    }
+    if (partial && typeof partial.autoCompactArmed === 'boolean') {
+      next.autoCompactArmed = partial.autoCompactArmed;
     }
     // Feature #4: merge only the auto-compact keys actually present, then
     // re-validate the trio as a unit (same shape as the term* block below) -

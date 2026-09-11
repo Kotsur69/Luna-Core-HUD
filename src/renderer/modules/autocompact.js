@@ -140,7 +140,9 @@ export function normalizeMode(mode) {
 let els = null;    // left-panel widget mount (the arm toggle), or null off screen
 let setEls = null; // Settings-overlay mount (the mode picker), or null
 
-let autoCompactArmed = false; // per-session, never persisted - armed deliberately each run
+// Off by default; the real, persisted value (ui.local.json's autoCompactArmed)
+// arrives async via adoptPrefs() below - same pattern as mode/everyTurns/afterMinutes.
+let autoCompactArmed = false;
 let autoCompactFired = false; // 'context' edge flag
 let autoCompactFiredAt = 0;   // last shot - the shared cooldown
 let armedAt = 0;              // 'time' clock origin until the first compact
@@ -256,12 +258,29 @@ function renderAutoCompact() {
   els.status.textContent = autoCompactArmed ? armedLabel() : t('autocompact.off');
 }
 
-/** Loads the persisted mode + N/M into module state; repaints both mounts. */
+/**
+ * Loads the persisted mode + N/M (and the armed toggle itself) into module
+ * state; repaints both mounts. Called from both the left-panel widget's mount
+ * and the Settings overlay's mount, so `els` (left-panel) may or may not exist
+ * yet - guarded the same way the toggle's own change handler is.
+ */
 function adoptPrefs(prefs) {
   if (!prefs) return;
   mode = normalizeMode(prefs.autoCompactMode);
   if (Number.isFinite(prefs.autoCompactEveryTurns)) everyTurns = prefs.autoCompactEveryTurns;
   if (Number.isFinite(prefs.autoCompactAfterMinutes)) afterMinutes = prefs.autoCompactAfterMinutes;
+  if (typeof prefs.autoCompactArmed === 'boolean' && prefs.autoCompactArmed !== autoCompactArmed) {
+    autoCompactArmed = prefs.autoCompactArmed;
+    // Same clean-slate reset the toggle's own change handler does below.
+    autoCompactFired = false;
+    turnCount = 0;
+    armedAt = Date.now();
+    lastCompactAt = 0;
+    if (els) {
+      els.toggle.checked = autoCompactArmed;
+      els.field.classList.toggle('is-armed', autoCompactArmed);
+    }
+  }
   renderAutoCompact();
   renderSettings();
 }
@@ -303,6 +322,7 @@ defineWidget({
       lastCompactAt = 0;
       els.field.classList.toggle('is-armed', autoCompactArmed);
       renderAutoCompact();
+      window.lunacore.setUiPrefs({ autoCompactArmed });
     });
 
     const offContext = onActiveContext((metrics) => {
@@ -311,8 +331,8 @@ defineWidget({
     });
     const offLang = onLangChange(renderAutoCompact);
 
-    // The persisted mode + N/M arrive async (same as notify.js). A mount before
-    // they land shows the safe 'context' default.
+    // The persisted mode + N/M + armed toggle arrive async (same as
+    // notify.js). A mount before they land shows the safe 'context'/off default.
     window.lunacore.getUiPrefs().then(adoptPrefs).catch(() => {});
 
     return () => {
