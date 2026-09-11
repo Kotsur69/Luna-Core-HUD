@@ -755,7 +755,15 @@ function spawnInto(session, profile) {
     // that much new output is the evidence that the next match is a new event.
     const edges = detectSignalEdges(
       scan,
-      { usageLimit: triggers.usageLimit, connectionError: triggers.connectionError },
+      // usageLimit ONLY. connectionError used to be scanned here too, and that
+      // was the "continue appeared out of nowhere" bug: this matcher sees raw
+      // stdout and has no idea WHO printed the phrase, so a config dump, a grep
+      // hit, a code comment or Claude simply writing "API Error: Connection lost
+      // mid-response" in a reply all read as a live drop and got a "continue"
+      // typed into a perfectly healthy session. A drop is now taken from the
+      // transcript instead (TranscriptWatcher's onApiError below), which is the
+      // CLI's own record of what happened and cannot be faked by rendered text.
+      { usageLimit: triggers.usageLimit },
       session.signalShowing,
     );
     session.signalShowing = edges.showing;
@@ -802,6 +810,12 @@ function spawnInto(session, profile) {
       // §4.3/§11.1: "All done" voice line, gated on turn duration in checkTurnEnd.
       // §6.1: also forwarded to the renderer for the session timeline widget -
       // checkTurnEnd only ever drove sound/TTS, it never reached the UI before.
+      // The drop signal, straight from the CLI's own transcript. Same channel
+      // and payload the stdout scan used to send, so godmode.js and
+      // autoproceed.js need no change - only the provenance is different, and
+      // that is the whole point: this fires once per real dropped request
+      // instead of once per repaint of some text that happens to say so.
+      onApiError: () => send('godmode:signal', { sessionId: session.id, type: 'connectionError' }),
       onTurnEnd: (turn) => {
         checkTurnEnd(turn);
         send('metrics:turnend', { sessionId: session.id, turn });

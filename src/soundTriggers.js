@@ -6,8 +6,17 @@
 // pattern lists, all literal substrings matched against ANSI-stripped stdout
 // via observer.js's generic detectApprovalPrompt(raw, patterns):
 //   - approvalPrompt   (SOUNDS_IMPLEMENTATION_PLAN.md §3) - the y/n TUI prompt.
-//   - usageLimit / connectionError (GODMODE_PLAN.md §"New pieces") - the two
-//     conditions God Mode has to notice and recover from on its own.
+//   - usageLimit       (GODMODE_PLAN.md §"New pieces") - the wall God Mode has
+//     to notice and wait out on its own.
+//
+// connectionError is still loaded, so a hand-edited config never crashes, but
+// NOTHING matches it against stdout any more. A dropped request is taken from
+// the CLI's transcript instead (src/observer.js, isApiErrorEntry ->
+// TranscriptWatcher.onApiError -> main.js). Editing those phrases will not
+// change auto-proceed's behaviour: matching the text on screen is precisely
+// what used to fire "continue" at healthy sessions, because anything that
+// merely PRINTED the phrase - a config dump, a grep hit, a code comment, a
+// reply about the error - read as a live drop.
 // Data, not code: Claude Code's TUI text can change between CLI releases, and
 // Mati should be able to fix a broken match by editing JSON, not by shipping
 // a new build.
