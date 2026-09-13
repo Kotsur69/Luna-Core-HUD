@@ -109,6 +109,26 @@ const KNOWN_TOKENS = new Set([
   '--ease-smooth', '--ease-sharp', '--ease-bounce', '--stagger',
   // interaction: how far a row rises on hover, how far a control sinks on press
   '--lift', '--press-scale',
+  // surface (v0.11): how much of the theme's own colour actually gets painted.
+  // A transparent theme sets this and nothing else changes; every other theme
+  // omits it and inherits 100%, which is bit-for-bit the pre-v0.11 look.
+  '--surface-alpha',
+]);
+
+/**
+ * Tokens that live in :root but are COMPUTED, not authored - each is a
+ * color-mix() of a colour token with --surface-alpha (see the Surfaces block in
+ * styles.css). They are deliberately absent from KNOWN_TOKENS: a theme setting
+ * --surface-panel directly would hand itself a fixed colour and silently opt out
+ * of the alpha system, which is exactly the drift this dictionary exists to
+ * prevent. Themes move --surface-alpha; the stylesheet derives the rest.
+ *
+ * Exported for test/theme.test.js, which must exclude them from the :root
+ * cross-check while still failing on any OTHER unlisted token.
+ */
+const DERIVED_TOKENS = new Set([
+  '--surface-bg', '--surface-edge', '--surface-panel', '--surface-panel-2',
+  '--surface-term',
 ]);
 
 /**
@@ -220,4 +240,4 @@ function loadThemes(warn = (msg) => console.warn(msg)) {
   return { themes };
 }
 
-module.exports = { loadThemes, normalizeTheme, KNOWN_TOKENS };
+module.exports = { loadThemes, normalizeTheme, KNOWN_TOKENS, DERIVED_TOKENS };

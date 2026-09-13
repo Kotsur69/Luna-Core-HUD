@@ -32,6 +32,13 @@
   <!-- xterm.js stylesheet (from node_modules, project root = ../../) -->
   <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
   <!-- LunaCore theme -->
+  <!-- The window's backgroundColor is transparent so Windows can paint acrylic
+       behind the app (v0.11), which gives up Electron's own no-white-flash
+       guard. This does the same job one layer down: it paints before styles.css
+       parses, and styles.css - loaded after - wins by source order the moment it
+       does. Without it a cold start flashes raw desktop. -->
+  <style>html { background: #0a0710; }</style>
+
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>

@@ -202,6 +202,28 @@
   --text-glow: none;    /* a text-shadow; phosphor themes set a real one */
   --shadow-panel: none; /* drop shadow between regions, for non-flat themes */
 
+  /* ---- Surfaces (v0.11): the alpha layer -------------------------------- */
+  /* A theme publishes OPAQUE colour and knows nothing about transparency; this
+     block decides how much of it actually gets painted. That split is the whole
+     reason config/themes.json needs no edit to support a see-through HUD - see
+     reference/TRANSPARENCY_PLAN.md.
+
+     --surface-alpha is the single knob. The [data-surface] modifier blocks are
+     the only thing that may change it. At 100% every color-mix below resolves
+     to exactly the colour it replaced, so `solid` is not "close to" the old
+     look - it is bit-for-bit the old look.
+
+     --surface-edge is the important one and the least obvious: .app is a 100vh
+     grid painted --edge, so it is an opaque lid over the entire window, and its
+     1px `gap` is what draws every hairline between panels. Borders that use
+     --edge stay opaque on purpose; only this background is alpha'd. */
+  --surface-alpha: 100%;
+  --surface-bg:      color-mix(in srgb, var(--bg)         var(--surface-alpha), transparent);
+  --surface-edge:    color-mix(in srgb, var(--edge)       var(--surface-alpha), transparent);
+  --surface-panel:   color-mix(in srgb, var(--bg-panel)   var(--surface-alpha), transparent);
+  --surface-panel-2: color-mix(in srgb, var(--bg-panel-2) var(--surface-alpha), transparent);
+  --surface-term:    color-mix(in srgb, var(--term-bg)    var(--surface-alpha), transparent);
+
   /* ---- Texture: painted over the whole app by .app::before --------------- */
   --texture: none;         /* any background-image: repeating-linear-gradient, etc. */
   --texture-size: auto;
@@ -414,7 +436,7 @@
 html, body {
   margin: 0;
   height: 100%;
-  background: var(--bg);
+  background: var(--surface-bg);
   color: var(--text);
   font-family: var(--font-ui);
   overflow: hidden;
@@ -430,7 +452,7 @@ html, body {
   grid-template-columns: 1fr;
   height: 100vh;
   gap: var(--space-hair);
-  background: var(--edge);
+  background: var(--surface-edge);
   /* C2: the containing block for .splitter, which is absolutely positioned over
      the grid gaps. Without this the handles would resolve against the viewport
      and sit correctly only while .app happened to fill it. */
@@ -464,7 +486,7 @@ body::after {
 }
 
 .panel {
-  background: var(--bg-panel);
+  background: var(--surface-panel);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -516,7 +538,7 @@ body::after {
   align-items: center;
   gap: var(--space-6);
   padding: var(--space-5) var(--space-7);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border-bottom: var(--border-w) solid var(--warn);
   box-shadow: 0 0 var(--glow-size-md) var(--glow);
   font-family: var(--font-ui);
@@ -584,7 +606,7 @@ body::after {
   animation-delay: calc(var(--region-i, 0) * var(--stagger));
 }
 
-.panel--center { padding: 0; background: var(--term-bg); }
+.panel--center { padding: 0; background: var(--surface-term); }
 
 /* ---- Branding ------------------------------------------------------------- */
 
@@ -793,7 +815,7 @@ body::after {
   padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text);
   font-size: var(--fs-md);
 }
@@ -836,7 +858,7 @@ input[type="number"] {
   padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--fs-md);
@@ -854,7 +876,7 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: var(--radius-xs);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
 }
 input[type="range"]::-webkit-slider-thumb {
@@ -958,7 +980,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: var(--space-5);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
@@ -990,7 +1012,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   cursor: pointer;
   user-select: none;
   transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
@@ -1019,7 +1041,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   width: 100%;
   height: 100%;
   border-radius: var(--radius-pill);
-  background: var(--bg);
+  background: var(--surface-bg);
   border: var(--border-w) solid var(--edge);
   transition: background var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
 }
@@ -1044,7 +1066,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   align-items: center;
   gap: var(--space-6);
   padding: var(--space-5) var(--space-8);
-  background: var(--bg-panel);
+  background: var(--surface-panel);
   border-bottom: var(--border-w) solid var(--edge);
 }
 .terminal-bar__title { font-size: 13px; font-weight: 600; color: var(--neon-cyan); }
@@ -1084,7 +1106,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   align-items: stretch;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-5) 0;
-  background: var(--bg-panel);
+  background: var(--surface-panel);
   border-bottom: var(--border-w) solid var(--edge);
 }
 .tabs__list { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; }
@@ -1097,12 +1119,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   border: var(--border-w) solid var(--edge);
   border-bottom: none;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text-dim);
   max-width: 220px;
   transition: background var(--dur-fast) var(--ease-sharp), color var(--dur-fast) var(--ease-sharp);
 }
-.tab.is-active { background: var(--bg); color: var(--neon-cyan); border-color: var(--neon-cyan); position: relative; }
+.tab.is-active { background: var(--bg); /* deliberately opaque - see TRANSPARENCY_PLAN.md */ color: var(--neon-cyan); border-color: var(--neon-cyan); position: relative; }
 .tab.is-dead .tab__label { text-decoration: line-through; opacity: 0.6; }
 
 /* A 2px accent pinned under the active tab. The tab strip's baseline is a plain
@@ -1162,8 +1184,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    with padding so you can hit the close button without aiming for a pixel. */
 .tab__close { font-size: 14px; padding: 4px 6px; }
 .tabs__new { font-size: 16px; padding: 4px 12px; align-self: center; }
-.tab__close:hover { color: var(--danger, #ff6b8a); background: var(--bg-panel-2); }
-.tabs__new:hover { color: var(--neon-cyan); background: var(--bg-panel-2); }
+.tab__close:hover { color: var(--danger, #ff6b8a); background: var(--surface-panel-2); }
+.tabs__new:hover { color: var(--neon-cyan); background: var(--surface-panel-2); }
 .tab__label:focus-visible,
 .tab__close:focus-visible,
 .tabs__new:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
@@ -1214,7 +1236,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   width: 100%;
   height: 14px;
   border-radius: var(--radius-md);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   overflow: hidden;
 }
@@ -1265,7 +1287,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .badge {
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-pill);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text);
   font-size: var(--fs-2xs);
   line-height: 1.4;
@@ -1334,7 +1356,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   width: 100%;
   height: 8px;
   border-radius: var(--radius-sm);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   overflow: hidden;
 }
@@ -1408,7 +1430,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   overflow: hidden; /* clips the running sweep to the tile */
   padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   font-size: var(--fs-sm);
   color: var(--text-dim);
@@ -1451,7 +1473,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 /* Resolved: a short flash so a finish is visible, then back to dark. */
 .skill-tile.is-done {
-  background: color-mix(in srgb, var(--good) 14%, var(--bg-panel-2));
+  background: color-mix(in srgb, var(--good) 14%, var(--surface-panel-2));
 }
 
 /*
@@ -1490,7 +1512,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   gap: var(--space-4);
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   font-size: var(--fs-sm);
   transition: box-shadow var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp);
@@ -1634,7 +1656,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   height: 10px;
   border-radius: 50%;
   border: var(--border-w) solid var(--edge-glow);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   cursor: pointer;
   padding: 0;
   transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
@@ -1775,7 +1797,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   height: 6px;
   margin-top: var(--space-3);
   overflow: hidden;
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   border-radius: var(--radius-pill);
 }
@@ -1875,7 +1897,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   gap: var(--space-4);
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   font-size: var(--fs-sm);
 }
@@ -1941,7 +1963,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   gap: var(--space-1);
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   font-size: var(--fs-sm);
 }
@@ -2053,7 +2075,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   gap: var(--space-1);
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   font-size: var(--fs-xs);
   cursor: pointer;
@@ -2112,7 +2134,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   gap: var(--space-1);
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   font-size: var(--fs-sm);
 }
@@ -2224,7 +2246,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .cheat {
   border: var(--border-w) solid var(--edge);
   border-radius: var(--radius-md);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   overflow: hidden;
 }
 .cheat__summary {
@@ -2288,7 +2310,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -2329,7 +2351,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .skill-entry:hover {
   color: var(--neon-cyan);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border-color: var(--edge);
 }
 .skill-entry.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
@@ -2373,7 +2395,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   width: 30px;
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text-dim);
   font-size: var(--fs-sm);
   cursor: pointer;
@@ -2419,7 +2441,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text-dim);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-sharp), border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
@@ -2498,7 +2520,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   flex-direction: column;
   border-radius: var(--radius-lg);
   border: var(--border-w) solid var(--edge-glow);
-  background: linear-gradient(160deg, var(--bg-panel), var(--bg-panel-2));
+  background: linear-gradient(160deg, var(--surface-panel), var(--surface-panel-2));
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6), 0 0 40px var(--glow);
   overflow: hidden;
   animation: palette-in var(--dur-fast) var(--ease-sharp);
@@ -2554,11 +2576,11 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   cursor: pointer;
 }
 .palette-item.is-active {
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border-color: var(--edge-glow);
   box-shadow: inset 0 0 0 1px rgba(199, 116, 255, 0.12);
 }
-.palette-item:hover { background: var(--bg-panel-2); }
+.palette-item:hover { background: var(--surface-panel-2); }
 
 /* Action source badge (color = type). */
 .palette-item__kind {
@@ -2626,7 +2648,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: var(--space-hair) var(--space-3);
   border-radius: var(--radius-xs);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
 }
@@ -2663,7 +2685,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   border: var(--border-w) solid var(--edge);
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-5);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
 }
 .gitquick__hint {
   font-size: var(--fs-2xs);
@@ -2716,7 +2738,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   flex-direction: column;
   border-radius: var(--radius-lg);
   border: var(--border-w) solid var(--edge-glow);
-  background: linear-gradient(160deg, var(--bg-panel), var(--bg-panel-2));
+  background: linear-gradient(160deg, var(--surface-panel), var(--surface-panel-2));
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6), 0 0 40px var(--glow);
   overflow: hidden;
   animation: palette-in var(--dur-fast) var(--ease-sharp);
@@ -2779,7 +2801,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: var(--space-hair) var(--space-3);
   border-radius: var(--radius-xs);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
 }
@@ -2787,7 +2809,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text-dim);
   font-size: var(--fs-xs);
   cursor: pointer;
@@ -2850,7 +2872,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: var(--space-hair) var(--space-3);
   border-radius: var(--radius-xs);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
   color: var(--text);
@@ -2901,7 +2923,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   flex-direction: column;
   border-radius: var(--radius-lg);
   border: var(--border-w) solid var(--edge-glow);
-  background: linear-gradient(160deg, var(--bg-panel), var(--bg-panel-2));
+  background: linear-gradient(160deg, var(--surface-panel), var(--surface-panel-2));
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6), 0 0 40px var(--glow);
   overflow: hidden;
   animation: palette-in var(--dur-fast) var(--ease-sharp);
@@ -2926,7 +2948,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   height: 22px;
   border-radius: var(--radius-sm);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text-dim);
   cursor: pointer;
   line-height: 1;
@@ -2991,6 +3013,10 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    ---------------------------------------------------------------------------- */
 
 .boot {
+  /* Deliberately opaque, unlike every other full-window surface: boot runs
+     before the user can react to anything, and a see-through boot sequence over
+     an arbitrary desktop is noise during the one moment the HUD is theatrical.
+     See reference/TRANSPARENCY_PLAN.md. */
   position: fixed;
   inset: 0;
   z-index: 200; /* above the palette (100) - this is the first thing on screen */
@@ -3177,7 +3203,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   margin: 0;
   border-radius: var(--radius-xs);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   cursor: pointer;
   position: relative;
 }
@@ -3209,7 +3235,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--fs-sm);
@@ -3236,7 +3262,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   gap: var(--space-4);
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
-  background: var(--bg-panel-2);
+  background: var(--surface-panel-2);
   border: var(--border-w) solid var(--edge);
   font-size: var(--fs-sm);
 }
@@ -3818,7 +3844,7 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   padding: 0;
   border: var(--border-w) solid var(--edge);
   border-radius: var(--radius-sm);
-  background: linear-gradient(160deg, var(--bg-panel), var(--bg-panel-2));
+  background: linear-gradient(160deg, var(--surface-panel), var(--surface-panel-2));
   color: var(--text-dim);
   font-family: var(--font-display);
   font-size: var(--fs-sm);

@@ -324,7 +324,15 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 560,
-    backgroundColor: '#0a0710', // dark background before CSS loads (no white flash)
+    // Transparency (v0.11). Both lines are unconditional on purpose: acrylic is
+    // only ever VISIBLE where the stylesheet paints a surface with alpha, and
+    // only a transparent theme does that. Under all 28 opaque themes the app
+    // covers the material completely and this costs nothing - which is why the
+    // window needs no toggle, no IPC and no recreation when the theme changes.
+    // Non-Win11 ignores backgroundMaterial; the transparent backgroundColor is
+    // covered by index.html's pre-CSS paint. See reference/TRANSPARENCY_PLAN.md.
+    backgroundColor: '#00000000',
+    backgroundMaterial: 'acrylic',
     title: 'LunaCore',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

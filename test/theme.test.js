@@ -17,7 +17,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { loadThemes, normalizeTheme, KNOWN_TOKENS } = require('../src/theme');
+const { loadThemes, normalizeTheme, KNOWN_TOKENS, DERIVED_TOKENS } = require('../src/theme');
 
 const STYLES = path.join(__dirname, '..', 'src', 'renderer', 'styles.css');
 
@@ -112,7 +112,13 @@ test('a typo in a token does not reject the whole theme', () => {
 test('KNOWN_TOKENS matches the :root block in styles.css', () => {
   const inCss = rootTokens();
   const missingFromCss = [...KNOWN_TOKENS].filter((t) => !inCss.has(t));
-  const missingFromList = [...inCss].filter((t) => !KNOWN_TOKENS.has(t));
+  // DERIVED_TOKENS are in :root but deliberately not settable by a theme - they
+  // are color-mix()es of a colour token with --surface-alpha. Excluded here and
+  // pinned by their own test below, so this stays a real drift guard rather than
+  // an escape hatch: any token that is neither known nor derived still fails.
+  const missingFromList = [...inCss].filter(
+    (t) => !KNOWN_TOKENS.has(t) && !DERIVED_TOKENS.has(t)
+  );
 
   assert.deepStrictEqual(
     missingFromCss,
@@ -124,6 +130,25 @@ test('KNOWN_TOKENS matches the :root block in styles.css', () => {
     [],
     `:root has tokens no theme can set: ${missingFromList.join(', ')}`
   );
+});
+
+test('every derived token really is in :root, and no theme can set one', () => {
+  const inCss = rootTokens();
+  for (const t of DERIVED_TOKENS) {
+    assert.ok(inCss.has(t), `${t} is declared derived but is missing from :root`);
+    assert.ok(!KNOWN_TOKENS.has(t), `${t} must not be theme-settable`);
+  }
+
+  // The boundary, exercised rather than asserted about: a theme trying to set a
+  // derived surface directly gets it dropped with a warning, exactly like a typo.
+  const warns = [];
+  const t = normalizeTheme(
+    { id: 'x', vars: { '--surface-panel': '#123456', '--surface-alpha': '62%' } },
+    (m) => warns.push(m)
+  );
+  assert.strictEqual(t.vars['--surface-panel'], undefined, 'derived token must not survive');
+  assert.strictEqual(t.vars['--surface-alpha'], '62%', 'the alpha knob must survive');
+  assert.match(warns.join(' '), /--surface-panel/);
 });
 
 // ---- the space + type scales must not rot back into literals ----------------

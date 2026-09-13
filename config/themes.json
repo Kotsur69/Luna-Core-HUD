@@ -1430,6 +1430,51 @@
     },
 
     {
+      "id": "glass",
+      "label": "Glass",
+      "vars": {
+        "--surface-alpha": "62%",
+        "--bg": "#0a0e13",
+        "--bg-panel": "#0e141c",
+        "--bg-panel-2": "#121a24",
+        "--edge": "#26333f",
+        "--edge-glow": "#4a7f96",
+        "--text": "#eaf1f7",
+        "--text-dim": "#9db0c4",
+        "--neon-magenta": "#a99bff",
+        "--neon-cyan": "#7fe6f5",
+        "--good": "#86e8ad",
+        "--warn": "#ffd694",
+        "--bad": "#ff92a4",
+        "--term-bg": "#0b1116",
+        "--btn-grad": "linear-gradient(135deg, #16202b, #1d2a38)",
+        "--btn-grad-hover": "linear-gradient(135deg, #1d2a38, #26374a)",
+        "--glow": "rgba(127, 230, 245, 0.22)",
+        "--font-display": "'Chakra Petch', 'Segoe UI', sans-serif",
+        "--font-mono": "'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
+        "--tracking-title": "1.2px",
+        "--texture": "none",
+        "--texture-opacity": "1",
+        "--text-glow": "none"
+      },
+      "terminal": {
+        "background": "#0b1116",
+        "foreground": "#e6eef6",
+        "cursor": "#7fe6f5",
+        "selectionBackground": "#24425a",
+        "black": "#131b23",
+        "brightBlack": "#4a5c6e",
+        "magenta": "#a99bff",
+        "brightMagenta": "#c5bbff",
+        "cyan": "#7fe6f5",
+        "brightCyan": "#a8f0fa",
+        "green": "#86e8ad",
+        "yellow": "#ffd694",
+        "red": "#ff92a4"
+      }
+    },
+
+    {
       "id": "paper",
       "label": "Paper",
       "vars": {
