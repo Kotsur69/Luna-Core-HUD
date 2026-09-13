@@ -17,7 +17,7 @@
 
 'use strict';
 
-import { term, applyTerminalAppearance } from './terminals.js';
+import { term, applyTerminalAppearance, setScreenshotPasteEnabled } from './terminals.js';
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
 import { mountAutoCompactSettings } from './autocompact.js';
@@ -32,6 +32,7 @@ import {
   preloadCurrentVariant,
 } from './keysynth.js';
 import { t } from './util.js';
+import { onLangChange } from './bus.js';
 import { closeWithExit, cancelExit } from './motion.js';
 
 const termcustomEl = document.getElementById('termcustom');
@@ -67,6 +68,13 @@ const els = {
   soundLongTaskMinutes: document.getElementById('sound-long-task-minutes'),
   soundReadOutputToggle: document.getElementById('sound-read-output-toggle'),
   voiceDuckToggle: document.getElementById('sound-voiceduck-toggle'),
+  // Ctrl+V of an image -> a file path (src/screenshots.js). Lives here rather
+  // than in its own module like boot.js/notify.js because it has no behaviour
+  // of its own to own: the switch is the whole feature surface, and the state
+  // it drives belongs to terminals.js.
+  shotPasteField: document.getElementById('shotpaste-field'),
+  shotPasteStatus: document.getElementById('shotpaste-status'),
+  shotPasteToggle: document.getElementById('shotpaste-toggle'),
 };
 
 // The curated <option> values in index.html - anything else means "Custom…".
@@ -116,6 +124,32 @@ function renderSoundSwitcher() {
   els.soundReadOutputToggle.checked = soundPrefs.readOutputEnabled;
   els.voiceDuckToggle.checked = soundPrefs.voiceDuckingEnabled;
 }
+
+// Screenshot paste (src/screenshots.js). Mirrors uiprefs' default so a repaint
+// that beats the async prefs load shows the feature as on, which is what it is.
+let shotPasteEnabled = true;
+
+/** Repaints the screenshot-paste switch from module state. */
+function renderShotPaste() {
+  els.shotPasteToggle.checked = shotPasteEnabled;
+  els.shotPasteField.classList.toggle('is-armed', shotPasteEnabled);
+  els.shotPasteStatus.textContent = t(shotPasteEnabled ? 'shotpaste.on' : 'shotpaste.off');
+}
+
+els.shotPasteToggle.addEventListener('change', () => {
+  sfx.modeToggle();
+  shotPasteEnabled = els.shotPasteToggle.checked;
+  // terminals.js first, so the very next paste obeys the switch even if the
+  // write to disk is still in flight.
+  setScreenshotPasteEnabled(shotPasteEnabled);
+  renderShotPaste();
+  window.lunacore.setUiPrefs({ screenshotPasteEnabled: shotPasteEnabled });
+});
+
+// i18n rewrites the status span from its data-i18n key on a language change,
+// which would strand it on "on" while the switch reads off - same repaint
+// notify.js does, and for the same reason.
+onLangChange(renderShotPaste);
 
 /** Persists a partial prefs change AND repaints the live terminal (§4/§5). */
 function persistAndApply(partial) {
@@ -418,6 +452,13 @@ export async function initTermcustomSettings() {
   setSynthVariant(soundPrefs.keystrokeVariant);
   preloadCurrentVariant(); // decode+slice is real work - don't do it for the first time on a keypress
   renderSoundSwitcher();
+
+  // Screenshot paste: pushed into terminals.js HERE, at startup, not when the
+  // overlay opens - the panes have to honour the switch from the first paste
+  // whether or not Settings was ever opened. A missing key means ON (uiprefs).
+  shotPasteEnabled = prefs.screenshotPasteEnabled !== false;
+  setScreenshotPasteEnabled(shotPasteEnabled);
+  renderShotPaste();
 
   // mountBoot(root) is root-agnostic (see boot.js) - #termcustom is static,
   // non-remountable markup, so the returned disposer is never called, same

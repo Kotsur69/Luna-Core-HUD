@@ -586,6 +586,32 @@ function foldMcpEvents(open, events) {
 // ---- 3. Task-complete detection (turn start/end, SOUNDS_IMPLEMENTATION_PLAN.md §3) --
 
 /**
+ * True for the synthetic entry Claude Code writes when a request dies
+ * mid-flight - "API Error: Connection lost mid-response", a timeout, a
+ * 500/503/529. It is shaped like an ordinary assistant message and carries a
+ * TERMINAL stop_reason ("stop_sequence"), so hasTurnEnd() below read it as a
+ * finished turn: the exact opposite of what it means.
+ *
+ * That misread is what killed auto-proceed. A drop arms a "continue" on a
+ * backoff timer; this entry reaches the watcher ~1.5s later (intervalMs), gets
+ * reported as a turn end, and autoproceed.js / godmode.js both cancel the
+ * pending injection for a session that never recovered. The session then sits
+ * idle producing no new stdout, so main.js's connectionError edge never fires
+ * again and the drop is never recovered - the "armed, and nothing happens for
+ * twenty minutes" case. See test/observer.test.js.
+ *
+ * @param {object} obj a parsed transcript line
+ * @returns {boolean}
+ */
+function isApiErrorEntry(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  if (obj.isApiErrorMessage === true) return true;
+  // Belt and braces: the flag is the newer of the two fields, but every
+  // synthetic entry is also stamped with this model id.
+  return Boolean(obj.message && obj.message.model === '<synthetic>');
+}
+
+/**
  * True if this fragment contains an assistant message whose turn is fully
  * done - `stop_reason` present and not `"tool_use"` (which means the turn
  * still has a pending tool call, control has not returned to Mati yet).
@@ -600,6 +626,8 @@ function hasTurnEnd(text) {
     if (!line || !line.includes('"stop_reason"')) continue;
     try {
       const obj = JSON.parse(line);
+      // A dropped turn is not a finished turn - see isApiErrorEntry().
+      if (isApiErrorEntry(obj)) continue;
       const reason = obj && obj.message && obj.message.stop_reason;
       if (reason && reason !== 'tool_use') return true;
     } catch {
@@ -607,6 +635,93 @@ function hasTurnEnd(text) {
     }
   }
   return false;
+}
+
+/**
+ * Wall-clock of the LAST API-error entry in this fragment, read from the
+ * entry's own `timestamp`, or null if there is none (or none carries a
+ * parseable one).
+ *
+ * The renderer needs the drop's own time, not the time we happened to read it:
+ * autoproceed.js compares it against the timestamps on tool events to tell
+ * "the session moved again" from "the dying turn is still flushing its tail".
+ * At read time those look identical - the watcher polls every 1.5s and can hand
+ * over a batch spanning several seconds of transcript - and mistaking the
+ * second for the first cancels a recovery that nothing will ever re-arm.
+ *
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {number|null} epoch ms
+ */
+function apiErrorAt(text) {
+  let at = null;
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || (!line.includes('isApiErrorMessage') && !line.includes('<synthetic>'))) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (!isApiErrorEntry(obj)) continue;
+      const t = Date.parse(obj.timestamp);
+      if (Number.isFinite(t) && (at === null || t > at)) at = t;
+    } catch {
+      /* incomplete line - skip */
+    }
+  }
+  return at;
+}
+
+/**
+ * True if this fragment contains the synthetic entry the CLI writes when a
+ * request dies mid-flight (isApiErrorEntry above).
+ *
+ * Kept separate from apiErrorAt() on purpose: an error entry whose timestamp is
+ * missing or malformed must still count as a drop, and folding the two would
+ * make "no usable timestamp" silently read as "no drop".
+ *
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {boolean}
+ */
+function hasApiError(text) {
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    // Cheap pre-filter, same shape as hasTurnEnd's: only a line that could
+    // possibly be an error entry is worth parsing.
+    if (!line || (!line.includes('isApiErrorMessage') && !line.includes('<synthetic>'))) continue;
+    try {
+      if (isApiErrorEntry(JSON.parse(line))) return true;
+    } catch {
+      /* incomplete line - skip */
+    }
+  }
+  return false;
+}
+
+/**
+ * "This fragment contains a turn that actually FINISHED" - hasTurnEnd() minus
+ * the turns that only look finished because the connection died.
+ *
+ * This is the distinction auto-proceed lives or dies on, and hasTurnEnd()
+ * alone cannot make it. When a request dies mid-response the CLI flushes the
+ * partial assistant message it had so far and stamps it with a perfectly
+ * ordinary terminal stop_reason - "end_turn", usually over nothing but a
+ * thinking block - and only THEN appends the API-error entry. Across the 242
+ * real drops in Mati's own transcripts, 90% are preceded by exactly such an
+ * entry, and half of those land in the same 1.5s watcher tick as the error.
+ *
+ * So the truncated stream announced a finished turn, autoproceed.js cancelled
+ * the "continue" it had just armed, the session sat there dead, and - because
+ * a stalled session prints nothing more - no further signal ever arrived to
+ * re-arm it. That is the "armed, waited twenty minutes, nothing happened" case.
+ *
+ * The error entry is written last, so a fragment carrying one invalidates every
+ * turn end in it. A genuine recovery arrives in a LATER fragment with no error
+ * entry, and reports normally.
+ *
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @returns {boolean}
+ */
+function hasCompletedTurn(text) {
+  if (hasApiError(text)) return false;
+  return hasTurnEnd(text);
 }
 
 /**
@@ -761,6 +876,12 @@ class TranscriptWatcher {
     // Optional: called with { startedAt, endedAt } when hasTurnEnd() fires on
     // newly appended lines (§4.3/§11.1's "All done" announcement).
     this.onTurnEnd = typeof opts.onTurnEnd === 'function' ? opts.onTurnEnd : null;
+    // Optional: called when a newly appended fragment carries the CLI's own
+    // API-error entry - i.e. this session's request really did die, as opposed
+    // to the phrase merely having been printed to the terminal by something
+    // else. main.js forwards it as the connectionError signal the recovery UI
+    // already listens for.
+    this.onApiError = typeof opts.onApiError === 'function' ? opts.onApiError : null;
     // Wall-clock of the last genuine user prompt seen (hasUserPromptStart()).
     // 0 = none observed yet this session/tick-history, so a turn end right
     // now has an unknown duration (isLongTurn() treats that as "don't fire").
@@ -866,7 +987,7 @@ class TranscriptWatcher {
       // - a resumed session's PAST turns must not replay a stale start/end.
       if (!firstPass) {
         if (hasUserPromptStart(complete)) this.turnStartedAt = Date.now();
-        if (this.onTurnEnd && hasTurnEnd(complete)) {
+        if (this.onTurnEnd && hasCompletedTurn(complete)) {
           const startedAt = this.turnStartedAt;
           // Consumed: the NEXT end without a fresh start in between has an
           // unknown duration (isLongTurn() then correctly refuses to fire).
@@ -877,6 +998,18 @@ class TranscriptWatcher {
           // stays a dumb signal source, the same split hasTurnEnd()/
           // isLongTurn() already use (detect here, decide at the call site).
           this.onTurnEnd({ startedAt, endedAt: Date.now(), text: complete });
+        }
+        // Fired LAST on purpose. onTools/onTurnEnd above are what the renderer
+        // reads as "this session is alive", and a dying turn flushes both in
+        // this very fragment; announcing the drop after them means that stale
+        // liveness is consumed BEFORE recovery is armed, instead of cancelling
+        // it a moment later.
+        // `at` is the ERROR ENTRY's own timestamp, not read time: the renderer
+        // compares it against tool-event timestamps from this same fragment to
+        // decide whether the session moved after the drop. Date.now() is only
+        // the fallback for an entry with no parseable timestamp.
+        if (this.onApiError && hasApiError(complete)) {
+          this.onApiError({ at: apiErrorAt(complete) ?? Date.now() });
         }
       }
     } catch {
@@ -1016,6 +1149,9 @@ module.exports = {
   mcpEventsFromLines,
   foldMcpEvents,
   hasTurnEnd,
+  hasApiError,
+  apiErrorAt,
+  hasCompletedTurn,
   hasUserPromptStart,
   isLongTurn,
   CONTEXT_LIMIT,

@@ -302,6 +302,20 @@ contextBridge.exposeInMainWorld('lunacore', {
   // tab - exactly the one the user is looking at.
   pastePrompt: (text, submit = false, sessionId) =>
     ipcRenderer.send('pty:paste', { text, submit, sessionId }),
+  /**
+   * Saves an image that was PASTED over a terminal pane and pastes its path
+   * into the session (Claude Code reads a screenshot by path, not by bitmap).
+   *
+   * invoke, not send, so the renderer can tell a failed save from a successful
+   * one - see src/screenshots.js for why a save can legitimately fail.
+   *
+   * @param {Uint8Array} bytes the pasted image, straight off the paste event
+   * @param {string} mime e.g. 'image/png'
+   * @param {string} [sessionId] the tab that was pasted into
+   * @returns {Promise<{ok: boolean, path?: string}>}
+   */
+  pasteScreenshot: (bytes, mime, sessionId) =>
+    ipcRenderer.invoke('pty:screenshot', { bytes, mime, sessionId }),
   /** Raw keyboard input (xterm.js onData) into a given tab's PTY. */
   write: (data, sessionId) => ipcRenderer.send('pty:write', { data, sessionId }),
   /** A ready-made command from a GUI button (appends Enter). E.g. runCommand('/compact'). */

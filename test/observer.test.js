@@ -20,6 +20,9 @@ const {
   mcpEventsFromLines,
   foldMcpEvents,
   hasTurnEnd,
+  hasApiError,
+  apiErrorAt,
+  hasCompletedTurn,
   hasUserPromptStart,
   isLongTurn,
   CONTEXT_LIMIT,
@@ -728,6 +731,128 @@ test('hasTurnEnd is false with no stop_reason at all', () => {
 
 test('hasTurnEnd survives a torn line mid-write', () => {
   assert.equal(hasTurnEnd('{"message":{"stop_reason":"end_'), false);
+});
+
+// ---- hasTurnEnd vs. a dropped connection ------------------------------------
+// The entry Claude Code writes when a request dies mid-flight LOOKS like a
+// finished turn - role assistant, stop_reason "stop_sequence" - and reading it
+// as one is what used to cancel auto-proceed's pending "continue" ~1.5s after
+// a drop, leaving the session stalled forever. Shape copied verbatim from a
+// transcript the CLI actually wrote.
+
+const apiErrorLine = (extra = {}) =>
+  JSON.stringify({
+    type: 'assistant',
+    timestamp: TS,
+    message: {
+      model: '<synthetic>',
+      role: 'assistant',
+      stop_reason: 'stop_sequence',
+      content: [{ type: 'text', text: 'API Error: Connection lost mid-response. The response above may be incomplete.' }],
+    },
+    error: 'server_error',
+    isApiErrorMessage: true,
+    ...extra,
+  });
+
+test('hasTurnEnd is false for the synthetic API-error entry (a drop is not a turn end)', () => {
+  assert.equal(hasTurnEnd(apiErrorLine()), false);
+});
+
+test('hasTurnEnd is false for a synthetic entry even without the isApiErrorMessage flag', () => {
+  assert.equal(hasTurnEnd(apiErrorLine({ isApiErrorMessage: undefined })), false);
+});
+
+test('a real turn end in the same fragment still counts alongside an error entry', () => {
+  // The guard skips the error line, it does not abandon the whole fragment -
+  // hasTurnEnd stays a narrow "is there a terminal stop_reason here" answer.
+  const fragment = [apiErrorLine(), endLine('end_turn')].join('\n');
+  assert.equal(hasTurnEnd(fragment), true);
+});
+
+test('hasApiError finds the error entry, and ignores an ordinary turn', () => {
+  assert.equal(hasApiError(apiErrorLine()), true);
+  assert.equal(hasApiError(endLine('end_turn')), false);
+  assert.equal(hasApiError(''), false);
+  assert.equal(hasApiError('{"isApiErrorMessage":tr'), false); // torn line mid-write
+});
+
+// ---- apiErrorAt: WHEN the drop happened ------------------------------------
+// The renderer dates a drop against the tool events in the same fragment to
+// tell "the session moved again" from "the dying turn is still flushing its
+// tail" (src/renderer/modules/autoproceed.js). Read time is useless for that:
+// the watcher polls every 1.5s and hands over batches spanning several seconds
+// of transcript, so the timestamp has to come from the entry itself.
+
+test('apiErrorAt reads the error entry own timestamp', () => {
+  assert.equal(apiErrorAt(apiErrorLine()), Date.parse(TS));
+});
+
+test('apiErrorAt is null when there is no error entry', () => {
+  assert.equal(apiErrorAt(endLine('end_turn')), null);
+  assert.equal(apiErrorAt(''), null);
+  assert.equal(apiErrorAt('{"isApiErrorMessage":tr'), null); // torn line mid-write
+});
+
+test('apiErrorAt takes the NEWEST entry when a fragment carries several', () => {
+  // One dead request can write more than once inside a single 1.5s tick; the
+  // last of them is the one the recovery has to be dated against.
+  const older = apiErrorLine({ timestamp: '2026-01-01T00:00:00.000Z' });
+  const newer = apiErrorLine({ timestamp: '2026-01-01T00:00:05.000Z' });
+  assert.equal(apiErrorAt([newer, older].join('\n')), Date.parse('2026-01-01T00:00:05.000Z'));
+});
+
+test('apiErrorAt is null for an error entry with an unusable timestamp', () => {
+  // hasApiError must still call it a drop - the two are kept separate so a
+  // missing timestamp costs precision, never the recovery itself.
+  const undated = apiErrorLine({ timestamp: 'not-a-date' });
+  assert.equal(apiErrorAt(undated), null);
+  assert.equal(hasApiError(undated), true);
+});
+
+// ---- hasCompletedTurn: the actual "waited 20 minutes" regression ------------
+// A drop does NOT just append the error entry. The CLI first flushes whatever
+// of the response it had, stamped with an ordinary terminal stop_reason -
+// "end_turn", often over nothing but a thinking block - and appends the error
+// entry immediately after. 90% of the 242 real drops in the transcripts on
+// this machine look like this, and half of them land in one 1.5s watcher tick.
+//
+// So hasTurnEnd() alone reports a finished turn for a session that just died:
+// autoproceed.js cancels the "continue" it armed, and since a stalled session
+// prints nothing more, nothing ever re-arms it. hasCompletedTurn is the
+// predicate the watcher actually reports turn ends from.
+
+const truncatedFlush = () =>
+  JSON.stringify({
+    type: 'assistant',
+    timestamp: TS,
+    message: {
+      model: 'claude-opus-5',
+      role: 'assistant',
+      stop_reason: 'end_turn',
+      content: [{ type: 'thinking', thinking: 'half a thought' }],
+    },
+  });
+
+test('hasCompletedTurn is false for a turn that only ended because the request died', () => {
+  const dyingTurn = [truncatedFlush(), apiErrorLine()].join('\n');
+  assert.equal(hasTurnEnd(dyingTurn), true, 'the flush really does look like a turn end');
+  assert.equal(hasCompletedTurn(dyingTurn), false, 'but the error entry invalidates it');
+});
+
+test('hasCompletedTurn is true for an ordinary finished turn', () => {
+  assert.equal(hasCompletedTurn(endLine('end_turn')), true);
+});
+
+test('hasCompletedTurn is false while a tool call is still pending', () => {
+  assert.equal(hasCompletedTurn(endLine('tool_use')), false);
+});
+
+test('a recovery arriving in a later, error-free fragment reports normally', () => {
+  // The drop and the recovery are separate watcher ticks: only the fragment
+  // carrying the error entry is suppressed, not everything after it.
+  assert.equal(hasCompletedTurn([truncatedFlush(), apiErrorLine()].join('\n')), false);
+  assert.equal(hasCompletedTurn(endLine('end_turn')), true);
 });
 
 test('hasUserPromptStart is true for a plain string prompt', () => {

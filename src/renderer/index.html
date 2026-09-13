@@ -1009,6 +1009,25 @@
           </div>
           <span id="termcustom-bg-image-status" class="ui-field__label"></span>
         </div>
+        <!-- Screenshot paste: Win+Shift+S leaves a BITMAP on the clipboard, and
+             Claude Code reads an image by PATH - so a pasted image is written
+             under %TEMP%\lunacore-clips and the path goes in instead. See
+             src/screenshots.js. Default ON (uiprefs' screenshotPasteEnabled):
+             unlike the clipboard-history switch this watches nothing, it only
+             ever touches bytes an explicit Ctrl+V already delivered.
+             Sits with the terminal, not under Sound/startup: the Ctrl+V it
+             governs happens over a terminal pane, which is where someone
+             wondering why a paste did nothing goes looking (2026-09-11, Mati). -->
+        <label id="shotpaste-field" class="switch-field" data-i18n-title="shotpaste.hint" title="Ctrl+V ze zrzutem ekranu zapisuje PNG w %TEMP% i wkleja sciezke do pliku.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="shotpaste.label">Wklejanie zrzutow ekranu</span>
+            <span id="shotpaste-status" class="switch-field__status" data-i18n="shotpaste.on">wlaczone</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="shotpaste-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
 
         <h3 class="termcustom__section" data-i18n="termcustom.section.sound">Dzwiek i start</h3>
         <!-- Sound: sfx/voice lines on interactions. mpv is optional - missing from

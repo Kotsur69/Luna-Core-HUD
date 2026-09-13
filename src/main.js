@@ -103,6 +103,10 @@ const {
   clearHistory,
 } = require('./clipboard');
 
+// Screenshots pasted into a session (Win+Shift+S -> Ctrl+V). See
+// src/screenshots.js for why a bitmap has to become a file path first.
+const { saveClip, pruneClips, clipsDir } = require('./screenshots');
+
 const { readTodos, writeTodos } = require('./todo');
 
 const { micState } = require('./devices');
@@ -763,7 +767,15 @@ function spawnInto(session, profile) {
     // that much new output is the evidence that the next match is a new event.
     const edges = detectSignalEdges(
       scan,
-      { usageLimit: triggers.usageLimit, connectionError: triggers.connectionError },
+      // usageLimit ONLY. connectionError used to be scanned here too, and that
+      // was the "continue appeared out of nowhere" bug: this matcher sees raw
+      // stdout and has no idea WHO printed the phrase, so a config dump, a grep
+      // hit, a code comment or Claude simply writing "API Error: Connection lost
+      // mid-response" in a reply all read as a live drop and got a "continue"
+      // typed into a perfectly healthy session. A drop is now taken from the
+      // transcript instead (TranscriptWatcher's onApiError below), which is the
+      // CLI's own record of what happened and cannot be faked by rendered text.
+      { usageLimit: triggers.usageLimit },
       session.signalShowing,
     );
     session.signalShowing = edges.showing;
@@ -810,6 +822,17 @@ function spawnInto(session, profile) {
       // §4.3/§11.1: "All done" voice line, gated on turn duration in checkTurnEnd.
       // §6.1: also forwarded to the renderer for the session timeline widget -
       // checkTurnEnd only ever drove sound/TTS, it never reached the UI before.
+      // The drop signal, straight from the CLI's own transcript. Same channel
+      // and payload the stdout scan used to send, so godmode.js and
+      // autoproceed.js need no change - only the provenance is different, and
+      // that is the whole point: this fires once per real dropped request
+      // instead of once per repaint of some text that happens to say so.
+      //
+      // `at` rides along: the drop's OWN transcript timestamp, which
+      // autoproceed.js needs to date the drop against the tool events in the
+      // same fragment (a dying turn's tail must not read as "recovered").
+      onApiError: ({ at } = {}) =>
+        send('godmode:signal', { sessionId: session.id, type: 'connectionError', at }),
       onTurnEnd: (turn) => {
         checkTurnEnd(turn);
         send('metrics:turnend', { sessionId: session.id, turn });
@@ -1358,6 +1381,36 @@ function registerIpc() {
     session.proc.write(`\x1b[200~${text}\x1b[201~`);
     if (payload.submit) session.proc.write('\r');
     session.approvalShowing = false;
+  });
+
+  // ACTION INJECTOR (screenshot paste): a Ctrl+V that carried an IMAGE.
+  //
+  // Claude Code reads an image by PATH, so the bitmap has to become a file
+  // first - that is the whole job here, and src/screenshots.js's header has
+  // the background (it is what the external winclipshot helper did, minus its
+  // hardcoded list of terminal .exe names that LunaCore was never on).
+  //
+  // The renderer sends the bytes it already holds from the paste event rather
+  // than us reading the clipboard: nothing in LunaCore reads the clipboard
+  // unprompted, and this way an image copied from a browser or Explorer works
+  // the same as a Win+Shift+S snip.
+  //
+  // The path goes in as a bracketed paste WITHOUT Enter (same reasoning as
+  // pty:paste above): the user still gets to type the question that goes with
+  // the screenshot. The trailing space is so the next word they type does not
+  // glue itself onto ".png".
+  //
+  // { bytes: Uint8Array, mime: string, sessionId?: string } -> { ok, path? }
+  ipcMain.handle('pty:screenshot', (_event, payload) => {
+    const session = resolveTargetSession(payload && payload.sessionId);
+    if (!session || !session.proc || !payload) return { ok: false };
+    const file = saveClip(clipsDir(), payload.bytes, payload.mime);
+    if (!file) return { ok: false };
+    // After the write, so a failed save never costs the user an older clip.
+    pruneClips(clipsDir());
+    session.proc.write(`\x1b[200~${file} \x1b[201~`);
+    session.approvalShowing = false;
+    return { ok: true, path: file };
   });
 
   // Matches the PTY size to the window's terminal size (xterm-addon-fit).

@@ -19,7 +19,8 @@ injects prompts or touches the `claude` binary.
 > **look-&-feel axes** (density · font pack · glow · motion) and a **PL/EN
 > language switch**, a live **usage-limits gauge** (5-hour + weekly subscription windows),
 > an **armed auto-compact** toggle (trigger on the 85% context threshold, every
-> N turns, or N minutes since the last compact — picked in Settings), a
+> N turns, or N minutes since the last compact — picked in Settings, and the
+> arm itself remembered across restarts), a
 > **CWD/project switcher** (native "add repo
 > folder" picker), a **cyberpunk boot sequence**, a **Skill Tracker that shows how
 > long each tool actually ran**, an **Active-Files Edit Heatmap** (real diff-stat
@@ -29,7 +30,8 @@ injects prompts or touches the `claude` binary.
 > **devices** widgets, **GPU usage** next to CPU/RAM, **foldable / resizable /
 > drag-to-rearrange panels** across **nine layout presets plus a save-your-own
 > layout builder**, a **Ctrl+G git quick-menu**, an **Auto-proceed**
-> connection-drop recovery toggle, a **God Mode** unattended to-do runner, a
+> connection-drop recovery toggle (armed state also remembered across
+> restarts), a **God Mode** unattended to-do runner, a
 > **per-project pin-board todo list**, optional **sound & voice feedback** (mpv
 > cues + a Web Audio keystroke engine, degrades silently), and opt-in **OS
 > notifications** (busy→idle, 85% context) that focus the window and jump to the
@@ -46,8 +48,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.10.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.10.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.11.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.11.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
@@ -95,9 +97,10 @@ the complete list — all of it verifiable in the linked source.
 | Running from a clone | the repo's own `config/` |
 
 - `ui.local.json` — theme, language, active profile, layout preset, boot toggle,
-  which panels you folded shut, any column widths you dragged, and any panels
+  which panels you folded shut, any column widths you dragged, any panels
   you dragged into a different column (by their `⠿` title grip; double-click a
-  grip to put that preset's panels back)
+  grip to put that preset's panels back), and whether **auto-compact** /
+  **auto-proceed** are armed
   ([`src/uiprefs.js`](src/uiprefs.js))
 - `scratchpad.local.md` — whatever you typed into the scratchpad
   ([`src/scratchpad.js`](src/scratchpad.js))

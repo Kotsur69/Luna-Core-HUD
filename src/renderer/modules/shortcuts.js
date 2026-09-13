@@ -129,6 +129,14 @@ export const SHORTCUT_GROUPS = [
         source: { file: 'src/renderer/modules/terminals.js', marker: 'isCopyChord' },
       },
       {
+        chords: [['Ctrl', 'V']],
+        descKey: 'shortcuts.pasteShot',
+        source: {
+          file: 'src/renderer/modules/terminals.js',
+          marker: 'imageItem(event.clipboardData)',
+        },
+      },
+      {
         chords: [['Shift', '↕']],
         descKey: 'shortcuts.pageTerm',
         source: {
