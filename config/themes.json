@@ -1434,6 +1434,11 @@
       "label": "Glass",
       "vars": {
         "--surface-alpha": "62%",
+        "--alpha-ground": "0%",
+        "--alpha-edge": "22%",
+        "--alpha-panel": "48%",
+        "--alpha-term": "42%",
+        "--alpha-chrome": "20%",
         "--bg": "#0a0e13",
         "--bg-panel": "#0e141c",
         "--bg-panel-2": "#121a24",
@@ -1471,6 +1476,51 @@
         "green": "#86e8ad",
         "yellow": "#ffd694",
         "red": "#ff92a4"
+      }
+    },
+    {
+      "_note": "The paint turned as far down as legibility allows: the most backdrop this family shows.",
+      "id": "glass-clear",
+      "label": "Glass - Clear",
+      "extends": "glass",
+      "vars": {
+        "--alpha-edge": "10%",
+        "--alpha-panel": "28%",
+        "--alpha-term": "24%",
+        "--alpha-chrome": "10%"
+      }
+    },
+    {
+      "_note": "The readable end: more paint and a cooler, lighter tint, for when the desktop behind is busy.",
+      "id": "glass-frost",
+      "label": "Glass - Frost",
+      "extends": "glass",
+      "vars": {
+        "--alpha-edge": "34%",
+        "--alpha-panel": "66%",
+        "--alpha-term": "60%",
+        "--alpha-chrome": "32%",
+        "--bg-panel": "#121b26",
+        "--bg-panel-2": "#18222f",
+        "--edge": "#33455a",
+        "--edge-glow": "#5f9ab4",
+        "--text-dim": "#aec1d4"
+      }
+    },
+    {
+      "_note": "A near-black tint, so what shows through reads as light rather than as colour.",
+      "id": "glass-noir",
+      "label": "Glass - Noir",
+      "extends": "glass",
+      "vars": {
+        "--alpha-edge": "26%",
+        "--alpha-panel": "52%",
+        "--alpha-term": "46%",
+        "--alpha-chrome": "22%",
+        "--bg": "#05070a",
+        "--bg-panel": "#070a0e",
+        "--bg-panel-2": "#0a0f15",
+        "--edge": "#1b242e"
       }
     },
 

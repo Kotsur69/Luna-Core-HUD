@@ -336,7 +336,20 @@ function createWindow() {
     // Non-Win11 ignores backgroundMaterial; the transparent backgroundColor is
     // covered by index.html's pre-CSS paint. See reference/TRANSPARENCY_PLAN.md.
     backgroundColor: '#00000000',
-    backgroundMaterial: 'acrylic',
+    // Which material is Mati's choice of how smeared the backdrop is: acrylic
+    // blurs live windows behind, mica only tints the wallpaper, tabbed is a
+    // stronger mica. DWM owns all three and its blur radius is not adjustable,
+    // so this dropdown IS the clarity knob. setBackgroundMaterial() applies it
+    // live, with no window recreation.
+    //
+    // There is deliberately NO unblurred option. A DWM material keeps the
+    // window surface transparent while it paints; with no material there is
+    // nothing holding it, and Chromium falls back to its default WHITE - which
+    // with --alpha-ground: 0% is the whole app going white mid-session. Adding
+    // transparent: true was tried on 2026-09-13 and did NOT hold it either, so
+    // the only honest position is that this build has no stable sharp
+    // see-through. See reference/TRANSPARENCY_PLAN.md.
+    backgroundMaterial: readUiPrefs().windowMaterial,
     title: 'LunaCore',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -1952,6 +1965,16 @@ function registerIpc() {
     if (next && soundManager) {
       soundManager.setEnabled(next.soundEnabled);
       soundManager.setVolume(next.soundVolume);
+    }
+    // Live, on the existing window: setBackgroundMaterial() does NOT recreate
+    // it, so open tabs keep their scrollback and their ptys stay connected.
+    // That is the whole reason this could be a dropdown instead of a restart.
+    if (next && mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        mainWindow.setBackgroundMaterial(next.windowMaterial);
+      } catch {
+        /* not Win11, or an Electron that predates the API - stays opaque */
+      }
     }
     if (next && narrationManager) {
       narrationManager.setEnabled(next.soundEnabled);

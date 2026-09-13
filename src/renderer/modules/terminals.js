@@ -115,12 +115,54 @@ function currentBgHex() {
   return (currentTermTheme && currentTermTheme.background) || TERM_OPTIONS.theme.background;
 }
 
-/** Re-applies currentTermOpacity on top of whatever background is live now. */
+/**
+ * The active theme's see-through level for the terminal ground, 0-100.
+ *
+ * Read live off --alpha-term rather than passed in: appearance.js's
+ * applyThemeVars() sets the token immediately BEFORE it calls
+ * applyTerminalTheme(), so the value is always current here, and reading it
+ * keeps the alpha vocabulary in one place (styles.css's Surfaces block) instead
+ * of a second copy of the numbers over here. Anything unparseable means opaque,
+ * which is what all 28 non-glass themes are.
+ */
+function themeTermAlphaPct() {
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue('--alpha-term')
+    .trim();
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 100;
+}
+
+/**
+ * Re-applies currentTermOpacity on top of whatever background is live now.
+ *
+ * Under a SEE-THROUGH theme xterm paints no ground at all. The pane beneath it
+ * (.panel--center, painted --surface-term) is already the terminal's ground,
+ * and two stacked alphas composite to 1-(1-a)^2 - at 55% that is 80%, which is
+ * enough to bury the acrylic completely. That stacking is the exact bug the
+ * per-layer alpha tokens exist to prevent, and xterm is simply one more layer.
+ *
+ * The slider therefore does nothing while such a theme is active, on purpose:
+ * "see through the terminal" is what the theme has already done, and the two
+ * controls would otherwise fight over the same pixel.
+ */
 function applyOpacityToAllTabs() {
-  const background = backgroundWithOpacity(currentBgHex(), currentTermOpacity);
+  const opacityPct = themeTermAlphaPct() < 100 ? 0 : currentTermOpacity;
+  const background = backgroundWithOpacity(currentBgHex(), opacityPct);
   for (const s of termsBySession.values()) {
     s.term.options.theme = { ...s.term.options.theme, background };
   }
+}
+
+/**
+ * Re-runs the ground decision after --alpha-term moves.
+ *
+ * Exported for modules/surfacealpha.js: whether xterm paints a background at
+ * all is a canvas option, not a CSS token, so changing the token alone leaves
+ * the terminal on whatever it was told last.
+ */
+export function refreshTerminalGround() {
+  applyOpacityToAllTabs();
 }
 
 export function getActiveSessionId() {

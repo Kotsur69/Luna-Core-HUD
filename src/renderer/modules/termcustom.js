@@ -21,6 +21,7 @@ import { term, applyTerminalAppearance, setScreenshotPasteEnabled } from './term
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
 import { mountAutoCompactSettings } from './autocompact.js';
+import { mountSurfaceAlpha } from './surfacealpha.js';
 import { applyLang } from './appearance.js';
 import { MODIFIER_AXES, getModifiers, setModifier } from './modifiers.js';
 import { sfx } from './sound.js';
@@ -474,6 +475,10 @@ export async function initTermcustomSettings() {
   // Same static-overlay shape as mountNotify above - the arm toggle itself
   // stays a left-panel widget (autocompact.js).
   mountAutoCompactSettings(termcustomEl);
+
+  // Same static-overlay mount shape. Its apply path is driven by
+  // appearance.js on every theme change, so this only wires the controls.
+  mountSurfaceAlpha(termcustomEl);
 }
 
 // Global Ctrl/Cmd+L (capture, to get ahead of xterm.js) - same tradeoff and

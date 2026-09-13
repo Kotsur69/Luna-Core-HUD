@@ -208,21 +208,49 @@
      reason config/themes.json needs no edit to support a see-through HUD - see
      reference/TRANSPARENCY_PLAN.md.
 
-     --surface-alpha is the single knob. The [data-surface] modifier blocks are
-     the only thing that may change it. At 100% every color-mix below resolves
-     to exactly the colour it replaced, so `solid` is not "close to" the old
-     look - it is bit-for-bit the old look.
+     --surface-alpha is the headline knob and the DEFAULT for the four layer
+     tokens under it. At 100% every color-mix below resolves to exactly the
+     colour it replaced, so `solid` is not "close to" the old look - it is
+     bit-for-bit the old look.
 
-     --surface-edge is the important one and the least obvious: .app is a 100vh
-     grid painted --edge, so it is an opaque lid over the entire window, and its
-     1px `gap` is what draws every hairline between panels. Borders that use
-     --edge stay opaque on purpose; only this background is alpha'd. */
+     THE FOUR LAYERS ARE SEPARATE BECAUSE THEY NEST, AND NESTING MULTIPLIES.
+     html/body, .app and .panel are stacked, not side by side, so one shared
+     62% is not 62% on screen - it is 1 - 0.38^3 = 94.5%, which is visually
+     indistinguishable from opaque. That is not a tuning error, it is what
+     "one knob on three stacked layers" means, and it is why a theme sets an
+     absolute alpha PER LAYER instead:
+
+       --alpha-ground  html/body. 0% under glass - the ground's only job was to
+                       be the bottom of an opaque stack, and there isn't one now.
+       --alpha-edge    .app, seen only through the 1px grid gaps between panels.
+                       Held BELOW --alpha-panel so the hairlines read as the
+                       see-through part and the panels as the solid part.
+       --alpha-panel   .panel and every control painted --surface-panel-2.
+       --alpha-term    the terminal's ground.
+
+     Borders that use --edge stay opaque on purpose; only backgrounds are
+     alpha'd. See reference/TRANSPARENCY_PLAN.md. */
   --surface-alpha: 100%;
-  --surface-bg:      color-mix(in srgb, var(--bg)         var(--surface-alpha), transparent);
-  --surface-edge:    color-mix(in srgb, var(--edge)       var(--surface-alpha), transparent);
-  --surface-panel:   color-mix(in srgb, var(--bg-panel)   var(--surface-alpha), transparent);
-  --surface-panel-2: color-mix(in srgb, var(--bg-panel-2) var(--surface-alpha), transparent);
-  --surface-term:    color-mix(in srgb, var(--term-bg)    var(--surface-alpha), transparent);
+  --alpha-ground: var(--surface-alpha);
+  --alpha-edge:   var(--surface-alpha);
+  --alpha-panel:  var(--surface-alpha);
+  --alpha-term:   var(--surface-alpha);
+  /* --alpha-chrome is the fifth layer and the least obvious one. .terminal-bar
+     and .tabs sit INSIDE .panel--center, which is already alpha'd, which is
+     already on .app - so painting them --surface-panel like any other panel
+     makes them a THIRD stacked ground and they composite to ~90% while the
+     terminal beside them is see-through (Mati's 2026-09-13 screenshot). Held
+     low, this row reads as a TINT over the pane instead of a lid on it.
+     Deliberately NOT the same as --surface-panel-2: the palette, modals and
+     the Settings overlay use that, and those are places you read and type,
+     where legibility beats atmosphere. */
+  --alpha-chrome: var(--surface-alpha);
+  --surface-bg:      color-mix(in srgb, var(--bg)         var(--alpha-ground), transparent);
+  --surface-edge:    color-mix(in srgb, var(--edge)       var(--alpha-edge),   transparent);
+  --surface-panel:   color-mix(in srgb, var(--bg-panel)   var(--alpha-panel),  transparent);
+  --surface-panel-2: color-mix(in srgb, var(--bg-panel-2) var(--alpha-panel),  transparent);
+  --surface-term:    color-mix(in srgb, var(--term-bg)    var(--alpha-term),   transparent);
+  --surface-chrome:  color-mix(in srgb, var(--bg-panel)   var(--alpha-chrome), transparent);
 
   /* ---- Texture: painted over the whole app by .app::before --------------- */
   --texture: none;         /* any background-image: repeating-linear-gradient, etc. */
@@ -815,9 +843,27 @@ body::after {
   padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
-  background: var(--surface-panel-2);
+  /* OPAQUE, and --bg-panel-2 rather than --surface-panel-2 on purpose.
+     The open dropdown list is painted by the OS, not by us, and Chromium only
+     carries the control's own background into it when that background is
+     opaque. Hand it an alpha and the list falls back to the system LIGHT
+     popup - while the options still inherit our pale --text, which is exactly
+     the unreadable light-on-light picker Mati hit on 2026-09-13. A control you
+     read your way down has no business being see-through anyway; same call the
+     plan already makes for the palette and the modals. */
+  background: var(--bg-panel-2);
   color: var(--text);
   font-size: var(--fs-md);
+}
+
+/* Belt and braces for the same popup: Chromium honours these on the list rows
+   directly, so the colours hold even where it decides to draw its own popup
+   instead of inheriting the control's. Theme tokens, so the four light themes
+   get dark-on-light and everything else light-on-dark, with no color-scheme
+   declaration to keep in sync. */
+.profile-select option {
+  background-color: var(--bg-panel-2);
+  color: var(--text);
 }
 .profile-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -901,6 +947,32 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   font-size: var(--fs-xs);
   color: var(--text-dim);
   letter-spacing: 0.3px;
+}
+
+/* A slider has no readable position, so the live number sits on the label
+   rather than under the track - one line instead of two, and the eye is
+   already there reading what the slider is called. */
+.ui-field__label:has(.ui-field__value) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.ui-field__value {
+  font-family: var(--font-mono);
+  /* Tabular figures: without them the readout reflows the label every time a
+     digit changes, which is once per frame while a slider is being dragged. */
+  font-variant-numeric: tabular-nums;
+  color: var(--neon-cyan);
+  white-space: nowrap;
+}
+
+.termcustom__hint {
+  margin: 0 0 var(--space-5);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-dim);
 }
 
 /* Confirms a persisted value (termcustom.js's delegated 'change' listener) -
@@ -1066,7 +1138,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   align-items: center;
   gap: var(--space-6);
   padding: var(--space-5) var(--space-8);
-  background: var(--surface-panel);
+  background: var(--surface-chrome);
   border-bottom: var(--border-w) solid var(--edge);
 }
 .terminal-bar__title { font-size: 13px; font-weight: 600; color: var(--neon-cyan); }
@@ -1106,7 +1178,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   align-items: stretch;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-5) 0;
-  background: var(--surface-panel);
+  background: var(--surface-chrome);
   border-bottom: var(--border-w) solid var(--edge);
 }
 .tabs__list { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; }

@@ -113,6 +113,11 @@ const KNOWN_TOKENS = new Set([
   // A transparent theme sets this and nothing else changes; every other theme
   // omits it and inherits 100%, which is bit-for-bit the pre-v0.11 look.
   '--surface-alpha',
+  // ...and the per-layer overrides beneath it. They exist because html/body,
+  // .app and .panel NEST: one shared alpha on three stacked layers composites
+  // to 1 - (1-a)^3, so 62% lands at 94.5% and reads as opaque. Each defaults to
+  // --surface-alpha, so a theme that sets only the headline knob is unchanged.
+  '--alpha-ground', '--alpha-edge', '--alpha-panel', '--alpha-term', '--alpha-chrome',
 ]);
 
 /**
@@ -128,7 +133,7 @@ const KNOWN_TOKENS = new Set([
  */
 const DERIVED_TOKENS = new Set([
   '--surface-bg', '--surface-edge', '--surface-panel', '--surface-panel-2',
-  '--surface-term',
+  '--surface-term', '--surface-chrome',
 ]);
 
 /**

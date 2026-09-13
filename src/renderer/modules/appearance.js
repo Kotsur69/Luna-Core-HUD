@@ -24,6 +24,7 @@
 
 import { emitLangChange, onLangChange } from './bus.js';
 import { applyTerminalTheme, applyTerminalAppearance } from './terminals.js';
+import { applySurfaceAlpha, initSurfaceAlpha } from './surfacealpha.js';
 import { defineWidget } from './registry.js';
 import { getLayouts, getActiveLayoutId, selectLayout, refreshLayouts } from './layout.js';
 import { currentUnrailedColumns, copyRailsTo } from './panels.js';
@@ -77,6 +78,11 @@ function applyThemeVars(theme) {
   if (theme.terminal && typeof theme.terminal === 'object') {
     applyTerminalTheme(theme.terminal);
   }
+
+  // Compose, don't race: the incoming theme has just written its own
+  // --alpha-* onto :root, which would silently drop any slider override in
+  // modules/surfacealpha.js. It re-snapshots the theme and re-applies on top.
+  applySurfaceAlpha();
 }
 
 /**
@@ -197,6 +203,11 @@ export async function initAppearance() {
   // currentTermTheme already does for the theme (TERMINAL_CUSTOMIZER_PLAN.md
   // §4/§5). A fallback `prefs` with no term* keys is a safe no-op here.
   applyTerminalAppearance(prefs);
+
+  // Seed the transparency overrides BEFORE the first theme lands below, so a
+  // stored override is on screen from the first paint rather than snapping in
+  // once the Settings overlay is first opened.
+  initSurfaceAlpha(prefs);
 
   // v0.10 4.2. Read before renderLayoutSwitcher() below, which needs it to know
   // which of the listed layouts the user is allowed to rename or delete.

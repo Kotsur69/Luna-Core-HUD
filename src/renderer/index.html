@@ -933,6 +933,63 @@
             <option value="off" data-i18n="termcustom.motion.off">Wylaczone</option>
           </select>
         </label>
+        <h3 class="termcustom__section" data-i18n="surfacealpha.title">Przezroczystosc</h3>
+        <!-- reference/TRANSPARENCY_PLAN.md. Four sliders and not one because the
+             layers NEST - html/body under .app under .panel - so a single shared
+             alpha composites to 1-(1-a)^n and reads as opaque. Each axis follows
+             the active theme until its slider is moved. -->
+        <p class="termcustom__hint" data-i18n="surfacealpha.hint">
+          Akrylowe tlo Windows 11 widac tylko tam, gdzie warstwa nie jest pelna.
+        </p>
+        <!-- Above the sliders on purpose: the material decides WHAT is behind
+             the glass, the sliders only decide how much of it shows. -->
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="surfacealpha.material">Jak czysto widac (Windows)</span>
+          <select id="surfacealpha-material" class="profile-select">
+            <option value="acrylic" data-i18n="surfacealpha.material.acrylic">Akryl - mocno rozmyte, widac ksztalty okien pod spodem</option>
+            <option value="tabbed" data-i18n="surfacealpha.material.tabbed">Tabbed - rozmyte, mocniejszy odcien</option>
+            <option value="mica" data-i18n="surfacealpha.material.mica">Mica - tylko odcien tapety, bez okien pod spodem</option>
+            <option value="auto" data-i18n="surfacealpha.material.auto">Auto - wybiera Windows</option>
+          </select>
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label">
+            <span data-i18n="surfacealpha.ground">Tlo okna</span>
+            <output class="ui-field__value" id="surfacealpha-ground-out" for="surfacealpha-ground">100%</output>
+          </span>
+          <input type="range" id="surfacealpha-ground" min="0" max="100" step="1" />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label">
+            <span data-i18n="surfacealpha.edge">Szczeliny miedzy panelami</span>
+            <output class="ui-field__value" id="surfacealpha-edge-out" for="surfacealpha-edge">100%</output>
+          </span>
+          <input type="range" id="surfacealpha-edge" min="0" max="100" step="1" />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label">
+            <span data-i18n="surfacealpha.panel">Panele</span>
+            <output class="ui-field__value" id="surfacealpha-panel-out" for="surfacealpha-panel">100%</output>
+          </span>
+          <input type="range" id="surfacealpha-panel" min="0" max="100" step="1" />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label">
+            <span data-i18n="surfacealpha.term">Terminal</span>
+            <output class="ui-field__value" id="surfacealpha-term-out" for="surfacealpha-term">100%</output>
+          </span>
+          <input type="range" id="surfacealpha-term" min="0" max="100" step="1" />
+        </label>
+        <label class="ui-field">
+          <span class="ui-field__label">
+            <span data-i18n="surfacealpha.chrome">Paski i zakladki</span>
+            <output class="ui-field__value" id="surfacealpha-chrome-out" for="surfacealpha-chrome">100%</output>
+          </span>
+          <input type="range" id="surfacealpha-chrome" min="0" max="100" step="1" />
+        </label>
+        <div class="termcustom__bgimage-row">
+          <button type="button" id="surfacealpha-follow" class="termcustom__reset" data-i18n="surfacealpha.follow">Wroc do motywu</button>
+        </div>
         <h3 class="termcustom__section" data-i18n="termcustom.section.appearance">Wyglad terminala</h3>
         <label class="ui-field">
           <span class="ui-field__label" data-i18n="termcustom.fontFamily">Czcionka</span>

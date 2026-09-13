@@ -9,6 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  readUiPrefs,
   clampTermPrefs,
   clampAutoCompactPrefs,
   cleanCollapsed,
@@ -30,7 +31,42 @@ const DEFAULTS = {
   termBgOpacity: 100,
   termBgBlur: 0,
   termBgImage: null,
+  // null is a state, not an absence: "follow whatever the active theme says".
+  surfaceAlphaGround: null,
+  surfaceAlphaEdge: null,
+  surfaceAlphaPanel: null,
+  surfaceAlphaTerm: null,
+  surfaceAlphaChrome: null,
 };
+
+test('readUiPrefs hands back no undefined values (allowlist drift)', () => {
+  // readUiPrefs() builds an EXPLICIT object rather than spreading DEFAULTS, so
+  // a key added to DEFAULTS and to writeUiPrefs but forgotten here round-trips
+  // to disk and then reads back undefined - silently, because every consumer
+  // just sees a missing option. That is exactly how windowMaterial reached
+  // createWindow as undefined on 2026-09-13. Any undefined in the result means
+  // some key is written but not read; add it to readUiPrefs().
+  const prefs = readUiPrefs();
+  const undef = Object.keys(prefs).filter((k) => prefs[k] === undefined);
+  assert.deepStrictEqual(undef, [], `written but never read back: ${undef.join(', ')}`);
+});
+
+test('surfaceAlpha*: a number clamps and rounds, everything else is null', () => {
+  // The trap this guards: Number(null) is 0, so a naive clamp would turn
+  // "follow the theme" into a fully see-through layer on every read.
+  assert.equal(clampTermPrefs({ surfaceAlphaPanel: 62 }).surfaceAlphaPanel, 62);
+  assert.equal(clampTermPrefs({ surfaceAlphaPanel: 61.6 }).surfaceAlphaPanel, 62);
+  assert.equal(clampTermPrefs({ surfaceAlphaPanel: 140 }).surfaceAlphaPanel, 100);
+  assert.equal(clampTermPrefs({ surfaceAlphaPanel: -5 }).surfaceAlphaPanel, 0);
+  assert.equal(clampTermPrefs({ surfaceAlphaPanel: 0 }).surfaceAlphaPanel, 0, '0% is a real value');
+  for (const notANumber of [null, undefined, '', 'x', {}, []]) {
+    assert.equal(
+      clampTermPrefs({ surfaceAlphaPanel: notANumber }).surfaceAlphaPanel,
+      null,
+      `${JSON.stringify(notANumber)} must mean "follow the theme"`
+    );
+  }
+});
 
 test('a missing/bad input object -> pure DEFAULTS', () => {
   for (const bad of [null, undefined, 42, 'x', []]) {
@@ -54,6 +90,11 @@ test('valid values pass through unchanged', () => {
     termBgOpacity: 80,
     termBgBlur: 6,
     termBgImage: 'data:image/png;base64,AAAA',
+    surfaceAlphaGround: 0,
+    surfaceAlphaEdge: 30,
+    surfaceAlphaPanel: 62,
+    surfaceAlphaTerm: 55,
+    surfaceAlphaChrome: 20,
   };
   assert.deepEqual(clampTermPrefs(raw), raw);
 });

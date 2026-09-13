@@ -75,6 +75,18 @@ function clampLongTaskMinutes(v) {
 // was 'pl' until 2026-08-05, which was invisible on a developer machine whose
 // prefs file already recorded a choice, and would have handed every stranger a
 // UI they could not read.
+// The backdrop materials that are actually STABLE here. All of them keep the
+// window surface transparent while DWM paints them; 'mica' tints the wallpaper
+// without showing live windows behind (much 'cleaner' than acrylic), 'tabbed'
+// is its stronger sibling, 'auto' hands the choice to DWM.
+//
+// 'none' is deliberately ABSENT rather than merely unlisted in the UI: with no
+// material there is nothing holding the surface transparent and Chromium falls
+// back to white mid-session. Leaving it out of this list means a prefs file
+// still carrying windowMaterial:'none' from 2026-09-13 fails validation and
+// falls back to the default, which migrates that install on next read.
+const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
+
 const DEFAULTS = {
   theme: 'cyberpunk',
   lang: 'en',
@@ -119,6 +131,21 @@ const DEFAULTS = {
   termScrollback: 5000,
   termBgOpacity: 100, // percent, 0-100
   termBgBlur: 0, // px, 0-20
+  // Per-layer surface transparency (reference/TRANSPARENCY_PLAN.md). null is
+  // not "0%" - it means FOLLOW THE ACTIVE THEME, which is why the default is
+  // null on all four: an untouched install must render every theme exactly as
+  // the theme authored it. Percent 0-100 once a slider has actually moved.
+  surfaceAlphaGround: null,
+  surfaceAlphaEdge: null,
+  surfaceAlphaPanel: null,
+  surfaceAlphaTerm: null,
+  surfaceAlphaChrome: null,
+  // Windows 11 backdrop material (BrowserWindow.setBackgroundMaterial).
+  // NOT a theme token: it is the one part of the see-through stack Windows
+  // owns rather than the stylesheet, it applies to the non-client area too,
+  // and it is the only control over HOW SMEARED the backdrop is - the blur
+  // radius of DWM acrylic is not adjustable. Ignored off Win11.
+  windowMaterial: 'acrylic',
   // data: URI (renderer's CSP only allows 'self'/data: for img-src, so a raw
   // file path could never be used as a CSS background-image). null = none.
   termBgImage: null,
@@ -429,6 +456,17 @@ function clampTermPrefs(raw) {
     const n = Number(v);
     return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
   };
+  // Number(null) is 0, so the plain num() above would turn "follow the theme"
+  // into a fully transparent layer. This keeps null as null.
+  const alphaPct = (v) => {
+    // Type-check BEFORE coercing: Number([]) is 0 and Number(null) is 0, so a
+    // plain Number() would read junk out of a hand-edited prefs file as a
+    // fully see-through layer instead of as "follow the theme".
+    if (typeof v !== 'number' && typeof v !== 'string') return null;
+    if (v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.round(Math.max(0, Math.min(100, n))) : null;
+  };
   return {
     termFontFamily:
       typeof obj.termFontFamily === 'string' && obj.termFontFamily.trim()
@@ -449,6 +487,14 @@ function clampTermPrefs(raw) {
       typeof obj.termBgImage === 'string' && obj.termBgImage.startsWith('data:image/')
         ? obj.termBgImage
         : null,
+    // nullable percent: anything non-finite (including an explicit null from
+    // the "Follow theme" button) collapses to null rather than to a number,
+    // because null is a real state here and not a missing value.
+    surfaceAlphaGround: alphaPct(obj.surfaceAlphaGround),
+    surfaceAlphaEdge: alphaPct(obj.surfaceAlphaEdge),
+    surfaceAlphaPanel: alphaPct(obj.surfaceAlphaPanel),
+    surfaceAlphaTerm: alphaPct(obj.surfaceAlphaTerm),
+    surfaceAlphaChrome: alphaPct(obj.surfaceAlphaChrome),
   };
 }
 
@@ -512,6 +558,14 @@ function readUiPrefs() {
     return {
       theme: typeof obj.theme === 'string' && obj.theme ? obj.theme : DEFAULTS.theme,
       lang: LANGS.includes(obj.lang) ? obj.lang : DEFAULTS.lang,
+      // Windows backdrop material. READ PATH MATTERS AS MUCH AS THE WRITE ONE:
+      // this function builds an explicit allowlist rather than spreading
+      // DEFAULTS, so a key added to DEFAULTS and to writeUiPrefs but not to
+      // this list round-trips to disk and then reads back undefined - which is
+      // what handed createWindow an undefined material on 2026-09-13.
+      windowMaterial: WINDOW_MATERIALS.includes(obj.windowMaterial)
+        ? obj.windowMaterial
+        : DEFAULTS.windowMaterial,
       // Missing key => enabled (prefs file written before this option existed).
       boot: typeof obj.boot === 'boolean' ? obj.boot : DEFAULTS.boot,
       // An unknown profile id is filtered out later by main.js (getProfile);
@@ -600,6 +654,9 @@ function writeUiPrefs(partial) {
     const next = readUiPrefs();
     if (partial && typeof partial.theme === 'string' && partial.theme) next.theme = partial.theme;
     if (partial && LANGS.includes(partial.lang)) next.lang = partial.lang;
+    if (partial && WINDOW_MATERIALS.includes(partial.windowMaterial)) {
+      next.windowMaterial = partial.windowMaterial;
+    }
     if (partial && typeof partial.boot === 'boolean') next.boot = partial.boot;
     if (partial && typeof partial.profile === 'string' && partial.profile) {
       next.profile = partial.profile;
@@ -695,6 +752,11 @@ function writeUiPrefs(partial) {
       'termBgOpacity',
       'termBgBlur',
       'termBgImage',
+      'surfaceAlphaGround',
+      'surfaceAlphaEdge',
+      'surfaceAlphaPanel',
+      'surfaceAlphaTerm',
+      'surfaceAlphaChrome',
     ];
     const mergedTerm = { ...next };
     if (partial) {

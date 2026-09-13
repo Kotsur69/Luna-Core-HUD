@@ -292,3 +292,167 @@ This is where the real time goes. Phases 1–3 are mechanical; this is not.
   because the mechanism failed. Spike extended to make `.app` transparent.
   Checks 2 (unfocused fallback), 3 (titlebar/corners) and 4 (live toggle via
   Ctrl+Alt+B) still open.
+- **2026-09-13, the "glass looks like a normal theme" bug — FOUND AND FIXED.**
+  Mati reported glass rendering opaque. It was not acrylic failing: measured
+  off the live window, the client area *was* sitting on an acrylic base of
+  ~`54,64,71`. **The alpha layers were stacking.** `html/body`, `.app` and
+  `.panel` nest, so one shared `--surface-alpha: 62%` composited to
+  `1 - 0.38³ = 94.5%` and left 5.5% of the acrylic visible. The arithmetic
+  closed exactly: a panel pixel measured `22,29,37` against `19,26,34`
+  predicted for three stacked layers over black, versus `9,12,17` for one.
+  **Fix:** `--surface-alpha` keeps its headline role but is now only the
+  DEFAULT for four absolute per-layer tokens — `--alpha-ground` /
+  `--alpha-edge` / `--alpha-panel` / `--alpha-term`. Glass sets ground `0%`
+  (nothing left to be the bottom of an opaque stack), edge `30%` (the 1px
+  grid gaps stay the most see-through thing on screen), panel `62%`, term
+  `55%`. At 100% all four collapse to the old single knob, so `solid` is
+  still bit-for-bit. Measured after: panel `22,29,37` → `35,40,46`, terminal
+  ground `11,17,22` → `37,42,47`.
+- **2026-09-13, xterm was a fifth layer.** The terminal canvas paints its own
+  ground from `terminal.background`, stacking on `.panel--center` for
+  `1-(1-a)² = 80%`. xterm now paints none while `--alpha-term < 100%`, so the
+  pane is the single ground. Note this **subsumes the `termBgOpacity` slider**
+  under a see-through theme — the two controls would otherwise fight over the
+  same pixel. `nord` is why this is conditional and not universal: it is the
+  one theme whose `terminal.background` (`#2e3440`) deliberately differs from
+  its `--term-bg` (`#232935`), so a blanket transparent xterm would regress it.
+- **2026-09-13, still open.** Phase 0 checks 2 and 3 (unfocused acrylic
+  fallback, titlebar/corners) remain eyes-on — automated foreground-activation
+  kept losing to the Win11 foreground lock. **The release must renumber to
+  v0.12.0**: the other machine shipped v0.11.0 (screenshot paste, auto-proceed
+  drop recovery) while this branch was open, and `main` has been merged in.
+- **2026-09-13, Phase 4 gets a control surface.** Mati: *"i actually love it
+  … i want to mess with opacity transparent lvls."* Four sliders in the
+  Settings overlay (Ctrl+L) over `--alpha-ground` / `--alpha-edge` /
+  `--alpha-panel` / `--alpha-term`, in `modules/surfacealpha.js`. `null` per
+  axis means FOLLOW THE THEME and is the default, so an untouched install
+  still renders all 29 themes exactly as authored — verified live: `luna`
+  reads `100%` on every axis while an override is active on glass.
+  The override is re-applied after every theme switch (the compose-don't-race
+  hook in `applyThemeVars`), and "Follow the theme" restores the theme's own
+  numbers from a baseline snapshot rather than deleting the token — a plain
+  `removeProperty()` would wipe the theme's value too, since both write the
+  same inline block. This replaces eyeballing 28 themes against hardcoded
+  numbers: the alphas are now tunable at runtime, which is what Phase 4
+  actually needed.
+- **2026-09-13, the stack had a fifth floor.** Mati screenshotted the top strip:
+  *"this panel is not acrylic at all."* Correct, and the same bug one level
+  down — `.terminal-bar` and `.tabs` sit INSIDE `.panel--center`, which is
+  inside `.app`, so painting them `--surface-panel` made them a THIRD stacked
+  ground: measured **90.5%** effective while the terminal beside them was
+  see-through. New `--alpha-chrome` / `--surface-chrome` axis for exactly
+  those in-pane rows, held lowest of all so the row reads as a TINT over the
+  pane rather than a lid on it. Deliberately NOT `--surface-panel-2`: the
+  palette, modals and this overlay use that token, and those are places you
+  read and type, where the plan already says legibility beats atmosphere.
+- **2026-09-13, glass loosened.** *"can we make it more see through… more
+  glassy."* edge `30→22%`, panel `62→48%`, term `55→42%`, chrome `20%`.
+  Measured: tab bar **0.905 → 0.638**, terminal body **0.548**. Five sliders
+  now, and the fifth is the one that was making the chrome look painted on.
+- **2026-09-13, clarity becomes a control, and glass becomes a family.**
+  Mati wanted the *smear* itself adjustable. It is not: DWM exposes no blur
+  radius, so the only real clarity lever Windows gives is WHICH MATERIAL -
+  acrylic blurs live content behind, mica only tints the wallpaper (much
+  cleaner), tabbed is a stronger mica, none turns the backdrop off. That is now
+  a dropdown (`windowMaterial`), applied live through the existing `ui:set`
+  write via `setBackgroundMaterial()` - no recreation, no lost scrollback,
+  which is why it could be a dropdown and not a restart. Sharp unblurred
+  see-through was considered and rejected again: it needs `transparent: true`,
+  which is §4's original titlebar blocker.
+  Three siblings via `extends: glass`, one axis - how much paint sits between
+  you and the backdrop: **Clear** (terminal 0.316), **Glass** (0.548),
+  **Noir** (0.600, near-black tint), **Frost** (0.736, cooler and most
+  readable). 32 themes, 1079/1079 green.
+- **2026-09-13, known UX trap.** Slider overrides are GLOBAL and outrank the
+  theme, so switching between the four glass themes changes nothing on any axis
+  the user has touched - measured live, all four reported an identical terminal
+  stack while an override was active. "Follow the theme" is the way back. Worth
+  a visible cue if it bites more than once.
+- **2026-09-13, regression: the theme picker went light-on-light.** Mati:
+  *"i can choose any mode cause i cant see what is written."* Caused by this
+  branch. `.profile-select` painted `--surface-panel-2`, which is now alpha'd,
+  and **Chromium only carries a control's background into the OS-drawn dropdown
+  list when that background is opaque** - given an alpha it falls back to the
+  system LIGHT popup, while the options still inherited our pale `--text`.
+  Fixed by painting the control from the OPAQUE `--bg-panel-2` and setting the
+  option rows from theme tokens as well. No `color-scheme` declaration to keep
+  in sync: the tokens already flip for the four light themes. Verified live -
+  `solarized` and `glass` come out light-on-dark, `paper` dark-on-light, all
+  three at alpha 1.
+  **Rule this establishes: a surface you READ YOUR WAY DOWN stays opaque.**
+  Selects join the palette and the modals on that list. Worth auditing anything
+  else native-drawn before the release.
+- **2026-09-13, CORRECTION - sharp see-through works, and §4's blocker is**
+  **wrong on this build.** I had twice told Mati the only clarity lever was
+  which material, because DWM exposes no blur radius. Half right. A spike with
+  a 20px black/white STRIPED backdrop (flat white cannot distinguish "blurred"
+  from "sharp" - that is why the earlier flat-white tests kept reading as
+  inconclusive) measured stripe contrast through four window configs:
+
+  | config | stripe contrast | verdict |
+  |---|---|---|
+  | `transparent: true` **with frame** | 164 | sharp |
+  | `transparent: true` + `frame: false` | 164 | sharp |
+  | `backgroundMaterial: 'none'` | 164 | **sharp** |
+
+  Two things follow. **(1) `none` does not mean "no backdrop", it means NO
+  BLUR** - a clear pane onto the sharp desktop, native titlebar intact, and it
+  was already in the dropdown, mislabelled by me as "no system backdrop".
+  **(2) §4's premise that `transparent: true` costs the frame on Windows did
+  not hold here** - the framed transparent window rendered sharp too. Not
+  needed now that `none` does the job, but the deferral it justified should not
+  be quoted as fact again without a re-test.
+  The dropdown is now ordered as a real clarity axis - acrylic, tabbed, mica,
+  clear - with `auto` last, since it is an abdication rather than a point on
+  the scale.
+- **2026-09-13, bug: `windowMaterial` was write-only.** The select kept reading
+  `acrylic` while the prefs file said `none`. `readUiPrefs()` builds an EXPLICIT
+  allowlist rather than spreading DEFAULTS, and the new key was added to
+  DEFAULTS and to `writeUiPrefs()` but not there - so it round-tripped to disk
+  and read back `undefined`, which also meant `createWindow()` was being handed
+  `backgroundMaterial: undefined` on every start. Silent, because every
+  consumer just sees a missing option. Fixed on the read path, and pinned with
+  a test that fails on ANY undefined value coming out of `readUiPrefs()` rather
+  than on this one key - the next person to add a pref gets caught by it too.
+- **2026-09-13, the white flash-out, and what it says about `none`.** Mati:
+  *"it worked for a second then it became like white mode."* The PAGE was fine
+  throughout - dark theme, light text, panels at 66% dark, checked live. The
+  white came from UNDER it: an alpha `backgroundColor` on a window that is not
+  declared transparent leaves the base UNDEFINED. DWM holds a transparent
+  surface while a material is painting, and Chromium falls back to its default
+  WHITE when one is not - so `none` is a coin-flip, not a mode. It is total
+  rather than subtle because `--alpha-ground: 0%` means the page paints nothing
+  over the base. **My earlier spike caught `none` in the good moment and I
+  generalised a mode out of it.**
+  Fix: `transparent: true` on the window, unconditionally (it is
+  construction-time only, so it cannot follow the dropdown). That gives the
+  base a DEFINED value instead of a fallback, and the same spike had already
+  shown it renders sharp WITH the frame. Measured after: panel pixels
+  `34,37,61` held flat across 13s with the window unfocused, carrying the
+  wallpaper's violet cast - no white at any point.
+  **Still eyes-on: whether the native titlebar, rounded corners and snap
+  layouts survive `transparent: true`.** That is Phase 0 check 3, and it is now
+  load-bearing rather than incidental - if the frame suffers, §4's original
+  objection comes back and the fallback is to drop `none` from the dropdown and
+  keep only the blurred materials.
+- **2026-09-13, "Clear pane" CUT. There is no stable sharp see-through on this**
+  **build.** Mati pinned the trigger: *"works perfectly on launch but then on
+  launch it goes white… when changing to another glass mode."* A theme switch
+  forces a full repaint, and with no DWM material holding the window surface
+  transparent the repaint lands on Chromium's default WHITE - total, because
+  `--alpha-ground: 0%` means the page paints nothing over the base.
+  `transparent: true` was tried first and did NOT hold it, so the option is
+  removed rather than shipped as a coin-flip - and removing it also lifts the
+  risk that declaring the window transparent had put on acrylic and mica, which
+  never needed it.
+  `none` is absent from `WINDOW_MATERIALS` rather than merely hidden in the UI,
+  so a prefs file still carrying it fails validation and migrates to the
+  default on next read (verified: a stored `none` now reads back `acrylic`).
+  **Standing correction to the two entries above: `none` renders sharp only
+  while DWM happens to still be holding the surface. The striped-backdrop spike
+  measured a real moment, not a mode. A spike proves a mechanism CAN work; only
+  use over time proves it HOLDS.**
+  What survives is the honest range: acrylic, tabbed, mica, auto - three
+  genuinely different amounts of smear, all stable, plus the five sliders for
+  how much shows through. Verified across seven theme switches including out to
+  an opaque theme and back.
