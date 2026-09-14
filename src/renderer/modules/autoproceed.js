@@ -321,7 +321,33 @@ export function staleSessionIds(known, list) {
   return [...known].filter((id) => !live.has(id));
 }
 
+/**
+ * A genuine new turn began (src/observer.js's hasUserPromptStart, forwarded via
+ * main.js's onTurnStart) - proof the injected "continue" was consumed, or that
+ * Mati typed a message himself. Either way the session is demonstrably alive,
+ * independent of whether the resulting turn ever calls a tool.
+ *
+ * Without this, a retried turn that only thinks or answers in plain text before
+ * dying again produces no onTools event at all, so handleProgress() never lifts
+ * the quiet window for it and the next real drop is silently swallowed - the
+ * "armed, one continue went out, then nothing" case from 2026-09-14 (a turn
+ * that cogitated 14s with no tool call, then dropped again). Mirrors
+ * handleProgress()'s shape: feed progressedAt, let the existing
+ * shouldScheduleRecovery() decider do the rest.
+ */
+function handleTurnStart({ sessionId, at } = {}) {
+  const s = sessions.get(sessionId);
+  if (!s) return; // no drop on record for this session - nothing to credit
+  s.progressedAt = Math.max(s.progressedAt, Number.isFinite(at) ? at : Date.now());
+  if (s.progressedAt > s.injectedAt) s.retryCount = 0;
+  cancelPending(sessionId);
+}
+
 function handleGodModeSignal({ sessionId, type, at } = {}) {
+  if (type === 'turnStarted') {
+    handleTurnStart({ sessionId, at });
+    return;
+  }
   if (!autoProceedArmed || type !== 'connectionError') return;
   if (isBoundSession(sessionId)) return; // godmode.js already owns this tab's recovery
   const s = sessionState(sessionId);

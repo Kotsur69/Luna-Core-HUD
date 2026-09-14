@@ -882,6 +882,15 @@ class TranscriptWatcher {
     // else. main.js forwards it as the connectionError signal the recovery UI
     // already listens for.
     this.onApiError = typeof opts.onApiError === 'function' ? opts.onApiError : null;
+    // Optional: called whenever hasUserPromptStart() fires on newly appended
+    // lines - a genuine new turn began, ours or Mati's own typing. autoproceed.js
+    // uses this as proof the injected "continue" was consumed, independent of
+    // whether the resulting turn ever calls a tool: a turn that only thinks or
+    // answers in plain text before dying again produces no onTools event at all,
+    // and without this the module has no way to tell that drop apart from the
+    // dying original request's own tail (see test/autoproceed.test.js, the
+    // "cogitated 14s" case from 2026-09-14).
+    this.onTurnStart = typeof opts.onTurnStart === 'function' ? opts.onTurnStart : null;
     // Wall-clock of the last genuine user prompt seen (hasUserPromptStart()).
     // 0 = none observed yet this session/tick-history, so a turn end right
     // now has an unknown duration (isLongTurn() treats that as "don't fire").
@@ -986,7 +995,10 @@ class TranscriptWatcher {
       // §4.3/§11.1: guarded by !firstPass for the same reason as onTools above
       // - a resumed session's PAST turns must not replay a stale start/end.
       if (!firstPass) {
-        if (hasUserPromptStart(complete)) this.turnStartedAt = Date.now();
+        if (hasUserPromptStart(complete)) {
+          this.turnStartedAt = Date.now();
+          if (this.onTurnStart) this.onTurnStart({ at: this.turnStartedAt });
+        }
         if (this.onTurnEnd && hasCompletedTurn(complete)) {
           const startedAt = this.turnStartedAt;
           // Consumed: the NEXT end without a fresh start in between has an

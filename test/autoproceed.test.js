@@ -136,6 +136,24 @@ test('the real 44.3s case from the transcript is recovered, not swallowed', () =
   assert.equal(shouldScheduleRecovery(state, T0 + 44_300), true);
 });
 
+// ---- turn-start progress, not just tool progress (the "14s cogitate" bug) --
+// 2026-09-14: a drop, auto-proceed's "continue" 15s later, a retried turn that
+// only thinks/answers in plain text for 14s (zero tool calls) before dropping
+// AGAIN, then nothing - the second drop landed inside the quiet window with no
+// onTools event to lift it, so it was swallowed exactly like the 44.3s case
+// above used to be. handleTurnStart() (src/renderer/modules/autoproceed.js)
+// now feeds progressedAt from hasUserPromptStart() too, so a turn that never
+// calls a tool still counts as proof the "continue" landed. Pinned here the
+// same way the 44.3s case is: as progressedAt state handed to the same
+// decider, since handleTurnStart is a thin, untested wrapper around it.
+
+test('a retried turn with zero tool calls still lifts the quiet window', () => {
+  // injected at T0, the retried turn starts at T0+1s (hasUserPromptStart, no
+  // tool call ever fires), second drop at T0+14s - well inside QUIET_MS.
+  const state = { retryCount: 1, injectedAt: T0, progressedAt: T0 + 1000, pending: false };
+  assert.equal(shouldScheduleRecovery(state, T0 + 14_000), true);
+});
+
 test('progress OLDER than our continue does not lift the window', () => {
   // The dying turn's own tail: work timestamped before the injection is not
   // evidence the injection took, so the quiet window still applies.

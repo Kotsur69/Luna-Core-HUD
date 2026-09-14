@@ -846,6 +846,12 @@ function spawnInto(session, profile) {
       // same fragment (a dying turn's tail must not read as "recovered").
       onApiError: ({ at } = {}) =>
         send('godmode:signal', { sessionId: session.id, type: 'connectionError', at }),
+      // Same channel/shape as onApiError above - autoproceed.js's proof that an
+      // armed "continue" (or Mati's own typing) was actually consumed, so a
+      // turn that only thinks or answers in plain text before dying again still
+      // counts as recovery even though it calls no tool.
+      onTurnStart: ({ at } = {}) =>
+        send('godmode:signal', { sessionId: session.id, type: 'turnStarted', at }),
       onTurnEnd: (turn) => {
         checkTurnEnd(turn);
         send('metrics:turnend', { sessionId: session.id, turn });
