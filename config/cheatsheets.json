@@ -1,6 +1,99 @@
 {
   "groups": [
     {
+      "title": { "pl": "ECC - nawyki (zacznij tu)", "en": "ECC - habits (start here)" },
+      "note": {
+        "pl": "Plan przed robota. Review po kodzie. Scan przed commitem. Fix gdy czerwono. To 90% wartosci ECC, reszta to specjalizacje. Przy jednym pliku albo drobnej poprawce NIE odpalaj niczego - po prostu popros Lune. Agent startuje bez historii rozmowy, wiec oplaca sie tylko przy zamknietej, wiekszej robocie.",
+        "en": "Plan before work. Review after code. Scan before commit. Fix when red. That is 90% of the value here - the rest are specializations. For a single file or a small tweak run NOTHING, just ask Luna. An agent starts with no conversation history, so it only pays off for bounded, larger work."
+      },
+      "commands": [
+        { "label": { "pl": "1. Plan (przed robota)", "en": "1. Plan (before work)" }, "command": "/ecc:plan" },
+        { "label": { "pl": "2. Review (po kodzie)", "en": "2. Review (after code)" }, "command": "/ecc:code-review" },
+        { "label": { "pl": "3. Scan (przed commitem)", "en": "3. Scan (before commit)" }, "command": "/ecc:security-scan" },
+        { "label": { "pl": "4. Fix (build/testy czerwone)", "en": "4. Fix (build/tests red)" }, "command": "/ecc:build-fix" },
+        { "label": { "pl": "Co jeszcze jest", "en": "What else exists" }, "command": "/ecc:ecc-guide" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - pelny przeplyw (oddajesz cale zadanie)", "en": "ECC - full workflow (hand over the task)" },
+      "note": {
+        "pl": "orch-add-feature: research -> plan -> TDD -> review -> commit za bramka. orch-fix-defect: najpierw odtworzenie jako CZERWONY test, dopiero potem naprawa. Te dwa zalatwiaja wiekszosc roboty. Drozsze niz nawyki 1-4, wiec uzywaj, gdy zadanie jest wieksze niz jeden plik i chcesz odejsc od klawiatury. Zawsze dopisz kryteria akceptacji i \"zatrzymaj sie przed commitem\".",
+        "en": "orch-add-feature: research -> plan -> TDD -> review -> gated commit. orch-fix-defect: reproduce as a RED test first, fix second. These two cover most work. Pricier than habits 1-4, so use them when the task is bigger than one file and you want to walk away. Always add acceptance criteria and \"stop before committing\"."
+      },
+      "commands": [
+        { "label": { "pl": "Nowa funkcja od zera", "en": "New feature from scratch" }, "command": "/ecc:orch-add-feature" },
+        { "label": { "pl": "Bug -> czerwony test -> fix", "en": "Bug -> red test -> fix" }, "command": "/ecc:orch-fix-defect" },
+        { "label": { "pl": "Zmiana istniejacej funkcji", "en": "Change existing feature" }, "command": "/ecc:orch-change-feature" },
+        { "label": { "pl": "Sprzatanie po refaktorze", "en": "Post-refactor cleanup" }, "command": "/ecc:orch-refine-code" },
+        { "label": "/ecc:santa-loop", "command": "/ecc:santa-loop" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - model i koszt", "en": "ECC - model & cost" },
+      "note": {
+        "pl": "Harness (hooki, reguly, skille, agenci ECC, MCP) dziala IDENTYCZNIE na obu modelach - zmieniasz mozg, nie narzedzia. Opus: architektura, trudny debug, duzy refaktor, planowanie. Sonnet: zwykla robota, szybkie iteracje, tanie petle. /model bez argumentu pokazuje aktualny. Zmiana dotyczy TEJ sesji.",
+        "en": "The harness (hooks, rules, skills, ECC agents, MCP) works IDENTICALLY on both models - you swap the brain, not the tooling. Opus: architecture, hard debugging, big refactors, planning. Sonnet: everyday work, fast iterations, cheap loops. /model with no argument shows the current one. The switch applies to THIS session."
+      },
+      "commands": [
+        { "label": { "pl": "Opus (trudne)", "en": "Opus (hard stuff)" }, "command": "/model opus" },
+        { "label": { "pl": "Sonnet (zwykla robota)", "en": "Sonnet (everyday work)" }, "command": "/model sonnet" },
+        { "label": { "pl": "Ktory teraz?", "en": "Which one now?" }, "command": "/model" },
+        { "label": "/cost", "command": "/cost" },
+        { "label": "/ecc:cost-report", "command": "/ecc:cost-report" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - plan", "en": "ECC - plan" },
+      "note": {
+        "pl": "Zacznij tu przy kazdej nietrywialnej zmianie. /ecc:plan czeka na Twoje potwierdzenie, nic nie pisze bez zgody.",
+        "en": "Start here for any non-trivial change. /ecc:plan waits for your confirm and writes nothing without it."
+      },
+      "commands": [
+        { "label": "/ecc:plan", "command": "/ecc:plan" },
+        { "label": "/ecc:feature-dev", "command": "/ecc:feature-dev" },
+        { "label": "/ecc:plan-prd", "command": "/ecc:plan-prd" },
+        { "label": "/ecc:ecc-guide", "command": "/ecc:ecc-guide" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - review i jakosc", "en": "ECC - review & quality" },
+      "note": {
+        "pl": "Po napisaniu kodu, przed commitem. W LunaCore: security-scan obowiazkowo, gdy ruszasz src/preload.js albo kanaly IPC.",
+        "en": "After writing code, before committing. In LunaCore: security-scan is mandatory whenever you touch src/preload.js or IPC channels."
+      },
+      "commands": [
+        { "label": "/ecc:code-review", "command": "/ecc:code-review" },
+        { "label": "/ecc:security-scan", "command": "/ecc:security-scan" },
+        { "label": "/ecc:test-coverage", "command": "/ecc:test-coverage" },
+        { "label": "/ecc:quality-gate", "command": "/ecc:quality-gate" },
+        { "label": "/ecc:refactor-clean", "command": "/ecc:refactor-clean" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - naprawa", "en": "ECC - fix" },
+      "note": {
+        "pl": "/ecc:build-fix sam wybiera wlasciwego agenta od bledow buildu.",
+        "en": "/ecc:build-fix auto-routes to the right build-resolver agent."
+      },
+      "commands": [
+        { "label": "/ecc:build-fix", "command": "/ecc:build-fix" },
+        { "label": "/ecc:orch-fix-defect", "command": "/ecc:orch-fix-defect" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - sesja", "en": "ECC - session" },
+      "note": {
+        "pl": "Przy robocie na kilka dni save/resume jest lepsze niz /compact - /compact gubi szczegoly, save zostawia spisany handoff.",
+        "en": "For multi-day work save/resume beats /compact - /compact loses detail, save leaves a written handoff."
+      },
+      "commands": [
+        { "label": "/ecc:save-session", "command": "/ecc:save-session" },
+        { "label": "/ecc:resume-session", "command": "/ecc:resume-session" },
+        { "label": "/ecc:model-route", "command": "/ecc:model-route" },
+        { "label": "/ecc:cost-report", "command": "/ecc:cost-report" }
+      ]
+    },
+    {
       "title": { "pl": "Review przed commitem", "en": "Pre-commit review" },
       "note": {
         "pl": "Prefiks ! = komenda powloki (bash) w sesji Claude.",
@@ -39,66 +132,6 @@
         { "label": "start", "command": "!npm start" },
         { "label": "pack", "command": "!npm run pack" },
         { "label": "dist", "command": "!npm run dist" }
-      ]
-    },
-    {
-      "title": { "pl": "ECC - plan", "en": "ECC - plan" },
-      "note": {
-        "pl": "Zacznij tu przy kazdej nietrywialnej zmianie. /ecc:plan czeka na Twoje potwierdzenie.",
-        "en": "Start here for any non-trivial change. /ecc:plan waits for your confirm."
-      },
-      "commands": [
-        { "label": "/ecc:plan", "command": "/ecc:plan" },
-        { "label": "/ecc:feature-dev", "command": "/ecc:feature-dev" },
-        { "label": "/ecc:plan-prd", "command": "/ecc:plan-prd" },
-        { "label": "/ecc:ecc-guide", "command": "/ecc:ecc-guide" }
-      ]
-    },
-    {
-      "title": { "pl": "ECC - review i jakosc", "en": "ECC - review & quality" },
-      "note": {
-        "pl": "Po napisaniu kodu, przed commitem.",
-        "en": "After writing code, before committing."
-      },
-      "commands": [
-        { "label": "/ecc:code-review", "command": "/ecc:code-review" },
-        { "label": "/ecc:security-scan", "command": "/ecc:security-scan" },
-        { "label": "/ecc:test-coverage", "command": "/ecc:test-coverage" },
-        { "label": "/ecc:quality-gate", "command": "/ecc:quality-gate" },
-        { "label": "/ecc:refactor-clean", "command": "/ecc:refactor-clean" }
-      ]
-    },
-    {
-      "title": { "pl": "ECC - naprawa", "en": "ECC - fix" },
-      "note": {
-        "pl": "/ecc:build-fix sam wybiera wlasciwego agenta od bledow buildu.",
-        "en": "/ecc:build-fix auto-routes to the right build-resolver agent."
-      },
-      "commands": [
-        { "label": "/ecc:build-fix", "command": "/ecc:build-fix" },
-        { "label": "/ecc:orch-fix-defect", "command": "/ecc:orch-fix-defect" }
-      ]
-    },
-    {
-      "title": { "pl": "ECC - pelny przeplyw", "en": "ECC - full workflow" },
-      "note": {
-        "pl": "Ciezsze piply: research -> plan -> TDD -> review -> commit za bramka.",
-        "en": "Heavier pipelines: research -> plan -> TDD -> review -> gated commit."
-      },
-      "commands": [
-        { "label": "/ecc:orch-add-feature", "command": "/ecc:orch-add-feature" },
-        { "label": "/ecc:orch-change-feature", "command": "/ecc:orch-change-feature" },
-        { "label": "/ecc:orch-refine-code", "command": "/ecc:orch-refine-code" },
-        { "label": "/ecc:santa-loop", "command": "/ecc:santa-loop" }
-      ]
-    },
-    {
-      "title": { "pl": "ECC - sesja", "en": "ECC - session" },
-      "commands": [
-        { "label": "/ecc:cost-report", "command": "/ecc:cost-report" },
-        { "label": "/ecc:model-route", "command": "/ecc:model-route" },
-        { "label": "/ecc:save-session", "command": "/ecc:save-session" },
-        { "label": "/ecc:resume-session", "command": "/ecc:resume-session" }
       ]
     }
   ]

@@ -46,6 +46,20 @@ turn with "waiting for background agents" — ending your turn while children ru
 orphans their results. If you delegate, you own collection: wait, integrate,
 then answer.
 
+## Model Choice
+
+The harness is model-independent. Hooks, rules, skills, ECC agents, and MCP
+servers load identically on Opus and Sonnet - `/model` swaps the reasoning
+engine, not the tooling. Nothing in this repo behaves differently between them.
+
+| Use | Model |
+|-----|-------|
+| Architecture, hard debugging, large refactors, planning | Opus |
+| Everyday edits, fast iterations, cheap loops | Sonnet |
+
+`/model` with no argument reports the current one. The switch applies to the
+current session only.
+
 ## ECC Workflow In This Repo
 
 Project context: Electron app, `main` / `preload` / `renderer`, plain JavaScript
