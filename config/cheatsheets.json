@@ -108,6 +108,19 @@
       ]
     },
     {
+      "title": { "pl": "Po commicie", "en": "After commit" },
+      "note": {
+        "pl": "Nie po kazdym commicie - po wiekszej funkcji albo po refaktorze, ktory zmienil ksztalt repo. /ecc:update-codemaps skanuje projekt i zapisuje mape do docs/CODEMAPS/ (architektura, warstwy, dane, zaleznosci; do ~1000 tokenow na plik), a podsumowanie zmian do .reports/codemap-diff.txt. Gdy zmienilo sie ponad 30 procent, najpierw pokaze diff i zapyta o zgode. To zwykly markdown, nie indeks kodu - starzeje sie po cichu, wiec albo go odswiezasz, albo mu nie ufasz. /ecc:update-docs robi to samo dla README i przewodnikow.",
+        "en": "Not after every commit - after a bigger feature, or a refactor that changed the shape of the repo. /ecc:update-codemaps scans the project and writes a map into docs/CODEMAPS/ (architecture, layers, data, dependencies; up to ~1000 tokens per file), plus a change summary in .reports/codemap-diff.txt. If more than 30 percent changed it shows you the diff and asks before overwriting. It is plain markdown, not a code index - it goes stale silently, so either you refresh it or you do not trust it. /ecc:update-docs does the same for READMEs and guides."
+      },
+      "commands": [
+        { "label": { "pl": "Odswiez mape repo", "en": "Refresh the repo map" }, "command": "/ecc:update-codemaps" },
+        { "label": { "pl": "Odswiez dokumentacje", "en": "Refresh the docs" }, "command": "/ecc:update-docs" },
+        { "label": { "pl": "Co poszlo ostatnio", "en": "What went in recently" }, "command": "!git log --oneline -5" },
+        { "label": { "pl": "Koszt sesji", "en": "Session cost" }, "command": "/ecc:cost-report" }
+      ]
+    },
+    {
       "title": { "pl": "ECC - sesja", "en": "ECC - session" },
       "note": {
         "pl": "Przy robocie na kilka dni save/resume jest lepsze niz /compact - /compact gubi szczegoly, save zostawia spisany handoff.",
