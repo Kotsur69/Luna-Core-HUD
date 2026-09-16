@@ -15,6 +15,19 @@
       ]
     },
     {
+      "title": { "pl": "Plan: tryb vs komenda", "en": "Plan: mode vs command" },
+      "note": {
+        "pl": "Trzy poziomy, od najostrozniejszego. 1) Shift+Tab = Plan Mode: Luna bada i pisze plan, ale NIE MOZE nic zmienic, dopoki nie zatwierdzisz - uzyj, gdy sam jeszcze nie wiesz, czego chcesz, albo gdy ruszasz nieznany kod. 2) /ecc:plan = komenda: Luna moze czytac i pisac, planuje wg regul ECC (ryzyka, fazy, zaleznosci) i czeka na Twoje OK - uzyj, gdy wiesz, co ma powstac. 3) /ecc:orch-add-feature = bez pytania, caly przeplyw do konca. Krotko: Plan Mode chroni kod, /ecc:plan daje lepszy plan.",
+        "en": "Three levels, most cautious first. 1) Shift+Tab = Plan Mode: Luna researches and drafts a plan but CANNOT change anything until you approve - use it when you do not know yet what you want, or when touching unfamiliar code. 2) /ecc:plan = a command: Luna can read and write, plans by the ECC rules (risks, phases, dependencies) and waits for your OK - use it when you know what should be built. 3) /ecc:orch-add-feature = no questions, the whole pipeline. Short version: Plan Mode protects the code, /ecc:plan produces the better plan."
+      },
+      "commands": [
+        { "label": { "pl": "Plan wg ECC", "en": "Plan the ECC way" }, "command": "/ecc:plan" },
+        { "label": { "pl": "Plan z PRD", "en": "Plan from a PRD" }, "command": "/ecc:plan-prd" },
+        { "label": { "pl": "Bez pytania, calosc", "en": "No questions, all of it" }, "command": "/ecc:orch-add-feature" },
+        { "label": { "pl": "Co zjada kontekst", "en": "What eats context" }, "command": "/context" }
+      ]
+    },
+    {
       "title": { "pl": "ECC - pelny przeplyw (oddajesz cale zadanie)", "en": "ECC - full workflow (hand over the task)" },
       "note": {
         "pl": "orch-add-feature: research -> plan -> TDD -> review -> commit za bramka. orch-fix-defect: najpierw odtworzenie jako CZERWONY test, dopiero potem naprawa. Te dwa zalatwiaja wiekszosc roboty. Drozsze niz nawyki 1-4, wiec uzywaj, gdy zadanie jest wieksze niz jeden plik i chcesz odejsc od klawiatury. Zawsze dopisz kryteria akceptacji i \"zatrzymaj sie przed commitem\".",
@@ -91,6 +104,19 @@
         { "label": "/ecc:resume-session", "command": "/ecc:resume-session" },
         { "label": "/ecc:model-route", "command": "/ecc:model-route" },
         { "label": "/ecc:cost-report", "command": "/ecc:cost-report" }
+      ]
+    },
+    {
+      "title": { "pl": "Wlasne komendy", "en": "Custom commands" },
+      "note": {
+        "pl": "Kazdy prompt, ktory piszesz w kolko, moze zostac Twoja wlasna komenda. Plik ~/.claude/commands/nazwa.md = komenda /nazwa, dostepna od razu, bez restartu. Na gorze pliku frontmatter: description (co robi) i argument-hint (co dopisac po komendzie), pod spodem tresc promptu. $ARGUMENTS wstawia to, co napisales po nazwie komendy. Folder jeszcze nie istnieje - zaloz go pierwszym przyciskiem.",
+        "en": "Any prompt you keep retyping can become your own command. A file ~/.claude/commands/name.md = the command /name, live immediately, no restart. Frontmatter at the top: description (what it does) and argument-hint (what to type after it), then the prompt body. $ARGUMENTS inserts whatever you typed after the command name. The folder does not exist yet - the first button creates it."
+      },
+      "commands": [
+        { "label": { "pl": "Zaloz folder", "en": "Create the folder" }, "command": "!mkdir -p ~/.claude/commands" },
+        { "label": { "pl": "Moje komendy", "en": "My commands" }, "command": "!ls -1 ~/.claude/commands" },
+        { "label": { "pl": "Wzor komendy ECC", "en": "An ECC command as a model" }, "command": "!head -5 ~/.claude/plugins/cache/ecc/ecc/2.2.1/commands/plan.md" },
+        { "label": "/help", "command": "/help" }
       ]
     },
     {
