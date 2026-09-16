@@ -248,6 +248,7 @@ const I18N_DICT = {
     'activefiles.empty': 'Zadnych zmian w plikach w tej sesji.',
     'activefiles.hint': '+/- to realne linie z diffa transcriptu.',
     'activefiles.more': '+{n} wiecej',
+    'activefiles.less': 'Pokaz mniej',
     'activefiles.readonly': 'tylko odczyt',
     'activefiles.weight.title':
       'Szacunkowy koszt kontekstu. Dokladnie {chars} znakow wczytanych do okna kontekstu w {reads} odczytach. Liczba tokenow jest przyblizona - wyliczona ze znakow, nie z API.',
@@ -711,6 +712,7 @@ const I18N_DICT = {
     'activefiles.empty': 'No file changes this session.',
     'activefiles.hint': '+/- are real diff lines from the transcript.',
     'activefiles.more': '+{n} more',
+    'activefiles.less': 'Show less',
     'activefiles.readonly': 'read only',
     'activefiles.weight.title':
       'Estimated context cost. Exactly {chars} characters entered the context window across {reads} reads. The token figure is approximate - derived from characters, not reported by the API.',

@@ -49,7 +49,8 @@ import { parseDiff } from '../../filediff.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { beginListUpdate, endListUpdate } from './flip.js';
 
-/** Honest truncation (ports.js's rule): show this many, state the rest. */
+/** Honest truncation (ports.js's rule): show this many, state the rest -
+ *  the rest stays one click away rather than gone (see visibleRows()). */
 const MAX_ROWS = 8;
 
 /** Self-heal ceiling (Mati, 2026-08-13 manual test: a row stayed live past its
@@ -75,6 +76,18 @@ let files = new Map();
 
 /** Elements of the current mount, or null while this widget is off screen. */
 let els = null;
+
+/** Whether the overflow past MAX_ROWS is currently unrolled. View state, not
+ *  app state (unlike `files`): it resets to collapsed on every mount and on
+ *  every session-tab switch (registerSessionView's load()) rather than being
+ *  parked on the bucket, since there is no expectation a re-opened tab should
+ *  remember it was left expanded. */
+let expanded = false;
+
+/** True only while the toggle row is actually interactive - guards the click/
+ *  keydown handlers (attached once, in mount()) against firing when there is
+ *  nothing to expand or collapse. Kept in sync by render() on every repaint. */
+let toggleHasOverflow = false;
 
 /**
  * Last two path segments, `\` or `/` alike. Not cwd-relative in v1 - see plan
@@ -266,6 +279,22 @@ function sortedRows(map) {
     if (aChanged !== bChanged) return aChanged ? -1 : 1;
     return b.lastAt - a.lastAt;
   });
+}
+
+/**
+ * Splits sorted rows into what's shown and what's hidden behind the "+N more"
+ * toggle. Pure and exported for the same reason applyFileEvent is (test/
+ * activefiles.test.js's own stated convention) - no DOM needed to verify the
+ * slicing logic.
+ * @param {object[]} rows already sorted by sortedRows()
+ * @param {boolean} isExpanded
+ * @param {number} maxRows
+ * @returns {{ shown: object[], hasOverflow: boolean, hiddenCount: number }}
+ */
+export function visibleRows(rows, isExpanded, maxRows) {
+  const hasOverflow = rows.length > maxRows;
+  const shown = isExpanded || !hasOverflow ? rows : rows.slice(0, maxRows);
+  return { shown, hasOverflow, hiddenCount: hasOverflow ? rows.length - maxRows : 0 };
 }
 
 /**
@@ -492,6 +521,21 @@ function buildRow(row) {
   return li;
 }
 
+/** Sets/clears the interactive attributes on the toggle row. Split out of
+ *  render() because the true empty-state message (no files at all) reuses
+ *  the same element but must never be a11y-announced as a button. */
+function setToggleInteractive(interactive) {
+  els.empty.classList.toggle('is-clickable', interactive);
+  if (interactive) {
+    els.empty.setAttribute('role', 'button');
+    els.empty.tabIndex = 0;
+  } else {
+    els.empty.removeAttribute('role');
+    els.empty.removeAttribute('tabindex');
+    els.empty.removeAttribute('aria-expanded');
+  }
+}
+
 /** Repaints from `files`. Called on every event AND on mount/lang change, so
  *  a remount shows truth rather than the template's authored empty state. */
 function render() {
@@ -502,19 +546,37 @@ function render() {
   els.list.innerHTML = '';
 
   if (!rows.length) {
+    toggleHasOverflow = false;
+    setToggleInteractive(false);
     els.empty.textContent = t('activefiles.empty');
     els.empty.style.display = '';
     endListUpdate(els.list, snap);
     return;
   }
 
-  const shown = rows.slice(0, MAX_ROWS);
+  const { shown, hasOverflow, hiddenCount } = visibleRows(rows, expanded, MAX_ROWS);
   for (const row of shown) els.list.appendChild(buildRow(row));
   endListUpdate(els.list, snap);
 
-  const extra = rows.length - shown.length;
-  els.empty.textContent = extra > 0 ? t('activefiles.more', { n: extra }) : '';
-  els.empty.style.display = extra > 0 ? '' : 'none';
+  toggleHasOverflow = hasOverflow;
+  setToggleInteractive(hasOverflow);
+  if (hasOverflow) {
+    els.empty.textContent = expanded ? t('activefiles.less') : t('activefiles.more', { n: hiddenCount });
+    els.empty.setAttribute('aria-expanded', String(expanded));
+    els.empty.style.display = '';
+  } else {
+    els.empty.textContent = '';
+    els.empty.style.display = 'none';
+  }
+}
+
+/** Click/keydown handler for the toggle row - flips `expanded` and repaints.
+ *  Guarded by `toggleHasOverflow` so a stale listener firing after a render
+ *  that removed the overflow (e.g. files dropping below MAX_ROWS) is a no-op. */
+function toggleExpanded() {
+  if (!toggleHasOverflow) return;
+  expanded = !expanded;
+  render();
 }
 
 /** Apply transcript lifecycle events to the tab you are looking at. */
@@ -576,6 +638,15 @@ defineWidget({
       empty: root.querySelector('#afile-empty'),
     };
     ensureDiffModal();
+    expanded = false; // a fresh mount always starts collapsed
+
+    els.empty.addEventListener('click', toggleExpanded);
+    els.empty.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggleExpanded();
+      }
+    });
 
     const offLang = onLangChange(render);
     // Only for the denominator of a row's share. Repainting on every context
@@ -616,6 +687,9 @@ registerSessionView({
   },
   load(bucket) {
     files = bucket.activeFiles || new Map();
+    // Expansion is view state, not app state - a re-opened tab always starts
+    // collapsed, same as a fresh mount (see `expanded`'s own doc comment).
+    expanded = false;
     // A background tab gets no stale sweep (no timer runs while off screen) -
     // catch up in one shot so switching to it never shows a leftover live row
     // or a deleted-file row that still looks untouched.
@@ -631,6 +705,7 @@ registerSessionView({
 // Restart = a new process: whatever was tracked belonged to the one that died.
 onSessionRestarted(() => {
   files = new Map();
+  expanded = false;
   closeDiffModal();
   render();
 });

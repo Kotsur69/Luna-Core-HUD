@@ -13,6 +13,7 @@ const {
   shortPath,
   clearStaleInProgress,
   applyDeletedFlags,
+  visibleRows,
 } = require('../src/renderer/modules/activefiles.js');
 
 const startEv = (file, at = 1000) => ({ phase: 'start', id: 't0', tile: 'Edit', at, file });
@@ -264,4 +265,41 @@ test('applyFileEvent ignores context weight on a start event', () => {
   const map = new Map();
   applyFileEvent(map, { phase: 'start', at: 1, file: 'C:/a/x.js', contextChars: 999 });
   assert.equal(map.get('C:/a/x.js').contextChars, 0);
+});
+
+// ---- visibleRows (click-to-expand past MAX_ROWS) -----------------------------
+
+const rowsOf = (n) => Array.from({ length: n }, (_, i) => ({ file: `f${i}.js` }));
+
+test('visibleRows shows everything and reports no overflow when under the cap', () => {
+  const rows = rowsOf(5);
+  const result = visibleRows(rows, false, 8);
+  assert.equal(result.shown.length, 5);
+  assert.equal(result.hasOverflow, false);
+  assert.equal(result.hiddenCount, 0);
+});
+
+test('visibleRows collapses to maxRows and reports the hidden count when over the cap', () => {
+  const rows = rowsOf(12);
+  const result = visibleRows(rows, false, 8);
+  assert.equal(result.shown.length, 8);
+  assert.deepEqual(result.shown, rows.slice(0, 8));
+  assert.equal(result.hasOverflow, true);
+  assert.equal(result.hiddenCount, 4);
+});
+
+test('visibleRows shows every row when expanded, but still reports overflow', () => {
+  const rows = rowsOf(12);
+  const result = visibleRows(rows, true, 8);
+  assert.equal(result.shown.length, 12);
+  assert.equal(result.hasOverflow, true);
+  assert.equal(result.hiddenCount, 4);
+});
+
+test('visibleRows treats exactly maxRows as no overflow', () => {
+  const rows = rowsOf(8);
+  const result = visibleRows(rows, false, 8);
+  assert.equal(result.shown.length, 8);
+  assert.equal(result.hasOverflow, false);
+  assert.equal(result.hiddenCount, 0);
 });

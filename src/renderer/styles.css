@@ -1700,6 +1700,21 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   box-shadow: 0 0 var(--glow-size-sm) rgba(95, 242, 214, 0.4);
 }
 
+/* The "+N more" / "Show less" toggle (#afile-empty doing double duty - see
+   activefiles.js's setToggleInteractive()). It's a bare <p>, not an .afile
+   card, so the affordance is text-based rather than the border glow above. */
+#afile-empty.is-clickable {
+  cursor: pointer;
+  opacity: 1;
+  border-radius: var(--radius-sm);
+}
+#afile-empty.is-clickable:hover { color: var(--neon-cyan); }
+#afile-empty.is-clickable:focus-visible {
+  outline: none;
+  color: var(--neon-cyan);
+  box-shadow: 0 0 0 2px rgba(95, 242, 214, 0.4);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .afile.is-live .afile__dot {
     animation: none !important;
