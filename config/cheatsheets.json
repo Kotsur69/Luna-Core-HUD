@@ -42,6 +42,20 @@
       ]
     },
     {
+      "title": { "pl": "Agenci rownolegle", "en": "Parallel agents" },
+      "note": {
+        "pl": "Agenci czytaja rownolegle, pisza po kolei. Trzech reviewerow w jednej wiadomosci kosztuje tyle czasu co jeden. Zasada: rownolegle tylko to, co niezalezne - kazdy agent dostaje inna dzialke (inny plik, inna warstwa, inne pytanie). Gdy krok B potrzebuje wyniku A, rownoleglosc nic nie daje. Do pisania rownoleglego sa worktree: osobny katalog roboczy na watek, zero konfliktow w Twoim. Gotowe prompty z przypadkami uzycia: zakladka Prompty -> ECC - agenci. Przy jednym pliku nie delegujesz wcale.",
+        "en": "Agents read in parallel and write in sequence. Three reviewers in one message cost the time of one. The rule: parallelize only what is independent - every agent gets its own lane (a different file, a different layer, a different question). When step B needs the result of A, parallelism buys nothing. Parallel writing is what worktrees are for: one working directory per lane, zero conflicts in yours. Ready-made use-case prompts: the Prompts tab -> ECC - agents. For a single file you do not delegate at all."
+      },
+      "commands": [
+        { "label": { "pl": "Lista agentow", "en": "Agent list" }, "command": "/agents" },
+        { "label": { "pl": "Pelny roster ECC", "en": "Full ECC roster" }, "command": "/ecc:ecc-guide" },
+        { "label": { "pl": "Podziel dzialki wg zmian", "en": "Split lanes by changes" }, "command": "!git diff --name-only" },
+        { "label": { "pl": "Bramka przed releasem", "en": "Gate before release" }, "command": "/ecc:quality-gate" },
+        { "label": { "pl": "Ile to zjadlo", "en": "What it cost" }, "command": "/cost" }
+      ]
+    },
+    {
       "title": { "pl": "ECC - model i koszt", "en": "ECC - model & cost" },
       "note": {
         "pl": "Harness (hooki, reguly, skille, agenci ECC, MCP) dziala IDENTYCZNIE na obu modelach - zmieniasz mozg, nie narzedzia. Opus: architektura, trudny debug, duzy refaktor, planowanie. Sonnet: zwykla robota, szybkie iteracje, tanie petle. /model bez argumentu pokazuje aktualny. Zmiana dotyczy TEJ sesji.",

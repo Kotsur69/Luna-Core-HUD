@@ -222,6 +222,118 @@
               "Do not start implementing until I confirm."
             ]
           }
+        },
+        {
+          "label": { "pl": "Rozpoznanie przed zmiana", "en": "Recon before a change" },
+          "note": {
+            "pl": "Dwoch agentow czyta kod naraz, zanim cokolwiek powstanie. Czytanie zrownoleglasz zawsze - nic nie ryzykujesz, bo zaden z nich nie pisze.",
+            "en": "Two agents read the code at once, before anything gets written. Reading always parallelizes - nothing is at risk, neither of them writes."
+          },
+          "text": {
+            "pl": [
+              "Uruchom dwoch agentow ROWNOLEGLE (jedna wiadomosc, dwa wywolania):",
+              "1. ecc:code-explorer - przesledz sciezke wykonania funkcji <nazwa>: od kliku",
+              "   w UI, przez IPC, po zapis stanu. Wypisz pliki i funkcje po kolei.",
+              "2. ecc:code-architect - na podstawie wzorcow, ktore juz sa w tym repo, powiedz,",
+              "   gdzie dopiac <nowa funkcja>: jakie pliki, jakie interfejsy, w jakiej kolejnosci.",
+              "Scal oba wyniki w jeden plan i pokaz mi go PRZED pisaniem kodu.",
+              "Nie koncz tury z 'czekam na agentow'."
+            ],
+            "en": [
+              "Launch two agents IN PARALLEL (one message, two calls):",
+              "1. ecc:code-explorer - trace the execution path of <function>: from the UI",
+              "   click, through IPC, to where state is persisted. List files and functions in order.",
+              "2. ecc:code-architect - from the patterns already present in this repo, say where",
+              "   <new feature> attaches: which files, which interfaces, in what build order.",
+              "Merge both results into one plan and show it to me BEFORE any code is written.",
+              "Do not end your turn with 'waiting for agents'."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "Sweep przed releasem", "en": "Pre-release sweep" },
+          "note": {
+            "pl": "Czterech agentow, cztery rozne pytania o ten sam diff. Odpalasz raz, przed tagiem wersji - nie po kazdym commicie.",
+            "en": "Four agents, four different questions about the same diff. Run it once, before you tag a version - not after every commit."
+          },
+          "text": {
+            "pl": [
+              "Przed wydaniem. Uruchom czterech agentow ROWNOLEGLE na diffie wzgledem main",
+              "(git diff main...HEAD), kazdy dostaje ten sam diff i inne pytanie:",
+              "1. ecc:security-reviewer - sekrety, walidacja wejscia, granica IPC,",
+              "2. ecc:silent-failure-hunter - polkniete bledy, puste catch, ciche fallbacki,",
+              "3. ecc:pr-test-analyzer - czy testy faktycznie lapia te zmiany, czy tylko istnieja,",
+              "4. ecc:comment-analyzer - komentarze i docstringi, ktore juz klamia.",
+              "Scal w JEDNA liste: waga, plik, linia, co zrobic. Na koncu jedno zdanie:",
+              "wydawac czy nie. Nie koncz tury z 'czekam na agentow'."
+            ],
+            "en": [
+              "Before a release. Launch four agents IN PARALLEL over the diff against main",
+              "(git diff main...HEAD) - same diff for each, a different question each:",
+              "1. ecc:security-reviewer - secrets, input validation, the IPC boundary,",
+              "2. ecc:silent-failure-hunter - swallowed errors, empty catch, quiet fallbacks,",
+              "3. ecc:pr-test-analyzer - whether the tests actually catch these changes or merely exist,",
+              "4. ecc:comment-analyzer - comments and docstrings that already lie.",
+              "Merge into ONE list: severity, file, line, what to do. Then one sentence:",
+              "ship or do not ship. Do not end your turn with 'waiting for agents'."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "Trzy perspektywy na decyzje", "en": "Three takes on one decision" },
+          "note": {
+            "pl": "Ten sam plan, trzy rozne role. Sensowne, gdy sam nie wiesz, ktora droga wybrac - interesuja Cie miejsca, w ktorych sie NIE zgadzaja.",
+            "en": "One plan, three different roles. Worth it when you cannot pick a direction - what you are after are the places where they do NOT agree."
+          },
+          "text": {
+            "pl": [
+              "Mam decyzje do podjecia: <opcja A> albo <opcja B>.",
+              "Uruchom trzech agentow ROWNOLEGLE, kazdy ocenia OBIE opcje ze swojej perspektywy:",
+              "1. ecc:architect - utrzymywalnosc i to, co bedzie bolec za pol roku,",
+              "2. ecc:performance-optimizer - koszt w czasie, pamieci i rozmiarze,",
+              "3. ecc:security-reviewer - powierzchnia ataku i dane uzytkownika.",
+              "Potem pokaz mi tabele: opcja / zdanie kazdego z nich. Wyroznij punkty sporne",
+              "i zakoncz JEDNA rekomendacja z uzasadnieniem.",
+              "Nie koncz tury z 'czekam na agentow'."
+            ],
+            "en": [
+              "I have a decision to make: <option A> or <option B>.",
+              "Launch three agents IN PARALLEL, each judging BOTH options from its own angle:",
+              "1. ecc:architect - maintainability and what will hurt six months from now,",
+              "2. ecc:performance-optimizer - cost in time, memory and size,",
+              "3. ecc:security-reviewer - attack surface and user data.",
+              "Then show me a table: option / what each of them says. Highlight the points",
+              "where they disagree and close with ONE recommendation and its reasoning.",
+              "Do not end your turn with 'waiting for agents'."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "Pisanie rownolegle (worktree)", "en": "Parallel writing (worktree)" },
+          "note": {
+            "pl": "Agenci-reviewerzy tylko czytaja. Zeby pisac dwie rzeczy naraz, potrzebujesz dwoch katalogow roboczych - to robi worktree. Zaczynaj od dwoch watkow, nie czterech: wasko gardlo to Twoj przeglad diffow.",
+            "en": "Reviewer agents only read. To write two things at once you need two working directories - that is what a worktree does. Start with two lanes, not four: the bottleneck is your own diff review."
+          },
+          "text": {
+            "pl": [
+              "Chce zrobic dwie rzeczy, nie mieszajac ich w moim katalogu roboczym.",
+              "Zadanie A: <opis>. Zadanie B: <opis>.",
+              "Najpierw powiedz mi, czy A i B ruszaja te same pliki - jesli tak, robimy je po kolei",
+              "i na tym koniec dyskusji.",
+              "Jesli nie: zrob zadanie A w osobnym worktree (EnterWorktree), doprowadz do zielonych",
+              "testow, pokaz mi diff i wroc (ExitWorktree). Potem to samo dla B.",
+              "Moj katalog roboczy ma zostac nietkniety, dopoki nie zatwierdze diffa."
+            ],
+            "en": [
+              "I want to do two things without mixing them in my working tree.",
+              "Task A: <describe>. Task B: <describe>.",
+              "First tell me whether A and B touch the same files - if they do, we do them in",
+              "sequence and that is the end of the discussion.",
+              "If not: do task A in a separate worktree (EnterWorktree), get the tests green,",
+              "show me the diff and come back (ExitWorktree). Then the same for B.",
+              "My working tree stays untouched until I approve the diff."
+            ]
+          }
         }
       ]
     },
