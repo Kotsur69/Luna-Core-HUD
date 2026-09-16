@@ -156,6 +156,307 @@
           }
         }
       ]
+    },
+    {
+      "title": { "pl": "ECC - agenci", "en": "ECC - agents" },
+      "note": {
+        "pl": "CLAUDE.md tego repo pozwala uzywac agentow bez pytania. Te prompty wymuszaja to wprost.",
+        "en": "This repo's CLAUDE.md authorizes agents without asking. These prompts force it explicitly."
+      },
+      "prompts": [
+        {
+          "label": { "pl": "Rownolegly audyt", "en": "Parallel audit" },
+          "note": {
+            "pl": "Trzej agenci naraz, kazdy w swojej dzialce. Najlepszy zwrot z delegacji.",
+            "en": "Three agents at once, each in its own lane. Best return on delegation."
+          },
+          "text": {
+            "pl": [
+              "Uruchom trzech agentow ROWNOLEGLE (jedna wiadomosc, trzy wywolania):",
+              "1. ecc:security-reviewer - granica IPC w src/preload.js i handlery w src/main.js,",
+              "2. ecc:typescript-reviewer - jakosc i poprawnosc JS w zmienionych plikach,",
+              "3. ecc:silent-failure-hunter - polkniete bledy i puste catch {}.",
+              "Poczekaj na wszystkich trzech, scal wyniki i daj mi JEDNA liste",
+              "posortowana wg wagi. Nie koncz tury z 'czekam na agentow'."
+            ],
+            "en": [
+              "Launch three agents IN PARALLEL (one message, three calls):",
+              "1. ecc:security-reviewer - the IPC boundary in src/preload.js and handlers in src/main.js,",
+              "2. ecc:typescript-reviewer - JS quality and correctness in the changed files,",
+              "3. ecc:silent-failure-hunter - swallowed errors and empty catch {}.",
+              "Wait for all three, merge the results and give me ONE list",
+              "sorted by severity. Do not end your turn with 'waiting for agents'."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "Agent od IPC", "en": "IPC security agent" },
+          "text": {
+            "pl": [
+              "Oddeleguj to do ecc:security-reviewer: przejrzyj kazdy kanal wystawiony",
+              "przez contextBridge w src/preload.js i odpowiadajacy mu ipcMain.handle",
+              "w src/main.js. Dla kazdego powiedz: czy payload z renderera jest",
+              "walidowany po stronie main, i co moze zrobic zlosliwy renderer.",
+              "Wynik: tabela kanal / walidacja / ryzyko."
+            ],
+            "en": [
+              "Delegate this to ecc:security-reviewer: review every channel exposed",
+              "through contextBridge in src/preload.js and its matching ipcMain.handle",
+              "in src/main.js. For each, say whether the renderer payload is validated",
+              "on the main side, and what a malicious renderer could do.",
+              "Output: a table of channel / validation / risk."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "Plan przez agenta", "en": "Plan via agent" },
+          "text": {
+            "pl": [
+              "Oddeleguj planowanie do ecc:planner. Daj mu pelny kontekst zadania,",
+              "poczekaj na plan, a potem PRZEDSTAW MI GO i zaczekaj na moje OK.",
+              "Nie zaczynaj implementacji, dopoki nie potwierdze."
+            ],
+            "en": [
+              "Delegate the planning to ecc:planner. Give it the full task context,",
+              "wait for the plan, then SHOW IT TO ME and wait for my OK.",
+              "Do not start implementing until I confirm."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - scenariusze", "en": "ECC - scenarios" },
+      "note": {
+        "pl": "Pelne przeplywy. Uzyj, gdy zadanie jest wieksze niz jeden plik.",
+        "en": "Full pipelines. Use when the task is bigger than a single file."
+      },
+      "prompts": [
+        {
+          "label": { "pl": "1. Nowa funkcja od zera", "en": "1. New feature from scratch" },
+          "note": {
+            "pl": "research -> plan -> TDD -> review -> commit za bramka.",
+            "en": "research -> plan -> TDD -> review -> gated commit."
+          },
+          "text": {
+            "pl": [
+              "/ecc:orch-add-feature",
+              "",
+              "Funkcja: <opisz w jednym zdaniu>",
+              "Kryteria akceptacji:",
+              "- <co musi dzialac>",
+              "- <co nie moze sie zepsuc>",
+              "Zatrzymaj sie przed commitem i pokaz mi diff."
+            ],
+            "en": [
+              "/ecc:orch-add-feature",
+              "",
+              "Feature: <describe in one sentence>",
+              "Acceptance criteria:",
+              "- <what must work>",
+              "- <what must not break>",
+              "Stop before committing and show me the diff."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "2. Bug z testem regresji", "en": "2. Bug with regression test" },
+          "text": {
+            "pl": [
+              "/ecc:orch-fix-defect",
+              "",
+              "Objaw: <co widze>",
+              "Oczekiwane: <co powinno byc>",
+              "Kroki: <jak to odtworzyc>",
+              "Najpierw odtworz to jako TEST, ktory nie przechodzi w test/, pokaz mi",
+              "czerwony wynik, dopiero potem naprawiaj."
+            ],
+            "en": [
+              "/ecc:orch-fix-defect",
+              "",
+              "Symptom: <what I see>",
+              "Expected: <what should happen>",
+              "Steps: <how to reproduce>",
+              "First reproduce it as a FAILING test in test/, show me the red",
+              "result, and only then fix it."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "3. Zmiana istniejacej funkcji", "en": "3. Change existing feature" },
+          "text": {
+            "pl": [
+              "/ecc:orch-change-feature",
+              "",
+              "Co dzis robi: <obecne zachowanie>",
+              "Co ma robic: <nowe zachowanie>",
+              "Najpierw zaktualizuj testy do NOWEJ specyfikacji, pokaz je na czerwono,",
+              "potem zmien implementacje. Wypisz wszystko, co przestanie dzialac."
+            ],
+            "en": [
+              "/ecc:orch-change-feature",
+              "",
+              "What it does today: <current behaviour>",
+              "What it should do: <new behaviour>",
+              "First update the tests to the NEW spec, show them red,",
+              "then change the implementation. List everything that will break."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "4. Refaktor bez zmiany zachowania", "en": "4. Behaviour-preserving refactor" },
+          "note": {
+            "pl": "src/main.js ma 2220 linii, src/observer.js 1171 - tu sie przydaje.",
+            "en": "src/main.js is 2220 lines, src/observer.js 1171 - this is where it pays."
+          },
+          "text": {
+            "pl": [
+              "/ecc:orch-refine-code",
+              "",
+              "Cel: <plik lub modul>",
+              "Zasada: zero zmian zachowania. Najpierw potwierdz, ze `npm test`",
+              "jest zielony, refaktoruj, po kazdym kroku uruchom testy ponownie.",
+              "Jesli cokolwiek zmieni zachowanie - cofnij i powiedz mi."
+            ],
+            "en": [
+              "/ecc:orch-refine-code",
+              "",
+              "Target: <file or module>",
+              "Rule: zero behaviour change. First confirm `npm test` is green,",
+              "then refactor, re-running the tests after every step.",
+              "If anything changes behaviour - revert it and tell me."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "5. Przed commitem", "en": "5. Before committing" },
+          "text": {
+            "pl": [
+              "Przejdz pelna bramke przed commitem, po kolei:",
+              "1. !npm test",
+              "2. /ecc:code-review",
+              "3. /ecc:security-scan",
+              "Po kazdym kroku powiedz PASS/FAIL. Przy FAIL zatrzymaj sie i napraw",
+              "zanim przejdziesz dalej. Nie commituj bez mojej zgody."
+            ],
+            "en": [
+              "Run the full pre-commit gate, in order:",
+              "1. !npm test",
+              "2. /ecc:code-review",
+              "3. /ecc:security-scan",
+              "After each step say PASS/FAIL. On FAIL, stop and fix it before",
+              "moving on. Do not commit without my approval."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - LunaCore", "en": "ECC - LunaCore" },
+      "note": {
+        "pl": "Scenariusze pod architekture tego repo: main / preload / renderer.",
+        "en": "Scenarios for this repo's architecture: main / preload / renderer."
+      },
+      "prompts": [
+        {
+          "label": { "pl": "Nowy kanal IPC", "en": "New IPC channel" },
+          "text": {
+            "pl": [
+              "Dodaj nowy kanal IPC, trzymajac sie istniejacego wzorca:",
+              "1. ipcMain.handle('<nazwa>:<akcja>', ...) w src/main.js,",
+              "2. wystawienie przez contextBridge w src/preload.js z komentarzem JSDoc",
+              "   opisujacym zwracany ksztalt,",
+              "3. walidacja payloadu PO STRONIE main - nie ufaj rendererowi,",
+              "4. test w test/.",
+              "Na koniec oddeleguj review do ecc:security-reviewer."
+            ],
+            "en": [
+              "Add a new IPC channel following the existing pattern:",
+              "1. ipcMain.handle('<name>:<action>', ...) in src/main.js,",
+              "2. expose it through contextBridge in src/preload.js with a JSDoc",
+              "   comment describing the returned shape,",
+              "3. validate the payload ON THE MAIN SIDE - never trust the renderer,",
+              "4. a test in test/.",
+              "Then delegate the review to ecc:security-reviewer."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "Nowy loader configu", "en": "New config loader" },
+          "text": {
+            "pl": [
+              "Dodaj nowy loader configu wzorowany na src/cheatsheets.js i src/prompts.js.",
+              "Musi trzymac ten sam kontrakt:",
+              "- bezpieczny odczyt + JSON.parse w try/catch, null przy bledzie,",
+              "- walidacja na granicy: niekompletne wpisy sa odrzucane,",
+              "- plik bazowy z paths.bundled() + opcjonalny *.local.json z paths.local(),",
+              "- scalanie po mergeKey(title),",
+              "- zepsuty plik daje pusta liste, nigdy crash.",
+              "Dorzuc test w test/."
+            ],
+            "en": [
+              "Add a new config loader modelled on src/cheatsheets.js and src/prompts.js.",
+              "It must keep the same contract:",
+              "- safe read + JSON.parse in try/catch, null on failure,",
+              "- validate at the boundary: incomplete entries are rejected,",
+              "- base file via paths.bundled() + optional *.local.json via paths.local(),",
+              "- merge by mergeKey(title),",
+              "- a broken file yields an empty list, never a crash.",
+              "Add a test in test/."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "Nowy widget renderera", "en": "New renderer widget" },
+          "text": {
+            "pl": [
+              "Dodaj nowy widget renderera zgodnie z kontraktem widgetow",
+              "(patrz src/renderer/modules/cheatsheets.js: id, template, init).",
+              "Pamietaj o:",
+              "- rejestracji w src/renderer/renderer.js,",
+              "- dodaniu do lewej szyny w src/layouts.js i src/uiprefs.js,",
+              "- stanie 'collapsed' na starcie,",
+              "- tekstach w PL i EN.",
+              "Najpierw pokaz plan, nie pisz jeszcze kodu."
+            ],
+            "en": [
+              "Add a new renderer widget following the widget contract",
+              "(see src/renderer/modules/cheatsheets.js: id, template, init).",
+              "Remember to:",
+              "- register it in src/renderer/renderer.js,",
+              "- add it to the left rail in src/layouts.js and src/uiprefs.js,",
+              "- start it collapsed,",
+              "- provide both PL and EN strings.",
+              "Show the plan first, do not write code yet."
+            ]
+          }
+        },
+        {
+          "label": { "pl": "Nawigacja po grafie", "en": "Navigate by graph" },
+          "note": {
+            "pl": "codebase-memory ma to repo zaindeksowane - taniej niz grep.",
+            "en": "codebase-memory has this repo indexed - cheaper than grep."
+          },
+          "text": {
+            "pl": [
+              "Uzyj narzedzi codebase-memory-mcp zamiast grepowania:",
+              "- search_graph, zeby znalezc symbol,",
+              "- trace_path, zeby zobaczyc kto to wola i co to wola,",
+              "- get_code_snippet po dokladne zrodlo.",
+              "Pytanie: <co chce zrozumiec>",
+              "Nie czytaj calych plikow, jesli graf wystarczy."
+            ],
+            "en": [
+              "Use the codebase-memory-mcp tools instead of grepping:",
+              "- search_graph to find the symbol,",
+              "- trace_path to see who calls it and what it calls,",
+              "- get_code_snippet for the exact source.",
+              "Question: <what I want to understand>",
+              "Do not read whole files if the graph is enough."
+            ]
+          }
+        }
+      ]
     }
   ]
 }

@@ -36,8 +36,69 @@
       "title": { "pl": "Testy / Build", "en": "Tests / Build" },
       "commands": [
         { "label": "npm test", "command": "!npm test" },
-        { "label": "npm run build", "command": "!npm run build" },
-        { "label": "npm run lint", "command": "!npm run lint" }
+        { "label": "start", "command": "!npm start" },
+        { "label": "pack", "command": "!npm run pack" },
+        { "label": "dist", "command": "!npm run dist" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - plan", "en": "ECC - plan" },
+      "note": {
+        "pl": "Zacznij tu przy kazdej nietrywialnej zmianie. /ecc:plan czeka na Twoje potwierdzenie.",
+        "en": "Start here for any non-trivial change. /ecc:plan waits for your confirm."
+      },
+      "commands": [
+        { "label": "/ecc:plan", "command": "/ecc:plan" },
+        { "label": "/ecc:feature-dev", "command": "/ecc:feature-dev" },
+        { "label": "/ecc:plan-prd", "command": "/ecc:plan-prd" },
+        { "label": "/ecc:ecc-guide", "command": "/ecc:ecc-guide" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - review i jakosc", "en": "ECC - review & quality" },
+      "note": {
+        "pl": "Po napisaniu kodu, przed commitem.",
+        "en": "After writing code, before committing."
+      },
+      "commands": [
+        { "label": "/ecc:code-review", "command": "/ecc:code-review" },
+        { "label": "/ecc:security-scan", "command": "/ecc:security-scan" },
+        { "label": "/ecc:test-coverage", "command": "/ecc:test-coverage" },
+        { "label": "/ecc:quality-gate", "command": "/ecc:quality-gate" },
+        { "label": "/ecc:refactor-clean", "command": "/ecc:refactor-clean" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - naprawa", "en": "ECC - fix" },
+      "note": {
+        "pl": "/ecc:build-fix sam wybiera wlasciwego agenta od bledow buildu.",
+        "en": "/ecc:build-fix auto-routes to the right build-resolver agent."
+      },
+      "commands": [
+        { "label": "/ecc:build-fix", "command": "/ecc:build-fix" },
+        { "label": "/ecc:orch-fix-defect", "command": "/ecc:orch-fix-defect" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - pelny przeplyw", "en": "ECC - full workflow" },
+      "note": {
+        "pl": "Ciezsze piply: research -> plan -> TDD -> review -> commit za bramka.",
+        "en": "Heavier pipelines: research -> plan -> TDD -> review -> gated commit."
+      },
+      "commands": [
+        { "label": "/ecc:orch-add-feature", "command": "/ecc:orch-add-feature" },
+        { "label": "/ecc:orch-change-feature", "command": "/ecc:orch-change-feature" },
+        { "label": "/ecc:orch-refine-code", "command": "/ecc:orch-refine-code" },
+        { "label": "/ecc:santa-loop", "command": "/ecc:santa-loop" }
+      ]
+    },
+    {
+      "title": { "pl": "ECC - sesja", "en": "ECC - session" },
+      "commands": [
+        { "label": "/ecc:cost-report", "command": "/ecc:cost-report" },
+        { "label": "/ecc:model-route", "command": "/ecc:model-route" },
+        { "label": "/ecc:save-session", "command": "/ecc:save-session" },
+        { "label": "/ecc:resume-session", "command": "/ecc:resume-session" }
       ]
     }
   ]
