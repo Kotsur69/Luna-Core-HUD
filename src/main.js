@@ -70,6 +70,9 @@ const { loadCheatsheets } = require('./cheatsheets');
 const { loadSkills, rescanSkills } = require('./skills');
 // Prompt library: multi-line prompts for repeated use.
 const { loadPrompts } = require('./prompts');
+// Recommended libraries & tools (Ctrl+B): a curated link directory. The loader
+// also OWNS the addresses - see the libraries:open handler.
+const { loadLibraries, resolveLibraryUrl } = require('./libraries');
 // Scratchpad: local notepad kept as a plain text file.
 const { readScratchpad, writeScratchpad } = require('./scratchpad');
 // Themes (theming): CSS token maps + xterm colors from config/themes.json.
@@ -1661,6 +1664,20 @@ function registerIpc() {
 
   // Prompt library: groups of multi-line prompts to paste.
   ipcMain.handle('prompts:list', () => loadPrompts());
+
+  // Ctrl+B directory: the curated libraries & tools catalog.
+  ipcMain.handle('libraries:list', () => loadLibraries());
+
+  // Opening one of those links. Same rule as claude:docs and
+  // update:open-releases above - the renderer names an INTENT, never an
+  // address - except the intent is a catalog id rather than a fixed page,
+  // because there are 30+ of them. resolveLibraryUrl() looks the id up in
+  // config/libraries.json and rejects anything that is not there, so the worst
+  // a compromised renderer can do is open a link the user already had.
+  ipcMain.on('libraries:open', (_event, id) => {
+    const url = resolveLibraryUrl(id);
+    if (url) shell.openExternal(url);
+  });
 
   // Scratchpad: reads and writes the local notepad (validated in scratchpad.js).
   ipcMain.handle('scratchpad:read', () => readScratchpad());

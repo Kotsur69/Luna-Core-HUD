@@ -745,6 +745,12 @@
         <button id="shortcuts-open" class="palette-chip" data-i18n-title="shortcuts.chip.title" title="Skroty klawiszowe (Ctrl+/)">
           <kbd>Ctrl</kbd><kbd>/</kbd>
         </button>
+        <!-- Fifth chip: the recommended libraries & tools directory. A modal
+             reachable only by a chord nobody was told about is a modal nobody
+             opens - same rationale as the Ctrl+G and Ctrl+/ chips above. -->
+        <button id="libraries-open" class="palette-chip" data-i18n-title="libraries.chip.title" title="Polecane biblioteki i narzedzia (Ctrl+B)">
+          <kbd>Ctrl</kbd><kbd>B</kbd>
+        </button>
         <!-- D5: the same chip-style bar as Ctrl+K/Ctrl+L, instead of a permanent block
              in the left panel (see modules/update.js). Only visible when there's
              something to act on (an update available/ready); hidden otherwise -
@@ -854,6 +860,56 @@
       </div>
       <div id="shortcuts-list" class="shortcuts shortcuts-overlay__body"></div>
       <div class="palette__foot">
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Recommended libraries & tools (Ctrl+B) ============ -->
+  <!-- modules/libraries.js. A curated link directory (config/libraries.json),
+       grouped by category and filtered from the field in the bar. Reuses
+       .palette's overlay/backdrop/modal/bar/foot CSS, same pairing as
+       .gitquick and .shortcuts-overlay above; only the scrolling body and the
+       entry rows are its own.
+
+       The rows are built in JS and carry an entry ID, never an href: clicking
+       one sends that id to main, which looks the address up in its own copy of
+       the catalog (src/libraries.js). An <a href> here would be the open
+       redirect main.js's claude:docs comment warns about, and `target="_blank"`
+       in Electron would not have opened a browser anyway. -->
+  <div id="libraries" class="palette libraries-overlay" tabindex="-1" hidden>
+    <div class="palette__backdrop" data-libraries-close></div>
+    <div class="palette__modal" role="dialog" aria-modal="true" aria-label="Polecane biblioteki i narzedzia">
+      <div class="palette__bar">
+        <span class="palette__glyph">◈</span>
+        <input
+          id="libraries-input"
+          class="palette__input"
+          type="text"
+          data-i18n-ph="libraries.input.ph"
+          placeholder="Filtruj biblioteki i narzedzia..."
+          autocomplete="off"
+          spellcheck="false"
+          data-i18n-aria="libraries.input.aria"
+          aria-label="Filtruj biblioteki i narzedzia"
+        />
+        <span id="libraries-count" class="libraries__count"></span>
+        <button
+          type="button"
+          id="libraries-closebtn"
+          class="libraries__closebtn"
+          data-libraries-close
+          data-i18n-title="libraries.close"
+          data-i18n-aria="libraries.close"
+          title="Zamknij"
+          aria-label="Zamknij"
+        >×</button>
+      </div>
+      <div id="libraries-list" class="libraries libraries-overlay__body"></div>
+      <div class="palette__foot">
+        <span id="libraries-note" class="libraries__note" role="status"></span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.nav">nawigacja</span></span>
+        <span><kbd>Enter</kbd> <span data-i18n="libraries.foot.open">otworz w przegladarce</span></span>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>

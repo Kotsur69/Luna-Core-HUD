@@ -109,6 +109,14 @@ export const SHORTCUT_GROUPS = [
           marker: "e.key === '/'",
         },
       },
+      {
+        chords: [['Ctrl', 'B']],
+        descKey: 'shortcuts.libraries',
+        source: {
+          file: 'src/renderer/modules/libraries.js',
+          marker: "e.key === 'b' || e.key === 'B'",
+        },
+      },
     ],
   },
   {

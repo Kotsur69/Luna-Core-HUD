@@ -156,6 +156,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Fetches { groups: [{ title, note, prompts: [{label, text, note}] }] }. */
   getPrompts: () => ipcRenderer.invoke('prompts:list'),
 
+  // --- Ctrl+B: recommended libraries & tools directory ---
+  /** Fetches { categories: [{ title, items: [{id, name, url, description}] }], total }. */
+  getLibraries: () => ipcRenderer.invoke('libraries:list'),
+  /** Opens a catalog entry in the default browser. Takes the entry's ID, NOT a
+   *  URL: main resolves the address from config/libraries.json itself, so this
+   *  bridge cannot be used to open an arbitrary page (src/libraries.js header). */
+  openLibrary: (id) => ipcRenderer.send('libraries:open', id),
+
   // --- Scratchpad (local notepad) ---
   /** Reads the scratchpad content; Promise<string> ('' when empty). */
   getScratchpad: () => ipcRenderer.invoke('scratchpad:read'),

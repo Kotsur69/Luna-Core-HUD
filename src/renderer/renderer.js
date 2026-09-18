@@ -60,6 +60,9 @@ import './modules/devices.js';
 import './modules/mcp.js';
 import './modules/git.js';
 import './modules/palette.js';
+// Ctrl+B: the recommended libraries & tools directory. Renderer-side apart
+// from two read-only IPC calls (catalog, open-by-id) - see modules/libraries.js.
+import './modules/libraries.js';
 import './modules/gitquick.js';
 
 // -- Left panel: switchers, ports, appearance ---------------------------------

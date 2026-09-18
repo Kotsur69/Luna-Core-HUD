@@ -228,6 +228,7 @@ const I18N_DICT = {
     'shortcuts.settings': 'Ten panel ustawien',
     'shortcuts.gitMenu': 'Szybkie menu Git',
     'shortcuts.shortcutsRef': 'Ta lista skrotow',
+    'shortcuts.libraries': 'Polecane biblioteki i narzedzia',
     'shortcuts.mark': 'Zaznaczanie tekstu z klawiatury',
     'shortcuts.copySel': 'Kopiuj zaznaczenie (gdy cos zaznaczone; inaczej przerywa proces w terminalu)',
     'shortcuts.pasteShot': 'Wklej zrzut ekranu (Win+Shift+S) jako sciezke do pliku',
@@ -292,6 +293,20 @@ const I18N_DICT = {
     'palette.foot.use': 'uzyj',
     'palette.foot.send': 'wyslij prompt',
     'palette.foot.close': 'zamknij',
+    'libraries.chip.title': 'Polecane biblioteki i narzedzia (Ctrl+B)',
+    'libraries.input.ph': 'Filtruj biblioteki i narzedzia...',
+    'libraries.input.aria': 'Filtruj biblioteki i narzedzia',
+    'libraries.close': 'Zamknij',
+    'libraries.count': '{n} z {total}',
+    'libraries.empty': 'Nic nie pasuje do tego filtra.',
+    'libraries.unavailable': 'Nie udalo sie wczytac katalogu (config/libraries.json).',
+    'libraries.open.title': 'Otworz w przegladarce',
+    'libraries.foot.open': 'otworz w przegladarce',
+    'libraries.copy': 'Kopiuj link',
+    'libraries.copied': 'Skopiowano link',
+    'libraries.copyFailed': 'Nie udalo sie skopiowac linku',
+    'libraries.insert': 'Wklej link do sesji',
+    'libraries.inserted': 'Wklejono link do sesji',
     'ptystatus.connecting': 'PTY: laczenie...',
     'ptystatus.active': 'PTY: aktywne',
     'ptystatus.ended': 'PTY: zakonczono (kod {code})',
@@ -692,6 +707,7 @@ const I18N_DICT = {
     'shortcuts.settings': 'This settings panel',
     'shortcuts.gitMenu': 'Git quick-menu',
     'shortcuts.shortcutsRef': 'This shortcut list',
+    'shortcuts.libraries': 'Recommended libraries & tools',
     'shortcuts.mark': 'Keyboard text selection',
     'shortcuts.copySel': 'Copy the selection (when text is selected; otherwise interrupts the terminal process)',
     'shortcuts.pasteShot': 'Paste a screenshot (Win+Shift+S) as a file path',
@@ -756,6 +772,20 @@ const I18N_DICT = {
     'palette.foot.use': 'use',
     'palette.foot.send': 'send prompt',
     'palette.foot.close': 'close',
+    'libraries.chip.title': 'Recommended libraries & tools (Ctrl+B)',
+    'libraries.input.ph': 'Filter libraries and tools...',
+    'libraries.input.aria': 'Filter libraries and tools',
+    'libraries.close': 'Close',
+    'libraries.count': '{n} of {total}',
+    'libraries.empty': 'Nothing matches that filter.',
+    'libraries.unavailable': 'Could not load the catalog (config/libraries.json).',
+    'libraries.open.title': 'Open in browser',
+    'libraries.foot.open': 'open in browser',
+    'libraries.copy': 'Copy link',
+    'libraries.copied': 'Link copied',
+    'libraries.copyFailed': 'Could not copy the link',
+    'libraries.insert': 'Paste link into session',
+    'libraries.inserted': 'Link pasted into session',
     'ptystatus.connecting': 'PTY: connecting...',
     'ptystatus.active': 'PTY: active',
     'ptystatus.ended': 'PTY: ended (code {code})',
@@ -980,6 +1010,12 @@ function applyStatic(root = document) {
   });
   root.querySelectorAll('[data-i18n-title]').forEach((el) => {
     el.setAttribute('title', t(el.dataset.i18nTitle));
+  });
+  // An icon-only control (the Ctrl+B directory's × button) has no text node to
+  // translate - its accessible name IS the aria-label, so without this pass a
+  // screen reader would read the authored Polish to an English user.
+  root.querySelectorAll('[data-i18n-aria]').forEach((el) => {
+    el.setAttribute('aria-label', t(el.dataset.i18nAria));
   });
   document.documentElement.lang = currentLang;
 }

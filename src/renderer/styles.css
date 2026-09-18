@@ -2980,6 +2980,192 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   color: var(--text-dim);
 }
 
+/* ---- Recommended libraries & tools (Ctrl+B) --------------------------------
+   Reuses .palette's overlay/backdrop/modal/bar/foot rules directly, same
+   pairing as .gitquick and .shortcuts-overlay above. Only the wider modal, the
+   scrolling body and the entry rows are its own.
+
+   The rows are a two-column grid (content | actions) rather than the palette's
+   three-column row: an entry here carries a paragraph of description, so it
+   needs the full width and a second line, which the palette's single-line
+   grid cannot give it. */
+
+.libraries-overlay .palette__modal { width: min(720px, 94vw); max-height: 76vh; }
+
+/* Filtered/total, sitting between the field and the close button. */
+.libraries__count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.libraries__closebtn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: var(--border-w) solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-sharp),
+    border-color var(--dur-fast) var(--ease-sharp);
+}
+.libraries__closebtn:hover {
+  color: var(--text);
+  border-color: var(--edge-glow);
+}
+
+/* The scrolling middle - .palette__list's job, with the overlay body inset the
+   grouped layout wants instead of the list's tight padding. */
+.libraries-overlay__body {
+  padding: var(--space-7) var(--space-8);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.libraries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+}
+
+.libraries__grouptitle {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+}
+
+.libraries__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* content | actions. The actions column only earns its ink on hover/focus. */
+.libraries-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: var(--space-3);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid transparent;
+}
+.libraries-item:hover,
+.libraries-item:focus-within {
+  background: var(--surface-panel-2);
+  border-color: var(--edge-glow);
+}
+
+.libraries-item__open {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-5) var(--space-6);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.libraries-item__open:focus-visible {
+  outline: var(--border-w) solid var(--neon-cyan);
+  outline-offset: -2px;
+}
+
+.libraries-item__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-5);
+}
+.libraries-item__name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+/* The destination host, dimmed: present when you look for it, never competing
+   with the name. */
+.libraries-item__host {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  color: var(--text-dim);
+}
+.libraries-item__desc {
+  font-size: var(--fs-2xs);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.libraries-item__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-hair);
+  padding: var(--space-5) var(--space-5) var(--space-5) 0;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-sharp);
+}
+/* Keyboard users never hover, so focus inside the row reveals them too. */
+.libraries-item:hover .libraries-item__actions,
+.libraries-item:focus-within .libraries-item__actions {
+  opacity: 1;
+}
+
+.libraries-item__action {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--surface-panel);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-sharp),
+    border-color var(--dur-fast) var(--ease-sharp);
+}
+.libraries-item__action:hover { border-color: var(--edge-glow); }
+.libraries-item__action.is-copy:hover { color: var(--neon-cyan); }
+.libraries-item__action.is-insert:hover { color: var(--neon-magenta); }
+.libraries-item__action:focus-visible {
+  outline: var(--border-w) solid var(--neon-cyan);
+  outline-offset: 1px;
+}
+
+.libraries__empty {
+  margin: 0;
+  padding: var(--space-7) 0;
+  text-align: center;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+/* Transient "copied" / "pasted" acknowledgement, first slot in the footer. */
+.libraries__note {
+  flex: 1;
+  min-width: 0;
+  color: var(--good);
+}
+
 /* ---- §6.1: Session timeline turn preview modal ------------------------------
    Same overlay skeleton as .termcustom above (backdrop + centered panel) -
    read-only by construction, nothing in here ever writes to the PTY. */

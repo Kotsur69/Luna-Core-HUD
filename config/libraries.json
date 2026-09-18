@@ -1,0 +1,235 @@
+{
+  "_comment": "Recommended libraries & tools directory (Ctrl+B). Loaded by src/libraries.js and merged with an optional config/libraries.local.json (gitignored) - a local category with the same title REPLACES the base one. Category titles are localized { pl, en }; item descriptions are plain strings, i.e. language-neutral: they are technical blurbs, not UI chrome. Item ids are DERIVED from the name by the loader - do not write them here. `url` must be http(s). The renderer never hands an address back to the main process; it names an id and main resolves the URL from this file.",
+  "categories": [
+    {
+      "title": { "pl": "Komponenty UI i design systemy", "en": "UI Components & Design Systems" },
+      "items": [
+        {
+          "name": "daisyUI",
+          "url": "https://daisyui.com",
+          "description": "Tailwind plugin that turns utility soup into semantic class names (btn, card, modal). Pure CSS - no JS runtime - and themes swap via a data attribute."
+        },
+        {
+          "name": "Kokonut UI",
+          "url": "https://kokonutui.com",
+          "description": "Copy-paste React components on Tailwind and Motion. The source ships with the component, so an agent edits it instead of fighting a package API."
+        },
+        {
+          "name": "OriginKit",
+          "url": "https://www.originkit.dev",
+          "description": "React blocks at the layout level - sections, shells, page scaffolds - rather than individual controls."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Animacja i efekty wizualne", "en": "Animation & Visual Effects" },
+      "items": [
+        {
+          "name": "Motion",
+          "url": "https://motion.dev",
+          "description": "Animation for React and plain JS built on the browser's own animation engine. Successor to Framer Motion: hardware-accelerated transforms, no JS render loop."
+        },
+        {
+          "name": "Particles (Casberry)",
+          "url": "https://particles.casberry.in",
+          "description": "Configurable particle-field backgrounds on Canvas/WebGL. Decorative - check the frame cost before putting one behind live content."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Wizualizacja danych i metryki", "en": "Data Visualization & Metrics" },
+      "items": [
+        {
+          "name": "Bklit UI",
+          "url": "https://bklit.com",
+          "description": "Chart and telemetry components aimed at dashboards that update while you watch them, rather than static reports."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Narzedzia AI i automatyzacja", "en": "AI Tools & Automation" },
+      "items": [
+        {
+          "name": "Manus",
+          "url": "https://manus.im",
+          "description": "Hosted agent that drives a browser and runs multi-step tasks on its own. Closed and cloud-side: you hand it a goal, not a tool loop you control."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Agent skills, frameworki i infrastruktura", "en": "Agent Skills, Frameworks & Infrastructure" },
+      "items": [
+        {
+          "name": "cloudflare/computer",
+          "url": "https://github.com/cloudflare/computer",
+          "description": "Gives an agent a POSIX-ish filesystem inside a Durable Object, so a sandbox keeps its working state between calls instead of starting cold every time."
+        },
+        {
+          "name": "usestrix/strix",
+          "url": "https://github.com/usestrix/strix",
+          "description": "Agents that pentest an app from inside a Docker sandbox and try to prove each finding with a working PoC - the part that separates it from a scanner emitting maybes."
+        },
+        {
+          "name": "mvanhorn/last30days-skill",
+          "url": "https://github.com/mvanhorn/last30days-skill",
+          "description": "Pulls the last 30 days from X, Reddit, YouTube, HN and Polymarket into one summary. Already installed in this setup - see the /last30days command."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Grafika, design i diagramy", "en": "Visuals, Design & Diagramming" },
+      "items": [
+        {
+          "name": "cathrynlavery/diagram-design",
+          "url": "https://github.com/cathrynlavery/diagram-design",
+          "description": "Editorial HTML/SVG diagram templates for coding agents - flywheels, system maps, sequences. The pitch is escaping default Mermaid output. Also installed here."
+        },
+        {
+          "name": "tt-a1i/archify",
+          "url": "https://github.com/tt-a1i/archify",
+          "description": "Parses a codebase into a typed JSON intermediate form, then compiles a self-contained interactive architecture map whose nodes link back to the commit behind them."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Scraping, wyszukiwanie i automatyzacja www", "en": "Web Scraping, Search & Automation" },
+      "items": [
+        {
+          "name": "unclecode/crawl4ai",
+          "url": "https://github.com/unclecode/crawl4ai",
+          "description": "Crawler whose output target is a context window, not a browser: clean Markdown plus structured extraction, page chrome already stripped."
+        },
+        {
+          "name": "Panniantong/Agent-Reach",
+          "url": "https://github.com/Panniantong/Agent-Reach",
+          "description": "CLI that searches Twitter, Reddit, YouTube, GitHub, Bilibili and XiaoHongShu without paid API keys. It scrapes rather than calls APIs, so expect breakage when a site changes."
+        },
+        {
+          "name": "browser-use/browser-use",
+          "url": "https://github.com/browser-use/browser-use",
+          "description": "Lets an agent work a real web UI from both the DOM tree and screenshots, which is what gets it through flows a selector-only script would lose."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Generatory aplikacji i stron", "en": "Full-Stack Web App & AI Generators" },
+      "items": [
+        {
+          "name": "AKCodez/seo-god",
+          "url": "https://github.com/AKCodez/seo-god",
+          "description": "SEO agent that audits a site, tracks keyword positions and AI-answer visibility, and can run the fix loop on a schedule instead of on request."
+        },
+        {
+          "name": "JCodesMore/ai-website-cloner-template",
+          "url": "https://github.com/JCodesMore/ai-website-cloner-template",
+          "description": "Reads an existing site's computed CSS, assets and layout and rebuilds it as a Next.js/Tailwind project. Fine for porting your own old site; check the licence otherwise."
+        },
+        {
+          "name": "diegosouzapw/OmniRoute",
+          "url": "https://github.com/diegosouzapw/OmniRoute",
+          "description": "One endpoint in front of OpenAI, Anthropic and local models, handling fallback and rate limits so the choice of backend stops leaking into app code."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Media, audio i narzedzia AI", "en": "Media, Audio & AI Utilities" },
+      "items": [
+        {
+          "name": "jamiepine/voicebox",
+          "url": "https://github.com/jamiepine/voicebox",
+          "description": "Voice synthesis and cloning on local TTS models, with a multi-track timeline, dictation and an MCP surface so an agent can speak and listen."
+        },
+        {
+          "name": "guillaumemeyer/watermarks-remover",
+          "url": "https://github.com/guillaumemeyer/watermarks-remover",
+          "description": "Strips C2PA provenance metadata and synthetic watermarks from text and media. Note what that means - it removes AI-origin signals, so think about where the output goes."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "System, kod i narzedzia deweloperskie", "en": "System, Code Intelligence & Developer Utilities" },
+      "items": [
+        {
+          "name": "pranshuparmar/witr",
+          "url": "https://github.com/pranshuparmar/witr",
+          "description": "Answers \"why is this running?\" on Linux - walks PID ancestry, the systemd/Docker/PM2 supervisor above a process and the ports below it, and prints the causal chain."
+        },
+        {
+          "name": "vitali87/code-graph-rag",
+          "url": "https://github.com/vitali87/code-graph-rag",
+          "description": "Tree-sitter parse into a Memgraph knowledge graph you can query in natural language. Same idea as the codebase-memory MCP already wired into this setup."
+        },
+        {
+          "name": "public-apis/public-apis",
+          "url": "https://github.com/public-apis/public-apis",
+          "description": "The long-running index of free public APIs by category. A starting point - entries go stale and auth requirements drift."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Agenty AI i orkiestracja", "en": "AI Agents & Orchestration" },
+      "items": [
+        {
+          "name": "livekit/agents",
+          "url": "https://github.com/livekit/agents",
+          "description": "Voice agents as WebRTC participants: the STT-LLM-TTS loop plus the interruption and turn-taking handling that makes real-time speech bearable."
+        },
+        {
+          "name": "langflow-ai/langflow",
+          "url": "https://github.com/langflow-ai/langflow",
+          "description": "Node-graph editor for agent workflows with Python custom nodes and MCP/API export. The visual layer earns its keep when handing a flow to someone else."
+        },
+        {
+          "name": "langgenius/dify",
+          "url": "https://github.com/langgenius/dify",
+          "description": "Self-hostable LLMOps platform covering workflows, RAG, agents and prompt iteration - heavier than a library, lighter than building the ops layer yourself."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Tworzenie tresci, media i pisanie", "en": "Content Creation, Media & Writing" },
+      "items": [
+        {
+          "name": "xiamuceer-j/MuMuAINovel",
+          "url": "https://github.com/xiamuceer-j/MuMuAINovel",
+          "description": "Long-form fiction drafting that keeps the state a novel needs - characters, plot timeline, relationship graph - outside the context window."
+        },
+        {
+          "name": "GVCLab/PersonaLive",
+          "url": "https://github.com/GVCLab/PersonaLive",
+          "description": "Streaming diffusion for continuous portrait animation, targeted at a single 12GB GPU - the constraint that decides whether it runs on your machine."
+        },
+        {
+          "name": "aiming-lab/AutoResearchClaw",
+          "url": "https://github.com/aiming-lab/AutoResearchClaw",
+          "description": "A 23-stage research pipeline: literature search, experiment runs, self-healing code, review and LaTeX. Wide scope - treat the output as a draft under review."
+        }
+      ]
+    },
+    {
+      "title": { "pl": "Automatyzacja biznesu i DevOps", "en": "Business Automation, Productivity & DevOps" },
+      "items": [
+        {
+          "name": "Zackriya-Solutions/meetily",
+          "url": "https://github.com/Zackriya-Solutions/meetily",
+          "description": "Meeting notes with nothing leaving the machine: Rust/Tauri app, live transcription, speaker diarization, Ollama summaries."
+        },
+        {
+          "name": "coollabsio/coolify",
+          "url": "https://github.com/coollabsio/coolify",
+          "description": "Self-hosted deploy layer for apps, databases and Docker services on a VPS you own - the usual answer to a Vercel bill that stopped being small."
+        },
+        {
+          "name": "CoreBunch/Instatic",
+          "url": "https://github.com/CoreBunch/Instatic",
+          "description": "Git-backed visual CMS on Bun: content modeling and canvas layout editing that commit to the repo, then build a static site."
+        },
+        {
+          "name": "Stirling-Tools/Stirling-PDF",
+          "url": "https://github.com/Stirling-Tools/Stirling-PDF",
+          "description": "Self-hosted PDF toolbox - merge, split, convert, OCR - so documents stop going through a random web converter."
+        }
+      ]
+    }
+  ]
+}
