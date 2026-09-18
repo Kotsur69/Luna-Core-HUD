@@ -230,6 +230,46 @@
           "description": "Self-hosted PDF toolbox - merge, split, convert, OCR - so documents stop going through a random web converter."
         }
       ]
+    },
+    {
+      "title": { "pl": "Wideo", "en": "Videos" },
+      "items": [
+        {
+          "name": "brag",
+          "url": "https://github.com/latent-spaces/brag",
+          "description": "Agent skill that turns the repo itself into a ~20-second launch video - music, UI animation and share text - via Hyperframes. Commands: /brag, or /brag --voice for a voiceover cut."
+        },
+        {
+          "name": "autoclip",
+          "url": "https://github.com/zhouxiaoka/autoclip",
+          "description": "Cuts a long recording into short-form clips on its own, picking the highlight windows instead of leaving you to scrub the timeline."
+        },
+        {
+          "name": "vhs",
+          "url": "https://github.com/charmbracelet/vhs",
+          "description": "Terminal GIF and video recorder written in Go, driven by declarative .tape scripts - a demo clip becomes a file you re-run, not a take you re-record."
+        },
+        {
+          "name": "claude-video",
+          "url": "https://github.com/bradautomates/claude-video",
+          "description": "Wires video generation and editing into Claude, so a session ends with a rendered clip rather than a command left for you to run."
+        },
+        {
+          "name": "video-use",
+          "url": "https://github.com/browser-use/video-use",
+          "description": "browser-use extension for recorded sessions: it drives the page and turns the run into a web video."
+        },
+        {
+          "name": "OpenMontage",
+          "url": "https://github.com/calesthio/OpenMontage",
+          "description": "Open-source editing and montage pipeline that assembles footage programmatically, for media produced on a schedule rather than by hand."
+        },
+        {
+          "name": "Remotion",
+          "url": "https://github.com/remotion-dev/remotion",
+          "description": "Videos written as React components - HTML, CSS and JS rendered frame by frame - so a clip is code you can diff, parametrize and rebuild."
+        }
+      ]
     }
   ]
 }

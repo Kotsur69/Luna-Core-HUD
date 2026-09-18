@@ -186,6 +186,17 @@
         { "label": "pack", "command": "!npm run pack" },
         { "label": "dist", "command": "!npm run dist" }
       ]
+    },
+    {
+      "title": { "pl": "Wideo", "en": "Videos" },
+      "note": {
+        "pl": "Jedyne z narzedzi wideo, ktore odpalasz komenda w sesji - reszta to repozytoria, wiec siedzi w katalogu bibliotek pod Ctrl+B (kategoria Wideo). /brag czyta kod projektu i sklada z niego ~20-sekundowy klip premierowy; --voice doklada lektora.",
+        "en": "The only video tool you launch as a command in the session - the rest are repositories, so they live in the libraries directory under Ctrl+B (Videos category). /brag reads the project code and builds a ~20-second launch clip from it; --voice adds narration."
+      },
+      "commands": [
+        { "label": { "pl": "Klip premierowy", "en": "Launch clip" }, "command": "/brag:brag" },
+        { "label": { "pl": "Klip z lektorem", "en": "Clip with voiceover" }, "command": "/brag:brag --voice" }
+      ]
     }
   ]
 }

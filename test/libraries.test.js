@@ -235,3 +235,36 @@ test('every libraries.* i18n key used by the overlay exists in both languages', 
     assert.ok(en.includes(`'${key}':`), `missing en translation: ${key}`);
   }
 });
+
+// ---- The Videos category ---------------------------------------------------
+// Spec-anchored, unlike the generic catalog guards above: these seven tools are
+// the point of the category, and a rename or a dropped row would otherwise pass
+// every structural check while quietly emptying the section.
+//
+// Deliberately the exception, not the new house rule. Videos was requested as a
+// FIXED list, so pinning the names is the spec; every other category is meant to
+// grow, and pinning those would turn each new row into a test edit for nothing.
+
+test('the shipped catalog carries a Videos category with the expected tools', () => {
+  const videos = catalog.categories.find((c) => c.title.en === 'Videos');
+  assert.ok(videos, 'no category titled "Videos" in config/libraries.json');
+
+  const expected = [
+    'brag',
+    'autoclip',
+    'vhs',
+    'claude-video',
+    'video-use',
+    'OpenMontage',
+    'Remotion',
+  ];
+  assert.deepEqual(
+    videos.items.map((i) => i.name),
+    expected,
+    'the Videos entries drifted from the spec'
+  );
+
+  for (const entry of videos.items) {
+    assert.match(entry.url, /^https:\/\/github\.com\//, `${entry.name} should link to its repo`);
+  }
+});
