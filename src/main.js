@@ -41,6 +41,7 @@ const { loadSoundTriggers } = require('./soundTriggers');
 const { loadProfiles, getProfile, redactProfile, addProfile, updateProfile, removeProfile } = require('./profiles');
 const { loadProviders, getProviderTemplate, buildProfileFromTemplate } = require('./providers');
 const { localEndpointFromProfile } = require('./lmstudio');
+const { detectLmsCli, listDownloadedModels, loadModel: loadLmStudioModel } = require('./lmstudiocli');
 // Building the start command: decides whether a session can be pinned by id.
 const { withSessionId, findExecutable } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
@@ -1591,6 +1592,19 @@ function registerIpc() {
     if (wasActive) activeProfileId = result.activeProfile;
     return { profiles: profiles.map(redactProfile), activeProfile: activeProfileId };
   });
+
+  // LM Studio CLI control (src/lmstudiocli.js) - the in-app replacement for
+  // the "go local claude" desktop script: Settings can now list every
+  // DOWNLOADED model (not just a currently-running server's loaded one) and
+  // force-load one, without leaving LunaCore.
+  ipcMain.handle('lmstudiocli:status', () => detectLmsCli());
+  ipcMain.handle('lmstudiocli:list', () => listDownloadedModels());
+
+  // `payload` is renderer-supplied; loadLmStudioModel()'s own buildLoadArgs()
+  // validates every field's type/shape before it becomes CLI argv (an array,
+  // never a shell string - no injection surface even from an untrusted
+  // modelKey), so no separate validation is needed here.
+  ipcMain.handle('lmstudiocli:load', (_event, payload) => loadLmStudioModel(payload));
 
   // PHASE 4: switching profile -> restart THIS tab with the new environment.
   // Other tabs are left untouched; a profile is a session's trait, not the app's.

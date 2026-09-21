@@ -94,6 +94,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Removes a profile (local-added or a shipped default) by id; returns { profiles, activeProfile } or null. */
   removeProfile: (id) => ipcRenderer.invoke('profiles:remove', id),
 
+  // --- LM Studio CLI control (Settings model picker - replaces "go local claude") ---
+  /** Whether the `lms` CLI is reachable; returns { ok, version } or { ok:false, reason }. */
+  getLmsCliStatus: () => ipcRenderer.invoke('lmstudiocli:status'),
+  /** Every model downloaded to disk (not just a currently-loaded one); returns { ok, models } or { ok:false, reason }. */
+  listDownloadedLmStudioModels: () => ipcRenderer.invoke('lmstudiocli:list'),
+  /** Force-loads a model via `lms load`; returns { ok, message } or { ok:false, reason, message? }. */
+  loadLmStudioModel: (payload) => ipcRenderer.invoke('lmstudiocli:load', payload),
+
   // --- Project switcher (working directory) ---
   /** Fetches { projects, activeProject } to fill the switcher. */
   getProjects: () => ipcRenderer.invoke('projects:list'),

@@ -2267,11 +2267,14 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   transition: color var(--dur-fast) var(--ease-sharp),
     border-color var(--dur-fast) var(--ease-sharp);
 }
-.diag-item__action:hover {
+.diag-item__action:hover:not(:disabled) {
   color: var(--neon-cyan);
   border-color: var(--edge-glow);
 }
 .diag-item__action.is-pulsing { animation: pulse var(--dur-normal) var(--ease-smooth); }
+/* Added for the LM Studio model picker's "Load" buttons - the diagnostics
+   tile's own action buttons (docs links, copy, focus) never disable. */
+.diag-item__action:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ---- Git station --------------------------------------------------------------
    Sorted by urgency in gitstation.js, so the top row is always the one worth

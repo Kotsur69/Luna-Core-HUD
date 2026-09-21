@@ -1274,6 +1274,30 @@
           </span>
         </label>
 
+        <h3 class="termcustom__section" data-i18n="termcustom.section.lmstudio">LM Studio</h3>
+        <!-- The in-app replacement for the external "go local claude" desktop
+             script: lists every model DOWNLOADED to disk (via the `lms` CLI -
+             src/lmstudiocli.js, NOT src/lmstudio.js's passive HTTP watcher,
+             which only sees a currently-running server's loaded model) and
+             force-loads one on click. Static markup, filled by
+             modules/lmstudiomodels.js mountLmStudioSettings() - same shape as
+             autocompact.js's Settings section further down. -->
+        <p class="termcustom__hint" data-i18n="lmstudio.hint">
+          Zaladuj dowolny pobrany model LM Studio bez zewnetrznego skryptu. Wymaga CLI "lms" (instalowane razem z LM Studio) na PATH.
+        </p>
+        <div class="project-row">
+          <span id="lmstudio-status" class="ui-field__label" data-i18n="lmstudio.status.checking">Sprawdzanie...</span>
+          <button
+            type="button"
+            id="lmstudio-refresh-btn"
+            class="usage-refresh"
+            data-i18n-title="lmstudio.refresh.title"
+            title="Odswiez liste"
+          >&#8635;</button>
+        </div>
+        <ul id="lmstudio-models-list" class="diag-list"></ul>
+        <p id="lmstudio-models-empty" class="hint" data-i18n="lmstudio.status.checking">Sprawdzanie...</p>
+
         <h3 class="termcustom__section" data-i18n="termcustom.section.sound">Dzwiek i start</h3>
         <!-- Sound: sfx/voice lines on interactions. mpv is optional - missing from
              PATH means a silent fallback (soundManager.js); this toggle only enables/
