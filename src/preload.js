@@ -74,7 +74,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   openInEditor: (payload) => ipcRenderer.invoke('editor:open', payload),
 
   // --- PHASE 4: launch profiles ---
-  /** Fetches { profiles, activeProfile } to fill the switcher. */
+  /** Fetches { profiles, activeProfile } to fill the switcher. Profiles are redacted (no env/secrets). */
   getProfiles: () => ipcRenderer.invoke('profiles:list'),
   /** Switches profile -> restarts THIS tab; the others are left untouched. */
   switchProfile: (id, sessionId) =>
@@ -83,6 +83,16 @@ contextBridge.exposeInMainWorld('lunacore', {
   onRestarted: (callback) => {
     ipcRenderer.on('pty:restarted', (_event, profile) => callback(profile));
   },
+
+  // --- AI providers: template catalog + generated-profile CRUD ---
+  /** Fetches the shipped provider templates (LM Studio, Kimi, GLM, ...); no secrets in this list. */
+  getProviders: () => ipcRenderer.invoke('providers:list'),
+  /** Builds a profile from a template + user input (apiKey/model/...) and saves it; returns { profiles, activeProfile, addedId } or { ok:false, reason }. */
+  addProviderProfile: (payload) => ipcRenderer.invoke('profiles:add-from-template', payload),
+  /** Updates an existing generated profile's model/key; returns { profiles, activeProfile } or { ok:false, reason }. */
+  updateProviderProfile: (id, payload) => ipcRenderer.invoke('profiles:update-from-template', { id, ...payload }),
+  /** Removes a profile (local-added or a shipped default) by id; returns { profiles, activeProfile } or null. */
+  removeProfile: (id) => ipcRenderer.invoke('profiles:remove', id),
 
   // --- Project switcher (working directory) ---
   /** Fetches { projects, activeProject } to fill the switcher. */
@@ -166,6 +176,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Sends a /ask question to Claude (headless, Sonnet), grounded in the current
    *  libraries catalog. Promise<{ok, summary, recommended, suggestions} | {ok:false, reason}>. */
   askLibraries: (question) => ipcRenderer.invoke('ask:query', question),
+  /** "Add to my library": persists an /ask suggestion card into the local
+   *  override. Payload: {name, url, description, category}.
+   *  Promise<{ok, categories, total} | {ok:false, reason}>. */
+  addLibraryItem: (item) => ipcRenderer.invoke('libraries:add', item),
 
   // --- Highlight extractor (batch clip trimmer) ---
   /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */

@@ -93,4 +93,22 @@ function mergeKey(v) {
   return JSON.stringify(v);
 }
 
-module.exports = { LANGS, isLocalized, hasText, joinLines, normalizeText, mergeKey };
+/**
+ * Plain display text for a title, preferring `en` over `pl` - the opposite
+ * order from mergeKey() below. mergeKey() exists to keep a Map key stable
+ * across merges (pl-first, arbitrarily); this exists for text that is about
+ * to be shown or sent somewhere English-only (an AI prompt, an English UI
+ * label), where an `en` value should win when both are present.
+ * @param {unknown} v
+ * @returns {string} '' when there is no plain text to show
+ */
+function titleText(v) {
+  if (typeof v === 'string') return v;
+  if (v && typeof v === 'object') {
+    if (typeof v.en === 'string' && v.en) return v.en;
+    if (typeof v.pl === 'string' && v.pl) return v.pl;
+  }
+  return '';
+}
+
+module.exports = { LANGS, isLocalized, hasText, joinLines, normalizeText, mergeKey, titleText };

@@ -22,6 +22,7 @@
 'use strict';
 
 import { onLangChange } from './bus.js';
+import { t } from './util.js';
 import { term } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import {
@@ -84,15 +85,48 @@ function openRecommended(id) {
 }
 
 /**
- * Stub for this phase: window.lunacore.addLibraryItem does not exist yet.
- * The plan's "Files to modify" adds it alongside src/libraries.js's
- * addLibraryItem() and a libraries:add IPC handler in a later phase - swap
- * this body for that real call once both exist. Deliberately a documented
- * no-op rather than a console.log, same reasoning as onRunSuggestion below.
- * @param {{name:string,url:string,description:string,category:string}} _item
+ * "Add to my library": persists a suggestion card into
+ * config/libraries.local.json via the libraries:add bridge
+ * (src/libraries.js's addLibraryItem, through src/main.js's handler).
+ *
+ * `item.category` is either a real catalog title or the literal "new"
+ * (src/ask.js's parseAskResponse) - "new" is never a usable category name by
+ * itself, so `item.newCategoryTitle` (the model's own short, specific name,
+ * or the "Suggested Tools" fallback) is used instead. This is the "good
+ * category" half of the feature: a suggestion outside the existing catalog
+ * lands in a real, named bucket rather than one generic pile.
+ *
+ * `buttonEl` is disabled for the round trip and swapped to the "Added to
+ * your library" label on success, or re-enabled (so the user can retry) on
+ * failure - the only place this module mutates a DOM node passed in from
+ * askview.js rather than building one itself, because the alternative
+ * (re-rendering the whole panel just to update one button) would also lose
+ * the user's place if they had scrolled the suggestions list.
+ * @param {{name:string,url:string,description:string,category:string,newCategoryTitle:?string}} item
+ * @param {HTMLButtonElement} buttonEl
  */
-function onAddSuggestion(_item) {
-  // Intentionally inert for this phase - see comment above.
+async function onAddSuggestion(item, buttonEl) {
+  const category = item.category === 'new' ? item.newCategoryTitle : item.category;
+  if (buttonEl) buttonEl.disabled = true;
+
+  let result;
+  try {
+    result = await window.lunacore.addLibraryItem({
+      name: item.name,
+      url: item.url,
+      description: item.description,
+      category,
+    });
+  } catch {
+    result = { ok: false };
+  }
+
+  if (!buttonEl) return;
+  if (result && result.ok) {
+    buttonEl.textContent = t('ask.suggestions.added');
+  } else {
+    buttonEl.disabled = false;
+  }
 }
 
 /**

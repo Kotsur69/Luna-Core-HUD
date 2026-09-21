@@ -176,7 +176,7 @@ export function recommendedCard(item, { onOpen }) {
  * builder can render both without re-validating them itself.
  *
  * @param {{name:string,description:string,capability:string|null}} item
- * @param {{onAdd: (item:object) => void, onRun: (item:object) => void}} handlers
+ * @param {{onAdd: (item:object, buttonEl:HTMLButtonElement) => void, onRun: (item:object) => void}} handlers
  */
 export function suggestionCard(item, { onAdd, onRun }) {
   const li = document.createElement('li');
@@ -201,7 +201,7 @@ export function suggestionCard(item, { onAdd, onRun }) {
   addBtn.type = 'button';
   addBtn.className = 'ask-card__add';
   addBtn.textContent = t('ask.suggestions.add');
-  addBtn.addEventListener('click', () => onAdd(item));
+  addBtn.addEventListener('click', () => onAdd(item, addBtn));
   actions.appendChild(addBtn);
 
   // Only when the model flagged this suggestion as a clip-trimming tool

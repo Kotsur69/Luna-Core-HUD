@@ -134,16 +134,17 @@ test('every ask.* i18n key used by the panel exists in both languages', () => {
 });
 
 test('every ask.* i18n key is present in both languages, independent of current usage', () => {
-  // Broader than the scan above: pins the full key set the plan specifies,
-  // including ask.suggestions.added - reserved for when onAddSuggestion()
-  // (modules/ask.js) is wired to a real libraries:add bridge in a later
-  // phase and starts showing it, so it is not yet referenced by any t() call.
+  // Broader than the scan above: pins the full key set the plan specifies.
+  // ask.suggestions.added is now also caught by the scan above (onAddSuggestion()
+  // in modules/ask.js shows it on a successful "Add to my library"), but this
+  // test stays as the belt-and-suspenders pin for the whole set regardless.
   const i18nSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/i18n.js'), 'utf8');
   const enAt = i18nSrc.indexOf('\n  en: {');
   const pl = i18nSrc.slice(0, enAt);
   const en = i18nSrc.slice(enAt);
 
   const expectedKeys = [
+    'ask.chip.title',
     'ask.panel.title',
     'ask.loading',
     'ask.summary.label',

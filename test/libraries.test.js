@@ -32,6 +32,7 @@ const {
   normalizeIcon,
   safeUrl,
   slugify,
+  planLibraryAdd,
 } = require('../src/libraries.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -127,6 +128,121 @@ test('normalizeCategory rejects a category with no title or no surviving entries
   // Every entry rejected is the same as no entries at all.
   assert.equal(normalizeCategory({ title: 'Example', items: [item({ url: 'ftp://x/y' })] }), null);
   assert.equal(normalizeCategory(null), null);
+});
+
+// ---- planLibraryAdd: the "Add to my library" decision -----------------------
+// The pure half of addLibraryItem() (src/libraries.js) - no fs, so every
+// branch can be covered directly instead of through a real write.
+
+/** A minimal merged catalog shaped like loadLibraries().categories. */
+function mergedCategories() {
+  return [
+    {
+      title: { pl: 'Edytory wideo', en: 'Video Editors' },
+      icon: 'video',
+      items: [
+        { id: 'kdenlive', name: 'Kdenlive', url: 'https://kdenlive.org', description: 'Free video editor.' },
+      ],
+    },
+    { title: 'UI Kits', icon: 'default', items: [{ id: 'daisyui', name: 'daisyUI', url: 'https://daisyui.com', description: 'CSS kit.' }] },
+  ];
+}
+
+test('planLibraryAdd rejects a bad item (no name / no usable url)', () => {
+  assert.deepEqual(planLibraryAdd({ url: 'https://x.com', category: 'UI Kits' }, mergedCategories(), []), {
+    ok: false,
+    reason: 'bad-item',
+  });
+  assert.deepEqual(
+    planLibraryAdd({ name: 'X', url: 'javascript:alert(1)', category: 'UI Kits' }, mergedCategories(), []),
+    { ok: false, reason: 'bad-item' }
+  );
+});
+
+test('planLibraryAdd rejects a missing, blank or "new" category', () => {
+  for (const category of [undefined, null, '', '   ', 'new']) {
+    assert.deepEqual(planLibraryAdd(item({ category }), mergedCategories(), []), {
+      ok: false,
+      reason: 'bad-category',
+    });
+  }
+});
+
+test('planLibraryAdd appends to an existing category without dropping its other items', () => {
+  const result = planLibraryAdd(item({ name: 'HitFilm', category: 'Video Editors' }), mergedCategories(), []);
+  assert.equal(result.ok, true);
+  const category = result.localCategories.find((c) => c.title === 'Video Editors');
+  assert.ok(category, 'expected a Video Editors category in the plan');
+  assert.equal(category.icon, 'video');
+  assert.deepEqual(category.items.map((i) => i.name), ['Kdenlive', 'HitFilm']);
+  // The existing catalog item's generated id must not leak into the write -
+  // loadLibraries() reassigns ids after every merge.
+  assert.equal(category.items[0].id, undefined);
+});
+
+test('planLibraryAdd matches an existing category by its English title even when it is localized', () => {
+  // titleText() prefers `en`; a suggestion's category is always the English
+  // text (src/ask.js's titleText()), so this must match "Video Editors", not
+  // the Polish "Edytory wideo" mergeKey() would have picked.
+  const result = planLibraryAdd(item({ category: 'Video Editors' }), mergedCategories(), []);
+  const category = result.localCategories.find((c) => c.title === 'Video Editors');
+  assert.equal(category.items.length, 2);
+});
+
+test('planLibraryAdd creates a brand-new category when the title matches nothing', () => {
+  const result = planLibraryAdd(item({ category: 'Video Editing' }), mergedCategories(), []);
+  assert.equal(result.ok, true);
+  const category = result.localCategories.find((c) => c.title === 'Video Editing');
+  assert.ok(category, 'expected a new "Video Editing" category');
+  assert.equal(category.icon, 'default');
+  assert.equal(category.items.length, 1);
+});
+
+test('planLibraryAdd replaces (not duplicates) a local category it already touched before', () => {
+  const firstPass = planLibraryAdd(item({ name: 'First', category: 'Video Editing' }), mergedCategories(), []);
+  // Simulates the real addLibraryItem() call sequence: between the two calls,
+  // loadLibraries() re-reads disk, so the SECOND call's "merged" argument
+  // already includes what the first call just wrote (a brand-new category
+  // doesn't collide with any base title, so it merges in unchanged).
+  const secondPass = planLibraryAdd(
+    item({ name: 'Second', category: 'Video Editing' }),
+    [...mergedCategories(), ...firstPass.localCategories],
+    firstPass.localCategories
+  );
+  const matches = secondPass.localCategories.filter((c) => c.title === 'Video Editing');
+  assert.equal(matches.length, 1, 'should not have created a second "Video Editing" category');
+  assert.deepEqual(matches[0].items.map((i) => i.name), ['First', 'Second']);
+});
+
+test('planLibraryAdd leaves other local categories untouched', () => {
+  const otherCategory = { title: 'Notes', icon: 'default', items: [{ name: 'Obsidian', url: 'https://obsidian.md', description: 'Notes app.' }] };
+  const result = planLibraryAdd(item({ category: 'Video Editing' }), mergedCategories(), [otherCategory]);
+  assert.ok(result.localCategories.includes(otherCategory));
+});
+
+test('planLibraryAdd rejects a name or description over the length cap', () => {
+  assert.deepEqual(
+    planLibraryAdd(item({ name: 'n'.repeat(200), category: 'UI Kits' }), mergedCategories(), []),
+    { ok: false, reason: 'bad-item' }
+  );
+  assert.deepEqual(
+    planLibraryAdd(item({ description: 'd'.repeat(500), category: 'UI Kits' }), mergedCategories(), []),
+    { ok: false, reason: 'bad-item' }
+  );
+});
+
+test('planLibraryAdd rejects a category title over the length cap', () => {
+  assert.deepEqual(
+    planLibraryAdd(item({ category: 'c'.repeat(200) }), mergedCategories(), []),
+    { ok: false, reason: 'bad-category' }
+  );
+});
+
+test('planLibraryAdd tolerates a missing/malformed merged or local list without throwing', () => {
+  assert.doesNotThrow(() => planLibraryAdd(item({ category: 'X' }), null, null));
+  assert.doesNotThrow(() => planLibraryAdd(item({ category: 'X' }), undefined, undefined));
+  const result = planLibraryAdd(item({ category: 'X' }), null, null);
+  assert.equal(result.ok, true);
 });
 
 // ---- The shipped catalog ---------------------------------------------------

@@ -4,7 +4,7 @@
 // Small persistent slice of interface state in config/ui.local.json (gitignored)
 // - like the scratchpad, a plain file rather than localStorage. Holds
 // { theme, lang, boot, profile, layout, hideSystemPorts, soundEnabled,
-// voiceEnabled, voiceDuckingEnabled,
+// voiceEnabled, voiceDuckingEnabled, askUseLocalModel,
 // soundVolume, soundKeystrokeVariant, soundLongTaskMinutes, notificationsEnabled,
 // screenshotPasteEnabled,
 // autoProceedArmed, autoCompactArmed,
@@ -166,6 +166,15 @@ const DEFAULTS = {
   // there is no watching to opt into. Off, an image paste does nothing at all,
   // which is what Ctrl+V did before the feature existed.
   screenshotPasteEnabled: true,
+  // /ask (Ctrl+B's tool recommender, src/ask.js). Default OFF: without this,
+  // ask:query always calls the cloud `claude` CLI with --model sonnet -
+  // switching a profile's terminal tab to a local endpoint must never make
+  // /ask silently follow it (see src/ask.js's header on why --model is always
+  // explicit). ON opts /ask into using whichever configured profile points at
+  // a local endpoint (profiles.js + lmstudio.js's localEndpointFromProfile),
+  // if one exists - never a surprise switch, always something the user asked
+  // for once in Settings (Ctrl+L).
+  askUseLocalModel: false,
   // Connection-error auto-recovery (autoproceed.js). Missing key => OFF, same
   // reasoning as notificationsEnabled/clipboardEnabled above: injecting
   // "continue" into a session costs a token round-trip, so it must be an
@@ -615,6 +624,9 @@ function readUiPrefs() {
           ? obj.screenshotPasteEnabled
           : DEFAULTS.screenshotPasteEnabled,
       // Missing key => disabled (prefs file written before this option existed).
+      askUseLocalModel:
+        typeof obj.askUseLocalModel === 'boolean' ? obj.askUseLocalModel : DEFAULTS.askUseLocalModel,
+      // Missing key => disabled (prefs file written before this option existed).
       autoProceedArmed:
         typeof obj.autoProceedArmed === 'boolean' ? obj.autoProceedArmed : DEFAULTS.autoProceedArmed,
       // Missing key => disabled (prefs file written before this option existed).
@@ -688,6 +700,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.clipboardEnabled === 'boolean') {
       next.clipboardEnabled = partial.clipboardEnabled;
+    }
+    if (partial && typeof partial.askUseLocalModel === 'boolean') {
+      next.askUseLocalModel = partial.askUseLocalModel;
     }
     if (partial && typeof partial.notificationsEnabled === 'boolean') {
       next.notificationsEnabled = partial.notificationsEnabled;

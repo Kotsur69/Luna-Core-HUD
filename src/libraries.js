@@ -26,13 +26,28 @@
 
 const fs = require('fs');
 const paths = require('./paths');
-const { hasText, normalizeText, mergeKey } = require('./localized');
+const { hasText, normalizeText, mergeKey, titleText } = require('./localized');
 
 const BASE_FILE = paths.bundled('libraries.json');
 const localFile = () => paths.local('libraries.local.json');
 
 /** Only these two schemes may ever reach shell.openExternal. */
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
+
+/**
+ * Length caps for a NEW item written via addLibraryItem() - mirrors
+ * scratchpad.js's MAX_BYTES: a catalog row is a display line, not a file
+ * store, and loadLibraries() re-parses the WHOLE local file on every Ctrl+B
+ * open and every /ask query. Without a cap here, a single oversized write (or
+ * a renderer calling the bridge repeatedly) grows that file without bound.
+ * Same numbers src/ask.js's parseAskResponse() already caps a suggestion to,
+ * kept as separate constants rather than a shared import so this file - the
+ * actual write boundary - enforces its own limit regardless of what ask.js
+ * did or didn't already clamp upstream.
+ */
+const MAX_ADD_NAME_CHARS = 80;
+const MAX_ADD_DESCRIPTION_CHARS = 300;
+const MAX_ADD_CATEGORY_CHARS = 80;
 
 /** Safe read + JSON parse. Returns null when the file is missing or invalid. */
 function readJson(file) {
@@ -194,9 +209,122 @@ function resolveLibraryUrl(id) {
   return null;
 }
 
-// normalizeItem / normalizeCategory / safeUrl / slugify are exported for the
-// same reason paths.js exports resolveUserDir: they are the pure decisions, and
-// `node --test` can cover every rejection branch without a fixture directory.
+/**
+ * Pure decision for "Add to my library" (Ctrl+B's /ask suggestion cards):
+ * given the current MERGED catalog (base+local, from loadLibraries()) and the
+ * current RAW local-only categories as stored on disk (unmerged), decides
+ * what config/libraries.local.json should look like after adding `raw` under
+ * its category. Never touches fs - addLibraryItem() below is the thin impure
+ * wrapper that reads/writes and calls this, same pure/impure split
+ * buildTrimArgs()/HighlightBatchJob and parseAskResponse()/runAsk() already
+ * use in this repo.
+ *
+ * A category whose title matches an EXISTING one (base or local, compared via
+ * titleText() - see that function's header for why English-preferred, not
+ * mergeKey()'s pl-preferred order) gets the new item appended to its full
+ * MERGED item list before the whole category is written back - never just the
+ * new item alone - because loadLibraries() REPLACES a base category outright
+ * when a local one shares its title (mergeKey(), see this file's own header).
+ * Writing only the new item would silently drop every other item already in
+ * that category. A title that matches nothing becomes a brand-new category.
+ *
+ * `category` must already be a real, non-empty title - this function
+ * validates its presence but never invents one (that policy call belongs to
+ * the caller, e.g. src/ask.js falling back to "Suggested Tools"). The literal
+ * "new" is rejected too: that string is /ask's internal marker for "not in
+ * the catalog", never an actual category name.
+ *
+ * @param {{name:unknown, url:unknown, description:unknown, category:unknown}} raw
+ * @param {Array<{title:unknown, icon:string, items:Array<{id:string,name:string,url:string,description:string}>}>} mergedCategories loadLibraries().categories
+ * @param {Array<object>} localCategories raw (unmerged) categories currently on disk
+ * @returns {{ok:true, localCategories:Array<object>} | {ok:false, reason:'bad-item'|'bad-category'}}
+ */
+function planLibraryAdd(raw, mergedCategories, localCategories) {
+  const item = normalizeItem(raw);
+  if (!item) return { ok: false, reason: 'bad-item' };
+  if (item.name.length > MAX_ADD_NAME_CHARS || item.description.length > MAX_ADD_DESCRIPTION_CHARS) {
+    return { ok: false, reason: 'bad-item' };
+  }
+
+  const title = raw && typeof raw.category === 'string' ? raw.category.trim() : '';
+  if (!title || title === 'new' || title.length > MAX_ADD_CATEGORY_CHARS) {
+    return { ok: false, reason: 'bad-category' };
+  }
+
+  const merged = Array.isArray(mergedCategories) ? mergedCategories : [];
+  const existing = merged.find((c) => titleText(c && c.title) === title);
+  // Strip the generated id - loadLibraries() reassigns ids after every merge,
+  // so a stored one would be dead weight (and could collide once this item
+  // shifts everything after it).
+  const items = existing ? existing.items.map(({ id, ...rest }) => rest) : [];
+  items.push(item);
+  const icon = existing ? existing.icon : DEFAULT_ICON;
+  const nextCategory = { title, icon, items };
+
+  const current = Array.isArray(localCategories) ? localCategories : [];
+  const idx = current.findIndex((c) => titleText(c && c.title) === title);
+  const nextLocalCategories =
+    idx >= 0
+      ? current.map((c, i) => (i === idx ? nextCategory : c))
+      : [...current, nextCategory];
+
+  return { ok: true, localCategories: nextLocalCategories };
+}
+
+/**
+ * The impure wrapper: reads the merged catalog and the raw local file, hands
+ * both to planLibraryAdd(), and writes the result back. Same
+ * ensureUserDir()-then-writeFileSync() shape every other *.local.json writer
+ * in this repo uses (todo.js's writeStore(), uiprefs.js, clipboard.js, ...).
+ *
+ * Deliberately left untested by test/libraries.test.js: it writes to the real
+ * config/libraries.local.json (paths.local() resolves to the repo's own
+ * config/ directory under `node --test`, same as every other *.local.json
+ * writer), so exercising it would pollute the working tree on every test run.
+ * planLibraryAdd() above carries every branch worth testing.
+ *
+ * @param {{name:unknown, url:unknown, description:unknown, category:unknown}} raw
+ * @returns {{ok:true, categories:Array<object>, total:number} | {ok:false, reason:'bad-item'|'bad-category'|'local-file-corrupt'|'write-failed'}}
+ */
+function addLibraryItem(raw) {
+  const merged = loadLibraries();
+
+  // readJson() returns null for BOTH "file doesn't exist yet" (normal - no
+  // local overrides written so far) and "file exists but failed to parse"
+  // (a truncated write, a stray comma from a manual edit). Those two cases
+  // must not be treated the same here: this is the first caller in this file
+  // that READS the local file only to immediately OVERWRITE it, so silently
+  // treating "corrupt" as "empty" would make the very next successful add
+  // permanently discard every local category the corrupt file still held.
+  let currentLocal = [];
+  if (fs.existsSync(localFile())) {
+    const localRaw = readJson(localFile());
+    if (!localRaw) return { ok: false, reason: 'local-file-corrupt' };
+    currentLocal = Array.isArray(localRaw.categories) ? localRaw.categories : [];
+  }
+
+  const plan = planLibraryAdd(raw, merged.categories, currentLocal);
+  if (!plan.ok) return plan;
+
+  try {
+    paths.ensureUserDir();
+    fs.writeFileSync(
+      localFile(),
+      JSON.stringify({ categories: plan.localCategories }, null, 2) + '\n',
+      'utf8'
+    );
+  } catch {
+    return { ok: false, reason: 'write-failed' };
+  }
+
+  const updated = loadLibraries();
+  return { ok: true, categories: updated.categories, total: updated.total };
+}
+
+// normalizeItem / normalizeCategory / safeUrl / slugify / planLibraryAdd are
+// exported for the same reason paths.js exports resolveUserDir: they are the
+// pure decisions, and `node --test` can cover every rejection branch without
+// a fixture directory.
 module.exports = {
   loadLibraries,
   resolveLibraryUrl,
@@ -205,4 +333,6 @@ module.exports = {
   normalizeIcon,
   safeUrl,
   slugify,
+  planLibraryAdd,
+  addLibraryItem,
 };

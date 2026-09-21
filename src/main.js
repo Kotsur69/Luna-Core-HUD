@@ -38,7 +38,9 @@ const { transcriptToMarkdown } = require('./sessionExport');
 // not code, since the CLI text can change between releases (config/sound-triggers.json).
 const { loadSoundTriggers } = require('./soundTriggers');
 // Launch profiles (Phase 4): "how to start a session" definitions from JSON.
-const { loadProfiles, getProfile } = require('./profiles');
+const { loadProfiles, getProfile, redactProfile, addProfile, updateProfile, removeProfile } = require('./profiles');
+const { loadProviders, getProviderTemplate, buildProfileFromTemplate } = require('./providers');
+const { localEndpointFromProfile } = require('./lmstudio');
 // Building the start command: decides whether a session can be pinned by id.
 const { withSessionId, findExecutable } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
@@ -72,7 +74,7 @@ const { loadSkills, rescanSkills } = require('./skills');
 const { loadPrompts } = require('./prompts');
 // Recommended libraries & tools (Ctrl+B): a curated link directory. The loader
 // also OWNS the addresses - see the libraries:open handler.
-const { loadLibraries, resolveLibraryUrl } = require('./libraries');
+const { loadLibraries, resolveLibraryUrl, addLibraryItem } = require('./libraries');
 // /ask: a one-shot headless `claude -p` tool recommender grounded in the
 // libraries catalog above. See src/ask.js's header for the trust boundary.
 const { runAsk } = require('./ask');
@@ -1504,7 +1506,91 @@ function registerIpc() {
   });
 
   // PHASE 4: the renderer asks for the available profiles (to fill the switcher).
-  ipcMain.handle('profiles:list', () => ({ profiles, activeProfile: activeProfileId }));
+  // Redacted: `env` can hold a provider API key in the clear
+  // (config/profiles.local.json), and the switcher only ever needs id/label
+  // (src/renderer/modules/switchers.js) - never send secrets across the IPC
+  // boundary that don't need to cross it.
+  ipcMain.handle('profiles:list', () => ({
+    profiles: profiles.map(redactProfile),
+    activeProfile: activeProfileId,
+  }));
+
+  // Shipped AI-provider templates (LM Studio, Kimi, GLM, Ollama via CCR, ...).
+  // No secrets in this list - just the shape a profile needs to be built from.
+  ipcMain.handle('providers:list', () => loadProviders());
+
+  // Builds a profile from a template + the user's input (apiKey/model/...) and
+  // saves it to profiles.local.json. Never touches activeProfile - same "adding
+  // must not switch the caller's tab away" rule as projects:add. The renderer
+  // payload only ever supplies VALUES; buildProfileFromTemplate is what pins
+  // the resulting env's KEY set to the template's own fixed allow-list.
+  ipcMain.handle('profiles:add-from-template', (_event, payload) => {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const template = getProviderTemplate(loadProviders().providers, p.templateId);
+    if (!template) return { ok: false, reason: 'unknown-template' };
+    const built = buildProfileFromTemplate(template, p);
+    if (!built.ok) return built;
+    const result = addProfile(built.profile);
+    if (!result) return { ok: false, reason: 'save-failed' };
+    profiles = result.profiles;
+    return { ok: true, profiles: profiles.map(redactProfile), activeProfile: activeProfileId, addedId: result.addedId };
+  });
+
+  // Re-derives an existing generated profile's env from its template with a
+  // changed model/key, same validation path as profiles:add-from-template.
+  //
+  // profiles:list only ever sends the renderer a REDACTED profile (no env,
+  // no ccrConfig - see redactProfile), so a "just change the model" edit from
+  // the UI cannot legitimately resend the existing apiKey/baseUrl - it never
+  // had them. `profiles` here is main's own in-memory, UNREDACTED copy, so an
+  // omitted apiKey/baseUrl in the payload falls back to whatever is already
+  // stored rather than failing the whole update over a field the caller had
+  // no way to know.
+  ipcMain.handle('profiles:update-from-template', (_event, payload) => {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const current = getProfile(profiles, p.id);
+    if (!current) return { ok: false, reason: 'unknown-profile' };
+    const templateId = typeof p.templateId === 'string' && p.templateId ? p.templateId : current.templateId;
+    const template = getProviderTemplate(loadProviders().providers, templateId);
+    if (!template) return { ok: false, reason: 'unknown-template' };
+
+    const apiKey =
+      typeof p.apiKey === 'string' && p.apiKey.trim()
+        ? p.apiKey.trim()
+        : (current.env && current.env.ANTHROPIC_AUTH_TOKEN) ||
+          (current.ccrConfig && current.ccrConfig.apiKey) ||
+          '';
+    const baseUrl =
+      typeof p.baseUrl === 'string' && p.baseUrl.trim()
+        ? p.baseUrl.trim()
+        : (current.ccrConfig && current.ccrConfig.baseUrl) || '';
+
+    const built = buildProfileFromTemplate(template, {
+      ...p,
+      id: current.id,
+      label: p.label || current.label,
+      apiKey,
+      baseUrl,
+    });
+    if (!built.ok) return built;
+    const result = updateProfile(current.id, built.profile);
+    if (!result) return { ok: false, reason: 'save-failed' };
+    profiles = result.profiles;
+    return { ok: true, profiles: profiles.map(redactProfile), activeProfile: activeProfileId };
+  });
+
+  // Removes a profile (local-added or a shipped default) by id. Reassigns
+  // activeProfileId only when the removed one WAS active, same rule as
+  // projects:remove - removing some other, inactive entry leaves the current
+  // tab's profile untouched.
+  ipcMain.handle('profiles:remove', (_event, id) => {
+    const wasActive = id === activeProfileId;
+    const result = removeProfile(id);
+    if (!result) return null;
+    profiles = result.profiles;
+    if (wasActive) activeProfileId = result.activeProfile;
+    return { profiles: profiles.map(redactProfile), activeProfile: activeProfileId };
+  });
 
   // PHASE 4: switching profile -> restart THIS tab with the new environment.
   // Other tabs are left untouched; a profile is a session's trait, not the app's.
@@ -1697,9 +1783,33 @@ function registerIpc() {
   // endpoint. The model's reply is validated in ask.js before it ever reaches
   // the renderer - see that file's header for the trust boundary.
   ipcMain.handle('ask:query', async (_event, question) => {
-    const env = withClaudeOnPath(stripClaudeSessionMarkers({ ...process.env }));
-    return runAsk({ question, catalog: loadLibraries(), env, timeoutMs: 45000 });
+    let profileEnv = {};
+    let model = 'sonnet';
+    // Opt-in (Settings/Ctrl+L -> askUseLocalModel): route /ask through
+    // whichever configured profile points at a local endpoint, the same
+    // profiles.json entries the per-tab profile switcher already offers -
+    // never inferred or auto-detected, so this only ever does what the user
+    // explicitly turned on. No local profile configured -> silently stays on
+    // the cloud default, same graceful-degradation rule every other /ask
+    // failure mode follows (see src/ask.js's header).
+    if (readUiPrefs().askUseLocalModel) {
+      const localProfile = loadProfiles().profiles.find((p) => localEndpointFromProfile(p));
+      if (localProfile) {
+        profileEnv = localProfile.env || {};
+        model = null; // let the local endpoint's own loaded model answer - see buildAskArgs()
+      }
+    }
+    const env = withClaudeOnPath(stripClaudeSessionMarkers({ ...process.env, ...profileEnv }));
+    return runAsk({ question, catalog: loadLibraries(), env, timeoutMs: 45000, model });
   });
+
+  // "Add to my library": persists an /ask suggestion card into
+  // config/libraries.local.json. addLibraryItem() (src/libraries.js) does all
+  // the validation (bad-item/bad-category/write-failed) - this handler is a
+  // thin pass-through, same as libraries:list, not a new trust boundary of
+  // its own; the payload can only ever add a display row (name/url/
+  // description/category), never an executable action.
+  ipcMain.handle('libraries:add', (_event, payload) => addLibraryItem(payload || {}));
 
   // Highlight extractor: batch tail-trim of clips via system ffmpeg. See
   // src/highlights.js's header - ffmpeg is not bundled, detected on PATH only.

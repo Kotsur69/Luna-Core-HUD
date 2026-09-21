@@ -30,7 +30,7 @@ import { mountPaletteChip } from './palette.js';
 import { mountTermcustomChip } from './termcustom.js';
 import { mountGitquickChip } from './gitquick.js';
 import { mountShortcutsChip } from './shortcutspanel.js';
-import { mountLibrariesChip } from './libraries.js';
+import { mountLibrariesChip, mountAskChip } from './libraries.js';
 import { mountHighlightsChip } from './highlights.js';
 import { mountUpdateChip } from './update.js';
 
@@ -48,6 +48,7 @@ defineWidget({
     mountGitquickChip(root);
     mountShortcutsChip(root);
     mountLibrariesChip(root);
+    mountAskChip(root);
     mountHighlightsChip(root);
     mountUpdateChip(root);
     // No cleanup: this widget is never meant to unmount (see header).

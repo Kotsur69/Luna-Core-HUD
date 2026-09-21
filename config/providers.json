@@ -1,0 +1,119 @@
+{
+  "providers": [
+    {
+      "id": "claude-cloud",
+      "label": { "pl": "Claude Cloud", "en": "Claude Cloud" },
+      "wireVia": "direct",
+      "requiresApiKey": false,
+      "envTemplate": {},
+      "docsUrl": "https://claude.com/claude-code"
+    },
+    {
+      "id": "lm-studio",
+      "label": { "pl": "LM Studio (lokalnie)", "en": "LM Studio (local)" },
+      "wireVia": "direct",
+      "requiresApiKey": false,
+      "autoModel": true,
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "http://localhost:1234",
+        "ANTHROPIC_AUTH_TOKEN": "lmstudio"
+      },
+      "docsUrl": "https://lmstudio.ai/docs/api/endpoints/anthropic"
+    },
+    {
+      "id": "glm",
+      "label": { "pl": "GLM (Z.ai)", "en": "GLM (Z.ai)" },
+      "wireVia": "direct",
+      "requiresApiKey": true,
+      "defaultModel": "glm-5.3",
+      "defaultFastModel": "glm-5.3-flash",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{fastModel}}",
+        "ANTHROPIC_SMALL_FAST_MODEL": "{{fastModel}}",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "{{model}}",
+        "API_TIMEOUT_MS": "3000000"
+      },
+      "docsUrl": "https://docs.z.ai"
+    },
+    {
+      "id": "kimi",
+      "label": { "pl": "Kimi (Moonshot)", "en": "Kimi (Moonshot)" },
+      "wireVia": "direct",
+      "requiresApiKey": true,
+      "defaultModel": "kimi-k2-0905-preview",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "https://api.moonshot.ai/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}"
+      },
+      "docsUrl": "https://platform.moonshot.ai/docs"
+    },
+    {
+      "id": "ollama",
+      "label": { "pl": "Ollama (lokalnie, przez CCR)", "en": "Ollama (local, via CCR)" },
+      "wireVia": "ccr",
+      "requiresApiKey": false,
+      "ccrProviderType": "ollama",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
+        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+      },
+      "docsUrl": "https://ollama.com"
+    },
+    {
+      "id": "codex",
+      "label": { "pl": "Codex (OpenAI, przez CCR)", "en": "Codex (OpenAI, via CCR)" },
+      "wireVia": "ccr",
+      "requiresApiKey": true,
+      "ccrProviderType": "openai",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
+        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+      },
+      "docsUrl": "https://platform.openai.com/docs"
+    },
+    {
+      "id": "gemini",
+      "label": { "pl": "Gemini (przez CCR)", "en": "Gemini (via CCR)" },
+      "wireVia": "ccr",
+      "requiresApiKey": true,
+      "ccrProviderType": "gemini",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
+        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+      },
+      "docsUrl": "https://ai.google.dev/gemini-api/docs"
+    },
+    {
+      "id": "grok",
+      "label": { "pl": "Grok (xAI, przez CCR)", "en": "Grok (xAI, via CCR)" },
+      "wireVia": "ccr",
+      "requiresApiKey": true,
+      "ccrProviderType": "openai-compatible",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
+        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+      },
+      "docsUrl": "https://docs.x.ai"
+    },
+    {
+      "id": "openai-compatible",
+      "label": { "pl": "Wlasny (OpenAI-compatible, przez CCR)", "en": "Custom (OpenAI-compatible, via CCR)" },
+      "wireVia": "ccr",
+      "requiresApiKey": true,
+      "requiresBaseUrl": true,
+      "ccrProviderType": "openai-compatible",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
+        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+      },
+      "docsUrl": ""
+    }
+  ]
+}

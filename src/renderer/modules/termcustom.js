@@ -76,6 +76,11 @@ const els = {
   shotPasteField: document.getElementById('shotpaste-field'),
   shotPasteStatus: document.getElementById('shotpaste-status'),
   shotPasteToggle: document.getElementById('shotpaste-toggle'),
+  // /ask local-model opt-in (src/uiprefs.js's askUseLocalModel). Same
+  // field/status/toggle triple as shotPaste* above.
+  askLocalModelField: document.getElementById('ask-local-model-field'),
+  askLocalModelStatus: document.getElementById('ask-local-model-status'),
+  askLocalModelToggle: document.getElementById('ask-local-model-toggle'),
 };
 
 // The curated <option> values in index.html - anything else means "Custom…".
@@ -151,6 +156,30 @@ els.shotPasteToggle.addEventListener('change', () => {
 // which would strand it on "on" while the switch reads off - same repaint
 // notify.js does, and for the same reason.
 onLangChange(renderShotPaste);
+
+// /ask local-model opt-in. Off by default (src/uiprefs.js's askUseLocalModel) -
+// mirrors this file's own default, so a repaint that beats the async prefs
+// load shows the feature as off, which is what it is.
+let askLocalModelEnabled = false;
+
+/** Repaints the /ask local-model switch from module state. */
+function renderAskLocalModel() {
+  els.askLocalModelToggle.checked = askLocalModelEnabled;
+  els.askLocalModelField.classList.toggle('is-armed', askLocalModelEnabled);
+  els.askLocalModelStatus.textContent = t(askLocalModelEnabled ? 'ask.localModel.on' : 'ask.localModel.off');
+}
+
+els.askLocalModelToggle.addEventListener('change', () => {
+  sfx.modeToggle();
+  askLocalModelEnabled = els.askLocalModelToggle.checked;
+  renderAskLocalModel();
+  // Nothing to push into terminals.js (unlike screenshot paste above): this
+  // setting is only ever read fresh, per call, by src/main.js's ask:query
+  // handler - there is no live renderer-side behaviour to apply.
+  window.lunacore.setUiPrefs({ askUseLocalModel: askLocalModelEnabled });
+});
+
+onLangChange(renderAskLocalModel);
 
 /** Persists a partial prefs change AND repaints the live terminal (§4/§5). */
 function persistAndApply(partial) {
@@ -431,6 +460,7 @@ export async function initTermcustomSettings() {
     soundLongTaskMinutes: 10,
     soundReadOutputEnabled: false,
     voiceDuckingEnabled: false,
+    askUseLocalModel: false,
   };
   try {
     prefs = (await window.lunacore.getUiPrefs()) || prefs;
@@ -460,6 +490,11 @@ export async function initTermcustomSettings() {
   shotPasteEnabled = prefs.screenshotPasteEnabled !== false;
   setScreenshotPasteEnabled(shotPasteEnabled);
   renderShotPaste();
+
+  // /ask local-model opt-in: read-only-on-demand by main.js's ask:query
+  // handler, so no push into another module here - just paint the switch.
+  askLocalModelEnabled = prefs.askUseLocalModel === true;
+  renderAskLocalModel();
 
   // mountBoot(root) is root-agnostic (see boot.js) - #termcustom is static,
   // non-remountable markup, so the returned disposer is never called, same

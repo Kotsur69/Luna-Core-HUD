@@ -62,7 +62,7 @@ import {
 } from './librariesview.js';
 // "/ask <question>" hands off to the /ask panel instead of opening a row -
 // see modules/ask.js's own header for why it lives in a separate file.
-import { isAskCommand, parseAskQuery, openAsk } from './ask.js';
+import { ASK_PREFIX, isAskCommand, parseAskQuery, openAsk } from './ask.js';
 
 const overlayEl = document.getElementById('libraries');
 const inputEl = document.getElementById('libraries-input');
@@ -328,7 +328,13 @@ setHandlers({
 
 // ---- Open / close -----------------------------------------------------------
 
-async function open() {
+/**
+ * @param {{prefill?: string}} [opts] - text to seed the filter box with once
+ *   open (e.g. "/ask " from the #ask-open chip, cursor left at the end so the
+ *   user can just start typing their question). Defaults to '', the same
+ *   always-blank behaviour every other caller relies on.
+ */
+async function open({ prefill = '' } = {}) {
   if (isOpen) return;
   // Esc-then-Ctrl+B inside the exit window is a real gesture on a keyboard-
   // driven HUD; without this the pending timer would hide what was just opened.
@@ -359,9 +365,10 @@ async function open() {
   activeIndex = -1;
   gridScrollTop = 0;
   enterFrom = '';
-  inputEl.value = '';
+  inputEl.value = prefill;
   noteEl.textContent = '';
   render({ focus: 'input' });
+  if (prefill) inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
 }
 
 function close() {
@@ -544,7 +551,20 @@ window.addEventListener(
 /** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
 export function mountLibrariesChip(root) {
   const btn = root.querySelector('#libraries-open');
-  if (btn) btn.addEventListener('click', open);
+  if (btn) btn.addEventListener('click', () => open());
+}
+
+/**
+ * The /ask discoverability chip: same panel, same open(), just pre-filled so
+ * the user lands with their cursor ready to type a question instead of
+ * having to already know to type "/ask" themselves. Nothing here calls the
+ * askLibraries() bridge - that still only happens on Enter (openAsk(), wired
+ * in the Enter-key handler above) - so this changes nothing about the
+ * zero-tokens-unless-asked rule, only how easy the command is to find.
+ */
+export function mountAskChip(root) {
+  const btn = root.querySelector('#ask-open');
+  if (btn) btn.addEventListener('click', () => open({ prefill: `${ASK_PREFIX} ` }));
 }
 
 // Category titles and every label in a row's actions come from the dictionary

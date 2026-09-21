@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { normalizeProfile, getProfile } = require('../src/profiles');
+const { normalizeProfile, getProfile, redactProfile } = require('../src/profiles');
 
 test('normalizeProfile passes a valid profile through', () => {
   assert.deepEqual(
@@ -26,8 +26,35 @@ test('normalizeProfile passes a valid profile through', () => {
       // Absent in the input, so it defaults off - a profile has to ASK for its
       // model to be filled in from a local endpoint (src/lmstudio.js).
       autoModel: false,
+      // Absent in the input -> not generated from a provider template.
+      templateId: null,
+      // Absent in the input -> not a CCR-routed provider.
+      ccrConfig: null,
     }
   );
+});
+
+test('normalizeProfile carries templateId through only when it is a non-empty string', () => {
+  assert.equal(normalizeProfile({ id: 'x', label: 'X', templateId: 'kimi' }).templateId, 'kimi');
+  assert.equal(normalizeProfile({ id: 'x', label: 'X', templateId: '' }).templateId, null);
+  assert.equal(normalizeProfile({ id: 'x', label: 'X', templateId: 42 }).templateId, null);
+  assert.equal(normalizeProfile({ id: 'x', label: 'X' }).templateId, null);
+});
+
+test('normalizeProfile carries a well-formed ccrConfig through', () => {
+  const p = normalizeProfile({
+    id: 'x',
+    label: 'X',
+    ccrConfig: { providerType: 'openai-compatible', apiKey: 'k', baseUrl: 'https://x' },
+  });
+  assert.deepEqual(p.ccrConfig, { providerType: 'openai-compatible', apiKey: 'k', baseUrl: 'https://x' });
+});
+
+test('normalizeProfile drops ccrConfig to null when providerType is missing or the shape is junk', () => {
+  assert.equal(normalizeProfile({ id: 'x', label: 'X', ccrConfig: { apiKey: 'k' } }).ccrConfig, null);
+  assert.equal(normalizeProfile({ id: 'x', label: 'X', ccrConfig: 'nope' }).ccrConfig, null);
+  assert.equal(normalizeProfile({ id: 'x', label: 'X', ccrConfig: null }).ccrConfig, null);
+  assert.equal(normalizeProfile({ id: 'x', label: 'X' }).ccrConfig, null);
 });
 
 test('normalizeProfile carries autoModel through only when it is exactly true', () => {
@@ -87,7 +114,10 @@ test('normalizeProfile turns a non-object env (including arrays) into an empty o
 
 test('normalizeProfile does not carry unknown fields forward', () => {
   const p = normalizeProfile({ id: 'x', label: 'X', whatever: 'junk' });
-  assert.deepEqual(Object.keys(p).sort(), ['args', 'autoModel', 'command', 'env', 'id', 'label']);
+  assert.deepEqual(
+    Object.keys(p).sort(),
+    ['args', 'autoModel', 'ccrConfig', 'command', 'env', 'id', 'label', 'templateId']
+  );
 });
 
 test('getProfile finds by id, otherwise null', () => {
@@ -98,4 +128,31 @@ test('getProfile finds by id, otherwise null', () => {
   assert.equal(getProfile(list, 'b').label, 'B');
   assert.equal(getProfile(list, 'no-such-id'), null);
   assert.equal(getProfile([], 'a'), null);
+});
+
+test('redactProfile strips env and ccrConfig but keeps every other field', () => {
+  const p = normalizeProfile({
+    id: 'custom',
+    label: 'Custom',
+    command: 'claude',
+    args: ['--continue'],
+    env: { ANTHROPIC_AUTH_TOKEN: 'sk-super-secret' },
+    autoModel: false,
+    templateId: 'openai-compatible',
+    ccrConfig: { providerType: 'openai-compatible', apiKey: 'sk-ccr-secret', baseUrl: 'https://x' },
+  });
+  const redacted = redactProfile(p);
+  assert.deepEqual(redacted, {
+    id: 'custom',
+    label: 'Custom',
+    command: 'claude',
+    args: ['--continue'],
+    autoModel: false,
+    templateId: 'openai-compatible',
+  });
+  assert.equal('env' in redacted, false);
+  assert.equal('ccrConfig' in redacted, false);
+  const dump = JSON.stringify(redacted);
+  assert.equal(dump.indexOf('sk-super-secret'), -1);
+  assert.equal(dump.indexOf('sk-ccr-secret'), -1);
 });

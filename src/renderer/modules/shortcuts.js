@@ -117,6 +117,18 @@ export const SHORTCUT_GROUPS = [
           marker: "e.key === 'b' || e.key === 'B'",
         },
       },
+      {
+        // Not a key chord - a command typed into the Ctrl+B filter box. Fits
+        // this table anyway (a single-token "chord" renders as one <kbd>,
+        // same trick shortcuts.jumpProject uses for "Alt+1…9") because it is
+        // exactly as undiscoverable as an unlisted chord would be.
+        chords: [['/ask']],
+        descKey: 'shortcuts.askTool',
+        source: {
+          file: 'src/renderer/modules/libraries.js',
+          marker: 'isAskCommand(inputEl.value)',
+        },
+      },
     ],
   },
   {

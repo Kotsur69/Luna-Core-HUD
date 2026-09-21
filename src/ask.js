@@ -43,6 +43,7 @@
 
 const { execFile } = require('child_process');
 const { safeUrl } = require('./libraries');
+const { titleText } = require('./localized');
 
 /** Default timeout for the one-shot `claude -p` call. */
 const DEFAULT_TIMEOUT_MS = 45000;
@@ -63,23 +64,9 @@ const MAX_SUGGESTIONS = 10;
 /** The only capability values the renderer knows how to act on. */
 const ALLOWED_CAPABILITIES = new Set([null, 'highlight-extractor']);
 
-/**
- * A category title from loadLibraries() is either a plain string (same in
- * every language) or a { pl, en } localized object (src/localized.js). The
- * prompt sent to the model, like every comment in this repo, is English-only,
- * so English is preferred here; pl is only a fallback for a title authored
- * with pl but no en.
- * @param {unknown} title
- * @returns {string}
- */
-function titleText(title) {
-  if (typeof title === 'string') return title;
-  if (title && typeof title === 'object') {
-    if (typeof title.en === 'string' && title.en) return title.en;
-    if (typeof title.pl === 'string' && title.pl) return title.pl;
-  }
-  return '';
-}
+/** Fallback category name for a suggestion the model flags "new" but gives no
+ *  (or an unusable) newCategoryTitle for - see parseAskResponse() below. */
+const DEFAULT_NEW_CATEGORY_TITLE = 'Suggested Tools';
 
 /**
  * Condenses loadLibraries()'s catalog into short lines the prompt can afford:
@@ -136,7 +123,8 @@ function buildAskPrompt(question, catalogContext) {
     '  "summary": string,',
     '  "recommended": [{ "id": string }],',
     '  "suggestions": [',
-    '    { "name": string, "url": string, "description": string, "category": string, "capability": string|null }',
+    '    { "name": string, "url": string, "description": string, "category": string,',
+    '      "newCategoryTitle": string|null, "capability": string|null }',
     '  ]',
     '}',
     '',
@@ -148,6 +136,10 @@ function buildAskPrompt(question, catalogContext) {
     '- "suggestions" lists real tools that help but are NOT in the catalog. Use [] when none.',
     '- "suggestions[].category" must be copied EXACTLY from one of the category names shown',
     '  in the CATALOG below, OR the literal string "new" when none of them fit.',
+    '- "suggestions[].newCategoryTitle" must be null UNLESS "category" is "new" - in that case',
+    '  it must be a short (2-4 word) descriptive category name in Title Case for what kind of',
+    '  tool this is (e.g. "Video Editing", "Note Taking"), never a vague name like "Other" or',
+    '  "Misc".',
     '- "suggestions[].capability" must be null, UNLESS the suggestion is specifically a tool',
     '  for trimming/cutting video clips down to a highlight - in that one case, set it to',
     '  the literal string "highlight-extractor". Otherwise it must be null.',
@@ -261,7 +253,16 @@ function parseAskResponse(cliStdout, catalog) {
     // rather than dropping the whole suggestion over a category name typo.
     if (category !== 'new' && !categoryTitles.has(category)) category = 'new';
     const capability = ALLOWED_CAPABILITIES.has(entry.capability) ? entry.capability : null;
-    suggestions.push({ name, url, description, category, capability });
+    // Only meaningful when category === 'new' - a real catalog category needs
+    // no name of its own, and addLibraryItem() (src/libraries.js) never looks
+    // at this field otherwise. This is the "good category" half of "Add to my
+    // library": a suggestion that doesn't fit the catalog gets a real,
+    // specific bucket instead of one generic dumping ground.
+    const newCategoryTitle =
+      category === 'new'
+        ? clampString(entry.newCategoryTitle, MAX_CATEGORY_CHARS) || DEFAULT_NEW_CATEGORY_TITLE
+        : null;
+    suggestions.push({ name, url, description, category, capability, newCategoryTitle });
   }
 
   return {
@@ -273,14 +274,37 @@ function parseAskResponse(cliStdout, catalog) {
 }
 
 /**
+ * Pure argv builder for the headless `claude -p` call - never a shell string,
+ * same reasoning src/highlights.js's buildTrimArgs() documents for the same
+ * shape. Split out so the one behavioural choice this function makes (when
+ * to omit `--model`) is unit-testable without spawning a real process, same
+ * pure/impure split as buildTrimArgs()/HighlightBatchJob.
+ *
+ * `model` is `'sonnet'` by default - the CLI always gets an explicit model
+ * when talking to the cloud, per this file's header. Passing a falsy `model`
+ * (the ask:query handler's local-model path in src/main.js, gated behind the
+ * askUseLocalModel setting) omits the flag entirely: a local endpoint serves
+ * whatever it has loaded regardless of the requested model id, and forcing
+ * "sonnet" at it would be a name with no effect, not a real choice.
+ * @param {{prompt:string, model?:string|null}} args
+ * @returns {string[]}
+ */
+function buildAskArgs({ prompt, model = 'sonnet' }) {
+  const args = ['-p', prompt];
+  if (model) args.push('--model', model);
+  args.push('--output-format', 'json');
+  return args;
+}
+
+/**
  * The impure orchestrator: validates the question, runs a one-shot headless
  * `claude -p` call and hands its stdout to parseAskResponse(). Always
  * resolves, never rejects/throws - every failure mode is a typed
  * { ok:false, reason }, same convention as fetchUsage()'s { error } states.
- * @param {{question:string, catalog:object, env:Record<string,string>, timeoutMs?:number}} args
+ * @param {{question:string, catalog:object, env:Record<string,string>, timeoutMs?:number, model?:string|null}} args
  * @returns {Promise<{ok:true,...}|{ok:false,reason:'empty-question'|'no-claude'|'timeout'|'generic'|'bad-json'}>}
  */
-function runAsk({ question, catalog, env, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+function runAsk({ question, catalog, env, timeoutMs = DEFAULT_TIMEOUT_MS, model = 'sonnet' } = {}) {
   return new Promise((resolve) => {
     const trimmedQuestion = typeof question === 'string' ? question.trim() : '';
     if (!trimmedQuestion) {
@@ -292,7 +316,7 @@ function runAsk({ question, catalog, env, timeoutMs = DEFAULT_TIMEOUT_MS } = {})
 
     execFile(
       'claude',
-      ['-p', prompt, '--model', 'sonnet', '--output-format', 'json'],
+      buildAskArgs({ prompt, model }),
       { env, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 },
       (error, stdout) => {
         if (error) {
@@ -321,4 +345,4 @@ function runAsk({ question, catalog, env, timeoutMs = DEFAULT_TIMEOUT_MS } = {})
   });
 }
 
-module.exports = { buildCatalogContext, buildAskPrompt, parseAskResponse, runAsk };
+module.exports = { buildCatalogContext, buildAskPrompt, buildAskArgs, parseAskResponse, runAsk };

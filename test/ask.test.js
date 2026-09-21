@@ -19,7 +19,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildCatalogContext, buildAskPrompt, parseAskResponse } = require('../src/ask.js');
+const { buildCatalogContext, buildAskPrompt, buildAskArgs, parseAskResponse } = require('../src/ask.js');
 
 /** A minimal valid catalog, shaped like loadLibraries()'s output. */
 function catalog(over = {}) {
@@ -122,11 +122,55 @@ test('buildAskPrompt instructs a JSON-only reply matching the schema', () => {
   assert.match(prompt, /"suggestions"/);
   assert.match(prompt, /"capability"/);
   assert.match(prompt, /highlight-extractor/);
+  assert.match(prompt, /"newCategoryTitle"/);
 });
 
 test('buildAskPrompt falls back to a placeholder for an empty catalog context', () => {
   const prompt = buildAskPrompt('question', '');
   assert.match(prompt, /catalog is currently empty/);
+});
+
+// ---- buildAskArgs -------------------------------------------------------------
+// The argv builder for the headless `claude -p` call. Same regression guard
+// buildTrimArgs (src/highlights.js) is tested for: this must always be an
+// ARRAY, never a shell string, so a prompt containing quotes/backticks/`$(...)`
+// can never be interpreted by a shell.
+
+test('buildAskArgs returns an argv array, never a shell string', () => {
+  const args = buildAskArgs({ prompt: 'question' });
+  assert.ok(Array.isArray(args), 'buildAskArgs must return an array, not a string');
+  for (const a of args) assert.equal(typeof a, 'string');
+});
+
+test('buildAskArgs defaults to --model sonnet', () => {
+  const args = buildAskArgs({ prompt: 'question' });
+  assert.deepEqual(args, ['-p', 'question', '--model', 'sonnet', '--output-format', 'json']);
+});
+
+test('buildAskArgs omits --model entirely when explicitly given a falsy model (local-endpoint path)', () => {
+  // undefined is deliberately NOT in this list: a default parameter treats a
+  // missing/undefined `model` as "not specified", which falls back to
+  // 'sonnet' - the same as never passing the option at all. Only an
+  // EXPLICIT falsy value (what src/main.js's ask:query handler passes on the
+  // local-model path) means "omit the flag".
+  for (const bad of [null, '', false]) {
+    const args = buildAskArgs({ prompt: 'question', model: bad });
+    assert.deepEqual(args, ['-p', 'question', '--output-format', 'json']);
+    assert.ok(!args.includes('--model'), `should not include --model for model=${String(bad)}`);
+  }
+});
+
+test('buildAskArgs uses an explicit non-default model when given one', () => {
+  const args = buildAskArgs({ prompt: 'question', model: 'glm-5.3' });
+  assert.deepEqual(args, ['-p', 'question', '--model', 'glm-5.3', '--output-format', 'json']);
+});
+
+test("buildAskArgs never lets the prompt's content leak an extra flag - it is always one argv element", () => {
+  // A shell-string builder would let a prompt containing `--model evil` or a
+  // stray quote change the actual invocation; an argv array cannot.
+  const args = buildAskArgs({ prompt: '--model evil; rm -rf /' });
+  assert.equal(args[1], '--model evil; rm -rf /');
+  assert.equal(args.length, 6);
 });
 
 // ---- parseAskResponse: the security boundary --------------------------------
@@ -260,6 +304,77 @@ test('parseAskResponse keeps a suggestion category matching a real catalog title
   };
   const result = parseAskResponse(envelope(answer), catalog());
   assert.equal(result.suggestions[0].category, 'UI Kits');
+});
+
+// ---- newCategoryTitle: the "good category" half of "Add to my library" -----
+
+test('parseAskResponse defaults newCategoryTitle when category is "new" and the model omits it', () => {
+  const answer = {
+    summary: 'x',
+    recommended: [],
+    suggestions: [{ name: 'A', url: 'https://example.com/a', description: 'x', category: 'new', capability: null }],
+  };
+  const result = parseAskResponse(envelope(answer), catalog());
+  assert.equal(result.suggestions[0].category, 'new');
+  assert.equal(result.suggestions[0].newCategoryTitle, 'Suggested Tools');
+});
+
+test('parseAskResponse keeps a model-provided newCategoryTitle when category is "new"', () => {
+  const answer = {
+    summary: 'x',
+    recommended: [],
+    suggestions: [
+      {
+        name: 'A',
+        url: 'https://example.com/a',
+        description: 'x',
+        category: 'new',
+        newCategoryTitle: 'Video Editing',
+        capability: null,
+      },
+    ],
+  };
+  const result = parseAskResponse(envelope(answer), catalog());
+  assert.equal(result.suggestions[0].newCategoryTitle, 'Video Editing');
+});
+
+test('parseAskResponse forces newCategoryTitle to null when category matches a real catalog title', () => {
+  const answer = {
+    summary: 'x',
+    recommended: [],
+    suggestions: [
+      {
+        name: 'A',
+        url: 'https://example.com/a',
+        description: 'x',
+        category: 'UI Kits',
+        newCategoryTitle: 'Should Be Ignored',
+        capability: null,
+      },
+    ],
+  };
+  const result = parseAskResponse(envelope(answer), catalog());
+  assert.equal(result.suggestions[0].category, 'UI Kits');
+  assert.equal(result.suggestions[0].newCategoryTitle, null);
+});
+
+test('parseAskResponse caps a runaway newCategoryTitle length', () => {
+  const answer = {
+    summary: 'x',
+    recommended: [],
+    suggestions: [
+      {
+        name: 'A',
+        url: 'https://example.com/a',
+        description: 'x',
+        category: 'new',
+        newCategoryTitle: 't'.repeat(500),
+        capability: null,
+      },
+    ],
+  };
+  const result = parseAskResponse(envelope(answer), catalog());
+  assert.ok(result.suggestions[0].newCategoryTitle.length <= 80);
 });
 
 test('parseAskResponse caps name/description/category string lengths', () => {
