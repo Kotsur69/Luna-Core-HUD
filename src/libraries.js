@@ -73,6 +73,35 @@ function slugify(name, ordinal) {
   return slug || `item-${ordinal}`;
 }
 
+/** The icon a category falls back to when it names none, or names one badly. */
+const DEFAULT_ICON = 'default';
+
+/** An icon name is a slug, never a glyph and never markup. */
+const ICON_PATTERN = /^[a-z][a-z0-9-]{0,23}$/;
+
+/**
+ * Validates the icon NAME a category carries.
+ *
+ * The config names an icon; it never contains one. That is deliberate and it is
+ * the same rule the URLs follow two functions up: a glyph - or worse, an SVG
+ * string - in a hand-edited libraries.local.json would be a second path for
+ * data to reach the DOM, and the renderer would have to trust it. A slug can
+ * only ever select a drawing the renderer already ships
+ * (src/renderer/modules/libicons.js), so an unknown or hostile value is inert.
+ *
+ * Anything that is not a plain lowercase slug resolves to 'default' rather than
+ * being rejected: a category with a typo'd icon should still appear in the grid
+ * with a neutral tile, not vanish from the catalog.
+ *
+ * @param {unknown} value
+ * @returns {string} a usable icon name, never empty
+ */
+function normalizeIcon(value) {
+  if (typeof value !== 'string') return DEFAULT_ICON;
+  const slug = value.trim();
+  return ICON_PATTERN.test(slug) ? slug : DEFAULT_ICON;
+}
+
 /**
  * Validates a single entry. Returns { name, url, description } or null.
  * `name` and `url` are required; `description` is optional. None of the three
@@ -89,13 +118,13 @@ function normalizeItem(raw) {
   return { name: raw.name.trim(), url, description };
 }
 
-/** Validates a category. Returns { title, items } or null (when it has no items). */
+/** Validates a category. Returns { title, icon, items } or null (no items). */
 function normalizeCategory(raw) {
   if (!raw || typeof raw !== 'object') return null;
   if (!hasText(raw.title)) return null;
   const items = Array.isArray(raw.items) ? raw.items.map(normalizeItem).filter(Boolean) : [];
   if (items.length === 0) return null;
-  return { title: normalizeText(raw.title), items };
+  return { title: normalizeText(raw.title), icon: normalizeIcon(raw.icon), items };
 }
 
 /**
@@ -106,7 +135,7 @@ function normalizeCategory(raw) {
  * screen. They are unique across the WHOLE catalog, not per category - the
  * renderer passes one back as the only thing identifying a link.
  *
- * @returns {{categories: Array<{title, items: Array<{id,name,url,description}>}>, total: number}}
+ * @returns {{categories: Array<{title, icon, items: Array<{id,name,url,description}>}>, total: number}}
  */
 function loadLibraries() {
   const byTitle = new Map();
@@ -128,6 +157,7 @@ function loadLibraries() {
   let total = 0;
   const categories = [...byTitle.values()].map((category) => ({
     title: category.title,
+    icon: category.icon,
     items: category.items.map((item) => {
       const base = slugify(item.name, total);
       // Two entries named the same would otherwise resolve to one URL, and the
@@ -172,6 +202,7 @@ module.exports = {
   resolveLibraryUrl,
   normalizeItem,
   normalizeCategory,
+  normalizeIcon,
   safeUrl,
   slugify,
 };

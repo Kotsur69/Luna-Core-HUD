@@ -751,6 +751,13 @@
         <button id="libraries-open" class="palette-chip" data-i18n-title="libraries.chip.title" title="Polecane biblioteki i narzedzia (Ctrl+B)">
           <kbd>Ctrl</kbd><kbd>B</kbd>
         </button>
+        <!-- Sixth chip: the highlight extractor (batch clip trimmer, modules/
+             highlights.js). Click-only, no assigned chord yet - unlike its
+             siblings above it has no keyboard shortcut to be discoverable
+             for, so it carries no <kbd> pair. -->
+        <button id="highlights-open" class="palette-chip" data-i18n-title="highlights.chip.title" title="Ekstraktor highlightow">
+          ✂
+        </button>
         <!-- D5: the same chip-style bar as Ctrl+K/Ctrl+L, instead of a permanent block
              in the left panel (see modules/update.js). Only visible when there's
              something to act on (an update available/ready); hidden otherwise -
@@ -866,11 +873,16 @@
   </div>
 
   <!-- ============ Recommended libraries & tools (Ctrl+B) ============ -->
-  <!-- modules/libraries.js. A curated link directory (config/libraries.json),
-       grouped by category and filtered from the field in the bar. Reuses
+  <!-- modules/libraries.js. A curated link directory (config/libraries.json).
+       Two levels: a grid of square category tiles, and the entries inside one
+       category; typing in the bar overrides both with flat results. Reuses
        .palette's overlay/backdrop/modal/bar/foot CSS, same pairing as
-       .gitquick and .shortcuts-overlay above; only the scrolling body and the
-       entry rows are its own.
+       .gitquick and .shortcuts-overlay above; only the scrolling body, the
+       tiles and the entry rows are its own.
+
+       The body is EMPTY in the markup and every level is built in JS - the
+       three views share one scroll container, and a static skeleton for each
+       would be three hidden subtrees to keep in step with the module.
 
        The rows are built in JS and carry an entry ID, never an href: clicking
        one sends that id to main, which looks the address up in its own copy of
@@ -909,7 +921,99 @@
       <div class="palette__foot">
         <span id="libraries-note" class="libraries__note" role="status"></span>
         <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.nav">nawigacja</span></span>
-        <span><kbd>Enter</kbd> <span data-i18n="libraries.foot.open">otworz w przegladarce</span></span>
+        <span><kbd>Enter</kbd> <span data-i18n="libraries.foot.open">otworz</span></span>
+        <span><kbd>⌫</kbd> <span data-i18n="libraries.foot.back">poziom wyzej</span></span>
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= /ask tool recommender ================= -->
+  <!-- modules/ask.js. Reachable only by typing "/ask <question>" into the
+       #libraries-input filter field above and hitting Enter (see modules/
+       libraries.js's Enter-key handler) - there is no other way to "open"
+       it, so it gets no chip of its own. A sibling of #libraries in the DOM,
+       placed right after it so it stacks visually on top when both happen to
+       be open at once (same .palette overlay CSS on both; last-in-DOM wins
+       the z-order at equal z-index). Reuses .libraries-overlay's modal width
+       and .libraries-overlay__body's scroll body rather than duplicating
+       that CSS - see #libraries's own comment above for why the palette's
+       shared overlay/backdrop/modal/bar/foot rules are reused across every
+       overlay in this file instead of each one carrying its own copy.
+
+       The body is EMPTY in the markup, same reasoning as #libraries-list:
+       loading / summary+recommended+suggestions / error are three different
+       states, and a static skeleton for each would be three hidden subtrees
+       to keep in step with the module. modules/askview.js builds whichever
+       one is current. -->
+  <div id="ask" class="palette libraries-overlay ask-overlay" tabindex="-1" hidden>
+    <div class="palette__backdrop" data-ask-close></div>
+    <div
+      class="palette__modal"
+      role="dialog"
+      aria-modal="true"
+      data-i18n-aria="ask.panel.title"
+      aria-label="Pytanie do /ask"
+    >
+      <div class="palette__bar">
+        <span class="palette__glyph">✦</span>
+        <span id="ask-question" class="ask__question"></span>
+        <button
+          type="button"
+          id="ask-closebtn"
+          class="libraries__closebtn"
+          data-ask-close
+          data-i18n-title="ask.close"
+          data-i18n-aria="ask.close"
+          title="Zamknij"
+          aria-label="Zamknij"
+        >×</button>
+      </div>
+      <div id="ask-body" class="libraries libraries-overlay__body ask__body"></div>
+      <div class="palette__foot">
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Highlight extractor (batch clip trimmer) ============ -->
+  <!-- modules/highlights.js. Batch-trims the last N seconds off every clip in
+       a folder via a system-installed ffmpeg (not bundled - src/highlights.js's
+       header explains why). Reachable on its own via the #highlights-open
+       chip, or - once Phase 5 wires it - pre-filled from an /ask suggestion
+       card's "Run it" button. Reuses .libraries-overlay's modal width and
+       .libraries-overlay__body's scroll body rather than duplicating that
+       CSS, same reasoning #ask's own comment gives for the same choice.
+
+       The body is EMPTY in the markup, same reasoning as #libraries-list/
+       #ask-body: whether the ffmpeg-missing banner, the form, or live
+       per-file progress is on screen depends on runtime state, not markup.
+       modules/highlightsview.js builds whichever one is current. -->
+  <div id="highlights" class="palette libraries-overlay highlights-overlay" tabindex="-1" hidden>
+    <div class="palette__backdrop" data-highlights-close></div>
+    <div
+      class="palette__modal"
+      role="dialog"
+      aria-modal="true"
+      data-i18n-aria="highlights.panel.title"
+      aria-label="Ekstraktor highlightow"
+    >
+      <div class="palette__bar">
+        <span class="palette__glyph">✂</span>
+        <span class="highlights__title" data-i18n="highlights.panel.title">Ekstraktor highlightow</span>
+        <button
+          type="button"
+          id="highlights-closebtn"
+          class="libraries__closebtn"
+          data-highlights-close
+          data-i18n-title="highlights.close"
+          data-i18n-aria="highlights.close"
+          title="Zamknij"
+          aria-label="Zamknij"
+        >×</button>
+      </div>
+      <div id="highlights-body" class="libraries libraries-overlay__body highlights__body"></div>
+      <div class="palette__foot">
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>

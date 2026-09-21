@@ -163,6 +163,29 @@ contextBridge.exposeInMainWorld('lunacore', {
    *  URL: main resolves the address from config/libraries.json itself, so this
    *  bridge cannot be used to open an arbitrary page (src/libraries.js header). */
   openLibrary: (id) => ipcRenderer.send('libraries:open', id),
+  /** Sends a /ask question to Claude (headless, Sonnet), grounded in the current
+   *  libraries catalog. Promise<{ok, summary, recommended, suggestions} | {ok:false, reason}>. */
+  askLibraries: (question) => ipcRenderer.invoke('ask:query', question),
+
+  // --- Highlight extractor (batch clip trimmer) ---
+  /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */
+  getFfmpegStatus: () => ipcRenderer.invoke('highlights:ffmpeg-status'),
+  /** Native folder picker for the source/output folder. `role` is 'source' or
+   *  'output' (only changes the dialog's title/default path); returns the
+   *  picked path or null (cancelled). */
+  pickHighlightsFolder: (role) => ipcRenderer.invoke('highlights:pick-folder', role),
+  /** Starts a batch tail-trim of every clip in sourceFolder into outputFolder.
+   *  Payload: {sourceFolder, outputFolder, seconds, extensions}. Returns
+   *  immediately (does not wait for the batch to finish); progress streams
+   *  over onHighlightProgress. Promise<{ok, jobId, files} | {ok:false, reason}>. */
+  runHighlightBatch: (payload) => ipcRenderer.invoke('highlights:run', payload),
+  /** Cancels a running batch by job id (fire-and-forget). */
+  cancelHighlightBatch: (jobId) => ipcRenderer.send('highlights:cancel', jobId),
+  /** Registers a callback with per-file batch progress:
+   *  {jobId, event, file?, index?, total?, reason?}. */
+  onHighlightProgress: (callback) => {
+    ipcRenderer.on('highlights:progress', (_e, payload) => callback(payload));
+  },
 
   // --- Scratchpad (local notepad) ---
   /** Reads the scratchpad content; Promise<string> ('' when empty). */

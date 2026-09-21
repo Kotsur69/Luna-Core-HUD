@@ -2983,7 +2983,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 /* ---- Recommended libraries & tools (Ctrl+B) --------------------------------
    Reuses .palette's overlay/backdrop/modal/bar/foot rules directly, same
    pairing as .gitquick and .shortcuts-overlay above. Only the wider modal, the
-   scrolling body and the entry rows are its own.
+   scrolling body, the category tiles and the entry rows are its own.
+
+   Two levels share one scroll container: a grid of square category tiles, and
+   the rows inside one category. Each level builds its own .libraries__view
+   wrapper, and that wrapper - not the scroller - is what slides, so the
+   scrollbar does not travel with the content.
 
    The rows are a two-column grid (content | actions) rather than the palette's
    three-column row: an entry here carries a paragraph of description, so it
@@ -3031,14 +3036,180 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   min-height: 0;
 }
 
-.libraries {
+/* The scroll container itself. The layout belongs to the view inside it. */
+.libraries { display: block; }
+
+/* One per render: whichever level is currently on screen. */
+.libraries__view {
   display: flex;
   flex-direction: column;
   gap: var(--space-7);
 }
 
-.libraries__grouptitle {
-  margin: 0 0 var(--space-3);
+/* Forward goes deeper and arrives from the right; back reverses it. Direction
+   is the only thing telling you which way you just moved, so it is worth the
+   fourteen pixels. Both keyframes end at `none` rather than translate(0), so a
+   settled view is not left holding a composited layer it no longer needs.
+
+   No prefers-reduced-motion block here on purpose: --dur-normal is already
+   forced to 0ms globally (see the motion tokens near the top of this file), and
+   a zero-length animation with `both` simply lands on its end state. */
+.libraries__view.is-from-right {
+  animation: libraries-slide-right var(--dur-normal) var(--ease-smooth) both;
+}
+.libraries__view.is-from-left {
+  animation: libraries-slide-left var(--dur-normal) var(--ease-smooth) both;
+}
+
+@keyframes libraries-slide-right {
+  from { opacity: 0; transform: translate3d(14px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes libraries-slide-left {
+  from { opacity: 0; transform: translate3d(-14px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---- Level 1: the category grid ------------------------------------------ */
+
+.libraries__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: var(--space-5);
+}
+
+/* Square by construction: fourteen tiles only read as a grid if they are one
+   shape, and aspect-ratio keeps that true at every modal width without a
+   second breakpoint. */
+.libraries-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  aspect-ratio: 1;
+  padding: var(--space-6);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  animation: libraries-tile-in var(--dur-normal) var(--ease-smooth) both;
+  animation-delay: calc(var(--tile-index, 0) * var(--stagger));
+  transition: border-color var(--dur-fast) var(--ease-sharp),
+    background-color var(--dur-fast) var(--ease-sharp),
+    color var(--dur-fast) var(--ease-sharp);
+}
+
+/* Coming BACK from a category, the whole view already slides. Staggering the
+   tiles underneath that is two animations for one gesture, and the second one
+   is the one that reads as slow. */
+.libraries__view.is-from-left .libraries-tile { animation: none; }
+
+@keyframes libraries-tile-in {
+  from { opacity: 0; transform: translate3d(0, 6px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+.libraries-tile:hover {
+  border-color: var(--edge-glow);
+  background: var(--surface-panel-2);
+  color: var(--text);
+}
+.libraries-tile:focus-visible {
+  outline: var(--border-w) solid var(--neon-cyan);
+  outline-offset: 2px;
+  color: var(--text);
+}
+
+.libraries-tile__icon {
+  display: flex;
+  color: var(--neon-cyan);
+  transition: color var(--dur-fast) var(--ease-sharp);
+}
+.libraries-tile__icon svg {
+  display: block;
+  width: 26px;
+  height: 26px;
+}
+.libraries-tile:hover .libraries-tile__icon,
+.libraries-tile:focus-visible .libraries-tile__icon {
+  color: var(--neon-magenta);
+}
+
+.libraries-tile__title {
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+  /* Several titles run to four words. Clamping stops a long one from pushing
+     the count out of the square; the full text stays in the aria-label. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* A bare number: a tile has no room for a noun, and Polish would need three of
+   them to be correct at 1, 2 and 5. The spoken label carries the words. */
+.libraries-tile__count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+/* ---- Level 2: one category's header --------------------------------------- */
+
+.libraries__detailhead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding-bottom: var(--space-5);
+  border-bottom: var(--border-w) solid var(--edge);
+}
+
+.libraries__back {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--surface-panel);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-sharp),
+    border-color var(--dur-fast) var(--ease-sharp);
+}
+.libraries__back:hover {
+  color: var(--text);
+  border-color: var(--edge-glow);
+}
+.libraries__back:focus-visible {
+  outline: var(--border-w) solid var(--neon-cyan);
+  outline-offset: 1px;
+}
+
+.libraries__detailicon {
+  display: flex;
+  flex: none;
+  color: var(--neon-cyan);
+}
+.libraries__detailicon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.libraries__detailtitle {
+  margin: 0;
   font-size: var(--fs-2xs);
   font-weight: 600;
   letter-spacing: 0.4px;
@@ -3107,6 +3278,17 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   font-size: var(--fs-3xs);
   color: var(--text-dim);
 }
+/* Results only: which category the hit came from. In the flat list that is no
+   longer implied by where you are standing, so the row has to say it. */
+.libraries-item__cat {
+  font-family: var(--font-ui);
+  font-size: var(--fs-3xs);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+  opacity: 0.75;
+}
+
 .libraries-item__desc {
   font-size: var(--fs-2xs);
   line-height: 1.45;

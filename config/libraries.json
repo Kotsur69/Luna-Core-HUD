@@ -1,273 +1,292 @@
 {
-  "_comment": "Recommended libraries & tools directory (Ctrl+B). Loaded by src/libraries.js and merged with an optional config/libraries.local.json (gitignored) - a local category with the same title REPLACES the base one. Category titles are localized { pl, en }; item descriptions are plain strings, i.e. language-neutral: they are technical blurbs, not UI chrome. Item ids are DERIVED from the name by the loader - do not write them here. `url` must be http(s). The renderer never hands an address back to the main process; it names an id and main resolves the URL from this file.",
+  "_comment": "Recommended libraries & tools directory (Ctrl+B). Loaded by src/libraries.js and merged with an optional config/libraries.local.json (gitignored) - a local category with the same title REPLACES the base one. Category titles are localized { pl, en }; item descriptions are plain strings, i.e. language-neutral: they are technical blurbs, not UI chrome. Each category also names an `icon` - a slug, never a glyph and never markup - which src/renderer/modules/libicons.js draws as an SVG; an unknown or malformed name falls back to the neutral `default` tile. Item ids are DERIVED from the name by the loader - do not write them here. `url` must be http(s). The renderer never hands an address back to the main process; it names an id and main resolves the URL from this file.",
   "categories": [
     {
       "title": { "pl": "Komponenty UI i design systemy", "en": "UI Components & Design Systems" },
+      "icon": "blocks",
       "items": [
         {
           "name": "daisyUI",
           "url": "https://daisyui.com",
-          "description": "Tailwind plugin that turns utility soup into semantic class names (btn, card, modal). Pure CSS - no JS runtime - and themes swap via a data attribute."
+          "description": "Tailwind plugin that turns utility soup into semantic class names (btn, card, modal). Pure CSS with no JS runtime, 68 components, and 68 built-in themes that swap through a data attribute."
         },
         {
           "name": "Kokonut UI",
           "url": "https://kokonutui.com",
-          "description": "Copy-paste React components on Tailwind and Motion. The source ships with the component, so an agent edits it instead of fighting a package API."
+          "description": "100+ React components on Tailwind, Motion and shadcn/ui, taken either by the shadcn CLI or pasted in whole. The source ships with the component, so an agent edits it instead of fighting a package API. The Pro tier is separate and paid."
         },
         {
           "name": "OriginKit",
           "url": "https://www.originkit.dev",
-          "description": "React blocks at the layout level - sections, shells, page scaffolds - rather than individual controls."
+          "description": "Free library of animated components for modern websites. Documentation is thin - the gallery is the reference, so budget time to read the source of anything you take."
         }
       ]
     },
     {
       "title": { "pl": "Animacja i efekty wizualne", "en": "Animation & Visual Effects" },
+      "icon": "sparkles",
       "items": [
         {
           "name": "Motion",
           "url": "https://motion.dev",
-          "description": "Animation for React and plain JS built on the browser's own animation engine. Successor to Framer Motion: hardware-accelerated transforms, no JS render loop."
+          "description": "Animation for React, Vue and plain JS on a hybrid engine: hardware-accelerated browser APIs where they exist, JS where they do not. Successor to Framer Motion, MIT, and small enough that scroll-linked work no longer needs GSAP."
         },
         {
           "name": "Particles (Casberry)",
           "url": "https://particles.casberry.in",
-          "description": "Configurable particle-field backgrounds on Canvas/WebGL. Decorative - check the frame cost before putting one behind live content."
+          "description": "Browser studio for particle swarms on Three.js/WebGL - 20k+ units, behaviour written as a JS function you generate with an LLM and paste in. Exports vanilla JS, React or Three.js, plus PLY/GLB/OBJ. A workbench, not a drop-in background component."
         }
       ]
     },
     {
       "title": { "pl": "Wizualizacja danych i metryki", "en": "Data Visualization & Metrics" },
+      "icon": "chart",
       "items": [
         {
           "name": "Bklit UI",
           "url": "https://bklit.com",
-          "description": "Chart and telemetry components aimed at dashboards that update while you watch them, rather than static reports."
+          "description": "React chart components: 17+ types from area and bar through sankey, sunburst and candlestick, with the axes, legends and brushes around them. Ships a visual builder (Studio) and prebuilt blocks; open source, in the Vercel OSS program."
         }
       ]
     },
     {
       "title": { "pl": "Narzedzia AI i automatyzacja", "en": "AI Tools & Automation" },
+      "icon": "wand",
       "items": [
         {
           "name": "Manus",
           "url": "https://manus.im",
-          "description": "Hosted agent that drives a browser and runs multi-step tasks on its own. Closed and cloud-side: you hand it a goal, not a tool loop you control."
+          "description": "Hosted agent that runs multi-step work on its own - slides, sites, images, music, driving a browser. Closed and cloud-side on paid tiers: you hand it a goal, not a tool loop you control."
         }
       ]
     },
     {
       "title": { "pl": "Agent skills, frameworki i infrastruktura", "en": "Agent Skills, Frameworks & Infrastructure" },
+      "icon": "cube",
       "items": [
         {
           "name": "cloudflare/computer",
           "url": "https://github.com/cloudflare/computer",
-          "description": "Gives an agent a POSIX-ish filesystem inside a Durable Object, so a sandbox keeps its working state between calls instead of starting cold every time."
+          "description": "A virtual filesystem living inside a Durable Object, SQLite as the source of truth, projected into a container, a bash isolate or a JS isolate so a sandbox keeps its working state between calls. Cloudflare says plainly it is not production-ready - experiments only."
         },
         {
           "name": "usestrix/strix",
           "url": "https://github.com/usestrix/strix",
-          "description": "Agents that pentest an app from inside a Docker sandbox and try to prove each finding with a working PoC - the part that separates it from a scanner emitting maybes."
+          "description": "Agents that pentest a running app from a Docker sandbox and prove each finding with a working PoC - the part that separates it from a scanner emitting maybes. Can open remediation PRs. Needs an LLM key, and authorised targets only."
         },
         {
           "name": "mvanhorn/last30days-skill",
           "url": "https://github.com/mvanhorn/last30days-skill",
-          "description": "Pulls the last 30 days from X, Reddit, YouTube, HN and Polymarket into one summary. Already installed in this setup - see the /last30days command."
+          "description": "Pulls the last 30 days from Reddit, HN, Polymarket, GitHub and arXiv with no keys at all; X, YouTube and the rest each need their own auth. Ranks by real engagement and writes Markdown, HTML or JSON. Already installed here - see the /last30days command."
         }
       ]
     },
     {
       "title": { "pl": "Grafika, design i diagramy", "en": "Visuals, Design & Diagramming" },
+      "icon": "diagram",
       "items": [
         {
           "name": "cathrynlavery/diagram-design",
           "url": "https://github.com/cathrynlavery/diagram-design",
-          "description": "Editorial HTML/SVG diagram templates for coding agents - flywheels, system maps, sequences. The pitch is escaping default Mermaid output. Also installed here."
+          "description": "Agent skill that emits 39 diagram types as self-contained HTML+SVG - no build step, no JS runtime - and can redraw an existing draw.io, Mermaid or Excalidraw source. Exports SVG and PNG. Also installed here."
         },
         {
           "name": "tt-a1i/archify",
           "url": "https://github.com/tt-a1i/archify",
-          "description": "Parses a codebase into a typed JSON intermediate form, then compiles a self-contained interactive architecture map whose nodes link back to the commit behind them."
+          "description": "You describe a system in chat, the agent emits typed JSON, and Archify compiles that deterministically into one interactive HTML file. Five diagram kinds; pointing it at a repo is optional, and only there to pin claims to commits."
         }
       ]
     },
     {
       "title": { "pl": "Scraping, wyszukiwanie i automatyzacja www", "en": "Web Scraping, Search & Automation" },
+      "icon": "search",
       "items": [
         {
           "name": "unclecode/crawl4ai",
           "url": "https://github.com/unclecode/crawl4ai",
-          "description": "Crawler whose output target is a context window, not a browser: clean Markdown plus structured extraction, page chrome already stripped."
+          "description": "Crawler whose output target is a context window, not a browser: clean Markdown plus CSS/XPath/LLM extraction, page chrome already stripped. Deep crawling, stealth mode and a Docker server. Apache-2.0."
         },
         {
           "name": "Panniantong/Agent-Reach",
           "url": "https://github.com/Panniantong/Agent-Reach",
-          "description": "CLI that searches Twitter, Reddit, YouTube, GitHub, Bilibili and XiaoHongShu without paid API keys. It scrapes rather than calls APIs, so expect breakage when a site changes."
+          "description": "Gives an agent one way in to 16+ platforms - X, Reddit, YouTube, GitHub, Bilibili, XiaoHongShu - by routing each to whichever backend still works: official API, CLI tool, browser or scrape, with health checks and fallbacks. The routing table is the product."
         },
         {
           "name": "browser-use/browser-use",
           "url": "https://github.com/browser-use/browser-use",
-          "description": "Lets an agent work a real web UI from both the DOM tree and screenshots, which is what gets it through flows a selector-only script would lose."
+          "description": "Lets an agent work a real web UI from the DOM and from screenshots, which is what gets it through flows a selector-only script would lose. Python 3.11+, any major LLM or their own tuned model, a local browser or their cloud."
         }
       ]
     },
     {
       "title": { "pl": "Generatory aplikacji i stron", "en": "Full-Stack Web App & AI Generators" },
+      "icon": "layers",
       "items": [
         {
           "name": "AKCodez/seo-god",
           "url": "https://github.com/AKCodez/seo-god",
-          "description": "SEO agent that audits a site, tracks keyword positions and AI-answer visibility, and can run the fix loop on a schedule instead of on request."
+          "description": "Turns Claude Code into a standing SEO operator: audits the site, fixes what it can in your repo, reads Search Console, tracks AI-answer visibility, then installs itself as a daily job. Needs Docker and a publicly reachable site. It edits files but never commits them."
         },
         {
           "name": "JCodesMore/ai-website-cloner-template",
           "url": "https://github.com/JCodesMore/ai-website-cloner-template",
-          "description": "Reads an existing site's computed CSS, assets and layout and rebuilds it as a Next.js/Tailwind project. Fine for porting your own old site; check the licence otherwise."
+          "description": "Point an agent at a URL and it rebuilds the site as Next.js 16, React 19, shadcn/ui and Tailwind v4, extracting design tokens, assets and per-component specs on the way. MIT, and the README is blunt about not using it to impersonate anyone."
         },
         {
           "name": "diegosouzapw/OmniRoute",
           "url": "https://github.com/diegosouzapw/OmniRoute",
-          "description": "One endpoint in front of OpenAI, Anthropic and local models, handling fallback and rate limits so the choice of backend stops leaking into app code."
+          "description": "Local gateway with an OpenAI-compatible /v1 in front of 350+ providers, cascading subscription to key to cheap to free as each one fails. 19 routing strategies and a prompt-compression stage; also speaks MCP."
         }
       ]
     },
     {
       "title": { "pl": "Media, audio i narzedzia AI", "en": "Media, Audio & AI Utilities" },
+      "icon": "waveform",
       "items": [
         {
           "name": "jamiepine/voicebox",
           "url": "https://github.com/jamiepine/voicebox",
-          "description": "Voice synthesis and cloning on local TTS models, with a multi-track timeline, dictation and an MCP surface so an agent can speak and listen."
+          "description": "Local voice studio: seven TTS engines, zero-shot cloning from one sample, Whisper dictation on a global hotkey, and an MCP server so an agent can speak in a chosen voice. Nothing leaves the machine. Rust and React, MIT."
         },
         {
           "name": "guillaumemeyer/watermarks-remover",
           "url": "https://github.com/guillaumemeyer/watermarks-remover",
-          "description": "Strips C2PA provenance metadata and synthetic watermarks from text and media. Note what that means - it removes AI-origin signals, so think about where the output goes."
+          "description": "Strips invisible-Unicode carriers and C2PA/EXIF/XMP provenance from text and media you own, and rewrites text to attack sampling watermarks. Honest about the trade: the rewrite flattens the prose, and no tool can certify a mark is actually gone."
         }
       ]
     },
     {
       "title": { "pl": "System, kod i narzedzia deweloperskie", "en": "System, Code Intelligence & Developer Utilities" },
+      "icon": "terminal",
       "items": [
         {
           "name": "pranshuparmar/witr",
           "url": "https://github.com/pranshuparmar/witr",
-          "description": "Answers \"why is this running?\" on Linux - walks PID ancestry, the systemd/Docker/PM2 supervisor above a process and the ports below it, and prints the causal chain."
+          "description": "Answers \"why is this running?\" - walks PID ancestry, the supervisor above a process (systemd, launchd, Services, rc.d) and the ports and files below it, then prints the causal chain. Linux, macOS, Windows and FreeBSD; plain text, JSON or a TUI."
         },
         {
           "name": "vitali87/code-graph-rag",
           "url": "https://github.com/vitali87/code-graph-rag",
-          "description": "Tree-sitter parse into a Memgraph knowledge graph you can query in natural language. Same idea as the codebase-memory MCP already wired into this setup."
+          "description": "Tree-sitter parse of 13+ languages into a Memgraph or Neo4j knowledge graph, queried by turning a question into Cypher. Also does AST-based edits and dead-code detection. Same idea as the codebase-memory MCP already wired into this setup."
         },
         {
           "name": "public-apis/public-apis",
           "url": "https://github.com/public-apis/public-apis",
-          "description": "The long-running index of free public APIs by category. A starting point - entries go stale and auth requirements drift."
+          "description": "The long-running index of free public APIs by category, each row carrying its auth type and whether it supports HTTPS and CORS - which is the part worth the visit. A starting point: entries go stale and auth requirements drift."
         }
       ]
     },
     {
       "title": { "pl": "Agenty AI i orkiestracja", "en": "AI Agents & Orchestration" },
+      "icon": "network",
       "items": [
         {
           "name": "livekit/agents",
           "url": "https://github.com/livekit/agents",
-          "description": "Voice agents as WebRTC participants: the STT-LLM-TTS loop plus the interruption and turn-taking handling that makes real-time speech bearable."
+          "description": "Voice agents as WebRTC participants: the STT-LLM-TTS loop plus a transformer that decides when you have actually finished talking, which is what makes interruption bearable. Multi-agent handoff and telephony included. Python, Apache-2.0."
         },
         {
           "name": "langflow-ai/langflow",
           "url": "https://github.com/langflow-ai/langflow",
-          "description": "Node-graph editor for agent workflows with Python custom nodes and MCP/API export. The visual layer earns its keep when handing a flow to someone else."
+          "description": "Node-graph editor for agent workflows, with Python behind every node and export either as an API or as an MCP server. MIT, Python 3.10-3.14, desktop build available. The visual layer earns its keep when handing a flow to someone else."
         },
         {
           "name": "langgenius/dify",
           "url": "https://github.com/langgenius/dify",
-          "description": "Self-hostable LLMOps platform covering workflows, RAG, agents and prompt iteration - heavier than a library, lighter than building the ops layer yourself."
+          "description": "Self-hostable platform covering workflows, RAG, agents and prompt iteration - heavier than a library, lighter than building the ops layer yourself. The licence is Apache-2.0 with extra conditions, so read it before shipping on top."
         }
       ]
     },
     {
       "title": { "pl": "Tworzenie tresci, media i pisanie", "en": "Content Creation, Media & Writing" },
+      "icon": "pencil",
       "items": [
         {
           "name": "xiamuceer-j/MuMuAINovel",
           "url": "https://github.com/xiamuceer-j/MuMuAINovel",
-          "description": "Long-form fiction drafting that keeps the state a novel needs - characters, plot timeline, relationship graph - outside the context window."
+          "description": "Long-form fiction drafting that keeps what a novel needs - characters, worldbuilding, relationship graph, planted foreshadowing - in Postgres rather than the context window. FastAPI and React, deployed with Docker."
         },
         {
           "name": "GVCLab/PersonaLive",
           "url": "https://github.com/GVCLab/PersonaLive",
-          "description": "Streaming diffusion for continuous portrait animation, targeted at a single 12GB GPU - the constraint that decides whether it runs on your machine."
+          "description": "Streaming diffusion that animates a still portrait from a driving video, continuously and without a fixed length. 12GB of VRAM is the floor, which is the number that decides whether it runs on your machine. Released for academic research only."
         },
         {
           "name": "aiming-lab/AutoResearchClaw",
           "url": "https://github.com/aiming-lab/AutoResearchClaw",
-          "description": "A 23-stage research pipeline: literature search, experiment runs, self-healing code, review and LaTeX. Wide scope - treat the output as a draft under review."
+          "description": "A 23-stage pipeline from topic to conference-formatted LaTeX: literature search across OpenAlex, Semantic Scholar and arXiv, sandboxed self-healing experiments, multi-agent review, verified BibTeX. Three human approval gates - leave them in."
         }
       ]
     },
     {
       "title": { "pl": "Automatyzacja biznesu i DevOps", "en": "Business Automation, Productivity & DevOps" },
+      "icon": "briefcase",
       "items": [
         {
           "name": "Zackriya-Solutions/meetily",
           "url": "https://github.com/Zackriya-Solutions/meetily",
-          "description": "Meeting notes with nothing leaving the machine: Rust/Tauri app, live transcription, speaker diarization, Ollama summaries."
+          "description": "Meeting notes with nothing leaving the machine: Rust and Tauri app, local Whisper or Parakeet transcription, summaries through Ollama or a cloud key if you want one. Speaker diarization is not in the community build yet."
         },
         {
           "name": "coollabsio/coolify",
           "url": "https://github.com/coollabsio/coolify",
-          "description": "Self-hosted deploy layer for apps, databases and Docker services on a VPS you own - the usual answer to a Vercel bill that stopped being small."
+          "description": "Self-hosted deploy layer for apps, databases and 300+ one-click services on anything you can SSH into, down to a Raspberry Pi. Git-push deploys and PR previews - the usual answer to a Vercel bill that stopped being small."
         },
         {
           "name": "CoreBunch/Instatic",
           "url": "https://github.com/CoreBunch/Instatic",
-          "description": "Git-backed visual CMS on Bun: content modeling and canvas layout editing that commit to the repo, then build a static site."
+          "description": "Visual CMS on Bun where pages, posts and any collection you invent share one table, and publishing bakes plain semantic HTML to disk - no framework runtime left in the page, and about a kilobyte of it only where something is genuinely dynamic."
         },
         {
           "name": "Stirling-Tools/Stirling-PDF",
           "url": "https://github.com/Stirling-Tools/Stirling-PDF",
-          "description": "Self-hosted PDF toolbox - merge, split, convert, OCR - so documents stop going through a random web converter."
+          "description": "50+ PDF tools - merge, split, convert, OCR, redact, sign - as a desktop app, a browser build or a server you host, so documents stop going through a random web converter. Open-core: some enterprise pieces are not free."
         }
       ]
     },
     {
       "title": { "pl": "Wideo", "en": "Videos" },
+      "icon": "video",
       "items": [
         {
           "name": "brag",
           "url": "https://github.com/latent-spaces/brag",
-          "description": "Agent skill that turns the repo itself into a ~20-second launch video - music, UI animation and share text - via Hyperframes. Commands: /brag, or /brag --voice for a voiceover cut."
+          "description": "Agent skill that turns the repo itself into a shareable launch video: it picks the angle, then renders an MP4 with music and share copy into brag-output/. /brag, --voice for narration, --tone to steer it. Needs Node 22, FFmpeg and the Hyperframes CLI."
         },
         {
           "name": "autoclip",
           "url": "https://github.com/zhouxiaoka/autoclip",
-          "description": "Cuts a long recording into short-form clips on its own, picking the highlight windows instead of leaving you to scrub the timeline."
+          "description": "A self-hosted service rather than a CLI: pulls a video from YouTube or Bilibili, has an LLM outline it, scores the segments, titles the winners and assembles themed collections. FastAPI, Celery and Redis behind a React UI."
         },
         {
           "name": "vhs",
           "url": "https://github.com/charmbracelet/vhs",
-          "description": "Terminal GIF and video recorder written in Go, driven by declarative .tape scripts - a demo clip becomes a file you re-run, not a take you re-record."
+          "description": "Terminal GIF and video recorder written in Go, driven by declarative .tape scripts - a demo clip becomes a file you re-run, not a take you re-record. Outputs GIF, MP4, WebM or frames; needs ttyd and ffmpeg on PATH."
         },
         {
           "name": "claude-video",
           "url": "https://github.com/bradautomates/claude-video",
-          "description": "Wires video generation and editing into Claude, so a session ends with a rendered clip rather than a command left for you to run."
+          "description": "A /watch skill that lets Claude actually see a video: yt-dlp for the source, ffmpeg for frames, captions or Whisper for a timestamped transcript, then answers grounded in both. It reads video - it does not generate any."
         },
         {
           "name": "video-use",
           "url": "https://github.com/browser-use/video-use",
-          "description": "browser-use extension for recorded sessions: it drives the page and turns the run into a web video."
+          "description": "An editing agent despite the name: point it at a folder of raw takes and it transcribes with ElevenLabs Scribe, cuts filler and silence from the TEXT, grades, subtitles and renders edit/final.mp4. Nothing to do with driving a browser."
         },
         {
           "name": "OpenMontage",
           "url": "https://github.com/calesthio/OpenMontage",
-          "description": "Open-source editing and montage pipeline that assembles footage programmatically, for media produced on a schedule rather than by hand."
+          "description": "Agentic pipeline from one sentence to a finished MP4 - research, script, scene plan, asset generation, edit, compose - across 60+ providers, with an approval gate and a spend cap at each stage. Composes through Remotion or HyperFrames. AGPLv3."
         },
         {
           "name": "Remotion",
           "url": "https://github.com/remotion-dev/remotion",
-          "description": "Videos written as React components - HTML, CSS and JS rendered frame by frame - so a clip is code you can diff, parametrize and rebuild."
+          "description": "Videos written as React components and rendered frame by frame, locally, on Lambda or in the browser - so a clip is code you can diff, parametrize and rebuild. Not plain open source: past a certain company size it needs a paid licence."
+        },
+        {
+          "name": "FFmpeg",
+          "url": "https://ffmpeg.org/download.html",
+          "description": "The command-line audio/video toolkit this app's own highlight extractor shells out to for trimming clips - and what half the entries above already quietly depend on. Not bundled; grab a static build for your OS from this page and make sure it lands on PATH."
         }
       ]
     }

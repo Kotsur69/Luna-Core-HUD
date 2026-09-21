@@ -38,7 +38,14 @@ injects prompts or touches the `claude` binary.
 > right tab when clicked — plus a taskbar flash on the same busy→idle edge
 > whenever the window is unfocused, and **clickable `file:line` links in the
 > terminal** (click `src/foo.js:123` → opens in `code -g` / `$EDITOR`, with the
-> path validated against that session's own project root, no network).
+> path validated against that session's own project root, no network), a
+> **Ctrl+B recommended libraries & tools directory** (14 categories, 40+
+> curated dev tools, filterable, opened only through a validated id→URL
+> lookup — never a renderer-supplied address), a one-shot **`/ask`** tool
+> recommender inside that same filter box (the one deliberate, user-triggered
+> exception to the zero-extra-tokens rule — see *Core constraint* below), and
+> a **highlight/clip extractor** panel that batch-trims video files via a
+> system `ffmpeg`.
 
 ---
 
@@ -48,8 +55,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.11.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.11.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.12.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.12.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
@@ -122,17 +129,28 @@ defaults are read-only; your overrides live beside them as `*.local.json` and ar
 merged on top, which is why an update can still deliver a new theme or a
 corrected rate table.
 
-**Network — two endpoints, both reads:**
+**Network — two endpoints, both reads, made directly by LunaCore's own main
+process:**
 
 | Request | When | Why | Off switch |
 |---------|------|-----|------------|
 | `GET https://api.anthropic.com/api/oauth/usage` | every 90 s | Draws the usage gauge (5-hour + weekly limits). | `ENABLE_USAGE_METER = false` in [`src/main.js`](src/main.js) |
 | `GET https://api.github.com/repos/Kotsur69/Luna-Core-HUD/releases/…` | **once, at launch** | Asks whether a newer LunaCore exists. | `ENABLE_AUTO_UPDATE = false` in [`src/main.js`](src/main.js) |
 
-Set both to `false` and the app makes **no network requests at all**.
+Set both to `false` and LunaCore's own process makes **no network requests at
+all**.
 
-Neither request ever calls `/v1/messages`, which is precisely why LunaCore
-**cannot spend your tokens** — see *Core constraint* below.
+Neither of these two calls `/v1/messages`, which is why *these two* **cannot
+spend your tokens** — see *Core constraint* below. That claim only ever
+covered what this table lists: HTTP calls LunaCore's own main process makes
+directly. It does **not** cover `/ask`. `/ask` does spend tokens, on purpose,
+and this table has no row for it because it isn't a network call *from this
+process* at all — it's a `claude` CLI process LunaCore **spawns**, and that
+spawned process makes its own authenticated call under its own auth, the same
+way it would if you'd typed the question into the terminal yourself. See *Core
+constraint: zero extra tokens* below for what `/ask` is and why it's the one
+deliberate exception, and **Runs**, just below, for exactly what gets
+spawned.
 
 **About the update check specifically.** It only *asks*. Nothing is downloaded
 until you click **Download**, and nothing is installed until you click **Install
@@ -162,6 +180,16 @@ feedback — entirely optional and entirely local, controlled over a JSON IPC
 pipe (no per-event process spawn). Without `mpv`, the HUD is identical; every
 sound call becomes a silent no-op.
 
+`/ask` (below) spawns one more process, but only when you invoke it:
+`claude -p "<question>" --model sonnet --output-format json` via Node's
+`execFile` ([`src/ask.js`](src/ask.js)) — a one-shot, non-interactive child,
+not a PTY and not persistent, that runs once per question, prints its JSON
+reply to stdout, and exits. The highlight extractor spawns a system `ffmpeg`
+the same way, once per video file, sequentially, during a batch run
+([`src/highlights.js`](src/highlights.js)). Neither is a network request
+LunaCore's own process makes — the *spawned* `claude` CLI authenticates and
+calls the API itself, exactly as it does for the terminal above.
+
 ---
 
 ## ⚠️ Core constraint: zero extra tokens
@@ -179,6 +207,41 @@ Sound/voice feedback (below) is a third, purely local category: short UI cues
 and TTS voice lines played by `mpv` on interaction/threshold events. It reads
 nothing from the CLI and calls no API — zero tokens for a different reason than
 the two categories above: there is no model or network involved at all.
+
+### The one deliberate exception: `/ask`
+
+**`/ask` breaks the constraint above, on purpose — this is the one place in
+LunaCore where that is true, and it needs to be said plainly rather than
+discovered.** Typing `/ask <question>` into the Ctrl+B filter box and pressing
+Enter (see below) spends real tokens against **your own Claude subscription**,
+through the `claude` CLI's own authenticated session (`claude -p --model
+sonnet`) — not a separate API key LunaCore holds, and not the OAuth-usage read
+described above.
+
+What keeps this from being the "smart context analysis" the paragraph above
+rules out:
+
+- **Explicit and opt-in, every time.** It runs only when you type `/ask`
+  followed by a question and press Enter. Never on a keystroke, never on a
+  timer, never as a side effect of opening the directory, filtering it, or
+  anything else in the HUD.
+- **A single, bounded call, not a standing agent.** `runAsk()`
+  ([`src/ask.js`](src/ask.js)) spawns one `claude -p` child process via
+  `execFile` — no PTY, no terminal tab, no persistent process. It runs once,
+  prints its JSON reply, and exits; nothing is left running afterward, and
+  nothing calls it again on its own.
+- **You asked; the CLI answered.** That is the entire feature. What this
+  section exists to prevent is LunaCore silently deciding *for you* that a
+  moment calls for model analysis. Typing `/ask` is you deciding that — the
+  same decision as typing a question straight into the terminal, just routed
+  through a headless, one-shot call instead of the interactive session.
+
+`/ask` is not filed under Passive Observer or Action Injector above because it
+is honestly neither: it reads no terminal stream and injects nothing into a
+PTY. It is its own category — a narrow, explicit hole cut into the zero-token
+rule, not a fit forced into either existing bucket. See [What LunaCore reads,
+writes and sends](#what-lunacore-reads-writes-and-sends) above for the
+network-table caveat this creates, and below for what `/ask` actually does.
 
 ---
 
@@ -303,6 +366,9 @@ Luna-Core-HUD/
 │   ├── cheatsheets.js     # load/validate action cheat-sheets from config/
 │   ├── skills.js          # scan skill dirs → categorized skill cheat-sheet
 │   ├── prompts.js         # load/validate multi-line prompt library from config/
+│   ├── libraries.js       # load/validate the Ctrl+B recommended libraries & tools catalog from config/
+│   ├── ask.js             # headless claude -p tool recommender for the Ctrl+B directory (/ask)
+│   ├── highlights.js      # batch tail-trim of video clips via system ffmpeg
 │   ├── scratchpad.js      # read/write the local scratchpad note file
 │   ├── projects.js        # load/validate working directories (~ expansion)
 │   ├── hotkeys.js         # pure: which tab Alt+←/→ means, which project Alt+1..9 means
@@ -341,6 +407,15 @@ Luna-Core-HUD/
 │           ├── ports.js       # localhost port tracker
 │           ├── cheatsheets.js # config-driven command buttons
 │           ├── prompts.js     # prompt library
+│           ├── libraries.js   # Ctrl+B directory overlay: state (grid/detail/results, filter, keyboard nav)
+│           ├── librariesview.js # nodes the directory overlay is built from (tiles, rows)
+│           ├── libicons.js    # category icon slugs → inline SVG
+│           ├── ask.js         # /ask overlay: state/orchestration (askLibraries() bridge, four render states)
+│           ├── askview.js     # nodes the /ask panel is built from (summary, recommended/suggestion cards)
+│           ├── askcommand.js  # pure /ask command parsing (isAskCommand, parseAskQuery)
+│           ├── highlights.js  # highlight extractor panel: state/orchestration
+│           ├── highlightsview.js # nodes the highlight extractor panel is built from
+│           ├── highlightscommand.js # pure highlight extractor validation + progress-event mapping
 │           ├── skills.js      # skill cheatsheet
 │           ├── scratchpad.js  # local notepad
 │           ├── appearance.js  # theme + language + sound prefs (toggle, volume, keystroke variant)
@@ -351,6 +426,7 @@ Luna-Core-HUD/
 │   ├── projects.json      # working directories (projects.local.json overrides, gitignored)
 │   ├── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
 │   ├── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
+│   ├── libraries.json     # Ctrl+B recommended libraries & tools catalog (libraries.local.json overrides, gitignored)
 │   ├── themes.json        # visual themes (themes.local.json overrides, gitignored)
 │   ├── rates.json         # per-model token prices for the cost HUD (rates.local.json overrides)
 │   ├── sounds.json        # sfx/voice event → file + volume (keystroke: 4-way variant list)
@@ -533,6 +609,9 @@ the reasoning behind the contract are in [`FUTURE_PLAN.md`](FUTURE_PLAN.md)
 | + | Active-Files Edit Heatmap — real `+`/`-` diff-stat counts per file, live-edit pulse, self-heal, deleted-file indicator | ✅ done (see [`ACTIVE_FILES_HEATMAP_PLAN.md`](reference/ACTIVE_FILES_HEATMAP_PLAN.md)) |
 | + | Multi-repo project switching — "+" button, native folder picker, writes `projects.local.json` | ✅ done |
 | + | GPU usage row in the System widget (Windows, Task-Manager-style counters) | ✅ done |
+| + | Ctrl+B recommended libraries & tools directory — filterable catalog, validated id→URL resolution (shipped in `f989b36`/`c72cfef`; this README caught up in v0.12.0) | ✅ done |
+| + | `/ask` — one-shot `claude -p` tool recommendation inside the Ctrl+B filter box (the one deliberate, user-triggered exception to the zero-token constraint) | ✅ done |
+| + | Highlight/clip extractor — batch tail-trim via system `ffmpeg`, reachable from its own chip or an `/ask` "Run it" suggestion | ✅ done |
 
 That closes the whole approved shortlist and the first slice of the structural
 plan. **A1 is done**: the 1554-line `renderer.js` is a 57-line entry point plus
@@ -553,15 +632,18 @@ than a Claude-only HUD.
 ### Tests
 
 ```bash
-npm test        # node --test — 350 tests, ~0.3s, no extra dependencies
+npm test        # node --test — 1182 tests, ~0.9s, no extra dependencies
 ```
 
 Covers the side-effect-free modules only: context metrics, transcript-dir
 encoding, tool detection, profile/project validation, port parsing, skill
 categorisation, model/context-window inference, the burn-rate sampler with
 its ETA arithmetic, sound-config resolution (`resolveSoundFile`, including the
-keystroke variant lookup), and the usage-threshold voice announcer's state
-machine (`nextUsageAnnounced`).
+keystroke variant lookup), the usage-threshold voice announcer's state
+machine (`nextUsageAnnounced`), `/ask`'s catalog-context builder and response
+validator (`buildCatalogContext`/`parseAskResponse` in `src/ask.js`), and the
+highlight extractor's pure argv/validation helpers (`buildTrimArgs`,
+`filterVideoFiles`, `parseFfmpegVersionLine` in `src/highlights.js`).
 
 Two of them are **data** tests rather than logic tests: they assert that the
 shipped `config/rates.json` and the `MODEL_WINDOWS` table actually know every
@@ -900,6 +982,42 @@ several messages. Bracketed paste tells the terminal "this is a paste, not
 keystrokes" — the whole block lands in the input buffer with its line breaks
 intact and nothing is sent until you say so. Drop a `config/prompts.local.json`
 (gitignored) for private prompts; it overrides base groups by `title`.
+
+## `/ask` and the highlight extractor
+
+**`/ask`** turns the Ctrl+B filter box into a tool-recommendation prompt.
+Typing `/ask <question>` and pressing Enter (`isAskCommand()`/`parseAskQuery()`
+in [`src/renderer/modules/askcommand.js`](src/renderer/modules/askcommand.js))
+runs one `claude -p "<question>" --model sonnet --output-format json` call
+(`runAsk()` in [`src/ask.js`](src/ask.js), a 45 s default timeout), grounded in
+a condensed copy of the catalog — 14 categories, 41 entries as shipped, capped
+to 200 lines of 140 characters each. `--model sonnet` is explicit so the
+answer never silently comes from a local model a profile's
+`ANTHROPIC_BASE_URL` happens to point at. The reply is never trusted for
+parsing as JSON alone: `parseAskResponse()` drops any `recommended[].id` not
+actually in the catalog, runs every `suggestions[].url` through the same
+`safeUrl()` gate that guards `libraries.local.json`, and coerces `capability`
+onto a two-value allow-list. Each suggestion's **Add to my library** button is
+wired in the UI but, as shipped, not yet connected to
+`config/libraries.local.json` — a documented follow-up in
+`modules/ask.js`'s own comments, not a promise this release keeps. See *Core
+constraint: zero extra tokens* above for why this one call spends real tokens.
+
+A suggestion tagged `'highlight-extractor'` gets a **Run it** button that
+closes the `/ask` overlay and opens the **highlight extractor** with its
+defaults (also reachable directly, from its own chip in the terminal bar). It
+batch-trims the last N seconds (30 by default) off every video file in a
+folder — up to 300 files, `.mp4` by default — via a system-installed
+`ffmpeg`: not bundled, detected on `PATH` when the panel opens
+(`detectFfmpeg()` in [`src/highlights.js`](src/highlights.js)), reported
+missing with a link to the FFmpeg entry this release also added to the
+libraries directory's Videos category. Trimming stream-copies
+(`ffmpeg -y -sseof -<N> -i <input> -c copy <output>`) for speed, which seeks to
+the nearest keyframe rather than an exact frame — the trimmed clip's first
+fraction of a second can be broken, and the panel says so unconditionally, not
+just on failure. `HighlightBatchJob` runs the folder sequentially, never in
+parallel, streaming `file-start`/`file-done`/`file-error`/`file-cancelled`
+events over `highlights:progress` so the per-file list updates live.
 
 ## Working/waiting LED
 

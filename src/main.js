@@ -73,6 +73,12 @@ const { loadPrompts } = require('./prompts');
 // Recommended libraries & tools (Ctrl+B): a curated link directory. The loader
 // also OWNS the addresses - see the libraries:open handler.
 const { loadLibraries, resolveLibraryUrl } = require('./libraries');
+// /ask: a one-shot headless `claude -p` tool recommender grounded in the
+// libraries catalog above. See src/ask.js's header for the trust boundary.
+const { runAsk } = require('./ask');
+// Highlight extractor: batch tail-trim of video clips via system ffmpeg.
+// See src/highlights.js's header for the argv-array security property.
+const { detectFfmpeg, listVideoFiles, HighlightBatchJob } = require('./highlights');
 // Scratchpad: local notepad kept as a plain text file.
 const { readScratchpad, writeScratchpad } = require('./scratchpad');
 // Themes (theming): CSS token maps + xterm colors from config/themes.json.
@@ -192,6 +198,10 @@ function safeCwd(dir) {
 
 /** @type {Map<string, Session>} */
 const sessions = new Map();
+/** Running highlight-extractor batches, keyed by HighlightBatchJob.id. Entries
+ *  are removed once their batch reports 'batch-done'/'batch-cancelled', so
+ *  this does not grow unbounded across many runs. @type {Map<string, HighlightBatchJob>} */
+const highlightJobs = new Map();
 /** @type {string|null} id of the session shown in the window */
 let activeSessionId = null;
 let sessionSeq = 0;
@@ -1677,6 +1687,101 @@ function registerIpc() {
   ipcMain.on('libraries:open', (_event, id) => {
     const url = resolveLibraryUrl(id);
     if (url) shell.openExternal(url);
+  });
+
+  // /ask: one-shot headless `claude -p` tool recommendation, grounded in the
+  // libraries catalog. Same env prep as spawnInto()'s terminal tabs
+  // (withClaudeOnPath/stripClaudeSessionMarkers), but no PTY - this is a
+  // single captured-stdout call, and `--model sonnet` inside runAsk() is
+  // explicit so it never silently answers from a profile's local LM Studio
+  // endpoint. The model's reply is validated in ask.js before it ever reaches
+  // the renderer - see that file's header for the trust boundary.
+  ipcMain.handle('ask:query', async (_event, question) => {
+    const env = withClaudeOnPath(stripClaudeSessionMarkers({ ...process.env }));
+    return runAsk({ question, catalog: loadLibraries(), env, timeoutMs: 45000 });
+  });
+
+  // Highlight extractor: batch tail-trim of clips via system ffmpeg. See
+  // src/highlights.js's header - ffmpeg is not bundled, detected on PATH only.
+  ipcMain.handle('highlights:ffmpeg-status', () => detectFfmpeg());
+
+  // Native folder picker for the extractor's source/output folders, modeled
+  // on projects:pick-folder above (same dialog shape, same null-on-cancel
+  // return). `role` ('source'|'output') only changes the dialog title/default
+  // path - it never reaches fs/execFile, so an unexpected value is harmless.
+  ipcMain.handle('highlights:pick-folder', async (_event, role) => {
+    if (!mainWindow) return null;
+    let defaultPath;
+    try {
+      defaultPath = app.getPath('videos');
+    } catch {
+      defaultPath = app.getPath('documents');
+    }
+    const title = role === 'output' ? 'Choose an output folder' : 'Choose a folder of clips';
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title,
+      defaultPath,
+      properties: ['openDirectory'],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    return result.filePaths[0];
+  });
+
+  // Starts a batch trim job. Validates inputs the same as buildTrimArgs/
+  // listVideoFiles do internally (defense in depth - this handler is the
+  // renderer-facing boundary, so it must not rely solely on those modules'
+  // own checks). Returns immediately with the job id; progress streams over
+  // 'highlights:progress'. job.start() is intentionally NOT awaited - awaiting
+  // here would hold this invoke() pending until the whole batch finished.
+  ipcMain.handle('highlights:run', async (_event, payload) => {
+    const { sourceFolder, outputFolder, seconds, extensions } = payload || {};
+
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+      return { ok: false, reason: 'bad-seconds' };
+    }
+
+    const listing = listVideoFiles(sourceFolder, extensions);
+    if (!listing.ok) return listing;
+    if (listing.files.length === 0) return { ok: false, reason: 'empty-folder' };
+
+    // The output folder may legitimately not exist yet - "pick a folder" in a
+    // native dialog commonly means "make a new one right here". Create it
+    // rather than failing; only a genuine failure (e.g. the parent is
+    // unwritable) is reported back as bad-folder.
+    try {
+      if (!fs.existsSync(outputFolder)) {
+        fs.mkdirSync(outputFolder, { recursive: true });
+      } else if (!fs.statSync(outputFolder).isDirectory()) {
+        return { ok: false, reason: 'bad-folder' };
+      }
+    } catch {
+      return { ok: false, reason: 'bad-folder' };
+    }
+
+    const job = new HighlightBatchJob(listing.files, {
+      sourceFolder,
+      outputFolder,
+      seconds,
+      onProgress: (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('highlights:progress', progress);
+        }
+        if (progress.event === 'batch-done' || progress.event === 'batch-cancelled') {
+          highlightJobs.delete(job.id);
+        }
+      },
+    });
+    highlightJobs.set(job.id, job);
+    job.start();
+
+    return { ok: true, jobId: job.id, files: listing.files };
+  });
+
+  // Fire-and-forget cancel - the batch's own onProgress path handles the
+  // resulting file-error/cleanup for the in-flight file (see HighlightBatchJob).
+  ipcMain.on('highlights:cancel', (_event, jobId) => {
+    const job = highlightJobs.get(jobId);
+    if (job) job.cancel();
   });
 
   // Scratchpad: reads and writes the local notepad (validated in scratchpad.js).
