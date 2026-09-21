@@ -67,6 +67,27 @@ export async function initProfiles() {
   }
 }
 
+/**
+ * Re-fetches the profile list after an add/edit/remove elsewhere (the
+ * provider-settings panel, modules/providersettings.js) WITHOUT restarting
+ * the active tab or jumping the switcher off its current pick - unlike
+ * initProfiles() (boot-time only), which intentionally resets
+ * currentProfileId to the config's default. currentProfileId only moves here
+ * when it no longer exists in the fresh list (the profile it pointed at was
+ * just removed), mirroring loadProfiles()'s own "fall back to whatever is
+ * still there" rule on the main-process side.
+ */
+export async function refreshProfileList() {
+  try {
+    const { profiles, activeProfile } = await window.lunacore.getProfiles();
+    lastProfiles = { items: profiles, activeId: activeProfile };
+    if (!profiles.some((p) => p.id === currentProfileId)) currentProfileId = activeProfile;
+    renderProfileSwitcher();
+  } catch (err) {
+    // Could not read the profiles - leave the switcher showing its last known state.
+  }
+}
+
 export async function initProjects() {
   try {
     const { projects, activeProject } = await window.lunacore.getProjects();

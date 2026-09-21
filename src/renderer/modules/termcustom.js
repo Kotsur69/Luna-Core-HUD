@@ -23,6 +23,7 @@ import { mountNotify } from './notify.js';
 import { mountAutoCompactSettings } from './autocompact.js';
 import { mountSurfaceAlpha } from './surfacealpha.js';
 import { mountLmStudioSettings } from './lmstudiomodels.js';
+import { mountProviderSettings } from './providersettings.js';
 import { applyLang } from './appearance.js';
 import { MODIFIER_AXES, getModifiers, setModifier } from './modifiers.js';
 import { sfx } from './sound.js';
@@ -515,6 +516,12 @@ export async function initTermcustomSettings() {
   // Same static-overlay mount shape. Its apply path is driven by
   // appearance.js on every theme change, so this only wires the controls.
   mountSurfaceAlpha(termcustomEl);
+
+  // AI-provider profile CRUD (Phase 3) - add/edit/remove a profile built from
+  // a config/providers.json template. Same static-overlay shape as
+  // mountAutoCompactSettings above; mounted before the LM Studio picker to
+  // match the section order in index.html.
+  mountProviderSettings(termcustomEl);
 
   // The LM Studio model picker (src/lmstudiocli.js on the main side) - same
   // static-overlay shape as mountAutoCompactSettings above.

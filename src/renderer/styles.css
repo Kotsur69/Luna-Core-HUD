@@ -2276,6 +2276,10 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    tile's own action buttons (docs links, copy, focus) never disable. */
 .diag-item__action:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* AI-provider Settings panel: inline validation/success text on a plain
+   .hint paragraph (providersettings.js) - mirrors .gitquick__result.is-fail. */
+.hint.is-fail { color: var(--bad); }
+
 /* ---- Git station --------------------------------------------------------------
    Sorted by urgency in gitstation.js, so the top row is always the one worth
    looking at. Badges only appear when their count is non-zero: a row of zeroes

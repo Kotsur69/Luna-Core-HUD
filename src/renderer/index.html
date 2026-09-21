@@ -1274,6 +1274,27 @@
           </span>
         </label>
 
+        <h3 class="termcustom__section" data-i18n="termcustom.section.providers">Dostawcy AI</h3>
+        <!-- Provider-profile CRUD (Phase 3 of the AI-providers feature): lists
+             every profile built FROM a config/providers.json template (GLM,
+             Kimi, Ollama via CCR, ...) and lets Mati add/edit/remove one
+             without ever hand-editing config/profiles.local.json. Rows and
+             their inline add/edit forms are built entirely in JS (see
+             modules/providersettings.js's mountProviderSettings()) - this
+             block only holds the section's static frame. Hand-written
+             profiles (e.g. the shipped claude-cloud) are intentionally not
+             listed here; #providers-other-hint covers them with a count. -->
+        <p class="termcustom__hint" data-i18n="providers.hint">
+          Dodaj wlasny profil dostawcy (GLM, Kimi, Ollama, ...) bez edycji plikow JSON. Klucz API zapisuje sie lokalnie w config/profiles.local.json i nigdy nie wraca do interfejsu.
+        </p>
+        <ul id="providers-list" class="diag-list"></ul>
+        <p id="providers-empty" class="hint" data-i18n="providers.loading">Wczytywanie...</p>
+        <p id="providers-other-hint" class="hint" hidden></p>
+        <div class="project-row">
+          <button type="button" id="providers-add-btn" class="termcustom__reset" data-i18n="providers.action.add">Dodaj profil</button>
+        </div>
+        <p id="providers-status" class="hint" role="status" hidden></p>
+
         <h3 class="termcustom__section" data-i18n="termcustom.section.lmstudio">LM Studio</h3>
         <!-- The in-app replacement for the external "go local claude" desktop
              script: lists every model DOWNLOADED to disk (via the `lms` CLI -

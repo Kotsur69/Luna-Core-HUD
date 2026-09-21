@@ -93,6 +93,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   updateProviderProfile: (id, payload) => ipcRenderer.invoke('profiles:update-from-template', { id, ...payload }),
   /** Removes a profile (local-added or a shipped default) by id; returns { profiles, activeProfile } or null. */
   removeProfile: (id) => ipcRenderer.invoke('profiles:remove', id),
+  /** Opens a provider template's docs page. Main resolves the URL from config/providers.json itself - this bridge cannot be used to open an arbitrary page. */
+  openProviderDocs: (templateId) => ipcRenderer.send('providers:open-docs', templateId),
 
   // --- LM Studio CLI control (Settings model picker - replaces "go local claude") ---
   /** Whether the `lms` CLI is reachable; returns { ok, version } or { ok:false, reason }. */

@@ -75,7 +75,7 @@ const { loadSkills, rescanSkills } = require('./skills');
 const { loadPrompts } = require('./prompts');
 // Recommended libraries & tools (Ctrl+B): a curated link directory. The loader
 // also OWNS the addresses - see the libraries:open handler.
-const { loadLibraries, resolveLibraryUrl, addLibraryItem } = require('./libraries');
+const { loadLibraries, resolveLibraryUrl, addLibraryItem, safeUrl } = require('./libraries');
 // /ask: a one-shot headless `claude -p` tool recommender grounded in the
 // libraries catalog above. See src/ask.js's header for the trust boundary.
 const { runAsk } = require('./ask');
@@ -1520,6 +1520,17 @@ function registerIpc() {
   // No secrets in this list - just the shape a profile needs to be built from.
   ipcMain.handle('providers:list', () => loadProviders());
 
+  // Opens a provider template's docs page. Same rule as libraries:open above -
+  // the renderer names an INTENT (a template id), never an address; the URL
+  // is resolved server-side from config/providers.json (a shipped, code-
+  // reviewed file) and re-validated through safeUrl() before shell.openExternal,
+  // so a compromised renderer can at worst re-open a link that ships with the app.
+  ipcMain.on('providers:open-docs', (_event, templateId) => {
+    const template = getProviderTemplate(loadProviders().providers, templateId);
+    const url = template && safeUrl(template.docsUrl);
+    if (url) shell.openExternal(url);
+  });
+
   // Builds a profile from a template + the user's input (apiKey/model/...) and
   // saves it to profiles.local.json. Never touches activeProfile - same "adding
   // must not switch the caller's tab away" rule as projects:add. The renderer
@@ -1566,12 +1577,28 @@ function registerIpc() {
         ? p.baseUrl.trim()
         : (current.ccrConfig && current.ccrConfig.baseUrl) || '';
 
+    // Same keep-current rule as apiKey/baseUrl above, extended to
+    // model/fastModel (security-reviewer's Phase 3 finding): without this,
+    // buildProfileFromTemplate() falls back to the TEMPLATE's default model
+    // whenever the payload omits one, silently discarding a custom model on
+    // any edit that doesn't happen to resend it.
+    const model =
+      typeof p.model === 'string' && p.model.trim()
+        ? p.model.trim()
+        : (current.env && current.env.ANTHROPIC_MODEL) || '';
+    const fastModel =
+      typeof p.fastModel === 'string' && p.fastModel.trim()
+        ? p.fastModel.trim()
+        : (current.env && current.env.ANTHROPIC_SMALL_FAST_MODEL) || '';
+
     const built = buildProfileFromTemplate(template, {
       ...p,
       id: current.id,
       label: p.label || current.label,
       apiKey,
       baseUrl,
+      model,
+      fastModel,
     });
     if (!built.ok) return built;
     const result = updateProfile(current.id, built.profile);

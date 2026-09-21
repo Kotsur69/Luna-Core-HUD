@@ -130,7 +130,7 @@ test('getProfile finds by id, otherwise null', () => {
   assert.equal(getProfile([], 'a'), null);
 });
 
-test('redactProfile strips env and ccrConfig but keeps every other field', () => {
+test('redactProfile strips env and ccrConfig but keeps every other field, plus derived non-secret flags', () => {
   const p = normalizeProfile({
     id: 'custom',
     label: 'Custom',
@@ -149,10 +149,65 @@ test('redactProfile strips env and ccrConfig but keeps every other field', () =>
     args: ['--continue'],
     autoModel: false,
     templateId: 'openai-compatible',
+    model: '',
+    fastModel: '',
+    hasApiKey: true,
+    hasBaseUrl: true,
   });
   assert.equal('env' in redacted, false);
   assert.equal('ccrConfig' in redacted, false);
   const dump = JSON.stringify(redacted);
   assert.equal(dump.indexOf('sk-super-secret'), -1);
   assert.equal(dump.indexOf('sk-ccr-secret'), -1);
+});
+
+test('redactProfile reads model/fastModel out of env without exposing env itself', () => {
+  const p = normalizeProfile({
+    id: 'glm-1',
+    label: 'My GLM',
+    templateId: 'glm',
+    env: {
+      ANTHROPIC_AUTH_TOKEN: 'sk-glm-secret',
+      ANTHROPIC_MODEL: 'glm-5.3',
+      ANTHROPIC_SMALL_FAST_MODEL: 'glm-5.3-flash',
+    },
+  });
+  const redacted = redactProfile(p);
+  assert.equal(redacted.model, 'glm-5.3');
+  assert.equal(redacted.fastModel, 'glm-5.3-flash');
+  assert.equal(redacted.hasApiKey, true);
+  assert.equal('env' in redacted, false);
+});
+
+test('redactProfile does not count a template\'s own fixed placeholder token as a real API key', () => {
+  const lmStudio = normalizeProfile({
+    id: 'lm-studio',
+    label: 'LM Studio',
+    templateId: 'lm-studio',
+    env: { ANTHROPIC_AUTH_TOKEN: 'lmstudio' },
+  });
+  const ccrRouted = normalizeProfile({
+    id: 'ollama-1',
+    label: 'Ollama',
+    templateId: 'ollama',
+    env: { ANTHROPIC_AUTH_TOKEN: 'ccr-local' },
+  });
+  assert.equal(redactProfile(lmStudio).hasApiKey, false);
+  assert.equal(redactProfile(ccrRouted).hasApiKey, false);
+});
+
+test('redactProfile handles a hand-written profile with no env/ccrConfig at all', () => {
+  const p = normalizeProfile({ id: 'claude-cloud', label: 'Claude Cloud' });
+  assert.deepEqual(redactProfile(p), {
+    id: 'claude-cloud',
+    label: 'Claude Cloud',
+    command: '',
+    args: [],
+    autoModel: false,
+    templateId: null,
+    model: '',
+    fastModel: '',
+    hasApiKey: false,
+    hasBaseUrl: false,
+  });
 });

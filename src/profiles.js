@@ -147,21 +147,52 @@ function getProfile(profiles, id) {
   return profiles.find((p) => p.id === id) || null;
 }
 
+// A template's own FIXED, non-secret placeholder for ANTHROPIC_AUTH_TOKEN
+// (config/providers.json's lm-studio/ollama/codex/gemini/grok/openai-compatible
+// entries all set one) - never a real credential, so it must not count as
+// "a key is configured" for the provider-settings UI.
+const NON_SECRET_AUTH_TOKENS = new Set(['lmstudio', 'ccr-local']);
+
 /**
- * Strips everything a profile carries that must never reach the renderer -
- * `env` (a provider API key can be in the clear there for a direct-wired
- * profile) and `ccrConfig` (same, for a CCR-routed one) -
- * config/profiles.local.json is plaintext by design, see providers.js.
- * The renderer-side switcher only ever reads `.id`/`.label`
- * (src/renderer/modules/switchers.js); a future provider-settings UI that
- * needs to show "a key is configured" should add a boolean here, never the
- * raw value.
+ * Strips the two fields this codebase treats as secret-bearing - `env` (a
+ * provider API key can be in the clear there for a direct-wired profile) and
+ * `ccrConfig` (same, for a CCR-routed one) - config/profiles.local.json is
+ * plaintext by design, see providers.js. In their place, exposes only
+ * non-secret facts DERIVED from them: the current `model`/`fastModel` (read
+ * out of `env`, needed so the provider-settings edit form can prefill the
+ * real value instead of silently resetting it to the template default on
+ * save) and `hasApiKey`/`hasBaseUrl` booleans (so the UI can show "a key is
+ * configured" without the raw value ever crossing IPC).
+ *
+ * `command`/`args` pass through UNREDACTED: every shipped template
+ * (providers.js) and every shipped profile (config/profiles.json) puts all
+ * provider config in `env`/`ccrConfig` and always ships `args: []`, so
+ * neither field is expected to ever carry a secret. A hand-written
+ * profiles.local.json entry that puts one there anyway (e.g. `args:
+ * ['--api-key=...']`) would leak it to the renderer - do not add secret
+ * material to `command`/`args` in a profile.
  * @param {Object} profile a normalizeProfile()-shaped object
  * @returns {Object}
  */
 function redactProfile(profile) {
   const { env, ccrConfig, ...rest } = profile;
-  return rest;
+  const model = (env && typeof env.ANTHROPIC_MODEL === 'string' && env.ANTHROPIC_MODEL) || '';
+  const fastModel =
+    (env && typeof env.ANTHROPIC_SMALL_FAST_MODEL === 'string' && env.ANTHROPIC_SMALL_FAST_MODEL) || '';
+  const hasApiKey = Boolean(
+    (ccrConfig && ccrConfig.apiKey) ||
+      (env &&
+        typeof env.ANTHROPIC_AUTH_TOKEN === 'string' &&
+        env.ANTHROPIC_AUTH_TOKEN &&
+        !NON_SECRET_AUTH_TOKENS.has(env.ANTHROPIC_AUTH_TOKEN))
+  );
+  // Only ever reads ccrConfig.baseUrl - true today because the one shipped
+  // template with requiresBaseUrl:true (openai-compatible) is CCR-routed, so
+  // that is the only place a base URL is ever stored. A future DIRECT-wired
+  // template that also requires a base URL would need its own storage read
+  // here too, or this would wrongly report false for it.
+  const hasBaseUrl = Boolean(ccrConfig && ccrConfig.baseUrl);
+  return { ...rest, model, fastModel, hasApiKey, hasBaseUrl };
 }
 
 /**
