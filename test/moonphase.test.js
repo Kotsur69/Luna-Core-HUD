@@ -137,16 +137,24 @@ test('moonLitPath draws a full disc at full moon and a diameter at the quarters'
  * silently drew the WRONG area at every fraction except the symmetric ones.
  * Only actually flattening and measuring the enclosed area catches that
  * class of bug again.
+ *
+ * Crucially, the sweep flags and terminator radius below are parsed out of
+ * moonLitPath()'s own returned `d` string, not recomputed from
+ * terminatorGeometry() - recomputing them here would just duplicate
+ * moonphase.js's sweep-flag formula, so this check would keep passing even
+ * if that formula regressed back to the buggy version. Parsing the real
+ * output is what makes this an independent check on the code under test.
  * @param {number} r disc radius
  * @param {number} fraction a value from phaseFraction()
  * @returns {{areaFraction: number, centroidX: number}}
  */
 function litPolygon(r, fraction) {
-  const { litSide, terminatorRx, crescent } = terminatorGeometry(fraction);
-  const right = litSide === 'right';
-  const rx = r * terminatorRx;
-  const limbSweep = right ? 1 : 0;
-  const termSweep = crescent === right ? 0 : 1;
+  const d = moonLitPath(r, fraction);
+  const arcs = [...d.matchAll(/A ([\d.-]+) ([\d.-]+) 0 0 (\d) /g)];
+  const [limbArc, termArc] = arcs;
+  const rx = Number(termArc[1]);
+  const limbSweep = Number(limbArc[3]);
+  const termSweep = Number(termArc[3]);
   const steps = 400;
   const points = [];
   // Limb: top -> bottom, radius r. Empirically: sweep 1 bows +x, sweep 0 bows -x.
