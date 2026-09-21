@@ -118,7 +118,84 @@ test('moonLitPath is well formed at the awkward fractions', () => {
 
 test('moonLitPath draws a full disc at full moon and a diameter at the quarters', () => {
   // Full: terminator arc has the disc's own radius (40) and closes the circle.
-  assert.equal(moonLitPath(40, 0.5), 'M 0 -40 A 40 40 0 0 0 0 40 A 40 40 0 0 1 0 -40 Z');
+  assert.equal(moonLitPath(40, 0.5), 'M 0 -40 A 40 40 0 0 0 0 40 A 40 40 0 0 0 0 -40 Z');
   // First quarter: terminator radius collapses to 0 -> straight vertical edge.
-  assert.match(moonLitPath(40, 0.25), /A 0 40 0 0 1 0 -40 Z$/);
+  assert.match(moonLitPath(40, 0.25), /A 0 40 0 0 0 0 -40 Z$/);
+});
+
+/**
+ * Flattens the two arcs `moonLitPath` emits into a polygon and returns its
+ * area as a fraction of the full disc, via the shoelace formula. The two arcs
+ * are known (see moonphase.js's header + terminatorGeometry) to always share
+ * a center at the origin and run between the disc's own top/bottom poles, so
+ * each can be parametrized directly - no need for a general SVG arc parser.
+ *
+ * This exists because the exact-string tests above only pin known-good
+ * fixed points; they missed a real bug (an inverted sweep flag on the
+ * terminator arc, since it travels bottom-to-top - the opposite direction
+ * from the limb arc, which flips which flag value bows which way) that
+ * silently drew the WRONG area at every fraction except the symmetric ones.
+ * Only actually flattening and measuring the enclosed area catches that
+ * class of bug again.
+ * @param {number} r disc radius
+ * @param {number} fraction a value from phaseFraction()
+ * @returns {{areaFraction: number, centroidX: number}}
+ */
+function litPolygon(r, fraction) {
+  const { litSide, terminatorRx, crescent } = terminatorGeometry(fraction);
+  const right = litSide === 'right';
+  const rx = r * terminatorRx;
+  const limbSweep = right ? 1 : 0;
+  const termSweep = crescent === right ? 0 : 1;
+  const steps = 400;
+  const points = [];
+  // Limb: top -> bottom, radius r. Empirically: sweep 1 bows +x, sweep 0 bows -x.
+  const limbSign = limbSweep === 1 ? 1 : -1;
+  for (let i = 0; i <= steps; i++) {
+    const t = (Math.PI * i) / steps;
+    points.push([limbSign * r * Math.sin(t), -r * Math.cos(t)]);
+  }
+  // Terminator: bottom -> top, radius rx. Direction is reversed from the limb,
+  // so the sweep -> side mapping is reversed too: sweep 1 bows -x, sweep 0 bows +x.
+  const termSign = termSweep === 1 ? -1 : 1;
+  for (let i = 0; i <= steps; i++) {
+    const t = (Math.PI * i) / steps;
+    points.push([termSign * rx * Math.sin(t), r * Math.cos(t)]);
+  }
+  let area2 = 0;
+  let cx = 0;
+  for (let i = 0; i < points.length; i++) {
+    const [x0, y0] = points[i];
+    const [x1, y1] = points[(i + 1) % points.length];
+    const cross = x0 * y1 - x1 * y0;
+    area2 += cross;
+    cx += (x0 + x1) * cross;
+  }
+  const area = Math.abs(area2) / 2;
+  const centroidX = area2 !== 0 ? cx / (3 * area2) : 0;
+  return { areaFraction: area / (Math.PI * r * r), centroidX };
+}
+
+test('moonLitPath actually encloses the illuminated fraction of the disc, not its complement', () => {
+  for (let i = 1; i < 50; i++) {
+    const f = i / 50; // skip 0 to dodge a zero-area degenerate case
+    const { areaFraction } = litPolygon(40, f);
+    assert.ok(
+      Math.abs(areaFraction - illumination(f)) < 0.01,
+      `fraction ${f}: enclosed area ${areaFraction} should match illumination ${illumination(f)}`
+    );
+  }
+});
+
+test('moonLitPath bulges toward the flagged lit side, not away from it', () => {
+  // Comfortably off-center fractions only: near the quarters the centroid is
+  // ~0 by symmetry and the sign is not a meaningful signal.
+  for (const f of [0.1, 0.15, 0.35, 0.4]) {
+    const { centroidX } = litPolygon(40, f);
+    assert.ok(centroidX > 0, `waxing (${f}): lit area should sit on the right, got centroid ${centroidX}`);
+  }
+  for (const f of [0.6, 0.65, 0.85, 0.9]) {
+    const { centroidX } = litPolygon(40, f);
+    assert.ok(centroidX < 0, `waning (${f}): lit area should sit on the left, got centroid ${centroidX}`);
+  }
 });

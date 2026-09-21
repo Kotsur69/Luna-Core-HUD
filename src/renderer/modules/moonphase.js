@@ -126,9 +126,14 @@ export function moonLitPath(r, fraction) {
   // Bright limb: top -> bottom along the lit edge. Sweep 1 bows through +x
   // (right), sweep 0 through -x (left).
   const limbSweep = right ? 1 : 0;
-  // Terminator: bottom -> top. A crescent's terminator bows the same way as
-  // the limb (into the lit side); a gibbous phase's bows the other way.
-  const termSweep = crescent === right ? 1 : 0;
+  // Terminator: bottom -> top - the OPPOSITE direction from the limb above.
+  // Sweep-flag direction is relative to travel direction, so going
+  // bottom-to-top flips which flag value bows which way versus the limb's
+  // top-to-bottom arc: here sweep 1 bows -x (left), sweep 0 bows +x (right).
+  // A crescent's terminator still bows into the lit side, and a gibbous
+  // phase's still bows the other way; only the flag needed to express that
+  // is inverted from the limb's mapping above.
+  const termSweep = crescent === right ? 0 : 1;
 
   // Round to 3 dp: SVG needs nothing finer at this size, and it snaps the
   // float dust from cos() near the quarters (2.4e-15) cleanly to 0.
