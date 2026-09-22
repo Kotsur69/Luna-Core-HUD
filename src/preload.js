@@ -96,6 +96,24 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Opens a provider template's docs page. Main resolves the URL from config/providers.json itself - this bridge cannot be used to open an arbitrary page. */
   openProviderDocs: (templateId) => ipcRenderer.send('providers:open-docs', templateId),
 
+  // --- CCR (claude-code-router) gateway control ---
+  /** Fetches { installed, version, state, reason, port, expectedPort, startedByUs }. */
+  getCcrStatus: () => ipcRenderer.invoke('ccr:status'),
+  /** Starts the local gateway if nothing is already answering for it; returns the typed start result. */
+  startCcr: () => ipcRenderer.invoke('ccr:start'),
+  /** Stops the gateway - refuses with { ok:false, reason:'not-ours' } unless THIS process started it. */
+  stopCcr: () => ipcRenderer.invoke('ccr:stop'),
+  /** Opens CCR's own browser-based management UI (routing/provider config lives there, never in LunaCore). */
+  openCcrUi: () => ipcRenderer.invoke('ccr:open-ui'),
+  /** Opens the CCR docs page. Deliberately takes no argument - the address is hardcoded in main.js. */
+  openCcrDocs: () => ipcRenderer.send('ccr:docs'),
+  /** Confirms a profile's CCR client key authenticates against the gateway; returns { ok, models } or { ok:false, reason }. Only sends a profile id, never the key itself. */
+  testCcrKey: (profileId) => ipcRenderer.invoke('ccr:test-key', profileId),
+  /** Registers a callback with gateway lifecycle changes: { startedByUs, sessionId? }. */
+  onCcrState: (callback) => {
+    ipcRenderer.on('ccr:state', (_event, payload) => callback(payload));
+  },
+
   // --- LM Studio CLI control (Settings model picker - replaces "go local claude") ---
   /** Whether the `lms` CLI is reachable; returns { ok, version } or { ok:false, reason }. */
   getLmsCliStatus: () => ipcRenderer.invoke('lmstudiocli:status'),

@@ -38,12 +38,16 @@ function usesPlaceholder(envTemplate, name) {
 
 /**
  * Which inputs the add/edit form should show for one template. `autoModel`
- * templates (LM Studio) and CCR-routed ones with no `{{model}}`/`{{fastModel}}`
- * placeholder in their envTemplate (ollama/codex/gemini/grok/openai-compatible
- * all only ever template `{{ccrPort}}`) never show a model field, because
- * buildProfileFromTemplate() has nowhere to put a value for it.
+ * templates (LM Studio) never show a model field, since buildProfileFromTemplate()
+ * has nowhere to put a value for it. Otherwise a model/fast-model field shows
+ * exactly when the template's own envTemplate uses the matching `{{model}}`/
+ * `{{fastModel}}` placeholder - true for every direct-wired template that
+ * templates a model (GLM/Kimi) and, since the CCR reshape, every CCR-routed
+ * template too (their ANTHROPIC_MODEL/ANTHROPIC_SMALL_FAST_MODEL are an
+ * OPTIONAL override left blank by default - see config/providers.json). A
+ * `{{ccrPort}}` placeholder likewise shows the CCR-port field.
  * @param {{requiresApiKey?:boolean, requiresBaseUrl?:boolean, autoModel?:boolean, envTemplate?:Object}} template
- * @returns {{needsApiKey:boolean, needsBaseUrl:boolean, showModel:boolean, showFastModel:boolean}}
+ * @returns {{needsApiKey:boolean, needsBaseUrl:boolean, showModel:boolean, showFastModel:boolean, showCcrPort:boolean}}
  */
 function templateFields(template) {
   const t = template && typeof template === 'object' ? template : {};
@@ -54,12 +58,34 @@ function templateFields(template) {
     needsBaseUrl: t.requiresBaseUrl === true,
     showModel: modelCapable && usesPlaceholder(envTemplate, 'model'),
     showFastModel: modelCapable && usesPlaceholder(envTemplate, 'fastModel'),
+    showCcrPort: usesPlaceholder(envTemplate, 'ccrPort'),
   };
 }
 
 /** Reads a trimmed string field, or '' for anything else. */
 function trimmedString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * Validates an optional `ccrPort` form field. Mirrors how apiKey/baseUrl are
+ * only ever included when non-empty: a field the template does not show
+ * (`fields.showCcrPort` false) is ignored entirely, even if present and even
+ * if it is junk - the template has nowhere to put it. When shown, an absent/
+ * blank value is fine (means "use the default port"); a present-but-invalid
+ * value (not a finite number in 1-65535) is a typed rejection.
+ * @param {{showCcrPort:boolean}} fields templateFields(template)'s output
+ * @param {unknown} rawPort form.ccrPort
+ * @returns {{ok:true, port?:number}|{ok:false, reason:'invalid-port'}}
+ */
+function resolveCcrPort(fields, rawPort) {
+  if (!fields.showCcrPort) return { ok: true };
+  if (rawPort === undefined || rawPort === null || rawPort === '') return { ok: true };
+  const num = typeof rawPort === 'number' ? rawPort : Number(rawPort);
+  if (!Number.isFinite(num) || num < 1 || num > 65535) {
+    return { ok: false, reason: 'invalid-port' };
+  }
+  return { ok: true, port: Math.round(num) };
 }
 
 /**
@@ -87,6 +113,9 @@ function buildAddPayload(form) {
   const baseUrl = trimmedString(f.baseUrl);
   if (fields.needsBaseUrl && !baseUrl) return { ok: false, reason: 'missing-base-url' };
 
+  const ccrPort = resolveCcrPort(fields, f.ccrPort);
+  if (!ccrPort.ok) return { ok: false, reason: ccrPort.reason };
+
   // `id` is fixed to the template's own id (never derived from the label) so
   // a repeat "add GLM" round-trips through addProfile()'s existing
   // uniqueId(slugify(...)) de-dup (kimi, kimi-2, ...) instead of scattering
@@ -98,6 +127,7 @@ function buildAddPayload(form) {
   if (model) payload.model = model;
   const fastModel = trimmedString(f.fastModel);
   if (fastModel) payload.fastModel = fastModel;
+  if (ccrPort.port !== undefined) payload.ccrPort = ccrPort.port;
 
   return { ok: true, payload };
 }
@@ -134,6 +164,9 @@ function buildEditPayload(form) {
   const baseUrl = trimmedString(f.baseUrl);
   if (fields.needsBaseUrl && !baseUrl && f.hasBaseUrl !== true) return { ok: false, reason: 'missing-base-url' };
 
+  const ccrPort = resolveCcrPort(fields, f.ccrPort);
+  if (!ccrPort.ok) return { ok: false, reason: ccrPort.reason };
+
   const payload = { id, templateId: template.id, label };
   if (apiKey) payload.apiKey = apiKey;
   if (baseUrl) payload.baseUrl = baseUrl;
@@ -141,6 +174,7 @@ function buildEditPayload(form) {
   if (model) payload.model = model;
   const fastModel = trimmedString(f.fastModel);
   if (fastModel) payload.fastModel = fastModel;
+  if (ccrPort.port !== undefined) payload.ccrPort = ccrPort.port;
 
   return { ok: true, payload };
 }
@@ -151,6 +185,7 @@ const FAILURE_KEYS = {
   'missing-api-key': 'providers.error.missingApiKey',
   'missing-base-url': 'providers.error.missingBaseUrl',
   'missing-id': 'providers.error.missingId',
+  'invalid-port': 'providers.error.invalidPort',
   'unknown-template': 'providers.error.unknownTemplate',
   'unknown-profile': 'providers.error.unknownProfile',
   'save-failed': 'providers.error.saveFailed',

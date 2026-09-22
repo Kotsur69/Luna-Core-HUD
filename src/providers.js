@@ -146,10 +146,16 @@ function buildProfileFromTemplate(template, entry) {
     ccrPort: Number.isFinite(e.ccrPort) && e.ccrPort > 0 ? Math.round(e.ccrPort) : DEFAULT_CCR_PORT,
   };
 
+  // A resolved value can legitimately be '' now that the CCR templates carry
+  // OPTIONAL {{model}}/{{fastModel}} placeholders with no non-empty default
+  // (config/providers.json) - "let CCR's own Router decide" is expressed by
+  // NOT writing the key at all, not by writing it as an empty string, which
+  // would be worse: pty.spawn() would receive e.g. ANTHROPIC_MODEL="".
   const allowed = allowedEnvKeys(template);
   const env = {};
   for (const key of allowed) {
-    env[key] = fillTemplate(template.envTemplate[key], vars);
+    const value = fillTemplate(template.envTemplate[key], vars);
+    if (value) env[key] = value;
   }
   // `extraEnv` (if ever passed by a caller) may only supply VALUES for keys
   // the template already declares - it can never introduce a new key. This
@@ -162,23 +168,6 @@ function buildProfileFromTemplate(template, entry) {
     }
   }
 
-  // A CCR-routed profile's `env` only ever points `claude` at the LOCAL
-  // router (ANTHROPIC_BASE_URL=http://localhost:{{ccrPort}}), never at the
-  // real provider - so the real apiKey/baseUrl the user just typed in must be
-  // kept SOMEWHERE, or claude-code-router (src/ccr.js, a later phase) would
-  // have nothing to configure its own Providers entry from. Kept OUT of
-  // `env` on purpose: `env` feeds pty.spawn() for the `claude` process
-  // directly, and that process never needs the real provider secret, only
-  // CCR does. `ccrConfig` is stripped by redactProfile() exactly like `env`.
-  const ccrConfig =
-    template.wireVia === 'ccr'
-      ? {
-          providerType: template.ccrProviderType,
-          ...(template.requiresApiKey ? { apiKey } : {}),
-          ...(template.requiresBaseUrl ? { baseUrl } : {}),
-        }
-      : null;
-
   return {
     ok: true,
     profile: {
@@ -189,9 +178,33 @@ function buildProfileFromTemplate(template, entry) {
       env,
       autoModel: template.autoModel,
       templateId: template.id,
-      ccrConfig,
     },
   };
+}
+
+/**
+ * True for a CCR-routed template - one whose profile needs claude-code-router
+ * running locally before `claude` can be spawned against it. Pure, no lookup.
+ * @param {{wireVia?:string}|null|undefined} template
+ * @returns {boolean}
+ */
+function isCcrTemplate(template) {
+  return Boolean(template && template.wireVia === 'ccr');
+}
+
+/**
+ * Same check as isCcrTemplate(), but starting from a profile (src/profiles.js)
+ * instead of a template - looks the profile's own templateId up in `providers`
+ * first. False for a hand-written profile (no templateId) or one whose
+ * templateId no longer matches a shipped template.
+ * @param {{templateId?:string|null}|null|undefined} profile
+ * @param {Array<Object>} providers loadProviders().providers
+ * @returns {boolean}
+ */
+function isCcrProfile(profile, providers) {
+  if (!profile || typeof profile.templateId !== 'string' || !profile.templateId) return false;
+  const template = getProviderTemplate(providers, profile.templateId);
+  return isCcrTemplate(template);
 }
 
 module.exports = {
@@ -200,6 +213,8 @@ module.exports = {
   normalizeProviderTemplate,
   allowedEnvKeys,
   buildProfileFromTemplate,
+  isCcrTemplate,
+  isCcrProfile,
   ENV_KEY_DENY_RE,
   DEFAULT_CCR_PORT,
 };

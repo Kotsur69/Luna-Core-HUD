@@ -38,10 +38,33 @@ const { transcriptToMarkdown } = require('./sessionExport');
 // not code, since the CLI text can change between releases (config/sound-triggers.json).
 const { loadSoundTriggers } = require('./soundTriggers');
 // Launch profiles (Phase 4): "how to start a session" definitions from JSON.
-const { loadProfiles, getProfile, redactProfile, addProfile, updateProfile, removeProfile } = require('./profiles');
-const { loadProviders, getProviderTemplate, buildProfileFromTemplate } = require('./providers');
+const {
+  loadProfiles,
+  getProfile,
+  redactProfile,
+  addProfile,
+  updateProfile,
+  removeProfile,
+  NON_SECRET_AUTH_TOKENS,
+} = require('./profiles');
+const { loadProviders, getProviderTemplate, buildProfileFromTemplate, isCcrProfile, DEFAULT_CCR_PORT } = require('./providers');
 const { localEndpointFromProfile } = require('./lmstudio');
 const { detectLmsCli, listDownloadedModels, loadModel: loadLmStudioModel } = require('./lmstudiocli');
+// CCR (claude-code-router) gateway lifecycle control (Phase 4c): detect the
+// CLI, find/start/stop the local gateway process, and confirm a client key
+// authenticates against it - see src/ccr.js's header for the full trust
+// boundary this module was built around (CCR's own UI owns all routing
+// config; LunaCore only ever starts/stops the process and probes it).
+const {
+  detectCcr,
+  findGateway,
+  startGateway,
+  stopGateway,
+  openManagementUi,
+  testClientKey,
+  gatewayPortFromEnv,
+  describeState,
+} = require('./ccr');
 // Building the start command: decides whether a session can be pinned by id.
 const { withSessionId, findExecutable } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
@@ -247,6 +270,10 @@ const STARTUP_GREETING_DELAY_MS = 2000;
 // Profiles loaded from config/ plus the default id (for new sessions).
 let profiles = [];
 let activeProfileId = null;
+// PHASE 4c: whether THIS process started the CCR gateway (vs. finding one
+// already running) - only a gateway we started ourselves may ever be
+// stopped by us (see src/ccr.js's stopGateway header).
+let ccrStartedByUs = false;
 // Projects (working directories) loaded from config/ + the default id and the real cwd.
 let projects = [];
 let activeProjectId = null;
@@ -701,6 +728,40 @@ function withColorSupport(env) {
 }
 
 /**
+ * Broadcasts the CCR gateway's current lifecycle state to the renderer, e.g.
+ * right after ccr:start/ccr:stop change it, or after ensureGatewayFor() below
+ * lazily resolves one for a just-spawned CCR-routed session. `extra`
+ * typically carries the originating sessionId, so the renderer can show a
+ * per-tab status line rather than only a global one.
+ * @param {Object} extra
+ */
+function broadcastCcrState(extra) {
+  send('ccr:state', { startedByUs: ccrStartedByUs, ...extra });
+}
+
+/**
+ * Lazily makes sure a CCR gateway is available for a just-spawned CCR-routed
+ * session, WITHOUT blocking spawnInto() on it - fire-and-forget by design.
+ * Every function this calls is a typed-result function that never
+ * rejects/throws (src/ccr.js), so there is nothing here that can turn into an
+ * unhandled rejection.
+ * @param {Session} session
+ * @param {{env?:Object}} profile
+ */
+async function ensureGatewayFor(session, profile) {
+  const expectedPort = gatewayPortFromEnv(profile.env);
+  const found = await findGateway(expectedPort);
+  if (!found.ok) {
+    const detected = await detectCcr();
+    if (detected.ok) {
+      const started = await startGateway({ expectedPort });
+      if (started.ok) ccrStartedByUs = ccrStartedByUs || started.startedByUs;
+    }
+  }
+  broadcastCcrState({ sessionId: session.id });
+}
+
+/**
  * Attaches a PTY + TranscriptWatcher to an existing session record. Split out
  * because both creating a tab and restarting it under a new profile or
  * directory use this, always the same way.
@@ -889,6 +950,17 @@ function spawnInto(session, profile) {
     setTimeout(() => {
       if (session.proc === proc) proc.write(`${startCommand}\r`);
     }, 600);
+  }
+
+  // PHASE 4c: a CCR-routed profile needs a local gateway process running
+  // before `claude` can talk to it. Fire-and-forget - spawnInto() itself
+  // stays synchronous for every existing caller.
+  if (isCcrProfile(profile, loadProviders().providers)) {
+    // Every function ensureGatewayFor() calls is a typed-result function that
+    // never throws today - this .catch() is defense-in-depth against a future
+    // change to one of them silently reintroducing a throw path, which would
+    // otherwise surface as an unhandled rejection in the main process.
+    ensureGatewayFor(session, profile).catch(() => {});
   }
 }
 
@@ -1566,16 +1638,25 @@ function registerIpc() {
     const template = getProviderTemplate(loadProviders().providers, templateId);
     if (!template) return { ok: false, reason: 'unknown-template' };
 
+    // Keep-current fallback for apiKey: a profile still carrying a NON-SECRET
+    // sentinel (LM Studio's 'lmstudio', or the legacy 'ccr-local' placeholder
+    // - see NON_SECRET_AUTH_TOKENS in profiles.js) must not be treated as "a
+    // real key already exists" - fall back to '' for those instead, so the
+    // "needs a key" UI state survives an edit that doesn't resend one.
+    const currentToken = (current.env && current.env.ANTHROPIC_AUTH_TOKEN) || '';
     const apiKey =
       typeof p.apiKey === 'string' && p.apiKey.trim()
         ? p.apiKey.trim()
-        : (current.env && current.env.ANTHROPIC_AUTH_TOKEN) ||
-          (current.ccrConfig && current.ccrConfig.apiKey) ||
-          '';
+        : NON_SECRET_AUTH_TOKENS.has(currentToken)
+          ? ''
+          : currentToken;
+    // `current` is main's own unredacted in-memory copy, so reading
+    // env.ANTHROPIC_BASE_URL directly is simpler and more reliable than
+    // round-tripping through redactProfile()'s sanitized version.
     const baseUrl =
       typeof p.baseUrl === 'string' && p.baseUrl.trim()
         ? p.baseUrl.trim()
-        : (current.ccrConfig && current.ccrConfig.baseUrl) || '';
+        : (current.env && current.env.ANTHROPIC_BASE_URL) || '';
 
     // Same keep-current rule as apiKey/baseUrl above, extended to
     // model/fastModel (security-reviewer's Phase 3 finding): without this,
@@ -1591,6 +1672,14 @@ function registerIpc() {
         ? p.fastModel.trim()
         : (current.env && current.env.ANTHROPIC_SMALL_FAST_MODEL) || '';
 
+    // Same keep-current rule, extended to the CCR gateway port a profile's
+    // ANTHROPIC_BASE_URL implies - re-derived from the CURRENT (unredacted)
+    // env via gatewayPortFromEnv() when the payload doesn't supply one.
+    const ccrPort =
+      Number.isFinite(p.ccrPort) && p.ccrPort > 0
+        ? Math.round(p.ccrPort)
+        : gatewayPortFromEnv(current.env);
+
     const built = buildProfileFromTemplate(template, {
       ...p,
       id: current.id,
@@ -1599,6 +1688,7 @@ function registerIpc() {
       baseUrl,
       model,
       fastModel,
+      ccrPort,
     });
     if (!built.ok) return built;
     const result = updateProfile(current.id, built.profile);
@@ -1618,6 +1708,86 @@ function registerIpc() {
     profiles = result.profiles;
     if (wasActive) activeProfileId = result.activeProfile;
     return { profiles: profiles.map(redactProfile), activeProfile: activeProfileId };
+  });
+
+  // PHASE 4c: CCR (claude-code-router) gateway lifecycle - detect/start/stop
+  // the local gateway process and confirm a client key authenticates. Same
+  // trust-boundary rule as providers:open-docs above: the renderer only ever
+  // sends an id/intent, never a token or URL - main resolves anything
+  // sensitive itself (see src/ccr.js's header for why CCR's own management
+  // UI, not this bridge, owns all routing/provider config).
+  ipcMain.handle('ccr:status', async () => {
+    const detected = await detectCcr();
+    if (!detected.ok) {
+      const state = describeState({ installed: false });
+      return {
+        installed: false,
+        version: '',
+        expectedPort: DEFAULT_CCR_PORT,
+        startedByUs: ccrStartedByUs,
+        ...state,
+      };
+    }
+    const found = await findGateway(DEFAULT_CCR_PORT);
+    const state = describeState({
+      installed: true,
+      probe: found.ok ? found.classification : 'down',
+      expectedPort: DEFAULT_CCR_PORT,
+      foundPort: found.ok ? found.port : undefined,
+      startedByUs: ccrStartedByUs,
+    });
+    return {
+      installed: true,
+      version: detected.version,
+      expectedPort: DEFAULT_CCR_PORT,
+      startedByUs: ccrStartedByUs,
+      ...state,
+    };
+  });
+
+  ipcMain.handle('ccr:start', async () => {
+    const result = await startGateway({ expectedPort: DEFAULT_CCR_PORT });
+    if (result.ok) ccrStartedByUs = ccrStartedByUs || result.startedByUs;
+    broadcastCcrState({});
+    return result;
+  });
+
+  ipcMain.handle('ccr:stop', async () => {
+    const result = await stopGateway({ startedByUs: ccrStartedByUs });
+    if (result.ok) ccrStartedByUs = false;
+    broadcastCcrState({});
+    return result;
+  });
+
+  // openManagementUi() never returns a URL, by construction (see src/ccr.js) -
+  // the authenticated management address (and its token) can never leak
+  // downstream through this handler even by accident.
+  ipcMain.handle('ccr:open-ui', async () => openManagementUi());
+
+  // Hardcoded destination (never renderer-supplied) - same doc-link pattern
+  // as claude:docs/diag:mpv-docs elsewhere in this file. Still run through
+  // safeUrl() for defense in depth even though the string is fixed.
+  ipcMain.on('ccr:docs', () => {
+    const url = safeUrl('https://ccrdesk.top/en/');
+    if (url) shell.openExternal(url);
+  });
+
+  // `profileId` is a renderer-supplied STRING ID ONLY, never a token - main
+  // looks the profile up in its own unredacted in-memory copy and resolves
+  // the client key/port from there. The actual token never crosses the IPC
+  // boundary in either direction.
+  //
+  // No renderer caller wires this up yet - it's staged for a future "Test
+  // connection" button on a CCR-routed profile row (Settings > AI providers).
+  // Deliberate: fully built, typed, and unit-tested at the pure-function
+  // level (src/ccr.js's testClientKey), just not surfaced in the UI this
+  // phase. Not dead code to be cleaned up.
+  ipcMain.handle('ccr:test-key', async (_event, profileId) => {
+    const profile = getProfile(profiles, profileId);
+    if (!profile) return { ok: false, reason: 'unknown-profile' };
+    const token = (profile.env && profile.env.ANTHROPIC_AUTH_TOKEN) || '';
+    const port = gatewayPortFromEnv(profile.env);
+    return testClientKey(port, token);
   });
 
   // LM Studio CLI control (src/lmstudiocli.js) - the in-app replacement for
@@ -2488,6 +2658,14 @@ app.on('window-all-closed', () => {
   if (voiceDuck) {
     voiceDuck.onVoiceActive(false);
     voiceDuck = null;
+  }
+  // Best-effort: never block shutdown on this, and stopGateway() itself
+  // refuses to touch a gateway this process did not start (ccrStartedByUs
+  // guards that same check here, before the call, purely to skip a redundant
+  // 'not-ours' round trip when we know it would refuse anyway).
+  if (ccrStartedByUs) {
+    stopGateway({ startedByUs: ccrStartedByUs });
+    ccrStartedByUs = false;
   }
   if (process.platform !== 'darwin') app.quit();
 });

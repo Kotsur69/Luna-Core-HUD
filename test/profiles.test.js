@@ -6,7 +6,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { normalizeProfile, getProfile, redactProfile } = require('../src/profiles');
+const {
+  normalizeProfile,
+  getProfile,
+  redactProfile,
+  isLegacyCcrProfile,
+  NON_SECRET_AUTH_TOKENS,
+} = require('../src/profiles');
 
 test('normalizeProfile passes a valid profile through', () => {
   assert.deepEqual(
@@ -28,8 +34,6 @@ test('normalizeProfile passes a valid profile through', () => {
       autoModel: false,
       // Absent in the input -> not generated from a provider template.
       templateId: null,
-      // Absent in the input -> not a CCR-routed provider.
-      ccrConfig: null,
     }
   );
 });
@@ -39,22 +43,6 @@ test('normalizeProfile carries templateId through only when it is a non-empty st
   assert.equal(normalizeProfile({ id: 'x', label: 'X', templateId: '' }).templateId, null);
   assert.equal(normalizeProfile({ id: 'x', label: 'X', templateId: 42 }).templateId, null);
   assert.equal(normalizeProfile({ id: 'x', label: 'X' }).templateId, null);
-});
-
-test('normalizeProfile carries a well-formed ccrConfig through', () => {
-  const p = normalizeProfile({
-    id: 'x',
-    label: 'X',
-    ccrConfig: { providerType: 'openai-compatible', apiKey: 'k', baseUrl: 'https://x' },
-  });
-  assert.deepEqual(p.ccrConfig, { providerType: 'openai-compatible', apiKey: 'k', baseUrl: 'https://x' });
-});
-
-test('normalizeProfile drops ccrConfig to null when providerType is missing or the shape is junk', () => {
-  assert.equal(normalizeProfile({ id: 'x', label: 'X', ccrConfig: { apiKey: 'k' } }).ccrConfig, null);
-  assert.equal(normalizeProfile({ id: 'x', label: 'X', ccrConfig: 'nope' }).ccrConfig, null);
-  assert.equal(normalizeProfile({ id: 'x', label: 'X', ccrConfig: null }).ccrConfig, null);
-  assert.equal(normalizeProfile({ id: 'x', label: 'X' }).ccrConfig, null);
 });
 
 test('normalizeProfile carries autoModel through only when it is exactly true', () => {
@@ -116,7 +104,7 @@ test('normalizeProfile does not carry unknown fields forward', () => {
   const p = normalizeProfile({ id: 'x', label: 'X', whatever: 'junk' });
   assert.deepEqual(
     Object.keys(p).sort(),
-    ['args', 'autoModel', 'ccrConfig', 'command', 'env', 'id', 'label', 'templateId']
+    ['args', 'autoModel', 'command', 'env', 'id', 'label', 'templateId']
   );
 });
 
@@ -130,16 +118,18 @@ test('getProfile finds by id, otherwise null', () => {
   assert.equal(getProfile([], 'a'), null);
 });
 
-test('redactProfile strips env and ccrConfig but keeps every other field, plus derived non-secret flags', () => {
+test('redactProfile strips env but keeps every other field, plus derived non-secret flags', () => {
   const p = normalizeProfile({
     id: 'custom',
     label: 'Custom',
     command: 'claude',
     args: ['--continue'],
-    env: { ANTHROPIC_AUTH_TOKEN: 'sk-super-secret' },
+    env: {
+      ANTHROPIC_AUTH_TOKEN: 'sk-super-secret',
+      ANTHROPIC_BASE_URL: 'http://localhost:3456',
+    },
     autoModel: false,
     templateId: 'openai-compatible',
-    ccrConfig: { providerType: 'openai-compatible', apiKey: 'sk-ccr-secret', baseUrl: 'https://x' },
   });
   const redacted = redactProfile(p);
   assert.deepEqual(redacted, {
@@ -153,12 +143,12 @@ test('redactProfile strips env and ccrConfig but keeps every other field, plus d
     fastModel: '',
     hasApiKey: true,
     hasBaseUrl: true,
+    baseUrl: 'http://localhost:3456',
+    isLegacyCcr: false,
   });
   assert.equal('env' in redacted, false);
-  assert.equal('ccrConfig' in redacted, false);
   const dump = JSON.stringify(redacted);
   assert.equal(dump.indexOf('sk-super-secret'), -1);
-  assert.equal(dump.indexOf('sk-ccr-secret'), -1);
 });
 
 test('redactProfile reads model/fastModel out of env without exposing env itself', () => {
@@ -179,6 +169,18 @@ test('redactProfile reads model/fastModel out of env without exposing env itself
   assert.equal('env' in redacted, false);
 });
 
+test('redactProfile reports empty model/fastModel when env has neither', () => {
+  const p = normalizeProfile({
+    id: 'ollama-1',
+    label: 'Ollama',
+    templateId: 'ollama',
+    env: { ANTHROPIC_AUTH_TOKEN: 'sk-ccr-client-key' },
+  });
+  const redacted = redactProfile(p);
+  assert.equal(redacted.model, '');
+  assert.equal(redacted.fastModel, '');
+});
+
 test('redactProfile does not count a template\'s own fixed placeholder token as a real API key', () => {
   const lmStudio = normalizeProfile({
     id: 'lm-studio',
@@ -186,17 +188,17 @@ test('redactProfile does not count a template\'s own fixed placeholder token as 
     templateId: 'lm-studio',
     env: { ANTHROPIC_AUTH_TOKEN: 'lmstudio' },
   });
-  const ccrRouted = normalizeProfile({
+  const legacyCcrRouted = normalizeProfile({
     id: 'ollama-1',
     label: 'Ollama',
     templateId: 'ollama',
     env: { ANTHROPIC_AUTH_TOKEN: 'ccr-local' },
   });
   assert.equal(redactProfile(lmStudio).hasApiKey, false);
-  assert.equal(redactProfile(ccrRouted).hasApiKey, false);
+  assert.equal(redactProfile(legacyCcrRouted).hasApiKey, false);
 });
 
-test('redactProfile handles a hand-written profile with no env/ccrConfig at all', () => {
+test('redactProfile handles a hand-written profile with no env at all', () => {
   const p = normalizeProfile({ id: 'claude-cloud', label: 'Claude Cloud' });
   assert.deepEqual(redactProfile(p), {
     id: 'claude-cloud',
@@ -209,5 +211,85 @@ test('redactProfile handles a hand-written profile with no env/ccrConfig at all'
     fastModel: '',
     hasApiKey: false,
     hasBaseUrl: false,
+    baseUrl: '',
+    isLegacyCcr: false,
   });
+});
+
+test('redactProfile flags isLegacyCcr for a profile still carrying the old ccr-local sentinel', () => {
+  const legacyCcrRouted = normalizeProfile({
+    id: 'ollama-1',
+    label: 'Ollama',
+    templateId: 'ollama',
+    env: { ANTHROPIC_AUTH_TOKEN: 'ccr-local' },
+  });
+  const migratedCcrRouted = normalizeProfile({
+    id: 'ollama-2',
+    label: 'Ollama',
+    templateId: 'ollama',
+    env: { ANTHROPIC_AUTH_TOKEN: 'sk-real-ccr-client-key' },
+  });
+  const handWritten = normalizeProfile({ id: 'claude-cloud', label: 'Claude Cloud' });
+  assert.equal(redactProfile(legacyCcrRouted).isLegacyCcr, true);
+  assert.equal(redactProfile(migratedCcrRouted).isLegacyCcr, false);
+  assert.equal(redactProfile(handWritten).isLegacyCcr, false);
+});
+
+test('redactProfile exposes baseUrl only for a template-generated profile, not a hand-written one', () => {
+  const generated = normalizeProfile({
+    id: 'ollama-1',
+    label: 'Ollama',
+    templateId: 'ollama',
+    env: { ANTHROPIC_BASE_URL: 'http://localhost:3456', ANTHROPIC_AUTH_TOKEN: 'sk-ccr-key' },
+  });
+  assert.equal(redactProfile(generated).baseUrl, 'http://localhost:3456');
+  assert.equal(redactProfile(generated).hasBaseUrl, true);
+
+  const handWritten = normalizeProfile({
+    id: 'custom-endpoint',
+    label: 'Custom endpoint',
+    env: { ANTHROPIC_BASE_URL: 'http://localhost:9999' },
+  });
+  assert.equal(redactProfile(handWritten).baseUrl, '');
+  assert.equal(redactProfile(handWritten).hasBaseUrl, false);
+});
+
+test('redactProfile strips userinfo and query/hash from an exposed baseUrl', () => {
+  const p = normalizeProfile({
+    id: 'custom-1',
+    label: 'Custom',
+    templateId: 'openai-compatible',
+    env: { ANTHROPIC_BASE_URL: 'https://user:pass@example.com/v1?token=secret#frag' },
+  });
+  assert.equal(redactProfile(p).baseUrl, 'https://example.com/v1');
+});
+
+test('redactProfile reports an empty baseUrl when ANTHROPIC_BASE_URL is absent', () => {
+  const p = normalizeProfile({ id: 'kimi-1', label: 'Kimi', templateId: 'kimi', env: {} });
+  assert.equal(redactProfile(p).baseUrl, '');
+  assert.equal(redactProfile(p).hasBaseUrl, false);
+});
+
+test('NON_SECRET_AUTH_TOKENS exports the fixed set of non-secret ANTHROPIC_AUTH_TOKEN values', () => {
+  assert.deepEqual([...NON_SECRET_AUTH_TOKENS].sort(), ['ccr-local', 'lmstudio']);
+});
+
+test('isLegacyCcrProfile is true only for a profile still carrying the ccr-local sentinel', () => {
+  const legacy = normalizeProfile({
+    id: 'ollama-1',
+    label: 'Ollama',
+    templateId: 'ollama',
+    env: { ANTHROPIC_AUTH_TOKEN: 'ccr-local' },
+  });
+  const migrated = normalizeProfile({
+    id: 'ollama-1',
+    label: 'Ollama',
+    templateId: 'ollama',
+    env: { ANTHROPIC_AUTH_TOKEN: 'sk-real-ccr-key' },
+  });
+  assert.equal(isLegacyCcrProfile(legacy), true);
+  assert.equal(isLegacyCcrProfile(migrated), false);
+  assert.equal(isLegacyCcrProfile(normalizeProfile({ id: 'x', label: 'X' })), false);
+  assert.equal(isLegacyCcrProfile(null), false);
+  assert.equal(isLegacyCcrProfile(undefined), false);
 });

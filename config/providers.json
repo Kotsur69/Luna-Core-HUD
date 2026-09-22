@@ -58,11 +58,15 @@
       "id": "ollama",
       "label": { "pl": "Ollama (lokalnie, przez CCR)", "en": "Ollama (local, via CCR)" },
       "wireVia": "ccr",
-      "requiresApiKey": false,
+      "requiresApiKey": true,
       "ccrProviderType": "ollama",
+      "defaultModel": "",
+      "defaultFastModel": "",
       "envTemplate": {
         "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
-        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}",
+        "ANTHROPIC_SMALL_FAST_MODEL": "{{fastModel}}"
       },
       "docsUrl": "https://ollama.com"
     },
@@ -72,9 +76,13 @@
       "wireVia": "ccr",
       "requiresApiKey": true,
       "ccrProviderType": "openai",
+      "defaultModel": "",
+      "defaultFastModel": "",
       "envTemplate": {
         "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
-        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}",
+        "ANTHROPIC_SMALL_FAST_MODEL": "{{fastModel}}"
       },
       "docsUrl": "https://platform.openai.com/docs"
     },
@@ -84,9 +92,13 @@
       "wireVia": "ccr",
       "requiresApiKey": true,
       "ccrProviderType": "gemini",
+      "defaultModel": "",
+      "defaultFastModel": "",
       "envTemplate": {
         "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
-        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}",
+        "ANTHROPIC_SMALL_FAST_MODEL": "{{fastModel}}"
       },
       "docsUrl": "https://ai.google.dev/gemini-api/docs"
     },
@@ -96,9 +108,13 @@
       "wireVia": "ccr",
       "requiresApiKey": true,
       "ccrProviderType": "openai-compatible",
+      "defaultModel": "",
+      "defaultFastModel": "",
       "envTemplate": {
         "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
-        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}",
+        "ANTHROPIC_SMALL_FAST_MODEL": "{{fastModel}}"
       },
       "docsUrl": "https://docs.x.ai"
     },
@@ -107,11 +123,14 @@
       "label": { "pl": "Wlasny (OpenAI-compatible, przez CCR)", "en": "Custom (OpenAI-compatible, via CCR)" },
       "wireVia": "ccr",
       "requiresApiKey": true,
-      "requiresBaseUrl": true,
       "ccrProviderType": "openai-compatible",
+      "defaultModel": "",
+      "defaultFastModel": "",
       "envTemplate": {
         "ANTHROPIC_BASE_URL": "http://localhost:{{ccrPort}}",
-        "ANTHROPIC_AUTH_TOKEN": "ccr-local"
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}",
+        "ANTHROPIC_SMALL_FAST_MODEL": "{{fastModel}}"
       },
       "docsUrl": ""
     }

@@ -1274,6 +1274,42 @@
           </span>
         </label>
 
+        <h3 class="termcustom__section" data-i18n="termcustom.section.ccr">Router (CCR)</h3>
+        <!-- CCR (claude-code-router) gateway status (Phase 4d of the
+             AI-providers feature): the 5 CCR-routed provider templates
+             (ollama, codex, gemini, grok, openai-compatible) point `claude`
+             at a locally-run claude-code-router gateway - this block
+             detects/starts/stops it. Static markup, filled by
+             modules/ccrsettings.js mountCcrSettings() - same shape as the LM
+             Studio section below. CCR's own provider/model/routing config is
+             edited ONLY through "Open CCR settings" (CCR's own browser UI,
+             its own port) - see src/ccr.js's header for the hard boundary
+             this block respects; no URL/token is ever shown here. -->
+        <p class="termcustom__hint" data-i18n="ccr.hint">
+          Uruchamia lokalny gateway claude-code-router (CCR) dla profili Ollama/Codex/Gemini/Grok/OpenAI-compatible.
+        </p>
+        <p class="termcustom__hint" id="ccr-note" data-i18n="ccr.note">
+          Klucz API wklejany w takim profilu to klucz kliencki CCR, utworzony we wlasnym interfejsie CCR - NIE Twoj prawdziwy klucz OpenAI/Gemini/xAI/Ollama. Prawdziwy klucz podajesz bezposrednio w interfejsie CCR (przycisk ponizej) i nigdy nie trafia do LunaCore.
+        </p>
+        <div class="project-row">
+          <span id="ccr-status-dot" class="diag-item__dot diag-item__dot--unknown"></span>
+          <span id="ccr-status" class="ui-field__label" data-i18n="ccr.status.checking">Sprawdzanie...</span>
+          <button
+            type="button"
+            id="ccr-refresh-btn"
+            class="usage-refresh"
+            data-i18n-title="ccr.refresh.title"
+            title="Odswiez status"
+          >&#8635;</button>
+        </div>
+        <div class="project-row">
+          <button type="button" id="ccr-start-btn" class="termcustom__reset" data-i18n="ccr.action.start">Uruchom</button>
+          <button type="button" id="ccr-stop-btn" class="termcustom__reset" data-i18n="ccr.action.stop">Zatrzymaj</button>
+          <button type="button" id="ccr-open-ui-btn" class="termcustom__reset" data-i18n="ccr.action.openUi">Otworz ustawienia CCR</button>
+          <button type="button" id="ccr-install-help-btn" class="termcustom__reset" data-i18n="ccr.action.installHelp" hidden>Jak zainstalowac</button>
+        </div>
+        <p id="ccr-action-status" class="hint" role="status" hidden></p>
+
         <h3 class="termcustom__section" data-i18n="termcustom.section.providers">Dostawcy AI</h3>
         <!-- Provider-profile CRUD (Phase 3 of the AI-providers feature): lists
              every profile built FROM a config/providers.json template (GLM,

@@ -24,6 +24,7 @@ import { mountAutoCompactSettings } from './autocompact.js';
 import { mountSurfaceAlpha } from './surfacealpha.js';
 import { mountLmStudioSettings } from './lmstudiomodels.js';
 import { mountProviderSettings } from './providersettings.js';
+import { mountCcrSettings } from './ccrsettings.js';
 import { applyLang } from './appearance.js';
 import { MODIFIER_AXES, getModifiers, setModifier } from './modifiers.js';
 import { sfx } from './sound.js';
@@ -516,6 +517,12 @@ export async function initTermcustomSettings() {
   // Same static-overlay mount shape. Its apply path is driven by
   // appearance.js on every theme change, so this only wires the controls.
   mountSurfaceAlpha(termcustomEl);
+
+  // CCR (claude-code-router) gateway status (Phase 4d) - detect/start/stop
+  // the local gateway the CCR-routed provider templates need. Same
+  // static-overlay shape as mountAutoCompactSettings above; mounted before
+  // the provider list to match the section order in index.html.
+  mountCcrSettings(termcustomEl);
 
   // AI-provider profile CRUD (Phase 3) - add/edit/remove a profile built from
   // a config/providers.json template. Same static-overlay shape as

@@ -77,26 +77,7 @@ function normalizeProfile(p) {
     env,
     autoModel: p.autoModel === true,
     templateId: typeof p.templateId === 'string' && p.templateId ? p.templateId : null,
-    ccrConfig: normalizeCcrConfig(p.ccrConfig),
   };
-}
-
-/**
- * The real provider secret/endpoint for a CCR-routed profile (src/providers.js
- * buildProfileFromTemplate) - never in `env` itself, since `env` only ever
- * points `claude` at the local router, not the real provider. Returns null
- * for a direct-wired or hand-written profile.
- * @param {unknown} c
- * @returns {{providerType:string, apiKey?:string, baseUrl?:string}|null}
- */
-function normalizeCcrConfig(c) {
-  if (!c || typeof c !== 'object') return null;
-  const providerType = typeof c.providerType === 'string' ? c.providerType : '';
-  if (!providerType) return null;
-  const out = { providerType };
-  if (typeof c.apiKey === 'string' && c.apiKey) out.apiKey = c.apiKey;
-  if (typeof c.baseUrl === 'string' && c.baseUrl) out.baseUrl = c.baseUrl;
-  return out;
 }
 
 /**
@@ -148,51 +129,87 @@ function getProfile(profiles, id) {
 }
 
 // A template's own FIXED, non-secret placeholder for ANTHROPIC_AUTH_TOKEN
-// (config/providers.json's lm-studio/ollama/codex/gemini/grok/openai-compatible
-// entries all set one) - never a real credential, so it must not count as
-// "a key is configured" for the provider-settings UI.
+// (config/providers.json's lm-studio entry, and the LEGACY value a
+// CCR-routed profile created before the ccrConfig reshape still carries) -
+// never a real credential, so it must not count as "a key is configured" for
+// the provider-settings UI. 'ccr-local' stays here even though no shipped
+// template writes it anymore: an existing profiles.local.json entry from
+// before the reshape still has env.ANTHROPIC_AUTH_TOKEN === 'ccr-local' and
+// must keep reporting hasApiKey: false until the user re-edits it with a
+// real CCR client key (see isLegacyCcrProfile() below).
 const NON_SECRET_AUTH_TOKENS = new Set(['lmstudio', 'ccr-local']);
 
 /**
- * Strips the two fields this codebase treats as secret-bearing - `env` (a
- * provider API key can be in the clear there for a direct-wired profile) and
- * `ccrConfig` (same, for a CCR-routed one) - config/profiles.local.json is
- * plaintext by design, see providers.js. In their place, exposes only
- * non-secret facts DERIVED from them: the current `model`/`fastModel` (read
- * out of `env`, needed so the provider-settings edit form can prefill the
- * real value instead of silently resetting it to the template default on
- * save) and `hasApiKey`/`hasBaseUrl` booleans (so the UI can show "a key is
- * configured" without the raw value ever crossing IPC).
+ * Strips userinfo (`user:pass@`) and any query/hash from a URL string -
+ * defense in depth for the `baseUrl` exposure in redactProfile() below, even
+ * though no shipped template currently embeds a secret in a URL.
+ * @param {string} raw
+ * @returns {string}
+ */
+function sanitizeBaseUrl(raw) {
+  if (typeof raw !== 'string' || !raw) return '';
+  const withoutUserinfo = raw.replace(/^([a-zA-Z][\w+.-]*:\/\/)[^/?#@]*@/, '$1');
+  return withoutUserinfo.split(/[?#]/)[0];
+}
+
+/**
+ * Strips the one field this codebase treats as secret-bearing - `env` (a
+ * provider API key, and for a template-generated profile a CCR client key,
+ * can be in the clear there) - config/profiles.local.json is plaintext by
+ * design, see providers.js. In its place, exposes only non-secret facts
+ * DERIVED from it: the current `model`/`fastModel`/`baseUrl` (so the
+ * provider-settings edit form can prefill the real value instead of
+ * silently resetting it to the template default on save) and
+ * `hasApiKey`/`hasBaseUrl` booleans (so the UI can show "a key is
+ * configured" without the raw value ever crossing IPC), and `isLegacyCcr`
+ * (see isLegacyCcrProfile() below) so the UI can flag a profile that still
+ * needs a real CCR client key pasted in.
+ *
+ * `baseUrl` is only ever read out for a TEMPLATE-generated profile
+ * (`templateId` non-null) - every shipped template's envTemplate is
+ * shipped/code-reviewed and provably cannot embed a secret in the URL, but a
+ * hand-written profiles.local.json entry legitimately could (e.g. a URL with
+ * an API key in the query string), so it stays hidden for those.
  *
  * `command`/`args` pass through UNREDACTED: every shipped template
  * (providers.js) and every shipped profile (config/profiles.json) puts all
- * provider config in `env`/`ccrConfig` and always ships `args: []`, so
- * neither field is expected to ever carry a secret. A hand-written
- * profiles.local.json entry that puts one there anyway (e.g. `args:
- * ['--api-key=...']`) would leak it to the renderer - do not add secret
- * material to `command`/`args` in a profile.
+ * provider config in `env` and always ships `args: []`, so neither field is
+ * expected to ever carry a secret. A hand-written profiles.local.json entry
+ * that puts one there anyway (e.g. `args: ['--api-key=...']`) would leak it
+ * to the renderer - do not add secret material to `command`/`args` in a
+ * profile.
  * @param {Object} profile a normalizeProfile()-shaped object
  * @returns {Object}
  */
 function redactProfile(profile) {
-  const { env, ccrConfig, ...rest } = profile;
+  const { env, ...rest } = profile;
   const model = (env && typeof env.ANTHROPIC_MODEL === 'string' && env.ANTHROPIC_MODEL) || '';
   const fastModel =
     (env && typeof env.ANTHROPIC_SMALL_FAST_MODEL === 'string' && env.ANTHROPIC_SMALL_FAST_MODEL) || '';
   const hasApiKey = Boolean(
-    (ccrConfig && ccrConfig.apiKey) ||
-      (env &&
-        typeof env.ANTHROPIC_AUTH_TOKEN === 'string' &&
-        env.ANTHROPIC_AUTH_TOKEN &&
-        !NON_SECRET_AUTH_TOKENS.has(env.ANTHROPIC_AUTH_TOKEN))
+    env &&
+      typeof env.ANTHROPIC_AUTH_TOKEN === 'string' &&
+      env.ANTHROPIC_AUTH_TOKEN &&
+      !NON_SECRET_AUTH_TOKENS.has(env.ANTHROPIC_AUTH_TOKEN)
   );
-  // Only ever reads ccrConfig.baseUrl - true today because the one shipped
-  // template with requiresBaseUrl:true (openai-compatible) is CCR-routed, so
-  // that is the only place a base URL is ever stored. A future DIRECT-wired
-  // template that also requires a base URL would need its own storage read
-  // here too, or this would wrongly report false for it.
-  const hasBaseUrl = Boolean(ccrConfig && ccrConfig.baseUrl);
-  return { ...rest, model, fastModel, hasApiKey, hasBaseUrl };
+  const baseUrl =
+    profile.templateId !== null && env && typeof env.ANTHROPIC_BASE_URL === 'string'
+      ? sanitizeBaseUrl(env.ANTHROPIC_BASE_URL)
+      : '';
+  const hasBaseUrl = Boolean(baseUrl);
+  return { ...rest, model, fastModel, hasApiKey, hasBaseUrl, baseUrl, isLegacyCcr: isLegacyCcrProfile(profile) };
+}
+
+/**
+ * True for a profile created before the ccrConfig reshape: it still carries
+ * the fixed legacy sentinel in env.ANTHROPIC_AUTH_TOKEN rather than a real
+ * CCR client key. Used by the Settings UI to show a "needs your CCR client
+ * key" badge and prompt a re-edit.
+ * @param {{env?:Object}|null|undefined} profile
+ * @returns {boolean}
+ */
+function isLegacyCcrProfile(profile) {
+  return Boolean(profile && profile.env && profile.env.ANTHROPIC_AUTH_TOKEN === 'ccr-local');
 }
 
 /**
@@ -314,4 +331,6 @@ module.exports = {
   addProfile,
   updateProfile,
   removeProfile,
+  isLegacyCcrProfile,
+  NON_SECRET_AUTH_TOKENS,
 };

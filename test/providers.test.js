@@ -16,6 +16,8 @@ const {
   normalizeProviderTemplate,
   allowedEnvKeys,
   buildProfileFromTemplate,
+  isCcrTemplate,
+  isCcrProfile,
   ENV_KEY_DENY_RE,
 } = require('../src/providers');
 
@@ -209,50 +211,78 @@ test('buildProfileFromTemplate does not require an API key when the template doe
 });
 
 test('buildProfileFromTemplate rejects when a required base URL is missing', () => {
+  // No shipped template requires a base URL anymore (openai-compatible's
+  // endpoint is now configured inside CCR's own UI) - the requiresBaseUrl
+  // machinery stays in place for a future direct-wired template, so this
+  // exercises it against a synthetic one instead of a shipped id.
   const { providers } = loadProviders();
   const generic = getProviderTemplate(providers, 'openai-compatible');
-  const result = buildProfileFromTemplate(generic, { id: 'custom', label: 'Custom', apiKey: 'k' });
+  const patched = { ...generic, requiresBaseUrl: true };
+  const result = buildProfileFromTemplate(patched, { id: 'custom', label: 'Custom', apiKey: 'k' });
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'missing-base-url');
 });
 
-test('buildProfileFromTemplate persists the real apiKey/baseUrl of a CCR-routed provider in ccrConfig, not env', () => {
-  // env only ever points claude at the LOCAL router - the real secret/endpoint
-  // has to survive somewhere for claude-code-router (a later phase) to read,
-  // or it is silently lost the moment this call returns.
+test('buildProfileFromTemplate no longer requires a base URL for the shipped openai-compatible template', () => {
+  const { providers } = loadProviders();
+  const generic = getProviderTemplate(providers, 'openai-compatible');
+  const result = buildProfileFromTemplate(generic, { id: 'custom', label: 'Custom', apiKey: 'k' });
+  assert.equal(result.ok, true);
+});
+
+test('buildProfileFromTemplate routes a CCR provider\'s ANTHROPIC_AUTH_TOKEN through {{apiKey}}, not a fixed sentinel', () => {
+  // Under the corrected design LunaCore never sees the user's real upstream
+  // provider secret for a CCR-routed profile - the one credential it does
+  // carry is the CCR client API key, flowed through {{apiKey}} exactly like
+  // glm/kimi already do.
   const { providers } = loadProviders();
   const generic = getProviderTemplate(providers, 'openai-compatible');
   const result = buildProfileFromTemplate(generic, {
     id: 'custom',
     label: 'Custom',
-    apiKey: 'sk-custom-secret',
-    baseUrl: 'https://my-endpoint.example/v1',
+    apiKey: 'sk-ccr-client-key',
   });
   assert.equal(result.ok, true);
-  assert.deepEqual(result.profile.ccrConfig, {
-    providerType: 'openai-compatible',
-    apiKey: 'sk-custom-secret',
-    baseUrl: 'https://my-endpoint.example/v1',
-  });
-  // The real secret/endpoint must NOT leak into env - env only carries the
-  // fixed local-router pointer.
-  assert.equal(JSON.stringify(result.profile.env).includes('sk-custom-secret'), false);
-  assert.equal(JSON.stringify(result.profile.env).includes('my-endpoint'), false);
+  assert.equal(result.profile.env.ANTHROPIC_AUTH_TOKEN, 'sk-ccr-client-key');
+  assert.equal('ccrConfig' in result.profile, false);
 });
 
-test('buildProfileFromTemplate sets ccrConfig to null for a direct-wired template', () => {
+test('buildProfileFromTemplate omits ANTHROPIC_MODEL/ANTHROPIC_SMALL_FAST_MODEL from env when no model is supplied', () => {
+  // CCR templates ship an empty defaultModel/defaultFastModel now - leaving
+  // both blank must mean "let CCR's own Router decide", not
+  // ANTHROPIC_MODEL="" reaching pty.spawn().
   const { providers } = loadProviders();
-  const kimi = getProviderTemplate(providers, 'kimi');
-  const result = buildProfileFromTemplate(kimi, { id: 'kimi', label: 'Kimi', apiKey: 'k' });
-  assert.equal(result.profile.ccrConfig, null);
-});
-
-test('buildProfileFromTemplate omits apiKey/baseUrl from ccrConfig when the template does not require them', () => {
-  const { providers } = loadProviders();
-  const ollama = getProviderTemplate(providers, 'ollama'); // requiresApiKey: false, no baseUrl
-  const result = buildProfileFromTemplate(ollama, { id: 'ollama', label: 'Ollama' });
+  const ollama = getProviderTemplate(providers, 'ollama');
+  const result = buildProfileFromTemplate(ollama, { id: 'ollama', label: 'Ollama', apiKey: 'sk-key' });
   assert.equal(result.ok, true);
-  assert.deepEqual(result.profile.ccrConfig, { providerType: 'ollama' });
+  assert.equal('ANTHROPIC_MODEL' in result.profile.env, false);
+  assert.equal('ANTHROPIC_SMALL_FAST_MODEL' in result.profile.env, false);
+});
+
+test('buildProfileFromTemplate writes ANTHROPIC_MODEL/ANTHROPIC_SMALL_FAST_MODEL to env when a model is supplied', () => {
+  const { providers } = loadProviders();
+  const ollama = getProviderTemplate(providers, 'ollama');
+  const result = buildProfileFromTemplate(ollama, {
+    id: 'ollama',
+    label: 'Ollama',
+    apiKey: 'sk-key',
+    model: 'llama3.3-custom',
+    fastModel: 'llama3.2-custom',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.profile.env.ANTHROPIC_MODEL, 'llama3.3-custom');
+  assert.equal(result.profile.env.ANTHROPIC_SMALL_FAST_MODEL, 'llama3.2-custom');
+});
+
+test('buildProfileFromTemplate requires an API key for every shipped CCR template, including ollama', () => {
+  const { providers } = loadProviders();
+  for (const id of ['ollama', 'codex', 'gemini', 'grok', 'openai-compatible']) {
+    const template = getProviderTemplate(providers, id);
+    const entry = id === 'openai-compatible' ? { id, label: 'X', baseUrl: 'https://x' } : { id, label: 'X' };
+    const result = buildProfileFromTemplate(template, entry);
+    assert.equal(result.ok, false, `expected ${id} to require an api key`);
+    assert.equal(result.reason, 'missing-api-key', `expected ${id} to fail with missing-api-key`);
+  }
 });
 
 test('buildProfileFromTemplate rejects a null/invalid template', () => {
@@ -270,7 +300,7 @@ test('buildProfileFromTemplate rejects an entry without id or label', () => {
 test('buildProfileFromTemplate fills a CCR-routed template with the given port', () => {
   const { providers } = loadProviders();
   const ollama = getProviderTemplate(providers, 'ollama');
-  const result = buildProfileFromTemplate(ollama, { id: 'ollama', label: 'Ollama', ccrPort: 4090 });
+  const result = buildProfileFromTemplate(ollama, { id: 'ollama', label: 'Ollama', apiKey: 'sk-key', ccrPort: 4090 });
   assert.equal(result.ok, true);
   assert.equal(result.profile.env.ANTHROPIC_BASE_URL, 'http://localhost:4090');
 });
@@ -278,7 +308,34 @@ test('buildProfileFromTemplate fills a CCR-routed template with the given port',
 test('buildProfileFromTemplate defaults the CCR port when none is given', () => {
   const { providers } = loadProviders();
   const ollama = getProviderTemplate(providers, 'ollama');
-  const result = buildProfileFromTemplate(ollama, { id: 'ollama', label: 'Ollama' });
+  const result = buildProfileFromTemplate(ollama, { id: 'ollama', label: 'Ollama', apiKey: 'sk-key' });
   assert.equal(result.ok, true);
   assert.match(result.profile.env.ANTHROPIC_BASE_URL, /^http:\/\/localhost:\d+$/);
+});
+
+// ---- isCcrTemplate / isCcrProfile ---------------------------------------------------------------
+
+test('isCcrTemplate is true only for a wireVia: ccr template', () => {
+  const { providers } = loadProviders();
+  assert.equal(isCcrTemplate(getProviderTemplate(providers, 'ollama')), true);
+  assert.equal(isCcrTemplate(getProviderTemplate(providers, 'openai-compatible')), true);
+  assert.equal(isCcrTemplate(getProviderTemplate(providers, 'kimi')), false);
+  assert.equal(isCcrTemplate(getProviderTemplate(providers, 'claude-cloud')), false);
+  assert.equal(isCcrTemplate(null), false);
+  assert.equal(isCcrTemplate(undefined), false);
+});
+
+test('isCcrProfile looks the profile\'s templateId up and defers to isCcrTemplate', () => {
+  const { providers } = loadProviders();
+  assert.equal(isCcrProfile({ templateId: 'ollama' }, providers), true);
+  assert.equal(isCcrProfile({ templateId: 'kimi' }, providers), false);
+});
+
+test('isCcrProfile is false for a hand-written profile or an unknown templateId', () => {
+  const { providers } = loadProviders();
+  assert.equal(isCcrProfile({ templateId: null }, providers), false);
+  assert.equal(isCcrProfile({}, providers), false);
+  assert.equal(isCcrProfile({ templateId: 'no-such-template' }, providers), false);
+  assert.equal(isCcrProfile(null, providers), false);
+  assert.equal(isCcrProfile(undefined, providers), false);
 });

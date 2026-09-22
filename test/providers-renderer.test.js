@@ -52,15 +52,15 @@ test('generatedProfiles tolerates junk input without throwing', () => {
 
 test('templateFields matches every shipped template\'s real field needs', () => {
   const expected = {
-    'claude-cloud': { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false },
-    'lm-studio': { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false },
-    glm: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true },
-    kimi: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: false },
-    ollama: { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false },
-    codex: { needsApiKey: true, needsBaseUrl: false, showModel: false, showFastModel: false },
-    gemini: { needsApiKey: true, needsBaseUrl: false, showModel: false, showFastModel: false },
-    grok: { needsApiKey: true, needsBaseUrl: false, showModel: false, showFastModel: false },
-    'openai-compatible': { needsApiKey: true, needsBaseUrl: true, showModel: false, showFastModel: false },
+    'claude-cloud': { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
+    'lm-studio': { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
+    glm: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: false },
+    kimi: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: false, showCcrPort: false },
+    ollama: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    codex: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    gemini: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    grok: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    'openai-compatible': { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
   };
   for (const [id, want] of Object.entries(expected)) {
     assert.deepEqual(templateFields(template(id)), want, `templateFields(${id})`);
@@ -72,8 +72,40 @@ test('templateFields behaves the same on a raw catalog entry (missing autoModel)
   assert.deepEqual(templateFields(raw), templateFields(template('kimi')));
 });
 
+test('templateFields shows a model field for a CCR-routed template exactly because its envTemplate now carries the placeholder', () => {
+  // Since the CCR reshape, every CCR-routed template's envTemplate templates
+  // {{model}}/{{fastModel}} directly (config/providers.json) - no more
+  // wireVia special-casing needed, usesPlaceholder() alone is enough.
+  const raw = {
+    id: 'ollama',
+    wireVia: 'ccr',
+    requiresApiKey: true,
+    envTemplate: {
+      ANTHROPIC_BASE_URL: 'http://localhost:{{ccrPort}}',
+      ANTHROPIC_AUTH_TOKEN: '{{apiKey}}',
+      ANTHROPIC_MODEL: '{{model}}',
+      ANTHROPIC_SMALL_FAST_MODEL: '{{fastModel}}',
+    },
+  };
+  assert.equal(templateFields(raw).showModel, true);
+  assert.equal(templateFields(raw).showFastModel, true);
+  assert.equal(templateFields(raw).showCcrPort, true);
+});
+
+test('templateFields does not show a model field for a CCR-routed template whose envTemplate has no placeholder', () => {
+  // Confirms there is no more wireVia:'ccr' special-case left in templateFields().
+  const raw = {
+    id: 'weird',
+    wireVia: 'ccr',
+    requiresApiKey: true,
+    envTemplate: { ANTHROPIC_BASE_URL: 'http://localhost:{{ccrPort}}', ANTHROPIC_AUTH_TOKEN: '{{apiKey}}' },
+  };
+  assert.equal(templateFields(raw).showModel, false);
+  assert.equal(templateFields(raw).showFastModel, false);
+});
+
 test('templateFields tolerates junk input without throwing', () => {
-  const empty = { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false };
+  const empty = { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false };
   assert.deepEqual(templateFields(null), empty);
   assert.deepEqual(templateFields(undefined), empty);
   assert.deepEqual(templateFields('nope'), empty);
@@ -122,10 +154,19 @@ test('buildAddPayload rejects a missing API key when the template requires one',
 });
 
 test('buildAddPayload rejects a missing base URL when the template requires one', () => {
-  assert.deepEqual(buildAddPayload({ template: template('openai-compatible'), label: 'X', apiKey: 'k' }), {
+  // No shipped template requires a base URL anymore - exercised against a
+  // synthetic template so the (still-reusable) requiresBaseUrl check itself
+  // stays covered.
+  const patched = { ...template('openai-compatible'), requiresBaseUrl: true };
+  assert.deepEqual(buildAddPayload({ template: patched, label: 'X', apiKey: 'k' }), {
     ok: false,
     reason: 'missing-base-url',
   });
+});
+
+test('buildAddPayload no longer requires a base URL for the shipped openai-compatible template', () => {
+  const result = buildAddPayload({ template: template('openai-compatible'), label: 'X', apiKey: 'k' });
+  assert.equal(result.ok, true);
 });
 
 test('buildAddPayload rejects an unknown/missing template', () => {
@@ -137,6 +178,37 @@ test('buildAddPayload always sets id to the templateId, matching addProfile()\'s
   const result = buildAddPayload({ template: template('kimi'), label: 'Second Kimi key', apiKey: 'k' });
   assert.equal(result.payload.id, 'kimi');
   assert.equal(result.payload.templateId, 'kimi');
+});
+
+test('buildAddPayload includes a valid ccrPort as a number when the template shows the field', () => {
+  const result = buildAddPayload({ template: template('ollama'), label: 'Ollama', apiKey: 'k', ccrPort: '4090' });
+  assert.equal(result.ok, true);
+  assert.equal(result.payload.ccrPort, 4090);
+  assert.equal(typeof result.payload.ccrPort, 'number');
+});
+
+test('buildAddPayload omits ccrPort entirely when left blank', () => {
+  const result = buildAddPayload({ template: template('ollama'), label: 'Ollama', apiKey: 'k' });
+  assert.equal(result.ok, true);
+  assert.equal('ccrPort' in result.payload, false);
+});
+
+test('buildAddPayload rejects an out-of-range or non-numeric ccrPort', () => {
+  for (const bad of [0, -1, 65536, 999999, 'not-a-port', NaN]) {
+    assert.deepEqual(
+      buildAddPayload({ template: template('ollama'), label: 'Ollama', apiKey: 'k', ccrPort: bad }),
+      { ok: false, reason: 'invalid-port' },
+      `expected ccrPort ${bad} to be rejected`
+    );
+  }
+});
+
+test('buildAddPayload ignores ccrPort for a template that does not show the field', () => {
+  // glm's envTemplate never templates {{ccrPort}} - the field is not shown,
+  // so even a junk value is silently dropped rather than validated.
+  const result = buildAddPayload({ template: template('glm'), label: 'GLM', apiKey: 'k', ccrPort: 'garbage' });
+  assert.equal(result.ok, true);
+  assert.equal('ccrPort' in result.payload, false);
 });
 
 // ---- buildEditPayload ---------------------------------------------------------------
@@ -197,6 +269,39 @@ test('buildEditPayload includes a non-blank apiKey/baseUrl when the caller does 
   });
 });
 
+test('buildEditPayload includes a valid ccrPort and rejects an invalid one', () => {
+  const valid = buildEditPayload({
+    id: 'ollama-1',
+    template: template('ollama'),
+    label: 'Ollama',
+    hasApiKey: true,
+    ccrPort: 4090,
+  });
+  assert.equal(valid.ok, true);
+  assert.equal(valid.payload.ccrPort, 4090);
+
+  const invalid = buildEditPayload({
+    id: 'ollama-1',
+    template: template('ollama'),
+    label: 'Ollama',
+    hasApiKey: true,
+    ccrPort: 70000,
+  });
+  assert.deepEqual(invalid, { ok: false, reason: 'invalid-port' });
+});
+
+test('buildEditPayload ignores ccrPort for a template that does not show the field', () => {
+  const result = buildEditPayload({
+    id: 'glm-1',
+    template: template('glm'),
+    label: 'GLM',
+    hasApiKey: true,
+    ccrPort: 'garbage',
+  });
+  assert.equal(result.ok, true);
+  assert.equal('ccrPort' in result.payload, false);
+});
+
 // ---- failureKey ---------------------------------------------------------------
 
 test('failureKey maps every typed reason returned by main.js\'s handlers to a providers.error.* key', () => {
@@ -205,6 +310,7 @@ test('failureKey maps every typed reason returned by main.js\'s handlers to a pr
     'missing-api-key': 'providers.error.missingApiKey',
     'missing-base-url': 'providers.error.missingBaseUrl',
     'missing-id': 'providers.error.missingId',
+    'invalid-port': 'providers.error.invalidPort',
     'unknown-template': 'providers.error.unknownTemplate',
     'unknown-profile': 'providers.error.unknownProfile',
     'save-failed': 'providers.error.saveFailed',

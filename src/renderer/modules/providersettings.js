@@ -63,6 +63,7 @@ function describeProfile(profile) {
     parts.push(profile.hasBaseUrl ? t('providers.item.baseUrlSet') : t('providers.item.baseUrlMissing'));
   }
   if (fields.showModel && profile.model) parts.push(t('providers.item.model', { model: profile.model }));
+  if (profile.isLegacyCcr) parts.push(t('providers.item.legacyCcr'));
   return parts.join(' · ');
 }
 

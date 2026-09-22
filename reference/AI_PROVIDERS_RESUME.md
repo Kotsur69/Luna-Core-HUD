@@ -4,10 +4,9 @@ Operational hand-off for the AI-providers work. This is built directly on
 `main` (no dedicated feature branch) via the `/orch-add-feature` gated
 pipeline (Research → Plan → Gate 1 → TDD → Review → Gate 2 → Commit), one
 phase at a time. Read this file first in a new session before doing anything
-else on this feature - it says exactly where things stand and what Phase 4
-needs to do.
+else on this feature - it says exactly where things stand and what's left.
 
-Last updated: 2026-09-21, right after Phase 3 landed.
+Last updated: 2026-09-22, right after Phase 4 landed.
 
 ---
 
@@ -31,151 +30,206 @@ should be changeable from inside LunaCore's own Settings overlay (Ctrl+L).
 ## Where things stand
 
 ```
-0210e4d  feat: let Settings load downloaded LM Studio models   (Phase 2, done)
-03c47c0  feat: add AI-provider templates + /ask + highlights   (Phase 1, done - bundled with two unrelated features in one commit)
-<uncommitted>  Phase 3: AI-provider profile CRUD in Settings   (done, not yet committed as of this file)
+461edf1  feat: add AI-provider profile CRUD to Settings              (Phase 3, done)
+0210e4d  feat: let Settings load downloaded LM Studio models         (Phase 2, done)
+03c47c0  feat: add AI-provider templates + /ask + highlights         (Phase 1, done)
+<uncommitted>  Phase 4: claude-code-router (CCR) lifecycle + UI      (done, not yet committed as of this file)
 ```
 
-`npm test` → **1272 pass, 0 fail**, ~1s. `npm start` runs the app.
+`npm test` → **1337 pass, 0 fail**, ~1s. `npm start` runs the app.
 
 ### Phase 1 — DONE (`03c47c0`)
 The template/backend layer. `src/providers.js` (`loadProviders()`,
 `getProviderTemplate()`, `buildProfileFromTemplate()`) reads the read-only
 catalog `config/providers.json` - 9 shipped templates: `claude-cloud`,
-`lm-studio`, `glm`, `kimi` (all `wireVia: 'direct'`, pointing `claude` straight
-at the provider), and `ollama`, `codex`, `gemini`, `grok`, `openai-compatible`
-(all `wireVia: 'ccr'` - routed through a **not-yet-built** local
-claude-code-router instance, see Phase 4 below). `src/profiles.js` got
-`addProfile`/`updateProfile`/`removeProfile` (writing to gitignored
-`config/profiles.local.json`) and `redactProfile()` (strips secrets before
-anything crosses IPC). Full CRUD IPC was wired in `src/main.js` +
-`src/preload.js` at this point too: `profiles:list`, `providers:list`,
-`profiles:add-from-template`, `profiles:update-from-template`,
-`profiles:remove` - **all of Phase 3's UI is built entirely on IPC that
-already existed from this commit.**
+`lm-studio`, `glm`, `kimi` (all `wireVia: 'direct'`), and `ollama`, `codex`,
+`gemini`, `grok`, `openai-compatible` (all `wireVia: 'ccr'`, routed through a
+locally-run `claude-code-router` gateway - see Phase 4 below for how that
+actually works). `src/profiles.js` got `addProfile`/`updateProfile`/
+`removeProfile` (writing to gitignored `config/profiles.local.json`) and
+`redactProfile()` (strips secrets before anything crosses IPC). Full CRUD IPC
+was wired in `src/main.js` + `src/preload.js` at this point too: `profiles:list`,
+`providers:list`, `profiles:add-from-template`, `profiles:update-from-template`,
+`profiles:remove` - Phase 3's UI is built entirely on IPC that already existed
+from this commit.
 
 ### Phase 2 — DONE (`0210e4d`)
 `src/lmstudiocli.js`: a `lms` CLI wrapper (`execFile`, never `shell:true`) that
-lists every model DOWNLOADED to disk (not just a running server's loaded one,
-which is all `src/lmstudio.js`'s older passive HTTP watcher ever saw) and
-force-loads one. New Settings section ("LM Studio", Ctrl+L) built on top:
+lists every model DOWNLOADED to disk (not just a running server's loaded one)
+and force-loads one. New Settings section ("LM Studio", Ctrl+L) built on top:
 `src/renderer/modules/lmstudiomodels.js` + i18n + HTML + CSS. This is the part
 of "go local claude" that dealt with switching LM Studio's loaded model - it's
 now fully replaced from inside LunaCore.
 
-### Phase 3 — DONE, uncommitted as of this file
-A new "AI providers" Settings section (Ctrl+L, placed right before the LM
-Studio section) that lets Mati add/edit/remove a profile built FROM a
-provider template - no hand-editing `config/profiles.local.json` ever again.
+### Phase 3 — DONE (`461edf1`)
+A new "AI providers" Settings section (Ctrl+L) that lets Mati add/edit/remove
+a profile built FROM a provider template - no hand-editing
+`config/profiles.local.json` ever again. Inline per-row add/edit forms;
+hand-written profiles (`templateId: null`, e.g. the shipped `claude-cloud`) are
+hidden from this list with a one-line "N other profiles are edited by hand"
+hint. `redactProfile()` exposes derived non-secret facts (`model`, `fastModel`,
+`hasApiKey`, `hasBaseUrl`) instead of the raw `env`.
 
-**New files:**
-- `src/renderer/modules/providerform.js` - pure form logic, unit-tested
-  (`test/providers-renderer.test.js`): which fields a template needs
-  (`templateFields()`), building an add/edit IPC payload with the same typed
-  rejection reasons `main.js`'s handlers use (`buildAddPayload`/
-  `buildEditPayload`), mapping a failure reason to an i18n key (`failureKey`).
-- `src/renderer/modules/providersettings.js` - the DOM/IPC half
-  (`mountProviderSettings(root)`). UX: **inline per-row forms** - clicking
-  "Edit" on a profile row replaces it with its edit form in place; clicking
-  the top "Add profile" button inserts a new form row. Only one row is ever
-  in form mode at a time. Hand-written profiles (`templateId: null`, e.g. the
-  shipped `claude-cloud`) are hidden from this list with a one-line "N other
-  profiles are edited by hand" hint rather than listed - see Gate 1 decisions
-  below.
+### Phase 4 — DONE, uncommitted as of this file
+`claude-code-router` (CCR) integration: LunaCore can detect/start/stop a local
+CCR gateway process and hand off to its own management UI, plus a "Router
+(CCR)" Settings block. **This phase's design changed mid-flight** after a live
+install revealed the originally-planned architecture didn't match reality -
+recorded here so nobody re-derives (or re-breaks) this.
 
-**Backend additions this phase needed (small, on top of Phase 1):**
-- `src/profiles.js`'s `redactProfile()` now also derives and exposes
-  `model`, `fastModel` (read out of `env`, never `env` itself) and
-  `hasApiKey`/`hasBaseUrl` booleans (never the raw secret) - needed so the
-  edit form can prefill and preserve the real current model instead of
-  silently resetting it to the template default on every save.
-- `src/main.js`'s `profiles:update-from-template` handler gained the same
-  keep-current fallback for `model`/`fastModel` that `apiKey`/`baseUrl`
-  already had (a real bug the code review caught: editing a profile's label
-  used to silently reset its model).
-- One new safe IPC round trip: `providers:open-docs` (`main.js` + `preload.js`)
-  - the renderer only ever sends a template id; the URL is resolved
-    server-side from the shipped `config/providers.json` and re-validated
-    through `safeUrl()` before `shell.openExternal`, same trust pattern as
-    the existing `libraries:open` handler.
+**What was originally assumed (WRONG):** that LunaCore could author CCR's
+`config.json` directly (providers/models/routing), matching CCR's old 1.0.x
+architecture. `ccrConfig` (`{providerType, apiKey?, baseUrl?}` on a profile)
+was built in an earlier pass of this same session specifically to support that.
+
+**What's actually true** (verified live against `@musistudio/claude-code-router
+v3.1.1`, the current published release - 1.0.x is an abandoned pre-rewrite
+line): CCR stores its own config in a SQLite database and is configured ONLY
+through its own browser-based management UI (`ccr ui`) - no CLI flags or
+config file LunaCore can script. The gateway (the endpoint `claude` actually
+talks to) defaults to `http://127.0.0.1:3456`; its real route for a model list
+is `GET /v1/models` (not `/api/v1/models` - corrected from an initial
+assumption during Phase 4a's build). There's no `ccr --version` flag; `ccr
+--help`'s exit code is the "is it on PATH" signal instead. The management UI
+runs on a separate port (3458 by default) and its URL carries an authenticated
+`ccr_web_token` query param CCR itself treats as a password.
+
+**The design that actually shipped ("launch + hand off to CCR's own UI"):**
+LunaCore never sees or stores the user's real upstream provider secret
+(OpenAI/Gemini/xAI/Ollama key) - that's entered directly into CCR's own UI,
+once, by the user. The ONE credential LunaCore stores for a CCR-routed profile
+is a **CCR client API key** (created by the user in CCR's UI under "API
+Keys" - a different credential from the upstream secret), which flows straight
+into `env.ANTHROPIC_AUTH_TOKEN` via `{{apiKey}}`, exactly like `glm`/`kimi`
+already do. `ccrConfig` was deleted entirely - it had no remaining reason to
+exist once LunaCore stopped authoring CCR's config. Model/fast-model fields
+stay in the add/edit form as an OPTIONAL override, empty by default (blank =
+let CCR's own Router decide; typing a value forces `ANTHROPIC_MODEL`/
+`ANTHROPIC_SMALL_FAST_MODEL` for that profile) - also via `env`, also empty
+unless the user types one.
+
+**New/changed files:**
+- `src/ccr.js` (new) - the lifecycle module. Pure: `gatewayPortFromEnv`,
+  `candidatePorts` (covers CCR's own silent "port taken, try the next one"
+  fallback), `classifyProbe`, `redactCcrOutput` (strips any `ccr_web_token`
+  before a child-process string can reach a log/IPC payload), `describeState`.
+  Impure, typed-never-throw: `detectCcr`, `probeGateway`, `findGateway`,
+  `startGateway`, `stopGateway` (refuses on anything LunaCore didn't start
+  itself), `openManagementUi` (NEVER returns a URL, by construction - CCR
+  opens its own browser window with its own token), `testClientKey` (built,
+  wired end-to-end via `ccr:test-key` IPC, but has no UI caller yet - staged
+  for a future "Test connection" button, see main.js's comment on that
+  handler; not a bug).
+- `config/providers.json`, `src/providers.js`, `src/profiles.js`,
+  `src/renderer/modules/providerform.js` - reshaped away from `ccrConfig`: the
+  5 CCR templates now set `requiresApiKey: true` (including `ollama`, which
+  didn't before - **unverified assumption, see below**), `defaultModel`/
+  `defaultFastModel: ""`, and `envTemplate.ANTHROPIC_AUTH_TOKEN: "{{apiKey}}"`
+  (was the literal `"ccr-local"`). `buildProfileFromTemplate()` now drops any
+  env key that resolves to an empty string (so an unset model never reaches
+  `pty.spawn()` as `ANTHROPIC_MODEL: ""`). New exports: `isCcrTemplate`/
+  `isCcrProfile` (providers.js), `NON_SECRET_AUTH_TOKENS`/`isLegacyCcrProfile`
+  (profiles.js - `isLegacyCcrProfile` is now wired into `redactProfile()`'s
+  `isLegacyCcr` field and shown as a row badge, "needs your CCR key
+  re-entered", for any profile still carrying the old `'ccr-local'` sentinel).
+  `redactProfile()` also now exposes a sanitized `baseUrl` (template-generated
+  profiles only).
+- `src/main.js`/`src/preload.js` - six new `ccr:*` IPC handlers
+  (`status`/`start`/`stop`/`open-ui`/`docs`/`test-key`), a fire-and-forget
+  `ensureGatewayFor()` called from `spawnInto()` when a CCR-routed profile
+  spawns (never blocks tab startup), `ccrStartedByUs` tracking so `ccr:stop`
+  refuses to touch a gateway LunaCore didn't start. Passed a dedicated
+  security review (no CRITICAL/HIGH findings) - the one LOW finding
+  (`ensureGatewayFor()`'s fire-and-forget call had no `.catch()`) was fixed.
+- `src/renderer/modules/ccrsettings.js` (new) - a "Router (CCR)" Settings
+  block, mounted in `termcustom.js` above the existing "Dostawcy AI" section.
+  Status line + Start/Stop/"Open CCR settings"/Install-help buttons, matching
+  the existing LM Studio/AI-providers section's exact visual language (no new
+  design system - this was deliberate, see Gate 1 below). Includes the single
+  most important string in this phase: an explanation that the API key field
+  on a CCR-routed profile is a **CCR client key**, not the user's real
+  provider key.
 
 **Gate 1 decisions Mati made for this phase** (don't re-ask, don't re-derive):
-1. Editing a profile shows/preserves the REAL current model (not blind to it).
-2. Add/edit forms are **inline per-row**, not a separate panel.
-3. The docs link goes through the new safe `providers:open-docs` bridge, not
-   a raw `<a href>` or `window.open`.
-4. Hand-written profiles (`claude-cloud`) are hidden from this section with a
-   count hint, not listed read-only and not removable from here.
-5. (Carried from the planner's other defaults, not objected to): all 9
-   templates are offered, with a "CCR lands later" note (`providers.note.ccr`)
-   on the 5 CCR-routed ones; no `ccrPort` field yet (uses the 3456 default);
-   adding a profile does NOT auto-switch the active tab onto it.
+1. CCR is detected on PATH, never bundled as a dependency - same pattern as
+   the `lms` CLI already uses.
+2. Only one CCR gateway process/config exists app-wide (not per-tab) - CCR's
+   own UI owns routing for every LunaCore tab identically. A tab spawning
+   under a CCR profile auto-starts the gateway silently if it's down.
+3. A per-profile `ccrPort` field exists in the add/edit form (threaded through
+   `buildAddPayload`/`buildEditPayload`, validated 1-65535) for when CCR's own
+   port-fallback picks a different port than 3456.
+4. Model/fast-model fields stay visible for CCR profiles as an optional,
+   empty-by-default override (see above).
+5. LunaCore refuses to touch (start/stop/reconfigure) a CCR instance it did
+   not itself start - protects a pre-existing manual CCR setup.
+6. **Unverified assumption, flagged for Mati to confirm once CCR's UI is
+   actually open:** CCR's gateway requires a client API key for every request,
+   even a local Ollama backend - `requiresApiKey: true` was set on all 5 CCR
+   templates on that basis. If wrong, it's a one-line JSON boolean flip, not a
+   redesign (deliberately chosen so a wrong guess here is cheap).
+
+**Deliberately deferred, not built this phase (documented, not silently
+dropped):**
+- **No per-tab status strip.** This codebase has no existing toast/per-session
+  banner component to hook into, and a CCR-routed tab that can't connect
+  already fails exactly like any other unreachable local-endpoint profile
+  (LM Studio included) does today - as ordinary `claude` connection-error
+  output in that tab's terminal. Building new UI infrastructure for this was
+  judged out of scope for what Mati actually asked for.
+- **No "Test connection" button.** `ccr:test-key`/`testClientKey()` are fully
+  built, typed, and unit-tested, just not wired to a UI trigger yet - see the
+  comment on the `ccr:test-key` handler in `main.js`.
 
 **Review findings, all fixed before commit:**
-- Security (MEDIUM): `redactProfile()`'s docstring overclaimed what it strips
-  (`command`/`args` pass through unredacted - harmless today, since every
-  shipped template/profile only ever puts config in `env`/`ccrConfig`, but
-  undocumented). Fixed by tightening the docstring to state the actual
-  contract explicitly.
-- Code review (HIGH): removing a profile that failed silently showed nothing
-  to the user. Fixed - now shows a visible error via the panel's status line.
-- Code review (MEDIUM): the model/fastModel keep-current fix above.
-- Two minor completeness gaps (base-URL configured/missing state wasn't shown
-  in a row's detail text or its status dot) - added.
+- Security review (no CRITICAL/HIGH): one LOW finding, `ensureGatewayFor()`'s
+  fire-and-forget call lacked a `.catch()` - fixed (defense-in-depth against a
+  future change reintroducing a throw path).
+- Code-quality review (no CRITICAL/HIGH): two MEDIUM findings, both about the
+  same shape - `isLegacyCcrProfile`/`testClientKey` were built but had no
+  caller. `isLegacyCcrProfile` is now wired into the UI (badge). `testClientKey`
+  stays staged/documented rather than rushing a "Test connection" UX Mati
+  didn't ask for.
 
-**Not yet done for Phase 3:** Mati has not personally clicked through the
-Ctrl+L → AI providers panel yet (no GUI automation tool available to verify
-visually from this side). Worth a look before treating it as fully proven,
-same caveat as Phase 2's LM Studio panel.
+**Not yet done for Phase 4:** same caveat as Phases 2/3 - no browser/GUI
+automation tool was available to click through the new Settings block
+visually. Everything verifiable programmatically (syntax, the pure decision
+functions' unit coverage, the full suite, i18n key parity) checks out clean,
+but Mati hasn't personally confirmed it renders/behaves correctly yet. Also
+unverified: assumption #6 above (Ollama needing a CCR client key) - only
+confirmable once CCR's own UI is opened and a provider is actually added.
 
 ---
 
 ## What's next
 
-### Phase 4 — `src/ccr.js`, NOT STARTED
-The claude-code-router (CCR) proxy. **This is the load-bearing gap**: 5 of the
-9 provider templates (`ollama`, `codex`, `gemini`, `grok`, `openai-compatible`)
-are `wireVia: 'ccr'` - their generated profile points `claude` at
-`http://localhost:{{ccrPort}}` (default 3456, `DEFAULT_CCR_PORT` in
-`src/providers.js`), and nothing is listening there yet. A user who adds one
-of these profiles right now gets exactly the warning the UI already shows
-(`providers.note.ccr`: "this provider runs through CCR - CCR routing lands in
-a later phase, so the profile saves but does not work yet") - **but it truly
-does not work until this phase lands.**
-
-What Phase 4 needs to do, based on what's already in place for it to consume:
-- Each CCR-routed profile carries a `ccrConfig` field (`{providerType,
-  apiKey?, baseUrl?}` - see `src/profiles.js`'s `normalizeCcrConfig()` and
-  `src/providers.js`'s `buildProfileFromTemplate()`) that is stripped from
-  the renderer by `redactProfile()` but IS available to the main process's
-  own in-memory `profiles` array. `ccrProviderType` per template
-  (`'ollama'|'openai'|'gemini'|'openai-compatible'`) is in
-  `config/providers.json` already.
-- `src/ccr.js` needs to: detect/manage a local claude-code-router process (or
-  vendor/spawn it - not yet researched which CCR implementation LunaCore
-  should drive), translate a profile's `ccrConfig` into whatever config
-  format that router expects, and start/stop it in step with which
-  CCR-routed profile is active in a tab.
-- This is a `/plan`-worthy phase on its own (research: which CCR project/CLI,
-  how it's configured, whether it needs to be bundled or is expected
-  pre-installed) - do the Research step properly before writing code, per
-  this repo's own `/orch-add-feature` workflow.
-
-### Phase 5 — polish/docs, NOT STARTED
-Whatever's left once Phase 4 actually makes the CCR-routed providers work:
-README/FUTURE_PLAN updates, and re-walking the "CCR lands later" hint out of
-the UI once it's no longer true.
+### Phase 5 — polish, NOT STARTED
+Nothing is currently blocking - Phases 1-4 together deliver everything in the
+original request. Candidates for a future pass, roughly in likely-usefulness
+order:
+1. Click through the app for real (Ctrl+L → Router (CCR) section, and the AI
+   providers section for a CCR template) and confirm assumption #6 above once
+   CCR's UI is open with a real provider configured.
+2. Wire a "Test connection" button using the already-built `ccr:test-key` IPC,
+   if the manual click-through above shows it'd genuinely help (e.g. people
+   pasting the wrong kind of key is a real confusion point).
+3. A per-tab status strip, if a CCR gateway failure turns out to be
+   meaningfully less discoverable in practice than a plain terminal error -
+   would need a new toast/banner component this codebase doesn't have yet.
+4. `src/main.js` is now ~2665 lines (pre-existing oversized-file condition,
+   not introduced by this feature) - the new CCR IPC block
+   (`ccr:status`/`start`/`stop`/`open-ui`/`docs`/`test-key`, contiguous) is a
+   clean extraction candidate into its own `registerCcrIpc()` function or
+   module, same pattern `src/ccr.js` already set for the pure logic.
 
 ---
 
 ## How to resume this in a new session
 
-Tell the new session: *"read reference/AI_PROVIDERS_RESUME.md, then proceed
-with Phase 4."* It should NOT re-ask the Gate 1 questions already answered
-above, and should start Phase 4 with a `/plan`-style research pass (per this
-repo's `CLAUDE.md`, delegate to `ecc:planner` - Phase 4 is a `src/main.js`
-change plus a brand-new module, both explicit triggers), since the CCR
-integration approach itself hasn't been decided yet.
+Tell the new session: *"read reference/AI_PROVIDERS_RESUME.md."* Phases 1-4
+are all done - there's no blocking next phase. If Mati wants Phase 5 work,
+point at the candidate list above; otherwise treat this feature as complete
+and ask what's next.
 
 ---
 
@@ -189,9 +243,18 @@ integration approach itself hasn't been decided yet.
   and retry.
 - **A concurrent Claude session can share this git index.** Check `git
   status`/`git log` before committing; never `git add -A` - stage explicit
-  paths only (this file's own commit does exactly that).
+  paths only.
 - Renderer modules in this repo use ESM `import`/`export` syntax but are
   plain `.js` files (no bundler in the loop for the app itself); `node
   --input-type=module --check < file.js` is how to syntax-check one from a
   shell without a browser, since plain `node --check` chokes on the ESM
   syntax.
+- **A tool's real behavior can diverge from its own docs, or a fresh
+  `npm install` can pull a much newer major version than expected.** Phase 4
+  planned an integration against `claude-code-router`'s documented/assumed
+  1.0.x-era architecture (a hand-authorable `config.json`); the actually
+  installed latest version (3.1.1) turned out to be a full rewrite (SQLite +
+  browser UI, no scriptable config). When integrating an external CLI/service
+  this feature doesn't control the version of, install it for real and probe
+  its actual behavior (`--help`, hit its real HTTP routes) before designing
+  around its docs or training-data knowledge of an older version.
