@@ -216,8 +216,22 @@ test('recover only restarts the server when a model is still loaded', async () =
 test('recover reloads with the last Settings load request, options included', async () => {
   const lastLoad = { modelKey: 'm', contextLength: 131072, flashAttention: true };
   const deps = recoverDeps();
-  const r = await recoverLocalBackend({ modelKey: 'other', lastLoad, ...deps });
+  const r = await recoverLocalBackend({ modelKey: 'm', lastLoad, ...deps });
   assert.deepStrictEqual(r, { ok: true, action: 'reload' });
+  assert.deepStrictEqual(deps.calls[2], ['load', lastLoad]);
+});
+
+test('recover never swaps in a different model from a later Settings load', async () => {
+  const lastLoad = { modelKey: 'loaded-for-another-tab', contextLength: 4096 };
+  const deps = recoverDeps();
+  await recoverLocalBackend({ modelKey: 'run-model', lastLoad, ...deps });
+  assert.deepStrictEqual(deps.calls[2], ['load', { modelKey: 'run-model' }]);
+});
+
+test('recover uses the Settings load when the run never saw a model loaded', async () => {
+  const lastLoad = { modelKey: 'm', contextLength: 131072 };
+  const deps = recoverDeps();
+  await recoverLocalBackend({ modelKey: null, lastLoad, ...deps });
   assert.deepStrictEqual(deps.calls[2], ['load', lastLoad]);
 });
 

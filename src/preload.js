@@ -270,6 +270,9 @@ contextBridge.exposeInMainWorld('lunacore', {
   },
   /** Native "are you sure" popup gating every arm; resolves true only on an explicit Yes. */
   confirmGodMode: (openCount) => ipcRenderer.invoke('godmode:confirm', openCount),
+  /** Reports the tab a run is bound to (null when it ends) - arms the overnight guard. */
+  setGodModeRun: (sessionId) =>
+    ipcRenderer.send('godmode:run', typeof sessionId === 'string' ? sessionId : null),
 
   // --- Device panel: microphone mute ---
   /**

@@ -6,8 +6,8 @@ pipeline (Research → Plan → Gate 1 → TDD → Review → Gate 2 → Commit)
 phase at a time. Read this file first in a new session before doing anything
 else on this feature - it says exactly where things stand and what's left.
 
-Last updated: 2026-09-24, after Phase 8 (shim token, env-strip fix, CCR IPC
-module, Test connection, CCR port field).
+Last updated: 2026-09-24, after Phase 8b (the two parallel Phase 8 branches
+merged into one, Kimi Code template, overnight guard wired into God Mode).
 
 ---
 
@@ -36,13 +36,16 @@ should be changeable from inside LunaCore's own Settings overlay (Ctrl+L).
 03c47c0  feat: add AI-provider templates + /ask + highlights         (Phase 1, done)
 b84027b  feat: add claude-code-router (CCR) lifecycle management    (Phase 4, done)
 02988cc  Phases 5 + 7: LM Studio runs the full Luna harness           (done)
-<this commit>  Phase 8: shim token, env fix, CCR module + Test button  (done)
+ee3cf38  Phase 8: shim token, env fix, CCR module + Test button       (done)
+082e53c  Phase 8b: local Phase 8 branch folded in (Kimi Code etc.)    (done)
+<this commit>  Phase 8b: overnight guard wired into God Mode         (done, not run live)
 ```
 
-`npm test` → **1446 tests, 1445 pass**. The one failure,
-`test/launch.test.js` "withSessionId accepts a path or .exe/.cmd form of the
-binary", is Windows-path-only: it fails on Linux (cloud sessions) on untouched
-`main` too and passes on Mati's Windows machine. `npm start` runs the app.
+Everything is on `main`; there are no feature branches left.
+`npm test` on Mati's Windows machine → **1482 tests, 1482 pass**. (On Linux
+cloud sessions `test/launch.test.js` "withSessionId accepts a path or
+.exe/.cmd form of the binary" fails - it is Windows-path-only and fails on
+untouched `main` there too.) `npm start` runs the app.
 
 ### Phase 1 — DONE (`03c47c0`)
 The template/backend layer. `src/providers.js` (`loadProviders()`,
@@ -600,6 +603,82 @@ Small pre-existing thing noticed, not changed: a CCR template's Model field
 placeholder reads "default: " with nothing after it (the CCR templates ship
 `defaultModel: ""`). A "blank = CCR's router decides" hint would read better.
 
+### Phase 8b — DONE (2026-09-24): two Phase 8s merged, overnight guard wired
+
+Phase 8 was built twice in parallel: once locally (`feat/overnight-guard`,
+`83c8b9e`) and once in a cloud session (`ai-providers-phase-8`, `ee3cf38`,
+the section above). Both were green alone but conflicted in 8 files (each had
+its own `ccrcontrol.js` and shim token). Mati picked the cloud branch as the
+base; `082e53c` ports what only the local branch had:
+
+- **Kimi Code template** (`kimi-code`): `https://api.kimi.ai/coding/`, auth
+  via `ANTHROPIC_API_KEY` per Kimi's docs, all tiers -> `k3-256k` (type
+  `k3[1m]` for the 1M plan), context/auto-compact 262144, effort high.
+  `profileAuthKey()` (profiles.js) reads whichever of `ANTHROPIC_AUTH_TOKEN` /
+  `ANTHROPIC_API_KEY` a profile uses, for `hasApiKey` AND for
+  `profileinput.js`'s keep-key-on-edit. Without the latter, editing a Kimi
+  Code profile failed with `missing-api-key` (found while merging; test
+  added). Not yet tried with a real key.
+- **Shim probe exemption**: the CLI's `HEAD /api/hello` connectivity probe
+  carries no custom headers (seen live on claude 2.1.278), so exactly that
+  request (HEAD, that path) skips the token check. It has no body and cannot
+  start a generation.
+- **`API_TIMEOUT_MS` = 50 min** on every local tab unless the profile sets it
+  (`LOCAL_API_TIMEOUT_MS` in locallaunch.js). The CLI default is 10 min; a 128k
+  prefill measured ~8 min on a 16 GB card.
+
+**Overnight guard** = hardening a God Mode run, NOT a new runner or toggle.
+`src/overnight.js` (`createOvernightGuard`, `recoverLocalBackend`) is now
+wired:
+- **main.js**: the guard is built next to `ccrControl`. For the run's
+  lifetime it holds `powerSaveBlocker('prevent-app-suspension')` (the screen
+  may still turn off) and sets `setBackgroundThrottling(false)` so a minimized
+  window keeps God Mode's timers. Only an **LM Studio** tab (one
+  `resolveLocalLaunch` accepts) gets the 30 s backend watchdog. A CCR gateway on
+  loopback is deliberately excluded, because waking LM Studio cannot fix it.
+  One bad probe is re-checked 3 s later before anything acts on it. Recovery =
+  `lms server start` -> SDK list -> reload ONLY if nothing is loaded. It reloads
+  the model this run last saw loaded; the last successful Settings load
+  (`lastLmStudioLoad`, a shallow copy of the `lmstudiocli:load` payload,
+  re-validated by `buildLoadRequest`) only contributes its options when it is
+  for that same model, or when the run never saw one loaded. (The first cut
+  preferred the app-wide Settings load, which could swap in a model loaded
+  for another tab - security-review HIGH, fixed + tested.) 3 failed
+  recoveries -> `backendLost`.
+  New IPC `godmode:run` (renderer -> main): arms the guard only for a live
+  session id, anything else releases it. `onApiError` also pokes the guard
+  (`onConnectionError`), `closeSession` forgets the tab, quit calls `stop()`.
+- **preload.js**: `setGodModeRun(sessionId|null)`.
+- **godmode.js**: reports the run on arm / finish / disarm. New phase
+  `waiting-backend` (shown as "restoring the local model" / "przywraca
+  lokalny model"). The pure transition is `backendSignalStep()`, tested in
+  `test/godmode-backend.test.js`:
+  `backendRecovering` -> wait (timers cleared, a drop already seen is
+  remembered); `connectionError` while waiting -> remembered, no retry;
+  `backendRecovered` -> running, pasting `continue` ONLY if a request dropped
+  (the CLI may have retried by itself); `backendLost` -> stalled.
+- main.js is 2600 lines (was 2551).
+
+**Not verified live yet** - Mati is testing on 2026-09-25. What to check:
+1. God Mode on an LM Studio tab, window minimized: the machine does not sleep
+   and the run keeps going.
+2. Mid-run, eject the model in LM Studio: within ~30 s the status reads
+   "restoring the local model", the model comes back, and the run resumes.
+3. Quit LM Studio's server mid-run: same, via `lms server start`.
+4. God Mode on a cloud (Claude) tab: no watchdog, only the sleep blocker.
+5. A Kimi Code profile with a real key: add, edit without re-entering the
+   key, open a tab.
+
+Known limits:
+- The watchdog's upstream is resolved when the run is armed. If the tab's
+  profile is switched mid-run, it keeps watching the old endpoint until the
+  run is re-armed.
+- Accepted (security-review MEDIUM): `godmode:run` checks only that the id is
+  a live session - main has no independent knowledge of a God Mode run. A
+  compromised renderer could hold the sleep blocker, or watch a tab that is
+  not running God Mode. That is bounded by the recovery rule above: it only
+  reloads when nothing is loaded, and only loopback LM Studio is ever woken.
+
 ### Phase 6 — further polish (old Phase 5 candidates, lower priority)
 #2 and #4 are DONE in Phase 8 (see above). Still open: #1 and #3.
 Candidates from before Mati's 2026-09-22 report, roughly in likely-usefulness
@@ -624,16 +703,15 @@ order:
 ## How to resume this in a new session
 
 Tell the new session: *"read reference/AI_PROVIDERS_RESUME.md."* Phases 1-5,
-7 and 8 are done - there's no blocking next phase. What is left needs Mati
+7, 8 and 8b are done - there's no blocking next phase. What is left needs Mati
 or his machine:
+- Phase 8b's live checklist (overnight guard + Kimi Code with a real key).
 - Phase 6 #1: open CCR's own UI with a real provider and confirm assumption
   #6 (does the gateway need a client key even for Ollama?). The new Test
   connection button is the quickest way to check.
 - Phase 6 #3: a per-tab status strip, only if a CCR failure turns out hard
   to spot in practice.
-- Phase 7 follow-ups: verify CCR route names before Codex; the Kimi Code
-  template (needs the current endpoint/model verified); an "overnight run"
-  mode (needs a design conversation first).
+- Phase 7 follow-up: verify CCR route names before Codex.
 - Re-measure a real LM Studio tab now that `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
   actually reaches it (Phase 8's env fix).
 Otherwise treat this feature as complete and ask what's next.

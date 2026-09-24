@@ -56,7 +56,11 @@ async function recoverLocalBackend({ modelKey, lastLoad, wake, listModels, load 
     if (!listed || !listed.ok) return { ok: false, reason: (listed && listed.reason) || 'error' };
     const hasModel = (listed.models || []).some((m) => m && m.loaded === true && m.type !== 'embedding');
     if (hasModel) return { ok: true, action: 'server' };
-    const request = lastLoad || (modelKey ? { modelKey } : null);
+    // The model this run last saw loaded wins: lastLoad is app-wide (any
+    // Settings load), so its options are reused only when it is for that
+    // same model - never to swap a different model in mid-run.
+    const lastMatches = lastLoad && (!modelKey || lastLoad.modelKey === modelKey);
+    const request = lastMatches ? lastLoad : modelKey ? { modelKey } : null;
     if (!request) return { ok: false, reason: 'no-model' };
     const loaded = await load(request);
     if (!loaded || !loaded.ok) return { ok: false, reason: (loaded && loaded.reason) || 'error' };

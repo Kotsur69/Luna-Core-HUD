@@ -52,12 +52,13 @@ const SIGNAL_COOLDOWN_MS = 4000; // a TUI redraw repeats the same stdout chunk
 let els = null;
 
 // ---- State that must OUTLIVE a remount / the widget being off-screen -------
-let phase = 'idle'; // idle | running | waiting-limit | waiting-connection | stalled
+let phase = 'idle'; // idle | running | waiting-limit | waiting-connection | waiting-backend | stalled
 let boundSessionId = null; // which tab this run is bound to (v1: one at a time)
 let currentAt = null; // the in-flight to-do's `at` key (survives index shifts)
 let currentText = null; // its text, kept for limit-poll re-injection
 let remainingCount = 0; // open-item count as of the last list read, for the status line
 let retryCount = 0; // connection-error attempts for the CURRENT item
+let sawDrop = false; // a request dropped while the local backend was being restored
 let lastUsageLimitAt = 0;
 let lastConnErrAt = 0;
 let limitTimer = null;
@@ -82,6 +83,8 @@ function statusText() {
       return t('godmode.waitingLimit');
     case 'waiting-connection':
       return t('godmode.waitingConnection');
+    case 'waiting-backend':
+      return t('godmode.waitingBackend');
     case 'stalled':
       return t('godmode.stalled');
     default:
@@ -91,7 +94,8 @@ function statusText() {
 
 function render() {
   if (!els) return;
-  const engaged = phase === 'running' || phase === 'waiting-limit' || phase === 'waiting-connection';
+  const engaged =
+    phase === 'running' || phase === 'waiting-limit' || phase === 'waiting-connection' || phase === 'waiting-backend';
   els.toggle.checked = engaged;
   els.field.classList.toggle('is-armed', engaged);
   els.field.classList.toggle('is-stalled', phase === 'stalled');
@@ -150,6 +154,13 @@ async function markCurrentDoneAndAdvance() {
   await injectNext();
 }
 
+/** Tells main which tab a run is bound to (null = none) - arms the overnight guard. */
+function reportRun(sessionId) {
+  if (typeof window !== 'undefined' && window.lunacore && window.lunacore.setGodModeRun) {
+    window.lunacore.setGodModeRun(sessionId);
+  }
+}
+
 function finishRun(reason) {
   clearTimers();
   phase = reason === 'stalled' ? 'stalled' : 'idle';
@@ -160,6 +171,8 @@ function finishRun(reason) {
   currentText = null;
   retryCount = 0;
   remainingCount = 0;
+  sawDrop = false;
+  reportRun(null);
   render();
 }
 
@@ -171,6 +184,8 @@ function disarm() {
   currentText = null;
   retryCount = 0;
   remainingCount = 0;
+  sawDrop = false;
+  reportRun(null);
   render();
 }
 
@@ -224,9 +239,55 @@ function handleTurnEnd({ sessionId } = {}) {
   markCurrentDoneAndAdvance();
 }
 
+/**
+ * The overnight guard's signals (src/overnight.js) for a local backend, as a
+ * pure step: given the current phase/sawDrop and a signal type, the next
+ * state and what to do. Null = not a backend concern, handle it as before.
+ *   - backendRecovering: wait for the backend instead of burning connection
+ *     retries; a drop seen before it (waiting-connection) is remembered.
+ *   - connectionError while waiting-backend: remember the drop, no retry.
+ *   - backendRecovered: resume; paste 'continue' ONLY if a request dropped,
+ *     since the CLI may have retried by itself and a stray 'continue'
+ *     mid-turn becomes a queued prompt.
+ *   - backendLost: the run stalls.
+ * @param {string} currentPhase
+ * @param {boolean} dropped
+ * @param {string} type
+ * @returns {{phase:string, sawDrop:boolean, effect:'wait'|'none'|'resume'|'continue'|'stall'}|null}
+ */
+export function backendSignalStep(currentPhase, dropped, type) {
+  if (type === 'backendLost') return { phase: 'stalled', sawDrop: false, effect: 'stall' };
+  if (type === 'backendRecovering') {
+    return { phase: 'waiting-backend', sawDrop: dropped || currentPhase === 'waiting-connection', effect: 'wait' };
+  }
+  if (currentPhase !== 'waiting-backend') return null;
+  if (type === 'connectionError') return { phase: currentPhase, sawDrop: true, effect: 'none' };
+  if (type === 'backendRecovered') return { phase: 'running', sawDrop: false, effect: dropped ? 'continue' : 'resume' };
+  return null;
+}
+
+/** Applies a backendSignalStep() result. */
+function applyBackendStep(step) {
+  if (step.effect === 'stall') {
+    finishRun('stalled');
+    return;
+  }
+  if (step.effect === 'wait') clearTimers();
+  if (step.effect === 'resume' || step.effect === 'continue') retryCount = 0;
+  phase = step.phase;
+  sawDrop = step.sawDrop;
+  if (step.effect === 'continue') window.lunacore.pastePrompt('continue', true, boundSessionId);
+  render();
+}
+
 function handleGodModeSignal({ sessionId, type } = {}) {
   if (!boundSessionId || sessionId !== boundSessionId) return;
   if (phase === 'idle' || phase === 'stalled') return;
+  const step = backendSignalStep(phase, sawDrop, type);
+  if (step) {
+    applyBackendStep(step);
+    return;
+  }
   const now = Date.now();
   if (type === 'usageLimit') {
     if (phase === 'waiting-limit') return; // already handling this wall
@@ -282,7 +343,9 @@ async function tryArm() {
   }
   boundSessionId = sessionId;
   retryCount = 0;
+  sawDrop = false;
   phase = 'running';
+  reportRun(sessionId);
   render();
   await injectNext();
 }

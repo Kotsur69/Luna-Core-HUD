@@ -31,3 +31,6 @@ config/*.local.md
 # Dual-runner secrets (GLM key). The committed contract is
 # .env.luna.example - the filled-in copy never goes to git.
 .env.luna
+
+# Written at runtime by locallaunch.js (lean-MCP LM Studio tabs), per machine.
+config/lmstudio-empty-mcp.json

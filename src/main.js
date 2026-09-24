@@ -12,7 +12,7 @@
 //   - relays the raw PTY stdout stream to the renderer to display/parse.
 // ============================================================================
 
-const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -60,6 +60,9 @@ const { findApiPort, listModels: listLmStudioModels, loadModel: loadLmStudioMode
 // src/ccr.js's header for the trust boundary (CCR's own UI owns all routing
 // config; LunaCore only ever starts/stops the process and probes it).
 const { createCcrControl } = require('./ccrcontrol');
+// Keeps an unattended God Mode run alive: no sleep, no throttling, and a
+// watchdog that brings a local LM Studio backend back (src/overnight.js).
+const { createOvernightGuard, recoverLocalBackend } = require('./overnight');
 // Env for every `claude` we start: inherited env minus session markers + layers.
 const { withColorSupport, buildSessionEnv } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
@@ -275,6 +278,32 @@ const ccrControl = createCcrControl({
   getProviders: () => loadProviders().providers,
   openExternal: (url) => shell.openExternal(url),
   safeUrl,
+});
+// The last model load Settings asked for and LM Studio accepted - what the
+// overnight guard reloads if the model disappears mid-run.
+let lastLmStudioLoad = null;
+// Overnight guard for the running God Mode tab. Only an LM Studio tab gets the
+// backend watchdog (resolveLocalLaunch) - a CCR gateway on loopback is not
+// something waking LM Studio could fix.
+const overnight = createOvernightGuard({
+  blocker: powerSaveBlocker,
+  getWebContents: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null),
+  resolveLocal: (sessionId) => {
+    const session = sessions.get(sessionId);
+    const profile = session ? getProfile(profiles, session.profileId) : null;
+    if (!profile || !resolveLocalLaunch(profile, loadProviders().providers)) return null;
+    return localEndpointFromProfile(profile);
+  },
+  probe: (upstream) => probeEndpoint(upstream),
+  recover: (ctx) =>
+    recoverLocalBackend({
+      ...ctx,
+      lastLoad: lastLmStudioLoad,
+      wake: wakeLmStudio,
+      listModels: () => listLmStudioModels({ wake: wakeLmStudio }),
+      load: (request) => loadLmStudioModel(request, { wake: wakeLmStudio }),
+    }),
+  signal: (sessionId, type) => send('godmode:signal', { sessionId, type }),
 });
 // Projects (working directories) loaded from config/ + the default id and the real cwd.
 let projects = [];
@@ -877,8 +906,11 @@ function spawnInto(session, profile, launch = null) {
       // `at` rides along: the drop's OWN transcript timestamp, which
       // autoproceed.js needs to date the drop against the tool events in the
       // same fragment (a dying turn's tail must not read as "recovered").
-      onApiError: ({ at } = {}) =>
-        send('godmode:signal', { sessionId: session.id, type: 'connectionError', at }),
+      onApiError: ({ at } = {}) => {
+        send('godmode:signal', { sessionId: session.id, type: 'connectionError', at });
+        // A drop on the run's tab: have the guard look at the backend now.
+        overnight.onConnectionError(session.id);
+      },
       // Same channel/shape as onApiError above - autoproceed.js's proof that an
       // armed "continue" (or Mati's own typing) was actually consumed, so a
       // turn that only thinks or answers in plain text before dying again still
@@ -1055,6 +1087,7 @@ function closeSession(sessionId) {
   // Only stopped HERE, not in teardownSession() - see the session field's own
   // comment: a restart must not lose this watcher's warm sample.
   if (session.localModelWatcher) session.localModelWatcher.stop();
+  overnight.forgetSession(sessionId);
   sessions.delete(sessionId);
 
   if (sessions.size === 0) {
@@ -1684,7 +1717,15 @@ function registerIpc() {
   // `payload` is renderer-supplied; buildLoadRequest() in src/lmstudiosdk.js
   // whitelists every field and range-checks its value before anything
   // reaches the SDK, so no separate validation is needed here.
-  ipcMain.handle('lmstudiocli:load', (_event, payload) => loadLmStudioModel(payload, { wake: wakeLmStudio }));
+  ipcMain.handle('lmstudiocli:load', async (_event, payload) => {
+    const result = await loadLmStudioModel(payload, { wake: wakeLmStudio });
+    // Remembered for the overnight guard's reload. A shallow copy of the
+    // plain payload only - buildLoadRequest() re-validates it on reuse.
+    if (result && result.ok && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      lastLmStudioLoad = { ...payload };
+    }
+    return result;
+  });
 
   // PHASE 4: switching profile -> restart THIS tab with the new environment.
   // Other tabs are left untouched; a profile is a session's trait, not the app's.
@@ -2187,6 +2228,12 @@ function registerIpc() {
   // literally the "popup window with an are-you-sure message" Mati asked for,
   // for less code than a hand-rolled overlay/focus-trap. Resolves true only
   // on the explicit Yes button; closing the dialog any other way is a No.
+  // The renderer reports which tab a God Mode run is bound to (or null when it
+  // ends). Only a live session id arms the guard - never trust the renderer.
+  ipcMain.on('godmode:run', (_event, sessionId) => {
+    overnight.setRun(typeof sessionId === 'string' && sessions.has(sessionId) ? sessionId : null);
+  });
+
   ipcMain.handle('godmode:confirm', async (_event, openCount) => {
     const pl = readUiPrefs().lang === 'pl';
     const count = Number.isFinite(openCount) ? openCount : 0;
@@ -2542,6 +2589,8 @@ app.on('window-all-closed', () => {
     voiceDuck.onVoiceActive(false);
     voiceDuck = null;
   }
+  // Release the sleep blocker and stop the backend watchdog.
+  overnight.stop();
   // LM Studio shims: close their loopback listeners and any open streams.
   stopAllShims().catch(() => {});
   // Best-effort: never blocks shutdown, and only ever stops a CCR gateway
