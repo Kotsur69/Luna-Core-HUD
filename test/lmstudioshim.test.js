@@ -22,6 +22,7 @@ const {
   LmStudioShim,
   ensureShim,
   stopAllShims,
+  SHIM_TOKEN_HEADER,
 } = require('../src/lmstudioshim');
 
 function deepFreeze(value) {
@@ -144,9 +145,14 @@ function startUpstream(handler) {
   });
 }
 
-function request(port, { method = 'GET', path = '/', body = null, headers = {} } = {}) {
+/** Headers a client of this shim sends: its token (unless null) plus extras. */
+function authed(token, headers = {}) {
+  return token ? { [SHIM_TOKEN_HEADER]: token, ...headers } : { ...headers };
+}
+
+function request(port, { method = 'GET', path = '/', body = null, headers = {}, token = null } = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, method, path, headers }, (res) => {
+    const req = http.request({ host: '127.0.0.1', port, method, path, headers: authed(token, headers) }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
@@ -176,6 +182,7 @@ test('shim rewrites a messages POST and forwards a correct content-length', asyn
     const res = await request(started.port, {
       method: 'POST',
       path: '/v1/messages',
+      token: started.token,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ messages: [{ role: 'user', content: 'a' }, { role: 'system', content: 'b' }] }),
     });
@@ -194,9 +201,9 @@ test('shim passes GET requests through untouched', async () => {
     res.end(JSON.stringify({ path: req.url }));
   });
   const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}` });
-  const { port } = await shim.start();
+  const { port, token } = await shim.start();
   try {
-    const res = await request(port, { path: '/v1/models' });
+    const res = await request(port, { path: '/v1/models', token });
     assert.deepStrictEqual(JSON.parse(res.body), { path: '/v1/models' });
   } finally {
     await shim.stop();
@@ -215,10 +222,10 @@ test('shim streams SSE chunks before the upstream finishes', async () => {
     res.end('event: b\ndata: 2\n\n');
   });
   const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}` });
-  const { port } = await shim.start();
+  const { port, token } = await shim.start();
   try {
     const first = await new Promise((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/messages' }, (res) => {
+      const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/messages', headers: authed(token) }, (res) => {
         res.once('data', (c) => { resolve(c.toString('utf8')); release(); res.resume(); });
       });
       req.on('error', reject);
@@ -236,9 +243,9 @@ test('shim answers 502 in Anthropic error shape when the upstream is down', asyn
   const deadPort = dead.address().port;
   await new Promise((r) => dead.close(r));
   const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${deadPort}` });
-  const { port } = await shim.start();
+  const { port, token } = await shim.start();
   try {
-    const res = await request(port, { method: 'POST', path: '/v1/messages', body: '{"messages":[]}' });
+    const res = await request(port, { method: 'POST', path: '/v1/messages', body: '{"messages":[]}', token });
     assert.strictEqual(res.status, 502);
     const json = JSON.parse(res.body);
     assert.strictEqual(json.type, 'error');
@@ -251,9 +258,9 @@ test('shim answers 502 in Anthropic error shape when the upstream is down', asyn
 test('shim rejects an oversized body with 413', async () => {
   const upstream = await startUpstream((req, res) => { req.resume(); res.end('{}'); });
   const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}`, maxBodyBytes: 64 });
-  const { port } = await shim.start();
+  const { port, token } = await shim.start();
   try {
-    const res = await request(port, { method: 'POST', path: '/v1/messages', body: 'x'.repeat(500) });
+    const res = await request(port, { method: 'POST', path: '/v1/messages', body: 'x'.repeat(500), token });
     assert.strictEqual(res.status, 413);
   } finally {
     await shim.stop();
@@ -264,13 +271,65 @@ test('shim rejects an oversized body with 413', async () => {
 test('shim rejects a foreign Host header with 403', async () => {
   const upstream = await startUpstream((req, res) => { req.resume(); res.end('{}'); });
   const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}` });
-  const { port } = await shim.start();
+  const { port, token } = await shim.start();
   try {
-    const res = await request(port, { path: '/v1/models', headers: { host: 'evil.example:80' } });
+    const res = await request(port, { path: '/v1/models', token, headers: { host: 'evil.example:80' } });
     assert.strictEqual(res.status, 403);
   } finally {
     await shim.stop();
     upstream.close();
+  }
+});
+
+test('shim refuses a request without the token, or with a wrong one, and never forwards it', async () => {
+  let hits = 0;
+  const upstream = await startUpstream((req, res) => { hits += 1; req.resume(); res.end('{}'); });
+  const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}` });
+  const { port, token } = await shim.start();
+  try {
+    // The last one has the right length, so the constant-time compare itself decides.
+    const sameLength = `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`;
+    for (const bad of [null, 'nope', `${token}x`, token.slice(1), sameLength]) {
+      const res = await request(port, { method: 'POST', path: '/v1/messages', body: '{"messages":[]}', token: bad });
+      assert.strictEqual(res.status, 401);
+      const json = JSON.parse(res.body);
+      assert.strictEqual(json.type, 'error');
+      assert.strictEqual(json.error.type, 'authentication_error');
+    }
+    const get = await request(port, { path: '/v1/models' });
+    assert.strictEqual(get.status, 401);
+    assert.strictEqual(hits, 0);
+  } finally {
+    await shim.stop();
+    upstream.close();
+  }
+});
+
+test('shim strips its own token header and keeps the client auth header upstream', async () => {
+  let seen = null;
+  const upstream = await startUpstream((req, res) => { seen = req.headers; req.resume(); res.end('{}'); });
+  const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}` });
+  const { port, token } = await shim.start();
+  try {
+    const res = await request(port, { path: '/v1/models', token, headers: { authorization: 'Bearer lmstudio' } });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(seen[SHIM_TOKEN_HEADER], undefined);
+    assert.strictEqual(seen.authorization, 'Bearer lmstudio');
+  } finally {
+    await shim.stop();
+    upstream.close();
+  }
+});
+
+test('every shim gets its own unguessable token', async () => {
+  const a = new LmStudioShim({ upstream: 'http://127.0.0.1:1' });
+  const b = new LmStudioShim({ upstream: 'http://127.0.0.1:2' });
+  const [ra, rb] = await Promise.all([a.start(), b.start()]);
+  try {
+    assert.match(ra.token, /^[0-9a-f]{64}$/);
+    assert.notStrictEqual(ra.token, rb.token);
+  } finally {
+    await Promise.all([a.stop(), b.stop()]);
   }
 });
 
@@ -308,10 +367,10 @@ test('shim destroys the upstream request when the client aborts', async () => {
     res.on('close', () => upstreamClosed(true));
   });
   const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}` });
-  const { port } = await shim.start();
+  const { port, token } = await shim.start();
   try {
     await new Promise((resolve) => {
-      const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/messages' }, (res) => {
+      const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/messages', headers: authed(token) }, (res) => {
         res.once('data', () => { req.destroy(); resolve(); });
       });
       req.on('error', () => {});
@@ -330,6 +389,7 @@ test('ensureShim reuses one shim per upstream and refuses non-loopback upstreams
     const b = await ensureShim('http://127.0.0.1:1/');
     assert.strictEqual(a.ok, true);
     assert.strictEqual(a.url, b.url);
+    assert.strictEqual(a.token, b.token);
     const remote = await ensureShim('http://api.example.com');
     assert.deepStrictEqual(remote, { ok: false, reason: 'not-local' });
   } finally {

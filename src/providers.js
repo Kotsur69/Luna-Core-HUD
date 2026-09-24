@@ -142,12 +142,19 @@ function buildProfileFromTemplate(template, entry) {
   const baseUrl = typeof e.baseUrl === 'string' ? e.baseUrl.trim() : '';
   if (template.requiresBaseUrl && !baseUrl) return { ok: false, reason: 'missing-base-url' };
 
+  // A number outside 1-65535 is a typed rejection (same reason the Settings
+  // form uses), never a silent fallback that would repoint the profile at the
+  // default port. A missing/non-numeric value still means "the default".
+  if (typeof e.ccrPort === 'number' && !(Number.isFinite(e.ccrPort) && e.ccrPort >= 1 && e.ccrPort <= 65535)) {
+    return { ok: false, reason: 'invalid-port' };
+  }
+
   const vars = {
     apiKey,
     model: (typeof e.model === 'string' && e.model.trim()) || template.defaultModel,
     fastModel: (typeof e.fastModel === 'string' && e.fastModel.trim()) || template.defaultFastModel,
     baseUrl,
-    ccrPort: Number.isFinite(e.ccrPort) && e.ccrPort > 0 ? Math.round(e.ccrPort) : DEFAULT_CCR_PORT,
+    ccrPort: typeof e.ccrPort === 'number' ? Math.round(e.ccrPort) : DEFAULT_CCR_PORT,
   };
 
   // A resolved value can legitimately be '' now that the CCR templates carry

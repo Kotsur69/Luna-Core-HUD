@@ -305,6 +305,17 @@ test('buildProfileFromTemplate fills a CCR-routed template with the given port',
   assert.equal(result.profile.env.ANTHROPIC_BASE_URL, 'http://localhost:4090');
 });
 
+test('buildProfileFromTemplate rejects a numeric CCR port outside 1-65535', () => {
+  const { providers } = loadProviders();
+  const ollama = getProviderTemplate(providers, 'ollama');
+  for (const bad of [0, -1, 65536, 70000, Number.NaN, Infinity]) {
+    const result = buildProfileFromTemplate(ollama, { id: 'ollama', label: 'Ollama', apiKey: 'sk-key', ccrPort: bad });
+    assert.deepEqual(result, { ok: false, reason: 'invalid-port' }, String(bad));
+  }
+  const edge = buildProfileFromTemplate(ollama, { id: 'ollama', label: 'Ollama', apiKey: 'sk-key', ccrPort: 65535 });
+  assert.equal(edge.profile.env.ANTHROPIC_BASE_URL, 'http://localhost:65535');
+});
+
 test('buildProfileFromTemplate defaults the CCR port when none is given', () => {
   const { providers } = loadProviders();
   const ollama = getProviderTemplate(providers, 'ollama');

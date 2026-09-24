@@ -105,7 +105,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   stopCcr: () => ipcRenderer.invoke('ccr:stop'),
   /** Opens CCR's own browser-based management UI (routing/provider config lives there, never in LunaCore). */
   openCcrUi: () => ipcRenderer.invoke('ccr:open-ui'),
-  /** Opens the CCR docs page. Deliberately takes no argument - the address is hardcoded in main.js. */
+  /** Opens the CCR docs page. Deliberately takes no argument - the address is hardcoded in src/ccrcontrol.js. */
   openCcrDocs: () => ipcRenderer.send('ccr:docs'),
   /** Confirms a profile's CCR client key authenticates against the gateway; returns { ok, models } or { ok:false, reason }. Only sends a profile id, never the key itself. */
   testCcrKey: (profileId) => ipcRenderer.invoke('ccr:test-key', profileId),

@@ -22,6 +22,7 @@ const {
   LEAN_DISALLOWED_TOOLS,
   TIER_MODEL_KEYS,
 } = require('../src/locallaunch');
+const { SHIM_TOKEN_HEADER } = require('../src/lmstudioshim');
 
 const lmProfile = (extra = {}) => ({
   id: 'lm-studio',
@@ -63,7 +64,7 @@ test('resolveLocalLaunch is null for profiles without a local launch block', () 
 // --- env ------------------------------------------------------------------
 
 test('buildLocalEnv maps every tier to the model and sets the context length', () => {
-  const env = buildLocalEnv({ profileEnv: {}, model: 'qwen/qwen3-coder-next', contextLength: 131072, shimUrl: 'http://127.0.0.1:5555' });
+  const env = buildLocalEnv({ profileEnv: {}, model: 'qwen/qwen3-coder-next', contextLength: 131072, shimUrl: 'http://127.0.0.1:5555', shimToken: 't' });
   for (const key of TIER_MODEL_KEYS) assert.strictEqual(env[key], 'qwen/qwen3-coder-next');
   assert.strictEqual(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '131072');
   assert.strictEqual(env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:5555');
@@ -79,6 +80,36 @@ test('buildLocalEnv never overrides a value the profile sets explicitly', () => 
   assert.strictEqual(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
   assert.strictEqual(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, undefined);
   assert.strictEqual(env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'big');
+});
+
+test('buildLocalEnv hands the shim token to the CLI as a custom header', () => {
+  const env = buildLocalEnv({ profileEnv: {}, model: null, contextLength: null, shimUrl: 'http://127.0.0.1:5555', shimToken: 'abc' });
+  assert.strictEqual(env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:5555');
+  assert.strictEqual(env.ANTHROPIC_CUSTOM_HEADERS, `${SHIM_TOKEN_HEADER}: abc`);
+});
+
+test('buildLocalEnv keeps the profile custom headers and replaces a stale shim token', () => {
+  const env = buildLocalEnv({
+    profileEnv: { ANTHROPIC_CUSTOM_HEADERS: `X-Team: luna\r\n${SHIM_TOKEN_HEADER.toUpperCase()}: old\n\n` },
+    model: null,
+    contextLength: null,
+    shimUrl: 'http://127.0.0.1:5555',
+    shimToken: 'new',
+  });
+  assert.strictEqual(env.ANTHROPIC_CUSTOM_HEADERS, `X-Team: luna\n${SHIM_TOKEN_HEADER}: new`);
+});
+
+test('buildLocalEnv keeps inherited custom headers when the profile sets none', () => {
+  const base = { model: null, contextLength: null, shimUrl: 'http://127.0.0.1:5555', shimToken: 'tok' };
+  const inherited = buildLocalEnv({ ...base, profileEnv: {}, inheritedEnv: { ANTHROPIC_CUSTOM_HEADERS: `X-Shell: 1\n${SHIM_TOKEN_HEADER}: stale` } });
+  assert.strictEqual(inherited.ANTHROPIC_CUSTOM_HEADERS, `X-Shell: 1\n${SHIM_TOKEN_HEADER}: tok`);
+  const own = buildLocalEnv({ ...base, profileEnv: { ANTHROPIC_CUSTOM_HEADERS: 'X-Profile: 2' }, inheritedEnv: { ANTHROPIC_CUSTOM_HEADERS: 'X-Shell: 1' } });
+  assert.strictEqual(own.ANTHROPIC_CUSTOM_HEADERS, `X-Profile: 2\n${SHIM_TOKEN_HEADER}: tok`);
+});
+
+test('buildLocalEnv never routes through the shim without its token', () => {
+  const env = buildLocalEnv({ profileEnv: {}, model: null, contextLength: null, shimUrl: 'http://127.0.0.1:5555', shimToken: '' });
+  assert.deepStrictEqual(env, {});
 });
 
 test('buildLocalEnv omits what it does not know', () => {
@@ -117,7 +148,7 @@ test('the lean tool list only names built-in CLI tools, never harness content', 
 const loadedRow = { id: 'qwen/qwen3-coder-next', type: 'llm', loaded: true, loadedContext: 131072 };
 const deps = (over = {}) => ({
   probe: async () => ({ up: true, models: [loadedRow] }),
-  ensureShim: async () => ({ ok: true, url: 'http://127.0.0.1:5555' }),
+  ensureShim: async () => ({ ok: true, url: 'http://127.0.0.1:5555', token: 'tok' }),
   ensureMcpFile: () => 'C:\\data\\empty.json',
   timeoutMs: 200,
   ...over,
@@ -127,6 +158,7 @@ const lean = { shim: true, leanMcp: true, leanTools: true };
 test('prepareLocalLaunch resolves shim, model, context and flags', async () => {
   const prep = await prepareLocalLaunch(lmProfile(), lean, deps());
   assert.strictEqual(prep.envOverrides.ANTHROPIC_BASE_URL, 'http://127.0.0.1:5555');
+  assert.strictEqual(prep.envOverrides.ANTHROPIC_CUSTOM_HEADERS, `${SHIM_TOKEN_HEADER}: tok`);
   assert.strictEqual(prep.envOverrides.ANTHROPIC_MODEL, 'qwen/qwen3-coder-next');
   assert.strictEqual(prep.envOverrides.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '131072');
   assert.ok(prep.extraArgs.includes('--strict-mcp-config'));
@@ -148,6 +180,13 @@ test('prepareLocalLaunch honours an explicit profile model', async () => {
 test('prepareLocalLaunch falls back to the direct upstream when the shim fails', async () => {
   const prep = await prepareLocalLaunch(lmProfile(), lean, deps({ ensureShim: async () => ({ ok: false, reason: 'error' }) }));
   assert.strictEqual(prep.envOverrides.ANTHROPIC_BASE_URL, undefined);
+  assert.ok(prep.notes.includes('shim-failed'));
+});
+
+test('prepareLocalLaunch treats a shim result without a token as a failed shim', async () => {
+  const prep = await prepareLocalLaunch(lmProfile(), lean, deps({ ensureShim: async () => ({ ok: true, url: 'http://127.0.0.1:5555' }) }));
+  assert.strictEqual(prep.envOverrides.ANTHROPIC_BASE_URL, undefined);
+  assert.strictEqual(prep.envOverrides.ANTHROPIC_CUSTOM_HEADERS, undefined);
   assert.ok(prep.notes.includes('shim-failed'));
 });
 

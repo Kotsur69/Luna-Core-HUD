@@ -24,6 +24,10 @@ const {
   buildAddPayload,
   buildEditPayload,
   failureKey,
+  canTestConnection,
+  portFromBaseUrl,
+  testResultMessage,
+  TEST_RESULT_KEYS,
 } = require('../src/renderer/modules/providerform.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -326,6 +330,62 @@ test('failureKey falls back to a generic key for an unknown reason', () => {
   assert.equal(failureKey(null), 'providers.error.generic');
 });
 
+test('failureKey maps invalid-port to a translated key', () => {
+  assert.equal(failureKey('invalid-port'), 'providers.error.invalidPort');
+});
+
+test('failureKey never returns an inherited Object property', () => {
+  for (const reason of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    assert.equal(failureKey(reason), 'providers.error.generic', reason);
+  }
+});
+
+// ---- Test connection (CCR profiles) ---------------------------------------------
+
+test('canTestConnection is true only for CCR-routed templates', () => {
+  for (const id of ['ollama', 'codex', 'gemini', 'grok', 'openai-compatible']) {
+    assert.equal(canTestConnection(template(id)), true, id);
+  }
+  for (const id of ['claude-cloud', 'lm-studio', 'glm', 'kimi']) {
+    assert.equal(canTestConnection(template(id)), false, id);
+  }
+  assert.equal(canTestConnection(null), false);
+});
+
+test('portFromBaseUrl reads an explicit port and nothing else', () => {
+  assert.equal(portFromBaseUrl('http://localhost:3460'), '3460');
+  assert.equal(portFromBaseUrl('http://127.0.0.1:3456/'), '3456');
+  assert.equal(portFromBaseUrl('http://localhost'), '');
+  assert.equal(portFromBaseUrl('not a url'), '');
+  assert.equal(portFromBaseUrl(''), '');
+  assert.equal(portFromBaseUrl(undefined), '');
+});
+
+test('testResultMessage maps every ccr:test-key outcome to its own message', () => {
+  assert.deepEqual(testResultMessage({ ok: true, models: 3 }), { ok: true, key: 'providers.test.ok', params: { n: 3 } });
+  assert.deepEqual(testResultMessage({ ok: true, models: 0 }), { ok: true, key: 'providers.test.noProviders', params: {} });
+  const reasons = {
+    unauthorized: 'providers.test.unauthorized',
+    down: 'providers.test.down',
+    'no-models': 'providers.test.foreign',
+    'no-key': 'providers.test.noKey',
+    'not-local': 'providers.test.notLocal',
+    'not-ccr': 'providers.test.failed',
+    'unknown-profile': 'providers.error.unknownProfile',
+  };
+  for (const [reason, key] of Object.entries(reasons)) {
+    assert.deepEqual(testResultMessage({ ok: false, reason }), { ok: false, key, params: {} }, reason);
+  }
+});
+
+test('testResultMessage treats anything malformed as a failed test', () => {
+  for (const bad of [null, undefined, 'x', {}, { ok: false }, { ok: true }, { ok: true, models: -1 }, { ok: false, reason: 'new' }, { ok: false, reason: 'constructor' }]) {
+    const msg = testResultMessage(bad);
+    assert.equal(msg.ok, false, JSON.stringify(bad));
+    assert.equal(msg.key, 'providers.test.failed');
+  }
+});
+
 // ---- i18n: the AI-providers section's own strings ---------------------------------------
 
 test('every providers.* i18n key used by the panel exists in both languages', () => {
@@ -352,6 +412,26 @@ test('every providers.* i18n key used by the panel exists in both languages', ()
   ]);
 
   assert.ok(keys.size > 0, 'found no providers.* keys to check - did the selectors drift?');
+  for (const key of keys) {
+    assert.ok(pl.includes(`'${key}':`), `missing pl translation: ${key}`);
+    assert.ok(en.includes(`'${key}':`), `missing en translation: ${key}`);
+  }
+});
+
+test('every Test-connection and port key exists in both languages', () => {
+  const i18nSrc = fs.readFileSync(path.join(ROOT, 'src/renderer/i18n.js'), 'utf8');
+  const enAt = i18nSrc.indexOf('\n  en: {');
+  const pl = i18nSrc.slice(0, enAt);
+  const en = i18nSrc.slice(enAt);
+  const keys = [
+    ...TEST_RESULT_KEYS,
+    'providers.action.test',
+    'providers.test.running',
+    'providers.form.ccrPort',
+    'providers.form.ccrPort.ph',
+    'providers.form.ccrPort.keepPh',
+    'providers.error.invalidPort',
+  ];
   for (const key of keys) {
     assert.ok(pl.includes(`'${key}':`), `missing pl translation: ${key}`);
     assert.ok(en.includes(`'${key}':`), `missing en translation: ${key}`);

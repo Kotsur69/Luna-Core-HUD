@@ -4,7 +4,7 @@
 // Lets the user type "/ask <question>" into the existing libraries filter box
 // and get back a short, grounded tool recommendation - without a new Anthropic
 // API key. It reuses the `claude` CLI the app already knows how to launch
-// (spawnInto()'s withClaudeOnPath()/stripClaudeSessionMarkers() env prep, see
+// (spawnInto()'s withClaudeOnPath()/buildSessionEnv() env prep, see
 // main.js), but headless and one-shot: `execFile('claude', ['-p', ...])`, no
 // PTY, no terminal tab, just captured stdout. `--model sonnet` is explicit so
 // the answer is always Sonnet regardless of which profile's terminal happens

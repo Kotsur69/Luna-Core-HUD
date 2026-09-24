@@ -16,13 +16,27 @@
 // clicking "Edit" on a profile row replaces it with its edit form; clicking
 // the top "Add profile" button inserts a new form row at the top. Only one
 // row is ever in form mode at a time (opening one closes the other).
+//
+// A CCR-routed row also gets "Test connection" (ccr:test-key): main checks
+// the profile's stored client key against its own gateway - only the profile
+// id crosses IPC - and the row shows what the outcome means.
 // ============================================================================
 
 'use strict';
 
 import { t, loc } from './util.js';
 import { onLangChange } from './bus.js';
-import { generatedProfiles, templateFields, localLaunchState, buildAddPayload, buildEditPayload, failureKey } from './providerform.js';
+import {
+  generatedProfiles,
+  templateFields,
+  localLaunchState,
+  buildAddPayload,
+  buildEditPayload,
+  failureKey,
+  canTestConnection,
+  portFromBaseUrl,
+  testResultMessage,
+} from './providerform.js';
 import { refreshProfileList } from './switchers.js';
 
 let templates = []; // getProviders() catalog
@@ -31,7 +45,14 @@ let editingId = null; // profile id whose row is showing the edit form, or null
 let adding = false; // whether the top "add new" form row is open
 let addTemplateId = ''; // template picked in the add form, kept across re-renders
 let saving = false; // guards double-submit while an IPC call is in flight
+// Profile id -> {running:true} while ccr:test-key is in flight, then the
+// testResultMessage() outcome. Kept across re-renders; dropped on edit/remove
+// and whenever the gateway's state changes (ccr:state).
+const testResults = new Map();
 let els = null;
+
+/** Placeholder only - src/providers.js owns the real default port. */
+const DEFAULT_CCR_PORT = 3456;
 
 function findTemplate(id) {
   return templates.find((tpl) => tpl.id === id) || null;
@@ -233,6 +254,23 @@ function buildFormRow({ template, prefill, titleKey, titleParams, submitKey, onS
   });
   li.appendChild(fastModelRow.wrapper);
 
+  // Only for CCR templates ({{ccrPort}}): when CCR's own "port taken" fallback
+  // picked another port. Text, not number, so junk reaches the invalid-port
+  // check instead of silently reading as blank.
+  const ccrPortRow = buildFieldRow({
+    show: fields.showCcrPort,
+    labelKey: 'providers.form.ccrPort',
+    inputType: 'text',
+    value: prefill.ccrPort,
+    // Blank on edit keeps the stored port (main's keep-current rule), so the
+    // hint must not promise the default there.
+    placeholder: prefill.editing
+      ? t('providers.form.ccrPort.keepPh')
+      : t('providers.form.ccrPort.ph', { port: DEFAULT_CCR_PORT }),
+  });
+  ccrPortRow.input.inputMode = 'numeric';
+  li.appendChild(ccrPortRow.wrapper);
+
   const localLaunch = buildLocalLaunchBlock(localLaunchState(template, prefill));
   if (localLaunch) li.appendChild(localLaunch.wrapper);
 
@@ -271,6 +309,7 @@ function buildFormRow({ template, prefill, titleKey, titleParams, submitKey, onS
         baseUrl: baseUrlRow.input.value,
         model: modelRow.input.value,
         fastModel: fastModelRow.input.value,
+        ccrPort: ccrPortRow.input.value,
         localLaunch: localLaunch ? localLaunch.read() : undefined,
         showFail: (key) => {
           status.hidden = false;
@@ -361,6 +400,8 @@ async function submitEdit(profile, fields) {
   }
   profiles = response.profiles;
   editingId = null;
+  // The key or port may have changed - an old test result no longer applies.
+  testResults.delete(profile.id);
   render();
   showStatus(t('providers.saved.edit'));
   refreshProfileList();
@@ -383,8 +424,72 @@ async function removeRow(profile) {
     return;
   }
   profiles = response.profiles;
+  testResults.delete(profile.id);
   render();
   refreshProfileList();
+}
+
+/** Shows one view row's Test state: the button while running, and the status line. */
+function paintTestState(li, result) {
+  const btn = li.querySelector('[data-role="test"]');
+  if (btn) btn.disabled = Boolean(result && result.running);
+  let line = li.querySelector('[data-role="test-status"]');
+  if (!result) {
+    if (line) line.remove();
+    return;
+  }
+  if (!line) {
+    line = document.createElement('p');
+    line.className = 'hint';
+    line.dataset.role = 'test-status';
+    line.setAttribute('role', 'status');
+    li.appendChild(line);
+  }
+  line.classList.toggle('is-fail', !result.running && !result.ok);
+  line.textContent = result.running ? t('providers.test.running') : t(result.key, result.params);
+}
+
+/**
+ * Repaints ONE row's Test state in place. Never a full render(): that
+ * rebuilds every row, and would wipe an add/edit form the user is typing in.
+ * A row that is currently an edit form has no data-profile-id, so it is left
+ * alone; its result shows once it is a view row again.
+ */
+function paintTestRow(profileId) {
+  if (!els) return;
+  const li = [...els.list.children].find((el) => el.dataset.profileId === profileId);
+  if (li) paintTestState(li, testResults.get(profileId));
+}
+
+/**
+ * Runs ccr:test-key for one CCR profile row. Only the id crosses IPC; main
+ * resolves the key and port itself. A result that lands after the row was
+ * edited or removed is dropped.
+ */
+async function runConnectionTest(profileId) {
+  const current = testResults.get(profileId);
+  if (current && current.running) return;
+  const pending = { running: true };
+  testResults.set(profileId, pending);
+  paintTestRow(profileId);
+  let response;
+  try {
+    response = await window.lunacore.testCcrKey(profileId);
+  } catch {
+    response = null;
+  }
+  if (testResults.get(profileId) !== pending) return;
+  testResults.set(profileId, testResultMessage(response));
+  paintTestRow(profileId);
+}
+
+/** The gateway started/stopped (or a CCR tab spawned): finished results are stale. */
+function clearFinishedTests() {
+  for (const [id, result] of testResults) {
+    if (result.running) continue;
+    testResults.delete(id);
+    paintTestRow(id);
+  }
 }
 
 /** The template <select> for the add form - a fixed dropdown, not editable once a row is in edit mode. */
@@ -437,7 +542,9 @@ function buildEditRow(profile) {
       fastModel: profile.fastModel,
       hasApiKey: profile.hasApiKey,
       hasBaseUrl: profile.hasBaseUrl,
+      ccrPort: portFromBaseUrl(profile.baseUrl),
       localLaunch: profile.localLaunch,
+      editing: true,
     },
     titleKey: 'providers.form.edit.title',
     titleParams: { label: loc(profile.label) },
@@ -450,12 +557,14 @@ function buildEditRow(profile) {
 function buildViewRow(profile) {
   const li = document.createElement('li');
   li.className = 'diag-item';
+  li.dataset.profileId = profile.id;
 
   const head = document.createElement('span');
   head.className = 'diag-item__head';
 
   const dot = document.createElement('span');
-  const fields = templateFields(findTemplate(profile.templateId));
+  const template = findTemplate(profile.templateId);
+  const fields = templateFields(template);
   const configured =
     (!fields.needsApiKey || profile.hasApiKey) && (!fields.needsBaseUrl || profile.hasBaseUrl);
   dot.className = `diag-item__dot ${configured ? 'diag-item__dot--ok' : 'diag-item__dot--unknown'}`;
@@ -465,6 +574,16 @@ function buildViewRow(profile) {
   label.className = 'diag-item__label';
   label.textContent = loc(profile.label);
   head.appendChild(label);
+
+  if (canTestConnection(template)) {
+    const testBtn = document.createElement('button');
+    testBtn.type = 'button';
+    testBtn.className = 'diag-item__action';
+    testBtn.dataset.role = 'test';
+    testBtn.textContent = t('providers.action.test');
+    testBtn.addEventListener('click', () => runConnectionTest(profile.id));
+    head.appendChild(testBtn);
+  }
 
   const editBtn = document.createElement('button');
   editBtn.type = 'button';
@@ -486,6 +605,8 @@ function buildViewRow(profile) {
   detail.className = 'diag-item__detail';
   detail.textContent = describeProfile(profile);
   li.appendChild(detail);
+
+  paintTestState(li, testResults.get(profile.id));
 
   return li;
 }
@@ -551,6 +672,9 @@ export function mountProviderSettings(root) {
   els.addBtn.addEventListener('click', startAdd);
 
   const offLang = onLangChange(render);
+  // Registered once, like ccrsettings.js (the preload API has no unsubscribe);
+  // a no-op once disposed, since paintTestRow checks els.
+  if (typeof window.lunacore.onCcrState === 'function') window.lunacore.onCcrState(clearFinishedTests);
 
   refresh();
 

@@ -6,7 +6,8 @@ pipeline (Research → Plan → Gate 1 → TDD → Review → Gate 2 → Commit)
 phase at a time. Read this file first in a new session before doing anything
 else on this feature - it says exactly where things stand and what's left.
 
-Last updated: 2026-09-24, after Phase 7 (local-model harness + SDK loading).
+Last updated: 2026-09-24, after Phase 8 (shim token, env-strip fix, CCR IPC
+module, Test connection, CCR port field).
 
 ---
 
@@ -34,10 +35,14 @@ should be changeable from inside LunaCore's own Settings overlay (Ctrl+L).
 0210e4d  feat: let Settings load downloaded LM Studio models         (Phase 2, done)
 03c47c0  feat: add AI-provider templates + /ask + highlights         (Phase 1, done)
 b84027b  feat: add claude-code-router (CCR) lifecycle management    (Phase 4, done)
-<this commit>  Phases 5 + 7: LM Studio runs the full Luna harness     (done)
+02988cc  Phases 5 + 7: LM Studio runs the full Luna harness           (done)
+<this commit>  Phase 8: shim token, env fix, CCR module + Test button  (done)
 ```
 
-`npm test` → **1395 pass, 0 fail**. `npm start` runs the app.
+`npm test` → **1446 tests, 1445 pass**. The one failure,
+`test/launch.test.js` "withSessionId accepts a path or .exe/.cmd form of the
+binary", is Windows-path-only: it fails on Linux (cloud sessions) on untouched
+`main` too and passes on Mati's Windows machine. `npm start` runs the app.
 
 ### Phase 1 — DONE (`03c47c0`)
 The template/backend layer. `src/providers.js` (`loadProviders()`,
@@ -480,11 +485,123 @@ local process answering `{"lmstudio":true}` on the SDK's fixed ports - the
 same check the SDK itself makes, and exploiting it already requires running
 code as the user.
 
-Open follow-ups: per-shim auth token (hardening; LM Studio's own port is
-unauthenticated anyway); verify CCR route names before Codex; the Kimi Code
-template; an "overnight run" mode.
+Open follow-ups: ~~per-shim auth token~~ (done in Phase 8); verify CCR route
+names before Codex; the Kimi Code template; an "overnight run" mode.
 
-### Phase 6 — further polish, NOT STARTED (old Phase 5 candidates, lower priority)
+### Phase 8 — DONE (2026-09-24): hardening + the Phase 6 items a cloud session could do
+
+Picked from the Phase 6 / Phase 7 follow-up list: everything buildable and
+verifiable without Mati's LM Studio, a real CCR install, or provider keys.
+
+- **Bug fixed: `CLAUDE_CODE_*` env from a profile never reached the CLI.**
+  `spawnInto()` ran `stripClaudeSessionMarkers()` on the MERGED env, after the
+  profile and local-launch layers - so Phase 7's
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and GLM's `CLAUDE_CODE_SUBAGENT_MODEL` were
+  deleted before `pty.spawn` (the /ask path had the same bug). New
+  `src/sessionenv.js` (`buildSessionEnv(inherited, ...layers)`) strips the
+  inherited env only, then layers profile / auto-model / launch overrides.
+  Verified live: with the fix, `claude` 2.1.281 refuses a turn with "Prompt is
+  too long" when the value is 8192, which proves the CLI now receives it. The
+  README's env table always described the fixed order; the code now matches.
+  Phase 7's "6m41s -> 1m04s" measurement was taken outside `spawnInto`, so
+  context-aware auto-compaction in real LM Studio tabs starts working only now.
+- **Per-shim auth token** (Phase 7 follow-up). Each `LmStudioShim` generates
+  `crypto.randomBytes(32)` hex; every request must carry
+  `x-lunacore-shim-token` (constant-time compare) or gets a 401 in Anthropic
+  error shape, checked after the Host check and before anything is
+  forwarded. The header is stripped before forwarding; the client's own
+  `Authorization` passes through untouched. `locallaunch.js` hands the token
+  to the tab via `ANTHROPIC_CUSTOM_HEADERS`, merged with any value the
+  profile sets (or, if it sets none, the one inherited from the shell). The
+  shim URL is only used when a token exists, otherwise the tab goes direct.
+  An inherited shim-token line (LunaCore started from inside a LM Studio tab)
+  is stripped like any other session marker, so non-shim tabs never send it
+  to a provider. Scope, stated honestly in the shim's header: it stops
+  browser pages and other users' processes, not same-user processes (the
+  token sits in the tab's env), and LM Studio's own port stays open on
+  loopback. Verified live end to end with the real CLI through the real shim
+  to a fake upstream: request forwarded, token not leaked upstream,
+  `Authorization` and the profile's own custom header intact, a token-less
+  request gets 401. A browser page can no longer drive the shim: a custom
+  header forces a CORS preflight the shim never approves.
+- **Phase 6 #4 - CCR IPC extracted** to `src/ccrcontrol.js`
+  (`createCcrControl({send, getProfiles, getProviders, openExternal, safeUrl})`
+  -> `registerIpc`, `ensureGatewayFor`, `shutdown`, `isStartedByUs`). With
+  `profileinput.js` below, main.js went 2773 -> 2551 lines. The handlers are now unit-tested
+  (`test/ccrcontrol.test.js`). `ccr:test-key` is also stricter: non-string or
+  unknown id -> `unknown-profile`, non-CCR profile -> `not-ccr` (a GLM/Kimi
+  key is never sent anywhere), blank key or `NON_SECRET_AUTH_TOKENS` sentinel
+  -> `no-key`, non-loopback base URL -> `not-local`. All four are refused before any
+  network call.
+- **Phase 6 #2 - "Test connection" button** on every CCR-routed row in
+  Settings -> AI providers. Only the profile id crosses IPC. The row shows
+  what each outcome means: connected + model count, key OK but no provider in
+  CCR yet, key rejected (with the "client key, not provider key" hint), gateway
+  down, foreign process on the port, no key stored, not local. Results are kept per row
+  across re-renders, dropped on edit/remove, and a result landing after an
+  edit is discarded. Pure mapping in `providerform.js`
+  (`canTestConnection`, `testResultMessage`, `TEST_RESULT_KEYS`), tested.
+- **Phase 4 gap closed - the CCR port field.** Gate 1 decision #3 said the
+  add/edit form has a per-profile port field. The payload layer supported it,
+  but `providersettings.js` never rendered the input, and
+  `providers.error.invalidPort` had no translation. Both are fixed: the port field
+  shows for `{{ccrPort}}` templates and the edit form prefills it from the
+  profile's base URL (`portFromBaseUrl`). `buildProfileFromTemplate` now also rejects a
+  numeric port outside 1-65535 with `invalid-port` (it used to accept e.g.
+  70000 and build `http://localhost:70000`).
+- `failureKey`/`testResultMessage` use an own-property lookup, so a reason
+  like `constructor` can't resolve to an inherited `Object` property.
+- **Pre-existing IPC holes closed (security review finding, HIGH + MEDIUM).**
+  `profiles:add/update-from-template` spread the raw renderer payload into
+  `buildProfileFromTemplate`, which honours `extraEnv` for any key the
+  template declares. A compromised renderer could therefore repoint a stored
+  GLM key's `ANTHROPIC_BASE_URL` to its own host (the key is kept on an edit
+  that does not resend it). And an edit could switch a GLM profile to a CCR
+  template while keeping the key, which the new `ccr:test-key` would then
+  send to a loopback port. New `src/profileinput.js` (`pickTemplateInput`,
+  `resolveTemplateAdd`, `resolveTemplateUpdate`) keeps only the form's own
+  fields and refuses a template switch (`template-mismatch`) or a
+  hand-written profile. It holds main.js's keep-current rules, moved as-is. Both
+  handlers are now four lines, and the rules are unit-tested
+  (`test/profileinput.test.js`, including both attack payloads). Any numeric
+  `ccrPort` on edit now reaches the same 1-65535 check as on add.
+
+**Reviews** (general-purpose agents standing in for ecc:security-reviewer /
+ecc:typescript-reviewer, which this cloud environment does not have). No
+CRITICAL. The only HIGH was the pre-existing `extraEnv` hole above; fixed.
+Everything else is fixed as well:
+- the Test button's full `render()` wiped an open add/edit form. It now
+  repaints only its own row, and a live GUI regression check confirms a
+  typed-but-unsaved key survives;
+- the inherited shim-token leak;
+- the shim comment overstated what the token protects;
+- inherited custom headers were dropped in shim tabs;
+- the edit form's port placeholder promised "default" where blank keeps the
+  current port;
+- add and edit validated ports differently;
+- a stale test result stayed after a gateway start/stop (now cleared on
+  `ccr:state`);
+- no test compared a wrong token of the same length.
+
+Reviewer note worth acting on: now that `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
+actually reaches LM Studio tabs, run one with a SMALL loaded context (e.g.
+4096) and check it compacts or refuses cleanly instead of overflowing.
+
+**Clicked through for real** (first time for this feature): Electron 43 under
+xvfb, driven by Playwright, against a fake CCR gateway on 127.0.0.1:3456 that
+accepts one client key. Steps: add an Ollama (via CCR) profile with a wrong
+key -> Test connection -> rejected-key message; Edit -> port prefilled 3456,
+70000 -> "The port must be a number from 1 to 65535."; enter the right key ->
+Save (the old result clears) -> Test -> "Connected - the key works, models in
+CCR: 2." Not verified: a REAL CCR install (still Phase 6 #1 / assumption #6)
+and a real LM Studio tab end to end.
+
+Small pre-existing thing noticed, not changed: a CCR template's Model field
+placeholder reads "default: " with nothing after it (the CCR templates ship
+`defaultModel: ""`). A "blank = CCR's router decides" hint would read better.
+
+### Phase 6 — further polish (old Phase 5 candidates, lower priority)
+#2 and #4 are DONE in Phase 8 (see above). Still open: #1 and #3.
 Candidates from before Mati's 2026-09-22 report, roughly in likely-usefulness
 order:
 1. Click through the app for real (Ctrl+L → Router (CCR) section, and the AI
@@ -506,10 +623,20 @@ order:
 
 ## How to resume this in a new session
 
-Tell the new session: *"read reference/AI_PROVIDERS_RESUME.md."* Phases 1-5
-and 7 are done - there's no blocking next phase. Phase 6 and Phase 7's open
-follow-ups are the candidate list; otherwise treat this feature as complete
-and ask what's next.
+Tell the new session: *"read reference/AI_PROVIDERS_RESUME.md."* Phases 1-5,
+7 and 8 are done - there's no blocking next phase. What is left needs Mati
+or his machine:
+- Phase 6 #1: open CCR's own UI with a real provider and confirm assumption
+  #6 (does the gateway need a client key even for Ollama?). The new Test
+  connection button is the quickest way to check.
+- Phase 6 #3: a per-tab status strip, only if a CCR failure turns out hard
+  to spot in practice.
+- Phase 7 follow-ups: verify CCR route names before Codex; the Kimi Code
+  template (needs the current endpoint/model verified); an "overnight run"
+  mode (needs a design conversation first).
+- Re-measure a real LM Studio tab now that `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
+  actually reaches it (Phase 8's env fix).
+Otherwise treat this feature as complete and ask what's next.
 
 ---
 

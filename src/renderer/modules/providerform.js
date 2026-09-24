@@ -12,7 +12,9 @@
 //     profiles:add-from-template / profiles:update-from-template expect,
 //     with the SAME typed rejection reasons main.js's handlers use, so an
 //     obviously-invalid submission never spends an IPC round trip; and
-//   - mapping a typed failure reason to the i18n key that displays it.
+//   - mapping a typed failure reason to the i18n key that displays it; and
+//   - the "Test connection" button on a CCR profile row: which rows get it,
+//     and which message each ccr:test-key outcome shows.
 // ============================================================================
 
 'use strict';
@@ -221,9 +223,86 @@ const FAILURE_KEYS = {
   'save-failed': 'providers.error.saveFailed',
 };
 
-/** Maps a typed failure reason to its i18n key; unknown reasons fall back to a generic one. */
-function failureKey(reason) {
-  return FAILURE_KEYS[reason] || 'providers.error.generic';
+/** Own-property lookup, so a reason like 'constructor' never hits Object.prototype. */
+function lookup(table, key) {
+  return typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : null;
 }
 
-export { generatedProfiles, templateFields, localLaunchState, buildAddPayload, buildEditPayload, failureKey };
+/** Maps a typed failure reason to its i18n key; unknown reasons fall back to a generic one. */
+function failureKey(reason) {
+  return lookup(FAILURE_KEYS, reason) || 'providers.error.generic';
+}
+
+/**
+ * Only CCR-routed profiles get a "Test connection" button: main's
+ * ccr:test-key refuses every other profile before any network call.
+ * @param {{wireVia?:string}|null} template
+ * @returns {boolean}
+ */
+function canTestConnection(template) {
+  return Boolean(template && template.wireVia === 'ccr');
+}
+
+/**
+ * The explicit port of a (redacted) base URL, for prefilling the CCR port
+ * field. '' when there is none or the URL does not parse.
+ * @param {unknown} baseUrl
+ * @returns {string}
+ */
+function portFromBaseUrl(baseUrl) {
+  if (typeof baseUrl !== 'string' || !baseUrl) return '';
+  try {
+    return new URL(baseUrl).port;
+  } catch {
+    return '';
+  }
+}
+
+/** ccr:test-key failure reason -> the message that explains it. */
+const TEST_FAILURE_KEYS = {
+  unauthorized: 'providers.test.unauthorized',
+  down: 'providers.test.down',
+  'no-models': 'providers.test.foreign',
+  'no-key': 'providers.test.noKey',
+  'not-local': 'providers.test.notLocal',
+  'unknown-profile': 'providers.error.unknownProfile',
+};
+
+/** Every i18n key testResultMessage() can return (pinned by the i18n test). */
+const TEST_RESULT_KEYS = [
+  'providers.test.ok',
+  'providers.test.noProviders',
+  'providers.test.failed',
+  ...Object.values(TEST_FAILURE_KEYS),
+];
+
+/**
+ * Maps a ccr:test-key result to the row's status message. `models: 0` is its
+ * own success case - key accepted, but no provider set up in CCR's UI yet.
+ * Anything malformed reads as a failed test, never as a success.
+ * @param {unknown} result
+ * @returns {{ok:boolean, key:string, params:Object}}
+ */
+function testResultMessage(result) {
+  const r = result && typeof result === 'object' ? result : {};
+  if (r.ok === true && Number.isInteger(r.models) && r.models >= 0) {
+    return r.models > 0
+      ? { ok: true, key: 'providers.test.ok', params: { n: r.models } }
+      : { ok: true, key: 'providers.test.noProviders', params: {} };
+  }
+  const key = (r.ok === false && lookup(TEST_FAILURE_KEYS, r.reason)) || 'providers.test.failed';
+  return { ok: false, key, params: {} };
+}
+
+export {
+  generatedProfiles,
+  templateFields,
+  localLaunchState,
+  buildAddPayload,
+  buildEditPayload,
+  failureKey,
+  canTestConnection,
+  portFromBaseUrl,
+  testResultMessage,
+  TEST_RESULT_KEYS,
+};

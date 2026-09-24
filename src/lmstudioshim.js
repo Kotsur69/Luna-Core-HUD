@@ -16,14 +16,31 @@
 // through untouched.
 //
 // Boundaries: binds 127.0.0.1 only, rejects foreign Host headers (DNS
-// rebinding), only ever forwards to a LOCAL upstream, caps buffered bodies,
-// and never logs request or response contents.
+// rebinding), requires a per-shim random token on every request, only ever
+// forwards to a LOCAL upstream, caps buffered bodies, and never logs request
+// or response contents.
+//
+// The token: src/locallaunch.js hands it to the tab's `claude` through
+// ANTHROPIC_CUSTOM_HEADERS (verified live against claude 2.1.281: those
+// headers ride on every /v1/messages request, next to the untouched
+// Authorization header). What it stops: a web page in the user's browser
+// (which can reach 127.0.0.1, but cannot send a custom header without a CORS
+// preflight this shim never approves) and other users' processes. What it
+// does not stop: processes of the SAME user - the token sits in the tab's
+// environment, readable by that tab's tools and hooks and via the OS - and
+// LM Studio's own port, which stays unauthenticated on loopback anyway. The
+// header is stripped before forwarding, so LM Studio never sees it; the
+// client's own auth header passes through unchanged.
 // ============================================================================
 
 'use strict';
 
 const http = require('http');
+const crypto = require('crypto');
 const { localEndpointFromProfile } = require('./lmstudio');
+// Shared with the env side: locallaunch.js sends it, sessionenv.js strips an
+// inherited copy.
+const { SHIM_TOKEN_HEADER } = require('./sessionenv');
 
 /** Upper bound for one buffered /v1/messages body (images make them big). */
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -115,16 +132,26 @@ function shouldRewrite(method, url, headers) {
 }
 
 /** An error body Claude Code can render (Anthropic error shape). */
-function upstreamErrorBody(message) {
-  return JSON.stringify({ type: 'error', error: { type: 'api_error', message } });
+function upstreamErrorBody(message, type = 'api_error') {
+  return JSON.stringify({ type: 'error', error: { type, message } });
 }
 
+/** Copies headers minus hop-by-hop ones and the shim's own token. */
 function forwardHeaders(headers, extra) {
   const out = {};
   for (const [k, v] of Object.entries(headers || {})) {
-    if (!HOP_BY_HOP.has(k.toLowerCase())) out[k] = v;
+    const key = k.toLowerCase();
+    if (!HOP_BY_HOP.has(key) && key !== SHIM_TOKEN_HEADER) out[k] = v;
   }
   return { ...out, ...extra };
+}
+
+/** Constant-time check of a presented token against the expected one. */
+function tokenMatches(presented, expected) {
+  if (typeof presented !== 'string' || typeof expected !== 'string' || !expected) return false;
+  const a = Buffer.from(presented, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 // --- proxy -------------------------------------------------------------------
@@ -146,6 +173,9 @@ class LmStudioShim {
     this.port = null;
     this.sockets = new Set();
     this.starting = null;
+    // Fixed for this instance's lifetime: every tab sharing the shim gets the
+    // same value, and a restarted app gets a fresh one.
+    this.token = crypto.randomBytes(32).toString('hex');
   }
 
   start() {
@@ -166,7 +196,7 @@ class LmStudioShim {
       server.listen(this.requestedPort, '127.0.0.1', () => {
         this.server = server;
         this.port = server.address().port;
-        resolve({ ok: true, port: this.port, url: this.url() });
+        resolve({ ok: true, port: this.port, url: this.url(), token: this.token });
       });
     });
     return this.starting;
@@ -200,6 +230,12 @@ class LmStudioShim {
     if (!this.isAllowedHost(req.headers.host)) {
       res.writeHead(403, { 'content-type': 'application/json' });
       res.end(upstreamErrorBody('Forbidden host'));
+      req.resume();
+      return;
+    }
+    if (!tokenMatches(req.headers[SHIM_TOKEN_HEADER], this.token)) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(upstreamErrorBody('Missing or invalid LunaCore shim token', 'authentication_error'));
       req.resume();
       return;
     }
@@ -269,7 +305,7 @@ const shims = new Map();
 /**
  * Starts (or reuses) the shim in front of a local upstream.
  * @param {string} upstream e.g. http://localhost:1234
- * @returns {Promise<{ok:true, port:number, url:string}|{ok:false, reason:string}>}
+ * @returns {Promise<{ok:true, port:number, url:string, token:string}|{ok:false, reason:string}>}
  */
 async function ensureShim(upstream) {
   const origin = localEndpointFromProfile({ env: { ANTHROPIC_BASE_URL: upstream } });
@@ -296,8 +332,10 @@ module.exports = {
   rewriteBody,
   shouldRewrite,
   upstreamErrorBody,
+  tokenMatches,
   LmStudioShim,
   ensureShim,
   stopAllShims,
   MAX_BODY_BYTES,
+  SHIM_TOKEN_HEADER,
 };

@@ -786,7 +786,7 @@ then your profile's `env` is merged on top, so a profile always wins:
 | Step | Why |
 |---|---|
 | `withColorSupport()` | drops `NO_COLOR` / `FORCE_COLOR=0` and sets `TERM=xterm-256color` + `COLORTERM=truecolor`. **Claude Code sets `NO_COLOR=1`**, so launching LunaCore from a Claude Code terminal otherwise produced a completely colourless HUD — a white Claude logo instead of orange. No theme can fix that: xterm receives plain text. |
-| `stripClaudeSessionMarkers()` | removes `CLAUDE_CODE*`, `CLAUDECODE`, `CLAUDE_PID` etc. A nested `claude` that sees them starts as a *child session* and **disables transcript writing** — which silently kills the context bar, sparkline, and cost HUD, since all three read the JSONL. |
+| `stripClaudeSessionMarkers()` | removes `CLAUDE_CODE*`, `CLAUDECODE`, `CLAUDE_PID` etc. A nested `claude` that sees them starts as a *child session* and **disables transcript writing** — which silently kills the context bar, sparkline, and cost HUD, since all three read the JSONL. Only the *inherited* env is stripped ([`src/sessionenv.js`](src/sessionenv.js)), so a `CLAUDE_CODE_*` key your profile sets on purpose still reaches the CLI. |
 | `withClaudeOnPath()` | prepends `~/.local/bin` when `claude` lives there but is not on `PATH` (native-installer machines). |
 
 ### Local models (LM Studio) with the full harness
@@ -797,7 +797,10 @@ spawns, [`src/locallaunch.js`](src/locallaunch.js) prepares it:
 
 - starts a loopback shim ([`src/lmstudioshim.js`](src/lmstudioshim.js)) that
   rewrites the mid-conversation `system` messages LM Studio's Anthropic
-  endpoint rejects with a 400;
+  endpoint rejects with a 400. The shim only answers requests carrying its
+  random per-launch token, which the tab's `claude` sends through
+  `ANTHROPIC_CUSTOM_HEADERS` — other local processes and browser pages
+  cannot use it;
 - maps every model tier (opus/sonnet/haiku/…) to the loaded model and sets
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to its loaded context length;
 - optionally starts without MCP servers and hides built-in CLI tools a local

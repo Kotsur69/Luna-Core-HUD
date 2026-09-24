@@ -4,7 +4,8 @@
 // spawnInto() fixes a tab's env at pty.spawn, so everything a LM Studio tab
 // needs has to be known BEFORE the spawn, not after a watcher tick:
 //
-//   - the shim URL (src/lmstudioshim.js), without which turn one is a 400;
+//   - the shim URL (src/lmstudioshim.js), without which turn one is a 400,
+//     and the shim's token, sent as a custom header on every request;
 //   - which model EVERY tier maps to. Claude Code sends side requests under
 //     the haiku/fable/small-fast tiers too; left unset, those name a model
 //     LM Studio does not have;
@@ -27,6 +28,7 @@
 const fs = require('fs');
 const path = require('path');
 const { localEndpointFromProfile, pickLoadedModel } = require('./lmstudio');
+const { SHIM_TOKEN_HEADER, withoutHeader } = require('./sessionenv');
 
 const LOCAL_LAUNCH_KEYS = ['shim', 'leanMcp', 'leanTools'];
 
@@ -89,12 +91,28 @@ function resolveLocalLaunch(profile, providers) {
 }
 
 /**
+ * The tab's effective ANTHROPIC_CUSTOM_HEADERS (one "Name: value" per line)
+ * with the shim token line appended. Any earlier line for the shim header is
+ * dropped, so the tab always carries exactly the current token.
+ * @param {unknown} current the value the tab would otherwise get
+ * @param {string} token
+ * @returns {string}
+ */
+function withShimHeader(current, token) {
+  const kept = withoutHeader(current, SHIM_TOKEN_HEADER);
+  return [kept, `${SHIM_TOKEN_HEADER}: ${token}`].filter(Boolean).join('\n');
+}
+
+/**
  * Env overrides for a local tab. A key the profile already sets is never
- * touched - an explicit choice always wins over a derived one.
- * @param {{profileEnv:Object, model:string|null, contextLength:number|null, shimUrl:string|null}} input
+ * touched - an explicit choice always wins over a derived one. The two
+ * exceptions are the shim routing keys: the base URL has to point at the
+ * shim, and the custom headers are merged, never replaced - the profile's
+ * own value, or the inherited one when the profile sets none.
+ * @param {{profileEnv:Object, inheritedEnv?:Object, model:string|null, contextLength:number|null, shimUrl:string|null, shimToken?:string|null}} input
  * @returns {Object}
  */
-function buildLocalEnv({ profileEnv, model, contextLength, shimUrl }) {
+function buildLocalEnv({ profileEnv, inheritedEnv = {}, model, contextLength, shimUrl, shimToken = null }) {
   const own = profileEnv || {};
   const isUnset = (key) => typeof own[key] !== 'string' || own[key] === '';
   const tiers = model
@@ -103,8 +121,16 @@ function buildLocalEnv({ profileEnv, model, contextLength, shimUrl }) {
   const context = Number.isInteger(contextLength) && contextLength > 0 && isUnset('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
     ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(contextLength) }
     : {};
-  const base = shimUrl ? { ANTHROPIC_BASE_URL: shimUrl } : {};
-  return { ...tiers, ...context, ...base };
+  // Without its token the shim refuses every request, so a URL alone is
+  // worse than the direct upstream - route through it only with both.
+  const viaShim = typeof shimUrl === 'string' && shimUrl !== '' && typeof shimToken === 'string' && shimToken !== '';
+  const headers = typeof own.ANTHROPIC_CUSTOM_HEADERS === 'string'
+    ? own.ANTHROPIC_CUSTOM_HEADERS
+    : (inheritedEnv || {}).ANTHROPIC_CUSTOM_HEADERS;
+  const shim = viaShim
+    ? { ANTHROPIC_BASE_URL: shimUrl, ANTHROPIC_CUSTOM_HEADERS: withShimHeader(headers, shimToken) }
+    : {};
+  return { ...tiers, ...context, ...shim };
 }
 
 /**
@@ -190,7 +216,7 @@ function targetModel(profile, models) {
  * Everything a local tab needs before its spawn. Never rejects.
  * @param {Object} profile
  * @param {{shim:boolean, leanMcp:boolean, leanTools:boolean}} localLaunch
- * @param {{probe:Function, ensureShim:Function, ensureMcpFile:Function, timeoutMs?:number}} deps
+ * @param {{probe:Function, ensureShim:Function, ensureMcpFile:Function, inheritedEnv?:Object, timeoutMs?:number}} deps
  * @returns {Promise<{envOverrides:Object, extraArgs:string[], notes:string[]}>}
  */
 async function prepareLocalLaunch(profile, localLaunch, deps) {
@@ -204,7 +230,8 @@ async function prepareLocalLaunch(profile, localLaunch, deps) {
     localLaunch.shim ? settle(() => deps.ensureShim(upstream), timeoutMs, null) : Promise.resolve(null),
   ]);
   if (!probe || !probe.up) notes.push('probe-failed');
-  if (localLaunch.shim && !(shim && shim.ok)) notes.push('shim-failed');
+  const shimReady = Boolean(shim && shim.ok && shim.url && shim.token);
+  if (localLaunch.shim && !shimReady) notes.push('shim-failed');
 
   let mcpConfigPath = null;
   if (localLaunch.leanMcp) {
@@ -220,9 +247,11 @@ async function prepareLocalLaunch(profile, localLaunch, deps) {
   return {
     envOverrides: buildLocalEnv({
       profileEnv: profile.env,
+      inheritedEnv: deps.inheritedEnv,
       model,
       contextLength,
-      shimUrl: shim && shim.ok ? shim.url : null,
+      shimUrl: shimReady ? shim.url : null,
+      shimToken: shimReady ? shim.token : null,
     }),
     extraArgs: args,
     notes: [...notes, ...argNotes],
