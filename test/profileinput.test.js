@@ -133,6 +133,13 @@ test('an edit applies the fields the payload does send', () => {
   assert.equal(resolved.input.fastModel, 'glm-fast-custom');
 });
 
+test('an edit keeps a key stored as ANTHROPIC_API_KEY (kimi-code)', () => {
+  const kimi = { id: 'kimi-code', label: 'Kimi Code', templateId: 'kimi-code', env: { ANTHROPIC_API_KEY: 'real-kimi-secret' } };
+  const resolved = resolveTemplateUpdate([kimi], { id: 'kimi-code', model: 'k3-256k' }, providers);
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.input.apiKey, 'real-kimi-secret');
+});
+
 test('a non-secret sentinel is never kept as a real key', () => {
   const resolved = resolveTemplateUpdate(profiles, { id: 'lm-studio' }, providers);
   assert.equal(resolved.input.apiKey, '');

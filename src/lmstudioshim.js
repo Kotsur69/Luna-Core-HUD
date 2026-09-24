@@ -154,6 +154,15 @@ function tokenMatches(presented, expected) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+/**
+ * The CLI's connectivity probe, which does not carry ANTHROPIC_CUSTOM_HEADERS
+ * (observed live on claude 2.1.278). Exempt from the token check: HEAD on
+ * this exact path only - it has no body and cannot start a generation.
+ */
+function isConnectivityProbe(method, url) {
+  return method === 'HEAD' && String(url || '').split('?')[0] === '/api/hello';
+}
+
 // --- proxy -------------------------------------------------------------------
 
 class LmStudioShim {
@@ -233,7 +242,7 @@ class LmStudioShim {
       req.resume();
       return;
     }
-    if (!tokenMatches(req.headers[SHIM_TOKEN_HEADER], this.token)) {
+    if (!isConnectivityProbe(req.method, req.url) && !tokenMatches(req.headers[SHIM_TOKEN_HEADER], this.token)) {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(upstreamErrorBody('Missing or invalid LunaCore shim token', 'authentication_error'));
       req.resume();
@@ -333,6 +342,7 @@ module.exports = {
   shouldRewrite,
   upstreamErrorBody,
   tokenMatches,
+  isConnectivityProbe,
   LmStudioShim,
   ensureShim,
   stopAllShims,

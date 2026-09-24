@@ -375,3 +375,34 @@ test('buildProfileFromTemplate leaves localLaunch unset when none is given or th
   const cloud = buildProfileFromTemplate(kimi, { id: 'kimi', label: 'Kimi', apiKey: 'k', localLaunch: { shim: true } });
   assert.equal('localLaunch' in cloud.profile, false);
 });
+
+// ---- kimi-code (Kimi Code subscription) -----------------------------------
+
+test('kimi-code builds an x-api-key profile that maps every tier to one model', () => {
+  const { providers } = loadProviders();
+  const tpl = getProviderTemplate(providers, 'kimi-code');
+  assert.ok(tpl, 'kimi-code template is shipped');
+  const result = buildProfileFromTemplate(tpl, { id: 'kimi-code', label: 'Kimi Code', apiKey: 'sk-kimi' });
+  assert.equal(result.ok, true);
+  const env = result.profile.env;
+  assert.equal(env.ANTHROPIC_BASE_URL, 'https://api.kimi.ai/coding/');
+  assert.equal(env.ANTHROPIC_API_KEY, 'sk-kimi');
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, undefined);
+  for (const key of [
+    'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL',
+    'CLAUDE_CODE_SUBAGENT_MODEL',
+  ]) {
+    assert.equal(env[key], 'k3-256k', key);
+  }
+  assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '262144');
+  assert.equal(isCcrTemplate(tpl), false);
+});
+
+test('kimi-code refuses a profile without an API key and honours a custom model', () => {
+  const { providers } = loadProviders();
+  const tpl = getProviderTemplate(providers, 'kimi-code');
+  assert.equal(buildProfileFromTemplate(tpl, { id: 'k', label: 'K' }).reason, 'missing-api-key');
+  const custom = buildProfileFromTemplate(tpl, { id: 'k', label: 'K', apiKey: 'x', model: 'k3[1m]' });
+  assert.equal(custom.profile.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'k3[1m]');
+});

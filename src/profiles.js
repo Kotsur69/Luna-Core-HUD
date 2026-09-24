@@ -144,6 +144,21 @@ function getProfile(profiles, id) {
 const NON_SECRET_AUTH_TOKENS = new Set(['lmstudio', 'ccr-local']);
 
 /**
+ * The credential a profile's env carries, whichever variable its template
+ * uses: ANTHROPIC_AUTH_TOKEN (Bearer) for most, ANTHROPIC_API_KEY (x-api-key)
+ * for providers whose docs ask for it (e.g. kimi-code). '' when neither is set.
+ * @param {Object|undefined} env
+ * @returns {string}
+ */
+function profileAuthKey(env) {
+  if (!env) return '';
+  for (const key of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY']) {
+    if (typeof env[key] === 'string' && env[key]) return env[key];
+  }
+  return '';
+}
+
+/**
  * Strips userinfo (`user:pass@`) and any query/hash from a URL string -
  * defense in depth for the `baseUrl` exposure in redactProfile() below, even
  * though no shipped template currently embeds a secret in a URL.
@@ -190,12 +205,8 @@ function redactProfile(profile) {
   const model = (env && typeof env.ANTHROPIC_MODEL === 'string' && env.ANTHROPIC_MODEL) || '';
   const fastModel =
     (env && typeof env.ANTHROPIC_SMALL_FAST_MODEL === 'string' && env.ANTHROPIC_SMALL_FAST_MODEL) || '';
-  const hasApiKey = Boolean(
-    env &&
-      typeof env.ANTHROPIC_AUTH_TOKEN === 'string' &&
-      env.ANTHROPIC_AUTH_TOKEN &&
-      !NON_SECRET_AUTH_TOKENS.has(env.ANTHROPIC_AUTH_TOKEN)
-  );
+  const authKey = profileAuthKey(env);
+  const hasApiKey = Boolean(authKey) && !NON_SECRET_AUTH_TOKENS.has(authKey);
   const baseUrl =
     profile.templateId !== null && env && typeof env.ANTHROPIC_BASE_URL === 'string'
       ? sanitizeBaseUrl(env.ANTHROPIC_BASE_URL)
@@ -337,4 +348,5 @@ module.exports = {
   removeProfile,
   isLegacyCcrProfile,
   NON_SECRET_AUTH_TOKENS,
+  profileAuthKey,
 };

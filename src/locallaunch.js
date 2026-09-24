@@ -60,6 +60,13 @@ const MCP_CONFIG_FILE = 'lmstudio-empty-mcp.json';
 const PREP_TIMEOUT_MS = 4000;
 
 /**
+ * Per-request timeout for a local tab (50 min, the value GLM ships with). The
+ * CLI's 10-minute default is too close to a full 128k prefill on a 16 GB card
+ * (measured ~8 min) for an unattended run.
+ */
+const LOCAL_API_TIMEOUT_MS = 50 * 60 * 1000;
+
+/**
  * Validates a localLaunch block: only known keys with boolean values survive.
  * @param {unknown} value
  * @returns {{shim?:boolean, leanMcp?:boolean, leanTools?:boolean}|null}
@@ -121,6 +128,7 @@ function buildLocalEnv({ profileEnv, inheritedEnv = {}, model, contextLength, sh
   const context = Number.isInteger(contextLength) && contextLength > 0 && isUnset('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
     ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(contextLength) }
     : {};
+  const timeout = isUnset('API_TIMEOUT_MS') ? { API_TIMEOUT_MS: String(LOCAL_API_TIMEOUT_MS) } : {};
   // Without its token the shim refuses every request, so a URL alone is
   // worse than the direct upstream - route through it only with both.
   const viaShim = typeof shimUrl === 'string' && shimUrl !== '' && typeof shimToken === 'string' && shimToken !== '';
@@ -130,7 +138,7 @@ function buildLocalEnv({ profileEnv, inheritedEnv = {}, model, contextLength, sh
   const shim = viaShim
     ? { ANTHROPIC_BASE_URL: shimUrl, ANTHROPIC_CUSTOM_HEADERS: withShimHeader(headers, shimToken) }
     : {};
-  return { ...tiers, ...context, ...shim };
+  return { ...tiers, ...context, ...timeout, ...shim };
 }
 
 /**

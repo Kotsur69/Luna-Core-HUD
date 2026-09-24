@@ -19,6 +19,7 @@ const {
   normalizeMessages,
   rewriteBody,
   shouldRewrite,
+  isConnectivityProbe,
   LmStudioShim,
   ensureShim,
   stopAllShims,
@@ -303,6 +304,27 @@ test('shim refuses a request without the token, or with a wrong one, and never f
     await shim.stop();
     upstream.close();
   }
+});
+
+test('shim lets the tokenless HEAD /api/hello probe through', async () => {
+  const upstream = await startUpstream((req, res) => { req.resume(); res.end(); });
+  const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}` });
+  const { port } = await shim.start();
+  try {
+    const res = await request(port, { method: 'HEAD', path: '/api/hello' });
+    assert.strictEqual(res.status, 200);
+  } finally {
+    await shim.stop();
+    upstream.close();
+  }
+});
+
+test('only HEAD /api/hello is exempt from the token', () => {
+  assert.strictEqual(isConnectivityProbe('HEAD', '/api/hello'), true);
+  assert.strictEqual(isConnectivityProbe('HEAD', '/api/hello?x=1'), true);
+  assert.strictEqual(isConnectivityProbe('HEAD', '/v1/models'), false);
+  assert.strictEqual(isConnectivityProbe('GET', '/api/hello'), false);
+  assert.strictEqual(isConnectivityProbe('POST', '/api/hello'), false);
 });
 
 test('shim strips its own token header and keeps the client auth header upstream', async () => {

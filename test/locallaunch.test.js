@@ -24,6 +24,9 @@ const {
 } = require('../src/locallaunch');
 const { SHIM_TOKEN_HEADER } = require('../src/lmstudioshim');
 
+/** What buildLocalEnv adds with nothing else known: the 50-minute timeout. */
+const TIMEOUT_ONLY = { API_TIMEOUT_MS: '3000000' };
+
 const lmProfile = (extra = {}) => ({
   id: 'lm-studio',
   templateId: 'lm-studio',
@@ -109,12 +112,17 @@ test('buildLocalEnv keeps inherited custom headers when the profile sets none', 
 
 test('buildLocalEnv never routes through the shim without its token', () => {
   const env = buildLocalEnv({ profileEnv: {}, model: null, contextLength: null, shimUrl: 'http://127.0.0.1:5555', shimToken: '' });
+  assert.deepStrictEqual(env, TIMEOUT_ONLY);
+});
+
+test('buildLocalEnv keeps a timeout the profile sets itself', () => {
+  const env = buildLocalEnv({ profileEnv: { API_TIMEOUT_MS: '60000' }, model: null, contextLength: null, shimUrl: null });
   assert.deepStrictEqual(env, {});
 });
 
 test('buildLocalEnv omits what it does not know', () => {
-  assert.deepStrictEqual(buildLocalEnv({ profileEnv: {}, model: null, contextLength: 0, shimUrl: null }), {});
-  assert.deepStrictEqual(buildLocalEnv({ profileEnv: {}, model: null, contextLength: -5, shimUrl: null }), {});
+  assert.deepStrictEqual(buildLocalEnv({ profileEnv: {}, model: null, contextLength: 0, shimUrl: null }), TIMEOUT_ONLY);
+  assert.deepStrictEqual(buildLocalEnv({ profileEnv: {}, model: null, contextLength: -5, shimUrl: null }), TIMEOUT_ONLY);
 });
 
 // --- args -----------------------------------------------------------------
@@ -203,7 +211,7 @@ test('prepareLocalLaunch never rejects, even when a dep throws', async () => {
     ensureShim: async () => { throw new Error('boom'); },
     ensureMcpFile: () => { throw new Error('boom'); },
   }));
-  assert.deepStrictEqual(prep.envOverrides, {});
+  assert.deepStrictEqual(prep.envOverrides, TIMEOUT_ONLY);
   assert.ok(prep.notes.includes('shim-failed'));
   assert.ok(prep.notes.includes('probe-failed'));
 });

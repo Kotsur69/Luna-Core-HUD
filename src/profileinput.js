@@ -18,7 +18,7 @@
 'use strict';
 
 const { getProviderTemplate } = require('./providers');
-const { getProfile, NON_SECRET_AUTH_TOKENS } = require('./profiles');
+const { getProfile, NON_SECRET_AUTH_TOKENS, profileAuthKey } = require('./profiles');
 const { gatewayPortFromEnv } = require('./ccr');
 
 /** Everything the Settings add/edit form may send (providerform.js). */
@@ -83,8 +83,10 @@ function resolveTemplateUpdate(profiles, payload, providers) {
   // sentinel (LM Studio's 'lmstudio', or the legacy 'ccr-local' placeholder -
   // see NON_SECRET_AUTH_TOKENS in profiles.js) must not be treated as "a real
   // key already exists" - fall back to '' for those instead, so the "needs a
-  // key" UI state survives an edit that doesn't resend one.
-  const currentToken = typeof env.ANTHROPIC_AUTH_TOKEN === 'string' ? env.ANTHROPIC_AUTH_TOKEN : '';
+  // key" UI state survives an edit that doesn't resend one. profileAuthKey()
+  // reads whichever variable the template uses (AUTH_TOKEN, or API_KEY for
+  // kimi-code).
+  const currentToken = profileAuthKey(env);
   const apiKey = given(p.apiKey) || (NON_SECRET_AUTH_TOKENS.has(currentToken) ? '' : currentToken);
   const baseUrl = given(p.baseUrl) || env.ANTHROPIC_BASE_URL || '';
   // Same keep-current rule for model/fastModel (security-reviewer's Phase 3

@@ -12,6 +12,7 @@ const {
   redactProfile,
   isLegacyCcrProfile,
   NON_SECRET_AUTH_TOKENS,
+  profileAuthKey,
 } = require('../src/profiles');
 
 test('normalizeProfile passes a valid profile through', () => {
@@ -296,4 +297,23 @@ test('isLegacyCcrProfile is true only for a profile still carrying the ccr-local
   assert.equal(isLegacyCcrProfile(normalizeProfile({ id: 'x', label: 'X' })), false);
   assert.equal(isLegacyCcrProfile(null), false);
   assert.equal(isLegacyCcrProfile(undefined), false);
+});
+
+// ---- profileAuthKey / ANTHROPIC_API_KEY templates --------------------------
+
+test('profileAuthKey prefers ANTHROPIC_AUTH_TOKEN and falls back to ANTHROPIC_API_KEY', () => {
+  assert.equal(profileAuthKey({ ANTHROPIC_AUTH_TOKEN: 'a', ANTHROPIC_API_KEY: 'b' }), 'a');
+  assert.equal(profileAuthKey({ ANTHROPIC_API_KEY: 'b' }), 'b');
+  assert.equal(profileAuthKey({ ANTHROPIC_AUTH_TOKEN: '' }), '');
+  assert.equal(profileAuthKey(undefined), '');
+});
+
+test('redactProfile reports hasApiKey for an ANTHROPIC_API_KEY profile without leaking it', () => {
+  const p = normalizeProfile({
+    id: 'kimi-code', label: 'Kimi Code', templateId: 'kimi-code',
+    env: { ANTHROPIC_API_KEY: 'sk-secret', ANTHROPIC_BASE_URL: 'https://api.kimi.ai/coding/' },
+  });
+  const r = redactProfile(p);
+  assert.equal(r.hasApiKey, true);
+  assert.equal(JSON.stringify(r).includes('sk-secret'), false);
 });

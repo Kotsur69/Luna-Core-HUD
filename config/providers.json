@@ -56,6 +56,28 @@
       "docsUrl": "https://platform.moonshot.ai/docs"
     },
     {
+      "id": "kimi-code",
+      "label": { "pl": "Kimi Code (subskrypcja)", "en": "Kimi Code (subscription)" },
+      "wireVia": "direct",
+      "requiresApiKey": true,
+      "defaultModel": "k3-256k",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "https://api.kimi.ai/coding/",
+        "ANTHROPIC_API_KEY": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{model}}",
+        "ANTHROPIC_SMALL_FAST_MODEL": "{{model}}",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "{{model}}",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "262144",
+        "CLAUDE_CODE_EFFORT_LEVEL": "high"
+      },
+      "docsUrl": "https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html"
+    },
+    {
       "id": "ollama",
       "label": { "pl": "Ollama (lokalnie, przez CCR)", "en": "Ollama (local, via CCR)" },
       "wireVia": "ccr",
