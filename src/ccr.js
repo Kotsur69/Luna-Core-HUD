@@ -31,9 +31,43 @@ const PROBE_TIMEOUT_MS = 1500;
 const START_POLL_INTERVAL_MS = 500;
 const START_TIMEOUT_BUDGET_MS = 10000;
 
+// VERIFIED LIVE (2026-09-22): on Windows, npm's global install of `ccr`
+// creates THREE shims (`ccr`, `ccr.cmd`, `ccr.ps1`) and no `ccr.exe`. Node's
+// execFile() without `shell:true` goes straight to Windows CreateProcess,
+// which cannot launch an extensionless file directly - the result is ENOENT
+// ("not found") EVEN THOUGH the containing folder genuinely is on PATH
+// (confirmed against a real install: `ccr --help` works fine from a shell,
+// every execFile() call below failed with 'not-found' from inside Electron).
+// Targeting `ccr.cmd` directly instead is not a fix either - also verified
+// live, `execFile('ccr.cmd', ..., {shell:false})` throws `EINVAL` (Node's
+// CVE-2024-27980 hardening refuses to spawn a .cmd/.bat without a shell at
+// all). `shell:true` is therefore required, not optional, on Windows.
+const WIN32 = process.platform === 'win32';
+
 /** Caps redactCcrOutput()'s result - this feature's own spec picks 500 as the
  *  fallback length (no existing shared convention covers this exact case). */
 const MAX_OUTPUT_CHARS = 500;
+
+/**
+ * `execFile('ccr', args, ...)`, with the Windows shim workaround above
+ * applied. On Windows the whole command is folded into ONE string with an
+ * EMPTY args array (rather than `execFile('ccr', args, {shell:true}, ...)`)
+ * specifically to avoid Node's DEP0190 warning, which fires whenever `shell`
+ * is truthy AND `args` is a non-empty array (unescaped concatenation) - safe
+ * here only because every argv this module ever passes is a FIXED LITERAL
+ * (`'--help'`/`'start'`/`'stop'`/`'ui'`), never renderer- or user-supplied.
+ * Never call this with anything else.
+ * @param {string[]} args
+ * @param {{timeout?:number, maxBuffer?:number}} opts
+ * @param {(error: Error|null, stdout: string, stderr: string) => void} callback
+ */
+function execCcr(args, opts, callback) {
+  if (WIN32) {
+    execFile(['ccr', ...args].join(' '), [], { ...opts, shell: true }, callback);
+  } else {
+    execFile('ccr', args, opts, callback);
+  }
+}
 
 /** Safe JSON.parse - returns null instead of throwing. */
 function safeParseJson(text) {
@@ -212,7 +246,7 @@ function describeState({ installed, probe, expectedPort, foundPort, startedByUs 
  */
 function detectCcr({ timeoutMs = DETECT_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
-    execFile('ccr', ['--help'], { timeout: timeoutMs, maxBuffer: 64 * 1024 }, (error) => {
+    execCcr(['--help'], { timeout: timeoutMs, maxBuffer: 64 * 1024 }, (error) => {
       if (error) {
         resolve({ ok: false, reason: error.code === 'ENOENT' ? 'not-found' : 'error' });
         return;
@@ -255,7 +289,7 @@ async function doStartGateway(expectedPort) {
   }
 
   const launch = await new Promise((resolve) => {
-    execFile('ccr', ['start'], { timeout: DETECT_TIMEOUT_MS, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
+    execCcr(['start'], { timeout: DETECT_TIMEOUT_MS, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
       if (error) {
         resolve({ ok: false, detail: redactCcrOutput(stderr || stdout || error.message) });
         return;
@@ -306,7 +340,7 @@ function stopGateway({ startedByUs } = {}) {
       resolve({ ok: false, reason: 'not-ours' });
       return;
     }
-    execFile('ccr', ['stop'], { timeout: DETECT_TIMEOUT_MS, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
+    execCcr(['stop'], { timeout: DETECT_TIMEOUT_MS, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
       if (error) {
         resolve({
           ok: false,
@@ -332,7 +366,7 @@ function stopGateway({ startedByUs } = {}) {
  */
 function openManagementUi() {
   return new Promise((resolve) => {
-    execFile('ccr', ['ui'], { timeout: DETECT_TIMEOUT_MS, maxBuffer: 64 * 1024 }, (error) => {
+    execCcr(['ui'], { timeout: DETECT_TIMEOUT_MS, maxBuffer: 64 * 1024 }, (error) => {
       if (error) {
         resolve({ ok: false, reason: error.code === 'ENOENT' ? 'not-found' : 'launch-failed' });
         return;

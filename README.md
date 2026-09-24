@@ -789,6 +789,25 @@ then your profile's `env` is merged on top, so a profile always wins:
 | `stripClaudeSessionMarkers()` | removes `CLAUDE_CODE*`, `CLAUDECODE`, `CLAUDE_PID` etc. A nested `claude` that sees them starts as a *child session* and **disables transcript writing** — which silently kills the context bar, sparkline, and cost HUD, since all three read the JSONL. |
 | `withClaudeOnPath()` | prepends `~/.local/bin` when `claude` lives there but is not on `PATH` (native-installer machines). |
 
+### Local models (LM Studio) with the full harness
+
+An LM Studio tab runs the same `claude` CLI with your whole `~/.claude` setup
+(CLAUDE.md, rules, skills, agents, hooks) — nothing is trimmed. Before the tab
+spawns, [`src/locallaunch.js`](src/locallaunch.js) prepares it:
+
+- starts a loopback shim ([`src/lmstudioshim.js`](src/lmstudioshim.js)) that
+  rewrites the mid-conversation `system` messages LM Studio's Anthropic
+  endpoint rejects with a 400;
+- maps every model tier (opus/sonnet/haiku/…) to the loaded model and sets
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to its loaded context length;
+- optionally starts without MCP servers and hides built-in CLI tools a local
+  session never uses — both toggles live in Settings → AI providers.
+
+Settings → LM Studio loads any downloaded model through the official SDK
+([`src/lmstudiosdk.js`](src/lmstudiosdk.js)), including MoE expert offload,
+flash attention, K/V cache type and eval batch, and unloads other models
+first. The `lms` CLI is only used to start LM Studio when it is not running.
+
 ## Localhost ports tracker
 
 The right panel lists listening TCP ports (dev servers and everything else),

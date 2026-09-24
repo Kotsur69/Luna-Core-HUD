@@ -339,3 +339,28 @@ test('isCcrProfile is false for a hand-written profile or an unknown templateId'
   assert.equal(isCcrProfile(null, providers), false);
   assert.equal(isCcrProfile(undefined, providers), false);
 });
+
+// ---- localLaunch (lean-launch toggles for local-model tabs) -----------------
+
+test('buildProfileFromTemplate stores a validated localLaunch override', () => {
+  const { providers } = loadProviders();
+  const lmStudio = getProviderTemplate(providers, 'lm-studio');
+  const result = buildProfileFromTemplate(lmStudio, {
+    id: 'lm-studio',
+    label: 'LM Studio',
+    localLaunch: { shim: true, leanMcp: false, leanTools: 'yes', evil: true },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.profile.localLaunch, { shim: true, leanMcp: false });
+});
+
+test('buildProfileFromTemplate leaves localLaunch unset when none is given or the template has none', () => {
+  const { providers } = loadProviders();
+  const lmStudio = getProviderTemplate(providers, 'lm-studio');
+  const plain = buildProfileFromTemplate(lmStudio, { id: 'lm-studio', label: 'LM Studio' });
+  assert.equal('localLaunch' in plain.profile, false);
+
+  const kimi = getProviderTemplate(providers, 'kimi');
+  const cloud = buildProfileFromTemplate(kimi, { id: 'kimi', label: 'Kimi', apiKey: 'k', localLaunch: { shim: true } });
+  assert.equal('localLaunch' in cloud.profile, false);
+});

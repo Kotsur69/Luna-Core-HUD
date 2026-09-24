@@ -2,13 +2,16 @@
 // LunaCore - LM Studio model picker (Settings overlay)
 // ----------------------------------------------------------------------------
 // The in-app replacement for the external "go local claude" desktop script:
-// lists every model DOWNLOADED to disk (via the `lms` CLI, src/lmstudiocli.js
-// on the main side - NOT src/lmstudio.js's passive HTTP watcher, which only
-// ever sees a currently-running server's loaded model) and force-loads one on
-// click. Static markup in the Settings overlay (#termcustom), mounted once
-// from termcustom.js's init - same shape as autocompact.js's
-// mountAutoCompactSettings(), and rows/action-button wiring mirrors
-// diagnostics.js's buildRow()/event-delegation pattern closely.
+// lists every model DOWNLOADED to disk and loads one on click. Main side is
+// src/lmstudiosdk.js (the official LM Studio SDK; the `lms` CLI only wakes LM
+// Studio when it is down) - NOT src/lmstudio.js's passive HTTP watcher, which
+// only ever sees a running server's loaded model. Static markup in the
+// Settings overlay (#termcustom), mounted once from termcustom.js's init -
+// same shape as autocompact.js's mountAutoCompactSettings(), and the row /
+// action-button wiring mirrors diagnostics.js's buildRow() closely.
+//
+// The pure half (a row's raw inputs -> the load payload) lives in
+// lmstudioloadform.js and is unit-tested there.
 // ============================================================================
 
 'use strict';
@@ -16,6 +19,7 @@
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { formatBytes } from './telemetry.js';
+import { blankOptions, buildLoadPayload } from './lmstudioloadform.js';
 
 // Module state survives a remount (the overlay is static markup, so this
 // mostly matters for a language switch's repaint, same reasoning as
@@ -24,7 +28,19 @@ let status = null; // last getLmsCliStatus() result, or null before the first ch
 let models = []; // last listDownloadedLmStudioModels() result
 let loadingList = false;
 let loadingModelKey = null; // the one row currently mid-load, or null
-let lastLoadResult = null; // { modelKey, ok, reason } for the most recent load, or null
+let lastLoadResult = null; // { modelKey, ok, reason, field } for the most recent load, or null
+
+// One row's fields, keyed by model key - kept here (not in `models`) so an
+// in-progress edit survives the list re-rendering out from under it (every
+// status change wipes and rebuilds #lmstudio-models-list, same as
+// diagnostics.js's report repaint).
+const modelOptions = new Map();
+let optionsOpenKey = null; // the one row whose options panel is expanded, or null
+
+function optionsFor(modelKey) {
+  if (!modelOptions.has(modelKey)) modelOptions.set(modelKey, blankOptions());
+  return modelOptions.get(modelKey);
+}
 
 let els = null;
 
@@ -39,12 +55,108 @@ function describeModel(model) {
   return parts.join(' · ');
 }
 
-/** The label for a load-failure reason returned by loadLmStudioModel(). */
-function loadFailedLabel(reason) {
+/** The label for a load-failure result returned by loadLmStudioModel(). */
+function loadFailedLabel(result) {
+  const reason = result && result.reason;
   if (reason === 'timeout') return t('lmstudio.load.timeout');
   if (reason === 'busy') return t('lmstudio.load.busy');
-  if (reason === 'not-found') return t('lmstudio.status.notFound');
+  if (reason === 'not-running') return t('lmstudio.load.notRunning');
+  if (reason === 'unknown-model') return t('lmstudio.load.unknownModel');
+  if (reason === 'invalid-option') return t('lmstudio.load.invalid', { field: result.field || '' });
   return t('lmstudio.load.failed');
+}
+
+/** One labeled field for the options panel below. */
+function optionField(labelKey, input) {
+  const box = document.createElement('label');
+  box.className = 'diag-item__opt';
+  const span = document.createElement('span');
+  span.textContent = t(labelKey);
+  box.append(span, input);
+  return box;
+}
+
+/** A number input bound to one option field of one row. */
+function numberInput(model, field, { min, max, step, placeholderKey, placeholder }) {
+  const input = document.createElement('input');
+  input.type = 'number';
+  if (min !== undefined) input.min = String(min);
+  if (max !== undefined) input.max = String(max);
+  input.step = String(step);
+  input.placeholder = placeholder || t(placeholderKey || 'lmstudio.options.auto');
+  input.value = optionsFor(model.key)[field];
+  input.dataset.optField = field;
+  input.dataset.modelKey = model.key;
+  return input;
+}
+
+/** A <select> bound to one option field of one row. */
+function selectInput(model, field, choices) {
+  const select = document.createElement('select');
+  select.dataset.optField = field;
+  select.dataset.modelKey = model.key;
+  const current = optionsFor(model.key)[field];
+  for (const [value, label] of choices) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    if (value === current) opt.selected = true;
+    select.appendChild(opt);
+  }
+  return select;
+}
+
+/**
+ * The load-options panel for one row (collapsed by default - see
+ * optionsOpenKey). Every field starts blank/'auto': "let LM Studio decide"
+ * is expressed by omitting the option entirely (lmstudioloadform.js).
+ */
+function buildOptionsPanel(model) {
+  const opts = optionsFor(model.key);
+  const wrap = document.createElement('div');
+  wrap.className = 'diag-item__options';
+
+  const gpuSelect = selectInput(model, 'gpu', [
+    ['auto', t('lmstudio.options.gpu.auto')],
+    ['off', t('lmstudio.options.gpu.off')],
+    ['max', t('lmstudio.options.gpu.max')],
+    ['custom', t('lmstudio.options.gpu.custom')],
+  ]);
+  const gpuRatioInput = numberInput(model, 'gpuRatio', { min: 0, max: 1, step: 0.05, placeholder: '0.50' });
+  gpuRatioInput.disabled = opts.gpu !== 'custom';
+
+  const idInput = document.createElement('input');
+  idInput.type = 'text';
+  idInput.placeholder = model.key;
+  idInput.value = opts.identifier;
+  idInput.dataset.optField = 'identifier';
+  idInput.dataset.modelKey = model.key;
+
+  const onOff = [
+    ['auto', t('lmstudio.options.auto')],
+    ['on', t('lmstudio.options.on')],
+    ['off', t('lmstudio.options.off')],
+  ];
+  const kvChoices = [['auto', t('lmstudio.options.auto')], ['f16', 'f16'], ['q8_0', 'q8_0'], ['q4_0', 'q4_0']];
+
+  const threadsHint = document.createElement('p');
+  threadsHint.className = 'hint';
+  threadsHint.textContent = t('lmstudio.options.threadsHint');
+
+  wrap.append(
+    optionField('lmstudio.options.contextLength', numberInput(model, 'contextLength', { min: 256, step: 1 })),
+    optionField('lmstudio.options.gpu', gpuSelect),
+    optionField('lmstudio.options.gpuRatio', gpuRatioInput),
+    optionField('lmstudio.options.expertOffload', numberInput(model, 'expertOffload', { min: 0, max: 1, step: 0.05 })),
+    optionField('lmstudio.options.flashAttention', selectInput(model, 'flashAttention', onOff)),
+    optionField('lmstudio.options.kvCache', selectInput(model, 'kvCacheType', kvChoices)),
+    optionField('lmstudio.options.evalBatch', numberInput(model, 'evalBatchSize', { min: 32, step: 32 })),
+    optionField('lmstudio.options.parallel', numberInput(model, 'parallel', { min: 1, step: 1 })),
+    optionField('lmstudio.options.ttl', numberInput(model, 'ttlSeconds', { min: 1, step: 1, placeholderKey: 'lmstudio.options.never' })),
+    optionField('lmstudio.options.identifier', idInput),
+    threadsHint,
+  );
+  return wrap;
 }
 
 function buildModelRow(model) {
@@ -54,17 +166,24 @@ function buildModelRow(model) {
   const head = document.createElement('span');
   head.className = 'diag-item__head';
 
-  // No live "currently loaded" signal in this version (that would need
-  // `lms ps --json` wired up too) - the dot stays a neutral placeholder so
-  // the row still matches diagnostics.js's visual language.
   const dot = document.createElement('span');
-  dot.className = 'diag-item__dot diag-item__dot--unknown';
+  dot.className = `diag-item__dot ${model.loaded ? 'diag-item__dot--ok' : 'diag-item__dot--unknown'}`;
+  if (model.loaded) dot.title = t('lmstudio.loaded');
 
   const label = document.createElement('span');
   label.className = 'diag-item__label';
   label.textContent = model.displayName;
 
   head.append(dot, label);
+
+  const isOpen = optionsOpenKey === model.key;
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'diag-item__action diag-item__action--ghost';
+  toggleBtn.dataset.optionsToggle = model.key;
+  toggleBtn.setAttribute('aria-expanded', String(isOpen));
+  toggleBtn.textContent = isOpen ? t('lmstudio.options.hide') : t('lmstudio.options.show');
+  head.appendChild(toggleBtn);
 
   const isThisLoading = loadingModelKey === model.key;
   const btn = document.createElement('button');
@@ -77,18 +196,19 @@ function buildModelRow(model) {
 
   const detail = document.createElement('span');
   detail.className = 'diag-item__detail';
-  let detailText = describeModel(model);
+  const parts = [describeModel(model)];
+  if (model.loaded) parts.push(t('lmstudio.loaded'));
   if (!isThisLoading && lastLoadResult && lastLoadResult.modelKey === model.key) {
-    const suffix = lastLoadResult.ok ? t('lmstudio.load.done') : loadFailedLabel(lastLoadResult.reason);
-    detailText = detailText ? `${detailText} — ${suffix}` : suffix;
+    parts.push(lastLoadResult.ok ? t('lmstudio.load.done') : loadFailedLabel(lastLoadResult));
   }
-  detail.textContent = detailText;
+  detail.textContent = parts.filter(Boolean).join(' — ');
 
   li.append(head, detail);
+  if (isOpen) li.appendChild(buildOptionsPanel(model));
   return li;
 }
 
-/** Repaints the CLI-detection status line. */
+/** Repaints the status line: running / can be woken / unavailable. */
 function renderStatus() {
   if (!els) return;
   if (!status) {
@@ -96,10 +216,10 @@ function renderStatus() {
     return;
   }
   if (status.ok) {
-    els.status.textContent = t('lmstudio.status.ready', { version: status.version || '' });
+    els.status.textContent = status.running ? t('lmstudio.status.running') : t('lmstudio.status.canWake');
     return;
   }
-  els.status.textContent = status.reason === 'not-found' ? t('lmstudio.status.notFound') : t('lmstudio.status.error');
+  els.status.textContent = t('lmstudio.status.notRunning');
 }
 
 /** Repaints the model list (or the matching empty/loading/error state). */
@@ -109,7 +229,7 @@ function renderModels() {
 
   if (!status || !status.ok) {
     els.empty.style.display = '';
-    els.empty.textContent = t('lmstudio.status.checking');
+    els.empty.textContent = status ? t('lmstudio.status.notRunning') : t('lmstudio.status.checking');
     return;
   }
   if (loadingList) {
@@ -134,7 +254,26 @@ function render() {
   renderModels();
 }
 
-/** First load and the refresh button's action: re-checks `lms` and re-lists. */
+let fetchSeq = 0; // only the newest list request may write `models`
+
+/** Re-fetches the model list (with loaded marks) and the running flag. */
+async function fetchModels() {
+  const seq = ++fetchSeq;
+  let result;
+  try {
+    result = await window.lunacore.listDownloadedLmStudioModels();
+  } catch {
+    result = null;
+  }
+  if (seq !== fetchSeq) return;
+  const ok = Boolean(result && result.ok);
+  models = ok && Array.isArray(result.models) ? result.models : [];
+  // Listing wakes LM Studio when needed, so the list outcome is the freshest
+  // answer to "is it running" - in both directions.
+  if (status && status.ok) status = { ...status, running: ok };
+}
+
+/** First load and the refresh button's action: re-checks LM Studio and re-lists. */
 async function refreshStatusAndList() {
   loadingList = true;
   render();
@@ -145,16 +284,8 @@ async function refreshStatusAndList() {
     status = { ok: false, reason: 'error' };
   }
 
-  if (status && status.ok) {
-    try {
-      const result = await window.lunacore.listDownloadedLmStudioModels();
-      models = result && result.ok && Array.isArray(result.models) ? result.models : [];
-    } catch {
-      models = [];
-    }
-  } else {
-    models = [];
-  }
+  if (status && status.ok) await fetchModels();
+  else models = [];
 
   loadingList = false;
   render();
@@ -167,16 +298,20 @@ async function loadSelectedModel(modelKey) {
   lastLoadResult = null;
   renderModels();
 
+  const replaceLoaded = !els || !els.replaceLoaded || els.replaceLoaded.checked;
+  const payload = buildLoadPayload(modelKey, optionsFor(modelKey), { replaceLoaded });
   let result;
   try {
-    result = await window.lunacore.loadLmStudioModel({ modelKey });
+    result = await window.lunacore.loadLmStudioModel(payload);
   } catch {
     result = { ok: false, reason: 'error' };
   }
 
   loadingModelKey = null;
-  lastLoadResult = { modelKey, ok: !!(result && result.ok), reason: result && result.reason };
-  renderModels();
+  lastLoadResult = { modelKey, ok: !!(result && result.ok), reason: result && result.reason, field: result && result.field };
+  // Refresh the loaded marks: a load may also have unloaded other models.
+  await fetchModels();
+  render();
 }
 
 /**
@@ -191,6 +326,7 @@ export function mountLmStudioSettings(root) {
     refresh: root.querySelector('#lmstudio-refresh-btn'),
     list: root.querySelector('#lmstudio-models-list'),
     empty: root.querySelector('#lmstudio-models-empty'),
+    replaceLoaded: root.querySelector('#lmstudio-replace-loaded'),
   };
   if (!els.status) {
     els = null;
@@ -204,12 +340,40 @@ export function mountLmStudioSettings(root) {
   });
 
   // Delegated, same as diagnostics.js's #diag-list: one listener survives
-  // every row repaint instead of rebinding per-button.
+  // every row repaint instead of rebinding per-button. The options toggle
+  // is checked FIRST - it also matches `.diag-item__action` (same visual
+  // family) but must never trigger a load.
   els.list.addEventListener('click', (e) => {
+    const toggle = e.target.closest('[data-options-toggle]');
+    if (toggle) {
+      const key = toggle.dataset.optionsToggle;
+      optionsOpenKey = optionsOpenKey === key ? null : key;
+      renderModels();
+      return;
+    }
     const btn = e.target.closest('.diag-item__action');
-    if (!btn || btn.disabled) return;
+    if (!btn || btn.disabled || !btn.dataset.modelKey) return;
     loadSelectedModel(btn.dataset.modelKey);
   });
+
+  // Options-panel fields write straight into the modelOptions map, keyed by
+  // model - no re-render on every keystroke (that would rebuild the row out
+  // from under the input the user is still typing in and drop focus). The
+  // gpu <select> is the one exception: it must re-enable/disable the ratio
+  // field next to it, which is done directly rather than via a full repaint.
+  const handleOptionEdit = (e) => {
+    const field = e.target.dataset && e.target.dataset.optField;
+    if (!field) return;
+    const opts = optionsFor(e.target.dataset.modelKey);
+    opts[field] = e.target.value;
+    if (field === 'gpu') {
+      const panel = e.target.closest('.diag-item__options');
+      const ratioInput = panel && panel.querySelector('[data-opt-field="gpuRatio"]');
+      if (ratioInput) ratioInput.disabled = opts.gpu !== 'custom';
+    }
+  };
+  els.list.addEventListener('input', handleOptionEdit);
+  els.list.addEventListener('change', handleOptionEdit);
 
   const offLang = onLangChange(render);
 

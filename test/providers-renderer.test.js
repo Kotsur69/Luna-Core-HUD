@@ -419,3 +419,55 @@ test('every providers.* i18n key is present in both languages, independent of cu
     assert.ok(en.includes(`'${key}':`), `missing en translation: ${key}`);
   }
 });
+
+// ---- localLaunch toggles ---------------------------------------------------------------
+
+const { localLaunchState } = require('../src/renderer/modules/providerform.js');
+
+test('localLaunchState is null for templates without local launch settings', () => {
+  assert.equal(localLaunchState(template('glm'), null), null);
+  assert.equal(localLaunchState(null, null), null);
+});
+
+test('localLaunchState starts from the template defaults and applies the profile override', () => {
+  assert.deepEqual(localLaunchState(template('lm-studio'), null), { shim: true, leanMcp: true, leanTools: true });
+  assert.deepEqual(
+    localLaunchState(template('lm-studio'), { localLaunch: { leanTools: false } }),
+    { shim: true, leanMcp: true, leanTools: false },
+  );
+});
+
+test('buildAddPayload and buildEditPayload carry boolean localLaunch toggles for local templates only', () => {
+  const toggles = { shim: true, leanMcp: false, leanTools: true };
+  const add = buildAddPayload({ template: template('lm-studio'), label: 'LM', localLaunch: toggles });
+  assert.deepEqual(add.payload.localLaunch, toggles);
+
+  const edit = buildEditPayload({ id: 'lm-studio', template: template('lm-studio'), label: 'LM', localLaunch: { ...toggles, x: 1 } });
+  assert.deepEqual(edit.payload.localLaunch, toggles);
+
+  const cloud = buildAddPayload({ template: template('kimi'), label: 'K', apiKey: 'k', localLaunch: toggles });
+  assert.equal('localLaunch' in cloud.payload, false);
+
+  const none = buildAddPayload({ template: template('lm-studio'), label: 'LM' });
+  assert.equal('localLaunch' in none.payload, false);
+});
+
+test('every localLaunch toggle string has a pl and en translation', () => {
+  const i18n = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'i18n.js'), 'utf8');
+  const enAt = i18n.indexOf('\n  en: {');
+  const pl = i18n.slice(0, enAt);
+  const en = i18n.slice(enAt);
+  for (const key of [
+    'providers.localLaunch.title',
+    'providers.localLaunch.shim',
+    'providers.localLaunch.shimHint',
+    'providers.localLaunch.leanMcp',
+    'providers.localLaunch.leanMcpHint',
+    'providers.localLaunch.leanTools',
+    'providers.localLaunch.leanToolsHint',
+    'providers.localLaunch.harnessNote',
+  ]) {
+    assert.ok(pl.includes(`'${key}':`), `missing pl translation: ${key}`);
+    assert.ok(en.includes(`'${key}':`), `missing en translation: ${key}`);
+  }
+});

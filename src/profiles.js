@@ -16,6 +16,7 @@ const fs = require('fs');
 const paths = require('./paths');
 const { hasText, normalizeText } = require('./localized');
 const { slugify, uniqueId } = require('./projects');
+const { normalizeLocalLaunch } = require('./locallaunch');
 
 // Shipped profiles come from the bundled root; the user's override - which is
 // where API keys live, hence gitignored - lives in the WRITABLE root and is
@@ -77,6 +78,9 @@ function normalizeProfile(p) {
     env,
     autoModel: p.autoModel === true,
     templateId: typeof p.templateId === 'string' && p.templateId ? p.templateId : null,
+    // Per-profile override of the template's local launch settings
+    // (src/locallaunch.js resolveLocalLaunch); null = inherit the template.
+    localLaunch: normalizeLocalLaunch(p.localLaunch),
   };
 }
 

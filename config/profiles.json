@@ -14,6 +14,7 @@
       "command": "claude",
       "args": [],
       "autoModel": true,
+      "templateId": "lm-studio",
       "env": {
         "ANTHROPIC_BASE_URL": "http://localhost:1234",
         "ANTHROPIC_AUTH_TOKEN": "lmstudio"

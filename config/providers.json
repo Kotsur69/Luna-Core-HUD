@@ -18,7 +18,8 @@
         "ANTHROPIC_BASE_URL": "http://localhost:1234",
         "ANTHROPIC_AUTH_TOKEN": "lmstudio"
       },
-      "docsUrl": "https://lmstudio.ai/docs/api/endpoints/anthropic"
+      "localLaunch": { "shim": true, "leanMcp": true, "leanTools": true },
+      "docsUrl": "https://lmstudio.ai/docs/developer/anthropic-compat/messages"
     },
     {
       "id": "glm",

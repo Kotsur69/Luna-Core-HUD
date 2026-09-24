@@ -27,6 +27,7 @@
 const fs = require('fs');
 const paths = require('./paths');
 const { hasText, normalizeText } = require('./localized');
+const { normalizeLocalLaunch } = require('./locallaunch');
 
 const BASE_FILE = paths.bundled('providers.json');
 
@@ -76,6 +77,9 @@ function normalizeProviderTemplate(p) {
     ccrProviderType: typeof p.ccrProviderType === 'string' ? p.ccrProviderType : '',
     docsUrl: typeof p.docsUrl === 'string' ? p.docsUrl : '',
     envTemplate,
+    // Default launch settings for local-model tabs (src/locallaunch.js); null
+    // for every provider that is not a local endpoint.
+    localLaunch: normalizeLocalLaunch(p.localLaunch),
   };
 }
 
@@ -168,6 +172,10 @@ function buildProfileFromTemplate(template, entry) {
     }
   }
 
+  // Lean-launch toggles only mean something for a template that ships local
+  // launch defaults; for any other template an override is dropped.
+  const localLaunch = template.localLaunch ? normalizeLocalLaunch(e.localLaunch) : null;
+
   return {
     ok: true,
     profile: {
@@ -178,6 +186,7 @@ function buildProfileFromTemplate(template, entry) {
       env,
       autoModel: template.autoModel,
       templateId: template.id,
+      ...(localLaunch ? { localLaunch } : {}),
     },
   };
 }

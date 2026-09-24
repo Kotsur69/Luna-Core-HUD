@@ -22,7 +22,7 @@
 
 import { t, loc } from './util.js';
 import { onLangChange } from './bus.js';
-import { generatedProfiles, templateFields, buildAddPayload, buildEditPayload, failureKey } from './providerform.js';
+import { generatedProfiles, templateFields, localLaunchState, buildAddPayload, buildEditPayload, failureKey } from './providerform.js';
 import { refreshProfileList } from './switchers.js';
 
 let templates = []; // getProviders() catalog
@@ -88,6 +88,68 @@ function buildFieldRow({ show, labelKey, inputType, value, placeholder }) {
   label.appendChild(input);
 
   return { wrapper: label, input };
+}
+
+/** One switch toggle (same markup as the static Settings switches in index.html). */
+function buildSwitchRow({ labelKey, hintKey, checked }) {
+  const label = document.createElement('label');
+  label.className = 'switch-field';
+  label.title = t(hintKey);
+
+  const text = document.createElement('span');
+  text.className = 'switch-field__text';
+  const name = document.createElement('span');
+  name.className = 'switch-field__label';
+  name.textContent = t(labelKey);
+  const hint = document.createElement('span');
+  hint.className = 'switch-field__status';
+  hint.textContent = t(hintKey);
+  text.append(name, hint);
+
+  const sw = document.createElement('span');
+  sw.className = 'switch';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.className = 'switch__input';
+  input.checked = checked;
+  const track = document.createElement('span');
+  track.className = 'switch__track';
+  const thumb = document.createElement('span');
+  thumb.className = 'switch__thumb';
+  track.appendChild(thumb);
+  sw.append(input, track);
+
+  label.append(text, sw);
+  return { wrapper: label, input };
+}
+
+/**
+ * The lean-launch toggles for a local template (LM Studio), or null for any
+ * other. `read()` returns the current {shim, leanMcp, leanTools} booleans.
+ */
+function buildLocalLaunchBlock(state) {
+  if (!state) return null;
+  const box = document.createElement('div');
+
+  const heading = document.createElement('span');
+  heading.className = 'ui-field__label';
+  heading.textContent = t('providers.localLaunch.title');
+  box.appendChild(heading);
+
+  const rows = {
+    shim: buildSwitchRow({ labelKey: 'providers.localLaunch.shim', hintKey: 'providers.localLaunch.shimHint', checked: state.shim }),
+    leanMcp: buildSwitchRow({ labelKey: 'providers.localLaunch.leanMcp', hintKey: 'providers.localLaunch.leanMcpHint', checked: state.leanMcp }),
+    leanTools: buildSwitchRow({ labelKey: 'providers.localLaunch.leanTools', hintKey: 'providers.localLaunch.leanToolsHint', checked: state.leanTools }),
+  };
+  for (const row of Object.values(rows)) box.appendChild(row.wrapper);
+
+  const note = document.createElement('p');
+  note.className = 'hint';
+  note.textContent = t('providers.localLaunch.harnessNote');
+  box.appendChild(note);
+
+  const read = () => Object.fromEntries(Object.entries(rows).map(([k, row]) => [k, row.input.checked]));
+  return { wrapper: box, read };
 }
 
 /** The docs button for one template - hidden whenever it ships no docsUrl. */
@@ -171,6 +233,9 @@ function buildFormRow({ template, prefill, titleKey, titleParams, submitKey, onS
   });
   li.appendChild(fastModelRow.wrapper);
 
+  const localLaunch = buildLocalLaunchBlock(localLaunchState(template, prefill));
+  if (localLaunch) li.appendChild(localLaunch.wrapper);
+
   const status = document.createElement('p');
   status.className = 'hint';
   status.setAttribute('role', 'status');
@@ -206,6 +271,7 @@ function buildFormRow({ template, prefill, titleKey, titleParams, submitKey, onS
         baseUrl: baseUrlRow.input.value,
         model: modelRow.input.value,
         fastModel: fastModelRow.input.value,
+        localLaunch: localLaunch ? localLaunch.read() : undefined,
         showFail: (key) => {
           status.hidden = false;
           status.classList.add('is-fail');
@@ -371,6 +437,7 @@ function buildEditRow(profile) {
       fastModel: profile.fastModel,
       hasApiKey: profile.hasApiKey,
       hasBaseUrl: profile.hasBaseUrl,
+      localLaunch: profile.localLaunch,
     },
     titleKey: 'providers.form.edit.title',
     titleParams: { label: loc(profile.label) },

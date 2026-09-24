@@ -62,6 +62,36 @@ function templateFields(template) {
   };
 }
 
+const LOCAL_LAUNCH_KEYS = ['shim', 'leanMcp', 'leanTools'];
+
+/** Only the known boolean toggles of a localLaunch block (mirrors src/locallaunch.js). */
+function pickToggles(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    LOCAL_LAUNCH_KEYS.filter((k) => typeof value[k] === 'boolean').map((k) => [k, value[k]]),
+  );
+}
+
+/**
+ * The lean-launch toggles the form should show for a local template: the
+ * template's defaults with the profile's own override on top. Null when the
+ * template has no local launch settings (every cloud provider).
+ * @param {{localLaunch?:Object|null}|null} template
+ * @param {{localLaunch?:Object|null}|null} profile
+ * @returns {{shim:boolean, leanMcp:boolean, leanTools:boolean}|null}
+ */
+function localLaunchState(template, profile) {
+  if (!template || typeof template !== 'object' || !template.localLaunch) return null;
+  const merged = { ...pickToggles(template.localLaunch), ...pickToggles(profile && profile.localLaunch) };
+  return Object.fromEntries(LOCAL_LAUNCH_KEYS.map((k) => [k, merged[k] === true]));
+}
+
+/** Adds `localLaunch` to a payload when the template supports it and the form sent toggles. */
+function withLocalLaunch(payload, template, rawToggles) {
+  if (!template.localLaunch || !rawToggles || typeof rawToggles !== 'object') return payload;
+  return { ...payload, localLaunch: pickToggles(rawToggles) };
+}
+
 /** Reads a trimmed string field, or '' for anything else. */
 function trimmedString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -129,7 +159,7 @@ function buildAddPayload(form) {
   if (fastModel) payload.fastModel = fastModel;
   if (ccrPort.port !== undefined) payload.ccrPort = ccrPort.port;
 
-  return { ok: true, payload };
+  return { ok: true, payload: withLocalLaunch(payload, template, f.localLaunch) };
 }
 
 /**
@@ -176,7 +206,7 @@ function buildEditPayload(form) {
   if (fastModel) payload.fastModel = fastModel;
   if (ccrPort.port !== undefined) payload.ccrPort = ccrPort.port;
 
-  return { ok: true, payload };
+  return { ok: true, payload: withLocalLaunch(payload, template, f.localLaunch) };
 }
 
 /** Every typed reason profiles:add/update-from-template can return. */
@@ -196,4 +226,4 @@ function failureKey(reason) {
   return FAILURE_KEYS[reason] || 'providers.error.generic';
 }
 
-export { generatedProfiles, templateFields, buildAddPayload, buildEditPayload, failureKey };
+export { generatedProfiles, templateFields, localLaunchState, buildAddPayload, buildEditPayload, failureKey };

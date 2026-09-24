@@ -2275,6 +2275,36 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 /* Added for the LM Studio model picker's "Load" buttons - the diagnostics
    tile's own action buttons (docs links, copy, focus) never disable. */
 .diag-item__action:disabled { opacity: 0.5; cursor: not-allowed; }
+/* The options-toggle button next to Load - visually quieter, never disabled. */
+.diag-item__action--ghost { margin-left: var(--space-2); }
+
+/* LM Studio model row's 5-field load-options panel (contextLength/gpu/
+   parallel/ttl/identifier - see lmstudiomodels.js's buildOptionsPanel). */
+.diag-item__options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: var(--border-w) dashed var(--edge);
+}
+.diag-item__opt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.diag-item__opt input,
+.diag-item__opt select {
+  background: var(--surface-panel);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  padding: var(--space-1) var(--space-2);
+}
+.diag-item__opt input:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* AI-provider Settings panel: inline validation/success text on a plain
    .hint paragraph (providersettings.js) - mirrors .gitquick__result.is-fail. */

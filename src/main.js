@@ -48,8 +48,13 @@ const {
   NON_SECRET_AUTH_TOKENS,
 } = require('./profiles');
 const { loadProviders, getProviderTemplate, buildProfileFromTemplate, isCcrProfile, DEFAULT_CCR_PORT } = require('./providers');
-const { localEndpointFromProfile } = require('./lmstudio');
-const { detectLmsCli, listDownloadedModels, loadModel: loadLmStudioModel } = require('./lmstudiocli');
+const { localEndpointFromProfile, resolveAutoModel, LocalModelWatcher, probeEndpoint } = require('./lmstudio');
+// LM Studio tabs: role-rewriting loopback shim + pre-spawn env/flag prep.
+const { ensureShim, stopAllShims } = require('./lmstudioshim');
+const { resolveLocalLaunch, prepareLocalLaunch, launchWhenReady, ensureEmptyMcpConfig } = require('./locallaunch');
+const { userDir, ensureUserDir } = require('./paths');
+const { detectLmsCli, wakeLmStudio } = require('./lmstudiocli');
+const { findApiPort, listModels: listLmStudioModels, loadModel: loadLmStudioModel } = require('./lmstudiosdk');
 // CCR (claude-code-router) gateway lifecycle control (Phase 4c): detect the
 // CLI, find/start/stop the local gateway process, and confirm a client key
 // authenticates against it - see src/ccr.js's header for the full trust
@@ -339,7 +344,8 @@ function sessionSummary(s) {
     projectId: s.projectId,
     cwd: s.cwd,
     folder: path.basename(s.cwd) || s.cwd,
-    alive: s.alive,
+    // A local-model tab still in its pre-spawn prep counts as alive.
+    alive: s.alive || s.preparing === true,
   };
 }
 
@@ -767,18 +773,43 @@ async function ensureGatewayFor(session, profile) {
  * directory use this, always the same way.
  * @param {Session} session
  * @param {{id:string,label:string,command:string,args:string[],env:Object}} profile
+ * @param {{envOverrides:Object, extraArgs:string[]}|null} [launch] pre-spawn
+ *   prep for a local-model tab (src/locallaunch.js); null for every other tab
  */
-function spawnInto(session, profile) {
+function spawnInto(session, profile, launch = null) {
+  // Phase 5b: point THIS SESSION's own local-model watcher at the profile's
+  // endpoint (a no-op if already pointed there) and read whatever sample it
+  // already has. One instance PER SESSION, lazily created and kept across
+  // restarts of the same tab (not recreated here, unlike watcher/gitWatcher
+  // below) - a single shared/module-level watcher was tried first and
+  // reviewed out: two tabs on two different local endpoints would
+  // continuously flip its one `endpoint` pointer, wiping each other's cached
+  // reading on every restart (ecc:typescript-reviewer finding, 2026-09-22).
+  // The probe itself is async, so a profile switched to for the very first
+  // time may still spawn with no auto-resolved model yet - the NEXT restart
+  // of THIS session picks it up once its watcher's first tick lands (see
+  // lmstudio.js's LocalModelWatcher/resolveAutoModel).
+  if (!session.localModelWatcher) session.localModelWatcher = new LocalModelWatcher();
+  session.localModelWatcher.setEndpoint(localEndpointFromProfile(profile));
+  // A prepared local launch already resolved the model from a FRESH probe.
+  const autoModel = launch ? null : resolveAutoModel(profile, session.localModelWatcher.current());
+
   // Environment overrides from the profile (e.g. ANTHROPIC_BASE_URL for LM
   // Studio), clearing parent-session markers (transcript!) + guaranteeing
   // `claude` from ~/.local/bin is on the session's PATH.
   // Order matters: color is set on the INHERITED env first, and only then is
   // the profile applied on top - so a profile that deliberately sets TERM or
-  // NO_COLOR still wins.
+  // NO_COLOR still wins. autoModel (if resolved) is applied LAST, since it
+  // must never override a profile that already names its own ANTHROPIC_MODEL
+  // - also enforced inside resolveAutoModel() itself.
   const env = withClaudeOnPath(
     stripClaudeSessionMarkers({
       ...withColorSupport({ ...process.env }),
       ...(profile.env || {}),
+      ...(autoModel ? { ANTHROPIC_MODEL: autoModel } : {}),
+      // Local launch overrides (shim URL, tier models, context) go last; they
+      // already skip every key the profile sets itself.
+      ...(launch ? launch.envOverrides : {}),
     }),
   );
 
@@ -885,7 +916,9 @@ function spawnInto(session, profile) {
   });
 
   // The profile's start command (empty = bare shell, no auto-start).
-  const command = [profile.command, ...(profile.args || [])].join(' ').trim();
+  const command = [profile.command, ...(profile.args || []), ...(launch && profile.command ? launch.extraArgs : [])]
+    .join(' ')
+    .trim();
   // When WE launch `claude`, we dictate the session id - the transcript is then
   // named exactly <uuid>.jsonl and the watcher looks it up instead of inferring
   // ownership from file timestamps. Null = this session cannot be pinned (bare
@@ -965,6 +998,49 @@ function spawnInto(session, profile) {
 }
 
 /**
+ * Spawns a session's process. A local-model tab (LM Studio) first runs its
+ * pre-spawn prep - shim, fresh model/context probe, lean flags - bounded by
+ * PREP_TIMEOUT_MS; every other tab spawns synchronously, exactly as before.
+ * @param {Session} session
+ * @param {Object} profile
+ */
+function launchSession(session, profile) {
+  const localLaunch = resolveLocalLaunch(profile, loadProviders().providers);
+  if (!localLaunch) {
+    // Still a new launch: invalidates a local prep that may be in flight.
+    session.spawnSeq = (session.spawnSeq || 0) + 1;
+    session.preparing = false;
+    spawnInto(session, profile);
+    return;
+  }
+  // Reported as alive while prep runs (sessionSummary), so the tab does not
+  // flash "ended" before its process even exists.
+  session.preparing = true;
+  launchWhenReady(session, profile, {
+    prepare: () =>
+      prepareLocalLaunch(profile, localLaunch, {
+        probe: probeEndpoint,
+        ensureShim,
+        ensureMcpFile: () => (ensureUserDir() ? ensureEmptyMcpConfig(userDir()) : null),
+      }),
+    spawn: (s, p, launch) => {
+      s.preparing = false;
+      spawnInto(s, p, launch);
+      broadcastSessions();
+    },
+    isLive: () => sessions.get(session.id) === session,
+  }).catch(() => {
+    // prepare() never rejects, so this is spawnInto throwing (pty.spawn can,
+    // e.g. a ConPTY failure). Show the tab as ended instead of leaving it
+    // looking alive with no process behind it.
+    session.preparing = false;
+    session.alive = false;
+    send('pty:exit', { sessionId: session.id, code: -1 });
+    broadcastSessions();
+  });
+}
+
+/**
  * Creates a new tab and makes it active.
  * @param {{profileId?:string, projectId?:string}} [opts]
  * @returns {Session|null}
@@ -984,6 +1060,17 @@ function createSession(opts = {}) {
     size: { ...lastSize },
     watcher: null,
     gitWatcher: null,
+    // Phase 5b: this tab's OWN LocalModelWatcher (src/lmstudio.js), lazily
+    // created by spawnInto. Deliberately NOT reset in teardownSession - it
+    // tracks an external server's state, not this session's process, so a
+    // profile restart on the SAME local endpoint keeps its warm sample.
+    // Stopped only in closeSession, once the tab itself is actually gone.
+    localModelWatcher: null,
+    // Bumped by every launch (src/locallaunch.js launchWhenReady) so a slow,
+    // superseded local-launch prep never spawns a stale process.
+    spawnSeq: 0,
+    // True while that prep runs (no process yet); see launchSession.
+    preparing: false,
     // Session id handed to `claude --session-id`; null when it could not be
     // pinned. Set by spawnInto, which owns the start command.
     transcriptId: null,
@@ -1002,7 +1089,7 @@ function createSession(opts = {}) {
   };
 
   sessions.set(session.id, session);
-  spawnInto(session, profile);
+  launchSession(session, profile);
   activeSessionId = session.id;
   broadcastSessions();
   return session;
@@ -1040,6 +1127,9 @@ function closeSession(sessionId) {
   if (!session) return;
 
   teardownSession(session);
+  // Only stopped HERE, not in teardownSession() - see the session field's own
+  // comment: a restart must not lose this watcher's warm sample.
+  if (session.localModelWatcher) session.localModelWatcher.stop();
   sessions.delete(sessionId);
 
   if (sessions.size === 0) {
@@ -1139,7 +1229,7 @@ function restartSession(session, opts = {}) {
     label: profile.label,
     folder: path.basename(safeCwd(session.cwd)),
   });
-  spawnInto(session, profile);
+  launchSession(session, profile);
   broadcastSessions();
 }
 
@@ -1680,6 +1770,10 @@ function registerIpc() {
         ? Math.round(p.ccrPort)
         : gatewayPortFromEnv(current.env);
 
+    // Same keep-current rule for the lean-launch toggles: an edit that does
+    // not resend them keeps whatever the profile already had.
+    const localLaunch = p.localLaunch && typeof p.localLaunch === 'object' ? p.localLaunch : current.localLaunch;
+
     const built = buildProfileFromTemplate(template, {
       ...p,
       id: current.id,
@@ -1689,6 +1783,7 @@ function registerIpc() {
       model,
       fastModel,
       ccrPort,
+      localLaunch,
     });
     if (!built.ok) return built;
     const result = updateProfile(current.id, built.profile);
@@ -1790,18 +1885,23 @@ function registerIpc() {
     return testClientKey(port, token);
   });
 
-  // LM Studio CLI control (src/lmstudiocli.js) - the in-app replacement for
-  // the "go local claude" desktop script: Settings can now list every
-  // DOWNLOADED model (not just a currently-running server's loaded one) and
-  // force-load one, without leaving LunaCore.
-  ipcMain.handle('lmstudiocli:status', () => detectLmsCli());
-  ipcMain.handle('lmstudiocli:list', () => listDownloadedModels());
+  // LM Studio control for the Settings model picker - the in-app replacement
+  // for the "go local claude" desktop script. Listing and loading go through
+  // the official SDK (src/lmstudiosdk.js); the `lms` CLI is kept only to WAKE
+  // LM Studio when it is not running, which the SDK cannot do. Channel names
+  // stay lmstudiocli:* so preload.js is unchanged.
+  ipcMain.handle('lmstudiocli:status', async () => {
+    const [port, cli] = await Promise.all([findApiPort(), detectLmsCli()]);
+    const canWake = cli.ok === true;
+    if (!port && !canWake) return { ok: false, reason: cli.reason === 'not-found' ? 'not-found' : 'not-running' };
+    return { ok: true, running: Boolean(port), canWake, version: cli.ok ? cli.version : '' };
+  });
+  ipcMain.handle('lmstudiocli:list', () => listLmStudioModels({ wake: wakeLmStudio }));
 
-  // `payload` is renderer-supplied; loadLmStudioModel()'s own buildLoadArgs()
-  // validates every field's type/shape before it becomes CLI argv (an array,
-  // never a shell string - no injection surface even from an untrusted
-  // modelKey), so no separate validation is needed here.
-  ipcMain.handle('lmstudiocli:load', (_event, payload) => loadLmStudioModel(payload));
+  // `payload` is renderer-supplied; buildLoadRequest() in src/lmstudiosdk.js
+  // whitelists every field and range-checks its value before anything
+  // reaches the SDK, so no separate validation is needed here.
+  ipcMain.handle('lmstudiocli:load', (_event, payload) => loadLmStudioModel(payload, { wake: wakeLmStudio }));
 
   // PHASE 4: switching profile -> restart THIS tab with the new environment.
   // Other tabs are left untouched; a profile is a session's trait, not the app's.
@@ -2659,6 +2759,8 @@ app.on('window-all-closed', () => {
     voiceDuck.onVoiceActive(false);
     voiceDuck = null;
   }
+  // LM Studio shims: close their loopback listeners and any open streams.
+  stopAllShims().catch(() => {});
   // Best-effort: never block shutdown on this, and stopGateway() itself
   // refuses to touch a gateway this process did not start (ccrStartedByUs
   // guards that same check here, before the call, purely to skip a redundant

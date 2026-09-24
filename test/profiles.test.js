@@ -34,6 +34,8 @@ test('normalizeProfile passes a valid profile through', () => {
       autoModel: false,
       // Absent in the input -> not generated from a provider template.
       templateId: null,
+      // Absent in the input -> inherits the template's launch settings.
+      localLaunch: null,
     }
   );
 });
@@ -104,7 +106,7 @@ test('normalizeProfile does not carry unknown fields forward', () => {
   const p = normalizeProfile({ id: 'x', label: 'X', whatever: 'junk' });
   assert.deepEqual(
     Object.keys(p).sort(),
-    ['args', 'autoModel', 'command', 'env', 'id', 'label', 'templateId']
+    ['args', 'autoModel', 'command', 'env', 'id', 'label', 'localLaunch', 'templateId']
   );
 });
 
@@ -139,6 +141,7 @@ test('redactProfile strips env but keeps every other field, plus derived non-sec
     args: ['--continue'],
     autoModel: false,
     templateId: 'openai-compatible',
+    localLaunch: null,
     model: '',
     fastModel: '',
     hasApiKey: true,
@@ -207,6 +210,7 @@ test('redactProfile handles a hand-written profile with no env at all', () => {
     args: [],
     autoModel: false,
     templateId: null,
+    localLaunch: null,
     model: '',
     fastModel: '',
     hasApiKey: false,
