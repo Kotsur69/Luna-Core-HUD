@@ -70,12 +70,21 @@ function windowFromTable(id) {
 
 /**
  * Returns the context window for a model.
- * @param {string} model model id from the transcript (may be empty or unknown)
+ * @param {string} [model] model id from the transcript (may be empty or unknown)
  * @param {number} [observedTokens] actually observed usage - the corrective
  *   signal for when the model id does not tell the truth about the window
+ * @param {number} [contextLimit] optional known context limit override.
+ *   When a positive integer is given, returns exactly that limit with no
+ *   default and no tier promotion. Used for local LM Studio models whose
+ *   real window is whatever LM Studio loaded them with.
  * @returns {number}
  */
-function contextLimitFor(model, observedTokens = 0) {
+function contextLimitFor(model, observedTokens = 0, contextLimit) {
+  // Override: use the provided limit directly (e.g., LM Studio's loadedContext).
+  if (typeof contextLimit === 'number' && contextLimit > 0) {
+    return contextLimit;
+  }
+
   const id = String(model || '').toLowerCase();
   // Signal order: explicit 1m marker > table of known models > default 200k.
   let limit = hasOneMillionMarker(id) ? 1000000 : windowFromTable(id) || DEFAULT_CONTEXT_LIMIT;

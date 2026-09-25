@@ -828,15 +828,19 @@ function estimateSessionCost(byModel) {
  * Turns a usage object into context-window metrics.
  * @param {object} usage the `usage` field from the transcript
  * @param {string} [model] model id from the same line - determines the real window
+ * @param {number} [contextLimit] optional known context limit override for local models
  */
-function usageToMetrics(usage, model = '') {
+function usageToMetrics(usage, model = '', contextLimit) {
   const tokens =
     (usage.input_tokens || 0) +
     (usage.cache_read_input_tokens || 0) +
     (usage.cache_creation_input_tokens || 0);
   // Window computed from the model AND from observation - see the comment in models.js.
-  const limit = contextLimitFor(model, tokens);
-  const percent = Math.min(1, tokens / limit);
+  // If contextLimit is a positive integer, it overrides all window inference
+  // (used for local LM Studio models whose real window is loadedContext).
+  const limit = contextLimitFor(model, tokens, contextLimit);
+  // Clamp percent to 0..1 range
+  const percent = Math.min(1, Math.max(0, tokens / limit));
   return { tokens, limit, percent, model: String(model || ''), modelLabel: modelLabel(model) };
 }
 
@@ -857,7 +861,7 @@ function usageToMetrics(usage, model = '') {
 class TranscriptWatcher {
   /**
    * @param {(metrics: {tokens:number,limit:number,percent:number}) => void} onMetrics
-   * @param {{cwd?: string, intervalMs?: number}} [options]
+   * @param {{cwd?: string, intervalMs?: number, contextLimit?: number}} [options]
    */
   constructor(onMetrics, options = {}) {
     // Backward compatibility: the second argument used to be a bare interval in ms.
@@ -902,6 +906,9 @@ class TranscriptWatcher {
     // Session id we asked the CLI for via `--session-id`. The transcript is
     // named after it, so this turns file selection from a guess into a lookup.
     this.sessionUuid = opts.sessionUuid || null;
+    // Optional: known context limit override (e.g., LM Studio's loadedContext).
+    // Stored as a number or updated via setContextLimit().
+    this.contextLimit = typeof opts.contextLimit === 'number' ? opts.contextLimit : null;
     this.timer = null;
     this.currentFile = null;
     this.lastMtime = 0;
@@ -1110,6 +1117,14 @@ class TranscriptWatcher {
     this.pinned = null;
   }
 
+  /**
+   * Updates the context limit override for local LM Studio models.
+   * @param {number} limit
+   */
+  setContextLimit(limit) {
+    this.contextLimit = typeof limit === 'number' && limit > 0 ? limit : null;
+  }
+
   tick() {
     const file = this.pickFile();
     if (!file) return;
@@ -1128,7 +1143,7 @@ class TranscriptWatcher {
     const sample = readLatestSample(file);
     if (!sample) return;
 
-    const metrics = usageToMetrics(sample.usage, sample.model);
+    const metrics = usageToMetrics(sample.usage, sample.model, this.contextLimit);
     // B6: which file these numbers came from. The renderer offers it as a
     // copy button - the pinning rules make "which transcript is this tab on"
     // a real question, and the answer is worth one click instead of a hunt.

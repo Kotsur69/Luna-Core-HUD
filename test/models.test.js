@@ -69,6 +69,20 @@ test('contextLimitFor stops at the largest known tier', () => {
   assert.equal(contextLimitFor('anything', 5000000), 1000000);
 });
 
+test('contextLimitFor uses an explicit override for local models', () => {
+  // LM Studio's loadedContext takes precedence over all inference logic
+  assert.equal(contextLimitFor('qwen/qwen3-coder-next', 0, 131072), 131072);
+  assert.equal(contextLimitFor('anything', 999999, 131072), 131072);
+  assert.equal(contextLimitFor('claude-opus-5', 600000, 131072), 131072);
+});
+
+test('contextLimitFor ignores non-positive overrides and falls back to inference', () => {
+  // Zero or negative values are treated as "no override"
+  assert.equal(contextLimitFor('', 0, 0), DEFAULT_CONTEXT_LIMIT);
+  assert.equal(contextLimitFor('', 0, -1), DEFAULT_CONTEXT_LIMIT);
+  assert.equal(contextLimitFor('', 500000, 0), 1000000); // promotion still works
+});
+
 // ---- modelLabel -------------------------------------------------------------
 
 test('modelLabel shortens a model id to family and version', () => {

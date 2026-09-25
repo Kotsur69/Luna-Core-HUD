@@ -77,6 +77,27 @@ test('usageToMetrics without a model keeps the default 200k window', () => {
   assert.equal(m.modelLabel, '');
 });
 
+test('usageToMetrics uses an explicit contextLimit override for local models', () => {
+  // Override takes precedence over all inference
+  const m = usageToMetrics({ input_tokens: 1000 }, 'qwen/qwen3-coder-next', 131072);
+  assert.equal(m.tokens, 1000);
+  assert.equal(m.limit, 131072);
+  const expectedPercent = 1000 / 131072;
+  assert.ok(Math.abs(m.percent - expectedPercent) < 0.0001, `percent ${m.percent} should be ~${expectedPercent}`);
+
+  // Even for Claude models, override wins
+  const m2 = usageToMetrics({ input_tokens: 600000 }, 'claude-sonnet-5', 131072);
+  assert.equal(m2.limit, 131072); // not promoted to 1M
+});
+
+test('usageToMetrics clamps percent to 0..1 even with override', () => {
+  const m = usageToMetrics({ input_tokens: 500000 }, '', 131072);
+  assert.equal(m.percent, 1); // clamped at 1
+
+  const m2 = usageToMetrics({ input_tokens: -100 }, 'qwen', 131072);
+  assert.equal(m2.percent, 0); // clamped at 0 (tokens can't be negative)
+});
+
 // ---- encodeProjectDir -------------------------------------------------------
 // This is the crux of multi-session support: a wrong directory name = someone else's session metrics.
 

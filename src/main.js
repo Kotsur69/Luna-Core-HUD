@@ -759,6 +759,27 @@ function spawnInto(session, profile, launch = null) {
   // A prepared local launch already resolved the model from a FRESH probe.
   const autoModel = launch ? null : resolveAutoModel(profile, session.localModelWatcher.current());
 
+  // If this is a local-model tab with a context limit from prep (e.g. LM
+  // Studio's loadedContext), extract it and wire it into the watcher so the
+  // context bar uses the real window instead of falling back to 200k.
+  let contextLimit = null;
+  if (launch && launch.envOverrides && typeof launch.envOverrides.CLAUDE_CODE_MAX_CONTEXT_TOKENS === 'string') {
+    const parsed = Number(launch.envOverrides.CLAUDE_CODE_MAX_CONTEXT_TOKENS);
+    if (Number.isInteger(parsed) && parsed > 0) contextLimit = parsed;
+  }
+
+  // Wire LocalModelWatcher's onUpdate callback to update watcher's contextLimit
+  // when the model is loaded (or updated). This handles both:
+  //   - initial load at spawn time (contextLimit from launch)
+  //   - later load after spawn (when model wasn't loaded yet at launch)
+  session.localModelWatcher.onUpdate = (state) => {
+    if (!state || !state.loaded || !state.loaded.loadedContext) return;
+    const limit = state.loaded.loadedContext;
+    if (Number.isInteger(limit) && limit > 0 && session.watcher) {
+      session.watcher.setContextLimit(limit);
+    }
+  };
+
   // Environment overrides from the profile (e.g. ANTHROPIC_BASE_URL for LM
   // Studio), clearing parent-session markers (transcript!) + guaranteeing
   // `claude` from ~/.local/bin is on the session's PATH.
@@ -901,6 +922,7 @@ function spawnInto(session, profile, launch = null) {
     {
       cwd,
       sessionUuid: session.transcriptId,
+      contextLimit,
       // Skill Tracker fed from the transcript's structured tool_use entries.
       // Same IPC channel as the stdout scan - the payload differs: `events`
       // carries a start/end lifecycle (B8), `tiles` is the old flat blink the
