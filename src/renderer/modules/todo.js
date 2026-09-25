@@ -332,6 +332,8 @@ function paintDrag() {
 
 function onPointerMove(event) {
   if (!drag || event.pointerId !== drag.pointerId) return;
+  // Update lastY before scheduling the frame so paintDrag() has current data
+  drag.lastY = event.clientY;
   // pointermove fires far more often than the compositor paints; every extra
   // pass recomputes transforms nobody ever sees.
   if (drag.frame) return;
