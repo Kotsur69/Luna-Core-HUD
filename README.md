@@ -7,45 +7,37 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> Status: **Phases 1–4 + full backlog + the v0.10 fluidity pass implemented** —
-> interactive terminal, multi-session tabs (browser-style **Ctrl+T / Ctrl+W**,
-> **Alt+← / Alt+→** to walk the tab bar, **Alt+1..9** to open or focus a tab in
-> the Nth project),
-> Action Injector, live
-> Passive Observer, runtime profile switching, localhost ports tracker, action
-> cheat-sheets, skill cheat-sheet, a multi-line **prompt library**, a
-> **working/waiting LED**, a local **scratchpad**, a **command palette (Ctrl+K)**,
-> a **token burn-rate sparkline**, a **28-theme** system with four
-> **look-&-feel axes** (density · font pack · glow · motion) and a **PL/EN
-> language switch**, a live **usage-limits gauge** (5-hour + weekly subscription windows),
-> an **armed auto-compact** toggle (trigger on the 85% context threshold, every
-> N turns, or N minutes since the last compact — picked in Settings, and the
-> arm itself remembered across restarts), a
-> **CWD/project switcher** (native "add repo
-> folder" picker), a **cyberpunk boot sequence**, a **Skill Tracker that shows how
-> long each tool actually ran**, an **Active-Files Edit Heatmap** (real diff-stat
-> counts, live-edit pulse, deleted-file flag, **per-file context weight**), an
-> **MCP server health panel**, a **Git station** (per-repo branch / ahead-behind /
-> dirty), a **Session Timeline scrubber + Media Deck**, **clipboard** and
-> **devices** widgets, **GPU usage** next to CPU/RAM, **foldable / resizable /
-> drag-to-rearrange panels** across **nine layout presets plus a save-your-own
-> layout builder**, a **Ctrl+G git quick-menu**, an **Auto-proceed**
-> connection-drop recovery toggle (armed state also remembered across
-> restarts), a **God Mode** unattended to-do runner, a
-> **per-project pin-board todo list**, optional **sound & voice feedback** (mpv
-> cues + a Web Audio keystroke engine, degrades silently), and opt-in **OS
-> notifications** (busy→idle, 85% context) that focus the window and jump to the
-> right tab when clicked — plus a taskbar flash on the same busy→idle edge
-> whenever the window is unfocused, and **clickable `file:line` links in the
-> terminal** (click `src/foo.js:123` → opens in `code -g` / `$EDITOR`, with the
-> path validated against that session's own project root, no network), a
-> **Ctrl+B recommended libraries & tools directory** (14 categories, 40+
-> curated dev tools, filterable, opened only through a validated id→URL
-> lookup — never a renderer-supplied address), a one-shot **`/ask`** tool
-> recommender inside that same filter box (the one deliberate, user-triggered
-> exception to the zero-extra-tokens rule — see *Core constraint* below), and
-> a **highlight/clip extractor** panel that batch-trims video files via a
-> system `ffmpeg`.
+> **Current release: v0.13.0 — AI providers.** Any backend can now drive the
+> same `claude` CLI with your full `~/.claude` harness: LM Studio, GLM, Kimi,
+> and — through a local `claude-code-router` — Ollama, Codex, Gemini, Grok or
+> any OpenAI-compatible endpoint. Plus an LM Studio model loader in Settings,
+> an overnight guard for God Mode, a "Don't sleep" switch, and longer To-Do
+> items with scroll-aware drag-and-drop.
+
+**What's in the box:**
+
+- **Terminal** — real `claude` in a PTY, multi-session tabs (**Ctrl+T / Ctrl+W**,
+  **Alt+← / Alt+→**, **Alt+1..9** per project), clickable `file:line` links,
+  a working/waiting LED, a command palette (**Ctrl+K**).
+- **Observe** — context-window bar with a burn-rate sparkline, a usage-limits
+  gauge (5-hour + weekly), a Skill Tracker that shows how long each tool ran,
+  an Active-Files Edit Heatmap with per-file context weight and a diff viewer,
+  MCP server health, a Git station, a Session Timeline, localhost ports, and
+  CPU / RAM / GPU telemetry.
+- **Act** — action cheat-sheets, a skill cheat-sheet, a multi-line prompt
+  library, a scratchpad, a **Ctrl+G** git quick-menu, armed auto-compact,
+  Auto-proceed connection-drop recovery, a per-project To-Do pin-board and
+  **God Mode**, which works through that list unattended.
+- **Providers** — launch profiles built from 10 provider templates in
+  Settings → AI providers, an LM Studio model loader, and `claude-code-router`
+  lifecycle management (see [AI providers](#ai-providers)).
+- **Look** — 28 contrast-tested themes, four look-&-feel axes (density · font
+  pack · glow · motion), nine layout presets plus a layout builder, and
+  foldable / resizable / drag-to-rearrange panels, all in PL or EN.
+- **Extras** — a **Ctrl+B** libraries & tools directory with a one-shot `/ask`
+  recommender (the one deliberate exception to the zero-extra-tokens rule),
+  a highlight/clip extractor, clipboard and devices widgets, optional sound &
+  voice feedback, OS notifications, and a boot sequence.
 
 ---
 
@@ -55,8 +47,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.12.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.12.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.13.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.13.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
@@ -93,6 +85,7 @@ the complete list — all of it verifiable in the linked source.
 | Whatever paths the Active-Files Heatmap is currently tracking | `fs.existsSync` per file, every ~5 s, so a file deleted outside an Edit/Write (e.g. a terminal `rm`) shows as **deleted** instead of silently keeping its last diff stat. The renderer has no `fs` access itself (context isolation) — this is a narrow, read-only IPC round trip, not a directory scan. | [`src/main.js`](src/main.js) (`files:check-exist`) |
 | One file in the Active-Files Heatmap, **only when you click its row** | Clicking a changed or deleted row opens a read-only modal with that file's accumulated `git diff HEAD` — the diff behind the `+`/`-` numbers. One local `git diff` (disk read, zero tokens, no PTY write, no watcher), path-checked to stay inside the session's own repo. | [`src/main.js`](src/main.js) (`files:diff`) |
 | *(no file)* — the **system clipboard** — **OFF by default, opt-in** | The Clipboard widget's history. This is the only thing in this table LunaCore does **not** read unless you switch it on, and the reason is that it is the only one that would see things you never showed it — anything you copy anywhere on the machine, password managers included. Unchecked, the watcher is not running at all, not merely hidden. Checked, it polls `clipboard.readText()` every 1.2 s and keeps the last 20 text clips (clips over 4000 characters are skipped entirely). Pref: `clipboardEnabled` in `ui.local.json`. | [`src/clipboard.js`](src/clipboard.js) |
+| `config/keepawake.local.json` — **only if you create it** | The path of your own keep-awake `.bat` for the **Don't sleep** switch. Read in main; the path never crosses IPC — the renderer only sends on/off. Without the file the switch is disabled. | [`src/keepawake.js`](src/keepawake.js) |
 | *(no file)* — the default **microphone's** mute flag via `powershell.exe` | The Devices widget reads whether your mic is muted — on mount, after you press the button, and when you press refresh. **No poller**, and nothing here can hear anything: it is the same Core Audio endpoint property Windows' own mic-mute key sets, not an audio stream. Mute is used precisely because it is reversible and readable; LunaCore never *disables* a device. | [`src/devices.js`](src/devices.js) |
 
 **Writes — only inside one directory:**
@@ -117,8 +110,14 @@ the complete list — all of it verifiable in the linked source.
   base-then-`.local.json`-override merge as every other config file — never
   touches the shipped `config/projects.json`.
   ([`src/projects.js`](src/projects.js))
-- `todo.local.json` — the pin-board todo list
+- `todo.local.json` — the pin-board todo list, one list per project
   ([`src/todo.js`](src/todo.js))
+- `profiles.local.json` — **only when you add or edit a profile in Settings →
+  AI providers**. ⚠️ A provider's API key (GLM, Kimi, a CCR client key) is
+  stored here **in plain text**, like any `.env` file. Renderer-bound copies
+  are redacted — the key never crosses IPC back to the UI — but anyone who can
+  read your config directory can read the key.
+  ([`src/profiles.js`](src/profiles.js))
 - `clipboard.local.json` — **only while the Clipboard widget is switched on**:
   the last 20 text clips, in plain text. Switching the widget off stops the
   watcher; **Clear history** deletes this file.
@@ -135,12 +134,15 @@ process:**
 | Request | When | Why | Off switch |
 |---------|------|-----|------------|
 | `GET https://api.anthropic.com/api/oauth/usage` | every 90 s | Draws the usage gauge (5-hour + weekly limits). | `ENABLE_USAGE_METER = false` in [`src/main.js`](src/main.js) |
+| `GET https://open.bigmodel.cn/…/billing/balance` or `GET https://api.openai.com/v1/dashboard/billing/…` | every 90 s, **instead of** the row above, only when the gauge's profile is GLM or has an `OPENAI_API_KEY` | Provider-aware usage (see [Usage-limits gauge](#usage-limits-gauge)). Each host only ever receives the key it issued. | same switch |
 | `GET https://api.github.com/repos/Kotsur69/Luna-Core-HUD/releases/…` | **once, at launch** | Asks whether a newer LunaCore exists. | `ENABLE_AUTO_UPDATE = false` in [`src/main.js`](src/main.js) |
 
-Set both to `false` and LunaCore's own process makes **no network requests at
-all**.
+Set both to `false` and LunaCore's own process makes **no internet requests at
+all**. What remains is loopback-only and exists only if you use local models:
+the LM Studio model probe and SDK (`127.0.0.1:1234`), the LM Studio shim, and
+the `claude-code-router` gateway health check (`127.0.0.1:3456`).
 
-Neither of these two calls `/v1/messages`, which is why *these two* **cannot
+None of these calls `/v1/messages`, which is why *they* **cannot
 spend your tokens** — see *Core constraint* below. That claim only ever
 covered what this table lists: HTTP calls LunaCore's own main process makes
 directly. It does **not** cover `/ask`. `/ask` does spend tokens, on purpose,
@@ -189,6 +191,16 @@ the same way, once per video file, sequentially, during a batch run
 ([`src/highlights.js`](src/highlights.js)). Neither is a network request
 LunaCore's own process makes — the *spawned* `claude` CLI authenticates and
 calls the API itself, exactly as it does for the terminal above.
+
+Three more, each only if you use the feature: `lms` (LM Studio's CLI, only to
+wake LM Studio when it is not running), `ccr` (`claude-code-router`, started
+when a CCR-routed tab spawns and stopped only if LunaCore started it), and
+your own keep-awake `.bat` while **Don't sleep** is on (its whole process tree
+is killed when you switch it off or quit). `lms` runs with an argument array
+and no shell. `ccr` needs a shell on Windows (it is a `.cmd` shim) and so gets
+only LunaCore's own fixed subcommands, never text from a config file or the
+renderer. The keep-awake path goes through `cmd.exe /c` after validation:
+absolute `.bat`/`.cmd` only, with every character cmd treats as syntax refused.
 
 ---
 
@@ -280,7 +292,7 @@ network-table caveat this creates, and below for what `/ask` actually does.
 | Action Injector (prompt) | `pastePrompt(text, submit)` → IPC `pty:paste` → writes `ESC[200~ text ESC[201~` (bracketed paste), then `\r` only if `submit` |
 | Action Injector (palette) | Ctrl+K overlay aggregates actions/cheat-sheets/prompts/skills → fires the **existing** injector for the chosen row (no new PTY channel) |
 | Passive Observer (sparkline) | second `metrics:context` listener buffers the same `usage` samples → SVG sparkline + tok/min + ETA to 85% |
-| Passive Observer (usage gauge) | `UsageWatcher` reads the CLI's OAuth token from `~/.claude/.credentials.json` → **GET** `api.anthropic.com/api/oauth/usage` → IPC `usage:update` → 5h + weekly bars (read-only, never `/v1/messages`) |
+| Passive Observer (usage gauge) | `UsageWatcher` → `getAdapterForProfile()` picks a provider adapter (Claude / GLM / OpenAI / local) → Claude: CLI's OAuth token from `~/.claude/.credentials.json` → **GET** `api.anthropic.com/api/oauth/usage` → IPC `usage:update` → normalized `limits[]` → 5h + weekly bars (read-only, never `/v1/messages`) |
 | Prefs (theme/language/boot) | `getThemes()`/`getUiPrefs()`/`setUiPrefs()` → IPC `themes:list` / `ui:get` / `ui:set` → reads `config/themes.json`, persists `config/ui.local.json`; renderer writes CSS tokens + xterm palette live |
 | Settings overlay (Ctrl+L) | Ctrl+L / chip overlay (`termcustom.js`) → `getUiPrefs()`/`setUiPrefs()` (same `ui:get`/`ui:set` channel above). Two sections: **terminal appearance** — 10 `term*` keys, global not per-tab → `applyTerminalAppearance()` sets `term.options.*` on every tab (font/cursor/scrollback; needs `allowTransparency: true` at construction or alpha is ignored), composes background opacity into `theme.background`, writes CSS var `--term-blur` for the `backdrop-filter` on `.terminal__pane`, and a custom background image (`termBgImage`, a `data:` URI — CSP's `img-src` allows nothing else — via the new IPC `termcustom:pickBgImage`, which opens a native file dialog and reads the file **in main**, renderer never touches fs); and **sound & startup** — the sound toggle/volume/keystroke-variant/"all done"-minutes/read-output controls and the boot-sequence toggle, moved here from the left `appearance` panel (2026-08-13) to declutter it |
 | Boot sequence | renderer-only overlay: CSS drives every pixel of motion, JS only stamps `animation-delay` on the log rows and removes the node. No IPC, no PTY, no tokens |
@@ -375,7 +387,20 @@ Luna-Core-HUD/
 │   ├── localized.js       # {pl,en} config values: validate/normalize + merge keys (never resolves)
 │   ├── theme.js           # load/validate themes from config/ (FALLBACK cyberpunk)
 │   ├── uiprefs.js         # read/write UI prefs (theme + language + boot + profile + sound) → ui.local.json
-│   ├── usage.js           # UsageWatcher: GET OAuth /usage endpoint → 5h + weekly limits; nextUsageAnnounced() (pure)
+│   ├── usage.js           # UsageWatcher + per-provider adapters (Claude OAuth, GLM, OpenAI, local) → normalized limits
+│   ├── providers.js       # AI-provider templates (config/providers.json) → launch profiles
+│   ├── profileinput.js    # allow-list for profile add/edit payloads coming over IPC
+│   ├── sessionenv.js      # strips inherited CLAUDE_CODE_* session markers, keeps a profile's own
+│   ├── locallaunch.js     # LM Studio tab prep: model-tier mapping, context size, lean flags
+│   ├── lmstudio.js        # LocalModelWatcher: which model a local endpoint has loaded
+│   ├── lmstudiosdk.js     # load/unload models through @lmstudio/sdk
+│   ├── lmstudiocli.js     # `lms` CLI wrapper (wakes LM Studio, lists downloaded models)
+│   ├── lmstudioshim.js    # token-guarded loopback shim in front of LM Studio's Anthropic endpoint
+│   ├── ccr.js             # claude-code-router detect / start / stop / open UI
+│   ├── ccrcontrol.js      # ccr:* IPC handlers + client-key test
+│   ├── overnight.js       # God Mode overnight guard: power-save blocker + LM Studio watchdog
+│   ├── keepawake.js       # "Don't sleep" switch: runs / kills your keep-awake .bat
+│   ├── todo.js            # per-project To-Do list persistence + validation
 │   ├── sounds.js          # load config/sounds.json → resolveSoundFile(key, opts) (pure + config read)
 │   ├── soundManager.js    # persistent `mpv --idle` process + its JSON IPC socket
 │   ├── preload.js         # secure contextBridge → window.lunacore
@@ -426,6 +451,7 @@ Luna-Core-HUD/
 │   ├── projects.json      # working directories (projects.local.json overrides, gitignored)
 │   ├── cheatsheets.json   # action cheat-sheets (cheatsheets.local.json overrides)
 │   ├── prompts.json       # prompt library (prompts.local.json overrides, gitignored)
+│   ├── providers.json     # AI-provider templates (read-only catalog)
 │   ├── libraries.json     # Ctrl+B recommended libraries & tools catalog (libraries.local.json overrides, gitignored)
 │   ├── themes.json        # visual themes (themes.local.json overrides, gitignored)
 │   ├── rates.json         # per-model token prices for the cost HUD (rates.local.json overrides)
@@ -612,6 +638,9 @@ the reasoning behind the contract are in [`FUTURE_PLAN.md`](FUTURE_PLAN.md)
 | + | Ctrl+B recommended libraries & tools directory — filterable catalog, validated id→URL resolution (shipped in `f989b36`/`c72cfef`; this README caught up in v0.12.0) | ✅ done |
 | + | `/ask` — one-shot `claude -p` tool recommendation inside the Ctrl+B filter box (the one deliberate, user-triggered exception to the zero-token constraint) | ✅ done |
 | + | Highlight/clip extractor — batch tail-trim via system `ffmpeg`, reachable from its own chip or an `/ask` "Run it" suggestion | ✅ done |
+| + | AI providers — 10 provider templates, profile CRUD in Settings, LM Studio model loader via the SDK, full harness on local models, `claude-code-router` lifecycle (v0.13.0, see [`AI_PROVIDERS_RESUME.md`](reference/AI_PROVIDERS_RESUME.md)) | ✅ done |
+| + | God Mode overnight guard (sleep blocker + LM Studio watchdog), "Don't sleep" switch, longer To-Do items, scroll-aware To-Do drag-and-drop (v0.13.0) | ✅ done |
+| + | Provider-aware usage gauge (Claude, GLM, OpenAI, local) — adapters shipped; the gauge still follows the **first** profile, not the active tab | 🟡 partial |
 
 That closes the whole approved shortlist and the first slice of the structural
 plan. **A1 is done**: the 1554-line `renderer.js` is a 57-line entry point plus
@@ -625,14 +654,14 @@ source — inside an asar is the case that would actually have broken.
 blocks converted), A3 (test harness), A4 (dead-code cleanup) and A5 (async
 skill scan — `scanSkills()` no longer blocks the main process). See
 [`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8, which opens with a *START HERE* box, for
-current status and what's next. §9 sketches the bigger open question: turning
-LunaCore into a multi-model console (Claude / Kimi / local LM Studio) rather
-than a Claude-only HUD.
+current status and what's next. §9 sketched turning LunaCore into a
+multi-model console rather than a Claude-only HUD; v0.13.0 shipped that as
+[AI providers](#ai-providers).
 
 ### Tests
 
 ```bash
-npm test        # node --test — 1182 tests, ~0.9s, no extra dependencies
+npm test        # node --test — 1508 tests, ~3s, no extra dependencies
 ```
 
 Covers the side-effect-free modules only: context metrics, transcript-dir
@@ -776,7 +805,9 @@ Ship-safe defaults: **Claude Cloud**, **LM Studio (local)**, **bare shell**.
 Drop a `config/profiles.local.json` (gitignored) to add or override profiles
 by `id` without touching the committed file — handy for machine-specific keys.
 Switching a profile kills the current session and starts a fresh one with the
-selected environment; no extra tokens are spent.
+selected environment; no extra tokens are spent. For any provider other than
+Claude, build the profile in **Settings → AI providers** rather than by hand —
+see [AI providers](#ai-providers).
 
 ### What LunaCore does to the spawned environment
 
@@ -810,6 +841,39 @@ Settings → LM Studio loads any downloaded model through the official SDK
 ([`src/lmstudiosdk.js`](src/lmstudiosdk.js)), including MoE expert offload,
 flash attention, K/V cache type and eval batch, and unloads other models
 first. The `lms` CLI is only used to start LM Studio when it is not running.
+
+## AI providers
+
+LunaCore's answer to "can I use a different model?" is **not** a different
+client. Every provider drives the same `claude` CLI, so your CLAUDE.md, rules,
+skills, agents, hooks and MCP servers come along unchanged. Only the endpoint
+and the model behind it change.
+
+**Settings (Ctrl+L) → AI providers** builds a launch profile from a template in
+[`config/providers.json`](config/providers.json). No hand-editing
+`profiles.local.json`:
+
+| Wire | Templates | How it connects |
+|---|---|---|
+| **Direct** | Claude Cloud, LM Studio, GLM, Kimi, Kimi Code | The provider speaks the Anthropic API itself; the profile sets `ANTHROPIC_BASE_URL` and the key. |
+| **Via CCR** | Ollama, Codex, Gemini, Grok, OpenAI-compatible | Routed through a local [`claude-code-router`](https://github.com/musistudio/claude-code-router) gateway that translates the API. |
+
+**About CCR.** LunaCore detects `ccr` on `PATH` (it is never bundled), starts
+the gateway when a CCR-routed tab spawns, and stops it only if LunaCore started
+it — an instance you run by hand is left alone. CCR keeps its own config in its
+own UI, so LunaCore never sees your real OpenAI/Gemini/xAI key: that goes into
+CCR once. The only credential a CCR profile stores is a **CCR client key**,
+which **Test connection** checks against the loopback gateway.
+
+Keys you type into a profile are stored in `profiles.local.json` in plain text
+(see [What LunaCore reads, writes and sends](#what-lunacore-reads-writes-and-sends)).
+They never go back to the renderer, and the IPC payload is allow-listed
+([`src/profileinput.js`](src/profileinput.js)), so the UI cannot redirect a
+stored key to a different endpoint.
+
+A local session's context bar uses the context length LM Studio **actually
+loaded**, not the model's advertised maximum. That is the number that decides
+when the model starts forgetting.
 
 ## Localhost ports tracker
 
@@ -955,6 +1019,42 @@ arbitrary directory.
 A branch with no upstream reports **no upstream branch** rather than "clean":
 ahead/behind are structurally unavailable there, not zero, and that is exactly
 the state that hides divergence.
+
+## To-Do, God Mode & Don't sleep
+
+**To-Do** is a pin-board list, one per project, saved to `todo.local.json`.
+Items can run to 1000 characters: Enter adds an item, Shift+Enter starts a new
+line, and the input grows to about eight lines before it scrolls. Drag an item
+by its handle to reorder it. The list auto-scrolls near its edges, and the
+whole app still scrolls with the wheel while you hold an item.
+
+**God Mode** works through that list unattended. It pastes the next open item,
+waits for Claude's turn to end, ticks the item off and moves on. It waits out a
+usage-limit wall, retries a dropped connection up to three times, and then
+stops and calls you instead of looping on a dead session. The list is live: an
+item you add mid-run joins the run. Arming it always goes through a Yes/No
+confirmation, because nothing else in LunaCore types into your session without
+you ([`src/renderer/modules/godmode.js`](src/renderer/modules/godmode.js)).
+
+While a run is armed, the **overnight guard** ([`src/overnight.js`](src/overnight.js))
+keeps it alive with nobody at the desk. It blocks system sleep and background
+throttling for the run's lifetime only, so a minimized window keeps its
+timers. On an LM Studio tab it also runs a 30 s watchdog. A bad probe is
+confirmed before anything happens; then the guard wakes LM Studio and reloads
+the model the run was using, and God Mode waits for the backend instead of
+spending its connection retries.
+
+**Don't sleep** is a second, independent switch under God Mode. It runs *your
+own* keep-awake script, which keeps the **screen** on too (the overnight guard
+does not). Point `config/keepawake.local.json` at it:
+
+```json
+{ "script": "C:\\Tools\\Keep Awake.bat" }
+```
+
+No file, no switch — it stays disabled. Switching it off, or quitting LunaCore,
+kills the script's whole process tree, so Windows drops its power request
+immediately.
 
 ## Action cheat-sheets
 
@@ -1107,6 +1207,16 @@ poll plus a manual ↻ button keep it current, and a live 30 s tick updates the
 reset countdown between polls. Set `ENABLE_USAGE_METER = false` at the top of
 [`src/main.js`](src/main.js) to disable the network call entirely (tile shows
 "off"). The bars animate via `transform: scaleX(var(--usage))` — no layout thrash.
+
+**Provider-aware, with one caveat.** Since v0.13.0 the gauge picks an adapter
+from the profile's provider template ([`src/usage.js`](src/usage.js)): Claude
+reads the OAuth endpoint above, GLM reads its account balance, a profile with
+an `OPENAI_API_KEY` reads OpenAI's billing endpoints, and local models (LM
+Studio, Ollama) report *not supported* rather than a made-up number. Kimi,
+Gemini, Grok and CCR-routed profiles report *not configured*: their key was
+issued by another host and is never sent to OpenAI. The caveat: the gauge
+currently follows the **first profile** in your list (normally Claude Cloud),
+not the active tab — so in everyday use it still shows your Claude limits.
 
 ## Layout presets & the builder
 
