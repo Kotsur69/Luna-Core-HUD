@@ -17,9 +17,17 @@ test('no error -> normal interval', () => {
 });
 
 test('a read with an error -> faster heartbeat', () => {
-  for (const error of ['reauth', 'unavailable']) {
-    assert.equal(nextPollDelay({ error }, INTERVAL, HEARTBEAT), HEARTBEAT);
+  // Provider-aware readers report failures as status: 'error' (+ errorMessage).
+  for (const errorMessage of ['reauth', 'Network error']) {
+    assert.equal(
+      nextPollDelay({ status: 'error', errorMessage }, INTERVAL, HEARTBEAT),
+      HEARTBEAT
+    );
   }
+});
+
+test('a healthy provider read -> normal interval', () => {
+  assert.equal(nextPollDelay({ status: 'ok' }, INTERVAL, HEARTBEAT), INTERVAL);
 });
 
 test('missing/empty read (e.g. the tick has not run yet) -> normal interval', () => {

@@ -232,14 +232,78 @@ function flushSettle() {
 }
 
 /** Drops every inline transform the gesture painted and un-marks the row. */
-/** Clears all drag-related styles from siblings (the gesture item is handled separately). */
 function clearDragStyles(gesture) {
   gesture.li.classList.remove('todo-item--dragging');
-
-  // Clear transforms on sibling rows that were shifted during the drag
+  gesture.li.style.transform = '';
   gesture.siblings.forEach((s) => {
     s.el.style.transform = '';
   });
+}
+
+// Holding a row near the top or bottom edge of whatever scrolls (the list
+// itself, or the whole left panel once the list outgrows it) scrolls it, so
+// a row can be carried past what is currently on screen. The speed ramps up
+// the deeper the pointer sits in the edge zone, capped per frame.
+const EDGE_ZONE_PX = 40;
+const EDGE_MAX_SPEED_PX = 12;
+
+/**
+ * Auto-scroll speed in px per frame for a pointer at `y` inside a scroller
+ * whose visible box spans `top`..`bottom`. Negative scrolls up, positive
+ * down, 0 outside both edge zones. A pointer dragged PAST an edge counts as
+ * fully inside its zone, so overshooting the panel keeps scrolling at max.
+ */
+export function edgeScrollSpeed(y, top, bottom, zone = EDGE_ZONE_PX, max = EDGE_MAX_SPEED_PX) {
+  // A scroller shorter than two zones would sit in both at once; split it.
+  const reach = Math.min(zone, (bottom - top) / 2);
+  if (reach <= 0) return 0;
+  if (y < top + reach) return -max * Math.min(1, (top + reach - y) / reach);
+  if (y > bottom - reach) return max * Math.min(1, (y - (bottom - reach)) / reach);
+  return 0;
+}
+
+/** Every element that can actually scroll vertically, from the list outward
+ *  to the page. Measured once per drag - content does not change size while
+ *  a row is being carried. */
+function scrollersFrom(el) {
+  const found = [];
+  for (let node = el; node && node !== document.body; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    const scrollable = overflowY === 'auto' || overflowY === 'scroll';
+    if (scrollable && node.scrollHeight > node.clientHeight) found.push(node);
+  }
+  const page = document.scrollingElement;
+  if (page && page.scrollHeight > page.clientHeight) found.push(page);
+  return found;
+}
+
+/** How far the list's rows have moved on screen since the drag started, from
+ *  ANY scroll - the list's own, the panel's, or the page's. The list's box
+ *  tracks every ancestor scroll; its own scrollTop covers the rest. */
+function scrollDrift(gesture) {
+  const top = gesture.listEl.getBoundingClientRect().top;
+  return (top - gesture.startListTop) - (gesture.listEl.scrollTop - gesture.startListScroll);
+}
+
+/** One auto-scroll step: the innermost scroller the pointer is pressing an
+ *  edge of, and that still has room to go that way. Returns true while it is
+ *  still scrolling, so the caller knows to keep the frame loop alive. */
+function autoScrollStep(gesture) {
+  for (const scroller of gesture.scrollers) {
+    const isPage = scroller === document.scrollingElement;
+    const rect = isPage
+      ? { top: 0, bottom: window.innerHeight }
+      : scroller.getBoundingClientRect();
+    const speed = edgeScrollSpeed(gesture.lastY, rect.top, rect.bottom);
+    if (speed === 0) continue;
+    const canMove = speed < 0
+      ? scroller.scrollTop > 0
+      : scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 1;
+    if (!canMove) continue;
+    scroller.scrollTop += speed;
+    return true;
+  }
+  return false;
 }
 
 function startDrag(event, li, index) {
@@ -253,9 +317,10 @@ function startDrag(event, li, index) {
   // previous release first, then measure a list that is standing still.
   flushSettle();
 
-  // Snapshot every OTHER row's midpoint once. Their real rects never move
-  // during the gesture - only their `transform` does - so this stays valid
-  // for the whole drag and turns each frame into pure arithmetic.
+  // Snapshot every OTHER row's midpoint once, in drag-start coordinates.
+  // Their layout never changes during the gesture - only their `transform`
+  // does, and scrolling is folded back out via scrollDrift() - so this stays
+  // valid for the whole drag and turns each frame into pure arithmetic.
   const siblings = [];
   Array.from(els.list.children).forEach((el, i) => {
     if (i === index) return;
@@ -264,157 +329,91 @@ function startDrag(event, li, index) {
   });
 
   const rect = li.getBoundingClientRect();
-
-  // Store original styles so we can restore them on drag end
-  drag.draggedItemOriginalStyle = {
-    position: li.style.position,
-    left: li.style.left,
-    top: li.style.top,
-    transform: li.style.transform,
-    width: li.style.width,
-    pointerEvents: li.style.pointerEvents,
-  };
-
-  // Use fixed positioning to attach the dragged item to viewport coordinates.
-  // This allows native wheel scrolling to work while dragging because:
-  // - The dragged element is removed from document flow
-  // - Wheel events on window/document scroll the page normally
-  // - The dragged element stays locked to cursor (both are viewport-based)
-  drag.li.style.position = 'fixed';
-  drag.li.style.left = rect.left + 'px';
-  drag.li.style.top = rect.top + 'px';
-  drag.li.style.width = rect.width + 'px';
-  drag.li.style.pointerEvents = 'none'; // Let pointer events pass through to underlying items
-
-  // Capture initial viewport position for delta calculations
-  const startTop = rect.top;
-  const startLeft = rect.left;
-
   drag = {
     pointerId: event.pointerId,
     li,
     list: items,
+    listEl: els.list,
     originalIndex: index,
     targetIndex: index,
     startClientY: event.clientY,
-    startMouseX: event.clientX,
-    startMouseY: event.clientY,
     startMid: rect.top + rect.height / 2,
-    startTop: startTop,  // initial viewport top position
-    startLeft: startLeft, // initial viewport left position
+    startListTop: els.list.getBoundingClientRect().top,
+    startListScroll: els.list.scrollTop,
+    scrollers: scrollersFrom(els.list),
     step: rowStep(rect),
     lastY: event.clientY,
     frame: 0,
     moved: false,
     siblings,
-    listEl: els.list,
-    scrollAccumulator: 0,
-    autoScrollId: 0,
   };
-
-  // Attach global pointer handlers to track mouse movement
-  // No scroll listener needed - fixed positioning handles window scroll automatically
+  // The rest of the gesture is watched on the window, not on the row: the
+  // cursor outruns the row constantly, and the row itself can be torn out by
+  // a re-render mid-drag. setPointerCapture() would also have worked - except
+  // capture retargets the compatibility mouse events too, so `click` would
+  // land on the <li> instead of the <span> and click-to-expand would quietly
+  // stop firing on every row you had ever pressed.
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
   window.addEventListener('pointercancel', onPointerCancel);
+  // Wheel scrolling mid-drag is left native; `scroll` does not bubble, so a
+  // capturing listener hears the list, the panel and the page alike and
+  // re-glues the row to the pointer after each one.
+  window.addEventListener('scroll', onDragScroll, true);
 }
 
 /** Repaints the gesture: the dragged row onto the pointer, each sibling into
- *  or out of the slot it has to give up. Runs at most once per frame.
- *
- *  The dragged item uses position: fixed, so its coordinates are always relative
- *  to viewport. We track mouse movement in viewport coordinates (clientY) and
- *  update the element's top/left directly. No scroll compensation needed because
- *  position:fixed elements move with the viewport when the page scrolls.
- */
+ *  or out of the slot it has to give up. Runs at most once per frame. */
 function paintDrag() {
   if (!drag) return;
-
-  // Mouse position relative to viewport - this stays constant during window scroll
-  const currentMouseY = drag.lastY;
-  const currentMouseX = drag.startMouseX; // X doesn't change during vertical drag
-
-  // Calculate how far the mouse has moved from drag start (in viewport coords)
-  const dy = currentMouseY - drag.startClientY;
-  const dx = currentMouseX - drag.startMouseX;
-
+  const dy = drag.lastY - drag.startClientY;
   if (!drag.moved) {
     if (Math.abs(dy) < DRAG_THRESHOLD_PX) return;
     drag.moved = true;
     drag.li.classList.add('todo-item--dragging');
   }
-
-  // The dragged item has position: fixed, so we update top/left directly.
-  // Use the initial viewport position captured at drag start plus the mouse delta.
-  const newTop = drag.startTop + dy;
-  const newLeft = drag.startLeft + dx;
-
-  drag.li.style.top = newTop + 'px';
-  drag.li.style.left = newLeft + 'px';
-
-  // Calculate the dragged item's current midpoint for comparison with siblings
-  const liRect = drag.li.getBoundingClientRect();
-  const draggedMid = liRect.top + liRect.height / 2;
+  // The row's own layout box scrolls with its siblings, so the pointer's
+  // travel has to be net of that drift or the row would slide off the cursor.
+  const offset = dy - scrollDrift(drag);
+  drag.li.style.transform = `translateY(${offset}px)`;
 
   const { shifts, targetIndex } = resolveDrag(
     drag.siblings,
     drag.originalIndex,
-    draggedMid,
+    drag.startMid + offset,
     drag.step,
   );
-
   drag.siblings.forEach((sibling, i) => {
     sibling.el.style.transform = shifts[i] ? `translateY(${shifts[i]}px)` : '';
   });
-
   drag.targetIndex = targetIndex;
+}
+
+/** Queues one repaint (and one auto-scroll step) for the next frame. Every
+ *  trigger - pointer, wheel, auto-scroll itself - funnels through here, so a
+ *  frame never does the work twice. */
+function scheduleFrame() {
+  if (!drag || drag.frame) return;
+  drag.frame = requestAnimationFrame(() => {
+    if (!drag) return;
+    drag.frame = 0;
+    paintDrag();
+    // Only once the press has become a real drag: a click held near the
+    // panel's edge must not start scrolling it.
+    if (drag.moved && autoScrollStep(drag)) scheduleFrame();
+  });
 }
 
 function onPointerMove(event) {
   if (!drag || event.pointerId !== drag.pointerId) return;
-  // Update lastY before scheduling the frame so paintDrag() has current data
   drag.lastY = event.clientY;
   // pointermove fires far more often than the compositor paints; every extra
   // pass recomputes transforms nobody ever sees.
-  if (drag.frame) return;
-  drag.frame = requestAnimationFrame(() => {
-    if (drag) drag.frame = 0;
-    paintDrag();
-    autoScroll(drag);
-  });
+  scheduleFrame();
 }
 
-/** Auto-scrolls the list container when the pointer is near its top or bottom
- *  edge during a drag. Uses `requestAnimationFrame` for smooth animation and
- *  an accumulator to handle sub-pixel scroll amounts. */
-function autoScroll(gesture) {
-  if (!gesture || !gesture.listEl) return;
-
-  const threshold = 40; // px from top/bottom to trigger scroll
-  const maxSpeed = 12; // max pixels per frame
-  const containerRect = gesture.listEl.getBoundingClientRect();
-  const relativeY = gesture.lastY - containerRect.top;
-  let scrollAmount = 0;
-
-  if (relativeY < threshold) {
-    // Near top: scroll up, faster as we get closer
-    scrollAmount = -((threshold - relativeY) / threshold) * maxSpeed;
-  } else if (relativeY > containerRect.height - threshold) {
-    // Near bottom: scroll down, faster as we get closer
-    scrollAmount = ((relativeY - (containerRect.height - threshold)) / threshold) * maxSpeed;
-  }
-
-  if (scrollAmount !== 0) {
-    gesture.scrollAccumulator += scrollAmount;
-    // Only scroll when we have enough to move at least 1px
-    if (Math.abs(gesture.scrollAccumulator) >= 1) {
-      const delta = Math.trunc(gesture.scrollAccumulator);
-      gesture.scrollAccumulator -= delta;
-      gesture.listEl.scrollTop += delta;
-    }
-    // Continue the auto-scroll loop
-    gesture.autoScrollId = requestAnimationFrame(() => autoScroll(gesture));
-  }
+function onDragScroll() {
+  scheduleFrame();
 }
 
 function onPointerUp(event) {
@@ -433,87 +432,43 @@ function endDrag(keepMove) {
   if (!drag) return;
   const gesture = drag;
   drag = null;
-
-  // Cancel any pending frame and auto-scroll animation
   if (gesture.frame) cancelAnimationFrame(gesture.frame);
-  if (gesture.autoScrollId) cancelAnimationFrame(gesture.autoScrollId);
-
-  // Remove global pointer handlers
   window.removeEventListener('pointermove', onPointerMove);
   window.removeEventListener('pointerup', onPointerUp);
   window.removeEventListener('pointercancel', onPointerCancel);
-
+  window.removeEventListener('scroll', onDragScroll, true);
   if (!gesture.moved) {
-    // No drag happened - just clear styles and return
     clearDragStyles(gesture);
-
-    // Restore original positioning if we had fixed positioning during drag
-    if (gesture.draggedItemOriginalStyle && gesture.li.style.position === 'fixed') {
-      const style = gesture.draggedItemOriginalStyle;
-      Object.assign(gesture.li.style, style);
-    }
     return;
   }
-
   dragEndedAt = Date.now();
 
-  // The dragged item has been using position: fixed during the drag.
-  // To animate it to its new/old slot, we need to:
-  // 1. Change position to absolute with current viewport coordinates
-  // 2. Apply transform for the smooth slide animation
-
-  const liRect = gesture.li.getBoundingClientRect();
-  gesture.li.style.position = 'absolute';
-  gesture.li.style.left = liRect.left + 'px';
-  gesture.li.style.top = liRect.top + 'px';
-
   const to = keepMove ? gesture.targetIndex : gesture.originalIndex;
-
-  // Calculate how far the item should slide to its final position
-  const deltaY = (to - gesture.originalIndex) * gesture.step;
-  gesture.li.style.transform = `translateY(${deltaY}px)`;
-
-  // Remove the dragging class (re-enables transitions)
+  // Ride the row into the slot its neighbours already opened, THEN swap the
+  // real order in. Committing straight away would teleport it from under the
+  // cursor to its resting place - the one "pop" this whole rewrite is about.
+  // Dropping --dragging restores the transition, so setting the resting
+  // offset in the same style pass animates instead of jumping. The offset is
+  // in layout terms, so any scrolling during the drag needs no correction.
   gesture.li.classList.remove('todo-item--dragging');
+  gesture.li.style.transform =
+    `translateY(${(to - gesture.originalIndex) * gesture.step}px)`;
 
-  // Restore original styles after animation completes
-  if (gesture.draggedItemOriginalStyle) {
-    const originalStyle = gesture.draggedItemOriginalStyle;
-    delete gesture.draggedItemOriginalStyle; // Prevent clearDragStyles from restoring these
-
-    settle = {
-      finish: () => {
-        clearDragStyles(gesture);
-        // Restore original positioning (position: relative/static)
-        Object.assign(gesture.li.style, originalStyle);
-
-        // A project switch mid-settle swaps `items` wholesale; reordering by an
-        // index taken from the old list would scramble the new one.
-        if (to !== gesture.originalIndex && items === gesture.list) {
-          commit(reorderTodo(items, gesture.originalIndex, to));
-        }
-      },
-      timer: setTimeout(() => {
-        settle = null;
-        settle.finish();
-      }, settleMs(gesture.li)),
-    };
-  } else {
-    // Fallback path if original styles were not captured
-    settle = {
-      finish: () => {
-        clearDragStyles(gesture);
-        gesture.li.style.position = '';
-        if (to !== gesture.originalIndex && items === gesture.list) {
-          commit(reorderTodo(items, gesture.originalIndex, to));
-        }
-      },
-      timer: setTimeout(() => {
-        settle = null;
-        settle.finish();
-      }, settleMs(gesture.li)),
-    };
-  }
+  const finish = () => {
+    clearDragStyles(gesture);
+    // A project switch mid-settle swaps `items` wholesale; reordering by an
+    // index taken from the old list would scramble the new one.
+    if (to !== gesture.originalIndex && items === gesture.list) {
+      commit(reorderTodo(items, gesture.originalIndex, to));
+    }
+  };
+  settle = {
+    finish,
+    timer: setTimeout(() => {
+      settle = null;
+      finish();
+    }, settleMs(gesture.li)),
+  };
 }
 
 function renderRows() {

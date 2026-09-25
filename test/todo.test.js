@@ -23,6 +23,7 @@ const {
   removeTodo,
   reorderTodo,
   resolveDrag,
+  edgeScrollSpeed,
   clearDone,
   openCount,
 } = require('../src/renderer/modules/todo.js');
@@ -307,4 +308,30 @@ test('resolveDrag on a one-item list has no siblings to move', () => {
   const { shifts, targetIndex } = resolveDrag([], 0, 999, STEP);
   assert.deepEqual(shifts, []);
   assert.equal(targetIndex, 0);
+});
+
+// ---- edgeScrollSpeed (drag auto-scroll) --------------------------------------
+
+test('edgeScrollSpeed is 0 in the middle of the scroller', () => {
+  assert.equal(edgeScrollSpeed(250, 0, 500, 40, 12), 0);
+});
+
+test('edgeScrollSpeed scrolls up near the top and down near the bottom', () => {
+  assert.equal(edgeScrollSpeed(20, 0, 500, 40, 12), -6);
+  assert.equal(edgeScrollSpeed(480, 0, 500, 40, 12), 6);
+});
+
+test('edgeScrollSpeed caps at max once the pointer overshoots an edge', () => {
+  assert.equal(edgeScrollSpeed(-300, 0, 500, 40, 12), -12);
+  assert.equal(edgeScrollSpeed(900, 0, 500, 40, 12), 12);
+});
+
+test('edgeScrollSpeed splits a scroller shorter than two edge zones', () => {
+  // 60px tall: each zone shrinks to 30px so the two never overlap.
+  assert.equal(edgeScrollSpeed(30, 0, 60, 40, 12), 0);
+  assert.equal(edgeScrollSpeed(15, 0, 60, 40, 12), -6);
+});
+
+test('edgeScrollSpeed ignores a collapsed scroller', () => {
+  assert.equal(edgeScrollSpeed(10, 100, 100, 40, 12), 0);
 });
