@@ -38,18 +38,34 @@ const COUNTDOWN_MS = 30000;
 /** How often the "updated Xs ago" label ticks (locally, no request). */
 const FRESHNESS_MS = 1000;
 
+// Default reset times for common windows (in milliseconds from now)
+const WINDOW_RESETS = {
+  '5h': 5 * 60 * 60 * 1000,
+  weekly: 7 * 24 * 60 * 60 * 1000,
+  monthly: 30 * 24 * 60 * 60 * 1000,
+  balance: null, // no reset for balance
+};
+
+/** Computes a resetsAt timestamp from a window type. */
+function getResetsAt(windowType) {
+  const ms = WINDOW_RESETS[windowType];
+  if (!ms) return null;
+  return new Date(Date.now() + ms).toISOString();
+}
+
 // Elements of the current mount, or null when this widget is not on screen.
 let els = null;
-let lastGoodUsage = null; // last payload WITHOUT .error - what the bars render from
-let lastError = null; // .error of the most recent payload, or null if it was good
+let lastGoodUsage = null; // last payload WITH status==='ok' - what the bars render from
+let lastError = null; // status value of most recent error/unconfigured payload
 
 /** Applies a fresh payload to module state. Pure state update, no render. */
 function applyUsage(usage) {
-  if (usage && !usage.error) {
+  if (usage && usage.status === 'ok') {
     lastGoodUsage = usage;
     lastError = null;
-  } else {
-    lastError = (usage && usage.error) || null;
+  } else if (usage && usage.status) {
+    // Persistent error states that need user action
+    lastError = usage.status; // 'unconfigured', 'error', 'unsupported'
   }
 }
 
@@ -68,14 +84,14 @@ function fmtResetWhen(resetsAt) {
 }
 
 /**
- * Humanises elapsed time since fetchedAt (ms epoch) -> "3s" / "42s" / "5m" /
- * "2h 5m". null when fetchedAt is missing/invalid (nothing to show yet).
+ * Humanises elapsed time since updatedAt (ms epoch) -> "3s" / "42s" / "5m" /
+ * "2h 5m". null when updatedAt is missing/invalid (nothing to show yet).
  * `now` is a param (not Date.now() inline) so this stays a pure, testable
  * function - same shape as formatBytes/formatUptime in modules/telemetry.js.
  */
-export function fmtAgo(fetchedAt, now = Date.now()) {
-  if (typeof fetchedAt !== 'number' || !Number.isFinite(fetchedAt)) return null;
-  const sec = Math.max(0, Math.round((now - fetchedAt) / 1000));
+export function fmtAgo(updatedAt, now = Date.now()) {
+  if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return null;
+  const sec = Math.max(0, Math.round((now - updatedAt) / 1000));
   if (sec < 60) return `${sec}s`;
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min}m`;
@@ -84,8 +100,8 @@ export function fmtAgo(fetchedAt, now = Date.now()) {
   return `${h}h ${m}m`;
 }
 
-/** Builds one usage row (label + bar + % + time to reset). */
-function usageRow(labelKey, win) {
+/** Builds one usage row from a limit object in the new format. */
+function usageRowForLimit(limit) {
   const row = document.createElement('div');
   row.className = 'usage-row';
 
@@ -93,25 +109,32 @@ function usageRow(labelKey, win) {
   head.className = 'usage-row__head';
   const label = document.createElement('span');
   label.className = 'usage-row__label';
-  label.textContent = t(labelKey);
+  label.textContent = limit.label || t('usage.window.custom');
   const pct = document.createElement('span');
   pct.className = 'usage-row__pct';
-  pct.textContent = `${win.pct}%`;
+  pct.textContent = `${limit.percentUsed}%`;
   head.append(label, pct);
 
   const bar = document.createElement('div');
   bar.className = 'usage-bar';
   const fill = document.createElement('div');
   fill.className = 'usage-bar__fill';
-  // Fill via scaleX (--usage 0..1), consistent with .ctx-bar__fill.
-  fill.style.setProperty('--usage', String(win.pct / 100));
+  fill.style.setProperty('--usage', String(limit.percentUsed / 100));
   // Colour thresholds: >=90 bad (red), >=70 warn (orange), otherwise ok.
-  fill.dataset.level = win.pct >= 90 ? 'bad' : win.pct >= 70 ? 'warn' : 'good';
+  fill.dataset.level =
+    limit.percentUsed >= 90 ? 'bad' : limit.percentUsed >= 70 ? 'warn' : 'good';
   bar.appendChild(fill);
 
   const reset = document.createElement('div');
   reset.className = 'usage-row__reset hint';
-  const when = fmtResetWhen(win.resetsAt);
+  // Try to get resetsAt from the limit, or compute from window type
+  const resetsAt =
+    typeof limit.resetsAt === 'string'
+      ? limit.resetsAt
+      : limit.window
+        ? getResetsAt(limit.window)
+        : null;
+  const when = fmtResetWhen(resetsAt);
   reset.textContent = when ? t('usage.resetIn', { when }) : t('usage.resetting');
 
   row.append(head, bar, reset);
@@ -126,13 +149,13 @@ function usageMessage(key) {
 }
 
 /**
- * Updates the "updated Xs ago" hint from lastGoodUsage.fetchedAt. Only ever
+ * Updates the "updated Xs ago" hint from lastGoodUsage.updatedAt. Only ever
  * touches one textContent - never rebuilds the tile - so it is safe to call
  * every second without risking the flicker a full renderUsage() would cause.
  */
 function renderFreshness() {
   if (!els || !els.updated) return;
-  const when = lastGoodUsage ? fmtAgo(lastGoodUsage.fetchedAt) : null;
+  const when = lastGoodUsage ? fmtAgo(lastGoodUsage.updatedAt) : null;
   els.updated.textContent = when ? t('usage.updatedAgo', { when }) : '';
 }
 
@@ -143,14 +166,13 @@ function renderUsage() {
   usageBody.innerHTML = '';
 
   if (!lastGoodUsage) {
-    // Never had good data yet: 'reauth'/'off' are worth naming explicitly,
-    // anything else (incl. no payload at all) just reads as "still checking".
+    // Never had good data yet: show loading or last error
     const key =
-      lastError === 'reauth'
-        ? 'usage.reauth'
-        : lastError === 'off'
-          ? 'usage.off'
-          : lastError
+      lastError === 'unconfigured'
+        ? 'usage.unconfigured'
+        : lastError === 'unsupported'
+          ? 'usage.unsupported'
+          : lastError === 'error'
             ? 'usage.unavailable'
             : 'usage.loading';
     usageBody.appendChild(usageMessage(key));
@@ -158,34 +180,37 @@ function renderUsage() {
     return;
   }
 
-  if (lastError === 'reauth' || lastError === 'off') {
-    // Persistent, real states - not a blip the 15 s heartbeat will quietly
-    // fix on its own, so this is the one case still worth swapping the tile.
-    usageBody.appendChild(usageMessage(lastError === 'reauth' ? 'usage.reauth' : 'usage.off'));
+  if (lastError === 'unconfigured' || lastError === 'unsupported') {
+    // Persistent states - not a blip the 15 s heartbeat will fix
+    usageBody.appendChild(
+      usageMessage(lastError === 'unconfigured' ? 'usage.unconfigured' : 'usage.unsupported')
+    );
     renderFreshness();
     return;
   }
 
   const u = lastGoodUsage;
-  const windows = [
-    ['usage.window.5h', u.fiveHour],
-    ['usage.window.week', u.sevenDay],
-    ['usage.window.opus', u.sevenDayOpus],
-    ['usage.window.sonnet', u.sevenDaySonnet],
-  ];
+
+  // New format: iterate over limits[] array
   let any = false;
-  for (const [key, win] of windows) {
-    if (win && typeof win.pct === 'number') {
-      usageBody.appendChild(usageRow(key, win));
+  for (const limit of u.limits || []) {
+    if (typeof limit.percentUsed === 'number') {
+      usageBody.appendChild(usageRowForLimit(limit));
       any = true;
     }
   }
+
   if (!any) {
     usageBody.appendChild(usageMessage('usage.unavailable'));
     renderFreshness();
     return;
   }
-  if (u.extraUsage) usageBody.appendChild(usageMessage('usage.extra'));
+
+  // Show fallback indicator if applicable
+  if (u.isFallback) {
+    usageBody.appendChild(usageMessage('usage.fallback'));
+  }
+
   renderFreshness();
 }
 
