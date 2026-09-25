@@ -1271,10 +1271,16 @@ function startPortWatcher() {
 
 // ---- Passive Observer: subscription usage limits (5h + week) -----------
 
+/** Extracts the 5-hour window percentage from new-style usage payload. */
+function getFiveHourPct(usage) {
+  if (!usage || !Array.isArray(usage.limits)) return null;
+  const limit = usage.limits.find((l) => l.window === '5h');
+  return typeof limit?.percentUsed === 'number' ? limit.percentUsed : null;
+}
+
 /** Plays voice.usage50/usage80 on a fresh threshold crossing (§4.4). */
 function checkUsageThresholds(usage) {
-  const pct =
-    usage && usage.fiveHour && typeof usage.fiveHour.pct === 'number' ? usage.fiveHour.pct : null;
+  const pct = getFiveHourPct(usage);
   const { next, fire } = nextUsageAnnounced(pct, usageAnnounced);
   usageAnnounced = next;
   if (!fire || !soundManager || readUiPrefs().voiceEnabled === false) return;

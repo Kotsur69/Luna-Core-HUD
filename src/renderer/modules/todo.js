@@ -275,6 +275,9 @@ function startDrag(event, li, index) {
     frame: 0,
     moved: false,
     siblings,
+    listEl: els.list,
+    scrollAccumulator: 0,
+    autoScrollId: 0,
   };
   // The rest of the gesture is watched on the window, not on the row: the
   // cursor outruns the row constantly, and the row itself can be torn out by
@@ -320,7 +323,41 @@ function onPointerMove(event) {
   drag.frame = requestAnimationFrame(() => {
     if (drag) drag.frame = 0;
     paintDrag();
+    autoScroll(drag);
   });
+}
+
+/** Auto-scrolls the list container when the pointer is near its top or bottom
+ *  edge during a drag. Uses `requestAnimationFrame` for smooth animation and
+ *  an accumulator to handle sub-pixel scroll amounts. */
+function autoScroll(gesture) {
+  if (!gesture || !gesture.listEl) return;
+
+  const threshold = 40; // px from top/bottom to trigger scroll
+  const maxSpeed = 12; // max pixels per frame
+  const containerRect = gesture.listEl.getBoundingClientRect();
+  const relativeY = gesture.lastY - containerRect.top;
+  let scrollAmount = 0;
+
+  if (relativeY < threshold) {
+    // Near top: scroll up, faster as we get closer
+    scrollAmount = -((threshold - relativeY) / threshold) * maxSpeed;
+  } else if (relativeY > containerRect.height - threshold) {
+    // Near bottom: scroll down, faster as we get closer
+    scrollAmount = ((relativeY - (containerRect.height - threshold)) / threshold) * maxSpeed;
+  }
+
+  if (scrollAmount !== 0) {
+    gesture.scrollAccumulator += scrollAmount;
+    // Only scroll when we have enough to move at least 1px
+    if (Math.abs(gesture.scrollAccumulator) >= 1) {
+      const delta = Math.trunc(gesture.scrollAccumulator);
+      gesture.scrollAccumulator -= delta;
+      gesture.listEl.scrollTop += delta;
+    }
+    // Continue the auto-scroll loop
+    gesture.autoScrollId = requestAnimationFrame(() => autoScroll(gesture));
+  }
 }
 
 function onPointerUp(event) {
@@ -340,6 +377,8 @@ function endDrag(keepMove) {
   const gesture = drag;
   drag = null;
   if (gesture.frame) cancelAnimationFrame(gesture.frame);
+  // Cancel any pending auto-scroll animation
+  if (gesture.autoScrollId) cancelAnimationFrame(gesture.autoScrollId);
   window.removeEventListener('pointermove', onPointerMove);
   window.removeEventListener('pointerup', onPointerUp);
   window.removeEventListener('pointercancel', onPointerCancel);
