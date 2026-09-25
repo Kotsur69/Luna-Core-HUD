@@ -307,7 +307,10 @@ class OpenAiAdapter extends UsageAdapter {
    */
   getAuth(profile) {
     if (!profile || !profile.env) return { apiKey: '' };
-    const apiKey = profile.env.ANTHROPIC_AUTH_TOKEN || profile.env.OPENAI_API_KEY;
+    // Only a real OpenAI key may be sent to api.openai.com. ANTHROPIC_AUTH_TOKEN
+    // on these templates is a Kimi/Gemini/xAI key or a CCR client key, and
+    // must never leave for a host that did not issue it.
+    const apiKey = profile.env.OPENAI_API_KEY;
     const organizationId = profile.env.OPENAI_ORG_ID || profile.env.ORGANIZATION_ID;
     return { apiKey, organizationId };
   }
@@ -324,7 +327,7 @@ class OpenAiAdapter extends UsageAdapter {
         providerId: this.providerId,
         displayName: this.displayName,
         status: 'unconfigured',
-        errorMessage: 'No API key configured (set ANTHROPIC_AUTH_TOKEN or OPENAI_API_KEY)',
+        errorMessage: 'No OpenAI API key configured (set OPENAI_API_KEY)',
         limits: [],
         isFallback: false,
         updatedAt: Date.now(),
