@@ -262,6 +262,8 @@ function startDrag(event, li, index) {
   });
 
   const rect = li.getBoundingClientRect();
+  drag.scrollOffsetY = 0;
+  drag.startScrollY = window.scrollY || document.documentElement.scrollTop;
   drag = {
     pointerId: event.pointerId,
     li,
@@ -285,6 +287,15 @@ function startDrag(event, li, index) {
   // capture retargets the compatibility mouse events too, so `click` would
   // land on the <li> instead of the <span> and click-to-expand would quietly
   // stop firing on every row you had ever pressed.
+  //
+  // To allow scrolling the whole app window while holding a to-do item,
+  // we track window scroll changes and accumulate them. This way dragging
+  // survives vertical scrolling of document.body or any parent container.
+  drag.windowScrollHandler = () => {
+    const scrollTop = window.scrollY || document.documentElement.scrollTop;
+    drag.scrollOffsetY = scrollTop - drag.startScrollY;
+  };
+  window.addEventListener('scroll', drag.windowScrollHandler, { passive: true });
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
   window.addEventListener('pointercancel', onPointerCancel);
@@ -295,17 +306,22 @@ function startDrag(event, li, index) {
 function paintDrag() {
   if (!drag) return;
   const dy = drag.lastY - drag.startClientY;
+  // Add scroll compensation so dragging survives window scrolling:
+  // when the page scrolls, the cursor's viewport position doesn't change,
+  // but we need to offset the dragged item by the same amount as the scroll
+  // to keep it visually attached to the pointer.
+  const scrollCompensation = drag.scrollOffsetY || 0;
   if (!drag.moved) {
     if (Math.abs(dy) < DRAG_THRESHOLD_PX) return;
     drag.moved = true;
     drag.li.classList.add('todo-item--dragging');
   }
-  drag.li.style.transform = `translateY(${dy}px)`;
+  drag.li.style.transform = `translateY(${dy + scrollCompensation}px)`;
 
   const { shifts, targetIndex } = resolveDrag(
     drag.siblings,
     drag.originalIndex,
-    drag.startMid + dy,
+    drag.startMid + dy + scrollCompensation,
     drag.step,
   );
   drag.siblings.forEach((sibling, i) => {
@@ -316,7 +332,6 @@ function paintDrag() {
 
 function onPointerMove(event) {
   if (!drag || event.pointerId !== drag.pointerId) return;
-  drag.lastY = event.clientY;
   // pointermove fires far more often than the compositor paints; every extra
   // pass recomputes transforms nobody ever sees.
   if (drag.frame) return;
@@ -382,6 +397,10 @@ function endDrag(keepMove) {
   window.removeEventListener('pointermove', onPointerMove);
   window.removeEventListener('pointerup', onPointerUp);
   window.removeEventListener('pointercancel', onPointerCancel);
+  // Clean up the scroll event listener used during drag
+  if (gesture.windowScrollHandler) {
+    window.removeEventListener('scroll', gesture.windowScrollHandler);
+  }
   if (!gesture.moved) {
     clearDragStyles(gesture);
     return;
