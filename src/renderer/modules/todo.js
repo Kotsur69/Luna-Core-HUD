@@ -28,9 +28,10 @@ import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { defineWidget } from './registry.js';
 import { mountGodModeControl } from './godmode.js';
+import { mountKeepAwakeControl } from './keepawake.js';
 
 const SAVE_MS = 400;
-const MAX_TEXT_CHARS = 200;
+const MAX_TEXT_CHARS = 1000;
 
 let els = null;
 let items = [];
@@ -436,6 +437,16 @@ function renderRows() {
   });
 }
 
+/**
+ * Grows the input textarea to fit its content. The CSS max-height caps it,
+ * past which it scrolls, so a long prompt never pushes the list off screen.
+ */
+function fitInput() {
+  if (!els) return;
+  els.input.style.height = 'auto';
+  els.input.style.height = `${els.input.scrollHeight}px`;
+}
+
 function render() {
   if (!els) return;
   const open = openCount(items);
@@ -471,13 +482,25 @@ defineWidget({
       const next = addTodo(items, els.input.value);
       if (next !== items) {
         els.input.value = '';
+        fitInput();
         commit(next);
       }
     });
 
+    // A textarea swallows Enter as a newline, so submit by hand: Enter adds
+    // the item, Shift+Enter breaks the line. isComposing keeps an IME
+    // confirmation from submitting half a word.
+    els.input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+      event.preventDefault();
+      els.form.requestSubmit();
+    });
+    els.input.addEventListener('input', fitInput);
+
     els.clear.addEventListener('click', () => commit(clearDone(items)));
 
     const offGodMode = mountGodModeControl(root);
+    const offKeepAwake = mountKeepAwakeControl(root);
 
     boundSessionId = getActiveSessionId();
     window.lunacore
@@ -502,6 +525,7 @@ defineWidget({
       flushSettle();
       offLang();
       offGodMode();
+      offKeepAwake();
       els = null;
     };
   },

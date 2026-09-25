@@ -274,6 +274,18 @@ contextBridge.exposeInMainWorld('lunacore', {
   setGodModeRun: (sessionId) =>
     ipcRenderer.send('godmode:run', typeof sessionId === 'string' ? sessionId : null),
 
+  // --- "Don't sleep" switch (runs/kills the keep-awake .bat, src/keepawake.js) ---
+  /** Promise<{on, available, reason, error}>. */
+  getKeepAwake: () => ipcRenderer.invoke('keepawake:get'),
+  /** Turns it on or off; only a boolean crosses the bridge, never a path. */
+  setKeepAwake: (on) => ipcRenderer.invoke('keepawake:set', on === true),
+  /** Fires when the script stops on its own; returns an unsubscribe. */
+  onKeepAwakeChanged: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('keepawake:changed', listener);
+    return () => ipcRenderer.removeListener('keepawake:changed', listener);
+  },
+
   // --- Device panel: microphone mute ---
   /**
    * Reads or changes the default mic's mute state.

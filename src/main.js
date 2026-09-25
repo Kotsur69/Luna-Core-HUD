@@ -17,7 +17,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { randomUUID } = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFile, execFileSync } = require('child_process');
 // @lydell/node-pty: a maintained fork of node-pty with prebuilds (N-API),
 // works without compiling node-gyp / Visual Studio. API-compatible with node-pty.
 const pty = require('@lydell/node-pty');
@@ -63,6 +63,9 @@ const { createCcrControl } = require('./ccrcontrol');
 // Keeps an unattended God Mode run alive: no sleep, no throttling, and a
 // watchdog that brings a local LM Studio backend back (src/overnight.js).
 const { createOvernightGuard, recoverLocalBackend } = require('./overnight');
+// God Mode panel's "Don't sleep" switch: runs/kills the keep-awake .bat
+// named in config/keepawake.local.json (src/keepawake.js).
+const { createKeepAwake, CONFIG_FILE: KEEP_AWAKE_CONFIG } = require('./keepawake');
 // Env for every `claude` we start: inherited env minus session markers + layers.
 const { withColorSupport, buildSessionEnv } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
@@ -304,6 +307,18 @@ const overnight = createOvernightGuard({
       load: (request) => loadLmStudioModel(request, { wake: wakeLmStudio }),
     }),
   signal: (sessionId, type) => send('godmode:signal', { sessionId, type }),
+});
+const keepAwake = createKeepAwake({
+  platform: process.platform,
+  readConfig: () => {
+    const file = path.join(userDir(), KEEP_AWAKE_CONFIG);
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+  },
+  exists: (p) => fs.existsSync(p),
+  spawn,
+  execFile,
+  execFileSync,
+  onChange: (status) => send('keepawake:changed', status),
 });
 // Projects (working directories) loaded from config/ + the default id and the real cwd.
 let projects = [];
@@ -2234,6 +2249,11 @@ function registerIpc() {
     overnight.setRun(typeof sessionId === 'string' && sessions.has(sessionId) ? sessionId : null);
   });
 
+  // "Don't sleep" switch. The renderer only says on/off - the script path
+  // comes from the local config, never from the page.
+  ipcMain.handle('keepawake:get', () => keepAwake.status());
+  ipcMain.handle('keepawake:set', (_event, on) => keepAwake.set(on === true));
+
   ipcMain.handle('godmode:confirm', async (_event, openCount) => {
     const pl = readUiPrefs().lang === 'pl';
     const count = Number.isFinite(openCount) ? openCount : 0;
@@ -2591,6 +2611,10 @@ app.on('window-all-closed', () => {
   }
   // Release the sleep blocker and stop the backend watchdog.
   overnight.stop();
+  // Kill the keep-awake script too, so closing LunaCore never leaves the
+  // machine pinned awake by an orphaned process. Synchronous on purpose: the
+  // script survives its parent, so the kill must land before we exit.
+  keepAwake.stopSync();
   // LM Studio shims: close their loopback listeners and any open streams.
   stopAllShims().catch(() => {});
   // Best-effort: never blocks shutdown, and only ever stops a CCR gateway

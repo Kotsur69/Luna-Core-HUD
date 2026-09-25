@@ -392,17 +392,18 @@
       <h2 class="panel__title">
         <span data-i18n="todo.title">Zadania</span> <span id="todo-count" class="count"></span>
       </h2>
-      <!-- A <form> so Enter submits without a keydown handler, the same reason
-           the Settings modal grew one (TERMINAL_CUSTOMIZER_PLAN.md §10.2). -->
+      <!-- A <textarea> so a whole prompt fits: it grows with its content (up to
+           a cap, then scrolls). Enter still submits via todo.js's keydown
+           handler; Shift+Enter inserts a newline. -->
       <form id="todo-form" class="todo-form">
-        <input
+        <textarea
           id="todo-input"
-          type="text"
-          maxlength="200"
+          rows="1"
+          maxlength="1000"
           spellcheck="false"
           data-i18n-ph="todo.placeholder"
           placeholder="Nowe zadanie..."
-        />
+        ></textarea>
         <button type="submit" class="port-btn" data-i18n-title="todo.add" title="Dodaj">+</button>
       </form>
       <p id="todo-empty" class="hint" data-i18n="todo.empty">Brak zadan.</p>
@@ -420,6 +421,21 @@
         </span>
         <span class="switch">
           <input type="checkbox" id="godmode-toggle" class="switch__input" />
+          <span class="switch__track"><span class="switch__thumb"></span></span>
+        </span>
+      </label>
+      <label
+        id="keepawake-field"
+        class="switch-field godmode-field"
+        data-i18n-title="keepawake.hint"
+        title="Uruchamia skrypt Keep Awake: komputer nie zasnie, a ekran nie zgasnie. Wylaczenie zabija proces."
+      >
+        <span class="switch-field__text">
+          <span class="switch-field__label" data-i18n="keepawake.label">Nie usypiaj - komputer i ekran</span>
+          <span id="keepawake-status" class="switch-field__status" data-i18n="keepawake.off">wylaczone</span>
+        </span>
+        <span class="switch">
+          <input type="checkbox" id="keepawake-toggle" class="switch__input" />
           <span class="switch__track"><span class="switch__thumb"></span></span>
         </span>
       </label>

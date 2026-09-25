@@ -3721,9 +3721,17 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   outline: none;
   border-color: var(--edge-glow);
 }
-.todo-form input[type='text'] {
+/* The + button sits at the bottom edge once the textarea grows past one line. */
+.todo-form { align-items: flex-end; }
+.todo-form textarea {
   flex: 1;
   min-width: 0;
+  /* todo.js fitInput() sets the height to the content; this caps it at about
+     eight lines, past which it scrolls instead of eating the list. */
+  max-height: 10em;
+  resize: none;
+  overflow-y: auto;
+  line-height: 1.35;
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
@@ -3732,7 +3740,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   font-family: var(--font-ui);
   font-size: var(--fs-sm);
 }
-.todo-form input[type='text']:focus { outline: none; border-color: var(--edge-glow); }
+.todo-form textarea:focus { outline: none; border-color: var(--edge-glow); }
 
 .clip-list,
 .todo-list {
@@ -3778,7 +3786,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .todo-item__text--expanded {
   overflow: visible;
   text-overflow: clip;
-  white-space: normal;
+  /* pre-wrap, not normal: keeps the Shift+Enter line breaks of a long prompt. */
+  white-space: pre-wrap;
   overflow-wrap: break-word;
 }
 

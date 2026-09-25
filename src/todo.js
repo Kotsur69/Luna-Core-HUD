@@ -28,7 +28,7 @@ const file = () => paths.local('todo.local.json');
 // glanceable list, and the honest answer is that the work belongs somewhere
 // with a real tracker.
 const MAX_ITEMS = 100;
-const MAX_TEXT_CHARS = 200;
+const MAX_TEXT_CHARS = 1000;
 
 // Bucket used when the caller has no projectId in hand (no session yet, or a
 // project entry with no id reached this far) - "somewhere to put it" rather
