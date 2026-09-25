@@ -232,9 +232,11 @@ function flushSettle() {
 }
 
 /** Drops every inline transform the gesture painted and un-marks the row. */
+/** Clears all drag-related styles from siblings (the gesture item is handled separately). */
 function clearDragStyles(gesture) {
   gesture.li.classList.remove('todo-item--dragging');
-  gesture.li.style.transform = '';
+
+  // Clear transforms on sibling rows that were shifted during the drag
   gesture.siblings.forEach((s) => {
     s.el.style.transform = '';
   });
@@ -262,8 +264,32 @@ function startDrag(event, li, index) {
   });
 
   const rect = li.getBoundingClientRect();
-  drag.scrollOffsetY = 0;
-  drag.startScrollY = window.scrollY || document.documentElement.scrollTop;
+
+  // Store original styles so we can restore them on drag end
+  drag.draggedItemOriginalStyle = {
+    position: li.style.position,
+    left: li.style.left,
+    top: li.style.top,
+    transform: li.style.transform,
+    width: li.style.width,
+    pointerEvents: li.style.pointerEvents,
+  };
+
+  // Use fixed positioning to attach the dragged item to viewport coordinates.
+  // This allows native wheel scrolling to work while dragging because:
+  // - The dragged element is removed from document flow
+  // - Wheel events on window/document scroll the page normally
+  // - The dragged element stays locked to cursor (both are viewport-based)
+  drag.li.style.position = 'fixed';
+  drag.li.style.left = rect.left + 'px';
+  drag.li.style.top = rect.top + 'px';
+  drag.li.style.width = rect.width + 'px';
+  drag.li.style.pointerEvents = 'none'; // Let pointer events pass through to underlying items
+
+  // Capture initial viewport position for delta calculations
+  const startTop = rect.top;
+  const startLeft = rect.left;
+
   drag = {
     pointerId: event.pointerId,
     li,
@@ -271,7 +297,11 @@ function startDrag(event, li, index) {
     originalIndex: index,
     targetIndex: index,
     startClientY: event.clientY,
+    startMouseX: event.clientX,
+    startMouseY: event.clientY,
     startMid: rect.top + rect.height / 2,
+    startTop: startTop,  // initial viewport top position
+    startLeft: startLeft, // initial viewport left position
     step: rowStep(rect),
     lastY: event.clientY,
     frame: 0,
@@ -281,52 +311,62 @@ function startDrag(event, li, index) {
     scrollAccumulator: 0,
     autoScrollId: 0,
   };
-  // The rest of the gesture is watched on the window, not on the row: the
-  // cursor outruns the row constantly, and the row itself can be torn out by
-  // a re-render mid-drag. setPointerCapture() would also have worked - except
-  // capture retargets the compatibility mouse events too, so `click` would
-  // land on the <li> instead of the <span> and click-to-expand would quietly
-  // stop firing on every row you had ever pressed.
-  //
-  // To allow scrolling the whole app window while holding a to-do item,
-  // we track window scroll changes and accumulate them. This way dragging
-  // survives vertical scrolling of document.body or any parent container.
-  drag.windowScrollHandler = () => {
-    const scrollTop = window.scrollY || document.documentElement.scrollTop;
-    drag.scrollOffsetY = scrollTop - drag.startScrollY;
-  };
-  window.addEventListener('scroll', drag.windowScrollHandler, { passive: true });
+
+  // Attach global pointer handlers to track mouse movement
+  // No scroll listener needed - fixed positioning handles window scroll automatically
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
   window.addEventListener('pointercancel', onPointerCancel);
 }
 
 /** Repaints the gesture: the dragged row onto the pointer, each sibling into
- *  or out of the slot it has to give up. Runs at most once per frame. */
+ *  or out of the slot it has to give up. Runs at most once per frame.
+ *
+ *  The dragged item uses position: fixed, so its coordinates are always relative
+ *  to viewport. We track mouse movement in viewport coordinates (clientY) and
+ *  update the element's top/left directly. No scroll compensation needed because
+ *  position:fixed elements move with the viewport when the page scrolls.
+ */
 function paintDrag() {
   if (!drag) return;
-  const dy = drag.lastY - drag.startClientY;
-  // Add scroll compensation so dragging survives window scrolling:
-  // when the page scrolls, the cursor's viewport position doesn't change,
-  // but we need to offset the dragged item by the same amount as the scroll
-  // to keep it visually attached to the pointer.
-  const scrollCompensation = drag.scrollOffsetY || 0;
+
+  // Mouse position relative to viewport - this stays constant during window scroll
+  const currentMouseY = drag.lastY;
+  const currentMouseX = drag.startMouseX; // X doesn't change during vertical drag
+
+  // Calculate how far the mouse has moved from drag start (in viewport coords)
+  const dy = currentMouseY - drag.startClientY;
+  const dx = currentMouseX - drag.startMouseX;
+
   if (!drag.moved) {
     if (Math.abs(dy) < DRAG_THRESHOLD_PX) return;
     drag.moved = true;
     drag.li.classList.add('todo-item--dragging');
   }
-  drag.li.style.transform = `translateY(${dy + scrollCompensation}px)`;
+
+  // The dragged item has position: fixed, so we update top/left directly.
+  // Use the initial viewport position captured at drag start plus the mouse delta.
+  const newTop = drag.startTop + dy;
+  const newLeft = drag.startLeft + dx;
+
+  drag.li.style.top = newTop + 'px';
+  drag.li.style.left = newLeft + 'px';
+
+  // Calculate the dragged item's current midpoint for comparison with siblings
+  const liRect = drag.li.getBoundingClientRect();
+  const draggedMid = liRect.top + liRect.height / 2;
 
   const { shifts, targetIndex } = resolveDrag(
     drag.siblings,
     drag.originalIndex,
-    drag.startMid + dy + scrollCompensation,
+    draggedMid,
     drag.step,
   );
+
   drag.siblings.forEach((sibling, i) => {
     sibling.el.style.transform = shifts[i] ? `translateY(${shifts[i]}px)` : '';
   });
+
   drag.targetIndex = targetIndex;
 }
 
@@ -393,47 +433,87 @@ function endDrag(keepMove) {
   if (!drag) return;
   const gesture = drag;
   drag = null;
+
+  // Cancel any pending frame and auto-scroll animation
   if (gesture.frame) cancelAnimationFrame(gesture.frame);
-  // Cancel any pending auto-scroll animation
   if (gesture.autoScrollId) cancelAnimationFrame(gesture.autoScrollId);
+
+  // Remove global pointer handlers
   window.removeEventListener('pointermove', onPointerMove);
   window.removeEventListener('pointerup', onPointerUp);
   window.removeEventListener('pointercancel', onPointerCancel);
-  // Clean up the scroll event listener used during drag
-  if (gesture.windowScrollHandler) {
-    window.removeEventListener('scroll', gesture.windowScrollHandler);
-  }
+
   if (!gesture.moved) {
+    // No drag happened - just clear styles and return
     clearDragStyles(gesture);
+
+    // Restore original positioning if we had fixed positioning during drag
+    if (gesture.draggedItemOriginalStyle && gesture.li.style.position === 'fixed') {
+      const style = gesture.draggedItemOriginalStyle;
+      Object.assign(gesture.li.style, style);
+    }
     return;
   }
+
   dragEndedAt = Date.now();
 
-  const to = keepMove ? gesture.targetIndex : gesture.originalIndex;
-  // Ride the row into the slot its neighbours already opened, THEN swap the
-  // real order in. Committing straight away would teleport it from under the
-  // cursor to its resting place - the one "pop" this whole rewrite is about.
-  // Dropping --dragging restores the transition, so setting the resting
-  // offset in the same style pass animates instead of jumping.
-  gesture.li.classList.remove('todo-item--dragging');
-  gesture.li.style.transform =
-    `translateY(${(to - gesture.originalIndex) * gesture.step}px)`;
+  // The dragged item has been using position: fixed during the drag.
+  // To animate it to its new/old slot, we need to:
+  // 1. Change position to absolute with current viewport coordinates
+  // 2. Apply transform for the smooth slide animation
 
-  const finish = () => {
-    clearDragStyles(gesture);
-    // A project switch mid-settle swaps `items` wholesale; reordering by an
-    // index taken from the old list would scramble the new one.
-    if (to !== gesture.originalIndex && items === gesture.list) {
-      commit(reorderTodo(items, gesture.originalIndex, to));
-    }
-  };
-  settle = {
-    finish,
-    timer: setTimeout(() => {
-      settle = null;
-      finish();
-    }, settleMs(gesture.li)),
-  };
+  const liRect = gesture.li.getBoundingClientRect();
+  gesture.li.style.position = 'absolute';
+  gesture.li.style.left = liRect.left + 'px';
+  gesture.li.style.top = liRect.top + 'px';
+
+  const to = keepMove ? gesture.targetIndex : gesture.originalIndex;
+
+  // Calculate how far the item should slide to its final position
+  const deltaY = (to - gesture.originalIndex) * gesture.step;
+  gesture.li.style.transform = `translateY(${deltaY}px)`;
+
+  // Remove the dragging class (re-enables transitions)
+  gesture.li.classList.remove('todo-item--dragging');
+
+  // Restore original styles after animation completes
+  if (gesture.draggedItemOriginalStyle) {
+    const originalStyle = gesture.draggedItemOriginalStyle;
+    delete gesture.draggedItemOriginalStyle; // Prevent clearDragStyles from restoring these
+
+    settle = {
+      finish: () => {
+        clearDragStyles(gesture);
+        // Restore original positioning (position: relative/static)
+        Object.assign(gesture.li.style, originalStyle);
+
+        // A project switch mid-settle swaps `items` wholesale; reordering by an
+        // index taken from the old list would scramble the new one.
+        if (to !== gesture.originalIndex && items === gesture.list) {
+          commit(reorderTodo(items, gesture.originalIndex, to));
+        }
+      },
+      timer: setTimeout(() => {
+        settle = null;
+        settle.finish();
+      }, settleMs(gesture.li)),
+    };
+  } else {
+    // Fallback path if original styles were not captured
+    settle = {
+      finish: () => {
+        clearDragStyles(gesture);
+        gesture.li.style.position = '';
+        if (to !== gesture.originalIndex && items === gesture.list) {
+          commit(reorderTodo(items, gesture.originalIndex, to));
+        }
+      },
+      timer: setTimeout(() => {
+        settle = null;
+        settle.finish();
+      }, settleMs(gesture.li)),
+    };
+  }
 }
 
 function renderRows() {
