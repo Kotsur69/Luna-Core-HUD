@@ -69,7 +69,7 @@ const { createKeepAwake, CONFIG_FILE: KEEP_AWAKE_CONFIG } = require('./keepawake
 // Env for every `claude` we start: inherited env minus session markers + layers.
 const { withColorSupport, buildSessionEnv } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
-const { withSessionId, withIntakeMcp, findExecutable } = require('./launch');
+const { withSessionId, withIntakeMcp, withTaskBrief, findExecutable } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject, removeProject } = require('./projects');
 const {
@@ -149,7 +149,10 @@ const { readTodos, writeTodos } = require('./todo');
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
-const { addWorktree } = require('./worktrees');
+const { addWorktree, dirtyCount } = require('./worktrees');
+// God Mode v2 (ORCHESTRATOR_PLAN.md slice 3): headless planner + plan board.
+const { createOrchestra, BRIEF_DIR } = require('./orchestra');
+const { runPlanner } = require('./orchestraPlan');
 
 const { micState } = require('./devices');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
@@ -757,6 +760,27 @@ const intakeServer = new IntakeServer({
   },
 });
 
+// God Mode v2 run controller. Briefs live in <userDir>/tasks (gitignored in a
+// dev clone): outside the worktree, so a worker's `git add -A` never commits
+// one, and a folder of their own, so the tab's --add-dir grants nothing else.
+const orchestra = createOrchestra({
+  runPlanner,
+  addWorktree,
+  dirtyCount,
+  readTodos,
+  createSession,
+  briefDir: () => path.join(userDir(), BRIEF_DIR),
+  writeBrief: (file, text) => {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+});
+
 /**
  * Gives a tab its own intake token and --mcp-config file.
  * @param {Session} session
@@ -941,9 +965,13 @@ function spawnInto(session, profile, launch = null) {
   });
 
   // The profile's start command (empty = bare shell, no auto-start).
-  const command = [profile.command, ...(profile.args || []), ...(launch && profile.command ? launch.extraArgs : [])]
+  const baseCommand = [profile.command, ...(profile.args || []), ...(launch && profile.command ? launch.extraArgs : [])]
     .join(' ')
     .trim();
+  // A God Mode worker's first launch carries its brief (slice 3). Consumed
+  // here, so a later profile restart of the tab does not start the task again.
+  const command = (session.task && withTaskBrief(baseCommand, session.task)) || baseCommand;
+  session.task = null;
   // When WE launch `claude`, we dictate the session id - the transcript is then
   // named exactly <uuid>.jsonl and the watcher looks it up instead of inferring
   // ownership from file timestamps. Null = this session cannot be pinned (bare
@@ -1098,6 +1126,8 @@ function createSession(opts = {}) {
     projectId: project ? project.id : null,
     cwd: opts.cwd || (project ? project.path : activeCwd),
     branch: opts.branch || null,
+    // God Mode worker brief {briefPath, model} - main-only, see spawnInto.
+    task: opts.task || null,
     size: { ...lastSize },
     watcher: null,
     gitWatcher: null,
@@ -1174,6 +1204,7 @@ function closeSession(sessionId) {
   intakeServer.revoke(sessionId);
   removeSessionConfig(userDir(), sessionId);
   overnight.forgetSession(sessionId);
+  if (orchestra.onSessionClosed(sessionId)) send('orchestra:changed', orchestra.view());
   sessions.delete(sessionId);
 
   if (sessions.size === 0) {
@@ -2353,6 +2384,43 @@ function registerIpc() {
   ipcMain.on('godmode:run', (_event, sessionIds) => {
     const ids = Array.isArray(sessionIds) ? sessionIds.slice(0, 64) : [];
     overnight.setRuns(ids.filter((id) => typeof id === 'string' && sessions.has(id)));
+  });
+
+  // God Mode v2 planner (slice 3). The renderer names a tab at most; the
+  // project, repo folder, profile and to-do list are all resolved here. The
+  // planner runs on the cloud default like /ask (ask:query's reasoning): a
+  // tab's local-model profile must not silently plan the whole run.
+  ipcMain.handle('orchestra:plan', async (_event, sessionId) => {
+    const session = resolveSession(sessionId);
+    if (!session) return { ok: false, error: 'noTab' };
+    const project = getProject(projects, session.projectId);
+    const res = await orchestra.makePlan({
+      projectId: session.projectId,
+      repoPath: project ? project.path : session.cwd,
+      profileId: session.profileId,
+      env: withClaudeOnPath(buildSessionEnv(process.env, {})),
+    });
+    if (res.ok) send('orchestra:changed', res.plan);
+    return res;
+  });
+
+  ipcMain.handle('orchestra:get', () => orchestra.view());
+
+  // Approve / Launch. orchestra.launch() validates the payload: only a known
+  // plan id, ids of its own packages and capped prompt strings get through.
+  ipcMain.handle('orchestra:launch', async (_event, payload) => {
+    const res = await orchestra.launch(payload);
+    if (res.ok) {
+      playCue('sfx.terminalNew');
+      send('orchestra:changed', res.plan);
+    }
+    return res;
+  });
+
+  ipcMain.handle('orchestra:discard', () => {
+    const ok = orchestra.discard();
+    if (ok) send('orchestra:changed', null);
+    return ok;
   });
 
   // "Don't sleep" switch. The renderer only says on/off - the script path

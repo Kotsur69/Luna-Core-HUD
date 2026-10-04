@@ -67,6 +67,42 @@ function withIntakeMcp(command, configPath) {
   return `${cmd} --mcp-config '${configPath}'`;
 }
 
+/** True when a start command launches the `claude` CLI itself. */
+function isClaudeCommand(command) {
+  const first = String(command || '').trim().split(/\s+/)[0].replace(/^["']|["']$/g, '');
+  return path.basename(first).replace(/\.(exe|cmd|bat|ps1)$/i, '').toLowerCase() === 'claude';
+}
+
+/**
+ * Hands a God Mode worker tab its task (ORCHESTRATOR_PLAN.md slice 3): the
+ * brief sits in a file, `--add-dir` lets the tab read it without a
+ * permission prompt, and the first message - a positional argument - tells
+ * Claude to read it. A positional prompt is delivered by the CLI itself, so
+ * nothing is typed into a shell that might not have started Claude yet.
+ *
+ * The prompt goes right after the binary, before any profile flag, so a
+ * variadic option (`--add-dir <dirs...>`, `--allowedTools <tools...>`) can
+ * never swallow it. Single quotes suit both shells LunaCore types into
+ * (PowerShell, POSIX sh); a path containing one is refused instead of escaped.
+ * @param {string} command
+ * @param {{briefPath:string, model?:string|null}} task
+ * @returns {string|null} the command, or null when it cannot carry the task
+ */
+function withTaskBrief(command, task) {
+  const cmd = String(command || '').trim();
+  const briefPath = task && typeof task.briefPath === 'string' ? task.briefPath : '';
+  if (!isClaudeCommand(cmd) || !briefPath || /['`\r\n]/.test(briefPath)) return null;
+  const [bin, ...rest] = cmd.split(/\s+/);
+  // Backticks around the path: unquoted, the model cut a path at its first
+  // space and asked for the wrong file (verified live).
+  const message = `Your task brief is in the file \`${briefPath}\` - read it first, then carry it out.`;
+  const parts = [bin, `'${message}'`, ...rest, '--add-dir', `'${path.dirname(briefPath)}'`];
+  if (task.model && /^[a-z0-9.-]+$/i.test(task.model) && !/(^|\s)--model(\s|=|$)/.test(cmd)) {
+    parts.push('--model', task.model);
+  }
+  return parts.join(' ');
+}
+
 // Extensions Windows will actually execute for a bare name. The empty string is
 // last on purpose: `claude` with no extension is the POSIX case and also catches
 // an extensionless shim, but on Windows the .cmd/.exe forms are what npm and the
@@ -113,4 +149,12 @@ function findExecutable(name, pathEnv, isWindows, exists) {
   return null;
 }
 
-module.exports = { withSessionId, withIntakeMcp, SESSION_ID_DECIDED, findExecutable, WIN_EXTS };
+module.exports = {
+  withSessionId,
+  withIntakeMcp,
+  withTaskBrief,
+  isClaudeCommand,
+  SESSION_ID_DECIDED,
+  findExecutable,
+  WIN_EXTS,
+};

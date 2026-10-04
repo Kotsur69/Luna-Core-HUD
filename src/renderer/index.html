@@ -409,6 +409,14 @@
       <p id="todo-empty" class="hint" data-i18n="todo.empty">Brak zadan.</p>
       <ul id="todo-list" class="todo-list"></ul>
       <button id="todo-clear" class="pad-send" data-i18n="todo.clearDone">Usun zrobione</button>
+      <!-- God Mode v2 planner (ORCHESTRATOR_PLAN.md slice 3) - opens #orchestra. -->
+      <button
+        id="orchestra-plan"
+        class="pad-send"
+        data-i18n="orch.plan"
+        data-i18n-title="orch.plan.hint"
+        title="Headless Claude dzieli otwarte zadania na paczki - kazda dostaje wlasny worktree i zakladke."
+      >Zaplanuj paczki (God Mode v2)</button>
       <label
         id="godmode-field"
         class="switch-field godmode-field"
@@ -892,6 +900,50 @@
       </div>
       <div id="shortcuts-list" class="shortcuts shortcuts-overlay__body"></div>
       <div class="palette__foot">
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ God Mode v2 plan review (ORCHESTRATOR_PLAN.md slice 3) ============ -->
+  <!-- modules/orchestra.js. Opened by #orchestra-plan in the to-do widget.
+       Reuses .palette's overlay/backdrop/modal/bar/foot CSS and
+       .libraries-overlay's width + scroll body, like #ask below. The body is
+       built in JS: planning / error / plan board are different states. -->
+  <div id="orchestra" class="palette libraries-overlay orchestra-overlay" tabindex="-1" hidden>
+    <div class="palette__backdrop" data-orchestra-close></div>
+    <div
+      class="palette__modal"
+      role="dialog"
+      aria-modal="true"
+      data-i18n-aria="orch.title"
+      aria-label="Plan God Mode"
+    >
+      <div class="palette__bar">
+        <span class="palette__glyph">&#x2442;</span>
+        <span class="orchestra__heading" data-i18n="orch.title">Plan God Mode</span>
+        <button
+          type="button"
+          class="libraries__closebtn"
+          data-orchestra-close
+          data-i18n-title="orch.close"
+          data-i18n-aria="orch.close"
+          title="Zamknij"
+          aria-label="Zamknij"
+        >×</button>
+      </div>
+      <div id="orchestra-body" class="libraries libraries-overlay__body orchestra__body" aria-live="polite"></div>
+      <div class="palette__foot orchestra__foot">
+        <button
+          type="button"
+          id="orchestra-approve"
+          class="pad-send"
+          data-i18n="orch.approve"
+          data-i18n-title="orch.approve.hint"
+          title="Uruchamia paczki bez zaleznosci (max 3), kazda w nowym worktree i zakladce."
+        >Zatwierdz i uruchom</button>
+        <button type="button" id="orchestra-replan" class="pad-send" data-i18n="orch.replan">Zaplanuj od nowa</button>
+        <button type="button" id="orchestra-discard" class="pad-send" data-i18n="orch.discard">Odrzuc plan</button>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>

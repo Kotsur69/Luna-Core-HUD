@@ -4416,3 +4416,81 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   outline: var(--border-w) solid var(--edge-glow);
   outline-offset: 2px;
 }
+
+/* ---- God Mode v2 plan review (#orchestra, modules/orchestra.js) --------- */
+/* Shell = .palette + .libraries-overlay (width, scroll body). Only the plan
+   board's own rows live here. */
+
+.orchestra__heading {
+  flex: 1;
+  font-family: var(--font-display);
+  letter-spacing: var(--tracking-title);
+  color: var(--text);
+}
+
+.orchestra__body { display: flex; flex-direction: column; gap: var(--space-6); }
+
+.orchestra__summary {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--neon-cyan);
+  font-variant-numeric: tabular-nums;
+}
+.orchestra__notes { font-size: var(--fs-sm); color: var(--text-dim); margin: 0; }
+.orchestra__msg { font-size: var(--fs-sm); color: var(--text-dim); margin: 0; }
+.orchestra__msg.is-warn { color: var(--warn); }
+.orchestra__msg.is-bad { color: var(--bad); }
+
+.orchestra__pkg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+}
+.orchestra__pkg.is-launched { border-color: var(--good); }
+.orchestra__pkg.is-failed { border-color: var(--bad); }
+
+.orchestra__head { display: flex; align-items: baseline; gap: var(--space-4); }
+.orchestra__title { flex: 1; font-size: var(--fs-md); color: var(--text); }
+.orchestra__id,
+.orchestra__meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+.orchestra__state {
+  font-size: var(--fs-2xs);
+  padding: var(--space-hair) var(--space-3);
+  border-radius: var(--radius-pill);
+  border: var(--border-w) solid var(--edge);
+  color: var(--text-dim);
+}
+.orchestra__state.is-launched { color: var(--good); border-color: var(--good); }
+.orchestra__state.is-failed { color: var(--bad); border-color: var(--bad); }
+.orchestra__state.is-closed { color: var(--warn); border-color: var(--warn); }
+
+.orchestra__todos { margin: 0; padding-left: var(--space-7); font-size: var(--fs-xs); color: var(--text); }
+
+.orchestra__prompt {
+  width: 100%;
+  min-height: 6rem;
+  resize: vertical;
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.orchestra__prompt:focus-visible { outline: var(--border-w) solid var(--neon-cyan); }
+.orchestra__prompt[readonly] { color: var(--text-dim); }
+
+.orchestra__actions { display: flex; gap: var(--space-4); justify-content: flex-end; }
+.orchestra__actions .pad-send,
+.orchestra__foot .pad-send { padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); }
+.orchestra__foot { align-items: center; }
+.orchestra__foot .pad-send:disabled { opacity: 0.5; cursor: default; box-shadow: none; }

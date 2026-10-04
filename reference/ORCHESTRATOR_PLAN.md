@@ -10,7 +10,18 @@ tab-bar ⑂ button. node_modules is NOT junction-linked: `git worktree remove
 2026-10-04: God Mode state per tab; runs sharing a list claim items, honour
 `dependsOn`, serialize ticks, stall on deadlock; overnight guard takes a SET
 of runs (one shared recovery per local server). Division is automatic, not
-manual (tab ids don't survive a restart). Slices 3-5 not started.
+manual (tab ids don't survive a restart). Slice 3 (planner) BUILT
+2026-10-04: `src/orchestraPlan.js` (headless `claude -p --json-schema`,
+prompt on stdin, read-only tools, validation + estimate), `src/orchestra.js`
+(plan held in main, Approve/Launch -> worktree + brief file + tab),
+`withTaskBrief` in `src/launch.js`, `#orchestra` overlay
+(`modules/orchestra.js`). Workers get their brief as the CLI's positional
+first message pointing at `<userDir>/tasks/<slug>.md` + `--add-dir` (no
+typing into a shell that may not run Claude yet; verified the read needs no
+permission prompt). Approve launches dependency-free packages only (max 3);
+dependents keep a manual Launch until the slice-4 supervisor. Plan is
+in-memory (persistence = slice 4); workers run in default permission mode.
+Slices 4-5 not started.
 Successor of `GODMODE_PLAN.md` (v1 = one tab, one list, sequential).
 
 ## Goal

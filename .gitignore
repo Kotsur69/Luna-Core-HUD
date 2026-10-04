@@ -34,3 +34,6 @@ config/*.local.md
 
 # Written at runtime by locallaunch.js (lean-MCP LM Studio tabs), per machine.
 config/lmstudio-empty-mcp.json
+
+# God Mode worker briefs (src/orchestra.js), written per launch.
+config/tasks/

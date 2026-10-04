@@ -286,6 +286,21 @@ contextBridge.exposeInMainWorld('lunacore', {
       Array.isArray(sessionIds) ? sessionIds.filter((id) => typeof id === 'string') : [],
     ),
 
+  // --- God Mode v2 planner (reference/ORCHESTRATOR_PLAN.md slice 3) ---
+  /** Plans the tab's project to-dos with a headless `claude -p`: Promise<{ok, plan?, error?}>. */
+  planOrchestra: (sessionId) => ipcRenderer.invoke('orchestra:plan', typeof sessionId === 'string' ? sessionId : null),
+  /** The current plan view, or null. */
+  getOrchestra: () => ipcRenderer.invoke('orchestra:get'),
+  /** Approve (ids null) or launch chosen packages; main validates the payload. */
+  launchOrchestra: (payload) => ipcRenderer.invoke('orchestra:launch', payload),
+  discardOrchestra: () => ipcRenderer.invoke('orchestra:discard'),
+  /** Plan changes (new plan, launches, a worker tab closed); returns an unsubscribe. */
+  onOrchestraChanged: (cb) => {
+    const listener = (_e, plan) => cb(plan);
+    ipcRenderer.on('orchestra:changed', listener);
+    return () => ipcRenderer.removeListener('orchestra:changed', listener);
+  },
+
   // --- "Don't sleep" switch (runs/kills the keep-awake .bat, src/keepawake.js) ---
   /** Promise<{on, available, reason, error}>. */
   getKeepAwake: () => ipcRenderer.invoke('keepawake:get'),

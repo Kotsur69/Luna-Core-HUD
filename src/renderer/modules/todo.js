@@ -29,6 +29,7 @@ import { term, getActiveSessionId } from './terminals.js';
 import { defineWidget } from './registry.js';
 import { mountGodModeControl } from './godmode.js';
 import { mountKeepAwakeControl } from './keepawake.js';
+import { mountOrchestraButton } from './orchestra.js';
 
 const SAVE_MS = 400;
 const MAX_TEXT_CHARS = 1000;
@@ -727,6 +728,7 @@ defineWidget({
 
     const offGodMode = mountGodModeControl(root);
     const offKeepAwake = mountKeepAwakeControl(root);
+    const offOrchestra = mountOrchestraButton(root);
     // Cards written by Claude (intake MCP tools) land without a reload.
     const offExternal = window.lunacore.onTodoChanged(reloadExternal);
 
@@ -754,6 +756,7 @@ defineWidget({
       offLang();
       offGodMode();
       offKeepAwake();
+      offOrchestra();
       offExternal();
       els = null;
     };

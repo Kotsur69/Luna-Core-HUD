@@ -155,6 +155,18 @@ async function addWorktree(repoPath, name, deps = {}) {
   return { ok: true, cwd, root: target, branch, envCopied };
 }
 
+/**
+ * How many uncommitted changes the checkout has - worktrees branch from
+ * HEAD, so the God Mode plan warns that workers will not see them.
+ * @param {string} repoPath
+ * @returns {Promise<number|null>} null when it is not a repo or git failed
+ */
+async function dirtyCount(repoPath, deps = {}) {
+  const res = await runGit(repoPath, ['status', '--porcelain'], deps.execImpl || execFile);
+  if (!res.ok) return null;
+  return res.stdout.split('\n').filter((l) => l.trim()).length;
+}
+
 module.exports = {
   WORKTREE_DIR,
   BRANCH_PREFIX,
@@ -164,4 +176,5 @@ module.exports = {
   branchFor,
   copyEnvFiles,
   addWorktree,
+  dirtyCount,
 };
