@@ -1256,6 +1256,21 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    with padding so you can hit the close button without aiming for a pixel. */
 .tab__close { font-size: 14px; padding: 4px 6px; }
 .tabs__new { font-size: 16px; padding: 4px 12px; align-self: center; }
+#tab-worktree { padding: 4px 8px; }
+/* Inline name field that replaces the worktree button while typing */
+.tabs__wt-input {
+  align-self: center;
+  width: 160px;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-panel-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-xs);
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+.tabs__wt-input:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 1px; }
+.tabs__wt-input.is-error { border-color: var(--bad); }
 .tab__close:hover { color: var(--danger, #ff6b8a); background: var(--surface-panel-2); }
 .tabs__new:hover { color: var(--neon-cyan); background: var(--surface-panel-2); }
 .tab__label:focus-visible,

@@ -53,6 +53,9 @@ import { agentStream } from './keysynth.js';
 // A2f: set once by mountTabs() - see modules/terminal.js.
 let tabEls = null;
 
+/** Prefix on a worktree tab's label (git's "branch" glyph). */
+const WORKTREE_MARK = '⑂';
+
 /** Session metadata from the main process - the source of truth for what lives. */
 let sessionList = [];
 
@@ -231,8 +234,10 @@ function renderTabs() {
     btn.className = 'tab__label';
     btn.setAttribute('role', 'tab');
     btn.setAttribute('aria-selected', String(meta.id === getActiveSessionId()));
-    btn.textContent = meta.folder || meta.profileLabel || meta.id;
-    btn.title = `${meta.profileLabel || ''} - ${meta.cwd || ''}`.trim();
+    const label = meta.folder || meta.profileLabel || meta.id;
+    // A worktree tab carries a branch mark, so two tabs of one project tell apart.
+    btn.textContent = meta.branch ? `${WORKTREE_MARK} ${label}` : label;
+    btn.title = [meta.profileLabel, meta.branch, meta.cwd].filter(Boolean).join(' - ');
     btn.addEventListener('click', () => {
       sfx.navClick();
       window.lunacore.activateSession(meta.id);
@@ -292,6 +297,59 @@ window.lunacore.onSessions(({ sessions, activeSessionId: activeId }) => {
   renderTabs();
 });
 
+/**
+ * "New tab in worktree": swaps the button for a name field in place. Enter
+ * creates the worktree + tab (main does the git work), Esc or blur cancels.
+ * A failure keeps the field open with the reason in its tooltip.
+ */
+function openWorktreeField(button) {
+  if (button.hidden) return;
+  const input = document.createElement('input');
+  input.className = 'tabs__wt-input';
+  input.type = 'text';
+  input.maxLength = 60;
+  input.placeholder = t('tabs.worktree.placeholder');
+  input.setAttribute('aria-label', t('tabs.worktree'));
+  button.hidden = true;
+  button.after(input);
+
+  let busy = false;
+  const close = () => {
+    input.remove();
+    button.hidden = false;
+  };
+  input.addEventListener('blur', () => {
+    if (!busy) close();
+  });
+  input.addEventListener('input', () => input.classList.remove('is-error'));
+  input.addEventListener('keydown', async (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      button.focus();
+      return;
+    }
+    if (e.key !== 'Enter' || busy || !input.value.trim()) return;
+    e.preventDefault();
+    busy = true;
+    input.disabled = true;
+    const res = await window.lunacore
+      .createWorktreeSession(input.value)
+      .catch(() => ({ ok: false, error: 'gitFailed' }));
+    busy = false;
+    if (res && res.ok) {
+      close();
+      return;
+    }
+    const reason = t(`tabs.worktree.err.${(res && res.error) || 'gitFailed'}`);
+    input.disabled = false;
+    input.classList.add('is-error');
+    input.title = res && res.detail ? `${reason}: ${res.detail}` : reason;
+    input.focus();
+  });
+  input.focus();
+}
+
 /** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
 export function mountTabs(root) {
   tabEls = { list: root.querySelector('#tabs-list') };
@@ -299,6 +357,8 @@ export function mountTabs(root) {
     sfx.terminalNew();
     window.lunacore.createSession({});
   });
+  const wtButton = root.querySelector('#tab-worktree');
+  wtButton.addEventListener('click', () => openWorktreeField(wtButton));
   renderTabs();
 }
 

@@ -56,6 +56,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   },
   /** New tab (defaults to the current profile + project). */
   createSession: (opts = {}) => ipcRenderer.send('sessions:create', opts),
+  /** New tab in a fresh git worktree of the active project: (name) -> {ok, error?, detail?, branch?}. */
+  createWorktreeSession: (name) => ipcRenderer.invoke('sessions:createWorktree', name),
   /** Closes a tab; the last one is replaced with a fresh one, never left empty. */
   closeSession: (sessionId) => ipcRenderer.send('sessions:close', sessionId),
   /** Shows the chosen tab. The other tabs' processes keep running in the background. */

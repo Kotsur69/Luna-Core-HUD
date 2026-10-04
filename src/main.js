@@ -149,6 +149,7 @@ const { readTodos, writeTodos } = require('./todo');
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
+const { addWorktree } = require('./worktrees');
 
 const { micState } = require('./devices');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
@@ -223,7 +224,7 @@ function safeCwd(dir) {
  *
  * @typedef {{
  *   id: string, proc: import('node-pty').IPty|null, profileId: string,
- *   projectId: string|null, cwd: string, size: {cols:number,rows:number},
+ *   projectId: string|null, cwd: string, branch: string|null, size: {cols:number,rows:number},
  *   watcher: TranscriptWatcher|null, alive: boolean
  * }} Session
  */
@@ -388,6 +389,7 @@ function sessionSummary(s) {
     projectId: s.projectId,
     cwd: s.cwd,
     folder: path.basename(s.cwd) || s.cwd,
+    branch: s.branch || null,
     // A local-model tab still in its pre-spawn prep counts as alive.
     alive: s.alive || s.preparing === true,
   };
@@ -1076,7 +1078,11 @@ function launchSession(session, profile) {
 
 /**
  * Creates a new tab and makes it active.
- * @param {{profileId?:string, projectId?:string}} [opts]
+ *
+ * `cwd` / `branch` are main-process-only overrides (a worktree tab keeps its
+ * project id - same to-do list, same project settings - but runs elsewhere).
+ * The renderer can never pass them: see the 'sessions:create' handler.
+ * @param {{profileId?:string, projectId?:string, cwd?:string, branch?:string}} [opts]
  * @returns {Session|null}
  */
 function createSession(opts = {}) {
@@ -1090,7 +1096,8 @@ function createSession(opts = {}) {
     proc: null,
     profileId: profile.id,
     projectId: project ? project.id : null,
-    cwd: project ? project.path : activeCwd,
+    cwd: opts.cwd || (project ? project.path : activeCwd),
+    branch: opts.branch || null,
     size: { ...lastSize },
     watcher: null,
     gitWatcher: null,
@@ -1256,6 +1263,7 @@ function restartSession(session, opts = {}) {
     if (project) {
       session.projectId = project.id;
       session.cwd = project.path;
+      session.branch = null; // a project switch leaves the worktree behind
     }
   }
 
@@ -1674,8 +1682,35 @@ function registerIpc() {
   }));
 
   // New tab: defaults to the same profile and project as currently selected.
+  // Only the two ids pass through - cwd/branch are main-only overrides, so the
+  // renderer cannot start a process in an arbitrary folder.
   ipcMain.on('sessions:create', (_event, opts) => {
-    createSession(opts && typeof opts === 'object' ? opts : {});
+    const o = opts && typeof opts === 'object' ? opts : {};
+    createSession({
+      profileId: typeof o.profileId === 'string' ? o.profileId : undefined,
+      projectId: typeof o.projectId === 'string' ? o.projectId : undefined,
+    });
+  });
+
+  // New tab in a fresh git worktree of the ACTIVE tab's project (slice 1).
+  // The renderer sends only the name; main resolves the repo from the
+  // project config, so the folder is never renderer-chosen.
+  ipcMain.handle('sessions:createWorktree', async (_event, name) => {
+    if (typeof name !== 'string' || name.length > 200) return { ok: false, error: 'badName' };
+    const active = activeSessionId ? sessions.get(activeSessionId) : null;
+    const project = getProject(projects, (active && active.projectId) || activeProjectId);
+    const base = project ? project.path : activeCwd;
+    if (!base) return { ok: false, error: 'notRepo' };
+    const res = await addWorktree(base, name);
+    if (!res.ok) return res;
+    createSession({
+      profileId: active ? active.profileId : undefined,
+      projectId: project ? project.id : undefined,
+      cwd: res.cwd,
+      branch: res.branch,
+    });
+    playCue('sfx.terminalNew');
+    return { ok: true, branch: res.branch, cwd: res.cwd, envCopied: res.envCopied };
   });
 
   ipcMain.on('sessions:close', (_event, sessionId) => {
