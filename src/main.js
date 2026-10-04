@@ -2348,10 +2348,11 @@ function registerIpc() {
   // literally the "popup window with an are-you-sure message" Mati asked for,
   // for less code than a hand-rolled overlay/focus-trap. Resolves true only
   // on the explicit Yes button; closing the dialog any other way is a No.
-  // The renderer reports which tab a God Mode run is bound to (or null when it
-  // ends). Only a live session id arms the guard - never trust the renderer.
-  ipcMain.on('godmode:run', (_event, sessionId) => {
-    overnight.setRun(typeof sessionId === 'string' && sessions.has(sessionId) ? sessionId : null);
+  // The renderer reports every tab with a live God Mode run (an empty list
+  // when none). Only live session ids arm the guard - never trust the renderer.
+  ipcMain.on('godmode:run', (_event, sessionIds) => {
+    const ids = Array.isArray(sessionIds) ? sessionIds.slice(0, 64) : [];
+    overnight.setRuns(ids.filter((id) => typeof id === 'string' && sessions.has(id)));
   });
 
   // "Don't sleep" switch. The renderer only says on/off - the script path

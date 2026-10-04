@@ -6,7 +6,11 @@ Settings toggle, `~/.claude/commands/luna-plan.md`. Slice 1 (worktree tabs)
 BUILT 2026-10-04: `src/worktrees.js`, `createSession` cwd/branch override,
 tab-bar ⑂ button. node_modules is NOT junction-linked: `git worktree remove
 --force` follows the junction and empties the main checkout's node_modules
-(verified) - workers install their own. Slices 2-5 not started.
+(verified) - workers install their own. Slice 2 (per-tab v1) BUILT
+2026-10-04: God Mode state per tab; runs sharing a list claim items, honour
+`dependsOn`, serialize ticks, stall on deadlock; overnight guard takes a SET
+of runs (one shared recovery per local server). Division is automatic, not
+manual (tab ids don't survive a restart). Slices 3-5 not started.
 Successor of `GODMODE_PLAN.md` (v1 = one tab, one list, sequential).
 
 ## Goal

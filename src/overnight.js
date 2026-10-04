@@ -13,8 +13,11 @@
 //     model, telling God Mode through godmode:signal so the run waits for the
 //     backend instead of burning its connection retries.
 //
-// Both halves are scoped to the run: armed when the renderer reports a run,
-// released the moment it ends, stalls or its tab closes.
+// Both halves are scoped to the runs: armed when the renderer reports one,
+// released the moment the last one ends, stalls or its tab closes. Several
+// tabs can run at once (orchestrator slice 2): keep-awake is shared, the
+// watchdog is per tab, and tabs on the SAME local server share one recovery
+// so two runs never wake/load in parallel.
 //
 // A single bad probe is never acted on - it is confirmed a few seconds later
 // first, since a busy server can miss one probe while it generates. The
@@ -96,7 +99,11 @@ function createOvernightGuard(deps) {
     timers = { setInterval, clearInterval, setTimeout, clearTimeout },
   } = deps;
 
-  let run = null;
+  /** @type {Map<string, Object>} sessionId -> run record */
+  const runs = new Map();
+  let blockerId = null;
+  /** upstream -> in-flight recovery promise, shared by runs on one server */
+  const recoveries = new Map();
 
   function setThrottling(enabled) {
     const wc = getWebContents();
@@ -110,24 +117,33 @@ function createOvernightGuard(deps) {
     r.confirm = null;
   }
 
-  function release() {
-    if (!run) return;
-    stopWatch(run);
-    if (blocker.isStarted(run.blockerId)) blocker.stop(run.blockerId);
-    setThrottling(true);
-    run = null;
+  function isLive(r) {
+    return runs.get(r.sessionId) === r;
   }
 
-  /** Reports a run (a tab id) or its end (null). Idempotent per tab. */
-  function setRun(sessionId) {
-    const id = typeof sessionId === 'string' && sessionId ? sessionId : null;
-    if (run && run.sessionId === id) return;
-    release();
-    if (!id) return;
-    run = {
-      sessionId: id,
-      upstream: resolveLocal(id) || null,
-      blockerId: blocker.start('prevent-app-suspension'),
+  /** Keep-awake + throttling follow "is ANY run live". */
+  function syncPower() {
+    if (runs.size > 0 && blockerId === null) {
+      blockerId = blocker.start('prevent-app-suspension');
+      setThrottling(false);
+    } else if (runs.size === 0 && blockerId !== null) {
+      if (blocker.isStarted(blockerId)) blocker.stop(blockerId);
+      blockerId = null;
+      setThrottling(true);
+    }
+  }
+
+  function dropRun(sessionId) {
+    const r = runs.get(sessionId);
+    if (!r) return;
+    stopWatch(r);
+    runs.delete(sessionId);
+  }
+
+  function addRun(sessionId) {
+    const r = {
+      sessionId,
+      upstream: resolveLocal(sessionId) || null,
       interval: null,
       confirm: null,
       busy: false,
@@ -137,11 +153,42 @@ function createOvernightGuard(deps) {
       lost: false,
       lastModelKey: null,
     };
-    setThrottling(false);
-    if (run.upstream) {
-      run.interval = timers.setInterval(() => { check(); }, intervalMs);
-      check();
+    runs.set(sessionId, r);
+    if (r.upstream) {
+      r.interval = timers.setInterval(() => { checkRun(r); }, intervalMs);
+      checkRun(r);
     }
+  }
+
+  /** Reports the full set of tabs with a live run. Idempotent per tab. */
+  function setRuns(sessionIds) {
+    const wanted = new Set(
+      (Array.isArray(sessionIds) ? sessionIds : []).filter((id) => typeof id === 'string' && id),
+    );
+    for (const id of [...runs.keys()]) if (!wanted.has(id)) dropRun(id);
+    for (const id of wanted) if (!runs.has(id)) addRun(id);
+    syncPower();
+  }
+
+  /** Single-run form (v1): a tab id replaces every run, null ends them all. */
+  function setRun(sessionId) {
+    setRuns(typeof sessionId === 'string' && sessionId ? [sessionId] : []);
+  }
+
+  function release() {
+    setRuns([]);
+  }
+
+  /** One recovery per upstream at a time; every run on it awaits the same one. */
+  function sharedRecover(r) {
+    const key = r.upstream;
+    if (!recoveries.has(key)) {
+      const p = Promise.resolve()
+        .then(() => recover({ modelKey: r.lastModelKey }))
+        .finally(() => recoveries.delete(key));
+      recoveries.set(key, p);
+    }
+    return recoveries.get(key);
   }
 
   async function attemptRecovery(r) {
@@ -150,8 +197,8 @@ function createOvernightGuard(deps) {
       signal(r.sessionId, 'backendRecovering');
     }
     r.attempts += 1;
-    const result = await recover({ modelKey: r.lastModelKey });
-    if (run !== r) return; // the run ended or moved on while recovery ran
+    const result = await sharedRecover(r);
+    if (!isLive(r)) return; // the run ended or moved on while recovery ran
     if (result && result.ok) {
       r.recovering = false;
       r.attempts = 0;
@@ -165,10 +212,9 @@ function createOvernightGuard(deps) {
     }
   }
 
-  /** One watchdog pass. Safe to call at any time; overlapping calls are dropped. */
-  async function check() {
-    const r = run;
-    if (!r || !r.upstream || r.busy || r.lost) return;
+  /** One watchdog pass for one run; overlapping calls are dropped. */
+  async function checkRun(r) {
+    if (!isLive(r) || !r.upstream || r.busy || r.lost) return;
     r.busy = true;
     try {
       let reading = null;
@@ -177,7 +223,7 @@ function createOvernightGuard(deps) {
       } catch {
         reading = null;
       }
-      if (run !== r) return;
+      if (!isLive(r)) return;
       if (isBackendHealthy(reading)) {
         const loaded = pickLoadedModel(reading.models);
         if (loaded) r.lastModelKey = loaded.id;
@@ -194,7 +240,7 @@ function createOvernightGuard(deps) {
       if (r.confirm === null) {
         r.confirm = timers.setTimeout(() => {
           r.confirm = null;
-          return check();
+          return checkRun(r);
         }, confirmDelayMs);
       }
     } finally {
@@ -202,24 +248,36 @@ function createOvernightGuard(deps) {
     }
   }
 
-  /** A dropped request on the run's tab: look now instead of at the next tick. */
+  /** A watchdog pass for one tab's run, or for every run when no id is given. */
+  function check(sessionId) {
+    if (typeof sessionId === 'string') {
+      const r = runs.get(sessionId);
+      return r ? checkRun(r) : Promise.resolve();
+    }
+    return Promise.all([...runs.values()].map(checkRun)).then(() => undefined);
+  }
+
+  /** A dropped request on a run's tab: look now instead of at the next tick. */
   function onConnectionError(sessionId) {
-    if (!run || run.sessionId !== sessionId) return Promise.resolve();
-    return check();
+    return runs.has(sessionId) ? check(sessionId) : Promise.resolve();
   }
 
   /** A tab closed: a run bound to it is over. */
   function forgetSession(sessionId) {
-    if (run && run.sessionId === sessionId) release();
+    if (!runs.has(sessionId)) return;
+    dropRun(sessionId);
+    syncPower();
   }
 
   return {
     setRun,
+    setRuns,
     check,
     onConnectionError,
     forgetSession,
     stop: release,
-    current: () => (run ? run.sessionId : null),
+    current: () => (runs.size > 0 ? [...runs.keys()][0] : null),
+    currentAll: () => [...runs.keys()],
   };
 }
 

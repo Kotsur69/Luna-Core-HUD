@@ -194,6 +194,52 @@ test('forgetSession ends the run bound to a closed tab', () => {
   assert.strictEqual(blocker.started.size, 0);
 });
 
+// ---- several runs at once (orchestrator slice 2) ---------------------------
+
+test('several runs share one keep-awake blocker until the last one ends', () => {
+  const { guard, blocker, wc } = setup({ local: null });
+  guard.setRuns(['s1', 's2']);
+  assert.strictEqual(blocker.started.size, 1);
+  assert.strictEqual(wc.throttling, false);
+  guard.setRuns(['s2']);
+  assert.strictEqual(blocker.started.size, 1);
+  assert.deepStrictEqual(guard.currentAll(), ['s2']);
+  guard.forgetSession('s2');
+  assert.strictEqual(blocker.started.size, 0);
+  assert.strictEqual(wc.throttling, true);
+});
+
+test('setRuns ignores junk ids and keeps a surviving run untouched', () => {
+  const { guard, timers } = setup();
+  guard.setRuns(['s1']);
+  const watch = [...timers.intervals.keys()];
+  guard.setRuns(['s1', '', null, 7, 's1']);
+  assert.deepStrictEqual(guard.currentAll(), ['s1']);
+  assert.deepStrictEqual([...timers.intervals.keys()], watch, 's1 was not restarted');
+});
+
+test('two runs on one local server share a single recovery', async () => {
+  let release;
+  const { guard, timers, signals, recoverCalls } = setup({
+    probes: [DOWN],
+    recover: () => new Promise((r) => { release = () => r({ ok: true, action: 'reload' }); }),
+  });
+  guard.setRuns(['s1', 's2']);
+  await guard.check();
+  // Real timers fire independently - fire both confirmations concurrently.
+  const fns = [...timers.timeouts.values()];
+  timers.timeouts.clear();
+  const confirming = Promise.all(fns.map((fn) => fn()));
+  await new Promise((r) => setImmediate(r));
+  release();
+  await confirming;
+  assert.strictEqual(recoverCalls.length, 1);
+  assert.deepStrictEqual(
+    signals.filter(([, type]) => type === 'backendRecovered').map(([id]) => id).sort(),
+    ['s1', 's2'],
+  );
+});
+
 // ---- recoverLocalBackend ----------------------------------------------------
 
 function recoverDeps({ wake = { ok: true }, listed = { ok: true, models: [] }, load = { ok: true, identifier: 'm' } } = {}) {
