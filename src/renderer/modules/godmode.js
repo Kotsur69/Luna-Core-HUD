@@ -32,7 +32,7 @@
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { getActiveSessionId } from './terminals.js';
-import { openCount, syncTodoProject } from './todo.js';
+import { openCount, syncTodoProject, cardPrompt } from './todo.js';
 import { sfx, voice } from './sound.js';
 
 // A fixed instruction appended to every injected task. onTurnEnd (see below)
@@ -119,7 +119,8 @@ async function injectNext() {
     return;
   }
   currentAt = next.at;
-  currentText = next.text;
+  // A task card pastes its details/done-when too; a plain item is just its text.
+  currentText = cardPrompt(next);
   window.lunacore.pastePrompt(currentText + AUTONOMY_NUDGE, true, boundSessionId);
   render();
 }

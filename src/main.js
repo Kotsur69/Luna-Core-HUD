@@ -69,7 +69,7 @@ const { createKeepAwake, CONFIG_FILE: KEEP_AWAKE_CONFIG } = require('./keepawake
 // Env for every `claude` we start: inherited env minus session markers + layers.
 const { withColorSupport, buildSessionEnv } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
-const { withSessionId, findExecutable } = require('./launch');
+const { withSessionId, withIntakeMcp, findExecutable } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject, removeProject } = require('./projects');
 const {
@@ -146,6 +146,9 @@ const {
 const { saveClip, pruneClips, clipsDir } = require('./screenshots');
 
 const { readTodos, writeTodos } = require('./todo');
+// Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
+// which a tab's `claude` writes task cards into that tab's project list.
+const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
 
 const { micState } = require('./devices');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
@@ -732,6 +735,38 @@ function mcpHealthCached(rescan) {
   return mcpHealthPromise;
 }
 
+// One intake server for the whole app, started lazily by the first tab that
+// needs it. storeFor() resolves the CURRENT project of the calling tab on
+// every request, so a tab switched to another project writes there.
+const intakeServer = new IntakeServer({
+  version: app.getVersion(),
+  storeFor: (sessionId) => {
+    const session = sessions.get(sessionId);
+    if (!session) return null;
+    return {
+      read: () => readTodos(session.projectId),
+      write: (list) => {
+        const ok = writeTodos(session.projectId, list);
+        // The widget repaints from disk (merging any unsaved local edit).
+        if (ok) send('todo:changed', { projectId: session.projectId });
+        return ok;
+      },
+    };
+  },
+});
+
+/**
+ * Gives a tab its own intake token and --mcp-config file.
+ * @param {Session} session
+ * @returns {Promise<string|null>} the config path, or null (off / unavailable)
+ */
+async function prepareIntake(session) {
+  if (readUiPrefs().todoToolsEnabled === false) return null;
+  const started = await intakeServer.start();
+  if (!started.ok || !ensureUserDir()) return null;
+  return writeSessionConfig(userDir(), session.id, intakeServer.url(), intakeServer.issueToken(session.id));
+}
+
 /**
  * Attaches a PTY + TranscriptWatcher to an existing session record. Split out
  * because both creating a tab and restarting it under a new profile or
@@ -969,11 +1004,16 @@ function spawnInto(session, profile, launch = null) {
   session.gitWatcher = new GitFileWatcher(cwd, (files) => send('metrics:gitfiles', { sessionId: session.id, files }));
   session.gitWatcher.start();
 
-  // PTY buffers input, so the command runs once the shell is ready.
+  // PTY buffers input, so the command runs once the shell is ready. The
+  // intake config is prepared in parallel; it never blocks or fails a launch
+  // (prepareIntake resolves null when off or unavailable).
   const startCommand = pinnedCommand || command;
   if (startCommand) {
+    const intakeConfig = prepareIntake(session).catch(() => null);
     setTimeout(() => {
-      if (session.proc === proc) proc.write(`${startCommand}\r`);
+      intakeConfig.then((configPath) => {
+        if (session.proc === proc) proc.write(`${withIntakeMcp(startCommand, configPath)}\r`);
+      });
     }, 600);
   }
 
@@ -1124,6 +1164,8 @@ function closeSession(sessionId) {
   // Only stopped HERE, not in teardownSession() - see the session field's own
   // comment: a restart must not lose this watcher's warm sample.
   if (session.localModelWatcher) session.localModelWatcher.stop();
+  intakeServer.revoke(sessionId);
+  removeSessionConfig(userDir(), sessionId);
   overnight.forgetSession(sessionId);
   sessions.delete(sessionId);
 
@@ -2602,7 +2644,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   // Every tab has its own process and its own watcher - clean up all of them.
-  for (const session of sessions.values()) teardownSession(session);
+  for (const session of sessions.values()) {
+    teardownSession(session);
+    removeSessionConfig(userDir(), session.id);
+  }
+  intakeServer.stop().catch(() => {});
   sessions.clear();
   activeSessionId = null;
 

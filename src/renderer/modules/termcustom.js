@@ -84,6 +84,10 @@ const els = {
   askLocalModelField: document.getElementById('ask-local-model-field'),
   askLocalModelStatus: document.getElementById('ask-local-model-status'),
   askLocalModelToggle: document.getElementById('ask-local-model-toggle'),
+  // Task intake MCP tools (src/uiprefs.js's todoToolsEnabled). Same triple.
+  todoToolsField: document.getElementById('todotools-field'),
+  todoToolsStatus: document.getElementById('todotools-status'),
+  todoToolsToggle: document.getElementById('todotools-toggle'),
 };
 
 // The curated <option> values in index.html - anything else means "Custom…".
@@ -159,6 +163,26 @@ els.shotPasteToggle.addEventListener('change', () => {
 // which would strand it on "on" while the switch reads off - same repaint
 // notify.js does, and for the same reason.
 onLangChange(renderShotPaste);
+
+// Task intake tools. On by default, mirroring uiprefs. Main reads the pref
+// when a tab starts, so there is no live state to push anywhere else.
+let todoToolsEnabled = true;
+
+/** Repaints the to-do-tools switch from module state. */
+function renderTodoTools() {
+  els.todoToolsToggle.checked = todoToolsEnabled;
+  els.todoToolsField.classList.toggle('is-armed', todoToolsEnabled);
+  els.todoToolsStatus.textContent = t(todoToolsEnabled ? 'todotools.on' : 'todotools.off');
+}
+
+els.todoToolsToggle.addEventListener('change', () => {
+  sfx.modeToggle();
+  todoToolsEnabled = els.todoToolsToggle.checked;
+  renderTodoTools();
+  window.lunacore.setUiPrefs({ todoToolsEnabled });
+});
+
+onLangChange(renderTodoTools);
 
 // /ask local-model opt-in. Off by default (src/uiprefs.js's askUseLocalModel) -
 // mirrors this file's own default, so a repaint that beats the async prefs
@@ -498,6 +522,8 @@ export async function initTermcustomSettings() {
   // handler, so no push into another module here - just paint the switch.
   askLocalModelEnabled = prefs.askUseLocalModel === true;
   renderAskLocalModel();
+  todoToolsEnabled = prefs.todoToolsEnabled !== false;
+  renderTodoTools();
 
   // mountBoot(root) is root-agnostic (see boot.js) - #termcustom is static,
   // non-remountable markup, so the returned disposer is never called, same

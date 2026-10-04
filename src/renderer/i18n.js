@@ -51,6 +51,10 @@ const I18N_DICT = {
       'Ctrl+V ze zrzutem ekranu (Win+Shift+S) zapisuje PNG w %TEMP% i wkleja sciezke do pliku - w tej formie Claude Code czyta obrazy. Domyslnie wlaczone.',
     'shotpaste.on': 'wlaczone',
     'shotpaste.off': 'wylaczone',
+    'todotools.label': 'Narzedzia To-do dla Claude',
+    'todotools.hint': 'Nowe karty dostaja narzedzia MCP luna_todo_*, dzieki ktorym Claude dopisuje karty zadan do listy To-do. Dotyczy kart otwartych po zmianie.',
+    'todotools.on': 'wlaczone',
+    'todotools.off': 'wylaczone',
     'termcustom.section.ask': '/ask',
     'ask.localModel.label': 'Uzywaj lokalnego modelu dla /ask',
     'ask.localModel.hint':
@@ -671,6 +675,10 @@ const I18N_DICT = {
     'todo.clearDone': 'Usun zrobione',
     'todo.inject': 'Wklej do sesji',
     'todo.remove': 'Usun zadanie',
+    'todo.files': 'plikow: {n}',
+    'todo.acceptance': 'Gotowe gdy',
+    'todo.verify': 'Sprawdz',
+    'todo.dependsOn': 'Zalezy od: {n}',
     'godmode.label': 'God Mode',
     'godmode.hint':
       'LunaCore sam wykona liste zadan, jedno po drugim - przetrwa limit uzycia i zerwane polaczenie. Kazde uzbrojenie wymaga potwierdzenia.',
@@ -744,6 +752,10 @@ const I18N_DICT = {
       'Ctrl+V of a screenshot (Win+Shift+S) writes a PNG under %TEMP% and pastes its file path - the form Claude Code reads an image in. On by default.',
     'shotpaste.on': 'on',
     'shotpaste.off': 'off',
+    'todotools.label': 'To-do tools for Claude',
+    'todotools.hint': 'New tabs get the luna_todo_* MCP tools, so Claude can write task cards into the To-do list. Applies to tabs opened after the change.',
+    'todotools.on': 'on',
+    'todotools.off': 'off',
     'termcustom.section.ask': '/ask',
     'ask.localModel.label': 'Use a local model for /ask',
     'ask.localModel.hint':
@@ -1361,6 +1373,10 @@ const I18N_DICT = {
     'todo.clearDone': 'Clear done',
     'todo.inject': 'Paste into session',
     'todo.remove': 'Remove task',
+    'todo.files': '{n} files',
+    'todo.acceptance': 'Done when',
+    'todo.verify': 'Verify',
+    'todo.dependsOn': 'Depends on: {n}',
     'godmode.label': 'God Mode',
     'godmode.hint':
       "LunaCore runs the list on its own, one item at a time - survives usage-limit walls and dropped connections. Every arm needs a confirm.",

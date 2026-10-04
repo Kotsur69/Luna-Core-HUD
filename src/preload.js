@@ -262,6 +262,13 @@ contextBridge.exposeInMainWorld('lunacore', {
   getTodos: (sessionId) => ipcRenderer.invoke('todo:read', sessionId),
   /** Writes that project's whole list; Promise<boolean>. */
   saveTodos: (list, sessionId) => ipcRenderer.invoke('todo:write', list, sessionId),
+  /** A list was changed from outside the widget (Claude via the intake MCP
+   *  tools): ({ projectId }). Returns an unsubscribe function. */
+  onTodoChanged: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on('todo:changed', listener);
+    return () => ipcRenderer.removeListener('todo:changed', listener);
+  },
 
   // --- God Mode (unattended to-do runner, see reference/GODMODE_PLAN.md) ---
   /** Usage-limit / connection-drop signal from a session's raw stdout: ({ sessionId, type }). */

@@ -1270,6 +1270,20 @@
           </span>
         </label>
 
+        <!-- Task intake (src/intake.js): new tabs get the luna_todo_* MCP tools.
+             Default ON (uiprefs' todoToolsEnabled); applies to tabs opened after
+             the change, since the flag is part of the tab's start command. -->
+        <label id="todotools-field" class="switch-field" data-i18n-title="todotools.hint" title="Nowe karty dostaja narzedzia MCP luna_todo_*, dzieki ktorym Claude dopisuje karty zadan do listy To-do. Dotyczy kart otwartych po zmianie.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="todotools.label">Narzedzia To-do dla Claude</span>
+            <span id="todotools-status" class="switch-field__status" data-i18n="todotools.on">wlaczone</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="todotools-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+
         <h3 class="termcustom__section" data-i18n="termcustom.section.ask">/ask</h3>
         <!-- Off by default: without this, /ask always calls the cloud `claude`
              CLI with --model sonnet, regardless of which profile a terminal

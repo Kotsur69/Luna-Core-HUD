@@ -166,6 +166,11 @@ const DEFAULTS = {
   // there is no watching to opt into. Off, an image paste does nothing at all,
   // which is what Ctrl+V did before the feature existed.
   screenshotPasteEnabled: true,
+  // Task intake (src/intake.js): new tabs get the luna_todo_* MCP tools so
+  // Claude can write cards into the To-do list. Default ON - the cost is one
+  // small tool schema per LunaCore tab, nothing outside LunaCore is touched.
+  // Applies to tabs started after the change.
+  todoToolsEnabled: true,
   // /ask (Ctrl+B's tool recommender, src/ask.js). Default OFF: without this,
   // ask:query always calls the cloud `claude` CLI with --model sonnet -
   // switching a profile's terminal tab to a local endpoint must never make
@@ -623,6 +628,9 @@ function readUiPrefs() {
         typeof obj.screenshotPasteEnabled === 'boolean'
           ? obj.screenshotPasteEnabled
           : DEFAULTS.screenshotPasteEnabled,
+      // Missing key => ENABLED, same reasoning as screenshotPasteEnabled.
+      todoToolsEnabled:
+        typeof obj.todoToolsEnabled === 'boolean' ? obj.todoToolsEnabled : DEFAULTS.todoToolsEnabled,
       // Missing key => disabled (prefs file written before this option existed).
       askUseLocalModel:
         typeof obj.askUseLocalModel === 'boolean' ? obj.askUseLocalModel : DEFAULTS.askUseLocalModel,
@@ -709,6 +717,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.screenshotPasteEnabled === 'boolean') {
       next.screenshotPasteEnabled = partial.screenshotPasteEnabled;
+    }
+    if (partial && typeof partial.todoToolsEnabled === 'boolean') {
+      next.todoToolsEnabled = partial.todoToolsEnabled;
     }
     if (partial && typeof partial.autoProceedArmed === 'boolean') {
       next.autoProceedArmed = partial.autoProceedArmed;

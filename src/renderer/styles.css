@@ -3791,6 +3791,39 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   overflow-wrap: break-word;
 }
 
+/* Task cards (intake MCP tools): title + a chip line in the middle grid cell,
+   the card's details below them while expanded. min-width: 0 keeps the
+   title's ellipsis working inside the 1fr column. */
+.todo-item__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.todo-item__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.todo-chip {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+  border: var(--border-w) solid var(--edge);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+.todo-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.todo-card__label { color: var(--neon-cyan); }
+
 /* A ticked item stays readable rather than fading out: it is still a record of
    what was done, and dimming it to near-invisibility is how a board quietly
    loses its own history. */

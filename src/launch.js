@@ -48,6 +48,25 @@ function withSessionId(command, uuid) {
   return `${cmd} --session-id ${uuid}`;
 }
 
+/**
+ * Appends `--mcp-config '<path>'` (the tab's task-intake server, src/intake.js)
+ * to a plain `claude` start command. Left alone: non-claude commands, and a
+ * command already running under --strict-mcp-config (a lean local-model tab
+ * asked for NO extra MCP servers - honour that). The path is single-quoted for
+ * the shell it is typed into, so one containing a quote is refused.
+ * @param {string} command
+ * @param {string|null} configPath
+ * @returns {string} the command, with or without the flag
+ */
+function withIntakeMcp(command, configPath) {
+  const cmd = String(command || '').trim();
+  if (!cmd || typeof configPath !== 'string' || !configPath || configPath.includes("'")) return cmd;
+  const first = cmd.split(/\s+/)[0].replace(/^["']|["']$/g, '');
+  const bin = path.basename(first).replace(/\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();
+  if (bin !== 'claude' || /(^|\s)--strict-mcp-config(\s|$)/.test(cmd)) return cmd;
+  return `${cmd} --mcp-config '${configPath}'`;
+}
+
 // Extensions Windows will actually execute for a bare name. The empty string is
 // last on purpose: `claude` with no extension is the POSIX case and also catches
 // an extensionless shim, but on Windows the .cmd/.exe forms are what npm and the
@@ -94,4 +113,4 @@ function findExecutable(name, pathEnv, isWindows, exists) {
   return null;
 }
 
-module.exports = { withSessionId, SESSION_ID_DECIDED, findExecutable, WIN_EXTS };
+module.exports = { withSessionId, withIntakeMcp, SESSION_ID_DECIDED, findExecutable, WIN_EXTS };

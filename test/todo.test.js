@@ -335,3 +335,32 @@ test('edgeScrollSpeed splits a scroller shorter than two edge zones', () => {
 test('edgeScrollSpeed ignores a collapsed scroller', () => {
   assert.equal(edgeScrollSpeed(10, 100, 100, 40, 12), 0);
 });
+
+// ---- task cards / outside changes (intake MCP tools) -------------------------
+
+const { mergeExternal, isCard, cardPrompt } = require('../src/renderer/modules/todo.js');
+
+test('mergeExternal takes the disk list when nothing is pending locally', () => {
+  const disk = [{ text: 'a', done: false, at: 1 }];
+  assert.equal(mergeExternal([], disk, new Set(), false), disk);
+});
+
+test('mergeExternal keeps unsaved local edits and appends only genuinely new disk items', () => {
+  // Local: item 1 deleted, item 3 typed, both unsaved. Disk: 1 and 2 (2 from Claude).
+  const local = [{ text: 'typed', done: false, at: 3 }];
+  const disk = [{ text: 'deleted', done: false, at: 1 }, { text: 'claude', done: false, at: 2 }];
+  const out = mergeExternal(local, disk, new Set([1]), true);
+  assert.deepEqual(out.map((i) => i.at), [3, 2]);
+});
+
+test('mergeExternal returns the same local list when nothing is new', () => {
+  const local = [{ text: 'a', done: false, at: 1 }];
+  assert.equal(mergeExternal(local, [{ text: 'a', done: false, at: 1 }], new Set([1]), true), local);
+});
+
+test('cardPrompt pastes plain items as-is and cards self-contained', () => {
+  assert.equal(isCard({ text: 'x' }), false);
+  assert.equal(cardPrompt({ text: 'x' }), 'x');
+  const prompt = cardPrompt({ text: 'Fix', details: 'Do it.', acceptance: ['green'], files: ['a.js'], verify: 'npm test' });
+  assert.equal(prompt, 'Fix\n\nDo it.\n\nDefinition of done:\n- green\n\nFiles: a.js\n\nVerify with: npm test');
+});

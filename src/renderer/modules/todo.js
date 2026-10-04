@@ -164,12 +164,83 @@ export function openCount(list) {
   return current.filter((item) => !item.done).length;
 }
 
+/**
+ * Folds a list changed from OUTSIDE the widget (Claude via the intake MCP
+ * tools) into what the widget shows. With no unsaved local edit the disk
+ * list simply wins. With one pending, the local list is kept - it is about to
+ * be saved over the disk copy anyway - plus every disk item that is genuinely
+ * new: absent locally AND never seen before (`knownAts`). The second test is
+ * what stops an item deleted locally a moment ago from coming back.
+ * Returns the SAME local list when nothing changes.
+ */
+export function mergeExternal(local, disk, knownAts, isDirty) {
+  const diskList = Array.isArray(disk) ? disk : [];
+  if (!isDirty) return diskList;
+  const current = Array.isArray(local) ? local : [];
+  const have = new Set(current.map((item) => item.at));
+  const fresh = diskList.filter((item) => !have.has(item.at) && !knownAts.has(item.at));
+  return fresh.length ? [...current, ...fresh] : current;
+}
+
+/** Whether an item carries any task-card field beyond text/done/at. */
+export function isCard(item) {
+  return Boolean(item && (item.details || item.acceptance || item.files || item.verify || item.size || item.model));
+}
+
+/**
+ * What the inject button pastes: the title alone for a plain item; for a
+ * card, title + details + done-when + verify, so the pasted prompt is as
+ * self-contained as the card was written to be.
+ */
+export function cardPrompt(item) {
+  if (!isCard(item)) return item.text;
+  const parts = [item.text];
+  if (item.details) parts.push(item.details);
+  if (item.acceptance) parts.push(`Definition of done:\n${item.acceptance.map((a) => `- ${a}`).join('\n')}`);
+  if (item.files) parts.push(`Files: ${item.files.join(', ')}`);
+  if (item.verify) parts.push(`Verify with: ${item.verify}`);
+  return parts.join('\n\n');
+}
+
+// `at`s this widget has already seen on disk - see mergeExternal().
+let knownAts = new Set();
+
+function rememberAts(list) {
+  knownAts = new Set([...knownAts, ...list.map((item) => item.at)]);
+}
+
+/** Adopts a freshly loaded list for the bound session. */
+function adoptLoaded(list) {
+  items = Array.isArray(list) ? list : [];
+  knownAts = new Set(items.map((item) => item.at));
+}
+
 function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     window.lunacore.saveTodos(items, boundSessionId).catch(() => {});
+    rememberAts(items);
     saveTimer = null;
   }, SAVE_MS);
+}
+
+/** Repaints after an outside change to the list (todo:changed). */
+function reloadExternal() {
+  if (!els) return;
+  const sessionId = boundSessionId;
+  window.lunacore
+    .getTodos(sessionId)
+    .then((list) => {
+      // Gone, or the widget moved to another tab's project meanwhile.
+      if (!els || sessionId !== boundSessionId) return;
+      const disk = Array.isArray(list) ? list : [];
+      const next = mergeExternal(items, disk, knownAts, saveTimer !== null);
+      rememberAts(disk);
+      if (next === items) return;
+      items = next;
+      render();
+    })
+    .catch(() => {});
 }
 
 /** Writes a pending edit NOW, under the project it was typed for. Called
@@ -180,6 +251,7 @@ function flushPendingSave() {
   clearTimeout(saveTimer);
   saveTimer = null;
   window.lunacore.saveTodos(items, boundSessionId).catch(() => {});
+  rememberAts(items);
 }
 
 function commit(next) {
@@ -201,7 +273,7 @@ export function syncTodoProject() {
     .getTodos(boundSessionId)
     .then((list) => {
       if (!els) return;
-      items = Array.isArray(list) ? list : [];
+      adoptLoaded(list);
       render();
     })
     .catch(() => {});
@@ -515,7 +587,7 @@ function renderRows() {
     inject.textContent = '⚡';
     inject.title = t('todo.inject');
     inject.addEventListener('click', () => {
-      window.lunacore.pastePrompt(item.text, false);
+      window.lunacore.pastePrompt(cardPrompt(item), false);
       pulse(inject);
       term.focus();
     });
@@ -527,9 +599,68 @@ function renderRows() {
     drop.addEventListener('click', () => commit(removeTodo(items, index)));
 
     actions.append(inject, drop);
-    li.append(box, text, actions);
+    li.append(box, isCard(item) ? cardBody(item, text) : text, actions);
     els.list.append(li);
   });
+}
+
+/** A small text chip for a card's meta line. */
+function chip(label) {
+  const el = document.createElement('span');
+  el.className = 'todo-chip';
+  el.textContent = label;
+  return el;
+}
+
+/** One labelled block of the expanded card. */
+function cardSection(label, value) {
+  const el = document.createElement('div');
+  el.className = 'todo-card__section';
+  const head = document.createElement('span');
+  head.className = 'todo-card__label';
+  head.textContent = label;
+  el.append(head, document.createTextNode(` ${value}`));
+  return el;
+}
+
+/**
+ * The middle cell of a task card: its title, a meta line of chips (size,
+ * model, file count), and - while expanded - the card's details. Everything
+ * goes through textContent; card text is written by a model and is never
+ * parsed as HTML.
+ */
+function cardBody(item, text) {
+  const body = document.createElement('div');
+  body.className = 'todo-item__body';
+
+  const meta = document.createElement('div');
+  meta.className = 'todo-item__meta';
+  if (item.size) meta.append(chip(item.size));
+  if (item.model) meta.append(chip(item.model));
+  if (item.files) meta.append(chip(t('todo.files', { n: item.files.length })));
+  body.append(text, meta);
+
+  if (!expanded.has(item.at)) return body;
+  const card = document.createElement('div');
+  card.className = 'todo-card';
+  if (item.details) {
+    const details = document.createElement('div');
+    details.className = 'todo-card__details';
+    details.textContent = item.details;
+    card.append(details);
+  }
+  if (item.acceptance) card.append(cardSection(t('todo.acceptance'), item.acceptance.join(' · ')));
+  if (item.files) card.append(cardSection(t('todo.files', { n: item.files.length }), item.files.join(', ')));
+  if (item.verify) card.append(cardSection(t('todo.verify'), item.verify));
+  if (item.dependsOn) {
+    const titles = item.dependsOn.map((at) => {
+      const dep = items.find((other) => other.at === at);
+      return dep ? dep.text : String(at);
+    });
+    card.append(cardSection(t('todo.dependsOn', { n: titles.length }), titles.join(' · ')));
+  }
+  body.append(card);
+  return body;
 }
 
 /**
@@ -596,6 +727,8 @@ defineWidget({
 
     const offGodMode = mountGodModeControl(root);
     const offKeepAwake = mountKeepAwakeControl(root);
+    // Cards written by Claude (intake MCP tools) land without a reload.
+    const offExternal = window.lunacore.onTodoChanged(reloadExternal);
 
     boundSessionId = getActiveSessionId();
     window.lunacore
@@ -604,7 +737,7 @@ defineWidget({
         if (!els) return;
         // Only adopt the stored list if nothing was typed while it loaded -
         // otherwise a slow disk read would silently wipe a just-added item.
-        if (items.length === 0) items = Array.isArray(list) ? list : [];
+        if (items.length === 0) adoptLoaded(list);
         render();
       })
       .catch(() => {});
@@ -621,6 +754,7 @@ defineWidget({
       offLang();
       offGodMode();
       offKeepAwake();
+      offExternal();
       els = null;
     };
   },
