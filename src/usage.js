@@ -257,6 +257,7 @@ class ClaudeAdapter extends UsageAdapter {
         used: Math.round((fiveHour.pct / 100) * 1000), // estimated based on percentage
         limit: 1000,
         percentUsed: fiveHour.pct,
+        resetsAt: fiveHour.resetsAt,
         source: 'account',
       });
     }
@@ -268,6 +269,7 @@ class ClaudeAdapter extends UsageAdapter {
         used: Math.round((sevenDay.pct / 100) * 7000),
         limit: 7000,
         percentUsed: sevenDay.pct,
+        resetsAt: sevenDay.resetsAt,
         source: 'account',
       });
     }

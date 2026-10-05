@@ -38,21 +38,6 @@ const COUNTDOWN_MS = 30000;
 /** How often the "updated Xs ago" label ticks (locally, no request). */
 const FRESHNESS_MS = 1000;
 
-// Default reset times for common windows (in milliseconds from now)
-const WINDOW_RESETS = {
-  '5h': 5 * 60 * 60 * 1000,
-  weekly: 7 * 24 * 60 * 60 * 1000,
-  monthly: 30 * 24 * 60 * 60 * 1000,
-  balance: null, // no reset for balance
-};
-
-/** Computes a resetsAt timestamp from a window type. */
-function getResetsAt(windowType) {
-  const ms = WINDOW_RESETS[windowType];
-  if (!ms) return null;
-  return new Date(Date.now() + ms).toISOString();
-}
-
 // Elements of the current mount, or null when this widget is not on screen.
 let els = null;
 let lastGoodUsage = null; // last payload WITH status==='ok' - what the bars render from
@@ -127,14 +112,9 @@ function usageRowForLimit(limit) {
 
   const reset = document.createElement('div');
   reset.className = 'usage-row__reset hint';
-  // Try to get resetsAt from the limit, or compute from window type
-  const resetsAt =
-    typeof limit.resetsAt === 'string'
-      ? limit.resetsAt
-      : limit.window
-        ? getResetsAt(limit.window)
-        : null;
-  const when = fmtResetWhen(resetsAt);
+  // Only a real resetsAt from the provider is trustworthy. A "now + window"
+  // fallback restarts on every repaint and pins the label at the full window.
+  const when = fmtResetWhen(typeof limit.resetsAt === 'string' ? limit.resetsAt : null);
   reset.textContent = when ? t('usage.resetIn', { when }) : t('usage.resetting');
 
   row.append(head, bar, reset);
