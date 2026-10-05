@@ -270,9 +270,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   },
   /** Native "are you sure" popup gating every arm; resolves true only on an explicit Yes. */
   confirmGodMode: (openCount) => ipcRenderer.invoke('godmode:confirm', openCount),
-  /** Reports the tab a run is bound to (null when it ends) - arms the overnight guard. */
-  setGodModeRun: (sessionId) =>
-    ipcRenderer.send('godmode:run', typeof sessionId === 'string' ? sessionId : null),
+  /** Reports a tab's run starting (active=true) or ending - drives the overnight guard. */
+  setGodModeRun: (sessionId, active) => {
+    if (typeof sessionId === 'string') ipcRenderer.send('godmode:run', sessionId, active === true);
+  },
 
   // --- "Don't sleep" switch (runs/kills the keep-awake .bat, src/keepawake.js) ---
   /** Promise<{on, available, reason, error}>. */

@@ -6,6 +6,13 @@
 // onTurnEnd, ticks it done, injects the next - surviving usage-limit walls
 // and dropped connections on its own - so Mati can walk away for hours.
 //
+// v2 (per-tab arming): every tab can carry its own run, in parallel. State
+// lives in `runs`, keyed by session id; the To-do widget's toggle arms or
+// disarms the ACTIVE tab's run and its status line shows that run, so
+// switching tabs shows each tab's own state. To-do lists are stored per
+// PROJECT, not per tab, so two tabs on the same project would race for the
+// same items - arming is refused while another tab's run owns that project.
+//
 // LIVE queue, not a snapshot: every step re-reads the actual to-do list via
 // window.lunacore.getTodos(sessionId)/saveTodos(...) instead of caching its
 // own copy. Same source of truth the widget itself uses, so a task added or
@@ -14,7 +21,7 @@
 // DELIBERATE DEVIATION from autocompact.js's template: autocompact's
 // injecting subscription lives INSIDE mount() on purpose, so an unmounted
 // widget can never inject invisibly. God Mode's entire point is surviving
-// exactly the "not looking at it" case (§ walk away for hours), so its
+// exactly the "not looking at it" case (walk away for hours), so its
 // onTurnEnd/onGodModeSignal listeners are registered ONCE at module scope and
 // stay live regardless of whether this widget's DOM is on screen. The
 // counterweight is the confirm-gate at arm time (decision #5), not
@@ -43,42 +50,122 @@ import { sfx, voice } from './sound.js';
 const AUTONOMY_NUDGE =
   ' (Running unattended via God Mode: if anything here is ambiguous, use your own best judgement and keep going instead of stopping to ask.)';
 
+/**
+ * The text actually injected for a to-do item. An item starting with "/" would
+ * be run by Claude Code as a slash command (e.g. "/clear ...") instead of sent
+ * as a message - no turn happens, onTurnEnd never fires, and the run hangs
+ * forever. So it is framed as a task first, which Claude reads as plain text.
+ * @param {string} text the to-do item's text
+ * @returns {string}
+ */
+export function promptFor(text) {
+  const body = String(text).trim();
+  const framed = body.startsWith('/') ? `Task: ${body}` : body;
+  return framed + AUTONOMY_NUDGE;
+}
+
 const MAX_CONN_RETRIES = 3;
 const CONN_BACKOFF_MS = 5000;
 const LIMIT_POLL_MS = 5 * 60 * 1000; // re-nudge every 5 min while walled
 const SIGNAL_COOLDOWN_MS = 4000; // a TUI redraw repeats the same stdout chunk
+const NOTICE_MS = 4000; // how long a refused-arm notice stays on the status line
+
+const ENGAGED_PHASES = new Set(['running', 'waiting-limit', 'waiting-connection', 'waiting-backend']);
 
 // Elements of the current mount, or null when the To-do widget is not on screen.
 let els = null;
+// A short-lived message that overrides the status line (a refused arm).
+let notice = null;
+let noticeTimer = null;
 
 // ---- State that must OUTLIVE a remount / the widget being off-screen -------
-let phase = 'idle'; // idle | running | waiting-limit | waiting-connection | waiting-backend | stalled
-let boundSessionId = null; // which tab this run is bound to (v1: one at a time)
-let currentAt = null; // the in-flight to-do's `at` key (survives index shifts)
-let currentText = null; // its text, kept for limit-poll re-injection
-let remainingCount = 0; // open-item count as of the last list read, for the status line
-let retryCount = 0; // connection-error attempts for the CURRENT item
-let sawDrop = false; // a request dropped while the local backend was being restored
-let lastUsageLimitAt = 0;
-let lastConnErrAt = 0;
-let limitTimer = null;
-let connTimer = null;
+// sessionId -> run. Holds engaged runs and stalled ones (kept so the tab shows
+// "stalled - needs you" until re-armed, disarmed or closed); idle = absent.
+const runs = new Map();
+// sessionId -> projectId, from the main process's session broadcast.
+let projectBySession = new Map();
 
-function clearTimers() {
-  if (limitTimer) {
-    clearInterval(limitTimer);
-    limitTimer = null;
+/**
+ * @typedef {Object} Run
+ * @property {string} sessionId
+ * @property {string} phase running | waiting-limit | waiting-connection | waiting-backend | stalled
+ * @property {number|null} currentAt the in-flight to-do's `at` key (survives index shifts)
+ * @property {string|null} currentText its text, kept for limit-poll re-injection
+ * @property {number} remainingCount open-item count as of the last list read
+ * @property {number} retryCount connection-error attempts for the CURRENT item
+ * @property {boolean} sawDrop a request dropped while the local backend was being restored
+ * @property {number} lastUsageLimitAt
+ * @property {number} lastConnErrAt
+ * @property {*} limitTimer
+ * @property {*} connTimer
+ */
+
+/**
+ * @param {string} sessionId
+ * @param {string} [phase]
+ * @returns {Run}
+ */
+function newRun(sessionId, phase = 'running') {
+  return {
+    sessionId,
+    phase,
+    currentAt: null,
+    currentText: null,
+    remainingCount: 0,
+    retryCount: 0,
+    sawDrop: false,
+    lastUsageLimitAt: 0,
+    lastConnErrAt: 0,
+    limitTimer: null,
+    connTimer: null,
+  };
+}
+
+function isEngaged(run) {
+  return Boolean(run) && ENGAGED_PHASES.has(run.phase);
+}
+
+/** True while `run` is still the live run for its tab (not disarmed/replaced). */
+function isCurrent(run) {
+  return runs.get(run.sessionId) === run && isEngaged(run);
+}
+
+function clearTimers(run) {
+  if (run.limitTimer) {
+    clearInterval(run.limitTimer);
+    run.limitTimer = null;
   }
-  if (connTimer) {
-    clearTimeout(connTimer);
-    connTimer = null;
+  if (run.connTimer) {
+    clearTimeout(run.connTimer);
+    run.connTimer = null;
   }
 }
 
-function statusText() {
-  switch (phase) {
+/**
+ * Which other tab's engaged run already owns `sessionId`'s project, or null.
+ * Pure, so the collision rule is unit-testable without a DOM.
+ * @param {string} sessionId the tab being armed
+ * @param {Map<string, string|null>} projects sessionId -> projectId
+ * @param {Iterable<string>} engagedIds tabs with an engaged run
+ * @returns {string|null}
+ */
+export function findProjectConflict(sessionId, projects, engagedIds) {
+  const project = projects.get(sessionId);
+  if (!project) return null; // no project = no shared list to race over
+  for (const id of engagedIds) {
+    if (id !== sessionId && projects.get(id) === project) return id;
+  }
+  return null;
+}
+
+function engagedIds() {
+  return [...runs.values()].filter(isEngaged).map((run) => run.sessionId);
+}
+
+function phaseText(run) {
+  switch (run ? run.phase : 'idle') {
     case 'running':
-      return `${t('godmode.running')} (${remainingCount})`;
+      return `${t('godmode.running')} (${run.remainingCount})`;
     case 'waiting-limit':
       return t('godmode.waitingLimit');
     case 'waiting-connection':
@@ -92,56 +179,81 @@ function statusText() {
   }
 }
 
-function render() {
-  if (!els) return;
-  const engaged =
-    phase === 'running' || phase === 'waiting-limit' || phase === 'waiting-connection' || phase === 'waiting-backend';
-  els.toggle.checked = engaged;
-  els.field.classList.toggle('is-armed', engaged);
-  els.field.classList.toggle('is-stalled', phase === 'stalled');
-  els.status.textContent = statusText();
+function statusText(run) {
+  if (notice) return notice;
+  const others = engagedIds().filter((id) => !run || id !== run.sessionId).length;
+  if (others === 0) return phaseText(run);
+  return `${phaseText(run)} · ${t('godmode.otherTabs').replace('{n}', String(others))}`;
 }
 
-/** Reads the bound session's live list, injects the next open item, or finishes. */
-async function injectNext() {
-  if (phase !== 'running') return; // disarmed while an await above was in flight
-  let list;
+/** Paints the ACTIVE tab's run; other tabs' runs show only as a count. */
+function render() {
+  if (!els) return;
+  const run = runs.get(getActiveSessionId()) || null;
+  const engaged = isEngaged(run);
+  els.toggle.checked = engaged;
+  els.field.classList.toggle('is-armed', engaged);
+  els.field.classList.toggle('is-stalled', Boolean(run) && run.phase === 'stalled');
+  els.status.textContent = statusText(run);
+}
+
+function showNotice(text) {
+  notice = text;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => {
+    notice = null;
+    noticeTimer = null;
+    render();
+  }, NOTICE_MS);
+  render();
+}
+
+/**
+ * Repaints the control for whichever tab is active now. todo.js calls this
+ * from syncTodoProject(), i.e. on every tab or project switch.
+ */
+export function refreshGodModeControl() {
+  render();
+}
+
+async function readList(sessionId) {
   try {
-    list = await window.lunacore.getTodos(boundSessionId);
+    const list = await window.lunacore.getTodos(sessionId);
+    return Array.isArray(list) ? list : [];
   } catch {
-    list = [];
+    return [];
   }
-  const items = Array.isArray(list) ? list : [];
-  remainingCount = openCount(items);
+}
+
+/** Reads the run's live list, injects the next open item, or finishes. */
+async function injectNext(run) {
+  if (!isCurrent(run) || run.phase !== 'running') return; // disarmed mid-await
+  const items = await readList(run.sessionId);
+  if (!isCurrent(run)) return;
+  run.remainingCount = openCount(items);
   const next = items.find((item) => !item.done);
   if (!next) {
-    finishRun('done');
+    finishRun(run, 'done');
     return;
   }
-  currentAt = next.at;
-  currentText = next.text;
-  window.lunacore.pastePrompt(currentText + AUTONOMY_NUDGE, true, boundSessionId);
+  run.currentAt = next.at;
+  run.currentText = next.text;
+  window.lunacore.pastePrompt(promptFor(run.currentText), true, run.sessionId);
   render();
 }
 
 /** Ticks the in-flight item done (by `at`, not index) and moves on to the next one. */
-async function markCurrentDoneAndAdvance() {
-  if (currentAt == null) {
-    await injectNext();
+async function markCurrentDoneAndAdvance(run) {
+  if (run.currentAt == null) {
+    await injectNext(run);
     return;
   }
-  let list;
-  try {
-    list = await window.lunacore.getTodos(boundSessionId);
-  } catch {
-    list = [];
-  }
-  const items = Array.isArray(list) ? list : [];
-  const idx = items.findIndex((item) => item.at === currentAt);
+  const items = await readList(run.sessionId);
+  const idx = items.findIndex((item) => item.at === run.currentAt);
   if (idx !== -1 && !items[idx].done) {
     const next = items.map((item, i) => (i === idx ? { ...item, done: true } : item));
     try {
-      await window.lunacore.saveTodos(next, boundSessionId);
+      await window.lunacore.saveTodos(next, run.sessionId);
     } catch {
       /* best-effort - a failed save just means this item stays open, not lost */
     }
@@ -149,72 +261,71 @@ async function markCurrentDoneAndAdvance() {
   // Nudges the visible widget to repaint if it happens to be showing this
   // project right now; a no-op read for any other tab (same fn tab-switch uses).
   syncTodoProject();
-  currentAt = null;
-  currentText = null;
-  await injectNext();
+  run.currentAt = null;
+  run.currentText = null;
+  await injectNext(run);
 }
 
-/** Tells main which tab a run is bound to (null = none) - arms the overnight guard. */
-function reportRun(sessionId) {
+/** Tells main a tab's run started or ended - drives the overnight guard. */
+function reportRun(sessionId, active) {
   if (typeof window !== 'undefined' && window.lunacore && window.lunacore.setGodModeRun) {
-    window.lunacore.setGodModeRun(sessionId);
+    window.lunacore.setGodModeRun(sessionId, active);
   }
 }
 
-function finishRun(reason) {
-  clearTimers();
-  phase = reason === 'stalled' ? 'stalled' : 'idle';
-  if (reason === 'stalled') voice.needYou();
-  else voice.done();
-  boundSessionId = null;
-  currentAt = null;
-  currentText = null;
-  retryCount = 0;
-  remainingCount = 0;
-  sawDrop = false;
-  reportRun(null);
+/** Ends a run on its own; 'stalled' stays on record for the tab's status line. */
+function finishRun(run, reason) {
+  clearTimers(run);
+  if (reason === 'stalled') {
+    voice.needYou();
+    runs.set(run.sessionId, newRun(run.sessionId, 'stalled'));
+  } else {
+    voice.done();
+    runs.delete(run.sessionId);
+  }
+  reportRun(run.sessionId, false);
   render();
 }
 
-function disarm() {
-  clearTimers();
-  phase = 'idle';
-  boundSessionId = null;
-  currentAt = null;
-  currentText = null;
-  retryCount = 0;
-  remainingCount = 0;
-  sawDrop = false;
-  reportRun(null);
+/** Silent stop (toggle off, or the tab closed). */
+function disarm(sessionId) {
+  const run = runs.get(sessionId);
+  if (!run) {
+    render();
+    return;
+  }
+  clearTimers(run);
+  runs.delete(sessionId);
+  reportRun(sessionId, false);
   render();
 }
 
-function startLimitPoll() {
-  clearInterval(limitTimer);
-  limitTimer = setInterval(() => {
-    if (phase !== 'waiting-limit') {
-      clearInterval(limitTimer);
-      limitTimer = null;
+function startLimitPoll(run) {
+  clearInterval(run.limitTimer);
+  run.limitTimer = setInterval(() => {
+    if (!isCurrent(run) || run.phase !== 'waiting-limit') {
+      clearInterval(run.limitTimer);
+      run.limitTimer = null;
       return;
     }
-    if (currentText) window.lunacore.pastePrompt(currentText + AUTONOMY_NUDGE, true, boundSessionId);
+    if (run.currentText) window.lunacore.pastePrompt(promptFor(run.currentText), true, run.sessionId);
   }, LIMIT_POLL_MS);
 }
 
-function handleConnectionError() {
-  phase = 'waiting-connection';
+function handleConnectionError(run) {
+  run.phase = 'waiting-connection';
   render();
-  retryCount += 1;
-  if (retryCount > MAX_CONN_RETRIES) {
-    finishRun('stalled');
+  run.retryCount += 1;
+  if (run.retryCount > MAX_CONN_RETRIES) {
+    finishRun(run, 'stalled');
     return;
   }
-  clearTimeout(connTimer);
-  connTimer = setTimeout(() => {
-    connTimer = null;
-    if (phase !== 'waiting-connection') return; // disarmed or recovered already
-    window.lunacore.pastePrompt('continue', true, boundSessionId);
-    phase = 'running';
+  clearTimeout(run.connTimer);
+  run.connTimer = setTimeout(() => {
+    run.connTimer = null;
+    if (!isCurrent(run) || run.phase !== 'waiting-connection') return; // disarmed or recovered
+    window.lunacore.pastePrompt('continue', true, run.sessionId);
+    run.phase = 'running';
     render();
   }, CONN_BACKOFF_MS);
 }
@@ -226,17 +337,17 @@ function handleConnectionError() {
  * the two never both inject "continue" for the same drop.
  */
 export function isBoundSession(sessionId) {
-  return sessionId === boundSessionId && phase !== 'idle' && phase !== 'stalled';
+  return isEngaged(runs.get(sessionId));
 }
 
 function handleTurnEnd({ sessionId } = {}) {
-  if (!boundSessionId || sessionId !== boundSessionId) return;
-  if (phase === 'idle' || phase === 'stalled') return;
-  clearTimers();
-  retryCount = 0;
-  phase = 'running';
+  const run = runs.get(sessionId);
+  if (!isEngaged(run)) return;
+  clearTimers(run);
+  run.retryCount = 0;
+  run.phase = 'running';
   render();
-  markCurrentDoneAndAdvance();
+  markCurrentDoneAndAdvance(run);
 }
 
 /**
@@ -266,40 +377,49 @@ export function backendSignalStep(currentPhase, dropped, type) {
   return null;
 }
 
-/** Applies a backendSignalStep() result. */
-function applyBackendStep(step) {
+/** Applies a backendSignalStep() result to one run. */
+function applyBackendStep(run, step) {
   if (step.effect === 'stall') {
-    finishRun('stalled');
+    finishRun(run, 'stalled');
     return;
   }
-  if (step.effect === 'wait') clearTimers();
-  if (step.effect === 'resume' || step.effect === 'continue') retryCount = 0;
-  phase = step.phase;
-  sawDrop = step.sawDrop;
-  if (step.effect === 'continue') window.lunacore.pastePrompt('continue', true, boundSessionId);
+  if (step.effect === 'wait') clearTimers(run);
+  if (step.effect === 'resume' || step.effect === 'continue') run.retryCount = 0;
+  run.phase = step.phase;
+  run.sawDrop = step.sawDrop;
+  if (step.effect === 'continue') window.lunacore.pastePrompt('continue', true, run.sessionId);
   render();
 }
 
 function handleGodModeSignal({ sessionId, type } = {}) {
-  if (!boundSessionId || sessionId !== boundSessionId) return;
-  if (phase === 'idle' || phase === 'stalled') return;
-  const step = backendSignalStep(phase, sawDrop, type);
+  const run = runs.get(sessionId);
+  if (!isEngaged(run)) return;
+  const step = backendSignalStep(run.phase, run.sawDrop, type);
   if (step) {
-    applyBackendStep(step);
+    applyBackendStep(run, step);
     return;
   }
   const now = Date.now();
   if (type === 'usageLimit') {
-    if (phase === 'waiting-limit') return; // already handling this wall
-    if (now - lastUsageLimitAt < SIGNAL_COOLDOWN_MS) return;
-    lastUsageLimitAt = now;
-    phase = 'waiting-limit';
+    if (run.phase === 'waiting-limit') return; // already handling this wall
+    if (now - run.lastUsageLimitAt < SIGNAL_COOLDOWN_MS) return;
+    run.lastUsageLimitAt = now;
+    run.phase = 'waiting-limit';
     render();
-    startLimitPoll();
+    startLimitPoll(run);
   } else if (type === 'connectionError') {
-    if (now - lastConnErrAt < SIGNAL_COOLDOWN_MS) return;
-    lastConnErrAt = now;
-    handleConnectionError();
+    if (now - run.lastConnErrAt < SIGNAL_COOLDOWN_MS) return;
+    run.lastConnErrAt = now;
+    handleConnectionError(run);
+  }
+}
+
+/** Tracks each tab's project, and drops the run of any tab that closed. */
+function handleSessionList({ sessions } = {}) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  projectBySession = new Map(list.map((s) => [s.id, s.projectId || null]));
+  for (const id of [...runs.keys()]) {
+    if (!projectBySession.has(id)) disarm(id);
   }
 }
 
@@ -310,51 +430,48 @@ function handleGodModeSignal({ sessionId, type } = {}) {
 if (typeof window !== 'undefined' && window.lunacore) {
   window.lunacore.onTurnEnd(handleTurnEnd);
   window.lunacore.onGodModeSignal(handleGodModeSignal);
+  window.lunacore.onSessions(handleSessionList);
 }
 
 /**
- * The confirm-gated arm step (GODMODE_PLAN.md decision #5). Snapshots the
- * ACTIVE tab (v1 scope: active tab only), asks the native "are you sure"
- * popup - which is skipped entirely when there is nothing open to run - and
- * only starts on an explicit Yes.
+ * The confirm-gated arm step (GODMODE_PLAN.md decision #5) for the ACTIVE
+ * tab. Refused while another tab's run owns the same project; asks the native
+ * "are you sure" popup - skipped entirely when there is nothing open to run -
+ * and only starts on an explicit Yes. Other tabs' runs are never touched.
  */
 async function tryArm() {
-  if (phase !== 'idle' && phase !== 'stalled') return;
   const sessionId = getActiveSessionId();
-  if (!sessionId) {
+  if (!sessionId || isEngaged(runs.get(sessionId))) {
     render();
     return;
   }
-  let list;
-  try {
-    list = await window.lunacore.getTodos(sessionId);
-  } catch {
-    list = [];
+  if (findProjectConflict(sessionId, projectBySession, engagedIds())) {
+    showNotice(t('godmode.projectBusy'));
+    return;
   }
-  const open = openCount(Array.isArray(list) ? list : []);
+  const open = openCount(await readList(sessionId));
   if (open === 0) {
     render(); // nothing to confirm - stays off, toggle reverts
     return;
   }
   const ok = await window.lunacore.confirmGodMode(open);
-  if (!ok) {
+  // Re-check after the modal: a run may have started on this tab or project meanwhile.
+  if (!ok || isEngaged(runs.get(sessionId)) || findProjectConflict(sessionId, projectBySession, engagedIds())) {
     render();
     return;
   }
-  boundSessionId = sessionId;
-  retryCount = 0;
-  sawDrop = false;
-  phase = 'running';
-  reportRun(sessionId);
+  const run = newRun(sessionId);
+  runs.set(sessionId, run);
+  reportRun(sessionId, true);
   render();
-  await injectNext();
+  await injectNext(run);
 }
 
 /**
  * Wires the God Mode toggle + status line that live inside the To-do
  * widget's own template. Called from todo.js's mount(); returns a cleanup
- * that only tears down the DOM binding - the run itself (module state above)
- * is untouched, so a remount mid-run just re-attaches to what's still going.
+ * that only tears down the DOM binding - the runs themselves (module state
+ * above) are untouched, so a remount mid-run just re-attaches to them.
  * @param {HTMLElement} root the To-do widget's mounted root
  * @returns {() => void} cleanup
  */
@@ -375,7 +492,7 @@ export function mountGodModeControl(root) {
       els.toggle.checked = false;
       tryArm();
     } else {
-      disarm();
+      disarm(getActiveSessionId());
     }
   });
 

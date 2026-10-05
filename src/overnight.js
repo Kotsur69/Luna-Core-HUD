@@ -13,8 +13,10 @@
 //     model, telling God Mode through godmode:signal so the run waits for the
 //     backend instead of burning its connection retries.
 //
-// Both halves are scoped to the run: armed when the renderer reports a run,
-// released the moment it ends, stalls or its tab closes.
+// Both halves are scoped to the runs (God Mode v2: one per tab, several at
+// once): keep-awake is held while ANY run is live and released when the last
+// one ends, stalls or its tab closes; the watchdog is one per local upstream,
+// shared by every run on it, and stops when its last run does.
 //
 // A single bad probe is never acted on - it is confirmed a few seconds later
 // first, since a busy server can miss one probe while it generates. The
@@ -96,38 +98,57 @@ function createOvernightGuard(deps) {
     timers = { setInterval, clearInterval, setTimeout, clearTimeout },
   } = deps;
 
-  let run = null;
+  // Every live run: tab id -> its local upstream (null for a cloud tab).
+  const runs = new Map();
+  // One watchdog per local upstream, shared by every run that talks to it, so
+  // two tabs on the same LM Studio never both try to bring it back.
+  const watchers = new Map();
+  // Keep-awake and throttling are app-wide: held while ANY run is live.
+  let blockerId = null;
 
   function setThrottling(enabled) {
     const wc = getWebContents();
     if (wc && !wc.isDestroyed()) wc.setBackgroundThrottling(enabled);
   }
 
-  function stopWatch(r) {
-    if (r.interval !== null) timers.clearInterval(r.interval);
-    if (r.confirm !== null) timers.clearTimeout(r.confirm);
-    r.interval = null;
-    r.confirm = null;
+  function holdAwake() {
+    if (blockerId !== null) return;
+    blockerId = blocker.start('prevent-app-suspension');
+    setThrottling(false);
   }
 
-  function release() {
-    if (!run) return;
-    stopWatch(run);
-    if (blocker.isStarted(run.blockerId)) blocker.stop(run.blockerId);
+  function releaseAwake() {
+    if (blockerId === null) return;
+    if (blocker.isStarted(blockerId)) blocker.stop(blockerId);
+    blockerId = null;
     setThrottling(true);
-    run = null;
   }
 
-  /** Reports a run (a tab id) or its end (null). Idempotent per tab. */
-  function setRun(sessionId) {
-    const id = typeof sessionId === 'string' && sessionId ? sessionId : null;
-    if (run && run.sessionId === id) return;
-    release();
-    if (!id) return;
-    run = {
-      sessionId: id,
-      upstream: resolveLocal(id) || null,
-      blockerId: blocker.start('prevent-app-suspension'),
+  /** Sends a backend signal to every run on this watcher's upstream. */
+  function broadcast(w, type) {
+    for (const [sessionId, upstream] of runs) {
+      if (upstream === w.upstream) signal(sessionId, type);
+    }
+  }
+
+  function stopWatch(w) {
+    if (w.interval !== null) timers.clearInterval(w.interval);
+    if (w.confirm !== null) timers.clearTimeout(w.confirm);
+    w.interval = null;
+    w.confirm = null;
+  }
+
+  function isLive(w) {
+    return watchers.get(w.upstream) === w;
+  }
+
+  function startWatch(upstream) {
+    const existing = watchers.get(upstream);
+    // A watcher that already gave up is replaced: a new run is a fresh start.
+    if (existing && !existing.lost) return;
+    if (existing) stopWatch(existing);
+    const w = {
+      upstream,
       interval: null,
       confirm: null,
       busy: false,
@@ -137,89 +158,117 @@ function createOvernightGuard(deps) {
       lost: false,
       lastModelKey: null,
     };
-    setThrottling(false);
-    if (run.upstream) {
-      run.interval = timers.setInterval(() => { check(); }, intervalMs);
-      check();
-    }
+    watchers.set(upstream, w);
+    w.interval = timers.setInterval(() => { checkWatcher(w); }, intervalMs);
+    checkWatcher(w);
   }
 
-  async function attemptRecovery(r) {
-    if (!r.recovering) {
-      r.recovering = true;
-      signal(r.sessionId, 'backendRecovering');
+  /** Starts a run on a tab. Idempotent per tab; other tabs' runs are untouched. */
+  function startRun(sessionId) {
+    const id = typeof sessionId === 'string' && sessionId ? sessionId : null;
+    if (!id || runs.has(id)) return;
+    const upstream = resolveLocal(id) || null;
+    runs.set(id, upstream);
+    holdAwake();
+    if (upstream) startWatch(upstream);
+  }
+
+  /** Ends a tab's run. The last run out releases keep-awake. */
+  function endRun(sessionId) {
+    if (!runs.has(sessionId)) return;
+    const upstream = runs.get(sessionId);
+    runs.delete(sessionId);
+    if (upstream && ![...runs.values()].includes(upstream)) {
+      const w = watchers.get(upstream);
+      if (w) stopWatch(w);
+      watchers.delete(upstream);
     }
-    r.attempts += 1;
-    const result = await recover({ modelKey: r.lastModelKey });
-    if (run !== r) return; // the run ended or moved on while recovery ran
+    if (runs.size === 0) releaseAwake();
+  }
+
+  function stopAll() {
+    for (const w of watchers.values()) stopWatch(w);
+    watchers.clear();
+    runs.clear();
+    releaseAwake();
+  }
+
+  async function attemptRecovery(w) {
+    if (!w.recovering) {
+      w.recovering = true;
+      broadcast(w, 'backendRecovering');
+    }
+    w.attempts += 1;
+    const result = await recover({ modelKey: w.lastModelKey });
+    if (!isLive(w)) return; // every run on it ended while recovery ran
     if (result && result.ok) {
-      r.recovering = false;
-      r.attempts = 0;
-      signal(r.sessionId, 'backendRecovered');
+      w.recovering = false;
+      w.attempts = 0;
+      broadcast(w, 'backendRecovered');
       return;
     }
-    if (r.attempts >= MAX_RECOVERY_ATTEMPTS) {
-      r.lost = true;
-      stopWatch(r);
-      signal(r.sessionId, 'backendLost');
+    if (w.attempts >= MAX_RECOVERY_ATTEMPTS) {
+      w.lost = true;
+      stopWatch(w);
+      broadcast(w, 'backendLost');
     }
   }
 
-  /** One watchdog pass. Safe to call at any time; overlapping calls are dropped. */
-  async function check() {
-    const r = run;
-    if (!r || !r.upstream || r.busy || r.lost) return;
-    r.busy = true;
+  /** One watchdog pass for one upstream. Overlapping calls are dropped. */
+  async function checkWatcher(w) {
+    if (!isLive(w) || w.busy || w.lost) return;
+    w.busy = true;
     try {
       let reading = null;
       try {
-        reading = await probe(r.upstream);
+        reading = await probe(w.upstream);
       } catch {
         reading = null;
       }
-      if (run !== r) return;
+      if (!isLive(w)) return;
       if (isBackendHealthy(reading)) {
         const loaded = pickLoadedModel(reading.models);
-        if (loaded) r.lastModelKey = loaded.id;
-        r.suspect = false;
+        if (loaded) w.lastModelKey = loaded.id;
+        w.suspect = false;
         return;
       }
-      if (r.recovering || r.suspect) {
-        r.suspect = false;
-        await attemptRecovery(r);
+      if (w.recovering || w.suspect) {
+        w.suspect = false;
+        await attemptRecovery(w);
         return;
       }
       // First bad reading: confirm shortly instead of acting on it.
-      r.suspect = true;
-      if (r.confirm === null) {
-        r.confirm = timers.setTimeout(() => {
-          r.confirm = null;
-          return check();
+      w.suspect = true;
+      if (w.confirm === null) {
+        w.confirm = timers.setTimeout(() => {
+          w.confirm = null;
+          return checkWatcher(w);
         }, confirmDelayMs);
       }
     } finally {
-      r.busy = false;
+      w.busy = false;
     }
   }
 
-  /** A dropped request on the run's tab: look now instead of at the next tick. */
-  function onConnectionError(sessionId) {
-    if (!run || run.sessionId !== sessionId) return Promise.resolve();
-    return check();
+  /** A watchdog pass over every watched upstream. Safe to call at any time. */
+  function check() {
+    return Promise.all([...watchers.values()].map(checkWatcher));
   }
 
-  /** A tab closed: a run bound to it is over. */
-  function forgetSession(sessionId) {
-    if (run && run.sessionId === sessionId) release();
+  /** A dropped request on a run's tab: look at its backend now, not at the next tick. */
+  function onConnectionError(sessionId) {
+    const w = watchers.get(runs.get(sessionId));
+    return w ? checkWatcher(w) : Promise.resolve();
   }
 
   return {
-    setRun,
+    startRun,
+    endRun,
     check,
     onConnectionError,
-    forgetSession,
-    stop: release,
-    current: () => (run ? run.sessionId : null),
+    forgetSession: endRun, // a tab closed: a run bound to it is over
+    stop: stopAll,
+    current: () => [...runs.keys()],
   };
 }
 

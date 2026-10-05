@@ -9,7 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { backendSignalStep } = require('../src/renderer/modules/godmode.js');
+const { backendSignalStep, findProjectConflict, promptFor } = require('../src/renderer/modules/godmode.js');
 
 test('backendRecovering parks a running run in waiting-backend', () => {
   assert.deepEqual(backendSignalStep('running', false, 'backendRecovering'), {
@@ -62,4 +62,48 @@ test('backendLost stalls the run from any engaged phase', () => {
 test('unrelated signals are not a backend concern', () => {
   assert.equal(backendSignalStep('running', false, 'usageLimit'), null);
   assert.equal(backendSignalStep('waiting-backend', false, 'turnStarted'), null);
+});
+
+// ---- findProjectConflict (v2: per-tab runs, per-project to-do lists) -------
+
+const PROJECTS = new Map([
+  ['a', 'p1'],
+  ['b', 'p1'],
+  ['c', 'p2'],
+  ['d', null],
+  ['e', null],
+]);
+
+test('a tab on a project another tab is already running is refused', () => {
+  assert.equal(findProjectConflict('b', PROJECTS, ['a']), 'a');
+});
+
+test('tabs on different projects run in parallel', () => {
+  assert.equal(findProjectConflict('c', PROJECTS, ['a']), null);
+});
+
+test('a tab never conflicts with its own run', () => {
+  assert.equal(findProjectConflict('a', PROJECTS, ['a']), null);
+});
+
+test('tabs without a project never conflict with each other', () => {
+  assert.equal(findProjectConflict('e', PROJECTS, ['d']), null);
+});
+
+// ---- promptFor: never let a to-do run as a slash command --------------------
+
+test('an item starting with a slash is framed as a task, not run as a command', () => {
+  const out = promptFor('/clear into local model thing');
+  assert.ok(out.startsWith('Task: /clear into local model thing'));
+  assert.ok(!out.startsWith('/'));
+});
+
+test('leading whitespace cannot sneak a slash command through', () => {
+  assert.ok(promptFor('  /compact now').startsWith('Task: /compact now'));
+});
+
+test('a plain item is sent as written, with the autonomy nudge', () => {
+  const out = promptFor('fix the login bug');
+  assert.ok(out.startsWith('fix the login bug ('));
+  assert.ok(out.includes('Running unattended via God Mode'));
 });

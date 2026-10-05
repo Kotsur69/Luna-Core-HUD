@@ -27,7 +27,7 @@ import { t, pulse } from './util.js';
 import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { defineWidget } from './registry.js';
-import { mountGodModeControl } from './godmode.js';
+import { mountGodModeControl, refreshGodModeControl } from './godmode.js';
 import { mountKeepAwakeControl } from './keepawake.js';
 
 const SAVE_MS = 400;
@@ -194,6 +194,7 @@ function commit(next) {
  * current tab). Called by sessions.js; a no-op while the widget is unmounted.
  */
 export function syncTodoProject() {
+  refreshGodModeControl(); // the God Mode line shows the active tab's own run
   if (!els) return;
   flushPendingSave();
   boundSessionId = getActiveSessionId();

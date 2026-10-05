@@ -89,35 +89,106 @@ test('isBackendHealthy needs a loaded model when the server reports load state',
 
 test('a run keeps the machine awake and stops background throttling until it ends', async () => {
   const { guard, blocker, wc } = setup();
-  guard.setRun('s1');
+  guard.startRun('s1');
   assert.strictEqual(blocker.started.size, 1);
   assert.strictEqual(wc.throttling, false);
-  guard.setRun(null);
+  guard.endRun('s1');
   assert.strictEqual(blocker.started.size, 0);
   assert.strictEqual(wc.throttling, true);
 });
 
 test('re-reporting the same run does not stack blockers', () => {
   const { guard, blocker } = setup();
-  guard.setRun('s1');
-  guard.setRun('s1');
-  assert.strictEqual(blocker.started.size, 1);
-  guard.setRun('s2');
+  guard.startRun('s1');
+  guard.startRun('s1');
   assert.strictEqual(blocker.started.size, 1);
   guard.stop();
   assert.strictEqual(blocker.started.size, 0);
 });
 
+test('parallel runs share one keep-awake, released by the last one out', () => {
+  const { guard, blocker, wc } = setup();
+  guard.startRun('s1');
+  guard.startRun('s2');
+  assert.strictEqual(blocker.started.size, 1);
+  assert.deepStrictEqual(guard.current(), ['s1', 's2']);
+  guard.endRun('s1');
+  assert.strictEqual(blocker.started.size, 1, 's2 is still running');
+  assert.strictEqual(wc.throttling, false);
+  guard.endRun('s2');
+  assert.strictEqual(blocker.started.size, 0);
+  assert.strictEqual(wc.throttling, true);
+});
+
+test('two runs on one local backend share one watchdog and both hear its signals', async () => {
+  const { guard, timers, signals, recoverCalls } = setup({ probes: [LOADED, DOWN, DOWN, LOADED] });
+  guard.startRun('s1');
+  guard.startRun('s2');
+  assert.strictEqual(timers.intervals.size, 1);
+  await guard.check();
+  await guard.check();
+  await timers.fireTimeouts();
+  assert.strictEqual(recoverCalls.length, 1, 'recovered once, not once per tab');
+  assert.deepStrictEqual(signals, [
+    ['s1', 'backendRecovering'],
+    ['s2', 'backendRecovering'],
+    ['s1', 'backendRecovered'],
+    ['s2', 'backendRecovered'],
+  ]);
+});
+
+test('a shared watchdog survives one of its runs ending', () => {
+  const { guard, timers } = setup();
+  guard.startRun('s1');
+  guard.startRun('s2');
+  guard.endRun('s1');
+  assert.strictEqual(timers.intervals.size, 1);
+  guard.endRun('s2');
+  assert.strictEqual(timers.intervals.size, 0);
+});
+
+test('runs on different local backends each get their own watchdog', () => {
+  const blocker = fakeBlocker();
+  const timers = fakeTimers();
+  const guard = createOvernightGuard({
+    blocker,
+    getWebContents: () => fakeWebContents(),
+    resolveLocal: (id) => (id === 's1' ? 'http://localhost:1234' : 'http://localhost:5678'),
+    probe: async () => LOADED,
+    recover: async () => ({ ok: true }),
+    signal: () => {},
+    timers,
+  });
+  guard.startRun('s1');
+  guard.startRun('s2');
+  assert.strictEqual(timers.intervals.size, 2);
+  guard.stop();
+  assert.strictEqual(timers.intervals.size, 0);
+  assert.strictEqual(blocker.started.size, 0);
+});
+
+test('a new run replaces a watchdog that already gave up', async () => {
+  const { guard, timers } = setup({ probes: [DOWN], recover: async () => ({ ok: false, reason: 'x' }) });
+  guard.startRun('s1');
+  for (let i = 0; i < MAX_RECOVERY_ATTEMPTS + 2; i += 1) {
+    await guard.check();
+    await timers.fireTimeouts();
+  }
+  assert.strictEqual(timers.intervals.size, 0);
+  guard.startRun('s2');
+  assert.strictEqual(timers.intervals.size, 1);
+});
+
 test('a cloud tab gets keep-awake but no backend watchdog', () => {
   const { guard, timers, blocker } = setup({ local: null });
-  guard.setRun('s1');
+  guard.startRun('s1');
   assert.strictEqual(blocker.started.size, 1);
   assert.strictEqual(timers.intervals.size, 0);
 });
 
 test('a healthy backend is left alone', async () => {
   const { guard, signals, recoverCalls } = setup({ probes: [LOADED] });
-  guard.setRun('s1');
+  guard.startRun('s1');
   await guard.check();
   await guard.check();
   assert.deepStrictEqual(signals, []);
@@ -126,7 +197,7 @@ test('a healthy backend is left alone', async () => {
 
 test('one bad probe is only confirmed, never acted on', async () => {
   const { guard, timers, signals, recoverCalls } = setup({ probes: [LOADED, DOWN, LOADED] });
-  guard.setRun('s1');
+  guard.startRun('s1');
   await guard.check(); // healthy
   await guard.check(); // down once -> schedules a confirmation
   assert.strictEqual(timers.timeouts.size, 1);
@@ -137,7 +208,7 @@ test('one bad probe is only confirmed, never acted on', async () => {
 
 test('a confirmed outage recovers the last model and tells God Mode', async () => {
   const { guard, timers, signals, recoverCalls } = setup({ probes: [LOADED, DOWN, DOWN, LOADED] });
-  guard.setRun('s1');
+  guard.startRun('s1');
   await guard.check();
   await guard.check();
   await timers.fireTimeouts();
@@ -151,7 +222,7 @@ test('recovery gives up after the attempt budget and reports the backend lost', 
     probes: [DOWN],
     recover: async () => ({ ok: false, reason: 'not-running' }),
   });
-  guard.setRun('s1');
+  guard.startRun('s1');
   for (let i = 0; i < MAX_RECOVERY_ATTEMPTS + 2; i += 1) {
     await guard.check();
     await timers.fireTimeouts();
@@ -163,7 +234,7 @@ test('recovery gives up after the attempt budget and reports the backend lost', 
 
 test('a connection error triggers an immediate check', async () => {
   const { guard, timers } = setup({ probes: [DOWN] });
-  guard.setRun('s1');
+  guard.startRun('s1');
   await guard.onConnectionError('s1');
   assert.strictEqual(timers.timeouts.size, 1, 'the bad probe is already being confirmed');
   await guard.onConnectionError('other-tab');
@@ -175,11 +246,11 @@ test('a run ended mid-recovery sends no stale signal', async () => {
     probes: [DOWN],
     recover: () => new Promise((r) => { release = () => r({ ok: true, action: 'reload' }); }),
   });
-  guard.setRun('s1');
+  guard.startRun('s1');
   await guard.check();
   const confirming = timers.fireTimeouts();
   await new Promise((r) => setImmediate(r));
-  guard.setRun(null);
+  guard.endRun('s1');
   release();
   await confirming;
   assert.deepStrictEqual(signals, [['s1', 'backendRecovering']]);
@@ -187,7 +258,7 @@ test('a run ended mid-recovery sends no stale signal', async () => {
 
 test('forgetSession ends the run bound to a closed tab', () => {
   const { guard, blocker } = setup();
-  guard.setRun('s1');
+  guard.startRun('s1');
   guard.forgetSession('s2');
   assert.strictEqual(blocker.started.size, 1);
   guard.forgetSession('s1');
