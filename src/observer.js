@@ -166,6 +166,44 @@ const CONTEXT_LIMIT = DEFAULT_CONTEXT_LIMIT;
 // Directory where Claude Code keeps session transcripts (per project).
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
+// Where the CLI keeps one state file per running process, <pid>.json, holding
+// the session id that process is CURRENTLY on. /clear (and /resume) rewrite it
+// in place - same pid, new sessionId (verified live on claude 2.1.289).
+const SESSIONS_DIR = path.join(os.homedir(), '.claude', 'sessions');
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Parses one CLI state file; null when missing, unreadable or malformed. */
+function readCliState(file) {
+  try {
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!state || typeof state.sessionId !== 'string' || !UUID_RE.test(state.sessionId)) return null;
+    return { sessionId: state.sessionId, procStart: String(state.procStart ?? '') };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Finds the state file of the CLI process currently on `sessionId`.
+ * @returns {{file:string, procStart:string}|null}
+ */
+function findCliState(sessionId, dir) {
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    if (!/^\d+\.json$/.test(name)) continue;
+    const file = path.join(dir, name);
+    const state = readCliState(file);
+    if (state && state.sessionId === sessionId) return { file, procStart: state.procStart };
+  }
+  return null;
+}
+
 // How many bytes from the end of the file we read while looking for the last usage entry.
 const TAIL_BYTES = 128 * 1024;
 
@@ -906,6 +944,10 @@ class TranscriptWatcher {
     // Session id we asked the CLI for via `--session-id`. The transcript is
     // named after it, so this turns file selection from a guess into a lookup.
     this.sessionUuid = opts.sessionUuid || null;
+    // The CLI process behind sessionUuid ({file, procStart}), found once and
+    // then re-read each tick to follow /clear - see followSessionSwitch().
+    this.sessionsDir = opts.sessionsDir || SESSIONS_DIR;
+    this.cliState = null;
     // Optional: known context limit override (e.g., LM Studio's loadedContext).
     // Stored as a number or updated via setContextLimit().
     this.contextLimit = typeof opts.contextLimit === 'number' ? opts.contextLimit : null;
@@ -1125,7 +1167,50 @@ class TranscriptWatcher {
     this.contextLimit = typeof limit === 'number' && limit > 0 ? limit : null;
   }
 
+  /**
+   * Follows this tab's CLI onto a new session id after /clear (or /resume).
+   *
+   * Without this the watcher stays pinned to the pre-clear transcript, which
+   * never grows again: the context bar freezes, and onTurnEnd - what God Mode
+   * and the "All done" voice wait on - never fires for the rest of the tab.
+   * Tracked by the CLI's own <pid>.json, so a neighbour tab in the same folder
+   * clearing at the same moment can never be mistaken for ours.
+   * @returns {boolean} true when the watcher moved to a new session id
+   */
+  followSessionSwitch() {
+    if (!this.sessionUuid) return false;
+    if (!this.cliState) {
+      this.cliState = findCliState(this.sessionUuid, this.sessionsDir);
+      return false;
+    }
+    const state = readCliState(this.cliState.file);
+    if (!state) return false; // process exited (file removed) or mid-write
+    if (state.procStart !== this.cliState.procStart) {
+      // The pid now belongs to another process - stop trusting the file.
+      this.cliState = null;
+      return false;
+    }
+    if (state.sessionId === this.sessionUuid) return false;
+
+    if (this.pinned) claimedTranscripts.delete(this.pinned);
+    this.pinned = null;
+    this.currentFile = null;
+    this.lastMtime = 0;
+    this.sessionUuid = state.sessionId;
+    return true;
+  }
+
+  /** Context reading for a session that has not exchanged a message yet. */
+  emptyMetrics() {
+    const metrics = usageToMetrics({}, this.lastModel || '', this.contextLimit);
+    metrics.file = this.scopeDir ? path.join(this.scopeDir, `${this.sessionUuid}.jsonl`) : null;
+    metrics.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    metrics.elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
+    return metrics;
+  }
+
   tick() {
+    if (this.followSessionSwitch()) this.onMetrics(this.emptyMetrics());
     const file = this.pickFile();
     if (!file) return;
     let mtime;
@@ -1143,6 +1228,7 @@ class TranscriptWatcher {
     const sample = readLatestSample(file);
     if (!sample) return;
 
+    this.lastModel = sample.model;
     const metrics = usageToMetrics(sample.usage, sample.model, this.contextLimit);
     // B6: which file these numbers came from. The renderer offers it as a
     // copy button - the pinning rules make "which transcript is this tab on"

@@ -2118,7 +2118,8 @@ function registerIpc() {
     const project = (session.cwd || '').split(/[\\/]+/).filter(Boolean).pop() || 'session';
     const md = transcriptToMarkdown(jsonl, {
       cwd: session.cwd,
-      sessionId: session.transcriptId || undefined,
+      // The watcher's id follows /clear; transcriptId is only the launch id.
+      sessionId: (session.watcher && session.watcher.sessionUuid) || session.transcriptId || undefined,
       project,
     });
 
