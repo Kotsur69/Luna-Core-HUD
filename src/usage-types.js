@@ -16,6 +16,8 @@
  *   Maximum allowed in this window.
  * @property {number} percentUsed
  *   Percentage of limit used (0-100).
+ * @property {string|null} [resetsAt]
+ *   ISO-8601 time the window resets, as reported by the provider.
  * @property {'account'|'response_headers'|'manual'} source
  *   Where the data came from.
  */

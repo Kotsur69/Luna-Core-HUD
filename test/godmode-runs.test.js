@@ -15,7 +15,8 @@ const assert = require('node:assert/strict');
 const bridge = {
   list: [],
   pastes: [], // [sessionId, text]
-  reported: [], // every setGodModeRuns payload
+  live: new Set(), // tabs main currently counts as running (setGodModeRun)
+  reported: [], // snapshot of that set after every setGodModeRun call
   listeners: {},
 };
 
@@ -30,7 +31,11 @@ const api = {
   },
   pastePrompt: (text, _submit, sessionId) => bridge.pastes.push([sessionId, text]),
   confirmGodMode: async () => true,
-  setGodModeRuns: (ids) => bridge.reported.push([...ids].sort()),
+  setGodModeRun: (id, active) => {
+    if (active) bridge.live.add(id);
+    else bridge.live.delete(id);
+    bridge.reported.push([...bridge.live].sort());
+  },
   onTurnEnd: (cb) => { bridge.listeners.turnEnd = cb; },
   onGodModeSignal: (cb) => { bridge.listeners.signal = cb; },
   onSessions: (cb) => { bridge.listeners.sessions = cb; },

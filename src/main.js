@@ -1013,6 +1013,15 @@ function spawnInto(session, profile, launch = null) {
         // A drop on the run's tab: have the guard look at the backend now.
         overnight.onConnectionError(session.id);
       },
+      // The usage-limit wall, from the transcript (the CLI writes it as a 429
+      // API error, which onApiError above must NOT see as a drop). Carries the
+      // parsed reset time so God Mode waits it out instead of stalling.
+      onUsageLimit: ({ resetsAt } = {}) =>
+        send('godmode:signal', {
+          sessionId: session.id,
+          type: 'usageLimit',
+          resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
+        }),
       // Same channel/shape as onApiError above - autoproceed.js's proof that an
       // armed "continue" (or Mati's own typing) was actually consumed, so a
       // turn that only thinks or answers in plain text before dying again still
@@ -2226,7 +2235,8 @@ function registerIpc() {
     const project = (session.cwd || '').split(/[\\/]+/).filter(Boolean).pop() || 'session';
     const md = transcriptToMarkdown(jsonl, {
       cwd: session.cwd,
-      sessionId: session.transcriptId || undefined,
+      // The watcher's id follows /clear; transcriptId is only the launch id.
+      sessionId: (session.watcher && session.watcher.sessionUuid) || session.transcriptId || undefined,
       project,
     });
 
@@ -2379,11 +2389,16 @@ function registerIpc() {
   // literally the "popup window with an are-you-sure message" Mati asked for,
   // for less code than a hand-rolled overlay/focus-trap. Resolves true only
   // on the explicit Yes button; closing the dialog any other way is a No.
-  // The renderer reports every tab with a live God Mode run (an empty list
-  // when none). Only live session ids arm the guard - never trust the renderer.
-  ipcMain.on('godmode:run', (_event, sessionIds) => {
-    const ids = Array.isArray(sessionIds) ? sessionIds.slice(0, 64) : [];
-    overnight.setRuns(ids.filter((id) => typeof id === 'string' && sessions.has(id)));
+  // The renderer reports a tab's God Mode run starting (active=true) or ending.
+  // Several tabs can run at once. Only a live session id starts a run - never
+  // trust the renderer; ending one is always safe.
+  ipcMain.on('godmode:run', (_event, sessionId, active) => {
+    if (typeof sessionId !== 'string') return;
+    if (active === true) {
+      if (sessions.has(sessionId)) overnight.startRun(sessionId);
+    } else {
+      overnight.endRun(sessionId);
+    }
   });
 
   // God Mode v2 planner (slice 3). The renderer names a tab at most; the

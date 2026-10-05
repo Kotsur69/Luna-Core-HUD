@@ -279,12 +279,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   },
   /** Native "are you sure" popup gating every arm; resolves true only on an explicit Yes. */
   confirmGodMode: (openCount) => ipcRenderer.invoke('godmode:confirm', openCount),
-  /** Reports every tab with a live run ([] when none) - arms the overnight guard. */
-  setGodModeRuns: (sessionIds) =>
-    ipcRenderer.send(
-      'godmode:run',
-      Array.isArray(sessionIds) ? sessionIds.filter((id) => typeof id === 'string') : [],
-    ),
+  /** Reports a tab's run starting (active=true) or ending - drives the overnight guard. */
+  setGodModeRun: (sessionId, active) => {
+    if (typeof sessionId === 'string') ipcRenderer.send('godmode:run', sessionId, active === true);
+  },
 
   // --- God Mode v2 planner (reference/ORCHESTRATOR_PLAN.md slice 3) ---
   /** Plans the tab's project to-dos with a headless `claude -p`: Promise<{ok, plan?, error?}>. */

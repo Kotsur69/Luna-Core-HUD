@@ -206,3 +206,45 @@ needed for the parts the probe cannot reach - actually clicking ARM with
 todos queued, confirming the native Yes/No dialog, watching an item get
 injected and ticked done, and (whenever the real wall text is known)
 `usageLimit` detection.
+
+## v2 - per-tab arming (2026-10-05)
+
+Decision #4's "possible v2" is built: every tab can carry its own run, in
+parallel.
+
+- `godmode.js` keeps a `Map<sessionId, run>` instead of one module-level run.
+  The To-do toggle arms/disarms the ACTIVE tab's run; the status line shows
+  that tab's run plus a "+N on other tabs" count, and repaints on every tab
+  switch (`syncTodoProject()` -> `refreshGodModeControl()`).
+- To-do lists are per PROJECT, so arming is refused (short notice on the
+  status line) while another tab's run owns the same project -
+  `findProjectConflict()`, re-checked after the confirm dialog too.
+- A tab that closes drops its run (`onSessions`). A stalled run stays on
+  record for its tab until re-armed, disarmed or closed.
+- `overnight.js`: `startRun(id)` / `endRun(id)` instead of `setRun(id|null)`.
+  Keep-awake + throttling-off are held while ANY run is live; the backend
+  watchdog is one per local upstream, shared by every run on it, and its
+  signals fan out to all of them - two tabs on one LM Studio never both
+  recover it.
+- IPC `godmode:run` is now `(sessionId, active)`; main still only starts a
+  run for a live session id.
+
+Verified: full `node --test` suite, `--luna-probe`. Manual smoke-test still
+needed: arm two tabs on different projects, confirm both advance; try a
+second tab on the same project and see the refusal.
+
+### v2 fixes from the first manual test (2026-10-05)
+
+- **Slash-command items hung the run.** A to-do starting with `/` ("/clear
+  ...") was run by Claude Code as a command; no turn, no `onTurnEnd`, run
+  stuck. `promptFor()` now sends it as `Task: /clear ...`.
+- **A usage limit stalled the run.** The CLI writes the wall into the
+  transcript as an API error (429, "You've hit your session limit · resets
+  12:10pm"), which was read as a dropped connection: 3 quick "continue"s,
+  then "stalled". `observer.js` `usageLimitFrom()` now tells the wall apart
+  and parses the reset time; God Mode waits until reset + 1 min, types
+  "continue", and repeats for as many walls as it meets - never stalls on a
+  limit. Status shows the reset time. Connection-drop retries now back off
+  5s / 30s / 2m / 5m / 10m / 10m before stalling (rides out ~30 min).
+
+Next: v3, the orchestrator - see [ORCHESTRATOR_PLAN.md](ORCHESTRATOR_PLAN.md).

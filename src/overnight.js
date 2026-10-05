@@ -13,11 +13,10 @@
 //     model, telling God Mode through godmode:signal so the run waits for the
 //     backend instead of burning its connection retries.
 //
-// Both halves are scoped to the runs: armed when the renderer reports one,
-// released the moment the last one ends, stalls or its tab closes. Several
-// tabs can run at once (orchestrator slice 2): keep-awake is shared, the
-// watchdog is per tab, and tabs on the SAME local server share one recovery
-// so two runs never wake/load in parallel.
+// Both halves are scoped to the runs (God Mode v2: one per tab, several at
+// once): keep-awake is held while ANY run is live and released when the last
+// one ends, stalls or its tab closes; the watchdog is one per local upstream,
+// shared by every run on it, and stops when its last run does.
 //
 // A single bad probe is never acted on - it is confirmed a few seconds later
 // first, since a busy server can miss one probe while it generates. The
@@ -99,51 +98,57 @@ function createOvernightGuard(deps) {
     timers = { setInterval, clearInterval, setTimeout, clearTimeout },
   } = deps;
 
-  /** @type {Map<string, Object>} sessionId -> run record */
+  // Every live run: tab id -> its local upstream (null for a cloud tab).
   const runs = new Map();
+  // One watchdog per local upstream, shared by every run that talks to it, so
+  // two tabs on the same LM Studio never both try to bring it back.
+  const watchers = new Map();
+  // Keep-awake and throttling are app-wide: held while ANY run is live.
   let blockerId = null;
-  /** upstream -> in-flight recovery promise, shared by runs on one server */
-  const recoveries = new Map();
 
   function setThrottling(enabled) {
     const wc = getWebContents();
     if (wc && !wc.isDestroyed()) wc.setBackgroundThrottling(enabled);
   }
 
-  function stopWatch(r) {
-    if (r.interval !== null) timers.clearInterval(r.interval);
-    if (r.confirm !== null) timers.clearTimeout(r.confirm);
-    r.interval = null;
-    r.confirm = null;
+  function holdAwake() {
+    if (blockerId !== null) return;
+    blockerId = blocker.start('prevent-app-suspension');
+    setThrottling(false);
   }
 
-  function isLive(r) {
-    return runs.get(r.sessionId) === r;
+  function releaseAwake() {
+    if (blockerId === null) return;
+    if (blocker.isStarted(blockerId)) blocker.stop(blockerId);
+    blockerId = null;
+    setThrottling(true);
   }
 
-  /** Keep-awake + throttling follow "is ANY run live". */
-  function syncPower() {
-    if (runs.size > 0 && blockerId === null) {
-      blockerId = blocker.start('prevent-app-suspension');
-      setThrottling(false);
-    } else if (runs.size === 0 && blockerId !== null) {
-      if (blocker.isStarted(blockerId)) blocker.stop(blockerId);
-      blockerId = null;
-      setThrottling(true);
+  /** Sends a backend signal to every run on this watcher's upstream. */
+  function broadcast(w, type) {
+    for (const [sessionId, upstream] of runs) {
+      if (upstream === w.upstream) signal(sessionId, type);
     }
   }
 
-  function dropRun(sessionId) {
-    const r = runs.get(sessionId);
-    if (!r) return;
-    stopWatch(r);
-    runs.delete(sessionId);
+  function stopWatch(w) {
+    if (w.interval !== null) timers.clearInterval(w.interval);
+    if (w.confirm !== null) timers.clearTimeout(w.confirm);
+    w.interval = null;
+    w.confirm = null;
   }
 
-  function addRun(sessionId) {
-    const r = {
-      sessionId,
-      upstream: resolveLocal(sessionId) || null,
+  function isLive(w) {
+    return watchers.get(w.upstream) === w;
+  }
+
+  function startWatch(upstream) {
+    const existing = watchers.get(upstream);
+    // A watcher that already gave up is replaced: a new run is a fresh start.
+    if (existing && !existing.lost) return;
+    if (existing) stopWatch(existing);
+    const w = {
+      upstream,
       interval: null,
       confirm: null,
       busy: false,
@@ -153,131 +158,117 @@ function createOvernightGuard(deps) {
       lost: false,
       lastModelKey: null,
     };
-    runs.set(sessionId, r);
-    if (r.upstream) {
-      r.interval = timers.setInterval(() => { checkRun(r); }, intervalMs);
-      checkRun(r);
+    watchers.set(upstream, w);
+    w.interval = timers.setInterval(() => { checkWatcher(w); }, intervalMs);
+    checkWatcher(w);
+  }
+
+  /** Starts a run on a tab. Idempotent per tab; other tabs' runs are untouched. */
+  function startRun(sessionId) {
+    const id = typeof sessionId === 'string' && sessionId ? sessionId : null;
+    if (!id || runs.has(id)) return;
+    const upstream = resolveLocal(id) || null;
+    runs.set(id, upstream);
+    holdAwake();
+    if (upstream) startWatch(upstream);
+  }
+
+  /** Ends a tab's run. The last run out releases keep-awake. */
+  function endRun(sessionId) {
+    if (!runs.has(sessionId)) return;
+    const upstream = runs.get(sessionId);
+    runs.delete(sessionId);
+    if (upstream && ![...runs.values()].includes(upstream)) {
+      const w = watchers.get(upstream);
+      if (w) stopWatch(w);
+      watchers.delete(upstream);
     }
+    if (runs.size === 0) releaseAwake();
   }
 
-  /** Reports the full set of tabs with a live run. Idempotent per tab. */
-  function setRuns(sessionIds) {
-    const wanted = new Set(
-      (Array.isArray(sessionIds) ? sessionIds : []).filter((id) => typeof id === 'string' && id),
-    );
-    for (const id of [...runs.keys()]) if (!wanted.has(id)) dropRun(id);
-    for (const id of wanted) if (!runs.has(id)) addRun(id);
-    syncPower();
+  function stopAll() {
+    for (const w of watchers.values()) stopWatch(w);
+    watchers.clear();
+    runs.clear();
+    releaseAwake();
   }
 
-  /** Single-run form (v1): a tab id replaces every run, null ends them all. */
-  function setRun(sessionId) {
-    setRuns(typeof sessionId === 'string' && sessionId ? [sessionId] : []);
-  }
-
-  function release() {
-    setRuns([]);
-  }
-
-  /** One recovery per upstream at a time; every run on it awaits the same one. */
-  function sharedRecover(r) {
-    const key = r.upstream;
-    if (!recoveries.has(key)) {
-      const p = Promise.resolve()
-        .then(() => recover({ modelKey: r.lastModelKey }))
-        .finally(() => recoveries.delete(key));
-      recoveries.set(key, p);
+  async function attemptRecovery(w) {
+    if (!w.recovering) {
+      w.recovering = true;
+      broadcast(w, 'backendRecovering');
     }
-    return recoveries.get(key);
-  }
-
-  async function attemptRecovery(r) {
-    if (!r.recovering) {
-      r.recovering = true;
-      signal(r.sessionId, 'backendRecovering');
-    }
-    r.attempts += 1;
-    const result = await sharedRecover(r);
-    if (!isLive(r)) return; // the run ended or moved on while recovery ran
+    w.attempts += 1;
+    const result = await recover({ modelKey: w.lastModelKey });
+    if (!isLive(w)) return; // every run on it ended while recovery ran
     if (result && result.ok) {
-      r.recovering = false;
-      r.attempts = 0;
-      signal(r.sessionId, 'backendRecovered');
+      w.recovering = false;
+      w.attempts = 0;
+      broadcast(w, 'backendRecovered');
       return;
     }
-    if (r.attempts >= MAX_RECOVERY_ATTEMPTS) {
-      r.lost = true;
-      stopWatch(r);
-      signal(r.sessionId, 'backendLost');
+    if (w.attempts >= MAX_RECOVERY_ATTEMPTS) {
+      w.lost = true;
+      stopWatch(w);
+      broadcast(w, 'backendLost');
     }
   }
 
-  /** One watchdog pass for one run; overlapping calls are dropped. */
-  async function checkRun(r) {
-    if (!isLive(r) || !r.upstream || r.busy || r.lost) return;
-    r.busy = true;
+  /** One watchdog pass for one upstream. Overlapping calls are dropped. */
+  async function checkWatcher(w) {
+    if (!isLive(w) || w.busy || w.lost) return;
+    w.busy = true;
     try {
       let reading = null;
       try {
-        reading = await probe(r.upstream);
+        reading = await probe(w.upstream);
       } catch {
         reading = null;
       }
-      if (!isLive(r)) return;
+      if (!isLive(w)) return;
       if (isBackendHealthy(reading)) {
         const loaded = pickLoadedModel(reading.models);
-        if (loaded) r.lastModelKey = loaded.id;
-        r.suspect = false;
+        if (loaded) w.lastModelKey = loaded.id;
+        w.suspect = false;
         return;
       }
-      if (r.recovering || r.suspect) {
-        r.suspect = false;
-        await attemptRecovery(r);
+      if (w.recovering || w.suspect) {
+        w.suspect = false;
+        await attemptRecovery(w);
         return;
       }
       // First bad reading: confirm shortly instead of acting on it.
-      r.suspect = true;
-      if (r.confirm === null) {
-        r.confirm = timers.setTimeout(() => {
-          r.confirm = null;
-          return checkRun(r);
+      w.suspect = true;
+      if (w.confirm === null) {
+        w.confirm = timers.setTimeout(() => {
+          w.confirm = null;
+          return checkWatcher(w);
         }, confirmDelayMs);
       }
     } finally {
-      r.busy = false;
+      w.busy = false;
     }
   }
 
-  /** A watchdog pass for one tab's run, or for every run when no id is given. */
-  function check(sessionId) {
-    if (typeof sessionId === 'string') {
-      const r = runs.get(sessionId);
-      return r ? checkRun(r) : Promise.resolve();
-    }
-    return Promise.all([...runs.values()].map(checkRun)).then(() => undefined);
+  /** A watchdog pass over every watched upstream. Safe to call at any time. */
+  function check() {
+    return Promise.all([...watchers.values()].map(checkWatcher));
   }
 
-  /** A dropped request on a run's tab: look now instead of at the next tick. */
+  /** A dropped request on a run's tab: look at its backend now, not at the next tick. */
   function onConnectionError(sessionId) {
-    return runs.has(sessionId) ? check(sessionId) : Promise.resolve();
-  }
-
-  /** A tab closed: a run bound to it is over. */
-  function forgetSession(sessionId) {
-    if (!runs.has(sessionId)) return;
-    dropRun(sessionId);
-    syncPower();
+    const w = watchers.get(runs.get(sessionId));
+    return w ? checkWatcher(w) : Promise.resolve();
   }
 
   return {
-    setRun,
-    setRuns,
+    startRun,
+    endRun,
     check,
     onConnectionError,
-    forgetSession,
-    stop: release,
-    current: () => (runs.size > 0 ? [...runs.keys()][0] : null),
-    currentAll: () => [...runs.keys()],
+    forgetSession: endRun, // a tab closed: a run bound to it is over
+    stop: stopAll,
+    current: () => [...runs.keys()],
   };
 }
 

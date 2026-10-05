@@ -166,6 +166,44 @@ const CONTEXT_LIMIT = DEFAULT_CONTEXT_LIMIT;
 // Directory where Claude Code keeps session transcripts (per project).
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
+// Where the CLI keeps one state file per running process, <pid>.json, holding
+// the session id that process is CURRENTLY on. /clear (and /resume) rewrite it
+// in place - same pid, new sessionId (verified live on claude 2.1.289).
+const SESSIONS_DIR = path.join(os.homedir(), '.claude', 'sessions');
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Parses one CLI state file; null when missing, unreadable or malformed. */
+function readCliState(file) {
+  try {
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!state || typeof state.sessionId !== 'string' || !UUID_RE.test(state.sessionId)) return null;
+    return { sessionId: state.sessionId, procStart: String(state.procStart ?? '') };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Finds the state file of the CLI process currently on `sessionId`.
+ * @returns {{file:string, procStart:string}|null}
+ */
+function findCliState(sessionId, dir) {
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    if (!/^\d+\.json$/.test(name)) continue;
+    const file = path.join(dir, name);
+    const state = readCliState(file);
+    if (state && state.sessionId === sessionId) return { file, procStart: state.procStart };
+  }
+  return null;
+}
+
 // How many bytes from the end of the file we read while looking for the last usage entry.
 const TAIL_BYTES = 128 * 1024;
 
@@ -669,6 +707,76 @@ function apiErrorAt(text) {
   return at;
 }
 
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const LIMIT_TEXT = /hit your .*limit|usage limit|limit reached/i;
+const RESET_TEXT = /resets\s+(?:([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i;
+
+/**
+ * Epoch ms of the reset time in a limit message ("resets 12:10pm (Europe/
+ * Warsaw)", "resets Oct 9, 5am"), read as LOCAL time - the CLI prints it in
+ * the machine's own zone. A bare clock time already past today means
+ * tomorrow. Null when the message names no reset time.
+ * @param {string} text
+ * @param {number} [now] epoch ms
+ * @returns {number|null}
+ */
+function parseResetAt(text, now = Date.now()) {
+  const m = RESET_TEXT.exec(String(text || ''));
+  if (!m) return null;
+  let hour = Number(m[3]) % 12;
+  if (m[5].toLowerCase() === 'pm') hour += 12;
+  const minute = m[4] ? Number(m[4]) : 0;
+  const base = new Date(now);
+  const at = new Date(base.getFullYear(), base.getMonth(), base.getDate(), hour, minute, 0, 0);
+  if (m[1]) {
+    const month = MONTHS.indexOf(m[1].toLowerCase());
+    if (month === -1) return null;
+    at.setMonth(month, Number(m[2]));
+    // "Jan 2" read in late December is next year's.
+    if (at.getTime() < now - 24 * 60 * 60 * 1000) at.setFullYear(at.getFullYear() + 1);
+  } else if (at.getTime() <= now) {
+    at.setDate(at.getDate() + 1);
+  }
+  return at.getTime();
+}
+
+/** All the text of an entry's message content, whatever its shape. */
+function entryText(obj) {
+  const content = obj && obj.message && obj.message.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((part) => (part && typeof part.text === 'string' ? part.text : '')).join(' ');
+}
+
+/**
+ * The usage-limit wall, if this fragment hit it. The CLI records the wall as
+ * an API-error entry like a dropped request ("You've hit your session limit ·
+ * resets 12:10pm", apiErrorStatus 429) - but it is NOT a drop: "continue"
+ * just hits the wall again until the reset. Telling them apart is what lets
+ * God Mode wait the limit out instead of burning its connection retries and
+ * stalling.
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @param {number} [now] epoch ms
+ * @returns {{resetsAt:number|null}|null}
+ */
+function usageLimitFrom(text, now = Date.now()) {
+  let found = null;
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || (!line.includes('isApiErrorMessage') && !line.includes('<synthetic>'))) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (!isApiErrorEntry(obj)) continue;
+      const body = entryText(obj);
+      if (obj.apiErrorStatus !== 429 && !LIMIT_TEXT.test(body)) continue;
+      found = { resetsAt: parseResetAt(body, now) };
+    } catch {
+      /* incomplete line - skip */
+    }
+  }
+  return found;
+}
+
 /**
  * True if this fragment contains the synthetic entry the CLI writes when a
  * request dies mid-flight (isApiErrorEntry above).
@@ -886,6 +994,7 @@ class TranscriptWatcher {
     // else. main.js forwards it as the connectionError signal the recovery UI
     // already listens for.
     this.onApiError = typeof opts.onApiError === 'function' ? opts.onApiError : null;
+    this.onUsageLimit = typeof opts.onUsageLimit === 'function' ? opts.onUsageLimit : null;
     // Optional: called whenever hasUserPromptStart() fires on newly appended
     // lines - a genuine new turn began, ours or Mati's own typing. autoproceed.js
     // uses this as proof the injected "continue" was consumed, independent of
@@ -906,6 +1015,10 @@ class TranscriptWatcher {
     // Session id we asked the CLI for via `--session-id`. The transcript is
     // named after it, so this turns file selection from a guess into a lookup.
     this.sessionUuid = opts.sessionUuid || null;
+    // The CLI process behind sessionUuid ({file, procStart}), found once and
+    // then re-read each tick to follow /clear - see followSessionSwitch().
+    this.sessionsDir = opts.sessionsDir || SESSIONS_DIR;
+    this.cliState = null;
     // Optional: known context limit override (e.g., LM Studio's loadedContext).
     // Stored as a number or updated via setContextLimit().
     this.contextLimit = typeof opts.contextLimit === 'number' ? opts.contextLimit : null;
@@ -1027,7 +1140,12 @@ class TranscriptWatcher {
         // compares it against tool-event timestamps from this same fragment to
         // decide whether the session moved after the drop. Date.now() is only
         // the fallback for an entry with no parseable timestamp.
-        if (this.onApiError && hasApiError(complete)) {
+        // A usage-limit wall is written as an API error too, but must not be
+        // treated as a drop - see usageLimitFrom().
+        const limit = hasApiError(complete) ? usageLimitFrom(complete) : null;
+        if (limit && this.onUsageLimit) {
+          this.onUsageLimit(limit);
+        } else if (this.onApiError && hasApiError(complete)) {
           this.onApiError({ at: apiErrorAt(complete) ?? Date.now() });
         }
       }
@@ -1125,7 +1243,50 @@ class TranscriptWatcher {
     this.contextLimit = typeof limit === 'number' && limit > 0 ? limit : null;
   }
 
+  /**
+   * Follows this tab's CLI onto a new session id after /clear (or /resume).
+   *
+   * Without this the watcher stays pinned to the pre-clear transcript, which
+   * never grows again: the context bar freezes, and onTurnEnd - what God Mode
+   * and the "All done" voice wait on - never fires for the rest of the tab.
+   * Tracked by the CLI's own <pid>.json, so a neighbour tab in the same folder
+   * clearing at the same moment can never be mistaken for ours.
+   * @returns {boolean} true when the watcher moved to a new session id
+   */
+  followSessionSwitch() {
+    if (!this.sessionUuid) return false;
+    if (!this.cliState) {
+      this.cliState = findCliState(this.sessionUuid, this.sessionsDir);
+      return false;
+    }
+    const state = readCliState(this.cliState.file);
+    if (!state) return false; // process exited (file removed) or mid-write
+    if (state.procStart !== this.cliState.procStart) {
+      // The pid now belongs to another process - stop trusting the file.
+      this.cliState = null;
+      return false;
+    }
+    if (state.sessionId === this.sessionUuid) return false;
+
+    if (this.pinned) claimedTranscripts.delete(this.pinned);
+    this.pinned = null;
+    this.currentFile = null;
+    this.lastMtime = 0;
+    this.sessionUuid = state.sessionId;
+    return true;
+  }
+
+  /** Context reading for a session that has not exchanged a message yet. */
+  emptyMetrics() {
+    const metrics = usageToMetrics({}, this.lastModel || '', this.contextLimit);
+    metrics.file = this.scopeDir ? path.join(this.scopeDir, `${this.sessionUuid}.jsonl`) : null;
+    metrics.totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    metrics.elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
+    return metrics;
+  }
+
   tick() {
+    if (this.followSessionSwitch()) this.onMetrics(this.emptyMetrics());
     const file = this.pickFile();
     if (!file) return;
     let mtime;
@@ -1143,6 +1304,7 @@ class TranscriptWatcher {
     const sample = readLatestSample(file);
     if (!sample) return;
 
+    this.lastModel = sample.model;
     const metrics = usageToMetrics(sample.usage, sample.model, this.contextLimit);
     // B6: which file these numbers came from. The renderer offers it as a
     // copy button - the pinning rules make "which transcript is this tab on"
@@ -1178,6 +1340,8 @@ module.exports = {
   hasTurnEnd,
   hasApiError,
   apiErrorAt,
+  usageLimitFrom,
+  parseResetAt,
   hasCompletedTurn,
   hasUserPromptStart,
   isLongTurn,
