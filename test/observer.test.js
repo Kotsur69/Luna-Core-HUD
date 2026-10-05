@@ -22,6 +22,8 @@ const {
   hasTurnEnd,
   hasApiError,
   apiErrorAt,
+  usageLimitFrom,
+  parseResetAt,
   hasCompletedTurn,
   hasUserPromptStart,
   isLongTurn,
@@ -931,4 +933,44 @@ test('isLongTurn treats a 0-minute threshold as "announce every turn"', () => {
 
 test('isLongTurn is false if endedAt is before startedAt (clock oddity)', () => {
   assert.equal(isLongTurn(2000, 1000, 10), false);
+});
+
+// ---- usage-limit wall vs dropped request ------------------------------------
+
+const MORNING = new Date(2026, 9, 5, 9, 0).getTime();
+
+function limitEntry(text, extra = {}) {
+  return JSON.stringify({
+    type: 'assistant',
+    isApiErrorMessage: true,
+    message: { model: '<synthetic>', content: [{ type: 'text', text }] },
+    ...extra,
+  });
+}
+
+test('a 429 limit entry is a usage limit with its reset time, not a drop', () => {
+  const line = limitEntry("You've hit your session limit · resets 12:10pm (Europe/Warsaw)", { apiErrorStatus: 429 });
+  assert.deepEqual(usageLimitFrom(line, MORNING), { resetsAt: new Date(2026, 9, 5, 12, 10).getTime() });
+});
+
+test('limit wording alone is enough when the status is missing', () => {
+  const line = limitEntry("You've hit your weekly limit · resets Oct 9, 5am");
+  assert.deepEqual(usageLimitFrom(line, MORNING), { resetsAt: new Date(2026, 9, 9, 5, 0).getTime() });
+});
+
+test('an ordinary connection error is not a usage limit', () => {
+  assert.equal(usageLimitFrom(limitEntry('API Error: Connection error'), MORNING), null);
+});
+
+test('a limit with no reset time is still a limit', () => {
+  assert.deepEqual(usageLimitFrom(limitEntry('Usage limit reached', { apiErrorStatus: 429 }), MORNING), { resetsAt: null });
+});
+
+test('a bare reset clock time already past today means tomorrow', () => {
+  assert.equal(parseResetAt('resets 5am', MORNING), new Date(2026, 9, 6, 5, 0).getTime());
+});
+
+test('12am and 12pm parse as midnight and noon', () => {
+  assert.equal(parseResetAt('resets 12pm', MORNING), new Date(2026, 9, 5, 12, 0).getTime());
+  assert.equal(parseResetAt('resets 12am', MORNING), new Date(2026, 9, 6, 0, 0).getTime());
 });

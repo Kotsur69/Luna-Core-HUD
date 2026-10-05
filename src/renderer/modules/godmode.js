@@ -64,9 +64,15 @@ export function promptFor(text) {
   return framed + AUTONOMY_NUDGE;
 }
 
-const MAX_CONN_RETRIES = 3;
-const CONN_BACKOFF_MS = 5000;
-const LIMIT_POLL_MS = 5 * 60 * 1000; // re-nudge every 5 min while walled
+// Dropped-connection retries back off instead of giving up fast: an overnight
+// run should ride out a ~30 min outage, not stall on the third 5s retry.
+const CONN_BACKOFF_STEPS_MS = [5000, 30 * 1000, 2 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000, 10 * 60 * 1000];
+const MAX_CONN_RETRIES = CONN_BACKOFF_STEPS_MS.length;
+// Usage-limit wall: resume this long after the parsed reset time (the wall
+// lifts on the server's clock, not ours), or retry every LIMIT_POLL_MS when
+// the message named no reset time. A run NEVER stalls on a limit.
+const LIMIT_RESUME_BUFFER_MS = 60 * 1000;
+const LIMIT_POLL_MS = 5 * 60 * 1000;
 const SIGNAL_COOLDOWN_MS = 4000; // a TUI redraw repeats the same stdout chunk
 const NOTICE_MS = 4000; // how long a refused-arm notice stays on the status line
 
@@ -90,11 +96,12 @@ let projectBySession = new Map();
  * @property {string} sessionId
  * @property {string} phase running | waiting-limit | waiting-connection | waiting-backend | stalled
  * @property {number|null} currentAt the in-flight to-do's `at` key (survives index shifts)
- * @property {string|null} currentText its text, kept for limit-poll re-injection
+ * @property {string|null} currentText the in-flight item's text
  * @property {number} remainingCount open-item count as of the last list read
  * @property {number} retryCount connection-error attempts for the CURRENT item
  * @property {boolean} sawDrop a request dropped while the local backend was being restored
  * @property {number} lastUsageLimitAt
+ * @property {number|null} resetsAt when the current usage-limit wall lifts (epoch ms), if known
  * @property {number} lastConnErrAt
  * @property {*} limitTimer
  * @property {*} connTimer
@@ -115,6 +122,7 @@ function newRun(sessionId, phase = 'running') {
     retryCount: 0,
     sawDrop: false,
     lastUsageLimitAt: 0,
+    resetsAt: null,
     lastConnErrAt: 0,
     limitTimer: null,
     connTimer: null,
@@ -132,7 +140,7 @@ function isCurrent(run) {
 
 function clearTimers(run) {
   if (run.limitTimer) {
-    clearInterval(run.limitTimer);
+    clearTimeout(run.limitTimer);
     run.limitTimer = null;
   }
   if (run.connTimer) {
@@ -167,7 +175,7 @@ function phaseText(run) {
     case 'running':
       return `${t('godmode.running')} (${run.remainingCount})`;
     case 'waiting-limit':
-      return t('godmode.waitingLimit');
+      return run.resetsAt ? `${t('godmode.waitingLimit')} (${clockText(run.resetsAt)})` : t('godmode.waitingLimit');
     case 'waiting-connection':
       return t('godmode.waitingConnection');
     case 'waiting-backend':
@@ -177,6 +185,11 @@ function phaseText(run) {
     default:
       return t('godmode.off');
   }
+}
+
+/** "12:11" in the user's locale, for the waiting-for-limit status line. */
+function clockText(at) {
+  return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function statusText(run) {
@@ -300,16 +313,39 @@ function disarm(sessionId) {
   render();
 }
 
-function startLimitPoll(run) {
-  clearInterval(run.limitTimer);
-  run.limitTimer = setInterval(() => {
-    if (!isCurrent(run) || run.phase !== 'waiting-limit') {
-      clearInterval(run.limitTimer);
-      run.limitTimer = null;
-      return;
-    }
-    if (run.currentText) window.lunacore.pastePrompt(promptFor(run.currentText), true, run.sessionId);
-  }, LIMIT_POLL_MS);
+/**
+ * How long to wait out a usage-limit wall before trying again: until the
+ * parsed reset time plus a buffer, or LIMIT_POLL_MS when there is no reset
+ * time (or it is already past). Pure, for the tests.
+ * @param {number|null} resetsAt epoch ms
+ * @param {number} now epoch ms
+ * @returns {number} ms
+ */
+export function limitResumeDelay(resetsAt, now) {
+  if (!Number.isFinite(resetsAt)) return LIMIT_POLL_MS;
+  return Math.max(resetsAt + LIMIT_RESUME_BUFFER_MS - now, LIMIT_RESUME_BUFFER_MS);
+}
+
+/**
+ * Parks the run until the wall lifts, then types "continue" - the task is
+ * still in the conversation, so it is a nudge, not a resend. The run goes back
+ * to `running`: either the turn completes (onTurnEnd advances as usual) or
+ * the wall is still up and the next usageLimit signal parks it again. As many
+ * rounds as it takes - a limit never stalls a run.
+ */
+function waitForLimit(run, resetsAt) {
+  clearTimers(run);
+  run.phase = 'waiting-limit';
+  run.resetsAt = Number.isFinite(resetsAt) ? resetsAt : null;
+  render();
+  run.limitTimer = setTimeout(() => {
+    run.limitTimer = null;
+    if (!isCurrent(run) || run.phase !== 'waiting-limit') return; // disarmed or already moving
+    run.phase = 'running';
+    run.resetsAt = null;
+    window.lunacore.pastePrompt('continue', true, run.sessionId);
+    render();
+  }, limitResumeDelay(run.resetsAt, Date.now()));
 }
 
 function handleConnectionError(run) {
@@ -321,13 +357,14 @@ function handleConnectionError(run) {
     return;
   }
   clearTimeout(run.connTimer);
+  const backoff = CONN_BACKOFF_STEPS_MS[run.retryCount - 1];
   run.connTimer = setTimeout(() => {
     run.connTimer = null;
     if (!isCurrent(run) || run.phase !== 'waiting-connection') return; // disarmed or recovered
     window.lunacore.pastePrompt('continue', true, run.sessionId);
     run.phase = 'running';
     render();
-  }, CONN_BACKOFF_MS);
+  }, backoff);
 }
 
 /**
@@ -391,7 +428,7 @@ function applyBackendStep(run, step) {
   render();
 }
 
-function handleGodModeSignal({ sessionId, type } = {}) {
+function handleGodModeSignal({ sessionId, type, resetsAt } = {}) {
   const run = runs.get(sessionId);
   if (!isEngaged(run)) return;
   const step = backendSignalStep(run.phase, run.sawDrop, type);
@@ -401,13 +438,15 @@ function handleGodModeSignal({ sessionId, type } = {}) {
   }
   const now = Date.now();
   if (type === 'usageLimit') {
-    if (run.phase === 'waiting-limit') return; // already handling this wall
-    if (now - run.lastUsageLimitAt < SIGNAL_COOLDOWN_MS) return;
+    // The same wall is reported twice (stdout scan + transcript); only a
+    // repeat that brings a reset time we did not have is worth re-planning.
+    const newInfo = Number.isFinite(resetsAt) && resetsAt !== run.resetsAt;
+    if (run.phase === 'waiting-limit' && !newInfo) return;
+    if (now - run.lastUsageLimitAt < SIGNAL_COOLDOWN_MS && !newInfo) return;
     run.lastUsageLimitAt = now;
-    run.phase = 'waiting-limit';
-    render();
-    startLimitPoll(run);
+    waitForLimit(run, Number.isFinite(resetsAt) ? resetsAt : run.resetsAt);
   } else if (type === 'connectionError') {
+    if (run.phase === 'waiting-limit') return; // the wall, not a drop - wait it out
     if (now - run.lastConnErrAt < SIGNAL_COOLDOWN_MS) return;
     run.lastConnErrAt = now;
     handleConnectionError(run);

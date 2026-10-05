@@ -948,6 +948,15 @@ function spawnInto(session, profile, launch = null) {
         // A drop on the run's tab: have the guard look at the backend now.
         overnight.onConnectionError(session.id);
       },
+      // The usage-limit wall, from the transcript (the CLI writes it as a 429
+      // API error, which onApiError above must NOT see as a drop). Carries the
+      // parsed reset time so God Mode waits it out instead of stalling.
+      onUsageLimit: ({ resetsAt } = {}) =>
+        send('godmode:signal', {
+          sessionId: session.id,
+          type: 'usageLimit',
+          resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
+        }),
       // Same channel/shape as onApiError above - autoproceed.js's proof that an
       // armed "continue" (or Mati's own typing) was actually consumed, so a
       // turn that only thinks or answers in plain text before dying again still

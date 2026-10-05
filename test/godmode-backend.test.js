@@ -9,7 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { backendSignalStep, findProjectConflict, promptFor } = require('../src/renderer/modules/godmode.js');
+const { backendSignalStep, findProjectConflict, promptFor, limitResumeDelay } = require('../src/renderer/modules/godmode.js');
 
 test('backendRecovering parks a running run in waiting-backend', () => {
   assert.deepEqual(backendSignalStep('running', false, 'backendRecovering'), {
@@ -106,4 +106,19 @@ test('a plain item is sent as written, with the autonomy nudge', () => {
   const out = promptFor('fix the login bug');
   assert.ok(out.startsWith('fix the login bug ('));
   assert.ok(out.includes('Running unattended via God Mode'));
+});
+
+// ---- limitResumeDelay: a usage limit is waited out, never a stall -----------
+
+test('a known reset time is waited out, plus a one-minute buffer', () => {
+  const now = 1_000_000;
+  assert.equal(limitResumeDelay(now + 30 * 60 * 1000, now), 31 * 60 * 1000);
+});
+
+test('a reset time already past still waits the buffer, not zero', () => {
+  assert.equal(limitResumeDelay(500, 1_000_000), 60 * 1000);
+});
+
+test('no reset time falls back to retrying every five minutes', () => {
+  assert.equal(limitResumeDelay(null, 1_000_000), 5 * 60 * 1000);
 });

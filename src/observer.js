@@ -707,6 +707,76 @@ function apiErrorAt(text) {
   return at;
 }
 
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const LIMIT_TEXT = /hit your .*limit|usage limit|limit reached/i;
+const RESET_TEXT = /resets\s+(?:([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i;
+
+/**
+ * Epoch ms of the reset time in a limit message ("resets 12:10pm (Europe/
+ * Warsaw)", "resets Oct 9, 5am"), read as LOCAL time - the CLI prints it in
+ * the machine's own zone. A bare clock time already past today means
+ * tomorrow. Null when the message names no reset time.
+ * @param {string} text
+ * @param {number} [now] epoch ms
+ * @returns {number|null}
+ */
+function parseResetAt(text, now = Date.now()) {
+  const m = RESET_TEXT.exec(String(text || ''));
+  if (!m) return null;
+  let hour = Number(m[3]) % 12;
+  if (m[5].toLowerCase() === 'pm') hour += 12;
+  const minute = m[4] ? Number(m[4]) : 0;
+  const base = new Date(now);
+  const at = new Date(base.getFullYear(), base.getMonth(), base.getDate(), hour, minute, 0, 0);
+  if (m[1]) {
+    const month = MONTHS.indexOf(m[1].toLowerCase());
+    if (month === -1) return null;
+    at.setMonth(month, Number(m[2]));
+    // "Jan 2" read in late December is next year's.
+    if (at.getTime() < now - 24 * 60 * 60 * 1000) at.setFullYear(at.getFullYear() + 1);
+  } else if (at.getTime() <= now) {
+    at.setDate(at.getDate() + 1);
+  }
+  return at.getTime();
+}
+
+/** All the text of an entry's message content, whatever its shape. */
+function entryText(obj) {
+  const content = obj && obj.message && obj.message.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((part) => (part && typeof part.text === 'string' ? part.text : '')).join(' ');
+}
+
+/**
+ * The usage-limit wall, if this fragment hit it. The CLI records the wall as
+ * an API-error entry like a dropped request ("You've hit your session limit ·
+ * resets 12:10pm", apiErrorStatus 429) - but it is NOT a drop: "continue"
+ * just hits the wall again until the reset. Telling them apart is what lets
+ * God Mode wait the limit out instead of burning its connection retries and
+ * stalling.
+ * @param {string} text fragment of the JSONL file (whole lines)
+ * @param {number} [now] epoch ms
+ * @returns {{resetsAt:number|null}|null}
+ */
+function usageLimitFrom(text, now = Date.now()) {
+  let found = null;
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || (!line.includes('isApiErrorMessage') && !line.includes('<synthetic>'))) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (!isApiErrorEntry(obj)) continue;
+      const body = entryText(obj);
+      if (obj.apiErrorStatus !== 429 && !LIMIT_TEXT.test(body)) continue;
+      found = { resetsAt: parseResetAt(body, now) };
+    } catch {
+      /* incomplete line - skip */
+    }
+  }
+  return found;
+}
+
 /**
  * True if this fragment contains the synthetic entry the CLI writes when a
  * request dies mid-flight (isApiErrorEntry above).
@@ -924,6 +994,7 @@ class TranscriptWatcher {
     // else. main.js forwards it as the connectionError signal the recovery UI
     // already listens for.
     this.onApiError = typeof opts.onApiError === 'function' ? opts.onApiError : null;
+    this.onUsageLimit = typeof opts.onUsageLimit === 'function' ? opts.onUsageLimit : null;
     // Optional: called whenever hasUserPromptStart() fires on newly appended
     // lines - a genuine new turn began, ours or Mati's own typing. autoproceed.js
     // uses this as proof the injected "continue" was consumed, independent of
@@ -1069,7 +1140,12 @@ class TranscriptWatcher {
         // compares it against tool-event timestamps from this same fragment to
         // decide whether the session moved after the drop. Date.now() is only
         // the fallback for an entry with no parseable timestamp.
-        if (this.onApiError && hasApiError(complete)) {
+        // A usage-limit wall is written as an API error too, but must not be
+        // treated as a drop - see usageLimitFrom().
+        const limit = hasApiError(complete) ? usageLimitFrom(complete) : null;
+        if (limit && this.onUsageLimit) {
+          this.onUsageLimit(limit);
+        } else if (this.onApiError && hasApiError(complete)) {
           this.onApiError({ at: apiErrorAt(complete) ?? Date.now() });
         }
       }
@@ -1264,6 +1340,8 @@ module.exports = {
   hasTurnEnd,
   hasApiError,
   apiErrorAt,
+  usageLimitFrom,
+  parseResetAt,
   hasCompletedTurn,
   hasUserPromptStart,
   isLongTurn,
