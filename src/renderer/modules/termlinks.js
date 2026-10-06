@@ -15,7 +15,7 @@
 // parseFileLinks() is pure and unit-tested (test/termlinks.test.js).
 // mountFileLinks() wires one xterm instance and returns the IDisposable from
 // registerLinkProvider() - the caller MUST dispose it when it disposes the
-// terminal (FUTURE_PLAN.md §A2a/§A2b: a leaked provider is a leaked listener).
+// terminal (reference/ENGINEERING_NOTES.md §A2a/§A2b: a leaked provider is a leaked listener).
 // ============================================================================
 
 'use strict';

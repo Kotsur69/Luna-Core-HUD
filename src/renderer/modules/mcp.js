@@ -35,7 +35,7 @@ let els = null;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // ============================================================================
-// CONCEPT_MCP_DEBUGGER.md, safe half: live flow + JSON-RPC inspector.
+// reference/MCP_DEBUGGER_PLAN.md, safe half: live flow + JSON-RPC inspector.
 //
 // PASSIVE OBSERVER, same as the health scan above it: rides the transcript's
 // tool_use/tool_result lifecycle (observer.js's mcpEventsFromLines()/
@@ -207,7 +207,7 @@ function makeRow(s, live) {
   // its name does not, which is exactly the distinction flip.js needs.
   li.dataset.flipKey = s.name;
   if (!s.enabled) li.classList.add('mcp-item--off');
-  // Live Connection Flow Mapping (CONCEPT_MCP_DEBUGGER.md §2.1): a call to
+  // Live Connection Flow Mapping (reference/MCP_DEBUGGER_PLAN.md): a call to
   // this server is in flight right now.
   if (live.has(s.name)) li.classList.add('mcp-item--live');
 

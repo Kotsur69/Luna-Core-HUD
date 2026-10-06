@@ -638,7 +638,7 @@ test('foldToolEvents drops an orphan end, stat and all', () => {
   assert.deepEqual(out, []);
 });
 
-// ---- mcpEventsFromLines / foldMcpEvents (CONCEPT_MCP_DEBUGGER.md safe half) --
+// ---- mcpEventsFromLines / foldMcpEvents (reference/MCP_DEBUGGER_PLAN.md safe half) --
 
 /** User line closing one MCP tool call with a specific result payload and
  *  error flag - resLine() above always writes content:'ok', ok:true. */

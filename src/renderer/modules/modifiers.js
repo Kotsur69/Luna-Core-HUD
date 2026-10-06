@@ -5,7 +5,7 @@
 // is a look; a modifier is how you want that look served. Eighteen themes times
 // four densities is not seventy-two presets to maintain - it is eighteen presets
 // and four small token blocks in styles.css, and every future theme inherits all
-// four for free. This is FUTURE_PLAN.md §2.3, finally buildable now that the
+// four for free. This is the long-planned "presets beyond colour" idea, finally buildable now that the
 // space and type scales exist for density to multiply (v0.10 phase 1).
 //
 // This module owns exactly one thing: which id each axis is on. It deliberately

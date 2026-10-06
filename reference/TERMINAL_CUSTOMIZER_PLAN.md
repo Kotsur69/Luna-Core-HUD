@@ -67,5 +67,6 @@ too (loses the native title bar — needs a custom-built replacement), the
 toggle would need to recreate the window (open tabs' visible scrollback
 resets, though the underlying shell sessions survive), and it means
 reworking ~45 color tokens across 9 themes to carry an alpha channel. If
-revisited, it's a project of its own — see `FUTURE_PLAN.md`'s "Next action"
-for current status.
+revisited, it's a project of its own. **It was, differently:** the `glass`
+theme in v0.11.0 (Win11 acrylic on the framed window, no theme rework) - see
+[`TRANSPARENCY_PLAN.md`](TRANSPARENCY_PLAN.md).

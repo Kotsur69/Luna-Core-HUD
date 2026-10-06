@@ -10,7 +10,7 @@
 // (currently unobserved) case where a result carries old/new strings but no
 // patch - see plan §12/R4.
 //
-// PER-FILE CONTEXT WEIGHT (LUNA_HUD_ADVANCED_SPEC.md §2). A Read's result
+// PER-FILE CONTEXT WEIGHT (README.md, "Per-file context weight"). A Read's result
 // carries `file.content`: the exact text the CLI placed in the context window.
 // That string is a better measure of what a file cost than its size on disk, in
 // two ways that matter - a partial read (offset + limit) charges only the slice

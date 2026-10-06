@@ -17,7 +17,7 @@
 // a brand-new EMPTY host from the template and orphan every running session's
 // DOM from its buffer, which would look like every tab silently vanished while
 // its process kept running headless. `remountable: false` tells host.js to
-// refuse a remount instead of doing that; see FUTURE_PLAN.md §A2f.
+// refuse a remount instead of doing that; see reference/ENGINEERING_NOTES.md §A2f.
 // ============================================================================
 
 'use strict';

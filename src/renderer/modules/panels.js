@@ -523,7 +523,7 @@ function decorateAll() {
 // ---- Region rail: the DOM half (v0.10 3.4) ----------------------------------
 //
 // C2 shipped per-WIDGET folding; this is the per-REGION version, and it is the
-// `focus` preset's original promise in FUTURE_PLAN.md §3.2 - "panels collapse to
+// `focus` preset's original promise in the old roadmap - "panels collapse to
 // a thin icon rail, terminal reclaims the space". A railed region keeps one
 // glyph per widget, and clicking a glyph opens the region back up and scrolls
 // that widget into view, so collapsing is never a way to lose something.

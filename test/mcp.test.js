@@ -1,5 +1,5 @@
 // Tests for the pure functions behind the MCP debugger's safe half
-// (CONCEPT_MCP_DEBUGGER.md: live flow + JSON-RPC Inspector, no interception,
+// (reference/MCP_DEBUGGER_PLAN.md: live flow + JSON-RPC Inspector, no interception,
 // no config writes). Zero DOM - formatPayload/createMcpState/applyMcpEvent/
 // liveServers are pure; the widget's rendering and modal live behind the
 // manual verification pass, same split sessiontimeline.test.js already uses.

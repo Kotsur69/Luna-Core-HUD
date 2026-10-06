@@ -1,11 +1,11 @@
 # MCP debugger, safe half (Reference)
 
 **Status: shipped, hand-verified 2026-08-27.**
-`CONCEPT_MCP_DEBUGGER.md` sketched three pieces - live flow mapping, a
+The original concept sketched three pieces - live flow mapping, a
 JSON-RPC inspector, and a failure-injector/restart gateway. Only the first
 two shipped. This is the compact "what shipped and why the third piece
-didn't" doc; the concept file stays at root since §3 of it is still a live,
-unbuilt idea. Shipped 2026-08-26: 678/678 tests green and `--luna-probe`
+didn't" doc. The failure-injector was dropped for good on 2026-10-06 (it
+needs LunaCore to rewrite `~/.claude.json`), and the concept file with it. Shipped 2026-08-26: 678/678 tests green and `--luna-probe`
 confirms a clean mount. Hand-verified 2026-08-27 against a real
 `codebase-memory-mcp` call (Mati: *"shipped hand verified"*) - §6's
 checklist walked end to end: live pulse, inspector row, modal
@@ -136,8 +136,6 @@ purpose.
    `mcp.call.*`) - confirm both languages render sensibly, no leftover key
    names on screen.
 8. If everything above holds: flip this doc's top status line to
-   **"shipped, hand-verified"** with the date, and update
-   `FUTURE_PLAN.md`'s "Next action" row to drop the "needs a real MCP call"
-   caveat. If something's off, fix it here rather than filing it as a
+   **"shipped, hand-verified"** with the date (done 2026-08-27). If something's off, fix it here rather than filing it as a
    separate concept - this doc is the source of truth for what this
    feature is supposed to do.

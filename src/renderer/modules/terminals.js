@@ -465,7 +465,7 @@ export function ensureTerm(sessionId) {
   });
 
   // Clickable file:line links. registerLinkProvider() returns an IDisposable
-  // that MUST be torn down with the instance (FUTURE_PLAN.md §A2a/§A2b) - see
+  // that MUST be torn down with the instance (reference/ENGINEERING_NOTES.md §A2a/§A2b) - see
   // pruneTerms() below. Each tab resolves its own links against its own cwd,
   // so the closure captures THIS sessionId.
   const linkDisposer = mountFileLinks(instance, () => sessionId);

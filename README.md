@@ -13,6 +13,12 @@ injects prompts or touches the `claude` binary.
 > any OpenAI-compatible endpoint. Plus an LM Studio model loader in Settings,
 > an overnight guard for God Mode, a "Don't sleep" switch, and longer To-Do
 > items with scroll-aware drag-and-drop.
+>
+> **On `main`, not released yet: God Mode v2.** A headless planner splits a
+> project's To-Do list into work packages, each package runs in its own tab and
+> git worktree, LunaCore verifies and pushes every branch itself, and a finished
+> run ends as PRs (or a verified merge) plus a morning report. See
+> [God Mode v2](#god-mode-v2--parallel-workers-in-worktrees).
 
 **What's in the box:**
 
@@ -27,11 +33,13 @@ injects prompts or touches the `claude` binary.
 - **Act** — action cheat-sheets, a skill cheat-sheet, a multi-line prompt
   library, a scratchpad, a **Ctrl+G** git quick-menu, armed auto-compact,
   Auto-proceed connection-drop recovery, a per-project To-Do pin-board and
-  **God Mode**, which works through that list unattended.
+  **God Mode**, which works through that list unattended — in v2 as parallel
+  workers in git worktrees, each tab a separate package, finished as PRs.
 - **Providers** — launch profiles built from 10 provider templates in
   Settings → AI providers, an LM Studio model loader, and `claude-code-router`
   lifecycle management (see [AI providers](#ai-providers)).
-- **Look** — 28 contrast-tested themes, four look-&-feel axes (density · font
+- **Look** — 28 contrast-tested themes plus four `glass` (window
+  transparency) themes, four look-&-feel axes (density · font
   pack · glow · motion), nine layout presets plus a layout builder, and
   foldable / resizable / drag-to-rearrange panels, all in PL or EN.
 - **Extras** — a **Ctrl+B** libraries & tools directory with a one-shot `/ask`
@@ -400,7 +408,17 @@ Luna-Core-HUD/
 │   ├── ccrcontrol.js      # ccr:* IPC handlers + client-key test
 │   ├── overnight.js       # God Mode overnight guard: power-save blocker + LM Studio watchdog
 │   ├── keepawake.js       # "Don't sleep" switch: runs / kills your keep-awake .bat
-│   ├── todo.js            # per-project To-Do list persistence + validation
+│   ├── todo.js            # per-project To-Do list persistence + validation (task cards)
+│   ├── intake.js          # Luna MCP server: luna_todo_add/list/update for LunaCore tabs
+│   ├── worktrees.js       # git worktree per tab / per God Mode package (add, remove)
+│   ├── orchestra.js       # God Mode v2 run controller: plan -> launch -> supervise -> finalize
+│   ├── orchestraPlan.js   # headless `claude -p --json-schema` planner + plan validation
+│   ├── orchestraSupervisor.js # pure rules: markers, nudges, schedule, escalation, overlap, restore
+│   ├── orchestraFinish.js # per-worker finish: commit leftovers, verify, push the branch
+│   ├── orchestraFinalize.js # end of run: integrate, clean up worktrees, to-do notes, report
+│   ├── orchestraIntegrate.js # PRs via gh, or merge into the base branch with verify
+│   ├── orchestraReport.js # run report markdown + stall notes (pure)
+│   ├── orchestraStore.js  # orchestra.local.json persistence
 │   ├── sounds.js          # load config/sounds.json → resolveSoundFile(key, opts) (pure + config read)
 │   ├── soundManager.js    # persistent `mpv --idle` process + its JSON IPC socket
 │   ├── preload.js         # secure contextBridge → window.lunacore
@@ -458,11 +476,13 @@ Luna-Core-HUD/
 │   ├── sounds.json        # sfx/voice event → file + volume (keystroke: 4-way variant list)
 │   ├── editor.json        # editor for clicked file:line links ({file}/{line}/{col}; editor.local.json overrides)
 │   ├── ui.local.json      # persisted theme + language + boot + last profile + sound prefs (gitignored)
+│   ├── orchestra.local.json # the current God Mode v2 run, for restart/resume (gitignored)
 │   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
 ├── helpers/sounds/        # bundled audio: sfx/*.wav (placeholders), voice/*.mp3 (real, Edge-TTS)
 ├── test/                  # unit tests over the pure modules (`npm test`, node --test)
-├── FUTURE_PLAN.md         # roadmap: themes, layout engine, feature shortlist
-├── reference/             # compacted "what shipped" docs for finished features (see below)
+├── FUTURE_PLAN.md         # short roadmap: next steps, owed live checks, known issues, kept ideas
+├── LUNA_HUD_SPECIFICATION.md # orientation, module inventory, widget recipe, idea record
+├── reference/             # one design/build record per feature + ENGINEERING_NOTES.md (history)
 └── README.md
 ```
 
@@ -598,8 +618,8 @@ the left-panel list builders (`cheatsheets`, `prompts`, `skills`),
 and opts out of remounting — see §A2f). A `[data-slot]` placeholder is
 `display: contents`, so converted and unconverted blocks sat side by side
 without disturbing the flex layout during the migration. Conversion order and
-the reasoning behind the contract are in [`FUTURE_PLAN.md`](FUTURE_PLAN.md)
-§A2a–§A2f.
+the reasoning behind the contract are in
+[`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md) §A2a–§A2f.
 
 ---
 
@@ -638,9 +658,12 @@ the reasoning behind the contract are in [`FUTURE_PLAN.md`](FUTURE_PLAN.md)
 | + | Ctrl+B recommended libraries & tools directory — filterable catalog, validated id→URL resolution (shipped in `f989b36`/`c72cfef`; this README caught up in v0.12.0) | ✅ done |
 | + | `/ask` — one-shot `claude -p` tool recommendation inside the Ctrl+B filter box (the one deliberate, user-triggered exception to the zero-token constraint) | ✅ done |
 | + | Highlight/clip extractor — batch tail-trim via system `ffmpeg`, reachable from its own chip or an `/ask` "Run it" suggestion | ✅ done |
-| + | AI providers — 10 provider templates, profile CRUD in Settings, LM Studio model loader via the SDK, full harness on local models, `claude-code-router` lifecycle (v0.13.0, see [`AI_PROVIDERS_RESUME.md`](reference/AI_PROVIDERS_RESUME.md)) | ✅ done |
+| + | AI providers — 10 provider templates, profile CRUD in Settings, LM Studio model loader via the SDK, full harness on local models, `claude-code-router` lifecycle (v0.13.0, see [AI providers](#ai-providers)) | ✅ done |
 | + | God Mode overnight guard (sleep blocker + LM Studio watchdog), "Don't sleep" switch, longer To-Do items, scroll-aware To-Do drag-and-drop (v0.13.0) | ✅ done |
 | + | Provider-aware usage gauge (Claude, GLM, OpenAI, local) — adapters shipped; the gauge still follows the **first** profile, not the active tab | 🟡 partial |
+| + | Window transparency — the `glass` theme family (Win11 acrylic), tunable (v0.11.0) | ✅ done |
+| v2 | God Mode v2: task intake (Luna MCP + `/luna-plan`), worktree tabs, per-tab runs, headless planner + plan board | ✅ on `main` |
+| v2 | God Mode v2 supervisor + integrator: DONE markers, verify + push per worker, Retry, kill switch, scheduled start, Sonnet→Opus escalation, file-overlap guard, PRs / merge, run report ([`ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md)) | ✅ on `main`, live test owed |
 
 That closes the whole approved shortlist and the first slice of the structural
 plan. **A1 is done**: the 1554-line `renderer.js` is a 57-line entry point plus
@@ -652,11 +675,10 @@ source — inside an asar is the case that would actually have broken.
 
 **Phase A is done (5/5)**: A1 (renderer split), A2 (widget contract, all 13/13
 blocks converted), A3 (test harness), A4 (dead-code cleanup) and A5 (async
-skill scan — `scanSkills()` no longer blocks the main process). See
-[`FUTURE_PLAN.md`](FUTURE_PLAN.md) §8, which opens with a *START HERE* box, for
-current status and what's next. §9 sketched turning LunaCore into a
-multi-model console rather than a Claude-only HUD; v0.13.0 shipped that as
-[AI providers](#ai-providers).
+skill scan — `scanSkills()` no longer blocks the main process). What's next,
+the live checks still owed and the known issues are in
+[`FUTURE_PLAN.md`](FUTURE_PLAN.md); how each phase was built is in
+[`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md).
 
 ### Tests
 
@@ -1056,6 +1078,60 @@ No file, no switch — it stays disabled. Switching it off, or quitting LunaCore
 kills the script's whole process tree, so Windows drops its power request
 immediately.
 
+## God Mode v2 — parallel workers in worktrees
+
+Status: on `main`, not released yet; the first live run is still owed. Design,
+decisions and status per slice: [`reference/ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md).
+
+**Getting tasks in.** Every LunaCore tab gets a small local MCP server
+([`src/intake.js`](src/intake.js), loopback only, one token per tab) with
+`luna_todo_add` / `luna_todo_list` / `luna_todo_update`, so Claude can write
+task cards (details, acceptance, files, verify command, size) straight into that
+project's To-Do list. `/luna-plan` interviews you and files the cards. Settings
+toggle: *To-do tools for Claude*.
+
+**Planning.** *Plan packages* in the To-Do widget runs one headless
+`claude -p --json-schema` (read-only tools, capped budget) that groups the open
+to-dos into packages with dependencies, a verify command and a self-contained
+prompt. The plan board shows the estimate, warnings (an uncovered to-do, two
+packages touching one file) and an editable prompt per package.
+
+**Running.** Approve starts the run — now, at a set time, or when the 5-hour
+usage window resets. Up to three workers run at once; each package gets its own
+git worktree (`../.luna-worktrees/<repo>/<package>`, branch `luna/<package>`)
+and a normal tab whose `claude` starts by reading its brief. Dependents start
+from their dependency's pushed work. Per worker, the supervisor:
+
+- finishes it on `LUNA_DONE <id>`: commits leftovers, runs the verify command
+  **itself**, pushes the branch (never `main`, never `--force`), ticks its to-dos;
+- nudges a turn that ended without a marker (max 3), pastes a failed verify back
+  (max 2), then marks it *stalled* with the reason;
+- stalls it on a permission prompt, logging the command so the board can offer
+  "Allow" for future workers (shells, interpreters, network and destructive
+  commands are never suggested);
+- pauses the **whole run** on a usage limit and resumes everyone after the reset;
+- restarts a Sonnet worker that stalled twice once on Opus (only if workers run
+  on Sonnet — the default is Opus everywhere);
+- warns once when two independent workers change the same file.
+
+Retry picks a stalled package back up; **Kill** (board button or **Ctrl+Shift+K**
+inside the window) sends Esc to every worker and keeps the worktrees. The run is
+saved to `orchestra.local.json`; after a restart it comes back held, with running
+packages marked stalled.
+
+**Ending.** When nothing more can happen on its own — or on *Finish run* —
+the run is integrated per its mode: **PRs** via `gh` (default), **merge** into
+the base branch (a separate worktree, verify after each merge, one sandboxed
+headless resolver per conflict, push only if everything is green; you confirm it
+in a native dialog), or **branches only**. Pushed packages' tabs close and their
+worktrees are removed; stalled ones are kept and get a note on their to-dos; a
+report lands in `runs/<plan>.md` in the config folder.
+
+Settings → God Mode v2: worker model (default **Opus**, or the planner's pick),
+permission mode (default **bypassPermissions** — a worktree contains a worker's
+git damage, not its filesystem damage), what happens after a run, and the list
+of allowed tools learned from stalls.
+
 ## Action cheat-sheets
 
 Collapsible command groups in the left panel, defined in
@@ -1296,7 +1372,7 @@ and [`src/renderer/modules/widgetarrange.js`](src/renderer/modules/widgetarrange
 ## Theming
 
 The whole look is a set of CSS custom-property tokens, so a "theme" is just a
-values file. **28 ship**, defined in [`config/themes.json`](config/themes.json):
+values file. **32 ship**, defined in [`config/themes.json`](config/themes.json):
 
 | | |
 |---|---|
@@ -1308,6 +1384,7 @@ values file. **28 ship**, defined in [`config/themes.json`](config/themes.json):
 | **Atmospheric** | aurora, abyss, magma |
 | **Quiet** | void, glacier |
 | **Light** | paper, light, newsprint, eink |
+| **Glass** | glass, glass-clear, glass-frost, glass-noir — window transparency (Win11 acrylic) |
 
 The picker lists every dark theme first and groups the four light ones at the
 bottom, so the list you scroll is the list you actually pick from.

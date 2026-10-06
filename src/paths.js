@@ -16,7 +16,7 @@
 // redirect config out from under you.
 //
 // What deliberately does NOT happen here: copying the shipped defaults into the
-// user directory on first run. §7 of FUTURE_PLAN proposed that, but this
+// user directory on first run. The old roadmap proposed that, but this
 // codebase already separates the two concerns BY FILENAME - `themes.json` ships,
 // `themes.local.json` is yours, and every loader merges base then local (see
 // theme.js loadThemes). Copying defaults across would shadow them, so an update

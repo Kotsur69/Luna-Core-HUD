@@ -63,7 +63,7 @@ current session only.
 ## ECC Workflow In This Repo
 
 Project context: Electron app, `main` / `preload` / `renderer`, plain JavaScript
-(no TypeScript), `node --test` with 58 test files in `test/`, packaged by
+(no TypeScript), `node --test` with 89 test files in `test/`, packaged by
 `electron-builder`. Entry point `src/main.js`.
 
 | Situation | Command |
@@ -85,7 +85,7 @@ Project context: Electron app, `main` / `preload` / `renderer`, plain JavaScript
 - **Config loaders** — `cheatsheets.js`, `prompts.js`, `layouts.js`, `themes.js`
   share one contract: safe read, validate at the boundary, a broken file yields
   an empty list rather than a crash. Preserve that shape.
-- **File size** — `src/main.js` (2220 lines) and `src/observer.js` (1171) are
+- **File size** — `src/main.js` (3033 lines) and `src/observer.js` (1350) are
   well past the 500-line guideline in the parent `CLAUDE.md`. Prefer extracting
   a module over growing them further.
 - **Localization** — new user-facing strings need both `pl` and `en`.

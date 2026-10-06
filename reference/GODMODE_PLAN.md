@@ -1,5 +1,9 @@
 # LunaCore - "God Mode" (unattended to-do runner)
 
+**Status: v1 shipped 2026-08-19 (`71610db`).** Its multi-tab successor, God
+Mode v2 (planner, worktree workers, supervisor, integrator), is designed and
+tracked in [`ORCHESTRATOR_PLAN.md`](ORCHESTRATOR_PLAN.md).
+
 ## Goal
 
 Arm a toggle on the active tab. LunaCore then works through that tab's

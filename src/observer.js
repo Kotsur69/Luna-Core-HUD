@@ -528,7 +528,7 @@ function foldToolEvents(open, events) {
   return out;
 }
 
-// ---- MCP call lifecycle (CONCEPT_MCP_DEBUGGER.md, safe half: no interception,
+// ---- MCP call lifecycle (reference/MCP_DEBUGGER_PLAN.md, safe half: no interception,
 // no config writes - just the same transcript tailing every other Passive
 // Observer here already does) -------------------------------------------------
 
@@ -981,7 +981,7 @@ class TranscriptWatcher {
     // B8: tools currently in flight, id -> tile. Spans ticks by design - a tool
     // routinely starts in one appended chunk and finishes in a later one.
     this.openTools = new Map();
-    // Optional: called with MCP call start/end events (CONCEPT_MCP_DEBUGGER.md,
+    // Optional: called with MCP call start/end events (reference/MCP_DEBUGGER_PLAN.md,
     // safe half) - same shape/reasoning as onTools, for mcp__ calls specifically.
     this.onMcp = typeof opts.onMcp === 'function' ? opts.onMcp : null;
     this.openMcp = new Map();

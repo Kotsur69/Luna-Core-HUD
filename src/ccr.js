@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - claude-code-router (CCR) gateway process control
 // ----------------------------------------------------------------------------
-// Phase 4a of the AI-providers feature (reference/AI_PROVIDERS_RESUME.md).
+// Phase 4a of the AI-providers feature (README.md, "AI providers").
 // Five shipped provider templates (`ollama`, `codex`, `gemini`, `grok`,
 // `openai-compatible`) route through a locally-run claude-code-router gateway
 // instead of talking upstream directly - this module detects/starts/stops

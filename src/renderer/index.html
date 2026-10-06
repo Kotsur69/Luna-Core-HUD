@@ -202,7 +202,7 @@
       <ul id="mcp-list" class="mcp-list"></ul>
       <p id="mcp-empty" class="hint" data-i18n="mcp.idle">Kliknij odswiez, aby przeskanowac.</p>
 
-      <!-- CONCEPT_MCP_DEBUGGER.md safe half: live flow pulse on the rows
+      <!-- reference/MCP_DEBUGGER_PLAN.md safe half: live flow pulse on the rows
            above, JSON-RPC Inspector history here. Click a row -> #mcpcall-modal. -->
       <h3 class="panel__subtitle mcpcall-heading" data-i18n="mcp.calls.title">Ostatnie wywolania</h3>
       <ul id="mcp-calls-list" class="mcpcall-list"></ul>
@@ -1650,7 +1650,7 @@
     </div>
   </div>
 
-  <!-- CONCEPT_MCP_DEBUGGER.md safe half: the JSON-RPC Inspector's call detail.
+  <!-- reference/MCP_DEBUGGER_PLAN.md safe half: the JSON-RPC Inspector's call detail.
        Same overlay skeleton as #stimeline-modal above - opening/closing and
        filling it in lives in modules/mcp.js. -->
   <div id="mcpcall-modal" class="stimeline-modal" hidden>
@@ -1677,7 +1677,7 @@
   <!-- i18n (PL/EN) - must load before renderer.js -->
   <script src="i18n.js"></script>
   <!-- LunaCore renderer logic. type="module" - renderer.js is now just the
-       entry point, the actual code lives in modules/*.js (see FUTURE_PLAN §8 A1).
+       entry point, the actual code lives in modules/*.js (see reference/ENGINEERING_NOTES.md, A1).
        A module is deferred, so it runs after DOM parsing and after the
        classic <script> tags above - xterm and window.i18n are already ready. -->
   <script type="module" src="renderer.js"></script>

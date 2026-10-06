@@ -55,7 +55,7 @@ origin/<base>, verify after each merge, one headless resolver per conflict,
 push without force; or branches only), close pushed tabs + remove their
 worktrees (stalled ones kept), note unfinished packages on their to-dos, write
 `<userDir>/runs/<plan>.md` + an OS toast when notifications are on. Not
-built: budget cap (§3), `config/orchestra.json` allowlist file (rules live in
+built (dropped 2026-10-06): budget cap (§3); not built: `config/orchestra.json` allowlist file (rules live in
 ui prefs instead), per-worktree `npm ci` for workers (the worker installs).
 Successor of `GODMODE_PLAN.md` (v1 = one tab, one list, sequential).
 
@@ -317,7 +317,8 @@ plan matches what Mati actually described. Widget shows cards collapsed
 ## Improvement ideas (ranked by value / cost)
 
 **Approved by Mati 2026-10-04: #2, #3, #5, #6, #7, #8, #9 - IN SCOPE.**
-#1 (review gate) and #4 (takeover auto-pause) are NOT selected - parked, do
+#1 (review gate) and #4 (takeover auto-pause) were parked, then DROPPED 2026-10-06
+(Mati), together with the budget cap - do
 not build unless asked again.
 
 | # | Idea | Status | Lands in build slice |
@@ -329,10 +330,10 @@ not build unless asked again.
 | 7 | Live file-overlap guard | approved | 4 (+ serialize merges in 5) |
 | 8 | Morning report + re-add stalled as to-dos | approved | 5 |
 | 9 | Kill switch (hotkey + run-board button) | approved | 4 (must exist before any unattended multi-tab run) |
-| 1 | Review gate per package | parked | - |
-| 4 | Takeover = auto-pause | parked | - |
+| 1 | Review gate per package | dropped 2026-10-06 | - |
+| 4 | Takeover = auto-pause | dropped 2026-10-06 | - |
 
-1. **Review gate per package** *(parked)* - before pushing a branch, a fresh headless
+1. **Review gate per package** *(dropped)* - before pushing a branch, a fresh headless
    `claude -p` runs a code review on `git diff base..branch` (ECC
    code-reviewer prompt). CRITICAL/HIGH -> back to the worker once. Catches
    what the author-session is blind to; cheap compared to the work itself.
@@ -342,7 +343,7 @@ not build unless asked again.
 3. **Cost + time estimate before arming** - from card sizes and models ->
    "≈ 3 workers, ~2 h, ~X% of the weekly limit". The confirm dialog then means
    something.
-4. **Takeover = auto-pause** *(parked)* - if Mati types into a worker tab, the supervisor
+4. **Takeover = auto-pause** *(dropped)* - if Mati types into a worker tab, the supervisor
    pauses THAT worker (no nudges fighting him); a "hand back" chip resumes it.
 5. **Stall learning** - log every approval prompt that stalled a worker; at the
    end of the run: "Bash(npx tsc) stalled 3 workers - add to allowlist?" The

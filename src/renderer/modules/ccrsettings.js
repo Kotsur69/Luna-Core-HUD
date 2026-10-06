@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - claude-code-router (CCR) gateway status (Settings overlay)
 // ----------------------------------------------------------------------------
-// Phase 4d of the AI-providers feature (reference/AI_PROVIDERS_RESUME.md):
+// Phase 4d of the AI-providers feature (README.md, "AI providers"):
 // the Settings-panel half of src/ccr.js's gateway lifecycle control. Static
 // markup in the Settings overlay (#termcustom), mounted once from
 // termcustom.js's init - same shape as lmstudiomodels.js's

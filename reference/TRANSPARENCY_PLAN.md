@@ -1,5 +1,8 @@
 # LunaCore — Whole-app window transparency (v0.11.0)
 
+**Status: shipped in `v0.11.0`** as the `glass` theme family; tuned further
+2026-09-14 (`d6b2417`). Kept as the design record.
+
 Plan doc for the project Mati asked for on 2026-09-11: *"the whole transparent
 thing that we previously planned … but I want to leave the current appearance
 themes bcs I love them."*
@@ -7,8 +10,7 @@ themes bcs I love them."*
 Branch: `feat/window-transparency` → one `v0.11.0` release at the end.
 
 **Supersedes** [`TERMINAL_CUSTOMIZER_PLAN.md`](TERMINAL_CUSTOMIZER_PLAN.md) §4
-("Explicitly deferred, not built") and closes the open item in
-[`../FUTURE_PLAN.md`](../FUTURE_PLAN.md)'s "Next action" row.
+("Explicitly deferred, not built").
 
 ---
 
@@ -246,13 +248,13 @@ This is where the real time goes. Phases 1–3 are mechanical; this is not.
 - `npm test` green, including a new assertion that `solid` resolves to the same
   computed tokens as before the change.
 - **By hand: 28 themes × 3 surface levels, over both a bright desktop and a dark
-  one.** Same eyes-on discipline `RESUME.md` demanded for v0.10, for the same
+  one.** Same eyes-on discipline the v0.10 walkthrough demanded, for the same
   reason — `npm test` is structurally incapable of seeing "muddy". This is the
   bulk of the wall-clock time in the whole project.
 - PL/EN labels for the axis in `renderer/i18n.js`, under the existing
   `termcustom.*` key prefix (`:152+`).
 - Docs: flip `TERMINAL_CUSTOMIZER_PLAN.md` §4 from "deferred" to shipped and
-  point here; update `FUTURE_PLAN.md`'s "Next action" row.
+  point here.
 
 ---
 

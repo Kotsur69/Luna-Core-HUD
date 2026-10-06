@@ -1,5 +1,9 @@
 # LunaCore — Auto-proceed (connection-error auto-recovery)
 
+**Status: shipped 2026-08-19**, hardened 2026-09-11/14 (drops are now read
+from the transcript, not stdout). Still owed: a check against a real dropped
+connection in the wild.
+
 ## Goal
 
 Arm a toggle in the Actions section, next to Auto-compact. When ARMED, any

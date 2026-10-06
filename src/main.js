@@ -1161,7 +1161,7 @@ function spawnInto(session, profile, launch = null) {
       // carries a start/end lifecycle (B8), `tiles` is the old flat blink the
       // stdout backstop above still sends.
       onTools: (events) => send('metrics:tools', { sessionId: session.id, events }),
-      // CONCEPT_MCP_DEBUGGER.md safe half: MCP call start/end lifecycle, same
+      // reference/MCP_DEBUGGER_PLAN.md safe half: MCP call start/end lifecycle, same
       // shape/channel-pattern as onTools above.
       onMcp: (events) => send('metrics:mcp', { sessionId: session.id, events }),
       // §4.3/§11.1: "All done" voice line, gated on turn duration in checkTurnEnd.

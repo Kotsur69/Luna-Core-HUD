@@ -1,5 +1,9 @@
 # LunaCore — Typing Synth (v1: user keystrokes only)
 
+**Status: shipped 2026-08-26** as sample-based keystroke sounds (see
+"Resolved 2026-08-26" below). The v2 ideas this plan mentions (agent-output
+texture, LED/scanline sync) were dropped 2026-10-06.
+
 ## Goal
 
 Replace the static keystroke `.wav` clips with a live Web Audio synth that

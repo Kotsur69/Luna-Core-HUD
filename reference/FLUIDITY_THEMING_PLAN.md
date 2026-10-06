@@ -1,5 +1,9 @@
 # LunaCore — Fluidity & Theming (v0.10.0)
 
+**Status: shipped - all six phases walked in a running app, released as
+`v0.10.0` on 2026-09-01.** Kept as the design record; the hand-off notes below
+are history.
+
 Plan doc for the update Mati asked for on 2026-08-27: *"whole app has to have more
 fluidity like folding in folding out animations, more templates, more schemes."*
 
@@ -13,10 +17,9 @@ Written because the work moves to a different machine and the work PC will be
 off for a week, so the session transcript on it is unreachable. Everything
 needed to pick this up cold is in this section, in the repo, on the branch.
 
-> **Start at [`RESUME.md`](RESUME.md)**, not here. That file is the operational
-> entry point — what to do first, how to run it, what to actually look at, and
-> the environment gotchas. This section is the design record: the locked
-> decisions and what each phase landed. Decisions live here and only here.
+> The operational hand-off (`RESUME.md`) was deleted on 2026-10-06 once the
+> release was out. This section is the design record: the locked decisions and
+> what each phase landed.
 
 ### Decisions already locked (do not re-ask)
 
@@ -201,8 +204,7 @@ mid-list. Now 24 darks, then the 4 lights. A test measures the group boundary by
 without anyone remembering to update an array; the darks top out at 0.026 and the
 lights start at 0.694, so the 0.5 threshold is nowhere near delicate.
 
-**Not yet seen running** — same standing caveat as phase 4. See RESUME.md for the
-walkthrough.
+**Seen running** in the v0.10 walkthrough before the release.
 
 See the phase sections below — written out in full and unchanged.
 
@@ -210,7 +212,7 @@ See the phase sections below — written out in full and unchanged.
 
 * **Never `git add -A`.** A concurrent Claude session shares this git index; at
   the time of writing the tree also holds `.gitignore`, `config/profiles.json`,
-  `setup.md`, `.env.luna.example` and six `scripts/*` files that belong to it.
+  a dual-runner setup guide, `.env.luna.example` and six `scripts/*` files that belong to it.
   Commit explicit paths only.
 * Comments in English always, but do **not** touch the `pl`/`en` values in
   `src/localized.js`, `src/renderer/i18n.js`, `modules/localize.js`, or the
@@ -460,7 +462,7 @@ Applied to the list builders that currently pop: `ports`, `activefiles`, `mcp`,
 - Retune the existing fold: it is correct but linear-feeling. Exit shorter than
   enter, per §1 rule 3.
 - **New: collapse a whole region to an icon rail.** This is the `focus` preset's
-  original promise in `FUTURE_PLAN.md` §3.2 (*"panels collapse to a thin icon
+  original promise in the old roadmap (*"panels collapse to a thin icon
   rail, terminal reclaims the space"*) — C2 shipped per-widget folding but never
   the per-region rail. A region collapses to ~40px showing one glyph per widget;
   clicking a glyph expands the region and scrolls that widget into view.

@@ -2,8 +2,8 @@
 // LunaCore - claude-code-router (CCR) IPC controller
 // ----------------------------------------------------------------------------
 // The ccr:* IPC handlers plus the one piece of state they share: whether THIS
-// process started the gateway. Extracted from main.js (Phase 6 of
-// reference/AI_PROVIDERS_RESUME.md) so the rules below are unit-tested rather
+// process started the gateway. Extracted from main.js (AI-providers phase 6)
+// so the rules below are unit-tested rather
 // than inline in a 2700-line file. src/ccr.js still owns every process and
 // network call; this module only decides WHEN to make them.
 //

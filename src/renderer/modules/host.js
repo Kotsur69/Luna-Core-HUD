@@ -143,7 +143,7 @@ export function remountWidget(id) {
   if (widget && widget.remountable === false) {
     // `terminal` (A2f): a remount would clone a fresh, empty host and orphan
     // every running session's live xterm buffer from the DOM. Refuse instead
-    // of doing that - see FUTURE_PLAN.md §A2f.
+    // of doing that - see reference/ENGINEERING_NOTES.md §A2f.
     console.warn(`widget "${id}": remount is unsupported for this widget - ignored`);
     return false;
   }

@@ -128,7 +128,7 @@
 
   /* ---- Density: the multiplier the space and type scales below ride on ----
      Until v0.10 every size in this file was a px literal, so a `--density`
-     token had nothing to multiply - which is why FUTURE_PLAN.md §2.3's density
+     token had nothing to multiply - which is why the planned density
      presets sat unbuilt for a year. The scales below are what make the axis
      real; the presets themselves are the [data-density] blocks further down.
 
@@ -2139,7 +2139,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .git-fetch:disabled { cursor: default; opacity: 0.5; }
 
-/* ---- CONCEPT_MCP_DEBUGGER.md safe half: live flow + JSON-RPC Inspector ----
+/* ---- reference/MCP_DEBUGGER_PLAN.md safe half: live flow + JSON-RPC Inspector ----
    Glow is exclusive to --live, same rule .afile.is-live already established
    (2026-08-13 manual test: an always-on glow reads as "still lit" long after
    the call finished) - reuses that rule's afile-pulse keyframe rather than
@@ -3479,7 +3479,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   margin: 0 var(--space-8) var(--space-7);
 }
 
-/* ---- CONCEPT_MCP_DEBUGGER.md safe half: JSON-RPC Inspector call modal -----
+/* ---- reference/MCP_DEBUGGER_PLAN.md safe half: JSON-RPC Inspector call modal -----
    Reuses .stimeline-modal's overlay/backdrop/panel/bar/closebtn/text shape
    directly (same fixed+backdrop+centered-modal precedent .gitquick's reuse
    of .palette__modal already set) - only what differs (title, badge, two
@@ -4317,7 +4317,7 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 
 /* ---- 3.4 Region rail -------------------------------------------------------
    C2 shipped per-WIDGET folding; this is the per-REGION version, and it is the
-   `focus` preset's original promise in FUTURE_PLAN.md 3.2 - "panels collapse to
+   `focus` preset's original promise in the old roadmap - "panels collapse to
    a thin icon rail, terminal reclaims the space".
 
    panels.js pins the region's grid track to RAIL_PX and sets [data-railed];
