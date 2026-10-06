@@ -131,4 +131,4 @@ function extractSpokenText(text) {
   return capLength(prose);
 }
 
-module.exports = { extractSpokenText, stripMarkdown, findTurnEndMessage, capLength, MAX_SPOKEN_CHARS };
+module.exports = { extractSpokenText, stripMarkdown, findTurnEndMessage, textBlocks, capLength, MAX_SPOKEN_CHARS };

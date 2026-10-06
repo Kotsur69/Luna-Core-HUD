@@ -940,10 +940,20 @@
           class="pad-send"
           data-i18n="orch.approve"
           data-i18n-title="orch.approve.hint"
-          title="Uruchamia paczki bez zaleznosci (max 3), kazda w nowym worktree i zakladce."
+          title="Startuje przebieg: max 3 workery naraz, kazdy w nowym worktree i zakladce; zalezne paczki ruszaja same po wypchnieciu poprzednich."
         >Zatwierdz i uruchom</button>
         <button type="button" id="orchestra-replan" class="pad-send" data-i18n="orch.replan">Zaplanuj od nowa</button>
         <button type="button" id="orchestra-discard" class="pad-send" data-i18n="orch.discard">Odrzuc plan</button>
+        <!-- Slice 4 kill switch; shown only while a worker runs (modules/orchestra.js). -->
+        <button
+          type="button"
+          id="orchestra-kill"
+          class="pad-send"
+          data-i18n="orch.kill"
+          data-i18n-title="orch.kill.hint"
+          title="Kill switch (Ctrl+Shift+K): zadnych nowych workerow, Esc do dzialajacych, worktree zostaja."
+          hidden
+        >Zatrzymaj wszystko</button>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>
@@ -1336,6 +1346,42 @@
             <span class="switch__track"><span class="switch__thumb"></span></span>
           </span>
         </label>
+
+        <!-- God Mode v2 workers (ORCHESTRATOR_PLAN.md slice 4, modules/orchestrasettings.js).
+             Frozen per run when it starts. bypassPermissions is the default by
+             Mati's choice: a worktree contains a worker's git damage, not its
+             filesystem damage - the hint says so. -->
+        <h3 class="termcustom__section" data-i18n="orchset.section">God Mode v2 - workery</h3>
+        <label class="ui-field" data-i18n-title="orchset.model.hint" title="Model kazdego workera. Plan = model wybrany przez planiste dla danej paczki.">
+          <span class="ui-field__label" data-i18n="orchset.model">Model workerow</span>
+          <select id="orchestra-worker-model" class="profile-select">
+            <option value="opus">Opus</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="plan" data-i18n="orchset.model.plan">Wg planu</option>
+          </select>
+        </label>
+        <label class="ui-field" data-i18n-title="orchset.perm.hint" title="Tryb uprawnien workerow. Bypass: zadnych pytan - worker ma pelny Bash na Twoim koncie; worktree chroni tylko git, nie pliki.">
+          <span class="ui-field__label" data-i18n="orchset.perm">Uprawnienia workerow</span>
+          <select id="orchestra-permission-mode" class="profile-select">
+            <option value="bypassPermissions" data-i18n="orchset.perm.bypass">Bez pytan (bypass)</option>
+            <option value="acceptEdits" data-i18n="orchset.perm.acceptEdits">Akceptuj edycje</option>
+            <option value="default" data-i18n="orchset.perm.default">Domyslne (pyta)</option>
+          </select>
+        </label>
+        <!-- Slice 5 default (PRs) and the allow rules learned from stalled prompts (idea #5). -->
+        <label class="ui-field" data-i18n-title="orchset.integ.hint" title="Co zrobic z wypchnietymi galeziami, gdy przebieg sie skonczy. Mozna zmienic na tablicy przed startem.">
+          <span class="ui-field__label" data-i18n="orchset.integ">Po przebiegu</span>
+          <select id="orchestra-integration" class="profile-select">
+            <option value="pr" data-i18n="orch.integ.pr">PR-y (gh)</option>
+            <option value="merge" data-i18n="orch.integ.merge">Scal do galezi bazowej</option>
+            <option value="branches" data-i18n="orch.integ.branches">Tylko galezie</option>
+          </select>
+        </label>
+        <div class="ui-field" data-i18n-title="orchset.allowed.hint" title="Reguly --allowedTools dodane z tablicy, gdy pytanie o zgode zatrzymalo workera.">
+          <span class="ui-field__label" data-i18n="orchset.allowed">Dozwolone narzedzia workerow</span>
+          <span id="orchestra-allowed" class="orchestra__allowed">brak</span>
+          <button type="button" id="orchestra-allowed-clear" class="pad-send" data-i18n="orchset.allowed.clear">Wyczysc</button>
+        </div>
 
         <h3 class="termcustom__section" data-i18n="termcustom.section.ask">/ask</h3>
         <!-- Off by default: without this, /ask always calls the cloud `claude`

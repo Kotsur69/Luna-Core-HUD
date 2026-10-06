@@ -12,7 +12,7 @@
 //   - relays the raw PTY stdout stream to the renderer to display/parse.
 // ============================================================================
 
-const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker, Notification } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -149,10 +149,15 @@ const { readTodos, writeTodos } = require('./todo');
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
-const { addWorktree, dirtyCount } = require('./worktrees');
-// God Mode v2 (ORCHESTRATOR_PLAN.md slice 3): headless planner + plan board.
+const { addWorktree, dirtyCount, removeWorktree } = require('./worktrees');
+// God Mode v2 (ORCHESTRATOR_PLAN.md slices 3-5): headless planner, plan board,
+// supervisor + per-worker finish (verify, push, tick to-dos), integrator.
 const { createOrchestra, BRIEF_DIR } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
+const { finishPackage, headSha } = require('./orchestraFinish');
+const orchestraStore = require('./orchestraStore');
+const orchestraIntegrate = require('./orchestraIntegrate');
+const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, PR_URL_RE } = require('./orchestraSupervisor');
 
 const { micState } = require('./devices');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
@@ -248,6 +253,9 @@ let mainWindow = null;
 let portWatcher = null;
 /** @type {UsageWatcher | null} */
 let usageWatcher = null;
+// Latest usage reading - the God Mode "start when the window resets" option
+// reads the 5 h window's reset time from it.
+let latestUsage = null;
 /** @type {TelemetryWatcher | null} */
 let telemetryWatcher = null;
 /** @type {GpuSampler | null} */
@@ -486,6 +494,14 @@ function createWindow() {
   // branch below can claim the chord.
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || input.isAutoRepeat) return;
+    // God Mode v2 kill switch (slice 4). Checked before the Shift bail-out
+    // below, and only claimed while a run has workers - otherwise Ctrl+Shift+K
+    // reaches the terminal as before.
+    if (input.shift && input.control && !input.alt && input.code === 'KeyK' && orchestra.isRunning()) {
+      event.preventDefault();
+      orchestra.kill();
+      return;
+    }
     if (input.shift) return;
 
     // Exactly one namespace at a time: Ctrl+Alt+X belongs to neither.
@@ -763,6 +779,45 @@ const intakeServer = new IntakeServer({
 // God Mode v2 run controller. Briefs live in <userDir>/tasks (gitignored in a
 // dev clone): outside the worktree, so a worker's `git add -A` never commits
 // one, and a folder of their own, so the tab's --add-dir grants nothing else.
+// How often the supervisor checks workers against their working-time cap.
+const ORCHESTRA_TICK_MS = 60 * 1000;
+// How much of a worker's transcript is read to name the tool a permission
+// prompt is about (idea #5) - once per prompt appearance, worker tabs only.
+const APPROVAL_TAIL_BYTES = 256 * 1024;
+const RUN_REPORT_DIR = 'runs';
+const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
+/** Same env the planner runs with: claude and gh on PATH, cloud default. */
+const orchestraToolEnv = () => withClaudeOnPath(buildSessionEnv(process.env, {}));
+
+/** Epoch ms the 5 h usage window resets, or null when unknown. */
+function usageResetAt() {
+  const limits = latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : [];
+  const five = limits.find((l) => l.window === '5h');
+  const at = five && typeof five.resetsAt === 'string' ? Date.parse(five.resetsAt) : NaN;
+  return Number.isFinite(at) ? at : null;
+}
+
+/** The tail of a worker's transcript -> {rule, example} its prompt is about. */
+function approvalRuleFor(session) {
+  const none = { rule: null, example: null };
+  const file = session.watcher && session.watcher.currentFile;
+  if (!file) return none;
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const length = Math.min(size, APPROVAL_TAIL_BYTES);
+    const buf = Buffer.alloc(length);
+    fs.readSync(fd, buf, 0, length, size - length);
+    const open = lastOpenToolUse(buf.toString('utf8'));
+    return { rule: allowRuleFor(open), example: exampleFor(open) };
+  } catch {
+    return none;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
 const orchestra = createOrchestra({
   runPlanner,
   addWorktree,
@@ -778,6 +833,115 @@ const orchestra = createOrchestra({
     } catch {
       return false;
     }
+  },
+  // Slice 4 supervisor.
+  finishPackage,
+  headSha,
+  sessionAlive: (id) => {
+    const s = sessions.get(id);
+    return !!(s && s.proc);
+  },
+  // Multi-line text goes in as a bracketed paste + Enter (see pty:paste);
+  // a bare control byte (the kill switch's Esc) is written raw. Pasted text
+  // can carry tool output (a failed verify), so control characters are
+  // stripped first: an embedded ESC[201~ would end the paste early and turn
+  // the rest into live keystrokes.
+  writePty: (id, text, opts = {}) => {
+    const s = sessions.get(id);
+    if (!s || !s.proc) return false;
+    if (opts.paste) {
+      // eslint-disable-next-line no-control-regex
+      const clean = String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+      s.proc.write(`\x1b[200~${clean}\x1b[201~`);
+      s.proc.write('\r');
+    } else {
+      s.proc.write(text);
+    }
+    return true;
+  },
+  tickTodos: (projectId, ats) => {
+    const wanted = new Set(ats);
+    const list = readTodos(projectId);
+    const next = list.map((t) => (wanted.has(t.at) && !t.done ? { ...t, done: true } : t));
+    if (next.some((t, i) => t !== list[i]) && writeTodos(projectId, next)) send('todo:changed', { projectId });
+  },
+  workerSettings: () => {
+    const prefs = readUiPrefs();
+    return {
+      model: prefs.orchestraWorkerModel,
+      permissionMode: prefs.orchestraPermissionMode,
+      integration: prefs.orchestraIntegration,
+      allowedTools: prefs.orchestraAllowedTools,
+    };
+  },
+  // Second pass + slice 5.
+  closeSession: (id) => closeSession(id),
+  usageResetAt,
+  baseBranchOf: (repoPath) => orchestraIntegrate.baseBranchOf(repoPath),
+  mergeDeps: (root, branches) => orchestraIntegrate.mergeDeps(root, branches),
+  createPr: (args) => orchestraIntegrate.createPr({ ...args, env: orchestraToolEnv() }),
+  integrateMerge: (args) =>
+    orchestraIntegrate.integrateMerge(args, {
+      addWorktree,
+      removeWorktree,
+      resolve: (r) => orchestraIntegrate.runResolver({ ...r, env: orchestraToolEnv() }),
+    }),
+  removeWorktree,
+  updateTodos: (projectId, fn) => {
+    const list = readTodos(projectId);
+    const next = fn(list);
+    if (next !== list && writeTodos(projectId, next)) send('todo:changed', { projectId });
+  },
+  writeReport: (planId, text) => {
+    if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return null;
+    try {
+      const dir = path.join(userDir(), RUN_REPORT_DIR);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${planId}.md`);
+      fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
+      return file;
+    } catch {
+      return null;
+    }
+  },
+  // Merge mode pushes the base branch with no PR review: Mati confirms it
+  // here, natively - a renderer can ask for it, never grant it.
+  confirmMerge: async (base) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['Merge and push', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'God Mode - merge into base branch',
+      message: `Merge every pushed package into "${base || '?'}" and push it?`,
+      detail:
+        'Packages are merged in dependency order in a separate worktree and verified after each merge. Nothing is pushed if a verify fails or a conflict cannot be resolved. There is no PR review.',
+    });
+    return response === 0;
+  },
+  // The morning report toast, when OS notifications are on (Settings).
+  notify: ({ pushed, total, failed }) => {
+    if (!readUiPrefs().notificationsEnabled || !Notification.isSupported()) return;
+    const body = `${pushed}/${total} pushed${failed ? ' - integration needs you' : ''}`;
+    new Notification({ title: 'LunaCore God Mode', body }).show();
+  },
+  // A saved run is only brought back for a folder that is still one of the
+  // registered projects - the file is on disk, so it is not trusted to name
+  // where LunaCore opens tabs and runs git.
+  loadState: () => {
+    const raw = orchestraStore.loadRun();
+    const repo = raw && typeof raw.repoPath === 'string' ? path.resolve(raw.repoPath) : null;
+    return repo && projects.some((p) => p.path && path.resolve(p.path) === repo) ? raw : null;
+  },
+  saveState: (data) => {
+    if (!orchestraStore.saveRun(data)) console.error('[orchestra] could not save config/orchestra.local.json');
+  },
+  onChange: (view) => send('orchestra:changed', view),
+  onRunEvent: (kind) => {
+    if (readUiPrefs().voiceEnabled === false) return;
+    if (kind === 'done') playCue('voice.done');
+    else if (kind === 'needYou' || kind === 'stalled' || kind === 'overlap') playCue('voice.needYou');
   },
 });
 
@@ -906,13 +1070,17 @@ function spawnInto(session, profile, launch = null) {
     // §4.2: fire voice.needYou once per prompt APPEARANCE, not once per stdout
     // chunk - a TUI redraw repeats the same text while Mati is still reading
     // it. approvalShowing clears on this session's next input (see registerIpc).
-    if (soundManager && !session.approvalShowing) {
-      if (detectApprovalPrompt(scan, triggers.approvalPrompt)) {
-        session.approvalShowing = true;
-        if (readUiPrefs().voiceEnabled !== false) {
-          const resolved = resolveSoundFile('voice.needYou');
-          if (resolved) soundManager.play(resolved.path);
-        }
+    // Also a God Mode v2 signal: a worker on a prompt is stalled (slice 4),
+    // which is why the scan no longer waits on the sound engine being up.
+    if (!session.approvalShowing && detectApprovalPrompt(scan, triggers.approvalPrompt)) {
+      session.approvalShowing = true;
+      if (orchestra.ownsSession(session.id)) {
+        const { rule, example } = approvalRuleFor(session);
+        orchestra.onApproval(session.id, rule, example);
+      }
+      if (soundManager && readUiPrefs().voiceEnabled !== false) {
+        const resolved = resolveSoundFile('voice.needYou');
+        if (resolved) soundManager.play(resolved.path);
       }
     }
 
@@ -1016,12 +1184,12 @@ function spawnInto(session, profile, launch = null) {
       // The usage-limit wall, from the transcript (the CLI writes it as a 429
       // API error, which onApiError above must NOT see as a drop). Carries the
       // parsed reset time so God Mode waits it out instead of stalling.
-      onUsageLimit: ({ resetsAt } = {}) =>
-        send('godmode:signal', {
-          sessionId: session.id,
-          type: 'usageLimit',
-          resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
-        }),
+      onUsageLimit: ({ resetsAt } = {}) => {
+        const at = Number.isFinite(resetsAt) ? resetsAt : null;
+        send('godmode:signal', { sessionId: session.id, type: 'usageLimit', resetsAt: at });
+        // A God Mode v2 worker: the whole run waits (one account, one limit).
+        orchestra.onUsageLimit(session.id, at);
+      },
       // Same channel/shape as onApiError above - autoproceed.js's proof that an
       // armed "continue" (or Mati's own typing) was actually consumed, so a
       // turn that only thinks or answers in plain text before dying again still
@@ -1031,6 +1199,8 @@ function spawnInto(session, profile, launch = null) {
       onTurnEnd: (turn) => {
         checkTurnEnd(turn);
         send('metrics:turnend', { sessionId: session.id, turn });
+        // God Mode v2 worker: LUNA_DONE / LUNA_BLOCKED / nudge (slice 4).
+        orchestra.onTurnEnd(session.id, turn.text);
       },
     },
   );
@@ -1040,7 +1210,11 @@ function spawnInto(session, profile, launch = null) {
   // cwd - same lifecycle as the transcript watcher above (stopped + recreated
   // on every restart, so a project switch re-baselines against the new repo).
   if (session.gitWatcher) session.gitWatcher.stop();
-  session.gitWatcher = new GitFileWatcher(cwd, (files) => send('metrics:gitfiles', { sessionId: session.id, files }));
+  session.gitWatcher = new GitFileWatcher(cwd, (files) => {
+    send('metrics:gitfiles', { sessionId: session.id, files });
+    // God Mode v2 live file-overlap guard (idea #7).
+    orchestra.onFiles(session.id, files.map((f) => f.file));
+  });
   session.gitWatcher.start();
 
   // PTY buffers input, so the command runs once the shell is ready. The
@@ -1213,7 +1387,7 @@ function closeSession(sessionId) {
   intakeServer.revoke(sessionId);
   removeSessionConfig(userDir(), sessionId);
   overnight.forgetSession(sessionId);
-  if (orchestra.onSessionClosed(sessionId)) send('orchestra:changed', orchestra.view());
+  orchestra.onSessionClosed(sessionId);
   sessions.delete(sessionId);
 
   if (sessions.size === 0) {
@@ -1417,6 +1591,7 @@ function maybeReadOutputAloud(text) {
 function startUsageWatcher() {
   if (!ENABLE_USAGE_METER) return;
   usageWatcher = new UsageWatcher((usage) => {
+    latestUsage = usage;
     checkUsageThresholds(usage);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('usage:update', usage);
@@ -2432,10 +2607,36 @@ function registerIpc() {
     return res;
   });
 
-  ipcMain.handle('orchestra:discard', () => {
-    const ok = orchestra.discard();
-    if (ok) send('orchestra:changed', null);
-    return ok;
+  // Discard is refused while a worker still runs (kill the run first).
+  ipcMain.handle('orchestra:discard', () => orchestra.discard());
+
+  // Slice 4. Retry: {planId, id} - validated in orchestra.retry(). Kill: no
+  // payload; same as the Ctrl+Shift+K hotkey.
+  ipcMain.handle('orchestra:retry', (_event, payload) => orchestra.retry(payload));
+  ipcMain.handle('orchestra:kill', () => orchestra.kill());
+
+  // Second pass + slice 5: cancel a scheduled start; finish a run by hand
+  // (integrate + clean up + report). Both validated in orchestra.js.
+  ipcMain.handle('orchestra:unschedule', (_event, payload) => orchestra.unschedule(payload));
+  ipcMain.handle('orchestra:finish', (_event, payload) => orchestra.finishRun(payload));
+  // The URL comes from the plan (gh's own output, shape-checked), never from
+  // the page.
+  ipcMain.on('orchestra:openPr', (_event, id) => {
+    const view = orchestra.view();
+    const pkg = view && typeof id === 'string' ? view.packages.find((p) => p.id === id) : null;
+    if (pkg && typeof pkg.prUrl === 'string' && PR_URL_RE.test(pkg.prUrl)) shell.openExternal(pkg.prUrl);
+  });
+
+  // Idea #5: allow a tool for FUTURE workers. Only a rule the current run
+  // actually logged from a stalled prompt is accepted - the renderer cannot
+  // add an arbitrary one.
+  ipcMain.handle('orchestra:allow', (_event, rule) => {
+    const view = orchestra.view();
+    if (!isAllowRule(rule) || !view || !view.suggestions.some((s) => s.rule === rule)) return { ok: false, error: 'badRule' };
+    const prefs = readUiPrefs();
+    const list = [...new Set([...(prefs.orchestraAllowedTools || []), rule])];
+    writeUiPrefs({ orchestraAllowedTools: list });
+    return { ok: true, allowed: readUiPrefs().orchestraAllowedTools };
   });
 
   // "Don't sleep" switch. The renderer only says on/off - the script path
@@ -2546,6 +2747,16 @@ function registerIpc() {
   // UI preferences: reads {theme, lang} and writes a partial update (returns the new state).
   ipcMain.handle('ui:get', () => readUiPrefs());
   ipcMain.handle('ui:set', (_event, partial) => {
+    // God Mode worker allow rules only GROW through orchestra:allow (evidence
+    // from a stalled prompt); from here the renderer may only remove some.
+    if (partial && typeof partial === 'object' && 'orchestraAllowedTools' in partial) {
+      const current = new Set(readUiPrefs().orchestraAllowedTools || []);
+      const asked = Array.isArray(partial.orchestraAllowedTools) ? partial.orchestraAllowedTools : null;
+      if (!asked || !asked.every((r) => current.has(r))) {
+        partial = { ...partial };
+        delete partial.orchestraAllowedTools;
+      }
+    }
     const next = writeUiPrefs(partial);
     // Sound prefs take effect immediately, no restart - same live-apply as
     // theme/lang. soundManager may still be null if this fires before
@@ -2693,6 +2904,11 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   startActiveProjects(); // sets cwd before the first session starts
+  // God Mode v2: bring back the last run's board (held - nothing launches
+  // until Approve/Retry) and start the worker-time watchdog. After the
+  // projects load: a restored run must belong to one of them.
+  orchestra.restore();
+  setInterval(() => orchestra.tick(), ORCHESTRA_TICK_MS).unref();
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();
   startUsageWatcher();

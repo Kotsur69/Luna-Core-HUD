@@ -21,6 +21,7 @@ import { term, applyTerminalAppearance, setScreenshotPasteEnabled } from './term
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
 import { mountAutoCompactSettings } from './autocompact.js';
+import { mountOrchestraSettings } from './orchestrasettings.js';
 import { mountSurfaceAlpha } from './surfacealpha.js';
 import { mountLmStudioSettings } from './lmstudiomodels.js';
 import { mountProviderSettings } from './providersettings.js';
@@ -539,6 +540,10 @@ export async function initTermcustomSettings() {
   // Same static-overlay shape as mountNotify above - the arm toggle itself
   // stays a left-panel widget (autocompact.js).
   mountAutoCompactSettings(termcustomEl);
+
+  // God Mode v2 worker model + permission mode (slice 4). Read by main when
+  // a run starts; this only wires the two selects.
+  mountOrchestraSettings(termcustomEl, prefs);
 
   // Same static-overlay mount shape. Its apply path is driven by
   // appearance.js on every theme change, so this only wires the controls.

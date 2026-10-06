@@ -4452,6 +4452,9 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 }
 .orchestra__pkg.is-launched { border-color: var(--good); }
 .orchestra__pkg.is-failed { border-color: var(--bad); }
+.orchestra__pkg.is-pushed { border-color: var(--good); opacity: 0.8; }
+.orchestra__pkg.is-stalled,
+.orchestra__pkg.is-killed { border-color: var(--warn); }
 
 .orchestra__head { display: flex; align-items: baseline; gap: var(--space-4); }
 .orchestra__title { flex: 1; font-size: var(--fs-md); color: var(--text); }
@@ -4471,6 +4474,11 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__state.is-launched { color: var(--good); border-color: var(--good); }
 .orchestra__state.is-failed { color: var(--bad); border-color: var(--bad); }
 .orchestra__state.is-closed { color: var(--warn); border-color: var(--warn); }
+/* Slice 4 supervisor phases. */
+.orchestra__state.is-finishing,
+.orchestra__state.is-pushed { color: var(--good); border-color: var(--good); }
+.orchestra__state.is-stalled,
+.orchestra__state.is-killed { color: var(--warn); border-color: var(--warn); }
 
 .orchestra__todos { margin: 0; padding-left: var(--space-7); font-size: var(--fs-xs); color: var(--text); }
 
@@ -4490,6 +4498,13 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__prompt[readonly] { color: var(--text-dim); }
 
 .orchestra__actions { display: flex; gap: var(--space-4); justify-content: flex-end; }
+.orchestra__options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
+.orchestra__options .pad-send { padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); }
+.orchestra__optlabel { font-size: var(--fs-xs); color: var(--text-dim); }
+.orchestra__time { font: inherit; font-size: var(--fs-xs); }
+.orchestra__link { font-size: var(--fs-xs); color: var(--neon-cyan); word-break: break-all; }
+.orchestra__allowed { font-size: var(--fs-xs); color: var(--text-dim); word-break: break-word; }
+.orchestra__example { display: block; font-size: var(--fs-xs); color: var(--text); word-break: break-all; }
 .orchestra__actions .pad-send,
 .orchestra__foot .pad-send { padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); }
 .orchestra__foot { align-items: center; }

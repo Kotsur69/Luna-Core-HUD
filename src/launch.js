@@ -84,14 +84,18 @@ function isClaudeCommand(command) {
  * variadic option (`--add-dir <dirs...>`, `--allowedTools <tools...>`) can
  * never swallow it. Single quotes suit both shells LunaCore types into
  * (PowerShell, POSIX sh); a path containing one is refused instead of escaped.
+ *
+ * `permissionMode` (slice 4, Settings -> God Mode workers) is appended unless
+ * the profile already decides it - same rule as `--model`.
  * @param {string} command
- * @param {{briefPath:string, model?:string|null}} task
+ * @param {{briefPath:string, model?:string|null, permissionMode?:string|null}} task
  * @returns {string|null} the command, or null when it cannot carry the task
  */
 function withTaskBrief(command, task) {
   const cmd = String(command || '').trim();
   const briefPath = task && typeof task.briefPath === 'string' ? task.briefPath : '';
-  if (!isClaudeCommand(cmd) || !briefPath || /['`\r\n]/.test(briefPath)) return null;
+  // U+2018-U+201B: PowerShell treats the typographic quotes as ' too.
+  if (!isClaudeCommand(cmd) || !briefPath || /['`\r\n‘-‛]/.test(briefPath)) return null;
   const [bin, ...rest] = cmd.split(/\s+/);
   // Backticks around the path: unquoted, the model cut a path at its first
   // space and asked for the wrong file (verified live).
@@ -100,8 +104,25 @@ function withTaskBrief(command, task) {
   if (task.model && /^[a-z0-9.-]+$/i.test(task.model) && !/(^|\s)--model(\s|=|$)/.test(cmd)) {
     parts.push('--model', task.model);
   }
+  if (WORKER_PERMISSION_MODES.includes(task.permissionMode) && !PERMISSION_DECIDED.test(cmd)) {
+    parts.push('--permission-mode', task.permissionMode);
+  }
+  // Allow rules learned from stalled prompts (God Mode idea #5). Single
+  // quotes are literal in PowerShell and POSIX shells alike; the shape check
+  // keeps a quote, `$` or backtick out of them.
+  const rules = Array.isArray(task.allowedTools) ? task.allowedTools.filter((r) => ALLOW_RULE_RE.test(r)) : [];
+  if (rules.length && !/(^|\s)--allowed-?tools(\s|=|$)/i.test(cmd)) {
+    parts.push('--allowedTools', ...rules.map((r) => `'${r}'`));
+  }
   return parts.join(' ');
 }
+
+// Permission modes a God Mode worker may be started in. 'default' adds no
+// flag on purpose: it is what the CLI does anyway.
+const WORKER_PERMISSION_MODES = ['acceptEdits', 'bypassPermissions'];
+const PERMISSION_DECIDED = /(^|\s)(--permission-mode|--dangerously-skip-permissions)(\s|=|$)/;
+// Same shape as orchestraSupervisor's ALLOW_RULE_RE.
+const ALLOW_RULE_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}(\([A-Za-z0-9 _.:*/@=-]{1,100}\))?$/;
 
 // Extensions Windows will actually execute for a bare name. The empty string is
 // last on purpose: `claude` with no extension is the POSIX case and also catches
@@ -153,6 +174,7 @@ module.exports = {
   withSessionId,
   withIntakeMcp,
   withTaskBrief,
+  WORKER_PERMISSION_MODES,
   isClaudeCommand,
   SESSION_ID_DECIDED,
   findExecutable,

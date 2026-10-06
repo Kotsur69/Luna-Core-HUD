@@ -86,6 +86,21 @@ function clampLongTaskMinutes(v) {
 // still carrying windowMaterial:'none' from 2026-09-13 fails validation and
 // falls back to the default, which migrates that install on next read.
 const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
+// God Mode v2 workers (ORCHESTRATOR_PLAN.md slice 4). 'plan' = the model
+// the planner picked per package; the others force one model for every
+// worker. Permission modes map 1:1 to `claude --permission-mode`, except
+// 'default', which adds no flag.
+const ORCHESTRA_WORKER_MODELS = ['opus', 'sonnet', 'plan'];
+const ORCHESTRA_PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
+// Slice 5: what a settled run does with its pushed branches (default PRs,
+// Mati 2026-10-06). Allowed tools (idea #5) are worker --allowedTools rules
+// added from the run board's evidence; the shape check keeps them safe inside
+// the single quotes withTaskBrief puts them in.
+const ORCHESTRA_INTEGRATION_MODES = ['pr', 'merge', 'branches'];
+const ALLOW_RULE_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}(\([A-Za-z0-9 _.:*/@=-]{1,100}\))?$/;
+const MAX_ALLOWED_TOOLS = 50;
+const allowedToolList = (v) =>
+  Array.isArray(v) ? [...new Set(v.filter((r) => typeof r === 'string' && ALLOW_RULE_RE.test(r)))].slice(0, MAX_ALLOWED_TOOLS) : null;
 
 const DEFAULTS = {
   theme: 'cyberpunk',
@@ -171,6 +186,14 @@ const DEFAULTS = {
   // small tool schema per LunaCore tab, nothing outside LunaCore is touched.
   // Applies to tabs started after the change.
   todoToolsEnabled: true,
+  // God Mode v2 workers. Opus everywhere and bypassPermissions are Mati's
+  // choice (2026-10-06): unattended workers must not stall on every prompt,
+  // and the worktree keeps their git damage contained (not filesystem damage
+  // - the Settings hint says so). Frozen per run when the run starts.
+  orchestraWorkerModel: 'opus',
+  orchestraPermissionMode: 'bypassPermissions',
+  orchestraIntegration: 'pr',
+  orchestraAllowedTools: [],
   // /ask (Ctrl+B's tool recommender, src/ask.js). Default OFF: without this,
   // ask:query always calls the cloud `claude` CLI with --model sonnet -
   // switching a profile's terminal tab to a local endpoint must never make
@@ -631,6 +654,16 @@ function readUiPrefs() {
       // Missing key => ENABLED, same reasoning as screenshotPasteEnabled.
       todoToolsEnabled:
         typeof obj.todoToolsEnabled === 'boolean' ? obj.todoToolsEnabled : DEFAULTS.todoToolsEnabled,
+      orchestraWorkerModel: ORCHESTRA_WORKER_MODELS.includes(obj.orchestraWorkerModel)
+        ? obj.orchestraWorkerModel
+        : DEFAULTS.orchestraWorkerModel,
+      orchestraPermissionMode: ORCHESTRA_PERMISSION_MODES.includes(obj.orchestraPermissionMode)
+        ? obj.orchestraPermissionMode
+        : DEFAULTS.orchestraPermissionMode,
+      orchestraIntegration: ORCHESTRA_INTEGRATION_MODES.includes(obj.orchestraIntegration)
+        ? obj.orchestraIntegration
+        : DEFAULTS.orchestraIntegration,
+      orchestraAllowedTools: allowedToolList(obj.orchestraAllowedTools) || [],
       // Missing key => disabled (prefs file written before this option existed).
       askUseLocalModel:
         typeof obj.askUseLocalModel === 'boolean' ? obj.askUseLocalModel : DEFAULTS.askUseLocalModel,
@@ -720,6 +753,18 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.todoToolsEnabled === 'boolean') {
       next.todoToolsEnabled = partial.todoToolsEnabled;
+    }
+    if (partial && ORCHESTRA_WORKER_MODELS.includes(partial.orchestraWorkerModel)) {
+      next.orchestraWorkerModel = partial.orchestraWorkerModel;
+    }
+    if (partial && ORCHESTRA_PERMISSION_MODES.includes(partial.orchestraPermissionMode)) {
+      next.orchestraPermissionMode = partial.orchestraPermissionMode;
+    }
+    if (partial && ORCHESTRA_INTEGRATION_MODES.includes(partial.orchestraIntegration)) {
+      next.orchestraIntegration = partial.orchestraIntegration;
+    }
+    if (partial && allowedToolList(partial.orchestraAllowedTools)) {
+      next.orchestraAllowedTools = allowedToolList(partial.orchestraAllowedTools);
     }
     if (partial && typeof partial.autoProceedArmed === 'boolean') {
       next.autoProceedArmed = partial.autoProceedArmed;

@@ -291,7 +291,31 @@ contextBridge.exposeInMainWorld('lunacore', {
   getOrchestra: () => ipcRenderer.invoke('orchestra:get'),
   /** Approve (ids null) or launch chosen packages; main validates the payload. */
   launchOrchestra: (payload) => ipcRenderer.invoke('orchestra:launch', payload),
+  /** Promise<{ok, error?}> - refused ('runActive') while a worker runs. */
   discardOrchestra: () => ipcRenderer.invoke('orchestra:discard'),
+  /** Slice 4: pick a stalled / closed / killed package back up. Only ids cross. */
+  retryOrchestra: (planId, id) =>
+    ipcRenderer.invoke('orchestra:retry', {
+      planId: typeof planId === 'string' ? planId : null,
+      id: typeof id === 'string' ? id : null,
+    }),
+  /** Slice 4 kill switch: no new workers, Esc to the running ones. */
+  killOrchestra: () => ipcRenderer.invoke('orchestra:kill'),
+  /** Cancels a scheduled start (idea #2). Only the plan id crosses. */
+  unscheduleOrchestra: (planId) =>
+    ipcRenderer.invoke('orchestra:unschedule', { planId: typeof planId === 'string' ? planId : null }),
+  /** Slice 5: integrate + clean up + report by hand; mode 'pr'|'merge'|'branches' (validated in main). */
+  finishOrchestra: (planId, integration) =>
+    ipcRenderer.invoke('orchestra:finish', {
+      planId: typeof planId === 'string' ? planId : null,
+      integration: typeof integration === 'string' ? integration : null,
+    }),
+  /** Idea #5: allow a rule the run logged from a stalled prompt, for future workers. */
+  allowOrchestraTool: (rule) => ipcRenderer.invoke('orchestra:allow', typeof rule === 'string' ? rule : null),
+  /** Opens a package's PR in the browser - only the package id crosses; main has the URL. */
+  openOrchestraPr: (id) => {
+    if (typeof id === 'string') ipcRenderer.send('orchestra:openPr', id);
+  },
   /** Plan changes (new plan, launches, a worker tab closed); returns an unsubscribe. */
   onOrchestraChanged: (cb) => {
     const listener = (_e, plan) => cb(plan);

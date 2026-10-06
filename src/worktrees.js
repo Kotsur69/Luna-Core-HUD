@@ -14,8 +14,9 @@
 // `git worktree remove --force` follows a junction and empties the MAIN
 // checkout's node_modules (verified). The tab runs its own install instead.
 //
-// Removal is deliberately not here yet: a worktree may hold the only copy of
-// uncommitted work, so for now it is `git worktree remove` by hand.
+// Removal (removeWorktree) is only for God Mode packages whose branch is
+// pushed, and refuses a worktree with anything uncommitted: it may hold the
+// only copy of that work. No --force, so git itself re-checks.
 // ============================================================================
 
 'use strict';
@@ -29,6 +30,9 @@ const BRANCH_PREFIX = 'luna/';
 const MAX_SLUG_CHARS = 48;
 const GIT_TIMEOUT_MS = 30000;
 const ENV_FILE_RE = /^\.env(\..+)?$/;
+// A commit a new worktree may start from instead of HEAD (a dependency's
+// pushed head) - full or abbreviated hex only, never a ref or an option.
+const BASE_SHA_RE = /^[0-9a-f]{7,64}$/;
 
 /**
  * Turns a free-form tab name into a safe folder + branch name: lower-case
@@ -120,7 +124,8 @@ function copyEnvFiles(fromDir, toDir, fsImpl = fs) {
  *
  * @param {string} repoPath the project's folder
  * @param {unknown} name tab / branch name as typed
- * @param {{execImpl?: Function, fsImpl?: typeof fs}} [deps]
+ * @param {{execImpl?: Function, fsImpl?: typeof fs, base?: string}} [deps]
+ *   base: commit sha to branch from instead of HEAD
  * @returns {Promise<{ok:true, cwd:string, root:string, branch:string, envCopied:number}
  *   | {ok:false, error:'badName'|'notRepo'|'noCommits'|'exists'|'gitFailed', detail?:string}>}
  */
@@ -143,7 +148,8 @@ async function addWorktree(repoPath, name, deps = {}) {
   if (fsImpl.existsSync(target)) return { ok: false, error: 'exists', detail: target };
 
   const branch = branchFor(slug);
-  const add = await runGit(root, ['worktree', 'add', '-b', branch, target, 'HEAD'], execImpl);
+  const base = typeof deps.base === 'string' && BASE_SHA_RE.test(deps.base) ? deps.base : 'HEAD';
+  const add = await runGit(root, ['worktree', 'add', '-b', branch, target, base], execImpl);
   if (!add.ok) return { ok: false, error: 'gitFailed', detail: firstLine(add.stderr) };
 
   const envCopied = copyEnvFiles(root, target, fsImpl);
@@ -167,7 +173,24 @@ async function dirtyCount(repoPath, deps = {}) {
   return res.stdout.split('\n').filter((l) => l.trim()).length;
 }
 
+/**
+ * Removes a worktree whose work is safe elsewhere (pushed). Refuses when it
+ * has uncommitted changes; the branch itself is kept.
+ * @param {string} repoPath any folder of the main checkout
+ * @param {string} root the worktree's top folder
+ * @returns {Promise<{ok:true} | {ok:false, error:'dirty'|'gitFailed', detail?:string}>}
+ */
+async function removeWorktree(repoPath, root, deps = {}) {
+  const execImpl = deps.execImpl || execFile;
+  const status = await runGit(root, ['status', '--porcelain'], execImpl);
+  if (!status.ok) return { ok: false, error: 'gitFailed', detail: firstLine(status.stderr) };
+  if (status.stdout.trim()) return { ok: false, error: 'dirty' };
+  const res = await runGit(repoPath, ['worktree', 'remove', '--', root], execImpl);
+  return res.ok ? { ok: true } : { ok: false, error: 'gitFailed', detail: firstLine(res.stderr) };
+}
+
 module.exports = {
+  removeWorktree,
   WORKTREE_DIR,
   BRANCH_PREFIX,
   MAX_SLUG_CHARS,
@@ -177,4 +200,6 @@ module.exports = {
   copyEnvFiles,
   addWorktree,
   dirtyCount,
+  runGit,
+  firstLine,
 };

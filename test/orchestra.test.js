@@ -85,7 +85,8 @@ test('Approve launches only dependency-free packages, max 3, each in its own wor
   assert.equal(first.projectId, 'p1');
   assert.equal(first.profileId, 'claude-cloud');
   assert.match(first.branch, /^luna\/a-/);
-  assert.equal(first.task.model, 'sonnet');
+  assert.equal(first.task.model, 'opus', 'worker model comes from the settings, opus by default');
+  assert.equal(first.task.permissionMode, 'bypassPermissions');
   const brief = log.briefs.get(first.task.briefPath);
   assert.match(brief, /edited a/, 'the review edit reaches the brief');
   assert.match(brief, /LUNA_DONE a/);
@@ -130,7 +131,9 @@ test('a launched run blocks re-planning until discarded; closing its tab shows o
   assert.equal(orch.onSessionClosed('s1'), true);
   assert.equal(orch.view().packages[0].state, 'closed');
 
-  assert.equal(orch.discard(), true);
+  // The settled run finalizes (integration, report) - discard waits for it.
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(orch.discard(), { ok: true });
   assert.equal(orch.view(), null);
   assert.equal((await orch.makePlan(ctx)).ok, true);
 });

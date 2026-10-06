@@ -21,7 +21,42 @@ typing into a shell that may not run Claude yet; verified the read needs no
 permission prompt). Approve launches dependency-free packages only (max 3);
 dependents keep a manual Launch until the slice-4 supervisor. Plan is
 in-memory (persistence = slice 4); workers run in default permission mode.
-Slices 4-5 not started.
+Slice 4 CORE (supervisor + finish) BUILT 2026-10-06: `src/orchestraSupervisor.js`
+(pure rules: marker parsing, nudge/verify caps, ready-to-launch, restore),
+`src/orchestraFinish.js` (commit leftovers -> refuse empty branch -> verify
+ourselves -> `git push -u origin <branch>`), `src/orchestraStore.js`
+(`config/orchestra.local.json`). Approve now STARTS the run: dependents launch
+by themselves once their dependencies are pushed; to-dos tick on push. Turn
+end without `LUNA_DONE` -> nudge (5 s delay, max 3) -> stalled; red verify ->
+pasted back (max 2) -> stalled; approval prompt / 2 h working time ->
+stalled; usage limit -> run-wide pause + one resume timer. A stalled worker
+that later prints `LUNA_DONE` on its open tab still finishes. Kill switch:
+board button + Ctrl+Shift+K (in-window, not a global OS hotkey) - Esc to
+every worker, worktrees kept. Retry per package (nudge an open tab, or reopen
+its worktree with a "resuming" brief). After a restart the run comes back
+held, running packages stalled (`restarted`). Workers: Settings -> God Mode v2
+- model (default **Opus everywhere**, or per plan) and permission mode
+(default **bypassPermissions**, Mati 2026-10-06), frozen per run.
+Slice 4 second pass BUILT 2026-10-06: #2 Approve can start now / at HH:MM /
+when the 5 h window resets (re-armed after a restart if still ahead); #5 an
+approval stall logs the tool it asked about (last open tool_use in the
+transcript tail -> `Bash(npx tsc:*)`), the board offers "Allow" and main
+accepts only rules the run logged -> `--allowedTools` for later workers; #6
+a Sonnet worker stalled twice (noMarker/blocked/verify/timeout/noCommits) is
+restarted once on Opus in its worktree with the reason in the brief; #7 each
+worker's git status (GitFileWatcher) + its pushed diff feed `touched`, pairs
+of non-dependent packages sharing a file warn once and land in PR bodies.
+Dependents now branch from their dependency's pushed head (extra deps merged
+in). Slice 5 BUILT 2026-10-06 (`src/orchestraIntegrate.js`,
+`src/orchestraFinalize.js`, `src/orchestraReport.js`): when a run settles -
+or "Finish run" on the board - integrate per mode (default **PRs**, Mati
+2026-10-06; or merge into the base branch via an integration worktree from
+origin/<base>, verify after each merge, one headless resolver per conflict,
+push without force; or branches only), close pushed tabs + remove their
+worktrees (stalled ones kept), note unfinished packages on their to-dos, write
+`<userDir>/runs/<plan>.md` + an OS toast when notifications are on. Not
+built: budget cap (§3), `config/orchestra.json` allowlist file (rules live in
+ui prefs instead), per-worktree `npm ci` for workers (the worker installs).
 Successor of `GODMODE_PLAN.md` (v1 = one tab, one list, sequential).
 
 ## Goal
