@@ -74,6 +74,34 @@ const STALE_CHECK_MS = 5000;
  *  and tab backgrounding. */
 let files = new Map();
 
+/** Absolute path -> {file, added, removed}: EVERY git-detected change in the
+ *  repo, unattributed (src/gitattribution.js narrows `files` to this terminal;
+ *  this is what the "whole repo" scope adds on top). App state, per session. */
+let repoGit = new Map();
+
+/** 'session' = only this terminal's files, 'repo' = everything git sees.
+ *  A viewer preference, not session state: one choice for every tab. */
+const SCOPE_KEY = 'lunacore.activefiles.scope';
+let scope = readScope();
+
+function readScope() {
+  try {
+    // typeof guard: the unit tests load this module under Node, no storage.
+    if (typeof localStorage === 'undefined') return 'session';
+    return localStorage.getItem(SCOPE_KEY) === 'repo' ? 'repo' : 'session';
+  } catch {
+    return 'session';
+  }
+}
+
+function writeScope(value) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(SCOPE_KEY, value);
+  } catch {
+    // Storage blocked: the choice still holds for this run, just not the next.
+  }
+}
+
 /** Elements of the current mount, or null while this widget is off screen. */
 let els = null;
 
@@ -267,6 +295,24 @@ export function clearStaleInProgress(map, now, maxAgeMs) {
     }
   }
   return changed;
+}
+
+/**
+ * The map a given scope shows. 'session' is this terminal's own map as-is;
+ * 'repo' is a COPY of it with every repo-wide git stat folded in through the
+ * same applyGitStat() rule (a row with real transcript touches keeps its exact
+ * numbers). Pure and exported for tests; never mutates either input.
+ * @param {Map<string, object>} own
+ * @param {Map<string, object>} repo path -> {file, added, removed}
+ * @param {'session'|'repo'} which
+ * @returns {Map<string, object>}
+ */
+export function rowsForScope(own, repo, which) {
+  if (which !== 'repo' || !repo || repo.size === 0) return own;
+  const merged = new Map();
+  for (const [k, row] of own) merged.set(k, { ...row });
+  for (const stat of repo.values()) applyGitStat(merged, stat);
+  return merged;
 }
 
 /** Live rows first, then changed files ahead of read-only ones (plan §12/R6),
@@ -541,7 +587,8 @@ function setToggleInteractive(interactive) {
 function render() {
   if (!els) return;
 
-  const rows = sortedRows(files);
+  renderScope();
+  const rows = sortedRows(rowsForScope(files, repoGit, scope));
   const snap = beginListUpdate(els.list);
   els.list.innerHTML = '';
 
@@ -570,6 +617,25 @@ function render() {
   }
 }
 
+/** Syncs the two scope buttons' pressed state with `scope`. */
+function renderScope() {
+  if (!els || !els.scopeBtns) return;
+  for (const btn of els.scopeBtns) {
+    const on = btn.dataset.scope === scope;
+    btn.setAttribute('aria-pressed', String(on));
+    btn.classList.toggle('is-on', on);
+  }
+}
+
+function setScope(value) {
+  const next = value === 'repo' ? 'repo' : 'session';
+  if (next === scope) return;
+  scope = next;
+  writeScope(scope);
+  expanded = false;
+  render();
+}
+
 /** Click/keydown handler for the toggle row - flips `expanded` and repaints.
  *  Guarded by `toggleHasOverflow` so a stale listener firing after a render
  *  that removed the overflow (e.g. files dropping below MAX_ROWS) is a no-op. */
@@ -594,7 +660,7 @@ export function applyFileEvents(events) {
  */
 async function refreshDeleted() {
   if (!window.lunacore || typeof window.lunacore.checkFilesExist !== 'function') return;
-  const paths = [...files.keys()];
+  const paths = [...rowsForScope(files, repoGit, scope).keys()];
   if (!paths.length) return;
   let existsMap;
   try {
@@ -614,18 +680,33 @@ export function trackBucketFiles(bucket, events) {
   for (const ev of events) applyFileEvent(bucket.activeFiles, ev);
 }
 
-/** Apply git-sourced stats (src/gitfiles.js) to the tab you are looking at. */
-export function applyGitFiles(stats) {
-  if (!Array.isArray(stats) || stats.length === 0) return;
-  for (const stat of stats) applyGitStat(files, stat);
+/** Folds a repo-wide git emission into a path -> stat map. Each emission is
+ *  the repo's CURRENT state, so it replaces the stat rather than adding. */
+function applyRepoStats(map, stats) {
+  for (const stat of stats) {
+    if (stat && stat.file) map.set(stat.file, { file: stat.file, added: stat.added || 0, removed: stat.removed || 0 });
+  }
+}
+
+/** Apply git-sourced stats (src/gitfiles.js) to the tab you are looking at.
+ *  `stats` = this terminal's own (attributed in main.js), `repoStats` = all. */
+export function applyGitFiles(stats, repoStats = []) {
+  const own = Array.isArray(stats) ? stats : [];
+  const repo = Array.isArray(repoStats) ? repoStats : [];
+  if (own.length === 0 && repo.length === 0) return;
+  for (const stat of own) applyGitStat(files, stat);
+  applyRepoStats(repoGit, repo);
   render();
 }
 
 /** The same fold for a tab running in the background - mirrors trackBucketFiles(). */
-export function trackBucketGitFiles(bucket, stats) {
-  if (!Array.isArray(stats) || stats.length === 0) return;
+export function trackBucketGitFiles(bucket, stats, repoStats = []) {
+  const own = Array.isArray(stats) ? stats : [];
+  const repo = Array.isArray(repoStats) ? repoStats : [];
   if (!bucket.activeFiles) bucket.activeFiles = new Map();
-  for (const stat of stats) applyGitStat(bucket.activeFiles, stat);
+  if (!bucket.activeRepoFiles) bucket.activeRepoFiles = new Map();
+  for (const stat of own) applyGitStat(bucket.activeFiles, stat);
+  applyRepoStats(bucket.activeRepoFiles, repo);
 }
 
 defineWidget({
@@ -636,7 +717,11 @@ defineWidget({
     els = {
       list: root.querySelector('#afile-list'),
       empty: root.querySelector('#afile-empty'),
+      scopeBtns: [...root.querySelectorAll('.afile-scope__btn')],
     };
+    for (const btn of els.scopeBtns) {
+      btn.addEventListener('click', () => setScope(btn.dataset.scope));
+    }
     ensureDiffModal();
     expanded = false; // a fresh mount always starts collapsed
 
@@ -684,9 +769,11 @@ defineWidget({
 registerSessionView({
   save(bucket) {
     bucket.activeFiles = new Map(files);
+    bucket.activeRepoFiles = new Map(repoGit);
   },
   load(bucket) {
     files = bucket.activeFiles || new Map();
+    repoGit = bucket.activeRepoFiles || new Map();
     // Expansion is view state, not app state - a re-opened tab always starts
     // collapsed, same as a fresh mount (see `expanded`'s own doc comment).
     expanded = false;
@@ -699,12 +786,14 @@ registerSessionView({
   },
   clear(bucket) {
     bucket.activeFiles = new Map();
+    bucket.activeRepoFiles = new Map();
   },
 });
 
 // Restart = a new process: whatever was tracked belonged to the one that died.
 onSessionRestarted(() => {
   files = new Map();
+  repoGit = new Map();
   expanded = false;
   closeDiffModal();
   render();

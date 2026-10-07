@@ -1718,6 +1718,39 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 /* The "+N more" / "Show less" toggle (#afile-empty doing double duty - see
    activefiles.js's setToggleInteractive()). It's a bare <p>, not an .afile
    card, so the affordance is text-based rather than the border glow above. */
+/* Scope toggle in the title row: two compact segments, same edge/radius
+   language as .usage-refresh so it reads as a header control, not content. */
+.afile-scope {
+  display: inline-flex;
+  flex: none;
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.afile-scope__btn {
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-3xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: var(--space-1) var(--space-3);
+  min-height: 22px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-sharp), background-color var(--dur-fast) var(--ease-sharp);
+}
+.afile-scope__btn + .afile-scope__btn { border-left: var(--border-w) solid var(--edge); }
+.afile-scope__btn:hover { color: var(--neon-cyan); }
+.afile-scope__btn.is-on {
+  color: var(--neon-cyan);
+  background: color-mix(in srgb, var(--neon-cyan) 12%, transparent);
+}
+.afile-scope__btn:focus-visible {
+  outline: var(--border-w) solid var(--neon-cyan);
+  outline-offset: -2px;
+}
+
 #afile-empty.is-clickable {
   cursor: pointer;
   opacity: 1;

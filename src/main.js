@@ -93,6 +93,9 @@ const { readAllRepos, fetchRepo, scanForRepos, readRepoStatus, fetchDir, commitA
 // session touched via Bash/PowerShell rather than Read/Edit/Write (see
 // src/gitfiles.js's header for why the transcript path alone misses these).
 const { GitFileWatcher, git, pathInsideCwd } = require('./gitfiles');
+// Per-terminal attribution for those git rows: the watcher reads the whole
+// repo, this decides which changes belong to which terminal.
+const { SessionAttribution } = require('./gitattribution');
 // Action cheat-sheets (7C): command groups sent through the Action Injector.
 const { loadCheatsheets } = require('./cheatsheets');
 // Skill cheat-sheet (7A): auto-scans skill directories -> categories.
@@ -1150,6 +1153,8 @@ function spawnInto(session, profile, launch = null) {
 
   // Its own transcript watcher, scoped to this session's directory.
   if (session.watcher) session.watcher.stop();
+  // Fresh per restart, like both watchers: a new process owns nothing yet.
+  session.gitAttribution = new SessionAttribution();
   session.watcher = new TranscriptWatcher(
     (metrics) => send('metrics:context', { sessionId: session.id, metrics }),
     {
@@ -1160,7 +1165,10 @@ function spawnInto(session, profile, launch = null) {
       // Same IPC channel as the stdout scan - the payload differs: `events`
       // carries a start/end lifecycle (B8), `tiles` is the old flat blink the
       // stdout backstop above still sends.
-      onTools: (events) => send('metrics:tools', { sessionId: session.id, events }),
+      onTools: (events) => {
+        session.gitAttribution.noteToolEvents(events, Date.now());
+        send('metrics:tools', { sessionId: session.id, events });
+      },
       // reference/MCP_DEBUGGER_PLAN.md safe half: MCP call start/end lifecycle, same
       // shape/channel-pattern as onTools above.
       onMcp: (events) => send('metrics:mcp', { sessionId: session.id, events }),
@@ -1211,7 +1219,13 @@ function spawnInto(session, profile, launch = null) {
   // on every restart, so a project switch re-baselines against the new repo).
   if (session.gitWatcher) session.gitWatcher.stop();
   session.gitWatcher = new GitFileWatcher(cwd, (files) => {
-    send('metrics:gitfiles', { sessionId: session.id, files });
+    // `files` = this terminal's own changes, `repoFiles` = everything git sees
+    // (the widget's "whole repo" view).
+    const own = session.gitAttribution.attribute(files, {
+      now: Date.now(),
+      foreignEdited: editedByOtherSessions(session),
+    });
+    send('metrics:gitfiles', { sessionId: session.id, files: own, repoFiles: files });
     // God Mode v2 live file-overlap guard (idea #7).
     orchestra.onFiles(session.id, files.map((f) => f.file));
   });
@@ -1240,6 +1254,22 @@ function spawnInto(session, profile, launch = null) {
     // otherwise surface as an unhandled rejection in the main process.
     ccrControl.ensureGatewayFor(session, profile).catch(() => {});
   }
+}
+
+/**
+ * Paths other live sessions' transcripts edited - a file one terminal edited
+ * through Edit/Write must never be attributed to another just because that
+ * other terminal happened to be busy when git noticed it.
+ * @param {Session} session
+ * @returns {Set<string>} pathKey form (src/gitattribution.js)
+ */
+function editedByOtherSessions(session) {
+  const out = new Set();
+  for (const other of sessions.values()) {
+    if (other === session || !other.gitAttribution) continue;
+    for (const key of other.gitAttribution.edited) out.add(key);
+  }
+  return out;
 }
 
 /**

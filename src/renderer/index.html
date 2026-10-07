@@ -495,7 +495,19 @@
 
   <template id="w-activefiles">
     <div class="panel__section">
-      <h2 class="panel__title" data-i18n="activefiles.title" data-i18n-title="activefiles.hint" title="+/- to realne linie z diffa transcriptu.">Aktywne pliki</h2>
+      <h2 class="panel__title usage-head">
+        <span data-i18n="activefiles.title" data-i18n-title="activefiles.hint" title="+/- to realne linie z diffa transcriptu.">Aktywne pliki</span>
+        <!-- Scope: this terminal's own changes vs everything git sees in the
+             repo (src/gitattribution.js does the per-terminal split). -->
+        <span class="afile-scope" role="group" data-i18n-aria="activefiles.scope.label" aria-label="Zakres">
+          <button type="button" class="afile-scope__btn" data-scope="session" aria-pressed="true"
+            data-i18n="activefiles.scope.session" data-i18n-title="activefiles.scope.session.title"
+            title="Tylko pliki zmienione przez ten terminal">Terminal</button>
+          <button type="button" class="afile-scope__btn" data-scope="repo" aria-pressed="false"
+            data-i18n="activefiles.scope.repo" data-i18n-title="activefiles.scope.repo.title"
+            title="Wszystkie zmiany w repo, z kazdego terminala">Repo</button>
+        </span>
+      </h2>
       <!-- Fed by the observer from observer.js (tool_use/tool_result + structuredPatch)
            via modules/sessions.js - zero new I/O, zero new IPC channel. -->
       <ul id="afile-list" class="afile-list"></ul>

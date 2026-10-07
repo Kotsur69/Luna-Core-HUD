@@ -303,3 +303,28 @@ test('visibleRows treats exactly maxRows as no overflow', () => {
   assert.equal(result.hasOverflow, false);
   assert.equal(result.hiddenCount, 0);
 });
+
+// ---- rowsForScope (this terminal vs whole repo) --------------------------------
+
+const { rowsForScope } = require('../src/renderer/modules/activefiles.js');
+
+test('rowsForScope "session" returns the own map untouched', () => {
+  const own = new Map([['/r/a.js', { file: '/r/a.js', added: 1, removed: 0, touches: 1 }]]);
+  const repo = new Map([['/r/b.js', { file: '/r/b.js', added: 4, removed: 0 }]]);
+  assert.equal(rowsForScope(own, repo, 'session'), own);
+});
+
+test('rowsForScope "repo" adds every git row without mutating either map', () => {
+  const own = new Map([['/r/a.js', { file: '/r/a.js', added: 1, removed: 0, touches: 1 }]]);
+  const repo = new Map([
+    ['/r/a.js', { file: '/r/a.js', added: 50, removed: 50 }],
+    ['/r/b.js', { file: '/r/b.js', added: 4, removed: 0 }],
+  ]);
+  const merged = rowsForScope(own, repo, 'repo');
+  assert.equal(merged.size, 2);
+  // Transcript-touched row keeps its exact numbers (applyGitStat's rule).
+  assert.equal(merged.get('/r/a.js').added, 1);
+  assert.equal(merged.get('/r/b.js').added, 4);
+  assert.equal(own.size, 1);
+  assert.equal(own.get('/r/a.js').added, 1);
+});

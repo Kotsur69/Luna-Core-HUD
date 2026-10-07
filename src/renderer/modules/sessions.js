@@ -134,10 +134,14 @@ window.lunacore.onMcp(({ sessionId, events }) => {
 // Active-Files Heatmap's git-sourced signal (src/gitfiles.js): catches files
 // a session changed via Bash/PowerShell, which carry no file_path for the
 // transcript path above to key a row on. Same active/background split.
-window.lunacore.onGitFiles(({ sessionId, files }) => {
+//
+// `files` is already narrowed to this terminal by main.js (src/gitattribution.js);
+// `repoFiles` is the unfiltered repo view behind the widget's scope toggle.
+window.lunacore.onGitFiles(({ sessionId, files, repoFiles }) => {
   if (!Array.isArray(files)) return;
-  if (sessionId === getActiveSessionId()) applyGitFiles(files);
-  else trackBucketGitFiles(ensureTerm(sessionId), files);
+  const repo = Array.isArray(repoFiles) ? repoFiles : files;
+  if (sessionId === getActiveSessionId()) applyGitFiles(files, repo);
+  else trackBucketGitFiles(ensureTerm(sessionId), files, repo);
 });
 
 // §6.1: a turn just completed. Same active/background split as onTools above -

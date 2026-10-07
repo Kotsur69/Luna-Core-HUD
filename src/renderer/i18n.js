@@ -412,6 +412,11 @@ const I18N_DICT = {
     'activefiles.empty': 'Zadnych zmian w plikach w tej sesji.',
     'activefiles.hint': '+/- to realne linie z diffa transcriptu.',
     'activefiles.more': '+{n} wiecej',
+    'activefiles.scope.label': 'Zakres',
+    'activefiles.scope.session': 'Terminal',
+    'activefiles.scope.session.title': 'Tylko pliki zmienione przez ten terminal',
+    'activefiles.scope.repo': 'Repo',
+    'activefiles.scope.repo.title': 'Wszystkie zmiany w repo, z kazdego terminala',
     'activefiles.less': 'Pokaz mniej',
     'activefiles.readonly': 'tylko odczyt',
     'activefiles.weight.title':
@@ -1247,6 +1252,11 @@ const I18N_DICT = {
     'activefiles.empty': 'No file changes this session.',
     'activefiles.hint': '+/- are real diff lines from the transcript.',
     'activefiles.more': '+{n} more',
+    'activefiles.scope.label': 'Scope',
+    'activefiles.scope.session': 'Terminal',
+    'activefiles.scope.session.title': 'Only files this terminal changed',
+    'activefiles.scope.repo': 'Repo',
+    'activefiles.scope.repo.title': 'Every change in the repo, from any terminal',
     'activefiles.less': 'Show less',
     'activefiles.readonly': 'read only',
     'activefiles.weight.title':
