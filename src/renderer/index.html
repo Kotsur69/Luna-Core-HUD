@@ -348,6 +348,12 @@
     <div class="panel__section panel__section--grow mc">
       <h2 class="panel__title usage-head">
         <span data-i18n="mc.cal.title">Kalendarz</span>
+        <!-- Week = the agenda list for the next N days; Month = a grid of the
+             real calendar month (modules/missioncalmonth.js). -->
+        <span class="afile-scope mc-view" role="group" data-i18n-aria="mc.cal.view.label" aria-label="Widok">
+          <button type="button" class="afile-scope__btn" data-view="week" aria-pressed="true" data-i18n="mc.cal.view.week">Tydzien</button>
+          <button type="button" class="afile-scope__btn" data-view="month" aria-pressed="false" data-i18n="mc.cal.view.month">Miesiac</button>
+        </span>
         <button id="mc-cal-refresh" class="usage-refresh" data-i18n-title="mc.cal.refresh" title="Wczytaj agende" aria-label="Wczytaj agende">&#8635;</button>
       </h2>
       <form id="mc-cal-form" class="todo-form mc-quick">
@@ -357,7 +363,19 @@
       </form>
       <div id="mc-cal-draft" class="mc-draft" hidden></div>
       <p id="mc-cal-status" class="hint mc-status" role="status" aria-live="polite"></p>
+      <!-- Shown until Google Calendar is connected (read-only OAuth, src/gcal.js). -->
+      <button type="button" id="mc-cal-connect" class="pad-send mc-connect" data-i18n="mc.cal.connect" hidden>Polacz Google Calendar</button>
       <div id="mc-cal-agenda" class="mc-agenda"></div>
+      <div id="mc-cal-monthview" class="mc-monthview" hidden>
+        <div class="mc-month__nav">
+          <button type="button" id="mc-cal-prev" class="port-btn" data-i18n-title="mc.cal.prev" data-i18n-aria="mc.cal.prev" title="Poprzedni miesiac" aria-label="Poprzedni miesiac">&#8249;</button>
+          <span id="mc-cal-monthlabel" class="mc-month__label"></span>
+          <button type="button" id="mc-cal-next" class="port-btn" data-i18n-title="mc.cal.next" data-i18n-aria="mc.cal.next" title="Nastepny miesiac" aria-label="Nastepny miesiac">&#8250;</button>
+          <button type="button" id="mc-cal-today" class="port-btn mc-month__today" data-i18n="mc.cal.today">Dzis</button>
+        </div>
+        <div id="mc-cal-grid"></div>
+        <div id="mc-cal-day" class="mc-agenda"></div>
+      </div>
     </div>
   </template>
 
@@ -826,6 +844,11 @@
         <button id="libraries-open" class="palette-chip" data-i18n-title="libraries.chip.title" title="Polecane biblioteki i narzedzia (Ctrl+B)">
           <kbd>Ctrl</kbd><kbd>B</kbd>
         </button>
+        <!-- Mission Control (mail cleanup + calendar), same discoverability
+             rationale as the chips above. -->
+        <button id="mission-open" class="palette-chip" data-i18n-title="mc.chip.title" title="Mission Control - poczta i kalendarz (Ctrl+Shift+M)">
+          <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd>
+        </button>
         <!-- Sixth chip: the highlight extractor (batch clip trimmer, modules/
              highlights.js). Click-only, no assigned chord yet - unlike its
              siblings above it has no keyboard shortcut to be discoverable
@@ -1027,7 +1050,7 @@
        the catalog (src/libraries.js). An <a href> here would be the open
        redirect main.js's claude:docs comment warns about, and `target="_blank"`
        in Electron would not have opened a browser anyway. -->
-  <!-- ================= Mission Control panel (Ctrl+`) ================= -->
+  <!-- ================= Mission Control panel (Ctrl+Shift+M) ================= -->
   <!-- modules/missionpanel.js. The columns are empty: the mailcleanup and
        calendar widgets are mounted into them on open and taken down on close
        (their state lives in the widget modules, so nothing is lost). -->
@@ -1044,7 +1067,7 @@
         <div id="mission-col-cal" class="mission-overlay__col"></div>
       </div>
       <div class="palette__foot">
-        <span><kbd>Ctrl</kbd><kbd>`</kbd> <span data-i18n="mc.panel.toggle">przelacz</span></span>
+        <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd> <span data-i18n="mc.panel.toggle">przelacz</span></span>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>

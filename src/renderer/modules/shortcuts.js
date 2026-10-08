@@ -118,11 +118,11 @@ export const SHORTCUT_GROUPS = [
         },
       },
       {
-        chords: [['Ctrl', '`']],
+        chords: [['Ctrl', 'Shift', 'M']],
         descKey: 'shortcuts.mission',
         source: {
           file: 'src/renderer/modules/missionpanel.js',
-          marker: "e.code === 'Backquote'",
+          marker: "e.code === 'KeyM'",
         },
       },
       {

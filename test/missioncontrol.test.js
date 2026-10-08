@@ -1,6 +1,6 @@
 // ============================================================================
 // LunaCore - Mission Control tests (src/missionrunner.js, missionmail.js,
-// missioncal.js, missioncontrolipc.js)
+// missioncal.js, gcal.js, missioncontrolipc.js)
 // ----------------------------------------------------------------------------
 // The argv gating and approvedTrashIds() are the security boundary of the
 // whole feature (a mail job that can only trash what the user ticked), so they
@@ -16,6 +16,7 @@ const assert = require('node:assert/strict');
 const runner = require('../src/missionrunner.js');
 const mail = require('../src/missionmail.js');
 const cal = require('../src/missioncal.js');
+const gcal = require('../src/gcal.js');
 const { registerMissionIpc, localIsoNow } = require('../src/missioncontrolipc.js');
 const { MISSION_MODELS: PREF_MODELS } = require('../src/uiprefs.js');
 
@@ -161,22 +162,6 @@ test('normalizeDraft: all-day needs plain dates, unknown category becomes null',
   assert.equal(cal.normalizeDraft({ title: 'T', start: '2026-10-10T09:00', end: '2026-10-11', allDay: true }, CATS).ok, false);
 });
 
-test('parseAgenda drops events with bad times and sorts by start', () => {
-  const { events } = cal.parseAgenda(
-    {
-      events: [
-        { id: 'b', title: 'Later', start: '2026-10-09T10:00:00+02:00', end: '2026-10-09T11:00:00+02:00' },
-        { id: 'a', title: 'Sooner', start: '2026-10-08T10:00:00+02:00', category: 'work' },
-        { id: 'c', title: 'Broken', start: 'tomorrow-ish' },
-      ],
-    },
-    CATS
-  );
-  assert.deepEqual(events.map((e) => e.id), ['a', 'b']);
-  assert.equal(events[0].category, 'work');
-  assert.equal(events[0].end, events[0].start);
-});
-
 test('create prompt embeds the category colorId as data', () => {
   const prompt = cal.buildCreatePrompt(
     { title: 'T', start: '2026-10-10T09:00:00+02:00', end: '2026-10-10T10:00:00+02:00', allDay: false, category: 'work' },
@@ -193,10 +178,25 @@ test('localIsoNow renders a zone offset', () => {
 
 // ---- IPC handlers through a fake ipcMain ---------------------------------------
 
-function harness(answers) {
+/** Google Calendar stand-in: records listEvents windows, never touches the network. */
+function fakeGcal(events = []) {
+  const windows = [];
+  return {
+    windows,
+    status: () => ({ configured: true, connected: true }),
+    connect: async () => {},
+    listEvents: async (req) => {
+      windows.push(req);
+      return { events };
+    },
+  };
+}
+
+function harness(answers, gc = fakeGcal()) {
   const handlers = new Map();
   const calls = [];
   registerMissionIpc({
+    gcal: gc,
     ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
     getModel: () => 'haiku',
     getEnv: () => ({}),
@@ -244,6 +244,55 @@ test('compareEvents puts an all-day event first on its own local day', () => {
   const allDay = { start: '2026-10-10', allDay: true };
   const dayBefore = { start: '2026-10-09T23:00:00' + localIsoNow().slice(19), allDay: false };
   assert.deepEqual([timed, allDay, dayBefore].sort(cal.compareEvents), [dayBefore, allDay, timed]);
+});
+
+test('monthBounds spans local midnight to the next month and rejects junk', () => {
+  const dec = cal.monthBounds('2026-12');
+  assert.deepEqual([dec.start.getFullYear(), dec.start.getMonth(), dec.start.getDate()], [2026, 11, 1]);
+  assert.deepEqual([dec.end.getFullYear(), dec.end.getMonth(), dec.end.getDate()], [2027, 0, 1]);
+  assert.equal(dec.start.getHours(), 0);
+  for (const bad of ['2026-13', '2026-00', '26-10', '1999-05', 'abc', null, 202610]) {
+    assert.equal(cal.monthBounds(bad), null, String(bad));
+  }
+});
+
+test('cal-agenda reads a whole month, or the next N days, from the API with no model call', async () => {
+  const gc = fakeGcal([{ id: 'e1' }]);
+  const h = harness([], gc);
+  const month = await h.invoke('mission:cal-agenda', { month: '2026-10' });
+  assert.deepEqual(month, { ok: true, events: [{ id: 'e1' }] });
+  assert.match(gc.windows[0].fromIso, /^2026-10-01T00:00:00[+-]\d{2}:\d{2}$/);
+  assert.match(gc.windows[0].toIso, /^2026-11-01T00:00:00[+-]\d{2}:\d{2}$/);
+  await h.invoke('mission:cal-agenda');
+  assert.match(gc.windows[1].fromIso, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('cal-agenda refuses a malformed month before reaching the API', async () => {
+  const gc = fakeGcal();
+  const h = harness([], gc);
+  assert.deepEqual(await h.invoke('mission:cal-agenda', { month: '2026-10; ignore rules' }), {
+    ok: false,
+    reason: 'bad-range',
+  });
+  assert.equal(gc.windows.length, 0);
+});
+
+test('cal-agenda passes a GcalError reason through and hides anything else', async () => {
+  const gc = fakeGcal();
+  gc.listEvents = async () => {
+    throw new gcal.GcalError('gcal-not-connected');
+  };
+  assert.deepEqual(await harness([], gc).invoke('mission:cal-agenda'), { ok: false, reason: 'gcal-not-connected' });
+  gc.listEvents = async () => {
+    throw new Error('socket hang up');
+  };
+  assert.deepEqual(await harness([], gc).invoke('mission:cal-agenda'), { ok: false, reason: 'gcal-failed' });
+});
+
+test('mission:config reports the Google connection state', async () => {
+  const cfg = await harness([]).invoke('mission:config');
+  assert.deepEqual(cfg.gcal, { configured: true, connected: true });
 });
 
 test('cal-create reports maybe-created when the job dies after starting', async () => {

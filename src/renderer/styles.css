@@ -4706,7 +4706,74 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   background: var(--mc-cat, var(--edge));
 }
 
-/* Mission Control panel (Ctrl+`): the palette overlay shell, widened to hold
+/* Calendar Week / Month switch (reuses the active-files scope toggle look),
+   pushed right next to the refresh button. */
+.mc-view { margin-left: auto; }
+.mc-agenda[hidden], .mc-monthview[hidden] { display: none; }
+/* Connect button: only until Google Calendar is linked (src/gcal.js). */
+.mc-connect { align-self: flex-start; padding-inline: var(--space-6); }
+.mc-connect[hidden] { display: none; }
+.mc-monthview { display: flex; flex-direction: column; gap: var(--space-4); min-height: 0; flex: 1; overflow-y: auto; }
+.mc-month__nav { display: flex; align-items: center; gap: var(--space-3); }
+.mc-month__label { flex: 1; text-align: center; font-weight: 600; text-transform: capitalize; letter-spacing: 0.02em; }
+.mc-month__today { width: auto; padding-inline: var(--space-4); font-size: var(--fs-xs); }
+.mc-month__weekdays,
+.mc-month__grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-1); }
+.mc-month__weekdays span {
+  text-align: center;
+  font-size: var(--fs-3xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding-bottom: var(--space-2);
+}
+.mc-month__day {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  min-height: 74px;
+  min-width: 0;
+  padding: var(--space-2);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--surface-panel-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-sharp), background-color var(--dur-fast) var(--ease-sharp);
+}
+.mc-month__day:hover { border-color: var(--edge-glow); }
+.mc-month__day:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.mc-month__day.is-out { opacity: 0.35; }
+.mc-month__day[aria-pressed='true'] {
+  border-color: var(--neon-cyan);
+  background: color-mix(in srgb, var(--neon-cyan) 8%, var(--surface-panel-2));
+}
+.mc-month__num { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; color: var(--text-dim); }
+/* Today: a filled badge, so it reads without relying on the border colour. */
+.mc-month__day.is-today .mc-month__num {
+  align-self: flex-start;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: var(--neon-cyan);
+  color: var(--bg-panel-2);
+  font-weight: 700;
+}
+/* Title text plus a category bar: colour is never the only signal. */
+.mc-month__ev {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-3xs);
+  line-height: 1.35;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--mc-cat, var(--edge-glow));
+}
+.mc-month__more { font-size: var(--fs-3xs); color: var(--text-dim); }
+
+/* Mission Control panel (Ctrl+Shift+M): the palette overlay shell, widened to hold
    the mail and calendar widgets side by side. Each column scrolls on its own
    so a long review list never pushes the agenda off screen. */
 .mission-overlay .palette__modal { width: min(1280px, 96vw); height: 86vh; max-height: 86vh; display: flex; flex-direction: column; }

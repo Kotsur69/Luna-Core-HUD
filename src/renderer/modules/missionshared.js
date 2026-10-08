@@ -22,6 +22,14 @@ const ERROR_KEYS = {
   'not-created': 'mc.err.notCreated',
   'maybe-created': 'mc.err.maybeCreated',
   empty: 'mc.err.empty',
+  'bad-range': 'mc.err.badRange',
+  'gcal-no-client': 'mc.err.gcalNoClient',
+  'gcal-not-connected': 'mc.err.gcalNotConnected',
+  'gcal-auth': 'mc.err.gcalAuth',
+  'gcal-denied': 'mc.err.gcalDenied',
+  'gcal-timeout': 'mc.err.gcalTimeout',
+  'gcal-network': 'mc.err.gcalNetwork',
+  'gcal-failed': 'mc.err.gcalFailed',
   generic: 'mc.err.generic',
 };
 

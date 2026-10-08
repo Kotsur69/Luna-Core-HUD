@@ -32,6 +32,7 @@ import { mountGitquickChip } from './gitquick.js';
 import { mountShortcutsChip } from './shortcutspanel.js';
 import { mountLibrariesChip, mountAskChip } from './libraries.js';
 import { mountHighlightsChip } from './highlights.js';
+import { mountMissionChip } from './missionpanel.js';
 import { mountUpdateChip } from './update.js';
 
 defineWidget({
@@ -49,6 +50,7 @@ defineWidget({
     mountShortcutsChip(root);
     mountLibrariesChip(root);
     mountAskChip(root);
+    mountMissionChip(root);
     mountHighlightsChip(root);
     mountUpdateChip(root);
     // No cleanup: this widget is never meant to unmount (see header).

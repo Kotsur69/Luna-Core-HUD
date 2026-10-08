@@ -1,7 +1,8 @@
 // ============================================================================
 // LunaCore - Mission Control IPC (main process)
 // ----------------------------------------------------------------------------
-// Wires the mission:* channels to the mail and calendar jobs. Lives outside
+// Wires the mission:* channels to the mail and calendar jobs, and the agenda
+// to the Google Calendar API client (src/gcal.js - no model call). Lives outside
 // main.js on purpose (main.js is far past the file-size guideline); main.js
 // only calls registerMissionIpc() once.
 //
@@ -19,8 +20,10 @@ const { runJob, MISSION_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunn
 const { loadMissionConfig } = require('./missionconfig');
 const mail = require('./missionmail');
 const cal = require('./missioncal');
+const { createGcal } = require('./gcal');
 
-const TIMEOUTS = { preview: 300000, apply: 180000, agenda: 120000, parse: 60000, create: 120000 };
+const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, create: 120000 };
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Local ISO 8601 with the zone offset, e.g. 2026-10-08T14:03:00+02:00. */
 function localIsoNow(date = new Date()) {
@@ -37,13 +40,25 @@ function localIsoNow(date = new Date()) {
 const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
 /**
- * @param {{ipcMain:object, getModel:()=>string, getEnv:()=>Record<string,string>, run?:Function}} deps
- *   `run` is injectable so tests can exercise the handlers without a CLI.
- */
 /** Create failures where the event may still exist in the calendar. */
 const UNSURE_CREATE = new Set(['timeout', 'cli-error', 'bad-json']);
 
-function registerMissionIpc({ ipcMain, getModel, getEnv, run = runJob }) {
+/** A GcalError keeps its reason; anything else is logged and made generic. */
+function gcalFailure(err) {
+  if (err && typeof err.reason === 'string') {
+    console.error('[mission] google calendar:', err.reason, err.message);
+    return { ok: false, reason: err.reason };
+  }
+  console.error('[mission] google calendar failed:', err && err.message);
+  return { ok: false, reason: 'gcal-failed' };
+}
+
+/**
+ * @param {{ipcMain:object, getModel:()=>string, getEnv:()=>Record<string,string>, run?:Function, gcal?:object}} deps
+ *   `run` and `gcal` are injectable so tests can exercise the handlers
+ *   without a CLI or the network.
+ */
+function registerMissionIpc({ ipcMain, getModel, getEnv, run = runJob, gcal = createGcal() }) {
   let lastPreview = null;
   const busy = new Set();
 
@@ -71,7 +86,13 @@ function registerMissionIpc({ ipcMain, getModel, getEnv, run = runJob }) {
 
   ipcMain.handle('mission:config', () => {
     const { calendar } = loadMissionConfig();
-    return { model: model(), models: MISSION_MODELS, categories: calendar.categories, days: calendar.days };
+    return {
+      model: model(),
+      models: MISSION_MODELS,
+      categories: calendar.categories,
+      days: calendar.days,
+      gcal: gcal.status(),
+    };
   });
 
   ipcMain.handle('mission:mail-preview', () =>
@@ -105,18 +126,44 @@ function registerMissionIpc({ ipcMain, getModel, getEnv, run = runJob }) {
     })
   );
 
-  ipcMain.handle('mission:cal-agenda', () =>
+  // No argument: the next `days` days from now (the week list). `{month}`:
+  // that whole calendar month (the month grid). Read from the Calendar API.
+  ipcMain.handle('mission:cal-agenda', (_event, req) =>
     guarded('agenda', async () => {
       const { calendar } = loadMissionConfig();
-      const prompt = cal.buildAgendaPrompt({
-        nowIso: localIsoNow(),
-        timeZone: timeZone(),
-        days: calendar.days,
-        categories: calendar.categories,
-      });
-      const res = await job('agenda', prompt, { allowed: cal.AGENDA_TOOLS });
-      if (!res.ok) return res;
-      return { ok: true, ...cal.parseAgenda(res.answer, calendar.categories), costUsd: res.costUsd };
+      let from;
+      let to;
+      if (req && req.month !== undefined) {
+        const bounds = cal.monthBounds(req.month);
+        if (!bounds) return { ok: false, reason: 'bad-range' };
+        ({ start: from, end: to } = bounds);
+      } else {
+        from = new Date();
+        to = new Date(from.getTime() + calendar.days * DAY_MS);
+      }
+      try {
+        const { events } = await gcal.listEvents({
+          fromIso: localIsoNow(from),
+          toIso: localIsoNow(to),
+          categories: calendar.categories,
+        });
+        return { ok: true, events };
+      } catch (err) {
+        return gcalFailure(err);
+      }
+    })
+  );
+
+  // Opens the browser for Google consent and waits (up to 3 min) for the
+  // loopback redirect. One at a time: a second click while waiting is `busy`.
+  ipcMain.handle('mission:gcal-connect', () =>
+    guarded('gcal-connect', async () => {
+      try {
+        await gcal.connect();
+        return { ok: true, gcal: gcal.status() };
+      } catch (err) {
+        return gcalFailure(err);
+      }
     })
   );
 

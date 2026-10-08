@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Mission Control panel (Ctrl+`)
+// LunaCore - Mission Control panel (Ctrl+Shift+M)
 // ----------------------------------------------------------------------------
 // A full-screen overlay that hosts the Mission Control widgets side by side,
 // instead of squeezing them into a layout region. The widgets themselves are
@@ -8,7 +8,7 @@
 // survives that, so closing and reopening the panel never re-bills a model
 // call.
 //
-// Ctrl+` is matched on e.code ('Backquote'), not e.key: the physical key is
+// Ctrl+Shift+M is matched on e.code ('KeyM'), not e.key: the physical key is
 // what the user learns, and e.key differs between keyboard layouts. Nothing
 // else in the renderer or main.js's before-input-event handler claims it.
 // ============================================================================
@@ -57,6 +57,12 @@ function close() {
   returnFocus = null;
 }
 
+/** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
+export function mountMissionChip(root) {
+  const btn = root.querySelector('#mission-open');
+  if (btn) btn.addEventListener('click', () => open());
+}
+
 overlayEl.addEventListener('click', (e) => {
   if (e.target.hasAttribute('data-mission-close')) close();
 });
@@ -76,7 +82,7 @@ window.addEventListener(
       close();
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'Backquote') {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === 'KeyM') {
       e.preventDefault();
       e.stopPropagation();
       if (isOpen) close();
