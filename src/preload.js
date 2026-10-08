@@ -211,6 +211,23 @@ contextBridge.exposeInMainWorld('lunacore', {
    *  Promise<{ok, categories, total} | {ok:false, reason}>. */
   addLibraryItem: (item) => ipcRenderer.invoke('libraries:add', item),
 
+  // --- Mission Control (src/missioncontrolipc.js) ---
+  // Every channel takes plain data and main re-validates it: apply only trashes
+  // thread ids main's own last preview proposed, and a calendar draft is
+  // re-checked before create. No channel here can name a tool or a model.
+  /** Promise<{model, models, categories, days}>. */
+  getMissionConfig: () => ipcRenderer.invoke('mission:config'),
+  /** Dry-run inbox scan. Promise<{ok, preview:{summary,trash,flag,needsCall}, costUsd} | {ok:false, reason}>. */
+  missionMailPreview: () => ipcRenderer.invoke('mission:mail-preview'),
+  /** Trashes the given thread ids (recoverable 30 days). Promise<{ok, trashed, failed, costUsd} | {ok:false, reason}>. */
+  missionMailApply: (threadIds) => ipcRenderer.invoke('mission:mail-apply', threadIds),
+  /** Promise<{ok, events, costUsd} | {ok:false, reason}>. */
+  missionCalAgenda: () => ipcRenderer.invoke('mission:cal-agenda'),
+  /** Natural language -> event draft. Promise<{ok, draft, costUsd} | {ok:false, reason}>. */
+  missionCalParse: (text) => ipcRenderer.invoke('mission:cal-parse', text),
+  /** Creates a confirmed draft. Promise<{ok, eventId, costUsd} | {ok:false, reason}>. */
+  missionCalCreate: (draft) => ipcRenderer.invoke('mission:cal-create', draft),
+
   // --- Highlight extractor (batch clip trimmer) ---
   /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */
   getFfmpegStatus: () => ipcRenderer.invoke('highlights:ffmpeg-status'),

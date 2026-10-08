@@ -118,6 +118,14 @@ export const SHORTCUT_GROUPS = [
         },
       },
       {
+        chords: [['Ctrl', '`']],
+        descKey: 'shortcuts.mission',
+        source: {
+          file: 'src/renderer/modules/missionpanel.js',
+          marker: "e.code === 'Backquote'",
+        },
+      },
+      {
         // Not a key chord - a command typed into the Ctrl+B filter box. Fits
         // this table anyway (a single-token "chord" renders as one <kbd>,
         // same trick shortcuts.jumpProject uses for "Alt+1…9") because it is

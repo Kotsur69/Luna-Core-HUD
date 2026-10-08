@@ -108,6 +108,9 @@ const { loadLibraries, resolveLibraryUrl, addLibraryItem, safeUrl } = require('.
 // /ask: a one-shot headless `claude -p` tool recommender grounded in the
 // libraries catalog above. See src/ask.js's header for the trust boundary.
 const { runAsk } = require('./ask');
+// Mission Control: Gmail cleanup + Calendar through tool-gated headless
+// `claude -p` jobs. See src/missionrunner.js's header for the trust boundary.
+const { registerMissionIpc } = require('./missioncontrolipc');
 // Highlight extractor: batch tail-trim of video clips via system ffmpeg.
 // See src/highlights.js's header for the argv-array security property.
 const { detectFfmpeg, listVideoFiles, HighlightBatchJob } = require('./highlights');
@@ -2318,6 +2321,16 @@ function registerIpc() {
     }
     const env = withClaudeOnPath(buildSessionEnv(process.env, profileEnv));
     return runAsk({ question, catalog: loadLibraries(), env, timeoutMs: 45000, model });
+  });
+
+  // Mission Control (mission:* channels). Always the cloud CLI with an empty
+  // profile env, same reason as /ask's default: a tab's local-model profile
+  // must never leak into a job that can trash mail. The model comes from the
+  // missionModel pref (Haiku by default) and is re-checked in the runner.
+  registerMissionIpc({
+    ipcMain,
+    getModel: () => readUiPrefs().missionModel,
+    getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
   });
 
   // "Add to my library": persists an /ask suggestion card into

@@ -92,6 +92,10 @@ const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
 // 'default', which adds no flag.
 const ORCHESTRA_WORKER_MODELS = ['opus', 'sonnet', 'plan'];
 const ORCHESTRA_PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
+// Mission Control jobs (src/missionrunner.js MISSION_MODELS - kept in sync by
+// test/missioncontrol.test.js). Haiku by default: mail triage and calendar
+// parsing are cheap, high-volume chores.
+const MISSION_MODELS = ['haiku', 'sonnet', 'opus'];
 // Slice 5: what a settled run does with its pushed branches (default PRs,
 // Mati 2026-10-06). Allowed tools (idea #5) are worker --allowedTools rules
 // added from the run board's evidence; the shape check keeps them safe inside
@@ -203,6 +207,7 @@ const DEFAULTS = {
   // if one exists - never a surprise switch, always something the user asked
   // for once in Settings (Ctrl+L).
   askUseLocalModel: false,
+  missionModel: 'haiku',
   // Connection-error auto-recovery (autoproceed.js). Missing key => OFF, same
   // reasoning as notificationsEnabled/clipboardEnabled above: injecting
   // "continue" into a session costs a token round-trip, so it must be an
@@ -667,6 +672,7 @@ function readUiPrefs() {
       // Missing key => disabled (prefs file written before this option existed).
       askUseLocalModel:
         typeof obj.askUseLocalModel === 'boolean' ? obj.askUseLocalModel : DEFAULTS.askUseLocalModel,
+      missionModel: MISSION_MODELS.includes(obj.missionModel) ? obj.missionModel : DEFAULTS.missionModel,
       // Missing key => disabled (prefs file written before this option existed).
       autoProceedArmed:
         typeof obj.autoProceedArmed === 'boolean' ? obj.autoProceedArmed : DEFAULTS.autoProceedArmed,
@@ -744,6 +750,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && typeof partial.askUseLocalModel === 'boolean') {
       next.askUseLocalModel = partial.askUseLocalModel;
+    }
+    if (partial && MISSION_MODELS.includes(partial.missionModel)) {
+      next.missionModel = partial.missionModel;
     }
     if (partial && typeof partial.notificationsEnabled === 'boolean') {
       next.notificationsEnabled = partial.notificationsEnabled;
@@ -871,4 +880,5 @@ module.exports = {
   cleanWidgetSlots,
   cleanRailedRegions,
   cleanCustomLayouts,
+  MISSION_MODELS,
 };

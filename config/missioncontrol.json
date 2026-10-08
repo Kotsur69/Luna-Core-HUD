@@ -1,0 +1,45 @@
+{
+  "_comment": "Mission Control rules. Override or extend any list in the gitignored config/missioncontrol.local.json (same shape; lists there REPLACE the lists here). Rules are plain-language instructions handed to the mail model; senders are exact addresses or @domains.",
+  "mail": {
+    "query": "in:inbox -is:starred",
+    "maxThreads": 40,
+    "trashCategories": [
+      "Marketing and promotional email: sales, discounts, coupons, 'last chance' offers, product launches from shops and brands",
+      "Newsletters and digests the user never replied to (Substack, Medium daily digest, product/company newsletters, blog roundups)",
+      "Social network notifications that are not a message from a person: LinkedIn notifications (views, 'people you may know', job alerts, post likes), Facebook, Instagram, X/Twitter, YouTube, Reddit, Discord digests",
+      "Automated app or service notices that need no action: 'welcome' mails, feature announcements, tips and onboarding series, terms-of-service updates, 'we miss you' mails",
+      "Shipping and delivery updates for orders that were already delivered or are older than 7 days",
+      "One-time login codes, verification codes and magic links older than 24 hours",
+      "Webinar, conference and event invitations from companies, plus surveys and 'rate your experience' requests",
+      "Successful CI / build / deploy notifications and dependency-bot digests (failures are NOT in this category)"
+    ],
+    "trashSenders": [],
+    "flagCategories": [
+      "Payment failures, declined cards, failed renewals",
+      "Double or unexpected charges, refunds that did not arrive",
+      "Security alerts about unknown sign-ins, new devices or password changes the user may not have made",
+      "Leaked credential, exposed secret or API-key notices (GitHub secret scanning, GitGuardian, provider key leaks), and any mail containing plaintext passwords, logins or API keys",
+      "Account-access actions that need a response: verify your account, confirm ownership, account will be suspended or deleted",
+      "Domain, certificate or subscription expiry warnings",
+      "Tax, government or legal mail (e.g. Urzad Skarbowy, ZUS, e-Urzad, courts, notaries)",
+      "Failed CI / build / deploy runs on the user's own repositories"
+    ],
+    "neverTrash": [
+      "Real human correspondence: personal messages, replies in a thread with a real person, LinkedIn messages written by a person",
+      "Invoices, receipts and faktury (needed for accounting)",
+      "Bank statements and contracts",
+      "Calendar invitations from people",
+      "Anything the user sent or replied to"
+    ],
+    "keepSenders": []
+  },
+  "calendar": {
+    "days": 7,
+    "categories": [
+      { "id": "work", "label": { "pl": "Praca", "en": "Work" }, "colorId": "9", "color": "#5484ed" },
+      { "id": "motorsport", "label": { "pl": "Trackday i motorsport", "en": "Trackday & Motorsport" }, "colorId": "11", "color": "#dc2127" },
+      { "id": "personal", "label": { "pl": "Prywatne", "en": "Personal" }, "colorId": "2", "color": "#7ae7bf" },
+      { "id": "travel", "label": { "pl": "Podroze", "en": "Travel" }, "colorId": "5", "color": "#fbd75b" }
+    ]
+  }
+}
