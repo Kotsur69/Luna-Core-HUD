@@ -46,6 +46,11 @@
           "name": "Bklit UI",
           "url": "https://bklit.com",
           "description": "React chart components: 17+ types from area and bar through sankey, sunburst and candlestick, with the axes, legends and brushes around them. Ships a visual builder (Studio) and prebuilt blocks; open source, in the Vercel OSS program."
+        },
+        {
+          "name": "gods-eye-view",
+          "url": "https://github.com/bilawalsidhu/gods-eye-view",
+          "description": "Spy-satellite simulator in the browser with real data: live open-source spatial intelligence on a photorealistic 3D globe. JavaScript."
         }
       ]
     },
@@ -152,6 +157,11 @@
           "name": "guillaumemeyer/watermarks-remover",
           "url": "https://github.com/guillaumemeyer/watermarks-remover",
           "description": "Strips invisible-Unicode carriers and C2PA/EXIF/XMP provenance from text and media you own, and rewrites text to attack sampling watermarks. Honest about the trade: the rewrite flattens the prose, and no tool can certify a mark is actually gone."
+        },
+        {
+          "name": "VoiceStudio",
+          "url": "https://github.com/debpalash/VoiceStudio",
+          "description": "Fully local ElevenLabs alternative: voice cloning and design, video dubbing, dictation, transcription and audiobooks across 646 languages. Python, AGPL-3.0, so a hosted fork has to publish its source."
         }
       ]
     },
@@ -241,6 +251,16 @@
           "name": "Stirling-Tools/Stirling-PDF",
           "url": "https://github.com/Stirling-Tools/Stirling-PDF",
           "description": "50+ PDF tools - merge, split, convert, OCR, redact, sign - as a desktop app, a browser build or a server you host, so documents stop going through a random web converter. Open-core: some enterprise pieces are not free."
+        },
+        {
+          "name": "thetagang",
+          "url": "https://github.com/brndnmtthws/thetagang",
+          "description": "Python bot for Interactive Brokers that runs the options wheel strategy: sells puts and calls to collect premium. AGPL-3.0. It places real orders, so run it on a paper account first."
+        },
+        {
+          "name": "anthropics/financial-services",
+          "url": "https://github.com/anthropics/financial-services",
+          "description": "Anthropic reference repo for finance work with Claude: agents and skills for areas like equity research, investment banking and modelling. Python, Apache 2.0."
         }
       ]
     },
@@ -287,6 +307,11 @@
           "name": "FFmpeg",
           "url": "https://ffmpeg.org/download.html",
           "description": "The command-line audio/video toolkit this app's own highlight extractor shells out to for trimming clips - and what half the entries above already quietly depend on. Not bundled; grab a static build for your OS from this page and make sure it lands on PATH."
+        },
+        {
+          "name": "hyperframes",
+          "url": "https://github.com/heygen-com/hyperframes",
+          "description": "Write HTML, render video, built for agents: a composition is a web page and the CLI turns it into an MP4. Apache 2.0, TypeScript. The engine behind the brag launch-video skill listed here."
         }
       ]
     }

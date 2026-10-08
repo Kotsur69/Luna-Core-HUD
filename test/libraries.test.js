@@ -379,6 +379,7 @@ test('the shipped catalog carries a Videos category with the expected tools', ()
     'OpenMontage',
     'Remotion',
     'FFmpeg',
+    'hyperframes',
   ];
   assert.deepEqual(
     videos.items.map((i) => i.name),
