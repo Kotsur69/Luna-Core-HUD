@@ -53,6 +53,8 @@ import { initSkills } from './modules/skills.js';
 import './modules/scratchpad.js';
 import './modules/missionmail.js';
 import './modules/missioncalendar.js';
+import './modules/missiontelemetry.js';
+import './modules/missionnews.js';
 import './modules/missionpanel.js';
 import './modules/clipboard.js';
 import './modules/todo.js';

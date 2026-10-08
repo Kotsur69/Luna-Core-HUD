@@ -1,0 +1,11 @@
+# Agent-Reach's tested dependency set (upstream constraints.txt, commit 94f06c1).
+# Installed by LunaCore's "Set up News" into its own venv under the app's
+# userData folder - never into the global Python.
+requests==2.32.5
+feedparser==6.0.12
+python-dotenv==1.2.1
+loguru==0.7.3
+PyYAML==6.0.3
+rich==14.3.2
+yt-dlp==2026.07.04
+yt-dlp-ejs==0.8.0

@@ -379,6 +379,70 @@
     </div>
   </template>
 
+  <!-- Mission Control: telemetry. GitHub through the gh CLI (src/missiongithub.js)
+       and the Claude weekly budget from the usage poll - no model call.
+       Pace math and anomaly flags: modules/missionpace.js. -->
+  <template id="w-missiontele">
+    <div class="panel__section panel__section--grow mc">
+      <h2 class="panel__title usage-head">
+        <span data-i18n="mc.tele.title">Telemetria</span>
+        <button id="mc-tele-refresh" class="usage-refresh" data-i18n-title="mc.tele.refresh" data-i18n-aria="mc.tele.refresh" title="Odswiez dane z GitHuba" aria-label="Odswiez dane z GitHuba">&#8635;</button>
+      </h2>
+      <p id="mc-tele-status" class="hint mc-status" role="status" aria-live="polite"></p>
+      <ul id="mc-tele-flags" class="mc-tele__flags" hidden></ul>
+      <div class="mc-tele__body">
+        <section class="mc-bucket">
+          <h3 class="mc-bucket__title" data-i18n="mc.tele.budget">Budzet Claude</h3>
+          <div id="mc-tele-budget" class="mc-tele__budget"></div>
+        </section>
+        <section class="mc-bucket">
+          <h3 class="mc-bucket__title" data-i18n="mc.tele.velocity">Tempo na GitHubie</h3>
+          <div id="mc-tele-velocity" class="mc-tele__velocity"></div>
+        </section>
+        <section class="mc-bucket">
+          <h3 class="mc-bucket__title" data-i18n="mc.tele.open">Otwarte</h3>
+          <div id="mc-tele-open" class="mc-tele__open"></div>
+        </section>
+      </div>
+    </div>
+  </template>
+
+  <!-- Mission Control: News. Sources + topics are fetched by the vendored
+       Agent-Reach (helpers/agent-reach, own venv) and summarised by one Haiku
+       call (src/missionnews.js). Lists are built by modules/missionnews.js. -->
+  <template id="w-missionnews">
+    <div class="panel__section panel__section--grow mc">
+      <h2 class="panel__title"><span data-i18n="mc.news.title">Newsy</span></h2>
+      <p id="mc-news-status" class="hint mc-status" role="status" aria-live="polite"></p>
+      <button type="button" id="mc-news-setup" class="pad-send mc-connect" data-i18n="mc.news.setup" hidden>Skonfiguruj Newsy (Agent-Reach)</button>
+      <div id="mc-news-picker" class="mc-news__picker" hidden>
+        <section class="mc-bucket">
+          <h3 class="mc-bucket__title" data-i18n="mc.news.sources">Zrodla</h3>
+          <ul id="mc-news-sources" class="mc-news__list"></ul>
+          <p id="mc-news-sources-empty" class="hint" data-i18n="mc.news.sourcesEmpty">Brak zrodel.</p>
+          <form id="mc-news-addsource" class="mc-news__add">
+            <select id="mc-news-src-platform" class="profile-select mc-news__platform" data-i18n-aria="mc.news.platformsLabel" aria-label="Platforma"></select>
+            <input id="mc-news-src-target" class="mc-input" maxlength="500" spellcheck="false" autocomplete="off" data-i18n-ph="mc.news.srcTarget" data-i18n-aria="mc.news.srcTarget" placeholder="URL albo wlasciciel/repo" aria-label="URL albo wlasciciel/repo" />
+            <input id="mc-news-src-label" class="mc-input" maxlength="80" spellcheck="false" autocomplete="off" data-i18n-ph="mc.news.srcLabel" data-i18n-aria="mc.news.srcLabel" placeholder="Nazwa (opcjonalnie)" aria-label="Nazwa (opcjonalnie)" />
+            <button type="submit" class="port-btn" data-i18n-title="mc.news.addSource" data-i18n-aria="mc.news.addSource" title="Dodaj zrodlo" aria-label="Dodaj zrodlo">+</button>
+          </form>
+        </section>
+        <section class="mc-bucket">
+          <h3 class="mc-bucket__title" data-i18n="mc.news.topics">Tematy</h3>
+          <ul id="mc-news-topics" class="mc-news__list"></ul>
+          <p id="mc-news-topics-empty" class="hint" data-i18n="mc.news.topicsEmpty">Brak tematow.</p>
+          <form id="mc-news-addtopic" class="mc-news__add">
+            <input id="mc-news-topic-input" class="mc-input" maxlength="600" spellcheck="false" autocomplete="off" data-i18n-ph="mc.news.topicPh" data-i18n-aria="mc.news.addTopic" placeholder="np. claude code, cursor" aria-label="Dodaj tematy" />
+            <button type="submit" class="port-btn" data-i18n-title="mc.news.addTopic" data-i18n-aria="mc.news.addTopic" title="Dodaj tematy" aria-label="Dodaj tematy">+</button>
+            <fieldset id="mc-news-tp" class="mc-news__tps"></fieldset>
+          </form>
+        </section>
+        <button type="button" id="mc-news-scan" class="pad-send mc-bar__go" disabled>Zaznacz zrodla lub tematy</button>
+      </div>
+      <div id="mc-news-results" class="mc-results"></div>
+    </div>
+  </template>
+
   <!-- NOTE: `.panel__section` WITHOUT `--grow`, exactly as this block was authored
        as static markup. The two templates above happen to grow; copying one of them
        here would quietly redistribute the right panel's height. -->
@@ -846,7 +910,7 @@
         </button>
         <!-- Mission Control (mail cleanup + calendar), same discoverability
              rationale as the chips above. -->
-        <button id="mission-open" class="palette-chip" data-i18n-title="mc.chip.title" title="Mission Control - poczta i kalendarz (Ctrl+Shift+M)">
+        <button id="mission-open" class="palette-chip" data-i18n-title="mc.chip.title" title="Mission Control - poczta, kalendarz, telemetria, newsy (Ctrl+Shift+M)">
           <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd>
         </button>
         <!-- Sixth chip: the highlight extractor (batch clip trimmer, modules/
@@ -1065,6 +1129,8 @@
       <div class="mission-overlay__body">
         <div id="mission-col-mail" class="mission-overlay__col"></div>
         <div id="mission-col-cal" class="mission-overlay__col"></div>
+        <div id="mission-col-tele" class="mission-overlay__col"></div>
+        <div id="mission-col-news" class="mission-overlay__col"></div>
       </div>
       <div class="palette__foot">
         <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd> <span data-i18n="mc.panel.toggle">przelacz</span></span>

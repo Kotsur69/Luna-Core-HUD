@@ -37,3 +37,6 @@ config/lmstudio-empty-mcp.json
 
 # God Mode worker briefs (src/orchestra.js), written per launch.
 config/tasks/
+
+# Python bytecode (helpers/agent-reach, the vendored News fetcher).
+__pycache__/

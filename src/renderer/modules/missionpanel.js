@@ -22,6 +22,8 @@ import { closeWithExit, cancelExit } from './motion.js';
 const COLUMNS = [
   ['mission-col-mail', 'mailcleanup'],
   ['mission-col-cal', 'calendar'],
+  ['mission-col-tele', 'missiontelemetry'],
+  ['mission-col-news', 'missionnews'],
 ];
 
 const overlayEl = document.getElementById('mission');

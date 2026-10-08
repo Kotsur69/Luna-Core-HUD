@@ -192,12 +192,21 @@ function fakeGcal(events = []) {
   };
 }
 
-function harness(answers, gc = fakeGcal()) {
+/** GitHub stand-in: a canned fetch result and a fixed id -> url table. */
+function fakeGithub(result = { login: 'me', days: [], lists: {} }) {
+  return { fetch: async () => result, urlFor: (id) => (id === 'prs:0' ? 'https://github.com/o/r/pull/1' : null) };
+}
+
+function harness(answers, gc = fakeGcal(), gh = fakeGithub()) {
   const handlers = new Map();
+  const listeners = new Map();
   const calls = [];
+  const opened = [];
   registerMissionIpc({
     gcal: gc,
-    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
+    github: gh,
+    openExternal: (url) => opened.push(url),
+    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn), on: (ch, fn) => listeners.set(ch, fn) },
     getModel: () => 'haiku',
     getEnv: () => ({}),
     run: async (job) => {
@@ -205,7 +214,12 @@ function harness(answers, gc = fakeGcal()) {
       return { ok: true, answer: answers.shift(), costUsd: 0 };
     },
   });
-  return { invoke: (ch, arg) => handlers.get(ch)({}, arg), calls };
+  return {
+    invoke: (ch, arg) => handlers.get(ch)({}, arg),
+    send: (ch, arg) => listeners.get(ch)({}, arg),
+    calls,
+    opened,
+  };
 }
 
 test('apply refuses before any preview, then trashes only approved ids', async () => {
@@ -298,7 +312,7 @@ test('mission:config reports the Google connection state', async () => {
 test('cal-create reports maybe-created when the job dies after starting', async () => {
   const handlers = new Map();
   registerMissionIpc({
-    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
+    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn), on: () => {} },
     getModel: () => 'haiku',
     getEnv: () => ({}),
     run: async () => ({ ok: false, reason: 'timeout' }),
@@ -306,4 +320,32 @@ test('cal-create reports maybe-created when the job dies after starting', async 
   const draft = { title: 'T', start: '2026-10-10T09:00:00+02:00', end: '2026-10-10T10:00:00+02:00' };
   const res = await handlers.get('mission:cal-create')({}, draft);
   assert.equal(res.reason, 'maybe-created');
+});
+
+test('mission:github returns the telemetry with no model call', async () => {
+  const h = harness([]);
+  const res = await h.invoke('mission:github');
+  assert.deepEqual(res, { ok: true, github: { login: 'me', days: [], lists: {} } });
+  assert.equal(h.calls.length, 0);
+});
+
+test('mission:github passes a GithubError reason through, anything else is gh-failed', async () => {
+  const { GithubError } = require('../src/missiongithub.js');
+  const gh = fakeGithub();
+  gh.fetch = async () => {
+    throw new GithubError('gh-auth');
+  };
+  assert.deepEqual(await harness([], fakeGcal(), gh).invoke('mission:github'), { ok: false, reason: 'gh-auth' });
+  gh.fetch = async () => {
+    throw new Error('boom');
+  };
+  assert.deepEqual(await harness([], fakeGcal(), gh).invoke('mission:github'), { ok: false, reason: 'gh-failed' });
+});
+
+test('mission:github-open opens only an id from the last fetch, never a renderer URL', () => {
+  const h = harness([]);
+  h.send('mission:github-open', 'https://evil.example.com');
+  h.send('mission:github-open', 'prs:9');
+  h.send('mission:github-open', 'prs:0');
+  assert.deepEqual(h.opened, ['https://github.com/o/r/pull/1']);
 });

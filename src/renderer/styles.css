@@ -4774,11 +4774,148 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mc-month__more { font-size: var(--fs-3xs); color: var(--text-dim); }
 
 /* Mission Control panel (Ctrl+Shift+M): the palette overlay shell, widened to hold
-   the mail and calendar widgets side by side. Each column scrolls on its own
-   so a long review list never pushes the agenda off screen. */
-.mission-overlay .palette__modal { width: min(1280px, 96vw); height: 86vh; max-height: 86vh; display: flex; flex-direction: column; }
+   the mail, calendar and telemetry widgets side by side. Each column scrolls on
+   its own so a long review list never pushes the agenda off screen. */
+.mission-overlay .palette__modal { width: min(1840px, 97vw); height: 88vh; max-height: 88vh; display: flex; flex-direction: column; }
 .mission-overlay__heading { flex: 1; font-weight: 600; letter-spacing: 0.04em; }
-.mission-overlay__body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
+.mission-overlay__body { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-6); padding: var(--space-6); }
 .mission-overlay__col { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .mission-overlay__col > .panel__section { flex: 1; min-height: 0; }
-@media (max-width: 760px) { .mission-overlay__body { grid-template-columns: 1fr; overflow-y: auto; } }
+/* Below four comfortable columns: a 2x2 grid sharing the height, every cell
+   still scrolling on its own so all four widgets stay in view. */
+@media (max-width: 1500px) { .mission-overlay__body { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .mission-overlay__body { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: minmax(60vh, auto); overflow-y: auto; } }
+
+/* ---- Mission Control: telemetry widget (modules/missiontelemetry.js) ----
+   Bars and the budget marker size through custom properties set from JS (--h,
+   --at), so a re-render never writes layout-bound inline styles. */
+.mc-tele__body { display: flex; flex-direction: column; gap: var(--space-8); overflow-y: auto; min-height: 0; flex: 1; }
+.mc-tele__stat { margin: 0; font-size: var(--fs-sm); color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.45; }
+.mc-tele__flags { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.mc-tele__flags[hidden] { display: none; }
+.mc-tele__flag {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+.mc-tele__flagicon {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  font-weight: 700;
+  font-size: var(--fs-xs);
+  color: var(--bg-panel-2);
+  background: var(--text-dim);
+}
+.mc-tele__flag--warn { border-color: color-mix(in srgb, var(--warn) 55%, var(--edge)); }
+.mc-tele__flag--warn .mc-tele__flagicon { background: var(--warn); }
+.mc-tele__flag--bad { border-color: color-mix(in srgb, var(--bad) 60%, var(--edge)); }
+.mc-tele__flag--bad .mc-tele__flagicon { background: var(--bad); }
+.mc-tele__budget, .mc-tele__velocity { display: flex; flex-direction: column; gap: var(--space-3); }
+/* The even-pace marker sits on the usage bar (which keeps overflow hidden). */
+.mc-tele__budgetbar { position: relative; height: 10px; }
+.mc-tele__mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--at, 0) * 100%);
+  width: 2px;
+  background: var(--text);
+  opacity: 0.85;
+}
+.mc-tele__bars { display: flex; align-items: flex-end; gap: var(--space-2); height: 44px; }
+.mc-tele__bar {
+  flex: 1;
+  height: 100%;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  background: color-mix(in srgb, var(--neon-magenta) 45%, var(--surface-panel-2));
+  transform: scaleY(max(0.04, var(--h, 0)));
+  transform-origin: bottom;
+  transition: transform var(--dur-normal) var(--ease-smooth);
+}
+.mc-tele__bar.is-current { background: var(--neon-cyan); }
+.mc-tele__heat { display: flex; gap: var(--space-1); }
+.mc-tele__heatcol { display: flex; flex-direction: column; gap: var(--space-1); flex: 1; max-width: 14px; }
+.mc-tele__cell { aspect-ratio: 1; border-radius: var(--radius-xs); background: var(--surface-panel-2); border: var(--border-w) solid var(--edge); }
+.mc-tele__cell.is-future { visibility: hidden; }
+.mc-tele__cell[data-level='1'] { background: color-mix(in srgb, var(--good) 25%, var(--surface-panel-2)); }
+.mc-tele__cell[data-level='2'] { background: color-mix(in srgb, var(--good) 50%, var(--surface-panel-2)); }
+.mc-tele__cell[data-level='3'] { background: color-mix(in srgb, var(--good) 75%, var(--surface-panel-2)); }
+.mc-tele__cell[data-level='4'] { background: var(--good); }
+.mc-tele__open { display: flex; flex-direction: column; gap: var(--space-6); }
+.mc-tele__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-hair);
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.mc-tele__item:hover, .mc-tele__item:focus-visible { border-color: var(--edge-glow); }
+.mc-tele__itemtitle { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .mc-tele__bar { transition: none; } }
+
+/* ---- Mission Control: News widget (modules/missionnews.js) ------------ */
+.mc-news__picker { display: flex; flex-direction: column; gap: var(--space-6); }
+.mc-news__picker[hidden], .hint[hidden] { display: none; }
+.mc-news__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.mc-news__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+}
+.mc-news__name {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mc-news__name:hover, .mc-news__name:focus-visible { color: var(--neon-cyan); text-decoration: underline; }
+.mc-news__meta { font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; }
+.mc-news__remove { min-width: 0; padding: 0 var(--space-3); }
+.mc-news__add { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+.mc-news__add .mc-input { flex: 1 1 140px; min-width: 0; }
+.mc-news__platform { flex: 0 0 auto; width: auto; }
+.mc-news__tps { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); width: 100%; margin: 0; padding: 0; border: 0; }
+.mc-news__tp { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--fs-xs); color: var(--text-dim); cursor: pointer; }
+.mc-news__section { gap: var(--space-3); }
+.mc-news__briefing {
+  padding: var(--space-4) var(--space-5);
+  border: var(--border-w) solid color-mix(in srgb, var(--neon-cyan) 45%, var(--edge));
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+}
+.mc-news__bullets { margin: 0; padding-left: var(--space-8); display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-sm); line-height: 1.45; }
+.mc-news__pickitem { border-color: color-mix(in srgb, var(--neon-magenta) 45%, var(--edge)); }
+.mc-news__more { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-xs); color: var(--text-dim); }
+.mc-news__more[open] > .mc-tele__item { margin-top: var(--space-2); }
+.mc-news__more > summary { cursor: pointer; }

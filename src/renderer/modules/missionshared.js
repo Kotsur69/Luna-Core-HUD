@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Mission Control: helpers shared by the mail and calendar widgets
+// LunaCore - Mission Control: helpers shared by the Mission Control widgets
 // ----------------------------------------------------------------------------
 // The model picker (one pref, missionModel, read by both widgets), the error
 // reason -> i18n key table, and the "$0.04" cost suffix. Every job result from
@@ -30,6 +30,16 @@ const ERROR_KEYS = {
   'gcal-timeout': 'mc.err.gcalTimeout',
   'gcal-network': 'mc.err.gcalNetwork',
   'gcal-failed': 'mc.err.gcalFailed',
+  'gh-missing': 'mc.err.ghMissing',
+  'gh-auth': 'mc.err.ghAuth',
+  'gh-timeout': 'mc.err.ghTimeout',
+  'gh-failed': 'mc.err.ghFailed',
+  'news-not-setup': 'mc.err.newsNotSetup',
+  'news-no-python': 'mc.err.newsNoPython',
+  'news-setup-failed': 'mc.err.newsSetupFailed',
+  'news-fetch-failed': 'mc.err.newsFetchFailed',
+  'news-timeout': 'mc.err.newsTimeout',
+  'news-nothing-selected': 'mc.err.newsNothing',
   generic: 'mc.err.generic',
 };
 

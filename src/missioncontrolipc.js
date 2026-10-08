@@ -2,7 +2,9 @@
 // LunaCore - Mission Control IPC (main process)
 // ----------------------------------------------------------------------------
 // Wires the mission:* channels to the mail and calendar jobs, and the agenda
-// to the Google Calendar API client (src/gcal.js - no model call). Lives outside
+// to the Google Calendar API client (src/gcal.js - no model call), the
+// GitHub telemetry to the gh CLI (src/missiongithub.js), and News to the
+// vendored Agent-Reach bridge plus a Haiku summary (src/missionnews.js). Lives outside
 // main.js on purpose (main.js is far past the file-size guideline); main.js
 // only calls registerMissionIpc() once.
 //
@@ -21,8 +23,15 @@ const { loadMissionConfig } = require('./missionconfig');
 const mail = require('./missionmail');
 const cal = require('./missioncal');
 const { createGcal } = require('./gcal');
+const { createGithub } = require('./missiongithub');
+const { createNews, buildNewsPrompt, parseNewsSummary, publicSections } = require('./missionnews');
+const newsStore = require('./missionnewsstore');
 
-const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, create: 120000 };
+/** Minimum gap between two links opened from the renderer. */
+const OPEN_GAP_MS = 500;
+
+const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, create: 120000, news: 180000 };
+const LANGS = ['pl', 'en'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Local ISO 8601 with the zone offset, e.g. 2026-10-08T14:03:00+02:00. */
@@ -39,7 +48,6 @@ function localIsoNow(date = new Date()) {
 
 const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
-/**
 /** Create failures where the event may still exist in the calendar. */
 const UNSURE_CREATE = new Set(['timeout', 'cli-error', 'bad-json']);
 
@@ -53,14 +61,43 @@ function gcalFailure(err) {
   return { ok: false, reason: 'gcal-failed' };
 }
 
+/** A typed error (GithubError, NewsError) keeps its reason; anything else gets `fallback`. */
+function typedFailure(label, err, fallback) {
+  const reason = err && typeof err.reason === 'string' ? err.reason : fallback;
+  console.error(`[mission] ${label}:`, reason, err && err.message);
+  return { ok: false, reason };
+}
+
 /**
- * @param {{ipcMain:object, getModel:()=>string, getEnv:()=>Record<string,string>, run?:Function, gcal?:object}} deps
- *   `run` and `gcal` are injectable so tests can exercise the handlers
- *   without a CLI or the network.
+ * @param {{ipcMain:object, getModel:()=>string, getEnv:()=>Record<string,string>, run?:Function,
+ *          gcal?:object, github?:object, news?:object, store?:object, openExternal?:(url:string)=>void}} deps
+ *   Everything after getEnv is injectable so tests can exercise the handlers
+ *   without a CLI, Python, the network, the disk or a browser.
  */
-function registerMissionIpc({ ipcMain, getModel, getEnv, run = runJob, gcal = createGcal() }) {
+function registerMissionIpc({
+  ipcMain,
+  getModel,
+  getEnv,
+  run = runJob,
+  gcal = createGcal(),
+  github = createGithub(),
+  news = createNews(),
+  store = newsStore,
+  openExternal = (url) => require('electron').shell.openExternal(url),
+}) {
   let lastPreview = null;
   const busy = new Set();
+  let lastOpenAt = 0;
+
+  /** Opens what `resolve` maps the renderer's key to - throttled, so a
+   *  misbehaving renderer cannot fire a burst of browser tabs. */
+  const openResolved = (resolve) => (_event, key) => {
+    const url = resolve(key);
+    const now = Date.now();
+    if (!url || now - lastOpenAt < OPEN_GAP_MS) return;
+    lastOpenAt = now;
+    openExternal(url);
+  };
 
   const model = () => {
     const m = getModel();
@@ -166,6 +203,71 @@ function registerMissionIpc({ ipcMain, getModel, getEnv, run = runJob, gcal = cr
       }
     })
   );
+
+  // GitHub telemetry through the `gh` CLI (src/missiongithub.js) - free.
+  ipcMain.handle('mission:github', () =>
+    guarded('github', async () => {
+      try {
+        return { ok: true, github: await github.fetch() };
+      } catch (err) {
+        return typedFailure('github', err, 'gh-failed');
+      }
+    })
+  );
+
+  // The renderer names an item id from the last fetch, never a URL.
+  ipcMain.on('mission:github-open', openResolved((id) => github.urlFor(id)));
+
+  // ---- News: Agent-Reach fetch (src/missionnews.js) + one lean Haiku job ----
+
+  ipcMain.handle('mission:news-config', () => store.loadNews());
+
+  ipcMain.handle('mission:news-save', (_event, raw) => {
+    try {
+      return { ok: true, news: store.saveNews(raw) };
+    } catch (err) {
+      console.error('[mission] news save failed:', err && err.message);
+      return { ok: false, reason: 'generic' };
+    }
+  });
+
+  ipcMain.handle('mission:news-status', () => guarded('news-status', async () => ({ ok: true, status: await news.status() })));
+
+  // Creates the dedicated venv and installs Agent-Reach's dependencies (~1 min).
+  ipcMain.handle('mission:news-setup', () =>
+    guarded('news-setup', async () => {
+      try {
+        return { ok: true, status: await news.setup() };
+      } catch (err) {
+        return typedFailure('news setup', err, 'news-setup-failed');
+      }
+    })
+  );
+
+  // req: {sourceIds[], topicIds[], lang}. Ids are looked up in the saved store;
+  // the renderer cannot introduce a target of its own.
+  ipcMain.handle('mission:news-scan', (_event, req) =>
+    guarded('news-scan', async () => {
+      const selection = { sourceIds: req && req.sourceIds, topicIds: req && req.topicIds };
+      let sections;
+      try {
+        sections = await news.fetchSections(store.loadNews(), selection);
+      } catch (err) {
+        return typedFailure('news fetch', err, 'news-fetch-failed');
+      }
+      // Nothing came back: no point paying for a summary of nothing.
+      if (!sections.some((s) => s.entries.length)) {
+        return { ok: true, briefing: [], sections: publicSections(sections), costUsd: null };
+      }
+      const lang = LANGS.includes(req && req.lang) ? req.lang : 'pl';
+      const res = await job('news', buildNewsPrompt(sections, lang), { lean: true });
+      if (!res.ok) return { ...res, sections: publicSections(sections) };
+      const { briefing, summaries } = parseNewsSummary(res.answer, sections);
+      return { ok: true, briefing, sections: publicSections(sections, summaries), costUsd: res.costUsd };
+    })
+  );
+
+  ipcMain.on('mission:news-open', openResolved((key) => news.urlFor(key)));
 
   ipcMain.handle('mission:cal-parse', (_event, text) =>
     guarded('parse', async () => {

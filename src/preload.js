@@ -229,6 +229,22 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionCalCreate: (draft) => ipcRenderer.invoke('mission:cal-create', draft),
   /** Browser consent for read-only Google Calendar access. Promise<{ok, gcal} | {ok:false, reason}>. */
   missionGcalConnect: () => ipcRenderer.invoke('mission:gcal-connect'),
+  /** GitHub telemetry via the gh CLI (no model). Promise<{ok, github:{login, days, lists}} | {ok:false, reason}>. */
+  missionGithub: () => ipcRenderer.invoke('mission:github'),
+  /** Opens a PR/issue from the last fetch by its item id - main resolves the URL. */
+  missionGithubOpen: (id) => ipcRenderer.send('mission:github-open', id),
+  /** Saved News sources and topics. Promise<{sources, topics}>. */
+  missionNewsConfig: () => ipcRenderer.invoke('mission:news-config'),
+  /** Replaces the saved sources/topics; main validates. Promise<{ok, news} | {ok:false, reason}>. */
+  missionNewsSave: (news) => ipcRenderer.invoke('mission:news-save', news),
+  /** Agent-Reach venv state. Promise<{ok, status:{ready, installed, agentReach?, python?}}>. */
+  missionNewsStatus: () => ipcRenderer.invoke('mission:news-status'),
+  /** Creates the News venv and installs Agent-Reach's deps. Promise<{ok, status} | {ok:false, reason}>. */
+  missionNewsSetup: () => ipcRenderer.invoke('mission:news-setup'),
+  /** Fetch + Haiku summary of saved ids. Promise<{ok, briefing, sections, costUsd} | {ok:false, reason}>. */
+  missionNewsScan: (req) => ipcRenderer.invoke('mission:news-scan', req),
+  /** Opens a fetched entry by key - main resolves the URL. */
+  missionNewsOpen: (key) => ipcRenderer.send('mission:news-open', key),
 
   // --- Highlight extractor (batch clip trimmer) ---
   /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */
