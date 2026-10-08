@@ -123,6 +123,11 @@ const TOOLS = [
             text: { type: 'string' },
             ...CARD_PROPERTIES,
             dependsOn: { type: 'array', items: { type: 'number' }, description: '`at` ids of other cards.' },
+            original: {
+              type: 'string',
+              description:
+                "The user's loose note this card was rewritten from. Set once; ignored if the card already has one.",
+            },
           },
         },
       },
@@ -219,6 +224,10 @@ function applyUpdate(list, at, patch) {
   const changes = Object.fromEntries(
     ['text', ...CARD_FIELDS].filter((key) => key in patch && patch[key] !== null).map((key) => [key, patch[key]]),
   );
+  // `original` is write-once and not in CARD_FIELDS, so null cannot remove
+  // it: it is the user's own words, the yardstick a later rewrite is
+  // checked against, and no rewrite gets to move that yardstick.
+  if (!current.original && typeof patch.original === 'string') changes.original = patch.original;
   // done/at are never patchable - ticking a card is the user's (or, later,
   // the run controller's) call, not the planning session's.
   const card = normalizeTodo({ ...kept, ...changes, done: current.done, at: current.at });
@@ -518,6 +527,7 @@ module.exports = {
   MAX_TASKS_PER_CALL,
   PROTOCOL_VERSIONS,
   SERVER_NAME,
+  TOOLS,
   freshAts,
   applyAdd,
   applyUpdate,

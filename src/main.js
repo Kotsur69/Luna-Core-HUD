@@ -69,7 +69,7 @@ const { createKeepAwake, CONFIG_FILE: KEEP_AWAKE_CONFIG } = require('./keepawake
 // Env for every `claude` we start: inherited env minus session markers + layers.
 const { withColorSupport, buildSessionEnv } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
-const { withSessionId, withIntakeMcp, withTaskBrief, findExecutable } = require('./launch');
+const { withSessionId, withIntakeMcp, intakeState, withTaskBrief, findExecutable } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject, removeProject } = require('./projects');
 const {
@@ -406,6 +406,8 @@ function sessionSummary(s) {
     branch: s.branch || null,
     // A local-model tab still in its pre-spawn prep counts as alive.
     alive: s.alive || s.preparing === true,
+    // 'ready' | 'off' | 'none' | null - drives the to-do widget's ✨ button.
+    todoTools: s.todoTools || null,
   };
 }
 
@@ -1235,11 +1237,18 @@ function spawnInto(session, profile, launch = null) {
   // intake config is prepared in parallel; it never blocks or fails a launch
   // (prepareIntake resolves null when off or unavailable).
   const startCommand = pinnedCommand || command;
+  // Whether the to-do widget's ✨ can work in this tab - see intakeState().
+  // null while a start command is still on its way; a bare shell is 'none'.
+  session.todoTools = startCommand ? null : 'none';
   if (startCommand) {
     const intakeConfig = prepareIntake(session).catch(() => null);
     setTimeout(() => {
       intakeConfig.then((configPath) => {
-        if (session.proc === proc) proc.write(`${withIntakeMcp(startCommand, configPath)}\r`);
+        if (session.proc !== proc) return;
+        const launched = withIntakeMcp(startCommand, configPath);
+        proc.write(`${launched}\r`);
+        session.todoTools = intakeState(startCommand, launched);
+        broadcastSessions();
       });
     }, 600);
   }
@@ -1869,8 +1878,16 @@ function registerIpc() {
   ipcMain.on('pty:paste', (_event, payload) => {
     const session = resolveTargetSession(payload && payload.sessionId);
     if (!session || !session.proc || !payload || typeof payload.text !== 'string') return;
-    // Line-ending normalization: only "\n" enters the input buffer.
-    const text = payload.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // Line-ending normalization: only "\n" enters the input buffer. Control
+    // characters are stripped like writePty's paste does: pasted text can be
+    // model-written (a to-do card, the ✨ rewrite prompt), and an embedded
+    // ESC[201~ would end the bracketed paste early and turn the rest into
+    // live keystrokes - which a `submit` Enter would then run.
+    const text = payload.text
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0b-\x1f\x7f\x80-\x9f]/g, '');
     session.proc.write(`\x1b[200~${text}\x1b[201~`);
     if (payload.submit) session.proc.write('\r');
     session.approvalShowing = false;

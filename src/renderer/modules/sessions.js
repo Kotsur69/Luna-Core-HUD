@@ -46,7 +46,7 @@ import { applyFileEvents, trackBucketFiles, applyGitFiles, trackBucketGitFiles }
 import { applyTurnEnd, trackBucketTurn } from './sessiontimeline.js';
 import { applyMcpEvents, trackBucketMcp } from './mcp.js';
 import { syncSwitchers } from './switchers.js';
-import { syncTodoProject } from './todo.js';
+import { syncTodoProject, setTodoToolsState } from './todo.js';
 import { sfx } from './sound.js';
 import { agentStream } from './keysynth.js';
 
@@ -208,6 +208,7 @@ function showSession(sessionId) {
   restoreActive();
   syncSwitchers(activeMeta());
   syncTodoProject();
+  setTodoToolsState(activeMeta());
   renderTabs();
   fitAndResize(); // a background tab did not know its own size
   term.focus();
@@ -298,6 +299,8 @@ window.lunacore.onSessions(({ sessions, activeSessionId: activeId }) => {
       showSession(activeId);
     }
   }
+  // The active tab's own flag may have flipped (its `claude` just launched).
+  setTodoToolsState(activeMeta());
   renderTabs();
 });
 

@@ -67,6 +67,20 @@ function withIntakeMcp(command, configPath) {
   return `${cmd} --mcp-config '${configPath}'`;
 }
 
+/**
+ * What a tab's start command means for the intake MCP tools, for the to-do
+ * widget's "rewrite with Claude" button: 'ready' when withIntakeMcp() really
+ * attached the config, 'off' for a `claude` launched without it (tools turned
+ * off, no config, or --strict-mcp-config), 'none' when the tab is not Claude.
+ * @param {string} command the start command as configured
+ * @param {string} launched what withIntakeMcp() turned it into
+ * @returns {'ready'|'off'|'none'}
+ */
+function intakeState(command, launched) {
+  if (!isClaudeCommand(command)) return 'none';
+  return launched !== String(command || '').trim() ? 'ready' : 'off';
+}
+
 /** True when a start command launches the `claude` CLI itself. */
 function isClaudeCommand(command) {
   const first = String(command || '').trim().split(/\s+/)[0].replace(/^["']|["']$/g, '');
@@ -173,6 +187,7 @@ function findExecutable(name, pathEnv, isWindows, exists) {
 module.exports = {
   withSessionId,
   withIntakeMcp,
+  intakeState,
   withTaskBrief,
   WORKER_PERMISSION_MODES,
   isClaudeCommand,

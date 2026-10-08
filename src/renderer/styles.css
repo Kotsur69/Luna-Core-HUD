@@ -3925,6 +3925,60 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   gap: var(--space-2);
 }
 
+/* ✨ while it cannot work here (no Claude, or its To-do tools are off). It
+   stays hoverable - aria-disabled, not disabled - so the tooltip saying why
+   still shows. */
+.todo-item__actions .port-btn[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: help;
+}
+
+/* The ✎ form in place of a row's text. Rows are drag handles with selection
+   suppressed (see .todo-item above); the form has to undo that or nothing
+   typed into it could be selected. Top-aligned so the checkbox and buttons
+   stay with the title instead of floating to the middle of a tall form. */
+.todo-item--editing {
+  align-items: start;
+  border-color: var(--edge-glow);
+  box-shadow: 0 0 var(--glow-size-sm) var(--glow);
+}
+.todo-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  user-select: text;
+}
+.todo-edit__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-xs);
+}
+.todo-edit__input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  line-height: 1.35;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--edge);
+  background: var(--surface-panel);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+.todo-edit__input:focus { outline: none; border-color: var(--edge-glow); }
+.todo-edit__bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.todo-edit__save { color: var(--neon-cyan); border-color: var(--edge-glow); }
+
+/* The loose note a card was rewritten from: a reference, quieter than the card. */
+.todo-card__original { opacity: 0.75; font-style: italic; }
+
 .dev-row {
   display: grid;
   grid-template-columns: auto 1fr auto auto;

@@ -99,6 +99,10 @@ function normalizeCardFields(raw) {
     size: SIZES.includes(raw.size) ? raw.size : null,
     model: MODELS.includes(raw.model) ? raw.model : null,
     dependsOn: cleanDepends(raw.dependsOn),
+    // The loose note a card was rewritten from (the to-do widget's "rewrite
+    // with Claude"), kept so the user can check the card did not drift from
+    // what they meant. Same cap as a title: it WAS a title.
+    original: cleanString(raw.original, MAX_TEXT_CHARS),
   };
   return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null));
 }

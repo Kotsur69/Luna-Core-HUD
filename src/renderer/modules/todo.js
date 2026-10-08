@@ -30,9 +30,16 @@ import { defineWidget } from './registry.js';
 import { mountGodModeControl, refreshGodModeControl } from './godmode.js';
 import { mountKeepAwakeControl } from './keepawake.js';
 import { mountOrchestraButton } from './orchestra.js';
+import { MAX_TEXT_CHARS, isCard, cardPrompt, editTodo, refinePrompt } from './todocards.js';
+import {
+  initTodoEdit, isEditing, toggleEdit, forgetEdit, pruneEdit, editForm, focusEditField, cardSection,
+} from './todoedit.js';
+
+// The pure card helpers moved to todocards.js; re-exported so callers and
+// test/todo.test.js keep importing the whole widget API from one place.
+export { isCard, cardPrompt, editTodo, refinePrompt };
 
 const SAVE_MS = 400;
-const MAX_TEXT_CHARS = 1000;
 
 let els = null;
 let items = [];
@@ -73,6 +80,12 @@ const CLICK_SUPPRESS_MS = 60;
 // means anything that cannot wait it out - a second drag, an unmount - can
 // end it early instead of racing it.
 let settle = null;
+
+// Whether ✨ can work in the active tab, as main reports it per session
+// (sessionSummary's todoTools): 'ready' when a `claude` process started with
+// the intake MCP tools attached, 'off' when it is Claude without them,
+// anything else when the tab is not running Claude at all.
+let todoToolsState = null;
 
 /**
  * Appends an item. Returns a NEW array (immutability rule) and rejects
@@ -183,26 +196,6 @@ export function mergeExternal(local, disk, knownAts, isDirty) {
   return fresh.length ? [...current, ...fresh] : current;
 }
 
-/** Whether an item carries any task-card field beyond text/done/at. */
-export function isCard(item) {
-  return Boolean(item && (item.details || item.acceptance || item.files || item.verify || item.size || item.model));
-}
-
-/**
- * What the inject button pastes: the title alone for a plain item; for a
- * card, title + details + done-when + verify, so the pasted prompt is as
- * self-contained as the card was written to be.
- */
-export function cardPrompt(item) {
-  if (!isCard(item)) return item.text;
-  const parts = [item.text];
-  if (item.details) parts.push(item.details);
-  if (item.acceptance) parts.push(`Definition of done:\n${item.acceptance.map((a) => `- ${a}`).join('\n')}`);
-  if (item.files) parts.push(`Files: ${item.files.join(', ')}`);
-  if (item.verify) parts.push(`Verify with: ${item.verify}`);
-  return parts.join('\n\n');
-}
-
 // `at`s this widget has already seen on disk - see mergeExternal().
 let knownAts = new Set();
 
@@ -270,6 +263,8 @@ export function syncTodoProject() {
   refreshGodModeControl(); // the God Mode line shows the active tab's own run
   if (!els) return;
   flushPendingSave();
+  // An open form belongs to the previous project's list.
+  forgetEdit();
   boundSessionId = getActiveSessionId();
   window.lunacore
     .getTodos(boundSessionId)
@@ -383,8 +378,8 @@ function autoScrollStep(gesture) {
 function startDrag(event, li, index) {
   // A second pointer (or a second finger) must not hijack a live gesture.
   if (drag || event.button !== 0) return;
-  // The checkbox and the inject/remove buttons own their own presses.
-  if (event.target.closest('input, button')) return;
+  // The checkbox, the row buttons and an open edit form own their own presses.
+  if (event.target.closest('input, button, textarea, .todo-edit')) return;
   // Grabbing again mid-settle would measure rows that are still moving, and
   // getBoundingClientRect() reports the TRANSFORMED box - every midpoint
   // below would be read off a position no row is going to keep. Land the
@@ -547,6 +542,8 @@ function endDrag(keepMove) {
 
 function renderRows() {
   if (!els) return;
+  // The row being edited was removed (Claude, another window) - nothing to save into.
+  pruneEdit(items);
   els.list.innerHTML = '';
   items.forEach((item, index) => {
     const li = document.createElement('li');
@@ -581,29 +578,77 @@ function renderRows() {
       renderRows();
     });
 
-    const actions = document.createElement('span');
-    actions.className = 'todo-item__actions';
-
-    const inject = document.createElement('button');
-    inject.className = 'port-btn';
-    inject.textContent = '⚡';
-    inject.title = t('todo.inject');
-    inject.addEventListener('click', () => {
-      window.lunacore.pastePrompt(cardPrompt(item), false);
-      pulse(inject);
-      term.focus();
-    });
-
-    const drop = document.createElement('button');
-    drop.className = 'port-btn';
-    drop.textContent = '✕';
-    drop.title = t('todo.remove');
-    drop.addEventListener('click', () => commit(removeTodo(items, index)));
-
-    actions.append(inject, drop);
-    li.append(box, isCard(item) ? cardBody(item, text) : text, actions);
+    const editingRow = isEditing(item.at);
+    if (editingRow) li.classList.add('todo-item--editing');
+    const middle = editingRow ? editForm(item) : isCard(item) ? cardBody(item, text) : text;
+    li.append(box, middle, rowActions(item, index));
     els.list.append(li);
   });
+  focusEditField(els.list);
+}
+
+/** A small icon button for a row's action cell. */
+function rowButton(glyph, title, onClick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'port-btn';
+  btn.textContent = glyph;
+  btn.title = title;
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+/** The ✎ ✨ ⚡ ✕ cell of one row. */
+function rowActions(item, index) {
+  const actions = document.createElement('span');
+  actions.className = 'todo-item__actions';
+
+  const edit = rowButton('✎', t('todo.edit'), () => toggleEdit(item));
+
+  const refineTitle = t({
+    ready: 'todo.refine',
+    off: 'todo.refineOff',
+    none: 'todo.refineNotClaude',
+  }[todoToolsState] || 'todo.refineStarting');
+  const refine = rowButton('✨', refineTitle, () => {
+    if (todoToolsState !== 'ready') return;
+    window.lunacore.pastePrompt(refinePrompt(item), true);
+    pulse(refine);
+    term.focus();
+  });
+  // aria-disabled rather than `disabled`: a disabled button swallows the
+  // hover, and the tooltip explaining WHY it is off is the whole point.
+  refine.setAttribute('aria-disabled', String(todoToolsState !== 'ready'));
+
+  const inject = rowButton('⚡', t('todo.inject'), () => {
+    window.lunacore.pastePrompt(cardPrompt(item), false);
+    pulse(inject);
+    term.focus();
+  });
+
+  const drop = rowButton('✕', t('todo.remove'), () => {
+    if (isEditing(item.at)) forgetEdit();
+    commit(removeTodo(items, index));
+  });
+
+  actions.append(edit, refine, inject, drop);
+  return actions;
+}
+
+/**
+ * Called by sessions.js with the active tab's summary whenever the tab list
+ * or the active tab changes, so ✨ is only live where it can work.
+ * @param {{todoTools?:string}|undefined} meta
+ */
+export function setTodoToolsState(meta) {
+  // A tab whose process has exited is a dead shell now, whatever it started as.
+  const exited = Boolean(meta) && meta.alive === false;
+  const next = exited ? 'none' : meta && typeof meta.todoTools === 'string' ? meta.todoTools : null;
+  if (next === todoToolsState) return;
+  todoToolsState = next;
+  // A repaint mid-drag would tear out the row being carried; the drop's own
+  // commit repaints with the new state anyway.
+  if (!drag && !settle) renderRows();
 }
 
 /** A small text chip for a card's meta line. */
@@ -611,17 +656,6 @@ function chip(label) {
   const el = document.createElement('span');
   el.className = 'todo-chip';
   el.textContent = label;
-  return el;
-}
-
-/** One labelled block of the expanded card. */
-function cardSection(label, value) {
-  const el = document.createElement('div');
-  el.className = 'todo-card__section';
-  const head = document.createElement('span');
-  head.className = 'todo-card__label';
-  head.textContent = label;
-  el.append(head, document.createTextNode(` ${value}`));
   return el;
 }
 
@@ -660,6 +694,11 @@ function cardBody(item, text) {
       return dep ? dep.text : String(at);
     });
     card.append(cardSection(t('todo.dependsOn', { n: titles.length }), titles.join(' · ')));
+  }
+  if (item.original) {
+    const original = cardSection(t('todo.original'), item.original);
+    original.classList.add('todo-card__original');
+    card.append(original);
   }
   body.append(card);
   return body;
@@ -702,6 +741,7 @@ defineWidget({
     };
 
     const offLang = onLangChange(render);
+    initTodoEdit({ getItems: () => items, commit, repaint: renderRows });
 
     els.form.addEventListener('submit', (event) => {
       // Without this the form would navigate the renderer away from index.html
@@ -754,6 +794,7 @@ defineWidget({
       // but the reorder itself is the user's, so it lands rather than dies.
       endDrag(true);
       flushSettle();
+      forgetEdit();
       offLang();
       offGodMode();
       offKeepAwake();

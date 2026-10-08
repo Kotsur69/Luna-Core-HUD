@@ -19,9 +19,10 @@ const {
   IntakeServer,
   MAX_TASKS_PER_CALL,
   PROTOCOL_VERSIONS,
+  TOOLS,
 } = require('../src/intake.js');
 const { normalizeTodo, MAX_ITEMS } = require('../src/todo.js');
-const { withIntakeMcp } = require('../src/launch.js');
+const { withIntakeMcp, intakeState } = require('../src/launch.js');
 
 const NOW = 1_800_000_000_000;
 
@@ -125,6 +126,25 @@ test('applyUpdate rejects unknown cards and dangling dependencies', () => {
   assert.equal(applyUpdate(list, 1, { dependsOn: [1] }).ok, false);
   assert.equal(applyUpdate(list, 1, { text: '' }).ok, false);
   assert.equal(applyUpdate(list, '1', {}).ok, false);
+});
+
+test('applyUpdate sets original once and never overwrites or removes it', () => {
+  const list = [{ text: 'loose note', done: false, at: 1 }];
+  const first = applyUpdate(list, 1, { text: 'Real title', details: 'd', original: 'loose note' });
+  assert.equal(first.ok, true);
+  assert.equal(first.card.original, 'loose note');
+
+  const again = applyUpdate(first.list, 1, { original: 'something else' });
+  assert.equal(again.ok, true);
+  assert.equal(again.card.original, 'loose note');
+
+  const cleared = applyUpdate(first.list, 1, { original: null });
+  assert.equal(cleared.card.original, 'loose note');
+});
+
+test('luna_todo_update advertises the original field', () => {
+  const update = TOOLS.find((tool) => tool.name === 'luna_todo_update');
+  assert.ok(update.inputSchema.properties.patch.properties.original);
 });
 
 test('listView hides done items unless asked', () => {
@@ -242,4 +262,13 @@ test('IntakeServer enforces token, host, origin and method; serves tools', async
   } finally {
     await server.stop();
   }
+});
+
+test('intakeState tells a tools-attached claude from a bare one and from a shell', () => {
+  const cmd = 'claude --model opus';
+  assert.equal(intakeState(cmd, withIntakeMcp(cmd, 'C:/cfg.json')), 'ready');
+  assert.equal(intakeState(cmd, withIntakeMcp(cmd, null)), 'off');
+  const strict = 'claude --strict-mcp-config';
+  assert.equal(intakeState(strict, withIntakeMcp(strict, 'C:/cfg.json')), 'off');
+  assert.equal(intakeState('pwsh', withIntakeMcp('pwsh', 'C:/cfg.json')), 'none');
 });
