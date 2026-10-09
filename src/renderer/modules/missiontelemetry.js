@@ -18,6 +18,7 @@ import { defineWidget } from './registry.js';
 import { onLangChange, onUsageUpdate } from './bus.js';
 import { errorText, setStatus, ipcFailed } from './missionshared.js';
 import { githubVelocity, heatmap, budgetPace, paceFlags } from './missionpace.js';
+import { mountLedger } from './missionledger.js';
 
 const STALE_MS = 10 * 60 * 1000;
 const LISTS = ['reviews', 'prs', 'issues'];
@@ -218,18 +219,27 @@ defineWidget({
       budget: root.querySelector('#mc-tele-budget'),
       open: root.querySelector('#mc-tele-open'),
     };
-    els.refresh.addEventListener('click', load);
+    const ledger = mountLedger(root.querySelector('#mc-tele-ledger'), weeklyLimit);
+    els.refresh.addEventListener('click', () => {
+      load();
+      ledger.load(true);
+    });
     const offUsage = onUsageUpdate((u) => {
       usage = u;
       render();
+      ledger.usageChanged();
     });
-    const offLang = onLangChange(render);
+    const offLang = onLangChange(() => {
+      render();
+      ledger.render();
+    });
     render();
     if (Date.now() - fetchedAt > STALE_MS) load();
     else if (github) setStatus(els.status, t('mc.tele.loaded', { login: github.login }));
     return () => {
       offUsage();
       offLang();
+      ledger.unmount();
       els = null;
     };
   },

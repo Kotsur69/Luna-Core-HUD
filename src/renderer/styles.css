@@ -4871,6 +4871,72 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mc-tele__itemtitle { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .mc-tele__bar { transition: none; } }
 
+/* ---- Mission Control: "Where Claude went" ledger (modules/missionledger.js) ---- */
+/* Class colours are fixed, not theme accents: themes remap --neon-* (cyan can
+   become orange, magenta green), which made work and fun look alike. Blue vs
+   pink stays apart for the common colour-vision deficiencies too. */
+.mc-ledger {
+  --ledger-work: #3d8bff;
+  --ledger-fun: #ff5fb4;
+  --ledger-other: #8a8f9c;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.mc-ledger__bar {
+  display: flex;
+  height: var(--space-6);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
+  background: var(--surface-panel-2);
+  overflow: hidden;
+}
+.mc-ledger__seg { flex: 0 0 0; min-width: 2px; }
+.mc-ledger__seg--work { background: var(--ledger-work); }
+.mc-ledger__seg--fun { background: var(--ledger-fun); }
+.mc-ledger__seg--other { background: var(--ledger-other); }
+/* Hatched, not just a hue: "unassigned" must read without colour. */
+.mc-ledger__seg--unassigned {
+  background: repeating-linear-gradient(135deg, var(--warn) 0 var(--space-1), transparent var(--space-1) var(--space-2));
+}
+.mc-ledger__seg--free { background: transparent; min-width: 0; }
+.mc-ledger__legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); font-size: var(--fs-xs); color: var(--text-dim); }
+.mc-ledger__legenditem { display: inline-flex; align-items: center; gap: var(--space-2); }
+.mc-ledger__swatch { display: inline-block; width: var(--space-3); height: var(--space-3); border-radius: var(--radius-xs); }
+.mc-ledger__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.mc-ledger__row, .mc-ledger__assignrow { display: flex; align-items: center; gap: var(--space-3); font-size: var(--fs-sm); }
+.mc-ledger__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.mc-ledger__nums { font-variant-numeric: tabular-nums; color: var(--text); white-space: nowrap; }
+.mc-ledger__chip {
+  font-size: var(--fs-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+  color: var(--surface-panel);
+  white-space: nowrap;
+}
+/* The chip carries text, so no hatch behind it - a warn outline says "unassigned". */
+.mc-ledger__chip.mc-ledger__seg--unassigned { background: transparent; color: var(--warn); border: var(--border-w) solid var(--warn); }
+.mc-ledger__clear { width: auto; height: auto; padding: var(--space-1) var(--space-4); font-size: var(--fs-xs); }
+.mc-ledger__assign { display: flex; flex-direction: column; gap: var(--space-2); }
+.mc-ledger__toggle { display: inline-flex; border: var(--border-w) solid var(--edge); border-radius: var(--radius-sm); overflow: hidden; }
+.mc-ledger__pick {
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  padding: var(--space-1) var(--space-3);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.mc-ledger__pick + .mc-ledger__pick { border-left: var(--border-w) solid var(--edge); }
+.mc-ledger__pick:hover { background: var(--surface-panel-2); }
+.mc-ledger__pick:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: -2px; }
+.mc-ledger__pick:disabled { opacity: 0.45; cursor: progress; }
+.mc-ledger__foot { display: flex; flex-direction: column; gap: var(--space-2); }
+.mc-ledger__foot .hint { margin: 0; }
+.mc-ledger__dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-ledger__actions { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+
 /* ---- Mission Control: News widget (modules/missionnews.js) ------------ */
 .mc-news__picker { display: flex; flex-direction: column; gap: var(--space-6); }
 .mc-news__picker[hidden], .hint[hidden] { display: none; }

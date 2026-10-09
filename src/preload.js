@@ -245,6 +245,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionNewsScan: (req) => ipcRenderer.invoke('mission:news-scan', req),
   /** Opens a fetched entry by key - main resolves the URL. */
   missionNewsOpen: (key) => ipcRenderer.send('mission:news-open', key),
+  /** Claude spend per project in the weekly window, all synced PCs. Promise<{ok, projects, machines, ...} | {ok:false, reason}>. */
+  missionLedger: (req) => ipcRenderer.invoke('mission:ledger', req),
+  /** Marks a project work / fun / other (null = unassigned). Promise<{ok} | {ok:false, reason}>. */
+  missionProjectClass: (key, cls) => ipcRenderer.invoke('mission:project-class', { key, cls }),
+  /** Native folder dialog for the shared ledger folder - no path is passed. Promise<{ok, sharedDir} | {ok:false, reason}>. */
+  missionLedgerPickDir: () => ipcRenderer.invoke('mission:ledger-pick-dir'),
+  /** Stops sharing: forgets the shared ledger folder. Promise<{ok, sharedDir:null}>. */
+  missionLedgerClearDir: () => ipcRenderer.invoke('mission:ledger-clear-dir'),
 
   // --- Highlight extractor (batch clip trimmer) ---
   /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */

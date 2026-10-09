@@ -26,6 +26,38 @@ const { createGcal } = require('./gcal');
 const { createGithub } = require('./missiongithub');
 const { createNews, buildNewsPrompt, parseNewsSummary, publicSections } = require('./missionnews');
 const newsStore = require('./missionnewsstore');
+const projectStore = require('./missionprojects');
+
+/** The real ledger: this PC's ~/.claude/projects, priced with config/rates.json. */
+function defaultLedgerService() {
+  const os = require('os');
+  const path = require('path');
+  const { createLedger } = require('./missionledger');
+  const { createRepoKeys } = require('./missionrepokey');
+  const { createLedgerService } = require('./missionledgerservice');
+  const sync = require('./missionledgersync');
+  const { loadRates } = require('./rates');
+  return createLedgerService({
+    ledger: createLedger({
+      root: path.join(os.homedir(), '.claude', 'projects'),
+      // Pinned projects' folder aliases catch sessions from repos no longer on this PC.
+      resolveKey: createRepoKeys({ aliases: () => projectStore.pinnedAliases(projectStore.loadProjects().pinned) }).resolve,
+    }),
+    store: projectStore,
+    sync,
+    loadRates,
+    machine: sync.machineName(os.hostname()),
+  });
+}
+
+/** Native folder dialog; the path never comes from the renderer. */
+async function defaultPickDir() {
+  const { dialog, BrowserWindow } = require('electron');
+  const win = BrowserWindow.getFocusedWindow();
+  const opts = { title: 'Shared ledger folder', properties: ['openDirectory', 'createDirectory'] };
+  const result = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+  return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
+}
 
 /** Minimum gap between two links opened from the renderer. */
 const OPEN_GAP_MS = 500;
@@ -84,7 +116,13 @@ function registerMissionIpc({
   news = createNews(),
   store = newsStore,
   openExternal = (url) => require('electron').shell.openExternal(url),
+  ledgerService = null,
+  projects = projectStore,
+  pickDir = defaultPickDir,
 }) {
+  // Built on first use: requiring it is cheap, but tests never need the real one.
+  let ledger = ledgerService;
+  const getLedger = () => ledger || (ledger = defaultLedgerService());
   let lastPreview = null;
   const busy = new Set();
   let lastOpenAt = 0;
@@ -217,6 +255,41 @@ function registerMissionIpc({
 
   // The renderer names an item id from the last fetch, never a URL.
   ipcMain.on('mission:github-open', openResolved((id) => github.urlFor(id)));
+
+  // ---- Ledger: Claude spend per project (src/missionledgerservice.js) - free ----
+
+  // req: {resetsAt} - epoch ms of the weekly reset from the usage poll. Only
+  // that number crosses; the service re-checks it is plausible.
+  ipcMain.handle('mission:ledger', (_event, req) =>
+    guarded('ledger', () => {
+      const resetsAt = req && typeof req.resetsAt === 'number' && Number.isFinite(req.resetsAt) ? req.resetsAt : null;
+      return getLedger().report({ resetsAt });
+    })
+  );
+
+  // {key, cls}: cls 'work' | 'fun' | 'other' | null. The store validates both.
+  ipcMain.handle('mission:project-class', (_event, req) => {
+    try {
+      projects.setClass(req && req.key, req && req.cls !== undefined ? req.cls : null);
+      return { ok: true };
+    } catch (err) {
+      console.error('[mission] project class rejected:', err && err.message);
+      return { ok: false, reason: 'bad-input' };
+    }
+  });
+
+  // The folder comes from a native dialog in main; any renderer argument is ignored.
+  ipcMain.handle('mission:ledger-pick-dir', () =>
+    guarded('ledger-dir', async () => {
+      const dir = await pickDir();
+      if (!dir) return { ok: false, reason: 'cancelled' };
+      return { ok: true, sharedDir: projects.setSharedDir(dir).sharedDir };
+    })
+  );
+
+  ipcMain.handle('mission:ledger-clear-dir', () =>
+    guarded('ledger-dir', async () => ({ ok: true, sharedDir: projects.setSharedDir(null).sharedDir }))
+  );
 
   // ---- News: Agent-Reach fetch (src/missionnews.js) + one lean Haiku job ----
 

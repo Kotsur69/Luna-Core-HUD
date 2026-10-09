@@ -60,9 +60,68 @@ under *Open questions*.
 Each workstream is shippable on its own. Data first, because the weekly
 review and the morning brief are only as good as what they summarise.
 
-### W1 — Project ledger: Claude % per project ⏳
+### W1 — Project ledger: Claude % per project ✅ (2026-10-09)
 
 *"Which project ate my weekly limit?"* — Mati's favourite metric.
+
+**Shipped:** Telemetry → *Where Claude went*: stacked bar by class, top 5
+with "≈ x % of weekly limit · ~$y", one-click work / fun / other, the PCs
+feeding the numbers. Files: `src/missionledger.js` (scan + cache + price),
+`src/missionrepokey.js` (cwd → project key, no spawn),
+`src/missionledgersync.js` (multi-PC files), `src/missionprojects.js`
+(classes + shared folder), `src/missionledgerservice.js` (glue), renderer
+`modules/missionledger.js` + `missionledgerview.js` (pure math). IPC
+`mission:ledger`, `mission:project-class`, `mission:ledger-pick-dir`,
+`mission:ledger-clear-dir`. Verified on real data: hand count of one project
+within 0.13 %, full scan 423 ms with a worst event-loop stall of 4 ms (no
+worker needed), re-open 25 ms.
+
+**Answers (Mati, 2026-10-09):** show % **and** $; prices for the 5.5 models
+are Mati's (`config/rates.json`: Opus 4/20, Sonnet 2/10, Haiku 0.1/0.5);
+**all 3 PCs share one Claude account**, so the % is of the combined usage.
+Mati wants the ledger on **all 3 PCs** → each PC writes
+`<shared folder>/ledger-<hostname>.json` (hour × project × model token
+counts only — no paths, no prompts) and merges the others'. Projects are
+keyed by normalised git remote so clones at different paths match.
+
+**Pinned projects (Mati, 2026-10-09):** synthara, blade&bullet,
+money_printer (= `money_printer_turbo_trader`) and job-autoapply-pl always
+show on top with ★, even at 0 % ("no Claude this week"). Stored as
+`pinned: [{key, name, folders[]}]` in `mission-projects.local.json`; a
+pin's `folders` are aliases, so sessions from a repo folder that no longer
+exists on this PC still count for it. No UI to add pins yet (config only).
+
+**Colours:** work = blue `#3d8bff`, fun = pink `#ff5fb4`, other = grey —
+fixed per class on `.mc-ledger`, *not* theme accents (see Gotchas).
+
+**Security review (ecc:security-reviewer):** no CRITICAL / HIGH. Fixed:
+symlink-safe temp write into the shared folder (random name + `wx`), cap of
+500 project keys per peer and 50 projects per report (renderer DoS),
+token-count clamp, UNC / relative `cwd` → *other* (no SMB/NTLM probe),
+case-insensitive own-file skip. Left open (LOW): peers are unauthenticated
+(can inflate numbers), lstat→read TOCTOU, unbounded partial transcript
+line, producer/validator regex drift (`_` hosts, `/` in model ids),
+worktree `gitdir:` can point anywhere, bidi chars in names, non-atomic
+`mission-projects.local.json` write.
+
+**Not done yet:** re-classing an already classed project needs a UI (today
+only unassigned ones get the toggle); pin / unpin from the UI.
+
+### W1b — Move the ledger files between the 3 PCs ⏳ (Mati's setup)
+
+LunaCore only reads/writes a folder; something has to sync it. Mati: no
+OneDrive for personal stuff, Google Drive desktop is blocked by company
+policy, a work PC sits behind Zscaler.
+- **Try first: Syncthing** on all 3 PCs, one shared folder → in LunaCore
+  *Share with other PCs…* → pick it. Zscaler may block its relays / port
+  22000 — if so, it fails silently (peer shows a stale "x hours ago").
+- **Fallback: Gmail transport** (Gmail works everywhere for Mati): each PC
+  mails its ledger JSON to Mati's own address under a label, the others read
+  the newest per machine. Needs a Gmail API scope via the existing Google
+  OAuth (`src/gcal.js` pattern) — a token-free path, not the claude.ai
+  connector (that costs a model call per read). Own small workstream; ask
+  before adding the scope.
+- Open: should the work / fun / other classes sync too (today per PC)?
 
 - **Source:** `~/.claude/projects/*/*.jsonl`. Every assistant line carries
   `cwd`, `timestamp`, `message.model` and `message.usage`
@@ -188,8 +247,7 @@ functions/commits went to X, the work project stands on Y, with its to-dos."*
 
 ## Open questions (ask at the start of the matching workstream)
 
-- **W1:** count only this machine's transcripts (the only ones visible)?
-  Show $ next to the %, or only %?
+- ~~**W1:**~~ answered 2026-10-09 (see W1).
 - **W3:** which address receives the weekly email (assume the Gmail account
   the connector is signed in to — confirm)? Polish or English? Include cost
   numbers?
@@ -229,3 +287,35 @@ functions/commits went to X, the work project stands on Y, with its to-dos."*
 - `RegExp.test(undefined)` tests the string `"undefined"` — type-check ids
   first.
 - YouTube channel handles: `@anthropic-ai`, not `@AnthropicAI`.
+
+## Gotchas learned building W1 (ledger)
+
+- **Transcripts repeat assistant messages:** one `message.id` is written on
+  several lines (586 of 946 ids in one file), and their `usage` can differ
+  (28 cases in a week) → dedupe by id, keep the **max per field**. Summing
+  lines roughly doubles the count.
+- Subagent transcripts live one level deeper:
+  `<project>/<session>/subagents/agent-*.jsonl` — easy to miss, real spend.
+- `"model":"<synthetic>"` lines carry no real usage — skip them.
+- Pre-filter lines with `Buffer.indexOf('"assistant"')` before `JSON.parse`;
+  most bytes are tool results. Read in 1 MB chunks and keep the byte offset of
+  the last complete line → re-open only reads the appended tail.
+- Async chunked reads yield to the event loop; measure the **stall**, not the
+  total: 423 ms total was only 4 ms worst stall, so no worker thread.
+- `config/rates.json` matches by longest id prefix: without explicit
+  `claude-*-5-5` rows, Opus/Sonnet 5.5 silently used the 5.0 prices and
+  Haiku 5.5 was unpriced.
+- Dev builds keep `config/*.local.json` in the repo's `config/` — a second
+  app instance (CDP smoke test) shares it with the one Mati is running.
+- Port 9333 can be held by another tool; pick a free CDP port and a separate
+  `--user-data-dir` for the test instance.
+- `.port-btn` is a fixed 22 px icon button; text buttons in Mission Control
+  use `pad-send mc-connect`.
+- **Theme accents are not semantic colours:** themes remap `--neon-cyan` /
+  `--neon-magenta` (to orange, green…), so work vs fun looked alike for
+  Mati. Data classes get fixed colours of their own.
+- Transcripts mix `C:\…` and Git Bash `/c/…` cwds for the same repo;
+  `path.isAbsolute('/c/x')` is true on Windows but means `C:\c\x`.
+- Don't patch JS regexes / escapes through a Python or bash heredoc: `\\`
+  and `\u0000` got turned into real NUL/DEL bytes and single backslashes
+  (silently weakening a UNC check). Use the Edit tool or `String.raw`.
