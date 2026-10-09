@@ -17,8 +17,17 @@ export const TOP_N = 5;
 export const MAX_ASSIGN = 20;
 export const CLASS_ORDER = ['work', 'fun', 'other', 'unassigned'];
 
+/** Order a class chip steps through on each click. */
+const CYCLE = ['work', 'fun', 'other'];
+
 /** A project's class; the non-repo "other" bucket is always class other. */
 const classOf = (p) => (p.key === 'other' ? 'other' : p.cls || 'unassigned');
+
+/** The class a chip click moves to: work -> fun -> other -> work; unassigned -> work. */
+export function nextClass(cls) {
+  const i = CYCLE.indexOf(cls);
+  return CYCLE[(i + 1) % CYCLE.length];
+}
 
 /**
  * @param {{ok:boolean, totalUsd:number, unpricedTokens:number, projects:Array}|null} report
@@ -34,6 +43,7 @@ export function ledgerView(report, weeklyPct) {
       key: p.key,
       name: p.name,
       cls: classOf(p),
+      reclassable: p.key !== 'other',
       usd: p.usd,
       pct: p.share * scale,
       unpricedTokens: p.unpricedTokens,

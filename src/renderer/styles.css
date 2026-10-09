@@ -4914,6 +4914,11 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   color: var(--surface-panel);
   white-space: nowrap;
 }
+/* A chip that re-classes on click: a real button, so it needs its own reset + states. */
+.mc-ledger__chip--btn { border: 0; font-family: inherit; line-height: inherit; cursor: pointer; }
+.mc-ledger__chip--btn:hover { filter: brightness(1.15); }
+.mc-ledger__chip--btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 2px; }
+.mc-ledger__chip--btn:disabled { opacity: 0.45; cursor: progress; }
 /* The chip carries text, so no hatch behind it - a warn outline says "unassigned". */
 .mc-ledger__chip.mc-ledger__seg--unassigned { background: transparent; color: var(--warn); border: var(--border-w) solid var(--warn); }
 .mc-ledger__clear { width: auto; height: auto; padding: var(--space-1) var(--space-4); font-size: var(--fs-xs); }

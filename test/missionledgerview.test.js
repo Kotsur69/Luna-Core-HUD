@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { ledgerView, TOP_N } = require('../src/renderer/modules/missionledgerview.js');
+const { ledgerView, nextClass, TOP_N } = require('../src/renderer/modules/missionledgerview.js');
 
 const p = (key, usd, cls = null, share) => ({ key, name: key.split(/[:/]/).pop(), usd, share, cls, tokens: 1, unpricedTokens: 0 });
 
@@ -53,6 +53,19 @@ test('an empty or failed report is an empty view', () => {
   assert.deepEqual(ledgerView({ ok: true, totalUsd: 0, projects: [] }, 10).top, []);
   assert.equal(ledgerView(null, 10), null);
   assert.equal(ledgerView({ ok: false }, 10), null);
+});
+
+test('clicking a class chip cycles work -> fun -> other -> work', () => {
+  assert.equal(nextClass('work'), 'fun');
+  assert.equal(nextClass('fun'), 'other');
+  assert.equal(nextClass('other'), 'work');
+  assert.equal(nextClass('unassigned'), 'work');
+  assert.equal(nextClass(undefined), 'work');
+});
+
+test('every row says whether its class can be changed (the "other" bucket cannot)', () => {
+  const v = ledgerView(report([p('git:a', 5, 'work'), p('other', 3), p('git:b', 2)]), 50);
+  assert.deepEqual(v.top.map((r) => [r.key, r.reclassable]), [['git:a', true], ['other', false], ['git:b', true]]);
 });
 
 test('pinned projects come first, even at zero, then the top spenders', () => {

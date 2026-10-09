@@ -4,8 +4,9 @@
 // Lives inside the Telemetry widget. mission:ledger (src/missionledgerservice.js)
 // scans the local transcripts and merges the other PCs' files from the shared
 // folder - free, no model call. This file only renders: the stacked bar by
-// class, the top projects, one-click work / fun / other for unassigned ones,
-// and the PCs feeding the numbers. Math lives in missionledgerview.js.
+// class, the top projects, one-click work / fun / other for unassigned ones
+// (a row's class chip steps to the next class on click), and the PCs feeding
+// the numbers. Math lives in missionledgerview.js.
 //
 // The renderer never names a path: the shared folder is picked in a native
 // dialog in main, and project classes are set by key, validated in main.
@@ -15,7 +16,7 @@
 
 import { t } from './util.js';
 import { errorText, ipcFailed } from './missionshared.js';
-import { ledgerView, CLASS_ORDER } from './missionledgerview.js';
+import { ledgerView, nextClass, CLASS_ORDER } from './missionledgerview.js';
 
 const STALE_MS = 2 * 60 * 1000;
 const PICK = ['work', 'fun', 'other'];
@@ -76,14 +77,43 @@ function renderBar(view) {
   return [bar, legend];
 }
 
-function renderRows(view) {
+/** Saves a project's class in main, then updates the cached report in place of a refetch. */
+async function setClass(key, cls, rerender) {
+  const res = await window.lunacore.missionProjectClass(key, cls).catch(ipcFailed);
+  if (res.ok && report) {
+    report = { ...report, projects: report.projects.map((x) => (x.key === key ? { ...x, cls } : x)) };
+  } else if (!res.ok) {
+    lastError = res.reason;
+  }
+  rerender();
+}
+
+/** The class tag of a row; a button that steps to the next class when the project can be re-classed. */
+function classChip(r, rerender) {
+  const cls = `mc-ledger__chip mc-ledger__seg--${r.cls}`;
+  const label = t(`mc.ledger.cls.${r.cls}`);
+  if (!r.reclassable) return el('span', cls, label);
+  const next = nextClass(r.cls);
+  const chip = el('button', `${cls} mc-ledger__chip--btn`, label);
+  chip.type = 'button';
+  const hint = t('mc.ledger.reclass', { name: r.name, from: label, to: t(`mc.ledger.cls.${next}`) });
+  chip.title = hint;
+  chip.setAttribute('aria-label', hint);
+  chip.addEventListener('click', () => {
+    chip.disabled = true;
+    setClass(r.key, next, rerender);
+  });
+  return chip;
+}
+
+function renderRows(view, rerender) {
   const list = el('ul', 'mc-ledger__rows');
   const unit = view.basis === 'limit' ? 'mc.ledger.ofLimit' : 'mc.ledger.ofSpend';
   for (const r of view.top) {
     const row = el('li', 'mc-ledger__row');
     const name = el('span', 'mc-ledger__name', r.pinned ? `★ ${r.name}` : r.name);
     name.title = r.pinned ? `${t('mc.ledger.pinned')} · ${r.key}` : r.key;
-    const chip = el('span', `mc-ledger__chip mc-ledger__seg--${r.cls}`, t(`mc.ledger.cls.${r.cls}`));
+    const chip = classChip(r, rerender);
     const idle = r.usd === 0 && !r.unpricedTokens;
     const nums = el('span', 'mc-ledger__nums', idle ? t('mc.ledger.idle') : `≈ ${t(unit, { pct: pct(r.pct) })} · ~${usd(r.usd)}`);
     row.append(name, chip, nums);
@@ -108,15 +138,9 @@ function renderUnassigned(view, rerender) {
       const btn = el('button', 'mc-ledger__pick', t(`mc.ledger.cls.${cls}`));
       btn.type = 'button';
       btn.setAttribute('aria-pressed', 'false');
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', () => {
         group.querySelectorAll('button').forEach((b) => (b.disabled = true));
-        const res = await window.lunacore.missionProjectClass(p.key, cls).catch(ipcFailed);
-        if (res.ok && report) {
-          report = { ...report, projects: report.projects.map((x) => (x.key === p.key ? { ...x, cls } : x)) };
-        } else {
-          lastError = res.reason;
-        }
-        rerender();
+        setClass(p.key, cls, rerender);
       });
       group.append(btn);
     }
@@ -205,7 +229,7 @@ export function mountLedger(root, getWeekly) {
     if (loading && !report) parts.push(el('p', 'hint', t('mc.ledger.loading')));
     if (lastError) parts.push(el('p', 'hint is-fail', errorText(lastError)));
     if (view && view.top.length) {
-      parts.push(...renderBar(view), ...renderRows(view), ...renderUnassigned(view, render));
+      parts.push(...renderBar(view), ...renderRows(view, render), ...renderUnassigned(view, render));
       parts.push(el('p', 'hint', t(view.basis === 'limit' ? 'mc.ledger.noteLimit' : 'mc.ledger.noteSpend')));
     } else if (view) {
       parts.push(el('p', 'hint', t('mc.ledger.empty')));

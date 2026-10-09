@@ -104,8 +104,13 @@ line, producer/validator regex drift (`_` hosts, `/` in model ids),
 worktree `gitdir:` can point anywhere, bidi chars in names, non-atomic
 `mission-projects.local.json` write.
 
-**Not done yet:** re-classing an already classed project needs a UI (today
-only unassigned ones get the toggle); pin / unpin from the UI.
+**Re-class (2026-10-09):** each row's class chip is a button — click steps
+work → fun → other → work (`nextClass` in `missionledgerview.js`), saved via
+the existing `mission:project-class`. The non-repo *other* bucket stays a
+plain tag.
+
+**Not done yet:** pin / unpin from the UI; re-classing a project outside the
+top 5 + pins (it has no row).
 
 ### W1b — Move the ledger files between the 3 PCs ⏳ (Mati's setup)
 
@@ -191,6 +196,29 @@ functions/commits went to X, the work project stands on Y, with its to-dos."*
 
 ### W5 — X and Reddit in News + quick search + presets ⏳
 
+**Answers (Mati, 2026-10-09):** cookies from his **main** X / Reddit
+accounts (he accepts the ban risk); **25 posts** per topic / source; logged
+in on **Chrome / Edge**.
+
+**Found live (2026-10-09), before any install:**
+- Reddit has **no anonymous path**: `hot.rss` answered 200 once, then every
+  request 429 (even 6 s apart), a sub 403, `.json` 403. Agent-Reach's
+  `channels/reddit.py` says the same → logged-in **rdt-cli** is required.
+- Both upstream CLIs **fall back to reading browser cookies on their own**
+  (twitter-cli when the env pair is missing *or invalid*; `rdt login` /
+  7-day refresh). Chrome 127+ on Windows encrypts cookies app-bound, so that
+  fallback likely fails anyway → plan for the **Cookie-Editor paste**.
+- Keeping cookies out of LunaCore: open a console running Agent-Reach's
+  `configure twitter-cookies` (hidden `getpass` prompt → its own
+  `~/.agent-reach/config.yaml`); a matching bridge `configure-reddit`
+  writes `~/.config/rdt-cli/credential.json`. The bridge passes the X pair
+  to `twitter` as child env only; Node never sees a cookie.
+- Neither README documents its JSON fields (`SCHEMA.md`); rdt `--json` is an
+  `{ok, schema_version, data, error}` envelope; non-TTY output defaults to
+  YAML → always pass `--json`. twitter count flag is `--max`, not `-n`.
+- **Blocked:** installing `twitter-cli` / `rdt-cli` (PyPI / pinned git) for
+  the live probe needs Mati's go-ahead (auto-mode refused third-party code).
+
 - **Setup:** Agent-Reach channels `twitter` (twitter-cli, cookies
   `auth_token` + `ct0`) and `reddit` (rdt-cli session). Use Agent-Reach's own
   `cookie_extract.py` / install flow inside the News venv, as a second
@@ -251,8 +279,7 @@ functions/commits went to X, the work project stands on Y, with its to-dos."*
 - **W3:** which address receives the weekly email (assume the Gmail account
   the connector is signed in to — confirm)? Polish or English? Include cost
   numbers?
-- **W5:** dedicated scraping accounts or the main ones for X / Reddit cookies
-  (ban risk sits on the account)? How many posts per topic (cost)?
+- ~~**W5:**~~ answered 2026-10-09 (see W5).
 - **W6:** 08:00 fixed, or "first launch after 06:00"? Weekends too?
 - **W7:** which tracks are frequent (pre-seed coordinates: Tor Poznań,
   Silesia Ring…)?
