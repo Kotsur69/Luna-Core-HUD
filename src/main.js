@@ -2187,6 +2187,14 @@ function registerIpc() {
       if (!tracked.ok) {
         const untracked = await git(cwd, ['diff', '--no-index', '--', '/dev/null', rel]);
         if (untracked.stdout) diff = untracked.stdout;
+      } else {
+        // Tracked and clean against HEAD: the session's edits were already
+        // committed, so the row's +/- counts (from the transcript) outlive the
+        // working-tree diff. Show the last commit that touched the file instead
+        // of a misleading "no changes"; the "commit <hash> <subject>" header
+        // line says what is being shown.
+        const last = await git(cwd, ['log', '-1', '-p', '--format=commit %h %s', '--', rel]);
+        if (last.stdout) diff = last.stdout;
       }
     }
 
