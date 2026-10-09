@@ -200,7 +200,18 @@ functions/commits went to X, the work project stands on Y, with its to-dos."*
 - The weekly review scores each goal against commits / closed to-dos (the
   model judges with evidence lines: done / partly / not yet).
 
-### W5 — X and Reddit in News + quick search + presets 🟡 (built 2026-10-09; live read waits for Mati's login)
+### W5 — X and Reddit in News + quick search + presets ✅ (2026-10-09; X *search* down upstream)
+
+**Live check (2026-10-09, Mati connected both):** Reddit search + all 11
+preset subreddits read 23–25 posts each (`HonkaiStarRail_leaks`,
+`claudexplorers`, `trackdays`, `electronjs` all exist). X account
+timelines 25 posts (`claudeai`, `AnthropicAI`, `HonkaiStarRail`, `F1`,
+`FIAWEC`). **X search answers HTTP 404** to twitter-cli 0.8.5 (latest; both
+`top` and `latest` tabs; "Failed to init ClientTransaction") → presets use
+X *accounts* instead of X topics, the UI says "X search is down", quick
+search defaults to Reddit. Re-test X search when twitter-cli updates.
+Bug found live: `python -I` drops `PYTHONUTF8`, so the CLI child crashed
+on the first emoji (cp1250) → `-X utf8` on the child.
 
 **Shipped:** News → *X and Reddit* block (Install X / Reddit tools →
 Connect X / Connect Reddit → Check again), *Quick search* (platform toggle
@@ -404,6 +415,11 @@ in on **Opera GX** (said Chrome / Edge first).
   rejected login, rdt-cli after 7 days — via `uv run --with
   browser-cookie3`, then it overwrites its credential file). Stub the
   fallbacks (`python -I -c` shim) — env tricks alone are not enough.
+- **`python -I` ignores `PYTHONUTF8`** — a child started with `-I` needs
+  its own `-X utf8`, or Windows cp1250 stdout dies on the first emoji (a
+  feed without emoji passes, so a single test can look fine).
+- Test a batch, not one feed: r/programming worked alone while 10 other
+  subreddits failed for the reason above.
 - Both CLIs print **YAML when stdout is not a TTY** — always pass `--json`;
   both answer `{ok, schema_version, data, error}`. twitter's count flag is
   `-n/--max`; rdt `--compact` gives flat post dicts.

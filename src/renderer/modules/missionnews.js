@@ -26,7 +26,8 @@ const SOURCE_PLATFORMS = ['youtube', 'rss', 'web', 'github', 'twitter', 'reddit'
 const TOPIC_PLATFORMS = ['youtube', 'github', 'bilibili', 'hackernews', 'twitter', 'reddit'];
 /** Topic checkboxes ticked by default (X / Reddit need a login first). */
 const DEFAULT_TOPIC_PLATFORMS = ['youtube', 'github', 'hackernews'];
-const QUICK_PLATFORMS = ['twitter', 'reddit', 'youtube', 'hackernews', 'github'];
+// Reddit first: X search is down upstream (see missionnewspresets.js).
+const QUICK_PLATFORMS = ['reddit', 'twitter', 'youtube', 'hackernews', 'github'];
 const MAX_TOPICS_PER_ADD = 10;
 
 // Module state survives unmount (closing the panel never re-bills a scan).
@@ -34,7 +35,7 @@ let news = { sources: [], topics: [] };
 let status = null;
 let result = null;
 let scanning = false;
-let quickPlatform = 'twitter';
+let quickPlatform = 'reddit';
 /** The quick search the current result came from ({query, platform}), for "save as topic". */
 let lastQuick = null;
 let socialBusy = false;

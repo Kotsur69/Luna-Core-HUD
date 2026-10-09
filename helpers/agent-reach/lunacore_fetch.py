@@ -390,7 +390,9 @@ def run_social(platform, args, extra_env=None):
     }
     with SOCIAL_LOCKS[platform]:
         run = subprocess.run(
-            [sys.executable, "-I", "-B", "-c", SHIMS[platform], *args],
+            # -X utf8: -I ignores PYTHONUTF8, and the CLIs' JSON carries emoji
+            # that cp1250 cannot encode (crash, no output).
+            [sys.executable, "-I", "-B", "-X", "utf8", "-c", SHIMS[platform], *args],
             capture_output=True, text=True, encoding="utf8", errors="replace",
             timeout=SOCIAL_TIMEOUT, env=env, cwd=tempfile.gettempdir(),
         )
@@ -438,7 +440,14 @@ def x_run(args):
 
 
 def x_search(query):
-    return x_run(["search", "-t", "top", "-n", str(SOCIAL_ENTRIES), "--json", "--", query])
+    try:
+        return x_run(["search", "-t", "top", "-n", str(SOCIAL_ENTRIES), "--json", "--", query])
+    except FetchError as err:
+        # X answers 404 to twitter-cli 0.8.5's search (2026-10-09) while
+        # timelines work: say so instead of "no such account".
+        if str(err) == "not-found":
+            raise FetchError("x-search-down") from err
+        raise
 
 
 def x_account(handle):

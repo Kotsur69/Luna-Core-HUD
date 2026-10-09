@@ -27,14 +27,16 @@ test('applying a preset twice adds nothing the second time', () => {
 
 test('existing items are kept; a topic already saved gains the preset platforms', () => {
   const ai = PRESETS.find((p) => p.id === 'ai');
+  const dev = PRESETS.find((p) => p.id === 'dev');
   const before = {
     sources: [{ id: 's-1', platform: 'reddit', target: 'claudeai', label: 'mine' }],
-    topics: [{ id: 't-1', query: 'claude code', platforms: ['youtube'] }],
+    topics: [{ id: 't-1', query: 'Trending', platforms: ['youtube'] }],
   };
-  const after = applyPreset(before, ai);
-  assert.equal(after.sources.filter((s) => s.platform === 'reddit' && s.target.toLowerCase() === 'claudeai').length, 1);
-  assert.equal(after.sources[0].label, 'mine');
-  const cc = after.topics.find((t) => t.id === 't-1');
-  assert.deepEqual(cc.platforms, ['youtube', 'twitter']);
+  const withAi = applyPreset(before, ai);
+  assert.equal(withAi.sources.filter((s) => s.platform === 'reddit' && s.target.toLowerCase() === 'claudeai').length, 1);
+  assert.equal(withAi.sources[0].label, 'mine');
+  const after = applyPreset(withAi, dev);
+  const tr = after.topics.find((t) => t.id === 't-1');
+  assert.deepEqual(tr.platforms, ['youtube', 'github']);
   assert.deepEqual(before.topics[0].platforms, ['youtube'], 'input not mutated');
 });
