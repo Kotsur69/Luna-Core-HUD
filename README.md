@@ -7,18 +7,21 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.13.0 — AI providers.** Any backend can now drive the
-> same `claude` CLI with your full `~/.claude` harness: LM Studio, GLM, Kimi,
-> and — through a local `claude-code-router` — Ollama, Codex, Gemini, Grok or
-> any OpenAI-compatible endpoint. Plus an LM Studio model loader in Settings,
-> an overnight guard for God Mode, a "Don't sleep" switch, and longer To-Do
-> items with scroll-aware drag-and-drop.
+> **Current release: v0.14.0 — Mission Control.** A **Ctrl+Shift+M** dashboard
+> for the rest of your day: Gmail cleanup (dry run, then confirm), Google
+> Calendar read through the API (week list + month grid, every calendar you
+> ticked) with natural-language quick add, GitHub + Claude-budget telemetry
+> with pace flags, and News — sources and topics fetched by a vendored
+> [Agent-Reach](https://github.com/Panniantong/Agent-Reach) and summarised by
+> Haiku. See [Mission Control](#mission-control-ctrlshiftm) and what is next in
+> [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md).
 >
-> **On `main`, not released yet: God Mode v2.** A headless planner splits a
-> project's To-Do list into work packages, each package runs in its own tab and
-> git worktree, LunaCore verifies and pushes every branch itself, and a finished
-> run ends as PRs (or a verified merge) plus a morning report. See
-> [God Mode v2](#god-mode-v2--parallel-workers-in-worktrees).
+> Also in v0.14.0: **God Mode v2** — a headless planner splits a project's
+> To-Do list into work packages, each runs in its own tab and git worktree,
+> LunaCore verifies and pushes every branch, and a run ends as PRs (or a
+> verified merge) plus a morning report. See
+> [God Mode v2](#god-mode-v2--parallel-workers-in-worktrees). Its first full
+> live run is still owed (see [`FUTURE_PLAN.md`](FUTURE_PLAN.md)).
 
 **What's in the box:**
 
@@ -42,6 +45,9 @@ injects prompts or touches the `claude` binary.
   transparency) themes, four look-&-feel axes (density · font
   pack · glow · motion), nine layout presets plus a layout builder, and
   foldable / resizable / drag-to-rearrange panels, all in PL or EN.
+- **Mission Control** — **Ctrl+Shift+M**: mail cleanup, Google Calendar,
+  GitHub / Claude-budget telemetry and Agent-Reach news with Haiku summaries,
+  side by side in one overlay.
 - **Extras** — a **Ctrl+B** libraries & tools directory with a one-shot `/ask`
   recommender (the one deliberate exception to the zero-extra-tokens rule),
   a highlight/clip extractor, clipboard and devices widgets, optional sound &
@@ -55,8 +61,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.13.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.13.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.14.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.14.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
@@ -130,6 +136,20 @@ the complete list — all of it verifiable in the linked source.
   the last 20 text clips, in plain text. Switching the widget off stops the
   watcher; **Clear history** deletes this file.
   ([`src/clipboard.js`](src/clipboard.js))
+- `gcal-token.local.json` — **only after you click Connect Google Calendar** in
+  Mission Control: the read-only Calendar refresh token, **encrypted** with the
+  OS keychain (Electron `safeStorage`). If the OS offers no encryption the token
+  is kept in memory only and never written. A revoked token deletes the file.
+  ([`src/gcal.js`](src/gcal.js))
+- `mission-news.local.json` — the News sources and topics you saved in Mission
+  Control ([`src/missionnewsstore.js`](src/missionnewsstore.js))
+
+**One folder outside that directory, only if you ask for it:** pressing **Set up
+News** in Mission Control creates a Python venv, `agent-reach-venv`, next to
+the config folder (in LunaCore's app-data folder), and installs the vendored
+Agent-Reach's pinned dependencies into it — never into your global Python.
+Delete the folder to remove it; News then asks to be set up again.
+([`src/missionnews.js`](src/missionnews.js))
 
 Nothing else anywhere on your disk is written. The shipped `config/*.json`
 defaults are read-only; your overrides live beside them as `*.local.json` and are
@@ -144,6 +164,7 @@ process:**
 | `GET https://api.anthropic.com/api/oauth/usage` | every 90 s | Draws the usage gauge (5-hour + weekly limits). | `ENABLE_USAGE_METER = false` in [`src/main.js`](src/main.js) |
 | `GET https://open.bigmodel.cn/…/billing/balance` or `GET https://api.openai.com/v1/dashboard/billing/…` | every 90 s, **instead of** the row above, only when the gauge's profile is GLM or has an `OPENAI_API_KEY` | Provider-aware usage (see [Usage-limits gauge](#usage-limits-gauge)). Each host only ever receives the key it issued. | same switch |
 | `GET https://api.github.com/repos/Kotsur69/Luna-Core-HUD/releases/…` | **once, at launch** | Asks whether a newer LunaCore exists. | `ENABLE_AUTO_UPDATE = false` in [`src/main.js`](src/main.js) |
+| `POST https://oauth2.googleapis.com/token`, `GET https://www.googleapis.com/calendar/v3/…` | **only after you connected Google Calendar**, when the Mission Control calendar loads or you flip a month | Reads your calendars and events (read-only scope). The consent itself runs in your browser with a one-shot `127.0.0.1` redirect listener. | don't connect, or revoke access in your Google account |
 
 Set both to `false` and LunaCore's own process makes **no internet requests at
 all**. What remains is loopback-only and exists only if you use local models:
@@ -199,6 +220,17 @@ the same way, once per video file, sequentially, during a batch run
 ([`src/highlights.js`](src/highlights.js)). Neither is a network request
 LunaCore's own process makes — the *spawned* `claude` CLI authenticates and
 calls the API itself, exactly as it does for the terminal above.
+
+**Mission Control** (Ctrl+Shift+M) spawns, each only when you use it:
+`claude -p` one-shot jobs for mail scan / apply, calendar quick add and the News
+summary (on a click — see the second exception under *Core constraint*);
+`gh api graphql` for the telemetry column (when it opens, at most every 10
+minutes, plus the refresh button — `gh` owns the GitHub token); and the
+vendored Agent-Reach bridge, `python -I -B lunacore_fetch.py`, which fetches
+your News sources from YouTube, RSS feeds, web pages (through Jina Reader),
+GitHub, Bilibili and Hacker News, with a minimal environment (no API keys) and
+a public-address check on every URL and redirect. **Set up News** runs
+`python -m venv` and `pip install` once.
 
 Three more, each only if you use the feature: `lms` (LM Studio's CLI, only to
 wake LM Studio when it is not running), `ccr` (`claude-code-router`, started
@@ -262,6 +294,18 @@ PTY. It is its own category — a narrow, explicit hole cut into the zero-token
 rule, not a fit forced into either existing bucket. See [What LunaCore reads,
 writes and sends](#what-lunacore-reads-writes-and-sends) above for the
 network-table caveat this creates, and below for what `/ask` actually does.
+
+### The second deliberate exception: Mission Control jobs
+
+Mission Control's **Scan** (mail), **Apply**, calendar **quick add** and News
+**Scan and summarise** each spend tokens the same way `/ask` does: one
+headless `claude -p` call (Haiku by default, picker in the mail column) under
+your own subscription, never on a timer, never as a side effect. Every result
+shows what it cost. The same rules hold: explicit, one bounded call, nothing
+left running. The calendar agenda, the GitHub telemetry and the News *fetch*
+cost no tokens at all. Scheduled summaries (Morning brief, Weekly review) are
+planned in [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md) and will
+be opt-in with the same cost display.
 
 ---
 
@@ -662,7 +706,9 @@ the reasoning behind the contract are in
 | + | God Mode overnight guard (sleep blocker + LM Studio watchdog), "Don't sleep" switch, longer To-Do items, scroll-aware To-Do drag-and-drop (v0.13.0) | ✅ done |
 | + | Provider-aware usage gauge (Claude, GLM, OpenAI, local) — adapters shipped; the gauge still follows the **first** profile, not the active tab | 🟡 partial |
 | + | Window transparency — the `glass` theme family (Win11 acrylic), tunable (v0.11.0) | ✅ done |
-| v2 | God Mode v2: task intake (Luna MCP + `/luna-plan`), worktree tabs, per-tab runs, headless planner + plan board | ✅ on `main` |
+| v2 | God Mode v2: task intake (Luna MCP + `/luna-plan`), worktree tabs, per-tab runs, headless planner + plan board | ✅ done (v0.14.0) |
+| MC | Mission Control (Ctrl+Shift+M): Gmail cleanup, Google Calendar API + quick add, GitHub / Claude-budget telemetry, Agent-Reach News with Haiku summaries (v0.14.0) | ✅ done |
+| MC2 | Weekly review + email, Morning brief, Claude % per project, focus time, X / Reddit + presets, goals, trackday weather — see [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md) | 🔜 next |
 | v2 | God Mode v2 supervisor + integrator: DONE markers, verify + push per worker, Retry, kill switch, scheduled start, Sonnet→Opus escalation, file-overlap guard, PRs / merge, run report ([`ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md)) | ✅ on `main`, live test owed |
 
 That closes the whole approved shortlist and the first slice of the structural
@@ -1131,6 +1177,26 @@ Settings → God Mode v2: worker model (default **Opus**, or the planner's pick)
 permission mode (default **bypassPermissions** — a worktree contains a worker's
 git damage, not its filesystem damage), what happens after a run, and the list
 of allowed tools learned from stalls.
+
+## Mission Control (Ctrl+Shift+M)
+
+A full-screen overlay (also the **Mission Control** chip next to Ctrl+K /
+Ctrl+L in the terminal bar) with four columns — 2×2 on narrower windows. Each
+column keeps its state when you close the panel, so reopening never re-bills a
+model call.
+
+| Column | What it does | Costs tokens? |
+|--------|--------------|---------------|
+| **Inbox cleanup** | **Scan** reads `in:inbox` through the claude.ai Gmail connector and proposes what to trash, what to flag and what "needs your call" — a dry run that changes nothing. You tick rows and **Apply** moves only those threads to Trash (recoverable for 30 days). Real people, payment problems, security alerts and anything not matching your rules (`config/missioncontrol.json`, override in `.local.json`) are never trashed. | yes, per click |
+| **Calendar** | Week list and month grid of **every calendar you ticked** in Google Calendar, read through the Calendar API after a one-time read-only OAuth consent (put your Google *Desktop app* client JSON at `config/google-oauth.local.json`, then **Connect**). Quick add: type "Trackday Tor Poznan Saturday 9-16", check the editable draft, **Add**. | agenda no; quick add yes |
+| **Telemetry** | GitHub contributions this week vs your 4-week average, 8 weekly bars, a 12-week heatmap, open PRs / review requests / assigned issues (through `gh`), and the Claude weekly budget against an even-pace marker with burn rate and projected hit time. Flags late in the week: low output, unused budget, burning too fast, quiet streak. | no |
+| **News** | Saved **sources** (YouTube channel, RSS, web page, GitHub repo) and **topics** (keywords searched on YouTube, GitHub, Bilibili, Hacker News — add several at once, comma separated). Click a name to scan just that one, or tick several and **Scan and summarise**: the vendored Agent-Reach fetches, one Haiku call writes a briefing plus a summary per source with the links worth opening. Needs a one-time **Set up News** (Python 3.10+). | fetch no; summary yes |
+
+Agent-Reach ([Panniantong/Agent-Reach](https://github.com/Panniantong/Agent-Reach),
+MIT) lives unchanged in [`helpers/agent-reach/`](helpers/agent-reach/) next to
+LunaCore's small bridge, `lunacore_fetch.py`. v0.14.0 uses only its public,
+login-free paths; X and Reddit are next in
+[`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md).
 
 ## Action cheat-sheets
 

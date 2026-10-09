@@ -5,11 +5,16 @@ got here (widget contract, layout engine, packaging, the lessons each phase
 cost) lives in [`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md).
 Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 
-## Where things stand (2026-10-06)
+## Where things stand (2026-10-09)
 
-- **Released:** `v0.13.0` (2026-09-25) - AI providers, provider-aware usage,
-  God Mode overnight guard, "Don't sleep", longer To-Do items.
-- **On `main`, not released yet:** God Mode v2 - task intake (Luna MCP +
+- **START HERE for Mission Control:**
+  [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md) - decisions,
+  build order W1-W8 and a copy-paste starting prompt.
+- **Released:** `v0.14.0` (2026-10-09) - Mission Control (Ctrl+Shift+M: mail
+  cleanup, Google Calendar API, GitHub / Claude-budget telemetry, Agent-Reach
+  News) and God Mode v2 below. Before it: `v0.13.0` (2026-09-25) - AI
+  providers, provider-aware usage, God Mode overnight guard, "Don't sleep".
+- **Shipped in v0.14.0 without its live run:** God Mode v2 - task intake (Luna MCP +
   `/luna-plan`), worktree tabs, per-tab runs, the headless planner + plan
   board, the supervisor (DONE markers, verify, push, Retry, kill switch,
   persistence), scheduled start, Sonnet->Opus escalation, file-overlap guard,
@@ -24,7 +29,7 @@ Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
    logged in). Watch: workers printing `LUNA_DONE`, the first
    bypassPermissions / folder-trust prompt in a new worktree, PRs + worktree
    cleanup + `runs/<plan>.md` at the end.
-2. **Cut `v0.14.0`** once that run is clean (README is already current).
+2. **Mission Control W1-W8** - see [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md).
 
 ## Owed live checks (unit tests cannot clear these)
 
