@@ -21,10 +21,10 @@ const paths = require('./paths');
 
 const FILE_NAME = 'mission-news.local.json';
 
-/** Platforms a saved source can point at. */
-const SOURCE_PLATFORMS = ['youtube', 'rss', 'web', 'github'];
-/** Platforms a topic can be searched on (public, no login). */
-const TOPIC_PLATFORMS = ['youtube', 'github', 'bilibili', 'hackernews'];
+/** Platforms a saved source can point at (twitter = an X account, reddit = a subreddit). */
+const SOURCE_PLATFORMS = ['youtube', 'rss', 'web', 'github', 'twitter', 'reddit'];
+/** Platforms a topic can be searched on (X / Reddit ride the user's own login). */
+const TOPIC_PLATFORMS = ['youtube', 'github', 'bilibili', 'hackernews', 'twitter', 'reddit'];
 
 const MAX_SOURCES = 50;
 const MAX_TOPICS = 30;
@@ -34,6 +34,31 @@ const MAX_QUERY = 120;
 const ID_RE = /^[a-z0-9-]{1,40}$/;
 const REPO_RE = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 const YT_HOST_RE = /^(www\.|m\.)?youtube\.com$/i;
+const HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
+const SUBREDDIT_RE = /^[A-Za-z0-9_]{2,21}$/;
+const X_URL_RE = /^https:\/\/(www\.|mobile\.)?(x|twitter)\.com\/([^/?#]+)/i;
+const REDDIT_URL_RE = /^https:\/\/(www\.|old\.|new\.)?reddit\.com\/r\/([^/?#]+)/i;
+
+/** "@handle", "handle" or an x.com / twitter.com profile URL -> "handle", or ''. */
+function xHandle(value) {
+  const m = X_URL_RE.exec(value);
+  const handle = (m ? m[3] : value).replace(/^@/, '');
+  return HANDLE_RE.test(handle) ? handle : '';
+}
+
+/** "r/Name", "Name" or a reddit.com/r/Name URL -> "Name", or ''. */
+function subreddit(value) {
+  const m = REDDIT_URL_RE.exec(value);
+  const name = (m ? m[2] : value).replace(/^\/?r\//i, '');
+  return SUBREDDIT_RE.test(name) ? name : '';
+}
+
+/** Default label for a source without one. */
+function sourceLabel(platform, target) {
+  if (platform === 'twitter') return `@${target}`;
+  if (platform === 'reddit') return `r/${target}`;
+  return target;
+}
 
 const text = (v, max) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
 const newId = (prefix) => `${prefix}-${crypto.randomBytes(4).toString('hex')}`;
@@ -53,6 +78,8 @@ function httpUrl(value) {
 /** Normalises a source target for its platform; '' when it does not fit. */
 function sourceTarget(platform, raw) {
   const value = text(raw, MAX_TARGET);
+  if (platform === 'twitter') return xHandle(value);
+  if (platform === 'reddit') return subreddit(value);
   if (platform === 'github') {
     const repo = value.replace(/^https:\/\/github\.com\//i, '').replace(/\/+$/, '');
     return REPO_RE.test(repo) ? repo : '';
@@ -72,14 +99,15 @@ function normalizeSource(raw) {
     id: validId(raw.id) ? raw.id : newId('s'),
     platform: raw.platform,
     target,
-    label: text(raw.label, MAX_LABEL) || target,
+    label: text(raw.label, MAX_LABEL) || sourceLabel(raw.platform, target),
   };
 }
 
 /** One raw topic -> a valid topic, or null. */
 function normalizeTopic(raw) {
+  if (!raw || typeof raw !== 'object') return null;
   // A leading "-" would read as a flag to the CLIs behind some platforms.
-  const query = text(raw && raw.query, MAX_QUERY).replace(/^-+\s*/, '');
+  const query = text(raw.query, MAX_QUERY).replace(/^-+\s*/, '');
   if (!query) return null;
   const platforms = Array.isArray(raw.platforms) ? raw.platforms.filter((p) => TOPIC_PLATFORMS.includes(p)) : [];
   if (platforms.length === 0) return null;
@@ -120,6 +148,7 @@ module.exports = {
   loadNews,
   saveNews,
   normalizeNews,
+  normalizeTopic,
   sourceTarget,
   SOURCE_PLATFORMS,
   TOPIC_PLATFORMS,

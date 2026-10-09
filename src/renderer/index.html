@@ -420,6 +420,25 @@
       <p id="mc-news-status" class="hint mc-status" role="status" aria-live="polite"></p>
       <button type="button" id="mc-news-setup" class="pad-send mc-connect" data-i18n="mc.news.setup" hidden>Skonfiguruj Newsy (Agent-Reach)</button>
       <div id="mc-news-picker" class="mc-news__picker" hidden>
+        <!-- X / Reddit: tools + logins live in the News venv and the tools' own
+             config; the buttons only open the bridge's console (modules/missionnews.js). -->
+        <section id="mc-news-social" class="mc-bucket mc-news__social">
+          <h3 class="mc-bucket__title" data-i18n="mc.news.social.title">X i Reddit</h3>
+          <p id="mc-news-social-state" class="hint"></p>
+          <div id="mc-news-social-actions" class="mc-news__actions"></div>
+        </section>
+        <section class="mc-bucket">
+          <h3 class="mc-bucket__title" data-i18n="mc.news.quick.title">Szybkie wyszukiwanie</h3>
+          <form id="mc-news-quick" class="mc-news__quick">
+            <div id="mc-news-qp" class="mc-ledger__toggle mc-news__qp" role="group" data-i18n-aria="mc.news.quick.platforms" aria-label="Gdzie szukac"></div>
+            <input id="mc-news-quick-input" class="mc-input" maxlength="120" spellcheck="false" autocomplete="off" data-i18n-ph="mc.news.quick.ph" data-i18n-aria="mc.news.quick.ph" placeholder="Temat, potem Enter" aria-label="Temat, potem Enter" />
+            <button type="submit" class="pad-send mc-connect" data-i18n="mc.news.quick.go">Szukaj</button>
+          </form>
+        </section>
+        <section class="mc-bucket">
+          <h3 class="mc-bucket__title" data-i18n="mc.news.presets.title">Gotowe zestawy</h3>
+          <div id="mc-news-presets" class="mc-news__actions"></div>
+        </section>
         <section class="mc-bucket">
           <h3 class="mc-bucket__title" data-i18n="mc.news.sources">Zrodla</h3>
           <ul id="mc-news-sources" class="mc-news__list"></ul>

@@ -21,7 +21,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 
 const HELPER_DIR = path
   .join(__dirname, '..', 'helpers', 'agent-reach')
@@ -29,10 +29,19 @@ const HELPER_DIR = path
   .replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 const BRIDGE = path.join(HELPER_DIR, 'lunacore_fetch.py');
 const REQUIREMENTS = path.join(HELPER_DIR, 'requirements.txt');
+const REQUIREMENTS_SOCIAL = path.join(HELPER_DIR, 'requirements-social.txt');
+/** Platforms whose login the bridge's `configure` console sets up. */
+const CONFIGURABLE = ['x', 'reddit'];
+/** X and Reddit sections carry more posts (Mati: 25 per topic). */
+const SOCIAL_PLATFORMS = ['twitter', 'reddit'];
+const MAX_SOCIAL_ENTRIES = 25;
 
 const MIN_PYTHON = [3, 10];
 const STATUS_TIMEOUT_MS = 30000;
-const FETCH_TIMEOUT_MS = 180000;
+// X / Reddit items run one at a time in the bridge (max 12 x 30 s worst case).
+const FETCH_TIMEOUT_MS = 300000;
+/** Min gap between two configure consoles (a double click must not stack windows). */
+const CONFIGURE_COOLDOWN_MS = 5000;
 const VENV_TIMEOUT_MS = 120000;
 const PIP_TIMEOUT_MS = 600000;
 const MAX_ENTRIES_PER_SECTION = 8;
@@ -44,7 +53,7 @@ const MAX_BRIEFING = 5;
 const URL_RE = /^https?:\/\/[^\s]+$/i;
 
 class NewsError extends Error {
-  /** @param {'news-not-setup'|'news-no-python'|'news-setup-failed'|'news-fetch-failed'|'news-timeout'|'news-nothing-selected'} reason */
+  /** @param {'news-not-setup'|'news-no-python'|'news-setup-failed'|'news-fetch-failed'|'news-timeout'|'news-nothing-selected'|'bad-input'|'rate-limited'} reason */
   constructor(reason, message) {
     super(message || reason);
     this.reason = reason;
@@ -65,6 +74,17 @@ function runProcDefault(file, args, { timeoutMs, input, env } = {}) {
     );
     if (input !== undefined) child.stdin.end(input);
   });
+}
+
+/**
+ * Starts a process in its own visible console window (Windows: detached ->
+ * new console) and lets it outlive the call. Used only for the bridge's
+ * `configure` prompt, where the user pastes a login the app must not see.
+ */
+function spawnConsoleDefault(file, args, { env } = {}) {
+  const child = spawn(file, args, { detached: true, stdio: 'ignore', windowsHide: false, env, cwd: os.tmpdir() });
+  child.on('error', (err) => console.error('[mission] news configure console:', err && err.message));
+  child.unref();
 }
 
 /** What Python, pip, yt-dlp and gh need from the environment - and no API keys. */
@@ -90,20 +110,26 @@ function pythonOk(versionText) {
   return major > MIN_PYTHON[0] || (major === MIN_PYTHON[0] && minor >= MIN_PYTHON[1]);
 }
 
-/** Saved selection -> bridge items. A topic becomes one item per platform. */
-function buildItems(news, { sourceIds = [], topicIds = [] }) {
+const topicItems = (id, t) =>
+  t.platforms.map((platform) => ({ id: `${id}~${platform}`, kind: 'topic', platform, query: t.query, label: t.query }));
+
+/**
+ * Saved selection -> bridge items. A topic becomes one item per platform.
+ * `adhoc` is a quick search ({query, platforms}, already validated by
+ * missionnewsstore.normalizeTopic in main) that is not saved anywhere.
+ */
+function buildItems(news, { sourceIds = [], topicIds = [], adhoc = null }) {
   const pickSources = new Set(Array.isArray(sourceIds) ? sourceIds : []);
   const pickTopics = new Set(Array.isArray(topicIds) ? topicIds : []);
   const items = news.sources
     .filter((s) => pickSources.has(s.id))
     .map((s) => ({ id: s.id, kind: 'source', platform: s.platform, target: s.target, label: s.label }));
-  for (const t of news.topics.filter((topic) => pickTopics.has(topic.id))) {
-    for (const platform of t.platforms) {
-      items.push({ id: `${t.id}~${platform}`, kind: 'topic', platform, query: t.query, label: t.query });
-    }
-  }
+  for (const t of news.topics.filter((topic) => pickTopics.has(topic.id))) items.push(...topicItems(t.id, t));
+  if (adhoc && Array.isArray(adhoc.platforms)) items.push(...topicItems('q', adhoc));
   return items;
 }
+
+const maxEntries = (platform) => (SOCIAL_PLATFORMS.includes(platform) ? MAX_SOCIAL_ENTRIES : MAX_ENTRIES_PER_SECTION);
 
 /** Bridge output + the requested items -> sections with keyed entries. */
 function toSections(items, bridgeOut) {
@@ -117,7 +143,7 @@ function toSections(items, bridgeOut) {
     }
     const entries = (Array.isArray(res.entries) ? res.entries : [])
       .filter((e) => e && typeof e.url === 'string' && URL_RE.test(e.url))
-      .slice(0, MAX_ENTRIES_PER_SECTION)
+      .slice(0, maxEntries(item.platform))
       .map((e, j) => ({
         key: `e${i}-${j}`,
         title: str(e.title, 300) || '(no title)',
@@ -208,9 +234,11 @@ function createNews({
   venvDir = () => path.join(require('electron').app.getPath('userData'), 'agent-reach-venv'),
   env = () => childEnv(process.env),
   platform = process.platform,
+  spawnConsole = spawnConsoleDefault,
 } = {}) {
   // Entry key -> url from the most recent scan; nothing else is openable.
   let urls = new Map();
+  let lastConsoleAt = 0;
 
   const venvPython = () =>
     platform === 'win32' ? path.join(venvDir(), 'Scripts', 'python.exe') : path.join(venvDir(), 'bin', 'python');
@@ -224,12 +252,19 @@ function createNews({
     try {
       const out = JSON.parse(await bridge('status', { timeoutMs: STATUS_TIMEOUT_MS }));
       const modules = out.modules || {};
+      const social = out.social || {};
       return {
         ready: modules.yt_dlp === true && modules.feedparser === true,
         installed: true,
         agentReach: str(out.agentReach, 20),
         python: str(out.python, 20),
         gh: out.gh === true,
+        // Strict booleans: whether a login is saved, never anything about it.
+        social: {
+          tools: social.twitterCli === true && social.rdtCli === true,
+          x: social.x === true,
+          reddit: social.reddit === true,
+        },
       };
     } catch (err) {
       console.error('[mission] news status:', err && err.message);
@@ -267,6 +302,34 @@ function createNews({
     return status();
   }
 
+  /** Adds twitter-cli + rdt-cli to the News venv; the base pins act as constraints. */
+  async function setupSocial() {
+    if (!fs.existsSync(venvPython())) throw new NewsError('news-not-setup');
+    try {
+      await runProc(
+        venvPython(),
+        ['-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '-r', REQUIREMENTS_SOCIAL, '-c', REQUIREMENTS],
+        { timeoutMs: PIP_TIMEOUT_MS, env: env() }
+      );
+    } catch (err) {
+      throw new NewsError('news-setup-failed', String(err.stderr || err.message).slice(0, 500));
+    }
+    return status();
+  }
+
+  /**
+   * Opens the bridge's `configure` console for X or Reddit. The user pastes
+   * their cookies there; they go straight into the tool's own config and
+   * never pass through this process.
+   */
+  function configure(which) {
+    if (!CONFIGURABLE.includes(which)) throw new NewsError('bad-input');
+    if (!fs.existsSync(venvPython())) throw new NewsError('news-not-setup');
+    if (Date.now() - lastConsoleAt < CONFIGURE_COOLDOWN_MS) throw new NewsError('rate-limited');
+    lastConsoleAt = Date.now();
+    spawnConsole(venvPython(), ['-I', '-B', '-X', 'utf8', BRIDGE, 'configure', which], { env: env() });
+  }
+
   /** Runs the bridge for the selection; returns sections (URLs stay in main). */
   async function fetchSections(news, selection) {
     const items = buildItems(news, selection || {});
@@ -285,7 +348,7 @@ function createNews({
     return sections;
   }
 
-  return { status, setup, fetchSections, urlFor: (key) => (typeof key === 'string' && urls.get(key)) || null };
+  return { status, setup, setupSocial, configure, fetchSections, urlFor: (key) => (typeof key === 'string' && urls.get(key)) || null };
 }
 
 module.exports = {

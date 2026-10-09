@@ -1,8 +1,10 @@
 // ============================================================================
 // LunaCore - Mission Control: News widget (Agent-Reach fetch + Haiku summary)
 // ----------------------------------------------------------------------------
-// Saved sources (a feed: YouTube channel, RSS, web page, GitHub repo) and
-// topics (keywords searched on YouTube / GitHub / Bilibili / Hacker News).
+// Saved sources (a feed: YouTube channel, RSS, web page, GitHub repo, X
+// account, subreddit) and topics (keywords searched on YouTube / GitHub /
+// Bilibili / Hacker News / X / Reddit), one-click presets, and a quick search
+// that fetches + summarises one topic without saving it.
 // Click a source or topic name to scan just that one; tick several and press
 // Scan for one combined run. Either way: Agent-Reach fetches (main ->
 // helpers/agent-reach), then ONE Haiku call writes the briefing and the
@@ -18,9 +20,13 @@ import { t } from './util.js';
 import { defineWidget } from './registry.js';
 import { onLangChange } from './bus.js';
 import { errorText, costSuffix, setStatus, ipcFailed } from './missionshared.js';
+import { PRESETS, applyPreset } from './missionnewspresets.js';
 
-const SOURCE_PLATFORMS = ['youtube', 'rss', 'web', 'github'];
-const TOPIC_PLATFORMS = ['youtube', 'github', 'bilibili', 'hackernews'];
+const SOURCE_PLATFORMS = ['youtube', 'rss', 'web', 'github', 'twitter', 'reddit'];
+const TOPIC_PLATFORMS = ['youtube', 'github', 'bilibili', 'hackernews', 'twitter', 'reddit'];
+/** Topic checkboxes ticked by default (X / Reddit need a login first). */
+const DEFAULT_TOPIC_PLATFORMS = ['youtube', 'github', 'hackernews'];
+const QUICK_PLATFORMS = ['twitter', 'reddit', 'youtube', 'hackernews', 'github'];
 const MAX_TOPICS_PER_ADD = 10;
 
 // Module state survives unmount (closing the panel never re-bills a scan).
@@ -28,6 +34,10 @@ let news = { sources: [], topics: [] };
 let status = null;
 let result = null;
 let scanning = false;
+let quickPlatform = 'twitter';
+/** The quick search the current result came from ({query, platform}), for "save as topic". */
+let lastQuick = null;
+let socialBusy = false;
 const picked = new Set();
 let els = null;
 
@@ -53,16 +63,18 @@ const platformName = (p) => t(`mc.news.platform.${p}`);
 
 // ---- Saved lists -------------------------------------------------------------
 
+/** @returns {Promise<boolean>} whether main saved it (it shows its own error otherwise). */
 async function save(next) {
   const res = await window.lunacore.missionNewsSave(next).catch(ipcFailed);
   if (!res.ok) {
     if (els) setStatus(els.status, errorText(res.reason), true);
-    return;
+    return false;
   }
   news = res.news;
   const ids = new Set([...news.sources, ...news.topics].map((x) => x.id));
   for (const id of [...picked]) if (!ids.has(id)) picked.delete(id);
   renderLists();
+  return true;
 }
 
 function removeItem(kind, id) {
@@ -144,6 +156,100 @@ function renderStatus() {
   els.setup.hidden = !status || ready;
   els.picker.hidden = !ready;
   if (status && !ready) setStatus(els.status, t(status.installed ? 'mc.news.broken' : 'mc.news.notSetup'));
+  renderSocial();
+}
+
+// ---- X / Reddit: tools + logins (the cookies never reach this window) ----------
+
+function renderSocial() {
+  if (!els) return;
+  const social = (status && status.social) || { tools: false, x: false, reddit: false };
+  const on = (v) => t(v ? 'mc.news.social.on' : 'mc.news.social.off');
+  els.socialState.textContent = social.tools
+    ? t('mc.news.social.state', { x: on(social.x), reddit: on(social.reddit) })
+    : t('mc.news.social.how');
+  const actions = [];
+  if (!social.tools) {
+    actions.push(button('pad-send mc-connect', t('mc.news.social.install'), installSocial));
+  } else {
+    for (const which of ['x', 'reddit']) {
+      const key = social[which] ? 'reconnect' : 'connect';
+      actions.push(button('pad-send mc-connect', t(`mc.news.social.${key}.${which}`), () => connect(which)));
+    }
+    actions.push(button('port-btn mc-ledger__clear', t('mc.news.social.recheck'), loadStatus));
+  }
+  for (const b of actions) b.disabled = socialBusy;
+  els.socialActions.replaceChildren(...actions);
+}
+
+async function installSocial() {
+  socialBusy = true;
+  renderSocial();
+  setStatus(els.status, t('mc.news.social.installing'));
+  const res = await window.lunacore.missionNewsSetupSocial().catch(ipcFailed);
+  socialBusy = false;
+  if (res.ok) status = res.status;
+  if (!els) return;
+  if (!res.ok) setStatus(els.status, errorText(res.reason), true);
+  else setStatus(els.status, t('mc.news.social.how'));
+  renderSocial();
+}
+
+async function connect(which) {
+  const res = await window.lunacore.missionNewsConfigure(which).catch(ipcFailed);
+  if (!els) return;
+  if (res.ok) setStatus(els.status, t('mc.news.social.opened'));
+  else setStatus(els.status, errorText(res.reason), true);
+}
+
+// ---- Quick search + presets -----------------------------------------------------
+
+function renderQuickPlatforms() {
+  if (!els) return;
+  els.quickPlatforms.replaceChildren(
+    ...QUICK_PLATFORMS.map((p) => {
+      const b = button('mc-ledger__pick', platformName(p), () => {
+        quickPlatform = p;
+        renderQuickPlatforms();
+      });
+      b.setAttribute('aria-pressed', String(p === quickPlatform));
+      return b;
+    })
+  );
+}
+
+function quickSearch(e) {
+  e.preventDefault();
+  const query = els.quickInput.value.trim();
+  if (!query) return;
+  scan([], [], { query, platform: quickPlatform });
+}
+
+function saveQuickAsTopic() {
+  if (!lastQuick) return;
+  const { query, platform } = lastQuick;
+  const next = applyPreset(news, { sources: [], topics: [{ query, platforms: [platform] }] });
+  save(next).then((ok) => {
+    if (ok && els) setStatus(els.status, t('mc.news.quick.saved', { query }));
+  });
+}
+
+function renderPresets() {
+  if (!els) return;
+  els.presets.replaceChildren(
+    ...PRESETS.map((preset) => {
+      const name = t(`mc.news.presets.${preset.id}`);
+      return button(
+        'port-btn mc-ledger__clear',
+        `+ ${name}`,
+        () =>
+          save(applyPreset(news, preset)).then((ok) => {
+            if (ok && els) setStatus(els.status, t('mc.news.presets.added', { name }));
+          }),
+        t('mc.news.presets.add', { name })
+      );
+    })
+  );
 }
 
 async function loadStatus() {
@@ -173,16 +279,20 @@ function renderScanButton() {
   els.scan.textContent = picked.size ? t('mc.news.scanN', { n: picked.size }) : t('mc.news.scan');
 }
 
-async function scan(sourceIds, topicIds) {
-  if (scanning || (!sourceIds.length && !topicIds.length)) return;
+/** adhoc: a quick search {query, platform} - fetched and summarised, not saved. */
+async function scan(sourceIds, topicIds, adhoc = null) {
+  if (scanning || (!sourceIds.length && !topicIds.length && !adhoc)) return;
   scanning = true;
   renderScanButton();
   setStatus(els.status, t('mc.news.scanning'));
   const lang = (window.i18n && window.i18n.lang) || 'pl';
-  const res = await window.lunacore.missionNewsScan({ sourceIds, topicIds, lang }).catch(ipcFailed);
+  const res = await window.lunacore.missionNewsScan({ sourceIds, topicIds, adhoc, lang }).catch(ipcFailed);
   scanning = false;
   // A failed summary still carries the fetched sections - show those.
-  if (res.ok || res.sections) result = res;
+  if (res.ok || res.sections) {
+    result = res;
+    lastQuick = adhoc;
+  }
   if (!els) return;
   renderScanButton();
   if (!res.ok) setStatus(els.status, errorText(res.reason) + costSuffix(res.costUsd), true);
@@ -230,6 +340,7 @@ function renderResults() {
     return;
   }
   const parts = [];
+  if (lastQuick) parts.push(button('pad-send mc-connect mc-news__savequick', t('mc.news.quick.save'), saveQuickAsTopic));
   if (result.briefing && result.briefing.length) {
     const brief = el('section', 'mc-bucket mc-news__briefing');
     const list = el('ul', 'mc-news__bullets');
@@ -254,7 +365,7 @@ function buildPlatformPickers(root) {
     const box = el('input');
     box.type = 'checkbox';
     box.value = p;
-    box.checked = p !== 'bilibili';
+    box.checked = DEFAULT_TOPIC_PLATFORMS.includes(p);
     label.append(box, el('span', '', platformName(p)));
     return label;
   });
@@ -282,8 +393,14 @@ defineWidget({
       topicInput: q('#mc-news-topic-input'),
       scan: q('#mc-news-scan'),
       results: q('#mc-news-results'),
+      socialState: q('#mc-news-social-state'),
+      socialActions: q('#mc-news-social-actions'),
+      quickPlatforms: q('#mc-news-qp'),
+      quickInput: q('#mc-news-quick-input'),
+      presets: q('#mc-news-presets'),
     };
     els.topicPlatforms = buildPlatformPickers(root);
+    q('#mc-news-quick').addEventListener('submit', quickSearch);
     q('#mc-news-addsource').addEventListener('submit', addSource);
     q('#mc-news-addtopic').addEventListener('submit', addTopics);
     els.setup.addEventListener('click', setup);
@@ -295,7 +412,12 @@ defineWidget({
     const offLang = onLangChange(() => {
       renderLists();
       renderResults();
+      renderSocial();
+      renderQuickPlatforms();
+      renderPresets();
     });
+    renderQuickPlatforms();
+    renderPresets();
     window.lunacore
       .missionNewsConfig()
       .then((saved) => {

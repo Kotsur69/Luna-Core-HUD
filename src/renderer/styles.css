@@ -4974,6 +4974,14 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mc-news__meta { font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; }
 .mc-news__remove { min-width: 0; padding: 0 var(--space-3); }
 .mc-news__add { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+/* X / Reddit setup, presets: a wrapping row of buttons. */
+.mc-news__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.mc-news__social .hint { margin: 0 0 var(--space-3); }
+/* Quick search: platform toggle, topic, go - wraps under the toggle when narrow. */
+.mc-news__quick { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+.mc-news__quick .mc-input { flex: 1 1 140px; min-width: 0; }
+.mc-news__qp .mc-ledger__pick[aria-pressed="true"] { background: var(--surface-panel-2); color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--edge-glow); }
+.mc-news__savequick { align-self: flex-start; }
 .mc-news__add .mc-input { flex: 1 1 140px; min-width: 0; }
 .mc-news__platform { flex: 0 0 auto; width: auto; }
 .mc-news__tps { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); width: 100%; margin: 0; padding: 0; border: 0; }

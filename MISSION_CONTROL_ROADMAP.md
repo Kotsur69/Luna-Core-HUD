@@ -118,7 +118,13 @@ LunaCore only reads/writes a folder; something has to sync it. Mati: no
 OneDrive for personal stuff, Google Drive desktop is blocked by company
 policy, a work PC sits behind Zscaler.
 - **Try first: Syncthing** on all 3 PCs, one shared folder → in LunaCore
-  *Share with other PCs…* → pick it. Zscaler may block its relays / port
+  *Share with other PCs…* → pick it.
+  **This PC (KT-PC-LLM), 2026-10-09:** the SyncTrayzor *installer* failed for
+  Mati; the **portable** build works (v2.2.0, sha512 checked against the
+  release's `sha512sum.txt.asc`) → `%LOCALAPPDATA%\SyncTrayzorPortable\
+  SyncTrayzorPortable-x64\SyncTrayzor.exe`. Syncthing folder id
+  `lunacore-ledger` = `%USERPROFILE%\LunaLedger`, set as LunaCore's shared
+  folder. Not paired with the other PCs yet. Zscaler may block its relays / port
   22000 — if so, it fails silently (peer shows a stale "x hours ago").
 - **Fallback: Gmail transport** (Gmail works everywhere for Mati): each PC
   mails its ledger JSON to Mati's own address under a label, the others read
@@ -194,11 +200,54 @@ functions/commits went to X, the work project stands on Y, with its to-dos."*
 - The weekly review scores each goal against commits / closed to-dos (the
   model judges with evidence lines: done / partly / not yet).
 
-### W5 — X and Reddit in News + quick search + presets ⏳
+### W5 — X and Reddit in News + quick search + presets 🟡 (built 2026-10-09; live read waits for Mati's login)
+
+**Shipped:** News → *X and Reddit* block (Install X / Reddit tools →
+Connect X / Connect Reddit → Check again), *Quick search* (platform toggle
+X / Reddit / YouTube / HN / GitHub, Enter, result + "★ Save as topic"),
+*Presets* (AI / Claude, HSR leaks, Motorsport, Dev / tools — merge, no
+duplicates), X accounts (`@handle`) and subreddits (`r/name`) as sources,
+X / Reddit as topic platforms. 25 posts per X / Reddit section.
+- Bridge: `twitter` (search `-t top`, `user-posts`) and `reddit` (`sub -s
+  hot`, `search -s top -t week`) in `lunacore_fetch.py`; `configure x|reddit`
+  is an interactive console (hidden paste of Cookie-Editor's *Header
+  String*) that writes into Agent-Reach's `config.yaml` (X) / rdt-cli's
+  `credential.json` (Reddit), then does one tiny live check.
+- Main: `setupSocial()` = `pip install -r requirements-social.txt -c
+  requirements.txt` (whole tree pinned); `configure()` spawns that console
+  detached (own window); IPC `mission:news-setup-social`,
+  `mission:news-configure` (`'x'|'reddit'` only), `mission:news-scan` +
+  `adhoc {query, platform}` re-validated with `normalizeTopic`.
+- Installed into Mati's News venv on this PC (twitter-cli 0.8.5, rdt-cli
+  0.4.1, `pip check` clean). The other PCs install with the button.
+- Mati's browser is **Opera GX** (not Chrome / Edge as first answered):
+  neither CLI knows it, and its cookie DB is locked while it runs (shadow
+  copy needs admin) → the paste flow is the only path. Cookie-Editor
+  installs in Opera GX from the Chrome Web Store.
+
+**Still to do (needs Mati):** Connect X + Connect Reddit once, then verify
+live: the JSON shapes against real data, 25 posts arriving, preset
+subreddit names (`HonkaiStarRail_leaks` per search, ~338k members;
+`claudexplorers`, `trackdays`, `electronjs` unchecked), the HSR one.
+GitHub *trending* has no stable endpoint — the Dev preset uses a GitHub
+topic search "trending" instead.
+
+**Security review (ecc:security-reviewer):** no CRITICAL. Fixed both HIGH:
+twitter-cli (on a rejected login) and rdt-cli (on a 7-day-old one, even via
+`uv run --with browser-cookie3`, then overwriting `credential.json`) fall
+back to reading **other browsers' cookie stores** → each CLI now runs
+through a `python -I -c` shim that stubs `extract_from_browser` /
+`extract_browser_credential`, with an empty `APPDATA` / `LOCALAPPDATA` and
+`UV_OFFLINE=1`; verified live (no `credential.json` appeared). Fixed MEDIUM:
+whole dependency tree pinned, symlink check before rdt's writer, 10 s gap
+between quick searches (main), max 12 X / Reddit items per scan, 5 s
+cooldown on the configure console. Fixed LOW: `fullmatch` regexes, tighter
+permalink, no CLI stderr echoed, configure errors caught. Left open: pip
+hashes (with W8), orphaned CLI child on a scan timeout (≤ 30 s).
 
 **Answers (Mati, 2026-10-09):** cookies from his **main** X / Reddit
 accounts (he accepts the ban risk); **25 posts** per topic / source; logged
-in on **Chrome / Edge**.
+in on **Opera GX** (said Chrome / Edge first).
 
 **Found live (2026-10-09), before any install:**
 - Reddit has **no anonymous path**: `hot.rss` answered 200 once, then every
@@ -346,3 +395,25 @@ in on **Chrome / Edge**.
 - Don't patch JS regexes / escapes through a Python or bash heredoc: `\\`
   and `\u0000` got turned into real NUL/DEL bytes and single backslashes
   (silently weakening a UNC check). Use the Edit tool or `String.raw`.
+
+## Gotchas learned building W5 (X / Reddit)
+
+- **Reddit has no anonymous path any more:** `hot.rss` 200 once, then 429
+  on every request; `.json` 403. rdt-cli without a login → `forbidden`.
+- **Both CLIs read other browsers' cookies on their own** (twitter-cli on a
+  rejected login, rdt-cli after 7 days — via `uv run --with
+  browser-cookie3`, then it overwrites its credential file). Stub the
+  fallbacks (`python -I -c` shim) — env tricks alone are not enough.
+- Both CLIs print **YAML when stdout is not a TTY** — always pass `--json`;
+  both answer `{ok, schema_version, data, error}`. twitter's count flag is
+  `-n/--max`; rdt `--compact` gives flat post dicts.
+- browser_cookie3's Opera GX path is stale (`Default\Network\Cookies` now),
+  and a running Chromium locks the DB (shadow copy needs admin).
+- `pip install` of a fresh tree once failed with a hash mismatch on a
+  corrupted download — retry with `--no-cache-dir` before suspecting PyPI.
+- Windows `spawn(..., {detached: true, stdio: 'ignore'})` gives the child
+  its own console window — how the paste prompt stays out of the app.
+- A killed test Electron can leave its CDP port held by a dead PID — pick a
+  new port rather than waiting.
+- The classifier blocks reading browser cookie stores ("credential
+  exploration") — by design; the paste flow is the answer, not a bypass.

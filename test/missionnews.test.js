@@ -37,9 +37,9 @@ test('store: normalises targets per platform and drops junk', () => {
       { id: 'keep', platform: 'web', target: 'https://dup.example.com' },
     ],
     topics: [
-      { query: 'claude', platforms: ['youtube', 'twitter', 'youtube'] },
+      { query: 'claude', platforms: ['youtube', 'myspace', 'youtube'] },
       { query: '   ', platforms: ['youtube'] },
-      { query: 'x', platforms: ['twitter'] },
+      { query: 'x', platforms: ['myspace'] },
     ],
   });
   assert.deepEqual(
@@ -55,6 +55,63 @@ test('store: normalises targets per platform and drops junk', () => {
     out.topics.map((t) => t.platforms),
     [['youtube']]
   );
+});
+
+test('store: X accounts and subreddits become bare names; junk is dropped', () => {
+  const out = store.normalizeNews({
+    sources: [
+      { platform: 'reddit', target: 'r/ClaudeAI' },
+      { platform: 'reddit', target: 'https://www.reddit.com/r/LocalLLaMA/' },
+      { platform: 'reddit', target: 'not a sub!' },
+      { platform: 'twitter', target: '@AnthropicAI' },
+      { platform: 'twitter', target: 'https://x.com/claudeai' },
+      { platform: 'twitter', target: 'https://evil.example.com/claudeai' },
+      { platform: 'twitter', target: 'way_too_long_handle_123' },
+    ],
+    topics: [{ query: 'claude code', platforms: ['twitter', 'reddit'] }],
+  });
+  assert.deepEqual(
+    out.sources.map((s) => [s.platform, s.target, s.label]),
+    [
+      ['reddit', 'ClaudeAI', 'r/ClaudeAI'],
+      ['reddit', 'LocalLLaMA', 'r/LocalLLaMA'],
+      ['twitter', 'AnthropicAI', '@AnthropicAI'],
+      ['twitter', 'claudeai', '@claudeai'],
+    ]
+  );
+  assert.deepEqual(out.topics[0].platforms, ['twitter', 'reddit']);
+});
+
+test('store: normalizeTopic validates a one-off quick search', () => {
+  assert.deepEqual(store.normalizeTopic({ query: ' -- HSR leaks ', platforms: ['twitter'] }).platforms, ['twitter']);
+  assert.equal(store.normalizeTopic({ query: 'HSR leaks', platforms: ['myspace'] }), null);
+  assert.equal(store.normalizeTopic(null), null);
+});
+
+test('buildItems: a quick search is one topic item per platform, not saved', () => {
+  const items = newsMod.buildItems(NEWS, { adhoc: { query: 'hsr leaks', platforms: ['twitter', 'reddit'] } });
+  assert.deepEqual(
+    items.map((i) => [i.id, i.kind, i.platform, i.query]),
+    [
+      ['q~twitter', 'topic', 'twitter', 'hsr leaks'],
+      ['q~reddit', 'topic', 'reddit', 'hsr leaks'],
+    ]
+  );
+});
+
+test('toSections: X and Reddit keep up to 25 posts, other platforms 8', () => {
+  const many = (n) => Array.from({ length: n }, (_, i) => ({ title: `t${i}`, url: `https://a.b/${i}` }));
+  const items = [
+    { id: 'q~reddit', kind: 'topic', platform: 'reddit', query: 'x', label: 'x' },
+    { id: 'q~youtube', kind: 'topic', platform: 'youtube', query: 'x', label: 'x' },
+  ];
+  const sections = newsMod.toSections(items, {
+    items: [
+      { id: 'q~reddit', ok: true, entries: many(30) },
+      { id: 'q~youtube', ok: true, entries: many(30) },
+    ],
+  });
+  assert.deepEqual(sections.map((s) => s.entries.length), [25, 8]);
 });
 
 test('store: save writes the normalised copy and load survives a broken file', () => {
@@ -197,6 +254,66 @@ test('createNews: fetch sends targets as stdin JSON (never argv) and urlFor reso
   assert.equal(news.urlFor('e9-9'), null);
 });
 
+function fakeVenv() {
+  const venv = fs.mkdtempSync(path.join(os.tmpdir(), 'venv-'));
+  fs.mkdirSync(path.join(venv, 'Scripts'));
+  fs.writeFileSync(path.join(venv, 'Scripts', 'python.exe'), '');
+  return venv;
+}
+
+test('createNews: status reports the X / Reddit tools and logins as booleans only', async () => {
+  const venv = fakeVenv();
+  const news = newsMod.createNews({
+    platform: 'win32',
+    venvDir: () => venv,
+    runProc: async () =>
+      JSON.stringify({
+        agentReach: '1.5.0',
+        modules: { yt_dlp: true, feedparser: true },
+        social: { twitterCli: true, rdtCli: true, x: 'secret?', reddit: true },
+      }),
+  });
+  const st = await news.status();
+  assert.deepEqual(st.social, { tools: true, x: false, reddit: true });
+});
+
+test('createNews: setupSocial installs the pinned tools with the base pins as constraints', async () => {
+  const venv = fakeVenv();
+  const calls = [];
+  const news = newsMod.createNews({
+    platform: 'win32',
+    venvDir: () => venv,
+    runProc: async (file, args) => {
+      calls.push(args);
+      return JSON.stringify({ modules: { yt_dlp: true, feedparser: true }, social: {} });
+    },
+  });
+  await news.setupSocial();
+  const pip = calls.find((a) => a.includes('pip'));
+  assert.ok(pip[pip.indexOf('-r') + 1].endsWith('requirements-social.txt'));
+  assert.ok(pip[pip.indexOf('-c') + 1].endsWith('requirements.txt'));
+  const none = newsMod.createNews({ venvDir: () => path.join(os.tmpdir(), `no-venv-${process.pid}`), runProc: async () => '' });
+  await assert.rejects(none.setupSocial(), { reason: 'news-not-setup' });
+});
+
+test('createNews: configure opens the bridge console for x / reddit only', () => {
+  const venv = fakeVenv();
+  const spawned = [];
+  const news = newsMod.createNews({
+    platform: 'win32',
+    venvDir: () => venv,
+    runProc: async () => '',
+    spawnConsole: (file, args) => spawned.push([file, args]),
+  });
+  news.configure('reddit');
+  assert.throws(() => news.configure('x; calc'), { reason: 'bad-input' });
+  // A second click right away does not stack another console window.
+  assert.throws(() => news.configure('reddit'), { reason: 'rate-limited' });
+  assert.equal(spawned.length, 1);
+  assert.deepEqual(spawned[0][1].slice(-2), ['configure', 'reddit']);
+  assert.ok(spawned[0][1].includes('-I'));
+});
+
 // ---- IPC ---------------------------------------------------------------------
 
 function harness({ sections, answer }) {
@@ -204,10 +321,20 @@ function harness({ sections, answer }) {
   const listeners = new Map();
   const jobs = [];
   const opened = [];
+  const selections = [];
+  const configured = [];
   const fakeNews = {
     status: async () => ({ ready: true, installed: true }),
     setup: async () => ({ ready: true }),
-    fetchSections: async () => sections,
+    setupSocial: async () => ({ ready: true, social: { tools: true } }),
+    configure: (p) => {
+      if (!['x', 'reddit'].includes(p)) throw Object.assign(new Error('bad'), { reason: 'bad-input' });
+      configured.push(p);
+    },
+    fetchSections: async (_n, selection) => {
+      selections.push(selection);
+      return sections;
+    },
     urlFor: (k) => (k === 'e0-0' ? 'https://a.b/c' : null),
   };
   registerMissionIpc({
@@ -229,8 +356,30 @@ function harness({ sections, answer }) {
     send: (ch, arg) => listeners.get(ch)({}, arg),
     jobs,
     opened,
+    selections,
+    configured,
   };
 }
+
+test('news-scan: a quick search is re-validated in main; junk platforms never reach the bridge', async () => {
+  const h = harness({ sections: ONE, answer: { briefing: [], sections: [] } });
+  await h.invoke('mission:news-scan', { adhoc: { query: 'hsr leaks', platform: 'twitter' } });
+  assert.deepEqual(h.selections[0].adhoc, { query: 'hsr leaks', platforms: ['twitter'] });
+  await h.invoke('mission:news-scan', { adhoc: { query: 'x', platform: 'file:///etc' } });
+  assert.equal(h.selections[1].adhoc, null);
+  // Quick searches hit Mati's main accounts: back-to-back ones are refused in main.
+  const again = await h.invoke('mission:news-scan', { adhoc: { query: 'f1', platform: 'reddit' } });
+  assert.deepEqual([again.ok, again.reason], [false, 'rate-limited']);
+  assert.equal(h.selections.length, 2);
+});
+
+test('news-configure / news-setup-social: platform checked, failures typed', async () => {
+  const h = harness({ sections: ONE, answer: {} });
+  assert.deepEqual(await h.invoke('mission:news-configure', 'x'), { ok: true });
+  assert.deepEqual(await h.invoke('mission:news-configure', { evil: 1 }), { ok: false, reason: 'bad-input' });
+  assert.deepEqual(h.configured, ['x']);
+  assert.equal((await h.invoke('mission:news-setup-social')).ok, true);
+});
 
 const ONE = [
   {

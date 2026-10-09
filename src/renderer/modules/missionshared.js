@@ -40,6 +40,7 @@ const ERROR_KEYS = {
   'news-fetch-failed': 'mc.err.newsFetchFailed',
   'news-timeout': 'mc.err.newsTimeout',
   'news-nothing-selected': 'mc.err.newsNothing',
+  'rate-limited': 'mc.news.err.rate-limited',
   generic: 'mc.err.generic',
 };
 

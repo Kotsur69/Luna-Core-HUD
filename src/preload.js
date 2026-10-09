@@ -241,7 +241,11 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionNewsStatus: () => ipcRenderer.invoke('mission:news-status'),
   /** Creates the News venv and installs Agent-Reach's deps. Promise<{ok, status} | {ok:false, reason}>. */
   missionNewsSetup: () => ipcRenderer.invoke('mission:news-setup'),
-  /** Fetch + Haiku summary of saved ids. Promise<{ok, briefing, sections, costUsd} | {ok:false, reason}>. */
+  /** Adds the X / Reddit tools to the News venv. Promise<{ok, status} | {ok:false, reason}>. */
+  missionNewsSetupSocial: () => ipcRenderer.invoke('mission:news-setup-social'),
+  /** Opens the console where the X / Reddit login is pasted ('x' | 'reddit'). Promise<{ok} | {ok:false, reason}>. */
+  missionNewsConfigure: (which) => ipcRenderer.invoke('mission:news-configure', which),
+  /** Fetch + Haiku summary of saved ids, or a quick search {adhoc:{query, platform}}. Promise<{ok, briefing, sections, costUsd} | {ok:false, reason}>. */
   missionNewsScan: (req) => ipcRenderer.invoke('mission:news-scan', req),
   /** Opens a fetched entry by key - main resolves the URL. */
   missionNewsOpen: (key) => ipcRenderer.send('mission:news-open', key),

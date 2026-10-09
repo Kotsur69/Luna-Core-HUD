@@ -65,6 +65,8 @@ const OPEN_GAP_MS = 500;
 const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, create: 120000, news: 180000 };
 const LANGS = ['pl', 'en'];
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Min gap between two quick searches (X / Reddit ride the user's main accounts). */
+const QUICK_SEARCH_GAP_MS = 10000;
 
 /** Local ISO 8601 with the zone offset, e.g. 2026-10-08T14:03:00+02:00. */
 function localIsoNow(date = new Date()) {
@@ -126,6 +128,7 @@ function registerMissionIpc({
   let lastPreview = null;
   const busy = new Set();
   let lastOpenAt = 0;
+  let lastQuickAt = 0;
 
   /** Opens what `resolve` maps the renderer's key to - throttled, so a
    *  misbehaving renderer cannot fire a burst of browser tabs. */
@@ -317,11 +320,42 @@ function registerMissionIpc({
     })
   );
 
-  // req: {sourceIds[], topicIds[], lang}. Ids are looked up in the saved store;
-  // the renderer cannot introduce a target of its own.
+  // Adds twitter-cli + rdt-cli to the News venv (pinned, base pins as constraints).
+  ipcMain.handle('mission:news-setup-social', () =>
+    guarded('news-setup-social', async () => {
+      try {
+        return { ok: true, status: await news.setupSocial() };
+      } catch (err) {
+        return typedFailure('news setup social', err, 'news-setup-failed');
+      }
+    })
+  );
+
+  // 'x' | 'reddit': opens the bridge's own console where the user pastes the
+  // login. The cookies never come through here - only this word does.
+  ipcMain.handle('mission:news-configure', (_event, which) => {
+    try {
+      news.configure(typeof which === 'string' ? which : '');
+      return { ok: true };
+    } catch (err) {
+      return typedFailure('news configure', err, 'bad-input');
+    }
+  });
+
+  // req: {sourceIds[], topicIds[], adhoc?: {query, platform}, lang}. Ids are
+  // looked up in the saved store; a quick search is re-validated like a saved
+  // topic. The renderer cannot introduce a URL or a platform of its own.
   ipcMain.handle('mission:news-scan', (_event, req) =>
     guarded('news-scan', async () => {
-      const selection = { sourceIds: req && req.sourceIds, topicIds: req && req.topicIds };
+      const raw = req && req.adhoc;
+      const topic = raw && typeof raw === 'object' ? newsStore.normalizeTopic({ query: raw.query, platforms: [raw.platform] }) : null;
+      const adhoc = topic ? { query: topic.query, platforms: topic.platforms } : null;
+      if (adhoc) {
+        // The logins are Mati's main accounts: no burst of quick searches.
+        if (Date.now() - lastQuickAt < QUICK_SEARCH_GAP_MS) return { ok: false, reason: 'rate-limited' };
+        lastQuickAt = Date.now();
+      }
+      const selection = { sourceIds: req && req.sourceIds, topicIds: req && req.topicIds, adhoc };
       let sections;
       try {
         sections = await news.fetchSections(store.loadNews(), selection);
