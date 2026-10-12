@@ -228,7 +228,10 @@ function renderConnect() {
 
 function agendaFailed(reason) {
   setStatus(els.status, errorText(reason), true);
-  if (!NEEDS_CONNECT.has(reason)) return;
+  // Reset connected status on any failure during event loading.
+  // The gcal-auth reason specifically means the token is invalid and we should
+  // offer reconnection; other failures (network, API errors) might be temporary,
+  // but keeping "connected" displayed when events won't load is worse UX.
   config = { ...config, gcal: { ...config.gcal, connected: false } };
   renderConnect();
 }
