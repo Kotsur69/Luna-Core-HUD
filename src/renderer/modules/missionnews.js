@@ -300,7 +300,8 @@ function renderPresets() {
         () =>
           save(applyPreset(news, preset)).then((ok) => {
             if (!ok || !els) return;
-            // Tick what the preset covers, so the scan button is ready to go.
+            // The preset replaces the selection: only what it covers stays ticked.
+            picked.clear();
             for (const id of presetIds(news, preset)) picked.add(id);
             renderLists();
             setStatus(els.status, t('mc.news.presets.added', { name }));
