@@ -19,7 +19,7 @@
 import { t } from './util.js';
 import { defineWidget } from './registry.js';
 import { onLangChange } from './bus.js';
-import { errorText, costSuffix, setStatus, ipcFailed } from './missionshared.js';
+import { errorText, costSuffix, bindModelSelect, setStatus, ipcFailed } from './missionshared.js';
 import { PRESETS, applyPreset, presetIds } from './missionnewspresets.js';
 import { mountTrending } from './missiontrending.js';
 import { foldBuckets } from './missionfold.js';
@@ -520,6 +520,14 @@ defineWidget({
     els.topicPlatforms = buildPlatformPickers(root);
     const trending = mountTrending(root);
     foldBuckets(root);
+    window.lunacore
+      .getMissionConfig()
+      .then((config) => {
+        if (els) bindModelSelect(q('#mc-news-model'), config);
+      })
+      .catch(() => {
+        // No config -> leave the select empty; main falls back to haiku.
+      });
     q('#mc-news-quick').addEventListener('submit', quickSearch);
     q('#mc-news-addsource').addEventListener('submit', addSource);
     q('#mc-news-addtopic').addEventListener('submit', addTopics);

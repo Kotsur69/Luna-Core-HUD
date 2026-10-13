@@ -461,7 +461,13 @@
             <fieldset id="mc-news-tp" class="mc-news__tps"></fieldset>
           </form>
         </section>
-        <button type="button" id="mc-news-scan" class="pad-send mc-bar__go" disabled>Zaznacz zrodla lub tematy</button>
+        <div class="mc-bar">
+          <label class="mc-model">
+            <span data-i18n="mc.model">Model</span>
+            <select id="mc-news-model" class="profile-select mc-model__select"></select>
+          </label>
+          <button type="button" id="mc-news-scan" class="pad-send mc-bar__go" disabled>Zaznacz zrodla lub tematy</button>
+        </div>
       </div>
       <!-- GitHub Trending: scraped in main (src/missiontrending.js), needs no Agent-Reach
            setup. Built by modules/missiontrending.js. -->
