@@ -200,7 +200,20 @@ functions/commits went to X, the work project stands on Y, with its to-dos."*
 - The weekly review scores each goal against commits / closed to-dos (the
   model judges with evidence lines: done / partly / not yet).
 
-### W5 — X and Reddit in News + quick search + presets ✅ (2026-10-09; X *search* down upstream)
+### W5 — X and Reddit in News + quick search + presets ✅ (2026-10-09; X search fixed 2026-10-13)
+
+**Update 2026-10-13 — X search works again.** twitter-cli 0.8.5 is still the
+latest and upstream is dormant (issue #88, 7 unmerged PRs). Root cause: X now
+serves the *anonymous* x.com page without the `ondemand.s` bundle that
+ClientTransaction init needs (`/home` and `/search` too; a `/home`-only URL
+change does not help). The logged-in page still has it, so the `SHIMS["twitter"]`
+runtime patch in `lunacore_fetch.py` sends the session cookies for that one
+page fetch and clears them after. Live-verified: topic `nvidia` and `@nvidia`
+25 posts each. Gotcha when testing: twitter-cli caches the init for 1 h in
+`~/.twitter-cli/transaction_cache.json` — delete it to get an honest result.
+The notes below are the 2026-10-09 state; presets still use X accounts
+(topic presets are a follow-up).
+
 
 **Live check (2026-10-09, Mati connected both):** Reddit search + all 11
 preset subreddits read 23–25 posts each (`HonkaiStarRail_leaks`,

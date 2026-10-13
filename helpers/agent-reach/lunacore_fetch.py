@@ -311,6 +311,21 @@ SHIMS = {
     "twitter": (
         "import twitter_cli.auth as a\n"
         "a.extract_from_browser = lambda *k, **kw: (None, ['browser fallback disabled by LunaCore'])\n"
+        # X serves the anonymous x.com page without the ondemand.s bundle that
+        # ClientTransaction needs (twitter-cli issue #88), which makes search 404.
+        # The logged-in page still has it: send the session cookies for that one
+        # fetch only, then clear them so later requests keep their explicit header.
+        "import twitter_cli.client as c\n"
+        "_init = c.TwitterClient._ensure_client_transaction\n"
+        "def _init_with_cookies(self):\n"
+        "    s = c._get_cffi_session()\n"
+        "    s.cookies.set('auth_token', self._auth_token, domain='.x.com')\n"
+        "    s.cookies.set('ct0', self._ct0, domain='.x.com')\n"
+        "    try:\n"
+        "        return _init(self)\n"
+        "    finally:\n"
+        "        s.cookies.clear()\n"
+        "c.TwitterClient._ensure_client_transaction = _init_with_cookies\n"
         "from twitter_cli.cli import cli\n"
         "cli(prog_name='twitter')"
     ),
@@ -443,8 +458,9 @@ def x_search(query):
     try:
         return x_run(["search", "-t", "top", "-n", str(SOCIAL_ENTRIES), "--json", "--", query])
     except FetchError as err:
-        # X answers 404 to twitter-cli 0.8.5's search (2026-10-09) while
-        # timelines work: say so instead of "no such account".
+        # A 404 on search while timelines work means ClientTransaction init
+        # broke again (X changed its page; see the cookie fix in SHIMS):
+        # say so instead of "no such account".
         if str(err) == "not-found":
             raise FetchError("x-search-down") from err
         raise
