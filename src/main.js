@@ -152,6 +152,9 @@ const {
 const { saveClip, pruneClips, clipsDir } = require('./screenshots');
 
 const { readTodos, writeTodos } = require('./todo');
+// To-dos merged with the other PCs through the ledger's shared folder.
+const { startTodoSync } = require('./todosync');
+let todoSync = null;
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
@@ -778,6 +781,7 @@ const intakeServer = new IntakeServer({
         const ok = writeTodos(session.projectId, list);
         // The widget repaints from disk (merging any unsaved local edit).
         if (ok) send('todo:changed', { projectId: session.projectId });
+        if (ok && todoSync) todoSync.soon();
         return ok;
       },
     };
@@ -2619,11 +2623,15 @@ function registerIpc() {
   // (List operations themselves are pure and live in the renderer widget.)
   ipcMain.handle('todo:read', (_event, sessionId) => {
     const session = resolveSession(sessionId);
+    // Opening a list also pulls the other PCs' changes (todo:changed repaints).
+    if (todoSync) todoSync.soon();
     return readTodos(session ? session.projectId : null);
   });
   ipcMain.handle('todo:write', (_event, list, sessionId) => {
     const session = resolveSession(sessionId);
-    return writeTodos(session ? session.projectId : null, list);
+    const ok = writeTodos(session ? session.projectId : null, list);
+    if (ok && todoSync) todoSync.soon();
+    return ok;
   });
 
   // God Mode: the hard confirm gate (GODMODE_PLAN.md decision #5). A NATIVE
@@ -2972,6 +2980,10 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   startActiveProjects(); // sets cwd before the first session starts
+  todoSync = startTodoSync({
+    getProjects: () => projects,
+    onChanged: (ids) => ids.forEach((projectId) => send('todo:changed', { projectId })),
+  });
   // God Mode v2: bring back the last run's board (held - nothing launches
   // until Approve/Retry) and start the worker-time watchdog. After the
   // projects load: a restored run must belong to one of them.

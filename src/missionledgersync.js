@@ -63,15 +63,16 @@ function validRow(r, now) {
   return [hour, key, name, model, ...tokens];
 }
 
-/** Writes this PC's rows (tmp file + rename, so a sync never sees half a file). */
-function writeOwn(dir, machine, rows, now = Date.now()) {
-  if (!MACHINE_RE.test(machine)) throw new Error('bad machine name');
-  const file = path.join(dir, `ledger-${machine}.json`);
-  // Random name + 'wx': anyone who can write to the synced folder could plant a
-  // symlink at a guessable temp name; 'wx' fails instead of following it.
+/**
+ * Writes JSON into the shared folder: tmp file + rename, so a sync tool never
+ * sees half a file. Random name + 'wx': anyone who can write to the synced
+ * folder could plant a symlink at a guessable temp name; 'wx' fails instead
+ * of following it.
+ */
+function writeSharedJson(file, data) {
   const tmp = `${file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify({ v: VERSION, machine, updatedAt: now, rows }), { encoding: 'utf8', flag: 'wx' });
+    fs.writeFileSync(tmp, JSON.stringify(data), { encoding: 'utf8', flag: 'wx' });
     fs.renameSync(tmp, file);
   } catch (err) {
     fs.rmSync(tmp, { force: true });
@@ -79,21 +80,31 @@ function writeOwn(dir, machine, rows, now = Date.now()) {
   }
 }
 
-/** One peer file -> {machine, updatedAt, rows} or null. */
-function readPeer(file, machine, now) {
+/** A regular (non-link) file of at most maxBytes, parsed as JSON; null otherwise. */
+function readSharedJson(file, maxBytes = MAX_FILE_BYTES) {
   let st;
   try {
     st = fs.lstatSync(file);
   } catch {
     return null;
   }
-  if (!st.isFile() || st.size > MAX_FILE_BYTES) return null;
-  let data;
+  if (!st.isFile() || st.size > maxBytes) return null;
   try {
-    data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     return null;
   }
+}
+
+/** Writes this PC's rows. */
+function writeOwn(dir, machine, rows, now = Date.now()) {
+  if (!MACHINE_RE.test(machine)) throw new Error('bad machine name');
+  writeSharedJson(path.join(dir, `ledger-${machine}.json`), { v: VERSION, machine, updatedAt: now, rows });
+}
+
+/** One peer file -> {machine, updatedAt, rows} or null. */
+function readPeer(file, machine, now) {
+  const data = readSharedJson(file);
   if (!data || data.v !== VERSION || data.machine !== machine || !Array.isArray(data.rows)) return null;
   const updatedAt = Number.isFinite(data.updatedAt) ? data.updatedAt : 0;
   const rows = [];
@@ -133,4 +144,16 @@ function readPeers(dir, ownMachine, now = Date.now()) {
 /** A project key as missionrepokey.js produces it ("other", "git:...", "local:..."). */
 const validKey = (key) => typeof key === 'string' && KEY_RE.test(key);
 
-module.exports = { machineName, writeOwn, readPeers, validRow, validKey, MAX_PEERS, MAX_PEER_KEYS, MAX_FILE_BYTES };
+module.exports = {
+  machineName,
+  writeOwn,
+  readPeers,
+  validRow,
+  validKey,
+  writeSharedJson,
+  readSharedJson,
+  MACHINE_RE,
+  MAX_PEERS,
+  MAX_PEER_KEYS,
+  MAX_FILE_BYTES,
+};
