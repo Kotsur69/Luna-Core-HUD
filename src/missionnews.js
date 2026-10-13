@@ -18,6 +18,7 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -227,9 +228,44 @@ function publicSections(sections, summaries = new Map()) {
   });
 }
 
+const KEY_RE = /^[0-9a-f]{8}-e\d+-\d+$/;
+
+/** Reads the saved key -> url table; a missing or broken file yields an empty one. */
+function loadLinks(file) {
+  const urls = new Map();
+  if (!file) return urls;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!Array.isArray(parsed)) return urls;
+    for (const pair of parsed.slice(-MAX_REMEMBERED_URLS)) {
+      if (Array.isArray(pair) && KEY_RE.test(pair[0]) && typeof pair[1] === 'string' && URL_RE.test(pair[1])) {
+        urls.set(pair[0], pair[1]);
+      }
+    }
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') console.error('[mission] news links unreadable:', err && err.message);
+  }
+  return urls;
+}
+
+/** Best effort: a failed write only means old reports lose their links after a restart. */
+function saveLinks(file, urls) {
+  if (!file) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify([...urls]));
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    console.error('[mission] news links not saved:', err && err.message);
+  }
+}
+
 /**
- * @param {{runProc?:Function, venvDir?:()=>string, env?:()=>object, platform?:string}} [deps]
- *   All injectable so tests run without Python, a venv or Electron.
+ * @param {{runProc?:Function, venvDir?:()=>string, env?:()=>object, platform?:string,
+ *          linksFile?:string|(()=>string)|null}} [deps]
+ *   All injectable so tests run without Python, a venv or Electron. linksFile
+ *   null keeps the key -> url table in memory only.
  */
 function createNews({
   runProc = runProcDefault,
@@ -237,10 +273,14 @@ function createNews({
   env = () => childEnv(process.env),
   platform = process.platform,
   spawnConsole = spawnConsoleDefault,
+  linksFile = null,
 } = {}) {
   // Entry key -> url from recent scans (enough for the saved reports); nothing else is openable.
-  const urls = new Map();
-  let scanSeq = 0;
+  // Persisted to linksFile so reports saved by the renderer still open after a restart.
+  // linksFile may be a function so Electron's userData is only asked for on first use.
+  let urls = null;
+  const linksPath = () => (typeof linksFile === 'function' ? linksFile() : linksFile);
+  const table = () => urls || (urls = loadLinks(linksPath()));
   let lastConsoleAt = 0;
 
   const venvPython = () =>
@@ -348,21 +388,24 @@ function createNews({
     }
     // Keys are positional per scan (e0-0...), so namespace them: an older saved
     // report must keep resolving to its own links, not the newest scan's.
-    scanSeq += 1;
+    // A random scan id (not a counter) so keys stay unique across app restarts.
+    const scanId = crypto.randomBytes(4).toString('hex');
     const sections = toSections(items, out).map((s) => ({
       ...s,
-      entries: s.entries.map((e) => ({ ...e, key: `${scanSeq.toString(36)}-${e.key}` })),
+      entries: s.entries.map((e) => ({ ...e, key: `${scanId}-${e.key}` })),
     }));
-    for (const e of sections.flatMap((s) => s.entries)) urls.set(e.key, e.url);
+    const known = table();
+    for (const e of sections.flatMap((s) => s.entries)) known.set(e.key, e.url);
     // Bounded: drop the oldest keys (Map keeps insertion order).
-    for (const key of urls.keys()) {
-      if (urls.size <= MAX_REMEMBERED_URLS) break;
-      urls.delete(key);
+    for (const key of known.keys()) {
+      if (known.size <= MAX_REMEMBERED_URLS) break;
+      known.delete(key);
     }
+    saveLinks(linksPath(), known);
     return sections;
   }
 
-  return { status, setup, setupSocial, configure, fetchSections, urlFor: (key) => (typeof key === 'string' && urls.get(key)) || null };
+  return { status, setup, setupSocial, configure, fetchSections, urlFor: (key) => (typeof key === 'string' && table().get(key)) || null };
 }
 
 module.exports = {

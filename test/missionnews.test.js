@@ -272,6 +272,29 @@ test('createNews: an older scan keeps resolving to its own links after a newer s
   assert.equal(news.urlFor(second[0].entries[0].key), 'https://github.com/new/report');
 });
 
+test('createNews: saved links survive a restart; a broken file is an empty table', async () => {
+  const venv = fs.mkdtempSync(path.join(os.tmpdir(), 'venv-'));
+  fs.mkdirSync(path.join(venv, 'Scripts'));
+  fs.writeFileSync(path.join(venv, 'Scripts', 'python.exe'), '');
+  const linksFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'links-')), 'news-links.json');
+  const make = () =>
+    newsMod.createNews({
+      platform: 'win32',
+      venvDir: () => venv,
+      linksFile,
+      runProc: async () =>
+        JSON.stringify({ items: [{ id: 's-gh', ok: true, entries: [{ title: 't', url: 'https://github.com/x/y' }] }] }),
+    });
+  const sections = await make().fetchSections(NEWS, { sourceIds: ['s-gh'] });
+  const key = sections[0].entries[0].key;
+  assert.equal(make().urlFor(key), 'https://github.com/x/y');
+
+  fs.writeFileSync(linksFile, JSON.stringify([['bad key', 'https://a.b'], [key, 'javascript:alert(1)']]));
+  assert.equal(make().urlFor(key), null);
+  fs.writeFileSync(linksFile, '{not json');
+  assert.equal(make().urlFor(key), null);
+});
+
 function fakeVenv() {
   const venv = fs.mkdtempSync(path.join(os.tmpdir(), 'venv-'));
   fs.mkdirSync(path.join(venv, 'Scripts'));

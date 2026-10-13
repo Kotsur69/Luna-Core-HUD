@@ -130,7 +130,9 @@ function registerMissionIpc({
   gcal = createGcal(),
   github = createGithub(),
   trending = createTrending(),
-  news = createNews(),
+  news = createNews({
+    linksFile: () => require('path').join(require('electron').app.getPath('userData'), 'news-links.json'),
+  }),
   store = newsStore,
   openExternal = (url) => require('electron').shell.openExternal(url),
   ledgerService = null,
