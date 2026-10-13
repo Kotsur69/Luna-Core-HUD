@@ -349,3 +349,27 @@ test('mission:github-open opens only an id from the last fetch, never a renderer
   h.send('mission:github-open', 'prs:0');
   assert.deepEqual(h.opened, ['https://github.com/o/r/pull/1']);
 });
+
+test('gcal-import-client: the file comes from a native dialog in main, never from the renderer', async () => {
+  const handlers = new Map();
+  const imported = [];
+  const gc = {
+    ...fakeGcal(),
+    status: () => ({ configured: imported.length > 0, connected: false }),
+    importClient: (file) => imported.push(file),
+  };
+  let answer = 'C:\Downloads\client_secret_1.json';
+  registerMissionIpc({
+    gcal: gc,
+    github: fakeGithub(),
+    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn), on: () => {} },
+    getModel: () => 'haiku',
+    getEnv: () => ({}),
+    pickClientFile: async () => answer,
+  });
+  const res = await handlers.get('mission:gcal-import-client')({}, 'C:\evil.json');
+  assert.deepEqual(res, { ok: true, gcal: { configured: true, connected: false } });
+  assert.deepEqual(imported, ['C:\Downloads\client_secret_1.json']);
+  answer = null;
+  assert.deepEqual(await handlers.get('mission:gcal-import-client')({}), { ok: false, reason: 'cancelled' });
+});

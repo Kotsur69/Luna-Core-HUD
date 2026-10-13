@@ -60,6 +60,19 @@ async function defaultPickDir() {
   return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
 }
 
+/** Native file dialog for the Google Desktop-app client JSON. */
+async function defaultPickClientFile() {
+  const { dialog, BrowserWindow } = require('electron');
+  const win = BrowserWindow.getFocusedWindow();
+  const opts = {
+    title: 'Google OAuth client (Desktop app) JSON',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  };
+  const result = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+  return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
+}
+
 /** Minimum gap between two links opened from the renderer. */
 const OPEN_GAP_MS = 500;
 
@@ -116,12 +129,14 @@ function registerMissionIpc({
   run = runJob,
   gcal = createGcal(),
   github = createGithub(),
+  trending = createTrending(),
   news = createNews(),
   store = newsStore,
   openExternal = (url) => require('electron').shell.openExternal(url),
   ledgerService = null,
   projects = projectStore,
   pickDir = defaultPickDir,
+  pickClientFile = defaultPickClientFile,
 }) {
   // Built on first use: requiring it is cheap, but tests never need the real one.
   let ledger = ledgerService;
@@ -129,7 +144,6 @@ function registerMissionIpc({
   let lastPreview = null;
   const busy = new Set();
   let lastOpenAt = 0;
-  trending = createTrending(),
   let lastQuickAt = 0;
 
   /** Opens what `resolve` maps the renderer's key to - throttled, so a
@@ -236,6 +250,21 @@ function registerMissionIpc({
 
   // Opens the browser for Google consent and waits (up to 3 min) for the
   // loopback redirect. One at a time: a second click while waiting is `busy`.
+  // The Google "Desktop app" client JSON: picked in a native dialog here, so
+  // the renderer never names a path; gcal.importClient validates and copies it.
+  ipcMain.handle('mission:gcal-import-client', () =>
+    guarded('gcal-import', async () => {
+      const file = await pickClientFile();
+      if (!file) return { ok: false, reason: 'cancelled' };
+      try {
+        gcal.importClient(file);
+        return { ok: true, gcal: gcal.status() };
+      } catch (err) {
+        return gcalFailure(err);
+      }
+    })
+  );
+
   ipcMain.handle('mission:gcal-connect', () =>
     guarded('gcal-connect', async () => {
       try {
@@ -260,6 +289,35 @@ function registerMissionIpc({
 
   // The renderer names an item id from the last fetch, never a URL.
   ipcMain.on('mission:github-open', openResolved((id) => github.urlFor(id)));
+
+  // GitHub Trending, scraped from the public page (src/missiontrending.js) - free.
+  // The renderer names a period ('daily' | 'weekly' | 'monthly'); main checks it.
+  ipcMain.handle('mission:trending', (_event, period) =>
+    guarded('trending', async () => {
+      try {
+        return { ok: true, trending: await trending.fetch(typeof period === 'string' ? period : undefined) };
+      } catch (err) {
+        return typedFailure('trending', err, 'trending-failed');
+      }
+    })
+  );
+
+  ipcMain.on('mission:trending-open', openResolved((id) => trending.urlFor(id)));
+
+  // One lean Haiku job over the repo README: req {id, lang}. The id must come from
+  // the last trending fetch - the renderer cannot name a repo of its own.
+  ipcMain.handle('mission:trending-describe', (_event, req) =>
+    guarded('trending-describe', async () => {
+      const input = await trending.describeInput(req && req.id);
+      if (!input) return { ok: false, reason: 'bad-input' };
+      const lang = LANGS.includes(req && req.lang) ? req.lang : 'pl';
+      const res = await job('describe', buildDescribePrompt(input, lang), { lean: true });
+      if (!res.ok) return res;
+      const description = parseDescription(res.answer);
+      if (!description) return { ok: false, reason: 'bad-json', costUsd: res.costUsd };
+      return { ok: true, description, costUsd: res.costUsd };
+    })
+  );
 
   // ---- Ledger: Claude spend per project (src/missionledgerservice.js) - free ----
 
@@ -290,35 +348,6 @@ function registerMissionIpc({
       if (!dir) return { ok: false, reason: 'cancelled' };
       return { ok: true, sharedDir: projects.setSharedDir(dir).sharedDir };
     })
-  // GitHub Trending, scraped from the public page (src/missiontrending.js) - free.
-  // The renderer names a period ('daily' | 'weekly' | 'monthly'); main checks it.
-  ipcMain.handle('mission:trending', (_event, period) =>
-    guarded('trending', async () => {
-      try {
-        return { ok: true, trending: await trending.fetch(typeof period === 'string' ? period : undefined) };
-      } catch (err) {
-        return typedFailure('trending', err, 'trending-failed');
-      }
-    })
-  );
-
-  ipcMain.on('mission:trending-open', openResolved((id) => trending.urlFor(id)));
-
-  // One lean Haiku job over the repo README: req {id, lang}. The id must come from
-  // the last trending fetch - the renderer cannot name a repo of its own.
-  ipcMain.handle('mission:trending-describe', (_event, req) =>
-    guarded('trending-describe', async () => {
-      const input = await trending.describeInput(req && req.id);
-      if (!input) return { ok: false, reason: 'bad-input' };
-      const lang = LANGS.includes(req && req.lang) ? req.lang : 'pl';
-      const res = await job('describe', buildDescribePrompt(input, lang), { lean: true });
-      if (!res.ok) return res;
-      const description = parseDescription(res.answer);
-      if (!description) return { ok: false, reason: 'bad-json', costUsd: res.costUsd };
-      return { ok: true, description, costUsd: res.costUsd };
-    })
-  );
-
   );
 
   ipcMain.handle('mission:ledger-clear-dir', () =>

@@ -364,6 +364,7 @@
       <div id="mc-cal-draft" class="mc-draft" hidden></div>
       <p id="mc-cal-status" class="hint mc-status" role="status" aria-live="polite"></p>
       <!-- Shown until Google Calendar is connected (read-only OAuth, src/gcal.js). -->
+      <button type="button" id="mc-cal-client" class="pad-send mc-connect" data-i18n="mc.cal.importClient" hidden>Wybierz plik klienta Google...</button>
       <button type="button" id="mc-cal-connect" class="pad-send mc-connect" data-i18n="mc.cal.connect" hidden>Polacz Google Calendar</button>
       <div id="mc-cal-agenda" class="mc-agenda"></div>
       <div id="mc-cal-monthview" class="mc-monthview" hidden>
@@ -462,7 +463,6 @@
         </section>
         <button type="button" id="mc-news-scan" class="pad-send mc-bar__go" disabled>Zaznacz zrodla lub tematy</button>
       </div>
-      <div id="mc-news-results" class="mc-results"></div>
       <!-- GitHub Trending: scraped in main (src/missiontrending.js), needs no Agent-Reach
            setup. Built by modules/missiontrending.js. -->
       <section class="mc-bucket mc-news__trending">
@@ -481,6 +481,7 @@
           <ul id="mc-trending" class="mc-news__list"></ul>
         </div>
       </section>
+      <div id="mc-news-results" class="mc-results"></div>
     </div>
   </template>
 

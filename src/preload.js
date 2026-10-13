@@ -229,18 +229,20 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionCalCreate: (draft) => ipcRenderer.invoke('mission:cal-create', draft),
   /** Browser consent for read-only Google Calendar access. Promise<{ok, gcal} | {ok:false, reason}>. */
   missionGcalConnect: () => ipcRenderer.invoke('mission:gcal-connect'),
+  /** Native dialog in main -> imports the Google Desktop-app client JSON. Promise<{ok, gcal} | {ok:false, reason}>. */
+  missionGcalImportClient: () => ipcRenderer.invoke('mission:gcal-import-client'),
   /** GitHub telemetry via the gh CLI (no model). Promise<{ok, github:{login, days, lists}} | {ok:false, reason}>. */
   missionGithub: () => ipcRenderer.invoke('mission:github'),
   /** Opens a PR/issue from the last fetch by its item id - main resolves the URL. */
   missionGithubOpen: (id) => ipcRenderer.send('mission:github-open', id),
-  /** Saved News sources and topics. Promise<{sources, topics}>. */
-  missionNewsConfig: () => ipcRenderer.invoke('mission:news-config'),
   /** GitHub Trending scraped in main (no model). period: 'daily'|'weekly'|'monthly'. Promise<{ok, trending:{period, items}} | {ok:false, reason}>. */
   missionTrending: (period) => ipcRenderer.invoke('mission:trending', period),
   /** Opens a trending repo from the last fetch by its item id - main resolves the URL. */
   missionTrendingOpen: (id) => ipcRenderer.send('mission:trending-open', id),
   /** Quick model description of a trending repo by item id (README, lean Haiku job). Promise<{ok, description:{summary, useFor, caveats}, costUsd} | {ok:false, reason}>. */
   missionTrendingDescribe: (id, lang) => ipcRenderer.invoke('mission:trending-describe', { id, lang }),
+  /** Saved News sources and topics. Promise<{sources, topics}>. */
+  missionNewsConfig: () => ipcRenderer.invoke('mission:news-config'),
   /** Replaces the saved sources/topics; main validates. Promise<{ok, news} | {ok:false, reason}>. */
   missionNewsSave: (news) => ipcRenderer.invoke('mission:news-save', news),
   /** Agent-Reach venv state. Promise<{ok, status:{ready, installed, agentReach?, python?}}>. */
