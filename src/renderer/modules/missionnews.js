@@ -34,8 +34,13 @@ const MAX_TOPICS_PER_ADD = 10;
 // Module state survives unmount (closing the panel never re-bills a scan).
 let news = { sources: [], topics: [] };
 let status = null;
-let result = null;
 let scanning = false;
+// Finished scans, newest first: {id, at, names, briefing, sections}. Kept in
+// localStorage (capped) so a report survives a restart without re-billing a scan.
+const REPORTS_KEY = 'lunacore.news.reports';
+const MAX_REPORTS = 10;
+let reports = loadReports();
+let viewer = null;
 let quickPlatform = 'reddit';
 /** The quick search the current result came from ({query, platform}), for "save as topic". */
 let lastQuick = null;
@@ -62,6 +67,53 @@ function button(cls, text, onClick, title) {
 }
 
 const platformName = (p) => t(`mc.news.platform.${p}`);
+
+// ---- Reports (persisted scan results) ------------------------------------------
+
+function loadReports() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(REPORTS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter((r) => r && r.id && Array.isArray(r.sections)).slice(0, MAX_REPORTS) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistReports() {
+  try {
+    localStorage.setItem(REPORTS_KEY, JSON.stringify(reports));
+  } catch {
+    // Storage blocked or full: reports still live for this session.
+  }
+}
+
+/** Section labels (subreddit, channel, topic) joined for the chip title. */
+function reportNames(res, adhoc) {
+  const labels = [...new Set((res.sections || []).map((s) => s.label).filter(Boolean))];
+  if (!labels.length && adhoc) labels.push(adhoc.query);
+  return labels.join(', ');
+}
+
+function addReport(res, adhoc) {
+  const report = {
+    id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    at: Date.now(),
+    names: reportNames(res, adhoc),
+    briefing: res.briefing || [],
+    sections: res.sections || [],
+  };
+  reports = [report, ...reports].slice(0, MAX_REPORTS);
+  persistReports();
+}
+
+function deleteReport(id) {
+  reports = reports.filter((r) => r.id !== id);
+  persistReports();
+  if (viewer && viewer.dataset.report === id) closeViewer();
+  renderResults();
+}
+
+const reportTitle = (r) => t('mc.news.report.title', { names: r.names || '-' });
 
 // ---- Saved lists -------------------------------------------------------------
 
@@ -258,7 +310,7 @@ async function loadStatus() {
   const res = await window.lunacore.missionNewsStatus().catch(ipcFailed);
   status = res.ok ? res.status : { ready: false, installed: false };
   renderStatus();
-  if (els && status.ready && !result) setStatus(els.status, t('mc.news.ready', { version: status.agentReach }));
+  if (els && status.ready && !reports.length) setStatus(els.status, t('mc.news.ready', { version: status.agentReach }));
 }
 
 async function setup() {
@@ -292,7 +344,7 @@ async function scan(sourceIds, topicIds, adhoc = null) {
   scanning = false;
   // A failed summary still carries the fetched sections - show those.
   if (res.ok || res.sections) {
-    result = res;
+    addReport(res, adhoc);
     lastQuick = adhoc;
   }
   if (!els) return;
@@ -335,22 +387,80 @@ function renderSection(s) {
   return box;
 }
 
-function renderResults() {
-  if (!els) return;
-  if (!result) {
-    els.results.replaceChildren();
-    return;
-  }
+/** The full report body: briefing bullets, then one box per source/topic. */
+function reportParts(report) {
   const parts = [];
-  if (lastQuick) parts.push(button('pad-send mc-connect mc-news__savequick', t('mc.news.quick.save'), saveQuickAsTopic));
-  if (result.briefing && result.briefing.length) {
+  if (report.briefing && report.briefing.length) {
     const brief = el('section', 'mc-bucket mc-news__briefing');
     const list = el('ul', 'mc-news__bullets');
-    list.append(...result.briefing.map((b) => el('li', '', b)));
+    list.append(...report.briefing.map((b) => el('li', '', b)));
     brief.append(el('h4', 'mc-bucket__title', t('mc.news.briefing')), list);
     parts.push(brief);
   }
-  parts.push(...(result.sections || []).map(renderSection));
+  parts.push(...report.sections.map(renderSection));
+  return parts;
+}
+
+function onViewerKey(e) {
+  if (e.key !== 'Escape') return;
+  e.stopPropagation();
+  closeViewer();
+}
+
+function closeViewer() {
+  if (!viewer) return;
+  document.removeEventListener('keydown', onViewerKey, true);
+  viewer.remove();
+  viewer = null;
+}
+
+/** Opens a report in a large overlay window; Esc, x or a click outside closes it. */
+function openViewer(report) {
+  closeViewer();
+  const close = button('port-btn mc-report__close', '×', closeViewer, t('mc.news.report.close'));
+  const head = el('div', 'mc-report__head');
+  head.append(el('h3', 'mc-report__title', reportTitle(report)), close);
+  const body = el('div', 'mc-report__body');
+  body.append(...reportParts(report));
+  const dialog = el('div', 'mc-report__dialog');
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-label', reportTitle(report));
+  dialog.append(head, body);
+  const overlay = el('div', 'mc-report');
+  overlay.dataset.report = report.id;
+  overlay.append(dialog);
+  overlay.addEventListener('mousedown', (e) => {
+    if (e.target === overlay) closeViewer();
+  });
+  document.body.append(overlay);
+  viewer = overlay;
+  document.addEventListener('keydown', onViewerKey, true);
+  close.focus();
+}
+
+function reportChip(report) {
+  const li = el('li', 'mc-report-chip');
+  const time = new Date(report.at).toLocaleTimeString((window.i18n && window.i18n.lang) || 'pl', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const open = button('mc-report-chip__open', '', () => openViewer(report), reportTitle(report));
+  open.append(el('span', 'mc-report-chip__name', reportTitle(report)), el('span', 'mc-row__note', time));
+  const remove = button('port-btn mc-news__remove', '×', () => deleteReport(report.id), t('mc.news.report.delete'));
+  li.append(open, remove);
+  return li;
+}
+
+function renderResults() {
+  if (!els) return;
+  const parts = [];
+  if (lastQuick) parts.push(button('pad-send mc-connect mc-news__savequick', t('mc.news.quick.save'), saveQuickAsTopic));
+  if (reports.length) {
+    const list = el('ul', 'mc-news__list mc-report-list');
+    list.append(...reports.map(reportChip));
+    parts.push(el('h4', 'mc-bucket__title', t('mc.news.report.heading')), list);
+  }
   els.results.replaceChildren(...parts);
 }
 
@@ -435,6 +545,7 @@ defineWidget({
     loadStatus();
     return () => {
       offLang();
+      closeViewer();
       trending.unmount();
       els = null;
     };
