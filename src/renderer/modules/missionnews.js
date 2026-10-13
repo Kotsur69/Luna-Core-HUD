@@ -20,8 +20,9 @@ import { t } from './util.js';
 import { defineWidget } from './registry.js';
 import { onLangChange } from './bus.js';
 import { errorText, costSuffix, setStatus, ipcFailed } from './missionshared.js';
-import { PRESETS, applyPreset } from './missionnewspresets.js';
+import { PRESETS, applyPreset, presetIds } from './missionnewspresets.js';
 import { mountTrending } from './missiontrending.js';
+import { foldBuckets } from './missionfold.js';
 
 const SOURCE_PLATFORMS = ['youtube', 'rss', 'web', 'github', 'twitter', 'reddit'];
 const TOPIC_PLATFORMS = ['youtube', 'github', 'bilibili', 'hackernews', 'twitter', 'reddit'];
@@ -298,7 +299,11 @@ function renderPresets() {
         `+ ${name}`,
         () =>
           save(applyPreset(news, preset)).then((ok) => {
-            if (ok && els) setStatus(els.status, t('mc.news.presets.added', { name }));
+            if (!ok || !els) return;
+            // Tick what the preset covers, so the scan button is ready to go.
+            for (const id of presetIds(news, preset)) picked.add(id);
+            renderLists();
+            setStatus(els.status, t('mc.news.presets.added', { name }));
           }),
         t('mc.news.presets.add', { name })
       );
@@ -513,6 +518,7 @@ defineWidget({
     };
     els.topicPlatforms = buildPlatformPickers(root);
     const trending = mountTrending(root);
+    foldBuckets(root);
     q('#mc-news-quick').addEventListener('submit', quickSearch);
     q('#mc-news-addsource').addEventListener('submit', addSource);
     q('#mc-news-addtopic').addEventListener('submit', addTopics);

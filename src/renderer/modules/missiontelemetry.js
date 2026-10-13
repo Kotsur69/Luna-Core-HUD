@@ -19,6 +19,7 @@ import { onLangChange, onUsageUpdate } from './bus.js';
 import { errorText, setStatus, ipcFailed } from './missionshared.js';
 import { githubVelocity, heatmap, budgetPace, paceFlags } from './missionpace.js';
 import { mountLedger } from './missionledger.js';
+import { foldBuckets } from './missionfold.js';
 
 const STALE_MS = 10 * 60 * 1000;
 const LISTS = ['reviews', 'prs', 'issues'];
@@ -221,6 +222,7 @@ defineWidget({
       open: root.querySelector('#mc-tele-open'),
     };
     const ledger = mountLedger(root.querySelector('#mc-tele-ledger'), weeklyLimit);
+    foldBuckets(root);
     els.refresh.addEventListener('click', () => {
       load();
       ledger.load(true);

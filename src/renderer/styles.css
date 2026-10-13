@@ -4682,6 +4682,10 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   text-transform: uppercase;
   color: var(--text-dim);
 }
+/* Foldable section titles (modules/missionfold.js): folded = title only. */
+.mc-bucket[data-collapsed] { gap: 0; }
+.mc-bucket[data-collapsed] > *:not(.mc-bucket__title) { display: none; }
+.mc-bucket[data-collapsed] > .mc-bucket__title .panel__fold { transform: rotate(-90deg); }
 .mc-row { grid-template-columns: auto 1fr; cursor: pointer; }
 .mc-row--flag { cursor: default; border-color: color-mix(in srgb, var(--warn) 55%, var(--edge)); }
 .mc-row__text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }

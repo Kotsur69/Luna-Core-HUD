@@ -46,6 +46,16 @@ export const PRESETS = [
 const sourceKey = (s) => `${s.platform}:${String(s.target).toLowerCase()}`;
 const topicKey = (t) => String(t.query).trim().toLowerCase();
 
+/** Ids of the saved sources and topics a preset covers, so a click can tick them for the scan. */
+export function presetIds(news, preset) {
+  const sourceKeys = new Set(preset.sources.map(sourceKey));
+  const topicKeys = new Set(preset.topics.map(topicKey));
+  return [
+    ...news.sources.filter((s) => sourceKeys.has(sourceKey(s))).map((s) => s.id),
+    ...news.topics.filter((tp) => topicKeys.has(topicKey(tp))).map((tp) => tp.id),
+  ];
+}
+
 /** news + preset -> a new news object; never mutates either. */
 export function applyPreset(news, preset) {
   const have = new Set(news.sources.map(sourceKey));
