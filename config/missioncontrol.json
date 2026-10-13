@@ -42,13 +42,14 @@
       { "id": "travel", "label": { "pl": "Podroze", "en": "Travel" }, "colorId": "5", "color": "#fbd75b" }
     ],
     "weather": {
+      "category": "motorsport",
       "tracks": [
-        { "name": "Tor Poznan", "names": ["tor poznan"], "lat": 52.418, "lon": 16.812 },
-        { "name": "Tor Kielce", "names": ["tor kielce", "miedziana gora"], "lat": 50.836, "lon": 20.551 },
-        { "name": "Autodrom Jastrzab", "names": ["autodrom jastrzab", "jastrzab"], "lat": 51.247, "lon": 20.948 },
+        { "name": "Tor Poznan", "names": ["tor poznan"], "towns": ["poznan", "przezmierowo"], "lat": 52.418, "lon": 16.812 },
+        { "name": "Tor Kielce", "names": ["tor kielce", "miedziana gora"], "towns": ["kielce"], "lat": 50.836, "lon": 20.551 },
+        { "name": "Autodrom Jastrzab", "names": ["autodrom jastrzab", "jastrzab"], "towns": ["szydlowiec"], "lat": 51.247, "lon": 20.948 },
         { "name": "Silesia Ring", "names": ["silesia ring", "silesia", "kamien slaski"], "lat": 50.530, "lon": 18.080 },
         { "name": "Slovakia Ring", "names": ["slovakia ring", "slovakiaring"], "lat": 48.055, "lon": 17.572 },
-        { "name": "Automotodrom Brno", "names": ["automotodrom brno", "masaryk circuit"], "lat": 49.203, "lon": 16.445 },
+        { "name": "Automotodrom Brno", "names": ["automotodrom brno", "masaryk circuit"], "towns": ["brno"], "lat": 49.203, "lon": 16.445 },
         { "name": "Autodrom Most", "names": ["autodrom most"], "lat": 50.519, "lon": 13.607 },
         { "name": "Hungaroring", "names": ["hungaroring"], "lat": 47.579, "lon": 19.248 },
         { "name": "Red Bull Ring", "names": ["red bull ring"], "lat": 47.220, "lon": 14.765 },

@@ -4762,20 +4762,56 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mc-event.is-editing { border-color: var(--edge-glow); background: var(--surface-panel-2); }
 .mc-edit-row { list-style: none; margin-block: var(--space-2) var(--space-4); }
 .mc-edit .mc-field:nth-child(4) { grid-column: 1 / -1; }
-/* Trackday weather: text, so rain is never told by colour alone. */
+/* Event weather: its own row under the event (text, so rain is never told by
+   colour alone); a button that unfolds the hourly table. Indented to the
+   title column so it reads as part of the event above. */
+.mc-wx-row { list-style: none; margin: calc(var(--space-2) * -1) 0 var(--space-3); padding-left: calc(4.6em + var(--space-5)); }
 .mc-wx {
-  display: block;
-  margin-top: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border: var(--border-w) solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   color: var(--neon-cyan);
+  cursor: pointer;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out;
 }
+.mc-wx:hover:not(:disabled) { border-color: var(--edge); background: var(--bg-panel-2); }
+.mc-wx:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 2px; }
+.mc-wx:disabled { cursor: default; }
+.mc-wx[aria-expanded='true'] { border-color: var(--edge-glow); background: var(--bg-panel-2); }
+.mc-wx__chevron { font-size: var(--fs-2xs); color: var(--text-dim); }
 .mc-wx.is-wet { color: var(--warn); }
+/* Hour by hour: wet hours tinted AND labelled in the last column. */
+.mc-wxh {
+  width: 100%;
+  margin-top: var(--space-3);
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.mc-wxh th, .mc-wxh td { padding: var(--space-1) var(--space-3); text-align: right; white-space: nowrap; color: var(--text); }
+.mc-wxh thead th { font-family: var(--font-ui); font-size: var(--fs-2xs); font-weight: 400; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); border-bottom: var(--border-w) solid var(--edge); }
+.mc-wxh tbody th { text-align: left; font-weight: 400; color: var(--text-dim); }
+.mc-wxh tbody tr + tr { border-top: var(--border-w) solid color-mix(in srgb, var(--edge) 50%, transparent); }
+.mc-wxh .mc-wxh__surface { text-align: left; font-family: var(--font-ui); }
+/* The hour and track columns read left to right, header included. */
+.mc-wxh thead th:first-child, .mc-wxh thead th:last-child { text-align: left; }
+.mc-wxh tr.is-dry .mc-wxh__surface { color: var(--good); }
+.mc-wxh tr.is-maybe { background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.mc-wxh tr.is-maybe .mc-wxh__surface { color: var(--warn); }
+.mc-wxh tr.is-wet { background: color-mix(in srgb, var(--neon-cyan) 12%, transparent); }
+.mc-wxh tr.is-wet .mc-wxh__surface { color: var(--neon-cyan); font-weight: 600; }
 /* Long range (over a week out): quieter, the "≈" carries the meaning. */
 .mc-wx.is-far { opacity: 0.75; font-style: italic; }
 @media (prefers-reduced-motion: reduce) {
-  .mc-event.is-editable { transition: none; }
+  .mc-event.is-editable, .mc-wx { transition: none; }
 }
 /* Category is always TEXT plus a colour dot - never colour alone. */
 .mc-chip {

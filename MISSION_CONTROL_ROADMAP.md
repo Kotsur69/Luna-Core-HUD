@@ -398,6 +398,22 @@ switches today), each day cell prints its time on the heat tile (dark text
 on bright levels), today's column lit, a share bar under each project, the
 method note folded under "How is this counted?".
 
+**Hourly + real-calendar fixes (same day):** the weather line is its own
+row under the event (a button: never nested in the clickable event row) and
+unfolds an hour-by-hour table - hour, temp, rain chance, rain **mm**, wind,
+and a dry / may rain / wet guess per hour (`missionweatherview.js
+surfaceOf`: mm decides first - >= 0.5 mm wet, 0.1-0.5 maybe unless >= 70 %;
+chance alone only when mm is missing). Rain mm added to the forecast fetch;
+max 48 hour rows. Found on Mati's real calendar: (1) the work address
+"..., Stalowa 1, 40-610 Katowice, Polska" resolved to "Polska" (country
+centre) - postcodes are now cut off with the town kept, and country /
+region hits (GeoNames PCL*, ADM1/2, CONT, RGN) are rejected; (2) "Trackday
+Kielce" at "Kielce" got the city - tracks have optional `towns`, matched only
+for trackday events (title/calendar says trackday, or `calendar.weather.
+category` = motorsport). Verified on the real agenda: work -> Katowice,
+Trackday Kielce -> Tor Kielce. Gotcha: a Python heredoc turned "\b" in a JS
+regex into a backspace char - write such patches as script files.
+
 ### W7b — Click-to-edit calendar events ✅ (2026-10-13, Mati's ask)
 
 - Click an event you own (week list or month day list) → inline card: title,

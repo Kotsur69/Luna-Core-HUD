@@ -22,7 +22,7 @@ import { t, loc } from './util.js';
 import { defineWidget } from './registry.js';
 import { errorText, costSuffix, setStatus, ipcFailed } from './missionshared.js';
 import { buildMonthGrid, eventsByDay, monthKeyOf, shiftMonth, shiftDate, dateKey, startDay } from './missioncalmonth.js';
-import { toInputValue, fromInputValue, field, input, buildEditor, weatherBadge } from './missioncaledit.js';
+import { toInputValue, fromInputValue, field, input, buildEditor, weatherRow } from './missioncaledit.js';
 
 let config = { categories: [], days: 7, gcal: { configured: false, connected: false } };
 let agenda = null;
@@ -33,6 +33,8 @@ let els = null;
 let editingId = null;
 let card = null; // {id, row} - the open card's DOM, kept across re-renders
 let weather = {};
+// Event ids whose hourly forecast is unfolded (kept across re-renders).
+const wxOpen = new Set();
 let weatherSeq = 0;
 const WEATHER_REFRESH_MS = 60 * 60 * 1000;
 // Month view. Loaded months are kept ('YYYY-MM' -> events) so flipping back
@@ -90,12 +92,20 @@ function eventRow(ev, withCard) {
     where.textContent = ev.location;
     body.append(where);
   }
-  const wx = weatherBadge(weather[ev.id]);
-  if (wx) body.append(wx);
   li.append(time, body, chip(ev));
-  if (!ev.editable) return [li];
-  const cardRow = makeEditable(li, ev, withCard);
-  return cardRow ? [li, cardRow] : [li];
+  const wxRow = weatherRow(weather[ev.id], { id: ev.id, open: wxOpen.has(ev.id), onToggle: () => toggleWeather(ev.id) });
+  const cardRow = ev.editable ? makeEditable(li, ev, withCard) : null;
+  return [li, wxRow, cardRow].filter(Boolean);
+}
+
+/** Unfolds / folds an event's hourly forecast; focus stays on its button. */
+function toggleWeather(id) {
+  if (wxOpen.has(id)) wxOpen.delete(id);
+  else wxOpen.add(id);
+  renderEvents();
+  const list = view === 'week' ? els.agenda : els.day;
+  const btn = [...list.querySelectorAll('[data-wx-for]')].find((b) => b.dataset.wxFor === id);
+  if (btn) btn.focus();
 }
 
 /**

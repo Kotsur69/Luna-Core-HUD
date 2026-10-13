@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Mission Control: calendar event editor + event weather badge
+// LunaCore - Mission Control: calendar event editor + event weather row
 // ----------------------------------------------------------------------------
 // Click an event you own -> this card opens inside its row: title, start, end,
 // location. Save goes to main (mission:cal-update), which re-validates and
@@ -13,6 +13,7 @@
 
 import { t } from './util.js';
 import { shiftDate } from './missioncalmonth.js';
+import { surfaceOf } from './missionweatherview.js';
 
 const DAY_MS = 86400000;
 const pad = (n) => String(Math.abs(n)).padStart(2, '0');
@@ -132,18 +133,110 @@ export function buildEditor(ev, { onSave, onCancel }) {
   return { el: form, focus: () => start.focus() };
 }
 
-/** "12–17°C · rain 40% · wind 25 km/h" for an event with a place; null without a forecast. */
-export function weatherBadge(wx) {
-  if (!wx) return null;
-  const span = document.createElement('span');
-  span.className = 'mc-wx';
+let wxSeq = 0;
+
+/** "12–17°C · rain 40% · wind 25 km/h", "≈ " in front when over a week out. */
+function weatherSummary(wx) {
   const parts = [wx.tMin === wx.tMax ? `${wx.tMax}°C` : `${wx.tMin}–${wx.tMax}°C`];
   if (wx.rain !== null) parts.push(t('mc.cal.wx.rain', { n: wx.rain }));
   if (wx.wind !== null) parts.push(t('mc.cal.wx.wind', { n: wx.wind }));
-  // More than a week out the forecast is a trend: "≈" in front, and said so on hover.
-  span.textContent = (wx.longRange ? '≈ ' : '') + parts.join(' · ');
-  span.title = t(wx.longRange ? 'mc.cal.wx.titleFar' : 'mc.cal.wx.title', { place: wx.place || '' });
-  if (wx.longRange) span.classList.add('is-far');
-  if (wx.rain !== null && wx.rain >= 50) span.classList.add('is-wet');
-  return span;
+  return (wx.longRange ? '≈ ' : '') + parts.join(' · ');
+}
+
+/** "sob 09:00" on the first hour of each day, "10:00" after it. */
+function hourLabel(ms, prevMs) {
+  const d = new Date(ms);
+  const hh = `${pad(d.getHours())}:00`;
+  const newDay = prevMs === null || new Date(prevMs).toDateString() !== d.toDateString();
+  return newDay ? `${d.toLocaleDateString(window.i18n.lang, { weekday: 'short' })} ${hh}` : hh;
+}
+
+const num = (v, unit = '') => (v === null || v === undefined ? '–' : `${v}${unit}`);
+
+/** The hour-by-hour table: time, temp, rain chance, rain mm, wind, surface guess. */
+function hourTable(wx, id) {
+  const table = document.createElement('table');
+  table.className = 'mc-wxh';
+  table.id = id;
+  const cap = document.createElement('caption');
+  cap.className = 'mc-sr';
+  cap.textContent = t('mc.cal.wx.hourly', { place: wx.place || '' });
+  const head = document.createElement('tr');
+  for (const key of ['hour', 'temp', 'chance', 'mm', 'wind', 'surface']) {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.textContent = t(`mc.cal.wx.col.${key}`);
+    if (key === 'surface') th.title = t('mc.cal.wx.surfaceHint');
+    head.append(th);
+  }
+  const thead = document.createElement('thead');
+  thead.append(head);
+  const tbody = document.createElement('tbody');
+  let prev = null;
+  for (const h of wx.hours || []) {
+    const surface = surfaceOf(h);
+    const tr = document.createElement('tr');
+    tr.className = `is-${surface}`;
+    const th = document.createElement('th');
+    th.scope = 'row';
+    th.textContent = hourLabel(h.t, prev);
+    prev = h.t;
+    tr.append(th);
+    for (const text of [num(h.temp, '°'), num(h.rain, '%'), num(h.mm), num(h.wind)]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.append(td);
+    }
+    // Text, not only colour: the guess is readable without the tint.
+    const guess = document.createElement('td');
+    guess.className = 'mc-wxh__surface';
+    guess.textContent = t(`mc.cal.wx.surface.${surface}`);
+    tr.append(guess);
+    tbody.append(tr);
+  }
+  table.append(cap, thead, tbody);
+  return table;
+}
+
+/**
+ * The weather line under an event, as its own list item (a button must not
+ * sit inside the row, which is itself a button). Clicking it unfolds the
+ * hourly table - a trackday's tyre call can change from hour to hour.
+ * @param {object|undefined} wx  main's forecast for the event
+ * @param {{id:string, open:boolean, onToggle:()=>void}} opts
+ * @returns {HTMLLIElement|null}
+ */
+export function weatherRow(wx, { id, open, onToggle }) {
+  if (!wx) return null;
+  const li = document.createElement('li');
+  li.className = 'mc-wx-row';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'mc-wx';
+  btn.dataset.wxFor = id;
+  if (wx.longRange) btn.classList.add('is-far');
+  if (wx.rain !== null && wx.rain >= 50) btn.classList.add('is-wet');
+  const hasHours = Array.isArray(wx.hours) && wx.hours.length > 0;
+  const text = document.createElement('span');
+  text.textContent = weatherSummary(wx);
+  btn.append(text);
+  btn.title = t(wx.longRange ? 'mc.cal.wx.titleFar' : 'mc.cal.wx.title', { place: wx.place || '' });
+  li.append(btn);
+  if (!hasHours) {
+    btn.disabled = true;
+    return li;
+  }
+  const chevron = document.createElement('span');
+  chevron.className = 'mc-wx__chevron';
+  chevron.setAttribute('aria-hidden', 'true');
+  chevron.textContent = open ? '▴' : '▾';
+  btn.append(chevron);
+  btn.setAttribute('aria-expanded', String(open));
+  btn.addEventListener('click', onToggle);
+  if (open) {
+    const tableId = `mc-wxh-${++wxSeq}`;
+    btn.setAttribute('aria-controls', tableId);
+    li.append(hourTable(wx, tableId));
+  }
+  return li;
 }

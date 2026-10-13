@@ -8,15 +8,17 @@
 //
 // Where:
 //   1. a known track (calendar.weather.tracks) named in the title or the
-//      location - its own coordinates ("Tor Kielce" is not the city);
+//      location - its own coordinates ("Tor Kielce" is not the city); for a
+//      trackday also its home town ("Trackday Kielce" at "Kielce");
 //   2. otherwise the location through Open-Meteo geocoding: each comma part
 //      as a whole ("Tor X, Radom" -> "Radom"), then, if none matched, its
 //      single words, keeping the most populous hit ("Hala Expo Kielce" ->
 //      Kielce, not a hamlet called "Hala").
 // Online meetings (links, Teams, Zoom, Meet...) have no place and are skipped.
 //
-// Privacy: only location text leaves the PC - never titles, and never a part
-// with digits (a street address or postcode).
+// Privacy: only location text leaves the PC - never titles, never a part with
+// a street number; postcodes are cut off before the town is sent. A country
+// or region hit ("Polska") is no place and is ignored.
 //
 // Everything Open-Meteo returns is untrusted: numbers are checked finite and
 // in range, names are capped, only the arrays we read are cached. Forecasts
@@ -40,6 +42,8 @@ const FETCH_TIMEOUT_MS = 10000;
 const MAX_EVENTS = 25;
 const MAX_CACHE = 200;
 const MAX_HOURS = 24 * 16;
+/** Hour rows sent for the expandable table: 3 all-day days x 10 h fit; a long event is cut. */
+const MAX_HOUR_ROWS = 48;
 const MAX_QUERY_CHARS = 100;
 const MAX_PLACE_CHARS = 80;
 const MAX_GEOCODE_PARTS = 3;
@@ -66,9 +70,25 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Whole words only: "tor" must not match inside "motor". */
 const hasPhrase = (text, phrase) => new RegExp(`(^|[^a-z0-9])${escapeRe(fold(phrase))}($|[^a-z0-9])`).test(text);
 
-function findTrack(ev, tracks) {
+const TRACKDAY_RE = /\btrack ?days?\b/;
+
+/** Title or calendar says trackday ("Trackday Kielce", the "Trackdays" calendar), or the motorsport category. */
+function isTrackday(ev, rules) {
+  if (rules.category && ev.category === rules.category) return true;
+  return TRACKDAY_RE.test(fold(`${ev.title || ''} ${ev.calendar || ''}`));
+}
+
+/**
+ * The known track an event is at: one of its names anywhere in title or
+ * location; or, for a trackday, its home town ("Trackday Kielce" at
+ * "Kielce" is Tor Kielce - a work meeting in Kielce is not).
+ */
+function findTrack(ev, rules) {
+  const tracks = rules.tracks || [];
   const text = fold(`${ev.title || ''} ${ev.location || ''}`);
-  return tracks.find((t) => t.names.some((n) => hasPhrase(text, n))) || null;
+  const byName = tracks.find((t) => t.names.some((n) => hasPhrase(text, n)));
+  if (byName || !isTrackday(ev, rules)) return byName || null;
+  return tracks.find((t) => (t.towns || []).some((n) => hasPhrase(text, n))) || null;
 }
 
 /** The location text worth geocoding, or '' (none, or an online meeting). */
@@ -99,37 +119,55 @@ function eventHours(ev) {
 
 const finite = (v, min, max) => (typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null);
 
+const round1 = (v) => (v === null ? null : Math.round(v * 10) / 10);
+
 /**
  * Open-Meteo hourly arrays (timeformat=unixtime) -> a summary of the hours
- * touching `spans`, or null when none of them is in the forecast.
- * @returns {{tMin:number, tMax:number, rain:number|null, wind:number|null}|null}
+ * touching `spans` plus those hours one by one (for the expandable table:
+ * a trackday's tyre call can change from hour to hour), or null when none of
+ * them is in the forecast.
+ * @returns {{tMin:number, tMax:number, rain:number|null, wind:number|null,
+ *   hours:Array<{t:number, temp:number, rain:number|null, mm:number|null, wind:number|null}>}|null}
  */
 function summarize(hourly, spans) {
   const h = hourly && typeof hourly === 'object' ? hourly : {};
   const time = Array.isArray(h.time) ? h.time.slice(0, MAX_HOURS) : [];
-  const temps = [];
-  const rains = [];
-  const winds = [];
+  const hours = [];
   time.forEach((sec, i) => {
     if (finite(sec, 0, 1e11) === null) return;
     const ms = sec * 1000;
     // An hourly value covers [ms, ms + 1 h): count it when that overlaps a span.
     if (!spans.some(([from, to]) => ms + HOUR_MS > from && ms < to)) return;
-    const t = finite((h.temperature_2m || [])[i], -60, 60);
-    if (t === null) return;
-    temps.push(t);
-    const r = finite((h.precipitation_probability || [])[i], 0, 100);
-    if (r !== null) rains.push(r);
-    const w = finite((h.wind_speed_10m || [])[i], 0, 400);
-    if (w !== null) winds.push(w);
+    const temp = finite((h.temperature_2m || [])[i], -60, 60);
+    if (temp === null) return;
+    hours.push({
+      t: ms,
+      temp: round1(temp),
+      rain: finite((h.precipitation_probability || [])[i], 0, 100),
+      mm: round1(finite((h.precipitation || [])[i], 0, 500)),
+      wind: round1(finite((h.wind_speed_10m || [])[i], 0, 400)),
+    });
   });
-  if (!temps.length) return null;
+  if (!hours.length) return null;
+  const pick = (k) => hours.map((x) => x[k]).filter((v) => v !== null);
   const max = (list) => (list.length ? Math.round(Math.max(...list)) : null);
-  return { tMin: Math.round(Math.min(...temps)), tMax: Math.round(Math.max(...temps)), rain: max(rains), wind: max(winds) };
+  const temps = pick('temp');
+  return {
+    tMin: Math.round(Math.min(...temps)),
+    tMax: Math.round(Math.max(...temps)),
+    rain: max(pick('rain')),
+    wind: max(pick('wind')),
+    hours: hours.slice(0, MAX_HOUR_ROWS),
+  };
 }
+
+/** GeoNames feature codes that are no place to forecast: countries, regions, continents. */
+const AREA_RE = /^(PCL|ADM1|ADM2|CONT|RGN)/;
 
 function parseHit(hit) {
   if (!hit || typeof hit !== 'object') return null;
+  // "Polska" at the end of an address must not put the event in the middle of the country.
+  if (typeof hit.feature_code === 'string' && AREA_RE.test(hit.feature_code)) return null;
   const lat = finite(hit.latitude, -90, 90);
   const lon = finite(hit.longitude, -180, 180);
   if (lat === null || lon === null) return null;
@@ -157,15 +195,30 @@ function trimHourly(h) {
     time: pick('time'),
     temperature_2m: pick('temperature_2m'),
     precipitation_probability: pick('precipitation_probability'),
+    precipitation: pick('precipitation'),
     wind_speed_10m: pick('wind_speed_10m'),
   };
 }
 
-/** Comma parts worth sending: no digits (street / postcode), sane length. */
+/** Postcodes: PL "40-610", and plain 4-6 digit ones. */
+const POSTCODE_RE = /^(\d{2}-\d{3}|\d{4,6})$/;
+
+/**
+ * Comma parts worth sending. A postcode is dropped but its town kept
+ * ("40-610 Katowice" -> "Katowice"); a part still holding digits is a street
+ * address ("Stalowa 1") and stays on the PC.
+ */
 function locationParts(location) {
   return String(location)
     .split(',')
-    .map((p) => p.trim().slice(0, MAX_QUERY_CHARS))
+    .map((p) =>
+      p
+        .trim()
+        .split(/\s+/)
+        .filter((w) => !POSTCODE_RE.test(w))
+        .join(' ')
+        .slice(0, MAX_QUERY_CHARS)
+    )
     .filter((p) => p.length >= 2 && !/\d/.test(p))
     .slice(0, MAX_GEOCODE_PARTS);
 }
@@ -229,7 +282,7 @@ function createWeather({ fetchImpl = (...a) => fetch(...a), now = Date.now } = {
     const body = await getJson(FORECAST_URL, {
       latitude: lat.toFixed(4),
       longitude: lon.toFixed(4),
-      hourly: 'temperature_2m,precipitation_probability,wind_speed_10m',
+      hourly: 'temperature_2m,precipitation_probability,precipitation,wind_speed_10m',
       timeformat: 'unixtime',
       forecast_days: String(FORECAST_DAYS),
     });
@@ -241,8 +294,8 @@ function createWeather({ fetchImpl = (...a) => fetch(...a), now = Date.now } = {
   return {
     /**
      * @param {object[]} events  normalized calendar events (gcal.js)
-     * @param {{tracks:Array<{name:string, names:string[], lat:number, lon:number}>}} rules
-     * @returns {Promise<Record<string, {tMin:number, tMax:number, rain:number|null, wind:number|null, place:string, longRange:boolean}>>}
+     * @param {{category:string|null, tracks:Array<{name:string, names:string[], towns:string[], lat:number, lon:number}>}} rules
+     * @returns {Promise<Record<string, {tMin:number, tMax:number, rain:number|null, wind:number|null, hours:object[], place:string, longRange:boolean}>>}
      *   keyed by event id; events with no place or no forecast are left out
      */
     async forEvents(events, rules) {
@@ -250,7 +303,7 @@ function createWeather({ fetchImpl = (...a) => fetch(...a), now = Date.now } = {
       const horizon = at + AHEAD_DAYS * DAY_MS;
       // Soonest first, so the cap never drops tomorrow for next week.
       const picked = (Array.isArray(events) ? events : [])
-        .filter((ev) => ev && ev.id && (placeText(ev) || findTrack(ev, rules.tracks)))
+        .filter((ev) => ev && ev.id && (placeText(ev) || findTrack(ev, rules)))
         .map((ev) => ({ ev, spans: eventHours(ev) }))
         .filter(({ spans }) => spans.length > 0 && spans[spans.length - 1][1] > at && spans[0][0] < horizon)
         .sort((a, b) => a.spans[0][0] - b.spans[0][0])
@@ -259,7 +312,7 @@ function createWeather({ fetchImpl = (...a) => fetch(...a), now = Date.now } = {
       for (const { ev, spans } of picked) {
         try {
           const loc = placeText(ev);
-          const where = findTrack(ev, rules.tracks) || (loc ? await geocode(loc) : null);
+          const where = findTrack(ev, rules) || (loc ? await geocode(loc) : null);
           if (!where) continue;
           const summary = summarize(await forecast(where.lat, where.lon), spans);
           if (summary) out[ev.id] = { ...summary, place: where.name, longRange: spans[0][0] > at + RELIABLE_DAYS * DAY_MS };
@@ -272,4 +325,4 @@ function createWeather({ fetchImpl = (...a) => fetch(...a), now = Date.now } = {
   };
 }
 
-module.exports = { createWeather, findTrack, placeText, eventHours, summarize, parseGeocode, locationWords, fold, AHEAD_DAYS };
+module.exports = { createWeather, findTrack, isTrackday, locationParts, placeText, eventHours, summarize, parseGeocode, locationWords, fold, AHEAD_DAYS };

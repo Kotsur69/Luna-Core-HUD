@@ -80,14 +80,17 @@ const inRange = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.
 function normalizeTrack(raw) {
   if (!raw || typeof raw !== 'object' || !inRange(raw.lat, 90) || !inRange(raw.lon, 180)) return null;
   const name = trackName(raw.name);
-  const names = (Array.isArray(raw.names) ? raw.names : []).map(trackName).filter((n) => n && n.length >= 3);
+  const list = (v) => (Array.isArray(v) ? v : []).map(trackName).filter((n) => n && n.length >= 3).slice(0, MAX_TRACK_NAMES);
+  const names = list(raw.names);
   if (!name || !names.length) return null;
-  return { name, names: names.slice(0, MAX_TRACK_NAMES), lat: raw.lat, lon: raw.lon };
+  // towns: matched only for trackday events ("Trackday Kielce" -> Tor Kielce).
+  return { name, names, towns: list(raw.towns), lat: raw.lat, lon: raw.lon };
 }
 
 function normalizeWeather(raw) {
   const w = raw && typeof raw === 'object' ? raw : {};
   return {
+    category: typeof w.category === 'string' && CATEGORY_ID_RE.test(w.category) ? w.category : null,
     tracks: (Array.isArray(w.tracks) ? w.tracks : []).map(normalizeTrack).filter(Boolean).slice(0, MAX_TRACKS),
   };
 }
@@ -100,7 +103,7 @@ const pick = (base, local, key) =>
  * @returns {{mail:{query:string,maxThreads:number,trashCategories:string[],trashSenders:string[],
  *   flagCategories:string[],neverTrash:string[],keepSenders:string[]},
  *   calendar:{days:number,categories:Array<{id:string,label:unknown,colorId:string|null,color:string}>,
- *     weather:{tracks:Array<{name:string,names:string[],lat:number,lon:number}>}}}}
+ *     weather:{category:string|null,tracks:Array<{name:string,names:string[],lat:number,lon:number}>}}}}
  */
 function loadMissionConfig() {
   const base = readJson(BASE_FILE) || {};

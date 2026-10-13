@@ -16,9 +16,9 @@ const HOUR = 3600 * 1000;
 const NOW = new Date(2026, 9, 13, 12).getTime();
 const TRACKS = [
   { name: 'Tor Poznan', names: ['tor poznan'], lat: 52.418, lon: 16.812 },
-  { name: 'Tor Kielce', names: ['tor kielce', 'miedziana gora'], lat: 50.836, lon: 20.551 },
+  { name: 'Tor Kielce', names: ['tor kielce', 'miedziana gora'], towns: ['kielce'], lat: 50.836, lon: 20.551 },
 ];
-const RULES = { tracks: TRACKS };
+const RULES = { category: 'motorsport', tracks: TRACKS };
 const at = (d, h) => new Date(2026, 9, d, h).getTime();
 const iso = (ms) => new Date(ms).toISOString();
 const timed = (id, from, to, extra = {}) => ({ id, title: 'x', start: iso(from), end: iso(to), allDay: false, location: '', ...extra });
@@ -62,10 +62,10 @@ test('fold makes names match without diacritics or case', () => {
 });
 
 test('findTrack: whole words in title or location ("tor" never inside "motor")', () => {
-  assert.equal(w.findTrack({ title: 'Jazda', location: 'Tor Kielce' }, TRACKS).name, 'Tor Kielce');
-  assert.equal(w.findTrack({ title: 'Trening Tor Poznań' }, TRACKS).name, 'Tor Poznan');
+  assert.equal(w.findTrack({ title: 'Jazda', location: 'Tor Kielce' }, RULES).name, 'Tor Kielce');
+  assert.equal(w.findTrack({ title: 'Trening Tor Poznań' }, RULES).name, 'Tor Poznan');
   const short = [{ name: 'T', names: ['tor'], lat: 1, lon: 1 }];
-  assert.equal(w.findTrack({ title: 'Motorsport meetup' }, short), null);
+  assert.equal(w.findTrack({ title: 'Motorsport meetup' }, { tracks: short }), null);
 });
 
 test('placeText skips empty and online-meeting locations', () => {
@@ -87,22 +87,37 @@ test('eventHours: timed span as is; all-day = 08-18 per day, at most 3 days', ()
 
 test('summarize: min-max temp, worst rain and wind over the event hours only', () => {
   // Hours 9, 10, 11 -> temps 9..11, rain 90, 0, 10.
-  assert.deepEqual(w.summarize(hourly(), [[at(14, 9), at(14, 12)]]), { tMin: 9, tMax: 11, rain: 90, wind: 20 });
+  const { hours, ...sum } = w.summarize(hourly(), [[at(14, 9), at(14, 12)]]);
+  assert.deepEqual(sum, { tMin: 9, tMax: 11, rain: 90, wind: 20 });
+  assert.deepEqual(hours.map((h) => [h.t, h.temp, h.rain]), [
+    [at(14, 9), 9, 90],
+    [at(14, 10), 10, 0],
+    [at(14, 11), 11, 10],
+  ]);
   assert.equal(w.summarize(hourly(), [[at(30, 9), at(30, 12)]]), null, 'beyond the forecast');
 });
 
 test('summarize drops out-of-range or non-numeric values from the API', () => {
   const bad = { time: [at(14, 9) / 1000, at(14, 10) / 1000], temperature_2m: [999, 'x'], precipitation_probability: [50, 50] };
   assert.equal(w.summarize(bad, [[at(14, 9), at(14, 11)]]), null);
-  const ok = { time: [at(14, 9) / 1000], temperature_2m: [12.4], precipitation_probability: [null], wind_speed_10m: [-3] };
-  assert.deepEqual(w.summarize(ok, [[at(14, 9), at(14, 10)]]), { tMin: 12, tMax: 12, rain: null, wind: null });
+  const ok = { time: [at(14, 9) / 1000], temperature_2m: [12.4], precipitation_probability: [null], precipitation: [-1], wind_speed_10m: [-3] };
+  assert.deepEqual(w.summarize(ok, [[at(14, 9), at(14, 10)]]), {
+    tMin: 12,
+    tMax: 12,
+    rain: null,
+    wind: null,
+    hours: [{ t: at(14, 9), temp: 12.4, rain: null, mm: null, wind: null }],
+  });
 });
 
 test('any event with a place gets weather - not only trackdays', async () => {
   const f = fakeFetch({ Kielce: town('Kielce', 190000) });
   const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => NOW });
   const out = await weather.forEvents([timed('dentist', at(14, 9), at(14, 12), { title: 'Dentysta', location: 'Kielce' })], RULES);
-  assert.deepEqual(out, { dentist: { tMin: 9, tMax: 11, rain: 90, wind: 20, place: 'Kielce', longRange: false } });
+  const { hours, ...rest } = out.dentist;
+  assert.deepEqual(rest, { tMin: 9, tMax: 11, rain: 90, wind: 20, place: 'Kielce', longRange: false });
+  assert.equal(hours.length, 3);
+  assert.ok(f.calls.some((u) => /(^|,)precipitation(,|$)/.test(u.searchParams.get('hourly') || '')), 'rain amount is asked for');
 });
 
 test('a known track uses its own coordinates, no geocoding ("Tor Kielce" is not the city)', async () => {
@@ -210,4 +225,35 @@ test('events up to two weeks out get weather; past a week it is flagged longRang
   assert.equal(w.AHEAD_DAYS, 14);
   assert.deepEqual([out.soon.longRange, 'later' in out], [false, true]);
   assert.equal(out.later.longRange, true);
+});
+
+test('hour rows are capped (a long event is cut, not unbounded)', () => {
+  const { hours } = w.summarize(hourly(9), [[at(13, 0), at(20, 0)]]);
+  assert.equal(hours.length, 48);
+});
+
+test('a trackday in a track town is that track; a meeting in the same town is the town', () => {
+  const trackday = { title: 'Trackday Kielce', location: 'Kielce' };
+  assert.equal(w.findTrack(trackday, RULES).name, 'Tor Kielce');
+  assert.equal(w.findTrack({ title: 'Jazda', location: 'Kielce', calendar: 'Trackdays' }, RULES).name, 'Tor Kielce');
+  assert.equal(w.findTrack({ title: 'Jazda', location: 'Kielce', category: 'motorsport' }, RULES).name, 'Tor Kielce');
+  assert.equal(w.findTrack({ title: 'Spotkanie', location: 'Kielce' }, RULES), null);
+});
+
+test('a postcode is cut off but its town is kept; a street number keeps the part on the PC', () => {
+  assert.deepEqual(
+    w.locationParts('ArcelorMittal Poland w Katowicach, Stalowa 1, 40-610 Katowice, Polska'),
+    ['ArcelorMittal Poland w Katowicach', 'Katowice', 'Polska']
+  );
+});
+
+test('a country or region hit is no place ("Polska" must not win over the town)', async () => {
+  const f = fakeFetch({
+    Katowice: town('Katowice', 290000),
+    Polska: { name: 'Polska', latitude: 52, longitude: 19, population: 38000000, feature_code: 'PCLI' },
+  });
+  const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => NOW });
+  const ev = timed('work', at(14, 8), at(14, 16), { location: 'Firma, Stalowa 1, 40-610 Katowice, Polska' });
+  assert.equal((await weather.forEvents([ev], RULES)).work.place, 'Katowice');
+  assert.equal(w.parseGeocode({ results: [{ name: 'Polska', latitude: 52, longitude: 19, feature_code: 'PCLI' }] }), null);
 });
