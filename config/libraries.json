@@ -183,6 +183,11 @@
           "name": "public-apis/public-apis",
           "url": "https://github.com/public-apis/public-apis",
           "description": "The long-running index of free public APIs by category, each row carrying its auth type and whether it supports HTTPS and CORS - which is the part worth the visit. A starting point: entries go stale and auth requirements drift."
+        },
+        {
+          "name": "morluto/rea",
+          "url": "https://github.com/morluto/rea",
+          "description": "One MCP server for reverse engineering with agents, from app behavior down to native binaries (it can drive Hopper for disassembly). Set up with npx rea-agents setup, MIT. Point it only at software you are allowed to analyze."
         }
       ]
     },
