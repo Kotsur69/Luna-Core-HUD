@@ -45,6 +45,8 @@ const CONFIGURE_COOLDOWN_MS = 5000;
 const VENV_TIMEOUT_MS = 120000;
 const PIP_TIMEOUT_MS = 600000;
 const MAX_ENTRIES_PER_SECTION = 8;
+// Links kept in memory for saved reports (the renderer keeps up to 10 reports).
+const MAX_REMEMBERED_URLS = 2000;
 /** Characters of fetched text the prompt may carry in total. */
 const PROMPT_BUDGET = 60000;
 const MIN_ENTRY_TEXT = 200;
@@ -236,8 +238,9 @@ function createNews({
   platform = process.platform,
   spawnConsole = spawnConsoleDefault,
 } = {}) {
-  // Entry key -> url from the most recent scan; nothing else is openable.
-  let urls = new Map();
+  // Entry key -> url from recent scans (enough for the saved reports); nothing else is openable.
+  const urls = new Map();
+  let scanSeq = 0;
   let lastConsoleAt = 0;
 
   const venvPython = () =>
@@ -343,8 +346,19 @@ function createNews({
       if (err && err.killed) throw new NewsError('news-timeout');
       throw new NewsError('news-fetch-failed', String((err && (err.stderr || err.message)) || '').slice(0, 500));
     }
-    const sections = toSections(items, out);
-    urls = new Map(sections.flatMap((s) => s.entries.map((e) => [e.key, e.url])));
+    // Keys are positional per scan (e0-0...), so namespace them: an older saved
+    // report must keep resolving to its own links, not the newest scan's.
+    scanSeq += 1;
+    const sections = toSections(items, out).map((s) => ({
+      ...s,
+      entries: s.entries.map((e) => ({ ...e, key: `${scanSeq.toString(36)}-${e.key}` })),
+    }));
+    for (const e of sections.flatMap((s) => s.entries)) urls.set(e.key, e.url);
+    // Bounded: drop the oldest keys (Map keeps insertion order).
+    for (const key of urls.keys()) {
+      if (urls.size <= MAX_REMEMBERED_URLS) break;
+      urls.delete(key);
+    }
     return sections;
   }
 

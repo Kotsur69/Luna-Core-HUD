@@ -254,6 +254,24 @@ test('createNews: fetch sends targets as stdin JSON (never argv) and urlFor reso
   assert.equal(news.urlFor('e9-9'), null);
 });
 
+test('createNews: an older scan keeps resolving to its own links after a newer scan', async () => {
+  const venv = fs.mkdtempSync(path.join(os.tmpdir(), 'venv-'));
+  fs.mkdirSync(path.join(venv, 'Scripts'));
+  fs.writeFileSync(path.join(venv, 'Scripts', 'python.exe'), '');
+  let url = 'https://github.com/old/report';
+  const news = newsMod.createNews({
+    platform: 'win32',
+    venvDir: () => venv,
+    runProc: async () => JSON.stringify({ items: [{ id: 's-gh', ok: true, entries: [{ title: 't', url }] }] }),
+  });
+  const first = await news.fetchSections(NEWS, { sourceIds: ['s-gh'] });
+  url = 'https://github.com/new/report';
+  const second = await news.fetchSections(NEWS, { sourceIds: ['s-gh'] });
+  assert.notEqual(first[0].entries[0].key, second[0].entries[0].key);
+  assert.equal(news.urlFor(first[0].entries[0].key), 'https://github.com/old/report');
+  assert.equal(news.urlFor(second[0].entries[0].key), 'https://github.com/new/report');
+});
+
 function fakeVenv() {
   const venv = fs.mkdtempSync(path.join(os.tmpdir(), 'venv-'));
   fs.mkdirSync(path.join(venv, 'Scripts'));
