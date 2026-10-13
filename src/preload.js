@@ -235,6 +235,12 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionGithubOpen: (id) => ipcRenderer.send('mission:github-open', id),
   /** Saved News sources and topics. Promise<{sources, topics}>. */
   missionNewsConfig: () => ipcRenderer.invoke('mission:news-config'),
+  /** GitHub Trending scraped in main (no model). period: 'daily'|'weekly'|'monthly'. Promise<{ok, trending:{period, items}} | {ok:false, reason}>. */
+  missionTrending: (period) => ipcRenderer.invoke('mission:trending', period),
+  /** Opens a trending repo from the last fetch by its item id - main resolves the URL. */
+  missionTrendingOpen: (id) => ipcRenderer.send('mission:trending-open', id),
+  /** Quick model description of a trending repo by item id (README, lean Haiku job). Promise<{ok, description:{summary, useFor, caveats}, costUsd} | {ok:false, reason}>. */
+  missionTrendingDescribe: (id, lang) => ipcRenderer.invoke('mission:trending-describe', { id, lang }),
   /** Replaces the saved sources/topics; main validates. Promise<{ok, news} | {ok:false, reason}>. */
   missionNewsSave: (news) => ipcRenderer.invoke('mission:news-save', news),
   /** Agent-Reach venv state. Promise<{ok, status:{ready, installed, agentReach?, python?}}>. */

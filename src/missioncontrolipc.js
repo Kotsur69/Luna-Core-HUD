@@ -24,6 +24,7 @@ const mail = require('./missionmail');
 const cal = require('./missioncal');
 const { createGcal } = require('./gcal');
 const { createGithub } = require('./missiongithub');
+const { createTrending, buildDescribePrompt, parseDescription } = require('./missiontrending');
 const { createNews, buildNewsPrompt, parseNewsSummary, publicSections } = require('./missionnews');
 const newsStore = require('./missionnewsstore');
 const projectStore = require('./missionprojects');
@@ -62,7 +63,7 @@ async function defaultPickDir() {
 /** Minimum gap between two links opened from the renderer. */
 const OPEN_GAP_MS = 500;
 
-const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, create: 120000, news: 180000 };
+const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, create: 120000, news: 180000, describe: 90000 };
 const LANGS = ['pl', 'en'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Min gap between two quick searches (X / Reddit ride the user's main accounts). */
@@ -128,6 +129,7 @@ function registerMissionIpc({
   let lastPreview = null;
   const busy = new Set();
   let lastOpenAt = 0;
+  trending = createTrending(),
   let lastQuickAt = 0;
 
   /** Opens what `resolve` maps the renderer's key to - throttled, so a
@@ -288,6 +290,35 @@ function registerMissionIpc({
       if (!dir) return { ok: false, reason: 'cancelled' };
       return { ok: true, sharedDir: projects.setSharedDir(dir).sharedDir };
     })
+  // GitHub Trending, scraped from the public page (src/missiontrending.js) - free.
+  // The renderer names a period ('daily' | 'weekly' | 'monthly'); main checks it.
+  ipcMain.handle('mission:trending', (_event, period) =>
+    guarded('trending', async () => {
+      try {
+        return { ok: true, trending: await trending.fetch(typeof period === 'string' ? period : undefined) };
+      } catch (err) {
+        return typedFailure('trending', err, 'trending-failed');
+      }
+    })
+  );
+
+  ipcMain.on('mission:trending-open', openResolved((id) => trending.urlFor(id)));
+
+  // One lean Haiku job over the repo README: req {id, lang}. The id must come from
+  // the last trending fetch - the renderer cannot name a repo of its own.
+  ipcMain.handle('mission:trending-describe', (_event, req) =>
+    guarded('trending-describe', async () => {
+      const input = await trending.describeInput(req && req.id);
+      if (!input) return { ok: false, reason: 'bad-input' };
+      const lang = LANGS.includes(req && req.lang) ? req.lang : 'pl';
+      const res = await job('describe', buildDescribePrompt(input, lang), { lean: true });
+      if (!res.ok) return res;
+      const description = parseDescription(res.answer);
+      if (!description) return { ok: false, reason: 'bad-json', costUsd: res.costUsd };
+      return { ok: true, description, costUsd: res.costUsd };
+    })
+  );
+
   );
 
   ipcMain.handle('mission:ledger-clear-dir', () =>

@@ -4052,6 +4052,11 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .panel__section[data-collapsed]:not(.is-folding) > *:not(.panel__title) { display: none; }
 .panel__section[data-collapsed] .panel__fold { transform: rotate(-90deg); }
 
+/* GitHub Trending fold inside the News widget (modules/missiontrending.js):
+   same chevron language as the panel fold, scoped to this one sub-section. */
+.mc-news__trending[data-collapsed] #mc-trending-body { display: none; }
+.mc-news__trending[data-collapsed] .panel__fold { transform: rotate(-90deg); }
+
 /* The in-flight state. `--fold-ms` is set inline per fold: panels.js scales the
    duration by how far the section actually has to travel, so a two-line widget
    snaps and a tall one takes its time. It falls back to the plain token if the

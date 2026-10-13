@@ -463,6 +463,24 @@
         <button type="button" id="mc-news-scan" class="pad-send mc-bar__go" disabled>Zaznacz zrodla lub tematy</button>
       </div>
       <div id="mc-news-results" class="mc-results"></div>
+      <!-- GitHub Trending: scraped in main (src/missiontrending.js), needs no Agent-Reach
+           setup. Built by modules/missiontrending.js. -->
+      <section class="mc-bucket mc-news__trending">
+        <h3 id="mc-trending-head" class="mc-bucket__title usage-head panel__title--fold" role="button" tabindex="0" aria-expanded="true" aria-controls="mc-trending-body">
+          <span class="panel__fold" aria-hidden="true">&#9662;</span>
+          <span data-i18n="mc.tele.trending">Trending na GitHubie</span>
+          <button id="mc-trending-refresh" type="button" class="usage-refresh" data-i18n-title="mc.tele.trending.refresh" data-i18n-aria="mc.tele.trending.refresh" title="Odswiez Trending" aria-label="Odswiez Trending">&#8635;</button>
+        </h3>
+        <div id="mc-trending-body">
+          <select id="mc-trending-period" class="profile-select" data-i18n-aria="mc.tele.trendingPeriod" aria-label="Okres trendow">
+            <option value="daily" data-i18n="mc.tele.trending.daily">Dzis</option>
+            <option value="weekly" data-i18n="mc.tele.trending.weekly">Ten tydzien</option>
+            <option value="monthly" data-i18n="mc.tele.trending.monthly">Ten miesiac</option>
+          </select>
+          <p id="mc-trending-status" class="hint mc-status" role="status" aria-live="polite"></p>
+          <ul id="mc-trending" class="mc-news__list"></ul>
+        </div>
+      </section>
     </div>
   </template>
 

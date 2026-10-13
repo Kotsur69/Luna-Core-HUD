@@ -21,6 +21,7 @@ import { defineWidget } from './registry.js';
 import { onLangChange } from './bus.js';
 import { errorText, costSuffix, setStatus, ipcFailed } from './missionshared.js';
 import { PRESETS, applyPreset } from './missionnewspresets.js';
+import { mountTrending } from './missiontrending.js';
 
 const SOURCE_PLATFORMS = ['youtube', 'rss', 'web', 'github', 'twitter', 'reddit'];
 const TOPIC_PLATFORMS = ['youtube', 'github', 'bilibili', 'hackernews', 'twitter', 'reddit'];
@@ -401,6 +402,7 @@ defineWidget({
       presets: q('#mc-news-presets'),
     };
     els.topicPlatforms = buildPlatformPickers(root);
+    const trending = mountTrending(root);
     q('#mc-news-quick').addEventListener('submit', quickSearch);
     q('#mc-news-addsource').addEventListener('submit', addSource);
     q('#mc-news-addtopic').addEventListener('submit', addTopics);
@@ -416,6 +418,7 @@ defineWidget({
       renderSocial();
       renderQuickPlatforms();
       renderPresets();
+      trending.render();
     });
     renderQuickPlatforms();
     renderPresets();
@@ -432,6 +435,7 @@ defineWidget({
     loadStatus();
     return () => {
       offLang();
+      trending.unmount();
       els = null;
     };
   },

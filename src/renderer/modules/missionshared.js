@@ -34,6 +34,8 @@ const ERROR_KEYS = {
   'gh-auth': 'mc.err.ghAuth',
   'gh-timeout': 'mc.err.ghTimeout',
   'gh-failed': 'mc.err.ghFailed',
+  'trending-failed': 'mc.err.trendingFailed',
+  'trending-timeout': 'mc.err.trendingTimeout',
   'news-not-setup': 'mc.err.newsNotSetup',
   'news-no-python': 'mc.err.newsNoPython',
   'news-setup-failed': 'mc.err.newsSetupFailed',
