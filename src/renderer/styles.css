@@ -4748,7 +4748,8 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 }
 .mc-draft[hidden] { display: none; }
 .mc-field { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-xs); color: var(--text-dim); min-width: 0; }
-.mc-field:first-child, .mc-field:nth-child(5) { grid-column: 1 / -1; }
+/* Quick add: title and location take the full row; category | calendar share one. */
+.mc-field:first-child, .mc-field:nth-child(6) { grid-column: 1 / -1; }
 .mc-draft__actions { grid-column: 1 / -1; display: flex; gap: var(--space-4); }
 .mc-draft__actions .pad-send { flex: 1; }
 .mc-draft__cancel { width: auto; padding-inline: var(--space-5); }

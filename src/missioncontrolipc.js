@@ -80,12 +80,15 @@ async function defaultPickClientFile() {
 /** Minimum gap between two links opened from the renderer. */
 const OPEN_GAP_MS = 500;
 
-const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, create: 120000, news: 180000, describe: 90000 };
+const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, news: 180000, describe: 90000 };
 const LANGS = ['pl', 'en'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_SEEN_EVENTS = 1000;
-/** Min gap between two event edits (a person saves one card at a time). */
+/** Min gap between two event edits or creates (a person saves one card at a time). */
 const UPDATE_GAP_MS = 1000;
+/** At most this many new events per window (a person adds a few at a time). */
+const MAX_CREATES_PER_WINDOW = 30;
+const CREATE_WINDOW_MS = 10 * 60 * 1000;
 const EVENT_ID_RE = /^[A-Za-z0-9_@.-]{1,256}$/;
 /** Min gap between two quick searches (X / Reddit ride the user's main accounts). */
 const QUICK_SEARCH_GAP_MS = 10000;
@@ -104,8 +107,8 @@ function localIsoNow(date = new Date()) {
 
 const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
-/** Create failures where the event may still exist in the calendar. */
-const UNSURE_CREATE = new Set(['timeout', 'cli-error', 'bad-json']);
+/** The opaque calendar keys gcal.listCalendars() hands out. */
+const CAL_KEY_RE = /^[0-9a-f]{16}$/;
 
 /** A GcalError keeps its reason; anything else is logged and made generic. */
 function gcalFailure(err) {
@@ -167,6 +170,8 @@ function registerMissionIpc({
   let lastOpenAt = 0;
   let lastQuickAt = 0;
   let lastUpdateAt = 0;
+  let lastCreateAt = 0;
+  let createTimes = [];
 
   /** Opens what `resolve` maps the renderer's key to - throttled, so a
    *  misbehaving renderer cannot fire a burst of browser tabs. */
@@ -207,6 +212,8 @@ function registerMissionIpc({
       models: MISSION_MODELS,
       categories: calendar.categories,
       days: calendar.days,
+      // Trackday events default to the trackday calendar in quick add.
+      weatherCategory: calendar.weather.category,
       gcal: gcal.status(),
     };
   });
@@ -513,22 +520,46 @@ function registerMissionIpc({
     })
   );
 
-  ipcMain.handle('mission:cal-create', (_event, rawDraft) =>
+  // The calendars a new event can go to, as opaque keys (a calendar id is an
+  // email address; the renderer never sees one).
+  ipcMain.handle('mission:cal-calendars', () =>
+    guarded('calendars', async () => {
+      try {
+        return { ok: true, calendars: await gcal.listCalendars() };
+      } catch (err) {
+        return gcalFailure(err);
+      }
+    })
+  );
+
+  // Creates the confirmed draft in the chosen calendar through the Calendar
+  // API - no model. {draft, calendar}: the draft is re-validated (it has been
+  // through the renderer since PARSE), the key must be one gcal handed out.
+  ipcMain.handle('mission:cal-create', (_event, req) =>
     guarded('create', async () => {
+      const key = req && typeof req.calendar === 'string' && CAL_KEY_RE.test(req.calendar) ? req.calendar : null;
+      if (!key) return { ok: false, reason: 'bad-draft' };
       const { calendar } = loadMissionConfig();
-      // Re-validated: the draft has been through the renderer since PARSE.
-      const checked = cal.normalizeDraft(rawDraft, calendar.categories);
+      const checked = cal.normalizeDraft(req.draft, calendar.categories);
       if (!checked.ok) return checked;
-      const prompt = cal.buildCreatePrompt(checked.draft, calendar.categories, timeZone());
-      const res = await job('create', prompt, { allowed: cal.CREATE_TOOLS });
-      // A timeout or CLI error can land AFTER create_event went through; a
-      // plain error would invite a retry that duplicates the event.
-      if (!res.ok && UNSURE_CREATE.has(res.reason)) return { ...res, reason: 'maybe-created' };
-      if (!res.ok) return res;
-      const created = cal.parseCreate(res.answer);
-      return created.created
-        ? { ok: true, ...created, draft: checked.draft, costUsd: res.costUsd }
-        : { ok: false, reason: 'not-created', costUsd: res.costUsd };
+      // Same throttle as edits: a renderer looping creates cannot flood the calendar.
+      const nowMs = Date.now();
+      if (nowMs - lastCreateAt < UPDATE_GAP_MS) return { ok: false, reason: 'rate-limited' };
+      // And a ceiling per window: one a second would still be 3600 an hour.
+      createTimes = createTimes.filter((at) => nowMs - at < CREATE_WINDOW_MS);
+      if (createTimes.length >= MAX_CREATES_PER_WINDOW) return { ok: false, reason: 'rate-limited' };
+      createTimes.push(nowMs);
+      lastCreateAt = nowMs;
+      try {
+        const { event } = await gcal.createEvent(key, checked.draft, calendar.categories);
+        rememberEvents([event]);
+        return { ok: true, event };
+      } catch (err) {
+        // A network error can land after Google stored the event: say so
+        // rather than invite a retry that duplicates it.
+        if (err && err.reason === 'gcal-network') return { ok: false, reason: 'maybe-created' };
+        return gcalFailure(err);
+      }
     })
   );
 }

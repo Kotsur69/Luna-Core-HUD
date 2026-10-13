@@ -1,32 +1,25 @@
 // ============================================================================
 // LunaCore - Mission Control: Google Calendar agenda + natural-language add
 // ----------------------------------------------------------------------------
-// Reading the calendar is not a model job any more: src/gcal.js calls the
-// Calendar API directly (free, every visible calendar). Two jobs remain, each
-// with the narrowest tool set that does the work:
+// Reading, creating and editing go straight to the Calendar API (src/gcal.js:
+// free, every visible calendar). One model job remains:
 //
 //   PARSE   lean, no tools at all            "Trackday Tor Poznan Sat 9-16"
 //                                            -> a structured event DRAFT
-//   CREATE  allowed: create_event            only after the user confirmed
-//                                            (and possibly edited) the draft
 //
-// The draft travels renderer -> main between PARSE and CREATE, so
-// normalizeDraft() runs on both sides of that trip: the renderer is never
-// trusted to hand back something shaped like what we sent it.
+// The draft travels renderer -> main between PARSE and create (and back for
+// an edit), so normalizeDraft() runs on both sides of that trip: the renderer
+// is never trusted to hand back something shaped like what we sent it.
 // ============================================================================
 
 'use strict';
 
 const { clampString } = require('./missionrunner');
 
-const GCAL = 'mcp__claude_ai_Google_Calendar__';
-const CREATE_TOOLS = [`${GCAL}create_event`];
-
 const MONTH_RE = /^(\d{4})-(\d{2})$/;
 const MAX_TITLE_CHARS = 200;
 const MAX_TEXT_CHARS = 500;
 const MAX_INPUT_CHARS = 300;
-const EVENT_ID_RE = /^[A-Za-z0-9_@.-]{1,256}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/;
 
@@ -115,45 +108,11 @@ function normalizeDraft(raw, categories) {
   };
 }
 
-/** The create prompt carries the confirmed draft as JSON data, not prose. */
-function buildCreatePrompt(draft, categories, timeZone) {
-  const category = categories.find((c) => c.id === draft.category);
-  const payload = {
-    summary: draft.title,
-    start: draft.start,
-    end: draft.end,
-    allDay: draft.allDay,
-    timeZone,
-    location: draft.location || undefined,
-    description: draft.description || undefined,
-    colorId: category && category.colorId ? category.colorId : undefined,
-  };
-  return [
-    `Call ${GCAL}create_event exactly once on the user's primary calendar with these`,
-    "values (map them onto the tool's parameters; skip colorId if unsupported).",
-    'Do not call any other tool.',
-    '',
-    JSON.stringify(payload, null, 2),
-    '',
-    'Reply with ONLY one JSON object, no prose: { "created": boolean, "eventId": string }',
-  ].join('\n');
-}
-
-function parseCreate(answer) {
-  const created = !!(answer && answer.created === true);
-  const eventId =
-    answer && typeof answer.eventId === 'string' && EVENT_ID_RE.test(answer.eventId) ? answer.eventId : '';
-  return { created, eventId };
-}
-
 module.exports = {
   compareEvents,
   monthBounds,
-  CREATE_TOOLS,
   MAX_INPUT_CHARS,
   validTime,
   buildParsePrompt,
   normalizeDraft,
-  buildCreatePrompt,
-  parseCreate,
 };

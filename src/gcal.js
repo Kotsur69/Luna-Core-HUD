@@ -186,6 +186,12 @@ function mergeEvents(lists) {
   return out.sort(compareEvents).slice(0, MAX_EVENTS);
 }
 
+/** A calendar's display name; '' when the only name there is an email address. */
+function calendarName(c) {
+  const name = clampString(c.summaryOverride || c.summary, MAX_NAME_CHARS);
+  return name && !name.includes('@') ? name : '';
+}
+
 /** The calendars shown in Google Calendar (ticked in its sidebar). */
 function visibleCalendars(items) {
   return (Array.isArray(items) ? items : [])
@@ -193,9 +199,12 @@ function visibleCalendars(items) {
     .slice(0, MAX_CALENDARS)
     .map((c) => ({
       id: c.id,
-      name: clampString(c.summaryOverride || c.summary, MAX_NAME_CHARS) || c.id.slice(0, MAX_NAME_CHARS),
+      // The primary calendar is named after the account's email address: never
+      // shown. '' -> the renderer says "Main calendar" (or "no category" on a chip).
+      name: calendarName(c),
       color: typeof c.backgroundColor === 'string' && HEX_RE.test(c.backgroundColor) ? c.backgroundColor : null,
       writable: WRITE_ROLES.has(c.accessRole),
+      primary: c.primary === true,
     }));
 }
 
@@ -282,6 +291,8 @@ function createGcal(deps = {}) {
   let loaded = false;
   // Filled by listEvents (see remember()); cleared with the credentials.
   const editable = new Map();
+  /** key -> calendar the user may add events to; the renderer only ever sees the key. */
+  const targets = new Map();
 
   function loadRefreshToken() {
     if (loaded) return refreshToken;
@@ -320,6 +331,7 @@ function createGcal(deps = {}) {
     access = null;
     loaded = true;
     editable.clear();
+    targets.clear();
     try {
       fs.rmSync(tokenFile(), { force: true });
     } catch (err) {
@@ -403,7 +415,13 @@ function createGcal(deps = {}) {
       const body = await res.json().catch(() => ({}));
       throw new GcalError('gcal-failed', `HTTP ${res.status} on ${path}${googleErrorDetail(body)}`);
     }
-    return res.json();
+    try {
+      return await res.json();
+    } catch (err) {
+      // A write that answered 2xx was stored even if its reply is unreadable:
+      // gcal-network makes the caller say "may have been created", not "retry".
+      throw new GcalError(method === 'GET' ? 'gcal-failed' : 'gcal-network', `unreadable reply on ${path}`);
+    }
   }
 
   async function calendarEvents(cal, fromIso, toIso, categories) {
@@ -437,10 +455,57 @@ function createGcal(deps = {}) {
    * the window and are still running in it.
    */
   async function listEvents({ fromIso, toIso, categories }) {
-    const list = await apiRequest('GET', '/users/me/calendarList', { minAccessRole: 'reader', maxResults: '250' });
-    const cals = visibleCalendars(list.items);
+    const cals = await loadCalendars();
     const lists = await Promise.all(cals.map((c) => calendarEvents(c, fromIso, toIso, categories)));
     return { events: mergeEvents(lists) };
+  }
+
+  const calendarKey = (id) => crypto.createHash('sha256').update(id).digest('hex').slice(0, 16);
+
+  /** The visible calendars; refreshes the writable `targets` as a side effect. */
+  async function loadCalendars() {
+    const list = await apiRequest('GET', '/users/me/calendarList', { minAccessRole: 'reader', maxResults: '250' });
+    const cals = visibleCalendars(list.items);
+    targets.clear();
+    for (const c of cals) if (c.writable) targets.set(calendarKey(c.id), c);
+    return cals;
+  }
+
+  /**
+   * Calendars a new event can go to, primary first, as {key, name, color, primary}.
+   * Keys are hashes of the calendar ids: a calendar id is an email address.
+   */
+  async function listCalendars() {
+    await loadCalendars();
+    return [...targets.entries()]
+      .map(([key, c]) => ({ key, name: c.name, color: c.color, primary: c.primary }))
+      .sort((a, b) => b.primary - a.primary || a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Creates `draft` (validated: missioncal.normalizeDraft) in the calendar
+   * behind `key`. The category becomes the event colour.
+   * @returns {Promise<{event:object}>} the event as Google stored it
+   */
+  async function createEvent(key, draft, categories) {
+    const cal = typeof key === 'string' ? targets.get(key) : null;
+    if (!cal) throw new GcalError('gcal-not-editable', 'unknown calendar');
+    const when = (v) => (draft.allDay ? { date: v } : { dateTime: v });
+    const category = categories.find((c) => c.id === draft.category);
+    const body = {
+      summary: draft.title,
+      start: when(draft.start),
+      end: when(draft.end),
+      ...(draft.location ? { location: draft.location } : {}),
+      ...(draft.description ? { description: draft.description } : {}),
+      ...(category && category.colorId ? { colorId: category.colorId } : {}),
+    };
+    const raw = await apiRequest('POST', `/calendars/${encodeURIComponent(cal.id)}/events`, {}, body);
+    const ev = normalizeEvent(raw, cal, categories);
+    if (!ev) throw new GcalError('gcal-failed', 'unreadable created event');
+    if (ev.editable) remember(ev.id, { cal, allDay: ev.allDay });
+    const { uid, ...event } = ev;
+    return { event };
   }
 
   /**
@@ -539,7 +604,7 @@ function createGcal(deps = {}) {
     );
   }
 
-  return { status, connect, listEvents, updateEvent, importClient };
+  return { status, connect, listEvents, listCalendars, createEvent, updateEvent, importClient };
 }
 
 module.exports = {

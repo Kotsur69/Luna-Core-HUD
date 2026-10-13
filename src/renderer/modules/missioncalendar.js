@@ -33,6 +33,10 @@ let els = null;
 let editingId = null;
 let card = null; // {id, row} - the open card's DOM, kept across re-renders
 let weather = {};
+// Calendars a new event can go to ({key, name, color, primary}); null until loaded.
+let calendars = null;
+const LAST_CAL_KEY = 'lc.mc.lastCalendar';
+const TRACKDAY_RE = /\btrack ?days?\b/i;
 // Event ids whose hourly forecast is unfolded (kept across re-renders).
 const wxOpen = new Set();
 let weatherSeq = 0;
@@ -279,6 +283,17 @@ function renderDraft() {
     ...config.categories.map((c) => new Option(loc(c.label), c.id))
   );
   cat.value = draft.category || '';
+  const calSelect = document.createElement('select');
+  calSelect.className = 'profile-select';
+  fillCalendars(calSelect, pickCalendar(draft));
+  // A trackday category moves the event to the trackday calendar - until the
+  // user picks a calendar by hand, which then stays.
+  let calTouched = false;
+  calSelect.addEventListener('change', () => (calTouched = true));
+  cat.addEventListener('change', () => {
+    if (!calTouched) calSelect.value = pickCalendar({ ...draft, title: title.value, category: cat.value || null }) || calSelect.value;
+  });
+  els.calSelect = calSelect;
 
   const add = document.createElement('button');
   add.type = 'button';
@@ -303,6 +318,7 @@ function renderDraft() {
         location: where.value,
         category: cat.value || null,
       },
+      calSelect.value,
       add
     )
   );
@@ -312,14 +328,60 @@ function renderDraft() {
     field('mc.cal.f.start', start),
     field('mc.cal.f.end', end),
     field('mc.cal.f.category', cat),
+    field('mc.cal.f.calendar', calSelect),
     field('mc.cal.f.location', where),
     actions
   );
   title.focus();
 }
 
+/** Last calendar used for a new event, if this browser profile remembers one. */
+function lastCalendar() {
+  try {
+    return localStorage.getItem(LAST_CAL_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The calendar a draft should default to: a trackday goes to the calendar
+ * named like "Trackdays"; otherwise the last one used, else the primary one.
+ */
+function pickCalendar(d) {
+  if (!calendars || !calendars.length) return '';
+  const trackday = (config.weatherCategory && d.category === config.weatherCategory) || TRACKDAY_RE.test(d.title || '');
+  const trackCal = trackday ? calendars.find((c) => /track/i.test(c.name)) : null;
+  if (trackCal) return trackCal.key;
+  const last = lastCalendar();
+  if (last && calendars.some((c) => c.key === last)) return last;
+  return (calendars.find((c) => c.primary) || calendars[0]).key;
+}
+
+/** Options for the calendar select; a placeholder while the list loads. */
+function fillCalendars(select, selected) {
+  if (!calendars) {
+    select.replaceChildren(new Option(t('mc.cal.calLoading'), ''));
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.replaceChildren(...calendars.map((c) => new Option(c.name || t('mc.cal.mainCalendar'), c.key)));
+  if (selected) select.value = selected;
+}
+
+/** Fetches the calendar list once per mount; fills an open draft's select in place. */
+async function loadCalendars() {
+  const res = await window.lunacore.missionCalCalendars().catch(ipcFailed);
+  if (!res.ok) return;
+  calendars = res.calendars;
+  // Filled in place: re-rendering the draft would drop the user's edits.
+  if (els && els.calSelect && draft) fillCalendars(els.calSelect, pickCalendar(draft));
+}
+
 function closeDraft() {
   draft = null;
+  if (els) els.calSelect = null;
   renderDraft();
   if (els) els.input.focus();
 }
@@ -364,6 +426,7 @@ async function connect() {
   setStatus(els.status, t('mc.cal.connected'));
   renderConnect();
   loadVisible();
+  loadCalendars();
 }
 
 // ---- Week list -----------------------------------------------------------------
@@ -512,25 +575,38 @@ async function parse(text) {
   renderDraft();
 }
 
-async function create(edited, button) {
+async function create(edited, calendarKey, button) {
+  if (!calendarKey) {
+    setStatus(els.status, t('mc.cal.calLoading'), true);
+    return;
+  }
   button.disabled = true;
   setStatus(els.status, t('mc.cal.creating'));
-  const res = await window.lunacore.missionCalCreate(edited).catch(ipcFailed);
+  const res = await window.lunacore.missionCalCreate(edited, calendarKey).catch(ipcFailed);
   if (res.ok) {
-    // Main's normalised draft, not the raw form values; spliced into whatever
-    // is loaded rather than paying for a reload.
-    const ev = { ...res.draft, id: res.eventId };
+    // The event as Google stored it, spliced into whatever is loaded rather
+    // than paying for a reload.
+    const ev = res.event;
+    const touches = monthsOf(ev);
     if (agenda) agenda = [...agenda, ev].sort(compareEvents);
-    const key = startDay(ev).slice(0, 7);
-    if (months.has(key)) months.set(key, [...months.get(key), ev].sort(compareEvents));
+    for (const [key, list] of months) if (touches(key)) months.set(key, [...list, ev].sort(compareEvents));
+    try {
+      localStorage.setItem(LAST_CAL_KEY, calendarKey);
+    } catch {
+      // A convenience only: without storage the primary calendar stays the default.
+    }
   }
   if (!els) return;
   button.disabled = false;
   if (!res.ok) {
-    setStatus(els.status, errorText(res.reason) + costSuffix(res.costUsd), true);
+    setStatus(els.status, errorText(res.reason), true);
+    // A token from before editing existed: one reconnect grants the write scope.
+    if (res.reason === 'gcal-scope') els.connect.hidden = false;
     return;
   }
-  setStatus(els.status, t('mc.cal.created', { title: edited.title }) + costSuffix(res.costUsd));
+  const cal = (calendars || []).find((c) => c.key === calendarKey);
+  setStatus(els.status, t('mc.cal.createdIn', { title: res.event.title, calendar: cal ? cal.name : '' }));
+  loadWeather();
   els.input.value = '';
   closeDraft();
   renderAgenda();
@@ -571,7 +647,10 @@ defineWidget({
         // Category colours arrive with the config.
         if (view === 'month') renderMonth();
         renderConnect();
-        if (c.gcal.connected) loadVisible();
+        if (c.gcal.connected) {
+          loadVisible();
+          loadCalendars();
+        }
         else setStatus(els.status, t('mc.cal.idle'));
       })
       .catch(() => {
@@ -610,6 +689,7 @@ defineWidget({
       els = null;
       editingId = null;
       card = null;
+      calendars = null;
     };
   },
 });

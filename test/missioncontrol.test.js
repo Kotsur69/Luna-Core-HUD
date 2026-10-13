@@ -162,16 +162,6 @@ test('normalizeDraft: all-day needs plain dates, unknown category becomes null',
   assert.equal(cal.normalizeDraft({ title: 'T', start: '2026-10-10T09:00', end: '2026-10-11', allDay: true }, CATS).ok, false);
 });
 
-test('create prompt embeds the category colorId as data', () => {
-  const prompt = cal.buildCreatePrompt(
-    { title: 'T', start: '2026-10-10T09:00:00+02:00', end: '2026-10-10T10:00:00+02:00', allDay: false, category: 'work' },
-    CATS,
-    'Europe/Warsaw'
-  );
-  assert.match(prompt, /"colorId": "9"/);
-  assert.match(prompt, /create_event exactly once/);
-});
-
 test('localIsoNow renders a zone offset', () => {
   assert.match(localIsoNow(new Date()), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
 });
@@ -181,8 +171,15 @@ test('localIsoNow renders a zone offset', () => {
 /** Google Calendar stand-in: records listEvents windows, never touches the network. */
 function fakeGcal(events = []) {
   const windows = [];
+  const created = [];
   return {
     windows,
+    created,
+    listCalendars: async () => [{ key: 'abcdef0123456789', name: 'Trackdays', color: null, primary: false }],
+    createEvent: async (key, draft) => {
+      created.push({ key, draft });
+      return { event: { id: 'new1', ...draft, editable: true } };
+    },
     status: () => ({ configured: true, connected: true }),
     connect: async () => {},
     listEvents: async (req) => {
@@ -239,11 +236,37 @@ test('apply refuses before any preview, then trashes only approved ids', async (
   assert.deepEqual(await h.invoke('mission:mail-apply', ['t1']), { ok: false, reason: 'nothing-approved' });
 });
 
-test('cal-create re-validates the draft coming back from the renderer', async () => {
-  const h = harness([]);
-  const res = await h.invoke('mission:cal-create', { title: '', start: 'x', end: 'y' });
-  assert.deepEqual(res, { ok: false, reason: 'bad-draft' });
+test('cal-create re-validates the draft and the calendar key coming back from the renderer', async () => {
+  const gc = fakeGcal();
+  const h = harness([], gc);
+  const good = { title: 'T', start: '2026-10-10T09:00:00+02:00', end: '2026-10-10T10:00:00+02:00' };
+  for (const bad of [
+    { draft: { title: '', start: 'x', end: 'y' }, calendar: 'abcdef0123456789' },
+    { draft: good, calendar: 'me@gmail.com' },
+    { draft: good },
+    null,
+  ]) {
+    assert.deepEqual(await h.invoke('mission:cal-create', bad), { ok: false, reason: 'bad-draft' });
+  }
+  assert.equal(gc.created.length, 0);
   assert.equal(h.calls.length, 0);
+});
+
+test('cal-create goes straight to the Calendar API in the chosen calendar - no model', async () => {
+  const gc = fakeGcal();
+  const h = harness([], gc);
+  const draft = { title: 'Trackday', start: '2026-10-25', end: '2026-10-26', allDay: true, category: 'nope', extra: 'x' };
+  const res = await h.invoke('mission:cal-create', { draft, calendar: 'abcdef0123456789' });
+  assert.equal(res.ok, true);
+  assert.equal(gc.created[0].key, 'abcdef0123456789');
+  assert.equal(gc.created[0].draft.category, null, 'unknown category dropped');
+  assert.equal('extra' in gc.created[0].draft, false);
+  assert.equal(h.calls.length, 0);
+});
+
+test('cal-calendars lists the writable calendars by key', async () => {
+  const res = await harness([]).invoke('mission:cal-calendars');
+  assert.deepEqual(res, { ok: true, calendars: [{ key: 'abcdef0123456789', name: 'Trackdays', color: null, primary: false }] });
 });
 
 test('cal-parse runs lean (no connectors)', async () => {
@@ -309,17 +332,14 @@ test('mission:config reports the Google connection state', async () => {
   assert.deepEqual(cfg.gcal, { configured: true, connected: true });
 });
 
-test('cal-create reports maybe-created when the job dies after starting', async () => {
-  const handlers = new Map();
-  registerMissionIpc({
-    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn), on: () => {} },
-    getModel: () => 'haiku',
-    getEnv: () => ({}),
-    run: async () => ({ ok: false, reason: 'timeout' }),
-  });
+test('cal-create reports maybe-created when the network fails mid-request', async () => {
+  const gc = fakeGcal();
+  gc.createEvent = async () => {
+    throw new gcal.GcalError('gcal-network', 'socket hang up');
+  };
   const draft = { title: 'T', start: '2026-10-10T09:00:00+02:00', end: '2026-10-10T10:00:00+02:00' };
-  const res = await handlers.get('mission:cal-create')({}, draft);
-  assert.equal(res.reason, 'maybe-created');
+  const res = await harness([], gc).invoke('mission:cal-create', { draft, calendar: 'abcdef0123456789' });
+  assert.deepEqual(res, { ok: false, reason: 'maybe-created' });
 });
 
 test('mission:github returns the telemetry with no model call', async () => {

@@ -414,6 +414,18 @@ category` = motorsport). Verified on the real agenda: work -> Katowice,
 Trackday Kielce -> Tor Kielce. Gotcha: a Python heredoc turned "\b" in a JS
 regex into a backspace char - write such patches as script files.
 
+**Quick add picks a calendar (same day, Mati's ask):** create no longer
+runs a model + MCP create_event on the primary calendar - it POSTs through
+the Calendar API (`gcal.createEvent`, free, instant) into the calendar
+chosen in the draft. `mission:cal-calendars` lists the writable calendars
+as opaque keys (sha256 of the id: calendar ids are email addresses and never
+reach the renderer). Default: a trackday (motorsport category or "trackday"
+in the title) goes to the calendar named like "Trackdays", else the last one
+used (localStorage), else primary; changing the category re-picks until the
+calendar is chosen by hand. Creates are rate-limited like edits (1/s).
+Needs the calendar.events scope like editing (one reconnect). The model
+still parses the natural-language text into the draft.
+
 ### W7b — Click-to-edit calendar events ✅ (2026-10-13, Mati's ask)
 
 - Click an event you own (week list or month day list) → inline card: title,

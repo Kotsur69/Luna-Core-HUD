@@ -384,3 +384,50 @@ test('an id listed from two writable calendars is not editable (which copy is un
   await client.listEvents(RANGE);
   await assert.rejects(client.updateEvent('dup', DRAFT, CATS), { reason: 'gcal-not-editable' });
 });
+
+// ---- listCalendars / createEvent (quick add with a calendar picker) ----------
+
+test('listCalendars: writable calendars only, primary first, keyed by a hash (never the id)', async () => {
+  const { fetchImpl } = editableApi();
+  const client = gcal.createGcal({ fetchImpl, safeStorage: fakeStorage, ...tempFiles({ refreshToken: 'r' }) });
+  const cals = await client.listCalendars();
+  assert.deepEqual(cals.map((c) => [c.name, c.primary]), [['me', true]]);
+  assert.match(cals[0].key, /^[0-9a-f]{16}$/);
+  assert.ok(!JSON.stringify(cals).includes('@'), 'no calendar id (an email) leaves gcal');
+});
+
+test('createEvent POSTs to the calendar behind the key, category as colour; an unknown key is refused', async () => {
+  const seen = [];
+  const base = editableApi();
+  const fetchImpl = async (url, opts = {}) => {
+    seen.push({ url: String(url), opts });
+    if (opts.method === 'POST' && String(url).includes('/events')) {
+      return json({ id: 'n1', summary: 'Trackday', start: { date: '2026-10-25' }, end: { date: '2026-10-26' }, location: 'Tor Kielce' });
+    }
+    return base.fetchImpl(url, opts);
+  };
+  const client = gcal.createGcal({ fetchImpl, safeStorage: fakeStorage, ...tempFiles({ refreshToken: 'r' }) });
+  const [me] = await client.listCalendars();
+  const draft = { title: 'Trackday', start: '2026-10-25', end: '2026-10-26', allDay: true, location: 'Tor Kielce', description: '', category: 'work' };
+  const { event } = await client.createEvent(me.key, draft, CATS);
+  const post = seen.find((c) => c.opts.method === 'POST' && c.url.includes('/events'));
+  assert.ok(post.url.includes('/calendars/me%40gmail.com/events?'));
+  assert.deepEqual(JSON.parse(post.opts.body), {
+    summary: 'Trackday',
+    start: { date: '2026-10-25' },
+    end: { date: '2026-10-26' },
+    location: 'Tor Kielce',
+    colorId: '9',
+  });
+  assert.deepEqual([event.id, event.editable], ['n1', true]);
+  await assert.rejects(client.createEvent('0000000000000000', draft, CATS), { reason: 'gcal-not-editable' });
+});
+
+test('an email-address calendar name never leaves gcal (primary is named after the account)', () => {
+  const cals = gcal.visibleCalendars([
+    { id: 'me@gmail.com', primary: true, summary: 'me@gmail.com', accessRole: 'owner' },
+    { id: 'x@group.calendar.google.com', selected: true, accessRole: 'owner' },
+    { id: 't@group.calendar.google.com', selected: true, summary: 'Trackdays', accessRole: 'owner' },
+  ]);
+  assert.deepEqual(cals.map((c) => c.name), ['', '', 'Trackdays']);
+});

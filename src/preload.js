@@ -225,8 +225,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionCalAgenda: (req) => ipcRenderer.invoke('mission:cal-agenda', req),
   /** Natural language -> event draft. Promise<{ok, draft, costUsd} | {ok:false, reason}>. */
   missionCalParse: (text) => ipcRenderer.invoke('mission:cal-parse', text),
-  /** Creates a confirmed draft. Promise<{ok, eventId, costUsd} | {ok:false, reason}>. */
-  missionCalCreate: (draft) => ipcRenderer.invoke('mission:cal-create', draft),
+  /** Calendars a new event can go to. Promise<{ok, calendars:[{key, name, color, primary}]} | {ok:false, reason}>. */
+  missionCalCalendars: () => ipcRenderer.invoke('mission:cal-calendars'),
+  /** Creates a confirmed draft in the calendar behind `calendarKey` (Calendar API, no model). Promise<{ok, event} | {ok:false, reason}>. */
+  missionCalCreate: (draft, calendarKey) => ipcRenderer.invoke('mission:cal-create', { draft, calendar: calendarKey }),
   /** Edits title/times/location of a listed event (Calendar API, no model). Promise<{ok, event} | {ok:false, reason}>. */
   missionCalUpdate: (id, draft) => ipcRenderer.invoke('mission:cal-update', { id, draft }),
   /** Weather for listed events that have a place (Open-Meteo). Promise<{ok, weather:{[eventId]:{tMin,tMax,rain,wind,place}}}>. */
