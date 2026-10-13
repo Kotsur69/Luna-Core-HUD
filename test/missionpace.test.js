@@ -62,6 +62,17 @@ test('heatmap: Monday-first columns, future days null, levels 0..4', () => {
   assert.equal(cols[1][4], null);
 });
 
+test('heatmap shows only the current year: earlier days are blank and do not set the scale', () => {
+  // Mon Dec 29 2025 .. Wed Jan 7 2026; the 2025 days carry huge counts.
+  const rows = days(new Date(2025, 11, 29), 10, (i) => (i < 3 ? 100 : i));
+  const cols = pace.heatmap(rows, new Date(2026, 0, 7, 10));
+  assert.equal(cols.length, 2);
+  assert.deepEqual(cols[0].slice(0, 3), [null, null, null]);
+  assert.equal(cols[0][3].date, '2026-01-01');
+  assert.equal(cols[0][3].level, 2);
+  assert.equal(cols[1][2].level, 4);
+});
+
 test('budgetPace: on-track, overburn with a hit time, and missing reset', () => {
   const now = new Date('2026-10-08T12:00:00Z');
   const half = new Date(now.getTime() + 3.5 * DAY_MS).toISOString();

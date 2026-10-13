@@ -4843,8 +4843,9 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   transition: transform var(--dur-normal) var(--ease-smooth);
 }
 .mc-tele__bar.is-current { background: var(--neon-cyan); }
-.mc-tele__heat { display: flex; gap: var(--space-1); }
-.mc-tele__heatcol { display: flex; flex-direction: column; gap: var(--space-1); flex: 1; max-width: 14px; }
+/* A year is 52 columns: tight gaps so the cells stay readable, capped so a wide panel doesn't balloon them. */
+.mc-tele__heat { display: flex; justify-content: center; gap: calc(var(--space-hair) * 2); }
+.mc-tele__heatcol { display: flex; flex-direction: column; gap: calc(var(--space-hair) * 2); flex: 1; max-width: 14px; }
 .mc-tele__cell { aspect-ratio: 1; border-radius: var(--radius-xs); background: var(--surface-panel-2); border: var(--border-w) solid var(--edge); }
 .mc-tele__cell.is-future { visibility: hidden; }
 .mc-tele__cell[data-level='1'] { background: color-mix(in srgb, var(--good) 25%, var(--surface-panel-2)); }

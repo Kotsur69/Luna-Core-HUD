@@ -106,15 +106,18 @@ export function githubVelocity(days, now) {
 
 /**
  * Days -> heatmap columns (one per week, Monday first), each cell
- * {date, count, level 0..4}, or null for days not reached yet.
+ * {date, count, level 0..4}, or null for days outside this calendar year
+ * (before Jan 1, or not reached yet). Earlier years do not set the scale.
  */
 export function heatmap(days, now) {
-  if (!days.length) return [];
-  const counts = new Map(days.map((d) => [d.date, d.count]));
-  const max = Math.max(1, ...days.map((d) => d.count));
+  const yearStart = `${now.getFullYear()}-01-01`;
+  const yearDays = days.filter((d) => d.date >= yearStart);
+  if (!yearDays.length) return [];
+  const counts = new Map(yearDays.map((d) => [d.date, d.count]));
+  const max = Math.max(1, ...yearDays.map((d) => d.count));
   const today = dayKey(now);
   const cols = [];
-  const cursor = weekStart(parseDay(days[0].date));
+  const cursor = weekStart(parseDay(yearDays[0].date));
   const end = weekStart(now);
   while (cursor <= end) {
     const col = [];
@@ -122,7 +125,7 @@ export function heatmap(days, now) {
       const key = dayKey(cursor);
       const count = counts.get(key) || 0;
       const level = count === 0 ? 0 : Math.min(4, Math.ceil((count / max) * 4));
-      col.push(key > today ? null : { date: key, count, level });
+      col.push(key < yearStart || key > today ? null : { date: key, count, level });
       cursor.setDate(cursor.getDate() + 1);
     }
     cols.push(col);

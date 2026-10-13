@@ -63,10 +63,21 @@ test('normalizeGithub rejects a response with no viewer', () => {
   assert.throws(() => gh.normalizeGithub({ errors: [{ message: 'bad' }] }), { reason: 'gh-failed' });
 });
 
-test('historyStart is a Monday at local midnight, WEEKS-1 weeks back', () => {
-  const start = gh.historyStart(new Date(2026, 9, 8, 15, 0)); // Thursday
-  assert.deepEqual([start.getFullYear(), start.getMonth(), start.getDate(), start.getDay()], [2026, 6, 20, 1]);
+test('historyStart is Jan 1 of the current year at local midnight once the year is long enough', () => {
+  const start = gh.historyStart(new Date(2026, 9, 8, 15, 0)); // Thursday in October
+  assert.deepEqual([start.getFullYear(), start.getMonth(), start.getDate()], [2026, 0, 1]);
   assert.equal(start.getHours(), 0);
+});
+
+test('historyStart reaches back into last year early in January so the bars and average still fill', () => {
+  const start = gh.historyStart(new Date(2026, 0, 7, 10, 0)); // Wednesday; Monday 7 weeks back is Nov 17
+  assert.deepEqual([start.getFullYear(), start.getMonth(), start.getDate(), start.getDay()], [2025, 10, 17, 1]);
+});
+
+test('the history window never exceeds the one year GitHub allows per contributions query', () => {
+  const lastNight = new Date(2026, 11, 31, 23, 59); // longest window: Jan 1 to Dec 31
+  const days = (lastNight - gh.historyStart(lastNight)) / 86400000;
+  assert.ok(days < 365, `window is ${days} days`);
 });
 
 test('classifyFailure maps missing CLI, timeout and auth errors', () => {

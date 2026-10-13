@@ -83,9 +83,10 @@ function renderBars(weeks) {
 }
 
 function renderHeat(cells) {
+  const total = cells.reduce((sum, col) => sum + col.reduce((a, cell) => a + (cell ? cell.count : 0), 0), 0);
   const heat = el('div', 'mc-tele__heat');
   heat.setAttribute('role', 'img');
-  heat.setAttribute('aria-label', t('mc.tele.heatLabel', { n: github.days.reduce((a, d) => a + d.count, 0) }));
+  heat.setAttribute('aria-label', t('mc.tele.heatLabel', { n: total }));
   for (const col of cells) {
     const c = el('div', 'mc-tele__heatcol');
     for (const cell of col) {

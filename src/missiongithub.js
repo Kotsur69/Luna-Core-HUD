@@ -2,7 +2,7 @@
 // LunaCore - Mission Control: GitHub telemetry (main process)
 // ----------------------------------------------------------------------------
 // One GraphQL query through the GitHub CLI (`gh api graphql`): the daily
-// contribution counts for the last WEEKS weeks, plus the open PRs, review
+// contribution counts for the current year, plus the open PRs, review
 // requests and assigned issues of the signed-in user. Free - no model call -
 // and no token of ours: `gh` owns the credential (its own keyring entry), so
 // LunaCore never stores or sees it.
@@ -20,8 +20,8 @@
 
 const { execFile } = require('child_process');
 
-/** Weeks of contribution history: enough for a 4-week average plus a heatmap. */
-const WEEKS = 12;
+/** Weeks of history that must always be covered: the 8 velocity bars and the 4-week average. */
+const MIN_WEEKS = 8;
 const ITEMS_PER_LIST = 10;
 const TIMEOUT_MS = 20000;
 const MAX_TITLE = 200;
@@ -60,12 +60,18 @@ class GithubError extends Error {
   }
 }
 
-/** Monday 00:00 local time, `weeksBack` weeks before the week holding `now`. */
-function historyStart(now, weeksBack = WEEKS - 1) {
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const sinceMonday = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - sinceMonday - weeksBack * 7);
-  return d;
+/**
+ * Where the contribution history starts: Jan 1 of the current year (the heatmap
+ * shows this year only), or the Monday MIN_WEEKS - 1 weeks back when that is
+ * earlier, so early in January the bars and average still have their weeks.
+ * Never more than 364 days before `now`, inside the one year GitHub accepts for
+ * a contributions query.
+ */
+function historyStart(now) {
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7) - (MIN_WEEKS - 1) * 7);
+  const jan1 = new Date(now.getFullYear(), 0, 1);
+  return jan1 < monday ? jan1 : monday;
 }
 
 const str = (v, max = MAX_TITLE) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -178,4 +184,4 @@ function createGithub({ runGh = runGhDefault, now = () => new Date() } = {}) {
   return { fetch, urlFor: (id) => (typeof id === 'string' && urls.get(id)) || null };
 }
 
-module.exports = { createGithub, normalizeGithub, historyStart, classifyFailure, GithubError, WEEKS };
+module.exports = { createGithub, normalizeGithub, historyStart, classifyFailure, GithubError, MIN_WEEKS };
