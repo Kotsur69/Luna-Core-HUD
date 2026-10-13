@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Mission Control: calendar event editor + trackday weather badge
+// LunaCore - Mission Control: calendar event editor + event weather badge
 // ----------------------------------------------------------------------------
 // Click an event you own -> this card opens inside its row: title, start, end,
 // location. Save goes to main (mission:cal-update), which re-validates and
@@ -132,7 +132,7 @@ export function buildEditor(ev, { onSave, onCancel }) {
   return { el: form, focus: () => start.focus() };
 }
 
-/** "12–17°C · rain 40% · wind 25 km/h" for a trackday; null without a forecast. */
+/** "12–17°C · rain 40% · wind 25 km/h" for an event with a place; null without a forecast. */
 export function weatherBadge(wx) {
   if (!wx) return null;
   const span = document.createElement('span');
@@ -140,8 +140,10 @@ export function weatherBadge(wx) {
   const parts = [wx.tMin === wx.tMax ? `${wx.tMax}°C` : `${wx.tMin}–${wx.tMax}°C`];
   if (wx.rain !== null) parts.push(t('mc.cal.wx.rain', { n: wx.rain }));
   if (wx.wind !== null) parts.push(t('mc.cal.wx.wind', { n: wx.wind }));
-  span.textContent = parts.join(' · ');
-  span.title = t('mc.cal.wx.title', { place: wx.place || '' });
+  // More than a week out the forecast is a trend: "≈" in front, and said so on hover.
+  span.textContent = (wx.longRange ? '≈ ' : '') + parts.join(' · ');
+  span.title = t(wx.longRange ? 'mc.cal.wx.titleFar' : 'mc.cal.wx.title', { place: wx.place || '' });
+  if (wx.longRange) span.classList.add('is-far');
   if (wx.rain !== null && wx.rain >= 50) span.classList.add('is-wet');
   return span;
 }

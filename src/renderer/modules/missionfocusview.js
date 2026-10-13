@@ -35,12 +35,22 @@ export function focusView(focus, now) {
     const next = focus.days[i + 1] ? focus.days[i + 1].start : Infinity;
     return { ...d, isFuture: d.start > now, isToday: d.start <= now && now < next };
   });
-  const rows = focus.projects.slice(0, FOCUS_TOP).map((p) => ({
+  const top = focus.projects.slice(0, FOCUS_TOP);
+  // Bar length under each name: share of the busiest project (it fills the bar).
+  const maxMs = Math.max(0, ...top.map((p) => p.totalMs));
+  const rows = top.map((p) => ({
     key: p.key,
     name: p.name,
     cls: classOf(p),
     totalMs: p.totalMs,
-    cells: days.map((d, i) => ({ start: d.start, ms: p.days[i] || 0, level: focusLevel(p.days[i]), isFuture: d.isFuture })),
+    share: maxMs > 0 ? p.totalMs / maxMs : 0,
+    cells: days.map((d, i) => ({
+      start: d.start,
+      ms: p.days[i] || 0,
+      level: focusLevel(p.days[i]),
+      isFuture: d.isFuture,
+      isToday: d.isToday,
+    })),
   }));
   const rest = focus.projects.slice(FOCUS_TOP);
   const today = days.find((d) => d.isToday);

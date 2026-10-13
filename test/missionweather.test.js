@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Mission Control trackday weather tests (src/missionweather.js)
+// LunaCore - Mission Control event weather tests (src/missionweather.js)
 // ----------------------------------------------------------------------------
 // fetch is an injected fake keyed by URL; the clock is fixed. Times are built
 // in LOCAL time (new Date(y, m, d, h)), like the module's all-day spans.
@@ -14,8 +14,11 @@ const w = require('../src/missionweather.js');
 
 const HOUR = 3600 * 1000;
 const NOW = new Date(2026, 9, 13, 12).getTime();
-const TRACKS = [{ name: 'Tor Poznan', names: ['tor poznan'], lat: 52.418, lon: 16.812 }];
-const RULES = { category: 'motorsport', tracks: TRACKS };
+const TRACKS = [
+  { name: 'Tor Poznan', names: ['tor poznan'], lat: 52.418, lon: 16.812 },
+  { name: 'Tor Kielce', names: ['tor kielce', 'miedziana gora'], lat: 50.836, lon: 20.551 },
+];
+const RULES = { tracks: TRACKS };
 const at = (d, h) => new Date(2026, 9, d, h).getTime();
 const iso = (ms) => new Date(ms).toISOString();
 const timed = (id, from, to, extra = {}) => ({ id, title: 'x', start: iso(from), end: iso(to), allDay: false, location: '', ...extra });
@@ -36,27 +39,40 @@ function hourly(days = 9) {
   return { time, temperature_2m, precipitation_probability, wind_speed_10m };
 }
 
-function fakeFetch() {
+/** Fake Open-Meteo: `geo` maps a geocoding query to its first result (or nothing). */
+function fakeFetch(geo = {}) {
   const calls = [];
   const fetchImpl = async (url) => {
     const u = new URL(url);
     calls.push(u);
-    const body = u.hostname.startsWith('geocoding') ? { results: [] } : { hourly: hourly() };
-    return { ok: true, status: 200, json: async () => body };
+    if (u.hostname.startsWith('geocoding')) {
+      const hit = geo[u.searchParams.get('name')];
+      return { ok: true, json: async () => ({ results: hit ? [hit] : [] }) };
+    }
+    return { ok: true, json: async () => ({ hourly: hourly(16) }) };
   };
-  return { fetchImpl, calls };
+  const geoNames = () => calls.filter((u) => u.hostname.startsWith('geocoding')).map((u) => u.searchParams.get('name'));
+  return { fetchImpl, calls, geoNames };
 }
 
-test('fold makes track names match without diacritics or case', () => {
+const town = (name, population, lat = 50.87, lon = 20.63) => ({ name, latitude: lat, longitude: lon, population });
+
+test('fold makes names match without diacritics or case', () => {
   assert.equal(w.fold('Tor Poznań ŁÓDŹ'), 'tor poznan lodz');
 });
 
-test('isTrackday: the category, "trackday" in the title, or a known track name', () => {
-  assert.ok(w.isTrackday({ title: 'x', category: 'motorsport' }, RULES));
-  assert.ok(w.isTrackday({ title: 'Track day z ekipa' }, RULES));
-  assert.ok(w.isTrackday({ title: 'Jazda', location: 'Tor Poznań, Przezmierowo' }, RULES));
-  assert.ok(!w.isTrackday({ title: 'Dentist', location: 'Poznan' }, RULES));
-  assert.ok(!w.isTrackday({ title: 'x', category: 'work' }, { category: null, tracks: [] }));
+test('findTrack: whole words in title or location ("tor" never inside "motor")', () => {
+  assert.equal(w.findTrack({ title: 'Jazda', location: 'Tor Kielce' }, TRACKS).name, 'Tor Kielce');
+  assert.equal(w.findTrack({ title: 'Trening Tor Poznań' }, TRACKS).name, 'Tor Poznan');
+  const short = [{ name: 'T', names: ['tor'], lat: 1, lon: 1 }];
+  assert.equal(w.findTrack({ title: 'Motorsport meetup' }, short), null);
+});
+
+test('placeText skips empty and online-meeting locations', () => {
+  assert.equal(w.placeText({ location: 'Kielce' }), 'Kielce');
+  for (const loc of ['', 'Microsoft Teams Meeting', 'https://meet.google.com/abc', 'Zoom', 'online']) {
+    assert.equal(w.placeText({ location: loc }), '', loc);
+  }
 });
 
 test('eventHours: timed span as is; all-day = 08-18 per day, at most 3 days', () => {
@@ -82,100 +98,116 @@ test('summarize drops out-of-range or non-numeric values from the API', () => {
   assert.deepEqual(w.summarize(ok, [[at(14, 9), at(14, 10)]]), { tMin: 12, tMax: 12, rain: null, wind: null });
 });
 
-test('forEvents: a known track uses its own coordinates, no geocoding', async () => {
-  const { fetchImpl, calls } = fakeFetch();
-  const weather = w.createWeather({ fetchImpl, now: () => NOW });
-  const out = await weather.forEvents([timed('e1', at(14, 9), at(14, 12), { title: 'Trackday Tor Poznan' })], RULES);
-  assert.deepEqual(out, { e1: { tMin: 9, tMax: 11, rain: 90, wind: 20, place: 'Tor Poznan' } });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].hostname, 'api.open-meteo.com');
-  assert.equal(calls[0].searchParams.get('latitude'), '52.4180');
-  assert.equal(calls[0].searchParams.get('timeformat'), 'unixtime');
+test('any event with a place gets weather - not only trackdays', async () => {
+  const f = fakeFetch({ Kielce: town('Kielce', 190000) });
+  const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => NOW });
+  const out = await weather.forEvents([timed('dentist', at(14, 9), at(14, 12), { title: 'Dentysta', location: 'Kielce' })], RULES);
+  assert.deepEqual(out, { dentist: { tMin: 9, tMax: 11, rain: 90, wind: 20, place: 'Kielce', longRange: false } });
 });
 
-test('forEvents: an unknown place is geocoded part by part; only the location leaves the PC', async () => {
-  let n = 0;
-  const calls = [];
-  const fetchImpl = async (url) => {
-    const u = new URL(url);
-    calls.push(u);
-    if (u.hostname.startsWith('geocoding')) {
-      n += 1;
-      // The first part ("Autodrom X") has no hit; the city does.
-      const body = n === 1 ? { results: [] } : { results: [{ latitude: 50.06, longitude: 19.94, name: 'Krakow' }] };
-      return { ok: true, json: async () => body };
-    }
-    return { ok: true, json: async () => ({ hourly: hourly() }) };
-  };
-  const weather = w.createWeather({ fetchImpl, now: () => NOW });
-  const ev = timed('e2', at(15, 10), at(15, 11), { title: 'Secret plan', category: 'motorsport', location: 'Autodrom X, Krakow' });
+test('a known track uses its own coordinates, no geocoding ("Tor Kielce" is not the city)', async () => {
+  const f = fakeFetch();
+  const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => NOW });
+  const out = await weather.forEvents([timed('e1', at(14, 9), at(14, 12), { title: 'Trackday', location: 'Tor Kielce' })], RULES);
+  assert.equal(out.e1.place, 'Tor Kielce');
+  assert.deepEqual(f.geoNames(), []);
+  assert.equal(f.calls[0].searchParams.get('latitude'), '50.8360');
+  assert.equal(f.calls[0].searchParams.get('timeformat'), 'unixtime');
+});
+
+test('a venue name that is no place falls back to its words, keeping the biggest town', async () => {
+  const f = fakeFetch({ Kielce: town('Kielce', 190000), Hala: town('Hala', 120, 10, 10) });
+  const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => NOW });
+  const out = await weather.forEvents([timed('e2', at(15, 10), at(15, 11), { title: 'Targi', location: 'Hala Expo Kielce' })], RULES);
+  assert.equal(out.e2.place, 'Kielce');
+  // Whole part first, then the words (last first).
+  assert.deepEqual(f.geoNames(), ['Hala Expo Kielce', 'Kielce', 'Expo', 'Hala']);
+});
+
+test('comma parts are tried in order; a part with digits never leaves the PC; titles never do', async () => {
+  const f = fakeFetch({ Radom: town('Radom', 200000) });
+  const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => NOW });
+  const ev = timed('e3', at(15, 10), at(15, 11), { title: 'Secret plan', location: 'Autodrom X, ul. Polna 12, Radom' });
   const out = await weather.forEvents([ev], RULES);
-  assert.equal(out.e2.place, 'Krakow');
-  const names = calls.filter((u) => u.hostname.startsWith('geocoding')).map((u) => u.searchParams.get('name'));
-  assert.deepEqual(names, ['Autodrom X', 'Krakow']);
-  assert.ok(calls.every((u) => !u.href.includes('Secret')));
+  assert.equal(out.e3.place, 'Radom');
+  assert.deepEqual(f.geoNames(), ['Autodrom X', 'Radom']);
+  assert.ok(f.calls.every((u) => !u.href.includes('Secret') && !u.href.includes('Polna')));
 });
 
-test('forEvents skips non-trackdays, past events, events beyond the horizon and placeless ones', async () => {
-  const { fetchImpl, calls } = fakeFetch();
-  const weather = w.createWeather({ fetchImpl, now: () => NOW });
+test('skips placeless, online, past and too-far events', async () => {
+  const f = fakeFetch({ Kielce: town('Kielce', 190000) });
+  const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => NOW });
   const far = 13 + w.AHEAD_DAYS + 1;
   const out = await weather.forEvents(
     [
-      timed('work', at(14, 9), at(14, 10), { title: 'Standup', location: 'Office' }),
-      timed('past', at(12, 9), at(12, 10), { title: 'Trackday' }),
-      timed('far', at(far, 9), at(far, 10), { title: 'Trackday Tor Poznan' }),
-      timed('noplace', at(14, 9), at(14, 10), { title: 'Trackday' }),
+      timed('noplace', at(14, 9), at(14, 10), { title: 'Standup' }),
+      timed('online', at(14, 9), at(14, 10), { location: 'Microsoft Teams Meeting' }),
+      timed('past', at(12, 9), at(12, 10), { location: 'Kielce' }),
+      timed('far', at(far, 9), at(far, 10), { location: 'Kielce' }),
     ],
     RULES
   );
   assert.deepEqual(out, {});
-  assert.equal(calls.length, 0);
+  assert.equal(f.calls.length, 0);
 });
 
-test('forecasts are cached per place for an hour; a failed fetch leaves the event out, not a crash', async () => {
+test('forecasts are cached per place for an hour; a "no hit" is asked again after it; a failed fetch is no crash', async () => {
   let t = NOW;
-  const { fetchImpl, calls } = fakeFetch();
-  const weather = w.createWeather({ fetchImpl, now: () => t });
-  const ev = [timed('e1', at(14, 9), at(14, 12), { title: 'Tor Poznan' })];
-  await weather.forEvents(ev, RULES);
-  await weather.forEvents(ev, RULES);
-  assert.equal(calls.length, 1);
+  const f = fakeFetch();
+  const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => t });
+  const track = [timed('e1', at(14, 9), at(14, 12), { location: 'Tor Poznan' })];
+  await weather.forEvents(track, RULES);
+  await weather.forEvents(track, RULES);
+  assert.equal(f.calls.length, 1, 'forecast cached');
+  const nowhere = [timed('e4', at(14, 9), at(14, 12), { location: 'Nowhere' })];
+  await weather.forEvents(nowhere, RULES);
+  await weather.forEvents(nowhere, RULES);
+  assert.deepEqual(f.geoNames(), ['Nowhere'], 'no hit cached');
   t += 2 * HOUR;
-  await weather.forEvents(ev, RULES);
-  assert.equal(calls.length, 2);
+  await weather.forEvents(nowhere, RULES);
+  assert.deepEqual(f.geoNames(), ['Nowhere', 'Nowhere'], 'and retried after the TTL');
 
   const broken = w.createWeather({ fetchImpl: async () => ({ ok: false, status: 503 }), now: () => NOW });
-  assert.deepEqual(await broken.forEvents(ev, RULES), {});
+  assert.deepEqual(await broken.forEvents(track, RULES), {});
 });
 
-test('parseGeocode validates coordinates and caps the name', () => {
+test('soonest events first under the cap', async () => {
+  const f = fakeFetch({ Kielce: town('Kielce', 190000) });
+  const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => NOW });
+  const later = Array.from({ length: 30 }, (_, i) => timed(`late${i}`, at(19, 9), at(19, 10), { location: 'Kielce' }));
+  const out = await weather.forEvents([...later, timed('tomorrow', at(14, 9), at(14, 10), { location: 'Kielce' })], RULES);
+  assert.ok(out.tomorrow);
+  assert.equal(Object.keys(out).length, 25);
+});
+
+test('parseGeocode validates coordinates, caps the name, reads population', () => {
   assert.equal(w.parseGeocode({ results: [{ latitude: 999, longitude: 1, name: 'x' }] }), null);
   assert.equal(w.parseGeocode({}), null);
-  assert.equal(w.parseGeocode({ results: [{ latitude: 1, longitude: 2, name: 'y'.repeat(500) }] }).name.length, 80);
+  const p = w.parseGeocode({ results: [{ latitude: 1, longitude: 2, name: 'y'.repeat(500), population: 'lots' }] });
+  assert.deepEqual([p.name.length, p.population], [80, 0]);
 });
 
-test('track names match whole words only ("tor" never inside "motor")', () => {
-  const short = { category: null, tracks: [{ name: 'T', names: ['tor'], lat: 1, lon: 1 }] };
-  assert.ok(!w.isTrackday({ title: 'Motorsport meetup' }, short));
-  assert.ok(w.isTrackday({ title: 'Jazda: tor, sobota' }, short));
+test('parseGeocode keeps the most populous of the hits (the city, not a namesake district)', () => {
+  const p = w.parseGeocode({
+    results: [
+      { name: 'Warszawa Historic District', latitude: 41.6, longitude: -87.6, population: 0 },
+      { name: 'Warszawa', latitude: 52.23, longitude: 21.01, population: 1700000 },
+    ],
+  });
+  assert.equal(p.name, 'Warszawa');
 });
 
-test('geocoding never sends a part with digits; a "no hit" is asked again after an hour', async () => {
-  let t = NOW;
-  const calls = [];
-  const fetchImpl = async (url) => {
-    const u = new URL(url);
-    calls.push(u);
-    return { ok: true, json: async () => (u.hostname.startsWith('geocoding') ? { results: [] } : { hourly: hourly() }) };
-  };
-  const weather = w.createWeather({ fetchImpl, now: () => t });
-  const ev = [timed('e3', at(15, 10), at(15, 11), { category: 'motorsport', location: 'ul. Polna 12, 62-080 Tarnowo, Nowhere' })];
-  await weather.forEvents(ev, RULES);
-  assert.deepEqual(calls.map((u) => u.searchParams.get('name')), ['Nowhere']);
-  await weather.forEvents(ev, RULES);
-  assert.equal(calls.length, 1, 'no hit is cached');
-  t += 2 * HOUR;
-  await weather.forEvents(ev, RULES);
-  assert.equal(calls.length, 2, 'and retried after the TTL');
+test('events up to two weeks out get weather; past a week it is flagged longRange', async () => {
+  const f = fakeFetch({ Kielce: town('Kielce', 190000) });
+  const weather = w.createWeather({ fetchImpl: f.fetchImpl, now: () => NOW });
+  const out = await weather.forEvents(
+    [
+      timed('soon', at(15, 9), at(15, 10), { location: 'Kielce' }),
+      timed('later', at(13 + 12, 9), at(13 + 12, 10), { location: 'Kielce' }),
+    ],
+    RULES
+  );
+  assert.equal(w.AHEAD_DAYS, 14);
+  assert.deepEqual([out.soon.longRange, 'later' in out], [false, true]);
+  assert.equal(out.later.longRange, true);
 });

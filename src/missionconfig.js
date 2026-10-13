@@ -76,7 +76,7 @@ const MAX_TRACK_NAME_CHARS = 60;
 const trackName = (s) => (typeof s === 'string' && s.trim() ? s.trim().slice(0, MAX_TRACK_NAME_CHARS) : null);
 const inRange = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= lim;
 
-/** A known track for trackday weather; null when the name or coordinates are unusable. */
+/** A known track for event weather (its own coordinates beat geocoding the town); null when the name or coordinates are unusable. */
 function normalizeTrack(raw) {
   if (!raw || typeof raw !== 'object' || !inRange(raw.lat, 90) || !inRange(raw.lon, 180)) return null;
   const name = trackName(raw.name);
@@ -88,7 +88,6 @@ function normalizeTrack(raw) {
 function normalizeWeather(raw) {
   const w = raw && typeof raw === 'object' ? raw : {};
   return {
-    category: typeof w.category === 'string' && CATEGORY_ID_RE.test(w.category) ? w.category : null,
     tracks: (Array.isArray(w.tracks) ? w.tracks : []).map(normalizeTrack).filter(Boolean).slice(0, MAX_TRACKS),
   };
 }
@@ -101,7 +100,7 @@ const pick = (base, local, key) =>
  * @returns {{mail:{query:string,maxThreads:number,trashCategories:string[],trashSenders:string[],
  *   flagCategories:string[],neverTrash:string[],keepSenders:string[]},
  *   calendar:{days:number,categories:Array<{id:string,label:unknown,colorId:string|null,color:string}>,
- *     weather:{category:string|null,tracks:Array<{name:string,names:string[],lat:number,lon:number}>}}}}
+ *     weather:{tracks:Array<{name:string,names:string[],lat:number,lon:number}>}}}}
  */
 function loadMissionConfig() {
   const base = readJson(BASE_FILE) || {};

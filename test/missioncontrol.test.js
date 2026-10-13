@@ -425,7 +425,7 @@ test('cal-weather works only from events main listed itself', async () => {
   const res = await h.invoke('mission:cal-weather', [{ id: 'evil', title: 'Trackday', location: 'http://x' }]);
   assert.equal(res.ok, true);
   assert.deepEqual(h.weatherCalls[0].evs.map((e) => e.id), ['e1']);
-  assert.equal(h.weatherCalls[0].rules.category, 'motorsport');
+  assert.ok(h.weatherCalls[0].rules.tracks.some((t) => t.name === 'Tor Kielce'));
 });
 
 test('cal-update is rate-limited: a second save within a second is refused', async () => {

@@ -14,7 +14,7 @@
 //     tick and untick, but it cannot introduce a thread id of its own.
 //   - busy: one job per kind at a time. A double-click must not start two
 //     overlapping inbox scans, each costing a full model call.
-//   - seenEvents: the calendar events main itself read from Google. Trackday
+//   - seenEvents: the calendar events main itself read from Google. Event
 //     weather is worked out from these, never from events the renderer sends.
 // ============================================================================
 
@@ -295,7 +295,7 @@ function registerMissionIpc({
     })
   );
 
-  // Trackday weather for the events already listed (Open-Meteo, free).
+  // Weather for the listed events that have a place (Open-Meteo, free).
   // Not under `busy`: an idempotent read, and a dropped second call would be
   // the one that already sees a just-saved event.
   ipcMain.handle('mission:cal-weather', async () => {

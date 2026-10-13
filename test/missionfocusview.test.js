@@ -59,3 +59,22 @@ test('no report or no focus is null; an empty week has no rows', () => {
   assert.deepEqual(v.rows, []);
   assert.equal(v.totalMs, 0);
 });
+
+test('rows carry a share of the busiest project and today marks on cells', () => {
+  const day = 24 * 3600 * 1000;
+  const start = Date.UTC(2026, 9, 12);
+  const days = Array.from({ length: 7 }, (_, i) => ({ start: start + i * day, totalMs: 0, switches: 0 }));
+  const v = focusView(
+    {
+      totalMs: 3 * 3600000,
+      days,
+      projects: [
+        { key: 'git:a', name: 'a', totalMs: 2 * 3600000, days: [0, 2 * 3600000, 0, 0, 0, 0, 0] },
+        { key: 'git:b', name: 'b', totalMs: 3600000, days: [3600000, 0, 0, 0, 0, 0, 0] },
+      ],
+    },
+    start + day + 3600000
+  );
+  assert.deepEqual(v.rows.map((r) => r.share), [1, 0.5]);
+  assert.deepEqual(v.rows[0].cells.map((c) => c.isToday), [false, true, false, false, false, false, false]);
+});

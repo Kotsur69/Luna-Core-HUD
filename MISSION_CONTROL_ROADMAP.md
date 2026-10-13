@@ -379,6 +379,25 @@ event, week + month day list. Main computes it from the events it listed
 itself, never from renderer input. Forecast cache 1 h per place.
 Morning brief part waits for W6.
 
+**Update 2026-10-13 (Mati's feedback):** weather is no longer trackday-only —
+**every event with a place** within **14 days** gets it (work in Katowice
+too). Known track in title/location first (now 12: + Tor Kielce, Autodrom
+Jastrzab; "Silesia" alone matches Silesia Ring — Mati's events are often
+title-only, no location). Otherwise geocode with `language=pl` (Polish names
+like "Warszawa" only match in pl), 5 results, most populous wins (the first
+hit for "Warszawa" in en was a US historic district); if no comma part is a
+place, its single words are tried and the biggest town wins ("Hala Expo
+Kielce" → Kielce). Online meetings (Teams/Zoom/Meet/links) skipped. Over 7
+days out the badge says "≈" (long range, a trend). Open-Meteo stops at 16
+days, so an event 18 days out has no weather until it is 14 days out.
+Refresh: on every Mission Control open and hourly while open (main caches
+1 h). The `category` setting was dropped from `calendar.weather`.
+
+**Focus redesign (same day):** three headline tiles (this week / today /
+switches today), each day cell prints its time on the heat tile (dark text
+on bright levels), today's column lit, a share bar under each project, the
+method note folded under "How is this counted?".
+
 ### W7b — Click-to-edit calendar events ✅ (2026-10-13, Mati's ask)
 
 - Click an event you own (week list or month day list) → inline card: title,

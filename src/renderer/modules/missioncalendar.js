@@ -8,8 +8,8 @@
 // create) still runs a model.
 //
 // Clicking an event you own opens an edit card (missioncaledit.js) saved
-// straight through the Calendar API - no model. Trackday events carry an
-// Open-Meteo weather badge (main's missionweather.js), also free.
+// straight through the Calendar API - no model. Events with a place in the
+// next 7 days carry an Open-Meteo weather badge (main's missionweather.js), also free.
 //
 // Quick add is parse -> editable draft -> Add. The draft card is the "modal":
 // inline, because the HUD has no free floating space, but it has the same
@@ -28,12 +28,13 @@ let config = { categories: [], days: 7, gcal: { configured: false, connected: fa
 let agenda = null;
 let draft = null;
 let els = null;
-// Click-to-edit: the id of the event whose card is open, and trackday weather
+// Click-to-edit: the id of the event whose card is open, and event weather
 // by event id (main works it out from the events it listed itself).
 let editingId = null;
 let card = null; // {id, row} - the open card's DOM, kept across re-renders
 let weather = {};
 let weatherSeq = 0;
+const WEATHER_REFRESH_MS = 60 * 60 * 1000;
 // Month view. Loaded months are kept ('YYYY-MM' -> events) so flipping back
 // and forth never re-bills; the refresh button forces a reload.
 let view = 'week';
@@ -203,7 +204,7 @@ async function saveEdit(ev, edited, button) {
   loadWeather();
 }
 
-/** Trackday forecasts for what is loaded; quiet on failure (a nice-to-have). */
+/** Forecasts for loaded events that have a place; quiet on failure (a nice-to-have). */
 async function loadWeather() {
   // Only the newest call's answer counts: it has seen the most events.
   const seq = ++weatherSeq;
@@ -587,7 +588,15 @@ defineWidget({
     renderAgenda();
     renderDraft();
     applyView();
+    // Events survive remounts, so their weather is re-asked on every open and
+    // hourly while open. Main caches forecasts for an hour: this costs nothing
+    // until a fresher forecast exists.
+    if (agenda || months.size) loadWeather();
+    const weatherTimer = setInterval(() => {
+      if (agenda || months.size) loadWeather();
+    }, WEATHER_REFRESH_MS);
     return () => {
+      clearInterval(weatherTimer);
       els = null;
       editingId = null;
       card = null;

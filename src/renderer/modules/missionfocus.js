@@ -3,9 +3,10 @@
 // ----------------------------------------------------------------------------
 // Lives inside the Telemetry widget, under "Where Claude went", and renders
 // report.focus from the same mission:ledger call (no extra IPC, no model
-// call). A real <table>: rows = top projects, columns = Mon-Sun, a cell's
-// heat level comes from missionfocusview.js. Exact time is in each cell's
-// title and in hidden text, so the heat colour is never the only signal.
+// call). Three headline tiles (week, today, switches today), then a real
+// <table>: rows = top projects with a share bar, columns = Mon-Sun. Each
+// cell prints its time on a heat tile (level from missionfocusview.js), so
+// the colour is never the only signal; screen readers get the spelled-out time.
 // ============================================================================
 
 'use strict';
@@ -45,7 +46,7 @@ function headRow(view) {
   corner.append(el('span', 'mc-sr', t('mc.focus.project')));
   tr.append(corner);
   for (const d of view.days) {
-    const th = el('th', d.isToday ? 'mc-focus__day is-today' : 'mc-focus__day', weekday(d.start));
+    const th = el('th', d.isToday ? 'mc-focus__day is-today' : 'mc-focus__day', weekday(d.start).replace('.', ''));
     th.scope = 'col';
     th.title = longDay(d.start);
     tr.append(th);
@@ -61,22 +62,51 @@ function projectRow(r) {
   const th = el('th', 'mc-focus__name');
   th.scope = 'row';
   th.title = `${r.name} · ${t(`mc.ledger.cls.${r.cls}`)}`;
-  th.append(el('span', `mc-ledger__swatch mc-ledger__seg--${r.cls}`), el('span', 'mc-focus__label', r.name));
+  const label = el('span', 'mc-focus__labelline');
+  label.append(el('span', `mc-ledger__swatch mc-ledger__seg--${r.cls}`), el('span', 'mc-focus__label', r.name));
+  // Share of the busiest project; decorative (the Total column has the number).
+  const bar = el('span', 'mc-focus__bar');
+  bar.setAttribute('aria-hidden', 'true');
+  const fill = el('span', `mc-focus__barfill mc-ledger__seg--${r.cls}`);
+  fill.style.width = `${Math.round(r.share * 100)}%`;
+  bar.append(fill);
+  th.append(label, bar);
   tr.append(th);
-  for (const c of r.cells) {
-    const td = el('td', 'mc-focus__cellwrap');
-    const sq = el('span', c.isFuture ? 'mc-tele__cell mc-focus__cell is-future' : 'mc-tele__cell mc-focus__cell');
-    if (!c.isFuture) {
-      sq.dataset.level = String(c.level);
-      td.title = `${longDay(c.start)}: ${c.ms ? hm(c.ms) : '-'}`;
-      td.append(sq, el('span', 'mc-sr', c.ms ? hm(c.ms) : '-'));
-    } else {
-      td.append(sq);
-    }
-    tr.append(td);
-  }
-  tr.append(el('td', 'mc-focus__sum', hm(r.totalMs)));
+  for (const c of r.cells) tr.append(dayCell(c));
+  tr.append(el('td', 'mc-focus__sum mc-focus__total', hm(r.totalMs)));
   return tr;
+}
+
+/** One project-day: the time itself on a heat tile ("4:12"), blank for the future. */
+function dayCell(c) {
+  const td = el('td', c.isToday ? 'mc-focus__cellwrap is-today' : 'mc-focus__cellwrap');
+  if (c.isFuture) {
+    td.append(el('span', 'mc-focus__cell is-future'));
+    return td;
+  }
+  const tile = el('span', 'mc-focus__cell', c.ms ? clock(c.ms) : '·');
+  tile.dataset.level = String(c.level);
+  // The tile text is visual shorthand; screen readers get the spelled-out time.
+  tile.setAttribute('aria-hidden', 'true');
+  td.title = `${longDay(c.start)}: ${c.ms ? hm(c.ms) : '-'}`;
+  td.append(tile, el('span', 'mc-sr', c.ms ? hm(c.ms) : '-'));
+  return td;
+}
+
+/** The three headline numbers above the grid. */
+function statTiles(view) {
+  const box = el('div', 'mc-focus__stats');
+  const tile = (labelKey, value, extra = '') => {
+    const d = el('div', `mc-focus__stat${extra}`);
+    d.append(el('span', 'mc-focus__statvalue', value), el('span', 'mc-focus__statlabel', t(labelKey)));
+    return d;
+  };
+  box.append(
+    tile('mc.focus.statWeek', hm(view.totalMs)),
+    tile('mc.focus.statToday', view.today ? hm(view.today.totalMs) : '-', ' is-today'),
+    tile('mc.focus.statSwitches', view.today ? String(view.today.switches) : '-')
+  );
+  return box;
 }
 
 /** Bottom rows: wall-clock hours per day, then context switches per day. */
@@ -91,8 +121,9 @@ function footRows(view) {
   hours.append(hTh);
   switches.append(sTh);
   for (const d of view.days) {
-    hours.append(el('td', 'mc-focus__num', d.isFuture || !d.totalMs ? '' : clock(d.totalMs)));
-    switches.append(el('td', 'mc-focus__num', d.isFuture || !d.totalMs ? '' : String(d.switches)));
+    const cls = d.isToday ? 'mc-focus__num is-today' : 'mc-focus__num';
+    hours.append(el('td', cls, d.isFuture || !d.totalMs ? '' : clock(d.totalMs)));
+    switches.append(el('td', cls, d.isFuture || !d.totalMs ? '' : String(d.switches)));
   }
   hours.append(el('td', 'mc-focus__sum', hm(view.totalMs)));
   switches.append(el('td', 'mc-focus__sum', ''));
@@ -109,10 +140,6 @@ export function renderFocus(focus) {
   if (!view) return [];
   if (!view.rows.length) return [el('p', 'hint', t('mc.focus.empty'))];
 
-  const summary = el('p', 'mc-tele__stat');
-  const today = view.today ? t('mc.focus.today', { time: hm(view.today.totalMs), n: view.today.switches }) : '';
-  summary.textContent = [t('mc.focus.week', { time: hm(view.totalMs) }), today].filter(Boolean).join(' · ');
-
   const table = el('table', 'mc-focus__grid');
   table.append(el('caption', 'mc-sr', t('mc.focus.caption')));
   const thead = el('thead');
@@ -125,8 +152,11 @@ export function renderFocus(focus) {
 
   const wrap = el('div', 'mc-focus__scroll');
   wrap.append(table);
-  const out = [summary, wrap];
-  if (view.restCount) out.push(el('p', 'mc-tele__stat', t('mc.focus.rest', { n: view.restCount, time: hm(view.restMs) })));
-  out.push(el('p', 'hint', t('mc.focus.note')));
+  const out = [statTiles(view), wrap];
+  if (view.restCount) out.push(el('p', 'mc-focus__rest', t('mc.focus.rest', { n: view.restCount, time: hm(view.restMs) })));
+  // The method note is for the curious: folded, so it does not compete with the numbers.
+  const how = el('details', 'mc-focus__how');
+  how.append(el('summary', '', t('mc.focus.how')), el('p', 'hint', t('mc.focus.note')));
+  out.push(how);
   return out;
 }

@@ -229,7 +229,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionCalCreate: (draft) => ipcRenderer.invoke('mission:cal-create', draft),
   /** Edits title/times/location of a listed event (Calendar API, no model). Promise<{ok, event} | {ok:false, reason}>. */
   missionCalUpdate: (id, draft) => ipcRenderer.invoke('mission:cal-update', { id, draft }),
-  /** Trackday weather for listed events (Open-Meteo). Promise<{ok, weather:{[eventId]:{tMin,tMax,rain,wind,place}}}>. */
+  /** Weather for listed events that have a place (Open-Meteo). Promise<{ok, weather:{[eventId]:{tMin,tMax,rain,wind,place}}}>. */
   missionCalWeather: () => ipcRenderer.invoke('mission:cal-weather'),
   /** Browser consent for Google Calendar (read + event edits). Promise<{ok, gcal} | {ok:false, reason}>. */
   missionGcalConnect: () => ipcRenderer.invoke('mission:gcal-connect'),
