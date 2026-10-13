@@ -52,7 +52,7 @@ test("parseClientFile accepts Google's Desktop client JSON and rejects junk", ()
   assert.equal(gcal.parseClientFile(null), null);
 });
 
-test('auth URL asks for read-only scope, offline access and a PKCE S256 challenge', () => {
+test('auth URL asks for calendar-list read + event edit scopes, offline access and a PKCE S256 challenge', () => {
   const url = new URL(
     gcal.buildAuthUrl({
       clientId: 'c.apps.googleusercontent.com',
@@ -62,7 +62,10 @@ test('auth URL asks for read-only scope, offline access and a PKCE S256 challeng
     })
   );
   assert.equal(url.origin, 'https://accounts.google.com');
-  assert.equal(url.searchParams.get('scope'), 'https://www.googleapis.com/auth/calendar.readonly');
+  assert.deepEqual(url.searchParams.get('scope').split(' '), [
+    'https://www.googleapis.com/auth/calendar.readonly',
+    'https://www.googleapis.com/auth/calendar.events',
+  ]);
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
   assert.equal(url.searchParams.get('access_type'), 'offline');
   assert.equal(url.searchParams.get('redirect_uri'), 'http://127.0.0.1:5555');
@@ -261,4 +264,123 @@ test('importClient copies only id + secret from a Desktop client file; junk and 
   assert.throws(() => client.importClient(path.join(dir, 'missing.json')), { reason: 'gcal-bad-client' });
   // The good client is still in place after the refused imports.
   assert.equal(client.status().configured, true);
+});
+
+// ---- updateEvent (click-to-edit) ----------------------------------------------
+
+/** A fake Google: one owned calendar, one read-only one; PATCH answers `patchReply`. */
+function editableApi({ patchReply = null, patchStatus = 200 } = {}) {
+  const seen = [];
+  const fetchImpl = async (url, opts = {}) => {
+    const u = String(url);
+    seen.push({ url: u, opts });
+    if (u.startsWith('https://oauth2')) return json({ access_token: 'acc', expires_in: 3600 });
+    if (u.includes('/users/me/calendarList')) {
+      return json({
+        items: [
+          { id: 'me@gmail.com', primary: true, summary: 'me', accessRole: 'owner' },
+          { id: 'holidays@group', selected: true, summary: 'Holidays', accessRole: 'reader' },
+        ],
+      });
+    }
+    if (opts.method === 'PATCH') return json(patchReply, patchStatus);
+    const mine = u.includes('/calendars/me%40gmail.com/');
+    const items = mine
+      ? [
+          { id: 'own1', summary: 'Trackday', start: { dateTime: '2026-10-14T09:00:00+02:00' }, end: { dateTime: '2026-10-14T16:00:00+02:00' } },
+          {
+            id: 'invite1',
+            summary: 'Their meeting',
+            organizer: { email: 'boss@x.io' },
+            start: { dateTime: '2026-10-14T11:00:00+02:00' },
+            end: { dateTime: '2026-10-14T12:00:00+02:00' },
+          },
+        ]
+      : [{ id: 'hol1', summary: 'Holiday', start: { date: '2026-10-15' }, end: { date: '2026-10-16' } }];
+    return json({ items });
+  };
+  return { fetchImpl, seen };
+}
+
+const RANGE = { fromIso: '2026-10-13T00:00:00+02:00', toIso: '2026-10-20T00:00:00+02:00', categories: CATS };
+const DRAFT = { title: 'Trackday', start: '2026-10-14T10:00:00+02:00', end: '2026-10-14T17:00:00+02:00', allDay: false, location: 'Tor Poznan' };
+
+test('listEvents marks only own events in writable calendars as editable', async () => {
+  const { fetchImpl } = editableApi();
+  const client = gcal.createGcal({ fetchImpl, safeStorage: fakeStorage, ...tempFiles({ refreshToken: 'r' }) });
+  const { events } = await client.listEvents(RANGE);
+  const byId = Object.fromEntries(events.map((e) => [e.id, e.editable]));
+  assert.deepEqual(byId, { own1: true, invite1: false, hol1: false });
+});
+
+test('updateEvent PATCHes the calendar main listed the event from, with only title/times/location', async () => {
+  const reply = { id: 'own1', summary: 'Trackday', start: { dateTime: DRAFT.start }, end: { dateTime: DRAFT.end }, location: 'Tor Poznan' };
+  const { fetchImpl, seen } = editableApi({ patchReply: reply });
+  const client = gcal.createGcal({ fetchImpl, safeStorage: fakeStorage, ...tempFiles({ refreshToken: 'r' }) });
+  await client.listEvents(RANGE);
+  const { event } = await client.updateEvent('own1', DRAFT, CATS);
+  const patch = seen.find((c) => c.opts.method === 'PATCH');
+  assert.match(patch.url, /\/calendars\/me%40gmail\.com\/events\/own1\?/);
+  assert.deepEqual(JSON.parse(patch.opts.body), {
+    summary: 'Trackday',
+    location: 'Tor Poznan',
+    start: { dateTime: DRAFT.start },
+    end: { dateTime: DRAFT.end },
+  });
+  assert.equal(patch.opts.headers['Content-Type'], 'application/json');
+  assert.deepEqual([event.start, event.editable, 'uid' in event], [DRAFT.start, true, false]);
+});
+
+test('updateEvent refuses ids main never listed as editable, before any request', async () => {
+  const { fetchImpl, seen } = editableApi();
+  const client = gcal.createGcal({ fetchImpl, safeStorage: fakeStorage, ...tempFiles({ refreshToken: 'r' }) });
+  await client.listEvents(RANGE);
+  const before = seen.length;
+  for (const id of ['invite1', 'hol1', 'never-seen', null]) {
+    await assert.rejects(client.updateEvent(id, DRAFT, CATS), { reason: 'gcal-not-editable' }, String(id));
+  }
+  assert.equal(seen.length, before);
+});
+
+test('updateEvent refuses switching an event between all-day and timed', async () => {
+  const { fetchImpl } = editableApi();
+  const client = gcal.createGcal({ fetchImpl, safeStorage: fakeStorage, ...tempFiles({ refreshToken: 'r' }) });
+  await client.listEvents(RANGE);
+  await assert.rejects(client.updateEvent('own1', { ...DRAFT, allDay: true, start: '2026-10-14', end: '2026-10-15' }, CATS), {
+    reason: 'bad-draft',
+  });
+});
+
+test('a 403 for missing scope on PATCH is gcal-scope (reconnect), other 403s gcal-not-editable', async () => {
+  const scopeBody = { error: { code: 403, message: 'Request had insufficient authentication scopes.', errors: [{ reason: 'insufficientPermissions' }] } };
+  const files = tempFiles({ refreshToken: 'r' });
+  const a = editableApi({ patchReply: scopeBody, patchStatus: 403 });
+  const scoped = gcal.createGcal({ fetchImpl: a.fetchImpl, safeStorage: fakeStorage, ...files });
+  await scoped.listEvents(RANGE);
+  await assert.rejects(scoped.updateEvent('own1', DRAFT, CATS), { reason: 'gcal-scope' });
+  assert.equal(fs.existsSync(files.tokenPath), true, 'a scope problem never drops the token');
+
+  const b = editableApi({ patchReply: { error: { code: 403, errors: [{ reason: 'forbiddenForNonOrganizer' }] } }, patchStatus: 403 });
+  const denied = gcal.createGcal({ fetchImpl: b.fetchImpl, safeStorage: fakeStorage, ...tempFiles({ refreshToken: 'r' }) });
+  await denied.listEvents(RANGE);
+  await assert.rejects(denied.updateEvent('own1', DRAFT, CATS), { reason: 'gcal-not-editable' });
+});
+
+test('an id listed from two writable calendars is not editable (which copy is unknown)', async () => {
+  const fetchImpl = async (url, opts = {}) => {
+    const u = String(url);
+    if (u.startsWith('https://oauth2')) return json({ access_token: 'acc', expires_in: 3600 });
+    if (u.includes('/users/me/calendarList')) {
+      return json({
+        items: [
+          { id: 'me@gmail.com', primary: true, summary: 'me', accessRole: 'owner' },
+          { id: 'team@group', selected: true, summary: 'Team', accessRole: 'writer' },
+        ],
+      });
+    }
+    return json({ items: [{ id: 'dup', start: { dateTime: DRAFT.start }, end: { dateTime: DRAFT.end } }] });
+  };
+  const client = gcal.createGcal({ fetchImpl, safeStorage: fakeStorage, ...tempFiles({ refreshToken: 'r' }) });
+  await client.listEvents(RANGE);
+  await assert.rejects(client.updateEvent('dup', DRAFT, CATS), { reason: 'gcal-not-editable' });
 });

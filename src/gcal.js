@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Google Calendar API client (read-only, OAuth 2.0)
+// LunaCore - Google Calendar API client (read + event edits, OAuth 2.0)
 // ----------------------------------------------------------------------------
 // Mission Control's agenda and month grid read the calendar through this
 // module, straight from the Calendar API v3: no model call, no cost, and every
@@ -10,7 +10,12 @@
 //     Cloud project), dropped at <user config>/google-oauth.local.json;
 //   - browser consent with PKCE (S256) and a random `state`, the redirect
 //     caught by a one-shot loopback server on 127.0.0.1:<random port>;
-//   - scope calendar.readonly - this module cannot change the calendar;
+//   - scopes calendar.readonly (the calendar list) + calendar.events (read
+//     and edit events - never calendars, sharing or settings). A token from
+//     before editing existed has only the first; an edit then fails with
+//     gcal-scope and the UI asks for one reconnect;
+//   - only events main itself listed from a writable calendar can be edited
+//     (the `editable` map below): the renderer names an event id, never a calendar;
 //   - the refresh token is stored encrypted with Electron safeStorage in
 //     gcal-token.local.json. No safeStorage -> it lives in memory only and
 //     the user reconnects after a restart; it is never written in clear.
@@ -28,7 +33,7 @@ const paths = require('./paths');
 const { clampString } = require('./missionrunner');
 const { validTime, compareEvents } = require('./missioncal');
 
-const SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+const SCOPE = ['calendar.readonly', 'calendar.events'].map((s) => `https://www.googleapis.com/auth/${s}`).join(' ');
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const API = 'https://www.googleapis.com/calendar/v3';
@@ -46,6 +51,9 @@ const MAX_EVENTS = 500;
 const MAX_TITLE_CHARS = 200;
 const MAX_TEXT_CHARS = 500;
 const MAX_NAME_CHARS = 80;
+/** Event ids remembered as editable; the oldest fall out first. */
+const MAX_EDITABLE = 3000;
+const WRITE_ROLES = new Set(['owner', 'writer']);
 const DEFAULT_TTL_MS = 3600000;
 // Refresh a little before Google's expiry, not on the failed request after it.
 const EXPIRY_SLACK_MS = 60000;
@@ -98,6 +106,17 @@ function readJson(file) {
   }
 }
 
+/**
+ * A 403 on a write: the token predates the calendar.events scope (reconnect
+ * fixes it), or Google refuses this event (a read-only calendar, a guest).
+ */
+function writeDenial(body) {
+  const err = (body && body.error) || {};
+  const reason = Array.isArray(err.errors) && err.errors[0] ? err.errors[0].reason : '';
+  const scoped = reason === 'insufficientPermissions' || /scope/i.test(String(err.message || ''));
+  return scoped ? 'gcal-scope' : 'gcal-not-editable';
+}
+
 const base64url = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 function buildAuthUrl({ clientId, redirectUri, state, challenge }) {
@@ -133,8 +152,11 @@ function normalizeEvent(raw, calendar, categories) {
   const start = validTime(allDay ? s.date : s.dateTime, allDay);
   if (!start) return null;
   const category = categories.find((c) => c.colorId && c.colorId === raw.colorId);
+  const id = typeof raw.id === 'string' && EVENT_ID_RE.test(raw.id) ? raw.id : '';
+  // Someone else's invite: Google refuses a time change from a guest.
+  const ownsIt = !raw.organizer || raw.organizer.self === true || raw.guestsCanModify === true;
   return {
-    id: typeof raw.id === 'string' && EVENT_ID_RE.test(raw.id) ? raw.id : '',
+    id,
     uid: typeof raw.iCalUID === 'string' ? raw.iCalUID.slice(0, 300) : '',
     title: clampString(raw.summary, MAX_TITLE_CHARS) || '(no title)',
     start,
@@ -144,6 +166,7 @@ function normalizeEvent(raw, calendar, categories) {
     category: category ? category.id : null,
     calendar: calendar.name,
     color: calendar.color,
+    editable: !!(id && calendar.writable && ownsIt),
   };
 }
 
@@ -172,6 +195,7 @@ function visibleCalendars(items) {
       id: c.id,
       name: clampString(c.summaryOverride || c.summary, MAX_NAME_CHARS) || c.id.slice(0, MAX_NAME_CHARS),
       color: typeof c.backgroundColor === 'string' && HEX_RE.test(c.backgroundColor) ? c.backgroundColor : null,
+      writable: WRITE_ROLES.has(c.accessRole),
     }));
 }
 
@@ -256,6 +280,8 @@ function createGcal(deps = {}) {
   let refreshToken = null;
   let access = null; // { token, expiresAt }
   let loaded = false;
+  // Filled by listEvents (see remember()); cleared with the credentials.
+  const editable = new Map();
 
   function loadRefreshToken() {
     if (loaded) return refreshToken;
@@ -293,6 +319,7 @@ function createGcal(deps = {}) {
     refreshToken = null;
     access = null;
     loaded = true;
+    editable.clear();
     try {
       fs.rmSync(tokenFile(), { force: true });
     } catch (err) {
@@ -341,12 +368,17 @@ function createGcal(deps = {}) {
     return access.token;
   }
 
-  async function apiGet(path, query) {
+  async function apiRequest(method, path, query, body) {
     const token = await accessToken();
     let res;
     try {
       res = await doFetch(`${API}${path}?${new URLSearchParams(query)}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
     } catch (err) {
@@ -363,7 +395,9 @@ function createGcal(deps = {}) {
         forget();
         throw new GcalError('gcal-auth', body.error_description || 'refresh token invalid');
       }
-      throw new GcalError('gcal-failed', `HTTP ${res.status} on ${path}${googleErrorDetail(body)}`);
+      const detail = `HTTP ${res.status} on ${path}${googleErrorDetail(body)}`;
+      if (method !== 'GET' && res.status === 403) throw new GcalError(writeDenial(body), detail);
+      throw new GcalError('gcal-failed', detail);
     }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -384,10 +418,12 @@ function createGcal(deps = {}) {
         maxResults: String(PAGE_SIZE),
         ...(pageToken ? { pageToken } : {}),
       };
-      const body = await apiGet(`/calendars/${encodeURIComponent(cal.id)}/events`, query);
+      const body = await apiRequest('GET', `/calendars/${encodeURIComponent(cal.id)}/events`, query);
       for (const raw of Array.isArray(body.items) ? body.items : []) {
         const ev = normalizeEvent(raw, cal, categories);
-        if (ev) out.push(ev);
+        if (!ev) continue;
+        if (ev.editable) remember(ev.id, { cal, allDay: ev.allDay });
+        out.push(ev);
       }
       pageToken = typeof body.nextPageToken === 'string' ? body.nextPageToken : null;
       if (!pageToken) break;
@@ -401,10 +437,46 @@ function createGcal(deps = {}) {
    * the window and are still running in it.
    */
   async function listEvents({ fromIso, toIso, categories }) {
-    const list = await apiGet('/users/me/calendarList', { minAccessRole: 'reader', maxResults: '250' });
+    const list = await apiRequest('GET', '/users/me/calendarList', { minAccessRole: 'reader', maxResults: '250' });
     const cals = visibleCalendars(list.items);
     const lists = await Promise.all(cals.map((c) => calendarEvents(c, fromIso, toIso, categories)));
     return { events: mergeEvents(lists) };
+  }
+
+  /**
+   * id -> {cal, allDay} of events listed from a writable calendar. An id met
+   * in two calendars maps to null: which copy the user meant is unknown, so
+   * neither is edited.
+   */
+  function remember(id, info) {
+    const prev = editable.get(id);
+    const value = prev === null || (prev && prev.cal.id !== info.cal.id) ? null : info;
+    editable.delete(id);
+    editable.set(id, value);
+    if (editable.size > MAX_EDITABLE) editable.delete(editable.keys().next().value);
+  }
+
+  /**
+   * Changes title, times and location of an event listed earlier. `draft` is
+   * already validated (missioncal.normalizeDraft); the all-day kind cannot
+   * change here, and colour, guests and description are left as they are.
+   * @returns {Promise<{event:object}>} the event as Google now has it
+   */
+  async function updateEvent(id, draft, categories) {
+    const known = typeof id === 'string' ? editable.get(id) : null;
+    if (!known) throw new GcalError('gcal-not-editable');
+    if (draft.allDay !== known.allDay) throw new GcalError('bad-draft', 'all-day kind changed');
+    const when = (v) => (known.allDay ? { date: v } : { dateTime: v });
+    const raw = await apiRequest(
+      'PATCH',
+      `/calendars/${encodeURIComponent(known.cal.id)}/events/${encodeURIComponent(id)}`,
+      {},
+      { summary: draft.title, location: draft.location, start: when(draft.start), end: when(draft.end) }
+    );
+    const ev = normalizeEvent(raw, known.cal, categories);
+    if (!ev) throw new GcalError('gcal-failed', 'unreadable updated event');
+    const { uid, ...event } = ev;
+    return { event };
   }
 
   async function connect() {
@@ -467,7 +539,7 @@ function createGcal(deps = {}) {
     );
   }
 
-  return { status, connect, listEvents, importClient };
+  return { status, connect, listEvents, updateEvent, importClient };
 }
 
 module.exports = {

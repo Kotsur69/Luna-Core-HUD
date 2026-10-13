@@ -4755,6 +4755,26 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 
 .mc-event { grid-template-columns: 4.6em 1fr auto; }
 .mc-event__time { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--neon-cyan); font-variant-numeric: tabular-nums; }
+/* Click-to-edit (missioncaledit.js): only events you own get these. */
+.mc-event.is-editable { cursor: pointer; transition: border-color 150ms ease-out, background-color 150ms ease-out; }
+.mc-event.is-editable:hover { border-color: var(--edge-glow); }
+.mc-event.is-editable:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 2px; }
+.mc-event.is-editing { border-color: var(--edge-glow); background: var(--surface-panel-2); }
+.mc-edit-row { list-style: none; margin-block: var(--space-2) var(--space-4); }
+.mc-edit .mc-field:nth-child(4) { grid-column: 1 / -1; }
+/* Trackday weather: text, so rain is never told by colour alone. */
+.mc-wx {
+  display: block;
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--neon-cyan);
+}
+.mc-wx.is-wet { color: var(--warn); }
+@media (prefers-reduced-motion: reduce) {
+  .mc-event.is-editable { transition: none; }
+}
 /* Category is always TEXT plus a colour dot - never colour alone. */
 .mc-chip {
   display: inline-flex;

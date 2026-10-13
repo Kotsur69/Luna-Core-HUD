@@ -7,6 +7,10 @@
 // survives remounts; the refresh button re-reads. Only quick add (parse +
 // create) still runs a model.
 //
+// Clicking an event you own opens an edit card (missioncaledit.js) saved
+// straight through the Calendar API - no model. Trackday events carry an
+// Open-Meteo weather badge (main's missionweather.js), also free.
+//
 // Quick add is parse -> editable draft -> Add. The draft card is the "modal":
 // inline, because the HUD has no free floating space, but it has the same
 // contract - nothing is created until the user presses Add, Escape cancels.
@@ -18,11 +22,18 @@ import { t, loc } from './util.js';
 import { defineWidget } from './registry.js';
 import { errorText, costSuffix, setStatus, ipcFailed } from './missionshared.js';
 import { buildMonthGrid, eventsByDay, monthKeyOf, shiftMonth, shiftDate, dateKey, startDay } from './missioncalmonth.js';
+import { toInputValue, fromInputValue, field, input, buildEditor, weatherBadge } from './missioncaledit.js';
 
 let config = { categories: [], days: 7, gcal: { configured: false, connected: false } };
 let agenda = null;
 let draft = null;
 let els = null;
+// Click-to-edit: the id of the event whose card is open, and trackday weather
+// by event id (main works it out from the events it listed itself).
+let editingId = null;
+let card = null; // {id, row} - the open card's DOM, kept across re-renders
+let weather = {};
+let weatherSeq = 0;
 // Month view. Loaded months are kept ('YYYY-MM' -> events) so flipping back
 // and forth never re-bills; the refresh button forces a reload.
 let view = 'week';
@@ -30,25 +41,6 @@ let monthKey = monthKeyOf(new Date());
 let selectedDay = dateKey(new Date());
 let monthLoading = false;
 const months = new Map();
-
-const pad = (n) => String(Math.abs(n)).padStart(2, '0');
-
-/** datetime-local value ('YYYY-MM-DDTHH:mm', local wall time) from an ISO string. */
-function toInputValue(iso, allDay) {
-  if (allDay) return iso.slice(0, 10);
-  const d = new Date(iso);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** ISO 8601 with the local offset for that date, from a datetime-local value. */
-function fromInputValue(value, allDay) {
-  if (allDay) return value;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  const off = -d.getTimezoneOffset();
-  const sign = off >= 0 ? '+' : '-';
-  return `${value}:00${sign}${pad(Math.trunc(off / 60))}:${pad(off % 60)}`;
-}
 
 /** Same order as main's compareEvents (src/missioncal.js). */
 function compareEvents(a, b) {
@@ -78,7 +70,8 @@ function timeLabel(ev) {
   return ev.end && ev.end !== ev.start ? `${hm(ev.start)}–${hm(ev.end)}` : hm(ev.start);
 }
 
-function eventRow(ev) {
+/** @param {boolean} withCard  this list is the visible view (only it shows the edit card) */
+function eventRow(ev, withCard) {
   const li = document.createElement('li');
   li.className = 'todo-item mc-event';
   const time = document.createElement('span');
@@ -96,8 +89,128 @@ function eventRow(ev) {
     where.textContent = ev.location;
     body.append(where);
   }
+  const wx = weatherBadge(weather[ev.id]);
+  if (wx) body.append(wx);
   li.append(time, body, chip(ev));
-  return li;
+  if (!ev.editable) return [li];
+  const cardRow = makeEditable(li, ev, withCard);
+  return cardRow ? [li, cardRow] : [li];
+}
+
+/**
+ * An event you own opens its edit card on click / Enter / Space. The card is
+ * its own list item after the row - a form must not sit inside a button.
+ * @returns {HTMLLIElement|null} the open card's row, if this event is being edited
+ */
+function makeEditable(li, ev, withCard) {
+  const open = editingId === ev.id && withCard;
+  li.classList.add('is-editable');
+  li.dataset.eventId = ev.id;
+  li.tabIndex = 0;
+  li.setAttribute('role', 'button');
+  li.setAttribute('aria-expanded', String(open));
+  li.title = t('mc.cal.editHint');
+  li.addEventListener('click', () => toggleEdit(ev.id));
+  li.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    toggleEdit(ev.id);
+  });
+  if (!open) return null;
+  li.classList.add('is-editing');
+  // The same card DOM is re-attached on every re-render (refresh, weather,
+  // a month load), so unsaved input survives; only a new event builds a new one.
+  if (!card || card.id !== ev.id) {
+    const editor = buildEditor(ev, { onSave: (d, button) => saveEdit(ev, d, button), onCancel: () => closeEdit(ev.id) });
+    const row = document.createElement('li');
+    row.className = 'mc-edit-row';
+    row.append(editor.el);
+    card = { id: ev.id, row };
+    queueMicrotask(editor.focus);
+  }
+  return card.row;
+}
+
+/** Re-renders whatever view is showing; focus inside the open card stays put. */
+function renderEvents() {
+  const active = document.activeElement;
+  const inCard = !!(card && active && card.row.contains(active));
+  renderAgenda();
+  if (view === 'month') renderMonth();
+  if (inCard && active.isConnected) active.focus();
+}
+
+function toggleEdit(id) {
+  if (editingId === id) {
+    closeEdit(id);
+    return;
+  }
+  editingId = id;
+  card = null;
+  renderEvents();
+}
+
+/** Closes the card and gives focus back to its row in the visible list. */
+function closeEdit(id) {
+  editingId = null;
+  card = null;
+  renderEvents();
+  if (!els) return;
+  const list = view === 'week' ? els.agenda : els.day;
+  const row = [...list.querySelectorAll('[data-event-id]')].find((r) => r.dataset.eventId === id);
+  if (row) row.focus();
+}
+
+/** Local 'YYYY-MM' keys an event touches, as a test (all-day end is exclusive). */
+function monthsOf(ev) {
+  const first = startDay(ev);
+  const lastDay = ev.allDay ? shiftDate(ev.end, -1) : toInputValue(ev.end, false).slice(0, 10);
+  const from = first.slice(0, 7);
+  const to = (lastDay > first ? lastDay : first).slice(0, 7);
+  return (key) => key >= from && key <= to;
+}
+
+/**
+ * Swaps the edited event into the loaded lists: every cached month it now
+ * touches (it may have moved, or span two), and the week list only if it was
+ * already there.
+ */
+function replaceEvent(ev) {
+  const touches = monthsOf(ev);
+  const without = (list) => list.filter((e) => e.id !== ev.id);
+  const swap = (list) => [...without(list), ev].sort(compareEvents);
+  if (agenda && agenda.some((e) => e.id === ev.id)) agenda = swap(agenda);
+  for (const [key, list] of months) months.set(key, touches(key) ? swap(list) : without(list));
+}
+
+async function saveEdit(ev, edited, button) {
+  button.disabled = true;
+  setStatus(els.status, t('mc.cal.saving'));
+  const res = await window.lunacore.missionCalUpdate(ev.id, edited).catch(ipcFailed);
+  if (!els) return;
+  button.disabled = false;
+  if (!res.ok) {
+    setStatus(els.status, errorText(res.reason), true);
+    // A token from before editing existed: one reconnect grants the edit scope.
+    if (res.reason === 'gcal-scope') els.connect.hidden = false;
+    return;
+  }
+  replaceEvent(res.event);
+  setStatus(els.status, t('mc.cal.saved', { title: res.event.title }));
+  // The user may have opened another card while this one was saving.
+  if (editingId === ev.id) closeEdit(ev.id);
+  else renderEvents();
+  loadWeather();
+}
+
+/** Trackday forecasts for what is loaded; quiet on failure (a nice-to-have). */
+async function loadWeather() {
+  // Only the newest call's answer counts: it has seen the most events.
+  const seq = ++weatherSeq;
+  const res = await window.lunacore.missionCalWeather().catch(ipcFailed);
+  if (!res.ok || !els || seq !== weatherSeq) return;
+  weather = res.weather || {};
+  renderEvents();
 }
 
 function renderAgenda() {
@@ -128,27 +241,10 @@ function renderAgenda() {
     });
     const ul = document.createElement('ul');
     ul.className = 'todo-list';
-    ul.append(...events.map(eventRow));
+    ul.append(...events.flatMap((ev) => eventRow(ev, view === 'week')));
     section.append(h, ul);
     els.agenda.append(section);
   }
-}
-
-function field(labelKey, control) {
-  const label = document.createElement('label');
-  label.className = 'mc-field';
-  const span = document.createElement('span');
-  span.textContent = t(labelKey);
-  label.append(span, control);
-  return label;
-}
-
-function input(type, value) {
-  const el = document.createElement('input');
-  el.type = type;
-  el.className = 'mc-input';
-  el.value = value;
-  return el;
 }
 
 function renderDraft() {
@@ -276,6 +372,7 @@ async function loadAgenda() {
   }
   setStatus(els.status, t('mc.cal.loaded', { n: agenda.length }));
   renderAgenda();
+  loadWeather();
 }
 
 // ---- Month view ---------------------------------------------------------------
@@ -304,7 +401,7 @@ function renderDay(events) {
   }
   const ul = document.createElement('ul');
   ul.className = 'todo-list';
-  ul.append(...list.map(eventRow));
+  ul.append(...list.flatMap((ev) => eventRow(ev, view === 'month')));
   els.day.append(h, ul);
 }
 
@@ -356,6 +453,7 @@ async function loadMonth(key) {
     return;
   }
   setStatus(els.status, t('mc.cal.loaded', { n: res.events.length }));
+  loadWeather();
   if (key === monthKey) renderMonth();
   // The user flipped to another month while this one was loading.
   else if (view === 'month' && !months.has(monthKey)) loadMonth(monthKey);
@@ -434,6 +532,7 @@ defineWidget({
   template: 'w-calendar',
   mount(root) {
     els = {
+      root,
       refresh: root.querySelector('#mc-cal-refresh'),
       form: root.querySelector('#mc-cal-form'),
       input: root.querySelector('#mc-cal-input'),
@@ -490,6 +589,8 @@ defineWidget({
     applyView();
     return () => {
       els = null;
+      editingId = null;
+      card = null;
     };
   },
 });

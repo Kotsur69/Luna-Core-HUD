@@ -358,12 +358,56 @@ in on **Opera GX** (said Chrome / Edge first).
   trackday weather if a motorsport event is ≤ 3 days away.
 - 08:00 + catch-up on launch, history last 14, model picker.
 
-### W7 — Trackday weather ⏳
+### W7 — Trackday weather ✅ (2026-10-13)
 
 - Calendar events in the *trackday* category (or with a track name) →
   geocode the location (Open-Meteo geocoding, free, no key) → forecast for
   the event hours, 3 days ahead: temp, rain %, wind. Shown next to the event
   in week + month view and in the morning brief. No tokens.
+
+**Shipped:** `src/missionweather.js` + `mission:cal-weather`. A trackday =
+category `motorsport`, "trackday"/"track day" in the title, or a known track
+name in title/location (`calendar.weather` in `config/missioncontrol.json`:
+10 pre-seeded tracks — Tor Poznan, Silesia Ring, Slovakia Ring, Brno, Most,
+Hungaroring, Red Bull Ring, Sachsenring, Lausitzring, Nurburgring; add your
+own in `missioncontrol.local.json`). Unknown places are geocoded per comma
+part of the location ("Autodrom X, Radom" → Radom); only the location text
+leaves the PC, never the title. Horizon **7 days** (not 3 — Open-Meteo is
+fine that far for planning). All-day events are forecast 08–18, max 3 days.
+Badge `12–17°C · deszcz 40% · wiatr 25 km/h` (amber at rain ≥ 50%) under the
+event, week + month day list. Main computes it from the events it listed
+itself, never from renderer input. Forecast cache 1 h per place.
+Morning brief part waits for W6.
+
+### W7b — Click-to-edit calendar events ✅ (2026-10-13, Mati's ask)
+
+- Click an event you own (week list or month day list) → inline card: title,
+  start, end, location → Save PATCHes Google directly (`gcal.updateEvent`,
+  `mission:cal-update`) — no model, instant, free. Moving the start keeps the
+  length (like Google). All-day ↔ timed switch and category are not editable.
+- **OAuth scope widened** to `calendar.readonly` + `calendar.events`. Old
+  tokens lack the second → first Save answers `gcal-scope` and the Connect
+  button reappears: **Mati reconnects once**.
+- Editable = listed by main from an owner/writer calendar AND you are the
+  organizer (or guests may modify). The renderer sends an event id, never a
+  calendar id. Invites from others stay read-only.
+- Follow-up idea: quick add could also use the API now (free, no Haiku).
+
+**Reviews (security + JS):** no CRITICAL/HIGH security issue. Fixed: edits
+rate-limited (1/s, `rate-limited`), an id seen in two calendars is not
+editable, the edit map is cleared on disconnect, geocoding never sends a
+location part with digits (street / postcode), forecasts cached as trimmed
+arrays, "no hit" geocodes retried after 1 h, soonest trackdays first under
+the 10-event cap, whole-word track names. Renderer: the open card's DOM
+survives re-renders (refresh / weather / month load keep unsaved input), the
+card shows only in the visible view, a save updates every cached month the
+event touches and the week list only if it was there, newest weather call
+wins. **Open LOWs:** PATCH sends no `timeZone` (offset-only times; a
+hand-crafted offsetless time gets Google's 400 → generic error); no renderer
+tests for the card; `missioncalendar.js` (596), `gcal.js` (556) and
+`missioncontrolipc.js` (536) are now past 500 lines — extract next time
+they grow. Not verified live: a real Save (needs Mati's reconnect); the card
+itself was smoke-tested with a fake event in a second instance.
 
 ### W8 — Owed fixes from v0.14.0 ⏳
 

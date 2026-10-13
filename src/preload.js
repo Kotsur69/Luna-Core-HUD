@@ -227,7 +227,11 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionCalParse: (text) => ipcRenderer.invoke('mission:cal-parse', text),
   /** Creates a confirmed draft. Promise<{ok, eventId, costUsd} | {ok:false, reason}>. */
   missionCalCreate: (draft) => ipcRenderer.invoke('mission:cal-create', draft),
-  /** Browser consent for read-only Google Calendar access. Promise<{ok, gcal} | {ok:false, reason}>. */
+  /** Edits title/times/location of a listed event (Calendar API, no model). Promise<{ok, event} | {ok:false, reason}>. */
+  missionCalUpdate: (id, draft) => ipcRenderer.invoke('mission:cal-update', { id, draft }),
+  /** Trackday weather for listed events (Open-Meteo). Promise<{ok, weather:{[eventId]:{tMin,tMax,rain,wind,place}}}>. */
+  missionCalWeather: () => ipcRenderer.invoke('mission:cal-weather'),
+  /** Browser consent for Google Calendar (read + event edits). Promise<{ok, gcal} | {ok:false, reason}>. */
   missionGcalConnect: () => ipcRenderer.invoke('mission:gcal-connect'),
   /** Native dialog in main -> imports the Google Desktop-app client JSON. Promise<{ok, gcal} | {ok:false, reason}>. */
   missionGcalImportClient: () => ipcRenderer.invoke('mission:gcal-import-client'),

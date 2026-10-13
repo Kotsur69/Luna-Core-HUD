@@ -77,8 +77,8 @@ window.addEventListener(
   'keydown',
   (e) => {
     if (isOpen && e.key === 'Escape') {
-      // The calendar draft owns Escape inside itself (cancel the draft).
-      if (e.target instanceof Element && e.target.closest('#mc-cal-draft')) return;
+      // The calendar draft and edit card own Escape inside themselves (cancel).
+      if (e.target instanceof Element && e.target.closest('#mc-cal-draft, .mc-edit')) return;
       e.preventDefault();
       e.stopPropagation();
       close();

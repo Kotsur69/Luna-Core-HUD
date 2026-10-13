@@ -14,6 +14,8 @@
 //     tick and untick, but it cannot introduce a thread id of its own.
 //   - busy: one job per kind at a time. A double-click must not start two
 //     overlapping inbox scans, each costing a full model call.
+//   - seenEvents: the calendar events main itself read from Google. Trackday
+//     weather is worked out from these, never from events the renderer sends.
 // ============================================================================
 
 'use strict';
@@ -23,6 +25,7 @@ const { loadMissionConfig } = require('./missionconfig');
 const mail = require('./missionmail');
 const cal = require('./missioncal');
 const { createGcal } = require('./gcal');
+const { createWeather } = require('./missionweather');
 const { createGithub } = require('./missiongithub');
 const { createTrending, buildDescribePrompt, parseDescription } = require('./missiontrending');
 const { createNews, buildNewsPrompt, parseNewsSummary, publicSections } = require('./missionnews');
@@ -80,6 +83,10 @@ const OPEN_GAP_MS = 500;
 const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, create: 120000, news: 180000, describe: 90000 };
 const LANGS = ['pl', 'en'];
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_SEEN_EVENTS = 1000;
+/** Min gap between two event edits (a person saves one card at a time). */
+const UPDATE_GAP_MS = 1000;
+const EVENT_ID_RE = /^[A-Za-z0-9_@.-]{1,256}$/;
 /** Min gap between two quick searches (X / Reddit ride the user's main accounts). */
 const QUICK_SEARCH_GAP_MS = 10000;
 
@@ -129,6 +136,7 @@ function registerMissionIpc({
   getEnv,
   run = runJob,
   gcal = createGcal(),
+  weather = createWeather(),
   github = createGithub(),
   trending = createTrending(),
   news = createNews({
@@ -146,8 +154,19 @@ function registerMissionIpc({
   const getLedger = () => ledger || (ledger = defaultLedgerService());
   let lastPreview = null;
   const busy = new Set();
+  const seenEvents = new Map();
+  /** Keeps the newest copy of each listed event; the oldest fall out first. */
+  const rememberEvents = (events) => {
+    for (const ev of events) {
+      if (!ev || !ev.id) continue;
+      seenEvents.delete(ev.id);
+      seenEvents.set(ev.id, ev);
+    }
+    while (seenEvents.size > MAX_SEEN_EVENTS) seenEvents.delete(seenEvents.keys().next().value);
+  };
   let lastOpenAt = 0;
   let lastQuickAt = 0;
+  let lastUpdateAt = 0;
 
   /** Opens what `resolve` maps the renderer's key to - throttled, so a
    *  misbehaving renderer cannot fire a burst of browser tabs. */
@@ -244,12 +263,50 @@ function registerMissionIpc({
           toIso: localIsoNow(to),
           categories: calendar.categories,
         });
+        rememberEvents(events);
         return { ok: true, events };
       } catch (err) {
         return gcalFailure(err);
       }
     })
   );
+
+  // Click-to-edit: title, times and location of one event main listed earlier.
+  // The draft is validated like a quick-add draft; gcal decides which calendar.
+  ipcMain.handle('mission:cal-update', (_event, req) =>
+    guarded('update', async () => {
+      const id = req && typeof req.id === 'string' && EVENT_ID_RE.test(req.id) ? req.id : null;
+      if (!id) return { ok: false, reason: 'bad-draft' };
+      const { calendar } = loadMissionConfig();
+      const checked = cal.normalizeDraft(req.draft, calendar.categories);
+      if (!checked.ok) return checked;
+      // A person saves one card at a time; a renderer looping over every
+      // editable event is throttled to a crawl. Only well-formed saves count.
+      const nowMs = Date.now();
+      if (nowMs - lastUpdateAt < UPDATE_GAP_MS) return { ok: false, reason: 'rate-limited' };
+      lastUpdateAt = nowMs;
+      try {
+        const { event } = await gcal.updateEvent(id, checked.draft, calendar.categories);
+        rememberEvents([event]);
+        return { ok: true, event };
+      } catch (err) {
+        return gcalFailure(err);
+      }
+    })
+  );
+
+  // Trackday weather for the events already listed (Open-Meteo, free).
+  // Not under `busy`: an idempotent read, and a dropped second call would be
+  // the one that already sees a just-saved event.
+  ipcMain.handle('mission:cal-weather', async () => {
+    try {
+      const { calendar } = loadMissionConfig();
+      return { ok: true, weather: await weather.forEvents([...seenEvents.values()], calendar.weather) };
+    } catch (err) {
+      console.error('[mission] weather failed:', err && err.message);
+      return { ok: false, reason: 'generic' };
+    }
+  });
 
   // Opens the browser for Google consent and waits (up to 3 min) for the
   // loopback redirect. One at a time: a second click while waiting is `busy`.

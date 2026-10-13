@@ -373,3 +373,64 @@ test('gcal-import-client: the file comes from a native dialog in main, never fro
   answer = null;
   assert.deepEqual(await handlers.get('mission:gcal-import-client')({}), { ok: false, reason: 'cancelled' });
 });
+
+// ---- cal-update / cal-weather ------------------------------------------------
+
+const EDIT = { title: 'Trackday', start: '2026-10-14T10:00:00+02:00', end: '2026-10-14T17:00:00+02:00', allDay: false, location: '' };
+
+function editHarness(events = []) {
+  const gc = fakeGcal(events);
+  const updates = [];
+  gc.updateEvent = async (id, draft) => {
+    updates.push({ id, draft });
+    return { event: { id, ...draft, editable: true } };
+  };
+  const handlers = new Map();
+  const weatherCalls = [];
+  registerMissionIpc({
+    gcal: gc,
+    weather: {
+      forEvents: async (evs, rules) => {
+        weatherCalls.push({ evs, rules });
+        return { e1: { tMin: 1, tMax: 2, rain: 0, wind: 5, place: 'X' } };
+      },
+    },
+    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn), on: () => {} },
+    getModel: () => 'haiku',
+    getEnv: () => ({}),
+    run: async () => {
+      throw new Error('no model call expected');
+    },
+  });
+  return { invoke: (ch, arg) => handlers.get(ch)({}, arg), updates, weatherCalls };
+}
+
+test('cal-update validates id and draft in main, then hands them to gcal (no model)', async () => {
+  const h = editHarness();
+  for (const bad of [null, {}, { id: '../x', draft: EDIT }, { id: 42, draft: EDIT }]) {
+    assert.deepEqual(await h.invoke('mission:cal-update', bad), { ok: false, reason: 'bad-draft' });
+  }
+  const backwards = { ...EDIT, end: '2026-10-14T09:00:00+02:00' };
+  assert.deepEqual(await h.invoke('mission:cal-update', { id: 'e1', draft: backwards }), { ok: false, reason: 'bad-draft' });
+  assert.equal(h.updates.length, 0);
+  const res = await h.invoke('mission:cal-update', { id: 'e1', draft: { ...EDIT, extra: 'x' } });
+  assert.equal(res.ok, true);
+  assert.equal(h.updates[0].id, 'e1');
+  assert.equal('extra' in h.updates[0].draft, false);
+});
+
+test('cal-weather works only from events main listed itself', async () => {
+  const h = editHarness([{ id: 'e1', title: 'Trackday', start: '2026-10-14T09:00:00+02:00' }]);
+  await h.invoke('mission:cal-agenda');
+  const res = await h.invoke('mission:cal-weather', [{ id: 'evil', title: 'Trackday', location: 'http://x' }]);
+  assert.equal(res.ok, true);
+  assert.deepEqual(h.weatherCalls[0].evs.map((e) => e.id), ['e1']);
+  assert.equal(h.weatherCalls[0].rules.category, 'motorsport');
+});
+
+test('cal-update is rate-limited: a second save within a second is refused', async () => {
+  const h = editHarness();
+  assert.equal((await h.invoke('mission:cal-update', { id: 'e1', draft: EDIT })).ok, true);
+  assert.deepEqual(await h.invoke('mission:cal-update', { id: 'e2', draft: EDIT }), { ok: false, reason: 'rate-limited' });
+  assert.equal(h.updates.length, 1);
+});

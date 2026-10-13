@@ -30,6 +30,8 @@ const ERROR_KEYS = {
   'gcal-timeout': 'mc.err.gcalTimeout',
   'gcal-network': 'mc.err.gcalNetwork',
   'gcal-failed': 'mc.err.gcalFailed',
+  'gcal-scope': 'mc.err.gcalScope',
+  'gcal-not-editable': 'mc.err.gcalNotEditable',
   'gh-missing': 'mc.err.ghMissing',
   'gh-auth': 'mc.err.ghAuth',
   'gh-timeout': 'mc.err.ghTimeout',

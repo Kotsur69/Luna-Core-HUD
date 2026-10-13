@@ -69,6 +69,30 @@ function normalizeCategory(raw) {
   };
 }
 
+const MAX_TRACKS = 50;
+const MAX_TRACK_NAMES = 6;
+const MAX_TRACK_NAME_CHARS = 60;
+
+const trackName = (s) => (typeof s === 'string' && s.trim() ? s.trim().slice(0, MAX_TRACK_NAME_CHARS) : null);
+const inRange = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= lim;
+
+/** A known track for trackday weather; null when the name or coordinates are unusable. */
+function normalizeTrack(raw) {
+  if (!raw || typeof raw !== 'object' || !inRange(raw.lat, 90) || !inRange(raw.lon, 180)) return null;
+  const name = trackName(raw.name);
+  const names = (Array.isArray(raw.names) ? raw.names : []).map(trackName).filter((n) => n && n.length >= 3);
+  if (!name || !names.length) return null;
+  return { name, names: names.slice(0, MAX_TRACK_NAMES), lat: raw.lat, lon: raw.lon };
+}
+
+function normalizeWeather(raw) {
+  const w = raw && typeof raw === 'object' ? raw : {};
+  return {
+    category: typeof w.category === 'string' && CATEGORY_ID_RE.test(w.category) ? w.category : null,
+    tracks: (Array.isArray(w.tracks) ? w.tracks : []).map(normalizeTrack).filter(Boolean).slice(0, MAX_TRACKS),
+  };
+}
+
 /** A section's value from `local` when it has the key, otherwise from `base`. */
 const pick = (base, local, key) =>
   local && Object.prototype.hasOwnProperty.call(local, key) ? local[key] : base && base[key];
@@ -76,7 +100,8 @@ const pick = (base, local, key) =>
 /**
  * @returns {{mail:{query:string,maxThreads:number,trashCategories:string[],trashSenders:string[],
  *   flagCategories:string[],neverTrash:string[],keepSenders:string[]},
- *   calendar:{days:number,categories:Array<{id:string,label:unknown,colorId:string|null,color:string}>}}}
+ *   calendar:{days:number,categories:Array<{id:string,label:unknown,colorId:string|null,color:string}>,
+ *     weather:{category:string|null,tracks:Array<{name:string,names:string[],lat:number,lon:number}>}}}}
  */
 function loadMissionConfig() {
   const base = readJson(BASE_FILE) || {};
@@ -106,8 +131,9 @@ function loadMissionConfig() {
     calendar: {
       days: clampInt(pick(bc, lc, 'days'), 1, 31, 7),
       categories,
+      weather: normalizeWeather(pick(bc, lc, 'weather')),
     },
   };
 }
 
-module.exports = { loadMissionConfig, ruleList, senderList, normalizeCategory };
+module.exports = { loadMissionConfig, ruleList, senderList, normalizeCategory, normalizeWeather };
