@@ -129,3 +129,52 @@ test('readPeers skips our own file even when the case differs', () => {
   writePeer(d, 'home', { v: 1, machine: 'home', updatedAt: NOW, rows: [row()] });
   assert.deepEqual(sync.readPeers(d, 'HOME', NOW), []);
 });
+
+// ---- Focus blocks [startMs, endMs, key, name] (W2) ----
+
+const block = (over = {}) => [H, H + HOUR, 'git:github.com/me/app', 'app'].map((v, i) => (i in over ? over[i] : v));
+
+test('writeOwn adds focus blocks when given; a peer file round-trips them', () => {
+  const d = dir();
+  sync.writeOwn(d, 'LAPTOP', [row()], NOW, [block()]);
+  const saved = JSON.parse(fs.readFileSync(path.join(d, 'ledger-LAPTOP.json'), 'utf8'));
+  assert.deepEqual(saved.blocks, [block()]);
+  assert.deepEqual(sync.readPeers(d, 'HOME', NOW)[0].blocks, [block()]);
+});
+
+test('a peer file from before focus blocks reads as no blocks', () => {
+  const d = dir();
+  writePeer(d, 'LAPTOP', { v: 1, machine: 'LAPTOP', updatedAt: NOW, rows: [row()] });
+  assert.deepEqual(sync.readPeers(d, 'HOME', NOW)[0].blocks, []);
+});
+
+test('readPeers drops malformed focus blocks and keeps the good ones', () => {
+  const d = dir();
+  writePeer(d, 'LAPTOP', {
+    v: 1,
+    machine: 'LAPTOP',
+    updatedAt: NOW,
+    rows: [],
+    blocks: [
+      block(),
+      block({ 1: H }), // empty
+      block({ 1: H - HOUR }), // ends before it starts
+      block({ 0: H + 0.5 }), // not an integer
+      block({ 1: H + 3 * 24 * HOUR }), // longer than a block can be
+      block({ 0: NOW - 30 * 24 * HOUR, 1: NOW - 30 * 24 * HOUR + HOUR }), // older than history
+      block({ 0: NOW + 2 * 24 * HOUR, 1: NOW + 2 * 24 * HOUR + HOUR }), // future
+      block({ 2: '../evil' }),
+      block({ 3: 'bad\u0000name' }),
+      [H, H + HOUR, 'git:github.com/me/app'],
+      'junk',
+    ],
+  });
+  assert.deepEqual(sync.readPeers(d, 'HOME', NOW)[0].blocks, [block()]);
+});
+
+test('focus blocks share the per-peer project-key cap with the rows', () => {
+  const d = dir();
+  const rows = Array.from({ length: sync.MAX_PEER_KEYS }, (_, i) => row({ 1: `local:p${i}`, 2: `p${i}` }));
+  writePeer(d, 'LAPTOP', { v: 1, machine: 'LAPTOP', updatedAt: NOW, rows, blocks: [block({ 2: 'local:extra' }), block({ 2: 'local:p1' })] });
+  assert.deepEqual(sync.readPeers(d, 'HOME', NOW)[0].blocks.map((b) => b[2]), ['local:p1']);
+});

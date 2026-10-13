@@ -221,7 +221,7 @@ defineWidget({
       budget: root.querySelector('#mc-tele-budget'),
       open: root.querySelector('#mc-tele-open'),
     };
-    const ledger = mountLedger(root.querySelector('#mc-tele-ledger'), weeklyLimit);
+    const ledger = mountLedger(root.querySelector('#mc-tele-ledger'), weeklyLimit, root.querySelector('#mc-tele-focus'));
     foldBuckets(root);
     els.refresh.addEventListener('click', () => {
       load();

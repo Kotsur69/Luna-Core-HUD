@@ -357,6 +357,7 @@ function scanForRepos() {
 // Same split as ports.js: the parsers are pure text -> rows and carry every
 // rule worth pinning, while anything that spawns git is left to manual checks.
 module.exports = {
+  git,
   readAllRepos,
   readRepoStatus,
   fetchRepo,

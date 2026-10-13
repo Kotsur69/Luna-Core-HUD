@@ -5013,6 +5013,25 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mc-ledger__dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mc-ledger__actions { display: flex; gap: var(--space-3); flex-wrap: wrap; }
 
+/* ---- Mission Control: "Focus this week" (modules/missionfocus.js) ---- */
+/* A real table for screen readers; heat cells reuse the GitHub heatmap levels.
+   Horizontal scroll only inside the block if the column gets very narrow. */
+.mc-focus__scroll { overflow-x: auto; }
+.mc-focus__grid { width: 100%; border-collapse: separate; border-spacing: calc(var(--space-hair) * 2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.mc-focus__grid th, .mc-focus__grid td { padding: 0; font-weight: 400; color: var(--text-dim); }
+.mc-focus__day { text-align: center; text-transform: capitalize; min-width: var(--space-8); }
+.mc-focus__day.is-today { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--edge-glow); }
+.mc-focus__name { text-align: left; max-width: 0; width: 38%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.mc-focus__name .mc-ledger__swatch { margin-right: var(--space-2); vertical-align: middle; }
+.mc-focus__label { vertical-align: middle; }
+.mc-focus__cellwrap { text-align: center; }
+.mc-focus__cell { display: block; width: 100%; max-width: var(--space-10); margin: 0 auto; }
+.mc-focus__sum { text-align: right; white-space: nowrap; padding-left: var(--space-3); color: var(--text); }
+.mc-focus__num { text-align: center; }
+.mc-focus__foot th, .mc-focus__foot td { padding-top: var(--space-2); }
+.mc-focus__foot:first-child th, .mc-focus__foot:first-child td { border-top: var(--border-w) solid var(--edge); }
+.mc-focus__foot th { color: var(--text-dim); }
+
 /* ---- Mission Control: News widget (modules/missionnews.js) ------------ */
 .mc-news__picker { display: flex; flex-direction: column; gap: var(--space-6); }
 .mc-news__picker[hidden], .hint[hidden] { display: none; }

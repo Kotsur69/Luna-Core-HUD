@@ -158,7 +158,43 @@ policy, a work PC sits behind Zscaler.
 - **Done when:** numbers for the current week match a hand count on one
   project within 1 %, a re-open costs < 50 ms, classes persist.
 
-### W2 — Focus / time per project ⏳
+### W2 — Focus / time per project ✅ (2026-10-13)
+
+**Shipped:** Telemetry → *Focus this week* (under *Where Claude went*, same
+`mission:ledger` call, no new IPC): week total, today's hours + switches, a
+table of the top 6 projects × Mon–Sun (heat cells, exact time in title +
+hidden text), per-day wall-clock hours and switches. Files:
+`src/missionfocus.js` (pure: moments → blocks, union, week split),
+`src/missioncommits.js` (own commits via `git log`, cached 10 min),
+`missionledger.js` `events()`, `missionledgersync.js` `blocks`, renderer
+`modules/missionfocus.js` + `missionfocusview.js` (pure).
+Verified on real data: cold report 1.5 s (7 repos × 2 gits ≈ 0.7 s), re-open
+28 ms; week 10:37 h, LunaCore 7:58 h.
+
+**Answers (Mati, 2026-10-13):** all PCs (blocks ride in each PC's
+`ledger-<pc>.json` as `[startMs, endMs, key, name]`, unioned so the same
+work seen twice counts once); **+5 min** after a block's last moment (a lone
+reply = 5 min); shown **in Telemetry**.
+
+**Rules:** moments of one project < 10 min apart join; a different project
+starting ≤ 30 min after the previous block = a switch; "mine" = commit
+author email equals that repo's `git config user.email` (no email → repo
+skipped); `--all` so commits fetched from another PC still count; the week
+is the local Mon–Sun (lines up with W3's Sunday review), not the Claude
+window the ledger uses.
+
+**Reviews (ecc:security-reviewer + ecc:typescript-reviewer):** no CRITICAL /
+HIGH. Fixed: a cold git scan can no longer stall `mission:ledger` (8 s
+deadline, stale cache served while refreshing), `-c core.fsmonitor=false`,
+15 s git timeout + a 1 min retry after a failed repo (not 10 min of "no
+commits"), switches judged against the block that ends last, own blocks
+split into <= 1-day pieces (peers reject > 2 days), Focus table rebuilt only
+for a new report / language. Left open (LOW): bidi / zero-width chars in
+peer project names, a peer can rename a project (unauthenticated peers, as
+W1), a switch across midnight is not counted, mapped network drives in
+`repos.local.json` are allowed.
+
+**Original spec:**
 
 - **Active time:** from the same transcript timestamps — consecutive events
   in one project less than 10 min apart count as continuous work; a gap ends
@@ -419,6 +455,17 @@ in on **Opera GX** (said Chrome / Edge first).
 - Don't patch JS regexes / escapes through a Python or bash heredoc: `\\`
   and `\u0000` got turned into real NUL/DEL bytes and single backslashes
   (silently weakening a UNC check). Use the Edit tool or `String.raw`.
+
+## Gotchas learned building W2 (focus)
+
+- A transcript `message.id` repeats over several lines a few seconds apart —
+  take the **first** line's timestamp as the reply's moment.
+- Day bounds must come from `new Date(y, m, d + i)`, not `+ 24 h`, or a DST
+  change shifts every later day by an hour.
+- A day's hours are the **union** across projects (parallel sessions count
+  once); per-project hours still add up to more than the day — say so in the UI.
+- `cat > file` with no heredoc in the Bash tool waits on stdin until the
+  timeout and leaves an empty file — the "hang" was the probe, not the code.
 
 ## Gotchas learned building W5 (X / Reddit)
 

@@ -217,3 +217,23 @@ test('parseAssistantLine clamps absurd token counts', () => {
   raw.message.usage.input_tokens = 1e308;
   assert.equal(parseAssistantLine(JSON.stringify(raw)).u.input, 1e12);
 });
+
+test('events() is one moment per reply (first line of a repeated id), for focus time', async () => {
+  const root = setup();
+  fs.writeFileSync(
+    path.join(root, 'proj-a', 'sess-1.jsonl'),
+    [
+      line({ id: 'm1', ts: '2026-10-09T10:15:00Z' }),
+      line({ id: 'm1', ts: '2026-10-09T10:15:09Z' }),
+      line({ id: 'm2', ts: '2026-10-09T10:20:00Z', cwd: '/r/beta' }),
+      line({ id: 'old', ts: '2026-09-01T10:00:00Z' }),
+    ].join('\n') + '\n'
+  );
+  const ledger = ledgerFor(root);
+  await ledger.scan();
+  const events = ledger.events().sort((a, b) => a.ms - b.ms);
+  assert.deepEqual(events, [
+    { ms: at('2026-10-09T10:15:00Z'), key: 'local:alpha', name: 'alpha' },
+    { ms: at('2026-10-09T10:20:00Z'), key: 'local:beta', name: 'beta' },
+  ]);
+});

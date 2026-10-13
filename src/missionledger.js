@@ -115,7 +115,7 @@ async function listTranscripts(root) {
  *          now?:()=>number, historyDays?:number}} opts
  */
 function createLedger({ root, resolveKey, now = Date.now, historyDays = DEFAULT_HISTORY_DAYS }) {
-  /** file -> {size, mtimeMs, offset, msgs: Map<id, {hour,key,name,model,u}>} */
+  /** file -> {size, mtimeMs, offset, msgs: Map<id, {ms,hour,key,name,model,u}>} */
   const files = new Map();
   let bytesRead = 0;
   let scanning = null;
@@ -133,7 +133,7 @@ function createLedger({ root, resolveKey, now = Date.now, historyDays = DEFAULT_
       return;
     }
     const { key, name } = resolveKey(rec.cwd);
-    state.msgs.set(rec.id, { hour: rec.ms - (rec.ms % HOUR_MS), key, name, model: rec.model, u: rec.u });
+    state.msgs.set(rec.id, { ms: rec.ms, hour: rec.ms - (rec.ms % HOUR_MS), key, name, model: rec.model, u: rec.u });
   }
 
   /** Reads complete lines from state.offset to EOF; a partial last line waits. */
@@ -215,6 +215,16 @@ function createLedger({ root, resolveKey, now = Date.now, historyDays = DEFAULT_
         }
       }
       return [...buckets.values()];
+    },
+
+    /** One {ms, key, name} per reply inside the window - the moments focus time is built from. */
+    events() {
+      const min = cutoff();
+      const out = [];
+      for (const state of files.values()) {
+        for (const r of state.msgs.values()) if (r.ms >= min) out.push({ ms: r.ms, key: r.key, name: r.name });
+      }
+      return out;
     },
 
     stats: () => ({ files: files.size, bytesRead }),

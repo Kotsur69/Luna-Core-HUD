@@ -38,12 +38,13 @@ function defaultLedgerService() {
   const { createLedgerService } = require('./missionledgerservice');
   const sync = require('./missionledgersync');
   const { loadRates } = require('./rates');
+  const { createCommits } = require('./missioncommits');
+  // Pinned projects' folder aliases catch sessions from repos no longer on this PC.
+  const { resolve } = createRepoKeys({ aliases: () => projectStore.pinnedAliases(projectStore.loadProjects().pinned) });
   return createLedgerService({
-    ledger: createLedger({
-      root: path.join(os.homedir(), '.claude', 'projects'),
-      // Pinned projects' folder aliases catch sessions from repos no longer on this PC.
-      resolveKey: createRepoKeys({ aliases: () => projectStore.pinnedAliases(projectStore.loadProjects().pinned) }).resolve,
-    }),
+    ledger: createLedger({ root: path.join(os.homedir(), '.claude', 'projects'), resolveKey: resolve }),
+    // Focus time: own commits in config/repos.local.json, keyed like the transcripts.
+    commits: createCommits({ resolveKey: resolve }),
     store: projectStore,
     sync,
     loadRates,

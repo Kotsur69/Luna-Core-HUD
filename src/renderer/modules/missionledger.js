@@ -17,6 +17,7 @@
 import { t } from './util.js';
 import { errorText, ipcFailed } from './missionshared.js';
 import { ledgerView, nextClass, CLASS_ORDER } from './missionledgerview.js';
+import { renderFocus } from './missionfocus.js';
 
 const STALE_MS = 2 * 60 * 1000;
 const PICK = ['work', 'fun', 'other'];
@@ -181,11 +182,15 @@ function renderFooter(onPick, onClear) {
 
 /**
  * Mounts the block into `root`. getWeekly() returns the weekly usage limit
- * ({percentUsed, resetsAt}) from the usage poll, or null.
+ * ({percentUsed, resetsAt}) from the usage poll, or null. `focusRoot` gets the
+ * "Focus this week" block (missionfocus.js) from the same report.
  * @returns {{render:()=>void, load:(force?:boolean)=>Promise<void>, usageChanged:()=>void, unmount:()=>void}}
  */
-export function mountLedger(root, getWeekly) {
+export function mountLedger(root, getWeekly, focusRoot = null) {
   let mounted = true;
+  // The Focus table is rebuilt only for a new report or language - a class
+  // click or a usage poll must not reset its scroll position.
+  let focusDrawn = { report: undefined, lang: null };
 
   async function load(force = false) {
     if (loading || (!force && report && Date.now() - fetchedAt < STALE_MS)) return render();
@@ -236,6 +241,10 @@ export function mountLedger(root, getWeekly) {
     }
     if (report) parts.push(renderFooter(pickDir, clearDir));
     root.replaceChildren(...parts);
+    if (focusRoot && (focusDrawn.report !== report || focusDrawn.lang !== lang())) {
+      focusRoot.replaceChildren(...(report ? renderFocus(report.focus) : []));
+      focusDrawn = { report, lang: lang() };
+    }
   }
 
   /** Usage poll update: if the last report had to guess the window (Monday) and

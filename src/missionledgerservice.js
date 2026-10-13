@@ -5,6 +5,9 @@
 // publish our aggregates to the shared folder and read the other PCs'
 // (missionledgersync.js), then price everything inside the Claude weekly
 // window and attach each project's class (missionprojects.js).
+// Focus (W2): this PC's reply + commit moments become blocks
+// (missionfocus.js), are published next to the rows, and are unioned with the
+// other PCs' blocks into report.focus for the local Mon-Sun week.
 //
 // Window: the provider's own 7-day window (weekly resetsAt - 7 d) when the
 // renderer's usage poll knows the reset; otherwise Monday 00:00 local.
@@ -12,6 +15,8 @@
 // ============================================================================
 
 'use strict';
+
+const { eventsToBlocks, focusWeek } = require('./missionfocus');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
@@ -43,20 +48,50 @@ function withPinned(projects, pinned) {
   return [...pins, ...rest];
 }
 
+/** This PC's focus blocks: Claude replies + own commits; a failing git reader is not fatal. */
+async function ownBlocks(ledger, commits) {
+  let commitEvents = [];
+  try {
+    commitEvents = await commits.events();
+  } catch (err) {
+    console.error('[focus] commit moments failed:', err && err.message);
+  }
+  return eventsToBlocks([...ledger.events(), ...commitEvents]);
+}
+
+/** Focus for the local Mon-Sun week over every PC's blocks, capped like the ledger. */
+function focusReport(blocks, at, classes) {
+  const week = focusWeek(blocks, { now: at });
+  return {
+    ...week,
+    projects: week.projects.slice(0, MAX_PROJECTS).map((p) => ({ ...p, cls: classes[p.key] || null })),
+    moreProjects: Math.max(0, week.projects.length - MAX_PROJECTS),
+  };
+}
+
 /**
- * @param {{ledger:{scan:Function,rows:Function}, store:{loadProjects:Function},
+ * @param {{ledger:{scan:Function,rows:Function,events:Function}, store:{loadProjects:Function},
  *          sync:{writeOwn:Function,readPeers:Function}, loadRates:Function,
- *          summarize?:Function, machine:string, now?:()=>number}} deps
+ *          commits?:{events:()=>Promise<Array>}, summarize?:Function, machine:string, now?:()=>number}} deps
  */
-function createLedgerService({ ledger, store, sync, loadRates, summarize = require('./missionledger').summarize, machine, now = Date.now }) {
+function createLedgerService({
+  ledger,
+  store,
+  sync,
+  loadRates,
+  commits = { events: async () => [] },
+  summarize = require('./missionledger').summarize,
+  machine,
+  now = Date.now,
+}) {
   let lastWritten = null;
 
-  /** Writes our file when the rows or the folder changed; returns an error code or null. */
-  function publish(dir, rows, at) {
-    const sig = `${dir}\u0000${JSON.stringify(rows)}`;
+  /** Writes our file when the rows, blocks or folder changed; returns an error code or null. */
+  function publish(dir, rows, blocks, at) {
+    const sig = `${dir}\u0000${JSON.stringify(rows)}\u0000${JSON.stringify(blocks)}`;
     if (sig === lastWritten) return null;
     try {
-      sync.writeOwn(dir, machine, rows, at);
+      sync.writeOwn(dir, machine, rows, at, blocks);
       lastWritten = sig;
       return null;
     } catch (err) {
@@ -68,11 +103,13 @@ function createLedgerService({ ledger, store, sync, loadRates, summarize = requi
   return {
     async report(req) {
       await ledger.scan();
+      const blocks = await ownBlocks(ledger, commits);
       const at = now();
       const own = ledger.rows();
       const { classes, sharedDir, pinned = [] } = store.loadProjects();
-      const syncError = sharedDir ? publish(sharedDir, own, at) : null;
+      const syncError = sharedDir ? publish(sharedDir, own, blocks, at) : null;
       const peers = sharedDir ? sync.readPeers(sharedDir, machine, at) : [];
+      const allBlocks = peers.reduce((all, p) => all.concat(p.blocks || []), blocks);
 
       const win = weekWindow(req && req.resetsAt, at);
       const rows = peers.reduce((all, p) => all.concat(p.rows), own);
@@ -86,6 +123,7 @@ function createLedgerService({ ledger, store, sync, loadRates, summarize = requi
         projects: withPinned(sum.projects, pinned).map((p) => ({ ...p, cls: classes[p.key] || null })),
         moreProjects: Math.max(0, sum.projects.filter((p) => !pinned.some((x) => x.key === p.key)).length - MAX_PROJECTS),
         machines: [{ machine, updatedAt: at, self: true }, ...peers.map((p) => ({ machine: p.machine, updatedAt: p.updatedAt, self: false }))],
+        focus: focusReport(allBlocks, at, classes),
         sharedDir,
         syncError,
       };

@@ -17,16 +17,17 @@ const NOW = Date.parse('2026-10-09T12:00:00Z');
 const H = Date.parse('2026-10-09T10:00:00Z');
 const RATES = { rates: [{ id: 'claude-opus-5-5', input: 4, output: 20 }], cacheReadMultiplier: 0.1, cacheWriteMultiplier: 1.25 };
 
-function fakes({ sharedDir = null, classes = {}, ownRows, peers = [] } = {}) {
+function fakes({ sharedDir = null, classes = {}, ownRows, ownEvents = [], peers = [] } = {}) {
   const writes = [];
   const deps = {
     ledger: {
       scan: async () => {},
       rows: () => ownRows || [[H, 'git:github.com/me/a', 'a', 'claude-opus-5-5', 1e6, 0, 0, 0]],
+      events: () => ownEvents,
     },
     store: { loadProjects: () => ({ classes, sharedDir }) },
     sync: {
-      writeOwn: (dir, machine, rows, now) => writes.push({ dir, machine, rows, now }),
+      writeOwn: (dir, machine, rows, now, blocks) => writes.push({ dir, machine, rows, now, blocks }),
       readPeers: () => peers,
     },
     loadRates: () => RATES,
@@ -124,4 +125,55 @@ test('pinned projects are always reported, at zero when idle, and flagged', asyn
   const idle = r.projects.find((p) => p.key === 'git:github.com/me/idle');
   assert.deepEqual([idle.usd, idle.pinned, idle.cls], [0, true, 'fun']);
   assert.equal(r.projects.find((p) => p.key === 'git:github.com/me/a').pinned, true);
+});
+
+// ---- Focus / time per project (W2) ----
+
+const MIN = 60 * 1000;
+// Local Monday of NOW's week, 09:00 - built in local time like missionfocus.js.
+const nowDate = new Date(NOW);
+const MON9 = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - ((nowDate.getDay() + 6) % 7), 9).getTime();
+
+test("report adds this week's focus from Claude replies and commits, with classes", async () => {
+  const { deps, writes } = fakes({
+    sharedDir: 'D:\\Sync',
+    classes: { 'git:github.com/me/a': 'work' },
+    ownEvents: [
+      { ms: MON9, key: 'git:github.com/me/a', name: 'a' },
+      { ms: MON9 + 5 * MIN, key: 'git:github.com/me/a', name: 'a' },
+    ],
+  });
+  deps.commits = { events: async () => [{ ms: MON9 + 60 * MIN, key: 'local:toy', name: 'toy' }] };
+  const r = await createLedgerService(deps).report({});
+  assert.deepEqual(
+    r.focus.projects.map((p) => [p.key, p.totalMs, p.cls]),
+    [
+      ['git:github.com/me/a', 10 * MIN, 'work'],
+      ['local:toy', 5 * MIN, null],
+    ]
+  );
+  assert.equal(r.focus.totalMs, 15 * MIN);
+  assert.equal(r.focus.days.length, 7);
+  assert.deepEqual(writes[0].blocks, [
+    [MON9, MON9 + 10 * MIN, 'git:github.com/me/a', 'a'],
+    [MON9 + 60 * MIN, MON9 + 65 * MIN, 'local:toy', 'toy'],
+  ]);
+});
+
+test("focus unions a peer PC's blocks with ours (the same hour is not counted twice)", async () => {
+  const { deps } = fakes({
+    sharedDir: 'D:\\Sync',
+    ownEvents: [{ ms: MON9, key: 'git:github.com/me/a', name: 'a' }],
+    peers: [{ machine: 'LAPTOP', updatedAt: NOW, rows: [], blocks: [[MON9, MON9 + 60 * MIN, 'git:github.com/me/a', 'a']] }],
+  });
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.focus.projects[0].totalMs, 60 * MIN);
+});
+
+test('a failing commit reader leaves focus with the Claude replies only', async () => {
+  const { deps } = fakes({ ownEvents: [{ ms: MON9, key: 'git:github.com/me/a', name: 'a' }] });
+  deps.commits = { events: async () => Promise.reject(new Error('git gone')) };
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.ok, true);
+  assert.equal(r.focus.projects[0].totalMs, 5 * MIN);
 });

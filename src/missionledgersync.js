@@ -8,10 +8,13 @@
 //
 //   <dir>/ledger-<machine>.json = {v:1, machine, updatedAt, rows:[
 //     [hourEpochMs, projectKey, projectName, model, input, cacheWrite, cacheRead, output]
+//   ], blocks:[
+//     [startMs, endMs, projectKey, projectName]      <- focus time (missionfocus.js)
 //   ]}
 //
-// Only token counts per hour/project/model leave this PC - never prompts,
-// code, paths or transcript text. LunaCore itself does no networking here.
+// Only token counts per hour/project/model and when work happened per project
+// leave this PC - never prompts, code, paths or transcript text. `blocks` is
+// optional (files from before it read as none). LunaCore does no networking here.
 //
 // Trust boundary: a peer file is written by another machine and moved by a
 // sync tool, so it is untrusted input. Name pattern, size, count, version and
@@ -30,6 +33,9 @@ const DAY_MS = 24 * HOUR_MS;
 const HISTORY_DAYS = 14;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_ROWS = 50000;
+const MAX_BLOCKS = 10000;
+/** One focus block cannot be longer than this (a reply every < 10 min for 2 days). */
+const MAX_BLOCK_MS = 2 * DAY_MS;
 const MAX_PEERS = 8;
 /** Distinct projects one peer may report - same cap as missionprojects.js. */
 const MAX_PEER_KEYS = 500;
@@ -61,6 +67,17 @@ function validRow(r, now) {
   if (typeof model !== 'string' || !MODEL_RE.test(model)) return null;
   if (!tokens.every(isCount)) return null;
   return [hour, key, name, model, ...tokens];
+}
+
+/** A peer focus block, or null when any field is off. */
+function validBlock(b, now) {
+  if (!Array.isArray(b) || b.length !== 4) return null;
+  const [start, end, key, name] = b;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start || end - start > MAX_BLOCK_MS) return null;
+  if (start < now - HISTORY_DAYS * DAY_MS - DAY_MS || end > now + DAY_MS) return null;
+  if (typeof key !== 'string' || !KEY_RE.test(key)) return null;
+  if (typeof name !== 'string' || !NAME_RE.test(name)) return null;
+  return [start, end, key, name];
 }
 
 /**
@@ -96,28 +113,37 @@ function readSharedJson(file, maxBytes = MAX_FILE_BYTES) {
   }
 }
 
-/** Writes this PC's rows. */
-function writeOwn(dir, machine, rows, now = Date.now()) {
+/** Writes this PC's rows, plus its focus blocks when given. */
+function writeOwn(dir, machine, rows, now = Date.now(), blocks) {
   if (!MACHINE_RE.test(machine)) throw new Error('bad machine name');
-  writeSharedJson(path.join(dir, `ledger-${machine}.json`), { v: VERSION, machine, updatedAt: now, rows });
+  const body = { v: VERSION, machine, updatedAt: now, rows };
+  writeSharedJson(path.join(dir, `ledger-${machine}.json`), Array.isArray(blocks) ? { ...body, blocks } : body);
 }
 
-/** One peer file -> {machine, updatedAt, rows} or null. */
+/** One peer file -> {machine, updatedAt, rows, blocks} or null. */
 function readPeer(file, machine, now) {
   const data = readSharedJson(file);
   if (!data || data.v !== VERSION || data.machine !== machine || !Array.isArray(data.rows)) return null;
   const updatedAt = Number.isFinite(data.updatedAt) ? data.updatedAt : 0;
-  const rows = [];
   const keys = new Set();
+  // A peer flooding distinct projects would otherwise reach the renderer;
+  // rows and blocks draw on one key budget.
+  const admit = (key) => {
+    if (!keys.has(key) && keys.size >= MAX_PEER_KEYS) return false;
+    keys.add(key);
+    return true;
+  };
+  const rows = [];
   for (const raw of data.rows.slice(0, MAX_ROWS)) {
     const r = validRow(raw, now);
-    if (!r) continue;
-    // A peer flooding distinct projects would otherwise reach the renderer.
-    if (!keys.has(r[1]) && keys.size >= MAX_PEER_KEYS) continue;
-    keys.add(r[1]);
-    rows.push(r);
+    if (r && admit(r[1])) rows.push(r);
   }
-  return { machine, updatedAt, rows };
+  const blocks = [];
+  for (const raw of Array.isArray(data.blocks) ? data.blocks.slice(0, MAX_BLOCKS) : []) {
+    const b = validBlock(raw, now);
+    if (b && admit(b[2])) blocks.push(b);
+  }
+  return { machine, updatedAt, rows, blocks };
 }
 
 /** Every other PC's file in `dir`; a missing folder is an empty list. */
@@ -149,6 +175,7 @@ module.exports = {
   writeOwn,
   readPeers,
   validRow,
+  validBlock,
   validKey,
   writeSharedJson,
   readSharedJson,
