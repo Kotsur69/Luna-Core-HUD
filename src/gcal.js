@@ -36,6 +36,8 @@ const CLIENT_FILE = 'google-oauth.local.json';
 const TOKEN_FILE = 'gcal-token.local.json';
 
 const CONSENT_TIMEOUT_MS = 180000;
+/** A downloaded client JSON is ~400 bytes; anything this big is not one. */
+const MAX_CLIENT_FILE_BYTES = 64 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
 const MAX_CALENDARS = 25;
 const MAX_PAGES = 5;
@@ -58,6 +60,21 @@ class GcalError extends Error {
     super(detail || reason);
     this.reason = reason;
   }
+}
+
+/**
+ * Google API errors are {error:{code, message, status, errors:[{reason}]}}, not
+ * a string. Returns ": <status/reason> - <message>" for the log, or "" when the
+ * body carries nothing usable. Never includes tokens - Google does not echo them.
+ */
+function googleErrorDetail(body) {
+  const err = body && body.error;
+  if (!err) return '';
+  if (typeof err === 'string') return `: ${err}`;
+  const reason = (Array.isArray(err.errors) && err.errors[0] && err.errors[0].reason) || err.status || '';
+  const message = typeof err.message === 'string' ? err.message.slice(0, 300) : '';
+  const parts = [reason, message].filter(Boolean).join(' - ');
+  return parts ? `: ${parts}` : '';
 }
 
 /**
@@ -335,11 +352,23 @@ function createGcal(deps = {}) {
     } catch (err) {
       throw new GcalError('gcal-network', err && err.message);
     }
-    if (res.status === 401) {
+    // 401 or 403 indicates authentication failure. Google's error response for
+    // invalid_grant is {error: "invalid_grant", error_description: "..."}.
+    if (res.status === 401 || res.status === 403) {
+      const body = await res.json().catch(() => ({}));
       access = null;
-      throw new GcalError('gcal-failed', 'access token rejected');
+      // Only clear credentials when Google explicitly says the grant is invalid.
+      // Other 403 errors might be transient - don't delete the token file.
+      if (body && body.error === 'invalid_grant') {
+        forget();
+        throw new GcalError('gcal-auth', body.error_description || 'refresh token invalid');
+      }
+      throw new GcalError('gcal-failed', `HTTP ${res.status} on ${path}${googleErrorDetail(body)}`);
     }
-    if (!res.ok) throw new GcalError('gcal-failed', `HTTP ${res.status} on ${path}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new GcalError('gcal-failed', `HTTP ${res.status} on ${path}${googleErrorDetail(body)}`);
+    }
     return res.json();
   }
 
@@ -414,7 +443,31 @@ function createGcal(deps = {}) {
 
   const status = () => ({ configured: !!loadClient(), connected: !!loadRefreshToken() });
 
-  return { status, connect, listEvents };
+  /**
+   * Takes the client JSON the user downloaded from Google Cloud (picked in a
+   * native dialog by main) and saves only what this module needs. Anything
+   * that is not a Desktop-app client is refused and the old file stays.
+   */
+  function importClient(file) {
+    let raw = null;
+    try {
+      const st = fs.lstatSync(file);
+      if (st.isFile() && st.size <= MAX_CLIENT_FILE_BYTES) raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      raw = null;
+    }
+    const client = parseClientFile(raw && raw.installed ? raw : null);
+    if (!client) throw new GcalError('gcal-bad-client');
+    const dest = deps.clientPath || paths.local(CLIENT_FILE);
+    if (!deps.clientPath) paths.ensureUserDir();
+    fs.writeFileSync(
+      dest,
+      JSON.stringify({ installed: { client_id: client.clientId, client_secret: client.clientSecret } }, null, 2) + '\n',
+      'utf8'
+    );
+  }
+
+  return { status, connect, listEvents, importClient };
 }
 
 module.exports = {

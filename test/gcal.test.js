@@ -161,6 +161,25 @@ test('a revoked refresh token is forgotten and reported as gcal-auth', async () 
   assert.equal(client.status().connected, false);
 });
 
+test('a 403 without invalid_grant fails with gcal-failed and keeps credentials', async () => {
+  const files = tempFiles({ refreshToken: 'refresh-1' });
+  let callCount = 0;
+  const fetchImpl = async (url) => {
+    if (String(url).startsWith('https://oauth2.googleapis.com/token')) {
+      return json({ access_token: 'acc', expires_in: 3600 });
+    }
+    // Simulate a 403 without error body (like Google sometimes returns for transient issues)
+    callCount++;
+    return json({}, 403);
+  };
+  const client = gcal.createGcal({ fetchImpl, safeStorage: fakeStorage, ...files });
+  await assert.rejects(client.listEvents({ fromIso: 'a', toIso: 'b', categories: [] }), { reason: 'gcal-failed' });
+  // Token file should persist since this is not an explicit invalid_grant
+  assert.equal(fs.existsSync(files.tokenPath), true);
+  assert.equal(callCount, 1); // Only one API call made
+  assert.equal(client.status().connected, true);
+});
+
 test('no client file -> gcal-no-client, before any network call', async () => {
   let fetched = false;
   const missing = path.join(os.tmpdir(), `no-such-gcal-${process.pid}`);
@@ -212,4 +231,34 @@ test('connect: the user declining consent rejects with gcal-denied', async () =>
   const client = gcal.createGcal({ fetchImpl: async () => json({}), openExternal, safeStorage: fakeStorage, ...files });
   await assert.rejects(client.connect(), { reason: 'gcal-denied' });
   assert.equal(client.status().connected, false);
+});
+
+test('importClient copies only id + secret from a Desktop client file; junk and oversized files are refused', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gcal-import-'));
+  const clientPath = path.join(dir, 'google-oauth.local.json');
+  const client = gcal.createGcal({ clientPath, tokenPath: path.join(dir, 't.json'), safeStorage: fakeStorage });
+  assert.equal(client.status().configured, false);
+
+  const src = path.join(dir, 'client_secret_123.json');
+  fs.writeFileSync(
+    src,
+    JSON.stringify({
+      installed: { client_id: '123-abc.apps.googleusercontent.com', client_secret: 'GOCSPX-x', project_id: 'p', redirect_uris: ['http://localhost'] },
+    })
+  );
+  client.importClient(src);
+  assert.equal(client.status().configured, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(clientPath, 'utf8')), {
+    installed: { client_id: '123-abc.apps.googleusercontent.com', client_secret: 'GOCSPX-x' },
+  });
+
+  const bad = path.join(dir, 'web-client.json');
+  fs.writeFileSync(bad, JSON.stringify({ web: { client_id: 'x', client_secret: 'y' } }));
+  assert.throws(() => client.importClient(bad), { reason: 'gcal-bad-client' });
+  const big = path.join(dir, 'big.json');
+  fs.writeFileSync(big, ' '.repeat(70 * 1024));
+  assert.throws(() => client.importClient(big), { reason: 'gcal-bad-client' });
+  assert.throws(() => client.importClient(path.join(dir, 'missing.json')), { reason: 'gcal-bad-client' });
+  // The good client is still in place after the refused imports.
+  assert.equal(client.status().configured, true);
 });
