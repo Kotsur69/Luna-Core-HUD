@@ -467,4 +467,34 @@ function apply(op, data, file = defaultFile(), nowMs = Date.now()) {
   return save(next, file);
 }
 
-module.exports = { loadBudget, apply, OP_NAMES: Object.keys(OPS) };
+/**
+ * For the sync with other PCs (src/lifesync.js): the whole store as it is on
+ * disk. Same rule as apply(): only a missing file counts as empty
+ * (`exists: false`); an unreadable one throws, so a sync can never mistake a
+ * locked file for "everything was deleted". `suspect` = the file parses but
+ * is not what save() writes (a hand edit dropped rows, or `{}`): a sync must
+ * not publish that as deletions.
+ * @returns {{budget: object, exists: boolean, suspect: boolean, mtimeMs: number}}
+ */
+function readForSync(file = defaultFile()) {
+  const { budget, text, lossy } = loadForWrite(file);
+  if (text === null) return { budget, exists: false, suspect: false, mtimeMs: 0 };
+  const raw = JSON.parse(text);
+  const shaped = Boolean(raw) && typeof raw === 'object' && ['categories', 'expenses', 'bills', 'goals', 'deposits'].every((k) => Array.isArray(raw[k]));
+  let mtimeMs = 0;
+  try {
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    // Gone between the read and the stat: the read is what counts.
+  }
+  return { budget, exists: true, suspect: lossy || !shaped, mtimeMs };
+}
+
+/** Replaces the whole store (a sync merge), validated like a loaded file. */
+function replaceBudget(raw, file = defaultFile()) {
+  const { text, lossy } = loadForWrite(file);
+  if (lossy && text !== null) fs.writeFileSync(sibling(file, 'bak'), text, 'utf8');
+  return save(normalize(raw), file);
+}
+
+module.exports = { loadBudget, apply, normalize, readForSync, replaceBudget, OP_NAMES: Object.keys(OPS) };

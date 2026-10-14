@@ -14,9 +14,10 @@
 //
 // The renderer is untrusted: it names an op and sends a payload, and
 // src/lifebudget.js's fixed op table validates all of it. Failures come back
-// as fixed reason codes, never raw error text. The budget is purely local; only
-// life:body* talk to the network
-// (YAZIO, via src/lifeyazio.js). No model call. Lives outside main.js (past
+// as fixed reason codes, never raw error text. The budget is shared with the
+// other PCs through the Syncthing folder (src/lifesync.js: a read pulls their
+// changes first, a write publishes soon after); only life:body* talk to the
+// network (YAZIO, via src/lifeyazio.js). No model call. Lives outside main.js (past
 // the file-size guideline); main.js only calls registerLifeIpc() once.
 // ============================================================================
 
@@ -88,17 +89,18 @@ function yazioReason(err) {
 
 /**
  * @param {{ipcMain: {handle: Function}, file?: string, now?: () => number,
- *   yazio?: object}} deps
+ *   yazio?: object, sync?: {fresh: Function, soon: Function} | null}} deps
  *   file/now/yazio are injectable for tests; the real store path and a real
- *   YAZIO client are the defaults.
+ *   YAZIO client are the defaults. sync = startLifeSync() in the app, none in tests.
  */
-function registerLifeIpc({ ipcMain, file, now = Date.now, yazio = createYazio() }) {
+function registerLifeIpc({ ipcMain, file, now = Date.now, yazio = createYazio(), sync = null }) {
   let lastWriteAt = -Infinity;
   let lastForceAt = -Infinity;
   let lastConnectAt = -Infinity;
 
   ipcMain.handle('life:budget', (_event, req) => {
     try {
+      if (sync) sync.fresh();
       const at = now();
       return view(store.loadBudget(file), at, viewMonth(req, at));
     } catch (err) {
@@ -113,6 +115,7 @@ function registerLifeIpc({ ipcMain, file, now = Date.now, yazio = createYazio() 
     lastWriteAt = at;
     try {
       const next = store.apply(req.op, req.data, file, at);
+      if (sync) sync.soon();
       // A create answers its new row id, so the renderer can offer Undo.
       const rows = Object.hasOwn(CREATES, req.op) ? next[CREATES[req.op]] : null;
       const created = rows && rows.length ? rows[rows.length - 1].id : undefined;
