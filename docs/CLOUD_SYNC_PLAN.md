@@ -1,7 +1,11 @@
 # Cloud sync + iPhone companion — plan
 
-Status: **confirmed by Mati 2026-10-14, nothing implemented yet.** Start at
-"Next session: start here". Decisions below are settled — don't re-ask them.
+Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14**
+to project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
+`https://phkigyuhvbanadwmxqqs.supabase.co`) — schema in
+`supabase/migrations/`. Security advisor: clean (RPC execute on Supabase's own
+`rls_auto_enable()` event-trigger helper revoked). Start at "Next session: start here". Decisions below are settled
+— don't re-ask them.
 
 ## Goal
 
@@ -179,11 +183,29 @@ week. Phase 3 then removes the folder transport, `sharedDir`, and SyncTrayzor.
 3. Phase 4: Vercel account via GitHub.
 4. Phase 5: Google OAuth app → "In production".
 
+## Phase 1 results (2026-10-14) ✅
+
+- Steps 1–2 of "What Mati does himself" are done: GitHub OAuth App "LunaCore",
+  provider enabled in Supabase, redirect allow-list `http://127.0.0.1:*/callback`.
+- Applied SQL = `supabase/migrations/` (differs from the sketch above:
+  policies `to authenticated` with `(select auth.uid())`, `push_units` is
+  plpgsql with `search_path = ''`, rejects unknown scopes and > 500 units,
+  execute revoked from `anon`). Advisors: security clean.
+- **Live probe in Electron 43 main (Node 24), all green:** global `WebSocket`
+  exists (no `ws` needed); GitHub login with PKCE + system browser + loopback
+  on a **random port** works (the `*` port wildcard is accepted); `push_units`
+  ok; pull by `rev` ok; an older `u` is ignored server-side; realtime
+  `postgres_changes` delivers the UPDATE after login; anonymous `push_units`
+  → `42501 permission denied`. Probe pattern: in-memory `auth.storage` Map
+  (holds the PKCE verifier), `signInWithOAuth({skipBrowserRedirect: true})`
+  → `shell.openExternal` → `exchangeCodeForSession(code)`.
+- `@supabase/supabase-js` ^2.117.3 added to `dependencies`.
+- Supabase project → Settings → Integrations → GitHub repo deploy must stay
+  **off**: migrations are applied via MCP, a deploy would re-run them.
+- Unrelated, owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.
+
 ## Next session: start here
 
 1. Re-read this file. Check `git log` for anything newer touching `lifesync.js` / `todosync.js`.
-2. Phase 1: create the Supabase project, apply the SQL above as a migration, run
-   `get_advisors` (security), and check the project's `*.supabase.co` address is
-   reachable from the work PC.
-3. Probe `@supabase/supabase-js` inside Electron main: login, `push_units`, pull, live event.
-4. Ask the candidates question (section A), then `/plan` phase 2 in detail.
+2. Confirm "Allow new users to sign up" is off (`/auth/v1/settings` → `disable_signup: true`).
+3. Ask the candidates question (section A), then `/plan` phase 2 in detail.
