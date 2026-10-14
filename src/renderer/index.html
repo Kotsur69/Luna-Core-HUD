@@ -40,6 +40,8 @@
   <style>html { background: #0a0710; }</style>
 
   <link rel="stylesheet" href="styles.css" />
+  <!-- Life dashboard (Ctrl+Shift+N); separate because styles.css is past the size guideline. -->
+  <link rel="stylesheet" href="life.css" />
 </head>
 <body>
   <!-- ================= HUD =================
@@ -965,6 +967,11 @@
         <button id="mission-open" class="palette-chip" data-i18n-title="mc.chip.title" title="Mission Control - poczta, kalendarz, telemetria, newsy (Ctrl+Shift+M)">
           <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd>
         </button>
+        <!-- Life dashboard (budget, bills, goals), same discoverability
+             rationale as the chips above. -->
+        <button id="life-open" class="palette-chip" data-i18n-title="life.chip.title" title="Zycie - budzet, rachunki, cele (Ctrl+Shift+N)">
+          <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd>
+        </button>
         <!-- Sixth chip: the highlight extractor (batch clip trimmer, modules/
              highlights.js). Click-only, no assigned chord yet - unlike its
              siblings above it has no keyboard shortcut to be discoverable
@@ -1186,6 +1193,30 @@
       </div>
       <div class="palette__foot">
         <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd> <span data-i18n="mc.panel.toggle">przelacz</span></span>
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Life dashboard (Ctrl+Shift+N) ================= -->
+  <!-- modules/lifepanel.js. The columns are empty: lifemoney / lifebills /
+       lifeplan build them in JS on first open (all user text via textContent). -->
+  <div id="life" class="palette mission-overlay life-overlay" tabindex="-1" hidden>
+    <div class="palette__backdrop" data-life-close></div>
+    <div class="palette__modal" role="dialog" aria-modal="true" data-i18n-aria="life.title" aria-label="Zycie">
+      <div class="palette__bar">
+        <span class="palette__glyph">◐</span>
+        <span class="mission-overlay__heading" data-i18n="life.title">Zycie</span>
+        <button type="button" class="libraries__closebtn" data-life-close data-i18n-title="libraries.close" data-i18n-aria="libraries.close" title="Zamknij" aria-label="Zamknij">×</button>
+      </div>
+      <p id="life-status" class="hint mc-status life-status" role="status" aria-live="polite"></p>
+      <div class="mission-overlay__body life-overlay__body">
+        <div id="life-col-money" class="mission-overlay__col life-col"></div>
+        <div id="life-col-bills" class="mission-overlay__col life-col"></div>
+        <div id="life-col-plan" class="mission-overlay__col life-col"></div>
+      </div>
+      <div class="palette__foot">
+        <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd> <span data-i18n="mc.panel.toggle">przelacz</span></span>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>

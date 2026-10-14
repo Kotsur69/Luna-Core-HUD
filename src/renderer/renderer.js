@@ -56,6 +56,7 @@ import './modules/missioncalendar.js';
 import './modules/missiontelemetry.js';
 import './modules/missionnews.js';
 import './modules/missionpanel.js';
+import './modules/lifepanel.js';
 import './modules/clipboard.js';
 import './modules/todo.js';
 import './modules/devices.js';

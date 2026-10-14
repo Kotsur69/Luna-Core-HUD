@@ -33,6 +33,7 @@ import { mountShortcutsChip } from './shortcutspanel.js';
 import { mountLibrariesChip, mountAskChip } from './libraries.js';
 import { mountHighlightsChip } from './highlights.js';
 import { mountMissionChip } from './missionpanel.js';
+import { mountLifeChip } from './lifepanel.js';
 import { mountUpdateChip } from './update.js';
 
 defineWidget({
@@ -51,6 +52,7 @@ defineWidget({
     mountLibrariesChip(root);
     mountAskChip(root);
     mountMissionChip(root);
+    mountLifeChip(root);
     mountHighlightsChip(root);
     mountUpdateChip(root);
     // No cleanup: this widget is never meant to unmount (see header).

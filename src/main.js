@@ -111,6 +111,8 @@ const { runAsk } = require('./ask');
 // Mission Control: Gmail cleanup + Calendar through tool-gated headless
 // `claude -p` jobs. See src/missionrunner.js's header for the trust boundary.
 const { registerMissionIpc } = require('./missioncontrolipc');
+// Life dashboard (Ctrl+Shift+N): local budget store, no network, no model.
+const { registerLifeIpc } = require('./lifeipc');
 // Highlight extractor: batch tail-trim of video clips via system ffmpeg.
 // See src/highlights.js's header for the argv-array security property.
 const { detectFfmpeg, listVideoFiles, HighlightBatchJob } = require('./highlights');
@@ -2344,6 +2346,9 @@ function registerIpc() {
     getModel: () => readUiPrefs().missionModel,
     getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
   });
+
+  // Life dashboard (life:* channels): budget store + summary, all local.
+  registerLifeIpc({ ipcMain });
 
   // "Add to my library": persists an /ask suggestion card into
   // config/libraries.local.json. addLibraryItem() (src/libraries.js) does all

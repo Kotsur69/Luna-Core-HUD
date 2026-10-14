@@ -1,0 +1,177 @@
+/* ============================================================================
+   LunaCore - Life dashboard (Ctrl+Shift+N): modules/lifepanel.js + columns
+   ----------------------------------------------------------------------------
+   Its own sheet because styles.css is far past the file-size guideline. Only
+   the shared tokens from styles.css are used (colours, spacing, radii, type,
+   motion), so every theme restyles this panel too. The overlay shell reuses
+   .mission-overlay; only what differs lives here.
+   ============================================================================ */
+
+/* Three columns, each scrolling on its own, down to 1100px - the columns are
+   narrow enough to stay readable there (Mission Control's 2x2 step would
+   squeeze a column into a half-height cell). Below that: one column, and the
+   whole body scrolls instead of each column. Specificity beats the
+   .mission-overlay__body media rules this shell inherits. */
+.mission-overlay__body.life-overlay__body { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+@media (max-width: 1100px) {
+  .mission-overlay__body.life-overlay__body { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: max-content; overflow-y: auto; }
+  .life-overlay__body > .life-col { overflow: visible; min-height: auto; }
+}
+
+.life-status { padding: 0 var(--space-6); }
+.life-status.is-error { color: var(--bad); opacity: 1; }
+.life-col { gap: var(--space-8); padding-right: var(--space-2); }
+.life-bucket__body { display: flex; flex-direction: column; gap: var(--space-4); }
+.life-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ---- headline: the one number that matters ---------------------------- */
+.life-hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-8);
+  border: var(--border-w) solid color-mix(in srgb, var(--neon-cyan) 35%, var(--edge));
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--neon-cyan) 12%, transparent), transparent 60%),
+    var(--surface-panel-2);
+}
+.life-hero p { margin: 0; }
+.life-hero__label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+.life-hero__big {
+  font-size: calc(var(--fs-xl) * 2.2);
+  font-weight: 700;
+  line-height: 1.05;
+  color: var(--neon-cyan);
+  font-variant-numeric: tabular-nums;
+  text-shadow: var(--text-glow);
+}
+.life-hero__big.is-bad { color: var(--bad); }
+.life-hero__sub { font-size: var(--fs-md); color: var(--text); font-variant-numeric: tabular-nums; }
+.life-hero__math { font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.life-hero__warn { font-size: var(--fs-sm); color: var(--bad); font-weight: 600; }
+
+/* ---- forms --------------------------------------------------------------- */
+.life-form { display: flex; flex-direction: column; gap: var(--space-4); }
+/* Top-aligned: an amount field carries a preview line under its input, so
+   bottom alignment would lift its label above its neighbours'. A button in a
+   row skips the label height to sit level with the inputs. */
+.life-form__row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-4); }
+.life-form__row > button { margin-top: calc(var(--fs-xs) * 1.4 + var(--space-2)); min-height: 32px; }
+.life-form__actions { display: flex; gap: var(--space-4); }
+.life-form__go { flex: 1; min-height: 34px; }
+.life-field { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; flex: 1 1 120px; }
+.life-field--grow { flex: 2 1 180px; }
+.life-field--amount { flex: 1 1 140px; }
+.life-field[hidden] { display: none; }
+.life-field__label { font-size: var(--fs-xs); color: var(--text-dim); }
+.life-field__preview { min-height: 1.2em; font-size: var(--fs-xs); color: var(--neon-cyan); font-variant-numeric: tabular-nums; }
+.life-field__preview.is-bad { color: var(--warn); }
+.life-field .mc-input { min-height: 32px; }
+
+.life-btn {
+  min-height: 30px;
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--edge);
+  background: var(--surface-panel-2);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
+}
+.life-btn:hover { border-color: var(--edge-glow); }
+.life-btn:active { transform: scale(var(--press-scale)); }
+.life-btn:disabled, .life-form__go:disabled { opacity: 0.5; cursor: progress; }
+.life-btn.pad-send { border-color: var(--edge-glow); background: var(--btn-grad); }
+.life-btn:focus-visible, .life-form__go:focus-visible, .life-field .mc-input:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.life-btn[hidden] { display: none; }
+.life-pay > button { margin-top: calc(var(--fs-xs) * 1.4 + var(--space-2)); min-height: 32px; }
+
+/* ---- lists ----------------------------------------------------------------- */
+.life-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.life-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+}
+.life-row--plain { grid-template-columns: minmax(0, 1fr) auto; }
+.life-row--cat { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; align-items: start; }
+.life-row--cat > .life-row__acts { margin-top: calc(var(--fs-xs) * 1.4 + var(--space-2)); }
+.life-row__text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.life-row__title { font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.life-row__meta { font-size: var(--fs-xs); color: var(--text-dim); }
+.life-row__amount { font-size: var(--fs-sm); }
+.life-row__acts { display: flex; gap: var(--space-2); }
+.life-total { margin: 0; font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* ---- bills ------------------------------------------------------------------- */
+.life-bill__amt { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; font-size: var(--fs-sm); }
+.life-bill__diff { font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.life-bill__diff.is-good { color: var(--good); }
+.life-bill__diff.is-warn { color: var(--warn); }
+.life-bill.is-overdue { border-color: color-mix(in srgb, var(--bad) 60%, var(--edge)); }
+.life-bill.is-soon { border-color: color-mix(in srgb, var(--warn) 55%, var(--edge)); }
+.life-bill.is-paid .life-row__title { color: var(--text-dim); }
+/* Status is always spelled out; the chip colour only reinforces it. */
+.life-chip {
+  display: inline-block;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  border: var(--border-w) solid var(--edge);
+}
+.life-chip--paid { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--edge)); }
+.life-chip--overdue { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, var(--edge)); }
+.life-chip--soon { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--edge)); }
+.life-chip--due { color: var(--text-dim); }
+/* Inline pay / deposit editor: spans the whole row under it. */
+.life-pay {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: var(--border-w) dashed var(--edge);
+}
+
+/* ---- category + goal bars ------------------------------------------------- */
+.life-cat, .life-goal { display: flex; flex-direction: column; gap: var(--space-2); }
+.life-goal { padding: var(--space-4); border: var(--border-w) solid var(--edge); border-radius: var(--radius-md); background: var(--surface-panel-2); }
+.life-cat__head { display: flex; justify-content: space-between; gap: var(--space-4); font-size: var(--fs-sm); }
+.life-cat__name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.life-cat__note { font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.life-cat__note.is-bad { color: var(--bad); font-weight: 600; }
+.life-bar { height: 8px; border-radius: var(--radius-pill); background: var(--surface-panel-2); border: var(--border-w) solid var(--edge); overflow: hidden; }
+.life-goal .life-bar { background: var(--surface-panel); }
+.life-bar__fill {
+  height: 100%;
+  background: var(--neon-cyan);
+  transform: scaleX(var(--p, 0));
+  transform-origin: left;
+  transition: transform var(--dur-normal) var(--ease-smooth);
+}
+.life-bar.is-warn .life-bar__fill { background: var(--warn); }
+.life-bar.is-bad .life-bar__fill { background: var(--bad); }
+.life-bar.is-good .life-bar__fill { background: var(--good); }
+
+/* ---- week vs last week ------------------------------------------------------ */
+.life-week { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.life-week th { text-align: left; font-size: var(--fs-xs); font-weight: 600; color: var(--text-dim); padding: var(--space-2) var(--space-3); border-bottom: var(--border-w) solid var(--edge); }
+.life-week td { padding: var(--space-2) var(--space-3); border-bottom: var(--border-w) solid color-mix(in srgb, var(--edge) 60%, transparent); }
+.life-week th:not(:first-child), .life-week td.life-num { text-align: right; }
+.life-week td.is-good { color: var(--good); }
+.life-week td.is-warn { color: var(--warn); }
+.life-week__total td { font-weight: 600; border-bottom: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .life-bar__fill, .life-btn { transition: none; }
+  .life-btn:active { transform: none; }
+}

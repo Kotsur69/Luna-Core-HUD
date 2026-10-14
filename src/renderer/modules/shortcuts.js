@@ -126,6 +126,14 @@ export const SHORTCUT_GROUPS = [
         },
       },
       {
+        chords: [['Ctrl', 'Shift', 'N']],
+        descKey: 'shortcuts.life',
+        source: {
+          file: 'src/renderer/modules/lifepanel.js',
+          marker: "e.code === 'KeyN'",
+        },
+      },
+      {
         // Not a key chord - a command typed into the Ctrl+B filter box. Fits
         // this table anyway (a single-token "chord" renders as one <kbd>,
         // same trick shortcuts.jumpProject uses for "Alt+1…9") because it is

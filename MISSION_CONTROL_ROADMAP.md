@@ -204,7 +204,66 @@ W1), a switch across midnight is not counted, mapped network drives in
   **context switches per day** (project changes inside 30 min).
 - **Reuse:** W1's scan pass (one reader, two aggregates).
 
-### W3 — Weekly review (Sunday 20:00, email) ⏳
+### W3+ — Life Dashboard (live) + budget + weekly review ⏳ (scope widened 2026-10-14)
+
+Mati widened W3 into a live life dashboard; the weekly review below becomes
+its Sunday snapshot. **Decisions (2026-10-14, answered — do not re-ask):**
+
+| Topic | Decision |
+|-------|----------|
+| Placement | **Own full-screen dashboard** (separate view), opened with **Ctrl+Shift+N** — in-app like Ctrl+Shift+M (renderer keydown on `e.code === 'KeyN'`; verified free 2026-10-14), plus a chip next to the Mission Control one. |
+| YAZIO | **Unofficial API** (npm `yazio` 1.1.3, last published 2024-04 — reverse-engineered, may break). Credentials encrypted with `safeStorage`, main process only. **Probe live with Mati's account before designing around it** (kcal, macros, weight, steps/exercise). |
+| Productivity % | Live 0–100, four parts, **equal weights 25/25/25/25** with sliders in settings: focus hours vs daily target (W2), shipping (commits, feat/fix, PRs), weekly goals + closed to-dos (W4), health (kcal/protein goal hit, sleep, habits). |
+| Extra areas | **All four:** sleep hours (manual), energy/mood 1–5 check-in, motorsport prep (countdown, weather, tires, car/gear checklist), habits & streaks. |
+| Check-in | Sleep + energy prompt on the **first dashboard open of the day**. |
+| Habits | **Pre-filled suggestions** (gym, steps goal, water, no late snacks), editable/deletable, daily or N×/week. |
+| Budget — input | **Quick manual entry only** (amount + category + note) with a calculator in the amount field (`45+120.5` — parse arithmetic safely, never `eval`). No bank import, no Gmail bill scan. |
+| Budget — "left" | **Both:** monthly envelope (income − fixed bills paid + still due − spent = left, plus "per day until payday") **and** per-category limits with remaining bars. |
+| Bills | Recurring bills + **subscriptions list** (monthly total, yearly cost each), **due-date reminder toast** with "mark paid", and due dates **written to Google Calendar** (reuses `gcal.createEvent`). |
+| Bill amounts | Each bill has an **expected** amount; "mark paid" opens an **editable actual amount** (gas expected 400, paid 200). "Left" uses the actual once paid, the expected while still due; paid entries stay editable afterwards. |
+| YAZIO privacy | Mati: the YAZIO *data* (kcal, steps) is not sensitive to him. The *password* is still encrypted with `safeStorage` (password reuse). |
+| Money extras | **Savings goals** (target + date → per-month amount, progress bar); **spending week vs last week** per category in the weekly review. |
+| Weekly email | **English, with Claude cost numbers**, To = the connector's Gmail account only. |
+
+**Panels:** live score + today-so-far vs yesterday; "now" strip (current
+project, time in it, switch nudge); life balance wheel (work / fun / health /
+motorsport); YAZIO block (kcal vs goal, macros, weight trend, steps); habits
++ streaks; trackday readiness; **Money** (left this month, per-day, category
+bars, bills due soon, subscriptions, savings goals); correlations
+("protein-goal days → +X h focus", computed locally, shown only with enough
+days of data); week vs last week arrows on every metric; "do more / do less"
+(3 suggestions, each tied to a number). W4 (weekly goals) is built as part
+of this. Money data stays local (`config/life-budget.local.json`, never
+sent to a model except the weekly category totals).
+
+**W3+ phases** (each shippable): 1 shell + check-in + habits · **2 Money ✅**
+· 3 productivity % + W4 goals + "now" strip · 4 YAZIO (probe live first) ·
+5 weekly review + correlations + Sunday email.
+
+**Phase 2 — Money ✅ (2026-10-14).** Ctrl+Shift+N (+ chip) opens the Life
+overlay (`lifepanel.js`), three columns: **Money** (`lifemoney.js`: "left until
+payday" headline + per day, quick expense with calculator `lifecalc.js` -
+recursive-descent, never eval - category bars, recent with edit/delete),
+**Bills** (`lifebills.js`: bills due this period, Pay → editable actual
+amount, paid rows editable + Undo, subscriptions monthly/yearly, bill
+manager), **Plan** (`lifeplan.js`: savings goals + "+ Save" deposits, week vs
+last week per category, income/payday + category limits). Main side:
+`lifebudget.js` (store, fixed op table), `lifebudgetcalc.js` (pure math - the
+budget month runs payday to payday; a due day before payday falls in the next
+calendar month), `lifeipc.js` (`life:budget`, `life:budget-do`). Bill
+reminders: native toast 8 s after launch + every 6 h for unpaid bills due ≤ 3
+days or overdue, once per bill per day. Styles in `src/renderer/life.css`
+(styles.css is past the size guideline). **Not built yet: bill due dates into
+Google Calendar** (needs a recurrence field in `gcal.createEvent`; do it with
+phase 5 or on request).
+Security review: no CRITICAL/HIGH. Fixed: a failed read (AV/sync lock,
+half-written file) no longer falls back to defaults on a write - only ENOENT
+does, anything else answers `unreadable` and leaves the file alone; atomic
+writes (temp + rename); a write that would drop hand-edited junk rows keeps
+`.bak` first; expense cap refuses instead of evicting; payment month within
+±12 months; writes rate-limited (100 ms); amounts rounding to 0, years outside
+2000-2100 and bidi/zero-width text rejected. Open LOW: no `senderFrame` check
+(repo convention).
 
 The summary Mati asked for: *"we worked a lot on fun projects, a lot of new
 functions/commits went to X, the work project stands on Y, with its to-dos."*
@@ -476,9 +535,7 @@ itself was smoke-tested with a fake event in a second instance.
 ## Open questions (ask at the start of the matching workstream)
 
 - ~~**W1:**~~ answered 2026-10-09 (see W1).
-- **W3:** which address receives the weekly email (assume the Gmail account
-  the connector is signed in to — confirm)? Polish or English? Include cost
-  numbers?
+- ~~**W3:**~~ answered 2026-10-14 (see W3+).
 - ~~**W5:**~~ answered 2026-10-09 (see W5).
 - **W6:** 08:00 fixed, or "first launch after 06:00"? Weekends too?
 - **W7:** which tracks are frequent (pre-seed coordinates: Tor Poznań,
@@ -584,3 +641,17 @@ itself was smoke-tested with a fake event in a second instance.
   new port rather than waiting.
 - The classifier blocks reading browser cookie stores ("credential
   exploration") — by design; the paste flow is the answer, not a bypass.
+
+## Gotchas learned building W3+ phase 2 (Money)
+
+- CDP debug ports were unusable in this harness (every port looked held by an
+  invisible PID). Smoke-test with an in-process wrapper instead: `electron.exe
+  wrapper.js <repo> <out>` that requires `src/main.js` and drives the window
+  with `sendInputEvent` / `executeJavaScript` / `capturePage` (call
+  `invalidate()` + wait first, or the frame is stale). Dev runs write the
+  repo's `config/*.local.json` - delete what the smoke run created.
+- ` `-style escapes written through the Edit tool can land as the raw
+  characters; U+2028 inside a regex literal is a line terminator ("missing /").
+  Write such lines from a script with the backslash built at runtime.
+- An amount field with a preview line under it misaligns labels in a
+  bottom-aligned row: rows are top-aligned, buttons skip the label height.

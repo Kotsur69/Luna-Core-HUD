@@ -272,6 +272,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Stops sharing: forgets the shared ledger folder. Promise<{ok, sharedDir:null}>. */
   missionLedgerClearDir: () => ipcRenderer.invoke('mission:ledger-clear-dir'),
 
+  // --- Life dashboard (src/lifeipc.js) ---
+  // Local budget only. `op` is checked against main's fixed op table and the
+  // payload re-validated there; nothing here reaches the network or a model.
+  /** Promise<{ok, summary, budget} | {ok:false, reason}>. */
+  lifeBudget: () => ipcRenderer.invoke('life:budget'),
+  /** One change (addExpense, payBill, saveBill...). Same answer as lifeBudget. */
+  lifeBudgetDo: (op, data) => ipcRenderer.invoke('life:budget-do', { op, data }),
+
   // --- Highlight extractor (batch clip trimmer) ---
   /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */
   getFfmpegStatus: () => ipcRenderer.invoke('highlights:ffmpeg-status'),
