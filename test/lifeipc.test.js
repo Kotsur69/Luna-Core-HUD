@@ -43,7 +43,8 @@ test('life:budget-do applies an op and answers with the fresh summary', async ()
   await call('life:budget-do', { op: 'setIncome', data: { amount: 8000, payday: 10 } });
   const res = await call('life:budget-do', { op: 'addExpense', data: { date: '2026-10-14', amount: 45, category: 'food', note: '' } });
   assert.equal(res.ok, true);
-  assert.equal(res.summary.spent, 45);
+  // Food is a planned envelope with no plan yet: the spend itself is reserved.
+  assert.equal(res.summary.planned.spent, 45);
   assert.equal(res.summary.left, 7955);
 });
 

@@ -27,23 +27,25 @@ under *Open questions*.
 ## ⏸ Resume here (last session 2026-10-14)
 
 - **Active workstream: W3+ Life Dashboard** (Ctrl+Shift+N). Phase 2 Money
-  shipped in `393c07d` (pushed). All W3+ decisions are recorded in its
-  section below - don't re-ask them.
-- **Next: Mati picks the phase** - 1 shell + daily check-in (sleep / energy,
-  first open of the day) + habits with pre-filled suggestions · 3
-  productivity % (25/25/25/25 + sliders) + W4 weekly goals + "now" strip ·
-  4 YAZIO · 5 weekly review + correlations + Sunday email (English, with
-  costs). Ask which one at the start.
-- **YAZIO needs Mati first:** he creates `config/yazio.local.json`
-  (`{"email","password"}`, gitignored). Then probe the unofficial npm
-  `yazio` client live, read-only (today's kcal, weight) before any design;
-  the finished feature moves the password into `safeStorage` and deletes the file.
+  shipped in `393c07d`; the **budget redesign (5 buckets, tabs, charts,
+  undo everywhere)** landed after it - see "Phase 2b" in the W3+ section.
+  All W3+ decisions are recorded there - don't re-ask them.
+- **Next: phase 4 YAZIO** (Mati: "Budget first, YAZIO after"). Main side is
+  done: `src/lifeyazio.js` (own client - the npm `yazio` package is broken;
+  API `https://yzapi.yazio.com/v15`), `life:body`, `life:body-connect`,
+  `life:body-disconnect` in `lifeipc.js`, preload `lifeBody*`; the login is
+  safeStorage-encrypted in `yazio-cred.local.json`, the legacy plain
+  `config/yazio.local.json` is read once. **TODO:** renderer `lifebody.js`
+  (a Body tab; password field `type=password`, cleared after connect), i18n
+  `life.body.*`, `test/lifeyazio.test.js`.
+- Then Mati picks: 1 check-in + habits · 3 productivity % + W4 goals · 5
+  weekly review + Sunday email.
 - **Owed from phase 2:** bill due dates into Google Calendar (needs a
-  recurrence field in `gcal.createEvent`); one boot-time console error
-  ("Cannot read properties of null (reading 'appendChild')", misattributed to
-  `preload.js:19`) seen in the smoke wrapper - check whether it predates
-  `393c07d` before chasing it.
-- Mati has not entered real budget data yet (smoke data was deleted).
+  recurrence field in `gcal.createEvent`). The boot-time console error
+  ("Cannot read properties of null (reading 'appendChild')", attributed to
+  `preload.js:19`) **predates the Life panel** - not from it.
+- Mati's Revolut 3000 is still kind `bill` - suggest switching it to
+  `saving` in Settings (then it counts as savings, not a fixed bill).
 
 ---
 
@@ -278,7 +280,28 @@ days or overdue, once per bill per day. Styles in `src/renderer/life.css`
 (styles.css is past the size guideline). **Not built yet: bill due dates into
 Google Calendar** (needs a recurrence field in `gcal.createEvent`; do it with
 phase 5 or on request).
-Security review: no CRITICAL/HIGH. Fixed: a failed read (AV/sync lock,
+**Phase 2b — budget redesign ✅ (2026-10-14).** Mati: "currently i cant
+delete most of my mistakes… make it more readable… more graphs… what is the
+money left so i can know if i should go to the cinema". **5-bucket model:**
+free left = income − fixed bills − savings − planned envelopes (reserved =
+max(plan, spent)) − free spending. Categories are `planned` (envelope with a
+plan: food, fuel) or `free` (quick spending: snacks, fun); bills have kind
+`bill` / `subscription` / `saving` (a `saving` bill - e.g. monthly Revolut
+investing - counts as savings and can feed a goal); goals may be open-ended
+(target 0, no date) and take `deposits`. Main: `lifebudgetdates.js`
+(periods), `lifebudgettrend.js` (usual spend per category, trend rows, week
+/ period % breakdown), `lifebudgetcalc.js` `budgetSummary` (one answer the
+whole UI renders from), `life:budget {month}` / `life:budget-do {op, data,
+month}` → `{ok, summary, budget, created}`. Renderer: `lifepanel.js` shell
+(tabs Overview · Spending · Transactions · Bills & Savings · Settings,
+month switch ◀ ▶ / Today, quick bar always on top), `lifeui.js` (state,
+`act`, Undo toast), `lifecharts.js` (SVG donut + stacked bars),
+`lifequick.js`, `lifeoverview.js`, `lifespending.js`, `lifetx.js` (every row
+editable inline or removed in one click + Undo), `lifebills.js` (pay editor,
+calendar, subscriptions, savings pots), `lifesettings.js`. `lifemoney.js` and
+`lifeplan.js` are gone.
+
+Security review (phase 2): no CRITICAL/HIGH. Fixed: a failed read (AV/sync lock,
 half-written file) no longer falls back to defaults on a write - only ENOENT
 does, anything else answers `unreadable` and leaves the file alone; atomic
 writes (temp + rename); a write that would drop hand-edited junk rows keeps

@@ -4,15 +4,26 @@
 // config/life-budget.local.json (gitignored by the *.local.json rule):
 //   currency:   'PLN'
 //   income:     {amount, payday 1-31}
-//   categories: [{id, name, limit}]  name '' = a built-in one, localized by id
-//                                    in the renderer; limit 0 = no limit
+//   categories: [{id, name, kind 'planned'|'free', plan}]  name '' = a
+//               built-in one, localized by id in the renderer. 'planned' =
+//               a monthly envelope (food, fuel): its plan is set aside from
+//               free money up front. 'free' = quick spending (snacks, fun)
+//               that comes straight out of free money. Older files with
+//               {limit} migrate: limit > 0 -> planned with plan = limit.
 //   expenses:   [{id, date 'YYYY-MM-DD', amount, category, note}]
-//   bills:      [{id, name, expected, dueDay 1-31, kind 'bill'|'subscription',
-//                 every 'month'|'year', month 1-12 (yearly only, else 0), category}]
+//   bills:      [{id, name, expected, dueDay 1-31,
+//                 kind 'bill'|'subscription'|'saving', every 'month'|'year',
+//                 month 1-12 (yearly only, else 0), category, goal}]
+//               'saving' = a planned monthly transfer (Revolut Investing):
+//               counted out of free money like a bill, but as saved, not
+//               spent; `goal` optionally names the pot it grows.
 //   payments:   {'YYYY-MM': {billId: {amount, paidOn 'YYYY-MM-DD'}}}  the
 //               actual amount paid, editable after the fact (expected 400,
 //               paid 200)
-//   goals:      [{id, name, target, saved, by 'YYYY-MM'}]
+//   goals:      [{id, name, target (0 = open-ended pot), saved (starting
+//                balance), by 'YYYY-MM' | ''}]
+//   deposits:   [{id, date, goal, amount, note}]  one-off "+ Save" entries,
+//               kept as rows so a mistaken deposit can be deleted
 //
 // Same contract as the other config loaders: safe read, validate at the
 // boundary, a broken file yields the default store rather than a crash; a
@@ -35,6 +46,7 @@ const MAX_BILLS = 100;
 const MAX_CATEGORIES = 30;
 const MAX_GOALS = 20;
 const MAX_PAYMENT_MONTHS = 24;
+const MAX_DEPOSITS = 2000;
 const MAX_NOTE = 200;
 const MAX_NAME = 60;
 
@@ -48,10 +60,22 @@ const MIN_YEAR = 2000;
 const MAX_YEAR = 2100;
 // A payment can be recorded for at most this many months before/after now.
 const PAYMENT_WINDOW_MONTHS = 12;
-const KINDS = ['bill', 'subscription'];
+const KINDS = ['bill', 'subscription', 'saving'];
+const CAT_KINDS = ['planned', 'free'];
 const EVERY = ['month', 'year'];
 
-const DEFAULT_CATEGORIES = ['food', 'fuel', 'home', 'car', 'trackday', 'fun', 'health', 'other'];
+const DEFAULT_CATEGORIES = [
+  ['food', 'planned'],
+  ['fuel', 'planned'],
+  ['home', 'planned'],
+  ['car', 'free'],
+  ['trackday', 'free'],
+  ['eatout', 'free'],
+  ['snacks', 'free'],
+  ['fun', 'free'],
+  ['health', 'free'],
+  ['other', 'free'],
+];
 
 const defaultFile = () => paths.local(FILE_NAME);
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -62,11 +86,12 @@ function defaults() {
   return {
     currency: 'PLN',
     income: { amount: 0, payday: 1 },
-    categories: DEFAULT_CATEGORIES.map((id) => ({ id, name: '', limit: 0 })),
+    categories: DEFAULT_CATEGORIES.map(([id, kind]) => ({ id, name: '', kind, plan: 0 })),
     expenses: [],
     bills: [],
     payments: {},
     goals: [],
+    deposits: [],
   };
 }
 
@@ -147,21 +172,30 @@ function billRow(b, rowId) {
     every,
     month: m,
     category: b.category ? id(b.category) : '',
+    goal: b.goal ? id(b.goal) : '',
   };
 }
 
 function categoryRow(c, rowId) {
-  return { id: rowId, name: text(c.name ?? '', MAX_NAME), limit: amount(c.limit ?? 0, { allowZero: true }) };
+  // Migration from the {limit} shape: a limit was a plan in all but name.
+  const legacyLimit = c.kind === undefined && c.plan === undefined ? c.limit ?? 0 : null;
+  const plan = amount(legacyLimit ?? c.plan ?? 0, { allowZero: true });
+  const kind = legacyLimit !== null ? (plan > 0 ? 'planned' : 'free') : oneOf(c.kind, CAT_KINDS);
+  return { id: rowId, name: text(c.name ?? '', MAX_NAME), kind, plan };
 }
 
 function goalRow(g, rowId) {
   return {
     id: rowId,
     name: text(g.name, MAX_NAME, { required: true }),
-    target: amount(g.target),
+    target: amount(g.target ?? 0, { allowZero: true }),
     saved: amount(g.saved ?? 0, { allowZero: true }),
-    by: month(g.by),
+    by: g.by ? month(g.by) : '',
   };
+}
+
+function depositRow(d, rowId) {
+  return { id: rowId, date: date(d.date), goal: id(d.goal), amount: amount(d.amount), note: text(d.note ?? '', MAX_NOTE) };
 }
 
 /** Keeps the rows `shape` accepts; a bad row is dropped, not fatal. */
@@ -180,6 +214,23 @@ function cleanRows(list, shape, max) {
     if (out.length >= max) break;
   }
   return out;
+}
+
+/**
+ * Goals with the amounts of `dropped` payments ({month: {billId: {amount}}})
+ * added to their starting `saved`, for payments of saving bills linked to a
+ * goal - so a pot's total never shrinks when payment history goes away.
+ */
+function foldIntoGoals(b, dropped) {
+  const goalOf = new Map(b.bills.filter((x) => x.goal).map((x) => [x.id, x.goal]));
+  const add = {};
+  for (const row of Object.values(dropped)) {
+    for (const [billId, p] of Object.entries(row || {})) {
+      const g = goalOf.get(billId);
+      if (g && p && Number.isFinite(p.amount)) add[g] = (add[g] || 0) + p.amount;
+    }
+  }
+  return b.goals.map((g) => (add[g.id] ? { ...g, saved: round2(g.saved + add[g.id]) } : g));
 }
 
 function cleanPayments(raw, billIds) {
@@ -211,6 +262,8 @@ function normalize(raw) {
   }
   const categories = Array.isArray(raw.categories) ? cleanRows(raw.categories, categoryRow, MAX_CATEGORIES) : base.categories;
   const bills = cleanRows(raw.bills, billRow, MAX_BILLS);
+  const goals = cleanRows(raw.goals, goalRow, MAX_GOALS);
+  const goalIds = new Set(goals.map((g) => g.id));
   return {
     currency: 'PLN',
     income,
@@ -218,7 +271,8 @@ function normalize(raw) {
     expenses: cleanRows(raw.expenses, expenseRow, MAX_EXPENSES),
     bills,
     payments: cleanPayments(raw.payments, new Set(bills.map((b) => b.id))),
-    goals: cleanRows(raw.goals, goalRow, MAX_GOALS),
+    goals,
+    deposits: cleanRows(raw.deposits, depositRow, MAX_DEPOSITS).filter((d) => goalIds.has(d.goal)),
   };
 }
 
@@ -231,7 +285,7 @@ function loadBudget(file = defaultFile()) {
   }
 }
 
-const rowCount = (b) => ['categories', 'expenses', 'bills', 'goals'].reduce((n, k) => n + (Array.isArray(b && b[k]) ? b[k].length : 0), 0);
+const rowCount = (b) => ['categories', 'expenses', 'bills', 'goals', 'deposits'].reduce((n, k) => n + (Array.isArray(b && b[k]) ? b[k].length : 0), 0);
 
 /**
  * For writes: only a MISSING file means "start from the defaults". Any other
@@ -258,10 +312,18 @@ function loadForWrite(file) {
   return { budget, text, lossy };
 }
 
+/**
+ * A file next to the budget, still named *.local.json so the config/ gitignore
+ * rule covers it: life-budget.local.json -> life-budget.<tag>.local.json.
+ */
+function sibling(file, tag) {
+  return file.endsWith('.local.json') ? `${file.slice(0, -'.local.json'.length)}.${tag}.local.json` : `${file}.${tag}`;
+}
+
 /** Temp file + rename: a crash mid-write never leaves a truncated budget. */
 function save(next, file) {
   if (file === defaultFile()) paths.ensureUserDir();
-  const tmp = `${file}.${process.pid}.tmp`;
+  const tmp = sibling(file, `${process.pid}.tmp`);
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
   try {
     fs.renameSync(tmp, file);
@@ -297,6 +359,10 @@ function knownCategory(b, catId) {
   if (catId !== 'other' && !b.categories.some((c) => c.id === catId)) throw new Error('bad category');
 }
 
+function knownGoal(b, goalId) {
+  if (goalId && !b.goals.some((g) => g.id === goalId)) throw new Error('not found');
+}
+
 const OPS = {
   setIncome: (b, d) => ({ ...b, income: { amount: amount(d.amount, { allowZero: true }), payday: day(d.payday) } }),
 
@@ -318,15 +384,24 @@ const OPS = {
     return { ...b, expenses: b.expenses.filter((e) => e.id !== d.id) };
   },
 
-  saveBill: (b, d) => ({ ...b, bills: upsert(b.bills, billRow(d, targetId(b.bills, d)), MAX_BILLS) }),
+  saveBill: (b, d) => {
+    const row = billRow(d, targetId(b.bills, d));
+    // Only a saving grows a pot; a bill never carries a stale goal link.
+    const clean = row.kind === 'saving' ? row : { ...row, goal: '' };
+    knownGoal(b, clean.goal);
+    return { ...b, bills: upsert(b.bills, clean, MAX_BILLS) };
+  },
   deleteBill: (b, d) => {
     mustFind(b.bills, id(d.id));
     const payments = {};
+    const dropped = {};
     for (const [m, row] of Object.entries(b.payments)) {
       const rest = Object.fromEntries(Object.entries(row).filter(([k]) => k !== d.id));
+      if (row[d.id]) dropped[m] = { [d.id]: row[d.id] };
       if (Object.keys(rest).length) payments[m] = rest;
     }
-    return { ...b, bills: b.bills.filter((x) => x.id !== d.id), payments };
+    // A deleted saving bill's past payments stay in its pot.
+    return { ...b, goals: foldIntoGoals(b, dropped), bills: b.bills.filter((x) => x.id !== d.id), payments };
   },
   payBill: (b, d, nowMs) => {
     mustFind(b.bills, id(d.id));
@@ -334,7 +409,10 @@ const OPS = {
     const now = new Date(nowMs);
     const paidOn = d.paidOn ? date(d.paidOn) : `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
     const payments = { ...b.payments, [m]: { ...(b.payments[m] || {}), [d.id]: { amount: amount(d.amount, { allowZero: true }), paidOn } } };
-    return { ...b, payments: cleanPayments(payments, new Set(b.bills.map((x) => x.id))) };
+    // Months past the history cap are pruned; what they paid into a pot is kept as its starting amount.
+    const old = Object.keys(payments).sort().slice(0, -MAX_PAYMENT_MONTHS);
+    const dropped = Object.fromEntries(old.map((k) => [k, payments[k]]));
+    return { ...b, goals: foldIntoGoals(b, dropped), payments: cleanPayments(payments, new Set(b.bills.map((x) => x.id))) };
   },
   unpayBill: (b, d) => {
     const m = month(d.month);
@@ -352,9 +430,26 @@ const OPS = {
   },
 
   saveGoal: (b, d) => ({ ...b, goals: upsert(b.goals, goalRow(d, targetId(b.goals, d)), MAX_GOALS) }),
+  // The pot's deposits go with it; savings bills that fed it stay, unlinked.
   deleteGoal: (b, d) => {
     mustFind(b.goals, id(d.id));
-    return { ...b, goals: b.goals.filter((g) => g.id !== d.id) };
+    return {
+      ...b,
+      goals: b.goals.filter((g) => g.id !== d.id),
+      deposits: b.deposits.filter((x) => x.goal !== d.id),
+      bills: b.bills.map((x) => (x.goal === d.id ? { ...x, goal: '' } : x)),
+    };
+  },
+
+  addDeposit: (b, d) => {
+    const row = depositRow(d, newId());
+    mustFind(b.goals, row.goal);
+    if (b.deposits.length >= MAX_DEPOSITS) throw new Error('too many');
+    return { ...b, deposits: [...b.deposits, row] };
+  },
+  deleteDeposit: (b, d) => {
+    mustFind(b.deposits, id(d.id));
+    return { ...b, deposits: b.deposits.filter((x) => x.id !== d.id) };
   },
 };
 
@@ -368,7 +463,7 @@ function apply(op, data, file = defaultFile(), nowMs = Date.now()) {
   const { budget, text, lossy } = loadForWrite(file);
   const next = OPS[op](budget, data, nowMs);
   // This write would persist rows a hand edit broke: keep the original first.
-  if (lossy && text !== null) fs.writeFileSync(`${file}.bak`, text, 'utf8');
+  if (lossy && text !== null) fs.writeFileSync(sibling(file, 'bak'), text, 'utf8');
   return save(next, file);
 }
 

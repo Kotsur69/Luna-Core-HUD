@@ -275,10 +275,20 @@ contextBridge.exposeInMainWorld('lunacore', {
   // --- Life dashboard (src/lifeipc.js) ---
   // Local budget only. `op` is checked against main's fixed op table and the
   // payload re-validated there; nothing here reaches the network or a model.
+  // `month` ('YYYY-MM', optional) picks the budget period shown; main checks
+  // it and falls back to the current period on anything else.
   /** Promise<{ok, summary, budget} | {ok:false, reason}>. */
-  lifeBudget: () => ipcRenderer.invoke('life:budget'),
-  /** One change (addExpense, payBill, saveBill...). Same answer as lifeBudget. */
-  lifeBudgetDo: (op, data) => ipcRenderer.invoke('life:budget-do', { op, data }),
+  lifeBudget: (month) => ipcRenderer.invoke('life:budget', { month }),
+  /** One change (addExpense, payBill, saveBill...). Same answer as lifeBudget, plus `created`. */
+  lifeBudgetDo: (op, data, month) => ipcRenderer.invoke('life:budget-do', { op, data, month }),
+  // YAZIO (unofficial API, src/lifeyazio.js). The login goes one way: main
+  // stores it encrypted and never sends the email, password or a token back.
+  /** Promise<{ok, connected, body?} | {ok:false, connected, reason}>. force is throttled in main. */
+  lifeBody: (force = false) => ipcRenderer.invoke('life:body', { force: force === true }),
+  /** Promise<{ok, persisted} | {ok:false, reason}>. */
+  lifeBodyConnect: (email, password) => ipcRenderer.invoke('life:body-connect', { email, password }),
+  /** Forgets the stored YAZIO login. Promise<{ok}>. */
+  lifeBodyDisconnect: () => ipcRenderer.invoke('life:body-disconnect'),
 
   // --- Highlight extractor (batch clip trimmer) ---
   /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */

@@ -100,15 +100,49 @@ test('bill validation: yearly needs a month, kind/every are enums', () => {
   assert.throws(() => store.apply('payBill', { id: 'missing', month: '2026-10', amount: 1 }, f, NOW), /not found/);
 });
 
-test('categories: add with a limit, edit, delete', () => {
+test('categories: add with a kind and plan, edit, delete', () => {
   const f = file();
-  const b = store.apply('saveCategory', { name: 'Coffee', limit: 200 }, f, NOW);
+  const b = store.apply('saveCategory', { name: 'Coffee', kind: 'free', plan: 0 }, f, NOW);
   const cat = b.categories.find((c) => c.name === 'Coffee');
-  assert.equal(cat.limit, 200);
-  store.apply('saveCategory', { id: 'food', name: '', limit: 1500 }, f, NOW);
-  assert.equal(store.loadBudget(f).categories.find((c) => c.id === 'food').limit, 1500);
+  assert.deepEqual({ ...cat, id: 'x' }, { id: 'x', name: 'Coffee', kind: 'free', plan: 0 });
+  store.apply('saveCategory', { id: 'food', name: '', kind: 'planned', plan: 1500 }, f, NOW);
+  assert.deepEqual(store.loadBudget(f).categories.find((c) => c.id === 'food'), { id: 'food', name: '', kind: 'planned', plan: 1500 });
+  assert.throws(() => store.apply('saveCategory', { id: 'food', name: '', kind: 'weird', plan: 1 }, f, NOW), /bad value/);
   store.apply('deleteCategory', { id: cat.id }, f, NOW);
   assert.equal(store.loadBudget(f).categories.some((c) => c.id === cat.id), false);
+});
+
+test('old {limit} categories migrate: a limit becomes a planned envelope', () => {
+  const f = file();
+  fs.writeFileSync(f, JSON.stringify({ categories: [{ id: 'food', name: 'Food', limit: 1500 }, { id: 'fun', name: '', limit: 0 }] }));
+  assert.deepEqual(store.loadBudget(f).categories, [
+    { id: 'food', name: 'Food', kind: 'planned', plan: 1500 },
+    { id: 'fun', name: '', kind: 'free', plan: 0 },
+  ]);
+});
+
+test('a saving bill can feed a pot; a plain bill never keeps a goal link', () => {
+  const f = file();
+  const g = store.apply('saveGoal', { name: 'Investments', target: 0, saved: 0, by: '' }, f, NOW).goals[0];
+  const base = { name: 'Revolut', expected: 3000, dueDay: 10, every: 'month', month: 0, category: '' };
+  let b = store.apply('saveBill', { ...base, kind: 'saving', goal: g.id }, f, NOW);
+  assert.equal(b.bills[0].goal, g.id);
+  b = store.apply('saveBill', { ...base, id: b.bills[0].id, kind: 'bill', goal: g.id }, f, NOW);
+  assert.equal(b.bills[0].goal, '');
+  assert.throws(() => store.apply('saveBill', { ...base, kind: 'saving', goal: 'nope' }, f, NOW), /not found/);
+});
+
+test('deposits: add into a pot, delete one; deleting the pot takes its deposits', () => {
+  const f = file();
+  const g = store.apply('saveGoal', { name: 'Zanzibar', target: 15000, saved: 10000, by: '2026-12' }, f, NOW).goals[0];
+  let b = store.apply('addDeposit', { date: '2026-10-14', goal: g.id, amount: 500, note: '' }, f, NOW);
+  assert.equal(b.deposits.length, 1);
+  assert.throws(() => store.apply('addDeposit', { date: '2026-10-14', goal: 'nope', amount: 5 }, f, NOW), /not found/);
+  b = store.apply('addDeposit', { date: '2026-10-15', goal: g.id, amount: 100 }, f, NOW);
+  b = store.apply('deleteDeposit', { id: b.deposits[0].id }, f, NOW);
+  assert.deepEqual(b.deposits.map((d) => d.amount), [100]);
+  b = store.apply('deleteGoal', { id: g.id }, f, NOW);
+  assert.deepEqual(b.deposits, []);
 });
 
 test('savings goals: save and delete, by is YYYY-MM', () => {
@@ -144,7 +178,8 @@ test('a write that would drop hand-edited junk rows keeps a .bak of the original
   const raw = JSON.stringify({ income: { amount: 5000, payday: 10 }, expenses: [{ id: 'bad', date: 'never', amount: 5 }] });
   fs.writeFileSync(f, raw);
   store.apply('setIncome', { amount: 6000, payday: 10 }, f, NOW);
-  assert.equal(fs.readFileSync(`${f}.bak`, 'utf8'), raw);
+  // Named *.local.json so the config/ gitignore rule covers the backup too.
+  assert.equal(fs.readFileSync(f.replace(/\.local\.json$/, '.bak.local.json'), 'utf8'), raw);
 });
 
 test('the expense cap refuses instead of evicting history', () => {
@@ -189,4 +224,23 @@ test('a hand-edited file with junk rows keeps only valid rows', () => {
   assert.equal(b.income.amount, 5000);
   assert.deepEqual(b.expenses.map((e) => e.id), ['a1']);
   assert.deepEqual(b.bills, []);
+});
+
+test('a pot never shrinks: deleting its saving bill or pruning old months folds the payments into saved', () => {
+  const f = file();
+  const g = store.apply('saveGoal', { name: 'Investments', target: 0, saved: 100, by: '' }, f, NOW).goals[0];
+  const base = { name: 'Revolut', expected: 3000, dueDay: 10, kind: 'saving', goal: g.id, every: 'month', month: 0, category: '' };
+  let b = store.apply('saveBill', base, f, NOW);
+  const billId = b.bills[0].id;
+  // 25 months (a year either side of now) - one past the 24-month history cap.
+  for (let i = -12; i <= 12; i++) {
+    const d = new Date(2026, 9 + i, 1);
+    const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    b = store.apply('payBill', { id: billId, month: m, amount: 10 }, f, NOW);
+  }
+  assert.equal(Object.keys(b.payments).length, 24);
+  assert.equal(b.goals[0].saved, 110);
+  b = store.apply('deleteBill', { id: billId }, f, NOW);
+  assert.equal(b.goals[0].saved, 350);
+  assert.deepEqual(b.payments, {});
 });

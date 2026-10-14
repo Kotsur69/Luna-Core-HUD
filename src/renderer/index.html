@@ -1199,8 +1199,9 @@
   </div>
 
   <!-- ================= Life dashboard (Ctrl+Shift+N) ================= -->
-  <!-- modules/lifepanel.js. The columns are empty: lifemoney / lifebills /
-       lifeplan build them in JS on first open (all user text via textContent). -->
+  <!-- modules/lifepanel.js. Tabs, month switch, quick add bar and the tab view
+       are empty here and built in JS on first open (all user text via
+       textContent). -->
   <div id="life" class="palette mission-overlay life-overlay" tabindex="-1" hidden>
     <div class="palette__backdrop" data-life-close></div>
     <div class="palette__modal" role="dialog" aria-modal="true" data-i18n-aria="life.title" aria-label="Zycie">
@@ -1209,12 +1210,14 @@
         <span class="mission-overlay__heading" data-i18n="life.title">Zycie</span>
         <button type="button" class="libraries__closebtn" data-life-close data-i18n-title="libraries.close" data-i18n-aria="libraries.close" title="Zamknij" aria-label="Zamknij">×</button>
       </div>
-      <p id="life-status" class="hint mc-status life-status" role="status" aria-live="polite"></p>
-      <div class="mission-overlay__body life-overlay__body">
-        <div id="life-col-money" class="mission-overlay__col life-col"></div>
-        <div id="life-col-bills" class="mission-overlay__col life-col"></div>
-        <div id="life-col-plan" class="mission-overlay__col life-col"></div>
+      <div class="life-head">
+        <div id="life-tabs" class="life-tabs" role="tablist" data-i18n-aria="life.title" aria-label="Zycie"></div>
+        <div id="life-month" class="life-month"></div>
       </div>
+      <div id="life-quick" class="life-quick-wrap"></div>
+      <p id="life-status" class="hint mc-status life-status" role="status" aria-live="polite"></p>
+      <div id="life-view" class="life-view" role="tabpanel" tabindex="-1"></div>
+      <div id="life-toast" class="life-toast" role="status" aria-live="polite" hidden></div>
       <div class="palette__foot">
         <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd> <span data-i18n="mc.panel.toggle">przelacz</span></span>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>

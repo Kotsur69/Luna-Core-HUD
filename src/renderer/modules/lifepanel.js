@@ -1,10 +1,12 @@
 // ============================================================================
 // LunaCore - Life dashboard overlay (Ctrl+Shift+N)
 // ----------------------------------------------------------------------------
-// A full-screen overlay like Mission Control's, holding the Money columns
-// (lifemoney / lifebills / lifeplan). The columns are built on first open
-// and kept (their state lives in lifeui.js), so reopening is instant and a
-// half-typed expense survives a close.
+// A full-screen overlay like Mission Control's: the quick add bar on top
+// (always there - a Red Bull is two keystrokes and a click), a month switch
+// (◀ period ▶ / Today) and five tabs - Overview, Spending, Transactions,
+// Bills & Savings, Settings. Every tab renders from the one budget answer in
+// lifeui.js, so a change anywhere redraws the open tab at once. The shell is
+// built on first open and kept, so reopening is instant.
 //
 // Ctrl+Shift+N is matched on e.code ('KeyN'), not e.key - the physical key,
 // same rule as Ctrl+Shift+M. Nothing else in the renderer claims it, and
@@ -22,25 +24,147 @@
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { closeWithExit, cancelExit } from './motion.js';
-import { loadBudget, bindStatus, setStatus, money, shortDate, getState } from './lifeui.js';
-import { mountMoney, relabelMoney, focusMoney } from './lifemoney.js';
-import { mountBills, relabelBills, billsNeedingAttention } from './lifebills.js';
-import { mountPlan, relabelPlan } from './lifeplan.js';
+import {
+  el, iconButton, loadBudget, peekBudget, setMonth, bindStatus, setStatus, hideToast, money, shortDate, monthLabel, getState, onState,
+} from './lifeui.js';
+import { mountQuick, relabelQuick, focusQuick } from './lifequick.js';
+import { renderOverview } from './lifeoverview.js';
+import { renderSpending } from './lifespending.js';
+import { renderTx } from './lifetx.js';
+import { renderBills, billsNeedingAttention } from './lifebills.js';
+import { renderSettings } from './lifesettings.js';
 
 const REMIND_FIRST_MS = 8000;
 const REMIND_EVERY_MS = 6 * 60 * 60 * 1000;
 const REMIND_KEY = 'lunacore.life.reminded';
+const TAB_KEY = 'lunacore.life.tab';
+
+const TABS = [
+  ['overview', (root, s) => renderOverview(root, s, goTab)],
+  ['spending', renderSpending],
+  ['tx', renderTx],
+  ['bills', (root, s) => renderBills(root, s, goTab)],
+  ['settings', renderSettings],
+];
 
 const overlayEl = document.getElementById('life');
 let isOpen = false;
 let isBuilt = false;
 let returnFocus = null;
+let els = null;
+let tab = readTab();
+
+function readTab() {
+  try {
+    const saved = localStorage.getItem(TAB_KEY);
+    return TABS.some(([id]) => id === saved) ? saved : 'overview';
+  } catch {
+    return 'overview';
+  }
+}
+
+// --- tabs ---------------------------------------------------------------------
+
+function buildTabs() {
+  els.tabs.replaceChildren();
+  for (const [id] of TABS) {
+    const b = el('button', 'life-tab', t(`life.tab.${id}`));
+    b.type = 'button';
+    b.id = `life-tab-${id}`;
+    b.dataset.tab = id;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-controls', 'life-view');
+    b.addEventListener('click', () => goTab(id));
+    els.tabs.append(b);
+  }
+  paintTabs();
+}
+
+function paintTabs() {
+  for (const b of els.tabs.querySelectorAll('.life-tab')) {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  els.view.setAttribute('aria-labelledby', `life-tab-${tab}`);
+}
+
+function goTab(id) {
+  tab = id;
+  try {
+    localStorage.setItem(TAB_KEY, id);
+  } catch {
+    // Storage unavailable: the tab just is not remembered.
+  }
+  paintTabs();
+  renderView();
+  els.view.scrollTop = 0;
+}
+
+function renderView() {
+  const state = getState();
+  if (!els || !state) return;
+  const render = TABS.find(([id]) => id === tab)[1];
+  render(els.view, state);
+}
+
+// --- month switch -------------------------------------------------------------
+
+function shiftMonth(ym, n) {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function renderMonth() {
+  const state = getState();
+  if (!els || !state) return;
+  const s = state.summary;
+  const label = el('span', 'life-month__label');
+  label.append(el('span', 'life-month__name', monthLabel(s.month, 'long')), el('span', 'life-month__range', `${shortDate(s.period.start)} – ${shortDate(s.period.end)}`));
+  const go = (n) => () => setMonth(shiftMonth(s.month, n));
+  const parts = [iconButton('◀', 'life.month.prev', go(-1)), label, iconButton('▶', 'life.month.next', go(1))];
+  if (!s.period.isCurrent) {
+    const back = el('button', 'life-btn', t('life.month.today'));
+    back.type = 'button';
+    back.addEventListener('click', () => setMonth(null));
+    parts.push(back);
+  }
+  els.month.replaceChildren(...parts);
+  els.month.classList.toggle('is-other', !s.period.isCurrent);
+}
+
+// --- shell ----------------------------------------------------------------------
+
+function onTabKey(e) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+  const i = TABS.findIndex(([id]) => id === tab);
+  let next;
+  if (e.key === 'ArrowLeft') next = (i + TABS.length - 1) % TABS.length;
+  else if (e.key === 'ArrowRight') next = (i + 1) % TABS.length;
+  else next = e.key === 'Home' ? 0 : TABS.length - 1;
+  goTab(TABS[next][0]);
+  els.tabs.querySelector(`[data-tab="${TABS[next][0]}"]`).focus();
+  e.preventDefault();
+}
 
 function build() {
-  bindStatus(document.getElementById('life-status'));
-  mountMoney(document.getElementById('life-col-money'));
-  mountBills(document.getElementById('life-col-bills'));
-  mountPlan(document.getElementById('life-col-plan'));
+  els = {
+    tabs: document.getElementById('life-tabs'),
+    month: document.getElementById('life-month'),
+    quick: document.getElementById('life-quick'),
+    view: document.getElementById('life-view'),
+  };
+  bindStatus(document.getElementById('life-status'), document.getElementById('life-toast'));
+  buildTabs();
+  mountQuick(els.quick);
+  onState(() => {
+    renderMonth();
+    renderView();
+  });
+  // Arrow keys move between tabs (roving tabindex, like a native tab strip).
+  els.tabs.addEventListener('keydown', onTabKey);
   isBuilt = true;
 }
 
@@ -52,13 +176,14 @@ async function open() {
   if (!isBuilt) build();
   overlayEl.hidden = false;
   setStatus('');
-  focusMoney();
+  focusQuick();
   await loadBudget();
 }
 
 function close() {
   if (!isOpen) return;
   isOpen = false;
+  hideToast();
   closeWithExit(overlayEl);
   if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
   returnFocus = null;
@@ -89,11 +214,14 @@ function writeReminded(map) {
 }
 
 async function remind() {
-  const res = await loadBudget();
-  if (!res.ok || typeof Notification === 'undefined') return;
+  // Reminders are about today, so they always read the current period - and
+  // without redrawing the panel, which may hold a half-typed form.
+  if (typeof Notification === 'undefined') return;
+  const res = await peekBudget();
+  if (!res.ok) return;
   const day = new Date().toDateString();
   const seen = readReminded();
-  const due = billsNeedingAttention(getState().summary).filter((b) => seen[`${b.id}:${b.dueDate}`] !== day);
+  const due = billsNeedingAttention(res.summary).filter((b) => seen[`${b.id}:${b.dueDate}`] !== day);
   if (!due.length) return;
   const lines = due.map((b) => t(`life.remind.${b.status}`, { name: b.name, amount: money(b.expected), date: shortDate(b.dueDate) }));
   const note = new Notification(t('life.remind.title', { n: due.length }), { body: lines.join('\n') });
@@ -114,9 +242,10 @@ setTimeout(() => {
 
 onLangChange(() => {
   if (!isBuilt) return;
-  relabelMoney();
-  relabelBills();
-  relabelPlan();
+  buildTabs();
+  relabelQuick();
+  renderMonth();
+  renderView();
 });
 
 overlayEl.addEventListener('click', (e) => {
