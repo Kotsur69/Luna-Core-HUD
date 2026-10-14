@@ -26,6 +26,9 @@ under *Open questions*.
 
 ## ⏸ Resume here (last session 2026-10-14)
 
+- **Next workstream: Cloud sync + iPhone companion** — confirmed plan in
+  [`docs/CLOUD_SYNC_PLAN.md`](docs/CLOUD_SYNC_PLAN.md) (Supabase replaces the
+  Syncthing folder; PWA on Vercel). Start at its "Next session: start here".
 - **Active workstream: W3+ Life Dashboard** (Ctrl+Shift+N). Phase 2 Money
   shipped in `393c07d`; the **budget redesign (5 buckets, tabs, charts,
   undo everywhere)** landed after it - see "Phase 2b" in the W3+ section.
