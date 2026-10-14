@@ -30,14 +30,20 @@ under *Open questions*.
   shipped in `393c07d`; the **budget redesign (5 buckets, tabs, charts,
   undo everywhere)** landed after it - see "Phase 2b" in the W3+ section.
   All W3+ decisions are recorded there - don't re-ask them.
-- **Next: phase 4 YAZIO** (Mati: "Budget first, YAZIO after"). Main side is
-  done: `src/lifeyazio.js` (own client - the npm `yazio` package is broken;
-  API `https://yzapi.yazio.com/v15`), `life:body`, `life:body-connect`,
-  `life:body-disconnect` in `lifeipc.js`, preload `lifeBody*`; the login is
-  safeStorage-encrypted in `yazio-cred.local.json`, the legacy plain
-  `config/yazio.local.json` is read once. **TODO:** renderer `lifebody.js`
-  (a Body tab; password field `type=password`, cleared after connect), i18n
-  `life.body.*`, `test/lifeyazio.test.js`.
+- **Phase 4 YAZIO ✅ (renderer).** Body tab (`lifebody.js` + pure
+  `lifebodyview.js`) between Bills & Savings and Settings: kcal left hero,
+  macros, steps / water / weight / 7-day avg KPIs, 7-day kcal bars with the
+  goal line, weight start → goal progress, week stats. Connect form
+  (`type=password`, cleared after every attempt), Refresh (main throttles a
+  forced refresh to 1 per 15 s), Disconnect (two clicks). Month switch hides
+  on this tab. Tests: `test/lifeyazio.test.js`, `test/lifebodyview.test.js`.
+  Security review: no CRITICAL/HIGH. Fixed: a failed fetch answers its
+  error for 15 s even when forced, a stored login YAZIO refuses is never
+  retried until reconnect (no account lockout), parallel 401s share one
+  login, a connect/disconnect drops in-flight fetches of the old login,
+  weigh-in date shape-checked, logs carry only error codes.
+  **Not yet probed with Mati's real account** - first connect is his; if the
+  tab says "YAZIO changed its API", fix `pickSummary` in `src/lifeyazio.js`.
 - Then Mati picks: 1 check-in + habits · 3 productivity % + W4 goals · 5
   weekly review + Sunday email.
 - **Owed from phase 2:** bill due dates into Google Calendar (needs a
@@ -261,7 +267,7 @@ of this. Money data stays local (`config/life-budget.local.json`, never
 sent to a model except the weekly category totals).
 
 **W3+ phases** (each shippable): 1 shell + check-in + habits · **2 Money ✅**
-· 3 productivity % + W4 goals + "now" strip · 4 YAZIO (probe live first) ·
+· 3 productivity % + W4 goals + "now" strip · **4 YAZIO ✅** (Body tab) ·
 5 weekly review + correlations + Sunday email.
 
 **Phase 2 — Money ✅ (2026-10-14).** Ctrl+Shift+N (+ chip) opens the Life

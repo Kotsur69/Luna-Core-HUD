@@ -82,7 +82,7 @@ function view(budget, nowMs, month) {
 function yazioReason(err) {
   const reason = err && err.reason;
   if (YAZIO_REASONS.has(reason)) return reason;
-  console.error('[life] yazio failed:', err && err.message);
+  console.error('[life] yazio failed:', (err && (err.code || err.name)) || 'error');
   return 'failed';
 }
 

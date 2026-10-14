@@ -40,6 +40,11 @@ const CACHE_MS = 5 * 60 * 1000;
 const HISTORY_DAYS = 7;
 // Refresh the access token this long before YAZIO says it expires.
 const EXPIRY_SLACK_MS = 60 * 1000;
+// After a failed fetch, every call within this gap - forced or not - gets the
+// same error back without touching the network (a Refresh button spammed
+// against a down API must not turn into 8 requests per click).
+const RETRY_GAP_MS = 15 * 1000;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}/;
 const MAX_EMAIL = 254;
 const MAX_PASSWORD = 200;
 const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
@@ -142,6 +147,13 @@ function createYazio(deps = {}) {
   let token = null; // { access, refresh, expiresAt }
   let cache = null; // { at, body }
   let inflight = null;
+  let loginInflight = null;
+  // A stored login YAZIO refused: never retried until connect(), so a changed
+  // password cannot get the account locked by repeated attempts.
+  let blocked = null;
+  let lastFail = null; // { at, err }
+  // Bumped by connect/disconnect: a fetch started for an older login is dropped.
+  let gen = 0;
 
   function loadCreds() {
     if (loaded) return creds;
@@ -183,7 +195,7 @@ function createYazio(deps = {}) {
       fs.renameSync(tmp, credFile());
       return true;
     } catch (err) {
-      console.error('[yazio] could not store login:', err && err.message);
+      console.error('[yazio] could not store login:', (err && (err.code || err.name)) || 'error');
       return false;
     }
   }
@@ -235,8 +247,7 @@ function createYazio(deps = {}) {
 
   const login = (c) => grant({ grant_type: 'password', username: c.email, password: c.password });
 
-  async function ensureToken() {
-    if (token && token.expiresAt - EXPIRY_SLACK_MS > now()) return;
+  async function renewToken() {
     if (token && token.refresh) {
       try {
         token = await grant({ grant_type: 'refresh_token', refresh_token: token.refresh });
@@ -249,14 +260,27 @@ function createYazio(deps = {}) {
     token = await login(creds);
   }
 
+  /** One login at a time: parallel callers (8 per fetch) share it. */
+  function ensureToken() {
+    if (token && token.expiresAt - EXPIRY_SLACK_MS > now()) return Promise.resolve();
+    if (!loginInflight) {
+      loginInflight = renewToken().finally(() => {
+        loginInflight = null;
+      });
+    }
+    return loginInflight;
+  }
+
   async function get(path) {
     await ensureToken();
+    const sent = token.access;
     try {
-      return await request(path, { headers: { Authorization: `Bearer ${token.access}` } });
+      return await request(path, { headers: { Authorization: `Bearer ${sent}` } });
     } catch (err) {
       if (err.reason !== 'unauthorized') throw err;
       // Revoked early (another device logged out?): one fresh login, one retry.
-      token = null;
+      // Only the first caller drops the token; the rest join its login.
+      if (token && token.access === sent) token = null;
       await ensureToken();
       return request(path, { headers: { Authorization: `Bearer ${token.access}` } });
     }
@@ -277,7 +301,7 @@ function createYazio(deps = {}) {
     ]);
     const picked = summaries.map(pickSummary);
     const lastWeighIn =
-      weight && typeof weight === 'object' && num(weight.value) !== null && typeof weight.date === 'string'
+      weight && typeof weight === 'object' && num(weight.value) !== null && typeof weight.date === 'string' && DATE_RE.test(weight.date)
         ? { value: weight.value, date: weight.date.slice(0, 10) }
         : null;
     return {
@@ -296,7 +320,7 @@ function createYazio(deps = {}) {
     try {
       fs.rmSync(legacyFile(), { force: true });
     } catch (err) {
-      console.error('[yazio] could not remove plaintext login file:', err && err.message);
+      console.error('[yazio] could not remove plaintext login file:', (err && (err.code || err.name)) || 'error');
     }
   }
 
@@ -308,16 +332,28 @@ function createYazio(deps = {}) {
   /** Today + the last week. Cached for 5 minutes unless `force`. */
   async function body({ force = false } = {}) {
     if (!loadCreds()) throw new YazioError('not-connected');
+    if (blocked) throw blocked;
     if (!force && cache && now() - cache.at < CACHE_MS) return cache.body;
+    if (lastFail && now() - lastFail.at < RETRY_GAP_MS) throw lastFail.err;
     if (inflight) return inflight;
+    const started = gen;
     inflight = fetchBody()
       .then((b) => {
+        if (started !== gen) return b; // the login changed meanwhile
         cache = { at: now(), body: b };
+        lastFail = null;
         finishImport();
         return b;
       })
+      .catch((err) => {
+        if (started === gen) {
+          lastFail = { at: now(), err };
+          if (err.reason === 'bad-login') blocked = err;
+        }
+        throw err;
+      })
       .finally(() => {
-        inflight = null;
+        if (started === gen) inflight = null;
       });
     return inflight;
   }
@@ -326,27 +362,42 @@ function createYazio(deps = {}) {
   async function connect(c) {
     if (!validCreds(c)) throw new YazioError('bad-login');
     const next = { email: c.email, password: c.password };
-    token = await login(next);
+    const nextToken = await login(next);
+    reset();
+    token = nextToken;
     creds = next;
     loaded = true;
     fromLegacy = false;
+    const persisted = saveCreds(next);
+    // Not saved: an older login left on disk would come back after a restart.
+    if (!persisted) removeFile(credFile());
+    return { persisted };
+  }
+
+  /** Forgets every per-login state; in-flight fetches of the old login are dropped. */
+  function reset() {
+    gen += 1;
+    token = null;
     cache = null;
-    return { persisted: saveCreds(next) };
+    inflight = null;
+    blocked = null;
+    lastFail = null;
+  }
+
+  function removeFile(file) {
+    try {
+      fs.rmSync(file, { force: true });
+    } catch (err) {
+      console.error('[yazio] could not remove login file:', (err && (err.code || err.name)) || 'error');
+    }
   }
 
   function disconnect() {
+    reset();
     creds = null;
-    token = null;
-    cache = null;
     loaded = true;
     fromLegacy = false;
-    for (const file of [credFile(), legacyFile()]) {
-      try {
-        fs.rmSync(file, { force: true });
-      } catch (err) {
-        console.error('[yazio] could not remove login file:', err && err.message);
-      }
-    }
+    for (const file of [credFile(), legacyFile()]) removeFile(file);
   }
 
   return { status, body, connect, disconnect };

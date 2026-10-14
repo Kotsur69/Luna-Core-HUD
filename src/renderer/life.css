@@ -396,3 +396,29 @@
   .life-toast { animation: none; }
   .life-btn:active, .life-icon-btn:active, .life-chip-btn:active, .life-tab:active { transform: none; }
 }
+
+/* ---- Body tab (YAZIO, modules/lifebody.js) ------------------------------- */
+.life-body { display: flex; flex-direction: column; gap: var(--space-6); }
+.life-body__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.life-body__meta { margin: 0; font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.life-body__acts { display: flex; gap: var(--space-3); }
+.life-body__alert {
+  margin: 0;
+  padding: var(--space-3) var(--space-5);
+  border: var(--border-w) solid var(--edge);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+  font-size: var(--fs-sm);
+}
+.life-body__alert.is-bad { border-left-color: var(--bad); }
+.life-body__connect { max-width: 560px; }
+.life-body__note { margin: 0; min-height: 1.4em; font-size: var(--fs-sm); color: var(--text-dim); }
+.life-body__note.is-bad { color: var(--bad); }
+.life-body__hero .life-bar { margin-top: var(--space-2); }
+.life-body__big { margin: 0; font-size: var(--fs-xl); font-weight: 800; }
+.life-body__days .life-row { padding-block: var(--space-2); }
+.life-kpis--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.life-kpi__value.is-good { color: var(--good); }
+.life-month[hidden] { display: none; }
+@media (max-width: 1000px) { .life-kpis--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
