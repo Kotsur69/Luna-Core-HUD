@@ -17,11 +17,33 @@ under *Open questions*.
 > workstream in one AskUserQuestion round, verify any external tool live
 > (install + probe it, don't trust its docs), and tell me the plan in five
 > lines. Then build it TDD-first, run the full `npm test`, smoke-test the
-> panel in the running app over CDP (screenshot), run `ecc:security-reviewer`
+> panel in the real app with the in-process Electron wrapper (screenshot -
+> see *Gotchas W3+*; CDP ports don't work here), run `ecc:security-reviewer`
 > on anything touching IPC / preload / network / spawned processes, fix
 > CRITICAL+HIGH, update this file (mark the workstream ✅, move learnings into
 > *Gotchas*), and commit + push the explicit file list (never `git add -A`,
 > leave other sessions' hunks out). Talk to me in the language I write in.
+
+## ⏸ Resume here (last session 2026-10-14)
+
+- **Active workstream: W3+ Life Dashboard** (Ctrl+Shift+N). Phase 2 Money
+  shipped in `393c07d` (pushed). All W3+ decisions are recorded in its
+  section below - don't re-ask them.
+- **Next: Mati picks the phase** - 1 shell + daily check-in (sleep / energy,
+  first open of the day) + habits with pre-filled suggestions · 3
+  productivity % (25/25/25/25 + sliders) + W4 weekly goals + "now" strip ·
+  4 YAZIO · 5 weekly review + correlations + Sunday email (English, with
+  costs). Ask which one at the start.
+- **YAZIO needs Mati first:** he creates `config/yazio.local.json`
+  (`{"email","password"}`, gitignored). Then probe the unofficial npm
+  `yazio` client live, read-only (today's kcal, weight) before any design;
+  the finished feature moves the password into `safeStorage` and deletes the file.
+- **Owed from phase 2:** bill due dates into Google Calendar (needs a
+  recurrence field in `gcal.createEvent`); one boot-time console error
+  ("Cannot read properties of null (reading 'appendChild')", misattributed to
+  `preload.js:19`) seen in the smoke wrapper - check whether it predates
+  `393c07d` before chasing it.
+- Mati has not entered real budget data yet (smoke data was deleted).
 
 ---
 
