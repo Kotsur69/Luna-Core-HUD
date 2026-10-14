@@ -187,6 +187,8 @@ week. Phase 3 then removes the folder transport, `sharedDir`, and SyncTrayzor.
 
 - Steps 1–2 of "What Mati does himself" are done: GitHub OAuth App "LunaCore",
   provider enabled in Supabase, redirect allow-list `http://127.0.0.1:*/callback`.
+  Mati's account exists (first login 2026-10-14); **sign-ups are off**
+  (`disable_signup: true` verified), anonymous sign-ins and manual linking off.
 - Applied SQL = `supabase/migrations/` (differs from the sketch above:
   policies `to authenticated` with `(select auth.uid())`, `push_units` is
   plpgsql with `search_path = ''`, rejects unknown scopes and > 500 units,
@@ -207,5 +209,4 @@ week. Phase 3 then removes the folder transport, `sharedDir`, and SyncTrayzor.
 ## Next session: start here
 
 1. Re-read this file. Check `git log` for anything newer touching `lifesync.js` / `todosync.js`.
-2. Confirm "Allow new users to sign up" is off (`/auth/v1/settings` → `disable_signup: true`).
-3. Ask the candidates question (section A), then `/plan` phase 2 in detail.
+2. Ask the candidates question (section A), then `/plan` phase 2 in detail.
