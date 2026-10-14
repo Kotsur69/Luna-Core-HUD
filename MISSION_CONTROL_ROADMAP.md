@@ -45,8 +45,11 @@ under *Open questions*.
   retried until reconnect (no account lockout), parallel 401s share one
   login, a connect/disconnect drops in-flight fetches of the old login,
   weigh-in date shape-checked, logs carry only error codes.
-  **Not yet probed with Mati's real account** - first connect is his; if the
-  tab says "YAZIO changed its API", fix `pickSummary` in `src/lifeyazio.js`.
+  **Verified with Mati's real account 2026-10-14 - "works perfectly".** If
+  the tab ever says "YAZIO changed its API", fix `pickSummary` in
+  `src/lifeyazio.js`.
+- **Order (Mati, 2026-10-14):** cloud sync first (phases 2–3), then the
+  morning brief (W6) and weekly review (W3+ phase 5), which build on it.
 - Then Mati picks: 1 check-in + habits · 3 productivity % + W4 goals · 5
   weekly review + Sunday email.
 - **Owed from phase 2:** bill due dates into Google Calendar (needs a

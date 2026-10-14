@@ -45,7 +45,13 @@ packaged build (`src/paths.js` → `paths.local()`).
 | `missioncontrol.local.json` | `config` | `mc:rules` (whole doc) | Inbox / Mission Control rules. Not on KT-PC-LLM yet; create on first write. |
 | `mission-projects.local.json` | `config` | `proj:class:<projectKey>`, `proj:pinned` | `classes` (work/fun/other) + `pinned`. **`sharedDir` stays per machine** and is removed in phase 3. |
 
-**Candidates — ask Mati at the start of phase 2** (machine-independent content,
+**Candidates — answered 2026-10-14:** sync `prompts.local.json`,
+`cheatsheets.local.json`, `libraries.local.json`, `rates.local.json` (whole
+doc, newest wins, scope `config`, keys `doc:<file>`). **Not synced:** layouts,
+themes, scratchpad, and no `ui.local.json` keys at all. Original question
+kept below for reference.
+
+~~Candidates — ask Mati at the start of phase 2~~ (machine-independent content,
 whole-doc newest-wins in scope `config`): `prompts.local.json`,
 `cheatsheets.local.json`, `layouts.local.json`, `themes.local.json`,
 `libraries.local.json`, `rates.local.json`, `scratchpad.local.md`, and a whitelist of `ui.local.json` keys (`theme`, `lang`,
@@ -206,7 +212,51 @@ week. Phase 3 then removes the folder transport, `sharedDir`, and SyncTrayzor.
   **off**: migrations are applied via MCP, a deploy would re-run them.
 - Unrelated, owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.
 
+## Phase 2 — detailed plan (2026-10-14, shown to Mati; build next session)
+
+Key finding: `lifesync.js` and `todosync.js` already merge **peers** of a fixed
+shape — life: `{units: [{k, v, u}], gone: {k: t}}`; to-dos:
+`{<projectKey>: {items: [todo + u], gone: {<at>: t}}}`. The cloud only has to
+produce that same shape from pulled rows, so the merge rules stay untouched.
+
+**Split (each shippable):**
+- **2a — login + budget + to-dos** (the core).
+- **2b — config scope:** `mc:rules`, `news:source:<id>` / `news:topic:<id>`,
+  `proj:class:<key>` / `proj:pinned`, and whole docs `doc:prompts`,
+  `doc:cheatsheets`, `doc:libraries`, `doc:rates`.
+- **2c — snapshots:** ledger (combined weekly limit), news briefing, YAZIO.
+
+**2a pieces:**
+
+| Piece | What |
+|---|---|
+| `src/cloudauth.js` | `createClient` with `flowType: 'pkce'`; storage adapter backed by `cloud-session.local.json`, encrypted with `safeStorage` (pattern: `lifeyazio.js`); `autoRefreshToken` on. Login = the probed flow (loopback `127.0.0.1:0/callback`, 3 min timeout, server closed after). Logout clears the file. |
+| `src/cloudsync.js` | Async shell around the existing **synchronous** `syncOnce` / `syncAll`: pull (`rev > cursor`, pages of 1000) → in-memory + on-disk mirror of rows → run the sync with the mirror as an extra peer → push what it published. Realtime event → debounced pull. Fallback poll 60 s. |
+| State file | `cloud-sync.local.json` = `{v, cursor: {life, todos, config}, pushed: {scope: {key: u}}, mirror: {scope: {key: {v, u, d, machine}}}}`. |
+| Push = diff, no queue | After each local sync: push every unit whose `u` > `pushed[key]`; mark pushed only after the RPC succeeds. Offline → the next run pushes what is still missing. Batches of ≤ 500 (server cap) — the first upload of the whole budget takes several calls. |
+| Row ↔ peer mapping | life: row key = unit key; tombstone = `{v: null, u: t, d: t}` → `gone[k] = d`. to-dos: row key = `<projectKey>:<at>` (split at the **last** `:`, `at` is digits). All rows, own machine included, form one peer (merge takes max `u`; own rows restore a lost local file). |
+| `lifesync.js` / `todosync.js` | Smallest change: new deps `extraPeers()` and `onPublish(doc)`; `sharedDir` empty no longer returns early when the cloud is on. Existing tests stay green. |
+| `src/cloudipc.js` + `preload.js` | `cloud:status`, `cloud:login`, `cloud:logout`, `cloud:syncNow`. No token ever reaches the renderer; validate in main. **`ecc:security-reviewer` before commit.** Wire in `main.js` with one `register` call (file is past the size guideline). |
+| UI | "Cloud" card: logged in as, last sync, units not yet pushed, Sync now, Log out. `pl` + `en` strings. |
+| Config | `config/cloud.local.json` = `{url, publishableKey}` (gitignored). No file → cloud off, folder sync as today. Values: `https://phkigyuhvbanadwmxqqs.supabase.co`, `sb_publishable_ovwDzfpECqXNVyME9FMrhQ_7uSaZovy` (public by design). |
+
+**Changed from the original plan:** no week of Syncthing in parallel — it was
+never paired with another PC, so there is nothing to protect. The folder code
+keeps working until phase 3 removes it once the cloud is proven on two PCs.
+
+**Tests first (TDD):** rows → life peer / to-do peer; doc → units-to-push diff
+against `pushed`; tombstones both ways; to-do key split with `local:home` and
+`github.com/x/y`; paging pull with a fake client; cursor + `pushed` persisted
+only after success; `cloud.local.json` validation (bad URL / missing key →
+off); `lifesync` / `todosync` with `extraPeers`; future-dated `u` (> now + 1
+day) from the cloud rejected by the existing `validStamp`.
+
+**Risks:** device clock far ahead wins every conflict (mitigated by
+`validStamp`); first upload size (batched); `safeStorage` unavailable → no
+login, show why.
+
 ## Next session: start here
 
 1. Re-read this file. Check `git log` for anything newer touching `lifesync.js` / `todosync.js`.
-2. Ask the candidates question (section A), then `/plan` phase 2 in detail.
+2. Mati has seen the phase 2 plan above; get his "go", then build **2a**
+   TDD-first, smoke-test in the real app, security review, commit + push.
