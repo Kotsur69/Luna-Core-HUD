@@ -3,8 +3,8 @@
 // ----------------------------------------------------------------------------
 // A full-screen overlay like Mission Control's: the quick add bar on top
 // (always there - a Red Bull is two keystrokes and a click), a month switch
-// (◀ period ▶ / Today) and six tabs - Overview, Spending, Transactions,
-// Bills & Savings, Body (YAZIO, lifebody.js), Settings. Every tab renders from the one budget answer in
+// (◀ period ▶ / Today) and seven tabs - Overview, Spending, Transactions,
+// Bills & Savings, Year (lifeyear.js), Body (YAZIO, lifebody.js), Settings. Every tab renders from the one budget answer in
 // lifeui.js, so a change anywhere redraws the open tab at once. The shell is
 // built on first open and kept, so reopening is instant.
 //
@@ -34,6 +34,7 @@ import { renderTx } from './lifetx.js';
 import { renderBills, billsNeedingAttention } from './lifebills.js';
 import { renderSettings } from './lifesettings.js';
 import { renderBody } from './lifebody.js';
+import { renderYear } from './lifeyear.js';
 
 const REMIND_FIRST_MS = 8000;
 const REMIND_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -45,6 +46,7 @@ const TABS = [
   ['spending', renderSpending],
   ['tx', renderTx],
   ['bills', (root, s) => renderBills(root, s, goTab)],
+  ['year', renderYear],
   ['body', renderBody],
   ['settings', renderSettings],
 ];
@@ -90,8 +92,9 @@ function paintTabs() {
     b.tabIndex = on ? 0 : -1;
   }
   els.view.setAttribute('aria-labelledby', `life-tab-${tab}`);
-  // The budget period means nothing on the Body tab (YAZIO is always today).
-  els.month.hidden = tab === 'body';
+  // The budget period means nothing on the Body tab (YAZIO is always today);
+  // the Year tab has its own year switch.
+  els.month.hidden = tab === 'body' || tab === 'year';
 }
 
 function goTab(id) {

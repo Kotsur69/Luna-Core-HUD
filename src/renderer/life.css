@@ -294,8 +294,24 @@
 .life-bill__diff { font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .life-bill__diff.is-good { color: var(--good); }
 .life-bill__diff.is-warn { color: var(--warn); }
-.life-bill.is-overdue { border-color: color-mix(in srgb, var(--bad) 60%, var(--edge)); }
-.life-bill.is-soon { border-color: color-mix(in srgb, var(--warn) 55%, var(--edge)); }
+/* Unpaid bills carry a red accent that deepens with urgency: a hint while
+   due, a little more when soon, full strength once overdue. The chip still
+   spells the status out. */
+.life-bill.is-due {
+  border-color: color-mix(in srgb, var(--bad) 22%, var(--edge));
+  background: color-mix(in srgb, var(--bad) 4%, var(--surface-panel-2));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--bad) 35%, transparent);
+}
+.life-bill.is-soon {
+  border-color: color-mix(in srgb, var(--bad) 32%, var(--edge));
+  background: color-mix(in srgb, var(--bad) 6%, var(--surface-panel-2));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--bad) 55%, transparent);
+}
+.life-bill.is-overdue {
+  border-color: color-mix(in srgb, var(--bad) 70%, var(--edge));
+  background: color-mix(in srgb, var(--bad) 13%, var(--surface-panel-2));
+  box-shadow: inset 3px 0 0 var(--bad);
+}
 .life-bill.is-paid .life-row__title { color: var(--text-dim); }
 /* Status is always spelled out; the chip colour only reinforces it. */
 .life-chip {
@@ -309,7 +325,7 @@
 .life-chip--paid { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--edge)); }
 .life-chip--overdue { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, var(--edge)); }
 .life-chip--soon { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--edge)); }
-.life-chip--due { color: var(--text-dim); }
+.life-chip--due { color: color-mix(in srgb, var(--bad) 45%, var(--text-dim)); border-color: color-mix(in srgb, var(--bad) 30%, var(--edge)); }
 /* Inline pay / deposit editor: spans the whole row under it. */
 .life-pay {
   grid-column: 1 / -1;
@@ -422,3 +438,22 @@
 .life-kpi__value.is-good { color: var(--good); }
 .life-month[hidden] { display: none; }
 @media (max-width: 1000px) { .life-kpis--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---- Year tab (modules/lifeyear.js) -------------------------------------- */
+.life-year__switch { align-self: flex-start; }
+.life-kpi__value.is-bad, .life-table td.is-bad, .life-fact__value.is-bad { color: var(--bad); }
+.life-facts { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+@media (max-width: 700px) { .life-facts { grid-template-columns: 1fr; } }
+.life-fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+  min-width: 0;
+}
+.life-fact__label { font-size: var(--fs-xs); font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.life-fact__value { font-size: var(--fs-md); font-weight: 700; text-transform: capitalize; }
+.life-fact__note { font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }

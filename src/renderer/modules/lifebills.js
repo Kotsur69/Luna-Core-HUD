@@ -264,16 +264,29 @@ function savingsCard(s, goTab) {
   return card.sec;
 }
 
+function forgetEditorsOnNewMonth(month) {
+  if (month === shownMonth) return;
+  shownMonth = month;
+  paying = null;
+  depositFor = null;
+  draft = '';
+}
+
+/**
+ * One bill row with its Pay button and inline pay editor, for another tab
+ * (the Overview's upcoming bills). `redraw` rebuilds that tab.
+ */
+export function billRow(summary, b, redraw) {
+  rerender = redraw;
+  forgetEditorsOnNewMonth(summary.month);
+  return billLine(b);
+}
+
 /** Rebuilds the Bills & Savings tab into `root`; `goTab(id)` switches tabs. */
 export function renderBills(root, state, goTab) {
   rerender = () => renderBills(root, getState(), goTab);
   const s = state.summary;
-  if (s.month !== shownMonth) {
-    shownMonth = s.month;
-    paying = null;
-    depositFor = null;
-    draft = '';
-  }
+  forgetEditorsOnNewMonth(s.month);
   const grid = el('div', 'life-grid life-grid--2');
   const left = el('div', 'life-stack');
   left.append(billsCard(s, goTab), subsCard(s));

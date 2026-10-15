@@ -19,13 +19,14 @@
 //
 // All money is rounded to grosze (2 decimals) at every sum. Dates are local
 // 'YYYY-MM-DD' strings, compared as strings. History-based numbers (usual
-// spend, trend, week/month breakdown) live in lifebudgettrend.js; period and
-// date helpers in lifebudgetdates.js.
+// spend, trend, week/month breakdown) live in lifebudgettrend.js, the Year
+// tab's in lifebudgetyear.js; period and date helpers in lifebudgetdates.js.
 // ============================================================================
 
 'use strict';
 
 const { usualByCategory, trendRows, breakdown } = require('./lifebudgettrend');
+const { yearSummary } = require('./lifebudgetyear');
 const { round2, floor2, ymd, monthKey, dueDateIn, nextMonth, dayDiff, periodFor, billMonth, sumBy, categoryOf } = require('./lifebudgetdates');
 
 const SOON_DAYS = 3;
@@ -247,6 +248,7 @@ function budgetSummary(budget, nowMs, month) {
     transactions: transactionRows(budget, inPeriod, bills, period),
     trend: trendRows(budget, period, nowMs),
     breakdown: breakdown(budget, period, inPeriod, fixed, savings),
+    year: yearSummary(budget, Number(period.startMonth.slice(0, 4)), nowMs),
   };
 }
 

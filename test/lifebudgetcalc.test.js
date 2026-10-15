@@ -256,3 +256,46 @@ test('per day never floors a grosz away, and a zero balance is never -0', () => 
   assert.equal(floor2(0.29), 0.29);
   assert.ok(Object.is(round2(-0.001), 0));
 });
+
+test('year: twelve periods, only active ones counted, future ones listed but empty', () => {
+  const s = budgetSummary(
+    store({
+      bills: [bill('rent', 500, 12)],
+      payments: { '2026-08': { rent: { amount: 500, paidOn: '2026-08-11' } }, '2026-09': { rent: { amount: 450, paidOn: '2026-09-14' } } },
+      expenses: [exp('e1', '2026-08-15', 100, 'snacks'), exp('e2', '2026-09-20', 300, 'food', 'groceries'), exp('e3', '2026-10-11', 50, 'fun')],
+    }),
+    NOW
+  );
+  const y = s.year;
+  assert.equal(y.year, 2026);
+  assert.equal(y.isCurrent, true);
+  assert.equal(y.rows.length, 12);
+  assert.deepEqual(y.rows.filter((r) => r.active).map((r) => r.month), ['2026-08', '2026-09', '2026-10']);
+  assert.equal(y.rows[11].state, 'future');
+  assert.equal(y.totals.months, 3);
+  assert.equal(y.totals.income, 27000);
+  // Aug 500+100, Sep 450+300, Oct rent still due (500 expected) + 50.
+  assert.equal(y.totals.spent, 1900);
+  assert.equal(y.totals.avgSpent, 633.33);
+  assert.equal(y.bestMonth, '2026-08');
+  assert.equal(y.worstMonth, '2026-09');
+  assert.equal(y.categories[0].id, 'food');
+  assert.equal(y.top[0].note, 'groceries');
+  assert.equal(y.weekdays.reduce((a, b) => a + b, 0), 450);
+  // Aug paid on time, Sep paid late (due 12th); Oct not due yet (due 12 Oct < today 14 -> past due).
+  assert.equal(y.bills.paid, 2);
+  assert.equal(y.bills.onTime, 1);
+  assert.equal(y.bills.unpaidPastDue, 1);
+  assert.equal(y.bills.diff, -50);
+  assert.equal(y.prev, null);
+});
+
+test('year: the year before is compared over the same months only', () => {
+  const s = budgetSummary(
+    store({ expenses: [exp('a', '2025-10-15', 200, 'fun'), exp('b', '2025-03-15', 999, 'fun'), exp('c', '2026-10-15', 100, 'fun')] }),
+    NOW
+  );
+  assert.equal(s.year.prev.months, 1);
+  assert.equal(s.year.prev.spent, 200);
+  assert.equal(s.year.categories.find((c) => c.id === 'fun').prev, 200);
+});

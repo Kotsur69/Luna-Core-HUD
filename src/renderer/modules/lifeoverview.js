@@ -5,14 +5,15 @@
 // up top, then where the income went - five KPI cards (income, fixed bills,
 // savings, planned envelopes, free spending), a donut of the same split, the
 // envelopes against their plan and usual spend, free spending by category and
-// the bills still to pay. Every number is printed as text; colour only
+// the bills still to pay (each with an inline Pay). Every number is printed as text; colour only
 // repeats it.
 // ============================================================================
 
 'use strict';
 
 import { t } from './util.js';
-import { el, bucket, button, bar, money, money0, pct, shortDate, catName, catColor } from './lifeui.js';
+import { el, bucket, button, bar, money, money0, pct, shortDate, catName, catColor, getState } from './lifeui.js';
+import { billRow } from './lifebills.js';
 import { donut } from './lifecharts.js';
 
 const BUCKET_COLOR = {
@@ -173,7 +174,7 @@ function freeSpending(s) {
   return card.sec;
 }
 
-function upcoming(s, goTab) {
+function upcoming(s, goTab, redraw) {
   const card = bucket('life.ov.upcoming');
   const due = s.bills.filter((b) => b.status !== 'paid');
   if (!due.length) {
@@ -181,15 +182,8 @@ function upcoming(s, goTab) {
     return card.sec;
   }
   const list = el('ul', 'life-list');
-  for (const b of due.slice(0, UPCOMING_MAX)) {
-    const li = el('li', `life-row life-row--plain life-bill is-${b.status}`);
-    const text = el('div', 'life-row__text');
-    const meta = el('span', 'life-row__meta');
-    meta.append(el('span', `life-chip life-chip--${b.status}`, t(`life.bills.status.${b.status}`)), document.createTextNode(` ${shortDate(b.dueDate)}`));
-    text.append(el('span', 'life-row__title', b.name), meta);
-    li.append(text, el('span', 'life-num', money(b.expected)));
-    list.append(li);
-  }
+  // The same row as on the Bills tab: Pay opens the inline amount editor here.
+  for (const b of due.slice(0, UPCOMING_MAX)) list.append(billRow(s, b, redraw));
   const total = due.reduce((sum, b) => sum + b.expected, 0);
   card.body.append(list, el('p', 'life-total', t('life.ov.dueTotal', { n: due.length, amount: money(total) })), button('life.ov.toBills', () => goTab('bills')));
   return card.sec;
@@ -198,9 +192,10 @@ function upcoming(s, goTab) {
 /** Rebuilds the Overview into `root`; `goTab(id)` switches tabs. */
 export function renderOverview(root, state, goTab) {
   const s = state.summary;
+  const redraw = () => renderOverview(root, getState(), goTab);
   const top = el('div', 'life-ov__top');
   top.append(hero(s), split(s));
   const grid = el('div', 'life-grid');
-  grid.append(envelopes(s, goTab), freeSpending(s), upcoming(s, goTab));
+  grid.append(envelopes(s, goTab), freeSpending(s), upcoming(s, goTab, redraw));
   root.replaceChildren(top, kpis(s), grid);
 }

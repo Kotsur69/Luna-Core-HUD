@@ -122,4 +122,4 @@ function breakdown(budget, period, inPeriod, fixed, savings) {
   return { week, month };
 }
 
-module.exports = { usualByCategory, trendRows, breakdown };
+module.exports = { usualByCategory, trendRows, breakdown, billTotals, expensesIn };
