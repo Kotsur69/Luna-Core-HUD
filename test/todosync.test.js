@@ -197,6 +197,32 @@ test('cloud on, no shared folder: local buckets meet through the cloud body', ()
   assert.deepEqual(b.store.get('home').map((x) => x.text).sort(), ['bread', 'milk']);
 });
 
+test('first sync on a PC: its old copy of an item does not beat the cloud', () => {
+  // The cloud has item 1 ticked (u 4000); this PC still has it unticked from an old copy.
+  const cloud = { 'local:home': { items: [{ ...item(1, 'milk', { done: true }), u: 4000 }], gone: {} } };
+  const b = cloudPc('LAPTOP', { home: [item(1, 'milk'), item(2, 'bread')] }, () => cloud);
+  b.s.syncAll();
+  assert.equal(b.store.get('home').find((x) => x.at === 1).done, true);
+  // Items only this PC has still go up.
+  const mine = b.published.at(-1)['local:home'].items;
+  assert.deepEqual(mine.map((x) => x.at).sort(), [1, 2]);
+});
+
+test('after the first sync, a local edit gets a real stamp and wins', () => {
+  const cloud = { 'local:home': { items: [{ ...item(1, 'milk'), u: 4000 }], gone: {} } };
+  const b = cloudPc('LAPTOP', { home: [item(1, 'milk')] }, () => cloud);
+  b.s.syncAll();
+  b.store.set('home', [item(1, 'milk', { done: true })]);
+  b.s.syncAll();
+  const pub = b.published.at(-1)['local:home'].items.find((x) => x.at === 1);
+  assert.equal(pub.done, true);
+  assert.equal(pub.u, 5000);
+});
+
+test('stamp: an explicit base stamps new items (first sync uses 0)', () => {
+  assert.deepEqual(sync.stamp([item(1, 'a')], empty(), 100, 0).u, { 1: 0 });
+});
+
 test('cloud off and no shared folder: nothing published', () => {
   const a = cloudPc('DESK', { home: [item(1, 'milk')] }, () => null);
   assert.deepEqual(a.s.syncAll(), []);

@@ -56,10 +56,12 @@ function fingerprint(item) {
 
 /**
  * Records what changed locally since the last sync: new / edited items get
- * `now` as their stamp, items missing from the list get a tombstone.
+ * `base` (normally `now`) as their stamp, items missing from the list get a
+ * tombstone. A project's first sync on a PC passes base 0: an old copy of an
+ * item lying on this PC must not beat a newer version from the other PCs.
  * @returns {{snap:object, u:object, gone:object}} a new meta, input untouched
  */
-function stamp(list, meta, now) {
+function stamp(list, meta, now, base = now) {
   const snap = {};
   const u = {};
   const gone = { ...meta.gone };
@@ -67,7 +69,7 @@ function stamp(list, meta, now) {
     if (!validAt(item.at)) continue;
     const fp = fingerprint(item);
     snap[item.at] = fp;
-    u[item.at] = meta.snap[item.at] === fp && validStamp(meta.u[item.at], now) ? meta.u[item.at] : now;
+    u[item.at] = meta.snap[item.at] === fp && validStamp(meta.u[item.at], now) ? meta.u[item.at] : base;
   }
   for (const at of Object.keys(meta.snap)) {
     if (!(at in snap)) gone[at] = Math.max(gone[at] || 0, now);
@@ -194,7 +196,8 @@ function createTodoSync({ sharedDir, machine, projects, resolveKey, readTodos, w
       const alias = syncKey(null, id);
       const keysFor = alias && alias !== key ? [key, alias] : [key];
       const local = readTodos(id);
-      const stamped = stamp(local, metas[key] || emptyMeta(), t);
+      const prev = metas[key];
+      const stamped = stamp(local, prev || emptyMeta(), t, prev ? t : 0);
       const theirs = peers.flatMap((p) => keysFor.map((k) => p[k]).filter(Boolean));
       const out = merge(local, stamped, theirs, t);
       // Write before publishing: a failed local write must not advertise the merge.
