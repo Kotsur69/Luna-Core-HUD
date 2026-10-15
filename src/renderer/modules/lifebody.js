@@ -27,8 +27,9 @@ const MACROS = [
   ['carb', 'var(--life-fixed)'],
 ];
 
-// {phase: idle|loading|ready, connected, data, reason}
-let body = { phase: 'idle', connected: false, data: null, reason: '' };
+// {phase: idle|loading|ready, connected, data, reason, from}
+// from = {machine} when data is another PC's copy (this PC is not logged in).
+let body = { phase: 'idle', connected: false, data: null, reason: '', from: null };
 let root = null;
 
 const n0 = (n) => new Intl.NumberFormat(lang(), { maximumFractionDigits: 0 }).format(n);
@@ -55,7 +56,7 @@ async function load(force) {
   redraw();
   const res = await window.lunacore.lifeBody(force).catch(() => ({ ok: false, connected: body.connected, reason: 'ipc' }));
   body = res.ok
-    ? { phase: 'ready', connected: res.connected, data: res.body || null, reason: '' }
+    ? { phase: 'ready', connected: res.connected, data: res.body || null, reason: '', from: res.from || null }
     : { ...body, phase: 'ready', connected: res.connected !== false, reason: res.reason };
   redraw();
 }
@@ -234,6 +235,21 @@ function weekCard(data, week) {
   return card.sec;
 }
 
+/** Not logged in here: another PC's copy (read-only), then the login form. */
+function peerView(wrap) {
+  const row = el('div', 'life-body__head');
+  const when = `${body.data.date} ${time(body.data.fetchedAt)}`;
+  row.append(el('p', 'life-body__meta', t('life.body.fromPc', { machine: body.from.machine, time: when })));
+  const refresh = button('life.body.refresh', () => load(false));
+  refresh.disabled = body.phase === 'loading';
+  const acts = el('div', 'life-body__acts');
+  acts.append(refresh);
+  row.append(acts);
+  wrap.append(row);
+  bodyCards(wrap);
+  wrap.append(connectCard());
+}
+
 // --- shell ------------------------------------------------------------------------
 
 function connectedView(wrap) {
@@ -246,6 +262,11 @@ function connectedView(wrap) {
     if (body.phase === 'loading') wrap.append(el('p', 'hint', t('life.body.loading')));
     return;
   }
+  bodyCards(wrap);
+}
+
+/** Every card for body.data - this PC's YAZIO or another PC's copy. */
+function bodyCards(wrap) {
   const d = body.data.today;
   const week = weekStats(body.data.history, d.proteinGoal);
   const top = el('div', 'life-ov__top');
@@ -258,6 +279,7 @@ function connectedView(wrap) {
 function draw() {
   const wrap = el('div', 'life-body');
   if (body.phase === 'idle') wrap.append(el('p', 'hint', t('life.body.loading')));
+  else if (!body.connected && body.data && body.from) peerView(wrap);
   else if (!body.connected) wrap.append(connectCard());
   else connectedView(wrap);
   root.replaceChildren(wrap);

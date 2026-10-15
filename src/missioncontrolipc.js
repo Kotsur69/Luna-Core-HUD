@@ -30,6 +30,7 @@ const { createGithub } = require('./missiongithub');
 const { createTrending, buildDescribePrompt, parseDescription } = require('./missiontrending');
 const { createNews, buildNewsPrompt, parseNewsSummary, publicSections, newsSnapshot } = require('./missionnews');
 const newsStore = require('./missionnewsstore');
+const { createNewsPeers } = require('./missionnewspeers');
 const projectStore = require('./missionprojects');
 
 /** The real ledger: this PC's ~/.claude/projects, priced with config/rates.json. */
@@ -158,6 +159,8 @@ function registerMissionIpc({
   // Built on first use: requiring it is cheap, but tests never need the real one.
   let ledger = ledgerService;
   const getLedger = () => ledger || (ledger = defaultLedgerService(cloudSnapshots));
+  // Other PCs' last briefings (`news` snapshots), keyed like a local scan.
+  const newsPeers = createNewsPeers({ cloud: cloudSnapshots });
   let lastPreview = null;
   const busy = new Set();
   const seenEvents = new Map();
@@ -521,7 +524,10 @@ function registerMissionIpc({
     })
   );
 
-  ipcMain.on('mission:news-open', openResolved((key) => news.urlFor(key)));
+  // Other PCs' last briefings as read-only reports: keys, never URLs.
+  ipcMain.handle('mission:news-peers', () => guarded('news-peers', async () => ({ ok: true, reports: await newsPeers.list() })));
+
+  ipcMain.on('mission:news-open', openResolved((key) => news.urlFor(key) || newsPeers.urlFor(key)));
 
   ipcMain.handle('mission:cal-parse', (_event, text) =>
     guarded('parse', async () => {

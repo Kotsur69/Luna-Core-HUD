@@ -268,7 +268,9 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionNewsConfigure: (which) => ipcRenderer.invoke('mission:news-configure', which),
   /** Fetch + Haiku summary of saved ids, or a quick search {adhoc:{query, platform}}. Promise<{ok, briefing, sections, costUsd} | {ok:false, reason}>. */
   missionNewsScan: (req) => ipcRenderer.invoke('mission:news-scan', req),
-  /** Opens a fetched entry by key - main resolves the URL. */
+  /** Other PCs' last briefings from the cloud, read-only. Promise<{ok, reports:[{id, peer, machine, at, names, briefing, sections}]} | {ok:false, reason}>. */
+  missionNewsPeers: () => ipcRenderer.invoke('mission:news-peers'),
+  /** Opens a fetched entry by key (local scan or another PC's report) - main resolves the URL. */
   missionNewsOpen: (key) => ipcRenderer.send('mission:news-open', key),
   /** Claude spend per project in the weekly window, all synced PCs. Promise<{ok, projects, machines, ...} | {ok:false, reason}>. */
   missionLedger: (req) => ipcRenderer.invoke('mission:ledger', req),

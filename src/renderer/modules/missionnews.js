@@ -41,6 +41,9 @@ let scanning = false;
 const REPORTS_KEY = 'lunacore.news.reports';
 const MAX_REPORTS = 10;
 let reports = loadReports();
+// Other PCs' last briefings from the cloud (mission:news-peers): read-only,
+// never persisted here - the cloud row is the copy.
+let peerReports = [];
 let viewer = null;
 let quickPlatform = 'reddit';
 /** The quick search the current result came from ({query, platform}), for "save as topic". */
@@ -114,7 +117,18 @@ function deleteReport(id) {
   renderResults();
 }
 
-const reportTitle = (r) => t('mc.news.report.title', { names: r.names || '-' });
+const reportTitle = (r) =>
+  r.peer
+    ? t('mc.news.report.peerTitle', { machine: r.machine, names: r.names || '-' })
+    : t('mc.news.report.title', { names: r.names || '-' });
+
+/** Other PCs' briefings; a failure just leaves the local reports. */
+async function loadPeerReports() {
+  const res = await window.lunacore.missionNewsPeers().catch(ipcFailed);
+  if (!res.ok || !Array.isArray(res.reports)) return;
+  peerReports = res.reports;
+  renderResults();
+}
 
 // ---- Saved lists -------------------------------------------------------------
 
@@ -445,16 +459,22 @@ function openViewer(report) {
   close.focus();
 }
 
+/** HH:MM today, otherwise with the day too (another PC's briefing can be days old). */
+function reportTime(at) {
+  const lang = (window.i18n && window.i18n.lang) || 'pl';
+  const d = new Date(at);
+  const today = d.toDateString() === new Date().toDateString();
+  const opts = today ? { hour: '2-digit', minute: '2-digit' } : { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
+  return d.toLocaleString(lang, opts);
+}
+
 function reportChip(report) {
   const li = el('li', 'mc-report-chip');
-  const time = new Date(report.at).toLocaleTimeString((window.i18n && window.i18n.lang) || 'pl', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
   const open = button('mc-report-chip__open', '', () => openViewer(report), reportTitle(report));
-  open.append(el('span', 'mc-report-chip__name', reportTitle(report)), el('span', 'mc-row__note', time));
-  const remove = button('port-btn mc-news__remove', '×', () => deleteReport(report.id), t('mc.news.report.delete'));
-  li.append(open, remove);
+  open.append(el('span', 'mc-report-chip__name', reportTitle(report)), el('span', 'mc-row__note', reportTime(report.at)));
+  li.append(open);
+  // Another PC's report belongs to that PC: it is replaced by its next scan, not deleted here.
+  if (!report.peer) li.append(button('port-btn mc-news__remove', '×', () => deleteReport(report.id), t('mc.news.report.delete')));
   return li;
 }
 
@@ -462,9 +482,10 @@ function renderResults() {
   if (!els) return;
   const parts = [];
   if (lastQuick) parts.push(button('pad-send mc-connect mc-news__savequick', t('mc.news.quick.save'), saveQuickAsTopic));
-  if (reports.length) {
+  const all = [...reports, ...peerReports].sort((a, b) => b.at - a.at);
+  if (all.length) {
     const list = el('ul', 'mc-news__list mc-report-list');
-    list.append(...reports.map(reportChip));
+    list.append(...all.map(reportChip));
     parts.push(el('h4', 'mc-bucket__title', t('mc.news.report.heading')), list);
   }
   els.results.replaceChildren(...parts);
@@ -558,6 +579,7 @@ defineWidget({
     renderResults();
     renderStatus();
     loadStatus();
+    loadPeerReports();
     return () => {
       offLang();
       closeViewer();

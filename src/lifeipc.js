@@ -26,6 +26,10 @@
 const store = require('./lifebudget');
 const { budgetSummary } = require('./lifebudgetcalc');
 const { createYazio, MAX_EMAIL: MAX_EMAIL_LEN, MAX_PASSWORD: MAX_PASSWORD_LEN } = require('./lifeyazio');
+const { yazioSnapshot, newestYazioPeer } = require('./lifeyaziopeers');
+
+/** How long the Body tab waits for another PC's copy before showing the login form. */
+const PEER_TIMEOUT_MS = 4000;
 
 // lifebudget.js error message -> reason code the renderer localizes.
 const REASONS = {
@@ -93,7 +97,41 @@ function yazioReason(err) {
  *   file/now/yazio are injectable for tests; the real store path and a real
  *   YAZIO client are the defaults. sync = startLifeSync() in the app, none in tests.
  */
-function registerLifeIpc({ ipcMain, file, now = Date.now, yazio = createYazio(), sync = null }) {
+function registerLifeIpc({
+  ipcMain,
+  file,
+  now = Date.now,
+  yazio = createYazio(),
+  sync = null,
+  cloud = () => null,
+  peerTimeoutMs = PEER_TIMEOUT_MS,
+}) {
+  /** Shares the Body data with the other PCs and the phone; never waits, never throws. */
+  const putYazio = (body) => {
+    const log = (err) => console.error('[life] yazio cloud snapshot failed:', err && err.message);
+    try {
+      const live = cloud();
+      const snap = yazioSnapshot(body, now());
+      // Data that fails our own check must not replace a good row in the cloud.
+      if (live && snap.body) Promise.resolve().then(() => live.put('yazio', snap)).catch(log);
+    } catch (err) {
+      log(err);
+    }
+  };
+
+  /** Another PC's copy, or null when there is none or the cloud is slow. */
+  const peerBody = async () => {
+    let timer;
+    const late = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), peerTimeoutMs);
+    });
+    try {
+      return await Promise.race([newestYazioPeer(cloud, now()), late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   let lastWriteAt = -Infinity;
   let lastForceAt = -Infinity;
   let lastConnectAt = -Infinity;
@@ -126,7 +164,11 @@ function registerLifeIpc({ ipcMain, file, now = Date.now, yazio = createYazio(),
   });
 
   ipcMain.handle('life:body', async (_event, req) => {
-    if (!yazio.status().connected) return { ok: true, connected: false };
+    if (!yazio.status().connected) {
+      // Not logged in here: show another PC's copy (read-only) when there is one.
+      const peer = await peerBody();
+      return peer ? { ok: true, connected: false, body: peer.body, from: { machine: peer.machine } } : { ok: true, connected: false };
+    }
     let force = Boolean(req && typeof req === 'object' && req.force === true);
     if (force) {
       const at = now();
@@ -135,7 +177,10 @@ function registerLifeIpc({ ipcMain, file, now = Date.now, yazio = createYazio(),
       else lastForceAt = at;
     }
     try {
-      return { ok: true, connected: true, body: await yazio.body({ force }) };
+      const body = await yazio.body({ force });
+      // cloudsnapshots skips the upload while the content is unchanged.
+      putYazio(body);
+      return { ok: true, connected: true, body };
     } catch (err) {
       return { ok: false, connected: true, reason: yazioReason(err) };
     }

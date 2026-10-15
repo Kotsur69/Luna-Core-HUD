@@ -429,11 +429,46 @@ Re-parse every URL with `new URL()` (http(s), no credentials) and open it with
 `noopener noreferrer`. Render every string as text only (no `innerHTML`,
 markdown or auto-linking: briefing/summary are LLM output over untrusted pages).
 Show the link host before opening it, show "from HH:MM, <machine>" from `at`, and
-take the newest `at` across machines. No desktop reader yet: the News tab still shows
-local scans only.
+take the newest `at` across machines. Desktop reader: slice 3 (`missionnewspeers.js`).
 
 `npm test` 2135/2135. Not yet live-tested (`select machine, updated_at from
 snapshots where kind = 'news'` after a scan).
+
+## Phase 2c, slice 3 — readers + YAZIO (2026-10-15)
+
+Mati on the laptop: "when i click ctrl shift m on my laptop i cant see reports
+from this pc". Slice 2 only uploaded the briefing, so this slice adds the reader,
+plus a sweep of every synced item for an upload with no reader.
+
+| File | Role |
+|---|---|
+| `src/missionnewspeers.js` | `news` rows of the other PCs → read-only reports (v/lang/at checked, every string capped, links re-validated with `safeUrl`, kept in main behind keys). `mission:news-peers`; `mission:news-open` resolves these keys too. Renderer: "Ready reports" lists them as "Report from <PC>" next to the local ones, with no delete. |
+| `src/lifeyaziopeers.js` | `yazio` snapshot = Body numbers only (whitelisted fields, ranges checked; never the login). `life:body` puts it after each successful fetch. On a PC not logged in to YAZIO, it returns the newest other PC's copy with `from: {machine}`. The Body tab shows it read-only above the login form. |
+
+Security review (`ecc:security-reviewer`): no CRITICAL/HIGH. Fixed:
+- MEDIUM: peer links to loopback, private, link-local or single-label hosts are dropped (`isPublicHost`), so a row can't aim a click at the LAN.
+- MEDIUM: the Body tab waits at most 4 s for another PC's copy.
+- LOW: a body that fails its own check is never uploaded over a good row.
+- LOW: the key table is sized above one list's worst case, and sections are capped at 30.
+
+**Accepted:** Body numbers (weight, kcal, steps) go to the cloud behind the cloud login, as decided in section B. Any PC on the account can label its row with any machine name.
+
+`npm test` 2154/2154.
+
+**Audit of everything that syncs (2026-10-15, live table + code):**
+
+| Item | Up | Read/apply | State |
+|---|---|---|---|
+| Budget (`life`) | ✅ | ✅ pull → `lifebudget` | Live on both PCs. The laptop's default categories `home`/`eatout`/`snacks` sit at `u=0` (same values as KT-PC-LLM's), so they never override anything. |
+| To-dos (`todos`) | ✅ | ✅ | Live on both PCs |
+| Project list (`proj:entry`) | ✅ | ✅ | Live (laptop) |
+| Project classes / pinned, news sources/topics | ✅ | ✅ | Live (KT-PC-LLM) |
+| `doc:rates` | ✅ | ✅ | Live |
+| `doc:prompts`, `doc:libraries`, `mc:rules` | ✅ | ✅ | Nothing in the cloud yet: no PC has a `*.local.json` of these (shipped defaults only). The first edit on any PC syncs. |
+| Cheatsheets | — | — | Never synced, by decision (2b) |
+| Ledger snapshot | ✅ | ✅ merged into the ledger | The laptop's row is empty (no Claude Code transcripts there in 8 days) |
+| News snapshot | ✅ | ✅ **this slice** | |
+| YAZIO snapshot | ✅ **this slice** | ✅ **this slice** | |
 
 ## Next session: start here
 
@@ -453,8 +488,8 @@ snapshots where kind = 'news'` after a scan).
 3. ✅ **2b — config scope** done 2026-10-15 (project list, `doc:*` + `mc:rules`,
    news sources/topics, project classes/pinned; see the three slices above).
    Smoke-test live on two PCs before the next release. Next:
-   **2c — snapshots**: ledger ✅, news briefing ✅ (slices 1–2 above); next
-   YAZIO, same TDD + security review routine, reusing `cloudsnapshots.js`.
+   **2c — snapshots**: ledger ✅, news briefing ✅, desktop readers + YAZIO ✅
+   (slices 1–3 above). 2c is complete; next is phase 3 or the phone (phase 4).
 4. Phase 3 (remove the folder transport, `sharedDir`, SyncTrayzor) only after
    the cloud is proven on two PCs.
 5. Still owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.

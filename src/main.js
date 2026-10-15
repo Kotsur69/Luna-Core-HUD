@@ -2376,7 +2376,7 @@ function registerIpc() {
   // other PCs through the same Syncthing folder as the to-dos.
   cloud = startCloud({ machine: machineName(os.hostname()) });
   registerCloudIpc({ ipcMain, cloud });
-  registerLifeIpc({ ipcMain, sync: startLifeSync({ cloud }) });
+  registerLifeIpc({ ipcMain, sync: startLifeSync({ cloud }), cloud: () => (cloud ? cloud.snapshots : null) });
 
   // "Add to my library": persists an /ask suggestion card into
   // config/libraries.local.json. addLibraryItem() (src/libraries.js) does all
