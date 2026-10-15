@@ -316,7 +316,10 @@ id, no paths needed.
 
 1. Re-read this file; `git log` for anything newer touching `cloud*.js`,
    `lifesync.js`, `todosync.js`.
-2. **Prove 2a on a second PC** (work PC or home PC): install v0.15.0 from
+2. ✅ **Proven on a second PC (2026-10-15)**, v0.15.0 installer +
+   `cloud.local.json` + `projects.local.json`; Mati: "works perfectly".
+   Phase 3 (folder transport removal) is now unblocked. Original steps, kept for the next PC:
+   **Set up another PC:** install v0.15.0 from
    GitHub Releases, copy `cloud.local.json` (values in the 2a table above)
    **and `projects.local.json`** into its config dir
    (`%APPDATA%\LunaCore\config\` for the installer, `LunaCore-config\` next to
