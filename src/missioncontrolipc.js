@@ -33,7 +33,7 @@ const newsStore = require('./missionnewsstore');
 const projectStore = require('./missionprojects');
 
 /** The real ledger: this PC's ~/.claude/projects, priced with config/rates.json. */
-function defaultLedgerService() {
+function defaultLedgerService(cloudSnapshots) {
   const os = require('os');
   const path = require('path');
   const { createLedger } = require('./missionledger');
@@ -52,6 +52,8 @@ function defaultLedgerService() {
     sync,
     loadRates,
     machine: sync.machineName(os.hostname()),
+    // Other PCs' ledgers through the cloud's `snapshots` table (cloudsnapshots.js).
+    cloud: cloudSnapshots,
   });
 }
 
@@ -148,13 +150,14 @@ function registerMissionIpc({
   store = newsStore,
   openExternal = (url) => require('electron').shell.openExternal(url),
   ledgerService = null,
+  cloudSnapshots = () => null,
   projects = projectStore,
   pickDir = defaultPickDir,
   pickClientFile = defaultPickClientFile,
 }) {
   // Built on first use: requiring it is cheap, but tests never need the real one.
   let ledger = ledgerService;
-  const getLedger = () => ledger || (ledger = defaultLedgerService());
+  const getLedger = () => ledger || (ledger = defaultLedgerService(cloudSnapshots));
   let lastPreview = null;
   const busy = new Set();
   const seenEvents = new Map();

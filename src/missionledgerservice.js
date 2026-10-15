@@ -17,6 +17,7 @@
 'use strict';
 
 const { eventsToBlocks, focusWeek } = require('./missionfocus');
+const { fits } = require('./cloudsnapshots');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
@@ -69,10 +70,65 @@ function focusReport(blocks, at, classes) {
   };
 }
 
+/** The cloud snapshot needs the weekly window (<= 7 days) and the Mon-Sun focus week only. */
+const CLOUD_KEEP_MS = 8 * DAY_MS;
+/** Same cap as missionledgersync.js MAX_PEERS. */
+const MAX_PEERS = 8;
+
+/** Shorter windows tried when 8 days of a heavy week don't fit one snapshot row. */
+const SHRINK_DAYS = [3, 1];
+
+/** This PC's `ledger` snapshot body for the last `keepMs`. */
+function snapshotBody(machine, rows, blocks, at, keepMs) {
+  const since = at - keepMs;
+  return { v: 1, machine, rows: rows.filter((r) => r[0] >= since), blocks: blocks.filter((b) => b[1] >= since) };
+}
+
+/** Sends this PC's rows + blocks as its `ledger` snapshot; never waits, never throws. */
+function putSnapshot(cloud, machine, rows, blocks, at) {
+  let data = snapshotBody(machine, rows, blocks, at, CLOUD_KEEP_MS);
+  // Too big for a row: the newest days matter most. Still too big -> put() refuses and logs once.
+  for (const days of SHRINK_DAYS) if (!fits(data)) data = snapshotBody(machine, rows, blocks, at, days * DAY_MS);
+  Promise.resolve()
+    .then(() => cloud.put('ledger', data))
+    .catch((err) => console.error('[ledger] cloud snapshot failed:', err && err.message));
+}
+
+/** Other PCs' `ledger` snapshots, validated like peer files; a failing cloud is no peers. */
+async function cloudPeers(cloud, parsePeer, machine, at) {
+  let rows = [];
+  try {
+    rows = await cloud.list('ledger');
+  } catch (err) {
+    console.error('[ledger] cloud snapshots unreadable:', err && err.message);
+  }
+  const own = machine.toLowerCase();
+  return (Array.isArray(rows) ? rows : [])
+    .filter((r) => r && typeof r.machine === 'string' && r.machine.toLowerCase() !== own)
+    .map((r) => parsePeer({ ...r.data, updatedAt: r.updatedAt }, r.machine, at))
+    // A retired PC's row stays in the cloud; once nothing of it is in range it is not a PC to list.
+    .filter((p) => p && (p.rows.length || p.blocks.length));
+}
+
+/** Folder and cloud peers, one per machine (case-insensitive): the newer copy wins. */
+function mergePeers(a, b) {
+  const byMachine = new Map();
+  for (const p of [...a, ...b]) {
+    const id = p.machine.toLowerCase();
+    const seen = byMachine.get(id);
+    if (!seen || p.updatedAt > seen.updatedAt) byMachine.set(id, p);
+  }
+  return [...byMachine.values()].slice(0, MAX_PEERS);
+}
+
 /**
  * @param {{ledger:{scan:Function,rows:Function,events:Function}, store:{loadProjects:Function},
- *          sync:{writeOwn:Function,readPeers:Function}, loadRates:Function,
- *          commits?:{events:()=>Promise<Array>}, summarize?:Function, machine:string, now?:()=>number}} deps
+ *          sync:{writeOwn:Function,readPeers:Function,parsePeer?:Function}, loadRates:Function,
+ *          commits?:{events:()=>Promise<Array>}, summarize?:Function, machine:string, now?:()=>number,
+ *          cloud?:object|(()=>object|null)|null}} deps
+ *   cloud = cloudsnapshots.js {put, list} (or a getter for it; null while the
+ *   cloud is off): our snapshot goes up and the other PCs' come down, with or
+ *   without a shared folder.
  */
 function createLedgerService({
   ledger,
@@ -83,6 +139,7 @@ function createLedgerService({
   summarize = require('./missionledger').summarize,
   machine,
   now = Date.now,
+  cloud = null,
 }) {
   let lastWritten = null;
 
@@ -108,7 +165,10 @@ function createLedgerService({
       const own = ledger.rows();
       const { classes, sharedDir, pinned = [] } = store.loadProjects();
       const syncError = sharedDir ? publish(sharedDir, own, blocks, at) : null;
-      const peers = sharedDir ? sync.readPeers(sharedDir, machine, at) : [];
+      const folderPeers = sharedDir ? sync.readPeers(sharedDir, machine, at) : [];
+      const live = typeof cloud === 'function' ? cloud() : cloud;
+      if (live) putSnapshot(live, machine, own, blocks, at);
+      const peers = live ? mergePeers(folderPeers, await cloudPeers(live, sync.parsePeer, machine, at)) : folderPeers;
       const allBlocks = peers.reduce((all, p) => all.concat(p.blocks || []), blocks);
 
       const win = weekWindow(req && req.resetsAt, at);

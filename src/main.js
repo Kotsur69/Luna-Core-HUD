@@ -2368,6 +2368,8 @@ function registerIpc() {
     ipcMain,
     getModel: () => readUiPrefs().missionModel,
     getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
+    // Read on the ledger's first use, after startCloud() below has run.
+    cloudSnapshots: () => (cloud ? cloud.snapshots : null),
   });
 
   // Life dashboard (life:* channels): budget store + summary, shared with the

@@ -122,7 +122,14 @@ function writeOwn(dir, machine, rows, now = Date.now(), blocks) {
 
 /** One peer file -> {machine, updatedAt, rows, blocks} or null. */
 function readPeer(file, machine, now) {
-  const data = readSharedJson(file);
+  return parsePeer(readSharedJson(file), machine, now);
+}
+
+/**
+ * A parsed peer body (a peer file, or a cloud snapshot) -> {machine,
+ * updatedAt, rows, blocks} or null. `machine` is who it must claim to be.
+ */
+function parsePeer(data, machine, now) {
   if (!data || data.v !== VERSION || data.machine !== machine || !Array.isArray(data.rows)) return null;
   const updatedAt = Number.isFinite(data.updatedAt) ? data.updatedAt : 0;
   const keys = new Set();
@@ -174,6 +181,7 @@ module.exports = {
   machineName,
   writeOwn,
   readPeers,
+  parsePeer,
   validRow,
   validBlock,
   validKey,

@@ -178,3 +178,12 @@ test('focus blocks share the per-peer project-key cap with the rows', () => {
   writePeer(d, 'LAPTOP', { v: 1, machine: 'LAPTOP', updatedAt: NOW, rows, blocks: [block({ 2: 'local:extra' }), block({ 2: 'local:p1' })] });
   assert.deepEqual(sync.readPeers(d, 'HOME', NOW)[0].blocks.map((b) => b[2]), ['local:p1']);
 });
+
+test('parsePeer validates a snapshot body the same way as a peer file', () => {
+  const good = { v: 1, machine: 'WORK', updatedAt: NOW, rows: [row()], blocks: [block()] };
+  assert.deepEqual(sync.parsePeer(good, 'WORK', NOW), { machine: 'WORK', updatedAt: NOW, rows: [row()], blocks: [block()] });
+  assert.equal(sync.parsePeer({ ...good, machine: 'OTHER' }, 'WORK', NOW), null);
+  assert.equal(sync.parsePeer({ ...good, v: 2 }, 'WORK', NOW), null);
+  assert.equal(sync.parsePeer(null, 'WORK', NOW), null);
+  assert.equal(sync.parsePeer({ ...good, rows: [['junk']] }, 'WORK', NOW).rows.length, 0);
+});

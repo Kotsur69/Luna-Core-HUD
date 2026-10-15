@@ -177,3 +177,95 @@ test('a failing commit reader leaves focus with the Claude replies only', async 
   assert.equal(r.ok, true);
   assert.equal(r.focus.projects[0].totalMs, 5 * MIN);
 });
+
+// ---- Cloud snapshot (docs/CLOUD_SYNC_PLAN.md, 2c): the ledger without a shared folder ----
+
+const { parsePeer } = require('../src/missionledgersync.js');
+
+function withCloud(deps, cloudRows = []) {
+  const puts = [];
+  const cloud = {
+    put: async (kind, data) => {
+      puts.push({ kind, data });
+      return true;
+    },
+    list: async (kind) => (kind === 'ledger' ? cloudRows : []),
+  };
+  return { deps: { ...deps, sync: { ...deps.sync, parsePeer }, cloud }, puts };
+}
+
+test('with the cloud on and no shared folder, our rows go up and other PCs come down', async () => {
+  const peer = { v: 1, machine: 'WORK', rows: [[H, 'local:toy', 'toy', 'claude-opus-5-5', 2e6, 0, 0, 0]], blocks: [] };
+  const { deps, puts } = withCloud(fakes().deps, [{ machine: 'WORK', data: peer, updatedAt: NOW - HOUR }]);
+  const r = await createLedgerService(deps).report({});
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].kind, 'ledger');
+  assert.equal(puts[0].data.machine, 'HOME');
+  assert.equal('updatedAt' in puts[0].data, false); // the row's updated_at says when; same rows = same snapshot
+  assert.equal(r.totalUsd, 12);
+  assert.deepEqual(r.machines, [
+    { machine: 'HOME', updatedAt: NOW, self: true },
+    { machine: 'WORK', updatedAt: NOW - HOUR, self: false },
+  ]);
+});
+
+test('the cloud snapshot keeps only the last 8 days of rows and blocks', async () => {
+  const old = NOW - 10 * DAY - (NOW % HOUR);
+  const ownRows = [[H, 'local:a', 'a', 'claude-opus-5-5', 1, 0, 0, 0], [old, 'local:a', 'a', 'claude-opus-5-5', 1, 0, 0, 0]];
+  const { deps, puts } = withCloud(fakes({ ownRows }).deps);
+  await createLedgerService(deps).report({});
+  assert.deepEqual(puts[0].data.rows.map((r) => r[0]), [H]);
+});
+
+test('a cloud peer and a folder peer of the same PC count once, the newer one wins', async () => {
+  const folderPeer = { machine: 'WORK', updatedAt: NOW - 3 * HOUR, rows: [[H, 'local:toy', 'toy', 'claude-opus-5-5', 1e6, 0, 0, 0]], blocks: [] };
+  const cloudPeer = { v: 1, machine: 'WORK', rows: [[H, 'local:toy', 'toy', 'claude-opus-5-5', 2e6, 0, 0, 0]], blocks: [] };
+  const base = fakes({ sharedDir: 'D:\\Sync', peers: [folderPeer] }).deps;
+  const { deps } = withCloud(base, [{ machine: 'work', data: { ...cloudPeer, machine: 'work' }, updatedAt: NOW - HOUR }]);
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.totalUsd, 12);
+  assert.equal(r.machines.length, 2);
+});
+
+test('a malformed cloud peer is dropped, and our own machine never counts twice', async () => {
+  const { deps } = withCloud(fakes().deps, [
+    { machine: 'WORK', data: { v: 1, machine: 'OTHER', rows: [] }, updatedAt: NOW },
+    { machine: 'HOME', data: { v: 1, machine: 'HOME', rows: [[H, 'local:a', 'a', 'claude-opus-5-5', 9e6, 0, 0, 0]] }, updatedAt: NOW },
+  ]);
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.totalUsd, 4);
+  assert.equal(r.machines.length, 1);
+});
+
+test('a failing cloud never breaks the report', async () => {
+  const { deps } = withCloud(fakes().deps);
+  deps.cloud.put = async () => {
+    throw new Error('offline');
+  };
+  deps.cloud.list = async () => {
+    throw new Error('offline');
+  };
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.ok, true);
+  assert.equal(r.totalUsd, 4);
+});
+
+test('a heavy week that does not fit one snapshot row is cut to the newest days', async () => {
+  const { MAX_BYTES } = require('../src/cloudsnapshots.js');
+  const name = 'n'.repeat(90);
+  const rows = [];
+  for (let h = 0; rows.length * 140 < MAX_BYTES * 1.5; h++) {
+    rows.push([H - (h % (7 * 24)) * HOUR, `local:p${rows.length}`, name, 'claude-opus-5-5', 1, 0, 0, 0]);
+  }
+  const { deps, puts } = withCloud(fakes({ ownRows: rows }).deps);
+  await createLedgerService(deps).report({});
+  const sent = puts[0].data.rows;
+  assert.ok(sent.length > 0 && sent.length < rows.length);
+  assert.ok(sent.every((r) => r[0] >= NOW - 3 * DAY));
+});
+
+test('a cloud peer with nothing left in range is not listed as a PC', async () => {
+  const { deps } = withCloud(fakes().deps, [{ machine: 'OLD', data: { v: 1, machine: 'OLD', rows: [], blocks: [] }, updatedAt: NOW - 30 * DAY }]);
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.machines.length, 1);
+});

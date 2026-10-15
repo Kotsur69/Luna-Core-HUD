@@ -381,6 +381,30 @@ write (the loader ignores them anyway); bidi/zero-width characters in labels.
 
 **2b is complete** — every file in inventory section A now syncs.
 
+## Phase 2c, slice 1 — ledger snapshot (2026-10-15)
+
+| File | Role |
+|---|---|
+| `src/cloudsnapshots.js` | `put(kind, data)` upserts this PC's `snapshots` row (`onConflict: user_id,kind,machine`), skipped while the JSON is unchanged, 512 KiB cap; `list(kind)` = the other machines' rows (machine name + plain-object checked), 60 s cache, a failed read keeps the last good answer. Reset on logout. `startCloud().snapshots`; `SNAPSHOTS_OFF` without config. |
+| `src/missionledgersync.js` | `parsePeer(data, machine, now)` split out of `readPeer`: a cloud snapshot gets exactly the peer-file validation. |
+| `src/missionledgerservice.js` | Optional `cloud` dep (object or getter). Each report puts `{v, machine, rows, blocks}` — **last 8 days only**, no `updatedAt` (the row's `updated_at` says when, so the same rows don't re-upload) — and merges cloud peers with folder peers: one per machine (case-insensitive), the newer copy wins, cap 8. Works with no `sharedDir`. |
+| `main.js` / `missioncontrolipc.js` | `cloudSnapshots: () => cloud.snapshots`, read on the ledger's first use. |
+
+Security review (`ecc:security-reviewer`): no CRITICAL/HIGH. Fixed: an
+oversize week is cut to the newest 3 days, then 1 (MEDIUM; `put` logs once per
+kind); `reset()` bumps a generation so a list/put in flight at logout can't
+fill the next user's cache or skip their first put, and any auth change resets
+(MEDIUM); a far-future `updated_at` is clamped to now; `list()` orders newest
+first and skips our own row server-side; puts of one kind run one at a time;
+a cloud peer with nothing in range is not listed. **Accepted (same as the
+folder transport):** project keys/names (`git:host/owner/repo`,
+`local:<folder>`) leave the PC — no paths, prompts or text. Not done (LOW):
+parse cache for cloud peers; machine-name collisions (`PC_1` = `PC-1`); a
+"forget this PC" action for a retired PC's row.
+
+`npm test` 2126/2126. Not yet live-tested (needs two logged-in PCs; check
+`select kind, machine, updated_at from snapshots` after the first ledger refresh).
+
 ## Next session: start here
 
 1. Re-read this file; `git log` for anything newer touching `cloud*.js`,
@@ -399,8 +423,8 @@ write (the loader ignores them anyway); bidi/zero-width characters in labels.
 3. ✅ **2b — config scope** done 2026-10-15 (project list, `doc:*` + `mc:rules`,
    news sources/topics, project classes/pinned; see the three slices above).
    Smoke-test live on two PCs before the next release. Next:
-   **2c — snapshots** (ledger, news briefing, YAZIO), same TDD + security
-   review routine.
+   **2c — snapshots**: ledger ✅ (slice 1 above); next news briefing, then
+   YAZIO, same TDD + security review routine, reusing `cloudsnapshots.js`.
 4. Phase 3 (remove the folder transport, `sharedDir`, SyncTrayzor) only after
    the cloud is proven on two PCs.
 5. Still owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.

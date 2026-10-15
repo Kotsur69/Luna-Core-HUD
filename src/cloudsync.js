@@ -24,6 +24,7 @@
 
 const fs = require('fs');
 const rows = require('./cloudrows');
+const { createSnapshots, SNAPSHOTS_OFF } = require('./cloudsnapshots');
 
 const VERSION = 1;
 const SCOPES = ['life', 'todos', 'config'];
@@ -206,6 +207,7 @@ const CLOUD_OFF = {
   login: async () => ({ ok: false, reason: 'not-configured' }),
   logout: async () => {},
   syncNow: async () => ({ ok: false, reason: 'not-configured' }),
+  snapshots: SNAPSHOTS_OFF,
 };
 
 /**
@@ -237,6 +239,7 @@ function startCloud({ machine }) {
     userId: () => auth.userId(),
     onPulled: notify,
   });
+  const snapshots = createSnapshots({ client: auth.client, machine, loggedIn: () => auth.status().loggedIn });
   let channel = null;
   let pushTimer = null;
   let liveTimer = null;
@@ -272,6 +275,8 @@ function startCloud({ machine }) {
   auth.onChange((loggedIn) => {
     // Outside supabase-js's auth callback: it must not await other auth calls.
     setTimeout(() => {
+      // Any auth change (logout, another account) starts the snapshot cache over.
+      snapshots.reset();
       if (loggedIn) {
         subscribe();
         syncNow();
@@ -304,6 +309,8 @@ function startCloud({ machine }) {
     login: () => auth.login(),
     logout: () => auth.logout(),
     syncNow,
+    /** One row per machine for the ledger / news / YAZIO (cloudsnapshots.js). */
+    snapshots,
   };
 }
 
