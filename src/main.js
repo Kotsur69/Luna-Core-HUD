@@ -115,6 +115,12 @@ const { registerMissionIpc } = require('./missioncontrolipc');
 // through the Syncthing folder (src/lifesync.js). No model call.
 const { registerLifeIpc } = require('./lifeipc');
 const { startLifeSync } = require('./lifesync');
+// Cloud sync (docs/CLOUD_SYNC_PLAN.md): Supabase as one more peer for the
+// budget and the to-dos. Off without config/cloud.local.json.
+const { startCloud } = require('./cloudsync');
+const { registerCloudIpc } = require('./cloudipc');
+const { machineName } = require('./missionledgersync');
+let cloud = null;
 // Highlight extractor: batch tail-trim of video clips via system ffmpeg.
 // See src/highlights.js's header for the argv-array security property.
 const { detectFfmpeg, listVideoFiles, HighlightBatchJob } = require('./highlights');
@@ -2351,7 +2357,9 @@ function registerIpc() {
 
   // Life dashboard (life:* channels): budget store + summary, shared with the
   // other PCs through the same Syncthing folder as the to-dos.
-  registerLifeIpc({ ipcMain, sync: startLifeSync() });
+  cloud = startCloud({ machine: machineName(os.hostname()) });
+  registerCloudIpc({ ipcMain, cloud });
+  registerLifeIpc({ ipcMain, sync: startLifeSync({ cloud }) });
 
   // "Add to my library": persists an /ask suggestion card into
   // config/libraries.local.json. addLibraryItem() (src/libraries.js) does all
@@ -2991,6 +2999,7 @@ app.whenReady().then(() => {
   todoSync = startTodoSync({
     getProjects: () => projects,
     onChanged: (ids) => ids.forEach((projectId) => send('todo:changed', { projectId })),
+    cloud,
   });
   // God Mode v2: bring back the last run's board (held - nothing launches
   // until Approve/Retry) and start the worker-time watchdog. After the

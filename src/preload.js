@@ -289,6 +289,17 @@ contextBridge.exposeInMainWorld('lunacore', {
   lifeBodyConnect: (email, password) => ipcRenderer.invoke('life:body-connect', { email, password }),
   /** Forgets the stored YAZIO login. Promise<{ok}>. */
   lifeBodyDisconnect: () => ipcRenderer.invoke('life:body-disconnect'),
+  // --- Cloud sync (src/cloudipc.js) ---
+  // No payloads. Main answers from a whitelist: who is logged in and the sync
+  // state - never a token. Login opens GitHub in the system browser.
+  /** Promise<{ok, configured, loggedIn, user, lastSync, pending, error}>. */
+  cloudStatus: () => ipcRenderer.invoke('cloud:status'),
+  /** Promise<{ok} | {ok:false, reason}>. Rate-limited in main. */
+  cloudLogin: () => ipcRenderer.invoke('cloud:login'),
+  /** Promise<{ok}>. */
+  cloudLogout: () => ipcRenderer.invoke('cloud:logout'),
+  /** Promise<{ok} | {ok:false, reason}>. Rate-limited in main. */
+  cloudSyncNow: () => ipcRenderer.invoke('cloud:syncNow'),
 
   // --- Highlight extractor (batch clip trimmer) ---
   /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */

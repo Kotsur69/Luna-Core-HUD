@@ -187,3 +187,58 @@ test('peer units that fail validation are dropped', () => {
   assert.deepEqual(peer.units.map((x) => x.k), ['e:aaa']);
   assert.deepEqual(peer.gone, { 'e:fff': 1 });
 });
+
+// ---- cloud as an extra peer (src/cloudsync.js) ----------------------------------
+
+function cloudPc(machine, clock, cloudBody) {
+  const dir = tmp(machine);
+  const budgetFile = path.join(dir, 'life-budget.local.json');
+  const published = [];
+  const sync = createLifeSync({
+    sharedDir: () => null,
+    machine,
+    metaFile: path.join(dir, 'life-sync.local.json'),
+    budgetFile,
+    now: () => clock.t,
+    extraPeers: () => (cloudBody() ? [cloudBody()] : null),
+    onPublish: (doc) => published.push(doc),
+  });
+  return {
+    published,
+    sync: () => sync.syncOnce(),
+    apply: (op, data) => store.apply(op, data, budgetFile, clock.t),
+    budget: () => store.loadBudget(budgetFile),
+  };
+}
+
+test('cloud on, no shared folder: two PCs meet through the cloud body', () => {
+  const clock = { t: Date.UTC(2026, 9, 14, 12) };
+  let cloud = { units: [], gone: {} };
+  const a = cloudPc('PC-A', clock, () => cloud);
+  const b = cloudPc('PC-B', clock, () => cloud);
+  a.apply('addExpense', expense(10, 'from A'));
+  a.sync();
+  cloud = a.published.at(-1);
+  b.apply('addExpense', expense(20, 'from B'));
+  clock.t += 1000;
+  assert.equal(b.sync(), true);
+  assert.deepEqual(notes(b.budget()), ['from A', 'from B']);
+  assert.ok(Array.isArray(cloud.units) && cloud.gone && typeof cloud.gone === 'object');
+});
+
+test('cloud off and no shared folder: still a no-op', () => {
+  const clock = { t: Date.UTC(2026, 9, 14, 12) };
+  const a = cloudPc('PC-A', clock, () => null);
+  a.apply('addExpense', expense(10, 'x'));
+  assert.equal(a.sync(), false);
+  assert.equal(a.published.length, 0);
+});
+
+test('cloud body is validated like a peer file', () => {
+  const clock = { t: Date.UTC(2026, 9, 14, 12) };
+  const bad = { units: [{ k: 'e:bbb', v: { id: 'bbb', date: '2026-10-14', amount: -5, category: 'food', note: '' }, u: 1 }], gone: {} };
+  const a = cloudPc('PC-A', clock, () => bad);
+  a.apply('addExpense', expense(10, 'ok'));
+  a.sync();
+  assert.deepEqual(notes(a.budget()), ['ok']);
+});

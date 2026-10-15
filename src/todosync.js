@@ -147,9 +147,12 @@ const emptyMeta = () => ({ snap: {}, u: {}, gone: {} });
 /**
  * @param {{sharedDir:()=>string|null, machine:string, projects:()=>{id:string,path:string}[],
  *   resolveKey:(path:string)=>string, readTodos:(id)=>object[], writeTodos:(id, list)=>boolean,
- *   metaFile:string, now?:()=>number}} deps
+ *   metaFile:string, now?:()=>number, extraPeers?:()=>object[]|null,
+ *   onPublish?:(projects:object)=>void}} deps  extraPeers = the cloud
+ *   (src/cloudsync.js): raw `projects` maps, validated here like peer files,
+ *   or null while the cloud is off. onPublish gets what this PC publishes.
  */
-function createTodoSync({ sharedDir, machine, projects, resolveKey, readTodos, writeTodos, metaFile, now = Date.now }) {
+function createTodoSync({ sharedDir, machine, projects, resolveKey, readTodos, writeTodos, metaFile, now = Date.now, extraPeers = () => null, onPublish = () => {} }) {
   if (!MACHINE_RE.test(machine)) throw new Error('bad machine name');
 
   function readPeers(dir, t) {
@@ -174,10 +177,12 @@ function createTodoSync({ sharedDir, machine, projects, resolveKey, readTodos, w
 
   /** Syncs every project; returns the ids whose local list changed. */
   function syncAll() {
-    const dir = sharedDir();
-    if (typeof dir !== 'string' || !dir) return [];
+    const raw = sharedDir();
+    const dir = typeof raw === 'string' && raw ? raw : null;
+    const cloud = extraPeers();
+    if (!dir && !cloud) return [];
     const t = now();
-    const peers = readPeers(dir, t);
+    const peers = [...(dir ? readPeers(dir, t) : []), ...(cloud || []).map((p) => validPeerProjects(p, t))];
     const metas = readMeta(metaFile);
     const published = {};
     const changed = [];
@@ -203,7 +208,8 @@ function createTodoSync({ sharedDir, machine, projects, resolveKey, readTodos, w
       for (const k of keysFor) published[k] = mine;
     }
     fs.writeFileSync(metaFile, JSON.stringify({ v: VERSION, projects: metas }) + '\n', 'utf8');
-    writeSharedJson(path.join(dir, `todos-${machine}.json`), { v: VERSION, machine, updatedAt: t, projects: published });
+    if (dir) writeSharedJson(path.join(dir, `todos-${machine}.json`), { v: VERSION, machine, updatedAt: t, projects: published });
+    if (cloud) onPublish(published);
     return changed;
   }
 
@@ -229,9 +235,11 @@ const FIRST_SYNC_MS = 5000;
  * The real thing for main.js: shared folder + project keys exactly as the
  * Claude ledger uses them, a sync every minute, and soon() after any read or
  * write of a list. onChanged(ids) gets the project ids whose list changed.
- * @param {{getProjects:()=>{id:string,path:string}[], onChanged:(ids:string[])=>void}} opts
+ * cloud = startCloud() (src/cloudsync.js): an extra peer, and a sync soon
+ * after it brings another PC's changes.
+ * @param {{getProjects:()=>{id:string,path:string}[], onChanged:(ids:string[])=>void, cloud?:object}} opts
  */
-function startTodoSync({ getProjects, onChanged }) {
+function startTodoSync({ getProjects, onChanged, cloud = null }) {
   const os = require('os');
   const paths = require('./paths');
   const { readTodos, writeTodos } = require('./todo');
@@ -247,6 +255,7 @@ function startTodoSync({ getProjects, onChanged }) {
     readTodos,
     writeTodos,
     metaFile: paths.local('todo-sync.local.json'),
+    ...(cloud ? cloud.hooks('todos') : {}),
   });
   const run = () => {
     try {
@@ -258,12 +267,14 @@ function startTodoSync({ getProjects, onChanged }) {
   };
   let timer = setTimeout(run, FIRST_SYNC_MS);
   const interval = setInterval(run, SYNC_INTERVAL_MS);
+  const soon = () => {
+    clearTimeout(timer);
+    timer = setTimeout(run, SYNC_DEBOUNCE_MS);
+  };
+  if (cloud) cloud.onPulled((scope) => scope === 'todos' && soon());
   return {
     /** Debounced sync, e.g. after a write: a burst of edits publishes once. */
-    soon() {
-      clearTimeout(timer);
-      timer = setTimeout(run, SYNC_DEBOUNCE_MS);
-    },
+    soon,
     stop() {
       clearTimeout(timer);
       clearInterval(interval);

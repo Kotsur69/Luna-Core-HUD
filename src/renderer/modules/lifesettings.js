@@ -16,6 +16,7 @@ import {
   el, bucket, button, armedButton, field, input, select, amountField, money, monthLabel, lang, catName,
   getState, act as uiAct, setStatus,
 } from './lifeui.js';
+import { cloudCard } from './lifecloud.js';
 
 let editingBillId = null;
 let editingGoalId = null;
@@ -309,7 +310,7 @@ export function renderSettings(root, state) {
   const left = el('div', 'life-stack');
   left.append(incomeCard(budget), categoriesCard(budget));
   const right = el('div', 'life-stack');
-  right.append(billsCard(budget, rerender), goalsCard(budget, rerender));
+  right.append(billsCard(budget, rerender), goalsCard(budget, rerender), cloudCard());
   grid.append(left, right);
   root.replaceChildren(grid);
 }

@@ -1,6 +1,8 @@
 # Cloud sync + iPhone companion — plan
 
-Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14**
+Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14.
+Phase 2a (login + budget + to-dos over the cloud) shipped 2026-10-15**, live on
+KT-PC-LLM only so far
 to project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
 `https://phkigyuhvbanadwmxqqs.supabase.co`) — schema in
 `supabase/migrations/`. Security advisor: clean (RPC execute on Supabase's own
@@ -212,7 +214,7 @@ week. Phase 3 then removes the folder transport, `sharedDir`, and SyncTrayzor.
   **off**: migrations are applied via MCP, a deploy would re-run them.
 - Unrelated, owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.
 
-## Phase 2 — detailed plan (2026-10-14, shown to Mati; build next session)
+## Phase 2 — detailed plan (2026-10-14; 2a built 2026-10-15, see results below)
 
 Key finding: `lifesync.js` and `todosync.js` already merge **peers** of a fixed
 shape — life: `{units: [{k, v, u}], gone: {k: t}}`; to-dos:
@@ -255,8 +257,55 @@ day) from the cloud rejected by the existing `validStamp`.
 `validStamp`); first upload size (batched); `safeStorage` unavailable → no
 login, show why.
 
+## Phase 2a results (2026-10-15) ✅
+
+Built TDD-first as planned; `npm test` 2057/2057 (46 new cloud tests).
+Smoke-tested in the real app on KT-PC-LLM: GitHub login, first upload of 29
+budget units + 120 to-do units, card shows 0 waiting.
+
+| File | Role |
+|---|---|
+| `src/cloudrows.js` | Pure mapping: rows <-> life / to-do peers, published doc -> units, `unpushed()`, `parseCloudConfig()`. Rejects hostile keys (`__proto__`, `constructor`...), keys > 200, far-future `u`. Floors `u` (bigint column). |
+| `src/cloudsync.js` | `createCloudSync` (pull by `rev` in pages of 1000, push in batches of 500, cursor / `pushed` move only after success, state bound to the user id, `reset()` cancels an in-flight run) + `startCloud` (realtime -> debounced pull, 60 s poll, push 1 s after a publish, `CLOUD_OFF` without config). |
+| `src/cloudauth.js` | PKCE login, loopback `127.0.0.1:<random>/callback` (Host-checked, ignores stray requests, 3 min timeout), authorize URL checked before `openExternal`, session encrypted with `safeStorage` (no plaintext fallback). |
+| `src/cloudipc.js` | `cloud:status/login/logout/syncNow`, no payloads, whitelisted answers, rate limits. |
+| `src/renderer/modules/lifecloud.js` | "Cloud sync" card in Life -> Settings (`life.cloud.*` strings, pl + en). |
+| `lifesync.js` / `todosync.js` | New deps `extraPeers()` (null = cloud off) and `onPublish(doc)`; work with no `sharedDir` when the cloud is on. `startLifeSync({cloud})`, `startTodoSync({..., cloud})`. |
+
+Runtime files (user config dir / `config/` in a dev clone, all `*.local.json`):
+`cloud.local.json` `{url, publishableKey}`, `cloud-session.local.json`
+(encrypted), `cloud-sync.local.json` `{v, user, scopes: {life|todos: {cursor, pushed, mirror}}}`.
+
+Lessons:
+- Old first-sync stamps were `mtimeMs` floats (`1791972919873.1597`);
+  `push_units` casts `u` to bigint and refused every batch (22P02). Fixed by
+  flooring in `cloudrows` and in `lifesync`'s first-sync base.
+- Failures now log PostgREST code + message (`[cloudsync] push-failed: ...`).
+- The dev app has no single-instance lock: don't run two copies on one `config/`.
+
+Security review (`ecc:security-reviewer`): no CRITICAL/HIGH. Fixed: hostile
+row keys, user binding + logout race, loopback hardening, far-future stamps,
+`persist()` never throws, logout rate limit. Deliberately skipped (LOW):
+sender-frame check on IPC (no other handler does it; no webviews), per-entry
+mirror validation on load (peers go through `validPeer` anyway), one save per
+page during a pull.
+
+Not done in 2a: snapshots (2c), config scope (2b), a second PC.
+
 ## Next session: start here
 
-1. Re-read this file. Check `git log` for anything newer touching `lifesync.js` / `todosync.js`.
-2. Mati has seen the phase 2 plan above; get his "go", then build **2a**
-   TDD-first, smoke-test in the real app, security review, commit + push.
+1. Re-read this file; `git log` for anything newer touching `cloud*.js`,
+   `lifesync.js`, `todosync.js`.
+2. **Prove 2a on a second PC** (work PC or home PC): update LunaCore, copy
+   `cloud.local.json` (values in the 2a table above) into its config dir, log
+   in, check the budget + to-dos arrive and an edit on either PC shows up on
+   the other within seconds. Its first sync must not overwrite the cloud with
+   default categories (guarded: no peers before the first pull, stamps from
+   the file mtime / 0).
+3. Then **2b — config scope** (`mc:rules`, `news:source|topic:<id>`,
+   `proj:class:<key>` / `proj:pinned`, `doc:prompts|cheatsheets|libraries|rates`)
+   and **2c — snapshots** (ledger, news briefing, YAZIO), same TDD + security
+   review routine.
+4. Phase 3 (remove the folder transport, `sharedDir`, SyncTrayzor) only after
+   the cloud is proven on two PCs.
+5. Still owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.

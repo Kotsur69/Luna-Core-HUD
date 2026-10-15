@@ -165,3 +165,40 @@ test('no shared folder -> nothing happens, nothing throws', () => {
   const p = pc('DESK', null, { synthara: [item(1, 'x')] });
   assert.deepEqual(p.s.syncAll(), []);
 });
+
+// ---- cloud as an extra peer (src/cloudsync.js) ----------------------------------
+
+function cloudPc(name, lists, cloudBody) {
+  const store = new Map(Object.entries(lists));
+  const published = [];
+  const s = sync.createTodoSync({
+    sharedDir: () => null,
+    machine: name,
+    projects: () => [...store.keys()].map((id) => ({ id, path: '' })),
+    resolveKey: (_p, id) => sync.syncKey(null, id),
+    readTodos: (id) => store.get(id) || [],
+    writeTodos: (id, list) => (store.set(id, list), true),
+    metaFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), `tsc-${name}-`)), 'm.json'),
+    now: () => 5000,
+    extraPeers: () => (cloudBody() ? [cloudBody()] : null),
+    onPublish: (projects) => published.push(projects),
+  });
+  return { s, store, published };
+}
+
+test('cloud on, no shared folder: local buckets meet through the cloud body', () => {
+  let cloud = {};
+  const a = cloudPc('DESK', { home: [item(1, 'milk')] }, () => cloud);
+  const b = cloudPc('PHONE-ish', { home: [item(2, 'bread')] }, () => cloud);
+  a.s.syncAll();
+  cloud = a.published.at(-1);
+  assert.ok(cloud['local:home']);
+  assert.deepEqual(b.s.syncAll(), ['home']);
+  assert.deepEqual(b.store.get('home').map((x) => x.text).sort(), ['bread', 'milk']);
+});
+
+test('cloud off and no shared folder: nothing published', () => {
+  const a = cloudPc('DESK', { home: [item(1, 'milk')] }, () => null);
+  assert.deepEqual(a.s.syncAll(), []);
+  assert.equal(a.published.length, 0);
+});

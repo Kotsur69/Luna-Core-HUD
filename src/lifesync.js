@@ -170,10 +170,13 @@ function readMeta(file) {
 
 /**
  * @param {{sharedDir:()=>string|null, machine:string, metaFile:string,
- *   budgetFile?:string, now?:()=>number}} deps  budgetFile defaults to the
- *   store's own file.
+ *   budgetFile?:string, now?:()=>number, extraPeers?:()=>object[]|null,
+ *   onPublish?:(doc:{units, gone})=>void}} deps  budgetFile defaults to the
+ *   store's own file. extraPeers = the cloud (src/cloudsync.js): raw peer
+ *   bodies, validated here like peer files, or null while the cloud is off.
+ *   onPublish gets what this PC publishes, so the cloud can push it.
  */
-function createLifeSync({ sharedDir, machine, metaFile, budgetFile, now = Date.now }) {
+function createLifeSync({ sharedDir, machine, metaFile, budgetFile, now = Date.now, extraPeers = () => null, onPublish = () => {} }) {
   if (!MACHINE_RE.test(machine)) throw new Error('bad machine name');
 
   function readPeers(dir, t, withOwn) {
@@ -201,19 +204,23 @@ function createLifeSync({ sharedDir, machine, metaFile, budgetFile, now = Date.n
    * @returns {boolean} whether the local budget changed
    */
   function syncOnce() {
-    const dir = sharedDir();
-    if (typeof dir !== 'string' || !dir) return false;
+    const raw = sharedDir();
+    const dir = typeof raw === 'string' && raw ? raw : null;
+    const cloud = extraPeers();
+    if (!dir && !cloud) return false;
     const t = now();
     const local = store.readForSync(budgetFile);
     // Rows a damaged file lost would go out as deletions to every PC. Wait for
     // the next real write, which keeps a .bak and rewrites the file whole.
     if (local.suspect) throw new Error('suspect local budget');
     const saved = local.exists ? readMeta(metaFile) : null;
-    const base = !local.exists ? 0 : saved ? t : Math.min(local.mtimeMs, t);
+    const base = !local.exists ? 0 : saved ? t : Math.floor(Math.min(local.mtimeMs, t));
     const localUnits = toUnits(local.budget);
     const stamped = stamp(localUnits, saved || emptyMeta(), t, base);
     // No local file: this PC's own published copy may be the only one left.
-    const merged = merge(localUnits, stamped, readPeers(dir, t, !local.exists), t);
+    // The cloud rows include this PC's own, so they restore a lost file too.
+    const peers = [...(dir ? readPeers(dir, t, !local.exists) : []), ...(cloud || []).map((p) => validPeer(p, t))];
+    const merged = merge(localUnits, stamped, peers, t);
     // normalize() may still drop a unit (a deposit whose pot another PC deleted).
     const budget = fromUnits(merged.units);
     const finalUnits = toUnits(budget);
@@ -223,13 +230,9 @@ function createLifeSync({ sharedDir, machine, metaFile, budgetFile, now = Date.n
     const u = Object.fromEntries(finalUnits.map(([k]) => [k, merged.u[k] ?? t]));
     const snap = Object.fromEntries(finalUnits.map(([k, v]) => [k, fingerprint(v)]));
     fs.writeFileSync(metaFile, JSON.stringify({ v: VERSION, snap, u, gone: merged.gone }) + '\n', 'utf8');
-    writeSharedJson(path.join(dir, `life-budget-${machine}.json`), {
-      v: VERSION,
-      machine,
-      updatedAt: t,
-      units: finalUnits.map(([k, v]) => ({ k, v, u: u[k] })),
-      gone: merged.gone,
-    });
+    const units = finalUnits.map(([k, v]) => ({ k, v, u: u[k] }));
+    if (dir) writeSharedJson(path.join(dir, `life-budget-${machine}.json`), { v: VERSION, machine, updatedAt: t, units, gone: merged.gone });
+    if (cloud) onPublish({ units, gone: merged.gone });
     return changed;
   }
 
@@ -245,8 +248,10 @@ const FRESH_GAP_MS = 10 * 1000;
 /**
  * The real thing for main.js: the shared folder from missionprojects.js, a
  * sync every minute, soon() after a write, fresh() before a read.
+ * cloud = startCloud() (src/cloudsync.js): an extra peer, and a sync soon
+ * after it brings another PC's changes.
  */
-function startLifeSync() {
+function startLifeSync({ cloud = null } = {}) {
   const os = require('os');
   const paths = require('./paths');
   const { machineName } = require('./missionledgersync');
@@ -255,6 +260,7 @@ function startLifeSync() {
     sharedDir: () => projectStore.loadProjects().sharedDir,
     machine: machineName(os.hostname()),
     metaFile: paths.local('life-sync.local.json'),
+    ...(cloud ? cloud.hooks('life') : {}),
   });
   let lastRun = -Infinity;
   const run = () => {
@@ -267,12 +273,14 @@ function startLifeSync() {
   };
   let timer = setTimeout(run, FIRST_SYNC_MS);
   const interval = setInterval(run, SYNC_INTERVAL_MS);
+  const soon = () => {
+    clearTimeout(timer);
+    timer = setTimeout(run, SYNC_DEBOUNCE_MS);
+  };
+  if (cloud) cloud.onPulled((scope) => scope === 'life' && soon());
   return {
     /** Debounced sync, e.g. after a write: a burst of edits publishes once. */
-    soon() {
-      clearTimeout(timer);
-      timer = setTimeout(run, SYNC_DEBOUNCE_MS);
-    },
+    soon,
     /** Pulls the other PCs' changes now, unless a sync just ran. */
     fresh() {
       if (Date.now() - lastRun >= FRESH_GAP_MS) run();
