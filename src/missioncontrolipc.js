@@ -28,7 +28,7 @@ const { createGcal } = require('./gcal');
 const { createWeather } = require('./missionweather');
 const { createGithub } = require('./missiongithub');
 const { createTrending, buildDescribePrompt, parseDescription } = require('./missiontrending');
-const { createNews, buildNewsPrompt, parseNewsSummary, publicSections } = require('./missionnews');
+const { createNews, buildNewsPrompt, parseNewsSummary, publicSections, newsSnapshot } = require('./missionnews');
 const newsStore = require('./missionnewsstore');
 const projectStore = require('./missionprojects');
 
@@ -189,6 +189,21 @@ function registerMissionIpc({
   const model = () => {
     const m = getModel();
     return MISSION_MODELS.includes(m) ? m : DEFAULT_MISSION_MODEL;
+  };
+
+  /** The last briefing for the phone and other PCs; never waits, never throws -
+   *  a broken snapshot must not discard a paid summary. */
+  const putNewsSnapshot = (build) => {
+    const log = (err) => console.error('[mission] news cloud snapshot failed:', err && err.message);
+    try {
+      const cloud = cloudSnapshots();
+      if (!cloud) return;
+      Promise.resolve()
+        .then(() => cloud.put('news', build()))
+        .catch(log);
+    } catch (err) {
+      log(err);
+    }
   };
 
   /** Runs `fn` under the per-kind busy guard; always resolves. */
@@ -500,6 +515,8 @@ function registerMissionIpc({
       const res = await job('news', buildNewsPrompt(sections, lang), { lean: true });
       if (!res.ok) return { ...res, sections: publicSections(sections) };
       const { briefing, summaries } = parseNewsSummary(res.answer, sections);
+      // A quick search is a one-off: it must not replace the briefing the phone shows.
+      if (!adhoc) putNewsSnapshot(() => newsSnapshot({ briefing, sections, summaries, at: Date.now(), lang }));
       return { ok: true, briefing, sections: publicSections(sections, summaries), costUsd: res.costUsd };
     })
   );

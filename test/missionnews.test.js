@@ -357,7 +357,7 @@ test('createNews: configure opens the bridge console for x / reddit only', () =>
 
 // ---- IPC ---------------------------------------------------------------------
 
-function harness({ sections, answer }) {
+function harness({ sections, answer, cloudSnapshots }) {
   const handlers = new Map();
   const listeners = new Map();
   const jobs = [];
@@ -391,6 +391,7 @@ function harness({ sections, answer }) {
     news: fakeNews,
     store: { loadNews: () => NEWS, saveNews: (n) => n },
     openExternal: (u) => opened.push(u),
+    ...(cloudSnapshots ? { cloudSnapshots } : {}),
   });
   return {
     invoke: (ch, arg) => handlers.get(ch)({}, arg),
@@ -460,4 +461,133 @@ test('news-open resolves keys from the last scan only', () => {
   h.send('mission:news-open', 'https://evil.example.com');
   h.send('mission:news-open', 'e0-0');
   assert.deepEqual(h.opened, ['https://a.b/c']);
+});
+
+// ---- Cloud snapshot of the last briefing (CLOUD_SYNC_PLAN.md phase 2c) ----
+
+test('newsSnapshot: briefing + summaries + links for the phone; failed sections and raw text left out', () => {
+  const sections = [
+    ...ONE,
+    { id: 's-x', kind: 'source', label: 'x', platform: 'rss', ok: false, error: 'blocked', entries: [] },
+  ];
+  const summaries = new Map([['s-gh', { summary: 'sum', picks: ['e0-0'] }]]);
+  const snap = newsMod.newsSnapshot({ briefing: ['b'], sections, summaries, at: 1000, lang: 'en' });
+  assert.deepEqual(snap, {
+    v: 1,
+    at: 1000,
+    lang: 'en',
+    briefing: ['b'],
+    sections: [
+      {
+        label: 'gh',
+        platform: 'github',
+        kind: 'source',
+        summary: 'sum',
+        entries: [{ title: 'T', published: null, url: 'https://a.b/c', pick: true }],
+      },
+    ],
+  });
+});
+
+test('newsSnapshot: non-http and overlong links never leave the PC', () => {
+  const entries = [
+    { key: 'e0-0', title: 'ok', text: '', url: 'https://a.b/ok', published: null },
+    { key: 'e0-1', title: 'js', text: '', url: 'javascript:alert(1)', published: null },
+    { key: 'e0-2', title: 'long', text: '', url: `https://a.b/${'x'.repeat(3000)}`, published: null },
+  ];
+  const snap = newsMod.newsSnapshot({
+    briefing: [],
+    sections: [{ ...ONE[0], entries }],
+    summaries: new Map(),
+    at: 1,
+    lang: 'pl',
+  });
+  assert.deepEqual(snap.sections[0].entries.map((e) => e.title), ['ok']);
+});
+
+test('newsSnapshot: too big for a row -> picks only, then no entries', () => {
+  const { fits } = require('../src/cloudsnapshots.js');
+  const big = (n) =>
+    Array.from({ length: n }, (_, j) => ({ key: `e0-${j}`, title: 't'.repeat(300), text: '', url: `https://a.b/${'u'.repeat(1900)}${j}`, published: null }));
+  const sections = Array.from({ length: 30 }, (_, i) => ({ ...ONE[0], id: `s${i}`, entries: big(25) }));
+  const summaries = new Map(sections.map((s) => [s.id, { summary: 's', picks: ['e0-0'] }]));
+  const snap = newsMod.newsSnapshot({ briefing: ['b'], sections, summaries, at: 1, lang: 'pl' });
+  assert.equal(fits(snap), true);
+  assert.equal(snap.sections.length, 30);
+  assert.deepEqual(snap.sections[0].entries.map((e) => e.pick), [true]);
+  assert.equal(snap.sections[0].summary, 's');
+});
+
+function cloudHarness(opts) {
+  const puts = [];
+  const h = harness({
+    ...opts,
+    cloudSnapshots: () => ({ put: async (kind, data) => puts.push([kind, data]) || true, list: async () => [] }),
+  });
+  return { ...h, puts };
+}
+
+test('news-scan: a summarised scan of saved items goes up as the `news` snapshot', async () => {
+  const h = cloudHarness({
+    sections: ONE,
+    answer: { briefing: ['b'], sections: [{ id: 's-gh', summary: 's', picks: ['e0-0'] }] },
+  });
+  await h.invoke('mission:news-scan', { sourceIds: ['s-gh'], lang: 'en' });
+  assert.equal(h.puts.length, 1);
+  const [kind, data] = h.puts[0];
+  assert.equal(kind, 'news');
+  assert.deepEqual([data.lang, data.briefing, data.sections[0].entries[0].url], ['en', ['b'], 'https://a.b/c']);
+});
+
+test('news-scan: quick searches, empty scans and failed summaries are not pushed', async () => {
+  const h = cloudHarness({ sections: ONE, answer: { briefing: ['b'], sections: [] } });
+  await h.invoke('mission:news-scan', { adhoc: { query: 'hsr', platform: 'twitter' } });
+  assert.equal(h.puts.length, 0);
+  const empty = cloudHarness({ sections: [{ ...ONE[0], ok: false, entries: [] }], answer: null });
+  await empty.invoke('mission:news-scan', { sourceIds: ['s-gh'] });
+  assert.equal(empty.puts.length, 0);
+});
+
+test('news-scan: a failing cloud never fails the scan', async () => {
+  const h = harness({
+    sections: ONE,
+    answer: { briefing: ['b'], sections: [] },
+    cloudSnapshots: () => ({ put: async () => { throw new Error('offline'); } }),
+  });
+  const res = await h.invoke('mission:news-scan', { sourceIds: ['s-gh'] });
+  assert.equal(res.ok, true);
+});
+
+test('safeUrl: credentials, secret-looking params, quotes and non-http links stay on the PC', () => {
+  const { safeUrl } = newsMod;
+  assert.equal(safeUrl('https://a.b/p?x=1#frag'), 'https://a.b/p?x=1');
+  assert.equal(safeUrl('https://user:pw@a.b/'), null);
+  assert.equal(safeUrl('https://a.b/feed?token=abc'), null);
+  assert.equal(safeUrl('https://a.b/?api_key=abc'), null);
+  assert.equal(safeUrl('https://a.b/"onmouseover'), null);
+  assert.equal(safeUrl('ftp://a.b/'), null);
+  assert.equal(safeUrl('javascript:alert(1)'), null);
+  assert.equal(safeUrl(42), null);
+});
+
+test('newsSnapshot: labels clipped', () => {
+  const snap = newsMod.newsSnapshot({
+    briefing: [],
+    sections: [{ ...ONE[0], label: 'l'.repeat(500) }],
+    at: 1,
+    lang: 'pl',
+  });
+  assert.equal(snap.sections[0].label.length, 120);
+});
+
+test('news-scan: a cloud getter that throws never fails the scan', async () => {
+  const h = harness({
+    sections: ONE,
+    answer: { briefing: ['b'], sections: [] },
+    cloudSnapshots: () => {
+      throw new Error('boom');
+    },
+  });
+  const res = await h.invoke('mission:news-scan', { sourceIds: ['s-gh'] });
+  assert.deepEqual([res.ok, res.briefing], [true, ['b']]);
 });

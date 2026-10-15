@@ -405,6 +405,36 @@ parse cache for cloud peers; machine-name collisions (`PC_1` = `PC-1`); a
 `npm test` 2126/2126. Not yet live-tested (needs two logged-in PCs; check
 `select kind, machine, updated_at from snapshots` after the first ledger refresh).
 
+## Phase 2c, slice 2 — news briefing snapshot (2026-10-15)
+
+`missionnews.js` `newsSnapshot()` builds `{v, at, lang, briefing, sections:
+[{label, platform, kind, summary, entries: [{title, published, url, pick}]}]}`
+and `mission:news-scan` puts it as `news` after a successful summary,
+fire-and-forget (a throw anywhere never fails the scan or loses the paid
+summary). **Quick searches are not pushed**, so a one-off search never replaces the
+briefing. Unlike the renderer, the snapshot carries links (the phone has no
+main process to resolve keys) but never the fetched text. Links go through
+`safeUrl()`: http(s) only, no credentials, no quote/angle bracket/space,
+no secret-looking query parameter (`token|key|auth|sig|session|secret|password|code`),
+fragment dropped, ≤ 2048 chars. Labels are clipped to 120 chars, with at most 100 sections. Too big
+→ picked entries only → no entries → `put` refuses and logs once.
+
+Security review (`ecc:security-reviewer`): no CRITICAL. Fixed: snapshot built
+inside the guard (HIGH); strict `safeUrl` (MEDIUM); label/section caps
+(MEDIUM). **Accepted:** topic queries / source labels and the LLM summary leave
+the PC (same trust as the ledger's project names). **Reader requirements
+(phone, phase 4; other PCs):** treat the row as untrusted. Check `v === 1`,
+field types, `lang` ∈ {pl, en} and a sane `at`. Apply its own length caps.
+Re-parse every URL with `new URL()` (http(s), no credentials) and open it with
+`noopener noreferrer`. Render every string as text only (no `innerHTML`,
+markdown or auto-linking: briefing/summary are LLM output over untrusted pages).
+Show the link host before opening it, show "from HH:MM, <machine>" from `at`, and
+take the newest `at` across machines. No desktop reader yet: the News tab still shows
+local scans only.
+
+`npm test` 2135/2135. Not yet live-tested (`select machine, updated_at from
+snapshots where kind = 'news'` after a scan).
+
 ## Next session: start here
 
 1. Re-read this file; `git log` for anything newer touching `cloud*.js`,
@@ -423,7 +453,7 @@ parse cache for cloud peers; machine-name collisions (`PC_1` = `PC-1`); a
 3. ✅ **2b — config scope** done 2026-10-15 (project list, `doc:*` + `mc:rules`,
    news sources/topics, project classes/pinned; see the three slices above).
    Smoke-test live on two PCs before the next release. Next:
-   **2c — snapshots**: ledger ✅ (slice 1 above); next news briefing, then
+   **2c — snapshots**: ledger ✅, news briefing ✅ (slices 1–2 above); next
    YAZIO, same TDD + security review routine, reusing `cloudsnapshots.js`.
 4. Phase 3 (remove the folder transport, `sharedDir`, SyncTrayzor) only after
    the cloud is proven on two PCs.
