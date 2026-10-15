@@ -1,9 +1,9 @@
 # Cloud sync + iPhone companion — plan
 
 Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14. Released in v0.15.0 (2026-10-15).
-Phase 2a (login + budget + to-dos over the cloud) shipped 2026-10-15**, live on
-KT-PC-LLM only so far
-to project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
+Phases 2a–2c shipped 2026-10-15 (v0.15.0 → v0.16.1) and proven live on two PCs**
+(KT-PC-LLM + laptop KT-NO-MMAZUR), against Supabase
+project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
 `https://phkigyuhvbanadwmxqqs.supabase.co`) — schema in
 `supabase/migrations/`. Security advisor: clean (RPC execute on Supabase's own
 `rls_auto_enable()` event-trigger helper revoked). Start at "Next session: start here". Decisions below are settled
@@ -402,7 +402,7 @@ folder transport):** project keys/names (`git:host/owner/repo`,
 parse cache for cloud peers; machine-name collisions (`PC_1` = `PC-1`); a
 "forget this PC" action for a retired PC's row.
 
-`npm test` 2126/2126. Not yet live-tested (needs two logged-in PCs; check
+`npm test` 2126/2126. ✅ Live on two PCs since v0.16.0 (check
 `select kind, machine, updated_at from snapshots` after the first ledger refresh).
 
 ## Phase 2c, slice 2 — news briefing snapshot (2026-10-15)
@@ -431,7 +431,7 @@ markdown or auto-linking: briefing/summary are LLM output over untrusted pages).
 Show the link host before opening it, show "from HH:MM, <machine>" from `at`, and
 take the newest `at` across machines. Desktop reader: slice 3 (`missionnewspeers.js`).
 
-`npm test` 2135/2135. Not yet live-tested (`select machine, updated_at from
+`npm test` 2135/2135. ✅ Live, read on the laptop since v0.16.1 (`select machine, updated_at from
 snapshots where kind = 'news'` after a scan).
 
 ## Phase 2c, slice 3 — readers + YAZIO (2026-10-15)
@@ -472,24 +472,35 @@ Security review (`ecc:security-reviewer`): no CRITICAL/HIGH. Fixed:
 
 ## Next session: start here
 
-1. Re-read this file; `git log` for anything newer touching `cloud*.js`,
-   `lifesync.js`, `todosync.js`.
-2. ✅ **Proven on a second PC (2026-10-15)**, v0.15.0 installer +
-   `cloud.local.json` + `projects.local.json`; Mati: "works perfectly".
-   Phase 3 (folder transport removal) is now unblocked. Original steps, kept for the next PC:
-   **Set up another PC:** install v0.15.0 from
-   GitHub Releases, copy `cloud.local.json` (values in the 2a table above)
-   **and `projects.local.json`** into its config dir
+State on 2026-10-15: **phases 1, 2a, 2b and 2c are done, released (latest
+v0.16.1) and proven live on two PCs.** Mati, on the laptop with v0.16.1: "checked it
+works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
+
+1. Re-read this file and check `git log` for anything newer touching `cloud*.js`,
+   `configsync.js`, `docsync.js`, `missionsync.js`, `lifesync.js`, `todosync.js`,
+   `*peers.js`.
+2. **Rule learned in 2c:** a sync slice is not done until some PC *reads*
+   what it uploads. The audit table in slice 3 is the checklist; add a row for
+   every new synced item.
+3. **Next: Mati picks** one of these:
+   - **Phase 3**: remove the folder transport (`sharedDir`, the `ledger-*.json`
+     / life / to-do peer files, the "shared folder" UI in the ledger footer) and
+     SyncTrayzor. Unblocked, since the cloud is proven on two PCs. Keep the merge and
+     validation code that the cloud path reuses (`parsePeer`, `merge`, ...).
+   - **Phase 4**: the iPhone PWA (`mobile/`, see "Phone (phase 4)" above). Its
+     news reader must follow the reader requirements in slice 2.
+4. Small open items:
+   - The laptop's ledger snapshot is empty (no Claude Code transcripts there
+     in 8 days). Fine unless Mati uses Claude Code on the laptop.
+   - `doc:prompts`, `doc:libraries` and `mc:rules` aren't in the cloud
+     yet: no PC has edited them. The first edit should be watched once.
+   - The YAZIO snapshot uploads when a logged-in PC opens the Body tab. It's not live-checked
+     yet (`select machine, updated_at from snapshots where kind = 'yazio'`).
+   - LOW review notes not done: a "forget this PC" action for a retired PC's
+     rows; machine-name collisions (`PC_1` = `PC-1`).
+   - Still owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.
+5. **Setting up another PC:** install the latest release, copy `cloud.local.json`
+   (values in the 2a table above) and `projects.local.json` into its config dir
    (`%APPDATA%\LunaCore\config\` for the installer, `LunaCore-config\` next to
-   the portable `.exe`), log in, check the budget + to-dos arrive and an edit on either PC shows up on
-   the other within seconds. Its first sync must not overwrite the cloud with
-   default categories (guarded: no peers before the first pull, stamps from
-   the file mtime / 0).
-3. ✅ **2b — config scope** done 2026-10-15 (project list, `doc:*` + `mc:rules`,
-   news sources/topics, project classes/pinned; see the three slices above).
-   Smoke-test live on two PCs before the next release. Next:
-   **2c — snapshots**: ledger ✅, news briefing ✅, desktop readers + YAZIO ✅
-   (slices 1–3 above). 2c is complete; next is phase 3 or the phone (phase 4).
-4. Phase 3 (remove the folder transport, `sharedDir`, SyncTrayzor) only after
-   the cloud is proven on two PCs.
-5. Still owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.
+   the portable `.exe`), then log in. Its first sync can't overwrite the cloud
+   (no peers before the first pull, stamps from the file mtime / 0).
