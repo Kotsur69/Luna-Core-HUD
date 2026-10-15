@@ -99,6 +99,18 @@ export async function initProjects() {
   }
 }
 
+/** Re-reads the list but keeps the selection, unless that project is gone. */
+async function refreshProjectList() {
+  try {
+    const { projects, activeProject } = await window.lunacore.getProjects();
+    lastProjects = { items: projects, activeId: activeProject };
+    if (!projects.some((p) => p.id === currentProjectId)) currentProjectId = activeProject;
+    renderProjectSwitcher();
+  } catch (err) {
+    // Could not read the projects - leave the switcher showing its last known state.
+  }
+}
+
 /** Points both switchers at the ACTIVE tab's values. */
 export function syncSwitchers(meta) {
   if (!meta) return;
@@ -213,9 +225,12 @@ defineWidget({
     projectEls.removeBtn.addEventListener('click', () => removeSelectedProject(projectEls.removeBtn));
 
     const offLang = onLangChange(renderProjectSwitcher);
+    // Another PC added or removed a project (cloud sync): repaint the list.
+    const offChanged = window.lunacore.onProjectsChanged(refreshProjectList);
 
     return () => {
       offLang();
+      offChanged();
       projectEls = null;
     };
   },

@@ -14,7 +14,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createCloudSync, PAGE, BATCH } = require('../src/cloudsync.js');
+const { createCloudSync, PAGE, BATCH, SCOPES } = require('../src/cloudsync.js');
 
 /** In-memory sync_units with the same newest-wins rule as the SQL function. */
 function fakeServer() {
@@ -174,7 +174,7 @@ test('cursor, pushed and mirror survive a restart; a new instance pulls only new
   const pullsBefore = server.calls.pulls;
   await again.syncNow();
   assert.equal(again.peers('life')[0].units.length, 1);
-  assert.equal(server.calls.pulls - pullsBefore, 2); // one empty page per scope
+  assert.equal(server.calls.pulls - pullsBefore, SCOPES.length); // one empty page per scope
 });
 
 test('a corrupt state file starts over instead of throwing', async () => {

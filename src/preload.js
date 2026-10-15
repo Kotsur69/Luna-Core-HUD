@@ -136,6 +136,13 @@ contextBridge.exposeInMainWorld('lunacore', {
   addProject: (entry) => ipcRenderer.invoke('projects:add', entry),
   /** Removes a project by id (local-added or a shipped default); returns { projects, activeProject } or null. */
   removeProject: (id) => ipcRenderer.invoke('projects:remove', id),
+  /** The list changed outside the switcher (cloud sync from another PC). No
+   *  payload: re-fetch with getProjects(). Returns an unsubscribe function. */
+  onProjectsChanged: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('projects:changed', listener);
+    return () => ipcRenderer.removeListener('projects:changed', listener);
+  },
 
   // --- Active-Files Heatmap: does the file still exist on disk ---
   /** Checks fs.existsSync for a list of paths; returns { [path]: boolean }. */

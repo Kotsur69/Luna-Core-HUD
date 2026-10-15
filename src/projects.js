@@ -73,9 +73,11 @@ function normalizeProject(p) {
  * @returns {{projects: Array<{id:string,label:string,path:string}>, activeProject: string}}
  */
 function loadProjects() {
-  const base = readJson(BASE_FILE) || FALLBACK;
-  const local = readJson(localFile());
+  return mergeProjects(readJson(BASE_FILE) || FALLBACK, readJson(localFile()));
+}
 
+/** Pure part of loadProjects(): parsed base + parsed local (or null) -> the list. */
+function mergeProjects(base, local) {
   // Ids the user deleted via the UI. Needed because a deleted entry may come
   // from the READ-ONLY base file - removeProject() cannot erase it there, so
   // it records the id here instead and every load filters it back out.
@@ -235,6 +237,9 @@ function removeProject(id) {
 // as loadProjects() itself.
 module.exports = {
   loadProjects,
+  mergeProjects,
+  /** The two files loadProjects() reads, for the cloud sync (src/projectsync.js). */
+  projectFiles: () => ({ baseFile: BASE_FILE, localFile: localFile() }),
   getProject,
   normalizeProject,
   expandHome,

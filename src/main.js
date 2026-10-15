@@ -165,6 +165,9 @@ const { readTodos, writeTodos } = require('./todo');
 // To-dos merged with the other PCs through the ledger's shared folder.
 const { startTodoSync } = require('./todosync');
 let todoSync = null;
+// The project list (and later other settings) shared through the cloud.
+const { startConfigSync } = require('./configsync');
+let configSync = null;
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
@@ -1559,6 +1562,16 @@ function startActiveProjects() {
   }
 }
 
+/** The cloud changed the project list (src/configsync.js): reload it, repaint the switcher. */
+function reloadProjects() {
+  const loaded = loadProjects();
+  projects = loaded.projects;
+  if (!getProject(projects, activeProjectId)) activeProjectId = loaded.activeProject;
+  send('projects:changed');
+  // New projects bring their to-dos from the cloud on the next to-do sync.
+  if (todoSync) todoSync.soon();
+}
+
 /**
  * Loads profiles and opens the first tab (at app start).
  * B1: the profile remembered in ui.local.json takes priority - we start
@@ -2225,6 +2238,7 @@ function registerIpc() {
     const result = addProject(entry);
     if (!result) return null;
     projects = result.projects;
+    if (configSync) configSync.soon();
     return result;
   });
 
@@ -2240,6 +2254,7 @@ function registerIpc() {
     if (!result) return null;
     projects = result.projects;
     if (wasActive) activeProjectId = result.activeProject;
+    if (configSync) configSync.soon();
     return result;
   });
 
@@ -3000,6 +3015,10 @@ app.whenReady().then(() => {
     getProjects: () => projects,
     onChanged: (ids) => ids.forEach((projectId) => send('todo:changed', { projectId })),
     cloud,
+  });
+  configSync = startConfigSync({
+    cloud,
+    onChanged: (names) => names.includes('projects') && reloadProjects(),
   });
   // God Mode v2: bring back the last run's board (held - nothing launches
   // until Approve/Retry) and start the worker-time watchdog. After the

@@ -26,7 +26,7 @@ const fs = require('fs');
 const rows = require('./cloudrows');
 
 const VERSION = 1;
-const SCOPES = ['life', 'todos'];
+const SCOPES = ['life', 'todos', 'config'];
 const PAGE = 1000;
 /** push_units refuses more than 500 units per call. */
 const BATCH = 500;
@@ -34,8 +34,9 @@ const BATCH = 500;
 const MAX_PAGES = 100;
 const COLUMNS = 'key,value,u,deleted_at,rev,machine';
 
-const PEER_OF = { life: rows.lifePeer, todos: rows.todoPeer };
-const UNITS_OF = { life: rows.lifeUnits, todos: rows.todoUnits };
+// configsync.js publishes the same {units, gone} body as lifesync.js.
+const PEER_OF = { life: rows.lifePeer, todos: rows.todoPeer, config: rows.lifePeer };
+const UNITS_OF = { life: rows.lifeUnits, todos: rows.todoUnits, config: rows.lifeUnits };
 
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const emptyScope = () => ({ cursor: 0, pushed: {}, mirror: {} });

@@ -312,6 +312,28 @@ id, no paths needed.
 **Build rule (v0.15.0):** `build.files` packs only `config/**/*.json` (minus
 `*.local.json`), so a stray note in `config/` can never ship inside the `.exe`.
 
+## Phase 2b, slice 1 — project list (2026-10-15)
+
+| File | Role |
+|---|---|
+| `src/configsync.js` | Engine for the `config` scope: one **provider** per kind of setting (`owns`, `valid`, `read`, `resolve?`, `write`). Reuses `lifesync`'s `stamp` / `merge` (newest wins, tombstones). Cloud only, no folder transport. A provider that can't read or write is skipped that round. State `config-sync.local.json` = `{v, providers: {<name>: {snap, u, gone}}}`. `startConfigSync({cloud, onChanged})`. |
+| `src/projectsync.js` | Provider `projects`: `proj:entry:<id>` = `{label, path}`, paths under home as `~/...`. A PC **adds** projects it lacks and **drops** ones deleted elsewhere, but a project it already has **keeps its own path/label**. `removedIds` seed tombstones on the first sync (a removed default can't come back). Cloud paths: only `~`, `~/...`, absolute; no UNC; ids `[A-Za-z0-9._-]{1,80}` minus `__proto__` & co. |
+| `src/cloudsync.js` | `SCOPES` += `config` (same `{units, gone}` mapping as `life`). |
+| `src/main.js` / `preload.js` / `switchers.js` | `configSync.soon()` after add/remove; cloud change -> `reloadProjects()` -> `projects:changed` (no payload) -> switcher re-fetches; to-do sync runs soon so new projects bring their to-dos. |
+
+Security review (`ecc:security-reviewer`): no CRITICAL/HIGH. Fixed: Windows
+device paths (`\??\UNC\...`, `\\.\...`) slipped past the UNC check — now only
+`~`, `~/`, `X:\`, plain `/x`; `removedIds` seeds stamped with the file mtime
+(floored to now − 30 days) instead of now, so a later re-add elsewhere wins;
+arrivals capped at 200 projects; temp files match `*.local.json`; meta written
+atomically; unparseable local entries kept. **Accepted trust assumption:** a
+row in Mati's own cloud can add a project whose folder becomes a terminal cwd
+— anyone able to write it already holds his Supabase session.
+`npm test` 2079/2079. Not yet smoke-tested live.
+
+Next providers (same engine, one file each): `mc:rules`, `news:source|topic:<id>`,
+`proj:class:<key>` / `proj:pinned`, `doc:prompts|cheatsheets|libraries|rates`.
+
 ## Next session: start here
 
 1. Re-read this file; `git log` for anything newer touching `cloud*.js`,
@@ -327,7 +349,7 @@ id, no paths needed.
    the other within seconds. Its first sync must not overwrite the cloud with
    default categories (guarded: no peers before the first pull, stamps from
    the file mtime / 0).
-3. Then **2b — config scope** (**`proj:entry:<id>` project list first**, `mc:rules`, `news:source|topic:<id>`,
+3. Then **2b — config scope** (✅ `proj:entry:<id>` project list built 2026-10-15, see above; next `mc:rules`, `news:source|topic:<id>`,
    `proj:class:<key>` / `proj:pinned`, `doc:prompts|cheatsheets|libraries|rates`)
    and **2c — snapshots** (ledger, news briefing, YAZIO), same TDD + security
    review routine.
