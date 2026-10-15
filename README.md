@@ -7,7 +7,13 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.15.0 — Life + cloud sync.** A **Ctrl+Shift+N** Life
+> **Current release: v0.16.0 — Cloud sync, part 2.** The cloud now also carries
+> the project list, prompts, libraries, rates, Mission Control mail rules, news
+> sources/topics and project classes/pins (cheatsheets deliberately stay local),
+> plus per-PC snapshots of the Claude ledger (combined weekly limit across PCs)
+> and the last news briefing. Same opt-in: no `cloud.local.json`, no cloud.
+>
+> **v0.15.0 — Life + cloud sync.** A **Ctrl+Shift+N** Life
 > dashboard (budget with buckets, bills, savings goals, charts, a Year tab, and
 > a YAZIO Body tab), and optional cloud sync of the budget and to-dos between
 > PCs over your own Supabase project with GitHub login. No `cloud.local.json`
@@ -68,8 +74,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.15.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.15.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.16.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.16.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
