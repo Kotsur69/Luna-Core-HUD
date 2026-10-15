@@ -26,6 +26,7 @@ const { stamp, merge } = require('./lifesync');
 const { writeAtomic } = require('./projectsync');
 const { fingerprint } = require('./todosync');
 const { MAX_KEY } = require('./cloudrows');
+const { MAX_DOC_BYTES } = require('./docsync');
 
 const VERSION = 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -35,6 +36,11 @@ const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArr
 const validStamp = (t, now) => typeof t === 'number' && Number.isFinite(t) && t >= 0 && t <= now + DAY_MS;
 const validKey = (k) => typeof k === 'string' && k.length > 0 && k.length <= MAX_KEY && k !== '__proto__' && !Object.hasOwn(Object.prototype, k);
 const emptyMeta = () => ({ snap: {}, u: {}, gone: {} });
+/**
+ * Whether the server would take the unit. One refused row fails its whole
+ * push batch on every retry, so a too-long key or too-big value stays local.
+ */
+const pushable = (k, v) => k.length <= MAX_KEY && Buffer.byteLength(JSON.stringify(v), 'utf8') <= MAX_DOC_BYTES;
 
 function readMetas(file) {
   try {
@@ -109,8 +115,11 @@ function createConfigSync({ providers, metaFile, now = Date.now, extraPeers = ()
       }
       const u = Object.fromEntries(final.map(([k]) => [k, merged.u[k] ?? t]));
       metas[provider.name] = { snap: Object.fromEntries(final.map(([k, v]) => [k, fingerprint(v)])), u, gone: merged.gone };
-      for (const [k, v] of final) units.push({ k, v, u: u[k] });
-      Object.assign(gone, merged.gone);
+      for (const [k, v] of final) {
+        if (pushable(k, v)) units.push({ k, v, u: u[k] });
+        else console.error(`[configsync] ${provider.name}: ${k.slice(0, 60)} too big for the cloud, kept local`);
+      }
+      for (const [k, t] of Object.entries(merged.gone)) if (k.length <= MAX_KEY) gone[k] = t;
     }
     // Atomic: a torn meta file would read as a first sync and lose local deletions.
     writeAtomic(metaFile, JSON.stringify({ v: VERSION, providers: metas }) + '\n');
@@ -135,9 +144,16 @@ function startConfigSync({ cloud, onChanged }) {
   const paths = require('./paths');
   const { projectFiles } = require('./projects');
   const { createProjectsProvider } = require('./projectsync');
+  const { docProviders } = require('./docsync');
+  const { createNewsProvider, createMissionProjectsProvider } = require('./missionsync');
   paths.ensureUserDir();
   const sync = createConfigSync({
-    providers: [createProjectsProvider(projectFiles())],
+    providers: [
+      createProjectsProvider(projectFiles()),
+      ...docProviders((name) => paths.local(name)),
+      createNewsProvider(paths.local('mission-news.local.json')),
+      createMissionProjectsProvider(paths.local('mission-projects.local.json')),
+    ],
     metaFile: paths.local('config-sync.local.json'),
     ...cloud.hooks('config'),
   });

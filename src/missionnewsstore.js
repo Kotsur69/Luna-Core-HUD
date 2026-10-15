@@ -106,8 +106,9 @@ function normalizeSource(raw) {
 /** One raw topic -> a valid topic, or null. */
 function normalizeTopic(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  // A leading "-" would read as a flag to the CLIs behind some platforms.
-  const query = text(raw.query, MAX_QUERY).replace(/^-+\s*/, '');
+  // A leading "-" would read as a flag to the CLIs behind some platforms;
+  // "- -x" must not leave one behind either.
+  const query = text(raw.query, MAX_QUERY).replace(/^[\s-]+/, '');
   if (!query) return null;
   const platforms = Array.isArray(raw.platforms) ? raw.platforms.filter((p) => TOPIC_PLATFORMS.includes(p)) : [];
   if (platforms.length === 0) return null;
@@ -149,7 +150,11 @@ module.exports = {
   saveNews,
   normalizeNews,
   normalizeTopic,
+  normalizeSource,
+  validId,
   sourceTarget,
+  MAX_SOURCES,
+  MAX_TOPICS,
   SOURCE_PLATFORMS,
   TOPIC_PLATFORMS,
 };

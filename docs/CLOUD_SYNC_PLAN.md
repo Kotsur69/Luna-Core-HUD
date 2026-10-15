@@ -331,8 +331,55 @@ row in Mati's own cloud can add a project whose folder becomes a terminal cwd
 — anyone able to write it already holds his Supabase session.
 `npm test` 2079/2079. Not yet smoke-tested live.
 
-Next providers (same engine, one file each): `mc:rules`, `news:source|topic:<id>`,
-`proj:class:<key>` / `proj:pinned`, `doc:prompts|cheatsheets|libraries|rates`.
+## Phase 2b, slice 2 — whole settings files (2026-10-15)
+
+`src/docsync.js`: one provider per file, unit value = the parsed file, newest wins:
+`doc:prompts`, `doc:libraries`, `doc:rates` (`<name>.local.json`)
+and `mc:rules` (`missioncontrol.local.json`). First sync stamps from the file
+mtime (a fresh PC's older file loses to the cloud). Deleting the file deletes it
+on the other PCs; whatever the cloud replaces or deletes is kept as
+`<name>.bak.local.json`. A file over 7000 UTF-8 bytes of JSON (the server's
+16 KiB jsonb cap, with room for jsonb's ~2x overhead; one refused row would
+fail its whole push batch forever) or unparseable is skipped: never published,
+never overwritten (only a console line says so). Cloud values only need to be
+a plain object within the cap — every loader re-validates its file on each
+read. Tests: `test/docsync.test.js` (fake cloud reorders keys like jsonb to
+prove there is no rewrite loop).
+
+Security review (`ecc:security-reviewer`): no CRITICAL. Fixed: chars-vs-bytes
+cap (HIGH), `.bak` copy against a wrong fleet-wide delete (MEDIUM).
+Reviewer HIGH on synced cheatsheet commands (typed into the terminal on
+click) -> Mati dropped `doc:cheatsheets` from the sync. **Accepted trust
+assumption** (same as the project list): Mission Control mail rules
+go into the Haiku mail prompt (trash still needs preview + approval) — anyone
+able to write those rows already holds Mati's Supabase session. Not done
+(LOW): oversize warning in the Cloud card; `{}` accepted as a doc.
+**Cheatsheets are not synced** (Mati, 2026-10-15): a cheatsheet command is
+typed into the terminal on click, so no cloud row may change one.
+Known gap: the prompts panel fetches once at start and libraries
+on first open, so a change from another PC shows after a restart.
+
+## Phase 2b, slice 3 — Mission Control settings (2026-10-15)
+
+`src/missionsync.js`, two providers:
+- `news` (`mission-news.local.json`): `news:source:<id>` = `{platform, target, label}`,
+  `news:topic:<id>` = `{query, platforms}`. Cloud values pass the store's own
+  `normalizeSource` / `normalizeTopic`; arrivals capped at 50 sources / 30 topics.
+  Items without a valid id stay in the file, unsynced.
+- `missionProjects` (`mission-projects.local.json`): `proj:class:<projectKey>` =
+  `{class}`, `proj:pinned` = `{list}` (through `normalizePinned`). **`sharedDir`
+  never leaves the PC.**
+Tests: `test/missionsync.test.js`. `npm test` 2103/2103.
+
+Security review (`ecc:security-reviewer`): no CRITICAL/HIGH, `sharedDir` never
+leaks. Fixed (MEDIUM): `configsync` now keeps any unit with a key > 200 chars
+or a value > 7000 bytes local (one refused row would fail its whole push batch
+forever — a long `git:` project key or a big pinned list could do it); the
+topic dash guard strips `- -x` too (`/^[\s-]+/`). Not done (LOW): local news
+items with a valid id that fail normalisation are dropped on the next cloud
+write (the loader ignores them anyway); bidi/zero-width characters in labels.
+
+**2b is complete** — every file in inventory section A now syncs.
 
 ## Next session: start here
 
@@ -349,9 +396,10 @@ Next providers (same engine, one file each): `mc:rules`, `news:source|topic:<id>
    the other within seconds. Its first sync must not overwrite the cloud with
    default categories (guarded: no peers before the first pull, stamps from
    the file mtime / 0).
-3. Then **2b — config scope** (✅ `proj:entry:<id>` project list built 2026-10-15, see above; next `mc:rules`, `news:source|topic:<id>`,
-   `proj:class:<key>` / `proj:pinned`, `doc:prompts|cheatsheets|libraries|rates`)
-   and **2c — snapshots** (ledger, news briefing, YAZIO), same TDD + security
+3. ✅ **2b — config scope** done 2026-10-15 (project list, `doc:*` + `mc:rules`,
+   news sources/topics, project classes/pinned; see the three slices above).
+   Smoke-test live on two PCs before the next release. Next:
+   **2c — snapshots** (ledger, news briefing, YAZIO), same TDD + security
    review routine.
 4. Phase 3 (remove the folder transport, `sharedDir`, SyncTrayzor) only after
    the cloud is proven on two PCs.

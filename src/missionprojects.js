@@ -107,4 +107,4 @@ function pinnedAliases(pinned) {
   return map;
 }
 
-module.exports = { loadProjects, setClass, setSharedDir, setPinned, pinnedAliases, CLASSES };
+module.exports = { loadProjects, setClass, setSharedDir, setPinned, pinnedAliases, normalize, normalizePinned, CLASSES, MAX_CLASSES };

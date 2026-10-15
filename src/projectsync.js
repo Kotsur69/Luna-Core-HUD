@@ -157,4 +157,4 @@ function createProjectsProvider({ baseFile, localFile }) {
   };
 }
 
-module.exports = { createProjectsProvider, portablePath, validEntry, writeAtomic, PREFIX, MAX_PROJECTS };
+module.exports = { createProjectsProvider, portablePath, validEntry, readDoc, writeAtomic, PREFIX, MAX_PROJECTS };
