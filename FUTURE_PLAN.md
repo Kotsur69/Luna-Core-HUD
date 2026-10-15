@@ -5,12 +5,16 @@ got here (widget contract, layout engine, packaging, the lessons each phase
 cost) lives in [`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md).
 Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 
-## Where things stand (2026-10-09)
+## Where things stand (2026-10-15)
 
+- **START HERE for cloud sync:** [`docs/CLOUD_SYNC_PLAN.md`](docs/CLOUD_SYNC_PLAN.md)
+  "Next session: start here" (second-PC test, then 2b config + project list, 2c snapshots).
 - **START HERE for Mission Control:**
   [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md) - decisions,
   build order W1-W8 and a copy-paste starting prompt.
-- **Released:** `v0.14.0` (2026-10-09) - Mission Control (Ctrl+Shift+M: mail
+- **Released:** `v0.15.0` (2026-10-15) - Life dashboard (Ctrl+Shift+N: budget,
+  bills, savings, Year and Body tabs) and cloud sync phase 2a (GitHub login,
+  budget + to-dos over Supabase). Before it: `v0.14.0` (2026-10-09) - Mission Control (Ctrl+Shift+M: mail
   cleanup, Google Calendar API, GitHub / Claude-budget telemetry, Agent-Reach
   News) and God Mode v2 below. Before it: `v0.13.0` (2026-09-25) - AI
   providers, provider-aware usage, God Mode overnight guard, "Don't sleep".

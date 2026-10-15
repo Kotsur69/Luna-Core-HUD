@@ -1,6 +1,6 @@
 # Cloud sync + iPhone companion — plan
 
-Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14.
+Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14. Released in v0.15.0 (2026-10-15).
 Phase 2a (login + budget + to-dos over the cloud) shipped 2026-10-15**, live on
 KT-PC-LLM only so far
 to project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
@@ -292,17 +292,39 @@ page during a pull.
 
 Not done in 2a: snapshots (2c), config scope (2b), a second PC.
 
+Follow-up fix (2026-10-15, shipped in v0.15.0): a project's **first** to-do
+sync on a PC stamps its local items `u = 0` (`todosync.js` `stamp(..., base)`),
+so an old copy of an item (e.g. unticked) can't beat the cloud's newer
+version. Items only that PC has still upload. Same idea as `lifesync`'s mtime base.
+
+**Gap found: the project list doesn't sync.** To-dos sync per project, and
+`syncAll` only walks the projects in *this* PC's list (`projects.json` +
+`projects.local.json`: `{id, label, path}`). A fresh install only knows
+`home` + `lunacore`, so the to-dos of every other project stay in the cloud
+but don't show up there. Nothing is lost or deleted. Workaround for the
+second-PC test: copy `projects.local.json` too (a missing folder is fine: the
+to-dos meet under the `local:<id>` alias; only opening a terminal there fails).
+Fix in **2b**: unit `proj:entry:<id>` = `{label, path}` (newest wins,
+tombstone on remove). A PC adds the projects it lacks, and paths under the home dir are
+stored as `~/...` so they fit another user name. Phone: to-dos grouped by project
+id, no paths needed.
+
+**Build rule (v0.15.0):** `build.files` packs only `config/**/*.json` (minus
+`*.local.json`), so a stray note in `config/` can never ship inside the `.exe`.
+
 ## Next session: start here
 
 1. Re-read this file; `git log` for anything newer touching `cloud*.js`,
    `lifesync.js`, `todosync.js`.
-2. **Prove 2a on a second PC** (work PC or home PC): update LunaCore, copy
-   `cloud.local.json` (values in the 2a table above) into its config dir, log
-   in, check the budget + to-dos arrive and an edit on either PC shows up on
+2. **Prove 2a on a second PC** (work PC or home PC): install v0.15.0 from
+   GitHub Releases, copy `cloud.local.json` (values in the 2a table above)
+   **and `projects.local.json`** into its config dir
+   (`%APPDATA%\LunaCore\config\` for the installer, `LunaCore-config\` next to
+   the portable `.exe`), log in, check the budget + to-dos arrive and an edit on either PC shows up on
    the other within seconds. Its first sync must not overwrite the cloud with
    default categories (guarded: no peers before the first pull, stamps from
    the file mtime / 0).
-3. Then **2b — config scope** (`mc:rules`, `news:source|topic:<id>`,
+3. Then **2b — config scope** (**`proj:entry:<id>` project list first**, `mc:rules`, `news:source|topic:<id>`,
    `proj:class:<key>` / `proj:pinned`, `doc:prompts|cheatsheets|libraries|rates`)
    and **2c — snapshots** (ledger, news briefing, YAZIO), same TDD + security
    review routine.
