@@ -2,7 +2,7 @@
 
 Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14. Released in v0.15.0 (2026-10-15).
 Phases 2a–2c shipped 2026-10-15 (v0.15.0 → v0.16.1) and proven live on two PCs.
-Phase 3 (folder transport removed) done 2026-10-15, not released yet**
+Phase 3 (folder transport removed) released in v0.16.2 (2026-10-19)**
 (KT-PC-LLM + laptop KT-NO-MMAZUR), against Supabase
 project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
 `https://phkigyuhvbanadwmxqqs.supabase.co`) — schema in
@@ -497,9 +497,10 @@ stay in use by the cloud path, don't delete them.
 ## Next session: start here
 
 State on 2026-10-15: **phases 1, 2a, 2b and 2c are done, released (latest
-v0.16.1) and proven live on two PCs. Phase 3 is done (see above) but not
-released yet** — next release should carry it; check on both PCs that the
-Ctrl+Shift+M ledger still lists the other PC and to-dos/budget still merge. Mati, on the laptop with v0.16.1: "checked it
+v0.16.1) and proven live on two PCs. Phase 3 is released in v0.16.2
+(2026-10-19)** — check on both PCs that the Ctrl+Shift+M ledger still lists
+the other PC and to-dos/budget still merge. KT-PC-LLM is cleaned up
+(SyncTrayzor + LunaLedger deleted); the laptop's cleanup is Mati's. Mati, on the laptop with v0.16.1: "checked it
 works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
 
 1. Re-read this file and check `git log` for anything newer touching `cloud*.js`,
