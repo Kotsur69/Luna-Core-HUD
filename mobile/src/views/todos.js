@@ -3,7 +3,8 @@
 // ----------------------------------------------------------------------------
 // One list at a time, picked from the projects the PCs have synced. Every
 // action is one cloud unit (todomodel.js); the screen re-renders from the
-// mirror the write's pull returns, so it only ever shows what the server holds.
+// mirror the write's pull returns: what the server holds, plus this phone's
+// writes still waiting to be sent (phase 4d).
 // ============================================================================
 
 import { h, icon, ICONS } from '../dom.js';
@@ -44,7 +45,9 @@ export function mountTodos(main, { cloud, toast }) {
     if (!unit || busy) return false;
     busy = true;
     try {
-      render((await cloud.write(SCOPE, unit)).mirror);
+      const s = await cloud.write(SCOPE, unit);
+      render(s.mirror);
+      if (s.queued) toast(t('savedOffline'));
       return true;
     } catch {
       toast(t('saveFailed'), true);

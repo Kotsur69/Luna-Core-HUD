@@ -11,12 +11,14 @@ const SUPABASE_RE = /^https:\/\/[a-z0-9-]{1,63}\.supabase\.co$/;
 /**
  * The CSP's connect-src names this build's own Supabase project, not every
  * *.supabase.co: a leaked session token can't be sent to another project.
+ * The wss:// twin is the realtime socket (phase 4d).
  */
 function cspOrigin(mode) {
-  const url = (loadEnv(mode, process.cwd(), 'VITE_').VITE_SUPABASE_URL || '').replace(/\/$/, '');
+  const env = (loadEnv(mode, process.cwd(), 'VITE_').VITE_SUPABASE_URL || '').replace(/\/$/, '');
+  const url = SUPABASE_RE.test(env) ? env : 'https://invalid.supabase.co';
   return {
     name: 'lunacore-csp-origin',
-    transformIndexHtml: (html) => html.replace('__SUPABASE_ORIGIN__', SUPABASE_RE.test(url) ? url : 'https://invalid.supabase.co'),
+    transformIndexHtml: (html) => html.replace('__SUPABASE_ORIGIN__', `${url} ${url.replace(/^https:/, 'wss:')}`),
   };
 }
 

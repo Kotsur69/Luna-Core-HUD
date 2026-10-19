@@ -5,7 +5,8 @@
 // bills, savings and the latest expenses. Numbers come from the desktop's own
 // maths (src/lifebudgetcalc.js) over the budget lifemodel.js rebuilds from
 // the cloud mirror. Every action is one budget op -> the units it changed;
-// the screen re-renders from the mirror the write's pull returns.
+// the screen re-renders from the mirror the write's pull returns (with the
+// phone's queued writes laid over it, phase 4d).
 // ============================================================================
 
 import { h, icon, ICONS } from '../dom.js';
@@ -127,7 +128,7 @@ export function mountLife(main, { cloud, toast }) {
   // dropped, so a slow pull never repaints over a write (or feeds it old stamps).
   let seq = 0;
 
-  /** Runs one op; refused input and failed pushes are told apart. */
+  /** Runs one op; refused input and a failed save are told apart. Offline, the op is queued. */
   async function act(op, data, ok) {
     if (busy) return false;
     let units;
@@ -145,18 +146,12 @@ export function mountLife(main, { cloud, toast }) {
       const s = await cloud.write(SCOPE, units);
       busy = false;
       if (mine === seq) render(s.mirror);
-      if (ok) toast(ok);
+      if (s.queued) toast(t('savedOffline'));
+      else if (ok) toast(ok);
       return true;
-    } catch (err) {
-      if (err.message === 'push-failed') {
-        toast(t('saveFailed'), true);
-        return false;
-      }
-      // Pushed, only the pull after it failed: a retry would add the row twice.
-      busy = false;
-      toast(t('savedNoRefresh'), true);
-      refresh();
-      return true;
+    } catch {
+      toast(t('saveFailed'), true);
+      return false;
     } finally {
       busy = false;
     }

@@ -3,7 +3,8 @@
 // ----------------------------------------------------------------------------
 // Logged out -> login screen. Logged in -> shell + the page in the URL hash
 // (Today, Mission, to-dos, Life or Body), pulled again when the app comes back to the foreground
-// (a PC may have changed things since).
+// (a PC may have changed things since), when the network comes back (queued
+// writes go out) and shortly after a realtime change (phase 4d).
 // ============================================================================
 
 import './styles.css';
@@ -18,9 +19,18 @@ import { mountBody } from './views/body.js';
 import { t } from './i18n.js';
 
 const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody };
+/** A burst of realtime events (a PC pushing 500 units) becomes one pull. */
+const REALTIME_DEBOUNCE_MS = 1500;
 const root = document.getElementById('app');
 const config = cloudConfig();
-const cloud = config ? createCloud(config) : null;
+// The shell exists only once logged in; the hooks reach it through this.
+let shellRef = null;
+const cloud = config
+  ? createCloud(config, {
+      onPending: (n) => shellRef?.setPending(n),
+      onRejected: () => shellRef?.toast(t('rejected'), true),
+    })
+  : null;
 let shownUser = null;
 
 function showApp(user) {
@@ -38,6 +48,8 @@ function showApp(user) {
       shell.toast(t('synced'));
     },
     onLogout: async () => {
+      const waiting = await cloud.pending().catch(() => 0);
+      if (waiting && !confirm(t('confirmLogoutPending'))) return;
       shownUser = null;
       await cloud.logout().catch(() => {});
       location.reload();
@@ -51,10 +63,23 @@ function showApp(user) {
     view = VIEWS[id](host, { cloud, toast: shell.toast });
     view.refresh();
   }
+  shellRef = shell;
   show(pageFromHash());
+  cloud.pending().catch(() => {});
+
+  /** Queued writes of every scope go out first, then the page pulls. */
+  const resync = () => cloud.flushAll().finally(() => view.refresh());
+  let timer = 0;
+  cloud.onChange(() => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (document.visibilityState === 'visible') view.refresh();
+    }, REALTIME_DEBOUNCE_MS);
+  });
   window.addEventListener('hashchange', () => show(pageFromHash()));
+  window.addEventListener('online', resync);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') view.refresh();
+    if (document.visibilityState === 'visible') resync();
   });
 }
 

@@ -565,7 +565,7 @@ pull can't repaint over a newer write; refused input says why. Left as LOW:
 a background pull re-renders while typing (focus kept, caret not), an op
 over 500 units (a goal with 500+ deposits) is pushed in non-atomic chunks.
 
-**4c built 2026-10-19 (not committed yet; checked against a fake cloud,
+**4c built and committed 2026-10-19 (7f28972; checked against a fake cloud,
 live Open-Meteo).** Three read-only pages join the menu: **Today** (`#today`:
 next 24 h of weather in 3-hour slots, calendar + mail placeholder until
 phase 5), **Mission** (`#mission`: News | Claude tabs) and **Body** (`#body`).
@@ -602,6 +602,41 @@ so the damage is misleading data); a secret in a news URL *path* (not query)
 isn't filtered by `safeUrl`; a public name resolving to a private address
 (nip.io) can't be caught from the string.
 
+**4d built and committed 2026-10-19 (unit-tested, build checked; the
+logged-in flow not yet live-checked).** Offline writes, realtime, install hint.
+- `mobile/src/outbox.js` (pure): each write scope (`todos`, `life`) has an
+  outbox in IndexedDB (`out:<uid>:<scope>`, newest unit per key). `write()`
+  queues first, then pulls; every pull pushes the outbox before it reads, and
+  a push that can't go out (offline, 401, 5xx) doesn't stop the read. Views
+  get the server mirror with the outbox laid over it (`overlay`), so the
+  mirror itself stays the server's copy. A unit leaves the outbox once the
+  mirror holds its key at the same or a newer `u` (`prune`): pushed, or beaten
+  by a newer change elsewhere. Resending is harmless (push_units ignores a
+  stamp that isn't newer). `enqueue` refuses what a pull could never confirm
+  (key > 200, stamp > 1 day ahead), or it would be pushed forever.
+- A 400/409/413 from push_units (the data itself refused) splits the batch
+  in halves until only the refused unit is dropped, with a toast.
+- Realtime: one channel on `sync_units` + `snapshots` (RLS filters it); an
+  event only triggers a refresh of the open page 1.5 s later; the payload is
+  never read. Back online / back in the foreground: every write scope is
+  pulled (so queues go out), then the page. CSP `connect-src` has the
+  `wss://` twin of the pinned project origin.
+- UI: badge on the sync button with the number of waiting writes; "Saved on
+  the phone" toast when offline; logout asks first when writes wait (logout
+  wipes IndexedDB); a one-time "Add to Home Screen" hint on iOS Safari outside
+  the installed app (`lunacore.installHint.dismissed`). Icons: still the one
+  512 px PNG (iOS scales it).
+- `test/mobileoutbox.test.mjs`; `npm test` 2171/2171.
+
+JS + security review done (no CRITICAL). Fixed: a failed push blocked the
+pull; a refused batch dropped its valid neighbours; units the mirror can never
+show stayed queued forever; a logout between an outbox read and write brought
+the outbox back (re-checked before the put, logout waits for the lock);
+`flushAll` could skip a scope; the realtime channel is closed on logout.
+**Accepted:** logout signs out locally only (`scope: 'local'`; a global
+sign-out would log the PCs out too); no retry timer while the app stays open
+offline (online / foreground / realtime / the next write retry it).
+
 Rules for the phone, same as the PCs: pulled rows are untrusted, so validate
 with the shared validators before rendering. Never apply a realtime payload
 directly (it only triggers a pull). Compare by `u`, never by JSON text. The
@@ -611,8 +646,10 @@ never in the repo. Audit rule from 2c: each phone write must show up on a PC
 
 ## Next session: start here
 
-**Update 2026-10-19 (later): phase 4c (Today / Mission / Body on the phone)
-is built and reviewed, not committed yet; see "4c built" above.**
+**Update 2026-10-19 (latest): 4c is committed (7f28972). Phase 4d (offline
+queue, realtime, install hint) is built, reviewed and committed; see
+"4d built" above. Every phone slice is now built; what's left is Mati's live
+checks and the Vercel deploy.**
 
 **State on 2026-10-19: phase 4a (phone PWA shell + to-dos) is built,
 committed and proven against the real cloud from `localhost:4173`. Phase 4b
@@ -655,8 +692,14 @@ works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
      week (compare with Ctrl+Shift+M on a PC; small drift = Monday vs reset
      window), `#body` shows YAZIO numbers (needs a PC that opened the Body
      tab), `#today` asks for a town once.
-   - **Then 4d**: offline write queue, realtime → pull (add the `wss://`
-     origin to the CSP), iOS install hint, review pass.
+   - **4d live check (Mati):** logged in on `localhost:4173/#todos`, DevTools
+     → Network → Offline, add a to-do: it shows at once, the toast says
+     "saved on the phone", the sync button shows a badge `1`. Back online:
+     the badge goes away and the to-do is on a PC. With the phone page open,
+     add a to-do on a PC and sync: the phone shows it within a few seconds
+     without pressing Sync (realtime). Do it once more on the iPhone after
+     the Vercel deploy (Safari tab shows the install hint once).
+   - **Then phase 5** (Google server function: calendar + mail on Today).
 4. Small open items:
    - The laptop's ledger snapshot is empty (no Claude Code transcripts there
      in 8 days). Fine unless Mati uses Claude Code on the laptop.

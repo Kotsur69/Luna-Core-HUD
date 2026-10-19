@@ -3,11 +3,52 @@
 // ----------------------------------------------------------------------------
 // A section not built yet stays in the menu, disabled and marked "soon". The
 // page is picked from the URL hash (#today, #mission, #todos, #life, #body)
-// so a home-screen reload keeps it.
+// so a home-screen reload keeps it. The sync button carries a badge while
+// writes wait to be sent (phase 4d), and iOS Safari outside the home screen
+// gets a one-time "Add to Home Screen" hint.
 // ============================================================================
 
 import { h, icon, ICONS } from './dom.js';
-import { t } from './i18n.js';
+import { t, tf } from './i18n.js';
+
+const HINT_KEY = 'lunacore.installHint.dismissed';
+
+/** iOS Safari in a tab, not the installed app. iPadOS reports itself as a Mac with touch. */
+function needsInstallHint() {
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const installed = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  try {
+    return ios && !installed && localStorage.getItem(HINT_KEY) !== '1';
+  } catch {
+    return ios && !installed;
+  }
+}
+
+function installHint() {
+  if (!needsInstallHint()) return null;
+  const el = h(
+    'div',
+    { class: 'install-hint', role: 'note' },
+    h('span', {}, t('installHint')),
+    h(
+      'button',
+      {
+        class: 'icon-btn',
+        'aria-label': t('dismiss'),
+        onclick: () => {
+          el.remove();
+          try {
+            localStorage.setItem(HINT_KEY, '1');
+          } catch {
+            // Private mode: the hint comes back next time.
+          }
+        },
+      },
+      icon(ICONS.close),
+    ),
+  );
+  return el;
+}
 
 const NAV = [
   { id: 'today', label: 'navToday', icon: ICONS.sun, ready: true },
@@ -27,11 +68,12 @@ export function pageFromHash(hash = location.hash) {
 /**
  * @param {HTMLElement} root
  * @param {{who: string, current: string, onNavigate: (id: string) => void, onSync: () => Promise<void>, onLogout: () => void}} opts
- * @returns {{main: HTMLElement, toast: (msg: string, bad?: boolean) => void, setPage: (id: string) => void}}
+ * @returns {{main: HTMLElement, toast: (msg: string, bad?: boolean) => void, setPage: (id: string) => void, setPending: (n: number) => void}}
  */
 export function mountShell(root, { who, current, onNavigate, onSync, onLogout }) {
   const menuBtn = h('button', { class: 'icon-btn', 'aria-label': t('menu'), 'aria-expanded': 'false', 'aria-controls': 'drawer' }, icon(ICONS.menu));
-  const syncBtn = h('button', { class: 'icon-btn', 'aria-label': t('sync') }, icon(ICONS.sync));
+  const badge = h('span', { class: 'badge', hidden: true, 'aria-hidden': 'true' });
+  const syncBtn = h('button', { class: 'icon-btn has-badge', 'aria-label': t('sync') }, icon(ICONS.sync), badge);
   const closeBtn = h('button', { class: 'icon-btn', 'aria-label': t('closeMenu') }, icon(ICONS.close));
 
   const title = h('h1', {});
@@ -95,7 +137,8 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout })
   const toastEl = h('div', { class: 'toast', role: 'status', hidden: true });
   let toastTimer = 0;
 
-  root.replaceChildren(h('header', { class: 'topbar' }, menuBtn, title, syncBtn), main, scrim, drawer, toastEl);
+  const hint = installHint();
+  root.replaceChildren(...[h('header', { class: 'topbar' }, menuBtn, title, syncBtn), hint, main, scrim, drawer, toastEl].filter(Boolean));
 
   function toast(msg, bad = false) {
     toastEl.textContent = msg;
@@ -118,5 +161,12 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout })
   }
   setPage(current);
 
-  return { main, toast, setPage };
+  /** Shows how many writes wait to be sent (0 hides the badge). */
+  function setPending(n) {
+    badge.hidden = !n;
+    badge.textContent = n > 99 ? '99+' : String(n);
+    syncBtn.setAttribute('aria-label', n ? `${t('sync')} (${tf('pendingLabel', { n })})` : t('sync'));
+  }
+
+  return { main, toast, setPage, setPending };
 }
