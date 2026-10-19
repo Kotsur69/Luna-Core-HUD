@@ -1,0 +1,5 @@
+node_modules/
+dist/
+dev-dist/
+# Supabase URL + publishable key for local preview; Vercel holds the real ones.
+.env.local

@@ -40,3 +40,6 @@ config/tasks/
 
 # Python bytecode (helpers/agent-reach, the vendored News fetcher).
 __pycache__/
+
+# Playwright MCP screenshots / logs
+.playwright-mcp/

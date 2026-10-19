@@ -494,9 +494,65 @@ SyncTrayzor (`%LOCALAPPDATA%\SyncTrayzorPortable\` on KT-PC-LLM) and the
 `%USERPROFILE%\LunaLedger` folder; old `todo-sync` / `life-sync` meta files
 stay in use by the cloud path, don't delete them.
 
+## Phase 4 — detailed plan (2026-10-19, not built yet)
+
+Probed before planning:
+
+- **CommonJS maths in Vite: works.** A real `vite build` (6.4) of
+  `src/lifebudgetcalc.js` from outside the root fails by default, and passes
+  with `build.commonjsOptions.include: [/src[\\/]lifebudget/, /node_modules/]`
+  (12 kB, no `require` left). `vite dev` doesn't convert out-of-root CJS, so
+  local testing runs `vite build --watch` + `vite preview`.
+- **Validators aren't browser-safe yet.** `lifebudget.normalize()` and
+  `todo.normalizeTodo()` are pure, but their files load `fs` / `crypto` /
+  `paths` at the top. A PC drops any pulled unit that doesn't survive
+  `normalize()` unchanged, so the phone must write rows that are already
+  normalised, using the same code.
+- **Row format is ready.** To-dos: scope `todos`, key `<projectKey>:<at>`,
+  value = the item without `u`. `local:<id>` buckets sync too, so the phone
+  sees home / safetyhub-bhp lists. Budget: scope `life`, keys as in section A.
+  A phone write = `push_units` with `u = Date.now()`, so the server decides newest-wins.
+
+Slices (each one is usable on the phone when it ships):
+
+| Slice | What | Needs from Mati |
+|---|---|---|
+| **4a** | Split pure validators into `src/lifebudgetrows.js` and `src/todorows.js` (no `fs`); the old modules re-export them, `npm test` stays green. `mobile/` scaffold: Vite + `vite-plugin-pwa`, dark HUD look (`ui-ux-pro-max` pass), slide-out nav, GitHub login (Supabase PKCE, redirect back to the PWA origin), pull `sync_units` into an IndexedDB mirror (same cursor rule: `rev > cursor`). **To-dos:** lists per project, add, tick, delete (tombstone). | Vercel account (GitHub); add `http://localhost:4173/**` and the Vercel URL to Supabase → Auth → URL configuration → Redirect URLs. |
+| **4b** | **Life:** quick add expense (main action), overview + charts (reuse `lifebudgetcalc.js`), bills (mark paid = `p:<YYYY-MM>:<billId>`), savings (edit/add goal, deposit). Units are written per row, never the whole budget. | — |
+| **4c** | Snapshot readers: **News** (latest `news` row, with "from HH:MM, <machine>"; follows the slice 2 reader rules: `safeUrl`, caps), **Claude ledger** (all `ledger` rows, combined weekly view), **Body** (`yazio`). **Today:** hourly weather from Open-Meteo. Calendar + mail are placeholders until phase 5. | — |
+| **4d** | Offline: writes queue in IndexedDB and push on reconnect. Realtime subscription triggers a pull. iOS install hint, icons, `ecc:security-reviewer` + `ecc:typescript-reviewer` pass. | Add to Home Screen on the iPhone. |
+
+**4a built and proven live 2026-10-19 (committed; not on Vercel yet).**
+GitHub login on `localhost:4173` works; Mati's real lists show; add / tick /
+delete round-trips phone ↔ PC ("works perfectly"). Files: `src/todorows.js`
+(validators out of `todo.js`), `mobile/` (Vite 6.4.4 + vite-plugin-pwa 1.3.0,
+supabase-js 2.117.3 pinned), `test/mobiletodomodel.test.mjs` (a phone unit
+passes `todosync.validPeerProjects` unchanged); `npm test` 2147/2147.
+Security + JS review done; fixed: pulls of a scope are chained (a write's pull
+never reuses one that started before the push), logout wipes IndexedDB even
+offline and on a sign-out elsewhere, CSP `connect-src` is pinned to the
+project origin at build time (**4d must add its `wss://` origin for
+realtime**), bidi characters stripped from list names. Local test:
+`cd mobile && npm run build && npm run preview` → `http://localhost:4173`
+(`.env.local` from `cloud.local.json`, gitignored). After the Vercel URL is
+live, remove `http://localhost:4173/**` from the Supabase redirect list.
+
+Rules for the phone, same as the PCs: pulled rows are untrusted, so validate
+with the shared validators before rendering. Never apply a realtime payload
+directly (it only triggers a pull). Compare by `u`, never by JSON text. The
+publishable key goes in Vercel env (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`),
+never in the repo. Audit rule from 2c: each phone write must show up on a PC
+(and vice versa) before its slice counts as done.
+
 ## Next session: start here
 
-State on 2026-10-15: **phases 1, 2a, 2b and 2c are done, released (latest
+**State on 2026-10-19: phase 4a (phone PWA shell + to-dos) is built,
+committed and proven against the real cloud from `localhost:4173`. Not
+deployed yet.** Supabase Auth URL config now: Site URL `http://localhost:4173`,
+Redirect URLs `http://localhost:4173/**` + `http://127.0.0.1:*/callback`
+(the PC entry had gone missing from the list and was re-added).
+
+Earlier: **phases 1, 2a, 2b and 2c are done, released (latest
 v0.16.1) and proven live on two PCs. Phase 3 is released in v0.16.2
 (2026-10-19)** — check on both PCs that the Ctrl+Shift+M ledger still lists
 the other PC and to-dos/budget still merge. KT-PC-LLM is cleaned up
@@ -510,8 +566,20 @@ works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
    what it uploads. The audit table in slice 3 is the checklist; add a row for
    every new synced item.
 3. **Next:**
-   - **Phase 4**: the iPhone PWA (`mobile/`, see "Phone (phase 4)" above). Its
-     news reader must follow the reader requirements in slice 2.
+   - **Deploy 4a to Vercel (Mati, with help):** Add New → Project →
+     Luna-Core-HUD, **Root Directory `mobile`**, preset **Vite** (not the
+     Python preset / `luna-core-hud-agent-reach` name it guessed on
+     2026-10-19), env `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (values
+     of `cloud.local.json`), "Include files outside the root directory" on.
+     Then in Supabase: add `https://<vercel-domain>/**` to Redirect URLs, set
+     Site URL to `https://<vercel-domain>`, remove `http://localhost:4173/**`.
+     On the iPhone: Safari → the URL → Share → Add to Home Screen → log in.
+     Optional: rename the Vercel team (currently "ArcelorMittal", Hobby =
+     personal use).
+   - **Then 4b**: Life on the phone (quick add, overview + charts, bills,
+     savings). Starts with splitting `lifebudget.normalize()` and its row
+     validators into a pure `src/lifebudgetrows.js`, the same way 4a did
+     `todorows.js`. See "Phase 4 — detailed plan" above.
 4. Small open items:
    - The laptop's ledger snapshot is empty (no Claude Code transcripts there
      in 8 days). Fine unless Mati uses Claude Code on the laptop.
