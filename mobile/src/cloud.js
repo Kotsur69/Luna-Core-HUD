@@ -5,7 +5,7 @@
 //
 //   pull   sync_units where scope = s and rev > cursor, pages of PAGE
 //          -> cloudrows.applyRows -> the scope's mirror in IndexedDB
-//   write  one unit via push_units (the server decides newest-wins), then
+//   write  units via push_units (the server decides newest-wins), then
 //          pull: the mirror only ever holds what the server holds, so a
 //          write that lost to a newer one on another PC never shows as saved
 //
@@ -21,6 +21,8 @@ import * as idb from './idb.js';
 /** This device in sync_units.machine (missionledgersync MACHINE_RE). */
 export const MACHINE = 'iPhone';
 const PAGE = 1000;
+/** The server's per-call cap (push_units rejects more than 500 units). */
+const PUSH_MAX = 500;
 /** A runaway pull (a bug, a hostile server) stops here instead of looping. */
 const MAX_PAGES = 100;
 const COLUMNS = 'key,value,u,deleted_at,rev,machine';
@@ -95,9 +97,13 @@ export function createCloud(config) {
     return next;
   }
 
-  async function write(scope, unit) {
-    const { error } = await client.rpc('push_units', { p_scope: scope, p_machine: MACHINE, p_units: [unit] });
-    if (error) throw new Error('push-failed', { cause: error });
+  /** One unit or a list (a budget op can change several rows); push_units takes PUSH_MAX per call. */
+  async function write(scope, units) {
+    const list = Array.isArray(units) ? units : [units];
+    for (let i = 0; i < list.length; i += PUSH_MAX) {
+      const { error } = await client.rpc('push_units', { p_scope: scope, p_machine: MACHINE, p_units: list.slice(i, i + PUSH_MAX) });
+      if (error) throw new Error('push-failed', { cause: error });
+    }
     return pull(scope);
   }
 

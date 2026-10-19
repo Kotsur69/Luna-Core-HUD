@@ -537,6 +537,34 @@ realtime**), bidi characters stripped from list names. Local test:
 (`.env.local` from `cloud.local.json`, gitignored). After the Vercel URL is
 live, remove `http://localhost:4173/**` from the Supabase redirect list.
 
+**4b built and committed 2026-10-19 (live check against the real cloud
+still pending).** Life on the phone: free money + per day + where the income goes
+(segmented bar + legend), quick add expense, envelopes, bills of the period
+(pay = the expected amount / undo), savings (+ deposit), last 10 expenses
+(delete). Current period only; editing bills, goals, categories and income
+stays on the PC. Files:
+- `src/lifebudgetrows.js`: validators + the op table out of `lifebudget.js`
+  (no `fs`; `newId` uses Web Crypto). `lifebudget.js` keeps the file I/O.
+- `src/lifebudgetunits.js`: `toUnits` / `fromUnits` / `validPeer` out of
+  `lifesync.js`. `validPeer` now compares with a sorted-key JSON instead of
+  sha1 (same result), and drops a unit whose key doesn't match its row's `id`
+  (security review: a fake `e:aaa` with `id: bbb` could hide the real row).
+- `mobile/src/lifemodel.js`: `budgetOf(mirror)` (same validPeer + normalize
+  as a PC) and `opUnits(mirror, op, data)`, which runs the PC's own op on it
+  and sends only the changed units. Stamp = `max(now, prev u + 1)`; removed
+  rows become tombstones. No writes until the mirror has an `income` unit,
+  so a phone never pushes the default categories.
+- `mobile/src/views/life.js` + hash routing (`#todos` / `#life`) in
+  `main.js` / `shell.js`. `cloud.write()` takes a list (chunks of 500).
+- `test/mobilelifemodel.test.mjs`: phone units go through a real
+  `createLifeSync` into a PC budget file unchanged. `npm test` 2156/2156.
+
+JS + security review done. Fixed: a pull that fails after a successful push
+no longer says "not saved" (a retry would add the expense twice); an older
+pull can't repaint over a newer write; refused input says why. Left as LOW:
+a background pull re-renders while typing (focus kept, caret not), an op
+over 500 units (a goal with 500+ deposits) is pushed in non-atomic chunks.
+
 Rules for the phone, same as the PCs: pulled rows are untrusted, so validate
 with the shared validators before rendering. Never apply a realtime payload
 directly (it only triggers a pull). Compare by `u`, never by JSON text. The
@@ -547,8 +575,10 @@ never in the repo. Audit rule from 2c: each phone write must show up on a PC
 ## Next session: start here
 
 **State on 2026-10-19: phase 4a (phone PWA shell + to-dos) is built,
-committed and proven against the real cloud from `localhost:4173`. Not
-deployed yet.** Supabase Auth URL config now: Site URL `http://localhost:4173`,
+committed and proven against the real cloud from `localhost:4173`. Phase 4b
+(Life on the phone) is built, committed and tested locally (unit tests + a
+smoke page with a fake cloud); the live check against the real cloud is
+still open. Not deployed yet.** Supabase Auth URL config now: Site URL `http://localhost:4173`,
 Redirect URLs `http://localhost:4173/**` + `http://127.0.0.1:*/callback`
 (the PC entry had gone missing from the list and was re-added).
 
@@ -576,10 +606,11 @@ works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
      On the iPhone: Safari → the URL → Share → Add to Home Screen → log in.
      Optional: rename the Vercel team (currently "ArcelorMittal", Hobby =
      personal use).
-   - **Then 4b**: Life on the phone (quick add, overview + charts, bills,
-     savings). Starts with splitting `lifebudget.normalize()` and its row
-     validators into a pure `src/lifebudgetrows.js`, the same way 4a did
-     `todorows.js`. See "Phase 4 — detailed plan" above.
+   - **4b live check (Mati):** `cd mobile && npm run build && npm run preview`
+     → `http://localhost:4173/#life` → add an expense, pay a bill, deposit
+     into a goal; on a PC, the Life panel shows all three within a minute
+     (and an edit on the PC shows on the phone after Sync).
+   - **Then 4c**: snapshot readers (News, Claude ledger, Body) + Today.
 4. Small open items:
    - The laptop's ledger snapshot is empty (no Claude Code transcripts there
      in 8 days). Fine unless Mati uses Claude Code on the laptop.

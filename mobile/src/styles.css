@@ -30,6 +30,14 @@
   --bad: #ff6b8a;
   --glow: rgba(199, 116, 255, 0.32);
   --scrim: rgba(5, 3, 10, 0.6);
+  --warn: #ffc56b;
+
+  /* Life buckets: where the income goes (legend text carries the meaning too). */
+  --bucket-fixed: var(--neon-magenta);
+  --bucket-savings: var(--neon-cyan);
+  --bucket-planned: #8f7bff;
+  --bucket-free: var(--warn);
+  --bucket-left: var(--good);
 
   --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-display: 'Chakra Petch', var(--font-ui);
@@ -309,6 +317,90 @@ main {
   letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+
+/* --- life --------------------------------------------------------------- */
+
+.card {
+  padding: var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+
+.stack-sm { display: grid; gap: var(--space-3); }
+.grid-2 { display: grid; grid-template-columns: 1fr 1.3fr; gap: var(--space-2); }
+
+.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.hint { font-size: 13px; color: var(--text-dim); }
+.is-bad { color: var(--bad); }
+.is-good { color: var(--good); }
+
+.hero {
+  border-color: var(--edge-glow);
+  background: radial-gradient(120% 90% at 0% 0%, #22123d 0%, var(--bg-panel) 60%);
+  box-shadow: 0 0 28px var(--glow);
+}
+.hero .label { margin: 0; font-weight: 400; }
+.hero .big {
+  margin-top: var(--space-1);
+  font: 600 40px/1.1 var(--font-display);
+  letter-spacing: 0.5px;
+  color: var(--neon-cyan);
+}
+.hero .big.is-bad { color: var(--bad); }
+.hero .sub { margin-top: var(--space-1); color: var(--text-dim); }
+
+.bucket-bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  margin-top: var(--space-4);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.seg { min-width: 4px; }
+.seg-fixed { background: var(--bucket-fixed); }
+.seg-savings { background: var(--bucket-savings); }
+.seg-planned { background: var(--bucket-planned); }
+.seg-free { background: var(--bucket-free); }
+.seg-left { background: var(--bucket-left); }
+
+.legend { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: grid; gap: var(--space-1); font-size: 14px; }
+.legend li { display: flex; align-items: center; gap: var(--space-2); }
+.dot { flex: none; width: 10px; height: 10px; border-radius: 3px; }
+
+.btn-primary {
+  width: 100%;
+  border-color: var(--neon-magenta);
+  background: linear-gradient(135deg, #3a1a66, #5a2ea0);
+  box-shadow: 0 0 16px var(--glow);
+}
+.btn-sm { padding: 0 var(--space-3); font-size: 14px; }
+
+.card .section-title { margin: 0 0 var(--space-3); }
+.card.stack-sm .section-title { margin: 0; }
+
+.rows { list-style: none; margin: 0; padding: 0; display: grid; }
+.rows > li { padding: var(--space-2) 0; border-top: 1px solid var(--edge); }
+.rows > li:first-child { border-top: 0; padding-top: 0; }
+.rows > li:last-child { padding-bottom: 0; }
+
+.row { display: flex; align-items: center; gap: var(--space-3); min-height: var(--tap); }
+.row-col { display: grid; gap: var(--space-2); }
+
+.bill.is-overdue .status { color: var(--bad); }
+.bill.is-soon .status { color: var(--warn); }
+.bill.is-paid .status { color: var(--good); }
+
+.meter { height: 6px; border-radius: 999px; background: var(--bg-raised); overflow: hidden; }
+.meter span { display: block; height: 100%; background: var(--neon-cyan); transform-origin: left; transition: transform var(--dur) var(--ease-out); }
+.meter.is-bad span { background: var(--bad); }
+
+@media (max-width: 360px) {
+  .grid-2 { grid-template-columns: 1fr; }
+  .hero .big { font-size: 34px; }
 }
 
 /* --- toast -------------------------------------------------------------- */

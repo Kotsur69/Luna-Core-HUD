@@ -33,6 +33,7 @@
 
 const fs = require('fs');
 const store = require('./lifebudget');
+const { toUnits, fromUnits, validPeer } = require('./lifebudgetunits');
 const { fingerprint } = require('./todosync');
 const { MACHINE_RE } = require('./missionledgersync');
 
@@ -40,46 +41,9 @@ const VERSION = 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Tombstones older than this are forgotten (a PC offline longer may resurrect a row). */
 const GONE_TTL_MS = 90 * DAY_MS;
-// Above the store's own caps summed (5000 expenses, 2000 deposits, 24 months x 100 bills...).
-const MAX_UNITS = 10000;
-const MAX_GONE = 10000;
-const KEY_RE = /^(income|[cebgd]:[a-z0-9-]{1,40}|p:\d{4}-(0[1-9]|1[0-2]):[a-z0-9-]{1,40})$/;
-const COLLECTIONS = [
-  ['c', 'categories'],
-  ['e', 'expenses'],
-  ['b', 'bills'],
-  ['g', 'goals'],
-  ['d', 'deposits'],
-];
-const COLLECTION_OF = Object.fromEntries(COLLECTIONS);
-
 const validStamp = (t, now) => typeof t === 'number' && Number.isFinite(t) && t >= 0 && t <= now + DAY_MS;
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const emptyMeta = () => ({ snap: {}, u: {}, gone: {} });
-
-/** A normalized budget -> [key, value] units, in display order. */
-function toUnits(b) {
-  const units = [['income', b.income]];
-  for (const [prefix, name] of COLLECTIONS) for (const row of b[name]) units.push([`${prefix}:${row.id}`, row]);
-  for (const m of Object.keys(b.payments).sort()) {
-    for (const [billId, pay] of Object.entries(b.payments[m])) units.push([`p:${m}:${billId}`, pay]);
-  }
-  return units;
-}
-
-/** [key, value] units -> a budget, validated by the store's own normalize(). */
-function fromUnits(units) {
-  const lists = Object.fromEntries(COLLECTIONS.map(([, name]) => [name, []]));
-  const payments = {};
-  let income;
-  for (const [k, v] of units) {
-    const [prefix, a, b] = k.split(':');
-    if (k === 'income') income = v;
-    else if (prefix === 'p') payments[a] = { ...payments[a], [b]: v };
-    else lists[COLLECTION_OF[prefix]].push(v);
-  }
-  return store.normalize({ income, payments, ...lists });
-}
 
 function sameUnits(a, b) {
   return a.length === b.length && a.every(([k, v], i) => b[i][0] === k && fingerprint(b[i][1]) === fingerprint(v));
@@ -131,27 +95,6 @@ function merge(local, meta, peers, now) {
     u: Object.fromEntries(order.map((k) => [k, best.get(k).u])),
     gone: Object.fromEntries(Object.entries(gone).filter(([, t]) => t >= now - GONE_TTL_MS)),
   };
-}
-
-/** A peer's body -> only the units that survive normalize() unchanged. */
-function validPeer(data, now) {
-  const seen = new Set();
-  const raw = [];
-  for (const x of Array.isArray(data.units) ? data.units.slice(0, MAX_UNITS) : []) {
-    if (!x || typeof x.k !== 'string' || !KEY_RE.test(x.k) || seen.has(x.k)) continue;
-    if (!isPlainObject(x.v) || !validStamp(x.u, now)) continue;
-    seen.add(x.k);
-    raw.push(x);
-  }
-  const clean = new Map(toUnits(fromUnits(raw.map((x) => [x.k, x.v]))));
-  const units = raw
-    .filter((x) => clean.has(x.k) && fingerprint(clean.get(x.k)) === fingerprint(x.v))
-    .map((x) => ({ k: x.k, v: clean.get(x.k), u: x.u }));
-  const gone = {};
-  for (const [k, t] of Object.entries(isPlainObject(data.gone) ? data.gone : {}).slice(0, MAX_GONE)) {
-    if (KEY_RE.test(k) && validStamp(t, now)) gone[k] = t;
-  }
-  return { units, gone };
 }
 
 /** The previous sync's snapshot, or null on a first sync. */
