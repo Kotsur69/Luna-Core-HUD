@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Mission Control: project classes + ledger folder (main process)
+// LunaCore - Mission Control: project classes + pinned projects (main process)
 // ----------------------------------------------------------------------------
 // config/mission-projects.local.json (gitignored by the *.local.json rule):
 //   classes:   {<project key>: 'work' | 'fun' | 'other'}  set with one click in
@@ -7,9 +7,9 @@
 //   pinned:    [{key, name, folders[]}]  the projects Mati always wants to
 //              see, even at 0 %; `folders` are folder names whose sessions
 //              count for the project when the repo is not on this PC
-//   sharedDir: absolute path of the folder the PCs exchange ledger files in
-//              (src/missionledgersync.js), or null. Only ever set from a
-//              native folder dialog in main, never from renderer text.
+//
+// A `sharedDir` key from the old folder sync (before the cloud) is dropped on
+// read, so the next save removes it from the file.
 //
 // Same contract as the other config loaders: safe read, validate at the
 // boundary, a broken file yields the empty store rather than a crash.
@@ -18,14 +18,12 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const paths = require('./paths');
 const { validKey } = require('./missionledgersync');
 
 const FILE_NAME = 'mission-projects.local.json';
 const CLASSES = ['work', 'fun', 'other'];
 const MAX_CLASSES = 500;
-const MAX_DIR = 1000;
 const MAX_PINNED = 20;
 const MAX_FOLDERS = 5;
 // A single folder name: no separators, no control chars, never '.' or '..'.
@@ -57,16 +55,14 @@ function normalize(raw) {
   for (const [key, cls] of Object.entries(src).slice(0, MAX_CLASSES)) {
     if (validKey(key) && CLASSES.includes(cls)) classes[key] = cls;
   }
-  const dir = raw && raw.sharedDir;
-  const sharedDir = typeof dir === 'string' && dir.length <= MAX_DIR && path.isAbsolute(dir) ? dir : null;
-  return { classes, sharedDir, pinned: normalizePinned(raw && raw.pinned) };
+  return { classes, pinned: normalizePinned(raw && raw.pinned) };
 }
 
 function loadProjects(file = defaultFile()) {
   try {
     return normalize(JSON.parse(fs.readFileSync(file, 'utf8')));
   } catch {
-    return { classes: {}, sharedDir: null, pinned: [] };
+    return { classes: {}, pinned: [] };
   }
 }
 
@@ -87,14 +83,6 @@ function setClass(key, cls, file = defaultFile()) {
   return save({ ...cur, classes }, file);
 }
 
-/** Sets (or with null clears) the shared ledger folder; absolute paths only. */
-function setSharedDir(dir, file = defaultFile()) {
-  if (dir !== null && (typeof dir !== 'string' || dir.length > MAX_DIR || !path.isAbsolute(dir))) {
-    throw new Error('bad folder');
-  }
-  return save({ ...loadProjects(file), sharedDir: dir }, file);
-}
-
 /** Replaces the pinned list; invalid entries are dropped, not thrown. */
 function setPinned(list, file = defaultFile()) {
   return save({ ...loadProjects(file), pinned: normalizePinned(list) }, file);
@@ -107,4 +95,4 @@ function pinnedAliases(pinned) {
   return map;
 }
 
-module.exports = { loadProjects, setClass, setSharedDir, setPinned, pinnedAliases, normalize, normalizePinned, CLASSES, MAX_CLASSES };
+module.exports = { loadProjects, setClass, setPinned, pinnedAliases, normalize, normalizePinned, CLASSES, MAX_CLASSES };

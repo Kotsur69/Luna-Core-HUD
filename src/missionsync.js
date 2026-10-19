@@ -10,7 +10,6 @@
 //     proj:class:<projectKey> = {class}    'work' | 'fun' | 'other'
 //     proj:pinned             = {list}     the whole pinned list
 //
-// sharedDir (the ledger folder) is a path on this PC and never leaves it.
 // Cloud values go through the stores' own normalizers (missionnewsstore.js,
 // missionprojects.js) - the same gate the renderer's edits pass.
 // ============================================================================
@@ -141,7 +140,7 @@ function createMissionProjectsProvider(file) {
       return capArrivals(merged, local, (k) => k === PINNED || room-- > 0);
     },
 
-    /** Everything but classes and pinned (sharedDir...) stays as this PC has it. */
+    /** Everything but classes and pinned stays as this PC has it (minus the old folder-sync `sharedDir`). */
     write(units, local) {
       const classes = {};
       let pinned = [];
@@ -149,7 +148,8 @@ function createMissionProjectsProvider(file) {
         if (k === PINNED) pinned = v.list;
         else classes[k.slice(CLASS.length)] = v.class;
       }
-      store(file, { ...(local.doc || {}), classes, pinned });
+      const { sharedDir, ...rest } = local.doc || {};
+      store(file, { ...rest, classes, pinned });
     },
   };
 }

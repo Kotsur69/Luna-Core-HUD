@@ -2,7 +2,8 @@
 // LunaCore - Mission Control settings over the cloud (src/missionsync.js)
 // ----------------------------------------------------------------------------
 // News sources / topics travel one unit per item; project classes one unit
-// per project key, the pinned list as one unit. sharedDir never leaves the PC.
+// per project key, the pinned list as one unit. A legacy sharedDir never leaves
+// the PC and is dropped on write.
 // Two simulated PCs share a fake cloud that reorders keys like jsonb.
 // ============================================================================
 
@@ -137,7 +138,7 @@ test('sources without a valid id stay in the file but are not synced', () => {
   assert.equal(a.read(NEWS).sources.length, 2);
 });
 
-test('project classes and pinned travel; sharedDir stays per PC', () => {
+test('project classes and pinned travel; a legacy sharedDir never goes up', () => {
   const { a, b, clock, cloud } = setup();
   const pinned = [{ key: 'git:github.com/x/y', name: 'Y', folders: ['y'] }];
   a.write(MP, { classes: { 'git:github.com/x/y': 'work', 'local:home': 'fun' }, sharedDir: 'C:\\A', pinned });
@@ -149,7 +150,7 @@ test('project classes and pinned travel; sharedDir stays per PC', () => {
   const got = b.read(MP);
   assert.deepEqual(got.classes, { 'git:github.com/x/y': 'work', 'local:home': 'fun' });
   assert.deepEqual(got.pinned, pinned);
-  assert.equal(got.sharedDir, 'D:\\B');
+  assert.equal('sharedDir' in got, false);
 });
 
 test('a class changed on one PC wins on the other; clearing it clears it there', () => {

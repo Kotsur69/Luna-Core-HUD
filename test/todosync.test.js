@@ -98,14 +98,20 @@ test('peer validation: junk, forged keys, future stamps and oversized lists are 
   assert.deepEqual(proj['git:github.com/kotsur69/synthara'].gone, { 9: now - 5 });
 });
 
-// ---- createTodoSync: files on disk ---------------------------------------------
+// ---- createTodoSync over a fake cloud ---------------------------------------------
 
-function pc(name, dir, lists) {
+/** Every PC gets all published docs, its own included - like the real mirror (src/cloudsync.js). */
+const fakeCloud = () => ({ docs: new Map() });
+const cloudHooks = (cloud, name) => ({
+  extraPeers: () => [...cloud.docs.values()],
+  onPublish: (projects) => cloud.docs.set(name, projects),
+});
+
+function pc(name, cloud, lists) {
   const store = new Map(Object.entries(lists));
   const metaFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), `tsm-${name}-`)), 'meta.json');
   let clock = 1000;
   const s = sync.createTodoSync({
-    sharedDir: () => dir,
     machine: name,
     projects: () => [...store.keys()].map((id) => ({ id, path: `/repos/${id}` })),
     resolveKey: (p) => `git:github.com/kotsur69/${path.basename(p)}`,
@@ -113,23 +119,23 @@ function pc(name, dir, lists) {
     writeTodos: (id, list) => (store.set(id, list), true),
     metaFile,
     now: () => (clock += 1000),
+    ...(cloud ? cloudHooks(cloud, name) : {}),
   });
   return { s, store };
 }
 
-test('two PCs through a shared folder: both lists end up with both items', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'todosync-'));
-  const a = pc('DESK', dir, { synthara: [item(1, 'desk idea')] });
-  const b = pc('LAPTOP', dir, { synthara: [item(2, 'laptop idea')] });
+test('two PCs through the cloud: both lists end up with both items', () => {
+  const cloud = fakeCloud();
+  const a = pc('DESK', cloud, { synthara: [item(1, 'desk idea')] });
+  const b = pc('LAPTOP', cloud, { synthara: [item(2, 'laptop idea')] });
   a.s.syncAll();
   const changedB = b.s.syncAll();
   assert.deepEqual(changedB, ['synthara']);
   assert.deepEqual(b.store.get('synthara').map((x) => x.text).sort(), ['desk idea', 'laptop idea']);
   a.s.syncAll();
   assert.deepEqual(a.store.get('synthara').map((x) => x.text).sort(), ['desk idea', 'laptop idea']);
-  // Own file holds no paths, only keys.
-  const own = fs.readFileSync(path.join(dir, 'todos-DESK.json'), 'utf8');
-  assert.equal(own.includes('/repos/'), false);
+  // What goes up holds no paths, only keys.
+  assert.equal(JSON.stringify(cloud.docs.get('DESK')).includes('/repos/'), false);
 });
 
 test('syncKey: repo key when there is one, else the project id (same on every PC)', () => {
@@ -140,12 +146,11 @@ test('syncKey: repo key when there is one, else the project id (same on every PC
 });
 
 test('a repo on one PC meets the same project whose folder is missing on the other', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'todosync-'));
-  const a = pc('DESK', dir, { synthara: [item(1, 'desk idea')] });
-  const b = pc('LAPTOP', dir, { synthara: [item(2, 'laptop idea')] });
+  const cloud = fakeCloud();
+  const a = pc('DESK', cloud, { synthara: [item(1, 'desk idea')] });
+  const b = pc('LAPTOP', null, { synthara: [item(2, 'laptop idea')] });
   // On the laptop the folder is missing: no repo key, only the project id.
   const bSync = sync.createTodoSync({
-    sharedDir: () => dir,
     machine: 'LAPTOP',
     projects: () => [{ id: 'synthara', path: '' }],
     resolveKey: (_p, id) => sync.syncKey('other', id),
@@ -153,6 +158,7 @@ test('a repo on one PC meets the same project whose folder is missing on the oth
     writeTodos: (id, list) => (b.store.set(id, list), true),
     metaFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tsm-')), 'm.json'),
     now: () => 2500, // same fake clock range as pc(): real time would read as "future"
+    ...cloudHooks(cloud, 'LAPTOP'),
   });
   a.s.syncAll();
   bSync.syncAll();
@@ -161,18 +167,17 @@ test('a repo on one PC meets the same project whose folder is missing on the oth
   assert.deepEqual(a.store.get('synthara').map((x) => x.text).sort(), ['desk idea', 'laptop idea']);
 });
 
-test('no shared folder -> nothing happens, nothing throws', () => {
+test('cloud off -> nothing happens, nothing throws', () => {
   const p = pc('DESK', null, { synthara: [item(1, 'x')] });
   assert.deepEqual(p.s.syncAll(), []);
 });
 
-// ---- cloud as an extra peer (src/cloudsync.js) ----------------------------------
+// ---- the cloud as one mirror body (src/cloudsync.js) -----------------------------
 
 function cloudPc(name, lists, cloudBody) {
   const store = new Map(Object.entries(lists));
   const published = [];
   const s = sync.createTodoSync({
-    sharedDir: () => null,
     machine: name,
     projects: () => [...store.keys()].map((id) => ({ id, path: '' })),
     resolveKey: (_p, id) => sync.syncKey(null, id),
@@ -186,7 +191,7 @@ function cloudPc(name, lists, cloudBody) {
   return { s, store, published };
 }
 
-test('cloud on, no shared folder: local buckets meet through the cloud body', () => {
+test('local buckets meet through the cloud body', () => {
   let cloud = {};
   const a = cloudPc('DESK', { home: [item(1, 'milk')] }, () => cloud);
   const b = cloudPc('PHONE-ish', { home: [item(2, 'bread')] }, () => cloud);
@@ -223,7 +228,7 @@ test('stamp: an explicit base stamps new items (first sync uses 0)', () => {
   assert.deepEqual(sync.stamp([item(1, 'a')], empty(), 100, 0).u, { 1: 0 });
 });
 
-test('cloud off and no shared folder: nothing published', () => {
+test('cloud off: nothing published', () => {
   const a = cloudPc('DESK', { home: [item(1, 'milk')] }, () => null);
   assert.deepEqual(a.s.syncAll(), []);
   assert.equal(a.published.length, 0);

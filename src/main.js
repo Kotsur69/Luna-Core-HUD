@@ -112,11 +112,11 @@ const { runAsk } = require('./ask');
 // `claude -p` jobs. See src/missionrunner.js's header for the trust boundary.
 const { registerMissionIpc } = require('./missioncontrolipc');
 // Life dashboard (Ctrl+Shift+N): budget store, shared with the other PCs
-// through the Syncthing folder (src/lifesync.js). No model call.
+// through the cloud (src/lifesync.js). No model call.
 const { registerLifeIpc } = require('./lifeipc');
 const { startLifeSync } = require('./lifesync');
-// Cloud sync (docs/CLOUD_SYNC_PLAN.md): Supabase as one more peer for the
-// budget and the to-dos. Off without config/cloud.local.json.
+// Cloud sync (docs/CLOUD_SYNC_PLAN.md): Supabase carries the budget, the
+// to-dos, settings and snapshots between PCs. Off without config/cloud.local.json.
 const { startCloud } = require('./cloudsync');
 const { registerCloudIpc } = require('./cloudipc');
 const { machineName } = require('./missionledgersync');
@@ -162,7 +162,7 @@ const {
 const { saveClip, pruneClips, clipsDir } = require('./screenshots');
 
 const { readTodos, writeTodos } = require('./todo');
-// To-dos merged with the other PCs through the ledger's shared folder.
+// To-dos merged with the other PCs through the cloud (src/todosync.js).
 const { startTodoSync } = require('./todosync');
 let todoSync = null;
 // The project list (and later other settings) shared through the cloud.
@@ -2373,7 +2373,7 @@ function registerIpc() {
   });
 
   // Life dashboard (life:* channels): budget store + summary, shared with the
-  // other PCs through the same Syncthing folder as the to-dos.
+  // other PCs through the cloud, like the to-dos.
   cloud = startCloud({ machine: machineName(os.hostname()) });
   registerCloudIpc({ ipcMain, cloud });
   registerLifeIpc({ ipcMain, sync: startLifeSync({ cloud }), cloud: () => (cloud ? cloud.snapshots : null) });

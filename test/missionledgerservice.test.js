@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Mission Control ledger service tests (src/missionledgerservice.js)
 // ----------------------------------------------------------------------------
-// The ledger, store, sync and rates are injected fakes; the clock is fixed.
+// The ledger, store, cloud and rates are injected fakes; the clock is fixed.
 // ============================================================================
 
 'use strict';
@@ -10,6 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createLedgerService, weekWindow } = require('../src/missionledgerservice.js');
+const { parsePeer } = require('../src/missionledgersync.js');
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -17,25 +18,37 @@ const NOW = Date.parse('2026-10-09T12:00:00Z');
 const H = Date.parse('2026-10-09T10:00:00Z');
 const RATES = { rates: [{ id: 'claude-opus-5-5', input: 4, output: 20 }], cacheReadMultiplier: 0.1, cacheWriteMultiplier: 1.25 };
 
-function fakes({ sharedDir = null, classes = {}, ownRows, ownEvents = [], peers = [] } = {}) {
-  const writes = [];
+function fakes({ classes = {}, ownRows, ownEvents = [] } = {}) {
   const deps = {
     ledger: {
       scan: async () => {},
       rows: () => ownRows || [[H, 'git:github.com/me/a', 'a', 'claude-opus-5-5', 1e6, 0, 0, 0]],
       events: () => ownEvents,
     },
-    store: { loadProjects: () => ({ classes, sharedDir }) },
-    sync: {
-      writeOwn: (dir, machine, rows, now, blocks) => writes.push({ dir, machine, rows, now, blocks }),
-      readPeers: () => peers,
-    },
+    store: { loadProjects: () => ({ classes }) },
+    sync: { parsePeer },
     loadRates: () => RATES,
     machine: 'HOME',
     now: () => NOW,
   };
-  return { deps, writes };
+  return { deps };
 }
+
+/** Adds a fake cloud: `cloudRows` are other PCs' `ledger` snapshot rows; `puts` records ours. */
+function withCloud(deps, cloudRows = []) {
+  const puts = [];
+  const cloud = {
+    put: async (kind, data) => {
+      puts.push({ kind, data });
+      return true;
+    },
+    list: async (kind) => (kind === 'ledger' ? cloudRows : []),
+  };
+  return { deps: { ...deps, cloud }, puts };
+}
+
+/** A peer PC's snapshot row as cloud.list('ledger') returns it. */
+const peerRow = (machine, updatedAt, rows, blocks = []) => ({ machine, updatedAt, data: { v: 1, machine, rows, blocks } });
 
 test('weekWindow uses the provider reset when it is within the next 7 days', () => {
   const reset = NOW + 2 * DAY;
@@ -53,25 +66,21 @@ test('weekWindow falls back to Monday 00:00 local for a missing or absurd reset'
   }
 });
 
-test('report prices this PC alone when no shared folder is set, and writes nothing', async () => {
-  const { deps, writes } = fakes({ classes: { 'git:github.com/me/a': 'work' } });
+test('report prices this PC alone when the cloud is off', async () => {
+  const { deps } = fakes({ classes: { 'git:github.com/me/a': 'work' } });
   const r = await createLedgerService(deps).report({ resetsAt: NOW + DAY });
-  assert.equal(writes.length, 0);
   assert.equal(r.ok, true);
   assert.equal(r.totalUsd, 4);
   assert.deepEqual(r.machines, [{ machine: 'HOME', updatedAt: NOW, self: true }]);
   assert.equal(r.projects[0].cls, 'work');
-  assert.equal(r.sharedDir, null);
+  assert.equal('sharedDir' in r, false);
   assert.equal(r.windowSource, 'reset');
 });
 
-test('report merges peer PCs and writes our own file to the shared folder', async () => {
+test('report merges peer PCs from the cloud', async () => {
   const peerRows = [[H, 'git:github.com/me/a', 'a', 'claude-opus-5-5', 1e6, 0, 0, 0], [H, 'local:toy', 'toy', 'claude-opus-5-5', 2e6, 0, 0, 0]];
-  const { deps, writes } = fakes({ sharedDir: 'D:\\Sync\\ledger', peers: [{ machine: 'LAPTOP', updatedAt: NOW - HOUR, rows: peerRows }] });
+  const { deps } = withCloud(fakes().deps, [peerRow('LAPTOP', NOW - HOUR, peerRows)]);
   const r = await createLedgerService(deps).report({});
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].dir, 'D:\\Sync\\ledger');
-  assert.equal(writes[0].machine, 'HOME');
   assert.equal(r.totalUsd, 16);
   assert.deepEqual(
     r.projects.map((p) => [p.key, p.usd, p.cls]),
@@ -81,24 +90,6 @@ test('report merges peer PCs and writes our own file to the shared folder', asyn
     ]
   );
   assert.deepEqual(r.machines.map((m) => m.machine), ['HOME', 'LAPTOP']);
-});
-
-test('a failing shared-folder write still returns the report, flagged', async () => {
-  const { deps } = fakes({ sharedDir: 'Z:\\gone' });
-  deps.sync.writeOwn = () => {
-    throw Object.assign(new Error('nope'), { code: 'ENOENT' });
-  };
-  const r = await createLedgerService(deps).report({});
-  assert.equal(r.ok, true);
-  assert.equal(r.syncError, 'ENOENT');
-});
-
-test('the own file is not rewritten when the rows did not change', async () => {
-  const { deps, writes } = fakes({ sharedDir: 'D:\\Sync' });
-  const svc = createLedgerService(deps);
-  await svc.report({});
-  await svc.report({});
-  assert.equal(writes.length, 1);
 });
 
 test('report returns at most MAX_PROJECTS projects and counts the rest', async () => {
@@ -115,7 +106,6 @@ test('pinned projects are always reported, at zero when idle, and flagged', asyn
   const { deps } = fakes();
   deps.store.loadProjects = () => ({
     classes: { 'git:github.com/me/idle': 'fun' },
-    sharedDir: null,
     pinned: [
       { key: 'git:github.com/me/idle', name: 'idle', folders: [] },
       { key: 'git:github.com/me/a', name: 'a', folders: [] },
@@ -135,14 +125,15 @@ const nowDate = new Date(NOW);
 const MON9 = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - ((nowDate.getDay() + 6) % 7), 9).getTime();
 
 test("report adds this week's focus from Claude replies and commits, with classes", async () => {
-  const { deps, writes } = fakes({
-    sharedDir: 'D:\\Sync',
-    classes: { 'git:github.com/me/a': 'work' },
-    ownEvents: [
-      { ms: MON9, key: 'git:github.com/me/a', name: 'a' },
-      { ms: MON9 + 5 * MIN, key: 'git:github.com/me/a', name: 'a' },
-    ],
-  });
+  const { deps, puts } = withCloud(
+    fakes({
+      classes: { 'git:github.com/me/a': 'work' },
+      ownEvents: [
+        { ms: MON9, key: 'git:github.com/me/a', name: 'a' },
+        { ms: MON9 + 5 * MIN, key: 'git:github.com/me/a', name: 'a' },
+      ],
+    }).deps
+  );
   deps.commits = { events: async () => [{ ms: MON9 + 60 * MIN, key: 'local:toy', name: 'toy' }] };
   const r = await createLedgerService(deps).report({});
   assert.deepEqual(
@@ -154,18 +145,16 @@ test("report adds this week's focus from Claude replies and commits, with classe
   );
   assert.equal(r.focus.totalMs, 15 * MIN);
   assert.equal(r.focus.days.length, 7);
-  assert.deepEqual(writes[0].blocks, [
+  assert.deepEqual(puts[0].data.blocks, [
     [MON9, MON9 + 10 * MIN, 'git:github.com/me/a', 'a'],
     [MON9 + 60 * MIN, MON9 + 65 * MIN, 'local:toy', 'toy'],
   ]);
 });
 
 test("focus unions a peer PC's blocks with ours (the same hour is not counted twice)", async () => {
-  const { deps } = fakes({
-    sharedDir: 'D:\\Sync',
-    ownEvents: [{ ms: MON9, key: 'git:github.com/me/a', name: 'a' }],
-    peers: [{ machine: 'LAPTOP', updatedAt: NOW, rows: [], blocks: [[MON9, MON9 + 60 * MIN, 'git:github.com/me/a', 'a']] }],
-  });
+  const { deps } = withCloud(fakes({ ownEvents: [{ ms: MON9, key: 'git:github.com/me/a', name: 'a' }] }).deps, [
+    peerRow('LAPTOP', NOW, [], [[MON9, MON9 + 60 * MIN, 'git:github.com/me/a', 'a']]),
+  ]);
   const r = await createLedgerService(deps).report({});
   assert.equal(r.focus.projects[0].totalMs, 60 * MIN);
 });
@@ -178,23 +167,9 @@ test('a failing commit reader leaves focus with the Claude replies only', async 
   assert.equal(r.focus.projects[0].totalMs, 5 * MIN);
 });
 
-// ---- Cloud snapshot (docs/CLOUD_SYNC_PLAN.md, 2c): the ledger without a shared folder ----
+// ---- Cloud snapshot (docs/CLOUD_SYNC_PLAN.md, 2c) ----
 
-const { parsePeer } = require('../src/missionledgersync.js');
-
-function withCloud(deps, cloudRows = []) {
-  const puts = [];
-  const cloud = {
-    put: async (kind, data) => {
-      puts.push({ kind, data });
-      return true;
-    },
-    list: async (kind) => (kind === 'ledger' ? cloudRows : []),
-  };
-  return { deps: { ...deps, sync: { ...deps.sync, parsePeer }, cloud }, puts };
-}
-
-test('with the cloud on and no shared folder, our rows go up and other PCs come down', async () => {
+test('with the cloud on, our rows go up and other PCs come down', async () => {
   const peer = { v: 1, machine: 'WORK', rows: [[H, 'local:toy', 'toy', 'claude-opus-5-5', 2e6, 0, 0, 0]], blocks: [] };
   const { deps, puts } = withCloud(fakes().deps, [{ machine: 'WORK', data: peer, updatedAt: NOW - HOUR }]);
   const r = await createLedgerService(deps).report({});
@@ -217,11 +192,11 @@ test('the cloud snapshot keeps only the last 8 days of rows and blocks', async (
   assert.deepEqual(puts[0].data.rows.map((r) => r[0]), [H]);
 });
 
-test('a cloud peer and a folder peer of the same PC count once, the newer one wins', async () => {
-  const folderPeer = { machine: 'WORK', updatedAt: NOW - 3 * HOUR, rows: [[H, 'local:toy', 'toy', 'claude-opus-5-5', 1e6, 0, 0, 0]], blocks: [] };
-  const cloudPeer = { v: 1, machine: 'WORK', rows: [[H, 'local:toy', 'toy', 'claude-opus-5-5', 2e6, 0, 0, 0]], blocks: [] };
-  const base = fakes({ sharedDir: 'D:\\Sync', peers: [folderPeer] }).deps;
-  const { deps } = withCloud(base, [{ machine: 'work', data: { ...cloudPeer, machine: 'work' }, updatedAt: NOW - HOUR }]);
+test('two snapshot rows of the same PC (case differs) count once, the newer one wins', async () => {
+  const { deps } = withCloud(fakes().deps, [
+    peerRow('WORK', NOW - 3 * HOUR, [[H, 'local:toy', 'toy', 'claude-opus-5-5', 1e6, 0, 0, 0]]),
+    peerRow('work', NOW - HOUR, [[H, 'local:toy', 'toy', 'claude-opus-5-5', 2e6, 0, 0, 0]]),
+  ]);
   const r = await createLedgerService(deps).report({});
   assert.equal(r.totalUsd, 12);
   assert.equal(r.machines.length, 2);

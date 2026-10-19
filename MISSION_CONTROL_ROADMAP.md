@@ -104,11 +104,12 @@ review and the morning brief are only as good as what they summarise.
 with "≈ x % of weekly limit · ~$y", one-click work / fun / other, the PCs
 feeding the numbers. Files: `src/missionledger.js` (scan + cache + price),
 `src/missionrepokey.js` (cwd → project key, no spawn),
-`src/missionledgersync.js` (multi-PC files), `src/missionprojects.js`
-(classes + shared folder), `src/missionledgerservice.js` (glue), renderer
+`src/missionledgersync.js` (peer validation), `src/missionprojects.js`
+(classes + pins), `src/missionledgerservice.js` (glue), renderer
 `modules/missionledger.js` + `missionledgerview.js` (pure math). IPC
-`mission:ledger`, `mission:project-class`, `mission:ledger-pick-dir`,
-`mission:ledger-clear-dir`. Verified on real data: hand count of one project
+`mission:ledger`, `mission:project-class`. Other PCs' ledgers come from the
+cloud `ledger` snapshots (docs/CLOUD_SYNC_PLAN.md); the original shared-folder
+transport was removed in cloud phase 3 (2026-10-15). Verified on real data: hand count of one project
 within 0.13 %, full scan 423 ms with a worst event-loop stall of 4 ms (no
 worker needed), re-open 25 ms.
 
@@ -148,27 +149,11 @@ plain tag.
 **Not done yet:** pin / unpin from the UI; re-classing a project outside the
 top 5 + pins (it has no row).
 
-### W1b — Move the ledger files between the 3 PCs ⏳ (Mati's setup)
+### W1b — Move the ledger between the 3 PCs ✅ superseded by the cloud
 
-LunaCore only reads/writes a folder; something has to sync it. Mati: no
-OneDrive for personal stuff, Google Drive desktop is blocked by company
-policy, a work PC sits behind Zscaler.
-- **Try first: Syncthing** on all 3 PCs, one shared folder → in LunaCore
-  *Share with other PCs…* → pick it.
-  **This PC (KT-PC-LLM), 2026-10-09:** the SyncTrayzor *installer* failed for
-  Mati; the **portable** build works (v2.2.0, sha512 checked against the
-  release's `sha512sum.txt.asc`) → `%LOCALAPPDATA%\SyncTrayzorPortable\
-  SyncTrayzorPortable-x64\SyncTrayzor.exe`. Syncthing folder id
-  `lunacore-ledger` = `%USERPROFILE%\LunaLedger`, set as LunaCore's shared
-  folder. Not paired with the other PCs yet. Zscaler may block its relays / port
-  22000 — if so, it fails silently (peer shows a stale "x hours ago").
-- **Fallback: Gmail transport** (Gmail works everywhere for Mati): each PC
-  mails its ledger JSON to Mati's own address under a label, the others read
-  the newest per machine. Needs a Gmail API scope via the existing Google
-  OAuth (`src/gcal.js` pattern) — a token-free path, not the claude.ai
-  connector (that costs a model call per read). Own small workstream; ask
-  before adding the scope.
-- Open: should the work / fun / other classes sync too (today per PC)?
+Done through Supabase instead (docs/CLOUD_SYNC_PLAN.md). The Syncthing /
+SyncTrayzor shared folder tried here on 2026-10-09 was removed from LunaCore
+in cloud phase 3 (2026-10-15); SyncTrayzor can be uninstalled on every PC.
 
 - **Source:** `~/.claude/projects/*/*.jsonl`. Every assistant line carries
   `cwd`, `timestamp`, `message.model` and `message.usage`
@@ -193,6 +178,7 @@ policy, a work PC sits behind Zscaler.
   `mission:project-class`.
 - **Done when:** numbers for the current week match a hand count on one
   project within 1 %, a re-open costs < 50 ms, classes persist.
+
 
 ### W2 — Focus / time per project ✅ (2026-10-13)
 

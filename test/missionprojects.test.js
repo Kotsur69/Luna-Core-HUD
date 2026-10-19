@@ -16,9 +16,9 @@ const file = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lc-proj-')),
 
 test('a missing or broken file loads as empty', () => {
   const f = file();
-  assert.deepEqual(store.loadProjects(f), { classes: {}, sharedDir: null, pinned: [] });
+  assert.deepEqual(store.loadProjects(f), { classes: {}, pinned: [] });
   fs.writeFileSync(f, '{oops');
-  assert.deepEqual(store.loadProjects(f), { classes: {}, sharedDir: null, pinned: [] });
+  assert.deepEqual(store.loadProjects(f), { classes: {}, pinned: [] });
 });
 
 test('setClass stores work / fun / other and null unassigns', () => {
@@ -44,16 +44,15 @@ test('loading drops bad entries written by hand', () => {
     f,
     JSON.stringify({ classes: { 'local:ok': 'fun', 'local:bad': 'boss', 'not a key': 'work' }, sharedDir: 42 })
   );
-  assert.deepEqual(store.loadProjects(f), { classes: { 'local:ok': 'fun' }, sharedDir: null, pinned: [] });
+  assert.deepEqual(store.loadProjects(f), { classes: { 'local:ok': 'fun' }, pinned: [] });
 });
 
-test('setSharedDir keeps an absolute path and clears with null', () => {
+test('a sharedDir left by the old folder sync is dropped on the next save', () => {
   const f = file();
-  const dir = path.resolve(os.tmpdir());
-  assert.equal(store.setSharedDir(dir, f).sharedDir, dir);
-  assert.equal(store.loadProjects(f).sharedDir, dir);
-  assert.equal(store.setSharedDir(null, f).sharedDir, null);
-  assert.throws(() => store.setSharedDir('relative/dir', f));
+  fs.writeFileSync(f, JSON.stringify({ classes: {}, sharedDir: 'C:/Users/x/LunaLedger', pinned: [] }));
+  assert.equal('sharedDir' in store.loadProjects(f), false);
+  store.setClass('local:toy', 'fun', f);
+  assert.equal('sharedDir' in JSON.parse(fs.readFileSync(f, 'utf8')), false);
 });
 
 test('setPinned stores pinned projects with folder aliases', () => {

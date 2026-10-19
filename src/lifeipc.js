@@ -15,7 +15,7 @@
 // The renderer is untrusted: it names an op and sends a payload, and
 // src/lifebudget.js's fixed op table validates all of it. Failures come back
 // as fixed reason codes, never raw error text. The budget is shared with the
-// other PCs through the Syncthing folder (src/lifesync.js: a read pulls their
+// other PCs through the cloud (src/lifesync.js: a read pulls their
 // changes first, a write publishes soon after); only life:body* talk to the
 // network (YAZIO, via src/lifeyazio.js). No model call. Lives outside main.js (past
 // the file-size guideline); main.js only calls registerLifeIpc() once.

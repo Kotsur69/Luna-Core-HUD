@@ -1,17 +1,14 @@
 // ============================================================================
 // LunaCore - Mission Control ledger sync tests (src/missionledgersync.js)
 // ----------------------------------------------------------------------------
-// A temp folder stands in for the synced one (Syncthing, a USB stick...).
-// Peer files are untrusted: every malformed shape must be dropped, not crash.
+// Peer bodies (other PCs' cloud snapshots) are untrusted: every malformed
+// shape must be dropped, not crash.
 // ============================================================================
 
 'use strict';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
 
 const sync = require('../src/missionledgersync.js');
 
@@ -19,10 +16,8 @@ const HOUR = 60 * 60 * 1000;
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const H = Date.parse('2026-10-09T10:00:00Z');
 const row = (over = {}) => [H, 'git:github.com/me/app', 'app', 'claude-opus-5-5', 10, 20, 30, 40].map((v, i) => (i in over ? over[i] : v));
-
-const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'lc-sync-'));
-const writePeer = (d, machine, body) =>
-  fs.writeFileSync(path.join(d, `ledger-${machine}.json`), typeof body === 'string' ? body : JSON.stringify(body));
+const block = (over = {}) => [H, H + HOUR, 'git:github.com/me/app', 'app'].map((v, i) => (i in over ? over[i] : v));
+const body = (extra = {}) => ({ v: 1, machine: 'LAPTOP', updatedAt: NOW, rows: [], ...extra });
 
 test('machineName keeps letters, digits and hyphens only', () => {
   assert.equal(sync.machineName('KT-PC-LLM'), 'KT-PC-LLM');
@@ -31,159 +26,72 @@ test('machineName keeps letters, digits and hyphens only', () => {
   assert.equal(sync.machineName('x'.repeat(100)).length, 63);
 });
 
-test('writeOwn writes ledger-<machine>.json atomically with the rows', () => {
-  const d = dir();
-  sync.writeOwn(d, 'KT-PC-LLM', [row()], NOW);
-  const saved = JSON.parse(fs.readFileSync(path.join(d, 'ledger-KT-PC-LLM.json'), 'utf8'));
-  assert.deepEqual(saved, { v: 1, machine: 'KT-PC-LLM', updatedAt: NOW, rows: [row()] });
-  assert.deepEqual(fs.readdirSync(d), ['ledger-KT-PC-LLM.json'], 'no temp file left behind');
-});
-
-test('writeOwn refuses a machine name that is not already sanitised', () => {
-  assert.throws(() => sync.writeOwn(dir(), '../x', [], NOW));
-});
-
-test('readPeers returns other machines, skipping our own file', () => {
-  const d = dir();
-  sync.writeOwn(d, 'HOME', [row()], NOW);
-  writePeer(d, 'LAPTOP', { v: 1, machine: 'LAPTOP', updatedAt: NOW - HOUR, rows: [row({ 4: 1 })] });
-  const peers = sync.readPeers(d, 'HOME', NOW);
-  assert.equal(peers.length, 1);
-  assert.equal(peers[0].machine, 'LAPTOP');
-  assert.equal(peers[0].updatedAt, NOW - HOUR);
-  assert.deepEqual(peers[0].rows, [row({ 4: 1 })]);
-});
-
-test('readPeers drops malformed rows and keeps the good ones', () => {
-  const d = dir();
-  writePeer(d, 'LAPTOP', {
-    v: 1,
-    machine: 'LAPTOP',
-    updatedAt: NOW,
-    rows: [
-      row(),
-      row({ 0: H + 5 }), // not on an hour boundary
-      row({ 0: NOW - 40 * 24 * HOUR }), // older than history
-      row({ 1: 'C:\\Users\\x' }), // not a project key
-      row({ 2: 'a\u0000b' }), // control character in name
-      row({ 3: 'claude opus' }), // bad model id
-      row({ 4: -1 }),
-      row({ 5: 1.5 }),
-      row({ 6: 'many' }),
-      [H, 'other', 'other', 'claude-opus-5-5', 1, 2, 3], // too short
-      'not a row',
-    ],
-  });
-  const [peer] = sync.readPeers(d, 'HOME', NOW);
-  assert.deepEqual(peer.rows, [row()]);
-});
-
-test('readPeers ignores junk, wrong versions, mismatched names, symlinks and oversize files', () => {
-  const d = dir();
-  writePeer(d, 'BROKEN', '{not json');
-  writePeer(d, 'OLDV', { v: 2, machine: 'OLDV', updatedAt: NOW, rows: [] });
-  writePeer(d, 'LIAR', { v: 1, machine: 'SOMEONE-ELSE', updatedAt: NOW, rows: [] });
-  writePeer(d, 'HUGE', 'x'.repeat(sync.MAX_FILE_BYTES + 1));
-  fs.writeFileSync(path.join(d, 'notes.json'), '{}');
-  fs.mkdirSync(path.join(d, 'ledger-DIR.json'));
-  assert.deepEqual(sync.readPeers(d, 'HOME', NOW), []);
-});
-
-test('readPeers of a missing or empty folder is an empty list', () => {
-  assert.deepEqual(sync.readPeers(path.join(os.tmpdir(), 'lc-sync-missing-xyz'), 'HOME', NOW), []);
-  assert.deepEqual(sync.readPeers(null, 'HOME', NOW), []);
-});
-
-test('readPeers caps the number of peer files', () => {
-  const d = dir();
-  for (let i = 0; i < sync.MAX_PEERS + 3; i++) {
-    writePeer(d, `PC${i}`, { v: 1, machine: `PC${i}`, updatedAt: NOW, rows: [row()] });
-  }
-  assert.equal(sync.readPeers(d, 'HOME', NOW).length, sync.MAX_PEERS);
-});
-
-test('writeOwn never writes through a planted symlink at a guessable temp name', () => {
-  const d = dir();
-  const victim = path.join(dir(), 'victim.txt');
-  fs.writeFileSync(victim, 'keep me');
-  try {
-    fs.symlinkSync(victim, path.join(d, `ledger-HOME.json.${process.pid}.tmp`));
-  } catch {
-    return; // no symlink privilege on this Windows account - nothing to plant
-  }
-  sync.writeOwn(d, 'HOME', [row()], NOW);
-  assert.equal(fs.readFileSync(victim, 'utf8'), 'keep me');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(d, 'ledger-HOME.json'), 'utf8')).machine, 'HOME');
-});
-
-test('readPeers caps distinct project keys per peer', () => {
-  const d = dir();
-  const rows = Array.from({ length: sync.MAX_PEER_KEYS + 50 }, (_, i) => row({ 1: `local:p${i}`, 2: `p${i}` }));
-  writePeer(d, 'LAPTOP', { v: 1, machine: 'LAPTOP', updatedAt: NOW, rows });
-  const keys = new Set(sync.readPeers(d, 'HOME', NOW)[0].rows.map((r) => r[1]));
-  assert.equal(keys.size, sync.MAX_PEER_KEYS);
-});
-
-test('readPeers skips our own file even when the case differs', () => {
-  const d = dir();
-  writePeer(d, 'home', { v: 1, machine: 'home', updatedAt: NOW, rows: [row()] });
-  assert.deepEqual(sync.readPeers(d, 'HOME', NOW), []);
-});
-
-// ---- Focus blocks [startMs, endMs, key, name] (W2) ----
-
-const block = (over = {}) => [H, H + HOUR, 'git:github.com/me/app', 'app'].map((v, i) => (i in over ? over[i] : v));
-
-test('writeOwn adds focus blocks when given; a peer file round-trips them', () => {
-  const d = dir();
-  sync.writeOwn(d, 'LAPTOP', [row()], NOW, [block()]);
-  const saved = JSON.parse(fs.readFileSync(path.join(d, 'ledger-LAPTOP.json'), 'utf8'));
-  assert.deepEqual(saved.blocks, [block()]);
-  assert.deepEqual(sync.readPeers(d, 'HOME', NOW)[0].blocks, [block()]);
-});
-
-test('a peer file from before focus blocks reads as no blocks', () => {
-  const d = dir();
-  writePeer(d, 'LAPTOP', { v: 1, machine: 'LAPTOP', updatedAt: NOW, rows: [row()] });
-  assert.deepEqual(sync.readPeers(d, 'HOME', NOW)[0].blocks, []);
-});
-
-test('readPeers drops malformed focus blocks and keeps the good ones', () => {
-  const d = dir();
-  writePeer(d, 'LAPTOP', {
-    v: 1,
-    machine: 'LAPTOP',
-    updatedAt: NOW,
-    rows: [],
-    blocks: [
-      block(),
-      block({ 1: H }), // empty
-      block({ 1: H - HOUR }), // ends before it starts
-      block({ 0: H + 0.5 }), // not an integer
-      block({ 1: H + 3 * 24 * HOUR }), // longer than a block can be
-      block({ 0: NOW - 30 * 24 * HOUR, 1: NOW - 30 * 24 * HOUR + HOUR }), // older than history
-      block({ 0: NOW + 2 * 24 * HOUR, 1: NOW + 2 * 24 * HOUR + HOUR }), // future
-      block({ 2: '../evil' }),
-      block({ 3: 'bad\u0000name' }),
-      [H, H + HOUR, 'git:github.com/me/app'],
-      'junk',
-    ],
-  });
-  assert.deepEqual(sync.readPeers(d, 'HOME', NOW)[0].blocks, [block()]);
-});
-
-test('focus blocks share the per-peer project-key cap with the rows', () => {
-  const d = dir();
-  const rows = Array.from({ length: sync.MAX_PEER_KEYS }, (_, i) => row({ 1: `local:p${i}`, 2: `p${i}` }));
-  writePeer(d, 'LAPTOP', { v: 1, machine: 'LAPTOP', updatedAt: NOW, rows, blocks: [block({ 2: 'local:extra' }), block({ 2: 'local:p1' })] });
-  assert.deepEqual(sync.readPeers(d, 'HOME', NOW)[0].blocks.map((b) => b[2]), ['local:p1']);
-});
-
-test('parsePeer validates a snapshot body the same way as a peer file', () => {
+test('parsePeer validates a snapshot body', () => {
   const good = { v: 1, machine: 'WORK', updatedAt: NOW, rows: [row()], blocks: [block()] };
   assert.deepEqual(sync.parsePeer(good, 'WORK', NOW), { machine: 'WORK', updatedAt: NOW, rows: [row()], blocks: [block()] });
   assert.equal(sync.parsePeer({ ...good, machine: 'OTHER' }, 'WORK', NOW), null);
   assert.equal(sync.parsePeer({ ...good, v: 2 }, 'WORK', NOW), null);
+  assert.equal(sync.parsePeer({ ...good, rows: 'nope' }, 'WORK', NOW), null);
   assert.equal(sync.parsePeer(null, 'WORK', NOW), null);
-  assert.equal(sync.parsePeer({ ...good, rows: [['junk']] }, 'WORK', NOW).rows.length, 0);
+  assert.equal(sync.parsePeer({ ...good, updatedAt: 'x' }, 'WORK', NOW).updatedAt, 0);
+});
+
+test('parsePeer drops malformed rows and keeps the good ones', () => {
+  const rows = [
+    row(),
+    row({ 0: H + 5 }), // not on an hour boundary
+    row({ 0: NOW - 40 * 24 * HOUR }), // older than history
+    row({ 1: 'C:\\Users\\x' }), // not a project key
+    row({ 2: 'a\u0000b' }), // control character in name
+    row({ 3: 'claude opus' }), // bad model id
+    row({ 4: -1 }),
+    row({ 5: 1.5 }),
+    row({ 6: 'many' }),
+    [H, 'other', 'other', 'claude-opus-5-5', 1, 2, 3], // too short
+    'not a row',
+  ];
+  assert.deepEqual(sync.parsePeer(body({ rows }), 'LAPTOP', NOW).rows, [row()]);
+});
+
+test('parsePeer caps distinct project keys per peer', () => {
+  const rows = Array.from({ length: sync.MAX_PEER_KEYS + 50 }, (_, i) => row({ 1: `local:p${i}`, 2: `p${i}` }));
+  const keys = new Set(sync.parsePeer(body({ rows }), 'LAPTOP', NOW).rows.map((r) => r[1]));
+  assert.equal(keys.size, sync.MAX_PEER_KEYS);
+});
+
+// ---- Focus blocks [startMs, endMs, key, name] (W2) ----
+
+test('a body from before focus blocks reads as no blocks', () => {
+  assert.deepEqual(sync.parsePeer(body({ rows: [row()] }), 'LAPTOP', NOW).blocks, []);
+});
+
+test('parsePeer drops malformed focus blocks and keeps the good ones', () => {
+  const blocks = [
+    block(),
+    block({ 1: H }), // empty
+    block({ 1: H - HOUR }), // ends before it starts
+    block({ 0: H + 0.5 }), // not an integer
+    block({ 1: H + 3 * 24 * HOUR }), // longer than a block can be
+    block({ 0: NOW - 30 * 24 * HOUR, 1: NOW - 30 * 24 * HOUR + HOUR }), // older than history
+    block({ 0: NOW + 2 * 24 * HOUR, 1: NOW + 2 * 24 * HOUR + HOUR }), // future
+    block({ 2: '../evil' }),
+    block({ 3: 'bad\u0000name' }),
+    [H, H + HOUR, 'git:github.com/me/app'],
+    'junk',
+  ];
+  assert.deepEqual(sync.parsePeer(body({ blocks }), 'LAPTOP', NOW).blocks, [block()]);
+});
+
+test('focus blocks share the per-peer project-key cap with the rows', () => {
+  const rows = Array.from({ length: sync.MAX_PEER_KEYS }, (_, i) => row({ 1: `local:p${i}`, 2: `p${i}` }));
+  const blocks = [block({ 2: 'local:extra' }), block({ 2: 'local:p1' })];
+  assert.deepEqual(sync.parsePeer(body({ rows, blocks }), 'LAPTOP', NOW).blocks.map((b) => b[2]), ['local:p1']);
+});
+
+test('validKey accepts the project-key shapes only', () => {
+  assert.equal(sync.validKey('other'), true);
+  assert.equal(sync.validKey('git:github.com/me/app'), true);
+  assert.equal(sync.validKey('local:home'), true);
+  assert.equal(sync.validKey('../evil'), false);
+  assert.equal(sync.validKey(42), false);
 });

@@ -58,15 +58,6 @@ function defaultLedgerService(cloudSnapshots) {
   });
 }
 
-/** Native folder dialog; the path never comes from the renderer. */
-async function defaultPickDir() {
-  const { dialog, BrowserWindow } = require('electron');
-  const win = BrowserWindow.getFocusedWindow();
-  const opts = { title: 'Shared ledger folder', properties: ['openDirectory', 'createDirectory'] };
-  const result = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
-  return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
-}
-
 /** Native file dialog for the Google Desktop-app client JSON. */
 async function defaultPickClientFile() {
   const { dialog, BrowserWindow } = require('electron');
@@ -153,7 +144,6 @@ function registerMissionIpc({
   ledgerService = null,
   cloudSnapshots = () => null,
   projects = projectStore,
-  pickDir = defaultPickDir,
   pickClientFile = defaultPickClientFile,
 }) {
   // Built on first use: requiring it is cheap, but tests never need the real one.
@@ -428,19 +418,6 @@ function registerMissionIpc({
       return { ok: false, reason: 'bad-input' };
     }
   });
-
-  // The folder comes from a native dialog in main; any renderer argument is ignored.
-  ipcMain.handle('mission:ledger-pick-dir', () =>
-    guarded('ledger-dir', async () => {
-      const dir = await pickDir();
-      if (!dir) return { ok: false, reason: 'cancelled' };
-      return { ok: true, sharedDir: projects.setSharedDir(dir).sharedDir };
-    })
-  );
-
-  ipcMain.handle('mission:ledger-clear-dir', () =>
-    guarded('ledger-dir', async () => ({ ok: true, sharedDir: projects.setSharedDir(null).sharedDir }))
-  );
 
   // ---- News: Agent-Reach fetch (src/missionnews.js) + one lean Haiku job ----
 

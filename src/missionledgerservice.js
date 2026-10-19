@@ -2,11 +2,11 @@
 // LunaCore - Mission Control: "which project ate my weekly limit" (main)
 // ----------------------------------------------------------------------------
 // Glue for mission:ledger: scan this PC's transcripts (missionledger.js),
-// publish our aggregates to the shared folder and read the other PCs'
-// (missionledgersync.js), then price everything inside the Claude weekly
+// put our aggregates in the `ledger` cloud snapshot and read the other PCs'
+// (validated by missionledgersync.js), then price everything inside the Claude weekly
 // window and attach each project's class (missionprojects.js).
 // Focus (W2): this PC's reply + commit moments become blocks
-// (missionfocus.js), are published next to the rows, and are unioned with the
+// (missionfocus.js), go up next to the rows, and are unioned with the
 // other PCs' blocks into report.focus for the local Mon-Sun week.
 //
 // Window: the provider's own 7-day window (weekly resetsAt - 7 d) when the
@@ -18,10 +18,11 @@
 
 const { eventsToBlocks, focusWeek } = require('./missionfocus');
 const { fits } = require('./cloudsnapshots');
+const { MAX_PEERS } = require('./missionledgersync');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
-/** Projects sent to the renderer; the rest are only counted (peer files are untrusted). */
+/** Projects sent to the renderer; the rest are only counted (peer data is untrusted). */
 const MAX_PROJECTS = 50;
 
 /** {sinceMs, untilMs, source} for the current weekly window. */
@@ -72,9 +73,6 @@ function focusReport(blocks, at, classes) {
 
 /** The cloud snapshot needs the weekly window (<= 7 days) and the Mon-Sun focus week only. */
 const CLOUD_KEEP_MS = 8 * DAY_MS;
-/** Same cap as missionledgersync.js MAX_PEERS. */
-const MAX_PEERS = 8;
-
 /** Shorter windows tried when 8 days of a heavy week don't fit one snapshot row. */
 const SHRINK_DAYS = [3, 1];
 
@@ -94,7 +92,7 @@ function putSnapshot(cloud, machine, rows, blocks, at) {
     .catch((err) => console.error('[ledger] cloud snapshot failed:', err && err.message));
 }
 
-/** Other PCs' `ledger` snapshots, validated like peer files; a failing cloud is no peers. */
+/** Other PCs' `ledger` snapshots, validated; a failing cloud is no peers. */
 async function cloudPeers(cloud, parsePeer, machine, at) {
   let rows = [];
   try {
@@ -110,10 +108,10 @@ async function cloudPeers(cloud, parsePeer, machine, at) {
     .filter((p) => p && (p.rows.length || p.blocks.length));
 }
 
-/** Folder and cloud peers, one per machine (case-insensitive): the newer copy wins. */
-function mergePeers(a, b) {
+/** One peer per machine (case-insensitive): the newer copy wins. */
+function onePerMachine(peers) {
   const byMachine = new Map();
-  for (const p of [...a, ...b]) {
+  for (const p of peers) {
     const id = p.machine.toLowerCase();
     const seen = byMachine.get(id);
     if (!seen || p.updatedAt > seen.updatedAt) byMachine.set(id, p);
@@ -123,12 +121,12 @@ function mergePeers(a, b) {
 
 /**
  * @param {{ledger:{scan:Function,rows:Function,events:Function}, store:{loadProjects:Function},
- *          sync:{writeOwn:Function,readPeers:Function,parsePeer?:Function}, loadRates:Function,
+ *          sync:{parsePeer:Function}, loadRates:Function,
  *          commits?:{events:()=>Promise<Array>}, summarize?:Function, machine:string, now?:()=>number,
  *          cloud?:object|(()=>object|null)|null}} deps
  *   cloud = cloudsnapshots.js {put, list} (or a getter for it; null while the
- *   cloud is off): our snapshot goes up and the other PCs' come down, with or
- *   without a shared folder.
+ *   cloud is off): our snapshot goes up and the other PCs' come down. With the
+ *   cloud off the report covers this PC only.
  */
 function createLedgerService({
   ledger,
@@ -141,34 +139,16 @@ function createLedgerService({
   now = Date.now,
   cloud = null,
 }) {
-  let lastWritten = null;
-
-  /** Writes our file when the rows, blocks or folder changed; returns an error code or null. */
-  function publish(dir, rows, blocks, at) {
-    const sig = `${dir}\u0000${JSON.stringify(rows)}\u0000${JSON.stringify(blocks)}`;
-    if (sig === lastWritten) return null;
-    try {
-      sync.writeOwn(dir, machine, rows, at, blocks);
-      lastWritten = sig;
-      return null;
-    } catch (err) {
-      console.error('[ledger] shared folder write failed:', err && err.code);
-      return (err && err.code) || 'write-failed';
-    }
-  }
-
   return {
     async report(req) {
       await ledger.scan();
       const blocks = await ownBlocks(ledger, commits);
       const at = now();
       const own = ledger.rows();
-      const { classes, sharedDir, pinned = [] } = store.loadProjects();
-      const syncError = sharedDir ? publish(sharedDir, own, blocks, at) : null;
-      const folderPeers = sharedDir ? sync.readPeers(sharedDir, machine, at) : [];
+      const { classes, pinned = [] } = store.loadProjects();
       const live = typeof cloud === 'function' ? cloud() : cloud;
       if (live) putSnapshot(live, machine, own, blocks, at);
-      const peers = live ? mergePeers(folderPeers, await cloudPeers(live, sync.parsePeer, machine, at)) : folderPeers;
+      const peers = live ? onePerMachine(await cloudPeers(live, sync.parsePeer, machine, at)) : [];
       const allBlocks = peers.reduce((all, p) => all.concat(p.blocks || []), blocks);
 
       const win = weekWindow(req && req.resetsAt, at);
@@ -184,8 +164,6 @@ function createLedgerService({
         moreProjects: Math.max(0, sum.projects.filter((p) => !pinned.some((x) => x.key === p.key)).length - MAX_PROJECTS),
         machines: [{ machine, updatedAt: at, self: true }, ...peers.map((p) => ({ machine: p.machine, updatedAt: p.updatedAt, self: false }))],
         focus: focusReport(allBlocks, at, classes),
-        sharedDir,
-        syncError,
       };
     },
   };

@@ -5069,8 +5069,6 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mc-ledger__pick:disabled { opacity: 0.45; cursor: progress; }
 .mc-ledger__foot { display: flex; flex-direction: column; gap: var(--space-2); }
 .mc-ledger__foot .hint { margin: 0; }
-.mc-ledger__dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mc-ledger__actions { display: flex; gap: var(--space-3); flex-wrap: wrap; }
 
 /* ---- Mission Control: "Focus this week" (modules/missionfocus.js) ---- */
 /* Headline tiles first (the three numbers that matter), then a real table:

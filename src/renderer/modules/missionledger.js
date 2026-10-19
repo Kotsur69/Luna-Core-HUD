@@ -2,14 +2,13 @@
 // LunaCore - Mission Control: "Where Claude went" block (renderer)
 // ----------------------------------------------------------------------------
 // Lives inside the Telemetry widget. mission:ledger (src/missionledgerservice.js)
-// scans the local transcripts and merges the other PCs' files from the shared
-// folder - free, no model call. This file only renders: the stacked bar by
+// scans the local transcripts and merges the other PCs' ledgers from the
+// cloud - free, no model call. This file only renders: the stacked bar by
 // class, the top projects, one-click work / fun / other for unassigned ones
 // (a row's class chip steps to the next class on click), and the PCs feeding
 // the numbers. Math lives in missionledgerview.js.
 //
-// The renderer never names a path: the shared folder is picked in a native
-// dialog in main, and project classes are set by key, validated in main.
+// Project classes are set by key, validated in main.
 // ============================================================================
 
 'use strict';
@@ -153,30 +152,12 @@ function renderUnassigned(view, rerender) {
   return [box];
 }
 
-function renderFooter(onPick, onClear) {
+function renderFooter() {
   const foot = el('div', 'mc-ledger__foot');
   const pcs = report.machines
     .map((m) => (m.self ? t('mc.ledger.thisPc', { name: m.machine }) : `${m.machine} (${ago(m.updatedAt)})`))
     .join(' · ');
   foot.append(el('p', 'hint', t('mc.ledger.pcs', { list: pcs })));
-  if (report.sharedDir) {
-    const dir = el('p', 'hint mc-ledger__dir', t('mc.ledger.sharedIn', { dir: report.sharedDir }));
-    dir.title = report.sharedDir;
-    foot.append(dir);
-  }
-  if (report.syncError) foot.append(el('p', 'hint is-fail', t('mc.ledger.syncError', { code: report.syncError })));
-  const actions = el('div', 'mc-ledger__actions');
-  const pick = el('button', 'pad-send mc-connect', t(report.sharedDir ? 'mc.ledger.changeDir' : 'mc.ledger.pickDir'));
-  pick.type = 'button';
-  pick.addEventListener('click', onPick);
-  actions.append(pick);
-  if (report.sharedDir) {
-    const clear = el('button', 'port-btn mc-ledger__clear', t('mc.ledger.clearDir'));
-    clear.type = 'button';
-    clear.addEventListener('click', onClear);
-    actions.append(clear);
-  }
-  foot.append(actions);
   return foot;
 }
 
@@ -212,20 +193,6 @@ export function mountLedger(root, getWeekly, focusRoot = null) {
     render();
   }
 
-  async function pickDir() {
-    const res = await window.lunacore.missionLedgerPickDir().catch(ipcFailed);
-    if (res.ok) return load(true);
-    if (res.reason !== 'cancelled') lastError = res.reason;
-    render();
-  }
-
-  async function clearDir() {
-    const res = await window.lunacore.missionLedgerClearDir().catch(ipcFailed);
-    if (res.ok) return load(true);
-    lastError = res.reason;
-    render();
-  }
-
   function render() {
     if (!mounted) return;
     const weekly = getWeekly();
@@ -239,7 +206,7 @@ export function mountLedger(root, getWeekly, focusRoot = null) {
     } else if (view) {
       parts.push(el('p', 'hint', t('mc.ledger.empty')));
     }
-    if (report) parts.push(renderFooter(pickDir, clearDir));
+    if (report) parts.push(renderFooter());
     root.replaceChildren(...parts);
     if (focusRoot && (focusDrawn.report !== report || focusDrawn.lang !== lang())) {
       focusRoot.replaceChildren(...(report ? renderFocus(report.focus) : []));

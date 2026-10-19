@@ -1,7 +1,8 @@
 # Cloud sync + iPhone companion — plan
 
 Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14. Released in v0.15.0 (2026-10-15).
-Phases 2a–2c shipped 2026-10-15 (v0.15.0 → v0.16.1) and proven live on two PCs**
+Phases 2a–2c shipped 2026-10-15 (v0.15.0 → v0.16.1) and proven live on two PCs.
+Phase 3 (folder transport removed) done 2026-10-15, not released yet**
 (KT-PC-LLM + laptop KT-NO-MMAZUR), against Supabase
 project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
 `https://phkigyuhvbanadwmxqqs.supabase.co`) — schema in
@@ -45,7 +46,7 @@ packaged build (`src/paths.js` → `paths.local()`).
 | `todo.local.json` | `todos` | `<projectKey>:<at>` | Project key = normalised git remote (`missionrepokey.js`). **Change from `todosync.js`:** `local:*` buckets (home, safetyhub-bhp, …) sync too, keyed by name — the phone has no repos. |
 | `mission-news.local.json` | `config` | `news:source:<id>`, `news:topic:<id>` | Sources (18) and topics. Briefing/articles are a snapshot (section B). |
 | `missioncontrol.local.json` | `config` | `mc:rules` (whole doc) | Inbox / Mission Control rules. Not on KT-PC-LLM yet; create on first write. |
-| `mission-projects.local.json` | `config` | `proj:class:<projectKey>`, `proj:pinned` | `classes` (work/fun/other) + `pinned`. **`sharedDir` stays per machine** and is removed in phase 3. |
+| `mission-projects.local.json` | `config` | `proj:class:<projectKey>`, `proj:pinned` | `classes` (work/fun/other) + `pinned`. `sharedDir` was removed in phase 3 (a leftover key is dropped on the next save). |
 
 **Candidates — answered 2026-10-14:** sync `prompts.local.json`,
 `cheatsheets.local.json`, `libraries.local.json`, `rates.local.json` (whole
@@ -64,7 +65,7 @@ sound/voice settings — not `windowMaterial`, `boot`, `layout`).
 
 | Kind | Source today | Who reads it |
 |---|---|---|
-| `ledger` | `<sharedDir>/ledger-<machine>.json` (`missionledgersync.js`: hourly token rows + focus blocks) | Every PC (combined weekly limit), phone |
+| `ledger` | This PC's transcripts (`missionledger.js`: hourly token rows + focus blocks; validated by `missionledgersync.js`) | Every PC (combined weekly limit), phone |
 | `news` | Latest briefing + articles (`missionnews.js`, `missionnewsstore.js`, `news-links.json` in userData) | Phone, other PCs |
 | `yazio` | Body tab data fetched by `lifeyazio.js` | Phone, other PCs |
 
@@ -470,10 +471,35 @@ Security review (`ecc:security-reviewer`): no CRITICAL/HIGH. Fixed:
 | News snapshot | ✅ | ✅ **this slice** | |
 | YAZIO snapshot | ✅ **this slice** | ✅ **this slice** | |
 
+## Phase 3 — folder transport removed (2026-10-15)
+
+The Syncthing / SyncTrayzor shared folder is gone; the cloud is the only way
+PCs share data. Useful code stays: merge/stamp/validation in `lifesync.js`,
+`todosync.js`, `parsePeer` / `validKey` / `machineName` in
+`missionledgersync.js`.
+
+| File | Change |
+|---|---|
+| `src/lifesync.js`, `src/todosync.js` | No `sharedDir` dep, no peer files. Cloud off → sync is a no-op. A lost local budget file still comes back: the cloud mirror holds this PC's own rows. |
+| `src/missionledgersync.js` | Folder I/O removed (`writeOwn`, `readPeers`, `writeSharedJson`, `readSharedJson`). Keeps validation + shared checks. |
+| `src/missionledgerservice.js` | Cloud peers only (one per machine, newer wins, cap 8). Report no longer has `sharedDir` / `syncError`. Cloud off → this PC only. |
+| `src/missionprojects.js`, `src/missionsync.js` | `sharedDir` / `setSharedDir` removed; a leftover `sharedDir` key is dropped on read and on the next save. |
+| `src/missioncontrolipc.js`, `src/preload.js` | `mission:ledger-pick-dir` / `mission:ledger-clear-dir` and the folder dialog removed (smaller IPC surface). |
+| Renderer (`missionledger.js`, `i18n.js`, `styles.css`) | Ctrl+Shift+M ledger footer: "Share with other PCs…", "Change folder…", "Stop sharing", the folder path and the write-error line are gone. "Data from: this PC · other PCs" stays. |
+
+Tests ported to an in-memory fake cloud; `npm test` 2142/2142.
+
+**Mati, by hand on each PC (optional cleanup):** uninstall / delete
+SyncTrayzor (`%LOCALAPPDATA%\SyncTrayzorPortable\` on KT-PC-LLM) and the
+`%USERPROFILE%\LunaLedger` folder; old `todo-sync` / `life-sync` meta files
+stay in use by the cloud path, don't delete them.
+
 ## Next session: start here
 
 State on 2026-10-15: **phases 1, 2a, 2b and 2c are done, released (latest
-v0.16.1) and proven live on two PCs.** Mati, on the laptop with v0.16.1: "checked it
+v0.16.1) and proven live on two PCs. Phase 3 is done (see above) but not
+released yet** — next release should carry it; check on both PCs that the
+Ctrl+Shift+M ledger still lists the other PC and to-dos/budget still merge. Mati, on the laptop with v0.16.1: "checked it
 works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
 
 1. Re-read this file and check `git log` for anything newer touching `cloud*.js`,
@@ -482,11 +508,7 @@ works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
 2. **Rule learned in 2c:** a sync slice is not done until some PC *reads*
    what it uploads. The audit table in slice 3 is the checklist; add a row for
    every new synced item.
-3. **Next: Mati picks** one of these:
-   - **Phase 3**: remove the folder transport (`sharedDir`, the `ledger-*.json`
-     / life / to-do peer files, the "shared folder" UI in the ledger footer) and
-     SyncTrayzor. Unblocked, since the cloud is proven on two PCs. Keep the merge and
-     validation code that the cloud path reuses (`parsePeer`, `merge`, ...).
+3. **Next:**
    - **Phase 4**: the iPhone PWA (`mobile/`, see "Phone (phase 4)" above). Its
      news reader must follow the reader requirements in slice 2.
 4. Small open items:

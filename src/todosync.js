@@ -1,14 +1,12 @@
 // ============================================================================
 // LunaCore - to-do lists shared between PCs (main)
 // ----------------------------------------------------------------------------
-// Mati adds different to-dos on different PCs. Through the same shared folder
-// the Claude ledger uses (Syncthing, missionprojects.sharedDir) every PC
-// publishes its lists and merges the others', so additions ADD UP and never
-// overwrite each other:
+// Mati adds different to-dos on different PCs. Through the cloud
+// (src/cloudsync.js, scope 'todos') every PC publishes its lists and merges
+// the others', so additions ADD UP and never overwrite each other. What a PC
+// publishes:
 //
-//   <dir>/todos-<machine>.json = {v:1, machine, updatedAt, projects: {
-//     "<project key>": {items: [todo + u], gone: {"<at>": deletedAt}}
-//   }}
+//   {"<project key>": {items: [todo + u], gone: {"<at>": deletedAt}}}
 //
 // - Identity is the item's `at` (creation ms) - the id the widget, the merge
 //   in the renderer and the luna_todo_* tools already use.
@@ -21,17 +19,16 @@
 // - Project key = normalised git remote (missionrepokey.js), so the same repo
 //   cloned at different paths matches. Non-repo buckets ("other") stay local.
 //
-// Peer files are untrusted (another machine, a sync tool): size, link, key,
-// stamp and every item are checked; anything off is dropped, never thrown.
+// Peer data is untrusted (another machine): key, stamp and every item are
+// checked; anything off is dropped, never thrown.
 // ============================================================================
 
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 const { normalizeTodo, MAX_ITEMS } = require('./todo');
-const { writeSharedJson, readSharedJson, validKey, MACHINE_RE, MAX_PEERS } = require('./missionledgersync');
+const { validKey, MACHINE_RE } = require('./missionledgersync');
 
 const VERSION = 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -40,7 +37,6 @@ const GONE_TTL_MS = 90 * DAY_MS;
 const MAX_PROJECTS = 200;
 const MAX_PEER_ITEMS = MAX_ITEMS + 50;
 const MAX_GONE = 2000;
-const FILE_RE = /^todos-([A-Za-z0-9-]{1,63})\.json$/;
 const AT_RE = /^[1-9][0-9]{0,15}$/;
 
 const validAt = (at) => Number.isSafeInteger(at) && at > 0;
@@ -113,7 +109,7 @@ function merge(local, meta, peers, now) {
   return { list, meta: { snap: next.snap, u: next.u, gone }, changed };
 }
 
-/** A peer file's `projects` -> only valid keys, items and tombstones. */
+/** A peer's `projects` map -> only valid keys, items and tombstones. */
 function validPeerProjects(raw, now) {
   const out = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
@@ -147,44 +143,22 @@ function readMeta(file) {
 const emptyMeta = () => ({ snap: {}, u: {}, gone: {} });
 
 /**
- * @param {{sharedDir:()=>string|null, machine:string, projects:()=>{id:string,path:string}[],
+ * @param {{machine:string, projects:()=>{id:string,path:string}[],
  *   resolveKey:(path:string)=>string, readTodos:(id)=>object[], writeTodos:(id, list)=>boolean,
  *   metaFile:string, now?:()=>number, extraPeers?:()=>object[]|null,
  *   onPublish?:(projects:object)=>void}} deps  extraPeers = the cloud
- *   (src/cloudsync.js): raw `projects` maps, validated here like peer files,
- *   or null while the cloud is off. onPublish gets what this PC publishes.
+ *   (src/cloudsync.js): raw `projects` maps, validated here, or null while
+ *   the cloud is off (no sync then). onPublish gets what this PC publishes.
  */
-function createTodoSync({ sharedDir, machine, projects, resolveKey, readTodos, writeTodos, metaFile, now = Date.now, extraPeers = () => null, onPublish = () => {} }) {
+function createTodoSync({ machine, projects, resolveKey, readTodos, writeTodos, metaFile, now = Date.now, extraPeers = () => null, onPublish = () => {} }) {
   if (!MACHINE_RE.test(machine)) throw new Error('bad machine name');
-
-  function readPeers(dir, t) {
-    let names;
-    try {
-      names = fs.readdirSync(dir);
-    } catch {
-      return [];
-    }
-    const peers = [];
-    for (const name of names.sort()) {
-      const m = FILE_RE.exec(name);
-      // Windows file names are case-insensitive: "desk" is our own "DESK" file.
-      if (!m || m[1].toLowerCase() === machine.toLowerCase()) continue;
-      const data = readSharedJson(path.join(dir, name));
-      if (!data || data.v !== VERSION || data.machine !== m[1]) continue;
-      peers.push(validPeerProjects(data.projects, t));
-      if (peers.length >= MAX_PEERS) break;
-    }
-    return peers;
-  }
 
   /** Syncs every project; returns the ids whose local list changed. */
   function syncAll() {
-    const raw = sharedDir();
-    const dir = typeof raw === 'string' && raw ? raw : null;
     const cloud = extraPeers();
-    if (!dir && !cloud) return [];
+    if (!cloud) return [];
     const t = now();
-    const peers = [...(dir ? readPeers(dir, t) : []), ...(cloud || []).map((p) => validPeerProjects(p, t))];
+    const peers = cloud.map((p) => validPeerProjects(p, t));
     const metas = readMeta(metaFile);
     const published = {};
     const changed = [];
@@ -211,8 +185,7 @@ function createTodoSync({ sharedDir, machine, projects, resolveKey, readTodos, w
       for (const k of keysFor) published[k] = mine;
     }
     fs.writeFileSync(metaFile, JSON.stringify({ v: VERSION, projects: metas }) + '\n', 'utf8');
-    if (dir) writeSharedJson(path.join(dir, `todos-${machine}.json`), { v: VERSION, machine, updatedAt: t, projects: published });
-    if (cloud) onPublish(published);
+    onPublish(published);
     return changed;
   }
 
@@ -235,11 +208,11 @@ const SYNC_DEBOUNCE_MS = 3000;
 const FIRST_SYNC_MS = 5000;
 
 /**
- * The real thing for main.js: shared folder + project keys exactly as the
- * Claude ledger uses them, a sync every minute, and soon() after any read or
- * write of a list. onChanged(ids) gets the project ids whose list changed.
- * cloud = startCloud() (src/cloudsync.js): an extra peer, and a sync soon
- * after it brings another PC's changes.
+ * The real thing for main.js: project keys exactly as the Claude ledger uses
+ * them, a sync every minute, and soon() after any read or write of a list.
+ * onChanged(ids) gets the project ids whose list changed.
+ * cloud = startCloud() (src/cloudsync.js): the other PCs' lists, and a sync
+ * soon after it brings their changes. Without it every sync is a no-op.
  * @param {{getProjects:()=>{id:string,path:string}[], onChanged:(ids:string[])=>void, cloud?:object}} opts
  */
 function startTodoSync({ getProjects, onChanged, cloud = null }) {
@@ -251,7 +224,6 @@ function startTodoSync({ getProjects, onChanged, cloud = null }) {
   const { createRepoKeys } = require('./missionrepokey');
   const keys = createRepoKeys({ aliases: () => projectStore.pinnedAliases(projectStore.loadProjects().pinned) });
   const sync = createTodoSync({
-    sharedDir: () => projectStore.loadProjects().sharedDir,
     machine: machineName(os.hostname()),
     projects: () => (getProjects() || []).map((p) => ({ id: p.id, path: p.path })),
     resolveKey: (p, id) => syncKey(keys.resolve(p).key, id),

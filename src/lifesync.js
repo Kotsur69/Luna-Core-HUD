@@ -2,12 +2,11 @@
 // LunaCore - Life budget shared between PCs (main)
 // ----------------------------------------------------------------------------
 // The budget lives in config/life-budget.local.json on each PC. Through the
-// same shared folder the to-dos and the Claude ledger use (Syncthing,
-// missionprojects.sharedDir) every PC publishes its budget and merges the
-// others', so expenses added on two PCs ADD UP and never overwrite each other:
+// cloud (src/cloudsync.js, scope 'life') every PC publishes its budget and
+// merges the others', so expenses added on two PCs ADD UP and never overwrite
+// each other. What a PC publishes:
 //
-//   <dir>/life-budget-<machine>.json = {v:1, machine, updatedAt,
-//     units: [{k, v, u}], gone: {"<k>": deletedAt}}
+//   {units: [{k, v, u}], gone: {"<k>": deletedAt}}
 //
 // - A unit is one independently mergeable piece of the budget:
 //     'income'                 the income row
@@ -26,17 +25,16 @@
 //   starts over as fresh and gets the budget back from its peers. An
 //   unreadable one (AV / sync lock) aborts the sync before anything is written.
 //
-// Peer files are untrusted (another machine, a sync tool): every unit goes
-// through lifebudget.normalize() and is dropped unless it survives unchanged.
+// Peer data is untrusted (another machine): every unit goes through
+// lifebudget.normalize() and is dropped unless it survives unchanged.
 // ============================================================================
 
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const store = require('./lifebudget');
 const { fingerprint } = require('./todosync');
-const { writeSharedJson, readSharedJson, MACHINE_RE, MAX_PEERS } = require('./missionledgersync');
+const { MACHINE_RE } = require('./missionledgersync');
 
 const VERSION = 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -45,7 +43,6 @@ const GONE_TTL_MS = 90 * DAY_MS;
 // Above the store's own caps summed (5000 expenses, 2000 deposits, 24 months x 100 bills...).
 const MAX_UNITS = 10000;
 const MAX_GONE = 10000;
-const FILE_RE = /^life-budget-([A-Za-z0-9-]{1,63})\.json$/;
 const KEY_RE = /^(income|[cebgd]:[a-z0-9-]{1,40}|p:\d{4}-(0[1-9]|1[0-2]):[a-z0-9-]{1,40})$/;
 const COLLECTIONS = [
   ['c', 'categories'],
@@ -136,7 +133,7 @@ function merge(local, meta, peers, now) {
   };
 }
 
-/** A peer file's body -> only the units that survive normalize() unchanged. */
+/** A peer's body -> only the units that survive normalize() unchanged. */
 function validPeer(data, now) {
   const seen = new Set();
   const raw = [];
@@ -169,45 +166,23 @@ function readMeta(file) {
 }
 
 /**
- * @param {{sharedDir:()=>string|null, machine:string, metaFile:string,
- *   budgetFile?:string, now?:()=>number, extraPeers?:()=>object[]|null,
+ * @param {{machine:string, metaFile:string, budgetFile?:string,
+ *   now?:()=>number, extraPeers?:()=>object[]|null,
  *   onPublish?:(doc:{units, gone})=>void}} deps  budgetFile defaults to the
  *   store's own file. extraPeers = the cloud (src/cloudsync.js): raw peer
- *   bodies, validated here like peer files, or null while the cloud is off.
+ *   bodies, validated here, or null while the cloud is off (no sync then).
  *   onPublish gets what this PC publishes, so the cloud can push it.
  */
-function createLifeSync({ sharedDir, machine, metaFile, budgetFile, now = Date.now, extraPeers = () => null, onPublish = () => {} }) {
+function createLifeSync({ machine, metaFile, budgetFile, now = Date.now, extraPeers = () => null, onPublish = () => {} }) {
   if (!MACHINE_RE.test(machine)) throw new Error('bad machine name');
-
-  function readPeers(dir, t, withOwn) {
-    let names;
-    try {
-      names = fs.readdirSync(dir);
-    } catch {
-      return [];
-    }
-    const peers = [];
-    for (const name of names.sort()) {
-      const m = FILE_RE.exec(name);
-      // Windows file names are case-insensitive: "desk" is our own "DESK" file.
-      if (!m || (!withOwn && m[1].toLowerCase() === machine.toLowerCase())) continue;
-      const data = readSharedJson(path.join(dir, name));
-      if (!data || data.v !== VERSION || typeof data.machine !== 'string' || data.machine.toLowerCase() !== m[1].toLowerCase()) continue;
-      peers.push(validPeer(data, t));
-      if (peers.length >= MAX_PEERS) break;
-    }
-    return peers;
-  }
 
   /**
    * One sync. Throws when the local budget is unreadable (nothing written).
    * @returns {boolean} whether the local budget changed
    */
   function syncOnce() {
-    const raw = sharedDir();
-    const dir = typeof raw === 'string' && raw ? raw : null;
     const cloud = extraPeers();
-    if (!dir && !cloud) return false;
+    if (!cloud) return false;
     const t = now();
     const local = store.readForSync(budgetFile);
     // Rows a damaged file lost would go out as deletions to every PC. Wait for
@@ -217,9 +192,8 @@ function createLifeSync({ sharedDir, machine, metaFile, budgetFile, now = Date.n
     const base = !local.exists ? 0 : saved ? t : Math.floor(Math.min(local.mtimeMs, t));
     const localUnits = toUnits(local.budget);
     const stamped = stamp(localUnits, saved || emptyMeta(), t, base);
-    // No local file: this PC's own published copy may be the only one left.
     // The cloud rows include this PC's own, so they restore a lost file too.
-    const peers = [...(dir ? readPeers(dir, t, !local.exists) : []), ...(cloud || []).map((p) => validPeer(p, t))];
+    const peers = cloud.map((p) => validPeer(p, t));
     const merged = merge(localUnits, stamped, peers, t);
     // normalize() may still drop a unit (a deposit whose pot another PC deleted).
     const budget = fromUnits(merged.units);
@@ -231,8 +205,7 @@ function createLifeSync({ sharedDir, machine, metaFile, budgetFile, now = Date.n
     const snap = Object.fromEntries(finalUnits.map(([k, v]) => [k, fingerprint(v)]));
     fs.writeFileSync(metaFile, JSON.stringify({ v: VERSION, snap, u, gone: merged.gone }) + '\n', 'utf8');
     const units = finalUnits.map(([k, v]) => ({ k, v, u: u[k] }));
-    if (dir) writeSharedJson(path.join(dir, `life-budget-${machine}.json`), { v: VERSION, machine, updatedAt: t, units, gone: merged.gone });
-    if (cloud) onPublish({ units, gone: merged.gone });
+    onPublish({ units, gone: merged.gone });
     return changed;
   }
 
@@ -246,18 +219,16 @@ const FIRST_SYNC_MS = 5000;
 const FRESH_GAP_MS = 10 * 1000;
 
 /**
- * The real thing for main.js: the shared folder from missionprojects.js, a
- * sync every minute, soon() after a write, fresh() before a read.
- * cloud = startCloud() (src/cloudsync.js): an extra peer, and a sync soon
- * after it brings another PC's changes.
+ * The real thing for main.js: a sync every minute, soon() after a write,
+ * fresh() before a read. cloud = startCloud() (src/cloudsync.js): the other
+ * PCs' budgets, and a sync soon after it brings their changes. Without it
+ * (no cloud config) every sync is a no-op.
  */
 function startLifeSync({ cloud = null } = {}) {
   const os = require('os');
   const paths = require('./paths');
   const { machineName } = require('./missionledgersync');
-  const projectStore = require('./missionprojects');
   const sync = createLifeSync({
-    sharedDir: () => projectStore.loadProjects().sharedDir,
     machine: machineName(os.hostname()),
     metaFile: paths.local('life-sync.local.json'),
     ...(cloud ? cloud.hooks('life') : {}),

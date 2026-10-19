@@ -276,10 +276,6 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionLedger: (req) => ipcRenderer.invoke('mission:ledger', req),
   /** Marks a project work / fun / other (null = unassigned). Promise<{ok} | {ok:false, reason}>. */
   missionProjectClass: (key, cls) => ipcRenderer.invoke('mission:project-class', { key, cls }),
-  /** Native folder dialog for the shared ledger folder - no path is passed. Promise<{ok, sharedDir} | {ok:false, reason}>. */
-  missionLedgerPickDir: () => ipcRenderer.invoke('mission:ledger-pick-dir'),
-  /** Stops sharing: forgets the shared ledger folder. Promise<{ok, sharedDir:null}>. */
-  missionLedgerClearDir: () => ipcRenderer.invoke('mission:ledger-clear-dir'),
 
   // --- Life dashboard (src/lifeipc.js) ---
   // Local budget only. `op` is checked against main's fixed op table and the

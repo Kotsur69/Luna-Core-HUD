@@ -19,16 +19,21 @@ const { createLifeSync, toUnits, fromUnits, validPeer } = require('../src/lifesy
 
 const tmp = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `lc-lifesync-${tag}-`));
 
-/** One simulated PC: its own config dir, the shared folder, a settable clock. */
-function pc(machine, shared, clock) {
+/**
+ * One simulated PC: its own config dir, the shared fake cloud, a settable
+ * clock. The cloud hands every PC all published docs, its own included - like
+ * the real mirror (src/cloudsync.js), which holds this PC's rows too.
+ */
+function pc(machine, cloud, clock) {
   const dir = tmp(machine);
   const budgetFile = path.join(dir, 'life-budget.local.json');
   const sync = createLifeSync({
-    sharedDir: () => shared,
     machine,
     metaFile: path.join(dir, 'life-sync.local.json'),
     budgetFile,
     now: () => clock.t,
+    extraPeers: () => [...cloud.docs.values()],
+    onPublish: (doc) => cloud.docs.set(machine, doc),
   });
   return {
     budgetFile,
@@ -39,9 +44,9 @@ function pc(machine, shared, clock) {
 }
 
 function setup() {
-  const shared = tmp('shared');
+  const cloud = { docs: new Map() };
   const clock = { t: Date.UTC(2026, 9, 14, 12) };
-  return { shared, clock, a: pc('PC-A', shared, clock), b: pc('PC-B', shared, clock) };
+  return { cloud, clock, a: pc('PC-A', cloud, clock), b: pc('PC-B', cloud, clock) };
 }
 
 const expense = (amount, note) => ({ date: '2026-10-14', amount, category: 'food', note });
@@ -56,9 +61,9 @@ test('units round-trip a budget unchanged', () => {
   assert.deepEqual(fromUnits(toUnits(b)), b);
 });
 
-test('no shared folder: sync is a no-op', () => {
+test('cloud off: sync is a no-op and writes no meta', () => {
   const dir = tmp('none');
-  const sync = createLifeSync({ sharedDir: () => null, machine: 'PC-A', metaFile: path.join(dir, 'm.json'), budgetFile: path.join(dir, 'b.json') });
+  const sync = createLifeSync({ machine: 'PC-A', metaFile: path.join(dir, 'm.json'), budgetFile: path.join(dir, 'b.json') });
   assert.equal(sync.syncOnce(), false);
   assert.equal(fs.existsSync(path.join(dir, 'm.json')), false);
 });
@@ -121,13 +126,13 @@ test('a delete on one PC removes the row everywhere and does not come back', () 
 });
 
 test('an unreadable local budget aborts the sync and writes nothing', () => {
-  const { shared, a, b } = setup();
+  const { cloud, a, b } = setup();
   a.apply('addExpense', expense(10, 'keep me'));
   a.sync();
-  const published = fs.readFileSync(path.join(shared, 'life-budget-PC-A.json'), 'utf8');
+  const published = cloud.docs.get('PC-A');
   fs.writeFileSync(a.budgetFile, '{ half a fi', 'utf8');
   assert.throws(() => a.sync(), /unreadable/);
-  assert.equal(fs.readFileSync(path.join(shared, 'life-budget-PC-A.json'), 'utf8'), published);
+  assert.equal(cloud.docs.get('PC-A'), published);
   // The other PC still gets the real data, no tombstones were published.
   b.sync();
   assert.deepEqual(notes(b.budget()), ['keep me']);
@@ -188,14 +193,13 @@ test('peer units that fail validation are dropped', () => {
   assert.deepEqual(peer.gone, { 'e:fff': 1 });
 });
 
-// ---- cloud as an extra peer (src/cloudsync.js) ----------------------------------
+// ---- the cloud as one mirror body (src/cloudsync.js) -----------------------------
 
 function cloudPc(machine, clock, cloudBody) {
   const dir = tmp(machine);
   const budgetFile = path.join(dir, 'life-budget.local.json');
   const published = [];
   const sync = createLifeSync({
-    sharedDir: () => null,
     machine,
     metaFile: path.join(dir, 'life-sync.local.json'),
     budgetFile,
@@ -211,7 +215,7 @@ function cloudPc(machine, clock, cloudBody) {
   };
 }
 
-test('cloud on, no shared folder: two PCs meet through the cloud body', () => {
+test('two PCs meet through the cloud body', () => {
   const clock = { t: Date.UTC(2026, 9, 14, 12) };
   let cloud = { units: [], gone: {} };
   const a = cloudPc('PC-A', clock, () => cloud);
@@ -226,7 +230,7 @@ test('cloud on, no shared folder: two PCs meet through the cloud body', () => {
   assert.ok(Array.isArray(cloud.units) && cloud.gone && typeof cloud.gone === 'object');
 });
 
-test('cloud off and no shared folder: still a no-op', () => {
+test('cloud off: nothing is published', () => {
   const clock = { t: Date.UTC(2026, 9, 14, 12) };
   const a = cloudPc('PC-A', clock, () => null);
   a.apply('addExpense', expense(10, 'x'));
@@ -234,7 +238,7 @@ test('cloud off and no shared folder: still a no-op', () => {
   assert.equal(a.published.length, 0);
 });
 
-test('cloud body is validated like a peer file', () => {
+test('the cloud body is validated', () => {
   const clock = { t: Date.UTC(2026, 9, 14, 12) };
   const bad = { units: [{ k: 'e:bbb', v: { id: 'bbb', date: '2026-10-14', amount: -5, category: 'food', note: '' }, u: 1 }], gone: {} };
   const a = cloudPc('PC-A', clock, () => bad);
