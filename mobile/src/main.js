@@ -2,7 +2,7 @@
 // LunaCore phone - entry
 // ----------------------------------------------------------------------------
 // Logged out -> login screen. Logged in -> shell + the page in the URL hash
-// (to-dos or Life), pulled again when the app comes back to the foreground
+// (Today, Mission, to-dos, Life or Body), pulled again when the app comes back to the foreground
 // (a PC may have changed things since).
 // ============================================================================
 
@@ -12,9 +12,12 @@ import { renderLogin } from './views/login.js';
 import { mountShell, pageFromHash } from './shell.js';
 import { mountTodos } from './views/todos.js';
 import { mountLife } from './views/life.js';
+import { mountToday } from './views/today.js';
+import { mountMission } from './views/mission.js';
+import { mountBody } from './views/body.js';
 import { t } from './i18n.js';
 
-const VIEWS = { todos: mountTodos, life: mountLife };
+const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody };
 const root = document.getElementById('app');
 const config = cloudConfig();
 const cloud = config ? createCloud(config) : null;

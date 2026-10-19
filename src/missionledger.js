@@ -14,7 +14,7 @@
 //     size and mtime did not change is never opened again;
 //   - files untouched for longer than the history window are skipped unread.
 //
-// summarize() prices the rows with src/rates.js. An unknown model is counted as
+// summarize() (missionledgercalc.js) prices the rows with the rates.js table. An unknown model is counted as
 // "unpriced tokens", never guessed (same rule as rates.js).
 // ============================================================================
 
@@ -22,7 +22,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { rateFor, estimateCost } = require('./rates');
+const { summarize } = require('./missionledgercalc');
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -229,41 +229,6 @@ function createLedger({ root, resolveKey, now = Date.now, historyDays = DEFAULT_
 
     stats: () => ({ files: files.size, bytesRead }),
   };
-}
-
-/**
- * Prices rows inside [sinceMs, untilMs) and splits them by project. The
- * bucket holding sinceMs counts whole (hour granularity).
- * @param {Array} rows from ledger.rows() (any number of machines, concatenated)
- * @param {{sinceMs:number, untilMs:number, rates:{rates:Array,cacheReadMultiplier?:number,cacheWriteMultiplier?:number}}} opts
- */
-function summarize(rows, { sinceMs, untilMs, rates }) {
-  const from = sinceMs - (sinceMs % HOUR_MS);
-  const byKey = new Map();
-  let totalUsd = 0;
-  let unpricedTokens = 0;
-  for (const [hour, key, name, model, input, cacheWrite, cacheRead, output] of rows) {
-    if (hour < from || hour >= untilMs) continue;
-    let p = byKey.get(key);
-    if (!p) {
-      p = { key, name, usd: 0, tokens: 0, unpricedTokens: 0, share: 0 };
-      byKey.set(key, p);
-    }
-    const tokens = input + cacheWrite + cacheRead + output;
-    p.tokens += tokens;
-    const cost = estimateCost({ input, output, cacheRead, cacheWrite }, rateFor(model, rates.rates), rates);
-    if (cost) {
-      p.usd += cost.usd;
-      totalUsd += cost.usd;
-    } else {
-      p.unpricedTokens += tokens;
-      unpricedTokens += tokens;
-    }
-  }
-  const projects = [...byKey.values()]
-    .map((p) => ({ ...p, share: totalUsd > 0 ? p.usd / totalUsd : 0 }))
-    .sort((a, b) => b.usd - a.usd || b.unpricedTokens - a.unpricedTokens);
-  return { totalUsd, unpricedTokens, projects };
 }
 
 module.exports = { parseAssistantLine, createLedger, summarize, HOUR_MS, DEFAULT_HISTORY_DAYS };

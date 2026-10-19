@@ -565,6 +565,43 @@ pull can't repaint over a newer write; refused input says why. Left as LOW:
 a background pull re-renders while typing (focus kept, caret not), an op
 over 500 units (a goal with 500+ deposits) is pushed in non-atomic chunks.
 
+**4c built 2026-10-19 (not committed yet; checked against a fake cloud,
+live Open-Meteo).** Three read-only pages join the menu: **Today** (`#today`:
+next 24 h of weather in 3-hour slots, calendar + mail placeholder until
+phase 5), **Mission** (`#mission`: News | Claude tabs) and **Body** (`#body`).
+To-dos stays the default page. The phone writes no snapshot; it reads every
+PC's rows of a kind (`cloud.snapshots(kind)`, newest first, max 16, rows over
+512 KiB dropped) and keeps the last answer in IndexedDB (`snap:<uid>:<kind>`)
+for offline use.
+- Pure splits so the phone runs the PC's own code: `src/ratecalc.js` (out of
+  `rates.js`, + `mergeRates`), `src/missionledgercalc.js` (`summarize` +
+  `weekWindow`), `src/missionnewsrows.js` (`safeUrl`, `isPublicHost`,
+  `parseNewsPeer`). `missionweather.js` and `lifeyaziopeers.js` were already
+  pure; all five are in `mobile/vite.config.js` SHARED.
+- `mobile/src/snapmodel.js`: `newsFrom` (newest `at`, links resolved to their
+  re-checked URL), `ledgerFrom` (one copy per machine, priced with the shipped
+  `config/rates.json` since Monday 00:00 local: the phone has no provider
+  reset time, so it can differ a little from the PC's figure), `bodyFrom`
+  (newest valid `fetchedAt`).
+- Weather: a town typed once (no GPS; `vercel.json` disables geolocation),
+  geocoded by Open-Meteo, kept in localStorage (`lunacore.today.place`,
+  cleared on logout). CSP `connect-src` adds `api.open-meteo.com` +
+  `geocoding-api.open-meteo.com`.
+- `test/mobilesnapmodel.test.mjs`: phone readers vs the PC's own writers and
+  `summarize`. `npm test` 2164/2164.
+
+JS + security review done (no CRITICAL). Fixed: the cached copy never painted
+when the network was slow or offline (HIGH); one failing kind blanked
+Mission; a failure with no cache stayed on "loading"; private-mode town loop;
+cancel while changing the town. `isPublicHost` (PC reader too) now strips a
+trailing dot (`localhost.`) and refuses CGNAT/Tailscale 100.64/10, 192.0.0/24,
+198.18/15, multicast and every `::`-prefixed / NAT64 IPv6 form.
+**Accepted / open:** RLS on `snapshots` binds only `user_id`, not `machine`,
+so a stolen phone session could overwrite a PC's row (readers are hardened,
+so the damage is misleading data); a secret in a news URL *path* (not query)
+isn't filtered by `safeUrl`; a public name resolving to a private address
+(nip.io) can't be caught from the string.
+
 Rules for the phone, same as the PCs: pulled rows are untrusted, so validate
 with the shared validators before rendering. Never apply a realtime payload
 directly (it only triggers a pull). Compare by `u`, never by JSON text. The
@@ -573,6 +610,9 @@ never in the repo. Audit rule from 2c: each phone write must show up on a PC
 (and vice versa) before its slice counts as done.
 
 ## Next session: start here
+
+**Update 2026-10-19 (later): phase 4c (Today / Mission / Body on the phone)
+is built and reviewed, not committed yet; see "4c built" above.**
 
 **State on 2026-10-19: phase 4a (phone PWA shell + to-dos) is built,
 committed and proven against the real cloud from `localhost:4173`. Phase 4b
@@ -610,7 +650,13 @@ works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
      → `http://localhost:4173/#life` → add an expense, pay a bill, deposit
      into a goal; on a PC, the Life panel shows all three within a minute
      (and an edit on the PC shows on the phone after Sync).
-   - **Then 4c**: snapshot readers (News, Claude ledger, Body) + Today.
+   - **4c live check (Mati):** `cd mobile && npm run build && npm run preview`
+     → `#mission` shows the last news scan "from HH:MM, <PC>" and the Claude
+     week (compare with Ctrl+Shift+M on a PC; small drift = Monday vs reset
+     window), `#body` shows YAZIO numbers (needs a PC that opened the Body
+     tab), `#today` asks for a town once.
+   - **Then 4d**: offline write queue, realtime → pull (add the `wss://`
+     origin to the CSP), iOS install hint, review pass.
 4. Small open items:
    - The laptop's ledger snapshot is empty (no Claude Code transcripts there
      in 8 days). Fine unless Mati uses Claude Code on the laptop.

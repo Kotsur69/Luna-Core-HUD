@@ -12,11 +12,15 @@
 // Login: GitHub through Supabase, PKCE, redirect back to this page. The
 // session lives in supabase-js storage; logout also wipes the local mirror.
 // Rows are untrusted: views validate them (todomodel.js) before rendering.
+//
+// snapshots(kind) reads every PC's `snapshots` row of a kind (phase 4c; the
+// phone writes none) and keeps the last answer in IndexedDB for offline use.
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
 import rows from '../../src/cloudrows.js';
 import * as idb from './idb.js';
+import { PLACE_KEY } from './weather.js';
 
 /** This device in sync_units.machine (missionledgersync MACHINE_RE). */
 export const MACHINE = 'iPhone';
@@ -26,6 +30,11 @@ const PUSH_MAX = 500;
 /** A runaway pull (a bug, a hostile server) stops here instead of looping. */
 const MAX_PAGES = 100;
 const COLUMNS = 'key,value,u,deleted_at,rev,machine';
+const SNAPSHOT_KINDS = new Set(['news', 'ledger', 'yazio']);
+/** cloudsnapshots.js MAX_ROWS: more machines than Mati will ever own. */
+const MAX_SNAPSHOTS = 16;
+/** cloudsnapshots.js MAX_BYTES: a PC never puts more, so a longer row is junk (JSON length <= byte length). */
+const MAX_SNAPSHOT_CHARS = 512 * 1024;
 /** The to-do list picked on this device (views/todos.js); cleared on logout. */
 export const PICK_KEY = 'lunacore.todos.list';
 
@@ -107,6 +116,33 @@ export function createCloud(config) {
     return pull(scope);
   }
 
+  const snapKey = (uid, kind) => `snap:${uid}:${kind}`;
+
+  /** Every machine's row of `kind`, newest first; raw and untrusted (snapmodel.js parses). */
+  async function snapshots(kind) {
+    if (!SNAPSHOT_KINDS.has(kind)) throw new Error('bad-kind');
+    const gen = generation;
+    const u = await user();
+    if (!u) throw new Error('logged-out');
+    const { data, error } = await client
+      .from('snapshots')
+      .select('machine,data,updated_at')
+      .eq('kind', kind)
+      .order('updated_at', { ascending: false })
+      .limit(MAX_SNAPSHOTS);
+    if (error || !Array.isArray(data)) throw new Error('snapshots-failed', { cause: error });
+    if (gen !== generation) throw new Error('logged-out');
+    const fit = data.filter((r) => r && JSON.stringify(r.data ?? null).length <= MAX_SNAPSHOT_CHARS);
+    await idb.put(snapKey(u.id, kind), fit);
+    return fit;
+  }
+
+  /** The last snapshots(kind) answer kept on this device, or []. */
+  async function cachedSnapshots(kind) {
+    const u = await user();
+    return (u && (await idb.get(snapKey(u.id, kind)))) || [];
+  }
+
   function login() {
     return client.auth.signInWithOAuth({
       provider: 'github',
@@ -123,6 +159,7 @@ export function createCloud(config) {
       await idb.clear();
       try {
         localStorage.removeItem(PICK_KEY);
+        localStorage.removeItem(PLACE_KEY);
       } catch {
         // Private mode: nothing was kept.
       }
@@ -131,5 +168,5 @@ export function createCloud(config) {
 
   const onAuth = (fn) => client.auth.onAuthStateChange((event, session) => fn(session ? session.user : null));
 
-  return { user, state, pull, write, login, logout, onAuth };
+  return { user, state, pull, write, snapshots, cachedSnapshots, login, logout, onAuth };
 }

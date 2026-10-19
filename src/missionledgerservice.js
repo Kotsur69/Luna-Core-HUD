@@ -19,21 +19,11 @@
 const { eventsToBlocks, focusWeek } = require('./missionfocus');
 const { fits } = require('./cloudsnapshots');
 const { MAX_PEERS } = require('./missionledgersync');
+const { weekWindow } = require('./missionledgercalc');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const WEEK_MS = 7 * DAY_MS;
 /** Projects sent to the renderer; the rest are only counted (peer data is untrusted). */
 const MAX_PROJECTS = 50;
-
-/** {sinceMs, untilMs, source} for the current weekly window. */
-function weekWindow(resetsAt, now) {
-  if (typeof resetsAt === 'number' && Number.isFinite(resetsAt) && resetsAt > now && resetsAt <= now + WEEK_MS) {
-    return { sinceMs: resetsAt - WEEK_MS, untilMs: now, source: 'reset' };
-  }
-  const d = new Date(now);
-  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
-  return { sinceMs: monday.getTime(), untilMs: now, source: 'monday' };
-}
 
 /**
  * Pinned projects first (in pin order, at zero when idle this week), then up

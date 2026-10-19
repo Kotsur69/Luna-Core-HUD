@@ -24,6 +24,7 @@ const os = require('os');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
 const { fits } = require('./cloudsnapshots');
+const { safeUrl } = require('./missionnewsrows');
 
 const HELPER_DIR = path
   .join(__dirname, '..', 'helpers', 'agent-reach')
@@ -229,31 +230,8 @@ function publicSections(sections, summaries = new Map()) {
   });
 }
 
-/** Longest link the cloud snapshot carries (the phone opens it as-is). */
-const MAX_SNAPSHOT_URL = 2048;
 const MAX_SNAPSHOT_SECTIONS = 100;
 const MAX_SNAPSHOT_LABEL = 120;
-/** Query parameters that look like a private feed's secret: such a link stays on the PC. */
-const SECRET_PARAM_RE = /token|key|auth|sig|session|secret|password|code/i;
-
-/**
- * A link fit to leave the PC: http(s) only, no credentials, no secret-looking
- * query parameter, no quote or angle bracket; normalised, fragment dropped.
- * Anything else -> null.
- */
-function safeUrl(raw) {
-  if (typeof raw !== 'string' || raw.length > MAX_SNAPSHOT_URL || /["'<>\s]/.test(raw)) return null;
-  let u;
-  try {
-    u = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (!['https:', 'http:'].includes(u.protocol) || !u.hostname || u.username || u.password) return null;
-  if ([...u.searchParams.keys()].some((k) => SECRET_PARAM_RE.test(k))) return null;
-  u.hash = '';
-  return u.href.length <= MAX_SNAPSHOT_URL ? u.href : null;
-}
 
 /**
  * The `news` cloud snapshot (CLOUD_SYNC_PLAN.md phase 2c): what the phone and

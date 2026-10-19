@@ -1,18 +1,20 @@
 // ============================================================================
 // LunaCore phone - app shell: top bar, slide-out nav, toast
 // ----------------------------------------------------------------------------
-// Sections not built yet stay in the menu, disabled and marked "soon", so the
-// phone shows where Mission will live (plan phase 4c). The page is picked
-// from the URL hash (#todos, #life) so a home-screen reload keeps it.
+// A section not built yet stays in the menu, disabled and marked "soon". The
+// page is picked from the URL hash (#today, #mission, #todos, #life, #body)
+// so a home-screen reload keeps it.
 // ============================================================================
 
 import { h, icon, ICONS } from './dom.js';
 import { t } from './i18n.js';
 
 const NAV = [
-  { id: 'mission', label: 'navMission', icon: ICONS.radar, ready: false },
+  { id: 'today', label: 'navToday', icon: ICONS.sun, ready: true },
+  { id: 'mission', label: 'navMission', icon: ICONS.radar, ready: true },
   { id: 'todos', label: 'navTodos', icon: ICONS.list, ready: true },
   { id: 'life', label: 'navLife', icon: ICONS.wallet, ready: true },
+  { id: 'body', label: 'navBody', icon: ICONS.activity, ready: true },
 ];
 const TOAST_MS = 3500;
 
