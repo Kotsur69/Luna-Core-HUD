@@ -5,14 +5,20 @@ got here (widget contract, layout engine, packaging, the lessons each phase
 cost) lives in [`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md).
 Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 
-## Where things stand (2026-10-15)
+## Where things stand (2026-10-19)
 
 - **START HERE for cloud sync:** [`docs/CLOUD_SYNC_PLAN.md`](docs/CLOUD_SYNC_PLAN.md)
-  "Next session: start here" (second-PC test, then 2b config + project list, 2c snapshots).
+  "Next session: start here". Phases 1-3 are done and released; the
+  Syncthing folder is gone. Next: check v0.16.2 on both PCs, then phase 4
+  (iPhone PWA).
 - **START HERE for Mission Control:**
   [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md) - decisions,
   build order W1-W8 and a copy-paste starting prompt.
-- **Released:** `v0.15.0` (2026-10-15) - Life dashboard (Ctrl+Shift+N: budget,
+- **Released:** `v0.16.2` (2026-10-19) - cloud sync phase 3: the shared
+  folder (Syncthing / SyncTrayzor) is removed, the cloud is the only sync
+  transport. Before it: `v0.16.0` / `v0.16.1` (2026-10-15) - cloud sync 2b +
+  2c (settings, ledger / news / YAZIO snapshots and their readers). Before it:
+  `v0.15.0` (2026-10-15) - Life dashboard (Ctrl+Shift+N: budget,
   bills, savings, Year and Body tabs) and cloud sync phase 2a (GitHub login,
   budget + to-dos over Supabase). Before it: `v0.14.0` (2026-10-09) - Mission Control (Ctrl+Shift+M: mail
   cleanup, Google Calendar API, GitHub / Claude-budget telemetry, Agent-Reach

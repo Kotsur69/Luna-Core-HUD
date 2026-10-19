@@ -24,11 +24,12 @@ under *Open questions*.
 > *Gotchas*), and commit + push the explicit file list (never `git add -A`,
 > leave other sessions' hunks out). Talk to me in the language I write in.
 
-## ⏸ Resume here (last session 2026-10-14)
+## ⏸ Resume here (last session 2026-10-19)
 
-- **Next workstream: Cloud sync + iPhone companion** — confirmed plan in
-  [`docs/CLOUD_SYNC_PLAN.md`](docs/CLOUD_SYNC_PLAN.md) (Supabase replaces the
-  Syncthing folder; PWA on Vercel). Start at its "Next session: start here".
+- **Cloud sync:** phases 1-3 released (latest `v0.16.2`, 2026-10-19). Supabase
+  is the only transport; the Syncthing folder and the ledger's "Share with
+  other PCs" UI are removed. **Next: iPhone PWA (phase 4)** — start at
+  [`docs/CLOUD_SYNC_PLAN.md`](docs/CLOUD_SYNC_PLAN.md) "Next session: start here".
 - **Active workstream: W3+ Life Dashboard** (Ctrl+Shift+N). Phase 2 Money
   shipped in `393c07d`; the **budget redesign (5 buckets, tabs, charts,
   undo everywhere)** landed after it - see "Phase 2b" in the W3+ section.
