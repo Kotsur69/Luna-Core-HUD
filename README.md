@@ -7,7 +7,12 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.16.1 — Cloud sync, part 2.1.** Every PC now *reads* what
+> **Current release: v0.16.2 — Cloud sync, part 3.** The cloud is now the only
+> way PCs share data: the old Syncthing / SyncTrayzor shared folder is gone, and
+> so are the "Share with other PCs…" buttons in the Mission Control ledger
+> (Ctrl+Shift+M). Budget, to-dos and the Claude ledger keep syncing as before.
+>
+> **v0.16.1 — Cloud sync, part 2.1.** Every PC now *reads* what
 > the others share: "Ready reports" in News lists the other PCs' last briefings
 > ("Report from <PC>"), and the Body tab shows YAZIO data from a PC that is logged
 > in when this one is not (YAZIO is now a cloud snapshot too, numbers only).
@@ -79,8 +84,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.16.1.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.16.1-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.16.2.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.16.2-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
