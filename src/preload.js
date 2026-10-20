@@ -282,6 +282,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionLedger: (req) => ipcRenderer.invoke('mission:ledger', req),
   /** Marks a project work / fun / other (null = unassigned). Promise<{ok} | {ok:false, reason}>. */
   missionProjectClass: (key, cls) => ipcRenderer.invoke('mission:project-class', { key, cls }),
+  /** Pins (true) / unpins a project of the last ledger report; main validates the key. Promise<{ok} | {ok:false, reason}>. */
+  missionProjectPin: (key, pinned) => ipcRenderer.invoke('mission:project-pin', { key, pinned }),
 
   // --- Life dashboard (src/lifeipc.js) ---
   // Local budget only. `op` is checked against main's fixed op table and the

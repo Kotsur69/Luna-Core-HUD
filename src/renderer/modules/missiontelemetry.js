@@ -17,18 +17,22 @@ import { t } from './util.js';
 import { defineWidget } from './registry.js';
 import { onLangChange, onUsageUpdate } from './bus.js';
 import { errorText, setStatus, ipcFailed } from './missionshared.js';
-import { githubVelocity, heatmap, budgetPace, paceFlags } from './missionpace.js';
+import { githubVelocity, heatmap, budgetPace, paceFlags, foldUsage } from './missionpace.js';
 import { mountLedger } from './missionledger.js';
 import { foldBuckets } from './missionfold.js';
 
 const STALE_MS = 10 * 60 * 1000;
+/** How often a stale budget reading's "as of ..." age is redrawn. */
+const AGE_TICK_MS = 60 * 1000;
 const LISTS = ['reviews', 'prs', 'issues'];
 
 // Module state survives unmount, like the other Mission Control widgets.
 let github = null;
 let fetchedAt = 0;
 let loading = false;
-let usage = null;
+// Last good usage read + the error since (if any): the budget block falls back
+// to the good one, like the Usage widget's lastGoodUsage.
+let usage = { good: null, error: null };
 let els = null;
 
 const lang = () => (window.i18n && window.i18n.lang) || 'pl';
@@ -46,9 +50,17 @@ function el(tag, cls, text) {
   return node;
 }
 
+/** "12 min ago" / "12 minut temu" in the UI language. */
+function ago(ms) {
+  const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  const rtf = new Intl.RelativeTimeFormat(lang(), { numeric: 'auto', style: 'short' });
+  return mins < 60 ? rtf.format(-mins, 'minute') : rtf.format(-Math.round(mins / 60), 'hour');
+}
+
 function weeklyLimit() {
-  if (!usage || usage.status !== 'ok' || !Array.isArray(usage.limits)) return null;
-  return usage.limits.find((l) => l.window === 'weekly') || null;
+  const good = usage.good;
+  if (!good || !Array.isArray(good.limits)) return null;
+  return good.limits.find((l) => l.window === 'weekly') || null;
 }
 
 function renderFlags(velocity, budget) {
@@ -121,7 +133,7 @@ function renderBudget(budget) {
   const limit = weeklyLimit();
   if (!limit) {
     // Say why when the usage meter knows (endpoint down, not signed in...).
-    const why = usage && usage.status !== 'ok' && usage.errorMessage ? ` (${usage.errorMessage})` : '';
+    const why = usage.error && usage.error.errorMessage ? ` (${usage.error.errorMessage})` : '';
     els.budget.replaceChildren(el('p', 'hint', t('mc.tele.noBudget') + why));
     return;
   }
@@ -152,8 +164,12 @@ function renderBudget(budget) {
       );
     }
   }
-  const fiveH = usage.limits.find((l) => l.window === '5h');
+  const fiveH = usage.good.limits.find((l) => l.window === '5h');
   if (fiveH) rows.push(el('p', 'mc-tele__stat', t('mc.tele.fiveH', { pct: pct(fiveH.percentUsed) })));
+  // The live read failed (429, endpoint down): this is the last good reading - say how old.
+  if (usage.error && Number.isFinite(usage.good.updatedAt)) {
+    rows.push(el('p', 'hint', t('mc.tele.asOf', { when: ago(usage.good.updatedAt) })));
+  }
   els.budget.replaceChildren(...rows);
 }
 
@@ -228,10 +244,14 @@ defineWidget({
       ledger.load(true);
     });
     const offUsage = onUsageUpdate((u) => {
-      usage = u;
+      usage = foldUsage(usage, u);
       render();
       ledger.usageChanged();
     });
+    // While rate limited no update arrives for minutes: keep the age honest.
+    const ageTimer = setInterval(() => {
+      if (usage.error && usage.good) render();
+    }, AGE_TICK_MS);
     const offLang = onLangChange(() => {
       render();
       ledger.render();
@@ -241,6 +261,7 @@ defineWidget({
     else if (github) setStatus(els.status, t('mc.tele.loaded', { login: github.login }));
     return () => {
       offUsage();
+      clearInterval(ageTimer);
       offLang();
       ledger.unmount();
       els = null;

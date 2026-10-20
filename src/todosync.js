@@ -222,7 +222,7 @@ function startTodoSync({ getProjects, onChanged, cloud = null }) {
   const { machineName } = require('./missionledgersync');
   const projectStore = require('./missionprojects');
   const { createRepoKeys } = require('./missionrepokey');
-  const keys = createRepoKeys({ aliases: () => projectStore.pinnedAliases(projectStore.loadProjects().pinned) });
+  const keys = createRepoKeys({ aliases: () => projectStore.pinnedAliases(projectStore.aliasEntries(projectStore.loadProjects())) });
   const sync = createTodoSync({
     machine: machineName(os.hostname()),
     projects: () => (getProjects() || []).map((p) => ({ id: p.id, path: p.path })),

@@ -5,10 +5,11 @@
 // scans the local transcripts and merges the other PCs' ledgers from the
 // cloud - free, no model call. This file only renders: the stacked bar by
 // class, the top projects, one-click work / fun / other for unassigned ones
-// (a row's class chip steps to the next class on click), and the PCs feeding
-// the numbers. Math lives in missionledgerview.js.
+// (a row's class chip steps to the next class on click), a star that pins /
+// unpins a project, an "All projects" fold-out with every project of the week,
+// and the PCs feeding the numbers. Math lives in missionledgerview.js.
 //
-// Project classes are set by key, validated in main.
+// Project classes and pins are set by key, validated in main.
 // ============================================================================
 
 'use strict';
@@ -26,6 +27,7 @@ let report = null;
 let fetchedAt = 0;
 let loading = false;
 let lastError = null;
+let allOpen = false;
 
 const lang = () => (window.i18n && window.i18n.lang) || 'pl';
 const pct = (n) => (n >= 10 ? `${Math.round(n)}%` : `${n.toFixed(1)}%`);
@@ -88,6 +90,33 @@ async function setClass(key, cls, rerender) {
   rerender();
 }
 
+/** Pins / unpins a project in main, then flips the cached report's flag in place of a refetch. */
+async function setPinned(key, pinned, rerender) {
+  const res = await window.lunacore.missionProjectPin(key, pinned).catch(ipcFailed);
+  if (res.ok && report) {
+    report = { ...report, projects: report.projects.map((x) => (x.key === key ? { ...x, pinned } : x)) };
+  } else if (!res.ok) {
+    lastError = res.reason;
+  }
+  rerender();
+}
+
+/** The star in front of a row's name: a pin / unpin toggle (the "other" bucket gets a blank slot). */
+function pinToggle(r, rerender) {
+  if (!r.reclassable) return el('span', 'mc-ledger__star');
+  const btn = el('button', 'mc-ledger__star mc-ledger__star--btn', r.pinned ? '★' : '☆');
+  btn.type = 'button';
+  btn.setAttribute('aria-pressed', String(r.pinned));
+  const hint = t(r.pinned ? 'mc.ledger.unpin' : 'mc.ledger.pin', { name: r.name });
+  btn.title = hint;
+  btn.setAttribute('aria-label', hint);
+  btn.addEventListener('click', () => {
+    btn.disabled = true;
+    setPinned(r.key, !r.pinned, rerender);
+  });
+  return btn;
+}
+
 /** The class tag of a row; a button that steps to the next class when the project can be re-classed. */
 function classChip(r, rerender) {
   const cls = `mc-ledger__chip mc-ledger__seg--${r.cls}`;
@@ -106,23 +135,39 @@ function classChip(r, rerender) {
   return chip;
 }
 
+/** One project row: star, name, class chip, numbers. */
+function projectRow(r, view, rerender) {
+  const unit = view.basis === 'limit' ? 'mc.ledger.ofLimit' : 'mc.ledger.ofSpend';
+  const row = el('li', 'mc-ledger__row');
+  const name = el('span', 'mc-ledger__name', r.name);
+  name.title = r.pinned ? `${t('mc.ledger.pinned')} · ${r.key}` : r.key;
+  const idle = r.usd === 0 && !r.unpricedTokens;
+  const nums = el('span', 'mc-ledger__nums', idle ? t('mc.ledger.idle') : `≈ ${t(unit, { pct: pct(r.pct) })} · ~${usd(r.usd)}`);
+  row.append(pinToggle(r, rerender), name, classChip(r, rerender), nums);
+  return row;
+}
+
 function renderRows(view, rerender) {
   const list = el('ul', 'mc-ledger__rows');
-  const unit = view.basis === 'limit' ? 'mc.ledger.ofLimit' : 'mc.ledger.ofSpend';
-  for (const r of view.top) {
-    const row = el('li', 'mc-ledger__row');
-    const name = el('span', 'mc-ledger__name', r.pinned ? `★ ${r.name}` : r.name);
-    name.title = r.pinned ? `${t('mc.ledger.pinned')} · ${r.key}` : r.key;
-    const chip = classChip(r, rerender);
-    const idle = r.usd === 0 && !r.unpricedTokens;
-    const nums = el('span', 'mc-ledger__nums', idle ? t('mc.ledger.idle') : `≈ ${t(unit, { pct: pct(r.pct) })} · ~${usd(r.usd)}`);
-    row.append(name, chip, nums);
-    list.append(row);
-  }
+  for (const r of view.top) list.append(projectRow(r, view, rerender));
   const out = [list];
   if (view.restCount) out.push(el('p', 'mc-tele__stat', t('mc.ledger.rest', { n: view.restCount, pct: pct(view.restPct) })));
   if (view.unpricedTokens) out.push(el('p', 'hint', t('mc.ledger.unpriced', { n: view.unpricedTokens.toLocaleString(lang()) })));
   return out;
+}
+
+/** Every project of the week with its star and class chip: re-class or pin outside the top rows. */
+function renderAll(view, rerender) {
+  const box = el('details', 'mc-ledger__all');
+  box.open = allOpen;
+  box.addEventListener('toggle', () => {
+    allOpen = box.open;
+  });
+  box.append(el('summary', 'mc-ledger__allsum', t('mc.ledger.allTitle', { n: view.all.length })));
+  const list = el('ul', 'mc-ledger__rows');
+  for (const r of view.all) list.append(projectRow(r, view, rerender));
+  box.append(list);
+  return [box];
 }
 
 function renderUnassigned(view, rerender) {
@@ -201,7 +246,7 @@ export function mountLedger(root, getWeekly, focusRoot = null) {
     if (loading && !report) parts.push(el('p', 'hint', t('mc.ledger.loading')));
     if (lastError) parts.push(el('p', 'hint is-fail', errorText(lastError)));
     if (view && view.top.length) {
-      parts.push(...renderBar(view), ...renderRows(view, render), ...renderUnassigned(view, render));
+      parts.push(...renderBar(view), ...renderRows(view, render), ...renderAll(view, render), ...renderUnassigned(view, render));
       parts.push(el('p', 'hint', t(view.basis === 'limit' ? 'mc.ledger.noteLimit' : 'mc.ledger.noteSpend')));
     } else if (view) {
       parts.push(el('p', 'hint', t('mc.ledger.empty')));

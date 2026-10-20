@@ -1,0 +1,10 @@
+# X and Reddit for News (Agent-Reach channels twitter / reddit), on top of the
+# base set. Source for the hash-locked requirements-social.txt - regenerate it
+# with requirements.txt as constraints so the shared deps keep their pins:
+#   uv pip compile requirements-social.in -c requirements.txt --universal --python-version 3.10 --generate-hashes --exclude-newer 2026-10-09 -o requirements-social.txt
+#
+# browser-cookie3 & co. come in as dependencies of both CLIs. Their browser
+# cookie fallbacks are stubbed out by the bridge (lunacore_fetch.py SHIMS).
+-r requirements.in
+twitter-cli==0.8.5
+rdt-cli==0.4.1

@@ -7,6 +7,8 @@
 //   pinned:    [{key, name, folders[]}]  the projects Mati always wants to
 //              see, even at 0 %; `folders` are folder names whose sessions
 //              count for the project when the repo is not on this PC
+//   unpinned:  [{key, name, folders[]}]  projects unpinned from the UI; kept
+//              so their folder aliases still count and a re-pin restores them
 //
 // A `sharedDir` key from the old folder sync (before the cloud) is dropped on
 // read, so the next save removes it from the file.
@@ -55,14 +57,17 @@ function normalize(raw) {
   for (const [key, cls] of Object.entries(src).slice(0, MAX_CLASSES)) {
     if (validKey(key) && CLASSES.includes(cls)) classes[key] = cls;
   }
-  return { classes, pinned: normalizePinned(raw && raw.pinned) };
+  const pinned = normalizePinned(raw && raw.pinned);
+  const pinnedKeys = new Set(pinned.map((p) => p.key));
+  const unpinned = normalizePinned(raw && raw.unpinned).filter((p) => !pinnedKeys.has(p.key));
+  return { classes, pinned, unpinned };
 }
 
 function loadProjects(file = defaultFile()) {
   try {
     return normalize(JSON.parse(fs.readFileSync(file, 'utf8')));
   } catch {
-    return { classes: {}, pinned: [] };
+    return { classes: {}, pinned: [], unpinned: [] };
   }
 }
 
@@ -88,6 +93,31 @@ function setPinned(list, file = defaultFile()) {
   return save({ ...loadProjects(file), pinned: normalizePinned(list) }, file);
 }
 
+/**
+ * Pins (on = true) or unpins one project. Unpinning parks the entry in
+ * `unpinned` so its folder aliases survive; re-pinning restores them. `name`
+ * is used only for a project never pinned before. Throws on bad input.
+ */
+function setPin(key, on, name, file = defaultFile()) {
+  if (!validKey(key)) throw new Error('bad project key');
+  const cur = loadProjects(file);
+  const entry = cur.pinned.find((p) => p.key === key) ||
+    cur.unpinned.find((p) => p.key === key) || { key, name, folders: [] };
+  if (typeof entry.name !== 'string' || !PIN_NAME_RE.test(entry.name)) throw new Error('bad project name');
+  const pinned = cur.pinned.filter((p) => p.key !== key);
+  const unpinned = cur.unpinned.filter((p) => p.key !== key);
+  if (on) {
+    if (pinned.length >= MAX_PINNED) throw new Error('too many pins');
+    pinned.push(entry);
+  } else {
+    unpinned.unshift(entry);
+  }
+  return save({ ...cur, pinned, unpinned: unpinned.slice(0, MAX_PINNED) }, file);
+}
+
+/** Pinned + unpinned entries: everything whose folder aliases count. */
+const aliasEntries = (projects) => [...projects.pinned, ...(projects.unpinned || [])];
+
 /** folder name (lower-case) -> {key, name}, for missionrepokey.js aliases. */
 function pinnedAliases(pinned) {
   const map = new Map();
@@ -95,4 +125,4 @@ function pinnedAliases(pinned) {
   return map;
 }
 
-module.exports = { loadProjects, setClass, setPinned, pinnedAliases, normalize, normalizePinned, CLASSES, MAX_CLASSES };
+module.exports = { loadProjects, setClass, setPinned, setPin, aliasEntries, pinnedAliases, normalize, normalizePinned, CLASSES, MAX_CLASSES };

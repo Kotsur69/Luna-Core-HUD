@@ -43,8 +43,8 @@ function defaultLedgerService(cloudSnapshots) {
   const sync = require('./missionledgersync');
   const { loadRates } = require('./rates');
   const { createCommits } = require('./missioncommits');
-  // Pinned projects' folder aliases catch sessions from repos no longer on this PC.
-  const { resolve } = createRepoKeys({ aliases: () => projectStore.pinnedAliases(projectStore.loadProjects().pinned) });
+  // Pinned (and unpinned) projects' folder aliases catch sessions from repos no longer on this PC.
+  const { resolve } = createRepoKeys({ aliases: () => projectStore.pinnedAliases(projectStore.aliasEntries(projectStore.loadProjects())) });
   return createLedgerService({
     ledger: createLedger({ root: path.join(os.homedir(), '.claude', 'projects'), resolveKey: resolve }),
     // Focus time: own commits in config/repos.local.json, keyed like the transcripts.
@@ -152,6 +152,8 @@ function registerMissionIpc({
   // Other PCs' last briefings (`news` snapshots), keyed like a local scan.
   const newsPeers = createNewsPeers({ cloud: cloudSnapshots });
   let lastPreview = null;
+  /** key -> name of the projects in the last ledger report, for mission:project-pin. */
+  let knownProjects = new Map();
   const busy = new Set();
   const seenEvents = new Map();
   /** Keeps the newest copy of each listed event; the oldest fall out first. */
@@ -402,9 +404,13 @@ function registerMissionIpc({
   // req: {resetsAt} - epoch ms of the weekly reset from the usage poll. Only
   // that number crosses; the service re-checks it is plausible.
   ipcMain.handle('mission:ledger', (_event, req) =>
-    guarded('ledger', () => {
+    guarded('ledger', async () => {
       const resetsAt = req && typeof req.resetsAt === 'number' && Number.isFinite(req.resetsAt) ? req.resetsAt : null;
-      return getLedger().report({ resetsAt });
+      const report = await getLedger().report({ resetsAt });
+      if (report && report.ok && Array.isArray(report.projects)) {
+        knownProjects = new Map(report.projects.filter((p) => p.key !== 'other').map((p) => [p.key, p.name]));
+      }
+      return report;
     })
   );
 
@@ -415,6 +421,22 @@ function registerMissionIpc({
       return { ok: true };
     } catch (err) {
       console.error('[mission] project class rejected:', err && err.message);
+      return { ok: false, reason: 'bad-input' };
+    }
+  });
+
+  // {key, pinned}: the key must be a project of the last ledger report (the
+  // renderer can only pin what it was shown); the name comes from that report.
+  ipcMain.handle('mission:project-pin', (_event, req) => {
+    const key = req && req.key;
+    if (typeof key !== 'string' || !knownProjects.has(key) || typeof (req && req.pinned) !== 'boolean') {
+      return { ok: false, reason: 'bad-input' };
+    }
+    try {
+      projects.setPin(key, req.pinned, knownProjects.get(key));
+      return { ok: true };
+    } catch (err) {
+      console.error('[mission] project pin rejected:', err && err.message);
       return { ok: false, reason: 'bad-input' };
     }
   });

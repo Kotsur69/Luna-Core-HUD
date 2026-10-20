@@ -147,8 +147,13 @@ work → fun → other → work (`nextClass` in `missionledgerview.js`), saved v
 the existing `mission:project-class`. The non-repo *other* bucket stays a
 plain tag.
 
-**Not done yet:** pin / unpin from the UI; re-classing a project outside the
-top 5 + pins (it has no row).
+**Pin / unpin + All projects (2026-10-20):** a star before each name pins /
+unpins (`mission:project-pin`; main accepts only a key of the last
+`mission:ledger` report and takes the name from it). Unpinning parks the
+entry in `unpinned` in `mission-projects.local.json`, so its folder aliases
+still count and a re-pin restores them. An *All projects* fold-out lists
+every project of the week with its star and class chip, so projects outside
+the top 5 can be re-classed and pinned too.
 
 ### W1b — Move the ledger between the 3 PCs ✅ superseded by the cloud
 
@@ -565,13 +570,17 @@ itself was smoke-tested with a fake event in a second instance.
 
 ### W8 — Owed fixes from v0.14.0 ⏳
 
-- **pip hash pinning:** `requirements.txt` is version-pinned only; generate
-  `--require-hashes` (pip-compile) and give pip a minimal env.
-- **Usage 429:** the Claude usage endpoint answered 429 on 2026-10-08, so the
-  Telemetry budget block showed "no data". Back off and show the last good
-  reading with its age instead of nothing.
-- **hnrss.org 502s** — flaky upstream; consider the HN Algolia API as the
-  Hacker News topic backend.
+- ~~**pip hash pinning**~~ ✅ 2026-10-20: `requirements*.txt` are full
+  hash locks (`uv pip compile --universal --generate-hashes`, sources in
+  `requirements*.in`, command in their headers); installed with
+  `--require-hashes` and `PIP_NO_INPUT` / `PIP_DISABLE_PIP_VERSION_CHECK` on
+  top of the key-free child env. The social lock is a superset of the base
+  one (no `-c`). Fresh venv on Python 3.14 + `pip check`: clean.
+- ~~**Usage 429**~~ ✅ 2026-10-20: the poller waits Retry-After on a 429
+  (else doubles the 90 s interval, cap 30 min) instead of the 15 s error
+  heartbeat; the budget block keeps the last good reading with "as of …".
+- ~~**hnrss.org 502s**~~ ✅ 2026-10-20: HN topics read the Algolia API
+  (`search_by_date`, stories), hnrss only as the fallback.
 - **Google Cloud setup (Mati):** create the Desktop OAuth client, save it as
   `config/google-oauth.local.json`, **publish** the consent screen (testing
   mode expires refresh tokens after 7 days), click Connect.

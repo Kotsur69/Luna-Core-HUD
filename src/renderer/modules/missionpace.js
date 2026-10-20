@@ -134,6 +134,18 @@ export function heatmap(days, now) {
 }
 
 /**
+ * Usage poll fold for the budget block: an ok read becomes the reading; an
+ * error (429, endpoint down) keeps the last good one and is remembered beside
+ * it, so the block can show that reading with its age instead of "no data".
+ * @param {{good:object|null, error:object|null}} state
+ * @returns {{good:object|null, error:object|null}}
+ */
+export function foldUsage(state, update) {
+  if (update && update.status === 'ok') return { good: update, error: null };
+  return { good: state.good, error: update || null };
+}
+
+/**
  * A weekly usage limit ({percentUsed, resetsAt}) -> burn rate against the
  * window's elapsed share. Null when the provider gave no reset time.
  */

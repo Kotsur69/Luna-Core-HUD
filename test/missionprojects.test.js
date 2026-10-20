@@ -16,9 +16,9 @@ const file = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lc-proj-')),
 
 test('a missing or broken file loads as empty', () => {
   const f = file();
-  assert.deepEqual(store.loadProjects(f), { classes: {}, pinned: [] });
+  assert.deepEqual(store.loadProjects(f), { classes: {}, pinned: [], unpinned: [] });
   fs.writeFileSync(f, '{oops');
-  assert.deepEqual(store.loadProjects(f), { classes: {}, pinned: [] });
+  assert.deepEqual(store.loadProjects(f), { classes: {}, pinned: [], unpinned: [] });
 });
 
 test('setClass stores work / fun / other and null unassigns', () => {
@@ -44,7 +44,7 @@ test('loading drops bad entries written by hand', () => {
     f,
     JSON.stringify({ classes: { 'local:ok': 'fun', 'local:bad': 'boss', 'not a key': 'work' }, sharedDir: 42 })
   );
-  assert.deepEqual(store.loadProjects(f), { classes: { 'local:ok': 'fun' }, pinned: [] });
+  assert.deepEqual(store.loadProjects(f), { classes: { 'local:ok': 'fun' }, pinned: [], unpinned: [] });
 });
 
 test('a sharedDir left by the old folder sync is dropped on the next save', () => {
@@ -73,4 +73,51 @@ test('setClass keeps pinned projects', () => {
   store.setPinned([{ key: 'local:toy', name: 'toy', folders: [] }], f);
   store.setClass('local:toy', 'fun', f);
   assert.equal(store.loadProjects(f).pinned.length, 1);
+});
+
+test('setPin pins a new project with no folders and unpins it again', () => {
+  const f = file();
+  store.setPin('local:toy', true, 'toy', f);
+  assert.deepEqual(store.loadProjects(f).pinned, [{ key: 'local:toy', name: 'toy', folders: [] }]);
+  store.setPin('local:toy', false, 'toy', f);
+  const cur = store.loadProjects(f);
+  assert.deepEqual(cur.pinned, []);
+  assert.deepEqual(cur.unpinned, [{ key: 'local:toy', name: 'toy', folders: [] }]);
+});
+
+test('unpinning keeps folder aliases and re-pinning restores them', () => {
+  const f = file();
+  store.setPinned([{ key: 'git:github.com/kotsur69/synthara', name: 'synthara', folders: ['synthara', 'synthara-old'] }], f);
+  store.setPin('git:github.com/kotsur69/synthara', false, 'ignored', f);
+  const parked = store.loadProjects(f);
+  assert.deepEqual(parked.pinned, []);
+  assert.deepEqual(store.pinnedAliases(store.aliasEntries(parked)).get('synthara-old'), {
+    key: 'git:github.com/kotsur69/synthara',
+    name: 'synthara',
+  });
+  store.setPin('git:github.com/kotsur69/synthara', true, 'ignored', f);
+  const back = store.loadProjects(f);
+  assert.deepEqual(back.pinned, [{ key: 'git:github.com/kotsur69/synthara', name: 'synthara', folders: ['synthara', 'synthara-old'] }]);
+  assert.deepEqual(back.unpinned, []);
+});
+
+test('setPin keeps classes and other pins, and rejects bad keys and names', () => {
+  const f = file();
+  store.setClass('local:toy', 'fun', f);
+  store.setPin('local:a', true, 'a', f);
+  store.setPin('local:b', true, 'b', f);
+  store.setPin('local:a', false, 'a', f);
+  const cur = store.loadProjects(f);
+  assert.deepEqual(cur.pinned.map((p) => p.key), ['local:b']);
+  assert.deepEqual(cur.classes, { 'local:toy': 'fun' });
+  assert.throws(() => store.setPin('C:\\Windows', true, 'x', f));
+  assert.throws(() => store.setPin('local:c', true, 'bad\u0000name', f));
+  assert.throws(() => store.setPin('local:c', true, undefined, f));
+});
+
+test('a key both pinned and unpinned by hand loads as pinned only', () => {
+  const f = file();
+  const pin = { key: 'local:toy', name: 'toy', folders: ['toy'] };
+  fs.writeFileSync(f, JSON.stringify({ classes: {}, pinned: [pin], unpinned: [pin] }));
+  assert.deepEqual(store.loadProjects(f), { classes: {}, pinned: [pin], unpinned: [] });
 });

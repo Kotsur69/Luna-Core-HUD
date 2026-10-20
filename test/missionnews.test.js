@@ -318,21 +318,26 @@ test('createNews: status reports the X / Reddit tools and logins as booleans onl
   assert.deepEqual(st.social, { tools: true, x: false, reddit: true });
 });
 
-test('createNews: setupSocial installs the pinned tools with the base pins as constraints', async () => {
+test('createNews: setupSocial installs the hash-locked tools with a minimal pip env', async () => {
   const venv = fakeVenv();
   const calls = [];
+  const envs = [];
   const news = newsMod.createNews({
     platform: 'win32',
     venvDir: () => venv,
-    runProc: async (file, args) => {
+    env: () => ({ PATH: 'x' }),
+    runProc: async (file, args, opts) => {
       calls.push(args);
+      envs.push(opts && opts.env);
       return JSON.stringify({ modules: { yt_dlp: true, feedparser: true }, social: {} });
     },
   });
   await news.setupSocial();
-  const pip = calls.find((a) => a.includes('pip'));
+  const at = calls.findIndex((a) => a.includes('pip'));
+  const pip = calls[at];
   assert.ok(pip[pip.indexOf('-r') + 1].endsWith('requirements-social.txt'));
-  assert.ok(pip[pip.indexOf('-c') + 1].endsWith('requirements.txt'));
+  assert.ok(pip.includes('--require-hashes'));
+  assert.deepEqual(envs[at], { PATH: 'x', PIP_NO_INPUT: '1', PIP_DISABLE_PIP_VERSION_CHECK: '1' });
   const none = newsMod.createNews({ venvDir: () => path.join(os.tmpdir(), `no-venv-${process.pid}`), runProc: async () => '' });
   await assert.rejects(none.setupSocial(), { reason: 'news-not-setup' });
 });

@@ -75,3 +75,12 @@ test('pinned projects come first, even at zero, then the top spenders', () => {
   assert.deepEqual(v.top.map((x) => [x.key, x.pinned]), [['git:pin', true], ['git:big', false], ['git:mid', false]]);
   assert.deepEqual(v.unassigned.map((x) => x.key), ['git:pin', 'git:big', 'git:mid']);
 });
+
+test('the "All projects" list has every project of the week, pinned first, beyond the top N', () => {
+  const many = Array.from({ length: TOP_N + 3 }, (_, i) => p(`git:p${i}`, 10 - i));
+  const pin = { ...p('git:pin', 0), pinned: true };
+  const v = ledgerView(report([pin, ...many, p('git:none', 0)]), null);
+  assert.equal(v.all.length, TOP_N + 4);
+  assert.equal(v.all[0].key, 'git:pin');
+  assert.equal(v.all.some((r) => r.key === 'git:none'), false);
+});

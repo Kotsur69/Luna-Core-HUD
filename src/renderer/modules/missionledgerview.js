@@ -64,6 +64,8 @@ export function ledgerView(report, weeklyPct) {
   return {
     basis: hasLimit ? 'limit' : 'spend',
     top,
+    // Every project of the week (pinned first, then by cost) for the "All projects" fold-out.
+    all: rows,
     restCount: rest.length,
     restPct: rest.reduce((s, r) => s + r.pct, 0),
     segments,

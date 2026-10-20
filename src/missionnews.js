@@ -107,6 +107,11 @@ function childEnv(source) {
   return { ...env, PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1' };
 }
 
+/** pip on top of childEnv: never prompts, never phones home for its own version. */
+const pipEnv = (env) => ({ ...env, PIP_NO_INPUT: '1', PIP_DISABLE_PIP_VERSION_CHECK: '1' });
+/** Every artifact must match a sha256 in the lock (requirements*.txt, from the .in files). */
+const PIP_INSTALL = ['-m', 'pip', 'install', '--quiet', '--require-hashes', '-r'];
+
 /** "Python 3.12.8" -> true when >= MIN_PYTHON. */
 function pythonOk(versionText) {
   const m = /Python (\d+)\.(\d+)/.exec(String(versionText));
@@ -370,26 +375,18 @@ function createNews({
     const [file, pre] = await findPython();
     try {
       await runProc(file, [...pre, '-m', 'venv', venvDir()], { timeoutMs: VENV_TIMEOUT_MS, env: env() });
-      await runProc(
-        venvPython(),
-        ['-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '-r', REQUIREMENTS],
-        { timeoutMs: PIP_TIMEOUT_MS, env: env() }
-      );
+      await runProc(venvPython(), [...PIP_INSTALL, REQUIREMENTS], { timeoutMs: PIP_TIMEOUT_MS, env: pipEnv(env()) });
     } catch (err) {
       throw new NewsError('news-setup-failed', String(err.stderr || err.message).slice(0, 500));
     }
     return status();
   }
 
-  /** Adds twitter-cli + rdt-cli to the News venv; the base pins act as constraints. */
+  /** Adds twitter-cli + rdt-cli to the News venv; their lock repeats the base pins, so those stay put. */
   async function setupSocial() {
     if (!fs.existsSync(venvPython())) throw new NewsError('news-not-setup');
     try {
-      await runProc(
-        venvPython(),
-        ['-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '-r', REQUIREMENTS_SOCIAL, '-c', REQUIREMENTS],
-        { timeoutMs: PIP_TIMEOUT_MS, env: env() }
-      );
+      await runProc(venvPython(), [...PIP_INSTALL, REQUIREMENTS_SOCIAL], { timeoutMs: PIP_TIMEOUT_MS, env: pipEnv(env()) });
     } catch (err) {
       throw new NewsError('news-setup-failed', String(err.stderr || err.message).slice(0, 500));
     }
