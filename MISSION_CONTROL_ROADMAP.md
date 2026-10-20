@@ -388,10 +388,8 @@ X / Reddit as topic platforms. 25 posts per X / Reddit section.
   copy needs admin) → the paste flow is the only path. Cookie-Editor
   installs in Opera GX from the Chrome Web Store.
 
-**Still to do (needs Mati):** Connect X + Connect Reddit once, then verify
-live: the JSON shapes against real data, 25 posts arriving, preset
-subreddit names (`HonkaiStarRail_leaks` per search, ~338k members;
-`claudexplorers`, `trackdays`, `electronjs` unchecked), the HSR one.
+**Live check ✅ (Mati, 2026-10-20): "works perfectly"** — X + Reddit
+connected, posts arriving, presets fine. Nothing left to verify.
 GitHub *trending* has no stable endpoint — the Dev preset uses a GitHub
 topic search "trending" instead.
 
@@ -459,7 +457,13 @@ in on **Opera GX** (said Chrome / Edge first).
   never trash), the last News briefing (or a fresh scan of starred presets),
   open to-dos for today's projects, what was committed yesterday, and
   trackday weather if a motorsport event is ≤ 3 days away.
-- 08:00 + catch-up on launch, history last 14, model picker.
+- **Answered (Mati, 2026-10-20):** no fixed 08:00. **Weekly brief,
+  automatic on the first launch of Monday** (or the week's first launch
+  if later; once per ISO week). It covers the **weekend from Fri 18:00**,
+  when Mati works on his fun projects, and looks ahead at the week. A
+  **daily brief runs on click only**, never on a schedule. It must not
+  repeat the Sunday weekly review. History: 12 weekly + 14 daily, model
+  picker.
 
 ### W7 — Trackday weather ✅ (2026-10-13)
 
@@ -571,8 +575,8 @@ itself was smoke-tested with a fake event in a second instance.
 - **Google Cloud setup (Mati):** create the Desktop OAuth client, save it as
   `config/google-oauth.local.json`, **publish** the consent screen (testing
   mode expires refresh tokens after 7 days), click Connect.
-- **God Mode v2 live run** is still owed (see `FUTURE_PLAN.md`) — it shipped
-  in v0.14.0 without one.
+- **God Mode v2 live run** — Mati does it himself (2026-10-20); not a task
+  for a session.
 
 ---
 
@@ -581,7 +585,7 @@ itself was smoke-tested with a fake event in a second instance.
 - ~~**W1:**~~ answered 2026-10-09 (see W1).
 - ~~**W3:**~~ answered 2026-10-14 (see W3+).
 - ~~**W5:**~~ answered 2026-10-09 (see W5).
-- **W6:** 08:00 fixed, or "first launch after 06:00"? Weekends too?
+- ~~**W6:**~~ answered 2026-10-20: weekly on Monday's first launch + daily on click (see W6).
 - **W7:** which tracks are frequent (pre-seed coordinates: Tor Poznań,
   Silesia Ring…)?
 
