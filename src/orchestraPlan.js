@@ -21,6 +21,7 @@
 
 const { execFile } = require('child_process');
 const { isUsageLimitText } = require('./orchestraPlanWait');
+const { checkCwd } = require('./projects');
 
 const PLANNER_MODEL = 'opus';
 const PLANNER_BUDGET_USD = 3;
@@ -373,7 +374,10 @@ function estimatePlan(packages, todos, maxParallel = MAX_PARALLEL) {
  * @returns {Promise<{ok:true, raw:unknown, costUsd:number|null, durationMs:number}
  *   | {ok:false, error:'noClaude'|'timeout'|'failed'|'budget'|'badJson', detail?:string}>}
  */
-function runPlanner({ cwd, env, openTodos, execImpl = execFile, timeoutMs = PLANNER_TIMEOUT_MS }) {
+function runPlanner({ cwd, env, openTodos, execImpl = execFile, timeoutMs = PLANNER_TIMEOUT_MS, isDirImpl = undefined }) {
+  // A missing cwd fails execFile with ENOENT - that is a missing project
+  // folder, not a missing `claude`.
+  if (!checkCwd(cwd, isDirImpl).ok) return Promise.resolve({ ok: false, error: 'noRepo', detail: String(cwd || '') });
   const started = Date.now();
   return new Promise((resolve) => {
     const child = execImpl(

@@ -74,7 +74,7 @@ const { withColorSupport, buildSessionEnv } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
 const { withSessionId, withIntakeMcp, intakeState, withTaskBrief, findExecutable, isClaudeCommand } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
-const { loadProjects, getProject, addProject, removeProject, resolveProjectDir } = require('./projects');
+const { loadProjects, getProject, addProject, removeProject, resolveProjectDir, resolveStoredPath } = require('./projects');
 const {
   cycleSessionId,
   moveSessionId,
@@ -974,7 +974,9 @@ const orchestra = createOrchestra({
   // where LunaCore opens tabs and runs git.
   loadState: () => {
     const raw = orchestraStore.loadRun();
-    const repo = raw && typeof raw.repoPath === 'string' ? path.resolve(raw.repoPath) : null;
+    // Re-homed first: a run saved under another user's home still matches
+    // the same registered project here (restore() re-homes the rest).
+    const repo = raw && typeof raw.repoPath === 'string' ? path.resolve(resolveStoredPath(raw.repoPath) || raw.repoPath) : null;
     return repo && projects.some((p) => p.path && path.resolve(p.path) === repo) ? raw : null;
   },
   saveState: (data) => {
@@ -986,6 +988,9 @@ const orchestra = createOrchestra({
   onPlanWait: (state) => send('orchestra:planWait', state),
   // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
   freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
+  // A restored run's folders and briefs re-homed onto this PC (src/projects.js).
+  resolvePath: (p) => resolveStoredPath(p),
+  resolveFile: (p) => resolveStoredPath(p, (f) => fs.existsSync(f)),
   onRunEvent: (kind) => {
     if (readUiPrefs().voiceEnabled === false) return;
     if (kind === 'done') playCue('voice.done');
@@ -2053,8 +2058,11 @@ function registerIpc() {
     if (typeof name !== 'string' || name.length > 200) return { ok: false, error: 'badName' };
     const active = activeSessionId ? sessions.get(activeSessionId) : null;
     const project = getProject(projects, (active && active.projectId) || activeProjectId);
-    const base = project ? project.path : activeCwd;
-    if (!base) return { ok: false, error: 'notRepo' };
+    const wanted = project ? project.path : activeCwd;
+    if (!wanted) return { ok: false, error: 'notRepo' };
+    // A project folder missing on this PC is its own error, not "not a repo".
+    const base = resolveProjectDir(wanted);
+    if (!base) return { ok: false, error: 'noFolder' };
     const res = await addWorktree(base, name);
     if (!res.ok) return res;
     createSession({

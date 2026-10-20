@@ -22,6 +22,7 @@
 
 const { exec } = require('child_process');
 const { runGit, firstLine } = require('./worktrees');
+const { checkCwd } = require('./projects');
 
 const VERIFY_TIMEOUT_MS = 15 * 60 * 1000;
 const VERIFY_MAX_BUFFER = 4 * 1024 * 1024;
@@ -64,6 +65,10 @@ async function headSha(root, execImpl) {
 async function finishPackage(pkg, deps = {}) {
   const execImpl = deps.execImpl;
   const verifyImpl = deps.verifyImpl || runVerify;
+  // The worktree folder may be gone (deleted by hand, other PC after a
+  // restore): say so instead of a git/verify ENOENT.
+  const cwdOk = checkCwd(pkg.root, deps.isDirImpl);
+  if (!cwdOk.ok) return { ok: false, stage: 'commit', detail: `worktree folder missing: ${cwdOk.detail}` };
 
   const status = await runGit(pkg.root, ['status', '--porcelain'], execImpl);
   if (!status.ok) return { ok: false, stage: 'commit', detail: firstLine(status.stderr) };

@@ -106,7 +106,7 @@ test('finishPackage pushes a free branch even when verify fails', async () => {
   const { execImpl, calls } = fakeGit({ 'status --porcelain': { stdout: '' }, 'rev-list': { stdout: '2\n' } });
   const res = await finishPackage(
     { id: 'a', root: '/wt/a', cwd: '/wt/a', branch: 'luna-free/a-1', baseSha: 'abc1234', verify: 'npm test', pushOnVerifyFail: true },
-    { execImpl, verifyImpl: async () => ({ ok: false, output: 'boom' }) },
+    { execImpl, isDirImpl: () => true, verifyImpl: async () => ({ ok: false, output: 'boom' }) },
   );
   assert.equal(res.stage, 'verify');
   assert.equal(res.pushed, true);
@@ -117,7 +117,7 @@ test('finishPackage on a normal run does not push after a failed verify', async 
   const { execImpl, calls } = fakeGit({ 'status --porcelain': { stdout: '' }, 'rev-list': { stdout: '2\n' } });
   const res = await finishPackage(
     { id: 'a', root: '/wt/a', cwd: '/wt/a', branch: 'luna/a-1', baseSha: 'abc1234', verify: 'npm test' },
-    { execImpl, verifyImpl: async () => ({ ok: false, output: 'boom' }) },
+    { execImpl, isDirImpl: () => true, verifyImpl: async () => ({ ok: false, output: 'boom' }) },
   );
   assert.equal(res.stage, 'verify');
   assert.ok(!calls.some((c) => c.startsWith('push')));

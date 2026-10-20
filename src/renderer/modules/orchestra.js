@@ -44,7 +44,7 @@ const FAIL_CODES = new Set([
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Integration errors with their own message (orchestraFinalize / Integrate).
 const INTEG_ERRORS = new Set([
-  'noBaseBranch', 'noGh', 'ghFailed', 'fetchFailed', 'worktreeFailed', 'installFailed', 'mergeFailed',
+  'noBaseBranch', 'noGh', 'missingCwd', 'ghFailed', 'fetchFailed', 'worktreeFailed', 'installFailed', 'mergeFailed',
   'conflictFailed', 'verifyFailed', 'pushFailed', 'baseMoved',
 ]);
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).

@@ -174,7 +174,9 @@ function createOrchestra(deps) {
    * started) - nothing launches at boot until Mati presses Approve or Retry.
    */
   function restore() {
-    const stored = deps.loadState ? sup.normalizeStoredPlan(deps.loadState()) : null;
+    const normalized = deps.loadState ? sup.normalizeStoredPlan(deps.loadState()) : null;
+    // Folders saved on another PC / under another user name re-homed here.
+    const stored = normalized && deps.resolvePath ? sup.rehomePlanPaths(normalized, deps.resolvePath, deps.resolveFile) : normalized;
     if (!stored || plan) return false;
     plan = { ...sup.restoreAfterRestart(stored), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, settled: false };
     // A schedule Mati armed survives a restart; one already missed does not

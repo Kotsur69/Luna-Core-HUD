@@ -213,7 +213,7 @@ test('prBody names to-dos, dependency branch and overlaps', () => {
 
 test('createPr returns the new or already existing PR url; no gh is its own error', async () => {
   const ok = fakeExec({ gh: { ok: true, stdout: 'https://github.com/o/r/pull/7\n' } });
-  assert.deepEqual(await integ.createPr({ repoPath: '/r', base: 'main', branch: 'luna/a', title: 't', body: 'b' }, ok.execImpl), {
+  assert.deepEqual(await integ.createPr({ isDirImpl: () => true, repoPath: '/r', base: 'main', branch: 'luna/a', title: 't', body: 'b' }, ok.execImpl), {
     ok: true,
     url: 'https://github.com/o/r/pull/7',
   });
@@ -221,9 +221,9 @@ test('createPr returns the new or already existing PR url; no gh is its own erro
   const exists = fakeExec({
     gh: { ok: false, stderr: 'a pull request for branch "luna/a" into branch "main" already exists:\nhttps://github.com/o/r/pull/3' },
   });
-  assert.equal((await integ.createPr({ base: 'main', branch: 'luna/a', title: 't', body: '' }, exists.execImpl)).url, 'https://github.com/o/r/pull/3');
+  assert.equal((await integ.createPr({ isDirImpl: () => true, repoPath: '/r', base: 'main', branch: 'luna/a', title: 't', body: '' }, exists.execImpl)).url, 'https://github.com/o/r/pull/3');
   const none = fakeExec({ gh: { ok: false, code: 'ENOENT' } });
-  assert.equal((await integ.createPr({ base: 'main', branch: 'luna/a', title: 't', body: '' }, none.execImpl)).error, 'noGh');
+  assert.equal((await integ.createPr({ isDirImpl: () => true, repoPath: '/r', base: 'main', branch: 'luna/a', title: 't', body: '' }, none.execImpl)).error, 'noGh');
 });
 
 test('mergeOne: a resolved conflict is committed; markers left behind abort the merge', async () => {
