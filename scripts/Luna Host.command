@@ -11,7 +11,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-lock_sum() { shasum -a 256 package-lock.json 2>/dev/null | cut -d' ' -f1; }
+lock_sum() { shasum -a 256 package-lock.json 2>/dev/null | cut -d' ' -f1 || true; }
 
 before="$(lock_sum)"
 git pull --ff-only || echo "git pull failed - starting the current checkout"

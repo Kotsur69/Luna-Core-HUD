@@ -228,10 +228,26 @@ function createHostCommands({
     }
   }
 
+  /**
+   * A row this host claimed before a crash or quit never finishes on its own:
+   * once past any allowed expiry it is marked failed, so the phone stops waiting.
+   */
+  async function failStale() {
+    const cutoff = new Date(now() - MAX_TTL_MS).toISOString();
+    const { error } = await client
+      .from('host_commands')
+      .update({ status: 'failed', result: { error: 'host-restarted' } })
+      .eq('host', host)
+      .eq('status', 'claimed')
+      .lt('created_at', cutoff);
+    if (error) log(`[hostcommands] clearing stale claims failed: ${error.code || 'error'}`);
+  }
+
   return {
     start() {
       if (!stopped) return;
       stopped = false;
+      failStale().catch((err) => log(`[hostcommands] clearing stale claims crashed: ${errText(err)}`));
       try {
         channel = client
           .channel(`lunacore-host-${host}`)

@@ -96,7 +96,10 @@ function readJson(file) {
 }
 
 /** Mirrors console.log / console.error into the host log ("Open log"). */
+let teed = false;
 function teeConsole(file) {
+  if (teed) return; // a second switch into host mode must not wrap console twice
+  teed = true;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     if (fs.existsSync(file) && fs.statSync(file).size > MAX_LOG_BYTES) fs.renameSync(file, `${file}.old`);
@@ -190,6 +193,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
 
   const blocker = powerSaveBlocker.start('prevent-app-suspension');
   const timers = [];
+  const timeouts = [];
   const every = (fn, ms) => {
     const t = setInterval(fn, ms);
     timers.push(t);
@@ -327,10 +331,10 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
 
   // First run: the GitHub login in the browser, same flow as the HUD.
   if (!given) {
-    setTimeout(() => {
+    timeouts.push(setTimeout(() => {
       const s = cloud.status();
       if (s.configured && !s.loggedIn) cloud.login().then(followLogin, (err) => console.error('[hostmain] login failed:', err.message));
-    }, LOGIN_CHECK_MS);
+    }, LOGIN_CHECK_MS));
   }
 
   every(() => {
@@ -338,11 +342,11 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     heartbeat();
   }, HEARTBEAT_MS);
   every(syncRepos, REPOS_EVERY_MS);
-  setTimeout(() => {
+  timeouts.push(setTimeout(() => {
     followLogin();
     syncRepos();
     puts.repos.refresh();
-  }, LOGIN_CHECK_MS * 2);
+  }, LOGIN_CHECK_MS * 2));
 
   let stopped = false;
   function stop() {
@@ -350,6 +354,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     stopped = true;
     console.log('[hostmain] host mode stopped');
     timers.forEach(clearInterval);
+    timeouts.forEach(clearTimeout);
     if (commands) commands.stop();
     if (usageWatcher) usageWatcher.stop();
     if (configSync) configSync.stop();
@@ -390,17 +395,32 @@ function boot({ argv, hud }) {
       const what = decideSecondInstance({ mode: mode(), argv: commandLine });
       if (what === 'make-default' && host) host.setDefault();
       if (what !== 'switch') return;
-      const windows = BrowserWindow.getAllWindows();
-      windows.forEach((w) => w.hide());
-      host = startHost({
-        electron,
-        machine,
-        makeDefault: parseHostArgs(commandLine).makeDefault,
-        cloud: hud().cloud,
-        onStop: () => {
+      // Only once the HUD is up: its cloud must exist, or a second one would start.
+      app.whenReady().then(() => {
+        const { cloud } = hud();
+        if (host || !cloud) {
+          if (!cloud) console.error('[hostmain] HUD cloud not ready, host switch ignored');
+          return;
+        }
+        const windows = BrowserWindow.getAllWindows();
+        const showAll = () => windows.filter((w) => !w.isDestroyed()).forEach((w) => w.show());
+        windows.forEach((w) => w.hide());
+        try {
+          host = startHost({
+            electron,
+            machine,
+            makeDefault: parseHostArgs(commandLine).makeDefault,
+            cloud,
+            onStop: () => {
+              host = null;
+              showAll();
+            },
+          });
+        } catch (err) {
+          console.error('[hostmain] switch into host mode failed:', err.message);
           host = null;
-          windows.filter((w) => !w.isDestroyed()).forEach((w) => w.show());
-        },
+          showAll();
+        }
       });
     });
   }
@@ -411,6 +431,10 @@ function boot({ argv, hud }) {
     app.whenReady().then(() => {
       if (process.platform === 'darwin' && app.dock) app.dock.hide();
       host = startHost({ electron, machine, makeDefault: args.makeDefault });
+    }).catch((err) => {
+      // No window and no tray: holding the lock would block every later --host.
+      console.error('[hostmain] host mode failed to start:', err && err.message);
+      app.quit();
     });
   }
   return decision;

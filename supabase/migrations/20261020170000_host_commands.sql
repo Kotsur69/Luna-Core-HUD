@@ -16,6 +16,8 @@ create table public.host_commands (
   result     jsonb       check (result is null or pg_column_size(result) < 262144),
   created_at timestamptz not null default now()
 );
+-- A signed command can be stored once: a copied row (same nonce) is refused here.
+create unique index host_commands_nonce_idx on public.host_commands (user_id, nonce);
 create index host_commands_pending_idx on public.host_commands (user_id, host, status, created_at);
 
 alter table public.host_commands enable row level security;

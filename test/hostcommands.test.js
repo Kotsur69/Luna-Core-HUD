@@ -41,7 +41,7 @@ function fakeClient(initial = []) {
   function query() {
     const q = { op: 'select', patch: null, returning: false, filters: [], max: Infinity };
     const run = () => {
-      const hits = table.filter((r) => q.filters.every(([c, v]) => r[c] === v));
+      const hits = table.filter((r) => q.filters.every(([c, v]) => r[c] === v) && (!q.below || r[q.below[0]] < q.below[1]));
       if (q.op === 'update') {
         hits.forEach((r) => Object.assign(r, q.patch));
         return { data: q.returning ? hits.map((r) => ({ id: r.id })) : null, error: null };
@@ -60,6 +60,10 @@ function fakeClient(initial = []) {
       },
       eq(c, v) {
         q.filters.push([c, v]);
+        return api;
+      },
+      lt(c, v) {
+        q.below = [c, v];
         return api;
       },
       order: () => api,
@@ -326,4 +330,17 @@ test('cleanRow: shape checks', () => {
   assert.equal(cleanRow(row({ nonce: 5 })), null);
   assert.equal(cleanRow(row({ id: '' })), null);
   assert.equal(cleanRow(null), null);
+});
+
+test('start: a claim left by a crashed run is failed once past the max expiry', async () => {
+  const old = row({ status: 'claimed', created_at: new Date(NOW - MAX_TTL_MS - 1000).toISOString() });
+  const fresh = row({ status: 'claimed' });
+  const { client, loop } = setup({ rows: [old, fresh] });
+  loop.start();
+  await loop.read();
+  await settle();
+  assert.equal(client.table[0].status, 'failed');
+  assert.deepEqual(client.table[0].result, { error: 'host-restarted' });
+  assert.equal(client.table[1].status, 'claimed', 'one maybe still running elsewhere is left alone');
+  loop.stop();
 });
