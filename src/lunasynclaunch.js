@@ -25,6 +25,9 @@ const MAX_PICKED = 500;
 /** CLIs that have an overlay layout. */
 const SYNC_CLIS = new Set(['codex', 'gemini']);
 
+/** What a gateway home gets with the Luna switch off: nothing from ~/.claude. */
+const EMPTY_SETUP = Object.freeze({ globalMd: '', rules: [], personalSkills: [], plugins: [], mcpServers: {} });
+
 const prefsFile = () => paths.local('lunasync.local.json');
 
 /**
@@ -82,9 +85,22 @@ function saveLunaSyncPrefs(prefs, file = prefsFile()) {
  * @returns {null|ReturnType<typeof syncOverlay>} null = this tab runs without an overlay
  */
 function lunaLaunchFor({ profile, template, overlayBase, pickedSkillIds = [], readSetup = readClaudeSetup, sync = syncOverlay }) {
-  if (!profile || profile.lunaSync !== true) return null;
-  if (!template || template.wireVia !== 'native' || !SYNC_CLIS.has(template.command)) return null;
+  if (!profile || !template || template.wireVia !== 'native' || !SYNC_CLIS.has(template.command)) return null;
   const cli = template.command;
+  const lunaOn = profile.lunaSync === true;
+  // A gateway template (FreeLLMAPI Gemini) ALWAYS runs on its own home, pinned
+  // to API-key auth - the user's own ~/.gemini may be set to Google login,
+  // which wins over every env var. The Luna setup goes in only when switched on.
+  if (template.gatewayHome === true) {
+    return sync({
+      cli,
+      overlayRoot: path.join(overlayBase, `${cli}-${template.id}`),
+      setup: lunaOn ? readSetup() : EMPTY_SETUP,
+      pickedSkillIds: lunaOn ? pickedSkillIds : [],
+      geminiAuthType: cli === 'gemini' ? 'gemini-api-key' : undefined,
+    });
+  }
+  if (!lunaOn) return null;
   return sync({ cli, overlayRoot: path.join(overlayBase, cli), setup: readSetup(), pickedSkillIds });
 }
 

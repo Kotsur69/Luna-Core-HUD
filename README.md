@@ -61,7 +61,7 @@ injects prompts or touches the `claude` binary.
   Auto-proceed connection-drop recovery, a per-project To-Do pin-board and
   **God Mode**, which works through that list unattended — in v2 as parallel
   workers in git worktrees, each tab a separate package, finished as PRs.
-- **Providers** — launch profiles built from 13 provider templates in
+- **Providers** — launch profiles built from 16 provider templates in
   Settings → AI providers, an LM Studio model loader, and `claude-code-router`
   lifecycle management (see [AI providers](#ai-providers)).
 - **Look** — 28 contrast-tested themes plus four `glass` (window
@@ -725,7 +725,7 @@ the reasoning behind the contract are in
 | + | Ctrl+B recommended libraries & tools directory — filterable catalog, validated id→URL resolution (shipped in `f989b36`/`c72cfef`; this README caught up in v0.12.0) | ✅ done |
 | + | `/ask` — one-shot `claude -p` tool recommendation inside the Ctrl+B filter box (the one deliberate, user-triggered exception to the zero-token constraint) | ✅ done |
 | + | Highlight/clip extractor — batch tail-trim via system `ffmpeg`, reachable from its own chip or an `/ask` "Run it" suggestion | ✅ done |
-| + | AI providers — 13 provider templates (incl. native Codex/Gemini CLI + OpenRouter free), profile CRUD in Settings, LM Studio model loader via the SDK, full harness on local models, `claude-code-router` lifecycle (v0.13.0, see [AI providers](#ai-providers)) | ✅ done |
+| + | AI providers — 16 provider templates (incl. native Codex/Gemini CLI + OpenRouter free), profile CRUD in Settings, LM Studio model loader via the SDK, full harness on local models, `claude-code-router` lifecycle (v0.13.0, see [AI providers](#ai-providers)) | ✅ done |
 | + | God Mode overnight guard (sleep blocker + LM Studio watchdog), "Don't sleep" switch, longer To-Do items, scroll-aware To-Do drag-and-drop (v0.13.0) | ✅ done |
 | + | Provider-aware usage gauge (Claude, GLM, OpenAI, local) — adapters shipped; the gauge still follows the **first** profile, not the active tab | 🟡 partial |
 | + | Window transparency — the `glass` theme family (Win11 acrylic), tunable (v0.11.0) | ✅ done |
@@ -946,9 +946,9 @@ and the model behind it change.
 
 | Wire | Templates | How it connects |
 |---|---|---|
-| **Direct** | Claude Cloud, LM Studio, GLM, Kimi, Kimi Code, OpenRouter | The provider speaks the Anthropic API itself; the profile sets `ANTHROPIC_BASE_URL` and the key. |
+| **Direct** | Claude Cloud, LM Studio, GLM, Kimi, Kimi Code, OpenRouter, FreeLLMAPI (claude) | The provider speaks the Anthropic API itself; the profile sets `ANTHROPIC_BASE_URL` and the key. |
 | **Via CCR** | Ollama, Codex, Gemini, Grok, OpenAI-compatible | Routed through a local [`claude-code-router`](https://github.com/musistudio/claude-code-router) gateway that translates the API. |
-| **Native CLI** | Codex CLI, Gemini CLI | The tab runs the vendor's own agent CLI (`codex`, `gemini`) instead of `claude`. You sign in with your ChatGPT / Google account inside the tab, so no key is needed. |
+| **Native CLI** | Codex CLI, Gemini CLI, FreeLLMAPI (Codex / Gemini) | The tab runs the vendor's own agent CLI (`codex`, `gemini`) instead of `claude`. You sign in with your ChatGPT / Google account inside the tab, so no key is needed. |
 
 **Free tiers.** You don't need a paid account to try these:
 
@@ -962,6 +962,12 @@ and the model behind it change.
   `openrouter/free` (a router over OpenRouter's free models). About 50 requests
   a day, or 1,000 once the account has $10 of credit. This keeps the full
   `claude` harness, but tool use on free models is less reliable.
+
+- **FreeLLMAPI**: a local gateway ([desktop app](https://github.com/tashfeenahmed/freellmapi/releases/latest), `127.0.0.1:31415`) that
+  stacks the free tiers of ~30 providers behind one key. Add provider keys on its
+  **Keys** page, then paste the *Unified API key* into any of the three
+  FreeLLMAPI templates. The Gemini one runs on its own LunaCore-managed Gemini
+  home, so your `~/.gemini` login choice is never changed.
 
 The Native CLI tabs don't load your Claude harness: CLAUDE.md, hooks, skills
 and MCP servers are Claude-only. Context and usage metrics are Claude-only too.

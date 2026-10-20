@@ -468,3 +468,32 @@ test('buildProfileFromTemplate stores lunaSync only for a native template', () =
   const glm = getProviderTemplate(providers, 'glm');
   assert.equal(buildProfileFromTemplate(glm, { id: 'x', label: 'X', apiKey: 'k', lunaSync: true }).profile.lunaSync, undefined);
 });
+
+test('native templates may carry fixed shell-safe args; anything else is rejected', () => {
+  const base = { id: 'x', label: 'X', wireVia: 'native', command: 'codex' };
+  assert.deepEqual(normalizeProviderTemplate({ ...base, args: ['-c', 'model_provider=freellmapi', '-m', 'auto'] }).args, ['-c', 'model_provider=freellmapi', '-m', 'auto']);
+  for (const bad of [['a b'], ['$(evil)'], ['x;y'], ['"q"'], [42], 'notarray']) {
+    assert.equal(normalizeProviderTemplate({ ...base, args: bad }), null, JSON.stringify(bad));
+  }
+  assert.deepEqual(normalizeProviderTemplate({ id: 'y', label: 'Y', wireVia: 'direct', args: ['-m', 'x'] }).args, []);
+});
+
+test('the FreeLLMAPI templates point every CLI at the local gateway', () => {
+  const { providers } = loadProviders();
+  const claude = buildProfileFromTemplate(getProviderTemplate(providers, 'freellm-claude'), { id: 'a', label: 'A', apiKey: 'fk' }).profile;
+  assert.equal(claude.command, 'claude');
+  assert.equal(claude.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:31415');
+  assert.equal(claude.env.ANTHROPIC_AUTH_TOKEN, 'fk');
+  const codex = buildProfileFromTemplate(getProviderTemplate(providers, 'freellm-codex'), { id: 'b', label: 'B', apiKey: 'fk' }).profile;
+  assert.equal(codex.command, 'codex');
+  assert.ok(codex.args.includes('model_providers.freellmapi.base_url=http://127.0.0.1:31415/v1'));
+  assert.equal(codex.env.FREELLM_API_KEY, 'fk');
+  const geminiTpl = getProviderTemplate(providers, 'freellm-gemini');
+  assert.equal(geminiTpl.gatewayHome, true);
+  const gemini = buildProfileFromTemplate(geminiTpl, { id: 'c', label: 'C', apiKey: 'fk' }).profile;
+  assert.equal(gemini.env.GOOGLE_GEMINI_BASE_URL, 'http://127.0.0.1:31415');
+  assert.equal(gemini.env.GEMINI_API_KEY, 'fk');
+  for (const id of ['freellm-claude', 'freellm-codex', 'freellm-gemini']) {
+    assert.equal(buildProfileFromTemplate(getProviderTemplate(providers, id), { id: 'z', label: 'Z' }).reason, 'missing-api-key', id);
+  }
+});

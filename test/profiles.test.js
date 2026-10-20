@@ -330,3 +330,7 @@ test('normalizeProfile keeps lunaSync only as a real boolean true', () => {
   assert.equal(normalizeProfile({ id: 'a', label: 'A', lunaSync: 'yes' }).lunaSync, false);
   assert.equal(normalizeProfile({ id: 'a', label: 'A' }).lunaSync, false);
 });
+
+test('profileAuthKey also reads the FreeLLMAPI Codex key', () => {
+  assert.equal(profileAuthKey({ FREELLM_API_KEY: 'f' }), 'f');
+});

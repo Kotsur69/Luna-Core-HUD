@@ -1055,7 +1055,9 @@ function spawnInto(session, profile, launch = null) {
   // and says so in the terminal below.
   const lunaSync = lunaLaunchFor({
     profile,
-    template: profile.lunaSync ? getProviderTemplate(loadProviders().providers, profile.templateId) : null,
+    // Only template-built profiles can be native; a gateway home (FreeLLMAPI
+    // Gemini) needs its template even with the Luna switch off.
+    template: profile.templateId ? getProviderTemplate(loadProviders().providers, profile.templateId) : null,
     overlayBase: path.join(app.getPath('userData'), 'luna-overlay'),
     pickedSkillIds: loadLunaSyncPrefs().pickedSkills,
   });

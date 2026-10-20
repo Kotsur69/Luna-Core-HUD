@@ -348,7 +348,7 @@ function writeRules(overlayRoot, rules) {
 }
 
 /** Everything the sync will write, computed from the current overlay without touching it. */
-function planOverlay(cli, overlayRoot, setup) {
+function planOverlay(cli, overlayRoot, setup, geminiAuthType) {
   const layout = LAYOUT[cli];
   const configDir = path.join(overlayRoot, layout.configDir);
   const manifest = readOverlayJson(path.join(overlayRoot, MANIFEST)) || {};
@@ -366,7 +366,7 @@ function planOverlay(cli, overlayRoot, setup) {
   };
   if (cli === 'gemini') {
     const settingsFile = path.join(configDir, 'settings.json');
-    const settings = geminiSettings(readOverlayJson(settingsFile), setup.mcpServers);
+    const settings = geminiSettings(readOverlayJson(settingsFile), setup.mcpServers, { authType: geminiAuthType });
     return { ...plan, configFile: settingsFile, configText: `${JSON.stringify(settings, null, 2)}\n`, servers: Object.keys(setup.mcpServers), serverSkips: [] };
   }
   const configFile = path.join(configDir, 'config.toml');
@@ -387,14 +387,14 @@ function planOverlay(cli, overlayRoot, setup) {
  * @returns {{ok:true, env:Object, skills:string[], servers:string[], skipped:Array<{kind:string,name:string,reason:string}>}
  *   |{ok:false, reason:'unknown-cli'|'invalid-root'|'forbidden-root'|'overlay-unreadable'|'overlay-damaged'|'write-failed', detail?:string}}
  */
-function syncOverlay({ cli, overlayRoot, setup, pickedSkillIds = [], homeDir = os.homedir() }) {
+function syncOverlay({ cli, overlayRoot, setup, pickedSkillIds = [], homeDir = os.homedir(), geminiAuthType }) {
   if (!LAYOUT[cli]) return { ok: false, reason: 'unknown-cli' };
   if (typeof overlayRoot !== 'string' || !path.isAbsolute(overlayRoot)) return { ok: false, reason: 'invalid-root' };
   if (isForbiddenRoot(overlayRoot, homeDir)) return { ok: false, reason: 'forbidden-root' };
 
   let plan;
   try {
-    plan = planOverlay(cli, overlayRoot, setup);
+    plan = planOverlay(cli, overlayRoot, setup, geminiAuthType);
   } catch (err) {
     if (err instanceof OverlayRefusal) return { ok: false, reason: err.reason, detail: err.message };
     return { ok: false, reason: 'overlay-unreadable', detail: err && err.message };
@@ -403,8 +403,12 @@ function syncOverlay({ cli, overlayRoot, setup, pickedSkillIds = [], homeDir = o
   try {
     fs.mkdirSync(plan.configDir, { recursive: true });
     const { inlineRules, referencedRules } = writeRules(overlayRoot, setup.rules);
-    const body = buildInstructions({ globalMd: setup.globalMd, inlineRules, referencedRules });
-    writeAtomic(plan.instructionsFile, upsertManagedBlock(plan.instructionsBefore, body));
+    // A gateway home with the Luna switch off gets an empty setup: no persona
+    // block at all, rather than a "Luna setup" header with nothing under it.
+    if (setup.globalMd.trim() || setup.rules.length) {
+      const body = buildInstructions({ globalMd: setup.globalMd, inlineRules, referencedRules });
+      writeAtomic(plan.instructionsFile, upsertManagedBlock(plan.instructionsBefore, body));
+    }
 
     const skills = selectSkills(setup, pickedSkillIds);
     const manifestFile = path.join(overlayRoot, MANIFEST);

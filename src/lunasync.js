@@ -174,13 +174,20 @@ function toGeminiServer(server) {
  * on top of whatever Gemini itself stored there (auth choice, UI prefs).
  * @param {Object|null} existing parsed overlay settings.json
  * @param {Object<string,Object>} servers normalizeMcpServers() output
+ * @param {{authType?:string}} [opts] pins security.auth.selectedType - a
+ *   gateway home must use its API key; Gemini ignores GEMINI_DEFAULT_AUTH_TYPE
+ *   and even a system-level enforcedType once a home has a saved choice
+ *   (verified live, plan S1)
  * @returns {Object}
  */
-function geminiSettings(existing, servers) {
+function geminiSettings(existing, servers, { authType } = {}) {
   const base = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
   const context = base.context && typeof base.context === 'object' ? base.context : {};
+  const security = base.security && typeof base.security === 'object' ? base.security : {};
+  const auth = security.auth && typeof security.auth === 'object' ? security.auth : {};
   return {
     ...base,
+    ...(authType ? { security: { ...security, auth: { ...auth, selectedType: authType } } } : {}),
     context: { ...context, fileName: [...GEMINI_CONTEXT_FILES] },
     mcpServers: Object.fromEntries(Object.entries(servers).map(([n, s]) => [n, toGeminiServer(s)])),
   };

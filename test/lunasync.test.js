@@ -211,3 +211,11 @@ test('isSafeSkillName refuses anything that could escape the skills dir', () => 
     assert.equal(isSafeSkillName(bad), false, String(bad));
   }
 });
+
+test('geminiSettings pins the auth type when asked, otherwise leaves the stored choice', () => {
+  const pinned = geminiSettings({ security: { auth: { selectedType: 'oauth-personal' }, other: 1 } }, {}, { authType: 'gemini-api-key' });
+  assert.equal(pinned.security.auth.selectedType, 'gemini-api-key');
+  assert.equal(pinned.security.other, 1);
+  const kept = geminiSettings({ security: { auth: { selectedType: 'oauth-personal' } } }, {});
+  assert.equal(kept.security.auth.selectedType, 'oauth-personal');
+});

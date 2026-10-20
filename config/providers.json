@@ -98,6 +98,51 @@
       "docsUrl": "https://openrouter.ai/docs/guides/guides/claude-code-integration"
     },
     {
+      "id": "freellm-claude",
+      "label": { "pl": "FreeLLMAPI (claude, darmowe modele)", "en": "FreeLLMAPI (claude, free models)" },
+      "wireVia": "direct",
+      "requiresApiKey": true,
+      "defaultModel": "",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:31415",
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}"
+      },
+      "docsUrl": "https://github.com/tashfeenahmed/freellmapi"
+    },
+    {
+      "id": "freellm-codex",
+      "label": { "pl": "FreeLLMAPI (Codex CLI, darmowe modele)", "en": "FreeLLMAPI (Codex CLI, free models)" },
+      "wireVia": "native",
+      "command": "codex",
+      "args": [
+        "-c", "model_provider=freellmapi",
+        "-c", "model_providers.freellmapi.name=FreeLLMAPI",
+        "-c", "model_providers.freellmapi.base_url=http://127.0.0.1:31415/v1",
+        "-c", "model_providers.freellmapi.env_key=FREELLM_API_KEY",
+        "-c", "model_providers.freellmapi.wire_api=responses",
+        "-m", "auto"
+      ],
+      "requiresApiKey": true,
+      "envTemplate": {
+        "FREELLM_API_KEY": "{{apiKey}}"
+      },
+      "docsUrl": "https://github.com/tashfeenahmed/freellmapi"
+    },
+    {
+      "id": "freellm-gemini",
+      "label": { "pl": "FreeLLMAPI (Gemini CLI, darmowe modele)", "en": "FreeLLMAPI (Gemini CLI, free models)" },
+      "wireVia": "native",
+      "command": "gemini",
+      "gatewayHome": true,
+      "requiresApiKey": true,
+      "envTemplate": {
+        "GOOGLE_GEMINI_BASE_URL": "http://127.0.0.1:31415",
+        "GEMINI_API_KEY": "{{apiKey}}"
+      },
+      "docsUrl": "https://github.com/tashfeenahmed/freellmapi"
+    },
+    {
       "id": "codex-cli",
       "label": { "pl": "Codex CLI (konto ChatGPT)", "en": "Codex CLI (ChatGPT account)" },
       "wireVia": "native",

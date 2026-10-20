@@ -287,3 +287,14 @@ test('syncOverlay follows a linked skill folder but never a link inside it', (t)
   assert.ok(fs.existsSync(path.join(overlayRoot, 'skills', 'linked', 'SKILL.md')), 'linked skill folder copied');
   assert.ok(!fs.existsSync(path.join(overlayRoot, 'skills', 'linked', 'leak')), 'inner link not followed');
 });
+
+test('syncOverlay with an empty setup writes no Luna instructions but still pins Gemini auth', () => {
+  const fx = makeFixture();
+  const overlayRoot = path.join(fx.root, 'overlay-gateway');
+  const empty = { globalMd: '', rules: [], personalSkills: [], plugins: [], mcpServers: {} };
+  const result = syncOverlay({ cli: 'gemini', overlayRoot, setup: empty, geminiAuthType: 'gemini-api-key' });
+  assert.equal(result.ok, true);
+  assert.ok(!fs.existsSync(path.join(overlayRoot, '.gemini', 'GEMINI.md')), 'no Luna block without a setup');
+  const settings = JSON.parse(fs.readFileSync(path.join(overlayRoot, '.gemini', 'settings.json'), 'utf8'));
+  assert.equal(settings.security.auth.selectedType, 'gemini-api-key');
+});

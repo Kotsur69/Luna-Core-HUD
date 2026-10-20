@@ -39,6 +39,10 @@ const WIRE_VIA_VALUES = new Set(['direct', 'ccr', 'native']);
 /** A native template's command: one bare executable name, never a path or shell syntax. */
 const NATIVE_COMMAND_RE = /^[a-z][a-z0-9-]*$/;
 
+/** A native template's fixed args are typed into the tab's shell: no spaces, quotes, $, ;, |, &, (). */
+const NATIVE_ARG_RE = /^[A-Za-z0-9._:/=@-]+$/;
+const MAX_NATIVE_ARGS = 24;
+
 /** Env var name prefixes a provider template must never be allowed to set. */
 const ENV_KEY_DENY_RE = /^(PATH|Path|NODE_|ELECTRON_|LD_|DYLD_|PYTHON|npm_)/;
 
@@ -62,6 +66,12 @@ function normalizeProviderTemplate(p) {
   if (!WIRE_VIA_VALUES.has(p.wireVia)) return null;
   const isNative = p.wireVia === 'native';
   if (isNative && !(typeof p.command === 'string' && NATIVE_COMMAND_RE.test(p.command))) return null;
+  let args = [];
+  if (isNative && p.args !== undefined) {
+    const valid = Array.isArray(p.args) && p.args.length <= MAX_NATIVE_ARGS && p.args.every((a) => typeof a === 'string' && NATIVE_ARG_RE.test(a));
+    if (!valid) return null;
+    args = [...p.args];
+  }
 
   const rawEnvTemplate =
     p.envTemplate && typeof p.envTemplate === 'object' && !Array.isArray(p.envTemplate)
@@ -81,6 +91,9 @@ function normalizeProviderTemplate(p) {
     // Shows the key field without requiring it (a paid key later, account login now).
     optionalApiKey: p.optionalApiKey === true,
     command: isNative ? p.command : '',
+    args,
+    // The tab always runs on a LunaCore-owned CLI home (src/lunasynclaunch.js).
+    gatewayHome: isNative && p.gatewayHome === true,
     requiresBaseUrl: p.requiresBaseUrl === true,
     // autoModel injects ANTHROPIC_MODEL - meaningless for a non-claude CLI.
     autoModel: !isNative && p.autoModel === true,
@@ -203,7 +216,7 @@ function buildProfileFromTemplate(template, entry) {
       id: e.id,
       label: normalizeText(e.label),
       command: template.command || 'claude',
-      args: [],
+      args: [...(template.args || [])],
       env,
       autoModel: template.autoModel,
       templateId: template.id,

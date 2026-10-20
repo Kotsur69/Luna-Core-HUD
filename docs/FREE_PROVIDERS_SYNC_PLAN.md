@@ -97,7 +97,24 @@ Design consequence: a "Luna" Codex/Gemini tab is a **separate CLI profile**
 (own login, own history) living in LunaCore's userData. With sync off,
 nothing changes and the user's normal login is used.
 
-### S1 — FreeLLMAPI connection + templates
+#### S1 status (2026-10-20): built, verified live
+
+Desktop app on `127.0.0.1:31415`, Google AI Studio + Groq keys, 278 models
+(`auto` router; `claude-*-4-5` names accepted). All three CLIs answered through
+it. Templates `freellm-claude` / `freellm-codex` / `freellm-gemini`:
+- Codex ignores `OPENAI_BASE_URL` (went to api.openai.com, no key sent) - the
+  template carries fixed, shell-safe `-c model_providers.freellmapi.*` args
+  (validated in providers.js) + `FREELLM_API_KEY`; ran verbatim in PowerShell.
+- Gemini: a saved Google-login choice in a home beats `GEMINI_DEFAULT_AUTH_TYPE`
+  and a system-settings `enforcedType` - so `freellm-gemini` has
+  `gatewayHome: true` and always runs on its own LunaCore home pinned to
+  `gemini-api-key` (`luna-overlay/gemini-freellm-gemini`); Luna setup only if
+  switched on.
+- Port is fixed at 31415 (desktop default). A Docker install (3001) needs a
+  configurable port - not done.
+- Not built: detect-only status row in Settings.
+
+### S1 — FreeLLMAPI connection + templates (original plan)
 
 - `src/freellmapi.js`: detect-only (probe `127.0.0.1:<port>/v1/models`,
   default 3001), "open dashboard" action. LunaCore never stores upstream

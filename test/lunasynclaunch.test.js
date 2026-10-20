@@ -99,3 +99,17 @@ test('lunaSyncNotice names the MCP servers that may run in the tab', () => {
   assert.match(line, /\(shadcn\)/);
   assert.doesNotMatch(line, /\x1b\[31m/, 'no escape sequence from a server name');
 });
+
+test('a gateway-home template always gets its own home, with the Luna setup only when switched on', () => {
+  const calls = [];
+  const sync = (args) => (calls.push(args), { ok: true, env: { GEMINI_CLI_HOME: args.overlayRoot } });
+  const base = path.join(os.tmpdir(), 'luna-overlay');
+  const template = { id: 'freellm-gemini', wireVia: 'native', command: 'gemini', gatewayHome: true };
+  const off = lunaLaunchFor({ profile: { lunaSync: false }, template, overlayBase: base, readSetup: () => ({ full: 1 }), sync });
+  assert.deepEqual(off.env, { GEMINI_CLI_HOME: path.join(base, 'gemini-freellm-gemini') });
+  assert.deepEqual(calls[0].setup, { globalMd: '', rules: [], personalSkills: [], plugins: [], mcpServers: {} });
+  assert.equal(calls[0].geminiAuthType, 'gemini-api-key');
+  lunaLaunchFor({ profile: { lunaSync: true }, template, overlayBase: base, readSetup: () => ({ full: 1 }), sync });
+  assert.deepEqual(calls[1].setup, { full: 1 });
+  assert.equal(calls[1].overlayRoot, path.join(base, 'gemini-freellm-gemini'));
+});
