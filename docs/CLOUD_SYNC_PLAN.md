@@ -2,7 +2,8 @@
 
 Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14. Released in v0.15.0 (2026-10-15).
 Phases 2a–2c shipped 2026-10-15 (v0.15.0 → v0.16.1) and proven live on two PCs.
-Phase 3 (folder transport removed) released in v0.16.2 (2026-10-19). Phone phases 4a–4d built 2026-10-19; phase 5 (Google calendar + mail on the phone) proven live 2026-10-20; phone live at https://luna-core-hud.vercel.app**
+Phase 3 (folder transport removed) released in v0.16.2 (2026-10-19). Phone phases 4a–4d built 2026-10-19; phase 5 (Google calendar + mail on the phone) proven live 2026-10-20; phone live at https://luna-core-hud.vercel.app.
+Mati's live checks of 4b–4d passed 2026-10-20 ("seems like everything works"): the plan is complete; only the small open items below remain.**
 (KT-PC-LLM + laptop KT-NO-MMAZUR), against Supabase
 project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
 `https://phkigyuhvbanadwmxqqs.supabase.co`) — schema in
@@ -723,14 +724,13 @@ Lessons from the first live run (2026-10-20):
   expressions` warning comes from the work network's Zscaler proxy, not
   from Vercel (it serves exactly `frame-ancestors 'none'` + `X-Frame-Options: DENY`).
 
-What's left on the whole plan:
-1. Delete `config/google-server.local.json` if it's still on the PC (the
-   secrets live in Supabase now; the file is gitignored, but it holds the
-   refresh token in clear).
-2. The iPhone: Safari → `https://luna-core-hud.vercel.app` → Share → Add to
-   Home Screen → open from the icon and log in there; then the open live
-   checks of 4b/4c/4d (below).
-3. If calendar/mail ever say "Google disconnected the server"
+Finished 2026-10-20: `config/google-server.local.json` deleted on
+KT-PC-LLM (secrets live only in Supabase); Mati tested the phone and the
+4b/4c/4d checks below ("seems like everything works"). Still open: release
+the YAZIO auto-refresh (1373fec) with the next batch, and the small items
+in point 4 below.
+
+If calendar/mail ever say "Google disconnected the server"
    (`google-auth`): the refresh token was revoked; run the token script
    again and replace `GOOGLE_REFRESH_TOKEN`.
 
