@@ -20,6 +20,7 @@
 'use strict';
 
 const { execFile } = require('child_process');
+const { isUsageLimitText } = require('./orchestraPlanWait');
 
 const PLANNER_MODEL = 'opus';
 const PLANNER_BUDGET_USD = 3;
@@ -171,8 +172,13 @@ function parsePlannerOutput(stdout) {
   if (!env || typeof env !== 'object') return { ok: false, error: 'badJson' };
   const costUsd = Number.isFinite(env.total_cost_usd) ? env.total_cost_usd : null;
   if (env.is_error) {
-    const budget = /budget/i.test(String(env.subtype || '')) || /budget/i.test(String(env.result || ''));
-    return { ok: false, error: budget ? 'budget' : 'failed', detail: clean(String(env.result || env.subtype || ''), 300) };
+    const text = String(env.result || '');
+    // An account usage limit (5 h / weekly) is not the planner's dollar cap:
+    // orchestraPlanWait.js turns it into a wait for the reset.
+    const limit = isUsageLimitText(text);
+    const budget = /budget/i.test(String(env.subtype || '')) || /budget/i.test(text);
+    const error = limit ? 'limit' : budget ? 'budget' : 'failed';
+    return { ok: false, error, detail: clean(String(env.result || env.subtype || ''), 300) };
   }
   if (env.structured_output && typeof env.structured_output === 'object') {
     return { ok: true, raw: env.structured_output, costUsd };
@@ -379,7 +385,10 @@ function runPlanner({ cwd, env, openTodos, execImpl = execFile, timeoutMs = PLAN
         if (error && error.killed) return resolve({ ok: false, error: 'timeout' });
         // A non-zero exit still prints the JSON envelope (is_error: true),
         // which says more than the exit code - parse it when it is there.
-        if (error && !stdout) return resolve({ ok: false, error: 'failed', detail: clean(error.message, 300) });
+        if (error && !stdout) {
+          const detail = clean(error.message, 300);
+          return resolve({ ok: false, error: isUsageLimitText(detail) ? 'limit' : 'failed', detail });
+        }
         const parsed = parsePlannerOutput(stdout);
         resolve(parsed.ok ? { ...parsed, durationMs: Date.now() - started } : parsed);
       },

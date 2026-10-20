@@ -978,6 +978,9 @@ const orchestra = createOrchestra({
     if (!orchestraStore.saveRun(data)) console.error('[orchestra] could not save config/orchestra.local.json');
   },
   onChange: (view) => send('orchestra:changed', view),
+  // Planning that hit the Claude limit waits for the reset (orchestraPlanWait.js).
+  usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
+  onPlanWait: (state) => send('orchestra:planWait', state),
   onRunEvent: (kind) => {
     if (readUiPrefs().voiceEnabled === false) return;
     if (kind === 'done') playCue('voice.done');
@@ -2787,6 +2790,10 @@ function registerIpc() {
   });
 
   ipcMain.handle('orchestra:get', () => orchestra.view());
+  // A planning wait for the usage-limit reset: replay its state, or cancel it.
+  // No payload crosses either way.
+  ipcMain.handle('orchestra:planWait', () => orchestra.planWait());
+  ipcMain.handle('orchestra:cancelPlanWait', () => orchestra.cancelPlanWait());
 
   // Approve / Launch. orchestra.launch() validates the payload: only a known
   // plan id, ids of its own packages and capped prompt strings get through.

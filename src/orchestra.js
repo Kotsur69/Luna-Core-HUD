@@ -36,6 +36,7 @@ const path = require('path');
 const { validatePlan, estimatePlan, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
 const sup = require('./orchestraSupervisor');
 const { createFinalizer } = require('./orchestraFinalize');
+const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
@@ -135,6 +136,15 @@ function createOrchestra(deps) {
   const nudgeTimers = new Map();
   let resumeTimer = null;
   let scheduleTimer = null;
+  // Planning that hit the 5 h / weekly limit waits for the reset and then
+  // plans on its own (orchestraPlanWait.js).
+  const planWaiter = createPlanWaiter({
+    setTimer,
+    clearTimer,
+    now,
+    onChange: deps.onPlanWait || noop,
+    replan: (ctx) => makePlan(ctx),
+  });
 
   const finalizer = createFinalizer({
     getPlan: () => plan,
@@ -278,6 +288,9 @@ function createOrchestra(deps) {
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
     const openTodos = deps.readTodos(ctx.projectId).filter((t) => !t.done);
     if (!openTodos.length) return { ok: false, error: 'noTodos' };
+    // A manual (re-)plan replaces a pending wait; the waiter's own replan
+    // is in state 'planning' and keeps it.
+    if (planWaiter.isWaiting()) planWaiter.clear();
 
     busy = true;
     try {
@@ -286,7 +299,13 @@ function createOrchestra(deps) {
         deps.dirtyCount(ctx.repoPath),
         deps.baseBranchOf ? deps.baseBranchOf(ctx.repoPath) : null,
       ]);
-      if (!res.ok) return res;
+      if (!res.ok) {
+        const limits = deps.usageLimits ? deps.usageLimits() : [];
+        const decision = planWaitDecision({ res, limits, now: now() });
+        if (decision.action !== 'wait') return res;
+        planWaiter.arm(ctx, decision);
+        return { ok: false, error: 'waiting', planWait: planWaiter.view() };
+      }
       const checked = validatePlan(res.raw, openTodos);
       clearAllTimers();
       plan = {
@@ -886,6 +905,8 @@ function createOrchestra(deps) {
     onSessionClosed,
     unschedule,
     finishRun,
+    planWait: () => planWaiter.view(),
+    cancelPlanWait: () => planWaiter.cancel(),
     isBusy,
     isRunning: () => !!plan && plan.started && !plan.killed && plan.packages.some(sup.isActive),
   };
