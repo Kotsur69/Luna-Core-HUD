@@ -45,6 +45,31 @@ function cycleSessionId(ids, currentId, delta) {
 }
 
 /**
+ * Drag-to-reorder in the tab bar: `id` moved so it sits at `toIndex` in the
+ * FINAL order. An out-of-range index clamps to the nearest end.
+ *
+ * Lives next to cycleSessionId because both define "bar order": Alt+Left /
+ * Alt+Right walk exactly the order this produces.
+ *
+ * @param {string[]} ids tab ids in bar order
+ * @param {string} id the dragged tab
+ * @param {number} toIndex its index after the move
+ * @returns {string[]|null} a new list, or null when nothing changes or the
+ *   input is invalid
+ */
+function moveSessionId(ids, id, toIndex) {
+  if (!Array.isArray(ids) || !Number.isInteger(toIndex)) return null;
+  const from = ids.indexOf(id);
+  if (from === -1) return null;
+
+  const to = Math.max(0, Math.min(ids.length - 1, toIndex));
+  if (to === from) return null;
+
+  const rest = ids.filter((x) => x !== id);
+  return [...rest.slice(0, to), id, ...rest.slice(to)];
+}
+
+/**
  * Electron's KeyboardEvent.code for a top-row digit -> the digit itself.
  * NumpadN is deliberately not accepted: with NumLock off it reports as
  * ArrowLeft/ArrowRight/etc., which the tab chords above already claim.
@@ -99,6 +124,7 @@ function findSessionIdForProject(entries, projectId) {
 module.exports = {
   PROJECT_DIGIT_MAX,
   cycleSessionId,
+  moveSessionId,
   parseDigitCode,
   projectIdForDigit,
   findSessionIdForProject,

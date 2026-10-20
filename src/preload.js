@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   closeSession: (sessionId) => ipcRenderer.send('sessions:close', sessionId),
   /** Shows the chosen tab. The other tabs' processes keep running in the background. */
   activateSession: (sessionId) => ipcRenderer.send('sessions:activate', sessionId),
+  /** Drag-to-reorder: moves a tab so it sits at `toIndex` in the final bar order. */
+  reorderSession: (sessionId, toIndex) => ipcRenderer.send('sessions:reorder', sessionId, toIndex),
   /** Restores + focuses the HUD window (a minimized/background window ignores a plain focus). */
   focusWindow: () => ipcRenderer.send('window:focus'),
   /** Flashes the taskbar button until the window is focused (busy -> idle cue, opt-in). No-op if already focused. */

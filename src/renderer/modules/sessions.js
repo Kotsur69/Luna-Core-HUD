@@ -221,16 +221,119 @@ function showSession(sessionId) {
 // should not wipe, the same rule context.js's lastCtxLevel follows.
 let paintedActiveId = null;
 
+// ---- drag-to-reorder ----------------------------------------------------------
+// The tab being dragged, or null. While it is set renderTabs() holds off:
+// a context tick repaints the whole bar, and destroying the drag source
+// mid-drag makes Chromium drop the gesture (no dragend, stuck indicator).
+let draggedId = null;
+let repaintAfterDrag = false;
+
+function clearDropMarks() {
+  for (const el of tabEls.list.querySelectorAll('.is-drop-before, .is-drop-after')) {
+    el.classList.remove('is-drop-before', 'is-drop-after');
+  }
+}
+
+/** Left half of a tab -> drop before it, right half -> after it. */
+function dropsAfter(tab, clientX) {
+  const r = tab.getBoundingClientRect();
+  return clientX > r.left + r.width / 2;
+}
+
+/** Final index of the dragged tab when dropped beside `targetId`. */
+function dropIndex(targetId, after) {
+  const ids = sessionList.map((m) => m.id);
+  const from = ids.indexOf(draggedId);
+  const slot = ids.indexOf(targetId) + (after ? 1 : 0);
+  return slot > from ? slot - 1 : slot;
+}
+
+function wireTabDrag(tab, id) {
+  tab.draggable = true;
+  tab.addEventListener('dragstart', (e) => {
+    draggedId = id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+    tab.classList.add('is-dragging');
+  });
+  tab.addEventListener('dragover', (e) => {
+    if (!draggedId || draggedId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const after = dropsAfter(tab, e.clientX);
+    clearDropMarks();
+    tab.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+  });
+  tab.addEventListener('drop', (e) => {
+    if (!draggedId || draggedId === id) return;
+    e.preventDefault();
+    window.lunacore.reorderSession(draggedId, dropIndex(id, dropsAfter(tab, e.clientX)));
+  });
+  tab.addEventListener('dragend', () => {
+    draggedId = null;
+    tab.classList.remove('is-dragging');
+    clearDropMarks();
+    if (repaintAfterDrag) {
+      repaintAfterDrag = false;
+      renderTabs();
+    }
+  });
+}
+
+// ---- tab slide (FLIP) -----------------------------------------------------------
+// renderTabs() rebuilds the bar from scratch, so a reorder or a close would
+// make the tabs jump. Instead: remember where each tab was (First), paint the
+// new bar (Last), Invert each moved tab back to its old x, and Play it home.
+
+/** sessionId -> left edge, read just before the bar is rebuilt. */
+function snapshotTabX() {
+  const xs = new Map();
+  for (const el of tabEls.list.children) {
+    if (el.dataset.sessionId) xs.set(el.dataset.sessionId, el.getBoundingClientRect().left);
+  }
+  return xs;
+}
+
+/** Slide duration in ms. Read off --dur-fast, which the reduced/off motion
+ *  tiers already pin to 0, so those tiers get the old instant jump for free. */
+function slideMs() {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--dur-fast');
+  const ms = parseFloat(raw);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function slideTabsFrom(oldX) {
+  const ms = slideMs();
+  if (ms <= 0 || oldX.size === 0) return;
+  const easing = getComputedStyle(document.documentElement).getPropertyValue('--ease-smooth').trim() || 'ease-out';
+  for (const el of tabEls.list.children) {
+    const before = oldX.get(el.dataset.sessionId);
+    if (before === undefined) continue; // a brand-new tab just appears
+    const dx = before - el.getBoundingClientRect().left;
+    if (Math.abs(dx) < 1) continue;
+    el.animate([{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' }], {
+      duration: ms,
+      easing,
+    });
+  }
+}
+
 function renderTabs() {
   if (!tabEls) return;
+  if (draggedId) {
+    repaintAfterDrag = true;
+    return;
+  }
   const activeId = getActiveSessionId();
   const switched = paintedActiveId !== null && activeId !== paintedActiveId;
   paintedActiveId = activeId;
+  const oldX = snapshotTabX();
   tabEls.list.innerHTML = '';
   for (const meta of sessionList) {
     const s = getBucket(meta.id);
     const isActive = meta.id === activeId;
     const tab = document.createElement('div');
+    tab.dataset.sessionId = meta.id;
     tab.className = 'tab' + (isActive ? ' is-active' : '');
     if (isActive && switched) tab.classList.add('tab--enter');
     if (s && !s.alive) tab.classList.add('is-dead');
@@ -273,8 +376,10 @@ function renderTabs() {
     });
     tab.appendChild(close);
 
+    wireTabDrag(tab, meta.id);
     tabEls.list.appendChild(tab);
   }
+  slideTabsFrom(oldX);
 }
 
 // The session list from the main process - the source of truth for what lives.

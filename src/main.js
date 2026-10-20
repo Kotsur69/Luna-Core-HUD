@@ -74,6 +74,7 @@ const { withSessionId, withIntakeMcp, intakeState, withTaskBrief, findExecutable
 const { loadProjects, getProject, addProject, removeProject } = require('./projects');
 const {
   cycleSessionId,
+  moveSessionId,
   parseDigitCode,
   projectIdForDigit,
   findSessionIdForProject,
@@ -2014,6 +2015,18 @@ function registerIpc() {
   ipcMain.on('sessions:activate', (_event, sessionId) => {
     if (typeof sessionId !== 'string' || !sessions.has(sessionId)) return;
     activeSessionId = sessionId;
+    broadcastSessions();
+  });
+
+  // Drag-to-reorder in the tab bar. The Map's insertion order IS the bar order
+  // (renderTabs, Alt+Left/Right), so the Map is rebuilt in the new order.
+  ipcMain.on('sessions:reorder', (_event, sessionId, toIndex) => {
+    if (typeof sessionId !== 'string' || !sessions.has(sessionId)) return;
+    const order = moveSessionId([...sessions.keys()], sessionId, toIndex);
+    if (!order) return;
+    const entries = order.map((id) => [id, sessions.get(id)]);
+    sessions.clear();
+    for (const [id, s] of entries) sessions.set(id, s);
     broadcastSessions();
   });
 

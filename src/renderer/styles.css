@@ -1199,6 +1199,13 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .tab.is-active { background: var(--bg); /* deliberately opaque - see TRANSPARENCY_PLAN.md */ color: var(--neon-cyan); border-color: var(--neon-cyan); position: relative; }
 .tab.is-dead .tab__label { text-decoration: line-through; opacity: 0.6; }
 
+/* Drag-to-reorder (sessions.js): the dragged tab dims, and an inset accent on
+   the target's left or right edge marks where it will land. Inset box-shadow
+   rather than a pseudo-element - ::after already belongs to the active accent. */
+.tab.is-dragging { opacity: 0.4; }
+.tab.is-drop-before { box-shadow: inset 2px 0 0 var(--neon-cyan); }
+.tab.is-drop-after { box-shadow: inset -2px 0 0 var(--neon-cyan); }
+
 /* A 2px accent pinned under the active tab. The tab strip's baseline is a plain
    --edge line (.tabs); this is the slice of it the active session owns, and it
    stays put through the many repaints a context tick triggers. On a REAL switch

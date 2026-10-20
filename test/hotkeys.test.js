@@ -18,6 +18,7 @@ const {
   parseDigitCode,
   projectIdForDigit,
   findSessionIdForProject,
+  moveSessionId,
 } = require('../src/hotkeys');
 
 // ---- cycleSessionId ---------------------------------------------------------
@@ -151,4 +152,39 @@ test('findSessionIdForProject tolerates a missing list or a blank id', () => {
   assert.equal(findSessionIdForProject(TABS, ''), null);
   assert.equal(findSessionIdForProject(TABS, undefined), null);
   assert.equal(findSessionIdForProject([{ projectId: 'home' }], 'home'), null);
+});
+
+// ---- moveSessionId ----------------------------------------------------------
+// Drag-to-reorder in the tab bar. `toIndex` is where the tab ends up in the
+// FINAL order, so the renderer never has to reason about the gap it leaves.
+
+test('moveSessionId moves a tab to the right', () => {
+  assert.deepEqual(moveSessionId(['s1', 's2', 's3'], 's1', 2), ['s2', 's3', 's1']);
+});
+
+test('moveSessionId moves a tab to the left', () => {
+  assert.deepEqual(moveSessionId(['s1', 's2', 's3'], 's3', 0), ['s3', 's1', 's2']);
+});
+
+test('moveSessionId clamps an out-of-range index to the ends', () => {
+  assert.deepEqual(moveSessionId(['s1', 's2', 's3'], 's2', 99), ['s1', 's3', 's2']);
+  assert.deepEqual(moveSessionId(['s1', 's2', 's3'], 's2', -5), ['s2', 's1', 's3']);
+});
+
+test('moveSessionId returns null when the tab is dropped where it already is', () => {
+  // main.js reads null as "skip the broadcast".
+  assert.equal(moveSessionId(['s1', 's2', 's3'], 's2', 1), null);
+});
+
+test('moveSessionId does not mutate the input list', () => {
+  const ids = ['s1', 's2', 's3'];
+  moveSessionId(ids, 's1', 2);
+  assert.deepEqual(ids, ['s1', 's2', 's3']);
+});
+
+test('moveSessionId rejects unknown ids and bad input', () => {
+  assert.equal(moveSessionId(['s1', 's2'], 'nope', 0), null);
+  assert.equal(moveSessionId(['s1', 's2'], 's1', 1.5), null);
+  assert.equal(moveSessionId(['s1', 's2'], 's1', '1'), null);
+  assert.equal(moveSessionId(null, 's1', 0), null);
 });
