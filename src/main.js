@@ -13,6 +13,12 @@
 // ============================================================================
 
 const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker, Notification } = require('electron');
+
+// Host mode (docs/REMOTE_HOST_PLAN.md, "Host runtime"): `--host` runs the
+// headless src/hostmain.js instead of the HUD, before any HUD module loads.
+// A CommonJS module may return at the top level: nothing below runs then.
+// eslint-disable-next-line no-use-before-define
+if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud }) }) !== 'hud') return;
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
