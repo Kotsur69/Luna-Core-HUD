@@ -12,7 +12,13 @@ import { t, tf, locale } from '../i18n.js';
 import { weekWindow, readEvents, readMail, groupByDay, draftFrom, dayKey } from '../agenda.js';
 
 const QUIET = new Set(['not-configured', 'offline', 'logged-out']);
-const REASON_TEXT = { 'not-configured': 'googleNotConfigured', 'google-auth': 'googleAuth', 'google-scope': 'googleAuth', offline: 'googleOffline' };
+const REASON_TEXT = {
+  'not-configured': 'googleNotConfigured',
+  'google-auth': 'googleAuth',
+  'google-scope': 'googleAuth',
+  offline: 'googleOffline',
+  unreachable: 'googleUnreachable',
+};
 
 const clock = (ms) => new Date(ms).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
 // The reason comes from a reply body: own keys only, never an inherited `constructor`.

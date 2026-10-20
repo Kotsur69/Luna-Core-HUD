@@ -285,7 +285,10 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
     const { data, error } = await client.functions.invoke('google', { body });
     if (gen !== generation) throw new Error('logged-out');
     if (error) {
-      let reason = error.name === 'FunctionsFetchError' ? 'offline' : 'google-failed';
+      // A fetch error while online is the browser refusing the reply: this page's
+      // origin is missing from the function's ALLOWED_ORIGINS (or the function is down).
+      const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+      let reason = error.name === 'FunctionsFetchError' ? (online ? 'unreachable' : 'offline') : 'google-failed';
       // Not deployed yet: the gateway's own 404 has no `error` field.
       if (error.context && error.context.status === 404) reason = 'not-configured';
       try {

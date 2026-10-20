@@ -141,6 +141,7 @@ const STRINGS = {
     googleNotConfigured: 'Kalendarz i poczta czekają na konfigurację funkcji Google w Supabase.',
     googleAuth: 'Google odłączył serwer. Uruchom skrypt tokenu jeszcze raz.',
     googleOffline: 'Brak sieci.',
+    googleUnreachable: 'Funkcja Google nie odpowiada tej stronie. Czy jej adres jest w ALLOWED_ORIGINS w Supabase?',
     googleFailed: 'Nie udało się pobrać danych z Google.',
   },
   en: {
@@ -283,6 +284,7 @@ const STRINGS = {
     googleNotConfigured: 'Calendar and mail are waiting for the Google function to be set up in Supabase.',
     googleAuth: 'Google disconnected the server. Run the token script again.',
     googleOffline: 'No network.',
+    googleUnreachable: 'The Google function refuses this page. Is its address in ALLOWED_ORIGINS in Supabase?',
     googleFailed: 'Could not fetch from Google.',
   },
 };

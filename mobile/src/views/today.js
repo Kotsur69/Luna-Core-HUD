@@ -84,7 +84,9 @@ export function mountToday(main, { cloud, toast }) {
 
   function header(place) {
     const change = place && !editing ? h('button', { class: 'btn btn-sm btn-ghost', onclick: () => ((editing = true), weather()) }, t('weatherChange')) : null;
-    head.replaceChildren(h('h2', { class: 'section-title grow', id: 'today-weather' }, place ? `${t('weather')} · ${place.name}` : t('weather')), change);
+    // replaceChildren() would print a null as the text "null".
+    const title = h('h2', { class: 'section-title grow', id: 'today-weather' }, place ? `${t('weather')} · ${place.name}` : t('weather'));
+    head.replaceChildren(...[title, change].filter(Boolean));
   }
 
   function refresh() {
