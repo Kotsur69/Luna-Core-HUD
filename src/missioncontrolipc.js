@@ -565,6 +565,10 @@ function registerMissionIpc({
       }
     })
   );
+
+  // The same ledger and GitHub reader for the Life dashboard's score
+  // (src/lifeipc.js), so transcripts and commits are scanned by one cache.
+  return { ledger: { report: (req) => getLedger().report(req) }, github };
 }
 
 module.exports = { registerMissionIpc, localIsoNow };

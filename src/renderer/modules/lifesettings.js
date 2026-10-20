@@ -17,6 +17,7 @@ import {
   getState, act as uiAct, setStatus,
 } from './lifeui.js';
 import { cloudCard } from './lifecloud.js';
+import { scoreSettingsCard } from './lifescoreview.js';
 
 let editingBillId = null;
 let editingGoalId = null;
@@ -308,7 +309,7 @@ export function renderSettings(root, state) {
   if (editingGoalId && !budget.goals.some((g) => g.id === editingGoalId)) editingGoalId = null;
   const grid = el('div', 'life-grid life-grid--2');
   const left = el('div', 'life-stack');
-  left.append(incomeCard(budget), categoriesCard(budget));
+  left.append(scoreSettingsCard(), incomeCard(budget), categoriesCard(budget));
   const right = el('div', 'life-stack');
   right.append(billsCard(budget, rerender), goalsCard(budget, rerender), cloudCard());
   grid.append(left, right);

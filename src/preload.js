@@ -315,6 +315,24 @@ contextBridge.exposeInMainWorld('lunacore', {
   mailSet: (patch) => ipcRenderer.invoke('mail:set', patch),
   /** Sends the nightly summary now, marked [test]. Promise<{ok} | {ok:false, reason}>. */
   mailTest: () => ipcRenderer.invoke('mail:test'),
+  // Daily side: check-in, habits, weekly goals, productivity score. Local
+  // files only; every payload is re-validated by main's stores.
+  /** Promise<{ok, today, entry, days}>. entry null = not asked today. */
+  lifeCheckin: () => ipcRenderer.invoke('life:checkin'),
+  /** One day's check-in; sleep and energy both null = skipped today. */
+  lifeCheckinSet: (date, sleep, energy) => ipcRenderer.invoke('life:checkin-set', { date, sleep, energy }),
+  /** Promise<{ok, today, steps, habits}>. */
+  lifeHabits: () => ipcRenderer.invoke('life:habits'),
+  /** add / edit / remove / restore / tick. Same answer as lifeHabits. */
+  lifeHabitsDo: (op, data) => ipcRenderer.invoke('life:habits-do', { op, data }),
+  /** Promise<{ok, week, goals, lastWeek, last, isMonday}>. */
+  lifeGoals: () => ipcRenderer.invoke('life:goals'),
+  /** set / status. Same answer as lifeGoals. */
+  lifeGoalsSet: (op, data) => ipcRenderer.invoke('life:goals-set', { op, data }),
+  /** Promise<{ok, score, now, prefs}>. Computed locally, no model call. */
+  lifeScore: () => ipcRenderer.invoke('life:score'),
+  /** Promise<{ok, prefs} | {ok:false, reason}>. Weights are normalised to 100 in main. */
+  lifeScorePrefs: (weights, focusTargetH) => ipcRenderer.invoke('life:score-prefs', { weights, focusTargetH }),
   // --- Cloud sync (src/cloudipc.js) ---
   // No payloads. Main answers from a whitelist: who is logged in and the sync
   // state - never a token. Login opens GitHub in the system browser.

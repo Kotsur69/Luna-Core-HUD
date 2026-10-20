@@ -167,6 +167,52 @@ test('a failing commit reader leaves focus with the Claude replies only', async 
   assert.equal(r.focus.projects[0].totalMs, 5 * MIN);
 });
 
+test('report.commitDays counts my commits per local day with feat/fix (last 14 days)', async () => {
+  const { deps } = fakes();
+  const today = new Date(NOW);
+  const at = (daysBack, h) => new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysBack, h).getTime();
+  deps.commits = {
+    events: async () => [],
+    shipped: async () => [
+      { ms: at(0, 9), key: 'local:a', kind: 'feat' },
+      { ms: at(0, 10), key: 'local:a', kind: 'fix' },
+      { ms: at(0, 11), key: 'local:a', kind: '' },
+      { ms: at(1, 9), key: 'local:a', kind: '' },
+      { ms: at(20, 9), key: 'local:a', kind: 'feat' },
+    ],
+  };
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.commitDays.length, 14);
+  assert.deepEqual(r.commitDays[13], { date: r.commitDays[13].date, commits: 3, feat: 1, fix: 1 });
+  assert.equal(r.commitDays[12].commits, 1);
+  assert.equal(r.commitDays.reduce((s, d) => s + d.commits, 0), 4);
+});
+
+test('report.commitDays is null without a commit reader that knows kinds', async () => {
+  const r = await createLedgerService(fakes().deps).report({});
+  assert.equal(r.commitDays, null);
+});
+
+test("report.focus.prevDays holds last week's daily totals", async () => {
+  const { deps } = fakes({ ownEvents: [{ ms: MON9 - 7 * DAY, key: 'git:github.com/me/a', name: 'a' }] });
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.focus.prevDays.length, 7);
+  assert.equal(r.focus.prevDays.reduce((s, d) => s + d.totalMs, 0), 5 * MIN);
+});
+
+test('report.now = the project of the latest Claude reply under 10 min old, with its block start', async () => {
+  const live = [
+    { ms: NOW - 40 * MIN, key: 'git:github.com/me/b', name: 'b' },
+    { ms: NOW - 20 * MIN, key: 'git:github.com/me/a', name: 'a' },
+    { ms: NOW - 12 * MIN, key: 'git:github.com/me/a', name: 'a' },
+    { ms: NOW - 3 * MIN, key: 'git:github.com/me/a', name: 'a' },
+  ];
+  const r = await createLedgerService(fakes({ ownEvents: live }).deps).report({});
+  assert.deepEqual(r.now, { key: 'git:github.com/me/a', name: 'a', sinceMs: NOW - 20 * MIN, lastMs: NOW - 3 * MIN });
+  const stale = await createLedgerService(fakes({ ownEvents: [{ ms: NOW - 11 * MIN, key: 'x', name: 'x' }] }).deps).report({});
+  assert.equal(stale.now, null);
+});
+
 // ---- Cloud snapshot (docs/CLOUD_SYNC_PLAN.md, 2c) ----
 
 test('with the cloud on, our rows go up and other PCs come down', async () => {

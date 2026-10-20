@@ -918,7 +918,7 @@ const orchestra = createOrchestra({
   tickTodos: (projectId, ats) => {
     const wanted = new Set(ats);
     const list = readTodos(projectId);
-    const next = list.map((t) => (wanted.has(t.at) && !t.done ? { ...t, done: true } : t));
+    const next = list.map((t) => (wanted.has(t.at) && !t.done ? { ...t, done: true, doneAt: Date.now() } : t));
     if (next.some((t, i) => t !== list[i]) && writeTodos(projectId, next)) send('todo:changed', { projectId });
   },
   workerSettings: () => {
@@ -2470,7 +2470,7 @@ function registerIpc() {
   // profile env, same reason as /ask's default: a tab's local-model profile
   // must never leak into a job that can trash mail. The model comes from the
   // missionModel pref (Haiku by default) and is re-checked in the runner.
-  registerMissionIpc({
+  const mission = registerMissionIpc({
     ipcMain,
     getModel: () => readUiPrefs().missionModel,
     getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
@@ -2502,7 +2502,15 @@ function registerIpc() {
       return response === 0;
     },
   });
-  registerLifeIpc({ ipcMain, sync: lifeSync, cloud: () => (cloud ? cloud.snapshots : null), billCal });
+  // The score reuses Mission Control's ledger (focus, commits, Now) and GitHub reader.
+  registerLifeIpc({
+    ipcMain,
+    sync: lifeSync,
+    cloud: () => (cloud ? cloud.snapshots : null),
+    billCal,
+    ledger: mission.ledger,
+    github: mission.github,
+  });
   registerMailIpc({ ipcMain, sender: reportMail.sender, prefs: reportMail.prefs, nightly: reportMail.nightly });
 
   // "Add to my library": persists an /ask suggestion card into

@@ -99,11 +99,15 @@ export function addTodo(list, text, now = Date.now()) {
   return [...current, { text: trimmed, done: false, at: now }];
 }
 
-/** Flips one item's done flag by index. Out-of-range is a no-op. */
-export function toggleTodo(list, index) {
+/** Flips one item's done flag by index (closing stamps doneAt). Out-of-range is a no-op. */
+export function toggleTodo(list, index, now = Date.now()) {
   const current = Array.isArray(list) ? list : [];
   if (index < 0 || index >= current.length) return current;
-  return current.map((item, i) => (i === index ? { ...item, done: !item.done } : item));
+  return current.map((item, i) => {
+    if (i !== index) return item;
+    const { doneAt, ...rest } = item;
+    return item.done ? { ...rest, done: false } : { ...rest, done: true, doneAt: now };
+  });
 }
 
 /** Drops one item by index. Out-of-range is a no-op. */

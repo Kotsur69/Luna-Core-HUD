@@ -94,10 +94,15 @@ function normalizeTodo(raw) {
   const text = raw.text.trim().slice(0, MAX_TEXT_CHARS);
   if (!text) return null;
   const at = Number(raw.at);
+  const done = raw.done === true;
+  // When it was ticked (the Life score counts to-dos closed today). Only on a
+  // done item, so reopening drops it and a plain item gains no key.
+  const doneAt = done && typeof raw.doneAt === 'number' && Number.isFinite(raw.doneAt) && raw.doneAt > 0 ? { doneAt: raw.doneAt } : {};
   return {
     text,
-    done: raw.done === true,
+    done,
     at: Number.isFinite(at) ? at : 0,
+    ...doneAt,
     ...normalizeCardFields(raw),
   };
 }

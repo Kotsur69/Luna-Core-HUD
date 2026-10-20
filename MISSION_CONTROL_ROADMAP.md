@@ -259,9 +259,25 @@ days of data); week vs last week arrows on every metric; "do more / do less"
 of this. Money data stays local (`config/life-budget.local.json`, never
 sent to a model except the weekly category totals).
 
-**W3+ phases** (each shippable): 1 shell + check-in + habits · **2 Money ✅**
-· 3 productivity % + W4 goals + "now" strip · **4 YAZIO ✅** (Body tab) ·
+**W3+ phases** (each shippable): **1 shell + check-in + habits ✅** · **2 Money ✅**
+· **3 productivity % + W4 goals + "now" strip ✅** · **4 YAZIO ✅** (Body tab) ·
 5 weekly review + correlations + Sunday email.
+
+**Phases 1 + 3 — daily side ✅ (2026-10-20, branch `luna/life-daily-xpakq`).**
+Check-in (`lifecheckin.js` → `life-checkin.local.json`, last 400 days; prompt
+on the first open of a local day, skip saved), Habits tab (`lifehabits.js`,
+4 suggestions, daily or N/week, tick today + yesterday, Undo toast; streaks in
+`lifehabitcalc.js` over `lifedays.js` calendar days; steps auto-tick from
+YAZIO, computed, never stored), weekly goals by ISO week (`lifegoals.js`, ≤ 3,
+last 52 weeks, prompt on the first open of a new week), live score
+(`lifescore.js` pure; inputs `lifescoreinputs.js`; weights + focus target in
+`lifescoreprefs.js`). All four stores share `lifestore.js` (ENOENT-only
+defaults, `unreadable` otherwise, atomic writes). The score reuses Mission
+Control's ledger: the report now also carries `focus.prevDays`,
+`commitDays` (this PC's commits + feat/fix) and `now` (reply < 10 min).
+To-dos gained `doneAt`. Shipping PRs = my open PRs updated that day (gh,
+cached 10 min). Today's YAZIO kcal/protein count as progress, past days as
+hit/miss.
 
 **Phase 2 — Money ✅ (2026-10-14).** Ctrl+Shift+N (+ chip) opens the Life
 overlay (`lifepanel.js`), three columns: **Money** (`lifemoney.js`: "left until
