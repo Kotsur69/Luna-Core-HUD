@@ -56,15 +56,18 @@ test('generatedProfiles tolerates junk input without throwing', () => {
 
 test('templateFields matches every shipped template\'s real field needs', () => {
   const expected = {
-    'claude-cloud': { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
-    'lm-studio': { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
-    glm: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: false },
-    kimi: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: false, showCcrPort: false },
-    ollama: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
-    codex: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
-    gemini: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
-    grok: { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
-    'openai-compatible': { needsApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    'claude-cloud': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
+    'lm-studio': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
+    glm: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: false },
+    kimi: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: false, showCcrPort: false },
+    ollama: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    codex: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    gemini: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    grok: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    'openai-compatible': { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
+    openrouter: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: false },
+    'codex-cli': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
+    'gemini-cli': { needsApiKey: false, showApiKey: true, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
   };
   for (const [id, want] of Object.entries(expected)) {
     assert.deepEqual(templateFields(template(id)), want, `templateFields(${id})`);
@@ -109,7 +112,7 @@ test('templateFields does not show a model field for a CCR-routed template whose
 });
 
 test('templateFields tolerates junk input without throwing', () => {
-  const empty = { needsApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false };
+  const empty = { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false };
   assert.deepEqual(templateFields(null), empty);
   assert.deepEqual(templateFields(undefined), empty);
   assert.deepEqual(templateFields('nope'), empty);
@@ -550,4 +553,17 @@ test('every localLaunch toggle string has a pl and en translation', () => {
     assert.ok(pl.includes(`'${key}':`), `missing pl translation: ${key}`);
     assert.ok(en.includes(`'${key}':`), `missing en translation: ${key}`);
   }
+});
+
+test('templateFields shows an optional key field without requiring it', () => {
+  const fields = templateFields(template('gemini-cli'));
+  assert.equal(fields.showApiKey, true);
+  assert.equal(fields.needsApiKey, false);
+  assert.equal(templateFields(template('codex-cli')).showApiKey, false);
+});
+
+test('buildAddPayload accepts a native CLI profile with no key', () => {
+  const result = buildAddPayload({ template: template('gemini-cli'), label: 'Gemini CLI' });
+  assert.equal(result.ok, true);
+  assert.equal(result.payload.apiKey, undefined);
 });

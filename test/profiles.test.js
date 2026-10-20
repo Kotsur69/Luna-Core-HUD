@@ -317,3 +317,7 @@ test('redactProfile reports hasApiKey for an ANTHROPIC_API_KEY profile without l
   assert.equal(r.hasApiKey, true);
   assert.equal(JSON.stringify(r).includes('sk-secret'), false);
 });
+
+test('profileAuthKey also reads a native CLI key (GEMINI_API_KEY)', () => {
+  assert.equal(profileAuthKey({ GEMINI_API_KEY: 'g' }), 'g');
+});

@@ -155,3 +155,12 @@ test('an edit keeps the current CCR port and passes any sent number through for 
     assert.deepEqual(buildProfileFromTemplate(resolved.template, resolved.input), { ok: false, reason: 'invalid-port' }, String(bad));
   }
 });
+
+test('resolveTemplateUpdate keeps a stored GEMINI_API_KEY when an edit does not resend it', () => {
+  const gemini = { id: 'gemini-cli', label: 'Gemini', templateId: 'gemini-cli', command: 'gemini', env: { GEMINI_API_KEY: 'AIza-stored' } };
+  const resolved = resolveTemplateUpdate([gemini], { id: 'gemini-cli', label: 'Renamed' }, providers);
+  assert.equal(resolved.ok, true);
+  const built = buildProfileFromTemplate(resolved.template, resolved.input);
+  assert.deepEqual(built.profile.env, { GEMINI_API_KEY: 'AIza-stored' });
+  assert.equal(built.profile.command, 'gemini');
+});

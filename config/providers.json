@@ -78,6 +78,47 @@
       "docsUrl": "https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html"
     },
     {
+      "id": "openrouter",
+      "label": { "pl": "OpenRouter (darmowe modele)", "en": "OpenRouter (free models)" },
+      "wireVia": "direct",
+      "requiresApiKey": true,
+      "defaultModel": "openrouter/free",
+      "defaultFastModel": "openrouter/free",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "ANTHROPIC_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "{{model}}",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{fastModel}}",
+        "ANTHROPIC_SMALL_FAST_MODEL": "{{fastModel}}",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "{{model}}"
+      },
+      "docsUrl": "https://openrouter.ai/docs/guides/guides/claude-code-integration"
+    },
+    {
+      "id": "codex-cli",
+      "label": { "pl": "Codex CLI (konto ChatGPT)", "en": "Codex CLI (ChatGPT account)" },
+      "wireVia": "native",
+      "command": "codex",
+      "requiresApiKey": false,
+      "envTemplate": {},
+      "docsUrl": "https://developers.openai.com/codex/cli"
+    },
+    {
+      "id": "gemini-cli",
+      "label": { "pl": "Gemini CLI (konto Google)", "en": "Gemini CLI (Google account)" },
+      "wireVia": "native",
+      "command": "gemini",
+      "requiresApiKey": false,
+      "optionalApiKey": true,
+      "envTemplate": {
+        "GEMINI_API_KEY": "{{apiKey}}"
+      },
+      "docsUrl": "https://geminicli.com/docs/resources/quota-and-pricing/"
+    },
+    {
       "id": "ollama",
       "label": { "pl": "Ollama (lokalnie, przez CCR)", "en": "Ollama (local, via CCR)" },
       "wireVia": "ccr",

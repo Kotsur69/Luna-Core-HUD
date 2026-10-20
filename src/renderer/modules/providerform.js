@@ -49,7 +49,7 @@ function usesPlaceholder(envTemplate, name) {
  * OPTIONAL override left blank by default - see config/providers.json). A
  * `{{ccrPort}}` placeholder likewise shows the CCR-port field.
  * @param {{requiresApiKey?:boolean, requiresBaseUrl?:boolean, autoModel?:boolean, envTemplate?:Object}} template
- * @returns {{needsApiKey:boolean, needsBaseUrl:boolean, showModel:boolean, showFastModel:boolean, showCcrPort:boolean}}
+ * @returns {{needsApiKey:boolean, showApiKey:boolean, needsBaseUrl:boolean, showModel:boolean, showFastModel:boolean, showCcrPort:boolean}}
  */
 function templateFields(template) {
   const t = template && typeof template === 'object' ? template : {};
@@ -57,6 +57,7 @@ function templateFields(template) {
   const modelCapable = t.autoModel !== true;
   return {
     needsApiKey: t.requiresApiKey === true,
+    showApiKey: t.requiresApiKey === true || t.optionalApiKey === true,
     needsBaseUrl: t.requiresBaseUrl === true,
     showModel: modelCapable && usesPlaceholder(envTemplate, 'model'),
     showFastModel: modelCapable && usesPlaceholder(envTemplate, 'fastModel'),

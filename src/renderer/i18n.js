@@ -96,6 +96,7 @@ const I18N_DICT = {
     'providers.empty': 'Brak wlasnych profili dostawcow.',
     'providers.other': 'Pozostale profile ({n}) sa zapisane w plikach i edytuje sie je recznie.',
     'providers.item.keySet': 'klucz zapisany',
+    'providers.item.accountLogin': 'logowanie kontem',
     'providers.item.noKey': 'bez klucza',
     'providers.item.baseUrlSet': 'adres API zapisany',
     'providers.item.baseUrlMissing': 'brak adresu API',
@@ -124,6 +125,8 @@ const I18N_DICT = {
     'providers.note.ccr':
       'Ten dostawca dziala przez claude-code-router (CCR) - zarzadzaj gateway w sekcji "Router (CCR)" powyzej. Klucz API ponizej to klucz kliencki CCR (tworzony w interfejsie CCR), nie Twoj prawdziwy klucz dostawcy.',
     'providers.note.autoModel': 'Model jest wybierany automatycznie z lokalnego serwera.',
+    'providers.note.native':
+      'Uruchamia wlasne CLI dostawcy zamiast claude (musi byc zainstalowane i w PATH). Przy pierwszym starcie zaloguj sie kontem w karcie (darmowy plan wystarczy). Klucz API jest opcjonalny - na pozniej, gdy bedziesz miec platne konto.',
     'providers.localLaunch.title': 'Uruchamianie lokalnego modelu',
     'providers.localLaunch.shim': 'Poprawka zapytan dla LM Studio',
     'providers.localLaunch.shimHint': 'Przepisuje wiadomosci systemowe w trakcie rozmowy, ktore LM Studio odrzuca bledem 400. Zostaw wlaczone.',
@@ -1546,6 +1549,7 @@ const I18N_DICT = {
     'providers.empty': 'No provider profiles yet.',
     'providers.other': 'The remaining profiles ({n}) come from config files and are edited by hand.',
     'providers.item.keySet': 'key stored',
+    'providers.item.accountLogin': 'account login',
     'providers.item.noKey': 'no key',
     'providers.item.baseUrlSet': 'API address stored',
     'providers.item.baseUrlMissing': 'no API address',
@@ -1574,6 +1578,8 @@ const I18N_DICT = {
     'providers.note.ccr':
       'This provider runs through claude-code-router (CCR) - manage the gateway in the "Router (CCR)" section above. The API key below is a CCR client key (created in CCR\'s own UI), not your real provider key.',
     'providers.note.autoModel': 'The model is picked automatically from the local server.',
+    'providers.note.native':
+      'Launches the provider\'s own CLI instead of claude (it must be installed and on PATH). On first start, sign in with your account inside the tab (the free plan is enough). The API key is optional - for later, once you have a paid account.',
     'providers.localLaunch.title': 'Local model launch',
     'providers.localLaunch.shim': 'LM Studio request fix',
     'providers.localLaunch.shimHint': 'Rewrites the mid-conversation system messages LM Studio rejects with a 400. Leave it on.',

@@ -80,6 +80,9 @@ function describeProfile(profile) {
   const parts = [template ? loc(template.label) : profile.templateId];
   const fields = templateFields(template);
   if (fields.needsApiKey) parts.push(profile.hasApiKey ? t('providers.item.keySet') : t('providers.item.noKey'));
+  else if (fields.showApiKey) {
+    parts.push(profile.hasApiKey ? t('providers.item.keySet') : t('providers.item.accountLogin'));
+  }
   if (fields.needsBaseUrl) {
     parts.push(profile.hasBaseUrl ? t('providers.item.baseUrlSet') : t('providers.item.baseUrlMissing'));
   }
@@ -208,6 +211,7 @@ function buildFormRow({ template, prefill, titleKey, titleParams, submitKey, onS
   const note = document.createElement('p');
   note.className = 'hint';
   if (template && template.wireVia === 'ccr') note.textContent = t('providers.note.ccr');
+  else if (template && template.wireVia === 'native') note.textContent = t('providers.note.native');
   else if (template && template.autoModel) note.textContent = t('providers.note.autoModel');
   else note.hidden = true;
   li.appendChild(note);
@@ -222,7 +226,7 @@ function buildFormRow({ template, prefill, titleKey, titleParams, submitKey, onS
   li.appendChild(labelRow.wrapper);
 
   const apiKeyRow = buildFieldRow({
-    show: fields.needsApiKey,
+    show: fields.showApiKey,
     labelKey: 'providers.form.apiKey',
     inputType: 'password',
     placeholder: prefill.hasApiKey ? t('providers.form.apiKey.keepPh') : t('providers.form.apiKey.ph'),

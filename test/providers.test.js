@@ -406,3 +406,56 @@ test('kimi-code refuses a profile without an API key and honours a custom model'
   const custom = buildProfileFromTemplate(tpl, { id: 'k', label: 'K', apiKey: 'x', model: 'k3[1m]' });
   assert.equal(custom.profile.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'k3[1m]');
 });
+
+// ---- native CLI templates (codex-cli, gemini-cli) + openrouter --------------
+
+test('normalizeProviderTemplate accepts wireVia native only with a bare command name', () => {
+  const base = { id: 'x', label: 'X', wireVia: 'native' };
+  assert.equal(normalizeProviderTemplate({ ...base, command: 'gemini' }).command, 'gemini');
+  assert.equal(normalizeProviderTemplate(base), null);
+  assert.equal(normalizeProviderTemplate({ ...base, command: 'gemini && rm -rf ~' }), null);
+  assert.equal(normalizeProviderTemplate({ ...base, command: '../evil' }), null);
+  // A command on a non-native template is ignored - those always launch claude.
+  assert.equal(normalizeProviderTemplate({ id: 'y', label: 'Y', wireVia: 'direct', command: 'gemini' }).command, '');
+});
+
+test('codex-cli builds a keyless profile that launches the codex CLI', () => {
+  const tpl = getProviderTemplate(loadProviders().providers, 'codex-cli');
+  assert.ok(tpl, 'codex-cli template is shipped');
+  const result = buildProfileFromTemplate(tpl, { id: 'codex-cli', label: 'Codex CLI' });
+  assert.equal(result.ok, true);
+  assert.equal(result.profile.command, 'codex');
+  assert.deepEqual(result.profile.env, {});
+  assert.equal(isCcrTemplate(tpl), false);
+});
+
+test('gemini-cli works without a key (Google login) and stores an optional one', () => {
+  const tpl = getProviderTemplate(loadProviders().providers, 'gemini-cli');
+  assert.ok(tpl, 'gemini-cli template is shipped');
+  assert.equal(tpl.requiresApiKey, false);
+  assert.equal(tpl.optionalApiKey, true);
+  const keyless = buildProfileFromTemplate(tpl, { id: 'g', label: 'G' });
+  assert.equal(keyless.profile.command, 'gemini');
+  assert.deepEqual(keyless.profile.env, {});
+  const keyed = buildProfileFromTemplate(tpl, { id: 'g', label: 'G', apiKey: 'AIza-test' });
+  assert.deepEqual(keyed.profile.env, { GEMINI_API_KEY: 'AIza-test' });
+});
+
+test('openrouter defaults every tier to the free router and needs a key', () => {
+  const tpl = getProviderTemplate(loadProviders().providers, 'openrouter');
+  assert.ok(tpl, 'openrouter template is shipped');
+  assert.equal(buildProfileFromTemplate(tpl, { id: 'o', label: 'O' }).reason, 'missing-api-key');
+  const result = buildProfileFromTemplate(tpl, { id: 'o', label: 'O', apiKey: 'sk-or-test' });
+  const env = result.profile.env;
+  assert.equal(result.profile.command, 'claude');
+  assert.equal(env.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'sk-or-test');
+  for (const key of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
+    assert.equal(env[key], 'openrouter/free', key);
+  }
+});
+
+test('a native template can never opt into autoModel', () => {
+  const tpl = normalizeProviderTemplate({ id: 'x', label: 'X', wireVia: 'native', command: 'gemini', autoModel: true });
+  assert.equal(tpl.autoModel, false);
+});

@@ -31,7 +31,13 @@ const { normalizeLocalLaunch } = require('./locallaunch');
 
 const BASE_FILE = paths.bundled('providers.json');
 
-const WIRE_VIA_VALUES = new Set(['direct', 'ccr']);
+// 'native' = the template launches another vendor's own agent CLI (codex,
+// gemini) instead of `claude`; it signs in with that vendor's account, so no
+// key is needed on the free tiers.
+const WIRE_VIA_VALUES = new Set(['direct', 'ccr', 'native']);
+
+/** A native template's command: one bare executable name, never a path or shell syntax. */
+const NATIVE_COMMAND_RE = /^[a-z][a-z0-9-]*$/;
 
 /** Env var name prefixes a provider template must never be allowed to set. */
 const ENV_KEY_DENY_RE = /^(PATH|Path|NODE_|ELECTRON_|LD_|DYLD_|PYTHON|npm_)/;
@@ -54,6 +60,8 @@ function normalizeProviderTemplate(p) {
   if (typeof p.id !== 'string' || !p.id) return null;
   if (!hasText(p.label)) return null;
   if (!WIRE_VIA_VALUES.has(p.wireVia)) return null;
+  const isNative = p.wireVia === 'native';
+  if (isNative && !(typeof p.command === 'string' && NATIVE_COMMAND_RE.test(p.command))) return null;
 
   const rawEnvTemplate =
     p.envTemplate && typeof p.envTemplate === 'object' && !Array.isArray(p.envTemplate)
@@ -70,8 +78,12 @@ function normalizeProviderTemplate(p) {
     label: normalizeText(p.label),
     wireVia: p.wireVia,
     requiresApiKey: p.requiresApiKey === true,
+    // Shows the key field without requiring it (a paid key later, account login now).
+    optionalApiKey: p.optionalApiKey === true,
+    command: isNative ? p.command : '',
     requiresBaseUrl: p.requiresBaseUrl === true,
-    autoModel: p.autoModel === true,
+    // autoModel injects ANTHROPIC_MODEL - meaningless for a non-claude CLI.
+    autoModel: !isNative && p.autoModel === true,
     defaultModel: typeof p.defaultModel === 'string' ? p.defaultModel : '',
     defaultFastModel: typeof p.defaultFastModel === 'string' ? p.defaultFastModel : '',
     ccrProviderType: typeof p.ccrProviderType === 'string' ? p.ccrProviderType : '',
@@ -188,7 +200,7 @@ function buildProfileFromTemplate(template, entry) {
     profile: {
       id: e.id,
       label: normalizeText(e.label),
-      command: 'claude',
+      command: template.command || 'claude',
       args: [],
       env,
       autoModel: template.autoModel,

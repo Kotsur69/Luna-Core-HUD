@@ -152,7 +152,7 @@ const NON_SECRET_AUTH_TOKENS = new Set(['lmstudio', 'ccr-local']);
  */
 function profileAuthKey(env) {
   if (!env) return '';
-  for (const key of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY']) {
+  for (const key of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY']) {
     if (typeof env[key] === 'string' && env[key]) return env[key];
   }
   return '';

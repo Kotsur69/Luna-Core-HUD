@@ -69,7 +69,7 @@ const { createKeepAwake, CONFIG_FILE: KEEP_AWAKE_CONFIG } = require('./keepawake
 // Env for every `claude` we start: inherited env minus session markers + layers.
 const { withColorSupport, buildSessionEnv } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
-const { withSessionId, withIntakeMcp, intakeState, withTaskBrief, findExecutable } = require('./launch');
+const { withSessionId, withIntakeMcp, intakeState, withTaskBrief, findExecutable, isClaudeCommand } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject, removeProject } = require('./projects');
 const {
@@ -1180,7 +1180,10 @@ function spawnInto(session, profile, launch = null) {
   if (session.watcher) session.watcher.stop();
   // Fresh per restart, like both watchers: a new process owns nothing yet.
   session.gitAttribution = new SessionAttribution();
-  session.watcher = new TranscriptWatcher(
+  // A foreign agent CLI (codex, gemini) writes no Claude transcript - a watcher
+  // there would only adopt ANOTHER tab's newest .jsonl in the same cwd.
+  const isForeignCli = Boolean(command) && !isClaudeCommand(command);
+  session.watcher = isForeignCli ? null : new TranscriptWatcher(
     (metrics) => send('metrics:context', { sessionId: session.id, metrics }),
     {
       cwd,
@@ -1237,7 +1240,7 @@ function spawnInto(session, profile, launch = null) {
       },
     },
   );
-  session.watcher.start();
+  if (session.watcher) session.watcher.start();
 
   // Active-Files Heatmap's git-sourced signal, scoped to this session's own
   // cwd - same lifecycle as the transcript watcher above (stopped + recreated
