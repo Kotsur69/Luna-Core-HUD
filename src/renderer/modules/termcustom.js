@@ -25,6 +25,7 @@ import { mountOrchestraSettings } from './orchestrasettings.js';
 import { mountSurfaceAlpha } from './surfacealpha.js';
 import { mountLmStudioSettings } from './lmstudiomodels.js';
 import { mountProviderSettings } from './providersettings.js';
+import { mountLunaSyncPicker } from './lunasyncpicker.js';
 import { mountCcrSettings } from './ccrsettings.js';
 import { applyLang } from './appearance.js';
 import { MODIFIER_AXES, getModifiers, setModifier } from './modifiers.js';
@@ -560,6 +561,10 @@ export async function initTermcustomSettings() {
   // mountAutoCompactSettings above; mounted before the LM Studio picker to
   // match the section order in index.html.
   mountProviderSettings(termcustomEl);
+
+  // Which plugin skills a "Use my Luna setup" Codex/Gemini tab also gets -
+  // sits right under the providers section in index.html.
+  mountLunaSyncPicker(termcustomEl);
 
   // The LM Studio model picker (src/lmstudiocli.js on the main side) - same
   // static-overlay shape as mountAutoCompactSettings above.

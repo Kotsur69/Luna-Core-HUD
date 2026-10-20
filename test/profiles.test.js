@@ -37,6 +37,7 @@ test('normalizeProfile passes a valid profile through', () => {
       templateId: null,
       // Absent in the input -> inherits the template's launch settings.
       localLaunch: null,
+      lunaSync: false,
     }
   );
 });
@@ -107,7 +108,7 @@ test('normalizeProfile does not carry unknown fields forward', () => {
   const p = normalizeProfile({ id: 'x', label: 'X', whatever: 'junk' });
   assert.deepEqual(
     Object.keys(p).sort(),
-    ['args', 'autoModel', 'command', 'env', 'id', 'label', 'localLaunch', 'templateId']
+    ['args', 'autoModel', 'command', 'env', 'id', 'label', 'localLaunch', 'lunaSync', 'templateId']
   );
 });
 
@@ -143,6 +144,7 @@ test('redactProfile strips env but keeps every other field, plus derived non-sec
     autoModel: false,
     templateId: 'openai-compatible',
     localLaunch: null,
+    lunaSync: false,
     model: '',
     fastModel: '',
     hasApiKey: true,
@@ -212,6 +214,7 @@ test('redactProfile handles a hand-written profile with no env at all', () => {
     autoModel: false,
     templateId: null,
     localLaunch: null,
+    lunaSync: false,
     model: '',
     fastModel: '',
     hasApiKey: false,
@@ -320,4 +323,10 @@ test('redactProfile reports hasApiKey for an ANTHROPIC_API_KEY profile without l
 
 test('profileAuthKey also reads a native CLI key (GEMINI_API_KEY)', () => {
   assert.equal(profileAuthKey({ GEMINI_API_KEY: 'g' }), 'g');
+});
+
+test('normalizeProfile keeps lunaSync only as a real boolean true', () => {
+  assert.equal(normalizeProfile({ id: 'a', label: 'A', lunaSync: true }).lunaSync, true);
+  assert.equal(normalizeProfile({ id: 'a', label: 'A', lunaSync: 'yes' }).lunaSync, false);
+  assert.equal(normalizeProfile({ id: 'a', label: 'A' }).lunaSync, false);
 });

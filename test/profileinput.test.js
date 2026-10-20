@@ -118,6 +118,7 @@ test('an edit keeps every field the payload does not resend', () => {
     fastModel: 'glm-fast-custom',
     ccrPort: null,
     localLaunch: undefined,
+    lunaSync: false,
   });
 });
 
@@ -163,4 +164,16 @@ test('resolveTemplateUpdate keeps a stored GEMINI_API_KEY when an edit does not 
   const built = buildProfileFromTemplate(resolved.template, resolved.input);
   assert.deepEqual(built.profile.env, { GEMINI_API_KEY: 'AIza-stored' });
   assert.equal(built.profile.command, 'gemini');
+});
+
+test('resolveTemplateUpdate keeps lunaSync unless the payload sends a boolean', () => {
+  const gemini = { id: 'gemini-cli', label: 'Gemini', templateId: 'gemini-cli', command: 'gemini', env: {}, lunaSync: true };
+  assert.equal(resolveTemplateUpdate([gemini], { id: 'gemini-cli' }, providers).input.lunaSync, true);
+  assert.equal(resolveTemplateUpdate([gemini], { id: 'gemini-cli', lunaSync: false }, providers).input.lunaSync, false);
+  assert.equal(resolveTemplateUpdate([gemini], { id: 'gemini-cli', lunaSync: 'on' }, providers).input.lunaSync, true);
+});
+
+test('pickTemplateInput passes lunaSync through', () => {
+  assert.equal(pickTemplateInput({ lunaSync: true, command: 'evil' }).lunaSync, true);
+  assert.equal(pickTemplateInput({ command: 'evil' }).command, undefined);
 });

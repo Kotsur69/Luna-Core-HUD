@@ -22,7 +22,7 @@ const { getProfile, NON_SECRET_AUTH_TOKENS, profileAuthKey } = require('./profil
 const { gatewayPortFromEnv } = require('./ccr');
 
 /** Everything the Settings add/edit form may send (providerform.js). */
-const TEMPLATE_INPUT_FIELDS = ['templateId', 'id', 'label', 'apiKey', 'baseUrl', 'model', 'fastModel', 'ccrPort', 'localLaunch'];
+const TEMPLATE_INPUT_FIELDS = ['templateId', 'id', 'label', 'apiKey', 'baseUrl', 'model', 'fastModel', 'ccrPort', 'localLaunch', 'lunaSync'];
 
 /**
  * Keeps only the known form fields of a renderer payload.
@@ -101,6 +101,8 @@ function resolveTemplateUpdate(profiles, payload, providers) {
   const ccrPort = typeof p.ccrPort === 'number' ? p.ccrPort : gatewayPortFromEnv(current.env);
   // Same keep-current rule for the lean-launch toggles.
   const localLaunch = p.localLaunch && typeof p.localLaunch === 'object' ? p.localLaunch : current.localLaunch;
+  // And for the Luna sync switch: only a real boolean changes it.
+  const lunaSync = typeof p.lunaSync === 'boolean' ? p.lunaSync : current.lunaSync === true;
 
   return {
     ok: true,
@@ -114,6 +116,7 @@ function resolveTemplateUpdate(profiles, payload, providers) {
       fastModel,
       ccrPort,
       localLaunch,
+      lunaSync,
     },
   };
 }

@@ -132,6 +132,11 @@ const { loadThemes } = require('./theme');
 const { loadLayouts } = require('./layouts');
 // UI preferences (theme + language) persisted in config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
+// Opt-in "Use my Luna setup" for native Codex/Gemini tabs (docs/FREE_PROVIDERS_SYNC_PLAN.md).
+const { loadLunaSyncPrefs, saveLunaSyncPrefs, lunaLaunchFor, lunaSyncNotice } = require('./lunasynclaunch');
+const { readClaudeSetup, listPluginSkills } = require('./lunasyncio');
+/** How long the Settings skill picker reuses one walk of the plugin folders. */
+const LUNA_SKILL_CACHE_MS = 30000;
 // Clickable file:line links in the terminal: resolve a renderer-supplied
 // candidate path against the session cwd (reject anything that escapes it),
 // then build the editor argv. Pure helpers, see src/editor.js's header.
@@ -1043,10 +1048,22 @@ function spawnInto(session, profile, launch = null) {
   // - also enforced inside resolveAutoModel() itself.
   // The marker strip applies to the inherited env only (src/sessionenv.js), so
   // a CLAUDE_CODE_* key the profile or the local launch sets survives.
+  //
+  // A native Codex/Gemini profile with "Use my Luna setup" on is pointed at
+  // LunaCore's overlay home (CODEX_HOME / GEMINI_CLI_HOME) - null for every
+  // other tab. A failed sync still starts the tab, on the user's own home,
+  // and says so in the terminal below.
+  const lunaSync = lunaLaunchFor({
+    profile,
+    template: profile.lunaSync ? getProviderTemplate(loadProviders().providers, profile.templateId) : null,
+    overlayBase: path.join(app.getPath('userData'), 'luna-overlay'),
+    pickedSkillIds: loadLunaSyncPrefs().pickedSkills,
+  });
   const env = withClaudeOnPath(
     buildSessionEnv(
       withColorSupport({ ...process.env }),
       profile.env,
+      lunaSync && lunaSync.ok ? lunaSync.env : null,
       autoModel ? { ANTHROPIC_MODEL: autoModel } : null,
       // Local launch overrides (shim URL, tier models, context) go last; they
       // already skip every key the profile sets itself.
@@ -1075,6 +1092,7 @@ function spawnInto(session, profile, launch = null) {
   });
   session.proc = proc;
   session.alive = true;
+  if (lunaSync) send('pty:data', { sessionId: session.id, data: lunaSyncNotice(lunaSync, readUiPrefs().lang) });
 
   // PASSIVE OBSERVER: this session's raw stdout -> renderer + tool detection.
   // Every event carries a sessionId, since the renderer keeps a separate buffer per tab.
@@ -2126,6 +2144,23 @@ function registerIpc() {
     profiles = result.profiles;
     return { ok: true, profiles: profiles.map(redactProfile), activeProfile: activeProfileId };
   });
+
+  // Luna sync skill picker: the enabled plugins' skills plus which are picked.
+  // Only ids/names cross IPC - no paths, and never readClaudeSetup()'s MCP
+  // env/header values.
+  // The skill walk is synchronous fs work over ~350 folders, so it is cached
+  // briefly - reopening Settings must not stall the main thread each time.
+  let lunaSkillCache = { at: 0, skills: [] };
+  ipcMain.handle('lunasync:skills', () => {
+    if (Date.now() - lunaSkillCache.at > LUNA_SKILL_CACHE_MS) {
+      const skills = listPluginSkills(readClaudeSetup()).map(({ id, plugin, name }) => ({ id, plugin, name }));
+      lunaSkillCache = { at: Date.now(), skills };
+    }
+    return { pickedSkills: loadLunaSyncPrefs().pickedSkills, skills: lunaSkillCache.skills };
+  });
+
+  // Saves the picked plugin skills; saveLunaSyncPrefs validates every id.
+  ipcMain.handle('lunasync:set-skills', (_event, pickedSkills) => saveLunaSyncPrefs({ pickedSkills }));
 
   // Removes a profile (local-added or a shipped default) by id. Reassigns
   // activeProfileId only when the removed one WAS active, same rule as

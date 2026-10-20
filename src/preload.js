@@ -97,6 +97,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   updateProviderProfile: (id, payload) => ipcRenderer.invoke('profiles:update-from-template', { id, ...payload }),
   /** Removes a profile (local-added or a shipped default) by id; returns { profiles, activeProfile } or null. */
   removeProfile: (id) => ipcRenderer.invoke('profiles:remove', id),
+  /** Luna sync picker: { pickedSkills, skills: [{ id, plugin, name }] } - names only, no paths. */
+  getLunaSyncSkills: () => ipcRenderer.invoke('lunasync:skills'),
+  /** Saves the picked plugin skill ids; main validates each one. Returns { ok, prefs } or { ok:false, reason }. */
+  setLunaSyncSkills: (ids) => ipcRenderer.invoke('lunasync:set-skills', ids),
   /** Opens a provider template's docs page. Main resolves the URL from config/providers.json itself - this bridge cannot be used to open an arbitrary page. */
   openProviderDocs: (templateId) => ipcRenderer.send('providers:open-docs', templateId),
 

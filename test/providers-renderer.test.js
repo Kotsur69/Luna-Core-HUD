@@ -56,18 +56,18 @@ test('generatedProfiles tolerates junk input without throwing', () => {
 
 test('templateFields matches every shipped template\'s real field needs', () => {
   const expected = {
-    'claude-cloud': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
-    'lm-studio': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
-    glm: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: false },
-    kimi: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: false, showCcrPort: false },
-    ollama: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
-    codex: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
-    gemini: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
-    grok: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
-    'openai-compatible': { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true },
-    openrouter: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: false },
-    'codex-cli': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
-    'gemini-cli': { needsApiKey: false, showApiKey: true, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false },
+    'claude-cloud': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false, showLunaSync: false },
+    'lm-studio': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false, showLunaSync: false },
+    glm: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: false, showLunaSync: false },
+    kimi: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: false, showCcrPort: false, showLunaSync: false },
+    ollama: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true, showLunaSync: false },
+    codex: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true, showLunaSync: false },
+    gemini: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true, showLunaSync: false },
+    grok: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true, showLunaSync: false },
+    'openai-compatible': { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true, showLunaSync: false },
+    openrouter: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: false, showLunaSync: false },
+    'codex-cli': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false, showLunaSync: true },
+    'gemini-cli': { needsApiKey: false, showApiKey: true, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false, showLunaSync: true },
   };
   for (const [id, want] of Object.entries(expected)) {
     assert.deepEqual(templateFields(template(id)), want, `templateFields(${id})`);
@@ -112,7 +112,7 @@ test('templateFields does not show a model field for a CCR-routed template whose
 });
 
 test('templateFields tolerates junk input without throwing', () => {
-  const empty = { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false };
+  const empty = { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false, showLunaSync: false };
   assert.deepEqual(templateFields(null), empty);
   assert.deepEqual(templateFields(undefined), empty);
   assert.deepEqual(templateFields('nope'), empty);
@@ -566,4 +566,19 @@ test('buildAddPayload accepts a native CLI profile with no key', () => {
   const result = buildAddPayload({ template: template('gemini-cli'), label: 'Gemini CLI' });
   assert.equal(result.ok, true);
   assert.equal(result.payload.apiKey, undefined);
+});
+
+test('templateFields offers the Luna sync switch only for native templates', () => {
+  assert.equal(templateFields(template('gemini-cli')).showLunaSync, true);
+  assert.equal(templateFields(template('codex-cli')).showLunaSync, true);
+  assert.equal(templateFields(template('glm')).showLunaSync, false);
+});
+
+test('buildAddPayload/buildEditPayload carry lunaSync for native templates only', () => {
+  const add = buildAddPayload({ template: template('codex-cli'), label: 'Codex', lunaSync: true });
+  assert.equal(add.payload.lunaSync, true);
+  const edit = buildEditPayload({ id: 'codex-cli', template: template('codex-cli'), label: 'Codex', lunaSync: false });
+  assert.equal(edit.payload.lunaSync, false);
+  const glm = buildAddPayload({ template: template('glm'), label: 'GLM', apiKey: 'k', lunaSync: true });
+  assert.equal(glm.payload.lunaSync, undefined);
 });

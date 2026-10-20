@@ -267,3 +267,23 @@ test('overlayEnv maps each cli to its home variable', () => {
   assert.deepEqual(overlayEnv('codex', '/o'), { CODEX_HOME: '/o' });
   assert.equal(overlayEnv('claude', '/o'), null);
 });
+
+test('syncOverlay follows a linked skill folder but never a link inside it', (t) => {
+  const fx = makeFixture();
+  const outside = path.join(fx.root, 'secrets');
+  write(path.join(outside, 'token.txt'), 'do not copy');
+  const linkedSkill = path.join(fx.root, 'agents-skills', 'linked');
+  write(path.join(linkedSkill, 'SKILL.md'), skillMd('linked'));
+  try {
+    fs.symlinkSync(linkedSkill, path.join(fx.claudeHome, 'skills', 'linked'), 'junction');
+    fs.symlinkSync(outside, path.join(linkedSkill, 'leak'), 'junction');
+  } catch (err) {
+    t.skip(`cannot create links here (${err.code})`);
+    return;
+  }
+  const overlayRoot = path.join(fx.root, 'overlay-codex');
+  const setup = readClaudeSetup({ claudeHome: fx.claudeHome, claudeJson: fx.claudeJson });
+  syncOverlay({ cli: 'codex', overlayRoot, setup });
+  assert.ok(fs.existsSync(path.join(overlayRoot, 'skills', 'linked', 'SKILL.md')), 'linked skill folder copied');
+  assert.ok(!fs.existsSync(path.join(overlayRoot, 'skills', 'linked', 'leak')), 'inner link not followed');
+});

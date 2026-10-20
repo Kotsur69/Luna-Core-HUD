@@ -459,3 +459,12 @@ test('a native template can never opt into autoModel', () => {
   const tpl = normalizeProviderTemplate({ id: 'x', label: 'X', wireVia: 'native', command: 'gemini', autoModel: true });
   assert.equal(tpl.autoModel, false);
 });
+
+test('buildProfileFromTemplate stores lunaSync only for a native template', () => {
+  const { providers } = loadProviders();
+  const gemini = getProviderTemplate(providers, 'gemini-cli');
+  assert.equal(buildProfileFromTemplate(gemini, { id: 'g', label: 'G', lunaSync: true }).profile.lunaSync, true);
+  assert.equal(buildProfileFromTemplate(gemini, { id: 'g', label: 'G' }).profile.lunaSync, undefined);
+  const glm = getProviderTemplate(providers, 'glm');
+  assert.equal(buildProfileFromTemplate(glm, { id: 'x', label: 'X', apiKey: 'k', lunaSync: true }).profile.lunaSync, undefined);
+});

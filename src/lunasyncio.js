@@ -309,10 +309,13 @@ function writeSkills(skillsDir, previous, skills) {
         fs.mkdirSync(dest, { recursive: true });
         fs.copyFileSync(skill.path, path.join(dest, 'SKILL.md'));
       } else {
-        fs.cpSync(skill.path, dest, {
+        // The skill folder itself may be a link (into ~/.agents/skills); links
+        // INSIDE it are never followed - one could point at any file on disk,
+        // which would then be handed to a third-party CLI.
+        const root = fs.realpathSync(skill.path);
+        fs.cpSync(root, dest, {
           recursive: true,
-          dereference: true,
-          filter: (src) => !SKIPPED_COPY_NAMES.has(path.basename(src)),
+          filter: (src) => src === root || (!SKIPPED_COPY_NAMES.has(path.basename(src)) && !fs.lstatSync(src).isSymbolicLink()),
         });
       }
       copied.push(skill.name);

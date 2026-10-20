@@ -62,6 +62,8 @@ function templateFields(template) {
     showModel: modelCapable && usesPlaceholder(envTemplate, 'model'),
     showFastModel: modelCapable && usesPlaceholder(envTemplate, 'fastModel'),
     showCcrPort: usesPlaceholder(envTemplate, 'ccrPort'),
+    // "Use my Luna setup" - only for another vendor's CLI (src/lunasyncio.js).
+    showLunaSync: t.wireVia === 'native',
   };
 }
 
@@ -87,6 +89,11 @@ function localLaunchState(template, profile) {
   if (!template || typeof template !== 'object' || !template.localLaunch) return null;
   const merged = { ...pickToggles(template.localLaunch), ...pickToggles(profile && profile.localLaunch) };
   return Object.fromEntries(LOCAL_LAUNCH_KEYS.map((k) => [k, merged[k] === true]));
+}
+
+/** Adds `lunaSync` to a payload when the template offers the switch and the form sent a boolean. */
+function withLunaSync(payload, template, raw) {
+  return templateFields(template).showLunaSync && typeof raw === 'boolean' ? { ...payload, lunaSync: raw } : payload;
 }
 
 /** Adds `localLaunch` to a payload when the template supports it and the form sent toggles. */
@@ -162,7 +169,7 @@ function buildAddPayload(form) {
   if (fastModel) payload.fastModel = fastModel;
   if (ccrPort.port !== undefined) payload.ccrPort = ccrPort.port;
 
-  return { ok: true, payload: withLocalLaunch(payload, template, f.localLaunch) };
+  return { ok: true, payload: withLunaSync(withLocalLaunch(payload, template, f.localLaunch), template, f.lunaSync) };
 }
 
 /**
@@ -209,7 +216,7 @@ function buildEditPayload(form) {
   if (fastModel) payload.fastModel = fastModel;
   if (ccrPort.port !== undefined) payload.ccrPort = ccrPort.port;
 
-  return { ok: true, payload: withLocalLaunch(payload, template, f.localLaunch) };
+  return { ok: true, payload: withLunaSync(withLocalLaunch(payload, template, f.localLaunch), template, f.lunaSync) };
 }
 
 /** Every typed reason profiles:add/update-from-template can return. */

@@ -135,7 +135,29 @@ servers Mati sees in Claude from elsewhere (project `.mcp.json`, claude.ai
 connectors) are not carried over yet - revisit in S3 if wanted.
 Note: FreeLLMAPI's desktop app listens on **31415**, not the docs' 3001.
 
-### S3 — Wiring
+#### S2 review follow-up (2026-10-20)
+
+Live: `codex mcp add` REWRITES config.toml and re-attaches comments, so a
+start/end comment pair is not a safe ownership marker there. TOML ownership is
+now by server NAME (`.lunacore-sync.json` -> `codexServers`). Also fixed:
+refuse unreadable/JSONC overlay files and damaged Markdown blocks instead of
+overwriting; home-dir guard; tmp+rename writes; skill copy skips
+`.git`/`node_modules`, never replaces a folder it did not create, case-folds
+names; SSE / `${VAR}` servers reported as skipped for Codex.
+
+#### S3 status (2026-10-20): built, pending Mati's live check
+
+- Profile `lunaSync` (native templates only) -> "Use my Luna setup" switch in
+  the provider form; `lunaLaunchFor()` in `spawnInto` builds
+  `<userData>/luna-overlay/<cli>` and layers `CODEX_HOME`/`GEMINI_CLI_HOME`;
+  a status line is printed in the tab (failure = starts without overlay, says why).
+- Settings "Luna setup for Codex/Gemini" picker (`lunasyncpicker.js`), picked
+  ids in `config/lunasync.local.json`; IPC carries ids/names only.
+- Verified outside Electron: overlay in `%APPDATA%` (no Codex temp warning),
+  Codex prompt carries the Luna persona, env layering overrides an inherited
+  `GEMINI_CLI_HOME`. Not yet clicked through in the running app.
+
+### S3 — Wiring (original plan)
 
 - Profile field `lunaSync: boolean` (default false), allow-listed in
   `profileinput.js`; checkbox only for native templates.

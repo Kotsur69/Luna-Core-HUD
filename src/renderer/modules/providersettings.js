@@ -88,6 +88,7 @@ function describeProfile(profile) {
   }
   if (fields.showModel && profile.model) parts.push(t('providers.item.model', { model: profile.model }));
   if (profile.isLegacyCcr) parts.push(t('providers.item.legacyCcr'));
+  if (fields.showLunaSync && profile.lunaSync) parts.push(t('providers.item.lunaSync'));
   return parts.join(' · ');
 }
 
@@ -278,6 +279,12 @@ function buildFormRow({ template, prefill, titleKey, titleParams, submitKey, onS
   const localLaunch = buildLocalLaunchBlock(localLaunchState(template, prefill));
   if (localLaunch) li.appendChild(localLaunch.wrapper);
 
+  // Native Codex/Gemini only: run the tab on LunaCore's Luna overlay home.
+  const lunaSyncRow = fields.showLunaSync
+    ? buildSwitchRow({ labelKey: 'providers.lunaSync', hintKey: 'providers.lunaSyncHint', checked: prefill.lunaSync === true })
+    : null;
+  if (lunaSyncRow) li.appendChild(lunaSyncRow.wrapper);
+
   const status = document.createElement('p');
   status.className = 'hint';
   status.setAttribute('role', 'status');
@@ -315,6 +322,7 @@ function buildFormRow({ template, prefill, titleKey, titleParams, submitKey, onS
         fastModel: fastModelRow.input.value,
         ccrPort: ccrPortRow.input.value,
         localLaunch: localLaunch ? localLaunch.read() : undefined,
+        lunaSync: lunaSyncRow ? lunaSyncRow.input.checked : undefined,
         showFail: (key) => {
           status.hidden = false;
           status.classList.add('is-fail');
@@ -548,6 +556,7 @@ function buildEditRow(profile) {
       hasBaseUrl: profile.hasBaseUrl,
       ccrPort: portFromBaseUrl(profile.baseUrl),
       localLaunch: profile.localLaunch,
+      lunaSync: profile.lunaSync,
       editing: true,
     },
     titleKey: 'providers.form.edit.title',

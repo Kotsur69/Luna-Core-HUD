@@ -1709,6 +1709,25 @@
         </div>
         <p id="providers-status" class="hint" role="status" hidden></p>
 
+        <!-- Luna sync skill picker (docs/FREE_PROVIDERS_SYNC_PLAN.md S3): which
+             PLUGIN skills a Codex/Gemini tab with "Use my Luna setup" also
+             gets - personal ~/.claude/skills always go along. Built in JS by
+             modules/lunasyncpicker.js; ids and names only, never paths. -->
+        <h3 class="termcustom__section" data-i18n="lunasync.title">Setup Luny dla Codex/Gemini</h3>
+        <p class="termcustom__hint" data-i18n="lunasync.hint">
+          Twoje skille z ~/.claude/skills ida zawsze. Tutaj wybierasz dodatkowe skille z pluginow.
+        </p>
+        <label class="ui-field">
+          <span class="ui-field__label" data-i18n="lunasync.filter">Szukaj skilla</span>
+          <input type="search" id="lunasync-filter" class="profile-select" autocomplete="off" spellcheck="false">
+        </label>
+        <p id="lunasync-count" class="hint" aria-live="polite"></p>
+        <ul id="lunasync-list" class="diag-list"></ul>
+        <div class="project-row">
+          <button type="button" id="lunasync-save" class="termcustom__reset" data-i18n="lunasync.save">Zapisz wybor</button>
+        </div>
+        <p id="lunasync-status" class="hint" role="status" hidden></p>
+
         <h3 class="termcustom__section" data-i18n="termcustom.section.lmstudio">LM Studio</h3>
         <!-- The in-app replacement for the external "go local claude" desktop
              script: lists every model DOWNLOADED to disk and loads one on click,

@@ -194,6 +194,8 @@ function buildProfileFromTemplate(template, entry) {
   // Lean-launch toggles only mean something for a template that ships local
   // launch defaults; for any other template an override is dropped.
   const localLaunch = template.localLaunch ? normalizeLocalLaunch(e.localLaunch) : null;
+  // The Luna overlay only exists for another vendor's CLI; `claude` already has the setup.
+  const lunaSync = template.wireVia === 'native' && e.lunaSync === true;
 
   return {
     ok: true,
@@ -206,6 +208,7 @@ function buildProfileFromTemplate(template, entry) {
       autoModel: template.autoModel,
       templateId: template.id,
       ...(localLaunch ? { localLaunch } : {}),
+      ...(lunaSync ? { lunaSync } : {}),
     },
   };
 }

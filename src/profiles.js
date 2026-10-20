@@ -81,6 +81,9 @@ function normalizeProfile(p) {
     // Per-profile override of the template's local launch settings
     // (src/locallaunch.js resolveLocalLaunch); null = inherit the template.
     localLaunch: normalizeLocalLaunch(p.localLaunch),
+    // Opt-in: a native Codex/Gemini tab runs against LunaCore's Luna overlay
+    // home (src/lunasyncio.js) instead of the user's own ~/.codex / ~/.gemini.
+    lunaSync: p.lunaSync === true,
   };
 }
 
