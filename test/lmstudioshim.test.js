@@ -475,23 +475,23 @@ test('isEventStream and endsOnEventBoundary', () => {
 });
 
 test('shim keeps a slow but active stream alive past the idle window', async () => {
-  // Total stream time (~6 x 40ms) is far longer than the 100ms idle window;
+  // Total stream time (~10 x 60ms) is far longer than the 400ms idle window;
   // only silence counts, so the whole answer must arrive.
   const upstream = await startUpstream(async (req, res) => {
     req.resume();
     res.writeHead(200, { 'content-type': 'text/event-stream' });
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < 10; i += 1) {
       res.write(`data: ${i}\n\n`);
-      await new Promise((r) => setTimeout(r, 40));
+      await new Promise((r) => setTimeout(r, 60));
     }
     res.end('data: done\n\n');
   });
-  const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}`, idleTimeoutMs: 100, keepAliveMs: 0 });
+  const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}`, idleTimeoutMs: 400, keepAliveMs: 0 });
   const { port, token } = await shim.start();
   try {
     const res = await request(port, { method: 'POST', path: '/v1/messages', body: '{"messages":[]}', token });
     assert.strictEqual(res.status, 200);
-    assert.match(res.body, /data: 5/);
+    assert.match(res.body, /data: 9/);
     assert.match(res.body, /data: done/);
   } finally {
     await shim.stop();
