@@ -1,10 +1,28 @@
 # Luna host + phone control — plan
 
-Status: **confirmed by Mati 2026-10-20. U1 built 2026-10-20 (migration
-applied; live check pending: restart the HUD, open the phone). Next: U2.** Builds on `CLOUD_SYNC_PLAN.md` (Supabase project
-`phkigyuhvbanadwmxqqs`, phone at `https://luna-core-hud.vercel.app`). Same
-rules apply: pulled rows are untrusted, realtime only triggers a read, every
-slice is done only when the other side *reads* what one side writes.
+Status: **confirmed by Mati 2026-10-20. U1 built + pushed 2026-10-20
+(bcf9e31, migration applied). Next: U2.** Builds on `CLOUD_SYNC_PLAN.md`
+(Supabase project `phkigyuhvbanadwmxqqs`, phone at
+`https://luna-core-hud.vercel.app`). Same rules apply: pulled rows are
+untrusted, realtime only triggers a read, every slice is done only when the
+other side *reads* what one side writes.
+
+## Resume here
+
+1. **U1 live check (open):** restart the HUD on a PC (it must run the new
+   build), wait for the Vercel deploy, open the phone → Today and Mission →
+   Claude show "Limity Claude" with two bars and "z HH:MM, <machine>". If the
+   card stays empty: `select kind, machine, updated_at from snapshots where
+   kind = 'usage'` - no row means the PC side (check the HUD log for
+   `[cloudsnapshots] put usage failed`), a row means the phone side.
+2. **Then U2** (repo status): same pattern as U1 - one shared CommonJS module
+   in `src/` (writer + reader), a migration adding `'repos'` to
+   `snapshots_kind_check`, `'repos'` in `KINDS` (`src/cloudsnapshots.js`) and
+   `SNAPSHOT_KINDS` (`mobile/src/cloud.js`), the put after each git-station
+   refresh, a phone page.
+3. Gotcha: a `src/*.js` module the phone imports must be added to the
+   `SHARED` regex in `mobile/vite.config.js`, or the build fails with
+   `"default" is not exported`.
 
 ## Goal
 
