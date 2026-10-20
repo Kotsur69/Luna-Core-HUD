@@ -164,4 +164,4 @@ function createRepoKeys({ aliases = () => null } = {}) {
   };
 }
 
-module.exports = { createRepoKeys, normalizeRemote, originUrl, OTHER };
+module.exports = { createRepoKeys, normalizeRemote, originUrl, findRepo, OTHER };

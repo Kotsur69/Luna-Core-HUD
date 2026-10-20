@@ -100,7 +100,7 @@ function briefText(pkg, branch, opts = {}) {
  *   closeSession?: Function, usageResetAt?: () => number|null,
  *   baseBranchOf?: Function, mergeDeps?: Function, createPr?: Function,
  *   integrateMerge?: Function, removeWorktree?: Function, updateTodos?: Function,
- *   writeReport?: Function, notify?: Function, sleep?: Function,
+ *   writeReport?: Function, notify?: Function, putSnapshot?: Function, sleep?: Function,
  * }} deps
  */
 function createOrchestra(deps) {
@@ -152,6 +152,7 @@ function createOrchestra(deps) {
     updateTodos: deps.updateTodos,
     writeReport: deps.writeReport,
     notify: deps.notify,
+    putSnapshot: deps.putSnapshot,
     sleep: deps.sleep,
   });
   const isBusy = () => busy || pumping || finalizer.isRunning();

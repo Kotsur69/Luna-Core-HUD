@@ -533,3 +533,21 @@ main {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
+
+/* --- repos + God Mode ----------------------------------------------------- */
+.tags { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.tag {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.tag.is-bad { border-color: var(--bad); color: var(--bad); }
+.tag.is-warn { border-color: var(--warn); color: var(--warn); }
+.tag.is-good { border-color: var(--good); color: var(--good); }
+.is-warn { color: var(--warn); }
+.run > summary { display: grid; gap: var(--space-1); cursor: pointer; list-style: none; }
+.run > summary::-webkit-details-marker { display: none; }
+.run[open] > summary { margin-bottom: var(--space-3); }

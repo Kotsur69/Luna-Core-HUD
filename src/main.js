@@ -145,6 +145,7 @@ const { loadEditorConfig, resolveInRoot, buildEditorInvocation } = require('./ed
 const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
 // REMOTE_HOST_PLAN U1: the same read as a `usage` snapshot for the phone.
 const { usageSnapshot } = require('./usagesnapshot');
+const { createSnapshotPuts } = require('./snapshotputs');
 // E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
 // zero network - Passive Observer in the strictest possible sense.
 const { TelemetryWatcher } = require('./telemetry');
@@ -932,6 +933,7 @@ const orchestra = createOrchestra({
     const next = fn(list);
     if (next !== list && writeTodos(projectId, next)) send('todo:changed', { projectId });
   },
+  putSnapshot: (run) => snapshotPuts.godmode.add(run),
   writeReport: (planId, text) => {
     if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return null;
     try {
@@ -1703,6 +1705,15 @@ function putUsageSnapshot() {
   const snap = usageSnapshot(latestUsage);
   if (snap && cloud) cloud.snapshots.put('usage', snap);
 }
+
+// U2: the git station's repos and finished God Mode runs, for the phone.
+const snapshotPuts = createSnapshotPuts({
+  snapshots: () => (cloud ? cloud.snapshots : null),
+  loggedIn: () => Boolean(cloud && cloud.status().loggedIn),
+  machine: machineName(os.hostname()),
+  readAll: readAllRepos,
+  historyFile: () => (ensureUserDir() ? path.join(userDir(), RUN_REPORT_DIR, 'godmode-snapshot.json') : null),
+});
 
 function startUsageWatcher() {
   if (!ENABLE_USAGE_METER) return;
@@ -2701,10 +2712,11 @@ function registerIpc() {
 
   // Git station: read + fetch. No pull, commit or push by design - see the
   // header of src/gitstation.js.
-  ipcMain.handle('git:list', () => readAllRepos());
+  // Each refresh / fetch also puts the `repos` snapshot (never throws).
+  ipcMain.handle('git:list', () => readAllRepos().then(snapshotPuts.repos.after));
   ipcMain.handle('git:fetch', (_event, dir) =>
     typeof dir === 'string' && dir
-      ? fetchRepo(dir)
+      ? fetchRepo(dir).finally(() => void snapshotPuts.repos.refresh())
       : Promise.resolve({ ok: false, error: 'badPath', repo: null })
   );
   ipcMain.handle('git:scan', () => scanForRepos());

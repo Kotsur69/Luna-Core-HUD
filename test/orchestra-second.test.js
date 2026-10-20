@@ -596,3 +596,37 @@ test('finishRun is refused while a worker runs and works after a kill', async ()
   assert.equal(s.log.prs.length, 0);
   assert.match(s.log.notes.find((t) => t.at === 1).details, /killed/);
 });
+
+test('the finalized run goes to putSnapshot by repo name only; a throwing put never breaks finalize', async () => {
+  const runs = [];
+  const s = await started({ packages: [pkg('a', [1])], extraDeps: { putSnapshot: async (run) => runs.push(run) } });
+  s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  await s.flush(8);
+  assert.ok(runs.length >= 1);
+  const run = runs[runs.length - 1];
+  assert.equal(run.repoName, 'repo');
+  assert.equal(run.pushed, 1);
+  assert.equal(run.packages[0].prUrl, 'https://github.com/o/r/pull/1');
+  assert.ok(!JSON.stringify(run).includes('/repo'), 'no path in the snapshot');
+
+  const errors = [];
+  const origError = console.error;
+  console.error = (...args) => errors.push(args.join(' '));
+  try {
+    const t = await started({
+      packages: [pkg('a', [1])],
+      extraDeps: {
+        putSnapshot: () => {
+          throw new Error('boom');
+        },
+      },
+    });
+    t.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+    await t.flush(8);
+    assert.equal(t.orch.view().integration.state, 'done');
+    assert.ok(t.log.events.some(([k]) => k === 'finalized'));
+    assert.ok(errors.some((e) => e.includes('[cloudsnapshots] put godmode failed')));
+  } finally {
+    console.error = origError;
+  }
+});

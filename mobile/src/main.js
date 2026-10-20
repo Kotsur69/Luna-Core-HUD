@@ -16,9 +16,11 @@ import { mountLife } from './views/life.js';
 import { mountToday } from './views/today.js';
 import { mountMission } from './views/mission.js';
 import { mountBody } from './views/body.js';
+import { mountRepos } from './views/repos.js';
+import { mountGodmode } from './views/godmode.js';
 import { t } from './i18n.js';
 
-const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody };
+const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody, repos: mountRepos, godmode: mountGodmode };
 /** A burst of realtime events (a PC pushing 500 units) becomes one pull. */
 const REALTIME_DEBOUNCE_MS = 1500;
 const root = document.getElementById('app');

@@ -19,7 +19,7 @@
 
 'use strict';
 
-const KINDS = new Set(['ledger', 'news', 'yazio', 'usage']);
+const KINDS = new Set(['ledger', 'news', 'yazio', 'usage', 'repos', 'godmode']);
 /** The column check is pg_column_size(data) < 1 MiB; JSON text this size stays well under. */
 const MAX_BYTES = 512 * 1024;
 const TTL_MS = 60 * 1000;

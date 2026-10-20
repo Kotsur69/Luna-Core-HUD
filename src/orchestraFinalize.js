@@ -11,7 +11,8 @@
 //   2. cleanup   - close pushed packages' tabs, remove their worktrees (the
 //                  branch is on the remote). Stalled ones stay for inspection.
 //   3. notes     - unfinished packages leave a note on their to-dos.
-//   4. report    - markdown in <userDir>/runs/<plan>.md + an OS notification.
+//   4. report    - markdown in <userDir>/runs/<plan>.md + an OS notification,
+//                  and the run for the phone's `godmode` snapshot.
 //
 // State lives in orchestra.js; this module gets accessors, never the object
 // to keep.
@@ -23,6 +24,7 @@ const sup = require('./orchestraSupervisor');
 const { topoOrder } = require('./orchestraPlan');
 const { prBody } = require('./orchestraIntegrate');
 const { buildReport, appendStallNotes } = require('./orchestraReport');
+const { runEntry } = require('./godmodesnapshot');
 
 // Lets a closed tab's processes let go of the worktree folder (Windows).
 const TAB_CLOSE_SETTLE_MS = 2500;
@@ -34,7 +36,7 @@ const MAX_TODO_DETAILS = 4000;
  *   commit: () => void, view: () => object|null, onRunEvent: Function, now: () => number,
  *   createPr?: Function, integrateMerge?: Function, removeWorktree?: Function,
  *   closeSession?: Function, sessionAlive?: Function, updateTodos?: Function,
- *   writeReport?: Function, notify?: Function, sleep?: (ms:number) => Promise<void>,
+ *   writeReport?: Function, notify?: Function, putSnapshot?: Function, sleep?: (ms:number) => Promise<void>,
  * }} deps
  */
 function createFinalizer(deps) {
@@ -129,14 +131,27 @@ function createFinalizer(deps) {
     deps.updateTodos(plan.projectId, (list) => appendStallNotes(list, notable, plan.id, MAX_TODO_DETAILS));
   }
 
+  // The phone's God Mode page (godmodesnapshot.js). main puts it only while
+  // logged in to the cloud; nothing here may break the end of a run.
+  function putSnapshot(view, extra) {
+    if (!deps.putSnapshot) return;
+    try {
+      Promise.resolve(deps.putSnapshot(runEntry(view, extra))).catch((err) =>
+        console.error('[cloudsnapshots] put godmode failed:', err instanceof Error ? err.message : String(err)),
+      );
+    } catch (err) {
+      console.error('[cloudsnapshots] put godmode failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   function report(plan) {
-    const text = buildReport(
-      { ...deps.view(), repoPath: plan.repoPath },
-      { now: deps.now(), suggestions: sup.allowSuggestions(plan.approvalLog) },
-    );
+    const view = { ...deps.view(), repoPath: plan.repoPath };
+    const extra = { now: deps.now(), suggestions: sup.allowSuggestions(plan.approvalLog) };
+    const text = buildReport(view, extra);
     const file = deps.writeReport ? deps.writeReport(plan.id, text) : null;
     const pushed = plan.packages.filter((p) => p.state === 'pushed').length;
     if (deps.notify) deps.notify({ pushed, total: plan.packages.length, failed: plan.integration.state === 'failed' });
+    putSnapshot(view, extra);
     return file;
   }
 

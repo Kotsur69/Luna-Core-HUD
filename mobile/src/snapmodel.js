@@ -2,7 +2,7 @@
 // LunaCore phone - snapshot readers (pure)
 // ----------------------------------------------------------------------------
 // docs/CLOUD_SYNC_PLAN.md phase 4c. Each PC writes its own `snapshots` row per
-// kind (news, ledger, yazio, usage); the phone writes none and reads them all. Every
+// kind (news, ledger, yazio, usage, repos, godmode); the phone writes none and reads them all. Every
 // row is untrusted and goes through the same parser a PC uses for another
 // PC's row - never rendered as it came.
 // ============================================================================
@@ -12,12 +12,16 @@ import ledgerSync from '../../src/missionledgersync.js';
 import ledgerCalc from '../../src/missionledgercalc.js';
 import yazio from '../../src/lifeyaziopeers.js';
 import usage from '../../src/usagesnapshot.js';
+import reposSnap from '../../src/repossnapshot.js';
+import godmodeSnap from '../../src/godmodesnapshot.js';
 
 const { parseNewsPeer } = newsRows;
 const { parsePeer, MAX_PEERS } = ledgerSync;
 const { summarize, weekWindow } = ledgerCalc;
 const { parseYazioPeer } = yazio;
 const { newestUsage, windowNow } = usage;
+const { reposFrom: mergeReposRows } = reposSnap;
+const { runsFrom } = godmodeSnap;
 
 /** Projects listed on the phone; the rest only count in the total. */
 export const MAX_PROJECTS = 20;
@@ -109,4 +113,14 @@ export function bodyFrom(rows, now) {
 export function usageFrom(rows, now) {
   const u = newestUsage(rows, now);
   return u && { machine: u.machine, at: u.at, fiveHour: windowNow(u.fiveHour, now), sevenDay: windowNow(u.sevenDay, now) };
+}
+
+/** Every PC's `repos` row, validated and merged into one entry per repo (repossnapshot.js). */
+export function reposFrom(rows, now) {
+  return mergeReposRows(rows, now);
+}
+
+/** Every PC's recent God Mode runs, newest first, each tagged with its machine. */
+export function godmodeRunsFrom(rows, now) {
+  return runsFrom(rows, now);
 }
