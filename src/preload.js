@@ -300,6 +300,21 @@ contextBridge.exposeInMainWorld('lunacore', {
   lifeBodyConnect: (email, password) => ipcRenderer.invoke('life:body-connect', { email, password }),
   /** Forgets the stored YAZIO login. Promise<{ok}>. */
   lifeBodyDisconnect: () => ipcRenderer.invoke('life:body-disconnect'),
+  /** "Add to calendar" for a bill: calendarKey from missionCalCalendars. Same answer as lifeBudget. */
+  lifeBillCalAdd: (billId, calendarKey, month) =>
+    ipcRenderer.invoke('life:bill-cal-add', { billId, calendar: calendarKey, month }),
+  // --- Report emails (src/mailipc.js) ---
+  // Settings toggles and fixed reports only: the recipient is always the
+  // connected Gmail address itself, decided in main; nothing here names one.
+  /** Promise<{ok, gmail:{configured, connected, email}, prefs, godmodeOn}>. */
+  mailStatus: () => ipcRenderer.invoke('mail:status'),
+  /** Browser consent for gmail.send. Same answer as mailStatus, or {ok:false, reason}. */
+  mailConnect: () => ipcRenderer.invoke('mail:connect'),
+  mailDisconnect: () => ipcRenderer.invoke('mail:disconnect'),
+  /** {nightlyEnabled?, nightlyTime?, sendWhenEmpty?, godmodeEmail?} - validated in main. */
+  mailSet: (patch) => ipcRenderer.invoke('mail:set', patch),
+  /** Sends the nightly summary now, marked [test]. Promise<{ok} | {ok:false, reason}>. */
+  mailTest: () => ipcRenderer.invoke('mail:test'),
   // --- Cloud sync (src/cloudipc.js) ---
   // No payloads. Main answers from a whitelist: who is logged in and the sync
   // state - never a token. Login opens GitHub in the system browser.

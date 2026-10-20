@@ -215,7 +215,7 @@ const tokenTtl = (body) => (Number.isFinite(body.expires_in) ? body.expires_in *
 const doneHtml = (ok) =>
   '<!doctype html><meta charset="utf-8"><title>LunaCore</title>' +
   '<body style="font:16px system-ui;padding:2rem">' +
-  (ok ? 'LunaCore is connected to Google Calendar. You can close this tab.' : 'Access was not granted.') +
+  (ok ? 'LunaCore is connected to Google. You can close this tab.' : 'Access was not granted.') +
   '</body>';
 
 /**
@@ -416,6 +416,8 @@ function createGcal(deps = {}) {
       const body = await res.json().catch(() => ({}));
       throw new GcalError('gcal-failed', `HTTP ${res.status} on ${path}${googleErrorDetail(body)}`);
     }
+    // A DELETE answers 204 with no body.
+    if (res.status === 204) return {};
     try {
       return await res.json();
     } catch (err) {
@@ -485,10 +487,13 @@ function createGcal(deps = {}) {
 
   /**
    * Creates `draft` (validated: missioncal.normalizeDraft) in the calendar
-   * behind `key`. The category becomes the event colour.
+   * behind `key`. The category becomes the event colour. `opts.recurrence`
+   * (RRULE lines from gcalrecur.js only) and `opts.tag` (private
+   * extendedProperties, so the event can later be told apart as ours) are
+   * built by main, never taken from the renderer.
    * @returns {Promise<{event:object}>} the event as Google stored it
    */
-  async function createEvent(key, draft, categories) {
+  async function createEvent(key, draft, categories, opts = {}) {
     const cal = typeof key === 'string' ? targets.get(key) : null;
     if (!cal) throw new GcalError('gcal-not-editable', 'unknown calendar');
     const when = (v) => (draft.allDay ? { date: v } : { dateTime: v });
@@ -500,6 +505,8 @@ function createGcal(deps = {}) {
       ...(draft.location ? { location: draft.location } : {}),
       ...(draft.description ? { description: draft.description } : {}),
       ...(category && category.colorId ? { colorId: category.colorId } : {}),
+      ...(opts.recurrence ? { recurrence: opts.recurrence } : {}),
+      ...(opts.tag ? { extendedProperties: { private: opts.tag } } : {}),
     };
     const raw = await apiRequest('POST', `/calendars/${encodeURIComponent(cal.id)}/events`, {}, body);
     const ev = normalizeEvent(raw, cal, categories);
@@ -526,10 +533,14 @@ function createGcal(deps = {}) {
    * Changes title, times and location of an event listed earlier. `draft` is
    * already validated (missioncal.normalizeDraft); the all-day kind cannot
    * change here, and colour, guests and description are left as they are.
+   * `opts.calendar` (a key from listCalendars) names the calendar of an event
+   * not listed in this session - main checks ownership first (gcalbills.js);
+   * `opts.recurrence` replaces the RRULE.
    * @returns {Promise<{event:object}>} the event as Google now has it
    */
-  async function updateEvent(id, draft, categories) {
-    const known = typeof id === 'string' ? editable.get(id) : null;
+  async function updateEvent(id, draft, categories, opts = {}) {
+    const target = typeof opts.calendar === 'string' ? targets.get(opts.calendar) : null;
+    const known = typeof id === 'string' ? editable.get(id) || (target ? { cal: target, allDay: draft.allDay } : null) : null;
     if (!known) throw new GcalError('gcal-not-editable');
     if (draft.allDay !== known.allDay) throw new GcalError('bad-draft', 'all-day kind changed');
     const when = (v) => (known.allDay ? { date: v } : { dateTime: v });
@@ -537,12 +548,29 @@ function createGcal(deps = {}) {
       'PATCH',
       `/calendars/${encodeURIComponent(known.cal.id)}/events/${encodeURIComponent(id)}`,
       {},
-      { summary: draft.title, location: draft.location, start: when(draft.start), end: when(draft.end) }
+      {
+        summary: draft.title,
+        location: draft.location,
+        start: when(draft.start),
+        end: when(draft.end),
+        ...(opts.recurrence ? { recurrence: opts.recurrence } : {}),
+      }
     );
     const ev = normalizeEvent(raw, known.cal, categories);
     if (!ev) throw new GcalError('gcal-failed', 'unreadable updated event');
     const { uid, ...event } = ev;
     return { event };
+  }
+
+  /**
+   * GET / DELETE of one event in a writable calendar named by its key, for
+   * gcalbills.js. Raw event (untrusted) or {} for a delete.
+   */
+  async function eventByKey(method, key, id) {
+    if (method !== 'GET' && method !== 'DELETE') throw new GcalError('gcal-failed', 'bad method');
+    const cal = typeof key === 'string' ? targets.get(key) : null;
+    if (!cal || typeof id !== 'string' || !EVENT_ID_RE.test(id)) throw new GcalError('gcal-not-editable');
+    return apiRequest(method, `/calendars/${encodeURIComponent(cal.id)}/events/${encodeURIComponent(id)}`, {});
   }
 
   async function connect() {
@@ -605,7 +633,7 @@ function createGcal(deps = {}) {
     );
   }
 
-  return { status, connect, listEvents, listCalendars, createEvent, updateEvent, importClient };
+  return { status, connect, listEvents, listCalendars, createEvent, updateEvent, eventByKey, importClient };
 }
 
 module.exports = {
@@ -617,6 +645,8 @@ module.exports = {
   mergeEvents,
   visibleCalendars,
   startRedirectServer,
+  base64url,
+  readJson,
   CLIENT_FILE,
   SCOPE,
 };

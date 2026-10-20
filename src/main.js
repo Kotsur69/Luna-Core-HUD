@@ -12,7 +12,7 @@
 //   - relays the raw PTY stdout stream to the renderer to display/parse.
 // ============================================================================
 
-const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker, Notification, powerMonitor } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -115,6 +115,12 @@ const { registerMissionIpc } = require('./missioncontrolipc');
 // Life dashboard (Ctrl+Shift+N): budget store, shared with the other PCs
 // through the cloud (src/lifesync.js). No model call.
 const { registerLifeIpc } = require('./lifeipc');
+// One Google Calendar client for Mission Control and the bill events (gcalbills.js).
+const { createGcal } = require('./gcal');
+const { createBillCalendar } = require('./gcalbills');
+// Report emails: Gmail sender, God Mode run email, nightly summary.
+const { createReportMail } = require('./reportmail');
+const { registerMailIpc } = require('./mailipc');
 const { startLifeSync } = require('./lifesync');
 // Cloud sync (docs/CLOUD_SYNC_PLAN.md): Supabase carries the budget, the
 // to-dos, settings and snapshots between PCs. Off without config/cloud.local.json.
@@ -859,6 +865,15 @@ function approvalRuleFor(session) {
   }
 }
 
+const gcal = createGcal();
+const reportMail = createReportMail({
+  runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+  listProjects: () => projects.map((p) => ({ id: p.id, name: p.label, todos: readTodos(p.id) })),
+  getUsage: () => latestUsage,
+  getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
+  onResume: (fn) => powerMonitor.on('resume', fn),
+});
+
 const orchestra = createOrchestra({
   runPlanner,
   addWorktree,
@@ -934,6 +949,7 @@ const orchestra = createOrchestra({
     if (next !== list && writeTodos(projectId, next)) send('todo:changed', { projectId });
   },
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
+  onReport: (planId, text, summary) => reportMail.godmode.onReport(planId, text, summary),
   writeReport: (planId, text) => {
     if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return null;
     try {
@@ -2458,6 +2474,7 @@ function registerIpc() {
     ipcMain,
     getModel: () => readUiPrefs().missionModel,
     getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
+    gcal,
     // Read on the ledger's first use, after startCloud() below has run.
     cloudSnapshots: () => (cloud ? cloud.snapshots : null),
   });
@@ -2466,7 +2483,27 @@ function registerIpc() {
   // other PCs through the cloud, like the to-dos.
   cloud = startCloud({ machine: machineName(os.hostname()) });
   registerCloudIpc({ ipcMain, cloud });
-  registerLifeIpc({ ipcMain, sync: startLifeSync({ cloud }), cloud: () => (cloud ? cloud.snapshots : null) });
+  const lifeSync = startLifeSync({ cloud });
+  const billCal = createBillCalendar({
+    gcal,
+    store: require('./lifebudget'),
+    onSaved: () => lifeSync && lifeSync.soon(),
+    // "Delete the calendar event too?" - asked natively, never by the renderer.
+    confirmDelete: async (name) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        buttons: ['Delete event', 'Keep event'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'LunaCore - bill deleted',
+        message: `Also delete the Google Calendar event for "${name}"?`,
+      });
+      return response === 0;
+    },
+  });
+  registerLifeIpc({ ipcMain, sync: lifeSync, cloud: () => (cloud ? cloud.snapshots : null), billCal });
+  registerMailIpc({ ipcMain, sender: reportMail.sender, prefs: reportMail.prefs, nightly: reportMail.nightly });
 
   // "Add to my library": persists an /ask suggestion card into
   // config/libraries.local.json. addLibraryItem() (src/libraries.js) does all
@@ -3125,6 +3162,7 @@ app.whenReady().then(() => {
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();
   startUsageWatcher();
+  reportMail.nightly.start();
   startTelemetryWatcher();
   startMediaWatcher();
   // Only if the user has previously opted in - the pref defaults to false, so

@@ -17,6 +17,7 @@ import {
   el, bucket, button, amountField, bar, money, money0, signedMoney, shortDate, monthLabel, lang, today,
   getState, act, setStatus, toast,
 } from './lifeui.js';
+import { billCalendarControl } from './lifebillcal.js';
 
 // Kept across re-renders: the open pay editor ('billId:month') or deposit
 // editor (goal id), with what was typed so far.
@@ -110,8 +111,11 @@ function billLine(b) {
   const acts = el('div', 'life-row__acts');
   if (b.status === 'paid') acts.append(button('life.edit', () => openPay(b)), button('life.bills.unpay', () => unpay(b)));
   else acts.append(button('life.bills.pay', () => openPay(b), 'life-btn pad-send'));
+  const cal = billCalendarControl(b.id, () => rerender());
+  if (cal.action) acts.append(cal.action);
   li.append(text, amt, acts);
   if (paying === `${b.id}:${b.month}`) li.append(payEditor(b));
+  if (cal.editor) li.append(cal.editor);
   return li;
 }
 

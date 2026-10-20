@@ -11,6 +11,11 @@
 //                    7 days); body is absent while not connected
 // life:body-connect {email, password} -> {ok, persisted} | {ok:false, reason}
 // life:body-disconnect -> {ok}  forgets the stored YAZIO login
+// life:bill-cal-add {billId, calendar} -> {ok, budget...} | {ok:false, reason}
+//                    "Add to calendar": a recurring all-day event for the bill
+//                    (src/gcalbills.js); `calendar` is a key from
+//                    mission:cal-calendars. Due-day edits and deletes follow up
+//                    on their own after life:budget-do (billCal.onApplied).
 //
 // The renderer is untrusted: it names an op and sends a payload, and
 // src/lifebudget.js's fixed op table validates all of it. Failures come back
@@ -54,6 +59,12 @@ const REASONS = {
 const MIN_WRITE_GAP_MS = 100;
 // Ops that append one row (lifebudget.js always appends at the end).
 const CREATES = { addExpense: 'expenses', addDeposit: 'deposits' };
+// Ops only main may run: the bill <-> calendar event link is set by gcalbills.js.
+const MAIN_ONLY_OPS = new Set(['setBillEvent']);
+const BILL_CAL_REASONS = new Set([
+  'bad-input', 'not-found', 'already-added', 'rate-limited', 'maybe-created', 'not-ours',
+  'gcal-no-client', 'gcal-not-connected', 'gcal-auth', 'gcal-scope', 'gcal-not-editable', 'gcal-network',
+]);
 // A forced YAZIO refresh is 8 requests: a looping renderer must not hammer
 // an unofficial API with Mati's account. Unforced reads come from the cache.
 const MIN_FORCE_GAP_MS = 15 * 1000;
@@ -112,6 +123,7 @@ function registerLifeIpc({
   cloud = () => null,
   peerTimeoutMs = PEER_TIMEOUT_MS,
   bodyEveryMs = BODY_EVERY_MS,
+  billCal = null,
 }) {
   /** Shares the Body data with the other PCs and the phone; never waits, never throws. */
   const putYazio = (body) => {
@@ -155,18 +167,38 @@ function registerLifeIpc({
 
   ipcMain.handle('life:budget-do', (_event, req) => {
     if (!req || typeof req !== 'object' || typeof req.op !== 'string') return { ok: false, reason: 'bad-op' };
+    if (MAIN_ONLY_OPS.has(req.op)) return { ok: false, reason: 'bad-op' };
     const at = now();
     if (at - lastWriteAt < MIN_WRITE_GAP_MS) return { ok: false, reason: 'rate-limited' };
     lastWriteAt = at;
     try {
+      const before = billCal ? store.loadBudget(file) : null;
       const next = store.apply(req.op, req.data, file, at);
       if (sync) sync.soon();
+      // Calendar follow-up (due-day edit, delete) runs after the answer; it never throws.
+      if (billCal) billCal.onApplied(req.op, before, next);
       // A create answers its new row id, so the renderer can offer Undo.
       const rows = Object.hasOwn(CREATES, req.op) ? next[CREATES[req.op]] : null;
       const created = rows && rows.length ? rows[rows.length - 1].id : undefined;
       return { ...view(next, at, viewMonth(req, at)), created };
     } catch (err) {
       return { ok: false, reason: reasonOf(err) };
+    }
+  });
+
+  ipcMain.handle('life:bill-cal-add', async (_event, req) => {
+    if (!billCal) return { ok: false, reason: 'failed' };
+    if (!req || typeof req !== 'object' || typeof req.billId !== 'string' || typeof req.calendar !== 'string') {
+      return { ok: false, reason: 'bad-input' };
+    }
+    try {
+      await billCal.add(req.billId, req.calendar);
+      const at = now();
+      return view(store.loadBudget(file), at, viewMonth(req, at));
+    } catch (err) {
+      const reason = err && BILL_CAL_REASONS.has(err.reason) ? err.reason : 'failed';
+      if (reason === 'failed') console.error('[life] add bill to calendar failed:', err && err.message);
+      return { ok: false, reason };
     }
   });
 

@@ -22,6 +22,7 @@ import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
 import { mountAutoCompactSettings } from './autocompact.js';
 import { mountOrchestraSettings } from './orchestrasettings.js';
+import { mountMailSettings } from './mailsettings.js';
 import { mountSurfaceAlpha } from './surfacealpha.js';
 import { mountLmStudioSettings } from './lmstudiomodels.js';
 import { mountProviderSettings } from './providersettings.js';
@@ -545,6 +546,9 @@ export async function initTermcustomSettings() {
   // God Mode v2 worker model + permission mode (slice 4). Read by main when
   // a run starts; this only wires the two selects.
   mountOrchestraSettings(termcustomEl, prefs);
+
+  // Report emails (Gmail send-only grant, nightly summary). Same static-overlay shape.
+  mountMailSettings(termcustomEl);
 
   // Same static-overlay mount shape. Its apply path is driven by
   // appearance.js on every theme change, so this only wires the controls.
