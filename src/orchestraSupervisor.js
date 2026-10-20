@@ -503,7 +503,11 @@ function normalizeStoredPlan(raw) {
     workerModel: strOrNull(raw.workerModel, 32),
     permissionMode: strOrNull(raw.permissionMode, 32),
     allowedTools: strList(raw.allowedTools).filter(isAllowRule).slice(0, 50),
-    integrationMode: INTEGRATION_MODES.includes(raw.integrationMode) ? raw.integrationMode : null,
+    // A free run (orchestraFree.js) stays branches-only after a restart too.
+    freeMode: raw.freeMode === true,
+    integrationMode: raw.freeMode === true
+      ? 'branches'
+      : (INTEGRATION_MODES.includes(raw.integrationMode) ? raw.integrationMode : null),
     baseBranch: isBaseBranch(raw.baseBranch) ? raw.baseBranch : null,
     scheduledAt: Number.isFinite(raw.scheduledAt) ? raw.scheduledAt : null,
     approvalLog: (Array.isArray(raw.approvalLog) ? raw.approvalLog : [])

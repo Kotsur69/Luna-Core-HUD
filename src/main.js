@@ -52,7 +52,10 @@ const { resolveTemplateAdd, resolveTemplateUpdate } = require('./profileinput');
 const { localEndpointFromProfile, resolveAutoModel, LocalModelWatcher, probeEndpoint } = require('./lmstudio');
 // LM Studio tabs: role-rewriting loopback shim + pre-spawn env/flag prep.
 const { ensureShim, stopAllShims } = require('./lmstudioshim');
-const { resolveLocalLaunch, prepareLocalLaunch, launchWhenReady, ensureEmptyMcpConfig } = require('./locallaunch');
+const { resolveLocalLaunch, prepareLocalLaunch, prepareChainLaunch, launchWhenReady, ensureEmptyMcpConfig } = require('./locallaunch');
+const { ensureFallbackProxy, stopAllFallbackProxies } = require('./fallbackproxy');
+const { loadChains, resolveProfileChain } = require('./freechains');
+const { pickFreeProfileId } = require('./orchestraFree');
 const { userDir, ensureUserDir } = require('./paths');
 const { detectLmsCli, wakeLmStudio } = require('./lmstudiocli');
 const { findApiPort, listModels: listLmStudioModels, loadModel: loadLmStudioModel } = require('./lmstudiosdk');
@@ -981,6 +984,8 @@ const orchestra = createOrchestra({
   // Planning that hit the Claude limit waits for the reset (orchestraPlanWait.js).
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
   onPlanWait: (state) => send('orchestra:planWait', state),
+  // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
+  freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
   onRunEvent: (kind) => {
     if (readUiPrefs().voiceEnabled === false) return;
     if (kind === 'done') playCue('voice.done');
@@ -1348,8 +1353,11 @@ function editedByOtherSessions(session) {
  * @param {Object} profile
  */
 function launchSession(session, profile) {
-  const localLaunch = resolveLocalLaunch(profile, loadProviders().providers);
-  if (!localLaunch) {
+  const providers = loadProviders().providers;
+  const localLaunch = resolveLocalLaunch(profile, providers);
+  // A free-model chain tab goes through the fallback proxy (src/fallbackproxy.js).
+  const chain = localLaunch ? null : resolveProfileChain(profile, providers, loadChains());
+  if (!localLaunch && !chain) {
     // Still a new launch: invalidates a local prep that may be in flight.
     session.spawnSeq = (session.spawnSeq || 0) + 1;
     session.preparing = false;
@@ -1360,8 +1368,9 @@ function launchSession(session, profile) {
   // flash "ended" before its process even exists.
   session.preparing = true;
   launchWhenReady(session, profile, {
-    prepare: () =>
-      prepareLocalLaunch(profile, localLaunch, {
+    prepare: () => chain
+      ? prepareChainLaunch(profile, chain, { ensureProxy: ensureFallbackProxy, inheritedEnv: process.env })
+      : prepareLocalLaunch(profile, localLaunch, {
         probe: probeEndpoint,
         ensureShim,
         ensureMcpFile: () => (ensureUserDir() ? ensureEmptyMcpConfig(userDir()) : null),
@@ -3238,6 +3247,7 @@ app.on('window-all-closed', () => {
   keepAwake.stopSync();
   // LM Studio shims: close their loopback listeners and any open streams.
   stopAllShims().catch(() => {});
+  stopAllFallbackProxies().catch(() => {});
   // Best-effort: never blocks shutdown, and only ever stops a CCR gateway
   // this process started itself (src/ccrcontrol.js).
   ccrControl.shutdown();

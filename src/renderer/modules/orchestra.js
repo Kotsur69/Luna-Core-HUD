@@ -39,7 +39,7 @@ const killBtn = q('#orchestra-kill');
 const FAIL_CODES = new Set([
   'noTodos', 'busy', 'runActive', 'noClaude', 'noRepo', 'timeout', 'budget', 'limit', 'badJson', 'failed',
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
-  'badSchedule', 'noReset', 'badRule', 'mergeDeclined',
+  'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Integration errors with their own message (orchestraFinalize / Integrate).
@@ -69,7 +69,7 @@ let planWait = null;
 /** Edited prompts, `${planId}:${pkgId}` -> text, until launched. */
 const drafts = new Map();
 /** Start options picked on the board before Approve. */
-const startOpts = { when: 'now', time: '01:00', integration: null };
+const startOpts = { when: 'now', time: '01:00', integration: null, free: false };
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -145,12 +145,28 @@ function startOptions() {
     });
     row.append(time);
   }
-  row.append(
-    el('span', 'orchestra__optlabel', t('orch.integ')),
-    selectEl(integrationOptions(), chosenIntegration(), (v) => {
-      startOpts.integration = v;
-    }),
-  );
+  // Free providers: workers on the fallback-chain profile, luna-free/
+  // branches only - so the integration select has nothing to choose.
+  const free = el('label', 'orchestra__optlabel');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.checked = startOpts.free;
+  box.disabled = phase !== 'idle';
+  box.addEventListener('change', () => {
+    startOpts.free = box.checked;
+    render();
+  });
+  free.append(box, document.createTextNode(` ${t('orch.free')}`));
+  free.title = t('orch.free.hint');
+  row.append(free);
+  if (!startOpts.free) {
+    row.append(
+      el('span', 'orchestra__optlabel', t('orch.integ')),
+      selectEl(integrationOptions(), chosenIntegration(), (v) => {
+        startOpts.integration = v;
+      }),
+    );
+  }
   return row;
 }
 
@@ -438,6 +454,7 @@ async function startPlanning() {
     drafts.clear();
     startOpts.when = 'now';
     startOpts.integration = null;
+    startOpts.free = false;
   } else if (res && res.error === 'waiting') {
     planWait = res.planWait || null;
   } else {
@@ -463,13 +480,14 @@ async function launch(ids) {
       : approve && startOpts.when === 'reset'
         ? { kind: 'reset' }
         : null;
-  const integration = approve ? chosenIntegration() : null;
+  const free = approve && startOpts.free;
+  const integration = approve && !free ? chosenIntegration() : null;
   phase = 'launching';
   failure = null;
   render();
   let res;
   try {
-    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration });
+    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free });
   } catch {
     res = { ok: false, error: 'failed' };
   }

@@ -462,6 +462,7 @@ module.exports = {
   rewriteBody,
   shouldRewrite,
   upstreamErrorBody,
+  forwardHeaders,
   tokenMatches,
   isConnectivityProbe,
   isEventStream,

@@ -37,6 +37,7 @@ const { validatePlan, estimatePlan, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODE
 const sup = require('./orchestraSupervisor');
 const { createFinalizer } = require('./orchestraFinalize');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
+const { FREE_BRANCH_PREFIX, isSafeFreeBranch, freeRunSettings, integrationFor } = require('./orchestraFree');
 
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
@@ -205,6 +206,7 @@ function createOrchestra(deps) {
       settled: plan.settled,
       pausedUntil: plan.pausedUntil,
       scheduledAt: plan.scheduledAt,
+      freeMode: plan.freeMode === true,
       integration: { ...plan.integration, running: finalizer.isRunning() },
       overlaps: sup.liveOverlaps(plan.packages),
       suggestions: sup.allowSuggestions(plan.approvalLog).filter((s) => !(plan.allowedTools || []).includes(s.rule)),
@@ -323,6 +325,7 @@ function createOrchestra(deps) {
         permissionMode: null,
         allowedTools: null,
         integrationMode: null,
+        freeMode: false,
         baseBranch: sup.isBaseBranch(baseBranch) ? baseBranch : null,
         scheduledAt: null,
         approvalLog: [],
@@ -402,8 +405,16 @@ function createOrchestra(deps) {
   async function launchOneUnsafe(pkg, stamp) {
     const pushedDeps = pkg.dependsOn.map(findPkg).filter((d) => d && d.state === 'pushed' && d.branch);
     const baseDep = pushedDeps.find((d) => d.headSha) || null;
-    const wt = await deps.addWorktree(plan.repoPath, `${pkg.id}-${stamp}`, { base: baseDep ? baseDep.headSha : undefined });
+    const wt = await deps.addWorktree(plan.repoPath, `${pkg.id}-${stamp}`, {
+      base: baseDep ? baseDep.headSha : undefined,
+      ...(plan.freeMode ? { branchPrefix: FREE_BRANCH_PREFIX } : {}),
+    });
     if (!wt.ok) return { state: 'failed', error: wt.error };
+    // A free run never works on (or pushes) the target branch.
+    if (plan.freeMode && !isSafeFreeBranch(wt.branch, plan.baseBranch)) {
+      if (deps.removeWorktree) await deps.removeWorktree(plan.repoPath, wt.root);
+      return { state: 'failed', error: 'unsafeBranch', detail: wt.branch || null };
+    }
     const others = pushedDeps.filter((d) => d !== baseDep).map((d) => d.branch);
     if (others.length && deps.mergeDeps) {
       const merged = await deps.mergeDeps(wt.root, others);
@@ -511,8 +522,17 @@ function createOrchestra(deps) {
       return { ok: false, error: 'nothingToLaunch' };
     }
 
-    if (mode === 'merge' && !plan.started && !(await confirmMerge())) return { ok: false, error: 'mergeDeclined' };
-    if (mode && !plan.started) plan.integrationMode = mode;
+    // "Free providers" (orchestraFree.js): chosen at Approve, fixed for the run.
+    if (o.free === true && !plan.started && !plan.freeMode) {
+      const free = freeRunSettings({ freeProfileId: deps.freeProfileId ? deps.freeProfileId() : null });
+      if (!free.ok) return { ok: false, error: free.error };
+      plan.freeMode = true;
+      plan.profileId = free.profileId;
+      plan.integrationMode = free.integrationMode;
+    }
+    const wanted = integrationFor(plan, mode);
+    if (wanted === 'merge' && !plan.started && !(await confirmMerge())) return { ok: false, error: 'mergeDeclined' };
+    if (wanted && !plan.started) plan.integrationMode = wanted;
     if (startAt) {
       freezeSettings();
       plan.scheduledAt = startAt;
@@ -643,7 +663,7 @@ function createOrchestra(deps) {
     commit();
     let res;
     try {
-      res = await finishPackage(findPkg(id));
+      res = await finishPackage({ ...findPkg(id), pushOnVerifyFail: plan.freeMode === true });
     } catch (err) {
       res = { ok: false, stage: 'push', detail: err instanceof Error ? err.message : 'finish failed' };
     }
@@ -785,7 +805,7 @@ function createOrchestra(deps) {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
     if (!plan.packages.some((p) => p.state !== 'pending')) return { ok: false, error: 'nothingToLaunch' };
-    if (sup.INTEGRATION_MODES.includes(o.integration) && o.integration !== plan.integrationMode) {
+    if (sup.INTEGRATION_MODES.includes(o.integration) && integrationFor(plan, o.integration) !== plan.integrationMode) {
       if (o.integration === 'merge' && !(await confirmMerge())) return { ok: false, error: 'mergeDeclined' };
       plan.integrationMode = o.integration;
     }

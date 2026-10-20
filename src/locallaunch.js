@@ -299,7 +299,39 @@ async function launchWhenReady(session, profile, { prepare, spawn, isLive }) {
   spawn(session, profile, launch);
 }
 
+/**
+ * Pre-spawn prep for a free-model chain tab (src/fallbackproxy.js): the tab
+ * talks to the loopback proxy, which walks the chain in front of the
+ * gateway. Same env rules as a local tab - the proxy URL + token, every tier
+ * named after the chain's first model (the proxy rewrites it per attempt
+ * anyway), the long timeouts free models need. Never rejects; a proxy that
+ * does not start leaves the tab on the gateway directly.
+ * @param {Object} profile
+ * @param {{id:string, models:string[]}} chain
+ * @param {{ensureProxy:Function, inheritedEnv?:Object, timeoutMs?:number}} deps
+ * @returns {Promise<{envOverrides:Object, extraArgs:string[], notes:string[]}>}
+ */
+async function prepareChainLaunch(profile, chain, deps) {
+  const upstream = localEndpointFromProfile(profile);
+  if (!upstream) return { envOverrides: {}, extraArgs: [], notes: ['not-local'] };
+  const proxy = await settle(() => deps.ensureProxy(upstream, chain), deps.timeoutMs || PREP_TIMEOUT_MS, null);
+  const ready = Boolean(proxy && proxy.ok && proxy.url && proxy.token);
+  return {
+    envOverrides: buildLocalEnv({
+      profileEnv: profile.env,
+      inheritedEnv: deps.inheritedEnv,
+      model: chain.models[0],
+      contextLength: null,
+      shimUrl: ready ? proxy.url : null,
+      shimToken: ready ? proxy.token : null,
+    }),
+    extraArgs: [],
+    notes: ready ? [] : ['proxy-failed'],
+  };
+}
+
 module.exports = {
+  prepareChainLaunch,
   normalizeLocalLaunch,
   resolveLocalLaunch,
   buildLocalEnv,
