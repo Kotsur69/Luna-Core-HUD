@@ -2,6 +2,6 @@
   "activeProject": "home",
   "projects": [
     { "id": "home", "label": "Home (~)", "path": "~" },
-    { "id": "lunacore", "label": "Luna-Core-HUD", "path": "~/Desktop/repos/Luna-Core-HUD" }
+    { "id": "lunacore", "label": "Luna-Core-HUD", "path": ["~/Desktop/repos/Luna-Core-HUD", "~/source/repos/Luna-Core-HUD"] }
   ]
 }

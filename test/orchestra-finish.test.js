@@ -31,7 +31,7 @@ test('clean worktree with commits: verify, push, report HEAD', async () => {
     'rev-parse': { ok: true, stdout: 'abc\n' },
     diff: { ok: true, stdout: 'src/x.js\n' },
   });
-  const res = await finishPackage(pkg, { execImpl: git.execImpl, verifyImpl: passVerify });
+  const res = await finishPackage(pkg, { isDirImpl: () => true, execImpl: git.execImpl, verifyImpl: passVerify });
   assert.deepEqual(res, { ok: true, headSha: 'abc', files: ['src/x.js'] });
   assert.ok(git.calls.includes('push -u origin refs/heads/luna/a-1'));
   assert.ok(!git.calls.some((c) => c.startsWith('commit')), 'nothing to commit');
@@ -39,7 +39,7 @@ test('clean worktree with commits: verify, push, report HEAD', async () => {
 
 test('leftovers are committed as a wip commit before verifying', async () => {
   const git = fakeGit({ status: { ok: true, stdout: ' M src/x.js\n' }, 'rev-list': { ok: true, stdout: '1' } });
-  await finishPackage(pkg, { execImpl: git.execImpl, verifyImpl: passVerify });
+  await finishPackage(pkg, { isDirImpl: () => true, execImpl: git.execImpl, verifyImpl: passVerify });
   assert.ok(git.calls.includes('add -A'));
   assert.ok(git.calls.includes('commit -m chore: luna wip a'));
 });
@@ -47,7 +47,7 @@ test('leftovers are committed as a wip commit before verifying', async () => {
 test('no commit past the base is refused before verify or push', async () => {
   let verified = false;
   const git = fakeGit({ 'rev-list': { ok: true, stdout: '0' } });
-  const res = await finishPackage(pkg, {
+  const res = await finishPackage(pkg, { isDirImpl: () => true,
     execImpl: git.execImpl,
     verifyImpl: async () => {
       verified = true;
@@ -61,13 +61,13 @@ test('no commit past the base is refused before verify or push', async () => {
 
 test('a red verify returns its output and does not push', async () => {
   const git = fakeGit({ 'rev-list': { ok: true, stdout: '1' } });
-  const res = await finishPackage(pkg, { execImpl: git.execImpl, verifyImpl: async () => ({ ok: false, output: 'FAIL' }) });
+  const res = await finishPackage(pkg, { isDirImpl: () => true, execImpl: git.execImpl, verifyImpl: async () => ({ ok: false, output: 'FAIL' }) });
   assert.deepEqual(res, { ok: false, stage: 'verify', output: 'FAIL' });
   assert.ok(!git.calls.some((c) => c.startsWith('push')));
 });
 
 test('push failure reports git\'s first stderr line', async () => {
   const git = fakeGit({ 'rev-list': { ok: true, stdout: '1' }, push: { ok: false, stderr: 'fatal: no remote\nmore' } });
-  const res = await finishPackage(pkg, { execImpl: git.execImpl, verifyImpl: passVerify });
+  const res = await finishPackage(pkg, { isDirImpl: () => true, execImpl: git.execImpl, verifyImpl: passVerify });
   assert.deepEqual(res, { ok: false, stage: 'push', detail: 'fatal: no remote' });
 });

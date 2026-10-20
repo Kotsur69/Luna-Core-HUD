@@ -37,14 +37,14 @@ const killBtn = q('#orchestra-kill');
 // Error codes main can return that have their own message; anything else
 // reads as the generic one.
 const FAIL_CODES = new Set([
-  'noTodos', 'busy', 'runActive', 'noClaude', 'noRepo', 'timeout', 'budget', 'badJson', 'failed',
+  'noTodos', 'busy', 'runActive', 'noClaude', 'noRepo', 'timeout', 'budget', 'limit', 'badJson', 'failed',
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
-  'badSchedule', 'noReset', 'badRule', 'mergeDeclined',
+  'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Integration errors with their own message (orchestraFinalize / Integrate).
 const INTEG_ERRORS = new Set([
-  'noBaseBranch', 'noGh', 'ghFailed', 'fetchFailed', 'worktreeFailed', 'installFailed', 'mergeFailed',
+  'noBaseBranch', 'noGh', 'missingCwd', 'ghFailed', 'fetchFailed', 'worktreeFailed', 'installFailed', 'mergeFailed',
   'conflictFailed', 'verifyFailed', 'pushFailed', 'baseMoved',
 ]);
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).
@@ -61,10 +61,15 @@ let plan = null;
 let phase = 'idle';
 /** Error code of the last plan/launch attempt, shown above the board. */
 let failure = null;
+/**
+ * Planning parked on a spent Claude limit (main's orchestraPlanWait.js):
+ * {state:'waiting'|'planning', resumeAt, window} or null.
+ */
+let planWait = null;
 /** Edited prompts, `${planId}:${pkgId}` -> text, until launched. */
 const drafts = new Map();
 /** Start options picked on the board before Approve. */
-const startOpts = { when: 'now', time: '01:00', integration: null };
+const startOpts = { when: 'now', time: '01:00', integration: null, free: false };
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -140,12 +145,28 @@ function startOptions() {
     });
     row.append(time);
   }
-  row.append(
-    el('span', 'orchestra__optlabel', t('orch.integ')),
-    selectEl(integrationOptions(), chosenIntegration(), (v) => {
-      startOpts.integration = v;
-    }),
-  );
+  // Free providers: workers on the fallback-chain profile, luna-free/
+  // branches only - so the integration select has nothing to choose.
+  const free = el('label', 'orchestra__optlabel');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.checked = startOpts.free;
+  box.disabled = phase !== 'idle';
+  box.addEventListener('change', () => {
+    startOpts.free = box.checked;
+    render();
+  });
+  free.append(box, document.createTextNode(` ${t('orch.free')}`));
+  free.title = t('orch.free.hint');
+  row.append(free);
+  if (!startOpts.free) {
+    row.append(
+      el('span', 'orchestra__optlabel', t('orch.integ')),
+      selectEl(integrationOptions(), chosenIntegration(), (v) => {
+        startOpts.integration = v;
+      }),
+    );
+  }
   return row;
 }
 
@@ -358,10 +379,45 @@ function updateButtons() {
   if (killBtn) killBtn.hidden = !(running || (plan && plan.started && !plan.killed && phase === 'launching'));
 }
 
+/** HH:MM (plus the date when it is not today) of an epoch ms. */
+function fmtResume(at) {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString()} ${time}`;
+}
+
+/** The waiting state: why, when planning resumes, and a way out. */
+function renderPlanWait() {
+  if (!planWait) return;
+  if (planWait.state === 'planning') {
+    body.append(msg(t('orch.planning')));
+    return;
+  }
+  const box = el('div', 'orchestra__wait');
+  const key = planWait.window === 'weekly' ? 'orch.wait.weekly' : planWait.window === '5h' ? 'orch.wait.fiveHour' : 'orch.wait.limit';
+  box.append(msg(t(key, { time: fmtResume(planWait.resumeAt) })));
+  const cancel = el('button', 'pad-send', t('orch.wait.cancel'));
+  cancel.type = 'button';
+  cancel.addEventListener('click', cancelPlanWait);
+  box.append(cancel);
+  body.append(box);
+}
+
+async function cancelPlanWait() {
+  try {
+    await window.lunacore.cancelOrchestraPlanWait();
+  } catch {
+    /* the wait state event below repaints either way */
+  }
+  planWait = null;
+  if (isOpen) render();
+}
+
 function render() {
   if (!body) return;
   body.replaceChildren();
   if (phase === 'planning') body.append(msg(t('orch.planning')));
+  renderPlanWait();
   if (failure) body.append(msg(failText(failure), 'is-bad'));
   if (plan) renderPlan();
   updateButtons();
@@ -394,9 +450,13 @@ async function startPlanning() {
   phase = 'idle';
   if (res && res.ok) {
     plan = res.plan;
+    planWait = null;
     drafts.clear();
     startOpts.when = 'now';
     startOpts.integration = null;
+    startOpts.free = false;
+  } else if (res && res.error === 'waiting') {
+    planWait = res.planWait || null;
   } else {
     failure = (res && res.error) || 'failed';
     await refetch(); // a refused re-plan keeps the old plan on screen
@@ -420,13 +480,14 @@ async function launch(ids) {
       : approve && startOpts.when === 'reset'
         ? { kind: 'reset' }
         : null;
-  const integration = approve ? chosenIntegration() : null;
+  const free = approve && startOpts.free;
+  const integration = approve && !free ? chosenIntegration() : null;
   phase = 'launching';
   failure = null;
   render();
   let res;
   try {
-    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration });
+    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free });
   } catch {
     res = { ok: false, error: 'failed' };
   }
@@ -489,9 +550,16 @@ async function openOrchestra() {
     // Focus, so Escape reaches the overlay instead of the terminal.
     overlay.focus();
   }
-  if (phase === 'idle') await refetch();
+  if (phase === 'idle') {
+    await refetch();
+    try {
+      planWait = await window.lunacore.getOrchestraPlanWait();
+    } catch {
+      planWait = null;
+    }
+  }
   render();
-  if (!plan && phase === 'idle' && !failure) startPlanning();
+  if (!plan && !planWait && phase === 'idle' && !failure) startPlanning();
 }
 
 function closeOrchestra() {
@@ -519,6 +587,15 @@ if (overlay) {
 
   window.lunacore.onOrchestraChanged((next) => {
     plan = next;
+    if (isOpen) render();
+  });
+  window.lunacore.onOrchestraPlanWait((state) => {
+    if (state && state.state === 'failed') {
+      failure = state.error || 'failed';
+      planWait = null;
+    } else {
+      planWait = state;
+    }
     if (isOpen) render();
   });
   onLangChange(() => {

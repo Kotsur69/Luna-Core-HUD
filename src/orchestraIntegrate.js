@@ -28,6 +28,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { runGit, firstLine } = require('./worktrees');
 const { runVerify } = require('./orchestraFinish');
+const { checkCwd } = require('./projects');
 
 const GH_TIMEOUT_MS = 60 * 1000;
 const RESOLVER_TIMEOUT_MS = 15 * 60 * 1000;
@@ -114,7 +115,10 @@ function prBody(pkg, ctx) {
  * Opens (or finds the already open) PR for one pushed branch.
  * @returns {Promise<{ok:true, url:string} | {ok:false, error:'noGh'|'ghFailed', detail?:string}>}
  */
-async function createPr({ repoPath, base, branch, title, body, env }, execImpl) {
+async function createPr({ repoPath, base, branch, title, body, env, isDirImpl }, execImpl) {
+  // gh in a missing folder fails with ENOENT, which would read as "gh not installed".
+  const cwdOk = checkCwd(repoPath, isDirImpl);
+  if (!cwdOk.ok) return { ok: false, error: 'missingCwd', detail: cwdOk.detail };
   const res = await run(
     'gh',
     ['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', body],
@@ -169,7 +173,8 @@ function resolverPrompt(branch, files) {
 }
 
 /** One headless `claude -p` to resolve the conflicts in `cwd`. */
-async function runResolver({ cwd, env, branch, files }, execImpl) {
+async function runResolver({ cwd, env, branch, files, isDirImpl }, execImpl) {
+  if (!checkCwd(cwd, isDirImpl).ok) return { ok: false, detail: `working folder missing: ${cwd || ''}` };
   const res = await run(
     'claude',
     [

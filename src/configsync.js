@@ -146,6 +146,7 @@ function startConfigSync({ cloud, onChanged }) {
   const { createProjectsProvider } = require('./projectsync');
   const { docProviders } = require('./docsync');
   const { createNewsProvider, createMissionProjectsProvider } = require('./missionsync');
+  const { createHostDefaultProvider } = require('./hostdefault');
   paths.ensureUserDir();
   const sync = createConfigSync({
     providers: [
@@ -153,6 +154,7 @@ function startConfigSync({ cloud, onChanged }) {
       ...docProviders((name) => paths.local(name)),
       createNewsProvider(paths.local('mission-news.local.json')),
       createMissionProjectsProvider(paths.local('mission-projects.local.json')),
+      createHostDefaultProvider(paths.local('host-default.local.json')),
     ],
     metaFile: paths.local('config-sync.local.json'),
     ...cloud.hooks('config'),

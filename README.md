@@ -1224,6 +1224,35 @@ permission mode (default **bypassPermissions** — a worktree contains a worker'
 git damage, not its filesystem damage), what happens after a run, and the list
 of allowed tools learned from stalls.
 
+## Host mode — a headless Luna host
+
+`LunaCore --host` runs the app without the HUD window: a tray icon only
+("Luna host · <machine> · default", **Stop**, **Open log**). It keeps the PC
+awake, puts a `host` heartbeat snapshot every 30 s (online on the phone while
+it is under 90 s old), runs signed commands from the phone (`host_commands`)
+and clones the synced projects it lacks. See
+[docs/REMOTE_HOST_PLAN.md](docs/REMOTE_HOST_PLAN.md) ("Host runtime", H1).
+
+- **Windows — `scripts/Luna Host.bat`** (double-click): starts the installed or
+  portable `LunaCore.exe --host --make-default`. No admin rights, no Node. It
+  finds the exe via `%LUNACORE_EXE%`, a `LunaCore*.exe` next to the script, or
+  the per-user / per-machine install. When the HUD already runs, it switches
+  into host mode instead (Stop in the tray brings the HUD back).
+- **macOS — `scripts/Luna Host.command`** (double-click, in a clone of this
+  repo): `git pull`, `npm ci` only when `package-lock.json` changed,
+  `caffeinate`, then `npx electron . --host --make-default`. Needs git, Node,
+  Claude Code and `gh auth login` once.
+- **`--make-default`** writes the synced unit `host:default` = `{machine}`
+  (config scope, newest wins), so the phone preselects this host. Without it
+  the host only shows as online.
+- **Auto-clone:** every synced project with a `remote`
+  (`https://github.com/<owner>/<repo>`) missing on the host is cloned into
+  `~/source/repos/<repo>` with the host's own git credentials — only for owners
+  in `config/host.local.json` → `{"owners": ["Kotsur69"]}` (the default). An
+  existing folder is never touched; the phone sees cloned / skipped: folder
+  exists / failed: auth / failed: other.
+- First run: the GitHub login opens in the browser, same as the HUD.
+
 ## Mission Control (Ctrl+Shift+M)
 
 A full-screen overlay (also the **Mission Control** chip next to Ctrl+K /

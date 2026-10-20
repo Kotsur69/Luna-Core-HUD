@@ -4,7 +4,14 @@
 // A provider for src/configsync.js: the projects switcher's list (projects.js,
 // base projects.json + projects.local.json) as one unit per project:
 //
-//   proj:entry:<id> = {label, path}     path under the home dir -> "~/..."
+//   proj:entry:<id> = {label, path, remote?}   path under the home dir -> "~/..."
+//
+// `remote` is the normalised https URL of the repo's origin
+// ("https://github.com/<owner>/<repo>", see src/missionrepokey.js), filled by
+// any PC that has the repo, so a host without it can clone it
+// (docs/REMOTE_HOST_PLAN.md H1). Entries without it still load. A PC that
+// lacks the repo keeps the remote another PC sent (stored in its local file):
+// it never overwrites a known remote with none.
 //
 // A PC adds the projects it lacks and drops the ones another PC deleted, but
 // a project it already has keeps its own path and label: the same repo may
@@ -22,6 +29,7 @@ const os = require('os');
 const path = require('path');
 const { mergeProjects } = require('./projects');
 const { hasText, normalizeText } = require('./localized');
+const { normalizeRemote, findRepo, originUrl } = require('./missionrepokey');
 
 const PREFIX = 'proj:entry:';
 const ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
@@ -58,12 +66,47 @@ function validPath(p) {
   return p === '~' || /^~[\\/]/.test(p) || /^[A-Za-z]:[\\/]/.test(p) || /^\/(?![\\/?.])/.test(p);
 }
 
-/** A cloud value -> {label, path}, or null. */
+/** Only a GitHub repo URL in the normalised form; the host clones nothing else. */
+const REMOTE_RE = /^https:\/\/github\.com\/([a-z0-9](?:[a-z0-9-]{0,38}))\/([a-z0-9._-]{1,100})$/;
+
+/** A remote that passes the reader, or null. '.' / '..' are no repo names. */
+function validRemote(v) {
+  const m = typeof v === 'string' ? REMOTE_RE.exec(v) : null;
+  return m && m[2] !== '.' && m[2] !== '..' ? v : null;
+}
+
+/** Any git remote URL -> "https://github.com/<owner>/<repo>", or null for anything else. */
+function remoteUrl(url) {
+  const key = normalizeRemote(url);
+  return key ? validRemote(`https://${key}`) : null;
+}
+
+/** The origin of the repo holding `dir` on this PC as a remote URL, or null. */
+function repoRemote(dir) {
+  try {
+    const repo = findRepo(dir);
+    if (!repo) return null;
+    return remoteUrl(originUrl(fs.readFileSync(path.join(repo.gitDir, 'config'), 'utf8')));
+  } catch {
+    return null; // no repo here, or an unreadable config: no remote to offer
+  }
+}
+
+/**
+ * A cloud value -> {label, path, remote?}, or null. A bad remote drops only
+ * the remote: the entry itself is still a fine switcher row.
+ */
 function validEntry(v) {
   if (!isPlainObject(v) || !hasText(v.label) || !validPath(v.path)) return null;
   const label = normalizeText(v.label);
   if (JSON.stringify(label).length > MAX_LABEL) return null;
-  return { label, path: v.path };
+  const remote = validRemote(v.remote);
+  return remote ? { label, path: v.path, remote } : { label, path: v.path };
+}
+
+/** `entry` with `remote` when it has none of its own: a known remote never goes back to none. */
+function keepRemote(entry, remote) {
+  return entry.remote || !remote ? entry : { ...entry, remote };
 }
 
 /** null when the file is missing; throws when it exists but is unreadable. */
@@ -92,13 +135,33 @@ function writeAtomic(file, text) {
   }
 }
 
-const toUnits = (projects) => projects.map((p) => [PREFIX + p.id, { label: p.label, path: portablePath(p.path) }]);
 const idOf = (k) => k.slice(PREFIX.length);
 
+/** id -> remote stored in a parsed projects file (what another PC sent earlier). */
+function storedRemotes(doc) {
+  const out = new Map();
+  for (const p of doc && Array.isArray(doc.projects) ? doc.projects : []) {
+    const remote = p && typeof p.id === 'string' ? validRemote(p.remote) : null;
+    if (remote) out.set(p.id, remote);
+  }
+  return out;
+}
+
 /**
- * @param {{baseFile: string, localFile: string}} files the two files projects.js reads
+ * @param {{baseFile: string, localFile: string, remoteOf?: (dir: string) => string|null}} files
+ *   the two files projects.js reads; remoteOf(dir) = the origin of the repo
+ *   in that folder here (injectable for tests)
  */
-function createProjectsProvider({ baseFile, localFile }) {
+function createProjectsProvider({ baseFile, localFile, remoteOf = repoRemote }) {
+  /** Git on this PC first (it may have moved), then what the local file stored. */
+  function toUnits(projects, stored) {
+    return projects.map((p) => {
+      const entry = { label: p.label, path: portablePath(p.path) };
+      const remote = validRemote(remoteOf(p.path)) || stored.get(p.id) || null;
+      return [PREFIX + p.id, remote ? { ...entry, remote } : entry];
+    });
+  }
+
   return {
     name: 'projects',
     owns: (k) => k.startsWith(PREFIX),
@@ -108,7 +171,7 @@ function createProjectsProvider({ baseFile, localFile }) {
     read(now) {
       const baseDoc = readDoc(baseFile) || { projects: [] };
       const doc = readDoc(localFile);
-      const units = toUnits(mergeProjects(baseDoc, doc).projects);
+      const units = toUnits(mergeProjects(baseDoc, doc).projects, storedRemotes(doc));
       const base = doc ? Math.floor(Math.min(fs.statSync(localFile).mtimeMs, now)) : 0;
       const alive = new Set(units.map(([k]) => k));
       const removed = doc && Array.isArray(doc.removedIds) ? doc.removedIds : [];
@@ -128,14 +191,14 @@ function createProjectsProvider({ baseFile, localFile }) {
       let room = MAX_PROJECTS - merged.filter(([k]) => mine.has(k)).length;
       return merged
         .filter(([k]) => mine.has(k) || room-- > 0)
-        .map(([k, v]) => [k, mine.has(k) ? mine.get(k) : v]);
+        .map(([k, v]) => [k, mine.has(k) ? keepRemote(mine.get(k), v.remote) : v]);
     },
 
     /** Writes projects.local.json so that loadProjects() lists exactly `units`. */
     write(units, local) {
       const doc = local.doc || {};
       const ids = new Set(units.map(([k]) => idOf(k)));
-      const baseKeys = new Set(toUnits(mergeProjects(local.baseDoc, null).projects).map(([k]) => k));
+      const baseKeys = new Set(mergeProjects(local.baseDoc, null).projects.map((p) => PREFIX + p.id));
       const all = Array.isArray(doc.projects) ? doc.projects : [];
       const hasId = (p) => p && typeof p.id === 'string';
       const raw = new Map(all.filter(hasId).map((p) => [p.id, p]));
@@ -143,9 +206,11 @@ function createProjectsProvider({ baseFile, localFile }) {
       const projects = all.filter((p) => !hasId(p));
       for (const [k, v] of units) {
         const id = idOf(k);
-        // Keep this PC's own entry as written; a base entry needs no copy.
-        if (raw.has(id)) projects.push(raw.get(id));
-        else if (!baseKeys.has(k)) projects.push({ id, label: v.label, path: v.path });
+        // Keep this PC's own entry as written (plus a newly known remote); a
+        // base entry needs a copy only to carry a remote.
+        const remote = validRemote(v.remote);
+        if (raw.has(id)) projects.push(remote && raw.get(id).remote !== remote ? { ...raw.get(id), remote } : raw.get(id));
+        else if (!baseKeys.has(k) || remote) projects.push(remote ? { id, label: v.label, path: v.path, remote } : { id, label: v.label, path: v.path });
       }
       // Every project that was listed and is gone now is recorded, like removeProject()
       // does; one the cloud brought back is taken off the list.
@@ -157,4 +222,4 @@ function createProjectsProvider({ baseFile, localFile }) {
   };
 }
 
-module.exports = { createProjectsProvider, portablePath, validEntry, readDoc, writeAtomic, PREFIX, MAX_PROJECTS };
+module.exports = { createProjectsProvider, portablePath, validEntry, validRemote, remoteUrl, repoRemote, readDoc, writeAtomic, PREFIX, MAX_PROJECTS };

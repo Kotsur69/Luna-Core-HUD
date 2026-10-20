@@ -43,3 +43,6 @@ __pycache__/
 
 # Playwright MCP screenshots / logs
 .playwright-mcp/
+
+# Luna Host.command: package-lock.json hash of the last npm ci
+.host-lock.sha256

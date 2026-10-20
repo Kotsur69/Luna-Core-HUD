@@ -111,6 +111,20 @@
       "docsUrl": "https://github.com/tashfeenahmed/freellmapi"
     },
     {
+      "id": "freellm-chain",
+      "label": { "pl": "FreeLLMAPI (claude, lancuch zapasowych modeli)", "en": "FreeLLMAPI (claude, fallback chain)" },
+      "wireVia": "direct",
+      "requiresApiKey": true,
+      "defaultModel": "",
+      "fallbackChain": "free-coding",
+      "envTemplate": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:31415",
+        "ANTHROPIC_AUTH_TOKEN": "{{apiKey}}",
+        "API_TIMEOUT_MS": "3000000"
+      },
+      "docsUrl": "https://github.com/tashfeenahmed/freellmapi"
+    },
+    {
       "id": "freellm-codex",
       "label": { "pl": "FreeLLMAPI (Codex CLI, darmowe modele)", "en": "FreeLLMAPI (Codex CLI, free models)" },
       "wireVia": "native",

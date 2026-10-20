@@ -61,9 +61,12 @@ function worktreePathFor(repoRoot, slug) {
   return path.join(path.dirname(repoRoot), WORKTREE_DIR, path.basename(repoRoot), slug);
 }
 
-/** @param {string} slug */
-function branchFor(slug) {
-  return `${BRANCH_PREFIX}${slug}`;
+/** Branch prefixes a caller may ask for (God Mode free runs use luna-free/). */
+const BRANCH_PREFIXES = new Set([BRANCH_PREFIX, 'luna-free/']);
+
+/** @param {string} slug @param {string} [prefix] one of BRANCH_PREFIXES */
+function branchFor(slug, prefix = BRANCH_PREFIX) {
+  return `${BRANCH_PREFIXES.has(prefix) ? prefix : BRANCH_PREFIX}${slug}`;
 }
 
 /** First non-empty line of git's stderr - enough to tell the user what broke. */
@@ -124,8 +127,9 @@ function copyEnvFiles(fromDir, toDir, fsImpl = fs) {
  *
  * @param {string} repoPath the project's folder
  * @param {unknown} name tab / branch name as typed
- * @param {{execImpl?: Function, fsImpl?: typeof fs, base?: string}} [deps]
+ * @param {{execImpl?: Function, fsImpl?: typeof fs, base?: string, branchPrefix?: string}} [deps]
  *   base: commit sha to branch from instead of HEAD
+ *   branchPrefix: 'luna/' (default) or 'luna-free/' - anything else is ignored
  * @returns {Promise<{ok:true, cwd:string, root:string, branch:string, envCopied:number}
  *   | {ok:false, error:'badName'|'notRepo'|'noCommits'|'exists'|'gitFailed', detail?:string}>}
  */
@@ -147,8 +151,8 @@ async function addWorktree(repoPath, name, deps = {}) {
   const target = worktreePathFor(root, slug);
   if (fsImpl.existsSync(target)) return { ok: false, error: 'exists', detail: target };
 
-  const branch = branchFor(slug);
-  const base = typeof deps.base === 'string' && BASE_SHA_RE.test(deps.base) ? deps.base : 'HEAD';
+  const branch = branchFor(slug, deps.branchPrefix);
+  const base =typeof deps.base === 'string' && BASE_SHA_RE.test(deps.base) ? deps.base : 'HEAD';
   const add = await runGit(root, ['worktree', 'add', '-b', branch, target, base], execImpl);
   if (!add.ok) return { ok: false, error: 'gitFailed', detail: firstLine(add.stderr) };
 

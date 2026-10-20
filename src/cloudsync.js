@@ -208,6 +208,7 @@ const CLOUD_OFF = {
   logout: async () => {},
   syncNow: async () => ({ ok: false, reason: 'not-configured' }),
   snapshots: SNAPSHOTS_OFF,
+  client: null,
 };
 
 /**
@@ -311,6 +312,8 @@ function startCloud({ machine }) {
     syncNow,
     /** One row per machine for the ledger / news / YAZIO (cloudsnapshots.js). */
     snapshots,
+    /** The logged-in client, for the host's command loop (src/hostcommands.js). */
+    client: auth.client,
   };
 }
 
