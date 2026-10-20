@@ -98,6 +98,7 @@ module.exports = {
   MAX_DETAILS_CHARS,
   normalizeTodos,
   normalizeStore,
+  readStore,
   readTodos,
   writeTodos,
   keyFor,

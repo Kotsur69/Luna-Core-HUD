@@ -5,8 +5,10 @@
 // up top, then where the income went - five KPI cards (income, fixed bills,
 // savings, planned envelopes, free spending), a donut of the same split, the
 // envelopes against their plan and usual spend, free spending by category and
-// the bills still to pay (each with an inline Pay). Every number is printed as text; colour only
-// repeats it.
+// the bills still to pay (each with an inline Pay). Above the money: the Now
+// strip and the day's row - productivity score, check-in and weekly goals
+// (lifescoreview.js, lifecheckin.js, lifegoalsview.js). Every number is
+// printed as text; colour only repeats it.
 // ============================================================================
 
 'use strict';
@@ -15,6 +17,9 @@ import { t } from './util.js';
 import { el, bucket, button, bar, money, money0, pct, shortDate, catName, catColor, getState } from './lifeui.js';
 import { billRow } from './lifebills.js';
 import { donut } from './lifecharts.js';
+import { scoreCard, nowStrip } from './lifescoreview.js';
+import { checkinCard } from './lifecheckin.js';
+import { goalsCard } from './lifegoalsview.js';
 
 const BUCKET_COLOR = {
   fixed: 'var(--life-fixed)',
@@ -197,5 +202,7 @@ export function renderOverview(root, state, goTab) {
   top.append(hero(s), split(s));
   const grid = el('div', 'life-grid');
   grid.append(envelopes(s, goTab), freeSpending(s), upcoming(s, goTab, redraw));
-  root.replaceChildren(top, kpis(s), grid);
+  const day = el('div', 'life-grid life-day');
+  day.append(scoreCard(), checkinCard(redraw), goalsCard(redraw));
+  root.replaceChildren(nowStrip(), day, top, kpis(s), grid);
 }

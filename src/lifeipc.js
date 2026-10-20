@@ -11,6 +11,9 @@
 //                    7 days); body is absent while not connected
 // life:body-connect {email, password} -> {ok, persisted} | {ok:false, reason}
 // life:body-disconnect -> {ok}  forgets the stored YAZIO login
+// life:checkin* / life:habits* / life:goals* / life:score* - the daily
+//                    side (check-in, habits, weekly goals, productivity
+//                    score); see registerDailyIpc() below
 //
 // The renderer is untrusted: it names an op and sends a payload, and
 // src/lifebudget.js's fixed op table validates all of it. Failures come back
@@ -27,6 +30,14 @@ const store = require('./lifebudget');
 const { budgetSummary } = require('./lifebudgetcalc');
 const { createYazio, MAX_EMAIL: MAX_EMAIL_LEN, MAX_PASSWORD: MAX_PASSWORD_LEN } = require('./lifeyazio');
 const { yazioSnapshot, newestYazioPeer } = require('./lifeyaziopeers');
+const checkinStore = require('./lifecheckin');
+const habitStore = require('./lifehabits');
+const goalStore = require('./lifegoals');
+const scorePrefs = require('./lifescoreprefs');
+const { habitStatus } = require('./lifehabitcalc');
+const { scoreReport } = require('./lifescore');
+const { dayInputs, autoDays, goalsByWeek, nowStrip } = require('./lifescoreinputs');
+const { ymd, addDays } = require('./lifedays');
 
 /** How long the Body tab waits for another PC's copy before showing the login form. */
 const PEER_TIMEOUT_MS = 4000;
@@ -43,6 +54,7 @@ const REASONS = {
   'bad id': 'bad-id',
   'bad value': 'bad-value',
   'bad category': 'bad-category',
+  'bad week': 'bad-week',
   'not found': 'not-found',
   'too many': 'too-many',
   unreadable: 'unreadable',
@@ -62,6 +74,11 @@ const MIN_CONNECT_GAP_MS = 3 * 1000;
 // get today's numbers without anyone opening the Body tab. One fetch is
 // 8 requests: every 30 minutes stays far from hammering an unofficial API.
 const BODY_EVERY_MS = 30 * 60 * 1000;
+// The score polls while the dashboard is open; `gh` is a network call, so
+// its answer (my open PRs) is reused for this long, a failure included.
+const GITHUB_TTL_MS = 10 * 60 * 1000;
+// A habits / score answer is reused this long (cleared by any daily write).
+const READ_REUSE_MS = 1000;
 const YAZIO_REASONS = new Set(['not-connected', 'bad-login', 'network', 'rate-limited', 'api-changed']);
 
 function reasonOf(err) {
@@ -112,6 +129,10 @@ function registerLifeIpc({
   cloud = () => null,
   peerTimeoutMs = PEER_TIMEOUT_MS,
   bodyEveryMs = BODY_EVERY_MS,
+  files = {},
+  ledger = null,
+  github = null,
+  readTodoStore = () => require('./todo').readStore(),
 }) {
   /** Shares the Body data with the other PCs and the phone; never waits, never throws. */
   const putYazio = (body) => {
@@ -221,6 +242,8 @@ function registerLifeIpc({
     return { ok: true };
   });
 
+  registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, bodyForDaily: () => bodyForDaily(yazio, peerBody) });
+
   /** One background fetch + upload; never throws. A bad login stays blocked in lifeyazio (no network). */
   const refreshBody = async () => {
     if (!yazio.status().connected) return;
@@ -243,6 +266,167 @@ function registerLifeIpc({
       timer = null;
     },
   };
+}
+
+// --- daily: check-in, habits, weekly goals, productivity score -------------------
+
+/** Today's YAZIO numbers for habits / score: this PC's cache or another PC's copy; null on any failure. */
+async function bodyForDaily(yazio, peerBody) {
+  try {
+    if (yazio.status().connected) return await yazio.body({ force: false });
+    const peer = await peerBody();
+    return peer ? peer.body : null;
+  } catch {
+    // No YAZIO numbers: the steps habit is just not auto-ticked, health is scored without them.
+    return null;
+  }
+}
+
+/**
+ * life:checkin            -> {ok, today, entry, days}  entry null = not asked today
+ * life:checkin-set        {date, sleep, energy} (both null = skipped) -> same
+ * life:habits             -> {ok, today, yesterday, steps, habits: [{...habit, status}]}
+ * life:habits-do          {op, data} -> same  (add/edit/remove/restore/tick)
+ * life:goals              -> {ok, week, goals, lastWeek, last, isMonday}
+ * life:goals-set          {op, data} -> same  (set/status)
+ * life:score              -> {ok, score, now, prefs}  never fails on a source
+ * life:score-prefs        {weights, focusTargetH} -> {ok, prefs}
+ * Every store validates its whole payload and throws a fixed message; it
+ * crosses back as a reason code. Each store has its own write rate limit.
+ */
+function registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, bodyForDaily: getBody }) {
+  const lastWrite = new Map();
+  /** Runs one write unless the same store was written within MIN_WRITE_GAP_MS. */
+  const write = (key, fn) => {
+    const at = now();
+    if (at - (lastWrite.get(key) || -Infinity) < MIN_WRITE_GAP_MS) return { ok: false, reason: 'rate-limited' };
+    lastWrite.set(key, at);
+    // Any write can move the score: the next read computes it afresh.
+    readCache.clear();
+    try {
+      return fn(at);
+    } catch (err) {
+      return { ok: false, reason: reasonOf(err) };
+    }
+  };
+  const isReq = (req) => Boolean(req) && typeof req === 'object';
+
+  // Reads that do real work (habits: YAZIO / cloud; score: the ledger scan +
+  // every store) are shared while in flight and reused for READ_REUSE_MS, so
+  // a looping renderer cannot turn them into a disk / network storm. A bug
+  // inside answers a fixed reason code, never raw error text.
+  const readCache = new Map();
+  const read = (key, fn) => async () => {
+    const hit = readCache.get(key);
+    if (hit && (hit.pending || now() - hit.at < READ_REUSE_MS)) return hit.pending || hit.answer;
+    const pending = Promise.resolve()
+      .then(fn)
+      .catch((err) => {
+        console.error(`[life] ${key} failed:`, err && err.message);
+        return { ok: false, reason: 'failed' };
+      });
+    readCache.set(key, { pending });
+    const answer = await pending;
+    if (readCache.get(key) && readCache.get(key).pending === pending) readCache.set(key, { at: now(), answer });
+    return answer;
+  };
+
+  const checkinAnswer = (s, at) => ({ ok: true, ...checkinStore.checkinView(s, at) });
+  ipcMain.handle('life:checkin', () => {
+    const at = now();
+    return checkinAnswer(checkinStore.loadCheckin(files.checkin), at);
+  });
+  ipcMain.handle('life:checkin-set', (_event, req) => {
+    if (!isReq(req) || typeof req.date !== 'string') return { ok: false, reason: 'bad-date' };
+    return write('checkin', (at) => checkinAnswer(checkinStore.setCheckin(req.date, { sleep: req.sleep, energy: req.energy }, files.checkin, at), at));
+  });
+
+  const habitsAnswer = async (s, at) => {
+    const body = await getBody();
+    const auto = autoDays(body);
+    const today = ymd(at);
+    return { ok: true, today, yesterday: addDays(today, -1), steps: Boolean(body), habits: s.habits.map((h) => ({ ...h, status: habitStatus(h, today, auto) })) };
+  };
+  ipcMain.handle('life:habits', read('habits', () => habitsAnswer(habitStore.loadHabits(files.habits), now())));
+  ipcMain.handle('life:habits-do', async (_event, req) => {
+    if (!isReq(req) || typeof req.op !== 'string') return { ok: false, reason: 'bad-op' };
+    const res = write('habits', (at) => ({ ok: true, store: habitStore.applyHabits(req.op, req.data, files.habits, at), at }));
+    if (!res.ok) return res;
+    try {
+      return await habitsAnswer(res.store, res.at);
+    } catch (err) {
+      console.error('[life] habits view failed:', err && err.message);
+      return { ok: false, reason: 'failed' };
+    }
+  });
+
+  const goalsAnswer = (s, at) => ({ ok: true, ...goalStore.goalsView(s, at) });
+  ipcMain.handle('life:goals', () => goalsAnswer(goalStore.loadGoals(files.goals), now()));
+  ipcMain.handle('life:goals-set', (_event, req) => {
+    if (!isReq(req) || typeof req.op !== 'string') return { ok: false, reason: 'bad-op' };
+    return write('goals', (at) => goalsAnswer(goalStore.applyGoals(req.op, req.data, files.goals, at), at));
+  });
+
+  // My open PRs, cached; a failure is cached too (null = no shipping-PR data).
+  let gh = { at: -Infinity, data: null, pending: null };
+  const githubData = async () => {
+    if (!github) return null;
+    if (now() - gh.at < GITHUB_TTL_MS) return gh.data;
+    if (!gh.pending) {
+      gh.pending = Promise.resolve()
+        .then(() => github.fetch())
+        .catch((err) => {
+          console.error('[life] github for score failed:', (err && err.reason) || 'error');
+          return null;
+        })
+        .then((data) => {
+          gh = { at: now(), data, pending: null };
+          return data;
+        });
+    }
+    return gh.pending;
+  };
+  const ledgerReport = async () => {
+    if (!ledger) return null;
+    try {
+      const r = await ledger.report({});
+      return r && r.ok ? r : null;
+    } catch (err) {
+      console.error('[life] ledger for score failed:', err && err.message);
+      return null;
+    }
+  };
+  const safeTodos = () => {
+    try {
+      return readTodoStore();
+    } catch {
+      // Unreadable to-dos: that sub-part simply has no data.
+      return {};
+    }
+  };
+
+  ipcMain.handle('life:score', read('score', async () => {
+    const at = now();
+    const today = ymd(at);
+    const prefs = scorePrefs.loadScorePrefs(files.score);
+    const [report, gh, body] = await Promise.all([ledgerReport(), githubData(), getBody()]);
+    const days = dayInputs({
+      today,
+      report,
+      github: gh,
+      todoStore: safeTodos(),
+      body,
+      checkin: checkinStore.loadCheckin(files.checkin),
+      habits: habitStore.loadHabits(files.habits).habits,
+    });
+    const score = scoreReport({ days, today, goalsByWeek: goalsByWeek(goalStore.loadGoals(files.goals)), weights: prefs.weights, focusTargetH: prefs.focusTargetH });
+    return { ok: true, score, now: nowStrip(report, today, at), prefs };
+  }));
+
+  ipcMain.handle('life:score-prefs', (_event, req) => {
+    if (!isReq(req)) return { ok: false, reason: 'bad-value' };
+    return write('score', () => ({ ok: true, prefs: scorePrefs.setScorePrefs({ weights: req.weights, focusTargetH: req.focusTargetH }, files.score) }));
+  });
 }
 
 module.exports = { registerLifeIpc };

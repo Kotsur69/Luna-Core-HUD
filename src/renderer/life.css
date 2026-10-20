@@ -457,3 +457,101 @@
 .life-fact__label { font-size: var(--fs-xs); font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
 .life-fact__value { font-size: var(--fs-md); font-weight: 700; text-transform: capitalize; }
 .life-fact__note { font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* ---- daily: prompts, Now strip, score, check-in, goals, habits ------------ */
+.life-prompt { padding: var(--space-4) var(--space-6) 0; }
+.life-prompt[hidden] { display: none; }
+.life-prompt__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-8);
+  border: var(--border-w) solid color-mix(in srgb, var(--neon-cyan) 35%, var(--edge));
+  border-radius: var(--radius-lg);
+  background: var(--surface-panel-2);
+}
+.life-prompt__title { margin: 0; font-size: var(--fs-md); font-weight: 700; }
+
+.life-now {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3) var(--space-6);
+  margin-bottom: var(--space-6);
+  padding: var(--space-4) var(--space-6);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel-2);
+  font-size: var(--fs-sm);
+}
+.life-now__label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+.life-now__project { font-weight: 700; }
+.life-now__idle, .life-now__switches { color: var(--text-dim); }
+.life-now__nudge { font-weight: 700; }
+.life-now__nudge.is-warn { color: var(--warn); }
+
+.life-day { margin-bottom: var(--space-6); }
+
+.life-score__top { display: flex; align-items: center; gap: var(--space-6); }
+.life-score__big { margin: 0; font-size: calc(var(--fs-md) * 3); font-weight: 800; line-height: 1; cursor: help; }
+.life-score__big.is-good { color: var(--good); }
+.life-score__big.is-warn { color: var(--warn); }
+.life-score__big.is-bad { color: var(--bad); }
+.life-score__trends { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-xs); }
+.life-score__trend { display: flex; gap: var(--space-3); }
+.life-score__trend.is-good .life-num { color: var(--good); }
+.life-score__trend.is-bad .life-num { color: var(--bad); }
+.life-score__trendlabel, .life-score__week { color: var(--text-dim); }
+.life-score__part { display: flex; flex-direction: column; gap: var(--space-2); }
+.life-bar.is-off { opacity: 0.4; }
+.life-score__slider { display: flex; align-items: flex-end; gap: var(--space-4); }
+.life-score__share { min-width: 4ch; padding-bottom: var(--space-3); text-align: right; font-size: var(--fs-sm); }
+
+.life-energy { display: flex; gap: var(--space-2); }
+.life-energy__btn, .life-habit__tick {
+  min-width: 32px;
+  min-height: 32px;
+  padding: var(--space-2) var(--space-4);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.life-energy__btn[aria-pressed="true"], .life-habit__tick.is-on {
+  border-color: var(--edge-glow);
+  background: color-mix(in srgb, var(--good) 22%, var(--surface-panel));
+  color: var(--text);
+}
+.life-habit__tick:disabled { cursor: default; }
+.life-energy__btn:focus-visible, .life-habit__tick:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
+
+.life-checkin__today { display: flex; align-items: baseline; gap: var(--space-4); margin: 0; }
+.life-checkin__big { font-size: calc(var(--fs-md) * 2); font-weight: 800; }
+.life-checkin__sub { font-size: var(--fs-sm); color: var(--text-dim); }
+.life-checkin__week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-2); margin: var(--space-4) 0; padding: 0; list-style: none; }
+.life-checkin__day { display: flex; flex-direction: column; align-items: center; gap: var(--space-1); font-size: var(--fs-xs); }
+.life-checkin__dname { color: var(--text-dim); text-transform: capitalize; }
+.life-checkin__energy { color: var(--text-dim); }
+
+.life-goals__week { margin: 0 0 var(--space-3); font-size: var(--fs-xs); color: var(--text-dim); }
+.life-goals__form { gap: var(--space-3); }
+.life-goal { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); font-size: var(--fs-sm); }
+.life-goal__text { min-width: 0; overflow-wrap: anywhere; }
+.life-goal.is-done .life-goal__text { color: var(--text-dim); text-decoration: line-through; }
+.life-goal .mc-input { flex: none; min-height: 30px; }
+
+.life-habit { display: flex; flex-direction: column; gap: var(--space-2); padding-bottom: var(--space-4); border-bottom: var(--border-w) solid var(--edge); }
+.life-habit:last-child { border-bottom: 0; }
+.life-habit__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-4); }
+.life-habit__name { font-size: var(--fs-md); font-weight: 700; overflow-wrap: anywhere; }
+.life-habit__badge { margin-left: var(--space-3); padding: 0 var(--space-3); border: var(--border-w) solid var(--edge); border-radius: var(--radius-pill); font-size: var(--fs-2xs); font-weight: 600; color: var(--text-dim); vertical-align: middle; }
+.life-habit__streak { font-size: var(--fs-sm); color: var(--text-dim); }
+.life-habit__meta { margin: 0; font-size: var(--fs-xs); color: var(--text-dim); }
+.life-habit__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+
+@media (prefers-reduced-motion: reduce) {
+  .life-energy__btn, .life-habit__tick { transition: none; }
+}
