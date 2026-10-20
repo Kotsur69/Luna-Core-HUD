@@ -65,6 +65,38 @@ Prove each mechanism by hand before building it. Hash `~/.codex` and
   Anthropic-compatible endpoint (candidates: Z.ai GLM flash, OpenRouter,
   MiniMax). Only verified ones become templates.
 
+#### S0 results (2026-10-20)
+
+- **Gemini — PASS via `GEMINI_CLI_HOME`** (not the system-settings layer:
+  skills are discovered only from `<home>/.gemini/skills`,
+  `<home>/.agents/skills`, extensions and the project — no settings key adds a
+  skills dir). `GEMINI_CLI_HOME=<overlay>` makes Gemini treat `<overlay>` as
+  the home: `<overlay>/.gemini/{settings.json,GEMINI.md,skills/}` all load
+  (`gemini skills list` showed the probe skill, `gemini mcp list` the probe
+  server). Real `~/.gemini` byte-identical before/after. Caveats:
+  - MCP servers stay disabled until the folder is trusted, and trust lives in
+    the overlay home (`trustedFolders.json`) — the first run asks once.
+  - Overlay home has no login: one-time Google login inside a Luna tab
+    (stored in the overlay, never copied from `~/.gemini`), or a key.
+  - Persona check (model call) still pending that login.
+- **Codex — PASS via `CODEX_HOME`** (candidate b). `<overlay>/{AGENTS.md,
+  config.toml,skills/}`: `codex mcp list` showed the probe server and
+  `codex debug prompt-input` (no model call) contained "You are Luna" and the
+  probe skill. Real `~/.codex` (config, AGENTS.md, auth.json, skills, rules)
+  hash-identical. Caveats:
+  - One-time ChatGPT login inside a Luna tab (`Not logged in` in a fresh
+    home) — tokens are never copied.
+  - `~/.agents/skills` is read in addition to `CODEX_HOME` — the user's own
+    shared skills still appear; that is their setup, left alone.
+  - Codex refuses PATH-alias helpers under a temp dir; the real overlay lives
+    in userData (`%APPDATA%`), not temp.
+- **FreeLLMAPI** — pending: Mati installs the Windows desktop app.
+- **Direct free endpoints** — pending research.
+
+Design consequence: a "Luna" Codex/Gemini tab is a **separate CLI profile**
+(own login, own history) living in LunaCore's userData. With sync off,
+nothing changes and the user's normal login is used.
+
 ### S1 — FreeLLMAPI connection + templates
 
 - `src/freellmapi.js`: detect-only (probe `127.0.0.1:<port>/v1/models`,
