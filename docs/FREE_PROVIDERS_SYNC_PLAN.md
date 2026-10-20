@@ -123,6 +123,18 @@ LunaCore's userData (`luna-overlay/gemini`, `luna-overlay/codex`):
   stay local, never cross IPC.
 - Rebuilt lazily on tab spawn when any source changed (content hash).
 
+#### S2 status (2026-10-20): built
+
+`src/lunasync.js` (pure) + `src/lunasyncio.js` (I/O), 19 tests. Live run
+against Mati's real `~/.claude` into a scratch overlay: 12 personal skills +
+1 picked plugin skill listed by `gemini skills list`; 3 MCP servers in both
+CLIs; Codex prompt contains "User = **Mati**", "assistant = **Luna**".
+`~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` hash-identical.
+Only 3 MCP servers come from `~/.claude.json` + enabled plugins' `.mcp.json`;
+servers Mati sees in Claude from elsewhere (project `.mcp.json`, claude.ai
+connectors) are not carried over yet - revisit in S3 if wanted.
+Note: FreeLLMAPI's desktop app listens on **31415**, not the docs' 3001.
+
 ### S3 — Wiring
 
 - Profile field `lunaSync: boolean` (default false), allow-listed in
