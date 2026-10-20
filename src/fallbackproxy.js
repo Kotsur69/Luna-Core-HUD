@@ -229,7 +229,9 @@ class FallbackProxy {
           res.writeHead(status, headers);
           upRes.pipe(res);
           upRes.on('error', () => res.destroy());
+          // 'close' too: a client that hangs up mid-stream never sees 'end'.
           upRes.on('end', () => resolve({ done: true }));
+          upRes.on('close', () => resolve({ done: true }));
           return;
         }
         const chunks = [];
