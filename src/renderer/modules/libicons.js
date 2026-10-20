@@ -150,6 +150,35 @@ export const ICONS = {
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /**
+ * Draws a list of shapes into a fresh decorative <svg>.
+ *
+ * Shared with widgeticons.js (the collapsed-rail glyphs), so both icon sets
+ * carry the same stroke, grid and accessibility attributes by construction.
+ * Only touches `document` when called, never at module scope.
+ *
+ * @param {Array<[string, Object<string, string|number>]>} shapes
+ * @returns {SVGElement}
+ */
+export function drawIcon(shapes) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${VIEWBOX} ${VIEWBOX}`);
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.5');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+
+  for (const [tag, attrs] of shapes) {
+    const shape = document.createElementNS(SVG_NS, tag);
+    for (const [key, value] of Object.entries(attrs)) shape.setAttribute(key, String(value));
+    svg.appendChild(shape);
+  }
+  return svg;
+}
+
+/**
  * Builds the <svg> for an icon name.
  *
  * Unknown names draw the default rather than nothing: the loader has already
@@ -164,20 +193,5 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
  * @returns {SVGElement}
  */
 export function iconSvg(name) {
-  const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('viewBox', `0 0 ${VIEWBOX} ${VIEWBOX}`);
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.5');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.setAttribute('aria-hidden', 'true');
-  svg.setAttribute('focusable', 'false');
-
-  for (const [tag, attrs] of ICONS[name] || ICONS.default) {
-    const shape = document.createElementNS(SVG_NS, tag);
-    for (const [key, value] of Object.entries(attrs)) shape.setAttribute(key, String(value));
-    svg.appendChild(shape);
-  }
-  return svg;
+  return drawIcon(ICONS[name] || ICONS.default);
 }
