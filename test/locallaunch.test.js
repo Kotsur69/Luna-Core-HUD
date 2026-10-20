@@ -21,11 +21,18 @@ const {
   launchWhenReady,
   LEAN_DISALLOWED_TOOLS,
   TIER_MODEL_KEYS,
+  LOCAL_STREAM_TIMEOUT_KEYS,
+  LOCAL_API_TIMEOUT_MS,
 } = require('../src/locallaunch');
 const { SHIM_TOKEN_HEADER } = require('../src/lmstudioshim');
 
-/** What buildLocalEnv adds with nothing else known: the 50-minute timeout. */
-const TIMEOUT_ONLY = { API_TIMEOUT_MS: '3000000' };
+/** What buildLocalEnv adds with nothing else known: the 50-minute timeouts. */
+const TIMEOUT_ONLY = {
+  API_TIMEOUT_MS: '3000000',
+  CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS: '3000000',
+  CLAUDE_STREAM_IDLE_TIMEOUT_MS: '3000000',
+  CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS: '3000000',
+};
 
 const lmProfile = (extra = {}) => ({
   id: 'lm-studio',
@@ -116,8 +123,17 @@ test('buildLocalEnv never routes through the shim without its token', () => {
 });
 
 test('buildLocalEnv keeps a timeout the profile sets itself', () => {
-  const env = buildLocalEnv({ profileEnv: { API_TIMEOUT_MS: '60000' }, model: null, contextLength: null, shimUrl: null });
+  const own = { API_TIMEOUT_MS: '60000', CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS: '1', CLAUDE_STREAM_IDLE_TIMEOUT_MS: '2', CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS: '3' };
+  const env = buildLocalEnv({ profileEnv: own, model: null, contextLength: null, shimUrl: null });
   assert.deepStrictEqual(env, {});
+});
+
+test('buildLocalEnv raises the CLI stream watchdogs so a long local generation is not cut off', () => {
+  // A local model may prefill for minutes before its first byte; the CLI's
+  // default first-byte/idle windows would abort it mid-generation.
+  const env = buildLocalEnv({ profileEnv: { API_TIMEOUT_MS: '60000' }, model: null, contextLength: null, shimUrl: null });
+  assert.strictEqual(env.API_TIMEOUT_MS, undefined);
+  for (const key of LOCAL_STREAM_TIMEOUT_KEYS) assert.strictEqual(env[key], String(LOCAL_API_TIMEOUT_MS));
 });
 
 test('buildLocalEnv omits what it does not know', () => {
