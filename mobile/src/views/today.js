@@ -1,14 +1,15 @@
 // ============================================================================
-// LunaCore phone - Today: the next 24 hours of weather (phase 4c)
+// LunaCore phone - Today: the next 24 hours of weather (phase 4c), then the
+// week's calendar and the inbox (phase 5, views/agenda.js)
 // ----------------------------------------------------------------------------
 // The town is asked once and kept on this phone (weather.js). Hours are shown
-// as a grid of 3-hour slots - no sideways scrolling inside the page. Calendar
-// and mail stay a placeholder until phase 5 (the Google server function).
+// as a grid of 3-hour slots - no sideways scrolling inside the page.
 // ============================================================================
 
 import { h } from '../dom.js';
 import { t, tf, locale } from '../i18n.js';
 import { savedPlace, savePlace, findPlace, nextHours } from '../weather.js';
+import { mountAgenda } from './agenda.js';
 
 const SLOT_EVERY = 3;
 const hourOf = (ms) => new Date(ms).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
@@ -62,37 +63,42 @@ function forecastView(w) {
 
 /**
  * @param {HTMLElement} main
- * @param {{toast: (m: string, bad?: boolean) => void}} deps
+ * @param {{cloud: object, toast: (m: string, bad?: boolean) => void}} deps
  * @returns {{refresh: () => Promise<void>}}
  */
-export function mountToday(main, { toast }) {
+export function mountToday(main, { cloud, toast }) {
   let seq = 0;
   let editing = false;
   let loaded = false; // a forecast, "none" or an error is on screen: no "loading" flash over it
   const weatherBody = h('div');
   const head = h('div', { class: 'row' });
+  const agenda = mountAgenda({ cloud, toast });
   main.replaceChildren(
     h(
       'div',
       { class: 'stack' },
       h('section', { class: 'card stack-sm', 'aria-labelledby': 'today-weather' }, head, weatherBody, h('p', { class: 'hint' }, t('weatherHint'))),
-      h('section', { class: 'card stack-sm', 'aria-labelledby': 'today-agenda' }, h('h2', { class: 'section-title', id: 'today-agenda' }, t('agenda')), h('p', { class: 'hint' }, t('agendaSoon'))),
+      ...agenda.nodes,
     ),
   );
 
   function header(place) {
-    const change = place && !editing ? h('button', { class: 'btn btn-sm btn-ghost', onclick: () => ((editing = true), refresh()) }, t('weatherChange')) : null;
+    const change = place && !editing ? h('button', { class: 'btn btn-sm btn-ghost', onclick: () => ((editing = true), weather()) }, t('weatherChange')) : null;
     head.replaceChildren(h('h2', { class: 'section-title grow', id: 'today-weather' }, place ? `${t('weather')} · ${place.name}` : t('weather')), change);
   }
 
-  async function refresh() {
+  function refresh() {
+    return Promise.all([weather(), agenda.refresh()]).then(() => {});
+  }
+
+  async function weather() {
     const mine = ++seq;
     const place = savedPlace();
     header(place);
     if (!place || editing) {
       const done = () => {
         editing = false;
-        refresh();
+        weather();
       };
       // A sync or a return to the app must not wipe a town being typed.
       if (!weatherBody.querySelector('form')) weatherBody.replaceChildren(placeForm(done, place, done));

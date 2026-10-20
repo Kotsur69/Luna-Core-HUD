@@ -119,12 +119,13 @@ function writeDenial(body) {
 
 const base64url = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-function buildAuthUrl({ clientId, redirectUri, state, challenge }) {
+/** `scope` defaults to this module's; scripts/google-server-token.js asks for more. */
+function buildAuthUrl({ clientId, redirectUri, state, challenge, scope = SCOPE }) {
   const q = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: SCOPE,
+    scope,
     code_challenge: challenge,
     code_challenge_method: 'S256',
     state,

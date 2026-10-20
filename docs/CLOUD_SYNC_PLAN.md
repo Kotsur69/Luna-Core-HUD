@@ -2,7 +2,7 @@
 
 Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14. Released in v0.15.0 (2026-10-15).
 Phases 2a–2c shipped 2026-10-15 (v0.15.0 → v0.16.1) and proven live on two PCs.
-Phase 3 (folder transport removed) released in v0.16.2 (2026-10-19)**
+Phase 3 (folder transport removed) released in v0.16.2 (2026-10-19). Phone phases 4a–4d built 2026-10-19; phase 5 (Google calendar + mail on the phone) proven live 2026-10-20**
 (KT-PC-LLM + laptop KT-NO-MMAZUR), against Supabase
 project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
 `https://phkigyuhvbanadwmxqqs.supabase.co`) — schema in
@@ -181,6 +181,55 @@ week. Phase 3 then removes the folder transport, `sharedDir`, and SyncTrayzor.
 - **Before this:** switch the Google OAuth app to "In production". In "Testing"
   status, refresh tokens expire after 7 days. Use Mati's personal Google
   account, not the company Workspace.
+
+**Phase 5 built 2026-10-19, proven live by Mati 2026-10-20 (unit-tested,
+reviewed, function deployed, secrets set).**
+- `supabase/functions/google/core.mjs` (pure, ESM, also imported by the
+  phone and `node --test`) + `index.js` (Deno entry). Deployed as `google`,
+  version 1, **`verify_jwt = false`** (redeploy with `--no-verify-jwt` /
+  MCP `verify_jwt: false`, or the browser preflight gets a 401 with no
+  CORS headers). Live probe: no session → 401 `not-logged-in`, unlisted
+  Origin → 403 `bad-origin`.
+- POST actions: `events {from, to}` (zoned ISO, ≤ 35 days, calendars ticked
+  in Google Calendar, ≤ 25), `create {draft}` (primary calendar only, start
+  within −31…+400 days), `mail` (INBOX unread count + latest 5 unread:
+  sender name, subject, time; scope `gmail.metadata`, so no bodies and no
+  `q`; label ids filter instead).
+- Every call: Bearer token checked against `/auth/v1/user`, the id must be
+  `OWNER_USER_ID`; a browser origin must be in `ALLOWED_ORIGINS` (unset = no
+  browser). Per-isolate limits: reads 60/min, creates 10/hour (429
+  `rate-limited`); the same week is answered from memory for 30 s; one
+  shared token refresh. Replies carry only a reason code; the log masks
+  calendar ids. Google text is stripped of control, zero-width and bidi characters.
+- Secrets (Supabase → Edge Functions → Secrets): `GOOGLE_CLIENT_ID`,
+  `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` (from the token script),
+  `OWNER_USER_ID` (the only row in `auth.users`), `ALLOWED_ORIGINS`
+  (`http://localhost:4173` now, plus `https://<vercel-domain>` after the deploy).
+- `scripts/google-server-token.js`: one-time consent (calendar.readonly +
+  calendar.events + gmail.metadata) with the PC's Desktop client in
+  `config/google-oauth.local.json`, PKCE loopback (`gcal.startRedirectServer`;
+  `buildAuthUrl` got an optional `scope`). Writes
+  `config/google-server.local.json` (gitignored, never overwrites, token
+  never printed).
+- Phone: `mobile/src/agenda.js` (pure: `weekWindow`, `readEvents`,
+  `readMail`, `groupByDay` (drops events already over, for an old cached
+  week), `draftFrom`), `mobile/src/views/agenda.js` (Calendar card: 7 days
+  grouped by day + "+" form; Mail card), `cloud.google()` /
+  `cachedGoogle()` (last good read in IndexedDB `google:<uid>:<action>`,
+  wiped on logout; a 404 = not deployed = `not-configured`). The CSP needs
+  nothing new (same Supabase origin).
+- `test/googlefn.test.mjs`, `test/mobileagenda.test.mjs`; `npm test` 2197/2197.
+
+JS + security review (no CRITICAL). Fixed: a late reply wiped a half-typed
+event form; a cached week showed past events under "Today"; the 404 of an
+undeployed function read as a failure; an IndexedDB write error hid fresh
+data; unlimited Google fan-out and event creation (rate limits, 30 s cache,
+date window); calendar ids in logs; bidi/zero-width spoofing; prototype-key
+reason lookup; the token script overwriting a leftover secrets file; origins
+falling back to localhost. **Accepted:** cached calendar/mail stay on a
+stolen phone that is still logged in (logout wipes them); limits are per
+isolate (a cold start resets them); `compareEvents` reads all-day dates in
+the runtime's zone (UTC on the server, local on the phone, which re-sorts).
 
 ## What Mati does himself (can't be done from here)
 
@@ -646,6 +695,31 @@ never in the repo. Audit rule from 2c: each phone write must show up on a PC
 
 ## Next session: start here
 
+**Update 2026-10-20 (newest): phase 5 is done and proven live.** Mati did
+the Google setup (Gmail API on, OAuth app "In production", token script,
+five secrets) and checked `localhost:4173/#today` against the real function:
+"looks like it works". Committed with this doc update.
+
+What's left on the whole plan:
+1. **Vercel deploy** (steps under 3. below), then add
+   `https://<vercel-domain>` to the `ALLOWED_ORIGINS` secret
+   (comma-separated, next to `http://localhost:4173`): without it the
+   deployed phone gets `bad-origin` from `google`.
+2. Delete `config/google-server.local.json` if it's still on the PC (the
+   secrets live in Supabase now; the file is gitignored, but it holds the
+   refresh token in clear).
+3. The open live checks of 4b/4c/4d on the iPhone after the deploy.
+4. If calendar/mail ever say "Google disconnected the server"
+   (`google-auth`): the refresh token was revoked; run the token script
+   again and replace `GOOGLE_REFRESH_TOKEN`.
+
+Setup reference (done 2026-10-20, kept for a re-run): enable the Gmail API
+and publish the consent screen in Google Cloud project
+`symmetric-aura-511406-f8`; `node scripts/google-server-token.js`; paste
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`,
+`OWNER_USER_ID` (`select id from auth.users`), `ALLOWED_ORIGINS` into
+Supabase → Edge Functions → Secrets.
+
 **Update 2026-10-19 (latest): 4c is committed (7f28972). Phase 4d (offline
 queue, realtime, install hint) is built, reviewed and committed; see
 "4d built" above. Every phone slice is now built; what's left is Mati's live
@@ -699,7 +773,7 @@ works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
      add a to-do on a PC and sync: the phone shows it within a few seconds
      without pressing Sync (realtime). Do it once more on the iPhone after
      the Vercel deploy (Safari tab shows the install hint once).
-   - **Then phase 5** (Google server function: calendar + mail on Today).
+   - **Phase 5:** done and proven live 2026-10-20 (see the top of this section).
 4. Small open items:
    - The laptop's ledger snapshot is empty (no Claude Code transcripts there
      in 8 days). Fine unless Mati uses Claude Code on the laptop.

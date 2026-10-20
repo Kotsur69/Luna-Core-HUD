@@ -20,6 +20,9 @@
 // every pull pushes the outbox before it reads, and views get the mirror with
 // the outbox laid over it. onChange() is the realtime feed: an event only
 // says "pull again" - its payload is never read.
+//
+// google(body) calls the `google` server function (phase 5: calendar and
+// mail) and keeps the last good read for offline use, like snapshots.
 // ============================================================================
 
 import { createClient } from '@supabase/supabase-js';
@@ -45,6 +48,8 @@ const MAX_SNAPSHOT_CHARS = 512 * 1024;
 export const PICK_KEY = 'lunacore.todos.list';
 /** Scopes the phone writes to (and so keeps an outbox for). */
 const WRITE_SCOPES = ['todos', 'life'];
+/** Actions of the `google` server function (supabase/functions/google). */
+const GOOGLE_ACTIONS = new Set(['events', 'create', 'mail']);
 
 const emptyScope = () => ({ cursor: 0, pushed: {}, mirror: {} });
 
@@ -264,6 +269,44 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
     return (u && (await idb.get(snapKey(u.id, kind)))) || [];
   }
 
+  const googleKey = (uid, action) => `google:${uid}:${action}`;
+
+  /**
+   * One call to the `google` server function (phase 5). Throws an Error whose
+   * message is the function's reason ('not-configured', 'google-auth', ...)
+   * or 'offline'. A successful read is kept for cachedGoogle().
+   * @param {{action: 'events'|'create'|'mail'}} body
+   */
+  async function google(body) {
+    if (!body || !GOOGLE_ACTIONS.has(body.action)) throw new Error('bad-request');
+    const gen = generation;
+    const u = await user();
+    if (!u) throw new Error('logged-out');
+    const { data, error } = await client.functions.invoke('google', { body });
+    if (gen !== generation) throw new Error('logged-out');
+    if (error) {
+      let reason = error.name === 'FunctionsFetchError' ? 'offline' : 'google-failed';
+      // Not deployed yet: the gateway's own 404 has no `error` field.
+      if (error.context && error.context.status === 404) reason = 'not-configured';
+      try {
+        const reply = await error.context.json();
+        if (reply && typeof reply.error === 'string' && reply.error.length <= 40) reason = reply.error;
+      } catch {
+        // No JSON body (offline, a gateway page): keep the generic reason.
+      }
+      throw new Error(reason);
+    }
+    // A full IndexedDB only loses the offline copy, never the fresh answer.
+    if (body.action !== 'create') await idb.put(googleKey(u.id, body.action), { at: Date.now(), data }).catch(() => {});
+    return data;
+  }
+
+  /** The last good google({action}) answer on this device: {at, data} or null. */
+  async function cachedGoogle(action) {
+    const u = await user();
+    return (u && (await idb.get(googleKey(u.id, action)))) || null;
+  }
+
   function login() {
     return client.auth.signInWithOAuth({
       provider: 'github',
@@ -292,5 +335,5 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
 
   const onAuth = (fn) => client.auth.onAuthStateChange((event, session) => fn(session ? session.user : null));
 
-  return { user, state, pull, write, pending, flushAll, onChange, snapshots, cachedSnapshots, login, logout, onAuth };
+  return { user, state, pull, write, pending, flushAll, onChange, snapshots, cachedSnapshots, google, cachedGoogle, login, logout, onAuth };
 }
