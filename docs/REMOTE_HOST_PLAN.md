@@ -1,7 +1,7 @@
 # Luna host + phone control — plan
 
-Status: **confirmed by Mati 2026-10-20 (all questions answered). Not built yet.
-Start with U1.** Builds on `CLOUD_SYNC_PLAN.md` (Supabase project
+Status: **confirmed by Mati 2026-10-20. U1 built 2026-10-20 (migration
+applied; live check pending: restart the HUD, open the phone). Next: U2.** Builds on `CLOUD_SYNC_PLAN.md` (Supabase project
 `phkigyuhvbanadwmxqqs`, phone at `https://luna-core-hud.vercel.app`). Same
 rules apply: pulled rows are untrusted, realtime only triggers a read, every
 slice is done only when the other side *reads* what one side writes.
@@ -87,6 +87,11 @@ Each slice ships on its own and is usable on the phone when it lands.
   "from HH:MM, <machine>". Two bars + reset countdowns on **Today** and in
   the Mission → Claude tab, next to the ledger week.
 - Reader: `v === 1`, pct 0–100 (clamped), sane timestamps. Strings: none.
+- **Built:** `src/usagesnapshot.js` (writer + reader, shared with the phone),
+  `main.js` puts on every usage change and re-offers every 5 min (late
+  login), migration `20261020120000_usage_snapshot.sql`, phone card
+  `mobile/src/views/usage.js`. A window whose reset passed shows 0 %
+  "reset" until a PC reads again.
 
 ### U2 — repo status on the phone
 

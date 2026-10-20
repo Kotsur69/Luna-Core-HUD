@@ -2,7 +2,7 @@
 // LunaCore phone - snapshot readers (pure)
 // ----------------------------------------------------------------------------
 // docs/CLOUD_SYNC_PLAN.md phase 4c. Each PC writes its own `snapshots` row per
-// kind (news, ledger, yazio); the phone writes none and reads them all. Every
+// kind (news, ledger, yazio, usage); the phone writes none and reads them all. Every
 // row is untrusted and goes through the same parser a PC uses for another
 // PC's row - never rendered as it came.
 // ============================================================================
@@ -11,11 +11,13 @@ import newsRows from '../../src/missionnewsrows.js';
 import ledgerSync from '../../src/missionledgersync.js';
 import ledgerCalc from '../../src/missionledgercalc.js';
 import yazio from '../../src/lifeyaziopeers.js';
+import usage from '../../src/usagesnapshot.js';
 
 const { parseNewsPeer } = newsRows;
 const { parsePeer, MAX_PEERS } = ledgerSync;
 const { summarize, weekWindow } = ledgerCalc;
 const { parseYazioPeer } = yazio;
+const { newestUsage, windowNow } = usage;
 
 /** Projects listed on the phone; the rest only count in the total. */
 export const MAX_PROJECTS = 20;
@@ -97,4 +99,14 @@ export function bodyFrom(rows, now) {
     if (p && (!best || p.body.fetchedAt > best.body.fetchedAt)) best = p;
   }
   return best;
+}
+
+/**
+ * The newest usage read across machines as it stands at `now` (a window whose
+ * reset passed shows empty), or null.
+ * @returns {{machine: string, at: number, fiveHour: object|null, sevenDay: object|null}|null}
+ */
+export function usageFrom(rows, now) {
+  const u = newestUsage(rows, now);
+  return u && { machine: u.machine, at: u.at, fiveHour: windowNow(u.fiveHour, now), sevenDay: windowNow(u.sevenDay, now) };
 }

@@ -1,6 +1,7 @@
 // ============================================================================
-// LunaCore phone - Today: the next 24 hours of weather (phase 4c), then the
-// week's calendar and the inbox (phase 5, views/agenda.js)
+// LunaCore phone - Today: Claude usage limits (REMOTE_HOST_PLAN U1), the next
+// 24 hours of weather (phase 4c), then the week's calendar and the inbox
+// (phase 5, views/agenda.js)
 // ----------------------------------------------------------------------------
 // The town is asked once and kept on this phone (weather.js). Hours are shown
 // as a grid of 3-hour slots - no sideways scrolling inside the page.
@@ -10,6 +11,8 @@ import { h } from '../dom.js';
 import { t, tf, locale } from '../i18n.js';
 import { savedPlace, savePlace, findPlace, nextHours } from '../weather.js';
 import { mountAgenda } from './agenda.js';
+import { mountSnapshots } from './snapshotview.js';
+import { usageCard } from './usage.js';
 
 const SLOT_EVERY = 3;
 const hourOf = (ms) => new Date(ms).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
@@ -73,10 +76,14 @@ export function mountToday(main, { cloud, toast }) {
   const weatherBody = h('div');
   const head = h('div', { class: 'row' });
   const agenda = mountAgenda({ cloud, toast });
+  const usageBox = h('div');
+  // No toast of its own: a failed pull is already toasted by the agenda; the box shows it inline.
+  const usage = mountSnapshots(usageBox, { cloud, toast: () => {} }, ['usage'], (byKind, now) => usageCard(byKind.usage, now));
   main.replaceChildren(
     h(
       'div',
       { class: 'stack' },
+      usageBox,
       h('section', { class: 'card stack-sm', 'aria-labelledby': 'today-weather' }, head, weatherBody, h('p', { class: 'hint' }, t('weatherHint'))),
       ...agenda.nodes,
     ),
@@ -90,7 +97,7 @@ export function mountToday(main, { cloud, toast }) {
   }
 
   function refresh() {
-    return Promise.all([weather(), agenda.refresh()]).then(() => {});
+    return Promise.all([usage.refresh(), weather(), agenda.refresh()]).then(() => {});
   }
 
   async function weather() {

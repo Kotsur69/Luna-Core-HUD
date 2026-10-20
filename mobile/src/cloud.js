@@ -39,7 +39,7 @@ const PUSH_MAX = 500;
 /** A runaway pull (a bug, a hostile server) stops here instead of looping. */
 const MAX_PAGES = 100;
 const COLUMNS = 'key,value,u,deleted_at,rev,machine';
-const SNAPSHOT_KINDS = new Set(['news', 'ledger', 'yazio']);
+const SNAPSHOT_KINDS = new Set(['news', 'ledger', 'yazio', 'usage']);
 /** cloudsnapshots.js MAX_ROWS: more machines than Mati will ever own. */
 const MAX_SNAPSHOTS = 16;
 /** cloudsnapshots.js MAX_BYTES: a PC never puts more, so a longer row is junk (JSON length <= byte length). */

@@ -431,6 +431,7 @@ main {
 .meter { height: 6px; border-radius: 999px; background: var(--bg-raised); overflow: hidden; }
 .meter span { display: block; height: 100%; background: var(--neon-cyan); transform-origin: left; transition: transform var(--dur) var(--ease-out); }
 .meter.is-bad span { background: var(--bad); }
+.meter.is-warn span { background: var(--warn); }
 
 @media (max-width: 360px) {
   .grid-2 { grid-template-columns: 1fr; }

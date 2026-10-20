@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore phone - Mission: the last news briefing + the Claude ledger (4c)
+// LunaCore phone - Mission: the last news briefing + Claude limits and ledger
 // ----------------------------------------------------------------------------
 // Both come from the PCs' `snapshots` rows, parsed by snapmodel.js with the
 // PC's own validators. News text is LLM output over fetched pages: it goes in
@@ -11,6 +11,7 @@ import { h, icon, ICONS } from '../dom.js';
 import { t, tf, locale } from '../i18n.js';
 import { newsFrom, ledgerFrom } from '../snapmodel.js';
 import { mountSnapshots, when } from './snapshotview.js';
+import { usageCard } from './usage.js';
 import ratecalc from '../../../src/ratecalc.js';
 import baseRates from '../../../config/rates.json';
 
@@ -131,7 +132,8 @@ export function mountMission(main, deps) {
   const tabs = h('div', { class: 'segmented', role: 'tablist', 'aria-label': t('navMission') });
   main.replaceChildren(h('div', { class: 'stack' }, tabs, panel));
 
-  const content = () => (tab === 'news' ? news(last.byKind.news, last.now) : ledger(last.byKind.ledger, last.now));
+  const claude = () => h('div', { class: 'stack' }, usageCard(last.byKind.usage, last.now), ledger(last.byKind.ledger, last.now));
+  const content = () => (tab === 'news' ? news(last.byKind.news, last.now) : claude());
 
   function select(id) {
     tab = id;
@@ -149,7 +151,7 @@ export function mountMission(main, deps) {
   }
   drawTabs();
 
-  return mountSnapshots(panel, deps, ['news', 'ledger'], (byKind, now) => {
+  return mountSnapshots(panel, deps, ['news', 'ledger', 'usage'], (byKind, now) => {
     last = { byKind, now };
     return content();
   });

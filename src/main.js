@@ -138,6 +138,8 @@ const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
 const { loadEditorConfig, resolveInRoot, buildEditorInvocation } = require('./editor');
 // Usage limit counter (5h + week) - GET read from the CLI's OAuth endpoint.
 const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
+// REMOTE_HOST_PLAN U1: the same read as a `usage` snapshot for the phone.
+const { usageSnapshot } = require('./usagesnapshot');
 // E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
 // zero network - Passive Observer in the strictest possible sense.
 const { TelemetryWatcher } = require('./telemetry');
@@ -1658,16 +1660,30 @@ function maybeReadOutputAloud(text) {
   });
 }
 
+// The watcher only emits on a change, and the cloud may log in later than the
+// first read - so the last read is offered again on a timer. put() skips a
+// snapshot identical to the last one it stored, so a re-offer costs nothing.
+const USAGE_SNAPSHOT_EVERY_MS = 5 * 60 * 1000;
+let usageSnapshotTimer = null;
+
+function putUsageSnapshot() {
+  const snap = usageSnapshot(latestUsage);
+  if (snap && cloud) cloud.snapshots.put('usage', snap);
+}
+
 function startUsageWatcher() {
   if (!ENABLE_USAGE_METER) return;
   usageWatcher = new UsageWatcher((usage) => {
     latestUsage = usage;
     checkUsageThresholds(usage);
+    putUsageSnapshot();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('usage:update', usage);
     }
   });
   usageWatcher.start();
+  usageSnapshotTimer = setInterval(putUsageSnapshot, USAGE_SNAPSHOT_EVERY_MS);
+  usageSnapshotTimer.unref();
 }
 
 // ---- E1: Passive Observer: machine telemetry (RAM / CPU / uptime) ----------
@@ -3125,6 +3141,10 @@ app.on('window-all-closed', () => {
   if (usageWatcher) {
     usageWatcher.stop();
     usageWatcher = null;
+  }
+  if (usageSnapshotTimer) {
+    clearInterval(usageSnapshotTimer);
+    usageSnapshotTimer = null;
   }
   if (telemetryWatcher) {
     telemetryWatcher.stop();

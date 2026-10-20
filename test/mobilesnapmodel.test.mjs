@@ -4,13 +4,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { snapRows, newsFrom, ledgerFrom, bodyFrom, MAX_PROJECTS } from '../mobile/src/snapmodel.js';
+import { snapRows, newsFrom, ledgerFrom, bodyFrom, usageFrom, MAX_PROJECTS } from '../mobile/src/snapmodel.js';
 
 const require = createRequire(import.meta.url);
 const { newsSnapshot } = require('../src/missionnews');
 const { summarize } = require('../src/missionledgercalc');
 const { mergeRates } = require('../src/ratecalc');
 const { yazioSnapshot } = require('../src/lifeyaziopeers');
+const { usageSnapshot } = require('../src/usagesnapshot');
 
 const HOUR = 60 * 60 * 1000;
 // A Wednesday noon, so Monday 00:00 local is two and a half days back.
@@ -115,4 +116,21 @@ test('isPublicHost refuses trailing-dot local names, CGNAT, multicast and v4-in-
   for (const url of ['https://example.com/', 'https://100.200.1.1/', 'https://[2606:4700::1111]/']) {
     assert.equal(isPublicHost(url), true, url);
   }
+});
+
+test('usageFrom shows the newest PC read, a passed reset as empty', () => {
+  const read = (updatedAt, resetIn) => ({
+    providerId: 'claude',
+    status: 'ok',
+    updatedAt,
+    limits: [
+      { window: '5h', percentUsed: 70, resetsAt: new Date(NOW + resetIn).toISOString() },
+      { window: 'weekly', percentUsed: 30, resetsAt: new Date(NOW + 48 * HOUR).toISOString() },
+    ],
+  });
+  const u = usageFrom([row('OLD', usageSnapshot(read(NOW - 2 * HOUR, HOUR), NOW)), row('NEW', usageSnapshot(read(NOW - HOUR, -1), NOW))], NOW);
+  assert.equal(u.machine, 'NEW');
+  assert.deepEqual(u.fiveHour, { pct: 0, resetsAt: null, isReset: true });
+  assert.equal(u.sevenDay.pct, 30);
+  assert.equal(usageFrom([], NOW), null);
 });
