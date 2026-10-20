@@ -2,7 +2,7 @@
 
 Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14. Released in v0.15.0 (2026-10-15).
 Phases 2a–2c shipped 2026-10-15 (v0.15.0 → v0.16.1) and proven live on two PCs.
-Phase 3 (folder transport removed) released in v0.16.2 (2026-10-19). Phone phases 4a–4d built 2026-10-19; phase 5 (Google calendar + mail on the phone) proven live 2026-10-20**
+Phase 3 (folder transport removed) released in v0.16.2 (2026-10-19). Phone phases 4a–4d built 2026-10-19; phase 5 (Google calendar + mail on the phone) proven live 2026-10-20; phone live at https://luna-core-hud.vercel.app**
 (KT-PC-LLM + laptop KT-NO-MMAZUR), against Supabase
 project `phkigyuhvbanadwmxqqs` ("Kotsur69's Project", `eu-west-1`,
 `https://phkigyuhvbanadwmxqqs.supabase.co`) — schema in
@@ -204,7 +204,7 @@ reviewed, function deployed, secrets set).**
 - Secrets (Supabase → Edge Functions → Secrets): `GOOGLE_CLIENT_ID`,
   `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` (from the token script),
   `OWNER_USER_ID` (the only row in `auth.users`), `ALLOWED_ORIGINS`
-  (`http://localhost:4173` now, plus `https://<vercel-domain>` after the deploy).
+  (`https://luna-core-hud.vercel.app,http://localhost:4173`).
 - `scripts/google-server-token.js`: one-time consent (calendar.readonly +
   calendar.events + gmail.metadata) with the PC's Desktop client in
   `config/google-oauth.local.json`, PKCE loopback (`gcal.startRedirectServer`;
@@ -695,23 +695,47 @@ never in the repo. Audit rule from 2c: each phone write must show up on a PC
 
 ## Next session: start here
 
-**Update 2026-10-20 (newest): phase 5 is done and proven live.** Mati did
-the Google setup (Gmail API on, OAuth app "In production", token script,
-five secrets) and checked `localhost:4173/#today` against the real function:
-"looks like it works". Committed with this doc update.
+**Update 2026-10-20 (newest): the phone is deployed on Vercel at
+`https://luna-core-hud.vercel.app`, and calendar + mail work there.**
+Vercel project root `mobile`, preset Vite, env `VITE_SUPABASE_URL` +
+`VITE_SUPABASE_ANON_KEY`; every push to `main` redeploys it. The
+`google` function's `ALLOWED_ORIGINS` secret is
+`https://luna-core-hud.vercel.app,http://localhost:4173`. Supabase Auth
+URL config: Site URL `https://luna-core-hud.vercel.app`, Redirect URLs
+`https://luna-core-hud.vercel.app/**` + `http://127.0.0.1:*/callback`
+(the PCs' login, keep it) + `http://localhost:4173/**` (local preview).
+
+Lessons from the first live run (2026-10-20):
+- The domain has dashes (`luna-core-hud`, from the repo name), not
+  `lunacore`. Use the production domain only: per-deploy URLs
+  (`luna-core-hud-<hash>-….vercel.app`) change on every push and must never
+  go into `ALLOWED_ORIGINS`.
+- A page origin missing from `ALLOWED_ORIGINS` shows as a CORS error in the
+  console; the phone now says "Funkcja Google nie odpowiada tej stronie…"
+  (`unreachable`) instead of "no network" (ed945aa).
+- `invalid_client` in the function log (`select event_message from logs
+  where source = 'function_logs'`) = a wrong `GOOGLE_CLIENT_ID` /
+  `GOOGLE_CLIENT_SECRET` secret. Compare the dashboard's SHA-256 digest
+  with the digest of the value in `config/google-server.local.json`; copy the
+  value to the clipboard with `node -e "process.stdout.write(require('./config/google-server.local.json').GOOGLE_CLIENT_SECRET)" | clip`
+  rather than selecting it by hand.
+- The console's `frame-ancestors 'none' … alongside other source
+  expressions` warning comes from the work network's Zscaler proxy, not
+  from Vercel (it serves exactly `frame-ancestors 'none'` + `X-Frame-Options: DENY`).
 
 What's left on the whole plan:
-1. **Vercel deploy** (steps under 3. below), then add
-   `https://<vercel-domain>` to the `ALLOWED_ORIGINS` secret
-   (comma-separated, next to `http://localhost:4173`): without it the
-   deployed phone gets `bad-origin` from `google`.
-2. Delete `config/google-server.local.json` if it's still on the PC (the
+1. Delete `config/google-server.local.json` if it's still on the PC (the
    secrets live in Supabase now; the file is gitignored, but it holds the
    refresh token in clear).
-3. The open live checks of 4b/4c/4d on the iPhone after the deploy.
-4. If calendar/mail ever say "Google disconnected the server"
+2. The iPhone: Safari → `https://luna-core-hud.vercel.app` → Share → Add to
+   Home Screen → open from the icon and log in there; then the open live
+   checks of 4b/4c/4d (below).
+3. If calendar/mail ever say "Google disconnected the server"
    (`google-auth`): the refresh token was revoked; run the token script
    again and replace `GOOGLE_REFRESH_TOKEN`.
+
+Phase 5 itself was proven on `localhost:4173` first ("looks like it works"),
+committed in 11d725c.
 
 Setup reference (done 2026-10-20, kept for a re-run): enable the Gmail API
 and publish the consent screen in Google Cloud project
@@ -747,16 +771,9 @@ works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
    what it uploads. The audit table in slice 3 is the checklist; add a row for
    every new synced item.
 3. **Next:**
-   - **Deploy 4a to Vercel (Mati, with help):** Add New → Project →
-     Luna-Core-HUD, **Root Directory `mobile`**, preset **Vite** (not the
-     Python preset / `luna-core-hud-agent-reach` name it guessed on
-     2026-10-19), env `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (values
-     of `cloud.local.json`), "Include files outside the root directory" on.
-     Then in Supabase: add `https://<vercel-domain>/**` to Redirect URLs, set
-     Site URL to `https://<vercel-domain>`, remove `http://localhost:4173/**`.
-     On the iPhone: Safari → the URL → Share → Add to Home Screen → log in.
-     Optional: rename the Vercel team (currently "ArcelorMittal", Hobby =
-     personal use).
+   - **Vercel deploy: done 2026-10-20** at `https://luna-core-hud.vercel.app`
+     (settings at the top of this section). Optional: rename the Vercel team
+     (currently "ArcelorMittal", Hobby = personal use).
    - **4b live check (Mati):** `cd mobile && npm run build && npm run preview`
      → `http://localhost:4173/#life` → add an expense, pay a bill, deposit
      into a goal; on a PC, the Life panel shows all three within a minute
