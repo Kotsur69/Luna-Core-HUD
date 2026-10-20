@@ -67,6 +67,22 @@ const PREP_TIMEOUT_MS = 4000;
 const LOCAL_API_TIMEOUT_MS = 50 * 60 * 1000;
 
 /**
+ * The CLI's stream watchdogs (found in claude 2.1.304): a first-byte window
+ * for the response headers and idle windows between stream chunks. Their
+ * defaults suit Anthropic's API, not a local model that prefills for minutes
+ * before its first token or thinks silently mid-answer - the tab then dies
+ * with "Stream idle timeout" while LM Studio is still generating. A local tab
+ * gets the same 50-minute ceiling as API_TIMEOUT_MS; the shim (lmstudioshim.js)
+ * additionally keeps a live stream ticking with SSE pings and owns the real
+ * stream-activity timeout.
+ */
+const LOCAL_STREAM_TIMEOUT_KEYS = [
+  'CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS',
+  'CLAUDE_STREAM_IDLE_TIMEOUT_MS',
+  'CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS',
+];
+
+/**
  * Validates a localLaunch block: only known keys with boolean values survive.
  * @param {unknown} value
  * @returns {{shim?:boolean, leanMcp?:boolean, leanTools?:boolean}|null}
@@ -128,7 +144,9 @@ function buildLocalEnv({ profileEnv, inheritedEnv = {}, model, contextLength, sh
   const context = Number.isInteger(contextLength) && contextLength > 0 && isUnset('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
     ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(contextLength) }
     : {};
-  const timeout = isUnset('API_TIMEOUT_MS') ? { API_TIMEOUT_MS: String(LOCAL_API_TIMEOUT_MS) } : {};
+  const timeout = Object.fromEntries(['API_TIMEOUT_MS', ...LOCAL_STREAM_TIMEOUT_KEYS]
+    .filter(isUnset)
+    .map((k) => [k, String(LOCAL_API_TIMEOUT_MS)]));
   // Without its token the shim refuses every request, so a URL alone is
   // worse than the direct upstream - route through it only with both.
   const viaShim = typeof shimUrl === 'string' && shimUrl !== '' && typeof shimToken === 'string' && shimToken !== '';
@@ -281,7 +299,39 @@ async function launchWhenReady(session, profile, { prepare, spawn, isLive }) {
   spawn(session, profile, launch);
 }
 
+/**
+ * Pre-spawn prep for a free-model chain tab (src/fallbackproxy.js): the tab
+ * talks to the loopback proxy, which walks the chain in front of the
+ * gateway. Same env rules as a local tab - the proxy URL + token, every tier
+ * named after the chain's first model (the proxy rewrites it per attempt
+ * anyway), the long timeouts free models need. Never rejects; a proxy that
+ * does not start leaves the tab on the gateway directly.
+ * @param {Object} profile
+ * @param {{id:string, models:string[]}} chain
+ * @param {{ensureProxy:Function, inheritedEnv?:Object, timeoutMs?:number}} deps
+ * @returns {Promise<{envOverrides:Object, extraArgs:string[], notes:string[]}>}
+ */
+async function prepareChainLaunch(profile, chain, deps) {
+  const upstream = localEndpointFromProfile(profile);
+  if (!upstream) return { envOverrides: {}, extraArgs: [], notes: ['not-local'] };
+  const proxy = await settle(() => deps.ensureProxy(upstream, chain), deps.timeoutMs || PREP_TIMEOUT_MS, null);
+  const ready = Boolean(proxy && proxy.ok && proxy.url && proxy.token);
+  return {
+    envOverrides: buildLocalEnv({
+      profileEnv: profile.env,
+      inheritedEnv: deps.inheritedEnv,
+      model: chain.models[0],
+      contextLength: null,
+      shimUrl: ready ? proxy.url : null,
+      shimToken: ready ? proxy.token : null,
+    }),
+    extraArgs: [],
+    notes: ready ? [] : ['proxy-failed'],
+  };
+}
+
 module.exports = {
+  prepareChainLaunch,
   normalizeLocalLaunch,
   resolveLocalLaunch,
   buildLocalEnv,
@@ -291,5 +341,7 @@ module.exports = {
   launchWhenReady,
   LEAN_DISALLOWED_TOOLS,
   TIER_MODEL_KEYS,
+  LOCAL_STREAM_TIMEOUT_KEYS,
+  LOCAL_API_TIMEOUT_MS,
   PREP_TIMEOUT_MS,
 };

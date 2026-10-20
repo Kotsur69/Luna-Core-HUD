@@ -837,6 +837,9 @@ function forceRefresh() {
 // USAGE WATCHER
 // ============================================================================
 
+/** Minimum gap between two reads of the non-Claude providers. */
+const OTHERS_EVERY_MS = 5 * 60 * 1000;
+
 /**
  * Periodically fetches usage and emits when it changes.
  * Adapts to the active provider automatically.
@@ -856,6 +859,11 @@ class UsageWatcher {
     this.busy = false;
     this.running = false;
     this.claudeAdapter = new ClaudeAdapter();
+    // Other configured providers (src/providerusage.js), read less often
+    // than Claude: several hosts per read, and their windows move slowly.
+    this.others = [];
+    this.othersAt = 0;
+    this.othersEveryMs = OTHERS_EVERY_MS;
   }
 
   start() {
@@ -883,6 +891,29 @@ class UsageWatcher {
     }
   }
 
+  /** Every configured profile (the "others" list is built from them). */
+  getAllProfiles() {
+    try {
+      const { loadProfiles } = require('./profiles');
+      return loadProfiles().profiles;
+    } catch {
+      return [];
+    }
+  }
+
+  /** The other providers' usage, refreshed at most every othersEveryMs. */
+  async readOthers() {
+    if (Date.now() - this.othersAt < this.othersEveryMs) return this.others;
+    try {
+      const { fetchOtherProvidersUsage } = require('./providerusage');
+      this.others = await fetchOtherProvidersUsage(this.getAllProfiles());
+    } catch {
+      this.others = [];
+    }
+    this.othersAt = Date.now();
+    return this.others;
+  }
+
   async tick() {
     if (this.busy) return;
     this.busy = true;
@@ -890,8 +921,13 @@ class UsageWatcher {
     let usage;
     try {
       const profile = this.getActiveProfile();
-      usage = await fetchUsage(profile);
-      const cmp = JSON.stringify({ ...usage, updatedAt: 0 });
+      const [primary, others] = await Promise.all([fetchUsage(profile), this.readOthers()]);
+      usage = { ...primary, others };
+      const cmp = JSON.stringify({
+        ...usage,
+        updatedAt: 0,
+        others: others.map((o) => ({ ...o, updatedAt: 0 })),
+      });
       if (cmp !== this.lastJson) {
         this.lastJson = cmp;
         this.onUpdate(usage);
@@ -907,6 +943,7 @@ class UsageWatcher {
   /** Forces an immediate read + emit (the refresh button in the UI). */
   refresh() {
     this.lastJson = ''; // force an emit on the next read
+    this.othersAt = 0; // the refresh button re-reads every provider
     if (this.timer) {
       clearTimeout(this.timer); // avoid duplicating the already-scheduled next tick
       this.timer = null;

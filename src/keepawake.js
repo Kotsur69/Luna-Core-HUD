@@ -20,6 +20,8 @@
 'use strict';
 
 const path = require('path');
+const os = require('os');
+const { expandHome, rehomePath } = require('./projects');
 
 const CONFIG_FILE = 'keepawake.local.json';
 const KILL_TIMEOUT_MS = 5000;
@@ -31,17 +33,22 @@ const CMD_META = /["&|<>^%!\r\n]/;
  * Validates the configured script path at the boundary.
  * @param {unknown} raw parsed keepawake.local.json
  * @param {(p:string)=>boolean} exists
+ * @param {string} [home]
  * @returns {{ok:true, script:string}|{ok:false, reason:string}}
  */
-function resolveScript(raw, exists) {
+function resolveScript(raw, exists, home = os.homedir()) {
   if (!raw || typeof raw !== 'object') return { ok: false, reason: 'not-configured' };
   const script = raw.script;
   if (typeof script !== 'string' || !script.trim()) return { ok: false, reason: 'not-configured' };
-  const trimmed = script.trim();
+  // "~\..." is accepted, and a path under another user's home is re-homed
+  // (src/projects.js), so one file works on both PCs.
+  const trimmed = expandHome(script.trim(), home);
   if (!path.win32.isAbsolute(trimmed) || CMD_META.test(trimmed)) return { ok: false, reason: 'invalid-path' };
   if (!/\.(bat|cmd)$/i.test(trimmed)) return { ok: false, reason: 'invalid-path' };
-  if (!exists(trimmed)) return { ok: false, reason: 'missing' };
-  return { ok: true, script: trimmed };
+  if (exists(trimmed)) return { ok: true, script: trimmed };
+  const twin = rehomePath(trimmed, home);
+  if (twin && !CMD_META.test(twin) && exists(twin)) return { ok: true, script: twin };
+  return { ok: false, reason: 'missing' };
 }
 
 /**

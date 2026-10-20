@@ -41,6 +41,8 @@ const NATIVE_COMMAND_RE = /^[a-z][a-z0-9-]*$/;
 
 /** A native template's fixed args are typed into the tab's shell: no spaces, quotes, $, ;, |, &, (). */
 const NATIVE_ARG_RE = /^[A-Za-z0-9._:/=@-]+$/;
+/** A chain id from config/freechains.json (src/freechains.js shape). */
+const FALLBACK_CHAIN_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const MAX_NATIVE_ARGS = 24;
 
 /** Env var name prefixes a provider template must never be allowed to set. */
@@ -105,6 +107,11 @@ function normalizeProviderTemplate(p) {
     // Default launch settings for local-model tabs (src/locallaunch.js); null
     // for every provider that is not a local endpoint.
     localLaunch: normalizeLocalLaunch(p.localLaunch),
+    // Default free-model fallback chain (config/freechains.json) for a
+    // claude tab behind a gateway; src/fallbackproxy.js walks it.
+    fallbackChain: !isNative && typeof p.fallbackChain === 'string' && FALLBACK_CHAIN_RE.test(p.fallbackChain)
+      ? p.fallbackChain
+      : null,
   };
 }
 
@@ -209,6 +216,10 @@ function buildProfileFromTemplate(template, entry) {
   const localLaunch = template.localLaunch ? normalizeLocalLaunch(e.localLaunch) : null;
   // The Luna overlay only exists for another vendor's CLI; `claude` already has the setup.
   const lunaSync = template.wireVia === 'native' && e.lunaSync === true;
+  // A chain choice only means something on a template that has one.
+  const fallbackChain = template.fallbackChain && typeof e.fallbackChain === 'string' && FALLBACK_CHAIN_RE.test(e.fallbackChain)
+    ? e.fallbackChain
+    : null;
 
   return {
     ok: true,
@@ -222,6 +233,7 @@ function buildProfileFromTemplate(template, entry) {
       templateId: template.id,
       ...(localLaunch ? { localLaunch } : {}),
       ...(lunaSync ? { lunaSync } : {}),
+      ...(fallbackChain ? { fallbackChain } : {}),
     },
   };
 }

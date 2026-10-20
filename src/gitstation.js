@@ -36,6 +36,7 @@ const os = require('os');
 const { execFile } = require('child_process');
 
 const paths = require('./paths');
+const { resolveStoredPath, toPortablePath, checkCwd } = require('./projects');
 
 const localFile = () => paths.local('repos.local.json');
 
@@ -230,6 +231,10 @@ function repoState(status) {
 /** Reads one repo. Never throws: a missing or broken repo becomes a row with an error. */
 async function readRepoStatus(dir) {
   const name = path.basename(dir);
+  // A folder that is not on this PC is not "not a repo" - say which it is.
+  if (!checkCwd(dir).ok) {
+    return { path: dir, name, error: 'missingDir', status: null, lastCommit: null, state: 'unknown' };
+  }
   if (!isRepo(dir)) {
     return { path: dir, name, error: 'notARepo', status: null, lastCommit: null, state: 'unknown' };
   }
@@ -255,24 +260,43 @@ async function readRepoStatus(dir) {
   };
 }
 
+/**
+ * A stored list -> local paths: "~" expanded, another user's home re-homed
+ * (src/projects.js resolveStoredPath), duplicates dropped.
+ * @param {unknown[]} list
+ * @param {(p:string) => boolean} [exists]
+ * @param {string} [home]
+ */
+function localPaths(list, exists, home) {
+  const out = list
+    .filter((r) => typeof r === 'string' && r.trim())
+    .map((r) => resolveStoredPath(r, exists, home));
+  return Array.from(new Set(out));
+}
+
 /** The configured list, or an empty one before the first scan. */
-function loadRepoList() {
+function loadRepoList(exists = undefined, home = undefined) {
   const data = readJson(localFile());
   const repos = data && Array.isArray(data.repos) ? data.repos : [];
   const roots = data && Array.isArray(data.roots) ? data.roots : DEFAULT_ROOTS;
-  return {
-    repos: repos.filter((r) => typeof r === 'string' && r.trim()).map((r) => r.trim()),
-    roots: roots.filter((r) => typeof r === 'string' && r.trim()),
-  };
+  return { repos: localPaths(repos, exists, home), roots: localPaths(roots, exists, home) };
+}
+
+/**
+ * The list as written to disk: home-relative ("~\...") so a copied or synced
+ * repos.local.json still points at the right folders on the other PC.
+ */
+function portableRepoList(repos, roots, home = undefined) {
+  const portable = (list) => Array.from(new Set(
+    list.filter((r) => typeof r === 'string' && r.trim()).map((r) => toPortablePath(r.trim(), home)),
+  ));
+  return { repos: portable(repos), roots: portable(roots && roots.length ? roots : DEFAULT_ROOTS) };
 }
 
 /** Writes the list back. This file is the panel's own state, not user config. */
 function saveRepoList(repos, roots) {
   const file = localFile();
-  const body = {
-    repos: Array.from(new Set(repos.filter((r) => typeof r === 'string' && r.trim()))),
-    roots: roots && roots.length ? roots : DEFAULT_ROOTS,
-  };
+  const body = portableRepoList(repos, roots);
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
@@ -367,6 +391,8 @@ module.exports = {
   scanForRepos,
   loadRepoList,
   saveRepoList,
+  localPaths,
+  portableRepoList,
   discoverRepos,
   parseStatus,
   parseLastCommit,

@@ -84,6 +84,11 @@ function normalizeProfile(p) {
     // Opt-in: a native Codex/Gemini tab runs against LunaCore's Luna overlay
     // home (src/lunasyncio.js) instead of the user's own ~/.codex / ~/.gemini.
     lunaSync: p.lunaSync === true,
+    // Free-model fallback chain id (config/freechains.json); null = the
+    // template's default, if it has one (src/freechains.js resolveProfileChain).
+    fallbackChain: typeof p.fallbackChain === 'string' && /^[a-z0-9][a-z0-9-]{0,39}$/.test(p.fallbackChain)
+      ? p.fallbackChain
+      : null,
   };
 }
 

@@ -50,6 +50,25 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024;
 /** Max time for a client to finish sending one request (not the response). */
 const REQUEST_TIMEOUT_MS = 60 * 1000;
 
+/**
+ * Stream-activity timeout: how long the upstream may stay completely silent
+ * (no response headers, no body bytes) before the shim gives up on it. It is
+ * reset on every received chunk, so a generation of any total length is fine
+ * as long as LM Studio keeps producing - only a hung server is cut off. A
+ * 128k prefill on a 16 GB card measured ~8 min before its first byte.
+ */
+const UPSTREAM_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
+ * While an SSE response sits idle between events (the model thinking, a slow
+ * token), the shim sends the client an Anthropic `ping` event this often, so
+ * the CLI's own stream-idle watchdog keeps seeing traffic.
+ */
+const KEEPALIVE_INTERVAL_MS = 20 * 1000;
+
+/** The Anthropic SSE keep-alive event; clients ignore it by contract. */
+const SSE_PING = Buffer.from('event: ping\ndata: {"type": "ping"}\n\n', 'utf8');
+
 /** Headers that describe one hop, never the message - dropped both ways. */
 const HOP_BY_HOP = new Set([
   'connection', 'keep-alive', 'proxy-connection', 'proxy-authenticate',
@@ -136,6 +155,49 @@ function upstreamErrorBody(message, type = 'api_error') {
   return JSON.stringify({ type: 'error', error: { type, message } });
 }
 
+/** True when the response is a server-sent event stream. */
+function isEventStream(headers) {
+  return /^text\/event-stream\b/i.test(String((headers && headers['content-type']) || ''));
+}
+
+/**
+ * True when a forwarded chunk ends on an SSE event boundary (a blank line),
+ * i.e. a ping can be injected without splitting an event in two.
+ * @param {Buffer|string} chunk
+ */
+function endsOnEventBoundary(chunk) {
+  const tail = Buffer.isBuffer(chunk) ? chunk.toString('utf8', Math.max(0, chunk.length - 4)) : String(chunk).slice(-4);
+  return /(\r?\n){2}$/.test(tail);
+}
+
+/**
+ * A restartable inactivity timer: fires `onIdle` once after `idleMs` without
+ * a touch(). Timers are injectable so tests run without real time.
+ * @param {{idleMs:number, onIdle:Function, setTimer?:Function, clearTimer?:Function}} opts
+ * @returns {{touch:Function, stop:Function}}
+ */
+function createIdleWatchdog({ idleMs, onIdle, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  let timer = null;
+  let done = false;
+  const stop = () => {
+    done = true;
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+  };
+  const touch = () => {
+    if (done || !(idleMs > 0)) return;
+    if (timer !== null) clearTimer(timer);
+    timer = setTimer(() => {
+      timer = null;
+      if (done) return;
+      done = true;
+      onIdle();
+    }, idleMs);
+  };
+  touch();
+  return { touch, stop };
+}
+
 /** Copies headers minus hop-by-hop ones and the shim's own token. */
 function forwardHeaders(headers, extra) {
   const out = {};
@@ -167,9 +229,13 @@ function isConnectivityProbe(method, url) {
 
 class LmStudioShim {
   /**
-   * @param {{upstream:string, port?:number, maxBodyBytes?:number, httpImpl?:Object}} opts
+   * @param {{upstream:string, port?:number, maxBodyBytes?:number, httpImpl?:Object,
+   *          idleTimeoutMs?:number, keepAliveMs?:number}} opts
    */
-  constructor({ upstream, port = 0, maxBodyBytes = MAX_BODY_BYTES, httpImpl = http }) {
+  constructor({
+    upstream, port = 0, maxBodyBytes = MAX_BODY_BYTES, httpImpl = http,
+    idleTimeoutMs = UPSTREAM_IDLE_TIMEOUT_MS, keepAliveMs = KEEPALIVE_INTERVAL_MS,
+  }) {
     const target = new URL(upstream);
     // 0.0.0.0 is a listen address, not a connect address (fails on Windows).
     this.upstreamHost = target.hostname === '0.0.0.0' ? '127.0.0.1' : target.hostname.replace(/^\[|\]$/g, '');
@@ -178,6 +244,8 @@ class LmStudioShim {
     this.requestedPort = port;
     this.maxBodyBytes = maxBodyBytes;
     this.httpImpl = httpImpl;
+    this.idleTimeoutMs = idleTimeoutMs;
+    this.keepAliveMs = keepAliveMs;
     this.server = null;
     this.port = null;
     this.sockets = new Set();
@@ -277,6 +345,12 @@ class LmStudioShim {
   forward(req, res, body) {
     const extra = { host: `${this.upstreamHost}:${this.upstreamPort}` };
     if (body) extra['content-length'] = String(body.length);
+    let keepAlive = null;
+    const cleanup = () => {
+      watchdog.stop();
+      if (keepAlive !== null) clearInterval(keepAlive);
+      keepAlive = null;
+    };
     const upReq = this.httpImpl.request({
       host: this.upstreamHost,
       port: this.upstreamPort,
@@ -286,11 +360,57 @@ class LmStudioShim {
       // One connection per request: nothing lingers after stop() or quit.
       agent: false,
     }, (upRes) => {
+      watchdog.touch();
       res.writeHead(upRes.statusCode || 502, forwardHeaders(upRes.headers, {}));
-      upRes.pipe(res);
-      upRes.on('error', () => res.destroy());
+      const sse = isEventStream(upRes.headers);
+      let atBoundary = true;
+      let lastWrite = Date.now();
+      if (sse && this.keepAliveMs > 0) {
+        keepAlive = setInterval(() => {
+          if (atBoundary && Date.now() - lastWrite >= this.keepAliveMs && !res.writableEnded) {
+            res.write(SSE_PING);
+            lastWrite = Date.now();
+          }
+        }, this.keepAliveMs);
+        if (typeof keepAlive.unref === 'function') keepAlive.unref();
+      }
+      upRes.on('data', (chunk) => {
+        watchdog.touch();
+        atBoundary = endsOnEventBoundary(chunk);
+        lastWrite = Date.now();
+        // Manual pipe (the pings need the boundary tracking): keep backpressure.
+        if (!res.write(chunk)) {
+          upRes.pause();
+          res.once('drain', () => upRes.resume());
+        }
+      });
+      upRes.on('end', () => {
+        cleanup();
+        res.end();
+      });
+      upRes.on('error', () => {
+        cleanup();
+        res.destroy();
+      });
+    });
+    // Reset on every received chunk: only a SILENT upstream times out, never
+    // a long generation that keeps streaming.
+    const watchdog = createIdleWatchdog({
+      idleMs: this.idleTimeoutMs,
+      onIdle: () => {
+        upReq.destroy();
+        const message = `LM Studio sent nothing for ${Math.round(this.idleTimeoutMs / 1000)}s - request timed out`;
+        if (!res.headersSent) {
+          res.writeHead(504, { 'content-type': 'application/json' });
+          res.end(upstreamErrorBody(message, 'timeout_error'));
+        } else if (!res.writableEnded) {
+          res.end(`event: error\ndata: ${upstreamErrorBody(message, 'timeout_error')}\n\n`);
+        }
+        cleanup();
+      },
     });
     upReq.on('error', (err) => {
+      cleanup();
       if (res.headersSent) {
         res.destroy();
         return;
@@ -300,6 +420,7 @@ class LmStudioShim {
     });
     // Esc in the CLI closes the client socket; stop LM Studio generating too.
     res.on('close', () => {
+      cleanup();
       if (!res.writableFinished) upReq.destroy();
     });
     if (body) upReq.end(body);
@@ -341,11 +462,17 @@ module.exports = {
   rewriteBody,
   shouldRewrite,
   upstreamErrorBody,
+  forwardHeaders,
   tokenMatches,
   isConnectivityProbe,
+  isEventStream,
+  endsOnEventBoundary,
+  createIdleWatchdog,
   LmStudioShim,
   ensureShim,
   stopAllShims,
   MAX_BODY_BYTES,
+  UPSTREAM_IDLE_TIMEOUT_MS,
+  KEEPALIVE_INTERVAL_MS,
   SHIM_TOKEN_HEADER,
 };

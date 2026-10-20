@@ -503,7 +503,11 @@ function normalizeStoredPlan(raw) {
     workerModel: strOrNull(raw.workerModel, 32),
     permissionMode: strOrNull(raw.permissionMode, 32),
     allowedTools: strList(raw.allowedTools).filter(isAllowRule).slice(0, 50),
-    integrationMode: INTEGRATION_MODES.includes(raw.integrationMode) ? raw.integrationMode : null,
+    // A free run (orchestraFree.js) stays branches-only after a restart too.
+    freeMode: raw.freeMode === true,
+    integrationMode: raw.freeMode === true
+      ? 'branches'
+      : (INTEGRATION_MODES.includes(raw.integrationMode) ? raw.integrationMode : null),
     baseBranch: isBaseBranch(raw.baseBranch) ? raw.baseBranch : null,
     scheduledAt: Number.isFinite(raw.scheduledAt) ? raw.scheduledAt : null,
     approvalLog: (Array.isArray(raw.approvalLog) ? raw.approvalLog : [])
@@ -513,6 +517,26 @@ function normalizeStoredPlan(raw) {
     integration: normalizeIntegration(raw.integration),
     todoText: new Map(todoText),
     packages,
+  };
+}
+
+/**
+ * A restored run's folders on THIS machine: the repo and every package's
+ * worktree root / cwd / brief go through `resolve` (src/projects.js
+ * resolveStoredPath - kept when it exists, re-homed from another user's
+ * home when that exists instead). Never mutates the input.
+ * @param {object} plan a normalizeStoredPlan result
+ * @param {(p:string) => string|null} resolve
+ * @param {(p:string) => string|null} [resolveFile] same for files (briefs)
+ */
+function rehomePlanPaths(plan, resolve, resolveFile = resolve) {
+  if (!plan) return plan;
+  const dir = (p) => (typeof p === 'string' && p ? resolve(p) || p : p);
+  const file = (p) => (typeof p === 'string' && p ? resolveFile(p) || p : p);
+  return {
+    ...plan,
+    repoPath: dir(plan.repoPath),
+    packages: plan.packages.map((p) => ({ ...p, root: dir(p.root), cwd: dir(p.cwd), briefPath: file(p.briefPath) })),
   };
 }
 
@@ -569,6 +593,7 @@ module.exports = {
   tally,
   timedOut,
   normalizeStoredPlan,
+  rehomePlanPaths,
   serializePlan,
   restoreAfterRestart,
 };
