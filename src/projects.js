@@ -53,17 +53,90 @@ function expandHome(p) {
   return p;
 }
 
-/** Validates and normalizes a single project entry. Returns an object or null. */
-function normalizeProject(p) {
+// "<drive>:\Users\<name>\rest" / "/Users/<name>/rest" / "/home/<name>/rest".
+const USER_HOME_RE = /^(?:[A-Za-z]:[\\/]+Users|\/Users|\/home)[\\/]+[^\\/]+(?:[\\/]+(.*))?$/;
+
+/**
+ * Re-roots a path that lives under ANOTHER user's home onto this machine's
+ * home: "C:\Users\mmazur\source\repos\x" -> "<homedir>\source\repos\x".
+ * The cloud sync carries projects.local.json between machines with different
+ * user names, so an absolute path written on one never exists on the other.
+ * Returns null when the path is not under a user home, or already under ours.
+ * @param {string} p
+ * @param {string} [home]
+ * @returns {string|null}
+ */
+function rehomePath(p, home = os.homedir()) {
+  if (typeof p !== 'string') return null;
+  const m = USER_HOME_RE.exec(p);
+  if (!m) return null;
+  const rehomed = path.normalize(path.join(home, m[1] || ''));
+  return rehomed.toLowerCase() === path.normalize(p).toLowerCase() ? null : rehomed;
+}
+
+/**
+ * Collapses a path under this machine's home to "~\rest", so an entry added
+ * here stays valid on every synced machine. Other paths are returned as-is.
+ * @param {string} p
+ * @param {string} [home]
+ * @returns {string}
+ */
+function toPortablePath(p, home = os.homedir()) {
+  const abs = path.normalize(p);
+  const root = path.normalize(home);
+  if (abs.toLowerCase() === root.toLowerCase()) return '~';
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+  if (!abs.toLowerCase().startsWith(prefix.toLowerCase())) return p;
+  return `~${path.sep}${abs.slice(prefix.length)}`;
+}
+
+/** True when `d` is an existing directory. */
+function isDir(d) {
+  try {
+    return Boolean(d) && fs.statSync(d).isDirectory();
+  } catch {
+    return false; // does not exist / no access
+  }
+}
+
+/**
+ * Picks the directory a session should actually start in: the configured
+ * path when it exists, else its re-homed twin (see rehomePath), else null so
+ * the caller can fall back AND say so.
+ * @param {string} dir
+ * @returns {string|null}
+ */
+function resolveProjectDir(dir) {
+  if (isDir(dir)) return dir;
+  const rehomed = rehomePath(dir);
+  return isDir(rehomed) ? rehomed : null;
+}
+
+/**
+ * Validates and normalizes a single project entry. Returns an object or null.
+ * `path` may be one string or a list of candidates - one per machine, e.g.
+ * ["~/Desktop/repos/x", "~/source/repos/x"] - and the first that exists here
+ * wins, trying each one's re-homed twin too (another user's home, see
+ * rehomePath). When none exists the first is kept, so the entry still loads
+ * (the repo may only live on another machine) and the spawn reports it missing.
+ * @param {object} p
+ * @param {(dir:string) => boolean} [exists]
+ */
+function normalizeProject(p, exists = isDir) {
   if (!p || typeof p !== 'object') return null;
   if (typeof p.id !== 'string' || !p.id) return null;
   // Label may be a string or a { pl, en } object - see src/localized.js.
   if (!hasText(p.label)) return null;
-  if (typeof p.path !== 'string' || !p.path) return null;
+  const raw = Array.isArray(p.path) ? p.path : [p.path];
+  const candidates = raw
+    .filter((c) => typeof c === 'string' && c)
+    .map((c) => path.normalize(expandHome(c)));
+  if (!candidates.length) return null;
+  const tries = candidates.flatMap((c) => [c, rehomePath(c)]).filter(Boolean);
   return {
     id: p.id,
     label: normalizeText(p.label),
-    path: path.normalize(expandHome(p.path)),
+    path: tries.find((c) => exists(c)) || candidates[0],
   };
 }
 
@@ -182,7 +255,9 @@ function addProject(entry) {
 
   const local = readJson(localFile()) || {};
   const list = Array.isArray(local.projects) ? local.projects.slice() : [];
-  list.push({ id, label, path: entry.path.trim() });
+  // Stored home-relative ("~\...") so the cloud-synced entry resolves on the
+  // other machines too, whatever their user name is.
+  list.push({ id, label, path: toPortablePath(resolvedPath) });
 
   paths.ensureUserDir();
   fs.writeFileSync(
@@ -243,6 +318,9 @@ module.exports = {
   getProject,
   normalizeProject,
   expandHome,
+  rehomePath,
+  toPortablePath,
+  resolveProjectDir,
   addProject,
   removeProject,
   slugify,

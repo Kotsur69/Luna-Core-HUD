@@ -71,7 +71,7 @@ const { withColorSupport, buildSessionEnv } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
 const { withSessionId, withIntakeMcp, intakeState, withTaskBrief, findExecutable, isClaudeCommand } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
-const { loadProjects, getProject, addProject, removeProject } = require('./projects');
+const { loadProjects, getProject, addProject, removeProject, resolveProjectDir } = require('./projects');
 const {
   cycleSessionId,
   moveSessionId,
@@ -243,12 +243,19 @@ const SCAN_TAIL_CHARS = 512;
  * @param {string} dir
  */
 function safeCwd(dir) {
-  try {
-    if (dir && fs.statSync(dir).isDirectory()) return dir;
-  } catch {
-    /* does not exist / no access */
-  }
-  return START_CWD;
+  return resolveProjectDir(dir) || START_CWD;
+}
+
+/**
+ * One dim terminal line when a tab could not start where its project points -
+ * the fallback to home must never be silent, or a project switch looks like
+ * it did nothing.
+ */
+function missingDirNotice(dir, lang) {
+  const text = lang === 'pl'
+    ? `[LunaCore] Folder projektu nie istnieje na tym komputerze: ${dir} - start w ${START_CWD}.`
+    : `[LunaCore] Project folder not found on this machine: ${dir} - starting in ${START_CWD}.`;
+  return `\x1b[2;33m${text}\x1b[0m\r\n`;
 }
 
 // ---- Global state ----------------------------------------------------------
@@ -1073,7 +1080,9 @@ function spawnInto(session, profile, launch = null) {
     ),
   );
 
-  const cwd = safeCwd(session.cwd);
+  const wantedCwd = session.cwd;
+  const cwd = safeCwd(wantedCwd);
+  const cwdMissing = Boolean(wantedCwd) && cwd === START_CWD && path.normalize(wantedCwd) !== START_CWD;
   session.cwd = cwd;
   session.profileId = profile.id;
   // A restart starts a fresh terminal: the old tail must not leak into the new
@@ -1094,6 +1103,7 @@ function spawnInto(session, profile, launch = null) {
   });
   session.proc = proc;
   session.alive = true;
+  if (cwdMissing) send('pty:data', { sessionId: session.id, data: missingDirNotice(wantedCwd, readUiPrefs().lang) });
   if (lunaSync) send('pty:data', { sessionId: session.id, data: lunaSyncNotice(lunaSync, readUiPrefs().lang) });
 
   // PASSIVE OBSERVER: this session's raw stdout -> renderer + tool detection.
@@ -2762,9 +2772,13 @@ function registerIpc() {
     const session = resolveSession(sessionId);
     if (!session) return { ok: false, error: 'noTab' };
     const project = getProject(projects, session.projectId);
+    // A missing cwd makes execFile fail with ENOENT, which would read as
+    // "claude not found" - check the folder first and say what is wrong.
+    const repoPath = resolveProjectDir(project ? project.path : session.cwd);
+    if (!repoPath) return { ok: false, error: 'noRepo' };
     const res = await orchestra.makePlan({
       projectId: session.projectId,
-      repoPath: project ? project.path : session.cwd,
+      repoPath,
       profileId: session.profileId,
       env: withClaudeOnPath(buildSessionEnv(process.env, {})),
     });

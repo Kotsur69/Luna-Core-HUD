@@ -37,7 +37,7 @@ const killBtn = q('#orchestra-kill');
 // Error codes main can return that have their own message; anything else
 // reads as the generic one.
 const FAIL_CODES = new Set([
-  'noTodos', 'busy', 'runActive', 'noClaude', 'timeout', 'budget', 'badJson', 'failed',
+  'noTodos', 'busy', 'runActive', 'noClaude', 'noRepo', 'timeout', 'budget', 'badJson', 'failed',
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
   'badSchedule', 'noReset', 'badRule', 'mergeDeclined',
 ]);

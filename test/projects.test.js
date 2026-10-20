@@ -64,6 +64,34 @@ test('normalizeProject does not check that the directory exists (the repo may be
   assert.ok(p.path.includes('i-do-not-exist-here-12345'));
 });
 
+test('normalizeProject picks the first path that exists on this machine', () => {
+  const here = path.normalize(path.join(os.homedir(), 'source/repos/x'));
+  const p = normalizeProject(
+    { id: 'x', label: 'X', path: ['~/Desktop/repos/x', '~/source/repos/x'] },
+    (d) => d === here,
+  );
+  assert.equal(p.path, here);
+});
+
+test("normalizeProject re-homes a path written under another user's home", () => {
+  const here = path.normalize(path.join(os.homedir(), 'source/repos/x'));
+  const p = normalizeProject(
+    { id: 'x', label: 'X', path: 'C:\\Users\\someone-else\\source\\repos\\x' },
+    (d) => d === here,
+  );
+  assert.equal(p.path, here);
+});
+
+test('normalizeProject keeps the first candidate when none exists here', () => {
+  const p = normalizeProject({ id: 'x', label: 'X', path: ['~/a', '~/b'] }, () => false);
+  assert.equal(p.path, path.normalize(path.join(os.homedir(), 'a')));
+});
+
+test('normalizeProject rejects a path list with no usable entry', () => {
+  assert.equal(normalizeProject({ id: 'x', label: 'X', path: [] }), null);
+  assert.equal(normalizeProject({ id: 'x', label: 'X', path: ['', 42] }), null);
+});
+
 test('getProject finds by id, otherwise null', () => {
   const list = [{ id: 'home', label: 'Home', path: '/home' }];
   assert.equal(getProject(list, 'home').label, 'Home');
@@ -92,4 +120,40 @@ test('uniqueId returns the base when it is free', () => {
 test('uniqueId appends -2, -3... on collision', () => {
   assert.equal(uniqueId('hud', new Set(['hud'])), 'hud-2');
   assert.equal(uniqueId('hud', new Set(['hud', 'hud-2'])), 'hud-3');
+});
+
+// ---- rehomePath / toPortablePath (cloud-synced entries across user names) ----
+
+const { rehomePath, toPortablePath } = require('../src/projects');
+
+test('rehomePath re-roots a Windows path from another user onto this home', { skip: process.platform !== 'win32' }, () => {
+  const home = 'C:\\Users\\Kotsur69';
+  assert.equal(
+    rehomePath('C:\\Users\\mmazur\\source\\repos\\synthara', home),
+    path.normalize(path.join(home, 'source', 'repos', 'synthara'))
+  );
+});
+
+test('rehomePath handles POSIX homes and a bare home dir', () => {
+  assert.equal(rehomePath('/home/alice/repos/x', '/home/bob'), path.normalize('/home/bob/repos/x'));
+  assert.equal(rehomePath('/Users/alice', '/Users/bob'), path.normalize('/Users/bob'));
+});
+
+test('rehomePath returns null outside user homes or when already ours', () => {
+  assert.equal(rehomePath('D:\\work\\repo', 'C:\\Users\\me'), null);
+  assert.equal(rehomePath(path.join(os.homedir(), 'repos')), null);
+  assert.equal(rehomePath(undefined), null);
+});
+
+test('toPortablePath collapses paths under home to ~ and leaves others alone', () => {
+  const home = os.homedir();
+  assert.equal(toPortablePath(home, home), '~');
+  assert.equal(toPortablePath(path.join(home, 'source', 'repos', 'x'), home), `~${path.sep}${path.join('source', 'repos', 'x')}`);
+  const outside = path.join(path.parse(home).root, 'elsewhere', 'repo');
+  assert.equal(toPortablePath(outside, home), outside);
+});
+
+test('toPortablePath output round-trips through expandHome', () => {
+  const p = path.join(os.homedir(), 'source', 'repos', 'x');
+  assert.equal(path.normalize(expandHome(toPortablePath(p))), path.normalize(p));
 });
