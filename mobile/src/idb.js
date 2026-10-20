@@ -46,3 +46,4 @@ async function run(mode, fn) {
 export const get = (key) => run('readonly', (s) => s.get(key));
 export const put = (key, value) => run('readwrite', (s) => s.put(value, key));
 export const clear = () => run('readwrite', (s) => s.clear());
+export const del = (key) => run('readwrite', (s) => s.delete(key));

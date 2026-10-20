@@ -28,6 +28,7 @@
 import { createClient } from '@supabase/supabase-js';
 import rows from '../../src/cloudrows.js';
 import * as idb from './idb.js';
+import * as hostkey from './hostkey.js';
 import * as outbox from './outbox.js';
 import { PLACE_KEY } from './weather.js';
 
@@ -326,6 +327,8 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
     } finally {
       // An outbox write already under the lock finishes before the wipe.
       await outboxLock;
+      // The host session key goes first: wipe() also drops it from memory.
+      await hostkey.wipe().catch(() => {});
       await idb.clear();
       try {
         localStorage.removeItem(PICK_KEY);
