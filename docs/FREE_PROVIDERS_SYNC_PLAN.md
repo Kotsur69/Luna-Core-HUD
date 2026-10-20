@@ -1,8 +1,35 @@
 # Free providers + Luna sync — plan
 
-Status: **draft, waiting for Mati's confirm** (2026-10-20).
-Predecessor (uncommitted at time of writing): native `codex-cli` / `gemini-cli`
-templates + `openrouter` template (see README "AI providers").
+Status: **S0-S3 built, tested and pushed** (2026-10-20, commits
+326a3e1..7323279). Mati's live click-through in the running app is the one
+check still open.
+
+## Resume here
+
+- **Live check (Mati):** restart LunaCore, add a Gemini CLI profile with
+  "Use my Luna setup" on, Google login + trust once, ask "who are you?" -
+  must answer as Luna. Same for a FreeLLMAPI profile with the unified key.
+- **Open, small:** configurable FreeLLMAPI port (Docker = 3001, desktop =
+  31415); a gateway up/down row in Settings; skip the per-spawn overlay copy
+  when nothing changed (it is synchronous on the main thread).
+- **Not planned:** hooks and `ecc:` agents for Codex/Gemini (no equivalent);
+  claude.ai connectors (Anthropic-hosted).
+
+## How to use it (agreed with Mati, 2026-10-20)
+
+FreeLLMAPI swaps only the MODEL, never the program or the setup:
+
+| Need | Profile |
+|---|---|
+| Best quality, full Luna | Claude Cloud (uses Claude limits) |
+| Free, strong, Luna instructions + skills | Gemini CLI (Google login, ~1000 req/day) + "Use my Luna setup" |
+| Full Luna harness when Claude limits run out | FreeLLMAPI (claude) - fallback only |
+
+Why FreeLLMAPI (claude) is a fallback, not a daily driver: the Luna harness
+sends ~20k tokens of rules plus Claude Code's own prompt and MCP tool lists
+on every turn (and is never trimmed - see memory "never trim the Luna
+harness"); free models have small quotas/contexts, weaker tool calling, and
+the gateway rotates models as daily caps run out.
 
 ## Goal
 
