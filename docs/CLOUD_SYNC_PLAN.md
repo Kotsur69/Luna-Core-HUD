@@ -796,8 +796,13 @@ works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
      in 8 days). Fine unless Mati uses Claude Code on the laptop.
    - `doc:prompts`, `doc:libraries` and `mc:rules` aren't in the cloud
      yet: no PC has edited them. The first edit should be watched once.
-   - The YAZIO snapshot uploads when a logged-in PC opens the Body tab. It's not live-checked
-     yet (`select machine, updated_at from snapshots where kind = 'yazio'`).
+   - YAZIO snapshot: live-checked 2026-10-20 (KT-PC-LLM row read by the
+     phone). It used to go stale: the Body tab fetched only once per app run,
+     and the phone only mirrors what a PC uploads. Fixed (not released yet):
+     a logged-in PC refetches + uploads every 30 min in the background
+     (`lifeipc.js` `BODY_EVERY_MS`), and an open Body tab re-asks when its
+     answer is over 5 min old (`lifebody.js` `STALE_MS`, also on focus).
+     Check: `select machine, updated_at from snapshots where kind = 'yazio'`.
    - LOW review notes not done: a "forget this PC" action for a retired PC's
      rows; machine-name collisions (`PC_1` = `PC-1`).
    - Still owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.

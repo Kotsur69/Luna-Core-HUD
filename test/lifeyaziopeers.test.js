@@ -159,3 +159,32 @@ test('life:body without YAZIO: a stalled cloud falls back to not connected', asy
   registerLifeIpc({ ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, now: () => NOW, yazio, cloud, peerTimeoutMs: 20 });
   assert.deepEqual(await handlers.get('life:body')({}, {}), { ok: true, connected: false });
 });
+
+test('background refresh: a logged-in PC fetches and puts the snapshot on its own', async () => {
+  const puts = [];
+  let calls = 0;
+  const yazio = { status: () => ({ connected: true }), body: async () => (calls++, bodyData()) };
+  const cloud = () => ({ put: async (k, d) => puts.push([k, d]) || true, list: async () => [] });
+  const life = registerLifeIpc({ ipcMain: { handle: () => {} }, now: () => NOW, yazio, cloud, bodyEveryMs: 10 });
+  await new Promise((r) => setTimeout(r, 80));
+  life.stop();
+  assert.ok(calls >= 2, `fetched ${calls}x`);
+  assert.deepEqual(puts[0], ['yazio', yazioSnapshot(bodyData(), NOW)]);
+});
+
+test('background refresh: not logged in -> no fetch; a failing fetch never throws; 0 turns it off', async () => {
+  let calls = 0;
+  const off = { status: () => ({ connected: false }), body: async () => calls++ };
+  const failing = { status: () => ({ connected: true }), body: async () => { calls++; throw Object.assign(new Error('x'), { reason: 'network' }); } };
+  const a = registerLifeIpc({ ipcMain: { handle: () => {} }, now: () => NOW, yazio: off, bodyEveryMs: 10 });
+  const b = registerLifeIpc({ ipcMain: { handle: () => {} }, now: () => NOW, yazio: failing, bodyEveryMs: 10 });
+  const c = registerLifeIpc({ ipcMain: { handle: () => {} }, now: () => NOW, yazio: failing, bodyEveryMs: 0 });
+  await new Promise((r) => setTimeout(r, 25));
+  a.stop();
+  b.stop();
+  c.stop();
+  assert.ok(calls >= 1, 'the failing PC still tried');
+  const after = calls;
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal(calls, after, 'stop() ends the timer');
+});

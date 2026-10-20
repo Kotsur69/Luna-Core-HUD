@@ -27,10 +27,17 @@ const MACROS = [
   ['carb', 'var(--life-fixed)'],
 ];
 
+// An answer older than this is asked for again when the tab is on screen
+// (main's own YAZIO cache is 5 minutes too, so a quick re-ask costs nothing).
+const STALE_MS = 5 * 60 * 1000;
+
 // {phase: idle|loading|ready, connected, data, reason, from}
 // from = {machine} when data is another PC's copy (this PC is not logged in).
 let body = { phase: 'idle', connected: false, data: null, reason: '', from: null };
 let root = null;
+// When the last answer arrived (not data.fetchedAt: another PC's copy can be old by nature).
+let loadedAt = 0;
+let watching = false;
 
 const n0 = (n) => new Intl.NumberFormat(lang(), { maximumFractionDigits: 0 }).format(n);
 const kg = (n) => `${new Intl.NumberFormat(lang(), { maximumFractionDigits: 1 }).format(n)} kg`;
@@ -58,7 +65,24 @@ async function load(force) {
   body = res.ok
     ? { phase: 'ready', connected: res.connected, data: res.body || null, reason: '', from: res.from || null }
     : { ...body, phase: 'ready', connected: res.connected !== false, reason: res.reason };
+  loadedAt = Date.now();
   redraw();
+}
+
+/** Re-asks main when the Body tab is visible and the answer is stale. */
+function refreshIfStale() {
+  // offsetParent is null while the Life panel (or the window) is hidden.
+  const onScreen = root && root.offsetParent !== null && root.querySelector('.life-body') && document.visibilityState === 'visible';
+  if (onScreen && body.phase === 'ready' && Date.now() - loadedAt >= STALE_MS) load(false);
+}
+
+/** Once per app run: a timer and a back-in-view check keep an open Body tab current. */
+function watch() {
+  if (watching) return;
+  watching = true;
+  setInterval(refreshIfStale, STALE_MS);
+  document.addEventListener('visibilitychange', refreshIfStale);
+  window.addEventListener('focus', refreshIfStale);
 }
 
 // --- not connected ----------------------------------------------------------------
@@ -285,9 +309,11 @@ function draw() {
   root.replaceChildren(wrap);
 }
 
-/** Draws the Body tab into `target`; the first visit loads from YAZIO. */
+/** Draws the Body tab into `target`; the first visit loads from YAZIO, later ones when stale. */
 export function renderBody(target) {
   root = target;
   draw();
+  watch();
   if (body.phase === 'idle') load(false);
+  else refreshIfStale();
 }

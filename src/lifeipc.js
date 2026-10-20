@@ -58,6 +58,10 @@ const CREATES = { addExpense: 'expenses', addDeposit: 'deposits' };
 // an unofficial API with Mati's account. Unforced reads come from the cache.
 const MIN_FORCE_GAP_MS = 15 * 1000;
 const MIN_CONNECT_GAP_MS = 3 * 1000;
+// Background YAZIO refresh while logged in, so the phone and the other PCs
+// get today's numbers without anyone opening the Body tab. One fetch is
+// 8 requests: every 30 minutes stays far from hammering an unofficial API.
+const BODY_EVERY_MS = 30 * 60 * 1000;
 const YAZIO_REASONS = new Set(['not-connected', 'bad-login', 'network', 'rate-limited', 'api-changed']);
 
 function reasonOf(err) {
@@ -96,6 +100,8 @@ function yazioReason(err) {
  *   yazio?: object, sync?: {fresh: Function, soon: Function} | null}} deps
  *   file/now/yazio are injectable for tests; the real store path and a real
  *   YAZIO client are the defaults. sync = startLifeSync() in the app, none in tests.
+ *   bodyEveryMs = background refresh period; 0 turns it off.
+ * @returns {{stop: () => void}} stops the background refresh
  */
 function registerLifeIpc({
   ipcMain,
@@ -105,6 +111,7 @@ function registerLifeIpc({
   sync = null,
   cloud = () => null,
   peerTimeoutMs = PEER_TIMEOUT_MS,
+  bodyEveryMs = BODY_EVERY_MS,
 }) {
   /** Shares the Body data with the other PCs and the phone; never waits, never throws. */
   const putYazio = (body) => {
@@ -213,6 +220,29 @@ function registerLifeIpc({
     yazio.disconnect();
     return { ok: true };
   });
+
+  /** One background fetch + upload; never throws. A bad login stays blocked in lifeyazio (no network). */
+  const refreshBody = async () => {
+    if (!yazio.status().connected) return;
+    try {
+      putYazio(await yazio.body({ force: false }));
+    } catch (err) {
+      console.error('[life] yazio background refresh failed:', yazioReason(err));
+    }
+  };
+
+  let timer = null;
+  if (bodyEveryMs > 0) {
+    timer = setInterval(refreshBody, bodyEveryMs);
+    // Never keeps the process (or a test run) alive on its own.
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+  return {
+    stop: () => {
+      if (timer) clearInterval(timer);
+      timer = null;
+    },
+  };
 }
 
 module.exports = { registerLifeIpc };
