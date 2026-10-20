@@ -1470,6 +1470,15 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    duration, so it survived prefers-reduced-motion. Only the color remains. */
 .usage-bar__fill[data-level='bad'] { background: linear-gradient(90deg, var(--bad), #ff3b6b); }
 .usage-row__reset { font-size: 10px; opacity: 0.6; }
+/* One block per other configured provider, below Claude's rows. */
+.usage-provider {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: var(--border-w) solid var(--edge);
+}
+.usage-provider__title { font-size: var(--fs-sm); font-weight: 700; }
 
 /* ---- Sparkline burn-rate (context window percentage over time) ---------------- */
 

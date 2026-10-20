@@ -28,7 +28,7 @@
 
 'use strict';
 
-import { t } from './util.js';
+import { t, loc } from './util.js';
 import { onLangChange, onUsageUpdate } from './bus.js';
 import { defineWidget } from './registry.js';
 
@@ -42,9 +42,13 @@ const FRESHNESS_MS = 1000;
 let els = null;
 let lastGoodUsage = null; // last payload WITH status==='ok' - what the bars render from
 let lastError = null; // status value of most recent error/unconfigured payload
+// Other configured providers (src/providerusage.js). Only the watcher's
+// payload carries them; a refresh-button read without the field keeps these.
+let lastOthers = [];
 
 /** Applies a fresh payload to module state. Pure state update, no render. */
 function applyUsage(usage) {
+  if (usage && Array.isArray(usage.others)) lastOthers = usage.others;
   if (usage && usage.status === 'ok') {
     lastGoodUsage = usage;
     lastError = null;
@@ -85,6 +89,75 @@ export function fmtAgo(updatedAt, now = Date.now()) {
   return `${h}h ${m}m`;
 }
 
+/** i18n keys for the windows every provider shares; others keep their label. */
+const WINDOW_LABEL_KEYS = {
+  '5h': 'usage.window.5h',
+  daily: 'usage.window.day',
+  weekly: 'usage.window.week',
+  monthly: 'usage.window.month',
+};
+
+/**
+ * The row label: the localized window name when the provider's label is the
+ * generic English one, otherwise the provider's own (a model name, "MCP").
+ */
+export function limitLabel(limit, translate = t) {
+  const generic = ['5-hour window', 'Daily limit', 'Weekly limit', 'Monthly limit'];
+  const key = WINDOW_LABEL_KEYS[limit && limit.window];
+  if (key && (!limit.label || generic.includes(limit.label))) return translate(key);
+  return (limit && limit.label) || translate('usage.window.custom');
+}
+
+/** A value-only row (prepaid balance, credits) - no bar, no reset. */
+function usageValueRow(limit) {
+  const row = document.createElement('div');
+  row.className = 'usage-row';
+  const head = document.createElement('div');
+  head.className = 'usage-row__head';
+  const label = document.createElement('span');
+  label.className = 'usage-row__label';
+  label.textContent = limitLabel(limit);
+  const value = document.createElement('span');
+  value.className = 'usage-row__pct';
+  value.textContent = limit.valueText;
+  head.append(label, value);
+  row.append(head);
+  return row;
+}
+
+/** One non-Claude provider: a heading, then its rows or "not available". */
+function usageProviderBlock(entry) {
+  const block = document.createElement('div');
+  block.className = 'usage-provider';
+  const title = document.createElement('div');
+  title.className = 'usage-provider__title';
+  title.textContent = loc(entry.displayName) || entry.profileId || '';
+  block.appendChild(title);
+  const rows = (entry.status === 'ok' ? entry.limits || [] : []).map((limit) => {
+    if (typeof limit.percentUsed === 'number') return usageRowForLimit(limit);
+    if (typeof limit.valueText === 'string') return usageValueRow(limit);
+    return null;
+  }).filter(Boolean);
+  if (rows.length > 0) {
+    block.append(...rows);
+  } else {
+    const key = entry.status === 'unconfigured' ? 'usage.other.unconfigured'
+      : entry.status === 'error' ? 'usage.unavailable'
+        : 'usage.other.notAvailable';
+    const msg = usageMessage(key);
+    if (entry.errorMessage) msg.title = entry.errorMessage;
+    block.appendChild(msg);
+  }
+  return block;
+}
+
+/** Appends every other provider below Claude's rows. */
+function renderOthers(usageBody) {
+  for (const entry of lastOthers) {
+    if (entry && typeof entry === 'object') usageBody.appendChild(usageProviderBlock(entry));
+  }
+}
+
 /** Builds one usage row from a limit object in the new format. */
 function usageRowForLimit(limit) {
   const row = document.createElement('div');
@@ -94,7 +167,7 @@ function usageRowForLimit(limit) {
   head.className = 'usage-row__head';
   const label = document.createElement('span');
   label.className = 'usage-row__label';
-  label.textContent = limit.label || t('usage.window.custom');
+  label.textContent = limitLabel(limit);
   const pct = document.createElement('span');
   pct.className = 'usage-row__pct';
   pct.textContent = `${limit.percentUsed}%`;
@@ -139,12 +212,18 @@ function renderFreshness() {
   els.updated.textContent = when ? t('usage.updatedAgo', { when }) : '';
 }
 
-/** Renders the tile from the current state. Error states become a message. */
+/** Renders the tile from the current state: Claude first, then the others. */
 function renderUsage() {
   if (!els) return; // not mounted - state is kept, the DOM is not ours
   const usageBody = els.body;
   usageBody.innerHTML = '';
+  renderClaudeRows(usageBody);
+  renderOthers(usageBody);
+  renderFreshness();
+}
 
+/** Claude's rows. Error states become a message. */
+function renderClaudeRows(usageBody) {
   if (!lastGoodUsage) {
     // Never had good data yet: show loading or last error
     const key =
@@ -156,7 +235,6 @@ function renderUsage() {
             ? 'usage.unavailable'
             : 'usage.loading';
     usageBody.appendChild(usageMessage(key));
-    renderFreshness();
     return;
   }
 
@@ -165,7 +243,6 @@ function renderUsage() {
     usageBody.appendChild(
       usageMessage(lastError === 'unconfigured' ? 'usage.unconfigured' : 'usage.unsupported')
     );
-    renderFreshness();
     return;
   }
 
@@ -182,7 +259,6 @@ function renderUsage() {
 
   if (!any) {
     usageBody.appendChild(usageMessage('usage.unavailable'));
-    renderFreshness();
     return;
   }
 
@@ -190,8 +266,6 @@ function renderUsage() {
   if (u.isFallback) {
     usageBody.appendChild(usageMessage('usage.fallback'));
   }
-
-  renderFreshness();
 }
 
 defineWidget({
@@ -237,7 +311,7 @@ defineWidget({
     // Refresh the reset labels every 30 s (the countdown is computed locally
     // from resetsAt, with no new network request).
     const countdown = setInterval(() => {
-      if (lastGoodUsage) renderUsage();
+      if (lastGoodUsage || lastOthers.length > 0) renderUsage();
     }, COUNTDOWN_MS);
 
     // Tick the "updated Xs ago" label every second - a plain textContent
