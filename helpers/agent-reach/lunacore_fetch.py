@@ -274,11 +274,42 @@ def bilibili_search(query):
     return out
 
 
-# ---- Hacker News (Agent-Reach rss channel over hnrss.org) ------------------
+# ---- Hacker News (HN Algolia search API; hnrss.org as the fallback) --------
+
+HN_ITEM = "https://news.ycombinator.com/item?id={}"
+
+
+def hackernews_algolia(query):
+    q = urllib.parse.quote(query)
+    api = f"https://hn.algolia.com/api/v1/search_by_date?query={q}&tags=story&hitsPerPage={MAX_ENTRIES}"
+    data = json.loads(http_get(api))
+    hits = data.get("hits") if isinstance(data, dict) else None
+    if not isinstance(hits, list):
+        raise FetchError("fetch-failed")
+    out = []
+    for h in hits:
+        if not isinstance(h, dict):
+            continue
+        story = str(h.get("objectID") or "")
+        if not story.isdigit():
+            continue
+        # Ask / Show HN posts have no url: link the HN discussion instead.
+        url = h.get("url") if isinstance(h.get("url"), str) and h.get("url") else HN_ITEM.format(story)
+        points = h.get("points") if isinstance(h.get("points"), int) else 0
+        item = entry(h.get("title"), url, f"{points} points", h.get("created_at"))
+        if item:
+            out.append(item)
+        if len(out) >= MAX_ENTRIES:
+            break
+    return out
 
 
 def hackernews_search(query):
-    return read_feed(f"https://hnrss.org/newest?q={urllib.parse.quote(query)}&count={MAX_ENTRIES}")
+    # hnrss.org 502s often; Algolia is the primary, the feed only a fallback.
+    try:
+        return hackernews_algolia(query)
+    except (FetchError, OSError, ValueError):
+        return read_feed(f"https://hnrss.org/newest?q={urllib.parse.quote(query)}&count={MAX_ENTRIES}")
 
 
 # ---- X and Reddit (Agent-Reach twitter / reddit channels: twitter-cli, rdt-cli)

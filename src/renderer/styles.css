@@ -5091,6 +5091,16 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mc-ledger__chip--btn:disabled { opacity: 0.45; cursor: progress; }
 /* The chip carries text, so no hatch behind it - a warn outline says "unassigned". */
 .mc-ledger__chip.mc-ledger__seg--unassigned { background: transparent; color: var(--warn); border: var(--border-w) solid var(--warn); }
+/* Pin star: a fixed-width slot so names line up whether or not a row can be pinned. */
+.mc-ledger__star { flex: 0 0 auto; width: var(--space-4); text-align: center; color: var(--warn); }
+.mc-ledger__star--btn { background: transparent; border: 0; padding: 0; font: inherit; line-height: inherit; cursor: pointer; }
+.mc-ledger__star--btn[aria-pressed="false"] { color: var(--text-dim); }
+.mc-ledger__star--btn:hover { filter: brightness(1.25); }
+.mc-ledger__star--btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 2px; }
+.mc-ledger__star--btn:disabled { opacity: 0.45; cursor: progress; }
+.mc-ledger__all > .mc-ledger__rows { margin-top: var(--space-2); }
+.mc-ledger__allsum { cursor: pointer; font-size: var(--fs-xs); color: var(--text-dim); }
+.mc-ledger__allsum:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 2px; }
 .mc-ledger__clear { width: auto; height: auto; padding: var(--space-1) var(--space-4); font-size: var(--fs-xs); }
 .mc-ledger__assign { display: flex; flex-direction: column; gap: var(--space-2); }
 .mc-ledger__toggle { display: inline-flex; border: var(--border-w) solid var(--edge); border-radius: var(--radius-sm); overflow: hidden; }

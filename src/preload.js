@@ -282,6 +282,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionLedger: (req) => ipcRenderer.invoke('mission:ledger', req),
   /** Marks a project work / fun / other (null = unassigned). Promise<{ok} | {ok:false, reason}>. */
   missionProjectClass: (key, cls) => ipcRenderer.invoke('mission:project-class', { key, cls }),
+  /** Pins (true) / unpins a project of the last ledger report; main validates the key. Promise<{ok} | {ok:false, reason}>. */
+  missionProjectPin: (key, pinned) => ipcRenderer.invoke('mission:project-pin', { key, pinned }),
   // Brief (src/missionbrief.js): weekly on its own, daily only on 'Brief me'.
   // The renderer picks a kind, a history key or a model from fixed lists.
   /** Promise<{ok, weekly:{keys, entry}, daily:{keys, entry}, model, models, busy}>. */

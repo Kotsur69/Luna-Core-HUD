@@ -1,0 +1,11 @@
+# Agent-Reach's tested dependency set (upstream constraints.txt, commit 94f06c1).
+# Source for the hash-locked requirements.txt - after an edit, regenerate it:
+#   uv pip compile requirements.in --universal --python-version 3.10 --generate-hashes --exclude-newer 2026-10-09 -o requirements.txt
+requests==2.32.5
+feedparser==6.0.12
+python-dotenv==1.2.1
+loguru==0.7.3
+PyYAML==6.0.3
+rich==14.3.2
+yt-dlp==2026.07.04
+yt-dlp-ejs==0.8.0

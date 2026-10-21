@@ -100,3 +100,15 @@ test('paceFlags: late-week low output and low budget, overburn first, quiet stre
   const hot = pace.budgetPace({ percentUsed: 80, resetsAt: new Date(now.getTime() + 3.5 * DAY_MS).toISOString() }, now);
   assert.equal(pace.paceFlags({ velocity: null, budget: hot })[0].key, 'overBurn');
 });
+
+test('foldUsage keeps the last good reading through an error and drops the error on the next ok read', () => {
+  const ok1 = { status: 'ok', updatedAt: 1, limits: [] };
+  const limited = { status: 'error', rateLimited: true, errorMessage: '429' };
+  let s = pace.foldUsage({ good: null, error: null }, ok1);
+  assert.deepEqual(s, { good: ok1, error: null });
+  s = pace.foldUsage(s, limited);
+  assert.deepEqual(s, { good: ok1, error: limited });
+  const ok2 = { status: 'ok', updatedAt: 2, limits: [] };
+  assert.deepEqual(pace.foldUsage(s, ok2), { good: ok2, error: null });
+  assert.deepEqual(pace.foldUsage({ good: null, error: null }, limited), { good: null, error: limited });
+});

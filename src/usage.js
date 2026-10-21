@@ -218,6 +218,22 @@ class ClaudeAdapter extends UsageAdapter {
       };
     }
 
+    if (status === 429) {
+      // Rate limited: the watcher backs off (Retry-After when given) instead
+      // of the fast error heartbeat; the UI keeps the last good reading.
+      return {
+        providerId: this.providerId,
+        displayName: this.displayName,
+        status: 'error',
+        errorMessage: 'Claude usage endpoint rate limited (429)',
+        rateLimited: true,
+        retryAfterMs: parseRetryAfter(headers && headers['retry-after']),
+        limits: [],
+        isFallback: false,
+        updatedAt: Date.now(),
+      };
+    }
+
     if (status !== 200) {
       return {
         providerId: this.providerId,
@@ -858,6 +874,7 @@ class UsageWatcher {
     this.lastJson = '';
     this.busy = false;
     this.running = false;
+    this.rateLimitedStreak = 0; // consecutive 429 reads, for the backoff
     this.claudeAdapter = new ClaudeAdapter();
     // Other configured providers (src/providerusage.js), read less often
     // than Claude: several hosts per read, and their windows move slowly.
@@ -923,6 +940,7 @@ class UsageWatcher {
       const profile = this.getActiveProfile();
       const [primary, others] = await Promise.all([fetchUsage(profile), this.readOthers()]);
       usage = { ...primary, others };
+      this.rateLimitedStreak = primary && primary.rateLimited ? this.rateLimitedStreak + 1 : 0;
       const cmp = JSON.stringify({
         ...usage,
         updatedAt: 0,
@@ -935,7 +953,8 @@ class UsageWatcher {
     } finally {
       this.busy = false;
       if (this.running) {
-        this.timer = setTimeout(() => this.tick(), nextPollDelay(usage, this.intervalMs, this.heartbeatMs));
+        const delay = nextPollDelay(usage, this.intervalMs, this.heartbeatMs, this.rateLimitedStreak);
+        this.timer = setTimeout(() => this.tick(), delay);
       }
     }
   }
@@ -956,11 +975,33 @@ class UsageWatcher {
 // UTILITY FUNCTIONS
 // ============================================================================
 
+/** Longest wait between usage reads while rate limited. */
+const MAX_BACKOFF_MS = 30 * 60 * 1000;
+
+/**
+ * Retry-After header -> ms to wait, or null. Accepts delta-seconds or an
+ * HTTP date; anything unparsable or in the past is null.
+ */
+function parseRetryAfter(value, now = Date.now()) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const text = raw.trim();
+  const ms = /^\d+$/.test(text) ? Number(text) * 1000 : Date.parse(text) - now;
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
 /**
  * Decision behind the heartbeat: normal cadence when the last read was
- * healthy, a faster retry cadence right after an error.
+ * healthy, a faster retry cadence right after an error - except a 429, which
+ * waits Retry-After (or doubles the interval per consecutive 429), never less
+ * than the normal interval and never more than MAX_BACKOFF_MS.
  */
-function nextPollDelay(usage, intervalMs, heartbeatMs) {
+function nextPollDelay(usage, intervalMs, heartbeatMs, rateLimitedStreak = 1) {
+  if (usage && usage.rateLimited) {
+    const backoff = intervalMs * 2 ** Math.max(0, Math.min(rateLimitedStreak, 6) - 1);
+    const wait = typeof usage.retryAfterMs === 'number' ? usage.retryAfterMs : backoff;
+    return Math.min(MAX_BACKOFF_MS, Math.max(intervalMs, wait));
+  }
   return usage && usage.status === 'error' ? heartbeatMs : intervalMs;
 }
 
@@ -995,6 +1036,8 @@ module.exports = {
   UsageWatcher,
   nextUsageAnnounced,
   nextPollDelay,
+  parseRetryAfter,
+  MAX_BACKOFF_MS,
   forceRefresh,
 
   // Adapters exported for testing
