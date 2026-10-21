@@ -110,6 +110,21 @@ export function toggleTodo(list, index, now = Date.now()) {
   });
 }
 
+/**
+ * Flips one item's `manual` opt-out by index (kept out of God Mode and
+ * Orchestra). Clearing drops the key, so the item is byte-identical to one
+ * that was never flagged. Out-of-range is a no-op.
+ */
+export function toggleManual(list, index) {
+  const current = Array.isArray(list) ? list : [];
+  if (index < 0 || index >= current.length) return current;
+  return current.map((item, i) => {
+    if (i !== index) return item;
+    const { manual, ...rest } = item;
+    return manual === true ? rest : { ...rest, manual: true };
+  });
+}
+
 /** Drops one item by index. Out-of-range is a no-op. */
 export function removeTodo(list, index) {
   const current = Array.isArray(list) ? list : [];
@@ -553,6 +568,7 @@ function renderRows() {
     const li = document.createElement('li');
     const classes = ['todo-item'];
     if (item.done) classes.push('todo-item--done');
+    if (item.manual === true) classes.push('todo-item--manual');
     // Lit up while its text is expanded, so the row you just clicked into
     // stays visually "the one you're on" instead of blending back into the
     // list the instant you look away from it.
@@ -584,7 +600,8 @@ function renderRows() {
 
     const editingRow = isEditing(item.at);
     if (editingRow) li.classList.add('todo-item--editing');
-    const middle = editingRow ? editForm(item) : isCard(item) ? cardBody(item, text) : text;
+    const withMeta = isCard(item) || item.manual === true;
+    const middle = editingRow ? editForm(item) : withMeta ? cardBody(item, text) : text;
     li.append(box, middle, rowActions(item, index));
     els.list.append(li);
   });
@@ -602,10 +619,16 @@ function rowButton(glyph, title, onClick) {
   return btn;
 }
 
-/** The ✎ ✨ ⚡ ✕ cell of one row. */
+/** The ✋ ✎ ✨ ⚡ ✕ cell of one row. */
 function rowActions(item, index) {
   const actions = document.createElement('span');
   actions.className = 'todo-item__actions';
+
+  const isManual = item.manual === true;
+  const manual = rowButton('✋', t(isManual ? 'todo.manualOff' : 'todo.manualOn'), () => {
+    commit(toggleManual(items, index));
+  });
+  manual.setAttribute('aria-pressed', String(isManual));
 
   const edit = rowButton('✎', t('todo.edit'), () => toggleEdit(item));
 
@@ -635,7 +658,7 @@ function rowActions(item, index) {
     commit(removeTodo(items, index));
   });
 
-  actions.append(edit, refine, inject, drop);
+  actions.append(manual, edit, refine, inject, drop);
   return actions;
 }
 
@@ -665,7 +688,8 @@ function chip(label) {
 
 /**
  * The middle cell of a task card: its title, a meta line of chips (size,
- * model, file count), and - while expanded - the card's details. Everything
+ * model, file count, manual), and - while expanded - the card's details. A
+ * plain note flagged manual gets the chip line too. Everything
  * goes through textContent; card text is written by a model and is never
  * parsed as HTML.
  */
@@ -678,9 +702,16 @@ function cardBody(item, text) {
   if (item.size) meta.append(chip(item.size));
   if (item.model) meta.append(chip(item.model));
   if (item.files) meta.append(chip(t('todo.files', { n: item.files.length })));
+  if (item.manual === true) {
+    const manual = chip(t('todo.manual'));
+    manual.classList.add('todo-chip--manual');
+    manual.title = t('todo.manualHint');
+    meta.append(manual);
+  }
   body.append(text, meta);
 
-  if (!expanded.has(item.at)) return body;
+  // A plain manual note has the chip line but no card to expand.
+  if (!expanded.has(item.at) || !isCard(item)) return body;
   const card = document.createElement('div');
   card.className = 'todo-card';
   if (item.details) {

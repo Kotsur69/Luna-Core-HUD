@@ -3918,6 +3918,26 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   box-shadow: 0 0 var(--glow-size-sm) var(--glow);
 }
 
+/* Manual (kept out of God Mode / Orchestra): a thin red bar on the left edge
+   and a faint red wash, derived from each theme's own --bad so it holds up in
+   dark and light themes. Deliberately subtle - a reminder, not an error - and
+   the text keeps full contrast: dimming is how a row says "done". The bar is
+   an inset shadow so it never shifts the grid, and stacks with the expanded
+   glow instead of replacing it. */
+.todo-item--manual {
+  --manual-edge: color-mix(in srgb, var(--bad) 85%, transparent);
+  --manual-wash: color-mix(in srgb, var(--bad) 8%, transparent);
+  background-image: linear-gradient(var(--manual-wash), var(--manual-wash));
+  box-shadow: inset 3px 0 0 var(--manual-edge);
+}
+.todo-item--manual.todo-item--expanded {
+  box-shadow: inset 3px 0 0 var(--manual-edge), 0 0 var(--glow-size-sm) var(--glow);
+}
+.todo-chip--manual {
+  border-color: var(--manual-edge);
+  color: var(--text);
+}
+
 /* Drag-to-reorder. The whole effect is one transition on one property: as the
    dragged row passes a neighbour, todo.js gives that neighbour a translateY of
    exactly one row, and this slides it there instead of letting it jump. Uses

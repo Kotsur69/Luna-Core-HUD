@@ -41,7 +41,7 @@
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { getActiveSessionId } from './terminals.js';
-import { openCount, syncTodoProject, cardPrompt } from './todo.js';
+import { syncTodoProject, cardPrompt } from './todo.js';
 import { sfx, voice } from './sound.js';
 
 // A fixed instruction appended to every injected task. onTurnEnd (see below)
@@ -102,7 +102,7 @@ function newRun(sessionId) {
     phase: 'running',
     currentAt: null, // the in-flight to-do's `at` key (survives index shifts)
     currentText: null, // its prompt, kept for limit-poll re-injection
-    remainingCount: 0, // open-item count as of the last list read
+    remainingCount: 0, // takeable (open, non-manual) count as of the last list read
     retryCount: 0, // connection-error attempts for the CURRENT item
     sawDrop: false, // a request dropped while the local backend was being restored
     lastUsageLimitAt: 0,
@@ -117,8 +117,51 @@ const isEngaged = (run) => !!run && ENGAGED.has(run.phase);
 
 // ---- Pure queue logic (exported for tests) ---------------------------------
 
+/** Open and not kept for the user (`manual`) - an item a run may ever take. */
+const isTakeable = (item) => Boolean(item) && !item.done && item.manual !== true;
+
 /**
- * The next item a run may take: open, not claimed by another run, and every
+ * How many items a run may still take - what 'done' waits on. Manual items
+ * stay open on the list but never keep a run alive.
+ * @param {Array<{done:boolean, manual?:boolean}>} items
+ * @returns {number}
+ */
+export function runnableCount(items) {
+  return Array.isArray(items) ? items.filter(isTakeable).length : 0;
+}
+
+/**
+ * The arm dialog's numbers: open manual items (skipped), takeable items that
+ * depend - directly or through other takeable items - on an open manual item
+ * (blocked: they can only wait for the user), and the rest (runnable).
+ * @param {Array<{at:number, done:boolean, manual?:boolean, dependsOn?:number[]}>} items
+ * @returns {{runnable:number, skipped:number, blocked:number}}
+ */
+export function armCounts(items) {
+  const list = Array.isArray(items) ? items : [];
+  const open = list.filter((item) => item && !item.done);
+  const takeable = open.filter(isTakeable);
+  const blocked = new Set(open.filter((item) => item.manual === true).map((item) => item.at));
+  const skipped = blocked.size;
+  // Fixed point: each pass may block items depending on ones blocked last pass.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const item of takeable) {
+      if (blocked.has(item.at)) continue;
+      const deps = Array.isArray(item.dependsOn) ? item.dependsOn : [];
+      if (deps.some((at) => blocked.has(at))) {
+        blocked.add(item.at);
+        grew = true;
+      }
+    }
+  }
+  const blockedCount = blocked.size - skipped;
+  return { runnable: takeable.length - blockedCount, skipped, blocked: blockedCount };
+}
+
+/**
+ * The next item a run may take: open, not manual, not claimed by another run, and every
  * `dependsOn` that still exists in the list is done. A dependency that was
  * deleted no longer blocks anything.
  * @param {Array<{at:number, done:boolean, dependsOn?:number[]}>} items
@@ -130,7 +173,7 @@ export function pickNextItem(items, claimed) {
   const doneByAt = new Map(list.map((item) => [item.at, item.done === true]));
   return (
     list.find((item) => {
-      if (item.done || claimed.has(item.at)) return false;
+      if (!isTakeable(item) || claimed.has(item.at)) return false;
       const deps = Array.isArray(item.dependsOn) ? item.dependsOn : [];
       return deps.every((at) => !doneByAt.has(at) || doneByAt.get(at));
     }) || null
@@ -145,7 +188,7 @@ export function pickNextItem(items, claimed) {
 export function queueStep(items, claimed) {
   const item = pickNextItem(items, claimed);
   if (item) return { action: 'take', item };
-  return openCount(items) > 0 ? { action: 'wait' } : { action: 'done' };
+  return runnableCount(items) > 0 ? { action: 'wait' } : { action: 'done' };
 }
 
 // ---- Run bookkeeping --------------------------------------------------------
@@ -253,7 +296,7 @@ async function injectNext(run) {
   if (runs.get(run.sessionId) !== run || !isEngaged(run)) return; // disarmed meanwhile
   const items = await readList(run.sessionId);
   if (runs.get(run.sessionId) !== run || !isEngaged(run)) return;
-  run.remainingCount = openCount(items);
+  run.remainingCount = runnableCount(items);
   const step = queueStep(items, claimedBy(run));
   if (step.action === 'done') {
     finishRun(run, 'done');
@@ -517,8 +560,8 @@ if (typeof window !== 'undefined' && window.lunacore) {
 /**
  * The confirm-gated arm step (GODMODE_PLAN.md decision #5) for the ACTIVE
  * tab. Asks the native "are you sure" popup - skipped entirely when there is
- * nothing open to run - and only starts on an explicit Yes. Other tabs' runs
- * are untouched.
+ * nothing runnable (manual items and items blocked on them do not count) - and
+ * only starts on an explicit Yes. Other tabs' runs are untouched.
  */
 async function tryArm() {
   const sessionId = getActiveSessionId();
@@ -526,12 +569,12 @@ async function tryArm() {
     render();
     return;
   }
-  const open = openCount(await readList(sessionId));
-  if (open === 0) {
-    render(); // nothing to confirm - stays off, toggle reverts
+  const counts = armCounts(await readList(sessionId));
+  if (counts.runnable === 0) {
+    render(); // nothing a run may take - stays off, toggle reverts
     return;
   }
-  const ok = await window.lunacore.confirmGodMode(open);
+  const ok = await window.lunacore.confirmGodMode(counts);
   if (!ok || isEngaged(runs.get(sessionId))) {
     render();
     return;
