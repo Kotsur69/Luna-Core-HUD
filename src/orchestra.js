@@ -56,14 +56,18 @@ const ESC = '\x1b';
  * them.
  * @param {{id:string, title:string, prompt:string, verify:string}} pkg
  * @param {string} branch
- * @param {{resume?:boolean, escalation?:{reason:string, detail:string|null}}} [opts]
+ * @param {{resume?:boolean, escalation?:{reason:string, detail:string|null},
+ *   depMerge?:{branches:string[], files:string[]}|null}} [opts] depMerge
+ *   defaults to the package's recorded one, so a resume brief keeps it
  * @returns {string}
  */
 function briefText(pkg, branch, opts = {}) {
   const esc = opts.escalation;
+  const depMerge = opts.depMerge !== undefined ? opts.depMerge : pkg.depMerge;
   return [
     `# LunaCore task: ${pkg.title}`,
     '',
+    ...depMergeSection(pkg, depMerge, opts.resume),
     `Package \`${pkg.id}\` of a God Mode plan. You are in an isolated git worktree on branch \`${branch}\`.`,
     ...(opts.resume
       ? ['', 'RESUMING: an earlier session already worked on this. Check `git status` and `git log` first and continue from there.']
@@ -88,6 +92,56 @@ function briefText(pkg, branch, opts = {}) {
     `- End your final message with the line \`LUNA_DONE ${pkg.id}\`, or \`LUNA_BLOCKED ${pkg.id}: <reason>\` if you cannot finish.`,
     '',
   ].join('\n');
+}
+
+// One line of model-facing text from git output: no control characters.
+const oneLine = (v) => String(v).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 300);
+
+/**
+ * The first section of a brief whose dependency branches could not all be
+ * merged at launch: the worker merges them itself before its task.
+ * @param {{id:string, verify:string}} pkg
+ * @param {{branches:string[], files:string[]}|null|undefined} depMerge
+ * @param {boolean} [resume]
+ * @returns {string[]}
+ */
+function depMergeSection(pkg, depMerge, resume) {
+  if (!depMerge || !Array.isArray(depMerge.branches) || !depMerge.branches.length) return [];
+  const files = Array.isArray(depMerge.files) ? depMerge.files : [];
+  const verify = pkg.verify ? `\`${pkg.verify}\`` : "the project's tests";
+  return [
+    '## Before your task: merge the dependency branches',
+    `Your worktree starts from one dependency; these branches could not be merged automatically${
+      resume ? ' (skip the ones `git log` shows as already merged)' : ''
+    }:`,
+    ...depMerge.branches.map((b) => `- \`git merge --no-edit ${oneLine(b)}\``),
+    ...(files.length ? ['', `Conflicting files: ${files.map((f) => `\`${oneLine(f)}\``).join(', ')}.`] : []),
+    '',
+    `For each branch above run the merge, resolve every conflict keeping the intent of BOTH sides, run ${verify}, and commit the merge. Only then start the task.`,
+    `If you truly cannot resolve it, end with \`LUNA_BLOCKED ${pkg.id}: dependency merge\`.`,
+    '',
+  ];
+}
+
+/**
+ * What a worker has to merge itself, or null when the launch merged every
+ * dependency branch (cleanly or with the headless resolver).
+ * @param {object|null|undefined} merged mergeDeps result
+ * @param {string[]} branches the branches that were asked for
+ * @returns {{strategy:'worker', branches:string[], files:string[]}|null}
+ */
+function workerDepMerge(merged, branches) {
+  if (merged && merged.ok) return null;
+  const failed = merged && Array.isArray(merged.failed) && merged.failed.length ? merged.failed : [merged || {}];
+  const named = failed.map((f) => f.branch).filter((b) => branches.includes(b));
+  const files = [];
+  for (const f of failed) {
+    for (const file of Array.isArray(f.files) ? f.files : []) {
+      if (typeof file === 'string' && !files.includes(file)) files.push(file);
+    }
+  }
+  // A result without branch names (older shape): hand the worker all of them.
+  return { strategy: 'worker', branches: (named.length ? named : branches).slice(0, 10), files: files.slice(0, 10) };
 }
 
 /**
@@ -238,6 +292,7 @@ function createOrchestra(deps) {
         prUrl: p.prUrl,
         merged: p.merged,
         cleaned: p.cleaned,
+        depMerge: p.depMerge || null,
       })),
     };
   }
@@ -404,7 +459,9 @@ function createOrchestra(deps) {
 
   /**
    * A dependent builds on its dependencies' work: its worktree starts from
-   * the first dependency's pushed head and merges the others in.
+   * the first dependency's pushed head and merges the others in. A merge
+   * that neither git nor the headless resolver can finish never fails the
+   * package: the worker gets it as the first step of its brief.
    */
   async function launchOneUnsafe(pkg, stamp) {
     const pushedDeps = pkg.dependsOn.map(findPkg).filter((d) => d && d.state === 'pushed' && d.branch);
@@ -420,19 +477,18 @@ function createOrchestra(deps) {
       return { state: 'failed', error: 'unsafeBranch', detail: wt.branch || null };
     }
     const others = pushedDeps.filter((d) => d !== baseDep).map((d) => d.branch);
+    let depMerge = null;
     if (others.length && deps.mergeDeps) {
-      const merged = await deps.mergeDeps(wt.root, others);
-      if (!merged.ok) {
-        // No location kept: a Retry relaunches it fresh instead of resuming a
-        // worktree that lacks its dependencies' work.
-        if (deps.removeWorktree) await deps.removeWorktree(plan.repoPath, wt.root);
-        return { state: 'failed', error: 'depMergeFailed', detail: merged.detail || null };
-      }
+      // mergeDeps aborts what it cannot merge, so the worktree is clean on the
+      // base dependency's head plus whatever did merge.
+      depMerge = workerDepMerge(await deps.mergeDeps(wt.root, others), others);
     }
     const baseSha = await headSha(wt.root);
     const briefPath = path.join(deps.briefDir(), `${path.basename(wt.root)}.md`);
-    const where = { branch: wt.branch, root: wt.root, cwd: wt.cwd, briefPath, baseSha };
-    if (!deps.writeBrief(briefPath, briefText(pkg, wt.branch))) return { ...where, state: 'failed', error: 'briefFailed' };
+    const where = { branch: wt.branch, root: wt.root, cwd: wt.cwd, briefPath, baseSha, depMerge };
+    if (!deps.writeBrief(briefPath, briefText(pkg, wt.branch, { depMerge }))) {
+      return { ...where, state: 'failed', error: 'briefFailed' };
+    }
     const session = openTab(pkg, wt.cwd, wt.branch, briefPath);
     if (!session) return { ...where, state: 'failed', error: 'noTab' };
     return { ...where, ...freshRun(), state: 'launched', sessionId: session.id };

@@ -68,20 +68,49 @@ async function baseBranchOf(repoPath, execImpl) {
 }
 
 /**
- * Brings extra dependency branches into a fresh worktree (the first
- * dependency is its base already). A conflict aborts the merge.
+ * Brings extra dependency branches into a fresh package worktree (the first
+ * dependency is its base already). Each branch goes through mergeOne, so a
+ * conflict gets the same headless resolver as the integration; the
+ * resolution commit lands on the package branch in `root`, never on a
+ * dependency branch. A branch that still cannot be merged is aborted (the
+ * worktree stays clean) and the next one is tried - the caller hands the
+ * leftovers to the worker instead of failing the package.
  * @param {string} root
  * @param {string[]} branches `luna/<slug>` names
+ * @param {{execImpl?:Function, resolve?:Function}|Function} [deps] a bare
+ *   function is the execImpl (old signature)
+ * @returns {Promise<{ok:true, resolved:number} | {ok:false, resolved:number,
+ *   stage:string, detail:string, branch:string, files:string[],
+ *   failed:Array<{branch:string, stage:string, detail:string, files:string[]}>}>}
  */
-async function mergeDeps(root, branches, execImpl) {
+async function mergeDeps(root, branches, deps) {
+  const opts = typeof deps === 'function' ? { execImpl: deps } : deps || {};
+  const resolve = safeResolver(opts.resolve);
+  let resolved = 0;
+  const failed = [];
   for (const branch of branches) {
-    const res = await runGit(root, ['merge', '--no-edit', `refs/heads/${branch}`], execImpl);
-    if (!res.ok) {
-      await runGit(root, ['merge', '--abort'], execImpl);
-      return { ok: false, detail: `${branch}: ${firstLine(res.stderr) || firstLine(res.stdout)}` };
+    const res = await mergeOne(root, branch, { execImpl: opts.execImpl, resolve });
+    if (res.ok) {
+      resolved += res.resolved || 0;
+      continue;
     }
+    failed.push({ branch, stage: res.stage, detail: String(res.detail || '').slice(0, 300), files: res.files || [] });
   }
-  return { ok: true };
+  if (!failed.length) return { ok: true, resolved };
+  return { ok: false, resolved, ...failed[0], failed };
+}
+
+/** A resolver that never rejects and always answers {ok, detail}. */
+function safeResolver(resolve) {
+  if (typeof resolve !== 'function') return async () => ({ ok: false, detail: 'no resolver' });
+  return async (args) => {
+    try {
+      const res = await resolve(args);
+      return res && typeof res === 'object' ? res : { ok: false, detail: 'no answer' };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message.slice(0, 200) : 'resolver threw' };
+    }
+  };
 }
 
 /**
@@ -234,8 +263,9 @@ async function mergeOne(root, branch, deps) {
   const conflicted = await unmergedFiles(root, execImpl);
   if (!conflicted || !conflicted.length) {
     await runGit(root, ['merge', '--abort'], execImpl);
-    return { ok: false, stage: 'merge', detail: firstLine(res.stderr) || firstLine(res.stdout) };
+    return { ok: false, stage: 'merge', detail: firstLine(res.stderr) || firstLine(res.stdout), files: [] };
   }
+  const files = conflicted.slice(0, 10);
   const resolved = await resolve({ cwd: root, branch, files: conflicted });
   // Markers first, then LunaCore stages exactly the conflicted files.
   const markers = resolved.ok ? await hasMarkers(root, conflicted, execImpl) : true;
@@ -243,12 +273,12 @@ async function mergeOne(root, branch, deps) {
   const left = staged.ok ? await unmergedFiles(root, execImpl) : null;
   if (!resolved.ok || markers || !left || left.length) {
     await runGit(root, ['merge', '--abort'], execImpl);
-    return { ok: false, stage: 'conflict', detail: conflicted.slice(0, 10).join(', ') };
+    return { ok: false, stage: 'conflict', detail: files.join(', '), files };
   }
   const commit = await runGit(root, ['commit', '--no-edit'], execImpl);
   if (!commit.ok) {
     await runGit(root, ['merge', '--abort'], execImpl);
-    return { ok: false, stage: 'conflict', detail: firstLine(commit.stderr) };
+    return { ok: false, stage: 'conflict', detail: firstLine(commit.stderr), files };
   }
   return { ok: true, resolved: conflicted.length };
 }

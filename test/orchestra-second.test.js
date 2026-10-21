@@ -571,19 +571,56 @@ test('a package pushed while the finalizer runs is integrated by a second pass',
   assert.ok(s.orch.view().packages.every((p) => p.prUrl));
 });
 
-test('a dependency merge failure leaves no worktree to resume', async () => {
+test('an unresolvable dependency merge still launches; the worker brief starts with the merge', async () => {
+  const briefs = [];
   const s = await started({
     packages: [pkg('a', [1]), pkg('b', [2]), pkg('c', [3], { dependsOn: ['a', 'b'] })],
-    extraDeps: { mergeDeps: async () => ({ ok: false, detail: 'luna/b: conflict' }) },
+    extraDeps: {
+      mergeDeps: async (_root, branches) => ({
+        ok: false,
+        resolved: 0,
+        stage: 'conflict',
+        detail: 'src/x.js',
+        branch: branches[0],
+        files: ['src/x.js'],
+        failed: [{ branch: branches[0], stage: 'conflict', detail: 'src/x.js', files: ['src/x.js'] }],
+      }),
+      writeBrief: (file, text) => (briefs.push(text), true),
+    },
+  });
+  s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  s.orch.onTurnEnd('s2', turn('LUNA_DONE b'));
+  await s.flush(8);
+  const v = s.orch.view().packages;
+  const c = v.find((p) => p.id === 'c');
+  const bBranch = v.find((p) => p.id === 'b').branch;
+  assert.equal(c.state, 'launched');
+  assert.equal(c.error, null);
+  assert.deepEqual(c.depMerge, { strategy: 'worker', branches: [bBranch], files: ['src/x.js'] });
+  assert.equal(s.log.removed.filter((r) => r.includes('c-')).length, 0, 'its worktree is kept');
+  const brief = briefs[briefs.length - 1];
+  assert.ok(brief.indexOf(`git merge --no-edit ${bBranch}`) < brief.indexOf('do c'));
+});
+
+test('a clean or headlessly resolved dependency merge launches with a plain brief', async () => {
+  const briefs = [];
+  const asked = [];
+  const s = await started({
+    packages: [pkg('a', [1]), pkg('b', [2]), pkg('c', [3], { dependsOn: ['a', 'b'] })],
+    extraDeps: {
+      mergeDeps: async (root, branches) => (asked.push([root, branches]), { ok: true, resolved: 2 }),
+      writeBrief: (file, text) => (briefs.push(text), true),
+    },
   });
   s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
   s.orch.onTurnEnd('s2', turn('LUNA_DONE b'));
   await s.flush(8);
   const c = s.orch.view().packages.find((p) => p.id === 'c');
-  assert.equal(c.state, 'failed');
-  assert.equal(c.error, 'depMergeFailed');
-  assert.equal(c.branch, null);
-  assert.equal(s.log.removed.filter((r) => r.includes('c-')).length, 1, 'its fresh worktree is removed');
+  assert.equal(c.state, 'launched');
+  assert.equal(c.depMerge, null);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0][1].length, 1, 'only the non-base dependency is merged');
+  assert.equal(briefs[briefs.length - 1].includes('git merge'), false);
 });
 
 test('finishRun is refused while a worker runs and works after a kill', async () => {

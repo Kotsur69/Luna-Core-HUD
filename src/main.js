@@ -972,7 +972,10 @@ const orchestra = createOrchestra({
   closeSession: (id) => closeSession(id),
   usageResetAt,
   baseBranchOf: (repoPath) => orchestraIntegrate.baseBranchOf(repoPath),
-  mergeDeps: (root, branches) => orchestraIntegrate.mergeDeps(root, branches),
+  mergeDeps: (root, branches) =>
+    orchestraIntegrate.mergeDeps(root, branches, {
+      resolve: (r) => orchestraIntegrate.runResolver({ ...r, env: orchestraToolEnv() }),
+    }),
   createPr: (args) => orchestraIntegrate.createPr({ ...args, env: orchestraToolEnv() }),
   integrateMerge: (args) =>
     orchestraIntegrate.integrateMerge(args, {
