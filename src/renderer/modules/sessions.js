@@ -49,6 +49,7 @@ import { syncSwitchers } from './switchers.js';
 import { syncTodoProject, setTodoToolsState } from './todo.js';
 import { sfx } from './sound.js';
 import { agentStream } from './keysynth.js';
+import { targetSlot, siblingOffsets, clampDx } from './tabdrag.js';
 
 // A2f: set once by mountTabs() - see modules/terminal.js.
 let tabEls = null;
@@ -223,61 +224,153 @@ function showSession(sessionId) {
 let paintedActiveId = null;
 
 // ---- drag-to-reorder ----------------------------------------------------------
-// The tab being dragged, or null. While it is set renderTabs() holds off:
-// a context tick repaints the whole bar, and destroying the drag source
-// mid-drag makes Chromium drop the gesture (no dragend, stuck indicator).
+// Live, Chrome-style, on pointer events: past a small threshold the tab
+// follows the pointer and its neighbours slide aside to preview the drop. The
+// arithmetic is in tabdrag.js; this half only reads rects and writes
+// transforms. Below the threshold nothing happens, so a click still activates.
+//
+// While `draggedId` is set renderTabs() holds off: a context tick repaints the
+// whole bar, and rebuilding it mid-drag would destroy the captured element.
+// On drop the bar is repainted from a snapshot of where the tabs are ON SCREEN
+// (transforms included), so the existing FLIP slides them home without a jump.
 let draggedId = null;
 let repaintAfterDrag = false;
 
-function clearDropMarks() {
-  for (const el of tabEls.list.querySelectorAll('.is-drop-before, .is-drop-after')) {
-    el.classList.remove('is-drop-before', 'is-drop-after');
+/** Pointer travel in px before a press becomes a drag rather than a click. */
+const DRAG_THRESHOLD_PX = 5;
+
+/** The gesture in progress (pending or live), or null. */
+let drag = null;
+
+function onDragMove(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  drag.dx = e.clientX - drag.startX;
+  if (!drag.active) {
+    if (Math.abs(drag.dx) < DRAG_THRESHOLD_PX) return;
+    if (!beginLiveDrag()) {
+      endDrag(false);
+      return;
+    }
   }
+  if (!drag.raf) drag.raf = requestAnimationFrame(paintDrag);
 }
 
-/** Left half of a tab -> drop before it, right half -> after it. */
-function dropsAfter(tab, clientX) {
-  const r = tab.getBoundingClientRect();
-  return clientX > r.left + r.width / 2;
+function onDragUp(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  endDrag(true);
 }
 
-/** Final index of the dragged tab when dropped beside `targetId`. */
-function dropIndex(targetId, after) {
-  const ids = sessionList.map((m) => m.id);
-  const from = ids.indexOf(draggedId);
-  const slot = ids.indexOf(targetId) + (after ? 1 : 0);
-  return slot > from ? slot - 1 : slot;
+function onDragCancel(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  endDrag(false);
+}
+
+function onDragKey(e) {
+  if (!drag || !drag.active || e.key !== 'Escape') return;
+  // Capture phase + stop, so the Escape cancels the drag instead of also
+  // reaching the focused terminal.
+  e.preventDefault();
+  e.stopPropagation();
+  endDrag(false);
+}
+
+/** Turns a pending press into a live drag. false when the bar cannot support one. */
+function beginLiveDrag() {
+  const tabs = [...tabEls.list.children].filter((el) => el.dataset.sessionId);
+  const from = tabs.indexOf(drag.tab);
+  if (from < 0 || tabs.length < 2) return false;
+  const rects = tabs.map((el) => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, width: r.width };
+  });
+  const gap = parseFloat(getComputedStyle(tabEls.list).columnGap) || 0;
+  Object.assign(drag, { active: true, tabs, from, rects, shift: rects[from].width + gap, slot: from });
+  try {
+    drag.tab.setPointerCapture(drag.pointerId);
+  } catch {
+    /* the pointer is already gone - pointerup/cancel on window still ends it */
+  }
+  draggedId = drag.id;
+  tabEls.list.classList.add('is-reordering');
+  drag.tab.classList.add('is-dragging');
+  return true;
+}
+
+/** Where the drag currently lands, from the latest pointer offset. */
+function currentSlot(d) {
+  const self = d.rects[d.from];
+  return targetSlot(d.rects, d.from, self.left + self.width / 2 + clampDx(d.rects, d.from, d.dx));
+}
+
+/** One rAF-batched frame: the dragged tab under the pointer, siblings aside. */
+function paintDrag() {
+  const d = drag;
+  if (!d || !d.active) return;
+  d.raf = 0;
+  d.slot = currentSlot(d);
+  d.tab.style.transform = `translateX(${clampDx(d.rects, d.from, d.dx)}px)`;
+  const offsets = siblingOffsets(d.rects, d.from, d.slot, d.shift);
+  d.tabs.forEach((el, i) => {
+    if (i !== d.from) el.style.transform = offsets[i] ? `translateX(${offsets[i]}px)` : '';
+  });
+}
+
+/** After a real drag the release must not also count as a click on the label. */
+function swallowNextClick() {
+  const swallow = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+  };
+  window.addEventListener('click', swallow, { capture: true, once: true });
+  setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0);
+}
+
+/** Ends the gesture. `commit` false (cancel / Escape / lost capture) snaps back. */
+function endDrag(commit) {
+  const d = drag;
+  drag = null;
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', onDragUp);
+  window.removeEventListener('pointercancel', onDragCancel);
+  window.removeEventListener('keydown', onDragKey, true);
+  if (!d || !d.active) return;
+  if (d.raf) cancelAnimationFrame(d.raf);
+  swallowNextClick();
+
+  const slot = currentSlot(d);
+  const moved = commit && slot !== d.from;
+  // Snapshot BEFORE the rebuild drops the inline transforms: the FLIP then
+  // starts every tab from where it is on screen, not from its old slot.
+  const onScreen = snapshotTabX();
+  draggedId = null;
+  repaintAfterDrag = false;
+  tabEls.list.classList.remove('is-reordering');
+  if (moved) {
+    // Optimistic: paint the new order now. The main process broadcasts the
+    // authoritative list right after, which repaints in place.
+    const rest = sessionList.filter((m) => m.id !== d.id);
+    const meta = sessionList.find((m) => m.id === d.id);
+    if (meta) sessionList = [...rest.slice(0, slot), meta, ...rest.slice(slot)];
+  }
+  renderTabs(onScreen);
+  if (moved) window.lunacore.reorderSession(d.id, slot);
 }
 
 function wireTabDrag(tab, id) {
-  tab.draggable = true;
-  tab.addEventListener('dragstart', (e) => {
-    draggedId = id;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', id);
-    tab.classList.add('is-dragging');
+  tab.addEventListener('pointerdown', (e) => {
+    if (drag || e.button !== 0 || !e.isPrimary) return;
+    // The close button and any inner control keep their own click.
+    if (e.target.closest('.tab__close, input, select, textarea, a')) return;
+    drag = { tab, id, pointerId: e.pointerId, startX: e.clientX, dx: 0, active: false, raf: 0 };
+    window.addEventListener('pointermove', onDragMove);
+    window.addEventListener('pointerup', onDragUp);
+    window.addEventListener('pointercancel', onDragCancel);
+    window.addEventListener('keydown', onDragKey, true);
   });
-  tab.addEventListener('dragover', (e) => {
-    if (!draggedId || draggedId === id) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const after = dropsAfter(tab, e.clientX);
-    clearDropMarks();
-    tab.classList.add(after ? 'is-drop-after' : 'is-drop-before');
-  });
-  tab.addEventListener('drop', (e) => {
-    if (!draggedId || draggedId === id) return;
-    e.preventDefault();
-    window.lunacore.reorderSession(draggedId, dropIndex(id, dropsAfter(tab, e.clientX)));
-  });
-  tab.addEventListener('dragend', () => {
-    draggedId = null;
-    tab.classList.remove('is-dragging');
-    clearDropMarks();
-    if (repaintAfterDrag) {
-      repaintAfterDrag = false;
-      renderTabs();
-    }
+  // Capture lost without a pointerup (window blur, element gone): snap back.
+  // After a normal pointerup `drag` is already null, so this is a no-op.
+  tab.addEventListener('lostpointercapture', (e) => {
+    if (drag && drag.tab === tab && e.pointerId === drag.pointerId) endDrag(false);
   });
 }
 
@@ -319,7 +412,12 @@ function slideTabsFrom(oldX) {
   }
 }
 
-function renderTabs() {
+/**
+ * Rebuilds the tab bar. `fromX` is an optional sessionId -> left snapshot to
+ * slide from instead of the current DOM (the drag drop passes the on-screen
+ * positions it measured before releasing its transforms).
+ */
+function renderTabs(fromX) {
   if (!tabEls) return;
   if (draggedId) {
     repaintAfterDrag = true;
@@ -328,7 +426,7 @@ function renderTabs() {
   const activeId = getActiveSessionId();
   const switched = paintedActiveId !== null && activeId !== paintedActiveId;
   paintedActiveId = activeId;
-  const oldX = snapshotTabX();
+  const oldX = fromX instanceof Map ? fromX : snapshotTabX();
   tabEls.list.innerHTML = '';
   for (const meta of sessionList) {
     const s = getBucket(meta.id);

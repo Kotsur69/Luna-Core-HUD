@@ -36,6 +36,8 @@ import { onLangChange } from './bus.js';
 // DOM-free at module scope, so it does not break this file's require()-ability
 // from a plain CJS test (see the header). Used by the region rail only.
 import { crossfade } from './motion.js';
+// DOM-free at module scope too: it only builds SVG when called.
+import { widgetIconSvg } from './widgeticons.js';
 
 /** Narrowest a panel may be dragged, and the widest a fixed track may grow. */
 export const MIN_TRACK_PX = 140;
@@ -470,6 +472,19 @@ function ensureChevron(title) {
 }
 
 /**
+ * The one way a user fold/unfold lands: animate it, remember it, persist it.
+ * Shared by the title toggle and the rail glyph, so there is no second path
+ * that could forget to persist.
+ */
+function toggleFold(section, id) {
+  const folded = !section.hasAttribute('data-collapsed');
+  animateFold(section, folded);
+  if (folded) collapsed.add(id);
+  else collapsed.delete(id);
+  persistCollapsed();
+}
+
+/**
  * Turns one widget section's title into a fold handle. Idempotent: a layout
  * switch MOVES widget roots rather than remounting them, so most sections
  * arrive here already decorated.
@@ -489,13 +504,7 @@ function decorate(section) {
     title.setAttribute('role', 'button');
     title.tabIndex = 0;
 
-    const toggle = () => {
-      const folded = !section.hasAttribute('data-collapsed');
-      animateFold(section, folded);
-      if (folded) collapsed.add(id);
-      else collapsed.delete(id);
-      persistCollapsed();
-    };
+    const toggle = () => toggleFold(section, id);
 
     title.addEventListener('click', (e) => {
       // Let the controls that live IN the title do their own job.
@@ -639,7 +648,8 @@ function railLabel(isRailed) {
 }
 
 /**
- * A section's own title text, minus the fold chevron.
+ * A section's own title text, minus the fold chevron and the drag grip
+ * (widgetarrange.js puts a .panel__grip in every title).
  *
  * Read off the DOM rather than looked up in the widget registry, deliberately:
  * this file has no import of registry.js (see the header - the pure half must
@@ -651,7 +661,13 @@ function sectionLabel(section) {
   if (!title) return '';
   let text = '';
   for (const node of title.childNodes) {
-    if (node.nodeType === 1 && node.classList && node.classList.contains('panel__fold')) continue;
+    if (
+      node.nodeType === 1 &&
+      node.classList &&
+      (node.classList.contains('panel__fold') || node.classList.contains('panel__grip'))
+    ) {
+      continue;
+    }
     text += node.textContent || '';
   }
   return text.trim();
@@ -670,10 +686,9 @@ function buildRailStrip(region) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'region__glyph';
-    // The first letter of the panel's own title. No icon set to maintain, no
-    // per-widget glyph table to keep in step with the registry, and it is
-    // already right in both languages.
-    btn.textContent = label.slice(0, 1).toUpperCase();
+    // A per-widget icon (widgeticons.js); the localized title rides along as
+    // the tooltip and accessible name, so it follows a language switch.
+    btn.appendChild(widgetIconSvg(section.dataset.widget));
     btn.title = label;
     btn.setAttribute('aria-label', label);
     btn.addEventListener('click', () => {
@@ -682,6 +697,9 @@ function buildRailStrip(region) {
       // is still railed and its scroller is still display:none with no box to
       // scroll within.
       setRailed(region.dataset.region, false, () => {
+        // Opening a column onto a folded panel would scroll to a bare title,
+        // so unfold it through the same path the title toggle uses.
+        if (section.hasAttribute('data-collapsed')) toggleFold(section, section.dataset.widget);
         section.scrollIntoView({ block: 'nearest' });
       });
     });
@@ -1013,7 +1031,7 @@ export function initPanelResizeTracking() {
   window.addEventListener('resize', positionSplitters);
   onLangChange(() => {
     decorateAll();
-    // decorateAll() first, deliberately: the rail glyphs are the first letter of
+    // decorateAll() first, deliberately: the rail glyphs take their tooltip from
     // each panel's own title, so they can only be right once the titles are.
     decorateRails();
     const label = splitterLabel();

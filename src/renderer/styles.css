@@ -1199,12 +1199,25 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .tab.is-active { background: var(--bg); /* deliberately opaque - see TRANSPARENCY_PLAN.md */ color: var(--neon-cyan); border-color: var(--neon-cyan); position: relative; }
 .tab.is-dead .tab__label { text-decoration: line-through; opacity: 0.6; }
 
-/* Drag-to-reorder (sessions.js): the dragged tab dims, and an inset accent on
-   the target's left or right edge marks where it will land. Inset box-shadow
-   rather than a pseudo-element - ::after already belongs to the active accent. */
-.tab.is-dragging { opacity: 0.4; }
-.tab.is-drop-before { box-shadow: inset 2px 0 0 var(--neon-cyan); }
-.tab.is-drop-after { box-shadow: inset -2px 0 0 var(--neon-cyan); }
+/* Live drag-to-reorder (sessions.js + tabdrag.js), Chrome-style: the dragged
+   tab follows the pointer via an inline translateX, fully opaque and raised
+   above its neighbours, with no transition of its own so it never lags the
+   cursor. Its neighbours slide out of the way on --dur-fast, which the
+   reduced/off motion tiers pin to 0. */
+.tabs__list.is-reordering .tab:not(.is-dragging) {
+  transition:
+    transform var(--dur-fast) var(--ease-smooth),
+    background var(--dur-fast) var(--ease-sharp),
+    color var(--dur-fast) var(--ease-sharp);
+}
+.tab.is-dragging {
+  position: relative;
+  z-index: 2;
+  opacity: 1;
+  cursor: grabbing;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--edge-glow);
+  transition: none;
+}
 
 /* A 2px accent pinned under the active tab. The tab strip's baseline is a plain
    --edge line (.tabs); this is the slice of it the active session owns, and it
@@ -4552,13 +4565,14 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   overflow-y: auto;
 }
 
-/* One glyph per panel, carrying the first letter of that panel's own title -
-   so there is no icon set to maintain, nothing to keep in step with the widget
-   registry, and it is already right in both languages. Clicking one opens the
-   region AND scrolls that panel into view, so collapsing a column is never a
-   way to lose track of what was in it. */
+/* One glyph per panel, carrying that widget's icon (modules/widgeticons.js)
+   with the panel's localized title as tooltip and accessible name. Clicking one
+   opens the region, unfolds the panel if it was folded, AND scrolls it into
+   view, so collapsing a column is never a way to lose track of what was in it. */
 .region__glyph {
   flex: none;
+  display: grid;
+  place-items: center;
   width: 28px;
   height: 28px;
   padding: 0;
@@ -4573,17 +4587,25 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   transition:
     color var(--dur-fast) var(--ease-sharp),
     border-color var(--dur-fast) var(--ease-sharp),
+    box-shadow var(--dur-fast) var(--ease-sharp),
     transform var(--dur-instant) var(--ease-sharp);
+}
+.region__glyph svg {
+  width: 16px;
+  height: 16px;
 }
 .region__glyph:hover {
   color: var(--neon-cyan);
-  border-color: var(--edge-glow);
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 0 1px var(--edge-glow), 0 0 8px var(--edge-glow);
   transform: translateY(calc(-1 * var(--lift)));
 }
 .region__glyph:active {
   transform: scale(var(--press-scale));
 }
 .region__glyph:focus-visible {
+  color: var(--neon-cyan);
+  border-color: var(--neon-cyan);
   outline: var(--border-w) solid var(--edge-glow);
   outline-offset: 2px;
 }
