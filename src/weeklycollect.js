@@ -137,9 +137,10 @@ function parseNumstat(stdout, email, sinceMs, untilMs) {
  * commits are left out; a repo whose git failed is counted in `failed`.
  * @returns {Promise<{repos:Array, failed:number}>}
  */
-async function repoStats({ listRepos, runGit = runGitDefault, sinceMs, untilMs }) {
+async function repoStats({ listRepos, runGit = runGitDefault, sinceMs, untilMs, days = null }) {
   const dirs = [...new Set((listRepos() || []).filter(usableRepo))].slice(0, MAX_REPOS);
   const repos = [];
+  const byDay = new Map();
   let failed = 0;
   // One repo at a time: nobody waits on the exact second, and the PC stays responsive.
   for (const dir of dirs) {
@@ -154,6 +155,7 @@ async function repoStats({ listRepos, runGit = runGitDefault, sinceMs, untilMs }
       }
       const commits = parseNumstat(log.stdout, email, sinceMs, untilMs);
       if (!commits.length) continue;
+      for (const c of commits) byDay.set(ymd(c.ms), (byDay.get(ymd(c.ms)) || 0) + 1);
       repos.push({
         repo: repoName(dir),
         commits: commits.length,
@@ -167,7 +169,9 @@ async function repoStats({ listRepos, runGit = runGitDefault, sinceMs, untilMs }
     }
   }
   repos.sort((a, b) => b.commits - a.commits || a.repo.localeCompare(b.repo));
-  return { repos: repos.slice(0, MAX_OUT_REPOS), failed };
+  const out = { repos: repos.slice(0, MAX_OUT_REPOS), failed };
+  // Own commits per local day (all repos), when the caller names the days.
+  return Array.isArray(days) ? { ...out, perDay: days.map((d) => byDay.get(d) || 0) } : out;
 }
 
 const classOf = (cls) => (CLASSES.includes(cls) ? cls : 'unassigned');
@@ -223,6 +227,8 @@ function githubWeek(gh, b) {
   const items = (kind) => list(kind).items.slice(0, MAX_LIST).map((it) => ({ repo: clean(it.repo, MAX_NAME), title: clean(it.title), draft: it.draft === true }));
   return {
     contributions: thisWeek,
+    // Mon..Sun, for the weekly report's per-day chart.
+    perDay: b.days.map((d) => counts.get(d) || 0),
     avgWeek,
     quietDays,
     flags,
@@ -333,7 +339,7 @@ function createWeeklyCollect(deps) {
         const r = await deps.ledgerRange({ sinceMs: b.sinceMs, untilMs: b.untilMs });
         return r && r.ok ? ledgerParts(r) : r;
       }),
-      source('repos', () => repoStats({ listRepos: deps.listRepos, runGit: deps.runGit, sinceMs: b.sinceMs, untilMs })),
+      source('repos', () => repoStats({ listRepos: deps.listRepos, runGit: deps.runGit, sinceMs: b.sinceMs, untilMs, days: b.days })),
       source('github', async () => (deps.github ? githubWeek(await deps.github.fetch(), b) : { error: 'off' })),
     ]);
     const split = (k) => (ledger && ledger.error ? ledger : ledger[k]);

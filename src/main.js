@@ -210,7 +210,7 @@ const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha } = require('./orchestraFinish');
 const orchestraStore = require('./orchestraStore');
 const orchestraIntegrate = require('./orchestraIntegrate');
-const { reportFileFor } = require('./orchestraReport');
+const { reportFileFor, renderRunReportHtml, repoPathOf } = require('./orchestraReport');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
 const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, PR_URL_RE } = require('./orchestraSupervisor');
 
@@ -1006,6 +1006,14 @@ const orchestra = createOrchestra({
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `${planId}.md`);
       fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
+      // The same run as a standalone page with charts, next to the .md.
+      try {
+        const view = orchestra.view() || {};
+        const html = renderRunReportHtml(view, { now: Date.now(), suggestions: view.suggestions, repoPath: repoPathOf(text) });
+        fs.writeFileSync(path.join(dir, `${planId}.html`), html, { encoding: 'utf8', mode: 0o600 });
+      } catch (err) {
+        console.error('[orchestra] html report failed:', err && err.message);
+      }
       return file;
     } catch {
       return null;
@@ -2600,6 +2608,7 @@ function registerIpc() {
     sender: reportMail.sender,
     prefs: reportMail.prefs,
     onResume: (fn) => powerMonitor.on('resume', fn),
+    reportDir: () => (ensureUserDir() ? path.join(userDir(), 'weekly') : null),
   });
   missionBrief = mission.brief;
 

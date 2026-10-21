@@ -168,3 +168,14 @@ test('collect: a failing source becomes {error} and the rest still comes back', 
 test('collect: a malformed week is null', async () => {
   assert.equal(await createWeeklyCollect(deps()).collect('nope'), null);
 });
+
+test('perDay: own commits per local day when the days are named, GitHub counts Mon..Sun', async () => {
+  const runGit = async (dir, args) =>
+    args.includes('config') ? { ok: true, stdout: 'me@x.com\n' } : { ok: true, stdout: log([[MID / 1000, 'me@x.com', 'feat: one'], [MID / 1000 + 60, 'me@x.com', 'fix: two']]) };
+  const res = await repoStats({ listRepos: () => [REPO], runGit, sinceMs: B.sinceMs, untilMs: B.untilMs, days: B.days });
+  assert.deepEqual(res.perDay, [0, 0, 2, 0, 0, 0, 0]);
+  const plain = await repoStats({ listRepos: () => [REPO], runGit, sinceMs: B.sinceMs, untilMs: B.untilMs });
+  assert.equal(plain.perDay, undefined);
+  const gh = githubWeek({ days: [{ date: B.days[0], count: 3 }, { date: B.days[6], count: 1 }] }, B);
+  assert.deepEqual(gh.perDay, [3, 0, 0, 0, 0, 0, 1]);
+});

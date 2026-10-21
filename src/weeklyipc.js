@@ -92,12 +92,24 @@ function registerWeeklyIpc({ ipcMain, review, store, mail, sender, prefs, now = 
 }
 
 /**
+ * <dir>/<week>.html for a valid ISO week key; the week is checked again
+ * here because it names the file. A null dir (no user folder) writes nothing.
+ */
+function writeWeeklyHtml(dir, week, html) {
+  if (!dir || !isWeek(week)) return;
+  const fs = require('fs');
+  const path = require('path');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${week}.html`), html, { encoding: 'utf8', mode: 0o600 });
+}
+
+/**
  * Composition root for main.js: the store, the collector over the real
  * readers, the mailer, the review and its IPC. main.js only calls this and
  * then review.start().
  * @param {{ipcMain:object, ledgerRange:Function, github:object|null, body:()=>Promise<object|null>,
  *   projectNames:()=>Map<string,string>, getEnv:()=>object, sender:object, prefs:object,
- *   onResume?:(fn:Function)=>void}} deps
+ *   onResume?:(fn:Function)=>void, reportDir?:()=>string|null}} deps  reportDir: where <week>.html goes
  */
 function setupWeeklyReview(deps) {
   const { createWeeklyStore, createWeeklyReview } = require('./weeklyreview');
@@ -119,9 +131,52 @@ function setupWeeklyReview(deps) {
     loadSeries: () => require('./lifeseries').loadSeries(),
   });
   const mail = createWeeklyMail({ sender: deps.sender, prefs: deps.prefs, store });
-  const review = createWeeklyReview({ collect: collect.collect, run: runJob, getEnv: deps.getEnv, store, mailer: mail, onResume: deps.onResume });
+  const review = createWeeklyReview({
+    collect: collect.collect,
+    run: runJob,
+    getEnv: deps.getEnv,
+    store,
+    mailer: mail,
+    onResume: deps.onResume,
+    writeHtml: deps.reportDir ? (week, html) => writeWeeklyHtml(deps.reportDir(), week, html) : null,
+  });
+  registerWeeklyIpc({ ipcMain: deps.ipcMain, review, store, mail, sender: deps.sender, prefs: deps.prefs });
+  return review;
+}
+
+module.exports = { registerWeeklyIpc, setupWeeklyReview };function setupWeeklyReview(deps) {
+  const { createWeeklyStore, createWeeklyReview } = require('./weeklyreview');
+  const { createWeeklyCollect } = require('./weeklycollect');
+  const { createWeeklyMail } = require('./weeklymail');
+  const { runJob } = require('./missionrunner');
+  const store = createWeeklyStore();
+  const collect = createWeeklyCollect({
+    ledgerRange: deps.ledgerRange,
+    listRepos: () => require('./gitstation').loadRepoList().repos,
+    readTodoStore: () => require('./todo').readStore(),
+    projectNames: deps.projectNames,
+    github: deps.github,
+    loadGoals: () => require('./lifegoals').loadGoals(),
+    loadBudget: () => require('./lifebudget').loadBudget(),
+    body: deps.body,
+    loadCheckin: () => require('./lifecheckin').loadCheckin(),
+    loadHabits: () => require('./lifehabits').loadHabits(),
+    loadSeries: () => require('./lifeseries').loadSeries(),
+  });
+  const mail = createWeeklyMail({ sender: deps.sender, prefs: deps.prefs, store });
+  const review = createWeeklyReview({
+    collect: collect.collect,
+    run: runJob,
+    getEnv: deps.getEnv,
+    store,
+    mailer: mail,
+    onResume: deps.onResume,
+    writeHtml: deps.reportDir ? (week, html) => writeWeeklyHtml(deps.reportDir(), week, html) : null,
+  });
   registerWeeklyIpc({ ipcMain: deps.ipcMain, review, store, mail, sender: deps.sender, prefs: deps.prefs });
   return review;
 }
 
 module.exports = { registerWeeklyIpc, setupWeeklyReview };
+
+

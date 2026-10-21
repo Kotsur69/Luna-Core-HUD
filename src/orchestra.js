@@ -341,6 +341,7 @@ function createOrchestra(deps) {
         nudges: p.nudges,
         verifyRounds: p.verifyRounds,
         startedAt: p.startedAt,
+        finishedAt: p.finishedAt || null,
         stalls: p.stalls,
         escalated: p.escalated,
         prUrl: p.prUrl,
@@ -366,8 +367,12 @@ function createOrchestra(deps) {
   const findPkg = (id) => (plan ? plan.packages.find((p) => p.id === id) : null);
   const bySession = (sessionId) => (plan && sessionId ? plan.packages.find((p) => p.sessionId === sessionId) : null);
 
+  /** When a state change lands: stamped on settling, cleared on a relaunch (report timeline). */
+  const finishStamp = (p, fields) =>
+    'state' in fields && fields.state !== p.state ? { finishedAt: sup.SETTLED_STATES.has(fields.state) ? now() : null } : {};
+
   function patch(id, fields) {
-    plan.packages = plan.packages.map((p) => (p.id === id ? { ...p, ...fields } : p));
+    plan.packages = plan.packages.map((p) => (p.id === id ? { ...p, ...fields, ...finishStamp(p, fields) } : p));
   }
 
   function cancelNudge(id) {

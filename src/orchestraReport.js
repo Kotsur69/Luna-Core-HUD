@@ -20,6 +20,7 @@
 'use strict';
 
 const path = require('path');
+const h = require('./reportHtml');
 
 const NOTE_TAG = '[LunaCore run';
 const MAX_NOTE_CHARS = 600;
@@ -279,6 +280,160 @@ function buildReport(view, extra) {
   return `${lines.join('\n')}\n`;
 }
 
+// --- HTML ------------------------------------------------------------------
+// The same run as a standalone page with charts, written next to the .md
+// (main's writeReport). Same data, same caps; markup only via reportHtml.js.
+
+const STATE_TONE = {
+  pushed: 'ok',
+  failed: 'bad',
+  killed: 'bad',
+  stalled: 'warn',
+  closed: 'muted',
+  pending: 'muted',
+  launched: 'info',
+  finishing: 'info',
+};
+const DONUT_ORDER = ['pushed', 'launched', 'finishing', 'stalled', 'failed', 'killed', 'closed', 'pending'];
+const REPO_LINE_RE = /^- Repo: `([^`\n]*)`/m;
+const noTicks = (v) => String(v).replace(/`/g, '');
+
+/** The repo path from a buildReport markdown's Repo line, or ''. */
+function repoPathOf(markdown) {
+  const m = REPO_LINE_RE.exec(String(markdown || ''));
+  return m ? m[1] : '';
+}
+
+/** How long a package ran: settled -> finishedAt, still running -> now, else null. */
+function packageMs(p, now) {
+  if (!Number.isFinite(p.startedAt)) return null;
+  const end = Number.isFinite(p.finishedAt) ? p.finishedAt : p.state === 'launched' || p.state === 'finishing' ? now : null;
+  return Number.isFinite(end) && end >= p.startedAt ? end - p.startedAt : null;
+}
+
+function runCards(view, packages, integ, now) {
+  const count = (...states) => packages.filter((p) => states.includes(p.state)).length;
+  const failed = count('failed', 'stalled', 'closed');
+  const killed = count('killed');
+  const started = Number.isFinite(view.runStartedAt) ? view.runStartedAt : null;
+  const took = started && Number.isFinite(now) && now >= started ? duration(now - started) : '-';
+  const sc = isObject(integ.selfCheck) ? integ.selfCheck : null;
+  const tests = sc ? oneLine(sc.tests, 16) || 'skipped' : 'not run';
+  return h.cards([
+    { label: 'Pushed', value: `${count('pushed')} / ${packages.length}`, tone: 'ok' },
+    { label: 'Failed', value: failed, tone: failed ? 'bad' : 'muted' },
+    { label: 'Killed', value: killed, tone: killed ? 'warn' : 'muted' },
+    { label: 'Duration', value: took, tone: 'info' },
+    { label: 'Commits', value: packages.filter((p) => sha7(p.headSha)).length },
+    { label: 'Tests', value: tests, tone: tests === 'ok' ? 'ok' : tests === 'failed' ? 'bad' : 'muted' },
+  ]);
+}
+
+function selfCheckHtml(integ) {
+  const sc = isObject(integ.selfCheck) ? integ.selfCheck : null;
+  const fixups = sc && Number.isFinite(sc.fixups) ? Math.max(0, Math.round(sc.fixups)) : 0;
+  const checks = sc ? [...CHECKS.map(([key, title]) => `${title}: ${oneLine(sc[key], 16) || 'skipped'}`), `Fix-ups: ${fixups}`] : [];
+  return h.section('Self-check', h.list(checks, 'Not run.'));
+}
+
+function runCharts(view, packages, integ, now) {
+  const donut = h.donutChart(
+    DONUT_ORDER.map((s) => ({ label: STATE_LABEL[s], value: packages.filter((p) => p.state === s).length, tone: STATE_TONE[s] })),
+    { center: String(packages.length), emptyText: 'No packages' },
+  );
+  const bars = h.barChart(
+    packages
+      .map((p) => ({ p, ms: packageMs(p, now) }))
+      .filter((x) => x.ms !== null)
+      .map(({ p, ms }) => ({ label: oneLine(p.id, 64), value: ms / 60000, text: duration(ms), tone: STATE_TONE[p.state] })),
+    { emptyText: 'No package timings' },
+  );
+  const gantt = h.ganttChart(
+    packages.map((p) => ({
+      label: oneLine(p.id, 64),
+      start: p.startedAt,
+      end: Number.isFinite(p.finishedAt) ? p.finishedAt : null,
+      tone: STATE_TONE[p.state],
+      text: `${STATE_LABEL[p.state] || oneLine(p.state, 24)}, ${fmt(p.startedAt)} - ${fmt(p.finishedAt)}`,
+    })),
+    { from: Number.isFinite(view.runStartedAt) ? view.runStartedAt : undefined, until: now, fmt, emptyText: 'No package started' },
+  );
+  return [
+    `<div class="grid2">${h.section('Status', donut)}${selfCheckHtml(integ)}</div>`,
+    h.section('Time per package', bars),
+    h.section('Timeline', gantt),
+  ].join('\n');
+}
+
+function needsHtml(view, integ) {
+  const needs = needsYouLines(view).map(noTicks);
+  const tail = tailLines(integ.selfCheck).map((l) => l.trim());
+  const body = needs.length ? h.list(needs) : '<p class="empty">Nothing - all done</p>';
+  return h.section('Needs you', `${body}${tail.length ? `<pre>${h.escapeHtml(tail.join('\n'))}</pre>` : ''}`);
+}
+
+function packageTable(view, packages, now) {
+  const merge = view.integrationMode === 'merge';
+  const rows = packages.map((p) => {
+    const ms = packageMs(p, now);
+    // Only an https link becomes an href (the plan shape-checks it already).
+    const pr = typeof p.prUrl === 'string' && /^https:\/\/[^\s"'<>]+$/.test(p.prUrl) ? `<a href="${h.escapeHtml(p.prUrl)}">PR</a>` : '';
+    const mergedText = merge && p.state === 'pushed' ? `merged: ${p.merged ? 'yes' : 'no'}` : p.merged ? 'merged' : '';
+    return [
+      `<code>${h.escapeHtml(oneLine(p.id, 64))}</code><br>${h.escapeHtml(oneLine(p.title, 120))}`,
+      h.pill(STATE_LABEL[p.state] || oneLine(p.state, 24), STATE_TONE[p.state]),
+      p.branch ? `<code>${h.escapeHtml(oneLine(p.branch, 120))}</code>` : '-',
+      h.escapeHtml(sha7(p.headSha) || '-'),
+      h.escapeHtml(ms === null ? '-' : duration(ms)),
+      pr || h.escapeHtml(mergedText || '-'),
+      h.escapeHtml(oneLine(reasonOf(p), MAX_ITEM_CHARS)),
+    ];
+  });
+  return h.section('Packages', h.table(['Package', 'State', 'Branch', 'Commit', 'Time', 'PR / merge', 'Notes'], rows, 'No packages'));
+}
+
+function detailSections(integ, suggestions) {
+  const groupTitle = (kind) => (MANUAL_GROUPS.find(([k]) => k === kind) || [kind, 'Other'])[1];
+  const manual = list(integ.manualActions)
+    .filter(isObject)
+    .map((a) => `${groupTitle(a.kind)}: ${oneLine(a.what, 160)}`);
+  const rules = list(suggestions)
+    .filter(isObject)
+    .map((s) => `${oneLine(s.rule, 160)} - ${Math.max(0, s.count | 0)} worker(s)`);
+  return `<div class="grid2">${h.section('Manual actions', h.list(manual, 'None.'))}${h.section('Allow-rule suggestions', h.list(rules, 'None.'))}</div>`;
+}
+
+/**
+ * The run report as a standalone HTML page with inline SVG charts.
+ * Deterministic: time comes from extra.now only. Only the repo NAME shows.
+ * @param {object} view orchestra view() of a settled run
+ * @param {{now:number, suggestions?:Array<object>, repoPath?:string}} extra
+ * @returns {string} html
+ */
+function renderRunReportHtml(view, extra = {}) {
+  const v = isObject(view) ? view : {};
+  const packages = list(v.packages).filter(isObject);
+  const integ = isObject(v.integration) ? v.integration : {};
+  const now = Number.isFinite(extra.now) ? extra.now : null;
+  const repo = oneLine(path.basename(String(extra.repoPath || v.repoPath || '')), 100);
+  const integError = integ.error ? ` (${oneLine(integ.error, 64)})` : '';
+  const integLine = `${oneLine(v.integrationMode, 16) || 'branches'} - ${oneLine(integ.state, 16) || 'idle'}${integError}`;
+  const base = v.baseBranch ? ` (base ${oneLine(v.baseBranch, 120)})` : '';
+  const body = [
+    runCards(v, packages, integ, now),
+    needsHtml(v, integ),
+    runCharts(v, packages, integ, now),
+    packageTable(v, packages, now),
+    detailSections(integ, extra.suggestions),
+  ].join('\n');
+  return h.page({
+    title: `God Mode run ${oneLine(v.id, 40)}`,
+    subtitle: `${repo || 'repo'}${base} · workers ${oneLine(v.workerModel, 32) || '-'} · integration ${integLine}`,
+    body,
+    footer: `Started ${fmt(v.runStartedAt)} UTC · finished ${fmt(now)} UTC · paused on limits ${duration(v.pausedTotalMs)}`,
+  });
+}
+
 /**
  * <runsDir>/<id>.md for a valid run id, else null. main's "Open report"
  * handler builds the path from the id alone; the renderer never sends one.
@@ -325,4 +480,4 @@ function appendStallNotes(todos, packages, planId, maxDetails) {
   return changed ? next : todos;
 }
 
-module.exports = { buildReport, needsYouLines, reportFileFor, stallNote, appendStallNotes, NOTE_TAG, RUN_ID_RE };
+module.exports = { buildReport, renderRunReportHtml, repoPathOf, needsYouLines, reportFileFor, stallNote, appendStallNotes, NOTE_TAG, RUN_ID_RE };

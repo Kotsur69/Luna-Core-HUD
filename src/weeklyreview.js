@@ -31,6 +31,7 @@ const { createStore } = require('./lifestore');
 const { ymd, parseDay, addDays, isoWeek, isWeek } = require('./lifedays');
 const { weekBounds, knownProjects } = require('./weeklycollect');
 const { MISSION_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunner');
+const h = require('./reportHtml');
 
 const MAX_WEEKS = 12;
 const REVIEW_HOUR = 20;
@@ -192,6 +193,105 @@ function reviewText(entry) {
   return lines.join('\n');
 }
 
+// --- HTML ----------------------------------------------------------------------------
+// The same entry as a standalone page with charts (<userDir>/weekly/<week>.html).
+// Stored data is re-checked here: every number through numOf, every string capped.
+
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const CLASS_TONE = { work: 'info', fun: 'accent', other: 'warn', unassigned: 'muted' };
+const VERDICT_TONE = { done: 'ok', partly: 'warn', 'not yet': 'bad' };
+const numOf = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const ok = (part) => Boolean(part) && typeof part === 'object' && !part.error;
+const sevenOf = (v) => (Array.isArray(v) && v.length === 7 ? v.map((x) => Math.max(0, numOf(x))) : null);
+
+function dayLabels(data) {
+  const from = typeof data.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.from) ? data.from : null;
+  return DAY_NAMES.map((name, i) => (from ? `${name} ${addDays(from, i).slice(8)}` : name));
+}
+
+function weeklyCards(entry, data) {
+  const repos = ok(data.repos) ? arr(data.repos.repos) : [];
+  const goals = entry.review ? entry.review.goals : [];
+  const done = goals.filter((g) => g.verdict === 'done').length;
+  return h.cards([
+    { label: 'Focus hours', value: ok(data.hours) ? `${numOf(data.hours.totalH)} h` : '-', tone: 'info' },
+    { label: 'Claude', value: ok(data.claude) ? money(numOf(data.claude.totalUsd)) : '-', tone: 'accent' },
+    { label: 'Commits', value: ok(data.repos) ? repos.reduce((s, r) => s + numOf(r && r.commits), 0) : '-', tone: 'ok' },
+    { label: 'Contributions', value: ok(data.github) ? numOf(data.github.contributions) : '-' },
+    { label: 'Open to-dos', value: ok(data.todos) ? numOf(data.todos.totalOpen) : '-', tone: 'warn' },
+    { label: 'Goals done', value: goals.length ? `${done} / ${goals.length}` : '-', tone: goals.length && done === goals.length ? 'ok' : 'muted' },
+  ]);
+}
+
+/** Bar rows from a list of stored objects: label/value keys picked, capped and checked. */
+function barRows(rows, labelKey, valueKey, text) {
+  return arr(rows)
+    .filter((r) => r && typeof r === 'object')
+    .map((r) => ({ label: str(String(r[labelKey] == null ? '' : r[labelKey]), 80), value: numOf(r[valueKey]), text: text(r), tone: CLASS_TONE[r.cls] || 'ok' }));
+}
+
+function weeklyCharts(data) {
+  const labels = dayLabels(data);
+  const days = (series, tone) => (series ? series.map((value, i) => ({ label: labels[i], value, tone })) : []);
+  const commits = days(ok(data.repos) ? sevenOf(data.repos.perDay) : null, 'ok');
+  const contrib = days(ok(data.github) ? sevenOf(data.github.perDay) : null, 'info');
+  const hoursBy = ok(data.hours) && data.hours.byClass && typeof data.hours.byClass === 'object' ? data.hours.byClass : {};
+  const hoursDonut = h.donutChart(
+    Object.keys(CLASS_TONE).map((k) => ({ label: k, value: numOf(hoursBy[k]), tone: CLASS_TONE[k] })),
+    { center: ok(data.hours) ? `${numOf(data.hours.totalH)} h` : '', emptyText: 'No focus hours' },
+  );
+  const half = (emptyText) => ({ emptyText, width: h.HALF_W });
+  const hoursBars = h.barChart(barRows(ok(data.hours) ? data.hours.projects : [], 'name', 'hours', (r) => `${numOf(r.hours)} h`), half('No focus hours'));
+  const claudeBars = h.barChart(barRows(ok(data.claude) ? data.claude.projects : [], 'name', 'usd', (r) => money(numOf(r.usd))), half('No Claude spend'));
+  const repoBars = h.barChart(barRows(ok(data.repos) ? data.repos.repos : [], 'repo', 'commits', (r) => String(numOf(r.commits))), half('No commits'));
+  const pair = (a, b) => `<div class="grid2">${a}${b}</div>`;
+  return [
+    pair(
+      h.section('Commits per day', h.columnChart(commits, half('No per-day commit data'))),
+      h.section('GitHub contributions per day', h.columnChart(contrib, half('No per-day contribution data'))),
+    ),
+    pair(h.section('Focus hours by kind', hoursDonut), h.section('Focus hours per project', hoursBars)),
+    pair(h.section('Claude spend per project', claudeBars), h.section('Commits per repo', repoBars)),
+  ].join('\n');
+}
+
+function reviewSections(r) {
+  if (!r) return h.section('Review', '<p class="empty">The model answer was not usable - the charts above show the raw numbers.</p>');
+  const work = r.work.map((w) => [h.escapeHtml(w.project), h.escapeHtml(w.status), w.openTodos.length ? h.list(w.openTodos) : '-']);
+  const goals = r.goals.map((g) => [h.escapeHtml(g.goal), h.pill(g.verdict, VERDICT_TONE[g.verdict]), g.evidence.length ? h.list(g.evidence) : '-']);
+  const fun = `${r.fun.summary ? `<p>${h.escapeHtml(r.fun.summary)}</p>` : ''}${r.fun.projects.length || !r.fun.summary ? h.list(r.fun.projects, 'Nothing logged.') : ''}`;
+  return [
+    h.section('Work', h.table(['Project', 'Status', 'Open to-dos'], work, 'No work projects')),
+    h.section('Fun', fun),
+    h.section('Goals', h.table(['Goal', 'Verdict', 'Evidence'], goals, 'No goals this week')),
+    h.section('Next week', h.list(r.suggestions, 'No suggestions')),
+    `<div class="grid2">${h.section('Do more', h.list(r.doMore, '-'))}${h.section('Do less', h.list(r.doLess, '-'))}</div>`,
+  ].join('\n');
+}
+
+/**
+ * A stored weekly entry as a standalone HTML page with inline SVG charts.
+ * Deterministic: nothing reads the clock.
+ * @param {object} entry a weekly store entry ({week, at, model, costUsd, review, data})
+ * @returns {string} html
+ */
+function renderWeeklyReportHtml(entry) {
+  const e = entry && typeof entry === 'object' ? entry : {};
+  const data = e.data && typeof e.data === 'object' ? e.data : {};
+  const week = str(e.week, 16) || 'week';
+  const range = typeof data.from === 'string' && typeof data.to === 'string' ? `${str(data.from, 10)} - ${str(data.to, 10)}` : '';
+  const headline = e.review ? e.review.headline : '';
+  const body = [weeklyCards(e, data), weeklyCharts(data), reviewSections(e.review)].join('\n');
+  const cost = typeof e.costUsd === 'number' ? ` · review cost ${money(e.costUsd)} (${str(e.model, 32)})` : '';
+  const at = Number.isFinite(e.at) ? new Date(e.at).toISOString().replace('T', ' ').slice(0, 16) : '-';
+  return h.page({
+    title: `Weekly review - ${week}`,
+    subtitle: [range, data.partial ? 'week in progress' : '', headline].filter(Boolean).join(' · '),
+    body,
+    footer: `Generated ${at} UTC${cost}`,
+  });
+}
+
 // --- history store -------------------------------------------------------------------
 
 const reasonOf = (v) => (typeof v === 'string' && REASON_RE.test(v) ? v : null);
@@ -276,7 +376,8 @@ function generatable(nowMs) {
 /**
  * @param {{collect:(week:string)=>Promise<object|null>, run:Function, getEnv:()=>object,
  *   store:ReturnType<typeof createWeeklyStore>, mailer?:{afterScheduled:Function}|null,
- *   now?:()=>number, onResume?:(fn:Function)=>void}} deps
+ *   now?:()=>number, onResume?:(fn:Function)=>void,
+ *   writeHtml?:(week:string, html:string)=>void}} deps  writeHtml: the standalone page, after each save
  */
 function createWeeklyReview(deps) {
   const now = deps.now || Date.now;
@@ -306,6 +407,13 @@ function createWeeklyReview(deps) {
       // A regenerated week keeps its mail state: dedupe is per ISO week.
       const entry = { week, at: now(), model, costUsd, review, failure, data, mail: prev ? prev.mail : null };
       deps.store.put(entry);
+      if (deps.writeHtml) {
+        try {
+          deps.writeHtml(week, renderWeeklyReportHtml(deps.store.get(week) || entry));
+        } catch (err) {
+          console.error('[weekly] html report failed:', err && err.message);
+        }
+      }
       if (scheduled && deps.mailer) {
         try {
           await deps.mailer.afterScheduled(week);
@@ -358,6 +466,7 @@ module.exports = {
   validateReview,
   rawLines,
   reviewText,
+  renderWeeklyReportHtml,
   dueWeek,
   generatable,
   reviewTime,
