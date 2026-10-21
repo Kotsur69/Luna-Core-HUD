@@ -5,7 +5,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-const SHARED = /[\\/]src[\\/](cloudrows|missionledger(sync|calc)|missionnewsrows|missionweather|ratecalc|lifeyaziopeers|usagesnapshot|repossnapshot|godmodesnapshot|hostcanon|hostsnapshot|todorows|lifebudget[a-z]*)\.js$/;
+const SHARED = /[\\/]src[\\/](cloudrows|missionledger(sync|calc)|missionnewsrows|missionweather|ratecalc|lifeyaziopeers|usagesnapshot|repossnapshot|godmodesnapshot|hostcanon|hostsnapshot|hostevents|todorows|lifebudget[a-z]*)\.js$/;
 const SUPABASE_RE = /^https:\/\/[a-z0-9-]{1,63}\.supabase\.co$/;
 
 /**
@@ -50,6 +50,8 @@ export default defineConfig(({ mode }) => ({
       workbox: {
         // App shell only: cloud data is never cached by the service worker.
         globPatterns: ['**/*.{js,css,html,png,woff2}'],
+        // Web Push (H4): the push / notificationclick handlers.
+        importScripts: ['push-sw.js'],
         navigateFallbackDenylist: [/^\/auth/],
       },
     }),

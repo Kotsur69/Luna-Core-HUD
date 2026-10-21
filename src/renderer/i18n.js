@@ -281,6 +281,7 @@ const I18N_DICT = {
     // Session tabs
     'tabs.new': 'Nowa sesja (Ctrl+T)',
     'tabs.close': 'Zamknij sesje (Ctrl+W)',
+    'tabs.phone': 'Sterowane z telefonu (tylko podglad)',
     'tabs.cycle': 'Poprzednia / nastepna sesja (Alt+Left / Alt+Right)',
     'tabs.worktree': 'Nowa sesja w worktree (osobna galaz)',
     'tabs.worktree.placeholder': 'nazwa galezi',
@@ -1765,6 +1766,7 @@ const I18N_DICT = {
     // Session tabs
     'tabs.new': 'New session (Ctrl+T)',
     'tabs.close': 'Close session (Ctrl+W)',
+    'tabs.phone': 'Driven from phone (read-only)',
     'tabs.cycle': 'Previous / next session (Alt+Left / Alt+Right)',
     'tabs.worktree': 'New session in a worktree (own branch)',
     'tabs.worktree.placeholder': 'branch name',

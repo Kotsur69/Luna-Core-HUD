@@ -35,6 +35,7 @@ const DEFAULT_FLAG = '--make-default';
 const REPOS_EVERY_MS = 10 * 60 * 1000;
 const USAGE_PUT_EVERY_MS = 5 * 60 * 1000;
 const LOGIN_CHECK_MS = 5000;
+const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
 
 // ---- pure parts (test/hostmain.test.js) ------------------------------------
@@ -203,11 +204,12 @@ function actionDeps({ cloud, repos, puts, configSync, after }) {
 /**
  * Starts host mode in this process.
  * @param {{electron: object, machine: string, makeDefault?: boolean,
- *   cloud?: object|null, onStop?: () => void}} opts
+ *   cloud?: object|null, onStop?: () => void, chatTabs?: object|null}} opts
  *   cloud = the HUD's running cloud (switch mode), else one is started here;
- *   onStop = what Stop does instead of quitting (switch mode: show the HUD)
+ *   onStop = what Stop does instead of quitting (switch mode: show the HUD);
+ *   chatTabs = the HUD's read-only tabs for phone sessions (switch mode only)
  */
-function startHost({ electron, machine, makeDefault = false, cloud: given = null, onStop = null }) {
+function startHost({ electron, machine, makeDefault = false, cloud: given = null, onStop = null, chatTabs = null }) {
   const { app, Tray, Menu, shell, dialog, powerSaveBlocker, nativeImage } = electron;
   const { execFile } = require('child_process');
   const paths = require('./paths');
@@ -226,6 +228,11 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   const { createHostPairing, hasPairedPhone, forgetAll } = require('./hostpairing');
   const { decideSetup, hostText, langOf, setupLine, confirmPairing } = require('./hostsetup');
   const { createHostActions } = require('./hostactions');
+  const { createHostChat } = require('./hostchat');
+  const { createHostEvents } = require('./hostevents');
+  const { createHostPush } = require('./hostpush');
+  const { spawn } = require('child_process');
+  const { randomUUID } = require('crypto');
 
   paths.ensureUserDir();
   const logFile = path.join(app.getPath('logs'), 'host.log');
@@ -307,7 +314,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
         skills,
         commands: commandNames(),
         mcp: mcpNames(),
-        sessions: [],
+        sessions: chat ? chat.sessions() : [],
       },
       Date.now(),
     );
@@ -315,9 +322,35 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     refreshTray();
   }
 
-  // ---- signed commands (src/hostactions.js) ----
+  // ---- live chat (src/hostchat.js), its events and push notifications ----
+  const push = cloud.client ? createHostPush({ invoke: (body) => cloud.client.functions.invoke('push', { body }), machine, log: console.error }) : null;
+  const events = cloud.client ? createHostEvents({ client: cloud.client, host: machine, log: console.error }) : null;
+  const chat = events
+    ? createHostChat({
+        spawn,
+        randomUUID,
+        events,
+        env: jobEnv,
+        // Only a cloned project of this host's own list: the phone sends an id, never a path.
+        repoDir: (repoId) => {
+          const p = listProjects().find((x) => x.id === repoId);
+          return p ? repos.dirOf(p) : null;
+        },
+        notify: (kind, info) => {
+          if (push) push.chat(kind, info);
+        },
+        onSessionsChanged: () => heartbeat(),
+        log: console.error,
+      })
+    : null;
+  const detachTabs = chat && chatTabs ? chatTabs.attach(chat) : null;
+  const pruneEvents = () => {
+    if (events && setupState() === 'ready') events.prune().catch((err) => console.error('[hostmain] event prune failed:', err.message));
+  };
+
+  // ---- signed commands (src/hostactions.js, src/hostchat.js) ----
   const auth = createHostAuth({ host: machine, keysPath, noncesPath: paths.local('host-nonces.local.json'), log: console.error });
-  const handlers = createHostActions(actionDeps({ cloud, repos, puts, configSync, after: heartbeat }));
+  const handlers = { ...createHostActions(actionDeps({ cloud, repos, puts, configSync, after: heartbeat })), ...(chat ? chat.handlers : {}) };
   const commands = cloud.client ? createHostCommands({ client: cloud.client, host: machine, verify: commandVerifier(auth), handlers, log: console.error }) : null;
   let commandsOn = false;
 
@@ -395,7 +428,9 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     let latest = null;
     const putUsage = () => {
       const snap = usageSnapshot(latest);
-      if (snap) cloud.snapshots.put('usage', snap).catch(() => {});
+      if (!snap) return;
+      cloud.snapshots.put('usage', snap).catch(() => {});
+      if (push && cloud.status().loggedIn) push.usage(snap);
     };
     usageWatcher = new UsageWatcher((usage) => {
       latest = usage;
@@ -444,10 +479,12 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     heartbeat();
   }, HEARTBEAT_MS);
   every(syncRepos, REPOS_EVERY_MS);
+  every(pruneEvents, PRUNE_EVERY_MS);
   timeouts.push(setTimeout(() => {
     if (followSetup() !== 'ready') return;
     syncRepos();
     puts.repos.refresh();
+    pruneEvents();
   }, LOGIN_CHECK_MS * 2));
 
   let stopped = false;
@@ -458,6 +495,8 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     timers.forEach(clearInterval);
     timeouts.forEach(clearTimeout);
     if (commands) commands.stop();
+    if (detachTabs) detachTabs();
+    if (chat) chat.stopAll();
     if (pairing) pairing.close();
     if (usageWatcher) usageWatcher.stop();
     if (configSync) configSync.stop();
@@ -514,6 +553,7 @@ function boot({ argv, hud }) {
             machine,
             makeDefault: parseHostArgs(commandLine).makeDefault,
             cloud,
+            chatTabs: hud().chatTabs || null,
             onStop: () => {
               host = null;
               showAll();

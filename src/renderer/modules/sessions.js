@@ -68,6 +68,7 @@ function activeMeta() {
 // PASSIVE OBSERVER: output from the Claude CLI -> the RIGHT tab's screen.
 window.lunacore.onData(({ sessionId, data }) => {
   const s = ensureTerm(sessionId);
+  if (sessionList.some((m) => m.id === sessionId && m.readOnly)) s.term.options.disableStdin = true;
   s.term.write(data);
   // The LED describes what you are looking at. A background tab blinks on its
   // own marker instead - same reasoning extends to the agent-stream sound
@@ -343,9 +344,16 @@ function renderTabs() {
     btn.setAttribute('role', 'tab');
     btn.setAttribute('aria-selected', String(meta.id === getActiveSessionId()));
     const label = meta.folder || meta.profileLabel || meta.id;
-    // A worktree tab carries a branch mark, so two tabs of one project tell apart.
-    btn.textContent = meta.branch ? `${WORKTREE_MARK} ${label}` : label;
-    btn.title = [meta.profileLabel, meta.branch, meta.cwd].filter(Boolean).join(' - ');
+    if (meta.readOnly) {
+      // A phone-driven host session (src/hostchattabs.js): shown, never typed into.
+      btn.textContent = `📱 ${label}`;
+      btn.title = t('tabs.phone');
+      if (s && s.term) s.term.options.disableStdin = true;
+    } else {
+      // A worktree tab carries a branch mark, so two tabs of one project tell apart.
+      btn.textContent = meta.branch ? `${WORKTREE_MARK} ${label}` : label;
+      btn.title = [meta.profileLabel, meta.branch, meta.cwd].filter(Boolean).join(' - ');
+    }
     btn.addEventListener('click', () => {
       sfx.navClick();
       window.lunacore.activateSession(meta.id);

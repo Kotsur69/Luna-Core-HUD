@@ -18,7 +18,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker,
 // headless src/hostmain.js instead of the HUD, before any HUD module loads.
 // A CommonJS module may return at the top level: nothing below runs then.
 // eslint-disable-next-line no-use-before-define
-if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud }) }) !== 'hud') return;
+if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud, chatTabs: phoneTabs }) }) !== 'hud') return;
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -130,6 +130,8 @@ const { startLifeSync } = require('./lifesync');
 const { startCloud } = require('./cloudsync');
 const { registerCloudIpc } = require('./cloudipc');
 const { machineName } = require('./missionledgersync');
+const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
+const { createHostPush } = require('./hostpush');
 let cloud = null;
 // Highlight extractor: batch tail-trim of video clips via system ffmpeg.
 // See src/highlights.js's header for the argv-array security property.
@@ -452,6 +454,8 @@ function sessionSummary(s) {
     alive: s.alive || s.preparing === true,
     // 'ready' | 'off' | 'none' | null - drives the to-do widget's ✨ button.
     todoTools: s.todoTools || null,
+    // A phone-driven host session (src/hostchattabs.js): no input.
+    readOnly: s.readOnly === true,
   };
 }
 
@@ -462,6 +466,27 @@ function broadcastSessions() {
     activeSessionId,
   });
 }
+
+// Phone-driven host sessions as read-only tabs (src/hostchattabs.js). Used
+// only when this HUD is switched into host mode (src/hostmain.js attaches it).
+const phoneTabs = createHostChatTabs({
+  open: (name) => {
+    const tab = readOnlySession(`s${++sessionSeq}`, name);
+    sessions.set(tab.id, tab);
+    broadcastSessions();
+    return tab.id;
+  },
+  isOpen: (id) => sessions.has(id),
+  write: (id, data) => send('pty:data', { sessionId: id, data }),
+  end: (id) => {
+    const tab = sessions.get(id);
+    if (!tab) return;
+    tab.alive = false;
+    send('pty:exit', { sessionId: id, code: 0 });
+    broadcastSessions();
+  },
+  lang: () => (readUiPrefs().lang === 'pl' ? 'pl' : 'en'),
+});
 
 // ---- App window ---------------------------------------------------------
 
@@ -1588,6 +1613,7 @@ function jumpToProject(digit) {
  * @param {{profileId?:string, projectId?:string}} [opts]
  */
 function restartSession(session, opts = {}) {
+  if (session.readOnly) return; // a phone-driven tab has no process to restart
   const profile =
     getProfile(profiles, opts.profileId || session.profileId) || profiles[0];
   if (!profile) return;
@@ -1724,9 +1750,16 @@ function maybeReadOutputAloud(text) {
 const USAGE_SNAPSHOT_EVERY_MS = 5 * 60 * 1000;
 let usageSnapshotTimer = null;
 
+// H4: the usage push (80 % / 95 % of each window, once) rides on the same put.
+let usagePush = null;
+
 function putUsageSnapshot() {
   const snap = usageSnapshot(latestUsage);
-  if (snap && cloud) cloud.snapshots.put('usage', snap);
+  if (!snap || !cloud) return;
+  cloud.snapshots.put('usage', snap);
+  if (!cloud.client || !cloud.status().loggedIn) return;
+  usagePush = usagePush || createHostPush({ invoke: (body) => cloud.client.functions.invoke('push', { body }), machine: machineName(os.hostname()) });
+  usagePush.usage(snap);
 }
 
 // U2: the git station's repos and finished God Mode runs, for the phone.

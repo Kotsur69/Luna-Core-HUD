@@ -210,6 +210,69 @@ Each slice ships on its own and is usable on the phone when it lands.
 - On a Windows host running the full HUD, the session also shows as a
   read-only tab, so you can sit down and see what happened.
 
+### H2 protocol (probed)
+
+Probed 2026-10-21 with `scripts/probe-claude-stream.js` (claude 2.1.306,
+Haiku, scratch git repo; `--dry-run` prints the invocation). Ids, paths and
+long strings redacted.
+
+- **Invocation:** `claude -p --input-format stream-json --output-format
+  stream-json --include-partial-messages --verbose --permission-prompts host
+  --permission-prompt-tool stdio --model <m> [--permission-mode <mode>]
+  (--session-id <uuid> | --resume <uuid>)`. Without `--permission-prompt-tool
+  stdio` nothing reaches the host: every prompt is denied
+  (`system/permission_denied`, tool result "…you haven't granted it yet").
+  `--permission-mode` choices are `acceptEdits | auto | bypassPermissions |
+  manual | dontAsk | plan` — there is **no `default`**: the phone's "default"
+  means "no flag". One child serves many turns; it stays up until stdin ends.
+- **User turn (stdin):** `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"…"}]}}`
+- **Per turn (stdout):** `system/init` (`session_id`, `cwd`, `model`,
+  `permissionMode`, `tools`, `mcp_servers[{name,status}]`, `slash_commands`,
+  `skills`), `system/status {status:"requesting"}`, then `stream_event`s
+  (`message_start`, `content_block_start`, `content_block_delta` with
+  `delta.type` = `text_delta {text}` | `thinking_delta` | `input_json_delta`,
+  `content_block_stop`, `message_delta`, `message_stop`), whole `assistant`
+  messages (`content[]` of `text` / `thinking` / `tool_use {id,name,input}`),
+  `user` messages carrying `tool_result {tool_use_id, content, is_error}`,
+  `rate_limit_event {rate_limit_info: {unifiedWindows: {five_hour, seven_day:
+  {utilization, resetsAt}}}}`, and last `result`.
+- **Result:** `{"type":"result","subtype":"success"|"error_during_execution","is_error":bool,"result":"<final text>","session_id":"<uuid>","total_cost_usd":0.0105,"num_turns":2,"duration_ms":9201,"permission_denials":[{tool_name,tool_use_id,tool_input}],"terminal_reason":"completed"}`
+  — `total_cost_usd` is **cumulative for the child**, not per turn.
+- **Permission prompt (stdout):**
+  `{"type":"control_request","request_id":"<uuid>","request":{"subtype":"can_use_tool","tool_name":"Write","display_name":"Write","input":{"file_path":"<path>","content":"allow"},"description":"probe-allow.txt","permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}],"tool_use_id":"toolu_…"}}`
+- **Allow (stdin):** `{"type":"control_response","response":{"subtype":"success","request_id":"<same>","response":{"behavior":"allow","updatedInput":<request.input>}}}`
+  → tool runs, `permission_decision.source = "user_temporary"`.
+- **Deny:** `… "response":{"behavior":"deny","message":"Denied from the phone"}` → the
+  tool result is that message with `is_error: true`; the result lists it in
+  `permission_denials`; the model carries on.
+- **Always:** allow plus `"updatedPermissions": <request.permission_suggestions>`
+  (the CLI's own "don't ask again"). For Write it was `setMode acceptEdits` for
+  the session: the next write ran with `source: "config", reason_type: "mode"`,
+  no prompt.
+- **Interrupt (stdin):** `{"type":"control_request","request_id":"<own id>","request":{"subtype":"interrupt"}}`
+  → `{"type":"control_response","response":{"subtype":"success","request_id":"<own id>","response":{"still_queued":[]}}}`,
+  a `user` message "[Request interrupted by user]", and
+  `result {subtype:"error_during_execution", is_error:true}`. The child stays
+  usable for the next turn.
+- **Resume:** a new child with `--resume <session_id>` remembered the first
+  turn (answered "probe-allow.txt"); `--session-id <uuid>` pins the id up front.
+- Hooks of the host's own settings run (`system/hook_started|hook_response`),
+  and user/project skills, MCP servers and plugins load as in a terminal.
+
+- **Built (H2):** `src/hostchat.js` (one child per session, the flags above,
+  max 2, handlers `chat.*` merged with hostactions in `src/hostmain.js`;
+  repo id -> folder only through the host's own synced project list; model
+  `sonnet|opus`, mode `default|acceptEdits|plan`, `approvalTimeout` 0-1440 min,
+  all checked on the host; "always" = allow + the request's
+  `permission_suggestions` as `updatedPermissions`). `src/hostevents.js`
+  (writer: text batched 300 ms, tool output clipped 4 KB, prune of sessions
+  idle 14 days every 6 h; reader shared with the phone), migration
+  `20261021130000_host_events.sql`. Full HUD switched into host mode:
+  `src/hostchattabs.js` opens a read-only tab per phone session ("Driven from
+  phone", stdin disabled, stays after the end until closed); headless hosts
+  attach nothing. Phone page **Host** (`mobile/src/views/host.js`,
+  `hostmodel.js`, `hostsend.js`).
+
 ### H3 — skills, commands, MCP, models
 
 - The `host` snapshot lists skills, slash commands and MCP servers of that
@@ -218,6 +281,11 @@ Each slice ships on its own and is usable on the phone when it lands.
 - Per-session model (Sonnet / Opus) and permission mode (default /
   acceptEdits / plan).
 - KT-PC-LLM's Unity / Blender MCP servers simply show up when it is the host.
+- **Built:** the heartbeat fills `skills` (the `src/skills.js` scan),
+  `commands` (`~/.claude/commands/*.md`) and `mcp` (server names from
+  `~/.claude.json` via `mcphealth.collectServers`), names only, capped at 300
+  each by `hostSnapshot`; `sessions` = hostchat's live sessions. The Host
+  page's picker inserts `/name`; model and mode are chosen per session.
 
 ### H4 — notifications + hardening
 
@@ -227,6 +295,21 @@ Each slice ships on its own and is usable on the phone when it lands.
   stale heartbeat of the default host: a scheduled check), **usage** at 80 %
   and 95 % of the 5 h and weekly limits. Text in a notification is generic
   ("Approval needed on KT-NO-MMAZUR"), never command text or code.
+- **Built (H4 push):** migration `20261021140000_push.sql`
+  (`push_subscriptions` own rows; `push_sent` = one row per notification key,
+  service role only), edge function `supabase/functions/push` (core.mjs +
+  Deno entry with `npm:web-push`; bodies built from the event alone; 404/410
+  subscriptions dropped; `{"event":"offline-check"}` with `x-cron-secret`
+  fires once per outage of the default host, > 5 min without heartbeat),
+  `src/hostpush.js` (approval / done / failed from hostchat; usage 80 % /
+  95 % per window from every PC's usage put), phone `mobile/src/push.js` +
+  `public/push-sw.js` (button "Enable notifications" on the Host page).
+- **Not applied / deployed (Mati):** run the two migrations; `supabase
+  functions deploy push --no-verify-jwt`; secrets `VAPID_PUBLIC_KEY`,
+  `VAPID_PRIVATE_KEY` (`npx web-push generate-vapid-keys`), `VAPID_SUBJECT`,
+  `OWNER_USER_ID`, `CRON_SECRET`, `PUSH_LANG`; Vercel env
+  `VITE_VAPID_PUBLIC_KEY`; a dashboard cron every 2 min posting
+  `{"event":"offline-check"}` with the `x-cron-secret` header.
 - `ecc:security-reviewer` on the whole command path (it is remote code
   execution by design: the passkey is the gate), `ecc:typescript-reviewer`,
   live checks on all three hosts.
