@@ -488,6 +488,21 @@ function normalizeIntegration(raw) {
     error: strOrNull(o.error, 64),
     detail: strOrNull(o.detail, MAX_DETAIL_CHARS),
     at: Number.isFinite(o.at) ? o.at : null,
+    // Packages a merge-mode integration left out (orchestraIntegrate.js).
+    skipped: (Array.isArray(o.skipped) ? o.skipped : []).map(normalizeSkipped).filter(Boolean).slice(0, MAX_SKIPPED),
+    partial: o.partial === true,
+  };
+}
+
+const MAX_SKIPPED = 50;
+
+function normalizeSkipped(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !SLUG_RE.test(raw.id)) return null;
+  return {
+    id: raw.id,
+    stage: str(raw.stage, 32),
+    detail: str(raw.detail, MAX_DETAIL_CHARS),
+    files: (Array.isArray(raw.files) ? raw.files : []).filter(isRelPath).slice(0, MAX_DEP_MERGE_ITEMS),
   };
 }
 

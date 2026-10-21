@@ -79,15 +79,17 @@ function createFinalizer(deps) {
     const res = await deps.integrateMerge({
       base: plan.baseBranch,
       slug: plan.id.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 24) || 'run',
-      packages: todo.map((p) => ({ id: p.id, branch: p.branch, verify: p.verify })),
+      packages: todo.map((p) => ({ id: p.id, branch: p.branch, verify: p.verify, dependsOn: p.dependsOn || [] })),
     });
-    // Merges only count once they are pushed; a red run pushed nothing.
+    // Merges only count once they are pushed. Skipped packages do not fail
+    // the integration: the rest landed, so it is a partial success.
+    const skipped = Array.isArray(res.skipped) ? res.skipped : [];
     if (res.ok) {
       for (const id of res.merged) deps.patch(id, { merged: true });
-      return { ok: true };
+      return { ok: true, skipped, partial: skipped.length > 0 };
     }
     const detail = [res.failedId, res.detail].filter(Boolean).join(': ');
-    return { ok: false, error: `${res.stage}Failed`, detail: detail || null };
+    return { ok: false, error: `${res.stage}Failed`, detail: detail || null, skipped };
   }
 
   async function integrate(plan) {
@@ -223,11 +225,12 @@ function createFinalizer(deps) {
       res = { ok: false, error: 'integrateThrew', detail: err instanceof Error ? err.message.slice(0, 300) : null };
     }
     if (deps.getPlan() !== plan) return false; // discarded meanwhile
+    const skipped = Array.isArray(res.skipped) ? res.skipped : [];
     setIntegration(
       plan,
       res.ok
-        ? { state: 'done', error: null, detail: null, at: deps.now() }
-        : { state: 'failed', error: res.error || 'failed', detail: res.detail || null, at: deps.now() },
+        ? { state: 'done', error: null, detail: null, at: deps.now(), skipped, partial: skipped.length > 0 }
+        : { state: 'failed', error: res.error || 'failed', detail: res.detail || null, at: deps.now(), skipped, partial: false },
     );
     deps.commit();
     try {

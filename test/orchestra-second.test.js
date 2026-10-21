@@ -258,7 +258,14 @@ test('integrateMerge merges in order, verifies each, pushes the base; a red veri
     { id: 'a', branch: 'luna/a', verify: 'npm test' },
     { id: 'b', branch: 'luna/b', verify: '' },
   ];
-  const green = fakeExec({ 'rev-parse': [{ ok: true, stdout: 'base1\n' }, { ok: true, stdout: 'head1\n' }] });
+  const green = fakeExec({
+    'rev-parse': [
+      { ok: true, stdout: 'base1\n' },
+      { ok: true, stdout: 'pre1\n' },
+      { ok: true, stdout: 'pre2\n' },
+      { ok: true, stdout: 'head1\n' },
+    ],
+  });
   const res = await integ.integrateMerge({ repoPath: '/r', base: 'main', slug: 'p', packages: pkgs }, deps(green, async () => ({ ok: true })));
   assert.deepEqual(res.merged, ['a', 'b']);
   assert.equal(res.ok, true);
@@ -270,12 +277,12 @@ test('integrateMerge merges in order, verifies each, pushes the base; a red veri
 
   const red = fakeExec({ 'rev-parse': { ok: true, stdout: 'base1\n' } });
   const res2 = await integ.integrateMerge(
-    { repoPath: '/r', base: 'main', slug: 'p', packages: pkgs },
+    { repoPath: '/r', base: 'main', slug: 'p', packages: pkgs.map((p) => ({ ...p, verify: 'npm test' })) },
     deps(red, async () => ({ ok: false, output: 'FAIL x' })),
   );
   assert.equal(res2.ok, false);
-  assert.equal(res2.stage, 'verify');
-  assert.equal(res2.failedId, 'a');
+  assert.equal(res2.stage, 'nothingMerged');
+  assert.deepEqual(res2.skipped.map((s) => [s.id, s.stage]), [['a', 'verify'], ['b', 'verify']]);
   assert.ok(!red.calls.some((c) => c.startsWith('git push')), 'never pushes after a red verify');
   assert.equal(res2.root, '/wt/int', 'failed integration worktree kept for inspection');
 });
@@ -510,11 +517,54 @@ test('merge mode marks merged packages only when the integration pushed; no base
   assert.equal(s.orch.view().packages[0].merged, true);
   assert.equal(s.orch.view().integrationMode, 'merge');
 
+  assert.equal(s.orch.view().integration.partial, false);
+  assert.deepEqual(s.orch.view().integration.skipped, []);
+
   const n = await started({ packages: [pkg('a', [1])], extraDeps: { baseBranchOf: async () => null } });
   n.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
   await n.flush(8);
   assert.equal(n.orch.view().integration.state, 'failed');
   assert.equal(n.orch.view().integration.error, 'noBaseBranch');
+});
+
+test('merge mode: a partial integration is done with partial + skipped; dependsOn reaches the integrator', async () => {
+  const merges = [];
+  const skipped = [{ id: 'b', stage: 'conflict', detail: 'src/x.js', files: ['src/x.js'] }];
+  const s = await started(
+    {
+      packages: [pkg('a', [1]), pkg('b', [2])],
+      extraDeps: {
+        confirmMerge: async () => true,
+        integrateMerge: async (args) => (merges.push(args), { ok: true, merged: ['a'], skipped, headSha: 'x' }),
+      },
+    },
+    { integration: 'merge' },
+  );
+  s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  s.orch.onTurnEnd('s2', turn('LUNA_DONE b'));
+  await s.flush(8);
+  const v = s.orch.view();
+  assert.deepEqual(merges[0].packages.map((p) => p.dependsOn), [[], []]);
+  assert.equal(v.integration.state, 'done');
+  assert.equal(v.integration.partial, true);
+  assert.deepEqual(v.integration.skipped, skipped);
+  assert.deepEqual(v.packages.map((p) => p.merged), [true, false]);
+
+  const none = await started(
+    {
+      packages: [pkg('a', [1])],
+      extraDeps: {
+        confirmMerge: async () => true,
+        integrateMerge: async () => ({ ok: false, merged: [], stage: 'nothingMerged', detail: 'a', skipped: [skipped[0]] }),
+      },
+    },
+    { integration: 'merge' },
+  );
+  none.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  await none.flush(8);
+  assert.equal(none.orch.view().integration.state, 'failed');
+  assert.equal(none.orch.view().integration.error, 'nothingMergedFailed');
+  assert.equal(none.orch.view().integration.skipped.length, 1);
 });
 
 test('merge mode needs the native confirmation; the checkout must still be on the base branch', async () => {
