@@ -1461,6 +1461,7 @@ const I18N_DICT = {
     'panel.resize': 'Przeciagnij, aby zmienic szerokosc. Dwuklik przywraca ustawienie presetu.',
     'panel.rail.collapse': 'Zwin kolumne do paska ikon.',
     'panel.rail.expand': 'Rozwin kolumne.',
+    'panel.tray.label': 'Zwiniete panele',
     // C4 - przeciaganie panelu do innej kolumny
     'panel.arrange': 'Przeciagnij, aby przeniesc panel do innej kolumny. Dwuklik przywraca uklad presetu.',
     'pad.saved': 'zapisano',
@@ -3192,6 +3193,7 @@ const I18N_DICT = {
     'panel.resize': 'Drag to resize. Double-click to restore the preset width.',
     'panel.rail.collapse': 'Collapse this column to an icon rail.',
     'panel.rail.expand': 'Expand this column.',
+    'panel.tray.label': 'Folded panels',
     // C4 - drag a panel to another column
     'panel.arrange': 'Drag to move this panel to another column. Double-click to restore the preset layout.',
     'pad.saved': 'saved',

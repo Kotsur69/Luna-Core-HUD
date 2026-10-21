@@ -4630,6 +4630,26 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   outline-offset: 2px;
 }
 
+/* Fold tray: the same glyphs, for widgets folded inside an OPEN region. A
+   folded section leaves the column once its fold has finished (.is-folding
+   keeps it in flow for the animation) and lives on as a glyph in this row at
+   the top of the region; clicking one unfolds it - see buildFoldTray() in
+   panels.js. A railed region already shows every panel, so it hides the tray. */
+.region__tray {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: var(--border-w) solid var(--edge);
+}
+.region[data-railed] > .region__tray {
+  display: none;
+}
+.region[data-folds] .panel__section[data-widget][data-collapsed]:not(.is-folding) {
+  display: none;
+}
+
 /* ---- God Mode v2 plan review (#orchestra, modules/orchestra.js) --------- */
 /* Shell = .palette + .libraries-overlay (width, scroll body). Only the plan
    board's own rows live here. */

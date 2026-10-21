@@ -478,10 +478,94 @@ function ensureChevron(title) {
  */
 function toggleFold(section, id) {
   const folded = !section.hasAttribute('data-collapsed');
+  const region = section.closest('.region[data-region]');
+  // Flag the region BEFORE measuring, so animateFold() reads the folded height
+  // as 0 (the section leaves for the tray) rather than as a bare title row.
+  if (folded && region) region.setAttribute('data-folds', '');
   animateFold(section, folded);
   if (folded) collapsed.add(id);
   else collapsed.delete(id);
   persistCollapsed();
+  if (region) buildFoldTray(region);
+}
+
+// ---- Fold tray --------------------------------------------------------------
+//
+// A folded widget used to stay on screen as a bare title row. In an open region
+// it now leaves the column entirely and is represented by the same 28px icon
+// glyph the region rail uses (widgeticons.js), in a tray at the top of that
+// region. Clicking a tray glyph unfolds the panel through toggleFold(), so the
+// tray and the title toggle share one path and one persisted state.
+
+/**
+ * Which folded widgets a region's tray shows, in column order.
+ * Pure, so the selection rule is testable without a DOM.
+ *
+ * @param {{id: string, label: string, folded: boolean}[]} entries
+ * @returns {{id: string, label: string}[]}
+ */
+export function foldTrayEntries(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((e) => e && e.folded && typeof e.id === 'string' && e.id && typeof e.label === 'string' && e.label)
+    .map(({ id, label }) => ({ id, label }));
+}
+
+/** Builds one icon glyph: the widget's icon, its localized title as the name. */
+function makeGlyph(id, label, onClick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'region__glyph';
+  btn.appendChild(widgetIconSvg(id));
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-expanded', 'false');
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+/** Rebuilds the tray of folded-widget glyphs at the top of one open region. */
+function buildFoldTray(region) {
+  region.querySelector(':scope > .region__tray')?.remove();
+  const scroll = region.querySelector(':scope > .panel__scroll');
+  if (!scroll) return;
+
+  const sections = [...scroll.querySelectorAll('.panel__section[data-widget]')];
+  const entries = foldTrayEntries(
+    sections.map((s) => ({
+      id: s.dataset.widget,
+      label: sectionLabel(s),
+      folded: s.hasAttribute('data-collapsed'),
+    })),
+  );
+  region.toggleAttribute('data-folds', entries.length > 0);
+  if (entries.length === 0) return;
+
+  const tray = document.createElement('div');
+  tray.className = 'region__tray';
+  tray.setAttribute('role', 'group');
+  if (window.i18n) tray.setAttribute('aria-label', window.i18n.t('panel.tray.label'));
+  for (const { id, label } of entries) {
+    const section = sections.find((s) => s.dataset.widget === id);
+    tray.appendChild(
+      makeGlyph(id, label, () => {
+        if (!section.hasAttribute('data-collapsed')) return;
+        toggleFold(section, id);
+        section.scrollIntoView({ block: 'nearest' });
+        // The glyph that had focus is gone with the rebuild; hand focus to the
+        // panel's own fold handle so a keyboard user can fold it straight back.
+        section.querySelector(':scope > .panel__title')?.focus({ preventScroll: true });
+      }),
+    );
+  }
+  region.insertBefore(tray, scroll);
+}
+
+/** Rebuilds every region's fold tray. */
+function buildFoldTrays() {
+  const el = app();
+  if (!el) return;
+  for (const region of el.querySelectorAll('.region[data-region]')) buildFoldTray(region);
 }
 
 /**
@@ -527,6 +611,7 @@ function decorateAll() {
   const el = app();
   if (!el) return;
   for (const section of el.querySelectorAll('.panel__section[data-widget]')) decorate(section);
+  buildFoldTrays();
 }
 
 // ---- Region rail: the DOM half (v0.10 3.4) ----------------------------------
@@ -683,15 +768,9 @@ function buildRailStrip(region) {
   for (const section of region.querySelectorAll('.panel__section[data-widget]')) {
     const label = sectionLabel(section);
     if (!label) continue;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'region__glyph';
     // A per-widget icon (widgeticons.js); the localized title rides along as
     // the tooltip and accessible name, so it follows a language switch.
-    btn.appendChild(widgetIconSvg(section.dataset.widget));
-    btn.title = label;
-    btn.setAttribute('aria-label', label);
-    btn.addEventListener('click', () => {
+    const btn = makeGlyph(section.dataset.widget, label, () => {
       // The scroll has to be a CALLBACK, not the next statement: setRailed()
       // hands the DOM change to a view transition, so at this point the region
       // is still railed and its scroller is still display:none with no box to
