@@ -104,6 +104,8 @@ create index on sync_units (user_id, scope, rev);
 
 create table snapshots (
   user_id    uuid not null default auth.uid() references auth.users on delete cascade,
+  -- Widened by later migrations; live since 2026-10-21:
+  -- ('ledger', 'news', 'yazio', 'usage', 'repos', 'godmode', 'host')
   kind       text not null check (kind in ('ledger', 'news', 'yazio')),
   machine    text not null check (length(machine) <= 64),
   data       jsonb not null check (pg_column_size(data) < 1048576),

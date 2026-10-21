@@ -2,7 +2,10 @@
 
 Status: **S0-S3 built, tested and pushed** (2026-10-20, commits
 326a3e1..7323279). Mati's live click-through in the running app is the one
-check still open.
+check still open. Related, built by the God Mode run and merged 2026-10-21:
+free-model fallback chains + the "Free providers" God Mode mode
+([`FREE_PROVIDERS.md`](FREE_PROVIDERS.md)) and usage rows for Codex / Gemini
+/ GLM / Kimi - none live-checked yet.
 
 ## Resume here
 

@@ -5,12 +5,21 @@ got here (widget contract, layout engine, packaging, the lessons each phase
 cost) lives in [`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md).
 Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 
-## Where things stand (2026-10-19)
+## Where things stand (2026-10-21)
 
+- **First real God Mode v2 run (2026-10-20 night):** 47 to-do cards built as
+  12 branches, merged by hand into `main` (`c9cfa41`, 2770 tests green, not
+  released yet). The run blocked on a dependency merge after ~15 min and its
+  final integration failed. Full report + what is still open:
+  [`docs/GODMODE_RUN_2026-10-20.md`](docs/GODMODE_RUN_2026-10-20.md).
+  **Next before another night run:** the "God Mode never blocks" cards in
+  the to-do list (auto-resolve conflicts, skip + report instead of stopping,
+  end-of-run self-check).
 - **START HERE for cloud sync:** [`docs/CLOUD_SYNC_PLAN.md`](docs/CLOUD_SYNC_PLAN.md)
   "Next session: start here". Phases 1-3 are done and released; the
-  Syncthing folder is gone. Next: check v0.16.2 on both PCs, then phase 4
-  (iPhone PWA).
+  Syncthing folder is gone. Phase 4 (iPhone PWA at
+  `https://luna-core-hud.vercel.app`) is built and live-checked by Mati
+  (2026-10-20). Phone host control: [`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md).
 - **START HERE for Mission Control:**
   [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md) - decisions,
   build order W1-W8 and a copy-paste starting prompt.
@@ -35,11 +44,12 @@ Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 
 ## Next
 
-1. **Live test of God Mode v2** on a small plan (2-3 to-dos, PR mode, `gh`
-   logged in). Watch: workers printing `LUNA_DONE`, the first
-   bypassPermissions / folder-trust prompt in a new worktree, PRs + worktree
-   cleanup + `runs/<plan>.md` at the end.
-2. **Mission Control W1-W8** - see [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md).
+1. **God Mode never blocks** - the first live run (done 2026-10-20) worked
+   but stopped on easy merge conflicts; fix that before the next night run
+   (cards in the to-do list, background in
+   [`docs/GODMODE_RUN_2026-10-20.md`](docs/GODMODE_RUN_2026-10-20.md)).
+2. **Release** the merged run work (`main` is ahead of `v0.16.2`).
+3. **Mission Control W1-W8** - see [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md).
 
 ## Owed live checks (unit tests cannot clear these)
 
@@ -50,9 +60,7 @@ Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
   on Electron 33; redo it on the current Electron 43 build.
 - **Luna host + phone control** (built + reviewed, not live; details in
   [`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md) "Resume here"):
-  - **Migrations** to apply in Supabase, in order: `repos_godmode_snapshots`,
-    `host_snapshot`, `host_commands`, `host_pairing`, `host_events`, `push`
-    (`supabase/migrations/2026102*`).
+  - ~~**Migrations**~~ ✅ applied 2026-10-21 (Supabase now 9 / 9).
   - **Edge function deploy:** `supabase functions deploy push --no-verify-jwt`,
     secrets `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` /
     `OWNER_USER_ID` / `CRON_SECRET` / `PUSH_LANG`, the 2-min
@@ -68,6 +76,10 @@ Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
     never a bare `claude` (security review S-M3).
 
 ## Known issues
+
+- **Usage panel lists every provider at once** - Mati wants only the active
+  tab's profile provider (Claude limits on a Claude tab, Codex on a Codex
+  tab). Card in the to-do list.
 
 - **LM Studio through claude-code-router returns HTTP 400** (AI providers
   phase 5c) - root-caused but not fixed; direct LM Studio tabs work.

@@ -59,6 +59,23 @@ built (dropped 2026-10-06): budget cap (§3); not built: `config/orchestra.json`
 ui prefs instead), per-worktree `npm ci` for workers (the worker installs).
 Successor of `GODMODE_PLAN.md` (v1 = one tab, one list, sequential).
 
+Added 2026-10-20/21 (by the first live run itself): the planner waits for
+the Claude 5 h / weekly reset instead of failing (`src/orchestraPlanWait.js`),
+a "Free providers" start option (`src/orchestraFree.js`, `luna-free/*`
+branches), the run email (`src/godmodemail.js`, Gmail) and the phone
+`godmode` snapshot (`src/godmodesnapshot.js`).
+
+**First live run 2026-10-20 night** (report:
+[`docs/GODMODE_RUN_2026-10-20.md`](../docs/GODMODE_RUN_2026-10-20.md)): 47
+cards / 12 pushed branches, good code, but the run blocked after ~15 min on
+a dependency merge at launch (`depMergeFailed`; Retry repeats the same
+plain `git merge`), and the merge-mode integration stopped at its first
+failure, so nothing reached `main` until a manual merge. No self-check of the
+merged result and no list of live-only steps (6 migrations). Next: the
+"God Mode never blocks" cards in the to-do list - escalating conflict
+strategies at launch and integration, skip + report instead of stopping,
+end-of-run self-check + fix-up worker, morning report.
+
 ## Goal
 
 Mati arms God Mode v2 on a project's to-do list. An **orchestrator** turns the

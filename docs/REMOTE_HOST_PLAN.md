@@ -3,7 +3,9 @@
 Status: **confirmed by Mati 2026-10-20. U1, U2, H1, H2, H3 and H4 built
 (2026-10-20 - 2026-10-21); security + JS review of the whole command path
 done 2026-10-21, every CRITICAL/HIGH fixed with a test (see "Security
-review"). Nothing past U1 is live-checked yet.** Builds on `CLOUD_SYNC_PLAN.md`
+review"). Merged into `main` 2026-10-21 (`c9cfa41`) and all 6 migrations
+applied to Supabase the same day; the `push` edge function is not deployed
+yet. Nothing past U1 is live-checked yet.** Builds on `CLOUD_SYNC_PLAN.md`
 (Supabase project `phkigyuhvbanadwmxqqs`, phone at
 `https://luna-core-hud.vercel.app`). Same rules apply: pulled rows are
 untrusted, realtime only triggers a read, every slice is done only when the
@@ -26,11 +28,12 @@ fixes below.
    `select kind, machine, updated_at from snapshots where kind = 'usage'` - no
    row means the PC side (`[cloudsnapshots] put usage failed` in the HUD
    log), a row means the phone side.
-2. **Apply the migrations** not yet in the project, in order:
-   `20261020130000_repos_godmode_snapshots`, `20261020160000_host_snapshot`,
-   `20261020170000_host_commands`, `20261021120000_host_pairing`,
-   `20261021130000_host_events`, `20261021140000_push`.
-3. **Deploy the edge function:** `supabase functions deploy push
+2. ~~**Apply the migrations**~~ ✅ 2026-10-21: all six applied in order
+   (`repos_godmode_snapshots` → `push`); a smoke launch then put the `repos`
+   snapshot of KT-PC-LLM without errors.
+3. **Deploy the edge function** (step-by-step as a `[Mati]` card in the
+   LunaCore to-do list; `OWNER_USER_ID` already exists as a project secret
+   from the `google` function): `supabase functions deploy push
    --no-verify-jwt`, its secrets and the 2-min cron (H4 below), Vercel env
    `VITE_VAPID_PUBLIC_KEY`, then redeploy the phone.
 4. **Real phone pairing** on each host (KT-PC-LLM, KT-NO-MMAZUR, MacBook):
@@ -326,7 +329,7 @@ long strings redacted.
   `src/hostpush.js` (approval / done / failed from hostchat; usage 80 % /
   95 % per window from every PC's usage put), phone `mobile/src/push.js` +
   `public/push-sw.js` (button "Enable notifications" on the Host page).
-- **Not applied / deployed (Mati):** run the two migrations; `supabase
+- **Not deployed (Mati):** migrations applied 2026-10-21; `supabase
   functions deploy push --no-verify-jwt`; secrets `VAPID_PUBLIC_KEY`,
   `VAPID_PRIVATE_KEY` (`npx web-push generate-vapid-keys`), `VAPID_SUBJECT`,
   `OWNER_USER_ID`, `CRON_SECRET`, `PUSH_LANG`; Vercel env

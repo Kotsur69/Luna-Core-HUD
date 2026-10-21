@@ -24,7 +24,22 @@ under *Open questions*.
 > *Gotchas*), and commit + push the explicit file list (never `git add -A`,
 > leave other sessions' hunks out). Talk to me in the language I write in.
 
-## ⏸ Resume here (last session 2026-10-19)
+## ⏸ Resume here (last session 2026-10-21)
+
+- **God Mode run 2026-10-20 built most of what was left here**, merged into
+  `main` 2026-10-21 (`c9cfa41`, not released yet): W3+ phases 1, 3 and 5
+  (check-in, habits, productivity score, weekly review + correlations +
+  Sunday email), W4 weekly goals, W6 weekly + daily brief, W1 pin /
+  re-class, W8 pip hash locks + HN Algolia + usage-429 last-good, bill due
+  dates into Google Calendar, Gmail sender + nightly summary. Report:
+  [`docs/GODMODE_RUN_2026-10-20.md`](docs/GODMODE_RUN_2026-10-20.md).
+- **None of it is live-checked by Mati yet.** First: pull `main`, restart,
+  connect Gmail (Settings → Report emails), then open the Life dashboard
+  (check-in prompt, Habits, Week tab) and Mission Control (brief strip,
+  star pins).
+- Everything below this block is the 2026-10-19 state, kept for history.
+
+### Earlier resume notes (2026-10-19)
 
 - **Cloud sync:** phases 1-3 released (latest `v0.16.2`, 2026-10-19). Supabase
   is the only transport; the Syncthing folder and the ledger's "Share with
@@ -232,7 +247,7 @@ W1), a switch across midnight is not counted, mapped network drives in
   **context switches per day** (project changes inside 30 min).
 - **Reuse:** W1's scan pass (one reader, two aggregates).
 
-### W3+ — Life Dashboard (live) + budget + weekly review ⏳ (scope widened 2026-10-14)
+### W3+ — Life Dashboard (live) + budget + weekly review ✅ built 2026-10-21, live check owed (scope widened 2026-10-14)
 
 Mati widened W3 into a live life dashboard; the weekly review below becomes
 its Sunday snapshot. **Decisions (2026-10-14, answered — do not re-ask):**
@@ -268,7 +283,7 @@ sent to a model except the weekly category totals).
 · **3 productivity % + W4 goals + "now" strip ✅** · **4 YAZIO ✅** (Body tab) ·
 **5 weekly review + correlations + Sunday email ✅**.
 
-**Phase 5 ✅ (2026-10-21, branch `luna/life-weekly-759j0`).** `weeklycollect.js`
+**Phase 5 ✅ (2026-10-21, God Mode run, merged into `main` in `c9cfa41`).** `weeklycollect.js`
 (one Mon-Sun week as plain JSON: W1 cost + W2 hours split work/fun/other via
 the new `missionledgerservice.range()`, own commits per repo with feat
 subjects / fix count / +- lines, open to-dos, GitHub flags + open PRs/issues,
@@ -281,7 +296,7 @@ data, raw-numbers fallback, `mission-weekly.local.json` last 12, Sunday 20:00
 in mail prefs), `lifecorrelate.js` + `lifeseries.js` (daily series kept from
 the score's inputs, ≥ 14 days and ≥ 5 per group). Week tab: `lifeweek.js`.
 
-**Phases 1 + 3 — daily side ✅ (2026-10-20, branch `luna/life-daily-xpakq`).**
+**Phases 1 + 3 — daily side ✅ (2026-10-20, God Mode run, merged into `main` in `c9cfa41`).**
 Check-in (`lifecheckin.js` → `life-checkin.local.json`, last 400 days; prompt
 on the first open of a local day, skip saved), Habits tab (`lifehabits.js`,
 4 suggestions, daily or N/week, tick today + yesterday, Undo toast; streaks in
@@ -366,7 +381,7 @@ functions/commits went to X, the work project stands on Y, with its to-dos."*
   possible). Plain text + a short HTML version.
 - **Model:** picker (default Haiku; Sonnet recommended for this job).
 
-### W4 — Goals per week ⏳
+### W4 — Goals per week ✅ (2026-10-20, built as part of W3+ phase 3: `src/lifegoals.js`)
 
 - Monday (or first open of the week): "3 goals for this week" input in the
   panel, stored with the ISO week.
@@ -623,8 +638,9 @@ itself was smoke-tested with a fake event in a second instance.
 - **Google Cloud setup (Mati):** create the Desktop OAuth client, save it as
   `config/google-oauth.local.json`, **publish** the consent screen (testing
   mode expires refresh tokens after 7 days), click Connect.
-- **God Mode v2 live run** — Mati does it himself (2026-10-20); not a task
-  for a session.
+- ~~**God Mode v2 live run**~~ ✅ done by Mati 2026-10-20 night; it built
+  most of this file's open work but blocked on merges - see
+  [`docs/GODMODE_RUN_2026-10-20.md`](docs/GODMODE_RUN_2026-10-20.md).
 
 ---
 
