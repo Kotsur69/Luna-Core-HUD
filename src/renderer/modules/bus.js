@@ -96,6 +96,22 @@ export function emitSessionRestarted(profile) {
   sessionRestarted.emit(profile);
 }
 
+// ---- Active tab's profile ------------------------------------------------------
+//
+// Replayed: the usage widget filters its rows by the profile of the tab you are
+// looking at, and it may mount long after the first tab was shown.
+
+const activeProfile = channel({ replay: true });
+
+/** Profile id of the active tab (null with no tab): cb(profileId) -> disposer */
+export function onActiveProfile(cb) {
+  return activeProfile.on(cb);
+}
+
+export function emitActiveProfile(profileId) {
+  activeProfile.emit(profileId);
+}
+
 // ---- Language switch --------------------------------------------------------
 
 const langChange = channel();
@@ -258,6 +274,7 @@ export function busStats() {
     activeContext: activeContext.size,
     backgroundContext: backgroundContext.size,
     sessionRestarted: sessionRestarted.size,
+    activeProfile: activeProfile.size,
     langChange: langChange.size,
     portsUpdate: portsUpdate.size,
     usageUpdate: usageUpdate.size,

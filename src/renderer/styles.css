@@ -1485,13 +1485,11 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .usage-row__reset { font-size: 10px; opacity: 0.6; }
 /* God Mode planning parked on a spent Claude limit: message + cancel. */
 .orchestra__wait { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
-/* One block per other configured provider, below Claude's rows. */
+/* A non-Claude provider's limits - shown alone, for the active tab's profile. */
 .usage-provider {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding-top: var(--space-4);
-  border-top: var(--border-w) solid var(--edge);
 }
 .usage-provider__title { font-size: var(--fs-sm); font-weight: 700; }
 
