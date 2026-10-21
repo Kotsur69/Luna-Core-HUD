@@ -311,6 +311,38 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
     return (u && (await idb.get(googleKey(u.id, action)))) || null;
   }
 
+  // ---- host pairing (REMOTE_HOST_PLAN H1, views/pair.js) ----
+
+  const PAIR_COLUMNS = 'id,host,host_nonce,phone_nonce,status';
+
+  /** Offers a passkey to a host: {host, label, credential_id, public_key, commitment} -> row id. */
+  async function pairOffer(req) {
+    if (!(await user())) throw new Error('logged-out');
+    const { data, error } = await client.from('host_pairings').insert(req).select('id').single();
+    if (error || !data || typeof data.id !== 'string') throw new Error('pair-failed', { cause: error });
+    return data.id;
+  }
+
+  /** The request as the host left it (untrusted: views/pair.js checks it). */
+  async function pairRead(id) {
+    const { data, error } = await client.from('host_pairings').select(PAIR_COLUMNS).eq('id', id).maybeSingle();
+    if (error) throw new Error('pair-failed', { cause: error });
+    return data || null;
+  }
+
+  /** Reveals the phone's nonce once the host challenged; only ever once. */
+  async function pairReveal(id, phoneNonce) {
+    const { data, error } = await client
+      .from('host_pairings')
+      .update({ phone_nonce: phoneNonce })
+      .eq('id', id)
+      .eq('status', 'pending')
+      .is('phone_nonce', null)
+      .not('host_nonce', 'is', null)
+      .select('id');
+    if (error || !Array.isArray(data) || data.length !== 1) throw new Error('pair-failed', { cause: error });
+  }
+
   function login() {
     return client.auth.signInWithOAuth({
       provider: 'github',
@@ -341,5 +373,5 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
 
   const onAuth = (fn) => client.auth.onAuthStateChange((event, session) => fn(session ? session.user : null));
 
-  return { user, state, pull, write, pending, flushAll, onChange, snapshots, cachedSnapshots, google, cachedGoogle, login, logout, onAuth };
+  return { user, state, pull, write, pending, flushAll, onChange, snapshots, cachedSnapshots, google, cachedGoogle, pairOffer, pairRead, pairReveal, login, logout, onAuth };
 }

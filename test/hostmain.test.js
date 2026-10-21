@@ -2,8 +2,7 @@
 // LunaCore - host mode: the pure parts of src/hostmain.js
 // ----------------------------------------------------------------------------
 // Arg parsing, the startup decision under the single-instance lock, the lock
-// holder's answer to a second launch, and the verifier loading (no hostauth
-// -> null, so every command is refused).
+// holder's answer to a second launch, and the row -> hostauth mapping.
 // ============================================================================
 
 'use strict';
@@ -11,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseHostArgs, decideBoot, decideSecondInstance, trayLabel, skillNames, loadVerifier } = require('../src/hostmain.js');
+const { parseHostArgs, decideBoot, decideSecondInstance, trayLabel, skillNames, commandVerifier } = require('../src/hostmain.js');
 
 const EXE = ['C:\\LunaCore\\LunaCore.exe'];
 
@@ -52,16 +51,13 @@ test('skillNames flattens a skill scan', () => {
   assert.deepEqual(skillNames(null), []);
 });
 
-test('loadVerifier: absent module -> null; either export shape works', async () => {
-  const missing = () => {
-    const err = new Error('nope');
-    err.code = 'MODULE_NOT_FOUND';
-    throw err;
-  };
-  assert.equal(loadVerifier(missing), null);
-  assert.equal(loadVerifier(() => ({})), null);
-  const fn = async () => ({ ok: true });
-  assert.equal(loadVerifier(() => ({ verifyCommand: fn })), fn);
-  const wrapped = loadVerifier(() => ({ createHostAuth: () => ({ verify: async (row) => ({ ok: row.id === 'x' }) }) }));
-  assert.deepEqual(await wrapped({ id: 'x' }), { ok: true });
+test('commandVerifier: hands hostauth exactly the row\'s signed fields and grant', async () => {
+  const seen = [];
+  const verify = commandVerifier({ verifyCommand: (input) => (seen.push(input), { ok: true }) });
+  const grant = { grant: { host: 'MAC-1' }, assertion: {} };
+  const row = { id: 'r1', host: 'MAC-1', kind: 'git.fetchAll', payload: { a: 1 }, nonce: 'n'.repeat(22), expiresAt: 1234, sig: 'sig', grant };
+  assert.deepEqual(await verify(row), { ok: true });
+  assert.deepEqual(seen, [
+    { grant, command: { host: 'MAC-1', kind: 'git.fetchAll', payload: { a: 1 }, nonce: 'n'.repeat(22), expires_at: 1234 }, sig: 'sig' },
+  ]);
 });

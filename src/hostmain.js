@@ -14,6 +14,11 @@
 //   startHost()   the runtime: tray, keep-awake, heartbeat (`host` snapshot
 //                 every 30 s), the command loop, clones of missing repos
 //
+// First run (src/hostsetup.js): no cloud session -> the HUD's GitHub browser
+// login; then, with no phone in host-keys.local.json, the pairing window
+// (src/hostpairing.js). Until both are done the tray says "Needs setup" and
+// the host neither heartbeats, clones nor claims commands.
+//
 // A second `--host` launch while the HUD runs switches the running app into
 // host mode (its windows hide, Stop brings them back). A second plain launch
 // behaves as before.
@@ -68,21 +73,17 @@ function trayLabel({ machine, isDefault }) {
 const skillNames = (scan) =>
   (scan && Array.isArray(scan.categories) ? scan.categories : []).flatMap((c) => (Array.isArray(c.skills) ? c.skills.map((s) => s && s.name) : []));
 
-/** The hostauth.js verifier, whatever shape it exports; null when absent (every row refused). */
-function loadVerifier(load = () => require('./hostauth')) {
-  let mod;
-  try {
-    mod = load();
-  } catch (err) {
-    if (err && err.code !== 'MODULE_NOT_FOUND') console.error('[hostmain] hostauth failed to load:', err.message);
-    return null;
-  }
-  if (mod && typeof mod.verifyCommand === 'function') return mod.verifyCommand;
-  if (mod && typeof mod.createHostAuth === 'function') {
-    const auth = mod.createHostAuth();
-    if (auth && typeof auth.verify === 'function') return (row) => auth.verify(row);
-  }
-  return null;
+/**
+ * A hostcommands.js row (cleanRow) -> hostauth.js verifyCommand(): the signed
+ * fields are exactly the row's, so what runs is what was signed.
+ */
+function commandVerifier(auth) {
+  return async (row) =>
+    auth.verifyCommand({
+      grant: row.grant,
+      command: { host: row.host, kind: row.kind, payload: row.payload, nonce: row.nonce, expires_at: row.expiresAt },
+      sig: row.sig,
+    });
 }
 
 // ---- runtime ---------------------------------------------------------------
@@ -158,6 +159,47 @@ function syncedProjects() {
   });
 }
 
+/** The claude CLI's env for host jobs: the session env, ~/.local/bin on PATH (native installer). */
+function jobEnv() {
+  const { buildSessionEnv } = require('./sessionenv');
+  const env = buildSessionEnv(process.env, {});
+  const binDir = path.join(os.homedir(), '.local', 'bin');
+  const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const parts = (env[key] || '').split(sep);
+  return parts.some((p) => p.toLowerCase() === binDir.toLowerCase()) ? env : { ...env, [key]: binDir + sep + (env[key] || '') };
+}
+
+/** The real dependencies of src/hostactions.js in this process. */
+function actionDeps({ cloud, repos, puts, configSync, after }) {
+  const { app } = require('electron');
+  const { createNews } = require('./missionnews');
+  const { loadNews } = require('./missionnewsstore');
+  const { runJob } = require('./missionrunner');
+  const { readUiPrefs } = require('./uiprefs');
+  const { loadRepoList, fetchDir } = require('./gitstation');
+  const { addProject } = require('./projects');
+  return {
+    news: createNews({ linksFile: () => path.join(app.getPath('userData'), 'news-links.json') }),
+    loadNews,
+    runJob,
+    model: () => readUiPrefs().missionModel,
+    env: jobEnv,
+    lang: () => readUiPrefs().lang,
+    snapshots: () => cloud.snapshots,
+    repoDirs: () => loadRepoList().repos,
+    fetchDir,
+    refreshRepos: () => puts.repos.refresh(),
+    cloneRepo: (url) => repos.clone(url),
+    folderExists: (url) => Boolean(repos.dirOf({ remote: url })),
+    addProject,
+    onProjectsChanged: () => {
+      if (configSync) configSync.soon();
+      after();
+    },
+  };
+}
+
 /**
  * Starts host mode in this process.
  * @param {{electron: object, machine: string, makeDefault?: boolean,
@@ -166,13 +208,13 @@ function syncedProjects() {
  *   onStop = what Stop does instead of quitting (switch mode: show the HUD)
  */
 function startHost({ electron, machine, makeDefault = false, cloud: given = null, onStop = null }) {
-  const { app, Tray, Menu, shell, powerSaveBlocker, nativeImage } = electron;
+  const { app, Tray, Menu, shell, dialog, powerSaveBlocker, nativeImage } = electron;
   const { execFile } = require('child_process');
   const paths = require('./paths');
   const { startCloud } = require('./cloudsync');
   const { startConfigSync } = require('./configsync');
   const { createSnapshotPuts } = require('./snapshotputs');
-  const { readAllRepos, fetchDir, loadRepoList } = require('./gitstation');
+  const { readAllRepos } = require('./gitstation');
   const { loadSkills } = require('./skills');
   const { UsageWatcher } = require('./usage');
   const { usageSnapshot } = require('./usagesnapshot');
@@ -180,6 +222,10 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   const { createHostCommands } = require('./hostcommands');
   const { createHostRepos, readOwners } = require('./hostrepos');
   const { writeDefault, readDefault } = require('./hostdefault');
+  const { createHostAuth } = require('./hostauth');
+  const { createHostPairing, hasPairedPhone, forgetAll } = require('./hostpairing');
+  const { decideSetup, hostText, langOf, setupLine, confirmPairing } = require('./hostsetup');
+  const { createHostActions } = require('./hostactions');
 
   paths.ensureUserDir();
   const logFile = path.join(app.getPath('logs'), 'host.log');
@@ -187,9 +233,11 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   console.log(`[hostmain] host mode on ${machine}${given ? ' (switched from the HUD)' : ''}`);
 
   const defaultFile = paths.local('host-default.local.json');
+  const keysPath = paths.local('host-keys.local.json');
+  const lang = langOf(require('./uiprefs').readUiPrefs().lang || app.getLocale());
+  const tx = (key, vars) => hostText(lang, key, vars);
   const cloud = given || startCloud({ machine });
   const configSync = given ? null : startConfigSync({ cloud, onChanged: (names) => names.includes('projects') && syncRepos() });
-  if (makeDefault) setDefault();
 
   const blocker = powerSaveBlocker.start('prevent-app-suspension');
   const timers = [];
@@ -235,11 +283,13 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   }
 
   async function syncRepos() {
+    if (setupState() !== 'ready') return;
     await repos.sync(listProjects());
     heartbeat();
   }
 
   function heartbeat() {
+    if (setupState() !== 'ready') return refreshTray();
     const statuses = repos.statuses();
     const { createRepoKeys } = require('./missionrepokey');
     const keys = createRepoKeys();
@@ -265,32 +315,78 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     refreshTray();
   }
 
-  // ---- signed commands ----
-  const handlers = {
-    'git.fetchAll': async () => {
-      const { repos: list } = loadRepoList();
-      const results = await Promise.all(list.map((dir) => fetchDir(dir).then((r) => r.ok)));
-      await puts.repos.refresh();
-      return { fetched: results.filter(Boolean).length, failed: results.filter((ok) => !ok).length };
-    },
-    'repo.clone': async (payload) => {
-      const res = await repos.clone(payload.url);
-      if (res.status === 'cloned' && res.dir) {
-        const { addProject } = require('./projects');
-        addProject({ path: res.dir });
-        if (configSync) configSync.soon();
-      }
-      heartbeat();
-      return { status: res.status };
-    },
-  };
-  const commands = cloud.client ? createHostCommands({ client: cloud.client, host: machine, verify: loadVerifier(), handlers, log: console.error }) : null;
+  // ---- signed commands (src/hostactions.js) ----
+  const auth = createHostAuth({ host: machine, keysPath, noncesPath: paths.local('host-nonces.local.json'), log: console.error });
+  const handlers = createHostActions(actionDeps({ cloud, repos, puts, configSync, after: heartbeat }));
+  const commands = cloud.client ? createHostCommands({ client: cloud.client, host: machine, verify: commandVerifier(auth), handlers, log: console.error }) : null;
   let commandsOn = false;
-  function followLogin() {
-    const loggedIn = cloud.status().loggedIn;
-    if (commands && loggedIn && !commandsOn) commands.start();
-    if (commands && !loggedIn && commandsOn) commands.stop();
-    commandsOn = Boolean(commands && loggedIn);
+
+  // ---- setup: login, then pairing ----
+  function setupState() {
+    const s = cloud.status();
+    return decideSetup({ configured: s.configured !== false && Boolean(cloud.client), loggedIn: s.loggedIn, paired: hasPairedPhone(keysPath) });
+  }
+  const pairing = cloud.client
+    ? createHostPairing({
+        client: cloud.client,
+        host: machine,
+        keysPath,
+        confirm: ({ code, label }) => confirmPairing({ dialog, lang, machine, code, label }),
+        onPaired: () => {
+          followSetup();
+          syncRepos();
+        },
+        log: console.error,
+      })
+    : null;
+  let pairingOffered = false;
+
+  function openPairing() {
+    if (!pairing || !cloud.status().loggedIn) return;
+    pairing.open();
+    refreshTray();
+    dialog.showMessageBox({ type: 'info', title: tx('pairHintTitle'), message: tx('pairHint', { machine }), noLink: true }).catch(() => {});
+  }
+
+  async function forgetPhones() {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: tx('forgetTitle'),
+      message: tx('forgetMessage'),
+      buttons: [tx('forgetConfirm'), tx('cancel')],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response !== 0) return;
+    try {
+      forgetAll(keysPath);
+    } catch (err) {
+      console.error('[hostmain] forgetting the phones failed:', err.message);
+    }
+    auth.forgetGrants();
+    console.log('[hostmain] every paired phone forgotten');
+    followSetup();
+  }
+
+  /** Commands run only once set up; the first time pairing is due it opens by itself. */
+  function followSetup() {
+    const state = setupState();
+    const ready = Boolean(commands) && state === 'ready';
+    if (ready && !commandsOn) commands.start();
+    if (!ready && commandsOn) commands.stop();
+    commandsOn = ready;
+    if (state === 'pair' && !pairingOffered) {
+      pairingOffered = true;
+      openPairing();
+    }
+    if (state !== 'pair' && state !== 'ready' && pairing) pairing.close();
+    refreshTray();
+    return state;
+  }
+
+  function login() {
+    cloud.login().then(followSetup, (err) => console.error('[hostmain] login failed:', err.message));
   }
 
   // ---- usage (the HUD already puts it in switch mode) ----
@@ -313,37 +409,43 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   let tray = null;
   function refreshTray() {
     if (!tray) return;
+    const state = setupState();
+    const ready = state === 'ready';
     const label = trayLabel({ machine, isDefault: readDefault(defaultFile) === machine });
-    tray.setToolTip(label);
+    tray.setToolTip(ready ? label : `${label} · ${tx('needsSetup')}`);
+    const pairOpen = Boolean(pairing && pairing.isOpen());
     tray.setContextMenu(
       Menu.buildFromTemplate([
         { label, enabled: false },
-        { label: cloud.status().loggedIn ? 'Cloud: logged in' : 'Cloud: logged out', enabled: false },
+        { label: ready ? setupLine(lang, state) : `${tx('needsSetup')}: ${setupLine(lang, state)}`, enabled: false },
         { type: 'separator' },
-        { label: 'Open log', click: () => shell.openPath(logFile) },
-        { label: 'Stop', click: () => stop() },
+        ...(state === 'login' ? [{ label: tx('login'), click: () => login() }] : []),
+        ...(pairing && cloud.status().loggedIn ? [{ label: pairOpen ? tx('pairOpen') : tx('pair'), enabled: !pairOpen, click: () => openPairing() }] : []),
+        { label: tx('forget'), enabled: hasPairedPhone(keysPath), click: () => forgetPhones().catch((err) => console.error('[hostmain] forget failed:', err.message)) },
+        { type: 'separator' },
+        { label: tx('openLog'), click: () => shell.openPath(logFile) },
+        { label: tx('stop'), click: () => stop() },
       ]),
     );
   }
   const icon = nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'icon-yellow.png'));
   tray = new Tray(icon.isEmpty() ? icon : icon.resize({ width: 16, height: 16 }));
+  // Only now: setDefault() refreshes the tray, which must exist by then.
+  if (makeDefault) setDefault();
   refreshTray();
 
   // First run: the GitHub login in the browser, same flow as the HUD.
-  if (!given) {
-    timeouts.push(setTimeout(() => {
-      const s = cloud.status();
-      if (s.configured && !s.loggedIn) cloud.login().then(followLogin, (err) => console.error('[hostmain] login failed:', err.message));
-    }, LOGIN_CHECK_MS));
-  }
+  timeouts.push(setTimeout(() => {
+    if (setupState() === 'login') login();
+  }, LOGIN_CHECK_MS));
 
   every(() => {
-    followLogin();
+    followSetup();
     heartbeat();
   }, HEARTBEAT_MS);
   every(syncRepos, REPOS_EVERY_MS);
   timeouts.push(setTimeout(() => {
-    followLogin();
+    if (followSetup() !== 'ready') return;
     syncRepos();
     puts.repos.refresh();
   }, LOGIN_CHECK_MS * 2));
@@ -356,6 +458,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     timers.forEach(clearInterval);
     timeouts.forEach(clearTimeout);
     if (commands) commands.stop();
+    if (pairing) pairing.close();
     if (usageWatcher) usageWatcher.stop();
     if (configSync) configSync.stop();
     if (powerSaveBlocker.isStarted(blocker)) powerSaveBlocker.stop(blocker);
@@ -440,4 +543,4 @@ function boot({ argv, hud }) {
   return decision;
 }
 
-module.exports = { boot, startHost, parseHostArgs, decideBoot, decideSecondInstance, trayLabel, skillNames, loadVerifier };
+module.exports = { boot, startHost, parseHostArgs, decideBoot, decideSecondInstance, trayLabel, skillNames, commandVerifier, actionDeps };

@@ -380,7 +380,12 @@ function createHostAuth({ host, keysPath, noncesPath, rpId = DEFAULT_RP_ID, orig
     });
   }
 
-  return { verifyGrant, verifyCommand };
+  /** "Forget all phones": drops the grants verified in this run (the keys file is emptied separately). */
+  function forgetGrants() {
+    grants.clear();
+  }
+
+  return { verifyGrant, verifyCommand, forgetGrants };
 }
 
 module.exports = { createHostAuth, REASONS, DEFAULT_RP_ID };

@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 // A section not built yet stays in the menu, disabled and marked "soon". The
 // page is picked from the URL hash (#today, #mission, #todos, #life, #body,
-// #repos, #godmode)
+// #repos, #godmode, #pair)
 // so a home-screen reload keeps it. The sync button carries a badge while
 // writes wait to be sent (phase 4d), and iOS Safari outside the home screen
 // gets a one-time "Add to Home Screen" hint.
@@ -59,6 +59,7 @@ const NAV = [
   { id: 'body', label: 'navBody', icon: ICONS.activity, ready: true },
   { id: 'repos', label: 'navRepos', icon: ICONS.branch, ready: true },
   { id: 'godmode', label: 'navGodmode', icon: ICONS.zap, ready: true },
+  { id: 'pair', label: 'navPair', icon: ICONS.key, ready: true },
 ];
 const TOAST_MS = 3500;
 

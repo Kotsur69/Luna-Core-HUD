@@ -29,15 +29,16 @@ const MAX_TTL_MS = 2 * 60 * 1000;
 const MAX_RESULT_BYTES = 128 * 1024;
 const MAX_ERROR = 300;
 const KIND_RE = /^[a-z][a-z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)+$/;
-const COLUMNS = 'id,host,kind,payload,nonce,expires_at,sig,status,created_at';
+const COLUMNS = 'id,host,kind,payload,nonce,expires_at,sig,grant,status,created_at';
 const BROKEN = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => String(err instanceof Error ? err.message : err).slice(0, MAX_ERROR);
 
 /**
- * A raw row -> {id, host, kind, payload, nonce, expiresAt, sig}, or null when
- * its shape is off. Says nothing about whether it may run.
+ * A raw row -> {id, host, kind, payload, nonce, expiresAt, sig, grant}, or null
+ * when its shape is off. Says nothing about whether it may run. `grant` (the
+ * passkey-signed session grant, null when missing) is checked by the verifier.
  */
 function cleanRow(row) {
   if (!isObject(row) || typeof row.id !== 'string' || !row.id || row.id.length > 64) return null;
@@ -45,7 +46,8 @@ function cleanRow(row) {
   if (typeof row.nonce !== 'string' || typeof row.sig !== 'string' || !isObject(row.payload)) return null;
   const expiresAt = Date.parse(row.expires_at);
   if (!Number.isFinite(expiresAt)) return null;
-  return { id: row.id, host: row.host, kind: row.kind, payload: row.payload, nonce: row.nonce, expiresAt, sig: row.sig };
+  const grant = isObject(row.grant) ? row.grant : null;
+  return { id: row.id, host: row.host, kind: row.kind, payload: row.payload, nonce: row.nonce, expiresAt, sig: row.sig, grant };
 }
 
 /** A handler's answer -> a result that fits the column. */

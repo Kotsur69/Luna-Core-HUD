@@ -165,6 +165,18 @@ Each slice ships on its own and is usable on the phone when it lands.
 - First fixed actions (prove signing end to end with low risk):
   `news.scan` (the existing Haiku briefing; result = the `news` snapshot),
   `git.fetchAll` (refreshes `repos`), `repo.clone`.
+- **Built (pairing + first actions):** `src/hostpairing.js` + phone
+  `mobile/src/hostpair.js` / `views/pair.js` (menu → "Pair a host"), table
+  `host_pairings` (migration `20261021120000_host_pairing.sql`, which also adds
+  `host_commands.grant`). Pairing is **commit-reveal** so a stolen session
+  can't grind a matching code: the phone sends its key + `sha256(commit)`,
+  the host snapshots that and writes a random `host_nonce`, the phone reveals
+  its nonce, both show `pairingCode(sha256(canonicalPairing))`
+  (`src/hostcanon.js`). The host only acts while its 10 min pairing window is
+  open and only on its own snapshot. First run (`src/hostsetup.js`): login →
+  pairing window → ready; until then the tray says "Needs setup", no
+  heartbeat, no clones, no command claims. Handlers in `src/hostactions.js`;
+  `repo.clone` lowercases a pasted `https://github.com/…(.git)` URL first.
 
 ### H2 — live Claude Code chat (the core)
 

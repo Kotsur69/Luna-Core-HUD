@@ -10,6 +10,13 @@
 // JSON.stringify writes them. Anything JSON cannot carry the same way twice
 // (undefined, functions, NaN, Dates, class instances, BigInt) throws a
 // TypeError instead of being silently dropped or coerced.
+//
+// Pairing (src/hostpairing.js, mobile/src/hostpair.js) is commit-reveal, so
+// a stolen cloud session can't grind a key whose code matches the phone's:
+//   commit  the phone sends sha256(canonicalCommit) with its key, nonce secret
+//   host    adds its own random hostNonce once it has seen the commitment
+//   reveal  the phone sends phoneNonce; the host checks it against the commit
+//   code    both show pairingCode(sha256(canonicalPairing)), 6 digits
 // ============================================================================
 
 'use strict';
@@ -68,4 +75,34 @@ function canonicalGrant(grant) {
   return canonicalJson({ sessionKeyPub, host, expires_at, nonce });
 }
 
-module.exports = { canonicalJson, canonicalCommand, canonicalGrant, GRANT_TTL_MAX_MS, COMMAND_TTL_MAX_MS, MAX_DEPTH };
+/** What the phone commits to before the host's nonce is known. */
+function canonicalCommit(req) {
+  const { host, credentialId, publicKey, phoneNonce } = req || {};
+  return canonicalJson({ host, credentialId, publicKey, phoneNonce });
+}
+
+/** The whole pairing, both nonces included: the input of the 6-digit code. */
+function canonicalPairing(req) {
+  const { host, credentialId, publicKey, hostNonce, phoneNonce } = req || {};
+  return canonicalJson({ host, credentialId, publicKey, hostNonce, phoneNonce });
+}
+
+/** sha256(canonicalPairing) bytes -> "042917": the first 4 bytes, big-endian, mod 10^6. */
+function pairingCode(digest) {
+  const b = digest;
+  if (!b || b.length < 4) throw new TypeError('pairingCode: digest too short');
+  const n = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+  return String(n % 1000000).padStart(6, '0');
+}
+
+module.exports = {
+  canonicalJson,
+  canonicalCommand,
+  canonicalGrant,
+  canonicalCommit,
+  canonicalPairing,
+  pairingCode,
+  GRANT_TTL_MAX_MS,
+  COMMAND_TTL_MAX_MS,
+  MAX_DEPTH,
+};
