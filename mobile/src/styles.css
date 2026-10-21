@@ -337,6 +337,27 @@ main {
 .todo.is-done .box { background: var(--neon-cyan); border-color: var(--neon-cyan); }
 .todo.is-done .todo-text { color: var(--text-dim); text-decoration: line-through; }
 
+/* Manual (kept out of God Mode / Orchestra on the PC): the same subtle red
+   edge + wash as the desktop row, from --bad. Text keeps full contrast -
+   dimming is how a row says "done", and this one is not. */
+.todo.is-manual {
+  --manual-edge: color-mix(in srgb, var(--bad) 85%, transparent);
+  --manual-wash: color-mix(in srgb, var(--bad) 8%, transparent);
+  background-image: linear-gradient(var(--manual-wash), var(--manual-wash));
+  box-shadow: inset 3px 0 0 var(--manual-edge);
+}
+.todo-chip {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--manual-edge, var(--edge));
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.todo-manual-btn { font-size: 18px; filter: grayscale(1); opacity: 0.7; }
+.todo-manual-btn[aria-pressed='true'] { filter: none; opacity: 1; }
+
 .empty {
   padding: var(--space-5) var(--space-4);
   border: 1px dashed var(--edge);

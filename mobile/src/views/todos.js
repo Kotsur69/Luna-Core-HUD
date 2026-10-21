@@ -9,7 +9,7 @@
 
 import { h, icon, ICONS } from '../dom.js';
 import { t } from '../i18n.js';
-import { lists, addUnit, toggleUnit, deleteUnit } from '../todomodel.js';
+import { lists, addUnit, toggleUnit, toggleManualUnit, deleteUnit } from '../todomodel.js';
 import { PICK_KEY } from '../cloud.js';
 
 const SCOPE = 'todos';
@@ -61,14 +61,26 @@ export function mountTodos(main, { cloud, toast }) {
     const del = () => {
       if (confirm(t('confirmDelete'))) act(deleteUnit(key, item));
     };
+    const manual = item.manual === true;
     return h(
       'li',
-      { class: `todo${item.done ? ' is-done' : ''}` },
+      { class: `todo${item.done ? ' is-done' : ''}${manual ? ' is-manual' : ''}` },
       h(
         'button',
         { class: 'todo-check', role: 'checkbox', 'aria-checked': String(item.done), onclick: () => act(toggleUnit(key, item)) },
         h('span', { class: 'box' }, item.done ? icon(ICONS.check) : null),
         h('span', { class: 'todo-text' }, item.text),
+        manual ? h('span', { class: 'todo-chip' }, t('manual')) : null,
+      ),
+      h(
+        'button',
+        {
+          class: 'icon-btn todo-manual-btn',
+          'aria-pressed': String(manual),
+          'aria-label': `${t(manual ? 'manualOff' : 'manualOn')}: ${item.text}`,
+          onclick: () => act(toggleManualUnit(key, item)),
+        },
+        '✋',
       ),
       h('button', { class: 'icon-btn', 'aria-label': `${t('delete')}: ${item.text}`, onclick: del }, icon(ICONS.trash)),
     );

@@ -153,6 +153,7 @@ const { loadThemes } = require('./theme');
 const { loadLayouts } = require('./layouts');
 // UI preferences (theme + language) persisted in config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
+const { normalizeArmCounts, confirmDetail } = require('./godmodeconfirm');
 // Opt-in "Use my Luna setup" for native Codex/Gemini tabs (docs/FREE_PROVIDERS_SYNC_PLAN.md).
 const { loadLunaSyncPrefs, saveLunaSyncPrefs, lunaLaunchFor, lunaSyncNotice } = require('./lunasynclaunch');
 const { readClaudeSetup, listPluginSkills } = require('./lunasyncio');
@@ -2976,9 +2977,12 @@ function registerIpc() {
   ipcMain.handle('keepawake:get', () => keepAwake.status());
   ipcMain.handle('keepawake:set', (_event, on) => keepAwake.set(on === true));
 
-  ipcMain.handle('godmode:confirm', async (_event, openCount) => {
+  // The renderer's {runnable, skipped, blocked} counts are clamped in
+  // godmodeconfirm.js before they reach the dialog - never trusted as sent.
+  ipcMain.handle('godmode:confirm', async (_event, rawCounts) => {
     const pl = readUiPrefs().lang === 'pl';
-    const count = Number.isFinite(openCount) ? openCount : 0;
+    const counts = normalizeArmCounts(rawCounts);
+    if (counts.runnable === 0) return false;
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'question',
       buttons: pl ? ['Tak', 'Nie'] : ['Yes', 'No'],
@@ -2986,9 +2990,7 @@ function registerIpc() {
       cancelId: 1,
       title: 'God Mode',
       message: pl ? 'Uruchomic God Mode?' : 'Start God Mode?',
-      detail: pl
-        ? `LunaCore sam wykona ${count} ${count === 1 ? 'zadanie' : 'zadania'} z listy, jedno po drugim, bez pytania o zgode.`
-        : `LunaCore will run ${count} open ${count === 1 ? 'task' : 'tasks'} from this list, one by one, without asking again.`,
+      detail: confirmDetail(counts, pl),
     });
     return response === 0;
   });

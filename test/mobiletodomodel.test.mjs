@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { lists, addUnit, toggleUnit, deleteUnit, projectName } from '../mobile/src/todomodel.js';
+import { lists, addUnit, toggleUnit, toggleManualUnit, deleteUnit, projectName } from '../mobile/src/todomodel.js';
 
 const require = createRequire(import.meta.url);
 const rows = require('../src/cloudrows');
@@ -55,4 +55,16 @@ test('toggle and delete stamp past the previous version, even with a clock behin
 test('projectName shows the repo or bucket name', () => {
   assert.equal(projectName(KEY), 'luna-core-hud');
   assert.equal(projectName('local:safetyhub-bhp'), 'safetyhub-bhp');
+});
+
+test('toggleManualUnit sets and clears manual, and a PC peer accepts both', () => {
+  const item = { text: 'call the bank', done: false, at: 7, u: 10 };
+  const on = toggleManualUnit(KEY, item, NOW);
+  assert.deepEqual(on, { k: `${KEY}:7`, v: { text: 'call the bank', done: false, at: 7, manual: true }, u: NOW, d: null });
+  const peer = validPeerProjects(rows.todoPeer(mirrorOf([on])), NOW);
+  assert.equal(peer[KEY].items[0].manual, true, 'the flag syncs to a PC');
+  const off = toggleManualUnit(KEY, { ...on.v, u: on.u }, NOW);
+  assert.deepEqual(off.v, { text: 'call the bank', done: false, at: 7 }, 'cleared = no key');
+  const [list] = lists(mirrorOf([on]));
+  assert.equal(list.items[0].manual, true, 'the phone reads a PC-set flag');
 });

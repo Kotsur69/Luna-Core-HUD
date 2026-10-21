@@ -79,6 +79,9 @@ function normalizeCardFields(raw) {
     // with Claude"), kept so the user can check the card did not drift from
     // what they meant. Same cap as a title: it WAS a title.
     original: cleanString(raw.original, MAX_TEXT_CHARS),
+    // Opt-out: only the user can do this one, so God Mode and Orchestra leave
+    // it alone. Stored only when true, so a plain item gains no key.
+    manual: raw.manual === true ? true : null,
   };
   return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null));
 }

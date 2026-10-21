@@ -292,7 +292,8 @@ function createOrchestra(deps) {
   async function makePlan(ctx) {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
-    const openTodos = deps.readTodos(ctx.projectId).filter((t) => !t.done);
+    // A manual item is the user's own job: the planner never sees it.
+    const openTodos = deps.readTodos(ctx.projectId).filter((t) => !t.done && t.manual !== true);
     if (!openTodos.length) return { ok: false, error: 'noTodos' };
     // A manual (re-)plan replaces a pending wait; the waiter's own replan
     // is in state 'planning' and keeps it.

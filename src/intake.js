@@ -42,7 +42,7 @@ const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const SERVER_NAME = 'lunacore';
 
 // Fields a card may carry besides `text` - the ones luna_todo_update may touch.
-const CARD_FIELDS = ['details', 'acceptance', 'files', 'verify', 'size', 'model', 'dependsOn'];
+const CARD_FIELDS = ['details', 'acceptance', 'files', 'verify', 'size', 'model', 'dependsOn', 'manual'];
 
 // --- tool definitions ---------------------------------------------------------
 
@@ -64,6 +64,7 @@ const CARD_PROPERTIES = {
   verify: { type: 'string', description: 'Command that proves it works, e.g. "npm test".' },
   size: { type: 'string', enum: ['S', 'M', 'L'], description: 'S < 30 min, M < 2 h, L larger.' },
   model: { type: 'string', enum: ['sonnet', 'opus'], description: 'Suggested worker model.' },
+  manual: { type: 'boolean', description: 'Keep out of God Mode/Orchestra; needs the user.' },
 };
 
 const TOOLS = [

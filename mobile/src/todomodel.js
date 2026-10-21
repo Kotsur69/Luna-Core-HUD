@@ -76,6 +76,16 @@ export function toggleUnit(key, item, now = Date.now()) {
   return v ? { k: `${key}:${item.at}`, v, u: stampAfter(u, now), d: null } : null;
 }
 
+/**
+ * The item's `manual` opt-out flipped (kept out of God Mode and Orchestra on
+ * the PC). Clearing drops the key, as normalizeTodo stores it only when true.
+ */
+export function toggleManualUnit(key, item, now = Date.now()) {
+  const { u, manual, ...rest } = item;
+  const v = normalizeTodo(manual === true ? rest : { ...rest, manual: true });
+  return v ? { k: `${key}:${item.at}`, v, u: stampAfter(u, now), d: null } : null;
+}
+
 /** A tombstone: beats every older version of the item on every machine. */
 export function deleteUnit(key, item, now = Date.now()) {
   const t = stampAfter(item.u, now);
