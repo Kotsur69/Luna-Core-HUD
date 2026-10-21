@@ -7,6 +7,8 @@
 //   sendWhenEmpty   boolean, default false - mail even a day with nothing in it
 //   godmodeEmail    boolean | null - "Email me when a run finishes"; null =
 //                   never touched, which means ON once Gmail is connected
+//   weeklyEmail     boolean | null - mail the weekly review (Life Settings);
+//                   null = never touched = ON once Gmail is connected
 //
 // config/mail-state.local.json - what was already sent, so a restart never
 // sends twice:
@@ -34,7 +36,7 @@ const TODO_KEY_MAX = 300;
 const MAX_BASELINE = 5000;
 const MAX_RUNS = 50;
 
-const DEFAULT_PREFS = Object.freeze({ nightlyEnabled: false, nightlyTime: '22:30', sendWhenEmpty: false, godmodeEmail: null });
+const DEFAULT_PREFS = Object.freeze({ nightlyEnabled: false, nightlyTime: '22:30', sendWhenEmpty: false, godmodeEmail: null, weeklyEmail: null });
 
 function readJson(file) {
   try {
@@ -60,6 +62,7 @@ function normalizePrefs(raw) {
     nightlyTime: typeof r.nightlyTime === 'string' && TIME_RE.test(r.nightlyTime) ? r.nightlyTime : DEFAULT_PREFS.nightlyTime,
     sendWhenEmpty: bool(r.sendWhenEmpty, DEFAULT_PREFS.sendWhenEmpty),
     godmodeEmail: typeof r.godmodeEmail === 'boolean' ? r.godmodeEmail : null,
+    weeklyEmail: typeof r.weeklyEmail === 'boolean' ? r.weeklyEmail : null,
   };
 }
 
@@ -123,4 +126,7 @@ function createMailPrefs(opts = {}) {
 /** "Email me when a run finishes": an explicit choice, else ON when connected. */
 const godmodeEmailOn = (prefs, connected) => connected && (prefs.godmodeEmail === null ? true : prefs.godmodeEmail);
 
-module.exports = { createMailPrefs, normalizePrefs, normalizeState, godmodeEmailOn, DEFAULT_PREFS, MAX_RUNS };
+/** The weekly review email: an explicit choice, else ON when connected. */
+const weeklyEmailOn = (prefs, connected) => connected && (prefs.weeklyEmail === null ? true : prefs.weeklyEmail);
+
+module.exports = { createMailPrefs, normalizePrefs, normalizeState, godmodeEmailOn, weeklyEmailOn, DEFAULT_PREFS, MAX_RUNS };

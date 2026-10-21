@@ -290,3 +290,28 @@ test('a cloud peer with nothing left in range is not listed as a PC', async () =
   const r = await createLedgerService(deps).report({});
   assert.equal(r.machines.length, 1);
 });
+
+// --- range(): the weekly review's week, the brief's weekend ----------------------
+
+test('range prices rows and clips focus hours to the window, with classes, uploading nothing', async () => {
+  const ownEvents = [
+    { ms: H - 2 * HOUR, key: 'git:github.com/me/a', name: 'a' },
+    { ms: H + 5 * 60 * 1000, key: 'git:github.com/me/a', name: 'a' },
+  ];
+  const { deps } = fakes({ classes: { 'git:github.com/me/a': 'fun' }, ownEvents });
+  const { deps: withC, puts } = withCloud(deps);
+  const res = await createLedgerService(withC).range({ sinceMs: H, untilMs: H + 2 * HOUR });
+  assert.equal(res.ok, true);
+  assert.equal(res.projects[0].cls, 'fun');
+  assert.ok(res.totalUsd > 0);
+  // The block [H+5min, H+10min] is inside; the one 2 h before is not.
+  assert.deepEqual(res.hours.map((p) => [p.key, p.ms, p.cls]), [['git:github.com/me/a', 5 * 60 * 1000, 'fun']]);
+  assert.equal(puts.length, 0);
+});
+
+test('range refuses an empty, reversed or over-long window', async () => {
+  const svc = createLedgerService(fakes().deps);
+  for (const req of [null, {}, { sinceMs: H, untilMs: H }, { sinceMs: H, untilMs: H - 1 }, { sinceMs: H, untilMs: H + 9 * DAY }]) {
+    assert.deepEqual(await svc.range(req), { ok: false, reason: 'bad-range' });
+  }
+});

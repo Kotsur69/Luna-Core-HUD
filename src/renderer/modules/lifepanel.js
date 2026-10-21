@@ -3,7 +3,8 @@
 // ----------------------------------------------------------------------------
 // A full-screen overlay like Mission Control's: the quick add bar on top
 // (always there - a Red Bull is two keystrokes and a click), a month switch
-// (◀ period ▶ / Today) and eight tabs - Overview, Habits (lifehabitsview.js), Spending, Transactions,
+// (◀ period ▶ / Today) and nine tabs - Overview, Habits (lifehabitsview.js), Week (the weekly
+// review, lifeweek.js), Spending, Transactions,
 // Bills & Savings, Year (lifeyear.js), Body (YAZIO, lifebody.js), Settings. Every tab renders from the one budget answer in
 // lifeui.js, so a change anywhere redraws the open tab at once. The shell is
 // built on first open and kept, so reopening is instant.
@@ -36,6 +37,7 @@ import { renderSettings } from './lifesettings.js';
 import { renderBody } from './lifebody.js';
 import { renderYear } from './lifeyear.js';
 import { renderHabits } from './lifehabitsview.js';
+import { renderWeek } from './lifeweek.js';
 import { getDaily, onDaily, loadDaily, startLive, stopLive } from './lifedaily.js';
 import { needsCheckin, needsGoals } from './lifedailyview.js';
 import { checkinPrompt } from './lifecheckin.js';
@@ -50,6 +52,7 @@ const TAB_KEY = 'lunacore.life.tab';
 const TABS = [
   ['overview', (root, s) => renderOverview(root, s, goTab)],
   ['habits', renderHabits],
+  ['week', renderWeek],
   ['spending', renderSpending],
   ['tx', renderTx],
   ['bills', (root, s) => renderBills(root, s, goTab)],
@@ -101,7 +104,7 @@ function paintTabs() {
   els.view.setAttribute('aria-labelledby', `life-tab-${tab}`);
   // The budget period means nothing on the Body and Habits tabs (always
   // today); the Year tab has its own year switch.
-  els.month.hidden = tab === 'body' || tab === 'year' || tab === 'habits';
+  els.month.hidden = tab === 'body' || tab === 'year' || tab === 'habits' || tab === 'week';
 }
 
 function goTab(id) {
@@ -244,6 +247,16 @@ function close() {
   closeWithExit(overlayEl);
   if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
   returnFocus = null;
+}
+
+/** Opens the dashboard on one tab (Mission Control's brief links to the Week tab). */
+export async function openLifeTab(id) {
+  if (TABS.some(([t2]) => t2 === id)) {
+    tab = id;
+    if (isBuilt) paintTabs();
+  }
+  await open();
+  renderView();
 }
 
 /** Called once by the `terminal` widget's mount() - see modules/terminal.js. */

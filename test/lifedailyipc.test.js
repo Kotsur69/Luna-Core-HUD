@@ -27,6 +27,7 @@ function harness({ ledger = null, github = null, todoStore = {}, yazio, clock } 
     habits: path.join(dir, 'life-habits.local.json'),
     goals: path.join(dir, 'life-goals.local.json'),
     score: path.join(dir, 'life-score.local.json'),
+    series: path.join(dir, 'life-series.local.json'),
   };
   const handlers = new Map();
   let tick = 0;

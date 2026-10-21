@@ -17,6 +17,7 @@
 
 import { mountWidget, unmountWidget, isMounted } from './host.js';
 import { closeWithExit, cancelExit } from './motion.js';
+import { showBrief } from './missionbriefview.js';
 
 // Column id in index.html -> widget id. Order is visual order.
 const COLUMNS = [
@@ -43,6 +44,7 @@ function open() {
     mountWidget(widgetId, document.getElementById(colId));
   }
   overlayEl.hidden = false;
+  showBrief(document.getElementById('mission-brief'));
   overlayEl.focus();
 }
 

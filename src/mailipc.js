@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - report email IPC (main process)
 // ----------------------------------------------------------------------------
-// mail:status      -> {ok, gmail:{configured, connected, email}, prefs, godmodeOn}
+// mail:status      -> {ok, gmail:{configured, connected, email}, prefs, godmodeOn, weeklyOn}
 // mail:connect     -> browser consent for gmail.send (src/gmailsend.js)
 // mail:disconnect  -> forgets the Gmail grant
 // mail:set {patch} -> validated by mailprefs.savePrefs (known keys only)
@@ -14,7 +14,7 @@
 
 'use strict';
 
-const { godmodeEmailOn } = require('./mailprefs');
+const { godmodeEmailOn, weeklyEmailOn } = require('./mailprefs');
 
 const REASONS = new Set([
   'busy', 'rate-limited', 'gmail-no-client', 'gmail-not-connected', 'gmail-auth', 'gmail-scope', 'gmail-denied',
@@ -38,7 +38,7 @@ function registerMailIpc({ ipcMain, sender, prefs, nightly, now = Date.now }) {
   const status = () => {
     const gmail = sender.status();
     const p = prefs.loadPrefs();
-    return { ok: true, gmail, prefs: p, godmodeOn: godmodeEmailOn(p, gmail.connected) };
+    return { ok: true, gmail, prefs: p, godmodeOn: godmodeEmailOn(p, gmail.connected), weeklyOn: weeklyEmailOn(p, gmail.connected) };
   };
 
   ipcMain.handle('mail:status', () => status());

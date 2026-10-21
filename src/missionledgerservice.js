@@ -12,6 +12,9 @@
 // carries focus.prevDays (last week), commitDays (this PC's commits per day
 // with feat/fix counts) and now (the project of a reply under 10 min old).
 //
+// range({sinceMs, untilMs}) prices and clips the same data to any window up
+// to 8 days (the weekly review's Mon-Sun week, the brief's weekend).
+//
 // Window: the provider's own 7-day window (weekly resetsAt - 7 d) when the
 // renderer's usage poll knows the reset; otherwise Monday 00:00 local.
 // The renderer only sends a number; anything implausible falls back.
@@ -19,7 +22,7 @@
 
 'use strict';
 
-const { eventsToBlocks, focusWeek, GAP_MS } = require('./missionfocus');
+const { eventsToBlocks, focusWeek, mergeBlocks, GAP_MS } = require('./missionfocus');
 const { fits } = require('./cloudsnapshots');
 const { MAX_PEERS } = require('./missionledgersync');
 const { weekWindow } = require('./missionledgercalc');
@@ -159,6 +162,22 @@ async function cloudPeers(cloud, parsePeer, machine, at) {
     .filter((p) => p && (p.rows.length || p.blocks.length));
 }
 
+/** Longest range range() accepts: a Mon-Sun week plus slack for a DST day. */
+const MAX_RANGE_MS = 8 * DAY_MS;
+
+/** ms per project key inside [sinceMs, untilMs), from blocks of any number of PCs. */
+function hoursIn(blocks, sinceMs, untilMs) {
+  const byKey = new Map();
+  for (const [start, end, key, name] of mergeBlocks(blocks)) {
+    const ms = Math.min(end, untilMs) - Math.max(start, sinceMs);
+    if (ms <= 0) continue;
+    const p = byKey.get(key) || { key, name, ms: 0 };
+    p.ms += ms;
+    byKey.set(key, p);
+  }
+  return [...byKey.values()].sort((a, b) => b.ms - a.ms || a.key.localeCompare(b.key));
+}
+
 /** One peer per machine (case-insensitive): the newer copy wins. */
 function onePerMachine(peers) {
   const byMachine = new Map();
@@ -191,6 +210,37 @@ function createLedgerService({
   cloud = null,
 }) {
   return {
+    /**
+     * Claude cost and focus hours per project inside an arbitrary window of at
+     * most MAX_RANGE_MS (the weekly review's Mon-Sun week, the brief's
+     * weekend). Every PC's rows and blocks; nothing is uploaded from here.
+     * @param {{sinceMs:number, untilMs:number}} req
+     */
+    async range(req) {
+      const sinceMs = req && Number.isFinite(req.sinceMs) ? req.sinceMs : NaN;
+      const untilMs = req && Number.isFinite(req.untilMs) ? req.untilMs : NaN;
+      if (!(untilMs > sinceMs) || untilMs - sinceMs > MAX_RANGE_MS) return { ok: false, reason: 'bad-range' };
+      await ledger.scan();
+      const blocks = await ownBlocks(ledger, commits);
+      const at = now();
+      const { classes } = store.loadProjects();
+      const live = typeof cloud === 'function' ? cloud() : cloud;
+      const peers = live ? onePerMachine(await cloudPeers(live, sync.parsePeer, machine, at)) : [];
+      const rows = peers.reduce((all, p) => all.concat(p.rows), ledger.rows());
+      const allBlocks = peers.reduce((all, p) => all.concat(p.blocks || []), blocks);
+      const sum = summarize(rows, { sinceMs, untilMs, rates: loadRates() });
+      const cls = (p) => ({ ...p, cls: classes[p.key] || null });
+      return {
+        ok: true,
+        sinceMs,
+        untilMs,
+        totalUsd: sum.totalUsd,
+        unpricedTokens: sum.unpricedTokens,
+        projects: sum.projects.slice(0, MAX_PROJECTS).map(cls),
+        hours: hoursIn(allBlocks, sinceMs, Math.min(untilMs, at)).slice(0, MAX_PROJECTS).map(cls),
+      };
+    },
+
     async report(req) {
       await ledger.scan();
       const blocks = await ownBlocks(ledger, commits);
@@ -222,4 +272,4 @@ function createLedgerService({
   };
 }
 
-module.exports = { createLedgerService, weekWindow, MAX_PROJECTS };
+module.exports = { createLedgerService, weekWindow, hoursIn, MAX_PROJECTS };

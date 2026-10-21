@@ -18,6 +18,7 @@ import {
 } from './lifeui.js';
 import { cloudCard } from './lifecloud.js';
 import { scoreSettingsCard } from './lifescoreview.js';
+import { weeklyMailCard } from './lifeweek.js';
 
 let editingBillId = null;
 let editingGoalId = null;
@@ -311,7 +312,7 @@ export function renderSettings(root, state) {
   const left = el('div', 'life-stack');
   left.append(scoreSettingsCard(), incomeCard(budget), categoriesCard(budget));
   const right = el('div', 'life-stack');
-  right.append(billsCard(budget, rerender), goalsCard(budget, rerender), cloudCard());
+  right.append(billsCard(budget, rerender), goalsCard(budget, rerender), weeklyMailCard(), cloudCard());
   grid.append(left, right);
   root.replaceChildren(grid);
 }

@@ -261,7 +261,20 @@ sent to a model except the weekly category totals).
 
 **W3+ phases** (each shippable): **1 shell + check-in + habits ✅** · **2 Money ✅**
 · **3 productivity % + W4 goals + "now" strip ✅** · **4 YAZIO ✅** (Body tab) ·
-5 weekly review + correlations + Sunday email.
+**5 weekly review + correlations + Sunday email ✅**.
+
+**Phase 5 ✅ (2026-10-21, branch `luna/life-weekly-759j0`).** `weeklycollect.js`
+(one Mon-Sun week as plain JSON: W1 cost + W2 hours split work/fun/other via
+the new `missionledgerservice.range()`, own commits per repo with feat
+subjects / fix count / +- lines, open to-dos, GitHub flags + open PRs/issues,
+W4 goals, budget category totals week vs last, YAZIO / check-in averages,
+habit streaks, top correlations; repo names only, capped, failing source →
+`{error}`), `weeklyreview.js` (one lean call, strict validation against the
+data, raw-numbers fallback, `mission-weekly.local.json` last 12, Sunday 20:00
++ catch-up, never twice, Generate now confirms overwrites), `weeklymail.js`
+(dedupe per ISO week, 'Email it', failure on the card, toggle `weeklyEmail`
+in mail prefs), `lifecorrelate.js` + `lifeseries.js` (daily series kept from
+the score's inputs, ≥ 14 days and ≥ 5 per group). Week tab: `lifeweek.js`.
 
 **Phases 1 + 3 — daily side ✅ (2026-10-20, branch `luna/life-daily-xpakq`).**
 Check-in (`lifecheckin.js` → `life-checkin.local.json`, last 400 days; prompt
@@ -467,7 +480,17 @@ in on **Opera GX** (said Chrome / Edge first).
   - **Dev / tools:** r/programming, r/webdev, r/electronjs; HN front page
     RSS; GitHub trending (via Agent-Reach `github` recipes).
 
-### W6 — Morning brief (08:00) ⏳
+### W6 — Weekly + daily brief ✅ (2026-10-21)
+
+**Shipped:** `src/missionbrief.js` + `mission:brief*` in `missioncontrolipc.js`;
+strip above the Mission Control columns (`missionbriefview.js`). Weekly brief
+once per ISO week on the first launch Monday or later (weekend since Fri 18:00
+or since the Sunday review, whichever is later); daily brief on **Brief me**
+only. One call each, Gmail read-only tools only, output checked against the
+inputs, `mission-brief.local.json` (12 weekly + 14 daily, model, last News
+briefing). Original notes below.
+
+### W6 — Morning brief (08:00) (original notes)
 
 - One card: today's calendar, mail that needs a call (read-only Gmail query,
   never trash), the last News briefing (or a fresh scan of starred presets),

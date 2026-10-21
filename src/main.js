@@ -121,6 +121,8 @@ const { createBillCalendar } = require('./gcalbills');
 // Report emails: Gmail sender, God Mode run email, nightly summary.
 const { createReportMail } = require('./reportmail');
 const { registerMailIpc } = require('./mailipc');
+// Weekly review (Life Week tab, Sunday 20:00 + Generate now) and its email.
+const { setupWeeklyReview } = require('./weeklyipc');
 const { startLifeSync } = require('./lifesync');
 // Cloud sync (docs/CLOUD_SYNC_PLAN.md): Supabase carries the budget, the
 // to-dos, settings and snapshots between PCs. Off without config/cloud.local.json.
@@ -128,6 +130,8 @@ const { startCloud } = require('./cloudsync');
 const { registerCloudIpc } = require('./cloudipc');
 const { machineName } = require('./missionledgersync');
 let cloud = null;
+let weeklyReview = null;
+let missionBrief = null;
 // Highlight extractor: batch tail-trim of video clips via system ffmpeg.
 // See src/highlights.js's header for the argv-array security property.
 const { detectFfmpeg, listVideoFiles, HighlightBatchJob } = require('./highlights');
@@ -2477,6 +2481,9 @@ function registerIpc() {
     gcal,
     // Read on the ledger's first use, after startCloud() below has run.
     cloudSnapshots: () => (cloud ? cloud.snapshots : null),
+    // The brief names a to-do list by its project's label, never its path.
+    projectNames: () => new Map(projects.map((p) => [p.id, p.label])),
+    onResume: (fn) => powerMonitor.on('resume', fn),
   });
 
   // Life dashboard (life:* channels): budget store + summary, shared with the
@@ -2503,7 +2510,7 @@ function registerIpc() {
     },
   });
   // The score reuses Mission Control's ledger (focus, commits, Now) and GitHub reader.
-  registerLifeIpc({
+  const life = registerLifeIpc({
     ipcMain,
     sync: lifeSync,
     cloud: () => (cloud ? cloud.snapshots : null),
@@ -2512,6 +2519,19 @@ function registerIpc() {
     github: mission.github,
   });
   registerMailIpc({ ipcMain, sender: reportMail.sender, prefs: reportMail.prefs, nightly: reportMail.nightly });
+  // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".
+  weeklyReview = setupWeeklyReview({
+    ipcMain,
+    ledgerRange: mission.ledger.range,
+    github: mission.github,
+    body: life.body,
+    projectNames: () => new Map(projects.map((p) => [p.id, p.label])),
+    getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
+    sender: reportMail.sender,
+    prefs: reportMail.prefs,
+    onResume: (fn) => powerMonitor.on('resume', fn),
+  });
+  missionBrief = mission.brief;
 
   // "Add to my library": persists an /ask suggestion card into
   // config/libraries.local.json. addLibraryItem() (src/libraries.js) does all
@@ -3171,6 +3191,9 @@ app.whenReady().then(() => {
   startPortWatcher();
   startUsageWatcher();
   reportMail.nightly.start();
+  if (weeklyReview) weeklyReview.start();
+  // The weekly brief: once per ISO week, on the first launch Monday or later.
+  if (missionBrief) missionBrief.start();
   startTelemetryWatcher();
   startMediaWatcher();
   // Only if the user has previously opted in - the pref defaults to false, so

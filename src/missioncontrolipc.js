@@ -4,7 +4,8 @@
 // Wires the mission:* channels to the mail and calendar jobs, and the agenda
 // to the Google Calendar API client (src/gcal.js - no model call), the
 // GitHub telemetry to the gh CLI (src/missiongithub.js), and News to the
-// vendored Agent-Reach bridge plus a Haiku summary (src/missionnews.js). Lives outside
+// vendored Agent-Reach bridge plus a Haiku summary (src/missionnews.js), and the
+// weekly / daily brief (src/missionbrief.js, mission:brief*). Lives outside
 // main.js on purpose (main.js is far past the file-size guideline); main.js
 // only calls registerMissionIpc() once.
 //
@@ -32,6 +33,7 @@ const { createNews, buildNewsPrompt, parseNewsSummary, publicSections, newsSnaps
 const newsStore = require('./missionnewsstore');
 const { createNewsPeers } = require('./missionnewspeers');
 const projectStore = require('./missionprojects');
+const { createBrief, createBriefStore, defaultSources, KINDS: BRIEF_KINDS } = require('./missionbrief');
 
 /** The real ledger: this PC's ~/.claude/projects, priced with config/rates.json. */
 function defaultLedgerService(cloudSnapshots) {
@@ -55,6 +57,25 @@ function defaultLedgerService(cloudSnapshots) {
     machine: sync.machineName(os.hostname()),
     // Other PCs' ledgers through the cloud's `snapshots` table (cloudsnapshots.js).
     cloud: cloudSnapshots,
+  });
+}
+
+/** The brief's real inputs: this module's ledger / calendar / weather plus the local stores. */
+function defaultBriefSources({ getLedger, gcal, weather, projectNames }) {
+  const { repoStats, openTodos } = require('./weeklycollect');
+  return defaultSources({
+    ledgerRange: (req) => getLedger().range(req),
+    gcal,
+    weather,
+    loadMissionConfig,
+    repoStats,
+    listRepos: () => require('./gitstation').loadRepoList().repos,
+    readTodoStore: () => require('./todo').readStore(),
+    openTodos,
+    projectNames,
+    loadGoals: () => require('./lifegoals').loadGoals(),
+    loadWeekly: () => require('./weeklyreview').createWeeklyStore().load(),
+    localIsoNow,
   });
 }
 
@@ -145,6 +166,10 @@ function registerMissionIpc({
   cloudSnapshots = () => null,
   projects = projectStore,
   pickClientFile = defaultPickClientFile,
+  briefStore = createBriefStore(),
+  briefSources = null,
+  projectNames = () => new Map(),
+  onResume = null,
 }) {
   // Built on first use: requiring it is cheap, but tests never need the real one.
   let ledger = ledgerService;
@@ -212,6 +237,16 @@ function registerMissionIpc({
       busy.delete(kind);
     }
   }
+
+  // W6 brief: weekly on its own (start()), daily on 'Brief me'. Same runner,
+  // same minimal env; its only tools are Gmail's read-only search + get.
+  const brief = createBrief({
+    store: briefStore,
+    run: (opts) => run(opts),
+    getEnv,
+    onResume,
+    sources: briefSources || defaultBriefSources({ getLedger, gcal, weather, projectNames }),
+  });
 
   const job = (kind, prompt, opts) =>
     run({ prompt, model: model(), env: getEnv(), timeoutMs: TIMEOUTS[kind], ...opts });
@@ -496,7 +531,10 @@ function registerMissionIpc({
       if (!res.ok) return { ...res, sections: publicSections(sections) };
       const { briefing, summaries } = parseNewsSummary(res.answer, sections);
       // A quick search is a one-off: it must not replace the briefing the phone shows.
-      if (!adhoc) putNewsSnapshot(() => newsSnapshot({ briefing, sections, summaries, at: Date.now(), lang }));
+      if (!adhoc) {
+        putNewsSnapshot(() => newsSnapshot({ briefing, sections, summaries, at: Date.now(), lang }));
+        brief.rememberNews(briefing);
+      }
       return { ok: true, briefing, sections: publicSections(sections, summaries), costUsd: res.costUsd };
     })
   );
@@ -566,9 +604,54 @@ function registerMissionIpc({
     })
   );
 
+  // ---- Brief (src/missionbrief.js): weekly on its own, daily on click ----
+
+  const briefView = (req) => {
+    const s = briefStore.load();
+    const pick = (kind) => {
+      const keys = Object.keys(s[kind]).sort().reverse();
+      const want = req && typeof req[kind] === 'string' ? req[kind] : null;
+      return { keys, entry: s[kind][want && s[kind][want] ? want : keys[0]] || null };
+    };
+    return { ok: true, weekly: pick('weekly'), daily: pick('daily'), model: s.model, models: MISSION_MODELS, busy: BRIEF_KINDS.filter((k) => brief.isBusy(k)) };
+  };
+  const safeBriefView = (req) => {
+    try {
+      return briefView(req);
+    } catch (err) {
+      console.error('[mission] brief view failed:', err && err.message);
+      return { ok: false, reason: 'generic' };
+    }
+  };
+
+  // req: {weekly?, daily?} - history keys to show; anything else shows the newest.
+  ipcMain.handle('mission:brief', (_event, req) => safeBriefView(req));
+
+  // req: {kind: 'weekly' | 'daily', overwrite}. 'exists' until the renderer
+  // confirms a Regenerate. One call per kind at a time (brief's own guard).
+  ipcMain.handle('mission:brief-run', async (_event, req) => {
+    const kind = req && BRIEF_KINDS.includes(req.kind) ? req.kind : null;
+    if (!kind) return { ok: false, reason: 'bad-input' };
+    const res = await brief.generate(kind, { overwrite: req.overwrite === true });
+    return res.ok ? safeBriefView({}) : res;
+  });
+
+  ipcMain.handle('mission:brief-model', (_event, req) => {
+    try {
+      briefStore.setModel(req && req.model);
+      return safeBriefView({});
+    } catch {
+      return { ok: false, reason: 'bad-input' };
+    }
+  });
+
   // The same ledger and GitHub reader for the Life dashboard's score
   // (src/lifeipc.js), so transcripts and commits are scanned by one cache.
-  return { ledger: { report: (req) => getLedger().report(req) }, github };
+  return {
+    ledger: { report: (req) => getLedger().report(req), range: (req) => getLedger().range(req) },
+    github,
+    brief,
+  };
 }
 
 module.exports = { registerMissionIpc, localIsoNow };

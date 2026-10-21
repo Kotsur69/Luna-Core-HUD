@@ -555,3 +555,31 @@
 @media (prefers-reduced-motion: reduce) {
   .life-energy__btn, .life-habit__tick { transition: none; }
 }
+
+/* ---- Week tab: the weekly review (modules/lifeweek.js) ---- */
+.life-week__bar { flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-4); }
+.life-week__headline { margin: 0; font-size: var(--fs-md); color: var(--text); line-height: 1.45; }
+.life-week__range { margin: 0; font-size: var(--fs-xs); color: var(--text-dim); }
+.life-week__split { display: flex; height: 10px; border-radius: var(--radius-pill); overflow: hidden; background: var(--surface-panel-2); }
+.life-week__seg { min-width: 2px; }
+.life-week__seg.is-work { background: var(--neon-cyan); }
+.life-week__seg.is-fun { background: var(--good); }
+.life-week__seg.is-other { background: var(--warn); }
+.life-week__seg.is-unassigned { background: var(--edge); }
+.life-week__sub { margin: var(--space-3) 0 var(--space-1); font-size: var(--fs-xs); color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+.life-week__work { display: block; font-size: var(--fs-sm); }
+.life-week__todos { margin-top: var(--space-1); color: var(--text-dim); }
+.life-week__verdict { font-size: var(--fs-xs); color: var(--text-dim); }
+.life-week__table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.life-week__table td { padding: var(--space-1) var(--space-2); border-bottom: var(--border-w) solid var(--edge); }
+.life-week__toggle { flex-direction: row; align-items: center; gap: var(--space-3); }
+
+/* ---- Mission Control: weekly / daily brief strip (modules/missionbriefview.js) ---- */
+.mission-brief { margin: var(--space-4) var(--space-6) 0; padding: var(--space-4); border: var(--border-w) solid var(--edge); border-radius: var(--radius-md); background: var(--surface-panel-2); max-height: 32vh; overflow-y: auto; }
+.mission-brief__bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.mission-brief__tab.is-on { border-color: var(--neon-cyan); color: var(--text); }
+.mission-brief__headline { margin: var(--space-3) 0 var(--space-2); font-size: var(--fs-md); color: var(--text); }
+.mission-brief__body { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-sm); }
+.mission-brief__sub { margin: var(--space-2) 0 var(--space-1); font-size: var(--fs-xs); color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+.mission-brief__list { margin: 0; padding-left: var(--space-6); }
+.mission-brief__nudge { color: var(--warn); }

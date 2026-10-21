@@ -43,6 +43,8 @@ const { habitStatus } = require('./lifehabitcalc');
 const { scoreReport } = require('./lifescore');
 const { dayInputs, autoDays, goalsByWeek, nowStrip } = require('./lifescoreinputs');
 const { ymd, addDays } = require('./lifedays');
+const { seriesFromInputs } = require('./lifecorrelate');
+const { recordSeries } = require('./lifeseries');
 
 /** How long the Body tab waits for another PC's copy before showing the login form. */
 const PEER_TIMEOUT_MS = 4000;
@@ -129,7 +131,8 @@ function yazioReason(err) {
  *   file/now/yazio are injectable for tests; the real store path and a real
  *   YAZIO client are the defaults. sync = startLifeSync() in the app, none in tests.
  *   bodyEveryMs = background refresh period; 0 turns it off.
- * @returns {{stop: () => void}} stops the background refresh
+ * @returns {{stop: () => void, body: () => Promise<object|null>}} stop = stops the background
+ *   refresh; body = this PC's or another PC's YAZIO numbers (the weekly review reads them)
  */
 function registerLifeIpc({
   ipcMain,
@@ -274,7 +277,8 @@ function registerLifeIpc({
     return { ok: true };
   });
 
-  registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, bodyForDaily: () => bodyForDaily(yazio, peerBody) });
+  const dailyBody = () => bodyForDaily(yazio, peerBody);
+  registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, bodyForDaily: dailyBody });
 
   /** One background fetch + upload; never throws. A bad login stays blocked in lifeyazio (no network). */
   const refreshBody = async () => {
@@ -297,6 +301,7 @@ function registerLifeIpc({
       if (timer) clearInterval(timer);
       timer = null;
     },
+    body: dailyBody,
   };
 }
 
@@ -437,6 +442,15 @@ function registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, 
     }
   };
 
+  /** Finished days go into the correlations' series (src/lifeseries.js); a failure never breaks the score. */
+  const keepSeries = (src) => {
+    try {
+      recordSeries(seriesFromInputs(src), files.series);
+    } catch (err) {
+      console.error('[life] series write failed:', err && err.message);
+    }
+  };
+
   ipcMain.handle('life:score', read('score', async () => {
     const at = now();
     const today = ymd(at);
@@ -451,7 +465,9 @@ function registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, 
       checkin: checkinStore.loadCheckin(files.checkin),
       habits: habitStore.loadHabits(files.habits).habits,
     });
-    const score = scoreReport({ days, today, goalsByWeek: goalsByWeek(goalStore.loadGoals(files.goals)), weights: prefs.weights, focusTargetH: prefs.focusTargetH });
+    const byWeek = goalsByWeek(goalStore.loadGoals(files.goals));
+    const score = scoreReport({ days, today, goalsByWeek: byWeek, weights: prefs.weights, focusTargetH: prefs.focusTargetH });
+    keepSeries({ days, today, checkin: checkinStore.loadCheckin(files.checkin), goalsByWeek: byWeek, weights: prefs.weights, focusTargetH: prefs.focusTargetH });
     return { ok: true, score, now: nowStrip(report, today, at), prefs };
   }));
 

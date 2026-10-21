@@ -326,9 +326,34 @@ headless `claude -p` call (Haiku by default, picker in the mail column) under
 your own subscription, never on a timer, never as a side effect. Every result
 shows what it cost. The same rules hold: explicit, one bounded call, nothing
 left running. The calendar agenda, the GitHub telemetry and the News *fetch*
-cost no tokens at all. Scheduled summaries (Morning brief, Weekly review) are
-planned in [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md) and will
-be opt-in with the same cost display.
+cost no tokens at all.
+
+### The third deliberate exception: weekly review and briefs
+
+These are the only model calls LunaCore makes **on its own schedule**, so they
+are listed one by one. Each is a single headless `claude -p` call (Haiku by
+default, its own model picker), each saved result shows what it cost, and
+nothing is left running.
+
+- **Weekly review** ([`src/weeklyreview.js`](src/weeklyreview.js)) - once a
+  week, Sunday 20:00 local; a PC that was off catches up last week's review on
+  the next launch. Never twice for the same ISO week. A lean call with **no
+  tools**: it only sees the week's numbers collected locally
+  ([`src/weeklycollect.js`](src/weeklycollect.js) - hours, Claude cost,
+  commit counts, to-dos, goals, budget category totals, YAZIO / check-in
+  averages; no file paths). **Generate now** on the Life dashboard's Week tab
+  runs it on click (asks before overwriting). The result is emailed to your
+  own Gmail address unless you turn that off in Life Settings.
+- **Weekly brief** ([`src/missionbrief.js`](src/missionbrief.js)) - once per
+  ISO week, on the first launch on Monday or later. Its only tools are Gmail
+  `search_threads` and `get_thread` (read-only; every other connector tool is
+  denied by name).
+- **Daily brief** - the same, but **only on the Brief me button** in Mission
+  Control, never scheduled.
+
+History is local: `config/mission-weekly.local.json` (12 weeks) and
+`config/mission-brief.local.json` (12 weekly + 14 daily briefs). The
+correlations on the Week tab are computed locally with no model at all.
 
 ---
 
