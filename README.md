@@ -7,7 +7,22 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.16.2 — Cloud sync, part 3.** The cloud is now the only
+> **Current release: v0.17.0 — Phone, host and a sturdier God Mode.**
+> - **Phone:** an iPhone PWA with GitHub login, to-dos, budget, Today, Mission,
+>   Body, Google calendar and mail, an offline write queue and realtime updates.
+> - **Host:** a headless Luna host you pair with a passkey. From the phone you
+>   get a live Claude chat, signed host actions and push notifications.
+> - **God Mode:** an auto-retry ladder, self-healing dependency merges and
+>   skipping bad packages instead of stopping. It also waits for the Claude
+>   limit reset, then ends with a self-check and a morning report.
+> - **Providers:** native Codex and Gemini CLI tabs ("Use my Luna setup"), plus
+>   free-model fallback chains. Usage limits now cover Codex, GLM, Kimi, Gemini
+>   and more.
+> - **Life:** daily check-in, habits, weekly goals and review, a Gmail nightly
+>   summary and bill calendar events.
+> - **Tabs:** drag-to-reorder session tabs.
+>
+> **v0.16.2 — Cloud sync, part 3.** The cloud is now the only
 > way PCs share data: the old Syncthing / SyncTrayzor shared folder is gone, and
 > so are the "Share with other PCs…" buttons in the Mission Control ledger
 > (Ctrl+Shift+M). Budget, to-dos and the Claude ledger keep syncing as before.
@@ -84,8 +99,8 @@ injects prompts or touches the `claude` binary.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.16.2.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.16.2-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.17.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.17.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
