@@ -22,6 +22,7 @@
 
 const { exec } = require('child_process');
 const { runGit, firstLine } = require('./worktrees');
+const { checkCwd } = require('./projects');
 
 const VERIFY_TIMEOUT_MS = 15 * 60 * 1000;
 const VERIFY_MAX_BUFFER = 4 * 1024 * 1024;
@@ -53,7 +54,8 @@ async function headSha(root, execImpl) {
 
 /**
  * The finish sequence for one package.
- * @param {{id:string, root:string, cwd:string, branch:string, baseSha:string|null, verify:string}} pkg
+ * @param {{id:string, root:string, cwd:string, branch:string, baseSha:string|null, verify:string,
+ *          pushOnVerifyFail?:boolean}} pkg
  * @param {{execImpl?:Function, verifyImpl?:Function}} [deps]
  * @returns {Promise<
  *   {ok:true, headSha:string|null, files:string[]}
@@ -63,6 +65,10 @@ async function headSha(root, execImpl) {
 async function finishPackage(pkg, deps = {}) {
   const execImpl = deps.execImpl;
   const verifyImpl = deps.verifyImpl || runVerify;
+  // The worktree folder may be gone (deleted by hand, other PC after a
+  // restore): say so instead of a git/verify ENOENT.
+  const cwdOk = checkCwd(pkg.root, deps.isDirImpl);
+  if (!cwdOk.ok) return { ok: false, stage: 'commit', detail: `worktree folder missing: ${cwdOk.detail}` };
 
   const status = await runGit(pkg.root, ['status', '--porcelain'], execImpl);
   if (!status.ok) return { ok: false, stage: 'commit', detail: firstLine(status.stderr) };
@@ -79,13 +85,23 @@ async function finishPackage(pkg, deps = {}) {
     }
   }
 
+  // Full ref name: a branch value can never be read as a push option.
+  const pushBranch = () => runGit(pkg.root, ['push', '-u', 'origin', `refs/heads/${pkg.branch}`], execImpl);
+
   if (pkg.verify) {
     const verified = await verifyImpl(pkg.verify, pkg.cwd || pkg.root);
-    if (!verified.ok) return { ok: false, stage: 'verify', output: verified.output };
+    if (!verified.ok) {
+      // Free runs (orchestraFree.js) save the work on their own branch even
+      // when verify fails; the worker is still asked to fix it.
+      if (pkg.pushOnVerifyFail) {
+        const saved = await pushBranch();
+        return { ok: false, stage: 'verify', output: verified.output, pushed: saved.ok };
+      }
+      return { ok: false, stage: 'verify', output: verified.output };
+    }
   }
 
-  // Full ref name: a branch value can never be read as a push option.
-  const push = await runGit(pkg.root, ['push', '-u', 'origin', `refs/heads/${pkg.branch}`], execImpl);
+  const push = await pushBranch();
   if (!push.ok) return { ok: false, stage: 'push', detail: firstLine(push.stderr) };
 
   return { ok: true, headSha: await headSha(pkg.root, execImpl), files: await changedFiles(pkg, execImpl) };

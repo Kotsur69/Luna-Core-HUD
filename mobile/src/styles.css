@@ -533,3 +533,37 @@ main {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
+
+/* --- repos + God Mode ----------------------------------------------------- */
+.tags { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.tag {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.tag.is-bad { border-color: var(--bad); color: var(--bad); }
+.tag.is-warn { border-color: var(--warn); color: var(--warn); }
+.tag.is-good { border-color: var(--good); color: var(--good); }
+.is-warn { color: var(--warn); }
+.run > summary { display: grid; gap: var(--space-1); cursor: pointer; list-style: none; }
+.run > summary::-webkit-details-marker { display: none; }
+.run[open] > summary { margin-bottom: var(--space-3); }
+
+/* ---- Host chat (REMOTE_HOST_PLAN H2): text only, model output never as HTML ---- */
+.chat { display: grid; gap: var(--space-2); max-height: 60vh; overflow-y: auto; overscroll-behavior: contain; }
+.msg { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.msg-me { justify-self: end; max-width: 85%; padding: var(--space-2) var(--space-3); border-radius: var(--radius); background: var(--bg-raised); border: 1px solid var(--edge); }
+.mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
+.tool { display: grid; gap: var(--space-1); }
+.tool-out, .diff {
+  margin: 0; padding: var(--space-2); max-height: 12rem; overflow: auto;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--bg); border: 1px solid var(--edge); border-radius: var(--radius-sm); color: var(--text-dim);
+}
+.approval { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--warn); border-radius: var(--radius); }
+.session-row { width: 100%; text-align: left; background: transparent; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; }
+textarea.field { resize: vertical; min-height: 4.5rem; line-height: 1.4; }

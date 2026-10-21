@@ -390,6 +390,16 @@ contextBridge.exposeInMainWorld('lunacore', {
   planOrchestra: (sessionId) => ipcRenderer.invoke('orchestra:plan', typeof sessionId === 'string' ? sessionId : null),
   /** The current plan view, or null. */
   getOrchestra: () => ipcRenderer.invoke('orchestra:get'),
+  /** Planning waiting for the Claude limit reset: {state, resumeAt, ...} or null. */
+  getOrchestraPlanWait: () => ipcRenderer.invoke('orchestra:planWait'),
+  /** Cancels that wait. No payload. */
+  cancelOrchestraPlanWait: () => ipcRenderer.invoke('orchestra:cancelPlanWait'),
+  /** Wait state changes (armed, planning, failed, cleared); returns an unsubscribe. */
+  onOrchestraPlanWait: (cb) => {
+    const listener = (_e, state) => cb(state);
+    ipcRenderer.on('orchestra:planWait', listener);
+    return () => ipcRenderer.removeListener('orchestra:planWait', listener);
+  },
   /** Approve (ids null) or launch chosen packages; main validates the payload. */
   launchOrchestra: (payload) => ipcRenderer.invoke('orchestra:launch', payload),
   /** Promise<{ok, error?}> - refused ('runActive') while a worker runs. */

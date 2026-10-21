@@ -43,3 +43,11 @@ __pycache__/
 
 # Playwright MCP screenshots / logs
 .playwright-mcp/
+
+# Luna Host.command: package-lock.json hash of the last npm ci
+.host-lock.sha256
+
+# Passkeys paired on this host (src/hostpairing.js) and seen command nonces.
+# Never in git, never read from the cloud.
+host-keys.local.json
+host-nonces.local.json

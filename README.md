@@ -488,6 +488,24 @@ Luna-Core-HUD/
 │   ├── orchestraStore.js  # orchestra.local.json persistence
 │   ├── sounds.js          # load config/sounds.json → resolveSoundFile(key, opts) (pure + config read)
 │   ├── soundManager.js    # persistent `mpv --idle` process + its JSON IPC socket
+│   ├── usagesnapshot.js   # `usage` snapshot writer + reader (shared with the phone)
+│   ├── repossnapshot.js   # `repos` snapshot: git-station status per repo, no paths (shared)
+│   ├── godmodesnapshot.js # `godmode` snapshot: recent God Mode runs (shared)
+│   ├── snapshotputs.js    # puts the repos / godmode snapshots after each refresh
+│   ├── hostmain.js        # `--host`: headless boot, tray, heartbeat, wiring of the host modules
+│   ├── hostsetup.js       # first run (login -> pairing -> ready) + tray / dialog strings
+│   ├── hostdefault.js     # `--make-default` -> the synced `host:default` unit
+│   ├── hostsnapshot.js    # `host` heartbeat snapshot writer + reader (shared)
+│   ├── hostcanon.js       # canonical JSON of grants, commands, pairing (shared, signed bytes)
+│   ├── hostpairing.js     # commit-reveal passkey pairing -> host-keys.local.json
+│   ├── hostauth.js        # the gate: passkey grant + session-key command signatures, nonces
+│   ├── hostcommands.js    # host_commands loop: claim, verify, run, finish
+│   ├── hostactions.js     # news.scan, git.fetchAll, repo.clone handlers
+│   ├── hostrepos.js       # auto-clone of synced projects + repo.clone URL rules
+│   ├── hostchat.js        # one `claude` stream-json child per phone session (chat.* handlers)
+│   ├── hostchattabs.js    # read-only HUD tabs for phone sessions
+│   ├── hostevents.js      # host_events writer + reader (shared): the chat feed
+│   ├── hostpush.js        # asks the push edge function for approval / done / usage alerts
 │   ├── preload.js         # secure contextBridge → window.lunacore
 │   └── renderer/
 │       ├── index.html     # 3-panel layout
@@ -545,6 +563,22 @@ Luna-Core-HUD/
 │   ├── ui.local.json      # persisted theme + language + boot + last profile + sound prefs (gitignored)
 │   ├── orchestra.local.json # the current God Mode v2 run, for restart/resume (gitignored)
 │   └── scratchpad.local.md # your scratchpad notes (created on first save, gitignored)
+├── mobile/                # the phone PWA (Vite), deployed to Vercel
+│   ├── public/push-sw.js  # service worker that shows Web Push notifications
+│   └── src/
+│       ├── hostkey.js     # non-extractable session key, passkey grant, signs commands
+│       ├── hostpair.js    # phone side of the pairing (passkey + commit-reveal)
+│       ├── hostsend.js    # sends one signed command and waits for its result
+│       ├── hostmodel.js   # pure helpers of the Host page
+│       ├── push.js        # PushManager subscription -> push_subscriptions
+│       └── views/         # pages: repos.js, godmode.js, host.js, pair.js, usage.js, ...
+├── supabase/
+│   ├── migrations/        # snapshots kinds, host_commands, host_pairings, host_events, push tables
+│   └── functions/push/    # Web Push edge function (core.mjs logic, index.js Deno entry)
+├── scripts/
+│   ├── Luna Host.bat      # Windows: start (or switch to) host mode, make it the default
+│   ├── Luna Host.command  # macOS: pull, npm ci when needed, caffeinate, host mode
+│   └── probe-claude-stream.js # records the claude stream-json control protocol
 ├── helpers/sounds/        # bundled audio: sfx/*.wav (placeholders), voice/*.mp3 (real, Edge-TTS)
 ├── test/                  # unit tests over the pure modules (`npm test`, node --test)
 ├── FUTURE_PLAN.md         # short roadmap: next steps, owed live checks, known issues, kept ideas
@@ -1223,6 +1257,101 @@ Settings → God Mode v2: worker model (default **Opus**, or the planner's pick)
 permission mode (default **bypassPermissions** — a worktree contains a worker's
 git damage, not its filesystem damage), what happens after a run, and the list
 of allowed tools learned from stalls.
+
+## Luna host + phone control
+
+A **Luna host** is any PC (or Mac) that the phone app drives like a terminal
+at home: pick a repo, chat with Claude Code live, approve tool calls, get push
+notifications. The phone also shows every PC's usage limits, repo status and
+God Mode runs. Design, protocol and security review:
+[docs/REMOTE_HOST_PLAN.md](docs/REMOTE_HOST_PLAN.md).
+
+> **This is remote code execution by design.** Whoever can sign a command owns
+> the host. The gate is a passkey (Face ID) paired on the host's own screen;
+> a cloud login alone can never run anything. Host mode is off unless you
+> start it.
+
+### Starting a host (`--host`)
+
+`LunaCore --host` runs the app without the HUD window: a tray icon only
+("Luna host · <machine> · default", **Pair a phone**, **Forget all phones**,
+**Open log**, **Stop**). It keeps the PC awake, puts a `host` heartbeat
+snapshot every 30 s (online on the phone while it is under 90 s old; it lists
+the host's repos, skills, slash commands, MCP servers and live sessions), runs
+signed commands from the phone (`host_commands`) and clones the synced
+projects it lacks. The log is `host.log` in the app's logs folder.
+
+- **Windows — `scripts/Luna Host.bat`** (double-click): starts the installed or
+  portable `LunaCore.exe --host --make-default`. No admin rights, no Node. It
+  finds the exe via `%LUNACORE_EXE%`, a `LunaCore*.exe` next to the script, or
+  the per-user / per-machine install. When the HUD already runs, it switches
+  into host mode instead (Stop in the tray brings the HUD back).
+- **macOS — `scripts/Luna Host.command`** (double-click, in a clone of this
+  repo): `git pull`, `npm ci` only when `package-lock.json` changed,
+  `caffeinate`, then `npx electron . --host --make-default`. Needs git, Node,
+  Claude Code and `gh auth login` once.
+- **`--make-default`** writes the synced unit `host:default` = `{machine}`
+  (config scope, newest wins), so the phone preselects this host. Without it
+  the host only shows as online.
+- **Auto-clone:** every synced project with a `remote`
+  (`https://github.com/<owner>/<repo>`) missing on the host is cloned into
+  `~/source/repos/<repo>` with the host's own git credentials — only for owners
+  in `config/host.local.json` → `{"owners": ["Kotsur69"]}` (the default). An
+  existing folder is never touched; the phone sees cloned / skipped: folder
+  exists / failed: auth / failed: other.
+- **First run:** the GitHub login opens in the browser, same as the HUD, then
+  the pairing window opens by itself. Until both are done the tray says
+  "Needs setup" and the host neither heartbeats, clones nor runs commands.
+
+### Pairing a phone
+
+1. On the host: the pairing window is open on first run, or tray → **Pair a
+   phone** (open for 10 minutes).
+2. On the phone: menu → **Pair a host**, type the host's machine name (the
+   tray and the hint dialog show it), tap Pair and approve the new passkey
+   with Face ID.
+3. Both screens show a 6-digit code. Confirm on the host **only if the codes
+   match**. The key is stored in `config/host-keys.local.json` on that host
+   only and never read from the cloud again.
+
+The exchange is commit-reveal, so a stolen cloud session can't grind a key
+whose code matches yours. Pair once per host. After that, Face ID once per
+12 h signs a session key that lives non-extractable on the phone; every
+command is signed with it and expires in 2 minutes.
+
+**Forget all phones** (tray) removes every paired key at once: live phone
+sessions stop being accepted immediately and every phone has to pair again.
+Use it if a phone is lost.
+
+### Phone pages
+
+- **Repos** — one card per repo (by remote), a row per PC: branch, dirty,
+  ahead / behind, last commit, last fetch; badges for "needs push", "behind",
+  "dirty" and "diverged across PCs". Read-only.
+- **God Mode** — the recent God Mode v2 runs of every PC (repo, "N of M
+  pushed", integration state); a tap shows the packages with branch, PR link
+  and stall reason. Read-only.
+- **Host** — usage bars on top, the host picker (online dot, star for the
+  default host), the repo picker (a synced repo the host hasn't cloned →
+  **Clone**, the signed `repo.clone`), a new session (model Sonnet / Opus, mode default /
+  acceptEdits / plan, optional "deny after N min", a picker that inserts
+  `/skill` or `/command`), the session list of every host, and the live chat:
+  streamed text, tool calls, approval cards (**Allow / Deny / Always**),
+  Send, Stop, End, Resume. Everything is shown as text, never HTML.
+- **Pair a host** — the pairing above.
+
+On a Windows PC where the full HUD was switched into host mode, each phone
+session also shows as a read-only tab ("Driven from phone").
+
+### Notifications
+
+Web Push to the installed PWA (iOS 16.4+): **approval needed**, **session
+done / failed**, **host offline** (the default host's heartbeat is > 5 min
+old) and **usage** at 80 % / 95 % of the 5 h and weekly limits. Turn them on
+with **Enable notifications** on the Host page. The text is generic
+("Approval needed on KT-PC-LLM"), never command text or code. The sender is
+the Supabase Edge Function `supabase/functions/push`; its setup (secrets,
+deploy, cron) is listed in the plan under H4.
 
 ## Mission Control (Ctrl+Shift+M)
 

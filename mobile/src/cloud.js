@@ -28,6 +28,7 @@
 import { createClient } from '@supabase/supabase-js';
 import rows from '../../src/cloudrows.js';
 import * as idb from './idb.js';
+import * as hostkey from './hostkey.js';
 import * as outbox from './outbox.js';
 import { PLACE_KEY } from './weather.js';
 
@@ -39,7 +40,7 @@ const PUSH_MAX = 500;
 /** A runaway pull (a bug, a hostile server) stops here instead of looping. */
 const MAX_PAGES = 100;
 const COLUMNS = 'key,value,u,deleted_at,rev,machine';
-const SNAPSHOT_KINDS = new Set(['news', 'ledger', 'yazio', 'usage']);
+const SNAPSHOT_KINDS = new Set(['news', 'ledger', 'yazio', 'usage', 'repos', 'godmode', 'host']);
 /** cloudsnapshots.js MAX_ROWS: more machines than Mati will ever own. */
 const MAX_SNAPSHOTS = 16;
 /** cloudsnapshots.js MAX_BYTES: a PC never puts more, so a longer row is junk (JSON length <= byte length). */
@@ -238,6 +239,7 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
       .channel('lunacore-sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sync_units' }, () => fn())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'snapshots' }, () => fn())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'host_events' }, () => fn())
       .subscribe();
     return () => client.removeChannel(channel);
   }
@@ -310,6 +312,101 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
     return (u && (await idb.get(googleKey(u.id, action)))) || null;
   }
 
+  // ---- host pairing (REMOTE_HOST_PLAN H1, views/pair.js) ----
+
+  const PAIR_COLUMNS = 'id,host,host_nonce,phone_nonce,status';
+
+  /** Offers a passkey to a host: {host, label, credential_id, public_key, commitment} -> row id. */
+  async function pairOffer(req) {
+    if (!(await user())) throw new Error('logged-out');
+    const { data, error } = await client.from('host_pairings').insert(req).select('id').single();
+    if (error || !data || typeof data.id !== 'string') throw new Error('pair-failed', { cause: error });
+    return data.id;
+  }
+
+  /** The request as the host left it (untrusted: views/pair.js checks it). */
+  async function pairRead(id) {
+    const { data, error } = await client.from('host_pairings').select(PAIR_COLUMNS).eq('id', id).maybeSingle();
+    if (error) throw new Error('pair-failed', { cause: error });
+    return data || null;
+  }
+
+  /** Reveals the phone's nonce once the host challenged; only ever once. */
+  async function pairReveal(id, phoneNonce) {
+    const { data, error } = await client
+      .from('host_pairings')
+      .update({ phone_nonce: phoneNonce })
+      .eq('id', id)
+      .eq('status', 'pending')
+      .is('phone_nonce', null)
+      .not('host_nonce', 'is', null)
+      .select('id');
+    if (error || !Array.isArray(data) || data.length !== 1) throw new Error('pair-failed', { cause: error });
+  }
+
+  // ---- host chat (REMOTE_HOST_PLAN H2, views/host.js) ----
+
+  const EVENT_COLUMNS = 'session_id,seq,host,kind,data,at';
+  /** A long session reads in pages; this caps one refresh. */
+  const EVENTS_PAGE = 500;
+  const SESSIONS_SCAN = 300;
+
+  /** A signed command ({command, sig, grant} from hostkey.signCommand) -> its row id. */
+  async function hostCommand({ command, sig, grant }) {
+    if (!(await user())) throw new Error('logged-out');
+    const row = {
+      host: command.host,
+      kind: command.kind,
+      payload: command.payload,
+      nonce: command.nonce,
+      expires_at: new Date(command.expires_at).toISOString(),
+      sig,
+      grant,
+    };
+    const { data, error } = await client.from('host_commands').insert(row).select('id').single();
+    if (error || !data || typeof data.id !== 'string') throw new Error('command-failed', { cause: error });
+    return data.id;
+  }
+
+  /** {status, result} of a command (untrusted: views/host.js reads known fields only). */
+  async function hostCommandRead(id) {
+    const { data, error } = await client.from('host_commands').select('status,result').eq('id', id).maybeSingle();
+    if (error) throw new Error('command-failed', { cause: error });
+    return data || null;
+  }
+
+  /** One session's events after `afterSeq`, raw (hostmodel.js parses). */
+  async function hostEvents(sessionId, afterSeq = -1) {
+    const { data, error } = await client
+      .from('host_events')
+      .select(EVENT_COLUMNS)
+      .eq('session_id', sessionId)
+      .gt('seq', afterSeq)
+      .order('seq', { ascending: true })
+      .limit(EVENTS_PAGE);
+    if (error || !Array.isArray(data)) throw new Error('events-failed', { cause: error });
+    return data;
+  }
+
+  /** The newest status events of all sessions, raw: the session list. */
+  async function hostSessions() {
+    const { data, error } = await client
+      .from('host_events')
+      .select(EVENT_COLUMNS)
+      .eq('kind', 'status')
+      .order('at', { ascending: false })
+      .limit(SESSIONS_SCAN);
+    if (error || !Array.isArray(data)) throw new Error('events-failed', { cause: error });
+    return data;
+  }
+
+  /** Stores this phone's push subscription (H4); the same endpoint is kept once. */
+  async function savePush({ endpoint, p256dh, auth }) {
+    if (!(await user())) throw new Error('logged-out');
+    const { error } = await client.from('push_subscriptions').upsert({ endpoint, p256dh, auth }, { onConflict: 'user_id,endpoint', ignoreDuplicates: true });
+    if (error) throw new Error('push-failed', { cause: error });
+  }
+
   function login() {
     return client.auth.signInWithOAuth({
       provider: 'github',
@@ -326,6 +423,8 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
     } finally {
       // An outbox write already under the lock finishes before the wipe.
       await outboxLock;
+      // The host session key goes first: wipe() also drops it from memory.
+      await hostkey.wipe().catch(() => {});
       await idb.clear();
       try {
         localStorage.removeItem(PICK_KEY);
@@ -338,5 +437,5 @@ export function createCloud(config, { onPending = () => {}, onRejected = () => {
 
   const onAuth = (fn) => client.auth.onAuthStateChange((event, session) => fn(session ? session.user : null));
 
-  return { user, state, pull, write, pending, flushAll, onChange, snapshots, cachedSnapshots, google, cachedGoogle, login, logout, onAuth };
+  return { user, state, pull, write, pending, flushAll, onChange, snapshots, cachedSnapshots, google, cachedGoogle, pairOffer, pairRead, pairReveal, hostCommand, hostCommandRead, hostEvents, hostSessions, savePush, login, logout, onAuth };
 }

@@ -45,10 +45,10 @@ function readJson(file) {
 }
 
 /** Expands a leading "~" to the home directory; returns a normalized path. */
-function expandHome(p) {
-  if (p === '~') return os.homedir();
+function expandHome(p, home = os.homedir()) {
+  if (p === '~') return home;
   if (p.startsWith('~/') || p.startsWith('~\\')) {
-    return path.join(os.homedir(), p.slice(2));
+    return path.join(home, p.slice(2));
   }
   return p;
 }
@@ -110,6 +110,37 @@ function resolveProjectDir(dir) {
   if (isDir(dir)) return dir;
   const rehomed = rehomePath(dir);
   return isDir(rehomed) ? rehomed : null;
+}
+
+/**
+ * The local form of a path read back from a persisted / synced file: "~"
+ * expanded, and an absolute path from another user's home re-homed when the
+ * original does not exist here (see rehomePath). When neither exists the
+ * expanded path is returned, so the caller can still report it as missing.
+ * @param {string} p
+ * @param {(p:string) => boolean} [exists]
+ * @param {string} [home]
+ * @returns {string|null} null for a non-string / empty input
+ */
+function resolveStoredPath(p, exists = isDir, home = os.homedir()) {
+  if (typeof p !== 'string' || !p.trim()) return null;
+  const abs = path.normalize(expandHome(p.trim(), home));
+  if (exists(abs)) return abs;
+  const twin = rehomePath(abs, home);
+  return twin && exists(twin) ? twin : abs;
+}
+
+/**
+ * Checks a working directory BEFORE a spawn/execFile uses it. A missing cwd
+ * makes the child fail with ENOENT, which every caller would otherwise read
+ * as "the program is not installed".
+ * @param {unknown} dir
+ * @param {(d:string) => boolean} [isDirFn]
+ * @returns {{ok:true}|{ok:false, error:'missingCwd', detail:string}}
+ */
+function checkCwd(dir, isDirFn = isDir) {
+  if (typeof dir === 'string' && dir && isDirFn(dir)) return { ok: true };
+  return { ok: false, error: 'missingCwd', detail: typeof dir === 'string' ? dir : '' };
 }
 
 /**
@@ -227,7 +258,10 @@ function uniqueId(base, existingIds) {
  * the "+" dialog pointed at a folder twice) is a no-op: the existing entry
  * is returned as-is rather than creating a second switcher option for the
  * same directory.
- * @param {{label?:string, path:string}} entry
+ *
+ * `remote` (a host's repo.clone, already checked by hostrepos.parseRemote) is
+ * stored with the entry; projectsync.js validates it again on every read.
+ * @param {{label?:string, path:string, remote?:string}} entry
  * @returns {{projects, activeProject, addedId:string}|null} null when `path`
  *   is missing/blank. `addedId` lets the caller select/switch to the new
  *   (or matching pre-existing) entry without having to re-derive its slug
@@ -257,7 +291,8 @@ function addProject(entry) {
   const list = Array.isArray(local.projects) ? local.projects.slice() : [];
   // Stored home-relative ("~\...") so the cloud-synced entry resolves on the
   // other machines too, whatever their user name is.
-  list.push({ id, label, path: toPortablePath(resolvedPath) });
+  const remote = typeof entry.remote === 'string' && entry.remote.startsWith('https://github.com/') ? entry.remote : null;
+  list.push({ id, label, path: toPortablePath(resolvedPath), ...(remote ? { remote } : {}) });
 
   paths.ensureUserDir();
   fs.writeFileSync(
@@ -321,6 +356,9 @@ module.exports = {
   rehomePath,
   toPortablePath,
   resolveProjectDir,
+  resolveStoredPath,
+  checkCwd,
+  isDir,
   addProject,
   removeProject,
   slugify,

@@ -173,7 +173,7 @@ function fakeExec(reply) {
 
 test('runPlanner feeds the prompt on stdin, in the repo folder', async () => {
   const { exec, calls } = fakeExec({ stdout: JSON.stringify({ structured_output: { packages: [] }, total_cost_usd: 1 }) });
-  const res = await runPlanner({ cwd: 'C:/repo', env: { A: '1' }, openTodos: [todo(1, 'x')], execImpl: exec });
+  const res = await runPlanner({ isDirImpl: () => true, cwd: 'C:/repo', env: { A: '1' }, openTodos: [todo(1, 'x')], execImpl: exec });
   assert.equal(res.ok, true);
   assert.equal(res.costUsd, 1);
   assert.equal(calls[0].file, 'claude');
@@ -185,9 +185,9 @@ test('runPlanner maps process failures', async () => {
   const enoent = Object.assign(new Error('x'), { code: 'ENOENT' });
   const killed = Object.assign(new Error('x'), { killed: true });
   const exit1 = Object.assign(new Error('exit 1'), { code: 1 });
-  assert.equal((await runPlanner({ openTodos: [], execImpl: fakeExec({ error: enoent }).exec })).error, 'noClaude');
-  assert.equal((await runPlanner({ openTodos: [], execImpl: fakeExec({ error: killed }).exec })).error, 'timeout');
-  assert.equal((await runPlanner({ openTodos: [], execImpl: fakeExec({ error: exit1 }).exec })).error, 'failed');
+  assert.equal((await runPlanner({ isDirImpl: () => true, cwd: 'C:/repo', openTodos: [], execImpl: fakeExec({ error: enoent }).exec })).error, 'noClaude');
+  assert.equal((await runPlanner({ isDirImpl: () => true, cwd: 'C:/repo', openTodos: [], execImpl: fakeExec({ error: killed }).exec })).error, 'timeout');
+  assert.equal((await runPlanner({ isDirImpl: () => true, cwd: 'C:/repo', openTodos: [], execImpl: fakeExec({ error: exit1 }).exec })).error, 'failed');
   const budget = fakeExec({ error: exit1, stdout: JSON.stringify({ is_error: true, subtype: 'error_max_budget_usd' }) });
-  assert.equal((await runPlanner({ openTodos: [], execImpl: budget.exec })).error, 'budget', 'envelope beats exit code');
+  assert.equal((await runPlanner({ isDirImpl: () => true, cwd: 'C:/repo', openTodos: [], execImpl: budget.exec })).error, 'budget', 'envelope beats exit code');
 });

@@ -13,6 +13,12 @@
 // ============================================================================
 
 const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker, Notification } = require('electron');
+
+// Host mode (docs/REMOTE_HOST_PLAN.md, "Host runtime"): `--host` runs the
+// headless src/hostmain.js instead of the HUD, before any HUD module loads.
+// A CommonJS module may return at the top level: nothing below runs then.
+// eslint-disable-next-line no-use-before-define
+if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud, chatTabs: phoneTabs }) }) !== 'hud') return;
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -52,7 +58,10 @@ const { resolveTemplateAdd, resolveTemplateUpdate } = require('./profileinput');
 const { localEndpointFromProfile, resolveAutoModel, LocalModelWatcher, probeEndpoint } = require('./lmstudio');
 // LM Studio tabs: role-rewriting loopback shim + pre-spawn env/flag prep.
 const { ensureShim, stopAllShims } = require('./lmstudioshim');
-const { resolveLocalLaunch, prepareLocalLaunch, launchWhenReady, ensureEmptyMcpConfig } = require('./locallaunch');
+const { resolveLocalLaunch, prepareLocalLaunch, prepareChainLaunch, launchWhenReady, ensureEmptyMcpConfig } = require('./locallaunch');
+const { ensureFallbackProxy, stopAllFallbackProxies } = require('./fallbackproxy');
+const { loadChains, resolveProfileChain } = require('./freechains');
+const { pickFreeProfileId } = require('./orchestraFree');
 const { userDir, ensureUserDir } = require('./paths');
 const { detectLmsCli, wakeLmStudio } = require('./lmstudiocli');
 const { findApiPort, listModels: listLmStudioModels, loadModel: loadLmStudioModel } = require('./lmstudiosdk');
@@ -71,7 +80,7 @@ const { withColorSupport, buildSessionEnv } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
 const { withSessionId, withIntakeMcp, intakeState, withTaskBrief, findExecutable, isClaudeCommand } = require('./launch');
 // Project switcher: session working directories (cwd) from config/projects.json.
-const { loadProjects, getProject, addProject, removeProject, resolveProjectDir } = require('./projects');
+const { loadProjects, getProject, addProject, removeProject, resolveProjectDir, resolveStoredPath } = require('./projects');
 const {
   cycleSessionId,
   moveSessionId,
@@ -121,6 +130,8 @@ const { startLifeSync } = require('./lifesync');
 const { startCloud } = require('./cloudsync');
 const { registerCloudIpc } = require('./cloudipc');
 const { machineName } = require('./missionledgersync');
+const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
+const { createHostPush } = require('./hostpush');
 let cloud = null;
 // Highlight extractor: batch tail-trim of video clips via system ffmpeg.
 // See src/highlights.js's header for the argv-array security property.
@@ -145,6 +156,7 @@ const { loadEditorConfig, resolveInRoot, buildEditorInvocation } = require('./ed
 const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
 // REMOTE_HOST_PLAN U1: the same read as a `usage` snapshot for the phone.
 const { usageSnapshot } = require('./usagesnapshot');
+const { createSnapshotPuts } = require('./snapshotputs');
 // E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
 // zero network - Passive Observer in the strictest possible sense.
 const { TelemetryWatcher } = require('./telemetry');
@@ -442,6 +454,8 @@ function sessionSummary(s) {
     alive: s.alive || s.preparing === true,
     // 'ready' | 'off' | 'none' | null - drives the to-do widget's ✨ button.
     todoTools: s.todoTools || null,
+    // A phone-driven host session (src/hostchattabs.js): no input.
+    readOnly: s.readOnly === true,
   };
 }
 
@@ -452,6 +466,27 @@ function broadcastSessions() {
     activeSessionId,
   });
 }
+
+// Phone-driven host sessions as read-only tabs (src/hostchattabs.js). Used
+// only when this HUD is switched into host mode (src/hostmain.js attaches it).
+const phoneTabs = createHostChatTabs({
+  open: (name) => {
+    const tab = readOnlySession(`s${++sessionSeq}`, name);
+    sessions.set(tab.id, tab);
+    broadcastSessions();
+    return tab.id;
+  },
+  isOpen: (id) => sessions.has(id),
+  write: (id, data) => send('pty:data', { sessionId: id, data }),
+  end: (id) => {
+    const tab = sessions.get(id);
+    if (!tab) return;
+    tab.alive = false;
+    send('pty:exit', { sessionId: id, code: 0 });
+    broadcastSessions();
+  },
+  lang: () => (readUiPrefs().lang === 'pl' ? 'pl' : 'en'),
+});
 
 // ---- App window ---------------------------------------------------------
 
@@ -932,6 +967,7 @@ const orchestra = createOrchestra({
     const next = fn(list);
     if (next !== list && writeTodos(projectId, next)) send('todo:changed', { projectId });
   },
+  putSnapshot: (run) => snapshotPuts.godmode.add(run),
   writeReport: (planId, text) => {
     if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return null;
     try {
@@ -971,13 +1007,23 @@ const orchestra = createOrchestra({
   // where LunaCore opens tabs and runs git.
   loadState: () => {
     const raw = orchestraStore.loadRun();
-    const repo = raw && typeof raw.repoPath === 'string' ? path.resolve(raw.repoPath) : null;
+    // Re-homed first: a run saved under another user's home still matches
+    // the same registered project here (restore() re-homes the rest).
+    const repo = raw && typeof raw.repoPath === 'string' ? path.resolve(resolveStoredPath(raw.repoPath) || raw.repoPath) : null;
     return repo && projects.some((p) => p.path && path.resolve(p.path) === repo) ? raw : null;
   },
   saveState: (data) => {
     if (!orchestraStore.saveRun(data)) console.error('[orchestra] could not save config/orchestra.local.json');
   },
   onChange: (view) => send('orchestra:changed', view),
+  // Planning that hit the Claude limit waits for the reset (orchestraPlanWait.js).
+  usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
+  onPlanWait: (state) => send('orchestra:planWait', state),
+  // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
+  freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
+  // A restored run's folders and briefs re-homed onto this PC (src/projects.js).
+  resolvePath: (p) => resolveStoredPath(p),
+  resolveFile: (p) => resolveStoredPath(p, (f) => fs.existsSync(f)),
   onRunEvent: (kind) => {
     if (readUiPrefs().voiceEnabled === false) return;
     if (kind === 'done') playCue('voice.done');
@@ -1345,8 +1391,11 @@ function editedByOtherSessions(session) {
  * @param {Object} profile
  */
 function launchSession(session, profile) {
-  const localLaunch = resolveLocalLaunch(profile, loadProviders().providers);
-  if (!localLaunch) {
+  const providers = loadProviders().providers;
+  const localLaunch = resolveLocalLaunch(profile, providers);
+  // A free-model chain tab goes through the fallback proxy (src/fallbackproxy.js).
+  const chain = localLaunch ? null : resolveProfileChain(profile, providers, loadChains());
+  if (!localLaunch && !chain) {
     // Still a new launch: invalidates a local prep that may be in flight.
     session.spawnSeq = (session.spawnSeq || 0) + 1;
     session.preparing = false;
@@ -1357,8 +1406,9 @@ function launchSession(session, profile) {
   // flash "ended" before its process even exists.
   session.preparing = true;
   launchWhenReady(session, profile, {
-    prepare: () =>
-      prepareLocalLaunch(profile, localLaunch, {
+    prepare: () => chain
+      ? prepareChainLaunch(profile, chain, { ensureProxy: ensureFallbackProxy, inheritedEnv: process.env })
+      : prepareLocalLaunch(profile, localLaunch, {
         probe: probeEndpoint,
         ensureShim,
         ensureMcpFile: () => (ensureUserDir() ? ensureEmptyMcpConfig(userDir()) : null),
@@ -1563,6 +1613,7 @@ function jumpToProject(digit) {
  * @param {{profileId?:string, projectId?:string}} [opts]
  */
 function restartSession(session, opts = {}) {
+  if (session.readOnly) return; // a phone-driven tab has no process to restart
   const profile =
     getProfile(profiles, opts.profileId || session.profileId) || profiles[0];
   if (!profile) return;
@@ -1699,10 +1750,26 @@ function maybeReadOutputAloud(text) {
 const USAGE_SNAPSHOT_EVERY_MS = 5 * 60 * 1000;
 let usageSnapshotTimer = null;
 
+// H4: the usage push (80 % / 95 % of each window, once) rides on the same put.
+let usagePush = null;
+
 function putUsageSnapshot() {
   const snap = usageSnapshot(latestUsage);
-  if (snap && cloud) cloud.snapshots.put('usage', snap);
+  if (!snap || !cloud) return;
+  cloud.snapshots.put('usage', snap);
+  if (!cloud.client || !cloud.status().loggedIn) return;
+  usagePush = usagePush || createHostPush({ invoke: (body) => cloud.client.functions.invoke('push', { body }), machine: machineName(os.hostname()) });
+  usagePush.usage(snap);
 }
+
+// U2: the git station's repos and finished God Mode runs, for the phone.
+const snapshotPuts = createSnapshotPuts({
+  snapshots: () => (cloud ? cloud.snapshots : null),
+  loggedIn: () => Boolean(cloud && cloud.status().loggedIn),
+  machine: machineName(os.hostname()),
+  readAll: readAllRepos,
+  historyFile: () => (ensureUserDir() ? path.join(userDir(), RUN_REPORT_DIR, 'godmode-snapshot.json') : null),
+});
 
 function startUsageWatcher() {
   if (!ENABLE_USAGE_METER) return;
@@ -2041,8 +2108,11 @@ function registerIpc() {
     if (typeof name !== 'string' || name.length > 200) return { ok: false, error: 'badName' };
     const active = activeSessionId ? sessions.get(activeSessionId) : null;
     const project = getProject(projects, (active && active.projectId) || activeProjectId);
-    const base = project ? project.path : activeCwd;
-    if (!base) return { ok: false, error: 'notRepo' };
+    const wanted = project ? project.path : activeCwd;
+    if (!wanted) return { ok: false, error: 'notRepo' };
+    // A project folder missing on this PC is its own error, not "not a repo".
+    const base = resolveProjectDir(wanted);
+    if (!base) return { ok: false, error: 'noFolder' };
     const res = await addWorktree(base, name);
     if (!res.ok) return res;
     createSession({
@@ -2701,10 +2771,11 @@ function registerIpc() {
 
   // Git station: read + fetch. No pull, commit or push by design - see the
   // header of src/gitstation.js.
-  ipcMain.handle('git:list', () => readAllRepos());
+  // Each refresh / fetch also puts the `repos` snapshot (never throws).
+  ipcMain.handle('git:list', () => readAllRepos().then(snapshotPuts.repos.after));
   ipcMain.handle('git:fetch', (_event, dir) =>
     typeof dir === 'string' && dir
-      ? fetchRepo(dir)
+      ? fetchRepo(dir).finally(() => void snapshotPuts.repos.refresh())
       : Promise.resolve({ ok: false, error: 'badPath', repo: null })
   );
   ipcMain.handle('git:scan', () => scanForRepos());
@@ -2787,6 +2858,10 @@ function registerIpc() {
   });
 
   ipcMain.handle('orchestra:get', () => orchestra.view());
+  // A planning wait for the usage-limit reset: replay its state, or cancel it.
+  // No payload crosses either way.
+  ipcMain.handle('orchestra:planWait', () => orchestra.planWait());
+  ipcMain.handle('orchestra:cancelPlanWait', () => orchestra.cancelPlanWait());
 
   // Approve / Launch. orchestra.launch() validates the payload: only a known
   // plan id, ids of its own packages and capped prompt strings get through.
@@ -3231,6 +3306,7 @@ app.on('window-all-closed', () => {
   keepAwake.stopSync();
   // LM Studio shims: close their loopback listeners and any open streams.
   stopAllShims().catch(() => {});
+  stopAllFallbackProxies().catch(() => {});
   // Best-effort: never blocks shutdown, and only ever stops a CCR gateway
   // this process started itself (src/ccrcontrol.js).
   ccrControl.shutdown();

@@ -20,6 +20,9 @@ const {
   rewriteBody,
   shouldRewrite,
   isConnectivityProbe,
+  isEventStream,
+  endsOnEventBoundary,
+  createIdleWatchdog,
   LmStudioShim,
   ensureShim,
   stopAllShims,
@@ -416,5 +419,142 @@ test('ensureShim reuses one shim per upstream and refuses non-loopback upstreams
     assert.deepStrictEqual(remote, { ok: false, reason: 'not-local' });
   } finally {
     await stopAllShims();
+  }
+});
+
+// --- stream-activity timeout ------------------------------------------------
+
+/** Fake timers: fire() runs the pending callback, like the delay elapsing. */
+function fakeTimers() {
+  const pending = new Map();
+  let next = 1;
+  return {
+    setTimer: (fn, ms) => { const id = next++; pending.set(id, { fn, ms }); return id; },
+    clearTimer: (id) => { pending.delete(id); },
+    fireAll: () => { const all = [...pending.values()]; pending.clear(); all.forEach((t) => t.fn()); },
+    count: () => pending.size,
+  };
+}
+
+test('idle watchdog fires once after a silent window', () => {
+  const t = fakeTimers();
+  let fired = 0;
+  createIdleWatchdog({ idleMs: 1000, onIdle: () => { fired += 1; }, ...t });
+  t.fireAll();
+  t.fireAll();
+  assert.strictEqual(fired, 1);
+});
+
+test('idle watchdog is reset by every chunk, so long active streams never time out', () => {
+  const t = fakeTimers();
+  let fired = 0;
+  const w = createIdleWatchdog({ idleMs: 1000, onIdle: () => { fired += 1; }, ...t });
+  for (let i = 0; i < 50; i += 1) w.touch();
+  // Only the latest timer is armed - earlier windows were cleared by touch().
+  assert.strictEqual(t.count(), 1);
+  w.stop();
+  assert.strictEqual(t.count(), 0);
+  t.fireAll();
+  assert.strictEqual(fired, 0);
+});
+
+test('idle watchdog with a non-positive window never arms', () => {
+  const t = fakeTimers();
+  createIdleWatchdog({ idleMs: 0, onIdle: () => assert.fail('must not fire'), ...t });
+  assert.strictEqual(t.count(), 0);
+});
+
+test('isEventStream and endsOnEventBoundary', () => {
+  assert.strictEqual(isEventStream({ 'content-type': 'text/event-stream; charset=utf-8' }), true);
+  assert.strictEqual(isEventStream({ 'content-type': 'application/json' }), false);
+  assert.strictEqual(isEventStream(undefined), false);
+  assert.strictEqual(endsOnEventBoundary(Buffer.from('data: 1\n\n')), true);
+  assert.strictEqual(endsOnEventBoundary(Buffer.from('data: 1\r\n\r\n')), true);
+  assert.strictEqual(endsOnEventBoundary(Buffer.from('data: {"a":')), false);
+  assert.strictEqual(endsOnEventBoundary('event: x\n'), false);
+});
+
+test('shim keeps a slow but active stream alive past the idle window', async () => {
+  // Total stream time (~10 x 60ms) is far longer than the 400ms idle window;
+  // only silence counts, so the whole answer must arrive.
+  const upstream = await startUpstream(async (req, res) => {
+    req.resume();
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (let i = 0; i < 10; i += 1) {
+      res.write(`data: ${i}\n\n`);
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    res.end('data: done\n\n');
+  });
+  const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}`, idleTimeoutMs: 400, keepAliveMs: 0 });
+  const { port, token } = await shim.start();
+  try {
+    const res = await request(port, { method: 'POST', path: '/v1/messages', body: '{"messages":[]}', token });
+    assert.strictEqual(res.status, 200);
+    assert.match(res.body, /data: 9/);
+    assert.match(res.body, /data: done/);
+  } finally {
+    await shim.stop();
+    upstream.close();
+  }
+});
+
+test('shim answers 504 when the upstream stays silent before its headers', async () => {
+  const upstream = await startUpstream((req) => { req.resume(); });
+  const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}`, idleTimeoutMs: 80, keepAliveMs: 0 });
+  const { port, token } = await shim.start();
+  try {
+    const res = await request(port, { method: 'POST', path: '/v1/messages', body: '{"messages":[]}', token });
+    assert.strictEqual(res.status, 504);
+    assert.strictEqual(JSON.parse(res.body).error.type, 'timeout_error');
+  } finally {
+    await shim.stop();
+    upstream.closeAllConnections();
+    upstream.close();
+  }
+});
+
+test('shim ends a stream that goes silent mid-answer with an SSE error event', async () => {
+  const upstream = await startUpstream((req, res) => {
+    req.resume();
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write('data: 1\n\n');
+  });
+  const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}`, idleTimeoutMs: 80, keepAliveMs: 0 });
+  const { port, token } = await shim.start();
+  try {
+    const res = await request(port, { method: 'POST', path: '/v1/messages', body: '{"messages":[]}', token });
+    assert.strictEqual(res.status, 200);
+    assert.match(res.body, /data: 1/);
+    assert.match(res.body, /event: error/);
+  } finally {
+    await shim.stop();
+    upstream.closeAllConnections();
+    upstream.close();
+  }
+});
+
+test('shim sends SSE pings while the upstream thinks between events', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const upstream = await startUpstream(async (req, res) => {
+    req.resume();
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write('data: 1\n\n');
+    await gate;
+    res.end('data: 2\n\n');
+  });
+  const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}`, idleTimeoutMs: 5000, keepAliveMs: 30 });
+  const { port, token } = await shim.start();
+  try {
+    setTimeout(release, 200);
+    const res = await request(port, { method: 'POST', path: '/v1/messages', body: '{"messages":[]}', token });
+    assert.match(res.body, /event: ping\ndata: \{"type": "ping"\}\n\n/);
+    // Pings sit between whole events, never inside one.
+    assert.ok(res.body.startsWith('data: 1\n\n'));
+    assert.ok(res.body.endsWith('data: 2\n\n'));
+  } finally {
+    await shim.stop();
+    upstream.close();
   }
 });
