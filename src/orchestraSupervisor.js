@@ -569,10 +569,43 @@ function normalizeIntegration(raw) {
     // Packages a merge-mode integration left out (orchestraIntegrate.js).
     skipped: (Array.isArray(o.skipped) ? o.skipped : []).map(normalizeSkipped).filter(Boolean).slice(0, MAX_SKIPPED),
     partial: o.partial === true,
+    // End-of-run self-check (orchestraSelfCheck.js), null until one ran.
+    selfCheck: normalizeSelfCheck(o.selfCheck),
+    manualActions: (Array.isArray(o.manualActions) ? o.manualActions : [])
+      .map(normalizeManualAction)
+      .filter(Boolean)
+      .slice(0, MAX_MANUAL_ACTIONS),
   };
 }
 
 const MAX_SKIPPED = 50;
+const MAX_MANUAL_ACTIONS = 40;
+const MAX_SELFCHECK_TAIL = 4000;
+const CHECK_STATES = new Set(['ok', 'failed', 'skipped']);
+const MANUAL_KINDS = new Set(['migration', 'edgeFunction', 'env', 'note']);
+const SHA7_RE = /^[0-9a-f]{7,12}$/;
+const INTEGRATION_BRANCH_RE = /^luna\/[a-z0-9][a-z0-9-]{0,99}$/;
+
+function normalizeSelfCheck(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const state = (v) => (CHECK_STATES.has(v) ? v : 'skipped');
+  const branch = raw.pushedIntegrationBranch;
+  return {
+    tests: state(raw.tests),
+    syntax: state(raw.syntax),
+    smoke: state(raw.smoke),
+    fixups: Number.isFinite(raw.fixups) ? Math.max(0, Math.min(1, Math.round(raw.fixups))) : 0,
+    tail: str(raw.tail, MAX_SELFCHECK_TAIL),
+    pushedIntegrationBranch: typeof branch === 'string' && INTEGRATION_BRANCH_RE.test(branch) ? branch : null,
+  };
+}
+
+function normalizeManualAction(raw) {
+  if (!raw || typeof raw !== 'object' || !MANUAL_KINDS.has(raw.kind)) return null;
+  const what = str(raw.what, 160);
+  if (!what) return null;
+  return typeof raw.from === 'string' && SHA7_RE.test(raw.from) ? { kind: raw.kind, what, from: raw.from } : { kind: raw.kind, what };
+}
 
 function normalizeSkipped(raw) {
   if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !SLUG_RE.test(raw.id)) return null;

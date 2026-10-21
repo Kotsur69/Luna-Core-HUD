@@ -36,6 +36,7 @@ const path = require('path');
 const { validatePlan, estimatePlan, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
 const sup = require('./orchestraSupervisor');
 const { createFinalizer } = require('./orchestraFinalize');
+const { createFixupRunner } = require('./orchestraFixup');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 const { FREE_BRANCH_PREFIX, isSafeFreeBranch, freeRunSettings, integrationFor } = require('./orchestraFree');
 
@@ -178,6 +179,7 @@ function withStallNote(text, reason, detail) {
  *   baseBranchOf?: Function, mergeDeps?: Function, createPr?: Function,
  *   integrateMerge?: Function, removeWorktree?: Function, updateTodos?: Function,
  *   writeReport?: Function, notify?: Function, putSnapshot?: Function, sleep?: Function,
+ *   runSelfCheck?: Function, pushBranch?: Function,
  * }} deps
  */
 function createOrchestra(deps) {
@@ -224,6 +226,25 @@ function createOrchestra(deps) {
     replan: (ctx) => makePlan(ctx),
   });
 
+  // The end-of-run self-check's one fix-up worker (orchestraFixup.js): a
+  // tab, never a package.
+  const fixup = createFixupRunner({
+    getPlan: () => plan,
+    createSession: (opts) => deps.createSession(opts),
+    writeBrief: (file, text) => deps.writeBrief(file, text),
+    briefDir: () => deps.briefDir(),
+    closeSession: (id) => closeSession(id),
+    sessionAlive: (id) => sessionAlive(id),
+    // The run's (frozen) worker model and permission mode; 'plan' has no single model -> CLI default.
+    model: () => {
+      const m = (plan && plan.workerModel) || workerSettings().model;
+      return m && m !== 'plan' ? m : null;
+    },
+    permissionMode: () => (plan && plan.permissionMode) || workerSettings().permissionMode || null,
+    setTimer: (fn, ms) => setTimer(fn, ms),
+    clearTimer: (t) => clearTimer(t),
+  });
+
   const finalizer = createFinalizer({
     getPlan: () => plan,
     patch: (id, fields) => patch(id, fields),
@@ -232,7 +253,13 @@ function createOrchestra(deps) {
     onRunEvent: (...args) => onRunEvent(...args),
     now,
     createPr: deps.createPr ? (args) => deps.createPr({ ...args, repoPath: plan.repoPath }) : null,
-    integrateMerge: deps.integrateMerge ? (args) => deps.integrateMerge({ ...args, repoPath: plan.repoPath }) : null,
+    integrateMerge: deps.integrateMerge
+      ? (args, extra) => deps.integrateMerge({ ...args, repoPath: plan.repoPath }, extra)
+      : null,
+    runSelfCheck: deps.runSelfCheck,
+    pushBranch: deps.pushBranch,
+    runFixup: (args) => fixup.run(args),
+    checkCommand: () => workerSettings().checkCommand,
     currentBaseBranch: deps.baseBranchOf ? () => deps.baseBranchOf(plan.repoPath) : null,
     removeWorktree: deps.removeWorktree,
     closeSession,
@@ -909,6 +936,7 @@ function createOrchestra(deps) {
    * @param {string} fragment transcript text of the turn
    */
   function onTurnEnd(sessionId, fragment) {
+    if (fixup.onTurnEnd(sessionId, fragment)) return;
     const pkg = bySession(sessionId);
     if (!pkg || plan.killed) return;
     const marker = sup.markerFrom(fragment, pkg.id);
@@ -1070,6 +1098,8 @@ function createOrchestra(deps) {
     plan.killed = true;
     // A kill during a usage-limit pause still counts the pause so far.
     if (plan.pausedUntil && plan.pauseStartedAt) plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, now() - plan.pauseStartedAt);
+    // A running fix-up worker stops with the run: its tab closes, the base stays unpushed.
+    fixup.abort();
     plan.pausedUntil = null;
     plan.pauseStartedAt = null;
     for (const p of plan.packages.filter((x) => x.state === 'launched')) {
@@ -1123,6 +1153,7 @@ function createOrchestra(deps) {
 
   /** A closed tab leaves its worktree; the board says so and the slot frees. */
   function onSessionClosed(sessionId) {
+    if (fixup.onSessionClosed(sessionId)) return true;
     const pkg = bySession(sessionId);
     if (!pkg) return false;
     cancelNudge(pkg.id);
@@ -1160,6 +1191,7 @@ function createOrchestra(deps) {
     onSessionClosed,
     unschedule,
     finishRun,
+    runFixup: (args) => fixup.run(args),
     planWait: () => planWaiter.view(),
     cancelPlanWait: () => planWaiter.cancel(),
     isBusy,

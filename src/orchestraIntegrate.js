@@ -376,16 +376,18 @@ async function pushGate(deps, root, info) {
  * order, verify after each. A package that cannot be merged or stays red is
  * reset away and skipped, with every later package that depends on it
  * (their branches carry its commits); the rest is pushed to the base branch.
- * @param {{repoPath:string, base:string, slug:string,
+ * `checkOnly: true` builds the same worktree, runs deps.beforePush (the
+ * self-check) and never pushes; the worktree and its branch are removed.
+ * @param {{repoPath:string, base:string, slug:string, checkOnly?:boolean,
  *   packages:Array<{id:string, branch:string, verify:string, dependsOn?:string[]}>}} args
  * @param {{addWorktree:Function, removeWorktree:Function, resolve:Function,
  *   execImpl?:Function, verifyImpl?:Function, installImpl?:Function,
- *   beforePush?:(root:string, info:{merged:string[], skipped:object[]}) => Promise<{ok:boolean, reason?:string}>}} deps
+ *   beforePush?:(root:string, info:{merged:string[], skipped:object[], baseSha:string}) => Promise<{ok:boolean, reason?:string}>}} deps
  * @returns {Promise<{ok:boolean, merged:string[],
  *   skipped:Array<{id:string, stage:string, detail:string, files:string[]}>,
  *   stage?:string, failedId?:string|null, detail?:string, headSha?:string|null, root?:string|null}>}
  */
-async function integrateMerge({ repoPath, base, slug, packages }, deps) {
+async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, deps) {
   const execImpl = deps.execImpl;
   const verifyImpl = deps.verifyImpl || runVerify;
   const merged = [];
@@ -409,9 +411,15 @@ async function integrateMerge({ repoPath, base, slug, packages }, deps) {
   if (!wt.ok) return fail('worktree', wt.detail || wt.error);
   const done = async (result) => {
     // Removed only after a successful push; a failed integration is left in
-    // place for inspection.
-    if (result.ok) await deps.removeWorktree(repoPath, wt.root);
-    return { ...result, root: result.ok ? null : wt.root };
+    // place for inspection. A check-only (throwaway) worktree always goes,
+    // with its local branch, so the next check can build it again.
+    if (result.ok || checkOnly) {
+      const removed = await deps.removeWorktree(repoPath, wt.root);
+      if (checkOnly && (!removed || removed.ok !== false) && /^luna\/[A-Za-z0-9._-]+$/.test(wt.branch || '')) {
+        await runGit(repoPath, ['branch', '-D', wt.branch], execImpl);
+      }
+    }
+    return { ...result, root: result.ok || checkOnly ? null : wt.root };
   };
 
   const installed = await (deps.installImpl || ensureInstall)(wt.root, verifyImpl);
@@ -444,7 +452,10 @@ async function integrateMerge({ repoPath, base, slug, packages }, deps) {
   }
 
   if (!merged.length) return done(fail('nothingMerged', skipped.map((s) => s.id).join(', ')));
-  const gate = await pushGate(deps, wt.root, { merged: [...merged], skipped: skipped.map((s) => ({ ...s })) });
+  const gate = await pushGate(deps, wt.root, { merged: [...merged], skipped: skipped.map((s) => ({ ...s })), baseSha });
+  // Check-only (pr / branches modes): the gate ran the self-check; nothing
+  // is ever pushed from here.
+  if (checkOnly) return done({ ok: true, merged, skipped, checkOnly: true, headSha: null });
   if (!gate.ok) return done(fail('beforePush', gate.reason));
   const push = await runGit(wt.root, ['push', 'origin', `HEAD:refs/heads/${base}`], execImpl);
   if (!push.ok) return done(fail('push', firstLine(push.stderr)));

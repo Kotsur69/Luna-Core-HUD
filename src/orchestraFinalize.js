@@ -25,10 +25,15 @@ const { topoOrder } = require('./orchestraPlan');
 const { prBody } = require('./orchestraIntegrate');
 const { buildReport, appendStallNotes } = require('./orchestraReport');
 const { runEntry } = require('./godmodesnapshot');
+const { selfCheckGate } = require('./orchestraSelfCheck');
 
 // Lets a closed tab's processes let go of the worktree folder (Windows).
 const TAB_CLOSE_SETTLE_MS = 2500;
 const MAX_TODO_DETAILS = 4000;
+const DEFAULT_CHECK_COMMAND = 'npm test';
+
+/** The integration worktree / branch name part for a run: `luna/<slug>-integration`. */
+const slugOf = (plan) => plan.id.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 24) || 'run';
 
 /**
  * @param {{
@@ -38,6 +43,10 @@ const MAX_TODO_DETAILS = 4000;
  *   closeSession?: Function, sessionAlive?: Function, updateTodos?: Function,
  *   writeReport?: Function, notify?: Function, putSnapshot?: Function, sleep?: (ms:number) => Promise<void>,
  *   onReport?: (planId:string, text:string, summary:object) => Promise<{error?:string}|void>,
+ *   runSelfCheck?: (args:{root:string, baseSha:string|null, checkCommand:string}) => Promise<object>,
+ *   runFixup?: (args:{root:string, brief:string}) => Promise<{ok:boolean}>,
+ *   pushBranch?: (root:string, branch:string) => Promise<{ok:boolean}>,
+ *   checkCommand?: () => string,
  * }} deps
  */
 function createFinalizer(deps) {
@@ -73,35 +82,91 @@ function createFinalizer(deps) {
     return firstError ? { ok: false, ...firstError } : { ok: true };
   }
 
+  const checkCommand = () => {
+    const cmd = deps.checkCommand ? deps.checkCommand() : null;
+    return typeof cmd === 'string' && cmd.trim() ? cmd.trim() : DEFAULT_CHECK_COMMAND;
+  };
+  const packagesFor = (todo) => todo.map((p) => ({ id: p.id, branch: p.branch, verify: p.verify, dependsOn: p.dependsOn || [] }));
+  // Self-check results travel back with the integration result.
+  const checked = (gate) => (gate ? { selfCheck: gate.selfCheck, manualActions: gate.manualActions } : {});
+
   async function mergeAll(plan, todo) {
     if (!deps.integrateMerge) return { ok: false, error: 'unavailable' };
     if (!todo.length) return { ok: true };
-    const res = await deps.integrateMerge({
-      base: plan.baseBranch,
-      slug: plan.id.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 24) || 'run',
-      packages: todo.map((p) => ({ id: p.id, branch: p.branch, verify: p.verify, dependsOn: p.dependsOn || [] })),
-    });
+    const slug = slugOf(plan);
+    let gate = null;
+    // The self-check gate runs on the integration worktree right before the
+    // base push (orchestraIntegrate.js deps.beforePush): one fix-up worker,
+    // and a red result never reaches the base branch.
+    const extra = deps.runSelfCheck
+      ? {
+          beforePush: async (root, info) => {
+            gate = await selfCheckGate(
+              { root, baseSha: (info && info.baseSha) || null, checkCommand: checkCommand(), slug },
+              { runSelfCheck: deps.runSelfCheck, runFixup: deps.runFixup, pushBranch: deps.pushBranch },
+            );
+            return gate.ok ? { ok: true } : { ok: false, reason: gate.reason };
+          },
+        }
+      : {};
+    const res = await deps.integrateMerge({ base: plan.baseBranch, slug, packages: packagesFor(todo) }, extra);
     // Merges only count once they are pushed. Skipped packages do not fail
     // the integration: the rest landed, so it is a partial success.
     const skipped = Array.isArray(res.skipped) ? res.skipped : [];
     if (res.ok) {
       for (const id of res.merged) deps.patch(id, { merged: true });
-      return { ok: true, skipped, partial: skipped.length > 0 };
+      return { ok: true, skipped, partial: skipped.length > 0, ...checked(gate) };
     }
     const detail = [res.failedId, res.detail].filter(Boolean).join(': ');
-    return { ok: false, error: `${res.stage}Failed`, detail: detail || null, skipped };
+    // A red self-check is its own open question: the merged result sits on
+    // luna/<slug>-integration (when that push worked), the base is untouched.
+    const selfCheckRed = res.stage === 'beforePush' && gate && !gate.ok;
+    return { ok: false, error: selfCheckRed ? 'selfCheckFailed' : `${res.stage}Failed`, detail: detail || null, skipped, ...checked(gate) };
+  }
+
+  /**
+   * pr / branches modes: the same integration worktree, built as a throwaway
+   * (card-2 skip rules), only to run the self-check. Never pushes, no fix-up
+   * worker; only the results are kept. Free runs are left out: the merge
+   * resolver is a paid Claude call.
+   */
+  async function checkOnly(plan) {
+    if (!deps.integrateMerge || !deps.runSelfCheck || !plan.baseBranch || plan.freeMode) return {};
+    const todo = ordered(plan, (p) => p.state === 'pushed' && p.branch);
+    if (!todo.length) return {};
+    let gate = null;
+    try {
+      await deps.integrateMerge(
+        { base: plan.baseBranch, slug: `${slugOf(plan).slice(0, 18)}-check`, packages: packagesFor(todo), checkOnly: true },
+        {
+          beforePush: async (root, info) => {
+            gate = await selfCheckGate(
+              { root, baseSha: (info && info.baseSha) || null, checkCommand: checkCommand(), slug: slugOf(plan) },
+              { runSelfCheck: deps.runSelfCheck },
+            );
+            return { ok: false, reason: 'checkOnly' };
+          },
+        },
+      );
+    } catch (err) {
+      deps.onRunEvent('error', { where: 'selfCheck', message: err instanceof Error ? err.message : String(err) });
+    }
+    return checked(gate);
   }
 
   async function integrate(plan) {
     const mode = plan.integrationMode || 'branches';
-    if (mode === 'branches') return { ok: true };
+    if (mode === 'branches') return { ok: true, ...(await checkOnly(plan)) };
     if (!plan.baseBranch) return { ok: false, error: 'noBaseBranch' };
     // The checkout must still be on the branch the plan was made on - the
     // stored name is never trusted alone to pick what gets PRs or a push.
     if (deps.currentBaseBranch && (await deps.currentBaseBranch()) !== plan.baseBranch) {
       return { ok: false, error: 'baseMoved', detail: plan.baseBranch };
     }
-    if (mode === 'pr') return openPrs(plan, ordered(plan, (p) => p.state === 'pushed' && !p.prUrl && p.branch));
+    if (mode === 'pr') {
+      const prs = await openPrs(plan, ordered(plan, (p) => p.state === 'pushed' && !p.prUrl && p.branch));
+      return { ...prs, ...(await checkOnly(plan)) };
+    }
     return mergeAll(plan, ordered(plan, (p) => p.state === 'pushed' && !p.merged && p.branch));
   }
 
@@ -226,6 +291,8 @@ function createFinalizer(deps) {
     }
     if (deps.getPlan() !== plan) return false; // discarded meanwhile
     const skipped = Array.isArray(res.skipped) ? res.skipped : [];
+    // Kept from the last check when this pass ran none (nothing new to merge).
+    if (res.selfCheck) setIntegration(plan, { selfCheck: res.selfCheck, manualActions: res.manualActions || [] });
     setIntegration(
       plan,
       res.ok
