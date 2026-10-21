@@ -213,6 +213,12 @@ test('no marker -> delayed nudge, capped, then stalled', async () => {
   s.orch.onTurnEnd('s1', turn('still working'));
   assert.equal(s.orch.view().packages[0].state, 'launched', 'the stall waits like a nudge');
   s.advance(10_000);
+  // The first noMarker stall is resumed once automatically in a new tab.
+  assert.deepEqual([s.orch.view().packages[0].state, s.orch.view().packages[0].sessionId], ['launched', 's2']);
+  for (let i = 0; i <= sup.MAX_NUDGES; i += 1) {
+    s.orch.onTurnEnd('s2', turn('still working'));
+    s.advance(10_000);
+  }
   assert.equal(s.orch.view().packages[0].state, 'stalled');
   assert.equal(s.orch.view().packages[0].error, 'noMarker');
 });
@@ -235,20 +241,29 @@ test('verify failure goes back to the worker, then stalls after the cap', async 
     packages: [pkg('a', [1])],
     finish: async () => ({ ok: false, stage: 'verify', output: 'FAIL x.test.js' }),
   });
-  for (let i = 0; i < sup.MAX_VERIFY_ROUNDS; i += 1) {
-    s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  const exhaust = async (sid) => {
+    for (let i = 0; i < sup.MAX_VERIFY_ROUNDS; i += 1) {
+      s.orch.onTurnEnd(sid, turn('LUNA_DONE a'));
+      await s.flush();
+      assert.equal(s.orch.view().packages[0].state, 'launched');
+    }
+    s.orch.onTurnEnd(sid, turn('LUNA_DONE a'));
     await s.flush();
-    assert.equal(s.orch.view().packages[0].state, 'launched');
-  }
+  };
+  await exhaust('s1');
   assert.equal(s.log.writes.filter(([, t]) => /FAIL x\.test\.js/.test(t)).length, sup.MAX_VERIFY_ROUNDS);
-  s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
-  await s.flush();
+  // Resumed once automatically, then the same again is final.
+  assert.deepEqual([s.orch.view().packages[0].state, s.orch.view().packages[0].sessionId], ['launched', 's2']);
+  await exhaust('s2');
   assert.deepEqual([s.orch.view().packages[0].state, s.orch.view().packages[0].error], ['stalled', 'verifyFailed']);
 });
 
 test('a push failure or an empty branch stalls with the stage as the reason', async () => {
   const s = await started({ packages: [pkg('a', [1])], finish: async () => ({ ok: false, stage: 'noCommits', detail: '' }) });
   s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  await s.flush();
+  assert.equal(s.orch.view().packages[0].sessionId, 's2', 'resumed once automatically');
+  s.orch.onTurnEnd('s2', turn('LUNA_DONE a'));
   await s.flush();
   assert.equal(s.orch.view().packages[0].error, 'noCommitsFailed');
   assert.deepEqual(s.log.ticks, [], 'nothing ticked');
@@ -300,6 +315,9 @@ test('closing a worker tab frees its slot; discard is refused while a worker run
 
 test('a worker over its working time stalls on tick', async () => {
   const s = await started({ packages: [pkg('a', [1])] });
+  s.advance(sup.WORKER_CAP_MS + 1);
+  s.orch.tick();
+  assert.deepEqual([s.orch.view().packages[0].state, s.orch.view().packages[0].autoResumed], ['launched', true]);
   s.advance(sup.WORKER_CAP_MS + 1);
   s.orch.tick();
   assert.equal(s.orch.view().packages[0].error, 'timeout');

@@ -421,22 +421,24 @@ test('a scheduled run waits for its time, then starts by itself; cancel keeps it
 test('a Sonnet worker stalled twice restarts once on Opus in its worktree', async () => {
   const s = await started({ packages: [pkg('a', [1])], settings: { model: 'sonnet', permissionMode: 'bypassPermissions' } });
   s.orch.onTurnEnd('s1', turn('LUNA_BLOCKED a: cannot find the API'));
-  assert.deepEqual(s.state(), ['stalled']);
-  await s.flush(); // the run settled and finalized (nothing pushed) - then Retry
-  assert.equal((await s.orch.retry({ planId: s.planId, id: 'a' })).ok, true);
-  s.orch.onTurnEnd('s1', turn('LUNA_BLOCKED a: still stuck'));
+  // The first stall gets the one automatic resume, still on Sonnet.
+  assert.deepEqual(s.state(), ['launched']);
+  assert.equal(s.orch.view().packages[0].autoResumed, true);
+  assert.equal(s.log.sessions[1].task.model, 'sonnet');
+  s.orch.onTurnEnd('s2', turn('LUNA_BLOCKED a: still stuck'));
   await s.flush();
   const v = s.orch.view().packages[0];
   assert.equal(v.state, 'launched');
   assert.equal(v.escalated, true);
   assert.equal(v.model, 'opus');
-  assert.deepEqual(s.log.closed, ['s1']);
-  assert.equal(s.log.sessions[1].task.model, 'opus');
-  assert.equal(s.log.sessions[1].cwd, path.join('/wt', s.log.worktrees[0][0]), 'same worktree');
+  assert.deepEqual(s.log.closed, ['s1', 's2']);
+  assert.equal(s.log.sessions[2].task.model, 'opus');
+  assert.equal(s.log.sessions[2].cwd, path.join('/wt', s.log.worktrees[0][0]), 'same worktree');
   assert.ok(s.log.events.some(([k]) => k === 'escalated'));
-  // A third stall does not escalate again.
-  s.orch.onTurnEnd('s2', turn('LUNA_BLOCKED a: nope'));
+  // A third stall does not escalate again: the package is terminal.
+  s.orch.onTurnEnd('s3', turn('LUNA_BLOCKED a: nope'));
   assert.deepEqual(s.state(), ['stalled']);
+  assert.equal(s.orch.view().packages[0].terminal, true);
 });
 
 test('two workers changing the same file raise one overlap warning', async () => {
@@ -473,7 +475,9 @@ test('a settled run opens PRs in dependency order, removes pushed worktrees, not
   const s = await started({ packages: [pkg('b', [2], { dependsOn: ['a'] }), pkg('a', [1]), pkg('c', [3])] });
   s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
   await s.flush();
-  s.orch.onTurnEnd('s2', turn('LUNA_BLOCKED c: no idea'));
+  s.orch.onTurnEnd('s2', turn('LUNA_BLOCKED c: first try'));
+  // c was resumed once automatically (s4); its second stall is final.
+  s.orch.onTurnEnd('s4', turn('LUNA_BLOCKED c: no idea'));
   await s.flush();
   s.orch.onTurnEnd('s3', turn('LUNA_DONE b'));
   await s.flush(8);
@@ -610,10 +614,12 @@ test('a package pushed while the finalizer runs is integrated by a second pass',
     },
   });
   s.orch.onTurnEnd('s2', turn('LUNA_BLOCKED b: stuck'));
+  // The automatic resume (s3) stalls too: b is terminal.
+  s.orch.onTurnEnd('s3', turn('LUNA_BLOCKED b: still stuck'));
   s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
   await s.flush(8); // settled -> finalizing, PR for a in flight
   // Mati unblocks b by hand; it finishes while the finalizer still runs.
-  s.orch.onTurnEnd('s2', turn('LUNA_DONE b'));
+  s.orch.onTurnEnd('s3', turn('LUNA_DONE b'));
   await s.flush(8);
   release();
   await s.flush(16);
