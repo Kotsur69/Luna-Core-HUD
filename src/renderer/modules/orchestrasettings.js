@@ -56,6 +56,23 @@ export function mountOrchestraSettings(root, prefs) {
     });
   }
 
+  // Final check command (GM never blocks 4/5): saved on change; main
+  // validates it and keeps the old value for an empty or multi-line one.
+  const check = root.querySelector('#orchestra-check-command');
+  if (check) {
+    check.value = typeof prefs.orchestraCheckCommand === 'string' ? prefs.orchestraCheckCommand : 'npm test';
+    check.addEventListener('change', async () => {
+      const value = check.value.trim();
+      if (!value) {
+        check.value = typeof prefs.orchestraCheckCommand === 'string' ? prefs.orchestraCheckCommand : 'npm test';
+        return;
+      }
+      sfx.modeToggle();
+      const next = await window.lunacore.setUiPrefs({ orchestraCheckCommand: value });
+      if (next && typeof next.orchestraCheckCommand === 'string') check.value = next.orchestraCheckCommand;
+    });
+  }
+
   // Allow rules are added on the run board (main checks each against the
   // run's evidence); here they can only be seen and cleared.
   const allowed = root.querySelector('#orchestra-allowed');

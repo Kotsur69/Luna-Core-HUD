@@ -1666,6 +1666,11 @@
             <option value="branches" data-i18n="orch.integ.branches">Tylko galezie</option>
           </select>
         </label>
+        <!-- GM never blocks 4/5: the command the end-of-run self-check runs on the merged result. -->
+        <label class="ui-field" data-i18n-title="orchset.check.hint" title="Komenda uruchamiana na scalonym wyniku po przebiegu (w worktree integracji). Czerwony wynik = jeden worker naprawczy, potem bez pusha do galezi bazowej.">
+          <span class="ui-field__label" data-i18n="orchset.check">Komenda koncowego sprawdzenia</span>
+          <input id="orchestra-check-command" class="mc-input" maxlength="200" spellcheck="false" autocomplete="off" data-i18n-ph="orchset.check.ph" placeholder="npm test" />
+        </label>
         <div class="ui-field" data-i18n-title="orchset.allowed.hint" title="Reguly --allowedTools dodane z tablicy, gdy pytanie o zgode zatrzymalo workera.">
           <span class="ui-field__label" data-i18n="orchset.allowed">Dozwolone narzedzia workerow</span>
           <span id="orchestra-allowed" class="orchestra__allowed">brak</span>

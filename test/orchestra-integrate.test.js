@@ -312,7 +312,7 @@ test('integrateMerge: beforePush sees merged + skipped and can stop the push', a
     beforePush: async (root, info) => (seen.push([root, info]), { ok: false, reason: 'self-check red' }),
   });
   const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps);
-  assert.deepEqual(seen, [['/wt/int', { merged: ['a'], skipped: [] }]]);
+  assert.deepEqual(seen, [['/wt/int', { merged: ['a'], skipped: [], baseSha: 'sha1' }]]);
   assert.equal(res.ok, false);
   assert.equal(res.stage, 'beforePush');
   assert.equal(res.detail, 'self-check red');

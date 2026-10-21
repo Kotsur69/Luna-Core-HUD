@@ -210,6 +210,7 @@ const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha } = require('./orchestraFinish');
 const orchestraStore = require('./orchestraStore');
 const orchestraIntegrate = require('./orchestraIntegrate');
+const orchestraSelfCheck = require('./orchestraSelfCheck');
 const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, PR_URL_RE } = require('./orchestraSupervisor');
 
 const { micState } = require('./devices');
@@ -967,6 +968,7 @@ const orchestra = createOrchestra({
       permissionMode: prefs.orchestraPermissionMode,
       integration: prefs.orchestraIntegration,
       allowedTools: prefs.orchestraAllowedTools,
+      checkCommand: prefs.orchestraCheckCommand,
     };
   },
   // Second pass + slice 5.
@@ -978,12 +980,16 @@ const orchestra = createOrchestra({
       resolve: (r) => orchestraIntegrate.runResolver({ ...r, env: orchestraToolEnv() }),
     }),
   createPr: (args) => orchestraIntegrate.createPr({ ...args, env: orchestraToolEnv() }),
-  integrateMerge: (args) =>
+  // extra.beforePush: the end-of-run self-check gate (orchestraFinalize.js).
+  integrateMerge: (args, extra) =>
     orchestraIntegrate.integrateMerge(args, {
       addWorktree,
       removeWorktree,
       resolve: (r) => orchestraIntegrate.runResolver({ ...r, env: orchestraToolEnv() }),
+      ...(extra && typeof extra.beforePush === 'function' ? { beforePush: extra.beforePush } : {}),
     }),
+  runSelfCheck: (args) => orchestraSelfCheck.runSelfCheck(args),
+  pushBranch: (root, branch) => orchestraSelfCheck.pushBranch(root, branch),
   removeWorktree,
   updateTodos: (projectId, fn) => {
     const list = readTodos(projectId);

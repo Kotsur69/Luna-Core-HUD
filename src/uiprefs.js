@@ -105,6 +105,11 @@ const ALLOW_RULE_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}(\([A-Za-z0-9 _.:*/@=-]{1,100}
 const MAX_ALLOWED_TOOLS = 50;
 const allowedToolList = (v) =>
   Array.isArray(v) ? [...new Set(v.filter((r) => typeof r === 'string' && ALLOW_RULE_RE.test(r)))].slice(0, MAX_ALLOWED_TOOLS) : null;
+// GM never blocks 4/5: the end-of-run self-check's test command (run like a
+// package verify, in the integration worktree). One line, no control chars.
+const MAX_CHECK_COMMAND = 200;
+// eslint-disable-next-line no-control-regex
+const checkCommandOf = (v) => (typeof v === 'string' && v.trim() && v.length <= MAX_CHECK_COMMAND && !/[\x00-\x1f\x7f]/.test(v) ? v.trim() : null);
 
 const DEFAULTS = {
   theme: 'cyberpunk',
@@ -198,6 +203,7 @@ const DEFAULTS = {
   orchestraPermissionMode: 'bypassPermissions',
   orchestraIntegration: 'pr',
   orchestraAllowedTools: [],
+  orchestraCheckCommand: 'npm test',
   // /ask (Ctrl+B's tool recommender, src/ask.js). Default OFF: without this,
   // ask:query always calls the cloud `claude` CLI with --model sonnet -
   // switching a profile's terminal tab to a local endpoint must never make
@@ -669,6 +675,7 @@ function readUiPrefs() {
         ? obj.orchestraIntegration
         : DEFAULTS.orchestraIntegration,
       orchestraAllowedTools: allowedToolList(obj.orchestraAllowedTools) || [],
+      orchestraCheckCommand: checkCommandOf(obj.orchestraCheckCommand) || DEFAULTS.orchestraCheckCommand,
       // Missing key => disabled (prefs file written before this option existed).
       askUseLocalModel:
         typeof obj.askUseLocalModel === 'boolean' ? obj.askUseLocalModel : DEFAULTS.askUseLocalModel,
@@ -774,6 +781,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && allowedToolList(partial.orchestraAllowedTools)) {
       next.orchestraAllowedTools = allowedToolList(partial.orchestraAllowedTools);
+    }
+    if (partial && checkCommandOf(partial.orchestraCheckCommand)) {
+      next.orchestraCheckCommand = checkCommandOf(partial.orchestraCheckCommand);
     }
     if (partial && typeof partial.autoProceedArmed === 'boolean') {
       next.autoProceedArmed = partial.autoProceedArmed;
@@ -881,4 +891,5 @@ module.exports = {
   cleanRailedRegions,
   cleanCustomLayouts,
   MISSION_MODELS,
+  checkCommandOf,
 };
