@@ -45,8 +45,10 @@ const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Integration errors with their own message (orchestraFinalize / Integrate).
 const INTEG_ERRORS = new Set([
   'noBaseBranch', 'noGh', 'missingCwd', 'ghFailed', 'fetchFailed', 'worktreeFailed', 'installFailed', 'mergeFailed',
-  'conflictFailed', 'verifyFailed', 'pushFailed', 'baseMoved',
+  'conflictFailed', 'verifyFailed', 'pushFailed', 'baseMoved', 'nothingMergedFailed', 'beforePushFailed',
 ]);
+// "Open report" errors main can return (orchestra:openReport).
+const REPORT_ERRORS = new Set(['badId', 'noReport', 'openFailed']);
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).
 const ACTIVE = new Set(['launched', 'finishing']);
 const RETRYABLE = new Set(['stalled', 'closed', 'killed']);
@@ -359,11 +361,44 @@ function renderPlan() {
     const total = plan.packages.length;
     body.append(msg(t('orch.settled', { pushed, total }), pushed === total ? '' : 'is-warn'));
   }
+  if (hasReport()) body.append(reportRow());
   if (plan.dirty > 0) body.append(msg(t('orch.dirty', { n: plan.dirty }), 'is-warn'));
   for (const e of plan.errors) body.append(msg(errorText(e), 'is-bad'));
   for (const w of plan.warnings) body.append(msg(warningText(w), 'is-warn'));
   if (plan.notes) body.append(el('p', 'orchestra__notes', plan.notes));
   for (const pkg of plan.packages) body.append(pkgCard(pkg));
+}
+
+/** A settled (or already integrated) run has a morning report in runs/<id>.md. */
+function hasReport() {
+  const state = plan.integration && plan.integration.state;
+  return plan.settled || state === 'done' || state === 'failed';
+}
+
+/** "Open report": only the plan id goes to main, which builds the path. */
+function reportRow() {
+  const row = el('div', 'orchestra__options');
+  const btn = el('button', 'pad-send', t('orch.openReport'));
+  btn.type = 'button';
+  btn.title = t('orch.openReport.hint');
+  const status = el('span', 'orchestra__msg is-bad');
+  status.hidden = true;
+  btn.addEventListener('click', async () => {
+    let res;
+    try {
+      res = await window.lunacore.openOrchestraReport(plan.id);
+    } catch {
+      res = { ok: false, error: 'openFailed' };
+    }
+    const failed = !res || !res.ok;
+    status.hidden = !failed;
+    if (failed) {
+      const code = res && REPORT_ERRORS.has(res.error) ? res.error : 'openFailed';
+      status.textContent = t(`orch.openReport.${code}`);
+    }
+  });
+  row.append(btn, status);
+  return row;
 }
 
 function scheduledRow() {

@@ -2,10 +2,12 @@
 // LunaCore - God Mode v2 run email (orchestraFinalize.js report -> Gmail)
 // ----------------------------------------------------------------------------
 // When a run is finalized, Mati gets one email:
-//   subject  'God Mode: <repo name> - N of M pushed'  (or '- integration failed')
-//   body     'Needs you' first (packages that did not make it + why, approval
-//            prompts that stalled workers, a failed integration), then the PR
-//            links, then the full markdown report as plain text.
+//   subject  'God Mode: <repo name> - N of M merged' (merge mode; 'pushed'
+//            otherwise, '- integration failed' when it failed), plus
+//            ' - needs you' when the Needs-you block is not empty
+//   body     'Needs you' first - the report's own '## Needs you' section
+//            (orchestraReport.js) as plain text - then the PR links, then
+//            the full markdown report as plain text.
 //
 // Only the repo NAME goes out, never its path (the report's Repo line is
 // rewritten). Every string is stripped of control characters; nothing is HTML.
@@ -35,6 +37,40 @@ function reportText(text, repoName) {
     .replace(/^- Repo: `[^`\n]*`/m, `- Repo: ${repoName || '-'}`);
 }
 
+/**
+ * The report's '## Needs you' section as plain lines ([] for 'Nothing - all
+ * done'), or null when the report has no such section (an older layout).
+ * The report already strips model output; this strips again - control
+ * characters and markdown code marks out, capped.
+ */
+function needsFromReport(text) {
+  const lines = String(text || '').slice(0, MAX_REPORT).split(/\r?\n/);
+  const start = lines.indexOf('## Needs you');
+  if (start < 0) return null;
+  const out = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith('## ')) break;
+    const body = clean(line.replace(/`/g, ''));
+    if (!body || body === 'Nothing - all done') continue;
+    // An indented line is the self-check's output tail: keep it indented.
+    out.push(/^\s/.test(line) ? `    ${body}` : body);
+    if (out.length >= MAX_ITEMS) break;
+  }
+  return out;
+}
+
+/** The older Needs-you list, from the run summary alone. */
+function needsFromSummary(summary, failed) {
+  const needs = [];
+  for (const p of (summary.packages || []).slice(0, MAX_ITEMS)) {
+    if (p.state === 'pushed') continue;
+    needs.push(`- ${clean(p.id, 64)} ${clean(p.title, 120)}: ${clean(p.state, 24)}${p.reason ? ` - ${clean(p.reason)}` : ''}`);
+  }
+  for (const rule of (summary.approvalSuggestions || []).slice(0, MAX_ITEMS)) needs.push(`- Approval prompt stalled a worker: ${clean(rule, 200)}`);
+  if (failed) needs.push(`- Integration failed${summary.integrationError ? `: ${clean(summary.integrationError)}` : ''}`);
+  return needs;
+}
+
 /** The dedupe key of a run's result. */
 const resultKey = (s) => `${Math.max(0, Math.min(9999, s.pushed | 0))}|${/^[a-z]{1,24}$/.test(s.integrationState) ? s.integrationState : 'idle'}`;
 
@@ -48,16 +84,10 @@ const resultKey = (s) => `${Math.max(0, Math.min(9999, s.pushed | 0))}|${/^[a-z]
 function buildRunEmail(text, summary, opts = {}) {
   const repo = clean(summary.repoName, 100) || 'repo';
   const failed = summary.integrationState === 'failed';
-  const head = failed ? 'integration failed' : `${summary.pushed} of ${summary.total} pushed`;
-  const subject = `God Mode: ${repo} - ${head}${opts.updated ? ' (updated)' : ''}`;
-
-  const needs = [];
-  for (const p of (summary.packages || []).slice(0, MAX_ITEMS)) {
-    if (p.state === 'pushed') continue;
-    needs.push(`- ${clean(p.id, 64)} ${clean(p.title, 120)}: ${clean(p.state, 24)}${p.reason ? ` - ${clean(p.reason)}` : ''}`);
-  }
-  for (const rule of (summary.approvalSuggestions || []).slice(0, MAX_ITEMS)) needs.push(`- Approval prompt stalled a worker: ${clean(rule, 200)}`);
-  if (failed) needs.push(`- Integration failed${summary.integrationError ? `: ${clean(summary.integrationError)}` : ''}`);
+  const needs = needsFromReport(text) || needsFromSummary(summary, failed);
+  const done = summary.integrationMode === 'merge' ? `${summary.merged | 0} of ${summary.total} merged` : `${summary.pushed} of ${summary.total} pushed`;
+  const head = failed ? 'integration failed' : done;
+  const subject = `God Mode: ${repo} - ${head}${needs.length ? ' - needs you' : ''}${opts.updated ? ' (updated)' : ''}`;
 
   const prs = (summary.packages || []).filter((p) => p.prUrl).slice(0, MAX_ITEMS).map((p) => `- ${clean(p.id, 64)}: ${clean(p.prUrl)}`);
 

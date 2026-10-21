@@ -210,6 +210,7 @@ const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha } = require('./orchestraFinish');
 const orchestraStore = require('./orchestraStore');
 const orchestraIntegrate = require('./orchestraIntegrate');
+const { reportFileFor } = require('./orchestraReport');
 const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, PR_URL_RE } = require('./orchestraSupervisor');
 
 const { micState } = require('./devices');
@@ -2961,6 +2962,19 @@ function registerIpc() {
     const view = orchestra.view();
     const pkg = view && typeof id === 'string' ? view.packages.find((p) => p.id === id) : null;
     if (pkg && typeof pkg.prUrl === 'string' && PR_URL_RE.test(pkg.prUrl)) shell.openExternal(pkg.prUrl);
+  });
+  // "Open report": only the run id crosses; the path is built here
+  // (<userDir>/runs/<id>.md) and must be a plain file.
+  ipcMain.handle('orchestra:openReport', async (_event, planId) => {
+    const file = reportFileFor(path.join(userDir(), RUN_REPORT_DIR), planId);
+    if (!file) return { ok: false, error: 'badId' };
+    try {
+      if (!fs.lstatSync(file).isFile()) return { ok: false, error: 'noReport' };
+    } catch {
+      return { ok: false, error: 'noReport' };
+    }
+    const err = await shell.openPath(file);
+    return err ? { ok: false, error: 'openFailed' } : { ok: true };
   });
 
   // Idea #5: allow a tool for FUTURE workers. Only a rule the current run

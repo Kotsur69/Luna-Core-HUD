@@ -40,9 +40,55 @@ test('runEntry keeps the repo name only, packages and approval rules', () => {
       { id: 'b', title: 'Do B', state: 'stalled', branch: 'luna/b', sha7: null, prUrl: null, reason: 'verifyFailed - 2 tests', escalated: true },
     ],
     approvalSuggestions: ['Bash(npm test)'],
+    merged: 0,
+    skipped: 0,
+    blocked: 0,
+    manualActions: 0,
+    selfCheck: 'none',
   });
   assert.ok(!/Users|mati|wt/.test(JSON.stringify(run)));
   assert.equal(runEntry(null), null);
+});
+
+test('runEntry counts merged, skipped, blocked, manual actions and the self-check state', () => {
+  const v = view({
+    integrationMode: 'merge',
+    integration: {
+      state: 'done',
+      skipped: [{ id: 'b', stage: 'conflict' }, { id: 'c', stage: 'depSkipped' }],
+      manualActions: [{ kind: 'migration', what: 'x.sql' }, { kind: 'env', what: 'KEY' }, { kind: 'note', what: 'n' }],
+      selfCheck: { tests: 'ok', syntax: 'failed', smoke: 'skipped', fixups: 1 },
+    },
+    packages: [
+      { id: 'a', title: 'A', state: 'pushed', merged: true },
+      { id: 'b', title: 'B', state: 'pushed', merged: false },
+      { id: 'd', title: 'D', state: 'pending', blockedBy: 'x' },
+      { id: 'e', title: 'E', state: 'pending', blockedBy: null },
+    ],
+  });
+  const run = runEntry(v, { now: NOW });
+  assert.deepEqual(
+    [run.merged, run.skipped, run.blocked, run.manualActions, run.selfCheck],
+    [1, 2, 1, 3, 'failed'],
+  );
+  const green = runEntry(view({ integration: { state: 'done', selfCheck: { tests: 'ok', syntax: 'ok', smoke: 'skipped' } } }), { now: NOW });
+  assert.equal(green.selfCheck, 'ok');
+});
+
+test('a reader caps the new counts and still reads rows written before them', () => {
+  const old = { id: 'old', finishedAt: NOW - HOUR, total: 2, pushed: 1, packages: [] };
+  const hostile = { id: 'new', finishedAt: NOW, total: 2, packages: [], merged: 1e9, skipped: -3, blocked: 'x', manualActions: 1e9, selfCheck: '<b>' };
+  const p = parseGodmodePeer({ machine: 'PC1', data: data([old, hostile]) }, NOW);
+  const byId = Object.fromEntries(p.runs.map((r) => [r.id, r]));
+  assert.deepEqual(
+    [byId.old.merged, byId.old.skipped, byId.old.blocked, byId.old.manualActions, byId.old.selfCheck, byId.old.pushed],
+    [0, 0, 0, 0, 'none', 1],
+  );
+  assert.equal(byId.new.merged, 2, 'merged never above total');
+  assert.equal(byId.new.skipped, 0);
+  assert.equal(byId.new.blocked, 0);
+  assert.equal(byId.new.manualActions, 1000);
+  assert.equal(byId.new.selfCheck, 'none');
 });
 
 test('addRun puts the newest first, replaces a rerun, keeps 10', () => {

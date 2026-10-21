@@ -287,6 +287,9 @@ function createOrchestra(deps) {
       settled: plan.settled,
       pausedUntil: plan.pausedUntil,
       scheduledAt: plan.scheduledAt,
+      // The morning report's Timeline (orchestraReport.js).
+      runStartedAt: plan.runStartedAt || null,
+      pausedTotalMs: plan.pausedTotalMs || 0,
       freeMode: plan.freeMode === true,
       options: sup.normalizeOptions(plan.options),
       integration: { ...plan.integration, running: finalizer.isRunning() },
@@ -433,6 +436,8 @@ function createOrchestra(deps) {
         settled: false,
         pausedUntil: null,
         pauseStartedAt: null,
+        runStartedAt: null,
+        pausedTotalMs: 0,
         todoText: new Map(openTodos.map((t) => [t.at, t.text])),
         packages: checked.packages.map((p) => ({
           ...p,
@@ -704,6 +709,7 @@ function createOrchestra(deps) {
       plan.killed = false;
       plan.settled = false;
       plan.started = true;
+      if (!plan.runStartedAt) plan.runStartedAt = now();
       if (chosen) {
         // A launch by hand starts the automatic ladder afresh.
         for (const p of chosen) {
@@ -744,6 +750,7 @@ function createOrchestra(deps) {
     plan.killed = false;
     plan.settled = false;
     plan.started = true;
+    if (!plan.runStartedAt) plan.runStartedAt = now();
     onRunEvent('scheduledStart');
     commit();
     kick();
@@ -924,6 +931,7 @@ function createOrchestra(deps) {
     resumeTimer = null;
     if (!plan || !plan.pausedUntil) return;
     const pausedFor = now() - (plan.pauseStartedAt || now());
+    plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, pausedFor);
     plan.pausedUntil = null;
     plan.pauseStartedAt = null;
     for (const p of plan.packages.filter(sup.isActive)) {
@@ -1060,6 +1068,8 @@ function createOrchestra(deps) {
     clearAllTimers();
     plan.scheduledAt = null;
     plan.killed = true;
+    // A kill during a usage-limit pause still counts the pause so far.
+    if (plan.pausedUntil && plan.pauseStartedAt) plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, now() - plan.pauseStartedAt);
     plan.pausedUntil = null;
     plan.pauseStartedAt = null;
     for (const p of plan.packages.filter((x) => x.state === 'launched')) {
@@ -1103,6 +1113,7 @@ function createOrchestra(deps) {
     plan.packages = sup.withBlockedBy(plan.packages);
     // Only once the package is back in play does the run resume.
     plan.started = true;
+    if (!plan.runStartedAt) plan.runStartedAt = now();
     plan.killed = false;
     plan.settled = false;
     commit();

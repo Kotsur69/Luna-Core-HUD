@@ -481,6 +481,12 @@ contextBridge.exposeInMainWorld('lunacore', {
   openOrchestraPr: (id) => {
     if (typeof id === 'string') ipcRenderer.send('orchestra:openPr', id);
   },
+  /**
+   * Opens a settled run's morning report (runs/<id>.md) in the default app.
+   * Only the run id crosses; main builds and checks the path.
+   * Promise<{ok:true} | {ok:false, error:'badId'|'noReport'|'openFailed'}>.
+   */
+  openOrchestraReport: (planId) => ipcRenderer.invoke('orchestra:openReport', typeof planId === 'string' ? planId : null),
   /** Plan changes (new plan, launches, a worker tab closed); returns an unsubscribe. */
   onOrchestraChanged: (cb) => {
     const listener = (_e, plan) => cb(plan);

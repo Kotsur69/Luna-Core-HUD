@@ -620,6 +620,10 @@ function normalizeStoredPlan(raw) {
       : (INTEGRATION_MODES.includes(raw.integrationMode) ? raw.integrationMode : null),
     baseBranch: isBaseBranch(raw.baseBranch) ? raw.baseBranch : null,
     scheduledAt: Number.isFinite(raw.scheduledAt) ? raw.scheduledAt : null,
+    // The morning report's Timeline: when the run first started, total
+    // time it waited on usage limits.
+    runStartedAt: Number.isFinite(raw.runStartedAt) && raw.runStartedAt > 0 ? raw.runStartedAt : null,
+    pausedTotalMs: Number.isFinite(raw.pausedTotalMs) && raw.pausedTotalMs > 0 ? raw.pausedTotalMs : 0,
     approvalLog: (Array.isArray(raw.approvalLog) ? raw.approvalLog : [])
       .filter((e) => e && typeof e.pkgId === 'string' && SLUG_RE.test(e.pkgId))
       .map((e) => ({ pkgId: e.pkgId, rule: isAllowRule(e.rule) ? e.rule : null, example: cleanExample(e.example) }))

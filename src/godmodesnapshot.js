@@ -29,6 +29,7 @@ const MAX_REASON = 300;
 const MAX_RULE = 200;
 const MAX_URL = 300;
 const MAX_COUNT = 1000;
+const SELF_CHECK_STATES = ['ok', 'failed', 'none'];
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const isTime = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
@@ -88,7 +89,20 @@ function cleanRun(r, now) {
       .slice(0, MAX_SUGGESTIONS)
       .map((s) => clean(s, MAX_RULE))
       .filter(Boolean),
+    // GM never blocks 5/5 (the morning report's headline counts). A row
+    // written before them reads as zero / 'none'.
+    merged: Math.min(count(r.merged), total),
+    skipped: count(r.skipped),
+    blocked: count(r.blocked),
+    manualActions: count(r.manualActions),
+    selfCheck: SELF_CHECK_STATES.includes(r.selfCheck) ? r.selfCheck : 'none',
   };
+}
+
+/** 'failed' when any check went red, 'ok' when it ran, 'none' when it did not run. */
+function selfCheckState(sc) {
+  if (!isObject(sc)) return 'none';
+  return ['tests', 'syntax', 'smoke'].some((k) => sc[k] === 'failed') ? 'failed' : 'ok';
 }
 
 /**
@@ -110,6 +124,11 @@ function runEntry(view, { now = Date.now(), suggestions = [] } = {}) {
       integrationState: integ.state || 'idle',
       pushed: view.packages.filter((p) => p && p.state === 'pushed').length,
       total: view.packages.length,
+      merged: view.packages.filter((p) => p && p.merged === true).length,
+      skipped: Array.isArray(integ.skipped) ? integ.skipped.length : 0,
+      blocked: view.packages.filter((p) => p && p.state === 'pending' && p.blockedBy).length,
+      manualActions: Array.isArray(integ.manualActions) ? integ.manualActions.length : 0,
+      selfCheck: selfCheckState(integ.selfCheck),
       packages: view.packages.map((p) =>
         isObject(p)
           ? {
