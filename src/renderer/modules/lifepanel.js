@@ -3,7 +3,8 @@
 // ----------------------------------------------------------------------------
 // A full-screen overlay like Mission Control's: the quick add bar on top
 // (always there - a Red Bull is two keystrokes and a click), a month switch
-// (◀ period ▶ / Today) and seven tabs - Overview, Spending, Transactions,
+// (◀ period ▶ / Today) and nine tabs - Overview, Habits (lifehabitsview.js), Week (the weekly
+// review, lifeweek.js), Spending, Transactions,
 // Bills & Savings, Year (lifeyear.js), Body (YAZIO, lifebody.js), Settings. Every tab renders from the one budget answer in
 // lifeui.js, so a change anywhere redraws the open tab at once. The shell is
 // built on first open and kept, so reopening is instant.
@@ -35,6 +36,13 @@ import { renderBills, billsNeedingAttention } from './lifebills.js';
 import { renderSettings } from './lifesettings.js';
 import { renderBody } from './lifebody.js';
 import { renderYear } from './lifeyear.js';
+import { renderHabits } from './lifehabitsview.js';
+import { renderWeek } from './lifeweek.js';
+import { getDaily, onDaily, loadDaily, startLive, stopLive } from './lifedaily.js';
+import { needsCheckin, needsGoals } from './lifedailyview.js';
+import { checkinPrompt } from './lifecheckin.js';
+import { goalsPrompt } from './lifegoalsview.js';
+import { scoreCard, nowStrip } from './lifescoreview.js';
 
 const REMIND_FIRST_MS = 8000;
 const REMIND_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -43,6 +51,8 @@ const TAB_KEY = 'lunacore.life.tab';
 
 const TABS = [
   ['overview', (root, s) => renderOverview(root, s, goTab)],
+  ['habits', renderHabits],
+  ['week', renderWeek],
   ['spending', renderSpending],
   ['tx', renderTx],
   ['bills', (root, s) => renderBills(root, s, goTab)],
@@ -92,9 +102,9 @@ function paintTabs() {
     b.tabIndex = on ? 0 : -1;
   }
   els.view.setAttribute('aria-labelledby', `life-tab-${tab}`);
-  // The budget period means nothing on the Body tab (YAZIO is always today);
-  // the Year tab has its own year switch.
-  els.month.hidden = tab === 'body' || tab === 'year';
+  // The budget period means nothing on the Body and Habits tabs (always
+  // today); the Year tab has its own year switch.
+  els.month.hidden = tab === 'body' || tab === 'year' || tab === 'habits' || tab === 'week';
 }
 
 function goTab(id) {
@@ -142,6 +152,42 @@ function renderMonth() {
   els.month.classList.toggle('is-other', !s.period.isCurrent);
 }
 
+// --- daily prompts + live score ---------------------------------------------------
+
+let promptKind = '';
+
+/**
+ * The check-in prompt on the first open of a day, else the goals prompt on
+ * the first open of an ISO week. Rebuilt only when WHICH prompt shows
+ * changes, so a background refresh never wipes what is being typed.
+ */
+function renderPrompt() {
+  if (!els) return;
+  const d = getDaily();
+  const kind = needsCheckin(d.checkin) ? 'checkin' : needsGoals(d.goals) ? 'goals' : '';
+  if (kind === promptKind) return;
+  promptKind = kind;
+  els.prompt.hidden = !kind;
+  els.prompt.replaceChildren(...(kind === 'checkin' ? [checkinPrompt()] : kind === 'goals' ? [goalsPrompt()] : []));
+}
+
+/** A daily answer arrived: the score swaps its two nodes in place; the rest redraws its tab. */
+function onDailyPart(part) {
+  if (part === 'checkin' || part === 'goals') {
+    renderPrompt();
+    if (tab === 'overview') renderView();
+    return;
+  }
+  if (part === 'habits') {
+    if (tab === 'habits') renderView();
+    return;
+  }
+  const card = document.getElementById('life-score-card');
+  if (card) card.replaceWith(scoreCard());
+  const strip = document.getElementById('life-now-strip');
+  if (strip) strip.replaceWith(nowStrip());
+}
+
 // --- shell ----------------------------------------------------------------------
 
 function onTabKey(e) {
@@ -162,7 +208,12 @@ function build() {
     month: document.getElementById('life-month'),
     quick: document.getElementById('life-quick'),
     view: document.getElementById('life-view'),
+    prompt: document.createElement('div'),
   };
+  els.prompt.className = 'life-prompt';
+  els.prompt.hidden = true;
+  els.view.before(els.prompt);
+  onDaily(onDailyPart);
   bindStatus(document.getElementById('life-status'), document.getElementById('life-toast'));
   buildTabs();
   mountQuick(els.quick);
@@ -184,16 +235,28 @@ async function open() {
   overlayEl.hidden = false;
   setStatus('');
   focusQuick();
-  await loadBudget();
+  startLive();
+  await Promise.all([loadBudget(), loadDaily()]);
 }
 
 function close() {
   if (!isOpen) return;
   isOpen = false;
+  stopLive();
   hideToast();
   closeWithExit(overlayEl);
   if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
   returnFocus = null;
+}
+
+/** Opens the dashboard on one tab (Mission Control's brief links to the Week tab). */
+export async function openLifeTab(id) {
+  if (TABS.some(([t2]) => t2 === id)) {
+    tab = id;
+    if (isBuilt) paintTabs();
+  }
+  await open();
+  renderView();
 }
 
 /** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
@@ -253,6 +316,8 @@ onLangChange(() => {
   relabelQuick();
   renderMonth();
   renderView();
+  promptKind = '';
+  renderPrompt();
 });
 
 overlayEl.addEventListener('click', (e) => {

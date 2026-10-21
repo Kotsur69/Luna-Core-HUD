@@ -164,6 +164,7 @@ function createOrchestra(deps) {
     writeReport: deps.writeReport,
     notify: deps.notify,
     putSnapshot: deps.putSnapshot,
+    onReport: deps.onReport,
     sleep: deps.sleep,
   });
   const isBusy = () => busy || pumping || finalizer.isRunning();

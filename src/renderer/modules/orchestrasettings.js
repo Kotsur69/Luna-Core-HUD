@@ -13,6 +13,7 @@
 
 import { sfx } from './sound.js';
 import { t } from './util.js';
+import { mountRunEmailToggle } from './mailsettings.js';
 
 const MODELS = ['opus', 'sonnet', 'plan'];
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
@@ -29,6 +30,10 @@ export function mountOrchestraSettings(root, prefs) {
 
   model.value = MODELS.includes(prefs.orchestraWorkerModel) ? prefs.orchestraWorkerModel : 'opus';
   perm.value = PERMISSION_MODES.includes(prefs.orchestraPermissionMode) ? prefs.orchestraPermissionMode : 'bypassPermissions';
+
+  // "Email me when a run finishes" (src/godmodemail.js): ON by default once
+  // Gmail is connected, disabled with a hint until then.
+  mountRunEmailToggle(root);
 
   model.addEventListener('change', () => {
     if (!MODELS.includes(model.value)) return;

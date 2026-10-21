@@ -72,6 +72,14 @@ export async function act(op, data) {
   return res;
 }
 
+/** "Add to calendar" for a bill: main creates the recurring event and links it. */
+export async function addBillToCalendar(billId, calendarKey) {
+  const res = await window.lunacore.lifeBillCalAdd(billId, calendarKey, viewMonth || undefined).catch(ipcFailed);
+  accept(res);
+  if (!res.ok) setStatus(errText(res.reason), true);
+  return res;
+}
+
 export function bindStatus(node, toastNode) {
   statusEl = node;
   toastEl = toastNode;

@@ -37,6 +37,7 @@ const MAX_TODO_DETAILS = 4000;
  *   createPr?: Function, integrateMerge?: Function, removeWorktree?: Function,
  *   closeSession?: Function, sessionAlive?: Function, updateTodos?: Function,
  *   writeReport?: Function, notify?: Function, putSnapshot?: Function, sleep?: (ms:number) => Promise<void>,
+ *   onReport?: (planId:string, text:string, summary:object) => Promise<{error?:string}|void>,
  * }} deps
  */
 function createFinalizer(deps) {
@@ -144,6 +145,38 @@ function createFinalizer(deps) {
     }
   }
 
+  /**
+   * The run email (godmodemail.js), fire and forget. A failure never breaks
+   * finalize: it lands on the board (integration.emailError) and at the end
+   * of the report file.
+   */
+  function sendReport(plan, view, extra, text) {
+    if (!deps.onReport) return;
+    const integ = plan.integration || {};
+    const summary = {
+      ...runEntry(view, extra),
+      integrationError: integ.error ? [integ.error, integ.detail].filter(Boolean).join(': ') : null,
+    };
+    const failed = (reason) => {
+      if (deps.getPlan() !== plan) return;
+      setIntegration(plan, { emailError: String(reason).slice(0, 80) });
+      if (deps.writeReport) deps.writeReport(plan.id, `${text}
+- Email failed: ${String(reason).slice(0, 80)}
+`);
+      deps.commit();
+    };
+    setIntegration(plan, { emailError: null });
+    try {
+      Promise.resolve(deps.onReport(plan.id, text, summary))
+        .then((res) => {
+          if (res && res.error) failed(res.error);
+        })
+        .catch((err) => failed((err && err.reason) || 'failed'));
+    } catch (err) {
+      failed((err && err.reason) || 'failed');
+    }
+  }
+
   function report(plan) {
     const view = { ...deps.view(), repoPath: plan.repoPath };
     const extra = { now: deps.now(), suggestions: sup.allowSuggestions(plan.approvalLog) };
@@ -152,6 +185,7 @@ function createFinalizer(deps) {
     const pushed = plan.packages.filter((p) => p.state === 'pushed').length;
     if (deps.notify) deps.notify({ pushed, total: plan.packages.length, failed: plan.integration.state === 'failed' });
     putSnapshot(view, extra);
+    sendReport(plan, view, extra, text);
     return file;
   }
 

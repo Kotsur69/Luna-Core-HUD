@@ -38,18 +38,30 @@ const SAFE = ['-c', 'core.fsmonitor=false'];
 const MAX_REPOS = 50;
 const MAX_COMMITS = 5000;
 const MAX_EMAIL = 254;
+const EMPTY = Object.freeze({ events: [], shipped: [] });
 
-/** `%at\t%ae` lines -> epoch ms of this author's commits. */
-function parseLog(stdout, email) {
+// Conventional-commit subjects the Life score counts as shipping: feat / fix,
+// optionally scoped and/or breaking ("feat(life)!: ...").
+const KIND_RE = /^(feat|fix)(\([^)]*\))?!?:/i;
+
+/**
+ * `%at\t%ae\t%s` lines (the subject is optional) -> this author's commits as
+ * {ms, kind}; kind = 'feat' | 'fix' | ''. The subject itself is not kept.
+ */
+function parseCommits(stdout, email) {
   const me = String(email).trim().toLowerCase();
   const out = [];
   for (const line of String(stdout).split(/\r?\n/).slice(0, MAX_COMMITS)) {
-    const m = /^(\d{1,12})\t(.+)$/.exec(line);
+    const m = /^(\d{1,12})\t([^\t]+)(?:\t(.*))?$/.exec(line);
     if (!m || m[2].trim().toLowerCase() !== me) continue;
-    out.push(Number(m[1]) * 1000);
+    const kind = KIND_RE.exec(m[3] || '');
+    out.push({ ms: Number(m[1]) * 1000, kind: kind ? kind[1].toLowerCase() : '' });
   }
   return out;
 }
+
+/** Epoch ms of this author's commits. */
+const parseLog = (stdout, email) => parseCommits(stdout, email).map((c) => c.ms);
 
 /** An absolute local path; UNC would make git touch the network (SMB/NTLM). */
 const usableRepo = (dir) => typeof dir === 'string' && path.isAbsolute(dir) && !/^[\\/]{2}/.test(dir);
@@ -68,6 +80,7 @@ function createCommits({
   historyDays = HISTORY_DAYS,
   deadlineMs = DEADLINE_MS,
 }) {
+  /** {events, shipped}: both views built once per scan, so a cached answer is the same array. */
   let cache = null;
   let cachedAt = -Infinity;
   let pending = null;
@@ -79,15 +92,15 @@ function createCommits({
       const email = cfg.ok ? cfg.stdout.trim() : '';
       if (!email || email.length > MAX_EMAIL) return { events: [], failed: false };
       const since = `--since=${new Date(sinceMs).toISOString()}`;
-      const log = await runGit(dir, [...SAFE, 'log', '--all', '--no-merges', since, '--format=%at%x09%ae'], GIT_TIMEOUT_MS);
+      const log = await runGit(dir, [...SAFE, 'log', '--all', '--no-merges', since, '--format=%at%x09%ae%x09%s'], GIT_TIMEOUT_MS);
       if (!log.ok) {
         console.error('[focus] git log failed:', path.basename(dir));
         return { events: [], failed: true };
       }
       const { key, name } = resolveKey(dir);
-      const events = parseLog(log.stdout, email)
-        .filter((ms) => ms >= sinceMs)
-        .map((ms) => ({ ms, key, name }));
+      const events = parseCommits(log.stdout, email)
+        .filter((c) => c.ms >= sinceMs)
+        .map((c) => ({ ms: c.ms, key, name, kind: c.kind }));
       return { events, failed: false };
     } catch (err) {
       console.error('[focus] git log failed:', path.basename(dir), err && err.message);
@@ -113,33 +126,43 @@ function createCommits({
       all.push(...res.events);
       failed = failed || res.failed;
     }
-    cache = all;
+    cache = { events: all.map(({ ms, key, name }) => ({ ms, key, name })), shipped: all.map(({ ms, key, kind }) => ({ ms, key, kind })) };
     // A failed repo would otherwise look like "no commits" for the whole TTL.
     cachedAt = failed ? at - ttlMs + Math.min(RETRY_MS, ttlMs) : at;
-    return all;
+    return cache;
   }
 
   const refresh = () => pending || (pending = load().finally(() => (pending = null)));
 
+  /**
+   * The commits of the last historyDays. Fresh cache -> as is; stale cache ->
+   * returned now, refreshed in the background; no cache -> the first scan, or
+   * [] if it is not done within deadlineMs.
+   */
+  async function all() {
+    if (cache && now() - cachedAt <= ttlMs) return cache;
+    const run = refresh();
+    if (cache) return cache;
+    let timer;
+    const late = new Promise((resolve) => (timer = setTimeout(() => resolve(EMPTY), deadlineMs)));
+    try {
+      return await Promise.race([run, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return {
-    /**
-     * Commit moments of the last historyDays. Fresh cache -> as is; stale cache
-     * -> returned now, refreshed in the background; no cache -> the first scan,
-     * or [] if it is not done within deadlineMs.
-     */
+    /** Commit moments {ms, key, name} for focus time. */
     async events() {
-      if (cache && now() - cachedAt <= ttlMs) return cache;
-      const run = refresh();
-      if (cache) return cache;
-      let timer;
-      const late = new Promise((resolve) => (timer = setTimeout(() => resolve([]), deadlineMs)));
-      try {
-        return await Promise.race([run, late]);
-      } finally {
-        clearTimeout(timer);
-      }
+      return (await all()).events;
+    },
+
+    /** The same commits as {ms, key, kind} - feat / fix for the Life score's shipping part. */
+    async shipped() {
+      return (await all()).shipped;
     },
   };
 }
 
-module.exports = { createCommits, parseLog, HISTORY_DAYS };
+module.exports = { createCommits, parseLog, parseCommits, HISTORY_DAYS };

@@ -1185,6 +1185,8 @@
         <span class="mission-overlay__heading" data-i18n="mc.panel.title">Mission Control</span>
         <button type="button" class="libraries__closebtn" data-mission-close data-i18n-title="libraries.close" data-i18n-aria="libraries.close" title="Zamknij" aria-label="Zamknij">×</button>
       </div>
+      <!-- Weekly / daily brief strip: modules/missionbriefview.js, built in JS. -->
+      <div id="mission-brief" class="mission-brief" aria-live="polite" hidden></div>
       <div class="mission-overlay__body">
         <div id="mission-col-mail" class="mission-overlay__col"></div>
         <div id="mission-col-cal" class="mission-overlay__col"></div>
@@ -1596,6 +1598,44 @@
           </span>
         </label>
 
+        <!-- Report emails (src/mailipc.js, modules/mailsettings.js): a separate
+             gmail.send-only Google grant; every email goes to that same address. -->
+        <h3 class="termcustom__section" data-i18n="mailset.section">Raporty e-mail</h3>
+        <div class="ui-field" data-i18n-title="mailset.gmail.hint" title="Osobna zgoda Google tylko na wysylanie (gmail.send). Maile ida zawsze na ten sam adres.">
+          <span class="ui-field__label" data-i18n="mailset.gmail">Gmail</span>
+          <span id="mail-gmail-status" class="orchestra__allowed" data-i18n="mailset.gmail.off">niepolaczony</span>
+          <button type="button" id="mail-gmail-connect" class="pad-send" data-i18n="mailset.gmail.connect">Polacz Gmail</button>
+        </div>
+        <label id="mail-nightly-field" class="switch-field" data-i18n-title="mailset.nightly.hint" title="Codziennie o ustalonej godzinie: przebiegi God Mode, commity, odhaczone zadania i zuzycie Claude. Jedno wywolanie Haiku.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="mailset.nightly">Wieczorne podsumowanie e-mail</span>
+            <span id="mail-nightly-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="mail-nightly-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+        <label class="ui-field" data-i18n-title="mailset.time.hint" title="Godzina lokalna. Jesli komputer spal, mail wyjdzie po wybudzeniu tego samego dnia.">
+          <span class="ui-field__label" data-i18n="mailset.time">Godzina</span>
+          <input type="time" id="mail-nightly-time" class="profile-select" value="22:30" />
+        </label>
+        <label id="mail-empty-field" class="switch-field" data-i18n-title="mailset.empty.hint" title="Domyslnie dzien bez przebiegow, commitow i zadan jest pomijany.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="mailset.empty">Wysylaj nawet pusty dzien</span>
+            <span id="mail-empty-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="mail-empty-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+        <div class="ui-field">
+          <span class="ui-field__label" data-i18n="mailset.test">Test</span>
+          <span id="mail-test-status" class="orchestra__allowed"></span>
+          <button type="button" id="mail-test" class="pad-send" data-i18n="mailset.test.send">Wyslij test teraz</button>
+        </div>
+
         <!-- God Mode v2 workers (ORCHESTRATOR_PLAN.md slice 4, modules/orchestrasettings.js).
              Frozen per run when it starts. bypassPermissions is the default by
              Mati's choice: a worktree contains a worker's git damage, not its
@@ -1631,6 +1671,16 @@
           <span id="orchestra-allowed" class="orchestra__allowed">brak</span>
           <button type="button" id="orchestra-allowed-clear" class="pad-send" data-i18n="orchset.allowed.clear">Wyczysc</button>
         </div>
+        <label id="orchestra-email-field" class="switch-field" data-i18n-title="orchset.email.hint" title="Mail z wynikiem przebiegu na Twoj adres Gmail. Wymaga polaczenia Gmail w sekcji Raporty e-mail.">
+          <span class="switch-field__text">
+            <span class="switch-field__label" data-i18n="orchset.email">Wyslij mi maila po przebiegu</span>
+            <span id="orchestra-email-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="orchestra-email-toggle" class="switch__input" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
 
         <h3 class="termcustom__section" data-i18n="termcustom.section.ask">/ask</h3>
         <!-- Off by default: without this, /ask always calls the cloud `claude`

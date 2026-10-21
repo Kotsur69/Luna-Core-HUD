@@ -24,6 +24,9 @@ const MAX_NAME = 60;
 const ID_RE = /^[a-z0-9-]{1,40}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
+// A Google Calendar event id and the opaque calendar key gcal hands out.
+const EVENT_ID_RE = /^[A-Za-z0-9_@.-]{1,256}$/;
+const CAL_KEY_RE = /^[0-9a-f]{16}$/;
 // Printable text only: no C0/C1 control characters, no zero-width or bidi
 // override characters (they could make a name display as something else).
 const TEXT_RE = /^[^\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]*$/;
@@ -148,7 +151,17 @@ function billRow(b, rowId) {
     month: m,
     category: b.category ? id(b.category) : '',
     goal: b.goal ? id(b.goal) : '',
+    // Only present once added to Google Calendar, so older rows normalize unchanged.
+    ...(b.calEvent ? { calEvent: calEvent(b.calEvent) } : {}),
   };
+}
+
+/** {id, cal} of a bill's calendar event (src/gcalbills.js). Throws when malformed. */
+function calEvent(v) {
+  if (!v || typeof v !== 'object' || typeof v.id !== 'string' || !EVENT_ID_RE.test(v.id) || typeof v.cal !== 'string' || !CAL_KEY_RE.test(v.cal)) {
+    throw new Error('bad value');
+  }
+  return { id: v.id, cal: v.cal };
 }
 
 function categoryRow(c, rowId) {
@@ -302,11 +315,28 @@ const OPS = {
   },
 
   saveBill: (b, d) => {
-    const row = billRow(d, targetId(b.bills, d));
+    const rowId = targetId(b.bills, d);
+    // The calendar link is never taken from the form: only setBillEvent sets it.
+    const prev = b.bills.find((x) => x.id === rowId);
+    const { calEvent: _ignored, ...fields } = d;
+    const row = billRow(prev && prev.calEvent ? { ...fields, calEvent: prev.calEvent } : fields, rowId);
     // Only a saving grows a pot; a bill never carries a stale goal link.
     const clean = row.kind === 'saving' ? row : { ...row, goal: '' };
     knownGoal(b, clean.goal);
     return { ...b, bills: upsert(b.bills, clean, MAX_BILLS) };
+  },
+  // Main-only (lifeipc refuses it from the renderer): {id, calEvent: {id, cal} | null}.
+  setBillEvent: (b, d) => {
+    mustFind(b.bills, id(d.id));
+    const link = d.calEvent === null ? null : calEvent(d.calEvent);
+    return {
+      ...b,
+      bills: b.bills.map((x) => {
+        if (x.id !== d.id) return x;
+        const { calEvent: _old, ...rest } = x;
+        return link ? { ...rest, calEvent: link } : rest;
+      }),
+    };
   },
   deleteBill: (b, d) => {
     mustFind(b.bills, id(d.id));

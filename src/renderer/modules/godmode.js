@@ -304,7 +304,7 @@ async function markCurrentDoneAndAdvance(run) {
       const items = await readList(run.sessionId);
       const idx = items.findIndex((item) => item.at === at);
       if (idx === -1 || items[idx].done) return;
-      const next = items.map((item, i) => (i === idx ? { ...item, done: true } : item));
+      const next = items.map((item, i) => (i === idx ? { ...item, done: true, doneAt: Date.now() } : item));
       try {
         await window.lunacore.saveTodos(next, run.sessionId);
       } catch {

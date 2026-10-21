@@ -12,7 +12,7 @@
 //   - relays the raw PTY stdout stream to the renderer to display/parse.
 // ============================================================================
 
-const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker, Notification, powerMonitor } = require('electron');
 
 // Host mode (docs/REMOTE_HOST_PLAN.md, "Host runtime"): `--host` runs the
 // headless src/hostmain.js instead of the HUD, before any HUD module loads.
@@ -124,6 +124,14 @@ const { registerMissionIpc } = require('./missioncontrolipc');
 // Life dashboard (Ctrl+Shift+N): budget store, shared with the other PCs
 // through the cloud (src/lifesync.js). No model call.
 const { registerLifeIpc } = require('./lifeipc');
+// One Google Calendar client for Mission Control and the bill events (gcalbills.js).
+const { createGcal } = require('./gcal');
+const { createBillCalendar } = require('./gcalbills');
+// Report emails: Gmail sender, God Mode run email, nightly summary.
+const { createReportMail } = require('./reportmail');
+const { registerMailIpc } = require('./mailipc');
+// Weekly review (Life Week tab, Sunday 20:00 + Generate now) and its email.
+const { setupWeeklyReview } = require('./weeklyipc');
 const { startLifeSync } = require('./lifesync');
 // Cloud sync (docs/CLOUD_SYNC_PLAN.md): Supabase carries the budget, the
 // to-dos, settings and snapshots between PCs. Off without config/cloud.local.json.
@@ -133,6 +141,8 @@ const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
 let cloud = null;
+let weeklyReview = null;
+let missionBrief = null;
 // Highlight extractor: batch tail-trim of video clips via system ffmpeg.
 // See src/highlights.js's header for the argv-array security property.
 const { detectFfmpeg, listVideoFiles, HighlightBatchJob } = require('./highlights');
@@ -893,6 +903,15 @@ function approvalRuleFor(session) {
   }
 }
 
+const gcal = createGcal();
+const reportMail = createReportMail({
+  runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+  listProjects: () => projects.map((p) => ({ id: p.id, name: p.label, todos: readTodos(p.id) })),
+  getUsage: () => latestUsage,
+  getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
+  onResume: (fn) => powerMonitor.on('resume', fn),
+});
+
 const orchestra = createOrchestra({
   runPlanner,
   addWorktree,
@@ -937,7 +956,7 @@ const orchestra = createOrchestra({
   tickTodos: (projectId, ats) => {
     const wanted = new Set(ats);
     const list = readTodos(projectId);
-    const next = list.map((t) => (wanted.has(t.at) && !t.done ? { ...t, done: true } : t));
+    const next = list.map((t) => (wanted.has(t.at) && !t.done ? { ...t, done: true, doneAt: Date.now() } : t));
     if (next.some((t, i) => t !== list[i]) && writeTodos(projectId, next)) send('todo:changed', { projectId });
   },
   workerSettings: () => {
@@ -968,6 +987,7 @@ const orchestra = createOrchestra({
     if (next !== list && writeTodos(projectId, next)) send('todo:changed', { projectId });
   },
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
+  onReport: (planId, text, summary) => reportMail.godmode.onReport(planId, text, summary),
   writeReport: (planId, text) => {
     if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return null;
     try {
@@ -2513,19 +2533,64 @@ function registerIpc() {
   // profile env, same reason as /ask's default: a tab's local-model profile
   // must never leak into a job that can trash mail. The model comes from the
   // missionModel pref (Haiku by default) and is re-checked in the runner.
-  registerMissionIpc({
+  const mission = registerMissionIpc({
     ipcMain,
     getModel: () => readUiPrefs().missionModel,
     getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
+    gcal,
     // Read on the ledger's first use, after startCloud() below has run.
     cloudSnapshots: () => (cloud ? cloud.snapshots : null),
+    // The brief names a to-do list by its project's label, never its path.
+    projectNames: () => new Map(projects.map((p) => [p.id, p.label])),
+    onResume: (fn) => powerMonitor.on('resume', fn),
   });
 
   // Life dashboard (life:* channels): budget store + summary, shared with the
   // other PCs through the cloud, like the to-dos.
   cloud = startCloud({ machine: machineName(os.hostname()) });
   registerCloudIpc({ ipcMain, cloud });
-  registerLifeIpc({ ipcMain, sync: startLifeSync({ cloud }), cloud: () => (cloud ? cloud.snapshots : null) });
+  const lifeSync = startLifeSync({ cloud });
+  const billCal = createBillCalendar({
+    gcal,
+    store: require('./lifebudget'),
+    onSaved: () => lifeSync && lifeSync.soon(),
+    // "Delete the calendar event too?" - asked natively, never by the renderer.
+    confirmDelete: async (name) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        buttons: ['Delete event', 'Keep event'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'LunaCore - bill deleted',
+        message: `Also delete the Google Calendar event for "${name}"?`,
+      });
+      return response === 0;
+    },
+  });
+  // The score reuses Mission Control's ledger (focus, commits, Now) and GitHub reader.
+  const life = registerLifeIpc({
+    ipcMain,
+    sync: lifeSync,
+    cloud: () => (cloud ? cloud.snapshots : null),
+    billCal,
+    ledger: mission.ledger,
+    github: mission.github,
+  });
+  registerMailIpc({ ipcMain, sender: reportMail.sender, prefs: reportMail.prefs, nightly: reportMail.nightly });
+  // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".
+  weeklyReview = setupWeeklyReview({
+    ipcMain,
+    ledgerRange: mission.ledger.range,
+    github: mission.github,
+    body: life.body,
+    projectNames: () => new Map(projects.map((p) => [p.id, p.label])),
+    getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
+    sender: reportMail.sender,
+    prefs: reportMail.prefs,
+    onResume: (fn) => powerMonitor.on('resume', fn),
+  });
+  missionBrief = mission.brief;
 
   // "Add to my library": persists an /ask suggestion card into
   // config/libraries.local.json. addLibraryItem() (src/libraries.js) does all
@@ -3188,6 +3253,10 @@ app.whenReady().then(() => {
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();
   startUsageWatcher();
+  reportMail.nightly.start();
+  if (weeklyReview) weeklyReview.start();
+  // The weekly brief: once per ISO week, on the first launch Monday or later.
+  if (missionBrief) missionBrief.start();
   startTelemetryWatcher();
   startMediaWatcher();
   // Only if the user has previously opted in - the pref defaults to false, so

@@ -167,6 +167,52 @@ test('a failing commit reader leaves focus with the Claude replies only', async 
   assert.equal(r.focus.projects[0].totalMs, 5 * MIN);
 });
 
+test('report.commitDays counts my commits per local day with feat/fix (last 14 days)', async () => {
+  const { deps } = fakes();
+  const today = new Date(NOW);
+  const at = (daysBack, h) => new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysBack, h).getTime();
+  deps.commits = {
+    events: async () => [],
+    shipped: async () => [
+      { ms: at(0, 9), key: 'local:a', kind: 'feat' },
+      { ms: at(0, 10), key: 'local:a', kind: 'fix' },
+      { ms: at(0, 11), key: 'local:a', kind: '' },
+      { ms: at(1, 9), key: 'local:a', kind: '' },
+      { ms: at(20, 9), key: 'local:a', kind: 'feat' },
+    ],
+  };
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.commitDays.length, 14);
+  assert.deepEqual(r.commitDays[13], { date: r.commitDays[13].date, commits: 3, feat: 1, fix: 1 });
+  assert.equal(r.commitDays[12].commits, 1);
+  assert.equal(r.commitDays.reduce((s, d) => s + d.commits, 0), 4);
+});
+
+test('report.commitDays is null without a commit reader that knows kinds', async () => {
+  const r = await createLedgerService(fakes().deps).report({});
+  assert.equal(r.commitDays, null);
+});
+
+test("report.focus.prevDays holds last week's daily totals", async () => {
+  const { deps } = fakes({ ownEvents: [{ ms: MON9 - 7 * DAY, key: 'git:github.com/me/a', name: 'a' }] });
+  const r = await createLedgerService(deps).report({});
+  assert.equal(r.focus.prevDays.length, 7);
+  assert.equal(r.focus.prevDays.reduce((s, d) => s + d.totalMs, 0), 5 * MIN);
+});
+
+test('report.now = the project of the latest Claude reply under 10 min old, with its block start', async () => {
+  const live = [
+    { ms: NOW - 40 * MIN, key: 'git:github.com/me/b', name: 'b' },
+    { ms: NOW - 20 * MIN, key: 'git:github.com/me/a', name: 'a' },
+    { ms: NOW - 12 * MIN, key: 'git:github.com/me/a', name: 'a' },
+    { ms: NOW - 3 * MIN, key: 'git:github.com/me/a', name: 'a' },
+  ];
+  const r = await createLedgerService(fakes({ ownEvents: live }).deps).report({});
+  assert.deepEqual(r.now, { key: 'git:github.com/me/a', name: 'a', sinceMs: NOW - 20 * MIN, lastMs: NOW - 3 * MIN });
+  const stale = await createLedgerService(fakes({ ownEvents: [{ ms: NOW - 11 * MIN, key: 'x', name: 'x' }] }).deps).report({});
+  assert.equal(stale.now, null);
+});
+
 // ---- Cloud snapshot (docs/CLOUD_SYNC_PLAN.md, 2c) ----
 
 test('with the cloud on, our rows go up and other PCs come down', async () => {
@@ -243,4 +289,29 @@ test('a cloud peer with nothing left in range is not listed as a PC', async () =
   const { deps } = withCloud(fakes().deps, [{ machine: 'OLD', data: { v: 1, machine: 'OLD', rows: [], blocks: [] }, updatedAt: NOW - 30 * DAY }]);
   const r = await createLedgerService(deps).report({});
   assert.equal(r.machines.length, 1);
+});
+
+// --- range(): the weekly review's week, the brief's weekend ----------------------
+
+test('range prices rows and clips focus hours to the window, with classes, uploading nothing', async () => {
+  const ownEvents = [
+    { ms: H - 2 * HOUR, key: 'git:github.com/me/a', name: 'a' },
+    { ms: H + 5 * 60 * 1000, key: 'git:github.com/me/a', name: 'a' },
+  ];
+  const { deps } = fakes({ classes: { 'git:github.com/me/a': 'fun' }, ownEvents });
+  const { deps: withC, puts } = withCloud(deps);
+  const res = await createLedgerService(withC).range({ sinceMs: H, untilMs: H + 2 * HOUR });
+  assert.equal(res.ok, true);
+  assert.equal(res.projects[0].cls, 'fun');
+  assert.ok(res.totalUsd > 0);
+  // The block [H+5min, H+10min] is inside; the one 2 h before is not.
+  assert.deepEqual(res.hours.map((p) => [p.key, p.ms, p.cls]), [['git:github.com/me/a', 5 * 60 * 1000, 'fun']]);
+  assert.equal(puts.length, 0);
+});
+
+test('range refuses an empty, reversed or over-long window', async () => {
+  const svc = createLedgerService(fakes().deps);
+  for (const req of [null, {}, { sinceMs: H, untilMs: H }, { sinceMs: H, untilMs: H - 1 }, { sinceMs: H, untilMs: H + 9 * DAY }]) {
+    assert.deepEqual(await svc.range(req), { ok: false, reason: 'bad-range' });
+  }
 });

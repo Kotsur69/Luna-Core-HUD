@@ -17,6 +17,7 @@ const path = require('path');
 const newsMod = require('../src/missionnews.js');
 const store = require('../src/missionnewsstore.js');
 const { registerMissionIpc } = require('../src/missioncontrolipc.js');
+const { createBriefStore } = require('../src/missionbrief.js');
 
 const NEWS = {
   sources: [
@@ -391,6 +392,7 @@ function harness({ sections, answer, cloudSnapshots }) {
     news: fakeNews,
     store: { loadNews: () => NEWS, saveNews: (n) => n },
     openExternal: (u) => opened.push(u),
+    briefStore: createBriefStore({ file: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lc-news-brief-')), 'mission-brief.local.json') }),
     ...(cloudSnapshots ? { cloudSnapshots } : {}),
   });
   return {

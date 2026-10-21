@@ -282,6 +282,13 @@ contextBridge.exposeInMainWorld('lunacore', {
   missionLedger: (req) => ipcRenderer.invoke('mission:ledger', req),
   /** Marks a project work / fun / other (null = unassigned). Promise<{ok} | {ok:false, reason}>. */
   missionProjectClass: (key, cls) => ipcRenderer.invoke('mission:project-class', { key, cls }),
+  // Brief (src/missionbrief.js): weekly on its own, daily only on 'Brief me'.
+  // The renderer picks a kind, a history key or a model from fixed lists.
+  /** Promise<{ok, weekly:{keys, entry}, daily:{keys, entry}, model, models, busy}>. */
+  missionBrief: (weeklyKey, dailyKey) => ipcRenderer.invoke('mission:brief', { weekly: weeklyKey, daily: dailyKey }),
+  /** One model call. {ok:false, reason:'exists'} until overwrite is true (Regenerate, confirmed). */
+  missionBriefRun: (kind, overwrite = false) => ipcRenderer.invoke('mission:brief-run', { kind, overwrite: overwrite === true }),
+  missionBriefModel: (model) => ipcRenderer.invoke('mission:brief-model', { model }),
 
   // --- Life dashboard (src/lifeipc.js) ---
   // Local budget only. `op` is checked against main's fixed op table and the
@@ -300,6 +307,48 @@ contextBridge.exposeInMainWorld('lunacore', {
   lifeBodyConnect: (email, password) => ipcRenderer.invoke('life:body-connect', { email, password }),
   /** Forgets the stored YAZIO login. Promise<{ok}>. */
   lifeBodyDisconnect: () => ipcRenderer.invoke('life:body-disconnect'),
+  /** "Add to calendar" for a bill: calendarKey from missionCalCalendars. Same answer as lifeBudget. */
+  lifeBillCalAdd: (billId, calendarKey, month) =>
+    ipcRenderer.invoke('life:bill-cal-add', { billId, calendar: calendarKey, month }),
+  // --- Report emails (src/mailipc.js) ---
+  // Settings toggles and fixed reports only: the recipient is always the
+  // connected Gmail address itself, decided in main; nothing here names one.
+  /** Promise<{ok, gmail:{configured, connected, email}, prefs, godmodeOn}>. */
+  mailStatus: () => ipcRenderer.invoke('mail:status'),
+  /** Browser consent for gmail.send. Same answer as mailStatus, or {ok:false, reason}. */
+  mailConnect: () => ipcRenderer.invoke('mail:connect'),
+  mailDisconnect: () => ipcRenderer.invoke('mail:disconnect'),
+  /** {nightlyEnabled?, nightlyTime?, sendWhenEmpty?, godmodeEmail?, weeklyEmail?} - validated in main. */
+  mailSet: (patch) => ipcRenderer.invoke('mail:set', patch),
+  /** Sends the nightly summary now, marked [test]. Promise<{ok} | {ok:false, reason}>. */
+  mailTest: () => ipcRenderer.invoke('mail:test'),
+  // Daily side: check-in, habits, weekly goals, productivity score. Local
+  // files only; every payload is re-validated by main's stores.
+  /** Promise<{ok, today, entry, days}>. entry null = not asked today. */
+  lifeCheckin: () => ipcRenderer.invoke('life:checkin'),
+  /** One day's check-in; sleep and energy both null = skipped today. */
+  lifeCheckinSet: (date, sleep, energy) => ipcRenderer.invoke('life:checkin-set', { date, sleep, energy }),
+  /** Promise<{ok, today, steps, habits}>. */
+  lifeHabits: () => ipcRenderer.invoke('life:habits'),
+  /** add / edit / remove / restore / tick. Same answer as lifeHabits. */
+  lifeHabitsDo: (op, data) => ipcRenderer.invoke('life:habits-do', { op, data }),
+  /** Promise<{ok, week, goals, lastWeek, last, isMonday}>. */
+  lifeGoals: () => ipcRenderer.invoke('life:goals'),
+  /** set / status. Same answer as lifeGoals. */
+  lifeGoalsSet: (op, data) => ipcRenderer.invoke('life:goals-set', { op, data }),
+  /** Promise<{ok, score, now, prefs}>. Computed locally, no model call. */
+  lifeScore: () => ipcRenderer.invoke('life:score'),
+  /** Promise<{ok, prefs} | {ok:false, reason}>. Weights are normalised to 100 in main. */
+  lifeScorePrefs: (weights, focusTargetH) => ipcRenderer.invoke('life:score-prefs', { weights, focusTargetH }),
+  // Weekly review (src/weeklyipc.js). A week key and a model only; main
+  // decides what is collected, what the model is asked and where mail goes.
+  /** Promise<{ok, weeks, entry, model, models, current, generatable, busy, mailOn, gmail}>. */
+  lifeWeek: (week) => ipcRenderer.invoke('life:week', { week }),
+  /** One model call. {ok:false, reason:'exists'} until overwrite is true. Same answer as lifeWeek. */
+  lifeWeekGenerate: (week, overwrite = false) => ipcRenderer.invoke('life:week-generate', { week, overwrite: overwrite === true }),
+  /** 'Email it': sends that week's review to the connected Gmail address. */
+  lifeWeekEmail: (week) => ipcRenderer.invoke('life:week-email', { week }),
+  lifeWeekModel: (model, week) => ipcRenderer.invoke('life:week-model', { model, week }),
   // --- Cloud sync (src/cloudipc.js) ---
   // No payloads. Main answers from a whitelist: who is logged in and the sync
   // state - never a token. Login opens GitHub in the system browser.

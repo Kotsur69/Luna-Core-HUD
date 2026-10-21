@@ -10,7 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 
-const { createCommits, parseLog } = require('../src/missioncommits.js');
+const { createCommits, parseLog, parseCommits } = require('../src/missioncommits.js');
 
 const NOW = Date.parse('2026-10-13T12:00:00Z');
 const REPO = path.resolve('/r/alpha');
@@ -118,4 +118,27 @@ test('git runs with fsmonitor disabled (no hook programs from a repo config)', a
   const { runGit, calls } = fakeGit({ log: '' });
   await createCommits({ listRepos: () => [REPO], resolveKey: keys, runGit, now: () => NOW }).events();
   assert.ok(calls.every((c) => c.args[0] === '-c' && c.args[1] === 'core.fsmonitor=false'));
+});
+
+test('parseCommits reads the subject kind (feat: / fix:, scoped or breaking)', () => {
+  const out = parseCommits(
+    [
+      `${sec('2026-10-13T09:00:00Z')}\tme@x.io\tfeat(life): check-in`,
+      `${sec('2026-10-13T09:10:00Z')}\tme@x.io\tFix: typo\twith a tab`,
+      `${sec('2026-10-13T09:20:00Z')}\tme@x.io\tfeat!: breaking`,
+      `${sec('2026-10-13T09:30:00Z')}\tme@x.io\tdocs: readme`,
+      `${sec('2026-10-13T09:40:00Z')}\tme@x.io`,
+      `${sec('2026-10-13T09:50:00Z')}\tother@x.io\tfeat: not mine`,
+    ].join('\n'),
+    'me@x.io'
+  );
+  assert.deepEqual(out.map((c) => c.kind), ['feat', 'fix', 'feat', '', '']);
+});
+
+test('shipped: my commits with their kind; events stay {ms, key, name}', async () => {
+  const { runGit, calls } = fakeGit({ log: `${sec('2026-10-13T09:00:00Z')}\tme@x.io\tfix: bug\n` });
+  const commits = createCommits({ listRepos: () => [REPO], resolveKey: keys, runGit, now: () => NOW });
+  assert.deepEqual(await commits.shipped(), [{ ms: Date.parse('2026-10-13T09:00:00Z'), key: 'local:alpha', kind: 'fix' }]);
+  assert.deepEqual(await commits.events(), [{ ms: Date.parse('2026-10-13T09:00:00Z'), key: 'local:alpha', name: 'alpha' }]);
+  assert.ok(calls.find((c) => c.args.includes('log')).args.includes('--format=%at%x09%ae%x09%s'));
 });
