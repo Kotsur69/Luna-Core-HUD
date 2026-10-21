@@ -1262,6 +1262,33 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    rates.json: nothing shouts, it's just wrong. */
 .tab__ctx.is-high { color: var(--bad); }
 
+/* Status light in front of the label (src/sessionstatus.js). Every state has
+   its own glyph AND motion, so it reads without colour: pulsing dot = working,
+   check = done, blinking '!' = approval, clock = limit, grey ring/dash =
+   idle/dead. Motion is dropped for reduced/off tiers and the OS setting. */
+.tab__status {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-dim);
+}
+.tab__status.is-working { color: var(--neon-cyan); animation: tab-status-pulse 1.4s ease-in-out infinite; }
+.tab__status.is-done { color: var(--good); }
+.tab__status.is-approval { color: var(--warn, #ffd86b); animation: tab-status-blink 0.9s steps(1, end) infinite; }
+.tab__status.is-limit { color: var(--warn, #ffd86b); }
+.tab__status.is-idle,
+.tab__status.is-dead { color: var(--text-dim); opacity: 0.7; }
+@keyframes tab-status-pulse { 50% { opacity: 0.35; transform: scale(0.8); } }
+@keyframes tab-status-blink { 50% { opacity: 0.2; } }
+:root[data-motion='off'] .tab__status,
+:root[data-motion='reduced'] .tab__status { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .tab__status { animation: none; }
+}
+
 .tab__close,
 .tabs__new {
   background: none;
