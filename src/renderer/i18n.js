@@ -396,6 +396,18 @@ const I18N_DICT = {
     'termcustom.bgImage.errTooLarge': 'Plik zbyt duzy (limit 4 MB).',
     'termcustom.bgImage.errUnsupported': 'Nieobslugiwany format pliku.',
     'termcustom.reset': 'Przywroc domyslne',
+    'termcustom.cat.general': 'Ogolne',
+    'termcustom.cat.appearance': 'Wyglad',
+    'termcustom.cat.terminal': 'Terminal',
+    'termcustom.cat.sound': 'Dzwiek i start',
+    'termcustom.cat.notifications': 'Powiadomienia',
+    'termcustom.cat.ai': 'AI i modele',
+    'termcustom.cat.godmode': 'God Mode',
+    'termcustom.nav.aria': 'Kategorie ustawien',
+    'termcustom.section.claudeTools': 'Narzedzia Claude',
+    'termcustom.search.ph': 'Szukaj ustawien...',
+    'termcustom.search.aria': 'Szukaj ustawien',
+    'termcustom.search.empty': 'Brak ustawien pasujacych do "{q}".',
     'shortcuts.title': 'Skroty klawiszowe',
     'shortcuts.group.window': 'Karty i okno',
     'shortcuts.group.overlays': 'Nakladki',
@@ -2128,6 +2140,18 @@ const I18N_DICT = {
     'termcustom.bgImage.errTooLarge': 'File too large (4 MB limit).',
     'termcustom.bgImage.errUnsupported': 'Unsupported file format.',
     'termcustom.reset': 'Reset to defaults',
+    'termcustom.cat.general': 'General',
+    'termcustom.cat.appearance': 'Appearance',
+    'termcustom.cat.terminal': 'Terminal',
+    'termcustom.cat.sound': 'Sound & startup',
+    'termcustom.cat.notifications': 'Notifications',
+    'termcustom.cat.ai': 'AI & models',
+    'termcustom.cat.godmode': 'God Mode',
+    'termcustom.nav.aria': 'Settings categories',
+    'termcustom.section.claudeTools': 'Claude tools',
+    'termcustom.search.ph': 'Search settings...',
+    'termcustom.search.aria': 'Search settings',
+    'termcustom.search.empty': 'No settings match "{q}".',
     'shortcuts.title': 'Keyboard shortcuts',
     'shortcuts.group.window': 'Tabs & window',
     'shortcuts.group.overlays': 'Overlays',
@@ -3500,6 +3524,13 @@ function t(key, params) {
   return interpolate(str, params);
 }
 
+/** Every language's string for one key - the Settings search matches in both. */
+function tAll(key) {
+  return Object.values(I18N_DICT)
+    .map((dict) => dict[key])
+    .filter((str) => typeof str === 'string');
+}
+
 /** Sets the current language (unknown => 'pl'). */
 function setLang(lang) {
   currentLang = I18N_DICT[lang] ? lang : 'pl';
@@ -3527,6 +3558,7 @@ function applyStatic(root = document) {
 
 window.i18n = {
   t,
+  tAll,
   setLang,
   applyStatic,
   get lang() {

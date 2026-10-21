@@ -1368,571 +1368,646 @@
        general Settings, not just terminal appearance - hence the two sections. -->
   <div id="termcustom" class="termcustom" tabindex="-1" hidden>
     <div class="termcustom__backdrop" data-termcustom-close></div>
-    <div class="termcustom__modal" role="dialog" aria-modal="true" aria-label="Ustawienia">
+    <div class="termcustom__modal" role="dialog" aria-modal="true" aria-labelledby="termcustom-title">
       <div class="termcustom__bar">
         <span class="termcustom__glyph">⌗</span>
-        <span class="termcustom__title" data-i18n="termcustom.title">Ustawienia</span>
+        <span id="termcustom-title" class="termcustom__title" data-i18n="termcustom.title">Ustawienia</span>
+        <!-- Cross-category filter (modules/settingsearch.js holds the pure
+             matching). Focused on open; typing switches every pane on and hides
+             whatever does not match, in both languages. -->
+        <input
+          type="search"
+          id="termcustom-search"
+          class="termcustom__search"
+          autocomplete="off"
+          spellcheck="false"
+          data-i18n-ph="termcustom.search.ph"
+          data-i18n-aria="termcustom.search.aria"
+          placeholder="Szukaj ustawien..."
+          aria-label="Szukaj ustawien"
+        />
       </div>
-      <div class="termcustom__body">
-        <h3 class="termcustom__section" data-i18n="termcustom.section.general">Ogolne</h3>
-        <!-- UI language: PL/EN, switches live (i18n.js). Moved from w-appearance's
-             left panel (2026-08-19, Mati: wanted it under the same Ctrl shortcut
-             as the rest of Settings) - wiring lives in modules/termcustom.js,
-             the actual apply/persist logic stays in modules/appearance.js. -->
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="appearance.lang">Jezyk</span>
-          <select id="termcustom-lang-switcher" class="profile-select">
-            <option value="pl">Polski</option>
-            <option value="en">English</option>
-          </select>
-        </label>
-        <!-- v0.10 modifiers: four axes that multiply across every theme rather
-             than adding to them. They live here and not in the left rail because
-             that Appearance panel was deliberately slimmed to theme/layout/language
-             on 2026-08-13, and these are app-wide serving preferences - the same
-             category as Language above. Wiring: modules/termcustom.js -> modifiers.js,
-             which puts them on <html> as data-* attributes (never inline tokens,
-             which would collide with applyThemeVars). -->
-        <h3 class="termcustom__section" data-i18n="termcustom.section.interface">Interfejs</h3>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.density">Gestosc</span>
-          <select id="termcustom-density" class="profile-select">
-            <option value="comfortable" data-i18n="termcustom.density.comfortable">Przestronna</option>
-            <option value="cozy" data-i18n="termcustom.density.cozy">Zwykla</option>
-            <option value="compact" data-i18n="termcustom.density.compact">Kompaktowa</option>
-            <option value="dense" data-i18n="termcustom.density.dense">Gesta</option>
-          </select>
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.fontPack">Zestaw czcionek</span>
-          <select id="termcustom-font-pack" class="profile-select">
-            <option value="theme" data-i18n="termcustom.fontPack.theme">Wg motywu</option>
-            <option value="mono" data-i18n="termcustom.fontPack.mono">Monospace</option>
-            <option value="display" data-i18n="termcustom.fontPack.display">Techniczny</option>
-            <option value="system" data-i18n="termcustom.fontPack.system">Systemowy</option>
-          </select>
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.glow">Poswiata</span>
-          <select id="termcustom-glow" class="profile-select">
-            <option value="full" data-i18n="termcustom.glow.full">Pelna</option>
-            <option value="reduced" data-i18n="termcustom.glow.reduced">Ograniczona</option>
-            <option value="off" data-i18n="termcustom.glow.off">Wylaczona</option>
-          </select>
-        </label>
-        <!-- The title spells out that the OS switch still wins: someone running
-             prefers-reduced-motion system-wide who picks "Pelne" here would
-             otherwise see nothing happen and have no way to find out why. -->
-        <label class="ui-field" data-i18n-title="termcustom.motion.hint" title="Wlasne ustawienie animacji. Systemowe ograniczenie ruchu (prefers-reduced-motion) ma pierwszenstwo i zawsze je wylaczy.">
-          <span class="ui-field__label" data-i18n="termcustom.motion">Animacje</span>
-          <select id="termcustom-motion" class="profile-select">
-            <option value="full" data-i18n="termcustom.motion.full">Pelne</option>
-            <option value="reduced" data-i18n="termcustom.motion.reduced">Ograniczone</option>
-            <option value="off" data-i18n="termcustom.motion.off">Wylaczone</option>
-          </select>
-        </label>
-        <h3 class="termcustom__section" data-i18n="surfacealpha.title">Przezroczystosc</h3>
-        <!-- reference/TRANSPARENCY_PLAN.md. Four sliders and not one because the
-             layers NEST - html/body under .app under .panel - so a single shared
-             alpha composites to 1-(1-a)^n and reads as opaque. Each axis follows
-             the active theme until its slider is moved. -->
-        <p class="termcustom__hint" data-i18n="surfacealpha.hint">
-          Akrylowe tlo Windows 11 widac tylko tam, gdzie warstwa nie jest pelna.
-        </p>
-        <!-- Above the sliders on purpose: the material decides WHAT is behind
-             the glass, the sliders only decide how much of it shows. -->
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="surfacealpha.material">Jak czysto widac (Windows)</span>
-          <select id="surfacealpha-material" class="profile-select">
-            <option value="acrylic" data-i18n="surfacealpha.material.acrylic">Akryl - mocno rozmyte, widac ksztalty okien pod spodem</option>
-            <option value="tabbed" data-i18n="surfacealpha.material.tabbed">Tabbed - rozmyte, mocniejszy odcien</option>
-            <option value="mica" data-i18n="surfacealpha.material.mica">Mica - tylko odcien tapety, bez okien pod spodem</option>
-            <option value="auto" data-i18n="surfacealpha.material.auto">Auto - wybiera Windows</option>
-          </select>
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label">
-            <span data-i18n="surfacealpha.ground">Tlo okna</span>
-            <output class="ui-field__value" id="surfacealpha-ground-out" for="surfacealpha-ground">100%</output>
-          </span>
-          <input type="range" id="surfacealpha-ground" min="0" max="100" step="1" />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label">
-            <span data-i18n="surfacealpha.edge">Szczeliny miedzy panelami</span>
-            <output class="ui-field__value" id="surfacealpha-edge-out" for="surfacealpha-edge">100%</output>
-          </span>
-          <input type="range" id="surfacealpha-edge" min="0" max="100" step="1" />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label">
-            <span data-i18n="surfacealpha.panel">Panele</span>
-            <output class="ui-field__value" id="surfacealpha-panel-out" for="surfacealpha-panel">100%</output>
-          </span>
-          <input type="range" id="surfacealpha-panel" min="0" max="100" step="1" />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label">
-            <span data-i18n="surfacealpha.term">Terminal</span>
-            <output class="ui-field__value" id="surfacealpha-term-out" for="surfacealpha-term">100%</output>
-          </span>
-          <input type="range" id="surfacealpha-term" min="0" max="100" step="1" />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label">
-            <span data-i18n="surfacealpha.chrome">Paski i zakladki</span>
-            <output class="ui-field__value" id="surfacealpha-chrome-out" for="surfacealpha-chrome">100%</output>
-          </span>
-          <input type="range" id="surfacealpha-chrome" min="0" max="100" step="1" />
-        </label>
-        <div class="termcustom__bgimage-row">
-          <button type="button" id="surfacealpha-follow" class="termcustom__reset" data-i18n="surfacealpha.follow">Wroc do motywu</button>
+      <div class="termcustom__layout">
+        <!-- Category rail. Static buttons; termcustom.js owns selection, arrow-key
+             movement and the search mode that shows every pane at once. -->
+        <nav id="termcustom-nav" class="termcustom__nav" role="tablist" aria-orientation="vertical" data-i18n-aria="termcustom.nav.aria" aria-label="Kategorie ustawien">
+          <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-general" data-cat="general" aria-controls="termcustom-pane-general" data-i18n="termcustom.cat.general">Ogolne</button>
+          <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-appearance" data-cat="appearance" aria-controls="termcustom-pane-appearance" data-i18n="termcustom.cat.appearance">Wyglad</button>
+          <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-terminal" data-cat="terminal" aria-controls="termcustom-pane-terminal" data-i18n="termcustom.cat.terminal">Terminal</button>
+          <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-sound" data-cat="sound" aria-controls="termcustom-pane-sound" data-i18n="termcustom.cat.sound">Dzwiek i start</button>
+          <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-notifications" data-cat="notifications" aria-controls="termcustom-pane-notifications" data-i18n="termcustom.cat.notifications">Powiadomienia</button>
+          <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-ai" data-cat="ai" aria-controls="termcustom-pane-ai" data-i18n="termcustom.cat.ai">AI i modele</button>
+          <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-godmode" data-cat="godmode" aria-controls="termcustom-pane-godmode" data-i18n="termcustom.cat.godmode">God Mode</button>
+        </nav>
+        <div id="termcustom-body" class="termcustom__body">
+          <section id="termcustom-pane-general" class="termcustom__pane" data-cat="general" role="tabpanel" aria-labelledby="termcustom-tab-general">
+            <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.general">Ogolne</h2>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="termcustom.section.general">Ogolne</h3>
+              <!-- UI language: PL/EN, switches live (i18n.js). Moved from w-appearance's
+                   left panel (2026-08-19, Mati: wanted it under the same Ctrl shortcut
+                   as the rest of Settings) - wiring lives in modules/termcustom.js,
+                   the actual apply/persist logic stays in modules/appearance.js. -->
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="appearance.lang">Jezyk</span>
+                <select id="termcustom-lang-switcher" class="profile-select">
+                  <option value="pl">Polski</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
+            </div>
+          </section>
+          <section id="termcustom-pane-appearance" class="termcustom__pane" data-cat="appearance" role="tabpanel" aria-labelledby="termcustom-tab-appearance">
+            <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.appearance">Wyglad</h2>
+            <div class="termcustom__group">
+              <!-- v0.10 modifiers: four axes that multiply across every theme rather
+                   than adding to them. They live here and not in the left rail because
+                   that Appearance panel was deliberately slimmed to theme/layout/language
+                   on 2026-08-13, and these are app-wide serving preferences - the same
+                   category as Language above. Wiring: modules/termcustom.js -> modifiers.js,
+                   which puts them on <html> as data-* attributes (never inline tokens,
+                   which would collide with applyThemeVars). -->
+              <h3 class="termcustom__section" data-i18n="termcustom.section.interface">Interfejs</h3>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.density">Gestosc</span>
+                <select id="termcustom-density" class="profile-select">
+                  <option value="comfortable" data-i18n="termcustom.density.comfortable">Przestronna</option>
+                  <option value="cozy" data-i18n="termcustom.density.cozy">Zwykla</option>
+                  <option value="compact" data-i18n="termcustom.density.compact">Kompaktowa</option>
+                  <option value="dense" data-i18n="termcustom.density.dense">Gesta</option>
+                </select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.fontPack">Zestaw czcionek</span>
+                <select id="termcustom-font-pack" class="profile-select">
+                  <option value="theme" data-i18n="termcustom.fontPack.theme">Wg motywu</option>
+                  <option value="mono" data-i18n="termcustom.fontPack.mono">Monospace</option>
+                  <option value="display" data-i18n="termcustom.fontPack.display">Techniczny</option>
+                  <option value="system" data-i18n="termcustom.fontPack.system">Systemowy</option>
+                </select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.glow">Poswiata</span>
+                <select id="termcustom-glow" class="profile-select">
+                  <option value="full" data-i18n="termcustom.glow.full">Pelna</option>
+                  <option value="reduced" data-i18n="termcustom.glow.reduced">Ograniczona</option>
+                  <option value="off" data-i18n="termcustom.glow.off">Wylaczona</option>
+                </select>
+              </label>
+              <!-- The title spells out that the OS switch still wins: someone running
+                   prefers-reduced-motion system-wide who picks "Pelne" here would
+                   otherwise see nothing happen and have no way to find out why. -->
+              <label class="ui-field" data-i18n-title="termcustom.motion.hint" title="Wlasne ustawienie animacji. Systemowe ograniczenie ruchu (prefers-reduced-motion) ma pierwszenstwo i zawsze je wylaczy.">
+                <span class="ui-field__label" data-i18n="termcustom.motion">Animacje</span>
+                <select id="termcustom-motion" class="profile-select">
+                  <option value="full" data-i18n="termcustom.motion.full">Pelne</option>
+                  <option value="reduced" data-i18n="termcustom.motion.reduced">Ograniczone</option>
+                  <option value="off" data-i18n="termcustom.motion.off">Wylaczone</option>
+                </select>
+              </label>
+            </div>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="surfacealpha.title">Przezroczystosc</h3>
+              <!-- reference/TRANSPARENCY_PLAN.md. Four sliders and not one because the
+                   layers NEST - html/body under .app under .panel - so a single shared
+                   alpha composites to 1-(1-a)^n and reads as opaque. Each axis follows
+                   the active theme until its slider is moved. -->
+              <p class="termcustom__hint" data-i18n="surfacealpha.hint">
+                Akrylowe tlo Windows 11 widac tylko tam, gdzie warstwa nie jest pelna.
+              </p>
+              <!-- Above the sliders on purpose: the material decides WHAT is behind
+                   the glass, the sliders only decide how much of it shows. -->
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="surfacealpha.material">Jak czysto widac (Windows)</span>
+                <select id="surfacealpha-material" class="profile-select">
+                  <option value="acrylic" data-i18n="surfacealpha.material.acrylic">Akryl - mocno rozmyte, widac ksztalty okien pod spodem</option>
+                  <option value="tabbed" data-i18n="surfacealpha.material.tabbed">Tabbed - rozmyte, mocniejszy odcien</option>
+                  <option value="mica" data-i18n="surfacealpha.material.mica">Mica - tylko odcien tapety, bez okien pod spodem</option>
+                  <option value="auto" data-i18n="surfacealpha.material.auto">Auto - wybiera Windows</option>
+                </select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label">
+                  <span data-i18n="surfacealpha.ground">Tlo okna</span>
+                  <output class="ui-field__value" id="surfacealpha-ground-out" for="surfacealpha-ground">100%</output>
+                </span>
+                <input type="range" id="surfacealpha-ground" min="0" max="100" step="1" />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label">
+                  <span data-i18n="surfacealpha.edge">Szczeliny miedzy panelami</span>
+                  <output class="ui-field__value" id="surfacealpha-edge-out" for="surfacealpha-edge">100%</output>
+                </span>
+                <input type="range" id="surfacealpha-edge" min="0" max="100" step="1" />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label">
+                  <span data-i18n="surfacealpha.panel">Panele</span>
+                  <output class="ui-field__value" id="surfacealpha-panel-out" for="surfacealpha-panel">100%</output>
+                </span>
+                <input type="range" id="surfacealpha-panel" min="0" max="100" step="1" />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label">
+                  <span data-i18n="surfacealpha.term">Terminal</span>
+                  <output class="ui-field__value" id="surfacealpha-term-out" for="surfacealpha-term">100%</output>
+                </span>
+                <input type="range" id="surfacealpha-term" min="0" max="100" step="1" />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label">
+                  <span data-i18n="surfacealpha.chrome">Paski i zakladki</span>
+                  <output class="ui-field__value" id="surfacealpha-chrome-out" for="surfacealpha-chrome">100%</output>
+                </span>
+                <input type="range" id="surfacealpha-chrome" min="0" max="100" step="1" />
+              </label>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="surfacealpha-follow" class="termcustom__reset" data-i18n="surfacealpha.follow">Wroc do motywu</button>
+              </div>
+            </div>
+          </section>
+          <section id="termcustom-pane-terminal" class="termcustom__pane" data-cat="terminal" role="tabpanel" aria-labelledby="termcustom-tab-terminal">
+            <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.terminal">Terminal</h2>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="termcustom.section.appearance">Wyglad terminala</h3>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.fontFamily">Czcionka</span>
+                <select id="termcustom-font-family" class="profile-select">
+                  <option value='Cascadia Code, Consolas, "Courier New", monospace'>Cascadia Code</option>
+                  <option value="Consolas, monospace">Consolas</option>
+                  <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
+                  <option value="'Fira Code', monospace">Fira Code</option>
+                  <option value="'Courier New', monospace">Courier New</option>
+                  <option value="monospace">System default</option>
+                  <option value="__custom__" data-i18n="termcustom.fontFamily.custom">Custom…</option>
+                </select>
+              </label>
+              <label id="termcustom-font-family-custom-field" class="ui-field" hidden>
+                <input
+                  type="text"
+                  id="termcustom-font-family-custom"
+                  class="profile-select"
+                  autocomplete="off"
+                  spellcheck="false"
+                  data-i18n-ph="termcustom.fontFamily.customPh"
+                  placeholder="np. 'Iosevka', monospace"
+                />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.fontSize">Rozmiar czcionki</span>
+                <input type="number" id="termcustom-font-size" min="8" max="32" step="1" />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.lineHeight">Wysokosc linii</span>
+                <input type="number" id="termcustom-line-height" min="0.8" max="3" step="0.1" />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.letterSpacing">Odstepy liter (px)</span>
+                <input type="number" id="termcustom-letter-spacing" min="-5" max="20" step="1" />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.cursorStyle">Styl kursora</span>
+                <select id="termcustom-cursor-style" class="profile-select">
+                  <option value="block" data-i18n="termcustom.cursorStyle.block">Blok</option>
+                  <option value="underline" data-i18n="termcustom.cursorStyle.underline">Podkreslenie</option>
+                  <option value="bar" data-i18n="termcustom.cursorStyle.bar">Kreska</option>
+                </select>
+              </label>
+              <label id="termcustom-cursor-blink-field" class="switch-field">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="termcustom.cursorBlink">Migajacy kursor</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="termcustom-cursor-blink" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.scrollback">Bufor przewijania (linie)</span>
+                <input type="number" id="termcustom-scrollback" min="0" max="1000000" step="500" />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.bgOpacity">Przezroczystosc tla (%)</span>
+                <input type="range" id="termcustom-bg-opacity" min="0" max="100" step="1" />
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.bgBlur">Rozmycie tla (px)</span>
+                <input type="range" id="termcustom-bg-blur" min="0" max="20" step="1" />
+              </label>
+              <!-- 2026-08-13 (Mati): background image - requires allowTransparency (terminals.js)
+                   and a data: URI (CSP img-src). Picking and reading the file lives IN MAIN
+                   (main.js: termcustom:pickBgImage), the renderer only gets the dataUrl. -->
+              <div class="ui-field">
+                <span class="ui-field__label" data-i18n="termcustom.bgImage">Obraz tla</span>
+                <div class="termcustom__bgimage-row">
+                  <button type="button" id="termcustom-bg-image-pick" class="termcustom__reset" data-i18n="termcustom.bgImage.pick">Wybierz...</button>
+                  <button type="button" id="termcustom-bg-image-clear" class="termcustom__reset" data-i18n="termcustom.bgImage.clear">Usun</button>
+                </div>
+                <span id="termcustom-bg-image-status" class="ui-field__label"></span>
+              </div>
+              <!-- Screenshot paste: Win+Shift+S leaves a BITMAP on the clipboard, and
+                   Claude Code reads an image by PATH - so a pasted image is written
+                   under %TEMP%\lunacore-clips and the path goes in instead. See
+                   src/screenshots.js. Default ON (uiprefs' screenshotPasteEnabled):
+                   unlike the clipboard-history switch this watches nothing, it only
+                   ever touches bytes an explicit Ctrl+V already delivered.
+                   Sits with the terminal, not under Sound/startup: the Ctrl+V it
+                   governs happens over a terminal pane, which is where someone
+                   wondering why a paste did nothing goes looking (2026-09-11, Mati). -->
+              <label id="shotpaste-field" class="switch-field" data-i18n-title="shotpaste.hint" title="Ctrl+V ze zrzutem ekranu zapisuje PNG w %TEMP% i wkleja sciezke do pliku.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="shotpaste.label">Wklejanie zrzutow ekranu</span>
+                  <span id="shotpaste-status" class="switch-field__status" data-i18n="shotpaste.on">wlaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="shotpaste-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+      <div class="termcustom__bgimage-row">
+        <button type="button" id="termcustom-reset" class="termcustom__reset" data-i18n="termcustom.reset">Przywroc domyslne</button>
+      </div>
+            </div>
+          </section>
+          <section id="termcustom-pane-sound" class="termcustom__pane" data-cat="sound" role="tabpanel" aria-labelledby="termcustom-tab-sound">
+            <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.sound">Dzwiek i start</h2>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="termcustom.section.sound">Dzwiek i start</h3>
+              <!-- Sound: sfx/voice lines on interactions. mpv is optional - missing from
+                   PATH means a silent fallback (soundManager.js); this toggle only enables/
+                   disables renderer-side playback + persists the preference.
+                   Moved from w-appearance 2026-08-13 (Mati: slimming down the panel). -->
+              <label id="sound-field" class="switch-field" data-i18n-title="appearance.sound.hint" title="Dzwiekowe sprzezenie zwrotne (klawisze, zakladki, przelaczniki). Wymaga mpv na PATH - w przeciwnym razie cicho nic nie robi.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="appearance.sound">Dzwiek</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="sound-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <!-- Separate from the master Sound toggle above: mutes only Luna's own
+                   voice lines (welcome/needYou/done/usage alerts + read-aloud
+                   narration) while keystroke/nav/tab sfx keep playing. -->
+              <label id="voice-field" class="switch-field" data-i18n-title="appearance.voice.hint" title="Wycisz tylko glos Luny (powitanie, alerty, odczytywanie na glos) - dzwieki klawiszy i nawigacji zostaja wlaczone.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="appearance.voice">Glos Luny</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="voice-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="appearance.keystrokeSound">Dzwiek klawiszy</span>
+                <select id="sound-keystroke-variant" class="profile-select">
+                  <option value="mechanical">Mechanical (Thocky)</option>
+                  <option value="soft">Soft (iPhone)</option>
+                  <option value="scifi">Sci-fi (Mechanical)</option>
+                  <option value="typewriter">Typewriter (Phone)</option>
+                  <option value="atm">Cash Machine</option>
+                  <option value="secretcode">Secret Code</option>
+                  <option value="securitycode">Security Code</option>
+                </select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="appearance.volume">Glosnosc</span>
+                <input type="range" id="sound-volume" min="0" max="100" />
+              </label>
+              <!-- SS11.1: minimum turn duration before playing "All done" (turn-end
+                   detection in observer.js / checkTurnEnd() in main.js). 0 = every turn. -->
+              <label class="ui-field" data-i18n-title="appearance.longTaskMinutes.hint" title="Minimalny czas trwania tury Claude, zanim odtworzy sie glos &quot;All done&quot;. 0 = ogloszaj kazda ture.">
+                <span class="ui-field__label" data-i18n="appearance.longTaskMinutes">Ogloszenie "Gotowe" po (min)</span>
+                <input type="number" id="sound-long-task-minutes" min="0" max="180" step="1" />
+              </label>
+              <!-- SS11.2: optional reading of Claude's replies aloud (Windows
+                   SAPI, offline - src/tts.js). Off by default. -->
+              <label class="switch-field" data-i18n-title="appearance.readOutput.hint" title="Odczytuj odpowiedzi Claude na glos po kazdej turze (Windows SAPI, offline).">
+                <span class="switch-field__label" data-i18n="appearance.readOutput">Czytaj odpowiedzi na glos</span>
+                <span class="switch">
+                  <input type="checkbox" id="sound-read-output-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <!-- Auto-pause whatever is playing (Spotify, a podcast, a browser
+                   tab) for the duration of the read-aloud narration, then resume
+                   it. Narration only. Off by default - src/voiceduck.js. -->
+              <label class="switch-field" data-i18n-title="appearance.voiceDuck.hint" title="Gdy Luna czyta odpowiedz na glos, wstrzymaj odtwarzana muzyke lub podcast i wznow po zakonczeniu. Tylko odczyt na glos. Domyslnie wylaczone.">
+                <span class="switch-field__label" data-i18n="appearance.voiceDuck">Wstrzymaj muzyke na czas odczytu</span>
+                <span class="switch">
+                  <input type="checkbox" id="sound-voiceduck-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <!-- Boot sequence: pure decoration, can be turned off. Does not block
+                   the session - the PTY starts underneath regardless of the animation. -->
+              <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="boot.label">Sekwencja startowa</span>
+                  <span id="boot-status" class="switch-field__status" data-i18n="boot.on">wlaczona</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="boot-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+            </div>
+          </section>
+          <section id="termcustom-pane-notifications" class="termcustom__pane" data-cat="notifications" role="tabpanel" aria-labelledby="termcustom-tab-notifications">
+            <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.notifications">Powiadomienia</h2>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="notify.title">Powiadomienia</h3>
+              <!-- System notifications: moved from its own left-panel widget
+                   (2026-08-19, Mati) - see src/renderer/modules/notify.js. -->
+              <label id="notify-field" class="switch-field" data-i18n-title="notify.hint" title="Powiadomienie systemowe, gdy sesja skonczy prace lub przekroczy 85% kontekstu.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="notify.label">Powiadomienia systemowe</span>
+                  <span id="notify-status" class="switch-field__status" data-i18n="notify.off">wylaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="notify-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+            </div>
+            <div class="termcustom__group">
+              <!-- Report emails (src/mailipc.js, modules/mailsettings.js): a separate
+                   gmail.send-only Google grant; every email goes to that same address. -->
+              <h3 class="termcustom__section" data-i18n="mailset.section">Raporty e-mail</h3>
+              <div class="ui-field" data-i18n-title="mailset.gmail.hint" title="Osobna zgoda Google tylko na wysylanie (gmail.send). Maile ida zawsze na ten sam adres.">
+                <span class="ui-field__label" data-i18n="mailset.gmail">Gmail</span>
+                <span id="mail-gmail-status" class="orchestra__allowed" data-i18n="mailset.gmail.off">niepolaczony</span>
+                <button type="button" id="mail-gmail-connect" class="pad-send" data-i18n="mailset.gmail.connect">Polacz Gmail</button>
+              </div>
+              <label id="mail-nightly-field" class="switch-field" data-i18n-title="mailset.nightly.hint" title="Codziennie o ustalonej godzinie: przebiegi God Mode, commity, odhaczone zadania i zuzycie Claude. Jedno wywolanie Haiku.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="mailset.nightly">Wieczorne podsumowanie e-mail</span>
+                  <span id="mail-nightly-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="mail-nightly-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <label class="ui-field" data-i18n-title="mailset.time.hint" title="Godzina lokalna. Jesli komputer spal, mail wyjdzie po wybudzeniu tego samego dnia.">
+                <span class="ui-field__label" data-i18n="mailset.time">Godzina</span>
+                <input type="time" id="mail-nightly-time" class="profile-select" value="22:30" />
+              </label>
+              <label id="mail-empty-field" class="switch-field" data-i18n-title="mailset.empty.hint" title="Domyslnie dzien bez przebiegow, commitow i zadan jest pomijany.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="mailset.empty">Wysylaj nawet pusty dzien</span>
+                  <span id="mail-empty-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="mail-empty-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <div class="ui-field">
+                <span class="ui-field__label" data-i18n="mailset.test">Test</span>
+                <span id="mail-test-status" class="orchestra__allowed"></span>
+                <button type="button" id="mail-test" class="pad-send" data-i18n="mailset.test.send">Wyslij test teraz</button>
+              </div>
+            </div>
+          </section>
+          <section id="termcustom-pane-ai" class="termcustom__pane" data-cat="ai" role="tabpanel" aria-labelledby="termcustom-tab-ai">
+            <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.ai">AI i modele</h2>
+            <div class="termcustom__group">
+      <h3 class="termcustom__section" data-i18n="termcustom.section.claudeTools">Narzedzia Claude</h3>
+              <!-- Task intake (src/intake.js): new tabs get the luna_todo_* MCP tools.
+                   Default ON (uiprefs' todoToolsEnabled); applies to tabs opened after
+                   the change, since the flag is part of the tab's start command. -->
+              <label id="todotools-field" class="switch-field" data-i18n-title="todotools.hint" title="Nowe karty dostaja narzedzia MCP luna_todo_*, dzieki ktorym Claude dopisuje karty zadan do listy To-do. Dotyczy kart otwartych po zmianie.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="todotools.label">Narzedzia To-do dla Claude</span>
+                  <span id="todotools-status" class="switch-field__status" data-i18n="todotools.on">wlaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="todotools-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+            </div>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="termcustom.section.ask">/ask</h3>
+              <!-- Off by default: without this, /ask always calls the cloud `claude`
+                   CLI with --model sonnet, regardless of which profile a terminal
+                   tab happens to be on (src/ask.js's header explains why - a
+                   profile pointing a TERMINAL at a local endpoint must never make
+                   /ask silently follow). Turning this on opts /ask into whichever
+                   configured profile (profiles.json/profiles.local.json - the same
+                   list the per-tab profile switcher offers) points at a local
+                   endpoint, via src/main.js's ask:query handler. -->
+              <label id="ask-local-model-field" class="switch-field" data-i18n-title="ask.localModel.hint" title="Jesli w profilach jest skonfigurowany lokalny model (np. LM Studio), /ask bedzie go uzywac zamiast Claude w chmurze.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="ask.localModel.label">Uzywaj lokalnego modelu dla /ask</span>
+                  <span id="ask-local-model-status" class="switch-field__status" data-i18n="ask.localModel.off">wylaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="ask-local-model-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+            </div>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="autocompact.settings.title">Auto-compact</h3>
+              <!-- Feature #4: the arm TOGGLE itself stays a left-panel widget (Actions,
+                   next to the physical COMPACT button); this only picks WHAT an armed
+                   auto-compact watches. Wiring: autocompact.js mountAutoCompactSettings(). -->
+              <label class="ui-field" data-i18n-title="autocompact.settings.hint" title="Wybierz, co wyzwala auto-compact, gdy jest uzbrojony.">
+                <span class="ui-field__label" data-i18n="autocompact.settings.mode">Wyzwalacz</span>
+                <select id="autocompact-mode" class="profile-select">
+                  <option value="context" data-i18n="autocompact.mode.context">Prog 85% kontekstu</option>
+                  <option value="turns" data-i18n="autocompact.mode.turns">Co N tur</option>
+                  <option value="time" data-i18n="autocompact.mode.time">Po N minutach</option>
+                </select>
+              </label>
+              <label id="autocompact-turns-field" class="ui-field" hidden>
+                <span class="ui-field__label" data-i18n="autocompact.settings.everyTurns">Liczba tur (N)</span>
+                <input type="number" id="autocompact-turns" min="1" max="999" step="1" />
+              </label>
+              <label id="autocompact-minutes-field" class="ui-field" hidden>
+                <span class="ui-field__label" data-i18n="autocompact.settings.afterMinutes">Minuty (N)</span>
+                <input type="number" id="autocompact-minutes" min="1" max="1440" step="1" />
+              </label>
+            </div>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="termcustom.section.ccr">Router (CCR)</h3>
+              <!-- CCR (claude-code-router) gateway status (Phase 4d of the
+                   AI-providers feature): the 5 CCR-routed provider templates
+                   (ollama, codex, gemini, grok, openai-compatible) point `claude`
+                   at a locally-run claude-code-router gateway - this block
+                   detects/starts/stops it. Static markup, filled by
+                   modules/ccrsettings.js mountCcrSettings() - same shape as the LM
+                   Studio section below. CCR's own provider/model/routing config is
+                   edited ONLY through "Open CCR settings" (CCR's own browser UI,
+                   its own port) - see src/ccr.js's header for the hard boundary
+                   this block respects; no URL/token is ever shown here. -->
+              <p class="termcustom__hint" data-i18n="ccr.hint">
+                Uruchamia lokalny gateway claude-code-router (CCR) dla profili Ollama/Codex/Gemini/Grok/OpenAI-compatible.
+              </p>
+              <p class="termcustom__hint" id="ccr-note" data-i18n="ccr.note">
+                Klucz API wklejany w takim profilu to klucz kliencki CCR, utworzony we wlasnym interfejsie CCR - NIE Twoj prawdziwy klucz OpenAI/Gemini/xAI/Ollama. Prawdziwy klucz podajesz bezposrednio w interfejsie CCR (przycisk ponizej) i nigdy nie trafia do LunaCore.
+              </p>
+              <div class="project-row">
+                <span id="ccr-status-dot" class="diag-item__dot diag-item__dot--unknown"></span>
+                <span id="ccr-status" class="ui-field__label" data-i18n="ccr.status.checking">Sprawdzanie...</span>
+                <button
+                  type="button"
+                  id="ccr-refresh-btn"
+                  class="usage-refresh"
+                  data-i18n-title="ccr.refresh.title"
+                  title="Odswiez status"
+                >&#8635;</button>
+              </div>
+              <div class="project-row">
+                <button type="button" id="ccr-start-btn" class="termcustom__reset" data-i18n="ccr.action.start">Uruchom</button>
+                <button type="button" id="ccr-stop-btn" class="termcustom__reset" data-i18n="ccr.action.stop">Zatrzymaj</button>
+                <button type="button" id="ccr-open-ui-btn" class="termcustom__reset" data-i18n="ccr.action.openUi">Otworz ustawienia CCR</button>
+                <button type="button" id="ccr-install-help-btn" class="termcustom__reset" data-i18n="ccr.action.installHelp" hidden>Jak zainstalowac</button>
+              </div>
+              <p id="ccr-action-status" class="hint" role="status" hidden></p>
+            </div>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="termcustom.section.providers">Dostawcy AI</h3>
+              <!-- Provider-profile CRUD (Phase 3 of the AI-providers feature): lists
+                   every profile built FROM a config/providers.json template (GLM,
+                   Kimi, Ollama via CCR, ...) and lets Mati add/edit/remove one
+                   without ever hand-editing config/profiles.local.json. Rows and
+                   their inline add/edit forms are built entirely in JS (see
+                   modules/providersettings.js's mountProviderSettings()) - this
+                   block only holds the section's static frame. Hand-written
+                   profiles (e.g. the shipped claude-cloud) are intentionally not
+                   listed here; #providers-other-hint covers them with a count. -->
+              <p class="termcustom__hint" data-i18n="providers.hint">
+                Dodaj wlasny profil dostawcy (GLM, Kimi, Ollama, ...) bez edycji plikow JSON. Klucz API zapisuje sie lokalnie w config/profiles.local.json i nigdy nie wraca do interfejsu.
+              </p>
+              <ul id="providers-list" class="diag-list"></ul>
+              <p id="providers-empty" class="hint" data-i18n="providers.loading">Wczytywanie...</p>
+              <p id="providers-other-hint" class="hint" hidden></p>
+              <div class="project-row">
+                <button type="button" id="providers-add-btn" class="termcustom__reset" data-i18n="providers.action.add">Dodaj profil</button>
+              </div>
+              <p id="providers-status" class="hint" role="status" hidden></p>
+            </div>
+            <div class="termcustom__group">
+              <!-- Luna sync skill picker (docs/FREE_PROVIDERS_SYNC_PLAN.md S3): which
+                   PLUGIN skills a Codex/Gemini tab with "Use my Luna setup" also
+                   gets - personal ~/.claude/skills always go along. Built in JS by
+                   modules/lunasyncpicker.js; ids and names only, never paths. -->
+              <h3 class="termcustom__section" data-i18n="lunasync.title">Setup Luny dla Codex/Gemini</h3>
+              <p class="termcustom__hint" data-i18n="lunasync.hint">
+                Twoje skille z ~/.claude/skills ida zawsze. Tutaj wybierasz dodatkowe skille z pluginow.
+              </p>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="lunasync.filter">Szukaj skilla</span>
+                <input type="search" id="lunasync-filter" class="profile-select" autocomplete="off" spellcheck="false">
+              </label>
+              <p id="lunasync-count" class="hint" aria-live="polite"></p>
+              <ul id="lunasync-list" class="diag-list"></ul>
+              <div class="project-row">
+                <button type="button" id="lunasync-save" class="termcustom__reset" data-i18n="lunasync.save">Zapisz wybor</button>
+              </div>
+              <p id="lunasync-status" class="hint" role="status" hidden></p>
+            </div>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="termcustom.section.lmstudio">LM Studio</h3>
+              <!-- The in-app replacement for the external "go local claude" desktop
+                   script: lists every model DOWNLOADED to disk and loads one on click,
+                   through the LM Studio SDK (src/lmstudiosdk.js; the `lms` CLI
+                   only wakes LM Studio when it is down). Static markup, filled by
+                   modules/lmstudiomodels.js mountLmStudioSettings() - same shape as
+                   autocompact.js's Settings section further down. -->
+              <p class="termcustom__hint" data-i18n="lmstudio.hint">
+                Zaladuj dowolny pobrany model LM Studio bez zewnetrznego skryptu. Jesli LM Studio nie dziala, LunaCore uruchomi je przez CLI "lms".
+              </p>
+              <p class="termcustom__hint" data-i18n="lmstudio.options.hint">
+                "Opcje" ustawiaja kontekst, GPU offload, offload ekspertow MoE na CPU, flash attention, kwantyzacje cache K/V, eval batch, parallel, TTL i identyfikator. Puste pole = decyduje LM Studio.
+              </p>
+              <div class="project-row">
+                <span id="lmstudio-status" class="ui-field__label" data-i18n="lmstudio.status.checking">Sprawdzanie...</span>
+                <button
+                  type="button"
+                  id="lmstudio-refresh-btn"
+                  class="usage-refresh"
+                  data-i18n-title="lmstudio.refresh.title"
+                  title="Odswiez liste"
+                >&#8635;</button>
+              </div>
+              <label class="switch-field" data-i18n-title="lmstudio.replaceLoaded.hint" title="Zwalnia VRAM przed ladowaniem - dwa duze modele naraz nie mieszcza sie na karcie i spowalniaja oba.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="lmstudio.replaceLoaded">Najpierw wyladuj inne modele</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="lmstudio-replace-loaded" class="switch__input" checked />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <ul id="lmstudio-models-list" class="diag-list"></ul>
+              <p id="lmstudio-models-empty" class="hint" data-i18n="lmstudio.status.checking">Sprawdzanie...</p>
+            </div>
+          </section>
+          <section id="termcustom-pane-godmode" class="termcustom__pane" data-cat="godmode" role="tabpanel" aria-labelledby="termcustom-tab-godmode">
+            <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.godmode">God Mode</h2>
+            <div class="termcustom__group">
+              <!-- God Mode v2 workers (ORCHESTRATOR_PLAN.md slice 4, modules/orchestrasettings.js).
+                   Frozen per run when it starts. bypassPermissions is the default by
+                   Mati's choice: a worktree contains a worker's git damage, not its
+                   filesystem damage - the hint says so. -->
+              <h3 class="termcustom__section" data-i18n="orchset.section">God Mode v2 - workery</h3>
+              <label class="ui-field" data-i18n-title="orchset.model.hint" title="Model kazdego workera. Plan = model wybrany przez planiste dla danej paczki.">
+                <span class="ui-field__label" data-i18n="orchset.model">Model workerow</span>
+                <select id="orchestra-worker-model" class="profile-select">
+                  <option value="opus">Opus</option>
+                  <option value="sonnet">Sonnet</option>
+                  <option value="plan" data-i18n="orchset.model.plan">Wg planu</option>
+                </select>
+              </label>
+              <label class="ui-field" data-i18n-title="orchset.perm.hint" title="Tryb uprawnien workerow. Bypass: zadnych pytan - worker ma pelny Bash na Twoim koncie; worktree chroni tylko git, nie pliki.">
+                <span class="ui-field__label" data-i18n="orchset.perm">Uprawnienia workerow</span>
+                <select id="orchestra-permission-mode" class="profile-select">
+                  <option value="bypassPermissions" data-i18n="orchset.perm.bypass">Bez pytan (bypass)</option>
+                  <option value="acceptEdits" data-i18n="orchset.perm.acceptEdits">Akceptuj edycje</option>
+                  <option value="default" data-i18n="orchset.perm.default">Domyslne (pyta)</option>
+                </select>
+              </label>
+              <!-- Slice 5 default (PRs) and the allow rules learned from stalled prompts (idea #5). -->
+              <label class="ui-field" data-i18n-title="orchset.integ.hint" title="Co zrobic z wypchnietymi galeziami, gdy przebieg sie skonczy. Mozna zmienic na tablicy przed startem.">
+                <span class="ui-field__label" data-i18n="orchset.integ">Po przebiegu</span>
+                <select id="orchestra-integration" class="profile-select">
+                  <option value="pr" data-i18n="orch.integ.pr">PR-y (gh)</option>
+                  <option value="merge" data-i18n="orch.integ.merge">Scal do galezi bazowej</option>
+                  <option value="branches" data-i18n="orch.integ.branches">Tylko galezie</option>
+                </select>
+              </label>
+              <!-- GM never blocks 4/5: the command the end-of-run self-check runs on the merged result. -->
+              <label class="ui-field" data-i18n-title="orchset.check.hint" title="Komenda uruchamiana na scalonym wyniku po przebiegu (w worktree integracji). Czerwony wynik = jeden worker naprawczy, potem bez pusha do galezi bazowej.">
+                <span class="ui-field__label" data-i18n="orchset.check">Komenda koncowego sprawdzenia</span>
+                <input id="orchestra-check-command" class="mc-input" maxlength="200" spellcheck="false" autocomplete="off" data-i18n-ph="orchset.check.ph" placeholder="npm test" />
+              </label>
+              <div class="ui-field" data-i18n-title="orchset.allowed.hint" title="Reguly --allowedTools dodane z tablicy, gdy pytanie o zgode zatrzymalo workera.">
+                <span class="ui-field__label" data-i18n="orchset.allowed">Dozwolone narzedzia workerow</span>
+                <span id="orchestra-allowed" class="orchestra__allowed">brak</span>
+                <button type="button" id="orchestra-allowed-clear" class="pad-send" data-i18n="orchset.allowed.clear">Wyczysc</button>
+              </div>
+              <label id="orchestra-email-field" class="switch-field" data-i18n-title="orchset.email.hint" title="Mail z wynikiem przebiegu na Twoj adres Gmail. Wymaga polaczenia Gmail w sekcji Raporty e-mail.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="orchset.email">Wyslij mi maila po przebiegu</span>
+                  <span id="orchestra-email-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="orchestra-email-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+            </div>
+          </section>
+          <p id="termcustom-empty" class="termcustom__empty" role="status" hidden></p>
         </div>
-        <h3 class="termcustom__section" data-i18n="termcustom.section.appearance">Wyglad terminala</h3>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.fontFamily">Czcionka</span>
-          <select id="termcustom-font-family" class="profile-select">
-            <option value='Cascadia Code, Consolas, "Courier New", monospace'>Cascadia Code</option>
-            <option value="Consolas, monospace">Consolas</option>
-            <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
-            <option value="'Fira Code', monospace">Fira Code</option>
-            <option value="'Courier New', monospace">Courier New</option>
-            <option value="monospace">System default</option>
-            <option value="__custom__" data-i18n="termcustom.fontFamily.custom">Custom…</option>
-          </select>
-        </label>
-        <label id="termcustom-font-family-custom-field" class="ui-field" hidden>
-          <input
-            type="text"
-            id="termcustom-font-family-custom"
-            class="profile-select"
-            autocomplete="off"
-            spellcheck="false"
-            data-i18n-ph="termcustom.fontFamily.customPh"
-            placeholder="np. 'Iosevka', monospace"
-          />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.fontSize">Rozmiar czcionki</span>
-          <input type="number" id="termcustom-font-size" min="8" max="32" step="1" />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.lineHeight">Wysokosc linii</span>
-          <input type="number" id="termcustom-line-height" min="0.8" max="3" step="0.1" />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.letterSpacing">Odstepy liter (px)</span>
-          <input type="number" id="termcustom-letter-spacing" min="-5" max="20" step="1" />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.cursorStyle">Styl kursora</span>
-          <select id="termcustom-cursor-style" class="profile-select">
-            <option value="block" data-i18n="termcustom.cursorStyle.block">Blok</option>
-            <option value="underline" data-i18n="termcustom.cursorStyle.underline">Podkreslenie</option>
-            <option value="bar" data-i18n="termcustom.cursorStyle.bar">Kreska</option>
-          </select>
-        </label>
-        <label id="termcustom-cursor-blink-field" class="switch-field">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="termcustom.cursorBlink">Migajacy kursor</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="termcustom-cursor-blink" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.scrollback">Bufor przewijania (linie)</span>
-          <input type="number" id="termcustom-scrollback" min="0" max="1000000" step="500" />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.bgOpacity">Przezroczystosc tla (%)</span>
-          <input type="range" id="termcustom-bg-opacity" min="0" max="100" step="1" />
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.bgBlur">Rozmycie tla (px)</span>
-          <input type="range" id="termcustom-bg-blur" min="0" max="20" step="1" />
-        </label>
-        <!-- 2026-08-13 (Mati): background image - requires allowTransparency (terminals.js)
-             and a data: URI (CSP img-src). Picking and reading the file lives IN MAIN
-             (main.js: termcustom:pickBgImage), the renderer only gets the dataUrl. -->
-        <div class="ui-field">
-          <span class="ui-field__label" data-i18n="termcustom.bgImage">Obraz tla</span>
-          <div class="termcustom__bgimage-row">
-            <button type="button" id="termcustom-bg-image-pick" class="termcustom__reset" data-i18n="termcustom.bgImage.pick">Wybierz...</button>
-            <button type="button" id="termcustom-bg-image-clear" class="termcustom__reset" data-i18n="termcustom.bgImage.clear">Usun</button>
-          </div>
-          <span id="termcustom-bg-image-status" class="ui-field__label"></span>
-        </div>
-        <!-- Screenshot paste: Win+Shift+S leaves a BITMAP on the clipboard, and
-             Claude Code reads an image by PATH - so a pasted image is written
-             under %TEMP%\lunacore-clips and the path goes in instead. See
-             src/screenshots.js. Default ON (uiprefs' screenshotPasteEnabled):
-             unlike the clipboard-history switch this watches nothing, it only
-             ever touches bytes an explicit Ctrl+V already delivered.
-             Sits with the terminal, not under Sound/startup: the Ctrl+V it
-             governs happens over a terminal pane, which is where someone
-             wondering why a paste did nothing goes looking (2026-09-11, Mati). -->
-        <label id="shotpaste-field" class="switch-field" data-i18n-title="shotpaste.hint" title="Ctrl+V ze zrzutem ekranu zapisuje PNG w %TEMP% i wkleja sciezke do pliku.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="shotpaste.label">Wklejanie zrzutow ekranu</span>
-            <span id="shotpaste-status" class="switch-field__status" data-i18n="shotpaste.on">wlaczone</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="shotpaste-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-
-        <!-- Task intake (src/intake.js): new tabs get the luna_todo_* MCP tools.
-             Default ON (uiprefs' todoToolsEnabled); applies to tabs opened after
-             the change, since the flag is part of the tab's start command. -->
-        <label id="todotools-field" class="switch-field" data-i18n-title="todotools.hint" title="Nowe karty dostaja narzedzia MCP luna_todo_*, dzieki ktorym Claude dopisuje karty zadan do listy To-do. Dotyczy kart otwartych po zmianie.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="todotools.label">Narzedzia To-do dla Claude</span>
-            <span id="todotools-status" class="switch-field__status" data-i18n="todotools.on">wlaczone</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="todotools-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-
-        <!-- Report emails (src/mailipc.js, modules/mailsettings.js): a separate
-             gmail.send-only Google grant; every email goes to that same address. -->
-        <h3 class="termcustom__section" data-i18n="mailset.section">Raporty e-mail</h3>
-        <div class="ui-field" data-i18n-title="mailset.gmail.hint" title="Osobna zgoda Google tylko na wysylanie (gmail.send). Maile ida zawsze na ten sam adres.">
-          <span class="ui-field__label" data-i18n="mailset.gmail">Gmail</span>
-          <span id="mail-gmail-status" class="orchestra__allowed" data-i18n="mailset.gmail.off">niepolaczony</span>
-          <button type="button" id="mail-gmail-connect" class="pad-send" data-i18n="mailset.gmail.connect">Polacz Gmail</button>
-        </div>
-        <label id="mail-nightly-field" class="switch-field" data-i18n-title="mailset.nightly.hint" title="Codziennie o ustalonej godzinie: przebiegi God Mode, commity, odhaczone zadania i zuzycie Claude. Jedno wywolanie Haiku.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="mailset.nightly">Wieczorne podsumowanie e-mail</span>
-            <span id="mail-nightly-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="mail-nightly-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <label class="ui-field" data-i18n-title="mailset.time.hint" title="Godzina lokalna. Jesli komputer spal, mail wyjdzie po wybudzeniu tego samego dnia.">
-          <span class="ui-field__label" data-i18n="mailset.time">Godzina</span>
-          <input type="time" id="mail-nightly-time" class="profile-select" value="22:30" />
-        </label>
-        <label id="mail-empty-field" class="switch-field" data-i18n-title="mailset.empty.hint" title="Domyslnie dzien bez przebiegow, commitow i zadan jest pomijany.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="mailset.empty">Wysylaj nawet pusty dzien</span>
-            <span id="mail-empty-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="mail-empty-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <div class="ui-field">
-          <span class="ui-field__label" data-i18n="mailset.test">Test</span>
-          <span id="mail-test-status" class="orchestra__allowed"></span>
-          <button type="button" id="mail-test" class="pad-send" data-i18n="mailset.test.send">Wyslij test teraz</button>
-        </div>
-
-        <!-- God Mode v2 workers (ORCHESTRATOR_PLAN.md slice 4, modules/orchestrasettings.js).
-             Frozen per run when it starts. bypassPermissions is the default by
-             Mati's choice: a worktree contains a worker's git damage, not its
-             filesystem damage - the hint says so. -->
-        <h3 class="termcustom__section" data-i18n="orchset.section">God Mode v2 - workery</h3>
-        <label class="ui-field" data-i18n-title="orchset.model.hint" title="Model kazdego workera. Plan = model wybrany przez planiste dla danej paczki.">
-          <span class="ui-field__label" data-i18n="orchset.model">Model workerow</span>
-          <select id="orchestra-worker-model" class="profile-select">
-            <option value="opus">Opus</option>
-            <option value="sonnet">Sonnet</option>
-            <option value="plan" data-i18n="orchset.model.plan">Wg planu</option>
-          </select>
-        </label>
-        <label class="ui-field" data-i18n-title="orchset.perm.hint" title="Tryb uprawnien workerow. Bypass: zadnych pytan - worker ma pelny Bash na Twoim koncie; worktree chroni tylko git, nie pliki.">
-          <span class="ui-field__label" data-i18n="orchset.perm">Uprawnienia workerow</span>
-          <select id="orchestra-permission-mode" class="profile-select">
-            <option value="bypassPermissions" data-i18n="orchset.perm.bypass">Bez pytan (bypass)</option>
-            <option value="acceptEdits" data-i18n="orchset.perm.acceptEdits">Akceptuj edycje</option>
-            <option value="default" data-i18n="orchset.perm.default">Domyslne (pyta)</option>
-          </select>
-        </label>
-        <!-- Slice 5 default (PRs) and the allow rules learned from stalled prompts (idea #5). -->
-        <label class="ui-field" data-i18n-title="orchset.integ.hint" title="Co zrobic z wypchnietymi galeziami, gdy przebieg sie skonczy. Mozna zmienic na tablicy przed startem.">
-          <span class="ui-field__label" data-i18n="orchset.integ">Po przebiegu</span>
-          <select id="orchestra-integration" class="profile-select">
-            <option value="pr" data-i18n="orch.integ.pr">PR-y (gh)</option>
-            <option value="merge" data-i18n="orch.integ.merge">Scal do galezi bazowej</option>
-            <option value="branches" data-i18n="orch.integ.branches">Tylko galezie</option>
-          </select>
-        </label>
-        <!-- GM never blocks 4/5: the command the end-of-run self-check runs on the merged result. -->
-        <label class="ui-field" data-i18n-title="orchset.check.hint" title="Komenda uruchamiana na scalonym wyniku po przebiegu (w worktree integracji). Czerwony wynik = jeden worker naprawczy, potem bez pusha do galezi bazowej.">
-          <span class="ui-field__label" data-i18n="orchset.check">Komenda koncowego sprawdzenia</span>
-          <input id="orchestra-check-command" class="mc-input" maxlength="200" spellcheck="false" autocomplete="off" data-i18n-ph="orchset.check.ph" placeholder="npm test" />
-        </label>
-        <div class="ui-field" data-i18n-title="orchset.allowed.hint" title="Reguly --allowedTools dodane z tablicy, gdy pytanie o zgode zatrzymalo workera.">
-          <span class="ui-field__label" data-i18n="orchset.allowed">Dozwolone narzedzia workerow</span>
-          <span id="orchestra-allowed" class="orchestra__allowed">brak</span>
-          <button type="button" id="orchestra-allowed-clear" class="pad-send" data-i18n="orchset.allowed.clear">Wyczysc</button>
-        </div>
-        <label id="orchestra-email-field" class="switch-field" data-i18n-title="orchset.email.hint" title="Mail z wynikiem przebiegu na Twoj adres Gmail. Wymaga polaczenia Gmail w sekcji Raporty e-mail.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="orchset.email">Wyslij mi maila po przebiegu</span>
-            <span id="orchestra-email-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="orchestra-email-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-
-        <h3 class="termcustom__section" data-i18n="termcustom.section.ask">/ask</h3>
-        <!-- Off by default: without this, /ask always calls the cloud `claude`
-             CLI with --model sonnet, regardless of which profile a terminal
-             tab happens to be on (src/ask.js's header explains why - a
-             profile pointing a TERMINAL at a local endpoint must never make
-             /ask silently follow). Turning this on opts /ask into whichever
-             configured profile (profiles.json/profiles.local.json - the same
-             list the per-tab profile switcher offers) points at a local
-             endpoint, via src/main.js's ask:query handler. -->
-        <label id="ask-local-model-field" class="switch-field" data-i18n-title="ask.localModel.hint" title="Jesli w profilach jest skonfigurowany lokalny model (np. LM Studio), /ask bedzie go uzywac zamiast Claude w chmurze.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="ask.localModel.label">Uzywaj lokalnego modelu dla /ask</span>
-            <span id="ask-local-model-status" class="switch-field__status" data-i18n="ask.localModel.off">wylaczone</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="ask-local-model-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-
-        <h3 class="termcustom__section" data-i18n="termcustom.section.ccr">Router (CCR)</h3>
-        <!-- CCR (claude-code-router) gateway status (Phase 4d of the
-             AI-providers feature): the 5 CCR-routed provider templates
-             (ollama, codex, gemini, grok, openai-compatible) point `claude`
-             at a locally-run claude-code-router gateway - this block
-             detects/starts/stops it. Static markup, filled by
-             modules/ccrsettings.js mountCcrSettings() - same shape as the LM
-             Studio section below. CCR's own provider/model/routing config is
-             edited ONLY through "Open CCR settings" (CCR's own browser UI,
-             its own port) - see src/ccr.js's header for the hard boundary
-             this block respects; no URL/token is ever shown here. -->
-        <p class="termcustom__hint" data-i18n="ccr.hint">
-          Uruchamia lokalny gateway claude-code-router (CCR) dla profili Ollama/Codex/Gemini/Grok/OpenAI-compatible.
-        </p>
-        <p class="termcustom__hint" id="ccr-note" data-i18n="ccr.note">
-          Klucz API wklejany w takim profilu to klucz kliencki CCR, utworzony we wlasnym interfejsie CCR - NIE Twoj prawdziwy klucz OpenAI/Gemini/xAI/Ollama. Prawdziwy klucz podajesz bezposrednio w interfejsie CCR (przycisk ponizej) i nigdy nie trafia do LunaCore.
-        </p>
-        <div class="project-row">
-          <span id="ccr-status-dot" class="diag-item__dot diag-item__dot--unknown"></span>
-          <span id="ccr-status" class="ui-field__label" data-i18n="ccr.status.checking">Sprawdzanie...</span>
-          <button
-            type="button"
-            id="ccr-refresh-btn"
-            class="usage-refresh"
-            data-i18n-title="ccr.refresh.title"
-            title="Odswiez status"
-          >&#8635;</button>
-        </div>
-        <div class="project-row">
-          <button type="button" id="ccr-start-btn" class="termcustom__reset" data-i18n="ccr.action.start">Uruchom</button>
-          <button type="button" id="ccr-stop-btn" class="termcustom__reset" data-i18n="ccr.action.stop">Zatrzymaj</button>
-          <button type="button" id="ccr-open-ui-btn" class="termcustom__reset" data-i18n="ccr.action.openUi">Otworz ustawienia CCR</button>
-          <button type="button" id="ccr-install-help-btn" class="termcustom__reset" data-i18n="ccr.action.installHelp" hidden>Jak zainstalowac</button>
-        </div>
-        <p id="ccr-action-status" class="hint" role="status" hidden></p>
-
-        <h3 class="termcustom__section" data-i18n="termcustom.section.providers">Dostawcy AI</h3>
-        <!-- Provider-profile CRUD (Phase 3 of the AI-providers feature): lists
-             every profile built FROM a config/providers.json template (GLM,
-             Kimi, Ollama via CCR, ...) and lets Mati add/edit/remove one
-             without ever hand-editing config/profiles.local.json. Rows and
-             their inline add/edit forms are built entirely in JS (see
-             modules/providersettings.js's mountProviderSettings()) - this
-             block only holds the section's static frame. Hand-written
-             profiles (e.g. the shipped claude-cloud) are intentionally not
-             listed here; #providers-other-hint covers them with a count. -->
-        <p class="termcustom__hint" data-i18n="providers.hint">
-          Dodaj wlasny profil dostawcy (GLM, Kimi, Ollama, ...) bez edycji plikow JSON. Klucz API zapisuje sie lokalnie w config/profiles.local.json i nigdy nie wraca do interfejsu.
-        </p>
-        <ul id="providers-list" class="diag-list"></ul>
-        <p id="providers-empty" class="hint" data-i18n="providers.loading">Wczytywanie...</p>
-        <p id="providers-other-hint" class="hint" hidden></p>
-        <div class="project-row">
-          <button type="button" id="providers-add-btn" class="termcustom__reset" data-i18n="providers.action.add">Dodaj profil</button>
-        </div>
-        <p id="providers-status" class="hint" role="status" hidden></p>
-
-        <!-- Luna sync skill picker (docs/FREE_PROVIDERS_SYNC_PLAN.md S3): which
-             PLUGIN skills a Codex/Gemini tab with "Use my Luna setup" also
-             gets - personal ~/.claude/skills always go along. Built in JS by
-             modules/lunasyncpicker.js; ids and names only, never paths. -->
-        <h3 class="termcustom__section" data-i18n="lunasync.title">Setup Luny dla Codex/Gemini</h3>
-        <p class="termcustom__hint" data-i18n="lunasync.hint">
-          Twoje skille z ~/.claude/skills ida zawsze. Tutaj wybierasz dodatkowe skille z pluginow.
-        </p>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="lunasync.filter">Szukaj skilla</span>
-          <input type="search" id="lunasync-filter" class="profile-select" autocomplete="off" spellcheck="false">
-        </label>
-        <p id="lunasync-count" class="hint" aria-live="polite"></p>
-        <ul id="lunasync-list" class="diag-list"></ul>
-        <div class="project-row">
-          <button type="button" id="lunasync-save" class="termcustom__reset" data-i18n="lunasync.save">Zapisz wybor</button>
-        </div>
-        <p id="lunasync-status" class="hint" role="status" hidden></p>
-
-        <h3 class="termcustom__section" data-i18n="termcustom.section.lmstudio">LM Studio</h3>
-        <!-- The in-app replacement for the external "go local claude" desktop
-             script: lists every model DOWNLOADED to disk and loads one on click,
-             through the LM Studio SDK (src/lmstudiosdk.js; the `lms` CLI
-             only wakes LM Studio when it is down). Static markup, filled by
-             modules/lmstudiomodels.js mountLmStudioSettings() - same shape as
-             autocompact.js's Settings section further down. -->
-        <p class="termcustom__hint" data-i18n="lmstudio.hint">
-          Zaladuj dowolny pobrany model LM Studio bez zewnetrznego skryptu. Jesli LM Studio nie dziala, LunaCore uruchomi je przez CLI "lms".
-        </p>
-        <p class="termcustom__hint" data-i18n="lmstudio.options.hint">
-          "Opcje" ustawiaja kontekst, GPU offload, offload ekspertow MoE na CPU, flash attention, kwantyzacje cache K/V, eval batch, parallel, TTL i identyfikator. Puste pole = decyduje LM Studio.
-        </p>
-        <div class="project-row">
-          <span id="lmstudio-status" class="ui-field__label" data-i18n="lmstudio.status.checking">Sprawdzanie...</span>
-          <button
-            type="button"
-            id="lmstudio-refresh-btn"
-            class="usage-refresh"
-            data-i18n-title="lmstudio.refresh.title"
-            title="Odswiez liste"
-          >&#8635;</button>
-        </div>
-        <label class="switch-field" data-i18n-title="lmstudio.replaceLoaded.hint" title="Zwalnia VRAM przed ladowaniem - dwa duze modele naraz nie mieszcza sie na karcie i spowalniaja oba.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="lmstudio.replaceLoaded">Najpierw wyladuj inne modele</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="lmstudio-replace-loaded" class="switch__input" checked />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <ul id="lmstudio-models-list" class="diag-list"></ul>
-        <p id="lmstudio-models-empty" class="hint" data-i18n="lmstudio.status.checking">Sprawdzanie...</p>
-
-        <h3 class="termcustom__section" data-i18n="termcustom.section.sound">Dzwiek i start</h3>
-        <!-- Sound: sfx/voice lines on interactions. mpv is optional - missing from
-             PATH means a silent fallback (soundManager.js); this toggle only enables/
-             disables renderer-side playback + persists the preference.
-             Moved from w-appearance 2026-08-13 (Mati: slimming down the panel). -->
-        <label id="sound-field" class="switch-field" data-i18n-title="appearance.sound.hint" title="Dzwiekowe sprzezenie zwrotne (klawisze, zakladki, przelaczniki). Wymaga mpv na PATH - w przeciwnym razie cicho nic nie robi.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="appearance.sound">Dzwiek</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="sound-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <!-- Separate from the master Sound toggle above: mutes only Luna's own
-             voice lines (welcome/needYou/done/usage alerts + read-aloud
-             narration) while keystroke/nav/tab sfx keep playing. -->
-        <label id="voice-field" class="switch-field" data-i18n-title="appearance.voice.hint" title="Wycisz tylko glos Luny (powitanie, alerty, odczytywanie na glos) - dzwieki klawiszy i nawigacji zostaja wlaczone.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="appearance.voice">Glos Luny</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="voice-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="appearance.keystrokeSound">Dzwiek klawiszy</span>
-          <select id="sound-keystroke-variant" class="profile-select">
-            <option value="mechanical">Mechanical (Thocky)</option>
-            <option value="soft">Soft (iPhone)</option>
-            <option value="scifi">Sci-fi (Mechanical)</option>
-            <option value="typewriter">Typewriter (Phone)</option>
-            <option value="atm">Cash Machine</option>
-            <option value="secretcode">Secret Code</option>
-            <option value="securitycode">Security Code</option>
-          </select>
-        </label>
-        <label class="ui-field">
-          <span class="ui-field__label" data-i18n="appearance.volume">Glosnosc</span>
-          <input type="range" id="sound-volume" min="0" max="100" />
-        </label>
-        <!-- SS11.1: minimum turn duration before playing "All done" (turn-end
-             detection in observer.js / checkTurnEnd() in main.js). 0 = every turn. -->
-        <label class="ui-field" data-i18n-title="appearance.longTaskMinutes.hint" title="Minimalny czas trwania tury Claude, zanim odtworzy sie glos &quot;All done&quot;. 0 = ogloszaj kazda ture.">
-          <span class="ui-field__label" data-i18n="appearance.longTaskMinutes">Ogloszenie "Gotowe" po (min)</span>
-          <input type="number" id="sound-long-task-minutes" min="0" max="180" step="1" />
-        </label>
-        <!-- SS11.2: optional reading of Claude's replies aloud (Windows
-             SAPI, offline - src/tts.js). Off by default. -->
-        <label class="switch-field" data-i18n-title="appearance.readOutput.hint" title="Odczytuj odpowiedzi Claude na glos po kazdej turze (Windows SAPI, offline).">
-          <span class="switch-field__label" data-i18n="appearance.readOutput">Czytaj odpowiedzi na glos</span>
-          <span class="switch">
-            <input type="checkbox" id="sound-read-output-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <!-- Auto-pause whatever is playing (Spotify, a podcast, a browser
-             tab) for the duration of the read-aloud narration, then resume
-             it. Narration only. Off by default - src/voiceduck.js. -->
-        <label class="switch-field" data-i18n-title="appearance.voiceDuck.hint" title="Gdy Luna czyta odpowiedz na glos, wstrzymaj odtwarzana muzyke lub podcast i wznow po zakonczeniu. Tylko odczyt na glos. Domyslnie wylaczone.">
-          <span class="switch-field__label" data-i18n="appearance.voiceDuck">Wstrzymaj muzyke na czas odczytu</span>
-          <span class="switch">
-            <input type="checkbox" id="sound-voiceduck-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <!-- Boot sequence: pure decoration, can be turned off. Does not block
-             the session - the PTY starts underneath regardless of the animation. -->
-        <label id="boot-field" class="switch-field" data-i18n-title="boot.hint" title="Krotka animacja startowa. Nie opoznia sesji - PTY startuje pod spodem.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="boot.label">Sekwencja startowa</span>
-            <span id="boot-status" class="switch-field__status" data-i18n="boot.on">wlaczona</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="boot-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <h3 class="termcustom__section" data-i18n="notify.title">Powiadomienia</h3>
-        <!-- System notifications: moved from its own left-panel widget
-             (2026-08-19, Mati) - see src/renderer/modules/notify.js. -->
-        <label id="notify-field" class="switch-field" data-i18n-title="notify.hint" title="Powiadomienie systemowe, gdy sesja skonczy prace lub przekroczy 85% kontekstu.">
-          <span class="switch-field__text">
-            <span class="switch-field__label" data-i18n="notify.label">Powiadomienia systemowe</span>
-            <span id="notify-status" class="switch-field__status" data-i18n="notify.off">wylaczone</span>
-          </span>
-          <span class="switch">
-            <input type="checkbox" id="notify-toggle" class="switch__input" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <h3 class="termcustom__section" data-i18n="autocompact.settings.title">Auto-compact</h3>
-        <!-- Feature #4: the arm TOGGLE itself stays a left-panel widget (Actions,
-             next to the physical COMPACT button); this only picks WHAT an armed
-             auto-compact watches. Wiring: autocompact.js mountAutoCompactSettings(). -->
-        <label class="ui-field" data-i18n-title="autocompact.settings.hint" title="Wybierz, co wyzwala auto-compact, gdy jest uzbrojony.">
-          <span class="ui-field__label" data-i18n="autocompact.settings.mode">Wyzwalacz</span>
-          <select id="autocompact-mode" class="profile-select">
-            <option value="context" data-i18n="autocompact.mode.context">Prog 85% kontekstu</option>
-            <option value="turns" data-i18n="autocompact.mode.turns">Co N tur</option>
-            <option value="time" data-i18n="autocompact.mode.time">Po N minutach</option>
-          </select>
-        </label>
-        <label id="autocompact-turns-field" class="ui-field" hidden>
-          <span class="ui-field__label" data-i18n="autocompact.settings.everyTurns">Liczba tur (N)</span>
-          <input type="number" id="autocompact-turns" min="1" max="999" step="1" />
-        </label>
-        <label id="autocompact-minutes-field" class="ui-field" hidden>
-          <span class="ui-field__label" data-i18n="autocompact.settings.afterMinutes">Minuty (N)</span>
-          <input type="number" id="autocompact-minutes" min="1" max="1440" step="1" />
-        </label>
       </div>
       <div class="termcustom__foot">
-        <button type="button" id="termcustom-reset" class="termcustom__reset" data-i18n="termcustom.reset">Przywroc domyslne</button>
+        <!-- Filled from getUpdateStatus().version (app.getVersion() in main). -->
+        <span id="termcustom-version" class="termcustom__version"></span>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>
