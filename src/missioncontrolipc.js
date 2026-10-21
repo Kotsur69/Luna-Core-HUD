@@ -107,6 +107,8 @@ const CREATE_WINDOW_MS = 10 * 60 * 1000;
 const EVENT_ID_RE = /^[A-Za-z0-9_@.-]{1,256}$/;
 /** Min gap between two quick searches (X / Reddit ride the user's main accounts). */
 const QUICK_SEARCH_GAP_MS = 10000;
+/** Min gap between two brief runs of one kind started from the renderer. */
+const BRIEF_GAP_MS = 60 * 1000;
 
 /** Local ISO 8601 with the zone offset, e.g. 2026-10-08T14:03:00+02:00. */
 function localIsoNow(date = new Date()) {
@@ -629,10 +631,18 @@ function registerMissionIpc({
 
   // req: {kind: 'weekly' | 'daily', overwrite}. 'exists' until the renderer
   // confirms a Regenerate. One call per kind at a time (brief's own guard).
+  // A brief is a paid call with Gmail tools: one start per kind per minute,
+  // whatever the renderer sends.
+  const lastBriefAt = new Map();
   ipcMain.handle('mission:brief-run', async (_event, req) => {
     const kind = req && BRIEF_KINDS.includes(req.kind) ? req.kind : null;
     if (!kind) return { ok: false, reason: 'bad-input' };
+    if (req.overwrite !== true && brief.has(kind)) return { ok: false, reason: 'exists' };
+    const at = Date.now();
+    if (at - (lastBriefAt.get(kind) || -Infinity) < BRIEF_GAP_MS) return { ok: false, reason: 'rate-limited' };
     const res = await brief.generate(kind, { overwrite: req.overwrite === true });
+    // 'exists' / 'busy' never reached the model, so they do not start the cooldown.
+    if (res.ok || !['exists', 'busy'].includes(res.reason)) lastBriefAt.set(kind, at);
     return res.ok ? safeBriefView({}) : res;
   });
 

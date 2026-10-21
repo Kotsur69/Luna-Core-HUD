@@ -47,6 +47,8 @@ const HOUR_MS = 60 * 60 * 1000;
 const THREAD_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const REASON_RE = /^[a-z0-9-]{1,40}$/;
 const KINDS = ['weekly', 'daily'];
+/** A failed weekly brief is retried up to this many times in its week. */
+const MAX_ATTEMPTS = 3;
 const CAP = { headline: 200, weekend: 600, item: 240, note: 200, field: 160, nudge: 240 };
 
 // eslint-disable-next-line no-control-regex
@@ -192,6 +194,7 @@ function entryOf(kind, key, raw) {
     costUsd: typeof raw.costUsd === 'number' && Number.isFinite(raw.costUsd) ? raw.costUsd : null,
     brief,
     failure: brief ? null : reasonOf(raw.failure) || 'bad-json',
+    attempts: Number.isInteger(raw.attempts) && raw.attempts >= 0 ? Math.min(raw.attempts, MAX_ATTEMPTS) : 1,
     inputs,
   };
 }
@@ -324,7 +327,7 @@ function createBrief(deps) {
    * Builds and saves one brief. 'exists' unless overwrite (Regenerate, after
    * the renderer confirmed). Never rejects.
    */
-  async function generate(kind, { overwrite = false } = {}) {
+  async function generate(kind, { overwrite = false, retry = false } = {}) {
     if (!KINDS.includes(kind)) return { ok: false, reason: 'bad-input' };
     if (busy.has(kind)) return { ok: false, reason: 'busy' };
     busy.add(kind);
@@ -332,7 +335,8 @@ function createBrief(deps) {
       const at = now();
       const key = keyFor(kind, at);
       const s = deps.store.load();
-      if (s[kind][key] && !overwrite) return { ok: false, reason: 'exists' };
+      const prev = s[kind][key];
+      if (prev && !overwrite && !retry) return { ok: false, reason: 'exists' };
       const inputs = await gatherInputs(kind, deps.sources, at, s.lastNews);
       const res = await deps.run({
         prompt: buildBriefPrompt(kind, inputs),
@@ -343,7 +347,8 @@ function createBrief(deps) {
       });
       const brief = res && res.ok ? validateBrief(res.answer, inputs) : null;
       const failure = brief ? null : res && res.ok ? 'bad-json' : reasonOf(res && res.reason) || 'generic';
-      const entry = { kind, key, at: now(), model: s.model, costUsd: res && typeof res.costUsd === 'number' ? res.costUsd : null, brief, failure, inputs };
+      const attempts = retry && prev ? (prev.attempts || 1) + 1 : 1;
+      const entry = { kind, key, at: now(), model: s.model, costUsd: res && typeof res.costUsd === 'number' ? res.costUsd : null, brief, failure, attempts, inputs };
       deps.store.put(entry);
       return { ok: true, entry: deps.store.load()[kind][key] };
     } catch (err) {
@@ -355,12 +360,15 @@ function createBrief(deps) {
   }
 
   /** True when this ISO week has no weekly brief yet (any day is "Monday or later"). */
-  const weeklyDue = (at = now()) => !deps.store.load().weekly[isoWeek(ymd(at))];
+  const weeklyDue = (at = now()) => {
+    const e = deps.store.load().weekly[isoWeek(ymd(at))];
+    return !e || (!e.brief && (e.attempts || 1) < MAX_ATTEMPTS);
+  };
 
   /** The weekly scheduler step. The daily brief is never scheduled. */
   async function tick() {
     try {
-      return weeklyDue() ? await generate('weekly') : null;
+      return weeklyDue() ? await generate('weekly', { retry: true }) : null;
     } catch (err) {
       console.error('[brief] tick failed:', err && err.message);
       return null;
@@ -390,7 +398,10 @@ function createBrief(deps) {
     timer = null;
   }
 
-  return { generate, tick, start, stop, weeklyDue, rememberNews, isBusy: (kind) => busy.has(kind) };
+  /** True when the current day / week already has a brief of `kind` (a free check before the cooldown). */
+  const has = (kind) => KINDS.includes(kind) && Boolean(deps.store.load()[kind][keyFor(kind, now())]);
+
+  return { generate, tick, start, stop, weeklyDue, rememberNews, has, isBusy: (kind) => busy.has(kind) };
 }
 
 /**

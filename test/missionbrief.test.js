@@ -195,8 +195,17 @@ test('mission:brief* IPC: kinds and models from fixed lists, exists until confir
   assert.equal(res.ok, true);
   assert.equal(res.daily.entry.brief.headline, 'Hi');
   assert.equal((await call('mission:brief-run', { kind: 'daily' })).reason, 'exists');
-  assert.equal((await call('mission:brief-run', { kind: 'daily', overwrite: true })).ok, true);
+  // A confirmed Regenerate within a minute of the last call is throttled (paid call, Gmail tools).
+  assert.deepEqual(await call('mission:brief-run', { kind: 'daily', overwrite: true }), { ok: false, reason: 'rate-limited' });
   assert.deepEqual(await call('mission:brief-model', { model: 'gpt-5' }), { ok: false, reason: 'bad-input' });
   assert.equal((await call('mission:brief-model', { model: 'opus' })).model, 'opus');
   assert.equal((await call('mission:brief', { daily: 'not-a-key' })).daily.keys.length, 1);
+});
+
+test('a failed weekly brief is retried in its week, up to 3 attempts', async () => {
+  const h = setup({ answer: { nope: true } });
+  for (let i = 0; i < 3; i++) assert.equal((await h.brief.tick()).ok, true);
+  assert.equal(await h.brief.tick(), null);
+  assert.equal(h.runs.length, 3);
+  assert.equal(h.store.load().weekly['2026-W44'].attempts, 3);
 });
