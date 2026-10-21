@@ -234,6 +234,13 @@ test('a usage limit pauses the whole run, cancels the pending nudge and resumes 
   assert.equal(s.orch.view().pausedUntil, null);
   assert.deepEqual(s.log.writes.map(([id]) => id).sort(), ['s1', 's2']);
   assert.ok(s.log.events.includes('resumed'));
+  // The morning report's Timeline: start time and the total pause, kept on restore.
+  assert.equal(s.orch.view().runStartedAt, 1_000_000);
+  assert.ok(s.orch.view().pausedTotalMs >= 3_600_000, `paused ${s.orch.view().pausedTotalMs}`);
+  const restored = sup.normalizeStoredPlan(s.log.saved);
+  assert.equal(restored.runStartedAt, 1_000_000);
+  assert.equal(restored.pausedTotalMs, s.orch.view().pausedTotalMs);
+  assert.equal(sup.normalizeStoredPlan({ ...s.log.saved, runStartedAt: 'x', pausedTotalMs: -5 }).pausedTotalMs, 0);
 });
 
 test('verify failure goes back to the worker, then stalls after the cap', async () => {

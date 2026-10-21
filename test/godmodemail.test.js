@@ -38,9 +38,74 @@ const summary = (over = {}) => ({
 });
 
 test('subject: repo name and N of M pushed, or integration failed', () => {
-  assert.equal(buildRunEmail(REPORT, summary()).subject, 'God Mode: Luna-Core-HUD - 1 of 2 pushed');
-  assert.equal(buildRunEmail(REPORT, summary({ integrationState: 'failed' })).subject, 'God Mode: Luna-Core-HUD - integration failed');
-  assert.equal(buildRunEmail(REPORT, summary(), { updated: true }).subject, 'God Mode: Luna-Core-HUD - 1 of 2 pushed (updated)');
+  assert.equal(buildRunEmail(REPORT, summary()).subject, 'God Mode: Luna-Core-HUD - 1 of 2 pushed - needs you');
+  assert.equal(
+    buildRunEmail(REPORT, summary({ integrationState: 'failed' })).subject,
+    'God Mode: Luna-Core-HUD - integration failed - needs you',
+  );
+  assert.equal(buildRunEmail(REPORT, summary(), { updated: true }).subject, 'God Mode: Luna-Core-HUD - 1 of 2 pushed - needs you (updated)');
+});
+
+// The morning report (orchestraReport.buildReport) of a merge-mode run.
+const { buildReport } = require('../src/orchestraReport.js');
+const mergeView = (over = {}) => ({
+  id: 'abc123',
+  repoPath: 'C:\\Users\\Mati\\source\\repos\\Luna-Core-HUD',
+  baseBranch: 'main',
+  workerModel: 'opus',
+  permissionMode: 'bypassPermissions',
+  integrationMode: 'merge',
+  integration: { state: 'done', skipped: [] },
+  overlaps: [],
+  packages: [
+    { id: 'p1', title: 'One', state: 'pushed', merged: true },
+    { id: 'p2', title: 'Two', state: 'pushed', merged: true },
+  ],
+  ...over,
+});
+const mergeSummary = (over = {}) =>
+  summary({ integrationMode: 'merge', pushed: 2, merged: 2, total: 2, approvalSuggestions: [], packages: [], ...over });
+
+test("subject: 'N of M merged' in merge mode, ' - needs you' only when Needs you is not empty", () => {
+  const clean = buildReport(mergeView(), { now: 1, suggestions: [] });
+  const mail = buildRunEmail(clean, mergeSummary());
+  assert.equal(mail.subject, 'God Mode: Luna-Core-HUD - 2 of 2 merged');
+  assert.match(mail.text, /^NEEDS YOU\n- nothing\n/);
+
+  const skipped = mergeView({
+    integration: { state: 'done', partial: true, skipped: [{ id: 'p2', stage: 'conflict', detail: 'x\u001b[2J', files: ['a.js'] }] },
+    packages: [
+      { id: 'p1', title: 'One', state: 'pushed', merged: true },
+      { id: 'p2', title: 'Two', state: 'pushed', merged: false },
+    ],
+  });
+  const red = buildRunEmail(buildReport(skipped, { now: 1, suggestions: [] }), mergeSummary({ merged: 1 }));
+  assert.equal(red.subject, 'God Mode: Luna-Core-HUD - 1 of 2 merged - needs you');
+});
+
+test("the email's Needs you block is the report's section, plain text", () => {
+  const view = mergeView({
+    integration: {
+      state: 'done',
+      skipped: [],
+      manualActions: [{ kind: 'migration', what: '001.sql', from: 'abcdef1' }],
+      selfCheck: { tests: 'failed', syntax: 'ok', smoke: 'skipped', fixups: 1, tail: 'not ok 1\u0007 boom', pushedIntegrationBranch: 'luna/abc123-integration' },
+    },
+    packages: [
+      { id: 'p1', title: 'One', state: 'pushed', merged: false },
+      { id: 'p2', title: 'Two', state: 'pending', blockedBy: 'p9' },
+    ],
+  });
+  const { text, subject } = buildRunEmail(buildReport(view, { now: 1, suggestions: [] }), mergeSummary({ merged: 0 }));
+  assert.match(subject, / - needs you$/);
+  const needs = text.slice(0, text.indexOf('FULL REPORT'));
+  assert.match(needs, /- p2 Two - blocked by p9/);
+  assert.match(needs, /1 manual action to apply live/);
+  assert.match(needs, /Self-check red: tests\. Pushed luna\/abc123-integration instead of main\./);
+  assert.match(needs, /\n {4}not ok 1 +boom\n/, 'the tail stays indented under its line');
+  assert.doesNotMatch(needs, /`/, 'markdown code marks are stripped');
+  // eslint-disable-next-line no-control-regex
+  assert.doesNotMatch(text, /[\x00-\x09\x0b-\x1f]/);
 });
 
 test('body: Needs you first, then PR links, then the report - no path, no control chars', () => {
