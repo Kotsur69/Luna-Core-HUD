@@ -9,10 +9,12 @@
 //              Nothing touches the base branch.
 //   merge    - an integration worktree from origin/<base>; packages merged in
 //              dependency order, verify after each; a conflict gets ONE
-//              headless `claude -p` resolver, checked for leftover markers.
-//              All green -> `git push origin HEAD:refs/heads/<base>` (never
-//              --force: a remote that moved on rejects it). Anything red ->
-//              stop, nothing pushed.
+//              headless `claude -p` resolver (one stronger retry), checked
+//              for leftover markers. A package that stays red is reset away
+//              and skipped with its dependents; the rest is pushed with
+//              `git push origin HEAD:refs/heads/<base>` (never --force: a
+//              remote that moved on rejects it). Nothing merged -> nothing
+//              pushed.
 //   branches - nothing; Mati merges.
 //
 // Git and gh run without a shell (execFile); every value in their argv is
@@ -68,20 +70,49 @@ async function baseBranchOf(repoPath, execImpl) {
 }
 
 /**
- * Brings extra dependency branches into a fresh worktree (the first
- * dependency is its base already). A conflict aborts the merge.
+ * Brings extra dependency branches into a fresh package worktree (the first
+ * dependency is its base already). Each branch goes through mergeOne, so a
+ * conflict gets the same headless resolver as the integration; the
+ * resolution commit lands on the package branch in `root`, never on a
+ * dependency branch. A branch that still cannot be merged is aborted (the
+ * worktree stays clean) and the next one is tried - the caller hands the
+ * leftovers to the worker instead of failing the package.
  * @param {string} root
  * @param {string[]} branches `luna/<slug>` names
+ * @param {{execImpl?:Function, resolve?:Function}|Function} [deps] a bare
+ *   function is the execImpl (old signature)
+ * @returns {Promise<{ok:true, resolved:number} | {ok:false, resolved:number,
+ *   stage:string, detail:string, branch:string, files:string[],
+ *   failed:Array<{branch:string, stage:string, detail:string, files:string[]}>}>}
  */
-async function mergeDeps(root, branches, execImpl) {
+async function mergeDeps(root, branches, deps) {
+  const opts = typeof deps === 'function' ? { execImpl: deps } : deps || {};
+  const resolve = safeResolver(opts.resolve);
+  let resolved = 0;
+  const failed = [];
   for (const branch of branches) {
-    const res = await runGit(root, ['merge', '--no-edit', `refs/heads/${branch}`], execImpl);
-    if (!res.ok) {
-      await runGit(root, ['merge', '--abort'], execImpl);
-      return { ok: false, detail: `${branch}: ${firstLine(res.stderr) || firstLine(res.stdout)}` };
+    const res = await mergeOne(root, branch, { execImpl: opts.execImpl, resolve });
+    if (res.ok) {
+      resolved += res.resolved || 0;
+      continue;
     }
+    failed.push({ branch, stage: res.stage, detail: String(res.detail || '').slice(0, 300), files: res.files || [] });
   }
-  return { ok: true };
+  if (!failed.length) return { ok: true, resolved };
+  return { ok: false, resolved, ...failed[0], failed };
+}
+
+/** A resolver that never rejects and always answers {ok, detail}. */
+function safeResolver(resolve) {
+  if (typeof resolve !== 'function') return async () => ({ ok: false, detail: 'no resolver' });
+  return async (args) => {
+    try {
+      const res = await resolve(args);
+      return res && typeof res === 'object' ? res : { ok: false, detail: 'no answer' };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message.slice(0, 200) : 'resolver threw' };
+    }
+  };
 }
 
 /**
@@ -153,14 +184,43 @@ async function originHost(repoPath, execImpl) {
   return m ? m[1].toLowerCase() : null;
 }
 
-/** Installs dependencies in a fresh worktree when a lockfile says how. */
+/**
+ * Installs dependencies in a fresh worktree when a lockfile says how: the
+ * root, then every DIRECT subfolder with its own package-lock.json and no
+ * node_modules (e.g. mobile/, which verify commands like
+ * `npm test && cd mobile && npm run build` need too).
+ * @returns {Promise<{ok:boolean, output:string}>} a failure's last output
+ *   line names the folder
+ */
 async function ensureInstall(root, verifyImpl = runVerify) {
   const has = (f) => fs.existsSync(path.join(root, f));
   let cmd = null;
   if (has('package-lock.json') && !has('node_modules')) cmd = 'npm ci';
   else if (has('uv.lock') && !has('.venv')) cmd = 'uv sync';
-  if (!cmd) return { ok: true, output: '' };
-  return verifyImpl(cmd, root);
+  if (cmd) {
+    const res = await verifyImpl(cmd, root);
+    if (!res.ok) return res;
+  }
+  for (const name of npmSubfolders(root)) {
+    const res = await verifyImpl('npm ci', path.join(root, name));
+    if (!res.ok) return { ok: false, output: `${String(res.output || '')}\nnpm ci failed in ${name}/` };
+  }
+  return { ok: true, output: '' };
+}
+
+/** Direct subfolders of `root` that hold a package-lock.json but no node_modules yet. */
+function npmSubfolders(root) {
+  let entries;
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules')
+    .map((e) => e.name)
+    .filter((name) => fs.existsSync(path.join(root, name, 'package-lock.json')) && !fs.existsSync(path.join(root, name, 'node_modules')))
+    .sort();
 }
 
 function resolverPrompt(branch, files) {
@@ -172,9 +232,13 @@ function resolverPrompt(branch, files) {
   ].join('\n');
 }
 
-/** One headless `claude -p` to resolve the conflicts in `cwd`. */
-async function runResolver({ cwd, env, branch, files, isDirImpl }, execImpl) {
+/**
+ * One headless `claude -p` to resolve the conflicts in `cwd`. `attempt: 2`
+ * is the integration's second try: 3x the budget and twice the time.
+ */
+async function runResolver({ cwd, env, branch, files, isDirImpl, attempt }, execImpl) {
   if (!checkCwd(cwd, isDirImpl).ok) return { ok: false, detail: `working folder missing: ${cwd || ''}` };
+  const stronger = attempt === 2;
   const res = await run(
     'claude',
     [
@@ -191,10 +255,10 @@ async function runResolver({ cwd, env, branch, files, isDirImpl }, execImpl) {
       'user',
       '--strict-mcp-config',
       '--max-budget-usd',
-      String(RESOLVER_BUDGET_USD),
+      String(stronger ? RESOLVER_BUDGET_USD * 3 : RESOLVER_BUDGET_USD),
       '--no-session-persistence',
     ],
-    { cwd, env, timeout: RESOLVER_TIMEOUT_MS, input: resolverPrompt(branch, files) },
+    { cwd, env, timeout: stronger ? RESOLVER_TIMEOUT_MS * 2 : RESOLVER_TIMEOUT_MS, input: resolverPrompt(branch, files) },
     execImpl,
   );
   if (res.code === 'ENOENT') return { ok: false, detail: 'claude not found' };
@@ -234,8 +298,9 @@ async function mergeOne(root, branch, deps) {
   const conflicted = await unmergedFiles(root, execImpl);
   if (!conflicted || !conflicted.length) {
     await runGit(root, ['merge', '--abort'], execImpl);
-    return { ok: false, stage: 'merge', detail: firstLine(res.stderr) || firstLine(res.stdout) };
+    return { ok: false, stage: 'merge', detail: firstLine(res.stderr) || firstLine(res.stdout), files: [] };
   }
+  const files = conflicted.slice(0, 10);
   const resolved = await resolve({ cwd: root, branch, files: conflicted });
   // Markers first, then LunaCore stages exactly the conflicted files.
   const markers = resolved.ok ? await hasMarkers(root, conflicted, execImpl) : true;
@@ -243,32 +308,92 @@ async function mergeOne(root, branch, deps) {
   const left = staged.ok ? await unmergedFiles(root, execImpl) : null;
   if (!resolved.ok || markers || !left || left.length) {
     await runGit(root, ['merge', '--abort'], execImpl);
-    return { ok: false, stage: 'conflict', detail: conflicted.slice(0, 10).join(', ') };
+    return { ok: false, stage: 'conflict', detail: files.join(', '), files };
   }
   const commit = await runGit(root, ['commit', '--no-edit'], execImpl);
   if (!commit.ok) {
     await runGit(root, ['merge', '--abort'], execImpl);
-    return { ok: false, stage: 'conflict', detail: firstLine(commit.stderr) };
+    return { ok: false, stage: 'conflict', detail: firstLine(commit.stderr), files };
   }
   return { ok: true, resolved: conflicted.length };
 }
 
 /**
+ * The first skipped package `pkg` depends on, directly or through another
+ * package of this integration, or null.
+ * @param {{dependsOn?:string[]}} pkg
+ * @param {Map<string, string[]>} dependsOf id -> dependsOn of every package
+ * @param {Set<string>} skippedIds
+ */
+function skippedDependency(pkg, dependsOf, skippedIds) {
+  const seen = new Set();
+  const walk = (ids) => {
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (skippedIds.has(id)) return id;
+      const hit = walk(dependsOf.get(id) || []);
+      if (hit) return id;
+    }
+    return null;
+  };
+  return walk(Array.isArray(pkg.dependsOn) ? pkg.dependsOn : []);
+}
+
+/**
+ * Merges one package into the integration worktree and verifies it. A merge
+ * or conflict failure gets ONE more try with the stronger resolver; a red
+ * verify is run once more (timing-sensitive tests). Never throws.
+ * @returns {Promise<{ok:true} | {ok:false, stage:string, detail:string, files:string[]}>}
+ */
+async function mergeAndVerify(wt, pkg, deps, verifyImpl) {
+  const resolve = safeResolver(deps.resolve);
+  let res = await mergeOne(wt.root, pkg.branch, { execImpl: deps.execImpl, resolve });
+  if (!res.ok && (res.stage === 'merge' || res.stage === 'conflict')) {
+    res = await mergeOne(wt.root, pkg.branch, { execImpl: deps.execImpl, resolve: (r) => resolve({ ...r, attempt: 2 }) });
+  }
+  if (!res.ok) return { ok: false, stage: res.stage, detail: res.detail, files: res.files || [] };
+  if (!pkg.verify) return { ok: true };
+  let verified = await verifyImpl(pkg.verify, wt.cwd);
+  if (!verified.ok) verified = await verifyImpl(pkg.verify, wt.cwd);
+  if (verified.ok) return { ok: true };
+  return { ok: false, stage: 'verify', detail: listLines(verified.output).pop(), files: [] };
+}
+
+/** deps.beforePush, if any: {ok:false, reason} stops the push; a throw does too. */
+async function pushGate(deps, root, info) {
+  if (typeof deps.beforePush !== 'function') return { ok: true };
+  try {
+    const res = await deps.beforePush(root, info);
+    return res && res.ok === false ? { ok: false, reason: res.reason } : { ok: true };
+  } catch (err) {
+    return { ok: false, reason: `beforePush threw: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
  * Mode C: integration branch from origin/<base>, merge each package in
- * order, verify after each, push the base branch when all are green.
+ * order, verify after each. A package that cannot be merged or stays red is
+ * reset away and skipped, with every later package that depends on it
+ * (their branches carry its commits); the rest is pushed to the base branch.
  * @param {{repoPath:string, base:string, slug:string,
- *   packages:Array<{id:string, branch:string, verify:string}>}} args
+ *   packages:Array<{id:string, branch:string, verify:string, dependsOn?:string[]}>}} args
  * @param {{addWorktree:Function, removeWorktree:Function, resolve:Function,
- *   execImpl?:Function, verifyImpl?:Function, installImpl?:Function}} deps
- * @returns {Promise<{ok:boolean, merged:string[], stage?:string, failedId?:string, detail?:string, headSha?:string|null}>}
+ *   execImpl?:Function, verifyImpl?:Function, installImpl?:Function,
+ *   beforePush?:(root:string, info:{merged:string[], skipped:object[]}) => Promise<{ok:boolean, reason?:string}>}} deps
+ * @returns {Promise<{ok:boolean, merged:string[],
+ *   skipped:Array<{id:string, stage:string, detail:string, files:string[]}>,
+ *   stage?:string, failedId?:string|null, detail?:string, headSha?:string|null, root?:string|null}>}
  */
 async function integrateMerge({ repoPath, base, slug, packages }, deps) {
   const execImpl = deps.execImpl;
   const verifyImpl = deps.verifyImpl || runVerify;
   const merged = [];
+  const skipped = [];
   const fail = (stage, detail, failedId) => ({
     ok: false,
     merged,
+    skipped,
     stage,
     detail: String(detail || '').slice(0, 300),
     failedId: failedId || null,
@@ -292,20 +417,39 @@ async function integrateMerge({ repoPath, base, slug, packages }, deps) {
   const installed = await (deps.installImpl || ensureInstall)(wt.root, verifyImpl);
   if (!installed.ok) return done(fail('install', listLines(installed.output).pop()));
 
+  const dependsOf = new Map(packages.map((p) => [p.id, Array.isArray(p.dependsOn) ? p.dependsOn : []]));
+  const skippedIds = new Set();
+  const skip = (id, stage, detail, files) => {
+    skippedIds.add(id);
+    skipped.push({ id, stage, detail: String(detail || '').slice(0, 300), files: (files || []).slice(0, 10) });
+  };
   for (const pkg of packages) {
-    const res = await mergeOne(wt.root, pkg.branch, { execImpl, resolve: deps.resolve });
-    if (!res.ok) return done(fail(res.stage, res.detail, pkg.id));
-    if (pkg.verify) {
-      const verified = await verifyImpl(pkg.verify, wt.cwd);
-      if (!verified.ok) return done(fail('verify', listLines(verified.output).pop(), pkg.id));
+    const blocker = skippedDependency(pkg, dependsOf, skippedIds);
+    if (blocker) {
+      skip(pkg.id, 'depSkipped', blocker, []);
+      continue;
     }
-    merged.push(pkg.id);
+    const pre = await runGit(wt.root, ['rev-parse', 'HEAD'], execImpl);
+    const preSha = pre.ok ? firstLine(pre.stdout) : '';
+    const res = await mergeAndVerify(wt, pkg, deps, verifyImpl);
+    if (res.ok) {
+      merged.push(pkg.id);
+      continue;
+    }
+    skip(pkg.id, res.stage, res.detail, res.files);
+    // Back to the tree before this package; without that nothing later may
+    // be merged or pushed - the bad package could ride along.
+    const reset = preSha ? await runGit(wt.root, ['reset', '--hard', preSha], execImpl) : { ok: false, stderr: 'no HEAD' };
+    if (!reset.ok) return done(fail('reset', firstLine(reset.stderr), pkg.id));
   }
 
+  if (!merged.length) return done(fail('nothingMerged', skipped.map((s) => s.id).join(', ')));
+  const gate = await pushGate(deps, wt.root, { merged: [...merged], skipped: skipped.map((s) => ({ ...s })) });
+  if (!gate.ok) return done(fail('beforePush', gate.reason));
   const push = await runGit(wt.root, ['push', 'origin', `HEAD:refs/heads/${base}`], execImpl);
   if (!push.ok) return done(fail('push', firstLine(push.stderr)));
   const head = await runGit(wt.root, ['rev-parse', 'HEAD'], execImpl);
-  return done({ ok: true, merged, headSha: head.ok ? firstLine(head.stdout) : null });
+  return done({ ok: true, merged, skipped, headSha: head.ok ? firstLine(head.stdout) : null });
 }
 
 module.exports = {

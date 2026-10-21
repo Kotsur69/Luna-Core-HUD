@@ -451,7 +451,24 @@ function normalizePackage(raw) {
     prUrl: typeof raw.prUrl === 'string' && PR_URL_RE.test(raw.prUrl) ? raw.prUrl : null,
     merged: raw.merged === true,
     cleaned: raw.cleaned === true,
+    depMerge: normalizeDepMerge(raw.depMerge),
   };
+}
+
+const MAX_DEP_MERGE_ITEMS = 10;
+
+/**
+ * Dependency branches a worker was told to merge itself (orchestra.js
+ * launchOneUnsafe). The branches reach a brief as `git merge` commands, so
+ * only LunaCore's own `luna/<slug>` names survive; anything off-shape -> null.
+ */
+function normalizeDepMerge(raw) {
+  if (!raw || typeof raw !== 'object' || raw.strategy !== 'worker') return null;
+  const ok = (b) => isBranch(b) || (typeof b === 'string' && b.startsWith('luna-free/') && SLUG_RE.test(b.slice(10)));
+  const branches = (Array.isArray(raw.branches) ? raw.branches : []).filter(ok).slice(0, MAX_DEP_MERGE_ITEMS);
+  if (!branches.length) return null;
+  const files = (Array.isArray(raw.files) ? raw.files : []).filter(isRelPath).slice(0, MAX_DEP_MERGE_ITEMS);
+  return { strategy: 'worker', branches, files };
 }
 
 const PR_URL_RE = /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/\d{1,9}$/;
@@ -471,6 +488,21 @@ function normalizeIntegration(raw) {
     error: strOrNull(o.error, 64),
     detail: strOrNull(o.detail, MAX_DETAIL_CHARS),
     at: Number.isFinite(o.at) ? o.at : null,
+    // Packages a merge-mode integration left out (orchestraIntegrate.js).
+    skipped: (Array.isArray(o.skipped) ? o.skipped : []).map(normalizeSkipped).filter(Boolean).slice(0, MAX_SKIPPED),
+    partial: o.partial === true,
+  };
+}
+
+const MAX_SKIPPED = 50;
+
+function normalizeSkipped(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !SLUG_RE.test(raw.id)) return null;
+  return {
+    id: raw.id,
+    stage: str(raw.stage, 32),
+    detail: str(raw.detail, MAX_DETAIL_CHARS),
+    files: (Array.isArray(raw.files) ? raw.files : []).filter(isRelPath).slice(0, MAX_DEP_MERGE_ITEMS),
   };
 }
 
