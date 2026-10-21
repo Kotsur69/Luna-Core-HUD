@@ -39,6 +39,7 @@ const { createFinalizer } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 const { FREE_BRANCH_PREFIX, isSafeFreeBranch, freeRunSettings, integrationFor } = require('./orchestraFree');
+const { cleanupFailedLaunch, sweepOrphanBranches } = require('./orchestraCleanup');
 
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
@@ -148,6 +149,37 @@ function workerDepMerge(merged, branches) {
   return { strategy: 'worker', branches: (named.length ? named : branches).slice(0, 10), files: files.slice(0, 10) };
 }
 
+// Where in a launch each failure code happened (the board's failure block).
+const FAILURE_STAGES = {
+  briefFailed: 'brief',
+  noTab: 'tab',
+  launchThrew: 'launch',
+  unsafeBranch: 'worktree',
+  depMergeFailed: 'depMerge',
+  conflict: 'depMerge',
+  depVerifyFailed: 'depVerify',
+};
+
+/**
+ * The structured record of a failed launch the board renders: code, stage,
+ * the dependency branch involved, the conflicting files, when it happened.
+ * @param {{error?:string, detail?:string|null, depMerge?:object|null}} result
+ * @param {string|null} depBranch the dependency the worktree started from
+ * @param {number} at
+ */
+function failureOf(result, depBranch, at) {
+  const code = result.error || 'failed';
+  const dm = result.depMerge && Array.isArray(result.depMerge.branches) ? result.depMerge : null;
+  return {
+    code,
+    stage: FAILURE_STAGES[code] || 'worktree',
+    branch: (dm && dm.branches[0]) || depBranch || null,
+    files: dm && Array.isArray(dm.files) ? dm.files.slice(0, sup.MAX_FAILURE_FILES) : [],
+    detail: result.detail || null,
+    at,
+  };
+}
+
 /**
  * A resume brief for an automatic restart after a stall: the normal brief
  * plus why the previous session stopped, so the new one starts there.
@@ -179,7 +211,8 @@ function withStallNote(text, reason, detail) {
  *   baseBranchOf?: Function, mergeDeps?: Function, createPr?: Function,
  *   integrateMerge?: Function, removeWorktree?: Function, updateTodos?: Function,
  *   writeReport?: Function, notify?: Function, putSnapshot?: Function, sleep?: Function,
- *   runSelfCheck?: Function, pushBranch?: Function,
+ *   runSelfCheck?: Function, pushBranch?: Function, deleteBranch?: Function,
+ *   listOwnBranches?: Function, worktreeBranches?: Function, log?: Function,
  * }} deps
  */
 function createOrchestra(deps) {
@@ -205,6 +238,7 @@ function createOrchestra(deps) {
   const onRunEvent = deps.onRunEvent || noop;
   const setTimer = deps.setTimer || setTimeout;
   const clearTimer = deps.clearTimer || clearTimeout;
+  const log = deps.log || noop;
 
   /** @type {null|object} */
   let plan = null;
@@ -290,7 +324,28 @@ function createOrchestra(deps) {
     if (plan.scheduledAt && plan.scheduledAt > now()) armSchedule(plan.scheduledAt);
     else plan.scheduledAt = null;
     commit();
+    // Branches older builds left behind for this plan's packages.
+    sweepBranches().catch(noop);
     return true;
+  }
+
+  /**
+   * Deletes this plan's orphaned `luna/<pkgId>-<stamp>` branches (no
+   * worktree, not recorded on a package, no own commits) and logs them.
+   * @returns {Promise<{ok:boolean, deleted:string[], kept:Array<{branch:string, error:string}>, error?:string}>}
+   */
+  async function sweepBranches() {
+    if (!plan || !deps.deleteBranch || !deps.listOwnBranches || !deps.worktreeBranches) {
+      return { ok: false, deleted: [], kept: [], error: 'unavailable' };
+    }
+    const res = await sweepOrphanBranches({
+      repoPath: plan.repoPath,
+      packages: plan.packages,
+      git: { listOwnBranches: deps.listOwnBranches, worktreeBranches: deps.worktreeBranches, deleteBranch: deps.deleteBranch },
+    });
+    if (res.deleted.length) log(`deleted orphan branches: ${res.deleted.join(', ')}`);
+    if (!res.ok) log(`branch sweep failed: ${res.error}`);
+    return res;
   }
 
   function view() {
@@ -351,6 +406,7 @@ function createOrchestra(deps) {
         autoResumed: p.autoResumed === true,
         terminal: p.terminal === true,
         blockedBy: p.blockedBy || null,
+        failure: p.failure || null,
       })),
     };
   }
@@ -456,7 +512,11 @@ function createOrchestra(deps) {
         baseBranch: sup.isBaseBranch(baseBranch) ? baseBranch : null,
         scheduledAt: null,
         approvalLog: [],
-        options: sup.normalizeOptions({ unattendedApprovalMin: workerSettings().unattendedApprovalMin }),
+        options: sup.normalizeOptions({
+          unattendedApprovalMin: workerSettings().unattendedApprovalMin,
+          sleepOnLimit: false,
+          shutdownWhenDone: false,
+        }),
         integration: { state: 'idle', error: null, detail: null, at: null },
         started: false,
         killed: false,
@@ -494,6 +554,7 @@ function createOrchestra(deps) {
           terminal: false,
           blockedBy: null,
           stalledAt: null,
+          failure: null,
         })),
       };
       commit();
@@ -524,13 +585,32 @@ function createOrchestra(deps) {
 
   const freshRun = () => ({ nudges: 0, verifyRounds: 0, startedAt: now(), pausedMs: 0, error: null, detail: null });
 
-  /** Worktree + brief + tab for one package. Never throws. */
+  /**
+   * Worktree + brief + tab for one package. Never throws. A failure after
+   * the worktree was made removes the worktree AND its branch, and records
+   * a structured `failure` for the board.
+   */
   async function launchOne(pkg, stamp) {
+    const made = { wt: null, base: null, depBranch: null };
+    let result;
     try {
-      return await launchOneUnsafe(pkg, stamp);
+      result = await launchOneUnsafe(pkg, stamp, made);
     } catch (err) {
-      return { state: 'failed', error: 'launchThrew', detail: err instanceof Error ? err.message.slice(0, 300) : null };
+      result = { state: 'failed', error: 'launchThrew', detail: err instanceof Error ? err.message.slice(0, 300) : null };
     }
+    if (result.state !== 'failed') return { ...result, failure: null };
+    const failure = failureOf(result, made.depBranch, now());
+    if (!made.wt) return { ...result, failure };
+    const cleaned = await cleanupFailedLaunch(
+      { removeWorktree: deps.removeWorktree, deleteBranch: deps.deleteBranch },
+      plan.repoPath,
+      made.wt,
+      made.base,
+    );
+    if (cleaned.error) log(`failed launch of ${pkg.id} not fully cleaned up: ${cleaned.error}`);
+    // Worktree gone: Retry starts a fresh launch instead of reopening it.
+    const gone = cleaned.removed ? { branch: null, root: null, cwd: null, briefPath: null, baseSha: null } : {};
+    return { ...result, ...gone, failure };
   }
 
   /**
@@ -539,17 +619,20 @@ function createOrchestra(deps) {
    * that neither git nor the headless resolver can finish never fails the
    * package: the worker gets it as the first step of its brief.
    */
-  async function launchOneUnsafe(pkg, stamp) {
+  async function launchOneUnsafe(pkg, stamp, made) {
     const pushedDeps = pkg.dependsOn.map(findPkg).filter((d) => d && d.state === 'pushed' && d.branch);
     const baseDep = pushedDeps.find((d) => d.headSha) || null;
+    made.depBranch = baseDep ? baseDep.branch : null;
     const wt = await deps.addWorktree(plan.repoPath, `${pkg.id}-${stamp}`, {
       base: baseDep ? baseDep.headSha : undefined,
       ...(plan.freeMode ? { branchPrefix: FREE_BRANCH_PREFIX } : {}),
     });
-    if (!wt.ok) return { state: 'failed', error: wt.error };
+    if (!wt.ok) return { state: 'failed', error: wt.error, detail: wt.detail || null };
+    // From here on every failure is cleaned up by launchOne().
+    made.wt = wt;
+    made.base = baseDep ? baseDep.headSha : null;
     // A free run never works on (or pushes) the target branch.
     if (plan.freeMode && !isSafeFreeBranch(wt.branch, plan.baseBranch)) {
-      if (deps.removeWorktree) await deps.removeWorktree(plan.repoPath, wt.root);
       return { state: 'failed', error: 'unsafeBranch', detail: wt.branch || null };
     }
     const others = pushedDeps.filter((d) => d !== baseDep).map((d) => d.branch);
@@ -560,6 +643,8 @@ function createOrchestra(deps) {
       depMerge = workerDepMerge(await deps.mergeDeps(wt.root, others), others);
     }
     const baseSha = await headSha(wt.root);
+    // After any dependency merges: the branch has no own work beyond this yet.
+    if (baseSha) made.base = baseSha;
     const briefPath = path.join(deps.briefDir(), `${path.basename(wt.root)}.md`);
     const where = { branch: wt.branch, root: wt.root, cwd: wt.cwd, briefPath, baseSha, depMerge };
     if (!deps.writeBrief(briefPath, briefText(pkg, wt.branch, { depMerge }))) {
@@ -1165,6 +1250,22 @@ function createOrchestra(deps) {
     return true;
   }
 
+  /**
+   * Live run options (sleepOnLimit, shutdownWhenDone): only known boolean
+   * keys are applied, anything else is dropped. Allowed before, during and
+   * while paused.
+   * @param {unknown} patchRaw
+   */
+  function setOptions(patchRaw) {
+    if (!plan) return { ok: false, error: 'noPlan' };
+    const changes = sup.optionsPatch(patchRaw);
+    if (!Object.keys(changes).length) return { ok: false, error: 'badOptions' };
+    plan.options = sup.normalizeOptions({ ...plan.options, ...changes });
+    onRunEvent('options', { ...plan.options });
+    commit();
+    return { ok: true, options: { ...plan.options } };
+  }
+
   function discard() {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
@@ -1191,6 +1292,8 @@ function createOrchestra(deps) {
     onSessionClosed,
     unschedule,
     finishRun,
+    setOptions,
+    sweepBranches,
     runFixup: (args) => fixup.run(args),
     planWait: () => planWaiter.view(),
     cancelPlanWait: () => planWaiter.cancel(),

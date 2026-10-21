@@ -74,17 +74,17 @@ test('approvalExpired: a needsApproval stall older than the limit; 0 waits forev
 });
 
 test('normalizeOptions defaults and caps unattendedApprovalMin', () => {
-  assert.deepEqual(sup.normalizeOptions(undefined), { unattendedApprovalMin: 30 });
-  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: 0 }), { unattendedApprovalMin: 0 });
-  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: 12.6 }), { unattendedApprovalMin: 13 });
-  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: -5 }), { unattendedApprovalMin: 30 });
-  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: 1e9 }), { unattendedApprovalMin: sup.MAX_APPROVAL_MIN });
-  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: '5' }), { unattendedApprovalMin: 30 });
+  assert.deepEqual(sup.normalizeOptions(undefined), { unattendedApprovalMin: 30, sleepOnLimit: false, shutdownWhenDone: false });
+  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: 0 }), { unattendedApprovalMin: 0, sleepOnLimit: false, shutdownWhenDone: false });
+  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: 12.6 }), { unattendedApprovalMin: 13, sleepOnLimit: false, shutdownWhenDone: false });
+  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: -5 }), { unattendedApprovalMin: 30, sleepOnLimit: false, shutdownWhenDone: false });
+  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: 1e9 }), { unattendedApprovalMin: sup.MAX_APPROVAL_MIN, sleepOnLimit: false, shutdownWhenDone: false });
+  assert.deepEqual(sup.normalizeOptions({ unattendedApprovalMin: '5' }), { unattendedApprovalMin: 30, sleepOnLimit: false, shutdownWhenDone: false });
 });
 
 test('stored never-blocks fields are validated; a legacy plan loads with defaults', () => {
   const legacy = sup.normalizeStoredPlan({ id: 'p', repoPath: path.resolve('/r'), packages: [{ id: 'a', state: 'stalled' }] });
-  assert.deepEqual(legacy.options, { unattendedApprovalMin: 30 });
+  assert.deepEqual(legacy.options, { unattendedApprovalMin: 30, sleepOnLimit: false, shutdownWhenDone: false });
   const lp = legacy.packages[0];
   assert.deepEqual([lp.autoRetries, lp.autoResumed, lp.terminal, lp.blockedBy, lp.stalledAt], [0, false, false, null, null]);
 
@@ -98,7 +98,7 @@ test('stored never-blocks fields are validated; a legacy plan loads with default
       { id: 'c', state: 'pending', blockedBy: '../evil' },
     ],
   });
-  assert.deepEqual(stored.options, { unattendedApprovalMin: 45 });
+  assert.deepEqual(stored.options, { unattendedApprovalMin: 45, sleepOnLimit: false, shutdownWhenDone: false });
   assert.deepEqual(
     stored.packages.map((p) => [p.autoRetries, p.autoResumed, p.terminal, p.blockedBy, p.stalledAt]),
     [
