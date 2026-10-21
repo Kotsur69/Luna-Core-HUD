@@ -45,6 +45,8 @@ const STRINGS = {
     forgetTitle: 'LunaCore: zapomnij telefony',
     forgetMessage: 'Usunac wszystkie sparowane telefony i ich sesje? Telefon trzeba bedzie sparowac od nowa.',
     forgetConfirm: 'Usun',
+    forgetFailed: 'Nie udalo sie usunac kluczy - telefony nadal sa sparowane. ({error})',
+    pairCancel: 'Zamknij parowanie',
     cancel: 'Anuluj',
   },
   en: {
@@ -69,6 +71,8 @@ const STRINGS = {
     forgetTitle: 'LunaCore: forget phones',
     forgetMessage: 'Remove every paired phone and its sessions? The phone has to be paired again.',
     forgetConfirm: 'Remove',
+    forgetFailed: 'Could not remove the keys - the phones are still paired. ({error})',
+    pairCancel: 'Close pairing',
     cancel: 'Cancel',
   },
 };

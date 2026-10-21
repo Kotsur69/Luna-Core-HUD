@@ -27,6 +27,21 @@ alter table public.host_pairings enable row level security;
 create policy own on public.host_pairings for all to authenticated
   using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
+-- A new request is always fresh: no backdated created_at (to sort ahead of a
+-- real request) and no pre-set nonces or status. The host also rejects such rows.
+create function public.host_pairings_fresh() returns trigger
+  language plpgsql set search_path = '' as $$
+begin
+  new.created_at := now();
+  new.status := 'pending';
+  new.host_nonce := null;
+  new.phone_nonce := null;
+  return new;
+end;
+$$;
+create trigger host_pairings_fresh before insert on public.host_pairings
+  for each row execute function public.host_pairings_fresh();
+
 alter publication supabase_realtime add table public.host_pairings;
 
 alter table public.host_commands
