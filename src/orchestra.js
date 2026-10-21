@@ -48,6 +48,9 @@ const NUDGE_DELAY_MS = 5000;
 const DEFAULT_PAUSE_MS = 30 * 60 * 1000;
 // Resume a little after the reset, not on the second.
 const RESUME_GRACE_MS = 60 * 1000;
+// A launch that failed on machinery (worktree, brief, tab) is tried again
+// by itself after this long, at most sup.MAX_AUTO_RETRIES times.
+const AUTO_RETRY_DELAY_MS = 2 * 60 * 1000;
 const ESC = '\x1b';
 
 /**
@@ -86,6 +89,24 @@ function briefText(pkg, branch, opts = {}) {
     '- Work only in this worktree. Do not push, merge or switch branches.',
     '- When the work is done and verified, commit it on this branch with a conventional commit message.',
     `- End your final message with the line \`LUNA_DONE ${pkg.id}\`, or \`LUNA_BLOCKED ${pkg.id}: <reason>\` if you cannot finish.`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * A resume brief for an automatic restart after a stall: the normal brief
+ * plus why the previous session stopped, so the new one starts there.
+ * @param {string} text a briefText() result
+ * @param {string} reason the stall reason (noMarker, blocked, ...)
+ * @param {string|null} detail
+ * @returns {string}
+ */
+function withStallNote(text, reason, detail) {
+  return [
+    text.trimEnd(),
+    '',
+    '## Why you were restarted',
+    `The previous session on this package stalled (reason: ${reason}${detail ? ` - ${detail}` : ''}). Find out why before you continue.`,
     '',
   ].join('\n');
 }
@@ -135,6 +156,8 @@ function createOrchestra(deps) {
   let pumping = false;
   /** pkgId -> pending nudge timer */
   const nudgeTimers = new Map();
+  /** pkgId -> scheduled automatic relaunch after a machinery failure */
+  const retryTimers = new Map();
   let resumeTimer = null;
   let scheduleTimer = null;
   // Planning that hit the 5 h / weekly limit waits for the reset and then
@@ -211,6 +234,7 @@ function createOrchestra(deps) {
       pausedUntil: plan.pausedUntil,
       scheduledAt: plan.scheduledAt,
       freeMode: plan.freeMode === true,
+      options: sup.normalizeOptions(plan.options),
       integration: { ...plan.integration, running: finalizer.isRunning() },
       overlaps: sup.liveOverlaps(plan.packages),
       suggestions: sup.allowSuggestions(plan.approvalLog).filter((s) => !(plan.allowedTools || []).includes(s.rule)),
@@ -238,12 +262,18 @@ function createOrchestra(deps) {
         prUrl: p.prUrl,
         merged: p.merged,
         cleaned: p.cleaned,
+        autoRetries: p.autoRetries || 0,
+        autoResumed: p.autoResumed === true,
+        terminal: p.terminal === true,
+        blockedBy: p.blockedBy || null,
       })),
     };
   }
 
   /** Writes the run to disk and tells the renderer. Every transition ends here. */
   function commit() {
+    // blockedBy follows terminal / state on every transition, never stale.
+    if (plan) plan.packages = sup.withBlockedBy(plan.packages);
     saveState(plan ? sup.serializePlan(plan) : null);
     onChange(view());
   }
@@ -266,8 +296,15 @@ function createOrchestra(deps) {
     scheduleTimer = null;
   }
 
+  function cancelAutoRetry(id) {
+    const timer = retryTimers.get(id);
+    if (timer) clearTimer(timer);
+    retryTimers.delete(id);
+  }
+
   function clearAllTimers() {
     for (const id of [...nudgeTimers.keys()]) cancelNudge(id);
+    for (const id of [...retryTimers.keys()]) cancelAutoRetry(id);
     if (resumeTimer) clearTimer(resumeTimer);
     resumeTimer = null;
     clearSchedule();
@@ -333,6 +370,7 @@ function createOrchestra(deps) {
         baseBranch: sup.isBaseBranch(baseBranch) ? baseBranch : null,
         scheduledAt: null,
         approvalLog: [],
+        options: sup.normalizeOptions({ unattendedApprovalMin: workerSettings().unattendedApprovalMin }),
         integration: { state: 'idle', error: null, detail: null, at: null },
         started: false,
         killed: false,
@@ -363,6 +401,11 @@ function createOrchestra(deps) {
           prUrl: null,
           merged: false,
           cleaned: false,
+          autoRetries: 0,
+          autoResumed: false,
+          terminal: false,
+          blockedBy: null,
+          stalledAt: null,
         })),
       };
       commit();
@@ -443,6 +486,8 @@ function createOrchestra(deps) {
     for (const pkg of chosen) {
       // Kill / pause while an earlier launch was awaiting git: stop here.
       if (plan.killed || plan.pausedUntil) break;
+      cancelAutoRetry(pkg.id);
+      const before = findPkg(pkg.id) || pkg;
       const result = await launchOne(pkg, stamp);
       if (plan.killed && result.state === 'launched') {
         // The kill landed during this very launch: the tab exists, stop it too.
@@ -450,14 +495,63 @@ function createOrchestra(deps) {
         patch(pkg.id, { ...result, state: 'killed' });
       } else {
         patch(pkg.id, result);
+        if (result.state === 'failed') onLaunchFailed(before, result);
       }
       commit();
     }
   }
 
+  /**
+   * Machinery auto-retry: a failed launch is tried again by itself after
+   * AUTO_RETRY_DELAY_MS, at most MAX_AUTO_RETRIES times. The same error +
+   * detail twice in a row means it will not fix itself: terminal.
+   * @param {object} before the package as it was before this launch
+   * @param {{error?:string, detail?:string|null}} result
+   */
+  function onLaunchFailed(before, result) {
+    if (plan.killed) return;
+    const tries = before.autoRetries || 0;
+    const repeated =
+      tries > 0 && before.error === (result.error || null) && (before.detail || null) === (result.detail || null);
+    if (repeated || tries >= sup.MAX_AUTO_RETRIES) {
+      markTerminal(before.id, result.error || 'failed');
+      return;
+    }
+    patch(before.id, { autoRetries: tries + 1 });
+    const timer = setTimer(() => fireAutoRetry(before.id), AUTO_RETRY_DELAY_MS);
+    // A real timer must not keep a test process (or a quitting app) alive.
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    retryTimers.set(before.id, timer);
+  }
+
+  /** The scheduled relaunch: back to pending, the pump launches it in a free slot. */
+  function fireAutoRetry(id) {
+    retryTimers.delete(id);
+    const pkg = plan ? findPkg(id) : null;
+    if (!pkg || plan.killed || pkg.state !== 'failed') return;
+    // error/detail stay until the launch result replaces them: the next
+    // failure is compared against them.
+    patch(id, { state: 'pending' });
+    onRunEvent('autoRetry', { id, attempt: pkg.autoRetries });
+    commit();
+    kick();
+  }
+
+  /**
+   * Nothing automatic will pick this package up again: flag it and mark
+   * every pending dependent blockedBy it, so the board says why they wait.
+   */
+  function markTerminal(id, reason) {
+    patch(id, { terminal: true });
+    plan.packages = sup.withBlockedBy(plan.packages);
+    onRunEvent('terminal', { id, reason });
+  }
+
   /** Ends the run once nothing more can happen on its own, then finalizes it. */
   function checkSettled() {
     if (!plan.started || plan.killed || plan.settled || !sup.isSettled(plan.packages, MAX_PARALLEL)) return;
+    // A scheduled automatic relaunch keeps the run open.
+    if (retryTimers.size) return;
     plan.settled = true;
     const allPushed = plan.packages.every((p) => p.state === 'pushed');
     onRunEvent(allPushed ? 'done' : 'needYou', sup.tally(plan.packages));
@@ -553,7 +647,15 @@ function createOrchestra(deps) {
       plan.killed = false;
       plan.settled = false;
       plan.started = true;
-      if (chosen) await launchPackages(chosen);
+      if (chosen) {
+        // A launch by hand starts the automatic ladder afresh.
+        for (const p of chosen) {
+          cancelAutoRetry(p.id);
+          patch(p.id, { autoRetries: 0, terminal: false });
+        }
+        plan.packages = sup.withBlockedBy(plan.packages);
+        await launchPackages(chosen);
+      }
     } finally {
       busy = false;
     }
@@ -604,15 +706,54 @@ function createOrchestra(deps) {
     cancelNudge(id);
     const before = findPkg(id);
     const stalls = (before.stalls || 0) + 1;
-    patch(id, { state: 'stalled', error: reason, detail, stalls });
+    patch(id, { state: 'stalled', error: reason, detail, stalls, stalledAt: now() });
     const pkg = findPkg(id);
-    if (!plan.killed && !plan.pausedUntil && sup.shouldEscalate(pkg, modelFor(pkg), reason) && escalate(pkg, reason, detail)) {
+    const live = !plan.killed && !plan.pausedUntil;
+    if (live && sup.shouldEscalate(pkg, modelFor(pkg), reason) && escalate(pkg, reason, detail)) {
       commit();
       return;
     }
+    if (live && sup.shouldAutoResume(pkg, reason) && autoResume(pkg, reason, detail)) {
+      commit();
+      return;
+    }
+    // A permission prompt still waits for Mati (or the unattended timeout);
+    // any other stall here has used up its automatic chances.
+    if (live && reason !== 'needsApproval') markTerminal(id, reason);
     onRunEvent('stalled', { id, reason });
     commit();
     kick();
+  }
+
+  /**
+   * Reopens a package in its own worktree with a fresh brief, like Retry
+   * does for a closed tab. The new tab opens first; a still-open old tab is
+   * closed after the package points at the new one.
+   * @returns {{ok:true} | {ok:false, error:'briefFailed'|'noTab'}}
+   */
+  function reopenInWorktree(pkg, text) {
+    // Recomputed, never taken from the saved run: only LunaCore's own
+    // brief folder is ever written to.
+    const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
+    if (!deps.writeBrief(briefPath, text)) return { ok: false, error: 'briefFailed' };
+    const session = safeOpenTab(pkg, pkg.cwd || pkg.root, pkg.branch, briefPath);
+    if (!session) return { ok: false, error: 'noTab' };
+    const old = pkg.sessionId;
+    patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath });
+    if (old && old !== session.id && sessionAlive(old)) closeSession(old);
+    return { ok: true };
+  }
+
+  /**
+   * One automatic resume of a stalled worker, told why it stalled.
+   * @returns {boolean} false when the tab could not be reopened (stays stalled)
+   */
+  function autoResume(pkg, reason, detail) {
+    const text = withStallNote(briefText(pkg, pkg.branch, { resume: true }), reason, detail);
+    if (!reopenInWorktree(pkg, text).ok) return false;
+    patch(pkg.id, { autoResumed: true });
+    onRunEvent('autoResumed', { id: pkg.id, reason });
+    return true;
   }
 
   /**
@@ -676,7 +817,7 @@ function createOrchestra(deps) {
 
     if (res.ok) {
       const touched = sup.mergeTouched(pkg.touched, sup.relTouched(pkg.root, res.files || []));
-      patch(id, { state: 'pushed', headSha: res.headSha || null, error: null, detail: null, touched });
+      patch(id, { state: 'pushed', headSha: res.headSha || null, error: null, detail: null, touched, terminal: false });
       tickTodos(plan.projectId, pkg.todoAts);
       commit();
       kick();
@@ -826,6 +967,31 @@ function createOrchestra(deps) {
     for (const p of plan.packages) {
       if (p.state === 'launched' && sup.timedOut(p, now())) stall(p.id, 'timeout');
     }
+    expireApprovals();
+  }
+
+  /**
+   * Unattended approvals: a worker that has sat on a permission prompt
+   * longer than plan.options.unattendedApprovalMin loses its tab. Nothing is
+   * ever approved or typed into the prompt; the rule it asked about stays in
+   * approvalLog as an allow-rule suggestion for the morning.
+   */
+  function expireApprovals() {
+    const limit = sup.normalizeOptions(plan.options).unattendedApprovalMin;
+    if (!limit) return;
+    let changed = false;
+    for (const p of plan.packages) {
+      if (!sup.approvalExpired(p, now(), limit) || !p.sessionId || !sessionAlive(p.sessionId)) continue;
+      const sid = p.sessionId;
+      // detail keeps the logged rule (onApproval put it there).
+      patch(p.id, { error: 'approvalTimeout' });
+      markTerminal(p.id, 'approvalTimeout');
+      closeSession(sid);
+      changed = true;
+    }
+    if (!changed) return;
+    commit();
+    kick();
   }
 
   /**
@@ -869,18 +1035,15 @@ function createOrchestra(deps) {
       // a nudge + Enter now would land IN the prompt and answer it blindly.
       if (pkg.error !== 'needsApproval') writePty(pkg.sessionId, sup.nudgeText(pkg.id), { paste: true });
     } else if (pkg.root && pkg.branch) {
-      // Recomputed, never taken from the saved run: only LunaCore's own
-      // brief folder is ever written to.
-      const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
-      if (!deps.writeBrief(briefPath, briefText(pkg, pkg.branch, { resume: true }))) {
-        return { ok: false, error: 'briefFailed' };
-      }
-      const session = safeOpenTab(pkg, pkg.cwd || pkg.root, pkg.branch, briefPath);
-      if (!session) return { ok: false, error: 'noTab' };
-      patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath });
+      const reopened = reopenInWorktree(pkg, briefText(pkg, pkg.branch, { resume: true }));
+      if (!reopened.ok) return { ok: false, error: reopened.error };
     } else {
       patch(pkg.id, { state: 'pending', error: null, detail: null });
     }
+    // A Retry by hand: the package is back in play, its dependents unblocked.
+    cancelAutoRetry(pkg.id);
+    patch(pkg.id, { terminal: false, autoRetries: 0 });
+    plan.packages = sup.withBlockedBy(plan.packages);
     // Only once the package is back in play does the run resume.
     plan.started = true;
     plan.killed = false;
@@ -936,4 +1099,13 @@ function createOrchestra(deps) {
   };
 }
 
-module.exports = { createOrchestra, briefText, BRIEF_DIR, NUDGE_DELAY_MS, RESUME_GRACE_MS };
+module.exports = {
+  createOrchestra,
+  briefText,
+  withStallNote,
+  BRIEF_DIR,
+  NUDGE_DELAY_MS,
+  RESUME_GRACE_MS,
+  AUTO_RETRY_DELAY_MS,
+  MAX_AUTO_RETRIES: sup.MAX_AUTO_RETRIES,
+};

@@ -171,6 +171,79 @@ function shouldEscalate(pkg, model, reason) {
   );
 }
 
+// ---- never blocks: auto-retry, auto-resume, approval timeout, blockedBy ---
+
+// Machinery launch failures (worktree, brief, tab) are relaunched by
+// themselves at most this often per package (pkg.autoRetries).
+const MAX_AUTO_RETRIES = 2;
+// plan.options.unattendedApprovalMin: how long a worker may sit on a
+// permission prompt before its tab is closed (0 = wait for Mati forever).
+const DEFAULT_APPROVAL_MIN = 30;
+const MAX_APPROVAL_MIN = 24 * 60;
+
+/**
+ * A stalled worker gets ONE automatic resume in its own worktree, for the
+ * same reasons a stronger model could get past (never a permission prompt,
+ * never machinery trouble). Asked only when the stall does not escalate.
+ * @param {{autoResumed?:boolean, root:string|null, branch:string|null}} pkg
+ * @param {string} reason
+ */
+function shouldAutoResume(pkg, reason) {
+  return ESCALATE_REASONS.has(reason) && !pkg.autoResumed && !!pkg.root && !!pkg.branch;
+}
+
+/**
+ * Run options with defaults; a legacy plan without them loads unchanged.
+ * @param {unknown} raw
+ * @returns {{unattendedApprovalMin:number}}
+ */
+function normalizeOptions(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const min = o.unattendedApprovalMin;
+  const valid = typeof min === 'number' && Number.isFinite(min) && min >= 0;
+  return { unattendedApprovalMin: valid ? Math.min(Math.round(min), MAX_APPROVAL_MIN) : DEFAULT_APPROVAL_MIN };
+}
+
+/**
+ * True when a package has sat on a permission prompt longer than allowed.
+ * @param {{state:string, error:string|null, stalledAt?:number|null}} pkg
+ * @param {number} nowMs
+ * @param {number} limitMin 0 = never
+ */
+function approvalExpired(pkg, nowMs, limitMin) {
+  if (!limitMin || pkg.state !== 'stalled' || pkg.error !== 'needsApproval') return false;
+  if (!Number.isFinite(pkg.stalledAt)) return false;
+  return nowMs - pkg.stalledAt > limitMin * 60 * 1000;
+}
+
+/**
+ * Pending packages that depend (directly or transitively) on a terminal one
+ * get blockedBy = the first such dependency's id; every other package gets
+ * null. Packages whose value does not change keep their identity.
+ * @param {Array<{id:string, state:string, dependsOn:string[], terminal?:boolean, blockedBy?:string|null}>} packages
+ */
+function withBlockedBy(packages) {
+  const byId = new Map(packages.map((p) => [p.id, p]));
+  const blockerOf = (start) => {
+    const seen = new Set([start.id]);
+    const queue = [...start.dependsOn];
+    while (queue.length) {
+      const id = queue.shift();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const dep = byId.get(id);
+      if (!dep) continue;
+      if (dep.terminal === true && dep.state !== 'pushed') return dep.id;
+      queue.push(...dep.dependsOn);
+    }
+    return null;
+  };
+  return packages.map((p) => {
+    const blockedBy = p.state === 'pending' ? blockerOf(p) : null;
+    return (p.blockedBy || null) === blockedBy ? p : { ...p, blockedBy };
+  });
+}
+
 const HHMM_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 // Start a little after the window resets, like the usage-limit resume.
 const RESET_START_GRACE_MS = 2 * 60 * 1000;
@@ -451,6 +524,11 @@ function normalizePackage(raw) {
     prUrl: typeof raw.prUrl === 'string' && PR_URL_RE.test(raw.prUrl) ? raw.prUrl : null,
     merged: raw.merged === true,
     cleaned: raw.cleaned === true,
+    autoRetries: Number.isInteger(raw.autoRetries) ? Math.min(Math.max(raw.autoRetries, 0), MAX_AUTO_RETRIES) : 0,
+    autoResumed: raw.autoResumed === true,
+    terminal: raw.terminal === true,
+    blockedBy: typeof raw.blockedBy === 'string' && SLUG_RE.test(raw.blockedBy) ? raw.blockedBy : null,
+    stalledAt: Number.isFinite(raw.stalledAt) ? raw.stalledAt : null,
   };
 }
 
@@ -515,6 +593,7 @@ function normalizeStoredPlan(raw) {
       .map((e) => ({ pkgId: e.pkgId, rule: isAllowRule(e.rule) ? e.rule : null, example: cleanExample(e.example) }))
       .slice(-MAX_APPROVAL_LOG),
     integration: normalizeIntegration(raw.integration),
+    options: normalizeOptions(raw.options),
     todoText: new Map(todoText),
     packages,
   };
@@ -560,6 +639,13 @@ function restoreAfterRestart(plan) {
 
 module.exports = {
   ESCALATE_REASONS,
+  MAX_AUTO_RETRIES,
+  DEFAULT_APPROVAL_MIN,
+  MAX_APPROVAL_MIN,
+  shouldAutoResume,
+  normalizeOptions,
+  approvalExpired,
+  withBlockedBy,
   INTEGRATION_MODES,
   MAX_APPROVAL_LOG,
   shouldEscalate,

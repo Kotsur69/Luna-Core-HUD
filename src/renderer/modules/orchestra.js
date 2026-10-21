@@ -227,6 +227,25 @@ function progressText(pkg) {
   return '';
 }
 
+/**
+ * What the never-blocks ladder did or is doing with this package: automatic
+ * relaunch / resume, gave up, or waiting on a dependency that gave up.
+ */
+function ladderLines(pkg) {
+  const out = [];
+  if (pkg.blockedBy) {
+    const blocker = plan.packages.find((p) => p.id === pkg.blockedBy);
+    const reason = blocker && blocker.error ? pkgErrorText(blocker.error) : t(`orch.state.${blocker ? blocker.state : 'pending'}`);
+    out.push(t('orch.progress.blockedBy', { id: pkg.blockedBy, reason }));
+  }
+  if (pkg.autoRetries && !pkg.terminal && pkg.state === 'failed') {
+    out.push(t('orch.progress.autoRetry', { n: pkg.autoRetries }));
+  }
+  if (pkg.autoResumed) out.push(t('orch.progress.autoResumed'));
+  if (pkg.terminal) out.push(t('orch.progress.terminal'));
+  return out;
+}
+
 const canLaunch = (pkg) => pkg.state === 'pending' || pkg.state === 'failed';
 
 function pkgCard(pkg) {
@@ -273,6 +292,7 @@ function pkgCard(pkg) {
   const progress = progressText(pkg);
   if (progress) card.append(el('div', 'orchestra__meta', progress));
   if (pkg.escalated) card.append(el('div', 'orchestra__meta', t('orch.progress.escalated')));
+  for (const line of ladderLines(pkg)) card.append(el('div', 'orchestra__meta', line));
   if (pkg.prUrl) {
     const link = el('a', 'orchestra__link', pkg.prUrl);
     link.href = '#';
