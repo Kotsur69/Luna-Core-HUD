@@ -14,7 +14,8 @@
 // Bodies are generic and built here from the event alone ("Approval needed on
 // KT-PC-LLM"): a caller's text never reaches a notification, so no command or
 // code ever shows on a lock screen. Each `key` fires once (table push_sent,
-// insert-or-ignore). A subscription the push service answers 404 / 410 for is
+// insert-or-ignore), and only once delivered: a claim that reached no phone
+// is released. A subscription the push service answers 404 / 410 for is
 // deleted.
 //
 // Secrets: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (mailto:...),
@@ -144,6 +145,10 @@ export function createDb({ url, serviceKey, fetchImpl = fetch }) {
       const rows = await res.json();
       return Array.isArray(rows) && rows.length === 1;
     },
+    /** Undoes claimOnce: a notification that reached no phone may be tried again. */
+    async releaseOnce(userId, key) {
+      await rest(`push_sent?user_id=eq.${enc(userId)}&key=eq.${enc(key)}`, { method: 'DELETE' });
+    },
     /** The default host (sync unit host:default) and its last heartbeat. */
     async defaultHostSeen(userId) {
       const r1 = await rest(`sync_units?select=value&user_id=eq.${enc(userId)}&scope=eq.config&key=eq.${enc('host:default')}&deleted_at=is.null&limit=1`);
@@ -184,6 +189,25 @@ export async function fanOut({ db, sendPush, userId, payload, log }) {
 }
 
 /**
+ * Claims `key`, sends, and releases the claim again when no subscription got
+ * the notification (no subscriptions read, every send failed): the key is
+ * spent only by a delivery, so the caller's retry or the next cron run counts.
+ * @returns {Promise<{sent: number, dropped: number, duplicate?: true}>}
+ */
+export async function sendOnce({ db, sendPush, userId, key, payload, log }) {
+  if (!(await db.claimOnce(userId, key))) return { sent: 0, dropped: 0, duplicate: true };
+  let result;
+  try {
+    result = await fanOut({ db, sendPush, userId, payload, log });
+  } catch (err) {
+    await db.releaseOnce(userId, key).catch((e) => log(`[push] release failed: ${e && e.message}`));
+    throw err;
+  }
+  if (result.sent === 0) await db.releaseOnce(userId, key).catch((e) => log(`[push] release failed: ${e && e.message}`));
+  return result;
+}
+
+/**
  * The whole request -> Response.
  * @param {Request} req
  * @param {{env: Record<string, string|undefined>, fetchImpl?: Function,
@@ -210,18 +234,24 @@ export async function handle(req, { env, fetchImpl = fetch, db, sendPush, now = 
 
   if (parsed.event === 'offline-check') {
     if (!sameSecret(req.headers.get('x-cron-secret') || '', env.CRON_SECRET || '')) return reply(401, { error: 'not-allowed' });
-    const key = offlineKey(await d.defaultHostSeen(owner), now());
-    if (!key || !(await d.claimOnce(owner, key))) return reply(200, { sent: 0 });
-    const machine = key.split(':')[1];
-    return reply(200, await fanOut({ db: d, sendPush, userId: owner, payload: notification({ event: 'offline', machine }, env.PUSH_LANG), log }));
+    try {
+      const key = offlineKey(await d.defaultHostSeen(owner), now());
+      if (!key) return reply(200, { sent: 0 });
+      const machine = key.split(':')[1];
+      const r = await sendOnce({ db: d, sendPush, userId: owner, key, payload: notification({ event: 'offline', machine }, env.PUSH_LANG), log });
+      return reply(200, r.duplicate ? { sent: 0 } : { sent: r.sent, dropped: r.dropped });
+    } catch (err) {
+      log(`[push] offline-check failed: ${err && err.message}`);
+      return reply(502, { error: 'push-failed' });
+    }
   }
 
   const uid = await sessionUser(req, env, fetchImpl);
   if (!uid) return reply(401, { error: 'not-logged-in' });
   if (uid.toLowerCase() !== owner) return reply(403, { error: 'not-owner' });
   try {
-    if (!(await d.claimOnce(owner, parsed.key))) return reply(200, { sent: 0, duplicate: true });
-    return reply(200, await fanOut({ db: d, sendPush, userId: owner, payload: notification(parsed, env.PUSH_LANG), log }));
+    const r = await sendOnce({ db: d, sendPush, userId: owner, key: parsed.key, payload: notification(parsed, env.PUSH_LANG), log });
+    return reply(200, r.duplicate ? { sent: 0, duplicate: true } : { sent: r.sent, dropped: r.dropped });
   } catch (err) {
     log(`[push] ${parsed.event} failed: ${err && err.message}`);
     return reply(502, { error: 'push-failed' });

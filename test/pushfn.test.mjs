@@ -25,6 +25,9 @@ function fakeDb({ seen = null, subs = [{ id: 's1', endpoint: 'https://push.examp
       claimed.add(k);
       return true;
     },
+    releaseOnce: async (uid, key) => {
+      claimed.delete(`${uid}|${key}`);
+    },
     defaultHostSeen: async () => seen,
   };
 }
@@ -104,4 +107,35 @@ test('offline-check needs the cron secret and fires once per outage', async () =
   assert.equal(sent[0].body, 'Host KT-NO is offline');
   await handle(req({ event: 'offline-check' }, { 'x-cron-secret': 'cron-secret-123' }), deps);
   assert.equal(sent.length, 1);
+});
+
+// Review H4 (docs/REMOTE_HOST_PLAN.md "Security review"): the dedupe key was
+// spent before delivery, so a notification that reached no phone was lost.
+test('a notification that reached no phone releases its key, so a retry is sent', async () => {
+  const db = fakeDb();
+  let fail = true;
+  const sendPush = async () => {
+    if (fail) throw Object.assign(new Error('push service down'), { statusCode: 500 });
+  };
+  const deps = { env: ENV, fetchImpl: userFetch(OWNER), db: () => db, sendPush };
+  const body = { event: 'approval', machine: 'KT-PC', key: 'approval:retry-1' };
+  const first = await (await handle(req(body), deps)).json();
+  assert.equal(first.sent, 0);
+  assert.equal(db.claimed.size, 0, 'claim released');
+  fail = false;
+  const second = await (await handle(req(body), deps)).json();
+  assert.equal(second.sent, 1);
+  const third = await (await handle(req(body), deps)).json();
+  assert.equal(third.duplicate, true, 'a delivered key still fires once');
+});
+
+test('a subscriptions read that throws releases the key too (offline-check included)', async () => {
+  const db = fakeDb({ seen: { machine: 'KT', updatedAt: NOW - OFFLINE_MS - 1 } });
+  db.subscriptions = async () => {
+    throw new Error('subscriptions 500');
+  };
+  const deps = { env: ENV, fetchImpl: userFetch(OWNER), db: () => db, sendPush: async () => {}, now: () => NOW };
+  const res = await handle(req({ event: 'offline-check' }, { 'x-cron-secret': ENV.CRON_SECRET }), deps);
+  assert.equal(res.status, 502);
+  assert.equal(db.claimed.size, 0);
 });

@@ -7,7 +7,9 @@
 //
 //   chat.start     {repoId, prompt, model?, mode?, approvalTimeout?}
 //   chat.send      {sessionId, text}
-//   chat.approve   {requestId, decision: allow | deny | always}
+//   chat.approve   {requestId, decision: allow | deny | always, card}
+//                  card = {tool, summary, preview} as the phone showed it;
+//                  anything but the card this host emitted is refused
 //   chat.interrupt {sessionId}
 //   chat.end       {sessionId}
 //   chat.resume    {sessionId, prompt?, repoId?}
@@ -25,9 +27,10 @@
 
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const { clip } = require('./hostevents');
+const { clip, cleanCard } = require('./hostevents');
 
 const MAX_SESSIONS = 2;
 const MAX_PROMPT = 20000;
@@ -42,8 +45,41 @@ const ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
 const SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const REQUEST_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const DENY_MESSAGE = 'Denied from the phone';
+const CARD_FIELDS = ['tool', 'summary', 'preview'];
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * The absolute path of the claude CLI from the absolute PATH entries, never
+ * a bare 'claude': on Windows a bare name is looked up in the child's cwd
+ * (the repo) before PATH, so a `claude.exe` committed to a cloned repo would
+ * run instead of the CLI. A match inside `cwd` is refused. null = not found.
+ */
+function claudePath(env, cwd, { platform = process.platform, isFile = (f) => fs.statSync(f, { throwIfNoEntry: false })?.isFile() === true } = {}) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const key = Object.keys(env || {}).find((k) => k.toLowerCase() === 'path');
+  const dirs = String((key && env[key]) || '').split(platform === 'win32' ? ';' : ':');
+  const names = platform === 'win32' ? ['claude.exe'] : ['claude'];
+  const root = cwd ? p.resolve(cwd) : null;
+  for (const dir of dirs) {
+    if (!dir || !p.isAbsolute(dir)) continue;
+    const resolved = p.resolve(dir);
+    if (root) {
+      const rel = p.relative(root, resolved);
+      if (!rel || (!rel.startsWith('..') && !p.isAbsolute(rel))) continue;
+    }
+    for (const name of names) {
+      const file = p.join(resolved, name);
+      if (isFile(file)) return file;
+    }
+  }
+  return null;
+}
+
+/** The approval the phone signed must name the card it showed: what the host emitted, field by field. */
+function sameCard(shown, card) {
+  return isObject(shown) && isObject(card) && CARD_FIELDS.every((k) => shown[k] === card[k]);
+}
 
 // ---- pure parts (test/hostchat.test.js) ------------------------------------
 
@@ -197,8 +233,17 @@ function createHostChat(deps) {
   const clearTimer = deps.clearTimer || clearTimeout;
   const log = deps.log || ((l) => console.error(l));
   const maxSessions = deps.maxSessions || MAX_SESSIONS;
-  const notify = deps.notify || (() => {});
-  const changed = deps.onSessionsChanged || (() => {});
+  const resolveClaude = deps.claudePath || ((env, cwd) => claudePath(env, cwd));
+  // Callbacks into the host must never throw into a session's teardown.
+  const guard = (fn, what) => (...args) => {
+    try {
+      fn(...args);
+    } catch (err) {
+      log(`[hostchat] ${what} failed: ${err && err.message}`);
+    }
+  };
+  const notify = guard(deps.notify || (() => {}), 'notify');
+  const changed = guard(deps.onSessionsChanged || (() => {}), 'onSessionsChanged');
   /** sessionId -> live session */
   const live = new Map();
   /** sessionId -> {repoId, model, mode, approvalTimeoutMs}: what chat.resume needs, newest last */
@@ -231,7 +276,7 @@ function createHostChat(deps) {
   }
 
   function write(s, obj) {
-    if (s.ended || !s.child.stdin || s.child.stdin.destroyed) return false;
+    if (s.ended || s.endRequested || !s.child.stdin || s.child.stdin.destroyed || s.child.stdin.writableEnded) return false;
     try {
       s.child.stdin.write(`${typeof obj === 'string' ? obj : JSON.stringify(obj)}\n`);
       return true;
@@ -254,18 +299,20 @@ function createHostChat(deps) {
   }
 
   function onPermission(s, a) {
+    const card = cleanCard({ requestId: a.requestId, tool: a.tool, summary: toolSummary(a.tool, a.input, s.cwd), preview: toolPreview(a.tool, a.input) });
     const timer = s.approvalTimeoutMs
       ? setTimer(() => answer(s, a.requestId, 'timeout', { message: `No answer from the phone in ${Math.round(s.approvalTimeoutMs / 60000)} min` }), s.approvalTimeoutMs)
       : null;
-    s.pending.set(a.requestId, { input: a.input, suggestions: a.suggestions, timer });
-    emit(s, 'permission', { requestId: a.requestId, tool: a.tool, summary: toolSummary(a.tool, a.input, s.cwd), preview: toolPreview(a.tool, a.input) });
+    s.pending.set(a.requestId, { input: a.input, suggestions: a.suggestions, timer, card });
+    emit(s, 'permission', card);
     setStatus(s, 'waiting');
     notify('approval', { sessionId: s.id, key: `approval:${a.requestId}` });
   }
 
   /** A turn ended: one notification, keyed so it fires once. */
   function finished(s, kind) {
-    notify(kind, { sessionId: s.id, key: `${kind}:${s.id}:${s.turn}` });
+    // Per launch: a resumed session counts turns from 0 again, and a reused key never fires twice.
+    notify(kind, { sessionId: s.id, key: `${kind}:${s.id}:${s.launch}:${s.turn}` });
     s.turn++;
   }
 
@@ -349,9 +396,15 @@ function createHostChat(deps) {
   function launch({ sessionId, repoId, opts, resume, prompt }) {
     const cwd = deps.repoDir(repoId);
     if (!cwd) return { status: 'refused: unknown repo' };
+    const env = deps.env();
+    const command = resolveClaude(env, cwd);
+    if (!command) {
+      log('[hostchat] claude not found on PATH');
+      return { status: 'failed: no claude' };
+    }
     let child;
     try {
-      child = deps.spawn('claude', chatArgs({ ...opts, sessionId, resume }), { cwd, env: deps.env(), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child = deps.spawn(command, chatArgs({ ...opts, sessionId, resume }), { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (err) {
       log(`[hostchat] spawn failed: ${err.message}`);
       return { status: 'failed: spawn' };
@@ -373,9 +426,12 @@ function createHostChat(deps) {
       rl: null,
       stderrTail: '',
       turn: 0,
+      launch: deps.randomUUID().slice(0, 8),
     };
     live.set(sessionId, s);
     remember(sessionId, { repoId, ...opts });
+    // EPIPE / write-after-end on a dying child's stdin is an 'error' event: unhandled, it would take the host down.
+    if (child.stdin && typeof child.stdin.on === 'function') child.stdin.on('error', (err) => log(`[hostchat] session ${sessionId} stdin: ${err.code || err.message}`));
     s.rl = readline.createInterface({ input: child.stdout });
     s.rl.on('line', (line) => onLine(s, line));
     if (child.stderr) {
@@ -427,6 +483,9 @@ function createHostChat(deps) {
     const opts = sessionOptions({ ...(k || {}), ...p, approvalTimeout: p.approvalTimeout ?? (k ? k.approvalTimeoutMs / 60000 : undefined) });
     if (opts.error) return { status: opts.error };
     if (full()) return { status: 'refused: too many sessions' };
+    // The session's earlier rows hold seq 0..n: new ones continue after them, or the unique index drops them all.
+    if (typeof deps.events.continueSession === 'function') await deps.events.continueSession(p.sessionId);
+    if (live.has(p.sessionId) || full()) return { status: 'refused: too many sessions' };
     return launch({ sessionId: p.sessionId, repoId, opts, resume: true, prompt: p.prompt });
   }
 
@@ -434,8 +493,8 @@ function createHostChat(deps) {
     const s = liveSession(p);
     if (!s) return { status: 'refused: no session' };
     if (!validPrompt(p.text)) return { status: 'refused: text' };
-    emit(s, 'prompt', { text: p.text });
     if (!write(s, userLine(p.text))) return { status: 'failed: closed' };
+    emit(s, 'prompt', { text: p.text });
     setStatus(s, 'working');
     return { status: 'sent' };
   }
@@ -444,7 +503,15 @@ function createHostChat(deps) {
     if (!isObject(p) || typeof p.requestId !== 'string' || !REQUEST_RE.test(p.requestId)) return { status: 'refused: requestId' };
     if (!DECISIONS.includes(p.decision)) return { status: 'refused: decision' };
     for (const s of live.values()) {
-      if (s.pending.has(p.requestId)) return answer(s, p.requestId, p.decision) ? { status: 'answered' } : { status: 'failed' };
+      const pending = s.pending.get(p.requestId);
+      if (!pending) continue;
+      // host_events rows can be edited by anyone holding the cloud session: an
+      // approval counts only for the card this host actually emitted.
+      if (!sameCard(p.card, pending.card)) {
+        log(`[hostchat] approval for ${p.requestId} names a different card, refused`);
+        return { status: 'refused: card mismatch' };
+      }
+      return answer(s, p.requestId, p.decision) ? { status: 'answered' } : { status: 'failed' };
     }
     return { status: 'refused: no such request' };
   }
@@ -459,6 +526,7 @@ function createHostChat(deps) {
 
   function endSession(s) {
     s.endRequested = true;
+    clearTimer(s.killTimer);
     try {
       if (s.child.stdin && !s.child.stdin.destroyed) s.child.stdin.end();
     } catch {
@@ -516,6 +584,8 @@ module.exports = {
   createHostChat,
   sessionOptions,
   chatArgs,
+  claudePath,
+  sameCard,
   translate,
   toolSummary,
   toolPreview,

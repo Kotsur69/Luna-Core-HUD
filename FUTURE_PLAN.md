@@ -48,6 +48,24 @@ Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 - Auto-proceed against a real dropped connection in the wild.
 - The packaged-build spawn check (§D2a in the engineering notes) was last done
   on Electron 33; redo it on the current Electron 43 build.
+- **Luna host + phone control** (built + reviewed, not live; details in
+  [`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md) "Resume here"):
+  - **Migrations** to apply in Supabase, in order: `repos_godmode_snapshots`,
+    `host_snapshot`, `host_commands`, `host_pairing`, `host_events`, `push`
+    (`supabase/migrations/2026102*`).
+  - **Edge function deploy:** `supabase functions deploy push --no-verify-jwt`,
+    secrets `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` /
+    `OWNER_USER_ID` / `CRON_SECRET` / `PUSH_LANG`, the 2-min
+    `{"event":"offline-check"}` cron, Vercel env `VITE_VAPID_PUBLIC_KEY`.
+  - **Real phone pairing** on KT-PC-LLM, KT-NO-MMAZUR and the MacBook (codes
+    match, confirm on the host), then a signed `news.scan`, `repo.clone` and
+    a chat with Allow / Deny / Always, Stop, End, Resume; "Forget all phones"
+    must refuse the next command.
+  - **Push on iOS** (installed PWA, iOS 16.4+): approval, session done, host
+    offline (> 5 min), usage 80 % / 95 %.
+  - The claude CLI on a Windows host must be the native install
+    (`~/.local/bin/claude.exe`): the host now spawns an absolute path and
+    never a bare `claude` (security review S-M3).
 
 ## Known issues
 

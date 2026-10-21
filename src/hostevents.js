@@ -41,7 +41,7 @@ const REQUEST_RE = /^[A-Za-z0-9_-]{1,80}$/;
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 // eslint-disable-next-line no-control-regex
-const cleanShort = (v, max = MAX_SHORT) => (typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, max) : '');
+const cleanShort = (v, max = MAX_SHORT) => (typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, max).trimEnd() : '');
 /** Multi-line text keeps \n and \t; other control characters go. */
 // eslint-disable-next-line no-control-regex
 const cleanText = (v, max = MAX_TEXT) => (typeof v === 'string' ? v.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').slice(0, max) : '');
@@ -99,6 +99,12 @@ function cleanData(kind, d) {
       return null;
   }
 }
+
+/**
+ * An approval card exactly as the phone will read it back (parseEvent): the
+ * host keeps this copy and only accepts a chat.approve naming the same one.
+ */
+const cleanCard = (d) => cleanData('permission', d);
 
 /**
  * A raw `host_events` row -> {sessionId, seq, host, kind, data, at}, or null.
@@ -202,6 +208,30 @@ function createHostEvents({ client, host, now = Date.now, setTimer = setTimeout,
     flush,
     /** Resolves once every row emitted so far was written (or failed). */
     idle: () => chain,
+    /**
+     * Before a resumed session writes again: its next seq comes after the
+     * highest one already stored. A failed read leaves the counter as it is
+     * (inserts may then collide and be logged, never thrown).
+     */
+    async continueSession(sessionId) {
+      if (!isSessionId(sessionId)) return;
+      try {
+        const { data, error } = await client
+          .from('host_events')
+          .select('seq')
+          .eq('session_id', sessionId)
+          .order('seq', { ascending: false })
+          .limit(1);
+        if (error || !Array.isArray(data)) {
+          log(`[hostevents] seq read failed: ${(error && error.code) || 'error'}`);
+          return;
+        }
+        const top = data[0] && Number.isInteger(data[0].seq) ? data[0].seq : -1;
+        if (top + 1 > (seqs.get(sessionId) || 0)) seqs.set(sessionId, top + 1);
+      } catch (err) {
+        log(`[hostevents] seq read crashed: ${err && err.message}`);
+      }
+    },
     /** Forgets a session's counters once it ended (its rows stay). */
     forget(sessionId) {
       flush(sessionId);
@@ -240,6 +270,7 @@ module.exports = {
   parseEvent,
   eventsFrom,
   sessionsToDrop,
+  cleanCard,
   clip,
   byteLength,
   KINDS,

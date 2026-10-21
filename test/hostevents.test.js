@@ -190,3 +190,38 @@ test('eventsFrom sorts by seq and drops duplicates', () => {
   ];
   assert.deepEqual(ev.eventsFrom(rows).map((e) => e.data.text), ['a', 'c']);
 });
+
+// Review J-H2 (docs/REMOTE_HOST_PLAN.md "Security review"): a resumed session
+// restarted seq at 0 and every row hit the unique (user_id, session_id, seq) index.
+test('continueSession: a resumed session writes after its highest stored seq', async () => {
+  const sid = '11111111-2222-4333-8444-555555555555';
+  const inserts = [];
+  const client = {
+    from: () => ({
+      select: () => ({ eq: () => ({ order: () => ({ limit: async () => ({ data: [{ seq: 41 }], error: null }) }) }) }),
+      insert: async (row) => {
+        inserts.push(row);
+        return { error: null };
+      },
+    }),
+  };
+  const w = ev.createHostEvents({ client, host: 'KT-PC', log: () => {} });
+  await w.continueSession(sid);
+  await w.emit(sid, 'status', { status: 'working' });
+  assert.equal(inserts[0].seq, 42);
+});
+
+test('continueSession: a failed read leaves the counter and never throws', async () => {
+  const sid = '11111111-2222-4333-8444-555555555555';
+  const client = { from: () => ({ select: () => { throw new Error('offline'); }, insert: async () => ({ error: null }) }) };
+  const w = ev.createHostEvents({ client, host: 'KT-PC', log: () => {} });
+  await w.continueSession(sid);
+});
+
+test('cleanCard is what the phone reads back: cleaning twice changes nothing', () => {
+  const summary = `${'a'.repeat(299)} tail`;
+  const once = ev.cleanCard({ requestId: 'r1', tool: 'Bash', summary, preview: 'x\n' });
+  const twice = ev.parseEvent({ session_id: '11111111-2222-4333-8444-555555555555', seq: 0, host: 'H', kind: 'permission', data: once, at: new Date().toISOString() }).data;
+  assert.deepEqual(twice, once);
+  assert.equal(once.summary.endsWith(' '), false);
+});

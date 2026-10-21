@@ -191,7 +191,8 @@ export function mountHost(main, { cloud, toast }) {
 
   function approvalCard(a) {
     const decide = (decision) => async () => {
-      const r = await run(open.host, 'chat.approve', { requestId: a.requestId, decision });
+      // The card as shown: the host refuses an approval of anything else (a cloud row edited behind its back).
+      const r = await run(open.host, 'chat.approve', { requestId: a.requestId, decision, card: { tool: a.tool, summary: a.summary, preview: a.preview } });
       if (r) refresh();
     };
     return h(
