@@ -206,6 +206,7 @@ const { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, 
 // God Mode v2 (ORCHESTRATOR_PLAN.md slices 3-5): headless planner, plan board,
 // supervisor + per-worker finish (verify, push, tick to-dos), integrator.
 const { createOrchestra, BRIEF_DIR } = require('./orchestra');
+const { createPowerCtl } = require('./powerctl');
 const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha } = require('./orchestraFinish');
 const orchestraStore = require('./orchestraStore');
@@ -1060,6 +1061,32 @@ const orchestra = createOrchestra({
   // A restored run's folders and briefs re-homed onto this PC (src/projects.js).
   resolvePath: (p) => resolveStoredPath(p),
   resolveFile: (p) => resolveStoredPath(p, (f) => fs.existsSync(f)),
+  // Sleep at the usage limit / shut down when done (src/orchestraPower.js).
+  power: createPowerCtl(),
+  awake: { release: () => overnight.suspendAwake(), restore: () => overnight.restoreAwake() },
+  flush: () => {
+    if (todoSync) todoSync.flush();
+  },
+  otherRunsActive: () => overnight.current().length > 0,
+  appendReport: (planId, line) => {
+    if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return;
+    try {
+      fs.appendFileSync(path.join(userDir(), RUN_REPORT_DIR, `${planId}.md`), `${line}\n`, { encoding: 'utf8', mode: 0o600 });
+    } catch (err) {
+      console.error('[orchestra] could not append to the run report:', err && err.message);
+    }
+  },
+  // Shown whether or not toasts are on in Settings: the PC is about to go.
+  notifyPower: (kind) => {
+    if (!Notification.isSupported()) return;
+    const body = {
+      sleepSoon: 'Usage limit - the PC sleeps in 60 s and wakes for the reset. Cancel on the God Mode board.',
+      sleepFailed: 'Could not schedule the wake-up, so the PC stays awake.',
+      shutdownSoon: 'Run finished - the PC shuts down in 2 minutes. Cancel on the God Mode board.',
+      shutdownFailed: 'Could not schedule the shutdown.',
+    }[kind];
+    if (body) new Notification({ title: 'LunaCore God Mode', body }).show();
+  },
   onRunEvent: (kind) => {
     if (readUiPrefs().voiceEnabled === false) return;
     if (kind === 'done') playCue('voice.done');
@@ -2967,6 +2994,14 @@ function registerIpc() {
   // (integrate + clean up + report). Both validated in orchestra.js.
   ipcMain.handle('orchestra:unschedule', (_event, payload) => orchestra.unschedule(payload));
   ipcMain.handle('orchestra:finish', (_event, payload) => orchestra.finishRun(payload));
+  // Sleep / shutdown countdowns: only the two known names are accepted, and
+  // the renderer can only ever cancel - never start one.
+  ipcMain.handle('orchestra:cancel-power', (_event, what) => {
+    if (what === 'sleep') return orchestra.cancelSleep();
+    if (what === 'shutdown') return orchestra.cancelShutdown();
+    return { ok: false, error: 'badPower' };
+  });
+  ipcMain.handle('orchestra:check-wake', () => orchestra.checkWake());
   // Live run options: a plain object of known boolean flags, checked here -
   // the renderer is untrusted.
   ipcMain.handle('orchestra:set-options', (_event, patch) =>
@@ -3285,6 +3320,8 @@ app.whenReady().then(() => {
   // projects load: a restored run must belong to one of them.
   orchestra.restore();
   setInterval(() => orchestra.tick(), ORCHESTRA_TICK_MS).unref();
+  // Back from sleep: re-arm or resume a paused run, drop the wake task.
+  powerMonitor.on('resume', () => orchestra.onSystemResume());
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();
   startUsageWatcher();

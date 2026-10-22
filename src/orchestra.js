@@ -40,6 +40,8 @@ const { createFixupRunner } = require('./orchestraFixup');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 const { FREE_BRANCH_PREFIX, isSafeFreeBranch, freeRunSettings, integrationFor } = require('./orchestraFree');
 const { cleanupFailedLaunch, sweepOrphanBranches } = require('./orchestraCleanup');
+const { createPowerFlow } = require('./orchestraPower');
+const { createPowerCtl } = require('./powerctl');
 
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
@@ -213,6 +215,8 @@ function withStallNote(text, reason, detail) {
  *   writeReport?: Function, notify?: Function, putSnapshot?: Function, sleep?: Function,
  *   runSelfCheck?: Function, pushBranch?: Function, deleteBranch?: Function,
  *   listOwnBranches?: Function, worktreeBranches?: Function, log?: Function,
+ *   power?: object, awake?: {release:Function, restore:Function}, flush?: Function,
+ *   notifyPower?: Function, appendReport?: Function, otherRunsActive?: () => boolean,
  * }} deps
  */
 function createOrchestra(deps) {
@@ -304,8 +308,40 @@ function createOrchestra(deps) {
     putSnapshot: deps.putSnapshot,
     onReport: deps.onReport,
     sleep: deps.sleep,
+    onIdle: () => afterFinalize(),
   });
   const isBusy = () => busy || pumping || finalizer.isRunning();
+
+  // Sleep at the usage limit / shut down when done (orchestraPower.js).
+  const approvalsPending = () =>
+    plan.packages.some((p) => p.state === 'stalled' && p.error === 'needsApproval' && p.sessionId && sessionAlive(p.sessionId));
+  const powerFlow = createPowerFlow({
+    power: deps.power || createPowerCtl({ platform: 'unsupported' }),
+    getRun: () =>
+      plan
+        ? {
+            planId: plan.id,
+            pausedUntil: plan.pausedUntil,
+            killed: plan.killed,
+            approvalsPending: approvalsPending(),
+            options: sup.normalizeOptions(plan.options),
+          }
+        : null,
+    awake: deps.awake,
+    flush: deps.flush,
+    notify: deps.notifyPower,
+    appendReport: deps.appendReport,
+    onChange: () => onChange(view()),
+    graceMs: RESUME_GRACE_MS,
+    now,
+    setTimer,
+    clearTimer,
+    log,
+  });
+  // Set when a run settles on its own; only such a run may shut the PC down.
+  let settledFinalize = false;
+  const background = (promise, where) =>
+    promise.catch((err) => onRunEvent('error', { where, message: err instanceof Error ? err.message : String(err) }));
 
   /**
    * Brings back the run saved by the previous LunaCore. Not in the
@@ -375,6 +411,7 @@ function createOrchestra(deps) {
       freeMode: plan.freeMode === true,
       options: sup.normalizeOptions(plan.options),
       integration: { ...plan.integration, running: finalizer.isRunning() },
+      power: powerFlow.view(),
       overlaps: sup.liveOverlaps(plan.packages),
       suggestions: sup.allowSuggestions(plan.approvalLog).filter((s) => !(plan.allowedTools || []).includes(s.rule)),
       tally: sup.tally(plan.packages),
@@ -727,6 +764,7 @@ function createOrchestra(deps) {
     // A scheduled automatic relaunch keeps the run open.
     if (retryTimers.size) return;
     plan.settled = true;
+    settledFinalize = true;
     const allPushed = plan.packages.every((p) => p.state === 'pushed');
     onRunEvent(allPushed ? 'done' : 'needYou', sup.tally(plan.packages));
     startFinalize();
@@ -736,6 +774,19 @@ function createOrchestra(deps) {
     finalizer
       .finalize()
       .catch((err) => onRunEvent('error', { where: 'finalize', message: err instanceof Error ? err.message : String(err) }));
+  }
+
+  /**
+   * The finalizer went idle. A run that settled on its own ('done' /
+   * 'needYou') may now shut the PC down - never a killed one, never with a
+   * package, finalize or another God Mode run still going.
+   */
+  function afterFinalize() {
+    if (!settledFinalize || !plan) return;
+    settledFinalize = false;
+    if (!plan.settled || plan.killed) return;
+    const busyNow = isBusy() || plan.packages.some(sup.isActive) || !!(deps.otherRunsActive && deps.otherRunsActive());
+    background(powerFlow.afterFinalize({ busy: busyNow }), 'shutdown');
   }
 
   /** Launches whatever is ready, while slots are free. Re-entrancy safe. */
@@ -1056,6 +1107,20 @@ function createOrchestra(deps) {
     onRunEvent('resumed');
     commit();
     kick();
+    background(powerFlow.cancelSleep(), 'sleep');
+  }
+
+  /**
+   * electron powerMonitor 'resume': timers may not have counted the sleep.
+   * Past the reset -> resume now; before it -> re-arm the resume timer.
+   */
+  function onSystemResume() {
+    background(powerFlow.onSystemResume(), 'sleep');
+    if (!plan || !plan.pausedUntil) return;
+    if (resumeTimer) clearTimer(resumeTimer);
+    resumeTimer = null;
+    if (now() >= plan.pausedUntil) resume();
+    else resumeTimer = setTimer(resume, plan.pausedUntil - now() + RESUME_GRACE_MS);
   }
 
   /**
@@ -1075,6 +1140,7 @@ function createOrchestra(deps) {
     resumeTimer = setTimer(resume, until - now() + RESUME_GRACE_MS);
     onRunEvent('paused', { until });
     commit();
+    background(powerFlow.onPaused(), 'sleep');
   }
 
   /**
@@ -1191,6 +1257,9 @@ function createOrchestra(deps) {
       writePty(p.sessionId, ESC);
       patch(p.id, { state: 'killed' });
     }
+    settledFinalize = false;
+    background(powerFlow.cancelSleep(), 'sleep');
+    background(powerFlow.cancelShutdown(), 'shutdown');
     onRunEvent('killed');
     commit();
     return true;
@@ -1231,6 +1300,7 @@ function createOrchestra(deps) {
     if (!plan.runStartedAt) plan.runStartedAt = now();
     plan.killed = false;
     plan.settled = false;
+    settledFinalize = false;
     commit();
     await pump();
     return { ok: true, plan: view() };
@@ -1263,6 +1333,7 @@ function createOrchestra(deps) {
     plan.options = sup.normalizeOptions({ ...plan.options, ...changes });
     onRunEvent('options', { ...plan.options });
     commit();
+    background(powerFlow.onOptions(plan.options), 'options');
     return { ok: true, options: { ...plan.options } };
   }
 
@@ -1293,6 +1364,10 @@ function createOrchestra(deps) {
     unschedule,
     finishRun,
     setOptions,
+    onSystemResume,
+    cancelSleep: () => powerFlow.cancelSleep(),
+    cancelShutdown: () => powerFlow.cancelShutdown(),
+    checkWake: () => powerFlow.checkWake(),
     sweepBranches,
     runFixup: (args) => fixup.run(args),
     planWait: () => planWaiter.view(),

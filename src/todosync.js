@@ -250,6 +250,11 @@ function startTodoSync({ getProjects, onChanged, cloud = null }) {
   return {
     /** Debounced sync, e.g. after a write: a burst of edits publishes once. */
     soon,
+    /** Syncs right now, e.g. before the PC shuts down. */
+    flush() {
+      clearTimeout(timer);
+      run();
+    },
     stop() {
       clearTimeout(timer);
       clearInterval(interval);

@@ -7,6 +7,8 @@
 //    conflicting files, what to do next and when the attempt happened.
 //  - runOptionsRow(): the always-visible "Run options" checkboxes, reflecting
 //    plan.options as main pushes it.
+//  - powerBanner(): the sleep / shutdown countdown with its cancel button
+//    (src/orchestraPower.js), counting down on its own.
 // Every git- or model-derived string goes in through textContent only.
 // ============================================================================
 
@@ -22,6 +24,9 @@ const STAGES = new Set(['worktree', 'brief', 'tab', 'launch', 'depMerge', 'depVe
 const MAX_FILES_SHOWN = 10;
 // Live run switches (orchestraSupervisor RUN_OPTION_FLAGS).
 const RUN_OPTIONS = ['sleepOnLimit', 'shutdownWhenDone'];
+// canWake() reasons with their own text (orch.wake.<reason>).
+const WAKE_REASONS = new Set(['noSleepState', 'wakeTimersOff', 'wakeTimersImportantOnly', 'unsupported', 'unknown']);
+const COUNTDOWN_TICK_MS = 1000;
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -88,7 +93,58 @@ export function runOptionsRow(plan, { disabled, onToggle }) {
     box.addEventListener('change', () => onToggle(key, box.checked));
     label.append(box, document.createTextNode(` ${t(`orch.runopt.${key}`)}`));
     item.append(label, el('div', 'orchestra__meta', t(`orch.runopt.${key}.note`)));
+    const wake = plan.power && plan.power.wake;
+    if (key === 'sleepOnLimit' && wake && WAKE_REASONS.has(wake.reason)) {
+      item.append(el('div', `orchestra__meta${wake.ok ? '' : ' is-warn'}`, t(`orch.wake.${wake.reason}`)));
+    }
     row.append(item);
   }
   return row;
+}
+
+const clockText = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const secondsLeft = (at) => Math.max(0, Math.ceil((at - Date.now()) / 1000));
+
+/** The live text of a countdown, or of its phase before / after it. */
+function powerText(kind, state) {
+  if (kind === 'sleep') {
+    if (state.phase === 'scheduling') return t('orch.power.sleepScheduling');
+    if (state.phase === 'sleeping') return t('orch.power.sleeping', { time: clockText(state.wakeAt) });
+    return t('orch.power.sleepCountdown', { s: secondsLeft(state.at), time: clockText(state.wakeAt) });
+  }
+  if (state.phase === 'arming') return t('orch.power.shutdownArming');
+  return t('orch.power.shutdownCountdown', { s: secondsLeft(state.at) });
+}
+
+/**
+ * The sleep / shutdown banner, or null when neither is going. It ticks its
+ * own seconds, so the board is not re-rendered every second.
+ * @param {{power?:object}} plan
+ * @param {{onCancel:(what:'sleep'|'shutdown') => void}} opts
+ * @returns {HTMLElement|null}
+ */
+export function powerBanner(plan, { onCancel }) {
+  const power = plan.power && typeof plan.power === 'object' ? plan.power : {};
+  const box = el('div', 'orchestra__power');
+  for (const kind of ['shutdown', 'sleep']) {
+    const state = power[kind];
+    if (!state) continue;
+    const line = el('p', 'orchestra__msg is-warn', powerText(kind, state));
+    line.setAttribute('role', 'status');
+    const btn = el('button', 'pad-send', t(kind === 'sleep' ? 'orch.power.cancelSleep' : 'orch.power.cancelShutdown'));
+    btn.type = 'button';
+    btn.addEventListener('click', () => onCancel(kind));
+    box.append(line, btn);
+    if (Number.isFinite(state.at)) {
+      const timer = setInterval(() => {
+        if (!line.isConnected) clearInterval(timer);
+        else line.textContent = powerText(kind, state);
+      }, COUNTDOWN_TICK_MS);
+    }
+  }
+  if (power.sleepError) box.append(el('p', 'orchestra__msg is-bad', t('orch.power.sleepFailed', { reason: power.sleepError })));
+  if (power.shutdownError) {
+    box.append(el('p', 'orchestra__msg is-bad', t('orch.power.shutdownFailed', { reason: power.shutdownError })));
+  }
+  return box.childElementCount ? box : null;
 }
