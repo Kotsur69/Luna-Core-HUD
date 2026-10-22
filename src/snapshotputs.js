@@ -10,6 +10,8 @@
 //                      file, then put the last runs
 //   godmode.live(s)    a live run / tab lights changed (godmodelivepub.js):
 //                      put the history with `live` and `tabs` over it
+//   godmode.markSeen(id) the attention inbox opened run `id`: add it to
+//                      the same file's `seen` list, then put
 //
 // Every put is skipped while logged out, and a failure only logs - it never
 // throws into the git station or the end of a God Mode run. cloudsnapshots
@@ -22,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { reposSnapshot } = require('./repossnapshot');
-const { addRun, withLive } = require('./godmodesnapshot');
+const { addRun, addSeen, withLive, RUN_ID_RE } = require('./godmodesnapshot');
 const { createRepoKeys, findRepo } = require('./missionrepokey');
 
 const errText = (err) => (err instanceof Error ? err.message : String(err));
@@ -90,19 +92,24 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
   // history file holds finished runs, and a restart publishes afresh.
   let lastLive = { live: null, tabs: [] };
 
+  /** Rewrites the local history file with `step(prev)` and puts it with the live run over it. */
+  function writeHistory(step) {
+    const file = historyFile();
+    const next = step(file ? readHistory(file) : null);
+    if (file) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${JSON.stringify(next)}\n`, { encoding: 'utf8', mode: 0o600 });
+    }
+    const s = ready();
+    return s ? s.put('godmode', withLive(next, lastLive, { machine, now: now() })) : false;
+  }
+
   const godmode = {
     /** Adds a finalized run (godmodesnapshot runEntry) and puts the history. Never throws. */
     add(run) {
       return safePut('godmode', async () => {
         if (!run) return false;
-        const file = historyFile();
-        const next = addRun(file ? readHistory(file) : null, run, { machine, now: now() });
-        if (file) {
-          fs.mkdirSync(path.dirname(file), { recursive: true });
-          fs.writeFileSync(file, `${JSON.stringify(next)}\n`, { encoding: 'utf8', mode: 0o600 });
-        }
-        const s = ready();
-        return s ? s.put('godmode', withLive(next, lastLive, { machine, now: now() })) : false;
+        return writeHistory((prev) => addRun(prev, run, { machine, now: now() }));
       });
     },
     /** Puts the run history with this live run / tab list over it. Never throws. */
@@ -114,6 +121,18 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
         const file = historyFile();
         return s.put('godmode', withLive(file ? readHistory(file) : null, lastLive, { machine, now: now() }));
       });
+    },
+    /** Marks run `id` seen in this PC's own row (the attention inbox). Never throws. */
+    markSeen(id) {
+      return safePut('godmode', async () => {
+        if (typeof id !== 'string' || !RUN_ID_RE.test(id)) return false;
+        return writeHistory((prev) => addSeen(prev, id, { machine, now: now() }));
+      });
+    },
+    /** This PC's own snapshot as stored on disk (unvalidated), or null. */
+    read() {
+      const file = historyFile();
+      return file ? readHistory(file) : null;
     },
   };
 

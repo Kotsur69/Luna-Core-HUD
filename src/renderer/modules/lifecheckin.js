@@ -1,11 +1,12 @@
 // ============================================================================
 // LunaCore - Life dashboard: daily check-in (renderer)
 // ----------------------------------------------------------------------------
-// Sleep hours (0-16, half hours) and energy 1-5. The prompt shows above the
-// tabs on the first dashboard open of a local day and can be skipped (the
-// skip is saved, so it asks once a day); the Overview card shows today's
-// answer and the last week, and edits today at any time. Stored by
-// src/lifecheckin.js through lifedaily.js.
+// Sleep hours (0-16, half hours) and energy 1-5. The Health tab holds it:
+// the form while today is open (it can be skipped - the skip is saved), else
+// today's answer and the last week; its tab button carries a '1' badge while
+// today is open, and the attention inbox lists it. The Overview card shows
+// the same and edits today at any time. Stored by src/lifecheckin.js through
+// lifedaily.js.
 // ============================================================================
 
 'use strict';
@@ -74,15 +75,6 @@ function checkinForm(entry, { onSkip, onDone } = {}) {
   return form;
 }
 
-/** The once-a-day prompt above the tabs. */
-export function checkinPrompt() {
-  const box = el('section', 'life-prompt__card');
-  box.setAttribute('aria-label', t('life.checkin.title'));
-  box.append(el('h3', 'life-prompt__title', t('life.checkin.prompt')));
-  box.append(checkinForm(null, { onSkip: () => setCheckin(getDaily().checkin.today, null, null) }));
-  return box;
-}
-
 function lastWeek(c) {
   const list = el('ol', 'life-checkin__week');
   list.setAttribute('aria-label', t('life.checkin.week'));
@@ -96,6 +88,26 @@ function lastWeek(c) {
     list.append(li);
   }
   return list;
+}
+
+/**
+ * The Health tab: only the check-in. While today is open (not answered, not
+ * skipped) it shows the form with "Not today", plus the last 7 days;
+ * otherwise the same card as the Overview.
+ */
+export function renderHealth(root) {
+  const redraw = () => renderHealth(root);
+  const c = getDaily().checkin;
+  const wrap = el('div', 'life-health');
+  if (c && c.ok && c.entry === null && !isEditing) {
+    const card = bucket('life.checkin.title', 'life-checkin');
+    card.body.append(el('p', 'life-prompt__title', t('life.checkin.prompt')));
+    card.body.append(checkinForm(null, { onSkip: () => setCheckin(c.today, null, null) }), lastWeek(c));
+    wrap.append(card.sec);
+  } else {
+    wrap.append(checkinCard(redraw));
+  }
+  root.replaceChildren(wrap);
 }
 
 /** Overview card: today's sleep + energy, editable, and the last 7 days. */

@@ -583,3 +583,7 @@
 .mission-brief__sub { margin: var(--space-2) 0 var(--space-1); font-size: var(--fs-xs); color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
 .mission-brief__list { margin: 0; padding-left: var(--space-6); }
 .mission-brief__nudge { color: var(--warn); }
+
+/* ---- Health tab badge (modules/lifepanel.js): '1' while today's check-in is open ---- */
+.life-tab__badge { display: inline-block; min-width: 1rem; margin-left: var(--space-2); padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--bad); color: var(--bg-panel-2); font-size: var(--fs-2xs); font-weight: 700; line-height: 1rem; text-align: center; }
+.life-tab__badge[hidden] { display: none; }

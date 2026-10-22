@@ -1,8 +1,8 @@
 // ============================================================================
 // LunaCore - Mission Control: weekly / daily brief card (renderer, W6)
 // ----------------------------------------------------------------------------
-// A strip above the Mission Control columns (src/missionbrief.js via
-// mission:brief*): the weekly brief (made on its own, once per ISO week) and
+// Its own tall overlay, opened by the 'Brief' button in Mission Control's top
+// bar (src/missionbrief.js via mission:brief*): the weekly brief (made on its own, once per ISO week) and
 // the daily brief, which only the 'Brief me' button makes. Each shows its
 // headline, priorities, events with weather, to-dos, mail that needs a call,
 // news, the call's cost and a history picker. A brief whose model answer was
@@ -15,7 +15,9 @@
 
 import { t } from './util.js';
 import { openLifeTab } from './lifepanel.js';
+import { createTallOverlay } from './talloverlay.js';
 
+let overlay = null;
 let view = null;
 let pending = null; // kind waiting for an overwrite confirm
 let running = null;
@@ -158,7 +160,13 @@ function controls() {
     go.disabled = Boolean(running);
     bar.append(go);
   }
-  if (shown === 'weekly') bar.append(btn(t('mc.brief.review'), () => openLifeTab('week')));
+  if (shown === 'weekly') {
+    bar.append(btn(t('mc.brief.review'), () => {
+      // The Life dashboard would open under this overlay otherwise.
+      if (overlay) overlay.close();
+      openLifeTab('week');
+    }));
+  }
   if (view) {
     const model = el('select', 'mc-input');
     model.setAttribute('aria-label', t('mc.brief.model'));
@@ -187,10 +195,24 @@ function draw(status) {
   rootEl.replaceChildren(...parts);
 }
 
-/** Mission Control opened: show the strip and read the newest briefs (no model call). */
+/** Renders the brief into `root` and reads the newest briefs (no model call). */
 export function showBrief(root) {
   rootEl = root;
   root.hidden = false;
   draw('');
   load();
+}
+
+/** Mission Control's 'Brief' button: the brief in its own tall overlay. */
+export function openBriefOverlay() {
+  if (!overlay) {
+    overlay = createTallOverlay({ id: 'mission-brief-overlay', glyph: '◎', titleKey: 'mc.brief.overlayTitle' });
+    const root = document.createElement('div');
+    root.className = 'mission-brief mission-brief--overlay';
+    root.setAttribute('aria-live', 'polite');
+    overlay.body.append(root);
+    rootEl = root;
+  }
+  overlay.open();
+  showBrief(rootEl);
 }

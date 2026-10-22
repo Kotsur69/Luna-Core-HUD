@@ -251,7 +251,7 @@ function createFinalizer(deps) {
     const file = deps.writeReport ? deps.writeReport(plan.id, text) : null;
     const pushed = plan.packages.filter((p) => p.state === 'pushed').length;
     if (deps.notify) deps.notify({ pushed, total: plan.packages.length, failed: plan.integration.state === 'failed' });
-    putSnapshot(view, extra);
+    putSnapshot(view, { ...extra, report: text });
     sendReport(plan, view, extra, text);
     return file;
   }

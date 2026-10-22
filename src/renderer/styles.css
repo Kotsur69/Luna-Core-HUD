@@ -5509,3 +5509,99 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 
 /* God Mode sleep / shutdown countdown (orchestraDetails.js powerBanner). */
 .orchestra__power { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
+
+/* ==========================================================================
+   Attention inbox, God Mode run summary, Mission Control brief overlay
+   (modules/talloverlay.js, inbox.js, godmodesummary.js, missionbriefview.js).
+   The Settings overlay (.termcustom) at a taller size; theme tokens only, so
+   it reads the same in dark and light themes.
+   ========================================================================== */
+.tall-overlay { padding-top: 6vh; }
+.tall-overlay__modal { width: min(820px, 94vw); height: 84vh; max-height: 84vh; }
+.tall-overlay__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tall-overlay__body { flex: 1; overscroll-behavior: contain; }
+
+/* '!' chip and its red count badge (hidden at 0 via [hidden]). */
+.inbox-chip { position: relative; font-weight: 700; }
+.inbox-chip__badge {
+  min-width: 1.1rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bad);
+  color: var(--bg-panel-2);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  line-height: 1.1rem;
+  text-align: center;
+}
+.inbox-chip__badge[hidden] { display: none; }
+
+.inbox__list { display: flex; flex-direction: column; gap: var(--space-3); }
+.inbox__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+  width: 100%;
+  padding: var(--space-5) var(--space-6);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
+}
+.inbox__item:hover { border-color: var(--edge-glow); box-shadow: 0 0 var(--glow-size-md) var(--glow); }
+.inbox__item:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.inbox__glyph { flex: none; width: 1.5rem; color: var(--neon-cyan); font-size: var(--fs-lg); text-align: center; }
+.inbox__text { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.inbox__title { font-weight: 600; overflow-wrap: anywhere; }
+.inbox__sub { font-size: var(--fs-xs); color: var(--text-dim); }
+.inbox__empty { padding: var(--space-8) 0; text-align: center; }
+
+.gm-sum__facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-7); margin: 0 0 var(--space-7); font-size: var(--fs-sm); }
+.gm-sum__facts dt { color: var(--text-dim); }
+.gm-sum__facts dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.gm-sum__sec { margin-bottom: var(--space-7); }
+.gm-sum__list { margin: 0; padding-left: var(--space-7); display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-sm); color: var(--text); overflow-wrap: anywhere; }
+.gm-sum__tail { list-style: none; margin-left: var(--space-5); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); }
+.gm-sum__link { padding: 0; border: none; background: none; color: var(--neon-cyan); font: inherit; text-align: left; text-decoration: underline; cursor: pointer; overflow-wrap: anywhere; }
+.gm-sum__link:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.gm-sum__table-wrap { overflow-x: auto; }
+.gm-sum__table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); color: var(--text); }
+.gm-sum__table th { text-align: left; font-size: var(--fs-xs); font-weight: 600; color: var(--text-dim); padding: var(--space-2) var(--space-3); border-bottom: var(--border-w) solid var(--edge); }
+.gm-sum__table td { padding: var(--space-2) var(--space-3); border-bottom: var(--border-w) solid var(--edge); vertical-align: top; overflow-wrap: anywhere; }
+.gm-sum__dim { color: var(--text-dim); }
+.gm-sum__mono { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.gm-sum__state.is-pushed { color: var(--good); }
+.gm-sum__state.is-stalled, .gm-sum__state.is-failed { color: var(--bad); }
+.gm-sum__state.is-pending { color: var(--warn); }
+
+/* Mission Control top bar: the 'Brief' button. */
+.mission-brief-btn,
+.mission-brief--overlay .mc-btn {
+  padding: var(--space-2) var(--space-5);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--surface-panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-sharp), color var(--dur-fast) var(--ease-sharp);
+}
+.mission-brief-btn:hover,
+.mission-brief--overlay .mc-btn:hover { border-color: var(--edge-glow); color: var(--neon-cyan); }
+.mission-brief-btn:focus-visible,
+.mission-brief--overlay .mc-btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.mission-brief--overlay .mc-btn:disabled { opacity: 0.5; cursor: progress; }
+.mission-brief--overlay .mc-btn.pad-send { border-color: var(--neon-cyan); color: var(--neon-cyan); }
+.mission-brief--overlay .mc-btn.mc-danger { border-color: var(--bad); color: var(--bad); }
+
+/* The brief inside its overlay: no strip box or height cap of its own. */
+.mission-brief.mission-brief--overlay { margin: 0; padding: 0; border: none; background: transparent; max-height: none; overflow: visible; color: var(--text); }
+.mission-brief--overlay .mc-input { flex: none; width: auto; }
+.mission-brief--overlay .mc-input option { background: var(--surface-panel); color: var(--text); }
+.mission-brief--overlay .mission-brief__bar { position: sticky; top: calc(-1 * var(--space-7)); z-index: 1; padding: var(--space-3) 0; background: var(--surface-panel); border-bottom: var(--border-w) solid var(--edge); }
+.mission-brief--overlay .mission-brief__body { margin-top: var(--space-5); line-height: 1.5; }

@@ -15,9 +15,17 @@
 // terminal tab's status light, sessionstatus.js). Both are optional, so a
 // row written before them still reads. No local path, no terminal output and
 // no model text beyond plan / package / to-do titles ever goes in.
+//
+// Each run also carries what waits for Mati: `needs` (the report's '## Needs
+// you' lines) and `manual` (the manual actions to apply live). The snapshot's
+// `seen` lists the run ids this PC has opened in the attention inbox
+// (src/inbox.js unions them across machines). A row written before any of
+// these reads as empty lists.
 // ============================================================================
 
 'use strict';
+
+const { needsFromReport } = require('./godmodeneeds');
 
 const VERSION = 1;
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
@@ -35,6 +43,10 @@ const MAX_REASON = 300;
 const MAX_RULE = 200;
 const MAX_URL = 300;
 const MAX_COUNT = 1000;
+const MAX_LINES = 20;
+const MAX_LINE = 300;
+const MAX_SEEN = 50;
+const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 const SELF_CHECK_STATES = ['ok', 'failed', 'none'];
 const LIVE_STATES = ['running', 'paused', 'settled', 'killed'];
 const LIVE_PACKAGE_STATES = ['queued', 'launched', 'working', 'approval', 'verifying', 'pushed', 'failed', 'killed'];
@@ -237,6 +249,13 @@ function tabsEntry(sessions) {
   );
 }
 
+/** Up to MAX_LINES cleaned, non-empty lines. */
+const lines = (v) => (Array.isArray(v) ? v : []).slice(0, MAX_LINES).map((l) => clean(l, MAX_LINE)).filter(Boolean);
+
+/** Seen run ids: well-formed, unique, newest first, at most MAX_SEEN. */
+const cleanSeen = (v) =>
+  [...new Set((Array.isArray(v) ? v : []).filter((id) => typeof id === 'string' && RUN_ID_RE.test(id)))].slice(0, MAX_SEEN);
+
 /** One run, writer or reader side, or null to drop it. */
 function cleanRun(r, now) {
   if (!isObject(r) || !isTime(r.finishedAt)) return null;
@@ -266,8 +285,13 @@ function cleanRun(r, now) {
     blocked: count(r.blocked),
     manualActions: count(r.manualActions),
     selfCheck: SELF_CHECK_STATES.includes(r.selfCheck) ? r.selfCheck : 'none',
+    needs: lines(r.needs),
+    manual: lines(r.manual),
   };
 }
+
+/** A manual action ({kind, what, from}) as one line: 'migration: x.sql'. */
+const manualLine = (a) => (isObject(a) && a.what ? `${clean(a.kind, MAX_STATE) || 'note'}: ${clean(a.what, MAX_LINE)}` : null);
 
 /** 'failed' when any check went red, 'ok' when it ran, 'none' when it did not run. */
 function selfCheckState(sc) {
@@ -277,10 +301,11 @@ function selfCheckState(sc) {
 
 /**
  * A settled run's entry from orchestra view() (with repoPath, as
- * orchestraFinalize report() builds it) and allowSuggestions() output.
+ * orchestraFinalize report() builds it), allowSuggestions() output and the
+ * report markdown (its '## Needs you' section becomes `needs`).
  * @returns {object|null}
  */
-function runEntry(view, { now = Date.now(), suggestions = [] } = {}) {
+function runEntry(view, { now = Date.now(), suggestions = [], report = '' } = {}) {
   if (!isObject(view) || !Array.isArray(view.packages)) return null;
   const integ = isObject(view.integration) ? view.integration : {};
   return cleanRun(
@@ -314,10 +339,14 @@ function runEntry(view, { now = Date.now(), suggestions = [] } = {}) {
           : null,
       ),
       approvalSuggestions: (Array.isArray(suggestions) ? suggestions : []).map((s) => (isObject(s) ? s.rule : null)),
+      needs: needsFromReport(report, { maxItems: MAX_LINES, maxLine: MAX_LINE }) || [],
+      manual: (Array.isArray(integ.manualActions) ? integ.manualActions : []).slice(0, MAX_LINES).map(manualLine),
     },
     now,
   );
 }
+
+const seenOf = (snap) => (isObject(snap) && snap.v === VERSION ? cleanSeen(snap.seen) : []);
 
 /**
  * The next `godmode` snapshot: `run` in front of the previous snapshot's
@@ -332,7 +361,18 @@ function addRun(prev, run, { machine, now = Date.now() }) {
     .filter((r, i, all) => all.findIndex((o) => o.id === r.id) === i)
     .sort((a, b) => b.finishedAt - a.finishedAt)
     .slice(0, MAX_RUNS);
-  return { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs };
+  return { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs, seen: seenOf(prev) };
+}
+
+/**
+ * The next `godmode` snapshot with run `id` marked seen (in front, capped).
+ * Runs are kept as they are (cleaned); an unknown or malformed id changes nothing.
+ */
+function addSeen(prev, id, { machine, now = Date.now() }) {
+  const old = isObject(prev) && prev.v === VERSION && Array.isArray(prev.runs) ? prev.runs : [];
+  const runs = old.map((r) => cleanRun(r, now)).filter(Boolean).slice(0, MAX_RUNS);
+  const seen = cleanSeen([...(typeof id === 'string' && RUN_ID_RE.test(id) ? [id] : []), ...seenOf(prev)]);
+  return { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs, seen };
 }
 
 /**
@@ -341,7 +381,7 @@ function addRun(prev, run, { machine, now = Date.now() }) {
  */
 function withLive(snap, { live = null, tabs = [] } = {}, { machine, now = Date.now() }) {
   const base = isObject(snap) && snap.v === VERSION && Array.isArray(snap.runs) ? snap.runs.map((r) => cleanRun(r, now)).filter(Boolean) : [];
-  const out = { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs: base.slice(0, MAX_RUNS), tabs: cleanTabs(tabs) };
+  const out = { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs: base.slice(0, MAX_RUNS), seen: seenOf(snap), tabs: cleanTabs(tabs) };
   const l = cleanLive(live, now);
   return l ? { ...out, live: l } : out;
 }
@@ -357,7 +397,7 @@ function parseGodmodePeer(row, now = Date.now()) {
       .map((r) => cleanRun(r, now))
       .filter(Boolean)
       .sort((a, b) => b.finishedAt - a.finishedAt);
-    return { machine: row.machine, at: Math.min(d.at, now), runs, live: cleanLive(d.live, now), tabs: cleanTabs(d.tabs) };
+    return { machine: row.machine, at: Math.min(d.at, now), runs, seen: cleanSeen(d.seen), live: cleanLive(d.live, now), tabs: cleanTabs(d.tabs) };
   } catch {
     return null;
   }
@@ -414,6 +454,7 @@ function runsFrom(rows, now = Date.now()) {
 module.exports = {
   runEntry,
   addRun,
+  addSeen,
   parseGodmodePeer,
   runsFrom,
   prUrlOf,
@@ -424,7 +465,10 @@ module.exports = {
   tabsFrom,
   liveCounts,
   scrubPaths,
+  RUN_ID_RE,
   VERSION,
   MAX_RUNS,
+  MAX_SEEN,
+  MAX_LINES,
   LIVE_STALE_MS,
 };

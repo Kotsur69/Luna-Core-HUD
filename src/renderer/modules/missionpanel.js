@@ -17,7 +17,8 @@
 
 import { mountWidget, unmountWidget, isMounted } from './host.js';
 import { closeWithExit, cancelExit } from './motion.js';
-import { showBrief } from './missionbriefview.js';
+import { openBriefOverlay } from './missionbriefview.js';
+import { anyTallOpen } from './talloverlay.js';
 
 // Column id in index.html -> widget id. Order is visual order.
 const COLUMNS = [
@@ -44,7 +45,6 @@ function open() {
     mountWidget(widgetId, document.getElementById(colId));
   }
   overlayEl.hidden = false;
-  showBrief(document.getElementById('mission-brief'));
   overlayEl.focus();
 }
 
@@ -71,6 +71,9 @@ overlayEl.addEventListener('click', (e) => {
   if (e.target.hasAttribute('data-mission-close')) close();
 });
 
+// The brief lives in its own tall overlay on top of this panel.
+document.getElementById('mission-brief-open').addEventListener('click', () => openBriefOverlay());
+
 // Capture phase, to get ahead of xterm.js - same as Ctrl+K / Ctrl+B. Escape is
 // handled here too rather than on the overlay: focus is not guaranteed to be
 // inside the panel (the terminal can take it back during startup), and an
@@ -79,6 +82,8 @@ window.addEventListener(
   'keydown',
   (e) => {
     if (isOpen && e.key === 'Escape') {
+      // A tall overlay on top (the brief) closes first, on its own.
+      if (anyTallOpen()) return;
       // The calendar draft and edit card own Escape inside themselves (cancel).
       if (e.target instanceof Element && e.target.closest('#mc-cal-draft, .mc-edit')) return;
       e.preventDefault();

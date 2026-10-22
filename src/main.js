@@ -170,6 +170,7 @@ const { usageSnapshot } = require('./usagesnapshot');
 const { createSnapshotPuts } = require('./snapshotputs');
 const { createLivePublisher } = require('./godmodelivepub');
 const { liveEntry, tabsEntry } = require('./godmodesnapshot');
+const { registerInboxIpc } = require('./inboxipc');
 // E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
 // zero network - Passive Observer in the strictest possible sense.
 const { TelemetryWatcher } = require('./telemetry');
@@ -2686,6 +2687,8 @@ function registerIpc() {
     github: mission.github,
   });
   registerMailIpc({ ipcMain, sender: reportMail.sender, prefs: reportMail.prefs, nightly: reportMail.nightly });
+  // Attention inbox ('!' chip): God Mode runs to review from every PC, check-in, weekly goals.
+  registerInboxIpc({ ipcMain, snapshots: () => (cloud ? cloud.snapshots : null), godmode: snapshotPuts.godmode, machine: machineName(os.hostname()), openExternal: (url) => shell.openExternal(url) });
   // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".
   weeklyReview = setupWeeklyReview({
     ipcMain,
