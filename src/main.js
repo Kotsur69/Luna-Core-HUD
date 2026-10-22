@@ -202,7 +202,7 @@ let configSync = null;
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
-const { addWorktree, dirtyCount, removeWorktree } = require('./worktrees');
+const { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, worktreeBranches } = require('./worktrees');
 // God Mode v2 (ORCHESTRATOR_PLAN.md slices 3-5): headless planner, plan board,
 // supervisor + per-worker finish (verify, push, tick to-dos), integrator.
 const { createOrchestra, BRIEF_DIR } = require('./orchestra');
@@ -212,7 +212,7 @@ const orchestraStore = require('./orchestraStore');
 const orchestraIntegrate = require('./orchestraIntegrate');
 const { reportFileFor } = require('./orchestraReport');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
-const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, PR_URL_RE } = require('./orchestraSupervisor');
+const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSupervisor');
 
 const { micState } = require('./devices');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
@@ -992,6 +992,11 @@ const orchestra = createOrchestra({
   runSelfCheck: (args) => orchestraSelfCheck.runSelfCheck(args),
   pushBranch: (root, branch) => orchestraSelfCheck.pushBranch(root, branch),
   removeWorktree,
+  // Failed-launch cleanup + the orphan-branch sweep (orchestraCleanup.js).
+  deleteBranch,
+  listOwnBranches,
+  worktreeBranches,
+  log: (line) => console.info('[orchestra]', line),
   updateTodos: (projectId, fn) => {
     const list = readTodos(projectId);
     const next = fn(list);
@@ -2962,6 +2967,11 @@ function registerIpc() {
   // (integrate + clean up + report). Both validated in orchestra.js.
   ipcMain.handle('orchestra:unschedule', (_event, payload) => orchestra.unschedule(payload));
   ipcMain.handle('orchestra:finish', (_event, payload) => orchestra.finishRun(payload));
+  // Live run options: a plain object of known boolean flags, checked here -
+  // the renderer is untrusted.
+  ipcMain.handle('orchestra:set-options', (_event, patch) =>
+    isOptionsPatch(patch) ? orchestra.setOptions(patch) : { ok: false, error: 'badOptions' },
+  );
   // The URL comes from the plan (gh's own output, shape-checked), never from
   // the page.
   ipcMain.on('orchestra:openPr', (_event, id) => {

@@ -17,6 +17,10 @@
 // Removal (removeWorktree) is only for God Mode packages whose branch is
 // pushed, and refuses a worktree with anything uncommitted: it may hold the
 // only copy of that work. No --force, so git itself re-checks.
+//
+// Branch deletion (deleteBranch) is only for branches a failed God Mode
+// launch left behind: `luna/` names only, never the checked-out branch, and
+// never one with commits beyond its start point.
 // ============================================================================
 
 'use strict';
@@ -193,8 +197,86 @@ async function removeWorktree(repoPath, root, deps = {}) {
   return res.ok ? { ok: true } : { ok: false, error: 'gitFailed', detail: firstLine(res.stderr) };
 }
 
+// Only branches LunaCore itself names (`luna/<slug>`) may ever be deleted.
+const OWN_BRANCH_RE = /^luna\/[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * How many commits `branch` has that its start point does not: with a
+ * recorded base sha, `base..branch`; without one, the commits no other LOCAL
+ * branch reaches (a pushed branch from an earlier run counts as having work).
+ * @returns {Promise<number|null>} null when git failed
+ */
+async function ownCommitCount(repoPath, branch, base, execImpl) {
+  const ref = `refs/heads/${branch}`;
+  const args =
+    typeof base === 'string' && BASE_SHA_RE.test(base)
+      ? ['rev-list', '--count', `${base}..${ref}`]
+      : ['rev-list', '--count', ref, '--not', `--exclude=${branch}`, '--branches'];
+  const res = await runGit(repoPath, args, execImpl);
+  const n = res.ok ? Number.parseInt(firstLine(res.stdout), 10) : NaN;
+  return Number.isInteger(n) ? n : null;
+}
+
+/**
+ * Deletes a branch left by a failed God Mode launch. Refuses anything that
+ * is not LunaCore's own `luna/` branch, the checked-out branch, and a branch
+ * with commits beyond its start point - real work is never deleted.
+ * @param {string} repoPath any folder of the main checkout
+ * @param {unknown} branch e.g. `luna/core-abc12`
+ * @param {{execImpl?: Function, base?: string|null}} [deps] base: the sha the
+ *   branch was created from (pkg.baseSha / the dependency head)
+ * @returns {Promise<{ok:true} | {ok:false, error:'badName'|'checkedOut'|'hasCommits'|'gitFailed', detail?:string}>}
+ */
+async function deleteBranch(repoPath, branch, deps = {}) {
+  const execImpl = deps.execImpl || execFile;
+  if (typeof branch !== 'string' || !branch.startsWith(BRANCH_PREFIX) || !OWN_BRANCH_RE.test(branch)) {
+    return { ok: false, error: 'badName' };
+  }
+  const head = await runGit(repoPath, ['symbolic-ref', '--quiet', '--short', 'HEAD'], execImpl);
+  if (head.ok && firstLine(head.stdout) === branch) return { ok: false, error: 'checkedOut' };
+  const own = await ownCommitCount(repoPath, branch, deps.base, execImpl);
+  if (own === null) return { ok: false, error: 'gitFailed', detail: 'rev-list failed' };
+  if (own > 0) return { ok: false, error: 'hasCommits', detail: String(own) };
+  const res = await runGit(repoPath, ['branch', '-D', '--', branch], execImpl);
+  return res.ok ? { ok: true } : { ok: false, error: 'gitFailed', detail: firstLine(res.stderr) };
+}
+
+/**
+ * Local branch names under `luna/`.
+ * @returns {Promise<string[]|null>} null when git failed
+ */
+async function listOwnBranches(repoPath, deps = {}) {
+  const res = await runGit(
+    repoPath,
+    ['for-each-ref', '--format=%(refname:short)', `refs/heads/${BRANCH_PREFIX}`],
+    deps.execImpl || execFile,
+  );
+  if (!res.ok) return null;
+  return res.stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((b) => OWN_BRANCH_RE.test(b));
+}
+
+/**
+ * Branches checked out in any worktree of the repo (the main one included).
+ * @returns {Promise<string[]|null>} null when git failed
+ */
+async function worktreeBranches(repoPath, deps = {}) {
+  const res = await runGit(repoPath, ['worktree', 'list', '--porcelain'], deps.execImpl || execFile);
+  if (!res.ok) return null;
+  return res.stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('branch refs/heads/'))
+    .map((l) => l.slice('branch refs/heads/'.length));
+}
+
 module.exports = {
   removeWorktree,
+  deleteBranch,
+  listOwnBranches,
+  worktreeBranches,
   WORKTREE_DIR,
   BRANCH_PREFIX,
   MAX_SLUG_CHARS,
