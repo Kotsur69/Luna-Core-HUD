@@ -214,6 +214,7 @@ const orchestraIntegrate = require('./orchestraIntegrate');
 const { reportFileFor } = require('./orchestraReport');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
 const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSupervisor');
+const { createStatusBoard } = require('./sessionstatus');
 
 const { micState } = require('./devices');
 // Sound feedback: persistent `mpv --idle` process + JSON IPC.
@@ -470,6 +471,8 @@ function sessionSummary(s) {
     todoTools: s.todoTools || null,
     // A phone-driven host session (src/hostchattabs.js): no input.
     readOnly: s.readOnly === true,
+    // The tab's status light (src/sessionstatus.js); 'session:status' pushes changes.
+    status: statusBoard.current(s.id),
   };
 }
 
@@ -479,6 +482,24 @@ function broadcastSessions() {
     sessions: [...sessions.values()].map(sessionSummary),
     activeSessionId,
   });
+}
+
+// Every tab's status light. Pushed on change only - the board debounces.
+const STATUS_TICK_MS = 500;
+const statusBoard = createStatusBoard({
+  onChange: (sessionId, { state, since, resetsAt }) =>
+    send('session:status', { sessionId, state, since, ...(resetsAt ? { resetsAt } : {}) }),
+});
+
+/** Whether Mati is looking at this tab right now (a turn ending there is not "unseen"). */
+function isViewed(sessionId) {
+  return sessionId === activeSessionId && Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused());
+}
+
+/** Any input into a session: answers its approval prompt, if one is showing. */
+function noteInput(session) {
+  session.approvalShowing = false;
+  statusBoard.input(session.id);
 }
 
 // Phone-driven host sessions as read-only tabs (src/hostchattabs.js). Used
@@ -634,6 +655,7 @@ function createWindow() {
   // so a programmatic show()/focus() - a clicked toast - doesn't leave it lit.
   mainWindow.on('focus', () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(false);
+    if (activeSessionId) statusBoard.viewed(activeSessionId);
   });
 
   mainWindow.on('closed', () => {
@@ -1212,6 +1234,7 @@ function spawnInto(session, profile, launch = null) {
   });
   session.proc = proc;
   session.alive = true;
+  statusBoard.revive(session.id);
   if (cwdMissing) send('pty:data', { sessionId: session.id, data: missingDirNotice(wantedCwd, readUiPrefs().lang) });
   if (lunaSync) send('pty:data', { sessionId: session.id, data: lunaSyncNotice(lunaSync, readUiPrefs().lang) });
 
@@ -1219,6 +1242,7 @@ function spawnInto(session, profile, launch = null) {
   // Every event carries a sessionId, since the renderer keeps a separate buffer per tab.
   proc.onData((data) => {
     send('pty:data', { sessionId: session.id, data });
+    statusBoard.activity(session.id);
     const tiles = detectTools(data);
     if (tiles.length > 0) send('metrics:tools', { sessionId: session.id, tiles });
 
@@ -1241,6 +1265,7 @@ function spawnInto(session, profile, launch = null) {
     // which is why the scan no longer waits on the sound engine being up.
     if (!session.approvalShowing && detectApprovalPrompt(scan, triggers.approvalPrompt)) {
       session.approvalShowing = true;
+      statusBoard.approval(session.id);
       if (orchestra.ownsSession(session.id)) {
         const { rule, example } = approvalRuleFor(session);
         orchestra.onApproval(session.id, rule, example);
@@ -1295,6 +1320,7 @@ function spawnInto(session, profile, launch = null) {
     if (session.proc !== proc) return;
     session.proc = null;
     session.alive = false;
+    statusBoard.exited(session.id);
     send('pty:exit', { sessionId: session.id, code: exitCode });
     broadcastSessions();
   });
@@ -1334,6 +1360,7 @@ function spawnInto(session, profile, launch = null) {
       // stdout backstop above still sends.
       onTools: (events) => {
         session.gitAttribution.noteToolEvents(events, Date.now());
+        statusBoard.activity(session.id);
         send('metrics:tools', { sessionId: session.id, events });
       },
       // reference/MCP_DEBUGGER_PLAN.md safe half: MCP call start/end lifecycle, same
@@ -1362,6 +1389,7 @@ function spawnInto(session, profile, launch = null) {
       onUsageLimit: ({ resetsAt } = {}) => {
         const at = Number.isFinite(resetsAt) ? resetsAt : null;
         send('godmode:signal', { sessionId: session.id, type: 'usageLimit', resetsAt: at });
+        statusBoard.limit(session.id, at);
         // A God Mode v2 worker: the whole run waits (one account, one limit).
         orchestra.onUsageLimit(session.id, at);
       },
@@ -1369,10 +1397,13 @@ function spawnInto(session, profile, launch = null) {
       // armed "continue" (or Mati's own typing) was actually consumed, so a
       // turn that only thinks or answers in plain text before dying again still
       // counts as recovery even though it calls no tool.
-      onTurnStart: ({ at } = {}) =>
-        send('godmode:signal', { sessionId: session.id, type: 'turnStarted', at }),
+      onTurnStart: ({ at } = {}) => {
+        send('godmode:signal', { sessionId: session.id, type: 'turnStarted', at });
+        statusBoard.turnStart(session.id);
+      },
       onTurnEnd: (turn) => {
         checkTurnEnd(turn);
+        statusBoard.turnEnd(session.id, isViewed(session.id));
         send('metrics:turnend', { sessionId: session.id, turn });
         // God Mode v2 worker: LUNA_DONE / LUNA_BLOCKED / nudge (slice 4).
         orchestra.onTurnEnd(session.id, turn.text);
@@ -1597,6 +1628,7 @@ function closeSession(sessionId) {
   overnight.forgetSession(sessionId);
   orchestra.onSessionClosed(sessionId);
   sessions.delete(sessionId);
+  statusBoard.remove(sessionId);
 
   if (sessions.size === 0) {
     createSession();
@@ -2061,7 +2093,7 @@ function registerIpc() {
     const session = resolveTargetSession(p.sessionId);
     if (session && session.proc) session.proc.write(p.data);
     // §4.2: any input from Mati means an approval prompt (if showing) got answered.
-    if (session) session.approvalShowing = false;
+    if (session) noteInput(session);
   });
 
   // ACTION INJECTOR (GUI buttons): sends a ready-made command + Enter (\r).
@@ -2072,7 +2104,7 @@ function registerIpc() {
     if (!session || !session.proc || typeof p.text !== 'string') return;
     const line = p.text.endsWith('\r') ? p.text : `${p.text}\r`;
     session.proc.write(line);
-    session.approvalShowing = false;
+    noteInput(session);
   });
 
   // ACTION INJECTOR (prompt library): pastes MULTI-LINE text.
@@ -2100,7 +2132,7 @@ function registerIpc() {
       .replace(/[\x00-\x08\x0b-\x1f\x7f\x80-\x9f]/g, '');
     session.proc.write(`\x1b[200~${text}\x1b[201~`);
     if (payload.submit) session.proc.write('\r');
-    session.approvalShowing = false;
+    noteInput(session);
   });
 
   // ACTION INJECTOR (screenshot paste): a Ctrl+V that carried an IMAGE.
@@ -2129,7 +2161,7 @@ function registerIpc() {
     // After the write, so a failed save never costs the user an older clip.
     pruneClips(clipsDir());
     session.proc.write(`\x1b[200~${file} \x1b[201~`);
-    session.approvalShowing = false;
+    noteInput(session);
     return { ok: true, path: file };
   });
 
@@ -2197,6 +2229,7 @@ function registerIpc() {
   ipcMain.on('sessions:activate', (_event, sessionId) => {
     if (typeof sessionId !== 'string' || !sessions.has(sessionId)) return;
     activeSessionId = sessionId;
+    statusBoard.viewed(sessionId);
     broadcastSessions();
   });
 
@@ -3322,6 +3355,7 @@ app.whenReady().then(() => {
   setInterval(() => orchestra.tick(), ORCHESTRA_TICK_MS).unref();
   // Back from sleep: re-arm or resume a paused run, drop the wake task.
   powerMonitor.on('resume', () => orchestra.onSystemResume());
+  setInterval(() => statusBoard.tick(), STATUS_TICK_MS).unref();
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();
   startUsageWatcher();

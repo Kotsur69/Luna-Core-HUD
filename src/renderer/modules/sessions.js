@@ -60,6 +60,19 @@ const WORKTREE_MARK = '⑂';
 /** Session metadata from the main process - the source of truth for what lives. */
 let sessionList = [];
 
+/** sessionId -> { state, since, resetsAt? } from main (src/sessionstatus.js). */
+const statusById = new Map();
+
+/** Glyph per status light: each state has its own shape, never colour alone. */
+const STATUS_GLYPH = {
+  working: '●',
+  done: '✓',
+  approval: '!',
+  limit: '◷',
+  idle: '○',
+  dead: '–',
+};
+
 function activeMeta() {
   return sessionList.find((x) => x.id === getActiveSessionId());
 }
@@ -92,6 +105,36 @@ window.lunacore.onExit(({ sessionId, code }) => {
   }
   renderTabs();
 });
+
+// A tab's status light moved (main pushes on change only, already debounced).
+window.lunacore.onSessionStatus(({ sessionId, state, since, resetsAt }) => {
+  if (!STATUS_GLYPH[state]) return;
+  statusById.set(sessionId, { state, since, resetsAt });
+  renderTabs();
+});
+
+/** Tooltip/aria text for one status, with the reset time on a usage limit. */
+function statusText(status) {
+  if (status.state === 'limit' && Number.isFinite(status.resetsAt)) {
+    const time = new Date(status.resetsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return t('tabs.status.limitAt', { time });
+  }
+  return t(`tabs.status.${status.state}`);
+}
+
+/** The status light in front of a tab's label. A dead bucket wins over a stale push. */
+function statusLight(id, bucket) {
+  const known = statusById.get(id) || { state: 'idle' };
+  const status = bucket && !bucket.alive ? { state: 'dead' } : known;
+  const light = document.createElement('span');
+  light.className = `tab__status is-${status.state}`;
+  light.setAttribute('role', 'img');
+  const text = statusText(status);
+  light.title = text;
+  light.setAttribute('aria-label', text);
+  light.textContent = STATUS_GLYPH[status.state];
+  return light;
+}
 
 // Context metrics: EVERY tab has its own context window.
 window.lunacore.onContext(({ sessionId, metrics }) => {
@@ -456,6 +499,7 @@ function renderTabs(fromX) {
       sfx.navClick();
       window.lunacore.activateSession(meta.id);
     });
+    tab.appendChild(statusLight(meta.id, s));
     tab.appendChild(btn);
 
     // How full THIS tab's context is - you can see trouble brewing in the
@@ -494,7 +538,9 @@ window.lunacore.onSessions(({ sessions, activeSessionId: activeId }) => {
   for (const meta of sessionList) {
     const s = ensureTerm(meta.id);
     s.alive = meta.alive;
+    if (meta.status) statusById.set(meta.id, meta.status);
   }
+  for (const id of statusById.keys()) if (!sessionList.some((m) => m.id === id)) statusById.delete(id);
   pruneTerms(new Set(sessionList.map((m) => m.id)));
 
   if (activeId && activeId !== getActiveSessionId()) {
@@ -592,7 +638,10 @@ export function initSessions() {
     .getSessions()
     .then(({ sessions, activeSessionId: activeId }) => {
       sessionList = sessions || [];
-      for (const meta of sessionList) ensureTerm(meta.id).alive = meta.alive;
+      for (const meta of sessionList) {
+        ensureTerm(meta.id).alive = meta.alive;
+        if (meta.status) statusById.set(meta.id, meta.status);
+      }
       if (activeId) {
         setActiveSessionId(activeId);
         showPane(activeId);

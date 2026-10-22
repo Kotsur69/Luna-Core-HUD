@@ -54,6 +54,11 @@ contextBridge.exposeInMainWorld('lunacore', {
   onSessions: (callback) => {
     ipcRenderer.on('sessions:update', (_event, payload) => callback(payload));
   },
+  /** A tab's status light changed (src/sessionstatus.js):
+   *  ({ sessionId, state: 'working'|'done'|'idle'|'approval'|'limit'|'dead', since, resetsAt? }). */
+  onSessionStatus: (callback) => {
+    ipcRenderer.on('session:status', (_event, payload) => callback(payload));
+  },
   /** New tab (defaults to the current profile + project). */
   createSession: (opts = {}) => ipcRenderer.send('sessions:create', opts),
   /** New tab in a fresh git worktree of the active project: (name) -> {ok, error?, detail?, branch?}. */
