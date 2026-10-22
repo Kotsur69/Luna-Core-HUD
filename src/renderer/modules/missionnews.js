@@ -16,7 +16,7 @@
 
 'use strict';
 
-import { t } from './util.js';
+import { t, machineLabel } from './util.js';
 import { defineWidget } from './registry.js';
 import { onLangChange } from './bus.js';
 import { errorText, costSuffix, bindModelSelect, setStatus, ipcFailed } from './missionshared.js';
@@ -119,7 +119,7 @@ function deleteReport(id) {
 
 const reportTitle = (r) =>
   r.peer
-    ? t('mc.news.report.peerTitle', { machine: r.machine, names: r.names || '-' })
+    ? t('mc.news.report.peerTitle', { machine: machineLabel(r.machine), names: r.names || '-' })
     : t('mc.news.report.title', { names: r.names || '-' });
 
 /** Other PCs' briefings; a failure just leaves the local reports. */

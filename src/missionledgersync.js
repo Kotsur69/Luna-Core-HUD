@@ -23,6 +23,8 @@
 
 'use strict';
 
+const crypto = require('crypto');
+
 const VERSION = 1;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -40,13 +42,36 @@ const KEY_RE = /^(other|git:[a-z0-9.-]+(\/[a-z0-9._-]+)+|local:[^\u0000-\u001f\u
 const NAME_RE = /^[^\u0000-\u001f\u007f]{1,100}$/;
 const MODEL_RE = /^[A-Za-z0-9._-]{1,80}$/;
 
-/** os.hostname() -> a safe machine name (letters, digits, '-'). */
-function machineName(host) {
+/** Marks a key whose hostname had to be changed to fit MACHINE_RE: '-h' + 6 hex. */
+const HASH_SUFFIX_RE = /-h[0-9a-f]{6}$/;
+
+/**
+ * The key this PC used before 0.17.x: unsafe characters became '-', so
+ * `PC_1` and `PC-1` shared rows. Kept only to find and migrate those rows.
+ */
+function legacyMachineName(host) {
   const clean = String(host || '')
     .replace(/[^A-Za-z0-9-]/g, '-')
     .slice(0, 63);
   return clean || 'pc';
 }
+
+/**
+ * os.hostname() -> this PC's machine key (letters, digits, '-'). A hostname
+ * that already fits stays as it is (no PC with a plain name moves); any other
+ * is normalised and gets a short stable hash of the raw name, so two hosts
+ * that normalise alike (`PC_1`, `PC-1`) still get different keys.
+ */
+function machineName(host) {
+  const raw = String(host || '');
+  if (!raw) return 'pc';
+  if (MACHINE_RE.test(raw)) return raw;
+  const hash = crypto.createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 6);
+  return `${legacyMachineName(raw).slice(0, 55)}-h${hash}`;
+}
+
+/** A machine key -> the name to show (the hash suffix dropped). */
+const machineLabel = (key) => String(key || '').replace(HASH_SUFFIX_RE, '') || String(key || '');
 
 const isCount = (v) => Number.isInteger(v) && v >= 0 && v <= MAX_TOKENS;
 
@@ -107,6 +132,8 @@ const validKey = (key) => typeof key === 'string' && KEY_RE.test(key);
 
 module.exports = {
   machineName,
+  legacyMachineName,
+  machineLabel,
   parsePeer,
   validRow,
   validBlock,

@@ -32,6 +32,12 @@ export const t = (key, params) => window.i18n.t(key, params);
 export const loc = (value) => pickLocalized(value, window.i18n.lang);
 
 /**
+ * A cloud machine key -> the name to show. Keys of hostnames that had to be
+ * normalised end in '-h' + 6 hex (machineLabel in src/missionledgersync.js).
+ */
+export const machineLabel = (key) => String(key || '').replace(/-h[0-9a-f]{6}$/, '') || String(key || '');
+
+/**
  * Short visual acknowledgement - of a click by default, of a threshold crossing
  * when E3 passes its own class.
  *

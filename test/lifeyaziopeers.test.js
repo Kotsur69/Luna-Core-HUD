@@ -166,7 +166,10 @@ test('background refresh: a logged-in PC fetches and puts the snapshot on its ow
   const yazio = { status: () => ({ connected: true }), body: async () => (calls++, bodyData()) };
   const cloud = () => ({ put: async (k, d) => puts.push([k, d]) || true, list: async () => [] });
   const life = registerLifeIpc({ ipcMain: { handle: () => {} }, now: () => NOW, yazio, cloud, bodyEveryMs: 10 });
-  await new Promise((r) => setTimeout(r, 80));
+  // Wait for the ticks rather than a fixed sleep: a busy event loop (full
+  // suite) can delay a 10 ms interval well past any short fixed window.
+  const deadline = Date.now() + 5000;
+  while (calls < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
   life.stop();
   assert.ok(calls >= 2, `fetched ${calls}x`);
   assert.deepEqual(puts[0], ['yazio', yazioSnapshot(bodyData(), NOW)]);
