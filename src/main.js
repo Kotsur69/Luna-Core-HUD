@@ -68,7 +68,7 @@ const { findApiPort, listModels: listLmStudioModels, loadModel: loadLmStudioMode
 // CCR (claude-code-router) lifecycle control and the ccr:* IPC - see
 // src/ccr.js's header for the trust boundary (CCR's own UI owns all routing
 // config; LunaCore only ever starts/stops the process and probes it).
-const { createCcrControl } = require('./ccrcontrol');
+const { createCcrControl, prepareCcrLaunch } = require('./ccrcontrol');
 // Keeps an unattended God Mode run alive: no sleep, no throttling, and a
 // watchdog that brings a local LM Studio backend back (src/overnight.js).
 const { createOvernightGuard, recoverLocalBackend } = require('./overnight');
@@ -1504,7 +1504,8 @@ function editedByOtherSessions(session) {
 /**
  * Spawns a session's process. A local-model tab (LM Studio) first runs its
  * pre-spawn prep - shim, fresh model/context probe, lean flags - bounded by
- * PREP_TIMEOUT_MS; every other tab spawns synchronously, exactly as before.
+ * PREP_TIMEOUT_MS; a chain tab and a CCR tab prep their loopback proxy the
+ * same way; every other tab spawns synchronously, exactly as before.
  * @param {Session} session
  * @param {Object} profile
  */
@@ -1513,7 +1514,9 @@ function launchSession(session, profile) {
   const localLaunch = resolveLocalLaunch(profile, providers);
   // A free-model chain tab goes through the fallback proxy (src/fallbackproxy.js).
   const chain = localLaunch ? null : resolveProfileChain(profile, providers, loadChains());
-  if (!localLaunch && !chain) {
+  // A CCR tab goes through the request shim in front of its gateway.
+  const viaCcr = !localLaunch && !chain && isCcrProfile(profile, providers);
+  if (!localLaunch && !chain && !viaCcr) {
     // Still a new launch: invalidates a local prep that may be in flight.
     session.spawnSeq = (session.spawnSeq || 0) + 1;
     session.preparing = false;
@@ -1524,7 +1527,9 @@ function launchSession(session, profile) {
   // flash "ended" before its process even exists.
   session.preparing = true;
   launchWhenReady(session, profile, {
-    prepare: () => chain
+    prepare: () => viaCcr
+      ? prepareCcrLaunch(profile, { ensureShim, inheritedEnv: process.env })
+      : chain
       ? prepareChainLaunch(profile, chain, { ensureProxy: ensureFallbackProxy, inheritedEnv: process.env })
       : prepareLocalLaunch(profile, localLaunch, {
         probe: probeEndpoint,

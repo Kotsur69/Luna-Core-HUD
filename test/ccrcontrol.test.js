@@ -14,7 +14,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createCcrControl, CCR_DOCS_URL } = require('../src/ccrcontrol');
+const { createCcrControl, prepareCcrLaunch, CCR_DOCS_URL } = require('../src/ccrcontrol');
+const { normalizeMessages } = require('../src/lmstudioshim');
 
 const PROVIDERS = [
   { id: 'ollama', wireVia: 'ccr' },
@@ -209,4 +210,75 @@ test('shutdown stops only a gateway LunaCore started, and only once', async () =
   control.shutdown();
   assert.equal(ccr.calls.filter(([name]) => name === 'stopGateway').length, 1);
   assert.equal(control.isStartedByUs(), false);
+});
+
+// --- prepareCcrLaunch: the CCR + LM Studio 400 ------------------------------
+
+const SHIM = { ok: true, port: 50123, url: 'http://127.0.0.1:50123', token: 'a'.repeat(64) };
+
+test("prepareCcrLaunch: puts the shim in front of the profile's own gateway", async () => {
+  const seen = [];
+  const launch = await prepareCcrLaunch(ccrProfile(), {
+    ensureShim: async (upstream) => { seen.push(upstream); return SHIM; },
+    inheritedEnv: {},
+  });
+  assert.deepEqual(seen, ['http://localhost:3456']);
+  assert.deepEqual(launch, {
+    envOverrides: {
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:50123',
+      ANTHROPIC_CUSTOM_HEADERS: `x-lunacore-shim-token: ${SHIM.token}`,
+    },
+    extraArgs: [],
+    notes: [],
+  });
+});
+
+test("prepareCcrLaunch: follows a custom gateway port and keeps the profile's own headers", async () => {
+  let upstream = null;
+  const launch = await prepareCcrLaunch(
+    ccrProfile({ ANTHROPIC_BASE_URL: 'http://127.0.0.1:3460', ANTHROPIC_CUSTOM_HEADERS: 'x-own: 1' }),
+    { ensureShim: async (u) => { upstream = u; return SHIM; }, inheritedEnv: { ANTHROPIC_CUSTOM_HEADERS: 'x-shell: 1' } },
+  );
+  assert.equal(upstream, 'http://127.0.0.1:3460');
+  assert.equal(launch.envOverrides.ANTHROPIC_CUSTOM_HEADERS, `x-own: 1\nx-lunacore-shim-token: ${SHIM.token}`);
+});
+
+test('prepareCcrLaunch: falls back to the inherited headers when the profile sets none', async () => {
+  const launch = await prepareCcrLaunch(ccrProfile(), {
+    ensureShim: async () => SHIM,
+    inheritedEnv: { ANTHROPIC_CUSTOM_HEADERS: 'x-shell: 1' },
+  });
+  assert.equal(launch.envOverrides.ANTHROPIC_CUSTOM_HEADERS, `x-shell: 1\nx-lunacore-shim-token: ${SHIM.token}`);
+});
+
+test('prepareCcrLaunch: a shim that fails, throws or hangs leaves the tab on the gateway', async () => {
+  const cases = [
+    async () => ({ ok: false, reason: 'port-in-use' }),
+    async () => { throw new Error('boom'); },
+    () => new Promise(() => {}),
+    async () => ({ ok: true, url: 'http://127.0.0.1:1', token: '' }),
+  ];
+  for (const ensureShim of cases) {
+    const launch = await prepareCcrLaunch(ccrProfile(), { ensureShim, timeoutMs: 20 });
+    assert.deepEqual(launch, { envOverrides: {}, extraArgs: [], notes: ['shim-failed'] });
+  }
+});
+
+test('prepareCcrLaunch: never shims a non-loopback gateway', async () => {
+  let called = false;
+  const launch = await prepareCcrLaunch(ccrProfile({ ANTHROPIC_BASE_URL: 'https://ccr.example.com' }), {
+    ensureShim: async () => { called = true; return SHIM; },
+  });
+  assert.equal(called, false);
+  assert.deepEqual(launch.notes, ['not-local']);
+});
+
+test('the shim strips the mid-conversation system message CCR would pass to LM Studio', () => {
+  const messages = normalizeMessages([
+    { role: 'user', content: 'hi' },
+    { role: 'system', content: 'SessionStart hook output' },
+    { role: 'user', content: 'go' },
+  ]);
+  assert.ok(messages.every((m) => m.role === 'user' || m.role === 'assistant'));
+  assert.equal(messages.length, 1);
 });

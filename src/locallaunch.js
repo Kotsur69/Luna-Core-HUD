@@ -332,6 +332,8 @@ async function prepareChainLaunch(profile, chain, deps) {
 
 module.exports = {
   prepareChainLaunch,
+  withShimHeader,
+  settle,
   normalizeLocalLaunch,
   resolveLocalLaunch,
   buildLocalEnv,

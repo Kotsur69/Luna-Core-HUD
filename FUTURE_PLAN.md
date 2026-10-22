@@ -78,10 +78,12 @@ LunaCore to-do list, not in the file.
 
 ## Known issues
 
-- **LM Studio through claude-code-router returns HTTP 400** (AI providers
-  phase 5c) - direct LM Studio tabs work. Card in the to-do list.
-- **CCR settings never clicked through with a real provider** - `[Mati]`
-  card in the to-do list.
+- **Usage panel lists every provider at once** - Mati wants only the active
+  tab's profile provider (Claude limits on a Claude tab, Codex on a Codex
+  tab). Card in the to-do list.
+- **CCR settings never clicked through with a real provider** - confirm the
+  Router section and a CCR template work end to end. `[Mati]` card in the
+  to-do list.
 - **Auto-update from `v0.9.0`** does not work (from `v0.9.1` onward it does) -
   known, not being chased.
 
