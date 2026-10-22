@@ -81,8 +81,6 @@ Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
   tab's profile provider (Claude limits on a Claude tab, Codex on a Codex
   tab). Card in the to-do list.
 
-- **LM Studio through claude-code-router returns HTTP 400** (AI providers
-  phase 5c) - root-caused but not fixed; direct LM Studio tabs work.
 - **CCR settings never clicked through with a real provider** - confirm the
   Router section and a CCR template work end to end.
 - **Auto-update from `v0.9.0`** does not work (from `v0.9.1` onward it does) -

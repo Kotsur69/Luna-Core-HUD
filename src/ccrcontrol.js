@@ -22,6 +22,8 @@
 const ccr = require('./ccr');
 const { DEFAULT_CCR_PORT, isCcrProfile } = require('./providers');
 const { getProfile, NON_SECRET_AUTH_TOKENS } = require('./profiles');
+const { localEndpointFromProfile } = require('./lmstudio');
+const { withShimHeader, settle, PREP_TIMEOUT_MS } = require('./locallaunch');
 
 /** Fixed docs address - never renderer-supplied. */
 const CCR_DOCS_URL = 'https://ccrdesk.top/en/';
@@ -165,4 +167,33 @@ function createCcrControl({ send, getProfiles, getProviders, openExternal, safeU
   };
 }
 
-module.exports = { createCcrControl, CCR_DOCS_URL };
+/**
+ * Pre-spawn prep for a CCR-routed tab: the tab talks to the request shim
+ * (src/lmstudioshim.js) and the shim forwards to the loopback gateway.
+ * Root cause of the CCR + LM Studio 400: Claude Code sends a mid-conversation
+ * role:"system" message that CCR passes on to LM Studio, which refuses it - the
+ * shim rewrites it into a <system-reminder> user message before CCR sees it.
+ * Every CCR tab gets it: CCR's upstream lives in CCR's own config, which
+ * LunaCore never reads, and the rewrite is harmless for any other upstream.
+ * Never rejects; a shim that does not start leaves the tab on the gateway.
+ * @param {{env?:Object}} profile
+ * @param {{ensureShim:Function, inheritedEnv?:Object, timeoutMs?:number}} deps
+ * @returns {Promise<{envOverrides:Object, extraArgs:string[], notes:string[]}>}
+ */
+async function prepareCcrLaunch(profile, deps) {
+  const gateway = localEndpointFromProfile(profile);
+  if (!gateway) return { envOverrides: {}, extraArgs: [], notes: ['not-local'] };
+  const shim = await settle(() => deps.ensureShim(gateway), deps.timeoutMs || PREP_TIMEOUT_MS, null);
+  if (!(shim && shim.ok && shim.url && shim.token)) return { envOverrides: {}, extraArgs: [], notes: ['shim-failed'] };
+  const own = (profile && profile.env) || {};
+  const headers = typeof own.ANTHROPIC_CUSTOM_HEADERS === 'string'
+    ? own.ANTHROPIC_CUSTOM_HEADERS
+    : (deps.inheritedEnv || {}).ANTHROPIC_CUSTOM_HEADERS;
+  return {
+    envOverrides: { ANTHROPIC_BASE_URL: shim.url, ANTHROPIC_CUSTOM_HEADERS: withShimHeader(headers, shim.token) },
+    extraArgs: [],
+    notes: [],
+  };
+}
+
+module.exports = { createCcrControl, prepareCcrLaunch, CCR_DOCS_URL };
