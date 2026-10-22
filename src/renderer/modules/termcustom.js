@@ -41,6 +41,7 @@ import {
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { closeWithExit, cancelExit } from './motion.js';
+import { initSettingsNav } from './settingsnav.js';
 
 const termcustomEl = document.getElementById('termcustom');
 const els = {
@@ -117,6 +118,28 @@ const TERM_DEFAULTS = {
 };
 
 let termcustomOpen = false;
+
+// Category rail + cross-category search (2026-10-22: the overlay grew from a
+// narrow single column into a large grouped dialog). Owns only visibility -
+// every control below is still queried and wired by its original id.
+const settingsNav = initSettingsNav(termcustomEl);
+
+const versionEl = document.getElementById('termcustom-version');
+let versionShown = false;
+
+/** Fills the footer's "LunaCore vX.Y.Z" once - the version cannot change while running. */
+async function renderVersion() {
+  if (versionShown || !versionEl) return;
+  try {
+    const status = await window.lunacore.getUpdateStatus();
+    if (status && typeof status.version === 'string' && status.version) {
+      versionEl.textContent = `LunaCore v${status.version}`;
+      versionShown = true;
+    }
+  } catch {
+    /* IPC failed - the footer just stays without a version until the next open */
+  }
+}
 
 // Moved from appearance.js's module state (2026-08-13) - mirrors its role:
 // module scope so a re-render (langChange, reopen) repaints from truth
@@ -267,6 +290,10 @@ async function openTermcustom() {
   termcustomEl.hidden = false;
   renderLangSwitcher();
   renderModifiers();
+  // Before the prefs await below: the search box should take the keyboard on
+  // the same frame the overlay appears, not after an IPC round trip.
+  settingsNav.onOpen();
+  renderVersion();
 
   let prefs = TERM_DEFAULTS;
   try {
@@ -275,10 +302,11 @@ async function openTermcustom() {
     /* IPC failed - fall back to defaults, still lets the modal open */
   }
   renderFromPrefs(prefs);
-  // Same reason as gitquick.js's openGitQuick(): the overlay is a plain <div>,
-  // so until it holds focus its own keydown (Escape, :265) never fires and the
-  // keys keep going into the terminal. Needs the tabindex="-1" in index.html.
-  termcustomEl.focus();
+  // Same reason as gitquick.js's openGitQuick(): until something inside the
+  // overlay holds focus its own keydown (Escape) never fires and the keys keep
+  // going into the terminal. settingsNav.onOpen() focused the search box above;
+  // the container itself (tabindex="-1") is the fallback if that failed.
+  if (!termcustomEl.contains(document.activeElement)) termcustomEl.focus();
 }
 
 function closeTermcustom() {
