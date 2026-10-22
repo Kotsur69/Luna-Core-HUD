@@ -7,7 +7,20 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.17.0 — Phone, host and a sturdier God Mode.**
+> **Current release: v0.17.1 — Reports, status lights and a roomier Settings.**
+> - **Settings:** Ctrl+L opens a large grouped dialog with search across every
+>   category, and shows the app version.
+> - **Reports:** standalone HTML run and weekly reports with inline SVG charts;
+>   the God Mode email now attaches the run report.
+> - **God Mode:** failure details, cleanup of branches from failed launches,
+>   live run options, sleep at the usage limit with a wake task and an optional
+>   shutdown after the run.
+> - **Tabs and phone:** a status light on every terminal tab, mirrored live on
+>   the phone together with the running God Mode view.
+> - **Panels and usage:** folded widgets collapse into the icon rail, and the
+>   usage gauge shows only the active tab's provider limits.
+>
+> **v0.17.0 — Phone, host and a sturdier God Mode.**
 > - **Phone:** an iPhone PWA with GitHub login, to-dos, budget, Today, Mission,
 >   Body, Google calendar and mail, an offline write queue and realtime updates.
 > - **Host:** a headless Luna host you pair with a passkey. From the phone you
