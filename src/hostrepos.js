@@ -14,6 +14,12 @@
 // missing credential fails instead of hanging. Each project ends up as one of
 // cloned / skipped: folder exists / failed: auth / failed: other, which the
 // host snapshot (src/hostsnapshot.js) shows on the phone.
+//
+// A phone chat runs `claude` in a project's folder (src/hostchat.js), and the
+// synced `path` of a project can be rewritten by anyone holding the cloud
+// session. chatDirOf() therefore only hands out folders that, with symlinks
+// and junctions resolved, sit under the repos root or a host-local allow-list
+// (host.local.json -> chatDirs): never a folder on the synced path's word alone.
 // ============================================================================
 
 'use strict';
@@ -49,6 +55,25 @@ function readOwners(raw) {
   return list && list.length ? list : [...DEFAULT_OWNERS];
 }
 
+/** host.local.json -> extra folders phone chats may run in (absolute paths only). */
+function readChatDirs(raw) {
+  const list = raw && Array.isArray(raw.chatDirs) ? raw.chatDirs : [];
+  return list.filter((d) => typeof d === 'string' && d.length <= 1024 && path.isAbsolute(d));
+}
+
+/**
+ * Whether `dir` is `root` itself (only when `allowSelf`) or inside it. Both
+ * must already be real paths (fs.realpathSync): a junction in the repo list
+ * would otherwise pass as a child of the root while pointing anywhere.
+ */
+function isInside(root, dir, allowSelf) {
+  const rel = path.relative(root, dir);
+  if (!rel) return allowSelf;
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+const OUTSIDE = 'refused: repo outside the repos root';
+
 /** A failed clone -> the status the phone shows. */
 const failureOf = (err) => (AUTH_RE.test(`${(err && err.stderr) || ''} ${(err && err.message) || ''}`) ? 'failed: auth' : 'failed: other');
 
@@ -57,6 +82,8 @@ const failureOf = (err) => (AUTH_RE.test(`${(err && err.stderr) || ''} ${(err &&
  *   execFile: Function,                 child_process.execFile (or a fake)
  *   reposRoot?: string,                 ~/source/repos
  *   owners?: () => string[],            the allow-list (readOwners of host.local.json)
+ *   chatDirs?: () => string[],          host-local folders chats may use besides the root
+ *   realpath?: (p: string) => string,   fs.realpathSync (throws when missing)
  *   exists?: (p: string) => boolean,
  *   mkdir?: (p: string) => void,
  *   log?: (line: string) => void,
@@ -66,6 +93,8 @@ function createHostRepos({
   execFile,
   reposRoot = path.join(os.homedir(), 'source', 'repos'),
   owners = () => [...DEFAULT_OWNERS],
+  chatDirs = () => [],
+  realpath = (p) => fs.realpathSync(p),
   exists = (p) => fs.existsSync(p),
   mkdir = (p) => fs.mkdirSync(p, { recursive: true }),
   log = (line) => console.error(line),
@@ -131,6 +160,46 @@ function createHostRepos({
     return new Map(statuses);
   }
 
+  /** Where a project lives on this host: its own folder, else the clone target. */
+  function dirOf(p) {
+    if (p && typeof p.path === 'string' && exists(p.path)) return p.path;
+    const r = parseRemote(p && p.remote);
+    return r && exists(targetOf(r.name)) ? targetOf(r.name) : null;
+  }
+
+  const realOrNull = (p) => {
+    try {
+      return realpath(p);
+    } catch {
+      return null; // gone or unreadable: it can't contain anything
+    }
+  };
+
+  /**
+   * The folder a phone chat may run in, as a real path, or why not.
+   * @returns {{dir: string}|{error: string}}
+   */
+  function chatDirOf(p) {
+    const dir = dirOf(p);
+    if (!dir) return { error: 'refused: unknown repo' };
+    const real = realOrNull(dir);
+    if (!real) return { error: 'refused: unknown repo' };
+    const root = realOrNull(reposRoot);
+    if (root && isInside(root, real, false)) return { dir: real };
+    let extra = [];
+    try {
+      extra = chatDirs();
+    } catch (err) {
+      log(`[hostrepos] chat allow-list unreadable: ${err && err.message}`);
+    }
+    for (const d of Array.isArray(extra) ? extra : []) {
+      const allowed = typeof d === 'string' ? realOrNull(d) : null;
+      if (allowed && isInside(allowed, real, true)) return { dir: real };
+    }
+    log(`[hostrepos] chat refused for ${p && p.id}: ${real} is outside the repos root`);
+    return { error: OUTSIDE };
+  }
+
   return {
     /** One pass at a time; a call during a pass waits for it. */
     sync(projects) {
@@ -144,13 +213,9 @@ function createHostRepos({
     clone: (url) => cloneInto(url),
     /** project id -> status of the last pass. */
     statuses: () => new Map(statuses),
-    /** Where a project lives on this host: its own folder, else the clone target. */
-    dirOf(p) {
-      if (p && typeof p.path === 'string' && exists(p.path)) return p.path;
-      const r = parseRemote(p && p.remote);
-      return r && exists(targetOf(r.name)) ? targetOf(r.name) : null;
-    },
+    dirOf,
+    chatDirOf,
   };
 }
 
-module.exports = { createHostRepos, parseRemote, readOwners, validName, failureOf, DEFAULT_OWNERS };
+module.exports = { createHostRepos, parseRemote, readOwners, readChatDirs, isInside, validName, failureOf, DEFAULT_OWNERS };

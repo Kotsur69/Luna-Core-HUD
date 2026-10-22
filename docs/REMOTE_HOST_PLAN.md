@@ -382,16 +382,15 @@ claim race (`update … where status = 'new'`, serial handling).
 
 **Open (MEDIUM / LOW, accepted for now; no CRITICAL or HIGH left):**
 
-- **M1 tool output in the cloud** (security, card in the to-do list): tool results (4 KB), previews
-  and prompts sit in `host_events` / `host_commands` for 14 days, readable
-  with a stolen session (a session that reads `.env` puts it there). Next:
-  secret scrub (`sk-`, `ghp_`, `AKIA`, `-----BEGIN`, `KEY=`), shorter
-  results, drop `chat.*` payloads once done.
-- **M2 synced path redirect** (security, card in the to-do list): a stolen session can rewrite
-  `proj:entry.path` to another existing folder; a later `chat.start` on that
-  repo id runs `claude` there with that folder's project settings / hooks.
-  Needs Mati to start the chat. Next: on a host, resolve repo ids only under
-  the repos root or a host-local list.
+- ~~**M1 tool output in the cloud**~~ fixed: `src/hostscrub.js` masks `sk-`,
+  `ghp_` / `github_pat_`, `AKIA`, PEM key blocks and `*KEY*/*TOKEN*/*SECRET*/
+  *PASSWORD*=value` before every `host_events` insert and `host_commands`
+  result; tool results are capped at 1 KB; a finished `chat.*` row's payload
+  is emptied. Tests: `hostsecurity.test.js`.
+- ~~**M2 synced path redirect**~~ fixed: `hostrepos.chatDirOf` hands a chat
+  only a folder that, after `fs.realpathSync` (symlinks / junctions), sits
+  under the repos root or `host.local.json -> chatDirs`; otherwise the phone
+  gets `refused: repo outside the repos root`. Tests: `hostsecurity.test.js`.
 - **M4 phone CSP** (security, card in the to-do list): only `frame-ancestors` is set; a future XSS on
   the phone origin could sign commands for 12 h. No `innerHTML` today. Next:
   `script-src 'self'; object-src 'none'; base-uri 'none'; connect-src` the
