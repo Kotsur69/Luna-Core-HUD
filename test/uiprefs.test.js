@@ -17,6 +17,7 @@ const {
   cleanRailedRegions,
   cleanCustomLayouts,
   clampModifierPrefs,
+  cleanEffectsStrength,
 } = require('../src/uiprefs.js');
 const { loadLayouts } = require('../src/layouts.js');
 
@@ -496,4 +497,23 @@ test('cleanCustomLayouts caps how many area rows one layout may hold', () => {
 test('cleanCustomLayouts rejects an id that is not id-shaped', () => {
   assert.deepEqual(cleanCustomLayouts({ '': saved() }), {});
   assert.deepEqual(cleanCustomLayouts({ ['x'.repeat(65)]: saved() }), {});
+});
+
+// ---- effectsStrength: the Appearance panel's global texture slider ----------
+
+test('cleanEffectsStrength keeps an integer 0..100, including both ends', () => {
+  for (const ok of [0, 1, 55, 99, 100]) assert.equal(cleanEffectsStrength(ok), ok);
+});
+
+test('cleanEffectsStrength turns anything else into the default 100', () => {
+  // 0 is a deliberate "no texture at all", so the fallback must never be a
+  // coercion that could land there by accident (Number(null) is 0).
+  for (const bad of [-1, 101, 55.5, '50', null, undefined, NaN, Infinity, {}, [], true]) {
+    assert.equal(cleanEffectsStrength(bad), 100, `${String(bad)} must read as the default`);
+  }
+});
+
+test('readUiPrefs always hands back a valid effectsStrength', () => {
+  const { effectsStrength } = readUiPrefs();
+  assert.ok(Number.isInteger(effectsStrength) && effectsStrength >= 0 && effectsStrength <= 100);
 });

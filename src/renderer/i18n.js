@@ -235,6 +235,8 @@ const I18N_DICT = {
     'claude.missing.dismiss': 'Zamknij',
     'appearance.title': 'Wyglad',
     'appearance.theme': 'Motyw',
+    'appearance.effects': 'Sila efektow',
+    'appearance.effects.hint': 'Nakladka tekstury motywu (linie, kratka, gradient). 0% = brak, 100% = tak jak w motywie.',
     'appearance.layout': 'Uklad',
     // v0.10 4.2 layout builder.
     'appearance.layout.namePh': 'Nazwa ukladu',
@@ -2026,6 +2028,8 @@ const I18N_DICT = {
     'claude.missing.dismiss': 'Dismiss',
     'appearance.title': 'Appearance',
     'appearance.theme': 'Theme',
+    'appearance.effects': 'Effects strength',
+    'appearance.effects.hint': 'The theme texture overlay (scanlines, hatching, gradients). 0% = none, 100% = as the theme authored it.',
     'appearance.layout': 'Layout',
     // v0.10 4.2 layout builder.
     'appearance.layout.namePh': 'Layout name',

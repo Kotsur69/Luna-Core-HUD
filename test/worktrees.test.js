@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 
 const {
   slugify,
@@ -68,6 +68,14 @@ test('copyEnvFiles copies only missing top-level .env files', () => {
 
 // ---- addWorktree against real git -------------------------------------------
 
+// Real git with no kill timer. addWorktree's own 30s GIT_TIMEOUT_MS is a
+// production guard against a hung git; on a loaded machine (several suites
+// running at once) `git worktree add` alone has taken longer than that, and a
+// killed git surfaces as gitFailed with an empty detail - a flake, not a bug.
+const PATIENT = {
+  execImpl: (cmd, args, opts, cb) => execFile(cmd, args, { ...opts, timeout: 0 }, cb),
+};
+
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 }
@@ -94,7 +102,7 @@ test('addWorktree creates branch + checkout beside the repo', async () => {
   try {
     fs.writeFileSync(path.join(repo, '.env'), 'SECRET=1');
 
-    const res = await addWorktree(repo, 'Fix Login');
+    const res = await addWorktree(repo, 'Fix Login', PATIENT);
     assert.equal(res.ok, true, JSON.stringify(res));
     const expected = path.join(parent, WORKTREE_DIR, 'app', 'fix-login');
     assert.equal(res.root, expected);
@@ -114,7 +122,7 @@ test('addWorktree creates branch + checkout beside the repo', async () => {
 test('addWorktree opens the same sub-folder inside the worktree', async () => {
   const { parent, repo, cleanup } = makeRepo();
   try {
-    const res = await addWorktree(path.join(repo, 'pkg'), 'sub');
+    const res = await addWorktree(path.join(repo, 'pkg'), 'sub', PATIENT);
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(res.cwd, path.join(parent, WORKTREE_DIR, 'app', 'sub', 'pkg'));
   } finally {
@@ -125,8 +133,8 @@ test('addWorktree opens the same sub-folder inside the worktree', async () => {
 test('addWorktree refuses a name that is already taken', async () => {
   const { repo, cleanup } = makeRepo();
   try {
-    assert.equal((await addWorktree(repo, 'twice')).ok, true);
-    const again = await addWorktree(repo, 'twice');
+    assert.equal((await addWorktree(repo, 'twice', PATIENT)).ok, true);
+    const again = await addWorktree(repo, 'twice', PATIENT);
     assert.equal(again.ok, false);
     assert.equal(again.error, 'exists');
   } finally {
@@ -138,7 +146,7 @@ test('addWorktree reports a branch git refuses as gitFailed', async () => {
   const { repo, cleanup } = makeRepo();
   try {
     git(repo, 'branch', 'luna/taken');
-    const res = await addWorktree(repo, 'taken');
+    const res = await addWorktree(repo, 'taken', PATIENT);
     assert.equal(res.ok, false);
     assert.equal(res.error, 'gitFailed');
     assert.match(res.detail, /taken/);
@@ -150,14 +158,14 @@ test('addWorktree reports a branch git refuses as gitFailed', async () => {
 test('addWorktree errors: bad name, not a repo, no commits', async () => {
   const { parent, repo, cleanup } = makeRepo({ commit: false });
   try {
-    assert.equal((await addWorktree(repo, '???')).error, 'badName');
+    assert.equal((await addWorktree(repo, '???', PATIENT)).error, 'badName');
     const plain = path.join(parent, 'plain');
     fs.mkdirSync(plain);
     // A temp dir can still sit inside some repo on a dev machine; only assert
     // notRepo when git agrees there is none.
-    const res = await addWorktree(plain, 'x');
+    const res = await addWorktree(plain, 'x', PATIENT);
     if (res.error !== 'noCommits') assert.equal(res.error, 'notRepo');
-    assert.equal((await addWorktree(repo, 'x')).error, 'noCommits');
+    assert.equal((await addWorktree(repo, 'x', PATIENT)).error, 'noCommits');
   } finally {
     cleanup();
   }

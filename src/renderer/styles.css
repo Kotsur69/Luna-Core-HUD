@@ -110,6 +110,11 @@
   --btn-grad: linear-gradient(135deg, #1a1030, #241442);
   --btn-grad-hover: linear-gradient(135deg, #241442, #341d5c);
   --glow: rgba(199, 116, 255, 0.32);
+  /* Progress bar fill (usage, context window, telemetry) at its healthy level.
+     Per theme so two themes with similar accents still read apart at a glance;
+     the warn/bad states keep their own fixed gradients. */
+  --bar-from: var(--good);
+  --bar-to: var(--neon-cyan);
 
   /* ---- Form: how sharp or soft the HUD is -------------------------------- */
   /* A scale, not five unrelated numbers: a theme sets all of them to 0 and the
@@ -257,6 +262,11 @@
   --texture-size: auto;
   --texture-opacity: 1;
   --texture-blend: normal;
+  /* Global "Effects strength" (Appearance panel), 0..1. Set by appearance.js
+     from ui.local.json, never by a theme - so it is in DERIVED_TOKENS, not
+     KNOWN_TOKENS. At 0 no theme's texture is visible at all. */
+  --effects-strength: 1;
+  --texture-opacity-eff: calc(var(--texture-opacity) * var(--effects-strength));
 
   /* ---- Motion (C1c) ------------------------------------------------------ */
   /* Four durations and three curves, and nothing in the HUD may hardcode one.
@@ -509,7 +519,7 @@ body::after {
   pointer-events: none;
   background-image: var(--texture);
   background-size: var(--texture-size);
-  opacity: var(--texture-opacity);
+  opacity: var(--texture-opacity-eff);
   mix-blend-mode: var(--texture-blend);
 }
 
@@ -1381,7 +1391,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
      Phase 3 sets --ctx in the 0..1 range (e.g. 0.72 = 72%). */
   transform: scaleX(var(--ctx, 0));
   transform-origin: left center;
-  background: linear-gradient(90deg, var(--good), var(--neon-cyan));
+  background: linear-gradient(90deg, var(--bar-from), var(--bar-to));
   transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
 /* Context window thresholds, set by renderer.js (Phase 3). */
@@ -1502,7 +1512,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
      no layout thrash. renderer.js sets --usage in the 0..1 range. */
   transform: scaleX(var(--usage, 0));
   transform-origin: left center;
-  background: linear-gradient(90deg, var(--good), var(--neon-cyan));
+  background: linear-gradient(90deg, var(--bar-from), var(--bar-to));
   transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
 .usage-bar__fill[data-level='warn'] { background: linear-gradient(90deg, var(--warn), #ffb347); }
@@ -1937,6 +1947,9 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   /* One token per row; data-level only reassigns it. This keeps the bar,
      the number, and the ticks from drifting apart in color. */
   --telem-color: var(--good);
+  /* The bar's own paint. Healthy rows use the theme's bar gradient; every
+     level below swaps it for its flat --telem-color. */
+  --telem-bar: linear-gradient(90deg, var(--bar-from), var(--bar-to));
   --telem-fill: 0;
   margin-bottom: var(--space-7);
   transition: opacity var(--dur-fast) var(--ease-smooth);
@@ -1948,12 +1961,15 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 .telem__row[data-level='warn'] {
   --telem-color: var(--warn);
+  --telem-bar: var(--telem-color);
 }
 .telem__row[data-level='crit'] {
   --telem-color: var(--bad);
+  --telem-bar: var(--telem-color);
 }
 .telem__row[data-level='unknown'] {
   --telem-color: var(--text-dim);
+  --telem-bar: var(--telem-color);
 }
 
 .telem__head {
@@ -1999,7 +2015,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   height: 100%;
   transform: scaleX(var(--telem-fill, 0));
   transform-origin: left center;
-  background: var(--telem-color);
+  background: var(--telem-bar);
   box-shadow: 0 0 var(--glow-size-sm) var(--telem-color);
   transition: transform var(--dur-normal) var(--ease-smooth),
     background-color var(--dur-normal) var(--ease-smooth);

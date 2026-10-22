@@ -39,9 +39,12 @@ import {
 import { loc } from './util.js';
 import { sfx } from './sound.js';
 import { crossfade } from './motion.js';
+import { pickThemeId, effectsScale } from './themepick.js';
 
 let themesById = new Map();
 let activeThemeId = null;
+// Global effects strength, percent 0..100 (ui.local.json effectsStrength).
+let effectsPct = 100;
 
 // Elements of the current mount, or null when this widget is not on screen.
 let els = null;
@@ -97,6 +100,23 @@ export function applyLang(lang) {
   window.i18n.setLang(lang);
   window.i18n.applyStatic();
   emitLangChange();
+}
+
+/**
+ * Applies the effects-strength slider. Lives on :root as --effects-strength,
+ * which no theme can set (DERIVED_TOKENS), so a theme switch never resets it.
+ */
+function applyEffectsStrength(pct) {
+  const scale = effectsScale(pct);
+  effectsPct = Math.round(scale * 100);
+  document.documentElement.style.setProperty('--effects-strength', String(scale));
+}
+
+/** Repaints the slider and its readout from module state. */
+function renderEffectsStrength() {
+  if (!els || !els.effects) return;
+  els.effects.value = String(effectsPct);
+  els.effectsOut.textContent = `${effectsPct}%`;
 }
 
 /** Rebuilds the theme select's options and repaints it from module state. */
@@ -208,6 +228,8 @@ export async function initAppearance() {
   // stored override is on screen from the first paint rather than snapping in
   // once the Settings overlay is first opened.
   initSurfaceAlpha(prefs);
+  applyEffectsStrength(prefs.effectsStrength);
+  renderEffectsStrength();
 
   // v0.10 4.2. Read before renderLayoutSwitcher() below, which needs it to know
   // which of the listed layouts the user is allowed to rename or delete.
@@ -219,13 +241,12 @@ export async function initAppearance() {
   // were built in the authored language - relabel them now that we know better.
   renderLayoutSwitcher();
 
-  // Themes: fill the list and apply the active one (or the first available).
+  // Themes: fill the list and apply the saved one - or luna, when the saved id
+  // is a theme that no longer ships.
   try {
     const { themes } = await window.lunacore.getThemes();
     themesById = new Map((themes || []).map((th) => [th.id, th]));
-    const active = themesById.has(prefs.theme)
-      ? prefs.theme
-      : themes && themes[0] && themes[0].id;
+    const active = pickThemeId([...themesById.keys()], prefs.theme);
     if (active) {
       activeThemeId = active;
       renderThemeSwitcher();
@@ -243,6 +264,8 @@ defineWidget({
   mount(root) {
     els = {
       themeSwitcher: root.querySelector('#theme-switcher'),
+      effects: root.querySelector('#effects-strength'),
+      effectsOut: root.querySelector('#effects-strength-out'),
       layoutSwitcher: root.querySelector('#layout-switcher'),
       // v0.10 4.2 layout builder.
       layoutName: root.querySelector('#layout-name'),
@@ -255,7 +278,17 @@ defineWidget({
     // Repaint from module state - initAppearance() only runs once at launch,
     // a remount must not fall back to the template's authored defaults.
     renderThemeSwitcher();
+    renderEffectsStrength();
     renderLayoutSwitcher();
+
+    // Live while dragging; persisted once on release, not on every tick.
+    els.effects.addEventListener('input', () => {
+      applyEffectsStrength(Number(els.effects.value));
+      renderEffectsStrength();
+    });
+    els.effects.addEventListener('change', () => {
+      window.lunacore.setUiPrefs({ effectsStrength: effectsPct });
+    });
 
     // Layout labels are localized - relabel them on every language change, not
     // just the one initAppearance() applies at boot. Used to be a direct call

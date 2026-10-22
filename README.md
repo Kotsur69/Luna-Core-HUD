@@ -1667,17 +1667,17 @@ and [`src/renderer/modules/widgetarrange.js`](src/renderer/modules/widgetarrange
 ## Theming
 
 The whole look is a set of CSS custom-property tokens, so a "theme" is just a
-values file. **32 ship**, defined in [`config/themes.json`](config/themes.json):
+values file. **28 ship**, defined in [`config/themes.json`](config/themes.json):
 
 | | |
 |---|---|
-| **Neon** | cyberpunk *(default)*, synthwave, vapor, crimson |
+| **Neon** | cyberpunk *(default)*, synthwave, outrun, crimson, acid |
 | **Sci-fi HUD** | eva-01, tron, holo, luna |
 | **Terminal** | matrix, amber-crt, blueprint |
-| **Editor** | nord, tokyo-night, dracula, gruvbox, solarized |
-| **Calm** | catppuccin-mocha, rose-pine, everforest-dark |
-| **Atmospheric** | aurora, abyss, magma |
-| **Quiet** | void, glacier |
+| **Editor** | tokyo-night, dracula |
+| **Calm** | sakura (Sakura Bloom), regalia |
+| **Atmospheric** | aurora, magma, glacier (Deep Ocean) |
+| **Quiet** | void |
 | **Light** | paper, light, newsprint, eink |
 | **Glass** | glass, glass-clear, glass-frost, glass-noir — window transparency (Win11 acrylic) |
 
@@ -1687,7 +1687,11 @@ bottom, so the list you scroll is the list you actually pick from.
 `src/theme.js` loads and validates them (falling back to a built-in cyberpunk if
 the file is broken, same as `profiles.js`). Pick one from the **Appearance**
 section in the left panel — it applies live, rewriting the CSS tokens on
-`documentElement` *and* the xterm terminal palette, no reload.
+`documentElement` *and* the xterm terminal palette, no reload. A saved theme
+that no longer ships falls back to `luna`. Each dark theme also paints its own
+progress bars (`--bar-from` / `--bar-to` — usage, context window, telemetry),
+and the **Effects strength** slider under the theme picker scales every
+theme's texture overlay from 0% (none at all) to 100% (as authored).
 
 A theme is not just a palette. The ~45-token vocabulary also covers **form**
 (radii, padding, panel gap), **typography** (three font stacks, letter spacing,
@@ -1698,18 +1702,16 @@ a drafting grid, `newsprint` a halftone print, and costs the flat themes
 nothing (`--texture: none`). The v0.10 themes lean on it hardest: `tron` is a
 cyan wireframe grid with square corners and no hover lift, `eva-01` is all
 2px borders and 4.5px title tracking at zero radius, `holo` runs the largest
-glow in the app at 30px, `abyss` is a 900ms vignette with the text glow taken
-out entirely, and the three calm themes (`catppuccin-mocha`, `rose-pine`,
-`everforest-dark`) turn glow off, drop the uppercasing and round every corner
-to 12-14px — the same vocabulary, aimed the opposite way.
+glow in the app at 30px, `regalia` sets its titles in a serif with gold on
+royal navy, and `sakura` drops the uppercasing and rounds every corner to
+12-14px — the same vocabulary, aimed the opposite way.
 
 **Every theme is contrast-tested.** `test/theme.test.js` walks all 28 and fails
 the build if body or dim text drops under **4.5:1** against its own surfaces, or
 if the xterm palette's foreground does against its own background — the panel
 tokens and the terminal palette are separate blocks that nothing else forces to
 agree. A theme can also `extend` another and restate only
-what differs — `amber-crt` is `matrix` in amber, `vapor` is `synthwave` in
-pastel, `e-ink` is `paper` with the colour taken out.
+what differs — `amber-crt` is `matrix` in amber, `e-ink` is `paper` with the colour taken out.
 
 Drop a `config/themes.local.json` (gitignored) to add or override themes by
 `id`. An unknown token there is dropped with a warning rather than taking the

@@ -254,7 +254,7 @@ test('none of the existing theme ids have disappeared', () => {
   const { themes } = loadThemes(() => {});
   const ids = new Set(themes.map((t) => t.id));
   // Removing any of these would orphan a saved choice in ui.local.json.
-  for (const id of ['cyberpunk', 'synthwave', 'matrix', 'nord', 'light']) {
+  for (const id of ['cyberpunk', 'synthwave', 'matrix', 'luna', 'light']) {
     assert.ok(ids.has(id), `theme "${id}" disappeared from config/themes.json`);
   }
 });
@@ -271,9 +271,7 @@ test('matrix is no longer just a green filter', () => {
 
 test('flat themes genuinely turn off the glow', () => {
   const { themes } = loadThemes(() => {});
-  // Nord used to be in this list. It moved to the neon group below on a
-  // deliberate call - a Nord with no glow and light slate surfaces read as
-  // grey rather than as a colour scheme. The themes left here are flat by
+  // The themes here are flat by
   // PURPOSE (paper and light are lit surfaces; void is an absence), and a
   // glow on any of them would be a bug, not a preference.
   for (const id of ['paper', 'void', 'light']) {
@@ -294,7 +292,7 @@ test('the neon themes actually glow, on boxes AND on type', () => {
   // theme carrying a --glow-size but leaving --text-glow at "none", so the
   // bloom appears on every border and never once on the text - which reads as
   // a rendering fault rather than a style.
-  for (const id of ['cyberpunk', 'synthwave', 'nord', 'dracula', 'solarized', 'tokyo-night']) {
+  for (const id of ['cyberpunk', 'synthwave', 'dracula', 'tokyo-night', 'outrun', 'magma']) {
     const t = themes.find((x) => x.id === id);
     // An absent --glow-size is not a missing glow: :root's own default IS the
     // cyberpunk look, and cyberpunk is the one theme that inherits it rather
@@ -310,14 +308,131 @@ test('the neon themes actually glow, on boxes AND on type', () => {
   }
 });
 
-test('solarized stays restrained while the others burn', () => {
+test('synthwave out-blooms cyberpunk', () => {
   const { themes } = loadThemes(() => {});
   const size = (id) => glowSize(themes.find((t) => t.id === id));
-  // Solarized's identity is a deliberately narrow contrast range; it earns a
-  // glow but must never out-bloom the themes built for neon.
-  assert.ok(size('solarized') < size('cyberpunk'), 'solarized must stay under cyberpunk');
-  assert.ok(size('solarized') < size('synthwave'), 'solarized must stay under synthwave');
   assert.ok(size('synthwave') >= size('cyberpunk'), 'synthwave is the loudest by design');
+});
+
+// ---- the 2026-10 theme overhaul -------------------------------------------
+
+/** Ids removed in the overhaul. A saved one falls back to luna in the renderer. */
+const REMOVED_THEMES = [
+  'catppuccin-mocha', 'everforest-dark', 'gruvbox', 'nord', 'vapor', 'solarized', 'abyss',
+  'rose-pine',
+];
+
+test('removed themes are gone and their replacements ship', () => {
+  const { themes } = loadThemes(() => {});
+  const ids = new Set(themes.map((t) => t.id));
+  for (const id of REMOVED_THEMES) assert.ok(!ids.has(id), `theme "${id}" should be gone`);
+  for (const id of ['sakura', 'outrun', 'acid', 'regalia', 'luna']) {
+    assert.ok(ids.has(id), `theme "${id}" is missing`);
+  }
+  assert.strictEqual(themes.find((t) => t.id === 'glacier').label, 'Deep Ocean');
+});
+
+test('a saved theme that no longer exists falls back to luna', async () => {
+  const { pickThemeId, FALLBACK_THEME_ID } = await import('../src/renderer/modules/themepick.js');
+  const ids = loadThemes(() => {}).themes.map((t) => t.id);
+  assert.strictEqual(FALLBACK_THEME_ID, 'luna');
+  for (const gone of [...REMOVED_THEMES, 'no-such-theme', '', null, undefined, 42]) {
+    assert.strictEqual(pickThemeId(ids, gone), 'luna', `saved ${String(gone)}`);
+  }
+  // A theme that still exists is kept, even when it is not the first one.
+  assert.strictEqual(pickThemeId(ids, 'tron'), 'tron');
+  // Without luna loaded (a broken themes.json -> built-in fallback) the first wins.
+  assert.strictEqual(pickThemeId(['cyberpunk'], 'nord'), 'cyberpunk');
+  assert.strictEqual(pickThemeId([], 'luna'), null);
+});
+
+test('effectsScale maps an integer percent to 0..1 and anything else to 1', async () => {
+  const { effectsScale } = await import('../src/renderer/modules/themepick.js');
+  assert.strictEqual(effectsScale(0), 0);
+  assert.strictEqual(effectsScale(55), 0.55);
+  assert.strictEqual(effectsScale(100), 1);
+  for (const bad of [-1, 101, 55.5, '50', null, undefined, NaN]) {
+    assert.strictEqual(effectsScale(bad), 1, String(bad));
+  }
+});
+
+test('the texture overlay is painted through the effects multiplier', () => {
+  // At 0% no theme's texture may show, whatever --texture-opacity it sets. That
+  // only holds while body::after reads the derived token, never the raw one.
+  const css = fs.readFileSync(STYLES, 'utf8');
+  const overlay = /body::after\s*\{([^}]*)\}/.exec(css);
+  assert.ok(overlay, 'body::after overlay rule must exist');
+  assert.match(overlay[1], /opacity:\s*var\(--texture-opacity-eff\)/);
+  assert.strictEqual(
+    rootValue('--texture-opacity-eff'),
+    'calc(var(--texture-opacity) * var(--effects-strength))'
+  );
+  assert.strictEqual(rootValue('--effects-strength'), '1');
+  for (const t of ['--effects-strength', '--texture-opacity-eff']) {
+    assert.ok(DERIVED_TOKENS.has(t) && !KNOWN_TOKENS.has(t), `${t} must not be theme-settable`);
+  }
+});
+
+// ---- --bar-from / --bar-to ---------------------------------------------------
+
+test('bar tokens exist in :root and the bar fills actually use them', () => {
+  assert.strictEqual(rootValue('--bar-from'), 'var(--good)');
+  assert.strictEqual(rootValue('--bar-to'), 'var(--neon-cyan)');
+  assert.ok(KNOWN_TOKENS.has('--bar-from') && KNOWN_TOKENS.has('--bar-to'));
+  const css = fs.readFileSync(STYLES, 'utf8');
+  // The old hard-wired gradient must not creep back into any fill.
+  assert.doesNotMatch(css, /linear-gradient\(90deg, var\(--good\), var\(--neon-cyan\)\)/);
+  for (const sel of ['ctx-bar__fill', 'usage-bar__fill']) {
+    const rule = new RegExp(`\\.${sel}\\s*\\{([^}]*)\\}`).exec(css);
+    assert.ok(rule, `.${sel} rule must exist`);
+    assert.match(rule[1], /var\(--bar-from\), var\(--bar-to\)/, sel);
+  }
+  assert.match(css, /--telem-bar: linear-gradient\(90deg, var\(--bar-from\), var\(--bar-to\)\)/);
+});
+
+test('every dark theme has its own --bar-from/--bar-to pair', () => {
+  const { themes } = loadThemes(() => {});
+  const seen = new Map();
+  const missing = [];
+  for (const t of themes.filter((x) => !isLightTheme(x))) {
+    const from = t.vars['--bar-from'];
+    const to = t.vars['--bar-to'];
+    if (!parseColor(from) || !parseColor(to)) {
+      missing.push(t.id);
+      continue;
+    }
+    const key = `${from} ${to}`.toLowerCase();
+    // glass-* are variants of glass and share its pair through extends.
+    const family = t.id.replace(/^glass-.*/, 'glass');
+    const owner = seen.get(key);
+    assert.ok(!owner || owner === family, `${t.id} reuses ${owner}'s bar colours ${key}`);
+    seen.set(key, family);
+  }
+  assert.deepStrictEqual(missing, [], `dark themes without flat --bar-* colours: ${missing.join(', ')}`);
+});
+
+test('tokyo-night, holo and luna bars read apart', () => {
+  const { themes } = loadThemes(() => {});
+  const bar = (id) => {
+    const t = themes.find((x) => x.id === id);
+    return [parseColor(t.vars['--bar-from']), parseColor(t.vars['--bar-to'])];
+  };
+  // Sum of channel distances over both stops; 120 is well past "a bit bluer".
+  const dist = (a, b) =>
+    a.reduce((n, stop, i) => n + stop.reduce((m, c, j) => m + Math.abs(c - b[i][j]), 0), 0);
+  for (const [x, y] of [['tokyo-night', 'holo'], ['tokyo-night', 'luna'], ['holo', 'luna']]) {
+    assert.ok(dist(bar(x), bar(y)) > 120, `${x} vs ${y}`);
+  }
+});
+
+test('the reworked overlay themes keep their texture but turn it down', () => {
+  const { themes } = loadThemes(() => {});
+  for (const id of ['matrix', 'amber-crt', 'crimson', 'eva-01', 'magma']) {
+    const t = themes.find((x) => x.id === id);
+    assert.notStrictEqual(t.vars['--texture'], 'none', id);
+    assert.ok(parseFloat(t.vars['--texture-opacity']) <= 0.35, `${id} overlay is still heavy`);
+  }
+  assert.strictEqual(themes.find((x) => x.id === 'outrun').vars['--texture'], 'none');
 });
 
 // ---- contrast: a theme has to be readable, not just good-looking ------------
