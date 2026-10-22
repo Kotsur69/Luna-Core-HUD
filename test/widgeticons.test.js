@@ -76,3 +76,13 @@ test('libicons and widgeticons share one drawing helper, no innerHTML', () => {
   assert.match(src, /import \{ drawIcon \} from '\.\/libicons\.js'/);
   assert.doesNotMatch(src, /\.innerHTML\s*=/);
 });
+
+test('every widget icon is a distinct drawing', () => {
+  const { WIDGET_ICONS } = require('../src/renderer/modules/widgeticons.js');
+  const seen = new Map();
+  for (const [id, shapes] of Object.entries(WIDGET_ICONS)) {
+    const key = JSON.stringify(shapes);
+    assert.ok(!seen.has(key), `"${id}" draws the same icon as "${seen.get(key)}"`);
+    seen.set(key, id);
+  }
+});

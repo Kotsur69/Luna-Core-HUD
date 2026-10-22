@@ -25,6 +25,7 @@ const {
   MIN_TRACK_PX,
   MAX_TRACK_PX,
   foldDurationMs,
+  foldTrayEntries,
   FOLD_REF_PX,
   FOLD_MIN_SCALE,
   FOLD_MAX_SCALE,
@@ -422,4 +423,27 @@ test('every shipped preset can collapse at least one region', () => {
     }
     assert.ok(railable > 0, `${layout.id} offers no region that can be collapsed`);
   }
+});
+
+// ---- foldTrayEntries --------------------------------------------------------
+
+test('foldTrayEntries keeps only folded, labelled widgets, in column order', () => {
+  const out = foldTrayEntries([
+    { id: 'usage', label: 'Usage', folded: true },
+    { id: 'git', label: 'Git', folded: false },
+    { id: 'todo', label: '', folded: true },
+    { id: '', label: 'Nameless', folded: true },
+    null,
+    { id: 'profile', label: 'Profile', folded: true },
+  ]);
+  assert.deepEqual(out, [
+    { id: 'usage', label: 'Usage' },
+    { id: 'profile', label: 'Profile' },
+  ]);
+});
+
+test('foldTrayEntries tolerates junk input', () => {
+  assert.deepEqual(foldTrayEntries(undefined), []);
+  assert.deepEqual(foldTrayEntries('usage'), []);
+  assert.deepEqual(foldTrayEntries([]), []);
 });
