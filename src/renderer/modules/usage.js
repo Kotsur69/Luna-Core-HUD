@@ -24,12 +24,16 @@
 // disabled) still take over the whole tile, because those are real, lasting
 // states the next 15 s heartbeat (src/usage.js UsageWatcher) can't fix on
 // its own - the user has to do something (run `claude`, flip the flag).
+//
+// ONE PROVIDER AT A TIME: the tile shows only the limits of the profile the
+// active terminal tab runs - Claude's rows on a Claude tab, that provider's
+// block on a Codex / GLM / ... tab, never both. See selectVisibleUsage().
 // ============================================================================
 
 'use strict';
 
 import { t, loc } from './util.js';
-import { onLangChange, onUsageUpdate } from './bus.js';
+import { onLangChange, onUsageUpdate, onActiveProfile } from './bus.js';
 import { defineWidget } from './registry.js';
 
 /** How often the "resets in ..." labels are recomputed (locally, no request). */
@@ -45,6 +49,26 @@ let lastError = null; // status value of most recent error/unconfigured payload
 // Other configured providers (src/providerusage.js). Only the watcher's
 // payload carries them; a refresh-button read without the field keeps these.
 let lastOthers = [];
+// Profile id of the active terminal tab (bus replay), null with no tab.
+let activeProfileId = null;
+
+/**
+ * Which provider's limits the tile shows for the active tab. `others` only
+ * holds NON-Claude profiles (src/providerusage.js skips Claude, local models
+ * and command-less profiles), so a profile found there gets its own block and
+ * everything else - a Claude tab, no tab yet, a profile we hold no reading
+ * for - falls back to Claude's rows, which is what the tile showed first
+ * before it was split per provider. Never returns both.
+ * @param {Array<object>} others the payload's `others` list
+ * @param {string|null} profileId the active tab's profile
+ * @returns {{provider: 'claude', entry: null} | {provider: 'other', entry: object}}
+ */
+export function selectVisibleUsage(others, profileId) {
+  const entry = profileId && Array.isArray(others)
+    ? others.find((o) => o && typeof o === 'object' && o.profileId === profileId)
+    : null;
+  return entry ? { provider: 'other', entry } : { provider: 'claude', entry: null };
+}
 
 /** Applies a fresh payload to module state. Pure state update, no render. */
 function applyUsage(usage) {
@@ -151,13 +175,6 @@ function usageProviderBlock(entry) {
   return block;
 }
 
-/** Appends every other provider below Claude's rows. */
-function renderOthers(usageBody) {
-  for (const entry of lastOthers) {
-    if (entry && typeof entry === 'object') usageBody.appendChild(usageProviderBlock(entry));
-  }
-}
-
 /** Builds one usage row from a limit object in the new format. */
 function usageRowForLimit(limit) {
   const row = document.createElement('div');
@@ -208,17 +225,20 @@ function usageMessage(key) {
  */
 function renderFreshness() {
   if (!els || !els.updated) return;
-  const when = lastGoodUsage ? fmtAgo(lastGoodUsage.updatedAt) : null;
+  const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
+  const source = entry || lastGoodUsage;
+  const when = source ? fmtAgo(source.updatedAt) : null;
   els.updated.textContent = when ? t('usage.updatedAgo', { when }) : '';
 }
 
-/** Renders the tile from the current state: Claude first, then the others. */
+/** Renders the tile from the current state: the active tab's provider only. */
 function renderUsage() {
   if (!els) return; // not mounted - state is kept, the DOM is not ours
   const usageBody = els.body;
   usageBody.innerHTML = '';
-  renderClaudeRows(usageBody);
-  renderOthers(usageBody);
+  const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
+  if (entry) usageBody.appendChild(usageProviderBlock(entry));
+  else renderClaudeRows(usageBody);
   renderFreshness();
 }
 
@@ -289,6 +309,12 @@ defineWidget({
 
     const offLang = onLangChange(renderUsage);
 
+    // Replays, so the first paint already knows the active tab's profile.
+    const offProfile = onActiveProfile((profileId) => {
+      activeProfileId = profileId || null;
+      renderUsage();
+    });
+
     els.refresh.addEventListener('click', async () => {
       const btn = els.refresh;
       btn.classList.add('is-spinning');
@@ -324,6 +350,7 @@ defineWidget({
     return () => {
       offUsage();
       offLang();
+      offProfile();
       clearInterval(countdown);
       clearInterval(freshness);
       els = null;

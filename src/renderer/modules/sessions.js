@@ -17,6 +17,7 @@ import {
   emitActiveContext,
   emitBackgroundContext,
   emitSessionRestarted,
+  emitActiveProfile,
   saveSessionView,
   loadSessionView,
   clearSessionView,
@@ -75,6 +76,22 @@ const STATUS_GLYPH = {
 
 function activeMeta() {
   return sessionList.find((x) => x.id === getActiveSessionId());
+}
+
+// undefined = never emitted, so the first sync always goes out (even a null).
+let emittedProfileId;
+
+/**
+ * Tells the bus which profile the active tab runs - on a tab switch, and when
+ * a restart swapped the tab's profile. Only on change: the session list is
+ * re-broadcast far more often than that.
+ */
+function syncActiveProfile() {
+  const meta = activeMeta();
+  const profileId = (meta && meta.profileId) || null;
+  if (profileId === emittedProfileId) return;
+  emittedProfileId = profileId;
+  emitActiveProfile(profileId);
 }
 
 // ---- pty stream, routed by sessionId ----------------------------------------
@@ -254,6 +271,7 @@ function showSession(sessionId) {
   syncSwitchers(activeMeta());
   syncTodoProject();
   setTodoToolsState(activeMeta());
+  syncActiveProfile();
   renderTabs();
   fitAndResize(); // a background tab did not know its own size
   term.focus();
@@ -558,6 +576,8 @@ window.lunacore.onSessions(({ sessions, activeSessionId: activeId }) => {
   }
   // The active tab's own flag may have flipped (its `claude` just launched).
   setTodoToolsState(activeMeta());
+  // So may its profile (a restart with another profile keeps the same tab id).
+  syncActiveProfile();
   renderTabs();
 });
 
@@ -647,6 +667,7 @@ export function initSessions() {
         showPane(activeId);
         syncSwitchers(activeMeta());
       }
+      syncActiveProfile();
       renderTabs();
       fitAndResize();
       setPtyStatus(true, 'ptystatus.active');
