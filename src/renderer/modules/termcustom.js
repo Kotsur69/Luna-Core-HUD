@@ -28,6 +28,7 @@ import { mountLmStudioSettings } from './lmstudiomodels.js';
 import { mountProviderSettings } from './providersettings.js';
 import { mountLunaSyncPicker } from './lunasyncpicker.js';
 import { mountCcrSettings } from './ccrsettings.js';
+import { mountSetupCenter, refresh as refreshSetupCenter } from './setupcenter.js';
 import { applyLang } from './appearance.js';
 import { MODIFIER_AXES, getModifiers, setModifier } from './modifiers.js';
 import { sfx } from './sound.js';
@@ -294,6 +295,8 @@ async function openTermcustom() {
   // the same frame the overlay appears, not after an IPC round trip.
   settingsNav.onOpen();
   renderVersion();
+  // Setup rows re-probe on every open (main caches for a few seconds).
+  refreshSetupCenter();
 
   let prefs = TERM_DEFAULTS;
   try {
@@ -313,6 +316,17 @@ function closeTermcustom() {
   if (!termcustomOpen) return;
   termcustomOpen = false;
   closeWithExit(termcustomEl);
+}
+
+/**
+ * Opens Settings scrolled to one section - the Getting started guide's
+ * "Open Setup" link lands on #setup-center this way.
+ * @param {string} anchorId id of an element inside the overlay
+ */
+export async function openSettingsAt(anchorId) {
+  await openTermcustom();
+  const target = termcustomEl.querySelector(`#${CSS.escape(anchorId)}`);
+  if (target) target.scrollIntoView({ block: 'start' });
 }
 
 // -- Language (moved from appearance.js, 2026-08-19) -------------------------
@@ -574,6 +588,10 @@ export async function initTermcustomSettings() {
   // God Mode v2 worker model + permission mode (slice 4). Read by main when
   // a run starts; this only wires the two selects.
   mountOrchestraSettings(termcustomEl, prefs);
+
+  // Setup Center (top of the overlay) + the optional-module switches, which
+  // also apply the hide-* attributes right now, before Settings ever opens.
+  mountSetupCenter(termcustomEl, prefs);
 
   // Report emails (Gmail send-only grant, nightly summary). Same static-overlay shape.
   mountMailSettings(termcustomEl);

@@ -2,6 +2,7 @@
 // It shares validators and maths with the desktop app straight from ../src.
 // Those files are CommonJS outside this root, so the commonjs plugin has to
 // be told to convert them - by default it only converts node_modules.
+import { readFileSync } from 'node:fs';
 import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -22,12 +23,22 @@ function cspOrigin(mode) {
   };
 }
 
+/**
+ * vite preview ignores vercel.json, so it serves the same security headers
+ * (the full CSP included) read straight from there: one source, no drift.
+ */
+function vercelHeaders() {
+  const rules = JSON.parse(readFileSync(new URL('./vercel.json', import.meta.url), 'utf8')).headers || [];
+  const all = rules.find((r) => r.source === '/(.*)');
+  return Object.fromEntries((all ? all.headers : []).map((h) => [h.key, h.value]));
+}
+
 export default defineConfig(({ mode }) => ({
   build: {
     target: 'es2022',
     commonjsOptions: { include: [SHARED, /node_modules/] },
   },
-  preview: { port: 4173, strictPort: true },
+  preview: { port: 4173, strictPort: true, headers: vercelHeaders() },
   plugins: [
     cspOrigin(mode),
     VitePWA({

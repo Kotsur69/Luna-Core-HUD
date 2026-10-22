@@ -164,6 +164,9 @@ test('dedupe: same result sends once, a changed result sends one "updated" email
 
 test('off or not connected: nothing sent; a send failure comes back as a reason', async () => {
   const off = setup({ connected: false });
+  assert.equal((await off.mailer.onReport('abc123', REPORT, summary())).skipped, 'not-connected');
+  // Switched off on purpose: no "connect Gmail" nag, connected or not.
+  off.prefs.savePrefs({ godmodeEmail: false });
   assert.equal((await off.mailer.onReport('abc123', REPORT, summary())).skipped, 'off');
   const failing = setup({ failSend: 'gmail-network' });
   assert.deepEqual(await failing.mailer.onReport('abc123', REPORT, summary()), { sent: false, error: 'gmail-network' });
@@ -204,6 +207,42 @@ test('finalize hands the report to onReport and shows an email failure on the bo
   assert.equal(onReportArgs[2].pushed, 1);
   assert.equal(plan.integration.emailError, 'gmail-auth');
   assert.match(reports[reports.length - 1], /- Email failed: gmail-auth/);
+});
+
+test('finalize shows "Gmail not connected" on the board instead of skipping silently', async () => {
+  const { createFinalizer } = require('../src/orchestraFinalize.js');
+  const plan = { id: 'r2', repoPath: 'C:\\r', integrationMode: 'branches', integration: { state: 'idle' }, approvalLog: [], packages: [] };
+  const fin = createFinalizer({
+    getPlan: () => plan,
+    patch: () => {},
+    commit: () => {},
+    view: () => ({ id: plan.id, packages: [], integration: plan.integration, overlaps: [] }),
+    onRunEvent: () => {},
+    now: () => 1,
+    onReport: async () => ({ sent: false, skipped: 'not-connected' }),
+  });
+  assert.equal(await fin.finalize(), true);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(plan.integration.emailError, 'gmail-not-connected');
+});
+
+test('finalize: a switched-off or duplicate email is not shown as an error', async () => {
+  const { createFinalizer } = require('../src/orchestraFinalize.js');
+  for (const skipped of ['off', 'duplicate']) {
+    const plan = { id: 'r3', repoPath: 'C:\\r', integrationMode: 'branches', integration: { state: 'idle' }, approvalLog: [], packages: [] };
+    const fin = createFinalizer({
+      getPlan: () => plan,
+      patch: () => {},
+      commit: () => {},
+      view: () => ({ id: plan.id, packages: [], integration: plan.integration, overlaps: [] }),
+      onRunEvent: () => {},
+      now: () => 1,
+      onReport: async () => ({ sent: false, skipped }),
+    });
+    await fin.finalize();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(plan.integration.emailError, null, skipped);
+  }
 });
 
 test('a throwing onReport never breaks finalize', async () => {

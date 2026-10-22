@@ -12,7 +12,8 @@
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
 // collapsed, layoutSizes, widgetSlots, railedRegions, density, fontPack, glow,
-// motion, effectsStrength.
+// motion, effectsStrength, welcomeSeen, welcomeChecked, pwaUrl, hideLife,
+// hideMission, hideGodMode.
 // The renderer
 // reads it at startup (ui:get) and writes on change (ui:set).
 //
@@ -313,9 +314,24 @@ const DEFAULTS = {
   fontPack: 'theme',
   glow: 'full',
   motion: 'full',
+  // Getting started (src/welcome.js): the app version the guide was dismissed
+  // with "Don't show this again", and whether the first-run decision already
+  // ran on this profile. Written by main only (setupipc.js); ui:set drops them.
+  welcomeSeen: null,
+  welcomeChecked: false,
+  // Setup Center: the user's own phone PWA deploy (https, for the QR code)
+  // and the optional-module switches. Missing keys => every module shown.
+  pwaUrl: null,
+  hideLife: false,
+  hideMission: false,
+  hideGodMode: false,
 };
 
 const MAX_COLLAPSED = 64;
+const MODULE_HIDE_KEYS = ['hideLife', 'hideMission', 'hideGodMode'];
+const { parseVersion } = require('./welcome');
+const { normalizePwaUrl } = require('./setupcenter');
+const versionOf = (v) => (parseVersion(v) ? v.trim() : null);
 const MAX_LAYOUT_SIZES = 32;
 // A layout has a handful of regions and a few dozen widgets; these caps only
 // exist so a hand-edited or corrupt file cannot make the renderer chew on a
@@ -713,6 +729,10 @@ function readUiPrefs() {
       widgetSlots: cleanWidgetSlots(obj.widgetSlots),
       railedRegions: cleanRailedRegions(obj.railedRegions),
       customLayouts: cleanCustomLayouts(obj.customLayouts),
+      welcomeSeen: versionOf(obj.welcomeSeen),
+      welcomeChecked: obj.welcomeChecked === true,
+      pwaUrl: normalizePwaUrl(obj.pwaUrl),
+      ...Object.fromEntries(MODULE_HIDE_KEYS.map((k) => [k, obj[k] === true])),
       ...clampAutoCompactPrefs(obj),
       ...clampTermPrefs(obj),
       ...clampModifierPrefs(obj),
@@ -852,6 +872,17 @@ function writeUiPrefs(partial) {
     // and writes all of them, which is what makes deleting one expressible.
     if (partial && partial.customLayouts && typeof partial.customLayouts === 'object') {
       next.customLayouts = cleanCustomLayouts(partial.customLayouts);
+    }
+    if (partial && 'welcomeSeen' in partial && (partial.welcomeSeen === null || versionOf(partial.welcomeSeen))) {
+      next.welcomeSeen = partial.welcomeSeen === null ? null : versionOf(partial.welcomeSeen);
+    }
+    if (partial && typeof partial.welcomeChecked === 'boolean') next.welcomeChecked = partial.welcomeChecked;
+    // null clears the PWA address; anything else must pass the https check.
+    if (partial && 'pwaUrl' in partial && (partial.pwaUrl === null || normalizePwaUrl(partial.pwaUrl))) {
+      next.pwaUrl = partial.pwaUrl === null ? null : normalizePwaUrl(partial.pwaUrl);
+    }
+    for (const key of MODULE_HIDE_KEYS) {
+      if (partial && typeof partial[key] === 'boolean') next[key] = partial[key];
     }
     // Only the term* keys actually present in `partial` should move; anything
     // omitted keeps its current (already-validated) value from `next` rather

@@ -27,6 +27,7 @@ import { fitAndResize } from './modules/terminals.js';
 import { initSessions } from './modules/sessions.js';
 import './modules/terminal.js';
 import { initTermcustomSettings } from './modules/termcustom.js';
+import { initWelcome } from './modules/welcome.js';
 
 // -- Right panel: metrics -----------------------------------------------------
 // context before spark and autocompact: both read its thresholds, and this is
@@ -162,6 +163,9 @@ mountBrand();
 // After initAppearance(): boot's animation needs language + theme already
 // applied, same ordering constraint startBoot() has always documented.
 initTermcustomSettings();
+// Getting started: main says whether it opens on this start; it waits for
+// the boot sequence to finish. Not awaited - nothing below needs it.
+initWelcome();
 initSessions();
 
 // D3. After initAppearance() so applyStatic() has already resolved the notice's

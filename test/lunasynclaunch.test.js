@@ -24,6 +24,10 @@ const {
 const NATIVE_GEMINI = { id: 'gemini-cli', wireVia: 'native', command: 'gemini' };
 const DIRECT_GLM = { id: 'glm', wireVia: 'direct', command: '' };
 
+// An empty Claude setup, so the overlay fingerprint never walks the real ~/.claude.
+const NO_CLAUDE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'lunasynclaunch-home-'));
+const NO_CLAUDE = { claudeHome: path.join(NO_CLAUDE_DIR, '.claude'), claudeJson: path.join(NO_CLAUDE_DIR, '.claude.json') };
+
 function tmpFile() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lunasynclaunch-')), 'lunasync.local.json');
 }
@@ -55,10 +59,10 @@ test('lunaLaunchFor is null unless a native profile has the switch on', () => {
   const calls = [];
   const deps = { readSetup: () => ({}), sync: (args) => (calls.push(args), { ok: true, env: {} }) };
   const base = path.join(os.tmpdir(), 'luna-overlay');
-  assert.equal(lunaLaunchFor({ profile: { lunaSync: false }, template: NATIVE_GEMINI, overlayBase: base, ...deps }), null);
-  assert.equal(lunaLaunchFor({ profile: { lunaSync: true }, template: DIRECT_GLM, overlayBase: base, ...deps }), null);
-  assert.equal(lunaLaunchFor({ profile: { lunaSync: true }, template: null, overlayBase: base, ...deps }), null);
-  assert.equal(lunaLaunchFor({ profile: { lunaSync: true }, template: { ...NATIVE_GEMINI, command: 'aider' }, overlayBase: base, ...deps }), null);
+  assert.equal(lunaLaunchFor({ ...NO_CLAUDE, profile: { lunaSync: false }, template: NATIVE_GEMINI, overlayBase: base, ...deps }), null);
+  assert.equal(lunaLaunchFor({ ...NO_CLAUDE, profile: { lunaSync: true }, template: DIRECT_GLM, overlayBase: base, ...deps }), null);
+  assert.equal(lunaLaunchFor({ ...NO_CLAUDE, profile: { lunaSync: true }, template: null, overlayBase: base, ...deps }), null);
+  assert.equal(lunaLaunchFor({ ...NO_CLAUDE, profile: { lunaSync: true }, template: { ...NATIVE_GEMINI, command: 'aider' }, overlayBase: base, ...deps }), null);
   assert.equal(calls.length, 0, 'no sync ran');
 });
 
@@ -66,7 +70,7 @@ test('lunaLaunchFor syncs the CLI overlay under the base dir with the picked ski
   const calls = [];
   const setup = { marker: 1 };
   const base = path.join(os.tmpdir(), 'luna-overlay');
-  const result = lunaLaunchFor({
+  const result = lunaLaunchFor({ ...NO_CLAUDE,
     profile: { lunaSync: true },
     template: NATIVE_GEMINI,
     overlayBase: base,
@@ -105,11 +109,11 @@ test('a gateway-home template always gets its own home, with the Luna setup only
   const sync = (args) => (calls.push(args), { ok: true, env: { GEMINI_CLI_HOME: args.overlayRoot } });
   const base = path.join(os.tmpdir(), 'luna-overlay');
   const template = { id: 'freellm-gemini', wireVia: 'native', command: 'gemini', gatewayHome: true };
-  const off = lunaLaunchFor({ profile: { lunaSync: false }, template, overlayBase: base, readSetup: () => ({ full: 1 }), sync });
+  const off = lunaLaunchFor({ ...NO_CLAUDE, profile: { lunaSync: false }, template, overlayBase: base, readSetup: () => ({ full: 1 }), sync });
   assert.deepEqual(off.env, { GEMINI_CLI_HOME: path.join(base, 'gemini-freellm-gemini') });
   assert.deepEqual(calls[0].setup, { globalMd: '', rules: [], personalSkills: [], plugins: [], mcpServers: {} });
   assert.equal(calls[0].geminiAuthType, 'gemini-api-key');
-  lunaLaunchFor({ profile: { lunaSync: true }, template, overlayBase: base, readSetup: () => ({ full: 1 }), sync });
+  lunaLaunchFor({ ...NO_CLAUDE, profile: { lunaSync: true }, template, overlayBase: base, readSetup: () => ({ full: 1 }), sync });
   assert.deepEqual(calls[1].setup, { full: 1 });
   assert.equal(calls[1].overlayRoot, path.join(base, 'gemini-freellm-gemini'));
 });

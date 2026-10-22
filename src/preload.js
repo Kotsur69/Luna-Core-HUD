@@ -109,6 +109,37 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Opens a provider template's docs page. Main resolves the URL from config/providers.json itself - this bridge cannot be used to open an arbitrary page. */
   openProviderDocs: (templateId) => ipcRenderer.send('providers:open-docs', templateId),
 
+  // --- FreeLLMAPI gateway (src/freellmipc.js) ---
+  /** The configured gateway port (a number). */
+  getFreeLlmPort: () => ipcRenderer.invoke('freellm:get-port'),
+  /** Saves the port; main validates it. Returns { ok, port } or { ok:false, reason, port }. */
+  setFreeLlmPort: (port) => ipcRenderer.invoke('freellm:set-port', port),
+  /** 'up' | 'not-running' | 'not-installed' - the state string only. */
+  getFreeLlmStatus: () => ipcRenderer.invoke('freellm:status'),
+  /** Opens the gateway dashboard; main builds the URL and opens it only when the gateway is up. */
+  openFreeLlmDashboard: () => ipcRenderer.send('freellm:open-dashboard'),
+
+  // --- Setup Center + Getting started (src/setupipc.js) ---
+  // States only cross back; main validates every payload and builds every URL.
+  /** { ok, rows:[{id, state, note}], ownerUserId, pwaUrl }. */
+  getSetupStatus: () => ipcRenderer.invoke('setup:status'),
+  /** Probes the migration tables: { ok, present, total, missing } or { ok:false, reason }. */
+  checkSetupTables: () => ipcRenderer.invoke('setup:check-tables'),
+  /** Writes config/cloud.local.json from { url, key }; main validates and confirms a project swap itself. */
+  saveSetupCloud: (form) => ipcRenderer.invoke('setup:save-cloud', form),
+  /** Saves (or clears with null) the phone PWA address: { ok, pwaUrl } or { ok:false, reason }. */
+  setSetupPwaUrl: (url) => ipcRenderer.invoke('setup:set-pwa-url', url),
+  /** The saved PWA address as a QR matrix: { ok, size, bits }. */
+  getSetupPwaQr: () => ipcRenderer.invoke('setup:pwa-qr'),
+  /** Opens one whitelisted setup page by id; main owns the URL. */
+  openSetupLink: (target) => ipcRenderer.send('setup:open', target),
+  /** Restarts LunaCore (a new cloud config loads at startup). */
+  relaunchApp: () => ipcRenderer.send('setup:relaunch'),
+  /** { show } - whether the Getting started guide opens on this start. */
+  getWelcome: () => ipcRenderer.invoke('welcome:get'),
+  /** Closes the guide; dontShow records it as seen for this version. */
+  dismissWelcome: (dontShow) => ipcRenderer.invoke('welcome:dismiss', { dontShow: dontShow === true }),
+
   // --- CCR (claude-code-router) gateway control ---
   /** Fetches { installed, version, state, reason, port, expectedPort, startedByUs }. */
   getCcrStatus: () => ipcRenderer.invoke('ccr:status'),

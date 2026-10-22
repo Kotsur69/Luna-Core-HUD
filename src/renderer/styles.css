@@ -5605,3 +5605,93 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mission-brief--overlay .mc-input option { background: var(--surface-panel); color: var(--text); }
 .mission-brief--overlay .mission-brief__bar { position: sticky; top: calc(-1 * var(--space-7)); z-index: 1; padding: var(--space-3) 0; background: var(--surface-panel); border-bottom: var(--border-w) solid var(--edge); }
 .mission-brief--overlay .mission-brief__body { margin-top: var(--space-5); line-height: 1.5; }
+
+/* ---- Setup Center (Ctrl+L, top section; modules/setupcenter.js) ---------- */
+.setup-rows { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-5); }
+.setup-row {
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+}
+.setup-row--missing { border-color: color-mix(in srgb, var(--bad) 40%, var(--edge)); }
+.setup-row--warning { border-color: color-mix(in srgb, var(--warn) 40%, var(--edge)); }
+.setup-row__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  cursor: pointer;
+  list-style: none;
+}
+.setup-row__head::-webkit-details-marker { display: none; }
+.setup-row__head:focus-visible { outline: var(--border-w) solid var(--neon-cyan); outline-offset: -2px; }
+.setup-row__title { flex: 1; font-size: var(--fs-sm); color: var(--text); }
+.setup-row__state { font-size: var(--fs-xs); color: var(--text-dim); text-align: right; }
+.setup-row--ok .setup-row__state { color: var(--good); }
+.setup-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: 0 var(--space-5) var(--space-5);
+}
+.setup-row__steps {
+  margin: 0;
+  padding-left: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.setup-row__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.setup-row__owner code { font-family: var(--font-mono); color: var(--text); user-select: all; }
+.setup-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.setup-qr {
+  align-self: flex-start;
+  width: 132px;
+  height: 132px;
+  image-rendering: pixelated;
+  border-radius: var(--radius-sm);
+}
+
+/* Optional modules switched off in Setup: their entry points go away. */
+:root[data-hide-life] #life-open,
+:root[data-hide-mission] #mission-open,
+:root[data-hide-godmode] #orchestra-plan,
+:root[data-hide-godmode] #godmode-field { display: none; }
+
+/* ---- Getting started (modules/welcome.js) -------------------------------- */
+.welcome .welcome__modal { width: min(520px, 92vw); }
+.welcome__lead { margin: 0 0 var(--space-7); font-size: var(--fs-sm); line-height: 1.55; color: var(--text); }
+.welcome__keys {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-3) var(--space-7);
+  margin: 0 0 var(--space-7);
+  font-size: var(--fs-sm);
+}
+.welcome__keys dt { margin: 0; }
+.welcome__keys dd { margin: 0; color: var(--text-dim); }
+.welcome__keys kbd {
+  display: inline-block;
+  padding: var(--space-hair) var(--space-3);
+  border-radius: var(--radius-xs);
+  border: var(--border-w) solid var(--edge);
+  background: var(--surface-panel-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--neon-cyan);
+}
+.welcome__needs {
+  margin: 0 0 var(--space-7);
+  padding-left: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.welcome__cta { color: var(--neon-cyan); border-color: var(--edge-glow); }
+.welcome__dontshow { display: inline-flex; align-items: center; gap: var(--space-3); cursor: pointer; }

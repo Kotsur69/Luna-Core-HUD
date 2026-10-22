@@ -38,6 +38,7 @@ import {
   testResultMessage,
 } from './providerform.js';
 import { refreshProfileList } from './switchers.js';
+import { mountGatewaySettings } from './gatewaysettings.js';
 
 let templates = []; // getProviders() catalog
 let profiles = []; // redacted profiles from getProfiles()
@@ -690,9 +691,12 @@ export function mountProviderSettings(root) {
   if (typeof window.lunacore.onCcrState === 'function') window.lunacore.onCcrState(clearFinishedTests);
 
   refresh();
+  // FreeLLMAPI gateway row, same Settings section.
+  const disposeGateway = mountGatewaySettings(root);
 
   return () => {
     offLang();
+    disposeGateway();
     els = null;
   };
 }

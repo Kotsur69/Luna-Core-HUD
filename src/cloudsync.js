@@ -204,6 +204,7 @@ const CLOUD_OFF = {
   hooks: () => ({ extraPeers: () => null, onPublish: () => {} }),
   onPulled: () => {},
   status: () => ({ configured: false, loggedIn: false }),
+  userId: () => null,
   login: async () => ({ ok: false, reason: 'not-configured' }),
   logout: async () => {},
   syncNow: async () => ({ ok: false, reason: 'not-configured' }),
@@ -321,6 +322,8 @@ function startCloud({ machine, legacyMachine }) {
     /** cb(scope) when the cloud brought another machine's changes. */
     onPulled: (cb) => pulledListeners.push(cb),
     status: () => ({ ...auth.status(), ...core.status() }),
+    /** The logged-in user's id (Setup Center shows it for OWNER_USER_ID), or null. */
+    userId: () => auth.userId(),
     login: () => auth.login(),
     logout: () => auth.logout(),
     syncNow,

@@ -1428,6 +1428,34 @@
           <section id="termcustom-pane-general" class="termcustom__pane" data-cat="general" role="tabpanel" aria-labelledby="termcustom-tab-general">
             <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.general">Ogolne</h2>
             <div class="termcustom__group">
+              <!-- Setup Center: one row per integration (ok / warning / missing),
+                   a Connect/Fix button where main can do it and short steps where
+                   it cannot. Rows are built by modules/setupcenter.js from state
+                   strings only (src/setupipc.js) - no key or token ever reaches here. -->
+              <h3 id="setup-center" class="termcustom__section" data-i18n="setup.title">Konfiguracja</h3>
+              <p class="termcustom__hint" data-i18n="setup.hint">
+                Co dziala, czego brakuje i jak to podlaczyc. Kazdy uzytkownik podlacza wlasny projekt Supabase.
+              </p>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="setup-refresh" class="termcustom__reset" data-i18n="setup.refresh">Sprawdz ponownie</button>
+                <button type="button" id="welcome-reopen" class="termcustom__reset" data-i18n="welcome.reopen">Pierwsze kroki</button>
+              </div>
+              <div id="setup-rows" class="setup-rows"></div>
+              <h3 class="termcustom__section" data-i18n="setup.modules.title">Moduly opcjonalne</h3>
+              <label class="switch-field">
+                <span class="switch-field__text"><span class="switch-field__label" data-i18n="setup.modules.life">Ukryj Zycie</span></span>
+                <span class="switch"><input type="checkbox" id="setup-hide-life" class="switch__input" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <label class="switch-field">
+                <span class="switch-field__text"><span class="switch-field__label" data-i18n="setup.modules.mission">Ukryj Mission Control</span></span>
+                <span class="switch"><input type="checkbox" id="setup-hide-mission" class="switch__input" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <label class="switch-field">
+                <span class="switch-field__text"><span class="switch-field__label" data-i18n="setup.modules.godmode">Ukryj God Mode</span></span>
+                <span class="switch"><input type="checkbox" id="setup-hide-godmode" class="switch__input" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+            </div>
+            <div class="termcustom__group">
               <h3 class="termcustom__section" data-i18n="termcustom.section.general">Ogolne</h3>
               <!-- UI language: PL/EN, switches live (i18n.js). Moved from w-appearance's
                    left panel (2026-08-19, Mati: wanted it under the same Ctrl shortcut
@@ -1914,6 +1942,34 @@
                 <button type="button" id="providers-add-btn" class="termcustom__reset" data-i18n="providers.action.add">Dodaj profil</button>
               </div>
               <p id="providers-status" class="hint" role="status" hidden></p>
+              <!-- FreeLLMAPI gateway: port setting + up / not running / not installed
+                   row. Filled by modules/gatewaysettings.js; main probes the port and
+                   builds every URL (src/freellmipc.js) - only a state string and the
+                   port number cross IPC. -->
+              <h3 class="termcustom__section" data-i18n="freellm.title">Gateway FreeLLMAPI</h3>
+              <p class="termcustom__hint" data-i18n="freellm.hint">
+                Aplikacja desktop slucha na porcie 31415, obraz Docker na 3001. Zmiana portu dziala od nastepnego startu karty.
+              </p>
+              <div class="project-row">
+                <span id="freellm-status-dot" class="diag-item__dot diag-item__dot--unknown"></span>
+                <span id="freellm-status" class="ui-field__label" data-i18n="freellm.status.checking">Sprawdzanie...</span>
+                <button
+                  type="button"
+                  id="freellm-refresh-btn"
+                  class="usage-refresh"
+                  data-i18n-title="freellm.refresh"
+                  title="Odswiez status"
+                >&#8635;</button>
+                <button type="button" id="freellm-dashboard-btn" class="termcustom__reset" data-i18n="freellm.openDashboard" hidden>Otworz panel gateway</button>
+              </div>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="freellm.port">Port gateway</span>
+                <input type="number" id="freellm-port" class="profile-select" min="1" max="65535" step="1" inputmode="numeric">
+              </label>
+              <div class="project-row">
+                <button type="button" id="freellm-save-btn" class="termcustom__reset" data-i18n="freellm.save">Zapisz port</button>
+              </div>
+              <p id="freellm-port-status" class="hint" role="status" hidden></p>
             </div>
             <div class="termcustom__group">
               <!-- Luna sync skill picker (docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md S3): which
@@ -2044,6 +2100,49 @@
         <!-- Filled from getUpdateStatus().version (app.getVersion() in main). -->
         <span id="termcustom-version" class="termcustom__version"></span>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Getting started (first launch) ================= -->
+  <!-- Shown once on a clean profile (src/welcome.js decides in main), always
+       reopenable from Ctrl+L -> Setup. Same overlay shell as #termcustom;
+       wiring in modules/welcome.js. -->
+  <div id="welcome" class="termcustom welcome" tabindex="-1" hidden>
+    <div class="termcustom__backdrop" data-welcome-close></div>
+    <div class="termcustom__modal welcome__modal" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+      <div class="termcustom__bar">
+        <span class="termcustom__glyph">☾</span>
+        <span id="welcome-title" class="termcustom__title" data-i18n="welcome.title">Pierwsze kroki z LunaCore</span>
+      </div>
+      <div class="termcustom__body">
+        <p class="welcome__lead" data-i18n="welcome.what">
+          LunaCore to pulpit dla Claude Code CLI: karty terminali, kontekst i zuzycie na zywo, zadania, Mission Control i Zycie. Nie zuzywa dodatkowych tokenow - tylko obserwuje i wysyla to, co klikniesz.
+        </p>
+        <h3 class="termcustom__section" data-i18n="welcome.keys.title">Najwazniejsze skroty</h3>
+        <dl class="welcome__keys">
+          <dt><kbd>Ctrl+L</kbd></dt><dd data-i18n="welcome.keys.settings">Ustawienia i Konfiguracja</dd>
+          <dt><kbd>Ctrl+Shift+M</kbd></dt><dd data-i18n="welcome.keys.mission">Mission Control</dd>
+          <dt><kbd>Ctrl+Shift+N</kbd></dt><dd data-i18n="welcome.keys.life">Zycie</dd>
+          <dt><kbd>Ctrl+B</kbd></dt><dd data-i18n="welcome.keys.filter">Filtr bibliotek i /ask</dd>
+          <dt><kbd>Ctrl+K</kbd></dt><dd data-i18n="welcome.keys.palette">Paleta komend</dd>
+        </dl>
+        <h3 class="termcustom__section" data-i18n="welcome.needs.title">Co skonfigurowac i po co</h3>
+        <ul class="welcome__needs">
+          <li data-i18n="welcome.needs.claude">Terminale: Claude Code CLI zainstalowany i zalogowany.</li>
+          <li data-i18n="welcome.needs.cloud">Synchronizacja miedzy PC, telefon: wlasny projekt Supabase.</li>
+          <li data-i18n="welcome.needs.google">Kalendarz i poczta: wlasny klient Google OAuth.</li>
+          <li data-i18n="welcome.needs.news">Newsy z X/Reddit: Agent-Reach (w Mission Control).</li>
+          <li data-i18n="welcome.needs.local">Modele lokalne/darmowe: LM Studio lub FreeLLMAPI.</li>
+        </ul>
+        <button type="button" id="welcome-open-setup" class="termcustom__reset welcome__cta" data-i18n="welcome.openSetup">Otworz Konfiguracje</button>
+      </div>
+      <div class="termcustom__foot">
+        <label class="welcome__dontshow">
+          <input type="checkbox" id="welcome-dontshow" checked />
+          <span data-i18n="welcome.dontShow">Nie pokazuj ponownie</span>
+        </label>
+        <button type="button" id="welcome-close" class="termcustom__reset" data-i18n="welcome.close">Zamknij</button>
       </div>
     </div>
   </div>

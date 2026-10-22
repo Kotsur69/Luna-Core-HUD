@@ -31,6 +31,14 @@ const { selfCheckGate } = require('./orchestraSelfCheck');
 const TAB_CLOSE_SETTLE_MS = 2500;
 const MAX_TODO_DETAILS = 4000;
 const DEFAULT_CHECK_COMMAND = 'npm test';
+// Integration stages a second try can fix on its own: the network, a
+// leftover from an earlier pass (cleared at the start of the next one), a
+// flaky install, a base that moved on during the push. Conflicts, red
+// verifies and a red self-check are not retried - they need a human.
+const RETRY_STAGES = new Set(['fetch', 'worktree', 'install', 'reset', 'push']);
+const RETRY_DELAY_MS = 5000;
+// emailError when Gmail is not connected in LunaCore (the board shows a hint).
+const EMAIL_NOT_CONNECTED = 'gmail-not-connected';
 
 /** The integration worktree / branch name part for a run: `luna/<slug>-integration`. */
 const slugOf = (plan) => plan.id.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 24) || 'run';
@@ -109,7 +117,16 @@ function createFinalizer(deps) {
           },
         }
       : {};
-    const res = await deps.integrateMerge({ base: plan.baseBranch, slug, packages: packagesFor(todo) }, extra);
+    const args = { base: plan.baseBranch, slug, packages: packagesFor(todo) };
+    let res = await deps.integrateMerge(args, extra);
+    // A leftover worktree with local changes is refused every time - no retry.
+    const leftover = /^leftover /.test(String(res.detail || ''));
+    if (!res.ok && RETRY_STAGES.has(res.stage) && !leftover) {
+      deps.onRunEvent('integrationRetry', { stage: res.stage, detail: res.detail || null });
+      await sleep(RETRY_DELAY_MS);
+      gate = null;
+      res = await deps.integrateMerge(args, extra);
+    }
     // Merges only count once they are pushed. Skipped packages do not fail
     // the integration: the rest landed, so it is a partial success.
     const skipped = Array.isArray(res.skipped) ? res.skipped : [];
@@ -237,6 +254,7 @@ function createFinalizer(deps) {
       Promise.resolve(deps.onReport(plan.id, text, summary))
         .then((res) => {
           if (res && res.error) failed(res.error);
+          else if (res && res.skipped === 'not-connected') failed(EMAIL_NOT_CONNECTED);
         })
         .catch((err) => failed((err && err.reason) || 'failed'));
     } catch (err) {

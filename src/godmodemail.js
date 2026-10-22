@@ -109,7 +109,11 @@ function createGodModeMailer({ sender, prefs, enabled, readHtml, maxRuns = 50 })
     try {
       if (!summary || typeof runId !== 'string') return { sent: false, skipped: 'bad-input' };
       const st = sender.status();
-      if (!enabled(prefs.loadPrefs(), st.connected)) return { sent: false, skipped: 'off' };
+      const mailPrefs = prefs.loadPrefs();
+      // Not connected is told apart from switched off: the board says so,
+      // or the run email would just never come. An explicit "off" stays quiet.
+      if (!st.connected && mailPrefs.godmodeEmail !== false) return { sent: false, skipped: 'not-connected' };
+      if (!enabled(mailPrefs, st.connected)) return { sent: false, skipped: 'off' };
       const key = resultKey(summary);
       const prev = prefs.loadState().godmode[runId];
       if (prev === key) return { sent: false, skipped: 'duplicate' };

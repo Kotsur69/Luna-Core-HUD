@@ -12,9 +12,12 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const paths = require('./paths');
-const { readClaudeSetup, syncOverlay } = require('./lunasyncio');
+const { readClaudeSetup, syncOverlay, overlayEnv } = require('./lunasyncio');
+const { overlayFingerprint, syncIfChanged } = require('./lunasyncfingerprint');
+const { DEFAULT_GATEWAY_PORT } = require('./freellmgateway');
 
 /** `<plugin>:<skill>`, both halves a safe folder-ish name (src/lunasyncio.js listPluginSkills ids). */
 const SKILL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}:[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
@@ -79,29 +82,62 @@ function saveLunaSyncPrefs(prefs, file = prefsFile()) {
 }
 
 /**
- * Builds the overlay for one tab, when it should have one.
+ * Builds the overlay for one tab, when it should have one. Skips the rebuild
+ * (src/lunasyncfingerprint.js) when no input changed since the last good one.
  * @param {{profile:Object, template:Object|null, overlayBase:string, pickedSkillIds?:string[],
- *   readSetup?:Function, sync?:Function}} args readSetup/sync are injectable for tests
+ *   gatewayPort?:number, claudeHome?:string, claudeJson?:string,
+ *   readSetup?:Function, sync?:Function}} args readSetup/sync/claude paths are injectable for tests
  * @returns {null|ReturnType<typeof syncOverlay>} null = this tab runs without an overlay
  */
-function lunaLaunchFor({ profile, template, overlayBase, pickedSkillIds = [], readSetup = readClaudeSetup, sync = syncOverlay }) {
+function lunaLaunchFor({
+  profile,
+  template,
+  overlayBase,
+  pickedSkillIds = [],
+  gatewayPort = DEFAULT_GATEWAY_PORT,
+  claudeHome = path.join(os.homedir(), '.claude'),
+  claudeJson = path.join(os.homedir(), '.claude.json'),
+  readSetup = () => readClaudeSetup({ claudeHome, claudeJson }),
+  sync = syncOverlay,
+}) {
   if (!profile || !template || template.wireVia !== 'native' || !SYNC_CLIS.has(template.command)) return null;
   const cli = template.command;
   const lunaOn = profile.lunaSync === true;
   // A gateway template (FreeLLMAPI Gemini) ALWAYS runs on its own home, pinned
   // to API-key auth - the user's own ~/.gemini may be set to Google login,
   // which wins over every env var. The Luna setup goes in only when switched on.
-  if (template.gatewayHome === true) {
-    return sync({
-      cli,
-      overlayRoot: path.join(overlayBase, `${cli}-${template.id}`),
-      setup: lunaOn ? readSetup() : EMPTY_SETUP,
-      pickedSkillIds: lunaOn ? pickedSkillIds : [],
-      geminiAuthType: cli === 'gemini' ? 'gemini-api-key' : undefined,
-    });
-  }
-  if (!lunaOn) return null;
-  return sync({ cli, overlayRoot: path.join(overlayBase, cli), setup: readSetup(), pickedSkillIds });
+  const gatewayHome = template.gatewayHome === true;
+  if (!gatewayHome && !lunaOn) return null;
+  const options = {
+    cli,
+    overlayRoot: path.join(overlayBase, gatewayHome ? `${cli}-${template.id}` : cli),
+    pickedSkillIds: lunaOn ? [...pickedSkillIds].sort() : [],
+    ...(gatewayHome ? { geminiAuthType: cli === 'gemini' ? 'gemini-api-key' : undefined } : {}),
+  };
+  const fingerprint = overlayFingerprint({
+    options: { ...options, lunaOn, gatewayPort },
+    claudeHome,
+    claudeJson,
+    withSources: lunaOn,
+  });
+  return syncIfChanged({
+    overlayRoot: options.overlayRoot,
+    fingerprint,
+    build: () => sync({ ...options, setup: lunaOn ? readSetup() : EMPTY_SETUP }),
+    env: overlayEnv(cli, options.overlayRoot),
+    overlayFiles: (result) => overlayFilesOf(cli, options.overlayRoot, result.skills),
+  });
+}
+
+/** Files (and skill folders) syncOverlay() writes; src/lunasyncio.js header has the layout. */
+function overlayFilesOf(cli, overlayRoot, skills) {
+  const configDir = cli === 'gemini' ? path.join(overlayRoot, '.gemini') : overlayRoot;
+  const own = cli === 'gemini' ? ['GEMINI.md', 'settings.json'] : ['AGENTS.md', 'config.toml'];
+  return [
+    path.join(overlayRoot, '.lunacore-sync.json'),
+    ...own.map((name) => path.join(configDir, name)),
+    ...(Array.isArray(skills) ? skills : []).map((name) => path.join(configDir, 'skills', String(name))),
+  ];
 }
 
 /** Dim cyan, so the line reads as LunaCore talking, not the CLI. */

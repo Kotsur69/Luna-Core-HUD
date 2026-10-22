@@ -83,6 +83,19 @@ function firstLine(text) {
   );
 }
 
+/**
+ * The line of git's stderr that says why it failed: the first `fatal:` /
+ * `error:` line, else the first line. git prints progress ("Preparing
+ * worktree ...") before the reason, so firstLine alone hides it.
+ */
+function gitError(text) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return lines.find((l) => /^(fatal|error):/i.test(l)) || lines[0] || '';
+}
+
 /** Runs git without a shell; resolves {ok, stdout, stderr}, never rejects. */
 function runGit(cwd, args, execImpl = execFile) {
   return new Promise((resolve) => {
@@ -158,7 +171,7 @@ async function addWorktree(repoPath, name, deps = {}) {
   const branch = branchFor(slug, deps.branchPrefix);
   const base =typeof deps.base === 'string' && BASE_SHA_RE.test(deps.base) ? deps.base : 'HEAD';
   const add = await runGit(root, ['worktree', 'add', '-b', branch, target, base], execImpl);
-  if (!add.ok) return { ok: false, error: 'gitFailed', detail: firstLine(add.stderr) };
+  if (!add.ok) return { ok: false, error: 'gitFailed', detail: gitError(add.stderr) };
 
   const envCopied = copyEnvFiles(root, target, fsImpl);
 
@@ -194,7 +207,7 @@ async function removeWorktree(repoPath, root, deps = {}) {
   if (!status.ok) return { ok: false, error: 'gitFailed', detail: firstLine(status.stderr) };
   if (status.stdout.trim()) return { ok: false, error: 'dirty' };
   const res = await runGit(repoPath, ['worktree', 'remove', '--', root], execImpl);
-  return res.ok ? { ok: true } : { ok: false, error: 'gitFailed', detail: firstLine(res.stderr) };
+  return res.ok ? { ok: true } : { ok: false, error: 'gitFailed', detail: gitError(res.stderr) };
 }
 
 // Only branches LunaCore itself names (`luna/<slug>`) may ever be deleted.
@@ -288,4 +301,5 @@ module.exports = {
   dirtyCount,
   runGit,
   firstLine,
+  gitError,
 };

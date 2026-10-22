@@ -106,6 +106,45 @@ injects prompts or touches the `claude` binary.
 
 ---
 
+## Getting started
+
+![The Getting started guide on first launch](docs/screenshots/getting-started.png)
+<!-- Screenshot placeholder: docs/screenshots/getting-started.png -->
+
+1. **Install and open LunaCore** ([Download](#download) below, or
+   [run it from source](#running-from-source)). You need the
+   [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/setup),
+   installed and logged in.
+2. **Read the Getting started guide.** It opens once on first launch. It covers
+   what LunaCore is, the main shortcuts and what each feature needs. You can
+   reopen it any time from **Ctrl+L → Setup → Getting started**.
+3. **Open the Setup page (Ctrl+L).** Every integration gets one row:
+   green = ready, yellow = needs attention, red = missing. Each row has
+   **Connect/Fix** buttons, plus short steps for whatever LunaCore cannot do
+   for you.
+
+![The Setup page in Ctrl+L](docs/screenshots/setup-center.png)
+<!-- Screenshot placeholder: docs/screenshots/setup-center.png -->
+
+| Shortcut | Opens |
+|----------|-------|
+| `Ctrl+L` | Settings, with the **Setup** page at the top |
+| `Ctrl+Shift+M` | Mission Control (mail, calendar, telemetry, news) |
+| `Ctrl+Shift+N` | Life (budget, bills, goals) |
+| `Ctrl+B` | Library filter and `/ask` |
+
+**Cloud features use your own Supabase project.** This covers sync between PCs,
+the phone app and phone control. Create a free project, then paste its URL and
+**publishable** key into Setup → *Cloud*. LunaCore validates both and writes
+`config/cloud.local.json` for you, and it refuses secret / service_role keys.
+The same page links the SQL migrations, the GitHub/Google login settings, the
+redirect URL (`http://127.0.0.1:*/callback`), the edge functions and a QR code
+for your own phone deploy. Everything else (Google calendar/mail, YAZIO,
+Agent-Reach, LM Studio, FreeLLMAPI) is optional. Mission Control, Life and
+God Mode can be hidden there too.
+
+---
+
 ## Download
 
 **[Latest release →](https://github.com/Kotsur69/Luna-Core-HUD/releases/latest)** — Windows x64.
@@ -466,7 +505,7 @@ elements; scripts need no such exemption, which is why the boot failsafe lives i
 
 ---
 
-## Getting started
+## Running from source
 
 Requirements: **Node.js 18+** (tested on 24) and **Git**. No C++ build tools needed.
 

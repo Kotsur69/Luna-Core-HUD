@@ -335,6 +335,119 @@ test('integrateMerge: beforePush sees merged + skipped and can stop the push', a
   assert.ok(git3.calls.includes('git push origin HEAD:refs/heads/main'));
 });
 
+// ---- a second pass of the same run: leftovers never block it ---------------------
+
+test('integrateMerge: a leftover branch from an earlier pass is deleted before the build', async () => {
+  const git = fakeExec({ 'rev-parse': { ok: true, stdout: 'sha1\n' } });
+  const { deps } = integDeps(git);
+  const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps);
+  assert.equal(res.ok, true);
+  const delAt = git.calls.indexOf('git branch -D luna/p-integration');
+  assert.ok(delAt >= 0, 'leftover branch deleted');
+  assert.ok(git.calls.indexOf('git worktree prune') < delAt, 'pruned first');
+  assert.ok(delAt < git.calls.findIndex((c) => c.startsWith('git merge')), 'before any merge');
+});
+
+test('integrateMerge: no leftover branch, nothing deleted before the build', async () => {
+  const git = fakeExec({
+    'rev-parse': [{ ok: true, stdout: 'sha1\n' }, { ok: false }, { ok: true, stdout: 'sha1\n' }],
+  });
+  const { deps } = integDeps(git);
+  const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps);
+  assert.equal(res.ok, true);
+  const pushAt = git.calls.indexOf('git push origin HEAD:refs/heads/main');
+  assert.ok(git.calls.indexOf('git branch -D luna/p-integration') > pushAt, 'the only delete is the one after the push');
+});
+
+test('integrateMerge: a leftover worktree is removed; one with local changes fails as worktree, not built over', async () => {
+  const listing = 'worktree /r\nHEAD abc\nbranch refs/heads/main\n\nworktree /wt/old\nHEAD def\nbranch refs/heads/luna/p-integration\n';
+  const git = fakeExec({ 'rev-parse': { ok: true, stdout: 'sha1\n' }, worktree: { ok: true, stdout: listing } });
+  const { deps, removed } = integDeps(git);
+  assert.equal((await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps)).ok, true);
+  assert.equal(removed[0], '/wt/old');
+
+  const git2 = fakeExec({ 'rev-parse': { ok: true, stdout: 'sha1\n' }, worktree: { ok: true, stdout: listing } });
+  const dirty = integDeps(git2);
+  let added = false;
+  dirty.deps.removeWorktree = async () => ({ ok: false, error: 'dirty' });
+  dirty.deps.addWorktree = async () => ((added = true), WT);
+  const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), dirty.deps);
+  assert.equal(res.ok, false);
+  assert.equal(res.stage, 'worktree');
+  assert.match(res.detail, /leftover \/wt\/old: dirty/);
+  assert.equal(added, false);
+});
+
+test('integrateMerge: after a successful push the local integration branch goes too', async () => {
+  const git = fakeExec({ 'rev-parse': { ok: true, stdout: 'sha1\n' } });
+  const { deps } = integDeps(git);
+  await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps);
+  const pushAt = git.calls.indexOf('git push origin HEAD:refs/heads/main');
+  assert.ok(git.calls.lastIndexOf('git branch -D luna/p-integration') > pushAt);
+});
+
+test("integrateMerge: a failed fetch reports git's fatal line, not its progress line", async () => {
+  const git = fakeExec({ fetch: { ok: false, stderr: 'remote: Counting objects\nfatal: unable to access origin\n' } });
+  const { deps } = integDeps(git);
+  const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps);
+  assert.equal(res.stage, 'fetch');
+  assert.equal(res.detail, 'fatal: unable to access origin');
+});
+
+test('finalize: a worktree failure is retried once on its own; a conflict-type failure is not', async () => {
+  const { createFinalizer } = require('../src/orchestraFinalize.js');
+  const mk = (answers) => {
+    const plan = {
+      id: 'run1',
+      repoPath: '/r',
+      baseBranch: 'main',
+      integrationMode: 'merge',
+      integration: { state: 'idle' },
+      approvalLog: [],
+      packages: [{ id: 'a', title: 'A', state: 'pushed', branch: 'luna/a', dependsOn: [] }],
+    };
+    const calls = [];
+    const events = [];
+    const fin = createFinalizer({
+      getPlan: () => plan,
+      patch: () => {},
+      commit: () => {},
+      view: () => ({ id: plan.id, packages: plan.packages, integration: plan.integration, overlaps: [] }),
+      onRunEvent: (kind) => events.push(kind),
+      now: () => 1,
+      sleep: async () => {},
+      integrateMerge: async (a) => (calls.push(a), answers.shift()),
+    });
+    return { plan, calls, events, fin };
+  };
+
+  const retried = mk([
+    { ok: false, merged: [], skipped: [], stage: 'worktree', detail: 'fatal: a branch named x already exists' },
+    { ok: true, merged: ['a'], skipped: [] },
+  ]);
+  await retried.fin.finalize();
+  assert.equal(retried.calls.length, 2);
+  assert.ok(retried.events.includes('integrationRetry'));
+  assert.equal(retried.plan.integration.state, 'done');
+
+  const notRetried = mk([{ ok: false, merged: [], skipped: [], stage: 'nothingMerged', detail: 'a' }]);
+  await notRetried.fin.finalize();
+  assert.equal(notRetried.calls.length, 1);
+  assert.equal(notRetried.plan.integration.state, 'failed');
+
+  const dirtyLeftover = mk([{ ok: false, merged: [], skipped: [], stage: 'worktree', detail: 'leftover /wt/old: dirty' }]);
+  await dirtyLeftover.fin.finalize();
+  assert.equal(dirtyLeftover.calls.length, 1, 'a dirty leftover fails the same way every time');
+
+  const twice = mk([
+    { ok: false, merged: [], skipped: [], stage: 'push', detail: 'rejected' },
+    { ok: false, merged: [], skipped: [], stage: 'push', detail: 'rejected' },
+  ]);
+  await twice.fin.finalize();
+  assert.equal(twice.calls.length, 2, 'only one retry');
+  assert.equal(twice.plan.integration.error, 'pushFailed');
+});
+
 test('runResolver: attempt 2 triples the budget and doubles the timeout', async () => {
   const seen = [];
   const execImpl = (bin, argv, opts, cb) => {

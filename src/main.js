@@ -157,6 +157,9 @@ const { normalizeArmCounts, confirmDetail } = require('./godmodeconfirm');
 // Opt-in "Use my Luna setup" for native Codex/Gemini tabs (docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md).
 const { loadLunaSyncPrefs, saveLunaSyncPrefs, lunaLaunchFor, lunaSyncNotice } = require('./lunasynclaunch');
 const { readClaudeSetup, listPluginSkills } = require('./lunasyncio');
+const { loadGatewayPrefs, withGatewayPort } = require('./freellmgateway');
+const { registerFreeLlmIpc } = require('./freellmipc');
+const { registerSetupIpc, captureFirstStart } = require('./setupipc');
 /** How long the Settings skill picker reuses one walk of the plugin folders. */
 const LUNA_SKILL_CACHE_MS = 30000;
 // Clickable file:line links in the terminal: resolve a renderer-supplied
@@ -1223,6 +1226,7 @@ function spawnInto(session, profile, launch = null) {
     template: profile.templateId ? getProviderTemplate(loadProviders().providers, profile.templateId) : null,
     overlayBase: path.join(app.getPath('userData'), 'luna-overlay'),
     pickedSkillIds: loadLunaSyncPrefs().pickedSkills,
+    gatewayPort: loadGatewayPrefs().port,
   });
   const env = withClaudeOnPath(
     buildSessionEnv(
@@ -1510,7 +1514,9 @@ function editedByOtherSessions(session) {
  * @param {Session} session
  * @param {Object} profile
  */
-function launchSession(session, profile) {
+function launchSession(session, rawProfile) {
+  // A FreeLLMAPI tab follows the configured gateway port (env, args, fallback proxy upstream).
+  const profile = withGatewayPort(rawProfile, loadGatewayPrefs().port);
   const providers = loadProviders().providers;
   const localLaunch = resolveLocalLaunch(profile, providers);
   // A free-model chain tab goes through the fallback proxy (src/fallbackproxy.js).
@@ -2396,6 +2402,37 @@ function registerIpc() {
   // The handlers and their "never stop a gateway we did not start" state live
   // in src/ccrcontrol.js (unit-tested there).
   ccrControl.registerIpc(ipcMain);
+  // FreeLLMAPI gateway port + status row (src/freellmipc.js).
+  registerFreeLlmIpc({ ipcMain, shell });
+  // Setup Center rows + cloud form + Getting started (src/setupipc.js).
+  // `cloud` is read lazily: startCloud() runs further down in this function.
+  registerSetupIpc({
+    ipcMain,
+    shell,
+    app,
+    cloud: () => cloud,
+    gcal,
+    claudeFound: () => claudeStatus().found,
+    // Repointing sync to another project is confirmed here, natively - never
+    // on the renderer's word alone.
+    confirmReplace: async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      const pl = app.getLocale().toLowerCase().startsWith('pl');
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: pl ? ['Zastap', 'Anuluj'] : ['Replace', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+        title: 'LunaCore',
+        message: pl
+          ? 'Ten komputer jest juz podlaczony do innego projektu Supabase. Zastapic go?'
+          : 'This computer is already connected to another Supabase project. Replace it?',
+        detail: pl ? 'Sesja starego projektu zostanie usunieta.' : "The old project's session is removed.",
+      });
+      return response === 0;
+    },
+  });
 
   // LM Studio control for the Settings model picker - the in-app replacement
   // for the "go local claude" desktop script. Listing and loading go through
@@ -3234,6 +3271,12 @@ function registerIpc() {
         delete partial.orchestraAllowedTools;
       }
     }
+    // The Getting started record is main's (welcome:dismiss), and the PWA
+    // address goes only through setup:set-pwa-url - setup:open opens it.
+    if (partial && typeof partial === 'object' && ['welcomeSeen', 'welcomeChecked', 'pwaUrl'].some((k) => k in partial)) {
+      const { welcomeSeen: _seen, welcomeChecked: _checked, pwaUrl: _pwa, ...rest } = partial;
+      partial = rest;
+    }
     const next = writeUiPrefs(partial);
     // Sound prefs take effect immediately, no restart - same live-apply as
     // theme/lang. soundManager may still be null if this fires before
@@ -3378,6 +3421,9 @@ function registerIpc() {
 // ---- App lifecycle ---------------------------------------------------
 
 app.whenReady().then(() => {
+  // Before anything writes a *.local.json: tells a clean profile (show the
+  // Getting started guide) from an existing user (src/welcome.js).
+  captureFirstStart();
   registerIpc();
   createWindow();
   startActiveProjects(); // sets cwd before the first session starts

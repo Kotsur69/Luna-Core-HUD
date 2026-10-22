@@ -354,6 +354,8 @@ window.addEventListener(
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === 'KeyN') {
+      // Hidden in Ctrl+L -> Setup -> optional modules: the shortcut is off too.
+      if (!isOpen && document.documentElement.dataset.hideLife === '1') return;
       e.preventDefault();
       e.stopPropagation();
       if (isOpen) close();

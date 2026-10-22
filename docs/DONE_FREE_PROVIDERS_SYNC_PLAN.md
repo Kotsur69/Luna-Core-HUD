@@ -13,9 +13,15 @@ free-model fallback chains + the "Free providers" God Mode mode
 - ~~**Live check (Mati):**~~ ✅ passed 2026-10-22: restart LunaCore, add a Gemini CLI profile with
   "Use my Luna setup" on, Google login + trust once, ask "who are you?" -
   must answer as Luna. Same for a FreeLLMAPI profile with the unified key.
-- **Open, small (cards in the to-do list):** configurable FreeLLMAPI port (Docker = 3001, desktop =
-  31415); a gateway up/down row in Settings; skip the per-spawn overlay copy
-  when nothing changed (it is synchronous on the main thread).
+- **Built 2026-10-22 (package freellm-gateway), not live-checked:**
+  configurable FreeLLMAPI port (Settings > AI providers, saved in
+  `config/freellm.local.json`, applied to every `freellm-*` profile at launch
+  by `withGatewayPort()` - env, Codex args, fallback proxy upstream); gateway
+  status row (up / not running / not installed, 1.5 s probe in main,
+  `src/freellmgateway.js` + `src/freellmipc.js`); the Luna overlay is rebuilt
+  only when its fingerprint changes (`src/lunasyncfingerprint.js`,
+  `<overlay>.fingerprint.json`). "Not installed" = no desktop install folder
+  found - a stopped Docker gateway also reads as not installed.
 - **Not planned:** hooks and `ecc:` agents for Codex/Gemini (no equivalent);
   claude.ai connectors (Anthropic-hosted).
 
@@ -141,9 +147,8 @@ it. Templates `freellm-claude` / `freellm-codex` / `freellm-gemini`:
   `gatewayHome: true` and always runs on its own LunaCore home pinned to
   `gemini-api-key` (`luna-overlay/gemini-freellm-gemini`); Luna setup only if
   switched on.
-- Port is fixed at 31415 (desktop default). A Docker install (3001) needs a
-  configurable port - not done.
-- Not built: detect-only status row in Settings.
+- Port: configurable since 2026-10-22 (default 31415; Docker = 3001).
+- Status row in Settings: built 2026-10-22.
 
 ### S1 — FreeLLMAPI connection + templates (original plan)
 

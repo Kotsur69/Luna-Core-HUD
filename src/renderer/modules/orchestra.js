@@ -406,7 +406,8 @@ function renderPlan() {
   if (integ) body.append(integ);
   // The run email (src/godmodemail.js) failed: the run itself is fine.
   if (plan.integration && plan.integration.emailError) {
-    body.append(msg(t('orch.emailFailed', { reason: plan.integration.emailError }), 'is-warn'));
+    const reason = plan.integration.emailError;
+    body.append(msg(reason === 'gmail-not-connected' ? t('orch.emailNotConnected') : t('orch.emailFailed', { reason }), 'is-warn'));
   }
   for (const o of plan.overlaps || []) {
     body.append(msg(t('orch.overlap', { a: o.a, b: o.b, files: o.files.join(', ') }), 'is-warn'));

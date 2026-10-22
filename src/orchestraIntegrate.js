@@ -28,7 +28,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
-const { runGit, firstLine } = require('./worktrees');
+const { runGit, firstLine, gitError, slugify, branchFor } = require('./worktrees');
 const { runVerify } = require('./orchestraFinish');
 const { checkCwd } = require('./projects');
 
@@ -375,6 +375,46 @@ async function pushGate(deps, root, info) {
   }
 }
 
+/** The folder of the worktree that has `branch` checked out, from `git worktree list --porcelain`. */
+function worktreeOfBranch(porcelain, branch) {
+  for (const block of String(porcelain || '').split(/\r?\n\r?\n/)) {
+    const lines = block.split(/\r?\n/);
+    const dir = lines.find((l) => l.startsWith('worktree '));
+    if (dir && lines.includes(`branch refs/heads/${branch}`)) return dir.slice('worktree '.length).trim();
+  }
+  return null;
+}
+
+/**
+ * Clears what an earlier pass of the same run left behind: its integration
+ * worktree (kept for inspection after a failure) and its local branch.
+ * Without this a second finalize (packages pushed after "proceed", a Retry)
+ * cannot create `luna/<slug>-integration` again. The branch holds nothing
+ * unique - every pass rebuilds it from the package branches.
+ * @returns {Promise<{ok:true} | {ok:false, detail:string}>}
+ */
+async function clearStaleIntegration(repoPath, name, deps) {
+  const execImpl = deps.execImpl;
+  const slug = slugify(name);
+  if (!slug) return { ok: true };
+  const branch = branchFor(slug);
+  const listed = await runGit(repoPath, ['worktree', 'list', '--porcelain'], execImpl);
+  const stale = listed.ok ? worktreeOfBranch(listed.stdout, branch) : null;
+  if (stale) {
+    // removeWorktree refuses uncommitted changes; that leftover is reported, not forced away.
+    const removed = await deps.removeWorktree(repoPath, stale);
+    if (removed && removed.ok === false) {
+      return { ok: false, detail: `leftover ${stale}: ${[removed.error, removed.detail].filter(Boolean).join(' ')}` };
+    }
+  }
+  // A folder deleted by hand leaves a registration that blocks the branch delete.
+  await runGit(repoPath, ['worktree', 'prune'], execImpl);
+  const exists = await runGit(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], execImpl);
+  if (!exists.ok) return { ok: true };
+  const del = await runGit(repoPath, ['branch', '-D', branch], execImpl);
+  return del.ok ? { ok: true } : { ok: false, detail: gitError(del.stderr) };
+}
+
 /**
  * Mode C: integration branch from origin/<base>, merge each package in
  * order, verify after each. A package that cannot be merged or stays red is
@@ -406,20 +446,24 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
   });
 
   const fetched = await runGit(repoPath, ['fetch', 'origin', `refs/heads/${base}`], execImpl);
-  if (!fetched.ok) return fail('fetch', firstLine(fetched.stderr));
+  if (!fetched.ok) return fail('fetch', gitError(fetched.stderr));
   const tip = await runGit(repoPath, ['rev-parse', '--verify', 'FETCH_HEAD'], execImpl);
   const baseSha = tip.ok ? firstLine(tip.stdout) : '';
   if (!baseSha) return fail('fetch', 'no FETCH_HEAD');
 
-  const wt = await deps.addWorktree(repoPath, `${slug}-integration`, { base: baseSha });
+  const name = `${slug}-integration`;
+  const cleared = await clearStaleIntegration(repoPath, name, deps);
+  if (!cleared.ok) return fail('worktree', cleared.detail);
+  const wt = await deps.addWorktree(repoPath, name, { base: baseSha });
   if (!wt.ok) return fail('worktree', wt.detail || wt.error);
   const done = async (result) => {
     // Removed only after a successful push; a failed integration is left in
-    // place for inspection. A check-only (throwaway) worktree always goes,
-    // with its local branch, so the next check can build it again.
+    // place for inspection (the next pass clears it). Gone with it goes the
+    // local branch - pushed, or a throwaway check - so the next pass can
+    // build it again.
     if (result.ok || checkOnly) {
       const removed = await deps.removeWorktree(repoPath, wt.root);
-      if (checkOnly && (!removed || removed.ok !== false) && /^luna\/[A-Za-z0-9._-]+$/.test(wt.branch || '')) {
+      if ((!removed || removed.ok !== false) && /^luna\/[A-Za-z0-9._-]+$/.test(wt.branch || '')) {
         await runGit(repoPath, ['branch', '-D', wt.branch], execImpl);
       }
     }
@@ -452,7 +496,7 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
     // Back to the tree before this package; without that nothing later may
     // be merged or pushed - the bad package could ride along.
     const reset = preSha ? await runGit(wt.root, ['reset', '--hard', preSha], execImpl) : { ok: false, stderr: 'no HEAD' };
-    if (!reset.ok) return done(fail('reset', firstLine(reset.stderr), pkg.id));
+    if (!reset.ok) return done(fail('reset', gitError(reset.stderr), pkg.id));
   }
 
   if (!merged.length) return done(fail('nothingMerged', skipped.map((s) => s.id).join(', ')));
@@ -462,7 +506,7 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
   if (checkOnly) return done({ ok: true, merged, skipped, checkOnly: true, headSha: null });
   if (!gate.ok) return done(fail('beforePush', gate.reason));
   const push = await runGit(wt.root, ['push', 'origin', `HEAD:refs/heads/${base}`], execImpl);
-  if (!push.ok) return done(fail('push', firstLine(push.stderr)));
+  if (!push.ok) return done(fail('push', gitError(push.stderr)));
   const head = await runGit(wt.root, ['rev-parse', 'HEAD'], execImpl);
   return done({ ok: true, merged, skipped, headSha: head.ok ? firstLine(head.stdout) : null });
 }
@@ -477,6 +521,7 @@ module.exports = {
   runResolver,
   resolverPrompt,
   integrateMerge,
+  clearStaleIntegration,
   mergeOne,
   RESOLVER_TOOLS,
   RESOLVER_EFFORT,

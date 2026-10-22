@@ -261,6 +261,7 @@ test('integrateMerge merges in order, verifies each, pushes the base; a red veri
   const green = fakeExec({
     'rev-parse': [
       { ok: true, stdout: 'base1\n' },
+      { ok: false }, // no leftover luna/p-integration branch
       { ok: true, stdout: 'pre1\n' },
       { ok: true, stdout: 'pre2\n' },
       { ok: true, stdout: 'head1\n' },

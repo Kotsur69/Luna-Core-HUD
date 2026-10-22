@@ -17,11 +17,20 @@ const {
   branchFor,
   copyEnvFiles,
   addWorktree,
+  gitError,
   WORKTREE_DIR,
   MAX_SLUG_CHARS,
 } = require('../src/worktrees.js');
 
 // ---- pure helpers -----------------------------------------------------------
+
+test('gitError picks the fatal/error line over git progress output', () => {
+  const stderr = "Preparing worktree (new branch 'luna/x-integration')\nfatal: a branch named 'luna/x-integration' already exists\n";
+  assert.equal(gitError(stderr), "fatal: a branch named 'luna/x-integration' already exists");
+  assert.equal(gitError('error: pathspec x\n'), 'error: pathspec x');
+  assert.equal(gitError('just one line'), 'just one line');
+  assert.equal(gitError(''), '');
+});
 
 test('slugify keeps a-z, 0-9 and single dashes', () => {
   assert.equal(slugify('Fix Login Bug!'), 'fix-login-bug');
