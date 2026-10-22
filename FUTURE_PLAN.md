@@ -48,7 +48,16 @@ LunaCore to-do list, not in the file.
    host plan nobody has run yet.
 2. **Work the to-do cards** above (a God Mode night run can take them; the
    `[Mati]` cards are marked manual and stay out of it).
-3. **Think through ideas 3 + 4 together** (polish batch + local transcript
+3. **Notification hub** - face icon + badge, a vertical "Needs you" drawer,
+   the God Mode summary on every PC, the brief moved out of Mission Control.
+   Plan: [`docs/NOTIFICATION_HUB_PLAN.md`](docs/NOTIFICATION_HUB_PLAN.md)
+   (open questions first).
+4. **Release prep for friends** - decided 2026-10-22: **option B**, every
+   new user brings their **own** Supabase project (Mati's stays single-user,
+   sign-ups off). Cards: Setup Center in Ctrl+L (status + guide for every
+   integration) and a first-launch getting-started guide that never shows
+   again once dismissed.
+5. **Think through ideas 3 + 4 together** (polish batch + local transcript
    archive) - see *Ideas kept*.
 
 ## Owed live checks (unit tests cannot clear these)
