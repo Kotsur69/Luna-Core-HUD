@@ -17,7 +17,9 @@
 // Handlers for src/hostcommands.js (registered next to src/hostactions.js),
 // so each runs only after src/hostauth.js verified the signature. The payload
 // is still untrusted: the cwd comes from the host's own repo list by id (the
-// phone never sends a path), model and mode are allow-listed here.
+// phone never sends a path) and must sit under the repos root or a host-local
+// allow-list (src/hostrepos.js chatDirOf); model and mode are allow-listed here.
+// Secrets are scrubbed before a clip, so a clip never leaves half a key behind.
 //
 // What the child does goes out as host_events (src/hostevents.js) and, on a
 // full HUD, to listeners (onEvent) that show the session as a read-only tab.
@@ -30,7 +32,8 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const { clip, cleanCard } = require('./hostevents');
+const { clip, cleanCard, RESULT_BYTES } = require('./hostevents');
+const { scrub } = require('./hostscrub');
 
 const MAX_SESSIONS = 2;
 const MAX_PROMPT = 20000;
@@ -145,7 +148,7 @@ function toolPreview(name, input) {
   if (typeof i.old_string === 'string' && typeof i.new_string === 'string') text = `${firstLines(i.old_string, '- ')}\n${firstLines(i.new_string, '+ ')}`;
   else if (Array.isArray(i.edits)) text = i.edits.filter(isObject).map((e) => `${firstLines(e.old_string || '', '- ')}\n${firstLines(e.new_string || '', '+ ')}`).join('\n…\n');
   else if (typeof i.content === 'string') text = firstLines(i.content, '+ ');
-  return text ? clip(text).text : '';
+  return text ? clip(scrub(text)).text : '';
 }
 
 /** A tool_result's content (string or blocks) -> plain text. */
@@ -217,7 +220,9 @@ function permissionResponse(requestId, decision, { input, suggestions, message }
 /**
  * @param {{
  *   spawn: Function,                         child_process.spawn (or a fake)
- *   repoDir: (repoId: string) => string|null, the host's own repo list: a cloned project's folder
+ *   repoDir: (repoId: string) => string|{dir?: string, error?: string}|null,
+ *                                            the host's own repo list: a cloned project's folder,
+ *                                            or why it may not be used (that error reaches the phone)
  *   env: () => object,                       the claude CLI's env
  *   events: {text: Function, emit: Function, forget: Function},  src/hostevents.js
  *   randomUUID: () => string,
@@ -343,7 +348,7 @@ function createHostChat(deps) {
         }
       } else if (a.type === 'tool') emit(s, 'tool', { id: a.id, name: a.name, summary: a.summary });
       else if (a.type === 'tool_result') {
-        const c = clip(a.text);
+        const c = clip(scrub(a.text), RESULT_BYTES);
         emit(s, 'tool_result', { id: a.id, text: c.text, isError: a.isError, clipped: c.clipped });
       } else if (a.type === 'permission') onPermission(s, a);
       else if (a.type === 'cancel') {
@@ -394,8 +399,9 @@ function createHostChat(deps) {
   }
 
   function launch({ sessionId, repoId, opts, resume, prompt }) {
-    const cwd = deps.repoDir(repoId);
-    if (!cwd) return { status: 'refused: unknown repo' };
+    const found = deps.repoDir(repoId);
+    const cwd = typeof found === 'string' ? found : found && found.dir;
+    if (!cwd) return { status: (found && typeof found.error === 'string' && found.error) || 'refused: unknown repo' };
     const env = deps.env();
     const command = resolveClaude(env, cwd);
     if (!command) {

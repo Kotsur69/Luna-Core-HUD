@@ -16,9 +16,15 @@
 // the realtime socket is down, a poll every 3 s does the same read. Rows are
 // untrusted input: the verifier and the handler see a cleaned copy, a refusal
 // is logged with the reason only (never the payload).
+//
+// What the host writes back is scrubbed of secrets (src/hostscrub.js), and a
+// finished `chat.*` row loses its payload (prompts, texts): the phone has its
+// own copy as a `prompt` event, the row need not keep one for 14 days.
 // ============================================================================
 
 'use strict';
+
+const { scrubDeep } = require('./hostscrub');
 
 const POLL_MS = 3000;
 const LIVE_DEBOUNCE_MS = 200;
@@ -33,6 +39,8 @@ const COLUMNS = 'id,host,kind,payload,nonce,expires_at,sig,grant,status,created_
 const BROKEN = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+/** Kinds whose payload is dropped once the row finished (the column is NOT NULL: {}). */
+const dropsPayload = (kind) => typeof kind === 'string' && kind.startsWith('chat.');
 const errText = (err) => String(err instanceof Error ? err.message : err).slice(0, MAX_ERROR);
 
 /**
@@ -86,14 +94,15 @@ function createHostCommands({
   let stopped = true;
   let polling = false;
 
-  async function finish(id, status, result) {
-    const { error } = await client.from('host_commands').update({ status, result }).eq('id', id).eq('status', 'claimed');
+  async function finish(id, kind, status, result) {
+    const patch = { status, result: scrubDeep(result), ...(dropsPayload(kind) ? { payload: {} } : {}) };
+    const { error } = await client.from('host_commands').update(patch).eq('id', id).eq('status', 'claimed');
     if (error) log(`[hostcommands] ${id}: writing ${status} failed: ${error.code || 'error'}`);
   }
 
   async function refuse(id, kind, reason) {
     log(`[hostcommands] refused ${kind || '?'} ${id}: ${reason}`);
-    await finish(id, 'refused', { error: reason });
+    await finish(id, kind, 'refused', { error: reason });
   }
 
   /** @returns {Promise<boolean>} whether this host got the row */
@@ -133,15 +142,19 @@ function createHostCommands({
     const id = isObject(raw) && typeof raw.id === 'string' ? raw.id : null;
     if (!id || !(await claim(id))) return;
     const row = cleanRow(raw);
-    if (!row) return refuse(id, null, 'malformed');
+    if (!row) {
+      // Its kind is unchecked, so it is not logged; a chat.* payload still goes.
+      log(`[hostcommands] refused ? ${id}: malformed`);
+      return finish(id, typeof raw.kind === 'string' ? raw.kind : null, 'refused', { error: 'malformed' });
+    }
     const why = await refusal(row);
     if (why) return refuse(id, row.kind, why);
     try {
       const result = await handlers[row.kind]({ ...row.payload }, row);
-      await finish(id, 'done', fitResult(result));
+      await finish(id, row.kind, 'done', fitResult(result));
     } catch (err) {
       log(`[hostcommands] ${row.kind} ${id} failed: ${errText(err)}`);
-      await finish(id, 'failed', { error: errText(err) });
+      await finish(id, row.kind, 'failed', { error: errText(err) });
     }
   }
 

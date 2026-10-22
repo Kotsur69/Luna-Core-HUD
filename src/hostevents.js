@@ -15,8 +15,10 @@
 //   status       {status, reason?}     working | waiting | done | error
 //   cost         {usd, turns}          after each turn (usd: the child's total)
 //
-// Big outputs are clipped to 4 KB with "full output on the host". Retention:
-// events of sessions whose newest event is older than 14 days are deleted.
+// Big outputs are clipped to 4 KB with "full output on the host"; tool results
+// to 1 KB. Every string is scrubbed of secrets (src/hostscrub.js) before the
+// insert. Retention: events of sessions whose newest event is older than 14
+// days are deleted.
 //
 // The writer (createHostEvents) runs on the host; parseEvent / eventsFrom are
 // pure and shared with the phone (mobile/vite.config.js SHARED): rows are
@@ -25,9 +27,13 @@
 
 'use strict';
 
+const { scrubDeep } = require('./hostscrub');
+
 const BATCH_MS = 300;
 const CLIP_BYTES = 4096;
 const CLIP_NOTE = '\n… (full output on the host)';
+/** Tool results keep less: they are what most often carries file contents. */
+const RESULT_BYTES = 1024;
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_SCAN = 1000;
 const PRUNE_IDS = 50;
@@ -104,7 +110,14 @@ function cleanData(kind, d) {
  * An approval card exactly as the phone will read it back (parseEvent): the
  * host keeps this copy and only accepts a chat.approve naming the same one.
  */
-const cleanCard = (d) => cleanData('permission', d);
+const cleanCard = (d) => cleanData('permission', scrubDeep(d));
+
+/** What the writer stores: secrets masked, a tool result capped at RESULT_BYTES. */
+function storedData(kind, data) {
+  const clean = cleanData(kind, scrubDeep(data));
+  if (!clean || kind !== 'tool_result' || byteLength(clean.text) <= RESULT_BYTES + byteLength(CLIP_NOTE)) return clean;
+  return { ...clean, text: clip(clean.text, RESULT_BYTES).text, clipped: true };
+}
 
 /**
  * A raw `host_events` row -> {sessionId, seq, host, kind, data, at}, or null.
@@ -162,7 +175,7 @@ function createHostEvents({ client, host, now = Date.now, setTimer = setTimeout,
   }
 
   function insert(sessionId, kind, data) {
-    const clean = cleanData(kind, data);
+    const clean = storedData(kind, data);
     if (!clean || !isSessionId(sessionId)) {
       log(`[hostevents] dropped a malformed ${kind} event`);
       return chain;
@@ -271,6 +284,7 @@ module.exports = {
   eventsFrom,
   sessionsToDrop,
   cleanCard,
+  storedData,
   clip,
   byteLength,
   KINDS,
@@ -278,5 +292,6 @@ module.exports = {
   DECISIONS,
   BATCH_MS,
   CLIP_BYTES,
+  RESULT_BYTES,
   RETENTION_MS,
 };

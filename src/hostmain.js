@@ -222,7 +222,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   const { usageSnapshot } = require('./usagesnapshot');
   const { hostSnapshot, HEARTBEAT_MS } = require('./hostsnapshot');
   const { createHostCommands } = require('./hostcommands');
-  const { createHostRepos, readOwners } = require('./hostrepos');
+  const { createHostRepos, readOwners, readChatDirs } = require('./hostrepos');
   const { writeDefault, readDefault } = require('./hostdefault');
   const { createHostAuth } = require('./hostauth');
   const { createHostPairing, hasPairedPhone, forgetAll } = require('./hostpairing');
@@ -255,7 +255,8 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     return t;
   };
 
-  const repos = createHostRepos({ execFile, owners: () => readOwners(readJson(paths.local('host.local.json'))) });
+  const hostLocal = () => readJson(paths.local('host.local.json'));
+  const repos = createHostRepos({ execFile, owners: () => readOwners(hostLocal()), chatDirs: () => readChatDirs(hostLocal()) });
   const puts = createSnapshotPuts({
     snapshots: () => cloud.snapshots,
     loggedIn: () => cloud.status().loggedIn,
@@ -331,10 +332,11 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
         randomUUID,
         events,
         env: jobEnv,
-        // Only a cloned project of this host's own list: the phone sends an id, never a path.
+        // Only a project of this host's own list, under the repos root or host.local.json
+        // chatDirs: the phone sends an id, never a path, and a synced path alone is not trusted.
         repoDir: (repoId) => {
           const p = listProjects().find((x) => x.id === repoId);
-          return p ? repos.dirOf(p) : null;
+          return p ? repos.chatDirOf(p) : null;
         },
         notify: (kind, info) => {
           if (push) push.chat(kind, info);
