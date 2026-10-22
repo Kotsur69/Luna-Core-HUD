@@ -216,10 +216,14 @@ const CLOUD_OFF = {
  * live subscription that only triggers a pull, a fallback poll, and the
  * hooks lifesync / todosync take. No cloud.local.json -> CLOUD_OFF, and the
  * folder sync carries on exactly as before.
- * @param {{machine: string}} opts
+ * @param {{machine: string, legacyMachine?: string}} opts
+ *   legacyMachine = this PC's key before the collision-free one (defaults to
+ *   the legacy form of os.hostname(), as main.js derives `machine` from it).
  */
-function startCloud({ machine }) {
+function startCloud({ machine, legacyMachine }) {
   const paths = require('./paths');
+  const { legacyMachineName } = require('./missionledgersync');
+  const oldKey = legacyMachine || legacyMachineName(require('os').hostname());
   const { createCloudAuth } = require('./cloudauth');
   let config = null;
   try {
@@ -240,7 +244,15 @@ function startCloud({ machine }) {
     userId: () => auth.userId(),
     onPulled: notify,
   });
-  const snapshots = createSnapshots({ client: auth.client, machine, loggedIn: () => auth.status().loggedIn });
+  const snapshots = createSnapshots({
+    client: auth.client,
+    machine,
+    legacyMachine: oldKey,
+    loggedIn: () => auth.status().loggedIn,
+  });
+  // Once per login: this PC's rows under its old key move to the new one.
+  const migrateSnapshots = () =>
+    snapshots.migrate().catch((err) => console.error('[cloudsync] snapshot migration failed:', (err && err.name) || 'error'));
   let channel = null;
   let pushTimer = null;
   let liveTimer = null;
@@ -280,6 +292,7 @@ function startCloud({ machine }) {
       snapshots.reset();
       if (loggedIn) {
         subscribe();
+        migrateSnapshots();
         syncNow();
       } else {
         unsubscribe();
@@ -290,6 +303,7 @@ function startCloud({ machine }) {
   auth.init().then(() => {
     if (auth.status().loggedIn) {
       subscribe();
+      migrateSnapshots();
       syncNow();
     }
   });

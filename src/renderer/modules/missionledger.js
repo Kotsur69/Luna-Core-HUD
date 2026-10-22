@@ -14,7 +14,7 @@
 
 'use strict';
 
-import { t } from './util.js';
+import { t, machineLabel } from './util.js';
 import { errorText, ipcFailed } from './missionshared.js';
 import { ledgerView, nextClass, CLASS_ORDER } from './missionledgerview.js';
 import { renderFocus } from './missionfocus.js';
@@ -200,7 +200,7 @@ function renderUnassigned(view, rerender) {
 function renderFooter() {
   const foot = el('div', 'mc-ledger__foot');
   const pcs = report.machines
-    .map((m) => (m.self ? t('mc.ledger.thisPc', { name: m.machine }) : `${m.machine} (${ago(m.updatedAt)})`))
+    .map((m) => (m.self ? t('mc.ledger.thisPc', { name: machineLabel(m.machine) }) : `${machineLabel(m.machine)} (${ago(m.updatedAt)})`))
     .join(' · ');
   foot.append(el('p', 'hint', t('mc.ledger.pcs', { list: pcs })));
   return foot;

@@ -43,8 +43,8 @@ function harness(cloudOverrides = {}) {
   };
 }
 
-test('exactly the four channels', () => {
-  assert.deepEqual(harness().channels, ['cloud:login', 'cloud:logout', 'cloud:status', 'cloud:syncNow']);
+test('exactly the six channels', () => {
+  assert.deepEqual(harness().channels, ['cloud:forget', 'cloud:login', 'cloud:logout', 'cloud:machines', 'cloud:status', 'cloud:syncNow']);
 });
 
 test('status: whitelisted fields only, no token ever', async () => {

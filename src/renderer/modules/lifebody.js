@@ -15,7 +15,7 @@
 
 'use strict';
 
-import { t } from './util.js';
+import { t, machineLabel } from './util.js';
 import { el, bucket, button, armedButton, field, input, bar, lang } from './lifeui.js';
 import { stackedBars } from './lifecharts.js';
 import { kcalState, goalShare, weightProgress, weekStats } from './lifebodyview.js';
@@ -263,7 +263,7 @@ function weekCard(data, week) {
 function peerView(wrap) {
   const row = el('div', 'life-body__head');
   const when = `${body.data.date} ${time(body.data.fetchedAt)}`;
-  row.append(el('p', 'life-body__meta', t('life.body.fromPc', { machine: body.from.machine, time: when })));
+  row.append(el('p', 'life-body__meta', t('life.body.fromPc', { machine: machineLabel(body.from.machine), time: when })));
   const refresh = button('life.body.refresh', () => load(false));
   refresh.disabled = body.phase === 'loading';
   const acts = el('div', 'life-body__acts');

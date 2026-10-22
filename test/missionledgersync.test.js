@@ -21,7 +21,8 @@ const body = (extra = {}) => ({ v: 1, machine: 'LAPTOP', updatedAt: NOW, rows: [
 
 test('machineName keeps letters, digits and hyphens only', () => {
   assert.equal(sync.machineName('KT-PC-LLM'), 'KT-PC-LLM');
-  assert.equal(sync.machineName('my pc/../evil'), 'my-pc----evil');
+  // An unsafe hostname is normalised and tagged with a hash of the raw name.
+  assert.match(sync.machineName('my pc/../evil'), /^my-pc----evil-h[0-9a-f]{6}$/);
   assert.equal(sync.machineName(''), 'pc');
   assert.equal(sync.machineName('x'.repeat(100)).length, 63);
 });

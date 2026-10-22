@@ -11,6 +11,12 @@
 //                    one at a time, so an older one never lands last
 //   list(kind)       the other machines' rows, newest first, cached for
 //                    TTL_MS; a failed read keeps the last good answer
+//   machines()       every machine with rows and its last update (Settings)
+//   forget(machine)  delete all rows of another machine (a retired PC);
+//                    never this PC's own key or its legacy key
+//   migrate()        move this PC's rows from its legacy key (before the
+//                    collision-free key, missionledgersync.js) to the current
+//                    one: copy, then delete; a no-op once done
 //
 // reset() (logout, account switch) bumps a generation: a call still in
 // flight from before it never writes the cache or `lastPut` afterwards.
@@ -25,6 +31,8 @@ const MAX_BYTES = 512 * 1024;
 const TTL_MS = 60 * 1000;
 /** More machines than Mati will ever own; a flood stops here. */
 const MAX_ROWS = 16;
+/** Every kind of every machine fits in this many rows. */
+const MAX_ALL_ROWS = KINDS.size * MAX_ROWS;
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
 
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -32,10 +40,17 @@ const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArr
 /** Whether `data` fits a snapshot row (callers shrink to this before put). */
 const fits = (data) => Buffer.byteLength(JSON.stringify(data), 'utf8') <= MAX_BYTES;
 
+/** A body copied to a new key: its own `machine` claim moves with it. */
+const rekey = (data, from, to) => (data.machine === from ? { ...data, machine: to } : data);
+
 /**
- * @param {{client: object, machine: string, loggedIn: () => boolean, now?: () => number}} deps
+ * @param {{client: object, machine: string, legacyMachine?: string, loggedIn: () => boolean, now?: () => number}} deps
+ *   legacyMachine = this PC's key before the collision-free one; its rows are
+ *   this PC's own, never a peer's.
  */
-function createSnapshots({ client, machine, loggedIn, now = Date.now }) {
+function createSnapshots({ client, machine, legacyMachine = machine, loggedIn, now = Date.now }) {
+  const ownKeys = new Set([machine.toLowerCase(), String(legacyMachine).toLowerCase()]);
+  const isOwn = (m) => ownKeys.has(m.toLowerCase());
   let gen = 0;
   let lastPut = {}; // kind -> JSON of the last successful put
   let cache = {}; // kind -> {at, rows}
@@ -89,10 +104,9 @@ function createSnapshots({ client, machine, loggedIn, now = Date.now }) {
         console.error(`[cloudsnapshots] list ${kind} failed:`, (error && error.code) || 'error');
         return hit ? hit.rows : [];
       }
-      const own = machine.toLowerCase();
       const at = now();
       const rows = data
-        .filter((r) => r && typeof r.machine === 'string' && MACHINE_RE.test(r.machine) && r.machine.toLowerCase() !== own)
+        .filter((r) => r && typeof r.machine === 'string' && MACHINE_RE.test(r.machine) && !isOwn(r.machine))
         .filter((r) => isPlainObject(r.data))
         .map((r) => {
           const t = Date.parse(r.updated_at);
@@ -101,6 +115,94 @@ function createSnapshots({ client, machine, loggedIn, now = Date.now }) {
         });
       cache = { ...cache, [kind]: { at, rows } };
       return rows;
+    },
+
+    /** @returns {Promise<Array<{machine: string, updatedAt: number, self: boolean}>|null>} newest first; null when the read failed */
+    async machines() {
+      if (!loggedIn()) return null;
+      const mine = gen;
+      const { data, error } = await client
+        .from('snapshots')
+        .select('machine,updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(MAX_ALL_ROWS);
+      if (mine !== gen) return null;
+      if (error || !Array.isArray(data)) {
+        console.error('[cloudsnapshots] machines failed:', (error && error.code) || 'error');
+        return null;
+      }
+      const at = now();
+      const latest = new Map();
+      for (const r of data) {
+        if (!r || typeof r.machine !== 'string' || !MACHINE_RE.test(r.machine)) continue;
+        const t = Date.parse(r.updated_at);
+        const when = Number.isFinite(t) ? Math.min(t, at) : 0;
+        if (!latest.has(r.machine) || latest.get(r.machine) < when) latest.set(r.machine, when);
+      }
+      return [...latest]
+        .map(([m, updatedAt]) => ({ machine: m, updatedAt, self: isOwn(m) }))
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+    },
+
+    /** @returns {Promise<{ok: true, removed: number}|{ok: false, reason: string}>} */
+    async forget(target) {
+      if (typeof target !== 'string' || !MACHINE_RE.test(target)) return { ok: false, reason: 'bad-machine' };
+      if (isOwn(target)) return { ok: false, reason: 'own-machine' };
+      if (!loggedIn()) return { ok: false, reason: 'logged-out' };
+      const mine = gen;
+      const { data, error } = await client.from('snapshots').delete().eq('machine', target).select('kind');
+      if (mine !== gen) return { ok: false, reason: 'failed' };
+      if (error) {
+        console.error('[cloudsnapshots] forget failed:', error.code || 'error');
+        return { ok: false, reason: 'failed' };
+      }
+      cache = {};
+      return { ok: true, removed: Array.isArray(data) ? data.length : 0 };
+    },
+
+    /** @returns {Promise<boolean>} whether no legacy rows are left */
+    async migrate() {
+      if (legacyMachine === machine) return true;
+      if (!loggedIn()) return false;
+      const mine = gen;
+      const { data, error } = await client
+        .from('snapshots')
+        .select('kind,data,updated_at')
+        .eq('machine', legacyMachine)
+        .limit(MAX_ALL_ROWS);
+      if (mine !== gen) return false;
+      if (error || !Array.isArray(data)) {
+        console.error('[cloudsnapshots] migrate read failed:', (error && error.code) || 'error');
+        return false;
+      }
+      const copies = data
+        .filter((r) => r && KINDS.has(r.kind) && isPlainObject(r.data))
+        .map((r) => ({ kind: r.kind, machine, data: rekey(r.data, legacyMachine, machine), updated_at: r.updated_at }));
+      if (!copies.length) return true;
+      // Logout or another account since the read: never write into it.
+      const stillMine = () => mine === gen && loggedIn();
+      if (!stillMine()) return false;
+      // A row already under the new key is newer than the legacy copy: keep it.
+      const { error: copyErr } = await client
+        .from('snapshots')
+        .upsert(copies, { onConflict: 'user_id,kind,machine', ignoreDuplicates: true });
+      if (copyErr) {
+        console.error('[cloudsnapshots] migrate copy failed:', copyErr.code || 'error');
+        return false;
+      }
+      if (!stillMine()) return false;
+      // Only what was copied goes: a row this version cannot read stays put.
+      const { error: delErr } = await client
+        .from('snapshots')
+        .delete()
+        .eq('machine', legacyMachine)
+        .in('kind', copies.map((c) => c.kind));
+      if (delErr) {
+        console.error('[cloudsnapshots] migrate delete failed:', delErr.code || 'error');
+        return false;
+      }
+      cache = {};
+      return true;
     },
 
     /** Logout or another account: nothing cached belongs to the next user. */
@@ -115,6 +217,13 @@ function createSnapshots({ client, machine, loggedIn, now = Date.now }) {
 }
 
 /** What callers get while the cloud is off or logged out. */
-const SNAPSHOTS_OFF = { put: async () => false, list: async () => [], reset: () => {} };
+const SNAPSHOTS_OFF = {
+  put: async () => false,
+  list: async () => [],
+  machines: async () => null,
+  forget: async () => ({ ok: false, reason: 'logged-out' }),
+  migrate: async () => false,
+  reset: () => {},
+};
 
-module.exports = { createSnapshots, SNAPSHOTS_OFF, fits, KINDS, MAX_BYTES, TTL_MS };
+module.exports = { createSnapshots, SNAPSHOTS_OFF, fits, KINDS, MAX_BYTES, TTL_MS, MACHINE_RE };

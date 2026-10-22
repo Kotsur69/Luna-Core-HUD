@@ -352,7 +352,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   lifeWeekEmail: (week) => ipcRenderer.invoke('life:week-email', { week }),
   lifeWeekModel: (model, week) => ipcRenderer.invoke('life:week-model', { model, week }),
   // --- Cloud sync (src/cloudipc.js) ---
-  // No payloads. Main answers from a whitelist: who is logged in and the sync
+  // No payloads except cloudForget's machine name. Main answers from a whitelist: who is logged in and the sync
   // state - never a token. Login opens GitHub in the system browser.
   /** Promise<{ok, configured, loggedIn, user, lastSync, pending, error}>. */
   cloudStatus: () => ipcRenderer.invoke('cloud:status'),
@@ -362,6 +362,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   cloudLogout: () => ipcRenderer.invoke('cloud:logout'),
   /** Promise<{ok} | {ok:false, reason}>. Rate-limited in main. */
   cloudSyncNow: () => ipcRenderer.invoke('cloud:syncNow'),
+  /** Promise<{ok, machines:[{machine, label, updatedAt, self}]} | {ok:false, reason}>. */
+  cloudMachines: () => ipcRenderer.invoke('cloud:machines'),
+  /** Deletes another PC's cloud rows (never this PC's; checked in main). Promise<{ok, removed} | {ok:false, reason}>. */
+  cloudForget: (machine) => ipcRenderer.invoke('cloud:forget', typeof machine === 'string' ? machine : ''),
 
   // --- Highlight extractor (batch clip trimmer) ---
   /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */
