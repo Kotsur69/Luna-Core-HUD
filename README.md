@@ -7,7 +7,26 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.17.1 — Reports, status lights and a roomier Settings.**
+> **Current release: v0.18.0 — Setup Center, themes and a God Mode that finishes on its own.**
+> - **Setup:** a Setup Center in Ctrl+L > General shows what is connected and
+>   what is missing, with own-Supabase onboarding, and a Getting started guide
+>   opens on first launch. Life, Mission Control and God Mode can be hidden.
+> - **Themes:** reworked theme set with per-theme bar colours and an effects
+>   strength slider.
+> - **Attention inbox:** one chip for everything waiting on you, a God Mode run
+>   summary window, a Brief overlay and a Health tab.
+> - **God Mode:** worker effort levels (medium to max); a second end-of-run
+>   pass no longer fails on a leftover integration branch, transient merge
+>   failures retry once, git errors show the real reason, and the board says
+>   when the run email could not go out because Gmail is not connected.
+> - **Providers:** configurable FreeLLMAPI gateway port with a status row;
+>   claude-code-router tabs no longer hit LM Studio's HTTP 400.
+> - **Cloud and security:** forget a retired PC, collision-free machine keys,
+>   secrets scrubbed from cloud rows, chat repos confined to the repos root, a
+>   full Content-Security-Policy for the phone app, and js-yaml bumped for
+>   GHSA-2883-xcg3-v3hh.
+>
+> **v0.17.1 — Reports, status lights and a roomier Settings.**
 > - **Settings:** Ctrl+L opens a large grouped dialog with search across every
 >   category, and shows the app version.
 > - **Reports:** standalone HTML run and weekly reports with inline SVG charts;
