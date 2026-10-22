@@ -441,6 +441,50 @@ test('a Sonnet worker stalled twice restarts once on Opus in its worktree', asyn
   assert.equal(s.orch.view().packages[0].terminal, true);
 });
 
+const effortSettings = (effort, model = 'opus') => ({ model, effort, permissionMode: 'bypassPermissions', integration: 'pr', allowedTools: [] });
+
+test('effortFor: planner pick under "plan", medium when the planner gave none', async () => {
+  const picked = await started({ packages: [pkg('a', [1], { effort: 'xhigh' })], settings: effortSettings('plan') });
+  assert.equal(picked.log.sessions[0].task.effort, 'xhigh');
+  const none = await started({ packages: [pkg('a', [1])], settings: effortSettings('plan') });
+  assert.equal(none.log.sessions[0].task.effort, 'medium');
+  const unset = await started({ packages: [pkg('a', [1])], settings: effortSettings(undefined) });
+  assert.equal(unset.log.sessions[0].task.effort, 'medium');
+});
+
+test('effortFor: a forced Settings level beats the planner pick and is frozen into the run', async () => {
+  const s = await started({ packages: [pkg('a', [1], { effort: 'max' })], settings: effortSettings('high') });
+  assert.equal(s.log.sessions[0].task.effort, 'high');
+  assert.equal(s.orch.view().workerEffort, 'high');
+});
+
+test('escalation steps effort one level above the current one', async () => {
+  const s = await started({ packages: [pkg('a', [1], { effort: 'high' })], settings: effortSettings('plan', 'sonnet') });
+  s.orch.onTurnEnd('s1', turn('LUNA_BLOCKED a: stuck'));
+  assert.equal(s.log.sessions[1].task.effort, 'high', 'the auto-resume keeps the level');
+  s.orch.onTurnEnd('s2', turn('LUNA_BLOCKED a: still stuck'));
+  await s.flush();
+  assert.equal(s.log.sessions[2].task.model, 'opus');
+  assert.equal(s.log.sessions[2].task.effort, 'xhigh');
+  assert.equal(s.orch.view().packages[0].effort, 'xhigh');
+
+  // Above a forced level too: the override wins over Settings.
+  const forced = await started({ packages: [pkg('a', [1])], settings: effortSettings('medium', 'sonnet') });
+  forced.orch.onTurnEnd('s1', turn('LUNA_BLOCKED a: stuck'));
+  forced.orch.onTurnEnd('s2', turn('LUNA_BLOCKED a: still stuck'));
+  await forced.flush();
+  assert.equal(forced.log.sessions[2].task.effort, 'high');
+});
+
+test('escalation caps effort at max', async () => {
+  const s = await started({ packages: [pkg('a', [1], { effort: 'max' })], settings: effortSettings('plan', 'sonnet') });
+  s.orch.onTurnEnd('s1', turn('LUNA_BLOCKED a: stuck'));
+  s.orch.onTurnEnd('s2', turn('LUNA_BLOCKED a: still stuck'));
+  await s.flush();
+  assert.equal(s.orch.view().packages[0].escalated, true);
+  assert.equal(s.log.sessions[2].task.effort, 'max');
+});
+
 test('two workers changing the same file raise one overlap warning', async () => {
   const s = await started({ packages: [pkg('a', [1]), pkg('b', [2])] });
   const [ra, rb] = s.log.worktrees.map(([n]) => path.join('/wt', n));

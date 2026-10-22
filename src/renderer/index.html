@@ -1649,6 +1649,16 @@
             <option value="plan" data-i18n="orchset.model.plan">Wg planu</option>
           </select>
         </label>
+        <label class="ui-field" data-i18n-title="orchset.effort.hint" title="Poziom --effort kazdego workera. Wg planu = poziom wybrany przez planiste (medium, gdy brak). Nigdy ponizej medium.">
+          <span class="ui-field__label" data-i18n="orchset.effort">Wysilek workerow</span>
+          <select id="orchestra-worker-effort" class="profile-select">
+            <option value="plan" data-i18n="orchset.effort.plan">Wg planu</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">XHigh</option>
+            <option value="max">Max</option>
+          </select>
+        </label>
         <label class="ui-field" data-i18n-title="orchset.perm.hint" title="Tryb uprawnien workerow. Bypass: zadnych pytan - worker ma pelny Bash na Twoim koncie; worktree chroni tylko git, nie pliki.">
           <span class="ui-field__label" data-i18n="orchset.perm">Uprawnienia workerow</span>
           <select id="orchestra-permission-mode" class="profile-select">

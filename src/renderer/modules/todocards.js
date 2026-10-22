@@ -19,7 +19,7 @@ const EDITABLE_CARD_FIELDS = ['details', 'acceptance', 'verify'];
 
 /** Whether an item carries any task-card field beyond text/done/at. */
 export function isCard(item) {
-  return Boolean(item && (item.details || item.acceptance || item.files || item.verify || item.size || item.model));
+  return Boolean(item && (item.details || item.acceptance || item.files || item.verify || item.size || item.model || item.effort));
 }
 
 /**

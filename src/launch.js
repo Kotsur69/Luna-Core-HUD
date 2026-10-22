@@ -17,6 +17,7 @@
 'use strict';
 
 const path = require('path');
+const { isEffort } = require('./efforts');
 
 // Flags meaning "the session id is already decided" - the CLI resumes an
 // existing conversation, or the profile stated an id itself. Adding a second
@@ -100,9 +101,9 @@ function isClaudeCommand(command) {
  * (PowerShell, POSIX sh); a path containing one is refused instead of escaped.
  *
  * `permissionMode` (slice 4, Settings -> God Mode workers) is appended unless
- * the profile already decides it - same rule as `--model`.
+ * the profile already decides it - same rule as `--model`. So is `effort`.
  * @param {string} command
- * @param {{briefPath:string, model?:string|null, permissionMode?:string|null}} task
+ * @param {{briefPath:string, model?:string|null, effort?:string|null, permissionMode?:string|null}} task
  * @returns {string|null} the command, or null when it cannot carry the task
  */
 function withTaskBrief(command, task) {
@@ -117,6 +118,10 @@ function withTaskBrief(command, task) {
   const parts = [bin, `'${message}'`, ...rest, '--add-dir', `'${path.dirname(briefPath)}'`];
   if (task.model && /^[a-z0-9.-]+$/i.test(task.model) && !/(^|\s)--model(\s|=|$)/.test(cmd)) {
     parts.push('--model', task.model);
+  }
+  // Only the four God Mode levels are ever appended - never `low`.
+  if (isEffort(task.effort) && !/(^|\s)--effort(\s|=|$)/.test(cmd)) {
+    parts.push('--effort', task.effort);
   }
   if (WORKER_PERMISSION_MODES.includes(task.permissionMode) && !PERMISSION_DECIDED.test(cmd)) {
     parts.push('--permission-mode', task.permissionMode);

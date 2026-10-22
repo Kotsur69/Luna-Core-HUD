@@ -10,6 +10,8 @@
 
 'use strict';
 
+const { normalizeEffort } = require('./efforts');
+
 // A pin-board, not an issue tracker. Beyond this the widget stops being a
 // glanceable list, and the honest answer is that the work belongs somewhere
 // with a real tracker.
@@ -74,6 +76,8 @@ function normalizeCardFields(raw) {
     verify: cleanString(raw.verify, MAX_ENTRY_CHARS),
     size: SIZES.includes(raw.size) ? raw.size : null,
     model: MODELS.includes(raw.model) ? raw.model : null,
+    // Claude CLI --effort for the worker; never below medium (src/efforts.js).
+    effort: normalizeEffort(raw.effort),
     dependsOn: cleanDepends(raw.dependsOn),
     // The loose note a card was rewritten from (the to-do widget's "rewrite
     // with Claude"), kept so the user can check the card did not drift from

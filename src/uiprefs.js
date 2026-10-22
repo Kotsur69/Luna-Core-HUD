@@ -24,6 +24,7 @@
 
 const fs = require('fs');
 const paths = require('./paths');
+const { EFFORTS } = require('./efforts');
 
 // Per-machine state, so it lives in the WRITABLE root - which in a dev clone is
 // still the repo's config/, and in a packaged build is %APPDATA%/LunaCore/config
@@ -92,6 +93,14 @@ const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
 // 'default', which adds no flag.
 const ORCHESTRA_WORKER_MODELS = ['opus', 'sonnet', 'plan'];
 const ORCHESTRA_PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
+// Worker --effort: 'plan' = the planner's per-package pick (medium if none);
+// the others force one level. Never 'low' (src/efforts.js).
+const ORCHESTRA_WORKER_EFFORTS = ['plan', ...EFFORTS];
+
+/** A stored worker-effort pref, or null when it is not one of the options. */
+function workerEffortOf(raw) {
+  return ORCHESTRA_WORKER_EFFORTS.includes(raw) ? raw : null;
+}
 // Mission Control jobs (src/missionrunner.js MISSION_MODELS - kept in sync by
 // test/missioncontrol.test.js). Haiku by default: mail triage and calendar
 // parsing are cheap, high-volume chores.
@@ -201,6 +210,7 @@ const DEFAULTS = {
   // - the Settings hint says so). Frozen per run when the run starts.
   orchestraWorkerModel: 'opus',
   orchestraPermissionMode: 'bypassPermissions',
+  orchestraWorkerEffort: 'plan',
   orchestraIntegration: 'pr',
   orchestraAllowedTools: [],
   orchestraCheckCommand: 'npm test',
@@ -671,6 +681,7 @@ function readUiPrefs() {
       orchestraPermissionMode: ORCHESTRA_PERMISSION_MODES.includes(obj.orchestraPermissionMode)
         ? obj.orchestraPermissionMode
         : DEFAULTS.orchestraPermissionMode,
+      orchestraWorkerEffort: workerEffortOf(obj.orchestraWorkerEffort) || DEFAULTS.orchestraWorkerEffort,
       orchestraIntegration: ORCHESTRA_INTEGRATION_MODES.includes(obj.orchestraIntegration)
         ? obj.orchestraIntegration
         : DEFAULTS.orchestraIntegration,
@@ -775,6 +786,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && ORCHESTRA_PERMISSION_MODES.includes(partial.orchestraPermissionMode)) {
       next.orchestraPermissionMode = partial.orchestraPermissionMode;
+    }
+    if (partial && workerEffortOf(partial.orchestraWorkerEffort)) {
+      next.orchestraWorkerEffort = partial.orchestraWorkerEffort;
     }
     if (partial && ORCHESTRA_INTEGRATION_MODES.includes(partial.orchestraIntegration)) {
       next.orchestraIntegration = partial.orchestraIntegration;
@@ -892,4 +906,5 @@ module.exports = {
   cleanCustomLayouts,
   MISSION_MODELS,
   checkCommandOf,
+  workerEffortOf,
 };
