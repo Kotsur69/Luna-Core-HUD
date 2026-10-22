@@ -9,6 +9,12 @@
 // Only the repo NAME travels, never its path. A row is written by another
 // machine: untrusted. Strings are capped and stripped of control characters,
 // lists are capped, a PR link survives only as an https://github.com/ URL.
+//
+// While a run is going, the same row also carries `live` (the run right now:
+// state, per-package progress, what waits for Mati) and `tabs` (every
+// terminal tab's status light, sessionstatus.js). Both are optional, so a
+// row written before them still reads. No local path, no terminal output and
+// no model text beyond plan / package / to-do titles ever goes in.
 // ============================================================================
 
 'use strict';
@@ -30,6 +36,15 @@ const MAX_RULE = 200;
 const MAX_URL = 300;
 const MAX_COUNT = 1000;
 const SELF_CHECK_STATES = ['ok', 'failed', 'none'];
+const LIVE_STATES = ['running', 'paused', 'settled', 'killed'];
+const LIVE_PACKAGE_STATES = ['queued', 'launched', 'working', 'approval', 'verifying', 'pushed', 'failed', 'killed'];
+const TAB_STATES = ['working', 'done', 'idle', 'approval', 'limit', 'dead'];
+const MAX_DEPS = 20;
+const MAX_TODOS = 10;
+const MAX_TABS = 30;
+const MAX_ERROR = 40;
+const MAX_DETAIL = 160;
+const MAX_ELAPSED_MS = 7 * 24 * 60 * 60 * 1000;
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const isTime = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
@@ -65,6 +80,161 @@ function cleanPackage(p) {
     reason: clean(p.reason, MAX_REASON),
     escalated: p.escalated === true,
   };
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * `text` with every local path cut down: a repo / worktree root prefix goes
+ * (leaving the repo-relative name), any other absolute path keeps only its
+ * last segment. Applied on both sides - a reader trusts no writer.
+ */
+function scrubPaths(text, roots = []) {
+  if (typeof text !== 'string') return '';
+  let out = text;
+  for (const root of roots) {
+    if (typeof root !== 'string' || root.length < 3) continue;
+    // Either separator, case-insensitive (Windows paths), plus the separator after it.
+    const pattern = escapeRe(root.replace(/[\\/]+$/, '')).replace(/\\\\|\//g, '[\\\\/]');
+    out = out.replace(new RegExp(`${pattern}[\\\\/]?`, 'gi'), '');
+  }
+  return out
+    .replace(/(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|]*/g, (m) => baseName(m))
+    .replace(/(^|[\s"'(=])~?\/(?:[^\s/"'`]+\/)+([^\s/"'`]*)/g, (_, pre, last) => `${pre}${last}`);
+}
+
+/** One live package, writer or reader side, or null to drop it. */
+function cleanLivePackage(p) {
+  if (!isObject(p)) return null;
+  const id = clean(p.id, MAX_ID);
+  if (!id) return null;
+  const sha = typeof p.sha7 === 'string' ? p.sha7.toLowerCase() : '';
+  const state = LIVE_PACKAGE_STATES.includes(p.state) ? p.state : 'queued';
+  const elapsed = typeof p.elapsedMs === 'number' && Number.isFinite(p.elapsedMs) ? Math.min(MAX_ELAPSED_MS, Math.max(0, Math.round(p.elapsedMs))) : null;
+  return {
+    id,
+    title: clean(p.title, MAX_TITLE),
+    state,
+    dependsOn: (Array.isArray(p.dependsOn) ? p.dependsOn : []).slice(0, MAX_DEPS).map((d) => clean(d, MAX_ID)).filter(Boolean),
+    sha7: state === 'pushed' && SHA_RE.test(sha) ? sha : null,
+    prUrl: prUrlOf(p.prUrl),
+    error: clean(p.error, MAX_ERROR),
+    detail: clean(scrubPaths(p.detail), MAX_DETAIL),
+    elapsedMs: elapsed,
+    todos: (Array.isArray(p.todos) ? p.todos : []).slice(0, MAX_TODOS).map((t) => clean(t, MAX_TITLE)).filter(Boolean),
+  };
+}
+
+/** The `live` section, writer or reader side, or null. */
+function cleanLive(l, now) {
+  if (!isObject(l) || !LIVE_STATES.includes(l.state) || !isTime(l.startedAt)) return null;
+  const opts = isObject(l.options) ? l.options : {};
+  return {
+    id: clean(l.id, MAX_ID),
+    title: clean(l.title, MAX_TITLE),
+    baseBranch: clean(l.baseBranch, MAX_BRANCH),
+    startedAt: Math.min(l.startedAt, now),
+    state: l.state,
+    pausedUntil: l.state === 'paused' && isTime(l.pausedUntil) ? l.pausedUntil : null,
+    options: { sleepOnLimit: opts.sleepOnLimit === true, shutdownWhenDone: opts.shutdownWhenDone === true },
+    packages: (Array.isArray(l.packages) ? l.packages : []).slice(0, MAX_PACKAGES).map(cleanLivePackage).filter(Boolean),
+  };
+}
+
+/** The `tabs` list, writer or reader side. A label is a folder / profile name, never a path. */
+function cleanTabs(list) {
+  return (Array.isArray(list) ? list : [])
+    .slice(0, MAX_TABS)
+    .map((tab) =>
+      isObject(tab)
+        ? {
+            folder: clean(baseName(tab.folder), MAX_NAME),
+            profile: clean(baseName(tab.profile), MAX_NAME),
+            state: TAB_STATES.includes(tab.state) ? tab.state : 'idle',
+          }
+        : null,
+    )
+    .filter((tab) => tab && (tab.folder || tab.profile));
+}
+
+/**
+ * A package's live state: the supervisor state, refined by the worker tab's
+ * status light. A stall on a permission prompt waits for Mati too.
+ */
+function livePackageState(p, tabState) {
+  switch (p.state) {
+    case 'pending':
+      return 'queued';
+    case 'launched':
+      if (tabState === 'approval') return 'approval';
+      return tabState === 'working' ? 'working' : 'launched';
+    case 'finishing':
+      return 'verifying';
+    case 'pushed':
+    case 'killed':
+      return p.state;
+    case 'stalled':
+      return p.error === 'needsApproval' ? 'approval' : 'failed';
+    default:
+      return 'failed';
+  }
+}
+
+function liveRunState(view) {
+  if (view.killed) return 'killed';
+  if (view.settled) return 'settled';
+  return isTime(view.pausedUntil) ? 'paused' : 'running';
+}
+
+/**
+ * The `live` section from orchestra liveView() ({...view(), repoPath,
+ * roots}), or null before a run has started.
+ * @param {object|null} view
+ * @param {{now?: number, tabState?: (sessionId: string) => string|null}} [opts]
+ * @returns {object|null}
+ */
+function liveEntry(view, { now = Date.now(), tabState = () => null } = {}) {
+  if (!isObject(view) || !view.started || !Array.isArray(view.packages)) return null;
+  const roots = [view.repoPath, ...(Array.isArray(view.roots) ? view.roots : [])];
+  return cleanLive(
+    {
+      id: view.id,
+      title: baseName(view.repoPath),
+      baseBranch: view.baseBranch,
+      startedAt: isTime(view.runStartedAt) ? view.runStartedAt : now,
+      state: liveRunState(view),
+      pausedUntil: view.pausedUntil,
+      options: view.options,
+      packages: view.packages.map((p) => {
+        if (!isObject(p)) return null;
+        const state = livePackageState(p, p.sessionId ? tabState(p.sessionId) : null);
+        const why = state === 'failed' || state === 'approval';
+        const running = p.state === 'launched' || p.state === 'finishing';
+        return {
+          id: p.id,
+          title: p.title,
+          state,
+          dependsOn: p.dependsOn,
+          sha7: typeof p.headSha === 'string' ? p.headSha.slice(0, 7) : null,
+          prUrl: p.prUrl,
+          error: why ? p.error : '',
+          detail: why ? scrubPaths(p.detail, roots) : '',
+          elapsedMs: running && isTime(p.startedAt) ? now - p.startedAt - (p.pausedMs || 0) : null,
+          todos: p.todos,
+        };
+      }),
+    },
+    now,
+  );
+}
+
+/** The `tabs` list from main's session summaries ({folder, profileLabel, status}). */
+function tabsEntry(sessions) {
+  return cleanTabs(
+    (Array.isArray(sessions) ? sessions : []).map((s) =>
+      isObject(s) ? { folder: s.folder, profile: s.profileLabel, state: isObject(s.status) ? s.status.state : 'idle' } : null,
+    ),
+  );
 }
 
 /** One run, writer or reader side, or null to drop it. */
@@ -165,7 +335,18 @@ function addRun(prev, run, { machine, now = Date.now() }) {
   return { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs };
 }
 
-/** A `godmode` row ({machine, data}) -> {machine, at, runs} or null. Never throws. */
+/**
+ * `snap` (this PC's run history, addRun output or null) with the live run
+ * and tab lights laid over it and a fresh `at`. A null `live` drops it.
+ */
+function withLive(snap, { live = null, tabs = [] } = {}, { machine, now = Date.now() }) {
+  const base = isObject(snap) && snap.v === VERSION && Array.isArray(snap.runs) ? snap.runs.map((r) => cleanRun(r, now)).filter(Boolean) : [];
+  const out = { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs: base.slice(0, MAX_RUNS), tabs: cleanTabs(tabs) };
+  const l = cleanLive(live, now);
+  return l ? { ...out, live: l } : out;
+}
+
+/** A `godmode` row ({machine, data}) -> {machine, at, runs, live, tabs} or null. Never throws. */
 function parseGodmodePeer(row, now = Date.now()) {
   try {
     if (!isObject(row) || typeof row.machine !== 'string' || !MACHINE_RE.test(row.machine)) return null;
@@ -176,10 +357,49 @@ function parseGodmodePeer(row, now = Date.now()) {
       .map((r) => cleanRun(r, now))
       .filter(Boolean)
       .sort((a, b) => b.finishedAt - a.finishedAt);
-    return { machine: row.machine, at: Math.min(d.at, now), runs };
+    return { machine: row.machine, at: Math.min(d.at, now), runs, live: cleanLive(d.live, now), tabs: cleanTabs(d.tabs) };
   } catch {
     return null;
   }
+}
+
+/** A live snapshot older than this gets the 'stale' badge (the PC publishes at least every minute). */
+const LIVE_STALE_MS = 2 * 60 * 1000;
+
+/**
+ * The newest live run over every PC, tagged with its machine and whether the
+ * snapshot is stale, or null.
+ * @returns {object|null}
+ */
+function liveFrom(rows, now = Date.now()) {
+  const peers = (Array.isArray(rows) ? rows : [])
+    .map((r) => parseGodmodePeer(r, now))
+    .filter((p) => p && p.live)
+    .sort((a, b) => b.at - a.at);
+  const p = peers[0];
+  return p ? { ...p.live, machine: p.machine, at: p.at, stale: now - p.at > LIVE_STALE_MS } : null;
+}
+
+/** Every PC's tab lights: [{machine, at, stale, tabs}], newest first, PCs without tabs left out. */
+function tabsFrom(rows, now = Date.now()) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((r) => parseGodmodePeer(r, now))
+    .filter((p) => p && p.tabs.length)
+    .sort((a, b) => b.at - a.at)
+    .map((p) => ({ machine: p.machine, at: p.at, stale: now - p.at > LIVE_STALE_MS, tabs: p.tabs }));
+}
+
+/** Counters for the phone's headline: pushed / working / waiting for Mati / pending / failed. */
+function liveCounts(live) {
+  const c = { pushed: 0, working: 0, waiting: 0, pending: 0, failed: 0 };
+  for (const p of isObject(live) && Array.isArray(live.packages) ? live.packages : []) {
+    if (p.state === 'pushed') c.pushed += 1;
+    else if (p.state === 'approval') c.waiting += 1;
+    else if (p.state === 'queued') c.pending += 1;
+    else if (p.state === 'failed' || p.state === 'killed') c.failed += 1;
+    else c.working += 1;
+  }
+  return c;
 }
 
 /** Every PC's runs, each tagged with its machine, newest first, at most MAX_RUNS. */
@@ -191,4 +411,20 @@ function runsFrom(rows, now = Date.now()) {
   return runs.sort((a, b) => b.finishedAt - a.finishedAt).slice(0, MAX_RUNS);
 }
 
-module.exports = { runEntry, addRun, parseGodmodePeer, runsFrom, prUrlOf, VERSION, MAX_RUNS };
+module.exports = {
+  runEntry,
+  addRun,
+  parseGodmodePeer,
+  runsFrom,
+  prUrlOf,
+  liveEntry,
+  tabsEntry,
+  withLive,
+  liveFrom,
+  tabsFrom,
+  liveCounts,
+  scrubPaths,
+  VERSION,
+  MAX_RUNS,
+  LIVE_STALE_MS,
+};

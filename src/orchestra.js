@@ -207,7 +207,7 @@ function withStallNote(text, reason, detail) {
  *   briefDir: () => string, now?: () => number,
  *   finishPackage?: Function, headSha?: Function, writePty?: Function,
  *   sessionAlive?: Function, tickTodos?: Function, workerSettings?: Function,
- *   saveState?: Function, loadState?: Function, onChange?: Function,
+ *   saveState?: Function, loadState?: Function, onChange?: Function, onLive?: Function,
  *   onRunEvent?: Function, setTimer?: Function, clearTimer?: Function,
  *   closeSession?: Function, usageResetAt?: () => number|null,
  *   baseBranchOf?: Function, mergeDeps?: Function, createPr?: Function,
@@ -239,6 +239,7 @@ function createOrchestra(deps) {
       : Promise.resolve(false);
   const saveState = deps.saveState || noop;
   const onChange = deps.onChange || noop;
+  const onLive = deps.onLive || noop;
   const onRunEvent = deps.onRunEvent || noop;
   const setTimer = deps.setTimer || setTimeout;
   const clearTimer = deps.clearTimer || clearTimeout;
@@ -453,7 +454,22 @@ function createOrchestra(deps) {
     // blockedBy follows terminal / state on every transition, never stale.
     if (plan) plan.packages = sup.withBlockedBy(plan.packages);
     saveState(plan ? sup.serializePlan(plan) : null);
-    onChange(view());
+    const v = view();
+    onChange(v);
+    // The phone's live run view (godmodelivepub.js throttles): the repo and
+    // worktree roots ride along only so godmodesnapshot can cut paths out.
+    try {
+      onLive(
+        v && {
+          ...v,
+          repoPath: plan.repoPath,
+          roots: plan.packages.map((p) => p.root).filter(Boolean),
+          packages: v.packages.map((p, i) => ({ ...p, pausedMs: plan.packages[i].pausedMs || 0 })),
+        },
+      );
+    } catch (err) {
+      log(`[orchestra] live snapshot failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   const findPkg = (id) => (plan ? plan.packages.find((p) => p.id === id) : null);

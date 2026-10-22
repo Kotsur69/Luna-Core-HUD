@@ -168,6 +168,8 @@ const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
 // REMOTE_HOST_PLAN U1: the same read as a `usage` snapshot for the phone.
 const { usageSnapshot } = require('./usagesnapshot');
 const { createSnapshotPuts } = require('./snapshotputs');
+const { createLivePublisher } = require('./godmodelivepub');
+const { liveEntry, tabsEntry } = require('./godmodesnapshot');
 // E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
 // zero network - Passive Observer in the strictest possible sense.
 const { TelemetryWatcher } = require('./telemetry');
@@ -476,19 +478,28 @@ function sessionSummary(s) {
   };
 }
 
+// The phone's live God Mode view (src/godmodelivepub.js), set up next to the
+// snapshot puts. Null until then; tab changes before it are not published.
+let godmodeLive = null;
+let latestLiveView = null;
+const pokeGodmodeLive = () => godmodeLive && godmodeLive.poke();
+
 /** Broadcasts the full tab list + which one is active. */
 function broadcastSessions() {
   send('sessions:update', {
     sessions: [...sessions.values()].map(sessionSummary),
     activeSessionId,
   });
+  pokeGodmodeLive();
 }
 
 // Every tab's status light. Pushed on change only - the board debounces.
 const STATUS_TICK_MS = 500;
 const statusBoard = createStatusBoard({
-  onChange: (sessionId, { state, since, resetsAt }) =>
-    send('session:status', { sessionId, state, since, ...(resetsAt ? { resetsAt } : {}) }),
+  onChange: (sessionId, { state, since, resetsAt }) => {
+    send('session:status', { sessionId, state, since, ...(resetsAt ? { resetsAt } : {}) });
+    pokeGodmodeLive();
+  },
 });
 
 /** Whether Mati is looking at this tab right now (a turn ending there is not "unseen"). */
@@ -1075,6 +1086,10 @@ const orchestra = createOrchestra({
     if (!orchestraStore.saveRun(data)) console.error('[orchestra] could not save config/orchestra.local.json');
   },
   onChange: (view) => send('orchestra:changed', view),
+  onLive: (view) => {
+    latestLiveView = view;
+    pokeGodmodeLive();
+  },
   // Planning that hit the Claude limit waits for the reset (orchestraPlanWait.js).
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
   onPlanWait: (state) => send('orchestra:planWait', state),
@@ -1864,6 +1879,15 @@ const snapshotPuts = createSnapshotPuts({
   machine: machineName(os.hostname()),
   readAll: readAllRepos,
   historyFile: () => (ensureUserDir() ? path.join(userDir(), RUN_REPORT_DIR, 'godmode-snapshot.json') : null),
+});
+
+// The live run + tab lights for the phone: throttled, skipped when unchanged.
+godmodeLive = createLivePublisher({
+  build: () => ({
+    live: liveEntry(latestLiveView, { now: Date.now(), tabState: (id) => (statusBoard.current(id) || {}).state || null }),
+    tabs: tabsEntry([...sessions.values()].map(sessionSummary)),
+  }),
+  publish: (section) => snapshotPuts.godmode.live(section),
 });
 
 function startUsageWatcher() {

@@ -1,6 +1,6 @@
 // ============================================================================
-// LunaCore phone - Today: Claude usage limits (REMOTE_HOST_PLAN U1), the last
-// God Mode run when it finished in the last 24 h, the next
+// LunaCore phone - Today: Claude usage limits (REMOTE_HOST_PLAN U1), the
+// God Mode run going on now (or the last one, finished in the last 24 h), the next
 // 24 hours of weather (phase 4c), then the week's calendar and the inbox
 // (phase 5, views/agenda.js)
 // ----------------------------------------------------------------------------
@@ -14,7 +14,8 @@ import { savedPlace, savePlace, findPlace, nextHours } from '../weather.js';
 import { mountAgenda } from './agenda.js';
 import { mountSnapshots } from './snapshotview.js';
 import { usageCard } from './usage.js';
-import { latestRunCard } from './godmode.js';
+import { godmodeTodayCard } from './godmode.js';
+import { repaintWhileShown } from './godmodelive.js';
 
 const SLOT_EVERY = 3;
 const hourOf = (ms) => new Date(ms).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
@@ -82,7 +83,8 @@ export function mountToday(main, { cloud, toast }) {
   // No toast of its own: a failed pull is already toasted by the agenda; the box shows it inline.
   const usage = mountSnapshots(usageBox, { cloud, toast: () => {} }, ['usage'], (byKind, now) => usageCard(byKind.usage, now));
   const runBox = h('div');
-  const run = mountSnapshots(runBox, { cloud, toast: () => {} }, ['godmode'], (byKind, now) => latestRunCard(byKind.godmode, now));
+  const run = mountSnapshots(runBox, { cloud, toast: () => {} }, ['godmode'], (byKind, now) => godmodeTodayCard(byKind.godmode, now));
+  repaintWhileShown(main, run);
   main.replaceChildren(
     h(
       'div',
