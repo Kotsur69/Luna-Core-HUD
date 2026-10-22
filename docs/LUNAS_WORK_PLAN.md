@@ -206,10 +206,60 @@ several PCs) is **dropped** by Mati's decision.
 | 6 | Playtester personas | First-time user, power user, phone user, accessibility, "break it". Rotated: the core journeys every iteration, one extra persona per iteration, all of them at a milestone gate. | 2 |
 | 7 | Specialist reviews on a schedule | Security every 3 iterations, performance every 5, cleanup (`refactor-cleaner`) at each milestone gate. Findings become cards like the Critic's. Uses the existing ECC agents. | 2 |
 | 8 | Self-learning skills | At each milestone gate a pass turns what worked into project skills in the repo (`.claude/skills/`), so later workers start with them. Reviewed by the Critic, never edits global `~/.claude`. | 2 |
-| 12 | Live dashboard | HUD + phone: iteration timeline, scores per milestone over time, tokens per role, cards opened/closed, latest screenshots, pending decisions. One daily summary email instead of one per iteration. | 2 |
+| 12 | Live dashboard | HUD + phone: iteration timeline, scores per milestone over time, tokens per role, cards opened/closed, latest screenshots, pending decisions. Email only at milestone gates and at the end (B12), never per iteration. | 2 |
 | 10 | Staging | Migrations and edge functions applied to a **staging** copy, and the Playtester tests staging. Anything touching production goes to the decision queue. | 3 |
 | 14 | Research step | When the design references other products ("like X"), a research agent fills `design/references/` before building starts. | 3 |
 | 15 | Asset pipeline (games) | Generation APIs + Blender MCP, an asset list so nothing is generated twice, and a style check where the Critic compares new assets with the art direction references. | 3 |
+
+### Second round (2026-10-22)
+
+Numbered B1-B19 to keep them apart from the first list. B18 (writing lessons
+into the global `~/.claude` config, too much context) and B20 (a stricter
+permission profile for builders) are **dropped** by Mati's decision.
+
+| # | Feature | What it does | Phase |
+|---|---|---|---|
+| B1 | Done = verified in the app | Every card carries acceptance checks. A builder's LUNA_DONE only moves it to *built*; it closes when the next Playtester pass confirms the checks in the running app. Failed checks reopen it with the evidence. | 1 |
+| B2 | Iteration 0 (new projects) | For an empty repo: scaffold from a stack template (Next.js/TS, Python, …) with tests, lint, CI and `.env.example` before any feature card. | 1 |
+| B3 | Survive the machine | Watchdog restarts LunaCore and resumes the run; Windows updates paused for the run's length; disk cleanup of old evidence and settled worktrees; low-disk stops the run and emails Mati. | 1 |
+| B4 | Stuck cards | A card that fails two iterations is split into smaller cards by the Critic, or goes to the decision queue. | 1 |
+| B5 | Scope guard | The Director cannot schedule work outside `DESIGN.md` / `ROADMAP.md` without a decision-queue entry. | 1 |
+| B6 | Design match score | Screenshots compared with the mockups in `design/references/`; a per-screen fidelity score in the playtest. | 2 |
+| B7 | Web quality budgets | Lighthouse (performance, a11y, best practices, SEO) every iteration via chrome-devtools MCP, trend on the dashboard, a drop creates cards. | 2 |
+| B8 | Second-opinion model | At milestone gates a different model (Codex / Gemini) reviews alongside the Critic. | 2 |
+| B9 | Flaky test quarantine | A test that fails then passes unchanged is quarantined with a card, so it cannot trigger a rollback. | 1 |
+| B10 | Realistic data | A seed / fixtures step from `design/references/` (e.g. real steel prices, real quotes), so the Playtester tests real cases. | 2 |
+| B11 | pl/en completeness | A check that every new UI string exists in both languages, for projects that use both. | 2 |
+| B12 | Milestone emails + return pack | Like God Mode's run email, but per **milestone gate**, not per iteration: what was reached, screenshots, scores, the decisions taken, and a link for feedback. At SHIP / stop: the "while you were away" pack: what changed, the ten riskiest decisions to double-check, rollbacks and why, a screen tour. | 2 |
+| B13 | Demo video | The playtest evidence turned into a short walkthrough video with the `Remotion vids` setup, attached to the milestone email. | 3 |
+| B14 | Docs at SHIP | README, user guide, changelog per iteration, a release following the normal release process. | 2 |
+| B15 | Time to SHIP | Estimate from cards closed per iteration and roadmap left, on the dashboard and in the milestone email. | 2 |
+| B16 | Project queue | When a run ships, the next project in the queue starts. | 3 |
+| B17 | Mid-run feedback | See "Feedback while it runs". | 1 |
+| B19 | Fresh code graph | codebase-memory index and codemaps refreshed every iteration; builder briefs say "query the graph first". | 2 |
+
+### Feedback while it runs (B17)
+
+The run **never pauses** for feedback. Mati (or a client) gives input
+whenever they look at it, e.g. from a laptop on vacation after a milestone
+email or a push, and the next iteration plans it in.
+
+- **Channels:** a steer card from the phone (exists), the feedback link in
+  the milestone email, and for web apps a small feedback widget on the
+  **staging** build that a client can use without a LunaCore account.
+- **Triage:** at the start of every iteration the Director reads new
+  feedback. The Critic turns free text ("looks good, but the header is too
+  big and the PDF export is missing") into cards: look and bug feedback
+  becomes cards straight away and is scheduled first; anything that changes
+  scope or `BRIEF.md` goes through the decision queue.
+- **Trust:** Mati's feedback can change anything. Client feedback can create
+  look/bug cards directly, but scope changes from a client always wait for
+  Mati's yes in the decision queue (with no default answer, the rest of the
+  run continues meanwhile).
+- **Closing the loop:** each feedback item gets a status (planned / built /
+  verified in app), visible on the phone and in the next milestone email.
+- **Later option:** reply to the milestone email itself. That needs Gmail read
+  access, which LunaCore does not have today (it only sends).
 
 ## Build plan
 
@@ -234,17 +284,26 @@ doc becomes `DONE_LUNAS_WORK_PLAN.md`.
 6. **Decision queue** — phone question with default + deadline, never blocks,
    answers into `DECISIONS.md`.
 7. **Panel** — start / steer / stop, current iteration + role, basic scores.
+8. **Done = verified (B1), stuck cards (B4), scope guard (B5), flaky
+   quarantine (B9)** — rules in `lunasworkRules.js`, wired into the Critic.
+9. **Mid-run feedback (B17)** — steer cards + feedback link, triage into
+   cards, trust rules, per-item status.
+10. **Iteration 0 (B2) + survive the machine (B3).**
 
 ### Phase 2 — scale
 
-8. Contracts + ownership map (#2) · 9. Roadmap levels (#5) · 10. Playtester
-personas (#6) · 11. Scheduled specialist reviews (#7) · 12. Self-learning
-skills (#8) · 13. Live dashboard + phone snapshot + daily email (#12).
+11. Contracts + ownership map (#2) · 12. Roadmap levels (#5) · 13. Playtester
+personas (#6) · 14. Scheduled specialist reviews (#7) · 15. Self-learning
+skills (#8) · 16. Live dashboard + phone snapshot (#12) · 17. Milestone
+emails + return pack (B12) · 18. Design match + Lighthouse budgets (B6, B7) ·
+19. Second-opinion model (B8) · 20. Realistic data + pl/en check (B10, B11) ·
+21. Docs at SHIP + time to SHIP (B14, B15) · 22. Fresh code graph (B19).
 
 ### Phase 3 — reach
 
-14. Staging (#10) · 15. Research step (#14) · 16. Electron adapter ·
-17. Unity adapter (spike on the Unity PC first) · 18. Asset pipeline (#15).
+23. Staging + client feedback widget (#10, B17) · 24. Research step (#14) ·
+25. Demo video (B13) · 26. Project queue (B16) · 27. Electron adapter ·
+28. Unity adapter (spike on the Unity PC first) · 29. Asset pipeline (#15).
 
 ## Risks
 
