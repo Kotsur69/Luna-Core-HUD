@@ -967,6 +967,11 @@
         <button id="mission-open" class="palette-chip" data-i18n-title="mc.chip.title" title="Mission Control - poczta, kalendarz, telemetria, newsy (Ctrl+Shift+M)">
           <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd>
         </button>
+        <!-- Attention inbox ('!'): what needs Mati on every PC (modules/inbox.js).
+             The red count badge stays hidden at 0; nothing opens by itself. -->
+        <button id="inbox-open" class="palette-chip inbox-chip" data-i18n-title="inbox.chip.title" title="Co czeka na ciebie">
+          <span aria-hidden="true">!</span><span id="inbox-count" class="inbox-chip__badge" hidden>0</span>
+        </button>
         <!-- Life dashboard (budget, bills, goals), same discoverability
              rationale as the chips above. -->
         <button id="life-open" class="palette-chip" data-i18n-title="life.chip.title" title="Zycie - budzet, rachunki, cele (Ctrl+Shift+N)">
@@ -1183,10 +1188,11 @@
       <div class="palette__bar">
         <span class="palette__glyph">◎</span>
         <span class="mission-overlay__heading" data-i18n="mc.panel.title">Mission Control</span>
+        <!-- Weekly / daily brief: its own tall overlay (modules/missionbriefview.js),
+             so the four columns below get the full height. -->
+        <button type="button" id="mission-brief-open" class="mission-brief-btn" data-i18n="mc.brief.open" data-i18n-title="mc.brief.openTitle" title="Brief tygodniowy i dzienny">Brief</button>
         <button type="button" class="libraries__closebtn" data-mission-close data-i18n-title="libraries.close" data-i18n-aria="libraries.close" title="Zamknij" aria-label="Zamknij">×</button>
       </div>
-      <!-- Weekly / daily brief strip: modules/missionbriefview.js, built in JS. -->
-      <div id="mission-brief" class="mission-brief" aria-live="polite" hidden></div>
       <div class="mission-overlay__body">
         <div id="mission-col-mail" class="mission-overlay__col"></div>
         <div id="mission-col-cal" class="mission-overlay__col"></div>

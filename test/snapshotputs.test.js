@@ -73,3 +73,15 @@ test('a failing put logs and resolves false', async () => {
     console.error = orig;
   }
 });
+
+test('godmode.markSeen stores the id in the own row next to the runs and puts it', async () => {
+  const { sp, puts } = setup();
+  await sp.godmode.add(run('a'));
+  assert.equal(await sp.godmode.markSeen('a'), true);
+  assert.equal(await sp.godmode.markSeen('../bad'), false);
+  const last = puts.at(-1)[1];
+  assert.deepEqual([last.runs.map((r) => r.id), last.seen], [['a'], ['a']]);
+  assert.deepEqual(sp.godmode.read().seen, ['a']);
+  await sp.godmode.add(run('b'));
+  assert.deepEqual(puts.at(-1)[1].seen, ['a'], 'a new run keeps the seen list');
+});

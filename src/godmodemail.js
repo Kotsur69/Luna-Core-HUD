@@ -21,6 +21,8 @@
 
 'use strict';
 
+const { needsFromReport } = require('./godmodeneeds');
+
 const MAX_LINE = 300;
 const MAX_REPORT = 60000;
 const MAX_ITEMS = 50;
@@ -35,28 +37,6 @@ function reportText(text, repoName) {
     // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
     .replace(/^- Repo: `[^`\n]*`/m, `- Repo: ${repoName || '-'}`);
-}
-
-/**
- * The report's '## Needs you' section as plain lines ([] for 'Nothing - all
- * done'), or null when the report has no such section (an older layout).
- * The report already strips model output; this strips again - control
- * characters and markdown code marks out, capped.
- */
-function needsFromReport(text) {
-  const lines = String(text || '').slice(0, MAX_REPORT).split(/\r?\n/);
-  const start = lines.indexOf('## Needs you');
-  if (start < 0) return null;
-  const out = [];
-  for (const line of lines.slice(start + 1)) {
-    if (line.startsWith('## ')) break;
-    const body = clean(line.replace(/`/g, ''));
-    if (!body || body === 'Nothing - all done') continue;
-    // An indented line is the self-check's output tail: keep it indented.
-    out.push(/^\s/.test(line) ? `    ${body}` : body);
-    if (out.length >= MAX_ITEMS) break;
-  }
-  return out;
 }
 
 /** The older Needs-you list, from the run summary alone. */

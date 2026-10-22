@@ -8,6 +8,8 @@
 //   repos.refresh()    after a fetch: read every repo again, then put
 //   godmode.add(run)   after a finalized run: add it to the local history
 //                      file, then put the last runs
+//   godmode.markSeen(id) the attention inbox opened run `id`: add it to
+//                      the same file's `seen` list, then put
 //
 // Every put is skipped while logged out, and a failure only logs - it never
 // throws into the git station or the end of a God Mode run. cloudsnapshots
@@ -20,7 +22,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { reposSnapshot } = require('./repossnapshot');
-const { addRun } = require('./godmodesnapshot');
+const { addRun, addSeen, RUN_ID_RE } = require('./godmodesnapshot');
 const { createRepoKeys, findRepo } = require('./missionrepokey');
 
 const errText = (err) => (err instanceof Error ? err.message : String(err));
@@ -84,20 +86,37 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     },
   };
 
+  /** Rewrites the local history file with `step(prev)` and puts the result. */
+  function writeHistory(step) {
+    const file = historyFile();
+    const next = step(file ? readHistory(file) : null);
+    if (file) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${JSON.stringify(next)}\n`, { encoding: 'utf8', mode: 0o600 });
+    }
+    const s = ready();
+    return s ? s.put('godmode', next) : false;
+  }
+
   const godmode = {
     /** Adds a finalized run (godmodesnapshot runEntry) and puts the history. Never throws. */
     add(run) {
       return safePut('godmode', async () => {
         if (!run) return false;
-        const file = historyFile();
-        const next = addRun(file ? readHistory(file) : null, run, { machine, now: now() });
-        if (file) {
-          fs.mkdirSync(path.dirname(file), { recursive: true });
-          fs.writeFileSync(file, `${JSON.stringify(next)}\n`, { encoding: 'utf8', mode: 0o600 });
-        }
-        const s = ready();
-        return s ? s.put('godmode', next) : false;
+        return writeHistory((prev) => addRun(prev, run, { machine, now: now() }));
       });
+    },
+    /** Marks run `id` seen in this PC's own row (the attention inbox). Never throws. */
+    markSeen(id) {
+      return safePut('godmode', async () => {
+        if (typeof id !== 'string' || !RUN_ID_RE.test(id)) return false;
+        return writeHistory((prev) => addSeen(prev, id, { machine, now: now() }));
+      });
+    },
+    /** This PC's own snapshot as stored on disk (unvalidated), or null. */
+    read() {
+      const file = historyFile();
+      return file ? readHistory(file) : null;
     },
   };
 

@@ -4,7 +4,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { runEntry, addRun, parseGodmodePeer, runsFrom, prUrlOf } = require('../src/godmodesnapshot');
+const { runEntry, addRun, addSeen, parseGodmodePeer, runsFrom, prUrlOf } = require('../src/godmodesnapshot');
 
 const NOW = Date.UTC(2026, 9, 20, 12);
 const HOUR = 60 * 60 * 1000;
@@ -45,6 +45,8 @@ test('runEntry keeps the repo name only, packages and approval rules', () => {
     blocked: 0,
     manualActions: 0,
     selfCheck: 'none',
+    needs: [],
+    manual: [],
   });
   assert.ok(!/Users|mati|wt/.test(JSON.stringify(run)));
   assert.equal(runEntry(null), null);
@@ -160,4 +162,71 @@ test('runsFrom merges machines newest first and tags each run', () => {
   ];
   const out = runsFrom(rows, NOW);
   assert.deepEqual(out.map((r) => [r.id, r.machine]), [['b', 'PC2'], ['a', 'PC1']]);
+});
+
+const REPORT = [
+  '# God Mode run',
+  '',
+  '## Needs you',
+  '',
+  '- `b` Do B: stalled - verifyFailed',
+  'Self-check red: tests.',
+  '    1 failing',
+  '',
+  '## Manual actions',
+  '',
+  '- x.sql',
+].join('\n');
+
+test('runEntry takes needs from the report and manual actions from the integration', () => {
+  const v = view({ integration: { state: 'done', manualActions: [{ kind: 'migration', what: 'x.sql' }, { kind: 'env', what: 'KEY' }, null, { kind: 'note' }] } });
+  const run = runEntry(v, { now: NOW, report: REPORT });
+  assert.deepEqual(run.needs, ['- b Do B: stalled - verifyFailed', 'Self-check red: tests.', '1 failing']);
+  assert.deepEqual(run.manual, ['migration: x.sql', 'env: KEY']);
+  const none = runEntry(view(), { now: NOW, report: '## Needs you\n\nNothing - all done\n' });
+  assert.deepEqual(none.needs, []);
+  assert.deepEqual(runEntry(view(), { now: NOW }).needs, [], 'no report, no needs');
+});
+
+test('needs and manual are capped at 20 lines of 300 chars, control chars stripped', () => {
+  const long = ['## Needs you', ...Array.from({ length: 40 }, (_, i) => `- need ${i} ${'x'.repeat(500)}`)].join('\n');
+  const run = runEntry(view(), { now: NOW, report: long });
+  assert.equal(run.needs.length, 20);
+  assert.ok(run.needs.every((l) => l.length <= 300));
+  const p = parseGodmodePeer(
+    { machine: 'PC1', data: data([{ id: 'r', finishedAt: NOW, packages: [], needs: [...Array(30).fill('a\u001b[31mb'), 5, null], manual: 'x' }]) },
+    NOW,
+  );
+  assert.equal(p.runs[0].needs.length, 20);
+  assert.equal(p.runs[0].needs[0], 'a [31mb');
+  assert.deepEqual(p.runs[0].manual, []);
+});
+
+test('old rows without needs, manual or seen still read', () => {
+  const p = parseGodmodePeer({ machine: 'PC1', data: data([{ id: 'old', finishedAt: NOW, packages: [] }]) }, NOW);
+  assert.deepEqual([p.runs[0].needs, p.runs[0].manual, p.seen], [[], [], []]);
+});
+
+test('addSeen keeps runs, puts the id in front once, caps at 50, drops malformed ids', () => {
+  let snap = addRun(null, runEntry(view({ id: 'run1' }), { now: NOW }), { machine: 'PC1', now: NOW });
+  for (let i = 0; i < 60; i += 1) snap = addSeen(snap, `s${i}`, { machine: 'PC1', now: NOW });
+  assert.equal(snap.seen.length, 50);
+  assert.equal(snap.seen[0], 's59');
+  assert.equal(snap.runs[0].id, 'run1');
+  snap = addSeen(snap, 's10', { machine: 'PC1', now: NOW });
+  assert.equal(snap.seen[0], 's10');
+  assert.equal(snap.seen.filter((s) => s === 's10').length, 1);
+  const same = addSeen(snap, 'BAD ID<', { machine: 'PC1', now: NOW });
+  assert.deepEqual(same.seen, snap.seen);
+  const fresh = addSeen(null, 'abc', { machine: 'PC1', now: NOW });
+  assert.deepEqual([fresh.runs, fresh.seen], [[], ['abc']]);
+});
+
+test('addRun keeps the seen list; a reader validates and caps it', () => {
+  const snap = addRun(addSeen(null, 'abc', { machine: 'PC1', now: NOW }), runEntry(view({ id: 'x1' }), { now: NOW }), { machine: 'PC1', now: NOW });
+  assert.deepEqual(snap.seen, ['abc']);
+  const p = parseGodmodePeer({ machine: 'PC1', data: data([], { seen: ['ok1', 'ok1', 'NO', 7, '../x', ...Array.from({ length: 80 }, (_, i) => `z${i}`)] }) }, NOW);
+  assert.equal(p.seen.length, 50);
+  assert.deepEqual(p.seen.slice(0, 2), ['ok1', 'z0']);
+  assert.deepEqual(parseGodmodePeer({ machine: 'PC1', data: data([], { seen: 'abc' }) }, NOW).seen, []);
 });

@@ -34,6 +34,7 @@ import { mountLibrariesChip, mountAskChip } from './libraries.js';
 import { mountHighlightsChip } from './highlights.js';
 import { mountMissionChip } from './missionpanel.js';
 import { mountLifeChip } from './lifepanel.js';
+import { mountInboxChip } from './inbox.js';
 import { mountUpdateChip } from './update.js';
 
 defineWidget({
@@ -52,6 +53,7 @@ defineWidget({
     mountLibrariesChip(root);
     mountAskChip(root);
     mountMissionChip(root);
+    mountInboxChip(root);
     mountLifeChip(root);
     mountHighlightsChip(root);
     mountUpdateChip(root);

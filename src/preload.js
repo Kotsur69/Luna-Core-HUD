@@ -342,6 +342,13 @@ contextBridge.exposeInMainWorld('lunacore', {
   lifeScore: () => ipcRenderer.invoke('life:score'),
   /** Promise<{ok, prefs} | {ok:false, reason}>. Weights are normalised to 100 in main. */
   lifeScorePrefs: (weights, focusTargetH) => ipcRenderer.invoke('life:score-prefs', { weights, focusTargetH }),
+  // Attention inbox (src/inboxipc.js). Machine + run id only, validated in main.
+  /** Promise<{ok, items} | {ok:false, reason}>. */
+  inboxList: () => ipcRenderer.invoke('inbox:list'),
+  /** One God Mode run for the summary window; marks it seen. Promise<{ok, run} | {ok:false, reason}>. */
+  inboxRun: (machine, id) => ipcRenderer.invoke('inbox:run', { machine, id }),
+  /** Opens one package's PR (github.com only); main looks the URL up itself. */
+  inboxOpenPr: (machine, id, pkg) => ipcRenderer.send('inbox:open-pr', { machine, id, pkg }),
   // Weekly review (src/weeklyipc.js). A week key and a model only; main
   // decides what is collected, what the model is asked and where mail goes.
   /** Promise<{ok, weeks, entry, model, models, current, generatable, busy, mailOn, gmail}>. */

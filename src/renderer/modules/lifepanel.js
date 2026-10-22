@@ -3,7 +3,8 @@
 // ----------------------------------------------------------------------------
 // A full-screen overlay like Mission Control's: the quick add bar on top
 // (always there - a Red Bull is two keystrokes and a click), a month switch
-// (◀ period ▶ / Today) and nine tabs - Overview, Habits (lifehabitsview.js), Week (the weekly
+// (◀ period ▶ / Today) and ten tabs - Overview, Health (the daily sleep /
+// energy check-in, lifecheckin.js), Habits (lifehabitsview.js), Week (the weekly
 // review, lifeweek.js), Spending, Transactions,
 // Bills & Savings, Year (lifeyear.js), Body (YAZIO, lifebody.js), Settings. Every tab renders from the one budget answer in
 // lifeui.js, so a change anywhere redraws the open tab at once. The shell is
@@ -40,7 +41,7 @@ import { renderHabits } from './lifehabitsview.js';
 import { renderWeek } from './lifeweek.js';
 import { getDaily, onDaily, loadDaily, startLive, stopLive } from './lifedaily.js';
 import { needsCheckin, needsGoals } from './lifedailyview.js';
-import { checkinPrompt } from './lifecheckin.js';
+import { renderHealth } from './lifecheckin.js';
 import { goalsPrompt } from './lifegoalsview.js';
 import { scoreCard, nowStrip } from './lifescoreview.js';
 
@@ -51,6 +52,7 @@ const TAB_KEY = 'lunacore.life.tab';
 
 const TABS = [
   ['overview', (root, s) => renderOverview(root, s, goTab)],
+  ['health', renderHealth],
   ['habits', renderHabits],
   ['week', renderWeek],
   ['spending', renderSpending],
@@ -89,9 +91,24 @@ function buildTabs() {
     b.setAttribute('role', 'tab');
     b.setAttribute('aria-controls', 'life-view');
     b.addEventListener('click', () => goTab(id));
+    if (id === 'health') {
+      // '1' while today's check-in is open (not answered, not skipped).
+      const badge = el('span', 'life-tab__badge', '1');
+      badge.hidden = true;
+      b.append(badge);
+    }
     els.tabs.append(b);
   }
   paintTabs();
+  paintHealthBadge();
+}
+
+function paintHealthBadge() {
+  const badge = els && els.tabs.querySelector('#life-tab-health .life-tab__badge');
+  if (!badge) return;
+  const open = needsCheckin(getDaily().checkin);
+  badge.hidden = !open;
+  badge.parentElement.setAttribute('aria-label', open ? t('life.tab.healthOpen') : t('life.tab.health'));
 }
 
 function paintTabs() {
@@ -104,7 +121,7 @@ function paintTabs() {
   els.view.setAttribute('aria-labelledby', `life-tab-${tab}`);
   // The budget period means nothing on the Body and Habits tabs (always
   // today); the Year tab has its own year switch.
-  els.month.hidden = tab === 'body' || tab === 'year' || tab === 'habits' || tab === 'week';
+  els.month.hidden = tab === 'body' || tab === 'health' || tab === 'year' || tab === 'habits' || tab === 'week';
 }
 
 function goTab(id) {
@@ -157,25 +174,26 @@ function renderMonth() {
 let promptKind = '';
 
 /**
- * The check-in prompt on the first open of a day, else the goals prompt on
- * the first open of an ISO week. Rebuilt only when WHICH prompt shows
- * changes, so a background refresh never wipes what is being typed.
+ * The goals prompt on the first open of an ISO week (the daily check-in has
+ * no prompt here - it lives on the Health tab, badged while open). Rebuilt
+ * only when it appears or goes, so a background refresh never wipes what is
+ * being typed.
  */
 function renderPrompt() {
   if (!els) return;
-  const d = getDaily();
-  const kind = needsCheckin(d.checkin) ? 'checkin' : needsGoals(d.goals) ? 'goals' : '';
+  const kind = needsGoals(getDaily().goals) ? 'goals' : '';
   if (kind === promptKind) return;
   promptKind = kind;
   els.prompt.hidden = !kind;
-  els.prompt.replaceChildren(...(kind === 'checkin' ? [checkinPrompt()] : kind === 'goals' ? [goalsPrompt()] : []));
+  els.prompt.replaceChildren(...(kind === 'goals' ? [goalsPrompt()] : []));
 }
 
 /** A daily answer arrived: the score swaps its two nodes in place; the rest redraws its tab. */
 function onDailyPart(part) {
   if (part === 'checkin' || part === 'goals') {
     renderPrompt();
-    if (tab === 'overview') renderView();
+    paintHealthBadge();
+    if (tab === 'overview' || (tab === 'health' && part === 'checkin')) renderView();
     return;
   }
   if (part === 'habits') {
@@ -249,7 +267,7 @@ function close() {
   returnFocus = null;
 }
 
-/** Opens the dashboard on one tab (Mission Control's brief links to the Week tab). */
+/** Opens the dashboard on one tab (the brief links to Week, the attention inbox to Health / Week). */
 export async function openLifeTab(id) {
   if (TABS.some(([t2]) => t2 === id)) {
     tab = id;
