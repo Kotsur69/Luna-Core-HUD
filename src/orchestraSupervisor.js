@@ -192,16 +192,52 @@ function shouldAutoResume(pkg, reason) {
   return ESCALATE_REASONS.has(reason) && !pkg.autoResumed && !!pkg.root && !!pkg.branch;
 }
 
+// Live run switches Mati can flip during the run (orchestra.setOptions).
+// What they do lives elsewhere; here they are only stored. Default off.
+const RUN_OPTION_FLAGS = ['sleepOnLimit', 'shutdownWhenDone'];
+
 /**
- * Run options with defaults; a legacy plan without them loads unchanged.
+ * Run options with defaults; a legacy plan without them loads with every
+ * flag off.
  * @param {unknown} raw
- * @returns {{unattendedApprovalMin:number}}
+ * @returns {{unattendedApprovalMin:number, sleepOnLimit:boolean, shutdownWhenDone:boolean}}
  */
 function normalizeOptions(raw) {
   const o = raw && typeof raw === 'object' ? raw : {};
   const min = o.unattendedApprovalMin;
   const valid = typeof min === 'number' && Number.isFinite(min) && min >= 0;
-  return { unattendedApprovalMin: valid ? Math.min(Math.round(min), MAX_APPROVAL_MIN) : DEFAULT_APPROVAL_MIN };
+  const out = { unattendedApprovalMin: valid ? Math.min(Math.round(min), MAX_APPROVAL_MIN) : DEFAULT_APPROVAL_MIN };
+  for (const key of RUN_OPTION_FLAGS) out[key] = o[key] === true;
+  return out;
+}
+
+/**
+ * The part of an options patch that may be applied: known flags with a
+ * boolean value. Everything else is dropped.
+ * @param {unknown} raw
+ * @returns {Partial<{sleepOnLimit:boolean, shutdownWhenDone:boolean}>}
+ */
+function optionsPatch(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const key of RUN_OPTION_FLAGS) {
+    if (Object.prototype.hasOwnProperty.call(raw, key) && typeof raw[key] === 'boolean') out[key] = raw[key];
+  }
+  return out;
+}
+
+/**
+ * Strict check for an options patch from the (untrusted) renderer: a plain
+ * object with at least one key, every key a known flag, every value boolean.
+ * @param {unknown} raw
+ * @returns {boolean}
+ */
+function isOptionsPatch(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const proto = Object.getPrototypeOf(raw);
+  if (proto !== Object.prototype && proto !== null) return false;
+  const keys = Object.keys(raw);
+  return keys.length > 0 && keys.every((k) => RUN_OPTION_FLAGS.includes(k) && typeof raw[k] === 'boolean');
 }
 
 /**
@@ -530,10 +566,32 @@ function normalizePackage(raw) {
     terminal: raw.terminal === true,
     blockedBy: typeof raw.blockedBy === 'string' && SLUG_RE.test(raw.blockedBy) ? raw.blockedBy : null,
     stalledAt: Number.isFinite(raw.stalledAt) ? raw.stalledAt : null,
+    failure: normalizeFailure(raw.failure),
   };
 }
 
 const MAX_DEP_MERGE_ITEMS = 10;
+const MAX_FAILURE_FILES = 50;
+
+/**
+ * The structured result of the last failed launch (orchestra.js
+ * failureOf): error code, stage, the dependency branch involved, the
+ * conflicting files and when it happened. Off-shape -> null.
+ */
+function normalizeFailure(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.code !== 'string' || !raw.code) return null;
+  const branch = typeof raw.branch === 'string' && (isBranch(raw.branch) || isFreeBranch(raw.branch)) ? raw.branch : null;
+  return {
+    code: raw.code.slice(0, 64),
+    stage: strOrNull(raw.stage, 32),
+    branch,
+    files: (Array.isArray(raw.files) ? raw.files : []).filter(isRelPath).slice(0, MAX_FAILURE_FILES),
+    detail: strOrNull(raw.detail, MAX_DETAIL_CHARS),
+    at: Number.isFinite(raw.at) ? raw.at : null,
+  };
+}
+
+const isFreeBranch = (b) => typeof b === 'string' && b.startsWith('luna-free/') && SLUG_RE.test(b.slice(10));
 
 /**
  * Dependency branches a worker was told to merge itself (orchestra.js
@@ -542,7 +600,7 @@ const MAX_DEP_MERGE_ITEMS = 10;
  */
 function normalizeDepMerge(raw) {
   if (!raw || typeof raw !== 'object' || raw.strategy !== 'worker') return null;
-  const ok = (b) => isBranch(b) || (typeof b === 'string' && b.startsWith('luna-free/') && SLUG_RE.test(b.slice(10)));
+  const ok = (b) => isBranch(b) || isFreeBranch(b);
   const branches = (Array.isArray(raw.branches) ? raw.branches : []).filter(ok).slice(0, MAX_DEP_MERGE_ITEMS);
   if (!branches.length) return null;
   const files = (Array.isArray(raw.files) ? raw.files : []).filter(isRelPath).slice(0, MAX_DEP_MERGE_ITEMS);
@@ -713,6 +771,11 @@ module.exports = {
   MAX_APPROVAL_MIN,
   shouldAutoResume,
   normalizeOptions,
+  optionsPatch,
+  isOptionsPatch,
+  normalizeFailure,
+  RUN_OPTION_FLAGS,
+  MAX_FAILURE_FILES,
   approvalExpired,
   withBlockedBy,
   INTEGRATION_MODES,

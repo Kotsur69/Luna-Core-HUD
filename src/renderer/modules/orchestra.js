@@ -24,6 +24,7 @@ import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
+import { failureBlock, runOptionsRow, powerBanner } from './orchestraDetails.js';
 
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
@@ -39,7 +40,7 @@ const killBtn = q('#orchestra-kill');
 const FAIL_CODES = new Set([
   'noTodos', 'busy', 'runActive', 'noClaude', 'noRepo', 'timeout', 'budget', 'limit', 'badJson', 'failed',
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
-  'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile',
+  'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile', 'badOptions',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Integration errors with their own message (orchestraFinalize / Integrate).
@@ -68,6 +69,10 @@ let failure = null;
  * {state:'waiting'|'planning', resumeAt, window} or null.
  */
 let planWait = null;
+/** The package whose single Launch / Retry is in flight, or null. */
+let busyPkg = null;
+/** A run-options change on its way to main. */
+let optionsBusy = false;
 /** Edited prompts, `${planId}:${pkgId}` -> text, until launched. */
 const drafts = new Map();
 /** Start options picked on the board before Approve. */
@@ -286,7 +291,10 @@ function pkgCard(pkg) {
   prompt.addEventListener('input', () => drafts.set(draftKey(pkg.id), prompt.value));
   card.append(prompt);
 
-  if (pkg.error) {
+  if (pkg.state === 'failed' && pkg.failure) {
+    // Structured record of the last failed launch; its time changes per attempt.
+    card.append(failureBlock(pkg.failure, pkgErrorText));
+  } else if (pkg.error) {
     const text = pkg.detail ? `${pkgErrorText(pkg.error)}: ${pkg.detail}` : pkgErrorText(pkg.error);
     card.append(msg(text, 'is-bad'));
   }
@@ -306,15 +314,17 @@ function pkgCard(pkg) {
   }
 
   const actions = el('div', 'orchestra__actions');
-  const button = (label, onClick, disabled = phase !== 'idle') => {
-    const btn = el('button', 'pad-send', label);
+  const busy = busyPkg === pkg.id;
+  const button = (label, onClick, disabled = phase !== 'idle', busyable = false) => {
+    const btn = el('button', busyable && busy ? 'pad-send is-busy' : 'pad-send', busyable && busy ? t('orch.busy') : label);
     btn.type = 'button';
-    btn.disabled = disabled;
+    btn.disabled = disabled || (busyable && busy);
+    if (busyable && busy) btn.setAttribute('aria-busy', 'true');
     btn.addEventListener('click', onClick);
     actions.append(btn);
   };
-  if (canLaunch(pkg)) button(t('orch.launch'), () => launch([pkg.id]), phase !== 'idle' || plan.errors.length > 0);
-  if (RETRYABLE.has(pkg.state)) button(t('orch.retry'), () => retry(pkg.id));
+  if (canLaunch(pkg)) button(t('orch.launch'), () => launch([pkg.id]), phase !== 'idle' || plan.errors.length > 0, true);
+  if (RETRYABLE.has(pkg.state)) button(t('orch.retry'), () => retry(pkg.id), phase !== 'idle', true);
   if (pkg.sessionId && (isActive(pkg) || pkg.state === 'stalled')) {
     button(
       t('orch.goto'),
@@ -329,7 +339,55 @@ function pkgCard(pkg) {
   return card;
 }
 
+/** Sends one run-option flip to main; main pushes the new plan view back. */
+async function setRunOption(key, value) {
+  if (!plan || optionsBusy) return;
+  optionsBusy = true;
+  failure = null;
+  render();
+  let res;
+  try {
+    res = await window.lunacore.orchestraSetOptions({ [key]: value });
+  } catch {
+    res = { ok: false, error: 'failed' };
+  }
+  optionsBusy = false;
+  if (!res || !res.ok) failure = (res && res.error) || 'failed';
+  if (isOpen) render();
+}
+
+/** "Cancel sleep" / "Cancel shutdown"; main pushes the new view back. */
+async function cancelPower(what) {
+  try {
+    await window.lunacore.cancelOrchestraPower(what);
+  } catch {
+    failure = 'failed';
+    if (isOpen) render();
+  }
+}
+
+// The wake check runs once per app start, the first time the board opens.
+let wakeChecked = false;
+function checkWakeOnce() {
+  if (wakeChecked || !window.lunacore.checkOrchestraWake) return;
+  wakeChecked = true;
+  window.lunacore.checkOrchestraWake().catch(() => {});
+}
+
+// A countdown that started opens the board once, so its Cancel is in reach.
+let shownCountdown = null;
+function countdownKey(next) {
+  const power = next && next.power;
+  if (!power) return null;
+  const s = power.shutdown && power.shutdown.phase === 'countdown' ? `shutdown:${power.shutdown.at}` : null;
+  return s || (power.sleep && power.sleep.phase === 'countdown' ? `sleep:${power.sleep.at}` : null);
+}
+
 function renderPlan() {
+  const banner = powerBanner(plan, { onCancel: cancelPower });
+  if (banner) body.append(banner);
+  // Always on top and usable during the run: the switches are live.
+  body.append(runOptionsRow(plan, { disabled: optionsBusy, onToggle: setRunOption }));
   const est = plan.estimate;
   let line = t('orch.summary', {
     n: plan.packages.length,
@@ -542,6 +600,7 @@ async function launch(ids) {
   const free = approve && startOpts.free;
   const integration = approve && !free ? chosenIntegration() : null;
   phase = 'launching';
+  busyPkg = Array.isArray(ids) && ids.length === 1 ? ids[0] : null;
   failure = null;
   render();
   let res;
@@ -551,6 +610,7 @@ async function launch(ids) {
     res = { ok: false, error: 'failed' };
   }
   phase = 'idle';
+  busyPkg = null;
   if (res && res.ok) plan = res.plan;
   else failure = (res && res.error) || 'failed';
   if (isOpen) render();
@@ -582,8 +642,15 @@ async function discard() {
   render();
 }
 
-function retry(id) {
-  if (plan) act(() => window.lunacore.retryOrchestra(plan.id, id));
+async function retry(id) {
+  if (!plan || phase !== 'idle') return;
+  busyPkg = id;
+  try {
+    await act(() => window.lunacore.retryOrchestra(plan.id, id));
+  } finally {
+    busyPkg = null;
+    if (isOpen) render();
+  }
 }
 
 function finishRun() {
@@ -618,6 +685,7 @@ async function openOrchestra() {
     }
   }
   render();
+  checkWakeOnce();
   if (!plan && !planWait && phase === 'idle' && !failure) startPlanning();
 }
 
@@ -646,6 +714,14 @@ if (overlay) {
 
   window.lunacore.onOrchestraChanged((next) => {
     plan = next;
+    const key = countdownKey(next);
+    if (key && key !== shownCountdown) {
+      shownCountdown = key;
+      if (!isOpen) {
+        openOrchestra();
+        return;
+      }
+    }
     if (isOpen) render();
   });
   window.lunacore.onOrchestraPlanWait((state) => {

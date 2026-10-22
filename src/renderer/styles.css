@@ -4750,6 +4750,48 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__foot { align-items: center; }
 .orchestra__foot .pad-send:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
 
+/* Failed-launch details (orchestraDetails.js failureBlock). */
+.orchestra__failure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-left: var(--border-w) solid var(--bad);
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+}
+.orchestra__stage { color: var(--text-dim); font-size: var(--fs-xs); }
+.orchestra__files {
+  margin: 0;
+  padding-left: var(--space-7);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text);
+  word-break: break-all;
+}
+.orchestra__files .is-more { color: var(--text-dim); list-style: none; }
+
+/* Live run options row, always on top of the plan. */
+.orchestra__runopts { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-4) var(--space-7); }
+.orchestra__runopt { display: flex; flex-direction: column; gap: var(--space-hair); max-width: 22rem; }
+
+/* Launch / Retry in flight: disabled with a small spinner (a loading
+   indicator, so it stays under reduced motion like the usage spinner). */
+.orchestra__actions .pad-send.is-busy { opacity: 0.7; cursor: progress; }
+.orchestra__actions .pad-send.is-busy::before {
+  content: '';
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-right: var(--space-2);
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.05em;
+  animation: orch-spin 0.8s linear infinite;
+}
+@keyframes orch-spin { to { transform: rotate(360deg); } }
+
 /* ---- Mission Control: mail cleanup + calendar widgets ------------------
    Rows reuse .todo-item / .todo-list so they share the HUD's list rhythm;
    only the parts with no existing equivalent live here. */
@@ -5288,3 +5330,6 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mc-news__more { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-xs); color: var(--text-dim); }
 .mc-news__more[open] > .mc-tele__item { margin-top: var(--space-2); }
 .mc-news__more > summary { cursor: pointer; }
+
+/* God Mode sleep / shutdown countdown (orchestraDetails.js powerBanner). */
+.orchestra__power { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }

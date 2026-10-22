@@ -105,6 +105,9 @@ function createOvernightGuard(deps) {
   const watchers = new Map();
   // Keep-awake and throttling are app-wide: held while ANY run is live.
   let blockerId = null;
+  // God Mode's sleep / shutdown options let go of keep-awake on purpose;
+  // while suspended no run takes it back.
+  let suspended = false;
 
   function setThrottling(enabled) {
     const wc = getWebContents();
@@ -112,7 +115,7 @@ function createOvernightGuard(deps) {
   }
 
   function holdAwake() {
-    if (blockerId !== null) return;
+    if (blockerId !== null || suspended) return;
     blockerId = blocker.start('prevent-app-suspension');
     setThrottling(false);
   }
@@ -184,6 +187,18 @@ function createOvernightGuard(deps) {
       watchers.delete(upstream);
     }
     if (runs.size === 0) releaseAwake();
+  }
+
+  /** Releases keep-awake until restoreAwake(), whatever runs are live. */
+  function suspendAwake() {
+    suspended = true;
+    releaseAwake();
+  }
+
+  /** Takes keep-awake back when a run still needs it. */
+  function restoreAwake() {
+    suspended = false;
+    if (runs.size > 0) holdAwake();
   }
 
   function stopAll() {
@@ -268,6 +283,8 @@ function createOvernightGuard(deps) {
     onConnectionError,
     forgetSession: endRun, // a tab closed: a run bound to it is over
     stop: stopAll,
+    suspendAwake,
+    restoreAwake,
     current: () => [...runs.keys()],
   };
 }
