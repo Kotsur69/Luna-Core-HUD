@@ -2,7 +2,7 @@
   "name": "lunacore-mobile",
   "private": true,
   "version": "0.1.0",
-  "description": "LunaCore phone companion (PWA). docs/CLOUD_SYNC_PLAN.md phase 4.",
+  "description": "LunaCore phone companion (PWA). docs/DONE_CLOUD_SYNC_PLAN.md phase 4.",
   "type": "module",
   "scripts": {
     "build": "vite build",

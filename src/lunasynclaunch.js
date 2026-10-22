@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Luna sync launch glue (main process)
 // ----------------------------------------------------------------------------
-// docs/FREE_PROVIDERS_SYNC_PLAN.md, S3. Two jobs:
+// docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md, S3. Two jobs:
 //   - the picked plugin skills (config/lunasync.local.json, gitignored), which
 //     the Settings picker writes over IPC - so validated here, at the boundary;
 //   - lunaLaunchFor(): whether a tab gets a Luna overlay, and building it.

@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - cloud login (main)
 // ----------------------------------------------------------------------------
-// GitHub login through Supabase Auth (docs/CLOUD_SYNC_PLAN.md, phase 2a), the
+// GitHub login through Supabase Auth (docs/DONE_CLOUD_SYNC_PLAN.md, phase 2a), the
 // flow proven by the phase 1 probe:
 //
 //   signInWithOAuth({skipBrowserRedirect}) -> the authorize URL, checked to be

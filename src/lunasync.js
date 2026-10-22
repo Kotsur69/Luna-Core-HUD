@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Luna sync: Claude setup -> Codex/Gemini overlay (pure builders)
 // ----------------------------------------------------------------------------
-// docs/FREE_PROVIDERS_SYNC_PLAN.md, S2. A Codex/Gemini tab with "Use my Luna
+// docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md, S2. A Codex/Gemini tab with "Use my Luna
 // setup" on runs against an overlay home LunaCore owns (CODEX_HOME /
 // GEMINI_CLI_HOME) - the user's own ~/.codex and ~/.gemini are never written.
 // This module only TRANSLATES; src/lunasyncio.js reads the sources and writes

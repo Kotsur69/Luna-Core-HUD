@@ -1,5 +1,7 @@
 # God Mode v2 — first real run (2026-10-20 → 2026-10-21)
 
+> **✅ DONE (2026-10-22).** Every follow-up is closed: the "God Mode never blocks" cards shipped in v0.17.0, push / Gmail / Google OAuth are set up and the live checks passed. Kept as the first-run report.
+
 Report written afterwards (2026-10-21) by a Claude session on KT-PC-LLM,
 because the run's own report never reached Mati. Reconstructed from the
 pushed branches, their commit messages, the LunaCore to-do list (the cards
@@ -18,7 +20,7 @@ report" below) - if it turns up, add its integration line here.
 | Live state | 6 Supabase migrations were not applied (by design) and nothing flagged it; applied 2026-10-21. Push edge function still not deployed |
 | Report to Mati | **None** - email and phone snapshot were built *by* this run, so they did not exist while it ran |
 
-## What was built (all on `main` now, not released - still `v0.16.2`)
+## What was built (released in `v0.17.0`)
 
 | Branch (deleted, merged) | Cards | What |
 |---|---|---|
@@ -76,7 +78,13 @@ report" below) - if it turns up, add its integration line here.
   KT-PC-LLM arrives in the cloud.
 - Deleted the 12 merged `luna/*` branches on GitHub.
 
-## Open - needs Mati (also as `[Mati]` cards in the LunaCore to-do list)
+## Open - needs Mati ✅ all done 2026-10-22
+
+Push, Gmail + run email, live checks: done by Mati. The 5 dead
+`luna/life-weekly-*` branches only ever existed locally on the run PC (never
+pushed); delete them there with `git branch -D` if they are still around.
+The list below is the 2026-10-21 state.
+
 
 - **Push notifications:** deploy the `push` edge function, its secrets, the
   2-min cron, Vercel `VITE_VAPID_PUBLIC_KEY` + redeploy the phone.
@@ -107,7 +115,8 @@ page.
 
 ## What changes so this does not happen again
 
-"God Mode never blocks" cards in the to-do list (planned 2026-10-21):
+"God Mode never blocks" - planned 2026-10-21, **shipped in v0.17.0**
+(`d90580b`, `d1826a0`, `7285fdb`, `056d0da`, `bd542fd`):
 conflicts at launch and at integration are resolved with escalating
 strategies instead of failing, retries never repeat the same failing step,
 packages that truly cannot be done are skipped (with their dependents

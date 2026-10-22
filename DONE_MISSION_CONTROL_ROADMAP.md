@@ -1,5 +1,7 @@
 # Mission Control — Roadmap to "my whole life in one dashboard"
 
+> **✅ DONE (2026-10-22).** W1-W8 built, released in v0.17.0 and live-checked by Mati. Kept as history + gotchas. New work goes into `FUTURE_PLAN.md` and the to-do list.
+
 Mission Control (**Ctrl+Shift+M**) shipped in **v0.14.0** with four columns:
 Inbox cleanup, Calendar, Telemetry and News. This file is everything still
 owed to finish it, plus the ideas Mati picked on 2026-10-09. Every decision
@@ -10,7 +12,7 @@ under *Open questions*.
 
 ## ▶ Starting prompt (copy, paste, go)
 
-> Continue Mission Control in LunaCore. Read `MISSION_CONTROL_ROADMAP.md`
+> Continue Mission Control in LunaCore. Read `DONE_MISSION_CONTROL_ROADMAP.md`
 > top to bottom, then `CLAUDE.md` and the memory index. Pick the **first
 > workstream not marked ✅** in *Build order* below (or the one I name here:
 > `____`). Before writing code: ask me the *Open questions* for that
@@ -24,16 +26,22 @@ under *Open questions*.
 > *Gotchas*), and commit + push the explicit file list (never `git add -A`,
 > leave other sessions' hunks out). Talk to me in the language I write in.
 
-## ⏸ Resume here (last session 2026-10-21)
+## ⏸ Resume here (last session 2026-10-22)
+
+- **Nothing left here.** Everything below is released in v0.17.0 and Mati's
+  live checks passed (2026-10-22). Google OAuth (W8) is set up; the W7
+  question is answered (Tor Kielce was already pre-seeded).
+
+### Resume notes (2026-10-21)
 
 - **God Mode run 2026-10-20 built most of what was left here**, merged into
-  `main` 2026-10-21 (`c9cfa41`, not released yet): W3+ phases 1, 3 and 5
+  `main` 2026-10-21 (`c9cfa41`, released in v0.17.0): W3+ phases 1, 3 and 5
   (check-in, habits, productivity score, weekly review + correlations +
   Sunday email), W4 weekly goals, W6 weekly + daily brief, W1 pin /
   re-class, W8 pip hash locks + HN Algolia + usage-429 last-good, bill due
   dates into Google Calendar, Gmail sender + nightly summary. Report:
-  [`docs/GODMODE_RUN_2026-10-20.md`](docs/GODMODE_RUN_2026-10-20.md).
-- **None of it is live-checked by Mati yet.** First: pull `main`, restart,
+  [`docs/DONE_GODMODE_RUN_2026-10-20.md`](docs/DONE_GODMODE_RUN_2026-10-20.md).
+- ~~**None of it is live-checked by Mati yet.**~~ ✅ checked 2026-10-22. Was: pull `main`, restart,
   connect Gmail (Settings → Report emails), then open the Life dashboard
   (check-in prompt, Habits, Week tab) and Mission Control (brief strip,
   star pins).
@@ -44,7 +52,7 @@ under *Open questions*.
 - **Cloud sync:** phases 1-3 released (latest `v0.16.2`, 2026-10-19). Supabase
   is the only transport; the Syncthing folder and the ledger's "Share with
   other PCs" UI are removed. **Next: iPhone PWA (phase 4)** — start at
-  [`docs/CLOUD_SYNC_PLAN.md`](docs/CLOUD_SYNC_PLAN.md) "Next session: start here".
+  [`docs/DONE_CLOUD_SYNC_PLAN.md`](docs/DONE_CLOUD_SYNC_PLAN.md) "Next session: start here".
 - **Active workstream: W3+ Life Dashboard** (Ctrl+Shift+N). Phase 2 Money
   shipped in `393c07d`; the **budget redesign (5 buckets, tabs, charts,
   undo everywhere)** landed after it - see "Phase 2b" in the W3+ section.
@@ -124,7 +132,7 @@ feeding the numbers. Files: `src/missionledger.js` (scan + cache + price),
 (classes + pins), `src/missionledgerservice.js` (glue), renderer
 `modules/missionledger.js` + `missionledgerview.js` (pure math). IPC
 `mission:ledger`, `mission:project-class`. Other PCs' ledgers come from the
-cloud `ledger` snapshots (docs/CLOUD_SYNC_PLAN.md); the original shared-folder
+cloud `ledger` snapshots (docs/DONE_CLOUD_SYNC_PLAN.md); the original shared-folder
 transport was removed in cloud phase 3 (2026-10-15). Verified on real data: hand count of one project
 within 0.13 %, full scan 423 ms with a worst event-loop stall of 4 ms (no
 worker needed), re-open 25 ms.
@@ -172,7 +180,7 @@ the top 5 can be re-classed and pinned too.
 
 ### W1b — Move the ledger between the 3 PCs ✅ superseded by the cloud
 
-Done through Supabase instead (docs/CLOUD_SYNC_PLAN.md). The Syncthing /
+Done through Supabase instead (docs/DONE_CLOUD_SYNC_PLAN.md). The Syncthing /
 SyncTrayzor shared folder tried here on 2026-10-09 was removed from LunaCore
 in cloud phase 3 (2026-10-15); SyncTrayzor can be uninstalled on every PC.
 
@@ -247,7 +255,7 @@ W1), a switch across midnight is not counted, mapped network drives in
   **context switches per day** (project changes inside 30 min).
 - **Reuse:** W1's scan pass (one reader, two aggregates).
 
-### W3+ — Life Dashboard (live) + budget + weekly review ✅ built 2026-10-21, live check owed (scope widened 2026-10-14)
+### W3+ — Life Dashboard (live) + budget + weekly review ✅ built 2026-10-21, live-checked 2026-10-22 (scope widened 2026-10-14)
 
 Mati widened W3 into a live life dashboard; the weekly review below becomes
 its Sunday snapshot. **Decisions (2026-10-14, answered — do not re-ask):**
@@ -622,7 +630,7 @@ tests for the card; `missioncalendar.js` (596), `gcal.js` (556) and
 they grow. Not verified live: a real Save (needs Mati's reconnect); the card
 itself was smoke-tested with a fake event in a second instance.
 
-### W8 — Owed fixes from v0.14.0 ⏳
+### W8 — Owed fixes from v0.14.0 ✅ (2026-10-22)
 
 - ~~**pip hash pinning**~~ ✅ 2026-10-20: `requirements*.txt` are full
   hash locks (`uv pip compile --universal --generate-hashes`, sources in
@@ -635,12 +643,12 @@ itself was smoke-tested with a fake event in a second instance.
   heartbeat; the budget block keeps the last good reading with "as of …".
 - ~~**hnrss.org 502s**~~ ✅ 2026-10-20: HN topics read the Algolia API
   (`search_by_date`, stories), hnrss only as the fallback.
-- **Google Cloud setup (Mati):** create the Desktop OAuth client, save it as
+- ~~**Google Cloud setup (Mati):**~~ ✅ done by Mati 2026-10-22: create the Desktop OAuth client, save it as
   `config/google-oauth.local.json`, **publish** the consent screen (testing
   mode expires refresh tokens after 7 days), click Connect.
 - ~~**God Mode v2 live run**~~ ✅ done by Mati 2026-10-20 night; it built
   most of this file's open work but blocked on merges - see
-  [`docs/GODMODE_RUN_2026-10-20.md`](docs/GODMODE_RUN_2026-10-20.md).
+  [`docs/DONE_GODMODE_RUN_2026-10-20.md`](docs/DONE_GODMODE_RUN_2026-10-20.md).
 
 ---
 
@@ -650,8 +658,8 @@ itself was smoke-tested with a fake event in a second instance.
 - ~~**W3:**~~ answered 2026-10-14 (see W3+).
 - ~~**W5:**~~ answered 2026-10-09 (see W5).
 - ~~**W6:**~~ answered 2026-10-20: weekly on Monday's first launch + daily on click (see W6).
-- **W7:** which tracks are frequent (pre-seed coordinates: Tor Poznań,
-  Silesia Ring…)?
+- ~~**W7:**~~ answered 2026-10-22: mostly Tor Kielce, which has been
+  pre-seeded since 2026-10-13 (see W7). Nothing to build.
 
 ## Guardrails (repo rules that bit us — keep them)
 

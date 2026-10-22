@@ -5,98 +5,86 @@ got here (widget contract, layout engine, packaging, the lessons each phase
 cost) lives in [`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md).
 Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 
-## Where things stand (2026-10-21)
+**Doc naming:** a plan whose feature is fully built and live-checked is
+renamed with a `DONE_` prefix (`DONE_MISSION_CONTROL_ROADMAP.md`,
+`docs/DONE_CLOUD_SYNC_PLAN.md`, ...). Files without the prefix still have
+open work. Leftover small items of a `DONE_` plan live as cards in the
+LunaCore to-do list, not in the file.
 
-- **First real God Mode v2 run (2026-10-20 night):** 47 to-do cards built as
-  12 branches, merged by hand into `main` (`c9cfa41`, 2770 tests green, not
-  released yet). The run blocked on a dependency merge after ~15 min and its
-  final integration failed. Full report + what is still open:
-  [`docs/GODMODE_RUN_2026-10-20.md`](docs/GODMODE_RUN_2026-10-20.md).
-  **Next before another night run:** the "God Mode never blocks" cards in
-  the to-do list (auto-resolve conflicts, skip + report instead of stopping,
-  end-of-run self-check).
-- **START HERE for cloud sync:** [`docs/CLOUD_SYNC_PLAN.md`](docs/CLOUD_SYNC_PLAN.md)
-  "Next session: start here". Phases 1-3 are done and released; the
-  Syncthing folder is gone. Phase 4 (iPhone PWA at
-  `https://luna-core-hud.vercel.app`) is built and live-checked by Mati
-  (2026-10-20). Phone host control: [`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md).
-- **START HERE for Mission Control:**
-  [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md) - decisions,
-  build order W1-W8 and a copy-paste starting prompt.
-- **Released:** `v0.16.2` (2026-10-19) - cloud sync phase 3: the shared
-  folder (Syncthing / SyncTrayzor) is removed, the cloud is the only sync
-  transport. Before it: `v0.16.0` / `v0.16.1` (2026-10-15) - cloud sync 2b +
-  2c (settings, ledger / news / YAZIO snapshots and their readers). Before it:
-  `v0.15.0` (2026-10-15) - Life dashboard (Ctrl+Shift+N: budget,
-  bills, savings, Year and Body tabs) and cloud sync phase 2a (GitHub login,
-  budget + to-dos over Supabase). Before it: `v0.14.0` (2026-10-09) - Mission Control (Ctrl+Shift+M: mail
-  cleanup, Google Calendar API, GitHub / Claude-budget telemetry, Agent-Reach
-  News) and God Mode v2 below. Before it: `v0.13.0` (2026-09-25) - AI
-  providers, provider-aware usage, God Mode overnight guard, "Don't sleep".
-- **Shipped in v0.14.0 without its live run:** God Mode v2 - task intake (Luna MCP +
-  `/luna-plan`), worktree tabs, per-tab runs, the headless planner + plan
-  board, the supervisor (DONE markers, verify, push, Retry, kill switch,
-  persistence), scheduled start, Sonnet->Opus escalation, file-overlap guard,
-  allow-rule learning, and the integrator (PRs / merge / branches, cleanup,
-  run report). Design + status: [`reference/ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md).
-  Also: the usage gauge shows the real reset time, and the observer follows a
-  tab across `/clear`.
+## Where things stand (2026-10-22)
+
+- **Released:** `v0.17.0` (2026-10-22) - phone, Luna host and a sturdier God
+  Mode: everything the first God Mode run built (Life check-in / habits /
+  goals / weekly review, weekly + daily brief, Gmail sender + run email, bills
+  into Google Calendar, Codex / Gemini / GLM / Kimi usage rows, free-provider
+  fallback chains, path audit, Luna host + phone control), plus **God Mode
+  never blocks** (self-healing dependency merge, integration skips bad
+  packages, retry ladder, end-of-run self-check + fix-up worker, morning
+  report with "Needs you"), sleep at the usage limit with a wake task,
+  standalone HTML reports, usage limits for the active tab's provider only,
+  tab status lights and the grouped Ctrl+L settings dialog.
+  Before it: `v0.16.2` (2026-10-19) - cloud sync phase 3 (cloud is the only
+  transport). `v0.16.0` / `v0.16.1` (2026-10-15) - cloud sync 2b + 2c.
+  `v0.15.0` (2026-10-15) - Life dashboard + cloud sync 2a. `v0.14.0`
+  (2026-10-09) - Mission Control + God Mode v2. `v0.13.0` (2026-09-25) - AI
+  providers, provider-aware usage, overnight guard, "Don't sleep".
+- **Done (`DONE_` docs):** Mission Control W1-W8
+  ([`DONE_MISSION_CONTROL_ROADMAP.md`](DONE_MISSION_CONTROL_ROADMAP.md)),
+  cloud sync + iPhone PWA ([`docs/DONE_CLOUD_SYNC_PLAN.md`](docs/DONE_CLOUD_SYNC_PLAN.md)),
+  free providers + Luna sync ([`docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md`](docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md)),
+  the path audit ([`docs/DONE_PATH_AUDIT.md`](docs/DONE_PATH_AUDIT.md)) and
+  the first God Mode run report ([`docs/DONE_GODMODE_RUN_2026-10-20.md`](docs/DONE_GODMODE_RUN_2026-10-20.md)).
+  Mati's live checks of all of it passed 2026-10-22; push notifications,
+  Gmail and the Google OAuth app are set up.
+- **Still open:** Luna host + phone pairing
+  ([`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md)), and the cards in
+  the to-do list (LM Studio via CCR, FreeLLMAPI port + status row, overlay
+  copy skip, `js-yaml` audit, cloud "forget this PC", host security M1 / M2 /
+  M4).
 
 ## Next
 
-1. **God Mode never blocks** - the first live run (done 2026-10-20) worked
-   but stopped on easy merge conflicts; fix that before the next night run
-   (cards in the to-do list, background in
-   [`docs/GODMODE_RUN_2026-10-20.md`](docs/GODMODE_RUN_2026-10-20.md)).
-2. **Release** the merged run work (`main` is ahead of `v0.16.2`).
-3. **Mission Control W1-W8** - see [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md).
+1. **Pair the phone with a host** (`[Mati]` card) - the only part of the
+   host plan nobody has run yet.
+2. **Work the to-do cards** above (a God Mode night run can take them; the
+   `[Mati]` cards are marked manual and stay out of it).
+3. **Think through ideas 3 + 4 together** (polish batch + local transcript
+   archive) - see *Ideas kept*.
 
 ## Owed live checks (unit tests cannot clear these)
 
-- The usage-limit message text God Mode (v1 and v2) pauses on is still a
-  guess - capture the real string the first time the wall is hit.
+- The usage-limit message text God Mode pauses on is a pattern
+  (`src/orchestraPlanWait.js` `LIMIT_TEXT_RE`) - confirm it the first time
+  the wall is hit during a run, then check the planner resumes on its own at
+  the reset time (the board shows the resume time + Cancel meanwhile).
 - Auto-proceed against a real dropped connection in the wild.
 - The packaged-build spawn check (§D2a in the engineering notes) was last done
   on Electron 33; redo it on the current Electron 43 build.
-- **Luna host + phone control** (built + reviewed, not live; details in
-  [`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md) "Resume here"):
-  - ~~**Migrations**~~ ✅ applied 2026-10-21 (Supabase now 9 / 9).
-  - **Edge function deploy:** `supabase functions deploy push --no-verify-jwt`,
-    secrets `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` /
-    `OWNER_USER_ID` / `CRON_SECRET` / `PUSH_LANG`, the 2-min
-    `{"event":"offline-check"}` cron, Vercel env `VITE_VAPID_PUBLIC_KEY`.
-  - **Real phone pairing** on KT-PC-LLM, KT-NO-MMAZUR and the MacBook (codes
-    match, confirm on the host), then a signed `news.scan`, `repo.clone` and
-    a chat with Allow / Deny / Always, Stop, End, Resume; "Forget all phones"
-    must refuse the next command.
-  - **Push on iOS** (installed PWA, iOS 16.4+): approval, session done, host
-    offline (> 5 min), usage 80 % / 95 %.
-  - The claude CLI on a Windows host must be the native install
-    (`~/.local/bin/claude.exe`): the host now spawns an absolute path and
-    never a bare `claude` (security review S-M3).
+- **Luna host + phone pairing** on KT-PC-LLM, KT-NO-MMAZUR and the MacBook,
+  then a signed `news.scan`, `repo.clone` and a chat with Allow / Deny /
+  Always, Stop, End, Resume; "Forget all phones" must refuse the next
+  command. Steps: [`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md)
+  "Resume here". The claude CLI on a Windows host must be the native install
+  (`~/.local/bin/claude.exe`).
 
 ## Known issues
 
-- **Usage panel lists every provider at once** - Mati wants only the active
-  tab's profile provider (Claude limits on a Claude tab, Codex on a Codex
-  tab). Card in the to-do list.
-
 - **LM Studio through claude-code-router returns HTTP 400** (AI providers
-  phase 5c) - root-caused but not fixed; direct LM Studio tabs work.
-- **CCR settings never clicked through with a real provider** - confirm the
-  Router section and a CCR template work end to end.
+  phase 5c) - direct LM Studio tabs work. Card in the to-do list.
+- **CCR settings never clicked through with a real provider** - `[Mati]`
+  card in the to-do list.
 - **Auto-update from `v0.9.0`** does not work (from `v0.9.1` onward it does) -
   known, not being chased.
 
-## Ideas kept (Mati, 2026-10-06)
+## Ideas kept (Mati, 2026-10-06; reviewed 2026-10-22)
 
-| Idea | What it is | First step |
+| Idea | What it is | Status / first step |
 |---|---|---|
-| **Subagent stream visualizer** | Cards for subagents (Task spawns) running in parallel inside one tab. | Research spike: does a real multi-agent session's JSONL attribute subagent work cleanly (separate file? nested ids)? No estimate before that. |
-| **Google Calendar agenda widget** | Read-only Today / Tomorrow agenda tile, colour per calendar; later a small quick-add. | Main-process `src/calendar.js` polling with the existing Google OAuth refresh token; expect an expired token on first run. Native tile, not an embedded webview. |
-| **Small polish batch** | Skill search box (filter the skill list as you type), in-app cheat-sheet editor, recent-injections history, skill category override (drag a skill into the right group). | Each is small; one PR per item. |
-| **Local transcript archive + search** | Index your own `~/.claude/projects/**/*.jsonl` into a searchable history ("when did I solve this before?"). Read-only, zero tokens. | Needs a real store (SQLite), not JSON; decide index refresh (on start + on turn end). |
-| **Cross-provider usage ledger** | One view of Claude 5h/weekly limits + Codex / GLM / Kimi spend + local runtime. | Extends the provider-aware usage gauge; "unavailable" is a first-class state per vendor. |
+| **Local transcript archive + search** | Index your own `~/.claude/projects/**/*.jsonl` into a searchable history ("when did I solve this before?"). Read-only, zero tokens. | **Next to think about (productivity), together with the polish batch below.** Needs a real store (SQLite), not JSON; decide index refresh (on start + on turn end). |
+| **Small polish batch** | Skill search box (filter the skill list as you type), in-app cheat-sheet editor, recent-injections history, skill category override (drag a skill into the right group). | Planned together with the transcript archive (recent-injections history and search overlap with it). |
+| **Subagent stream visualizer** | Cards for subagents (Task spawns) running in parallel inside one tab. | Parked. Research spike first: does a real multi-agent session's JSONL attribute subagent work cleanly (separate file? nested ids)? |
+| **Cross-provider usage ledger** | One view of Claude 5h/weekly limits + Codex / GLM / Kimi spend + local runtime. | Parked (Mati, 2026-10-22). The per-provider usage rows (v0.17.0) cover the day-to-day need. |
+| ~~**Google Calendar agenda widget**~~ | Today / Tomorrow agenda with quick add. | ✅ Done - Mission Control's calendar (`src/renderer/modules/missioncalendar.js`: agenda + month + quick add + click-to-edit, `src/gcal.js`). No separate HUD tile planned. |
 
 ## Rules every idea must keep
 

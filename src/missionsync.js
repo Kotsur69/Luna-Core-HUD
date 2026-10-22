@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Mission Control settings as cloud units (main)
 // ----------------------------------------------------------------------------
-// Providers for src/configsync.js (docs/CLOUD_SYNC_PLAN.md, 2b):
+// Providers for src/configsync.js (docs/DONE_CLOUD_SYNC_PLAN.md, 2b):
 //
 //   news            mission-news.local.json
 //     news:source:<id> = {platform, target, label}

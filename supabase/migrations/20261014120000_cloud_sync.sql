@@ -1,4 +1,4 @@
--- Cloud sync, phase 1 (docs/CLOUD_SYNC_PLAN.md).
+-- Cloud sync, phase 1 (docs/DONE_CLOUD_SYNC_PLAN.md).
 -- sync_units: one row per synced unit, newest client change wins per unit.
 -- snapshots: one row per (kind, machine), written only by that machine.
 

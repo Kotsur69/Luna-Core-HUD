@@ -133,7 +133,7 @@ const { registerMailIpc } = require('./mailipc');
 // Weekly review (Life Week tab, Sunday 20:00 + Generate now) and its email.
 const { setupWeeklyReview } = require('./weeklyipc');
 const { startLifeSync } = require('./lifesync');
-// Cloud sync (docs/CLOUD_SYNC_PLAN.md): Supabase carries the budget, the
+// Cloud sync (docs/DONE_CLOUD_SYNC_PLAN.md): Supabase carries the budget, the
 // to-dos, settings and snapshots between PCs. Off without config/cloud.local.json.
 const { startCloud } = require('./cloudsync');
 const { registerCloudIpc } = require('./cloudipc');
@@ -154,7 +154,7 @@ const { loadLayouts } = require('./layouts');
 // UI preferences (theme + language) persisted in config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
 const { normalizeArmCounts, confirmDetail } = require('./godmodeconfirm');
-// Opt-in "Use my Luna setup" for native Codex/Gemini tabs (docs/FREE_PROVIDERS_SYNC_PLAN.md).
+// Opt-in "Use my Luna setup" for native Codex/Gemini tabs (docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md).
 const { loadLunaSyncPrefs, saveLunaSyncPrefs, lunaLaunchFor, lunaSyncNotice } = require('./lunasynclaunch');
 const { readClaudeSetup, listPluginSkills } = require('./lunasyncio');
 /** How long the Settings skill picker reuses one walk of the plugin folders. */

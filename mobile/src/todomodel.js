@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore phone - to-do model (pure)
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md phase 4a. The phone has no local to-do file: the
+// docs/DONE_CLOUD_SYNC_PLAN.md phase 4a. The phone has no local to-do file: the
 // pulled `todos` mirror ({key: {v, u, d}}, built by cloudrows.applyRows) IS
 // its state, and every change is one cloud unit {k, v, u, d} that the server
 // orders newest-wins. Rows come from other machines, so lists() runs every

@@ -2,7 +2,7 @@
 // LunaCore - Life budget validation and ops (pure, shared by main and phone)
 // ----------------------------------------------------------------------------
 // The store's shape rules (normalize) and its fixed op table, with no fs /
-// paths, so the phone app (mobile/, docs/CLOUD_SYNC_PLAN.md phase 4b) bundles
+// paths, so the phone app (mobile/, docs/DONE_CLOUD_SYNC_PLAN.md phase 4b) bundles
 // the exact code a PC uses: lifesync.js drops a pulled unit unless
 // normalize() returns it unchanged, so the phone must write units this code
 // already produced. The file format is documented in src/lifebudget.js,

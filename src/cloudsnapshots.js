@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - cloud snapshots (main)
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md, phase 2c. The `snapshots` table holds one row per
+// docs/DONE_CLOUD_SYNC_PLAN.md, phase 2c. The `snapshots` table holds one row per
 // (kind, machine), written only by that machine: the Claude ledger, the last
 // news briefing, the YAZIO body data. No merging - a reader takes every other
 // machine's row as it is and validates it like a peer file.

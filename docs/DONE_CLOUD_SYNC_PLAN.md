@@ -1,5 +1,7 @@
 # Cloud sync + iPhone companion — plan
 
+> **✅ DONE (2026-10-22).** Phases 1-5 built, released (YAZIO auto-refresh in v0.17.0) and live-checked. The last LOW items ("forget this PC", machine-name collisions, `js-yaml` audit) are cards in the to-do list.
+
 Status: **confirmed by Mati 2026-10-14. Phase 1 database applied 2026-10-14. Released in v0.15.0 (2026-10-15).
 Phases 2a–2c shipped 2026-10-15 (v0.15.0 → v0.16.1) and proven live on two PCs.
 Phase 3 (folder transport removed) released in v0.16.2 (2026-10-19). Phone phases 4a–4d built 2026-10-19; phase 5 (Google calendar + mail on the phone) proven live 2026-10-20; phone live at https://luna-core-hud.vercel.app.
@@ -728,9 +730,9 @@ Lessons from the first live run (2026-10-20):
 
 Finished 2026-10-20: `config/google-server.local.json` deleted on
 KT-PC-LLM (secrets live only in Supabase); Mati tested the phone and the
-4b/4c/4d checks below ("seems like everything works"). Still open: release
-the YAZIO auto-refresh (1373fec) with the next batch, and the small items
-in point 4 below.
+4b/4c/4d checks below ("seems like everything works"). The YAZIO auto-refresh
+(1373fec) shipped in v0.17.0; the small items in point 4 below are cards in
+the to-do list.
 
 If calendar/mail ever say "Google disconnected the server"
    (`google-auth`): the refresh token was revoked; run the token script
@@ -800,14 +802,14 @@ works perfect" (news reports from KT-PC-LLM show up in "Gotowe raporty").
      yet: no PC has edited them. The first edit should be watched once.
    - YAZIO snapshot: live-checked 2026-10-20 (KT-PC-LLM row read by the
      phone). It used to go stale: the Body tab fetched only once per app run,
-     and the phone only mirrors what a PC uploads. Fixed (not released yet):
+     and the phone only mirrors what a PC uploads. Fixed (released in v0.17.0):
      a logged-in PC refetches + uploads every 30 min in the background
      (`lifeipc.js` `BODY_EVERY_MS`), and an open Body tab re-asks when its
      answer is over 5 min old (`lifebody.js` `STALE_MS`, also on focus).
      Check: `select machine, updated_at from snapshots where kind = 'yazio'`.
-   - LOW review notes not done: a "forget this PC" action for a retired PC's
+   - LOW review notes not done (card in the to-do list): a "forget this PC" action for a retired PC's
      rows; machine-name collisions (`PC_1` = `PC-1`).
-   - Still owed: `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.
+   - Still owed (card in the to-do list): `npm audit` high on `js-yaml` 4.3.1 via `electron-updater`.
 5. **Setting up another PC:** install the latest release, copy `cloud.local.json`
    (values in the 2a table above) and `projects.local.json` into its config dir
    (`%APPDATA%\LunaCore\config\` for the installer, `LunaCore-config\` next to

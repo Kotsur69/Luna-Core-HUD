@@ -43,7 +43,7 @@ injects prompts or touches the `claude` binary.
 > a YAZIO Body tab), and optional cloud sync of the budget and to-dos between
 > PCs over your own Supabase project with GitHub login. No `cloud.local.json`
 > means no cloud: everything stays local. Plan and status:
-> [`docs/CLOUD_SYNC_PLAN.md`](docs/CLOUD_SYNC_PLAN.md).
+> [`docs/DONE_CLOUD_SYNC_PLAN.md`](docs/DONE_CLOUD_SYNC_PLAN.md).
 >
 > **v0.14.0 — Mission Control.** A **Ctrl+Shift+M** dashboard
 > for the rest of your day: Gmail cleanup (dry run, then confirm), Google
@@ -52,7 +52,7 @@ injects prompts or touches the `claude` binary.
 > with pace flags, and News — sources and topics fetched by a vendored
 > [Agent-Reach](https://github.com/Panniantong/Agent-Reach) and summarised by
 > Haiku. See [Mission Control](#mission-control-ctrlshiftm) and what is next in
-> [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md).
+> [`DONE_MISSION_CONTROL_ROADMAP.md`](DONE_MISSION_CONTROL_ROADMAP.md).
 >
 > Also in v0.14.0: **God Mode v2** — a headless planner splits a project's
 > To-Do list into work packages, each runs in its own tab and git worktree,
@@ -801,12 +801,13 @@ the reasoning behind the contract are in
 | + | Highlight/clip extractor — batch tail-trim via system `ffmpeg`, reachable from its own chip or an `/ask` "Run it" suggestion | ✅ done |
 | + | AI providers — 16 provider templates (incl. native Codex/Gemini CLI + OpenRouter free), profile CRUD in Settings, LM Studio model loader via the SDK, full harness on local models, `claude-code-router` lifecycle (v0.13.0, see [AI providers](#ai-providers)) | ✅ done |
 | + | God Mode overnight guard (sleep blocker + LM Studio watchdog), "Don't sleep" switch, longer To-Do items, scroll-aware To-Do drag-and-drop (v0.13.0) | ✅ done |
-| + | Provider-aware usage gauge (Claude, GLM, OpenAI, local) — adapters shipped; the gauge still follows the **first** profile, not the active tab | 🟡 partial |
+| + | Provider-aware usage gauge (Claude, Codex, GLM, Kimi, Gemini, OpenRouter, local) — shows only the active tab's provider limits (v0.17.0) | ✅ done |
 | + | Window transparency — the `glass` theme family (Win11 acrylic), tunable (v0.11.0) | ✅ done |
 | v2 | God Mode v2: task intake (Luna MCP + `/luna-plan`), worktree tabs, per-tab runs, headless planner + plan board | ✅ done (v0.14.0) |
 | MC | Mission Control (Ctrl+Shift+M): Gmail cleanup, Google Calendar API + quick add, GitHub / Claude-budget telemetry, Agent-Reach News with Haiku summaries (v0.14.0) | ✅ done |
-| MC2 | Weekly review + email, Morning brief, Claude % per project, focus time, X / Reddit + presets, goals, trackday weather — see [`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md) | 🔜 next |
-| v2 | God Mode v2 supervisor + integrator: DONE markers, verify + push per worker, Retry, kill switch, scheduled start, Sonnet→Opus escalation, file-overlap guard, PRs / merge, run report ([`ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md)) | ✅ on `main`, live test owed |
+| MC2 | Weekly review + email, Morning brief, Claude % per project, focus time, X / Reddit + presets, goals, trackday weather, Life dashboard — see [`DONE_MISSION_CONTROL_ROADMAP.md`](DONE_MISSION_CONTROL_ROADMAP.md) | ✅ done (v0.17.0) |
+| v2 | God Mode v2 supervisor + integrator: DONE markers, verify + push per worker, Retry, kill switch, scheduled start, Sonnet→Opus escalation, file-overlap guard, PRs / merge, run report ([`ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md)) | ✅ done, live-run 2026-10-20 |
+| v2 | God Mode never blocks: self-healing dependency merge, integration skips bad packages, retry ladder, end-of-run self-check + fix-up worker, morning report, sleep at the usage limit with a wake task (v0.17.0) | ✅ done |
 
 That closes the whole approved shortlist and the first slice of the structural
 plan. **A1 is done**: the 1554-line `renderer.js` is a 57-line entry point plus
@@ -1246,7 +1247,7 @@ immediately.
 
 ## God Mode v2 — parallel workers in worktrees
 
-Status: on `main`, not released yet; the first live run is still owed. Design,
+Status: released (v0.14.0, hardened in v0.17.0); first live run 2026-10-20. Design,
 decisions and status per slice: [`reference/ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md).
 
 **Getting tasks in.** Every LunaCore tab gets a small local MCP server
@@ -1411,7 +1412,7 @@ Agent-Reach ([Panniantong/Agent-Reach](https://github.com/Panniantong/Agent-Reac
 MIT) lives unchanged in [`helpers/agent-reach/`](helpers/agent-reach/) next to
 LunaCore's small bridge, `lunacore_fetch.py`. v0.14.0 uses only its public,
 login-free paths; X and Reddit are next in
-[`MISSION_CONTROL_ROADMAP.md`](MISSION_CONTROL_ROADMAP.md).
+[`DONE_MISSION_CONTROL_ROADMAP.md`](DONE_MISSION_CONTROL_ROADMAP.md).
 
 ## Action cheat-sheets
 

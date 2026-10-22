@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore phone - snapshot readers (pure)
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md phase 4c. Each PC writes its own `snapshots` row per
+// docs/DONE_CLOUD_SYNC_PLAN.md phase 4c. Each PC writes its own `snapshots` row per
 // kind (news, ledger, yazio, usage, repos, godmode); the phone writes none and reads them all. Every
 // row is untrusted and goes through the same parser a PC uses for another
 // PC's row - never rendered as it came.

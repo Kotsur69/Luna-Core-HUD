@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore phone - Today's weather (Open-Meteo: free, no key)
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md phase 4c. The place is a town typed once on this
+// docs/DONE_CLOUD_SYNC_PLAN.md phase 4c. The place is a town typed once on this
 // phone (no GPS: vercel.json turns geolocation off), geocoded and kept in
 // localStorage; only that town name and its coordinates leave the phone.
 // Parsing is the PC's own (src/missionweather.js): every number Open-Meteo

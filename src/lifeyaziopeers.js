@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - YAZIO Body data over the cloud (main)
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md phase 2c. A PC logged in to YAZIO puts what the Body
+// docs/DONE_CLOUD_SYNC_PLAN.md phase 2c. A PC logged in to YAZIO puts what the Body
 // tab shows (lifeyazio.js body()) as its `yazio` snapshot; a PC that is not
 // logged in shows the newest other PC's copy instead of only a login form.
 //

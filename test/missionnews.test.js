@@ -470,7 +470,7 @@ test('news-open resolves keys from the last scan only', () => {
   assert.deepEqual(h.opened, ['https://a.b/c']);
 });
 
-// ---- Cloud snapshot of the last briefing (CLOUD_SYNC_PLAN.md phase 2c) ----
+// ---- Cloud snapshot of the last briefing (DONE_CLOUD_SYNC_PLAN.md phase 2c) ----
 
 test('newsSnapshot: briefing + summaries + links for the phone; failed sections and raw text left out', () => {
   const sections = [

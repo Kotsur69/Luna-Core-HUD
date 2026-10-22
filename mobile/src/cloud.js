@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore phone - cloud transport
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md phase 4a. Same rules as src/cloudsync.js on a PC:
+// docs/DONE_CLOUD_SYNC_PLAN.md phase 4a. Same rules as src/cloudsync.js on a PC:
 //
 //   pull   sync_units where scope = s and rev > cursor, pages of PAGE
 //          -> cloudrows.applyRows -> the scope's mirror in IndexedDB

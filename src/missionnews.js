@@ -239,7 +239,7 @@ const MAX_SNAPSHOT_SECTIONS = 100;
 const MAX_SNAPSHOT_LABEL = 120;
 
 /**
- * The `news` cloud snapshot (CLOUD_SYNC_PLAN.md phase 2c): what the phone and
+ * The `news` cloud snapshot (DONE_CLOUD_SYNC_PLAN.md phase 2c): what the phone and
  * other PCs show as "the last briefing". Unlike publicSections it carries the
  * links - the phone has no main process to resolve keys - but never the raw
  * fetched text. Too big for a row -> picked entries only, then none.

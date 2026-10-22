@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore phone - Life budget model (pure)
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md phase 4b. Like the to-dos, the phone has no budget
+// docs/DONE_CLOUD_SYNC_PLAN.md phase 4b. Like the to-dos, the phone has no budget
 // file: the pulled `life` mirror IS its state. budgetOf() turns it into the
 // budget a PC would merge (same validPeer + normalize), and opUnits() runs a
 // PC's own op table (lifebudgetrows.applyOp) on it, then sends only the units

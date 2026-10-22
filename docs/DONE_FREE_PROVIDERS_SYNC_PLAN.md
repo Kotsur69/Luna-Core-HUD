@@ -1,18 +1,19 @@
 # Free providers + Luna sync — plan
 
+> **✅ DONE (2026-10-22).** S0-S3 built, released in v0.17.0 and live-checked by Mati. Small follow-ups (FreeLLMAPI port, gateway status row, overlay copy skip) are cards in the to-do list.
+
 Status: **S0-S3 built, tested and pushed** (2026-10-20, commits
-326a3e1..7323279). Mati's live click-through in the running app is the one
-check still open. Related, built by the God Mode run and merged 2026-10-21:
+326a3e1..7323279). Mati's live click-through passed 2026-10-22; released in v0.17.0. Related, built by the God Mode run and merged 2026-10-21:
 free-model fallback chains + the "Free providers" God Mode mode
 ([`FREE_PROVIDERS.md`](FREE_PROVIDERS.md)) and usage rows for Codex / Gemini
 / GLM / Kimi - none live-checked yet.
 
 ## Resume here
 
-- **Live check (Mati):** restart LunaCore, add a Gemini CLI profile with
+- ~~**Live check (Mati):**~~ ✅ passed 2026-10-22: restart LunaCore, add a Gemini CLI profile with
   "Use my Luna setup" on, Google login + trust once, ask "who are you?" -
   must answer as Luna. Same for a FreeLLMAPI profile with the unified key.
-- **Open, small:** configurable FreeLLMAPI port (Docker = 3001, desktop =
+- **Open, small (cards in the to-do list):** configurable FreeLLMAPI port (Docker = 3001, desktop =
   31415); a gateway up/down row in Settings; skip the per-spawn overlay copy
   when nothing changed (it is synchronous on the main thread).
 - **Not planned:** hooks and `ecc:` agents for Codex/Gemini (no equivalent);
@@ -192,7 +193,7 @@ overwriting; home-dir guard; tmp+rename writes; skill copy skips
 `.git`/`node_modules`, never replaces a folder it did not create, case-folds
 names; SSE / `${VAR}` servers reported as skipped for Codex.
 
-#### S3 status (2026-10-20): built, pending Mati's live check
+#### S3 status (2026-10-20): built; live-checked 2026-10-22
 
 - Profile `lunaSync` (native templates only) -> "Use my Luna setup" switch in
   the provider form; `lunaLaunchFor()` in `spawnInto` builds

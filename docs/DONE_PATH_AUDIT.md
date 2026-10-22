@@ -1,5 +1,7 @@
 # Path audit - machine-specific paths
 
+> **✅ DONE (2026-10-21).** Every finding fixed or kept on purpose, with regression tests in `test/pathaudit.test.js`. Released in v0.17.0.
+
 Two PCs (`C:\Users\Kotsur69`, `C:\Users\mmazur`), cloud-synced config. Goal:
 no path written on one PC breaks the other, and a missing folder is reported
 as a missing folder - never as "claude / gh not found".

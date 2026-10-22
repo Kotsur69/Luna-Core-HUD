@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - cloud rows <-> sync peers (main, pure)
 // ----------------------------------------------------------------------------
-// The cloud (Supabase table sync_units, docs/CLOUD_SYNC_PLAN.md) holds one row
+// The cloud (Supabase table sync_units, docs/DONE_CLOUD_SYNC_PLAN.md) holds one row
 // per unit: {key, value, u, deleted_at, rev}. lifesync.js and todosync.js
 // already merge peers of a fixed shape, so the cloud is just one more peer:
 //

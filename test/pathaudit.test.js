@@ -1,5 +1,5 @@
 // ============================================================================
-// Machine-specific paths (docs/PATH_AUDIT.md): two PCs, two user names
+// Machine-specific paths (docs/DONE_PATH_AUDIT.md): two PCs, two user names
 // (Kotsur69 / mmazur), cloud-synced config. Every check runs on injected
 // exists/isDir fns, so nothing depends on this machine's disk.
 // ============================================================================

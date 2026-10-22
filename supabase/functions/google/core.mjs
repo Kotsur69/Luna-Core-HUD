@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Supabase Edge Function `google`: the pure part (phase 5)
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md phase 5. The phone has no Google login of its own:
+// docs/DONE_CLOUD_SYNC_PLAN.md phase 5. The phone has no Google login of its own:
 // this function holds one refresh token (a Supabase secret, obtained once with
 // scripts/google-server-token.js) and answers three POST actions:
 //

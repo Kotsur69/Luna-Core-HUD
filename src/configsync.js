@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - machine-independent settings shared through the cloud (main)
 // ----------------------------------------------------------------------------
-// The cloud's `config` scope (docs/CLOUD_SYNC_PLAN.md, phase 2b). Same unit
+// The cloud's `config` scope (docs/DONE_CLOUD_SYNC_PLAN.md, phase 2b). Same unit
 // model and merge rules as src/lifesync.js - newest `u` wins per unit, a
 // delete is a tombstone - but there is no folder transport: no cloud, no sync.
 //

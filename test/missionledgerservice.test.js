@@ -213,7 +213,7 @@ test('report.now = the project of the latest Claude reply under 10 min old, with
   assert.equal(stale.now, null);
 });
 
-// ---- Cloud snapshot (docs/CLOUD_SYNC_PLAN.md, 2c) ----
+// ---- Cloud snapshot (docs/DONE_CLOUD_SYNC_PLAN.md, 2c) ----
 
 test('with the cloud on, our rows go up and other PCs come down', async () => {
   const peer = { v: 1, machine: 'WORK', rows: [[H, 'local:toy', 'toy', 'claude-opus-5-5', 2e6, 0, 0, 0]], blocks: [] };

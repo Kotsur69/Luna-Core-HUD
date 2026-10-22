@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Luna sync file I/O: read ~/.claude, write an overlay home
 // ----------------------------------------------------------------------------
-// docs/FREE_PROVIDERS_SYNC_PLAN.md, S2. readClaudeSetup() only READS the
+// docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md, S2. readClaudeSetup() only READS the
 // user's Claude setup; syncOverlay() only WRITES inside the overlay root it is
 // given (LunaCore's userData) and refuses any root that is, contains, or sits
 // inside a real CLI home (~/.claude, ~/.codex, ~/.gemini, ~/.agents). The

@@ -1,11 +1,14 @@
 # Luna host + phone control — plan
 
+> **🟡 OPEN (2026-10-22).** Built and released in v0.17.0; push notifications are set up and live. Still open: pairing the phone with each host (see "Resume here") and the security follow-ups M1 / M2 / M4 (cards in the to-do list).
+
 Status: **confirmed by Mati 2026-10-20. U1, U2, H1, H2, H3 and H4 built
 (2026-10-20 - 2026-10-21); security + JS review of the whole command path
 done 2026-10-21, every CRITICAL/HIGH fixed with a test (see "Security
 review"). Merged into `main` 2026-10-21 (`c9cfa41`) and all 6 migrations
-applied to Supabase the same day; the `push` edge function is not deployed
-yet. Nothing past U1 is live-checked yet.** Builds on `CLOUD_SYNC_PLAN.md`
+applied to Supabase the same day; released in v0.17.0. The `push` edge
+function, its secrets / cron and the Vercel key are set up (Mati,
+2026-10-22). Open: phone pairing with each host.** Builds on `DONE_CLOUD_SYNC_PLAN.md`
 (Supabase project `phkigyuhvbanadwmxqqs`, phone at
 `https://luna-core-hud.vercel.app`). Same rules apply: pulled rows are
 untrusted, realtime only triggers a read, every slice is done only when the
@@ -31,7 +34,7 @@ fixes below.
 2. ~~**Apply the migrations**~~ ✅ 2026-10-21: all six applied in order
    (`repos_godmode_snapshots` → `push`); a smoke launch then put the `repos`
    snapshot of KT-PC-LLM without errors.
-3. **Deploy the edge function** (step-by-step as a `[Mati]` card in the
+3. ~~**Deploy the edge function**~~ ✅ done by Mati 2026-10-22 (step-by-step as a `[Mati]` card in the
    LunaCore to-do list; `OWNER_USER_ID` already exists as a project secret
    from the `google` function): `supabase functions deploy push
    --no-verify-jwt`, its secrets and the 2-min cron (H4 below), Vercel env
@@ -41,7 +44,7 @@ fixes below.
    one `news.scan`, one `repo.clone`, one chat with an approval (Allow,
    Deny, Always), Stop, End, Resume; "Forget all phones" refuses the next
    command.
-5. **Push on iOS:** PWA installed from Safari, "Enable notifications", then an
+5. ~~**Push on iOS:**~~ ✅ set up 2026-10-22. PWA installed from Safari, "Enable notifications", then an
    approval, a session done, the default host stopped > 5 min, a usage alert.
 6. Gotcha: a `src/*.js` module the phone imports must be added to the
    `SHARED` regex in `mobile/vite.config.js`, or the build fails with
@@ -379,17 +382,17 @@ claim race (`update … where status = 'new'`, serial handling).
 
 **Open (MEDIUM / LOW, accepted for now; no CRITICAL or HIGH left):**
 
-- **M1 tool output in the cloud** (security): tool results (4 KB), previews
+- **M1 tool output in the cloud** (security, card in the to-do list): tool results (4 KB), previews
   and prompts sit in `host_events` / `host_commands` for 14 days, readable
   with a stolen session (a session that reads `.env` puts it there). Next:
   secret scrub (`sk-`, `ghp_`, `AKIA`, `-----BEGIN`, `KEY=`), shorter
   results, drop `chat.*` payloads once done.
-- **M2 synced path redirect** (security): a stolen session can rewrite
+- **M2 synced path redirect** (security, card in the to-do list): a stolen session can rewrite
   `proj:entry.path` to another existing folder; a later `chat.start` on that
   repo id runs `claude` there with that folder's project settings / hooks.
   Needs Mati to start the chat. Next: on a host, resolve repo ids only under
   the repos root or a host-local list.
-- **M4 phone CSP** (security): only `frame-ancestors` is set; a future XSS on
+- **M4 phone CSP** (security, card in the to-do list): only `frame-ancestors` is set; a future XSS on
   the phone origin could sign commands for 12 h. No `innerHTML` today. Next:
   `script-src 'self'; object-src 'none'; base-uri 'none'; connect-src` the
   Supabase project.

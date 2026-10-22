@@ -2,7 +2,7 @@
 // LunaCore - to-do item validation (pure, shared by main and the phone app)
 // ----------------------------------------------------------------------------
 // The shape rules of one to-do item and one list, with no fs / paths, so the
-// phone app (mobile/, docs/CLOUD_SYNC_PLAN.md phase 4) bundles the exact code
+// phone app (mobile/, docs/DONE_CLOUD_SYNC_PLAN.md phase 4) bundles the exact code
 // a PC uses: todosync.js drops a pulled item unless normalizeTodo() accepts
 // it, so the phone must write items this code already produced.
 // src/todo.js re-exports everything here; persistence stays there.

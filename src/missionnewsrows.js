@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - news snapshot rows (pure, shared with the phone)
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md phase 2c/4c. safeUrl() decides which links may leave
+// docs/DONE_CLOUD_SYNC_PLAN.md phase 2c/4c. safeUrl() decides which links may leave
 // a PC in the `news` snapshot (missionnews.js); parseNewsPeer() reads another
 // machine's row back - on a PC (missionnewspeers.js) and on the phone
 // (mobile/src/snapmodel.js). No fs, no crypto: the phone bundles this file.

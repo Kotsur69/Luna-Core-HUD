@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore phone - offline write queue (pure)
 // ----------------------------------------------------------------------------
-// docs/CLOUD_SYNC_PLAN.md phase 4d. A write goes into the scope's outbox
+// docs/DONE_CLOUD_SYNC_PLAN.md phase 4d. A write goes into the scope's outbox
 // ({key: unit}) before it is pushed, so it survives no network and an app
 // kill. The pulled mirror stays the server's copy; views see it with the
 // outbox laid over it. A unit leaves the outbox once a pull shows the server

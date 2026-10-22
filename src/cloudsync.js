@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - cloud sync transport (main)
 // ----------------------------------------------------------------------------
-// Supabase (docs/CLOUD_SYNC_PLAN.md, phase 2a) as one more peer for
+// Supabase (docs/DONE_CLOUD_SYNC_PLAN.md, phase 2a) as one more peer for
 // lifesync.js and todosync.js. Those stay synchronous and keep their merge
 // rules; this file only moves rows:
 //

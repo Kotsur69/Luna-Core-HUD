@@ -66,7 +66,7 @@ branches), the run email (`src/godmodemail.js`, Gmail) and the phone
 `godmode` snapshot (`src/godmodesnapshot.js`).
 
 **First live run 2026-10-20 night** (report:
-[`docs/GODMODE_RUN_2026-10-20.md`](../docs/GODMODE_RUN_2026-10-20.md)): 47
+[`docs/DONE_GODMODE_RUN_2026-10-20.md`](../docs/DONE_GODMODE_RUN_2026-10-20.md)): 47
 cards / 12 pushed branches, good code, but the run blocked after ~15 min on
 a dependency merge at launch (`depMergeFailed`; Retry repeats the same
 plain `git merge`), and the merge-mode integration stopped at its first

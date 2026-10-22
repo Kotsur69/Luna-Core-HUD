@@ -2,7 +2,7 @@
 // LunaCore - whole settings files as cloud units (main)
 // ----------------------------------------------------------------------------
 // Providers for src/configsync.js: machine-independent settings files that
-// travel whole, one unit per file, newest wins (docs/CLOUD_SYNC_PLAN.md, 2b):
+// travel whole, one unit per file, newest wins (docs/DONE_CLOUD_SYNC_PLAN.md, 2b):
 //
 //   doc:prompts      prompts.local.json
 //   doc:libraries    libraries.local.json

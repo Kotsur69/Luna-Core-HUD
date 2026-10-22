@@ -1,4 +1,4 @@
-// LunaCore phone companion (docs/CLOUD_SYNC_PLAN.md phase 4).
+// LunaCore phone companion (docs/DONE_CLOUD_SYNC_PLAN.md phase 4).
 // It shares validators and maths with the desktop app straight from ../src.
 // Those files are CommonJS outside this root, so the commonjs plugin has to
 // be told to convert them - by default it only converts node_modules.

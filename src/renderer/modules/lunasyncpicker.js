@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Luna sync skill picker (Settings, DOM + IPC half)
 // ----------------------------------------------------------------------------
-// docs/FREE_PROVIDERS_SYNC_PLAN.md S3. Lists the enabled plugins' skills
+// docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md S3. Lists the enabled plugins' skills
 // (ids/names only - main never sends paths) and saves which ones a Codex/
 // Gemini tab with "Use my Luna setup" also gets. Personal ~/.claude/skills
 // always go along, so they are not listed. The list logic is pure and lives
