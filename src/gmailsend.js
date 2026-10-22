@@ -43,6 +43,10 @@ const EXPIRY_SLACK_MS = 60000;
 const MAX_SUBJECT = 200;
 /** Gmail's own cap is 25 MB; a report is a few KB. */
 const MAX_BODY = 200 * 1024;
+const MAX_ATTACHMENT = 2 * 1024 * 1024;
+const MAX_ATTACHMENTS = 5;
+const MAX_FILENAME = 100;
+const ATTACHMENT_TYPES = new Set(['text/html', 'text/plain', 'text/markdown']);
 const EMAIL_RE = /^[^\s@<>()",;:\\[\]]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
 
 class GmailError extends Error {
@@ -84,25 +88,51 @@ const encodeHeader = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.
 /** Base64 body wrapped at 76 characters (RFC 2045). */
 const b64Lines = (s) => Buffer.from(s, 'utf8').toString('base64').replace(/.{76}/g, '$&\r\n');
 
+/** A filename safe inside a quoted MIME parameter. */
+const safeFilename = (v) => oneLine(v, MAX_FILENAME).replace(/[^A-Za-z0-9._-]+/g, '_') || 'attachment';
+
+/** One base64 attachment part; an unknown type goes out as octet-stream. */
+function attachmentPart(a) {
+  const name = safeFilename(a.filename);
+  const type = ATTACHMENT_TYPES.has(a.mimeType) ? `${a.mimeType}; charset=UTF-8` : 'application/octet-stream';
+  return [`Content-Type: ${type}; name="${name}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${name}"`, '', b64Lines(String(a.content || '').slice(0, MAX_ATTACHMENT))];
+}
+
 /**
- * The RFC 5322 message. `address` is both From and To.
- * @param {{address:string, subject:string, text:string, html?:boolean, boundary?:string}} m
+ * The RFC 5322 message. `address` is both From and To. With attachments the
+ * body (plain, or plain+html alternative) is wrapped in multipart/mixed.
+ * @param {{address:string, subject:string, text:string, html?:boolean, boundary?:string,
+ *   attachments?:Array<{filename:string, mimeType:string, content:string}>}} m
  */
-function buildMime({ address, subject, text, html = false, boundary }) {
+function buildMime({ address, subject, text, html = false, boundary, attachments = [] }) {
   const body = plainBody(text);
   const head = [`From: ${address}`, `To: ${address}`, `Subject: ${encodeHeader(oneLine(subject, MAX_SUBJECT))}`, 'MIME-Version: 1.0'];
   const part = (type, content) => [`Content-Type: ${type}; charset=UTF-8`, 'Content-Transfer-Encoding: base64', '', b64Lines(content)];
-  if (!html) return [...head, ...part('text/plain', body)].join('\r\n');
   const b = boundary || `lunacore-${crypto.randomBytes(12).toString('hex')}`;
-  const htmlBody = `<!doctype html><meta charset="utf-8"><pre style="font:13px/1.45 ui-monospace,Consolas,monospace;white-space:pre-wrap">${escapeHtml(body)}</pre>`;
+  let content = part('text/plain', body);
+  if (html) {
+    const alt = attachments.length ? `${b}-alt` : b;
+    const htmlBody = `<!doctype html><meta charset="utf-8"><pre style="font:13px/1.45 ui-monospace,Consolas,monospace;white-space:pre-wrap">${escapeHtml(body)}</pre>`;
+    content = [
+      `Content-Type: multipart/alternative; boundary="${alt}"`,
+      '',
+      `--${alt}`,
+      ...part('text/plain', body),
+      `--${alt}`,
+      ...part('text/html', htmlBody),
+      `--${alt}--`,
+      '',
+    ];
+  }
+  const files = attachments.slice(0, MAX_ATTACHMENTS);
+  if (!files.length) return [...head, ...content].join('\r\n');
   return [
     ...head,
-    `Content-Type: multipart/alternative; boundary="${b}"`,
+    `Content-Type: multipart/mixed; boundary="${b}"`,
     '',
     `--${b}`,
-    ...part('text/plain', body),
-    `--${b}`,
-    ...part('text/html', htmlBody),
+    ...content,
+    ...files.flatMap((a) => [`--${b}`, ...attachmentPart(a)]),
     `--${b}--`,
     '',
   ].join('\r\n');
@@ -256,12 +286,12 @@ function createGmailSender(deps = {}) {
 
   /**
    * Sends one message to the connected address.
-   * @param {{subject:string, text:string, html?:boolean}} msg
+   * @param {{subject:string, text:string, html?:boolean, attachments?:Array<{filename:string, mimeType:string, content:string}>}} msg
    * @returns {Promise<{id:string|null}>}
    */
-  async function send({ subject, text, html = false }) {
+  async function send({ subject, text, html = false, attachments = [] }) {
     const token = await accessToken();
-    const raw = base64url(Buffer.from(buildMime({ address: grant.email, subject, text, html }), 'utf8'));
+    const raw = base64url(Buffer.from(buildMime({ address: grant.email, subject, text, html, attachments }), 'utf8'));
     let res;
     try {
       res = await doFetch(SEND_URL, {

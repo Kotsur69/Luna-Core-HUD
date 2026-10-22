@@ -8,9 +8,12 @@
 //   body     'Needs you' first - the report's own '## Needs you' section
 //            (orchestraReport.js) as plain text - then the PR links, then
 //            the full markdown report as plain text.
+//   attached the run's HTML report (<runsDir>/<id>.html, orchestraReport.js)
+//            when main wrote one - it opens on a phone via Quick Look.
 //
 // Only the repo NAME goes out, never its path (the report's Repo line is
-// rewritten). Every string is stripped of control characters; nothing is HTML.
+// rewritten). Every string is stripped of control characters; the body is
+// never HTML (the attachment is the escaped page reportHtml.js renders).
 //
 // Dedupe: (run id, pushed count, integration state) is persisted in
 // mail-state.local.json. A re-finalize with the same result sends nothing; a
@@ -99,11 +102,23 @@ function buildRunEmail(text, summary, opts = {}) {
   return { subject, text: lines.join('\n') };
 }
 
+/** The run's HTML report as an attachment list ([] when missing or unreadable). */
+function htmlAttachments(readHtml, runId) {
+  if (!readHtml) return [];
+  try {
+    const html = readHtml(runId);
+    return typeof html === 'string' && html ? [{ filename: `godmode-run-${runId}.html`, mimeType: 'text/html', content: html }] : [];
+  } catch (err) {
+    console.error('[godmodemail] html report unreadable:', err && err.message);
+    return [];
+  }
+}
+
 /**
  * @param {{sender:{status:Function, send:Function}, prefs:{loadPrefs:Function, loadState:Function, updateState:Function},
- *   enabled:(prefs:object, connected:boolean)=>boolean}} deps
+ *   enabled:(prefs:object, connected:boolean)=>boolean, readHtml?:(runId:string)=>string|null}} deps
  */
-function createGodModeMailer({ sender, prefs, enabled, maxRuns = 50 }) {
+function createGodModeMailer({ sender, prefs, enabled, readHtml, maxRuns = 50 }) {
   // One send at a time per run: two quick re-finalizes must not both pass the dedupe.
   const inFlight = new Set();
 
@@ -122,7 +137,8 @@ function createGodModeMailer({ sender, prefs, enabled, maxRuns = 50 }) {
       inFlight.add(runId);
       try {
         const mail = buildRunEmail(text, summary, { updated: !!prev });
-        await sender.send({ subject: mail.subject, text: mail.text });
+        const attachments = htmlAttachments(readHtml, runId);
+        await sender.send({ subject: mail.subject, text: mail.text, ...(attachments.length ? { attachments } : {}) });
         prefs.updateState((s) => {
           const godmode = { ...s.godmode };
           delete godmode[runId];

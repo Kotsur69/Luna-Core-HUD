@@ -132,3 +132,29 @@ test('send without a grant fails typed; a revoked refresh token forgets the gran
   assert.equal(revoked.status().connected, false);
   assert.equal(fs.existsSync(f.tokenPath), false);
 });
+
+test('buildMime attachments: multipart/mixed, base64 file part, filename sanitized', () => {
+  const mime = buildMime({
+    address: 'me@example.com',
+    subject: 's',
+    text: 'body',
+    boundary: 'B',
+    attachments: [{ filename: 'run "x"\r\n../evil.html', mimeType: 'text/html', content: '<h1>hi</h1>' }],
+  });
+  assert.match(mime, /Content-Type: multipart\/mixed; boundary="B"/);
+  const parts = mime.split('--B');
+  const body = Buffer.from(parts[1].split('\r\n\r\n')[1].replace(/\r\n/g, ''), 'base64').toString('utf8');
+  assert.equal(body, 'body');
+  const [head, data] = parts[2].split('\r\n\r\n');
+  assert.match(head, /Content-Type: text\/html; charset=UTF-8; name="run_x_.._evil.html"/);
+  assert.match(head, /Content-Disposition: attachment; filename="run_x_.._evil.html"/);
+  assert.equal(Buffer.from(data.replace(/\r\n/g, ''), 'base64').toString('utf8'), '<h1>hi</h1>');
+  assert.match(mime, /--B--\r\n$/);
+});
+
+test('buildMime attachments: an unknown type falls back, an empty list keeps the plain message', () => {
+  const plain = buildMime({ address: 'me@example.com', subject: 's', text: 'body', attachments: [] });
+  assert.doesNotMatch(plain, /multipart/);
+  const mime = buildMime({ address: 'me@example.com', subject: 's', text: 'b', boundary: 'B', attachments: [{ filename: 'a.bin', mimeType: 'evil/"x"', content: 'x' }] });
+  assert.match(mime, /Content-Type: application\/octet-stream; name="a.bin"/);
+});

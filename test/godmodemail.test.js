@@ -225,3 +225,44 @@ test('a throwing onReport never breaks finalize', async () => {
   assert.ok(events.includes('finalized'));
   assert.equal(plan.integration.emailError, 'failed');
 });
+
+test('the run email attaches the HTML report when there is one', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmmail-test-'));
+  const prefs = createMailPrefs({ prefsPath: path.join(dir, 'mail.local.json'), statePath: path.join(dir, 'mail-state.local.json') });
+  const sent = [];
+  const sender = { status: () => ({ connected: true }), send: async (m) => sent.push(m) };
+  const asked = [];
+  const readHtml = (id) => {
+    asked.push(id);
+    return id === 'abc123' ? '<!doctype html><title>r</title>' : null;
+  };
+  const mailer = createGodModeMailer({ sender, prefs, enabled: godmodeEmailOn, readHtml });
+  assert.deepEqual(await mailer.onReport('abc123', REPORT, summary()), { sent: true });
+  assert.deepEqual(sent[0].attachments, [{ filename: 'godmode-run-abc123.html', mimeType: 'text/html', content: '<!doctype html><title>r</title>' }]);
+  assert.deepEqual(await mailer.onReport('zzz999', REPORT, summary()), { sent: true });
+  assert.equal(sent[1].attachments, undefined);
+  assert.deepEqual(asked, ['abc123', 'zzz999']);
+});
+
+test('a throwing readHtml still sends the text email', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmmail-test-'));
+  const prefs = createMailPrefs({ prefsPath: path.join(dir, 'mail.local.json'), statePath: path.join(dir, 'mail-state.local.json') });
+  const sent = [];
+  const sender = { status: () => ({ connected: true }), send: async (m) => sent.push(m) };
+  const readHtml = () => {
+    throw new Error('EACCES');
+  };
+  const mailer = createGodModeMailer({ sender, prefs, enabled: godmodeEmailOn, readHtml });
+  assert.deepEqual(await mailer.onReport('abc123', REPORT, summary()), { sent: true });
+  assert.equal(sent[0].attachments, undefined);
+});
+
+test('readRunHtml: reads <runsDir>/<id>.html, null for a bad id or a missing file', () => {
+  const { readRunHtml } = require('../src/reportmail.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmmail-html-'));
+  fs.writeFileSync(path.join(dir, 'abc123.html'), '<p>ok</p>');
+  assert.equal(readRunHtml(dir, 'abc123'), '<p>ok</p>');
+  assert.equal(readRunHtml(dir, 'nope99'), null);
+  assert.equal(readRunHtml(dir, '../abc123'), null);
+  assert.equal(readRunHtml('', 'abc123'), null);
+});
