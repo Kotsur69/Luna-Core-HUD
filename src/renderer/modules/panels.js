@@ -734,7 +734,9 @@ function railLabel(isRailed) {
 
 /**
  * A section's own title text, minus the fold chevron and the drag grip
- * (widgetarrange.js puts a .panel__grip in every title).
+ * (widgetarrange.js puts a .panel__grip in every title). Only text and
+ * non-button elements count: a comment node's textContent is the comment
+ * itself, and title action buttons (rescan ↻, export ⤓) are not the name.
  *
  * Read off the DOM rather than looked up in the widget registry, deliberately:
  * this file has no import of registry.js (see the header - the pure half must
@@ -746,16 +748,18 @@ function sectionLabel(section) {
   if (!title) return '';
   let text = '';
   for (const node of title.childNodes) {
+    if (node.nodeType !== 1 && node.nodeType !== 3) continue;
     if (
       node.nodeType === 1 &&
-      node.classList &&
-      (node.classList.contains('panel__fold') || node.classList.contains('panel__grip'))
+      (node.tagName === 'BUTTON' ||
+        node.classList.contains('panel__fold') ||
+        node.classList.contains('panel__grip'))
     ) {
       continue;
     }
     text += node.textContent || '';
   }
-  return text.trim();
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 /** Rebuilds the strip of glyphs a railed region shows instead of its panels. */
