@@ -238,6 +238,25 @@ permission profile for builders) are **dropped** by Mati's decision.
 | B17 | Mid-run feedback | See "Feedback while it runs". | 1 |
 | B19 | Fresh code graph | codebase-memory index and codemaps refreshed every iteration; builder briefs say "query the graph first". | 2 |
 
+### Third round (2026-10-22)
+
+Numbered C1-C14. C3 (mutation testing), C4 (mocks for external services),
+C12 (project presets) and C14 (run audit trail) are **dropped** by Mati's
+decision.
+
+| # | Feature | What it does | Phase |
+|---|---|---|---|
+| C1 | Design variants (**toggle**, off by default) | For key screens, 2-3 variants are built behind a switch; the choice is offered in the milestone email (Mati) or made by the Critic when nobody answers by the decision-queue deadline. Losing variants are removed. | 2 |
+| C2 | Clickable mockup first (**toggle**, off by default) | Pre-production ends with a rough clickable prototype of the main screens; the real build starts after Mati approves it, or after the decision-queue deadline if he does not answer. | 2 |
+| C5 | Backup before data changes | A snapshot of the staging data before every schema change; a rollback (#4) restores the data with the code. | 3 |
+| C6 | GDPR / legal pack (EU web apps) | Privacy policy, cookie consent, data export and deletion, generated and checked at SHIP. Legal text is marked "draft, check before publishing" in the return pack. | 2 |
+| C7 | Cross-browser and devices | The Playtester rotates Chromium / Firefox / WebKit and phone / tablet / desktop widths; every engine and width at a milestone gate. | 2 |
+| C8 | Load test | For apps with a backend: a short stress run at the "complete" milestone; failures become cards. | 3 |
+| C9 | Error tracking at SHIP | Error reporting (Sentry or similar) wired in at SHIP, so post-launch errors can become cards. The key is a secret: asked through the decision queue, never committed. | 3 |
+| C10 | Launch assets | Landing page copy, screenshots, store listing, a short pitch, via the ECC marketing agent, at SHIP. | 3 |
+| C11 | "Hand me the wheel" | Mati takes over: the run pauses at the end of the current iteration, he works by hand, and on hand-back the Critic reads his commits as decisions (`DECISIONS.md`) and the run continues. | 1 |
+| C13 | Ask Luna about the run | A chat from the phone or HUD about the current run ("why did you roll back iteration 14?"), answered by a read-only call over the run state, `PLAYTEST_LOG.md` and `DECISIONS.md`. | 2 |
+
 ### Feedback while it runs (B17)
 
 The run **never pauses** for feedback. Mati (or a client) gives input
@@ -289,21 +308,26 @@ doc becomes `DONE_LUNAS_WORK_PLAN.md`.
 9. **Mid-run feedback (B17)** — steer cards + feedback link, triage into
    cards, trust rules, per-item status.
 10. **Iteration 0 (B2) + survive the machine (B3).**
+11. **"Hand me the wheel" (C11).**
 
 ### Phase 2 — scale
 
-11. Contracts + ownership map (#2) · 12. Roadmap levels (#5) · 13. Playtester
-personas (#6) · 14. Scheduled specialist reviews (#7) · 15. Self-learning
-skills (#8) · 16. Live dashboard + phone snapshot (#12) · 17. Milestone
-emails + return pack (B12) · 18. Design match + Lighthouse budgets (B6, B7) ·
-19. Second-opinion model (B8) · 20. Realistic data + pl/en check (B10, B11) ·
-21. Docs at SHIP + time to SHIP (B14, B15) · 22. Fresh code graph (B19).
+12. Contracts + ownership map (#2) · 13. Roadmap levels (#5) · 14. Playtester
+personas (#6) · 15. Scheduled specialist reviews (#7) · 16. Self-learning
+skills (#8) · 17. Live dashboard + phone snapshot (#12) · 18. Milestone
+emails + return pack (B12) · 19. Design match + Lighthouse budgets (B6, B7) ·
+20. Second-opinion model (B8) · 21. Realistic data + pl/en check (B10, B11) ·
+22. Docs at SHIP + time to SHIP (B14, B15) · 23. Fresh code graph (B19) ·
+24. Cross-browser and devices (C7) · 25. Design variants + mockup-first
+toggles (C1, C2) · 26. GDPR / legal pack (C6) · 27. Ask Luna about the run (C13).
 
 ### Phase 3 — reach
 
-23. Staging + client feedback widget (#10, B17) · 24. Research step (#14) ·
-25. Demo video (B13) · 26. Project queue (B16) · 27. Electron adapter ·
-28. Unity adapter (spike on the Unity PC first) · 29. Asset pipeline (#15).
+28. Staging + client feedback widget (#10, B17) · 29. Backup before data
+changes (C5) · 30. Load test (C8) · 31. Error tracking + launch assets
+(C9, C10) · 32. Research step (#14) · 33. Demo video (B13) · 34. Project
+queue (B16) · 35. Electron adapter · 36. Unity adapter (spike on the Unity PC
+first) · 37. Asset pipeline (#15).
 
 ## Risks
 
