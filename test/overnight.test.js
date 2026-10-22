@@ -347,3 +347,18 @@ test('recover never rejects when a dep throws', async () => {
   });
   assert.deepStrictEqual(r, { ok: false, reason: 'error' });
 });
+
+test('suspendAwake lets go of keep-awake for God Mode sleep / shutdown; restoreAwake takes it back', () => {
+  const { guard, blocker } = setup();
+  guard.startRun('s1');
+  guard.suspendAwake();
+  assert.strictEqual(blocker.started.size, 0);
+  guard.startRun('s2');
+  assert.strictEqual(blocker.started.size, 0, 'no run takes it back while suspended');
+  guard.restoreAwake();
+  assert.strictEqual(blocker.started.size, 1);
+  guard.stop();
+  guard.suspendAwake();
+  guard.restoreAwake();
+  assert.strictEqual(blocker.started.size, 0, 'nothing to hold with no run');
+});

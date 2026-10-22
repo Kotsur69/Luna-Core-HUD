@@ -24,7 +24,7 @@ import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
-import { failureBlock, runOptionsRow } from './orchestraDetails.js';
+import { failureBlock, runOptionsRow, powerBanner } from './orchestraDetails.js';
 
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
@@ -356,7 +356,36 @@ async function setRunOption(key, value) {
   if (isOpen) render();
 }
 
+/** "Cancel sleep" / "Cancel shutdown"; main pushes the new view back. */
+async function cancelPower(what) {
+  try {
+    await window.lunacore.cancelOrchestraPower(what);
+  } catch {
+    failure = 'failed';
+    if (isOpen) render();
+  }
+}
+
+// The wake check runs once per app start, the first time the board opens.
+let wakeChecked = false;
+function checkWakeOnce() {
+  if (wakeChecked || !window.lunacore.checkOrchestraWake) return;
+  wakeChecked = true;
+  window.lunacore.checkOrchestraWake().catch(() => {});
+}
+
+// A countdown that started opens the board once, so its Cancel is in reach.
+let shownCountdown = null;
+function countdownKey(next) {
+  const power = next && next.power;
+  if (!power) return null;
+  const s = power.shutdown && power.shutdown.phase === 'countdown' ? `shutdown:${power.shutdown.at}` : null;
+  return s || (power.sleep && power.sleep.phase === 'countdown' ? `sleep:${power.sleep.at}` : null);
+}
+
 function renderPlan() {
+  const banner = powerBanner(plan, { onCancel: cancelPower });
+  if (banner) body.append(banner);
   // Always on top and usable during the run: the switches are live.
   body.append(runOptionsRow(plan, { disabled: optionsBusy, onToggle: setRunOption }));
   const est = plan.estimate;
@@ -656,6 +685,7 @@ async function openOrchestra() {
     }
   }
   render();
+  checkWakeOnce();
   if (!plan && !planWait && phase === 'idle' && !failure) startPlanning();
 }
 
@@ -684,6 +714,14 @@ if (overlay) {
 
   window.lunacore.onOrchestraChanged((next) => {
     plan = next;
+    const key = countdownKey(next);
+    if (key && key !== shownCountdown) {
+      shownCountdown = key;
+      if (!isOpen) {
+        openOrchestra();
+        return;
+      }
+    }
     if (isOpen) render();
   });
   window.lunacore.onOrchestraPlanWait((state) => {

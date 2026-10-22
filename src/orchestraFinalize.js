@@ -46,7 +46,7 @@ const slugOf = (plan) => plan.id.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice
  *   runSelfCheck?: (args:{root:string, baseSha:string|null, checkCommand:string}) => Promise<object>,
  *   runFixup?: (args:{root:string, brief:string}) => Promise<{ok:boolean}>,
  *   pushBranch?: (root:string, branch:string) => Promise<{ok:boolean}>,
- *   checkCommand?: () => string,
+ *   checkCommand?: () => string, onIdle?: () => void,
  * }} deps
  */
 function createFinalizer(deps) {
@@ -276,6 +276,9 @@ function createFinalizer(deps) {
         again = false;
         // Packages pushed meanwhile get their PR / merge / cleanup too.
         finalize().catch((err) => deps.onRunEvent('error', { where: 'finalize', message: String(err && err.message) }));
+      } else if (deps.onIdle) {
+        // Every pass done, state committed: the shutdown option may act now.
+        deps.onIdle();
       }
     }
   }

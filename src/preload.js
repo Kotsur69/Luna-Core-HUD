@@ -481,6 +481,10 @@ contextBridge.exposeInMainWorld('lunacore', {
    */
   orchestraSetOptions: (patch) =>
     ipcRenderer.invoke('orchestra:set-options', patch && typeof patch === 'object' ? { ...patch } : null),
+  /** Cancels the sleep or shutdown countdown: what = 'sleep' | 'shutdown'. */
+  cancelOrchestraPower: (what) => ipcRenderer.invoke('orchestra:cancel-power', what === 'sleep' || what === 'shutdown' ? what : null),
+  /** Best-effort "can this PC wake itself": Promise<{ok, reason}>. */
+  checkOrchestraWake: () => ipcRenderer.invoke('orchestra:check-wake'),
   /** Idea #5: allow a rule the run logged from a stalled prompt, for future workers. */
   allowOrchestraTool: (rule) => ipcRenderer.invoke('orchestra:allow', typeof rule === 'string' ? rule : null),
   /** Opens a package's PR in the browser - only the package id crosses; main has the URL. */

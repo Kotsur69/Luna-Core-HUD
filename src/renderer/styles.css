@@ -5303,3 +5303,6 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .mc-news__more { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-xs); color: var(--text-dim); }
 .mc-news__more[open] > .mc-tele__item { margin-top: var(--space-2); }
 .mc-news__more > summary { cursor: pointer; }
+
+/* God Mode sleep / shutdown countdown (orchestraDetails.js powerBanner). */
+.orchestra__power { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
