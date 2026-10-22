@@ -36,6 +36,8 @@ const ACTIVE_STATES = new Set(['launched', 'finishing']);
 const STATES = new Set(['pending', 'launched', 'finishing', 'pushed', 'stalled', 'failed', 'closed', 'killed']);
 // States a Retry may start from.
 const RETRYABLE_STATES = new Set(['stalled', 'closed', 'killed']);
+// States a package's run ends in: entering one stamps finishedAt (report timeline).
+const SETTLED_STATES = new Set(['pushed', 'stalled', 'failed', 'closed', 'killed']);
 
 const isActive = (pkg) => ACTIVE_STATES.has(pkg.state);
 
@@ -552,6 +554,7 @@ function normalizePackage(raw) {
     nudges: num(raw.nudges),
     verifyRounds: num(raw.verifyRounds),
     startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
+    finishedAt: Number.isFinite(raw.finishedAt) ? raw.finishedAt : null,
     pausedMs: num(raw.pausedMs),
     stalls: num(raw.stalls),
     escalated: raw.escalated === true,
@@ -765,6 +768,7 @@ function restoreAfterRestart(plan) {
 }
 
 module.exports = {
+  SETTLED_STATES,
   ESCALATE_REASONS,
   MAX_AUTO_RETRIES,
   DEFAULT_APPROVAL_MIN,

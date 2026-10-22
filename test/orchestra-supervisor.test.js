@@ -408,3 +408,15 @@ test('restored worktree locations must have the shape LunaCore creates', () => {
   assert.equal(bad({ verify: 'npm test\nrm -rf /' }).verify, '');
   assert.equal(sup.normalizeStoredPlan({ ...base, packages: [{ id: '../x' }] }), null);
 });
+
+test('a package gets finishedAt when it settles, cleared again on a relaunch (report timeline)', async () => {
+  const s = await started({ packages: [pkg('a', [1])] });
+  assert.equal(s.orch.view().packages[0].finishedAt, null);
+  s.orch.onApproval('s1');
+  await s.flush();
+  const stalled = s.orch.view().packages[0];
+  assert.equal(stalled.state, 'stalled');
+  assert.ok(Number.isFinite(stalled.finishedAt) && stalled.finishedAt >= stalled.startedAt);
+  assert.equal((await s.orch.retry({ planId: s.planId, id: 'a' })).ok, true);
+  assert.equal(s.orch.view().packages[0].finishedAt, null);
+});

@@ -84,7 +84,7 @@ test('dueWeek: Sunday 20:00 for this week, catch-up for last week, never twice',
   assert.equal(dueWeek(wed, {}), '2026-W43');
 });
 
-function setup({ answer = GOOD, ok = true, clock = new Date(2026, 9, 25, 20, 30).getTime(), sendFails = false, connected = true, weeklyEmail = null } = {}) {
+function setup({ answer = GOOD, ok = true, clock = new Date(2026, 9, 25, 20, 30).getTime(), sendFails = false, connected = true, weeklyEmail = null, writeHtml = null } = {}) {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lc-weekly-')), 'mission-weekly.local.json');
   const store = createWeeklyStore({ file });
   const runs = [];
@@ -111,6 +111,7 @@ function setup({ answer = GOOD, ok = true, clock = new Date(2026, 9, 25, 20, 30)
     store,
     mailer: mail,
     now,
+    writeHtml,
   });
   return { store, runs, sent, review, mail, sender, prefs, setNow: (v) => (at = v), now };
 }
@@ -226,4 +227,24 @@ test('life:week-email is rate-limited and life:week-model takes known models onl
   const view = await call('life:week', { week: '2026-W43' });
   assert.equal(view.entry.week, '2026-W43');
   assert.equal(view.mailOn, true);
+});
+
+test('every saved review also hands its standalone HTML page to writeHtml', async () => {
+  const pages = [];
+  const h = setup({ writeHtml: (week, html) => pages.push({ week, html }) });
+  await h.review.generate('2026-W43');
+  assert.equal(pages.length, 1);
+  assert.equal(pages[0].week, '2026-W43');
+  assert.ok(pages[0].html.startsWith('<!doctype html>'));
+  assert.match(pages[0].html, /A fun-heavy week\./);
+});
+
+test('a throwing writeHtml never fails the review', async () => {
+  const h = setup({
+    writeHtml: () => {
+      throw new Error('disk full');
+    },
+  });
+  const res = await h.review.generate('2026-W43');
+  assert.equal(res.ok, true);
 });
