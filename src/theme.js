@@ -85,6 +85,8 @@ const KNOWN_TOKENS = new Set([
   '--bg', '--bg-panel', '--bg-panel-2', '--edge', '--edge-glow', '--text',
   '--text-dim', '--neon-magenta', '--neon-cyan', '--good', '--warn', '--bad',
   '--term-bg', '--btn-grad', '--btn-grad-hover', '--glow',
+  // progress bar fill at its healthy level (usage, context window, telemetry)
+  '--bar-from', '--bar-to',
   // form
   '--radius', '--radius-lg', '--radius-md', '--radius-sm', '--radius-xs',
   '--radius-pill', '--border-w', '--pad-panel', '--panel-gap',
@@ -134,6 +136,10 @@ const KNOWN_TOKENS = new Set([
 const DERIVED_TOKENS = new Set([
   '--surface-bg', '--surface-edge', '--surface-panel', '--surface-panel-2',
   '--surface-term', '--surface-chrome',
+  // The global "Effects strength" slider (a user pref, not a theme choice) and
+  // the texture opacity it scales. A theme moves --texture-opacity; the user
+  // moves --effects-strength; body::after paints the product.
+  '--effects-strength', '--texture-opacity-eff',
 ]);
 
 /**

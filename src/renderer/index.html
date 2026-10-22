@@ -776,6 +776,25 @@
         <span class="ui-field__label" data-i18n="appearance.theme">Motyw</span>
         <select id="theme-switcher" class="profile-select"></select>
       </label>
+      <!-- Global effects strength: scales every theme's texture overlay
+           (scanlines, hatching, gradients) from none to as authored. Applies
+           live; persisted as effectsStrength in ui.local.json. -->
+      <label class="ui-field">
+        <span class="ui-field__label">
+          <span data-i18n="appearance.effects">Sila efektow</span>
+          <output class="ui-field__value" id="effects-strength-out" for="effects-strength">100%</output>
+        </span>
+        <input
+          type="range"
+          id="effects-strength"
+          min="0"
+          max="100"
+          step="1"
+          value="100"
+          data-i18n-title="appearance.effects.hint"
+          title="Nakladka tekstury motywu (linie, kratka, gradient). 0% = brak."
+        />
+      </label>
       <!-- C1: HUD layout preset. Options are filled in by appearance.js from
            config/layouts.json; changing it MOVES widgets between regions, it doesn't
            remount them from scratch (modules/layout.js). -->

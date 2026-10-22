@@ -12,7 +12,7 @@
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
 // collapsed, layoutSizes, widgetSlots, railedRegions, density, fontPack, glow,
-// motion.
+// motion, effectsStrength.
 // The renderer
 // reads it at startup (ui:get) and writes on change (ui:set).
 //
@@ -60,6 +60,13 @@ function clampVolume(v) {
 function clampLongTaskMinutes(v) {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? Math.round(n) : 10;
+}
+// Global "Effects strength" (Appearance panel): percent of every theme's own
+// texture opacity. Strict - only an integer 0..100 is a value; anything else
+// (a string, 55.5, -1, 101) is a hand-edit or a bug and reads as the default.
+const EFFECTS_STRENGTH_DEFAULT = 100;
+function cleanEffectsStrength(v) {
+  return Number.isInteger(v) && v >= 0 && v <= 100 ? v : EFFECTS_STRENGTH_DEFAULT;
 }
 // profile: id of the last used launch profile (B1). null = no choice recorded,
 // in which case activeProfile from config/profiles.json decides, as before.
@@ -114,6 +121,7 @@ const checkCommandOf = (v) => (typeof v === 'string' && v.trim() && v.length <= 
 const DEFAULTS = {
   theme: 'cyberpunk',
   lang: 'en',
+  effectsStrength: EFFECTS_STRENGTH_DEFAULT,
   boot: true,
   profile: null,
   layout: null,
@@ -606,6 +614,7 @@ function readUiPrefs() {
     return {
       theme: typeof obj.theme === 'string' && obj.theme ? obj.theme : DEFAULTS.theme,
       lang: LANGS.includes(obj.lang) ? obj.lang : DEFAULTS.lang,
+      effectsStrength: cleanEffectsStrength(obj.effectsStrength),
       // Windows backdrop material. READ PATH MATTERS AS MUCH AS THE WRITE ONE:
       // this function builds an explicit allowlist rather than spreading
       // DEFAULTS, so a key added to DEFAULTS and to writeUiPrefs but not to
@@ -704,7 +713,7 @@ function readUiPrefs() {
 
 /**
  * Merges and writes preferences. Accepts a partial
- * { theme?, lang?, boot?, profile?, layout?, hideSystemPorts?, soundEnabled?,
+ * { theme?, lang?, effectsStrength?, boot?, profile?, layout?, hideSystemPorts?, soundEnabled?,
  *   voiceEnabled?, voiceDuckingEnabled?,
  *   soundVolume?, soundKeystrokeVariant?, soundLongTaskMinutes?,
  *   soundReadOutputEnabled?, autoProceedArmed?, autoCompactArmed?,
@@ -720,6 +729,9 @@ function writeUiPrefs(partial) {
     const next = readUiPrefs();
     if (partial && typeof partial.theme === 'string' && partial.theme) next.theme = partial.theme;
     if (partial && LANGS.includes(partial.lang)) next.lang = partial.lang;
+    if (partial && 'effectsStrength' in partial) {
+      next.effectsStrength = cleanEffectsStrength(partial.effectsStrength);
+    }
     if (partial && WINDOW_MATERIALS.includes(partial.windowMaterial)) {
       next.windowMaterial = partial.windowMaterial;
     }
@@ -885,6 +897,7 @@ module.exports = {
   clampTermPrefs,
   clampAutoCompactPrefs,
   clampModifierPrefs,
+  cleanEffectsStrength,
   cleanCollapsed,
   cleanLayoutSizes,
   cleanWidgetSlots,
