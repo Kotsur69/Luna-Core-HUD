@@ -18,6 +18,8 @@ import { mountRunEmailToggle } from './mailsettings.js';
 const MODELS = ['opus', 'sonnet', 'plan'];
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
+// 'plan' + src/efforts.js EFFORTS (the renderer cannot require main-side modules).
+const EFFORT_OPTIONS = ['plan', 'medium', 'high', 'xhigh', 'max'];
 
 /**
  * @param {HTMLElement} root the Settings overlay
@@ -45,6 +47,17 @@ export function mountOrchestraSettings(root, prefs) {
     sfx.modeToggle();
     window.lunacore.setUiPrefs({ orchestraPermissionMode: perm.value });
   });
+
+  // Worker --effort: the planner's pick by default, or one forced level.
+  const effort = root.querySelector('#orchestra-worker-effort');
+  if (effort) {
+    effort.value = EFFORT_OPTIONS.includes(prefs.orchestraWorkerEffort) ? prefs.orchestraWorkerEffort : 'plan';
+    effort.addEventListener('change', () => {
+      if (!EFFORT_OPTIONS.includes(effort.value)) return;
+      sfx.modeToggle();
+      window.lunacore.setUiPrefs({ orchestraWorkerEffort: effort.value });
+    });
+  }
 
   const integ = root.querySelector('#orchestra-integration');
   if (integ) {

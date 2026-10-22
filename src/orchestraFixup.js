@@ -22,7 +22,7 @@ const FIXUP_CAP_MS = 45 * 60 * 1000;
  * @param {{
  *   getPlan: () => object|null, createSession: Function, writeBrief: Function,
  *   briefDir: () => string, closeSession: Function, sessionAlive: Function,
- *   model: () => string|null, permissionMode: () => string|null, setTimer: Function, clearTimer: Function,
+ *   model: () => string|null, effort?: () => string|null, permissionMode: () => string|null, setTimer: Function, clearTimer: Function,
  * }} deps
  */
 function createFixupRunner(deps) {
@@ -61,7 +61,7 @@ function createFixupRunner(deps) {
         projectId: plan.projectId,
         cwd: o.root,
         branch: null,
-        task: { briefPath, model: deps.model(), permissionMode: deps.permissionMode(), allowedTools: plan.allowedTools || [] },
+        task: { briefPath, model: deps.model(), effort: deps.effort ? deps.effort() : null, permissionMode: deps.permissionMode(), allowedTools: plan.allowedTools || [] },
       });
     } catch {
       session = null;

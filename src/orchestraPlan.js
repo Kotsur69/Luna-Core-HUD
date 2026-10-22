@@ -22,8 +22,11 @@
 const { execFile } = require('child_process');
 const { isUsageLimitText } = require('./orchestraPlanWait');
 const { checkCwd } = require('./projects');
+const { EFFORTS, normalizeEffort } = require('./efforts');
 
 const PLANNER_MODEL = 'opus';
+// Planning reads code across the repo and weighs grouping: one notch above routine.
+const PLANNER_EFFORT = 'high';
 const PLANNER_BUDGET_USD = 3;
 const PLANNER_TIMEOUT_MS = 8 * 60 * 1000;
 // Read-only: the planner may look at the code, never change it.
@@ -62,7 +65,7 @@ const PLAN_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'title', 'todoAts', 'prompt', 'files', 'dependsOn', 'verify', 'model'],
+        required: ['id', 'title', 'todoAts', 'prompt', 'files', 'dependsOn', 'verify', 'model', 'effort'],
         properties: {
           id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,23}$' },
           title: { type: 'string', maxLength: MAX_TITLE_CHARS },
@@ -72,6 +75,7 @@ const PLAN_SCHEMA = {
           dependsOn: { type: 'array', items: { type: 'string' } },
           verify: { type: 'string' },
           model: { type: 'string', enum: MODELS },
+          effort: { type: 'string', enum: EFFORTS },
         },
       },
     },
@@ -100,7 +104,7 @@ function slugId(raw) {
 function todoBrief(openTodos) {
   return openTodos.map((t) => {
     const out = { at: t.at, text: t.text };
-    for (const key of ['details', 'acceptance', 'files', 'verify', 'size', 'model', 'dependsOn']) {
+    for (const key of ['details', 'acceptance', 'files', 'verify', 'size', 'model', 'effort', 'dependsOn']) {
       if (t[key] !== undefined) out[key] = t[key];
     }
     return out;
@@ -128,6 +132,7 @@ function buildPlannerPrompt(openTodos) {
     '- "dependsOn" lists other package ids that must be finished first. Mark real dependencies only.',
     '- "verify" is the command that proves the package works (e.g. "npm test"); use the to-do\'s own verify when it has one.',
     '- "model": "opus" for hard or cross-cutting work, "sonnet" otherwise.',
+    '- "effort": the to-do\'s own effort when it has one; otherwise "medium" for routine work, "high" or "xhigh" for hard or cross-cutting work, "max" only for the heaviest.',
     '- "id": short kebab-case, unique. "notes": one short paragraph on why you grouped it this way.',
     '',
     'Open to-dos (JSON):',
@@ -140,7 +145,7 @@ function buildPlannerPrompt(openTodos) {
  * in on stdin, not here: a list of full task cards can outgrow the Windows
  * command-line limit (32k chars).
  */
-function buildPlannerArgs({ model = PLANNER_MODEL, budgetUsd = PLANNER_BUDGET_USD } = {}) {
+function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd = PLANNER_BUDGET_USD } = {}) {
   return [
     '-p',
     '--output-format',
@@ -149,6 +154,8 @@ function buildPlannerArgs({ model = PLANNER_MODEL, budgetUsd = PLANNER_BUDGET_US
     JSON.stringify(PLAN_SCHEMA),
     '--model',
     model,
+    '--effort',
+    effort,
     '--tools',
     PLANNER_TOOLS,
     '--max-budget-usd',
@@ -281,6 +288,7 @@ function validatePlan(raw, openTodos) {
       dependsOn: (Array.isArray(p.dependsOn) ? p.dependsOn : []).map(slugId).filter(Boolean),
       verify: clean(p.verify, MAX_VERIFY_CHARS),
       model: MODELS.includes(p.model) ? p.model : null,
+      effort: normalizeEffort(p.effort),
     });
   }
 
@@ -407,6 +415,7 @@ function runPlanner({ cwd, env, openTodos, execImpl = execFile, timeoutMs = PLAN
 module.exports = {
   PLAN_SCHEMA,
   PLANNER_MODEL,
+  PLANNER_EFFORT,
   PLANNER_BUDGET_USD,
   MAX_PARALLEL,
   MAX_PROMPT_CHARS,

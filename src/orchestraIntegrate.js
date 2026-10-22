@@ -36,6 +36,8 @@ const GH_TIMEOUT_MS = 60 * 1000;
 const RESOLVER_TIMEOUT_MS = 15 * 60 * 1000;
 const RESOLVER_BUDGET_USD = 2;
 const RESOLVER_MODEL = 'opus';
+// Conflict hunks are small and local: routine effort is enough.
+const RESOLVER_EFFORT = 'medium';
 // The resolver only reads and edits the conflicted files; LunaCore stages
 // and commits them itself. No shell, no network, no sub-agents - and no
 // project settings / MCP servers: the integration worktree holds worker-
@@ -245,6 +247,8 @@ async function runResolver({ cwd, env, branch, files, isDirImpl, attempt }, exec
       '-p',
       '--model',
       RESOLVER_MODEL,
+      '--effort',
+      RESOLVER_EFFORT,
       '--permission-mode',
       'acceptEdits',
       '--allowedTools',
@@ -475,4 +479,5 @@ module.exports = {
   integrateMerge,
   mergeOne,
   RESOLVER_TOOLS,
+  RESOLVER_EFFORT,
 };

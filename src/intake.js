@@ -31,6 +31,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { normalizeTodo, normalizeTodos, MAX_ITEMS } = require('./todo');
+const { EFFORTS } = require('./efforts');
 
 const MCP_PATH = '/mcp';
 const MAX_BODY_BYTES = 256 * 1024;
@@ -42,7 +43,7 @@ const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const SERVER_NAME = 'lunacore';
 
 // Fields a card may carry besides `text` - the ones luna_todo_update may touch.
-const CARD_FIELDS = ['details', 'acceptance', 'files', 'verify', 'size', 'model', 'dependsOn', 'manual'];
+const CARD_FIELDS = ['details', 'acceptance', 'files', 'verify', 'size', 'model', 'effort', 'dependsOn', 'manual'];
 
 // --- tool definitions ---------------------------------------------------------
 
@@ -64,6 +65,11 @@ const CARD_PROPERTIES = {
   verify: { type: 'string', description: 'Command that proves it works, e.g. "npm test".' },
   size: { type: 'string', enum: ['S', 'M', 'L'], description: 'S < 30 min, M < 2 h, L larger.' },
   model: { type: 'string', enum: ['sonnet', 'opus'], description: 'Suggested worker model.' },
+  effort: {
+    type: 'string',
+    enum: [...EFFORTS],
+    description: 'Worker reasoning effort: medium for routine work, high/xhigh for hard work, max only for the heaviest.',
+  },
   manual: { type: 'boolean', description: 'Keep out of God Mode/Orchestra; needs the user.' },
 };
 

@@ -66,6 +66,27 @@ export function promptFor(text) {
   return framed + AUTONOMY_NUDGE;
 }
 
+// Claude CLI effort levels (mirror of src/efforts.js EFFORTS - the renderer
+// cannot require main-side modules). Never `low`: medium is the floor.
+const EFFORTS = ['medium', 'high', 'xhigh', 'max'];
+const DEFAULT_EFFORT = 'medium';
+// `/effort <level>` is a slash command: it starts no model turn, so onTurnEnd
+// never fires for it. The task is typed after this short pause instead, so
+// the TUI has applied the command before the prompt arrives.
+const EFFORT_SETTLE_MS = 1500;
+
+/**
+ * The `/effort` command to type before an item, or null when the tab is
+ * already on that level. A card without a valid effort runs on medium.
+ * @param {{effort?:string}} item
+ * @param {string|null} lastEffort the level last set in this run's tab (null on a fresh run)
+ * @returns {{level:string, command:string}|null}
+ */
+export function effortStep(item, lastEffort) {
+  const level = item && EFFORTS.includes(item.effort) ? item.effort : DEFAULT_EFFORT;
+  return level === lastEffort ? null : { level, command: `/effort ${level}` };
+}
+
 // Dropped-connection retries back off instead of giving up fast: an overnight
 // run should ride out a ~30 min outage, not stall on the third 5s retry.
 const CONN_BACKOFF_STEPS_MS = [5000, 30 * 1000, 2 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000, 10 * 60 * 1000];
@@ -91,7 +112,8 @@ let els = null;
  * @type {Map<string, {
  *   sessionId:string, phase:string, currentAt:number|null, currentText:string|null,
  *   remainingCount:number, retryCount:number, sawDrop:boolean,
- *   lastUsageLimitAt:number, resetsAt:number|null, lastConnErrAt:number, limitTimer:any, connTimer:any
+ *   lastUsageLimitAt:number, resetsAt:number|null, lastConnErrAt:number, limitTimer:any, connTimer:any,
+ *   lastEffort:string|null, effortTimer:any
  * }>}
  */
 const runs = new Map();
@@ -110,6 +132,8 @@ function newRun(sessionId) {
     lastConnErrAt: 0,
     limitTimer: null,
     connTimer: null,
+    lastEffort: null, // the /effort level last typed into this tab; null = send it once
+    effortTimer: null, // the pause between /effort and the task
   };
 }
 
@@ -228,6 +252,10 @@ function clearTimers(run) {
     clearTimeout(run.connTimer);
     run.connTimer = null;
   }
+  if (run.effortTimer) {
+    clearTimeout(run.effortTimer);
+    run.effortTimer = null;
+  }
 }
 
 // Tabs main already knows have a live run (the overnight guard's view).
@@ -314,7 +342,21 @@ async function injectNext(run) {
   run.currentAt = step.item.at;
   // A task card pastes its details/done-when too; a plain item is just its text.
   run.currentText = cardPrompt(step.item);
-  window.lunacore.pastePrompt(promptFor(run.currentText), true, run.sessionId);
+  const effort = effortStep(step.item, run.lastEffort);
+  if (!effort) {
+    window.lunacore.pastePrompt(promptFor(run.currentText), true, run.sessionId);
+    render();
+    return;
+  }
+  // No onTurnEnd follows a slash command: type the task after a short pause.
+  window.lunacore.pastePrompt(effort.command, true, run.sessionId);
+  run.lastEffort = effort.level;
+  const at = run.currentAt;
+  run.effortTimer = setTimeout(() => {
+    run.effortTimer = null;
+    if (runs.get(run.sessionId) !== run || !isEngaged(run) || run.currentAt !== at) return; // disarmed or moved on
+    window.lunacore.pastePrompt(promptFor(run.currentText), true, run.sessionId);
+  }, EFFORT_SETTLE_MS);
   render();
 }
 

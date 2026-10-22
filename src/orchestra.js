@@ -35,6 +35,7 @@
 const path = require('path');
 const { validatePlan, estimatePlan, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
 const sup = require('./orchestraSupervisor');
+const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
 const { createFinalizer } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
@@ -229,7 +230,7 @@ function createOrchestra(deps) {
   const tickTodos = deps.tickTodos || noop;
   const workerSettings =
     deps.workerSettings ||
-    (() => ({ model: 'opus', permissionMode: 'bypassPermissions', integration: 'pr', allowedTools: [] }));
+    (() => ({ model: 'opus', effort: 'plan', permissionMode: 'bypassPermissions', integration: 'pr', allowedTools: [] }));
   const closeSession = deps.closeSession || noop;
   // Merging into the base branch pushes it: main asks Mati natively. No
   // dialog available = no merge.
@@ -279,6 +280,8 @@ function createOrchestra(deps) {
       const m = (plan && plan.workerModel) || workerSettings().model;
       return m && m !== 'plan' ? m : null;
     },
+    // A forced Settings level, else the routine default.
+    effort: () => normalizeEffort(plan && plan.workerEffort) || DEFAULT_EFFORT,
     permissionMode: () => (plan && plan.permissionMode) || workerSettings().permissionMode || null,
     setTimer: (fn, ms) => setTimer(fn, ms),
     clearTimer: (t) => clearTimer(t),
@@ -398,6 +401,7 @@ function createOrchestra(deps) {
       dirty: plan.dirty,
       model: PLANNER_MODEL,
       workerModel: plan.workerModel || workerSettings().model,
+      workerEffort: plan.workerEffort || workerSettings().effort || 'plan',
       permissionMode: plan.permissionMode || workerSettings().permissionMode,
       integrationMode: plan.integrationMode || workerSettings().integration,
       baseBranch: plan.baseBranch,
@@ -424,6 +428,7 @@ function createOrchestra(deps) {
         dependsOn: p.dependsOn,
         verify: p.verify,
         model: p.modelOverride || p.model,
+        effort: p.effortOverride || p.effort || null,
         todos: p.todoAts.map((at) => plan.todoText.get(at) || String(at)),
         state: p.state,
         sessionId: p.sessionId,
@@ -513,12 +518,16 @@ function createOrchestra(deps) {
   function freezeSettings() {
     const s = workerSettings();
     plan.workerModel = plan.workerModel || s.model;
+    plan.workerEffort = plan.workerEffort || (isEffort(s.effort) ? s.effort : 'plan');
     plan.permissionMode = plan.permissionMode || s.permissionMode;
     plan.integrationMode = plan.integrationMode || s.integration || 'pr';
     if (!plan.allowedTools) plan.allowedTools = (s.allowedTools || []).filter(sup.isAllowRule);
   }
 
   const modelFor = (pkg) => pkg.modelOverride || (plan.workerModel === 'plan' ? pkg.model : plan.workerModel);
+  /** Escalation override, then a forced Settings level, then the planner's pick, then medium. */
+  const effortFor = (pkg) =>
+    normalizeEffort(pkg.effortOverride) || normalizeEffort(plan.workerEffort) || normalizeEffort(pkg.effort) || DEFAULT_EFFORT;
 
   /**
    * Runs the planner for one project. Replaces any previous plan, except one
@@ -563,6 +572,7 @@ function createOrchestra(deps) {
         costUsd: res.costUsd,
         dirty,
         workerModel: null,
+        workerEffort: null,
         permissionMode: null,
         allowedTools: null,
         integrationMode: null,
@@ -603,6 +613,7 @@ function createOrchestra(deps) {
           stalls: 0,
           escalated: false,
           modelOverride: null,
+          effortOverride: null,
           touched: [],
           prUrl: null,
           merged: false,
@@ -628,7 +639,7 @@ function createOrchestra(deps) {
       projectId: plan.projectId,
       cwd,
       branch,
-      task: { briefPath, model: modelFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] },
+      task: { briefPath, model: modelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] },
     });
   }
 
@@ -1016,10 +1027,12 @@ function createOrchestra(deps) {
     const old = pkg.sessionId;
     // New tab first: closing the old one first could leave main opening an
     // empty replacement tab when it was the last one.
-    const session = safeOpenTab({ ...pkg, modelOverride: 'opus' }, pkg.cwd || pkg.root, pkg.branch, briefPath);
+    // One effort step up as well, capped at max.
+    const effortOverride = nextEffort(effortFor(pkg));
+    const session = safeOpenTab({ ...pkg, modelOverride: 'opus', effortOverride }, pkg.cwd || pkg.root, pkg.branch, briefPath);
     if (!session) return false;
     // Re-pointed before the close, so the old tab's close is not read as this package's.
-    patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath, modelOverride: 'opus', escalated: true });
+    patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath, modelOverride: 'opus', effortOverride, escalated: true });
     if (old && sessionAlive(old)) closeSession(old);
     onRunEvent('escalated', { id: pkg.id, reason });
     return true;

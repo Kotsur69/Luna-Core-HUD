@@ -688,7 +688,7 @@ function chip(label) {
 
 /**
  * The middle cell of a task card: its title, a meta line of chips (size,
- * model, file count, manual), and - while expanded - the card's details. A
+ * model, effort, file count, manual), and - while expanded - the card's details. A
  * plain note flagged manual gets the chip line too. Everything
  * goes through textContent; card text is written by a model and is never
  * parsed as HTML.
@@ -701,6 +701,7 @@ function cardBody(item, text) {
   meta.className = 'todo-item__meta';
   if (item.size) meta.append(chip(item.size));
   if (item.model) meta.append(chip(item.model));
+  if (item.effort) meta.append(chip(item.effort));
   if (item.files) meta.append(chip(t('todo.files', { n: item.files.length })));
   if (item.manual === true) {
     const manual = chip(t('todo.manual'));

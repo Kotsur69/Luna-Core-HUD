@@ -21,6 +21,7 @@
 const path = require('path');
 const { findTurnEndMessage, textBlocks } = require('./ttsExtract');
 const { WORKTREE_DIR, BRANCH_PREFIX } = require('./worktrees');
+const { normalizeEffort } = require('./efforts');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -542,6 +543,7 @@ function normalizePackage(raw) {
     // One line only: it runs through a shell (orchestraFinish.runVerify).
     verify: /[\r\n]/.test(str(raw.verify, 500)) ? '' : str(raw.verify, 500),
     model: strOrNull(raw.model, 32),
+    effort: normalizeEffort(raw.effort),
     todoAts: Array.isArray(raw.todoAts) ? raw.todoAts.filter(Number.isFinite) : [],
     state: STATES.has(raw.state) ? raw.state : 'pending',
     sessionId: strOrNull(raw.sessionId, 64),
@@ -559,6 +561,7 @@ function normalizePackage(raw) {
     stalls: num(raw.stalls),
     escalated: raw.escalated === true,
     modelOverride: raw.modelOverride === 'opus' ? 'opus' : null,
+    effortOverride: normalizeEffort(raw.effortOverride),
     touched: strList(raw.touched).filter(isRelPath).slice(0, MAX_TOUCHED),
     prUrl: typeof raw.prUrl === 'string' && PR_URL_RE.test(raw.prUrl) ? raw.prUrl : null,
     merged: raw.merged === true,
@@ -705,6 +708,8 @@ function normalizeStoredPlan(raw) {
     costUsd: Number.isFinite(raw.costUsd) ? raw.costUsd : null,
     dirty: Number.isFinite(raw.dirty) ? raw.dirty : null,
     workerModel: strOrNull(raw.workerModel, 32),
+    // 'plan' or one of the four levels; anything else re-freezes from Settings.
+    workerEffort: raw.workerEffort === 'plan' ? 'plan' : normalizeEffort(raw.workerEffort),
     permissionMode: strOrNull(raw.permissionMode, 32),
     allowedTools: strList(raw.allowedTools).filter(isAllowRule).slice(0, 50),
     // A free run (orchestraFree.js) stays branches-only after a restart too.

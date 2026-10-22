@@ -1002,6 +1002,7 @@ const orchestra = createOrchestra({
     return {
       model: prefs.orchestraWorkerModel,
       permissionMode: prefs.orchestraPermissionMode,
+      effort: prefs.orchestraWorkerEffort,
       integration: prefs.orchestraIntegration,
       allowedTools: prefs.orchestraAllowedTools,
       checkCommand: prefs.orchestraCheckCommand,

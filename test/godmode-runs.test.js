@@ -68,11 +68,18 @@ const flush = async () => {
   for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 2));
 };
 
+// A fresh run types `/effort medium` first and the task after godmode.js's
+// EFFORT_SETTLE_MS pause (a slash command fires no onTurnEnd).
+const EFFORT_SETTLE_WAIT_MS = 1600;
+
 async function armOn(sessionId) {
   setActiveSessionId(sessionId);
   toggle.checked = true;
   toggle.onChange();
   await flush();
+  if (bridge.pastes.some(([id, text]) => id === sessionId && text.startsWith('/effort '))) {
+    await new Promise((r) => setTimeout(r, EFFORT_SETTLE_WAIT_MS));
+  }
 }
 
 async function turnEnd(sessionId) {
@@ -80,7 +87,9 @@ async function turnEnd(sessionId) {
   await flush();
 }
 
-const pastedTo = (sessionId) => bridge.pastes.filter(([id]) => id === sessionId).map(([, text]) => text.split(' (')[0]);
+const pastedTo = (sessionId) =>
+  bridge.pastes.filter(([id, text]) => id === sessionId && !text.startsWith('/effort ')).map(([, text]) => text.split(' (')[0]);
+const effortsTo = (sessionId) => bridge.pastes.filter(([id, text]) => id === sessionId && text.startsWith('/effort ')).map(([, text]) => text);
 const item = (at, text, extra = {}) => ({ text, done: false, at, ...extra });
 
 test('two tabs split one list, respect dependsOn, and both ticks land', async () => {
@@ -131,5 +140,21 @@ test('closing a tab ends its run and frees its claim for the others', async () =
   await turnEnd('s4');
   assert.deepEqual(pastedTo('s4').at(-1), 'x', 's4 picks up the item s3 abandoned');
   await turnEnd('s4');
+  assert.deepEqual(bridge.reported.at(-1), []);
+});
+
+test('v1 types /effort once per run and again only when a card changes the level', async () => {
+  bridge.list = [item(30, 'p'), item(31, 'q'), item(32, 'r', { effort: 'xhigh' })];
+  await armOn('s5');
+  assert.deepEqual(effortsTo('s5'), ['/effort medium'], 'a fresh run always sets it once');
+  assert.deepEqual(pastedTo('s5'), ['p'], 'the task follows without a turn end');
+  await turnEnd('s5');
+  assert.deepEqual(effortsTo('s5'), ['/effort medium'], 'same level: no second /effort');
+  assert.deepEqual(pastedTo('s5'), ['p', 'q']);
+  await turnEnd('s5');
+  assert.deepEqual(effortsTo('s5'), ['/effort medium', '/effort xhigh']);
+  await new Promise((r) => setTimeout(r, EFFORT_SETTLE_WAIT_MS));
+  assert.deepEqual(pastedTo('s5'), ['p', 'q', 'r']);
+  await turnEnd('s5');
   assert.deepEqual(bridge.reported.at(-1), []);
 });
