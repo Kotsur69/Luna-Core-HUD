@@ -21,7 +21,7 @@ const { summarize, weekWindow } = ledgerCalc;
 const { parseYazioPeer } = yazio;
 const { newestUsage, windowNow } = usage;
 const { reposFrom: mergeReposRows } = reposSnap;
-const { runsFrom } = godmodeSnap;
+const { runsFrom, liveFrom, tabsFrom, liveCounts } = godmodeSnap;
 
 /** Projects listed on the phone; the rest only count in the total. */
 export const MAX_PROJECTS = 20;
@@ -123,4 +123,19 @@ export function reposFrom(rows, now) {
 /** Every PC's recent God Mode runs, newest first, each tagged with its machine. */
 export function godmodeRunsFrom(rows, now) {
   return runsFrom(rows, now);
+}
+
+/** The newest live God Mode run over every PC (with `machine`, `at`, `stale`), or null. */
+export function godmodeLiveFrom(rows, now) {
+  return liveFrom(rows, now);
+}
+
+/** Every PC's terminal tab lights, newest first. */
+export function godmodeTabsFrom(rows, now) {
+  return tabsFrom(rows, now);
+}
+
+/** {pushed, working, waiting, pending, failed} of a live run. */
+export function godmodeLiveCounts(live) {
+  return liveCounts(live);
 }

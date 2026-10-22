@@ -8,6 +8,8 @@
 //   repos.refresh()    after a fetch: read every repo again, then put
 //   godmode.add(run)   after a finalized run: add it to the local history
 //                      file, then put the last runs
+//   godmode.live(s)    a live run / tab lights changed (godmodelivepub.js):
+//                      put the history with `live` and `tabs` over it
 //
 // Every put is skipped while logged out, and a failure only logs - it never
 // throws into the git station or the end of a God Mode run. cloudsnapshots
@@ -20,7 +22,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { reposSnapshot } = require('./repossnapshot');
-const { addRun } = require('./godmodesnapshot');
+const { addRun, withLive } = require('./godmodesnapshot');
 const { createRepoKeys, findRepo } = require('./missionrepokey');
 
 const errText = (err) => (err instanceof Error ? err.message : String(err));
@@ -84,6 +86,10 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     },
   };
 
+  // The last live run + tab lights (godmodelivepub.js). Memory only: the
+  // history file holds finished runs, and a restart publishes afresh.
+  let lastLive = { live: null, tabs: [] };
+
   const godmode = {
     /** Adds a finalized run (godmodesnapshot runEntry) and puts the history. Never throws. */
     add(run) {
@@ -96,7 +102,17 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
           fs.writeFileSync(file, `${JSON.stringify(next)}\n`, { encoding: 'utf8', mode: 0o600 });
         }
         const s = ready();
-        return s ? s.put('godmode', next) : false;
+        return s ? s.put('godmode', withLive(next, lastLive, { machine, now: now() })) : false;
+      });
+    },
+    /** Puts the run history with this live run / tab list over it. Never throws. */
+    live(section) {
+      lastLive = { live: (section && section.live) || null, tabs: (section && section.tabs) || [] };
+      const s = ready();
+      if (!s) return Promise.resolve(false);
+      return safePut('godmode', async () => {
+        const file = historyFile();
+        return s.put('godmode', withLive(file ? readHistory(file) : null, lastLive, { machine, now: now() }));
       });
     },
   };

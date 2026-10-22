@@ -161,3 +161,259 @@ test('runsFrom merges machines newest first and tags each run', () => {
   const out = runsFrom(rows, NOW);
   assert.deepEqual(out.map((r) => [r.id, r.machine]), [['b', 'PC2'], ['a', 'PC1']]);
 });
+
+// ---------------------------------------------------------------------------
+// Live run section + tab lights, and the throttled publisher.
+// ---------------------------------------------------------------------------
+
+const { liveEntry, tabsEntry, withLive, liveFrom, tabsFrom, liveCounts, scrubPaths, LIVE_STALE_MS } = require('../src/godmodesnapshot');
+const { createLivePublisher, MIN_MS, HEARTBEAT_MS } = require('../src/godmodelivepub');
+
+const REPO = 'C:\\Users\\mati\\source\\repos\\Luna-Core-HUD';
+const WT = 'C:\\Users\\mati\\source\\repos\\.luna-worktrees\\Luna-Core-HUD\\b-x1';
+
+const liveView = (over = {}) => ({
+  id: 'run1',
+  repoPath: REPO,
+  roots: [WT],
+  baseBranch: 'main',
+  started: true,
+  killed: false,
+  settled: false,
+  pausedUntil: null,
+  runStartedAt: NOW - HOUR,
+  options: { sleepOnLimit: true, shutdownWhenDone: false, unattendedApprovalMin: 5 },
+  packages: [
+    { id: 'a', title: 'Do A', state: 'pushed', dependsOn: [], headSha: 'ABCDEF0123', prUrl: 'https://github.com/o/r/pull/1', todos: ['todo A'], startedAt: NOW - HOUR, sessionId: 's1', root: WT },
+    { id: 'b', title: 'Do B', state: 'launched', dependsOn: ['a'], headSha: null, prUrl: 'https://evil.example/pr', startedAt: NOW - 10 * 60000, pausedMs: 60000, sessionId: 's2' },
+    { id: 'c', title: 'Do C', state: 'stalled', dependsOn: ['a'], error: 'verifyFailed', detail: `test failed in ${WT}\\src\\x.js and C:\\Users\\mati\\secret\\y.js`, sessionId: 's3' },
+    { id: 'd', title: 'Do D', state: 'pending', dependsOn: ['b', 'c'] },
+    { id: 'e', title: 'Do E', state: 'finishing', startedAt: NOW - 1000, sessionId: 's5' },
+    { id: 'f', title: 'Do F', state: 'stalled', error: 'needsApproval', detail: 'Bash(rm /home/mati/x/y.txt)', sessionId: 's6' },
+  ],
+  ...over,
+});
+
+const tabStates = { s1: 'idle', s2: 'approval', s5: 'working' };
+const tabState = (id) => tabStates[id] || null;
+
+test('liveEntry maps package states, keeps github PR links only and no local paths', () => {
+  const live = liveEntry(liveView(), { now: NOW, tabState });
+  assert.equal(live.title, 'Luna-Core-HUD');
+  assert.equal(live.state, 'running');
+  assert.equal(live.startedAt, NOW - HOUR);
+  assert.deepEqual(live.options, { sleepOnLimit: true, shutdownWhenDone: false });
+  const byId = Object.fromEntries(live.packages.map((p) => [p.id, p]));
+  assert.deepEqual(
+    live.packages.map((p) => [p.id, p.state]),
+    [['a', 'pushed'], ['b', 'approval'], ['c', 'failed'], ['d', 'queued'], ['e', 'verifying'], ['f', 'approval']],
+  );
+  assert.equal(byId.a.sha7, 'abcdef0');
+  assert.equal(byId.a.prUrl, 'https://github.com/o/r/pull/1');
+  assert.deepEqual(byId.a.todos, ['todo A']);
+  assert.equal(byId.b.prUrl, null);
+  assert.equal(byId.b.elapsedMs, 9 * 60000, 'pause time does not count');
+  assert.equal(byId.a.elapsedMs, null, 'only running packages tick');
+  assert.deepEqual(byId.d.dependsOn, ['b', 'c']);
+  assert.equal(byId.c.error, 'verifyFailed');
+  assert.equal(byId.c.detail, 'test failed in src\\x.js and y.js');
+  assert.equal(byId.f.detail, 'Bash(rm y.txt)');
+  assert.ok(!/Users|mati|worktrees|C:/.test(JSON.stringify(live)), JSON.stringify(live));
+});
+
+test('liveEntry run state: paused with its time, settled, killed; nothing before start', () => {
+  const until = NOW + HOUR;
+  const paused = liveEntry(liveView({ pausedUntil: until }), { now: NOW });
+  assert.deepEqual([paused.state, paused.pausedUntil], ['paused', until]);
+  assert.equal(liveEntry(liveView({ settled: true }), { now: NOW }).state, 'settled');
+  assert.equal(liveEntry(liveView({ killed: true, settled: true }), { now: NOW }).state, 'killed');
+  assert.equal(liveEntry(liveView({ started: false }), { now: NOW }), null);
+  assert.equal(liveEntry(null, { now: NOW }), null);
+  assert.deepEqual(liveCounts(liveEntry(liveView(), { now: NOW, tabState })), { pushed: 1, working: 1, waiting: 2, pending: 1, failed: 1 });
+});
+
+test('tabsEntry keeps folder / profile names and the light only', () => {
+  const tabs = tabsEntry([
+    { folder: 'Luna-Core-HUD', profileLabel: 'Claude', cwd: REPO, status: { state: 'approval', since: 1 } },
+    { folder: 'C:\\Users\\mati\\proj', profileLabel: 'Codex', status: null },
+    { folder: '', profileLabel: '' },
+    null,
+  ]);
+  assert.deepEqual(tabs, [
+    { folder: 'Luna-Core-HUD', profile: 'Claude', state: 'approval' },
+    { folder: 'proj', profile: 'Codex', state: 'idle' },
+  ]);
+});
+
+test('scrubPaths cuts repo roots on either separator and other absolute paths', () => {
+  assert.equal(scrubPaths('see C:/Users/mati/source/repos/Luna-Core-HUD/src/a.js', [REPO]), 'see src/a.js');
+  assert.equal(scrubPaths('in /Users/mati/code/b.ts line 3'), 'in b.ts line 3');
+  assert.equal(scrubPaths('\\\\server\\share\\c.txt'), 'c.txt');
+  assert.equal(scrubPaths(42), '');
+});
+
+const liveRow = (live, over = {}) => ({ machine: 'PC1', data: { v: 1, at: NOW, machine: 'PC1', runs: [], live, tabs: [], ...over } });
+
+test('a reader caps the live section, re-checks PR links, scrubs paths and drops bad states', () => {
+  const pkgs = Array.from({ length: 80 }, (_, i) => ({
+    id: `p${i}`,
+    title: 'x'.repeat(999),
+    state: i === 0 ? 'hacked' : 'pushed',
+    sha7: 'abcdef0',
+    prUrl: i === 1 ? 'https://github.com/o/r/pull/2' : 'javascript:alert(1)',
+    detail: 'C:\\Users\\mati\\a\\b.js broke',
+    dependsOn: Array(50).fill('a'),
+    todos: Array(50).fill('t'),
+    elapsedMs: 1e15,
+    output: 'terminal text',
+  }));
+  const raw = { id: 'r', title: 't', startedAt: NOW + HOUR, state: 'running', pausedUntil: NOW, options: { sleepOnLimit: 'yes' }, packages: pkgs };
+  const live = liveFrom([liveRow(raw)], NOW);
+  assert.equal(live.packages.length, 50);
+  assert.equal(live.startedAt, NOW, 'a future start is clamped');
+  assert.equal(live.pausedUntil, null, 'only a paused run has a pause time');
+  assert.equal(live.options.sleepOnLimit, false);
+  const [p0, p1] = live.packages;
+  assert.equal(p0.state, 'queued');
+  assert.equal(p0.sha7, null, 'a sha only on a pushed package');
+  assert.equal(p0.prUrl, null);
+  assert.equal(p1.prUrl, 'https://github.com/o/r/pull/2');
+  assert.equal(p1.title.length, 200);
+  assert.equal(p1.dependsOn.length, 20);
+  assert.equal(p1.todos.length, 10);
+  assert.equal(p1.detail, 'b.js broke');
+  assert.equal(p1.elapsedMs, 7 * 24 * HOUR);
+  assert.ok(!('output' in p1));
+  assert.equal(liveFrom([liveRow({ ...raw, state: 'weird' })], NOW), null);
+  assert.equal(liveFrom([liveRow(undefined)], NOW), null, 'a row from before live reads as no live run');
+});
+
+test('liveFrom picks the newest PC and flags a stale snapshot; tabsFrom caps tabs', () => {
+  const raw = (id) => ({ id, title: id, startedAt: NOW - HOUR, state: 'running', packages: [] });
+  const rows = [liveRow(raw('old'), { at: NOW - LIVE_STALE_MS - 1000 }), { machine: 'PC2', data: { v: 1, at: NOW - 5000, runs: [], live: raw('new') } }];
+  const live = liveFrom(rows, NOW);
+  assert.deepEqual([live.id, live.machine, live.stale], ['new', 'PC2', false]);
+  assert.equal(liveFrom([rows[0]], NOW).stale, true);
+  const tabs = Array.from({ length: 40 }, (_, i) => ({ folder: `f${i}`, profile: 'p', state: i ? 'working' : 'evil' }));
+  const out = tabsFrom([liveRow(null, { tabs })], NOW);
+  assert.equal(out[0].tabs.length, 30);
+  assert.equal(out[0].tabs[0].state, 'idle');
+});
+
+test('withLive lays the live section over the run history', () => {
+  const hist = addRun(null, runEntry(view(), { now: NOW }), { machine: 'PC1', now: NOW });
+  const live = liveEntry(liveView(), { now: NOW });
+  const snap = withLive(hist, { live, tabs: [{ folder: 'f', profile: 'p', state: 'done' }] }, { machine: 'PC1', now: NOW + 1 });
+  assert.equal(snap.runs.length, 1);
+  assert.equal(snap.at, NOW + 1);
+  assert.equal(snap.live.id, 'run1');
+  assert.equal(snap.tabs.length, 1);
+  assert.ok(!('live' in withLive(hist, { live: null }, { machine: 'PC1', now: NOW })));
+  assert.ok(parseGodmodePeer({ machine: 'PC1', data: snap }, NOW + 1).live);
+});
+
+/** Fake clock + timers for the publisher. */
+function fakeTimers() {
+  let t = NOW;
+  let seq = 0;
+  const timers = new Map();
+  return {
+    now: () => t,
+    setTimer: (fn, ms) => {
+      seq += 1;
+      timers.set(seq, { fn, at: t + ms });
+      return seq;
+    },
+    clearTimer: (id) => timers.delete(id),
+    advance(ms) {
+      const end = t + ms;
+      for (;;) {
+        const next = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next || next[1].at > end) break;
+        timers.delete(next[0]);
+        t = next[1].at;
+        next[1].fn();
+      }
+      t = end;
+    },
+    pending: () => timers.size,
+  };
+}
+
+function publisherHarness() {
+  const clock = fakeTimers();
+  const sent = [];
+  let section = { live: liveEntry(liveView(), { now: NOW }), tabs: [] };
+  const pub = createLivePublisher({ build: () => section, publish: (s) => sent.push(s), now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, log: () => {} });
+  const set = (fn) => {
+    section = fn(section);
+  };
+  const withPkg = (s, id, patch) => ({ ...s, live: { ...s.live, packages: s.live.packages.map((p) => (p.id === id ? { ...p, ...patch } : p)) } });
+  return { clock, sent, pub, set, withPkg };
+}
+
+test('publisher: first poke and every package state change go out at once', () => {
+  const { sent, pub, set, withPkg } = publisherHarness();
+  pub.poke();
+  assert.equal(sent.length, 1);
+  set((s) => withPkg(s, 'd', { state: 'working' }));
+  pub.poke();
+  assert.equal(sent.length, 2, 'state change is not throttled');
+  set((s) => ({ ...s, live: { ...s.live, state: 'paused', pausedUntil: NOW + HOUR } }));
+  pub.poke();
+  assert.equal(sent.length, 3, 'pause is not throttled');
+});
+
+test('publisher: other changes are throttled to one per 15 s, unchanged content is skipped', () => {
+  const { clock, sent, pub, set, withPkg } = publisherHarness();
+  pub.poke();
+  set((s) => ({ ...s, tabs: [{ folder: 'f', profile: 'p', state: 'working' }] }));
+  pub.poke();
+  set((s) => ({ ...s, tabs: [{ folder: 'f', profile: 'p', state: 'idle' }] }));
+  pub.poke();
+  assert.equal(sent.length, 1);
+  clock.advance(MIN_MS - 1);
+  assert.equal(sent.length, 1);
+  clock.advance(1);
+  assert.equal(sent.length, 2, 'the trailing change goes out when the window opens');
+  assert.equal(sent[1].tabs[0].state, 'idle');
+  // Only the clock moved: no put until the heartbeat.
+  set((s) => withPkg(s, 'b', { elapsedMs: 123456 }));
+  clock.advance(MIN_MS * 2);
+  pub.poke();
+  assert.equal(sent.length, 2);
+  clock.advance(HEARTBEAT_MS);
+  assert.equal(sent.length, 3, 'a running run sends a heartbeat for the stale badge');
+});
+
+test('publisher: a settled run sends once and stops its heartbeat', () => {
+  const { clock, sent, pub, set } = publisherHarness();
+  pub.poke();
+  set((s) => ({ ...s, live: { ...s.live, state: 'settled' } }));
+  pub.poke();
+  assert.equal(sent.length, 2);
+  assert.equal(clock.pending(), 0);
+  clock.advance(HEARTBEAT_MS * 5);
+  assert.equal(sent.length, 2);
+});
+
+test('publisher: a failing build or publish only logs', () => {
+  const logs = [];
+  const broken = createLivePublisher({
+    build: () => {
+      throw new Error('boom');
+    },
+    publish: () => {},
+    log: (m) => logs.push(m),
+  });
+  assert.doesNotThrow(() => broken.poke());
+  const failing = createLivePublisher({
+    build: () => ({ live: null, tabs: [] }),
+    publish: () => {
+      throw new Error('net');
+    },
+    log: (m) => logs.push(m),
+  });
+  assert.doesNotThrow(() => failing.poke());
+  assert.equal(logs.length, 2);
+});

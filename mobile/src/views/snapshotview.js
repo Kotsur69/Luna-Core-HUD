@@ -23,7 +23,7 @@ export function when(ms, now = Date.now()) {
  * @param {{cloud: object, toast: (m: string, bad?: boolean) => void}} deps
  * @param {string[]} kinds snapshot kinds the page reads
  * @param {(byKind: Record<string, object[]>, now: number) => Node} render rows are parsed by snapmodel.js there
- * @returns {{refresh: () => Promise<void>}}
+ * @returns {{refresh: () => Promise<void>, repaint: () => void}} repaint() redraws what is held (a clock moved), no pull
  */
 export function mountSnapshots(main, { cloud, toast }, kinds, render) {
   let seq = 0;
@@ -64,5 +64,10 @@ export function mountSnapshots(main, { cloud, toast }, kinds, render) {
     // No cached copy (storage blocked): the network answer is all there is.
     () => {},
   );
-  return { refresh };
+  return {
+    refresh,
+    repaint() {
+      if (shown) paint();
+    },
+  };
 }

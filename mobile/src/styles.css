@@ -573,6 +573,33 @@ main {
 .run > summary::-webkit-details-marker { display: none; }
 .run[open] > summary { margin-bottom: var(--space-3); }
 
+/* Live God Mode run: counters, pause banner, HUD-style status lights. */
+.counters { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(4.5rem, 1fr)); gap: var(--space-2); }
+.counter { display: grid; gap: 2px; padding: var(--space-2); border: 1px solid var(--edge); border-radius: var(--radius-sm); text-align: center; }
+.counter-n { font-family: var(--font-display); font-size: 20px; font-weight: 700; line-height: 1.1; }
+.counter.is-good { border-color: var(--good); }
+.counter.is-good .counter-n { color: var(--good); }
+.counter.is-warn { border-color: var(--warn); }
+.counter.is-warn .counter-n { color: var(--warn); }
+.counter.is-bad { border-color: var(--bad); }
+.counter.is-bad .counter-n { color: var(--bad); }
+.banner { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid currentColor; border-radius: var(--radius-sm); }
+.group-title { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.todo-list { margin: 0; padding-left: var(--space-4, 16px); display: grid; gap: 2px; }
+.light { flex: none; width: 16px; text-align: center; font-size: 13px; font-weight: 700; line-height: 1; color: var(--text-dim); }
+.light.is-working { color: var(--neon-cyan); animation: light-pulse 1.4s ease-in-out infinite; }
+.light.is-done { color: var(--good); }
+.light.is-approval { color: var(--warn); animation: light-blink 0.9s steps(1, end) infinite; }
+.light.is-limit { color: var(--warn); }
+.light.is-failed { color: var(--bad); }
+.light.is-idle,
+.light.is-dead { opacity: 0.7; }
+@keyframes light-pulse { 50% { opacity: 0.35; transform: scale(0.8); } }
+@keyframes light-blink { 50% { opacity: 0.2; } }
+@media (prefers-reduced-motion: reduce) {
+  .light { animation: none; }
+}
+
 /* ---- Host chat (REMOTE_HOST_PLAN H2): text only, model output never as HTML ---- */
 .chat { display: grid; gap: var(--space-2); max-height: 60vh; overflow-y: auto; overscroll-behavior: contain; }
 .msg { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
