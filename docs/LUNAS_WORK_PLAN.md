@@ -1,7 +1,8 @@
 # Luna's Work — plan
 
-> Status: **PLAN, not built.** Written 2026-10-22. Waiting for Mati's confirm
-> before slice 1.
+> Status: **IN PROGRESS.** Written 2026-10-22. Phase 1 slice 1 done
+> (`9f65d6a`). **Resume here: Phase 1, slice 2** (button + settings +
+> pre-production pack).
 
 ## What it is
 
@@ -288,8 +289,13 @@ doc becomes `DONE_LUNAS_WORK_PLAN.md`.
 
 ### Phase 1 — the loop works on a web app
 
-1. **Rules + state** — `lunasworkRules.js` (stop, gate, plateau, steer
-   priority, rollback trigger, `auto` model choice), state store, tests. No IO.
+1. ✅ **Rules + state** (`9f65d6a`, 2026-10-22) — `lunasworkRules.js` (stop,
+   gate, plateau, steer priority, rollback trigger, `auto` model choice),
+   `lunasworkStore.js`, 35 tests in `test/lunaswork-rules.test.js`. No IO.
+   After review: scores compared only within one milestone, steer cards never
+   cut by the limit, stuck cards left out, corrupt records dropped (never
+   invented), run id restricted to git-tag-safe characters, a `researcher`
+   role added (default sonnet).
 2. **Settings + pre-production pack** — the Luna's Work button and settings
    (models per role, project profile), design pack templates including
    `ARCHITECTURE.md` / `DECISIONS.md`, interview brief, pack completeness check.
