@@ -10,7 +10,8 @@
 //
 // Sources: this PC's run history file (snapshotputs.js godmode.read()), the
 // other PCs' `godmode` rows (cloudsnapshots list(), untrusted - parsed by
-// godmodesnapshot.js), today's check-in and this week's goals (local files).
+// godmodesnapshot.js), today's check-in and this week's goals (local files),
+// and the report-email Gmail sender's status (no network, local token only).
 // The renderer names a run only by machine + id; both are validated here.
 // ============================================================================
 
@@ -35,7 +36,8 @@ function safe(label, fn) {
 
 /**
  * @param {{ipcMain:object, snapshots:()=>({list:Function}|null), godmode:{read:Function, markSeen:Function},
- *   machine:string, openExternal?:(url:string)=>Promise<void>, now?:()=>number, checkin?:(at:number)=>object|null, goals?:(at:number)=>object|null}} deps
+ *   machine:string, openExternal?:(url:string)=>Promise<void>, now?:()=>number, checkin?:(at:number)=>object|null, goals?:(at:number)=>object|null,
+ *   gmail?:()=>({configured:boolean, connected:boolean}|null)}} deps
  */
 function registerInboxIpc({
   ipcMain,
@@ -46,6 +48,7 @@ function registerInboxIpc({
   now = Date.now,
   checkin = (at) => checkinStore.checkinView(checkinStore.loadCheckin(), at),
   goals = (at) => goalStore.goalsView(goalStore.loadGoals(), at),
+  gmail = () => null,
 }) {
   async function peerRows() {
     const s = snapshots();
@@ -71,6 +74,7 @@ function registerInboxIpc({
         seen: seenUnion(peers),
         checkin: safe('checkin', () => checkin(at)),
         goals: safe('goals', () => goals(at)),
+        gmail: safe('gmail', () => gmail()),
         now: at,
       });
       return { ok: true, items };

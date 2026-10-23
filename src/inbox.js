@@ -1,13 +1,15 @@
 // ============================================================================
 // LunaCore - attention inbox: what needs Mati, on every PC (main, pure)
 // ----------------------------------------------------------------------------
-// The '!' chip lists three kinds of items:
+// The '!' chip lists four kinds of items:
 //   godmode  a finalized God Mode run from ANY PC in the last 7 days that
 //            no PC has opened yet (the `seen` lists of every machine's
 //            `godmode` snapshot row, unioned)
 //   checkin  today's sleep/energy check-in not answered and not skipped
 //   goals    this ISO week's goals not set yet - the same condition the Life
 //            dashboard's weekly prompt uses (lifedailyview.js needsGoals)
+//   gmail    the report-email Gmail grant is missing (gmailsend.js status()),
+//            so God Mode / nightly / weekly emails cannot go out
 //
 // No I/O here: inboxipc.js reads the files and the cloud rows and hands them
 // in. Rows from other machines are untrusted - they go through
@@ -56,17 +58,19 @@ const runItem = (r) => ({
 });
 
 /**
- * The inbox, newest God Mode runs first, then the check-in, then the goals.
+ * The inbox, newest God Mode runs first, then the check-in, the goals, Gmail.
  * @param {{runs:object[], seen:Set<string>, checkin?:{today:string, entry:object|null}|null,
- *   goals?:{week:string, goals:Array|null}|null, now:number}} input
+ *   goals?:{week:string, goals:Array|null}|null, gmail?:{configured:boolean, connected:boolean}|null,
+ *   now:number}} input
  * @returns {object[]}
  */
-function buildInbox({ runs, seen, checkin, goals, now }) {
+function buildInbox({ runs, seen, checkin, goals, gmail, now }) {
   const items = (Array.isArray(runs) ? runs : [])
     .filter((r) => RUN_ID_RE.test(r.id) && !seen.has(r.id) && r.finishedAt >= now - WINDOW_MS)
     .map(runItem);
   if (isObject(checkin) && typeof checkin.today === 'string' && checkin.entry === null) items.push({ kind: 'checkin', date: checkin.today });
   if (isObject(goals) && typeof goals.week === 'string' && goals.goals === null) items.push({ kind: 'goals', week: goals.week });
+  if (isObject(gmail) && gmail.connected === false) items.push({ kind: 'gmail', configured: gmail.configured === true });
   return items;
 }
 

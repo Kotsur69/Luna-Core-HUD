@@ -7,6 +7,7 @@
 //   godmode  -> the God Mode run summary window (godmodesummary.js)
 //   checkin  -> Ctrl+Shift+N on the Health tab
 //   goals    -> Ctrl+Shift+N on the Week tab
+//   gmail    -> Settings, scrolled to the report-email section
 // The badge refreshes on launch, every few minutes, when the window gets
 // focus, and when the check-in or goals change. textContent only.
 // ============================================================================
@@ -19,6 +20,7 @@ import { createTallOverlay } from './talloverlay.js';
 import { openRunSummary } from './godmodesummary.js';
 import { openLifeTab } from './lifepanel.js';
 import { onDaily } from './lifedaily.js';
+import { openSettingsAt } from './termcustom.js';
 
 const REFRESH_MS = 5 * 60 * 1000;
 
@@ -77,6 +79,12 @@ function itemRow(item) {
   }
   if (item.kind === 'checkin') return row('☾', t('inbox.checkin.title'), t('inbox.checkin.sub'), () => goLife('health'));
   if (item.kind === 'goals') return row('◎', t('inbox.goals.title'), t('inbox.goals.sub', { week: item.week }), () => goLife('week'));
+  if (item.kind === 'gmail') {
+    return row('✉', t('inbox.gmail.title'), t(item.configured ? 'inbox.gmail.sub' : 'inbox.gmail.noClient'), () => {
+      overlay.close();
+      openSettingsAt('mail-section');
+    });
+  }
   return null;
 }
 

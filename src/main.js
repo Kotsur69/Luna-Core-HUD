@@ -2730,8 +2730,15 @@ function registerIpc() {
     github: mission.github,
   });
   registerMailIpc({ ipcMain, sender: reportMail.sender, prefs: reportMail.prefs, nightly: reportMail.nightly });
-  // Attention inbox ('!' chip): God Mode runs to review from every PC, check-in, weekly goals.
-  registerInboxIpc({ ipcMain, snapshots: () => (cloud ? cloud.snapshots : null), godmode: snapshotPuts.godmode, machine: machineName(os.hostname()), openExternal: (url) => shell.openExternal(url) });
+  // Attention inbox ('!' chip): God Mode runs to review from every PC, check-in, weekly goals, Gmail not connected.
+  registerInboxIpc({
+    ipcMain,
+    snapshots: () => (cloud ? cloud.snapshots : null),
+    godmode: snapshotPuts.godmode,
+    machine: machineName(os.hostname()),
+    openExternal: (url) => shell.openExternal(url),
+    gmail: () => reportMail.sender.status(),
+  });
   // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".
   weeklyReview = setupWeeklyReview({
     ipcMain,
@@ -3059,7 +3066,11 @@ function registerIpc() {
   // project, repo folder, profile and to-do list are all resolved here. The
   // planner runs on the cloud default like /ask (ask:query's reasoning): a
   // tab's local-model profile must not silently plan the whole run.
-  ipcMain.handle('orchestra:plan', async (_event, sessionId) => {
+  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts) => {
+    // The picker's selection: to-do `at` values only, capped like the list
+    // itself. Off-shape -> null = every open to-do (makePlan re-checks each
+    // value against the list it reads).
+    const picked = Array.isArray(todoAts) && todoAts.length <= MAX_TODO_ITEMS && todoAts.every(Number.isFinite) ? todoAts : null;
     const session = resolveSession(sessionId);
     if (!session) return { ok: false, error: 'noTab' };
     const project = getProject(projects, session.projectId);

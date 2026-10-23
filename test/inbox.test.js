@@ -67,6 +67,16 @@ test('goals item only when this week has no goals yet (a skip is [])', () => {
   assert.deepEqual(kinds({ week: '2026-W43', goals: [{ text: 'x' }] }), []);
 });
 
+test('gmail item only when Gmail is not connected, last in the list', () => {
+  const peers = peersOf(snap('PC1', [run('aaa')]), [], 'PC1', NOW);
+  const of = (gmail) => buildInbox({ runs: collectRuns(peers), seen: seenUnion(peers), checkin: { today: 'd', entry: null }, gmail, now: NOW });
+  assert.deepEqual(of({ configured: true, connected: false }).map((i) => i.kind), ['godmode', 'checkin', 'gmail']);
+  assert.deepEqual(of({ configured: true, connected: false }).at(-1), { kind: 'gmail', configured: true });
+  assert.deepEqual(of({ configured: false, connected: false }).at(-1), { kind: 'gmail', configured: false });
+  assert.deepEqual(of({ configured: true, connected: true }).map((i) => i.kind), ['godmode', 'checkin']);
+  assert.deepEqual(of(null).map((i) => i.kind), ['godmode', 'checkin'], 'unknown status adds nothing');
+});
+
 test('an empty inbox is empty (the badge hides at 0)', () => {
   assert.deepEqual(inboxOf({ checkin: { today: 'd', entry: { sleep: 7, energy: 4 } }, goals: { week: 'w', goals: [] } }), []);
 });
@@ -103,6 +113,32 @@ test('inbox:list answers plain items; a cloud failure still lists local ones', a
   console.error = () => {};
   try {
     assert.deepEqual((await offline.handlers['inbox:list']()).items.map((i) => i.id || i.kind), ['aaa', 'checkin']);
+  } finally {
+    console.error = silence;
+  }
+});
+
+test('inbox:list adds the gmail item from the sender status; a throwing status adds nothing', async () => {
+  const listWith = async (gmail) => {
+    const handlers = {};
+    registerInboxIpc({
+      ipcMain: { handle: (ch, fn) => (handlers[ch] = fn), on: () => {} },
+      snapshots: () => null,
+      godmode: { read: () => null, markSeen: async () => true },
+      machine: 'PC1',
+      now: () => NOW,
+      checkin: () => null,
+      goals: () => null,
+      gmail,
+    });
+    return (await handlers['inbox:list']()).items;
+  };
+  assert.deepEqual(await listWith(() => ({ configured: true, connected: false, email: null })), [{ kind: 'gmail', configured: true }]);
+  assert.deepEqual(await listWith(() => ({ configured: true, connected: true, email: 'a@b.c' })), []);
+  const silence = console.error;
+  console.error = () => {};
+  try {
+    assert.deepEqual(await listWith(() => { throw new Error('keychain'); }), []);
   } finally {
     console.error = silence;
   }
