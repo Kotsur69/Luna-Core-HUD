@@ -86,7 +86,7 @@ const KNOWN_TOKENS = new Set([
   '--text-dim', '--neon-magenta', '--neon-cyan', '--good', '--warn', '--bad',
   '--term-bg', '--btn-grad', '--btn-grad-hover', '--glow',
   // progress bar fill at its healthy level (usage, context window, telemetry)
-  '--bar-from', '--bar-to',
+  '--bar-from', '--bar-to', '--bar-sheen',
   // form
   '--radius', '--radius-lg', '--radius-md', '--radius-sm', '--radius-xs',
   '--radius-pill', '--border-w', '--pad-panel', '--panel-gap',

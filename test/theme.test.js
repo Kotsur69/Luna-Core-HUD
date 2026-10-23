@@ -238,7 +238,7 @@ test('extends inherits the parent tokens, its own win', () => {
   assert.strictEqual(amber.vars['--font-ui'], matrix.vars['--font-ui']);
   // ...but the colors are its own.
   assert.notStrictEqual(amber.vars['--bg'], matrix.vars['--bg']);
-  assert.strictEqual(amber.vars['--bg'], '#0d0800');
+  assert.strictEqual(amber.vars['--bg'], '#08090a');
 });
 
 test('a resolved theme no longer carries the extends key to the renderer', () => {
@@ -387,7 +387,12 @@ test('bar tokens exist in :root and the bar fills actually use them', () => {
     assert.ok(rule, `.${sel} rule must exist`);
     assert.match(rule[1], /var\(--bar-from\), var\(--bar-to\)/, sel);
   }
-  assert.match(css, /--telem-bar: linear-gradient\(90deg, var\(--bar-from\), var\(--bar-to\)\)/);
+  assert.match(
+    css,
+    /--telem-bar: var\(--bar-sheen\), linear-gradient\(90deg, var\(--bar-from\), var\(--bar-to\)\)/
+  );
+  // `none` keeps every theme without a sheen bit-for-bit on the plain gradient.
+  assert.strictEqual(rootValue('--bar-sheen'), 'none');
 });
 
 test('every dark theme has its own --bar-from/--bar-to pair', () => {

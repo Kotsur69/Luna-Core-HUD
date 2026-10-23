@@ -115,6 +115,9 @@
      the warn/bad states keep their own fixed gradients. */
   --bar-from: var(--good);
   --bar-to: var(--neon-cyan);
+  /* Optional background layers painted OVER that gradient (magma's crust and
+     veins). Any comma-separated background-layer list; `none` paints nothing. */
+  --bar-sheen: none;
 
   /* ---- Form: how sharp or soft the HUD is -------------------------------- */
   /* A scale, not five unrelated numbers: a theme sets all of them to 0 and the
@@ -1391,7 +1394,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
      Phase 3 sets --ctx in the 0..1 range (e.g. 0.72 = 72%). */
   transform: scaleX(var(--ctx, 0));
   transform-origin: left center;
-  background: linear-gradient(90deg, var(--bar-from), var(--bar-to));
+  background: var(--bar-sheen), linear-gradient(90deg, var(--bar-from), var(--bar-to));
   transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
 /* Context window thresholds, set by renderer.js (Phase 3). */
@@ -1512,7 +1515,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
      no layout thrash. renderer.js sets --usage in the 0..1 range. */
   transform: scaleX(var(--usage, 0));
   transform-origin: left center;
-  background: linear-gradient(90deg, var(--bar-from), var(--bar-to));
+  background: var(--bar-sheen), linear-gradient(90deg, var(--bar-from), var(--bar-to));
   transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
 .usage-bar__fill[data-level='warn'] { background: linear-gradient(90deg, var(--warn), #ffb347); }
@@ -1949,7 +1952,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   --telem-color: var(--good);
   /* The bar's own paint. Healthy rows use the theme's bar gradient; every
      level below swaps it for its flat --telem-color. */
-  --telem-bar: linear-gradient(90deg, var(--bar-from), var(--bar-to));
+  --telem-bar: var(--bar-sheen), linear-gradient(90deg, var(--bar-from), var(--bar-to));
   --telem-fill: 0;
   margin-bottom: var(--space-7);
   transition: opacity var(--dur-fast) var(--ease-smooth);
