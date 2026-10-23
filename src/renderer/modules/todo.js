@@ -30,14 +30,14 @@ import { defineWidget } from './registry.js';
 import { mountGodModeControl, refreshGodModeControl } from './godmode.js';
 import { mountKeepAwakeControl } from './keepawake.js';
 import { mountOrchestraButton } from './orchestra.js';
-import { MAX_TEXT_CHARS, isCard, cardPrompt, editTodo, refinePrompt } from './todocards.js';
+import { MAX_TEXT_CHARS, STEER_TAG, isCard, cardPrompt, editTodo, refinePrompt, hasTag, toggleTag } from './todocards.js';
 import {
   initTodoEdit, isEditing, toggleEdit, forgetEdit, pruneEdit, editForm, focusEditField, cardSection,
 } from './todoedit.js';
 
 // The pure card helpers moved to todocards.js; re-exported so callers and
 // test/todo.test.js keep importing the whole widget API from one place.
-export { isCard, cardPrompt, editTodo, refinePrompt };
+export { isCard, cardPrompt, editTodo, refinePrompt, hasTag, toggleTag };
 
 const SAVE_MS = 400;
 
@@ -569,6 +569,7 @@ function renderRows() {
     const classes = ['todo-item'];
     if (item.done) classes.push('todo-item--done');
     if (item.manual === true) classes.push('todo-item--manual');
+    if (hasTag(item, STEER_TAG)) classes.push('todo-item--steer');
     // Lit up while its text is expanded, so the row you just clicked into
     // stays visually "the one you're on" instead of blending back into the
     // list the instant you look away from it.
@@ -600,7 +601,7 @@ function renderRows() {
 
     const editingRow = isEditing(item.at);
     if (editingRow) li.classList.add('todo-item--editing');
-    const withMeta = isCard(item) || item.manual === true;
+    const withMeta = isCard(item) || item.manual === true || Boolean(item.tags);
     const middle = editingRow ? editForm(item) : withMeta ? cardBody(item, text) : text;
     li.append(box, middle, rowActions(item, index));
     els.list.append(li);
@@ -619,7 +620,7 @@ function rowButton(glyph, title, onClick) {
   return btn;
 }
 
-/** The ✋ ✎ ✨ ⚡ ✕ cell of one row. */
+/** The ✋ 🧭 ✎ ✨ ⚡ ✕ cell of one row. */
 function rowActions(item, index) {
   const actions = document.createElement('span');
   actions.className = 'todo-item__actions';
@@ -629,6 +630,13 @@ function rowActions(item, index) {
     commit(toggleManual(items, index));
   });
   manual.setAttribute('aria-pressed', String(isManual));
+
+  // Steer: a card Luna's Work schedules first (docs/LUNAS_WORK_PLAN.md).
+  const isSteer = hasTag(item, STEER_TAG);
+  const steer = rowButton('🧭', t(isSteer ? 'todo.steerOff' : 'todo.steerOn'), () => {
+    commit(toggleTag(items, item.at, STEER_TAG));
+  });
+  steer.setAttribute('aria-pressed', String(isSteer));
 
   const edit = rowButton('✎', t('todo.edit'), () => toggleEdit(item));
 
@@ -658,7 +666,7 @@ function rowActions(item, index) {
     commit(removeTodo(items, index));
   });
 
-  actions.append(manual, edit, refine, inject, drop);
+  actions.append(manual, steer, edit, refine, inject, drop);
   return actions;
 }
 
@@ -688,8 +696,8 @@ function chip(label) {
 
 /**
  * The middle cell of a task card: its title, a meta line of chips (size,
- * model, effort, file count, manual), and - while expanded - the card's details. A
- * plain note flagged manual gets the chip line too. Everything
+ * model, effort, file count, manual, tags), and - while expanded - the card's details.
+ * A plain note flagged manual or tagged gets the chip line too. Everything
  * goes through textContent; card text is written by a model and is never
  * parsed as HTML.
  */
@@ -709,9 +717,15 @@ function cardBody(item, text) {
     manual.title = t('todo.manualHint');
     meta.append(manual);
   }
+  for (const tag of item.tags || []) {
+    const tagChip = chip(tag === STEER_TAG ? t('todo.steer') : `#${tag}`);
+    tagChip.classList.add(tag === STEER_TAG ? 'todo-chip--steer' : 'todo-chip--tag');
+    if (tag === STEER_TAG) tagChip.title = t('todo.steerHint');
+    meta.append(tagChip);
+  }
   body.append(text, meta);
 
-  // A plain manual note has the chip line but no card to expand.
+  // A plain manual or tagged note has the chip line but no card to expand.
   if (!expanded.has(item.at) || !isCard(item)) return body;
   const card = document.createElement('div');
   card.className = 'todo-card';

@@ -30,7 +30,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { normalizeTodo, normalizeTodos, MAX_ITEMS } = require('./todo');
+const { normalizeTodo, normalizeTodos, MAX_ITEMS, MAX_TAGS } = require('./todo');
 const { EFFORTS } = require('./efforts');
 
 const MCP_PATH = '/mcp';
@@ -43,7 +43,7 @@ const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const SERVER_NAME = 'lunacore';
 
 // Fields a card may carry besides `text` - the ones luna_todo_update may touch.
-const CARD_FIELDS = ['details', 'acceptance', 'files', 'verify', 'size', 'model', 'effort', 'dependsOn', 'manual'];
+const CARD_FIELDS = ['details', 'acceptance', 'files', 'verify', 'size', 'model', 'effort', 'dependsOn', 'manual', 'tags'];
 
 // --- tool definitions ---------------------------------------------------------
 
@@ -71,6 +71,12 @@ const CARD_PROPERTIES = {
     description: 'Worker reasoning effort: medium for routine work, high/xhigh for hard work, max only for the heaviest.',
   },
   manual: { type: 'boolean', description: 'Keep out of God Mode/Orchestra; needs the user.' },
+  tags: {
+    type: 'array',
+    maxItems: MAX_TAGS,
+    items: { type: 'string', pattern: '^[a-z0-9][a-z0-9:_-]{0,39}$' },
+    description: "Lowercase labels, e.g. `run:<runId>` (Luna's Work backlog) or `steer` (the user's steering). Invalid ones are dropped. On update the list REPLACES all tags: send the existing ones you want to keep (never drop `steer`).",
+  },
 };
 
 const TOOLS = [
@@ -112,6 +118,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         includeDone: { type: 'boolean', description: 'Also return completed items. Default false.' },
+        tag: { type: 'string', description: 'Only cards carrying this tag, e.g. `steer` or `run:<runId>`.' },
       },
     },
   },
@@ -242,9 +249,16 @@ function applyUpdate(list, at, patch) {
   return { ok: true, list: list.map((item, i) => (i === index ? card : item)), card };
 }
 
-/** luna_todo_list's view: open cards only unless asked otherwise. */
-function listView(list, includeDone) {
-  return includeDone === true ? list : list.filter((item) => !item.done);
+/**
+ * luna_todo_list's view: open cards only unless asked otherwise, and only
+ * the ones carrying `tag` when one is given (matched case-insensitively,
+ * like tags are stored).
+ */
+function listView(list, includeDone, tag) {
+  const open = includeDone === true ? list : list.filter((item) => !item.done);
+  if (typeof tag !== 'string' || !tag.trim()) return open;
+  const wanted = tag.trim().toLowerCase();
+  return open.filter((item) => Array.isArray(item.tags) && item.tags.includes(wanted));
 }
 
 // --- JSON-RPC -----------------------------------------------------------------
@@ -270,7 +284,7 @@ function toolText(payload, isError = false) {
  */
 function callTool(name, args, store) {
   const a = args && typeof args === 'object' ? args : {};
-  if (name === 'luna_todo_list') return toolText(listView(normalizeTodos(store.read()), a.includeDone));
+  if (name === 'luna_todo_list') return toolText(listView(normalizeTodos(store.read()), a.includeDone, a.tag));
 
   let outcome;
   if (name === 'luna_todo_add') {

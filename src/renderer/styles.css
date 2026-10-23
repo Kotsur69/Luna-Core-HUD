@@ -4124,6 +4124,23 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   color: var(--text);
 }
 
+/* Steer (Luna's Work schedules it first): the same edge bar as manual, in the
+   theme's accent instead of --bad, so the two never read as the same thing. A
+   row that is both keeps the manual bar: that is the stronger signal. */
+.todo-item--steer:not(.todo-item--manual) {
+  --steer-edge: color-mix(in srgb, var(--neon-cyan) 85%, transparent);
+  box-shadow: inset 3px 0 0 var(--steer-edge);
+}
+.todo-item--steer.todo-item--expanded:not(.todo-item--manual) {
+  box-shadow: inset 3px 0 0 var(--steer-edge), 0 0 var(--glow-size-sm) var(--glow);
+}
+.todo-chip--steer {
+  border-color: color-mix(in srgb, var(--neon-cyan) 85%, transparent);
+  color: var(--text);
+}
+.todo-chip--tag { color: var(--text-dim); }
+.todo-item__actions .port-btn[aria-pressed="true"] { color: var(--neon-cyan); }
+
 /* Drag-to-reorder. The whole effect is one transition on one property: as the
    dragged row passes a neighbour, todo.js gives that neighbour a translateY of
    exactly one row, and this slides it there instead of letting it jump. Uses

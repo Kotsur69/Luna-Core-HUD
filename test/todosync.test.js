@@ -233,3 +233,21 @@ test('cloud off: nothing published', () => {
   assert.deepEqual(a.s.syncAll(), []);
   assert.equal(a.published.length, 0);
 });
+
+test('tags survive HUD -> cloud rows -> PC peer and back unchanged', () => {
+  const rows = require('../src/cloudrows.js');
+  const now = 5_000_000;
+  const tagged = item(7, 'steer me', { tags: ['steer', 'run:r1'] });
+  // HUD publishes -> cloud units -> rows another machine pulls.
+  const units = rows.todoUnits({ 'git:github.com/kotsur69/x': { items: [{ ...tagged, u: now }], gone: {} } });
+  const pulled = rows.applyRows(
+    { cursor: 0, mirror: {}, pushed: {} },
+    units.map((x, i) => ({ key: x.k, value: x.v, u: x.u, deleted_at: x.d, rev: i + 1 })),
+    now,
+  );
+  const peer = sync.validPeerProjects(rows.todoPeer(pulled.mirror), now);
+  assert.deepEqual(peer['git:github.com/kotsur69/x'].items, [{ ...tagged, u: now }]);
+  // Merged into a PC that has no copy yet: it arrives with its tags.
+  const out = sync.merge([], empty(), [peer['git:github.com/kotsur69/x']], now);
+  assert.deepEqual(out.list, [tagged]);
+});

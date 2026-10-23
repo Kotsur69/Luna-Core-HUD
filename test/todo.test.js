@@ -444,3 +444,86 @@ test('normalizeTodo keeps doneAt only on a done item with a sane time', () => {
   assert.equal('doneAt' in normalizeTodo({ text: 'x', done: true, doneAt: -1 }), false);
   assert.deepEqual(normalizeTodo({ text: 'x', done: true }), { text: 'x', done: true, at: 0 });
 });
+
+// ---- tags (Luna's Work: run tag + steer) ------------------------------------------
+
+const { runTag, MAX_TAGS, STEER_TAG } = require('../src/todo.js');
+
+test('tags: valid tags are kept, trimmed and lowercased', () => {
+  const t = normalizeTodo({ text: 'x', at: 1, tags: ['steer', ' Run:abc-1 ', 'a_b', '0'] });
+  assert.deepEqual(t.tags, ['steer', 'run:abc-1', 'a_b', '0']);
+});
+
+test('tags: invalid entries are dropped, never thrown', () => {
+  const t = normalizeTodo({
+    text: 'x',
+    at: 1,
+    tags: ['', '-lead', ':lead', 'has space', 'dot.ted', 'a'.repeat(41), 42, null, {}, ['steer'], 'ok'],
+  });
+  assert.deepEqual(t.tags, ['ok']);
+  assert.equal('tags' in normalizeTodo({ text: 'x', at: 1, tags: 'steer' }), false);
+  assert.equal('tags' in normalizeTodo({ text: 'x', at: 1, tags: ['', 7] }), false);
+  assert.equal('tags' in normalizeTodo({ text: 'x', at: 1, tags: [] }), false);
+});
+
+test('tags: duplicates collapse to the first, case-insensitively', () => {
+  assert.deepEqual(normalizeTodo({ text: 'x', at: 1, tags: ['b', 'a', 'B', 'a'] }).tags, ['b', 'a']);
+});
+
+test('tags: capped at MAX_TAGS', () => {
+  const tags = Array.from({ length: 15 }, (_v, i) => `t${i}`);
+  const t = normalizeTodo({ text: 'x', at: 1, tags });
+  assert.equal(MAX_TAGS, 10);
+  assert.deepEqual(t.tags, tags.slice(0, 10));
+});
+
+test('tags: an untagged card round-trips byte-identical', () => {
+  const card = { text: 'card', done: false, at: 5, details: 'd', acceptance: ['a'], size: 'S', manual: true };
+  const once = normalizeTodo(card);
+  assert.equal(JSON.stringify(once), JSON.stringify(card));
+  assert.equal(JSON.stringify(normalizeTodo(once)), JSON.stringify(card));
+});
+
+test('tags: a tagged card is stable under re-normalizing', () => {
+  const once = normalizeTodo({ text: 'x', at: 1, tags: ['Steer', 'run:r1'] });
+  assert.equal(JSON.stringify(normalizeTodo(once)), JSON.stringify(once));
+});
+
+test('runTag: run:<id>, lowercased, dots to dashes, null when not a valid tag', () => {
+  assert.equal(STEER_TAG, 'steer');
+  assert.equal(runTag('2026-10-23_a'), 'run:2026-10-23_a');
+  assert.equal(runTag('Run.V2'), 'run:run-v2');
+  assert.equal(runTag('a'.repeat(36)), `run:${'a'.repeat(36)}`);
+  assert.equal(runTag('a'.repeat(37)), null);
+  assert.equal(runTag(''), null);
+  assert.equal(runTag(null), null);
+  assert.equal(runTag('has space'), null);
+});
+
+// ---- renderer: tag helpers (todocards.js) ------------------------------------------
+
+const { parseTags, hasTag, toggleTag } = require('../src/renderer/modules/todocards.js');
+
+test('parseTags splits on spaces and commas, drops invalid, dedupes', () => {
+  assert.deepEqual(parseTags(' steer, Run:r1  bad.tag steer,,x'), ['steer', 'run:r1', 'x']);
+  assert.deepEqual(parseTags(''), []);
+});
+
+test('toggleTag adds and removes steer; removing the last tag drops the key', () => {
+  const list = [{ text: 'a', done: false, at: 1 }, { text: 'b', done: false, at: 2, tags: ['x'] }];
+  const on = toggleTag(list, 1, 'steer');
+  assert.deepEqual(on[0].tags, ['steer']);
+  assert.equal(hasTag(on[0], 'steer'), true);
+  const off = toggleTag(on, 1, 'steer');
+  assert.deepEqual(off[0], { text: 'a', done: false, at: 1 });
+  assert.deepEqual(toggleTag(list, 2, 'steer')[1].tags, ['x', 'steer']);
+  assert.equal(toggleTag(list, 99, 'steer'), list);
+  assert.equal(toggleTag(list, 1, 'Bad Tag'), list);
+  assert.equal(list[0].tags, undefined);
+});
+
+test('editTodo sets tags from the form and clears them when emptied', () => {
+  const list = [{ text: 'a', done: false, at: 1, tags: ['old'] }];
+  assert.deepEqual(editTodo(list, 1, { text: 'a', tags: 'steer run:r1' })[0].tags, ['steer', 'run:r1']);
+  assert.deepEqual(editTodo(list, 1, { text: 'a', tags: '  ' })[0], { text: 'a', done: false, at: 1 });
+});

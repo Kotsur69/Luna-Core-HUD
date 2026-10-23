@@ -11,11 +11,57 @@
 'use strict';
 
 export const MAX_TEXT_CHARS = 1000;
+// Mirrors src/todorows.js (main normalizes every write; this only keeps the
+// form from sending what main would drop anyway).
+export const STEER_TAG = 'steer';
+const MAX_TAGS = 10;
+const TAG_RE = /^[a-z0-9][a-z0-9:_-]{0,39}$/;
 
 // Card fields the edit form exposes. files/size/model/dependsOn are planning
 // metadata Claude writes; hand-editing them in a row-sized form is more
 // footgun than feature, so they ride through an edit untouched.
-const EDITABLE_CARD_FIELDS = ['details', 'acceptance', 'verify'];
+const EDITABLE_CARD_FIELDS = ['details', 'acceptance', 'verify', 'tags'];
+
+/**
+ * The tag box's text -> unique valid tags, split on spaces and commas.
+ * Invalid entries are dropped, like src/todorows.js does.
+ * @param {string|string[]} value
+ * @returns {string[]}
+ */
+export function parseTags(value) {
+  const parts = Array.isArray(value) ? value : String(value ?? '').split(/[\s,]+/);
+  const out = [];
+  for (const part of parts) {
+    const tag = String(part).trim().toLowerCase();
+    if (TAG_RE.test(tag) && !out.includes(tag)) out.push(tag);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out;
+}
+
+/** Whether the item carries `tag`. */
+export function hasTag(item, tag) {
+  return Boolean(item && Array.isArray(item.tags) && item.tags.includes(tag));
+}
+
+/**
+ * Adds `tag` to the item with this `at`, or removes it if present - the
+ * Steer toggle. Removing the last tag drops the key, so the item is
+ * byte-identical to one that was never tagged. Unknown `at`, an invalid tag,
+ * or a full tag list returns the SAME list.
+ */
+export function toggleTag(list, at, tag) {
+  const current = Array.isArray(list) ? list : [];
+  const index = current.findIndex((item) => item.at === at);
+  if (index < 0 || !TAG_RE.test(tag)) return current;
+  const item = current[index];
+  const tags = Array.isArray(item.tags) ? item.tags : [];
+  if (!tags.includes(tag) && tags.length >= MAX_TAGS) return current;
+  const nextTags = tags.includes(tag) ? tags.filter((x) => x !== tag) : [...tags, tag];
+  const { tags: _old, ...rest } = item;
+  const edited = nextTags.length ? { ...rest, tags: nextTags } : rest;
+  return current.map((x, i) => (i === index ? edited : x));
+}
 
 /** Whether an item carries any task-card field beyond text/done/at. */
 export function isCard(item) {
@@ -39,6 +85,10 @@ export function cardPrompt(item) {
 
 /** One form value cleaned for storage, or null when it was emptied. */
 function cleanEditField(key, value) {
+  if (key === 'tags') {
+    const tags = parseTags(value);
+    return tags.length ? tags : null;
+  }
   if (key === 'acceptance') {
     const lines = Array.isArray(value) ? value : String(value ?? '').split('\n');
     const kept = lines.map((line) => String(line).trim()).filter(Boolean);
@@ -50,13 +100,13 @@ function cleanEditField(key, value) {
 
 /**
  * Applies the edit form to the item with this `at`. `fields.text` is the
- * title (required); details/verify are strings and acceptance is one bullet
- * per line. A field the form emptied is removed; a field it did not send is
+ * title (required); details/verify are strings, acceptance is one bullet
+ * per line and tags are space- or comma-separated. A field the form emptied is removed; a field it did not send is
  * left alone. An empty title or unknown `at` returns the SAME list. Field caps
  * are main's job (src/todo.js normalizes every write).
  * @param {Array} list
  * @param {number} at
- * @param {{text:string, details?:string, acceptance?:string|string[], verify?:string}} fields
+ * @param {{text:string, details?:string, acceptance?:string|string[], verify?:string, tags?:string|string[]}} fields
  * @returns {Array}
  */
 export function editTodo(list, at, fields) {

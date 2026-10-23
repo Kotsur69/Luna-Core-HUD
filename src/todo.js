@@ -29,11 +29,14 @@ const {
   normalizeCardFields,
   normalizeTodos,
   normalizeStore,
+  runTag,
   SIZES,
   MODELS,
   MAX_DETAILS_CHARS,
   MAX_ITEMS,
   MAX_TEXT_CHARS,
+  MAX_TAGS,
+  STEER_TAG,
 } = require('./todorows');
 
 
@@ -98,6 +101,9 @@ module.exports = {
   MAX_DETAILS_CHARS,
   normalizeTodos,
   normalizeStore,
+  runTag,
+  MAX_TAGS,
+  STEER_TAG,
   readStore,
   readTodos,
   writeTodos,

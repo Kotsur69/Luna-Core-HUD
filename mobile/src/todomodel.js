@@ -16,7 +16,9 @@ import todoRows from '../../src/todorows.js';
 
 const { splitTodoKey, MAX_KEY } = rows;
 const { validKey } = ledger;
-const { normalizeTodo, MAX_TEXT_CHARS } = todoRows;
+const { normalizeTodo, MAX_TEXT_CHARS, MAX_TAGS, STEER_TAG } = todoRows;
+
+export { STEER_TAG };
 
 const validAt = (at) => Number.isSafeInteger(at) && at > 0;
 
@@ -60,12 +62,13 @@ const stampAfter = (prev, now) => Math.max(Math.floor(now), (prev || 0) + 1);
 
 /**
  * A new item in `key`. `now` doubles as the item id (`at`), like on a PC.
+ * `tags` (e.g. ['steer']) go through the same validation as on a PC.
  * @returns {{k: string, v: object, u: number, d: null}|null} null = nothing to add
  */
-export function addUnit(key, text, now = Date.now()) {
+export function addUnit(key, text, now = Date.now(), tags = []) {
   if (!validKey(key) || key === 'other' || key.length + 17 > MAX_KEY) return null;
   const at = Math.floor(now);
-  const v = normalizeTodo({ text: String(text ?? '').slice(0, MAX_TEXT_CHARS), done: false, at });
+  const v = normalizeTodo({ text: String(text ?? '').slice(0, MAX_TEXT_CHARS), done: false, at, tags });
   return v ? { k: `${key}:${at}`, v, u: at, d: null } : null;
 }
 
@@ -83,6 +86,26 @@ export function toggleUnit(key, item, now = Date.now()) {
 export function toggleManualUnit(key, item, now = Date.now()) {
   const { u, manual, ...rest } = item;
   const v = normalizeTodo(manual === true ? rest : { ...rest, manual: true });
+  return v ? { k: `${key}:${item.at}`, v, u: stampAfter(u, now), d: null } : null;
+}
+
+/** Whether the item carries `tag`. */
+export function hasTag(item, tag) {
+  return Array.isArray(item.tags) && item.tags.includes(tag);
+}
+
+/**
+ * `tag` added to the item, or removed if it has it (the Steer toggle).
+ * Removing the last tag drops the key. Null when the list is already full.
+ */
+export function toggleTagUnit(key, item, tag, now = Date.now()) {
+  const { u, tags: rawTags, ...rest } = item;
+  // lists() normalizes, but never trust the shape of an item handed in.
+  const tags = Array.isArray(rawTags) ? rawTags : [];
+  const had = tags.includes(tag);
+  if (!had && tags.length >= MAX_TAGS) return null;
+  const next = had ? tags.filter((x) => x !== tag) : [...tags, tag];
+  const v = normalizeTodo(next.length ? { ...rest, tags: next } : rest);
   return v ? { k: `${key}:${item.at}`, v, u: stampAfter(u, now), d: null } : null;
 }
 

@@ -272,3 +272,43 @@ test('intakeState tells a tools-attached claude from a bare one and from a shell
   assert.equal(intakeState(strict, withIntakeMcp(strict, 'C:/cfg.json')), 'off');
   assert.equal(intakeState('pwsh', withIntakeMcp('pwsh', 'C:/cfg.json')), 'none');
 });
+
+// ---- tags --------------------------------------------------------------------------
+
+const callList = (store, args) =>
+  JSON.parse(handleRpc({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'luna_todo_list', arguments: args } }, store).result.content[0].text);
+
+test('luna_todo_add accepts tags and returns them normalized', () => {
+  const out = applyAdd([], [{ text: 'a', tags: ['Steer', 'run:r1', 'bad tag', 'steer'] }], NOW);
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.added[0].tags, ['steer', 'run:r1']);
+});
+
+test('luna_todo_update replaces tags, and null removes them', () => {
+  const list = applyAdd([], [{ text: 'a', tags: ['x'] }], NOW).list;
+  const at = list[0].at;
+  const set = applyUpdate(list, at, { tags: ['steer'] });
+  assert.deepEqual(set.card.tags, ['steer']);
+  const cleared = applyUpdate(set.list, at, { tags: null });
+  assert.equal('tags' in cleared.card, false);
+});
+
+test('luna_todo_list filters by tag (open only unless includeDone)', () => {
+  const list = [
+    { text: 'steer open', done: false, at: 1, tags: ['steer'] },
+    { text: 'steer done', done: true, at: 2, tags: ['steer'] },
+    { text: 'run card', done: false, at: 3, tags: ['run:r1'] },
+    { text: 'plain', done: false, at: 4 },
+  ];
+  assert.deepEqual(listView(list, false, 'steer').map((x) => x.text), ['steer open']);
+  assert.deepEqual(listView(list, true, 'STEER').map((x) => x.text), ['steer open', 'steer done']);
+  assert.deepEqual(listView(list, false, '').map((x) => x.text), ['steer open', 'run card', 'plain']);
+  assert.deepEqual(callList(memoryStore(list), { tag: 'run:r1' }).map((x) => x.at), [3]);
+});
+
+test('tool schemas advertise tags and the list tag filter', () => {
+  const byName = Object.fromEntries(TOOLS.map((tool) => [tool.name, tool]));
+  assert.ok(byName.luna_todo_add.inputSchema.properties.tasks.items.properties.tags);
+  assert.ok(byName.luna_todo_update.inputSchema.properties.patch.properties.tags);
+  assert.equal(byName.luna_todo_list.inputSchema.properties.tag.type, 'string');
+});

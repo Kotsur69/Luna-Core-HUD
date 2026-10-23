@@ -9,7 +9,7 @@
 
 import { h, icon, ICONS } from '../dom.js';
 import { t } from '../i18n.js';
-import { lists, addUnit, toggleUnit, toggleManualUnit, deleteUnit } from '../todomodel.js';
+import { lists, addUnit, toggleUnit, toggleManualUnit, toggleTagUnit, hasTag, deleteUnit, STEER_TAG } from '../todomodel.js';
 import { PICK_KEY } from '../cloud.js';
 
 const SCOPE = 'todos';
@@ -40,6 +40,8 @@ export function mountTodos(main, { cloud, toast }) {
   let busy = false;
   // Kept outside the DOM: a refresh re-renders the screen while Mati types.
   let draft = '';
+  // The add form's Steer toggle: the next card goes out tagged `steer`.
+  let steerDraft = false;
 
   async function act(unit) {
     if (!unit || busy) return false;
@@ -62,15 +64,30 @@ export function mountTodos(main, { cloud, toast }) {
       if (confirm(t('confirmDelete'))) act(deleteUnit(key, item));
     };
     const manual = item.manual === true;
+    const steer = hasTag(item, STEER_TAG);
+    const tagChips = (item.tags || []).map((tag) =>
+      tag === STEER_TAG ? h('span', { class: 'todo-chip is-steer' }, t('steer')) : h('span', { class: 'todo-chip is-tag' }, `#${tag}`),
+    );
     return h(
       'li',
-      { class: `todo${item.done ? ' is-done' : ''}${manual ? ' is-manual' : ''}` },
+      { class: `todo${item.done ? ' is-done' : ''}${manual ? ' is-manual' : ''}${steer ? ' is-steer' : ''}` },
       h(
         'button',
         { class: 'todo-check', role: 'checkbox', 'aria-checked': String(item.done), onclick: () => act(toggleUnit(key, item)) },
         h('span', { class: 'box' }, item.done ? icon(ICONS.check) : null),
         h('span', { class: 'todo-text' }, item.text),
         manual ? h('span', { class: 'todo-chip' }, t('manual')) : null,
+        ...tagChips,
+      ),
+      h(
+        'button',
+        {
+          class: 'icon-btn todo-steer-btn',
+          'aria-pressed': String(steer),
+          'aria-label': `${t(steer ? 'steerOff' : 'steerOn')}: ${item.text}`,
+          onclick: () => act(toggleTagUnit(key, item, STEER_TAG)),
+        },
+        '🧭',
       ),
       h(
         'button',
@@ -115,14 +132,40 @@ export function mountTodos(main, { cloud, toast }) {
     input.addEventListener('input', () => {
       draft = input.value;
     });
-    const form = h('form', { class: 'add-row' }, input, h('button', { class: 'btn', type: 'submit', 'aria-label': t('add') }, icon(ICONS.plus)));
+    const steerBtn = h(
+      'button',
+      {
+        class: 'icon-btn todo-steer-btn',
+        type: 'button',
+        'aria-pressed': String(steerDraft),
+        'aria-label': t(steerDraft ? 'steerNewOff' : 'steerNewOn'),
+        title: t(steerDraft ? 'steerNewOff' : 'steerNewOn'),
+        onclick: () => {
+          steerDraft = !steerDraft;
+          steerBtn.setAttribute('aria-pressed', String(steerDraft));
+          steerBtn.setAttribute('aria-label', t(steerDraft ? 'steerNewOff' : 'steerNewOn'));
+          steerBtn.title = t(steerDraft ? 'steerNewOff' : 'steerNewOn');
+        },
+      },
+      '🧭',
+    );
+    const form = h(
+      'form',
+      { class: 'add-row' },
+      input,
+      steerBtn,
+      h('button', { class: 'btn', type: 'submit', 'aria-label': t('add') }, icon(ICONS.plus)),
+    );
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const unit = addUnit(picked, draft);
+      const unit = addUnit(picked, draft, Date.now(), steerDraft ? [STEER_TAG] : []);
       if (!unit) return;
       const sent = draft;
       if (await act(unit)) {
-        if (draft === sent) draft = '';
+        if (draft === sent) {
+          draft = '';
+          steerDraft = false;
+        }
         const field = document.getElementById('todo-new');
         if (field) {
           field.value = draft;

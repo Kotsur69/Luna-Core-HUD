@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { lists, addUnit, toggleUnit, toggleManualUnit, deleteUnit, projectName } from '../mobile/src/todomodel.js';
+import { lists, addUnit, toggleUnit, toggleManualUnit, toggleTagUnit, hasTag, deleteUnit, projectName, STEER_TAG } from '../mobile/src/todomodel.js';
 
 const require = createRequire(import.meta.url);
 const rows = require('../src/cloudrows');
@@ -67,4 +67,28 @@ test('toggleManualUnit sets and clears manual, and a PC peer accepts both', () =
   assert.deepEqual(off.v, { text: 'call the bank', done: false, at: 7 }, 'cleared = no key');
   const [list] = lists(mirrorOf([on]));
   assert.equal(list.items[0].manual, true, 'the phone reads a PC-set flag');
+});
+
+test('a steer card added on the phone reaches a PC peer with its tag', () => {
+  const unit = addUnit(KEY, 'stop after this', NOW, [STEER_TAG]);
+  assert.deepEqual(unit.v, { text: 'stop after this', done: false, at: NOW, tags: ['steer'] });
+  const peer = validPeerProjects(rows.todoPeer(mirrorOf([unit])), NOW);
+  assert.deepEqual(peer[KEY].items, [{ ...unit.v, u: NOW }]);
+});
+
+test('toggleTagUnit adds and removes steer, keeps other tags, and a PC peer accepts both', () => {
+  // A HUD card with a run tag, as the phone lists it.
+  const item = lists(mirrorOf([{ k: `${KEY}:7`, v: { text: 'x', done: false, at: 7, tags: ['run:r1'] }, u: NOW, d: null }]))[0].items[0];
+  const on = toggleTagUnit(KEY, item, STEER_TAG, NOW + 1);
+  assert.deepEqual(on.v.tags, ['run:r1', 'steer']);
+  const back = lists(mirrorOf([on]))[0].items[0];
+  assert.equal(hasTag(back, STEER_TAG), true);
+  const off = toggleTagUnit(KEY, back, STEER_TAG, NOW + 2);
+  assert.deepEqual(off.v, { text: 'x', done: false, at: 7, tags: ['run:r1'] });
+  const bare = toggleTagUnit(KEY, { text: 'y', done: false, at: 8, u: NOW, tags: ['steer'] }, STEER_TAG, NOW + 3);
+  assert.deepEqual(bare.v, { text: 'y', done: false, at: 8 });
+  for (const unit of [on, off, bare]) {
+    const peer = validPeerProjects(rows.todoPeer(mirrorOf([unit])), NOW + 10);
+    assert.deepEqual(peer[KEY].items, [{ ...unit.v, u: unit.u }]);
+  }
 });

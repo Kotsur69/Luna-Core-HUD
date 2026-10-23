@@ -2,7 +2,7 @@
 // LunaCore - to-do ✎ edit form
 // ----------------------------------------------------------------------------
 // The inline form that replaces a to-do row's text while it is being edited:
-// the title, plus a card's details / done-when / verify. Ctrl+Enter saves,
+// the title and tags, plus a card's details / done-when / verify. Ctrl+Enter saves,
 // Esc cancels. Split out of todo.js, which stays the owner of the list -
 // this module only reads it and hands edits back through the hooks given to
 // initTodoEdit(), so there is no import cycle between the two.
@@ -51,6 +51,7 @@ function formValues(item) {
     details: item.details || '',
     acceptance: (item.acceptance || []).join('\n'),
     verify: item.verify || '',
+    tags: (item.tags || []).join(' '),
   };
 }
 
@@ -80,7 +81,8 @@ function saveEdit() {
   const items = hooks.getItems();
   const current = items.find((item) => item.at === editing.at);
   if (!current) return;
-  const keys = card ? Object.keys(draft) : ['text'];
+  // A plain note has only the title and tags in its form.
+  const keys = card ? Object.keys(draft) : ['text', 'tags'];
   const changed = Object.fromEntries(
     keys.filter((key) => draft[key] !== base[key]).map((key) => [key, draft[key]]),
   );
@@ -152,6 +154,7 @@ export function editForm(item) {
       editField('verify', 'todo.verify', false),
     );
   }
+  form.append(editField('tags', 'todo.tagsLines', false));
   if (item.original) form.append(cardSection(t('todo.original'), item.original));
 
   const bar = document.createElement('div');

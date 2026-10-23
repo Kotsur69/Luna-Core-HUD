@@ -30,6 +30,11 @@ const MAX_FILES = 50;
 const MAX_DEPENDS = 50;
 const SIZES = ['S', 'M', 'L'];
 const MODELS = ['sonnet', 'opus'];
+// Tags (docs/LUNAS_WORK_PLAN.md): Luna's Work files its backlog under a run
+// tag and reads Mati's `steer` cards. God Mode ignores them.
+const MAX_TAGS = 10;
+const TAG_RE = /^[a-z0-9][a-z0-9:_-]{0,39}$/;
+const STEER_TAG = 'steer';
 
 /** Trimmed, capped string, or null when there is nothing usable. */
 function cleanString(raw, max) {
@@ -62,6 +67,38 @@ function cleanDepends(raw) {
   return out.length ? out : null;
 }
 
+/** One tag, trimmed and lowercased, or null when it does not fit TAG_RE. */
+function cleanTag(raw) {
+  if (typeof raw !== 'string') return null;
+  const tag = raw.trim().toLowerCase();
+  return TAG_RE.test(tag) ? tag : null;
+}
+
+/** Array of unique valid tags in their first-seen order, or null when none. */
+function cleanTags(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  for (const entry of raw) {
+    const tag = cleanTag(entry);
+    if (tag && !out.includes(tag)) out.push(tag);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out.length ? out : null;
+}
+
+/**
+ * The tag Luna's Work files a run's cards under: `run:<runId>`. The run id
+ * is git-tag-safe (lunasworkRules.js) but may hold capitals and dots, so it
+ * is lowercased and dots become dashes. Null when the result is not a valid
+ * tag (an id longer than 36 characters, or not a string).
+ * @param {unknown} runId
+ * @returns {string|null}
+ */
+function runTag(runId) {
+  if (typeof runId !== 'string' || !runId) return null;
+  return cleanTag(`run:${runId.replace(/\./g, '-')}`);
+}
+
 /**
  * The optional card fields of one raw item - only the ones that are present
  * and valid, so a plain item gains no keys.
@@ -86,6 +123,7 @@ function normalizeCardFields(raw) {
     // Opt-out: only the user can do this one, so God Mode and Orchestra leave
     // it alone. Stored only when true, so a plain item gains no key.
     manual: raw.manual === true ? true : null,
+    tags: cleanTags(raw.tags),
   };
   return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null));
 }
@@ -151,9 +189,13 @@ module.exports = {
   normalizeCardFields,
   normalizeTodos,
   normalizeStore,
+  cleanTags,
+  runTag,
   SIZES,
   MODELS,
   MAX_DETAILS_CHARS,
   MAX_ITEMS,
   MAX_TEXT_CHARS,
+  MAX_TAGS,
+  STEER_TAG,
 };
