@@ -310,6 +310,7 @@ module.exports = {
   PLATEAU_WINDOW,
   RED_STREAK,
   ROLLBACK_MARGIN,
+  MAX_TEXT_CHARS,
   normalizeModels,
   pickModel,
   nextPhase,
