@@ -98,6 +98,20 @@ function slugId(raw) {
 }
 
 /**
+ * The open to-dos Mati ticked in the picker. No selection (null / not an
+ * array) means all of them - the pre-picker behaviour. Only `at` values of
+ * the list THIS process read count; anything else the renderer sent is ignored.
+ * @param {Array<{at:number}>} openTodos
+ * @param {unknown} todoAts
+ * @returns {Array<object>}
+ */
+function pickTodos(openTodos, todoAts) {
+  if (!Array.isArray(todoAts)) return openTodos;
+  const picked = new Set(todoAts.filter(Number.isFinite));
+  return openTodos.filter((t) => picked.has(t.at));
+}
+
+/**
  * The to-do fields the planner sees - the card, minus nothing it needs.
  * @param {Array<object>} openTodos
  */
@@ -421,6 +435,7 @@ module.exports = {
   MAX_PROMPT_CHARS,
   SIZE_MINUTES,
   slugId,
+  pickTodos,
   buildPlannerPrompt,
   buildPlannerArgs,
   parsePlannerOutput,

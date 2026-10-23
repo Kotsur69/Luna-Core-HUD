@@ -198,7 +198,7 @@ const {
 // src/screenshots.js for why a bitmap has to become a file path first.
 const { saveClip, pruneClips, clipsDir } = require('./screenshots');
 
-const { readTodos, writeTodos } = require('./todo');
+const { readTodos, writeTodos, MAX_ITEMS: MAX_TODO_ITEMS } = require('./todo');
 // To-dos merged with the other PCs through the cloud (src/todosync.js).
 const { startTodoSync } = require('./todosync');
 let todoSync = null;
@@ -3068,9 +3068,14 @@ function registerIpc() {
   // tab's local-model profile must not silently plan the whole run.
   ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts) => {
     // The picker's selection: to-do `at` values only, capped like the list
-    // itself. Off-shape -> null = every open to-do (makePlan re-checks each
-    // value against the list it reads).
-    const picked = Array.isArray(todoAts) && todoAts.length <= MAX_TODO_ITEMS && todoAts.every(Number.isFinite) ? todoAts : null;
+    // itself. No selection (null) = every open to-do; an off-shape one fails
+    // closed ([] -> 'noneSelected'). makePlan re-checks each value against
+    // the list it reads.
+    let picked = null;
+    if (todoAts != null) {
+      const unique = Array.isArray(todoAts) ? [...new Set(todoAts)] : [];
+      picked = unique.length <= MAX_TODO_ITEMS && unique.every(Number.isFinite) ? unique : [];
+    }
     const session = resolveSession(sessionId);
     if (!session) return { ok: false, error: 'noTab' };
     const project = getProject(projects, session.projectId);
@@ -3083,6 +3088,7 @@ function registerIpc() {
       repoPath,
       profileId: session.profileId,
       env: withClaudeOnPath(buildSessionEnv(process.env, {})),
+      todoAts: picked,
     });
     if (res.ok) send('orchestra:changed', res.plan);
     return res;

@@ -22,6 +22,7 @@ const path = require('path');
 const { findTurnEndMessage, textBlocks } = require('./ttsExtract');
 const { WORKTREE_DIR, BRANCH_PREFIX } = require('./worktrees');
 const { normalizeEffort } = require('./efforts');
+const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -573,6 +574,10 @@ function normalizePackage(raw) {
     blockedBy: typeof raw.blockedBy === 'string' && SLUG_RE.test(raw.blockedBy) ? raw.blockedBy : null,
     stalledAt: Number.isFinite(raw.stalledAt) ? raw.stalledAt : null,
     failure: normalizeFailure(raw.failure),
+    // Report evidence (orchestraDiagnose.js): the worker's last message and
+    // the end of a failed verify run. Model / test output - display only.
+    lastWords: strOrNull(raw.lastWords, MAX_LAST_WORDS + 3),
+    verifyTail: strOrNull(raw.verifyTail, MAX_TAIL_CHARS),
   };
 }
 

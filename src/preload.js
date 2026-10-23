@@ -488,7 +488,10 @@ contextBridge.exposeInMainWorld('lunacore', {
 
   // --- God Mode v2 planner (reference/ORCHESTRATOR_PLAN.md slice 3) ---
   /** Plans the tab's project to-dos with a headless `claude -p`: Promise<{ok, plan?, error?}>. */
-  planOrchestra: (sessionId) => ipcRenderer.invoke('orchestra:plan', typeof sessionId === 'string' ? sessionId : null),
+  // todoAts: the picker's ticked to-dos (`at` values); null = all open ones.
+  // Passed as-is: main validates and fails closed on a bad shape.
+  planOrchestra: (sessionId, todoAts) =>
+    ipcRenderer.invoke('orchestra:plan', typeof sessionId === 'string' ? sessionId : null, Array.isArray(todoAts) ? todoAts : null),
   /** The current plan view, or null. */
   getOrchestra: () => ipcRenderer.invoke('orchestra:get'),
   /** Planning waiting for the Claude limit reset: {state, resumeAt, ...} or null. */

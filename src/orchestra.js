@@ -33,7 +33,8 @@
 'use strict';
 
 const path = require('path');
-const { validatePlan, estimatePlan, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
+const { validatePlan, estimatePlan, pickTodos, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
+const { lastWordsFrom, outputTail } = require('./orchestraDiagnose');
 const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
 const { createFinalizer } = require('./orchestraFinalize');
@@ -451,6 +452,8 @@ function createOrchestra(deps) {
         terminal: p.terminal === true,
         blockedBy: p.blockedBy || null,
         failure: p.failure || null,
+        lastWords: p.lastWords || null,
+        verifyTail: p.verifyTail || null,
       })),
     };
   }
@@ -538,8 +541,11 @@ function createOrchestra(deps) {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
     // A manual item is the user's own job: the planner never sees it.
-    const openTodos = deps.readTodos(ctx.projectId).filter((t) => !t.done && t.manual !== true);
-    if (!openTodos.length) return { ok: false, error: 'noTodos' };
+    const allOpen = deps.readTodos(ctx.projectId).filter((t) => !t.done && t.manual !== true);
+    if (!allOpen.length) return { ok: false, error: 'noTodos' };
+    // The picker's selection rides in ctx, so a limit-wait replan keeps it.
+    const openTodos = pickTodos(allOpen, ctx.todoAts);
+    if (!openTodos.length) return { ok: false, error: 'noneSelected' };
     // A manual (re-)plan replaces a pending wait; the waiter's own replan
     // is in state 'planning' and keeps it.
     if (planWaiter.isWaiting()) planWaiter.clear();
@@ -652,7 +658,17 @@ function createOrchestra(deps) {
     }
   }
 
-  const freshRun = () => ({ nudges: 0, verifyRounds: 0, startedAt: now(), pausedMs: 0, error: null, detail: null });
+  // Evidence from an earlier attempt would explain the wrong failure: cleared too.
+  const freshRun = () => ({
+    nudges: 0,
+    verifyRounds: 0,
+    startedAt: now(),
+    pausedMs: 0,
+    error: null,
+    detail: null,
+    lastWords: null,
+    verifyTail: null,
+  });
 
   /**
    * Worktree + brief + tab for one package. Never throws. A failure after
@@ -1090,6 +1106,7 @@ function createOrchestra(deps) {
     }
     const lastLine = String(res.output || '').trim().split(/\r?\n/).pop() || '';
     if (plan.killed || sup.verifyFailAction(pkg) === 'stall' || !sessionAlive(pkg.sessionId)) {
+      patch(id, { verifyTail: outputTail(res.output) });
       stall(id, 'verifyFailed', lastLine.slice(0, 300));
       return;
     }
@@ -1109,6 +1126,9 @@ function createOrchestra(deps) {
     if (fixup.onTurnEnd(sessionId, fragment)) return;
     const pkg = bySession(sessionId);
     if (!pkg || plan.killed) return;
+    // Evidence for the report's "What went wrong": what the worker said last.
+    const lastWords = lastWordsFrom(fragment);
+    if (lastWords) patch(pkg.id, { lastWords });
     const marker = sup.markerFrom(fragment, pkg.id);
     if (pkg.state === 'stalled') {
       if (marker && marker.kind === 'done') finish(pkg.id);

@@ -3,6 +3,7 @@
 // ----------------------------------------------------------------------------
 // The DOM half of src/orchestra.js. "Plan packages" in the to-do widget opens
 // #orchestra (static markup in index.html, .palette overlay CSS like #ask):
+// first the to-do picker (orchestraPick.js) - only ticked cards are planned -
 // while the headless planner runs it says so, then it shows the plan - a
 // summary with the estimate (idea #3), warnings, the planner's notes and one
 // card per package with an editable prompt.
@@ -25,6 +26,7 @@ import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { failureBlock, runOptionsRow, powerBanner } from './orchestraDetails.js';
+import { loadPicker, pickerView } from './orchestraPick.js';
 
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
@@ -40,7 +42,7 @@ const killBtn = q('#orchestra-kill');
 const FAIL_CODES = new Set([
   'noTodos', 'busy', 'runActive', 'noClaude', 'noRepo', 'timeout', 'budget', 'limit', 'badJson', 'failed',
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
-  'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile', 'badOptions',
+  'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile', 'badOptions', 'noneSelected',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Integration errors with their own message (orchestraFinalize / Integrate).
@@ -73,6 +75,8 @@ let planWait = null;
 let busyPkg = null;
 /** A run-options change on its way to main. */
 let optionsBusy = false;
+/** The to-do picker is on screen instead of the board (orchestraPick.js). */
+let picking = false;
 /** Edited prompts, `${planId}:${pkgId}` -> text, until launched. */
 const drafts = new Map();
 /** Start options picked on the board before Approve. */
@@ -481,15 +485,18 @@ function updateButtons() {
   const idle = phase === 'idle';
   const running = !!plan && plan.packages.some(isActive);
   if (approveBtn) {
-    approveBtn.hidden = !plan;
+    approveBtn.hidden = !plan || picking;
     approveBtn.disabled =
       !idle || !plan || plan.errors.length > 0 || !hasReady() || (plan.started && !plan.killed && running) || !!plan.scheduledAt;
     const scheduling = !!plan && !plan.started && startOpts.when !== 'now';
     approveBtn.textContent = t(scheduling ? 'orch.schedule' : 'orch.approve');
   }
-  if (replanBtn) replanBtn.disabled = !idle || running;
+  if (replanBtn) {
+    replanBtn.hidden = picking;
+    replanBtn.disabled = !idle || running;
+  }
   if (discardBtn) {
-    discardBtn.hidden = !plan;
+    discardBtn.hidden = !plan || picking;
     discardBtn.disabled = !idle || running;
   }
   // Kill is never locked by `phase`: an Approve/Retry holds the board busy
@@ -537,8 +544,32 @@ function render() {
   if (phase === 'planning') body.append(msg(t('orch.planning')));
   renderPlanWait();
   if (failure) body.append(msg(failText(failure), 'is-bad'));
-  if (plan) renderPlan();
+  if (picking && phase === 'idle') {
+    body.append(
+      pickerView({
+        disabled: phase !== 'idle',
+        canCancel: !!plan,
+        onPlan: (ats) => startPlanning(ats),
+        onCancel: () => {
+          picking = false;
+          render();
+        },
+        repaint: render,
+      }),
+    );
+  } else if (plan) renderPlan();
   updateButtons();
+}
+
+/** Shows the to-do picker; the planner starts from its "Plan selected". */
+async function openPicker() {
+  if (phase !== 'idle') return;
+  failure = null;
+  await loadPicker(getActiveSessionId());
+  // Closed while the list loaded: closeOrchestra already reset `picking`.
+  if (!isOpen) return;
+  picking = true;
+  render();
 }
 
 async function refetch() {
@@ -554,14 +585,16 @@ async function refetchAndRender() {
   if (isOpen) render();
 }
 
-async function startPlanning() {
+/** @param {number[]} ats the picker's ticked to-dos */
+async function startPlanning(ats) {
   if (phase !== 'idle') return;
   phase = 'planning';
+  picking = false;
   failure = null;
   render();
   let res;
   try {
-    res = await window.lunacore.planOrchestra(getActiveSessionId());
+    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats);
   } catch {
     res = { ok: false, error: 'failed' };
   }
@@ -578,6 +611,8 @@ async function startPlanning() {
   } else {
     failure = (res && res.error) || 'failed';
     await refetch(); // a refused re-plan keeps the old plan on screen
+    // Nothing on screen to act on: back to the picker, error shown above it.
+    if (!plan) picking = true;
   }
   if (isOpen) render();
 }
@@ -687,13 +722,14 @@ async function openOrchestra() {
   }
   render();
   checkWakeOnce();
-  if (!plan && !planWait && phase === 'idle' && !failure) startPlanning();
+  if (!plan && !planWait && phase === 'idle' && !picking) openPicker();
 }
 
 function closeOrchestra() {
   if (!isOpen) return;
   isOpen = false;
   failure = null;
+  picking = false;
   closeWithExit(overlay);
   term.focus();
 }
@@ -709,12 +745,14 @@ if (overlay) {
     if (e.target.hasAttribute('data-orchestra-close')) closeOrchestra();
   });
   if (approveBtn) approveBtn.addEventListener('click', () => launch(null));
-  if (replanBtn) replanBtn.addEventListener('click', startPlanning);
+  if (replanBtn) replanBtn.addEventListener('click', openPicker);
   if (discardBtn) discardBtn.addEventListener('click', discard);
   if (killBtn) killBtn.addEventListener('click', kill);
 
   window.lunacore.onOrchestraChanged((next) => {
     plan = next;
+    // A run that starts (a scheduled start firing) takes the board back from the picker.
+    if (next && next.started) picking = false;
     const key = countdownKey(next);
     if (key && key !== shownCountdown) {
       shownCountdown = key;

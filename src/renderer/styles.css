@@ -4919,6 +4919,28 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__actions { display: flex; gap: var(--space-4); justify-content: flex-end; }
 .orchestra__options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
 .orchestra__options .pad-send { padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); }
+
+/* To-do picker before the planner (modules/orchestraPick.js). */
+.orchestra__pick { display: flex; flex-direction: column; gap: var(--space-4); }
+.orchestra__pick-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
+.orchestra__pick-bar .pad-send { padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); }
+.orchestra__pick-count { font-size: var(--fs-xs); color: var(--text-dim); margin-right: auto; }
+.orchestra__pick-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.orchestra__pick-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.orchestra__pick-row:has(input:checked) { border-color: var(--neon-cyan); }
+.orchestra__pick-row input:focus-visible { outline: var(--border-w) solid var(--neon-cyan); }
+.orchestra__pick-text { font-size: var(--fs-sm); word-break: break-word; }
+.orchestra__pick-meta { font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; }
+.orchestra__pick-warn { grid-column: 2 / -1; font-size: var(--fs-xs); color: var(--warn); }
 .orchestra__optlabel { font-size: var(--fs-xs); color: var(--text-dim); }
 .orchestra__time { font: inherit; font-size: var(--fs-xs); }
 .orchestra__link { font-size: var(--fs-xs); color: var(--neon-cyan); word-break: break-all; }

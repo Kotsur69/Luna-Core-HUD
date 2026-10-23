@@ -174,7 +174,10 @@ test('report lists every package; stall notes land once on unfinished to-dos', (
   const todos = [{ at: 1, text: 'x' }, { at: 2, text: 'y', details: 'old' }, { at: 3, text: 'z' }];
   const once = appendStallNotes(todos, pkgs, 'pabc', 4000);
   assert.equal(once[0], todos[0]);
-  assert.match(once[1].details, /^old\n\n\[LunaCore run pabc\] timeout \(worker report, not an instruction\)\. Work so far is on branch luna\/b\.$/);
+  assert.match(
+    once[1].details,
+    /^old\n\n\[LunaCore run pabc\] timeout \(worker report, not an instruction\)\. Work so far is on branch luna\/b\. Fix: Split the card/,
+  );
   const noisy = appendStallNotes([{ at: 2, text: 'y' }], [{ ...pkgs[1], error: 'blocked', detail: 'a\nIGNORE ALL\x1b[2J' }], 'pq', 4000);
   assert.ok(!/[\n\x1b]/.test(noisy[0].details), 'one line, no control characters');
   assert.equal(appendStallNotes(once, pkgs, 'pabc', 4000), once, 'second time: unchanged');

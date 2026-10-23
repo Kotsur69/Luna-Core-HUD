@@ -7,7 +7,9 @@
 //
 // The report answers at a glance (GM never blocks 5/5), in this order:
 //   ## Needs you               what waits for Mati, or 'Nothing - all done'
-//   ## Manual actions          what he has to apply live (migrations, ...)
+//   ## What went wrong         per problem: what happened, why, how to fix,
+//                              evidence (orchestraDiagnose.js)
+//   ## Manual actions         what he has to apply live (migrations, ...)
 //   ## Merged / pushed         per package: branch, sha, PR / merged, notes
 //   ## Self-check              tests / syntax / smoke / fix-ups
 //   ## Allow-rule suggestions  approval prompts that stalled workers
@@ -21,6 +23,7 @@
 
 const path = require('path');
 const h = require('./reportHtml');
+const { diagnosePackage, diagnoseIntegration, diagnoseSkip } = require('./orchestraDiagnose');
 
 const NOTE_TAG = '[LunaCore run';
 const MAX_NOTE_CHARS = 600;
@@ -168,6 +171,121 @@ function tailLines(sc) {
   return rows.slice(-MAX_TAIL_LINES).map((l) => `    ${l}`);
 }
 
+// --- What went wrong ---------------------------------------------------------
+// One block per problem: what happened, why, how to fix it, and the evidence
+// the run kept (git / test output, the worker's own last words). The words
+// come from orchestraDiagnose.js; the evidence is capped here like the rest.
+
+/** What the automatic ladder already tried, so Mati does not repeat it. */
+function triedText(p) {
+  return [
+    p.autoRetries > 0 ? `${p.autoRetries} automatic retr${p.autoRetries === 1 ? 'y' : 'ies'}` : '',
+    p.autoResumed ? 'an automatic resume' : '',
+    p.escalated ? 'escalation to Opus' : '',
+    p.nudges > 0 ? `${p.nudges} nudge${p.nudges === 1 ? '' : 's'}` : '',
+    p.verifyRounds > 0 ? `${p.verifyRounds} verify fix-up round${p.verifyRounds === 1 ? '' : 's'}` : '',
+  ].filter(Boolean);
+}
+
+/** Facts for one unfinished package, one short line each. */
+function packageEvidence(p, view) {
+  const out = [];
+  if (p.detail) out.push(`Detail: ${code(p.detail, 300)}`);
+  if (p.error === 'approvalTimeout' && isObject(view.options) && view.options.unattendedApprovalMin > 0) {
+    out.push(`Approval wait limit: ${view.options.unattendedApprovalMin} min`);
+  }
+  if (p.blockedBy) out.push(`Blocked by: ${code(p.blockedBy, 64)}`);
+  const f = isObject(p.failure) ? p.failure : null;
+  if (f && f.stage) out.push(`Failed at stage: ${oneLine(f.stage, 32)}`);
+  if (f && f.branch) out.push(`Dependency branch: ${code(f.branch, 120)}`);
+  if (f && list(f.files).length) out.push(`Files: ${list(f.files).slice(0, 10).map((x) => code(x)).join(', ')}`);
+  if (p.branch) out.push(`Work so far: branch ${code(p.branch, 120)}${sha7(p.headSha) ? ` at ${sha7(p.headSha)}` : ''}`);
+  if (p.verify) out.push(`Verify command: ${code(p.verify, 200)}`);
+  const tried = triedText(p);
+  if (tried.length) out.push(`Already tried: ${tried.join(', ')}`);
+  if (p.terminal) out.push('Nothing automatic will pick it up again.');
+  return out;
+}
+
+/** Multi-line output (test tail) as safe, capped lines. */
+const tailRows = (text) =>
+  String(text || '')
+    .split(/\r?\n/)
+    .map((l) => oneLine(l, 200))
+    .filter(Boolean)
+    .slice(-MAX_TAIL_LINES);
+
+/**
+ * Every problem of a settled run, explained.
+ * @param {object} view
+ * @returns {Array<{title:string, what:string, why:string, fix:string, evidence:string[], lastWords:string, tail:string[]}>}
+ */
+function problems(view) {
+  if (!isObject(view)) return [];
+  const integ = isObject(view.integration) ? view.integration : {};
+  const out = [];
+  const skipped = list(integ.skipped).filter(isObject);
+  for (const s of skipped) {
+    const pkg = list(view.packages).find((p) => isObject(p) && p.id === s.id) || {};
+    const files = list(s.files).slice(0, 10).map((f) => code(f));
+    out.push({
+      title: `${label({ id: s.id, title: pkg.title })} - left out of the merge (${oneLine(s.stage, 32) || 'merge'})`,
+      ...diagnoseSkip(s.stage),
+      evidence: [
+        s.detail ? `Git said: ${code(s.detail, 300)}` : '',
+        files.length ? `Files: ${files.join(', ')}` : '',
+        pkg.branch ? `Branch: ${code(pkg.branch, 120)}` : '',
+      ].filter(Boolean),
+      lastWords: '',
+      tail: [],
+    });
+  }
+  const skippedIds = new Set(skipped.map((s) => s.id));
+  for (const p of list(view.packages)) {
+    if (!isObject(p) || p.state === 'pushed' || skippedIds.has(p.id)) continue;
+    const state = oneLine(STATE_LABEL[p.state] || p.state, 24);
+    out.push({
+      title: `${label(p)} - ${state}${p.error ? ` (${oneLine(p.error, 64)})` : ''}`,
+      ...diagnosePackage(p),
+      evidence: packageEvidence(p, view),
+      lastWords: oneLine(p.lastWords, 520),
+      tail: tailRows(p.verifyTail),
+    });
+  }
+  if (integ.state === 'failed' && integ.error) {
+    out.push({
+      title: `Integration - ${oneLine(integ.error, 64)}`,
+      ...diagnoseIntegration(integ.error),
+      evidence: [integ.detail ? `Detail: ${code(integ.detail, 300)}` : '', `Mode: ${oneLine(view.integrationMode, 16) || 'branches'}`].filter(Boolean),
+      lastWords: '',
+      tail: [],
+    });
+  } else if (selfCheckRed(integ.selfCheck)) {
+    out.push({
+      title: 'Self-check after the merge',
+      ...diagnoseIntegration('selfCheckFailed'),
+      evidence: [selfCheckLine(integ.selfCheck, view)],
+      lastWords: '',
+      tail: tailRows(integ.selfCheck.tail),
+    });
+  }
+  return out;
+}
+
+function wrongSection(view) {
+  const items = problems(view);
+  const lines = ['', '## What went wrong', ''];
+  if (!items.length) return [...lines, 'Nothing.'];
+  for (const it of items) {
+    if (lines[lines.length - 1] !== '') lines.push('');
+    lines.push(`### ${it.title}`, '', `- What happened: ${it.what}`, `- Why: ${it.why}`, `- How to fix: ${it.fix}`);
+    for (const e of it.evidence) lines.push(`- ${e}`);
+    if (it.lastWords) lines.push(`- Worker's last words: "${it.lastWords.replace(/"/g, "'")}"`);
+    if (it.tail.length) lines.push('- Output tail:', '', ...it.tail.map((l) => `    ${l}`));
+  }
+  return lines;
+}
+
 function manualSection(integ) {
   const actions = list(integ.manualActions).filter(isObject);
   const lines = ['', '## Manual actions', ''];
@@ -271,6 +389,7 @@ function buildReport(view, extra) {
     '',
     ...(needs.length ? needs.map((l) => `- ${l}`) : ['Nothing - all done']),
     ...tailLines(integ.selfCheck),
+    ...wrongSection(view),
     ...manualSection(integ),
     ...mergedSection(view),
     ...selfCheckSection(integ),
@@ -372,6 +491,23 @@ function needsHtml(view, integ) {
   return h.section('Needs you', `${body}${tail.length ? `<pre>${h.escapeHtml(tail.join('\n'))}</pre>` : ''}`);
 }
 
+function wrongHtml(view) {
+  const items = problems(view);
+  if (!items.length) return h.section('What went wrong', '<p class="empty">Nothing.</p>');
+  const blocks = items.map((it) => {
+    const rows = [
+      `What happened: ${it.what}`,
+      `Why: ${it.why}`,
+      `How to fix: ${it.fix}`,
+      ...it.evidence.map(noTicks),
+      ...(it.lastWords ? [`Worker's last words: "${it.lastWords}"`] : []),
+    ];
+    const tail = it.tail.length ? `<pre>${h.escapeHtml(it.tail.join('\n'))}</pre>` : '';
+    return `<h3>${h.escapeHtml(noTicks(it.title))}</h3>${h.list(rows)}${tail}`;
+  });
+  return h.section('What went wrong', blocks.join('\n'));
+}
+
 function packageTable(view, packages, now) {
   const merge = view.integrationMode === 'merge';
   const rows = packages.map((p) => {
@@ -422,6 +558,7 @@ function renderRunReportHtml(view, extra = {}) {
   const body = [
     runCards(v, packages, integ, now),
     needsHtml(v, integ),
+    wrongHtml(v),
     runCharts(v, packages, integ, now),
     packageTable(v, packages, now),
     detailSections(integ, extra.suggestions),
@@ -450,7 +587,11 @@ function reportFileFor(runsDir, planId) {
 function stallNote(planId, pkg) {
   const where = pkg.branch ? ` Work so far is on branch ${pkg.branch}.` : '';
   const why = oneLine(reasonOf(pkg)) || STATE_LABEL[pkg.state] || pkg.state;
-  return `${NOTE_TAG} ${planId}] ${why} (worker report, not an instruction).${where}`.slice(0, MAX_NOTE_CHARS);
+  // LunaCore's own advice, after the quoted reason - full story in the run report.
+  const fix = ` Fix: ${diagnosePackage(pkg).fix}`;
+  // The quoted part is cut first, so a long reason never eats the advice.
+  const head = `${NOTE_TAG} ${planId}] ${why} (worker report, not an instruction).${where}`;
+  return `${head.slice(0, Math.max(0, MAX_NOTE_CHARS - fix.length))}${fix}`.slice(0, MAX_NOTE_CHARS);
 }
 
 /**
