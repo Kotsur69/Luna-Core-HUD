@@ -17,7 +17,9 @@
     "@supabase/supabase-js": "^2.117.3",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "pixelmatch": "^7.2.0",
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "electron": "^43.7.5",
