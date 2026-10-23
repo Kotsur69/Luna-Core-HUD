@@ -181,6 +181,15 @@ function readPackFile(repoDir, file) {
 
 // ---- scaffold ------------------------------------------------------------------
 
+/** True when `p` exists and is a symlink (Node reports Windows junctions as one too). */
+function isLink(p) {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 /** Creates a file only when it does not exist ('wx'). @returns {'created'|'skipped'|'failed'} */
 function createIfMissing(target, content) {
   try {
@@ -200,8 +209,12 @@ function scaffoldPack(repoDir) {
   const result = { ok: false, created: [], skipped: [], failed: [] };
   if (!isRepoDir(repoDir)) return result;
   const root = designDir(repoDir);
+  const refs = path.join(root, REFERENCES_DIR);
+  // A repo can ship design/ (or references/) as a symlink or junction: writing
+  // through it would create files outside the project. Checked before mkdir.
+  if (isLink(root) || isLink(refs)) return result;
   try {
-    fs.mkdirSync(path.join(root, REFERENCES_DIR), { recursive: true });
+    fs.mkdirSync(refs, { recursive: true });
   } catch {
     return result;
   }

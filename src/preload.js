@@ -385,6 +385,18 @@ contextBridge.exposeInMainWorld('lunacore', {
   inboxRun: (machine, id) => ipcRenderer.invoke('inbox:run', { machine, id }),
   /** Opens one package's PR (github.com only); main looks the URL up itself. */
   inboxOpenPr: (machine, id, pkg) => ipcRenderer.send('inbox:open-pr', { machine, id, pkg }),
+  // Luna's Work (src/lunasworkipc.js). The renderer names a known project by
+  // id only; main validates every payload and resolves the folder itself.
+  /** Promise<{ok, projectId, roles, choices, models, freeFallback, profile} | {ok:false, reason}>. */
+  lunasworkGetSettings: (projectId) => ipcRenderer.invoke('lunaswork:getSettings', { projectId }),
+  /** patch: {models?, freeFallback?, profile?}. Same answer, or {ok:false, reason, field?, detail?}. */
+  lunasworkSaveSettings: (projectId, patch) => ipcRenderer.invoke('lunaswork:saveSettings', { ...(patch && typeof patch === 'object' ? patch : {}), projectId }),
+  /** Creates the missing design/ pack files. Promise<{ok, created, skipped, failed, pack}>. */
+  lunasworkScaffoldPack: (projectId) => ipcRenderer.invoke('lunaswork:scaffoldPack', { projectId }),
+  /** Promise<{ok, pack:{complete, missing, empty}} | {ok:false, reason}>. */
+  lunasworkPackStatus: (projectId) => ipcRenderer.invoke('lunaswork:packStatus', { projectId }),
+  /** Scaffolds design/ and opens the interview tab. Promise<{ok, pack} | {ok:false, reason}>. */
+  lunasworkStartInterview: (projectId) => ipcRenderer.invoke('lunaswork:startInterview', { projectId }),
   // Weekly review (src/weeklyipc.js). A week key and a model only; main
   // decides what is collected, what the model is asked and where mail goes.
   /** Promise<{ok, weeks, entry, model, models, current, generatable, busy, mailOn, gmail}>. */

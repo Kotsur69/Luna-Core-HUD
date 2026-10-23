@@ -137,6 +137,8 @@ const { startLifeSync } = require('./lifesync');
 // to-dos, settings and snapshots between PCs. Off without config/cloud.local.json.
 const { startCloud } = require('./cloudsync');
 const { registerCloudIpc } = require('./cloudipc');
+// Luna's Work settings + pre-production (docs/LUNAS_WORK_PLAN.md slice 1.2c).
+const { registerLunasworkIpc } = require('./lunasworkipc');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -2701,6 +2703,7 @@ function registerIpc() {
   // other PCs through the cloud, like the to-dos.
   cloud = startCloud({ machine: machineName(os.hostname()) });
   registerCloudIpc({ ipcMain, cloud });
+  registerLunasworkIpc({ ipcMain, projects: () => projects, createSession, briefDir: () => path.join(userDir(), BRIEF_DIR) });
   const lifeSync = startLifeSync({ cloud });
   const billCal = createBillCalendar({
     gcal,

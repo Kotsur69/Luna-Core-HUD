@@ -30,6 +30,7 @@ import { defineWidget } from './registry.js';
 import { mountGodModeControl, refreshGodModeControl } from './godmode.js';
 import { mountKeepAwakeControl } from './keepawake.js';
 import { mountOrchestraButton } from './orchestra.js';
+import { mountLunasWorkButton } from './lunaswork.js';
 import { MAX_TEXT_CHARS, STEER_TAG, isCard, cardPrompt, editTodo, refinePrompt, hasTag, toggleTag } from './todocards.js';
 import {
   initTodoEdit, isEditing, toggleEdit, forgetEdit, pruneEdit, editForm, focusEditField, cardSection,
@@ -820,6 +821,7 @@ defineWidget({
     const offGodMode = mountGodModeControl(root);
     const offKeepAwake = mountKeepAwakeControl(root);
     const offOrchestra = mountOrchestraButton(root);
+    const offLunasWork = mountLunasWorkButton(root);
     // Cards written by Claude (intake MCP tools) land without a reload.
     const offExternal = window.lunacore.onTodoChanged(reloadExternal);
 
@@ -849,6 +851,7 @@ defineWidget({
       offGodMode();
       offKeepAwake();
       offOrchestra();
+      offLunasWork();
       offExternal();
       els = null;
     };

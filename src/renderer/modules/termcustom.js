@@ -22,6 +22,7 @@ import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
 import { mountAutoCompactSettings } from './autocompact.js';
 import { mountOrchestraSettings } from './orchestrasettings.js';
+import { mountLunasWorkSettings } from './lunaswork.js';
 import { mountMailSettings } from './mailsettings.js';
 import { mountSurfaceAlpha } from './surfacealpha.js';
 import { mountLmStudioSettings } from './lmstudiomodels.js';
@@ -326,7 +327,10 @@ function closeTermcustom() {
 export async function openSettingsAt(anchorId) {
   await openTermcustom();
   const target = termcustomEl.querySelector(`#${CSS.escape(anchorId)}`);
-  if (target) target.scrollIntoView({ block: 'start' });
+  if (!target) return;
+  // Browse mode shows one pane: switch to the one holding the anchor first.
+  settingsNav.showPaneOf(target);
+  target.scrollIntoView({ block: 'start' });
 }
 
 // -- Language (moved from appearance.js, 2026-08-19) -------------------------
@@ -588,6 +592,9 @@ export async function initTermcustomSettings() {
   // God Mode v2 worker model + permission mode (slice 4). Read by main when
   // a run starts; this only wires the two selects.
   mountOrchestraSettings(termcustomEl, prefs);
+
+  // Luna's Work pane (own IPC, own settings file - God Mode's prefs untouched).
+  mountLunasWorkSettings(termcustomEl);
 
   // Setup Center (top of the overlay) + the optional-module switches, which
   // also apply the hide-* attributes right now, before Settings ever opens.

@@ -592,6 +592,16 @@
         data-i18n-title="orch.plan.hint"
         title="Headless Claude dzieli otwarte zadania na paczki - kazda dostaje wlasny worktree i zakladke."
       >Zaplanuj paczki (God Mode v2)</button>
+      <!-- Luna's Work (docs/LUNAS_WORK_PLAN.md): its own entry point, separate
+           from God Mode. Opens Settings -> Luna's Work (modules/lunaswork.js). -->
+      <button
+        id="lunaswork-open"
+        type="button"
+        class="pad-send"
+        data-i18n="lw.open"
+        data-i18n-title="lw.open.hint"
+        title="Ustawienia Luna's Work i pre-produkcja projektu: modele rol, profil aplikacji, design pack."
+      >Luna's Work</button>
       <label
         id="godmode-field"
         class="switch-field godmode-field"
@@ -1423,6 +1433,7 @@
           <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-notifications" data-cat="notifications" aria-controls="termcustom-pane-notifications" data-i18n="termcustom.cat.notifications">Powiadomienia</button>
           <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-ai" data-cat="ai" aria-controls="termcustom-pane-ai" data-i18n="termcustom.cat.ai">AI i modele</button>
           <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-godmode" data-cat="godmode" aria-controls="termcustom-pane-godmode" data-i18n="termcustom.cat.godmode">God Mode</button>
+          <button type="button" role="tab" class="termcustom__navitem" id="termcustom-tab-lunaswork" data-cat="lunaswork" aria-controls="termcustom-pane-lunaswork" data-i18n="termcustom.cat.lunaswork">Luna's Work</button>
         </nav>
         <div id="termcustom-body" class="termcustom__body">
           <section id="termcustom-pane-general" class="termcustom__pane" data-cat="general" role="tabpanel" aria-labelledby="termcustom-tab-general">
@@ -2091,6 +2102,102 @@
                   <span class="switch__track"><span class="switch__thumb"></span></span>
                 </span>
               </label>
+            </div>
+          </section>
+          <!-- Luna's Work (docs/LUNAS_WORK_PLAN.md slice 1.2c, modules/lunaswork.js).
+               Saved to config/lunaswork-settings.local.json through the narrow
+               lunaswork:* IPC; main validates every field. -->
+          <section id="termcustom-pane-lunaswork" class="termcustom__pane" data-cat="lunaswork" role="tabpanel" aria-labelledby="termcustom-tab-lunaswork">
+            <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.lunaswork">Luna's Work</h2>
+            <div class="termcustom__group">
+              <h3 id="lunaswork-section" class="termcustom__section" data-i18n="lw.project.section">Projekt</h3>
+              <label class="ui-field" data-i18n-title="lw.project.hint" title="Profil aplikacji i design pack dotycza wybranego projektu.">
+                <span class="ui-field__label" data-i18n="lw.project">Projekt</span>
+                <select id="lw-project" class="profile-select"></select>
+              </label>
+              <p id="lw-error" class="termcustom__hint lw-error" role="alert" hidden></p>
+            </div>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="lw.models.section">Modele rol</h3>
+              <p class="termcustom__hint" data-i18n="lw.models.hint">auto = Luna decyduje (wybor i powod trafiaja do raportu przebiegu).</p>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="lw.role.director">Rezyser</span>
+                <select id="lw-model-director" class="profile-select" data-lw-role="director"></select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="lw.role.builder">Budowniczowie</span>
+                <select id="lw-model-builder" class="profile-select" data-lw-role="builder"></select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="lw.role.playtester">Tester</span>
+                <select id="lw-model-playtester" class="profile-select" data-lw-role="playtester"></select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="lw.role.critic">Krytyk</span>
+                <select id="lw-model-critic" class="profile-select" data-lw-role="critic"></select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="lw.role.reviewer">Recenzenci</span>
+                <select id="lw-model-reviewer" class="profile-select" data-lw-role="reviewer"></select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="lw.role.researcher">Researcher</span>
+                <select id="lw-model-researcher" class="profile-select" data-lw-role="researcher"></select>
+              </label>
+              <label id="lw-free-field" class="switch-field" data-i18n-title="lw.free.hint" title="Gdy Claude ma limit uzycia, budowniczowie i tester moga przejsc na darmowych dostawcow. Wylaczone = przebieg czeka na reset.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="lw.free">Darmowi dostawcy podczas limitu</span>
+                  <span id="lw-free-status" class="switch-field__status" data-i18n="lw.free.off">wylaczone - czeka na reset</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="lw-free-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+            </div>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="lw.profile.section">Profil aplikacji</h3>
+              <p class="termcustom__hint" data-i18n="lw.profile.hint">Jak LunaCore uruchamia aplikacje do testow. Zapisane tylko lokalnie w LunaCore - nic, co model zapisze w repo, nie zmieni tej komendy.</p>
+              <form id="lw-profile-form" class="lw-profile" novalidate>
+                <label class="ui-field">
+                  <span class="ui-field__label" data-i18n="lw.profile.adapter">Adapter</span>
+                  <select id="lw-adapter" class="profile-select">
+                    <option value="web" data-i18n="lw.adapter.web">Aplikacja web</option>
+                    <option value="electron" disabled data-i18n="lw.adapter.electron">Electron (wkrotce)</option>
+                    <option value="unity" disabled data-i18n="lw.adapter.unity">Unity (wkrotce)</option>
+                  </select>
+                </label>
+                <label class="ui-field">
+                  <span class="ui-field__label" data-i18n="lw.profile.start">Komenda startowa</span>
+                  <input id="lw-start" class="mc-input" maxlength="500" spellcheck="false" autocomplete="off" placeholder="npm run dev" />
+                </label>
+                <label class="ui-field">
+                  <span class="ui-field__label" data-i18n="lw.profile.url">URL</span>
+                  <input id="lw-url" class="mc-input" maxlength="500" spellcheck="false" autocomplete="off" placeholder="http://localhost:3000" />
+                </label>
+                <label class="ui-field">
+                  <span class="ui-field__label" data-i18n="lw.profile.timeout">Czas na start (s)</span>
+                  <input id="lw-timeout" class="mc-input" type="number" min="1" max="600" step="1" placeholder="60" />
+                </label>
+                <label class="ui-field">
+                  <span class="ui-field__label" data-i18n="lw.profile.check">Komenda sprawdzenia</span>
+                  <input id="lw-check" class="mc-input" maxlength="500" spellcheck="false" autocomplete="off" data-i18n-ph="lw.profile.check.ph" placeholder="opcjonalnie, np. npm test" />
+                </label>
+                <p id="lw-profile-error" class="termcustom__hint lw-error" role="alert" hidden></p>
+                <div class="termcustom__bgimage-row">
+                  <button type="submit" id="lw-profile-save" class="pad-send" data-i18n="lw.profile.save">Zapisz profil</button>
+                  <span id="lw-profile-saved" class="termcustom__hint" role="status" hidden data-i18n="lw.profile.saved">Zapisano.</span>
+                </div>
+              </form>
+            </div>
+            <div class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="lw.preprod.section">Pre-produkcja</h3>
+              <p class="termcustom__hint" data-i18n="lw.preprod.hint">Tworzy design/ w projekcie i otwiera zakladke Claude, w ktorej Luna przeprowadza z Toba wywiad i wypelnia design pack.</p>
+              <p id="lw-pack-status" class="termcustom__hint" role="status"></p>
+              <ul id="lw-pack-missing" class="lw-pack-list"></ul>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="lw-preprod-start" class="pad-send" data-i18n="lw.preprod.start">Rozpocznij pre-produkcje</button>
+              </div>
             </div>
           </section>
           <p id="termcustom-empty" class="termcustom__empty" role="status" hidden></p>

@@ -61,6 +61,16 @@ test('scaffoldPack rejects a non-absolute or missing repo dir without throwing',
   assert.equal(pack.scaffoldPack(null).ok, false);
 });
 
+test('scaffoldPack refuses a design/ that is a symlink or junction', () => {
+  const repo = tempRepo();
+  const outside = tempRepo();
+  // 'junction' needs no admin rights on Windows; other platforms ignore the type.
+  fs.symlinkSync(outside, path.join(repo, 'design'), 'junction');
+  const res = pack.scaffoldPack(repo);
+  assert.equal(res.ok, false);
+  assert.deepEqual(fs.readdirSync(outside), [], 'nothing written through the link');
+});
+
 // ---- ownership ops ----------------------------------------------------------------
 
 test('appendDesign appends and keeps the existing text', () => {

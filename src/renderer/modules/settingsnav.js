@@ -190,5 +190,10 @@ export function initSettingsNav(root) {
       if (search.value) { search.value = ''; clearFilter(); }
       search.focus();
     },
+    /** Selects the pane that contains `el` (deep links like openSettingsAt). */
+    showPaneOf(el) {
+      const index = panes.findIndex((pane) => pane.contains(el));
+      if (index >= 0 && !search.value.trim()) selectTab(index);
+    },
   };
 }

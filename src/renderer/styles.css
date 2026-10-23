@@ -4962,6 +4962,17 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__time { font: inherit; font-size: var(--fs-xs); }
 .orchestra__link { font-size: var(--fs-xs); color: var(--neon-cyan); word-break: break-all; }
 .orchestra__allowed { font-size: var(--fs-xs); color: var(--text-dim); word-break: break-word; }
+
+/* Luna's Work settings pane (modules/lunaswork.js). */
+.lw-error { color: var(--bad); margin-bottom: var(--space-3); }
+.lw-pack-list {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-5);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.lw-pack-list:empty { display: none; }
 .orchestra__example { display: block; font-size: var(--fs-xs); color: var(--text); word-break: break-all; }
 .orchestra__actions .pad-send,
 .orchestra__foot .pad-send { padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); }
