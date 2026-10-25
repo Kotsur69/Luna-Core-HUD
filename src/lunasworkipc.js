@@ -8,12 +8,19 @@
 // lunaswork:packStatus     {projectId} -> {ok, pack}
 // lunaswork:startInterview {projectId} -> {ok, pack} | {ok:false, reason}
 //
+// With a run controller (src/lunaswork.js) passed in:
+// lunaswork:start          {projectId, models?} -> {ok, status} | {ok:false, reason, message?}
+// lunaswork:stop           (no payload) -> {ok, status} | {ok:false, reason, message}
+// lunaswork:status         (no payload) -> {ok, status}
+//
 // view = {ok, projectId, roles, choices, models, freeFallback, profile}
 // pack = {complete, missing, empty}
 //
 // The renderer only ever names a KNOWN project by id - never a folder, a
 // file or a brief. Every payload is checked here: types, lengths, the role and
 // model lists, and the profile through lunasworkSettings.validateProfile.
+// A start's models override is this run's only and is checked like the
+// settings' models; nothing else of a start payload reaches the controller.
 // The profile's commands are saved only to LunaCore's local settings file
 // (the trust boundary described in lunasworkSettings.js).
 // ============================================================================
@@ -88,7 +95,8 @@ function defaultWriteBrief(file, text) {
 
 /**
  * @param {{ipcMain:object, projects:()=>object[], createSession:(opts:object)=>object|null,
- *   briefDir:()=>string, settingsFile?:string, writeBrief?:Function, resolveDir?:Function,
+ *   briefDir:()=>string, controller?:{start:Function, stop:Function, status:Function},
+ *   settingsFile?:string, writeBrief?:Function, resolveDir?:Function,
  *   now?:()=>number}} deps  settingsFile / writeBrief / resolveDir / now: test seams
  */
 function registerLunasworkIpc(deps) {
@@ -97,6 +105,7 @@ function registerLunasworkIpc(deps) {
     projects,
     createSession,
     briefDir,
+    controller,
     settingsFile,
     writeBrief = defaultWriteBrief,
     resolveDir = resolveProjectDir,
@@ -212,6 +221,46 @@ function registerLunasworkIpc(deps) {
     lastInterviewAt = at;
     return { ok: true, pack: pack.packCompleteness(repo) };
   }));
+
+  if (controller) registerRunIpc(ipcMain, controller, projectOf);
+}
+
+/** start / stop / status of a run (src/lunaswork.js). */
+function registerRunIpc(ipcMain, controller, projectOf) {
+  ipcMain.handle('lunaswork:start', async (_event, req) => {
+    try {
+      const project = projectOf(req);
+      if (!project) return { ok: false, reason: 'bad-project' };
+      let models;
+      if (req.models !== undefined) {
+        models = parseModels(req.models);
+        if (!models) return { ok: false, reason: 'bad-models' };
+      }
+      return await controller.start({ projectId: project.id, ...(models ? { models } : {}) });
+    } catch (err) {
+      console.error('[lunaswork] start failed:', err && err.message);
+      return { ok: false, reason: 'failed' };
+    }
+  });
+
+  // The kill switch takes no payload: there is one run at most.
+  ipcMain.handle('lunaswork:stop', () => {
+    try {
+      return controller.stop();
+    } catch (err) {
+      console.error('[lunaswork] stop failed:', err && err.message);
+      return { ok: false, reason: 'failed' };
+    }
+  });
+
+  ipcMain.handle('lunaswork:status', () => {
+    try {
+      return { ok: true, status: controller.status() };
+    } catch (err) {
+      console.error('[lunaswork] status failed:', err && err.message);
+      return { ok: false, reason: 'failed' };
+    }
+  });
 }
 
 module.exports = {

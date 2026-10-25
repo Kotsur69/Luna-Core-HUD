@@ -1,0 +1,408 @@
+// ============================================================================
+// LunaCore - Luna's Work run record (docs/LUNAS_WORK_PLAN.md, 1.5b)
+// ----------------------------------------------------------------------------
+// The pure half of the outer loop controller (src/lunaswork.js): no timers,
+// no IO, nothing kept between calls.
+//
+//   risky cards   riskReason / isRiskyCard, conflictedPaths (God Mode merge)
+//   landed cards  landedCards - only merged work counts as a closed card
+//   models        parseModelOverride, effectiveModels (run > project > global)
+//   self-check    checkCommandFor (the profile's, else God Mode's setting)
+//   SHIP          shipAgrees (the second, fresh Playtester)
+//   stored run    restoreRun and the clean* helpers for what comes back from
+//                 lunaswork.local.json; emptyCurrent, scoresByMilestone
+// ============================================================================
+
+'use strict';
+
+const path = require('path');
+const { PHASES, ROLES, MODEL_CHOICES, normalizeModels, normalizeStoredRun } = require('./lunasworkRules');
+const settingsStore = require('./lunasworkSettings');
+const { keyFor } = require('./todo');
+const { MAX_DETAILS_CHARS, MAX_TEXT_CHARS: MAX_CARD_TEXT_CHARS } = require('./todorows');
+
+const PREPROD = 'preprod';
+const DONE = 'done';
+const ALL_PHASES = [PREPROD, ...PHASES, DONE];
+const FINAL_VERDICTS = ['ship', 'plateau', 'red', 'stop'];
+const BUILDER_MODELS = ['haiku', 'sonnet', 'opus'];
+const MODEL_SOURCES = ['run', 'project', 'global'];
+
+const MAX_LOG = 400;
+const MAX_LOG_TEXT = 300;
+const MAX_CONFLICT_ITERATIONS = 20;
+const MAX_CONFLICT_FILES = 100;
+const MAX_RECENT_SCORES = 10;
+const MAX_PATH_CHARS = 500;
+const MAX_TEXT_CHARS = 2000;
+const MAX_REPORT_ITEMS = 100;
+const MAX_ITEMS = 50;
+const MAX_PLAN_IDS = 50;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const str = (v, max) => (typeof v === 'string' && v ? v.slice(0, max) : null);
+const finite = (v) => (Number.isFinite(v) ? v : null);
+
+/** A one-line command within the settings cap, trimmed; '' when unusable. */
+function cleanCommand(raw) {
+  if (typeof raw !== 'string' || raw.length > settingsStore.MAX_COMMAND_CHARS || CONTROL_CHARS.test(raw)) return '';
+  return raw.trim();
+}
+
+// ---- risky cards ------------------------------------------------------------------
+
+// A card's files: IPC, auth, migrations / schema. "author" is not auth;
+// "authorization" / "authorise" are.
+const RISKY_FILE_RE = /preload|ipc|contextbridge|auth(?!or(?!i[sz]))|migrat|schema/i;
+// A card's text: the same areas, as words.
+const RISKY_TEXT_RE = /\bpreload\b|\bipc|contextbridge|\bo?auth(?!or(?!i[sz]))|\bmigrat|\bschema/i;
+
+const normPath = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
+
+const cardFiles = (card) => (Array.isArray(card && card.files) ? card.files.filter((f) => typeof f === 'string' && f) : []);
+
+/** True when `conflict` is `file`, or sits inside it (the card names a folder). */
+const touches = (file, conflict) => conflict === file || conflict.startsWith(`${file}/`);
+
+/** Which risky area a matching file or text is about. */
+function areaOf(hit) {
+  if (/preload|ipc|contextbridge/i.test(hit)) return 'ipc';
+  if (/migrat|schema/i.test(hit)) return 'migration';
+  return 'auth';
+}
+
+/**
+ * Why a builder card counts as risky, or null. Risky = its files or text touch
+ * IPC (preload, ipcMain, contextBridge), auth or migrations / schema, or one of
+ * its files had a merge conflict in the previous iteration.
+ * @param {object} card a to-do card ({text, details?, files?})
+ * @param {Array<{n:number, files:string[]}>} history conflicted paths per iteration, oldest first
+ * @returns {'ipc'|'auth'|'migration'|'conflict'|null}
+ */
+function riskReason(card, history) {
+  if (!isObj(card)) return null;
+  const files = cardFiles(card);
+  const fileHit = files.find((f) => RISKY_FILE_RE.test(f));
+  if (fileHit) return areaOf(fileHit);
+  const text = [card.text, card.details].filter((t) => typeof t === 'string').join('\n');
+  const textHit = RISKY_TEXT_RE.exec(text);
+  if (textHit) return areaOf(textHit[0]);
+  const list = Array.isArray(history) ? history.filter((h) => isObj(h) && Array.isArray(h.files)) : [];
+  const previous = list[list.length - 1];
+  if (!previous || !files.length) return null;
+  const conflicts = previous.files.filter((f) => typeof f === 'string' && f).map(normPath);
+  return files.map(normPath).some((f) => conflicts.some((c) => touches(f, c))) ? 'conflict' : null;
+}
+
+/** @returns {boolean} see riskReason */
+function isRiskyCard(card, history) {
+  return riskReason(card, history) !== null;
+}
+
+/**
+ * Paths that conflicted in one God Mode merge: packages the integration
+ * skipped on a conflict, and packages whose launch hit one (dependency merge).
+ * @param {{integration?:object, plan?:object}|null} settled the build result (onRunSettled)
+ * @returns {string[]}
+ */
+function conflictedPaths(settled) {
+  const s = isObj(settled) ? settled : {};
+  const skipped = isObj(s.integration) && Array.isArray(s.integration.skipped) ? s.integration.skipped : [];
+  const packages = isObj(s.plan) && Array.isArray(s.plan.packages) ? s.plan.packages : [];
+  const files = [
+    ...skipped.filter((k) => isObj(k) && k.stage === 'conflict').flatMap((k) => (Array.isArray(k.files) ? k.files : [])),
+    ...packages
+      .filter((p) => isObj(p) && isObj(p.failure) && p.failure.code === 'conflict')
+      .flatMap((p) => (Array.isArray(p.failure.files) ? p.failure.files : [])),
+  ];
+  const clean = files.filter((f) => typeof f === 'string' && f).map((f) => f.slice(0, MAX_PATH_CHARS));
+  return [...new Set(clean)].slice(0, MAX_CONFLICT_FILES);
+}
+
+/**
+ * The cards whose work reached the base branch: the cards of packages God
+ * Mode merged, in an integration that is done. God Mode ticks a card when
+ * its package is pushed; a red or skipped merge leaves it ticked but off main.
+ * The settled view names a package's cards by text (or `at` when it has none).
+ * @param {{integration?:object, plan?:object}|null} settled the build result (onRunSettled)
+ * @param {Array<{at:number, text:string}>} cards this iteration's cards
+ * @returns {number[]}
+ */
+function landedCards(settled, cards) {
+  const s = isObj(settled) ? settled : {};
+  if (!isObj(s.integration) || s.integration.state !== 'done') return [];
+  const packages = isObj(s.plan) && Array.isArray(s.plan.packages) ? s.plan.packages : [];
+  const names = new Set(
+    packages.filter((p) => isObj(p) && p.merged === true).flatMap((p) => (Array.isArray(p.todos) ? p.todos : [])),
+  );
+  return (Array.isArray(cards) ? cards : []).filter((c) => names.has(c.text) || names.has(String(c.at))).map((c) => c.at);
+}
+
+// ---- models and the check command ---------------------------------------------------
+
+/** A partial {role: choice} map, or null when anything in it is unknown. */
+function parseModelOverride(raw) {
+  if (raw === undefined || raw === null) return {};
+  if (!isObj(raw)) return null;
+  const out = {};
+  for (const [role, choice] of Object.entries(raw)) {
+    if (!ROLES.includes(role) || !MODEL_CHOICES.includes(choice)) return null;
+    out[role] = choice;
+  }
+  return out;
+}
+
+/**
+ * The models a run uses. Precedence per role: this run's override, then the
+ * project's override, then the global default (Luna's Work settings).
+ * @param {object} settings lunasworkSettings.readSettings() result
+ * @param {string} projectId
+ * @param {object} [override] validated partial {role: choice} for this run only
+ * @returns {{models:Record<string,string>, sources:Record<string,'run'|'project'|'global'>}}
+ */
+function effectiveModels(settings, projectId, override = {}) {
+  const s = settingsStore.normalizeSettings(settings);
+  const project = s.projects[keyFor(projectId)];
+  const projectModels = settingsStore.normalizeModelOverride(project && project.models);
+  const runModels = settingsStore.normalizeModelOverride(override);
+  const models = normalizeModels({ ...s.models, ...projectModels, ...runModels });
+  const sources = {};
+  for (const role of ROLES) {
+    sources[role] = role in runModels ? 'run' : role in projectModels ? 'project' : 'global';
+  }
+  return { models, sources };
+}
+
+/**
+ * The self-check command of a Luna's Work build: the project profile's
+ * checkCommand, else God Mode's own 'Final check command' setting (which
+ * itself defaults to npm test). God Mode's default is never changed here.
+ * @param {{checkCommand?:string}|null} profile
+ * @param {string|null|undefined} godModeCommand
+ * @returns {string} '' = let God Mode's finalizer use its own default
+ */
+function checkCommandFor(profile, godModeCommand) {
+  const own = profile && typeof profile.checkCommand === 'string' ? profile.checkCommand.trim() : '';
+  if (own) return own;
+  return typeof godModeCommand === 'string' ? godModeCommand.trim() : '';
+}
+
+/**
+ * Whether the second, fresh SHIP-confirmation Playtester agrees: its pass
+ * worked, every gate passes on ITS scores, and it found no blocker.
+ * @param {{ok:boolean, report?:object}|null} pass runPlaytest result (mode shipConfirm)
+ * @param {{allPassed:boolean}|null} gate gate status computed from that pass's scores
+ * @returns {boolean}
+ */
+function shipAgrees(pass, gate) {
+  if (!isObj(pass) || pass.ok !== true || !isObj(gate) || gate.allPassed !== true) return false;
+  const findings = isObj(pass.report) && Array.isArray(pass.report.findings) ? pass.report.findings : [];
+  return !findings.some((f) => isObj(f) && f.severity === 'blocker');
+}
+
+// ---- stored run ------------------------------------------------------------------
+
+function cleanCard(raw) {
+  if (!isObj(raw) || !Number.isFinite(raw.at)) return null;
+  const files = cardFiles(raw).slice(0, MAX_ITEMS).map((f) => f.slice(0, MAX_PATH_CHARS));
+  const acceptance = Array.isArray(raw.acceptance) ? raw.acceptance.filter((a) => typeof a === 'string').slice(0, MAX_ITEMS) : [];
+  return {
+    at: raw.at,
+    text: str(raw.text, MAX_CARD_TEXT_CHARS) || '',
+    ...(str(raw.details, MAX_DETAILS_CHARS) ? { details: str(raw.details, MAX_DETAILS_CHARS) } : {}),
+    ...(files.length ? { files } : {}),
+    ...(str(raw.size, 10) ? { size: str(raw.size, 10) } : {}),
+    ...(acceptance.length ? { acceptance } : {}),
+    ...(str(raw.verify, MAX_PATH_CHARS) ? { verify: str(raw.verify, MAX_PATH_CHARS) } : {}),
+    model: BUILDER_MODELS.includes(raw.model) ? raw.model : 'opus',
+    reason: str(raw.reason, MAX_LOG_TEXT) || 'setting',
+  };
+}
+
+function cleanLogEntry(raw) {
+  if (!isObj(raw) || !Number.isFinite(raw.at) || !['model', 'event'].includes(raw.kind)) return null;
+  return {
+    at: raw.at,
+    n: Number.isInteger(raw.n) ? raw.n : 0,
+    kind: raw.kind,
+    ...(ROLES.includes(raw.role) ? { role: raw.role } : {}),
+    ...(str(raw.model, 20) ? { model: str(raw.model, 20) } : {}),
+    ...(str(raw.reason, MAX_LOG_TEXT) ? { reason: str(raw.reason, MAX_LOG_TEXT) } : {}),
+    ...(Number.isFinite(raw.card) ? { card: raw.card } : {}),
+    ...(str(raw.text, MAX_LOG_TEXT) ? { text: str(raw.text, MAX_LOG_TEXT) } : {}),
+  };
+}
+
+function cleanConflicts(raw) {
+  return (Array.isArray(raw) ? raw : [])
+    .filter((c) => isObj(c) && Number.isInteger(c.n) && Array.isArray(c.files))
+    .map((c) => ({ n: c.n, files: c.files.filter((f) => typeof f === 'string').slice(0, MAX_CONFLICT_FILES) }))
+    .slice(-MAX_CONFLICT_ITERATIONS);
+}
+
+function cleanMilestone(raw) {
+  if (!isObj(raw) || typeof raw.name !== 'string') return null;
+  return { name: raw.name.slice(0, 200), passed: raw.passed === true, score: finite(raw.score) };
+}
+
+function cleanCritic(raw) {
+  if (!isObj(raw)) return null;
+  return {
+    ok: raw.ok === true,
+    verdict: raw.verdict === 'ship' ? 'ship' : 'continue',
+    milestone: cleanMilestone(raw.milestone),
+    next: str(raw.next, 200),
+    allPassed: raw.allPassed === true,
+    ...(str(raw.error, 100) ? { error: str(raw.error, 100) } : {}),
+  };
+}
+
+const keepList = (v) => (Array.isArray(v) ? v.slice(0, MAX_REPORT_ITEMS) : []);
+
+function cleanReport(raw) {
+  if (!isObj(raw)) return null;
+  return {
+    mode: raw.mode === 'shipConfirm' ? 'shipConfirm' : 'explore',
+    findings: keepList(raw.findings),
+    scores: keepList(raw.scores),
+    journeys: keepList(raw.journeys),
+    screens: keepList(raw.screens),
+    warnings: keepList(raw.warnings),
+    errors: keepList(raw.errors),
+  };
+}
+
+/** A small progress record: only the listed keys, each of its kind. */
+function cleanSmall(raw, keys) {
+  if (!isObj(raw)) return null;
+  const out = {};
+  for (const [key, kind] of Object.entries(keys)) {
+    const v = raw[key];
+    if (kind === 'bool') out[key] = v === true;
+    else if (kind === 'str' && str(v, MAX_LOG_TEXT)) out[key] = str(v, MAX_LOG_TEXT);
+    else if (kind === 'num' && Number.isFinite(v)) out[key] = v;
+    else if (kind === 'ats' && Array.isArray(v)) out[key] = v.filter(Number.isFinite).slice(0, MAX_ITEMS);
+  }
+  return out;
+}
+
+const BUILD_KEYS = { selfCheck: 'str', error: 'str', integrationBranch: 'str', fixups: 'num', closed: 'ats', skipped: 'bool' };
+const PASS_KEYS = { ok: 'bool', agrees: 'bool', error: 'str', model: 'str', reason: 'str' };
+
+function emptyCurrent() {
+  return { cards: [], notes: null, planId: null, build: null, launch: null, report: null, playtest: null, critic: null, ship: null };
+}
+
+function cleanCurrent(raw) {
+  const c = isObj(raw) ? raw : {};
+  const build = cleanSmall(c.build, BUILD_KEYS);
+  return {
+    cards: (Array.isArray(c.cards) ? c.cards : []).map(cleanCard).filter(Boolean).slice(0, MAX_ITEMS),
+    notes: str(c.notes, MAX_TEXT_CHARS),
+    // The God Mode plan of this iteration's build: a restart finishes it (lunasworkBuild).
+    planId: str(c.planId, 100),
+    build: build && ['green', 'red'].includes(build.selfCheck) ? build : null,
+    launch: cleanSmall(c.launch, { ok: 'bool', error: 'str' }),
+    report: cleanReport(c.report),
+    playtest: cleanSmall(c.playtest, PASS_KEYS),
+    critic: cleanCritic(c.critic),
+    ship: cleanSmall(c.ship, PASS_KEYS),
+  };
+}
+
+function cleanSources(raw) {
+  const src = isObj(raw) ? raw : {};
+  const out = {};
+  for (const role of ROLES) out[role] = MODEL_SOURCES.includes(src[role]) ? src[role] : 'global';
+  return out;
+}
+
+/**
+ * A run read back from the store, or null. The core fields go through
+ * lunasworkRules.normalizeStoredRun; the controller's own fields are checked
+ * here. preprod and done are controller phases the rules module does not know.
+ * @param {unknown} raw
+ * @returns {object|null}
+ */
+function restoreRun(raw) {
+  if (!isObj(raw)) return null;
+  const phase = ALL_PHASES.includes(raw.phase) ? raw.phase : 'directing';
+  const core = normalizeStoredRun({ ...raw, phase: PHASES.includes(phase) ? phase : 'directing' });
+  if (!core) return null;
+  const verdict = FINAL_VERDICTS.includes(raw.verdict) ? raw.verdict : null;
+  return {
+    ...core,
+    phase,
+    // A done run without a verdict was stopped.
+    verdict: phase === DONE ? verdict || 'stop' : null,
+    modelSources: cleanSources(raw.modelSources),
+    phaseStartedAt: finite(raw.phaseStartedAt),
+    waitUntil: phase === DONE ? null : finite(raw.waitUntil),
+    waitReason: str(raw.waitReason, 40),
+    limitedUntil: finite(raw.limitedUntil),
+    stopRequested: raw.stopRequested === true,
+    endedAt: finite(raw.endedAt),
+    endNotified: raw.endNotified === true,
+    log: (Array.isArray(raw.log) ? raw.log : []).map(cleanLogEntry).filter(Boolean).slice(-MAX_LOG),
+    conflicts: cleanConflicts(raw.conflicts),
+    lastCritic: cleanCritic(raw.lastCritic),
+    evidenceDir:
+      typeof raw.evidenceDir === 'string' && path.isAbsolute(raw.evidenceDir) ? raw.evidenceDir.slice(0, MAX_PATH_CHARS) : null,
+    current: cleanCurrent(raw.current),
+    // Pinned when Mati confirmed the start: the commands he saw are the ones
+    // that run, whatever the settings say later. Re-validated like settings.
+    profile: settingsStore.validateProfile(raw.profile).profile,
+    checkCommand: cleanCommand(raw.checkCommand),
+    // Consecutive failed tries of one phase (retried, then STOP).
+    failures:
+      isObj(raw.failures) && ALL_PHASES.includes(raw.failures.phase) && Number.isInteger(raw.failures.count) && raw.failures.count > 0
+        ? { phase: raw.failures.phase, count: raw.failures.count }
+        : null,
+    // Every God Mode plan this run made: only those may be replaced by its next build.
+    planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
+      .filter((id) => typeof id === 'string' && id && id.length <= 100)
+      .slice(-MAX_PLAN_IDS),
+  };
+}
+
+/** Recent scores per milestone, oldest first, for the status view. */
+function scoresByMilestone(history) {
+  const out = {};
+  for (const r of Array.isArray(history) ? history : []) {
+    if (!isObj(r) || !Number.isFinite(r.score)) continue;
+    const key = r.milestone || '';
+    out[key] = [...(out[key] || []), { n: r.n, score: r.score }].slice(-MAX_RECENT_SCORES);
+  }
+  return out;
+}
+
+module.exports = {
+  PREPROD,
+  DONE,
+  ALL_PHASES,
+  MAX_PLAN_IDS,
+  MAX_LOG,
+  MAX_LOG_TEXT,
+  MAX_TEXT_CHARS,
+  BUILD_KEYS,
+  PASS_KEYS,
+  riskReason,
+  isRiskyCard,
+  conflictedPaths,
+  landedCards,
+  parseModelOverride,
+  effectiveModels,
+  checkCommandFor,
+  shipAgrees,
+  cleanCard,
+  cleanLogEntry,
+  cleanConflicts,
+  cleanCritic,
+  cleanReport,
+  cleanSmall,
+  emptyCurrent,
+  restoreRun,
+  scoresByMilestone,
+};

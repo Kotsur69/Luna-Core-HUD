@@ -137,8 +137,11 @@ const { startLifeSync } = require('./lifesync');
 // to-dos, settings and snapshots between PCs. Off without config/cloud.local.json.
 const { startCloud } = require('./cloudsync');
 const { registerCloudIpc } = require('./cloudipc');
-// Luna's Work settings + pre-production (docs/LUNAS_WORK_PLAN.md slice 1.2c).
+// Luna's Work settings + pre-production (docs/LUNAS_WORK_PLAN.md slice 1.2c)
+// and the outer loop run (src/lunaswork.js via src/lunasworkWiring.js).
 const { registerLunasworkIpc } = require('./lunasworkipc');
+const { createGodModeBuilder } = require('./lunasworkBuild');
+const { createLunasWorkRuntime } = require('./lunasworkWiring');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -955,8 +958,32 @@ const reportMail = createReportMail({
   onResume: (fn) => powerMonitor.on('resume', fn),
 });
 
+/** Env of the first profile with a free-model chain (Luna's Work freeFallback), or null. */
+function lunasworkFreeEnv() {
+  const id = pickFreeProfileId(profiles, loadProviders().providers, loadChains());
+  const profile = id ? getProfile(profiles, id) : null;
+  return profile ? withClaudeOnPath(buildSessionEnv(process.env, profile.env || {})) : null;
+}
+
+// Luna's Work builds through God Mode (src/lunasworkBuild.js). Its overlays
+// below only apply while one of its builds runs; idle, God Mode is unchanged.
+const lunasworkBuilder = createGodModeBuilder({
+  orchestra: {
+    makePlan: (ctx) => orchestra.makePlan(ctx),
+    launch: (payload) => orchestra.launch(payload),
+    cancelPlanWait: () => orchestra.cancelPlanWait(),
+    view: () => orchestra.view(),
+    planWait: () => orchestra.planWait(),
+    finishRun: (payload) => orchestra.finishRun(payload),
+  },
+  profileId: () => activeProfileId,
+  env: () => orchestraToolEnv(),
+  freeEnv: () => lunasworkFreeEnv(),
+  log: (line) => console.info(line),
+});
+
 const orchestra = createOrchestra({
-  runPlanner,
+  runPlanner: lunasworkBuilder.wrapPlanner(runPlanner),
   addWorktree,
   dirtyCount,
   readTodos,
@@ -1004,14 +1031,14 @@ const orchestra = createOrchestra({
   },
   workerSettings: () => {
     const prefs = readUiPrefs();
-    return {
+    return lunasworkBuilder.workerSettings({
       model: prefs.orchestraWorkerModel,
       permissionMode: prefs.orchestraPermissionMode,
       effort: prefs.orchestraWorkerEffort,
       integration: prefs.orchestraIntegration,
       allowedTools: prefs.orchestraAllowedTools,
       checkCommand: prefs.orchestraCheckCommand,
-    };
+    });
   },
   // Second pass + slice 5.
   closeSession: (id) => closeSession(id),
@@ -1066,8 +1093,10 @@ const orchestra = createOrchestra({
     }
   },
   // Merge mode pushes the base branch with no PR review: Mati confirms it
-  // here, natively - a renderer can ask for it, never grant it.
+  // here, natively - a renderer can ask for it, never grant it. A Luna's
+  // Work build's own plan was confirmed the same way when Mati started that run.
   confirmMerge: async (base) => {
+    if (lunasworkBuilder.ownsMerge(orchestra.view())) return true;
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
@@ -1100,7 +1129,10 @@ const orchestra = createOrchestra({
   saveState: (data) => {
     if (!orchestraStore.saveRun(data)) console.error('[orchestra] could not save config/orchestra.local.json');
   },
-  onChange: (view) => send('orchestra:changed', view),
+  onChange: (view) => {
+    send('orchestra:changed', view);
+    lunasworkBuilder.onChange(view);
+  },
   onLive: (view) => {
     latestLiveView = view;
     pokeGodmodeLive();
@@ -1145,6 +1177,51 @@ const orchestra = createOrchestra({
     else if (kind === 'needYou' || kind === 'stalled' || kind === 'overlap') playCue('voice.needYou');
   },
 });
+
+// Luna's Work run controller (src/lunaswork.js): all of its deps are built in
+// src/lunasworkWiring.js; main only hands over what it owns.
+const lunaswork = createLunasWorkRuntime({
+  projects: () => projects,
+  resolveDir: (p) => resolveProjectDir(p),
+  readTodos,
+  writeTodos,
+  onTodosChanged: (projectId) => send('todo:changed', { projectId }),
+  orchestra,
+  builder: lunasworkBuilder,
+  godModeCheckCommand: () => readUiPrefs().orchestraCheckCommand,
+  env: () => orchestraToolEnv(),
+  freeEnv: () => lunasworkFreeEnv(),
+  usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
+  // Every iteration merges into the base branch: Mati confirms it natively,
+  // with the commands the run will use (pinned in the run from here on).
+  confirmStart: async ({ repoPath, profile, checkCommand }) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ["Start Luna's Work", 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      title: "Luna's Work - merge every iteration",
+      message: `Start Luna's Work in "${repoPath}"?`,
+      detail: [
+        'Every iteration is built by God Mode and merged into the base branch and pushed, after the self-check. A red result is never pushed to the base branch. The run goes on until SHIP, a plateau, two red iterations in a row, or Stop.',
+        '',
+        `Start command: ${profile.startCommand}`,
+        `App URL: ${profile.url}`,
+        `Self-check command: ${checkCommand || 'npm test'}`,
+      ].join('\n'),
+    });
+    return response === 0;
+  },
+  powerSaveBlocker,
+  log: (line) => console.info(line),
+});
+lunaswork.subscribe((event) => send('lunaswork:changed', event.status));
+/** God Mode's side of the mutual exclusion for actions on the current plan: a refusal, or null. */
+const lunasworkBlocksPlan = () => {
+  const view = orchestra.view();
+  return view ? lunaswork.godModeBlock(view.projectId) : null;
+};
 
 /**
  * Gives a tab its own intake token and --mcp-config file.
@@ -2703,7 +2780,13 @@ function registerIpc() {
   // other PCs through the cloud, like the to-dos.
   cloud = startCloud({ machine: machineName(os.hostname()) });
   registerCloudIpc({ ipcMain, cloud });
-  registerLunasworkIpc({ ipcMain, projects: () => projects, createSession, briefDir: () => path.join(userDir(), BRIEF_DIR) });
+  registerLunasworkIpc({
+    ipcMain,
+    projects: () => projects,
+    createSession,
+    briefDir: () => path.join(userDir(), BRIEF_DIR),
+    controller: lunaswork,
+  });
   const lifeSync = startLifeSync({ cloud });
   const billCal = createBillCalendar({
     gcal,
@@ -3081,6 +3164,9 @@ function registerIpc() {
     }
     const session = resolveSession(sessionId);
     if (!session) return { ok: false, error: 'noTab' };
+    // Never God Mode and Luna's Work on the same project at once.
+    const blocked = lunaswork.godModeBlock(session.projectId);
+    if (blocked) return blocked;
     const project = getProject(projects, session.projectId);
     // A missing cwd makes execFile fail with ENOENT, which would read as
     // "claude not found" - check the folder first and say what is wrong.
@@ -3106,6 +3192,8 @@ function registerIpc() {
   // Approve / Launch. orchestra.launch() validates the payload: only a known
   // plan id, ids of its own packages and capped prompt strings get through.
   ipcMain.handle('orchestra:launch', async (_event, payload) => {
+    const blocked = lunasworkBlocksPlan();
+    if (blocked) return blocked;
     const res = await orchestra.launch(payload);
     if (res.ok) {
       playCue('sfx.terminalNew');
@@ -3115,17 +3203,19 @@ function registerIpc() {
   });
 
   // Discard is refused while a worker still runs (kill the run first).
-  ipcMain.handle('orchestra:discard', () => orchestra.discard());
+  // Discard / Retry / Finish are also refused while Luna's Work runs on the
+  // plan's project; Kill always works.
+  ipcMain.handle('orchestra:discard', () => lunasworkBlocksPlan() || orchestra.discard());
 
   // Slice 4. Retry: {planId, id} - validated in orchestra.retry(). Kill: no
   // payload; same as the Ctrl+Shift+K hotkey.
-  ipcMain.handle('orchestra:retry', (_event, payload) => orchestra.retry(payload));
+  ipcMain.handle('orchestra:retry', (_event, payload) => lunasworkBlocksPlan() || orchestra.retry(payload));
   ipcMain.handle('orchestra:kill', () => orchestra.kill());
 
   // Second pass + slice 5: cancel a scheduled start; finish a run by hand
   // (integrate + clean up + report). Both validated in orchestra.js.
   ipcMain.handle('orchestra:unschedule', (_event, payload) => orchestra.unschedule(payload));
-  ipcMain.handle('orchestra:finish', (_event, payload) => orchestra.finishRun(payload));
+  ipcMain.handle('orchestra:finish', (_event, payload) => lunasworkBlocksPlan() || orchestra.finishRun(payload));
   // Sleep / shutdown countdowns: only the two known names are accepted, and
   // the renderer can only ever cancel - never start one.
   ipcMain.handle('orchestra:cancel-power', (_event, what) => {
@@ -3460,6 +3550,8 @@ app.whenReady().then(() => {
   // until Approve/Retry) and start the worker-time watchdog. After the
   // projects load: a restored run must belong to one of them.
   orchestra.restore();
+  // Luna's Work: a run the previous LunaCore left goes on from its phase.
+  lunaswork.resume();
   setInterval(() => orchestra.tick(), ORCHESTRA_TICK_MS).unref();
   // Back from sleep: re-arm or resume a paused run, drop the wake task.
   powerMonitor.on('resume', () => orchestra.onSystemResume());
@@ -3583,6 +3675,8 @@ app.on('window-all-closed', () => {
   }
   // Release the sleep blocker and stop the backend watchdog.
   overnight.stop();
+  // Luna's Work: stop the app under test; the run itself stays saved.
+  lunaswork.dispose().catch(() => {});
   // Kill the keep-awake script too, so closing LunaCore never leaves the
   // machine pinned awake by an orphaned process. Synchronous on purpose: the
   // script survives its parent, so the kill must land before we exit.
