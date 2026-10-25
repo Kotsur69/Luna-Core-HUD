@@ -277,9 +277,10 @@ test('cal-parse runs lean (no connectors)', async () => {
 });
 
 test('compareEvents puts an all-day event first on its own local day', () => {
-  const timed = { start: '2026-10-10T07:00:00' + localIsoNow().slice(19), allDay: false };
+  // Offsets come from each event's own local time, not today's, so DST changes cannot shift them.
+  const timed = { start: localIsoNow(new Date(2026, 9, 10, 7)), allDay: false };
   const allDay = { start: '2026-10-10', allDay: true };
-  const dayBefore = { start: '2026-10-09T23:00:00' + localIsoNow().slice(19), allDay: false };
+  const dayBefore = { start: localIsoNow(new Date(2026, 9, 9, 23)), allDay: false };
   assert.deepEqual([timed, allDay, dayBefore].sort(cal.compareEvents), [dayBefore, allDay, timed]);
 });
 
