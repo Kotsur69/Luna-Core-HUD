@@ -7,7 +7,22 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.18.0 — Setup Center, themes and a God Mode that finishes on its own.**
+> **Current release: v0.18.1 — Luna's Work preview, a to-do picker and duo-tone themes.**
+> - **Luna's Work (preview):** a button next to God Mode opens its own Settings
+>   pane with role models, project profiles and a design pack. Behind it sit a
+>   Director that picks the next cards, a headless Playtester that scores a web
+>   app with screenshot evidence and screen diffs, and a Critic that turns
+>   findings into to-do cards and gates shipping on evidence-backed scores.
+> - **God Mode:** a to-do picker before planning (only ticked cards reach the
+>   planner, with dependency warnings), and run reports get a "What went wrong"
+>   section explaining every failure with evidence and a fix.
+> - **To-dos:** tags on cards (run tag + Steer toggle) in the HUD and on the
+>   phone; `luna_todo_list` can filter by tag.
+> - **Themes:** Matrix, Amber CRT, Tokyo Night, Crimson, Magma, Acid and Sakura
+>   reworked as duo-tone themes, plus a new `--bar-sheen` token.
+> - **Inbox:** shows "Gmail not connected" with a shortcut to Report emails.
+>
+> **v0.18.0 — Setup Center, themes and a God Mode that finishes on its own.**
 > - **Setup:** a Setup Center in Ctrl+L > General shows what is connected and
 >   what is missing, with own-Supabase onboarding, and a Getting started guide
 >   opens on first launch. Life, Mission Control and God Mode can be hidden.
