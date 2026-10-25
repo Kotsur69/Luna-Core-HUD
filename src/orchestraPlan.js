@@ -28,7 +28,9 @@ const PLANNER_MODEL = 'opus';
 // Planning reads code across the repo and weighs grouping: one notch above routine.
 const PLANNER_EFFORT = 'high';
 const PLANNER_BUDGET_USD = 3;
-const PLANNER_TIMEOUT_MS = 8 * 60 * 1000;
+// Opus at high effort over a big to-do set (e.g. 9 packages, ~$2.3) can run
+// past 8 min; a timeout throws the whole plan away, so leave headroom.
+const PLANNER_TIMEOUT_MS = 15 * 60 * 1000;
 // Read-only: the planner may look at the code, never change it.
 const PLANNER_TOOLS = 'Read,Grep,Glob';
 
