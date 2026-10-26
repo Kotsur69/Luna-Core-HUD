@@ -2277,3 +2277,128 @@ test('the releaser keeps an existing tag and release, and refuses what it cannot
   assert.equal((await release(noGh, { repoPath })).error, 'noGh');
   assert.ok(!noGh.calls.some((c) => c.args[1] === 'create'));
 });
+
+// ---- LW 2.25b: clickable mockup first ----------------------------------------------------
+
+const MOCKUP_ON = { models: {}, freeFallback: false, projects: { game: { mockupFirst: true } } };
+const tagged = (h, tag) => h.todos.filter((t) => Array.isArray(t.tags) && t.tags.includes(tag));
+const prototypeDecision = (h) => h.stored.decisions.find((d) => d.kind === 'prototype');
+
+/** Runs a mockup-first run up to its approval wait. */
+async function prototypeRun(over = {}) {
+  const designs = [];
+  const h = harness({ settings: MOCKUP_ON, deps: { appendDesign: (o) => designs.push(o) !== 0 }, ...over });
+  h.designs = designs;
+  await h.start();
+  return h;
+}
+
+test('LW 2.25b: mockup first off (the default) - straight to the build, no prototype', async () => {
+  const h = harness();
+  h.next.director.push(STOP_CARD);
+  await h.start();
+  assert.equal(h.calls.director[0].iteration, 1, 'the first Director runs at iteration 1');
+  assert.equal(h.calls.build.length, 0);
+  assert.ok(h.calls.playtest.every((p) => p.mode !== 'navigation'));
+  assert.deepEqual(tagged(h, 'prototype'), []);
+  assert.equal(h.stored.prototype, null);
+  assert.deepEqual(h.stored.toggles, { designVariants: false, mockupFirst: false });
+});
+
+test('LW 2.25b: on - a prototype iteration, one navigation playtest, then the approval gate takes its default at the deadline', async () => {
+  const h = await prototypeRun();
+  h.next.director.push(STOP_CARD);
+
+  // The prototype iteration: its own card, built before any Director.
+  assert.equal(h.calls.director.length, 0);
+  assert.equal(h.calls.build.length, 1);
+  const built = h.calls.build[0];
+  assert.equal(built.iteration, 1);
+  assert.equal(built.cards.length, 1);
+  assert.match(built.cards[0].text, /^Prototype: a rough clickable mockup/);
+  assert.match(built.cards[0].details, /http:\/\/localhost:3000\/prototype\//);
+  assert.equal(tagged(h, 'prototype')[0].done, true);
+
+  // Played once, for navigation only.
+  assert.deepEqual(h.calls.playtest.map((p) => p.mode), ['navigation']);
+  assert.equal(h.calls.critic.length, 0, 'no Critic on the prototype');
+
+  // The real build waits for the approval.
+  assert.equal(h.stored.phase, 'directing');
+  assert.equal(h.stored.iteration, 2);
+  assert.equal(h.stored.waitReason, 'prototype');
+  const asked = prototypeDecision(h);
+  assert.equal(asked.status, 'pending');
+  assert.deepEqual(asked.options, ['approve']);
+  assert.equal(asked.defaultAnswer, 'approve');
+  assert.equal(asked.freeText, true);
+  assert.equal(asked.deadline, START_CLOCK + 4 * HOUR);
+  assert.match(asked.question, /^Approve the prototype\?/);
+  assert.match(asked.detail, /open http:\/\/localhost:3000\/prototype\/ \(start the app: npm start\)/);
+  assert.equal(h.stored.prototype.status, 'asked');
+
+  // Nobody answers: at the deadline the default approves and the real build starts.
+  for (let i = 0; i < 3 && !h.calls.director.length; i += 1) await h.fire();
+  assert.equal(h.calls.director.length, 1);
+  assert.equal(h.calls.director[0].iteration, 2);
+  const taken = prototypeDecision(h);
+  assert.equal(taken.answer, 'approve');
+  assert.equal(taken.answeredBy, 'default');
+  assert.equal(h.stored.prototype.status, 'approved');
+  assert.deepEqual(h.designs, [], 'no comments, DESIGN.md untouched');
+  assert.deepEqual(tagged(h, 'prototype-review'), []);
+  assert.match(logText(h), /prototype approved \(default after deadline\)/);
+});
+
+test("LW 2.25b: Mati's comments on the prototype wake the run, become a card and go into DESIGN.md", async () => {
+  const h = await prototypeRun();
+  h.next.director.push(STOP_CARD);
+  assert.equal(h.stored.waitReason, 'prototype');
+
+  const res = h.ctl.answer({ id: prototypeDecision(h).id, answer: 'Bigger quote total, move the send button up' });
+  assert.equal(res.ok, true);
+  await h.settle();
+
+  assert.equal(h.calls.director.length, 1, 'woken before the deadline');
+  assert.equal(h.calls.director[0].iteration, 2);
+  const review = tagged(h, 'prototype-review');
+  assert.equal(review.length, 1);
+  assert.match(review[0].text, /^Prototype review: Bigger quote total/);
+  assert.ok(review[0].tags.includes('run:lwtest1'));
+  assert.equal(h.designs.length, 1);
+  assert.equal(h.designs[0].repoPath, REPO);
+  assert.match(h.designs[0].text, /^## Prototype review\n\nBigger quote total, move the send button up$/);
+});
+
+test('LW 2.25b: once the first milestone gate passed, one card deletes the prototype folder', async () => {
+  const h = await prototypeRun();
+  h.next.director.push(DEFAULT, STOP_CARD);
+  h.next.critic.push(() => ({
+    ok: true, verdict: 'continue', model: 'sonnet', modelReason: 'milestone gate',
+    milestone: { name: 'skeleton', passed: true, score: 90 }, next: 'core', allPassed: false,
+  }));
+  h.ctl.answer({ id: prototypeDecision(h).id, answer: 'approve' });
+  await h.settle();
+
+  assert.equal(h.calls.director.length, 2);
+  const cleanup = tagged(h, 'prototype-cleanup');
+  assert.equal(cleanup.length, 1);
+  assert.match(cleanup[0].text, /remove the prototype\/ folder/);
+  assert.deepEqual(cleanup[0].files, ['prototype/']);
+  assert.equal(h.stored.prototype.status, 'cleanup');
+  assert.equal(h.stored.prototype.cleanupAt, cleanup[0].at);
+  assert.equal(h.calls.playtest.filter((p) => p.mode === 'navigation').length, 1, 'the prototype is played only once');
+});
+
+test('LW 2.25b: a red prototype build is built again, not played', async () => {
+  const h = harness({ settings: MOCKUP_ON });
+  h.next.build.push(redBuild);
+  await h.start();
+  assert.equal(h.calls.playtest.length, 0);
+  assert.equal(h.stored.phase, 'building');
+  assert.equal(h.stored.prototype.status, 'building');
+  await h.fire();
+  assert.equal(h.calls.build.length, 2);
+  assert.match(h.calls.build[1].cards[0].text, /^Prototype:/);
+  assert.deepEqual(h.calls.playtest.map((p) => p.mode), ['navigation']);
+});

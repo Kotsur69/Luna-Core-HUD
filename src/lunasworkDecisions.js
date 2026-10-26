@@ -39,8 +39,13 @@
 
 // stuckCard: a card that failed two iterations and the Critic did not split
 // (B4). outOfScope: a card outside DESIGN.md / ROADMAP.md (B5). Both are
-// asked by the controller, never by needsDecision().
-const KINDS = ['dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'feedbackScope', 'clientScope', 'other'];
+// asked by the controller, never by needsDecision(). designVariant (LW 2.25a)
+// and prototype (LW 2.25b) are the toggles' own questions, asked by
+// lunasworkVariantFlow / lunasworkPrototype with their own options.
+const KINDS = [
+  'dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'feedbackScope', 'clientScope',
+  'designVariant', 'prototype', 'other',
+];
 const ANSWERED_BY = ['mati', 'default'];
 const STATUSES = ['pending', 'answered'];
 

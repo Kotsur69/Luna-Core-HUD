@@ -42,6 +42,13 @@
 // the same model - Read only, inside the evidence dir - scores each mockup /
 // screenshot pair 0-10, next to a structural diff number. The result is
 // report.designMatch[]; an entry without both images is dropped.
+//
+// Design variants (LW 2.25a, src/lunasworkVariants.js): with opts.variants
+// (screens whose variants are built), the explore pass also takes one
+// screenshot per `?variant=` letter - report.variantShots[], each a real PNG
+// of this pass. Navigation (LW 2.25b): mode 'navigation' clicks through the
+// clickable prototype under <url>/prototype/ once - links and buttons only,
+// no journeys, scores, screen diff or design match.
 // ============================================================================
 
 'use strict';
@@ -57,8 +64,11 @@ const { DESIGN_DIR, readPackFile } = require('./lunasworkPack');
 const { killTree } = require('./lunasworkAdapters');
 const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
 const designMatch = require('./lunasworkDesignMatch');
+const variants = require('./lunasworkVariants');
 
-const MODES = ['explore', 'shipConfirm'];
+const MODES = ['explore', 'shipConfirm', 'navigation'];
+// LW 2.25b: where the clickable prototype opens, relative to the app url.
+const PROTOTYPE_PATH = 'prototype/';
 // Plan: "The SHIP confirmation pass always gets opus" - whatever the settings say.
 const SHIP_CONFIRM_MODEL = 'opus';
 const FALLBACK_MODEL = 'sonnet';
@@ -190,6 +200,8 @@ const PLAYTEST_SCHEMA = {
     checks: checksSchema(EVIDENCE_SCHEMA),
     // Optional: only an explore pass with mapped mockups answers it (LW 2.19a).
     designShots: designMatch.DESIGN_SHOTS_SCHEMA,
+    // Optional: only an explore pass with built design variants answers it (LW 2.25a).
+    variantShots: variants.VARIANT_SHOTS_SCHEMA,
   },
 };
 
@@ -251,7 +263,7 @@ const isInside = (root, file) => {
 // ---- model --------------------------------------------------------------------------
 
 /**
- * @param {string} mode 'explore' | 'shipConfirm'
+ * @param {string} mode 'explore' | 'shipConfirm' | 'navigation'
  * @param {object} [models] Luna's Work models per role (settings)
  * @returns {{model:string, reason:string}}
  */
@@ -346,10 +358,11 @@ const sharedRules = (matrix, servers) => [
  */
 function buildPlaytestPrompt({
   mode, url, testPlan, shipCriteria, checks = [], personas = personasFor(0, false), matrix = matrixFor(0, false), tools,
-  designTargets = [],
+  designTargets = [], variantTargets = [],
 }) {
   const SHARED_RULES = sharedRules(matrix, enginesToServers(tools));
   const lenses = ['', 'Personas for this pass - test through each one in turn:', ...personaLines(personas)];
+  if (mode === 'navigation') return navigationPrompt(url, testPlan, SHARED_RULES);
   if (mode === 'shipConfirm') {
     return [
       'You are an independent SHIP confirmation tester for a web app. Nobody has told you whether it passes - find out yourself.',
@@ -383,6 +396,25 @@ function buildPlaytestPrompt({
     ...fence('Ship criteria (design/SHIP_CRITERIA.md)', shipCriteria),
     ...checksPrompt(checks),
     ...designMatch.designMatchPrompt(designTargets),
+    ...variants.variantShotsPrompt(variantTargets),
+  ].join('\n');
+}
+
+/** LW 2.25b: one pass over the clickable prototype - navigation only. */
+function navigationPrompt(url, testPlan, sharedRules) {
+  const start = new URL(PROTOTYPE_PATH, url).href;
+  return [
+    'You are checking a rough, clickable PROTOTYPE of a web app before the real build starts. It uses fake data on purpose.',
+    `The prototype starts at ${start}. You have only a browser (Playwright tools).`,
+    '',
+    'What to do - navigation only:',
+    '- Open the start page, then click every link, button and menu item you can reach, on every page.',
+    '- A finding is a broken way through: a dead link, a button that leads nowhere, a page you cannot get back from, a main screen of the test plan that no click reaches. Looks, texts and data are NOT findings.',
+    ...sharedRules,
+    '- scores, journeys: leave empty.',
+    '- screens: one viewport screenshot per prototype page you reached, in chromium at 1440x900, named "prototype-<page>".',
+    '',
+    ...fence('Test plan (design/TEST_PLAN.md) - its journeys name the main screens', testPlan),
   ].join('\n');
 }
 
@@ -570,6 +602,7 @@ function emptyReport(mode, error, { personas = [], matrix = [] } = {}) {
     checks: [],
     designShots: [],
     designMatch: [],
+    variantShots: [],
     warnings: [],
     errors: error ? [error] : [],
   };
@@ -588,7 +621,7 @@ function emptyReport(mode, error, { personas = [], matrix = [] } = {}) {
  *   screens:object[], checks:object[], warnings:object[], errors:object[]}}
  */
 function validateReport(raw, {
-  evidenceDir, since = 0, mode = 'explore', checks = [], personas = [], matrix = [], designTargets = [],
+  evidenceDir, since = 0, mode = 'explore', checks = [], personas = [], matrix = [], designTargets = [], variantTargets = [],
 }) {
   const ran = { personas, matrix };
   if (!isObj(raw) || !REPORT_KEYS.every((key) => Array.isArray(raw[key]))) {
@@ -612,6 +645,7 @@ function validateReport(raw, {
     designShots: designMatch.cleanDesignShots(raw.designShots, designTargets, (p) => evidenceFile(p, ctx), warnings),
     // Filled by runPlaytest after the vision comparison (lunasworkDesignMatch.runDesignMatch).
     designMatch: [],
+    variantShots: variants.cleanVariantShots(raw.variantShots, variantTargets, (p) => evidenceFile(p, ctx), warnings),
     warnings,
     errors: [],
   };
@@ -808,7 +842,8 @@ function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl 
  * isGate defaults to the SHIP confirmation pass (the milestone gate).
  *
  * @param {{projectDir:string, adapter:{evidenceDir:string, tools:Function, iteration?:number,
- *   ensureBrowsers?:Function}, url:string, mode?:'explore'|'shipConfirm', checks?:object[],
+ *   ensureBrowsers?:Function}, url:string, mode?:'explore'|'shipConfirm'|'navigation', checks?:object[],
+ *   variants?:object[],
  *   iteration?:number, isGate?:boolean, models?:object, env?:object,
  *   execImpl?:Function, timeoutMs?:number, budgetUsd?:number,
  *   threshold?:number, now?:()=>number, killTreeImpl?:(pid:number)=>void}} opts
@@ -852,6 +887,8 @@ async function runPlaytest(opts) {
     // LW 2.19a: the mapped mockups; the ship pass verifies criteria only.
     const design = mode === 'explore' ? designMatch.designTargets(projectDir) : { targets: [], warnings: [] };
     const designTargets = design.targets;
+    // LW 2.25a: the built design variants to screenshot (explore pass only).
+    const variantTargets = mode === 'explore' && Array.isArray(opts.variants) ? opts.variants : [];
 
     const { evidenceDir } = adapter;
     fs.mkdirSync(evidenceDir, { recursive: true });
@@ -866,7 +903,7 @@ async function runPlaytest(opts) {
     const execImpl = opts.execImpl || execFile;
     const call = await callClaude({
       args: buildPlaytestArgs({ model: pick.model, tools, budgetUsd: opts.budgetUsd }),
-      prompt: buildPlaytestPrompt({ mode, url: appUrl.href, ...inputs, checks, ...ran, tools, designTargets }),
+      prompt: buildPlaytestPrompt({ mode, url: appUrl.href, ...inputs, checks, ...ran, tools, designTargets, variantTargets }),
       cwd: evidenceDir, // never the repo: the Playtester must not see the code
       env,
       execImpl,
@@ -877,7 +914,7 @@ async function runPlaytest(opts) {
     const parsed = parsePlannerOutput(call.stdout);
     if (!parsed.ok) return fail(parsed.error, parsed.detail);
 
-    const checked = validateReport(parsed.raw, { evidenceDir, since, mode, checks, ...ran, designTargets });
+    const checked = validateReport(parsed.raw, { evidenceDir, since, mode, checks, ...ran, designTargets, variantTargets });
     if (checked.errors.length) return fail(checked.errors[0].code);
     // A failed install is not fatal: Playwright may still find the browsers.
     const validated = browsers && browsers.ok === false
@@ -913,6 +950,7 @@ async function runPlaytest(opts) {
 
 module.exports = {
   MODES,
+  PROTOTYPE_PATH,
   SHIP_CONFIRM_MODEL,
   DENIED_TOOLS,
   PLAYTEST_SCHEMA,

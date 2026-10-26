@@ -14,6 +14,8 @@
 //   design match  -> parseDesignMappings / readDesignMappings: the
 //                    `screen | route | mockup file` table in
 //                    design/references/README.md (LW 2.19a)
+//   key screens   -> parseKeyScreens / readKeyScreens: DESIGN.md's "Key
+//                    screens" list plus mapping rows marked `key` (LW 2.25a)
 //   legal         -> appendLegalJourneys: the GDPR journeys of an EU web app
 //                    into TEST_PLAN.md, each once (LW 2.26)
 //   interview     -> interviewBrief: system prompt for the Interviewer tab
@@ -433,6 +435,7 @@ function parseJourneys(md) {
 const MOCKUP_EXT_RE = /\.(png|jpe?g)$/i;
 const MAX_MAPPINGS = 30;
 const MAX_MAPPING_CELL_CHARS = 200;
+const KEY_MARK_RE = /^(key|yes|x|tak|kluczowy)$/i;
 const HEADER_WORDS = ['screen', 'route', 'mockup', 'mockup file', 'file', 'path', 'url', 'ekran', 'makieta'];
 
 /** A table cell's plain value: no backticks, a markdown link's target (or text), no <angle brackets>. */
@@ -492,7 +495,9 @@ function parseDesignMappings(md) {
     const key = screen.toLowerCase();
     if (!route || !mockup || seen.has(key)) continue;
     seen.add(key);
-    out.push({ screen, route, mockup });
+    // LW 2.25a: an optional fourth cell `key` marks a key screen (design variants).
+    const isKey = cells.length > 3 && KEY_MARK_RE.test(cellValue(cells[3], false));
+    out.push({ screen, route, mockup, ...(isKey ? { key: true } : {}) });
   }
   return out;
 }
@@ -509,6 +514,46 @@ function readDesignMappings(repoDir) {
   } catch {
     return [];
   }
+}
+
+// ---- key screens (LW 2.25a) ----------------------------------------------------------
+
+const MAX_KEY_SCREENS = 5;
+const KEY_HEADING_RE = /^#{1,4}\s+(key screens|kluczowe ekrany)\s*$/i;
+// "- Name", "- Name: /route", "- Name - /route", "- Name (/route)"
+const KEY_ITEM_RE = /^\s*[-*]\s+(.+?)(?:\s*(?::|\s-)\s*(\/\S*)|\s*\((\/[^)\s]*)\))?\s*$/;
+
+/**
+ * LW 2.25a: the key screens that get design variants - the list under a
+ * "Key screens" heading in DESIGN.md, then the mapping rows marked `key`.
+ * A screen named twice keeps its first entry; a route missing from the list
+ * comes from the mapping table. Pure, capped at MAX_KEY_SCREENS.
+ * @param {unknown} designMd
+ * @param {{screen:string, route:string, key?:boolean}[]} [mappings] parseDesignMappings output
+ * @returns {{screen:string, route:string|null}[]}
+ */
+function parseKeyScreens(designMd, mappings = []) {
+  const maps = Array.isArray(mappings) ? mappings : [];
+  const routeOf = (name) => (maps.find((m) => m.screen.toLowerCase() === name.toLowerCase()) || {}).route || null;
+  const out = [];
+  const add = (screen, route) => {
+    const name = oneLine(cellValue(screen, false)).slice(0, MAX_MAPPING_CELL_CHARS);
+    if (!name || out.length >= MAX_KEY_SCREENS || out.some((k) => k.screen.toLowerCase() === name.toLowerCase())) return;
+    out.push({ screen: name, route: cleanRoute(route || '') || routeOf(name) });
+  };
+  let inList = false;
+  for (const line of stripComments(designMd).split('\n')) {
+    if (/^#{1,6}\s/.test(line)) inList = KEY_HEADING_RE.test(line.trim());
+    const item = inList && line.match(KEY_ITEM_RE);
+    if (item) add(item[1], item[2] || item[3]);
+  }
+  for (const m of maps) if (m.key === true) add(m.screen, m.route);
+  return out;
+}
+
+/** The repo's key screens (DESIGN.md + design/references/README.md); [] when none. */
+function readKeyScreens(repoDir) {
+  return parseKeyScreens(readPackFile(repoDir, 'DESIGN.md') || '', readDesignMappings(repoDir));
 }
 
 // ---- legal journeys (LW 2.26) ------------------------------------------------------
@@ -787,6 +832,8 @@ module.exports = {
   parseJourneys,
   parseDesignMappings,
   readDesignMappings,
+  parseKeyScreens,
+  readKeyScreens,
   LEGAL_JOURNEYS,
   appendLegalJourneys,
   parseRoadmap,

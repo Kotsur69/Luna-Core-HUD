@@ -803,3 +803,220 @@ test('LW 2.26: the legal journeys land in TEST_PLAN.md once, with the cards', as
   const journeys = Pack.parseJourneys(Pack.readPackFile(repoDir, 'TEST_PLAN.md'));
   assert.deepEqual(journeys, ['Legal: privacy policy is reachable', 'Legal: data export works', 'Legal: account deletion works']);
 });
+
+// ---- LW 2.25a: design variants ----------------------------------------------------------
+
+const Variants = require('../src/lunasworkVariants.js');
+const { createVariantFlow } = require('../src/lunasworkVariantFlow.js');
+const Decisions = require('../src/lunasworkDecisions.js');
+const { createCardBook } = require('../src/lunasworkCards.js');
+
+const KEY_DESIGN = '# Design\n\n## Screens\n\nQuote screen.\n\n## Key screens\n\n- Quote form: /quote/new\n- Dashboard\n\n## Rules\n\n- Quote totals in PLN\n';
+
+function variantRepo(design = KEY_DESIGN) {
+  const dir = fakeRepo();
+  fs.writeFileSync(path.join(dir, 'design', 'DESIGN.md'), design);
+  return dir;
+}
+
+const variantTagsOf = (list) => list.flatMap((c) => c.tags || []).filter((t) => t.startsWith(Variants.VARIANT_TAG_PREFIX));
+
+test('LW 2.25a: design variants off (the default) - no variant card, even with key screens marked', async () => {
+  for (const designVariants of [undefined, false]) {
+    const store = writableStore([runCard(1)]);
+    const { res, calls } = await direct({ repoDir: variantRepo(), todoStore: store, list: [], designVariants, answer: { cardIds: [1], notes: '' } });
+    assert.equal(store.writes, 0, 'nothing written to the store');
+    assert.deepEqual(variantTagsOf(store.list), []);
+    assert.equal(res.autoCards.variants, null);
+    assert.doesNotMatch(calls[0].prompt, /designVariant/);
+  }
+});
+
+test('LW 2.25a: on - every key screen gets one card per variant behind ?variant=, created once', async () => {
+  const repoDir = variantRepo();
+  const store = writableStore([runCard(1)]);
+  const { res, calls } = await direct({ repoDir, todoStore: store, list: [], designVariants: true, answer: { cardIds: [1], notes: '' } });
+  assert.deepEqual(variantTagsOf(store.list).sort(), [
+    'variant:dashboard:a', 'variant:dashboard:b', 'variant:dashboard:c',
+    'variant:quote-form:a', 'variant:quote-form:b', 'variant:quote-form:c',
+  ]);
+  const quoteB = store.list.find((c) => (c.tags || []).includes('variant:quote-form:b'));
+  assert.match(quoteB.text, /Design variant B: the "Quote form" screen/);
+  assert.match(quoteB.details, /\?variant=a\|b\|c/);
+  assert.ok(quoteB.tags.includes(RUN_TAG));
+  assert.deepEqual(res.autoCards.variants, { screens: 2, ready: [] });
+  assert.equal(res.autoCards.created.length, 6);
+  assert.match(calls[0].prompt, /"designVariant": true/);
+
+  await direct({ repoDir, todoStore: store, list: [], designVariants: true, answer: { cardIds: [], notes: '' } });
+  assert.equal(variantTagsOf(store.list).length, 6, 'never a second set');
+});
+
+test('LW 2.25a: a key screen marked in the mapping table counts; a screen is ready once its variants are all done', async () => {
+  const repoDir = variantRepo('# Design\n\n## Screens\n\nCart.\n');
+  fs.writeFileSync(path.join(repoDir, 'design', 'references', 'README.md'), '| Screen | Route | Mockup | Key |\n| --- | --- | --- | --- |\n| Cart | /cart | cart.png | key |\n| Help | /help | help.png | |\n');
+  const store = writableStore([]);
+  await direct({ repoDir, todoStore: store, list: [], designVariants: true, answer: { cardIds: [], notes: '' } });
+  assert.deepEqual(variantTagsOf(store.list).sort(), ['variant:cart:a', 'variant:cart:b', 'variant:cart:c']);
+
+  store.list = store.list.map((c, i) => (i < 2 ? { ...c, done: true } : c));
+  const half = await direct({ repoDir, todoStore: store, list: [], designVariants: true, answer: { cardIds: [], notes: '' } });
+  assert.deepEqual(half.res.autoCards.variants.ready, [], 'one variant still open');
+
+  store.list = store.list.map((c) => ({ ...c, done: true }));
+  const all = await direct({ repoDir, todoStore: store, list: [], designVariants: true, answer: { cardIds: [], notes: '' } });
+  assert.deepEqual(all.res.autoCards.variants.ready, [{ screen: 'Cart', slug: 'cart', route: '/cart', letters: ['a', 'b', 'c'] }]);
+});
+
+/** The controller side of the variants over the real decision queue, card book and an in-memory store. */
+function variantFlowHarness({ pickVariant } = {}) {
+  const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-variants-'));
+  const h = { clock: 1_700_000_000_000, todos: [], lines: [], picks: [], log: [] };
+  h.run = {
+    id: 'amsteel1', projectId: 'amsteel', repoPath: fakeRepo(), iteration: 4, models: { critic: 'sonnet' },
+    decisions: [], variants: [],
+    current: { variantTargets: [{ screen: 'Quote form', slug: 'quote-form', route: '/quote/new', letters: ['a', 'b', 'c'] }] },
+  };
+  const store = { read: () => h.todos, write: (list) => { h.todos = list; return true; }, now: () => h.clock };
+  const cardBook = createCardBook({ store: () => store, now: () => h.clock, log: () => {} });
+  h.flow = createVariantFlow({
+    deps: {
+      pickVariant: async (o) => {
+        h.picks.push(o);
+        return pickVariant ? pickVariant(o) : { variant: 'b', reason: 'B reads clearest: the total sits next to the send button' };
+      },
+    },
+    run: () => h.run,
+    update: (fields) => { h.run = { ...h.run, ...fields }; },
+    logEvent: (text) => h.log.push(text),
+    cardBook,
+    ask: (spec) => {
+      const res = Decisions.createDecision(spec, { now: h.clock, list: h.run.decisions, iteration: h.run.iteration });
+      if (!res.ok) return { ok: false };
+      h.run = { ...h.run, decisions: [...h.run.decisions, res.decision] };
+      return { ok: true, id: res.decision.id };
+    },
+    writeDecisionLine: (line) => { h.lines.push(line); return true; },
+    now: () => h.clock,
+  });
+  h.shots = ['a', 'b', 'c'].map((variant) => ({ slug: 'quote-form', variant, screenshot: path.join(evidence, `variant-quote-form-${variant}.png`) }));
+  return h;
+}
+
+test('LW 2.25a: the variant screenshots become a decision with a deadline; at the deadline the Critic picks, its reason goes to DECISIONS.md, a cleanup card follows', async () => {
+  const h = variantFlowHarness();
+  h.flow.afterPlaytest({ variantShots: h.shots });
+  assert.equal(h.run.decisions.length, 1);
+  const asked = h.run.decisions[0];
+  assert.equal(asked.kind, 'designVariant');
+  assert.deepEqual(asked.options, ['a', 'b', 'c', Variants.CRITIC_PICK]);
+  assert.equal(asked.defaultAnswer, Variants.CRITIC_PICK);
+  assert.equal(asked.deadline, h.clock + Variants.VARIANT_DEADLINE_MS);
+  assert.match(asked.detail, /variant-quote-form-a\.png/);
+  assert.equal(h.run.variants[0].status, 'asked');
+  assert.equal(h.flow.targetsFrom({ autoCards: { variants: { ready: h.run.current.variantTargets } } }).length, 0, 'not offered again');
+
+  // Not answered yet: nothing happens.
+  await h.flow.settle();
+  assert.equal(h.picks.length, 0);
+  assert.equal(h.todos.length, 0);
+
+  // The deadline passes with no answer: the queue takes the default, the Critic picks.
+  h.clock += Variants.VARIANT_DEADLINE_MS;
+  const expired = Decisions.expireDue(h.run.decisions, h.clock);
+  assert.equal(expired.answered[0].answer, Variants.CRITIC_PICK);
+  assert.equal(expired.answered[0].answeredBy, 'default');
+  h.run = { ...h.run, decisions: expired.list };
+  await h.flow.settle();
+
+  assert.equal(h.picks.length, 1);
+  assert.equal(h.picks[0].model, 'sonnet', "the Critic's model");
+  assert.equal(h.picks[0].shots.length, 3);
+  assert.equal(h.lines.length, 1);
+  assert.match(h.lines[0], /^- Design variants, "Quote form": variant B kept - picked by the Critic after the deadline/);
+  assert.match(h.lines[0], /B reads clearest/);
+  const entry = h.run.variants[0];
+  assert.equal(entry.status, 'chosen');
+  assert.equal(entry.choice, 'b');
+  assert.equal(entry.by, 'critic');
+
+  // The cleanup card: keeps B, removes A, C and the switch.
+  assert.equal(h.todos.length, 1);
+  const cleanup = h.todos[0];
+  assert.ok(cleanup.tags.includes('variant-cleanup:quote-form'));
+  assert.ok(cleanup.tags.includes('run:amsteel1'));
+  assert.match(cleanup.text, /keep variant B of "Quote form", remove the others and the switch/);
+  assert.match(cleanup.details, /Delete variants A, C/);
+  assert.equal(entry.cleanupAt, cleanup.at);
+
+  // Settled once: a second pass changes nothing.
+  await h.flow.settle();
+  assert.equal(h.todos.length, 1);
+  assert.equal(h.picks.length, 1);
+});
+
+test("LW 2.25a: Mati's letter wins - no Critic call; a failed Critic pick keeps the first variant", async () => {
+  const mati = variantFlowHarness();
+  mati.flow.afterPlaytest({ variantShots: mati.shots });
+  const res = Decisions.answerDecision(mati.run.decisions, { id: mati.run.decisions[0].id, answer: 'c' }, { by: 'mati', now: mati.clock });
+  mati.run = { ...mati.run, decisions: res.list };
+  await mati.flow.settle();
+  assert.equal(mati.picks.length, 0);
+  assert.match(mati.lines[0], /variant C kept - picked by Mati/);
+  assert.match(mati.todos[0].text, /keep variant C/);
+
+  const broken = variantFlowHarness({ pickVariant: () => { throw new Error('claude crashed'); } });
+  broken.flow.afterPlaytest({ variantShots: broken.shots });
+  broken.clock += Variants.VARIANT_DEADLINE_MS;
+  broken.run = { ...broken.run, decisions: Decisions.expireDue(broken.run.decisions, broken.clock).list };
+  await broken.flow.settle();
+  assert.equal(broken.run.variants[0].choice, 'a');
+  assert.match(broken.lines[0], /variant A kept - picked by the Critic after the deadline \(\d{4}-\d\d-\d\d\): the Critic pick failed \(claude crashed\)/);
+  assert.equal(broken.todos.length, 1, 'the cleanup card still comes');
+});
+
+test('LW 2.25a: fewer than two variant screenshots - no decision yet, asked again next iteration', () => {
+  const h = variantFlowHarness();
+  h.flow.afterPlaytest({ variantShots: h.shots.slice(0, 1) });
+  h.flow.afterPlaytest({});
+  assert.equal(h.run.decisions.length, 0);
+  assert.equal(h.run.variants.length, 0);
+});
+
+test('LW 2.25a: runCriticPick reads the screenshots in their folder (Read only) and validates the pick', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-pick-'));
+  const shots = ['a', 'b'].map((variant) => ({ variant, screenshot: path.join(dir, `variant-home-${variant}.png`) }));
+  const good = fakeClaude({ variant: 'b', reason: 'calmer layout' });
+  const pick = await Variants.runCriticPick({ repoDir: variantRepo(), screen: 'Home', shots, model: 'auto', runClaude: good.run });
+  assert.deepEqual({ variant: pick.variant, reason: pick.reason, fallback: pick.fallback, model: pick.model }, { variant: 'b', reason: 'calmer layout', fallback: false, model: 'opus' });
+  const call = good.calls[0];
+  assert.equal(call.cwd, dir);
+  assert.equal(call.args[call.args.indexOf('--tools') + 1], 'Read');
+  assert.match(call.prompt, /variant-home-a\.png/);
+  assert.match(call.prompt, /Key screens/, 'DESIGN.md is in the prompt');
+
+  for (const answer of [{ variant: 'c', reason: 'not shot' }, { reason: 'no letter' }]) {
+    const res = await Variants.runCriticPick({ repoDir: variantRepo(), screen: 'Home', shots, runClaude: fakeClaude(answer).run });
+    assert.equal(res.fallback, true);
+    assert.equal(res.variant, 'a');
+  }
+  const failed = await Variants.runCriticPick({ repoDir: variantRepo(), screen: 'Home', shots, runClaude: async () => ({ error: 'limit' }) });
+  assert.match(failed.reason, /the Critic call failed \(limit\) - variant a kept/);
+});
+
+test('LW 2.25a: the Playtester keeps only asked variant shots that are real files of this pass', () => {
+  const targets = [{ screen: 'Home', slug: 'home', route: '/', letters: ['a', 'b', 'c'] }];
+  const ok = (p) => (typeof p === 'string' && p.startsWith('variant-') ? path.join(os.tmpdir(), p) : null);
+  const warnings = [];
+  const shots = Variants.cleanVariantShots([
+    { slug: 'home', variant: 'a', screenshot: 'variant-home-a.png' },
+    { slug: 'home', variant: 'a', screenshot: 'variant-home-a.png' },
+    { slug: 'home', variant: 'b', screenshot: '../../etc/passwd' },
+    { slug: 'cart', variant: 'a', screenshot: 'variant-cart-a.png' },
+    { slug: 'home', variant: 'c', screenshot: 'variant-home-c.png' },
+  ], targets, ok, warnings);
+  assert.deepEqual(shots.map((s) => s.variant), ['a', 'c']);
+  assert.equal(warnings.length, 3);
+  assert.deepEqual(Variants.cleanVariantShots([{ slug: 'home', variant: 'a', screenshot: 'variant-home-a.png' }], [], ok, []), [], 'nothing asked, nothing kept');
+  assert.equal(Variants.variantRoute('/q?x=1#top', 'b'), '/q?x=1&variant=b#top');
+});

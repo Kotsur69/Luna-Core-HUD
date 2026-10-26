@@ -213,6 +213,60 @@ test('the second-opinion CLI order is off by default and keeps known CLIs once, 
   assert.deepEqual(S.normalizeCliOrder(['constructor', '__proto__', 'toString']), []);
 });
 
+// ---- toggles (LW 2.25a / 2.25b) -----------------------------------------------------
+
+test('LW 2.25: designVariants and mockupFirst are off by default for every project', () => {
+  assert.deepEqual(S.togglesFor({}, 'p'), { designVariants: false, mockupFirst: false });
+  assert.deepEqual(S.togglesFor(S.defaultSettings(), undefined), { designVariants: false, mockupFirst: false });
+  assert.deepEqual(S.TOGGLES, ['designVariants', 'mockupFirst']);
+});
+
+test('LW 2.25: a stored toggle counts only when exactly true', () => {
+  for (const junk of ['true', 1, null, {}, 'yes']) {
+    const s = S.normalizeSettings({ projects: { p: { designVariants: junk, mockupFirst: junk } } });
+    assert.deepEqual(S.togglesFor(s, 'p'), { designVariants: false, mockupFirst: false }, `junk=${JSON.stringify(junk)}`);
+    assert.equal(s.projects.p, undefined, 'an entry with nothing valid is dropped');
+  }
+  const on = S.normalizeSettings({ projects: { p: { designVariants: true, mockupFirst: true } } });
+  assert.deepEqual(S.togglesFor(on, 'p'), { designVariants: true, mockupFirst: true });
+  assert.deepEqual(S.togglesFor(on, 'other'), { designVariants: false, mockupFirst: false }, 'per project');
+});
+
+test('LW 2.25: withProject turns each toggle on and off without mutating its input', () => {
+  const base = S.withProject({}, 'p', { profile: goodProfile }).settings;
+  const frozen = JSON.stringify(base);
+
+  const on = S.withProject(base, 'p', { designVariants: true });
+  assert.equal(on.reason, null);
+  assert.deepEqual(S.togglesFor(on.settings, 'p'), { designVariants: true, mockupFirst: false });
+  assert.equal(S.profileFor(on.settings, 'p').startCommand, 'npm run dev', 'the profile is kept');
+  assert.equal(JSON.stringify(base), frozen);
+
+  const both = S.withProject(on.settings, 'p', { mockupFirst: true });
+  assert.deepEqual(S.togglesFor(both.settings, 'p'), { designVariants: true, mockupFirst: true });
+
+  const off = S.withProject(both.settings, 'p', { designVariants: false });
+  assert.deepEqual(S.togglesFor(off.settings, 'p'), { designVariants: false, mockupFirst: true });
+  assert.equal('designVariants' in off.settings.projects.p, false, 'an off toggle is not stored');
+});
+
+test('LW 2.25: a non-boolean toggle is refused and nothing changes', () => {
+  const base = S.withProject({}, 'p', { mockupFirst: true }).settings;
+  for (const bad of ['true', 1, null, {}]) {
+    const res = S.withProject(base, 'p', { designVariants: bad, mockupFirst: false });
+    assert.match(res.reason, /designVariants must be true or false/);
+    assert.deepEqual(S.togglesFor(res.settings, 'p'), { designVariants: false, mockupFirst: true });
+  }
+  assert.match(S.withProject(base, 'p', { mockupFirst: 'no' }).reason, /mockupFirst/);
+});
+
+test('LW 2.25: the toggles round-trip through the file', () => {
+  const file = tmpFile();
+  const { settings } = S.withProject({}, 'p', { designVariants: true, mockupFirst: true });
+  assert.equal(S.writeSettings(settings, file), true);
+  assert.deepEqual(S.togglesFor(S.readSettings(file), 'p'), { designVariants: true, mockupFirst: true });
+});
+
 // ---- disk -------------------------------------------------------------------------
 
 test('a missing file reads as defaults', () => {

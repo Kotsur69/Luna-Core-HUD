@@ -7,6 +7,9 @@
 //            real personal data - splitByScope sends it to the decision queue
 //   legal    an EU web app's GDPR cards before SHIP (lunasworkLegal), once per
 //            `legal:<slug>` tag, plus their journeys in design/TEST_PLAN.md
+//   variants LW 2.25a, only with the project's designVariants toggle on: the
+//            variant cards of every key screen (lunasworkVariants), and the
+//            screens whose variants are all built (`ready`, to screenshot)
 //
 // Cards go through lunasworkCritic.applyCards; scheduleAutoCards never throws.
 // ============================================================================
@@ -18,6 +21,8 @@ const seed = require('./lunasworkSeed');
 const legal = require('./lunasworkLegal');
 const { applyCards } = require('./lunasworkCritic');
 const { CARD_CHOICES } = require('./lunasworkDecisions');
+const variants = require('./lunasworkVariants');
+const { isPrototypeCard } = require('./lunasworkPrototype');
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const clean = (raw, max) => (typeof raw === 'string' ? raw.replace(/\r\n/g, '\n').trim().slice(0, max) : '');
@@ -27,7 +32,8 @@ const hasTagPrefix = (card, prefix) => Array.isArray(card.tags) && card.tags.som
 /** LW 2.21a / 2.26: a seed data or legal card the Director created from the pack. */
 const isSeedCard = (card) => hasTagPrefix(card, seed.SEED_TAG_PREFIX);
 const isLegalCard = (card) => hasTagPrefix(card, legal.LEGAL_TAG_PREFIX);
-const isAutoCard = (card) => isSeedCard(card) || isLegalCard(card);
+// LW 2.25: the design-variant and prototype cards come from the toggles, not from a model.
+const isAutoCard = (card) => isSeedCard(card) || isLegalCard(card) || variants.isVariantCard(card) || isPrototypeCard(card);
 /** LW 2.21a: the card that copies real personal data - only with a decision-queue OK. */
 const isPiiCard = (card) => hasTagPrefix(card, seed.PII_TAG_PREFIX);
 const PII_MISSING = `real emails / phone numbers / tax ids from design/references in the fixtures - default ${CARD_CHOICES.outOfScope.defaultAnswer}: the fixtures keep fake values`;
@@ -77,23 +83,27 @@ function legalCardsDue(repoDir, todos, docs, lastCritic) {
 }
 
 /**
- * Creates the Director's own cards (seed data, legal pack) in the to-do
- * store, tagged with the run tag. Never throws.
- * @returns {{created:object[], seed:object|null, legal:object|null, journeysWritten:boolean, warnings:object[]}}
+ * Creates the Director's own cards (seed data, legal pack, design variants)
+ * in the to-do store, tagged with the run tag. Never throws.
+ * @param {{repoDir:string, todoStore:object, lastCritic?:object|null, designVariants?:boolean}} opts
+ * @returns {{created:object[], seed:object|null, legal:object|null, journeysWritten:boolean,
+ *   variants:{screens:number, ready:object[]}|null, warnings:object[]}} variants null = toggle off
  */
-function scheduleAutoCards({ repoDir, todoStore, lastCritic }, tag, todos, docs) {
-  const out = { created: [], seed: null, legal: null, journeysWritten: false, warnings: [] };
+function scheduleAutoCards({ repoDir, todoStore, lastCritic, designVariants }, tag, todos, docs) {
+  const out = { created: [], seed: null, legal: null, journeysWritten: false, variants: null, warnings: [] };
   try {
     const seedDue = seedCardsDue(repoDir, todos);
     const legalNow = legalCardsDue(repoDir, todos, docs, lastCritic);
+    const variantsNow = designVariants === true ? variants.variantsDue(repoDir, todos) : { cards: [], ready: [], screens: 0 };
     out.seed = seedDue.info;
     out.legal = legalNow.info;
+    if (designVariants === true) out.variants = { screens: variantsNow.screens, ready: variantsNow.ready };
     if (legalNow.journeys) {
       const res = pack.applyWrite(repoDir, legalNow.journeys);
       if (res.ok) out.journeysWritten = true;
       else out.warnings.push({ code: 'packWriteFailed', file: 'TEST_PLAN.md', detail: res.error });
     }
-    const cards = [...seedDue.cards, ...legalNow.cards];
+    const cards = [...seedDue.cards, ...legalNow.cards, ...variantsNow.cards];
     if (!cards.length) return out;
     if (typeof todoStore.write !== 'function') {
       out.warnings.push({ code: 'autoCardsSkipped', detail: 'the to-do store is read-only' });

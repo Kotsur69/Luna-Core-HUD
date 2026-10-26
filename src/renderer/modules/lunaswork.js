@@ -3,8 +3,9 @@
 // ----------------------------------------------------------------------------
 // Its own button (next to God Mode in the to-do widget) and its own Settings
 // pane: models per role, the free-providers fallback, the project profile and
-// pre-production (scaffold design/ + the interview tab). God Mode's controls
-// are not touched.
+// pre-production (scaffold design/ + the interview tab, and the per-project
+// LW 2.25 toggles: design variants, clickable mockup first). God Mode's
+// controls are not touched.
 //
 // Everything goes through the narrow lunaswork:* IPC (src/lunasworkipc.js):
 // the renderer names a known project by id and sends plain values; main
@@ -86,6 +87,11 @@ export function mountLunasWorkSettings(root) {
     packList: root.querySelector('#lw-pack-missing'),
     preprod: root.querySelector('#lw-preprod-start'),
   };
+  // LW 2.25a / 2.25b: per-project toggles; the setting key -> its switch and status.
+  const toggles = [
+    ['designVariants', root.querySelector('#lw-variants-toggle'), root.querySelector('#lw-variants-status')],
+    ['mockupFirst', root.querySelector('#lw-mockup-toggle'), root.querySelector('#lw-mockup-status')],
+  ].filter(([, input, status]) => input && status);
   if (Object.values(el).some((v) => !v)) return;
 
   let state = null;
@@ -111,6 +117,10 @@ export function mountLunasWorkSettings(root) {
     for (const select of el.selects) select.value = state.models[select.dataset.lwRole];
     el.free.checked = state.freeFallback === true;
     el.freeStatus.textContent = t(state.freeFallback ? 'lw.free.on' : 'lw.free.off');
+    for (const [key, input, status] of toggles) {
+      input.checked = state[key] === true;
+      status.textContent = t(state[key] === true ? 'lw.toggle.on' : 'lw.toggle.off');
+    }
   }
 
   function paintProfile() {
@@ -201,6 +211,13 @@ export function mountLunasWorkSettings(root) {
     sfx.modeToggle();
     save({ freeFallback: el.free.checked });
   });
+
+  for (const [key, input] of toggles) {
+    input.addEventListener('change', () => {
+      sfx.modeToggle();
+      save({ [key]: input.checked });
+    });
+  }
 
   el.form.addEventListener('submit', async (e) => {
     e.preventDefault();

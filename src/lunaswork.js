@@ -113,6 +113,13 @@
 // docs iteration (src/lunasworkShipDocs.js: README, USER_GUIDE, release) and
 // is final only once that build is green.
 //
+// LW 2.25a / 2.25b, per-project toggles pinned at start (run.toggles, both off
+// by default - off changes nothing): design variants for key screens
+// (src/lunasworkVariantFlow.js: Director cards, the Playtester's screenshots,
+// a decision the Critic answers at the deadline, a cleanup card), and a
+// clickable prototype before the real build (src/lunasworkPrototype.js:
+// its own iteration, one navigation playtest, an approval gate).
+//
 // Size: past the 800-line guideline on purpose. The steps share one closure
 // (the run, the wait timer, the app under test); the pure parts and the card
 // writes already live in lunasworkRun.js / lunasworkCards.js.
@@ -201,6 +208,9 @@ const { wheelState, newestWheelAction } = require('./lunasworkWheel');
 const { handbackDecisionLine, architectureBlock } = require('./lunasworkHandback');
 const { createLoopHooks } = require('./lunasworkLoopHooks');
 const { closePhase } = require('./lunasworkUsage');
+const { togglesFor } = require('./lunasworkSettings');
+const { createVariantFlow } = require('./lunasworkVariantFlow');
+const { createPrototype } = require('./lunasworkPrototype');
 
 const PHASE_ROLE = {
   preprod: null,
@@ -311,6 +321,30 @@ function createLunasWork(deps) {
     finish: (verdict, fields) => finish(verdict, fields),
     retryLater: (why) => retryLater(why),
     logEvent: (text) => logEvent(text),
+    cardBook,
+    withBuilderModel: (card) => withBuilderModel(card),
+    withBrief: (card) => withBuilderBrief(card, [], listSkills(run.repoPath)),
+  });
+  const variantFlow = createVariantFlow({
+    deps,
+    run: () => run,
+    update: (fields) => update(fields),
+    logEvent: (text) => logEvent(text),
+    cardBook,
+    ask: (spec) => ask(spec),
+    writeDecisionLine: (line, decision, label) => writeDecisionLine(line, decision, label),
+    now,
+  });
+  const prototype = createPrototype({
+    deps,
+    run: () => run,
+    update: (fields) => update(fields),
+    transition: (phase, fields) => transition(phase, fields),
+    retryLater: (why) => retryLater(why),
+    logEvent: (text) => logEvent(text),
+    armWait: (until, reason) => armWait(until, reason),
+    wake: (reason) => wake(reason),
+    ask: (spec) => ask(spec),
     cardBook,
     withBuilderModel: (card) => withBuilderModel(card),
     withBrief: (card) => withBuilderBrief(card, [], listSkills(run.repoPath)),
@@ -494,6 +528,16 @@ function createLunasWork(deps) {
 
   const isLimit = (res) => isObj(res) && res.error === 'limit';
 
+  /** Ends a wait of this reason early (LW 2.25b: the prototype approval came in). */
+  function wake(reason) {
+    if (!waitTimer || run.waitReason !== reason) return;
+    clearTimer(waitTimer);
+    waitTimer = null;
+    update({ waitUntil: null, waitReason: null });
+    emit('resume');
+    kick();
+  }
+
   /**
    * A step failed in a way a later try may fix (a throw, a build or Critic
    * error): the phase is retried after ERROR_RETRY_MS, and MAX_STEP_FAILURES
@@ -556,6 +600,8 @@ function createLunasWork(deps) {
     armDecisionTimer();
     // B8: an answer to a gate the second opinion held.
     loopHooks.onAnswered(answered);
+    // LW 2.25b: the prototype approval the run waits for.
+    prototype.onAnswered(answered);
     // B17: an answered scope decision moves its feedback item on.
     refreshFeedback();
   }
@@ -695,7 +741,7 @@ function createLunasWork(deps) {
   }
 
   /** One Playtester pass on the started app; the app is always stopped after. */
-  async function playtestAndStop(mode, checks = []) {
+  async function playtestAndStop(mode, checks = [], variants = []) {
     try {
       const res = await deps.playtest({
         projectDir: run.repoPath,
@@ -704,6 +750,8 @@ function createLunasWork(deps) {
         mode,
         // B1: the built cards' acceptance checks (explore pass only).
         checks,
+        // LW 2.25a: the built design variants to screenshot (explore pass only).
+        ...(variants.length ? { variants } : {}),
         models: run.models,
         // The SHIP confirmation is always the paid opus pass, never a free one.
         free: mode === 'explore' && onFree(),
@@ -723,6 +771,8 @@ function createLunasWork(deps) {
       return;
     }
     if (startScaffold()) return;
+    // LW 2.25b: with mockupFirst on, the prototype iteration comes first.
+    if (prototype.begin()) return;
     transition('directing', { iteration: run.iteration + 1, current: emptyCurrent() });
   }
 
@@ -758,6 +808,10 @@ function createLunasWork(deps) {
   }
 
   async function stepDirecting() {
+    // LW 2.25b: the real build waits for the prototype approval (or its deadline).
+    if (prototype.gate()) return;
+    // LW 2.25a: a variant choice answered since the last iteration gets its cleanup card.
+    await variantFlow.settle();
     // B17: feedback that came in since the last iteration is planned in first.
     triageFeedback();
     const held = heldNow();
@@ -773,6 +827,8 @@ function createLunasWork(deps) {
       // B4: stuck cards are left out; B5: a card a decision covers passes the scope guard.
       failCounts: run.failCounts,
       decidedCards: [...new Set(run.decisions.flatMap((d) => d.cardIds))],
+      // LW 2.25a: the project toggle, pinned at start.
+      designVariants: run.toggles.designVariants,
     });
     if (isLimit(res)) return limited(res, 'director');
     const r = isObj(res) ? res : {};
@@ -789,7 +845,9 @@ function createLunasWork(deps) {
       .filter(mayBuild)
       .map(withBuilderModel)
       .filter(Boolean);
-    transition('building', { current: { ...run.current, cards, notes: str(r.notes, MAX_TEXT_CHARS) } });
+    transition('building', {
+      current: { ...run.current, cards, notes: str(r.notes, MAX_TEXT_CHARS), variantTargets: variantFlow.targetsFrom(r) },
+    });
   }
 
   function buildRecord(r, cards, free) {
@@ -871,6 +929,7 @@ function createLunasWork(deps) {
     // LW 2.23 + B11: graph, codemaps and the i18n card after a merge.
     await loopHooks.afterMerge(build);
     if (shipDocs.isDocsBuild()) return shipDocs.end(build);
+    if (prototype.isBuild()) return prototype.end(build);
     if (run.iteration === 0) return endScaffold(build);
     transition('launching', {
       conflicts: cleanConflicts([...run.conflicts.filter((c) => c.n !== run.iteration), { n: run.iteration, files }]),
@@ -887,6 +946,8 @@ function createLunasWork(deps) {
     if (build.selfCheck !== 'green') return retryLater('iteration 0: the scaffold stayed red');
     logEvent('iteration 0: scaffold on main');
     // Iteration 0 has no lap: its loop-hook notes go to iteration 1's.
+    // LW 2.25b: the prototype iteration comes before the first Director.
+    if (prototype.begin({ hookNotes: run.current.hookNotes || [] })) return undefined;
     return nextIteration({ iteration: 1, current: { ...emptyCurrent(), hookNotes: run.current.hookNotes || [] } });
   }
 
@@ -908,7 +969,8 @@ function createLunasWork(deps) {
   async function stepLaunching() {
     const started = await startApp();
     if (!started.ok) logEvent(`app did not start: ${started.error}`);
-    else await loopHooks.afterLaunch(live.url);
+    // The prototype's navigation pass is all it gets: no Lighthouse on a mockup.
+    else if (!prototype.isPlaytest()) await loopHooks.afterLaunch(live.url);
     transition('playtesting', { current: { ...run.current, launch: started } });
   }
 
@@ -920,8 +982,15 @@ function createLunasWork(deps) {
       const started = await startApp();
       if (!started.ok) res = { ok: false, error: 'launchFailed', detail: started.error };
     }
+    // LW 2.25b: the prototype is played once, for navigation only, then Mati approves it.
+    if (prototype.isPlaytest()) {
+      if (!res) res = await playtestAndStop('navigation');
+      if (isLimit(res)) return limited(res, 'playtester');
+      logModel('playtester', res.model, `${res.modelReason || 'setting'} (prototype navigation)`);
+      return prototype.afterPlaytest(res);
+    }
     const built = cardBook.builtCards(run.projectId);
-    if (!res) res = await playtestAndStop('explore', checkList(built));
+    if (!res) res = await playtestAndStop('explore', checkList(built), run.current.variantTargets);
     if (isLimit(res)) return limited(res, 'playtester');
     logModel('playtester', res.model, res.modelReason);
     if (!res.ok) logEvent(`playtest failed: ${res.error}`);
@@ -930,6 +999,8 @@ function createLunasWork(deps) {
     // B1: built cards close or reopen; B4: the cards that failed this iteration count.
     const verify = cardFlow.settleBuilt(built, report);
     refreshFeedback();
+    // LW 2.25a: variant screenshots -> the choice goes to the decision queue.
+    variantFlow.afterPlaytest(res.report);
     transition('critiquing', {
       current: { ...run.current, report, playtest, verify },
       failCounts: nextFailCounts(run.failCounts, { failed: verify.failed, closed: verify.closed }),
@@ -1393,6 +1464,8 @@ function createLunasWork(deps) {
       current: emptyCurrent(),
       profile,
       checkCommand,
+      // LW 2.25: the project's toggles, pinned like the profile.
+      toggles: togglesFor(deps.settings(), project.id),
       planIds: [],
     });
     if (!created || !created.profile) return refuse('failed', 'Could not create the run.');

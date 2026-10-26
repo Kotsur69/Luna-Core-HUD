@@ -448,6 +448,22 @@ function decisionsSinceGate(run) {
   return [...critic, ...queue];
 }
 
+/** LW 2.25a: the design-variant choices still open, with their deadline ([] when none). */
+function variantLines(r) {
+  const open = list(r.variants).filter((e) => isObj(e) && e.status === 'asked');
+  if (!open.length) return [];
+  const deadlineOf = (e) => {
+    const d = list(r.decisions).find((x) => x.id === e.decisionId);
+    return d && Number.isFinite(d.deadline) ? ` by ${new Date(d.deadline).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
+  };
+  return [
+    'DESIGN VARIANTS - PICK ONE (screenshots inline below)',
+    ...open.map((e) => `- "${oneLine(e.screen, 80)}": variants ${list(e.shots).map((s) => String(s.variant).toUpperCase()).join(', ')}`
+      + ` - answer its decision with a letter${deadlineOf(e)}, or the Critic picks`),
+    '',
+  ];
+}
+
 /**
  * The milestone email: a gate passed and the run goes on.
  * @param {object} run the run right after the gate (already on the next milestone)
@@ -477,6 +493,7 @@ function buildMilestoneEmail(run, ctx) {
     'DECISIONS SINCE THE LAST GATE (DECISIONS.md)',
     ...(decisionsSinceGate(r).length ? decisionsSinceGate(r) : ['- none']),
     '',
+    ...variantLines(r),
     ...(shots.length ? ['SCREENSHOTS (inline below)', ...shots.map((s) => `- ${oneLine(s.name, 80)} (iteration ${s.n}): ${oneLine(s.filename, 100)}`), ''] : []),
     ...feedbackLines(r.feedback),
   ];
