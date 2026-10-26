@@ -124,3 +124,65 @@ test('createAwake holds one power-save blocker for the run and releases it once'
   awake.release();
   assert.deepEqual(calls, [['start', 'prevent-app-suspension'], ['stop', 7]]);
 });
+
+// ---- loop-hook deps (src/lunasworkHookDeps.js) ----------------------------------------
+
+const { routesFromTestPlan, iterationDiff, createHookDeps } = require('../src/lunasworkHookDeps');
+
+test('routesFromTestPlan: the root first, same-origin URLs and /paths, no other origin, no duplicates', () => {
+  const md = [
+    '### Quote',
+    '1. Open /quote and fill the form (see `/quote/new`).',
+    '2. Download http://localhost:3000/pdf?id=1, compare with https://example.com/other.',
+    '3. Back to /quote.',
+  ].join('\n');
+  assert.deepEqual(routesFromTestPlan(md, 'http://localhost:3000/app'), [
+    'http://localhost:3000/',
+    'http://localhost:3000/pdf?id=1',
+    'http://localhost:3000/quote',
+    'http://localhost:3000/quote/new',
+  ]);
+  assert.deepEqual(routesFromTestPlan('', 'http://localhost:5173'), ['http://localhost:5173/']);
+  assert.deepEqual(routesFromTestPlan('/a', 'not a url'), []);
+  const many = Array.from({ length: 20 }, (_, i) => `/r${i}`).join(' ');
+  assert.equal(routesFromTestPlan(many, 'http://localhost:3000').length, 8, 'capped');
+});
+
+test('iterationDiff: from the previous checkpoint tag when there is one, else the last commit', async () => {
+  const r = setupRepos();
+  try {
+    git(r.checkout, 'tag', 'luna-work/lwtest1/iter-1');
+    fs.writeFileSync(path.join(r.checkout, 'app.js'), 'v2\n');
+    git(r.checkout, 'commit', '-q', '-am', 'second');
+    fs.writeFileSync(path.join(r.checkout, 'app.js'), 'v3\n');
+    git(r.checkout, 'commit', '-q', '-am', 'third');
+    const fromTag = await iterationDiff(r.checkout, 'lwtest1', 2);
+    assert.match(fromTag, /-v1\n\+v3/, 'iteration 2 = everything since the iter-1 tag');
+    const lastCommit = await iterationDiff(r.checkout, 'lwtest1', 1);
+    assert.match(lastCommit, /-v2\n\+v3/);
+    // LW 2.23 commits the maps on top: the iteration diff looks past them.
+    fs.mkdirSync(path.join(r.checkout, 'docs', 'CODEMAPS'), { recursive: true });
+    fs.writeFileSync(path.join(r.checkout, 'docs', 'CODEMAPS', 'overview.md'), '# maps\n');
+    git(r.checkout, 'add', '-A');
+    git(r.checkout, 'commit', '-q', '-m', "docs(codemaps): refresh after Luna's Work iteration 1");
+    const pastMaps = await iterationDiff(r.checkout, 'lwtest1', 1);
+    assert.match(pastMaps, /-v2\n\+v3/);
+    assert.ok(!pastMaps.includes('CODEMAPS'), 'the maps are left out');
+    assert.ok(!(await iterationDiff(r.checkout, 'lwtest1', 2)).includes('CODEMAPS'));
+    assert.equal(await iterationDiff(path.join(r.dir, 'nowhere'), 'lwtest1', 2), '');
+  } finally {
+    r.done();
+  }
+});
+
+test('createHookDeps: the second opinion is off without a CLI order; no review due means no call', async () => {
+  const off = createHookDeps({ env: () => process.env, settings: () => ({ secondOpinionOrder: [] }) });
+  assert.equal(await off.secondOpinion({ isGate: true, repoPath: os.tmpdir(), runId: 'lwtest1', iteration: 1 }), null);
+  const on = createHookDeps({ env: () => process.env, settings: () => ({ secondOpinionOrder: ['codex'] }) });
+  const notGate = await on.secondOpinion({ isGate: false, repoPath: os.tmpdir(), runId: 'lwtest1', iteration: 1 });
+  assert.deepEqual(notGate, { skipped: true, note: 'second opinion skipped: not a milestone gate' });
+  const reviews = await on.reviews({ iteration: 1, isGate: false, runId: 'lwtest1', repoPath: os.tmpdir() });
+  assert.deepEqual(reviews.due, []);
+  assert.equal(await on.lighthouse({ projectId: 'p', repoPath: os.tmpdir(), url: 'not a url' }), null);
+  for (const key of ['refreshGraph', 'i18n', 'lighthouse', 'reviews', 'secondOpinion']) assert.equal(typeof on[key], 'function', key);
+});

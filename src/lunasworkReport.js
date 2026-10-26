@@ -14,6 +14,8 @@
 //        ## Rollbacks         from / to tag, why, the reverted commits
 //        ## Model choices     every choice with its reason (the run log)
 //        ## Decisions         the Critic's DECISIONS.md lines, per iteration
+//        ## Notes             loop-hook failures and skips per iteration (graph
+//                             refresh, reviews, second opinion, i18n, Lighthouse)
 //        ## Evidence          the evidence folder of every iteration
 //        ## Timeline
 //   2. emails it, under God Mode's "Email me when a run finishes" setting
@@ -200,6 +202,13 @@ function decisions(run) {
   );
 }
 
+/** The loop hooks' notes (src/lunasworkLoopHooks.js): what failed or was skipped. */
+function hookNotes(run) {
+  return list(run.laps).flatMap((lap) => (Array.isArray(lap.notes) ? lap.notes : [])
+    .filter((n) => typeof n === 'string' && n)
+    .map((n) => `Iteration ${lap.n}: ${oneLine(n, MAX_LINE)}`));
+}
+
 function evidence(run, forEmail) {
   const laps = list(run.laps).filter((l) => typeof l.evidenceDir === 'string' && l.evidenceDir);
   if (!laps.length && typeof run.evidenceDir === 'string' && run.evidenceDir) return [`Last iteration: ${evidenceName(run.evidenceDir, forEmail)}`];
@@ -281,6 +290,10 @@ function buildRunReport(run, extra = {}) {
     '',
     ...bullets(decisions(r)),
     '',
+    '## Notes',
+    '',
+    ...bullets(hookNotes(r)),
+    '',
     '## Evidence',
     '',
     ...bullets(evidence(r, extra.forEmail === true)),
@@ -348,6 +361,7 @@ function renderRunReportHtml(run, extra = {}) {
     h.section('Rollbacks', rollbackHtml(r)),
     h.section('Model choices', h.list(modelChoices(r), 'No model choice logged')),
     h.section('Decisions', h.list(decisions(r), 'No decisions')),
+    h.section('Notes', h.list(hookNotes(r), 'No notes')),
     h.section('Evidence', h.list(evidence(r, false), 'No evidence folder')),
   ].join('\n');
   return h.page({

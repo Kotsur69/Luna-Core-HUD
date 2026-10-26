@@ -15,6 +15,8 @@
 //   laps          buildLap / cleanLap - one summary per finished iteration
 //                 (cards, score, merge, checkpoint tag or rollback, evidence
 //                 folder, decisions) for the run report (lunasworkReport.js)
+//   loop hooks    HOOK_KEYS / cleanHookNotes (src/lunasworkLoopHooks.js),
+//                 cleanLighthouse (per-iteration results), cleanGateHold
 // ============================================================================
 
 'use strict';
@@ -27,6 +29,7 @@ const { MAX_DETAILS_CHARS, MAX_TEXT_CHARS: MAX_CARD_TEXT_CHARS } = require('./to
 const { restoreQueue } = require('./lunasworkDecisions');
 const { restoreFeedback } = require('./lunasworkFeedback');
 const { HANDED } = require('./lunasworkWheel');
+const { appendResult } = require('./lunasworkLighthouse');
 
 const PREPROD = 'preprod';
 const DONE = 'done';
@@ -48,6 +51,9 @@ const MAX_ITEMS = 50;
 const MAX_PLAN_IDS = 50;
 const MAX_LAPS = 200;
 const MAX_DECISIONS = 20;
+const MAX_HOOK_NOTES = 20;
+const MAX_LIGHTHOUSE_ENTRIES = 200;
+const GATE_HOLD_REASONS = ['verdict', 'blockingFindings'];
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
@@ -410,6 +416,8 @@ function cleanLap(raw) {
     journeysFailed: names(raw.journeysFailed),
     decisions: cleanDecisions(raw.decisions),
     evidenceDir: typeof raw.evidenceDir === 'string' && path.isAbsolute(raw.evidenceDir) ? raw.evidenceDir.slice(0, MAX_PATH_CHARS) : null,
+    // LW 2.23 + loop hooks: what failed or was skipped around the iteration.
+    notes: cleanHookNotes(raw.notes),
   };
 }
 
@@ -449,6 +457,7 @@ function buildLap(current, record, extra = {}) {
     journeysFailed: journeys.filter((j) => j.passed === false).map((j) => j.name),
     decisions: critic.decisions,
     evidenceDir: extra.evidenceDir,
+    notes: c.hookNotes,
   });
 }
 
@@ -468,11 +477,46 @@ const PASS_KEYS = { ok: 'bool', agrees: 'bool', error: 'str', model: 'str', reas
 // iteration's cards that ended open (B4 counts them).
 const VERIFY_KEYS = { closed: 'ats', reopened: 'ats', waiting: 'ats', failed: 'ats' };
 const MAX_QUARANTINE = 50;
+// Loop hooks done this iteration (src/lunasworkLoopHooks.js): a restart never repeats one.
+const HOOK_KEYS = { refreshed: 'bool', i18n: 'bool', lighthouse: 'bool', reviewed: 'bool' };
+
+/** The loop hooks' notes of one iteration (failures, skips) for the run report. */
+function cleanHookNotes(raw) {
+  return (Array.isArray(raw) ? raw : [])
+    .filter((n) => typeof n === 'string' && n.trim())
+    // eslint-disable-next-line no-control-regex
+    .map((n) => n.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, MAX_LOG_TEXT))
+    .slice(-MAX_HOOK_NOTES);
+}
+
+/** Per-iteration Lighthouse results (the dashboard trend), validated, sorted, capped. */
+function cleanLighthouse(raw) {
+  const list = (Array.isArray(raw) ? raw : []).reduce(
+    (history, e) => (isObj(e) && Number.isInteger(e.iteration) ? appendResult(history, e.iteration, e.results) : history),
+    [],
+  );
+  return [...list].slice(-MAX_LIGHTHOUSE_ENTRIES);
+}
+
+/** A milestone gate the second opinion keeps closed until the next Critic or Mati's answer. */
+function cleanGateHold(raw) {
+  if (!isObj(raw) || !str(raw.milestone, 200) || !Number.isInteger(raw.n)) return null;
+  return {
+    milestone: str(raw.milestone, 200),
+    next: str(raw.next, 200),
+    n: raw.n,
+    reason: GATE_HOLD_REASONS.includes(raw.reason) ? raw.reason : 'verdict',
+    cli: str(raw.cli, 20),
+    decisionId: Number.isSafeInteger(raw.decisionId) ? raw.decisionId : null,
+    // Mati opened it while its iteration was still ending (applied as it ends).
+    approved: raw.approved === true,
+  };
+}
 
 function emptyCurrent() {
   return {
     cards: [], notes: null, planId: null, build: null, launch: null, report: null, playtest: null, verify: null,
-    critic: null, ship: null, replay: null, checkpoint: null,
+    critic: null, ship: null, replay: null, checkpoint: null, hooks: null, hookNotes: [],
   };
 }
 
@@ -524,6 +568,8 @@ function cleanCurrent(raw) {
     replay: cleanReplay(c.replay),
     // Saved before the iteration ends: a restart never tags or reverts twice.
     checkpoint: cleanCheckpoint(c.checkpoint),
+    hooks: cleanSmall(c.hooks, HOOK_KEYS),
+    hookNotes: cleanHookNotes(c.hookNotes),
   };
 }
 
@@ -585,6 +631,10 @@ function restoreRun(raw) {
     // B4: failed iterations per card; B9: quarantined flaky tests, per run.
     failCounts: cleanFailCounts(raw.failCounts),
     quarantine: cleanQuarantine(raw.quarantine),
+    // B7: Lighthouse results per iteration (the dashboard trend).
+    lighthouse: cleanLighthouse(raw.lighthouse),
+    // B8: a gate the second opinion disagreed with stays closed until resolved.
+    gateHold: phase === DONE ? null : cleanGateHold(raw.gateHold),
     // C11 "Hand me the wheel": asked for (pauses at the end of the iteration),
     // when it was handed and main's commit then, a hand-back under way, and
     // the newest phone wheel action applied (never applied twice).
@@ -622,6 +672,7 @@ module.exports = {
   BUILD_KEYS,
   PASS_KEYS,
   VERIFY_KEYS,
+  HOOK_KEYS,
   riskReason,
   isRiskyCard,
   conflictedPaths,
@@ -643,6 +694,9 @@ module.exports = {
   buildLap,
   cleanLap,
   cleanLaps,
+  cleanHookNotes,
+  cleanLighthouse,
+  cleanGateHold,
   emptyCurrent,
   restoreRun,
   scoresByMilestone,

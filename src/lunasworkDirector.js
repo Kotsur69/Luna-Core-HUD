@@ -59,6 +59,8 @@ const STOP_TEXT = 'stop';
 const BUILDER_BRIEF = [
   'Read design/ARCHITECTURE.md and design/DECISIONS.md first; do not contradict a decision without adding a new DECISIONS entry.',
   'respect design/CONTRACTS.md; only edit files you own.',
+  // LW 2.23: the controller re-indexes the repo after every merge, so the graph is fresh.
+  'Query the code graph (codebase-memory search_graph / trace_path) before reading files.',
 ].join('\n');
 
 // LW 2.12: interfaces between the packages of a parallel build.

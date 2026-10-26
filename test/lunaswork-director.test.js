@@ -473,6 +473,14 @@ test('every builder brief references CONTRACTS.md, map or not', () => {
   assert.equal(D.withBuilderBrief({ text: 't' }).details, D.BUILDER_BRIEF);
 });
 
+test('every builder brief tells the worker to query the code graph before reading files (LW 2.23)', async () => {
+  const line = 'Query the code graph (codebase-memory search_graph / trace_path) before reading files.';
+  assert.ok(D.BUILDER_BRIEF.split('\n').includes(line));
+  assert.ok(D.withBuilderBrief({ text: 't', details: 'do it' }).details.includes(line));
+  const { res } = await direct({ list: [runCard(1), runCard(2)], answer: { cardIds: [1, 2], notes: '' } });
+  for (const card of res.cards) assert.ok(card.details.includes(line), card.text);
+});
+
 test('a later iteration without a map empties a stale CONTRACTS.md; none is created otherwise', async () => {
   const repoDir = fakeRepo();
   await direct({ repoDir, list: [runCard(1), runCard(2)], answer: PARALLEL });
