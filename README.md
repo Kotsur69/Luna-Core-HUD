@@ -7,7 +7,25 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.18.1 — Luna's Work preview, a to-do picker and duo-tone themes.**
+> **Current release: v0.18.2 — Luna's Work runs the whole loop.**
+> - **Luna's Work:** an outer loop controller drives Director -> build ->
+>   Playtester -> Critic until SHIP, PLATEAU, RED or STOP, survives restarts
+>   and waits out usage limits. Each build is one God Mode run in merge mode.
+> - **HUD panel:** Start / Stop / Steer, per-run model overrides, live status,
+>   score sparklines per milestone and a link to the run's evidence.
+> - **Decision queue:** risky changes (new dependencies, migrations, deleted
+>   features, design rewrites) ask first without blocking the run, with safe
+>   defaults after the deadline; answer from the HUD or the phone.
+> - **Checkpoints:** every green iteration is tagged; a regression is undone
+>   with a revert-only rollback (never a force-push) and becomes a bug card.
+>   A run report and one email arrive at the end of each run.
+> - **Iteration 0 + card rules:** empty repos get a stack scaffold first; stuck
+>   cards, scope guard and flaky-test quarantine keep the loop honest.
+> - **Mid-run feedback and "Hand me the wheel":** steer a running loop, or
+>   pause after an iteration, work by hand and hand it back to the Critic.
+> - **God Mode:** the planner gets 15 min instead of 8.
+>
+> **v0.18.1 — Luna's Work preview, a to-do picker and duo-tone themes.**
 > - **Luna's Work (preview):** a button next to God Mode opens its own Settings
 >   pane with role models, project profiles and a design pack. Behind it sit a
 >   Director that picks the next cards, a headless Playtester that scores a web
