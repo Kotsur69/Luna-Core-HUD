@@ -786,3 +786,50 @@ test('dashboardView: the time-to-SHIP estimate fills the KPI slot (LW 2.22b)', (
   assert.equal(none.ship, null);
   assert.equal(dashboardView({ id: 'abc' }, { isKnownProject: () => true, shipEstimate: { iterations: -1 } }).ship, null);
 });
+
+// ---- LW 2.27: "Ask Luna about the run" ------------------------------------------
+
+const { parseAskRequest } = require('../src/lunasworkipc');
+
+test('parseAskRequest: exactly {question}, one trimmed line of 1..500 chars', () => {
+  assert.deepEqual(parseAskRequest({ question: '  why did you roll back iteration 14?  ' }), { question: 'why did you roll back iteration 14?' });
+  assert.deepEqual(parseAskRequest({ question: 'two\nlines' }), { question: 'two lines' });
+  assert.equal(parseAskRequest({ question: 'x'.repeat(500) }).question.length, 500);
+  for (const bad of [
+    undefined, null, 'why?', 42, [], {}, { question: '' }, { question: '   ' }, { question: 7 },
+    { question: 'x'.repeat(501) }, { question: 'x'.repeat(5000) }, { question: 'ok', projectId: 'game' }, { question: ['why'] },
+  ]) {
+    assert.equal(parseAskRequest(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('lunaswork:ask validates the payload before the service sees it, and passes its answer through', async () => {
+  const calls = [];
+  const ask = {
+    ask: async (question, opts) => {
+      calls.push({ question, opts });
+      return question === 'limit?' ? { ok: false, reason: 'rate-limited', retryAt: 123 } : { ok: true, item: { id: 1, question, answer: 'because', sources: [{ file: 'rollbacks', iteration: 14 }] } };
+    },
+  };
+  const s = setup({ extra: { ask } });
+  assert.ok(s.ipc.channels().includes('lunaswork:ask'));
+  for (const bad of [undefined, 'why', { question: '' }, { question: 'x'.repeat(501) }, { question: 'ok', evil: 1 }]) {
+    assert.deepEqual(await s.ipc.invoke('lunaswork:ask', bad), { ok: false, reason: 'bad-question' });
+  }
+  assert.equal(calls.length, 0, 'a bad payload never reaches the service');
+  const res = await s.ipc.invoke('lunaswork:ask', { question: '  why roll back?  ' });
+  assert.deepEqual(calls[0], { question: 'why roll back?', opts: { from: 'hud' } });
+  assert.equal(res.ok, true);
+  assert.equal(res.item.answer, 'because');
+  assert.deepEqual(await s.ipc.invoke('lunaswork:ask', { question: 'limit?' }), { ok: false, reason: 'rate-limited', retryAt: 123 });
+  s.done();
+});
+
+test('lunaswork:ask turns a throwing service into a plain failure; no service, no channel', async () => {
+  const s = setup({ extra: { ask: { ask: async () => { throw new Error('boom'); } } } });
+  assert.deepEqual(await s.ipc.invoke('lunaswork:ask', { question: 'why?' }), { ok: false, reason: 'failed' });
+  s.done();
+  const none = setup();
+  assert.equal(none.ipc.channels().includes('lunaswork:ask'), false);
+  none.done();
+});

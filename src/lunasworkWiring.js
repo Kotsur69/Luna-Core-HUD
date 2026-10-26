@@ -38,6 +38,8 @@
 //   phone snapshot  lunasworksnapshot (LW 2.17b): controller.phoneSnapshot()
 //                   with the newest screenshots as small JPEG thumbnails;
 //                   wireDecisionSync puts it throttled on every phase change
+//   ask luna        lunasworkAsk (LW 2.27): wireDecisionSync hands the phone's
+//                   questions to the ask service; main.js creates it
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -73,6 +75,7 @@ const { runCriticPick } = require('./lunasworkVariants');
 const { shipEstimate, etaLine } = require('./lunasworkEta');
 const { buildSnapshot, createSnapshotThrottle, MAX_SHOTS } = require('./lunasworksnapshot');
 const { keyScreens } = require('./lunasworkRun');
+const { createAskService } = require('./lunasworkAsk');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -364,6 +367,28 @@ function createMachineRuntime(ctx) {
 }
 
 /**
+ * LW 2.27 "Ask Luna": the read-only question service (src/lunasworkAsk.js)
+ * over the real run store, its own store and `claude -p`. It reads the
+ * persisted run, never the controller.
+ * @param {{env:()=>object, runsDir:()=>string, putAsks?:(section:object|null)=>unknown, log?:(line:string)=>void}} ctx
+ */
+function createAskRuntime(ctx) {
+  const log = ctx.log || (() => {});
+  return createAskService({
+    loadRun: lunasworkStore.loadRun,
+    store: lunasworkStore.askStore,
+    runsDir: ctx.runsDir,
+    env: ctx.env,
+    runClaude: execClaude,
+    onChange: (section) => {
+      if (typeof ctx.putAsks !== 'function') return;
+      Promise.resolve(ctx.putAsks(section)).catch((err) => log(`[lunaswork] asks snapshot failed: ${err && err.message}`));
+    },
+    log,
+  });
+}
+
+/**
  * The decision queue's phone round trip:
  *   out  every controller event: the pending decisions go into the `godmode`
  *        snapshot (only when they changed; [] once the run ends)
@@ -381,13 +406,19 @@ function createMachineRuntime(ctx) {
  * LW 2.17b, when putLunasWork is given: controller.phoneSnapshot() goes out
  * on every phase change (and decision / feedback / wheel change), throttled
  * by lunasworksnapshot.createSnapshotThrottle.
+ *
+ * LW 2.27, when `ask` is given (lunasworkAsk.createAskService): the phone's
+ * `lunaswork-ask:<id>` questions go to ask.pullQuestions(), which validates,
+ * caps and rate-limits them here on the PC; the answers go out by the
+ * service's own onChange.
  * @param {{controller:{subscribe:Function, status:Function, applyAnswers:Function, applyFeedback?:Function, applyWheel?:Function},
  *   cloud:{onPulled:Function, hooks:Function}|null, putDecisions:(list:object[])=>unknown,
  *   putFeedback?:(section:object|null)=>unknown, putLunasWork?:(snap:object|null)=>unknown,
+ *   ask?:{pullQuestions:(peers:unknown)=>number},
  *   throttle?:object, log?:(line:string)=>void}} ctx
  * @returns {{publish:()=>void, pullAnswers:()=>number}}
  */
-function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLunasWork, throttle = {}, log = () => {} }) {
+function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLunasWork, ask, throttle = {}, log = () => {} }) {
   /** Puts `value` through `put` only when it changed since the last put. */
   const changedPut = (what, put) => {
     let last = null;
@@ -412,6 +443,13 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLun
     if (!cloud) return 0;
     try {
       const peers = cloud.hooks('todos').extraPeers();
+      if (ask && typeof ask.pullQuestions === 'function') {
+        try {
+          ask.pullQuestions(peers);
+        } catch (err) {
+          log(`[lunaswork] phone questions not read: ${err && err.message}`);
+        }
+      }
       if (typeof controller.applyFeedback === 'function') controller.applyFeedback(feedbackFromTodoPeers(peers));
       if (typeof controller.applyWheel === 'function') {
         Promise.resolve(controller.applyWheel(wheelFromTodoPeers(peers))).catch((err) => log(`[lunaswork] wheel action failed: ${err && err.message}`));
@@ -434,4 +472,4 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLun
   return { publish, pullAnswers };
 }
 
-module.exports = { createLunasWorkRuntime, createMachineRuntime, createAwake, syncCheckout, wireDecisionSync, thumbnailsOf };
+module.exports = { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, createAwake, syncCheckout, wireDecisionSync, thumbnailsOf };

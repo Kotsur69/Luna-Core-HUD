@@ -8,7 +8,8 @@
 // feedback items' status and up to three screenshot thumbnails.
 // Under the status sit the parts that write, the same cards the God Mode page
 // uses: decisions (LW 1.6), the wheel (LW 1.11) and the feedback / steer form
-// (B17) - the status card's buttons scroll to them. Every string is text; a
+// (B17) - the status card's buttons scroll to them. Right under the status:
+// "Ask Luna about the run" (LW 2.27, ./ask.js). Every string is text; a
 // thumbnail is only ever a data: image the reader already checked.
 // ============================================================================
 
@@ -20,6 +21,7 @@ import { repaintWhileShown } from './godmodelive.js';
 import { decisionsCard, createDecisionAnswers } from './decisions.js';
 import { feedbackCard, createFeedbackSender } from './feedback.js';
 import { wheelCard, createWheelSender } from './wheel.js';
+import { askCard, createAskSender } from './ask.js';
 import { statusKey, statusTone } from '../feedbackmodel.js';
 
 const PHASES = ['preprod', 'directing', 'building', 'launching', 'playtesting', 'critiquing', 'handed', 'done'];
@@ -155,12 +157,14 @@ export function mountLunasWork(main, deps) {
   const answers = createDecisionAnswers(deps, () => view.repaint());
   const feedback = createFeedbackSender(deps, () => view.repaint());
   const wheel = createWheelSender(deps, () => view.repaint());
+  const ask = createAskSender(deps, () => view.repaint());
   const view = mountSnapshots(main, deps, ['godmode'], (byKind, now) => {
     const rows = byKind.godmode;
     return h(
       'div',
       { class: 'stack' },
       statusCard(lunasworkFrom(rows, now), now),
+      askCard(rows, now, { mirror: ask.mirror(), send: ask.send }),
       decisionsCard(rows, now, { mirror: answers.mirror(), send: answers.send }),
       wheelCard(rows, now, { mirror: wheel.mirror(), send: wheel.send }),
       feedbackCard(rows, now, { mirror: feedback.mirror(), send: feedback.send }),

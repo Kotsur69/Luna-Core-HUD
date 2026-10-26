@@ -579,6 +579,7 @@ main {
 .decision { padding-left: var(--space-3); border-left: 2px solid var(--warn); }
 .decision-q { margin: 0; overflow-wrap: anywhere; }
 .decision-options { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ask-answer { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .is-warn { color: var(--warn); }
 .run > summary { display: grid; gap: var(--space-1); cursor: pointer; list-style: none; }
 .run > summary::-webkit-details-marker { display: none; }

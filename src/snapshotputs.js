@@ -18,6 +18,8 @@
 //                      put the history with it over it (the phone shows status)
 //   godmode.lunaswork(s) the Luna's Work run snapshot (LW 2.17b,
 //                      lunasworksnapshot.js) changed: put it as `lunaswork`
+//   godmode.asks(s)    the "Ask Luna" answers changed (LW 2.27,
+//                      lunasworkAsk.js): put them as `asks`
 //
 // Every put is skipped while logged out, and a failure only logs - it never
 // throws into the git station or the end of a God Mode run. cloudsnapshots
@@ -33,6 +35,7 @@ const { reposSnapshot } = require('./repossnapshot');
 const { addRun, addSeen, withLive, RUN_ID_RE } = require('./godmodesnapshot');
 const { createRepoKeys, findRepo } = require('./missionrepokey');
 const { cleanSnapshot: cleanLunasWork } = require('./lunasworksnapshot');
+const { publicAsks } = require('./lunasworkAskModel');
 
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 
@@ -105,11 +108,14 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
   const overlay = () => ({ ...lastLive, decisions: lastDecisions, feedback: lastFeedback });
   // Luna's Work run snapshot for the phone (LW 2.17b): memory only too.
   let lastLunasWork = null;
+  // "Ask Luna" answers for the phone (LW 2.27): the service keeps them on disk.
+  let lastAsks = null;
   /** The history with the live overlay and the Luna's Work snapshot over it. */
   const withOverlay = (history) => {
     const snap = withLive(history, overlay(), { machine, now: now() });
     const lw = cleanLunasWork(lastLunasWork, now());
-    return lw ? { ...snap, lunaswork: lw } : snap;
+    const asks = lastAsks ? publicAsks(lastAsks.items) : null;
+    return { ...snap, ...(lw ? { lunaswork: lw } : {}), ...(asks ? { asks } : {}) };
   };
 
   /** Rewrites the local history file with `step(prev)` and puts it with the live run over it. */
@@ -160,6 +166,11 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     /** Puts the run history with the Luna's Work run snapshot (null clears it). Never throws. */
     lunaswork(snap) {
       lastLunasWork = snap && typeof snap === 'object' ? snap : null;
+      return putOverlay();
+    },
+    /** Puts the run history with the "Ask Luna" section (lunasworkAskModel.publicAsks; null clears it). Never throws. */
+    asks(section) {
+      lastAsks = section && typeof section === 'object' ? section : null;
       return putOverlay();
     },
     /** Marks run `id` seen in this PC's own row (the attention inbox). Never throws. */

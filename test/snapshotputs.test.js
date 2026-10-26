@@ -102,3 +102,17 @@ test('godmode.lunaswork puts the Luna\'s Work run snapshot as `lunaswork`, clean
   await sp.godmode.lunaswork({ v: 9, runId: 'x' });
   assert.equal('lunaswork' in puts.at(-1)[1], false, 'a malformed snapshot is not put');
 });
+
+test('godmode.asks puts the "Ask Luna" answers as `asks`, re-checked; null clears it (LW 2.27)', async () => {
+  const { sp, puts } = setup();
+  const item = { id: NOW, question: 'why roll back?', status: 'answered', answer: 'iteration 14 broke login', sources: [{ file: 'rollbacks', iteration: 14 }], from: 'phone', at: NOW };
+  assert.equal(await sp.godmode.asks({ v: 1, items: [item, { id: 'bad', question: 'x', status: 'answered' }] }), true);
+  assert.deepEqual(puts.at(-1)[1].asks, { v: 1, items: [item] });
+  // Kept across the other overlay puts.
+  await sp.godmode.decisions([]);
+  assert.equal(puts.at(-1)[1].asks.items.length, 1);
+  await sp.godmode.asks(null);
+  assert.equal('asks' in puts.at(-1)[1], false);
+  await sp.godmode.asks({ items: 'nope' });
+  assert.equal('asks' in puts.at(-1)[1], false, 'nothing valid, nothing put');
+});
