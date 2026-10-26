@@ -17,6 +17,8 @@
 //                 folder, decisions) for the run report (lunasworkReport.js)
 //   loop hooks    HOOK_KEYS / cleanHookNotes (src/lunasworkLoopHooks.js),
 //                 cleanLighthouse (per-iteration results), cleanGateHold
+//   return pack   a lap's gate / changes / screens and keyScreens (LW 2.18),
+//                 gatesMailed, cleanShipDocs (LW 2.22a docs iteration)
 // ============================================================================
 
 'use strict';
@@ -418,7 +420,71 @@ function cleanLap(raw) {
     evidenceDir: typeof raw.evidenceDir === 'string' && path.isAbsolute(raw.evidenceDir) ? raw.evidenceDir.slice(0, MAX_PATH_CHARS) : null,
     // LW 2.23 + loop hooks: what failed or was skipped around the iteration.
     notes: cleanHookNotes(raw.notes),
+    // LW 2.18: a passed milestone gate, the closed cards' text, the key screenshots (the return pack).
+    ...(raw.gate === true ? { gate: true } : {}),
+    ...(cleanChanges(raw.changes).length ? { changes: cleanChanges(raw.changes) } : {}),
+    ...(cleanScreens(raw.screens).length ? { screens: cleanScreens(raw.screens) } : {}),
   };
+}
+
+const MAX_LAP_CHANGES = 30;
+const MAX_LAP_SCREENS = 12;
+const SCREENSHOT_RE = /\.(png|jpe?g)$/i;
+
+/** LW 2.18: the cards an iteration closed, as {text, kind?}. */
+function cleanChanges(raw) {
+  return (Array.isArray(raw) ? raw : [])
+    .filter((c) => isObj(c) && str(c.text, 1))
+    .slice(0, MAX_LAP_CHANGES)
+    .map((c) => ({ text: str(c.text, 200), ...(CARD_KINDS.includes(c.kind) ? { kind: c.kind } : {}) }));
+}
+
+/** LW 2.18: the Playtester's screenshots of an iteration - absolute image paths only. */
+function cleanScreens(raw) {
+  return (Array.isArray(raw) ? raw : [])
+    .filter((s) => isObj(s) && str(s.name, 1) && typeof s.screenshot === 'string' && path.isAbsolute(s.screenshot)
+      && SCREENSHOT_RE.test(s.screenshot) && s.screenshot.length <= MAX_PATH_CHARS && !CONTROL_CHARS.test(s.screenshot))
+    .slice(0, MAX_LAP_SCREENS)
+    .map((s) => ({ name: str(s.name, 80), screenshot: s.screenshot }));
+}
+
+// The Playtester names a screen's shots "<screen>-desktop" / "<screen>-mobile".
+const screenBase = (name) => name.replace(/-(desktop|mobile|tablet)$/i, '');
+const isDesktopShot = (name) => /-desktop$/i.test(name) || !/-(mobile|tablet)$/i.test(name);
+
+/**
+ * LW 2.18: one screenshot per key screen across the run - the newest lap's,
+ * the desktop one when there are both - in the order the screens first
+ * appeared. Pure.
+ * @param {object[]} laps cleanLaps() output
+ * @returns {{name:string, screenshot:string, n:number}[]}
+ */
+function keyScreens(laps) {
+  const byScreen = new Map();
+  for (const lap of Array.isArray(laps) ? laps : []) {
+    for (const s of isObj(lap) && Array.isArray(lap.screens) ? lap.screens : []) {
+      const name = screenBase(s.name);
+      const prev = byScreen.get(name);
+      const better = !prev || lap.n > prev.n || (lap.n === prev.n && isDesktopShot(s.name) && !prev.desktop);
+      if (better) byScreen.set(name, { name, screenshot: s.screenshot, n: lap.n, desktop: isDesktopShot(s.name) });
+    }
+  }
+  return [...byScreen.values()].slice(0, MAX_LAP_SCREENS).map(({ name, screenshot, n }) => ({ name, screenshot, n }));
+}
+
+/** LW 2.22a: the docs iteration at SHIP - its number, its cards, which landed, the release result. */
+function cleanShipDocs(raw) {
+  if (!isObj(raw) || !Number.isInteger(raw.n) || raw.n < 1) return null;
+  const release = isObj(raw.release)
+    ? {
+      ok: raw.release.ok === true,
+      ...(str(raw.release.tag, 60) ? { tag: str(raw.release.tag, 60) } : {}),
+      ...(str(raw.release.url, MAX_PATH_CHARS) ? { url: str(raw.release.url, MAX_PATH_CHARS) } : {}),
+      ...(str(raw.release.error, 100) ? { error: str(raw.release.error, 100) } : {}),
+      ...(str(raw.release.detail, MAX_LOG_TEXT) ? { detail: str(raw.release.detail, MAX_LOG_TEXT) } : {}),
+    }
+    : null;
+  return { n: raw.n, cards: ats(raw.cards), landed: ats(raw.landed), release };
 }
 
 /**
@@ -426,7 +492,8 @@ function cleanLap(raw) {
  * (run.current) and its history record.
  * @param {object} current run.current at the end of the iteration
  * @param {object} record the history record (lunasworkRules shape)
- * @param {{evidenceDir?:string|null}} [extra]
+ * @param {{evidenceDir?:string|null, gate?:boolean, changes?:{text:string, kind?:string}[]}} [extra]
+ *   gate = a milestone gate passed; changes = the cards closed (LW 2.18)
  */
 function buildLap(current, record, extra = {}) {
   const c = isObj(current) ? current : {};
@@ -458,6 +525,9 @@ function buildLap(current, record, extra = {}) {
     decisions: critic.decisions,
     evidenceDir: extra.evidenceDir,
     notes: c.hookNotes,
+    gate: extra.gate === true,
+    changes: extra.changes,
+    screens: isObj(c.report) ? c.report.screens : [],
   });
 }
 
@@ -478,7 +548,8 @@ const PASS_KEYS = { ok: 'bool', agrees: 'bool', error: 'str', model: 'str', reas
 const VERIFY_KEYS = { closed: 'ats', reopened: 'ats', waiting: 'ats', failed: 'ats' };
 const MAX_QUARANTINE = 50;
 // Loop hooks done this iteration (src/lunasworkLoopHooks.js): a restart never repeats one.
-const HOOK_KEYS = { refreshed: 'bool', i18n: 'bool', lighthouse: 'bool', reviewed: 'bool' };
+const HOOK_KEYS = { refreshed: 'bool', i18n: 'bool', lighthouse: 'bool', reviewed: 'bool', skills: 'bool' };
+const MAX_GATES_MAILED = 50;
 
 /** The loop hooks' notes of one iteration (failures, skips) for the run report. */
 function cleanHookNotes(raw) {
@@ -643,6 +714,10 @@ function restoreRun(raw) {
     handBase: phase === HANDED && typeof raw.handBase === 'string' && SHA_RE.test(raw.handBase) ? raw.handBase : null,
     handBackRequested: phase === HANDED && raw.handBackRequested === true,
     wheelSeq: Number.isSafeInteger(raw.wheelSeq) && raw.wheelSeq > 0 ? raw.wheelSeq : 0,
+    // LW 2.18: the milestone gates already mailed - one email per gate, across restarts.
+    gatesMailed: names(raw.gatesMailed).slice(-MAX_GATES_MAILED),
+    // LW 2.22a: the docs iteration SHIP waits for.
+    shipDocs: cleanShipDocs(raw.shipDocs),
     planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
       .filter((id) => typeof id === 'string' && id && id.length <= 100)
       .slice(-MAX_PLAN_IDS),
@@ -697,7 +772,10 @@ module.exports = {
   cleanHookNotes,
   cleanLighthouse,
   cleanGateHold,
+  cleanShipDocs,
   emptyCurrent,
   restoreRun,
   scoresByMilestone,
+  keyScreens,
+  kindOf,
 };

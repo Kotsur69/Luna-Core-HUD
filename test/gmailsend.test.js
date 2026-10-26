@@ -158,3 +158,26 @@ test('buildMime attachments: an unknown type falls back, an empty list keeps the
   const mime = buildMime({ address: 'me@example.com', subject: 's', text: 'b', boundary: 'B', attachments: [{ filename: 'a.bin', mimeType: 'evil/"x"', content: 'x' }] });
   assert.match(mime, /Content-Type: application\/octet-stream; name="a.bin"/);
 });
+
+test('buildMime attachments: a PNG / JPEG Buffer goes inline, any other Buffer or an oversized image is dropped', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array.from({ length: 120 }, (_, i) => i)]);
+  const mime = buildMime({
+    address: 'me@example.com',
+    subject: 's',
+    text: 'b',
+    boundary: 'B',
+    attachments: [
+      { filename: 'home.png', mimeType: 'image/png', content: png },
+      { filename: 'secret.html', mimeType: 'text/html', content: Buffer.from('<b>raw bytes</b>') },
+      { filename: 'huge.jpg', mimeType: 'image/jpeg', content: Buffer.alloc(1024 * 1024 + 1) },
+    ],
+  });
+  const parts = mime.split('--B');
+  assert.equal(parts.length, 4, 'body, one image, the closing boundary');
+  const [head, data] = parts[2].split('\r\n\r\n');
+  assert.match(head, /Content-Type: image\/png; name="home.png"/);
+  assert.match(head, /Content-Disposition: inline; filename="home.png"/);
+  assert.match(head, /Content-ID: <home.png@lunacore>/);
+  assert.ok(Buffer.from(data.replace(/\r\n/g, ''), 'base64').equals(png), 'the image bytes, unchanged');
+  assert.ok(!mime.includes('secret.html') && !mime.includes('huge.jpg'));
+});

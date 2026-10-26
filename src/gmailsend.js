@@ -21,7 +21,8 @@
 // pulled from the cloud or sent by a renderer can turn this into a mailer to
 // someone else. Subjects lose CR/LF and control characters (no header
 // injection); bodies are plain text, with an optional HTML part that is only
-// the same text escaped inside <pre> - never caller HTML.
+// the same text escaped inside <pre> - never caller HTML. Attachments are
+// text files, or PNG / JPEG screenshots (Buffers, size-capped) sent inline.
 // ============================================================================
 
 'use strict';
@@ -47,6 +48,8 @@ const MAX_ATTACHMENT = 2 * 1024 * 1024;
 const MAX_ATTACHMENTS = 5;
 const MAX_FILENAME = 100;
 const ATTACHMENT_TYPES = new Set(['text/html', 'text/plain', 'text/markdown']);
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg']);
+const MAX_IMAGE = 1024 * 1024;
 const EMAIL_RE = /^[^\s@<>()",;:\\[\]]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
 
 class GmailError extends Error {
@@ -91,9 +94,20 @@ const b64Lines = (s) => Buffer.from(s, 'utf8').toString('base64').replace(/.{76}
 /** A filename safe inside a quoted MIME parameter. */
 const safeFilename = (v) => oneLine(v, MAX_FILENAME).replace(/[^A-Za-z0-9._-]+/g, '_') || 'attachment';
 
-/** One base64 attachment part; an unknown type goes out as octet-stream. */
+/** LW 2.18: a screenshot shown inline - PNG or JPEG bytes in a Buffer, within MAX_IMAGE. */
+const isInlineImage = (a) => IMAGE_TYPES.has(a.mimeType) && Buffer.isBuffer(a.content) && a.content.length > 0 && a.content.length <= MAX_IMAGE;
+// A Buffer that is not such an image is dropped: it never goes out as text.
+const sendable = (a) => !!a && typeof a === 'object' && (!Buffer.isBuffer(a.content) || isInlineImage(a));
+
+/** One base64 attachment part; an unknown type goes out as octet-stream, an image inline. */
 function attachmentPart(a) {
   const name = safeFilename(a.filename);
+  if (isInlineImage(a)) {
+    return [
+      `Content-Type: ${a.mimeType}; name="${name}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: inline; filename="${name}"`,
+      `Content-ID: <${name}@lunacore>`, '', a.content.toString('base64').replace(/.{76}/g, '$&\r\n'),
+    ];
+  }
   const type = ATTACHMENT_TYPES.has(a.mimeType) ? `${a.mimeType}; charset=UTF-8` : 'application/octet-stream';
   return [`Content-Type: ${type}; name="${name}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${name}"`, '', b64Lines(String(a.content || '').slice(0, MAX_ATTACHMENT))];
 }
@@ -102,9 +116,11 @@ function attachmentPart(a) {
  * The RFC 5322 message. `address` is both From and To. With attachments the
  * body (plain, or plain+html alternative) is wrapped in multipart/mixed.
  * @param {{address:string, subject:string, text:string, html?:boolean, boundary?:string,
- *   attachments?:Array<{filename:string, mimeType:string, content:string}>}} m
+ *   attachments?:Array<{filename:string, mimeType:string, content:string|Buffer}>}} m
+ *   content: text, or (image/png, image/jpeg) the image bytes - sent inline
  */
-function buildMime({ address, subject, text, html = false, boundary, attachments = [] }) {
+function buildMime({ address, subject, text, html = false, boundary, attachments: given = [] }) {
+  const attachments = (Array.isArray(given) ? given : []).filter(sendable);
   const body = plainBody(text);
   const head = [`From: ${address}`, `To: ${address}`, `Subject: ${encodeHeader(oneLine(subject, MAX_SUBJECT))}`, 'MIME-Version: 1.0'];
   const part = (type, content) => [`Content-Type: ${type}; charset=UTF-8`, 'Content-Transfer-Encoding: base64', '', b64Lines(content)];

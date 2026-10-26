@@ -34,6 +34,13 @@
 //
 // Always resolves, never rejects. A malformed reply creates no cards and
 // writes nothing; the error is logged and returned.
+//
+// LW 2.16: reviewSkills() is the Critic's accept / reject / edit pass over a
+// milestone gate's project-skill proposals (src/lunasworkSkills.js); nothing
+// is written without it. LW 2.22a: runCritic passes opts.closedCards on to
+// the pack, which appends the iteration's CHANGELOG.md entry. The file runs
+// past 800 lines on purpose: both passes share the trust boundary and the
+// headless-call plumbing above.
 // ============================================================================
 
 'use strict';
@@ -46,7 +53,9 @@ const { gatePassed, isStepBack, pickModel, MAX_TEXT_CHARS } = require('./lunaswo
 const { applyAdd, applyUpdate, MAX_TASKS_PER_CALL } = require('./intake');
 const { normalizeTodos, runTag, cleanTags, MAX_DETAILS_CHARS, MAX_ITEMS, STEER_TAG, BUILT_STATE } = require('./todorows');
 const pack = require('./lunasworkPack');
-const { GATE_PASS_SCORE, MAX_SPLIT_PIECES, buildCriticPrompt } = require('./lunasworkCriticPrompt');
+const {
+  GATE_PASS_SCORE, MAX_SPLIT_PIECES, SKILL_VERDICTS, SKILL_REVIEW_SCHEMA, buildCriticPrompt, buildSkillReviewPrompt,
+} = require('./lunasworkCriticPrompt');
 const { formatLogEntry, writePack } = require('./lunasworkCriticPack');
 
 const CRITIC_EFFORT = 'high';
@@ -423,11 +432,11 @@ function validateCritique(raw, ctx = {}) {
 }
 
 /** argv for the headless Critic call - never a shell string; the prompt goes on stdin. */
-function buildCriticArgs({ model = FALLBACK_MODEL, effort = CRITIC_EFFORT, budgetUsd = CRITIC_BUDGET_USD } = {}) {
+function buildCriticArgs({ model = FALLBACK_MODEL, effort = CRITIC_EFFORT, budgetUsd = CRITIC_BUDGET_USD, schema = CRITIC_SCHEMA } = {}) {
   return [
     '-p',
     '--output-format', 'json',
-    '--json-schema', JSON.stringify(CRITIC_SCHEMA),
+    '--json-schema', JSON.stringify(schema),
     '--model', model,
     '--effort', effort,
     '--tools', CRITIC_TOOLS,
@@ -618,6 +627,7 @@ const stuckCardBrief = (c) => ({ ...openCardBrief(c), details: clean(c.details, 
  * @param {{repoDir:string, runId:string, iteration:number, milestone?:string|null,
  *   report:object, history?:object[], gitLog?:string, models?:object, env?:object,
  *   stuckCards?:number[], todoStore:{read:Function, write:Function, now?:Function},
+ *   closedCards?:{text:string, kind?:string|null}[],
  *   runClaude?:(call:{args:string[], prompt:string, cwd:string, env:object, timeoutMs:number})=>Promise<object>,
  *   log?:(message:string, detail?:unknown)=>void, now?:()=>number, timeoutMs?:number, budgetUsd?:number}} opts
  * @returns {Promise<{ok:boolean, verdict:'continue'|'ship', model:string|null, modelReason:string|null,
@@ -625,6 +635,7 @@ const stuckCardBrief = (c) => ({ ...openCardBrief(c), details: clean(c.details, 
  *   cards:{created:object[], updated:object[]}, split:number[], written:string[], warnings:object[],
  *   errors:object[], costUsd:number|null, durationMs:number, error?:string, detail?:string}>}
  *   split = the stuck cards (opts.stuckCards) the Critic split and closed
+ *   closedCards = the cards the Playtester closed this iteration (LW 2.22a CHANGELOG.md entry)
  */
 async function runCritic(opts) {
   const o = isObj(opts) ? opts : {};
@@ -721,6 +732,7 @@ async function runCritic(opts) {
       date,
       gate,
       architectureCut: docs.architectureCut,
+      closedCards: o.closedCards,
     });
     return {
       ...state,
@@ -740,6 +752,89 @@ async function runCritic(opts) {
   }
 }
 
+// ---- LW 2.16: the review of a gate's skill proposals ---------------------------------
+
+const SKILL_REVIEW_BUDGET_USD = 1;
+const SKILL_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_REVIEW_REASON_CHARS = 300;
+const MAX_REVIEW_DESCRIPTION_CHARS = 300;
+const MAX_REVIEW_BODY_CHARS = 8000;
+
+/**
+ * THE GATE of LW 2.16: one review per known proposal, first one wins. An
+ * `edit` without a new description or body is dropped - an unreviewed
+ * proposal is never written (lunasworkSkills.applyReview).
+ * @param {unknown} raw model output
+ * @param {{slug:string}[]} proposals
+ * @returns {{reviews:{slug:string, verdict:string, reason:string, description?:string, body?:string}[], warnings:object[]}}
+ */
+function validateSkillReview(raw, proposals) {
+  const known = new Set((Array.isArray(proposals) ? proposals : []).filter(isObj).map((p) => p.slug));
+  const list = isObj(raw) && Array.isArray(raw.reviews) ? raw.reviews : [];
+  const warnings = isObj(raw) && Array.isArray(raw.reviews) ? [] : [{ code: 'badSkillReview' }];
+  const seen = new Set();
+  const reviews = [];
+  for (const r of list.slice(0, MAX_RAW_CARDS)) {
+    const slug = isObj(r) && typeof r.slug === 'string' ? r.slug : '';
+    if (!known.has(slug) || seen.has(slug) || !SKILL_VERDICTS.includes(r.verdict)) {
+      warnings.push({ code: 'badSkillVerdict', slug: clean(slug, 80) });
+      continue;
+    }
+    const description = clean(r.description, MAX_REVIEW_DESCRIPTION_CHARS);
+    const body = clean(r.body, MAX_REVIEW_BODY_CHARS);
+    if (r.verdict === 'edit' && !description && !body) {
+      warnings.push({ code: 'emptySkillEdit', slug });
+      continue;
+    }
+    seen.add(slug);
+    reviews.push({
+      slug,
+      verdict: r.verdict,
+      reason: clean(r.reason, MAX_REVIEW_REASON_CHARS),
+      ...(r.verdict === 'edit' && description ? { description } : {}),
+      ...(r.verdict === 'edit' && body ? { body } : {}),
+    });
+  }
+  return { reviews, warnings };
+}
+
+/**
+ * The Critic's review of a milestone gate's skill proposals (LW 2.16): one
+ * read-only headless call. Always resolves; on any failure `reviews` is empty,
+ * so nothing gets written.
+ * @param {{repoDir:string, proposals:object[], milestone?:string|null, models?:object, env?:object,
+ *   docs?:{architecture?:string, decisions?:string}, runClaude?:Function, timeoutMs?:number, budgetUsd?:number}} opts
+ * @returns {Promise<{ok:boolean, reviews:object[], model:string|null, warnings:object[], costUsd:number|null,
+ *   error?:string, detail?:string}>}
+ */
+async function reviewSkills(opts) {
+  const o = isObj(opts) ? opts : {};
+  const proposals = Array.isArray(o.proposals) ? o.proposals.filter(isObj) : [];
+  const base = { reviews: [], model: null, warnings: [], costUsd: null };
+  if (!proposals.length) return { ...base, ok: true };
+  try {
+    if (!checkCwd(o.repoDir).ok) return { ...base, ok: false, error: 'noRepo' };
+    const pick = pickModel('critic', o.models, { gate: true }) || { model: FALLBACK_MODEL, reason: 'default' };
+    const docs = isObj(o.docs) ? o.docs : loadDocs(o.repoDir);
+    const runner = typeof o.runClaude === 'function' ? o.runClaude : execClaude;
+    const call = await runner({
+      args: buildCriticArgs({ model: pick.model, budgetUsd: o.budgetUsd || SKILL_REVIEW_BUDGET_USD, schema: SKILL_REVIEW_SCHEMA }),
+      prompt: buildSkillReviewPrompt({ milestone: o.milestone || null, proposals, docs }),
+      cwd: o.repoDir,
+      env: o.env || process.env,
+      timeoutMs: o.timeoutMs || SKILL_REVIEW_TIMEOUT_MS,
+    });
+    const state = { ...base, model: pick.model };
+    if (!isObj(call) || call.error) return { ...state, ok: false, error: (isObj(call) && call.error) || 'failed', detail: isObj(call) ? call.detail : undefined };
+    const parsed = parsePlannerOutput(call.stdout);
+    if (!parsed.ok) return { ...state, ok: false, error: parsed.error, detail: parsed.detail };
+    const checked = validateSkillReview(parsed.raw, proposals);
+    return { ...state, ok: true, reviews: checked.reviews, warnings: checked.warnings, costUsd: parsed.costUsd };
+  } catch (err) {
+    return { ...base, ok: false, error: 'crashed', detail: clean(err && err.message, 300) };
+  }
+}
+
 module.exports = {
   CRITIC_SCHEMA,
   CRITIC_TOOLS,
@@ -756,4 +851,6 @@ module.exports = {
   formatLogEntry,
   execClaude,
   runCritic,
+  validateSkillReview,
+  reviewSkills,
 };

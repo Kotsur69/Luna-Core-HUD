@@ -26,8 +26,9 @@
 // Playtester and are not schedulable either.
 //
 // designAppend goes through lunasworkPack.appendDesign (append only). Each
-// scheduled card comes back with the builder brief at the top of its details;
-// the to-do store itself is only read here.
+// scheduled card comes back with the builder brief at the top of its details
+// (LW 2.16: naming the repo's project skills when it has any); the to-do
+// store itself is only read here.
 //
 // Always resolves, never rejects.
 // ============================================================================
@@ -41,6 +42,7 @@ const { cardMeta, execClaude } = require('./lunasworkCritic');
 const { normalizeTodos, runTag, MAX_DETAILS_CHARS, STEER_TAG, BUILT_STATE } = require('./todorows');
 const pack = require('./lunasworkPack');
 const { normalizeOwnedPath, MAX_OWNERSHIP_ENTRIES } = require('./ownership');
+const { listSkills } = require('./lunasworkSkills');
 
 const DIRECTOR_EFFORT = 'high';
 const DIRECTOR_BUDGET_USD = 2;
@@ -61,7 +63,10 @@ const BUILDER_BRIEF = [
   'respect design/CONTRACTS.md; only edit files you own.',
   // LW 2.23: the controller re-indexes the repo after every merge, so the graph is fresh.
   'Query the code graph (codebase-memory search_graph / trace_path) before reading files.',
+  // LW 2.22a: the Critic appends to CHANGELOG.md every iteration; a builder edit would collide with it.
+  "Do not edit CHANGELOG.md unless your card asks you to - Luna's Work writes it.",
 ].join('\n');
+const MAX_SKILLS_LINE_CHARS = 400;
 
 // LW 2.12: interfaces between the packages of a parallel build.
 const CONTRACT_KINDS = Object.freeze(['function', 'module', 'data', 'route']);
@@ -163,17 +168,26 @@ function ownedLine(owned) {
   return line.length > MAX_OWNED_LIST_CHARS ? `${line.slice(0, MAX_OWNED_LIST_CHARS)}... (see design/CONTRACTS.md)` : line;
 }
 
+/** LW 2.16: the line naming the project skills ('' when the repo has none). */
+function skillsLine(skills) {
+  const slugs = (Array.isArray(skills) ? skills : []).map((s) => (s && typeof s === 'object' ? s.slug : s)).filter((s) => typeof s === 'string' && s);
+  if (!slugs.length) return '';
+  const line = `Project skills in .claude/skills/ record what worked in this project - use them: ${slugs.join(', ')}`;
+  return line.length > MAX_SKILLS_LINE_CHARS ? `${line.slice(0, MAX_SKILLS_LINE_CHARS)}...` : line;
+}
+
 /**
  * The builder brief at the top of a card's details, within the card cap.
  * Idempotent: a card that already carries it is returned as a plain copy.
  * @param {object} card
  * @param {string[]} [owned] LW 2.12: the paths this card owns this iteration
+ * @param {({slug:string}|string)[]} [skills] LW 2.16: the repo's project skills (lunasworkSkills.listSkills)
  * @returns {object} a new card
  */
-function withBuilderBrief(card, owned = []) {
+function withBuilderBrief(card, owned = [], skills = []) {
   const details = typeof card.details === 'string' ? card.details : '';
   if (details.includes(BUILDER_BRIEF)) return { ...card };
-  const head = [BUILDER_BRIEF, ownedLine(owned)].filter(Boolean).join('\n');
+  const head = [BUILDER_BRIEF, skillsLine(skills), ownedLine(owned)].filter(Boolean).join('\n');
   const room = MAX_DETAILS_CHARS - head.length - 2;
   return { ...card, details: [head, details.slice(0, room)].filter(Boolean).join('\n\n') };
 }
@@ -601,7 +615,8 @@ async function runDirector(opts) {
     const done = (direction, extra = {}) => {
       const owned = direction.ownership || [];
       const pathsOf = (at) => owned.filter((e) => e.cardId === at).map((e) => e.path);
-      const scheduled = direction.cards.map((c) => withBuilderBrief(originals.get(c.at), pathsOf(c.at)));
+      const skills = listSkills(o.repoDir);
+      const scheduled = direction.cards.map((c) => withBuilderBrief(originals.get(c.at), pathsOf(c.at), skills));
       return {
         ...base,
         ...extra,
