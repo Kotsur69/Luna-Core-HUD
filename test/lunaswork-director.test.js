@@ -597,3 +597,209 @@ test('no ROADMAP epics, or an unparsable ROADMAP.md: every card is on offer as b
     assert.equal(res.epic, null);
   }
 });
+
+// ---- LW 2.21a: seed data cards -------------------------------------------------------
+
+const Seed = require('../src/lunasworkSeed.js');
+const Legal = require('../src/lunasworkLegal.js');
+
+/** A store the Director may write its own cards to (the list is replaced on write). */
+function writableStore(list) {
+  const store = { list, writes: 0, now: () => 1700000000000 };
+  store.read = () => store.list;
+  store.write = (next) => {
+    store.writes += 1;
+    store.list = next;
+    return true;
+  };
+  return store;
+}
+
+function referenceRepo(files) {
+  const dir = fakeRepo();
+  for (const [name, body] of Object.entries(files)) fs.writeFileSync(path.join(dir, 'design', 'references', name), body);
+  return dir;
+}
+
+const PRICES_CSV = 'product,price_pln\nSteel beam IPE 200,412.50\nSteel sheet 2mm,189.00\n';
+const CLIENTS_CSV = 'client,email,phone,nip\nKowalski Stal,jan@kowalski-stal.pl,+48 600 700 800,1234567883\n';
+const seedTagOf = (card) => card.tags.find((t) => t.startsWith(Seed.SEED_TAG_PREFIX));
+
+test('LW 2.21a: data files in design/references/ create one seed card, tagged seed:<hash>, on offer at once', async () => {
+  const repoDir = referenceRepo({ 'prices.csv': PRICES_CSV, 'quote.json': '{"total": 601.5}' });
+  const store = writableStore([runCard(1, { text: 'Quote screen' })]);
+  const { res, calls } = await direct({ repoDir, todoStore: store, list: [], answer: { cardIds: [1], notes: '' } });
+
+  const seedCards = store.list.filter((c) => seedTagOf(c));
+  assert.equal(seedCards.length, 1);
+  const card = seedCards[0];
+  const hash = Seed.referencesHash(Seed.referenceDataFiles(repoDir));
+  assert.equal(seedTagOf(card), `seed:${hash}`);
+  assert.ok(card.tags.includes(RUN_TAG) && card.tags.includes('kind:missing'));
+  assert.match(card.text, /^Seed data: fixtures from design\/references \(2 files\)/);
+  assert.match(card.details, /seed script/);
+  assert.match(card.details, /fixture records by that name/);
+  assert.ok(card.acceptance.some((a) => /test runs the seed/.test(a)));
+  assert.deepEqual(res.autoCards.created, [card.at]);
+  assert.equal(res.autoCards.seed.hash, hash);
+  // Created before the pick: the model sees it in this very iteration, flagged as seed data.
+  assert.match(calls[0].prompt, /"seedData": true/);
+  assert.deepEqual(res.outOfScope, [], 'the seed card passes the scope guard');
+});
+
+test('LW 2.21a: the same references never get a second seed card, even once the first is done', async () => {
+  const repoDir = referenceRepo({ 'prices.csv': PRICES_CSV });
+  const store = writableStore([]);
+  await direct({ repoDir, todoStore: store, list: [], answer: { cardIds: [], notes: '' } });
+  assert.equal(store.list.length, 1);
+  store.list = store.list.map((c) => ({ ...c, done: true }));
+  const writes = store.writes;
+  const { res } = await direct({ repoDir, todoStore: store, list: [], answer: { cardIds: [], notes: '' } });
+  assert.equal(store.list.length, 1);
+  assert.equal(store.writes, writes, 'nothing written');
+  assert.deepEqual(res.autoCards.created, []);
+});
+
+test('LW 2.21a: a changed reference file (new hash) schedules a new seed card', async () => {
+  const repoDir = referenceRepo({ 'prices.csv': PRICES_CSV });
+  const store = writableStore([]);
+  await direct({ repoDir, todoStore: store, list: [], answer: { cardIds: [], notes: '' } });
+  const first = seedTagOf(store.list[0]);
+  fs.writeFileSync(path.join(repoDir, 'design', 'references', 'prices.csv'), `${PRICES_CSV}Steel pipe 50mm,77.10\n`);
+  await direct({ repoDir, todoStore: store, list: [], answer: { cardIds: [], notes: '' } });
+  const tags = store.list.map(seedTagOf);
+  assert.equal(tags.length, 2);
+  assert.notEqual(tags[1], first);
+  assert.equal(tags[1], `seed:${Seed.referencesHash(Seed.referenceDataFiles(repoDir))}`);
+});
+
+test('LW 2.21a: no data files (only README / images) means no seed card and no store write', async () => {
+  const repoDir = referenceRepo({ 'home.png': 'not data' });
+  const { res } = await direct({ repoDir, list: [runCard(1, { text: 'Quote screen' })], answer: { cardIds: [1], notes: '' } });
+  assert.equal(res.ok, true);
+  assert.equal(res.autoCards.seed, null);
+  assert.deepEqual(res.cardIds, [1]);
+});
+
+test('LW 2.21a: personal data in the references -> fake values in the seed card, real ones only through a decision', async () => {
+  const repoDir = referenceRepo({ 'clients.csv': CLIENTS_CSV });
+  const store = writableStore([]);
+  const first = await direct({ repoDir, todoStore: store, list: [], answer: { cardIds: [], notes: '' } });
+
+  const seedCard = store.list.find((c) => seedTagOf(c));
+  const piiCard = store.list.find((c) => c.tags.some((t) => t.startsWith(Seed.PII_TAG_PREFIX)));
+  assert.ok(seedCard && piiCard);
+  assert.match(seedCard.details, /Do NOT copy them into fixtures/);
+  assert.match(first.res.autoCards.seed.pii, /clients\.csv: 1 email, 1 phone number, 1 tax id/);
+  // The values never leave the guard: not in any card, not in the result.
+  const everything = JSON.stringify([store.list, first.res]);
+  for (const value of ['jan@kowalski-stal.pl', '600 700 800', '1234567883']) assert.doesNotMatch(everything, new RegExp(value));
+  // The PII card goes to the decision queue (outOfScope), even when the model picks it.
+  assert.deepEqual(first.res.outOfScope.map((c) => c.at), [piiCard.at]);
+  assert.match(first.res.outOfScope[0].missing[0], /tax ids/);
+  const picked = await direct({ repoDir, todoStore: store, list: [], answer: { cardIds: [piiCard.at, seedCard.at], notes: '' } });
+  assert.deepEqual(picked.res.cardIds, [seedCard.at]);
+  assert.ok(picked.res.warnings.some((w) => w.code === 'outOfScope' && w.at === piiCard.at));
+  // Mati's OK in the decision queue lets it through.
+  const ok = await direct({ repoDir, todoStore: store, list: [], decidedCards: [piiCard.at], answer: { cardIds: [piiCard.at], notes: '' } });
+  assert.deepEqual(ok.res.cardIds, [piiCard.at]);
+  assert.equal(store.list.length, 2, 'no card created twice');
+});
+
+test('LW 2.21a: scanPii counts emails, phones and checksummed tax ids, and never trusts a PDF', () => {
+  const repoDir = referenceRepo({
+    'clients.csv': CLIENTS_CSV,
+    'prices.csv': PRICES_CSV,
+    'ids.json': '{"pesel": "44051401458", "nip": "1234567890", "vat": "DE123456789"}',
+    'quote.pdf': '%PDF-1.4 binary',
+  });
+  const pii = Seed.scanPii(Seed.referenceDataFiles(repoDir));
+  const byName = Object.fromEntries(pii.files.map((f) => [f.name, f]));
+  assert.equal(pii.found, true);
+  assert.equal(byName['prices.csv'], undefined, 'prices are not personal data');
+  assert.deepEqual([byName['clients.csv'].emails, byName['clients.csv'].phones, byName['clients.csv'].taxIds], [1, 1, 1]);
+  // PESEL (valid checksum) and the VAT number count; 1234567890 fails the NIP checksum.
+  assert.equal(byName['ids.json'].taxIds, 2);
+  assert.equal(byName['quote.pdf'].unchecked, true);
+});
+
+// ---- LW 2.26: GDPR / legal pack ------------------------------------------------------
+
+test('LW 2.26: EU detection - the pack flag wins, then an EU audience or country in BRIEF / DESIGN', () => {
+  assert.equal(Legal.euWebApp({ brief: '## Who it is for\n\nEU web app: yes\n' }).source, 'flag');
+  assert.equal(Legal.euWebApp({ brief: 'EU web app: no\nSteel traders in Poland.' }).eu, false, 'an explicit no beats the text');
+  assert.equal(Legal.euWebApp({ brief: 'Small steel traders in Poland.' }).eu, true);
+  assert.equal(Legal.euWebApp({ design: 'Must follow GDPR.' }).eu, true);
+  assert.equal(Legal.euWebApp({ brief: 'Customers across the EU.' }).eu, true);
+  assert.equal(Legal.euWebApp({ brief: 'Shops in Texas and Ohio. Neutral feel.' }).eu, false);
+  assert.equal(Legal.euWebApp({ brief: '<!-- EU web app: yes -->\nUS only.' }).eu, false, 'comments are not the flag');
+  assert.equal(Legal.euWebApp(null).eu, false);
+});
+
+const SHIP_TWO = '# Ship criteria\n\n## Milestone 1: Skeleton\n\n- [ ] Starts\n\n## Milestone 2: Complete\n\n- [ ] Works\n';
+
+function euRepo({ brief = '# Brief\n\nEU web app: yes\n', pkg = null } = {}) {
+  const dir = fakeRepo();
+  fs.writeFileSync(path.join(dir, 'design', 'BRIEF.md'), brief);
+  fs.writeFileSync(path.join(dir, 'design', 'SHIP_CRITERIA.md'), SHIP_TWO);
+  if (pkg) fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));
+  return dir;
+}
+
+const pastFirstGate = { verdict: 'continue', milestone: { name: 'Milestone 1: Skeleton', passed: true }, next: 'Milestone 2: Complete', allPassed: false };
+const legalSlugs = (list) => list.flatMap((c) => c.tags.filter((t) => t.startsWith('legal:'))).sort();
+
+test('LW 2.26: before SHIP an EU web app gets privacy, export and deletion cards - no cookie card without trackers', async () => {
+  const repoDir = euRepo();
+  const store = writableStore([]);
+  const { res } = await direct({ repoDir, todoStore: store, list: [], lastCritic: pastFirstGate, answer: { cardIds: [], notes: '' } });
+  assert.deepEqual(legalSlugs(store.list), ['legal:delete', 'legal:export', 'legal:privacy']);
+  for (const card of store.list) {
+    assert.ok(card.tags.includes(RUN_TAG));
+    assert.match(card.details, /DRAFT - check before publishing/);
+    assert.ok(card.acceptance.some((a) => /DRAFT - check before publishing/.test(a)));
+    assert.match(card.details, /test/i);
+  }
+  assert.equal(res.autoCards.legal.eu, true);
+  assert.deepEqual(res.outOfScope, []);
+});
+
+test('LW 2.26: detected trackers add the cookie consent card; every card is created once', async () => {
+  const repoDir = euRepo({ pkg: { dependencies: { 'react-ga4': '^2.1.0', next: '14.0.0' } } });
+  const store = writableStore([]);
+  const { res } = await direct({ repoDir, todoStore: store, list: [], lastCritic: pastFirstGate, answer: { cardIds: [], notes: '' } });
+  assert.deepEqual(legalSlugs(store.list), ['legal:cookies', 'legal:delete', 'legal:export', 'legal:privacy']);
+  assert.ok(res.autoCards.legal.trackers.includes('package react-ga4'));
+  assert.match(store.list.find((c) => c.tags.includes('legal:cookies')).details, /no tracker script loads before the user opts in/);
+  await direct({ repoDir, todoStore: store, list: [], lastCritic: pastFirstGate, answer: { cardIds: [], notes: '' } });
+  assert.equal(store.list.length, 4);
+});
+
+test('LW 2.26: tracker snippets in the source count too', () => {
+  const repoDir = euRepo();
+  fs.mkdirSync(path.join(repoDir, 'public'));
+  fs.writeFileSync(path.join(repoDir, 'public', 'index.html'), '<script async src="https://www.googletagmanager.com/gtag/js?id=G-X"></script>');
+  assert.deepEqual(Legal.detectTrackers(repoDir).hits, ['googletagmanager.com']);
+  assert.equal(Legal.detectTrackers(fakeRepo()).found, false);
+});
+
+test('LW 2.26: no legal cards for a non-EU app, nor before the first gate passed', async () => {
+  const usStore = writableStore([]);
+  await direct({ repoDir: euRepo({ brief: '# Brief\n\nShops in Texas.\n' }), todoStore: usStore, list: [], lastCritic: pastFirstGate, answer: { cardIds: [], notes: '' } });
+  assert.deepEqual(usStore.list, []);
+  const earlyStore = writableStore([]);
+  const early = await direct({ repoDir: euRepo(), todoStore: earlyStore, list: [], answer: { cardIds: [], notes: '' } });
+  assert.deepEqual(earlyStore.list, []);
+  assert.equal(early.res.autoCards.legal.due, false);
+  assert.equal(D.legalDue(null, '# Ship criteria\n\n## Milestone 1\n\n- [ ] Works\n'), true, 'a one-rung ladder is due at once');
+  assert.equal(D.legalDue({ allPassed: true, next: null }, SHIP_TWO), true);
+});
+
+test('LW 2.26: the legal journeys land in TEST_PLAN.md once, with the cards', async () => {
+  const repoDir = euRepo();
+  const store = writableStore([]);
+  await direct({ repoDir, todoStore: store, list: [], lastCritic: pastFirstGate, answer: { cardIds: [], notes: '' } });
+  await direct({ repoDir, todoStore: store, list: [], lastCritic: pastFirstGate, answer: { cardIds: [], notes: '' } });
+  const journeys = Pack.parseJourneys(Pack.readPackFile(repoDir, 'TEST_PLAN.md'));
+  assert.deepEqual(journeys, ['Legal: privacy policy is reachable', 'Legal: data export works', 'Legal: account deletion works']);
+});

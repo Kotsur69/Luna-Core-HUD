@@ -119,6 +119,22 @@ test('profile validation rejects a malformed checkCommand and non-objects', () =
   for (const junk of [null, 'npm start', [], 3]) assert.equal(S.validateProfile(junk).profile, null);
 });
 
+test('LW 2.21a: seedCommand is optional, trimmed, and validated like startCommand', () => {
+  assert.equal('seedCommand' in S.validateProfile(goodProfile).profile, false, 'absent stays absent');
+  assert.equal('seedCommand' in S.validateProfile({ ...goodProfile, seedCommand: '   ' }).profile, false, 'blank = no seed');
+  assert.equal(S.validateProfile({ ...goodProfile, seedCommand: '  npm run seed ' }).profile.seedCommand, 'npm run seed');
+  for (const seedCommand of [7, null, {}, 'npm run seed\nrm -rf /', 'x'.repeat(S.MAX_COMMAND_CHARS + 1)]) {
+    const r = S.validateProfile({ ...goodProfile, seedCommand });
+    assert.equal(r.profile, null, `seedCommand=${JSON.stringify(seedCommand)}`);
+    assert.match(r.reason, /seedCommand/);
+  }
+});
+
+test('LW 2.21a: a stored profile with a bad seedCommand is dropped on read, like any bad profile', () => {
+  const settings = S.normalizeSettings({ projects: { p: { profile: { ...goodProfile, seedCommand: 'a\rb' } } } });
+  assert.equal(S.profileFor(settings, 'p'), null);
+});
+
 test('withProject sets, rejects, and removes a profile without mutating its input', () => {
   const base = S.defaultSettings();
   const frozen = JSON.stringify(base);

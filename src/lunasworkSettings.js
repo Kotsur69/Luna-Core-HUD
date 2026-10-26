@@ -20,9 +20,9 @@
 //                           budgets (0-100); unset categories use
 //                           lunasworkLighthouse.DEFAULT_BUDGETS
 //
-// TRUST BOUNDARY: the project profile (startCommand, checkCommand, url) is only
-// ever read from this local file, which only the LunaCore UI writes. It is
-// never read from the project repo or from model output, so nothing a model
+// TRUST BOUNDARY: the project profile (startCommand, checkCommand, seedCommand,
+// url) is only ever read from this local file, which only the LunaCore UI
+// writes. It is never read from the project repo or from model output, so nothing a model
 // writes can change the command LunaCore runs - the same boundary as God
 // Mode's planner. Do not add a code path that fills a profile from either.
 //
@@ -116,6 +116,14 @@ function validateProfile(raw) {
   const checkProblem = commandProblem(check, 'checkCommand');
   if (checkProblem) return invalid(checkProblem);
 
+  // LW 2.21a, optional: loads the builders' seed fixtures before the Playtester
+  // starts (lunasworkAdapters). Same boundary and checks as startCommand.
+  if (raw.seedCommand !== undefined) {
+    const seedProblem = commandProblem(raw.seedCommand, 'seedCommand');
+    if (seedProblem) return invalid(seedProblem);
+  }
+  const seedCommand = typeof raw.seedCommand === 'string' ? raw.seedCommand.trim() : '';
+
   // Optional: the iteration-0 stack template for a new project (src/lunasworkScaffold.js).
   if (raw.stack !== undefined && !PROFILE_STACKS.includes(raw.stack)) return invalid(`unknown stack '${String(raw.stack)}'`);
 
@@ -126,6 +134,7 @@ function validateProfile(raw) {
       url: url.trim(),
       readyTimeoutSec: timeout,
       checkCommand: check.trim(),
+      ...(seedCommand ? { seedCommand } : {}),
       ...(raw.stack !== undefined ? { stack: raw.stack } : {}),
     },
     reason: null,

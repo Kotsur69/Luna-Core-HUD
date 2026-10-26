@@ -11,7 +11,10 @@
 //
 // Only `web` exists. It spawns the profile's startCommand in the project dir,
 // logs stdout/stderr to server.log in the evidence dir, polls the profile url
-// until it answers 2xx/3xx, and kills the whole process tree on stop.
+// until it answers 2xx/3xx, and kills the whole process tree on stop. LW
+// 2.21a: an optional seedCommand runs to completion first (same dir, same
+// log), so the Playtester meets the builders' fixtures; a failing seed fails
+// the start.
 //
 // TRUST BOUNDARY: the command comes ONLY from the profile, which only ever
 // comes from lunasworkSettings (LunaCore's local file). start() re-validates it
@@ -43,6 +46,7 @@ const BROWSERS_MARKER = '.playwright-browsers.json';
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const BROWSERS_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_VIEWPORT = 4000;
+const SEED_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Playwright MCP, run by the Playtester's headless `claude -p`. Screenshots and
 // console dumps land in the evidence dir via --output-dir.
@@ -192,23 +196,62 @@ function createWebAdapter(ctx) {
   let exit = null; // {code, signal} once the child has exited
   let readyUrl = null;
   let stopping = null;
+  let seeder = null; // the seed command while it runs
+
+  const spawnInProject = (command) => ctx.spawn(command, {
+    cwd: ctx.projectDir,
+    shell: true,
+    windowsHide: true,
+    // POSIX: own process group, so stop() can kill the whole tree.
+    detached: ctx.platform !== 'win32',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  // Not pipe(): a dying server can still flush output after stop() closed the
+  // log, and a piped write-after-end would crash the main process.
+  const toLog = (chunk) => {
+    if (log) log.write(chunk);
+  };
+
+  /**
+   * LW 2.21a: runs the profile's seedCommand and waits for it to exit 0.
+   * @returns {Promise<{ok:boolean, reason?:string}>}
+   */
+  function seed(command) {
+    toLog(`[lunaswork] seed $ ${command}\n`);
+    return new Promise((resolve) => {
+      let timer = null;
+      const finish = (res) => {
+        clearTimeout(timer);
+        seeder = null;
+        resolve(res);
+      };
+      try {
+        seeder = spawnInProject(command);
+      } catch (err) {
+        finish({ ok: false, reason: `seed command failed: ${err.message}` });
+        return;
+      }
+      if (seeder.stdout) seeder.stdout.on('data', toLog);
+      if (seeder.stderr) seeder.stderr.on('data', toLog);
+      seeder.on('error', (err) => finish({ ok: false, reason: `seed command failed: ${err.message}` }));
+      seeder.on('exit', (code, signal) => {
+        toLog(`[lunaswork] seed exited code=${code} signal=${signal}\n`);
+        finish(code === 0 ? { ok: true } : { ok: false, reason: `seed command exited with code ${code} (signal ${signal})` });
+      });
+      if (Number.isInteger(seeder.pid)) {
+        const { pid } = seeder;
+        timer = setTimeout(() => {
+          killTree(pid, ctx);
+          finish({ ok: false, reason: `seed command did not finish within ${SEED_TIMEOUT_MS / 1000}s` });
+        }, SEED_TIMEOUT_MS);
+      }
+    });
+  }
 
   function launch(profile) {
-    log = openLog(ctx.evidenceDir);
-    log.write(`[lunaswork] $ ${profile.startCommand}\n`);
-    child = ctx.spawn(profile.startCommand, {
-      cwd: ctx.projectDir,
-      shell: true,
-      windowsHide: true,
-      // POSIX: own process group, so stop() can kill the whole tree.
-      detached: ctx.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    // Not pipe(): a dying server can still flush output after stop() closed the
-    // log, and a piped write-after-end would crash the main process.
-    const toLog = (chunk) => {
-      if (log) log.write(chunk);
-    };
+    toLog(`[lunaswork] $ ${profile.startCommand}\n`);
+    child = spawnInProject(profile.startCommand);
     if (child.stdout) child.stdout.on('data', toLog);
     if (child.stderr) child.stderr.on('data', toLog);
     child.on('exit', (code, signal) => {
@@ -238,11 +281,19 @@ function createWebAdapter(ctx) {
   }
 
   async function start(profile) {
-    if (child) throw new Error('web adapter is already started');
+    if (child || log) throw new Error('web adapter is already started');
     const { profile: valid, reason } = validateProfile(profile);
     if (!valid) throw new Error(`invalid project profile: ${reason}`);
     if (valid.adapter !== 'web') throw new Error(`profile adapter is '${valid.adapter}', not 'web'`);
 
+    log = openLog(ctx.evidenceDir);
+    if (valid.seedCommand) {
+      const seeded = await seed(valid.seedCommand);
+      if (!seeded.ok) {
+        await stop();
+        throw new Error(`${seeded.reason} - see ${path.join(ctx.evidenceDir, SERVER_LOG)}`);
+      }
+    }
     launch(valid);
     const ready = await waitReady(valid);
     if (!ready.ok) {
@@ -255,6 +306,7 @@ function createWebAdapter(ctx) {
 
   async function shutdown() {
     let killed = true;
+    if (seeder && Number.isInteger(seeder.pid)) killed = await killTree(seeder.pid, ctx);
     if (child && !exit && Number.isInteger(child.pid)) killed = await killTree(child.pid, ctx);
     if (log) {
       const stream = log;
@@ -396,6 +448,7 @@ function createAdapter(name, opts = {}) {
 module.exports = {
   PLAYWRIGHT_TOOLS,
   POLL_INTERVAL_MS,
+  SEED_TIMEOUT_MS,
   SERVER_LOG,
   BROWSERS_LOG,
   BROWSERS_MARKER,

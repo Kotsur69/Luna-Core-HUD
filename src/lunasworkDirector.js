@@ -27,8 +27,24 @@
 //
 // designAppend goes through lunasworkPack.appendDesign (append only). Each
 // scheduled card comes back with the builder brief at the top of its details
-// (LW 2.16: naming the repo's project skills when it has any); the to-do
-// store itself is only read here.
+// (LW 2.16: naming the repo's project skills when it has any).
+//
+// The Director's own cards (lunasworkAutoCards.scheduleAutoCards, written through
+// lunasworkCritic.applyCards; nothing else is written to the store here):
+//   - LW 2.21a seed data: design/references/ holds data files and no card
+//     carries `seed:<hash of those files>` yet - once, and again whenever the
+//     references change (lunasworkSeed). Emails / phones / tax ids in them:
+//     the seed card uses fake values, and a second `seed-pii:<hash>` card
+//     that copies the real ones always goes to the decision queue first
+//     (outOfScope -> the controller's existing outOfScope decision, default
+//     reject) - never scheduled without Mati's OK.
+//   - LW 2.26 legal pack: an EU web app (lunasworkLegal.euWebApp) gets its
+//     privacy / cookie consent (trackers only) / export / deletion cards
+//     before SHIP - once the first milestone gate passed, or right away with
+//     a one-milestone ladder - each `legal:<slug>` once, plus the matching
+//     TEST_PLAN.md journeys (lunasworkPack.appendLegalJourneys).
+// Both kinds pass the scope guard and the epic filter: they come from the
+// pack itself, not from a model.
 //
 // Always resolves, never rejects.
 // ============================================================================
@@ -43,6 +59,9 @@ const { normalizeTodos, runTag, MAX_DETAILS_CHARS, STEER_TAG, BUILT_STATE } = re
 const pack = require('./lunasworkPack');
 const { normalizeOwnedPath, MAX_OWNERSHIP_ENTRIES } = require('./ownership');
 const { listSkills } = require('./lunasworkSkills');
+const {
+  isAutoCard, isPiiCard, isSeedCard, isLegalCard, PII_MISSING, legalDue, scheduleAutoCards,
+} = require('./lunasworkAutoCards');
 
 const DIRECTOR_EFFORT = 'high';
 const DIRECTOR_BUDGET_USD = 2;
@@ -121,7 +140,6 @@ function clean(raw, max) {
 }
 
 const hasTag = (card, tag) => Array.isArray(card.tags) && card.tags.includes(tag);
-
 /** Mati's `stop` steer card: ends the run after the current iteration. */
 function isStopCard(card) {
   return isObj(card) && hasTag(card, STEER_TAG) && typeof card.text === 'string'
@@ -206,7 +224,11 @@ function splitByScope(cards, scopeText, decided) {
   const inScope = [];
   const outOfScope = [];
   for (const card of cards) {
-    const check = decided.has(card.at) ? { inScope: true } : scopeCheck(card, scopeText);
+    let check;
+    if (decided.has(card.at)) check = { inScope: true };
+    else if (isPiiCard(card)) check = { inScope: false, missing: [PII_MISSING] };
+    else if (isAutoCard(card)) check = { inScope: true };
+    else check = scopeCheck(card, scopeText);
     if (check.inScope) inScope.push(card);
     else outOfScope.push({ at: card.at, text: card.text, missing: check.missing || [] });
   }
@@ -384,6 +406,8 @@ const cardBrief = (c) => ({
   ...(c.files ? { files: c.files } : {}),
   ...(c.size ? { size: c.size } : {}),
   ...(c.feedback ? { feedback: true } : {}),
+  ...(isSeedCard(c) ? { seedData: true } : {}),
+  ...(isLegalCard(c) ? { legal: true } : {}),
 });
 
 /** What the Director sees of the last runCritic result. */
@@ -419,6 +443,7 @@ function buildDirectorPrompt({ iteration, docs, cards, lastCritic, gatePassed, l
     '- Mati\'s steer cards come first, every one of them, always. They are his direct instructions.',
     '- Cards marked "feedback": true come right after them: look and bug feedback given while the run goes on.',
     '- Then bugs and blockers on the current milestone, then what moves the current milestone gate. Work for later milestones waits.',
+    '- A card marked "seedData": true goes early: the Playtester needs the real data to test real cases. Cards marked "legal": true must be done before SHIP.',
     `- idea cards: ${gatePassed ? 'allowed - the current milestone gate passed' : 'NOT allowed yet - the current milestone gate has not passed'}.`,
     '- Pick a set that fits one iteration and that builders can do without stepping on each other.',
     `- Scheduling 2 or more cards means a parallel build. Then give contracts (the interfaces between the cards: function / module signatures, data shapes, API routes; kind is one of ${CONTRACT_KINDS.join(', ')}) and ownership: [{path, cardId}], a repo-relative file path or glob (e.g. "src/quote/**") per entry. Every scheduled card, steer cards included, owns at least one path; no path is owned twice; never an absolute path or "..". A broken ownership map throws your whole answer away. With one card, leave both out.`,
@@ -518,8 +543,8 @@ function advanceEpics(repoDir, todos) {
   }
 }
 
-/** With an active epic: steer and feedback cards plus the epic's own cards. */
-const inEpic = (epic) => (c) => !epic || c.steer || c.feedback || hasTag(c, epicTag(epic.slug));
+/** With an active epic: steer, feedback and the Director's own cards plus the epic's own cards. */
+const inEpic = (epic) => (c) => !epic || c.steer || c.feedback || isAutoCard(c) || isPiiCard(c) || hasTag(c, epicTag(epic.slug));
 
 /** Asks the model; resolves {raw, costUsd} or {error, detail}. Never rejects. */
 async function askModel(runner, call) {
@@ -586,6 +611,7 @@ async function runDirector(opts) {
     contractsWritten: false,
     epic: null,
     epicsTicked: [],
+    autoCards: { created: [], seed: null, legal: null, journeysWritten: false },
   };
   const fail = (error, detail) => {
     log(`director failed: ${error}`, detail);
@@ -601,7 +627,12 @@ async function runDirector(opts) {
 
     const limit = Number.isInteger(o.limit) && o.limit > 0 ? o.limit : MAX_CARDS_PER_ITERATION;
     const gatePassed = isObj(o.lastCritic) && isObj(o.lastCritic.milestone) && o.lastCritic.milestone.passed === true;
-    const allTodos = normalizeTodos(o.todoStore.read());
+    const docs = loadDocs(o.repoDir);
+    const readTodos = normalizeTodos(o.todoStore.read());
+    // LW 2.21a / 2.26: created before the pick, so they are on offer this iteration.
+    const auto = scheduleAutoCards(o, tag, readTodos, docs);
+    const allTodos = auto.created.length ? normalizeTodos(o.todoStore.read()) : readTodos;
+    const autoCards = { created: auto.created.map((c) => c.at), seed: auto.seed, legal: auto.legal, journeysWritten: auto.journeysWritten };
     const roadmap = advanceEpics(o.repoDir, allTodos);
     // Cards held by the decision queue (pending, or rejected) are not on offer.
     const hold = new Set(Array.isArray(o.holdCards) ? o.holdCards.filter(Number.isFinite) : []);
@@ -631,7 +662,8 @@ async function runDirector(opts) {
         ownership: owned.length ? Object.fromEntries(owned.map((e) => [e.path, e.cardId])) : null,
         epic: roadmap.epic,
         epicsTicked: roadmap.ticked,
-        warnings: [...roadmap.warnings, ...stuckSteer, ...direction.warnings, ...(extra.warnings || [])],
+        autoCards,
+        warnings: [...auto.warnings, ...roadmap.warnings, ...stuckSteer, ...direction.warnings, ...(extra.warnings || [])],
         durationMs: now() - started,
       };
     };
@@ -639,7 +671,6 @@ async function runDirector(opts) {
     const pick = pickModel('director', o.models, { gate: gatePassed, stepBack: isStepBack(o.iteration) })
       || { model: FALLBACK_MODEL, reason: 'default' };
     const modelInfo = { model: pick.model, modelReason: pick.reason };
-    const docs = loadDocs(o.repoDir);
     const scope = {
       scopeText: [docs.design, docs.roadmap].filter(Boolean).join('\n'),
       decided: new Set(Array.isArray(o.decidedCards) ? o.decidedCards.filter(Number.isFinite) : []),
@@ -699,6 +730,8 @@ module.exports = {
   validateContracts,
   validateOwnership,
   advanceEpics,
+  legalDue,
+  scheduleAutoCards,
   buildDirectorPrompt,
   buildDirectorArgs,
   runDirector,

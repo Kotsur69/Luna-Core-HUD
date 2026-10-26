@@ -41,6 +41,11 @@
 // the pack, which appends the iteration's CHANGELOG.md entry. The file runs
 // past 800 lines on purpose: both passes share the trust boundary and the
 // headless-call plumbing above.
+//
+// LW 2.19a: a design-match entry (report.designMatch) that scores low or
+// dropped since the previous iteration becomes a `feel` card naming both
+// images - computed here from the Playtester's evidence, never left to the
+// model (lunasworkDesignMatch.designMatchCards).
 // ============================================================================
 
 'use strict';
@@ -57,6 +62,7 @@ const {
   GATE_PASS_SCORE, MAX_SPLIT_PIECES, SKILL_VERDICTS, SKILL_REVIEW_SCHEMA, buildCriticPrompt, buildSkillReviewPrompt,
 } = require('./lunasworkCriticPrompt');
 const { formatLogEntry, writePack } = require('./lunasworkCriticPack');
+const { designMatchCards } = require('./lunasworkDesignMatch');
 
 const CRITIC_EFFORT = 'high';
 const CRITIC_BUDGET_USD = 3;
@@ -720,9 +726,12 @@ async function runCritic(opts) {
     });
     if (critique.errors.length) return fail(critique.errors[0].code);
 
+    // LW 2.19a: the design-match cards; one the model already rewrites that card is left to it.
+    const taken = new Set(critique.cards.map((c) => c.updatesCardId).filter((at) => at !== null));
+    const designCards = designMatchCards(report.designMatch, open).filter((c) => c.updatesCardId === null || !taken.has(c.updatesCardId));
     // LW 2.13: read after the Director's tick, so new cards land in the epic now being worked on.
     const epic = pack.activeEpic(pack.parseRoadmap(pack.readPackFile(o.repoDir, 'ROADMAP.md')));
-    const applied = safeApplyCards(o.todoStore, critique.cards, tag, { epic: epic ? epic.slug : null });
+    const applied = safeApplyCards(o.todoStore, [...critique.cards, ...designCards], tag, { epic: epic ? epic.slug : null });
     if (applied.error) log('critic could not save cards', applied.error);
     const date = new Date(now()).toISOString().slice(0, 10);
     // Cards that were not saved are work nobody will do: never ship past them.
