@@ -19,12 +19,20 @@
 //   gemini  GEMINI_API_KEY / GOOGLE_API_KEY, or ~/.gemini/oauth_creds.json with a token
 // The command names match the native provider templates (config/providers.json).
 //
-// Never throws. Not installed / not logged in -> { skipped:true, note }.
+// Read-only is enforced by each CLI, not here: codex runs in its read-only
+// sandbox (it may still READ the whole disk); gemini relies on headless
+// 'default' approval refusing every tool that needs approval. Either way the
+// prompt (playtest report, design pack, gate diff) goes to that vendor, so the
+// controller only calls this when Mati opted in to a second opinion.
+//
+// Never throws, never rejects (a throwing injected detect / runCli / log /
+// now included). Not installed / not logged in -> { skipped:true, note }.
 //
 // Exports
 //   DEFAULT_ORDER          string[]  ['codex', 'gemini']
-//   SECOND_OPINION_CLIS    {[cli]: {command:string, args:string[]}}  read-only invocations
+//   SECOND_OPINION_CLIS    {[cli]: {command:string, args:string[]}}  frozen; the invocations above
 //   SECOND_OPINION_SOURCE  'second opinion'
+//   resolveOnPath(command:string, deps?) -> string|null  absolute path of a command on PATH
 //   detectCli(cli:string, deps?:{env?, homedir?:()=>string, platform?:string,
 //       exists?:(p)=>boolean, readFile?:(p)=>string}) -> {installed:boolean, loggedIn:boolean}
 //       Default detector; every file-system access goes through deps.
@@ -38,7 +46,9 @@
 //       source 'second opinion' and the extra tag 'second-opinion'.
 //   gateVerdict(critic:{passed?, milestone?, verdict?}, second:object|null)
 //       -> {passed:boolean, disagreement:object|null}
-//   execCli({command, args, prompt, cwd, env, timeoutMs}) -> Promise<{stdout}|{error, detail?}>
+//   execCli({command, args, prompt, cwd, env, timeoutMs, execImpl?, platform?,
+//       resolve?:(command)=>string|null}) -> Promise<{stdout}|{error, detail?}>
+//       On Windows the command is resolved to its absolute PATH entry first.
 //   runSecondOpinion({isGate, inputs, order?, detect?, runCli?, cwd?, env?, allPassed?,
 //       ideasAllowed?, log?, now?, timeoutMs?}) -> Promise<
 //       {skipped:true, note:string} |
@@ -62,12 +72,15 @@ const { cleanTags } = require('./todorows');
 
 const DEFAULT_ORDER = ['codex', 'gemini'];
 // Prompt on stdin; every arg is a fixed token (safe for the Windows shell shim).
+const cliSpec = (command, args) => Object.freeze({ command, args: Object.freeze(args) });
 const SECOND_OPINION_CLIS = Object.freeze({
-  codex: { command: 'codex', args: ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--color', 'never', '-'] },
+  codex: cliSpec('codex', ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--color', 'never', '-']),
   // Non-interactive with piped stdin; 'default' approval denies every tool that needs approval (writes, shell).
-  gemini: { command: 'gemini', args: ['--approval-mode', 'default', '--output-format', 'json'] },
+  gemini: cliSpec('gemini', ['--approval-mode', 'default', '--output-format', 'json']),
 });
 const SAFE_ARG_RE = /^[A-Za-z0-9._:=-]+$/;
+// A resolved path goes inside double quotes, where only these stay special to cmd.exe.
+const UNSAFE_QUOTED_RE = /["%!\r\n]/;
 const SECOND_OPINION_SOURCE = 'second opinion';
 const SECOND_OPINION_TAG = 'second-opinion';
 const SECOND_OPINION_TIMEOUT_MS = 10 * 60 * 1000;
@@ -80,6 +93,25 @@ const STOP_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const clip = (s, max) => String(s === undefined || s === null ? '' : s).slice(0, max);
 const noop = () => {};
+
+/** An injected logger that throws must not break the never-reject promise. */
+const safeLog = (log) => (message, detail) => {
+  try {
+    log(message, detail);
+  } catch {
+    // ignored on purpose: logging is best effort
+  }
+};
+
+/** An injected clock that throws or lies reads as 0. */
+const safeNow = (now) => () => {
+  try {
+    const t = now();
+    return Number.isFinite(t) ? t : 0;
+  } catch {
+    return 0;
+  }
+};
 
 // ---- detection ----------------------------------------------------------------------
 
@@ -102,20 +134,34 @@ function defaultDeps(deps) {
   };
 }
 
-/** True when `command` resolves to a file on PATH (with PATHEXT on Windows). */
-function onPath(command, d) {
+/** The first file `command` resolves to on PATH (with PATHEXT on Windows), or null. */
+function findOnPath(command, d) {
   const env = d.env;
   const pathVar = env.PATH || env.Path || '';
   const win = d.platform === 'win32';
   const join = win ? path.win32.join : path.posix.join;
-  const exts = win ? ['', ...String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').toLowerCase().split(';').filter(Boolean)] : [''];
-  return pathVar.split(win ? ';' : ':').filter(Boolean).some((dir) => exts.some((ext) => {
-    try {
-      return d.exists(join(dir, command + ext));
-    } catch {
-      return false;
+  // Windows: a bare name without an extension is no runnable command.
+  const exts = win ? String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').toLowerCase().split(';').filter(Boolean) : [''];
+  for (const dir of pathVar.split(win ? ';' : ':').filter(Boolean)) {
+    for (const ext of exts) {
+      const file = join(dir, command + ext);
+      try {
+        if (d.exists(file)) return file;
+      } catch {
+        // an unreadable PATH entry is skipped
+      }
     }
-  }));
+  }
+  return null;
+}
+
+/** Absolute path of `command` on PATH, or null. Never throws. */
+function resolveOnPath(command, deps) {
+  try {
+    return findOnPath(command, defaultDeps(deps));
+  } catch {
+    return null;
+  }
 }
 
 function readJsonFile(file, d) {
@@ -152,7 +198,7 @@ function detectCli(cli, deps) {
   if (!spec) return { installed: false, loggedIn: false };
   try {
     const d = defaultDeps(deps);
-    const installed = onPath(spec.command, d);
+    const installed = findOnPath(spec.command, d) !== null;
     return { installed, loggedIn: installed && LOGIN_CHECKS[cli](d) };
   } catch {
     return { installed: false, loggedIn: false };
@@ -306,29 +352,51 @@ function gateVerdict(critic, second) {
 // ---- run ----------------------------------------------------------------------------
 
 /**
+ * The cmd.exe line for a Windows run: the command's absolute PATH entry in
+ * quotes (cmd.exe would otherwise try a same-named shim in the cwd - the
+ * repo - first), then the args. {error} when it cannot be built safely.
+ */
+function windowsLine(command, argv, resolveCommand) {
+  const file = resolveCommand(command);
+  if (typeof file !== 'string' || !file) return { error: 'notInstalled' };
+  if (UNSAFE_QUOTED_RE.test(file)) return { error: 'unsafeArgs' };
+  return { line: [`"${file}"`, ...argv].join(' ') };
+}
+
+/**
  * Default runner: execFile with the prompt on stdin. npm installs codex and
  * gemini as .cmd shims on Windows, which only run through the shell; every
- * arg is checked against SAFE_ARG_RE first, so nothing can be injected.
- * Resolves {stdout} or {error, detail}; never rejects.
+ * arg is checked against SAFE_ARG_RE first, so nothing can be injected, and
+ * the line is joined here, not by Node (an args array with shell:true is
+ * deprecated, DEP0190). Resolves {stdout} or {error, detail}; never rejects.
  */
-function execCli({ command, args, prompt, cwd, env, timeoutMs, execImpl = execFile, platform = process.platform }) {
+function execCli({ command, args, prompt, cwd, env, timeoutMs, execImpl = execFile, platform = process.platform, resolve: resolveCommand }) {
   return new Promise((resolve) => {
     const argv = Array.isArray(args) ? args : [];
     if (![command, ...argv].every((a) => typeof a === 'string' && SAFE_ARG_RE.test(a))) {
       resolve({ error: 'unsafeArgs' });
       return;
     }
-    // Through the shell the line is joined here (all tokens are safe), not by
-    // Node: an args array with shell:true is deprecated (DEP0190).
     const viaShell = platform === 'win32';
+    let win = null;
+    if (viaShell) {
+      const lookup = typeof resolveCommand === 'function' ? resolveCommand : (name) => resolveOnPath(name, { env, platform });
+      win = windowsLine(command, argv, lookup);
+      if (win.error) {
+        resolve({ error: win.error });
+        return;
+      }
+    }
     let child;
     try {
       child = execImpl(
-        viaShell ? [command, ...argv].join(' ') : command,
+        viaShell ? win.line : command,
         viaShell ? [] : argv,
         { cwd, env, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024, windowsHide: true, shell: viaShell },
         (error, stdout) => {
           if (error && error.code === 'ENOENT') return resolve({ error: 'notInstalled' });
+          // Checked before `killed`: a buffer overflow kills the child too.
+          if (error && error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return resolve({ error: 'tooMuchOutput' });
           if (error && error.killed) return resolve({ error: 'timeout' });
           if (error && !stdout) return resolve({ error: 'failed', detail: clip(error.message, MAX_NOTE_CHARS) });
           resolve({ stdout });
@@ -357,8 +425,8 @@ function skippedNote(tried) {
  */
 async function runSecondOpinion(opts) {
   const o = isObj(opts) ? opts : {};
-  const log = typeof o.log === 'function' ? o.log : noop;
-  const now = typeof o.now === 'function' ? o.now : Date.now;
+  const log = safeLog(typeof o.log === 'function' ? o.log : noop);
+  const now = safeNow(typeof o.now === 'function' ? o.now : Date.now);
   if (o.isGate !== true) return { skipped: true, note: 'second opinion skipped: not a milestone gate' };
   const started = now();
   let cli = null;
@@ -404,6 +472,7 @@ module.exports = {
   DEFAULT_ORDER,
   SECOND_OPINION_CLIS,
   SECOND_OPINION_SOURCE,
+  resolveOnPath,
   detectCli,
   pickCli,
   buildSecondOpinionPrompt,

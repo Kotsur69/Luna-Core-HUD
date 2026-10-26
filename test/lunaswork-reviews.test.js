@@ -59,6 +59,10 @@ test('buildReviewArgs: read-only tools, the ECC agent, the json schema', () => {
   const tools = args[args.indexOf('--tools') + 1].split(',');
   assert.deepEqual(tools, ['Read', 'Grep', 'Glob']);
   for (const banned of ['Edit', 'Write', 'Bash']) assert.equal(tools.includes(banned), false);
+  const disallowed = args[args.indexOf('--disallowedTools') + 1].split(',');
+  for (const banned of ['Edit', 'Write', 'Bash', 'NotebookEdit']) assert.equal(disallowed.includes(banned), true);
+  // No MCP server loads, so no MCP tool can act on the machine.
+  assert.equal(args.includes('--strict-mcp-config'), true);
   assert.deepEqual(JSON.parse(args[args.indexOf('--json-schema') + 1]), R.REVIEW_SCHEMA);
   assert.equal(args.includes('-p'), true);
   assert.equal(R.buildReviewArgs({ type: 'performance' }).includes('ecc:performance-optimizer'), true);
@@ -191,6 +195,17 @@ test('runReviews: a bad run id or missing repo fails every due review without a 
   const noRepo = await R.runReviews(baseOpts({ iteration: 3, isGate: false, runClaude: claude.run, isDir: () => false }));
   assert.deepEqual(noRepo.notes, ['security review failed: noRepo']);
   assert.equal(claude.calls.length, 0);
+});
+
+test('runReviews: a throwing logger, clock or pickModel never makes it reject', async () => {
+  const boom = () => { throw new Error('boom'); };
+  const out = await R.runReviews(baseOpts({
+    iteration: 3, isGate: false, runClaude: async () => ({ error: 'timeout' }), log: boom, now: boom,
+  }));
+  assert.deepEqual(out.notes, ['security review failed: timeout']);
+  assert.equal(out.durationMs, 0);
+  const badPick = await R.runReviews(baseOpts({ iteration: 3, isGate: false, pickModel: boom, runClaude: async () => ({ error: 'x' }) }));
+  assert.match(badPick.notes[0], /^security review failed: crashed \(boom\)/);
 });
 
 test('runReviews: garbage options never throw', async () => {

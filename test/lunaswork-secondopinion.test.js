@@ -249,11 +249,13 @@ test('execCli: prompt on stdin, shell only on Windows, unsafe args refused', asy
     const stdin = { on: () => {}, end: (text) => { seen[seen.length - 1].stdin = text; cb(null, '{"ok":1}'); } };
     return { stdin };
   };
-  const out = await S.execCli({ command: 'codex', args: ['exec', '-'], prompt: 'hello', execImpl: fakeExec, platform: 'win32' });
+  const resolve = () => 'C:\\Program Files (x86)\\npm\\codex.cmd';
+  const out = await S.execCli({ command: 'codex', args: ['exec', '-'], prompt: 'hello', execImpl: fakeExec, platform: 'win32', resolve });
   assert.deepEqual(out, { stdout: '{"ok":1}' });
   assert.equal(seen[0].stdin, 'hello');
   assert.equal(seen[0].options.shell, true);
-  assert.equal(seen[0].command, 'codex exec -');
+  // The absolute PATH entry, quoted: never a same-named shim in the cwd.
+  assert.equal(seen[0].command, '"C:\\Program Files (x86)\\npm\\codex.cmd" exec -');
   assert.deepEqual(seen[0].args, []);
   await S.execCli({ command: 'codex', args: ['exec'], prompt: '', execImpl: fakeExec, platform: 'linux' });
   assert.equal(seen[1].options.shell, false);
@@ -264,6 +266,45 @@ test('execCli: prompt on stdin, shell only on Windows, unsafe args refused', asy
   assert.equal(seen.length, 2);
   const missing = await S.execCli({ command: 'codex', args: [], prompt: '', execImpl: (c, a, o, cb) => { cb(Object.assign(new Error('x'), { code: 'ENOENT' }), ''); return null; } });
   assert.deepEqual(missing, { error: 'notInstalled' });
+});
+
+test('execCli: on Windows an unresolvable or unsafe command path is refused without a spawn', async () => {
+  let spawned = 0;
+  const fakeExec = () => { spawned += 1; return null; };
+  const unresolved = await S.execCli({ command: 'codex', args: [], prompt: '', execImpl: fakeExec, platform: 'win32', resolve: () => null });
+  assert.deepEqual(unresolved, { error: 'notInstalled' });
+  const percent = await S.execCli({ command: 'codex', args: [], prompt: '', execImpl: fakeExec, platform: 'win32', resolve: () => 'C:\\%TEMP%\\codex.cmd' });
+  assert.deepEqual(percent, { error: 'unsafeArgs' });
+  assert.equal(spawned, 0);
+});
+
+test('execCli: a stdout overflow is not reported as a timeout', async () => {
+  const overflow = (c, a, o, cb) => {
+    cb(Object.assign(new Error('maxBuffer'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true }), '');
+    return null;
+  };
+  assert.deepEqual(await S.execCli({ command: 'codex', args: [], prompt: '', execImpl: overflow, platform: 'linux' }), { error: 'tooMuchOutput' });
+});
+
+test('resolveOnPath: absolute path of a PATH command, or null', () => {
+  const deps = { ...fakeFs({ onPath: ['/opt/bin/gemini'] }), env: { PATH: '/usr/bin:/opt/bin' } };
+  assert.equal(S.resolveOnPath('gemini', deps), '/opt/bin/gemini');
+  assert.equal(S.resolveOnPath('codex', deps), null);
+});
+
+test('SECOND_OPINION_CLIS: the invocations cannot be changed at runtime', () => {
+  assert.equal(Object.isFrozen(S.SECOND_OPINION_CLIS.codex), true);
+  assert.equal(Object.isFrozen(S.SECOND_OPINION_CLIS.codex.args), true);
+  assert.throws(() => { 'use strict'; S.SECOND_OPINION_CLIS.gemini.args.push('--yolo'); });
+});
+
+test('runSecondOpinion: a throwing logger or clock never makes it reject', async () => {
+  const d = detector({ codex: { installed: true, loggedIn: true } });
+  const boom = () => { throw new Error('boom'); };
+  const out = await S.runSecondOpinion({ isGate: true, detect: d.detect, runCli: async () => ({ error: 'timeout' }), log: boom, now: boom });
+  assert.equal(out.ok, false);
+  assert.deepEqual(out.notes, ['codex second opinion failed: timeout']);
+  assert.equal(out.durationMs, 0);
 });
 
 test('parseCliOutput: plain, gemini envelope, fenced; junk is badJson', () => {

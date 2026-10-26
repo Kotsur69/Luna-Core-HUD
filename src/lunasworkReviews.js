@@ -7,7 +7,9 @@
 //   - security     every SECURITY_EVERY-th iteration   (ecc:security-reviewer)
 //   - performance  every PERFORMANCE_EVERY-th iteration (ecc:performance-optimizer)
 //   - cleanup      at each milestone gate               (ecc:refactor-cleaner)
-// Read-only: the allowed tools are Read,Grep,Glob - never Edit, Write or Bash.
+// Read-only: the allowed tools are Read,Grep,Glob; Edit, Write, Bash and
+// NotebookEdit are also explicitly disallowed, and --strict-mcp-config loads
+// no MCP server (a user's MCP tools could otherwise act on the machine).
 //
 // The findings go through the Critic's trust boundary (validateCritique in
 // src/lunasworkCritic.js): same kinds, severities, caps, and every bug card
@@ -15,8 +17,9 @@
 // review:<type>; nothing is written here - the controller files them (e.g.
 // via lunasworkCritic.applyCards, which keeps a card's `extraTags`).
 //
-// Always resolves, never rejects: a failing reviewer yields no cards and one
-// note, '<type> review failed: <reason>'.
+// Always resolves, never rejects (a throwing injected log / now / pickModel
+// included): a failing reviewer yields no cards and one note,
+// '<type> review failed: <reason>'.
 //
 // Exports
 //   REVIEW_TYPES      string[]  ['security', 'performance', 'cleanup']
@@ -29,7 +32,8 @@
 //       argv for one headless review call (no shell string; prompt on stdin).
 //   buildReviewPrompt({type:string, iteration:number, diff?:string}) -> string
 //   reviewCards(raw:unknown, {type:string, runId:string}) -> {cards:object[], warnings:object[], errors:object[]}
-//       Pure. The reply validated as Critic cards, each tagged; errors when malformed.
+//       Pure. The reply validated as Critic cards; each card also gets
+//       review:<type>, tags:string[] and extraTags:['review:<type>']. Errors when malformed.
 //   runReview(type:string, opts) -> Promise<{type, cards, notes, warnings, costUsd}>
 //   runReviews({iteration, isGate, runId, repoPath, diff?, pickModel?, runClaude?, env?,
 //       log?, now?, timeoutMs?, budgetUsd?, isDir?}) -> Promise<{due:string[], cards:object[],
@@ -62,6 +66,7 @@ const REVIEW_AGENTS = Object.freeze({
 const REVIEW_ROLE = 'reviewer';
 // Read-only: a reviewer reports, the Builder fixes.
 const REVIEW_TOOLS = 'Read,Grep,Glob';
+const REVIEW_DISALLOWED_TOOLS = 'Bash,Edit,Write,NotebookEdit';
 const REVIEW_EFFORT = 'medium';
 const REVIEW_BUDGET_USD = 1;
 const REVIEW_TIMEOUT_MS = 10 * 60 * 1000;
@@ -92,6 +97,25 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const clip = (s, max) => String(s === undefined || s === null ? '' : s).slice(0, max);
 const noop = () => {};
 
+/** An injected logger that throws must not break the never-reject promise. */
+const safeLog = (log) => (message, detail) => {
+  try {
+    log(message, detail);
+  } catch {
+    // ignored on purpose: logging is best effort
+  }
+};
+
+/** An injected clock that throws or lies reads as 0. */
+const safeNow = (now) => () => {
+  try {
+    const t = now();
+    return Number.isFinite(t) ? t : 0;
+  } catch {
+    return 0;
+  }
+};
+
 /**
  * Pure schedule. Iterations count from 1; anything else has no review due.
  * @param {number} iteration
@@ -118,6 +142,8 @@ function buildReviewArgs({ type, model = DEFAULT_MODELS[REVIEW_ROLE], effort = R
     '--model', model,
     '--effort', effort,
     '--tools', REVIEW_TOOLS,
+    '--disallowedTools', REVIEW_DISALLOWED_TOOLS,
+    '--strict-mcp-config',
     '--max-budget-usd', String(budgetUsd),
     '--no-session-persistence',
   ];
@@ -183,7 +209,7 @@ function pickedModel(pickModel) {
  */
 async function runReview(type, opts) {
   const o = isObj(opts) ? opts : {};
-  const log = typeof o.log === 'function' ? o.log : noop;
+  const log = safeLog(typeof o.log === 'function' ? o.log : noop);
   const failed = (reason, detail) => {
     log(`${type} review failed: ${reason}`, detail);
     const why = detail ? `${reason} (${clip(detail, MAX_NOTE_CHARS)})` : reason;
@@ -216,7 +242,7 @@ async function runReview(type, opts) {
  */
 async function runReviews(opts) {
   const o = isObj(opts) ? opts : {};
-  const now = typeof o.now === 'function' ? o.now : Date.now;
+  const now = safeNow(typeof o.now === 'function' ? o.now : Date.now);
   const started = now();
   const due = reviewsDue(o.iteration, o.isGate);
   const done = (results, extraNotes = []) => {
