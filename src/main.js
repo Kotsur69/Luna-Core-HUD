@@ -1216,7 +1216,6 @@ const lunaswork = createLunasWorkRuntime({
   powerSaveBlocker,
   log: (line) => console.info(line),
 });
-lunaswork.subscribe((event) => send('lunaswork:changed', event.status));
 /** God Mode's side of the mutual exclusion for actions on the current plan: a refusal, or null. */
 const lunasworkBlocksPlan = () => {
   const view = orchestra.view();
@@ -2786,6 +2785,19 @@ function registerIpc() {
     createSession,
     briefDir: () => path.join(userDir(), BRIEF_DIR),
     controller: lunaswork,
+    // The HUD panel: lunaswork:event pushes, steer cards and the evidence folder.
+    send,
+    todos: {
+      read: readTodos,
+      write: writeTodos,
+      changed: (projectId) => {
+        send('todo:changed', { projectId });
+        if (todoSync) todoSync.soon();
+      },
+    },
+    // Same folder the adapters write evidence into (lunasworkAdapters RUNS_DIR).
+    runsRoot: () => path.join(userDir(), RUN_REPORT_DIR),
+    openPath: (dir) => shell.openPath(dir),
   });
   const lifeSync = startLifeSync({ cloud });
   const billCal = createBillCalendar({

@@ -18,6 +18,7 @@
 import { sfx } from './sound.js';
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
+import { mountLunasWorkPanel } from './lunasworkPanel.js';
 
 const MODEL_LABELS = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 const SAVED_FLASH_MS = 2000;
@@ -217,8 +218,18 @@ export function mountLunasWorkSettings(root) {
     }
   });
 
+  // The run panel (start / stop / steer, live status) lives in the same pane.
+  const runPanel = mountLunasWorkPanel(root, {
+    projectId,
+    projectLabel: (id) => {
+      const opt = Array.from(el.project.options).find((o) => o.value === id);
+      return opt ? opt.textContent : id;
+    },
+  });
+
   el.project.addEventListener('change', () => {
     sfx.navClick();
+    runPanel.projectChanged();
     refresh();
   });
 
