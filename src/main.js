@@ -1214,6 +1214,9 @@ const lunaswork = createLunasWorkRuntime({
     return response === 0;
   },
   powerSaveBlocker,
+  // Run report (<userDir>/runs/lunaswork-<id>.md + .html) and the run-end email.
+  runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+  mail: { sender: reportMail.sender, prefs: reportMail.prefs },
   log: (line) => console.info(line),
 });
 lunaswork.subscribe((event) => send('lunaswork:changed', event.status));

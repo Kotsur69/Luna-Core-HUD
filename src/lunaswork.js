@@ -40,6 +40,15 @@
 // result to luna/<slug>-integration after one fix-up try. This module has no
 // push of its own; after each build it only fast-forwards the checkout.
 //
+// Checkpoints (deps.checkpoints, src/lunasworkCheckpoint.js): after the
+// Critic, a green iteration is tagged luna-work/<run>/iter-N - unless
+// lunasworkRules.rollbackDecision says it broke a core journey that passed
+// before or dropped the milestone score past the margin. Then main is
+// reverted to the last good tag with revert commits (never a force-push or a
+// reset), the iteration's cards reopen, a bug card holds the evidence, and
+// the iteration counts as rolled back. One lap summary per iteration (laps)
+// feeds the run report (src/lunasworkReport.js, via onRunEnd).
+//
 // Extension seams: status(), subscribe(listener) - an event on every phase
 // transition - and deps.onRunEnd, called once per run at its final verdict.
 //
@@ -51,7 +60,8 @@
 'use strict';
 
 const path = require('path');
-const { ROLES, pickModel, stopVerdict } = require('./lunasworkRules');
+const { ROLES, pickModel, stopVerdict, rollbackDecision } = require('./lunasworkRules');
+const { regressedJourneys, journeysPassedBefore, rollbackEvidence, reasonText } = require('./lunasworkCheckpoint');
 const {
   PREPROD,
   DONE,
@@ -60,8 +70,11 @@ const {
   MAX_LOG,
   MAX_LOG_TEXT,
   MAX_TEXT_CHARS,
+  MAX_LAPS,
   BUILD_KEYS,
   PASS_KEYS,
+  buildLap,
+  cleanCheckpoint,
   riskReason,
   isRiskyCard,
   conflictedPaths,
@@ -127,6 +140,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   critic: (opts:object)=>Promise<object>,
  *   gitLog?: (repoPath:string)=>Promise<string>,
  *   syncCheckout?: (repoPath:string)=>Promise<{ok:boolean, detail?:string}>,
+ *   checkpoints?: {tagIteration:(o:object)=>Promise<object>, rollback:(o:object)=>Promise<object>},
  *   limitResumeAt?: (res:object)=>number|null,
  *   awake?: {hold:()=>void, release:()=>void},
  *   onRunEnd?: Array<(run:object)=>void>|((run:object)=>void),
@@ -576,32 +590,119 @@ function createLunasWork(deps) {
       }
       shipConfirmed = ship.agrees === true;
     }
-    endIteration(critic, shipConfirmed);
+    await endIteration(critic, shipConfirmed);
   }
 
-  function endIteration(critic, shipConfirmed) {
+  // ---- checkpoints ----
+
+  async function tagGreen() {
+    const res = await deps.checkpoints.tagIteration({ repoPath: run.repoPath, runId: run.id, iteration: run.iteration });
+    if (isObj(res) && res.ok) {
+      logEvent(`checkpoint ${res.tag}`);
+      return { tag: res.tag };
+    }
+    const error = (isObj(res) && res.error) || 'failed';
+    logEvent(`checkpoint tag failed (${error}${isObj(res) && res.detail ? `: ${String(res.detail).slice(0, 150)}` : ''})`);
+    return { tagError: error };
+  }
+
+  /** Reverts main to the last good tag; the iteration's closed cards reopen. */
+  async function rollBack(decision, history, regressed) {
+    const c = run.current;
+    const closed = c.build ? c.build.closed || [] : [];
+    const evidence = rollbackEvidence({
+      decision,
+      history,
+      report: c.report,
+      regressed,
+      evidenceDir: run.evidenceDir,
+      cards: c.cards.filter((k) => closed.includes(k.at)).map((k) => k.text),
+    });
+    const why = reasonText(decision.reason, evidence);
+    logEvent(`rollback to iteration ${decision.toIteration}: ${why}`);
+    const res = await deps.checkpoints.rollback({
+      repoPath: run.repoPath,
+      runId: run.id,
+      iteration: run.iteration,
+      toIteration: decision.toIteration,
+      reason: decision.reason,
+      evidence,
+      todoStore: deps.todoStore(run.projectId),
+    });
+    const r = isObj(res) ? res : { ok: false, error: 'failed' };
+    const base = { reason: decision.reason, why, toIteration: decision.toIteration };
+    if (r.ok && r.nothing) {
+      logEvent('rollback: main already matches the last good tag, nothing to revert');
+      return { note: 'nothing to revert' };
+    }
+    if (!r.ok) {
+      logEvent(`rollback failed (${r.error || 'failed'}${r.detail ? `: ${String(r.detail).slice(0, 150)}` : ''}) - main keeps this iteration`);
+      return { rollback: { ...r, ok: false, ...base } };
+    }
+    cardBook.reopen(run.projectId, closed);
+    const reverted = Array.isArray(r.reverted) ? r.reverted : [];
+    logEvent(`rolled back ${r.fromTag} -> ${r.toTag}: ${reverted.length} revert commit(s), ${(r.cards || []).length} card(s)`);
+    await syncCheckout();
+    return { rollback: { ...r, ...base, reopened: closed } };
+  }
+
+  /**
+   * Tag or roll back after the Critic. Saved in the iteration's progress
+   * before the iteration ends, so a restart never does it twice.
+   * @returns {Promise<object|null>} the cleaned checkpoint record
+   */
+  async function checkpointStep(history, regressed) {
+    if (!deps.checkpoints) return null;
+    if (run.current.checkpoint) return run.current.checkpoint;
+    // A red iteration never reached main: nothing to tag or revert.
+    if (history[history.length - 1].selfCheck !== 'green') return null;
+    let checkpoint;
+    try {
+      const decision = rollbackDecision(history);
+      checkpoint = decision.rollback ? await rollBack(decision, history, regressed) : await tagGreen();
+    } catch (err) {
+      checkpoint = { note: `checkpoint failed: ${errText(err).slice(0, 200)}` };
+      logEvent(checkpoint.note);
+    }
+    const clean = cleanCheckpoint(checkpoint);
+    update({ current: { ...run.current, checkpoint: clean } });
+    return clean;
+  }
+
+  async function endIteration(critic, confirmed) {
     const c = run.current;
     const milestone = critic.milestone ? critic.milestone.name : run.milestone;
     const journeys = c.report ? c.report.journeys : [];
-    const record = {
+    const earlier = run.history.filter((h) => h.n !== run.iteration);
+    // A core journey counts as broken only when it passed before (null: unknown, all must pass).
+    const regressed = regressedJourneys(journeys, journeysPassedBefore(run.laps, earlier.length));
+    let record = {
       n: run.iteration,
       milestone: milestone || null,
       // No gate score (the Critic could not compute one) counts as no progress.
       score: critic.milestone && Number.isFinite(critic.milestone.score) ? critic.milestone.score : 0,
       cardsClosed: c.build ? (c.build.closed || []).length : 0,
       selfCheck: c.build ? c.build.selfCheck : 'green',
-      coreJourneysOk: journeys.every((j) => !isObj(j) || j.passed !== false),
+      coreJourneysOk: regressed ? regressed.length === 0 : journeys.every((j) => !isObj(j) || j.passed !== false),
       rolledBack: false,
     };
-    const history = [...run.history.filter((h) => h.n !== record.n), record];
+    const checkpoint = await checkpointStep([...earlier, record], regressed);
+    const rolledBack = !!(checkpoint && checkpoint.rollback && checkpoint.rollback.ok);
+    if (rolledBack) record = { ...record, rolledBack: true };
+    const history = [...earlier, record];
+    const lap = buildLap(run.current, record, { evidenceDir: run.evidenceDir });
+    const laps = [...run.laps.filter((l) => l.n !== record.n), ...(lap ? [lap] : [])].slice(-MAX_LAPS);
+    // Main was reverted: whatever the SHIP pass saw is gone.
+    const shipConfirmed = confirmed && !rolledBack;
     const verdict = stopVerdict({ history, critic: { verdict: critic.verdict }, shipConfirmed, stopRequested: run.stopRequested });
     const lastCritic = { verdict: critic.verdict, milestone: critic.milestone, next: critic.next, allPassed: critic.allPassed };
     if (verdict.type !== 'continue') {
-      finish(verdict.type, { history, lastCritic });
+      finish(verdict.type, { history, lastCritic, laps });
       return;
     }
     transition('directing', {
       history,
+      laps,
       lastCritic,
       // A passed gate moves the run on to the next milestone.
       milestone: (critic.milestone && critic.milestone.passed && critic.next) || milestone || null,
