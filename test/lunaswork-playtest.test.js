@@ -538,3 +538,92 @@ test('end to end: explore run validates screenshots and turns a changed screen i
   assert.match(res.report.findings[1].title, /home-desktop/);
   assert.equal(res.screenDiff.results[0].status, 'changed');
 });
+
+// ---- personas and browser matrix ------------------------------------------------------
+
+const R = require('../src/lunasworkRules.js');
+
+test('the prompt carries the personas and every browser x width of the pass', () => {
+  const prompt = P.buildPlaytestPrompt({
+    mode: 'explore',
+    url: URL_,
+    testPlan: TEST_PLAN,
+    shipCriteria: SHIP,
+    personas: R.personasFor(0, true),
+    matrix: R.matrixFor(0, true),
+    tools: {
+      mcpConfig: {
+        mcpServers: {
+          playwright: { args: ['--browser', 'chromium'] },
+          'playwright-webkit': { args: ['--browser', 'webkit'] },
+        },
+      },
+    },
+  });
+  for (const p of R.PERSONAS) assert.ok(prompt.includes(p.prompt), p.id);
+  assert.ok(prompt.includes('persona "a11y"'));
+  assert.ok(prompt.includes('firefox at 820px'));
+  assert.ok(prompt.includes('webkit at 390px (phone, browser_resize 390x844)'));
+  assert.ok(prompt.includes('mcp__playwright-webkit__*'));
+  assert.ok(prompt.includes('engineOnly'));
+});
+
+test('runPlaytest rotates one persona and one combo by the adapter iteration; the report lists them', async () => {
+  const adapter = await fakeAdapter();
+  const fake = fakeClaude({ raw: full() });
+  const res = await P.runPlaytest({ projectDir: fakeProject(), adapter, url: URL_, execImpl: fake.execImpl });
+
+  assert.equal(res.ok, true);
+  const prompt = fake.calls[0].prompt;
+  assert.ok(prompt.includes('Core journeys (persona "core")'));
+  assert.ok(prompt.includes('Power user (persona "power")'), 'iteration 1 -> the second persona');
+  assert.ok(!prompt.includes('persona "breakIt"'));
+  assert.deepEqual(res.report.personas.map((p) => p.id), ['core', 'power']);
+  assert.deepEqual(res.report.matrix.map((c) => `${c.engine}@${c.width}`), ['chromium@1440', 'chromium@820']);
+});
+
+test('the SHIP confirmation is the milestone gate: all personas, every engine x width', async () => {
+  const adapter = await fakeAdapter();
+  const fake = fakeClaude({ raw: full() });
+  const res = await P.runPlaytest({ projectDir: fakeProject(), adapter, url: URL_, mode: 'shipConfirm', execImpl: fake.execImpl });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.report.personas.length, 6);
+  assert.equal(res.report.matrix.length, 9);
+  const servers = JSON.parse(argAfter(fake.calls[0].args, '--mcp-config')).mcpServers;
+  assert.deepEqual(Object.keys(servers).sort(), ['playwright', 'playwright-firefox', 'playwright-webkit']);
+  // An explicit isGate wins over the mode default.
+  const plain = P.passPlan({ mode: 'shipConfirm', isGate: false, iteration: 2 });
+  assert.equal(plain.personas.length, 2);
+  assert.equal(plain.matrix.length, 2);
+  assert.deepEqual(P.passPlan({}).personas.map((p) => p.id), ['core', 'firstTime'], 'no iteration -> 0');
+});
+
+test('findings carry persona, engine and width; an engine-only bug says so in its title', () => {
+  const { evidenceDir } = evidenceWorld();
+  const finding = (over) => ({
+    kind: 'bug', severity: 'high', title: 'Total is blank', steps: ['Open'], screenshot: 'f1.png', consoleErrors: [], ...over,
+  });
+  const raw = full({
+    findings: [
+      finding({ persona: 'power', engine: 'webkit', width: 390, engineOnly: true }),
+      finding({ title: 'Firefox drops the cart', persona: 'core', engine: 'firefox', width: 820, engineOnly: true }),
+      finding({ persona: 'breakIt', engine: 'opera', width: 777, engineOnly: true }),
+    ],
+  });
+  const report = P.validateReport(raw, { evidenceDir, personas: R.personasFor(1, false), matrix: R.matrixFor(1, false) });
+  const [a, b, c] = report.findings;
+  assert.deepEqual([a.persona, a.engine, a.width, a.engineOnly], ['power', 'webkit', 390, true]);
+  assert.equal(a.title, 'Total is blank [webkit only, 390px]');
+  assert.equal(b.title, 'Firefox drops the cart', 'already names the engine');
+  assert.deepEqual([c.persona, c.engine, c.width, c.engineOnly], [null, null, null, false], 'not run / unknown');
+  assert.equal(c.title, 'Total is blank');
+  assert.deepEqual(report.personas.map((p) => p.id), ['core', 'power']);
+});
+
+test('PLAYTEST_SCHEMA requires persona, engine and width on every finding', () => {
+  const item = P.PLAYTEST_SCHEMA.properties.findings.items;
+  for (const key of ['persona', 'engine', 'width', 'engineOnly']) assert.ok(item.required.includes(key), key);
+  assert.deepEqual(item.properties.engine.enum, ['chromium', 'firefox', 'webkit']);
+  assert.deepEqual(item.properties.width.enum, [390, 820, 1440]);
+});

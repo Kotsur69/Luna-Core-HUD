@@ -291,3 +291,74 @@ test('projectDir must be absolute', () => {
   const opts = fakeWorld().opts;
   assert.throws(() => A.createAdapter('web', { ...opts, projectDir: 'relative/dir' }), /absolute/);
 });
+
+// ---- browser matrix -------------------------------------------------------------------
+
+test('tools({matrix}) starts one Playwright MCP per engine with --browser and the viewport', async () => {
+  const world = fakeWorld();
+  const adapter = A.createAdapter('web', world.opts);
+  await adapter.start(goodProfile);
+  const matrix = [
+    { engine: 'chromium', device: 'desktop', width: 1440, height: 900 },
+    { engine: 'firefox', device: 'tablet', width: 820, height: 1180 },
+  ];
+  const { mcpConfig, allowedTools } = adapter.tools({ matrix });
+  const servers = mcpConfig.mcpServers;
+  assert.deepEqual(Object.keys(servers), ['playwright', 'playwright-firefox']);
+
+  const after = (args, flag) => args[args.indexOf(flag) + 1];
+  assert.equal(after(servers.playwright.args, '--browser'), 'chromium');
+  assert.equal(after(servers.playwright.args, '--viewport-size'), '1440x900');
+  assert.equal(after(servers['playwright-firefox'].args, '--browser'), 'firefox');
+  assert.equal(after(servers['playwright-firefox'].args, '--viewport-size'), '820x1180');
+  for (const s of Object.values(servers)) {
+    assert.equal(after(s.args, '--allowed-origins'), 'http://localhost:5173', 'every engine is origin-locked');
+  }
+  assert.ok(allowedTools.includes('mcp__playwright-firefox__browser_click'));
+  assert.ok(!allowedTools.some((t) => t.endsWith('browser_evaluate')));
+  await adapter.stop();
+});
+
+test('tools() without a matrix is the chromium desktop baseline; unknown engines are dropped', () => {
+  const adapter = A.createAdapter('web', fakeWorld().opts);
+  const base = adapter.tools().mcpConfig.mcpServers;
+  assert.deepEqual(Object.keys(base), ['playwright']);
+  assert.ok(base.playwright.args.join(' ').includes('--browser chromium --viewport-size 1440x900'));
+  const bad = adapter.tools({ matrix: [{ engine: 'ie6', width: 800, height: 600 }, { engine: 'webkit', width: -1, height: 9 }] });
+  assert.deepEqual(Object.keys(bad.mcpConfig.mcpServers), ['playwright']);
+});
+
+test('ensureBrowsers installs missing engines once, logged, then skips', async () => {
+  const world = fakeWorld();
+  const adapter = A.createAdapter('web', world.opts);
+  const matrix = [{ engine: 'chromium', width: 1440, height: 900 }, { engine: 'webkit', width: 390, height: 844 }];
+
+  const first = await adapter.ensureBrowsers(matrix);
+  assert.deepEqual(first, { ok: true, installed: ['chromium', 'webkit'] });
+  assert.equal(world.execCalls.length, 1);
+  assert.equal(world.execCalls[0].file, 'npx -y --package=@playwright/mcp@latest playwright install chromium webkit');
+  const log = fs.readFileSync(path.join(adapter.evidenceDir, A.BROWSERS_LOG), 'utf8');
+  assert.match(log, /first use of chromium, webkit/);
+  assert.match(log, /installed chromium, webkit/);
+
+  const again = await adapter.ensureBrowsers(matrix);
+  assert.deepEqual(again, { ok: true, installed: [] });
+  assert.equal(world.execCalls.length, 1, 'no second install');
+
+  await adapter.ensureBrowsers([{ engine: 'firefox', width: 820, height: 1180 }]);
+  assert.match(world.execCalls[1].file, /playwright install firefox$/);
+});
+
+test('ensureBrowsers reports a failed install and does not record it', async () => {
+  const world = fakeWorld();
+  world.opts.execFile = (file, args, options, cb) => {
+    world.execCalls.push({ file, args });
+    cb(new Error('network down'));
+  };
+  const adapter = A.createAdapter('web', world.opts);
+  const res = await adapter.ensureBrowsers([{ engine: 'firefox', width: 820, height: 1180 }]);
+  assert.equal(res.ok, false);
+  assert.match(res.error, /network down/);
+  assert.equal(fs.existsSync(path.join(world.opts.runsRoot, A.BROWSERS_MARKER)), false);
+  assert.match(fs.readFileSync(path.join(adapter.evidenceDir, A.BROWSERS_LOG), 'utf8'), /install failed/);
+});

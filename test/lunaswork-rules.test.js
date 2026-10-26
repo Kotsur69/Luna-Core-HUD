@@ -440,3 +440,58 @@ test('withoutQuarantined drops quarantined journeys, so they cannot trigger a ro
   const history = [rec(1, 70), rec(2, 72, { coreJourneysOk: kept.every((j) => j.passed) })];
   assert.equal(rules.rollbackDecision(history).rollback, false);
 });
+
+// ---- playtest personas (LW 2.14) and browser/device matrix (LW 2.24) -----------------
+
+test('personasFor: core journeys every iteration plus one persona, round-robin', () => {
+  const ids = (n) => rules.personasFor(n, false).map((p) => p.id);
+  const count = rules.PERSONAS.length;
+  assert.equal(count, 5);
+  for (let n = 0; n < count * 2; n += 1) {
+    const list = ids(n);
+    assert.equal(list.length, 2);
+    assert.equal(list[0], 'core');
+    assert.equal(list[1], rules.PERSONAS[n % count].id);
+  }
+  // One full lap visits every persona exactly once.
+  const lap = new Set(Array.from({ length: count }, (_, n) => ids(n)[1]));
+  assert.equal(lap.size, count);
+  for (const p of rules.PERSONAS) assert.ok(p.prompt.length > 20, p.id);
+});
+
+test('personasFor: a milestone gate runs every persona; bad iterations count as 0', () => {
+  assert.deepEqual(
+    rules.personasFor(7, true).map((p) => p.id),
+    ['core', 'firstTime', 'power', 'phone', 'a11y', 'breakIt'],
+  );
+  assert.deepEqual(rules.personasFor(-3, false), rules.personasFor(0, false));
+  assert.deepEqual(rules.personasFor('x', 'yes'), rules.personasFor(0, false));
+});
+
+test('matrixFor: chromium desktop baseline always, plus one rotated combo', () => {
+  const key = (c) => `${c.engine}@${c.width}`;
+  const seen = new Set();
+  for (let n = 0; n < 16; n += 1) {
+    const list = rules.matrixFor(n, false);
+    assert.equal(list.length, 2);
+    assert.deepEqual(list[0], rules.BASELINE_COMBO);
+    assert.equal(key(list[0]), 'chromium@1440');
+    assert.notEqual(key(list[1]), 'chromium@1440');
+    seen.add(key(list[1]));
+  }
+  // Eight laps cover every non-baseline combo.
+  assert.equal(seen.size, 8);
+  assert.notDeepEqual(rules.matrixFor(1, false)[1], rules.matrixFor(2, false)[1]);
+});
+
+test('matrixFor: a milestone gate runs every engine x width, baseline first', () => {
+  const list = rules.matrixFor(3, true);
+  assert.equal(list.length, 9);
+  assert.deepEqual(list[0], rules.BASELINE_COMBO);
+  for (const engine of ['chromium', 'firefox', 'webkit']) {
+    for (const width of [390, 820, 1440]) {
+      assert.ok(list.some((c) => c.engine === engine && c.width === width), `${engine} ${width}`);
+    }
+  }
+  assert.ok(list.every((c) => Number.isInteger(c.height) && c.height > 0));
+});

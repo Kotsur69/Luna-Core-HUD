@@ -471,6 +471,89 @@ function normalizeStoredRun(raw) {
   };
 }
 
+// ---- playtest personas (LW 2.14) and browser/device matrix (LW 2.24) ----------------
+
+/** Iteration -> rotation index: a non-negative whole number (bad input = 0). */
+const rotationIndex = (iteration) => (Number.isInteger(iteration) && iteration > 0 ? iteration : 0);
+
+// Every pass runs the test plan's core journeys; the personas are extra lenses.
+const CORE_PERSONA = Object.freeze({
+  id: 'core',
+  label: 'Core journeys',
+  prompt: 'Run every journey in the test plan end to end, exactly as written.',
+});
+
+const PERSONAS = Object.freeze([
+  {
+    id: 'firstTime',
+    label: 'First-time user',
+    prompt: 'You have never seen this app. Use only what the screen tells you: read every label, '
+      + 'button and hint, and flag anything you had to guess, any jargon, and any step with no obvious next action.',
+  },
+  {
+    id: 'power',
+    label: 'Power user',
+    prompt: 'You use this app every day and want speed: keyboard shortcuts, Tab/Enter flows, bulk actions, '
+      + 'many items at once. Flag every extra click, missing shortcut, slow response and lost input.',
+  },
+  {
+    id: 'phone',
+    label: 'Phone user',
+    prompt: 'You are on a phone (390px wide, touch, slow network). Flag tap targets under 44px, horizontal '
+      + 'scroll, text that overflows or is too small, hover-only controls and missing loading states.',
+  },
+  {
+    id: 'a11y',
+    label: 'Accessibility',
+    prompt: 'You use the keyboard only. Check the focus order and that focus is always visible, contrast, '
+      + 'and that every control has a name in the accessibility tree (browser_snapshot): unlabeled buttons, '
+      + 'inputs without labels, images without alt text.',
+  },
+  {
+    id: 'breakIt',
+    label: 'Break it',
+    prompt: 'Try to break it: invalid and empty input, huge values and very long text, double clicks on every '
+      + 'submit, the back button mid-flow, reload during a save, and every empty state.',
+  },
+].map((p) => Object.freeze(p)));
+
+/**
+ * The Playtester personas for one pass: the core journeys every iteration
+ * plus one persona rotated round-robin; at a milestone gate, all of them.
+ * @param {number} iteration
+ * @param {boolean} isGate
+ * @returns {Array<{id:string, label:string, prompt:string}>} core first
+ */
+function personasFor(iteration, isGate) {
+  if (isGate === true) return [CORE_PERSONA, ...PERSONAS];
+  return [CORE_PERSONA, PERSONAS[rotationIndex(iteration) % PERSONAS.length]];
+}
+
+const ENGINES = Object.freeze(['chromium', 'firefox', 'webkit']);
+const WIDTHS = Object.freeze({
+  phone: Object.freeze({ width: 390, height: 844 }),
+  tablet: Object.freeze({ width: 820, height: 1180 }),
+  desktop: Object.freeze({ width: 1440, height: 900 }),
+});
+
+const combo = (engine, device) => Object.freeze({ engine, device, ...WIDTHS[device] });
+const ALL_COMBOS = Object.freeze(ENGINES.flatMap((e) => Object.keys(WIDTHS).map((d) => combo(e, d))));
+const BASELINE_COMBO = ALL_COMBOS.find((c) => c.engine === 'chromium' && c.device === 'desktop');
+const ROTATED_COMBOS = ALL_COMBOS.filter((c) => c !== BASELINE_COMBO);
+
+/**
+ * The engine x width combos for one pass: Chromium desktop is always the
+ * baseline, plus one other combo rotated per iteration; at a milestone gate,
+ * every engine x width.
+ * @param {number} iteration
+ * @param {boolean} isGate
+ * @returns {Array<{engine:string, device:string, width:number, height:number}>} baseline first
+ */
+function matrixFor(iteration, isGate) {
+  if (isGate === true) return [BASELINE_COMBO, ...ROTATED_COMBOS];
+  return [BASELINE_COMBO, ROTATED_COMBOS[rotationIndex(iteration) % ROTATED_COMBOS.length]];
+}
+
 module.exports = {
   ROLES,
   MODEL_CHOICES,
@@ -495,6 +578,13 @@ module.exports = {
   rollbackDecision,
   stopVerdict,
   normalizeStoredRun,
+  CORE_PERSONA,
+  PERSONAS,
+  personasFor,
+  ENGINES,
+  WIDTHS,
+  BASELINE_COMBO,
+  matrixFor,
   appChecks,
   builtVerdict,
   isTestFile,
