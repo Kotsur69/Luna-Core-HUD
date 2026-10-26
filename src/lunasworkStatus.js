@@ -10,6 +10,8 @@
 //   - phase / verdict / event type only from their known lists
 //   - the evidence folder never leaves main: the panel gets `hasEvidence`
 //     and asks main to open it (lunaswork:openEvidence)
+//   - pending decisions: a count, plus the cleaned list (question, options,
+//     default, deadline) when the controller sends one
 //
 // evidenceDirOf() is the one check before that folder is opened: it has to
 // sit inside <runsRoot>/lunaswork-<runId>/ of the current run.
@@ -21,8 +23,9 @@ const fs = require('fs');
 const path = require('path');
 const { ROLES, MODEL_CHOICES } = require('./lunasworkRules');
 const { ALL_PHASES } = require('./lunasworkRun');
+const { publicDecisions } = require('./lunasworkDecisions');
 
-const EVENT_TYPES = ['phase', 'wait', 'resume', 'stopping'];
+const EVENT_TYPES = ['phase', 'wait', 'resume', 'stopping', 'decision'];
 const VERDICTS = ['ship', 'plateau', 'red', 'stop'];
 const MODEL_SOURCES = ['run', 'project', 'global'];
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
@@ -92,8 +95,20 @@ function publicStatus(raw, isKnownProject) {
     scores: cleanScores(raw.scores),
     hasEvidence: typeof raw.evidenceDir === 'string' && raw.evidenceDir.length > 0,
     // Only when the controller reports it; the panel hides the count otherwise.
-    ...(Number.isInteger(pending) && pending >= 0 ? { pendingDecisions: Math.min(pending, MAX_PENDING) } : {}),
+    ...pendingOf(pending),
   };
+}
+
+/**
+ * The decision queue for the panel: the count, and the list when the
+ * controller sends one (re-cleaned field by field, lunasworkDecisions.publicDecisions).
+ */
+function pendingOf(pending) {
+  if (Array.isArray(pending)) {
+    const decisions = publicDecisions(pending);
+    return { pendingDecisions: decisions.length, decisions };
+  }
+  return Number.isInteger(pending) && pending >= 0 ? { pendingDecisions: Math.min(pending, MAX_PENDING) } : {};
 }
 
 /** A pushed event, or null when its type is unknown. */

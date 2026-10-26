@@ -14,6 +14,7 @@
 //   checkpoints     lunasworkCheckpoint: iteration tags, revert-only rollback
 //   run report      lunasworkReport on onRunEnd: <runsDir>/lunaswork-<id>.md
 //                   + .html, and one email under "Email me when a run finishes"
+//   decisions       every decision-queue answer appended to design/DECISIONS.md
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -35,6 +36,7 @@ const { createLunasWork } = require('./lunaswork');
 const { createCheckpoints } = require('./lunasworkCheckpoint');
 const { createLunasWorkReporter } = require('./lunasworkReport');
 const { godmodeEmailOn } = require('./mailprefs');
+const { answersFromTodoPeers } = require('./lunasworkDecisions');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -172,9 +174,55 @@ function createLunasWorkRuntime(ctx) {
     checkpoints: createCheckpoints({ log: ctx.log }),
     limitResumeAt,
     awake: createAwake(ctx.powerSaveBlocker),
+    // Every decision-queue answer, one line in the project's design/DECISIONS.md.
+    recordDecision: ({ repoPath, line }) => {
+      const op = pack.appendDecisionEntry(line);
+      const res = op ? pack.applyWrite(repoPath, op) : { ok: false, error: 'empty entry' };
+      if (!res.ok && ctx.log) ctx.log(`[lunaswork] DECISIONS.md not written: ${res.error}`);
+      return res.ok;
+    },
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
     log: ctx.log,
   });
 }
 
-module.exports = { createLunasWorkRuntime, createAwake, syncCheckout };
+/**
+ * The decision queue's phone round trip:
+ *   out  every controller event: the pending decisions go into the `godmode`
+ *        snapshot (only when they changed; [] once the run ends)
+ *   back after each `todos` pull: the answers the phone wrote there
+ *        (lunasworkDecisions.answersFromTodoPeers) go to applyAnswers(),
+ *        which accepts only pending ids of this run and listed options
+ * @param {{controller:{subscribe:Function, status:Function, applyAnswers:Function},
+ *   cloud:{onPulled:Function, hooks:Function}|null, putDecisions:(list:object[])=>unknown,
+ *   log?:(line:string)=>void}} ctx
+ * @returns {{publish:()=>void, pullAnswers:()=>number}}
+ */
+function wireDecisionSync({ controller, cloud, putDecisions, log = () => {} }) {
+  let last = null;
+  const publish = (status = controller.status()) => {
+    const list = status && Array.isArray(status.pendingDecisions) ? status.pendingDecisions : [];
+    const key = JSON.stringify(list);
+    if (key === last) return;
+    last = key;
+    try {
+      Promise.resolve(putDecisions(list)).catch((err) => log(`[lunaswork] decisions snapshot failed: ${err && err.message}`));
+    } catch (err) {
+      log(`[lunaswork] decisions snapshot failed: ${err && err.message}`);
+    }
+  };
+  const pullAnswers = () => {
+    if (!cloud) return 0;
+    try {
+      return controller.applyAnswers(answersFromTodoPeers(cloud.hooks('todos').extraPeers()));
+    } catch (err) {
+      log(`[lunaswork] decision answers not read: ${err && err.message}`);
+      return 0;
+    }
+  };
+  controller.subscribe((event) => publish(event && event.status));
+  if (cloud) cloud.onPulled((scope) => scope === 'todos' && pullAnswers());
+  return { publish, pullAnswers };
+}
+
+module.exports = { createLunasWorkRuntime, createAwake, syncCheckout, wireDecisionSync };

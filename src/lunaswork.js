@@ -49,8 +49,16 @@
 // the iteration counts as rolled back. One lap summary per iteration (laps)
 // feeds the run report (src/lunasworkReport.js, via onRunEnd).
 //
+// Decision queue (src/lunasworkDecisions.js, idea #11): a card the Director
+// schedules that needsDecision() flags (new dependency, migration, deleting a
+// feature, DESIGN.md beyond an append) is held and asked about; the rest of
+// the iteration goes on. ask() / answer() / applyAnswers() are the public
+// side; a timer takes the default at the deadline. Every answer goes to
+// design/DECISIONS.md (deps.recordDecision). Mati's steer cards never ask.
+//
 // Extension seams: status(), subscribe(listener) - an event on every phase
-// transition - and deps.onRunEnd, called once per run at its final verdict.
+// transition and on every decision change - and deps.onRunEnd, called once
+// per run at its final verdict.
 //
 // Size: past the 800-line guideline on purpose. The steps share one closure
 // (the run, the wait timer, the app under test); the pure parts and the card
@@ -94,6 +102,21 @@ const {
   scoresByMilestone,
 } = require('./lunasworkRun');
 const { createCardBook } = require('./lunasworkCards');
+const { STEER_TAG } = require('./todorows');
+const {
+  needsDecision,
+  createDecision,
+  answerDecision,
+  expireDue,
+  nextDeadline,
+  holdsCards,
+  heldCards,
+  decisionForCard,
+  pendingOf,
+  trimQueue,
+  decisionLine,
+  publicDecision,
+} = require('./lunasworkDecisions');
 
 const PHASE_ROLE = {
   preprod: null,
@@ -143,6 +166,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   checkpoints?: {tagIteration:(o:object)=>Promise<object>, rollback:(o:object)=>Promise<object>},
  *   limitResumeAt?: (res:object)=>number|null,
  *   awake?: {hold:()=>void, release:()=>void},
+ *   recordDecision?: (ctx:{repoPath:string, line:string, decision:object})=>boolean,
  *   onRunEnd?: Array<(run:object)=>void>|((run:object)=>void),
  *   newRunId?: ()=>string, now?: ()=>number, setTimer?: Function, clearTimer?: Function,
  *   log?: (line:string)=>void,
@@ -163,6 +187,8 @@ function createLunasWork(deps) {
   let run = null;
   let looping = false;
   let waitTimer = null;
+  // The next decision deadline (takes the default answer).
+  let decisionTimer = null;
   let awakeHeld = false;
   // start() is waiting on Mati's confirmation dialog.
   let starting = false;
@@ -253,6 +279,7 @@ function createLunasWork(deps) {
   function finish(verdict, fields = {}) {
     if (waitTimer) clearTimer(waitTimer);
     waitTimer = null;
+    clearDecisionTimer();
     const reason = fields.stopReason || run.stopReason;
     logEvent(`verdict ${verdict.toUpperCase()}${verdict === 'stop' && reason ? ` (${reason})` : ''}`);
     transition(DONE, { ...fields, verdict, waitUntil: null, waitReason: null, endedAt: now() });
@@ -326,6 +353,70 @@ function createLunasWork(deps) {
     if (reason === 'steer') cardBook.closeStopCards(run.projectId);
   }
 
+  // ---- decision queue ----
+
+  function clearDecisionTimer() {
+    if (decisionTimer) clearTimer(decisionTimer);
+    decisionTimer = null;
+  }
+
+  /** One DECISIONS.md line per answer; a failed write only goes into the run log. */
+  function recordDecision(decision) {
+    const line = decisionLine(decision);
+    if (!line || !deps.recordDecision) return;
+    try {
+      if (deps.recordDecision({ repoPath: run.repoPath, line, decision }) === false) logEvent(`decision ${decision.id}: DECISIONS.md not updated`);
+    } catch (err) {
+      logEvent(`decision ${decision.id}: DECISIONS.md not updated (${errText(err).slice(0, 150)})`);
+    }
+  }
+
+  /** Saves a changed queue, logs and records its new answers, announces it. */
+  function decisionsChanged(decisions, answered = []) {
+    run = { ...run, decisions: trimQueue(decisions) };
+    for (const d of answered) {
+      logEvent(`decision ${d.id} (${d.kind}): ${d.answer} - ${d.answeredBy === 'default' ? 'default after deadline' : 'answered by Mati'}`);
+      recordDecision(d);
+    }
+    save();
+    emit('decision');
+    armDecisionTimer();
+  }
+
+  function armDecisionTimer() {
+    clearDecisionTimer();
+    const at = active() ? nextDeadline(run.decisions) : null;
+    if (at === null) return;
+    decisionTimer = setTimer(() => {
+      decisionTimer = null;
+      expireDecisions();
+    }, Math.max(0, at - now()));
+  }
+
+  /** Takes the default of every decision past its deadline (never a client scope change). */
+  function expireDecisions() {
+    if (!active()) return;
+    const res = expireDue(run.decisions, now());
+    if (res.answered.length) decisionsChanged(res.list, res.answered);
+  }
+
+  /**
+   * Whether a scheduled card may be built now. A card a decision covers
+   * waits for it (and stays held when it was rejected); a card that
+   * needsDecision() flags gets a new decision and waits too.
+   */
+  function mayBuild(card) {
+    if (!isObj(card) || !Number.isFinite(card.at)) return true;
+    const earlier = decisionForCard(run.decisions, card.at);
+    if (earlier) return !holdsCards(earlier);
+    const steer = Array.isArray(card.tags) && card.tags.includes(STEER_TAG);
+    const need = needsDecision({ text: card.text, details: card.details, files: card.files, from: steer ? 'mati' : 'director' });
+    if (!need) return true;
+    ask({ question: card.text, detail: need.reason, kind: need.kind, options: need.options, defaultAnswer: need.defaultAnswer, freeText: need.freeText, cardIds: [card.at] });
+    // Asked, or the queue refused it: either way the card is not built yet.
+    return false;
+  }
+
   // ---- the app under test ----
 
   async function stopApp() {
@@ -387,6 +478,7 @@ function createLunasWork(deps) {
   }
 
   async function stepDirecting() {
+    const held = heldCards(run.decisions);
     const res = await deps.director({
       repoDir: run.repoPath,
       runId: run.id,
@@ -394,13 +486,20 @@ function createLunasWork(deps) {
       todoStore: deps.todoStore(run.projectId),
       lastCritic: run.lastCritic,
       models: run.models,
+      // Cards waiting for a decision (or refused by one): never scheduled.
+      holdCards: [...held],
     });
     if (isLimit(res)) return limited(res, 'director');
     const r = isObj(res) ? res : {};
     logModel('director', r.model, r.modelReason);
     if (r.error) logEvent(`director: ${r.error}${r.fallback ? ' (fallback order)' : ''}`);
     if (r.stop) requestStop('steer');
+    // Read the holds again: a decision may have been answered (or taken its
+    // default) while the Director was thinking.
+    const stillHeld = heldCards(run.decisions);
     const cards = (Array.isArray(r.cards) ? r.cards : [])
+      .filter((card) => !(isObj(card) && stillHeld.has(card.at)))
+      .filter(mayBuild)
       .map((card) => {
         const risk = riskReason(card, run.conflicts);
         const pick = pickModel('builder', run.models, { size: card && card.size, risky: !!risk }) || { model: 'opus', reason: 'default' };
@@ -732,6 +831,8 @@ function createLunasWork(deps) {
           finish('stop');
           break;
         }
+        // A deadline that passed while the PC slept: its default goes first.
+        expireDecisions();
         await STEPS[run.phase]();
       }
     } catch (err) {
@@ -835,6 +936,65 @@ function createLunasWork(deps) {
     return { ok: true, status: status() };
   }
 
+  const NO_RUN = () => refuse('no-run', "No Luna's Work run is going.");
+
+  /**
+   * Puts a question in the decision queue of the current run. Never blocks
+   * the run: only the listed cards wait for the answer.
+   * @param {{question:string, options?:string[], defaultAnswer?:string|null, deadlineMs?:number,
+   *   kind?:string, cardIds?:number[], detail?:string, freeText?:boolean}} spec
+   *   deadlineMs defaults to 2 h; kind 'clientScope' has no default and no deadline
+   * @returns {{ok:true, id:number}|{ok:false, reason:string, message:string}}
+   */
+  function ask(spec) {
+    if (!active()) return NO_RUN();
+    const res = createDecision(spec, { now: now(), list: run.decisions, iteration: run.iteration });
+    if (!res.ok) return refuse(res.error, 'The decision could not be queued.');
+    const d = res.decision;
+    logEvent(`decision ${d.id} asked (${d.kind})${d.cardIds.length ? `, card(s) ${d.cardIds.join(', ')} held` : ''}`);
+    decisionsChanged([...run.decisions, d]);
+    return { ok: true, id: d.id };
+  }
+
+  /**
+   * Mati's answer to a pending decision. Only a known pending id of this run
+   * and a listed option (or capped free text where allowed) are accepted.
+   * @param {{id:number|string, answer:string, runId?:string}} payload untrusted
+   * @returns {{ok:true, status:object}|{ok:false, reason:string, message:string}}
+   */
+  function answer(payload) {
+    if (!active()) return NO_RUN();
+    const p = isObj(payload) ? payload : {};
+    if (p.runId !== undefined && p.runId !== run.id) return refuse('unknownDecision', 'That decision is not part of this run.');
+    const res = answerDecision(run.decisions, { id: p.id, answer: p.answer }, { by: 'mati', now: now() });
+    if (!res.ok) return refuse(res.error, 'The answer was not accepted.');
+    decisionsChanged(res.list, [res.decision]);
+    return { ok: true, status: status() };
+  }
+
+  /**
+   * Answers that came back from the phone (lunasworkDecisions.answersFromTodoPeers).
+   * Already answered ids and other runs' answers are skipped quietly; a bad
+   * answer to a pending decision is refused and logged.
+   * @param {Array<{id:number, runId:string, answer:string}>} list untrusted
+   * @returns {number} how many were applied
+   */
+  function applyAnswers(list) {
+    if (!active() || !Array.isArray(list)) return 0;
+    let applied = 0;
+    for (const a of list) {
+      if (!isObj(a) || a.runId !== run.id || !pendingOf(run.decisions).some((d) => d.id === a.id)) continue;
+      const res = answer({ id: a.id, answer: a.answer, runId: a.runId });
+      if (res.ok) {
+        applied += 1;
+      } else {
+        logEvent(`decision ${a.id}: answer from the phone refused (${res.reason})`);
+        save();
+      }
+    }
+    return applied;
+  }
+
   /**
    * The kill switch: the step that is running finishes, then the run ends
    * with STOP. A run that is waiting ends at once.
@@ -876,6 +1036,7 @@ function createLunasWork(deps) {
     save();
     holdAwake();
     emit('phase');
+    armDecisionTimer();
     if (Number.isFinite(run.waitUntil) && run.waitUntil > now()) {
       armWait(run.waitUntil, run.waitReason || 'limit');
     } else {
@@ -909,6 +1070,10 @@ function createLunasWork(deps) {
       scores: scoresByMilestone(run.history),
       evidenceDir: run.evidenceDir,
       endedAt: run.endedAt,
+      // What waits for Mati (HUD panel, phone snapshot); none once the run ended.
+      pendingDecisions: active()
+        ? pendingOf(run.decisions).map((d) => publicDecision({ ...d, runId: run.id, repoName: path.basename(run.repoPath) })).filter(Boolean)
+        : [],
     };
   }
 
@@ -937,6 +1102,7 @@ function createLunasWork(deps) {
   async function dispose() {
     if (waitTimer) clearTimer(waitTimer);
     waitTimer = null;
+    clearDecisionTimer();
     await stopApp();
     releaseAwake();
   }
@@ -945,6 +1111,9 @@ function createLunasWork(deps) {
     start,
     stop,
     resume,
+    ask,
+    answer,
+    applyAnswers,
     status,
     subscribe,
     godModeBlock,

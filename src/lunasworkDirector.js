@@ -317,7 +317,7 @@ const isStore = (s) => isObj(s) && typeof s.read === 'function';
  * then says why - on 'limit' the controller may wait for the reset instead.
  *
  * @param {{repoDir:string, runId:string, iteration:number, todoStore:{read:Function},
- *   lastCritic?:object|null, failCounts?:Record<string,number>, models?:object, env?:object, limit?:number,
+ *   lastCritic?:object|null, failCounts?:Record<string,number>, holdCards?:number[], models?:object, env?:object, limit?:number,
  *   runClaude?:(call:{args:string[], prompt:string, cwd:string, env:object, timeoutMs:number})=>Promise<object>,
  *   log?:(message:string, detail?:unknown)=>void, now?:()=>number, timeoutMs?:number, budgetUsd?:number}} opts
  * @returns {Promise<{ok:boolean, stop:boolean, cardIds:number[], cards:object[], fallback:boolean,
@@ -356,7 +356,10 @@ async function runDirector(opts) {
 
     const limit = Number.isInteger(o.limit) && o.limit > 0 ? o.limit : MAX_CARDS_PER_ITERATION;
     const gatePassed = isObj(o.lastCritic) && isObj(o.lastCritic.milestone) && o.lastCritic.milestone.passed === true;
-    const { cards, originals, stop } = schedulable(normalizeTodos(o.todoStore.read()), tag, o.failCounts);
+    // Cards held by the decision queue (pending, or rejected) are not on offer.
+    const hold = new Set(Array.isArray(o.holdCards) ? o.holdCards.filter(Number.isFinite) : []);
+    const todos = normalizeTodos(o.todoStore.read()).filter((c) => !hold.has(c.at));
+    const { cards, originals, stop } = schedulable(todos, tag, o.failCounts);
     // A stuck steer card is left out like any stuck card, but Mati's
     // instruction must not vanish without a trace.
     const stuckSteer = cards.filter((c) => c.steer && isStuck(c)).map((c) => ({ code: 'stuckSteer', at: c.at }));

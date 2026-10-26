@@ -4996,6 +4996,23 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 }
 .lw-run__scores th { text-align: left; color: var(--text-dim); font-weight: normal; padding-bottom: var(--space-1); }
 .lw-run__scores td { padding: var(--space-1) var(--space-3) var(--space-1) 0; font-family: var(--font-mono); }
+.lw-run__decisions {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+}
+.lw-run__decision {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--warn);
+  background: var(--surface-panel-2);
+}
+.lw-run__decision-kind { color: var(--warn); text-transform: uppercase; letter-spacing: 0.04em; }
+.lw-run__decision-q { word-break: break-word; }
 .lw-run__spark { display: inline-block; width: 80px; height: 16px; vertical-align: middle; }
 .lw-run__spark polyline { fill: none; stroke: var(--neon-cyan); stroke-width: 1.5; }
 .lw-run__actions .pad-send:disabled,

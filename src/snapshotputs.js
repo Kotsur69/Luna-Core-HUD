@@ -12,6 +12,8 @@
 //                      put the history with `live` and `tabs` over it
 //   godmode.markSeen(id) the attention inbox opened run `id`: add it to
 //                      the same file's `seen` list, then put
+//   godmode.decisions(list) Luna's Work decisions waiting for Mati changed:
+//                      put the history with them over it (the phone answers)
 //
 // Every put is skipped while logged out, and a failure only logs - it never
 // throws into the git station or the end of a God Mode run. cloudsnapshots
@@ -91,6 +93,9 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
   // The last live run + tab lights (godmodelivepub.js). Memory only: the
   // history file holds finished runs, and a restart publishes afresh.
   let lastLive = { live: null, tabs: [] };
+  // Luna's Work decisions waiting for Mati: memory only, like the live run.
+  let lastDecisions = [];
+  const overlay = () => ({ ...lastLive, decisions: lastDecisions });
 
   /** Rewrites the local history file with `step(prev)` and puts it with the live run over it. */
   function writeHistory(step) {
@@ -101,7 +106,17 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
       fs.writeFileSync(file, `${JSON.stringify(next)}\n`, { encoding: 'utf8', mode: 0o600 });
     }
     const s = ready();
-    return s ? s.put('godmode', withLive(next, lastLive, { machine, now: now() })) : false;
+    return s ? s.put('godmode', withLive(next, overlay(), { machine, now: now() })) : false;
+  }
+
+  /** Puts the stored history with the live run and the decisions over it. */
+  function putOverlay() {
+    const s = ready();
+    if (!s) return Promise.resolve(false);
+    return safePut('godmode', async () => {
+      const file = historyFile();
+      return s.put('godmode', withLive(file ? readHistory(file) : null, overlay(), { machine, now: now() }));
+    });
   }
 
   const godmode = {
@@ -115,12 +130,12 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     /** Puts the run history with this live run / tab list over it. Never throws. */
     live(section) {
       lastLive = { live: (section && section.live) || null, tabs: (section && section.tabs) || [] };
-      const s = ready();
-      if (!s) return Promise.resolve(false);
-      return safePut('godmode', async () => {
-        const file = historyFile();
-        return s.put('godmode', withLive(file ? readHistory(file) : null, lastLive, { machine, now: now() }));
-      });
+      return putOverlay();
+    },
+    /** Puts the run history with these pending Luna's Work decisions ([] clears them). Never throws. */
+    decisions(list) {
+      lastDecisions = Array.isArray(list) ? list : [];
+      return putOverlay();
     },
     /** Marks run `id` seen in this PC's own row (the attention inbox). Never throws. */
     markSeen(id) {

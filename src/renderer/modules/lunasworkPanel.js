@@ -11,7 +11,9 @@
 //   - Live status from the lunaswork:event push (every phase transition,
 //     wait, resume, stop): run id, iteration, phase + role, models, verdict,
 //     time in phase, WAIT with its resume time, pending decisions when main
-//     reports them, recent scores per milestone and the evidence folder.
+//     reports them (count, and the list: kind, question, options with the
+//     default, deadline - answered from the phone), recent scores per
+//     milestone and the evidence folder.
 //
 // Everything goes through window.lunacore.lunaswork* (src/lunasworkipc.js);
 // main validates every payload and the status it pushes. Every value from
@@ -144,6 +146,49 @@ function scoresTable(scores) {
   return table;
 }
 
+/** A known option ('approve', 'yes', ...) in the UI language; anything else as sent. */
+function optionLabel(option) {
+  const key = `lw.decision.option.${option}`;
+  const text = t(key);
+  return text === key ? option : text;
+}
+
+/**
+ * One pending decision as text lines (tested): kind, question, the options
+ * with the default marked, and when the default is taken (or that it never is).
+ * @param {{kind:string, question:string, detail?:string|null, options:string[],
+ *   defaultAnswer:string|null, deadline:number|null}} d
+ * @param {(ms:number)=>string} [timeOf]
+ * @returns {{kind:string, question:string, detail:string, options:string, deadline:string}}
+ */
+export function decisionText(d, timeOf = clock) {
+  const kindKey = `lw.decision.kind.${d.kind}`;
+  const kind = t(kindKey);
+  return {
+    kind: kind === kindKey ? t('lw.decision.kind.other') : kind,
+    question: d.question,
+    detail: d.detail || '',
+    options: d.options.map((o) => (o === d.defaultAnswer ? `${optionLabel(o)} (${t('lw.decision.default')})` : optionLabel(o))).join(' · '),
+    deadline: d.deadline ? t('lw.decision.deadline', { time: timeOf(d.deadline) }) : t('lw.decision.noDeadline'),
+  };
+}
+
+/** The pending decisions list (answered from the phone), or null when there are none. */
+function decisionList(decisions) {
+  if (!Array.isArray(decisions) || !decisions.length) return null;
+  const list = el('ul', 'lw-run__decisions');
+  list.setAttribute('aria-label', t('lw.run.pending'));
+  for (const d of decisions) {
+    const text = decisionText(d);
+    const item = el('li', 'lw-run__decision');
+    item.append(el('span', 'lw-run__decision-kind', text.kind), el('span', 'lw-run__decision-q', text.question));
+    if (text.detail) item.append(el('span', 'termcustom__hint', text.detail));
+    item.append(el('span', 'termcustom__hint', text.options), el('span', 'termcustom__hint', text.deadline));
+    list.append(item);
+  }
+  return list;
+}
+
 /**
  * @param {HTMLElement} root the Settings overlay
  * @param {{projectId:()=>string|null, projectLabel:(id:string)=>string}} opts
@@ -223,7 +268,11 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
     const models = Object.entries(s.models || {}).map(([role, m]) => `${t(`lw.role.${role}`)}: ${modelLabel(m)}`);
     if (models.length) ui.details.append(row(t('lw.run.models'), models.join(' · ')));
     ui.details.append(row(t('lw.run.verdict'), s.verdict ? t(`lw.verdict.${s.verdict}`) : t('lw.run.noVerdict')));
-    if (Number.isInteger(s.pendingDecisions)) ui.details.append(row(t('lw.run.pending'), String(s.pendingDecisions)));
+    if (Number.isInteger(s.pendingDecisions)) {
+      ui.details.append(row(t('lw.run.pending'), String(s.pendingDecisions), s.pendingDecisions ? 'is-warn' : ''));
+    }
+    const decisions = decisionList(s.decisions);
+    if (decisions) ui.scores.append(decisions);
     const table = scoresTable(s.scores);
     if (table) ui.scores.append(table);
   }
