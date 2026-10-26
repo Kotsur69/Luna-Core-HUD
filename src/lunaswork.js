@@ -99,6 +99,12 @@
 // DECISIONS.md line each and a section in ARCHITECTURE.md, then the run goes
 // on from directing. Both come from the HUD panel or the phone (applyWheel).
 //
+// Loop hooks (src/lunasworkLoopHooks.js, LW 2.23 + B7 / B8 / B11 / 2.15):
+// after a merge the code graph and docs/CODEMAPS are refreshed and the i18n
+// card filed; with the app up, Lighthouse; after the Critic, the scheduled
+// reviews and, at a gate, the second opinion, whose disagreement holds the
+// gate. None of them can stop the run - a failure is a note in the report.
+//
 // Size: past the 800-line guideline on purpose. The steps share one closure
 // (the run, the wait timer, the app under test); the pure parts and the card
 // writes already live in lunasworkRun.js / lunasworkCards.js.
@@ -181,6 +187,7 @@ const {
 } = require('./lunasworkDecisions');
 const { wheelState, newestWheelAction } = require('./lunasworkWheel');
 const { handbackDecisionLine, architectureBlock } = require('./lunasworkHandback');
+const { createLoopHooks } = require('./lunasworkLoopHooks');
 
 const PHASE_ROLE = {
   preprod: null,
@@ -239,6 +246,8 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *     architecture:(ctx:{repoPath:string, block:string})=>boolean},
  *   onRunEnd?: Array<(run:object)=>void>|((run:object)=>void),
  *   onMilestone?: Array<(run:object, ctx:{milestone:string})=>void>|((run:object, ctx:{milestone:string})=>void),
+ *   refreshGraph?: Function, i18n?: Function, lighthouse?: Function, reviews?: Function, secondOpinion?: Function,
+ *     (the loop hooks, see src/lunasworkLoopHooks.js)
  *   newRunId?: ()=>string, now?: ()=>number, setTimer?: Function, clearTimer?: Function,
  *   log?: (line:string)=>void,
  * }} deps
@@ -264,6 +273,15 @@ function createLunasWork(deps) {
     cardBook,
     ask: (spec) => ask(spec),
     replayPass: () => replayPass(),
+  });
+  const loopHooks = createLoopHooks({
+    deps,
+    run: () => run,
+    update: (fields) => update(fields),
+    logEvent: (text) => logEvent(text),
+    cardBook,
+    ask: (spec) => ask(spec),
+    onGateOpened: (milestone) => notifyMilestone(milestone),
   });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
@@ -488,6 +506,8 @@ function createLunasWork(deps) {
     save();
     emit('decision');
     armDecisionTimer();
+    // B8: an answer to a gate the second opinion held.
+    loopHooks.onAnswered(answered);
     // B17: an answered scope decision moves its feedback item on.
     refreshFeedback();
   }
@@ -800,6 +820,8 @@ function createLunasWork(deps) {
     const build = buildRecord(r, cards, free);
     refreshFeedback();
     await syncCheckout();
+    // LW 2.23 + B11: graph, codemaps and the i18n card after a merge.
+    await loopHooks.afterMerge(build);
     if (run.iteration === 0) return endScaffold(build);
     transition('launching', {
       conflicts: cleanConflicts([...run.conflicts.filter((c) => c.n !== run.iteration), { n: run.iteration, files }]),
@@ -815,7 +837,8 @@ function createLunasWork(deps) {
   function endScaffold(build) {
     if (build.selfCheck !== 'green') return retryLater('iteration 0: the scaffold stayed red');
     logEvent('iteration 0: scaffold on main');
-    return nextIteration({ iteration: 1, current: emptyCurrent() });
+    // Iteration 0 has no lap: its loop-hook notes go to iteration 1's.
+    return nextIteration({ iteration: 1, current: { ...emptyCurrent(), hookNotes: run.current.hookNotes || [] } });
   }
 
   /**
@@ -836,6 +859,7 @@ function createLunasWork(deps) {
   async function stepLaunching() {
     const started = await startApp();
     if (!started.ok) logEvent(`app did not start: ${started.error}`);
+    else await loopHooks.afterLaunch(live.url);
     transition('playtesting', { current: { ...run.current, launch: started } });
   }
 
@@ -902,6 +926,7 @@ function createLunasWork(deps) {
 
   async function stepCritiquing() {
     let critic = run.current.critic;
+    let criticCards = [];
     if (!critic) {
       const stuck = cardFlow.stuckNow();
       const res = await runCriticOnce();
@@ -911,6 +936,7 @@ function createLunasWork(deps) {
       // A failed Critic applied nothing: try it again rather than score the lap 0.
       if (!r.ok) return retryLater(`critic: ${r.error || 'failed'}`);
       critic = cleanCritic(r);
+      criticCards = isObj(r.cards) && Array.isArray(r.cards.created) ? r.cards.created : [];
       // B4: a split card is done with; the rest of the stuck ones are asked about.
       const outcome = stuckOutcome(stuck, critic.split);
       if (outcome.split.length) logEvent(`${outcome.split.length} stuck card(s) split by the Critic`);
@@ -918,6 +944,8 @@ function createLunasWork(deps) {
       update({ current: { ...run.current, critic }, failCounts: nextFailCounts(run.failCounts, { closed: outcome.split }) });
       cardFlow.askAboutStuck(outcome.ask);
     }
+    // Reviews, and the second opinion at a gate (it may hold the gate closed).
+    if (!(run.current.hooks && run.current.hooks.reviewed)) critic = await loopHooks.afterCritic(critic, criticCards);
 
     let shipConfirmed = false;
     if (critic.verdict === 'ship') {
@@ -1061,6 +1089,8 @@ function createLunasWork(deps) {
     const history = [...earlier, record];
     const lap = buildLap(run.current, record, { evidenceDir: run.evidenceDir });
     const laps = [...run.laps.filter((l) => l.n !== record.n), ...(lap ? [lap] : [])].slice(-MAX_LAPS);
+    // B8: a held gate Mati opened while this iteration was ending.
+    critic = loopHooks.withApproval(critic);
     // Main was reverted: whatever the SHIP pass saw is gone.
     const shipConfirmed = confirmed && !rolledBack;
     const verdict = stopVerdict({ history, critic: { verdict: critic.verdict }, shipConfirmed, stopRequested: run.stopRequested });

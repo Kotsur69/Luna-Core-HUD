@@ -9,10 +9,16 @@
 //   freeFallback  false = on a usage limit the run waits for the reset
 //                 (Mati's decision); true = builders and playtester may use the
 //                 free providers (orchestraFree.js) while Claude is limited
-//   projects      keyed like the to-dos (todo.keyFor): { models, profile }
+//   secondOpinionOrder  optional CLI order for the milestone-gate second
+//                 opinion (lunasworkSecondOpinion: 'codex' / 'gemini'); empty =
+//                 off. Opt-in: the gate's evidence goes to that vendor
+//   projects      keyed like the to-dos (todo.keyFor): { models, profile, lighthouseBudgets }
 //                 models  - partial per-role override, merged over the global
 //                           models when a run starts
 //                 profile - how LunaCore launches the app under test
+//                 lighthouseBudgets - optional partial Lighthouse score
+//                           budgets (0-100); unset categories use
+//                           lunasworkLighthouse.DEFAULT_BUDGETS
 //
 // TRUST BOUNDARY: the project profile (startCommand, checkCommand, url) is only
 // ever read from this local file, which only the LunaCore UI writes. It is
@@ -30,6 +36,8 @@ const fs = require('fs');
 const paths = require('./paths');
 const { ROLES, MODEL_CHOICES, normalizeModels } = require('./lunasworkRules');
 const { keyFor } = require('./todo');
+const { CATEGORIES: LIGHTHOUSE_CATEGORIES, budgetsFrom } = require('./lunasworkLighthouse');
+const { SECOND_OPINION_CLIS } = require('./lunasworkSecondOpinion');
 
 const FILE_NAME = 'lunaswork-settings.local.json';
 const defaultFile = () => paths.local(FILE_NAME);
@@ -136,21 +144,59 @@ function normalizeModelOverride(raw) {
   return out;
 }
 
+// ---- Lighthouse budgets and the second opinion ----------------------------------------
+
+const isScore = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
+
+/**
+ * Strict validation of a project's Lighthouse budgets: a partial map of
+ * known categories to scores 0-100.
+ * @param {unknown} raw
+ * @returns {{budgets: object|null, reason: string|null}}
+ */
+function validateBudgets(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { budgets: null, reason: 'lighthouseBudgets must be an object' };
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!LIGHTHOUSE_CATEGORIES.includes(key)) return { budgets: null, reason: `unknown Lighthouse category '${key}'` };
+    if (!isScore(value)) return { budgets: null, reason: `lighthouseBudgets.${key} must be a number from 0 to 100` };
+    out[key] = value;
+  }
+  return { budgets: out, reason: null };
+}
+
+/** Keeps only known categories with a valid score - a partial override, never filled in. */
+function normalizeBudgets(raw) {
+  const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const out = {};
+  for (const c of LIGHTHOUSE_CATEGORIES) if (isScore(src[c])) out[c] = src[c];
+  return out;
+}
+
+/** Known CLIs only, each once, in the given order; [] = second opinion off. */
+function normalizeCliOrder(raw) {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((c) => typeof c === 'string' && Object.prototype.hasOwnProperty.call(SECOND_OPINION_CLIS, c)))];
+}
+
 // ---- whole store ------------------------------------------------------------------
 
 function normalizeProject(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const models = normalizeModelOverride(raw.models);
   const { profile } = validateProfile(raw.profile);
+  const budgets = normalizeBudgets(raw.lighthouseBudgets);
   const out = {};
   if (Object.keys(models).length) out.models = models;
   if (profile) out.profile = profile;
+  if (Object.keys(budgets).length) out.lighthouseBudgets = budgets;
   return Object.keys(out).length ? out : null;
 }
 
 /**
  * @param {unknown} raw parsed file content (or anything)
- * @returns {{models: Record<string,string>, freeFallback: boolean, projects: Record<string,object>}}
+ * @returns {{models: Record<string,string>, freeFallback: boolean, secondOpinionOrder: string[],
+ *   projects: Record<string,object>}}
  */
 function normalizeSettings(raw) {
   const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
@@ -164,6 +210,7 @@ function normalizeSettings(raw) {
   return {
     models: normalizeModels(src.models),
     freeFallback: src.freeFallback === true,
+    secondOpinionOrder: normalizeCliOrder(src.secondOpinionOrder),
     projects,
   };
 }
@@ -185,12 +232,18 @@ function profileFor(settings, projectId) {
   return (project && project.profile) || null;
 }
 
+/** The project's full Lighthouse budgets: its own over lunasworkLighthouse.DEFAULT_BUDGETS. */
+function lighthouseBudgetsFor(settings, projectId) {
+  const project = normalizeSettings(settings).projects[keyFor(projectId)];
+  return budgetsFrom({ lighthouseBudgets: (project && project.lighthouseBudgets) || {} });
+}
+
 /**
  * Returns new settings with one project's entry replaced (no mutation).
- * A profile that fails validation is reported and nothing changes.
+ * A profile or budgets that fail validation are reported and nothing changes.
  * @param {object} settings
  * @param {string|null|undefined} projectId
- * @param {{models?: object, profile?: object|null}} patch profile null removes it
+ * @param {{models?: object, profile?: object|null, lighthouseBudgets?: object|null}} patch null removes
  * @returns {{settings: object, reason: string|null}}
  */
 function withProject(settings, projectId, patch) {
@@ -207,6 +260,13 @@ function withProject(settings, projectId, patch) {
     const { profile, reason } = validateProfile(p.profile);
     if (!profile) return { settings: s, reason };
     next.profile = profile;
+  }
+  if (p.lighthouseBudgets === null) {
+    delete next.lighthouseBudgets;
+  } else if (p.lighthouseBudgets !== undefined) {
+    const { budgets, reason } = validateBudgets(p.lighthouseBudgets);
+    if (!budgets) return { settings: s, reason };
+    next.lighthouseBudgets = budgets;
   }
   return { settings: normalizeSettings({ ...s, projects: { ...s.projects, [key]: next } }), reason: null };
 }
@@ -243,11 +303,15 @@ module.exports = {
   MAX_COMMAND_CHARS,
   PROFILE_STACKS,
   validateProfile,
+  validateBudgets,
+  normalizeBudgets,
+  normalizeCliOrder,
   normalizeModelOverride,
   normalizeSettings,
   defaultSettings,
   modelsFor,
   profileFor,
+  lighthouseBudgetsFor,
   withProject,
   readSettings,
   writeSettings,

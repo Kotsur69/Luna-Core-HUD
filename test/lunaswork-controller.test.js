@@ -1748,3 +1748,308 @@ test('a phone wheel unit from far in the future is ignored and does not block la
   build.resolve(doneBuild());
   await h.settle();
 });
+
+// ---- loop hooks: graph refresh, i18n, Lighthouse, reviews, second opinion ----------------
+
+/** Fake loop-hook deps; `over.<dep>` replaces a default answer (a function of the call's opts). */
+function hookFakes(over = {}) {
+  const calls = { refreshGraph: [], reviews: [], secondOpinion: [], i18n: [], lighthouse: [] };
+  const answers = {
+    refreshGraph: () => ({ ok: true, committed: true, notes: [] }),
+    reviews: () => ({ due: [], cards: [], notes: [] }),
+    // null: no CLI order set, the second opinion is off.
+    secondOpinion: () => null,
+    i18n: () => ({ cards: [], notes: [] }),
+    lighthouse: () => ({ results: [], notes: [] }),
+    ...over,
+  };
+  const deps = Object.fromEntries(Object.keys(calls).map((k) => [k, async (o) => {
+    calls[k].push(clone(o));
+    return answers[k](o, calls[k].length);
+  }]));
+  return { calls, deps };
+}
+
+const lapNotes = (h, n) => (h.stored.laps.find((l) => l.n === n) || { notes: [] }).notes;
+const cardOf = (text, extra = {}) => ({ kind: 'feel', severity: 'medium', text, details: 'why', acceptance: ['it is fixed'], files: [], ...extra });
+const gateCritic = (extra = {}) => ({
+  ok: true,
+  verdict: 'continue',
+  model: 'opus',
+  modelReason: 'milestone gate',
+  milestone: { name: 'skeleton', passed: true, score: 90 },
+  next: 'core',
+  allPassed: false,
+  ...extra,
+});
+const lighthouseResults = (performance) => [{
+  route: 'http://localhost:3000/',
+  device: 'desktop',
+  scores: { performance, accessibility: 95, bestPractices: 95, seo: 95 },
+  reportPath: path.join(EVIDENCE, 'lh.json'),
+}];
+
+test('LW 2.23: the code graph is refreshed after every merge, never after an empty or red build', async () => {
+  const f = hookFakes();
+  const h = harness({ deps: f.deps, todos: [card(1), card(2), card(3)] });
+  h.next.director.push(
+    { ok: true, cards: [card(1), card(2)], model: 'opus', modelReason: 'setting' },
+    { ok: true, cards: [card(3)], model: 'opus', modelReason: 'setting' },
+    NO_CARDS,
+    STOP_CARD,
+  );
+  h.next.build.push(DEFAULT, redBuild());
+  await h.start();
+
+  assert.equal(h.ctl.status().verdict, 'stop');
+  assert.deepEqual(f.calls.refreshGraph, [{ repoPath: REPO, runId: 'lwtest1', iteration: 1 }], 'only the merged iteration');
+  assert.equal(f.calls.i18n.length, 1, 'the i18n check follows the same merge');
+  assert.match(logText(h), /code graph refreshed, codemaps committed/);
+});
+
+test('LW 2.23: a failing graph refresh is a note in the run report; the run goes on', async () => {
+  const f = hookFakes({
+    refreshGraph: (o, nth) => {
+      if (nth === 1) throw new Error('index server down');
+      return { ok: false, notes: ['code graph not re-indexed (cli): no such repo'] };
+    },
+  });
+  const h = harness({ deps: f.deps, todos: [card(1), card(2), card(3)] });
+  h.next.director.push(DEFAULT, { ok: true, cards: [card(3)], model: 'opus', modelReason: 'setting' }, STOP_CARD);
+  await h.start();
+
+  assert.equal(h.ctl.status().verdict, 'stop');
+  assert.equal(h.stored.stopReason, 'steer', 'not stepFailed: the refresh never failed a step');
+  assert.equal(h.calls.critic.length, 2, 'both iterations went on to the Critic');
+  assert.deepEqual(lapNotes(h, 1), ['graph refresh failed: index server down']);
+  assert.deepEqual(lapNotes(h, 2), ['code graph not re-indexed (cli): no such repo']);
+});
+
+test('i18n: after a merge only the missing-keys card is filed, and never twice while it is open', async () => {
+  const missing = cardOf('translation keys', { kind: 'bug', extraTags: ['i18n'] });
+  const hardcoded = cardOf('2 UI string(s) hard-coded instead of translated', { kind: 'missing', severity: 'low' });
+  const f = hookFakes({
+    i18n: (o, nth) => ({ cards: [{ ...missing, text: `${nth + 2} translation key(s) missing or empty in pl/en` }, hardcoded], notes: [] }),
+  });
+  const h = harness({ deps: f.deps, todos: [card(1), card(2), card(3)] });
+  h.next.director.push(DEFAULT, { ok: true, cards: [card(3)], model: 'opus', modelReason: 'setting' }, STOP_CARD);
+  await h.start();
+
+  assert.equal(f.calls.i18n.length, 2);
+  const filed = h.todos.filter((t) => /translation key|hard-coded/.test(t.text));
+  assert.equal(filed.length, 1, 'one card for the missing keys, the heuristic card left out');
+  assert.equal(filed[0].text, '3 translation key(s) missing or empty in pl/en');
+  assert.ok(filed[0].tags.includes('i18n') && filed[0].tags.includes('run:lwtest1'));
+});
+
+test('reviews: a failing reviewer never stops the run; review cards go to the to-do list', async () => {
+  const reviewCard = cardOf('Validate the quote id in the export handler', { kind: 'bug', severity: 'high', extraTags: ['review:security'] });
+  const f = hookFakes({
+    reviews: (o, nth) => {
+      if (nth === 1) throw new Error('reviewer crashed');
+      return { due: ['security'], cards: [reviewCard], notes: ['performance review failed: timeout'] };
+    },
+  });
+  const h = harness({ deps: f.deps, todos: [card(1), card(2), card(3)] });
+  h.next.director.push(DEFAULT, { ok: true, cards: [card(3)], model: 'opus', modelReason: 'setting' }, STOP_CARD);
+  await h.start();
+
+  assert.equal(h.ctl.status().verdict, 'stop');
+  assert.equal(h.stored.stopReason, 'steer');
+  assert.deepEqual(f.calls.reviews.map((c) => [c.iteration, c.isGate]), [[1, false], [2, false]]);
+  assert.deepEqual(lapNotes(h, 1), ['reviews failed: reviewer crashed']);
+  assert.deepEqual(lapNotes(h, 2), ['performance review failed: timeout']);
+  const filed = h.todos.find((t) => t.text === 'Validate the quote id in the export handler');
+  assert.ok(filed, 'the review card is filed');
+  assert.ok(filed.tags.includes('review:security') && filed.tags.includes('kind:bug') && filed.tags.includes('run:lwtest1'));
+});
+
+test('reviews run at a milestone gate with isGate (the cleanup review is due)', async () => {
+  const f = hookFakes();
+  const h = harness({ deps: f.deps });
+  h.next.critic.push(gateCritic());
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  assert.deepEqual(f.calls.reviews.map((c) => [c.iteration, c.isGate]), [[1, true]]);
+});
+
+test('second opinion: a disagreement at a gate keeps it closed until Mati opens it', async () => {
+  const milestones = [];
+  const f = hookFakes({
+    secondOpinion: () => ({
+      skipped: false, ok: true, cli: 'codex', verdict: 'continue', warnings: [], notes: [],
+      cards: [cardOf('The quote total ignores VAT', { kind: 'bug', severity: 'high' })],
+    }),
+  });
+  const h = harness({ deps: { ...f.deps, onMilestone: [(run, ctx) => milestones.push(ctx.milestone)] } });
+  h.next.critic.push(gateCritic());
+  const director = deferred();
+  h.next.director.push(DEFAULT, () => director.promise);
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.calls.director.length === 2);
+
+  assert.equal(f.calls.secondOpinion.length, 1);
+  assert.equal(f.calls.secondOpinion[0].isGate, true);
+  assert.equal(h.ctl.status().milestone, 'skeleton', 'the gate stays closed');
+  assert.deepEqual(milestones, [], 'no milestone email for a held gate');
+  const hold = h.stored.gateHold;
+  assert.equal(hold.milestone, 'skeleton');
+  assert.equal(hold.reason, 'blockingFindings');
+  assert.equal(hold.cli, 'codex');
+  const pending = h.ctl.status().pendingDecisions;
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].id, hold.decisionId);
+  assert.match(pending[0].question, /second opinion \(codex\) disagrees .* skeleton gate/);
+  const filed = h.todos.find((t) => t.text === 'The quote total ignores VAT');
+  assert.ok(filed && filed.tags.includes('second-opinion'), 'its new finding is merged into the cards');
+  assert.ok(lapNotes(h, 1).some((n) => /gate skeleton held: the second opinion \(codex\) disagrees/.test(n)));
+
+  assert.equal(h.ctl.answer({ id: hold.decisionId, answer: 'approve' }).ok, true);
+  assert.equal(h.stored.gateHold, null);
+  assert.equal(h.ctl.status().milestone, 'core', 'Mati opened the gate');
+  assert.deepEqual(milestones, ['skeleton']);
+  director.resolve(STOP_CARD);
+  await h.settle();
+});
+
+test('second opinion: the next Critic resolves a held gate; it is not asked again on that pass', async () => {
+  const f = hookFakes({
+    secondOpinion: () => ({ skipped: false, ok: true, cli: 'gemini', verdict: 'ship', cards: [], warnings: [], notes: [] }),
+  });
+  const h = harness({ deps: f.deps });
+  h.next.critic.push(gateCritic(), gateCritic());
+  h.next.director.push(DEFAULT, NO_CARDS, STOP_CARD);
+  await h.start();
+
+  assert.equal(f.calls.secondOpinion.length, 1, 'only the first gate pass asked the second opinion');
+  assert.equal(h.stored.gateHold, null);
+  assert.equal(h.ctl.status().milestone, 'core', 'the next Critic passed the gate');
+  assert.ok(lapNotes(h, 1).some((n) => /held: the second opinion \(gemini\) disagrees \(verdict\)/.test(n)));
+  assert.deepEqual(lapNotes(h, 2), ['gate skeleton hold resolved by the Critic: passed']);
+});
+
+test('second opinion: a missing CLI is a report note and the Critic alone opens the gate', async () => {
+  const f = hookFakes({
+    secondOpinion: () => ({ skipped: true, note: 'second opinion skipped: codex not installed, gemini not logged in' }),
+  });
+  const h = harness({ deps: f.deps });
+  h.next.critic.push(gateCritic());
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  assert.equal(h.ctl.status().milestone, 'core');
+  assert.equal(h.stored.gateHold, null);
+  assert.deepEqual(lapNotes(h, 1), ['second opinion skipped: codex not installed, gemini not logged in']);
+});
+
+test('second opinion is not asked when the Critic does not pass a gate', async () => {
+  const f = hookFakes();
+  const h = harness({ deps: f.deps });
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  assert.equal(f.calls.secondOpinion.length, 0);
+});
+
+test('Lighthouse: every iteration after launch, results kept with the run, a breach filed once', async () => {
+  const f = hookFakes({
+    lighthouse: (o, nth) => ({ results: lighthouseResults([95, 60, 55][nth - 1]), notes: [], budgets: { performance: 80 } }),
+  });
+  const h = harness({ deps: f.deps, scores: [10, 20, 30, 40] });
+  h.next.director.push(DEFAULT, NO_CARDS, NO_CARDS, STOP_CARD);
+  await h.start();
+
+  assert.equal(h.ctl.status().verdict, 'stop');
+  assert.deepEqual(f.calls.lighthouse.map((c) => [c.iteration, c.url, c.projectId]), [
+    [1, 'http://localhost:3000', 'game'], [2, 'http://localhost:3000', 'game'], [3, 'http://localhost:3000', 'game'],
+  ]);
+  assert.deepEqual(h.stored.lighthouse.map((e) => [e.iteration, e.results[0].scores.performance]), [[1, 95], [2, 60], [3, 55]]);
+  const breaches = h.todos.filter((t) => /^Performance \d+ on http:\/\/localhost:3000\/ is below its budget of 80$/.test(t.text));
+  assert.equal(breaches.length, 1, 'the same breach is not filed again while its card is open');
+  assert.ok(breaches[0].tags.includes('lighthouse'));
+  // Persisted: a restart keeps the trend.
+  assert.equal(restoreRun(clone(h.stored)).lighthouse.length, 3);
+});
+
+test('Lighthouse is skipped when the app did not start, and a failure never stops the run', async () => {
+  const f = hookFakes({
+    lighthouse: () => {
+      throw new Error('chrome-devtools gone');
+    },
+  });
+  const h = harness({ deps: f.deps });
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  assert.equal(h.ctl.status().verdict, 'stop');
+  assert.deepEqual(lapNotes(h, 1), ['lighthouse failed: chrome-devtools gone']);
+
+  const g = hookFakes();
+  const h2 = harness({ deps: g.deps });
+  h2.launchFails = true;
+  h2.next.director.push(DEFAULT, STOP_CARD);
+  await h2.start();
+  assert.equal(g.calls.lighthouse.length, 0);
+});
+
+test('loop hooks after a restart in critiquing: reviews and the second opinion are not run twice', async () => {
+  const f = hookFakes({ secondOpinion: () => ({ skipped: true, note: 'second opinion skipped: x' }) });
+  const h = harness({ deps: f.deps });
+  h.next.critic.push(gateCritic());
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  const saved = h.saves.find((s) => s.phase === 'critiquing' && s.current.hooks && s.current.hooks.reviewed);
+  assert.ok(saved, 'the hooks are saved as done with the Critic');
+
+  const g = hookFakes();
+  const again = harness({ deps: g.deps, stored: saved });
+  again.next.director.push(STOP_CARD);
+  assert.equal(again.ctl.resume(), true);
+  await again.settle();
+  assert.equal(g.calls.reviews.length, 0);
+  assert.equal(g.calls.secondOpinion.length, 0);
+  assert.equal(again.calls.critic.length, 0, 'the saved Critic stands');
+});
+
+test('second opinion: Mati opening a held gate while its iteration is still ending opens it as it ends', async () => {
+  const milestones = [];
+  const f = hookFakes({
+    secondOpinion: () => ({ skipped: false, ok: true, cli: 'codex', verdict: 'ship', cards: [], warnings: [], notes: [] }),
+  });
+  const tag = deferred();
+  const checkpoints = { tagIteration: () => tag.promise, rollback: async () => ({ ok: false, error: 'unused' }) };
+  const h = harness({ deps: { ...f.deps, checkpoints, onMilestone: [(run, ctx) => milestones.push(ctx.milestone)] } });
+  h.next.critic.push(gateCritic());
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => !!(h.stored.gateHold && h.stored.phase === 'critiquing' && h.stored.current.hooks && h.stored.current.hooks.reviewed));
+
+  // The checkpoint tag is still being pushed: endIteration has not finished.
+  assert.equal(h.ctl.answer({ id: h.stored.gateHold.decisionId, answer: 'approve' }).ok, true);
+  assert.equal(h.stored.gateHold.approved, true);
+  assert.deepEqual(milestones, [], 'not yet: the iteration opens it as it ends');
+  tag.resolve({ ok: true, tag: 'luna-work/lwtest1/iter-1' });
+  await h.settle();
+
+  assert.equal(h.stored.gateHold, null);
+  assert.equal(h.ctl.status().milestone, 'core', 'the approval was not lost to endIteration');
+  assert.deepEqual(milestones, ['skeleton'], 'one milestone email');
+});
+
+test('a restart right after the gate was held keeps it held (the hold is not taken for the next Critic)', async () => {
+  const f = hookFakes({
+    secondOpinion: () => ({ skipped: false, ok: true, cli: 'codex', verdict: 'ship', cards: [], warnings: [], notes: [] }),
+  });
+  const h = harness({ deps: f.deps });
+  h.next.critic.push(gateCritic());
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  const saved = h.saves.find((s) => s.phase === 'critiquing' && s.gateHold && !(s.current.hooks && s.current.hooks.reviewed));
+  assert.ok(saved, 'a save with the hold but the hooks not done yet');
+
+  const g = hookFakes();
+  const again = harness({ deps: g.deps, stored: saved });
+  again.next.director.push(STOP_CARD);
+  assert.equal(again.ctl.resume(), true);
+  await again.settle();
+  assert.equal(g.calls.secondOpinion.length, 0);
+  assert.equal(again.ctl.status().milestone, 'skeleton', 'still held');
+  assert.equal(again.stored.gateHold.milestone, 'skeleton');
+});

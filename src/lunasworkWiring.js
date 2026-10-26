@@ -21,6 +21,8 @@
 //                   disk cleanup, low-disk stop + email (lunasworkMachine)
 //   hand-back       lunasworkHandback (C11): main's commit at the pause, then
 //                   Mati's commits since -> DECISIONS.md + ARCHITECTURE.md
+//   loop hooks      lunasworkHookDeps: graph + codemaps refresh after a merge
+//                   (LW 2.23), i18n card, Lighthouse, reviews, second opinion
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -48,6 +50,7 @@ const { createScaffolder } = require('./lunasworkScaffold');
 const { createMachineGuard } = require('./lunasworkMachine');
 const { handbackHead, readCommits } = require('./lunasworkHandback');
 const { wheelFromTodoPeers } = require('./lunasworkWheel');
+const { createHookDeps } = require('./lunasworkHookDeps');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -210,6 +213,8 @@ function createLunasWorkRuntime(ctx) {
         return res.ok;
       },
     },
+    // Loop hooks (src/lunasworkLoopHooks.js): none of them can stop the run.
+    ...createHookDeps({ env: ctx.env, settings: () => settingsStore.readSettings(), log: ctx.log }),
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: reporter ? [reporter.onMilestone] : [],

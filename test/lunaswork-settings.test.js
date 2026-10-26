@@ -14,6 +14,7 @@ const path = require('path');
 
 const S = require('../src/lunasworkSettings.js');
 const { DEFAULT_MODELS } = require('../src/lunasworkRules.js');
+const { DEFAULT_BUDGETS } = require('../src/lunasworkLighthouse.js');
 
 const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lw-settings-')), 'settings.json');
 const goodProfile = { adapter: 'web', startCommand: 'npm run dev', url: 'http://localhost:5173' };
@@ -145,6 +146,55 @@ test('a __proto__ project key in the file is dropped, not turned into a prototyp
   const s = S.normalizeSettings(JSON.parse('{"projects":{"__proto__":{"models":{"builder":"haiku"}}}}'));
   assert.equal(Object.getPrototypeOf(s.projects), Object.prototype);
   assert.deepEqual(Object.keys(s.projects), []);
+});
+
+// ---- Lighthouse budgets + second opinion ---------------------------------------------
+
+test('lighthouse budgets default to DEFAULT_BUDGETS; a project override merges over them', () => {
+  assert.deepEqual(S.lighthouseBudgetsFor({}, 'p'), { ...DEFAULT_BUDGETS });
+  const s = { projects: { p: { lighthouseBudgets: { performance: 60, seo: 70 } } } };
+  assert.deepEqual(S.lighthouseBudgetsFor(s, 'p'), { ...DEFAULT_BUDGETS, performance: 60, seo: 70 });
+  assert.deepEqual(S.lighthouseBudgetsFor(s, 'other'), { ...DEFAULT_BUDGETS });
+});
+
+test('lighthouse budget validation rejects unknown categories and scores out of range', () => {
+  assert.deepEqual(S.validateBudgets({ accessibility: 95 }), { budgets: { accessibility: 95 }, reason: null });
+  assert.match(S.validateBudgets({ speed: 50 }).reason, /unknown Lighthouse category/);
+  for (const bad of [-1, 101, '90', NaN, null]) {
+    assert.match(S.validateBudgets({ seo: bad }).reason, /0 to 100/);
+  }
+  for (const junk of [null, [], 'x', 3]) assert.equal(S.validateBudgets(junk).budgets, null);
+});
+
+test('bad stored budgets are dropped on read, the good ones kept', () => {
+  const s = S.normalizeSettings({ projects: { p: { lighthouseBudgets: { seo: 50, performance: 200, bogus: 1 } } } });
+  assert.deepEqual(s.projects.p.lighthouseBudgets, { seo: 50 });
+  const none = S.normalizeSettings({ projects: { p: { lighthouseBudgets: { performance: 'fast' } } } });
+  assert.equal(none.projects.p, undefined, 'an entry with nothing valid is dropped');
+});
+
+test('withProject sets, rejects, and removes lighthouse budgets without mutating its input', () => {
+  const base = S.defaultSettings();
+  const frozen = JSON.stringify(base);
+  const set = S.withProject(base, 'p', { lighthouseBudgets: { performance: 70 } });
+  assert.equal(set.reason, null);
+  assert.equal(S.lighthouseBudgetsFor(set.settings, 'p').performance, 70);
+  assert.equal(JSON.stringify(base), frozen);
+
+  const bad = S.withProject(set.settings, 'p', { lighthouseBudgets: { performance: 170 } });
+  assert.match(bad.reason, /performance/);
+  assert.equal(S.lighthouseBudgetsFor(bad.settings, 'p').performance, 70, 'old budgets kept');
+
+  const removed = S.withProject(set.settings, 'p', { lighthouseBudgets: null });
+  assert.equal(S.lighthouseBudgetsFor(removed.settings, 'p').performance, DEFAULT_BUDGETS.performance);
+});
+
+test('the second-opinion CLI order is off by default and keeps known CLIs once, in order', () => {
+  assert.deepEqual(S.defaultSettings().secondOpinionOrder, []);
+  assert.deepEqual(S.normalizeSettings({ secondOpinionOrder: ['gemini', 'rm -rf', 'gemini', 'codex'] }).secondOpinionOrder, ['gemini', 'codex']);
+  for (const junk of ['codex', null, {}, [1, 2]]) assert.deepEqual(S.normalizeSettings({ secondOpinionOrder: junk }).secondOpinionOrder, []);
+  // Prototype names are no CLI.
+  assert.deepEqual(S.normalizeCliOrder(['constructor', '__proto__', 'toString']), []);
 });
 
 // ---- disk -------------------------------------------------------------------------

@@ -102,6 +102,18 @@ test('report shape: Needs you first, then verdict and why, iterations, scores, r
   assert.match(md, /- Took: 3 h 0 min/);
 });
 
+test('loop-hook notes get their own section per iteration, after the decisions (md and HTML)', () => {
+  const run = makeRun('stop');
+  const laps = [{ ...run.laps[0], notes: ['graph refresh failed: index timeout', '<b>security review failed</b>'] }, run.laps[1]];
+  const md = buildRunReport({ ...run, laps });
+  assert.ok(md.indexOf('## Notes') > md.indexOf('## Decisions') && md.indexOf('## Notes') < md.indexOf('## Evidence'));
+  assert.match(md, /- Iteration 1: graph refresh failed: index timeout/);
+  const html = renderRunReportHtml({ ...run, laps });
+  assert.match(html, /Iteration 1: graph refresh failed: index timeout/);
+  assert.ok(!html.includes('<b>security'), 'notes are escaped');
+  assert.match(buildRunReport(run), /## Notes\n\n- none/);
+});
+
 test('report shape per verdict: the Needs-you block and the reason fit the verdict', () => {
   const needsOf = (md) => md.slice(md.indexOf('## Needs you'), md.indexOf('## Verdict'));
   const quiet = { laps: [], history: [] };
