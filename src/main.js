@@ -3593,10 +3593,17 @@ app.whenReady().then(() => {
     cloud,
     onChanged: (names) => names.includes('projects') && reloadProjects(),
   });
+  // A --luna-probe instance shares userData with the live LunaCore - often the
+  // very one running the God Mode self-check that started it. Resuming the
+  // stored run there would drive the live run from a second process, and the
+  // scheduled catch-ups (weekly review, brief, nightly mail) would spend model
+  // calls and outlive app.quit(), so the probe never exits. Neither belongs in
+  // a widget check.
+  const probing = process.argv.includes('--luna-probe');
   // God Mode v2: bring back the last run's board (held - nothing launches
   // until Approve/Retry) and start the worker-time watchdog. After the
   // projects load: a restored run must belong to one of them.
-  orchestra.restore();
+  if (!probing) orchestra.restore();
   // Luna's Work decision queue: pending decisions to the phone snapshot,
   // answers back from the `todos` cloud scope. Wired before resume() so a
   // resumed run's decisions are published at once.
@@ -3616,9 +3623,11 @@ app.whenReady().then(() => {
   snapshotPuts.godmode.asks(lunasworkAsk.section());
   // Luna's Work: a run the previous LunaCore left goes on from its phase.
   // The machine guard follows it (attached first, so it sees the resume).
-  lunasworkMachine.attach();
-  lunaswork.resume();
-  lunasworkMachine.reconcile();
+  if (!probing) {
+    lunasworkMachine.attach();
+    lunaswork.resume();
+    lunasworkMachine.reconcile();
+  }
   setInterval(() => orchestra.tick(), ORCHESTRA_TICK_MS).unref();
   // Back from sleep: re-arm or resume a paused run, drop the wake task.
   powerMonitor.on('resume', () => orchestra.onSystemResume());
@@ -3626,10 +3635,12 @@ app.whenReady().then(() => {
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();
   startUsageWatcher();
-  reportMail.nightly.start();
-  if (weeklyReview) weeklyReview.start();
-  // The weekly brief: once per ISO week, on the first launch Monday or later.
-  if (missionBrief) missionBrief.start();
+  if (!probing) {
+    reportMail.nightly.start();
+    if (weeklyReview) weeklyReview.start();
+    // The weekly brief: once per ISO week, on the first launch Monday or later.
+    if (missionBrief) missionBrief.start();
+  }
   startTelemetryWatcher();
   startMediaWatcher();
   // Only if the user has previously opted in - the pref defaults to false, so
