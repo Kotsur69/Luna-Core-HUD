@@ -11,6 +11,11 @@
 //                    are writable and the target must resolve inside design/.
 //   reading       -> parseShipCriteria (feeds lunasworkRules.gatePassed),
 //                    parseJourneys, packCompleteness
+//   design match  -> parseDesignMappings / readDesignMappings: the
+//                    `screen | route | mockup file` table in
+//                    design/references/README.md (LW 2.19a)
+//   legal         -> appendLegalJourneys: the GDPR journeys of an EU web app
+//                    into TEST_PLAN.md, each once (LW 2.26)
 //   interview     -> interviewBrief: system prompt for the Interviewer tab
 //
 // Same contract as cheatsheets.js / lunasworkStore.js: a missing or broken
@@ -22,6 +27,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { LEGAL_DRAFT_MARKER, LEGAL_JOURNEYS } = require('./lunasworkLegal');
 
 const DESIGN_DIR = 'design';
 const REFERENCES_DIR = 'references';
@@ -40,7 +46,8 @@ const TEMPLATES = Object.freeze({
 
 ## Who it is for
 
-<!-- The users and the situation they use it in. -->
+<!-- The users and the situation they use it in. For users in the EU, add the
+     line "EU web app: yes" (or "no") - it turns on the GDPR legal pack. -->
 
 ## Success in one sentence
 
@@ -142,6 +149,15 @@ const REFERENCES_README = `# References
 
 Screenshots, mockups and example data (e.g. a real quote) the build should
 match. Drop files here; DESIGN.md and SHIP_CRITERIA.md may point at them.
+
+## Screens
+
+<!-- Design match: the Playtester captures each screen at its mockup's width
+     and scores how close it is (0-10). One row per screen; the mockup is a
+     PNG or JPEG in this folder. -->
+
+| Screen | Route | Mockup file |
+| --- | --- | --- |
 `;
 
 const PACK_FILES = Object.freeze(Object.keys(TEMPLATES));
@@ -412,6 +428,111 @@ function parseJourneys(md) {
   return journeys;
 }
 
+// ---- design match (LW 2.19a) -----------------------------------------------------
+
+const MOCKUP_EXT_RE = /\.(png|jpe?g)$/i;
+const MAX_MAPPINGS = 30;
+const MAX_MAPPING_CELL_CHARS = 200;
+const HEADER_WORDS = ['screen', 'route', 'mockup', 'mockup file', 'file', 'path', 'url', 'ekran', 'makieta'];
+
+/** A table cell's plain value: no backticks, a markdown link's target (or text), no <angle brackets>. */
+function cellValue(raw, preferLink) {
+  const text = raw.trim();
+  const link = text.match(/^!?\[([^\]]*)\]\(\s*<?([^)>\s]+)>?\s*\)$/);
+  const value = link ? (preferLink ? link[2] : link[1]) : text;
+  return value.replace(/^`+|`+$/g, '').replace(/^<|>$/g, '').trim();
+}
+
+/** A route inside the app: "/path?query", from a bare path or a full URL. Null when unusable. */
+function cleanRoute(raw) {
+  if (!raw || raw.length > MAX_MAPPING_CELL_CHARS || /\s/.test(raw)) return null;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      return `${u.pathname}${u.search}${u.hash}`;
+    } catch {
+      return null;
+    }
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('//')) return null;
+  return raw.startsWith('/') ? raw : `/${raw}`;
+}
+
+/** A mockup file inside design/references/: relative, no "..", a PNG / JPEG. Null when unusable. */
+function cleanMockup(raw) {
+  if (!raw || raw.length > MAX_MAPPING_CELL_CHARS) return null;
+  const rel = raw.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^design\/references\//i, '');
+  if (!MOCKUP_EXT_RE.test(rel) || rel.startsWith('/') || /^[a-z]:/i.test(rel)) return null;
+  if (rel.split('/').some((part) => part === '..' || part === '' || part === '.')) return null;
+  return rel;
+}
+
+/**
+ * LW 2.19a: the `screen | route | mockup file` table of
+ * design/references/README.md. Tolerant: any markdown table row with three or
+ * more cells counts (header and separator rows skipped, outer pipes
+ * optional); a row with an unusable route or mockup is dropped; a screen
+ * named twice keeps its first row. Missing or broken input reads as [].
+ * @param {unknown} md
+ * @returns {{screen:string, route:string, mockup:string}[]} mockup = path inside design/references/
+ */
+function parseDesignMappings(md) {
+  if (typeof md !== 'string') return [];
+  const out = [];
+  const seen = new Set();
+  for (const line of stripComments(md).split('\n')) {
+    if (out.length >= MAX_MAPPINGS) break;
+    if (!line.includes('|')) continue;
+    const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|');
+    if (cells.length < 3 || cells.every((c) => /^\s*:?-{2,}:?\s*$/.test(c) || !c.trim())) continue;
+    const screen = oneLine(cellValue(cells[0], false)).slice(0, MAX_MAPPING_CELL_CHARS);
+    if (!screen || HEADER_WORDS.includes(screen.toLowerCase())) continue;
+    const route = cleanRoute(cellValue(cells[1], true));
+    const mockup = cleanMockup(cellValue(cells[2], true));
+    const key = screen.toLowerCase();
+    if (!route || !mockup || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ screen, route, mockup });
+  }
+  return out;
+}
+
+/** design/references/README.md's mapping table; [] when missing, linked or broken. */
+function readDesignMappings(repoDir) {
+  if (!isRepoDir(repoDir)) return [];
+  const root = designDir(repoDir);
+  const refs = path.join(root, REFERENCES_DIR);
+  const file = path.join(refs, 'README.md');
+  if (isLink(root) || isLink(refs) || isLink(file)) return [];
+  try {
+    return parseDesignMappings(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+// ---- legal journeys (LW 2.26) ------------------------------------------------------
+
+/**
+ * LW 2.26, Director before SHIP: the GDPR journeys of an EU web app into
+ * TEST_PLAN.md's Journeys section. A journey already there (by name) is not
+ * added again; the cookie journey only when trackers were detected.
+ * @param {{cookies?:boolean}} [opts]
+ * @returns {{file:string, update:Function}}
+ */
+function appendLegalJourneys({ cookies } = {}) {
+  const wanted = LEGAL_JOURNEYS.filter((j) => !j.cookies || cookies === true);
+  return {
+    file: 'TEST_PLAN.md',
+    update: (current) => {
+      const have = new Set(parseJourneys(current || '').map((n) => n.toLowerCase()));
+      return wanted
+        .filter((j) => !have.has(j.name.toLowerCase()))
+        .reduce((text, j) => insertJourney(text, `### ${j.name}\n\n${j.body}`), current || '');
+    },
+  };
+}
+
 // ---- roadmap (LW 2.13) -----------------------------------------------------------
 
 // `epic:<slug>` must stay a valid card tag (todorows TAG_RE: 40 chars max).
@@ -621,13 +742,21 @@ How to run the interview:
 6. TEST_PLAN.md: at least one journey, one "### " heading each under
    "## Journeys", with numbered steps and the expected result.
 7. Record every decision he makes as "- Chose X because Y" in DECISIONS.md.
-8. ROADMAP.md: ask for the roadmap - the goal in one or two sentences, then
+8. EU web app (GDPR): ask whether the users are in the EU. Write the answer
+   as the line "EU web app: yes" or "EU web app: no" under "## Who it is for"
+   in BRIEF.md. With yes, the loop builds a privacy policy, cookie consent
+   (only if the app uses trackers), data export and account deletion before
+   it ships - all legal text marked "${LEGAL_DRAFT_MARKER}".
+9. Design match: when Mati has mockups, ask him to drop them (PNG / JPEG)
+   into ${REFERENCES_DIR}/ and fill the "| Screen | Route | Mockup file |"
+   table in ${REFERENCES_DIR}/README.md, one row per screen.
+10. ROADMAP.md: ask for the roadmap - the goal in one or two sentences, then
    the milestones in order, each a "### " heading under "## Milestones" with
    its epics (chunks of work of a few cards each) as
    "- [ ] epic:<slug> - <title>" lines (slug: lowercase letters, digits,
    "-"). Propose a roadmap from DESIGN.md he can accept with "ok". The loop
    works one epic at a time, in this order.
-9. Do not touch PLAYTEST_LOG.md. Only write inside ${dir}; do not change code.
+11. Do not touch PLAYTEST_LOG.md. Only write inside ${dir}; do not change code.
 
 The pack is complete when BRIEF, DESIGN, SHIP_CRITERIA (at least one milestone
 with a gate item) and TEST_PLAN (at least one journey) are filled in. Tell Mati
@@ -656,6 +785,10 @@ module.exports = {
   applyWrite,
   parseShipCriteria,
   parseJourneys,
+  parseDesignMappings,
+  readDesignMappings,
+  LEGAL_JOURNEYS,
+  appendLegalJourneys,
   parseRoadmap,
   activeEpic,
   epicSlug,

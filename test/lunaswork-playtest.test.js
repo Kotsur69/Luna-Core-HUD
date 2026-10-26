@@ -644,3 +644,174 @@ test('every browser server must be origin-locked - one open engine refuses the p
   assert.equal(res.error, 'badUrl');
   assert.equal(fake.calls.length, 0);
 });
+
+// ---- LW 2.19a: design match --------------------------------------------------------
+
+const DM = require('../src/lunasworkDesignMatch.js');
+
+const MAPPING = '# References\n\n| Screen | Route | Mockup file |\n| --- | --- | --- |\n| Home | /home | home.png |\n';
+
+/** A project whose references map "Home" to a 40x20 mockup. */
+function mockupProject(paint = red) {
+  const dir = fakeProject();
+  fs.mkdirSync(path.join(dir, 'design', 'references'));
+  fs.writeFileSync(path.join(dir, 'design', 'references', 'README.md'), MAPPING);
+  writePng(path.join(dir, 'design', 'references', 'home.png'), 40, 20, paint);
+  return dir;
+}
+
+/** The pieces of one valid design-match entry inside `evidenceDir`. */
+function matchWorld() {
+  const evidenceDir = tmpDir('lw-pt-match-');
+  writePng(path.join(evidenceDir, 'mockup-home.png'), 8, 4, red);
+  writePng(path.join(evidenceDir, 'design-home.png'), 8, 4, red);
+  fs.writeFileSync(path.join(evidenceDir, 'notes.png'), 'not an image');
+  const outside = path.join(tmpDir('lw-pt-outside-'), 'x.png');
+  writePng(outside, 4, 4, red);
+  const entry = { screen: 'Home', route: '/home', mockup: 'mockup-home.png', screenshot: 'design-home.png', score: 7, pixelDiff: 0.1 };
+  return { evidenceDir, outside, entry };
+}
+
+test('LW 2.19a: a designMatch entry is valid only with BOTH images inside the evidence dir', () => {
+  const { evidenceDir, outside, entry } = matchWorld();
+  const ok = DM.validateDesignMatch([entry], { evidenceDir });
+  assert.equal(ok.entries.length, 1);
+  assert.equal(ok.entries[0].mockup, fs.realpathSync.native(path.join(evidenceDir, 'mockup-home.png')));
+  assert.equal(ok.entries[0].score, 7);
+
+  const broken = [
+    { ...entry, mockup: undefined },
+    { ...entry, screenshot: '' },
+    { ...entry, mockup: 'missing.png' },
+    { ...entry, screenshot: outside },
+    { ...entry, mockup: '../x.png' },
+    { ...entry, screenshot: 'notes.png' },
+    { ...entry, screen: '' },
+    'junk',
+  ];
+  const res = DM.validateDesignMatch(broken, { evidenceDir });
+  assert.deepEqual(res.entries, []);
+  assert.equal(res.warnings.filter((w) => w.code === 'badDesignMatch').length, broken.length);
+});
+
+test('LW 2.19a: scores outside 0-10 and pixel diffs outside 0-1 become null, never a number', () => {
+  const { evidenceDir, entry } = matchWorld();
+  const [e] = DM.validateDesignMatch([{ ...entry, score: 11, previousScore: -1, pixelDiff: 2, diff: 'nope.png' }], { evidenceDir }).entries;
+  assert.equal(e.score, null);
+  assert.equal(e.previousScore, null);
+  assert.equal(e.pixelDiff, null);
+  assert.equal(e.diff, null);
+});
+
+test('LW 2.19a: the schema offers designShots; the explore prompt asks for each screen at its mockup width', () => {
+  assert.ok(P.PLAYTEST_SCHEMA.properties.designShots);
+  assert.ok(!P.PLAYTEST_SCHEMA.required.includes('designShots'), 'optional: a pass without mockups leaves it out');
+  const { targets } = DM.designTargets(mockupProject());
+  assert.deepEqual(targets.map((t) => [t.screen, t.route, t.width, t.height]), [['Home', '/home', 40, 20]]);
+  const prompt = P.buildPlaytestPrompt({ mode: 'explore', url: URL_, testPlan: TEST_PLAN, shipCriteria: SHIP, designTargets: targets });
+  assert.match(prompt, /"Home": route \/home, browser_resize 40x20, screenshot "design-home\.png"/);
+  assert.doesNotMatch(P.buildPlaytestPrompt({ mode: 'explore', url: URL_, testPlan: TEST_PLAN, shipCriteria: SHIP }), /Design match/);
+});
+
+test('LW 2.19a: a mockup outside design/references or not an image is not a target', () => {
+  const dir = mockupProject();
+  fs.writeFileSync(path.join(dir, 'design', 'references', 'fake.png'), 'text');
+  const res = DM.designTargets(dir, [
+    { screen: 'Fake', route: '/', mockup: 'fake.png' },
+    { screen: 'Gone', route: '/', mockup: 'gone.png' },
+    { screen: 'Home', route: '/home', mockup: 'home.png' },
+  ]);
+  assert.deepEqual(res.targets.map((t) => t.screen), ['Home']);
+  assert.deepEqual(res.warnings.map((w) => w.screen), ['Fake', 'Gone']);
+});
+
+/** A fake `claude` for the playtest call and the judge call (told apart by its Read tool). */
+function designClaude({ playtest, judge, shot = (x) => (x < 20 ? [255, 0, 0] : [0, 0, 255]) }) {
+  const calls = [];
+  const execImpl = (file, args, options, cb) => {
+    const stdin = new PassThrough();
+    const call = { file, args, options, prompt: '' };
+    calls.push(call);
+    stdin.on('data', (d) => {
+      call.prompt += d;
+    });
+    stdin.on('finish', () => {
+      const isJudge = argAfter(args, '--tools') === 'Read';
+      if (!isJudge) writePng(path.join(options.cwd, 'design-home.png'), 40, 20, shot);
+      const raw = isJudge ? judge : playtest;
+      setImmediate(() => cb(null, JSON.stringify({ structured_output: raw, total_cost_usd: 0.5 })));
+    });
+    return { stdin };
+  };
+  return { calls, execImpl };
+}
+
+test('LW 2.19a end to end: capture, mockup copy, structural diff and a 0-10 score from the Playtester model', async () => {
+  const adapter = await fakeAdapter();
+  const fake = designClaude({
+    playtest: full({ designShots: [{ screen: 'Home', screenshot: 'design-home.png' }] }),
+    judge: { screens: [{ screen: 'Home', score: 4, notes: 'The header is twice as tall and the CTA is grey.' }] },
+  });
+  const res = await P.runPlaytest({ projectDir: mockupProject(), adapter, url: URL_, execImpl: fake.execImpl });
+
+  assert.equal(res.ok, true);
+  assert.equal(fake.calls.length, 2, 'the playtest, then one judge call');
+  const judge = fake.calls[1];
+  assert.equal(argAfter(judge.args, '--model'), 'sonnet', "the Playtester's model");
+  assert.equal(argAfter(judge.args, '--allowedTools'), 'Read(./**)');
+  assert.equal(judge.options.cwd, adapter.evidenceDir, 'only the evidence dir');
+  assert.match(judge.prompt, /mockup mockup-home\.png, screenshot design-home\.png, pixel diff 50\.0%/);
+
+  const [entry] = res.report.designMatch;
+  assert.equal(entry.screen, 'Home');
+  assert.equal(entry.score, 4);
+  assert.equal(entry.previousScore, null);
+  assert.equal(entry.pixelDiff, 0.5);
+  for (const file of [entry.mockup, entry.screenshot, entry.diff]) {
+    assert.ok(fs.existsSync(file), file);
+    assert.equal(path.dirname(file), fs.realpathSync.native(adapter.evidenceDir));
+  }
+  assert.equal(path.basename(entry.mockup), 'mockup-home.png');
+  assert.equal(res.costUsd, 1, 'both calls are counted');
+});
+
+test('LW 2.19a: the next iteration carries the previous score; a failed judge leaves the score null', async () => {
+  const first = await fakeAdapter();
+  const project = mockupProject();
+  const shots = full({ designShots: [{ screen: 'Home', screenshot: 'design-home.png' }] });
+  await P.runPlaytest({ projectDir: project, adapter: first, url: URL_, execImpl: designClaude({ playtest: shots, judge: { screens: [{ screen: 'Home', score: 8, notes: '' }] } }).execImpl });
+  // Same run, next iteration: its evidence dir is a sibling, so the baselines folder is shared.
+  const second = A.createAdapter('web', {
+    projectDir: tmpDir('lw-pt-adapter-'),
+    runsRoot: path.dirname(path.dirname(first.evidenceDir)),
+    runId: 'run1',
+    iteration: 2,
+    spawn: () => Object.assign(new EventEmitter(), { pid: 4243, stdout: new PassThrough(), stderr: new PassThrough() }),
+    fetch: async () => ({ status: 200 }),
+    sleep: async () => {},
+    execFile: (file, args, options, cb) => cb(null),
+  });
+  await second.start({ adapter: 'web', startCommand: 'npm run dev', url: URL_, readyTimeoutSec: 5 });
+  const res = await P.runPlaytest({ projectDir: project, adapter: second, url: URL_, execImpl: designClaude({ playtest: shots, judge: { screens: [{ screen: 'Home', score: 5, notes: '' }] } }).execImpl });
+  assert.equal(res.report.designMatch[0].previousScore, 8);
+  assert.equal(res.report.designMatch[0].score, 5);
+
+  const broken = await P.runPlaytest({ projectDir: mockupProject(), adapter: await fakeAdapter(), url: URL_, execImpl: designClaude({ playtest: shots, judge: 'not a judgement' }).execImpl });
+  assert.equal(broken.ok, true, 'a judge failure never fails the playtest');
+  assert.equal(broken.report.designMatch[0].score, null);
+  assert.ok(broken.report.designMatch[0].mockup && broken.report.designMatch[0].screenshot, 'the evidence is still there');
+});
+
+test('LW 2.19a: a capture the Playtester did not take is not an entry; the SHIP pass does no design match', async () => {
+  const fake = designClaude({ playtest: full({ designShots: [{ screen: 'Home', screenshot: 'nope.png' }] }), judge: { screens: [] } });
+  const res = await P.runPlaytest({ projectDir: mockupProject(), adapter: await fakeAdapter(), url: URL_, execImpl: fake.execImpl });
+  assert.deepEqual(res.report.designMatch, []);
+  assert.ok(res.report.warnings.some((w) => w.code === 'badDesignShot'));
+  assert.equal(fake.calls.length, 1, 'no pair, no judge call');
+
+  const ship = designClaude({ playtest: full(), judge: { screens: [] } });
+  const shipRes = await P.runPlaytest({ projectDir: mockupProject(), adapter: await fakeAdapter(), url: URL_, mode: 'shipConfirm', execImpl: ship.execImpl });
+  assert.equal(ship.calls.length, 1);
+  assert.doesNotMatch(ship.calls[0].prompt, /Design match/);
+  assert.deepEqual(shipRes.report.designMatch, []);
+});

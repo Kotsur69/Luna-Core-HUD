@@ -612,3 +612,49 @@ test('onRunEnd saves lunaswork-<id>-return.md and attaches it with the screen to
   ]);
   assert.equal(sent.attachments[1].content, buildReturnPack(returnRun(), { forEmail: true }));
 });
+
+// ---- LW 2.26: legal drafts in the return pack ---------------------------------------
+
+const { LEGAL_DRAFT_MARKER, findDraftFiles } = require('../src/lunasworkLegal');
+
+test('LW 2.26: the return pack lists the legal drafts with the DRAFT note; none = no section', () => {
+  const md = buildReturnPack(returnRun(), { legalDrafts: ['src/app/privacy/page.tsx', 'src/components/CookieBanner.tsx'] });
+  assert.match(md, new RegExp(`## Legal text - ${LEGAL_DRAFT_MARKER}`));
+  assert.match(md, /- `src\/app\/privacy\/page\.tsx`\n- `src\/components\/CookieBanner\.tsx`/);
+  assert.match(md, /not legal advice: have it checked/);
+  assert.ok(md.indexOf('## Legal text') < md.indexOf('## Screen tour'), 'before the screen tour');
+  assert.doesNotMatch(buildReturnPack(returnRun()), /## Legal text/);
+  assert.doesNotMatch(buildReturnPack(returnRun(), { legalDrafts: [] }), /## Legal text/);
+});
+
+test('LW 2.26: findDraftFiles finds the marked files and skips node_modules and the design pack', (t) => {
+  const repo = tempDir(t);
+  const write = (rel, body) => {
+    fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
+    fs.writeFileSync(path.join(repo, rel), body);
+  };
+  write('src/app/privacy/page.tsx', `{/* ${LEGAL_DRAFT_MARKER} */}\n<h1>Privacy policy</h1>`);
+  write('src/pages/terms.html', `<!-- ${LEGAL_DRAFT_MARKER} -->`);
+  write('src/app/page.tsx', '<h1>Home</h1>');
+  write('node_modules/x/index.js', LEGAL_DRAFT_MARKER);
+  write('design/TEST_PLAN.md', LEGAL_DRAFT_MARKER);
+  assert.deepEqual(findDraftFiles(repo), ['src/app/privacy/page.tsx', 'src/pages/terms.html']);
+  assert.deepEqual(findDraftFiles('relative/path'), []);
+});
+
+test("LW 2.26: onRunEnd puts the repo's legal drafts into the saved and the mailed return pack", async (t) => {
+  const runsDir = tempDir(t);
+  const repo = tempDir(t);
+  fs.mkdirSync(path.join(repo, 'src'));
+  fs.writeFileSync(path.join(repo, 'src', 'privacy.html'), `<!-- ${LEGAL_DRAFT_MARKER} -->\n<h1>Privacy</h1>`);
+  const mail = fakeMail();
+  const reporter = createLunasWorkReporter({ runsDir: () => runsDir, mail: mail.deps, readFile: () => null, readImage: () => PNG });
+  const run = { ...returnRun(), repoPath: repo };
+  const res = await reporter.onRunEnd(run);
+  const saved = fs.readFileSync(res.returnFile, 'utf8');
+  assert.match(saved, /## Legal text - DRAFT - check before publishing/);
+  assert.match(saved, /- `src\/privacy\.html`/);
+  const attached = mail.sends[0].attachments.find((a) => a.filename.endsWith('-return.md'));
+  assert.match(attached.content, /- `src\/privacy\.html`/);
+  assert.ok(!attached.content.includes(repo), 'repo-relative, never a local path');
+});

@@ -764,3 +764,75 @@ test('a CHANGELOG.md that is not a plain file is never written: a warning, not a
   assert.ok(res.warnings.some((w) => w.code === 'changelogWriteFailed' && w.detail === 'notAFile'));
   assert.ok(!res.written.includes(CHANGELOG_FILE));
 });
+
+// ---- LW 2.19a: design match -> feel card ---------------------------------------------
+
+const DM = require('../src/lunasworkDesignMatch.js');
+
+const match = (over = {}) => ({
+  screen: 'Quote form',
+  route: '/quote/new',
+  mockup: 'C:/ev/iter-3/mockup-quote-form.png',
+  screenshot: 'C:/ev/iter-3/design-quote-form.png',
+  diff: 'C:/ev/iter-3/diff-design-quote-form.png',
+  pixelDiff: 0.31,
+  score: 8,
+  previousScore: null,
+  notes: 'The totals box sits below the table instead of beside it.',
+  ...over,
+});
+const designReport = (designMatch) => ({ ...NOTHING_PASSED, designMatch });
+const designCards = (store) => store.list.filter((c) => c.text.startsWith('Design match:'));
+
+test('LW 2.19a: a low design-match score becomes a feel card naming both images', async () => {
+  const store = memStore();
+  const claude = fakeClaude(envelope(critique({ cards: [] })));
+  const res = await C.runCritic(baseOpts({ todoStore: store, runClaude: claude.run, report: designReport([match({ score: 3 })]) }));
+  assert.equal(res.ok, true);
+  const [c] = designCards(store);
+  assert.ok(c, 'a design-match card');
+  assert.match(c.text, /^Design match: "Quote form" scores 3\/10 against its mockup/);
+  assert.ok(c.tags.includes('kind:feel') && c.tags.includes(RUN_TAG));
+  assert.ok(c.tags.includes('sev:high'), 'under 4/10 is high');
+  assert.match(c.details, /Mockup: C:\/ev\/iter-3\/mockup-quote-form\.png/);
+  assert.match(c.details, /Screenshot: C:\/ev\/iter-3\/design-quote-form\.png/);
+  assert.match(c.details, /Diff: .*31\.0% of the grid differs/);
+  assert.match(c.details, /totals box sits below the table/);
+  assert.equal(res.cards.created.length, 1);
+});
+
+test('LW 2.19a: a big drop vs the previous iteration is a feel card even at a passable score', async () => {
+  const store = memStore();
+  const claude = fakeClaude(envelope(critique({ cards: [] })));
+  await C.runCritic(baseOpts({ todoStore: store, runClaude: claude.run, report: designReport([match({ score: 7, previousScore: 9 })]) }));
+  const [c] = designCards(store);
+  assert.match(c.text, /dropped from 9\/10 to 7\/10/);
+  assert.ok(c.tags.includes('sev:medium'));
+});
+
+test('LW 2.19a: a good, steady score, a small dip or no score makes no card', () => {
+  assert.deepEqual(DM.designMatchCards([
+    match({ score: 8 }),
+    match({ screen: 'Home', score: 7, previousScore: 8 }),
+    match({ screen: 'List', score: null }),
+    match({ screen: 'Bad', score: 2, mockup: null }),
+  ]), []);
+  assert.equal(DM.designMatchCards([match({ score: DM.LOW_SCORE - 0.5 })]).length, 1);
+  assert.equal(DM.designMatchCards([match({ score: 8, previousScore: 8 + DM.DROP_POINTS })]).length, 1);
+});
+
+test("LW 2.19a: an open card about the same screen is updated, not doubled; the model's own rewrite wins", async () => {
+  const open = { text: 'Design match: "Quote form" scores 4/10 against its mockup', done: false, at: 77, tags: [RUN_TAG, 'kind:feel', 'sev:medium'] };
+  const store = memStore([open]);
+  const claude = fakeClaude(envelope(critique({ cards: [] })));
+  const res = await C.runCritic(baseOpts({ todoStore: store, runClaude: claude.run, report: designReport([match({ score: 2 })]) }));
+  assert.equal(designCards(store).length, 1);
+  assert.match(store.list.find((c) => c.at === 77).text, /scores 2\/10/);
+  assert.deepEqual(res.cards.updated.map((c) => c.at), [77]);
+
+  const rewritten = memStore([open]);
+  const own = fakeClaude(envelope(critique({ cards: [card({ text: 'Quote form layout off', updatesCardId: 77 })] })));
+  await C.runCritic(baseOpts({ todoStore: rewritten, runClaude: own.run, report: designReport([match({ score: 2 })]) }));
+  assert.equal(rewritten.list.find((c) => c.at === 77).text, 'Quote form layout off');
+  assert.equal(rewritten.list.length, 1, 'no second card for the same screen');
+});

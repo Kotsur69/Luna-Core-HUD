@@ -34,6 +34,8 @@
 //   4. LW 2.18: the "while you were away" return pack
 //      (src/lunasworkReturn.js), saved as <runsDir>/lunaswork-<id>-return.md
 //      and attached to the run email with the screen tour's screenshots.
+//      LW 2.26: it lists the repo's legal drafts (files marked "DRAFT -
+//      check before publishing", lunasworkLegal.findDraftFiles).
 //
 // Both emails list the run's feedback items with their status
 // (lunasworkFeedback.emailLines).
@@ -55,6 +57,7 @@ const { emailLines: feedbackLines } = require('./lunasworkFeedback');
 const { decisionLine } = require('./lunasworkDecisions');
 const { buildReturnPack } = require('./lunasworkReturn');
 const { createMilestoneMailer, screenshotAttachments } = require('./lunasworkMail');
+const { findDraftFiles } = require('./lunasworkLegal');
 
 // The run email carries the HTML report and the return pack: room for three screenshots (gmailsend caps at 5).
 const RUN_MAIL_IMAGES = 3;
@@ -504,6 +507,17 @@ function createLunasWorkReporter(deps) {
     });
   // One send at a time per run, on top of the persisted mark.
   const inFlight = new Set();
+  const findDrafts = typeof deps.findDrafts === 'function' ? deps.findDrafts : findDraftFiles;
+
+  /** LW 2.26: the repo's legal drafts for the return pack; [] when they cannot be listed. */
+  function legalDrafts(run) {
+    try {
+      return run.repoPath ? findDrafts(run.repoPath) : [];
+    } catch (err) {
+      log(`[lunaswork] legal drafts not listed: ${errText(err)}`);
+      return [];
+    }
+  }
 
   /** Writes the .md, the -return.md (LW 2.18) and the .html. */
   function writeReports(run) {
@@ -516,7 +530,7 @@ function createLunasWorkReporter(deps) {
       log(`[lunaswork] report not written: ${errText(err)}`);
     }
     try {
-      writeFile(`${base}-return.md`, buildReturnPack(run));
+      writeFile(`${base}-return.md`, buildReturnPack(run, { legalDrafts: legalDrafts(run) }));
       out.returnFile = `${base}-return.md`;
     } catch (err) {
       log(`[lunaswork] return pack not written: ${errText(err)}`);
@@ -565,7 +579,7 @@ function createLunasWorkReporter(deps) {
         const shots = screenshotAttachments(run, { max: RUN_MAIL_IMAGES, readImage: deps.readImage });
         const attachments = [
           ...(htmlText ? [{ filename: `lunaswork-run-${run.id}.html`, mimeType: 'text/html', content: htmlText }] : []),
-          { filename: `lunaswork-${run.id}-return.md`, mimeType: 'text/markdown', content: buildReturnPack(run, { forEmail: true }) },
+          { filename: `lunaswork-${run.id}-return.md`, mimeType: 'text/markdown', content: buildReturnPack(run, { forEmail: true, legalDrafts: legalDrafts(run) }) },
           ...shots.map(({ filename, mimeType, content }) => ({ filename, mimeType, content })),
         ];
         await m.sender.send({ subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) });
