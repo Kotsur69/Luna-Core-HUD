@@ -43,6 +43,7 @@ const FAIL_CODES = new Set([
   'noTodos', 'busy', 'runActive', 'noClaude', 'noRepo', 'timeout', 'budget', 'limit', 'badJson', 'failed',
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
   'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile', 'badOptions', 'noneSelected',
+  'lunasWorkActive',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Integration errors with their own message (orchestraFinalize / Integrate).

@@ -34,7 +34,7 @@ function fakeIpc() {
   };
 }
 
-function setup({ createSession, writeBrief, now } = {}) {
+function setup({ createSession, writeBrief, now, controller } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-ipc-'));
   const repo = path.join(dir, 'repo');
   fs.mkdirSync(repo);
@@ -54,6 +54,7 @@ function setup({ createSession, writeBrief, now } = {}) {
     writeBrief: writeBrief || ((file, text) => (briefs.push({ file, text }), fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, text), true)),
     resolveDir: (p) => (fs.existsSync(p) ? p : null),
     now: now || (() => 1_000_000),
+    ...(controller ? { controller } : {}),
   });
   return { dir, repo, ipc, sessions, briefs, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
@@ -247,4 +248,78 @@ test('startInterview reports a failed brief write or tab instead of throwing', a
   const c = setup({ createSession: () => { throw new Error('boom'); } });
   assert.deepEqual(await c.ipc.invoke('lunaswork:startInterview', { projectId: 'game' }), { ok: false, reason: 'failed' });
   c.done();
+});
+
+// ---- run: start / stop / status --------------------------------------------------------
+
+function fakeController() {
+  const c = {
+    starts: [],
+    stops: 0,
+    start: async (payload) => (c.starts.push(payload), { ok: true, status: { active: true } }),
+    stop: () => ((c.stops += 1), { ok: true, status: { active: false } }),
+    status: () => ({ active: false, runId: null }),
+  };
+  return c;
+}
+
+test('with a run controller, start / stop / status are registered too', () => {
+  const s = setup({ controller: fakeController() });
+  assert.deepEqual(s.ipc.channels().sort(), [...CHANNELS, 'lunaswork:start', 'lunaswork:stop', 'lunaswork:status'].sort());
+  s.done();
+});
+
+test('start refuses a malformed or unknown project and bad models before the controller sees it', async () => {
+  const controller = fakeController();
+  const s = setup({ controller });
+  for (const req of BAD_REQUESTS) {
+    assert.deepEqual(await s.ipc.invoke('lunaswork:start', req), { ok: false, reason: 'bad-project' }, JSON.stringify(req));
+  }
+  assert.deepEqual(await s.ipc.invoke('lunaswork:start', { projectId: 'game', models: { builder: 'gpt' } }), { ok: false, reason: 'bad-models' });
+  assert.deepEqual(await s.ipc.invoke('lunaswork:start', { projectId: 'game', models: 'opus' }), { ok: false, reason: 'bad-models' });
+  assert.equal(controller.starts.length, 0);
+  s.done();
+});
+
+test('start passes only the project id and the validated run models; nothing else of the payload', async () => {
+  const controller = fakeController();
+  const s = setup({ controller });
+  const res = await s.ipc.invoke('lunaswork:start', {
+    projectId: 'game',
+    models: { builder: 'auto', critic: 'sonnet' },
+    repoPath: 'C:/Windows',
+    startCommand: 'format c:',
+  });
+  assert.equal(res.ok, true);
+  assert.deepEqual(controller.starts, [{ projectId: 'game', models: { builder: 'auto', critic: 'sonnet' } }]);
+  await s.ipc.invoke('lunaswork:start', { projectId: 'game' });
+  assert.deepEqual(controller.starts[1], { projectId: 'game' });
+  s.done();
+});
+
+test('stop and status take no payload; a throwing controller is a plain failure', async () => {
+  const controller = fakeController();
+  const s = setup({ controller });
+  assert.equal((await s.ipc.invoke('lunaswork:stop', { projectId: 'anything' })).ok, true);
+  assert.equal(controller.stops, 1);
+  assert.deepEqual(await s.ipc.invoke('lunaswork:status'), { ok: true, status: { active: false, runId: null } });
+  s.done();
+
+  const broken = setup({
+    controller: {
+      start: async () => {
+        throw new Error('boom');
+      },
+      stop: () => {
+        throw new Error('boom');
+      },
+      status: () => {
+        throw new Error('boom');
+      },
+    },
+  });
+  assert.deepEqual(await broken.ipc.invoke('lunaswork:start', { projectId: 'game' }), { ok: false, reason: 'failed' });
+  assert.deepEqual(await broken.ipc.invoke('lunaswork:stop'), { ok: false, reason: 'failed' });
+  assert.deepEqual(await broken.ipc.invoke('lunaswork:status'), { ok: false, reason: 'failed' });
+  broken.done();
 });

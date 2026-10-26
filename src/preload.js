@@ -397,6 +397,18 @@ contextBridge.exposeInMainWorld('lunacore', {
   lunasworkPackStatus: (projectId) => ipcRenderer.invoke('lunaswork:packStatus', { projectId }),
   /** Scaffolds design/ and opens the interview tab. Promise<{ok, pack} | {ok:false, reason}>. */
   lunasworkStartInterview: (projectId) => ipcRenderer.invoke('lunaswork:startInterview', { projectId }),
+  /** models: optional {role: choice} for this run only. Main confirms natively. Promise<{ok, status} | {ok:false, reason, message?}>. */
+  lunasworkStart: (projectId, models) => ipcRenderer.invoke('lunaswork:start', models === undefined ? { projectId } : { projectId, models }),
+  /** The kill switch: the running step finishes, then STOP. Promise<{ok, status} | {ok:false, reason, message}>. */
+  lunasworkStop: () => ipcRenderer.invoke('lunaswork:stop'),
+  /** Promise<{ok, status}>. */
+  lunasworkStatus: () => ipcRenderer.invoke('lunaswork:status'),
+  /** status on every phase transition, wait and stop. Returns an unsubscribe function. */
+  onLunasworkChanged: (cb) => {
+    const listener = (_e, status) => cb(status);
+    ipcRenderer.on('lunaswork:changed', listener);
+    return () => ipcRenderer.removeListener('lunaswork:changed', listener);
+  },
   // Weekly review (src/weeklyipc.js). A week key and a model only; main
   // decides what is collected, what the model is asked and where mail goes.
   /** Promise<{ok, weeks, entry, model, models, current, generatable, busy, mailOn, gmail}>. */
