@@ -779,6 +779,8 @@ async function runCritic(opts) {
       ok: true,
       verdict,
       cards: { created: applied.created, updated: applied.updated },
+      // The DECISIONS.md lines of this pass, for the run report.
+      decisions: critique.decisions,
       written: packResult.written,
       warnings: [...critique.warnings, ...applied.warnings, ...packResult.warnings],
       errors: applied.error ? [{ code: 'cardsNotSaved', detail: applied.error }] : [],

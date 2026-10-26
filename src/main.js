@@ -1214,6 +1214,9 @@ const lunaswork = createLunasWorkRuntime({
     return response === 0;
   },
   powerSaveBlocker,
+  // Run report (<userDir>/runs/lunaswork-<id>.md + .html) and the run-end email.
+  runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+  mail: { sender: reportMail.sender, prefs: reportMail.prefs },
   log: (line) => console.info(line),
 });
 /** God Mode's side of the mutual exclusion for actions on the current plan: a refusal, or null. */

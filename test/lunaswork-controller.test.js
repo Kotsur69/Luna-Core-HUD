@@ -1274,6 +1274,104 @@ test('a limited SHIP pass waits for the reset (no free fallback for it)', async 
   assert.equal(h.calls.critic.length, 1, 'the Critic is not asked again');
 });
 
+// ---- checkpoints (deps.checkpoints, src/lunasworkCheckpoint.js) ----------------------
+
+/** A fake checkpoint dep; `rollbackAnswer` is what rollback() returns. */
+function fakeCheckpoints(rollbackAnswer) {
+  const cp = { tags: [], rollbacks: [] };
+  cp.dep = {
+    tagIteration: async (o) => {
+      cp.tags.push(o);
+      return { ok: true, tag: `luna-work/${o.runId}/iter-${o.iteration}`, sha: 'a'.repeat(40) };
+    },
+    rollback: async (o) => {
+      cp.rollbacks.push(o);
+      return rollbackAnswer || {
+        ok: true,
+        fromTag: `luna-work/${o.runId}/iter-${o.iteration}-rolled-back`,
+        toTag: `luna-work/${o.runId}/iter-${o.toIteration}`,
+        reverted: [{ sha: 'b'.repeat(40), subject: 'Merge package pk' }],
+        cards: [99],
+        decision: true,
+      };
+    },
+  };
+  return cp;
+}
+
+const oneCardEach = (h) => () => ({ ok: true, cards: [h.todos.find((t) => !t.done)], model: 'opus', modelReason: 'setting' });
+
+test('checkpoints: a green iteration is tagged; a score drop past the margin is rolled back', async () => {
+  const cp = fakeCheckpoints();
+  const todos = Array.from({ length: 4 }, (_, i) => card(i + 1));
+  const h = harness({ todos, scores: [60, 30], deps: { checkpoints: cp.dep } });
+  h.next.director.push(oneCardEach(h), oneCardEach(h), STOP_CARD);
+  await h.start();
+  assert.deepEqual(cp.tags.map((t) => t.iteration), [1], 'the rolled-back iteration is not tagged');
+  assert.equal(cp.rollbacks.length, 1);
+  const call = cp.rollbacks[0];
+  assert.equal(call.iteration, 2);
+  assert.equal(call.toIteration, 1);
+  assert.equal(call.reason, 'scoreDrop');
+  assert.equal(call.evidence.scoreBefore, 60);
+  assert.equal(call.evidence.scoreNow, 30);
+  assert.deepEqual(call.evidence.cards, ['card 2']);
+  // The rolled-back iteration's card is open again; iteration 1's stays done.
+  assert.equal(h.todos.find((t) => t.at === 2).done, false);
+  assert.equal(h.todos.find((t) => t.at === 1).done, true);
+  const run = h.ended[0];
+  assert.deepEqual(run.history.map((r) => r.rolledBack), [false, true]);
+  assert.equal(run.laps.length, 2);
+  assert.equal(run.laps[0].checkpoint.tag, 'luna-work/lwtest1/iter-1');
+  assert.equal(run.laps[1].checkpoint.rollback.ok, true);
+  assert.equal(run.laps[1].checkpoint.rollback.toTag, 'luna-work/lwtest1/iter-1');
+  assert.match(run.laps[1].checkpoint.rollback.why, /fell from 60 to 30/);
+  assert.deepEqual(run.laps[1].checkpoint.rollback.reopened, [2]);
+  assert.ok(h.ctl.runLog().some((e) => /rolled back luna-work\/lwtest1\/iter-2-rolled-back -> luna-work\/lwtest1\/iter-1/.test(e.text || '')));
+});
+
+test('checkpoints: only a journey that passed before rolls back; one that never passed does not', async () => {
+  const cp = fakeCheckpoints();
+  const h = harness({ todos: Array.from({ length: 6 }, (_, i) => card(i + 1)), scores: [50, 50, 50], deps: { checkpoints: cp.dep } });
+  const journeys = (login) => (o) => ({
+    ok: true,
+    model: 'sonnet',
+    modelReason: 'exploratory pass',
+    report: { mode: o.mode, findings: [], scores: [], screens: [], journeys: [{ name: 'login', passed: login }, { name: 'export', passed: false }] },
+  });
+  h.next.playtest.push(journeys(true), journeys(true), journeys(false));
+  h.next.director.push(DEFAULT, DEFAULT, DEFAULT, STOP_CARD);
+  await h.start();
+  assert.deepEqual(cp.tags.map((t) => t.iteration), [1, 2], '"export" never passed: no rollback for it');
+  assert.equal(cp.rollbacks.length, 1);
+  assert.equal(cp.rollbacks[0].reason, 'coreJourneyBroken');
+  assert.equal(cp.rollbacks[0].toIteration, 2);
+  assert.deepEqual(cp.rollbacks[0].evidence.failedJourneys.map((j) => j.name), ['login']);
+});
+
+test('checkpoints: a failed rollback keeps the iteration and its cards, and is reported', async () => {
+  const cp = fakeCheckpoints({ ok: false, error: 'pushFailed', detail: 'rejected', fromTag: 'f', toTag: 't' });
+  const todos = Array.from({ length: 4 }, (_, i) => card(i + 1));
+  const h = harness({ todos, scores: [60, 30], deps: { checkpoints: cp.dep } });
+  h.next.director.push(oneCardEach(h), oneCardEach(h), STOP_CARD);
+  await h.start();
+  const run = h.ended[0];
+  assert.deepEqual(run.history.map((r) => r.rolledBack), [false, false]);
+  assert.equal(run.laps[1].checkpoint.rollback.ok, false);
+  assert.equal(run.laps[1].checkpoint.rollback.error, 'pushFailed');
+  assert.equal(h.todos.find((t) => t.at === 2).done, true, 'nothing reverted, nothing reopened');
+});
+
+test('checkpoints: a red iteration is neither tagged nor rolled back', async () => {
+  const cp = fakeCheckpoints();
+  const h = harness({ scores: [40, 60], deps: { checkpoints: cp.dep } });
+  h.next.build.push(redBuild(), redBuild());
+  await h.start();
+  assert.equal(h.ctl.status().verdict, 'red');
+  assert.equal(cp.tags.length, 0);
+  assert.equal(cp.rollbacks.length, 0);
+});
+
 test('a `stop` steer card is closed once it stopped the run', async () => {
   const stopCard = { at: 9, text: 'stop', done: false, tags: ['steer'] };
   const h = harness({ todos: [card(1), stopCard] });

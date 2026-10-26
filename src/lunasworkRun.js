@@ -11,6 +11,9 @@
 //   SHIP          shipAgrees (the second, fresh Playtester)
 //   stored run    restoreRun and the clean* helpers for what comes back from
 //                 lunaswork.local.json; emptyCurrent, scoresByMilestone
+//   laps          buildLap / cleanLap - one summary per finished iteration
+//                 (cards, score, merge, checkpoint tag or rollback, evidence
+//                 folder, decisions) for the run report (lunasworkReport.js)
 // ============================================================================
 
 'use strict';
@@ -38,6 +41,9 @@ const MAX_TEXT_CHARS = 2000;
 const MAX_REPORT_ITEMS = 100;
 const MAX_ITEMS = 50;
 const MAX_PLAN_IDS = 50;
+const MAX_LAPS = 200;
+const MAX_DECISIONS = 20;
+const SHA_RE = /^[0-9a-f]{7,40}$/;
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
@@ -247,14 +253,28 @@ function cleanMilestone(raw) {
   return { name: raw.name.slice(0, 200), passed: raw.passed === true, score: finite(raw.score) };
 }
 
+function cleanDecisions(raw) {
+  return (Array.isArray(raw) ? raw : [])
+    .filter((d) => isObj(d) && str(d.choice, 1) && str(d.because, 1))
+    .slice(0, MAX_DECISIONS)
+    .map((d) => ({ choice: str(d.choice, MAX_LOG_TEXT), because: str(d.because, MAX_LOG_TEXT) }));
+}
+
+/** A count: an integer, or the length of a list (the Critic answers with card lists). */
+const countOf = (v) => (Array.isArray(v) ? v.length : Number.isInteger(v) && v > 0 ? v : 0);
+
 function cleanCritic(raw) {
   if (!isObj(raw)) return null;
+  const cards = isObj(raw.cards) ? raw.cards : {};
   return {
     ok: raw.ok === true,
     verdict: raw.verdict === 'ship' ? 'ship' : 'continue',
     milestone: cleanMilestone(raw.milestone),
     next: str(raw.next, 200),
     allPassed: raw.allPassed === true,
+    cardsOpened: countOf(raw.cardsOpened !== undefined ? raw.cardsOpened : cards.created),
+    cardsUpdated: countOf(raw.cardsUpdated !== undefined ? raw.cardsUpdated : cards.updated),
+    decisions: cleanDecisions(raw.decisions),
     ...(str(raw.error, 100) ? { error: str(raw.error, 100) } : {}),
   };
 }
@@ -288,11 +308,123 @@ function cleanSmall(raw, keys) {
   return out;
 }
 
+// ---- checkpoints and laps -----------------------------------------------------------
+
+const ats = (v) => (Array.isArray(v) ? v.filter(Number.isFinite).slice(0, MAX_ITEMS) : []);
+const names = (v) => (Array.isArray(v) ? v.filter((n) => typeof n === 'string' && n).slice(0, MAX_ITEMS).map((n) => n.slice(0, 200)) : []);
+
+/** A rollback record (lunasworkCheckpoint.rollback result plus why), or null. */
+function cleanRollback(raw) {
+  if (!isObj(raw)) return null;
+  const reverted = (Array.isArray(raw.reverted) ? raw.reverted : [])
+    .filter((c) => isObj(c) && typeof c.sha === 'string' && SHA_RE.test(c.sha))
+    .slice(0, MAX_ITEMS)
+    .map((c) => ({ sha: c.sha, subject: str(c.subject, 200) || '' }));
+  return {
+    ok: raw.ok === true,
+    ...(Number.isInteger(raw.toIteration) ? { toIteration: raw.toIteration } : {}),
+    reason: str(raw.reason, 40) || 'rollback',
+    why: str(raw.why, MAX_LOG_TEXT),
+    fromTag: str(raw.fromTag, 200),
+    toTag: str(raw.toTag, 200),
+    reverted,
+    cards: ats(raw.cards),
+    reopened: ats(raw.reopened),
+    decision: raw.decision === true,
+    ...(str(raw.error, 100) ? { error: str(raw.error, 100) } : {}),
+    ...(str(raw.detail, MAX_LOG_TEXT) ? { detail: str(raw.detail, MAX_LOG_TEXT) } : {}),
+  };
+}
+
+/** What the checkpoint step did in an iteration: a tag, a rollback, or a note. */
+function cleanCheckpoint(raw) {
+  if (!isObj(raw)) return null;
+  return {
+    tag: str(raw.tag, 200),
+    tagError: str(raw.tagError, 100),
+    rollback: cleanRollback(raw.rollback),
+    note: str(raw.note, MAX_LOG_TEXT),
+  };
+}
+
+function cleanLap(raw) {
+  if (!isObj(raw) || !Number.isInteger(raw.n) || raw.n < 1) return null;
+  const opt = (key, v) => (v === null || v === undefined || v === '' ? {} : { [key]: v });
+  return {
+    n: raw.n,
+    milestone: str(raw.milestone, 200),
+    score: finite(raw.score),
+    cardsPlanned: countOf(raw.cardsPlanned),
+    cardsClosed: ats(raw.cardsClosed),
+    cardsOpened: countOf(raw.cardsOpened),
+    cardsUpdated: countOf(raw.cardsUpdated),
+    selfCheck: raw.selfCheck === 'red' ? 'red' : 'green',
+    skipped: raw.skipped === true,
+    ...opt('buildError', str(raw.buildError, MAX_LOG_TEXT)),
+    ...opt('integrationBranch', str(raw.integrationBranch, 200)),
+    ...opt('fixups', finite(raw.fixups)),
+    ...opt('playtestOk', typeof raw.playtestOk === 'boolean' ? raw.playtestOk : null),
+    ...opt('playtestError', str(raw.playtestError, 100)),
+    criticVerdict: raw.criticVerdict === 'ship' ? 'ship' : 'continue',
+    ...opt('shipAgrees', typeof raw.shipAgrees === 'boolean' ? raw.shipAgrees : null),
+    checkpoint: cleanCheckpoint(raw.checkpoint),
+    rolledBack: raw.rolledBack === true,
+    journeysPassed: names(raw.journeysPassed),
+    journeysFailed: names(raw.journeysFailed),
+    decisions: cleanDecisions(raw.decisions),
+    evidenceDir: typeof raw.evidenceDir === 'string' && path.isAbsolute(raw.evidenceDir) ? raw.evidenceDir.slice(0, MAX_PATH_CHARS) : null,
+  };
+}
+
+/**
+ * One finished iteration for the run report, from the iteration's progress
+ * (run.current) and its history record.
+ * @param {object} current run.current at the end of the iteration
+ * @param {object} record the history record (lunasworkRules shape)
+ * @param {{evidenceDir?:string|null}} [extra]
+ */
+function buildLap(current, record, extra = {}) {
+  const c = isObj(current) ? current : {};
+  const build = isObj(c.build) ? c.build : {};
+  const critic = isObj(c.critic) ? c.critic : {};
+  const journeys = isObj(c.report) && Array.isArray(c.report.journeys) ? c.report.journeys.filter(isObj) : [];
+  return cleanLap({
+    n: record.n,
+    milestone: record.milestone,
+    score: record.score,
+    cardsPlanned: (c.cards || []).length,
+    cardsClosed: build.closed,
+    cardsOpened: critic.cardsOpened,
+    cardsUpdated: critic.cardsUpdated,
+    selfCheck: record.selfCheck,
+    skipped: build.skipped,
+    buildError: build.error,
+    integrationBranch: build.integrationBranch,
+    fixups: build.fixups,
+    playtestOk: c.playtest ? c.playtest.ok : null,
+    playtestError: c.playtest ? c.playtest.error : null,
+    criticVerdict: critic.verdict,
+    shipAgrees: c.ship ? c.ship.agrees : null,
+    checkpoint: c.checkpoint,
+    rolledBack: record.rolledBack,
+    journeysPassed: journeys.filter((j) => j.passed === true).map((j) => j.name),
+    journeysFailed: journeys.filter((j) => j.passed === false).map((j) => j.name),
+    decisions: critic.decisions,
+    evidenceDir: extra.evidenceDir,
+  });
+}
+
+function cleanLaps(raw) {
+  const byN = new Map();
+  for (const lap of (Array.isArray(raw) ? raw : []).map(cleanLap)) if (lap) byN.set(lap.n, lap);
+  return [...byN.values()].sort((a, b) => a.n - b.n).slice(-MAX_LAPS);
+}
+
 const BUILD_KEYS = { selfCheck: 'str', error: 'str', integrationBranch: 'str', fixups: 'num', closed: 'ats', skipped: 'bool' };
 const PASS_KEYS = { ok: 'bool', agrees: 'bool', error: 'str', model: 'str', reason: 'str' };
 
 function emptyCurrent() {
-  return { cards: [], notes: null, planId: null, build: null, launch: null, report: null, playtest: null, critic: null, ship: null };
+  return { cards: [], notes: null, planId: null, build: null, launch: null, report: null, playtest: null, critic: null, ship: null, checkpoint: null };
 }
 
 function cleanCurrent(raw) {
@@ -309,6 +441,8 @@ function cleanCurrent(raw) {
     playtest: cleanSmall(c.playtest, PASS_KEYS),
     critic: cleanCritic(c.critic),
     ship: cleanSmall(c.ship, PASS_KEYS),
+    // Saved before the iteration ends: a restart never tags or reverts twice.
+    checkpoint: cleanCheckpoint(c.checkpoint),
   };
 }
 
@@ -361,6 +495,8 @@ function restoreRun(raw) {
         ? { phase: raw.failures.phase, count: raw.failures.count }
         : null,
     // Every God Mode plan this run made: only those may be replaced by its next build.
+    // One summary per finished iteration (the run report).
+    laps: cleanLaps(raw.laps),
     planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
       .filter((id) => typeof id === 'string' && id && id.length <= 100)
       .slice(-MAX_PLAN_IDS),
@@ -402,6 +538,11 @@ module.exports = {
   cleanCritic,
   cleanReport,
   cleanSmall,
+  cleanRollback,
+  cleanCheckpoint,
+  buildLap,
+  cleanLap,
+  cleanLaps,
   emptyCurrent,
   restoreRun,
   scoresByMilestone,

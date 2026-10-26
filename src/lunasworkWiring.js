@@ -11,6 +11,9 @@
 //   usage limits    orchestraPlanWait.planWaitDecision for the resume time
 //   keep awake      an Electron powerSaveBlocker for the run's length
 //   checkout sync   fetch + ff-only after each build (the merge went to origin)
+//   checkpoints     lunasworkCheckpoint: iteration tags, revert-only rollback
+//   run report      lunasworkReport on onRunEnd: <runsDir>/lunaswork-<id>.md
+//                   + .html, and one email under "Email me when a run finishes"
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -29,6 +32,9 @@ const { createAdapter } = require('./lunasworkAdapters');
 const { planWaitDecision } = require('./orchestraPlanWait');
 const { getProject } = require('./projects');
 const { createLunasWork } = require('./lunaswork');
+const { createCheckpoints } = require('./lunasworkCheckpoint');
+const { createLunasWorkReporter } = require('./lunasworkReport');
+const { godmodeEmailOn } = require('./mailprefs');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -98,6 +104,7 @@ function createAwake(powerSaveBlocker) {
  *   confirmStart: (ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
+ *   runsDir?: ()=>string, mail?: {sender:object, prefs:object},
  * }} ctx
  */
 function createLunasWorkRuntime(ctx) {
@@ -135,6 +142,14 @@ function createLunasWorkRuntime(ctx) {
     return decision.action === 'wait' ? decision.resumeAt : null;
   };
 
+  const reporter = ctx.runsDir
+    ? createLunasWorkReporter({
+      runsDir: ctx.runsDir,
+      mail: ctx.mail ? { sender: ctx.mail.sender, prefs: ctx.mail.prefs, enabled: godmodeEmailOn } : undefined,
+      log: ctx.log,
+    })
+    : null;
+
   return createLunasWork({
     store: { load: lunasworkStore.loadRun, save: lunasworkStore.saveRun },
     settings: () => settingsStore.readSettings(),
@@ -154,9 +169,10 @@ function createLunasWorkRuntime(ctx) {
     critic: (opts) => runCritic({ ...opts, env: ctx.env() }),
     gitLog,
     syncCheckout,
+    checkpoints: createCheckpoints({ log: ctx.log }),
     limitResumeAt,
     awake: createAwake(ctx.powerSaveBlocker),
-    onRunEnd: ctx.onRunEnd || [],
+    onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
     log: ctx.log,
   });
 }
