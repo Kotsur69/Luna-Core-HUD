@@ -325,7 +325,16 @@ doc becomes `DONE_LUNAS_WORK_PLAN.md`.
     as iteration 0; profile defaults confirmed at start) and
     `lunasworkMachine.js` (watchdog task + `--lunaswork-watchdog`, Windows
     Update pause/restore, evidence + worktree cleanup, low-disk stop + email).
-11. **"Hand me the wheel" (C11).**
+11. ✅ **"Hand me the wheel" (C11).** HUD panel and phone buttons: the run
+    pauses at the end of the current iteration (persisted phase `handed`,
+    app stopped, no step runs; a run waiting on a usage limit before its
+    Director is handed at once). Usage-limit waits and decision deadlines
+    keep ticking. Hand-back: `lunasworkHandback.js` reads every commit since
+    the pause (git log + numstat) into one `DECISIONS.md` line each ("Mati
+    changed X by hand") and a "Manual changes" section in `ARCHITECTURE.md`,
+    then the run goes on from directing. The phone writes
+    `lunaswork-wheel:<id>` units through the `todos` outbox
+    (`lunasworkWheel.js`); the PC applies the newest of its run once.
 
 ### Phase 2 — scale
 

@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-const SHARED = /[\\/]src[\\/](cloudrows|missionledger(sync|calc)|missionnewsrows|missionweather|ratecalc|lifeyaziopeers|usagesnapshot|repossnapshot|godmodesnapshot|godmodeneeds|lunasworkDecisions|lunasworkFeedback|hostcanon|hostsnapshot|hostevents|hostscrub|todorows|efforts|lifebudget[a-z]*)\.js$/;
+const SHARED = /[\\/]src[\\/](cloudrows|missionledger(sync|calc)|missionnewsrows|missionweather|ratecalc|lifeyaziopeers|usagesnapshot|repossnapshot|godmodesnapshot|godmodeneeds|lunasworkDecisions|lunasworkFeedback|lunasworkWheel|hostcanon|hostsnapshot|hostevents|hostscrub|todorows|efforts|lifebudget[a-z]*)\.js$/;
 const SUPABASE_RE = /^https:\/\/[a-z0-9-]{1,63}\.supabase\.co$/;
 
 /**

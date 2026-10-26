@@ -26,10 +26,12 @@ const { keyFor } = require('./todo');
 const { MAX_DETAILS_CHARS, MAX_TEXT_CHARS: MAX_CARD_TEXT_CHARS } = require('./todorows');
 const { restoreQueue } = require('./lunasworkDecisions');
 const { restoreFeedback } = require('./lunasworkFeedback');
+const { HANDED } = require('./lunasworkWheel');
 
 const PREPROD = 'preprod';
 const DONE = 'done';
-const ALL_PHASES = [PREPROD, ...PHASES, DONE];
+// C11: `handed` - paused between iterations while Mati works by hand.
+const ALL_PHASES = [PREPROD, ...PHASES, HANDED, DONE];
 const FINAL_VERDICTS = ['ship', 'plateau', 'red', 'stop'];
 const BUILDER_MODELS = ['haiku', 'sonnet', 'opus'];
 const MODEL_SOURCES = ['run', 'project', 'global'];
@@ -583,6 +585,14 @@ function restoreRun(raw) {
     // B4: failed iterations per card; B9: quarantined flaky tests, per run.
     failCounts: cleanFailCounts(raw.failCounts),
     quarantine: cleanQuarantine(raw.quarantine),
+    // C11 "Hand me the wheel": asked for (pauses at the end of the iteration),
+    // when it was handed and main's commit then, a hand-back under way, and
+    // the newest phone wheel action applied (never applied twice).
+    handRequested: phase !== DONE && raw.handRequested === true,
+    handedAt: phase === HANDED ? finite(raw.handedAt) : null,
+    handBase: phase === HANDED && typeof raw.handBase === 'string' && SHA_RE.test(raw.handBase) ? raw.handBase : null,
+    handBackRequested: phase === HANDED && raw.handBackRequested === true,
+    wheelSeq: Number.isSafeInteger(raw.wheelSeq) && raw.wheelSeq > 0 ? raw.wheelSeq : 0,
     planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
       .filter((id) => typeof id === 'string' && id && id.length <= 100)
       .slice(-MAX_PLAN_IDS),
@@ -602,6 +612,7 @@ function scoresByMilestone(history) {
 
 module.exports = {
   PREPROD,
+  HANDED,
   DONE,
   ALL_PHASES,
   MAX_PLAN_IDS,

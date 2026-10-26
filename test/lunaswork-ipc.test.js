@@ -12,7 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { registerLunasworkIpc, parseModels, parseProfile, parseSteerText, fieldOf, INTERVIEW_GAP_MS } = require('../src/lunasworkipc');
+const { registerLunasworkIpc, parseModels, parseProfile, parseSteerText, parseWheelRequest, fieldOf, INTERVIEW_GAP_MS } = require('../src/lunasworkipc');
 const { publicStatus, publicEvent, evidenceDirOf } = require('../src/lunasworkStatus');
 const { DEFAULT_MODELS } = require('../src/lunasworkRules');
 const { DESIGN_DIR } = require('../src/lunasworkPack');
@@ -502,4 +502,72 @@ test('saveSettings stores a project model override from the start dialog; null c
   const cleared = await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', projectModels: null });
   assert.deepEqual(cleared.projectModels, {});
   s.done();
+});
+
+// ---- hand me the wheel (C11) --------------------------------------------------------
+
+test('parseWheelRequest: nothing, or {runId} naming a run - anything else is refused', () => {
+  assert.deepEqual(parseWheelRequest(undefined), {});
+  assert.deepEqual(parseWheelRequest(null), {});
+  assert.deepEqual(parseWheelRequest({}), {});
+  assert.deepEqual(parseWheelRequest({ runId: 'lwabc123' }), { runId: 'lwabc123' });
+  for (const bad of ['lwabc', 42, [], { runId: '' }, { runId: 'LW-1' }, { runId: 'x'.repeat(41) }, { runId: 7 }, { runId: 'lwa', projectId: 'game' }, { repoPath: 'C:/' }]) {
+    assert.equal(parseWheelRequest(bad), null, JSON.stringify(bad));
+  }
+});
+
+function wheelController() {
+  const c = {
+    ...fakeController(),
+    wheel: [],
+    handOver: async (payload) => (c.wheel.push(['handOver', payload]), { ok: true, status: { active: true, runId: 'lwabc123', wheel: 'requested', evidenceDir: 'C:/secret' } }),
+    handBack: async (payload) => (c.wheel.push(['handBack', payload]), { ok: false, reason: 'notHanded', message: 'The run has the wheel.' }),
+  };
+  return c;
+}
+
+test('handOver / handBack are registered with a controller that has them', () => {
+  const s = setup({ controller: wheelController() });
+  assert.ok(s.ipc.channels().includes('lunaswork:handOver'));
+  assert.ok(s.ipc.channels().includes('lunaswork:handBack'));
+  s.done();
+});
+
+test('handOver / handBack refuse a malformed payload before the controller sees it', async () => {
+  const controller = wheelController();
+  const s = setup({ controller });
+  for (const ch of ['lunaswork:handOver', 'lunaswork:handBack']) {
+    for (const req of ['lwabc', 7, [], { runId: '../x' }, { runId: 'lwa', repoPath: 'C:/' }]) {
+      assert.deepEqual(await s.ipc.invoke(ch, req), { ok: false, reason: 'bad-run' }, `${ch} ${JSON.stringify(req)}`);
+    }
+  }
+  assert.equal(controller.wheel.length, 0);
+  s.done();
+});
+
+test('handOver / handBack pass only the run id; the answer carries the public status only', async () => {
+  const controller = wheelController();
+  const s = setup({ controller });
+  const res = await s.ipc.invoke('lunaswork:handOver', { runId: 'lwabc123' });
+  assert.equal(res.ok, true);
+  assert.equal(res.status.wheel, 'requested');
+  assert.equal('evidenceDir' in res.status, false, 'the evidence folder never leaves main');
+  await s.ipc.invoke('lunaswork:handOver');
+  assert.deepEqual(controller.wheel, [['handOver', { runId: 'lwabc123' }], ['handOver', {}]]);
+  assert.deepEqual(await s.ipc.invoke('lunaswork:handBack', {}), { ok: false, reason: 'notHanded', message: 'The run has the wheel.' });
+  s.done();
+
+  const broken = setup({ controller: { ...fakeController(), handOver: async () => { throw new Error('boom'); }, handBack: () => { throw new Error('boom'); } } });
+  assert.deepEqual(await broken.ipc.invoke('lunaswork:handOver'), { ok: false, reason: 'failed' });
+  assert.deepEqual(await broken.ipc.invoke('lunaswork:handBack'), { ok: false, reason: 'failed' });
+  broken.done();
+});
+
+test('publicStatus: the wheel only from its known states, handedAt only as a time; the wheel event is pushed', () => {
+  const base = { runId: 'lwabc123', active: true };
+  assert.equal(publicStatus({ ...base, wheel: 'handed', handedAt: 5 }, () => true).wheel, 'handed');
+  assert.equal(publicStatus({ ...base, wheel: 'handed', handedAt: 5 }, () => true).handedAt, 5);
+  assert.equal(publicStatus({ ...base, wheel: '<img>', handedAt: 'soon' }, () => true).wheel, 'running');
+  assert.equal(publicStatus({ ...base, handedAt: -1 }, () => true).handedAt, null);
+  assert.equal(publicEvent({ type: 'wheel', status: base }, () => true).type, 'wheel');
 });

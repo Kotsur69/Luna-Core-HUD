@@ -1381,3 +1381,370 @@ test('a `stop` steer card is closed once it stopped the run', async () => {
   assert.equal(h.todos.find((t) => t.at === 9).done, true);
   assert.equal(h.todos.find((t) => t.at === 1).done, false);
 });
+
+// ---- hand me the wheel (C11) --------------------------------------------------------
+
+const { parseCommitLog } = require('../src/lunasworkHandback');
+
+const HAND_BASE = 'a'.repeat(40);
+
+/** The hand-back deps: HEAD at the pause, Mati's commits, DECISIONS.md lines and ARCHITECTURE.md sections. */
+function handbackFake(commits = []) {
+  const f = { reads: [], lines: [], blocks: [], commits };
+  f.deps = {
+    handback: {
+      head: async () => HAND_BASE,
+      commits: async (repoPath, base) => {
+        f.reads.push({ repoPath, base });
+        return { ok: true, commits: f.commits, more: 0 };
+      },
+      architecture: ({ block }) => {
+        f.blocks.push(block);
+        return true;
+      },
+    },
+    recordDecision: ({ line }) => {
+      f.lines.push(line);
+      return true;
+    },
+  };
+  return f;
+}
+
+/** A run that asked for the wheel during its first build and got it at the end of iteration 1. */
+async function handedRun(f, opts = {}) {
+  const h = harness({ ...opts, deps: { ...f.deps, ...(opts.deps || {}) } });
+  const build = deferred();
+  h.next.build.push(() => build.promise);
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.calls.build.length === 1);
+  const asked = await h.ctl.handOver();
+  build.resolve(doneBuild());
+  await h.settle();
+  return { h, asked };
+}
+
+test('hand me the wheel: the run pauses only at the end of the current iteration', async () => {
+  const f = handbackFake();
+  const h = harness({ deps: f.deps });
+  const build = deferred();
+  h.next.build.push(() => build.promise);
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.calls.build.length === 1);
+
+  const res = await h.ctl.handOver();
+  assert.equal(res.ok, true);
+  assert.equal(res.status.wheel, 'requested');
+  assert.equal(h.ctl.status().phase, 'building', 'the build is not cut off');
+  assert.equal(h.stored.handRequested, true, 'the request is persisted');
+  assert.ok(h.events.some((e) => e.type === 'wheel'));
+
+  build.resolve(doneBuild());
+  await h.settle();
+  const s = h.ctl.status();
+  assert.equal(s.active, true);
+  assert.equal(s.phase, 'handed');
+  assert.equal(s.wheel, 'handed');
+  assert.equal(s.role, null);
+  assert.equal(s.iteration, 2, 'iteration 1 ended; the run waits before iteration 2');
+  assert.equal(s.handedAt, h.clock);
+  assert.equal(s.feedback.wheel, 'handed', 'the phone sees it too');
+  // The rest of iteration 1 ran: launch, Playtester, Critic - then nothing more.
+  assert.equal(h.calls.playtest.length, 1);
+  assert.equal(h.calls.critic.length, 1);
+  assert.equal(h.calls.director.length, 1);
+  assert.equal(h.ctl.status().scores.skeleton.length, 1, 'iteration 1 was scored');
+  assert.ok(h.adapters.every((a) => a.stopped >= a.started), 'the app under test is stopped');
+  assert.equal(h.stored.phase, 'handed');
+  assert.equal(h.stored.handBase, HAND_BASE, "main's commit at the pause is kept");
+  assert.equal(h.stored.handRequested, false);
+  assert.match(logText(h), /wheel handed to Mati before iteration 2, main at aaaaaaa/);
+});
+
+test('while handed no builder runs; decision deadlines still take their default', async () => {
+  const f = handbackFake();
+  const { h } = await handedRun(f);
+  assert.equal(h.ctl.status().phase, 'handed');
+  const builds = h.calls.build.length;
+  const directors = h.calls.director.length;
+
+  const asked = h.ctl.ask({ question: 'Add lodash?', options: ['approve', 'reject'], defaultAnswer: 'approve', deadlineMs: HOUR });
+  assert.equal(asked.ok, true);
+  assert.equal(h.ctl.status().pendingDecisions.length, 1);
+  await h.fire();
+  assert.equal(h.ctl.status().pendingDecisions.length, 0, 'the deadline ticked while handed');
+  assert.ok(f.lines.some((l) => /Add lodash/.test(l) && /default after deadline/.test(l)));
+
+  // Nothing ran: no Director, no builder, and the run is still Mati's.
+  assert.equal(h.calls.build.length, builds);
+  assert.equal(h.calls.director.length, directors);
+  assert.equal(h.ctl.status().phase, 'handed');
+  assert.equal(h.timers.filter((t) => !t.cleared).length, 0, 'no step timer either');
+});
+
+test('a run waiting on a usage limit before its Director is handed at once; the wait keeps ticking', async () => {
+  const f = handbackFake();
+  const h = harness({ deps: f.deps });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'limit');
+
+  const res = await h.ctl.handOver();
+  assert.equal(res.status.phase, 'handed', 'no iteration was under way');
+  assert.equal(res.status.waitUntil, START_CLOCK + HOUR, 'the usage-limit wait is kept');
+
+  await h.fire();
+  assert.equal(h.ctl.status().phase, 'handed');
+  assert.equal(h.ctl.status().waitUntil, null, 'the reset passed while Mati had the wheel');
+  assert.equal(h.calls.director.length, 1, 'and nothing ran at the reset');
+
+  await h.ctl.handBack();
+  await h.settle();
+  assert.ok(h.calls.director.length >= 2, 'the run goes on from directing');
+  assert.equal(h.calls.director[1].iteration, 1, 'the same iteration, it never started');
+});
+
+test('a hand-back while the usage-limit wait is still on waits for the reset first', async () => {
+  const f = handbackFake();
+  const h = harness({ deps: f.deps });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  await h.start();
+  await h.ctl.handOver();
+  await h.ctl.handBack();
+  await h.settle();
+  const s = h.ctl.status();
+  assert.equal(s.phase, 'directing');
+  assert.equal(s.waitUntil, START_CLOCK + HOUR);
+  assert.equal(h.calls.director.length, 1, 'nothing before the reset');
+  await h.fire();
+  assert.ok(h.calls.director.length >= 2);
+});
+
+test("hand-back: the Critic turns Mati's commits into DECISIONS.md entries and the run continues from directing", async () => {
+  const log = [
+    `\x1e${'b'.repeat(40)}\x1fFix the header size`,
+    '',
+    '3\t1\tsrc/Header.tsx',
+    '-\t-\tpublic/logo.png',
+    `\x1e${'c'.repeat(40)}\x1fAdd PDF export`,
+    '',
+    '120\t0\tsrc/export/pdf.ts',
+  ].join('\n');
+  const f = handbackFake(parseCommitLog(log));
+  const { h } = await handedRun(f);
+  assert.equal(h.ctl.status().phase, 'handed');
+  h.clock += HOUR;
+  const syncsBefore = h.syncs.length;
+
+  const res = await h.ctl.handBack();
+  assert.equal(res.ok, true);
+  assert.deepEqual(f.reads, [{ repoPath: REPO, base: HAND_BASE }], 'every commit since the pause');
+  const date = new Date(h.clock).toISOString().slice(0, 10);
+  assert.deepEqual(f.lines, [
+    `- Mati changed "Fix the header size" by hand (bbbbbbb; 2 files: src/Header.tsx, public/logo.png; +3 -1), hand-back ${date}`,
+    `- Mati changed "Add PDF export" by hand (ccccccc; 1 file: src/export/pdf.ts; +120 -0), hand-back ${date}`,
+  ]);
+  assert.equal(f.blocks.length, 1, 'ARCHITECTURE.md gets one section');
+  assert.match(f.blocks[0], /^## Manual changes \(hand-back .+, before iteration 2\)/);
+  assert.match(f.blocks[0], /bbbbbbb Fix the header size/);
+  assert.match(f.blocks[0], /Files touched: src\/Header\.tsx, public\/logo\.png, src\/export\/pdf\.ts/);
+  assert.equal(h.syncs.length, syncsBefore + 1, 'main is fast-forwarded first');
+  assert.match(logText(h), /hand-back: 2 manual commit\(s\) read, 2 recorded in DECISIONS\.md/);
+
+  await h.settle();
+  assert.equal(h.calls.director[1].iteration, 2, 'the run goes on from directing at iteration 2');
+  assert.equal(h.ctl.status().wheel, 'running');
+  assert.equal(h.stored.handBase, null);
+});
+
+test('the wheel request can be withdrawn before the pause; refusals are plain', async () => {
+  const f = handbackFake();
+  const h = harness({ deps: f.deps });
+  const build = deferred();
+  h.next.build.push(() => build.promise);
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.calls.build.length === 1);
+
+  assert.equal((await h.ctl.handBack()).reason, 'notHanded');
+  assert.equal((await h.ctl.handOver({ runId: 'lwother' })).reason, 'otherRun');
+  assert.equal((await h.ctl.handOver({ runId: 'lwtest1' })).ok, true);
+  assert.equal((await h.ctl.handOver()).ok, true, 'asking twice is harmless');
+  const back = await h.ctl.handBack();
+  assert.equal(back.ok, true);
+  assert.equal(back.status.wheel, 'running', 'withdrawn');
+
+  build.resolve(doneBuild());
+  await until(() => h.calls.director.length >= 2);
+  assert.notEqual(h.ctl.status().phase, 'handed', 'the run went straight on');
+  h.ctl.stop();
+  await h.settle();
+  assert.equal((await h.ctl.handOver()).reason, 'no-run');
+});
+
+test('a Stop while handed ends the run at once; the wheel is refused while stopping', async () => {
+  const { h } = await handedRun(handbackFake());
+  assert.equal((await h.ctl.handOver()).reason, 'handed');
+  h.ctl.stop();
+  assert.equal(h.ctl.status().verdict, 'stop');
+  assert.equal(h.ctl.status().active, false);
+  assert.equal(h.ended.length, 1);
+
+  const h2 = harness();
+  const build = deferred();
+  h2.next.build.push(() => build.promise);
+  await h2.ctl.start({ projectId: 'game' });
+  await until(() => h2.calls.build.length === 1);
+  h2.ctl.stop();
+  assert.equal((await h2.ctl.handOver()).reason, 'stopping');
+  build.resolve(doneBuild());
+  await h2.settle();
+});
+
+test('resume while handed stays handed; a hand-back cut off by a restart is done again', async () => {
+  const f = handbackFake([{ sha: 'd'.repeat(40), subject: 'Rename the store', files: [], added: 0, deleted: 0 }]);
+  const { h } = await handedRun(f);
+  const stored = clone(h.stored);
+
+  const after = harness({ stored, deps: f.deps });
+  assert.equal(after.ctl.resume(), true);
+  await after.settle();
+  assert.equal(after.ctl.status().phase, 'handed');
+  assert.equal(after.calls.director.length + after.calls.build.length, 0, 'nothing runs after the restart');
+
+  const cut = harness({ stored: { ...stored, handBackRequested: true }, deps: f.deps });
+  assert.equal(cut.ctl.resume(), true);
+  await until(() => cut.calls.director.length > 0);
+  assert.equal(cut.calls.director[0].iteration, 2);
+  const date = new Date(cut.clock).toISOString().slice(0, 10);
+  assert.deepEqual(f.lines, [`- Mati changed "Rename the store" by hand (ddddddd; no file changes), hand-back ${date}`]);
+  await cut.settle();
+});
+
+test('restoreRun keeps the wheel fields only where they make sense', () => {
+  const h = harness();
+  const base = { id: 'lwtest1', projectId: 'game', repoPath: REPO, models: DEFAULT_MODELS, history: [], iteration: 2, profile: h.profile, startedAt: 1 };
+  const handed = restoreRun({ ...base, phase: 'handed', handedAt: 5, handBase: HAND_BASE, handBackRequested: true, wheelSeq: 9 });
+  assert.equal(handed.phase, 'handed');
+  assert.equal(handed.handBase, HAND_BASE);
+  assert.equal(handed.handBackRequested, true);
+  assert.equal(handed.wheelSeq, 9);
+  const building = restoreRun({ ...base, phase: 'building', handRequested: true, handBase: HAND_BASE, handedAt: 5 });
+  assert.equal(building.handRequested, true);
+  assert.equal(building.handBase, null);
+  assert.equal(building.handedAt, null);
+  assert.equal(restoreRun({ ...base, phase: 'handed', handBase: 'not-a-sha' }).handBase, null);
+  assert.equal(restoreRun({ ...base, phase: 'done', handRequested: true }).handRequested, false);
+});
+
+test('phone wheel actions: only the newest of this run counts, once', async () => {
+  const h = harness();
+  const build = deferred();
+  h.next.build.push(() => build.promise);
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.calls.build.length === 1);
+
+  const list = [
+    { id: 3, runId: 'lwtest1', action: 'back' },
+    { id: 5, runId: 'lwtest1', action: 'hand' },
+    { id: 9, runId: 'lwother', action: 'back' },
+    { id: 11, runId: 'lwtest1', action: 'drive' },
+  ];
+  assert.equal(await h.ctl.applyWheel(list), true);
+  assert.equal(h.ctl.status().wheel, 'requested');
+  assert.equal(h.stored.wheelSeq, 5);
+  assert.equal(await h.ctl.applyWheel(list), false, 'never applied twice');
+  assert.equal(await h.ctl.applyWheel([{ id: 6, runId: 'lwtest1', action: 'back' }]), true);
+  assert.equal(h.ctl.status().wheel, 'running');
+  assert.equal(await h.ctl.applyWheel([{ id: 7, runId: 'lwtest1', action: 'back' }]), false);
+  assert.match(logText(h), /wheel back from the phone refused \(notHanded\)/);
+  assert.equal(await h.ctl.applyWheel('nope'), false);
+  build.resolve(doneBuild());
+  await h.settle();
+});
+
+test('a Stop pressed while the run is being handed over wins: the run ends, it is not left handed', async () => {
+  const f = handbackFake();
+  const head = deferred();
+  const h = harness({ deps: { ...f.deps, handback: { ...f.deps.handback, head: () => head.promise } } });
+  const build = deferred();
+  h.next.build.push(() => build.promise);
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.calls.build.length === 1);
+  await h.ctl.handOver();
+  build.resolve(doneBuild());
+  await until(() => h.calls.critic.length === 1);
+  await tick();
+
+  h.ctl.stop();
+  head.resolve(HAND_BASE);
+  await h.settle();
+  assert.equal(h.ctl.status().active, false);
+  assert.equal(h.ctl.status().verdict, 'stop');
+  assert.equal(h.ended.length, 1);
+});
+
+test('the wait timer firing while a waiting run is handed over does not start the Director', async () => {
+  const f = handbackFake();
+  const head = deferred();
+  const h = harness({ deps: { ...f.deps, handback: { ...f.deps.handback, head: () => head.promise } } });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  await h.start();
+  const handing = h.ctl.handOver();
+  await h.fire();
+  head.resolve(HAND_BASE);
+  const res = await handing;
+  await h.settle();
+  assert.equal(res.status.phase, 'handed');
+  assert.equal(h.calls.director.length, 1, 'no Director while the wheel was being handed over');
+});
+
+test('a wheel request withdrawn while the hand-over is under way is honoured: the run goes on', async () => {
+  const f = handbackFake();
+  const head = deferred();
+  const h = harness({ deps: { ...f.deps, handback: { ...f.deps.handback, head: () => head.promise } } });
+  const build = deferred();
+  h.next.build.push(() => build.promise);
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.calls.build.length === 1);
+  await h.ctl.handOver();
+  build.resolve(doneBuild());
+  await until(() => h.calls.critic.length === 1);
+  await tick();
+
+  assert.equal((await h.ctl.handBack()).ok, true, 'withdrawn');
+  head.resolve(HAND_BASE);
+  await until(() => h.calls.director.length >= 2);
+  assert.notEqual(h.ctl.status().phase, 'handed');
+  h.ctl.stop();
+  await h.settle();
+});
+
+test('a Stop during an at-once hand-over whose wait timer already fired still ends the run', async () => {
+  const f = handbackFake();
+  const head = deferred();
+  const h = harness({ deps: { ...f.deps, handback: { ...f.deps.handback, head: () => head.promise } } });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  await h.start();
+  const handing = h.ctl.handOver();
+  await h.fire();
+  h.ctl.stop();
+  head.resolve(HAND_BASE);
+  await handing;
+  await h.settle();
+  assert.equal(h.ctl.status().active, false);
+  assert.equal(h.ctl.status().verdict, 'stop');
+  assert.equal(h.ctl.status().wheel, 'running');
+});
+
+test('a phone wheel unit from far in the future is ignored and does not block later taps', async () => {
+  const h = harness();
+  const build = deferred();
+  h.next.build.push(() => build.promise);
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.calls.build.length === 1);
+  assert.equal(await h.ctl.applyWheel([{ id: Number.MAX_SAFE_INTEGER, runId: 'lwtest1', action: 'hand' }]), false);
+  assert.equal(h.stored.wheelSeq, 0);
+  assert.equal(await h.ctl.applyWheel([{ id: h.clock, runId: 'lwtest1', action: 'hand' }]), true);
+  build.resolve(doneBuild());
+  await h.settle();
+});

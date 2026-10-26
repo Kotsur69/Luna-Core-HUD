@@ -9,9 +9,10 @@
 // (godmodelive.js); the snapshots table streams over realtime, so a PC's
 // put repaints the page without polling.
 // Luna's Work decisions waiting for Mati come first (decisions.js), then the
-// run's feedback with each item's status and the feedback form (feedback.js) -
-// the parts that write: an answer or new feedback goes back through the
-// `todos` outbox.
+// wheel ("Hand me the wheel" / "Hand back", wheel.js), then the run's
+// feedback with each item's status and the feedback form (feedback.js) - the
+// parts that write: an answer, a wheel action or new feedback goes back
+// through the `todos` outbox.
 // Otherwise read-only; every string is text, and a PR link is github.com
 // only (the reader already dropped anything else).
 // ============================================================================
@@ -23,6 +24,7 @@ import { mountSnapshots, when } from './snapshotview.js';
 import { liveToShow, liveCard, tabsCard, liveTodayCard, repaintWhileShown } from './godmodelive.js';
 import { decisionsCard, createDecisionAnswers } from './decisions.js';
 import { feedbackCard, createFeedbackSender } from './feedback.js';
+import { wheelCard, createWheelSender } from './wheel.js';
 
 const RECENT_MS = 24 * 60 * 60 * 1000;
 const PR_PREFIX = 'https://github.com/';
@@ -88,6 +90,8 @@ export function mountGodmode(main, deps) {
   const answers = createDecisionAnswers(deps, () => view.repaint());
   // B17: feedback on the run going on now, back through the same outbox.
   const feedback = createFeedbackSender(deps, () => view.repaint());
+  // C11: hand me the wheel / hand back, the same way.
+  const wheel = createWheelSender(deps, () => view.repaint());
   const view = mountSnapshots(main, deps, ['godmode'], (byKind, now) => {
     const rows = byKind.godmode;
     const runs = godmodeRunsFrom(rows, now);
@@ -95,8 +99,9 @@ export function mountGodmode(main, deps) {
     const tabs = tabsCard(rows, now);
     const decisions = decisionsCard(rows, now, { mirror: answers.mirror(), send: answers.send });
     const notes = feedbackCard(rows, now, { mirror: feedback.mirror(), send: feedback.send });
+    const helm = wheelCard(rows, now, { mirror: wheel.mirror(), send: wheel.send });
     if (!runs.length && !live && !tabs && !decisions && !notes) return h('p', { class: 'empty' }, t('godmodeEmpty'));
-    return h('div', { class: 'stack' }, decisions, notes, live ? liveCard(live, now) : null, tabs, runs.map((r) => runCard(r, now)));
+    return h('div', { class: 'stack' }, decisions, helm, notes, live ? liveCard(live, now) : null, tabs, runs.map((r) => runCard(r, now)));
   });
   repaintWhileShown(main, view);
   return view;

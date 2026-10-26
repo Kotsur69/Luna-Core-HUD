@@ -88,6 +88,17 @@
 // run goes preprod -> building at iteration 0 with the stack template's
 // cards, then on to directing at iteration 1 once the scaffold is green.
 //
+// Hand me the wheel (C11, src/lunasworkWheel.js + src/lunasworkHandback.js):
+// handOver() pauses the run at the END of the current iteration - the step
+// that runs finishes, the iteration ends as usual, then the run goes to
+// `handed` instead of directing: the app under test is stopped, no step
+// (so no builder) runs, and main's commit is noted. A run waiting before its
+// Director (a usage limit) has no iteration under way and is handed at once.
+// While handed, the usage-limit wait and the decision deadlines keep their
+// timers. handBack() reads every commit Mati made since the pause: one
+// DECISIONS.md line each and a section in ARCHITECTURE.md, then the run goes
+// on from directing. Both come from the HUD panel or the phone (applyWheel).
+//
 // Size: past the 800-line guideline on purpose. The steps share one closure
 // (the run, the wait timer, the app under test); the pure parts and the card
 // writes already live in lunasworkRun.js / lunasworkCards.js.
@@ -108,6 +119,7 @@ const { checkList } = require('./lunasworkChecks');
 const { rollbackEvidence, reasonText } = require('./lunasworkCheckpoint');
 const {
   PREPROD,
+  HANDED,
   DONE,
   ALL_PHASES,
   MAX_PLAN_IDS,
@@ -167,6 +179,8 @@ const {
   decisionLine,
   publicDecision,
 } = require('./lunasworkDecisions');
+const { wheelState, newestWheelAction } = require('./lunasworkWheel');
+const { handbackDecisionLine, architectureBlock } = require('./lunasworkHandback');
 
 const PHASE_ROLE = {
   preprod: null,
@@ -175,6 +189,7 @@ const PHASE_ROLE = {
   launching: 'playtester',
   playtesting: 'playtester',
   critiquing: 'critic',
+  handed: null,
   done: null,
 };
 // Roles the optional free-provider fallback covers (plan: "Models per role").
@@ -219,6 +234,9 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   limitResumeAt?: (res:object)=>number|null,
  *   awake?: {hold:()=>void, release:()=>void},
  *   recordDecision?: (ctx:{repoPath:string, line:string, decision:object})=>boolean,
+ *   handback?: {head:(repoPath:string)=>Promise<string|null>,
+ *     commits:(repoPath:string, base:string)=>Promise<{ok:boolean, commits?:object[], more?:number, error?:string}>,
+ *     architecture:(ctx:{repoPath:string, block:string})=>boolean},
  *   onRunEnd?: Array<(run:object)=>void>|((run:object)=>void),
  *   onMilestone?: Array<(run:object, ctx:{milestone:string})=>void>|((run:object, ctx:{milestone:string})=>void),
  *   newRunId?: ()=>string, now?: ()=>number, setTimer?: Function, clearTimer?: Function,
@@ -259,6 +277,8 @@ function createLunasWork(deps) {
   const refusedFeedback = new Set();
   // start() is waiting on Mati's confirmation dialog.
   let starting = false;
+  // A hand-back is reading Mati's commits (C11): a second one is refused.
+  let handingBack = false;
   // Not saved: the running app under test and the role of a sub-step.
   const live = { adapter: null, url: null, role: null };
 
@@ -439,15 +459,21 @@ function createLunasWork(deps) {
     decisionTimer = null;
   }
 
-  /** One DECISIONS.md line per answer; a failed write only goes into the run log. */
-  function recordDecision(decision) {
-    const line = decisionLine(decision);
-    if (!line || !deps.recordDecision) return;
+  /** One DECISIONS.md line; a failed write only goes into the run log. @returns {boolean} written */
+  function writeDecisionLine(line, decision, label) {
+    if (!line || !deps.recordDecision) return false;
     try {
-      if (deps.recordDecision({ repoPath: run.repoPath, line, decision }) === false) logEvent(`decision ${decision.id}: DECISIONS.md not updated`);
+      if (deps.recordDecision({ repoPath: run.repoPath, line, decision }) !== false) return true;
+      logEvent(`${label}: DECISIONS.md not updated`);
     } catch (err) {
-      logEvent(`decision ${decision.id}: DECISIONS.md not updated (${errText(err).slice(0, 150)})`);
+      logEvent(`${label}: DECISIONS.md not updated (${errText(err).slice(0, 150)})`);
     }
+    return false;
+  }
+
+  /** One DECISIONS.md line per answer. */
+  function recordDecision(decision) {
+    writeDecisionLine(decisionLine(decision), decision, `decision ${decision.id}`);
   }
 
   /** Saves a changed queue, logs and records its new answers, announces it. */
@@ -789,8 +815,7 @@ function createLunasWork(deps) {
   function endScaffold(build) {
     if (build.selfCheck !== 'green') return retryLater('iteration 0: the scaffold stayed red');
     logEvent('iteration 0: scaffold on main');
-    transition('directing', { iteration: 1, current: emptyCurrent() });
-    return undefined;
+    return nextIteration({ iteration: 1, current: emptyCurrent() });
   }
 
   /**
@@ -1044,7 +1069,7 @@ function createLunasWork(deps) {
       finish(verdict.type, { history, lastCritic, laps });
       return;
     }
-    transition('directing', {
+    await nextIteration({
       history,
       laps,
       lastCritic,
@@ -1054,6 +1079,94 @@ function createLunasWork(deps) {
       current: emptyCurrent(),
     });
     if (critic.milestone && critic.milestone.passed && milestone) notifyMilestone(milestone);
+  }
+
+  // ---- hand me the wheel (C11) ----
+
+  /** The end of an iteration: on to directing, or to `handed` when Mati asked for the wheel. */
+  async function nextIteration(fields) {
+    if (run.handRequested) await enterHanded(fields);
+    else transition('directing', fields);
+  }
+
+  /** main's commit at the pause: the hand-back reads every commit after it. */
+  async function headNow() {
+    if (!deps.handback) return null;
+    try {
+      return (await deps.handback.head(run.repoPath)) || null;
+    } catch (err) {
+      log(`[lunaswork] could not read HEAD: ${errText(err)}`);
+      return null;
+    }
+  }
+
+  /** The run pauses for Mati: the app stops, no step runs until handBack(). */
+  async function enterHanded(fields = {}) {
+    await stopApp();
+    const base = await headNow();
+    if (!active()) return;
+    // A Stop pressed meanwhile wins: the loop ends the run at its next check.
+    if (run.stopRequested) {
+      transition('directing', { ...fields, handRequested: false });
+      return;
+    }
+    // Withdrawn meanwhile (a hand then a back in one phone pull): the run goes on.
+    if (!run.handRequested) {
+      transition('directing', fields);
+      return;
+    }
+    logEvent(`wheel handed to Mati before iteration ${fields.iteration || run.iteration}${base ? `, main at ${base.slice(0, 7)}` : ''}`);
+    transition(HANDED, { ...fields, handRequested: false, handBackRequested: false, handedAt: now(), handBase: base });
+  }
+
+  /** Mati's commits since the pause -> DECISIONS.md lines and an ARCHITECTURE.md section. */
+  async function readManualWork() {
+    if (!deps.handback || !run.handBase) {
+      logEvent('hand-back: main at the pause unknown - manual commits not read');
+      return;
+    }
+    let res;
+    try {
+      res = await deps.handback.commits(run.repoPath, run.handBase);
+    } catch (err) {
+      res = { ok: false, error: errText(err) };
+    }
+    if (!isObj(res) || !res.ok) {
+      logEvent(`hand-back: commits not read (${String((isObj(res) && res.error) || 'failed').slice(0, 150)})`);
+      return;
+    }
+    const commits = Array.isArray(res.commits) ? res.commits : [];
+    const date = new Date(now()).toISOString().slice(0, 10);
+    const written = commits.filter((c) =>
+      writeDecisionLine(handbackDecisionLine(c, { date }), { kind: 'manual', sha: c.sha }, `manual commit ${c.sha.slice(0, 7)}`));
+    const block = architectureBlock(commits, { date, iteration: run.iteration, more: res.more || 0 });
+    if (block) {
+      try {
+        if (deps.handback.architecture({ repoPath: run.repoPath, block }) === false) logEvent('hand-back: ARCHITECTURE.md not updated');
+      } catch (err) {
+        logEvent(`hand-back: ARCHITECTURE.md not updated (${errText(err).slice(0, 150)})`);
+      }
+    }
+    logEvent(`hand-back: ${commits.length} manual commit(s) read, ${written.length} recorded in DECISIONS.md`);
+  }
+
+  /** The hand-back itself; saved first, so a restart mid-way does it again. */
+  async function takeWheelBack() {
+    handingBack = true;
+    try {
+      if (!run.handBackRequested) update({ handBackRequested: true });
+      emit('wheel');
+      // Mati may have pushed from another machine: main first.
+      await syncCheckout();
+      await readManualWork();
+      // A Stop during the reading ended the run.
+      if (!active() || run.phase !== HANDED) return;
+      transition('directing', { handBackRequested: false, handedAt: null, handBase: null });
+      // A usage-limit wait that is still on goes first.
+      if (!waitTimer) kick();
+    } finally {
+      handingBack = false;
+    }
   }
 
   const STEPS = {
@@ -1070,7 +1183,8 @@ function createLunasWork(deps) {
     if (looping) return;
     looping = true;
     try {
-      while (active() && !waitTimer) {
+      // Handed (C11): no step runs until Mati hands the wheel back.
+      while (active() && !waitTimer && run.phase !== HANDED) {
         // STOP: the step that was running has finished - end here.
         if (run.stopRequested) {
           await stopApp();
@@ -1302,6 +1416,83 @@ function createLunasWork(deps) {
     return added;
   }
 
+  /** Whether a wheel payload names another run than the current one (none named = current). */
+  const otherRun = (p) => p.runId !== undefined && p.runId !== run.id;
+
+  /**
+   * "Hand me the wheel" (C11): the run pauses at the end of the current
+   * iteration. A run waiting before its Director has none under way and is
+   * handed at once (its wait keeps ticking).
+   * @param {{runId?:string}} [payload] untrusted
+   * @returns {Promise<{ok:true, status:object}|{ok:false, reason:string, message:string}>}
+   */
+  async function handOver(payload) {
+    if (!active()) return NO_RUN();
+    const p = isObj(payload) ? payload : {};
+    if (otherRun(p)) return refuse('otherRun', 'That is not the current run.');
+    if (run.phase === HANDED) return refuse('handed', 'The wheel is already yours.');
+    if (run.stopRequested) return refuse('stopping', 'The run is stopping.');
+    if (!run.handRequested) {
+      logEvent('Mati asked for the wheel: the run pauses at the end of this iteration');
+      update({ handRequested: true });
+      emit('wheel');
+    }
+    if (!looping && waitTimer && run.phase === 'directing') {
+      // Held like a step: the wait timer firing meanwhile must not start the Director.
+      looping = true;
+      try {
+        await enterHanded();
+      } finally {
+        looping = false;
+      }
+      // Not handed after all (a Stop or a withdraw meanwhile), and the wait
+      // timer's kick fell on the held loop: run the loop now.
+      if (active() && run.phase !== HANDED && !waitTimer) kick();
+    }
+    return { ok: true, status: status() };
+  }
+
+  /**
+   * Hands the wheel back: Mati's commits since the pause are recorded, then
+   * the run goes on from directing. Before the pause it withdraws the request.
+   * @param {{runId?:string}} [payload] untrusted
+   * @returns {Promise<{ok:true, status:object}|{ok:false, reason:string, message:string}>}
+   */
+  async function handBack(payload) {
+    if (!active()) return NO_RUN();
+    const p = isObj(payload) ? payload : {};
+    if (otherRun(p)) return refuse('otherRun', 'That is not the current run.');
+    if (run.phase !== HANDED) {
+      if (!run.handRequested) return refuse('notHanded', 'The run has the wheel.');
+      logEvent('Mati withdrew the wheel request: the run goes on');
+      update({ handRequested: false });
+      emit('wheel');
+      return { ok: true, status: status() };
+    }
+    if (handingBack) return refuse('busy', 'The hand-back is already under way.');
+    await takeWheelBack();
+    return { ok: true, status: status() };
+  }
+
+  /**
+   * Wheel actions from the phone (lunasworkWheel.wheelFromTodoPeers): only the
+   * newest of this run that was not applied yet counts, once.
+   * @param {Array<{id:number, runId:string, action:string}>} list untrusted
+   * @returns {Promise<boolean>} whether one was applied
+   */
+  async function applyWheel(list) {
+    if (!active()) return false;
+    const w = newestWheelAction(list, { runId: run.id, seq: run.wheelSeq, now: now() });
+    if (!w) return false;
+    update({ wheelSeq: w.id });
+    const res = await (w.action === 'hand' ? handOver({ runId: w.runId }) : handBack({ runId: w.runId }));
+    if (!res.ok) {
+      logEvent(`wheel ${w.action} from the phone refused (${res.reason})`);
+      save();
+    }
+    return res.ok;
+  }
+
   /**
    * The kill switch: the step that is running finishes, then the run ends
    * with STOP. A run that is waiting ends at once.
@@ -1352,6 +1543,10 @@ function createLunasWork(deps) {
       update({ waitUntil: null, waitReason: null });
       kick();
     }
+    // C11: a hand-back cut off by the restart is done again.
+    if (active() && run.phase === HANDED && run.handBackRequested) {
+      takeWheelBack().catch((err) => log(`[lunaswork] hand-back failed: ${errText(err)}`));
+    }
     return true;
   }
 
@@ -1379,6 +1574,9 @@ function createLunasWork(deps) {
       scores: scoresByMilestone(run.history),
       // B9: the flaky tests quarantined in this run.
       quarantine: run.quarantine.map((q) => q.name),
+      // C11: who has the wheel (running / requested / handed), and since when.
+      wheel: wheelState(run),
+      handedAt: run.handedAt,
       evidenceDir: run.evidenceDir,
       endedAt: run.endedAt,
       // What waits for Mati (HUD panel, phone snapshot); none once the run ended.
@@ -1386,7 +1584,10 @@ function createLunasWork(deps) {
         ? pendingOf(run.decisions).map((d) => publicDecision({ ...d, runId: run.id, repoName: path.basename(run.repoPath) })).filter(Boolean)
         : [],
       // B17: the run's feedback with each item's status (phone snapshot); null once the run ended.
-      feedback: active() ? publicFeedback({ runId: run.id, repoName: path.basename(run.repoPath), items: run.feedback }) : null,
+      // C11: the wheel rides in the same section - the phone's buttons need the run id too.
+      feedback: active()
+        ? publicFeedback({ runId: run.id, repoName: path.basename(run.repoPath), items: run.feedback, wheel: wheelState(run) })
+        : null,
     };
   }
 
@@ -1429,6 +1630,9 @@ function createLunasWork(deps) {
     applyAnswers,
     feedback,
     applyFeedback,
+    handOver,
+    handBack,
+    applyWheel,
     status,
     subscribe,
     godModeBlock,
