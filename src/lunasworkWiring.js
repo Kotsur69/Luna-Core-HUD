@@ -22,7 +22,10 @@
 //   hand-back       lunasworkHandback (C11): main's commit at the pause, then
 //                   Mati's commits since -> DECISIONS.md + ARCHITECTURE.md
 //   loop hooks      lunasworkHookDeps: graph + codemaps refresh after a merge
-//                   (LW 2.23), i18n card, Lighthouse, reviews, second opinion
+//                   (LW 2.23), i18n card, Lighthouse, reviews, second opinion,
+//                   project skills at a passed gate (LW 2.16)
+//   docs at SHIP    lunasworkShipDocs (LW 2.22a): the docs iteration's cards,
+//                   the CHANGELOG.md commit before it, the vX.Y.Z release
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -51,6 +54,7 @@ const { createMachineGuard } = require('./lunasworkMachine');
 const { handbackHead, readCommits } = require('./lunasworkHandback');
 const { wheelFromTodoPeers } = require('./lunasworkWheel');
 const { createHookDeps } = require('./lunasworkHookDeps');
+const { createShipDocsDeps } = require('./lunasworkShipDocs');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -215,6 +219,8 @@ function createLunasWorkRuntime(ctx) {
     },
     // Loop hooks (src/lunasworkLoopHooks.js): none of them can stop the run.
     ...createHookDeps({ env: ctx.env, settings: () => settingsStore.readSettings(), log: ctx.log }),
+    // LW 2.22a: SHIP is final only after the docs iteration (README, user guide, release).
+    shipDocs: createShipDocsDeps({ env: ctx.env }),
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: reporter ? [reporter.onMilestone] : [],

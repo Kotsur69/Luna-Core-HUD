@@ -103,7 +103,15 @@
 // after a merge the code graph and docs/CODEMAPS are refreshed and the i18n
 // card filed; with the app up, Lighthouse; after the Critic, the scheduled
 // reviews and, at a gate, the second opinion, whose disagreement holds the
-// gate. None of them can stop the run - a failure is a note in the report.
+// gate; at a passed gate that stays on main, the project skills (LW 2.16,
+// src/lunasworkSkills.js). None of them can stop the run - a failure is a
+// note in the report.
+//
+// LW 2.18 / 2.22a: the Critic gets the iteration's closed cards (its
+// CHANGELOG.md entry, and the lap's `changes` for the return pack); one
+// milestone email per gate (run.gatesMailed). A SHIP verdict first runs the
+// docs iteration (src/lunasworkShipDocs.js: README, USER_GUIDE, release) and
+// is final only once that build is green.
 //
 // Size: past the 800-line guideline on purpose. The steps share one closure
 // (the run, the wait timer, the app under test); the pure parts and the card
@@ -154,7 +162,11 @@ const {
   emptyCurrent,
   restoreRun,
   scoresByMilestone,
+  kindOf,
 } = require('./lunasworkRun');
+const { createShipDocs } = require('./lunasworkShipDocs');
+const { withBuilderBrief } = require('./lunasworkDirector');
+const { listSkills } = require('./lunasworkSkills');
 const { createCardBook } = require('./lunasworkCards');
 const { createCardFlow } = require('./lunasworkCardFlow');
 const { STEER_TAG, BUILT_STATE } = require('./todorows');
@@ -209,6 +221,8 @@ const GODMODE_RETRY_MS = 5 * 60 * 1000;
 // long; this many failures of one phase in a row end the run with STOP.
 const ERROR_RETRY_MS = 5 * 60 * 1000;
 const MAX_STEP_FAILURES = 3;
+// LW 2.18: the gates already mailed, kept with the run (lunasworkRun.restoreRun caps it the same).
+const MAX_GATES_MAILED = 50;
 // Stop reasons other callers than the kill switch may give (src/lunasworkMachine.js).
 const STOP_CALLERS = ['lowDisk', 'updatesNotPaused'];
 
@@ -247,7 +261,10 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   onRunEnd?: Array<(run:object)=>void>|((run:object)=>void),
  *   onMilestone?: Array<(run:object, ctx:{milestone:string})=>void>|((run:object, ctx:{milestone:string})=>void),
  *   refreshGraph?: Function, i18n?: Function, lighthouse?: Function, reviews?: Function, secondOpinion?: Function,
+ *   skills?: Function,
  *     (the loop hooks, see src/lunasworkLoopHooks.js)
+ *   shipDocs?: {cards:Function, prepare?:Function, release?:Function}
+ *     (LW 2.22a, the docs iteration at SHIP, see src/lunasworkShipDocs.js; without it SHIP ends at once)
  *   newRunId?: ()=>string, now?: ()=>number, setTimer?: Function, clearTimer?: Function,
  *   log?: (line:string)=>void,
  * }} deps
@@ -282,6 +299,18 @@ function createLunasWork(deps) {
     cardBook,
     ask: (spec) => ask(spec),
     onGateOpened: (milestone) => notifyMilestone(milestone),
+  });
+  const shipDocs = createShipDocs({
+    deps,
+    run: () => run,
+    update: (fields) => update(fields),
+    transition: (phase, fields) => transition(phase, fields),
+    finish: (verdict, fields) => finish(verdict, fields),
+    retryLater: (why) => retryLater(why),
+    logEvent: (text) => logEvent(text),
+    cardBook,
+    withBuilderModel: (card) => withBuilderModel(card),
+    withBrief: (card) => withBuilderBrief(card, [], listSkills(run.repoPath)),
   });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
@@ -383,6 +412,10 @@ function createLunasWork(deps) {
 
   /** The milestone email (B12 / B17): a gate passed and the run goes on. */
   function notifyMilestone(milestone) {
+    // LW 2.18: exactly one email per gate, across restarts.
+    const mailed = Array.isArray(run.gatesMailed) ? run.gatesMailed : [];
+    if (!milestone || mailed.includes(milestone)) return;
+    update({ gatesMailed: [...mailed, milestone].slice(-MAX_GATES_MAILED) });
     const snapshot = { ...run };
     for (const fn of milestoneHooks) {
       try {
@@ -822,6 +855,7 @@ function createLunasWork(deps) {
     await syncCheckout();
     // LW 2.23 + B11: graph, codemaps and the i18n card after a merge.
     await loopHooks.afterMerge(build);
+    if (shipDocs.isDocsBuild()) return shipDocs.end(build);
     if (run.iteration === 0) return endScaffold(build);
     transition('launching', {
       conflicts: cleanConflicts([...run.conflicts.filter((c) => c.n !== run.iteration), { n: run.iteration, files }]),
@@ -906,7 +940,15 @@ function createLunasWork(deps) {
       // B4: the stuck cards to split (a held one is Mati's to decide already).
       stuckCards: cardFlow.stuckNow(),
       todoStore: deps.todoStore(run.projectId),
+      // LW 2.22a: the iteration's CHANGELOG.md entry.
+      closedCards: closedCards(),
     });
+  }
+
+  /** The cards the Playtester closed this iteration, as {at, text, kind}. */
+  function closedCards() {
+    const ats = run.current.verify ? run.current.verify.closed : [];
+    return ats.length ? cardBook.lookup(run.projectId, ats).map((t) => ({ at: t.at, text: t.text, kind: kindOf(t) })) : [];
   }
 
   /** The SHIP confirmation pass: a fresh Playtester (opus) on the SHIP criteria only. */
@@ -1087,14 +1129,19 @@ function createLunasWork(deps) {
     const rolledBack = !!(checkpoint && checkpoint.rollback && checkpoint.rollback.ok);
     if (rolledBack) record = { ...record, rolledBack: true };
     const history = [...earlier, record];
-    const lap = buildLap(run.current, record, { evidenceDir: run.evidenceDir });
-    const laps = [...run.laps.filter((l) => l.n !== record.n), ...(lap ? [lap] : [])].slice(-MAX_LAPS);
     // B8: a held gate Mati opened while this iteration was ending.
     critic = loopHooks.withApproval(critic);
+    const gate = !!(critic.milestone && critic.milestone.passed) && !rolledBack;
+    // LW 2.16: before the lap, so its notes are in the report.
+    await loopHooks.atGate(critic, { rolledBack, milestone });
+    const lap = buildLap(run.current, record, { evidenceDir: run.evidenceDir, gate, changes: closedCards() });
+    const laps = [...run.laps.filter((l) => l.n !== record.n), ...(lap ? [lap] : [])].slice(-MAX_LAPS);
     // Main was reverted: whatever the SHIP pass saw is gone.
     const shipConfirmed = confirmed && !rolledBack;
     const verdict = stopVerdict({ history, critic: { verdict: critic.verdict }, shipConfirmed, stopRequested: run.stopRequested });
     const lastCritic = { verdict: critic.verdict, milestone: critic.milestone, next: critic.next, allPassed: critic.allPassed };
+    // LW 2.22a: SHIP is final only after the docs iteration.
+    if (verdict.type === 'ship' && await shipDocs.begin({ history, lastCritic, laps })) return;
     if (verdict.type !== 'continue') {
       finish(verdict.type, { history, lastCritic, laps });
       return;

@@ -13,6 +13,8 @@
 //   secondOpinion  lunasworkSecondOpinion.runSecondOpinion - only when Mati
 //                  set a CLI order (settings.secondOpinionOrder); null = off,
 //                  because the gate's evidence goes to that vendor (B8)
+//   skills         lunasworkSkills.runGateSkills at a passed gate, with the
+//                  git log since the previous gate's checkpoint tag (LW 2.16)
 //
 // The iteration diff (docs/CODEMAPS left out) runs from the previous checkpoint tag
 // (lunasworkCheckpoint.tagName) to HEAD, else from the last non-codemaps commit.
@@ -31,8 +33,11 @@ const { i18nCards } = require('./lunasworkI18n');
 const { runLighthouse } = require('./lunasworkLighthouse');
 const { reviewsDue, runReviews } = require('./lunasworkReviews');
 const { runSecondOpinion } = require('./lunasworkSecondOpinion');
+const { runGateSkills } = require('./lunasworkSkills');
 
 const GIT_TIMEOUT_MS = 30 * 1000;
+const MAX_GATE_LOG_COMMITS = 200;
+const FALLBACK_LOG_COMMITS = 40;
 const MAX_DIFF_BYTES = 4 * 1024 * 1024;
 // Lighthouse covers every route on desktop and mobile: keep the list short.
 const MAX_ROUTES = 8;
@@ -95,6 +100,17 @@ async function iterationDiff(repoPath, runId, iteration) {
   return (await gitOut(repoPath, ['diff', '--no-color', `${base}..HEAD`, '--', '.', `:(exclude)${CODEMAPS_DIR}`])) || '';
 }
 
+/**
+ * LW 2.16: the gate's git log - since the previous gate's checkpoint tag,
+ * else the newest FALLBACK_LOG_COMMITS commits; '' on failure.
+ */
+async function gateLog(repoPath, runId, sinceIteration) {
+  const tag = Number.isInteger(sinceIteration) && sinceIteration >= 1 ? tagName(runId, sinceIteration) : null;
+  const hasTag = tag ? (await gitOut(repoPath, ['rev-parse', '-q', '--verify', `refs/tags/${tag}`])) !== null : false;
+  const range = hasTag ? [`refs/tags/${tag}..HEAD`, '-n', String(MAX_GATE_LOG_COMMITS)] : ['-n', String(FALLBACK_LOG_COMMITS), 'HEAD'];
+  return (await gitOut(repoPath, ['log', '--no-color', '--format=%h %s', '--name-only', ...range])) || '';
+}
+
 /** DESIGN.md and SHIP_CRITERIA.md: what the second opinion judges the gate against. */
 function designPack(repoPath) {
   return ['DESIGN.md', 'SHIP_CRITERIA.md']
@@ -108,7 +124,7 @@ function designPack(repoPath) {
 
 /**
  * @param {{env:()=>object, settings?:()=>object, log?:(line:string)=>void}} ctx
- * @returns {{refreshGraph:Function, i18n:Function, lighthouse:Function, reviews:Function, secondOpinion:Function}}
+ * @returns {{refreshGraph:Function, i18n:Function, lighthouse:Function, reviews:Function, skills:Function, secondOpinion:Function}}
  */
 function createHookDeps(ctx) {
   const settings = typeof ctx.settings === 'function' ? ctx.settings : () => settingsStore.readSettings();
@@ -135,6 +151,11 @@ function createHookDeps(ctx) {
       const diff = reviewsDue(iteration, isGate).length ? await iterationDiff(repoPath, runId, iteration) : '';
       return runReviews({ iteration, isGate, runId, repoPath, diff, env: ctx.env(), log });
     },
+    // LW 2.16: project skills at a passed gate, from the git log since the previous gate.
+    skills: async ({ isGate, repoPath, runId, iteration, milestone, models, sinceIteration }) => runGateSkills({
+      isGate, repoDir: repoPath, runId, iteration, milestone, models, env: ctx.env(), log,
+      gitLog: await gateLog(repoPath, runId, sinceIteration),
+    }),
     secondOpinion: async ({ isGate, repoPath, runId, iteration, report, allPassed }) => {
       const order = settingsStore.normalizeCliOrder(settings().secondOpinionOrder);
       if (!order.length) return null;
@@ -151,4 +172,4 @@ function createHookDeps(ctx) {
   };
 }
 
-module.exports = { routesFromTestPlan, iterationDiff, createHookDeps };
+module.exports = { routesFromTestPlan, iterationDiff, gateLog, createHookDeps };

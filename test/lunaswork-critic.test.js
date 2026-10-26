@@ -4,6 +4,9 @@
 // the pack files are written through lunasworkPack in a temp repo, and a
 // malformed reply creates no cards and does not crash. `claude` is a fake
 // runner; the to-do store is in memory.
+//
+// LW 2.22a: the iteration's Keep a Changelog CHANGELOG.md entry is built from
+// the closed cards (pure) and merged into the repo root's CHANGELOG.md.
 // ============================================================================
 
 'use strict';
@@ -16,6 +19,7 @@ const path = require('path');
 
 const C = require('../src/lunasworkCritic.js');
 const Pack = require('../src/lunasworkPack.js');
+const { changelogEntry, withChangelogEntry, appendChangelog, CHANGELOG_FILE } = require('../src/lunasworkCriticPack.js');
 const { orderCards } = require('../src/lunasworkRules.js');
 
 const RUN_ID = 'amsteel-1';
@@ -649,4 +653,114 @@ test('runCritic with no roadmap epic leaves the cards as before', async () => {
   const claude = fakeClaude(envelope(critique()));
   await C.runCritic(baseOpts({ todoStore: store, runClaude: claude.run }));
   assert.ok(!store.list[0].tags.some((t) => t.startsWith('epic:')));
+});
+
+// ---- LW 2.22a: CHANGELOG.md from the closed cards ---------------------------------------
+
+const closed = [
+  { at: 11, text: 'Save stores the quote', kind: 'bug' },
+  { at: 12, text: 'PDF export', kind: 'missing' },
+  { at: 13, text: 'Totals are readable at mobile width', kind: 'feel' },
+  { at: 14, text: 'A dark mode', kind: 'idea' },
+  { at: 15, text: 'Use the brand font', kind: null },
+];
+
+test('changelogEntry: one Keep a Changelog line per closed card, typed by its kind, in the format\'s order', () => {
+  const entry = changelogEntry({
+    iteration: 3,
+    cards: [...closed, { at: 16, text: 'pdf   EXPORT', kind: 'missing' }, { at: 17, text: '', kind: 'bug' }, null, { at: 18, text: 'Two\nlines', kind: 'bug' }],
+  });
+  assert.deepEqual(entry, {
+    Added: ['- PDF export', '- A dark mode'],
+    Changed: ['- Totals are readable at mobile width', '- Use the brand font'],
+    Fixed: ['- Save stores the quote', '- Two lines'],
+  });
+  assert.deepEqual(Object.keys(entry), ['Added', 'Changed', 'Fixed'], 'Keep a Changelog order');
+  assert.equal(changelogEntry({ cards: [] }), null, 'no card closed, no entry');
+  assert.equal(changelogEntry({}), null);
+  assert.equal(changelogEntry({ cards: Array.from({ length: 40 }, (_, i) => ({ text: `card ${i}`, kind: 'bug' })) }).Fixed.length, 30, 'capped');
+});
+
+test('withChangelogEntry: a new file gets the Keep a Changelog header and an Unreleased section', () => {
+  const md = withChangelogEntry('', changelogEntry({ cards: closed.slice(0, 2) }));
+  assert.match(md, /^# Changelog\n/);
+  assert.match(md, /\[Keep a Changelog\]\(https:\/\/keepachangelog\.com\/en\/1\.1\.0\/\)/);
+  assert.match(md, /\[Semantic Versioning\]/);
+  assert.ok(md.endsWith('## [Unreleased]\n\n### Added\n- PDF export\n\n### Fixed\n- Save stores the quote\n'));
+  assert.equal(withChangelogEntry('# Mine\n', null), '# Mine\n', 'no entry, no change');
+});
+
+test('withChangelogEntry merges into Unreleased above the releases, never repeats a line', () => {
+  const current = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '### Fixed',
+    '- An older fix',
+    '',
+    '## [1.0.0] - 2026-01-01',
+    '',
+    '### Added',
+    '- First release',
+    '',
+  ].join('\r\n');
+  const entry = changelogEntry({ cards: [closed[0], closed[1], { text: 'an OLDER fix', kind: 'bug' }] });
+  const md = withChangelogEntry(current, entry);
+  assert.equal(md, [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '### Added',
+    '- PDF export',
+    '',
+    '### Fixed',
+    '- An older fix',
+    '- Save stores the quote',
+    '',
+    '## [1.0.0] - 2026-01-01',
+    '',
+    '### Added',
+    '- First release',
+    '',
+  ].join('\n'));
+  assert.equal(withChangelogEntry(md, entry), md, 'the same cards again change nothing');
+  // No Unreleased section yet: it is made right above the newest release.
+  const released = withChangelogEntry('# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Added\n- First release\n', entry);
+  assert.match(released, /# Changelog\n\n## \[Unreleased\]\n\n### Added\n- PDF export\n\n### Fixed\n- Save stores the quote\n- an OLDER fix\n\n## \[1\.0\.0\]/);
+});
+
+test('runCritic appends the closed cards to the repo root CHANGELOG.md and lists it as written', async () => {
+  const opts = baseOpts({ runClaude: fakeClaude(envelope(critique())).run, closedCards: closed.slice(0, 2) });
+  const res = await C.runCritic(opts);
+  assert.equal(res.ok, true);
+  assert.ok(res.written.includes(CHANGELOG_FILE));
+  const file = path.join(opts.repoDir, CHANGELOG_FILE);
+  const md = fs.readFileSync(file, 'utf8');
+  assert.match(md, /## \[Unreleased\]\n\n### Added\n- PDF export\n\n### Fixed\n- Save stores the quote\n$/);
+  assert.ok(!fs.existsSync(path.join(opts.repoDir, 'design', CHANGELOG_FILE)), 'the project root, not design/');
+  // The next iteration closes one more card: appended, nothing repeated.
+  const next = await C.runCritic({ ...opts, iteration: 4, runClaude: fakeClaude(envelope(critique())).run, closedCards: closed.slice(0, 3) });
+  assert.ok(next.written.includes(CHANGELOG_FILE));
+  const md2 = fs.readFileSync(file, 'utf8');
+  assert.equal((md2.match(/- PDF export/g) || []).length, 1);
+  assert.match(md2, /### Changed\n- Totals are readable at mobile width\n\n### Fixed/);
+  // An iteration that closed nothing leaves the file alone.
+  const none = await C.runCritic({ ...opts, iteration: 5, runClaude: fakeClaude(envelope(critique())).run, closedCards: [] });
+  assert.ok(!none.written.includes(CHANGELOG_FILE));
+  assert.equal(fs.readFileSync(file, 'utf8'), md2);
+});
+
+test('a CHANGELOG.md that is not a plain file is never written: a warning, not a crash', async () => {
+  const repoDir = fakeRepo();
+  fs.mkdirSync(path.join(repoDir, CHANGELOG_FILE));
+  const entry = changelogEntry({ cards: closed });
+  assert.deepEqual(appendChangelog(repoDir, entry), { ok: false, written: false, error: 'notAFile' });
+  assert.deepEqual(appendChangelog('relative/repo', entry), { ok: false, written: false, error: 'noRepo' });
+  assert.deepEqual(appendChangelog(repoDir, null), { ok: true, written: false });
+  const res = await C.runCritic(baseOpts({ repoDir, runClaude: fakeClaude(envelope(critique())).run, closedCards: closed }));
+  assert.equal(res.ok, true, 'the iteration goes on');
+  assert.ok(res.warnings.some((w) => w.code === 'changelogWriteFailed' && w.detail === 'notAFile'));
+  assert.ok(!res.written.includes(CHANGELOG_FILE));
 });

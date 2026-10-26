@@ -27,6 +27,13 @@
 //      goes on (B12, lean): what was reached, the scores, what waits for
 //      Mati, and the feedback block (B17) - each item's status and the link
 //      to the phone / web feedback form. Once per run and milestone.
+//      LW 2.18: plus the decisions taken since the previous gate (the
+//      DECISIONS.md lines), the milestone's key screenshots inline and an
+//      optional TIME TO SHIP line (only when ctx.timeToShip is given); the
+//      sending and dedupe live in src/lunasworkMail.js.
+//   4. LW 2.18: the "while you were away" return pack
+//      (src/lunasworkReturn.js), saved as <runsDir>/lunaswork-<id>-return.md
+//      and attached to the run email with the screen tour's screenshots.
 //
 // Both emails list the run's feedback items with their status
 // (lunasworkFeedback.emailLines).
@@ -45,6 +52,12 @@ const h = require('./reportHtml');
 const pack = require('./lunasworkPack');
 const { PLATEAU_WINDOW, RED_STREAK } = require('./lunasworkRules');
 const { emailLines: feedbackLines } = require('./lunasworkFeedback');
+const { decisionLine } = require('./lunasworkDecisions');
+const { buildReturnPack } = require('./lunasworkReturn');
+const { createMilestoneMailer, screenshotAttachments } = require('./lunasworkMail');
+
+// The run email carries the HTML report and the return pack: room for three screenshots (gmailsend caps at 5).
+const RUN_MAIL_IMAGES = 3;
 
 const FINAL_VERDICTS = ['ship', 'plateau', 'red', 'stop'];
 const VERDICT_LABEL = { ship: 'SHIP', plateau: 'PLATEAU', red: 'RED', stop: 'STOP' };
@@ -59,8 +72,6 @@ const MAX_TAIL_LINES = 40;
 const MAX_TAIL_CHARS = 6000;
 const MAX_REPORT = 60000;
 const MAX_MAIL_RUNS = 50;
-// Milestone emails already sent (run id + milestone), per LunaCore session.
-const MAX_MILESTONE_KEYS = 200;
 
 const STOP_REASONS = {
   killSwitch: 'stopped with the kill switch',
@@ -136,6 +147,12 @@ function needsYou(run) {
     else if (rb) needs.push(`Iteration ${lap.n}: the rollback failed (${oneLine(rb.error || 'failed', 80)}) - the base branch still has that work.`);
     else if (lap.checkpoint && lap.checkpoint.tagError) needs.push(`Iteration ${lap.n}: the checkpoint tag was not pushed (${oneLine(lap.checkpoint.tagError, 80)}).`);
   }
+  // LW 2.22a: the release after the docs iteration.
+  const release = isObj(run.shipDocs) && isObj(run.shipDocs.release) ? run.shipDocs.release : null;
+  if (release && !release.ok) {
+    needs.push(`The release did not go out (${oneLine(release.error, 80)}${release.detail ? `: ${oneLine(release.detail, 160)}` : ''}) - tag it and run gh release create by hand.`);
+  }
+  if (verdict === 'stop' && isObj(run.shipDocs) && !release) needs.push('Every gate passed, but the docs iteration (README, user guide, release) did not go green - finish it by hand.');
   return needs;
 }
 
@@ -404,25 +421,60 @@ function buildRunEmail(run, opts = {}) {
 }
 
 /**
+ * LW 2.18: the DECISIONS.md lines taken since the previous passed gate - the
+ * Critic's per lap and the decision queue's answers - for the milestone email.
+ */
+function decisionsSinceGate(run) {
+  const laps = list(run.laps).sort((a, b) => a.n - b.n);
+  const previous = laps.slice(0, -1).filter((l) => l.gate === true).pop();
+  const since = previous ? previous.n : 0;
+  const critic = laps
+    .filter((l) => l.n > since)
+    .flatMap((l) => list(l.decisions).map((d) => `- Chose ${oneLine(d.choice, 200)} because ${oneLine(d.because, 200)} (Critic, iteration ${l.n})`));
+  const queue = list(run.decisions)
+    .filter((d) => d.status === 'answered' && (!Number.isInteger(d.iteration) || d.iteration > since))
+    .map((d) => {
+      try {
+        return decisionLine(d);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .map((line) => oneLine(line, 400));
+  return [...critic, ...queue];
+}
+
+/**
  * The milestone email: a gate passed and the run goes on.
  * @param {object} run the run right after the gate (already on the next milestone)
- * @param {{milestone:string}} ctx the milestone that was reached
+ * @param {{milestone:string, timeToShip?:string, screenshots?:{name:string, n:number, filename:string}[]}} ctx
+ *   the milestone that was reached; timeToShip = the estimate (the line only renders when given);
+ *   screenshots = the inline images attached (lunasworkMail)
  * @returns {{subject:string, text:string}}
  */
 function buildMilestoneEmail(run, ctx) {
   const r = isObj(run) ? run : {};
-  const reached = oneLine(ctx && ctx.milestone, 80) || 'a milestone';
+  const c = isObj(ctx) ? ctx : {};
+  const reached = oneLine(c.milestone, 80) || 'a milestone';
   const pending = list(r.decisions).filter((d) => d.status === 'pending');
   const lap = Math.max(0, (Number.isInteger(r.iteration) ? r.iteration : 1) - 1);
+  const timeToShip = oneLine(c.timeToShip, 120);
+  const shots = list(c.screenshots);
   const lines = [
     `Milestone "${reached}" reached after iteration ${lap}. The run goes on${r.milestone ? ` with "${oneLine(r.milestone, 80)}"` : ''}.`,
     '',
+    ...(timeToShip ? [`TIME TO SHIP: ${timeToShip}`, ''] : []),
     'WAITS FOR YOU',
     ...bullets(pending.map((d) => `${oneLine(d.question, 200)}${d.defaultAnswer ? '' : ' (no default - waits for you)'}`), '- nothing'),
     '',
     'SCORES PER MILESTONE',
     ...bullets(scoresByMilestone(r).map(([name, points]) => `${name}: ${scoreLine(points)}`)),
     '',
+    'DECISIONS SINCE THE LAST GATE (DECISIONS.md)',
+    ...(decisionsSinceGate(r).length ? decisionsSinceGate(r) : ['- none']),
+    '',
+    ...(shots.length ? ['SCREENSHOTS (inline below)', ...shots.map((s) => `- ${oneLine(s.name, 80)} (iteration ${s.n}): ${oneLine(s.filename, 100)}`), ''] : []),
     ...feedbackLines(r.feedback),
   ];
   return { subject: `Luna's Work: ${repoName(r)} - milestone ${reached} reached`, text: lines.join('\n') };
@@ -453,15 +505,21 @@ function createLunasWorkReporter(deps) {
   // One send at a time per run, on top of the persisted mark.
   const inFlight = new Set();
 
-  /** Writes the .md and .html. */
+  /** Writes the .md, the -return.md (LW 2.18) and the .html. */
   function writeReports(run) {
     const base = path.join(deps.runsDir(), `lunaswork-${run.id}`);
-    const out = { file: null, html: null, htmlText: null };
+    const out = { file: null, html: null, htmlText: null, returnFile: null };
     try {
       writeFile(`${base}.md`, buildRunReport(run, { now: now() }));
       out.file = `${base}.md`;
     } catch (err) {
       log(`[lunaswork] report not written: ${errText(err)}`);
+    }
+    try {
+      writeFile(`${base}-return.md`, buildReturnPack(run));
+      out.returnFile = `${base}-return.md`;
+    } catch (err) {
+      log(`[lunaswork] return pack not written: ${errText(err)}`);
     }
     try {
       out.htmlText = renderRunReportHtml(run, { now: now() });
@@ -503,7 +561,13 @@ function createLunasWorkReporter(deps) {
       inFlight.add(run.id);
       try {
         const email = buildRunEmail(run, { now: now(), logTail: playtestLogTail(readFile(run.repoPath, 'PLAYTEST_LOG.md')) });
-        const attachments = htmlText ? [{ filename: `lunaswork-run-${run.id}.html`, mimeType: 'text/html', content: htmlText }] : [];
+        // LW 2.18: the return pack (file names only, no local paths) and the screen tour's screenshots.
+        const shots = screenshotAttachments(run, { max: RUN_MAIL_IMAGES, readImage: deps.readImage });
+        const attachments = [
+          ...(htmlText ? [{ filename: `lunaswork-run-${run.id}.html`, mimeType: 'text/html', content: htmlText }] : []),
+          { filename: `lunaswork-${run.id}-return.md`, mimeType: 'text/markdown', content: buildReturnPack(run, { forEmail: true }) },
+          ...shots.map(({ filename, mimeType, content }) => ({ filename, mimeType, content })),
+        ];
         await m.sender.send({ subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) });
         if (persist) markSent(m, run);
         return { sent: true };
@@ -517,33 +581,15 @@ function createLunasWorkReporter(deps) {
     }
   }
 
-  const milestonesSent = new Set();
+  // LW 2.18: one email per run and milestone, with the milestone's screenshots inline.
+  const milestoneMailer = createMilestoneMailer({ mail: deps.mail, build: buildMilestoneEmail, readImage: deps.readImage, log });
 
   /**
    * The controller's onMilestone hook: one email per run and milestone.
-   * @returns {Promise<{sent:boolean, skipped?:string, error?:string}>} never rejects
+   * @returns {Promise<{sent:boolean, images?:number, skipped?:string, error?:string}>} never rejects
    */
-  async function onMilestone(run, ctx) {
-    const m = deps.mail;
-    if (!isObj(run) || typeof run.id !== 'string' || !FILE_ID_RE.test(run.id)) return { sent: false, skipped: 'bad-run' };
-    if (!m) return { sent: false, skipped: 'no-mailer' };
-    const key = `${run.id}|${oneLine(ctx && ctx.milestone, 80)}`;
-    if (milestonesSent.has(key)) return { sent: false, skipped: 'duplicate' };
-    try {
-      const st = m.sender.status();
-      const prefs = m.prefs.loadPrefs();
-      if (!st.connected && prefs.godmodeEmail !== false) return { sent: false, skipped: 'not-connected' };
-      if (!m.enabled(prefs, st.connected)) return { sent: false, skipped: 'off' };
-      milestonesSent.add(key);
-      if (milestonesSent.size > MAX_MILESTONE_KEYS) milestonesSent.delete(milestonesSent.values().next().value);
-      const email = buildMilestoneEmail(run, ctx);
-      await m.sender.send({ subject: email.subject, text: email.text });
-      return { sent: true };
-    } catch (err) {
-      const reason = (err && err.reason) || 'gmail-failed';
-      log(`[lunaswork] milestone email failed: ${reason} ${errText(err)}`);
-      return { sent: false, error: reason };
-    }
+  function onMilestone(run, ctx) {
+    return milestoneMailer.send(run, ctx);
   }
 
   /**
@@ -555,7 +601,7 @@ function createLunasWorkReporter(deps) {
     if (!FINAL_VERDICTS.includes(run.verdict)) return { ok: false, skipped: 'not-ended' };
     const written = writeReports(run);
     const sent = await mail(run, written.htmlText);
-    return { ok: !!written.file, file: written.file, html: written.html, mail: sent };
+    return { ok: !!written.file, file: written.file, html: written.html, returnFile: written.returnFile, mail: sent };
   }
 
   return { onRunEnd, onMilestone };

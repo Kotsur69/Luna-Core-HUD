@@ -29,6 +29,12 @@
 //                        that comes in while the held iteration is still
 //                        ending is kept (gateHold.approved) and applied by
 //                        withApproval(critic) as that iteration ends.
+//   atGate(critic, {rolledBack, milestone})
+//                        LW 2.16, ONLY at a passed gate that stayed on main:
+//                        project skills proposed, reviewed by the Critic,
+//                        written to .claude/skills and committed locally
+//                        (src/lunasworkSkills.js); the git log starts at the
+//                        previous gate's iteration (a lap with gate: true)
 //
 // A held gate is resolved by the next Critic too: its own call stands, and
 // no second opinion runs on that pass.
@@ -46,6 +52,8 @@
 //   deps.reviews({iteration, isGate, runId, repoPath}) -> Promise<runReviews() result>
 //   deps.secondOpinion({isGate, repoPath, runId, iteration, report, allPassed})
 //       -> Promise<runSecondOpinion() result|null>    (null: off, no CLI order set)
+//   deps.skills({isGate, repoPath, runId, iteration, milestone, models, sinceIteration})
+//       -> Promise<runGateSkills() result>
 // ============================================================================
 
 'use strict';
@@ -373,7 +381,41 @@ function createLoopHooks(ctx) {
     return { ...critic, milestone: { ...critic.milestone, passed: true } };
   }
 
-  return { afterMerge, afterLaunch, afterCritic, onAnswered, withApproval };
+  // ---- at a passed gate ----
+
+  /** The iteration of the run's previous passed gate (its git log starts there), or null. */
+  function previousGate() {
+    const r = run();
+    const gates = list(r.laps).filter((l) => isObj(l) && l.gate === true && l.n < r.iteration);
+    return gates.length ? gates[gates.length - 1].n : null;
+  }
+
+  /**
+   * LW 2.16: the project-skills pass, ONLY at a passed milestone gate that
+   * stays on main (not rolled back), once per iteration.
+   * @param {object} critic the Critic's call as the iteration ends (withApproval applied)
+   * @param {{rolledBack?:boolean, milestone?:string|null}} [opts]
+   */
+  function atGate(critic, opts = {}) {
+    return safely('project skills', async () => {
+      if (typeof deps.skills !== 'function' || !isGateOf(critic) || opts.rolledBack === true || isDone('skills')) return;
+      const r = run();
+      const res = await guarded('project skills', () => deps.skills({
+        ...base(),
+        isGate: true,
+        milestone: opts.milestone || (isObj(critic.milestone) ? critic.milestone.name : null) || r.milestone || null,
+        models: r.models,
+        sinceIteration: previousGate(),
+      }));
+      if (res !== FAILED && isObj(res)) {
+        for (const n of notesOf(res)) note(n);
+        if (res.committed) logEvent('project skills committed - they reach origin with the next merge');
+      }
+      markDone('skills');
+    });
+  }
+
+  return { afterMerge, afterLaunch, afterCritic, onAnswered, withApproval, atGate };
 }
 
 module.exports = { createLoopHooks, isGateOf };

@@ -5,13 +5,15 @@
 // Playtester; PLATEAU, RED, STOP, WAIT), persistence of every transition and
 // resume after a restart, the red self-check gate (never pushed to main),
 // model choices with reasons, isRiskyCard, the check command and model
-// precedence, and the mutual exclusion with God Mode both ways.
+// precedence, the mutual exclusion with God Mode both ways, and (LW 2.22a)
+// the docs iteration a SHIP verdict runs before the run ends.
 // ============================================================================
 
 'use strict';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
@@ -32,6 +34,7 @@ const { createGodModeBuilder } = require('../src/lunasworkBuild');
 const { createFinalizer } = require('../src/orchestraFinalize');
 const { selfCheckGate, fixupBrief } = require('../src/orchestraSelfCheck');
 const { DEFAULT_MODELS } = require('../src/lunasworkRules');
+const { docsCards, createReleaser } = require('../src/lunasworkShipDocs');
 
 // Never touched on disk: every dep that would use it is a fake.
 const REPO = path.resolve(os.tmpdir(), 'lw-controller-repo');
@@ -2052,4 +2055,225 @@ test('a restart right after the gate was held keeps it held (the hold is not tak
   assert.equal(g.calls.secondOpinion.length, 0);
   assert.equal(again.ctl.status().milestone, 'skeleton', 'still held');
   assert.equal(again.stored.gateHold.milestone, 'skeleton');
+});
+
+// ---- LW 2.22a: the docs iteration at SHIP --------------------------------------------------
+
+const DOCS_TEXTS = [
+  'Docs: README.md - what it is, install, run, test, deploy',
+  'Docs: docs/USER_GUIDE.md - one section per key screen',
+  'Release: version bump and the CHANGELOG.md section for vX.Y.Z',
+].sort();
+const RELEASED = { ok: true, tag: 'v1.1.0', url: 'https://example.invalid/amsteel/releases/v1.1.0' };
+
+/** deps.shipDocs fakes; `order` records each step and whether the run had ended by then. */
+function shipDocsFake(over = {}) {
+  const sd = { order: [], h: null };
+  const ended = () => (sd.h ? sd.h.ended.length : -1);
+  sd.deps = {
+    prepare: async () => {
+      sd.order.push(`prepare (ended ${ended()})`);
+      return { ok: true, committed: true };
+    },
+    cards: async (o) => {
+      sd.order.push(`cards (ended ${ended()})`);
+      return over.cards ? over.cards(o) : docsCards({ screens: [] });
+    },
+    release: async () => {
+      sd.order.push(`release (ended ${ended()})`);
+      return RELEASED;
+    },
+  };
+  return sd;
+}
+
+function docsHarness(over = {}) {
+  const sd = shipDocsFake(over);
+  const h = harness({ deps: { shipDocs: sd.deps } });
+  sd.h = h;
+  h.next.critic.push(shipCritic());
+  return { h, sd };
+}
+
+const textsOf = (cards) => cards.map((c) => c.text).sort();
+
+test('SHIP runs the docs iteration (README, USER_GUIDE, release) before the run ends', async () => {
+  const { h, sd } = docsHarness();
+  await h.start();
+
+  const status = h.ctl.status();
+  assert.equal(status.phase, 'done');
+  assert.equal(status.verdict, 'ship');
+  assert.equal(status.iteration, 2, 'the docs iteration is iteration n + 1');
+  assert.equal(h.calls.build.length, 2);
+  assert.deepEqual(textsOf(h.calls.build[0].cards), ['card 1', 'card 2']);
+  assert.equal(h.calls.build[1].iteration, 2);
+  assert.deepEqual(textsOf(h.calls.build[1].cards), DOCS_TEXTS);
+  // The builder brief rides on the docs cards too.
+  assert.ok(h.calls.build[1].cards.every((c) => /CHANGELOG\.md/.test(c.details)));
+  assert.deepEqual(sd.order, ['prepare (ended 0)', 'cards (ended 0)', 'release (ended 0)'], 'the run ends after the release');
+  // No new Playtester or Critic pass for the docs iteration.
+  assert.deepEqual(h.calls.playtest.map((c) => c.mode), ['explore', 'shipConfirm']);
+  assert.equal(h.calls.critic.length, 1);
+
+  assert.equal(h.ended.length, 1);
+  const [run] = h.ended;
+  assert.equal(run.verdict, 'ship');
+  assert.equal(run.shipDocs.n, 2);
+  assert.deepEqual([...run.shipDocs.landed].sort(), [...run.shipDocs.cards].sort());
+  assert.deepEqual(run.shipDocs.release, RELEASED);
+  const docs = h.todos.filter((t) => run.shipDocs.cards.includes(t.at));
+  assert.deepEqual(textsOf(docs), DOCS_TEXTS);
+  assert.ok(docs.every((t) => t.done === true && t.tags.includes('run:lwtest1')), 'the docs cards close with the run');
+  assert.match(logText(h), /SHIP verdict - docs iteration 2 first/);
+  assert.match(logText(h), /release v1\.1\.0 published/);
+});
+
+test('SHIP is not final while the docs build is red: it is built again, then the run ends', async () => {
+  const { h, sd } = docsHarness();
+  h.next.build.push(DEFAULT, redBuild());
+  await h.start();
+
+  assert.notEqual(h.ctl.status().phase, 'done');
+  assert.equal(h.ended.length, 0, 'no SHIP on a red docs build');
+  assert.ok(!sd.order.some((s) => s.startsWith('release')), 'nothing released');
+  assert.equal(h.stored.shipDocs.n, 2, 'the docs iteration survives a restart');
+  assert.match(logText(h), /docs iteration: the build is red/);
+
+  await h.fire();
+  assert.equal(h.ctl.status().verdict, 'ship');
+  assert.equal(h.calls.build.length, 3);
+  assert.equal(h.calls.build[2].iteration, 2);
+  assert.deepEqual(textsOf(h.calls.build[2].cards), DOCS_TEXTS);
+  assert.deepEqual(sd.order, ['prepare (ended 0)', 'cards (ended 0)', 'release (ended 0)']);
+  assert.equal(h.ended.length, 1);
+});
+
+test('a docs build that lands only some cards builds the rest again before SHIP', async () => {
+  const { h } = docsHarness();
+  // The docs build merges the first card only.
+  h.next.build.push(DEFAULT, (o) => {
+    const [first] = o.cards;
+    h.todos = h.todos.map((t) => (t.at === first.at ? { ...t, done: true } : t));
+    return {
+      ok: true, planId: 'p2', killed: false,
+      integration: { state: 'done', error: null, skipped: [], selfCheck: { tests: 'passed', fixups: 0, pushedIntegrationBranch: null } },
+      plan: { packages: [{ id: 'pk', merged: true, todos: [first.text] }] },
+    };
+  });
+  await h.start();
+
+  assert.equal(h.ended.length, 0);
+  assert.equal(h.stored.shipDocs.landed.length, 1);
+  assert.match(logText(h), /docs iteration: 2 card\(s\) did not land/);
+  await h.fire();
+  assert.equal(h.calls.build[2].cards.length, 2, 'only the missing cards');
+  assert.ok(!h.calls.build[2].cards.some((c) => c.at === h.calls.build[1].cards[0].at));
+  assert.equal(h.ctl.status().verdict, 'ship');
+  assert.equal(h.ended[0].shipDocs.landed.length, 3);
+});
+
+test('docs cards that cannot be filed do not hold SHIP back', async () => {
+  const { h, sd } = docsHarness({ cards: () => [] });
+  await h.start();
+  assert.equal(h.ctl.status().verdict, 'ship');
+  assert.equal(h.calls.build.length, 1, 'no docs build');
+  assert.deepEqual(sd.order, ['prepare (ended 0)', 'cards (ended 0)']);
+  assert.ok(!h.ended[0].shipDocs, 'no docs iteration ran');
+  assert.match(logText(h), /docs iteration not scheduled/);
+});
+
+// ---- LW 2.22a: the releaser (tag + gh release), git and gh faked ----------------------------
+
+const SHA = 'a'.repeat(40);
+const CHANGELOG = [
+  '# Changelog',
+  '',
+  '## [Unreleased]',
+  '',
+  '## [1.2.0] - 2026-10-26',
+  '',
+  '### Added',
+  '- PDF export',
+  '',
+  '## [1.1.0] - 2026-09-01',
+  '',
+  '### Fixed',
+  '- Old fix',
+  '',
+].join('\n');
+
+function releaseRepo(t, { changelog = CHANGELOG, version = '1.2.0' } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-release-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), changelog);
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'amsteel', version }));
+  return dir;
+}
+
+/** execFile fake: `answers` maps "cmd sub" to {ok, out}; records each call (and the notes file it was given). */
+function fakeExec(answers = {}) {
+  const calls = [];
+  const execImpl = (cmd, args, opts, cb) => {
+    const key = `${cmd} ${args[0]}${args[0] === 'rev-parse' ? ` ${args[args.length - 1]}` : ''}${cmd === 'gh' ? ` ${args[1]}` : ''}`;
+    const notesAt = args.indexOf('--notes-file');
+    calls.push({ cmd, args, key, notes: notesAt >= 0 ? fs.readFileSync(args[notesAt + 1], 'utf8') : null, notesFile: notesAt >= 0 ? args[notesAt + 1] : null });
+    const a = answers[key] || { ok: true, out: '' };
+    if (a.missing) return cb(Object.assign(new Error('not found'), { code: 'ENOENT' }), '', '');
+    return a.ok ? cb(null, a.out || '', '') : cb(new Error(a.err || 'failed'), '', a.err || 'failed');
+  };
+  return { calls, execImpl };
+}
+
+const RELEASE_ANSWERS = {
+  'git symbolic-ref': { ok: true, out: 'refs/heads/main' },
+  'git rev-parse FETCH_HEAD': { ok: true, out: SHA },
+  'git rev-parse refs/tags/v1.2.0': { ok: false },
+  'gh release view': { ok: false, err: 'release not found' },
+  'gh release create': { ok: true, out: 'https://github.com/example/amsteel/releases/tag/v1.2.0' },
+};
+
+test('the releaser tags the newest CHANGELOG version on origin\'s head and publishes its section', async (t) => {
+  const repoPath = releaseRepo(t);
+  const exec = fakeExec(RELEASE_ANSWERS);
+  const res = await createReleaser({ execImpl: exec.execImpl, env: () => ({}) }).release({ repoPath });
+
+  assert.deepEqual(res, { ok: true, tag: 'v1.2.0', url: 'https://github.com/example/amsteel/releases/tag/v1.2.0' });
+  assert.deepEqual(exec.calls.map((c) => [c.cmd, ...c.args]), [
+    ['git', 'symbolic-ref', '-q', 'HEAD'],
+    ['git', 'fetch', '-q', 'origin', 'refs/heads/main'],
+    ['git', 'rev-parse', 'FETCH_HEAD'],
+    ['git', 'rev-parse', '-q', '--verify', 'refs/tags/v1.2.0'],
+    ['git', 'tag', '-a', 'v1.2.0', '-m', 'Release v1.2.0', SHA],
+    ['git', 'push', '-q', 'origin', 'refs/tags/v1.2.0'],
+    ['gh', 'release', 'view', 'v1.2.0', '--json', 'url', '--jq', '.url'],
+    ['gh', 'release', 'create', 'v1.2.0', '--title', 'v1.2.0', '--notes-file', exec.calls[7].notesFile, '--verify-tag'],
+  ]);
+  assert.equal(exec.calls[7].notes, '### Added\n- PDF export', 'the notes are that version\'s CHANGELOG section');
+  assert.ok(!fs.existsSync(exec.calls[7].notesFile), 'the notes file is removed');
+});
+
+test('the releaser keeps an existing tag and release, and refuses what it cannot release', async (t) => {
+  const repoPath = releaseRepo(t);
+  const again = fakeExec({
+    ...RELEASE_ANSWERS,
+    'git rev-parse refs/tags/v1.2.0': { ok: true, out: SHA },
+    'gh release view': { ok: true, out: 'https://github.com/example/amsteel/releases/tag/v1.2.0' },
+  });
+  const res = await createReleaser({ execImpl: again.execImpl }).release({ repoPath });
+  assert.equal(res.ok, true);
+  assert.ok(!again.calls.some((c) => c.args[0] === 'tag' || c.args[1] === 'create'), 'no second tag, no second release');
+
+  const release = (exec, opts) => createReleaser({ execImpl: exec.execImpl }).release(opts);
+  assert.equal((await release(fakeExec(), { repoPath: 'relative' })).error, 'noRepo');
+  assert.equal((await release(fakeExec(), { repoPath: releaseRepo(t, { changelog: '# Changelog\n\n## [Unreleased]\n' }) })).error, 'noVersion');
+  const mismatch = fakeExec(RELEASE_ANSWERS);
+  const res2 = await release(mismatch, { repoPath: releaseRepo(t, { version: '1.1.0' }) });
+  assert.equal(res2.error, 'versionMismatch');
+  assert.equal(mismatch.calls.length, 0, 'nothing runs on a version mismatch');
+  assert.equal((await release(fakeExec({ ...RELEASE_ANSWERS, 'git symbolic-ref': { ok: false } }), { repoPath })).error, 'notOnBranch');
+  assert.equal((await release(fakeExec({ ...RELEASE_ANSWERS, 'git push': { ok: false, err: 'rejected' } }), { repoPath })).error, 'tagNotPushed');
+  const noGh = fakeExec({ ...RELEASE_ANSWERS, 'gh release view': { missing: true } });
+  assert.equal((await release(noGh, { repoPath })).error, 'noGh');
+  assert.ok(!noGh.calls.some((c) => c.args[1] === 'create'));
 });
