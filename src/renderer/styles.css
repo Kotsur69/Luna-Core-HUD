@@ -4973,6 +4973,44 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   color: var(--text-dim);
 }
 .lw-pack-list:empty { display: none; }
+
+/* Luna's Work run panel (modules/lunasworkPanel.js). */
+.lw-run__list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-xs);
+}
+.lw-run__list:empty { display: none; }
+.lw-run__row { display: contents; }
+.lw-run__row dt { color: var(--text-dim); }
+.lw-run__row dd { margin: 0; font-family: var(--font-mono); word-break: break-word; }
+.lw-run__row dd.is-warn { color: var(--warn); }
+.lw-run__scores-wrap:empty { display: none; }
+.lw-run__scores {
+  width: 100%;
+  margin-bottom: var(--space-3);
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+.lw-run__scores th { text-align: left; color: var(--text-dim); font-weight: normal; padding-bottom: var(--space-1); }
+.lw-run__scores td { padding: var(--space-1) var(--space-3) var(--space-1) 0; font-family: var(--font-mono); }
+.lw-run__spark { display: inline-block; width: 80px; height: 16px; vertical-align: middle; }
+.lw-run__spark polyline { fill: none; stroke: var(--neon-cyan); stroke-width: 1.5; }
+.lw-run__actions .pad-send:disabled,
+.lw-start .pad-send:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+.lw-run__stop:not(:disabled) { border-color: var(--bad); color: var(--bad); }
+.lw-start {
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: var(--border-w) solid var(--neon-cyan);
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+}
+.lw-start__save { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-2) 0; font-size: var(--fs-sm); }
+.lw-steer { margin-top: var(--space-3); }
+.termcustom__hint.is-bad { color: var(--bad); }
 .orchestra__example { display: block; font-size: var(--fs-xs); color: var(--text); word-break: break-all; }
 .orchestra__actions .pad-send,
 .orchestra__foot .pad-send { padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); }

@@ -2,7 +2,7 @@
 // LunaCore - Luna's Work IPC (main process, docs/LUNAS_WORK_PLAN.md slice 1.2c)
 // ----------------------------------------------------------------------------
 // lunaswork:getSettings    {projectId} -> view
-// lunaswork:saveSettings   {projectId, models?, freeFallback?, profile?} -> view
+// lunaswork:saveSettings   {projectId, models?, projectModels?, freeFallback?, profile?} -> view
 //                          | {ok:false, reason:'bad-profile', field, detail}
 // lunaswork:scaffoldPack   {projectId} -> {ok, created, skipped, failed, pack}
 // lunaswork:packStatus     {projectId} -> {ok, pack}
@@ -12,8 +12,14 @@
 // lunaswork:start          {projectId, models?} -> {ok, status} | {ok:false, reason, message?}
 // lunaswork:stop           (no payload) -> {ok, status} | {ok:false, reason, message}
 // lunaswork:status         (no payload) -> {ok, status}
+// lunaswork:steer          {projectId, text} -> {ok} | {ok:false, reason}
+// lunaswork:openEvidence   (no payload) -> {ok} | {ok:false, reason}
+// lunaswork:event          main -> renderer push, {type, status}, on every
+//                          controller event (phase, wait, resume, stopping)
 //
-// view = {ok, projectId, roles, choices, models, freeFallback, profile}
+// view = {ok, projectId, roles, choices, models, projectModels, freeFallback, profile}
+// models = LunaCore's default per role; projectModels = this project's override.
+// Every status that leaves main goes through lunasworkStatus.publicStatus.
 // pack = {complete, missing, empty}
 //
 // The renderer only ever names a KNOWN project by id - never a folder, a
@@ -33,6 +39,9 @@ const settingsStore = require('./lunasworkSettings');
 const pack = require('./lunasworkPack');
 const { ROLES, MODEL_CHOICES } = require('./lunasworkRules');
 const { getProject, resolveProjectDir } = require('./projects');
+const { keyFor } = require('./todo');
+const { publicStatus, publicEvent, evidenceDirOf } = require('./lunasworkStatus');
+const { STEER_TAG, MAX_ITEMS: MAX_TODO_ITEMS, MAX_TEXT_CHARS: MAX_STEER_CHARS } = require('./todorows');
 
 const MAX_ID_CHARS = 200;
 // Opening a tab is a side effect a double click must not repeat.
@@ -41,6 +50,16 @@ const PROFILE_FIELDS = ['adapter', 'startCommand', 'url', 'readyTimeoutSec', 'ch
 const MAX_PROFILE_STRING = settingsStore.MAX_COMMAND_CHARS;
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+/** A steer card's text: one trimmed line, 1..MAX_STEER_CHARS, or null. */
+function parseSteerText(raw) {
+  if (typeof raw !== 'string' || raw.length > MAX_STEER_CHARS * 2) return null;
+  const text = raw.trim();
+  if (!text || text.length > MAX_STEER_CHARS || CONTROL_CHARS.test(text)) return null;
+  return text;
+}
 
 /** The project id of a request, or null when it is malformed. */
 function projectIdOf(req) {
@@ -95,7 +114,10 @@ function defaultWriteBrief(file, text) {
 
 /**
  * @param {{ipcMain:object, projects:()=>object[], createSession:(opts:object)=>object|null,
- *   briefDir:()=>string, controller?:{start:Function, stop:Function, status:Function},
+ *   briefDir:()=>string, controller?:{start:Function, stop:Function, status:Function, subscribe:Function},
+ *   send?:(channel:string, payload:object)=>void,
+ *   todos?:{read:(projectId:string)=>object[], write:(projectId:string, list:object[])=>boolean, changed:(projectId:string)=>void},
+ *   runsRoot?:()=>string, openPath?:(dir:string)=>Promise<string>|string,
  *   settingsFile?:string, writeBrief?:Function, resolveDir?:Function,
  *   now?:()=>number}} deps  settingsFile / writeBrief / resolveDir / now: test seams
  */
@@ -106,6 +128,10 @@ function registerLunasworkIpc(deps) {
     createSession,
     briefDir,
     controller,
+    send,
+    todos,
+    runsRoot,
+    openPath,
     settingsFile,
     writeBrief = defaultWriteBrief,
     resolveDir = resolveProjectDir,
@@ -136,6 +162,7 @@ function registerLunasworkIpc(deps) {
       roles: [...ROLES],
       choices: [...MODEL_CHOICES],
       models: settings.models,
+      projectModels: settingsStore.normalizeModelOverride((settings.projects[keyFor(projectId)] || {}).models),
       freeFallback: settings.freeFallback,
       profile: settingsStore.profileFor(settings, projectId),
     };
@@ -166,6 +193,12 @@ function registerLunasworkIpc(deps) {
       const models = parseModels(req.models);
       if (!models) return { ok: false, reason: 'bad-models' };
       next = { ...next, models: { ...next.models, ...models } };
+    }
+    if (req.projectModels !== undefined) {
+      // "Save as this project's default" from the start dialog; null clears it.
+      const models = req.projectModels === null ? {} : parseModels(req.projectModels);
+      if (!models) return { ok: false, reason: 'bad-models' };
+      next = settingsStore.withProject(next, project.id, { models }).settings;
     }
     if (req.freeFallback !== undefined) {
       if (typeof req.freeFallback !== 'boolean') return { ok: false, reason: 'bad-value' };
@@ -222,11 +255,25 @@ function registerLunasworkIpc(deps) {
     return { ok: true, pack: pack.packCompleteness(repo) };
   }));
 
-  if (controller) registerRunIpc(ipcMain, controller, projectOf);
+  if (controller) {
+    const isKnownProject = (id) => !!projectOf({ projectId: id });
+    registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, todos, runsRoot, openPath, now });
+  }
 }
 
-/** start / stop / status of a run (src/lunaswork.js). */
-function registerRunIpc(ipcMain, controller, projectOf) {
+/** start / stop / status / steer / evidence of a run (src/lunaswork.js), and its event push. */
+function registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, todos, runsRoot, openPath, now }) {
+  // Whatever the controller answers, the renderer only sees the public status.
+  const withPublicStatus = (res) =>
+    isObject(res) && res.status !== undefined ? { ...res, status: publicStatus(res.status, isKnownProject) } : res;
+
+  if (send && typeof controller.subscribe === 'function') {
+    controller.subscribe((event) => {
+      const out = publicEvent(event, isKnownProject);
+      if (out) send('lunaswork:event', out);
+    });
+  }
+
   ipcMain.handle('lunaswork:start', async (_event, req) => {
     try {
       const project = projectOf(req);
@@ -236,7 +283,7 @@ function registerRunIpc(ipcMain, controller, projectOf) {
         models = parseModels(req.models);
         if (!models) return { ok: false, reason: 'bad-models' };
       }
-      return await controller.start({ projectId: project.id, ...(models ? { models } : {}) });
+      return withPublicStatus(await controller.start({ projectId: project.id, ...(models ? { models } : {}) }));
     } catch (err) {
       console.error('[lunaswork] start failed:', err && err.message);
       return { ok: false, reason: 'failed' };
@@ -246,7 +293,7 @@ function registerRunIpc(ipcMain, controller, projectOf) {
   // The kill switch takes no payload: there is one run at most.
   ipcMain.handle('lunaswork:stop', () => {
     try {
-      return controller.stop();
+      return withPublicStatus(controller.stop());
     } catch (err) {
       console.error('[lunaswork] stop failed:', err && err.message);
       return { ok: false, reason: 'failed' };
@@ -255,9 +302,58 @@ function registerRunIpc(ipcMain, controller, projectOf) {
 
   ipcMain.handle('lunaswork:status', () => {
     try {
-      return { ok: true, status: controller.status() };
+      return { ok: true, status: publicStatus(controller.status(), isKnownProject) };
     } catch (err) {
       console.error('[lunaswork] status failed:', err && err.message);
+      return { ok: false, reason: 'failed' };
+    }
+  });
+
+  if (todos) registerSteerIpc(ipcMain, projectOf, todos, now);
+
+  // Only the current run's evidence folder, checked to sit in its runs folder.
+  if (runsRoot && openPath) {
+    ipcMain.handle('lunaswork:openEvidence', async () => {
+      try {
+        const status = controller.status();
+        if (!isObject(status) || !isKnownProject(status.projectId)) return { ok: false, reason: 'no-evidence' };
+        const dir = evidenceDirOf(status, runsRoot());
+        if (!dir) return { ok: false, reason: 'no-evidence' };
+        const error = await openPath(dir);
+        return error ? { ok: false, reason: 'open-failed' } : { ok: true };
+      } catch (err) {
+        console.error('[lunaswork] openEvidence failed:', err && err.message);
+        return { ok: false, reason: 'failed' };
+      }
+    });
+  }
+}
+
+/**
+ * Quick-adds Mati's `steer` card to a known project's to-do list. The text is
+ * the only free input; the card's id, tags and state are set here.
+ */
+function registerSteerIpc(ipcMain, projectOf, todos, now) {
+  ipcMain.handle('lunaswork:steer', (_event, req) => {
+    try {
+      const project = projectOf(req);
+      if (!project) return { ok: false, reason: 'bad-project' };
+      const text = parseSteerText(req.text);
+      if (!text) return { ok: false, reason: 'bad-text' };
+      const raw = todos.read(project.id);
+      const list = Array.isArray(raw) ? raw : [];
+      if (list.length >= MAX_TODO_ITEMS) return { ok: false, reason: 'list-full' };
+      // `at` is the card id: never reuse one already on the list.
+      const taken = new Set(list.map((c) => isObject(c) && c.at));
+      let at = now();
+      while (taken.has(at)) at += 1;
+      if (!todos.write(project.id, [...list, { text, done: false, at, tags: [STEER_TAG] }])) {
+        return { ok: false, reason: 'write-failed' };
+      }
+      todos.changed(project.id);
+      return { ok: true };
+    } catch (err) {
+      console.error('[lunaswork] steer failed:', err && err.message);
       return { ok: false, reason: 'failed' };
     }
   });
@@ -267,6 +363,7 @@ module.exports = {
   registerLunasworkIpc,
   parseModels,
   parseProfile,
+  parseSteerText,
   fieldOf,
   INTERVIEW_GAP_MS,
 };

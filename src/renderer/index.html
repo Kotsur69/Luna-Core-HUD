@@ -2117,6 +2117,43 @@
               </label>
               <p id="lw-error" class="termcustom__hint lw-error" role="alert" hidden></p>
             </div>
+            <!-- The run panel (slice 1.7, modules/lunasworkPanel.js): start / stop /
+                 steer and the live status pushed on lunaswork:event. -->
+            <div class="termcustom__group lw-run">
+              <h3 class="termcustom__section" data-i18n="lw.run.section">Przebieg</h3>
+              <p id="lw-run-summary" class="termcustom__hint" role="status" data-i18n="lw.run.none">Brak przebiegu.</p>
+              <dl id="lw-run-details" class="lw-run__list"></dl>
+              <div id="lw-run-scores" class="lw-run__scores-wrap"></div>
+              <p id="lw-run-error" class="termcustom__hint lw-error" role="alert" hidden></p>
+              <div class="termcustom__bgimage-row lw-run__actions">
+                <button type="button" id="lw-run-start" class="pad-send" data-i18n="lw.run.start">Start</button>
+                <button type="button" id="lw-run-stop" class="pad-send lw-run__stop" disabled data-i18n-title="lw.run.stop.hint" title="Biezacy krok sie konczy, potem przebieg sie zatrzymuje i raportuje." data-i18n="lw.run.stop">Stop</button>
+                <button type="button" id="lw-run-evidence" class="pad-send" hidden data-i18n="lw.run.evidence">Folder dowodow</button>
+              </div>
+              <div id="lw-start-panel" class="lw-start" hidden>
+                <p class="termcustom__hint" data-i18n="lw.start.hint">Modele dla TEGO przebiegu. Domyslnie: ustawienie projektu albo LunaCore.</p>
+                <div id="lw-start-models" class="lw-start__models"></div>
+                <label class="lw-start__save">
+                  <input type="checkbox" id="lw-start-save" />
+                  <span data-i18n="lw.start.save">Zapisz jako domyslne dla tego projektu</span>
+                </label>
+                <p id="lw-start-block" class="termcustom__hint lw-error" role="alert" hidden></p>
+                <div class="termcustom__bgimage-row">
+                  <button type="button" id="lw-start-go" class="pad-send" data-i18n="lw.start.go">Uruchom przebieg</button>
+                  <button type="button" id="lw-start-cancel" class="pad-send" data-i18n="lw.start.cancel">Anuluj</button>
+                </div>
+              </div>
+              <form id="lw-steer-form" class="lw-steer" novalidate>
+                <label class="ui-field" data-i18n-title="lw.steer.hint" title="Dodaje karte steer do listy zadan projektu - rezyser bierze ja pod uwage w nastepnej iteracji.">
+                  <span class="ui-field__label" data-i18n="lw.steer">Steruj</span>
+                  <input id="lw-steer-text" class="mc-input" maxlength="1000" spellcheck="false" autocomplete="off" data-i18n-ph="lw.steer.ph" placeholder="np. najpierw popraw menu" />
+                </label>
+                <div class="termcustom__bgimage-row">
+                  <button type="submit" class="pad-send" data-i18n="lw.steer.add">Dodaj karte</button>
+                  <span id="lw-steer-msg" class="termcustom__hint" role="status" hidden></span>
+                </div>
+              </form>
+            </div>
             <div class="termcustom__group">
               <h3 class="termcustom__section" data-i18n="lw.models.section">Modele rol</h3>
               <p class="termcustom__hint" data-i18n="lw.models.hint">auto = Luna decyduje (wybor i powod trafiaja do raportu przebiegu).</p>
