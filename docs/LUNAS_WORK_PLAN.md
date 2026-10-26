@@ -311,8 +311,15 @@ doc becomes `DONE_LUNAS_WORK_PLAN.md`.
 7. **Panel** — start / steer / stop, current iteration + role, basic scores.
 8. **Done = verified (B1), stuck cards (B4), scope guard (B5), flaky
    quarantine (B9)** — rules in `lunasworkRules.js`, wired into the Critic.
-9. **Mid-run feedback (B17)** — steer cards + feedback link, triage into
-   cards, trust rules, per-item status.
+9. ✅ **Mid-run feedback (B17).** `lunasworkFeedback.js`: items stored in
+   the run (never a pause), rule-based triage into cards at the start of
+   every iteration (look / bug tagged `feedback`, scheduled right after
+   steer cards; scope held by a decision - Mati's `feedbackScope` defaults
+   to approve, a client's `clientScope` has none), per-item status
+   (planned / built / verified) on the phone's God Mode page with a
+   feedback form (`todos` unit `lunaswork-feedback:<id>`), and a lean
+   milestone email (scores, what waits, feedback + link). The full B12 pack
+   stays in Phase 2.
 10. ✅ **Iteration 0 (B2) + survive the machine (B3).** `lunasworkScaffold.js`
     (empty repo -> Next.js/TS or Python (uv + pytest) template cards, built
     as iteration 0; profile defaults confirmed at start) and

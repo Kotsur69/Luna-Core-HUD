@@ -173,7 +173,7 @@ test('runCritic stores bug cards with the repro test and the run tags', async ()
   assert.match(stored.details, /reproduces this bug/);
   assert.ok(stored.acceptance.some((a) => /a test reproduces the bug/i.test(a)));
   assert.deepEqual(stored.tags, [RUN_TAG, 'kind:bug', 'sev:blocker']);
-  assert.deepEqual(C.cardMeta(stored), { kind: 'bug', severity: 'blocker', steer: false });
+  assert.deepEqual(C.cardMeta(stored), { kind: 'bug', severity: 'blocker', steer: false, feedback: false });
 });
 
 // ---- idea cards and the milestone gate ----------------------------------------------

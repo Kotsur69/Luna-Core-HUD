@@ -25,6 +25,7 @@ const settingsStore = require('./lunasworkSettings');
 const { keyFor } = require('./todo');
 const { MAX_DETAILS_CHARS, MAX_TEXT_CHARS: MAX_CARD_TEXT_CHARS } = require('./todorows');
 const { restoreQueue } = require('./lunasworkDecisions');
+const { restoreFeedback } = require('./lunasworkFeedback');
 
 const PREPROD = 'preprod';
 const DONE = 'done';
@@ -577,6 +578,8 @@ function restoreRun(raw) {
     laps: cleanLaps(raw.laps),
     // The decision queue (lunasworkDecisions.js): pending ones survive a restart.
     decisions: restoreQueue(raw.decisions),
+    // B17: mid-run feedback items with their triage and status (lunasworkFeedback.js).
+    feedback: restoreFeedback(raw.feedback),
     // B4: failed iterations per card; B9: quarantined flaky tests, per run.
     failCounts: cleanFailCounts(raw.failCounts),
     quarantine: cleanQuarantine(raw.quarantine),

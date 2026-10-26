@@ -14,6 +14,8 @@
 //                      the same file's `seen` list, then put
 //   godmode.decisions(list) Luna's Work decisions waiting for Mati changed:
 //                      put the history with them over it (the phone answers)
+//   godmode.feedback(s) the current run's feedback section changed (B17):
+//                      put the history with it over it (the phone shows status)
 //
 // Every put is skipped while logged out, and a failure only logs - it never
 // throws into the git station or the end of a God Mode run. cloudsnapshots
@@ -95,7 +97,9 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
   let lastLive = { live: null, tabs: [] };
   // Luna's Work decisions waiting for Mati: memory only, like the live run.
   let lastDecisions = [];
-  const overlay = () => ({ ...lastLive, decisions: lastDecisions });
+  // Luna's Work feedback section of the current run (B17): memory only too.
+  let lastFeedback = null;
+  const overlay = () => ({ ...lastLive, decisions: lastDecisions, feedback: lastFeedback });
 
   /** Rewrites the local history file with `step(prev)` and puts it with the live run over it. */
   function writeHistory(step) {
@@ -135,6 +139,11 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     /** Puts the run history with these pending Luna's Work decisions ([] clears them). Never throws. */
     decisions(list) {
       lastDecisions = Array.isArray(list) ? list : [];
+      return putOverlay();
+    },
+    /** Puts the run history with the current run's feedback section (null clears it). Never throws. */
+    feedback(section) {
+      lastFeedback = section && typeof section === 'object' ? section : null;
       return putOverlay();
     },
     /** Marks run `id` seen in this PC's own row (the attention inbox). Never throws. */

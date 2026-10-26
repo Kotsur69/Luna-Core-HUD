@@ -63,6 +63,8 @@ const KIND_RANK = { bug: 0, missing: 1, feel: 2, idea: 3 };
 const SEVERITY_RANK = { blocker: 0, high: 1, medium: 2, low: 3 };
 // The tag a stuck card gets when it closes because the Critic split it (B4).
 const SPLIT_TAG = 'split';
+// Same value as lunasworkFeedback.FEEDBACK_TAG (that module loads this one's neighbours, not this one).
+const FEEDBACK_TAG = 'feedback';
 
 const MAX_CARDS = MAX_TASKS_PER_CALL;
 const MAX_RAW_CARDS = 50;
@@ -221,8 +223,9 @@ function cardTags(tag, kind, severity, existing = []) {
 
 /**
  * Kind and severity of a stored card, read back from its tags (for
- * lunasworkRules.orderCards). steer = Mati's card.
- * @returns {{kind:string|null, severity:string|null, steer:boolean}}
+ * lunasworkRules.orderCards). steer = Mati's card; feedback = a card filed
+ * from mid-run feedback (B17), scheduled right after the steer cards.
+ * @returns {{kind:string|null, severity:string|null, steer:boolean, feedback:boolean}}
  */
 function cardMeta(card) {
   const tags = isObj(card) && Array.isArray(card.tags) ? card.tags : [];
@@ -230,7 +233,7 @@ function cardMeta(card) {
     const hit = tags.find((t) => t.startsWith(prefix) && allowed.includes(t.slice(prefix.length)));
     return hit ? hit.slice(prefix.length) : null;
   };
-  return { kind: value('kind:', KINDS), severity: value('sev:', SEVERITIES), steer: tags.includes(STEER_TAG) };
+  return { kind: value('kind:', KINDS), severity: value('sev:', SEVERITIES), steer: tags.includes(STEER_TAG), feedback: tags.includes(FEEDBACK_TAG) };
 }
 
 /**
@@ -504,7 +507,8 @@ function applyCards(store, cards, tag) {
     fresh.slice(room).map((c) => ({ ...c, splitsCardId: splitOf(c) })),
     warnings,
   );
-  const tasks = kept.map((c) => ({ ...taskFields(c), tags: cardTags(tag, c.kind, c.severity) }));
+  // extraTags: set only by the controller's own cards (B17 feedback), never by the model's output.
+  const tasks = kept.map((c) => ({ ...taskFields(c), tags: cardTags(tag, c.kind, c.severity, c.extraTags) }));
   const at = store.now ? store.now() : Date.now();
   let created = [];
   if (tasks.length) {

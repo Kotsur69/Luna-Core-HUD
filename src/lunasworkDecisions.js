@@ -17,7 +17,8 @@
 //              side) and answersFromTodoPeers (the way back, see below)
 //
 // A stuck card (B4) or an out-of-scope card (B5) defaults to reject: the
-// card stays parked and the run keeps to the design.
+// card stays parked and the run keeps to the design. A scope change from
+// Mati's own feedback (B17, src/lunasworkFeedback.js) defaults to approve.
 // Defaults are the choice that loses nothing: adding a dependency or a
 // migration is approved (a checkpoint rollback reverts it), deleting a
 // feature or rewriting DESIGN.md is rejected (it would lose what Mati asked
@@ -39,7 +40,7 @@
 // stuckCard: a card that failed two iterations and the Critic did not split
 // (B4). outOfScope: a card outside DESIGN.md / ROADMAP.md (B5). Both are
 // asked by the controller, never by needsDecision().
-const KINDS = ['dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'clientScope', 'other'];
+const KINDS = ['dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'feedbackScope', 'clientScope', 'other'];
 const ANSWERED_BY = ['mati', 'default'];
 const STATUSES = ['pending', 'answered'];
 
@@ -77,6 +78,8 @@ const CARD_CHOICES = Object.freeze({
   stuckCard: { options: [APPROVE, REJECT], defaultAnswer: REJECT },
   // approve = build it anyway; the default keeps the run inside the design.
   outOfScope: { options: [APPROVE, REJECT], defaultAnswer: REJECT },
+  // B17: Mati's feedback may change anything; the queue only records it.
+  feedbackScope: { options: [APPROVE, REJECT], defaultAnswer: APPROVE },
 });
 const CLIENT_OPTIONS = Object.freeze(['yes', 'no']);
 

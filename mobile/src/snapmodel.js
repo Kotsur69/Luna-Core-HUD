@@ -21,7 +21,7 @@ const { summarize, weekWindow } = ledgerCalc;
 const { parseYazioPeer } = yazio;
 const { newestUsage, windowNow } = usage;
 const { reposFrom: mergeReposRows } = reposSnap;
-const { runsFrom, liveFrom, tabsFrom, decisionsFrom, liveCounts } = godmodeSnap;
+const { runsFrom, liveFrom, tabsFrom, decisionsFrom, feedbackFrom, liveCounts } = godmodeSnap;
 
 /** Projects listed on the phone; the rest only count in the total. */
 export const MAX_PROJECTS = 20;
@@ -138,6 +138,11 @@ export function godmodeTabsFrom(rows, now) {
 /** Luna's Work decisions waiting for Mati, from the newest PC that publishes any (each with `machine`, `stale`). */
 export function godmodeDecisionsFrom(rows, now) {
   return decisionsFrom(rows, now);
+}
+
+/** Luna's Work feedback of the run going on now (B17): {runId, repoName, items, machine, stale}, or null. */
+export function godmodeFeedbackFrom(rows, now) {
+  return feedbackFrom(rows, now);
 }
 
 /** {pushed, working, waiting, pending, failed} of a live run. */
