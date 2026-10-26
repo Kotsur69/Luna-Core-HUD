@@ -7,6 +7,7 @@
 //   tools()        -> the ONLY tools the Playtester may use
 //   stop()         -> Promise<boolean>         tear it all down (idempotent)
 //   evidenceDir    -> <userDir>/runs/lunaswork-<runId>/iter-<N>/
+//   ensureBrowsers(matrix) -> Promise<{ok, installed}>  install engines once
 //
 // Only `web` exists. It spawns the profile's startCommand in the project dir,
 // logs stdout/stderr to server.log in the evidence dir, polls the profile url
@@ -27,6 +28,7 @@ const path = require('path');
 const childProcess = require('child_process');
 const paths = require('./paths');
 const { ADAPTERS, RESERVED_ADAPTERS, validateProfile } = require('./lunasworkSettings');
+const { ENGINES, BASELINE_COMBO } = require('./lunasworkRules');
 
 const RUNS_DIR = 'runs';
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
@@ -34,6 +36,13 @@ const MAX_ITERATION = 10000;
 const POLL_INTERVAL_MS = 500;
 const POLL_REQUEST_TIMEOUT_MS = 3000;
 const SERVER_LOG = 'server.log';
+const BROWSERS_LOG = 'browsers.log';
+// <runsRoot>/.playwright-browsers.json: the engines already installed, so the
+// install step runs on first use of an engine only.
+const BROWSERS_MARKER = '.playwright-browsers.json';
+const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+const BROWSERS_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_VIEWPORT = 4000;
 
 // Playwright MCP, run by the Playtester's headless `claude -p`. Screenshots and
 // console dumps land in the evidence dir via --output-dir.
@@ -114,6 +123,45 @@ function killTree(pid, { platform, execFile, kill }) {
       }
     }
   });
+}
+
+// ---- browser matrix -----------------------------------------------------------------
+
+const viewportOk = (n) => Number.isInteger(n) && n > 0 && n <= MAX_VIEWPORT;
+
+/**
+ * The matrix entries the adapter can honour (a known engine, a sane viewport);
+ * the Chromium desktop baseline when nothing usable is left.
+ * @param {unknown} matrix lunasworkRules.matrixFor()
+ * @returns {Array<{engine:string, width:number, height:number}>}
+ */
+function cleanMatrix(matrix) {
+  const list = (Array.isArray(matrix) ? matrix : []).filter(
+    (c) => c && ENGINES.includes(c.engine) && viewportOk(c.width) && viewportOk(c.height),
+  );
+  return list.length ? list : [BASELINE_COMBO];
+}
+
+/** Distinct engines of a matrix, in matrix order. */
+const enginesOf = (matrix) => [...new Set(cleanMatrix(matrix).map((c) => c.engine))];
+
+/** Chromium keeps the plain server name; other engines get their own server. */
+const serverFor = (engine) => (engine === 'chromium' ? PLAYWRIGHT_SERVER : `${PLAYWRIGHT_SERVER}-${engine}`);
+
+/**
+ * Engines installed within BROWSERS_TTL_MS. The MCP package is @latest, so a
+ * marker without an age limit would outlive a Playwright upgrade that needs
+ * new browser builds; an expired marker reinstalls (idempotent, quick).
+ */
+function readInstalled(runsRoot, now) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(runsRoot, BROWSERS_MARKER), 'utf8'));
+    const at = Date.parse(raw && raw.at);
+    if (!Number.isFinite(at) || now - at > BROWSERS_TTL_MS || at > now) return [];
+    return Array.isArray(raw.engines) ? raw.engines.filter((e) => ENGINES.includes(e)) : [];
+  } catch {
+    return []; // missing or broken marker: install again, it is idempotent
+  }
 }
 
 // ---- web adapter --------------------------------------------------------------------
@@ -221,17 +269,91 @@ function createWebAdapter(ctx) {
     return stopping;
   }
 
-  /** Fresh objects every call, so a caller cannot edit the allow-list in place. */
-  function tools() {
-    const args = [PLAYWRIGHT_PACKAGE, '--headless', '--isolated', '--output-dir', ctx.evidenceDir];
-    if (readyUrl) args.push('--allowed-origins', new URL(readyUrl).origin);
-    return {
-      mcpConfig: { mcpServers: { [PLAYWRIGHT_SERVER]: { type: 'stdio', command: 'npx', args } } },
-      allowedTools: PLAYWRIGHT_TOOLS.map((t) => `mcp__${PLAYWRIGHT_SERVER}__${t}`),
-    };
+  /**
+   * One Playwright MCP server per engine of the matrix, each launched with
+   * its `--browser` and the viewport of that engine's first combo. Fresh
+   * objects every call, so a caller cannot edit the allow-list in place.
+   * @param {{matrix?:object[]}} [opts] matrix = lunasworkRules.matrixFor(); default the baseline
+   */
+  function tools({ matrix } = {}) {
+    const mcpServers = {};
+    const allowedTools = [];
+    const combos = cleanMatrix(matrix);
+    for (const engine of enginesOf(combos)) {
+      const first = combos.find((c) => c.engine === engine);
+      const args = [
+        PLAYWRIGHT_PACKAGE, '--headless', '--isolated',
+        '--browser', engine,
+        '--viewport-size', `${first.width}x${first.height}`,
+        '--output-dir', ctx.evidenceDir,
+      ];
+      if (readyUrl) args.push('--allowed-origins', new URL(readyUrl).origin);
+      const server = serverFor(engine);
+      mcpServers[server] = { type: 'stdio', command: 'npx', args };
+      allowedTools.push(...PLAYWRIGHT_TOOLS.map((t) => `mcp__${server}__${t}`));
+    }
+    return { mcpConfig: { mcpServers }, allowedTools };
   }
 
-  return { name: 'web', evidenceDir: ctx.evidenceDir, start, stop, tools };
+  /**
+   * Installs the Playwright browsers of the matrix that were never installed
+   * before (`playwright install`, the version @playwright/mcp itself uses).
+   * Logged to browsers.log in the evidence dir. Never rejects.
+   * @returns {Promise<{ok:boolean, installed:string[], error?:string}>}
+   */
+  function ensureBrowsers(matrix) {
+    const done = readInstalled(ctx.runsRoot, ctx.now());
+    const missing = enginesOf(matrix).filter((e) => !done.includes(e));
+    if (!missing.length) return Promise.resolve({ ok: true, installed: [] });
+    // Engines come only from the ENGINES allow-list, so the command is fixed text.
+    const command = `npx -y --package=${PLAYWRIGHT_PACKAGE} playwright install ${missing.join(' ')}`;
+    const note = (line) => {
+      try {
+        fs.mkdirSync(ctx.evidenceDir, { recursive: true });
+        fs.appendFileSync(path.join(ctx.evidenceDir, BROWSERS_LOG), `[lunaswork] ${line}
+`);
+      } catch {
+        // logging is best effort; the result still carries the outcome
+      }
+    };
+    note(`first use of ${missing.join(', ')} - $ ${command}`);
+    return new Promise((resolve) => {
+      // cwd = the runs folder, never the project: npx must not pick up a
+      // `playwright` the project ships.
+      const opts = { cwd: ctx.runsRoot, shell: true, windowsHide: true, timeout: INSTALL_TIMEOUT_MS };
+      try {
+        fs.mkdirSync(ctx.runsRoot, { recursive: true });
+      } catch (e) {
+        note(`could not create ${ctx.runsRoot}: ${e.message}`);
+        resolve({ ok: false, installed: [], error: String(e.message).slice(0, 300) });
+        return;
+      }
+      ctx.execFile(command, [], opts, (err, stdout, stderr) => {
+        if (stdout) note(String(stdout).trim());
+        if (stderr) note(String(stderr).trim());
+        if (err) {
+          note(`install failed: ${err.message}`);
+          resolve({ ok: false, installed: [], error: String(err.message).slice(0, 300) });
+          return;
+        }
+        try {
+          fs.mkdirSync(ctx.runsRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(ctx.runsRoot, BROWSERS_MARKER),
+            JSON.stringify({ engines: [...done, ...missing], at: new Date(ctx.now()).toISOString() }),
+          );
+        } catch (e) {
+          note(`could not record the install: ${e.message}`);
+        }
+        note(`installed ${missing.join(', ')}`);
+        resolve({ ok: true, installed: missing });
+      });
+    });
+  }
+
+  return {
+    name: 'web', evidenceDir: ctx.evidenceDir, iteration: ctx.iteration, start, stop, tools, ensureBrowsers,
+  };
 }
 
 // ---- factory ------------------------------------------------------------------------
@@ -245,7 +367,8 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {{projectDir:string, runId:string, iteration:number, runsRoot?:string,
  *   spawn?:Function, fetch?:Function, now?:()=>number, sleep?:Function,
  *   platform?:string, execFile?:Function, kill?:Function}} opts
- * @returns {{name:string, evidenceDir:string, start:Function, stop:Function, tools:Function}}
+ * @returns {{name:string, evidenceDir:string, iteration:number, start:Function, stop:Function,
+ *   tools:Function, ensureBrowsers:Function}}
  * @throws for an unknown / not-yet-built adapter, a bad projectDir, runId or iteration
  */
 function createAdapter(name, opts = {}) {
@@ -254,9 +377,12 @@ function createAdapter(name, opts = {}) {
   if (typeof opts.projectDir !== 'string' || !path.isAbsolute(opts.projectDir)) {
     throw new Error('projectDir must be an absolute path');
   }
+  const runsRoot = path.resolve(opts.runsRoot || defaultRunsRoot());
   return FACTORIES[name]({
     projectDir: opts.projectDir,
-    evidenceDir: evidenceDirFor(opts.runsRoot || defaultRunsRoot(), opts.runId, opts.iteration),
+    evidenceDir: evidenceDirFor(runsRoot, opts.runId, opts.iteration),
+    runsRoot,
+    iteration: opts.iteration,
     spawn: opts.spawn || childProcess.spawn,
     fetch: opts.fetch || globalThis.fetch,
     now: opts.now || Date.now,
@@ -271,6 +397,8 @@ module.exports = {
   PLAYWRIGHT_TOOLS,
   POLL_INTERVAL_MS,
   SERVER_LOG,
+  BROWSERS_LOG,
+  BROWSERS_MARKER,
   evidenceDirFor,
   killTree,
   createAdapter,

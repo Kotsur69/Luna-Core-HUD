@@ -19,6 +19,11 @@
 //   - B1: the explore pass also gets the app checks of the cards that were
 //     just built (src/lunasworkChecks.js) - card text, never code
 //
+// PERSONAS AND MATRIX (LW 2.14, 2.24). Each pass runs the core journeys plus
+// rotated personas (lunasworkRules.personasFor) in a rotated set of engine x
+// width combos (matrixFor); a milestone gate - the SHIP confirmation pass by
+// default - runs all of them. Every finding records persona, engine and width.
+//
 // THE TRUST BOUNDARY IS validateReport(). Scores without evidence are dropped;
 // a screenshot only counts when it is a real image file inside the evidence
 // dir written during THIS run (so a ship pass cannot cite an explore pass's
@@ -40,7 +45,7 @@ const { execFile } = require('child_process');
 const { PNG } = require('pngjs');
 const { parsePlannerOutput } = require('./orchestraPlan');
 const { isUsageLimitText } = require('./orchestraPlanWait');
-const { pickModel } = require('./lunasworkRules');
+const { pickModel, personasFor, matrixFor, CORE_PERSONA, PERSONAS, ENGINES, WIDTHS } = require('./lunasworkRules');
 const { DESIGN_DIR, readPackFile } = require('./lunasworkPack');
 const { killTree } = require('./lunasworkAdapters');
 const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
@@ -65,6 +70,8 @@ const MCP_TOOL_RE = /^mcp__([A-Za-z0-9_-]+?)__[A-Za-z0-9_]+$/;
 const KINDS = ['bug', 'feel', 'missing', 'idea'];
 const SEVERITIES = ['blocker', 'high', 'medium', 'low'];
 const MAX_SCORE = 10;
+const PERSONA_IDS = [CORE_PERSONA.id, ...PERSONAS.map((p) => p.id)];
+const WIDTH_VALUES = [...new Set(Object.values(WIDTHS).map((w) => w.width))];
 
 const MAX_DOC_CHARS = 20000;
 const MAX_FINDINGS = 100;
@@ -118,7 +125,9 @@ const PLAYTEST_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['kind', 'severity', 'title', 'steps', 'screenshot', 'consoleErrors'],
+        required: [
+          'kind', 'severity', 'title', 'steps', 'screenshot', 'consoleErrors', 'persona', 'engine', 'width', 'engineOnly',
+        ],
         properties: {
           kind: { type: 'string', enum: KINDS },
           severity: { type: 'string', enum: SEVERITIES },
@@ -126,6 +135,11 @@ const PLAYTEST_SCHEMA = {
           steps: stringList,
           screenshot: { type: 'string' },
           consoleErrors: stringList,
+          persona: { type: 'string', enum: PERSONA_IDS },
+          engine: { type: 'string', enum: ENGINES },
+          width: { type: 'integer', enum: WIDTH_VALUES },
+          // True when the bug shows in this engine only.
+          engineOnly: { type: 'boolean' },
         },
       },
     },
@@ -203,16 +217,18 @@ function httpUrl(url) {
   }
 }
 
-/** The origins the adapter's MCP servers restrict the browser to (`--allowed-origins`). */
-function allowedOrigins(tools) {
+/**
+ * True when EVERY one of the adapter's MCP servers restricts its browser to
+ * `origin` (`--allowed-origins`) - one unlocked engine would be an open door.
+ */
+function lockedTo(tools, origin) {
   const servers = isObj(tools && tools.mcpConfig && tools.mcpConfig.mcpServers) ? tools.mcpConfig.mcpServers : {};
-  const out = [];
-  for (const server of Object.values(servers)) {
+  const list = Object.values(servers);
+  return list.length > 0 && list.every((server) => {
     const args = Array.isArray(server && server.args) ? server.args : [];
     const i = args.indexOf('--allowed-origins');
-    if (i >= 0 && typeof args[i + 1] === 'string') out.push(...args[i + 1].split(';'));
-  }
-  return out;
+    return i >= 0 && typeof args[i + 1] === 'string' && args[i + 1].split(';').includes(origin);
+  });
 }
 
 /** Same file, compared the way the OS does (case-insensitive on Windows). */
@@ -268,8 +284,36 @@ function loadPlaytestInputs(projectDir) {
 
 const fence = (title, body) => [`${title}:`, '<<<', body || '(empty)', '>>>'];
 
-const SHARED_RULES = [
-  `- Check everything at desktop width (browser_resize ${DESKTOP.width}x${DESKTOP.height}) AND at mobile width (browser_resize ${MOBILE.width}x${MOBILE.height}).`,
+/** engine -> the MCP server that drives it (its `--browser` arg; chromium when absent). */
+function enginesToServers(tools) {
+  const servers = isObj(tools && tools.mcpConfig && tools.mcpConfig.mcpServers) ? tools.mcpConfig.mcpServers : {};
+  const out = {};
+  for (const [name, server] of Object.entries(servers)) {
+    const args = Array.isArray(server && server.args) ? server.args : [];
+    const i = args.indexOf('--browser');
+    const engine = i >= 0 ? args[i + 1] : 'chromium';
+    if (ENGINES.includes(engine) && !out[engine]) out[engine] = name;
+  }
+  return out;
+}
+
+/** The browser/width lines of the prompt, one per combo. */
+function matrixLines(matrix, servers) {
+  return matrix.map((c, i) => {
+    const via = servers[c.engine] ? ` - use the mcp__${servers[c.engine]}__* tools` : '';
+    const tag = i === 0 ? ' (baseline)' : '';
+    return `  - ${c.engine} at ${c.width}px (${c.device}, browser_resize ${c.width}x${c.height})${tag}${via}`;
+  });
+}
+
+function personaLines(personas) {
+  return personas.map((p) => `  - ${p.label} (persona "${p.id}"): ${p.prompt}`);
+}
+
+/** Rules for every pass; the matrix decides the browsers and widths. */
+const sharedRules = (matrix, servers) => [
+  '- Check everything in every browser and width below. Each browser has its own tools; browser_resize to the width before you test it:',
+  ...matrixLines(matrix, servers),
   '- Read the browser console (browser_console_messages) after every journey and screen; put the errors that belong to a finding in its consoleErrors.',
   '- Every finding needs a screenshot: browser_take_screenshot with a short, unique filename (for example "f3-mobile-cart.png"). Put exactly that filename in "screenshot".',
   '- Judge only what you see in the browser. You have no access to the source code; do not ask for it or guess at it.',
@@ -277,14 +321,23 @@ const SHARED_RULES = [
   'Report:',
   '- findings: kind "bug" (broken), "feel" (works but looks or feels wrong, slow, confusing), "missing" (expected but absent), "idea"; severity blocker/high/medium/low; steps = exact steps to reproduce, one action each.',
   '- scores: score each ship criterion you checked from 0 to 10, with its milestone. evidence = a screenshot filename you took in THIS session plus the steps that show it. A score without evidence is thrown away.',
+  '- Every finding: persona = the persona id whose lens found it ("core" for the test-plan journeys), engine + width = where you saw it.',
+  '- When a bug shows in one browser only (you checked another and it works there), set engineOnly true and name the browser in the title. Otherwise engineOnly false.',
 ];
 
 /**
- * @param {{mode:string, url:string, testPlan:string, shipCriteria:string, checks?:object[]}} input
- *   checks = lunasworkChecks.checkList of the built cards (explore pass only)
+ * @param {{mode:string, url:string, testPlan:string, shipCriteria:string, checks?:object[],
+ *   personas?:object[], matrix?:object[], tools?:object}} input
+ *   checks = lunasworkChecks.checkList of the built cards (explore pass only);
+ *   personas / matrix = personasFor / matrixFor (default: iteration 0, no gate);
+ *   tools = adapter.tools(), to name each browser's MCP server
  * @returns {string}
  */
-function buildPlaytestPrompt({ mode, url, testPlan, shipCriteria, checks = [] }) {
+function buildPlaytestPrompt({
+  mode, url, testPlan, shipCriteria, checks = [], personas = personasFor(0, false), matrix = matrixFor(0, false), tools,
+}) {
+  const SHARED_RULES = sharedRules(matrix, enginesToServers(tools));
+  const lenses = ['', 'Personas for this pass - test through each one in turn:', ...personaLines(personas)];
   if (mode === 'shipConfirm') {
     return [
       'You are an independent SHIP confirmation tester for a web app. Nobody has told you whether it passes - find out yourself.',
@@ -294,8 +347,9 @@ function buildPlaytestPrompt({ mode, url, testPlan, shipCriteria, checks = [] })
       '- Check every ship criterion below, one by one, strictly. A criterion passes only if you saw it work.',
       ...SHARED_RULES,
       '- Name every screenshot with a "ship-" prefix.',
-      '- journeys: one entry per user flow you exercised to check the criteria; passed true only if it completed end to end at both widths.',
+      '- journeys: one entry per user flow you exercised to check the criteria; passed true only if it completed end to end in every browser and width.',
       '- screens: leave empty.',
+      ...lenses,
       '',
       ...fence('Ship criteria (design/SHIP_CRITERIA.md)', shipCriteria),
     ].join('\n');
@@ -308,8 +362,9 @@ function buildPlaytestPrompt({ mode, url, testPlan, shipCriteria, checks = [] })
     '1. Run every journey in the test plan below, end to end, step by step.',
     '2. Then explore freely: empty and invalid input, edge cases, back/forward, reload, double clicks, long text.',
     ...SHARED_RULES,
-    '- journeys: one entry per test-plan journey (its exact name); passed true only if it completed end to end at both widths.',
-    '- screens: the start screen and the main screen of every journey, at both widths, named "<screen>-desktop" / "<screen>-mobile", each with a viewport screenshot (not full page). Use the same names every run - they are compared with the previous run.',
+    '- journeys: one entry per test-plan journey (its exact name); passed true only if it completed end to end in every browser and width.',
+    `- screens: in chromium only, the start screen and the main screen of every journey at ${DESKTOP.width}x${DESKTOP.height} and ${MOBILE.width}x${MOBILE.height}, named "<screen>-desktop" / "<screen>-mobile", each with a viewport screenshot (not full page). Use the same names every run - they are compared with the previous run.`,
+    ...lenses,
     '',
     ...fence('Test plan (design/TEST_PLAN.md)', testPlan),
     '',
@@ -401,6 +456,13 @@ function cleanEvidence(raw, ctx) {
   return { screenshot: evidenceFile(src.screenshot, ctx), steps: strings(src.steps, MAX_STEPS, MAX_STEP_CHARS) };
 }
 
+/** The title of an engine-only bug always names the engine (it becomes card text). */
+function engineTitle(title, engine, width) {
+  if (new RegExp(`\\b${engine}\\b`, 'i').test(title)) return title;
+  const tag = ` [${engine} only${width ? `, ${width}px` : ''}]`;
+  return title.slice(0, MAX_TITLE_CHARS - tag.length) + tag;
+}
+
 function cleanFinding(f, ctx, warnings) {
   const title = isObj(f) ? clean(f.title, MAX_TITLE_CHARS) : '';
   if (!title || !KINDS.includes(f.kind) || !SEVERITIES.includes(f.severity)) {
@@ -409,10 +471,18 @@ function cleanFinding(f, ctx, warnings) {
   }
   const screenshot = evidenceFile(f.screenshot, ctx);
   if (!screenshot) warnings.push({ code: 'badScreenshot', title });
+  const persona = ctx.personaIds.includes(f.persona) ? f.persona : null;
+  const engine = ENGINES.includes(f.engine) ? f.engine : null;
+  const width = WIDTH_VALUES.includes(f.width) ? f.width : null;
+  const engineOnly = f.engineOnly === true && !!engine;
   return {
     kind: f.kind,
     severity: f.severity,
-    title,
+    title: engineOnly ? engineTitle(title, engine, width) : title,
+    persona,
+    engine,
+    width,
+    engineOnly,
     steps: strings(f.steps, MAX_STEPS, MAX_STEP_CHARS),
     screenshot,
     consoleErrors: strings(f.consoleErrors, MAX_CONSOLE_ERRORS, MAX_CONSOLE_CHARS),
@@ -466,9 +536,28 @@ function cleanScreens(list, ctx, warnings) {
 
 const REPORT_KEYS = ['findings', 'scores', 'journeys', 'screens'];
 
+/** What the report says was run: persona ids + labels, engine x width combos. */
+const personaSummary = (list) => (Array.isArray(list) ? list : [])
+  .filter((p) => isObj(p) && PERSONA_IDS.includes(p.id))
+  .map((p) => ({ id: p.id, label: p.label }));
+const matrixSummary = (list) => (Array.isArray(list) ? list : [])
+  .filter((c) => isObj(c) && ENGINES.includes(c.engine) && WIDTH_VALUES.includes(c.width))
+  .map((c) => ({ engine: c.engine, device: c.device, width: c.width, height: c.height }));
+
 /** The report a failed run yields: nothing found, nothing scored, one error note. */
-function emptyReport(mode, error) {
-  return { mode, findings: [], scores: [], journeys: [], screens: [], checks: [], warnings: [], errors: error ? [error] : [] };
+function emptyReport(mode, error, { personas = [], matrix = [] } = {}) {
+  return {
+    mode,
+    personas: personaSummary(personas),
+    matrix: matrixSummary(matrix),
+    findings: [],
+    scores: [],
+    journeys: [],
+    screens: [],
+    checks: [],
+    warnings: [],
+    errors: error ? [error] : [],
+  };
 }
 
 /**
@@ -477,20 +566,27 @@ function emptyReport(mode, error) {
  * fallback skips the schema) - an empty report with an error, never a silent
  * "nothing found".
  * @param {unknown} raw model output
- * @param {{evidenceDir:string, since?:number, mode?:string, checks?:object[]}} opts since = ms;
- *   screenshots older than this are not evidence of this run; checks = what was asked
+ * @param {{evidenceDir:string, since?:number, mode?:string, checks?:object[],
+ *   personas?:object[], matrix?:object[]}} opts since = ms; screenshots older than this
+ *   are not evidence of this run; checks / personas / matrix = what was asked
  * @returns {{mode:string, findings:object[], scores:object[], journeys:object[],
  *   screens:object[], checks:object[], warnings:object[], errors:object[]}}
  */
-function validateReport(raw, { evidenceDir, since = 0, mode = 'explore', checks = [] }) {
+function validateReport(raw, { evidenceDir, since = 0, mode = 'explore', checks = [], personas = [], matrix = [] }) {
+  const ran = { personas, matrix };
   if (!isObj(raw) || !REPORT_KEYS.every((key) => Array.isArray(raw[key]))) {
-    return emptyReport(mode, { code: 'badReport' });
+    return emptyReport(mode, { code: 'badReport' }, ran);
   }
-  const ctx = { evidenceDir, since };
+  const ranPersonas = personaSummary(personas);
+  // A persona that was not asked for this pass is not credited; no list = any known one.
+  const personaIds = ranPersonas.length ? ranPersonas.map((p) => p.id) : PERSONA_IDS;
+  const ctx = { evidenceDir, since, personaIds };
   const warnings = [];
   const keep = (key, max, fn) => raw[key].slice(0, max).map((x) => fn(x, ctx, warnings)).filter(Boolean);
   return {
     mode,
+    personas: ranPersonas,
+    matrix: matrixSummary(matrix),
     findings: keep('findings', MAX_FINDINGS, cleanFinding),
     scores: keep('scores', MAX_SCORES, cleanScore),
     journeys: keep('journeys', MAX_JOURNEYS, cleanJourney),
@@ -567,6 +663,11 @@ function compareOne(screen, ctx) {
       baseline: kept,
       diff,
       consoleErrors: [],
+      // Key screens are always taken in the chromium baseline browser.
+      persona: null,
+      engine: 'chromium',
+      width: null,
+      engineOnly: false,
     };
   }
   // Roll forward: the next run compares against this one.
@@ -626,6 +727,17 @@ function compareScreens(screens, opts) {
 // ---- run ----------------------------------------------------------------------------
 
 /**
+ * The personas and browser matrix of one pass.
+ * @returns {{personas:object[], matrix:object[]}}
+ */
+function passPlan(opts) {
+  const adapter = isObj(opts.adapter) ? opts.adapter : {};
+  const iteration = [opts.iteration, adapter.iteration].find(Number.isInteger) || 0;
+  const isGate = typeof opts.isGate === 'boolean' ? opts.isGate : opts.mode === 'shipConfirm';
+  return { personas: personasFor(iteration, isGate), matrix: matrixFor(iteration, isGate) };
+}
+
+/**
  * One headless call. Resolves {stdout} or {error, detail}; never rejects.
  * The timeout kills the whole tree, not just `claude`: on Windows execFile's
  * own timeout would leave npx, the Playwright MCP server and Chromium running.
@@ -672,8 +784,12 @@ function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl 
  * resolves; a failure carries an empty report with the error noted, so the
  * run goes on (plan: never reject the run).
  *
- * @param {{projectDir:string, adapter:{evidenceDir:string, tools:Function},
- *   url:string, mode?:'explore'|'shipConfirm', checks?:object[], models?:object, env?:object,
+ * iteration defaults to the adapter's (it is built per iteration), else 0;
+ * isGate defaults to the SHIP confirmation pass (the milestone gate).
+ *
+ * @param {{projectDir:string, adapter:{evidenceDir:string, tools:Function, iteration?:number,
+ *   ensureBrowsers?:Function}, url:string, mode?:'explore'|'shipConfirm', checks?:object[],
+ *   iteration?:number, isGate?:boolean, models?:object, env?:object,
  *   execImpl?:Function, timeoutMs?:number, budgetUsd?:number,
  *   threshold?:number, now?:()=>number, killTreeImpl?:(pid:number)=>void}} opts
  * @returns {Promise<{ok:boolean, mode:string, model:string|null, modelReason:string|null,
@@ -686,12 +802,13 @@ async function runPlaytest(opts) {
   const started = now();
   const pick = MODES.includes(mode) ? playtestModel(mode, models) : null;
   const base = { mode, model: pick && pick.model, modelReason: pick && pick.reason, screenDiff: null, costUsd: null };
+  const ran = passPlan(opts);
   const fail = (error, detail) => ({
     ok: false,
     ...base,
     error,
     ...(detail ? { detail } : {}),
-    report: emptyReport(mode, { code: error, ...(detail ? { detail } : {}) }),
+    report: emptyReport(mode, { code: error, ...(detail ? { detail } : {}) }, ran),
     durationMs: now() - started,
   });
 
@@ -702,10 +819,10 @@ async function runPlaytest(opts) {
     if (!adapter || typeof adapter.tools !== 'function' || typeof adapter.evidenceDir !== 'string') {
       return fail('badAdapter');
     }
-    const tools = adapter.tools();
+    const tools = adapter.tools({ matrix: ran.matrix });
     // The browser must be locked to the app the adapter started - an unstarted
     // adapter has no origin lock and could reach LunaCore's own local servers.
-    if (!allowedOrigins(tools).includes(appUrl.origin)) return fail('badUrl', 'url is not the started app origin');
+    if (!lockedTo(tools, appUrl.origin)) return fail('badUrl', 'url is not the started app origin');
     const inputs = loadPlaytestInputs(projectDir);
     // The ship pass verifies the SHIP criteria only.
     const checks = mode === 'explore' && Array.isArray(opts.checks) ? opts.checks : [];
@@ -717,11 +834,14 @@ async function runPlaytest(opts) {
     const marker = path.join(evidenceDir, START_MARKER);
     fs.writeFileSync(marker, `${mode}\n`);
     const since = fs.statSync(marker).mtimeMs;
+    const browsers = typeof adapter.ensureBrowsers === 'function'
+      ? await adapter.ensureBrowsers(ran.matrix)
+      : { ok: true };
     const killImpl = opts.killTreeImpl
       || ((pid) => killTree(pid, { platform: process.platform, execFile, kill: process.kill.bind(process) }));
     const call = await callClaude({
       args: buildPlaytestArgs({ model: pick.model, tools, budgetUsd: opts.budgetUsd }),
-      prompt: buildPlaytestPrompt({ mode, url: appUrl.href, ...inputs, checks }),
+      prompt: buildPlaytestPrompt({ mode, url: appUrl.href, ...inputs, checks, ...ran, tools }),
       cwd: evidenceDir, // never the repo: the Playtester must not see the code
       env,
       execImpl: opts.execImpl || execFile,
@@ -732,8 +852,12 @@ async function runPlaytest(opts) {
     const parsed = parsePlannerOutput(call.stdout);
     if (!parsed.ok) return fail(parsed.error, parsed.detail);
 
-    const validated = validateReport(parsed.raw, { evidenceDir, since, mode, checks });
-    if (validated.errors.length) return fail(validated.errors[0].code);
+    const checked = validateReport(parsed.raw, { evidenceDir, since, mode, checks, ...ran });
+    if (checked.errors.length) return fail(checked.errors[0].code);
+    // A failed install is not fatal: Playwright may still find the browsers.
+    const validated = browsers && browsers.ok === false
+      ? { ...checked, warnings: [...checked.warnings, { code: 'browserInstallFailed', detail: clean(browsers.error, 300) }] }
+      : checked;
     // The ship pass verifies criteria; visual drift is the explore pass's job.
     const screenDiff = mode === 'explore'
       ? compareScreens(validated.screens, { evidenceDir, threshold: opts.threshold })
@@ -760,6 +884,7 @@ module.exports = {
   DESKTOP,
   MOBILE,
   playtestModel,
+  passPlan,
   loadPlaytestInputs,
   buildPlaytestPrompt,
   allowedAdapterTools,
