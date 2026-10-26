@@ -210,6 +210,7 @@ function createPowerCtl(deps = {}) {
 
 module.exports = {
   createPowerCtl,
+  defaultExec,
   wakeTaskXml,
   localStamp,
   hasSleepState,

@@ -141,7 +141,7 @@ const { registerCloudIpc } = require('./cloudipc');
 // and the outer loop run (src/lunaswork.js via src/lunasworkWiring.js).
 const { registerLunasworkIpc } = require('./lunasworkipc');
 const { createGodModeBuilder } = require('./lunasworkBuild');
-const { createLunasWorkRuntime, wireDecisionSync } = require('./lunasworkWiring');
+const { createLunasWorkRuntime, createMachineRuntime, wireDecisionSync } = require('./lunasworkWiring');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -1194,7 +1194,7 @@ const lunaswork = createLunasWorkRuntime({
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
   // Every iteration merges into the base branch: Mati confirms it natively,
   // with the commands the run will use (pinned in the run from here on).
-  confirmStart: async ({ repoPath, profile, checkCommand }) => {
+  confirmStart: async ({ repoPath, profile, checkCommand, scaffold }) => {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
@@ -1209,6 +1209,10 @@ const lunaswork = createLunasWorkRuntime({
         `Start command: ${profile.startCommand}`,
         `App URL: ${profile.url}`,
         `Self-check command: ${checkCommand || 'npm test'}`,
+        // Iteration 0 on an empty repo; a suggested profile is saved on Start.
+        ...(scaffold
+          ? ['', `Empty repo: iteration 0 scaffolds ${scaffold.label} first.${scaffold.profileSuggested ? ' The commands above are its defaults and become the project profile.' : ''}`]
+          : []),
       ].join('\n'),
     });
     return response === 0;
@@ -1217,6 +1221,25 @@ const lunaswork = createLunasWorkRuntime({
   // Run report (<userDir>/runs/lunaswork-<id>.md + .html) and the run-end email.
   runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
   mail: { sender: reportMail.sender, prefs: reportMail.prefs },
+  log: (line) => console.info(line),
+});
+// Luna's Work machine guard (src/lunasworkMachine.js): watchdog task, Windows
+// Update pause, disk cleanup and the low-disk stop for the length of a run.
+const lunasworkMachine = createMachineRuntime({
+  controller: lunaswork,
+  // What the watchdog task starts: this LunaCore (dev: electron + the app folder).
+  launch: { command: process.execPath, args: app.isPackaged ? [] : [app.getAppPath()] },
+  runsRoot: () => path.join(userDir(), RUN_REPORT_DIR),
+  godModeBusy: () => {
+    const view = orchestra.view();
+    return !!view && !view.settled && !view.killed;
+  },
+  // A worktree with an open tab is never removed.
+  worktreeInUse: (root) => {
+    const base = path.resolve(root).toLowerCase();
+    return [...sessions.values()].some((s) => s && typeof s.cwd === 'string' && path.resolve(s.cwd).toLowerCase().startsWith(base));
+  },
+  mail: { sender: reportMail.sender },
   log: (line) => console.info(line),
 });
 /** God Mode's side of the mutual exclusion for actions on the current plan: a refusal, or null. */
@@ -3575,7 +3598,10 @@ app.whenReady().then(() => {
     log: (line) => console.error(line),
   });
   // Luna's Work: a run the previous LunaCore left goes on from its phase.
+  // The machine guard follows it (attached first, so it sees the resume).
+  lunasworkMachine.attach();
   lunaswork.resume();
+  lunasworkMachine.reconcile();
   setInterval(() => orchestra.tick(), ORCHESTRA_TICK_MS).unref();
   // Back from sleep: re-arm or resume a paused run, drop the wake task.
   powerMonitor.on('resume', () => orchestra.onSystemResume());
@@ -3701,6 +3727,8 @@ app.on('window-all-closed', () => {
   overnight.stop();
   // Luna's Work: stop the app under test; the run itself stays saved.
   lunaswork.dispose().catch(() => {});
+  // Its timers only: the watchdog task and the update pause stay for the restart.
+  lunasworkMachine.dispose();
   // Kill the keep-awake script too, so closing LunaCore never leaves the
   // machine pinned awake by an orphaned process. Synchronous on purpose: the
   // script survives its parent, so the kill must land before we exit.

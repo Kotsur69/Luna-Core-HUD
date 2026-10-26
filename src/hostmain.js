@@ -32,6 +32,8 @@ const path = require('path');
 
 const HOST_FLAG = '--host';
 const DEFAULT_FLAG = '--make-default';
+// Added by the Luna's Work watchdog task: start LunaCore only if it is not running.
+const WATCHDOG_FLAG = '--lunaswork-watchdog';
 const REPOS_EVERY_MS = 10 * 60 * 1000;
 const USAGE_PUT_EVERY_MS = 5 * 60 * 1000;
 const LOGIN_CHECK_MS = 5000;
@@ -47,9 +49,17 @@ function parseHostArgs(argv) {
   return { host, makeDefault: host && list.includes(DEFAULT_FLAG) };
 }
 
-/** What this process does at startup. */
-function decideBoot({ host, gotLock }) {
-  if (!host) return 'hud';
+/** A launch by the Luna's Work watchdog task (src/lunasworkMachine.js). */
+function isWatchdogLaunch(argv) {
+  return Array.isArray(argv) && argv.includes(WATCHDOG_FLAG);
+}
+
+/**
+ * What this process does at startup. A watchdog launch only starts the HUD
+ * when no LunaCore holds the lock - it never opens a second copy.
+ */
+function decideBoot({ host, gotLock, watchdog = false }) {
+  if (!host) return watchdog && !gotLock ? 'quit' : 'hud';
   return gotLock ? 'host' : 'quit';
 }
 
@@ -524,9 +534,10 @@ function boot({ argv, hud }) {
   const { machineName } = require('./missionledgersync');
   const args = parseHostArgs(argv);
   const gotLock = app.requestSingleInstanceLock();
-  const decision = decideBoot({ host: args.host, gotLock });
+  const decision = decideBoot({ host: args.host, gotLock, watchdog: isWatchdogLaunch(argv) });
   if (decision === 'quit') {
-    // The lock holder switches into host mode (second-instance below).
+    // The lock holder switches into host mode (second-instance below), or
+    // already runs (a watchdog launch).
     app.quit();
     return decision;
   }
@@ -585,4 +596,4 @@ function boot({ argv, hud }) {
   return decision;
 }
 
-module.exports = { boot, startHost, parseHostArgs, decideBoot, decideSecondInstance, trayLabel, skillNames, commandVerifier, actionDeps };
+module.exports = { WATCHDOG_FLAG, isWatchdogLaunch, boot, startHost, parseHostArgs, decideBoot, decideSecondInstance, trayLabel, skillNames, commandVerifier, actionDeps };

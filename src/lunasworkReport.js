@@ -58,6 +58,8 @@ const STOP_REASONS = {
   projectMissing: "the project's folder is gone",
   noProfile: 'no confirmed project profile',
   godModeKilled: 'God Mode was killed during a build',
+  lowDisk: 'the disk was almost full (under 5 GB free on the project drive)',
+  updatesNotPaused: 'Windows Update could not be paused and Mati chose to stop',
 };
 // Stop reasons that leave work for Mati (the others were his own choice).
 const STOP_NEEDS = {
@@ -66,6 +68,8 @@ const STOP_NEEDS = {
   projectMissing: "The project's folder is gone - check the project in LunaCore.",
   noProfile: "Set the project profile in Luna's Work settings, then start again.",
   godModeKilled: 'God Mode was killed mid-build - check its board, then start again.',
+  lowDisk: "Free some space on the project's drive, then start again.",
+  updatesNotPaused: 'Start LunaCore as administrator (or pause Windows Update by hand), then start again.',
 };
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
