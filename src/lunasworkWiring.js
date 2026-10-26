@@ -32,6 +32,12 @@
 //   token meter     lunasworkUsage (LW 2.17a): every Director / Playtester /
 //                   Critic / reviewer `claude -p` result's usage, and God
 //                   Mode's planner cost per build, booked per role and phase
+//   time to SHIP    lunasworkEta (LW 2.22b): the estimate from the run's pace,
+//                   its open cards and ROADMAP.md - controller.shipEstimate()
+//                   for the HUD dashboard, a line in the milestone email
+//   phone snapshot  lunasworksnapshot (LW 2.17b): controller.phoneSnapshot()
+//                   with the newest screenshots as small JPEG thumbnails;
+//                   wireDecisionSync puts it throttled on every phase change
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -64,6 +70,9 @@ const { createShipDocsDeps } = require('./lunasworkShipDocs');
 const { createUsageMeter } = require('./lunasworkUsage');
 const { execClaude } = require('./lunasworkCritic');
 const { runCriticPick } = require('./lunasworkVariants');
+const { shipEstimate, etaLine } = require('./lunasworkEta');
+const { buildSnapshot, createSnapshotThrottle, MAX_SHOTS } = require('./lunasworksnapshot');
+const { keyScreens } = require('./lunasworkRun');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -104,6 +113,37 @@ async function syncCheckout(repoPath) {
   if (!fetched.ok) return { ok: false, detail: `fetch failed: ${fetched.err}` };
   const merged = await git(repoPath, ['merge', '--ff-only', 'FETCH_HEAD']);
   return merged.ok ? { ok: true } : { ok: false, detail: `no fast-forward: ${merged.err}` };
+}
+
+const THUMB_WIDTH = 240;
+const THUMB_QUALITY = 60;
+const MAX_THUMB_CHARS = 24 * 1024;
+
+/**
+ * A screenshot as a small JPEG data URL, or null. Electron's nativeImage
+ * (main process only); under plain Node (tests) there is none and the
+ * snapshot simply goes without thumbnails.
+ */
+function thumbnail(file) {
+  try {
+    const { nativeImage } = require('electron');
+    if (!nativeImage || typeof file !== 'string') return null;
+    const img = nativeImage.createFromPath(file);
+    if (img.isEmpty()) return null;
+    const url = `data:image/jpeg;base64,${img.resize({ width: THUMB_WIDTH }).toJPEG(THUMB_QUALITY).toString('base64')}`;
+    return url.length <= MAX_THUMB_CHARS ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The run's newest key-screen screenshots as thumbnails, newest first. */
+function thumbnailsOf(run, makeThumb = thumbnail) {
+  return keyScreens(run && run.laps)
+    .sort((a, b) => b.n - a.n)
+    .slice(0, MAX_SHOTS)
+    .map((s) => ({ name: s.name, n: s.n, src: makeThumb(s.screenshot) }))
+    .filter((s) => s.src);
 }
 
 /** Keeps the PC from suspending while a run is going (released at its end). */
@@ -189,7 +229,23 @@ function createLunasWorkRuntime(ctx) {
     return res;
   };
 
-  return createLunasWork({
+  // LW 2.22b: the time-to-SHIP estimate of a run record; null when it cannot be made.
+  const estimateOf = (run) => {
+    try {
+      if (!run || typeof run !== 'object') return null;
+      const cards = typeof run.projectId === 'string' ? ctx.readTodos(run.projectId) : [];
+      const roadmapMd = typeof run.repoPath === 'string' ? pack.readPackFile(run.repoPath, 'ROADMAP.md') : null;
+      return shipEstimate(run, { cards, roadmapMd });
+    } catch (err) {
+      if (ctx.log) ctx.log(`[lunaswork] time-to-SHIP estimate failed: ${err && err.message}`);
+      return null;
+    }
+  };
+  const milestoneMail = reporter
+    ? (run, mctx) => reporter.onMilestone(run, { ...mctx, timeToShip: etaLine(estimateOf(run)) })
+    : null;
+
+  const controller = createLunasWork({
     store: { load: lunasworkStore.loadRun, save: lunasworkStore.saveRun },
     settings: () => settingsStore.readSettings(),
     projectOf,
@@ -256,9 +312,21 @@ function createLunasWorkRuntime(ctx) {
     usageMeter: meter,
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
-    onMilestone: reporter ? [reporter.onMilestone] : [],
+    onMilestone: milestoneMail ? [milestoneMail] : [],
     log: ctx.log,
   });
+
+  return {
+    ...controller,
+    /** LW 2.22b: the current run's time-to-SHIP estimate, or null. */
+    shipEstimate: () => estimateOf(controller.snapshot()),
+    /** LW 2.17b: the phone snapshot of the current run, or null without one. */
+    phoneSnapshot: () => {
+      const run = controller.snapshot();
+      if (!run) return null;
+      return buildSnapshot({ status: controller.status(), run, eta: estimateOf(run), shots: thumbnailsOf(run) });
+    },
+  };
 }
 
 /**
@@ -309,12 +377,17 @@ function createMachineRuntime(ctx) {
  *        applyFeedback() (lunasworkFeedback.feedbackFromTodoPeers)
  * So does the wheel (C11): its state rides in the feedback section, and the
  * phone's `lunaswork-wheel:<id>` units go to applyWheel() (newest one, once).
+ *
+ * LW 2.17b, when putLunasWork is given: controller.phoneSnapshot() goes out
+ * on every phase change (and decision / feedback / wheel change), throttled
+ * by lunasworksnapshot.createSnapshotThrottle.
  * @param {{controller:{subscribe:Function, status:Function, applyAnswers:Function, applyFeedback?:Function, applyWheel?:Function},
  *   cloud:{onPulled:Function, hooks:Function}|null, putDecisions:(list:object[])=>unknown,
- *   putFeedback?:(section:object|null)=>unknown, log?:(line:string)=>void}} ctx
+ *   putFeedback?:(section:object|null)=>unknown, putLunasWork?:(snap:object|null)=>unknown,
+ *   throttle?:object, log?:(line:string)=>void}} ctx
  * @returns {{publish:()=>void, pullAnswers:()=>number}}
  */
-function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, log = () => {} }) {
+function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLunasWork, throttle = {}, log = () => {} }) {
   /** Puts `value` through `put` only when it changed since the last put. */
   const changedPut = (what, put) => {
     let last = null;
@@ -349,9 +422,16 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, log = 
       return 0;
     }
   };
-  controller.subscribe((event) => publish(event && event.status));
+  const phone = typeof putLunasWork === 'function' && typeof controller.phoneSnapshot === 'function'
+    ? createSnapshotThrottle({ ...throttle, publish: putLunasWork, log })
+    : null;
+  const SNAPSHOT_EVENTS = ['phase', 'decision', 'feedback', 'wheel', 'stopping'];
+  controller.subscribe((event) => {
+    publish(event && event.status);
+    if (phone && event && SNAPSHOT_EVENTS.includes(event.type)) phone.poke(() => controller.phoneSnapshot());
+  });
   if (cloud) cloud.onPulled((scope) => scope === 'todos' && pullAnswers());
   return { publish, pullAnswers };
 }
 
-module.exports = { createLunasWorkRuntime, createMachineRuntime, createAwake, syncCheckout, wireDecisionSync };
+module.exports = { createLunasWorkRuntime, createMachineRuntime, createAwake, syncCheckout, wireDecisionSync, thumbnailsOf };

@@ -14,6 +14,7 @@ import yazio from '../../src/lifeyaziopeers.js';
 import usage from '../../src/usagesnapshot.js';
 import reposSnap from '../../src/repossnapshot.js';
 import godmodeSnap from '../../src/godmodesnapshot.js';
+import lunasworkSnap from '../../src/lunasworksnapshot.js';
 
 const { parseNewsPeer } = newsRows;
 const { parsePeer, MAX_PEERS } = ledgerSync;
@@ -143,6 +144,11 @@ export function godmodeDecisionsFrom(rows, now) {
 /** Luna's Work feedback of the run going on now (B17): {runId, repoName, items, machine, stale}, or null. */
 export function godmodeFeedbackFrom(rows, now) {
   return feedbackFrom(rows, now);
+}
+
+/** The Luna's Work run snapshot of the newest PC (LW 2.17b), with `machine` and `stale`, or null. */
+export function lunasworkFrom(rows, now) {
+  return lunasworkSnap.lunasworkFrom(rows, now);
 }
 
 /** {pushed, working, waiting, pending, failed} of a live run. */

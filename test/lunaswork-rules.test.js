@@ -495,3 +495,57 @@ test('matrixFor: a milestone gate runs every engine x width, baseline first', ()
   }
   assert.ok(list.every((c) => Number.isInteger(c.height) && c.height > 0));
 });
+
+// ---- time to SHIP (LW 2.22b) ----
+
+test('timeToShip: null with fewer than 2 iterations of data', () => {
+  assert.equal(rules.timeToShip({ closedPerIteration: [], openCards: 5 }), null);
+  assert.equal(rules.timeToShip({ closedPerIteration: [4], openCards: 5, iterationMinutes: [30] }), null);
+  assert.equal(rules.timeToShip(), null);
+  assert.equal(rules.timeToShip({ closedPerIteration: 'nope' }), null);
+});
+
+test('timeToShip: null when the window closed nothing', () => {
+  assert.equal(rules.timeToShip({ closedPerIteration: [5, 0, 0, 0], openCards: 3 }), null);
+});
+
+test('timeToShip: moving average of the last 3 iterations against cards + roadmap left', () => {
+  // Window [2, 4, 3] -> 3 per iteration; the old 10 is out of the window.
+  const est = rules.timeToShip({
+    closedPerIteration: [10, 2, 4, 3],
+    openCards: 7,
+    roadmapLeft: 2,
+    iterationMinutes: [99, 40, 60, 50],
+  });
+  // 9 left / 3 = 3 iterations; 50 min per iteration on average -> 2.5 h.
+  assert.equal(est.iterations, 3);
+  assert.equal(est.hours, 2.5);
+  // Best iteration closes 4 -> ceil(9/4)=3 iterations; worst closes 2 -> 5 iterations.
+  assert.equal(est.low, 2.5);
+  assert.equal(est.high, 4.2);
+  assert.ok(est.low <= est.hours && est.hours <= est.high);
+});
+
+test('timeToShip: rounds iterations up and treats bad counts as zero', () => {
+  const est = rules.timeToShip({ closedPerIteration: [2, 2], openCards: 5, roadmapLeft: -3, iterationMinutes: [60, 60] });
+  assert.equal(est.iterations, 3);
+  assert.equal(est.hours, 3);
+  assert.deepEqual([est.low, est.high], [3, 3]);
+});
+
+test('timeToShip: nothing left is zero iterations', () => {
+  assert.deepEqual(rules.timeToShip({ closedPerIteration: [1, 3], openCards: 0, roadmapLeft: 0, iterationMinutes: [20, 40] }), {
+    iterations: 0,
+    hours: 0,
+    low: 0,
+    high: 0,
+  });
+});
+
+test('timeToShip: no measured minutes -> iterations only; a zero iteration leaves high open', () => {
+  assert.deepEqual(rules.timeToShip({ closedPerIteration: [3, 3], openCards: 6 }), { iterations: 2, hours: null, low: null, high: null });
+  const est = rules.timeToShip({ closedPerIteration: [0, 4], openCards: 4, iterationMinutes: [30, 30] });
+  assert.equal(est.iterations, 2);
+  assert.equal(est.high, null);
+  assert.equal(est.low, 0.5);
+});

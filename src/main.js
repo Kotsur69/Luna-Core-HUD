@@ -3597,6 +3597,8 @@ app.whenReady().then(() => {
     putDecisions: (list) => snapshotPuts.godmode.decisions(list),
     // B17: the run's feedback (per-item status) out, phone feedback back in.
     putFeedback: (section) => snapshotPuts.godmode.feedback(section),
+    // LW 2.17b: the run snapshot (status, scores, tokens, thumbnails), throttled.
+    putLunasWork: (snap) => snapshotPuts.godmode.lunaswork(snap),
     log: (line) => console.error(line),
   });
   // Luna's Work: a run the previous LunaCore left goes on from its phase.

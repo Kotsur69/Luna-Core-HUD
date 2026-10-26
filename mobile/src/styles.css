@@ -626,3 +626,9 @@ main {
 .approval { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--warn); border-radius: var(--radius); }
 .session-row { width: 100%; text-align: left; background: transparent; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; }
 textarea.field { resize: vertical; min-height: 4.5rem; line-height: 1.4; }
+
+/* Luna's Work (LW 2.17b): the newest screenshot thumbnails, side by side. */
+.lw-shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: var(--space-2); }
+.lw-shot { margin: 0; display: grid; gap: var(--space-1); min-width: 0; }
+.lw-shot img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--edge); }
+.lw-shot figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

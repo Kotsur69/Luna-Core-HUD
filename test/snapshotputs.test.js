@@ -85,3 +85,20 @@ test('godmode.markSeen stores the id in the own row next to the runs and puts it
   await sp.godmode.add(run('b'));
   assert.deepEqual(puts.at(-1)[1].seen, ['a'], 'a new run keeps the seen list');
 });
+
+test('godmode.lunaswork puts the Luna\'s Work run snapshot as `lunaswork`, cleaned; null clears it (LW 2.17b)', async () => {
+  const { sp, puts } = setup();
+  const lw = { v: 1, at: NOW, runId: 'lwabc', phase: 'building', milestone: 'see C:\\Users\\mati\\x\\plan.md', iteration: 2 };
+  assert.equal(await sp.godmode.lunaswork(lw), true);
+  const data = puts.at(-1)[1];
+  assert.equal(puts.at(-1)[0], 'godmode');
+  assert.equal(data.lunaswork.runId, 'lwabc');
+  assert.equal(data.lunaswork.milestone, 'see plan.md');
+  // Kept across the other overlay puts.
+  await sp.godmode.decisions([]);
+  assert.equal(puts.at(-1)[1].lunaswork.runId, 'lwabc');
+  await sp.godmode.lunaswork(null);
+  assert.equal('lunaswork' in puts.at(-1)[1], false);
+  await sp.godmode.lunaswork({ v: 9, runId: 'x' });
+  assert.equal('lunaswork' in puts.at(-1)[1], false, 'a malformed snapshot is not put');
+});

@@ -393,7 +393,9 @@ function registerDashboardIpc({ ipcMain, controller, isKnownProject, runsRoot })
 
   ipcMain.handle('lunaswork:dashboard', () => {
     try {
-      return { ok: true, dashboard: dashboardView(snapshot(), { runsRoot: runsRoot(), isKnownProject }) };
+      // LW 2.22b: the time-to-SHIP estimate, when the runtime can make one.
+      const shipEstimate = typeof controller.shipEstimate === 'function' ? controller.shipEstimate() : null;
+      return { ok: true, dashboard: dashboardView(snapshot(), { runsRoot: runsRoot(), isKnownProject, shipEstimate }) };
     } catch (err) {
       console.error('[lunaswork] dashboard failed:', err && err.message);
       return { ok: false, reason: 'failed' };

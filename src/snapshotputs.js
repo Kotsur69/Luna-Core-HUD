@@ -16,6 +16,8 @@
 //                      put the history with them over it (the phone answers)
 //   godmode.feedback(s) the current run's feedback section changed (B17):
 //                      put the history with it over it (the phone shows status)
+//   godmode.lunaswork(s) the Luna's Work run snapshot (LW 2.17b,
+//                      lunasworksnapshot.js) changed: put it as `lunaswork`
 //
 // Every put is skipped while logged out, and a failure only logs - it never
 // throws into the git station or the end of a God Mode run. cloudsnapshots
@@ -30,6 +32,7 @@ const path = require('path');
 const { reposSnapshot } = require('./repossnapshot');
 const { addRun, addSeen, withLive, RUN_ID_RE } = require('./godmodesnapshot');
 const { createRepoKeys, findRepo } = require('./missionrepokey');
+const { cleanSnapshot: cleanLunasWork } = require('./lunasworksnapshot');
 
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 
@@ -100,6 +103,14 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
   // Luna's Work feedback section of the current run (B17): memory only too.
   let lastFeedback = null;
   const overlay = () => ({ ...lastLive, decisions: lastDecisions, feedback: lastFeedback });
+  // Luna's Work run snapshot for the phone (LW 2.17b): memory only too.
+  let lastLunasWork = null;
+  /** The history with the live overlay and the Luna's Work snapshot over it. */
+  const withOverlay = (history) => {
+    const snap = withLive(history, overlay(), { machine, now: now() });
+    const lw = cleanLunasWork(lastLunasWork, now());
+    return lw ? { ...snap, lunaswork: lw } : snap;
+  };
 
   /** Rewrites the local history file with `step(prev)` and puts it with the live run over it. */
   function writeHistory(step) {
@@ -110,7 +121,7 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
       fs.writeFileSync(file, `${JSON.stringify(next)}\n`, { encoding: 'utf8', mode: 0o600 });
     }
     const s = ready();
-    return s ? s.put('godmode', withLive(next, overlay(), { machine, now: now() })) : false;
+    return s ? s.put('godmode', withOverlay(next)) : false;
   }
 
   /** Puts the stored history with the live run and the decisions over it. */
@@ -119,7 +130,7 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     if (!s) return Promise.resolve(false);
     return safePut('godmode', async () => {
       const file = historyFile();
-      return s.put('godmode', withLive(file ? readHistory(file) : null, overlay(), { machine, now: now() }));
+      return s.put('godmode', withOverlay(file ? readHistory(file) : null));
     });
   }
 
@@ -144,6 +155,11 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     /** Puts the run history with the current run's feedback section (null clears it). Never throws. */
     feedback(section) {
       lastFeedback = section && typeof section === 'object' ? section : null;
+      return putOverlay();
+    },
+    /** Puts the run history with the Luna's Work run snapshot (null clears it). Never throws. */
+    lunaswork(snap) {
+      lastLunasWork = snap && typeof snap === 'object' ? snap : null;
       return putOverlay();
     },
     /** Marks run `id` seen in this PC's own row (the attention inbox). Never throws. */

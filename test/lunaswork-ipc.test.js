@@ -773,3 +773,16 @@ test('dashboardView: no view for a malformed run; unknown project, phase and ver
   assert.equal(v.verdict, null);
   assert.deepEqual(v.screenshots, [], 'no runs root -> no screenshots');
 });
+
+test('dashboardView: the time-to-SHIP estimate fills the KPI slot (LW 2.22b)', () => {
+  const v = dashboardView({ id: 'abc', phase: 'building' }, { isKnownProject: () => true, shipEstimate: { iterations: 3, hours: 2.5, low: 2, high: 4 } });
+  assert.equal(v.shipEstimate, 2.5 * 3600 * 1000);
+  assert.deepEqual(v.ship, { iterations: 3, hours: 2.5, low: 2, high: 4 });
+  const iterOnly = dashboardView({ id: 'abc' }, { isKnownProject: () => true, shipEstimate: { iterations: 2, hours: null, low: null, high: null } });
+  assert.equal(iterOnly.shipEstimate, null);
+  assert.equal(iterOnly.ship.iterations, 2);
+  const none = dashboardView({ id: 'abc' }, { isKnownProject: () => true });
+  assert.equal(none.shipEstimate, null);
+  assert.equal(none.ship, null);
+  assert.equal(dashboardView({ id: 'abc' }, { isKnownProject: () => true, shipEstimate: { iterations: -1 } }).ship, null);
+});
