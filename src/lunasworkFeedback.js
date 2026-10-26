@@ -38,6 +38,7 @@
 'use strict';
 
 const { APPROVE, REJECT } = require('./lunasworkDecisions');
+const { cleanWheel } = require('./lunasworkWheel');
 
 const AUTHORS = ['mati', 'client'];
 const STATUSES = ['new', 'waiting', 'planned', 'built', 'verified', 'declined', 'noted'];
@@ -383,9 +384,10 @@ function publicItem(raw) {
 
 /**
  * The feedback section of the phone snapshot: the run it is for (the form
- * needs it even before any item) and its newest items, or null.
- * @param {unknown} raw {runId, repoName, items}
- * @returns {{runId:string, repoName:string|null, items:object[]}|null}
+ * needs it even before any item), its newest items, and who has the wheel
+ * (C11, lunasworkWheel - the phone's hand / hand-back button), or null.
+ * @param {unknown} raw {runId, repoName, items, wheel?}
+ * @returns {{runId:string, repoName:string|null, items:object[], wheel:'running'|'requested'|'handed'}|null}
  */
 function publicFeedback(raw) {
   if (!isObj(raw) || typeof raw.runId !== 'string' || !RUN_ID_RE.test(raw.runId)) return null;
@@ -396,7 +398,7 @@ function publicFeedback(raw) {
     .filter((i) => i && !seen.has(i.id) && seen.add(i.id))
     .sort((a, b) => a.id - b.id)
     .slice(-MAX_PUBLIC);
-  return { runId: raw.runId, repoName: oneLine(raw.repoName, 100) || null, items };
+  return { runId: raw.runId, repoName: oneLine(raw.repoName, 100) || null, items, wheel: cleanWheel(raw.wheel) };
 }
 
 /** The `todos` cloud key the phone writes a feedback item under. */

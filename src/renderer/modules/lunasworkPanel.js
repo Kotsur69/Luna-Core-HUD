@@ -8,6 +8,9 @@
 //     complete, God Mode on the project, ...) are shown with their reason.
 //   - Stop: the kill switch - the running step finishes, then the run ends.
 //   - Steer: quick-adds a `steer` card to the project's to-do list.
+//   - Hand me the wheel (C11): the run pauses at the end of the current
+//     iteration; Hand back records Mati's commits and the run goes on. Before
+//     the pause the second button withdraws the request.
 //   - Live status from the lunaswork:event push (every phase transition,
 //     wait, resume, stop): run id, iteration, phase + role, models, verdict,
 //     time in phase, WAIT with its resume time, pending decisions when main
@@ -71,6 +74,35 @@ export function startBlocker(view, pack) {
     return { reason: 'pack-incomplete', missing: [...(pack.pack.missing || []), ...(pack.pack.empty || [])] };
   }
   return null;
+}
+
+/**
+ * The wheel buttons for a status (tested): "Hand me the wheel" while the run
+ * has it, "Hand back" while Mati has it, and a cancel while the pause waits
+ * for the end of the iteration.
+ * @returns {{hand:{hidden:boolean, disabled:boolean}, back:{hidden:boolean, label:string, hint:string}}}
+ */
+export function wheelControls(s) {
+  const wheel = s && s.active ? s.wheel || 'running' : null;
+  const requested = wheel === 'requested';
+  return {
+    hand: { hidden: !wheel || wheel === 'handed', disabled: wheel !== 'running' || !!s.stopRequested },
+    back: {
+      hidden: !wheel || wheel === 'running',
+      label: requested ? 'lw.run.cancelHand' : 'lw.run.back',
+      hint: requested ? 'lw.run.handRequested' : 'lw.run.back.hint',
+    },
+  };
+}
+
+/** The summary line key of a run status. */
+export function summaryKey(s) {
+  if (!s || !s.runId) return 'lw.run.none';
+  if (!s.active) return 'lw.run.ended';
+  if (s.stopRequested) return 'lw.run.stopping';
+  if (s.wheel === 'handed') return 'lw.run.handed';
+  if (s.wheel === 'requested') return 'lw.run.handRequested';
+  return 'lw.run.active';
 }
 
 /** "m:ss" or "h:mm:ss" for a duration in ms. */
@@ -204,6 +236,8 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
     start: el$('lw-run-start'),
     stop: el$('lw-run-stop'),
     evidence: el$('lw-run-evidence'),
+    hand: el$('lw-run-hand'),
+    back: el$('lw-run-back'),
     dialog: el$('lw-start-panel'),
     dialogModels: el$('lw-start-models'),
     dialogBlock: el$('lw-start-block'),
@@ -241,10 +275,14 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
     ui.start.disabled = s.active;
     ui.stop.disabled = !s.active || s.stopRequested;
     ui.evidence.hidden = !(has && s.hasEvidence);
+    const wheel = wheelControls(s);
+    ui.hand.hidden = wheel.hand.hidden;
+    ui.hand.disabled = wheel.hand.disabled;
+    ui.back.hidden = wheel.back.hidden;
+    ui.back.textContent = t(wheel.back.label);
+    ui.back.title = t(wheel.back.hint);
 
-    if (!has) ui.summary.textContent = t('lw.run.none');
-    else if (s.active) ui.summary.textContent = t(s.stopRequested ? 'lw.run.stopping' : 'lw.run.active');
-    else ui.summary.textContent = t('lw.run.ended', { verdict: s.verdict ? t(`lw.verdict.${s.verdict}`) : '-' });
+    ui.summary.textContent = t(summaryKey(s), { verdict: s.verdict ? t(`lw.verdict.${s.verdict}`) : '-' });
 
     ui.details.replaceChildren();
     ui.scores.replaceChildren();
@@ -264,6 +302,7 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
       ui.details.append(timer);
       ticker = setInterval(() => (ui.details.isConnected ? paintTimer() : clearInterval(ticker)), TICK_MS);
     }
+    if (s.active && s.wheel === 'handed' && s.handedAt) ui.details.append(row(t('lw.run.handedSince'), clock(s.handedAt), 'is-warn'));
     if (s.freeUntil) ui.details.append(row(t('lw.run.free'), t('lw.run.freeUntil', { time: clock(s.freeUntil) }), 'is-warn'));
     const models = Object.entries(s.models || {}).map(([role, m]) => `${t(`lw.role.${role}`)}: ${modelLabel(m)}`);
     if (models.length) ui.details.append(row(t('lw.run.models'), models.join(' · ')));
@@ -394,6 +433,21 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
     steerTimer = setTimeout(() => setMsg(ui.steerMsg, ''), FLASH_MS);
   }
 
+  /** Hand me the wheel / hand back; main checks the run id against the current run. */
+  async function wheelCall(call, button) {
+    sfx.modeToggle();
+    button.disabled = true;
+    try {
+      const res = await call(status.runId || undefined);
+      if (!res || !res.ok) return setMsg(ui.error, reasonText(res), 'bad');
+      setMsg(ui.error, '');
+      apply(res.status);
+    } finally {
+      button.disabled = false;
+      paint();
+    }
+  }
+
   async function openEvidence() {
     const res = await window.lunacore.lunasworkOpenEvidence();
     setMsg(ui.error, res && res.ok ? '' : reasonText(res), 'bad');
@@ -407,6 +461,8 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
   ui.go.addEventListener('click', startRun);
   ui.stop.addEventListener('click', stopRun);
   ui.evidence.addEventListener('click', openEvidence);
+  ui.hand.addEventListener('click', () => wheelCall(window.lunacore.lunasworkHandOver, ui.hand));
+  ui.back.addEventListener('click', () => wheelCall(window.lunacore.lunasworkHandBack, ui.back));
   ui.steerForm.addEventListener('submit', steer);
 
   const offEvent = window.lunacore.onLunasworkEvent((event) => apply(event && event.status));

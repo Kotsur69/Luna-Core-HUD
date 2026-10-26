@@ -14,8 +14,12 @@
 // lunaswork:status         (no payload) -> {ok, status}
 // lunaswork:steer          {projectId, text} -> {ok} | {ok:false, reason}
 // lunaswork:openEvidence   (no payload) -> {ok} | {ok:false, reason}
+// lunaswork:handOver       {runId?} -> {ok, status} | {ok:false, reason, message?}
+// lunaswork:handBack       {runId?} -> {ok, status} | {ok:false, reason, message?}
+//                          "Hand me the wheel" (C11); runId, when sent, must
+//                          be the current run's - a stale panel is refused
 // lunaswork:event          main -> renderer push, {type, status}, on every
-//                          controller event (phase, wait, resume, stopping)
+//                          controller event (phase, wait, resume, stopping, wheel)
 //
 // view = {ok, projectId, roles, choices, models, projectModels, freeFallback, profile}
 // models = LunaCore's default per role; projectModels = this project's override.
@@ -42,6 +46,7 @@ const { getProject, resolveProjectDir } = require('./projects');
 const { keyFor } = require('./todo');
 const { publicStatus, publicEvent, evidenceDirOf } = require('./lunasworkStatus');
 const { STEER_TAG, MAX_ITEMS: MAX_TODO_ITEMS, MAX_TEXT_CHARS: MAX_STEER_CHARS } = require('./todorows');
+const { RUN_ID_RE } = require('./lunasworkWheel');
 
 const MAX_ID_CHARS = 200;
 // Opening a tab is a side effect a double click must not repeat.
@@ -59,6 +64,20 @@ function parseSteerText(raw) {
   const text = raw.trim();
   if (!text || text.length > MAX_STEER_CHARS || CONTROL_CHARS.test(text)) return null;
   return text;
+}
+
+/**
+ * A wheel request (C11): nothing, or {runId} naming a run. Null when it is
+ * malformed - any other key, or a run id that is not one.
+ * @returns {{runId?:string}|null}
+ */
+function parseWheelRequest(req) {
+  if (req === undefined || req === null) return {};
+  if (!isObject(req)) return null;
+  const keys = Object.keys(req);
+  if (keys.some((k) => k !== 'runId')) return null;
+  if (req.runId === undefined) return {};
+  return typeof req.runId === 'string' && RUN_ID_RE.test(req.runId) ? { runId: req.runId } : null;
 }
 
 /** The project id of a request, or null when it is malformed. */
@@ -309,6 +328,21 @@ function registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, 
     }
   });
 
+  // "Hand me the wheel" (C11): pause after the iteration / hand back.
+  for (const [channel, method] of [['lunaswork:handOver', 'handOver'], ['lunaswork:handBack', 'handBack']]) {
+    if (typeof controller[method] !== 'function') continue;
+    ipcMain.handle(channel, async (_event, req) => {
+      try {
+        const payload = parseWheelRequest(req);
+        if (!payload) return { ok: false, reason: 'bad-run' };
+        return withPublicStatus(await controller[method](payload));
+      } catch (err) {
+        console.error(`[lunaswork] ${method} failed:`, err && err.message);
+        return { ok: false, reason: 'failed' };
+      }
+    });
+  }
+
   if (todos) registerSteerIpc(ipcMain, projectOf, todos, now);
 
   // Only the current run's evidence folder, checked to sit in its runs folder.
@@ -364,6 +398,7 @@ module.exports = {
   parseModels,
   parseProfile,
   parseSteerText,
+  parseWheelRequest,
   fieldOf,
   INTERVIEW_GAP_MS,
 };

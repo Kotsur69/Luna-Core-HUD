@@ -12,6 +12,7 @@
 //     and asks main to open it (lunaswork:openEvidence)
 //   - pending decisions: a count, plus the cleaned list (question, options,
 //     default, deadline) when the controller sends one
+//   - the wheel (C11): running / requested / handed, and since when
 //
 // evidenceDirOf() is the one check before that folder is opened: it has to
 // sit inside <runsRoot>/lunaswork-<runId>/ of the current run.
@@ -24,8 +25,9 @@ const path = require('path');
 const { ROLES, MODEL_CHOICES } = require('./lunasworkRules');
 const { ALL_PHASES } = require('./lunasworkRun');
 const { publicDecisions } = require('./lunasworkDecisions');
+const { cleanWheel } = require('./lunasworkWheel');
 
-const EVENT_TYPES = ['phase', 'wait', 'resume', 'stopping', 'decision'];
+const EVENT_TYPES = ['phase', 'wait', 'resume', 'stopping', 'decision', 'wheel'];
 const VERDICTS = ['ship', 'plateau', 'red', 'stop'];
 const MODEL_SOURCES = ['run', 'project', 'global'];
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
@@ -94,6 +96,8 @@ function publicStatus(raw, isKnownProject) {
     endedAt: time(raw.endedAt),
     scores: cleanScores(raw.scores),
     hasEvidence: typeof raw.evidenceDir === 'string' && raw.evidenceDir.length > 0,
+    wheel: cleanWheel(raw.wheel),
+    handedAt: time(raw.handedAt),
     // Only when the controller reports it; the panel hides the count otherwise.
     ...pendingOf(pending),
   };

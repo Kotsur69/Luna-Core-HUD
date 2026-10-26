@@ -304,6 +304,13 @@ function writeArchitecture(text) {
   return { file: 'ARCHITECTURE.md', update: () => `${body}\n` };
 }
 
+/** Critic's hand-back pass (C11): a section about Mati's manual commits at the end of ARCHITECTURE.md. */
+function appendArchitecture(text) {
+  const block = cleanText(text, MAX_APPEND_CHARS);
+  if (!block) return null;
+  return { file: 'ARCHITECTURE.md', update: (current) => withBlock(current, block) };
+}
+
 /**
  * The one writer: reads the current file (missing = ''), applies the op and
  * writes the result, only for pack files inside <repo>/design/.
@@ -449,6 +456,7 @@ module.exports = {
   appendDecisionEntry,
   appendJourney,
   writeArchitecture,
+  appendArchitecture,
   applyWrite,
   parseShipCriteria,
   parseJourneys,

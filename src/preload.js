@@ -407,6 +407,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   lunasworkSteer: (projectId, text) => ipcRenderer.invoke('lunaswork:steer', { projectId, text }),
   /** Opens the current run's latest evidence folder; main resolves and checks the path. */
   lunasworkOpenEvidence: () => ipcRenderer.invoke('lunaswork:openEvidence'),
+  /** "Hand me the wheel": the run pauses at the end of this iteration. runId: the run the panel shows. Promise<{ok, status} | {ok:false, reason}>. */
+  lunasworkHandOver: (runId) => ipcRenderer.invoke('lunaswork:handOver', typeof runId === 'string' ? { runId } : {}),
+  /** Hands the wheel back (or withdraws the request): manual commits recorded, the run goes on. Same answer. */
+  lunasworkHandBack: (runId) => ipcRenderer.invoke('lunaswork:handBack', typeof runId === 'string' ? { runId } : {}),
   /** {type, status} on every phase transition, wait, resume and stop. Returns an unsubscribe function. */
   onLunasworkEvent: (cb) => {
     const listener = (_e, event) => cb(event);

@@ -19,6 +19,8 @@
 //   iteration 0     lunasworkScaffold: stack template cards for an empty repo
 //   machine guard   createMachineRuntime: watchdog task, Windows Update pause,
 //                   disk cleanup, low-disk stop + email (lunasworkMachine)
+//   hand-back       lunasworkHandback (C11): main's commit at the pause, then
+//                   Mati's commits since -> DECISIONS.md + ARCHITECTURE.md
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -44,6 +46,8 @@ const { answersFromTodoPeers } = require('./lunasworkDecisions');
 const { feedbackFromTodoPeers } = require('./lunasworkFeedback');
 const { createScaffolder } = require('./lunasworkScaffold');
 const { createMachineGuard } = require('./lunasworkMachine');
+const { handbackHead, readCommits } = require('./lunasworkHandback');
+const { wheelFromTodoPeers } = require('./lunasworkWheel');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -195,6 +199,17 @@ function createLunasWorkRuntime(ctx) {
       if (!res.ok && ctx.log) ctx.log(`[lunaswork] DECISIONS.md not written: ${res.error}`);
       return res.ok;
     },
+    // C11: what Mati committed by hand while he had the wheel.
+    handback: {
+      head: (repoPath) => handbackHead(repoPath),
+      commits: (repoPath, base) => readCommits(repoPath, base),
+      architecture: ({ repoPath, block }) => {
+        const op = pack.appendArchitecture(block);
+        const res = op ? pack.applyWrite(repoPath, op) : { ok: false, error: 'empty section' };
+        if (!res.ok && ctx.log) ctx.log(`[lunaswork] ARCHITECTURE.md not written: ${res.error}`);
+        return res.ok;
+      },
+    },
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: reporter ? [reporter.onMilestone] : [],
@@ -248,7 +263,9 @@ function createMachineRuntime(ctx) {
  *   out  the run's feedback section (each item's status) into the snapshot
  *   back the phone / web form's `lunaswork-feedback:<id>` units go to
  *        applyFeedback() (lunasworkFeedback.feedbackFromTodoPeers)
- * @param {{controller:{subscribe:Function, status:Function, applyAnswers:Function, applyFeedback?:Function},
+ * So does the wheel (C11): its state rides in the feedback section, and the
+ * phone's `lunaswork-wheel:<id>` units go to applyWheel() (newest one, once).
+ * @param {{controller:{subscribe:Function, status:Function, applyAnswers:Function, applyFeedback?:Function, applyWheel?:Function},
  *   cloud:{onPulled:Function, hooks:Function}|null, putDecisions:(list:object[])=>unknown,
  *   putFeedback?:(section:object|null)=>unknown, log?:(line:string)=>void}} ctx
  * @returns {{publish:()=>void, pullAnswers:()=>number}}
@@ -279,6 +296,9 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, log = 
     try {
       const peers = cloud.hooks('todos').extraPeers();
       if (typeof controller.applyFeedback === 'function') controller.applyFeedback(feedbackFromTodoPeers(peers));
+      if (typeof controller.applyWheel === 'function') {
+        Promise.resolve(controller.applyWheel(wheelFromTodoPeers(peers))).catch((err) => log(`[lunaswork] wheel action failed: ${err && err.message}`));
+      }
       return controller.applyAnswers(answersFromTodoPeers(peers));
     } catch (err) {
       log(`[lunaswork] decision answers not read: ${err && err.message}`);
