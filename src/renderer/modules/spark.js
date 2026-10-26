@@ -20,6 +20,28 @@ import {
 import { CTX_WARN_HIGH } from './thresholds.js';
 
 export const SPARK_MAX = 80; // how many samples the chart keeps
+
+/**
+ * SVG polyline points for a plain series, scaled to its own min..max (a flat
+ * series sits in the middle). Shared with the Luna's Work score sparklines.
+ * @param {number[]} values
+ * @param {number} width
+ * @param {number} height
+ * @returns {string} '' when fewer than two finite values
+ */
+export function sparkPoints(values, width, height) {
+  const ys = (Array.isArray(values) ? values : []).filter(Number.isFinite);
+  if (ys.length < 2) return '';
+  const lo = Math.min(...ys);
+  const range = Math.max(...ys) - lo;
+  return ys
+    .map((v, i) => {
+      const x = (i / (ys.length - 1)) * width;
+      const y = range ? (1 - (v - lo) / range) * height : height / 2;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(' ');
+}
 const BURN_WINDOW_MS = 5 * 60 * 1000; // rate is measured over this window
 
 // Elements of the current mount, or null when this half is not on screen. The

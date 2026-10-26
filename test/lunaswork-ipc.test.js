@@ -12,7 +12,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { registerLunasworkIpc, parseModels, parseProfile, fieldOf, INTERVIEW_GAP_MS } = require('../src/lunasworkipc');
+const { registerLunasworkIpc, parseModels, parseProfile, parseSteerText, fieldOf, INTERVIEW_GAP_MS } = require('../src/lunasworkipc');
+const { publicStatus, publicEvent, evidenceDirOf } = require('../src/lunasworkStatus');
 const { DEFAULT_MODELS } = require('../src/lunasworkRules');
 const { DESIGN_DIR } = require('../src/lunasworkPack');
 
@@ -34,7 +35,7 @@ function fakeIpc() {
   };
 }
 
-function setup({ createSession, writeBrief, now, controller } = {}) {
+function setup({ createSession, writeBrief, now, controller, extra } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-ipc-'));
   const repo = path.join(dir, 'repo');
   fs.mkdirSync(repo);
@@ -55,6 +56,7 @@ function setup({ createSession, writeBrief, now, controller } = {}) {
     resolveDir: (p) => (fs.existsSync(p) ? p : null),
     now: now || (() => 1_000_000),
     ...(controller ? { controller } : {}),
+    ...(typeof extra === 'function' ? extra(dir) : extra || {}),
   });
   return { dir, repo, ipc, sessions, briefs, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
@@ -322,4 +324,182 @@ test('stop and status take no payload; a throwing controller is a plain failure'
   assert.deepEqual(await broken.ipc.invoke('lunaswork:stop'), { ok: false, reason: 'failed' });
   assert.deepEqual(await broken.ipc.invoke('lunaswork:status'), { ok: false, reason: 'failed' });
   broken.done();
+});
+
+// ---- HUD panel (slice 1.7): public status, event push, steer, evidence -----------------
+
+const RAW_STATUS = {
+  active: true,
+  runId: 'abc123',
+  projectId: 'game',
+  repoPath: 'C:/secret/repo',
+  iteration: 3,
+  phase: 'building',
+  role: 'builder',
+  models: { builder: 'sonnet', critic: 'gpt-9', wizard: 'opus' },
+  modelSources: { builder: 'run', critic: 'hacked' },
+  verdict: 'ship',
+  phaseStartedAt: 5000,
+  waitUntil: 9000,
+  scores: { m1: [{ n: 1, score: 40 }, { n: 2, score: 'x' }, { n: 3, score: 55 }] },
+  evidenceDir: 'C:/runs/lunaswork-abc123/iter-3',
+  profile: { startCommand: 'npm start' },
+  pendingDecisions: 2,
+};
+
+test('publicStatus keeps known roles, models, phases and projects only, and hides paths', () => {
+  const out = publicStatus(RAW_STATUS, (id) => id === 'game');
+  assert.deepEqual(out.models, { builder: 'sonnet' });
+  assert.deepEqual(out.modelSources, { builder: 'run' });
+  assert.equal(out.phase, 'building');
+  assert.equal(out.role, 'builder');
+  assert.equal(out.projectId, 'game');
+  assert.equal(out.waitUntil, 9000);
+  assert.deepEqual(out.scores, { m1: [{ n: 1, score: 40 }, { n: 3, score: 55 }] });
+  assert.equal(out.hasEvidence, true);
+  assert.equal(out.pendingDecisions, 2);
+  for (const key of ['evidenceDir', 'repoPath', 'profile']) assert.equal(key in out, false, key);
+
+  const odd = publicStatus(
+    { ...RAW_STATUS, phase: 'hacking', role: 'god', verdict: 'win', projectId: 'nope', pendingDecisions: undefined },
+    () => false,
+  );
+  assert.equal(odd.phase, null);
+  assert.equal(odd.role, null);
+  assert.equal(odd.verdict, null);
+  assert.equal(odd.projectId, null);
+  assert.equal('pendingDecisions' in odd, false);
+  assert.deepEqual(publicStatus({ runId: '../x' }, () => true), { active: false, runId: null });
+  assert.deepEqual(publicStatus(null, () => true), { active: false, runId: null });
+});
+
+test('publicEvent passes known event types only', () => {
+  assert.equal(publicEvent({ type: 'phase', status: RAW_STATUS }, () => true).type, 'phase');
+  assert.equal(publicEvent({ type: 'evil', status: RAW_STATUS }, () => true), null);
+  assert.equal(publicEvent('phase', () => true), null);
+});
+
+test('evidenceDirOf only allows a folder inside the current run folder', () => {
+  const root = path.resolve(os.tmpdir(), 'lw-runs');
+  const inside = path.join(root, 'lunaswork-abc123', 'iter-3');
+  const yes = () => true;
+  assert.equal(evidenceDirOf({ runId: 'abc123', evidenceDir: inside }, root, yes), inside);
+  assert.equal(evidenceDirOf({ runId: 'abc123', evidenceDir: path.join(root, 'lunaswork-abc123', '..', '..', 'x') }, root, yes), null);
+  assert.equal(evidenceDirOf({ runId: 'abc123', evidenceDir: path.join(root, 'lunaswork-other', 'i') }, root, yes), null);
+  assert.equal(evidenceDirOf({ runId: 'abc123', evidenceDir: path.join(root, 'lunaswork-abc123') }, root, yes), null);
+  assert.equal(evidenceDirOf({ runId: 'abc123', evidenceDir: inside }, 'relative/root', yes), null);
+  assert.equal(evidenceDirOf({ runId: 'abc123', evidenceDir: inside }, root, () => false), null);
+});
+
+test('parseSteerText takes one trimmed line within the limit', () => {
+  assert.equal(parseSteerText('  fix the menu  '), 'fix the menu');
+  for (const bad of [undefined, 42, '', '   ', 'a\nb', 'x'.repeat(1001)]) {
+    assert.equal(parseSteerText(bad), null, JSON.stringify(bad));
+  }
+});
+
+function panelSetup({ controller, list = [], write } = {}) {
+  const sent = [];
+  const writes = [];
+  const changed = [];
+  const opened = [];
+  const ctl = controller || fakeController();
+  let listener = null;
+  ctl.subscribe = (fn) => (listener = fn);
+  const s = setup({
+    controller: ctl,
+    extra: (dir) => ({
+      send: (ch, payload) => sent.push({ ch, payload }),
+      todos: {
+        read: () => list,
+        write: write || ((id, next) => (writes.push({ id, next }), true)),
+        changed: (id) => changed.push(id),
+      },
+      runsRoot: () => path.join(dir, 'runs'),
+      openPath: (p) => (opened.push(p), ''),
+    }),
+  });
+  return { ...s, ctl, sent, writes, changed, opened, emit: (e) => listener(e) };
+}
+
+test('with the panel deps, steer and openEvidence are registered and events push on lunaswork:event', () => {
+  const s = panelSetup();
+  assert.ok(s.ipc.channels().includes('lunaswork:steer'));
+  assert.ok(s.ipc.channels().includes('lunaswork:openEvidence'));
+  s.emit({ type: 'phase', status: RAW_STATUS });
+  s.emit({ type: 'bogus', status: RAW_STATUS });
+  assert.equal(s.sent.length, 1);
+  assert.equal(s.sent[0].ch, 'lunaswork:event');
+  assert.equal(s.sent[0].payload.status.projectId, 'game');
+  assert.equal('evidenceDir' in s.sent[0].payload.status, false);
+  s.done();
+});
+
+test('start / stop / status answers carry the public status only', async () => {
+  const controller = fakeController();
+  controller.start = async () => ({ ok: true, status: RAW_STATUS });
+  controller.status = () => RAW_STATUS;
+  const s = panelSetup({ controller });
+  const started = await s.ipc.invoke('lunaswork:start', { projectId: 'game' });
+  assert.equal('repoPath' in started.status, false);
+  assert.deepEqual(started.status.models, { builder: 'sonnet' });
+  assert.equal('evidenceDir' in (await s.ipc.invoke('lunaswork:status')).status, false);
+  s.done();
+});
+
+test('steer validates project and text, then appends one steer card with a fresh id', async () => {
+  const s = panelSetup({ list: [{ text: 'old', done: false, at: 1_000_000 }] });
+  for (const req of BAD_REQUESTS) {
+    assert.deepEqual(await s.ipc.invoke('lunaswork:steer', req), { ok: false, reason: 'bad-project' }, JSON.stringify(req));
+  }
+  assert.deepEqual(await s.ipc.invoke('lunaswork:steer', { projectId: 'game', text: 'a\nb' }), { ok: false, reason: 'bad-text' });
+  assert.equal(s.writes.length, 0);
+  const res = await s.ipc.invoke('lunaswork:steer', { projectId: 'game', text: ' fix the menu ', tags: ['evil'], at: 1 });
+  assert.deepEqual(res, { ok: true });
+  assert.equal(s.writes.length, 1);
+  assert.deepEqual(s.writes[0].next[1], { text: 'fix the menu', done: false, at: 1_000_001, tags: ['steer'] });
+  assert.deepEqual(s.changed, ['game']);
+  s.done();
+});
+
+test('steer refuses a full list and reports a failed write', async () => {
+  const full = panelSetup({ list: Array.from({ length: 100 }, (_, i) => ({ text: `t${i}`, done: false, at: i })) });
+  assert.deepEqual(await full.ipc.invoke('lunaswork:steer', { projectId: 'game', text: 'x' }), { ok: false, reason: 'list-full' });
+  full.done();
+  const broken = panelSetup({ write: () => false });
+  assert.deepEqual(await broken.ipc.invoke('lunaswork:steer', { projectId: 'game', text: 'x' }), { ok: false, reason: 'write-failed' });
+  assert.deepEqual(broken.changed, []);
+  broken.done();
+});
+
+test('openEvidence opens only the current run folder inside the runs root', async () => {
+  const controller = fakeController();
+  const s = panelSetup({ controller });
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence'), { ok: false, reason: 'no-evidence' });
+  const inside = path.join(s.dir, 'runs', 'lunaswork-abc123', 'iter-3');
+  fs.mkdirSync(inside, { recursive: true });
+  controller.status = () => ({ ...RAW_STATUS, evidenceDir: inside });
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence', { dir: 'C:/Windows' }), { ok: true });
+  assert.deepEqual(s.opened, [inside]);
+  controller.status = () => ({ ...RAW_STATUS, evidenceDir: s.dir });
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence'), { ok: false, reason: 'no-evidence' });
+  controller.status = () => ({ ...RAW_STATUS, projectId: 'nope', evidenceDir: inside });
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence'), { ok: false, reason: 'no-evidence' });
+  assert.equal(s.opened.length, 1);
+  s.done();
+});
+
+test('saveSettings stores a project model override from the start dialog; null clears it', async () => {
+  const s = setup();
+  const saved = await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', projectModels: { critic: 'haiku' } });
+  assert.equal(saved.ok, true);
+  assert.deepEqual(saved.projectModels, { critic: 'haiku' });
+  assert.deepEqual((await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' })).projectModels, { critic: 'haiku' });
+  assert.deepEqual(
+    await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', projectModels: { critic: 'gpt' } }),
+    { ok: false, reason: 'bad-models' },
+  );
+  const cleared = await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', projectModels: null });
+  assert.deepEqual(cleared.projectModels, {});
+  s.done();
 });

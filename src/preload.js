@@ -387,9 +387,9 @@ contextBridge.exposeInMainWorld('lunacore', {
   inboxOpenPr: (machine, id, pkg) => ipcRenderer.send('inbox:open-pr', { machine, id, pkg }),
   // Luna's Work (src/lunasworkipc.js). The renderer names a known project by
   // id only; main validates every payload and resolves the folder itself.
-  /** Promise<{ok, projectId, roles, choices, models, freeFallback, profile} | {ok:false, reason}>. */
+  /** Promise<{ok, projectId, roles, choices, models, projectModels, freeFallback, profile} | {ok:false, reason}>. */
   lunasworkGetSettings: (projectId) => ipcRenderer.invoke('lunaswork:getSettings', { projectId }),
-  /** patch: {models?, freeFallback?, profile?}. Same answer, or {ok:false, reason, field?, detail?}. */
+  /** patch: {models?, projectModels?, freeFallback?, profile?}. Same answer, or {ok:false, reason, field?, detail?}. */
   lunasworkSaveSettings: (projectId, patch) => ipcRenderer.invoke('lunaswork:saveSettings', { ...(patch && typeof patch === 'object' ? patch : {}), projectId }),
   /** Creates the missing design/ pack files. Promise<{ok, created, skipped, failed, pack}>. */
   lunasworkScaffoldPack: (projectId) => ipcRenderer.invoke('lunaswork:scaffoldPack', { projectId }),
@@ -403,11 +403,15 @@ contextBridge.exposeInMainWorld('lunacore', {
   lunasworkStop: () => ipcRenderer.invoke('lunaswork:stop'),
   /** Promise<{ok, status}>. */
   lunasworkStatus: () => ipcRenderer.invoke('lunaswork:status'),
-  /** status on every phase transition, wait and stop. Returns an unsubscribe function. */
-  onLunasworkChanged: (cb) => {
-    const listener = (_e, status) => cb(status);
-    ipcRenderer.on('lunaswork:changed', listener);
-    return () => ipcRenderer.removeListener('lunaswork:changed', listener);
+  /** Quick-adds a `steer` card to the project's to-do list. Promise<{ok} | {ok:false, reason}>. */
+  lunasworkSteer: (projectId, text) => ipcRenderer.invoke('lunaswork:steer', { projectId, text }),
+  /** Opens the current run's latest evidence folder; main resolves and checks the path. */
+  lunasworkOpenEvidence: () => ipcRenderer.invoke('lunaswork:openEvidence'),
+  /** {type, status} on every phase transition, wait, resume and stop. Returns an unsubscribe function. */
+  onLunasworkEvent: (cb) => {
+    const listener = (_e, event) => cb(event);
+    ipcRenderer.on('lunaswork:event', listener);
+    return () => ipcRenderer.removeListener('lunaswork:event', listener);
   },
   // Weekly review (src/weeklyipc.js). A week key and a model only; main
   // decides what is collected, what the model is asked and where mail goes.
