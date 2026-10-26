@@ -21,11 +21,16 @@
 // `seen` lists the run ids this PC has opened in the attention inbox
 // (src/inbox.js unions them across machines). A row written before any of
 // these reads as empty lists.
+//
+// `decisions` (optional): the Luna's Work decisions of the PC's current run
+// that wait for Mati (src/lunasworkDecisions.js publicDecision). The phone
+// answers them through the `todos` cloud scope, never through this row.
 // ============================================================================
 
 'use strict';
 
 const { needsFromReport } = require('./godmodeneeds');
+const { publicDecisions } = require('./lunasworkDecisions');
 
 const VERSION = 1;
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
@@ -379,11 +384,13 @@ function addSeen(prev, id, { machine, now = Date.now() }) {
  * `snap` (this PC's run history, addRun output or null) with the live run
  * and tab lights laid over it and a fresh `at`. A null `live` drops it.
  */
-function withLive(snap, { live = null, tabs = [] } = {}, { machine, now = Date.now() }) {
+function withLive(snap, { live = null, tabs = [], decisions = [] } = {}, { machine, now = Date.now() }) {
   const base = isObject(snap) && snap.v === VERSION && Array.isArray(snap.runs) ? snap.runs.map((r) => cleanRun(r, now)).filter(Boolean) : [];
   const out = { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs: base.slice(0, MAX_RUNS), seen: seenOf(snap), tabs: cleanTabs(tabs) };
   const l = cleanLive(live, now);
-  return l ? { ...out, live: l } : out;
+  // Luna's Work decisions waiting for Mati (lunasworkDecisions.publicDecision).
+  const d = publicDecisions(decisions);
+  return { ...out, ...(l ? { live: l } : {}), ...(d.length ? { decisions: d } : {}) };
 }
 
 /** A `godmode` row ({machine, data}) -> {machine, at, runs, live, tabs} or null. Never throws. */
@@ -397,7 +404,15 @@ function parseGodmodePeer(row, now = Date.now()) {
       .map((r) => cleanRun(r, now))
       .filter(Boolean)
       .sort((a, b) => b.finishedAt - a.finishedAt);
-    return { machine: row.machine, at: Math.min(d.at, now), runs, seen: cleanSeen(d.seen), live: cleanLive(d.live, now), tabs: cleanTabs(d.tabs) };
+    return {
+      machine: row.machine,
+      at: Math.min(d.at, now),
+      runs,
+      seen: cleanSeen(d.seen),
+      live: cleanLive(d.live, now),
+      tabs: cleanTabs(d.tabs),
+      decisions: publicDecisions(d.decisions).filter((x) => x.runId),
+    };
   } catch {
     return null;
   }
@@ -427,6 +442,21 @@ function tabsFrom(rows, now = Date.now()) {
     .filter((p) => p && p.tabs.length)
     .sort((a, b) => b.at - a.at)
     .map((p) => ({ machine: p.machine, at: p.at, stale: now - p.at > LIVE_STALE_MS, tabs: p.tabs }));
+}
+
+/**
+ * Luna's Work decisions waiting for Mati, from the newest PC that publishes
+ * any, each tagged with its machine. A PC publishes only its current run's
+ * pending ones, so an older row's list is stale once a newer row has its own.
+ * @returns {object[]}
+ */
+function decisionsFrom(rows, now = Date.now()) {
+  const peers = (Array.isArray(rows) ? rows : [])
+    .map((r) => parseGodmodePeer(r, now))
+    .filter((p) => p && p.decisions.length)
+    .sort((a, b) => b.at - a.at);
+  const p = peers[0];
+  return p ? p.decisions.map((d) => ({ ...d, machine: p.machine, stale: now - p.at > LIVE_STALE_MS })) : [];
 }
 
 /** Counters for the phone's headline: pushed / working / waiting for Mati / pending / failed. */
@@ -463,6 +493,7 @@ module.exports = {
   withLive,
   liveFrom,
   tabsFrom,
+  decisionsFrom,
   liveCounts,
   scrubPaths,
   RUN_ID_RE,

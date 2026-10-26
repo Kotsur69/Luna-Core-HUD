@@ -264,6 +264,14 @@ function appendDecision(decision) {
   return { file: 'DECISIONS.md', update: (current) => withLine(current, line) };
 }
 
+/** Decision queue (lunasworkDecisions.decisionLine): one ready-made "- ..." line in DECISIONS.md. */
+function appendDecisionEntry(entry) {
+  const text = cleanText(entry, MAX_APPEND_CHARS);
+  if (!text) return null;
+  const line = oneLine(text);
+  return { file: 'DECISIONS.md', update: (current) => withLine(current, line.startsWith('- ') ? line : `- ${line}`) };
+}
+
 const oneLine = (s) => s.replace(/\s+/g, ' ');
 
 const withLine = (current, line) => {
@@ -438,6 +446,7 @@ module.exports = {
   appendDesign,
   appendPlaytestLog,
   appendDecision,
+  appendDecisionEntry,
   appendJourney,
   writeArchitecture,
   applyWrite,

@@ -8,8 +8,10 @@
 // A run going on right now and the PCs' tab lights sit on top
 // (godmodelive.js); the snapshots table streams over realtime, so a PC's
 // put repaints the page without polling.
-// Read-only; every string is text, and a PR link is github.com only (the
-// reader already dropped anything else).
+// Luna's Work decisions waiting for Mati come first (decisions.js) - the one
+// part that writes: an answer goes back through the `todos` outbox.
+// Otherwise read-only; every string is text, and a PR link is github.com
+// only (the reader already dropped anything else).
 // ============================================================================
 
 import { h, icon, ICONS } from '../dom.js';
@@ -17,6 +19,7 @@ import { t, tf } from '../i18n.js';
 import { godmodeRunsFrom } from '../snapmodel.js';
 import { mountSnapshots, when } from './snapshotview.js';
 import { liveToShow, liveCard, tabsCard, liveTodayCard, repaintWhileShown } from './godmodelive.js';
+import { decisionsCard, createDecisionAnswers } from './decisions.js';
 
 const RECENT_MS = 24 * 60 * 60 * 1000;
 const PR_PREFIX = 'https://github.com/';
@@ -78,13 +81,16 @@ function runCard(run, now) {
  * @returns {{refresh: () => Promise<void>}}
  */
 export function mountGodmode(main, deps) {
+  // Luna's Work decisions: answered from here, back through the `todos` outbox.
+  const answers = createDecisionAnswers(deps, () => view.repaint());
   const view = mountSnapshots(main, deps, ['godmode'], (byKind, now) => {
     const rows = byKind.godmode;
     const runs = godmodeRunsFrom(rows, now);
     const live = liveToShow(rows, now);
     const tabs = tabsCard(rows, now);
-    if (!runs.length && !live && !tabs) return h('p', { class: 'empty' }, t('godmodeEmpty'));
-    return h('div', { class: 'stack' }, live ? liveCard(live, now) : null, tabs, runs.map((r) => runCard(r, now)));
+    const decisions = decisionsCard(rows, now, { mirror: answers.mirror(), send: answers.send });
+    if (!runs.length && !live && !tabs && !decisions) return h('p', { class: 'empty' }, t('godmodeEmpty'));
+    return h('div', { class: 'stack' }, decisions, live ? liveCard(live, now) : null, tabs, runs.map((r) => runCard(r, now)));
   });
   repaintWhileShown(main, view);
   return view;

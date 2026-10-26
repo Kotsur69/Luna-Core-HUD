@@ -23,6 +23,7 @@ const { PHASES, ROLES, MODEL_CHOICES, normalizeModels, normalizeStoredRun } = re
 const settingsStore = require('./lunasworkSettings');
 const { keyFor } = require('./todo');
 const { MAX_DETAILS_CHARS, MAX_TEXT_CHARS: MAX_CARD_TEXT_CHARS } = require('./todorows');
+const { restoreQueue } = require('./lunasworkDecisions');
 
 const PREPROD = 'preprod';
 const DONE = 'done';
@@ -497,6 +498,8 @@ function restoreRun(raw) {
     // Every God Mode plan this run made: only those may be replaced by its next build.
     // One summary per finished iteration (the run report).
     laps: cleanLaps(raw.laps),
+    // The decision queue (lunasworkDecisions.js): pending ones survive a restart.
+    decisions: restoreQueue(raw.decisions),
     planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
       .filter((id) => typeof id === 'string' && id && id.length <= 100)
       .slice(-MAX_PLAN_IDS),

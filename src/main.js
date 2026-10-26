@@ -141,7 +141,7 @@ const { registerCloudIpc } = require('./cloudipc');
 // and the outer loop run (src/lunaswork.js via src/lunasworkWiring.js).
 const { registerLunasworkIpc } = require('./lunasworkipc');
 const { createGodModeBuilder } = require('./lunasworkBuild');
-const { createLunasWorkRuntime } = require('./lunasworkWiring');
+const { createLunasWorkRuntime, wireDecisionSync } = require('./lunasworkWiring');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -3565,6 +3565,15 @@ app.whenReady().then(() => {
   // until Approve/Retry) and start the worker-time watchdog. After the
   // projects load: a restored run must belong to one of them.
   orchestra.restore();
+  // Luna's Work decision queue: pending decisions to the phone snapshot,
+  // answers back from the `todos` cloud scope. Wired before resume() so a
+  // resumed run's decisions are published at once.
+  wireDecisionSync({
+    controller: lunaswork,
+    cloud,
+    putDecisions: (list) => snapshotPuts.godmode.decisions(list),
+    log: (line) => console.error(line),
+  });
   // Luna's Work: a run the previous LunaCore left goes on from its phase.
   lunaswork.resume();
   setInterval(() => orchestra.tick(), ORCHESTRA_TICK_MS).unref();
