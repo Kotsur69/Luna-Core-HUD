@@ -18,6 +18,12 @@
 // A steer card whose text is `stop` is not work: it is never scheduled and
 // returns stop: true - the run ends after the current iteration.
 //
+// Scope guard (B5): a card outside DESIGN.md / ROADMAP.md
+// (lunasworkRules.scopeCheck) is never scheduled unless the decision queue
+// already has an entry for it (opts.decidedCards). It comes back in
+// `outOfScope` and the controller asks Mati. Built cards (B1) wait for the
+// Playtester and are not schedulable either.
+//
 // designAppend goes through lunasworkPack.appendDesign (append only). Each
 // scheduled card comes back with the builder brief at the top of its details;
 // the to-do store itself is only read here.
@@ -29,9 +35,9 @@
 
 const { parsePlannerOutput } = require('./orchestraPlan');
 const { checkCwd } = require('./projects');
-const { orderCards, isStuck, isStepBack, pickModel, MAX_CARDS_PER_ITERATION } = require('./lunasworkRules');
+const { orderCards, isStuck, isStepBack, pickModel, scopeCheck, MAX_CARDS_PER_ITERATION } = require('./lunasworkRules');
 const { cardMeta, execClaude } = require('./lunasworkCritic');
-const { normalizeTodos, runTag, MAX_DETAILS_CHARS, STEER_TAG } = require('./todorows');
+const { normalizeTodos, runTag, MAX_DETAILS_CHARS, STEER_TAG, BUILT_STATE } = require('./todorows');
 const pack = require('./lunasworkPack');
 
 const DIRECTOR_EFFORT = 'high';
@@ -94,7 +100,8 @@ function isStopCard(card) {
  */
 function schedulable(list, tag, failCounts = {}) {
   const counts = isObj(failCounts) ? failCounts : {};
-  const open = list.filter((c) => !c.done && (hasTag(c, tag) || hasTag(c, STEER_TAG)));
+  // A built card is not work to schedule: the next Playtester pass settles it.
+  const open = list.filter((c) => !c.done && c.state !== BUILT_STATE && (hasTag(c, tag) || hasTag(c, STEER_TAG)));
   const stop = open.some(isStopCard);
   // `at` is the card id; a second card with the same `at` is ambiguous, so
   // only the first is schedulable.
@@ -127,8 +134,27 @@ function withBuilderBrief(card) {
 
 // ---- validation -------------------------------------------------------------------
 
+/**
+ * B5: splits the cards into the ones inside DESIGN.md / ROADMAP.md (or
+ * already in the decision queue) and the ones that need a decision first.
+ * @param {object[]} cards schedulable().cards
+ * @param {string} scopeText DESIGN.md + ROADMAP.md ('' = no scope guard)
+ * @param {Set<number>} decided cards the decision queue already covers
+ * @returns {{inScope:object[], outOfScope:Array<{at:number, text:string, missing:string[]}>}}
+ */
+function splitByScope(cards, scopeText, decided) {
+  const inScope = [];
+  const outOfScope = [];
+  for (const card of cards) {
+    const check = decided.has(card.at) ? { inScope: true } : scopeCheck(card, scopeText);
+    if (check.inScope) inScope.push(card);
+    else outOfScope.push({ at: card.at, text: card.text, missing: check.missing || [] });
+  }
+  return { inScope, outOfScope };
+}
+
 /** Valid picks in reply order; every rejected id becomes a warning. */
-function pickIds(rawIds, cards, eligible, warnings) {
+function pickIds(rawIds, cards, eligible, warnings, blocked = new Set()) {
   const known = new Map(cards.map((c) => [c.at, c]));
   const allowed = new Set(eligible.map((c) => c.at));
   const picked = [];
@@ -137,6 +163,7 @@ function pickIds(rawIds, cards, eligible, warnings) {
     if (!card) warnings.push({ code: 'unknownCard', at });
     else if (picked.includes(card)) warnings.push({ code: 'duplicateCard', at });
     else if (isStuck(card)) warnings.push({ code: 'stuckCard', at });
+    else if (blocked.has(at)) warnings.push({ code: 'outOfScope', at });
     else if (!allowed.has(at)) warnings.push({ code: 'ideaBeforeGate', at });
     else picked.push(card);
   }
@@ -148,14 +175,17 @@ function pickIds(rawIds, cards, eligible, warnings) {
  * throws. A reply without a cardIds list, or with no usable id in it, falls
  * back to orderCards.
  * @param {unknown} raw model output
- * @param {{cards:object[], gatePassed?:boolean, limit?:number}} ctx cards = schedulable().cards
- * @returns {{cards:object[], fallback:boolean, designAppend:string, notes:string, warnings:object[]}}
- *   cards = scheduled cards (with meta), steer first
+ * @param {{cards:object[], gatePassed?:boolean, limit?:number, scopeText?:string, decided?:Set<number>}} ctx
+ *   cards = schedulable().cards; scopeText / decided = the scope guard (splitByScope)
+ * @returns {{cards:object[], fallback:boolean, designAppend:string, notes:string, warnings:object[],
+ *   outOfScope:object[]}} cards = scheduled cards (with meta), steer first
  */
 function validateDirection(raw, ctx) {
-  const cards = Array.isArray(ctx && ctx.cards) ? ctx.cards : [];
+  const all = Array.isArray(ctx && ctx.cards) ? ctx.cards : [];
   const gatePassed = ctx && ctx.gatePassed === true;
   const limit = ctx && Number.isInteger(ctx.limit) && ctx.limit > 0 ? ctx.limit : MAX_CARDS_PER_ITERATION;
+  const decided = ctx && ctx.decided instanceof Set ? ctx.decided : new Set();
+  const { inScope: cards, outOfScope } = splitByScope(all, (ctx && ctx.scopeText) || '', decided);
   const warnings = [];
   const fallback = (code) => ({
     cards: fallbackOrder(cards, gatePassed, limit),
@@ -163,11 +193,12 @@ function validateDirection(raw, ctx) {
     designAppend: '',
     notes: '',
     warnings: [...warnings, { code }],
+    outOfScope,
   });
 
   if (!isObj(raw) || !Array.isArray(raw.cardIds)) return fallback('badDirection');
   const eligible = eligibleOf(cards, gatePassed);
-  const picked = pickIds(raw.cardIds, cards, eligible, warnings);
+  const picked = pickIds(raw.cardIds, all, eligible, warnings, new Set(outOfScope.map((c) => c.at)));
   if (!picked.length) return fallback('emptyDirection');
 
   // Mati's cards: the model's order first, then any it left out.
@@ -181,6 +212,7 @@ function validateDirection(raw, ctx) {
     designAppend: clean(raw.designAppend, MAX_DESIGN_APPEND_CHARS),
     notes: clean(raw.notes, MAX_NOTES_CHARS),
     warnings,
+    outOfScope,
   };
 }
 
@@ -317,12 +349,14 @@ const isStore = (s) => isObj(s) && typeof s.read === 'function';
  * then says why - on 'limit' the controller may wait for the reset instead.
  *
  * @param {{repoDir:string, runId:string, iteration:number, todoStore:{read:Function},
- *   lastCritic?:object|null, failCounts?:Record<string,number>, holdCards?:number[], models?:object, env?:object, limit?:number,
+ *   lastCritic?:object|null, failCounts?:Record<string,number>, holdCards?:number[], decidedCards?:number[],
+ *   models?:object, env?:object, limit?:number,
  *   runClaude?:(call:{args:string[], prompt:string, cwd:string, env:object, timeoutMs:number})=>Promise<object>,
  *   log?:(message:string, detail?:unknown)=>void, now?:()=>number, timeoutMs?:number, budgetUsd?:number}} opts
  * @returns {Promise<{ok:boolean, stop:boolean, cardIds:number[], cards:object[], fallback:boolean,
  *   notes:string, designAppended:boolean, model:string|null, modelReason:string|null,
- *   warnings:object[], costUsd:number|null, durationMs:number, error?:string, detail?:string}>}
+ *   outOfScope:object[], warnings:object[], costUsd:number|null, durationMs:number, error?:string, detail?:string}>}
+ *   outOfScope = cards left out by the scope guard, for the decision queue
  */
 async function runDirector(opts) {
   const o = isObj(opts) ? opts : {};
@@ -339,6 +373,7 @@ async function runDirector(opts) {
     designAppended: false,
     model: null,
     modelReason: null,
+    outOfScope: [],
     warnings: [],
     costUsd: null,
   };
@@ -374,6 +409,7 @@ async function runDirector(opts) {
         cards: scheduled,
         fallback: direction.fallback,
         notes: direction.notes,
+        outOfScope: direction.outOfScope || [],
         warnings: [...stuckSteer, ...direction.warnings, ...(extra.warnings || [])],
         durationMs: now() - started,
       };
@@ -382,25 +418,31 @@ async function runDirector(opts) {
     const pick = pickModel('director', o.models, { gate: gatePassed, stepBack: isStepBack(o.iteration) })
       || { model: FALLBACK_MODEL, reason: 'default' };
     const modelInfo = { model: pick.model, modelReason: pick.reason };
-    const eligible = eligibleOf(cards, gatePassed);
+    const docs = loadDocs(o.repoDir);
+    const scope = {
+      scopeText: [docs.design, docs.roadmap].filter(Boolean).join('\n'),
+      decided: new Set(Array.isArray(o.decidedCards) ? o.decidedCards.filter(Number.isFinite) : []),
+    };
+    const { inScope, outOfScope } = splitByScope(cards, scope.scopeText, scope.decided);
+    const eligible = eligibleOf(inScope, gatePassed);
     // Nothing to choose from: no call, no cost.
-    if (!eligible.length) return done({ cards: [], fallback: false, notes: '', warnings: [] });
+    if (!eligible.length) return done({ cards: [], fallback: false, notes: '', warnings: [], outOfScope });
 
     const runner = typeof o.runClaude === 'function' ? o.runClaude : execClaude;
     const answer = await askModel(runner, {
       args: buildDirectorArgs({ model: pick.model, budgetUsd: o.budgetUsd }),
-      prompt: buildDirectorPrompt({ iteration: o.iteration, docs: loadDocs(o.repoDir), cards: eligible, lastCritic: o.lastCritic, gatePassed, limit }),
+      prompt: buildDirectorPrompt({ iteration: o.iteration, docs, cards: eligible, lastCritic: o.lastCritic, gatePassed, limit }),
       cwd: o.repoDir,
       env: o.env || process.env,
       timeoutMs: o.timeoutMs || DIRECTOR_TIMEOUT_MS,
     });
     if (answer.error) {
       log(`director fell back to orderCards: ${answer.error}`, answer.detail);
-      const direction = validateDirection(null, { cards, gatePassed, limit });
+      const direction = validateDirection(null, { cards, gatePassed, limit, ...scope });
       return done(direction, { ...modelInfo, error: answer.error, ...(answer.detail ? { detail: answer.detail } : {}) });
     }
 
-    const direction = validateDirection(answer.raw, { cards, gatePassed, limit });
+    const direction = validateDirection(answer.raw, { cards, gatePassed, limit, ...scope });
     const design = direction.fallback ? { written: false } : appendToDesign(o.repoDir, direction.designAppend, o.iteration);
     return done(direction, {
       ...modelInfo,
@@ -419,6 +461,7 @@ module.exports = {
   BUILDER_BRIEF,
   isStopCard,
   schedulable,
+  splitByScope,
   withBuilderBrief,
   validateDirection,
   buildDirectorPrompt,

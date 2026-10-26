@@ -16,6 +16,8 @@
 //   phone      publicDecision (the snapshot the phone reads, also its reader
 //              side) and answersFromTodoPeers (the way back, see below)
 //
+// A stuck card (B4) or an out-of-scope card (B5) defaults to reject: the
+// card stays parked and the run keeps to the design.
 // Defaults are the choice that loses nothing: adding a dependency or a
 // migration is approved (a checkpoint rollback reverts it), deleting a
 // feature or rewriting DESIGN.md is rejected (it would lose what Mati asked
@@ -34,7 +36,10 @@
 
 'use strict';
 
-const KINDS = ['dependency', 'migration', 'featureDelete', 'designChange', 'clientScope', 'other'];
+// stuckCard: a card that failed two iterations and the Critic did not split
+// (B4). outOfScope: a card outside DESIGN.md / ROADMAP.md (B5). Both are
+// asked by the controller, never by needsDecision().
+const KINDS = ['dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'clientScope', 'other'];
 const ANSWERED_BY = ['mati', 'default'];
 const STATUSES = ['pending', 'answered'];
 
@@ -68,6 +73,10 @@ const CARD_CHOICES = Object.freeze({
   migration: { options: [APPROVE, REJECT], defaultAnswer: APPROVE },
   featureDelete: { options: [APPROVE, REJECT], defaultAnswer: REJECT },
   designChange: { options: [APPROVE, REJECT], defaultAnswer: REJECT },
+  // approve = try the card again; the default keeps it parked.
+  stuckCard: { options: [APPROVE, REJECT], defaultAnswer: REJECT },
+  // approve = build it anyway; the default keeps the run inside the design.
+  outOfScope: { options: [APPROVE, REJECT], defaultAnswer: REJECT },
 });
 const CLIENT_OPTIONS = Object.freeze(['yes', 'no']);
 

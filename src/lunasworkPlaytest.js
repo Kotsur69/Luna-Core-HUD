@@ -16,6 +16,8 @@
 //     rules or hooks), `--permission-mode dontAsk` (nothing outside
 //     --allowedTools is callable)
 //   - cwd is the iteration's evidence dir, never the project repo
+//   - B1: the explore pass also gets the app checks of the cards that were
+//     just built (src/lunasworkChecks.js) - card text, never code
 //
 // THE TRUST BOUNDARY IS validateReport(). Scores without evidence are dropped;
 // a screenshot only counts when it is a real image file inside the evidence
@@ -41,6 +43,7 @@ const { isUsageLimitText } = require('./orchestraPlanWait');
 const { pickModel } = require('./lunasworkRules');
 const { DESIGN_DIR, readPackFile } = require('./lunasworkPack');
 const { killTree } = require('./lunasworkAdapters');
+const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
 
 const MODES = ['explore', 'shipConfirm'];
 // Plan: "The SHIP confirmation pass always gets opus" - whatever the settings say.
@@ -161,6 +164,8 @@ const PLAYTEST_SCHEMA = {
         properties: { name: { type: 'string' }, screenshot: { type: 'string' } },
       },
     },
+    // Optional: only a pass that was given built cards' checks answers it.
+    checks: checksSchema(EVIDENCE_SCHEMA),
   },
 };
 
@@ -275,10 +280,11 @@ const SHARED_RULES = [
 ];
 
 /**
- * @param {{mode:string, url:string, testPlan:string, shipCriteria:string}} input
+ * @param {{mode:string, url:string, testPlan:string, shipCriteria:string, checks?:object[]}} input
+ *   checks = lunasworkChecks.checkList of the built cards (explore pass only)
  * @returns {string}
  */
-function buildPlaytestPrompt({ mode, url, testPlan, shipCriteria }) {
+function buildPlaytestPrompt({ mode, url, testPlan, shipCriteria, checks = [] }) {
   if (mode === 'shipConfirm') {
     return [
       'You are an independent SHIP confirmation tester for a web app. Nobody has told you whether it passes - find out yourself.',
@@ -308,6 +314,7 @@ function buildPlaytestPrompt({ mode, url, testPlan, shipCriteria }) {
     ...fence('Test plan (design/TEST_PLAN.md)', testPlan),
     '',
     ...fence('Ship criteria (design/SHIP_CRITERIA.md)', shipCriteria),
+    ...checksPrompt(checks),
   ].join('\n');
 }
 
@@ -461,7 +468,7 @@ const REPORT_KEYS = ['findings', 'scores', 'journeys', 'screens'];
 
 /** The report a failed run yields: nothing found, nothing scored, one error note. */
 function emptyReport(mode, error) {
-  return { mode, findings: [], scores: [], journeys: [], screens: [], warnings: [], errors: error ? [error] : [] };
+  return { mode, findings: [], scores: [], journeys: [], screens: [], checks: [], warnings: [], errors: error ? [error] : [] };
 }
 
 /**
@@ -470,12 +477,12 @@ function emptyReport(mode, error) {
  * fallback skips the schema) - an empty report with an error, never a silent
  * "nothing found".
  * @param {unknown} raw model output
- * @param {{evidenceDir:string, since?:number, mode?:string}} opts since = ms;
- *   screenshots older than this are not evidence of this run
+ * @param {{evidenceDir:string, since?:number, mode?:string, checks?:object[]}} opts since = ms;
+ *   screenshots older than this are not evidence of this run; checks = what was asked
  * @returns {{mode:string, findings:object[], scores:object[], journeys:object[],
- *   screens:object[], warnings:object[], errors:object[]}}
+ *   screens:object[], checks:object[], warnings:object[], errors:object[]}}
  */
-function validateReport(raw, { evidenceDir, since = 0, mode = 'explore' }) {
+function validateReport(raw, { evidenceDir, since = 0, mode = 'explore', checks = [] }) {
   if (!isObj(raw) || !REPORT_KEYS.every((key) => Array.isArray(raw[key]))) {
     return emptyReport(mode, { code: 'badReport' });
   }
@@ -488,6 +495,7 @@ function validateReport(raw, { evidenceDir, since = 0, mode = 'explore' }) {
     scores: keep('scores', MAX_SCORES, cleanScore),
     journeys: keep('journeys', MAX_JOURNEYS, cleanJourney),
     screens: cleanScreens(raw.screens.slice(0, MAX_SCREENS), ctx, warnings),
+    checks: cleanChecks(raw.checks, checks, (e) => cleanEvidence(e, ctx), warnings),
     warnings,
     errors: [],
   };
@@ -665,7 +673,7 @@ function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl 
  * run goes on (plan: never reject the run).
  *
  * @param {{projectDir:string, adapter:{evidenceDir:string, tools:Function},
- *   url:string, mode?:'explore'|'shipConfirm', models?:object, env?:object,
+ *   url:string, mode?:'explore'|'shipConfirm', checks?:object[], models?:object, env?:object,
  *   execImpl?:Function, timeoutMs?:number, budgetUsd?:number,
  *   threshold?:number, now?:()=>number, killTreeImpl?:(pid:number)=>void}} opts
  * @returns {Promise<{ok:boolean, mode:string, model:string|null, modelReason:string|null,
@@ -699,6 +707,8 @@ async function runPlaytest(opts) {
     // adapter has no origin lock and could reach LunaCore's own local servers.
     if (!allowedOrigins(tools).includes(appUrl.origin)) return fail('badUrl', 'url is not the started app origin');
     const inputs = loadPlaytestInputs(projectDir);
+    // The ship pass verifies the SHIP criteria only.
+    const checks = mode === 'explore' && Array.isArray(opts.checks) ? opts.checks : [];
     if (mode === 'shipConfirm' && !inputs.shipCriteria) return fail('noShipCriteria');
     if (!inputs.testPlan && !inputs.shipCriteria) return fail('noDesignPack');
 
@@ -711,7 +721,7 @@ async function runPlaytest(opts) {
       || ((pid) => killTree(pid, { platform: process.platform, execFile, kill: process.kill.bind(process) }));
     const call = await callClaude({
       args: buildPlaytestArgs({ model: pick.model, tools, budgetUsd: opts.budgetUsd }),
-      prompt: buildPlaytestPrompt({ mode, url: appUrl.href, ...inputs }),
+      prompt: buildPlaytestPrompt({ mode, url: appUrl.href, ...inputs, checks }),
       cwd: evidenceDir, // never the repo: the Playtester must not see the code
       env,
       execImpl: opts.execImpl || execFile,
@@ -722,7 +732,7 @@ async function runPlaytest(opts) {
     const parsed = parsePlannerOutput(call.stdout);
     if (!parsed.ok) return fail(parsed.error, parsed.detail);
 
-    const validated = validateReport(parsed.raw, { evidenceDir, since, mode });
+    const validated = validateReport(parsed.raw, { evidenceDir, since, mode, checks });
     if (validated.errors.length) return fail(validated.errors[0].code);
     // The ship pass verifies criteria; visual drift is the explore pass's job.
     const screenDiff = mode === 'explore'

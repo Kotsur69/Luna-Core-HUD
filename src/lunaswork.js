@@ -60,6 +60,21 @@
 // every phase transition and on every decision change - and deps.onRunEnd,
 // called once per run at its final verdict.
 //
+// Card rules (lunasworkRules.js, docs/LUNAS_WORK_PLAN.md B1, #3, B4, B5, B9):
+//   built    a landed card is *built*, not done; the next Playtester pass
+//            gets its acceptance checks and closes it, or reopens it with
+//            the evidence (lunasworkChecks.js). A landed `bug` card whose
+//            work changed no test file stays open with a note.
+//   stuck    every card that ends an iteration open counts a failure
+//            (run.failCounts); a stuck one is offered to the Critic to split,
+//            and one it did not split goes to the decision queue.
+//   scope    a card the Director left out as outside DESIGN.md / ROADMAP.md
+//            is asked about; it is scheduled only once a decision covers it.
+//   flaky    before a core-journey rollback, the playtest is replayed on the
+//            same code; a journey that fails then passes is quarantined for
+//            the run (run.quarantine), gets a card, and is left out of the
+//            rollback input from then on.
+//
 // Iteration 0 (deps.scaffold, src/lunasworkScaffold.js): on an empty repo the
 // run goes preprod -> building at iteration 0 with the stack template's
 // cards, then on to directing at iteration 1 once the scaffold is green.
@@ -72,8 +87,16 @@
 'use strict';
 
 const path = require('path');
-const { ROLES, pickModel, stopVerdict, rollbackDecision } = require('./lunasworkRules');
-const { regressedJourneys, journeysPassedBefore, rollbackEvidence, reasonText } = require('./lunasworkCheckpoint');
+const {
+  ROLES,
+  pickModel,
+  stopVerdict,
+  rollbackDecision,
+  nextFailCounts,
+  stuckOutcome,
+} = require('./lunasworkRules');
+const { checkList } = require('./lunasworkChecks');
+const { rollbackEvidence, reasonText } = require('./lunasworkCheckpoint');
 const {
   PREPROD,
   DONE,
@@ -106,8 +129,10 @@ const {
   scoresByMilestone,
 } = require('./lunasworkRun');
 const { createCardBook } = require('./lunasworkCards');
+const { createCardFlow } = require('./lunasworkCardFlow');
 const { STEER_TAG } = require('./todorows');
 const {
+  APPROVE,
   needsDecision,
   createDecision,
   answerDecision,
@@ -188,6 +213,16 @@ function createLunasWork(deps) {
   // Lowercase letters and digits: the adapters' evidence-dir rule is the strictest.
   const newRunId = deps.newRunId || (() => `lw${now().toString(36)}`);
   const cardBook = createCardBook({ store: (projectId) => deps.todoStore(projectId), now, log });
+  // The card rules (B1, #3, B4, B5, B9) applied to this run; the wrappers
+  // reach functions defined further down this closure.
+  const cardFlow = createCardFlow({
+    run: () => run,
+    update: (fields) => update(fields),
+    logEvent: (text) => logEvent(text),
+    cardBook,
+    ask: (spec) => ask(spec),
+    replayPass: () => replayPass(),
+  });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
   let run = null;
@@ -379,7 +414,9 @@ function createLunasWork(deps) {
 
   /** Saves a changed queue, logs and records its new answers, announces it. */
   function decisionsChanged(decisions, answered = []) {
-    run = { ...run, decisions: trimQueue(decisions) };
+    // B4: an approved stuck card gets a fresh start; a rejected one stays held.
+    const retried = answered.filter((d) => d.kind === 'stuckCard' && d.answer === APPROVE).flatMap((d) => d.cardIds);
+    run = { ...run, decisions: trimQueue(decisions), failCounts: nextFailCounts(run.failCounts, { closed: retried }) };
     for (const d of answered) {
       logEvent(`decision ${d.id} (${d.kind}): ${d.answer} - ${d.answeredBy === 'default' ? 'default after deadline' : 'answered by Mati'}`);
       recordDecision(d);
@@ -455,13 +492,15 @@ function createLunasWork(deps) {
   }
 
   /** One Playtester pass on the started app; the app is always stopped after. */
-  async function playtestAndStop(mode) {
+  async function playtestAndStop(mode, checks = []) {
     try {
       const res = await deps.playtest({
         projectDir: run.repoPath,
         adapter: live.adapter,
         url: live.url,
         mode,
+        // B1: the built cards' acceptance checks (explore pass only).
+        checks,
         models: run.models,
         // The SHIP confirmation is always the paid opus pass, never a free one.
         free: mode === 'explore' && onFree(),
@@ -526,12 +565,17 @@ function createLunasWork(deps) {
       models: run.models,
       // Cards waiting for a decision (or refused by one): never scheduled.
       holdCards: [...held],
+      // B4: stuck cards are left out; B5: a card a decision covers passes the scope guard.
+      failCounts: run.failCounts,
+      decidedCards: [...new Set(run.decisions.flatMap((d) => d.cardIds))],
     });
     if (isLimit(res)) return limited(res, 'director');
     const r = isObj(res) ? res : {};
     logModel('director', r.model, r.modelReason);
     if (r.error) logEvent(`director: ${r.error}${r.fallback ? ' (fallback order)' : ''}`);
     if (r.stop) requestStop('steer');
+    // B5: work outside DESIGN.md / ROADMAP.md waits for Mati.
+    cardFlow.askAboutScope(r.outOfScope);
     // Read the holds again: a decision may have been answered (or taken its
     // default) while the Director was thinking.
     const stillHeld = heldCards(run.decisions);
@@ -557,6 +601,8 @@ function createLunasWork(deps) {
     const unlanded = r.nothing ? [] : ticked.filter((at) => !landed.has(at));
     cardBook.reopen(run.projectId, unlanded);
     if (unlanded.length) logEvent(`${unlanded.length} card(s) reopened: their work did not reach main`);
+    // B1 + #3: landed cards are built, or kept open when a bug fix has no test.
+    const { built, noTest } = cardFlow.landedToBuilt(r, cards, closed);
     const build = cleanSmall(
       {
         selfCheck: red ? 'red' : 'green',
@@ -564,11 +610,13 @@ function createLunasWork(deps) {
         integrationBranch: selfCheck.pushedIntegrationBranch || null,
         fixups: selfCheck.fixups,
         closed,
+        built,
+        noTest,
       },
       BUILD_KEYS,
     );
     logEvent(
-      `build ${build.selfCheck}${build.error ? ` (${build.error})` : ''}, ${closed.length}/${cards.length} cards closed`
+      `build ${build.selfCheck}${build.error ? ` (${build.error})` : ''}, ${closed.length}/${cards.length} cards landed`
         + `${build.integrationBranch ? `, red result kept on ${build.integrationBranch}` : ''}${free ? ', free providers' : ''}`,
     );
     return build;
@@ -662,13 +710,19 @@ function createLunasWork(deps) {
       const started = await startApp();
       if (!started.ok) res = { ok: false, error: 'launchFailed', detail: started.error };
     }
-    if (!res) res = await playtestAndStop('explore');
+    const built = cardBook.builtCards(run.projectId);
+    if (!res) res = await playtestAndStop('explore', checkList(built));
     if (isLimit(res)) return limited(res, 'playtester');
     logModel('playtester', res.model, res.modelReason);
     if (!res.ok) logEvent(`playtest failed: ${res.error}`);
     const report = cleanReport(res.report) || cleanReport({ errors: [{ code: res.error || 'failed', detail: res.detail || null }] });
     const playtest = cleanSmall({ ok: res.ok === true, error: res.error, model: res.model, reason: res.modelReason }, PASS_KEYS);
-    transition('critiquing', { current: { ...run.current, report, playtest } });
+    // B1: built cards close or reopen; B4: the cards that failed this iteration count.
+    const verify = cardFlow.settleBuilt(built, report);
+    transition('critiquing', {
+      current: { ...run.current, report, playtest, verify },
+      failCounts: nextFailCounts(run.failCounts, { failed: verify.failed, closed: verify.closed }),
+    });
   }
 
   async function runCriticOnce() {
@@ -687,6 +741,8 @@ function createLunasWork(deps) {
       history: run.history,
       gitLog,
       models: run.models,
+      // B4: the stuck cards to split (a held one is Mati's to decide already).
+      stuckCards: cardFlow.stuckNow(),
       todoStore: deps.todoStore(run.projectId),
     });
   }
@@ -709,6 +765,7 @@ function createLunasWork(deps) {
   async function stepCritiquing() {
     let critic = run.current.critic;
     if (!critic) {
+      const stuck = cardFlow.stuckNow();
       const res = await runCriticOnce();
       if (isLimit(res)) return limited(res, 'critic');
       const r = isObj(res) ? res : { ok: false, error: 'failed' };
@@ -716,8 +773,12 @@ function createLunasWork(deps) {
       // A failed Critic applied nothing: try it again rather than score the lap 0.
       if (!r.ok) return retryLater(`critic: ${r.error || 'failed'}`);
       critic = cleanCritic(r);
+      // B4: a split card is done with; the rest of the stuck ones are asked about.
+      const outcome = stuckOutcome(stuck, critic.split);
+      if (outcome.split.length) logEvent(`${outcome.split.length} stuck card(s) split by the Critic`);
       // Saved before the SHIP pass: the Critic's cards must not be made twice.
-      update({ current: { ...run.current, critic } });
+      update({ current: { ...run.current, critic }, failCounts: nextFailCounts(run.failCounts, { closed: outcome.split }) });
+      cardFlow.askAboutStuck(outcome.ask);
     }
 
     let shipConfirmed = false;
@@ -813,23 +874,49 @@ function createLunasWork(deps) {
     return clean;
   }
 
+  // ---- flaky tests (B9) ----
+
+  /** A second explore pass on the same code, for the journeys only. */
+  async function replayPass() {
+    live.role = 'playtester';
+    try {
+      const started = await startApp();
+      if (!started.ok) return { ok: false, journeys: [] };
+      const res = await playtestAndStop('explore');
+      logModel('playtester', res.model, `${res.modelReason || 'setting'} (flaky-test replay)`);
+      return { ok: res.ok === true, journeys: isObj(res.report) && Array.isArray(res.report.journeys) ? res.report.journeys : [] };
+    } finally {
+      live.role = null;
+    }
+  }
+
   async function endIteration(critic, confirmed) {
     const c = run.current;
     const milestone = critic.milestone ? critic.milestone.name : run.milestone;
     const journeys = c.report ? c.report.journeys : [];
     const earlier = run.history.filter((h) => h.n !== run.iteration);
-    // A core journey counts as broken only when it passed before (null: unknown, all must pass).
-    const regressed = regressedJourneys(journeys, journeysPassedBefore(run.laps, earlier.length));
-    let record = {
+    // B9: quarantined (flaky) journeys never count against the iteration.
+    let core = cardFlow.coreJourneys(journeys, earlier.length);
+    const recordOf = (ok) => ({
       n: run.iteration,
       milestone: milestone || null,
       // No gate score (the Critic could not compute one) counts as no progress.
       score: critic.milestone && Number.isFinite(critic.milestone.score) ? critic.milestone.score : 0,
-      cardsClosed: c.build ? (c.build.closed || []).length : 0,
+      // B1: a card closes once the Playtester confirmed it in the app.
+      cardsClosed: c.verify ? c.verify.closed.length : c.build ? (c.build.closed || []).length : 0,
       selfCheck: c.build ? c.build.selfCheck : 'green',
-      coreJourneysOk: regressed ? regressed.length === 0 : journeys.every((j) => !isObj(j) || j.passed !== false),
+      coreJourneysOk: ok,
       rolledBack: false,
-    };
+    });
+    let record = recordOf(core.ok);
+    // B9: before a broken journey reverts main, make sure it is not just flaky.
+    const wouldRevert = rollbackDecision([...earlier, record]);
+    if (deps.checkpoints && !c.checkpoint && wouldRevert.rollback && wouldRevert.reason === 'coreJourneyBroken') {
+      await cardFlow.quarantineFlaky(journeys, core.failing);
+      core = cardFlow.coreJourneys(journeys, earlier.length);
+      record = recordOf(core.ok);
+    }
+    const regressed = core.regressed;
     const checkpoint = await checkpointStep([...earlier, record], regressed);
     const rolledBack = !!(checkpoint && checkpoint.rollback && checkpoint.rollback.ok);
     if (rolledBack) record = { ...record, rolledBack: true };
@@ -1133,6 +1220,8 @@ function createLunasWork(deps) {
       waitReason: run.waitReason,
       freeUntil: onFree() ? run.limitedUntil : null,
       scores: scoresByMilestone(run.history),
+      // B9: the flaky tests quarantined in this run.
+      quarantine: run.quarantine.map((q) => q.name),
       evidenceDir: run.evidenceDir,
       endedAt: run.endedAt,
       // What waits for Mati (HUD panel, phone snapshot); none once the run ended.

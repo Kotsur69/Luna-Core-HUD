@@ -97,13 +97,14 @@ test('stuck cards are left out', async () => {
 
 test('a second card with the same id is never the one scheduled', async () => {
   const list = [
-    runCard(1, { text: 'The real card' }),
+    // "Quote" keeps the card inside the fake DESIGN.md (the scope guard, B5).
+    runCard(1, { text: 'The real quote card' }),
     runCard(1, { text: 'Same id, other run', tags: ['run:other'] }),
     runCard(1, { text: 'Same id, later duplicate' }),
   ];
   const { res } = await direct({ list, answer: { cardIds: [1], notes: '' } });
   assert.deepEqual(res.cardIds, [1]);
-  assert.equal(res.cards[0].text, 'The real card');
+  assert.equal(res.cards[0].text, 'The real quote card');
 });
 
 test('a stuck steer card is left out with a warning', async () => {
@@ -313,4 +314,59 @@ test('bad input fails without a call', async () => {
     assert.equal(res.ok, false, JSON.stringify(over));
     assert.equal(calls.length, 0);
   }
+});
+
+// ---- B5: the scope guard; B1: built cards are not scheduled ------------------------
+
+test('a card outside DESIGN.md / ROADMAP.md is not scheduled and comes back in outOfScope (B5)', async () => {
+  const list = [runCard(1, { text: 'Quote totals' }), runCard(2, { text: 'Multiplayer leaderboard chat' })];
+  const { res, calls } = await direct({ list, answer: { cardIds: [1, 2], notes: '' } });
+  assert.deepEqual(res.cardIds, [1]);
+  assert.deepEqual(res.outOfScope.map((c) => c.at), [2]);
+  assert.ok(res.outOfScope[0].missing.includes('leaderboard'));
+  // The model never even sees the out-of-scope card.
+  assert.doesNotMatch(calls[0].prompt, /Multiplayer leaderboard/);
+});
+
+test('a decision-queue entry lets an out-of-scope card through (B5)', async () => {
+  const list = [runCard(1, { text: 'Quote totals' }), runCard(2, { text: 'Multiplayer leaderboard chat' })];
+  const { res } = await direct({ list, decidedCards: [2], answer: { cardIds: [1, 2], notes: '' } });
+  assert.deepEqual(res.cardIds, [1, 2]);
+  assert.deepEqual(res.outOfScope, []);
+});
+
+test('ROADMAP.md counts as scope too, and steer and bug cards are never out of scope (B5)', async () => {
+  const repoDir = fakeRepo();
+  fs.writeFileSync(path.join(repoDir, 'design', 'ROADMAP.md'), '# Roadmap\n\n- Milestone 3: multiplayer leaderboard\n');
+  const list = [
+    runCard(1, { text: 'Multiplayer leaderboard chat' }),
+    runCard(2, { text: 'Weather widget forecast', tags: [RUN_TAG, 'kind:bug', 'sev:high'] }),
+    steerCard(3, 'Weather widget forecast'),
+  ];
+  const { res } = await direct({ list, repoDir, answer: { cardIds: [1, 2, 3], notes: '' } });
+  assert.deepEqual([...res.cardIds].sort(), [1, 2, 3]);
+  assert.deepEqual(res.outOfScope, []);
+});
+
+test('validateDirection drops a picked out-of-scope id with a warning (B5)', () => {
+  const cards = [runCard(1, { text: 'Quote totals', kind: 'feel' }), runCard(2, { text: 'Multiplayer leaderboard chat', kind: 'feel' })];
+  const out = D.validateDirection({ cardIds: [2, 1], notes: '' }, { cards, scopeText: DESIGN_BODY, decided: new Set() });
+  assert.deepEqual(out.cards.map((c) => c.at), [1]);
+  assert.deepEqual(out.outOfScope.map((c) => c.at), [2]);
+  assert.ok(out.warnings.some((w) => w.code === 'outOfScope' && w.at === 2));
+});
+
+test('splitByScope: no scope text means no guard (B5)', () => {
+  const cards = [runCard(1, { text: 'Multiplayer leaderboard chat' })];
+  assert.deepEqual(D.splitByScope(cards, '', new Set()).outOfScope, []);
+  const guarded = D.splitByScope(cards, DESIGN_BODY, new Set());
+  assert.deepEqual(guarded.inScope, []);
+  assert.equal(guarded.outOfScope[0].text, 'Multiplayer leaderboard chat');
+});
+
+test('a built card is never scheduled: it waits for the Playtester (B1)', async () => {
+  const list = [runCard(1), runCard(2, { state: 'built' })];
+  const { res } = await direct({ list, answer: { cardIds: [1, 2], notes: '' } });
+  assert.deepEqual(res.cardIds, [1]);
+  assert.ok(res.warnings.some((w) => w.code === 'unknownCard' && w.at === 2));
 });

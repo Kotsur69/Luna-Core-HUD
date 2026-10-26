@@ -21,6 +21,8 @@ const KNOWN_KINDS = {
   migration: 'decisionKindMigration',
   featureDelete: 'decisionKindFeatureDelete',
   designChange: 'decisionKindDesignChange',
+  stuckCard: 'decisionKindStuckCard',
+  outOfScope: 'decisionKindOutOfScope',
   clientScope: 'decisionKindClientScope',
 };
 

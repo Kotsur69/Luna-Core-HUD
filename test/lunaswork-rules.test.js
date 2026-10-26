@@ -323,3 +323,120 @@ test('normalizeStoredRun: an unknown phase restarts the iteration at directing',
   assert.equal(run.iteration, 0);
   assert.deepEqual(run.history, []);
 });
+
+// ---- card rules (LW 1.8: B1, #3, B4, B5, B9) --------------------------------------
+
+test('appChecks keeps the checks the app can show, not the code-only ones', () => {
+  const card = { acceptance: ['The quote shows the total', 'A test reproduces the bug', '', 'A regression test covers it', 'Saving keeps the date'] };
+  assert.deepEqual(rules.appChecks(card), ['The quote shows the total', 'Saving keeps the date']);
+  assert.deepEqual(rules.appChecks(null), []);
+});
+
+test('builtVerdict: every app check confirmed closes a built card (B1)', () => {
+  const card = { acceptance: ['Total shows', 'Date saves'] };
+  const v = rules.builtVerdict(card, [{ check: 0, passed: true }, { check: 1, passed: true }]);
+  assert.equal(v.outcome, 'done');
+  assert.deepEqual(v.missing, []);
+});
+
+test('builtVerdict: a failed check reopens the card with its text (B1)', () => {
+  const card = { acceptance: ['Total shows', 'Date saves'] };
+  const v = rules.builtVerdict(card, [{ check: 0, passed: true }, { check: 1, passed: false, evidence: { shot: 'a.png' } }]);
+  assert.equal(v.outcome, 'reopen');
+  assert.equal(v.failed.length, 1);
+  assert.equal(v.failed[0].text, 'Date saves');
+  assert.deepEqual(v.failed[0].evidence, { shot: 'a.png' });
+});
+
+test('builtVerdict: an unchecked check leaves the card built; bad results are ignored', () => {
+  const card = { acceptance: ['Total shows', 'Date saves'] };
+  const v = rules.builtVerdict(card, [{ check: 0, passed: true }, { check: 7, passed: false }, null, { check: 'x' }]);
+  assert.equal(v.outcome, 'built');
+  assert.deepEqual(v.missing, [1]);
+  assert.equal(rules.builtVerdict({ acceptance: ['A test reproduces the bug'] }, []).outcome, 'done');
+});
+
+test('isTestFile recognises the common test paths', () => {
+  for (const f of ['test/a.test.js', 'src/__tests__/x.js', 'app/foo.spec.ts', 'tests/test_api.py', 'pkg/x_test.go', 'e2e\\checkout.js']) {
+    assert.equal(rules.isTestFile(f), true, f);
+  }
+  for (const f of ['src/main.js', 'docs/testing.md', 'src/contest.js', null]) {
+    assert.equal(rules.isTestFile(f), false, String(f));
+  }
+});
+
+test('bugTestVerdict: a bug card needs a changed test file (#3)', () => {
+  const bug = { tags: ['kind:bug'] };
+  assert.deepEqual(rules.bugTestVerdict(bug, ['src/a.js', 'test/a.test.js']), { ok: true });
+  const missing = rules.bugTestVerdict(bug, ['src/a.js']);
+  assert.equal(missing.ok, false);
+  assert.match(missing.note, /test file/);
+  const unknown = rules.bugTestVerdict({ kind: 'bug' }, null);
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.note, /not known/);
+});
+
+test('bugTestVerdict: other kinds never need a test', () => {
+  assert.deepEqual(rules.bugTestVerdict({ kind: 'missing' }, []), { ok: true });
+  assert.deepEqual(rules.bugTestVerdict({ tags: ['kind:feel'] }, null), { ok: true });
+  assert.deepEqual(rules.bugTestVerdict(null, null), { ok: true });
+});
+
+test('nextFailCounts counts failures and forgets closed cards, without mutating (B4)', () => {
+  const counts = Object.freeze({ 1: 1, 2: 1, 3: 0, 4: 'x' });
+  const next = rules.nextFailCounts(counts, { failed: [1, 1, 5], closed: [2] });
+  assert.deepEqual(next, { 1: 2, 5: 1 });
+  assert.deepEqual(rules.nextFailCounts(null), {});
+});
+
+test('stuckOf and stuckOutcome: two failures make a card stuck; split or ask (B4)', () => {
+  const counts = rules.nextFailCounts(rules.nextFailCounts({}, { failed: [10, 20] }), { failed: [10] });
+  assert.equal(rules.STUCK_AFTER, 2);
+  assert.deepEqual(rules.stuckOf([10, 20, 30], counts), [10]);
+  assert.deepEqual(rules.stuckOutcome([10, 11], [11, 99]), { split: [11], ask: [10] });
+  assert.deepEqual(rules.stuckOutcome([10], null), { split: [], ask: [10] });
+});
+
+test('scopeCheck: a card inside DESIGN.md / ROADMAP.md is in scope (B5)', () => {
+  const pack = '# Design\nA quote calculator: the user enters materials and labour, the quote shows a total and a PDF export.';
+  assert.equal(rules.scopeCheck({ text: 'Quote total rounds labour', kind: 'missing' }, pack).inScope, true);
+  const out = rules.scopeCheck({ text: 'Multiplayer leaderboard with chat', kind: 'idea' }, pack);
+  assert.equal(out.inScope, false);
+  assert.equal(out.reason, 'outsidePack');
+  assert.ok(out.missing.includes('leaderboard'));
+});
+
+test('scopeCheck: steer and bug cards, an empty pack and a term-less title are never out of scope', () => {
+  const pack = 'A quote calculator.';
+  assert.equal(rules.scopeCheck({ text: 'Multiplayer leaderboard', steer: true }, pack).reason, 'steer');
+  assert.equal(rules.scopeCheck({ text: 'Multiplayer leaderboard', tags: ['steer'] }, pack).reason, 'steer');
+  assert.equal(rules.scopeCheck({ text: 'Multiplayer leaderboard', tags: ['kind:bug'] }, pack).reason, 'bug');
+  assert.equal(rules.scopeCheck({ text: 'Multiplayer leaderboard' }, '').reason, 'noPack');
+  assert.equal(rules.scopeCheck({ text: 'Fix the page' }, pack).reason, 'noTerms');
+  assert.equal(rules.scopeCheck(null, pack).inScope, false);
+});
+
+test('flakyTests: failed then passed on the same rev is flaky; across revs it is not (B9)', () => {
+  const obs = [
+    { name: 'checkout', passed: false, rev: 'iter-3' },
+    { name: 'checkout', passed: true, rev: 'iter-3' },
+    { name: 'login', passed: false, rev: 'iter-2' },
+    { name: 'login', passed: true, rev: 'iter-3' },
+    { name: 'search', passed: false, rev: 'iter-3' },
+    { name: 'search', passed: false, rev: 'iter-3' },
+    { name: '', passed: true, rev: 'iter-3' },
+    null,
+  ];
+  assert.deepEqual(rules.flakyTests(obs), ['checkout']);
+  assert.deepEqual(rules.flakyTests(null), []);
+});
+
+test('withoutQuarantined drops quarantined journeys, so they cannot trigger a rollback (B9)', () => {
+  const journeys = [{ name: 'checkout', passed: false }, { name: 'login', passed: true }];
+  const kept = rules.withoutQuarantined(journeys, [{ name: 'checkout', n: 3 }]);
+  assert.deepEqual(kept, [{ name: 'login', passed: true }]);
+  assert.deepEqual(rules.withoutQuarantined(journeys, ['login']).map((j) => j.name), ['checkout']);
+  // With the flaky journey left out the record is good again: no rollback.
+  const history = [rec(1, 70), rec(2, 72, { coreJourneysOk: kept.every((j) => j.passed) })];
+  assert.equal(rules.rollbackDecision(history).rollback, false);
+});

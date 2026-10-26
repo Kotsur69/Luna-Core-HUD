@@ -9,6 +9,9 @@
 //   phases     -> directing -> building -> launching -> playtesting ->
 //                 critiquing -> directing ... (one iteration per lap)
 //   cards      -> what the Director may schedule, in which order
+//   card rules -> built -> done after in-app checks (B1), a bug card needs a
+//                 test file (#3), stuck cards (B4), the scope guard (B5),
+//                 flaky tests kept away from rollback (B9)
 //   history    -> plateau, red streak, rollback, and the stop verdict
 //   restart    -> validating the stored run (normalizeStoredRun)
 //
@@ -239,6 +242,171 @@ function stopVerdict(s) {
   return { type: 'continue' };
 }
 
+// ---- card rules: built -> done, bug tests, stuck, scope, flaky ----------------------------
+
+// A check about the code, not the running app: "A test reproduces the bug".
+// The Playtester cannot see it; the bug-test rule (bugTestVerdict) covers it.
+const CODE_CHECK_RE = /\b(repro\w*|reproduc\w*|unit|automated|regression)\b[^.\n]{0,60}\btests?\b|^\s*an?\s+tests?\b/i;
+// Test files of the common stacks: test/ tests/ __tests__/ spec/ e2e/ folders,
+// *.test.* / *.spec.*, Python test_*.py, Go / Python *_test.*.
+const TEST_FILE_RE = /(^|\/)(tests?|__tests__|specs?|e2e)\/|\.(test|spec)\.[a-z0-9]+$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$/i;
+// Card words that say nothing about scope.
+const SCOPE_STOPWORDS = new Set(
+  ('the and for with from into onto that this when then than does dont doesnt should must make made '
+    + 'add adds added show shows shown work works fix fixes fixed have has not now new more less some '
+    + 'page screen view button text user users card cards able after before every also only just like '
+    + 'what where which while there their them they your other same each').split(' '),
+);
+const SCOPE_MIN_CHARS = 4;
+// Share of a card's terms DESIGN.md / ROADMAP.md must mention for it to count as in scope.
+const SCOPE_MIN_SHARE = 0.5;
+
+const cardKind = (card) => {
+  if (typeof card.kind === 'string') return card.kind;
+  const tag = (Array.isArray(card.tags) ? card.tags : []).find((t) => typeof t === 'string' && t.startsWith('kind:'));
+  return tag ? tag.slice(5) : null;
+};
+
+/** The acceptance checks the Playtester can confirm in the running app. */
+function appChecks(card) {
+  const list = card && Array.isArray(card.acceptance) ? card.acceptance : [];
+  return list.filter((c) => typeof c === 'string' && c.trim() && !CODE_CHECK_RE.test(c));
+}
+
+/**
+ * B1: what the Playtester's pass means for one *built* card. Every app check
+ * confirmed closes it; any failed check reopens it; a check the pass did not
+ * get to leaves it built until the next pass. A card with no app check has
+ * nothing to confirm in the app and closes.
+ * @param {{acceptance?:string[]}} card
+ * @param {Array<{check:number, passed:boolean, evidence?:object}>} results this card's
+ *   results, `check` = index into appChecks(card)
+ * @returns {{outcome:'done'|'reopen'|'built', failed:object[], missing:number[]}}
+ */
+function builtVerdict(card, results) {
+  const checks = appChecks(card);
+  const list = (Array.isArray(results) ? results : []).filter((r) => r && Number.isInteger(r.check) && r.check >= 0 && r.check < checks.length);
+  const failed = list.filter((r) => r.passed === false).map((r) => ({ ...r, text: checks[r.check] }));
+  const failedIdx = new Set(failed.map((f) => f.check));
+  const confirmed = new Set(list.filter((r) => r.passed === true).map((r) => r.check));
+  const missing = checks.map((_, i) => i).filter((i) => !confirmed.has(i) && !failedIdx.has(i));
+  if (failed.length) return { outcome: 'reopen', failed, missing };
+  return { outcome: missing.length ? 'built' : 'done', failed: [], missing };
+}
+
+/** A repo path that is a test file. */
+function isTestFile(file) {
+  return typeof file === 'string' && TEST_FILE_RE.test(file.replace(/\\/g, '/'));
+}
+
+/**
+ * Idea #3, checked at finish: a `bug` card's commit must add or change a test
+ * file, or the card stays open. Other kinds always pass.
+ * @param {{kind?:string, tags?:string[]}} card
+ * @param {string[]|null} files the paths its merged work changed (null = unknown)
+ * @returns {{ok:boolean, note?:string}}
+ */
+function bugTestVerdict(card, files) {
+  if (!card || cardKind(card) !== 'bug') return { ok: true };
+  if (Array.isArray(files) && files.some(isTestFile)) return { ok: true };
+  return {
+    ok: false,
+    note: Array.isArray(files)
+      ? 'Still open: the fix did not add or change a test file. A bug card must ship with a test that reproduces the bug.'
+      : 'Still open: the files the fix changed are not known, so its repro test could not be checked.',
+  };
+}
+
+/**
+ * B4: failed iterations per card after one iteration. A failed card counts
+ * one more; a closed card (done, split) is forgotten.
+ * @param {Record<string,number>} counts
+ * @param {{failed?:number[], closed?:number[]}} outcome
+ * @returns {Record<string,number>} a new map
+ */
+function nextFailCounts(counts, { failed = [], closed = [] } = {}) {
+  const out = {};
+  for (const [at, n] of Object.entries(counts && typeof counts === 'object' ? counts : {})) {
+    if (Number.isInteger(n) && n > 0) out[at] = n;
+  }
+  for (const at of new Set(failed.filter(Number.isFinite))) out[at] = (out[at] || 0) + 1;
+  for (const at of closed.filter(Number.isFinite)) delete out[at];
+  return out;
+}
+
+/** B4: the stuck cards (failCount >= STUCK_AFTER) among `ats`. */
+function stuckOf(ats, counts) {
+  const c = counts && typeof counts === 'object' ? counts : {};
+  return (Array.isArray(ats) ? ats : []).filter((at) => isStuck({ failCount: c[at] }));
+}
+
+/**
+ * B4: a stuck card the Critic split is done with; every other one goes to the
+ * decision queue.
+ * @returns {{split:number[], ask:number[]}}
+ */
+function stuckOutcome(stuck, split) {
+  const done = new Set(Array.isArray(split) ? split : []);
+  const list = Array.isArray(stuck) ? stuck : [];
+  return { split: list.filter((at) => done.has(at)), ask: list.filter((at) => !done.has(at)) };
+}
+
+/** Lowercase words of a text, a trailing plural `s` dropped. */
+const wordsOf = (text) =>
+  (String(text || '').toLowerCase().match(/[a-z0-9]+/g) || []).map((w) => (w.length > SCOPE_MIN_CHARS && w.endsWith('s') ? w.slice(0, -1) : w));
+
+/**
+ * B5: whether a card stays inside DESIGN.md / ROADMAP.md. Mati's steer cards
+ * and bug cards (broken work is never new scope) always do. Otherwise at
+ * least SCOPE_MIN_SHARE of the card title's terms must appear in the pack. An
+ * empty pack cannot be judged against, so nothing is out of it.
+ * @param {{text?:string, kind?:string, steer?:boolean, tags?:string[]}} card
+ * @param {string} packText DESIGN.md + ROADMAP.md
+ * @returns {{inScope:boolean, reason:string, missing?:string[]}}
+ */
+function scopeCheck(card, packText) {
+  if (!card || typeof card !== 'object') return { inScope: false, reason: 'badCard' };
+  if (card.steer === true || (Array.isArray(card.tags) && card.tags.includes('steer'))) return { inScope: true, reason: 'steer' };
+  if (cardKind(card) === 'bug') return { inScope: true, reason: 'bug' };
+  const vocabulary = new Set(wordsOf(packText));
+  if (!vocabulary.size) return { inScope: true, reason: 'noPack' };
+  const terms = [...new Set(wordsOf(card.text))].filter((w) => w.length >= SCOPE_MIN_CHARS && !SCOPE_STOPWORDS.has(w));
+  if (!terms.length) return { inScope: true, reason: 'noTerms' };
+  const missing = terms.filter((w) => !vocabulary.has(w));
+  return (terms.length - missing.length) / terms.length >= SCOPE_MIN_SHARE
+    ? { inScope: true, reason: 'pack' }
+    : { inScope: false, reason: 'outsidePack', missing };
+}
+
+/**
+ * B9: tests (core journeys) that failed and passed on the same code - the
+ * same `rev` - are flaky.
+ * @param {Array<{name:string, passed:boolean, rev:string}>} observations
+ * @returns {string[]} names, first-seen order
+ */
+function flakyTests(observations) {
+  const seen = new Map();
+  for (const o of Array.isArray(observations) ? observations : []) {
+    if (!o || typeof o.name !== 'string' || !o.name || typeof o.passed !== 'boolean' || typeof o.rev !== 'string') continue;
+    const key = `${o.rev}\u0000${o.name}`;
+    const entry = seen.get(key) || { name: o.name, passed: false, failed: false };
+    seen.set(key, { ...entry, [o.passed ? 'passed' : 'failed']: true });
+  }
+  return [...new Set([...seen.values()].filter((e) => e.passed && e.failed).map((e) => e.name))];
+}
+
+/**
+ * B9: the journeys the rollback rules may look at - quarantined (flaky) ones
+ * are left out, so they can never trigger a rollback.
+ * @param {object[]} journeys
+ * @param {Array<string|{name:string}>} quarantine
+ * @returns {object[]}
+ */
+function withoutQuarantined(journeys, quarantine) {
+  const names = new Set((Array.isArray(quarantine) ? quarantine : []).map((q) => (typeof q === 'string' ? q : q && q.name)));
+  return (Array.isArray(journeys) ? journeys : []).filter((j) => !(j && names.has(j.name)));
+}
+
 // ---- stored run ------------------------------------------------------------------------
 
 const strOrNull = (v, max) => (typeof v === 'string' && v ? v.slice(0, max) : null);
@@ -323,4 +491,14 @@ module.exports = {
   rollbackDecision,
   stopVerdict,
   normalizeStoredRun,
+  appChecks,
+  builtVerdict,
+  isTestFile,
+  bugTestVerdict,
+  nextFailCounts,
+  stuckOf,
+  stuckOutcome,
+  scopeCheck,
+  flakyTests,
+  withoutQuarantined,
 };
