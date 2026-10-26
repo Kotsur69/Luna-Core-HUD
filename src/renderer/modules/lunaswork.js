@@ -11,6 +11,9 @@
 // validates them and answers with the stored state, which is what gets
 // painted - never the value the user typed. Same static-overlay mount shape
 // as orchestrasettings.js.
+//
+// The run panel's Dashboard button opens the live run dashboard (LW 2.17a,
+// modules/lunasworkDashboard.js) in its own overlay over Settings.
 // ============================================================================
 
 'use strict';
@@ -19,6 +22,7 @@ import { sfx } from './sound.js';
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { mountLunasWorkPanel } from './lunasworkPanel.js';
+import { mountLunasWorkDashboard } from './lunasworkDashboard.js';
 
 const MODEL_LABELS = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 const SAVED_FLASH_MS = 2000;
@@ -226,6 +230,16 @@ export function mountLunasWorkSettings(root) {
       return opt ? opt.textContent : id;
     },
   });
+
+  // LW 2.17a: the live dashboard, an overlay of its own (#lw-dash) over Settings.
+  const dashboard = mountLunasWorkDashboard(document.getElementById('lw-dash'));
+  const dashButton = root.querySelector('#lw-run-dashboard');
+  if (dashButton) {
+    dashButton.addEventListener('click', () => {
+      sfx.navClick();
+      dashboard.open();
+    });
+  }
 
   el.project.addEventListener('change', () => {
     sfx.navClick();

@@ -18,6 +18,14 @@
 // lunaswork:handBack       {runId?} -> {ok, status} | {ok:false, reason, message?}
 //                          "Hand me the wheel" (C11); runId, when sent, must
 //                          be the current run's - a stale panel is refused
+// lunaswork:dashboard      (no payload) -> {ok, dashboard} | {ok:false, reason}
+//                          the current run for the HUD dashboard (LW 2.17a,
+//                          lunasworkDashboardView.dashboardView); null without a run
+// lunaswork:screenshot     {runId, file} -> {ok, dataUrl} | {ok:false, reason}
+//                          one image ONLY from config/runs/lunaswork-<runId>/ of
+//                          the current (or last) run: file is relative to it;
+//                          `..`, absolute paths, streams, symlinks and hardlinks
+//                          are refused (lunasworkDashboardView.readScreenshot)
 // lunaswork:event          main -> renderer push, {type, status}, on every
 //                          controller event (phase, wait, resume, stopping, wheel)
 //
@@ -47,6 +55,7 @@ const { keyFor } = require('./todo');
 const { publicStatus, publicEvent, evidenceDirOf } = require('./lunasworkStatus');
 const { STEER_TAG, MAX_ITEMS: MAX_TODO_ITEMS, MAX_TEXT_CHARS: MAX_STEER_CHARS } = require('./todorows');
 const { RUN_ID_RE } = require('./lunasworkWheel');
+const { dashboardView, readScreenshot } = require('./lunasworkDashboardView');
 
 const MAX_ID_CHARS = 200;
 // Opening a tab is a side effect a double click must not repeat.
@@ -345,6 +354,8 @@ function registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, 
 
   if (todos) registerSteerIpc(ipcMain, projectOf, todos, now);
 
+  if (runsRoot) registerDashboardIpc({ ipcMain, controller, isKnownProject, runsRoot });
+
   // Only the current run's evidence folder, checked to sit in its runs folder.
   if (runsRoot && openPath) {
     ipcMain.handle('lunaswork:openEvidence', async () => {
@@ -361,6 +372,37 @@ function registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, 
       }
     });
   }
+}
+
+/**
+ * The HUD dashboard (LW 2.17a): the run's view, and its screenshots one by
+ * one. The renderer never names a path outside the run folder that gets read.
+ */
+function registerDashboardIpc({ ipcMain, controller, isKnownProject, runsRoot }) {
+  const snapshot = () => (typeof controller.snapshot === 'function' ? controller.snapshot() : null);
+
+  ipcMain.handle('lunaswork:dashboard', () => {
+    try {
+      return { ok: true, dashboard: dashboardView(snapshot(), { runsRoot: runsRoot(), isKnownProject }) };
+    } catch (err) {
+      console.error('[lunaswork] dashboard failed:', err && err.message);
+      return { ok: false, reason: 'failed' };
+    }
+  });
+
+  ipcMain.handle('lunaswork:screenshot', (_event, req) => {
+    try {
+      // Only the run the dashboard shows, of a registered project - never an older run's folder.
+      const run = snapshot();
+      const current = isObject(run) && isKnownProject(run.projectId) ? run.id : null;
+      if (!current || !isObject(req) || req.runId !== current) return { ok: false, reason: 'bad-file' };
+      const dataUrl = readScreenshot(req, runsRoot());
+      return dataUrl ? { ok: true, dataUrl } : { ok: false, reason: 'bad-file' };
+    } catch (err) {
+      console.error('[lunaswork] screenshot failed:', err && err.message);
+      return { ok: false, reason: 'failed' };
+    }
+  });
 }
 
 /**

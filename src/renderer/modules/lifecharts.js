@@ -111,3 +111,59 @@ export function stackedBars(rows, series, { line = 0, fmt = String, label = '', 
   if (line > 0) svg.append(svgEl('line', { x1: pad.l, x2: w - pad.r, y1: y(line), y2: y(line), class: 'life-chart__ref' }));
   return svg;
 }
+
+/**
+ * Lines over a shared x axis (e.g. iterations): series [{label, color,
+ * points: [{x, y}]}]. The y range is `min`..`max` when given, else the data's
+ * own. Every point is a dot with a title, so single points still show.
+ */
+export function lineChart(series, { label = '', min = null, max = null, fmt = String } = {}) {
+  const w = 640;
+  const h = 220;
+  const pad = { l: 34, r: 10, t: 14, b: 26 };
+  const svg = svgRoot(w, h, label);
+  svg.classList.add('life-chart--bars', 'life-chart--lines');
+  const points = series.flatMap((s) => s.points).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (!points.length) return svg;
+  const xs = [...new Set(points.map((p) => p.x))].sort((a, b) => a - b);
+  const lo = Number.isFinite(min) ? min : Math.min(...points.map((p) => p.y));
+  const hiRaw = Number.isFinite(max) ? max : Math.max(...points.map((p) => p.y));
+  const hi = hiRaw > lo ? hiRaw : lo + 1;
+  const plotW = w - pad.l - pad.r;
+  const plotH = h - pad.t - pad.b;
+  const xFirst = xs[0];
+  const xSpan = Math.max(1, xs[xs.length - 1] - xFirst);
+  const x = (v) => pad.l + (xs.length > 1 ? ((v - xFirst) / xSpan) * plotW : plotW / 2);
+  const y = (v) => pad.t + plotH - ((v - lo) / (hi - lo)) * plotH;
+
+  svg.append(svgEl('line', { x1: pad.l, x2: w - pad.r, y1: y(lo), y2: y(lo), class: 'life-chart__axis' }));
+  for (const v of [lo, hi]) {
+    const tl = svgEl('text', { x: pad.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'life-chart__tick' });
+    tl.textContent = fmt(v);
+    svg.append(tl);
+  }
+  // At most ~12 x labels, always the first and the last.
+  const step = Math.max(1, Math.ceil(xs.length / 12));
+  xs.forEach((v, i) => {
+    if (i % step && i !== xs.length - 1) return;
+    const tl = svgEl('text', { x: x(v), y: h - 8, 'text-anchor': 'middle', class: 'life-chart__tick' });
+    tl.textContent = String(v);
+    svg.append(tl);
+  });
+  for (const s of series) {
+    const pts = s.points.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)).sort((a, b) => a.x - b.x);
+    if (pts.length > 1) {
+      svg.append(svgEl('polyline', {
+        points: pts.map((p) => `${x(p.x).toFixed(1)},${y(p.y).toFixed(1)}`).join(' '),
+        fill: 'none',
+        stroke: s.color,
+        'stroke-width': 2,
+        'stroke-linejoin': 'round',
+      }));
+    }
+    for (const p of pts) {
+      svg.append(titled(svgEl('circle', { cx: x(p.x), cy: y(p.y), r: 3, fill: s.color }), `${s.label} · ${p.x}: ${fmt(p.y)}`));
+    }
+  }
+  return svg;
+}

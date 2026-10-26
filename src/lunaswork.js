@@ -200,6 +200,7 @@ const {
 const { wheelState, newestWheelAction } = require('./lunasworkWheel');
 const { handbackDecisionLine, architectureBlock } = require('./lunasworkHandback');
 const { createLoopHooks } = require('./lunasworkLoopHooks');
+const { closePhase } = require('./lunasworkUsage');
 
 const PHASE_ROLE = {
   preprod: null,
@@ -265,6 +266,8 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *     (the loop hooks, see src/lunasworkLoopHooks.js)
  *   shipDocs?: {cards:Function, prepare?:Function, release?:Function}
  *     (LW 2.22a, the docs iteration at SHIP, see src/lunasworkShipDocs.js; without it SHIP ends at once)
+ *   usageMeter?: {drain:()=>{role:string, usage:object}[]}
+ *     (LW 2.17a, src/lunasworkUsage.js createUsageMeter: the tokens of the role calls, booked per phase)
  *   newRunId?: ()=>string, now?: ()=>number, setTimer?: Function, clearTimer?: Function,
  *   log?: (line:string)=>void,
  * }} deps
@@ -353,9 +356,21 @@ function createLunasWork(deps) {
     save();
   }
 
-  /** Every phase change goes through here: saved first, then announced. */
+  /**
+   * Every phase change goes through here: saved first, then announced. The
+   * phase that ends is booked (LW 2.17a): its time and the tokens its calls
+   * used, into the iteration it ran in.
+   */
   function transition(phase, fields = {}) {
-    run = { ...run, ...fields, phase, phaseStartedAt: now(), failures: null };
+    const at = now();
+    const usage = closePhase(run.usage, {
+      iteration: run.iteration,
+      phase: run.phase,
+      startedAt: run.phaseStartedAt,
+      at,
+      entries: deps.usageMeter ? deps.usageMeter.drain() : [],
+    });
+    run = { ...run, ...fields, usage, phase, phaseStartedAt: at, failures: null };
     save();
     emit('phase');
   }

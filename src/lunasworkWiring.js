@@ -26,6 +26,9 @@
 //                   project skills at a passed gate (LW 2.16)
 //   docs at SHIP    lunasworkShipDocs (LW 2.22a): the docs iteration's cards,
 //                   the CHANGELOG.md commit before it, the vX.Y.Z release
+//   token meter     lunasworkUsage (LW 2.17a): every Director / Playtester /
+//                   Critic / reviewer `claude -p` result's usage, and God
+//                   Mode's planner cost per build, booked per role and phase
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -55,6 +58,8 @@ const { handbackHead, readCommits } = require('./lunasworkHandback');
 const { wheelFromTodoPeers } = require('./lunasworkWheel');
 const { createHookDeps } = require('./lunasworkHookDeps');
 const { createShipDocsDeps } = require('./lunasworkShipDocs');
+const { createUsageMeter } = require('./lunasworkUsage');
+const { execClaude } = require('./lunasworkCritic');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -170,6 +175,16 @@ function createLunasWorkRuntime(ctx) {
     })
     : null;
 
+  // LW 2.17a: the run's token accounting; the controller drains it at every phase change.
+  const meter = createUsageMeter();
+  const build = async (opts) => {
+    const res = await ctx.builder.build(opts);
+    // God Mode's planner is the one `claude -p` of a build; its workers' tabs are not metered here.
+    const plan = res && typeof res === 'object' ? res.plan : null;
+    if (plan && Number.isFinite(plan.costUsd) && plan.costUsd > 0) meter.add('builder', { calls: 1, costUsd: plan.costUsd });
+    return res;
+  };
+
   return createLunasWork({
     store: { load: lunasworkStore.loadRun, save: lunasworkStore.saveRun },
     settings: () => settingsStore.readSettings(),
@@ -187,13 +202,17 @@ function createLunasWorkRuntime(ctx) {
     godModeCheckCommand: ctx.godModeCheckCommand,
     confirmStart: ctx.confirmStart,
     todoStore,
-    director: (opts) => runDirector({ ...opts, env: ctx.env() }),
-    build: (opts) => ctx.builder.build(opts),
+    director: (opts) => runDirector({ ...opts, env: ctx.env(), runClaude: meter.runner('director', execClaude) }),
+    build,
     createAdapter: (name, opts) => createAdapter(name, opts),
     // Free providers for the Playtester while Claude is limited (freeFallback).
-    playtest: ({ free, ...opts }) => runPlaytest({ ...opts, env: (free && ctx.freeEnv()) || ctx.env() }),
+    playtest: ({ free, ...opts }) => runPlaytest({
+      ...opts,
+      env: (free && ctx.freeEnv()) || ctx.env(),
+      execImpl: meter.exec('playtester', execFile),
+    }),
     shipGate: ({ repoPath, scores }) => gateStatus({ shipCriteria: pack.readPackFile(repoPath, 'SHIP_CRITERIA.md') || '', scores }),
-    critic: (opts) => runCritic({ ...opts, env: ctx.env() }),
+    critic: (opts) => runCritic({ ...opts, env: ctx.env(), runClaude: meter.runner('critic', execClaude) }),
     gitLog,
     syncCheckout,
     checkpoints: createCheckpoints({ log: ctx.log }),
@@ -218,9 +237,10 @@ function createLunasWorkRuntime(ctx) {
       },
     },
     // Loop hooks (src/lunasworkLoopHooks.js): none of them can stop the run.
-    ...createHookDeps({ env: ctx.env, settings: () => settingsStore.readSettings(), log: ctx.log }),
+    ...createHookDeps({ env: ctx.env, settings: () => settingsStore.readSettings(), log: ctx.log, meter: meter.runner }),
     // LW 2.22a: SHIP is final only after the docs iteration (README, user guide, release).
     shipDocs: createShipDocsDeps({ env: ctx.env }),
+    usageMeter: meter,
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: reporter ? [reporter.onMilestone] : [],

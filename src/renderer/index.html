@@ -2131,6 +2131,7 @@
                 <button type="button" id="lw-run-hand" class="pad-send" hidden data-i18n-title="lw.run.hand.hint" title="Przebieg zatrzyma sie na koncu biezacej iteracji, a aplikacja i workerzy stana. Wtedy pracujesz recznie." data-i18n="lw.run.hand">Daj mi ster</button>
                 <button type="button" id="lw-run-back" class="pad-send" hidden title="Krytyk czyta Twoje commity od pauzy (DECISIONS.md, ARCHITECTURE.md), potem przebieg rusza od rezyserii.">Oddaj ster</button>
                 <button type="button" id="lw-run-evidence" class="pad-send" hidden data-i18n="lw.run.evidence">Folder dowodow</button>
+                <button type="button" id="lw-run-dashboard" class="pad-send" data-i18n="lw.run.dashboard" data-i18n-title="lw.run.dashboard.hint" title="Os czasu iteracji, wyniki, tokeny na role, karty, zrzuty ekranu i decyzje - na zywo.">Pulpit</button>
               </div>
               <div id="lw-start-panel" class="lw-start" hidden>
                 <p class="termcustom__hint" data-i18n="lw.start.hint">Modele dla TEGO przebiegu. Domyslnie: ustawienie projektu albo LunaCore.</p>
@@ -2246,6 +2247,25 @@
         <!-- Filled from getUpdateStatus().version (app.getVersion() in main). -->
         <span id="termcustom-version" class="termcustom__version"></span>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Luna's Work live dashboard (LW 2.17a) ================= -->
+  <!-- Opened from Settings -> Luna's Work -> Dashboard, above the Settings
+       overlay. Filled by modules/lunasworkDashboard.js from lunaswork:dashboard;
+       screenshots only through lunaswork:screenshot. -->
+  <div id="lw-dash" class="termcustom lw-dash" tabindex="-1" hidden>
+    <div class="termcustom__backdrop" data-lw-dash-close></div>
+    <div class="termcustom__modal lw-dash__modal" role="dialog" aria-modal="true" aria-labelledby="lw-dash-title">
+      <div class="termcustom__bar">
+        <span class="termcustom__glyph">☾</span>
+        <span id="lw-dash-title" class="termcustom__title" data-i18n="lw.dash.title">Pulpit Luna's Work</span>
+      </div>
+      <div id="lw-dash-content" class="termcustom__body lw-dash__body"></div>
+      <div class="termcustom__foot">
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+        <button type="button" id="lw-dash-close" class="termcustom__reset" data-i18n="lw.dash.close">Zamknij</button>
       </div>
     </div>
   </div>
