@@ -38,6 +38,8 @@ const ADAPTERS = ['web'];
 // Planned adapters (plan: "Electron and Unity come after"); rejected until built.
 const RESERVED_ADAPTERS = ['electron', 'unity'];
 const DEFAULT_ADAPTER = 'web';
+// The stack templates of src/lunasworkScaffold.js (TEMPLATES keys).
+const PROFILE_STACKS = ['nextjs', 'python'];
 const DEFAULT_URL = 'http://localhost:3000';
 const DEFAULT_READY_TIMEOUT_SEC = 60;
 const MIN_READY_TIMEOUT_SEC = 1;
@@ -106,8 +108,18 @@ function validateProfile(raw) {
   const checkProblem = commandProblem(check, 'checkCommand');
   if (checkProblem) return invalid(checkProblem);
 
+  // Optional: the iteration-0 stack template for a new project (src/lunasworkScaffold.js).
+  if (raw.stack !== undefined && !PROFILE_STACKS.includes(raw.stack)) return invalid(`unknown stack '${String(raw.stack)}'`);
+
   return {
-    profile: { adapter, startCommand, url: url.trim(), readyTimeoutSec: timeout, checkCommand: check.trim() },
+    profile: {
+      adapter,
+      startCommand,
+      url: url.trim(),
+      readyTimeoutSec: timeout,
+      checkCommand: check.trim(),
+      ...(raw.stack !== undefined ? { stack: raw.stack } : {}),
+    },
     reason: null,
   };
 }
@@ -229,6 +241,7 @@ module.exports = {
   MIN_READY_TIMEOUT_SEC,
   MAX_READY_TIMEOUT_SEC,
   MAX_COMMAND_CHARS,
+  PROFILE_STACKS,
   validateProfile,
   normalizeModelOverride,
   normalizeSettings,

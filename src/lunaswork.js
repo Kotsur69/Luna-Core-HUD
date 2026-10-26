@@ -56,9 +56,13 @@
 // side; a timer takes the default at the deadline. Every answer goes to
 // design/DECISIONS.md (deps.recordDecision). Mati's steer cards never ask.
 //
-// Extension seams: status(), subscribe(listener) - an event on every phase
-// transition and on every decision change - and deps.onRunEnd, called once
-// per run at its final verdict.
+// Extension seams: status(), snapshot(), subscribe(listener) - an event on
+// every phase transition and on every decision change - and deps.onRunEnd,
+// called once per run at its final verdict.
+//
+// Iteration 0 (deps.scaffold, src/lunasworkScaffold.js): on an empty repo the
+// run goes preprod -> building at iteration 0 with the stack template's
+// cards, then on to directing at iteration 1 once the scaffold is green.
 //
 // Size: past the 800-line guideline on purpose. The steps share one closure
 // (the run, the wait timer, the app under test); the pure parts and the card
@@ -137,6 +141,8 @@ const GODMODE_RETRY_MS = 5 * 60 * 1000;
 // long; this many failures of one phase in a row end the run with STOP.
 const ERROR_RETRY_MS = 5 * 60 * 1000;
 const MAX_STEP_FAILURES = 3;
+// Stop reasons other callers than the kill switch may give (src/lunasworkMachine.js).
+const STOP_CALLERS = ['lowDisk', 'updatesNotPaused'];
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v, max) => (typeof v === 'string' && v ? v.slice(0, max) : null);
@@ -474,7 +480,39 @@ function createLunasWork(deps) {
       finish('stop', { stopReason: 'packIncomplete' });
       return;
     }
+    if (startScaffold()) return;
     transition('directing', { iteration: run.iteration + 1, current: emptyCurrent() });
+  }
+
+  /** A scheduled card with its builder model; the choice goes into the run log. */
+  function withBuilderModel(card) {
+    const risk = riskReason(card, run.conflicts);
+    const pick = pickModel('builder', run.models, { size: card && card.size, risky: !!risk }) || { model: 'opus', reason: 'default' };
+    const reason = risk ? `${pick.reason} (${risk})` : pick.reason;
+    logModel('builder', pick.model, reason, card && card.at);
+    return cleanCard({ ...card, model: pick.model, reason });
+  }
+
+  /**
+   * Iteration 0 (src/lunasworkScaffold.js): an empty repo gets its stack
+   * template's cards, built straight away - no Director, no decision queue
+   * (fixed template cards), the normal God Mode build + self-check gate.
+   * @returns {boolean} whether iteration 0 started
+   */
+  function startScaffold() {
+    if (!deps.scaffold || run.iteration !== 0) return false;
+    const plan = deps.scaffold.plan(run.repoPath, run.profile);
+    if (!plan) return false;
+    const seeded = deps.scaffold.seed(deps.todoStore(run.projectId), { stack: plan.stack, runId: run.id, now: now() });
+    if (!seeded.ok) {
+      logEvent(`iteration 0: scaffold cards not created (${String(seeded.error).slice(0, 150)}) - going on without them`);
+      return false;
+    }
+    logEvent(`iteration 0: empty repo, scaffolding ${plan.label} (stack from ${plan.source}), ${seeded.cards.length} cards`);
+    const cards = seeded.cards.map(withBuilderModel).filter(Boolean);
+    if (!cards.length) return false;
+    transition('building', { current: { ...emptyCurrent(), cards, notes: `iteration 0: ${plan.label} scaffold` } });
+    return true;
   }
 
   async function stepDirecting() {
@@ -500,13 +538,7 @@ function createLunasWork(deps) {
     const cards = (Array.isArray(r.cards) ? r.cards : [])
       .filter((card) => !(isObj(card) && stillHeld.has(card.at)))
       .filter(mayBuild)
-      .map((card) => {
-        const risk = riskReason(card, run.conflicts);
-        const pick = pickModel('builder', run.models, { size: card && card.size, risky: !!risk }) || { model: 'opus', reason: 'default' };
-        const reason = risk ? `${pick.reason} (${risk})` : pick.reason;
-        logModel('builder', pick.model, reason, card && card.at);
-        return cleanCard({ ...card, model: pick.model, reason });
-      })
+      .map(withBuilderModel)
       .filter(Boolean);
     transition('building', { current: { ...run.current, cards, notes: str(r.notes, MAX_TEXT_CHARS) } });
   }
@@ -582,10 +614,23 @@ function createLunasWork(deps) {
     const files = conflictedPaths(r);
     const build = buildRecord(r, cards, free);
     await syncCheckout();
+    if (run.iteration === 0) return endScaffold(build);
     transition('launching', {
       conflicts: cleanConflicts([...run.conflicts.filter((c) => c.n !== run.iteration), { n: run.iteration, files }]),
       current: { ...run.current, build },
     });
+  }
+
+  /**
+   * Iteration 0 has no app to play yet: a green scaffold goes straight on to
+   * iteration 1. A red one never reached main, so it is built again (its
+   * cards reopened) - MAX_STEP_FAILURES red tries end the run.
+   */
+  function endScaffold(build) {
+    if (build.selfCheck !== 'green') return retryLater('iteration 0: the scaffold stayed red');
+    logEvent('iteration 0: scaffold on main');
+    transition('directing', { iteration: 1, current: emptyCurrent() });
+    return undefined;
   }
 
   /**
@@ -867,7 +912,12 @@ function createLunasWork(deps) {
     }
     const override = parseModelOverride(p.models);
     if (!override) return { refusal: refuse('bad-models', 'Unknown role or model in the run models.') };
-    const profile = deps.profileFor(project.id);
+    let profile = deps.profileFor(project.id);
+    // An empty repo gets iteration 0; with no profile yet, its template's
+    // defaults are suggested - Mati confirms them with the start.
+    const scaffold = deps.scaffold ? deps.scaffold.plan(project.repoPath, profile) : null;
+    const suggested = !profile && !!scaffold;
+    if (suggested) profile = scaffold.profile;
     if (!profile) {
       return { refusal: refuse('no-profile', "Set the project profile (start command, URL) in Luna's Work settings first.") };
     }
@@ -878,7 +928,18 @@ function createLunasWork(deps) {
     }
     if (deps.godModeActive({ projectId: project.id, repoPath: project.repoPath })) return { refusal: GOD_MODE_ACTIVE() };
     const checkCommand = checkCommandFor(profile, deps.godModeCheckCommand ? deps.godModeCheckCommand() : '');
-    return { project, override, profile, checkCommand };
+    const scaffoldInfo = scaffold ? { stack: scaffold.stack, label: scaffold.label, profileSuggested: suggested } : null;
+    return { project, override, profile, checkCommand, scaffold: scaffoldInfo };
+  }
+
+  /** The template's suggested profile, confirmed with the start, kept in LunaCore's local settings. */
+  function keepSuggestedProfile(projectId, profile) {
+    if (!deps.saveProfile) return;
+    try {
+      if (deps.saveProfile(projectId, profile) === false) log('[lunaswork] the suggested profile was not saved');
+    } catch (err) {
+      log(`[lunaswork] the suggested profile was not saved: ${errText(err)}`);
+    }
   }
 
   /**
@@ -891,13 +952,14 @@ function createLunasWork(deps) {
     if (starting) return refuse('busy', "Luna's Work is already asking to start a run.");
     const checked = startProblem(isObj(payload) ? payload : {});
     if (checked.refusal) return checked.refusal;
-    const { project, override, profile, checkCommand } = checked;
+    const { project, override, profile, checkCommand, scaffold } = checked;
     starting = true;
     let confirmed = true;
     try {
       // Mati sees the commands that will run; the run keeps exactly these.
       if (deps.confirmStart) {
-        confirmed = (await deps.confirmStart({ projectId: project.id, repoPath: project.repoPath, profile, checkCommand })) === true;
+        const ctx = { projectId: project.id, repoPath: project.repoPath, profile, checkCommand, ...(scaffold ? { scaffold } : {}) };
+        confirmed = (await deps.confirmStart(ctx)) === true;
       }
     } finally {
       starting = false;
@@ -927,6 +989,7 @@ function createLunasWork(deps) {
       planIds: [],
     });
     if (!created || !created.profile) return refuse('failed', 'Could not create the run.');
+    if (scaffold && scaffold.profileSuggested) keepSuggestedProfile(project.id, profile);
     run = created;
     logEvent(`started; models ${ROLES.map((role) => `${role}=${models[role]} (${sources[role]})`).join(', ')}`);
     save();
@@ -998,10 +1061,12 @@ function createLunasWork(deps) {
   /**
    * The kill switch: the step that is running finishes, then the run ends
    * with STOP. A run that is waiting ends at once.
+   * @param {string} [reason] one of STOP_CALLERS (the machine guard); anything
+   *   else - the IPC passes nothing - is the kill switch
    */
-  function stop() {
+  function stop(reason) {
     if (!active()) return { ok: false, reason: 'no-run', message: "No Luna's Work run is going." };
-    requestStop('killSwitch');
+    requestStop(STOP_CALLERS.includes(reason) ? reason : 'killSwitch');
     if (waitTimer || !looping) finish('stop');
     else emit('stopping');
     return { ok: true, status: status() };
@@ -1120,6 +1185,8 @@ function createLunasWork(deps) {
     isActiveOn: (projectId) => active() && run.projectId === projectId,
     /** The run's history log: every model choice with its reason, and the run's events. */
     runLog: () => (run ? run.log.map((e) => ({ ...e })) : []),
+    /** A deep copy of the run record (the machine guard's cleanup and decisions), or null. */
+    snapshot: () => (run ? JSON.parse(JSON.stringify(run)) : null),
     /** Test seam: settles when the current step loop has stopped. */
     idle: () => loopDone,
     dispose,

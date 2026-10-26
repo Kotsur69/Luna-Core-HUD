@@ -313,7 +313,11 @@ doc becomes `DONE_LUNAS_WORK_PLAN.md`.
    quarantine (B9)** — rules in `lunasworkRules.js`, wired into the Critic.
 9. **Mid-run feedback (B17)** — steer cards + feedback link, triage into
    cards, trust rules, per-item status.
-10. **Iteration 0 (B2) + survive the machine (B3).**
+10. ✅ **Iteration 0 (B2) + survive the machine (B3).** `lunasworkScaffold.js`
+    (empty repo -> Next.js/TS or Python (uv + pytest) template cards, built
+    as iteration 0; profile defaults confirmed at start) and
+    `lunasworkMachine.js` (watchdog task + `--lunaswork-watchdog`, Windows
+    Update pause/restore, evidence + worktree cleanup, low-disk stop + email).
 11. **"Hand me the wheel" (C11).**
 
 ### Phase 2 — scale

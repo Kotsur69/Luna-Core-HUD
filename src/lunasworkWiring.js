@@ -15,6 +15,9 @@
 //   run report      lunasworkReport on onRunEnd: <runsDir>/lunaswork-<id>.md
 //                   + .html, and one email under "Email me when a run finishes"
 //   decisions       every decision-queue answer appended to design/DECISIONS.md
+//   iteration 0     lunasworkScaffold: stack template cards for an empty repo
+//   machine guard   createMachineRuntime: watchdog task, Windows Update pause,
+//                   disk cleanup, low-disk stop + email (lunasworkMachine)
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -37,6 +40,8 @@ const { createCheckpoints } = require('./lunasworkCheckpoint');
 const { createLunasWorkReporter } = require('./lunasworkReport');
 const { godmodeEmailOn } = require('./mailprefs');
 const { answersFromTodoPeers } = require('./lunasworkDecisions');
+const { createScaffolder } = require('./lunasworkScaffold');
+const { createMachineGuard } = require('./lunasworkMachine');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -157,6 +162,13 @@ function createLunasWorkRuntime(ctx) {
     settings: () => settingsStore.readSettings(),
     projectOf,
     profileFor: (projectId) => settingsStore.profileFor(settingsStore.readSettings(), projectId),
+    // Iteration 0 for an empty repo; its template's profile, once Mati
+    // confirmed it with the start, is kept in LunaCore's local settings.
+    scaffold: createScaffolder(),
+    saveProfile: (projectId, profile) => {
+      const { settings, reason } = settingsStore.withProject(settingsStore.readSettings(), projectId, { profile });
+      return !reason && settingsStore.writeSettings(settings);
+    },
     packStatus: (repoPath) => pack.packCompleteness(repoPath),
     godModeActive,
     godModeCheckCommand: ctx.godModeCheckCommand,
@@ -182,6 +194,40 @@ function createLunasWorkRuntime(ctx) {
       return res.ok;
     },
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
+    log: ctx.log,
+  });
+}
+
+/**
+ * The machine guard (src/lunasworkMachine.js) over the real OS. Attach it
+ * before controller.resume() and reconcile() after.
+ * @param {{
+ *   controller: object,
+ *   launch: {command:string, args:string[]},
+ *   runsRoot: ()=>string,
+ *   godModeBusy: ()=>boolean,
+ *   worktreeInUse: (root:string)=>boolean,
+ *   mail?: {sender:{status:Function, send:Function}},
+ *   log?: (line:string)=>void,
+ * }} ctx
+ */
+function createMachineRuntime(ctx) {
+  const user = process.env.USERDOMAIN && process.env.USERNAME ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : null;
+  return createMachineGuard({
+    controller: ctx.controller,
+    store: lunasworkStore.machineStore,
+    launch: ctx.launch,
+    user,
+    runsRoot: ctx.runsRoot,
+    godModeBusy: ctx.godModeBusy,
+    worktreeInUse: ctx.worktreeInUse,
+    // The low-disk alert goes out whatever the run-email setting says.
+    email: ctx.mail
+      ? async (msg) => {
+        if (!ctx.mail.sender.status().connected) throw new Error('gmail not connected');
+        return ctx.mail.sender.send(msg);
+      }
+      : undefined,
     log: ctx.log,
   });
 }
@@ -225,4 +271,4 @@ function wireDecisionSync({ controller, cloud, putDecisions, log = () => {} }) {
   return { publish, pullAnswers };
 }
 
-module.exports = { createLunasWorkRuntime, createAwake, syncCheckout, wireDecisionSync };
+module.exports = { createLunasWorkRuntime, createMachineRuntime, createAwake, syncCheckout, wireDecisionSync };

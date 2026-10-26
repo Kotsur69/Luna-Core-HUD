@@ -8,6 +8,8 @@
 // Validation of what comes back lives in lunasworkRules.normalizeStoredRun;
 // this module only does the IO.
 //
+// config/lunaswork-machine.local.json: the machine guard's state (machineStore).
+//
 // Same contract as orchestraStore.js: a missing or broken file reads as null,
 // a failed write returns false - never a throw.
 // ============================================================================
@@ -17,37 +19,46 @@
 const fs = require('fs');
 const paths = require('./paths');
 
-const file = () => paths.local('lunaswork.local.json');
-
-/** @returns {unknown} the parsed file, or null */
-function loadRun() {
-  try {
-    return JSON.parse(fs.readFileSync(file(), 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
 /**
- * @param {object|null} data serialized run; null deletes the file
- * @returns {boolean}
+ * One JSON file under config/ with this module's contract.
+ * @param {string} name e.g. 'lunaswork.local.json'
+ * @returns {{load:()=>unknown, save:(data:object|null)=>boolean}}
  */
-function saveRun(data) {
-  try {
-    if (data === null) {
-      fs.rmSync(file(), { force: true });
-      return true;
-    }
-    if (!paths.ensureUserDir()) return false;
-    const target = file();
-    const tmp = `${target}.tmp`;
-    // Owner-only: it holds local paths and run history.
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, target);
-    return true;
-  } catch {
-    return false;
-  }
+function fileStore(name) {
+  const file = () => paths.local(name);
+  return {
+    /** @returns {unknown} the parsed file, or null */
+    load() {
+      try {
+        return JSON.parse(fs.readFileSync(file(), 'utf8'));
+      } catch {
+        return null;
+      }
+    },
+    /** @param {object|null} data null deletes the file */
+    save(data) {
+      try {
+        if (data === null) {
+          fs.rmSync(file(), { force: true });
+          return true;
+        }
+        if (!paths.ensureUserDir()) return false;
+        const target = file();
+        const tmp = `${target}.tmp`;
+        // Owner-only: it holds local paths and run history.
+        fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
+        fs.renameSync(tmp, target);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
-module.exports = { loadRun, saveRun };
+const runStore = fileStore('lunaswork.local.json');
+// The machine guard's state (src/lunasworkMachine.js): which run it set up and
+// the Windows Update values to restore. Kept apart from the run on purpose.
+const machineStore = fileStore('lunaswork-machine.local.json');
+
+module.exports = { loadRun: runStore.load, saveRun: runStore.save, machineStore };
