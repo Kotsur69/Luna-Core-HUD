@@ -362,3 +362,23 @@ test('ensureBrowsers reports a failed install and does not record it', async () 
   assert.equal(fs.existsSync(path.join(world.opts.runsRoot, A.BROWSERS_MARKER)), false);
   assert.match(fs.readFileSync(path.join(adapter.evidenceDir, A.BROWSERS_LOG), 'utf8'), /install failed/);
 });
+
+test('ensureBrowsers runs outside the project and reinstalls once the marker is a day old', async () => {
+  const world = fakeWorld();
+  const calls = [];
+  world.opts.execFile = (file, args, options, cb) => {
+    calls.push(options);
+    cb(null);
+  };
+  const adapter = A.createAdapter('web', world.opts);
+  const matrix = [{ engine: 'chromium', width: 1440, height: 900 }];
+  await adapter.ensureBrowsers(matrix);
+  assert.equal(path.resolve(calls[0].cwd), path.resolve(world.opts.runsRoot));
+
+  world.t += 60 * 60 * 1000;
+  await adapter.ensureBrowsers(matrix);
+  assert.equal(calls.length, 1, 'fresh marker: skipped');
+  world.t += 24 * 60 * 60 * 1000;
+  await adapter.ensureBrowsers(matrix);
+  assert.equal(calls.length, 2, 'expired marker: installed again');
+});

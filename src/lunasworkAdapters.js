@@ -41,6 +41,7 @@ const BROWSERS_LOG = 'browsers.log';
 // install step runs on first use of an engine only.
 const BROWSERS_MARKER = '.playwright-browsers.json';
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+const BROWSERS_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_VIEWPORT = 4000;
 
 // Playwright MCP, run by the Playtester's headless `claude -p`. Screenshots and
@@ -147,10 +148,17 @@ const enginesOf = (matrix) => [...new Set(cleanMatrix(matrix).map((c) => c.engin
 /** Chromium keeps the plain server name; other engines get their own server. */
 const serverFor = (engine) => (engine === 'chromium' ? PLAYWRIGHT_SERVER : `${PLAYWRIGHT_SERVER}-${engine}`);
 
-function readInstalled(runsRoot) {
+/**
+ * Engines installed within BROWSERS_TTL_MS. The MCP package is @latest, so a
+ * marker without an age limit would outlive a Playwright upgrade that needs
+ * new browser builds; an expired marker reinstalls (idempotent, quick).
+ */
+function readInstalled(runsRoot, now) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(runsRoot, BROWSERS_MARKER), 'utf8'));
-    return Array.isArray(raw && raw.engines) ? raw.engines.filter((e) => ENGINES.includes(e)) : [];
+    const at = Date.parse(raw && raw.at);
+    if (!Number.isFinite(at) || now - at > BROWSERS_TTL_MS || at > now) return [];
+    return Array.isArray(raw.engines) ? raw.engines.filter((e) => ENGINES.includes(e)) : [];
   } catch {
     return []; // missing or broken marker: install again, it is idempotent
   }
@@ -294,7 +302,7 @@ function createWebAdapter(ctx) {
    * @returns {Promise<{ok:boolean, installed:string[], error?:string}>}
    */
   function ensureBrowsers(matrix) {
-    const done = readInstalled(ctx.runsRoot);
+    const done = readInstalled(ctx.runsRoot, ctx.now());
     const missing = enginesOf(matrix).filter((e) => !done.includes(e));
     if (!missing.length) return Promise.resolve({ ok: true, installed: [] });
     // Engines come only from the ENGINES allow-list, so the command is fixed text.
@@ -310,7 +318,17 @@ function createWebAdapter(ctx) {
     };
     note(`first use of ${missing.join(', ')} - $ ${command}`);
     return new Promise((resolve) => {
-      ctx.execFile(command, [], { shell: true, windowsHide: true, timeout: INSTALL_TIMEOUT_MS }, (err, stdout, stderr) => {
+      // cwd = the runs folder, never the project: npx must not pick up a
+      // `playwright` the project ships.
+      const opts = { cwd: ctx.runsRoot, shell: true, windowsHide: true, timeout: INSTALL_TIMEOUT_MS };
+      try {
+        fs.mkdirSync(ctx.runsRoot, { recursive: true });
+      } catch (e) {
+        note(`could not create ${ctx.runsRoot}: ${e.message}`);
+        resolve({ ok: false, installed: [], error: String(e.message).slice(0, 300) });
+        return;
+      }
+      ctx.execFile(command, [], opts, (err, stdout, stderr) => {
         if (stdout) note(String(stdout).trim());
         if (stderr) note(String(stderr).trim());
         if (err) {

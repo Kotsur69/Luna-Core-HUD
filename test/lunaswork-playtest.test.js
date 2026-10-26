@@ -627,3 +627,20 @@ test('PLAYTEST_SCHEMA requires persona, engine and width on every finding', () =
   assert.deepEqual(item.properties.engine.enum, ['chromium', 'firefox', 'webkit']);
   assert.deepEqual(item.properties.width.enum, [390, 820, 1440]);
 });
+
+test('every browser server must be origin-locked - one open engine refuses the pass', async () => {
+  const adapter = await fakeAdapter();
+  const fake = fakeClaude({ raw: full() });
+  const leaky = {
+    ...adapter,
+    tools: (opts) => {
+      const t = adapter.tools(opts);
+      t.mcpConfig.mcpServers['playwright-firefox'] = { type: 'stdio', command: 'npx', args: ['--browser', 'firefox'] };
+      t.allowedTools.push('mcp__playwright-firefox__browser_navigate');
+      return t;
+    },
+  };
+  const res = await P.runPlaytest({ projectDir: fakeProject(), adapter: leaky, url: URL_, execImpl: fake.execImpl });
+  assert.equal(res.error, 'badUrl');
+  assert.equal(fake.calls.length, 0);
+});

@@ -217,16 +217,18 @@ function httpUrl(url) {
   }
 }
 
-/** The origins the adapter's MCP servers restrict the browser to (`--allowed-origins`). */
-function allowedOrigins(tools) {
+/**
+ * True when EVERY one of the adapter's MCP servers restricts its browser to
+ * `origin` (`--allowed-origins`) - one unlocked engine would be an open door.
+ */
+function lockedTo(tools, origin) {
   const servers = isObj(tools && tools.mcpConfig && tools.mcpConfig.mcpServers) ? tools.mcpConfig.mcpServers : {};
-  const out = [];
-  for (const server of Object.values(servers)) {
+  const list = Object.values(servers);
+  return list.length > 0 && list.every((server) => {
     const args = Array.isArray(server && server.args) ? server.args : [];
     const i = args.indexOf('--allowed-origins');
-    if (i >= 0 && typeof args[i + 1] === 'string') out.push(...args[i + 1].split(';'));
-  }
-  return out;
+    return i >= 0 && typeof args[i + 1] === 'string' && args[i + 1].split(';').includes(origin);
+  });
 }
 
 /** Same file, compared the way the OS does (case-insensitive on Windows). */
@@ -820,7 +822,7 @@ async function runPlaytest(opts) {
     const tools = adapter.tools({ matrix: ran.matrix });
     // The browser must be locked to the app the adapter started - an unstarted
     // adapter has no origin lock and could reach LunaCore's own local servers.
-    if (!allowedOrigins(tools).includes(appUrl.origin)) return fail('badUrl', 'url is not the started app origin');
+    if (!lockedTo(tools, appUrl.origin)) return fail('badUrl', 'url is not the started app origin');
     const inputs = loadPlaytestInputs(projectDir);
     // The ship pass verifies the SHIP criteria only.
     const checks = mode === 'explore' && Array.isArray(opts.checks) ? opts.checks : [];
