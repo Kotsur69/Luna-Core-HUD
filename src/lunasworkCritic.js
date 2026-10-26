@@ -472,10 +472,14 @@ function closeSplit(list, pieces, at) {
  * Creates and updates the run's cards in the to-do store, tagged run:<id>,
  * kind:<x>, sev:<x>. One read, one write. Pieces of a stuck card (B4) are
  * created whole or not at all; their stuck card then closes as split.
+ * LW 2.13: with an active ROADMAP epic, every NEW card is tagged
+ * `epic:<slug>` so the Director schedules it inside that epic.
  * @param {{read:()=>unknown, write:(list:object[])=>boolean, now?:()=>number}} store
+ * @param {{epic?:string|null}} [opts] epic = the active epic's slug
  * @returns {{created:object[], updated:object[], split:number[], warnings:object[], error?:string}}
  */
-function applyCards(store, cards, tag) {
+function applyCards(store, cards, tag, opts = {}) {
+  const epic = pack.epicSlug(isObj(opts) ? opts.epic : null);
   const warnings = [];
   let list = normalizeTodos(store.read());
   // Re-checked on this read: Mati may have tagged a card `steer` or closed it
@@ -508,7 +512,11 @@ function applyCards(store, cards, tag) {
     warnings,
   );
   // extraTags: set only by the controller's own cards (B17 feedback), never by the model's output.
-  const tasks = kept.map((c) => ({ ...taskFields(c), tags: cardTags(tag, c.kind, c.severity, c.extraTags) }));
+  const epicTags = epic ? [`epic:${epic}`] : [];
+  const tasks = kept.map((c) => ({
+    ...taskFields(c),
+    tags: cardTags(tag, c.kind, c.severity, [...epicTags, ...(Array.isArray(c.extraTags) ? c.extraTags : [])]),
+  }));
   const at = store.now ? store.now() : Date.now();
   let created = [];
   if (tasks.length) {
@@ -568,9 +576,9 @@ function spawnClaude(execImpl, args, { cwd, env, timeoutMs }, resolve) {
 }
 
 /** applyCards that turns a throwing store into an error, so the pack is still written. */
-function safeApplyCards(store, cards, tag) {
+function safeApplyCards(store, cards, tag, opts) {
   try {
-    return applyCards(store, cards, tag);
+    return applyCards(store, cards, tag, opts);
   } catch (err) {
     return { created: [], updated: [], split: [], warnings: [], error: clean(err && err.message, 300) || 'store failed' };
   }
@@ -701,7 +709,9 @@ async function runCritic(opts) {
     });
     if (critique.errors.length) return fail(critique.errors[0].code);
 
-    const applied = safeApplyCards(o.todoStore, critique.cards, tag);
+    // LW 2.13: read after the Director's tick, so new cards land in the epic now being worked on.
+    const epic = pack.activeEpic(pack.parseRoadmap(pack.readPackFile(o.repoDir, 'ROADMAP.md')));
+    const applied = safeApplyCards(o.todoStore, critique.cards, tag, { epic: epic ? epic.slug : null });
     if (applied.error) log('critic could not save cards', applied.error);
     const date = new Date(now()).toISOString().slice(0, 10);
     // Cards that were not saved are work nobody will do: never ship past them.

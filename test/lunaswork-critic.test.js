@@ -610,3 +610,43 @@ test('a built card is not rewritten by the Critic: it waits for the Playtester (
   assert.equal(store.list.find((c) => c.at === 30).text, 'built card');
   assert.ok(res.warnings.some((w) => w.code === 'notUpdatable'));
 });
+
+// ---- LW 2.13: new cards join the active ROADMAP epic ---------------------------------
+
+const ROADMAP = '# Roadmap\n\n## Milestones\n\n### Milestone 1\n\n- [x] epic:shell - Shell\n- [ ] epic:quote-form - Quote form\n';
+// A card as validateCritique hands it on.
+const freshCard = (over = {}) => card({ updatesCardId: null, splitsCardId: null, ...over });
+
+test('applyCards tags new cards with the active epic, never updated ones', () => {
+  const store = memStore([{ text: 'old', done: false, at: 40, tags: [RUN_TAG, 'kind:feel', 'sev:low'] }]);
+  const res = C.applyCards(store, [freshCard({ text: 'new one' }), freshCard({ text: 'rewrite 40', updatesCardId: 40 })], RUN_TAG, { epic: 'quote-form' });
+  assert.equal(res.created.length, 1);
+  assert.deepEqual(res.created[0].tags, [RUN_TAG, 'kind:feel', 'sev:medium', 'epic:quote-form']);
+  assert.ok(!store.list.find((c) => c.at === 40).tags.includes('epic:quote-form'));
+});
+
+test('applyCards without an epic, or with a bad slug, adds no epic tag', () => {
+  for (const opts of [undefined, {}, { epic: null }, { epic: '../x' }, { epic: 'Not A Slug' }]) {
+    const store = memStore();
+    const res = C.applyCards(store, [freshCard()], RUN_TAG, opts);
+    assert.deepEqual(res.created[0].tags, [RUN_TAG, 'kind:feel', 'sev:medium'], JSON.stringify(opts));
+  }
+});
+
+test('runCritic tags the cards it opens with the epic ROADMAP.md says is active', async () => {
+  const repoDir = fakeRepo();
+  fs.writeFileSync(path.join(repoDir, 'design', 'ROADMAP.md'), ROADMAP);
+  const store = memStore();
+  const claude = fakeClaude(envelope(critique()));
+  const res = await C.runCritic(baseOpts({ repoDir, todoStore: store, runClaude: claude.run }));
+  assert.equal(res.ok, true);
+  assert.equal(res.cards.created.length, 1);
+  assert.ok(store.list[0].tags.includes('epic:quote-form'));
+});
+
+test('runCritic with no roadmap epic leaves the cards as before', async () => {
+  const store = memStore();
+  const claude = fakeClaude(envelope(critique()));
+  await C.runCritic(baseOpts({ todoStore: store, runClaude: claude.run }));
+  assert.ok(!store.list[0].tags.some((t) => t.startsWith('epic:')));
+});

@@ -1,7 +1,8 @@
 // ============================================================================
 // God Mode's default path, pinned. orchestra.js has two optional hooks for
-// Luna's Work (makePlan ctx.cards and ctx.onRunSettled); with neither set,
-// God Mode must plan the same cards and emit the same events as before them.
+// Luna's Work (makePlan ctx.cards and ctx.onRunSettled), plus ctx.ownership
+// (LW 2.12); with none set, God Mode must plan the same cards, save the same
+// plan and emit the same events as before them.
 // ============================================================================
 
 'use strict';
@@ -34,9 +35,9 @@ const TODOS = [
   { at: 5, text: 'five', done: false },
 ];
 
-function setup() {
+function setup({ packages = [pkg('a', [1]), pkg('b', [2, 5], { dependsOn: ['a'] })] } = {}) {
   let seq = 0;
-  const log = { planned: [], events: [], callbacks: [] };
+  const log = { planned: [], events: [], callbacks: [], pty: [], saved: null };
   const alive = new Set();
   const orch = createOrchestra({
     now: () => 1700000000000,
@@ -45,7 +46,7 @@ function setup() {
     baseBranchOf: async () => 'main',
     runPlanner: async ({ openTodos }) => {
       log.planned.push(openTodos);
-      return { ok: true, raw: { packages: [pkg('a', [1]), pkg('b', [2, 5], { dependsOn: ['a'] })], notes: 'n' }, costUsd: 0 };
+      return { ok: true, raw: { packages, notes: 'n' }, costUsd: 0 };
     },
     addWorktree: async (_repo, name) => ({ ok: true, root: path.join('/wt', name), cwd: path.join('/wt', name), branch: `luna/${name}` }),
     headSha: async () => 'base0000',
@@ -58,7 +59,13 @@ function setup() {
     },
     closeSession: (id) => alive.delete(id),
     sessionAlive: (id) => alive.has(id),
-    writePty: (id) => alive.has(id),
+    writePty: (id, text) => {
+      log.pty.push([id, text]);
+      return alive.has(id);
+    },
+    saveState: (state) => {
+      log.saved = state;
+    },
     finishPackage: async (p) => ({ ok: true, headSha: `${p.id}5678aaa`, files: [] }),
     createPr: async () => ({ ok: true, url: 'https://github.com/o/r/pull/1' }),
     removeWorktree: async () => ({ ok: true }),
@@ -107,4 +114,18 @@ test('default run emits the same events and never calls a callback', async () =>
   assert.equal((await s.orch.finishRun({ planId: plan.id })).ok, true);
   assert.deepEqual(s.log.events, ['done', 'finalized', 'finalized']);
   assert.deepEqual(s.log.callbacks, []);
+});
+
+test('default run: no ownership map saved, overlaps only reported, no worker is stopped', async () => {
+  const s = setup({ packages: [pkg('a', [1]), pkg('b', [2])] });
+  const { plan } = await s.orch.makePlan(s.ctx);
+  assert.equal('ownership' in s.log.saved, false);
+  await s.orch.launch({ planId: plan.id });
+  const roots = s.orch.view().packages.map((p) => path.join('/wt', p.branch.replace('luna/', '')));
+  s.orch.onFiles('s1', [path.join(roots[0], 'src', 'x.js')]);
+  s.orch.onFiles('s2', [path.join(roots[1], 'src', 'x.js')]);
+  assert.deepEqual(s.orch.view().overlaps, [{ a: 'a', b: 'b', files: ['src/x.js'] }]);
+  assert.deepEqual(s.log.events, ['overlap']);
+  assert.deepEqual(s.log.pty, [], 'nothing typed into a worker');
+  assert.equal('ownership' in s.log.saved, false);
 });
