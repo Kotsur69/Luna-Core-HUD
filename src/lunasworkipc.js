@@ -27,6 +27,10 @@
 //                          the current (or last) run: file is relative to it;
 //                          `..`, absolute paths, streams, symlinks and hardlinks
 //                          are refused (lunasworkDashboardView.readScreenshot)
+// lunaswork:ask            {question} -> {ok, item} | {ok:false, reason, retryAt?}
+//                          "Ask Luna" (LW 2.27): a read-only answer about the run
+//                          (src/lunasworkAsk.js); question one line, 1..500 chars,
+//                          10 per hour with the phone's - enforced here, on the PC
 // lunaswork:event          main -> renderer push, {type, status}, on every
 //                          controller event (phase, wait, resume, stopping, wheel)
 //
@@ -58,6 +62,7 @@ const { publicStatus, publicEvent, evidenceDirOf } = require('./lunasworkStatus'
 const { STEER_TAG, MAX_ITEMS: MAX_TODO_ITEMS, MAX_TEXT_CHARS: MAX_STEER_CHARS } = require('./todorows');
 const { RUN_ID_RE } = require('./lunasworkWheel');
 const { dashboardView, readScreenshot } = require('./lunasworkDashboardView');
+const { cleanQuestion } = require('./lunasworkAskModel');
 
 const MAX_ID_CHARS = 200;
 // Opening a tab is a side effect a double click must not repeat.
@@ -148,6 +153,7 @@ function defaultWriteBrief(file, text) {
  *   send?:(channel:string, payload:object)=>void,
  *   todos?:{read:(projectId:string)=>object[], write:(projectId:string, list:object[])=>boolean, changed:(projectId:string)=>void},
  *   runsRoot?:()=>string, openPath?:(dir:string)=>Promise<string>|string,
+ *   ask?:{ask:(question:string, opts:object)=>Promise<object>},
  *   settingsFile?:string, writeBrief?:Function, resolveDir?:Function,
  *   now?:()=>number}} deps  settingsFile / writeBrief / resolveDir / now: test seams
  */
@@ -162,6 +168,7 @@ function registerLunasworkIpc(deps) {
     todos,
     runsRoot,
     openPath,
+    ask,
     settingsFile,
     writeBrief = defaultWriteBrief,
     resolveDir = resolveProjectDir,
@@ -297,6 +304,40 @@ function registerLunasworkIpc(deps) {
     const isKnownProject = (id) => !!projectOf({ projectId: id });
     registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, todos, runsRoot, openPath, now });
   }
+
+  if (ask) registerAskIpc(ipcMain, ask);
+}
+
+/**
+ * An "Ask Luna" request: exactly {question}, the question one line of
+ * 1..MAX_QUESTION chars after trimming. Null when it is anything else.
+ * @returns {{question:string}|null}
+ */
+function parseAskRequest(req) {
+  if (!isObject(req)) return null;
+  if (Object.keys(req).some((k) => k !== 'question')) return null;
+  const question = cleanQuestion(req.question);
+  return question ? { question } : null;
+}
+
+/**
+ * LW 2.27: one question about the run, answered read-only by the ask service
+ * (src/lunasworkAsk.js), which also holds the rate limit shared with the phone.
+ */
+function registerAskIpc(ipcMain, ask) {
+  ipcMain.handle('lunaswork:ask', async (_event, req) => {
+    try {
+      const payload = parseAskRequest(req);
+      if (!payload) return { ok: false, reason: 'bad-question' };
+      const res = await ask.ask(payload.question, { from: 'hud' });
+      if (!isObject(res)) return { ok: false, reason: 'failed' };
+      if (res.ok) return { ok: true, item: res.item };
+      return { ok: false, reason: typeof res.reason === 'string' ? res.reason : 'failed', ...(res.retryAt ? { retryAt: res.retryAt } : {}) };
+    } catch (err) {
+      console.error('[lunaswork] ask failed:', err && err.message);
+      return { ok: false, reason: 'failed' };
+    }
+  });
 }
 
 /** start / stop / status / steer / evidence of a run (src/lunaswork.js), and its event push. */
@@ -453,6 +494,7 @@ module.exports = {
   parseProfile,
   parseSteerText,
   parseWheelRequest,
+  parseAskRequest,
   fieldOf,
   INTERVIEW_GAP_MS,
 };

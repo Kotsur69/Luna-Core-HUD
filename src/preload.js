@@ -405,6 +405,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   lunasworkStatus: () => ipcRenderer.invoke('lunaswork:status'),
   /** Quick-adds a `steer` card to the project's to-do list. Promise<{ok} | {ok:false, reason}>. */
   lunasworkSteer: (projectId, text) => ipcRenderer.invoke('lunaswork:steer', { projectId, text }),
+  /** LW 2.27 "Ask Luna": a read-only answer about the run. Main trims, caps (500) and rate-limits. Promise<{ok, item} | {ok:false, reason, retryAt?}>. */
+  lunasworkAsk: (question) => ipcRenderer.invoke('lunaswork:ask', { question: typeof question === 'string' ? question : '' }),
   /** Opens the current run's latest evidence folder; main resolves and checks the path. */
   lunasworkOpenEvidence: () => ipcRenderer.invoke('lunaswork:openEvidence'),
   /** LW 2.17a: the current run's HUD dashboard. Promise<{ok, dashboard|null} | {ok:false, reason}>. */

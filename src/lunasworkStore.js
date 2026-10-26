@@ -60,5 +60,7 @@ const runStore = fileStore('lunaswork.local.json');
 // The machine guard's state (src/lunasworkMachine.js): which run it set up and
 // the Windows Update values to restore. Kept apart from the run on purpose.
 const machineStore = fileStore('lunaswork-machine.local.json');
+// "Ask Luna" (LW 2.27, src/lunasworkAsk.js): answered questions and the rate window.
+const askStore = fileStore('lunaswork-ask.local.json');
 
-module.exports = { loadRun: runStore.load, saveRun: runStore.save, machineStore };
+module.exports = { loadRun: runStore.load, saveRun: runStore.save, machineStore, askStore };

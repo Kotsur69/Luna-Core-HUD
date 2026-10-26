@@ -14,7 +14,8 @@
 // as orchestrasettings.js.
 //
 // The run panel's Dashboard button opens the live run dashboard (LW 2.17a,
-// modules/lunasworkDashboard.js) in its own overlay over Settings.
+// modules/lunasworkDashboard.js) in its own overlay over Settings, and the
+// "Ask Luna" box (LW 2.27, modules/lunasworkAsk.js) sits under the steer form.
 // ============================================================================
 
 'use strict';
@@ -24,6 +25,7 @@ import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { mountLunasWorkPanel } from './lunasworkPanel.js';
 import { mountLunasWorkDashboard } from './lunasworkDashboard.js';
+import { mountLunasWorkAsk } from './lunasworkAsk.js';
 
 const MODEL_LABELS = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 const SAVED_FLASH_MS = 2000;
@@ -247,6 +249,9 @@ export function mountLunasWorkSettings(root) {
       return opt ? opt.textContent : id;
     },
   });
+
+  // LW 2.27: "Ask Luna about the run", answered read-only by main.
+  mountLunasWorkAsk(root);
 
   // LW 2.17a: the live dashboard, an overlay of its own (#lw-dash) over Settings.
   const dashboard = mountLunasWorkDashboard(document.getElementById('lw-dash'));

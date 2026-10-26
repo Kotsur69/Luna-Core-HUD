@@ -141,7 +141,7 @@ const { registerCloudIpc } = require('./cloudipc');
 // and the outer loop run (src/lunaswork.js via src/lunasworkWiring.js).
 const { registerLunasworkIpc } = require('./lunasworkipc');
 const { createGodModeBuilder } = require('./lunasworkBuild');
-const { createLunasWorkRuntime, createMachineRuntime, wireDecisionSync } = require('./lunasworkWiring');
+const { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, wireDecisionSync } = require('./lunasworkWiring');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -1225,6 +1225,14 @@ const lunaswork = createLunasWorkRuntime({
 });
 // Luna's Work machine guard (src/lunasworkMachine.js): watchdog task, Windows
 // Update pause, disk cleanup and the low-disk stop for the length of a run.
+// LW 2.27 "Ask Luna": read-only answers about the run, from the HUD and the phone.
+const lunasworkAsk = createAskRuntime({
+  env: () => orchestraToolEnv(),
+  runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+  // Called only after a question, long after snapshotPuts exists.
+  putAsks: (section) => snapshotPuts.godmode.asks(section),
+  log: (line) => console.error(line),
+});
 const lunasworkMachine = createMachineRuntime({
   controller: lunaswork,
   // What the watchdog task starts: this LunaCore (dev: electron + the app folder).
@@ -2824,6 +2832,7 @@ function registerIpc() {
     // Same folder the adapters write evidence into (lunasworkAdapters RUNS_DIR).
     runsRoot: () => path.join(userDir(), RUN_REPORT_DIR),
     openPath: (dir) => shell.openPath(dir),
+    ask: lunasworkAsk,
   });
   const lifeSync = startLifeSync({ cloud });
   const billCal = createBillCalendar({
@@ -3599,8 +3608,12 @@ app.whenReady().then(() => {
     putFeedback: (section) => snapshotPuts.godmode.feedback(section),
     // LW 2.17b: the run snapshot (status, scores, tokens, thumbnails), throttled.
     putLunasWork: (snap) => snapshotPuts.godmode.lunaswork(snap),
+    // LW 2.27: the phone's questions in, checked and rate-limited here.
+    ask: lunasworkAsk,
     log: (line) => console.error(line),
   });
+  // The stored answers, so the phone sees them after a restart too.
+  snapshotPuts.godmode.asks(lunasworkAsk.section());
   // Luna's Work: a run the previous LunaCore left goes on from its phase.
   // The machine guard follows it (attached first, so it sees the resume).
   lunasworkMachine.attach();

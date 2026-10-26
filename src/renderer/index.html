@@ -2156,6 +2156,17 @@
                   <span id="lw-steer-msg" class="termcustom__hint" role="status" hidden></span>
                 </div>
               </form>
+              <form id="lw-ask-form" class="lw-steer lw-ask" novalidate>
+                <label class="ui-field" data-i18n-title="lw.ask.hint" title="Odpowiedz tylko z zapisow przebiegu (stan, raport, PLAYTEST_LOG.md, DECISIONS.md, cofniecia). Niczego nie zmienia. Do 10 pytan na godzine.">
+                  <span class="ui-field__label" data-i18n="lw.ask">Zapytaj Lune</span>
+                  <input id="lw-ask-text" class="mc-input" maxlength="500" spellcheck="false" autocomplete="off" data-i18n-ph="lw.ask.ph" placeholder="np. dlaczego cofnelas iteracje 14?" />
+                </label>
+                <div class="termcustom__bgimage-row">
+                  <button type="submit" id="lw-ask-send" class="pad-send" data-i18n="lw.ask.send">Zapytaj</button>
+                  <span id="lw-ask-msg" class="termcustom__hint" role="status" hidden></span>
+                </div>
+                <div id="lw-ask-answer" class="lw-ask__answer" aria-live="polite" hidden></div>
+              </form>
             </div>
             <div class="termcustom__group">
               <h3 class="termcustom__section" data-i18n="lw.models.section">Modele rol</h3>
