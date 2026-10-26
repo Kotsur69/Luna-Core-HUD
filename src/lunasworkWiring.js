@@ -15,6 +15,7 @@
 //   run report      lunasworkReport on onRunEnd: <runsDir>/lunaswork-<id>.md
 //                   + .html, and one email under "Email me when a run finishes"
 //   decisions       every decision-queue answer appended to design/DECISIONS.md
+//   milestone email lunasworkReport onMilestone: scores, what waits, feedback (B17)
 //   iteration 0     lunasworkScaffold: stack template cards for an empty repo
 //   machine guard   createMachineRuntime: watchdog task, Windows Update pause,
 //                   disk cleanup, low-disk stop + email (lunasworkMachine)
@@ -40,6 +41,7 @@ const { createCheckpoints } = require('./lunasworkCheckpoint');
 const { createLunasWorkReporter } = require('./lunasworkReport');
 const { godmodeEmailOn } = require('./mailprefs');
 const { answersFromTodoPeers } = require('./lunasworkDecisions');
+const { feedbackFromTodoPeers } = require('./lunasworkFeedback');
 const { createScaffolder } = require('./lunasworkScaffold');
 const { createMachineGuard } = require('./lunasworkMachine');
 
@@ -194,6 +196,8 @@ function createLunasWorkRuntime(ctx) {
       return res.ok;
     },
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
+    // B12 / B17: a short email per passed milestone gate, with the feedback link.
+    onMilestone: reporter ? [reporter.onMilestone] : [],
     log: ctx.log,
   });
 }
@@ -239,28 +243,43 @@ function createMachineRuntime(ctx) {
  *   back after each `todos` pull: the answers the phone wrote there
  *        (lunasworkDecisions.answersFromTodoPeers) go to applyAnswers(),
  *        which accepts only pending ids of this run and listed options
- * @param {{controller:{subscribe:Function, status:Function, applyAnswers:Function},
+ *
+ * Mid-run feedback (B17) rides the same way when putFeedback is given:
+ *   out  the run's feedback section (each item's status) into the snapshot
+ *   back the phone / web form's `lunaswork-feedback:<id>` units go to
+ *        applyFeedback() (lunasworkFeedback.feedbackFromTodoPeers)
+ * @param {{controller:{subscribe:Function, status:Function, applyAnswers:Function, applyFeedback?:Function},
  *   cloud:{onPulled:Function, hooks:Function}|null, putDecisions:(list:object[])=>unknown,
- *   log?:(line:string)=>void}} ctx
+ *   putFeedback?:(section:object|null)=>unknown, log?:(line:string)=>void}} ctx
  * @returns {{publish:()=>void, pullAnswers:()=>number}}
  */
-function wireDecisionSync({ controller, cloud, putDecisions, log = () => {} }) {
-  let last = null;
+function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, log = () => {} }) {
+  /** Puts `value` through `put` only when it changed since the last put. */
+  const changedPut = (what, put) => {
+    let last = null;
+    return (value) => {
+      const key = JSON.stringify(value);
+      if (key === last) return;
+      last = key;
+      try {
+        Promise.resolve(put(value)).catch((err) => log(`[lunaswork] ${what} snapshot failed: ${err && err.message}`));
+      } catch (err) {
+        log(`[lunaswork] ${what} snapshot failed: ${err && err.message}`);
+      }
+    };
+  };
+  const putDecisionList = changedPut('decisions', putDecisions);
+  const putFeedbackSection = typeof putFeedback === 'function' ? changedPut('feedback', putFeedback) : null;
   const publish = (status = controller.status()) => {
-    const list = status && Array.isArray(status.pendingDecisions) ? status.pendingDecisions : [];
-    const key = JSON.stringify(list);
-    if (key === last) return;
-    last = key;
-    try {
-      Promise.resolve(putDecisions(list)).catch((err) => log(`[lunaswork] decisions snapshot failed: ${err && err.message}`));
-    } catch (err) {
-      log(`[lunaswork] decisions snapshot failed: ${err && err.message}`);
-    }
+    putDecisionList(status && Array.isArray(status.pendingDecisions) ? status.pendingDecisions : []);
+    if (putFeedbackSection) putFeedbackSection((status && status.feedback) || null);
   };
   const pullAnswers = () => {
     if (!cloud) return 0;
     try {
-      return controller.applyAnswers(answersFromTodoPeers(cloud.hooks('todos').extraPeers()));
+      const peers = cloud.hooks('todos').extraPeers();
+      if (typeof controller.applyFeedback === 'function') controller.applyFeedback(feedbackFromTodoPeers(peers));
+      return controller.applyAnswers(answersFromTodoPeers(peers));
     } catch (err) {
       log(`[lunaswork] decision answers not read: ${err && err.message}`);
       return 0;

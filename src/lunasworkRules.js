@@ -138,7 +138,8 @@ function isStuck(card) {
 
 /**
  * What the Director may schedule this iteration. Every steer card, always
- * (Mati's input is never cut by the limit); then the rest by kind (bug,
+ * (Mati's input is never cut by the limit); then the cards filed from
+ * mid-run feedback (B17, within the limit); then the rest by kind (bug,
  * missing, feel, idea) and severity, input order on ties, up to `limit` in
  * total. `idea` cards only once the current milestone gate has passed, unless
  * Mati steered them. Stuck cards are left out - they are split or asked about.
@@ -161,8 +162,9 @@ function orderCards(cards, opts = {}) {
     )
     .map(({ card }) => card);
   const steer = ranked.filter((c) => c.steer === true);
-  const rest = ranked.filter((c) => c.steer !== true);
-  return [...steer, ...rest.slice(0, Math.max(0, limit - steer.length))];
+  const feedback = ranked.filter((c) => c.steer !== true && c.feedback === true);
+  const rest = ranked.filter((c) => c.steer !== true && c.feedback !== true);
+  return [...steer, ...[...feedback, ...rest].slice(0, Math.max(0, limit - steer.length))];
 }
 
 /** @param {{criteria?:{passed:boolean}[]}|null} gate */
@@ -356,17 +358,19 @@ const wordsOf = (text) =>
   (String(text || '').toLowerCase().match(/[a-z0-9]+/g) || []).map((w) => (w.length > SCOPE_MIN_CHARS && w.endsWith('s') ? w.slice(0, -1) : w));
 
 /**
- * B5: whether a card stays inside DESIGN.md / ROADMAP.md. Mati's steer cards
- * and bug cards (broken work is never new scope) always do. Otherwise at
+ * B5: whether a card stays inside DESIGN.md / ROADMAP.md. Mati's steer cards,
+ * feedback cards (B17: a scope part is held by its own decision) and bug
+ * cards (broken work is never new scope) always do. Otherwise at
  * least SCOPE_MIN_SHARE of the card title's terms must appear in the pack. An
  * empty pack cannot be judged against, so nothing is out of it.
- * @param {{text?:string, kind?:string, steer?:boolean, tags?:string[]}} card
+ * @param {{text?:string, kind?:string, steer?:boolean, feedback?:boolean, tags?:string[]}} card
  * @param {string} packText DESIGN.md + ROADMAP.md
  * @returns {{inScope:boolean, reason:string, missing?:string[]}}
  */
 function scopeCheck(card, packText) {
   if (!card || typeof card !== 'object') return { inScope: false, reason: 'badCard' };
   if (card.steer === true || (Array.isArray(card.tags) && card.tags.includes('steer'))) return { inScope: true, reason: 'steer' };
+  if (card.feedback === true || (Array.isArray(card.tags) && card.tags.includes('feedback'))) return { inScope: true, reason: 'feedback' };
   if (cardKind(card) === 'bug') return { inScope: true, reason: 'bug' };
   const vocabulary = new Set(wordsOf(packText));
   if (!vocabulary.size) return { inScope: true, reason: 'noPack' };

@@ -56,9 +56,18 @@
 // side; a timer takes the default at the deadline. Every answer goes to
 // design/DECISIONS.md (deps.recordDecision). Mati's steer cards never ask.
 //
+// Mid-run feedback (src/lunasworkFeedback.js, B17): feedback() / applyFeedback()
+// only store an item - the run never pauses for it. At the start of every
+// iteration the items are triaged into cards: look / bug parts straight away
+// (tagged `feedback`, scheduled right after the steer cards), scope parts
+// held by a decision - Mati's defaults to approve, a client's has no default
+// and waits for his yes while the run goes on. Each item's status (planned /
+// built / verified) follows its cards and goes to the phone with status().
+//
 // Extension seams: status(), snapshot(), subscribe(listener) - an event on
-// every phase transition and on every decision change - and deps.onRunEnd,
-// called once per run at its final verdict.
+// every phase transition, decision change and feedback change - deps.onRunEnd,
+// called once per run at its final verdict, and deps.onMilestone, called when
+// a milestone gate passed and the run goes on (the milestone email).
 //
 // Card rules (lunasworkRules.js, docs/LUNAS_WORK_PLAN.md B1, #3, B4, B5, B9):
 //   built    a landed card is *built*, not done; the next Playtester pass
@@ -130,7 +139,19 @@ const {
 } = require('./lunasworkRun');
 const { createCardBook } = require('./lunasworkCards');
 const { createCardFlow } = require('./lunasworkCardFlow');
-const { STEER_TAG } = require('./todorows');
+const { STEER_TAG, BUILT_STATE } = require('./todorows');
+const {
+  triageText,
+  cardFor,
+  scopeDecision,
+  isMatiFeedbackCard,
+  createItem,
+  needsTriage,
+  unaskedScopeCards,
+  withStatuses,
+  cardAts,
+  publicFeedback,
+} = require('./lunasworkFeedback');
 const {
   APPROVE,
   needsDecision,
@@ -199,6 +220,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   awake?: {hold:()=>void, release:()=>void},
  *   recordDecision?: (ctx:{repoPath:string, line:string, decision:object})=>boolean,
  *   onRunEnd?: Array<(run:object)=>void>|((run:object)=>void),
+ *   onMilestone?: Array<(run:object, ctx:{milestone:string})=>void>|((run:object, ctx:{milestone:string})=>void),
  *   newRunId?: ()=>string, now?: ()=>number, setTimer?: Function, clearTimer?: Function,
  *   log?: (line:string)=>void,
  * }} deps
@@ -208,7 +230,9 @@ function createLunasWork(deps) {
   const setTimer = deps.setTimer || setTimeout;
   const clearTimer = deps.clearTimer || clearTimeout;
   const log = deps.log || (() => {});
-  const runEndHooks = (Array.isArray(deps.onRunEnd) ? deps.onRunEnd : [deps.onRunEnd]).filter((fn) => typeof fn === 'function');
+  const hooksOf = (raw) => (Array.isArray(raw) ? raw : [raw]).filter((fn) => typeof fn === 'function');
+  const runEndHooks = hooksOf(deps.onRunEnd);
+  const milestoneHooks = hooksOf(deps.onMilestone);
   const listeners = new Set();
   // Lowercase letters and digits: the adapters' evidence-dir rule is the strictest.
   const newRunId = deps.newRunId || (() => `lw${now().toString(36)}`);
@@ -231,6 +255,8 @@ function createLunasWork(deps) {
   // The next decision deadline (takes the default answer).
   let decisionTimer = null;
   let awakeHeld = false;
+  // Phone feedback ids refused once (bad text, list full): not logged again on every pull.
+  const refusedFeedback = new Set();
   // start() is waiting on Mati's confirmation dialog.
   let starting = false;
   // Not saved: the running app under test and the role of a sub-step.
@@ -315,6 +341,18 @@ function createLunasWork(deps) {
       }
     }
     update({ endNotified: true });
+  }
+
+  /** The milestone email (B12 / B17): a gate passed and the run goes on. */
+  function notifyMilestone(milestone) {
+    const snapshot = { ...run };
+    for (const fn of milestoneHooks) {
+      try {
+        Promise.resolve(fn(snapshot, { milestone })).catch((err) => log(`[lunaswork] onMilestone failed: ${errText(err)}`));
+      } catch (err) {
+        log(`[lunaswork] onMilestone failed: ${errText(err)}`);
+      }
+    }
   }
 
   function finish(verdict, fields = {}) {
@@ -424,6 +462,8 @@ function createLunasWork(deps) {
     save();
     emit('decision');
     armDecisionTimer();
+    // B17: an answered scope decision moves its feedback item on.
+    refreshFeedback();
   }
 
   function armDecisionTimer() {
@@ -452,13 +492,82 @@ function createLunasWork(deps) {
     if (!isObj(card) || !Number.isFinite(card.at)) return true;
     const earlier = decisionForCard(run.decisions, card.at);
     if (earlier) return !holdsCards(earlier);
-    const steer = Array.isArray(card.tags) && card.tags.includes(STEER_TAG);
-    const need = needsDecision({ text: card.text, details: card.details, files: card.files, from: steer ? 'mati' : 'director' });
+    // Mati's steer cards and his feedback cards may change anything (B17 "Trust").
+    const fromMati = (Array.isArray(card.tags) && card.tags.includes(STEER_TAG)) || isMatiFeedbackCard(card);
+    const need = needsDecision({ text: card.text, details: card.details, files: card.files, from: fromMati ? 'mati' : 'director' });
     if (!need) return true;
     ask({ question: card.text, detail: need.reason, kind: need.kind, options: need.options, defaultAnswer: need.defaultAnswer, freeText: need.freeText, cardIds: [card.at] });
     // Asked, or the queue refused it: either way the card is not built yet.
     return false;
   }
+
+  // ---- mid-run feedback (B17) ----
+
+  /** The state of every card the feedback points at: open / built / done. */
+  function feedbackCardStates() {
+    const ats = cardAts(run.feedback);
+    if (!ats.length) return new Map();
+    return new Map(cardBook.lookup(run.projectId, ats).map((t) => [t.at, t.done ? 'done' : t.state === BUILT_STATE ? 'built' : 'open']));
+  }
+
+  /** Fresh statuses for every item; a change is logged, saved and announced. */
+  function refreshFeedback() {
+    if (!active() || !run.feedback.length) return;
+    const res = withStatuses(run.feedback, { cards: feedbackCardStates(), decisions: run.decisions });
+    if (!res.changed.length) return;
+    run = { ...run, feedback: res.list };
+    for (const item of res.changed) logEvent(`feedback ${item.id}: ${item.status}`);
+    save();
+    emit('feedback');
+  }
+
+  /** A scope part's card goes to the decision queue: the decision id, or null (asked again next iteration). */
+  function askScope(part, item) {
+    const res = ask(scopeDecision(part, item, part.at));
+    return res.ok ? res.id : null;
+  }
+
+  /**
+   * One item's free text -> cards: look / bug parts straight away, a scope
+   * part held by its decision. Null when no card could be filed (tried
+   * again next iteration - nothing was created, so nothing doubles).
+   */
+  function triageItem(item) {
+    const parts = triageText(item.text);
+    const ats = parts.length ? cardBook.fileCards(run.projectId, run.id, parts.map((p) => cardFor(p, item))) : [];
+    if (parts.length && !ats.length) {
+      logEvent(`feedback ${item.id}: no card filed - triaged again next iteration`);
+      return null;
+    }
+    if (ats.length < parts.length) logEvent(`feedback ${item.id}: ${parts.length - ats.length} part(s) not filed (the to-do list is full)`);
+    const filed = parts.map((p, i) => ({ ...p, at: Number.isFinite(ats[i]) ? ats[i] : null, decisionId: null }));
+    const kinds = filed.map((p) => p.type).join(', ') || 'praise only, nothing to build';
+    logEvent(`feedback ${item.id} (${item.author}) triaged: ${kinds}`);
+    return { ...item, parts: filed.map((p) => (p.type === 'scope' && p.at !== null ? { ...p, decisionId: askScope(p, item) } : p)), triagedAt: now() };
+  }
+
+  const isUnasked = (p) => p.type === 'scope' && p.at !== null && p.decisionId === null;
+
+  /**
+   * B17, at the start of every iteration: new items become cards, and a
+   * scope part the full queue refused before is asked again. Never waits.
+   */
+  function triageFeedback() {
+    if (!run.feedback.length) return;
+    for (const item of run.feedback.filter(needsTriage)) {
+      const triaged = triageItem(item);
+      if (triaged) run = { ...run, feedback: run.feedback.map((i) => (i.id === item.id ? triaged : i)) };
+    }
+    for (const item of run.feedback.filter((i) => (i.parts || []).some(isUnasked))) {
+      const parts = item.parts.map((p) => (isUnasked(p) ? { ...p, decisionId: askScope(p, item) } : p));
+      run = { ...run, feedback: run.feedback.map((i) => (i.id === item.id ? { ...i, parts } : i)) };
+    }
+    save();
+    refreshFeedback();
+  }
+
+  /** Cards the Director must not schedule: the decision queue's, and scope cards not asked about yet. */
+  const heldNow = () => new Set([...heldCards(run.decisions), ...unaskedScopeCards(run.feedback)]);
 
   // ---- the app under test ----
 
@@ -555,7 +664,9 @@ function createLunasWork(deps) {
   }
 
   async function stepDirecting() {
-    const held = heldCards(run.decisions);
+    // B17: feedback that came in since the last iteration is planned in first.
+    triageFeedback();
+    const held = heldNow();
     const res = await deps.director({
       repoDir: run.repoPath,
       runId: run.id,
@@ -578,7 +689,7 @@ function createLunasWork(deps) {
     cardFlow.askAboutScope(r.outOfScope);
     // Read the holds again: a decision may have been answered (or taken its
     // default) while the Director was thinking.
-    const stillHeld = heldCards(run.decisions);
+    const stillHeld = heldNow();
     const cards = (Array.isArray(r.cards) ? r.cards : [])
       .filter((card) => !(isObj(card) && stillHeld.has(card.at)))
       .filter(mayBuild)
@@ -661,6 +772,7 @@ function createLunasWork(deps) {
     else if (!r.ok) return retryLater(`build: ${r.error || 'failed'}`);
     const files = conflictedPaths(r);
     const build = buildRecord(r, cards, free);
+    refreshFeedback();
     await syncCheckout();
     if (run.iteration === 0) return endScaffold(build);
     transition('launching', {
@@ -719,6 +831,7 @@ function createLunasWork(deps) {
     const playtest = cleanSmall({ ok: res.ok === true, error: res.error, model: res.model, reason: res.modelReason }, PASS_KEYS);
     // B1: built cards close or reopen; B4: the cards that failed this iteration count.
     const verify = cardFlow.settleBuilt(built, report);
+    refreshFeedback();
     transition('critiquing', {
       current: { ...run.current, report, playtest, verify },
       failCounts: nextFailCounts(run.failCounts, { failed: verify.failed, closed: verify.closed }),
@@ -940,6 +1053,7 @@ function createLunasWork(deps) {
       iteration: run.iteration + 1,
       current: emptyCurrent(),
     });
+    if (critic.milestone && critic.milestone.passed && milestone) notifyMilestone(milestone);
   }
 
   const STEPS = {
@@ -1146,6 +1260,49 @@ function createLunasWork(deps) {
   }
 
   /**
+   * Feedback on the current run, from any channel (B17). Never pauses the
+   * run: the item is stored and the next iteration triages it.
+   * @param {{text:string, author?:'mati'|'client', id?:number, runId?:string}} payload untrusted
+   * @returns {{ok:true, id:number}|{ok:false, reason:string, message:string}}
+   */
+  function feedback(payload) {
+    if (!active()) return NO_RUN();
+    const p = isObj(payload) ? payload : {};
+    if (p.runId !== undefined && p.runId !== run.id) return refuse('otherRun', 'That feedback is for another run.');
+    const res = createItem({ text: p.text, author: p.author, ...(p.id !== undefined ? { id: p.id } : {}) }, { now: now(), list: run.feedback });
+    if (!res.ok) return refuse(res.error, 'The feedback was not accepted.');
+    run = { ...run, feedback: [...run.feedback, res.item] };
+    logEvent(`feedback ${res.item.id} from ${res.item.author}: planned in at the next iteration`);
+    save();
+    emit('feedback');
+    return { ok: true, id: res.item.id };
+  }
+
+  /**
+   * Feedback from the phone / web form (lunasworkFeedback.feedbackFromTodoPeers).
+   * Only Mati's account writes there, so the author is Mati. Other runs' and
+   * known ids are skipped quietly; a refused item is logged once.
+   * @param {Array<{id:number, runId:string, text:string}>} list untrusted
+   * @returns {number} how many were added
+   */
+  function applyFeedback(list) {
+    if (!active() || !Array.isArray(list)) return 0;
+    let added = 0;
+    for (const f of list) {
+      if (!isObj(f) || f.runId !== run.id || refusedFeedback.has(f.id) || run.feedback.some((i) => i.id === f.id)) continue;
+      const res = feedback({ text: f.text, author: 'mati', id: f.id, runId: f.runId });
+      if (res.ok) {
+        added += 1;
+      } else {
+        refusedFeedback.add(f.id);
+        logEvent(`feedback ${String(f.id).slice(0, 20)} from the phone refused (${res.reason})`);
+        save();
+      }
+    }
+    return added;
+  }
+
+  /**
    * The kill switch: the step that is running finishes, then the run ends
    * with STOP. A run that is waiting ends at once.
    * @param {string} [reason] one of STOP_CALLERS (the machine guard); anything
@@ -1228,6 +1385,8 @@ function createLunasWork(deps) {
       pendingDecisions: active()
         ? pendingOf(run.decisions).map((d) => publicDecision({ ...d, runId: run.id, repoName: path.basename(run.repoPath) })).filter(Boolean)
         : [],
+      // B17: the run's feedback with each item's status (phone snapshot); null once the run ended.
+      feedback: active() ? publicFeedback({ runId: run.id, repoName: path.basename(run.repoPath), items: run.feedback }) : null,
     };
   }
 
@@ -1268,6 +1427,8 @@ function createLunasWork(deps) {
     ask,
     answer,
     applyAnswers,
+    feedback,
+    applyFeedback,
     status,
     subscribe,
     godModeBlock,

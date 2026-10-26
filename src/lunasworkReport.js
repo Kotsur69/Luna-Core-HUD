@@ -21,6 +21,13 @@
 //      design/PLAYTEST_LOG.md. Never per iteration: only the run end calls
 //      in, and the run id is marked sent in mail-state so a restart that
 //      replays onRunEnd sends nothing.
+//   3. onMilestone: a short email when a milestone gate passed and the run
+//      goes on (B12, lean): what was reached, the scores, what waits for
+//      Mati, and the feedback block (B17) - each item's status and the link
+//      to the phone / web feedback form. Once per run and milestone.
+//
+// Both emails list the run's feedback items with their status
+// (lunasworkFeedback.emailLines).
 //
 // Model text (card titles, journey names, decisions, commit subjects) is
 // quoted on one line with control characters out; the HTML escapes every
@@ -35,6 +42,7 @@ const path = require('path');
 const h = require('./reportHtml');
 const pack = require('./lunasworkPack');
 const { PLATEAU_WINDOW, RED_STREAK } = require('./lunasworkRules');
+const { emailLines: feedbackLines } = require('./lunasworkFeedback');
 
 const FINAL_VERDICTS = ['ship', 'plateau', 'red', 'stop'];
 const VERDICT_LABEL = { ship: 'SHIP', plateau: 'PLATEAU', red: 'RED', stop: 'STOP' };
@@ -49,6 +57,8 @@ const MAX_TAIL_LINES = 40;
 const MAX_TAIL_CHARS = 6000;
 const MAX_REPORT = 60000;
 const MAX_MAIL_RUNS = 50;
+// Milestone emails already sent (run id + milestone), per LunaCore session.
+const MAX_MILESTONE_KEYS = 200;
 
 const STOP_REASONS = {
   killSwitch: 'stopped with the kill switch',
@@ -373,8 +383,35 @@ function buildRunEmail(run, opts = {}) {
   const lines = ['NEEDS YOU', ...bullets(needs, '- nothing'), '', `${VERDICT_LABEL[verdict]}: ${verdictWhy(r)}`, ''];
   const tail = (verdict === 'plateau' || verdict === 'red') && opts.logTail ? plain(opts.logTail, MAX_TAIL_CHARS) : '';
   if (tail) lines.push('PLAYTEST LOG (latest entries)', '', tail, '');
+  // The run is over: statuses only, no link to send more.
+  if (Array.isArray(r.feedback) && r.feedback.length) lines.push(...feedbackLines(r.feedback, { link: null }), '');
   lines.push('FULL REPORT', '', plain(buildRunReport(r, { now: opts.now, forEmail: true }), MAX_REPORT));
   return { subject, text: lines.join('\n') };
+}
+
+/**
+ * The milestone email: a gate passed and the run goes on.
+ * @param {object} run the run right after the gate (already on the next milestone)
+ * @param {{milestone:string}} ctx the milestone that was reached
+ * @returns {{subject:string, text:string}}
+ */
+function buildMilestoneEmail(run, ctx) {
+  const r = isObj(run) ? run : {};
+  const reached = oneLine(ctx && ctx.milestone, 80) || 'a milestone';
+  const pending = list(r.decisions).filter((d) => d.status === 'pending');
+  const lap = Math.max(0, (Number.isInteger(r.iteration) ? r.iteration : 1) - 1);
+  const lines = [
+    `Milestone "${reached}" reached after iteration ${lap}. The run goes on${r.milestone ? ` with "${oneLine(r.milestone, 80)}"` : ''}.`,
+    '',
+    'WAITS FOR YOU',
+    ...bullets(pending.map((d) => `${oneLine(d.question, 200)}${d.defaultAnswer ? '' : ' (no default - waits for you)'}`), '- nothing'),
+    '',
+    'SCORES PER MILESTONE',
+    ...bullets(scoresByMilestone(r).map(([name, points]) => `${name}: ${scoreLine(points)}`)),
+    '',
+    ...feedbackLines(r.feedback),
+  ];
+  return { subject: `Luna's Work: ${repoName(r)} - milestone ${reached} reached`, text: lines.join('\n') };
 }
 
 // ---- the onRunEnd hook ----------------------------------------------------------------
@@ -466,6 +503,35 @@ function createLunasWorkReporter(deps) {
     }
   }
 
+  const milestonesSent = new Set();
+
+  /**
+   * The controller's onMilestone hook: one email per run and milestone.
+   * @returns {Promise<{sent:boolean, skipped?:string, error?:string}>} never rejects
+   */
+  async function onMilestone(run, ctx) {
+    const m = deps.mail;
+    if (!isObj(run) || typeof run.id !== 'string' || !FILE_ID_RE.test(run.id)) return { sent: false, skipped: 'bad-run' };
+    if (!m) return { sent: false, skipped: 'no-mailer' };
+    const key = `${run.id}|${oneLine(ctx && ctx.milestone, 80)}`;
+    if (milestonesSent.has(key)) return { sent: false, skipped: 'duplicate' };
+    try {
+      const st = m.sender.status();
+      const prefs = m.prefs.loadPrefs();
+      if (!st.connected && prefs.godmodeEmail !== false) return { sent: false, skipped: 'not-connected' };
+      if (!m.enabled(prefs, st.connected)) return { sent: false, skipped: 'off' };
+      milestonesSent.add(key);
+      if (milestonesSent.size > MAX_MILESTONE_KEYS) milestonesSent.delete(milestonesSent.values().next().value);
+      const email = buildMilestoneEmail(run, ctx);
+      await m.sender.send({ subject: email.subject, text: email.text });
+      return { sent: true };
+    } catch (err) {
+      const reason = (err && err.reason) || 'gmail-failed';
+      log(`[lunaswork] milestone email failed: ${reason} ${errText(err)}`);
+      return { sent: false, error: reason };
+    }
+  }
+
   /**
    * The controller's onRunEnd hook: report files, then one email.
    * @returns {Promise<{ok:boolean, file?:string|null, html?:string|null, mail?:object, skipped?:string}>}
@@ -478,7 +544,7 @@ function createLunasWorkReporter(deps) {
     return { ok: !!written.file, file: written.file, html: written.html, mail: sent };
   }
 
-  return { onRunEnd };
+  return { onRunEnd, onMilestone };
 }
 
 /** <runsDir>/lunaswork-<runId>.md for a file-safe run id, else null. */
@@ -492,6 +558,7 @@ module.exports = {
   buildRunReport,
   renderRunReportHtml,
   buildRunEmail,
+  buildMilestoneEmail,
   playtestLogTail,
   needsYou,
   verdictWhy,

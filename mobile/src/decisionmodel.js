@@ -23,6 +23,7 @@ const KNOWN_KINDS = {
   designChange: 'decisionKindDesignChange',
   stuckCard: 'decisionKindStuckCard',
   outOfScope: 'decisionKindOutOfScope',
+  feedbackScope: 'decisionKindFeedbackScope',
   clientScope: 'decisionKindClientScope',
 };
 

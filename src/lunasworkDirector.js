@@ -11,7 +11,8 @@
 //   - ids that are not an open card of this run or a steer card are dropped,
 //     duplicates too; stuck cards (lunasworkRules.isStuck) are left out
 //   - every open steer card is scheduled first and never cut by the limit
-//     (lunasworkRules.orderCards), whether the model picked it or not
+//     (lunasworkRules.orderCards), whether the model picked it or not; open
+//     feedback cards (B17) follow them, within the limit
 //   - the rest is capped at MAX_CARDS_PER_ITERATION
 //   - a malformed or empty answer, or a failed call, falls back to orderCards
 //     over every open card
@@ -201,9 +202,12 @@ function validateDirection(raw, ctx) {
   const picked = pickIds(raw.cardIds, all, eligible, warnings, new Set(outOfScope.map((c) => c.at)));
   if (!picked.length) return fallback('emptyDirection');
 
-  // Mati's cards: the model's order first, then any it left out.
+  // Mati's cards: the model's order first, then any it left out. Feedback
+  // cards (B17) come next the same way, then the rest of the picks.
   const steer = [...picked.filter((c) => c.steer), ...eligible.filter((c) => c.steer && !picked.includes(c))];
-  const rest = picked.filter((c) => !c.steer);
+  const isFeedback = (c) => !c.steer && c.feedback;
+  const feedback = [...picked.filter(isFeedback), ...eligible.filter((c) => isFeedback(c) && !picked.includes(c))];
+  const rest = [...feedback, ...picked.filter((c) => !c.steer && !c.feedback)];
   const room = Math.max(0, limit - steer.length);
   if (rest.length > room) warnings.push({ code: 'tooManyCards', dropped: rest.length - room });
   return {
@@ -248,6 +252,7 @@ const cardBrief = (c) => ({
   ...(c.details ? { details: capped(c.details, 600) } : {}),
   ...(c.files ? { files: c.files } : {}),
   ...(c.size ? { size: c.size } : {}),
+  ...(c.feedback ? { feedback: true } : {}),
 });
 
 /** What the Director sees of the last runCritic result. */
@@ -276,6 +281,7 @@ function buildDirectorPrompt({ iteration, docs, cards, lastCritic, gatePassed, l
     'Rules:',
     `- cardIds: the "at" values of the cards to build, in the order they should be done, at most ${limit} besides Mati's steer cards. Only ids from the lists below count.`,
     '- Mati\'s steer cards come first, every one of them, always. They are his direct instructions.',
+    '- Cards marked "feedback": true come right after them: look and bug feedback given while the run goes on.',
     '- Then bugs and blockers on the current milestone, then what moves the current milestone gate. Work for later milestones waits.',
     `- idea cards: ${gatePassed ? 'allowed - the current milestone gate passed' : 'NOT allowed yet - the current milestone gate has not passed'}.`,
     '- Pick a set that fits one iteration and that builders can do without stepping on each other.',

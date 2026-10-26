@@ -3595,6 +3595,8 @@ app.whenReady().then(() => {
     controller: lunaswork,
     cloud,
     putDecisions: (list) => snapshotPuts.godmode.decisions(list),
+    // B17: the run's feedback (per-item status) out, phone feedback back in.
+    putFeedback: (section) => snapshotPuts.godmode.feedback(section),
     log: (line) => console.error(line),
   });
   // Luna's Work: a run the previous LunaCore left goes on from its phase.
