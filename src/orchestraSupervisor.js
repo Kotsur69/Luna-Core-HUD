@@ -23,6 +23,7 @@ const { findTurnEndMessage, textBlocks } = require('./ttsExtract');
 const { WORKTREE_DIR, BRANCH_PREFIX } = require('./worktrees');
 const { normalizeEffort } = require('./efforts');
 const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
+const { compileOwnership, ownerOf } = require('./ownership');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -312,6 +313,7 @@ function scheduleTime(spec, nowMs, resetAt) {
 
 const MAX_TOUCHED = 300;
 const MAX_APPROVAL_LOG = 50;
+const MAX_OWNERSHIP_FILES = 20;
 
 /** A repo-relative path we are willing to keep: posix, no `..`, not absolute. */
 function isRelPath(p) {
@@ -369,6 +371,62 @@ function liveOverlaps(packages) {
     }
   }
   return out;
+}
+
+/**
+ * LW 2.12: an ownership map given to makePlan (ctx.ownership), kept as plain
+ * JSON-safe entries. Null when unset or unusable - God Mode then behaves as
+ * if there were no map at all.
+ * @param {unknown} raw `{path: owner}` or `[{path, owner}]`; owner = package id or card `at`
+ * @returns {Array<{path:string, owner:string}>|null}
+ */
+function normalizeOwnership(raw) {
+  const compiled = compileOwnership(raw);
+  return compiled ? compiled.map((e) => ({ path: e.path, owner: e.owner })) : null;
+}
+
+/** The package an owner id names: its own id, or a package holding that card. */
+function packageOfOwner(owner, packages) {
+  const byId = packages.find((p) => p.id === owner);
+  if (byId) return byId.id;
+  const at = Number(owner);
+  if (!Number.isFinite(at)) return null;
+  const byCard = packages.find((p) => Array.isArray(p.todoAts) && p.todoAts.includes(at));
+  return byCard ? byCard.id : null;
+}
+
+/**
+ * LW 2.12: files a package changed that the ownership map gives to ANOTHER
+ * package of this run. Unowned files, own files and owners that are no
+ * package of the run are fine. Checked on every change, so a worker is
+ * stopped on its first foreign edit - before a second worker clashes with it.
+ * @param {{id:string}} pkg
+ * @param {string[]} files repo-relative (relTouched)
+ * @param {Array<{path:string, owner:string}>|null} ownership normalizeOwnership()
+ * @param {Array<{id:string, todoAts?:number[]}>} packages
+ * @returns {Array<{file:string, owner:string}>} owner = the owning package id
+ */
+function ownershipViolations(pkg, files, ownership, packages) {
+  const compiled = compileOwnership(ownership);
+  if (!compiled || !pkg) return [];
+  const out = [];
+  for (const file of files || []) {
+    const owner = ownerOf(file, compiled);
+    const ownerPkg = owner === null ? null : packageOfOwner(owner, packages);
+    if (ownerPkg && ownerPkg !== pkg.id) out.push({ file, owner: ownerPkg });
+  }
+  return out.slice(0, MAX_OWNERSHIP_FILES);
+}
+
+/** What a worker is told when it edits a file another package owns. */
+function ownershipText(pkgId, violations) {
+  return [
+    'STOP: you changed files that another package of this run owns (design/CONTRACTS.md ownership map):',
+    ...violations.map((v) => `- ${v.file} (owned by package ${v.owner})`),
+    '',
+    'Revert your changes to those files now and only edit files you own. If your task needs a change there, describe it in your final message instead.',
+    `Then continue your task and end with LUNA_DONE ${pkgId} as before.`,
+  ].join('\n');
 }
 
 /**
@@ -700,6 +758,7 @@ function normalizeStoredPlan(raw) {
   const todoText = Array.isArray(raw.todoText)
     ? raw.todoText.filter((e) => Array.isArray(e) && Number.isFinite(e[0]) && typeof e[1] === 'string')
     : [];
+  const ownership = normalizeOwnership(raw.ownership);
   return {
     id: raw.id.slice(0, 64),
     projectId: strOrNull(raw.projectId, 200),
@@ -736,6 +795,8 @@ function normalizeStoredPlan(raw) {
     options: normalizeOptions(raw.options),
     todoText: new Map(todoText),
     packages,
+    // LW 2.12: only a plan made with an ownership map carries the key.
+    ...(ownership ? { ownership } : {}),
   };
 }
 
@@ -799,6 +860,9 @@ module.exports = {
   relTouched,
   mergeTouched,
   liveOverlaps,
+  normalizeOwnership,
+  ownershipViolations,
+  ownershipText,
   lastOpenToolUse,
   allowRuleFor,
   exampleFor,

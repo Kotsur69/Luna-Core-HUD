@@ -126,7 +126,11 @@ const TEMPLATES = Object.freeze({
 `,
   'ROADMAP.md': `# Roadmap
 
-<!-- Goal -> milestones -> epics -> cards. Used from Phase 2 on. -->
+<!-- Goal -> milestones -> epics -> cards. The Director works one epic at a
+     time: the first open epic of the first milestone that still has one.
+     One "### " heading per milestone under "## Milestones", one line per
+     epic: "- [ ] epic:<slug> - <title>" (slug: lowercase letters, digits,
+     "-"). The Director ticks an epic "[x]" once all its cards are done. -->
 
 ## Goal
 
@@ -141,6 +145,9 @@ match. Drop files here; DESIGN.md and SHIP_CRITERIA.md may point at them.
 `;
 
 const PACK_FILES = Object.freeze(Object.keys(TEMPLATES));
+// LW 2.12: written by the Director before a parallel build, never scaffolded.
+const CONTRACTS_FILE = 'CONTRACTS.md';
+const WRITABLE_FILES = Object.freeze([...PACK_FILES, CONTRACTS_FILE]);
 const REQUIRED_FILES = Object.freeze(['BRIEF.md', 'DESIGN.md', 'SHIP_CRITERIA.md', 'TEST_PLAN.md']);
 
 const PURPOSE = Object.freeze({
@@ -151,7 +158,7 @@ const PURPOSE = Object.freeze({
   'PLAYTEST_LOG.md': 'leave as is - the Critic writes it',
   'ARCHITECTURE.md': 'modules, data flow, conventions (may stay a template for a new project)',
   'DECISIONS.md': '"chose X because Y" log - record every decision Mati makes in the interview',
-  'ROADMAP.md': 'goal -> milestones -> epics -> cards (optional for now)',
+  'ROADMAP.md': 'goal -> milestones ("### " each) -> epics ("- [ ] epic:<slug> - <title>"); the Director works one epic at a time',
 });
 
 // ---- paths ---------------------------------------------------------------------
@@ -162,7 +169,7 @@ const designDir = (repoDir) => path.join(path.resolve(repoDir), DESIGN_DIR);
 
 /** Absolute path of a pack file, or null when it is not a pack file or escapes design/. */
 function packPath(repoDir, file) {
-  if (!isRepoDir(repoDir) || !PACK_FILES.includes(file)) return null;
+  if (!isRepoDir(repoDir) || !WRITABLE_FILES.includes(file)) return null;
   const root = designDir(repoDir);
   const target = path.resolve(root, file);
   return path.dirname(target) === root ? target : null;
@@ -311,6 +318,43 @@ function appendArchitecture(text) {
   return { file: 'ARCHITECTURE.md', update: (current) => withBlock(current, block) };
 }
 
+// A contract's own "#".."###" lines would sit beside the file's sections.
+const demoteHeadings = (text) => text.replace(/^#{1,3}(?=\s)/gm, '####');
+// Backticks would break the ownership table's code spans.
+const tableCell = (s) => oneLine(String(s)).replace(/[`|]/g, '');
+
+/**
+ * LW 2.12, Director: replaces CONTRACTS.md with this iteration's interfaces
+ * between packages and the file ownership map. Builders read it first.
+ * @param {{contracts?:Array<{name:string, kind:string, spec:string}>,
+ *   ownership?:Array<{path:string, owner:string|number}>, iteration?:number}} input
+ *   already validated by lunasworkDirector.validateDirection
+ * @returns {{file:string, update:Function}|null} null when there is nothing to write
+ */
+function writeContracts(input) {
+  const o = input && typeof input === 'object' ? input : {};
+  const contracts = (Array.isArray(o.contracts) ? o.contracts : [])
+    .map((c) => (c && typeof c === 'object' ? { name: cleanText(c.name, 200), kind: cleanText(c.kind, 40), spec: cleanText(c.spec, MAX_APPEND_CHARS) } : {}))
+    .filter((c) => c.name && c.spec);
+  const ownership = (Array.isArray(o.ownership) ? o.ownership : [])
+    .filter((e) => e && typeof e.path === 'string' && e.path && (typeof e.owner === 'string' || Number.isFinite(e.owner)));
+  if (!contracts.length && !ownership.length) return null;
+  const when = Number.isInteger(o.iteration) ? ` (iteration ${o.iteration})` : '';
+  const sections = [
+    '# Contracts',
+    '',
+    `<!-- Written by the Director before a parallel build${when}. Builders: respect these interfaces and only edit files you own. -->`,
+    ...contracts.flatMap((c) => ['', `## ${oneLine(c.name)}${c.kind ? ` (${oneLine(c.kind)})` : ''}`, '', demoteHeadings(c.spec)]),
+  ];
+  if (ownership.length) {
+    sections.push('', '## File ownership', '', '| Path | Package |', '| --- | --- |');
+    for (const e of ownership) sections.push(`| \`${tableCell(e.path)}\` | ${tableCell(e.owner)} |`);
+  }
+  const body = sections.join('\n');
+  if (body.length > MAX_ARCHITECTURE_CHARS) return null;
+  return { file: CONTRACTS_FILE, update: () => `${body}\n` };
+}
+
 /**
  * The one writer: reads the current file (missing = ''), applies the op and
  * writes the result, only for pack files inside <repo>/design/.
@@ -366,6 +410,149 @@ function parseJourneys(md) {
     if (journey) journeys.push(journey[1]);
   }
   return journeys;
+}
+
+// ---- roadmap (LW 2.13) -----------------------------------------------------------
+
+// `epic:<slug>` must stay a valid card tag (todorows TAG_RE: 40 chars max).
+const MAX_EPIC_SLUG_CHARS = 35;
+const EPIC_SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
+const EPIC_LINE_RE = /^\s*[-*]\s+\[([ xX])\]\s+(.+?)\s*$/;
+const EPIC_PREFIX_RES = [/^epic:([a-z0-9][a-z0-9_-]*)\b\s*(.*)$/i, /^`([a-z0-9][a-z0-9_-]*)`\s*(.*)$/i];
+
+const slugify = (text) =>
+  text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').slice(0, MAX_EPIC_SLUG_CHARS).replace(/-+$/, '');
+
+/** A valid epic slug, lowercased, or null. */
+function epicSlug(raw) {
+  if (typeof raw !== 'string') return null;
+  const slug = raw.trim().toLowerCase();
+  return slug.length <= MAX_EPIC_SLUG_CHARS && EPIC_SLUG_RE.test(slug) ? slug : null;
+}
+
+/** One "- [ ] epic:<slug> - <title>" line, or null. A line without a slug gets one from its title. */
+function epicFromLine(line) {
+  const m = line.match(EPIC_LINE_RE);
+  if (!m) return null;
+  const body = m[2];
+  for (const re of EPIC_PREFIX_RES) {
+    const hit = body.match(re);
+    if (!hit) continue;
+    const slug = epicSlug(hit[1]);
+    if (!slug) return null;
+    const title = hit[2].replace(/^[-:–—]\s*/, '').trim();
+    return { slug, title: title || slug, done: m[1] !== ' ' };
+  }
+  const slug = slugify(body);
+  return slug ? { slug, title: body, done: m[1] !== ' ' } : null;
+}
+
+// Comments blanked out but every line kept, so line numbers match the file.
+const maskComments = (md) => md.replace(/<!--[\s\S]*?-->/g, (c) => c.replace(/[^\n]/g, ' '));
+
+/**
+ * One pass over ROADMAP.md. `lines` = every epic with its line number and
+ * the offset of its checkbox, for tickEpic. Headings: "## Goal",
+ * "## Milestones" with a "### " heading per milestone; another "## " heading
+ * naming a milestone ("## Milestone 2: ...") is one too, any other "## "
+ * section (Notes, Risks) is skipped.
+ */
+function scanRoadmap(md) {
+  const goal = [];
+  const milestones = [];
+  const lines = [];
+  const seen = new Set();
+  let section = null;
+  let headed = false;
+  const startMilestone = (name) => milestones.push({ name, epics: [] });
+  maskComments(md).split('\n').forEach((rawLine, index) => {
+    const line = rawLine.replace(/\r$/, '');
+    const h2 = line.match(/^##\s+(.+?)\s*#*\s*$/);
+    if (h2) {
+      headed = true;
+      if (/^goal$/i.test(h2[1])) section = 'goal';
+      else if (/^milestones?$/i.test(h2[1])) section = 'milestones';
+      else if (/\bmilestone\b/i.test(h2[1])) {
+        section = 'milestones';
+        startMilestone(h2[1]);
+      } else section = null;
+      return;
+    }
+    if (/^#\s/.test(line)) return;
+    const h3 = line.match(/^###\s+(.+?)\s*#*\s*$/);
+    if (h3) {
+      if (section === 'milestones') startMilestone(h3[1]);
+      return;
+    }
+    if (section === 'goal') {
+      if (line.trim()) goal.push(line.trim());
+      return;
+    }
+    const epic = section === 'milestones' ? epicFromLine(line) : null;
+    if (!epic || seen.has(epic.slug)) return;
+    seen.add(epic.slug);
+    if (!milestones.length) startMilestone(`Milestone ${milestones.length + 1}`);
+    milestones[milestones.length - 1].epics.push(epic);
+    // Comments are blanked to the same length, so this offset holds in the raw line too.
+    lines.push({ index, bracket: line.indexOf('[') + 1, ...epic });
+  });
+  return { headed, goal: goal.join(' '), milestones, lines };
+}
+
+/**
+ * LW 2.13: goal -> milestones -> epics. Tolerant: unknown lines are skipped,
+ * an epic seen twice keeps its first line. Null when `md` is not a roadmap
+ * at all (not text, or no "## " section and no epic).
+ * @param {unknown} md ROADMAP.md
+ * @returns {{goal:string, milestones:Array<{name:string, epics:Array<{slug:string, title:string, done:boolean}>}>}|null}
+ */
+function parseRoadmap(md) {
+  if (typeof md !== 'string' || !md.trim()) return null;
+  try {
+    const scan = scanRoadmap(md);
+    if (!scan.headed && !scan.lines.length) return null;
+    return { goal: scan.goal, milestones: scan.milestones };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The epic the Director works on: the first open epic of the current
+ * milestone (the first one that still has an open epic).
+ * @param {ReturnType<typeof parseRoadmap>} roadmap
+ * @returns {{slug:string, title:string, milestone:string}|null} null = no roadmap or every epic done
+ */
+function activeEpic(roadmap) {
+  const milestones = roadmap && Array.isArray(roadmap.milestones) ? roadmap.milestones : [];
+  for (const m of milestones) {
+    const epic = (m.epics || []).find((e) => !e.done);
+    if (epic) return { slug: epic.slug, title: epic.title, milestone: m.name };
+  }
+  return null;
+}
+
+/**
+ * Director: ticks one epic "[x]" in ROADMAP.md. Nothing else in the file
+ * changes - not a byte - and an epic that is missing or already done leaves
+ * it as it is.
+ * @returns {{file:string, update:Function}|null}
+ */
+function tickEpic(slug) {
+  const wanted = epicSlug(slug);
+  if (!wanted) return null;
+  return {
+    file: 'ROADMAP.md',
+    update: (current) => {
+      const text = typeof current === 'string' ? current : '';
+      const hit = scanRoadmap(text).lines.find((l) => l.slug === wanted && !l.done);
+      if (!hit) return text;
+      const lines = text.split('\n');
+      const line = lines[hit.index];
+      lines[hit.index] = `${line.slice(0, hit.bracket)}x${line.slice(hit.bracket + 1)}`;
+      return lines.join('\n');
+    },
+  };
 }
 
 const normalized = (md) => stripComments(md).replace(/\s+/g, ' ').trim();
@@ -434,7 +621,13 @@ How to run the interview:
 6. TEST_PLAN.md: at least one journey, one "### " heading each under
    "## Journeys", with numbered steps and the expected result.
 7. Record every decision he makes as "- Chose X because Y" in DECISIONS.md.
-8. Do not touch PLAYTEST_LOG.md. Only write inside ${dir}; do not change code.
+8. ROADMAP.md: ask for the roadmap - the goal in one or two sentences, then
+   the milestones in order, each a "### " heading under "## Milestones" with
+   its epics (chunks of work of a few cards each) as
+   "- [ ] epic:<slug> - <title>" lines (slug: lowercase letters, digits,
+   "-"). Propose a roadmap from DESIGN.md he can accept with "ok". The loop
+   works one epic at a time, in this order.
+9. Do not touch PLAYTEST_LOG.md. Only write inside ${dir}; do not change code.
 
 The pack is complete when BRIEF, DESIGN, SHIP_CRITERIA (at least one milestone
 with a gate item) and TEST_PLAN (at least one journey) are filled in. Tell Mati
@@ -445,6 +638,7 @@ module.exports = {
   DESIGN_DIR,
   TEMPLATES,
   PACK_FILES,
+  CONTRACTS_FILE,
   REQUIRED_FILES,
   MAX_APPEND_CHARS,
   MAX_ARCHITECTURE_CHARS,
@@ -457,9 +651,14 @@ module.exports = {
   appendJourney,
   writeArchitecture,
   appendArchitecture,
+  writeContracts,
+  tickEpic,
   applyWrite,
   parseShipCriteria,
   parseJourneys,
+  parseRoadmap,
+  activeEpic,
+  epicSlug,
   packCompleteness,
   interviewBrief,
 };

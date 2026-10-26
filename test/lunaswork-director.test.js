@@ -370,3 +370,222 @@ test('a built card is never scheduled: it waits for the Playtester (B1)', async 
   assert.deepEqual(res.cardIds, [1]);
   assert.ok(res.warnings.some((w) => w.code === 'unknownCard' && w.at === 2));
 });
+
+// ---- LW 2.12: contracts and file ownership ---------------------------------------------
+
+const CONTRACT = { name: 'quoteTotal', kind: 'function', spec: 'quoteTotal(items) -> number' };
+const PARALLEL = {
+  cardIds: [1, 2],
+  notes: '',
+  contracts: [CONTRACT],
+  ownership: [{ path: 'src/quote/**', cardId: 1 }, { path: 'src/pdf.js', cardId: 2 }],
+};
+const validate = (answer, cards = [runCard(1), runCard(2)], over = {}) =>
+  D.validateDirection(answer, { cards: cards.map((c) => ({ ...c, kind: 'feel', steer: (c.tags || []).includes('steer') })), ...over });
+
+test('a valid contracts + ownership answer comes back whole', () => {
+  const out = validate(PARALLEL);
+  assert.equal(out.fallback, false);
+  assert.deepEqual(out.cards.map((c) => c.at), [1, 2]);
+  assert.deepEqual(out.contracts, [CONTRACT]);
+  assert.deepEqual(out.ownership, [{ path: 'src/quote/**', cardId: 1 }, { path: 'src/pdf.js', cardId: 2 }]);
+});
+
+test('ownership paths are normalized; leaving both out is still a valid answer', () => {
+  const out = validate({ ...PARALLEL, ownership: [{ path: './src\\quote/', cardId: 1 }, { path: 'src//pdf.js', cardId: 2 }] });
+  assert.deepEqual(out.ownership.map((e) => e.path), ['src/quote/**', 'src/pdf.js']);
+  const plain = validate({ cardIds: [1, 2], notes: '' });
+  assert.equal(plain.fallback, false);
+  assert.deepEqual(plain.contracts, []);
+  assert.equal(plain.ownership, null);
+});
+
+test('a broken ownership map rejects the answer like any malformed one', () => {
+  const owned = (ownership) => ({ ...PARALLEL, ownership });
+  const cases = [
+    ['absolute path', owned([{ path: '/etc/x', cardId: 1 }, { path: 'src/pdf.js', cardId: 2 }])],
+    ['drive path', owned([{ path: 'C:\\repo\\x.js', cardId: 1 }, { path: 'src/pdf.js', cardId: 2 }])],
+    ['.. escape', owned([{ path: 'src/../../x.js', cardId: 1 }, { path: 'src/pdf.js', cardId: 2 }])],
+    ['owned twice', owned([{ path: 'src/a.js', cardId: 1 }, { path: './src/a.js', cardId: 2 }])],
+    ['card owns nothing', owned([{ path: 'src/a.js', cardId: 1 }])],
+    ['unknown card', owned([{ path: 'src/a.js', cardId: 1 }, { path: 'src/b.js', cardId: 2 }, { path: 'src/c.js', cardId: 99 }])],
+    ['not a list', owned({ 'src/a.js': 1 })],
+  ];
+  for (const [label, answer] of cases) {
+    const out = validate(answer);
+    assert.equal(out.fallback, true, label);
+    assert.ok(out.warnings.some((w) => w.code === 'badOwnership'), label);
+    assert.equal(out.ownership, null, label);
+  }
+});
+
+test('a steer card forced in must own a path too', () => {
+  const cards = [runCard(1), runCard(2), steerCard(10)];
+  const out = validate(PARALLEL, cards);
+  assert.equal(out.fallback, true);
+  assert.match(out.warnings.find((w) => w.code === 'badOwnership').detail, /10/);
+  const fixed = validate({ ...PARALLEL, ownership: [...PARALLEL.ownership, { path: 'src/logo.svg', cardId: 10 }] }, cards);
+  assert.equal(fixed.fallback, false);
+  assert.deepEqual(fixed.cards.map((c) => c.at), [10, 1, 2]);
+});
+
+test('a card the limit cut gives its paths up with a warning', () => {
+  const out = validate(PARALLEL, undefined, { limit: 1 });
+  assert.equal(out.fallback, false);
+  assert.deepEqual(out.cards.map((c) => c.at), [1]);
+  assert.deepEqual(out.ownership, [{ path: 'src/quote/**', cardId: 1 }]);
+  assert.ok(out.warnings.some((w) => w.code === 'ownershipDropped' && w.at === 2));
+});
+
+test('malformed contracts reject the answer too', () => {
+  for (const contracts of [[{ ...CONTRACT, kind: 'vibe' }], [{ ...CONTRACT, spec: '' }], [{ kind: 'data', spec: 'x' }], 'nope', ['x']]) {
+    const out = validate({ ...PARALLEL, contracts });
+    assert.equal(out.fallback, true, JSON.stringify(contracts));
+    assert.ok(out.warnings.some((w) => w.code === 'badContracts'), JSON.stringify(contracts));
+  }
+});
+
+test('the schema offers contracts and ownership, and the prompt explains them', async () => {
+  assert.deepEqual(D.DIRECTOR_SCHEMA.properties.contracts.items.properties.kind.enum, [...D.CONTRACT_KINDS]);
+  assert.deepEqual(D.DIRECTOR_SCHEMA.properties.ownership.items.required, ['path', 'cardId']);
+  assert.deepEqual(D.DIRECTOR_SCHEMA.required, ['cardIds', 'notes'], 'both stay optional');
+  const { calls } = await direct({ list: [runCard(1)], answer: { cardIds: [1], notes: '' } });
+  assert.match(calls[0].prompt, /ownership: \[\{path, cardId\}\]/);
+});
+
+test('runDirector writes CONTRACTS.md, returns the map for God Mode and names each card\'s files', async () => {
+  const repoDir = fakeRepo();
+  const { res } = await direct({ repoDir, list: [runCard(1), runCard(2)], answer: PARALLEL });
+  assert.equal(res.fallback, false);
+  assert.equal(res.contractsWritten, true);
+  assert.deepEqual(res.ownership, { 'src/quote/**': 1, 'src/pdf.js': 2 });
+  assert.deepEqual(res.contracts, [CONTRACT]);
+  const md = fs.readFileSync(path.join(repoDir, 'design', 'CONTRACTS.md'), 'utf8');
+  assert.match(md, /## quoteTotal \(function\)/);
+  assert.match(md, /\| `src\/quote\/\*\*` \| 1 \|/);
+  for (const card of res.cards) assert.match(card.details, /respect design\/CONTRACTS\.md; only edit files you own/);
+  assert.match(res.cards[0].details, /Files you own: `src\/quote\/\*\*`/);
+  assert.match(res.cards[1].details, /Files you own: `src\/pdf\.js`/);
+});
+
+test('every builder brief references CONTRACTS.md, map or not', () => {
+  assert.match(D.BUILDER_BRIEF, /respect design\/CONTRACTS\.md; only edit files you own/);
+  assert.equal(D.withBuilderBrief({ text: 't' }).details, D.BUILDER_BRIEF);
+});
+
+test('a later iteration without a map empties a stale CONTRACTS.md; none is created otherwise', async () => {
+  const repoDir = fakeRepo();
+  await direct({ repoDir, list: [runCard(1), runCard(2)], answer: PARALLEL });
+  const { res } = await direct({ repoDir, list: [runCard(1)], answer: { cardIds: [1], notes: '' } });
+  assert.equal(res.contractsWritten, false);
+  assert.equal(res.ownership, null);
+  const md = fs.readFileSync(path.join(repoDir, 'design', 'CONTRACTS.md'), 'utf8');
+  assert.doesNotMatch(md, /quoteTotal|src\/pdf\.js/);
+
+  const fresh = fakeRepo();
+  await direct({ repoDir: fresh, list: [runCard(1)], answer: { cardIds: [1], notes: '' } });
+  assert.equal(fs.existsSync(path.join(fresh, 'design', 'CONTRACTS.md')), false);
+});
+
+test('a rejected ownership map still schedules the fallback order, without a map', async () => {
+  const repoDir = fakeRepo();
+  const answer = { ...PARALLEL, ownership: [{ path: '../x', cardId: 1 }] };
+  const { res } = await direct({ repoDir, list: [runCard(1), runCard(2)], answer });
+  assert.equal(res.ok, true);
+  assert.equal(res.fallback, true);
+  assert.equal(res.ownership, null);
+  assert.deepEqual([...res.cardIds].sort(), [1, 2]);
+  assert.equal(fs.existsSync(path.join(repoDir, 'design', 'CONTRACTS.md')), false);
+});
+
+// ---- LW 2.13: roadmap epics ---------------------------------------------------------------
+
+const ROADMAP_MD = [
+  '# Roadmap',
+  '',
+  '## Goal',
+  '',
+  'Quote steel fast.',
+  '',
+  '## Milestones',
+  '',
+  '### Milestone 1: Skeleton',
+  '',
+  '- [ ] epic:quote-form - Quote form',
+  '- [ ] epic:pdf - PDF export',
+  '',
+].join('\n');
+
+const epicCard = (at, slug, over = {}) => runCard(at, { tags: [RUN_TAG, 'kind:feel', 'sev:medium', `epic:${slug}`], ...over });
+
+function roadmapRepo(md = ROADMAP_MD) {
+  const repoDir = fakeRepo();
+  fs.writeFileSync(path.join(repoDir, 'design', 'ROADMAP.md'), md);
+  return repoDir;
+}
+
+test('with an active epic only its cards are on offer; steer cards still come first', async () => {
+  const repoDir = roadmapRepo();
+  const list = [epicCard(1, 'quote-form'), epicCard(2, 'pdf'), runCard(3), steerCard(10)];
+  const { res, calls } = await direct({ repoDir, list, answer: { cardIds: [2, 3, 1], notes: '' } });
+  assert.deepEqual(res.cardIds, [10, 1]);
+  assert.deepEqual(res.epic, { slug: 'quote-form', title: 'Quote form', milestone: 'Milestone 1: Skeleton' });
+  assert.deepEqual(res.epicsTicked, []);
+  for (const at of [2, 3]) assert.ok(res.warnings.some((w) => w.code === 'unknownCard' && w.at === at), String(at));
+  assert.match(calls[0].prompt, /Active epic \(design\/ROADMAP\.md\): "Quote form" \(epic:quote-form/);
+  assert.doesNotMatch(calls[0].prompt, /Card 2|Card 3/);
+});
+
+test('steer cards are never cut by the epic, even over the limit', async () => {
+  const repoDir = roadmapRepo();
+  const steer = Array.from({ length: 7 }, (_, i) => steerCard(100 + i));
+  const list = [epicCard(1, 'quote-form'), runCard(2), ...steer];
+  const { res } = await direct({ repoDir, list, answer: { cardIds: [1], notes: '' } });
+  assert.deepEqual(res.cardIds, steer.map((c) => c.at));
+});
+
+test('an epic whose cards are all done is ticked and the next one starts', async () => {
+  const repoDir = roadmapRepo();
+  const list = [epicCard(1, 'quote-form', { done: true }), epicCard(2, 'quote-form', { done: true }), epicCard(3, 'pdf'), runCard(4)];
+  const { res } = await direct({ repoDir, list, answer: { cardIds: [3, 4], notes: '' } });
+  assert.deepEqual(res.epicsTicked, ['quote-form']);
+  assert.equal(res.epic.slug, 'pdf');
+  assert.deepEqual(res.cardIds, [3]);
+  // Only the checkbox changed: the Director never rewrites ROADMAP.md.
+  const roadmap = fs.readFileSync(path.join(repoDir, 'design', 'ROADMAP.md'), 'utf8');
+  assert.equal(roadmap, ROADMAP_MD.replace('- [ ] epic:quote-form', '- [x] epic:quote-form'));
+});
+
+test('an epic with open, built or no cards is not ticked', async () => {
+  for (const list of [
+    [epicCard(1, 'quote-form', { done: true }), epicCard(2, 'quote-form')],
+    [epicCard(1, 'quote-form', { state: 'built' })],
+    [runCard(4)],
+  ]) {
+    const repoDir = roadmapRepo();
+    const { res } = await direct({ repoDir, list, answer: { cardIds: [2], notes: '' } });
+    assert.deepEqual(res.epicsTicked, [], JSON.stringify(list));
+    assert.equal(res.epic.slug, 'quote-form');
+    assert.equal(fs.readFileSync(path.join(repoDir, 'design', 'ROADMAP.md'), 'utf8'), ROADMAP_MD);
+  }
+});
+
+test('the last epic done: every epic ticked, no epic filter any more', async () => {
+  const repoDir = roadmapRepo();
+  const list = [epicCard(1, 'quote-form', { done: true }), epicCard(2, 'pdf', { done: true }), runCard(3)];
+  const { res } = await direct({ repoDir, list, answer: { cardIds: [3], notes: '' } });
+  assert.deepEqual(res.epicsTicked, ['quote-form', 'pdf']);
+  assert.equal(res.epic, null);
+  assert.deepEqual(res.cardIds, [3]);
+});
+
+test('no ROADMAP epics, or an unparsable ROADMAP.md: every card is on offer as before', async () => {
+  for (const md of [Pack.TEMPLATES['ROADMAP.md'], 'random prose, not a roadmap', null]) {
+    const repoDir = md === null ? fakeRepo() : roadmapRepo(md);
+    if (md === null) fs.rmSync(path.join(repoDir, 'design', 'ROADMAP.md'));
+    const list = [epicCard(1, 'quote-form'), runCard(2)];
+    const { res } = await direct({ repoDir, list, answer: { cardIds: [2, 1], notes: '' } });
+    assert.deepEqual(res.cardIds, [2, 1], String(md));
+    assert.equal(res.epic, null);
+  }
+});

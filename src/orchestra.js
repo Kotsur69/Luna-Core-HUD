@@ -375,6 +375,9 @@ function createOrchestra(deps) {
   // after a restart Luna's Work resumes on its own.
   /** @type {null|{planId:string, fn:Function}} */
   let runSettledHook = null;
+  // LW 2.12: `${pkgId}|${file}` already sent an ownership stop, so a worker
+  // is told once per file. Not saved: a restarted run is held anyway.
+  const ownershipNudged = new Set();
   const background = (promise, where) =>
     promise.catch((err) => onRunEvent('error', { where, message: err instanceof Error ? err.message : String(err) }));
 
@@ -567,12 +570,15 @@ function createOrchestra(deps) {
   /**
    * Runs the planner for one project. Replaces any previous plan, except one
    * whose run still has a worker going.
-   * Two optional hooks exist for Luna's Work; God Mode never sets them and
+   * Optional hooks exist for Luna's Work; God Mode never sets them and
    * is unchanged without them: `cards` (card `at`s or card objects, see
-   * givenCards) replaces the open-card / todoAts selection, and
-   * `onRunSettled(result)` is called once when this plan's run settles.
+   * givenCards) replaces the open-card / todoAts selection,
+   * `onRunSettled(result)` is called once when this plan's run settles, and
+   * `ownership` (LW 2.12, `{path|glob: owner}` with owner = package id or
+   * card `at`) stops a worker that edits a file another package owns.
    * @param {{projectId:string|null, repoPath:string, profileId:string, env:object,
-   *   todoAts?:number[]|null, cards?:Array<number|object>, onRunSettled?:Function}} ctx
+   *   todoAts?:number[]|null, cards?:Array<number|object>, onRunSettled?:Function,
+   *   ownership?:object|object[]}} ctx
    */
   async function makePlan(ctx) {
     if (isBusy()) return { ok: false, error: 'busy' };
@@ -602,7 +608,9 @@ function createOrchestra(deps) {
         return { ok: false, error: 'waiting', planWait: planWaiter.view() };
       }
       const checked = validatePlan(res.raw, openTodos);
+      const ownership = sup.normalizeOwnership(ctx.ownership);
       clearAllTimers();
+      ownershipNudged.clear();
       plan = {
         id: `p${now().toString(36)}`,
         projectId: ctx.projectId,
@@ -637,6 +645,8 @@ function createOrchestra(deps) {
         runStartedAt: null,
         pausedTotalMs: 0,
         todoText: new Map(openTodos.map((t) => [t.at, t.text])),
+        // LW 2.12: only a plan made with an ownership map carries the key.
+        ...(ownership ? { ownership } : {}),
         packages: checked.packages.map((p) => ({
           ...p,
           state: 'pending',
@@ -1290,7 +1300,23 @@ function createOrchestra(deps) {
     for (const o of sup.liveOverlaps(plan.packages)) {
       if (!before.has(key(o))) onRunEvent('overlap', o);
     }
+    if (plan.ownership) guardOwnership(findPkg(pkg.id));
     commit();
+  }
+
+  /**
+   * LW 2.12: a worker that changed a file another package owns is told to
+   * revert it at once - before the owner's worker touches the same file -
+   * and the board gets an 'ownership' event. Only with a plan.ownership map.
+   */
+  function guardOwnership(pkg) {
+    const fresh = sup
+      .ownershipViolations(pkg, pkg.touched, plan.ownership, plan.packages)
+      .filter((v) => !ownershipNudged.has(`${pkg.id}|${v.file}`));
+    if (!fresh.length || pkg.state !== 'launched' || plan.pausedUntil || plan.killed) return;
+    for (const v of fresh) ownershipNudged.add(`${pkg.id}|${v.file}`);
+    const sent = writePty(pkg.sessionId, sup.ownershipText(pkg.id, fresh), { paste: true });
+    onRunEvent('ownership', { id: pkg.id, files: fresh, nudged: sent === true });
   }
 
   /**

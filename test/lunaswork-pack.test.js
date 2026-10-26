@@ -227,3 +227,152 @@ test('interviewBrief names the design folder and marks files that need work', ()
 test('interviewBrief does not throw on a bad repo dir', () => {
   assert.equal(typeof pack.interviewBrief(undefined), 'string');
 });
+
+test('interviewBrief asks for the roadmap in the epic line format (LW 2.13)', () => {
+  const brief = pack.interviewBrief(tempRepo());
+  assert.match(brief, /ROADMAP\.md: ask for the roadmap/);
+  assert.match(brief, /- \[ \] epic:<slug> - <title>/);
+});
+
+// ---- roadmap (LW 2.13) ------------------------------------------------------------
+
+const ROADMAP = `# Roadmap
+
+<!-- a comment with - [ ] epic:ghost - Not an epic -->
+
+## Goal
+
+Steel quotes in two minutes,
+from a drawing.
+
+## Milestones
+
+### Milestone 1: Skeleton
+
+- [x] epic:shell - App shell
+- [ ] epic:quote-form - Quote form
+
+### Milestone 2: Core flows
+
+- [ ] \`pdf-export\` PDF export
+- [ ] Email the quote
+- [ ] epic:quote-form - Duplicate, ignored
+`;
+
+test('parseRoadmap parses the ROADMAP.md template in TEMPLATES', () => {
+  assert.deepEqual(pack.parseRoadmap(pack.TEMPLATES['ROADMAP.md']), { goal: '', milestones: [] });
+  assert.equal(pack.activeEpic(pack.parseRoadmap(pack.TEMPLATES['ROADMAP.md'])), null);
+});
+
+test('parseRoadmap reads goal, milestones and epics; comments and duplicates skipped', () => {
+  assert.deepEqual(pack.parseRoadmap(ROADMAP), {
+    goal: 'Steel quotes in two minutes, from a drawing.',
+    milestones: [
+      {
+        name: 'Milestone 1: Skeleton',
+        epics: [
+          { slug: 'shell', title: 'App shell', done: true },
+          { slug: 'quote-form', title: 'Quote form', done: false },
+        ],
+      },
+      {
+        name: 'Milestone 2: Core flows',
+        epics: [
+          { slug: 'pdf-export', title: 'PDF export', done: false },
+          { slug: 'email-the-quote', title: 'Email the quote', done: false },
+        ],
+      },
+    ],
+  });
+});
+
+test('parseRoadmap is tolerant: CRLF, "## " milestone headings, epics without a heading', () => {
+  const crlf = pack.parseRoadmap(ROADMAP.replace(/\n/g, '\r\n'));
+  assert.deepEqual(crlf, pack.parseRoadmap(ROADMAP));
+  const flat = pack.parseRoadmap('# Roadmap\n\n## Milestone A\n\n- [ ] epic:a1 - One\n\n## Milestone B\n- [X] epic:b1\n');
+  assert.deepEqual(flat.milestones.map((m) => [m.name, m.epics]), [
+    ['Milestone A', [{ slug: 'a1', title: 'One', done: false }]],
+    ['Milestone B', [{ slug: 'b1', title: 'b1', done: true }]],
+  ]);
+  const bare = pack.parseRoadmap('## Milestones\n- [ ] epic:only - Only epic\n');
+  assert.deepEqual(bare.milestones, [{ name: 'Milestone 1', epics: [{ slug: 'only', title: 'Only epic', done: false }] }]);
+});
+
+test('parseRoadmap skips "## " sections that are not milestones', () => {
+  const md = `${ROADMAP}\n## Notes\n\n- [ ] remember the logo\n\n## Milestone 3: Polish\n\n- [ ] epic:polish - Polish\n`;
+  const names = pack.parseRoadmap(md).milestones.map((m) => m.name);
+  assert.deepEqual(names, ['Milestone 1: Skeleton', 'Milestone 2: Core flows', 'Milestone 3: Polish']);
+  assert.ok(!pack.parseRoadmap(md).milestones.some((m) => m.epics.some((e) => e.slug === 'remember-the-logo')));
+});
+
+test('tickEpic ticks the epic box, not a box inside a comment on the same line', () => {
+  const repo = tempRepo();
+  const md = '## Milestones\n### M1\n<!-- [ ] --> - [ ] epic:a - A\n';
+  write(repo, 'ROADMAP.md', md);
+  pack.applyWrite(repo, pack.tickEpic('a'));
+  assert.equal(read(repo, 'ROADMAP.md'), '## Milestones\n### M1\n<!-- [ ] --> - [x] epic:a - A\n');
+});
+
+test('parseRoadmap returns null for a broken or non-roadmap file', () => {
+  for (const md of [null, undefined, 42, {}, '', '   \n', 'just some prose', '- Milestone 3: multiplayer leaderboard\n']) {
+    assert.equal(pack.parseRoadmap(md), null, JSON.stringify(md));
+  }
+});
+
+test('activeEpic: first open epic of the first milestone that still has one', () => {
+  assert.deepEqual(pack.activeEpic(pack.parseRoadmap(ROADMAP)), { slug: 'quote-form', title: 'Quote form', milestone: 'Milestone 1: Skeleton' });
+  const later = pack.parseRoadmap(ROADMAP.replace('- [ ] epic:quote-form - Quote form', '- [x] epic:quote-form - Quote form'));
+  assert.equal(pack.activeEpic(later).slug, 'pdf-export');
+  assert.equal(pack.activeEpic(pack.parseRoadmap(ROADMAP.replace(/\[ \]/g, '[x]'))), null, 'all done');
+  assert.equal(pack.activeEpic(null), null);
+});
+
+test('tickEpic flips one checkbox and changes nothing else', () => {
+  const repo = tempRepo();
+  const crlf = ROADMAP.replace(/\n/g, '\r\n');
+  write(repo, 'ROADMAP.md', crlf);
+  assert.equal(pack.applyWrite(repo, pack.tickEpic('quote-form')).ok, true);
+  const after = read(repo, 'ROADMAP.md');
+  assert.equal(after, crlf.replace('- [ ] epic:quote-form - Quote form', '- [x] epic:quote-form - Quote form'));
+  // The duplicate line further down and the commented-out epic are untouched.
+  assert.match(after, /- \[ \] epic:quote-form - Duplicate, ignored/);
+  // Ticking again, or an unknown epic, leaves the file byte for byte.
+  pack.applyWrite(repo, pack.tickEpic('quote-form'));
+  pack.applyWrite(repo, pack.tickEpic('ghost'));
+  assert.equal(read(repo, 'ROADMAP.md'), after);
+  assert.equal(pack.tickEpic('../x'), null);
+  assert.equal(pack.tickEpic(''), null);
+});
+
+// ---- contracts (LW 2.12) ----------------------------------------------------------
+
+test('writeContracts writes design/CONTRACTS.md with the contracts and the ownership map', () => {
+  const repo = tempRepo();
+  const op = pack.writeContracts({
+    iteration: 3,
+    contracts: [
+      { name: 'quoteTotal', kind: 'function', spec: 'quoteTotal(items: Item[]) -> number\n# not a heading of the file' },
+      { name: 'POST /api/quote', kind: 'route', spec: 'body {items}, returns {id, total}' },
+    ],
+    ownership: [{ path: 'src/quote/**', owner: 12 }, { path: 'src/api.js', owner: 13 }],
+  });
+  assert.equal(op.file, 'CONTRACTS.md');
+  assert.equal(pack.applyWrite(repo, op).ok, true);
+  const md = read(repo, 'CONTRACTS.md');
+  assert.match(md, /^# Contracts\n/);
+  assert.match(md, /iteration 3/);
+  assert.match(md, /## quoteTotal \(function\)\n\nquoteTotal\(items: Item\[\]\) -> number\n#### not a heading/);
+  assert.match(md, /## POST \/api\/quote \(route\)/);
+  assert.match(md, /\| `src\/quote\/\*\*` \| 12 \|/);
+  assert.match(md, /\| `src\/api\.js` \| 13 \|/);
+  assert.equal(pack.readPackFile(repo, 'CONTRACTS.md'), md);
+});
+
+test('writeContracts: nothing to write is no op; CONTRACTS.md is never scaffolded', () => {
+  assert.equal(pack.writeContracts({}), null);
+  assert.equal(pack.writeContracts({ contracts: [{ name: '', kind: 'data', spec: 'x' }] }), null);
+  assert.equal(pack.PACK_FILES.includes('CONTRACTS.md'), false);
+  const repo = tempRepo();
+  pack.scaffoldPack(repo);
+  assert.equal(fs.existsSync(designFile(repo, 'CONTRACTS.md')), false);
+});
