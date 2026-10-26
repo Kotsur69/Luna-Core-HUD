@@ -19,6 +19,11 @@
 //                 lighthouseBudgets - optional partial Lighthouse score
 //                           budgets (0-100); unset categories use
 //                           lunasworkLighthouse.DEFAULT_BUDGETS
+//                 designVariants - LW 2.25a toggle, off by default: key
+//                           screens get 2-3 variants behind ?variant=
+//                 mockupFirst - LW 2.25b toggle, off by default: a clickable
+//                           prototype is approved before the real build
+//                 (a toggle is stored only while on)
 //
 // TRUST BOUNDARY: the project profile (startCommand, checkCommand, seedCommand,
 // url) is only ever read from this local file, which only the LunaCore UI
@@ -188,6 +193,17 @@ function normalizeCliOrder(raw) {
   return [...new Set(raw.filter((c) => typeof c === 'string' && Object.prototype.hasOwnProperty.call(SECOND_OPINION_CLIS, c)))];
 }
 
+// ---- toggles (LW 2.25a / 2.25b) -------------------------------------------------------
+
+/** The per-project toggles; each is off unless exactly true. */
+const TOGGLES = Object.freeze(['designVariants', 'mockupFirst']);
+
+/** Every toggle as a boolean, off unless exactly true. */
+function normalizeToggles(raw) {
+  const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return Object.fromEntries(TOGGLES.map((t) => [t, src[t] === true]));
+}
+
 // ---- whole store ------------------------------------------------------------------
 
 function normalizeProject(raw) {
@@ -199,6 +215,7 @@ function normalizeProject(raw) {
   if (Object.keys(models).length) out.models = models;
   if (profile) out.profile = profile;
   if (Object.keys(budgets).length) out.lighthouseBudgets = budgets;
+  for (const t of TOGGLES) if (raw[t] === true) out[t] = true;
   return Object.keys(out).length ? out : null;
 }
 
@@ -247,12 +264,18 @@ function lighthouseBudgetsFor(settings, projectId) {
   return budgetsFrom({ lighthouseBudgets: (project && project.lighthouseBudgets) || {} });
 }
 
+/** LW 2.25a / 2.25b: the project's toggles, {designVariants, mockupFirst}, each a boolean. */
+function togglesFor(settings, projectId) {
+  return normalizeToggles(normalizeSettings(settings).projects[keyFor(projectId)]);
+}
+
 /**
  * Returns new settings with one project's entry replaced (no mutation).
- * A profile or budgets that fail validation are reported and nothing changes.
+ * A profile, budgets or a toggle that fail validation are reported and nothing changes.
  * @param {object} settings
  * @param {string|null|undefined} projectId
- * @param {{models?: object, profile?: object|null, lighthouseBudgets?: object|null}} patch null removes
+ * @param {{models?: object, profile?: object|null, lighthouseBudgets?: object|null,
+ *   designVariants?: boolean, mockupFirst?: boolean}} patch null removes
  * @returns {{settings: object, reason: string|null}}
  */
 function withProject(settings, projectId, patch) {
@@ -276,6 +299,12 @@ function withProject(settings, projectId, patch) {
     const { budgets, reason } = validateBudgets(p.lighthouseBudgets);
     if (!budgets) return { settings: s, reason };
     next.lighthouseBudgets = budgets;
+  }
+  for (const t of TOGGLES) {
+    if (p[t] === undefined) continue;
+    if (typeof p[t] !== 'boolean') return { settings: s, reason: `${t} must be true or false` };
+    if (p[t]) next[t] = true;
+    else delete next[t];
   }
   return { settings: normalizeSettings({ ...s, projects: { ...s.projects, [key]: next } }), reason: null };
 }
@@ -311,16 +340,19 @@ module.exports = {
   MAX_READY_TIMEOUT_SEC,
   MAX_COMMAND_CHARS,
   PROFILE_STACKS,
+  TOGGLES,
   validateProfile,
   validateBudgets,
   normalizeBudgets,
   normalizeCliOrder,
   normalizeModelOverride,
   normalizeSettings,
+  normalizeToggles,
   defaultSettings,
   modelsFor,
   profileFor,
   lighthouseBudgetsFor,
+  togglesFor,
   withProject,
   readSettings,
   writeSettings,

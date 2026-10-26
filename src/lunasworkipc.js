@@ -2,7 +2,8 @@
 // LunaCore - Luna's Work IPC (main process, docs/LUNAS_WORK_PLAN.md slice 1.2c)
 // ----------------------------------------------------------------------------
 // lunaswork:getSettings    {projectId} -> view
-// lunaswork:saveSettings   {projectId, models?, projectModels?, freeFallback?, profile?} -> view
+// lunaswork:saveSettings   {projectId, models?, projectModels?, freeFallback?, profile?,
+//                           designVariants?, mockupFirst?} -> view
 //                          | {ok:false, reason:'bad-profile', field, detail}
 // lunaswork:scaffoldPack   {projectId} -> {ok, created, skipped, failed, pack}
 // lunaswork:packStatus     {projectId} -> {ok, pack}
@@ -29,7 +30,8 @@
 // lunaswork:event          main -> renderer push, {type, status}, on every
 //                          controller event (phase, wait, resume, stopping, wheel)
 //
-// view = {ok, projectId, roles, choices, models, projectModels, freeFallback, profile}
+// view = {ok, projectId, roles, choices, models, projectModels, freeFallback, profile,
+//         designVariants, mockupFirst}  (the LW 2.25 toggles are per project)
 // models = LunaCore's default per role; projectModels = this project's override.
 // Every status that leaves main goes through lunasworkStatus.publicStatus.
 // pack = {complete, missing, empty}
@@ -193,6 +195,7 @@ function registerLunasworkIpc(deps) {
       projectModels: settingsStore.normalizeModelOverride((settings.projects[keyFor(projectId)] || {}).models),
       freeFallback: settings.freeFallback,
       profile: settingsStore.profileFor(settings, projectId),
+      ...settingsStore.togglesFor(settings, projectId),
     };
   }
 
@@ -231,6 +234,13 @@ function registerLunasworkIpc(deps) {
     if (req.freeFallback !== undefined) {
       if (typeof req.freeFallback !== 'boolean') return { ok: false, reason: 'bad-value' };
       next = { ...next, freeFallback: req.freeFallback };
+    }
+    // LW 2.25a / 2.25b: per-project toggles, booleans only.
+    for (const toggle of settingsStore.TOGGLES) {
+      if (req[toggle] === undefined) continue;
+      const res = settingsStore.withProject(next, project.id, { [toggle]: req[toggle] });
+      if (res.reason) return { ok: false, reason: 'bad-value' };
+      next = res.settings;
     }
     if (req.profile !== undefined) {
       const raw = req.profile === null ? null : parseProfile(req.profile);

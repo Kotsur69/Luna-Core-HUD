@@ -165,6 +165,22 @@ test('saveSettings refuses bad models and a non-boolean freeFallback without wri
   s.done();
 });
 
+test('LW 2.25: the design-variants and mockup-first toggles are off by default, per project, booleans only', async () => {
+  const s = setup();
+  const fresh = await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' });
+  assert.equal(fresh.designVariants, false);
+  assert.equal(fresh.mockupFirst, false);
+  const saved = await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', designVariants: true, mockupFirst: true });
+  assert.equal(saved.ok, true);
+  assert.equal(saved.designVariants, true);
+  assert.equal(saved.mockupFirst, true);
+  assert.deepEqual(await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', mockupFirst: 'false' }), { ok: false, reason: 'bad-value' });
+  const off = await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', designVariants: false });
+  assert.equal(off.designVariants, false);
+  assert.equal(off.mockupFirst, true, 'a refused save changed nothing');
+  s.done();
+});
+
 test('saveSettings reports profile validation errors with the field', async () => {
   const s = setup();
   const cases = [

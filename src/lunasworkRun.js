@@ -19,6 +19,9 @@
 //                 cleanLighthouse (per-iteration results), cleanGateHold
 //   return pack   a lap's gate / changes / screens and keyScreens (LW 2.18),
 //                 gatesMailed, cleanShipDocs (LW 2.22a docs iteration)
+//   toggles       LW 2.25: the project toggles pinned at start, the design
+//                 variant choices (lunasworkVariants.cleanVariants) and the
+//                 prototype phase (cleanPrototype)
 // ============================================================================
 
 'use strict';
@@ -33,6 +36,7 @@ const { restoreFeedback } = require('./lunasworkFeedback');
 const { HANDED } = require('./lunasworkWheel');
 const { appendResult } = require('./lunasworkLighthouse');
 const { cleanLedger } = require('./lunasworkUsage');
+const { cleanTargets, cleanVariants } = require('./lunasworkVariants');
 
 const PREPROD = 'preprod';
 const DONE = 'done';
@@ -329,12 +333,14 @@ const keepList = (v) => (Array.isArray(v) ? v.slice(0, MAX_REPORT_ITEMS) : []);
 function cleanReport(raw) {
   if (!isObj(raw)) return null;
   return {
-    mode: raw.mode === 'shipConfirm' ? 'shipConfirm' : 'explore',
+    mode: ['shipConfirm', 'navigation'].includes(raw.mode) ? raw.mode : 'explore',
     findings: keepList(raw.findings),
     scores: keepList(raw.scores),
     journeys: keepList(raw.journeys),
     screens: keepList(raw.screens),
     checks: keepList(raw.checks),
+    // LW 2.25a: one screenshot per built design variant.
+    variantShots: keepList(raw.variantShots),
     warnings: keepList(raw.warnings),
     errors: keepList(raw.errors),
   };
@@ -588,7 +594,21 @@ function cleanGateHold(raw) {
 function emptyCurrent() {
   return {
     cards: [], notes: null, planId: null, build: null, launch: null, report: null, playtest: null, verify: null,
-    critic: null, ship: null, replay: null, checkpoint: null, hooks: null, hookNotes: [],
+    critic: null, ship: null, replay: null, checkpoint: null, hooks: null, hookNotes: [], variantTargets: [],
+  };
+}
+
+const PROTOTYPE_STATUSES = ['building', 'playtest', 'asked', 'approved', 'cleanup'];
+
+/** LW 2.25b: the clickable-prototype phase - its iteration, its card, where it stands. */
+function cleanPrototype(raw) {
+  if (!isObj(raw) || !Number.isInteger(raw.n) || raw.n < 1 || !PROTOTYPE_STATUSES.includes(raw.status)) return null;
+  return {
+    n: raw.n,
+    cards: ats(raw.cards),
+    status: raw.status,
+    decisionId: Number.isSafeInteger(raw.decisionId) ? raw.decisionId : null,
+    cleanupAt: Number.isSafeInteger(raw.cleanupAt) ? raw.cleanupAt : null,
   };
 }
 
@@ -642,6 +662,8 @@ function cleanCurrent(raw) {
     checkpoint: cleanCheckpoint(c.checkpoint),
     hooks: cleanSmall(c.hooks, HOOK_KEYS),
     hookNotes: cleanHookNotes(c.hookNotes),
+    // LW 2.25a: the design-variant screens this iteration's explore pass screenshots.
+    variantTargets: cleanTargets(c.variantTargets),
   };
 }
 
@@ -721,6 +743,10 @@ function restoreRun(raw) {
     gatesMailed: names(raw.gatesMailed).slice(-MAX_GATES_MAILED),
     // LW 2.22a: the docs iteration SHIP waits for.
     shipDocs: cleanShipDocs(raw.shipDocs),
+    // LW 2.25: the project toggles pinned at start, the variant choices, the prototype phase.
+    toggles: settingsStore.normalizeToggles(raw.toggles),
+    variants: cleanVariants(raw.variants),
+    prototype: cleanPrototype(raw.prototype),
     planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
       .filter((id) => typeof id === 'string' && id && id.length <= 100)
       .slice(-MAX_PLAN_IDS),
@@ -780,5 +806,6 @@ module.exports = {
   restoreRun,
   scoresByMilestone,
   keyScreens,
+  cleanPrototype,
   kindOf,
 };

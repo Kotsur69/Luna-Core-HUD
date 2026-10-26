@@ -24,6 +24,9 @@
 //   loop hooks      lunasworkHookDeps: graph + codemaps refresh after a merge
 //                   (LW 2.23), i18n card, Lighthouse, reviews, second opinion,
 //                   project skills at a passed gate (LW 2.16)
+//   toggles         LW 2.25a: the Critic's variant pick at the deadline
+//                   (lunasworkVariants.runCriticPick); LW 2.25b: Mati's
+//                   prototype comments appended to DESIGN.md
 //   docs at SHIP    lunasworkShipDocs (LW 2.22a): the docs iteration's cards,
 //                   the CHANGELOG.md commit before it, the vX.Y.Z release
 //   token meter     lunasworkUsage (LW 2.17a): every Director / Playtester /
@@ -60,6 +63,7 @@ const { createHookDeps } = require('./lunasworkHookDeps');
 const { createShipDocsDeps } = require('./lunasworkShipDocs');
 const { createUsageMeter } = require('./lunasworkUsage');
 const { execClaude } = require('./lunasworkCritic');
+const { runCriticPick } = require('./lunasworkVariants');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -223,6 +227,15 @@ function createLunasWorkRuntime(ctx) {
       const op = pack.appendDecisionEntry(line);
       const res = op ? pack.applyWrite(repoPath, op) : { ok: false, error: 'empty entry' };
       if (!res.ok && ctx.log) ctx.log(`[lunaswork] DECISIONS.md not written: ${res.error}`);
+      return res.ok;
+    },
+    // LW 2.25a: nobody picked a design variant by the deadline - the Critic does.
+    pickVariant: (opts) => runCriticPick({ ...opts, env: ctx.env(), runClaude: meter.runner('critic', execClaude) }),
+    // LW 2.25b: Mati's prototype comments, appended to DESIGN.md (never a rewrite).
+    appendDesign: ({ repoPath, text }) => {
+      const op = pack.appendDesign(text);
+      const res = op ? pack.applyWrite(repoPath, op) : { ok: false, error: 'empty append' };
+      if (!res.ok && ctx.log) ctx.log(`[lunaswork] DESIGN.md not written: ${res.error}`);
       return res.ok;
     },
     // C11: what Mati committed by hand while he had the wheel.

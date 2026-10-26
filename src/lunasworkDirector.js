@@ -43,7 +43,13 @@
 //     before SHIP - once the first milestone gate passed, or right away with
 //     a one-milestone ladder - each `legal:<slug>` once, plus the matching
 //     TEST_PLAN.md journeys (lunasworkPack.appendLegalJourneys).
-// Both kinds pass the scope guard and the epic filter: they come from the
+//   - LW 2.25a design variants (opts.designVariants, the project toggle, off
+//     by default): every key screen (DESIGN.md "Key screens" or a mapping row
+//     marked `key`) gets one card per variant, built behind `?variant=`;
+//     screens whose variant cards are all done come back in
+//     autoCards.variants.ready for the Playtester's screenshots
+//     (lunasworkVariants). Off = no variant card, ever.
+// All of them pass the scope guard and the epic filter: they come from the
 // pack itself, not from a model.
 //
 // Always resolves, never rejects.
@@ -62,6 +68,7 @@ const { listSkills } = require('./lunasworkSkills');
 const {
   isAutoCard, isPiiCard, isSeedCard, isLegalCard, PII_MISSING, legalDue, scheduleAutoCards,
 } = require('./lunasworkAutoCards');
+const { isVariantCard } = require('./lunasworkVariants');
 
 const DIRECTOR_EFFORT = 'high';
 const DIRECTOR_BUDGET_USD = 2;
@@ -408,6 +415,7 @@ const cardBrief = (c) => ({
   ...(c.feedback ? { feedback: true } : {}),
   ...(isSeedCard(c) ? { seedData: true } : {}),
   ...(isLegalCard(c) ? { legal: true } : {}),
+  ...(isVariantCard(c) ? { designVariant: true } : {}),
 });
 
 /** What the Director sees of the last runCritic result. */
@@ -431,6 +439,10 @@ function criticBrief(lastCritic) {
 function buildDirectorPrompt({ iteration, docs, cards, lastCritic, gatePassed, limit, epic = null }) {
   const steer = cards.filter((c) => c.steer);
   const run = cards.filter((c) => !c.steer);
+  // LW 2.25a: only when variant cards are on offer (toggle off = the prompt as before).
+  const variantRule = cards.some(isVariantCard)
+    ? ['- Cards marked "designVariant": true build design variants of one key screen behind a ?variant= switch: schedule the variants of a screen together, variant A first (it owns the switch).']
+    : [];
   const epicRule = epic
     ? [`- Active epic (design/ROADMAP.md): "${epic.title}" (epic:${epic.slug}, milestone "${epic.milestone}"). The run cards below belong to it; the roadmap moves to the next epic once they are all done.`]
     : [];
@@ -444,6 +456,7 @@ function buildDirectorPrompt({ iteration, docs, cards, lastCritic, gatePassed, l
     '- Cards marked "feedback": true come right after them: look and bug feedback given while the run goes on.',
     '- Then bugs and blockers on the current milestone, then what moves the current milestone gate. Work for later milestones waits.',
     '- A card marked "seedData": true goes early: the Playtester needs the real data to test real cases. Cards marked "legal": true must be done before SHIP.',
+    ...variantRule,
     `- idea cards: ${gatePassed ? 'allowed - the current milestone gate passed' : 'NOT allowed yet - the current milestone gate has not passed'}.`,
     '- Pick a set that fits one iteration and that builders can do without stepping on each other.',
     `- Scheduling 2 or more cards means a parallel build. Then give contracts (the interfaces between the cards: function / module signatures, data shapes, API routes; kind is one of ${CONTRACT_KINDS.join(', ')}) and ownership: [{path, cardId}], a repo-relative file path or glob (e.g. "src/quote/**") per entry. Every scheduled card, steer cards included, owns at least one path; no path is owned twice; never an absolute path or "..". A broken ownership map throws your whole answer away. With one card, leave both out.`,
@@ -578,6 +591,7 @@ const isStore = (s) => isObj(s) && typeof s.read === 'function';
  *
  * @param {{repoDir:string, runId:string, iteration:number, todoStore:{read:Function},
  *   lastCritic?:object|null, failCounts?:Record<string,number>, holdCards?:number[], decidedCards?:number[],
+ *   designVariants?:boolean,
  *   models?:object, env?:object, limit?:number,
  *   runClaude?:(call:{args:string[], prompt:string, cwd:string, env:object, timeoutMs:number})=>Promise<object>,
  *   log?:(message:string, detail?:unknown)=>void, now?:()=>number, timeoutMs?:number, budgetUsd?:number}} opts
@@ -611,7 +625,7 @@ async function runDirector(opts) {
     contractsWritten: false,
     epic: null,
     epicsTicked: [],
-    autoCards: { created: [], seed: null, legal: null, journeysWritten: false },
+    autoCards: { created: [], seed: null, legal: null, journeysWritten: false, variants: null },
   };
   const fail = (error, detail) => {
     log(`director failed: ${error}`, detail);
@@ -632,7 +646,9 @@ async function runDirector(opts) {
     // LW 2.21a / 2.26: created before the pick, so they are on offer this iteration.
     const auto = scheduleAutoCards(o, tag, readTodos, docs);
     const allTodos = auto.created.length ? normalizeTodos(o.todoStore.read()) : readTodos;
-    const autoCards = { created: auto.created.map((c) => c.at), seed: auto.seed, legal: auto.legal, journeysWritten: auto.journeysWritten };
+    const autoCards = {
+      created: auto.created.map((c) => c.at), seed: auto.seed, legal: auto.legal, journeysWritten: auto.journeysWritten, variants: auto.variants,
+    };
     const roadmap = advanceEpics(o.repoDir, allTodos);
     // Cards held by the decision queue (pending, or rejected) are not on offer.
     const hold = new Set(Array.isArray(o.holdCards) ? o.holdCards.filter(Number.isFinite) : []);

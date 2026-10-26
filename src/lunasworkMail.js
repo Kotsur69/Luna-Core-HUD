@@ -12,6 +12,8 @@
 //     most MAX_IMAGE_BYTES, all together at most MAX_TOTAL_BYTES. Only files
 //     inside the evidence folder of the lap that took them (or the run's) are
 //     read, only real PNG / JPEG bytes are sent; anything else is skipped
+//   - LW 2.25a: a design-variant choice still open goes first, one image per
+//     variant (lunasworkVariants.pendingShots), so Mati can pick from the mail
 //
 // screenshotAttachments() is shared with the run email's screen tour.
 // ============================================================================
@@ -21,6 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 const { keyScreens } = require('./lunasworkRun');
+const { pendingShots } = require('./lunasworkVariants');
 
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 400 * 1024;
@@ -57,23 +60,27 @@ const insideDir = (dir, file) => {
 };
 
 /**
- * Inline screenshot attachments: one per key screen of `laps`, capped.
+ * Inline screenshot attachments: `first` (LW 2.25a: the variant shots), then
+ * one per key screen of `laps`, capped.
  * @param {object} run the run (its evidenceDir bounds what is read)
- * @param {{laps?:object[], max?:number, readImage?:(file:string, max:number)=>Buffer|null}} [opts]
+ * @param {{laps?:object[], max?:number, readImage?:(file:string, max:number)=>Buffer|null,
+ *   first?:{name:string, screenshot:string, n:number}[]}} [opts]
  * @returns {{filename:string, mimeType:string, content:Buffer, name:string, n:number}[]}
  */
 function screenshotAttachments(run, opts = {}) {
   const r = isObj(run) ? run : {};
   const laps = (Array.isArray(opts.laps) ? opts.laps : Array.isArray(r.laps) ? r.laps : []).filter(isObj);
   // The evidence folder is per iteration: a shot is read from its own lap's folder (or the run's) only.
-  const folders = new Map(laps.map((l) => [l.n, l.evidenceDir]));
+  // Every lap of the run names its folder: a variant shot may come from a lap before this milestone's.
+  const folders = new Map([...(Array.isArray(r.laps) ? r.laps : []), ...laps].filter(isObj).map((l) => [l.n, l.evidenceDir]));
   const allowed = (shot) => [folders.get(shot.n), r.evidenceDir]
     .some((dir) => typeof dir === 'string' && path.isAbsolute(dir) && insideDir(dir, shot.screenshot));
   const read = typeof opts.readImage === 'function' ? opts.readImage : readImageFile;
   const max = Number.isInteger(opts.max) && opts.max >= 0 ? Math.min(opts.max, MAX_IMAGES) : MAX_IMAGES;
   const out = [];
   let total = 0;
-  for (const shot of keyScreens(laps)) {
+  const first = Array.isArray(opts.first) ? opts.first.filter((s) => isObj(s) && typeof s.screenshot === 'string' && typeof s.name === 'string') : [];
+  for (const shot of [...first, ...keyScreens(laps)]) {
     if (out.length >= max) break;
     if (!allowed(shot)) continue;
     const content = read(shot.screenshot, MAX_IMAGE_BYTES);
@@ -120,7 +127,9 @@ function createMilestoneMailer(deps) {
       if (!m.enabled(prefs, st.connected)) return { sent: false, skipped: 'off' };
       sent.add(key);
       if (sent.size > MAX_MILESTONE_KEYS) sent.delete(sent.values().next().value);
-      const images = screenshotAttachments(run, { laps: milestoneLaps(run, ctx && ctx.milestone), readImage: deps.readImage });
+      const images = screenshotAttachments(run, {
+        laps: milestoneLaps(run, ctx && ctx.milestone), readImage: deps.readImage, first: pendingShots(run.variants),
+      });
       const email = deps.build(run, { ...ctx, screenshots: images.map((i) => ({ name: i.name, n: i.n, filename: i.filename })) });
       const attachments = images.map(({ filename, mimeType, content }) => ({ filename, mimeType, content }));
       await m.sender.send({ subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) });
