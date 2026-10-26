@@ -32,6 +32,7 @@ const { restoreQueue } = require('./lunasworkDecisions');
 const { restoreFeedback } = require('./lunasworkFeedback');
 const { HANDED } = require('./lunasworkWheel');
 const { appendResult } = require('./lunasworkLighthouse');
+const { cleanLedger } = require('./lunasworkUsage');
 
 const PREPROD = 'preprod';
 const DONE = 'done';
@@ -704,6 +705,8 @@ function restoreRun(raw) {
     quarantine: cleanQuarantine(raw.quarantine),
     // B7: Lighthouse results per iteration (the dashboard trend).
     lighthouse: cleanLighthouse(raw.lighthouse),
+    // LW 2.17a: tokens / cost per role and iteration, phase durations (src/lunasworkUsage.js).
+    usage: cleanLedger(raw.usage),
     // B8: a gate the second opinion disagreed with stays closed until resolved.
     gateHold: phase === DONE ? null : cleanGateHold(raw.gateHold),
     // C11 "Hand me the wheel": asked for (pauses at the end of the iteration),

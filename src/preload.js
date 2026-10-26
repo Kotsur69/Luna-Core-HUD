@@ -407,6 +407,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   lunasworkSteer: (projectId, text) => ipcRenderer.invoke('lunaswork:steer', { projectId, text }),
   /** Opens the current run's latest evidence folder; main resolves and checks the path. */
   lunasworkOpenEvidence: () => ipcRenderer.invoke('lunaswork:openEvidence'),
+  /** LW 2.17a: the current run's HUD dashboard. Promise<{ok, dashboard|null} | {ok:false, reason}>. */
+  lunasworkDashboard: () => ipcRenderer.invoke('lunaswork:dashboard'),
+  /** One image of config/runs/lunaswork-<runId>/ (file relative to it; main refuses anything outside). Promise<{ok, dataUrl} | {ok:false, reason}>. */
+  lunasworkScreenshot: (runId, file) => ipcRenderer.invoke('lunaswork:screenshot', { runId, file }),
   /** "Hand me the wheel": the run pauses at the end of this iteration. runId: the run the panel shows. Promise<{ok, status} | {ok:false, reason}>. */
   lunasworkHandOver: (runId) => ipcRenderer.invoke('lunaswork:handOver', typeof runId === 'string' ? { runId } : {}),
   /** Hands the wheel back (or withdraws the request): manual commits recorded, the run goes on. Same answer. */

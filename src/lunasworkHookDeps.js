@@ -34,6 +34,7 @@ const { runLighthouse } = require('./lunasworkLighthouse');
 const { reviewsDue, runReviews } = require('./lunasworkReviews');
 const { runSecondOpinion } = require('./lunasworkSecondOpinion');
 const { runGateSkills } = require('./lunasworkSkills');
+const { execClaude } = require('./lunasworkCritic');
 
 const GIT_TIMEOUT_MS = 30 * 1000;
 const MAX_GATE_LOG_COMMITS = 200;
@@ -123,13 +124,16 @@ function designPack(repoPath) {
 }
 
 /**
- * @param {{env:()=>object, settings?:()=>object, log?:(line:string)=>void}} ctx
+ * @param {{env:()=>object, settings?:()=>object, log?:(line:string)=>void,
+ *   meter?:(role:string, runClaude:Function)=>Function}} ctx
+ *   meter: wraps a runClaude to book its tokens (LW 2.17a, lunasworkUsage.createUsageMeter().runner)
  * @returns {{refreshGraph:Function, i18n:Function, lighthouse:Function, reviews:Function, skills:Function, secondOpinion:Function}}
  */
 function createHookDeps(ctx) {
   const settings = typeof ctx.settings === 'function' ? ctx.settings : () => settingsStore.readSettings();
   const log = typeof ctx.log === 'function' ? (message) => ctx.log(`[lunaswork] ${message}`) : () => {};
   const graph = createGraphRefresher({ env: ctx.env, log: ctx.log });
+  const metered = (role) => (typeof ctx.meter === 'function' ? { runClaude: ctx.meter(role, execClaude) } : {});
 
   return {
     refreshGraph: (opts) => graph.refreshGraph(opts),
@@ -149,7 +153,7 @@ function createHookDeps(ctx) {
     reviews: async ({ iteration, isGate, runId, repoPath }) => {
       // No review due: no diff to read.
       const diff = reviewsDue(iteration, isGate).length ? await iterationDiff(repoPath, runId, iteration) : '';
-      return runReviews({ iteration, isGate, runId, repoPath, diff, env: ctx.env(), log });
+      return runReviews({ iteration, isGate, runId, repoPath, diff, env: ctx.env(), log, ...metered('reviewer') });
     },
     // LW 2.16: project skills at a passed gate, from the git log since the previous gate.
     skills: async ({ isGate, repoPath, runId, iteration, milestone, models, sinceIteration }) => runGateSkills({

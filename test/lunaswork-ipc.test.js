@@ -571,3 +571,189 @@ test('publicStatus: the wheel only from its known states, handedAt only as a tim
   assert.equal(publicStatus({ ...base, handedAt: -1 }, () => true).handedAt, null);
   assert.equal(publicEvent({ type: 'wheel', status: base }, () => true).type, 'wheel');
 });
+
+// ---- LW 2.17a: dashboard + screenshot evidence IPC --------------------------------------
+
+const { screenshotFile, readScreenshot, dashboardView, MAX_SCREENSHOT_BYTES } = require('../src/lunasworkDashboardView');
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** <runsRoot>/lunaswork-abc123/iter-1/home.png, plus files outside the run folder. */
+function evidenceTree(dir) {
+  const runsRoot = path.join(dir, 'runs');
+  const iter = path.join(runsRoot, 'lunaswork-abc123', 'iter-1');
+  fs.mkdirSync(iter, { recursive: true });
+  fs.writeFileSync(path.join(iter, 'home.png'), PNG);
+  fs.writeFileSync(path.join(iter, 'notes.txt'), 'x');
+  fs.mkdirSync(path.join(runsRoot, 'lunaswork-other1'), { recursive: true });
+  fs.writeFileSync(path.join(runsRoot, 'lunaswork-other1', 'x.png'), PNG);
+  fs.writeFileSync(path.join(dir, 'secret.png'), PNG);
+  return { runsRoot, iter };
+}
+
+test('screenshotFile serves an image inside the run folder only', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-shot-'));
+  try {
+    const { runsRoot, iter } = evidenceTree(dir);
+    const ok = screenshotFile({ runId: 'abc123', file: 'iter-1/home.png' }, runsRoot);
+    assert.equal(ok.mime, 'image/png');
+    assert.equal(ok.file, fs.realpathSync(path.join(iter, 'home.png')));
+    // Windows separators are fine as long as the path stays inside.
+    assert.ok(screenshotFile({ runId: 'abc123', file: 'iter-1\\home.png' }, runsRoot));
+    const refused = [
+      { runId: 'abc123', file: '../secret.png' },
+      { runId: 'abc123', file: 'iter-1/../../secret.png' },
+      { runId: 'abc123', file: '../lunaswork-other1/x.png' },
+      { runId: 'abc123', file: '..\\..\\secret.png' },
+      { runId: 'abc123', file: path.join(dir, 'secret.png') },
+      { runId: 'abc123', file: '/etc/passwd.png' },
+      { runId: 'abc123', file: 'C:secret.png' },
+      { runId: 'abc123', file: 'iter-1/notes.txt' },
+      { runId: 'abc123', file: 'iter-1/missing.png' },
+      { runId: 'abc123', file: 'iter-1' },
+      { runId: 'abc123', file: 'iter-1/home.png\u0000.png' },
+      { runId: 'abc123', file: '' },
+      { runId: 'abc123', file: 7 },
+      { runId: '../runs', file: 'x.png' },
+      { runId: 'ABC123', file: 'iter-1/home.png' },
+      { runId: 'abc/123', file: 'iter-1/home.png' },
+      { runId: 'nope99', file: 'iter-1/home.png' },
+      null,
+      'iter-1/home.png',
+    ];
+    for (const req of refused) assert.equal(screenshotFile(req, runsRoot), null, JSON.stringify(req));
+    assert.equal(screenshotFile({ runId: 'abc123', file: 'iter-1/home.png' }, 'relative/runs'), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('screenshotFile refuses symlinks and junctions, even ones pointing inside', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-shot-link-'));
+  try {
+    const { runsRoot, iter } = evidenceTree(dir);
+    // A folder junction leading out of the run folder (no admin rights needed on Windows).
+    fs.symlinkSync(dir, path.join(iter, 'out'), 'junction');
+    assert.equal(screenshotFile({ runId: 'abc123', file: 'iter-1/out/secret.png' }, runsRoot), null);
+    try {
+      fs.symlinkSync(path.join(dir, 'secret.png'), path.join(iter, 'leak.png'));
+      fs.symlinkSync(path.join(iter, 'home.png'), path.join(iter, 'alias.png'));
+    } catch {
+      // File symlinks need Developer Mode or admin rights on Windows.
+      t.diagnostic('file symlinks not available here; the junction case was checked');
+      return;
+    }
+    assert.equal(screenshotFile({ runId: 'abc123', file: 'iter-1/leak.png' }, runsRoot), null);
+    assert.equal(screenshotFile({ runId: 'abc123', file: 'iter-1/alias.png' }, runsRoot), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('screenshotFile refuses NTFS streams and hardlinks; readScreenshot wants real image bytes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-shot-hard-'));
+  try {
+    const { runsRoot, iter } = evidenceTree(dir);
+    assert.equal(screenshotFile({ runId: 'abc123', file: 'iter-1/notes.txt:x.png' }, runsRoot), null);
+    assert.equal(screenshotFile({ runId: 'abc123', file: 'iter-1/home.png::$DATA' }, runsRoot), null);
+    fs.linkSync(path.join(dir, 'secret.png'), path.join(iter, 'hard.png'));
+    assert.equal(screenshotFile({ runId: 'abc123', file: 'iter-1/hard.png' }, runsRoot), null);
+    // A text file named .png is no screenshot.
+    fs.writeFileSync(path.join(iter, 'fake.png'), 'not an image');
+    assert.ok(screenshotFile({ runId: 'abc123', file: 'iter-1/fake.png' }, runsRoot), 'the path itself is fine');
+    assert.equal(readScreenshot({ runId: 'abc123', file: 'iter-1/fake.png' }, runsRoot), null);
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
+    fs.writeFileSync(path.join(iter, 'shot.jpg'), jpeg);
+    assert.equal(readScreenshot({ runId: 'abc123', file: 'iter-1/shot.jpg' }, runsRoot), `data:image/jpeg;base64,${jpeg.toString('base64')}`);
+    // Over the size cap.
+    fs.writeFileSync(path.join(iter, 'huge.png'), Buffer.concat([PNG, Buffer.alloc(MAX_SCREENSHOT_BYTES)]));
+    assert.equal(readScreenshot({ runId: 'abc123', file: 'iter-1/huge.png' }, runsRoot), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lunaswork:screenshot returns a data URL for an image of the current run and refuses anything else', async () => {
+  const controller = fakeController();
+  const s = panelSetup({ controller });
+  const { iter } = evidenceTree(s.dir);
+  assert.ok(s.ipc.channels().includes('lunaswork:screenshot'));
+  const req = { runId: 'abc123', file: 'iter-1/home.png' };
+  assert.deepEqual(await s.ipc.invoke('lunaswork:screenshot', req), { ok: false, reason: 'bad-file' }, 'no run -> nothing served');
+  controller.snapshot = () => ({ id: 'abc123', projectId: 'game' });
+  const res = await s.ipc.invoke('lunaswork:screenshot', req);
+  assert.equal(res.ok, true);
+  assert.equal(res.dataUrl, `data:image/png;base64,${PNG.toString('base64')}`);
+  const refused = [
+    undefined,
+    {},
+    { runId: 'abc123', file: '../../secret.png' },
+    { runId: 'abc123', file: path.join(iter, 'home.png') },
+    // Another (older) run's folder, though it exists and holds a PNG.
+    { runId: 'other1', file: 'x.png' },
+  ];
+  for (const r of refused) {
+    assert.deepEqual(await s.ipc.invoke('lunaswork:screenshot', r), { ok: false, reason: 'bad-file' }, JSON.stringify(r));
+  }
+  // The current run of a project that is no longer registered.
+  controller.snapshot = () => ({ id: 'abc123', projectId: 'nope' });
+  assert.deepEqual(await s.ipc.invoke('lunaswork:screenshot', req), { ok: false, reason: 'bad-file' });
+  s.done();
+});
+
+test('lunaswork:dashboard: the run view with usage, timeline, cards and in-run screenshots only', async () => {
+  const controller = fakeController();
+  const s = panelSetup({ controller });
+  assert.deepEqual(await s.ipc.invoke('lunaswork:dashboard'), { ok: true, dashboard: null }, 'no snapshot seam -> no run');
+  const runDir = path.join(s.dir, 'runs', 'lunaswork-abc123');
+  controller.snapshot = () => ({
+    id: 'abc123',
+    projectId: 'game',
+    phase: 'building',
+    iteration: 2,
+    milestone: 'm1',
+    history: [{ n: 1, milestone: 'm1', score: 40 }, { n: 2, milestone: 'm1', score: 55 }],
+    laps: [{
+      n: 1, milestone: 'm1', score: 40, cardsOpened: 2, cardsClosed: [5], selfCheck: 'green', criticVerdict: 'continue', rolledBack: true,
+      screens: [
+        { name: 'home-desktop', screenshot: path.join(runDir, 'iter-1', 'home.png') },
+        { name: 'leak-desktop', screenshot: path.join(s.dir, 'secret.png') },
+      ],
+    }],
+    usage: {
+      total: { calls: 1, inputTokens: 10, costUsd: 0.1 },
+      byRole: { director: { calls: 1, inputTokens: 10, costUsd: 0.1 } },
+      iterations: [{ n: 1, byRole: {}, phases: { building: 1000 } }],
+    },
+    lighthouse: [{ iteration: 1, results: [] }],
+    evidenceDir: runDir,
+  });
+  const res = await s.ipc.invoke('lunaswork:dashboard');
+  assert.equal(res.ok, true);
+  const d = res.dashboard;
+  assert.equal(d.runId, 'abc123');
+  assert.equal(d.projectId, 'game');
+  assert.deepEqual(d.scores, { m1: [{ n: 1, score: 40 }, { n: 2, score: 55 }] });
+  assert.equal(d.usage.byRole.director.inputTokens, 10);
+  assert.deepEqual(d.cards, { series: [{ n: 1, opened: 2, closed: 1 }], opened: 2, closed: 1 });
+  assert.equal(d.timeline[0].rolledBack, true);
+  assert.deepEqual(d.timeline[0].phases, { building: 1000 });
+  assert.deepEqual(d.screenshots, [{ name: 'home', n: 1, file: 'iter-1/home.png' }], 'a shot outside the run folder never leaves main');
+  assert.equal(d.shipEstimate, null);
+  assert.equal(JSON.stringify(d).includes(s.dir), false, 'no absolute path reaches the renderer');
+  controller.snapshot = () => {
+    throw new Error('boom');
+  };
+  assert.deepEqual(await s.ipc.invoke('lunaswork:dashboard'), { ok: false, reason: 'failed' });
+  s.done();
+});
+
+test('dashboardView: no view for a malformed run; unknown project, phase and verdict dropped', () => {
+  assert.equal(dashboardView(null, { isKnownProject: () => true }), null);
+  assert.equal(dashboardView({ id: '../x' }, { isKnownProject: () => true }), null);
+  const v = dashboardView({ id: 'abc', projectId: 'secret', phase: 'evil', verdict: 'nope' }, { isKnownProject: () => false });
+  assert.equal(v.projectId, null);
+  assert.equal(v.phase, null);
+  assert.equal(v.verdict, null);
+  assert.deepEqual(v.screenshots, [], 'no runs root -> no screenshots');
+});
