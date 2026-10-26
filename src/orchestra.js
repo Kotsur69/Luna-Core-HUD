@@ -203,6 +203,31 @@ function withStallNote(text, reason, detail) {
 }
 
 /**
+ * Luna's Work hook: the to-dos a plan is built from when the caller names
+ * the cards itself. Each entry is a card's `at` or a card object; only open,
+ * non-manual store cards count (their `at` is what gets ticked later), in
+ * the given order, each once. A given object's fields (e.g. a builder brief
+ * in `details`) override the stored card's.
+ * @param {Array<object>} allOpen open, non-manual store cards
+ * @param {Array<number|object>} cards
+ * @returns {Array<object>}
+ */
+function givenCards(allOpen, cards) {
+  const open = new Map(allOpen.map((t) => [t.at, t]));
+  const out = [];
+  const seen = new Set();
+  for (const c of cards) {
+    const isObject = !!c && typeof c === 'object';
+    const at = isObject ? c.at : c;
+    if (!Number.isFinite(at) || seen.has(at) || !open.has(at)) continue;
+    seen.add(at);
+    const stored = open.get(at);
+    out.push(isObject ? { ...stored, ...c, at, text: typeof c.text === 'string' && c.text ? c.text : stored.text } : stored);
+  }
+  return out;
+}
+
+/**
  * @param {{
  *   runPlanner: Function, addWorktree: Function, createSession: Function,
  *   readTodos: Function, dirtyCount: Function, writeBrief: Function,
@@ -345,6 +370,11 @@ function createOrchestra(deps) {
   });
   // Set when a run settles on its own; only such a run may shut the PC down.
   let settledFinalize = false;
+  // Luna's Work hook: makePlan's optional ctx.onRunSettled, bound to the plan
+  // it made and fired once when that run's finalize goes idle. Not saved:
+  // after a restart Luna's Work resumes on its own.
+  /** @type {null|{planId:string, fn:Function}} */
+  let runSettledHook = null;
   const background = (promise, where) =>
     promise.catch((err) => onRunEvent('error', { where, message: err instanceof Error ? err.message : String(err) }));
 
@@ -535,7 +565,12 @@ function createOrchestra(deps) {
   /**
    * Runs the planner for one project. Replaces any previous plan, except one
    * whose run still has a worker going.
-   * @param {{projectId:string|null, repoPath:string, profileId:string, env:object}} ctx
+   * Two optional hooks exist for Luna's Work; God Mode never sets them and
+   * is unchanged without them: `cards` (card `at`s or card objects, see
+   * givenCards) replaces the open-card / todoAts selection, and
+   * `onRunSettled(result)` is called once when this plan's run settles.
+   * @param {{projectId:string|null, repoPath:string, profileId:string, env:object,
+   *   todoAts?:number[]|null, cards?:Array<number|object>, onRunSettled?:Function}} ctx
    */
   async function makePlan(ctx) {
     if (isBusy()) return { ok: false, error: 'busy' };
@@ -544,7 +579,7 @@ function createOrchestra(deps) {
     const allOpen = deps.readTodos(ctx.projectId).filter((t) => !t.done && t.manual !== true);
     if (!allOpen.length) return { ok: false, error: 'noTodos' };
     // The picker's selection rides in ctx, so a limit-wait replan keeps it.
-    const openTodos = pickTodos(allOpen, ctx.todoAts);
+    const openTodos = Array.isArray(ctx.cards) ? givenCards(allOpen, ctx.cards) : pickTodos(allOpen, ctx.todoAts);
     if (!openTodos.length) return { ok: false, error: 'noneSelected' };
     // A manual (re-)plan replaces a pending wait; the waiter's own replan
     // is in state 'planning' and keeps it.
@@ -632,6 +667,7 @@ function createOrchestra(deps) {
           failure: null,
         })),
       };
+      runSettledHook = typeof ctx.onRunSettled === 'function' ? { planId: plan.id, fn: ctx.onRunSettled } : null;
       commit();
       return { ok: true, plan: view() };
     } finally {
@@ -830,11 +866,30 @@ function createOrchestra(deps) {
    * package, finalize or another God Mode run still going.
    */
   function afterFinalize() {
+    fireRunSettled();
     if (!settledFinalize || !plan) return;
     settledFinalize = false;
     if (!plan.settled || plan.killed) return;
     const busyNow = isBusy() || plan.packages.some(sup.isActive) || !!(deps.otherRunsActive && deps.otherRunsActive());
     background(powerFlow.afterFinalize({ busy: busyNow }), 'shutdown');
+  }
+
+  /**
+   * Luna's Work hook: the plan's onRunSettled, at most once per plan, with
+   * the integration (merge / self-check) result. Cleared before the call so
+   * a later idle never repeats it; a throw or rejection is only logged.
+   */
+  function fireRunSettled() {
+    const hook = runSettledHook;
+    if (!hook || !plan || hook.planId !== plan.id) return;
+    runSettledHook = null;
+    const result = { planId: plan.id, killed: plan.killed, integration: { ...plan.integration }, plan: view() };
+    const failed = (err) => log(`[orchestra] onRunSettled failed: ${err instanceof Error ? err.message : String(err)}`);
+    try {
+      Promise.resolve(hook.fn(result)).catch(failed);
+    } catch (err) {
+      failed(err);
+    }
   }
 
   /** Launches whatever is ready, while slots are free. Re-entrancy safe. */
