@@ -475,6 +475,8 @@ function createOrchestra(deps) {
         escalated: p.escalated,
         prUrl: p.prUrl,
         merged: p.merged,
+        // Repo-relative paths the package changed (Luna's Work's bug-test rule).
+        touched: p.touched || [],
         cleaned: p.cleaned,
         depMerge: p.depMerge || null,
         autoRetries: p.autoRetries || 0,

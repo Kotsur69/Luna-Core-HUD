@@ -5,7 +5,8 @@
 // no IO, nothing kept between calls.
 //
 //   risky cards   riskReason / isRiskyCard, conflictedPaths (God Mode merge)
-//   landed cards  landedCards - only merged work counts as a closed card
+//   landed cards  landedCards - only merged work counts as a closed card;
+//                 landedFiles - what a card's merged work changed (idea #3)
 //   models        parseModelOverride, effectiveModels (run > project > global)
 //   self-check    checkCommandFor (the profile's, else God Mode's setting)
 //   SHIP          shipAgrees (the second, fresh Playtester)
@@ -147,6 +148,23 @@ function landedCards(settled, cards) {
   return (Array.isArray(cards) ? cards : []).filter((c) => names.has(c.text) || names.has(String(c.at))).map((c) => c.at);
 }
 
+/**
+ * The paths the merged packages of one card changed (God Mode's `touched`),
+ * for the bug-test rule (idea #3). Null when no merged package names the card.
+ * @param {{plan?:object}|null} settled the build result (onRunSettled)
+ * @param {{at:number, text:string}} card
+ * @returns {string[]|null}
+ */
+function landedFiles(settled, card) {
+  const s = isObj(settled) ? settled : {};
+  const packages = isObj(s.plan) && Array.isArray(s.plan.packages) ? s.plan.packages : [];
+  const names = (p) => (Array.isArray(p.todos) ? p.todos : []);
+  const mine = packages.filter((p) => isObj(p) && p.merged === true && isObj(card) && (names(p).includes(card.text) || names(p).includes(String(card.at))));
+  if (!mine.length) return null;
+  const files = mine.flatMap((p) => (Array.isArray(p.touched) ? p.touched : [])).filter((f) => typeof f === 'string' && f);
+  return [...new Set(files)].slice(0, MAX_CONFLICT_FILES);
+}
+
 // ---- models and the check command ---------------------------------------------------
 
 /** A partial {role: choice} map, or null when anything in it is unknown. */
@@ -211,13 +229,25 @@ function shipAgrees(pass, gate) {
 
 // ---- stored run ------------------------------------------------------------------
 
+const CARD_KINDS = ['bug', 'feel', 'missing', 'idea'];
+
+/** A card's kind: its own field, else its `kind:<x>` tag (the Critic's), else null. */
+function kindOf(raw) {
+  if (CARD_KINDS.includes(raw.kind)) return raw.kind;
+  const tag = (Array.isArray(raw.tags) ? raw.tags : []).find((t) => typeof t === 'string' && t.startsWith('kind:'));
+  return tag && CARD_KINDS.includes(tag.slice(5)) ? tag.slice(5) : null;
+}
+
 function cleanCard(raw) {
   if (!isObj(raw) || !Number.isFinite(raw.at)) return null;
   const files = cardFiles(raw).slice(0, MAX_ITEMS).map((f) => f.slice(0, MAX_PATH_CHARS));
   const acceptance = Array.isArray(raw.acceptance) ? raw.acceptance.filter((a) => typeof a === 'string').slice(0, MAX_ITEMS) : [];
+  const kind = kindOf(raw);
   return {
     at: raw.at,
     text: str(raw.text, MAX_CARD_TEXT_CHARS) || '',
+    // The bug-test rule (idea #3) reads it at finish.
+    ...(kind ? { kind } : {}),
     ...(str(raw.details, MAX_DETAILS_CHARS) ? { details: str(raw.details, MAX_DETAILS_CHARS) } : {}),
     ...(files.length ? { files } : {}),
     ...(str(raw.size, 10) ? { size: str(raw.size, 10) } : {}),
@@ -275,6 +305,8 @@ function cleanCritic(raw) {
     allPassed: raw.allPassed === true,
     cardsOpened: countOf(raw.cardsOpened !== undefined ? raw.cardsOpened : cards.created),
     cardsUpdated: countOf(raw.cardsUpdated !== undefined ? raw.cardsUpdated : cards.updated),
+    // B4: the stuck cards this pass split (saved, so a restart never asks about them).
+    split: Array.isArray(raw.split) ? raw.split.filter(Number.isFinite).slice(0, MAX_ITEMS) : [],
     decisions: cleanDecisions(raw.decisions),
     ...(str(raw.error, 100) ? { error: str(raw.error, 100) } : {}),
   };
@@ -290,6 +322,7 @@ function cleanReport(raw) {
     scores: keepList(raw.scores),
     journeys: keepList(raw.journeys),
     screens: keepList(raw.screens),
+    checks: keepList(raw.checks),
     warnings: keepList(raw.warnings),
     errors: keepList(raw.errors),
   };
@@ -394,7 +427,8 @@ function buildLap(current, record, extra = {}) {
     milestone: record.milestone,
     score: record.score,
     cardsPlanned: (c.cards || []).length,
-    cardsClosed: build.closed,
+    // B1: a card counts as closed once the Playtester confirmed it.
+    cardsClosed: isObj(c.verify) ? c.verify.closed : build.closed,
     cardsOpened: critic.cardsOpened,
     cardsUpdated: critic.cardsUpdated,
     selfCheck: record.selfCheck,
@@ -421,11 +455,52 @@ function cleanLaps(raw) {
   return [...byN.values()].sort((a, b) => a.n - b.n).slice(-MAX_LAPS);
 }
 
-const BUILD_KEYS = { selfCheck: 'str', error: 'str', integrationBranch: 'str', fixups: 'num', closed: 'ats', skipped: 'bool' };
+// closed = cards whose work landed on main; built = of those, the ones now
+// waiting for the Playtester (B1); noTest = bug cards kept open (idea #3).
+const BUILD_KEYS = {
+  selfCheck: 'str', error: 'str', integrationBranch: 'str', fixups: 'num', closed: 'ats', built: 'ats', noTest: 'ats', skipped: 'bool',
+};
 const PASS_KEYS = { ok: 'bool', agrees: 'bool', error: 'str', model: 'str', reason: 'str' };
+// B1: what the Playtester's pass did to the built cards; failed = this
+// iteration's cards that ended open (B4 counts them).
+const VERIFY_KEYS = { closed: 'ats', reopened: 'ats', waiting: 'ats', failed: 'ats' };
+const MAX_QUARANTINE = 50;
 
 function emptyCurrent() {
-  return { cards: [], notes: null, planId: null, build: null, launch: null, report: null, playtest: null, critic: null, ship: null, checkpoint: null };
+  return {
+    cards: [], notes: null, planId: null, build: null, launch: null, report: null, playtest: null, verify: null,
+    critic: null, ship: null, replay: null, checkpoint: null,
+  };
+}
+
+/** B9: the journeys a same-code replay saw ({name, passed}), or null. */
+function cleanReplay(raw) {
+  if (!isObj(raw) || !Array.isArray(raw.journeys)) return null;
+  return {
+    ok: raw.ok === true,
+    journeys: raw.journeys
+      .filter((j) => isObj(j) && typeof j.name === 'string' && j.name && typeof j.passed === 'boolean')
+      .slice(0, MAX_ITEMS)
+      .map((j) => ({ name: j.name.slice(0, 200), passed: j.passed })),
+  };
+}
+
+/** B4: failed iterations per card `at`. */
+function cleanFailCounts(raw) {
+  const out = {};
+  if (!isObj(raw)) return out;
+  for (const [at, n] of Object.entries(raw)) if (Number.isFinite(Number(at)) && Number.isInteger(n) && n > 0) out[at] = n;
+  return out;
+}
+
+/** B9: the run's quarantined (flaky) tests, one entry per name. */
+function cleanQuarantine(raw) {
+  const byName = new Map();
+  for (const q of Array.isArray(raw) ? raw : []) {
+    if (!isObj(q) || typeof q.name !== 'string' || !q.name || byName.has(q.name)) continue;
+    byName.set(q.name, { name: q.name.slice(0, 200), n: Number.isInteger(q.n) ? q.n : 0, ...(Number.isFinite(q.card) ? { card: q.card } : {}) });
+  }
+  return [...byName.values()].slice(-MAX_QUARANTINE);
 }
 
 function cleanCurrent(raw) {
@@ -440,8 +515,10 @@ function cleanCurrent(raw) {
     launch: cleanSmall(c.launch, { ok: 'bool', error: 'str' }),
     report: cleanReport(c.report),
     playtest: cleanSmall(c.playtest, PASS_KEYS),
+    verify: cleanSmall(c.verify, VERIFY_KEYS),
     critic: cleanCritic(c.critic),
     ship: cleanSmall(c.ship, PASS_KEYS),
+    replay: cleanReplay(c.replay),
     // Saved before the iteration ends: a restart never tags or reverts twice.
     checkpoint: cleanCheckpoint(c.checkpoint),
   };
@@ -500,6 +577,9 @@ function restoreRun(raw) {
     laps: cleanLaps(raw.laps),
     // The decision queue (lunasworkDecisions.js): pending ones survive a restart.
     decisions: restoreQueue(raw.decisions),
+    // B4: failed iterations per card; B9: quarantined flaky tests, per run.
+    failCounts: cleanFailCounts(raw.failCounts),
+    quarantine: cleanQuarantine(raw.quarantine),
     planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
       .filter((id) => typeof id === 'string' && id && id.length <= 100)
       .slice(-MAX_PLAN_IDS),
@@ -527,10 +607,12 @@ module.exports = {
   MAX_TEXT_CHARS,
   BUILD_KEYS,
   PASS_KEYS,
+  VERIFY_KEYS,
   riskReason,
   isRiskyCard,
   conflictedPaths,
   landedCards,
+  landedFiles,
   parseModelOverride,
   effectiveModels,
   checkCommandFor,
@@ -541,6 +623,7 @@ module.exports = {
   cleanCritic,
   cleanReport,
   cleanSmall,
+  cleanReplay,
   cleanRollback,
   cleanCheckpoint,
   buildLap,

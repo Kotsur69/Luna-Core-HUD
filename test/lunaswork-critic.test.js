@@ -553,3 +553,60 @@ test('execClaude resolves when exec throws synchronously', async () => {
   const res = await C.execClaude({ args: [], prompt: 'x', cwd: os.tmpdir(), env: {}, timeoutMs: 1000, execImpl });
   assert.equal(res.error, 'failed');
 });
+
+// ---- B4: stuck cards are split; B1: built cards are not rewritten ------------------
+
+test('the Critic splits a stuck card into pieces and closes it as split (B4)', async () => {
+  const store = memStore([
+    { text: 'Quote PDF export', done: false, at: 20, tags: [RUN_TAG, 'kind:missing', 'sev:high'], details: 'Export the quote as PDF.' },
+  ]);
+  const raw = critique({
+    cards: [
+      card({ kind: 'missing', text: 'PDF export: layout', splitsCardId: 20 }),
+      card({ kind: 'missing', text: 'PDF export: save dialog', splitsCardId: 20 }),
+    ],
+  });
+  const claude = fakeClaude(envelope(raw));
+  const res = await C.runCritic(baseOpts({ todoStore: store, runClaude: claude.run, stuckCards: [20] }));
+  assert.match(claude.calls[0].prompt, /Stuck cards to split/);
+  assert.deepEqual(res.split, [20]);
+  const stuck = store.list.find((c) => c.at === 20);
+  assert.equal(stuck.done, true);
+  assert.ok(stuck.tags.includes('split'));
+  assert.match(stuck.details, /Split by the Critic into 2 smaller cards/);
+  assert.deepEqual(res.cards.created.map((c) => c.text), ['PDF export: layout', 'PDF export: save dialog']);
+});
+
+test('a split of a card that is not stuck is refused and creates a plain card (B4)', async () => {
+  const store = memStore([{ text: 'Quote PDF export', done: false, at: 20, tags: [RUN_TAG, 'kind:missing', 'sev:high'] }]);
+  const raw = critique({ cards: [card({ text: 'PDF export: layout', splitsCardId: 20 })] });
+  const res = await C.runCritic(baseOpts({ todoStore: store, runClaude: fakeClaude(envelope(raw)).run }));
+  assert.deepEqual(res.split, []);
+  assert.equal(store.list.find((c) => c.at === 20).done, false);
+  assert.ok(res.warnings.some((w) => w.code === 'notStuck' && w.at === 20));
+});
+
+test('validateCritique caps the pieces of one split and drops a cut split whole (B4)', () => {
+  const pieces = Array.from({ length: 6 }, (_v, i) => card({ text: `piece ${i}`, splitsCardId: 20 }));
+  const out = C.validateCritique(critique({ cards: pieces }), { stuck: new Set([20]) });
+  assert.ok(out.warnings.some((w) => w.code === 'tooManyPieces' && w.at === 20));
+  assert.ok(out.cards.length <= 4);
+  assert.ok(out.cards.every((c) => c.splitsCardId === 20 && c.updatesCardId === null));
+});
+
+test('a piece never rewrites another card, even with updatesCardId set (B4)', () => {
+  const out = C.validateCritique(critique({ cards: [card({ text: 'piece', splitsCardId: 20, updatesCardId: 21 })] }), {
+    stuck: new Set([20]),
+    updatable: new Set([21]),
+  });
+  assert.equal(out.cards[0].splitsCardId, 20);
+  assert.equal(out.cards[0].updatesCardId, null);
+});
+
+test('a built card is not rewritten by the Critic: it waits for the Playtester (B1)', () => {
+  const store = memStore([{ text: 'built card', done: false, state: 'built', at: 30, tags: [RUN_TAG, 'kind:feel', 'sev:low'] }]);
+  const res = C.applyCards(store, [{ ...card({ text: 'rewrite 30' }), updatesCardId: 30 }], RUN_TAG);
+  assert.equal(res.updated.length, 0);
+  assert.equal(store.list.find((c) => c.at === 30).text, 'built card');
+  assert.ok(res.warnings.some((w) => w.code === 'notUpdatable'));
+});

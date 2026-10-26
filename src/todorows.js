@@ -35,6 +35,11 @@ const MODELS = ['sonnet', 'opus'];
 const MAX_TAGS = 10;
 const TAG_RE = /^[a-z0-9][a-z0-9:_-]{0,39}$/;
 const STEER_TAG = 'steer';
+// Card states beyond open / done (docs/LUNAS_WORK_PLAN.md B1): a Luna's Work
+// card whose work is merged but not yet confirmed in the running app is
+// `built` - still open (done: false) until the Playtester confirms it.
+const BUILT_STATE = 'built';
+const CARD_STATES = [BUILT_STATE];
 
 /** Trimmed, capped string, or null when there is nothing usable. */
 function cleanString(raw, max) {
@@ -124,6 +129,8 @@ function normalizeCardFields(raw) {
     // it alone. Stored only when true, so a plain item gains no key.
     manual: raw.manual === true ? true : null,
     tags: cleanTags(raw.tags),
+    // Only an open card can be built: ticking it done ends the state.
+    state: raw.done !== true && CARD_STATES.includes(raw.state) ? raw.state : null,
   };
   return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null));
 }
@@ -198,4 +205,6 @@ module.exports = {
   MAX_TEXT_CHARS,
   MAX_TAGS,
   STEER_TAG,
+  BUILT_STATE,
+  CARD_STATES,
 };
