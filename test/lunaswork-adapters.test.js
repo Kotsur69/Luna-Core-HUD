@@ -120,6 +120,54 @@ test('a crash before ready rejects with the exit code and does not poll forever'
   assert.equal(world.execCalls.length, 0, 'nothing left to kill');
 });
 
+// ---- LW 2.21a: seed before the Playtester -----------------------------------------------
+
+/** A world whose spawn exits the seed command with `seedCode`; the app child stays up. */
+function seedWorld(seedCode, statuses = [200]) {
+  const world = fakeWorld({ statuses });
+  const spawn = world.opts.spawn;
+  world.order = [];
+  world.opts.spawn = (cmd, options) => {
+    const child = spawn(cmd, options);
+    world.order.push(cmd);
+    if (cmd === 'npm run seed') setImmediate(() => child.emit('exit', seedCode, null));
+    return child;
+  };
+  return world;
+}
+
+test('LW 2.21a: the seedCommand runs to completion in the project dir before the app starts', async () => {
+  const world = seedWorld(0);
+  const adapter = A.createAdapter('web', world.opts);
+  const result = await adapter.start({ ...goodProfile, seedCommand: 'npm run seed' });
+
+  assert.deepEqual(result, { url: 'http://localhost:5173' });
+  assert.deepEqual(world.order, ['npm run seed', 'npm run dev'], 'seed first, then the app');
+  assert.equal(world.spawns[0].options.cwd, world.opts.projectDir);
+  assert.equal(world.spawns[0].options.shell, true);
+  await adapter.stop();
+  const log = fs.readFileSync(path.join(adapter.evidenceDir, A.SERVER_LOG), 'utf8');
+  assert.match(log, /seed \$ npm run seed/);
+  assert.match(log, /seed exited code=0/);
+});
+
+test('LW 2.21a: a failing seed fails the start and the app is never launched', async () => {
+  const world = seedWorld(2);
+  const adapter = A.createAdapter('web', world.opts);
+
+  await assert.rejects(adapter.start({ ...goodProfile, seedCommand: 'npm run seed' }), /seed command exited with code 2/);
+  assert.deepEqual(world.order, ['npm run seed'], 'no app process');
+  assert.equal(world.fetches, 0, 'never polled');
+});
+
+test('LW 2.21a: without a seedCommand only the app is spawned', async () => {
+  const world = seedWorld(0);
+  const adapter = A.createAdapter('web', world.opts);
+  await adapter.start(goodProfile);
+  assert.deepEqual(world.order, ['npm run dev']);
+  await adapter.stop();
+});
+
 test('stdout and stderr go to server.log in the evidence dir', async () => {
   const world = fakeWorld({
     statuses: [null, 200],

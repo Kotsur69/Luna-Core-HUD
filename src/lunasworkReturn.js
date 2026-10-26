@@ -13,6 +13,10 @@
 //                                   deleted feature > DESIGN change, newest
 //                                   first within a rank
 //   ## Rollbacks                    every rollback, why, what was reverted
+//   ## Legal text - DRAFT           LW 2.26: the repo files that carry the
+//                                   "DRAFT - check before publishing" marker
+//                                   (lunasworkLegal.findDraftFiles, passed in
+//                                   by lunasworkReport); only when there are any
 //   ## Screen tour                  one screenshot per key screen
 //                                   (lunasworkRun.keyScreens) with a caption
 //
@@ -27,6 +31,7 @@
 const path = require('path');
 const { needsDecision } = require('./lunasworkDecisions');
 const { keyScreens } = require('./lunasworkRun');
+const { LEGAL_DRAFT_MARKER } = require('./lunasworkLegal');
 
 // The risky kinds, riskiest first (after "taken by default").
 const RISK_KINDS = Object.freeze(['dependency', 'migration', 'featureDelete', 'designChange']);
@@ -39,6 +44,7 @@ const KIND_LABEL = Object.freeze({
 const DEFAULT_LIMIT = 10;
 const MAX_LINE = 300;
 const MAX_CHANGES_PER_LAP = 15;
+const MAX_LEGAL_DRAFTS = 50;
 // Queue answers carry clock times, Critic lines only an iteration number:
 // lifted past any iteration so "newest first" keeps them in their own order.
 const CLOCK_OFFSET = 1e9;
@@ -200,10 +206,25 @@ function releaseLines(run) {
   return ['## Docs and release', '', `- Docs iteration ${sd.n}: ${landed}/${cards} cards landed (README, user guide, release prep)`, line, ''];
 }
 
+/** LW 2.26: the legal drafts Mati must have checked before the app goes public. */
+function legalLines(drafts) {
+  const files = (Array.isArray(drafts) ? drafts : []).filter((f) => typeof f === 'string' && f).slice(0, MAX_LEGAL_DRAFTS);
+  if (!files.length) return [];
+  return [
+    `## Legal text - ${LEGAL_DRAFT_MARKER}`,
+    '',
+    `These files hold legal text (privacy policy, cookie consent, data export, deletion) marked "${LEGAL_DRAFT_MARKER}". Luna's Work wrote it as a draft, not legal advice: have it checked, fill in the placeholders and remove the marker before the app goes public.`,
+    '',
+    ...files.map((f) => `- \`${oneLine(f, 200).replace(/`/g, "'")}\``),
+    '',
+  ];
+}
+
 /**
  * The return pack as Markdown.
  * @param {object} run the finished run
- * @param {{forEmail?:boolean}} [opts]
+ * @param {{forEmail?:boolean, legalDrafts?:string[]}} [opts] legalDrafts = repo-relative
+ *   files with the DRAFT marker (lunasworkLegal.findDraftFiles)
  * @returns {string}
  */
 function buildReturnPack(run, opts = {}) {
@@ -228,6 +249,7 @@ function buildReturnPack(run, opts = {}) {
     ...rollbacksSection(laps),
     '',
     ...releaseLines(r),
+    ...legalLines(opts.legalDrafts),
     '## Screen tour',
     '',
     ...screensSection(laps, opts.forEmail === true),

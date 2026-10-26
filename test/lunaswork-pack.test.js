@@ -376,3 +376,96 @@ test('writeContracts: nothing to write is no op; CONTRACTS.md is never scaffolde
   pack.scaffoldPack(repo);
   assert.equal(fs.existsSync(designFile(repo, 'CONTRACTS.md')), false);
 });
+
+// ---- LW 2.19a: design match mapping table ------------------------------------------
+
+test('LW 2.19a: parseDesignMappings reads the screen | route | mockup file table', () => {
+  const md = [
+    '# References',
+    '',
+    '| Screen | Route | Mockup file |',
+    '| --- | :---: | --- |',
+    '| Home | / | `home.png` |',
+    '| Quote form | /quote/new | mocks/quote-form.jpg |',
+    'Quote PDF | https://example.com/quote/1?print=1 | [pdf mockup](design/references/quote-pdf.jpeg)',
+    '',
+  ].join('\n');
+  assert.deepEqual(pack.parseDesignMappings(md), [
+    { screen: 'Home', route: '/', mockup: 'home.png' },
+    { screen: 'Quote form', route: '/quote/new', mockup: 'mocks/quote-form.jpg' },
+    { screen: 'Quote PDF', route: '/quote/1?print=1', mockup: 'quote-pdf.jpeg' },
+  ]);
+});
+
+test('LW 2.19a: parseDesignMappings is tolerant - broken rows are dropped, broken input is []', () => {
+  const md = [
+    '<!-- | Commented | / | out.png | -->',
+    '| Screen | Route | Mockup file |',
+    '| Escape | /x | ../../secret.png |',
+    '| Absolute | /x | C:/mock.png |',
+    '| Not an image | /x | notes.pdf |',
+    '| Script route | javascript:alert(1) | a.png |',
+    '| Two cells | a.png |',
+    '| | /empty | e.png |',
+    '| Home | / | home.png |',
+    '| home | /duplicate | other.png |',
+    'plain prose | with a pipe',
+  ].join('\n');
+  assert.deepEqual(pack.parseDesignMappings(md), [{ screen: 'Home', route: '/', mockup: 'home.png' }]);
+  for (const junk of [null, undefined, 42, {}, '', 'no table here']) assert.deepEqual(pack.parseDesignMappings(junk), []);
+});
+
+test('LW 2.19a: readDesignMappings reads design/references/README.md; a missing file is []', () => {
+  const repo = tempRepo();
+  assert.deepEqual(pack.readDesignMappings(repo), []);
+  pack.scaffoldPack(repo);
+  assert.deepEqual(pack.readDesignMappings(repo), [], 'the scaffolded table is empty');
+  const readme = path.join(repo, 'design', 'references', 'README.md');
+  fs.appendFileSync(readme, '| Home | / | home.png |\n');
+  assert.deepEqual(pack.readDesignMappings(repo), [{ screen: 'Home', route: '/', mockup: 'home.png' }]);
+  assert.deepEqual(pack.readDesignMappings('relative'), []);
+});
+
+// ---- LW 2.26: legal journeys -------------------------------------------------------
+
+test('LW 2.26: appendLegalJourneys adds the GDPR journeys to TEST_PLAN.md once', () => {
+  const repo = filledRepo();
+  const before = pack.parseJourneys(read(repo, 'TEST_PLAN.md'));
+  assert.equal(pack.applyWrite(repo, pack.appendLegalJourneys({ cookies: true })).ok, true);
+  const after = pack.parseJourneys(read(repo, 'TEST_PLAN.md'));
+  assert.deepEqual(after, [
+    ...before,
+    'Legal: privacy policy is reachable',
+    'Legal: cookie consent blocks trackers before opt-in',
+    'Legal: data export works',
+    'Legal: account deletion works',
+  ]);
+  const text = read(repo, 'TEST_PLAN.md');
+  assert.match(text, /footer/);
+  assert.match(text, /no request to an analytics, ad or tracking domain before "Accept"/);
+  assert.match(text, /holds this user's data - and no other user's data/);
+  assert.match(text, /signing in again fails/);
+  assert.match(text, /DRAFT - check before publishing/);
+  // Idempotent: a second pass changes nothing.
+  pack.applyWrite(repo, pack.appendLegalJourneys({ cookies: true }));
+  assert.equal(read(repo, 'TEST_PLAN.md'), text);
+});
+
+test('LW 2.26: without trackers there is no cookie journey; a plan without Journeys gets the section', () => {
+  const op = pack.appendLegalJourneys({ cookies: false });
+  const out = op.update('# Test plan\n\n## Free exploration\n\nPoke around.\n');
+  assert.deepEqual(pack.parseJourneys(out), [
+    'Legal: privacy policy is reachable',
+    'Legal: data export works',
+    'Legal: account deletion works',
+  ]);
+  assert.match(out, /## Free exploration\n\nPoke around\./, 'existing text kept');
+});
+
+test('LW 2.26 / 2.19a: the interview asks about an EU web app and the mockup table', () => {
+  const brief = pack.interviewBrief(tempRepo());
+  assert.match(brief, /EU web app: yes" or "EU web app: no"/);
+  assert.match(brief, /DRAFT - check before publishing/);
+  assert.match(brief, /\| Screen \| Route \| Mockup file \|/);
+  assert.match(pack.TEMPLATES['BRIEF.md'], /EU web app: yes/);
+});

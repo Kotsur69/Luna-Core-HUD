@@ -35,6 +35,13 @@
 // every iteration, so a fixed baseline would re-flag every intended change
 // forever. A change is reported once, with both images and the diff, and the
 // Critic decides whether it was meant.
+//
+// Design match (LW 2.19a, src/lunasworkDesignMatch.js): the explore pass also
+// captures every screen of design/references/README.md's mapping table at its
+// mockup's width (`designShots`). After the pass, a separate vision call with
+// the same model - Read only, inside the evidence dir - scores each mockup /
+// screenshot pair 0-10, next to a structural diff number. The result is
+// report.designMatch[]; an entry without both images is dropped.
 // ============================================================================
 
 'use strict';
@@ -49,6 +56,7 @@ const { pickModel, personasFor, matrixFor, CORE_PERSONA, PERSONAS, ENGINES, WIDT
 const { DESIGN_DIR, readPackFile } = require('./lunasworkPack');
 const { killTree } = require('./lunasworkAdapters');
 const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
+const designMatch = require('./lunasworkDesignMatch');
 
 const MODES = ['explore', 'shipConfirm'];
 // Plan: "The SHIP confirmation pass always gets opus" - whatever the settings say.
@@ -180,6 +188,8 @@ const PLAYTEST_SCHEMA = {
     },
     // Optional: only a pass that was given built cards' checks answers it.
     checks: checksSchema(EVIDENCE_SCHEMA),
+    // Optional: only an explore pass with mapped mockups answers it (LW 2.19a).
+    designShots: designMatch.DESIGN_SHOTS_SCHEMA,
   },
 };
 
@@ -327,14 +337,16 @@ const sharedRules = (matrix, servers) => [
 
 /**
  * @param {{mode:string, url:string, testPlan:string, shipCriteria:string, checks?:object[],
- *   personas?:object[], matrix?:object[], tools?:object}} input
+ *   personas?:object[], matrix?:object[], tools?:object, designTargets?:object[]}} input
  *   checks = lunasworkChecks.checkList of the built cards (explore pass only);
  *   personas / matrix = personasFor / matrixFor (default: iteration 0, no gate);
- *   tools = adapter.tools(), to name each browser's MCP server
+ *   tools = adapter.tools(), to name each browser's MCP server;
+ *   designTargets = lunasworkDesignMatch.designTargets (explore pass only)
  * @returns {string}
  */
 function buildPlaytestPrompt({
   mode, url, testPlan, shipCriteria, checks = [], personas = personasFor(0, false), matrix = matrixFor(0, false), tools,
+  designTargets = [],
 }) {
   const SHARED_RULES = sharedRules(matrix, enginesToServers(tools));
   const lenses = ['', 'Personas for this pass - test through each one in turn:', ...personaLines(personas)];
@@ -370,6 +382,7 @@ function buildPlaytestPrompt({
     '',
     ...fence('Ship criteria (design/SHIP_CRITERIA.md)', shipCriteria),
     ...checksPrompt(checks),
+    ...designMatch.designMatchPrompt(designTargets),
   ].join('\n');
 }
 
@@ -555,6 +568,8 @@ function emptyReport(mode, error, { personas = [], matrix = [] } = {}) {
     journeys: [],
     screens: [],
     checks: [],
+    designShots: [],
+    designMatch: [],
     warnings: [],
     errors: error ? [error] : [],
   };
@@ -572,7 +587,9 @@ function emptyReport(mode, error, { personas = [], matrix = [] } = {}) {
  * @returns {{mode:string, findings:object[], scores:object[], journeys:object[],
  *   screens:object[], checks:object[], warnings:object[], errors:object[]}}
  */
-function validateReport(raw, { evidenceDir, since = 0, mode = 'explore', checks = [], personas = [], matrix = [] }) {
+function validateReport(raw, {
+  evidenceDir, since = 0, mode = 'explore', checks = [], personas = [], matrix = [], designTargets = [],
+}) {
   const ran = { personas, matrix };
   if (!isObj(raw) || !REPORT_KEYS.every((key) => Array.isArray(raw[key]))) {
     return emptyReport(mode, { code: 'badReport' }, ran);
@@ -592,6 +609,9 @@ function validateReport(raw, { evidenceDir, since = 0, mode = 'explore', checks 
     journeys: keep('journeys', MAX_JOURNEYS, cleanJourney),
     screens: cleanScreens(raw.screens.slice(0, MAX_SCREENS), ctx, warnings),
     checks: cleanChecks(raw.checks, checks, (e) => cleanEvidence(e, ctx), warnings),
+    designShots: designMatch.cleanDesignShots(raw.designShots, designTargets, (p) => evidenceFile(p, ctx), warnings),
+    // Filled by runPlaytest after the vision comparison (lunasworkDesignMatch.runDesignMatch).
+    designMatch: [],
     warnings,
     errors: [],
   };
@@ -829,6 +849,10 @@ async function runPlaytest(opts) {
     if (mode === 'shipConfirm' && !inputs.shipCriteria) return fail('noShipCriteria');
     if (!inputs.testPlan && !inputs.shipCriteria) return fail('noDesignPack');
 
+    // LW 2.19a: the mapped mockups; the ship pass verifies criteria only.
+    const design = mode === 'explore' ? designMatch.designTargets(projectDir) : { targets: [], warnings: [] };
+    const designTargets = design.targets;
+
     const { evidenceDir } = adapter;
     fs.mkdirSync(evidenceDir, { recursive: true });
     const marker = path.join(evidenceDir, START_MARKER);
@@ -839,12 +863,13 @@ async function runPlaytest(opts) {
       : { ok: true };
     const killImpl = opts.killTreeImpl
       || ((pid) => killTree(pid, { platform: process.platform, execFile, kill: process.kill.bind(process) }));
+    const execImpl = opts.execImpl || execFile;
     const call = await callClaude({
       args: buildPlaytestArgs({ model: pick.model, tools, budgetUsd: opts.budgetUsd }),
-      prompt: buildPlaytestPrompt({ mode, url: appUrl.href, ...inputs, checks, ...ran, tools }),
+      prompt: buildPlaytestPrompt({ mode, url: appUrl.href, ...inputs, checks, ...ran, tools, designTargets }),
       cwd: evidenceDir, // never the repo: the Playtester must not see the code
       env,
-      execImpl: opts.execImpl || execFile,
+      execImpl,
       timeoutMs: opts.timeoutMs || PLAYTEST_TIMEOUT_MS,
       killTreeImpl: killImpl,
     });
@@ -852,7 +877,7 @@ async function runPlaytest(opts) {
     const parsed = parsePlannerOutput(call.stdout);
     if (!parsed.ok) return fail(parsed.error, parsed.detail);
 
-    const checked = validateReport(parsed.raw, { evidenceDir, since, mode, checks, ...ran });
+    const checked = validateReport(parsed.raw, { evidenceDir, since, mode, checks, ...ran, designTargets });
     if (checked.errors.length) return fail(checked.errors[0].code);
     // A failed install is not fatal: Playwright may still find the browsers.
     const validated = browsers && browsers.ok === false
@@ -862,14 +887,25 @@ async function runPlaytest(opts) {
     const screenDiff = mode === 'explore'
       ? compareScreens(validated.screens, { evidenceDir, threshold: opts.threshold })
       : null;
-    const report = screenDiff
-      ? {
-        ...validated,
-        findings: [...validated.findings, ...screenDiff.findings],
-        warnings: [...validated.warnings, ...screenDiff.warnings],
-      }
-      : validated;
-    return { ok: true, ...base, screenDiff, report, costUsd: parsed.costUsd, durationMs: now() - started };
+    // LW 2.19a: the vision comparison runs with the Playtester's model, in the evidence dir.
+    const match = designTargets.length
+      ? await designMatch.runDesignMatch({
+        targets: designTargets,
+        shots: validated.designShots,
+        evidenceDir,
+        baselinesDir: baselinesDirFor(evidenceDir),
+        model: pick.model,
+        runJudge: (judge) => callClaude({ ...judge, env, execImpl, killTreeImpl: killImpl }),
+      })
+      : { designMatch: [], warnings: [], costUsd: null };
+    const report = {
+      ...validated,
+      findings: [...validated.findings, ...(screenDiff ? screenDiff.findings : [])],
+      designMatch: match.designMatch,
+      warnings: [...validated.warnings, ...(screenDiff ? screenDiff.warnings : []), ...design.warnings, ...match.warnings],
+    };
+    const costUsd = Number.isFinite(match.costUsd) ? (parsed.costUsd || 0) + match.costUsd : parsed.costUsd;
+    return { ok: true, ...base, screenDiff, report, costUsd, durationMs: now() - started };
   } catch (err) {
     return fail('crashed', clean(err && err.message, 300));
   }
