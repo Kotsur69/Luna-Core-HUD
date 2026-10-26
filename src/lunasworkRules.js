@@ -554,7 +554,56 @@ function matrixFor(iteration, isGate) {
   return [BASELINE_COMBO, ROTATED_COMBOS[rotationIndex(iteration) % ROTATED_COMBOS.length]];
 }
 
+// ---- time to SHIP (LW 2.22b) -------------------------------------------------------
+
+// The moving average looks at this many of the newest iterations.
+const SHIP_ETA_WINDOW = 3;
+const SHIP_ETA_MIN_ITERATIONS = 2;
+// An estimate past this many iterations says nothing useful.
+const SHIP_ETA_MAX_ITERATIONS = 999;
+
+const countOrZero = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+const tenth = (v) => Math.round(v * 10) / 10;
+
+/**
+ * Time to SHIP from the run's pace: the cards closed per iteration (a moving
+ * average of the last SHIP_ETA_WINDOW) against the work left - the open
+ * cards plus the epics still open in ROADMAP.md. The range takes the best and
+ * the worst iteration of the window; `high` is null when one of them closed
+ * nothing. Hours are null while no iteration has a measured duration.
+ * @param {{closedPerIteration?:number[], openCards?:number, roadmapLeft?:number, iterationMinutes?:number[]}} input
+ *   closedPerIteration / iterationMinutes: oldest first, one entry per finished iteration
+ * @returns {{iterations:number, hours:number|null, low:number|null, high:number|null}|null}
+ *   null with fewer than 2 iterations of data, or when the window closed nothing
+ */
+function timeToShip({ closedPerIteration, openCards, roadmapLeft, iterationMinutes } = {}) {
+  const closed = (Array.isArray(closedPerIteration) ? closedPerIteration : []).map(countOrZero);
+  if (closed.length < SHIP_ETA_MIN_ITERATIONS) return null;
+  const window = closed.slice(-SHIP_ETA_WINDOW);
+  const rate = window.reduce((s, n) => s + n, 0) / window.length;
+  if (rate <= 0) return null;
+  const left = countOrZero(openCards) + countOrZero(roadmapLeft);
+  const itersFor = (r) => Math.min(SHIP_ETA_MAX_ITERATIONS, Math.ceil(left / r));
+  const iterations = itersFor(rate);
+
+  const minutes = (Array.isArray(iterationMinutes) ? iterationMinutes : [])
+    .slice(-SHIP_ETA_WINDOW)
+    .filter((m) => Number.isFinite(m) && m > 0);
+  if (!minutes.length) return { iterations, hours: null, low: null, high: null };
+  const perIteration = minutes.reduce((s, m) => s + m, 0) / minutes.length;
+  const hoursFor = (n) => tenth((n * perIteration) / 60);
+  const worst = Math.min(...window);
+  return {
+    iterations,
+    hours: hoursFor(iterations),
+    low: hoursFor(itersFor(Math.max(...window))),
+    high: worst > 0 ? hoursFor(itersFor(worst)) : null,
+  };
+}
+
 module.exports = {
+  SHIP_ETA_WINDOW,
+  timeToShip,
   ROLES,
   MODEL_CHOICES,
   DEFAULT_MODELS,

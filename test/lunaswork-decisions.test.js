@@ -634,3 +634,41 @@ test('phone round trip: the answer unit goes through the todos mirror and back t
   assert.equal(wired.pullAnswers(), 1);
   assert.equal(wireDecisionSync({ controller, cloud: null, putDecisions: () => {} }).pullAnswers(), 0);
 });
+
+test('wireDecisionSync: the phone snapshot goes out throttled on phase changes (LW 2.17b)', () => {
+  let listener = null;
+  let t = 0;
+  const timers = [];
+  const puts = [];
+  let phase = 'directing';
+  const controller = {
+    subscribe: (fn) => {
+      listener = fn;
+    },
+    status: () => ({ pendingDecisions: [] }),
+    applyAnswers: () => 0,
+    phoneSnapshot: () => ({ v: 1, runId: 'lw1', phase }),
+  };
+  wireDecisionSync({
+    controller,
+    cloud: null,
+    putDecisions: () => {},
+    putLunasWork: (s) => puts.push(s),
+    throttle: { minMs: 1000, now: () => t, setTimer: (fn, ms) => timers.push({ fn, at: t + ms }), clearTimer: () => {} },
+  });
+  listener({ type: 'phase', status: {} });
+  assert.deepEqual(puts.map((s) => s.phase), ['directing']);
+  t = 10;
+  phase = 'building';
+  listener({ type: 'phase', status: {} });
+  listener({ type: 'resume', status: {} });
+  assert.equal(puts.length, 1, 'a second phase change inside the window waits');
+  assert.equal(timers.length, 1);
+  t = 1000;
+  timers[0].fn();
+  assert.deepEqual(puts.map((s) => s.phase), ['directing', 'building']);
+  // Without putLunasWork (or a controller without phoneSnapshot) nothing is built.
+  const bare = { ...controller, phoneSnapshot: () => assert.fail('not built') };
+  wireDecisionSync({ controller: bare, cloud: null, putDecisions: () => {} });
+  listener({ type: 'phase', status: {} });
+});

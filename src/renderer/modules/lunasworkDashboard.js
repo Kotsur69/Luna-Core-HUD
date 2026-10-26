@@ -11,7 +11,7 @@
 //   - the latest key-screen screenshots (lunaswork:screenshot, data URLs)
 //   - pending decisions with their deadlines (from the live status)
 //   - the Lighthouse trend when the run measured it
-//   - a slot for the time-to-SHIP estimate (filled by a later package)
+//   - the time-to-SHIP estimate with its range (LW 2.22b, lunasworkEta)
 // While open it refreshes on every lunaswork:event - no polling, no email.
 // Every value from main is painted through textContent / SVG attributes only.
 // ============================================================================
@@ -164,6 +164,15 @@ function kpi(labelKey, value, sub) {
   return box;
 }
 
+/** The KPI's sub line: "3-7 h, ~6 iterations", or why there is no estimate yet. */
+export function etaSub(ship) {
+  if (!ship || !Number.isInteger(ship.iterations)) return t('lw.dash.etaSoon');
+  const iters = t('lw.dash.etaIterations', { n: ship.iterations });
+  if (!Number.isFinite(ship.low)) return iters;
+  const high = Number.isFinite(ship.high) ? ship.high : '?';
+  return `${ship.low}-${high} h, ${iters}`;
+}
+
 function kpis(d) {
   const row = el('div', 'lw-dash__kpis');
   const total = d.usage.total;
@@ -172,8 +181,8 @@ function kpis(d) {
     kpi('lw.dash.tokens', formatTokens(tokensOf(total)), t('lw.dash.calls', { n: total.calls })),
     kpi('lw.dash.cost', formatUsd(total.costUsd)),
     kpi('lw.dash.cards', `${d.cards.closed} / ${d.cards.opened}`, t('lw.dash.cardsSub')),
-    // Slot for the time-to-SHIP estimate (a later package fills d.shipEstimate, in ms).
-    kpi('lw.dash.eta', Number.isFinite(d.shipEstimate) ? elapsed(d.shipEstimate) : '-', t('lw.dash.etaSoon')),
+    // LW 2.22b: time to SHIP (ms) and its range in hours / iterations.
+    kpi('lw.dash.eta', Number.isFinite(d.shipEstimate) ? elapsed(d.shipEstimate) : '-', etaSub(d.ship)),
   );
   return row;
 }

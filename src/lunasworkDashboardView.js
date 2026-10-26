@@ -14,7 +14,8 @@
 //                run folder, only when they sit inside it; the picture
 //                itself comes through lunaswork:screenshot (screenshotFile)
 //   lighthouse   the worst score per category per iteration, when measured
-//   shipEstimate null: a slot for the time-to-SHIP estimate (later package)
+//   shipEstimate time to SHIP in ms, and `ship` = {iterations, low, high}
+//                (hours) - lunasworkRules.timeToShip via lunasworkEta (LW 2.22b)
 //
 // screenshotFile() is the one check before a file is read for the renderer:
 // a run id of the right shape, a relative image path, inside
@@ -100,14 +101,25 @@ function screenshotsOf(laps, runsRoot, runId) {
     .filter((s) => s.file && s.file.length <= MAX_REL_PATH);
 }
 
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/** timeToShip() output as the dashboard's {iterations, hours, low, high}, or null. */
+function shipOf(est) {
+  if (!isObj(est) || !Number.isInteger(est.iterations) || est.iterations < 0) return null;
+  const h = (v) => (Number.isFinite(v) && v >= 0 ? v : null);
+  return { iterations: est.iterations, hours: h(est.hours), low: h(est.low), high: h(est.high) };
+}
+
 /**
  * The renderer's dashboard of a run, or null without one.
  * @param {unknown} run controller.snapshot()
- * @param {{runsRoot?:string, isKnownProject:(id:string)=>boolean}} opts
+ * @param {{runsRoot?:string, isKnownProject:(id:string)=>boolean, shipEstimate?:object|null}} opts
+ *   shipEstimate = lunasworkRules.timeToShip output for this run
  */
-function dashboardView(run, { runsRoot, isKnownProject }) {
+function dashboardView(run, { runsRoot, isKnownProject, shipEstimate = null }) {
   if (!isObj(run) || !RUN_ID_RE.test(String(run.id || ''))) return null;
   const ledger = cleanLedger(run.usage);
+  const ship = shipOf(shipEstimate);
   return {
     runId: run.id,
     projectId: typeof run.projectId === 'string' && isKnownProject(run.projectId) ? run.projectId : null,
@@ -125,8 +137,9 @@ function dashboardView(run, { runsRoot, isKnownProject }) {
     cards: cardsSeries(run.laps),
     screenshots: screenshotsOf(run.laps, runsRoot, run.id),
     lighthouse: trend(run.lighthouse),
-    // Filled by a later package (time-to-SHIP estimate); the dashboard shows a placeholder.
-    shipEstimate: null,
+    // LW 2.22b: time to SHIP (ms) for the KPI, with its range in `ship`.
+    shipEstimate: ship && ship.hours !== null ? Math.round(ship.hours * MS_PER_HOUR) : null,
+    ship,
   };
 }
 
