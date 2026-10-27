@@ -116,6 +116,7 @@ const {
   stuckOutcome,
 } = require('./lunasworkRules');
 const { checkList } = require('./lunasworkChecks');
+const { createLoadTest } = require('./lunasworkLoad');
 const { rollbackEvidence, reasonText } = require('./lunasworkCheckpoint');
 const { createStaging } = require('./lunasworkStaging');
 const {
@@ -233,6 +234,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   syncCheckout?: (repoPath:string)=>Promise<{ok:boolean, detail?:string}>,
  *   checkpoints?: {tagIteration:(o:object)=>Promise<object>, rollback:(o:object)=>Promise<object>},
  *   staging?: {runCommand?:Function, git?:Function, runsRoot?:()=>string},
+ *   load?: {runCommand?:Function, detectTool?:Function, readDoc?:Function, layout?:Function, runsRoot?:()=>string},
  *   limitResumeAt?: (res:object)=>number|null,
  *   awake?: {hold:()=>void, release:()=>void},
  *   recordDecision?: (ctx:{repoPath:string, line:string, decision:object})=>boolean,
@@ -269,6 +271,8 @@ function createLunasWork(deps) {
   });
   // LW 3.28a + 3.29: staging, the production guard and staging data backups.
   const staging = createStaging({ log, now, ...deps.staging });
+  // LW 3.30: the load test on staging (src/lunasworkLoad.js).
+  const loadTest = createLoadTest({ log, now, ...deps.load });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
   let run = null;
@@ -925,8 +929,11 @@ function createLunasWork(deps) {
       cardFlow.askAboutStuck(outcome.ask);
     }
 
+    // C8: a short load test on staging at the "complete" gate and before SHIP; a breach holds SHIP.
+    const load = await loadTest.afterCritic({ run: () => run, critic, logEvent, todoStore: deps.todoStore(run.projectId) });
     let shipConfirmed = false;
-    if (critic.verdict === 'ship') {
+    if (critic.verdict === 'ship' && load.blocksShip) logEvent('SHIP held: the load test on staging broke a threshold');
+    else if (critic.verdict === 'ship') {
       let ship = run.current.ship;
       if (!ship) {
         const pass = await shipPass();
