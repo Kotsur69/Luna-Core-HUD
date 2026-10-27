@@ -16,6 +16,8 @@
 //                   + .html, and one email under "Email me when a run finishes"
 //   decisions       every decision-queue answer appended to design/DECISIONS.md
 //   milestone email lunasworkReport onMilestone: scores, what waits, feedback (B17)
+//   launch assets   lunasworkLaunch at SHIP: the marketing agent -> marketing/ (C10)
+//   demo video      lunasworkDemo per milestone gate + at SHIP, Remotion render (B13)
 //   iteration 0     lunasworkScaffold: stack template cards for an empty repo
 //   machine guard   createMachineRuntime: watchdog task, Windows Update pause,
 //                   disk cleanup, low-disk stop + email (lunasworkMachine)
@@ -48,6 +50,8 @@ const { createScaffolder } = require('./lunasworkScaffold');
 const { createMachineGuard } = require('./lunasworkMachine');
 const { handbackHead, readCommits } = require('./lunasworkHandback');
 const { wheelFromTodoPeers } = require('./lunasworkWheel');
+const { runLaunchAssets } = require('./lunasworkLaunch');
+const { createDemoMaker } = require('./lunasworkDemo');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -159,6 +163,9 @@ function createLunasWorkRuntime(ctx) {
     ? createLunasWorkReporter({
       runsDir: ctx.runsDir,
       mail: ctx.mail ? { sender: ctx.mail.sender, prefs: ctx.mail.prefs, enabled: godmodeEmailOn } : undefined,
+      // C10: launch assets at SHIP; B13: a walkthrough video per milestone gate.
+      launch: (run) => runLaunchAssets({ run, env: ctx.env() }),
+      demo: createDemoMaker({ runsDir: ctx.runsDir, log: ctx.log }),
       log: ctx.log,
     })
     : null;
