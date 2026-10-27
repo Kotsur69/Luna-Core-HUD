@@ -23,7 +23,9 @@
 // migration is approved (a checkpoint rollback reverts it), deleting a
 // feature or rewriting DESIGN.md is rejected (it would lose what Mati asked
 // for). A client's scope change has NO default: it waits for Mati, however
-// long, while the rest of the run continues (B17 "Trust").
+// long, while the rest of the run continues (B17 "Trust"). Neither does a
+// `secret` (C9, src/lunasworkErrorTracking.js): a key such as an error
+// tracking DSN is Mati's to give - free text in a checked format, or `skip`.
 //
 // The way back: the phone writes one unit into the existing `todos` cloud
 // scope under `lunaswork-answer:<decision id>` ({runId, answer}). That key is
@@ -41,7 +43,10 @@
 // (B4). outOfScope: a card outside DESIGN.md / ROADMAP.md (B5). Both are
 // asked by the controller, never by needsDecision(). production: an iteration
 // diff that touches production (src/lunasworkStaging.js), default reject.
-const KINDS = ['dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'feedbackScope', 'clientScope', 'production', 'other'];
+// secret: a key Mati types in (C9), no default, no deadline.
+const KINDS = ['dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'feedbackScope', 'clientScope', 'production', 'secret', 'other'];
+// Kinds that wait for Mati however long: no default answer, no deadline.
+const NO_DEFAULT_KINDS = new Set(['clientScope', 'secret']);
 const ANSWERED_BY = ['mati', 'default'];
 const STATUSES = ['pending', 'answered'];
 
@@ -83,6 +88,14 @@ const CARD_CHOICES = Object.freeze({
   feedbackScope: { options: [APPROVE, REJECT], defaultAnswer: APPROVE },
 });
 const CLIENT_OPTIONS = Object.freeze(['yes', 'no']);
+const SECRET_OPTIONS = Object.freeze(['skip']);
+// Free-text formats a decision can require. dsn: a Sentry-style DSN,
+// <scheme>://<public key>@<host>/<project id>.
+const ANSWER_FORMATS = Object.freeze({
+  dsn: /^https?:\/\/[A-Za-z0-9]{16,64}(?::[A-Za-z0-9]{16,64})?@[A-Za-z0-9.-]{1,253}(?::\d{1,5})?(?:\/[A-Za-z0-9._-]{1,64}){0,4}\/\d{1,20}$/,
+});
+const formatOf = (v) => (typeof v === 'string' && Object.hasOwn(ANSWER_FORMATS, v) ? v : null);
+const defaultOptions = (kind) => (kind === 'clientScope' ? CLIENT_OPTIONS : kind === 'secret' ? SECRET_OPTIONS : undefined);
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const isTime = (v) => Number.isFinite(v) && v > 0;
@@ -338,12 +351,12 @@ function createDecision(spec, ctx) {
   const kind = KINDS.includes(spec.kind) ? spec.kind : 'other';
   const question = oneLine(spec.question, MAX_QUESTION);
   if (!question) return { ok: false, error: 'badQuestion' };
-  const client = kind === 'clientScope';
-  const options = cleanOptions(spec.options === undefined && client ? CLIENT_OPTIONS : spec.options);
+  const noDefault = NO_DEFAULT_KINDS.has(kind);
+  const options = cleanOptions(spec.options === undefined ? defaultOptions(kind) : spec.options);
   if (!options.length) return { ok: false, error: 'badOptions' };
-  // A client's scope change never defaults; everything else must.
-  const defaultAnswer = client ? null : oneLine(spec.defaultAnswer, MAX_OPTION);
-  if (!client && !options.includes(defaultAnswer)) return { ok: false, error: 'badDefault' };
+  // A client's scope change or a secret never defaults; everything else must.
+  const defaultAnswer = noDefault ? null : oneLine(spec.defaultAnswer, MAX_OPTION);
+  if (!noDefault && !options.includes(defaultAnswer)) return { ok: false, error: 'badDefault' };
   const span = Number.isFinite(spec.deadlineMs) ? Math.min(MAX_DEADLINE_MS, Math.max(MIN_DEADLINE_MS, spec.deadlineMs)) : DEFAULT_DEADLINE_MS;
   // Unique and increasing, like a to-do `at`: two asks in one ms still differ.
   const id = Math.max(Math.floor(ctx.now), ...list.map((d) => d.id + 1));
@@ -356,9 +369,11 @@ function createDecision(spec, ctx) {
       detail: oneLine(spec.detail, MAX_DETAIL) || null,
       options,
       defaultAnswer,
-      freeText: client ? spec.freeText !== false : spec.freeText === true,
+      // A secret is only ever typed in.
+      freeText: kind === 'secret' || (noDefault ? spec.freeText !== false : spec.freeText === true),
+      format: formatOf(spec.format),
       askedAt: ctx.now,
-      deadline: client ? null : ctx.now + span,
+      deadline: noDefault ? null : ctx.now + span,
       iteration: Number.isInteger(ctx.iteration) ? ctx.iteration : 0,
       cardIds: cardIdsOf(spec.cardIds),
       status: 'pending',
@@ -371,12 +386,15 @@ function createDecision(spec, ctx) {
 
 /**
  * The answer a pending decision accepts for `raw`, or null: a listed option
- * (exact), or capped free text where the decision allows it.
+ * (exact), or capped free text where the decision allows it - in the
+ * decision's format, when it names one.
  */
 function acceptedAnswer(decision, raw) {
   if (typeof raw !== 'string') return null;
   if (decision.options.includes(raw)) return raw;
-  return decision.freeText ? freeTextOf(raw) : null;
+  const text = decision.freeText ? freeTextOf(raw) : null;
+  const format = formatOf(decision.format);
+  return text !== null && format && !ANSWER_FORMATS[format].test(text) ? null : text;
 }
 
 /**
@@ -464,10 +482,10 @@ function cleanDecision(raw) {
   const question = oneLine(raw.question, MAX_QUESTION);
   if (!options.length || !question) return null;
   const kind = KINDS.includes(raw.kind) ? raw.kind : 'other';
-  const client = kind === 'clientScope';
-  const defaultAnswer = !client && options.includes(raw.defaultAnswer) ? raw.defaultAnswer : null;
-  // Only a client scope change may lack a default.
-  if (!client && defaultAnswer === null) return null;
+  const noDefault = NO_DEFAULT_KINDS.has(kind);
+  const defaultAnswer = !noDefault && options.includes(raw.defaultAnswer) ? raw.defaultAnswer : null;
+  // Only a client scope change or a secret may lack a default.
+  if (!noDefault && defaultAnswer === null) return null;
   const answered = raw.status === 'answered';
   const freeText = raw.freeText === true;
   // Free text only where the decision allowed it, as answerDecision does.
@@ -481,8 +499,9 @@ function cleanDecision(raw) {
     options,
     defaultAnswer,
     freeText,
+    format: formatOf(raw.format),
     askedAt: isTime(raw.askedAt) ? raw.askedAt : raw.id,
-    deadline: client ? null : isTime(raw.deadline) ? raw.deadline : raw.id + DEFAULT_DEADLINE_MS,
+    deadline: noDefault ? null : isTime(raw.deadline) ? raw.deadline : raw.id + DEFAULT_DEADLINE_MS,
     iteration: Number.isInteger(raw.iteration) && raw.iteration >= 0 ? raw.iteration : 0,
     cardIds: cardIdsOf(raw.cardIds),
     status: raw.status,
@@ -549,7 +568,7 @@ function publicDecision(raw) {
   const question = oneLine(raw.question, MAX_QUESTION);
   if (!options.length || !question) return null;
   const kind = KINDS.includes(raw.kind) ? raw.kind : 'other';
-  const defaultAnswer = kind !== 'clientScope' && options.includes(raw.defaultAnswer) ? raw.defaultAnswer : null;
+  const defaultAnswer = !NO_DEFAULT_KINDS.has(kind) && options.includes(raw.defaultAnswer) ? raw.defaultAnswer : null;
   return {
     id: idOf(raw.id),
     runId: typeof raw.runId === 'string' && RUN_ID_RE.test(raw.runId) ? raw.runId : null,
@@ -560,6 +579,7 @@ function publicDecision(raw) {
     options,
     defaultAnswer,
     freeText: raw.freeText === true,
+    format: formatOf(raw.format),
     askedAt: isTime(raw.askedAt) ? raw.askedAt : null,
     deadline: defaultAnswer !== null && isTime(raw.deadline) ? raw.deadline : null,
     cardIds: cardIdsOf(raw.cardIds),
@@ -621,6 +641,8 @@ module.exports = {
   APPROVE,
   REJECT,
   CARD_CHOICES,
+  NO_DEFAULT_KINDS,
+  ANSWER_FORMATS,
   MIGRATION_PATH_RE,
   ANSWER_LIST_KEY,
   DEFAULT_DEADLINE_MS,

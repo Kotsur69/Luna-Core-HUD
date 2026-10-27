@@ -48,6 +48,7 @@ const { createScaffolder } = require('./lunasworkScaffold');
 const { createMachineGuard } = require('./lunasworkMachine');
 const { handbackHead, readCommits } = require('./lunasworkHandback');
 const { wheelFromTodoPeers } = require('./lunasworkWheel');
+const { createSecretStore } = require('./lunasworkErrorTracking');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -117,7 +118,7 @@ function createAwake(powerSaveBlocker) {
  *   confirmStart: (ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
- *   runsDir?: ()=>string, mail?: {sender:object, prefs:object},
+ *   runsDir?: ()=>string, mail?: {sender:object, prefs:object}, secretStore?: object,
  * }} ctx
  */
 function createLunasWorkRuntime(ctx) {
@@ -210,6 +211,8 @@ function createLunasWorkRuntime(ctx) {
         return res.ok;
       },
     },
+    // C9: the error tracking DSN, kept on this PC (safeStorage, else a gitignored *.local.json).
+    errorTracking: { store: ctx.secretStore || createSecretStore({ log: ctx.log }), log: ctx.log },
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: reporter ? [reporter.onMilestone] : [],

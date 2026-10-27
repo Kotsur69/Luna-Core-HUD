@@ -141,6 +141,7 @@ const { registerCloudIpc } = require('./cloudipc');
 // and the outer loop run (src/lunaswork.js via src/lunasworkWiring.js).
 const { registerLunasworkIpc } = require('./lunasworkipc');
 const { createGodModeBuilder } = require('./lunasworkBuild');
+const { createSecretStore, createSecretGate } = require('./lunasworkErrorTracking');
 const { createLunasWorkRuntime, createMachineRuntime, wireDecisionSync } = require('./lunasworkWiring');
 const { stagingLines } = require('./lunasworkStaging');
 const { machineName } = require('./missionledgersync');
@@ -983,6 +984,15 @@ const lunasworkBuilder = createGodModeBuilder({
   log: (line) => console.info(line),
 });
 
+// C9: during a Luna's Work build, God Mode's pre-merge self-check also scans
+// the merged diff for secrets; a hit is red and its branch is never pushed.
+const lunasworkSecrets = createSecretStore({ log: (line) => console.info(line) });
+const lunasworkSecretGate = createSecretGate({
+  active: () => lunasworkBuilder.isBuilding(),
+  knownSecrets: () => lunasworkSecrets.secretValues(),
+  log: (line) => console.info(line),
+});
+
 const orchestra = createOrchestra({
   runPlanner: lunasworkBuilder.wrapPlanner(runPlanner),
   addWorktree,
@@ -1058,8 +1068,8 @@ const orchestra = createOrchestra({
       resolve: (r) => orchestraIntegrate.runResolver({ ...r, env: orchestraToolEnv() }),
       ...(extra && typeof extra.beforePush === 'function' ? { beforePush: extra.beforePush } : {}),
     }),
-  runSelfCheck: (args) => orchestraSelfCheck.runSelfCheck(args),
-  pushBranch: (root, branch) => orchestraSelfCheck.pushBranch(root, branch),
+  runSelfCheck: lunasworkSecretGate.wrapSelfCheck((args) => orchestraSelfCheck.runSelfCheck(args)),
+  pushBranch: lunasworkSecretGate.wrapPushBranch((root, branch) => orchestraSelfCheck.pushBranch(root, branch)),
   removeWorktree,
   // Failed-launch cleanup + the orphan-branch sweep (orchestraCleanup.js).
   deleteBranch,
@@ -1189,6 +1199,7 @@ const lunaswork = createLunasWorkRuntime({
   onTodosChanged: (projectId) => send('todo:changed', { projectId }),
   orchestra,
   builder: lunasworkBuilder,
+  secretStore: lunasworkSecrets,
   godModeCheckCommand: () => readUiPrefs().orchestraCheckCommand,
   env: () => orchestraToolEnv(),
   freeEnv: () => lunasworkFreeEnv(),

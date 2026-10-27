@@ -181,6 +181,7 @@ const {
   publicDecision,
 } = require('./lunasworkDecisions');
 const { wheelState, newestWheelAction } = require('./lunasworkWheel');
+const { createErrorTracking } = require('./lunasworkErrorTracking');
 const { handbackDecisionLine, architectureBlock } = require('./lunasworkHandback');
 
 const PHASE_ROLE = {
@@ -233,6 +234,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   syncCheckout?: (repoPath:string)=>Promise<{ok:boolean, detail?:string}>,
  *   checkpoints?: {tagIteration:(o:object)=>Promise<object>, rollback:(o:object)=>Promise<object>},
  *   staging?: {runCommand?:Function, git?:Function, runsRoot?:()=>string},
+ *   errorTracking?: {store:object, log?:Function},
  *   limitResumeAt?: (res:object)=>number|null,
  *   awake?: {hold:()=>void, release:()=>void},
  *   recordDecision?: (ctx:{repoPath:string, line:string, decision:object})=>boolean,
@@ -267,8 +269,10 @@ function createLunasWork(deps) {
     ask: (spec) => ask(spec),
     replayPass: () => replayPass(),
   });
+  // C9: error tracking at SHIP; its DSN reaches only the staging deploy env.
+  const errorTracking = createErrorTracking(deps.errorTracking);
   // LW 3.28a + 3.29: staging, the production guard and staging data backups.
-  const staging = createStaging({ log, now, ...deps.staging });
+  const staging = createStaging({ log, now, ...deps.staging, runCommand: errorTracking.stagingRunner(deps.staging && deps.staging.runCommand, () => run) });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
   let run = null;
@@ -482,6 +486,8 @@ function createLunasWork(deps) {
 
   /** Saves a changed queue, logs and records its new answers, announces it. */
   function decisionsChanged(decisions, answered = []) {
+    // C9: a secret answer goes to the local store; the queue keeps `provided`.
+    ({ decisions, answered } = errorTracking.capture(run.projectId, decisions, answered));
     // B4: an approved stuck card gets a fresh start; a rejected one stays held.
     const retried = answered.filter((d) => d.kind === 'stuckCard' && d.answer === APPROVE).flatMap((d) => d.cardIds);
     run = { ...run, decisions: trimQueue(decisions), failCounts: nextFailCounts(run.failCounts, { closed: retried }) };
@@ -928,6 +934,11 @@ function createLunasWork(deps) {
     let shipConfirmed = false;
     if (critic.verdict === 'ship') {
       let ship = run.current.ship;
+      // C9: the first SHIP files the error tracking card; SHIP waits one iteration for it.
+      if (!ship && errorTracking.atShip({ run, todoStore: deps.todoStore(run.projectId), ask, logEvent })) {
+        ship = { ok: true, agrees: false, error: 'errorTrackingCard' };
+        update({ current: { ...run.current, ship } });
+      }
       if (!ship) {
         const pass = await shipPass();
         // Not 'playtester': the SHIP pass never falls back to the free providers.
