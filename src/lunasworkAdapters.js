@@ -8,7 +8,11 @@
 //   stop()         -> Promise<boolean>         tear it all down (idempotent)
 //   evidenceDir    -> <userDir>/runs/lunaswork-<runId>/iter-<N>/
 //
-// Only `web` exists. It spawns the profile's startCommand in the project dir,
+// Three adapters: `web` (below), `electron` (src/lunasworkElectron.js, LW
+// 3.35) and `unity` (src/lunasworkUnity.js, LW 3.36b). The desktop and game
+// adapters hand the Playtester helpers/playtest-bridge instead of Playwright.
+//
+// `web` spawns the profile's startCommand in the project dir,
 // logs stdout/stderr to server.log in the evidence dir, polls the profile url
 // until it answers 2xx/3xx, and kills the whole process tree on stop. With a
 // stagingUrl in the profile (LW 3.28a) nothing is launched: the iteration was
@@ -29,7 +33,11 @@ const fs = require('fs');
 const path = require('path');
 const childProcess = require('child_process');
 const paths = require('./paths');
-const { ADAPTERS, RESERVED_ADAPTERS, validateProfile } = require('./lunasworkSettings');
+const { validateProfile } = require('./lunasworkSettings');
+const { createElectronAdapter } = require('./lunasworkElectron');
+const { createUnityAdapter } = require('./lunasworkUnity');
+const { newToken, callControl } = require('../helpers/playtest-bridge/control');
+const { createMcpHttpClient } = require('../helpers/playtest-bridge/mcp-http');
 
 const RUNS_DIR = 'runs';
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
@@ -241,7 +249,8 @@ function createWebAdapter(ctx) {
 
 // ---- factory ------------------------------------------------------------------------
 
-const FACTORIES = { web: createWebAdapter };
+const FACTORIES = { web: createWebAdapter, electron: createElectronAdapter, unity: createUnityAdapter };
+const ADAPTER_NAMES = Object.freeze(Object.keys(FACTORIES));
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -249,30 +258,43 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {string} name adapter name from the profile
  * @param {{projectDir:string, runId:string, iteration:number, runsRoot?:string,
  *   spawn?:Function, fetch?:Function, now?:()=>number, sleep?:Function,
- *   platform?:string, execFile?:Function, kill?:Function}} opts
+ *   platform?:string, execFile?:Function, kill?:Function, env?:object,
+ *   newToken?:()=>string, nodeBinary?:string, callControl?:Function,
+ *   connectUnity?:(url:string)=>{callTool:Function, close:Function}, log?:Function}} opts
+ *   env..connectUnity: the electron / unity adapters' seams (tests inject fakes)
  * @returns {{name:string, evidenceDir:string, start:Function, stop:Function, tools:Function}}
- * @throws for an unknown / not-yet-built adapter, a bad projectDir, runId or iteration
+ * @throws for an unknown adapter, a bad projectDir, runId or iteration
  */
 function createAdapter(name, opts = {}) {
-  if (RESERVED_ADAPTERS.includes(name)) throw new Error(`tester adapter '${name}' is not available yet`);
-  if (!ADAPTERS.includes(name) || !FACTORIES[name]) throw new Error(`unknown tester adapter '${String(name)}'`);
+  if (!ADAPTER_NAMES.includes(name)) throw new Error(`unknown tester adapter '${String(name)}'`);
   if (typeof opts.projectDir !== 'string' || !path.isAbsolute(opts.projectDir)) {
     throw new Error('projectDir must be an absolute path');
   }
-  return FACTORIES[name]({
+  const fetchFn = opts.fetch || globalThis.fetch;
+  const ctx = {
     projectDir: opts.projectDir,
     evidenceDir: evidenceDirFor(opts.runsRoot || defaultRunsRoot(), opts.runId, opts.iteration),
     spawn: opts.spawn || childProcess.spawn,
-    fetch: opts.fetch || globalThis.fetch,
+    fetch: fetchFn,
     now: opts.now || Date.now,
     sleep: opts.sleep || realSleep,
     platform: opts.platform || process.platform,
     execFile: opts.execFile || childProcess.execFile,
     kill: opts.kill || process.kill.bind(process),
-  });
+    env: opts.env || process.env,
+    newToken: opts.newToken || newToken,
+    // LunaCore's own binary runs the Playtester bridge (as Node).
+    nodeBinary: opts.nodeBinary || process.execPath,
+    callControl: opts.callControl || callControl,
+    connectUnity: opts.connectUnity || ((url) => createMcpHttpClient({ url, fetch: fetchFn })),
+    log: opts.log,
+  };
+  ctx.killTree = (pid) => killTree(pid, ctx);
+  return FACTORIES[name](ctx);
 }
 
 module.exports = {
+  ADAPTER_NAMES,
   PLAYWRIGHT_TOOLS,
   POLL_INTERVAL_MS,
   SERVER_LOG,

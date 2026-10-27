@@ -3,8 +3,14 @@
 // ----------------------------------------------------------------------------
 // One `claude -p --output-format json --json-schema <PLAYTEST_SCHEMA>` call that
 // plays the running app through the tester adapter's tools (Playwright MCP for
-// `web`) and answers with findings, scores and journeys. Same "always
-// resolves, never rejects" shape as orchestraPlan.js's runPlanner().
+// `web`, the playtest bridge for `electron` and `unity`) and answers with
+// findings, scores and journeys. Same "always resolves, never rejects" shape
+// as orchestraPlan.js's runPlanner().
+//
+// The prompt follows the adapter (adapter.name): a web app is checked at
+// desktop and mobile width; a desktop app (LW 3.35) at a wide and a compact
+// window size, with its keyboard shortcuts and menus; a Unity game (LW 3.36b)
+// through scripted input and the PlaytestDriver's game state.
 //
 // ANTI-SELF-GRADING (plan: "Roles"). The Playtester sees the running app,
 // design/TEST_PLAN.md and design/SHIP_CRITERIA.md - nothing else:
@@ -53,6 +59,11 @@ const PLAYTEST_BUDGET_USD = 5;
 const PLAYTEST_TIMEOUT_MS = 30 * 60 * 1000;
 const DESKTOP = { width: 1440, height: 900 };
 const MOBILE = { width: 390, height: 844 };
+// What the app under test is: the adapter's name. Anything else is a web app.
+const TARGETS = ['web', 'electron', 'unity'];
+// Desktop app window sizes (content area): a roomy one and a small laptop one.
+const WINDOW_WIDE = { width: 1440, height: 900 };
+const WINDOW_COMPACT = { width: 1024, height: 700 };
 
 // Denied by name on top of `--tools ""`: a removed tool does not exist in the
 // session at all, so even a future CLI default cannot hand one back.
@@ -268,23 +279,109 @@ function loadPlaytestInputs(projectDir) {
 
 const fence = (title, body) => [`${title}:`, '<<<', body || '(empty)', '>>>'];
 
-const SHARED_RULES = [
-  `- Check everything at desktop width (browser_resize ${DESKTOP.width}x${DESKTOP.height}) AND at mobile width (browser_resize ${MOBILE.width}x${MOBILE.height}).`,
-  '- Read the browser console (browser_console_messages) after every journey and screen; put the errors that belong to a finding in its consoleErrors.',
-  '- Every finding needs a screenshot: browser_take_screenshot with a short, unique filename (for example "f3-mobile-cart.png"). Put exactly that filename in "screenshot".',
-  '- Judge only what you see in the browser. You have no access to the source code; do not ask for it or guess at it.',
+const REPORT_RULES = [
   '',
   'Report:',
   '- findings: kind "bug" (broken), "feel" (works but looks or feels wrong, slow, confusing), "missing" (expected but absent), "idea"; severity blocker/high/medium/low; steps = exact steps to reproduce, one action each.',
   '- scores: score each ship criterion you checked from 0 to 10, with its milestone. evidence = a screenshot filename you took in THIS session plus the steps that show it. A score without evidence is thrown away.',
 ];
 
+const SHARED_RULES = [
+  `- Check everything at desktop width (browser_resize ${DESKTOP.width}x${DESKTOP.height}) AND at mobile width (browser_resize ${MOBILE.width}x${MOBILE.height}).`,
+  '- Read the browser console (browser_console_messages) after every journey and screen; put the errors that belong to a finding in its consoleErrors.',
+  '- Every finding needs a screenshot: browser_take_screenshot with a short, unique filename (for example "f3-mobile-cart.png"). Put exactly that filename in "screenshot".',
+  '- Judge only what you see in the browser. You have no access to the source code; do not ask for it or guess at it.',
+  ...REPORT_RULES,
+];
+
+// LW 3.35: a desktop (Electron) app through the bridge's desktop tools.
+const DESKTOP_RULES = [
+  `- Check every window at a wide size (resize_window ${WINDOW_WIDE.width}x${WINDOW_WIDE.height}) AND a compact size (resize_window ${WINDOW_COMPACT.width}x${WINDOW_COMPACT.height}): nothing cut off, overlapping or out of reach. Where a rule below says "both widths", it means these two sizes.`,
+  '- Use list_windows to see every window the app opens (dialogs, settings, second windows) and test each of them.',
+  '- Try the keyboard like a desktop user: Tab order, Enter and Escape in dialogs, and every shortcut the app shows in its menus or UI (press_key with modifiers).',
+  '- If list_menu shows an application menu (menu bar or tray-style entries), exercise its items with click_menu or their accelerators.',
+  '- Read console_errors after every journey and screen; put the errors that belong to a finding in its consoleErrors.',
+  '- Every finding needs a screenshot: screenshot with a short, unique name (for example "f3-settings-compact.png"). Put exactly that name in "screenshot".',
+  '- Judge only what you see in the app windows. You have no access to the source code or the file system; do not ask for them or guess at them.',
+  ...REPORT_RULES,
+];
+
+// LW 3.36b: a Unity game in play mode through the PlaytestDriver.
+const UNITY_RULES = [
+  '- Act with send_input (keys, buttons, axes, clicks at screen positions, UI elements by name), then wait and look: screenshot and game_state show what changed.',
+  '- A criterion passes only if the screenshot and game_state agree (score, health, current scene, open menu...). Where a rule below says "both widths", the one Game view counts as both.',
+  '- Read console_errors after every journey; put the errors that belong to a finding in its consoleErrors.',
+  '- Every finding needs a screenshot: screenshot with a short, unique name (for example "f3-pause-menu.png"). Put exactly that name in "screenshot".',
+  '- Judge only what you see and what game_state reports. You have no access to the source code or the project files; do not ask for them or guess at them.',
+  ...REPORT_RULES,
+];
+
+// Per non-web target: who is tested, how it is reached, its rules, and how
+// key screens are named (they are compared with the previous run).
+const TARGET_PROMPTS = {
+  electron: {
+    what: 'a desktop app (Electron)',
+    tester: 'test it like a real, careful user',
+    reach: 'The app is running on this computer. You see and drive its windows only through your tools (list_windows, screenshot, click, type_text, press_key, resize_window, read_text, console_errors, wait_for_text, list_menu, click_menu).',
+    explore: 'Then explore freely: empty and invalid input, edge cases, double clicks, long text, closing and reopening windows and dialogs, resizing while working.',
+    rules: DESKTOP_RULES,
+    screens: '- screens: the start screen and the main screen of every journey, at both window sizes, named "<screen>-wide" / "<screen>-compact". Use the same names every run - they are compared with the previous run.',
+    shipJourneys: 'passed true only if it completed end to end at both window sizes',
+  },
+  unity: {
+    what: 'a Unity game running in play mode',
+    tester: 'play it like a real, careful player',
+    reach: 'The game is running in the Unity editor on this computer. You see and drive it only through your tools (screenshot, game_state, send_input, console_errors, wait).',
+    explore: 'Then explore freely: unexpected input orders, mashing buttons, pausing and resuming, losing on purpose, going where the level does not expect you.',
+    rules: UNITY_RULES,
+    screens: '- screens: the start screen and the main screen of every journey, named "<screen>". Use the same names every run - they are compared with the previous run.',
+    shipJourneys: 'passed true only if it completed end to end',
+  },
+};
+
+/** The prompt for a desktop app or a game; same report contract as the web prompt. */
+function targetPrompt(t, { mode, testPlan, shipCriteria, checks }) {
+  if (mode === 'shipConfirm') {
+    return [
+      `You are an independent SHIP confirmation tester for ${t.what}. Nobody has told you whether it passes - find out yourself.`,
+      t.reach,
+      '',
+      'What to do:',
+      '- Check every ship criterion below, one by one, strictly. A criterion passes only if you saw it work.',
+      ...t.rules,
+      '- Name every screenshot with a "ship-" prefix.',
+      `- journeys: one entry per flow you exercised to check the criteria; ${t.shipJourneys}.`,
+      '- screens: leave empty.',
+      '',
+      ...fence('Ship criteria (design/SHIP_CRITERIA.md)', shipCriteria),
+    ].join('\n');
+  }
+  return [
+    `You are the Playtester for ${t.what}: ${t.tester}.`,
+    t.reach,
+    '',
+    'What to do:',
+    '1. Run every journey in the test plan below, end to end, step by step.',
+    `2. ${t.explore}`,
+    ...t.rules,
+    `- journeys: one entry per test-plan journey (its exact name); ${t.shipJourneys}.`,
+    t.screens,
+    '',
+    ...fence('Test plan (design/TEST_PLAN.md)', testPlan),
+    '',
+    ...fence('Ship criteria (design/SHIP_CRITERIA.md)', shipCriteria),
+    ...checksPrompt(checks),
+  ].join('\n');
+}
+
 /**
- * @param {{mode:string, url:string, testPlan:string, shipCriteria:string, checks?:object[]}} input
- *   checks = lunasworkChecks.checkList of the built cards (explore pass only)
+ * @param {{mode:string, url:string, testPlan:string, shipCriteria:string, checks?:object[], target?:string}} input
+ *   checks = lunasworkChecks.checkList of the built cards (explore pass only);
+ *   target = the adapter's name ('web' when absent; electron / unity need no url)
  * @returns {string}
  */
-function buildPlaytestPrompt({ mode, url, testPlan, shipCriteria, checks = [] }) {
+function buildPlaytestPrompt({ mode, url, testPlan, shipCriteria, checks = [], target = 'web' }) {
+  if (TARGET_PROMPTS[target]) return targetPrompt(TARGET_PROMPTS[target], { mode, testPlan, shipCriteria, checks });
   if (mode === 'shipConfirm') {
     return [
       'You are an independent SHIP confirmation tester for a web app. Nobody has told you whether it passes - find out yourself.',
@@ -697,15 +794,19 @@ async function runPlaytest(opts) {
 
   try {
     if (!pick) return fail('badMode', String(mode));
-    const appUrl = httpUrl(url);
-    if (!appUrl) return fail('badUrl', clean(String(url), 300));
+    const target = adapter && TARGETS.includes(adapter.name) ? adapter.name : 'web';
+    // A desktop app or a game has no url: the adapter's tools reach it.
+    const appUrl = target === 'web' ? httpUrl(url) : null;
+    if (target === 'web' && !appUrl) return fail('badUrl', clean(String(url), 300));
     if (!adapter || typeof adapter.tools !== 'function' || typeof adapter.evidenceDir !== 'string') {
       return fail('badAdapter');
     }
     const tools = adapter.tools();
     // The browser must be locked to the app the adapter started - an unstarted
     // adapter has no origin lock and could reach LunaCore's own local servers.
-    if (!allowedOrigins(tools).includes(appUrl.origin)) return fail('badUrl', 'url is not the started app origin');
+    if (target === 'web' && !allowedOrigins(tools).includes(appUrl.origin)) return fail('badUrl', 'url is not the started app origin');
+    // electron / unity offer their bridge only once the app runs.
+    if (target !== 'web' && !allowedAdapterTools(tools).length) return fail('badAdapter', 'the app is not started');
     const inputs = loadPlaytestInputs(projectDir);
     // The ship pass verifies the SHIP criteria only.
     const checks = mode === 'explore' && Array.isArray(opts.checks) ? opts.checks : [];
@@ -721,7 +822,7 @@ async function runPlaytest(opts) {
       || ((pid) => killTree(pid, { platform: process.platform, execFile, kill: process.kill.bind(process) }));
     const call = await callClaude({
       args: buildPlaytestArgs({ model: pick.model, tools, budgetUsd: opts.budgetUsd }),
-      prompt: buildPlaytestPrompt({ mode, url: appUrl.href, ...inputs, checks }),
+      prompt: buildPlaytestPrompt({ mode, target, url: appUrl ? appUrl.href : '', ...inputs, checks }),
       cwd: evidenceDir, // never the repo: the Playtester must not see the code
       env,
       execImpl: opts.execImpl || execFile,
@@ -759,6 +860,9 @@ module.exports = {
   DIFF_THRESHOLD,
   DESKTOP,
   MOBILE,
+  TARGETS,
+  WINDOW_WIDE,
+  WINDOW_COMPACT,
   playtestModel,
   loadPlaytestInputs,
   buildPlaytestPrompt,

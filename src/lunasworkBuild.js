@@ -20,15 +20,23 @@
 //                         for the self-check gate - God Mode's own 'Final
 //                         check command' when the profile has none
 //   wrapPlanner(fn)       each planned package gets the strongest model of
-//                         its cards (God Mode's stall escalation still applies)
+//                         its cards (God Mode's stall escalation still applies),
+//                         and ALL scene / prefab work goes to the one scene
+//                         worker package (src/lunasworkScene.js, LW 3.36b)
 //   ownsMerge()           the merge confirmation was given when Mati started
 //                         the Luna's Work run (a native dialog in main)
+//
+// A Unity project (LW 3.36b) also gets UnityYAMLMerge as its merge driver
+// before each build, and makePlan an ownership map giving every scene and
+// prefab to the scene worker (LW 2.12's guard enforces it once merged).
 //
 // The self-check gate itself stays God Mode's (orchestraSelfCheck.js): red
 // after the one fix-up try = luna/<slug>-integration is pushed, never the base.
 // ============================================================================
 
 'use strict';
+
+const scene = require('./lunasworkScene');
 
 const MODEL_RANK = { haiku: 0, sonnet: 1, opus: 2 };
 // God Mode workers run on these (orchestraPlan.js MODELS).
@@ -68,12 +76,27 @@ function planCard(card) {
  * @param {{orchestra:{makePlan:Function, launch:Function, cancelPlanWait:Function,
  *   view?:Function, planWait?:Function, finishRun?:Function},
  *   profileId:()=>string|null, env:()=>object, freeEnv?:()=>object|null,
- *   log?:(line:string)=>void}} deps
+ *   log?:(line:string)=>void, isUnityProject?:(repoPath:string)=>boolean,
+ *   configureUnityMerge?:(repoPath:string)=>Promise<object>}} deps
+ *   isUnityProject / configureUnityMerge: lunasworkScene's, injectable for tests
  */
 function createGodModeBuilder(deps) {
   const log = deps.log || (() => {});
-  /** @type {null|{projectId:string, checkCommand:string, models:Map<number,string>, planId:string|null, settle:Function}} */
+  const isUnityProject = deps.isUnityProject || scene.isUnityProject;
+  const configureUnityMerge = deps.configureUnityMerge || scene.configureUnityMerge;
+  /** @type {null|{projectId:string, checkCommand:string, models:Map<number,string>, cards:object[], planId:string|null, settle:Function}} */
   let active = null;
+
+  /** LW 3.36b: UnityYAMLMerge for every worktree; a failure is logged, the build goes on. */
+  async function prepareUnity(repoPath) {
+    try {
+      const res = await configureUnityMerge(repoPath);
+      if (!res || !res.ok) log(`[lunaswork-build] UnityYAMLMerge not configured: ${(res && (res.detail || res.error)) || 'failed'}`);
+      else if (res.warning) log(`[lunaswork-build] ${res.warning}`);
+    } catch (err) {
+      log(`[lunaswork-build] UnityYAMLMerge not configured: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   /**
    * The build plan God Mode restored after LunaCore restarted mid-build, when
@@ -154,6 +177,7 @@ function createGodModeBuilder(deps) {
       projectId: opts.projectId,
       checkCommand: typeof opts.checkCommand === 'string' ? opts.checkCommand : '',
       models: new Map(cards.map((c) => [c.at, c.model])),
+      cards,
       planId: null,
       settle,
     };
@@ -161,6 +185,8 @@ function createGodModeBuilder(deps) {
       const interrupted = interruptedPlan(opts);
       if (interrupted) return await finishInterrupted(interrupted);
       if (foreignPlanOpen(opts)) return { ok: false, error: 'godModeBusy' };
+      const unity = isUnityProject(opts.repoPath);
+      if (unity) await prepareUnity(opts.repoPath);
       const made = await deps.orchestra.makePlan({
         projectId: opts.projectId,
         repoPath: opts.repoPath,
@@ -169,6 +195,8 @@ function createGodModeBuilder(deps) {
         env: (opts.free && typeof deps.freeEnv === 'function' && deps.freeEnv()) || deps.env(),
         cards: cards.map(planCard),
         onRunSettled: (result) => settle(result),
+        // Only a Unity build carries the key: every other plan is made exactly as before.
+        ...(unity ? { ownership: scene.sceneOwnership() } : {}),
       });
       if (!isObj(made) || !made.ok) return planFailure(made);
       active.planId = made.plan.id;
@@ -210,12 +238,17 @@ function createGodModeBuilder(deps) {
     return { ...b, model: 'plan', integration: 'merge', checkCommand: active.checkCommand || b.checkCommand };
   }
 
-  /** runPlanner for God Mode: package models from the controller's card choices during a build. */
+  /**
+   * runPlanner for God Mode during a build: package models from the
+   * controller's card choices, then every scene / prefab package folded into
+   * the one scene worker (a plan without scene work is left as it was).
+   */
   function wrapPlanner(runPlanner) {
     return async (args) => {
       const res = await runPlanner(args);
       if (!active || !isObj(res) || !res.ok || !isObj(res.raw) || !Array.isArray(res.raw.packages)) return res;
-      const packages = res.raw.packages.map((p) => (isObj(p) ? { ...p, model: packageModel(p.todoAts, active.models, p.model) } : p));
+      const modelled = res.raw.packages.map((p) => (isObj(p) ? { ...p, model: packageModel(p.todoAts, active.models, p.model) } : p));
+      const packages = scene.routeScenePackages(modelled, active.cards);
       return { ...res, raw: { ...res.raw, packages } };
     };
   }

@@ -3,7 +3,8 @@
 // the prompt carries no code and no earlier verdicts, validation drops
 // evidence-less scores and foreign screenshots, shipConfirm is always opus,
 // screen diffs above the threshold become findings, and a broken answer yields
-// an empty report instead of a crash. `claude` is a fake exec; disk writes go
+// an empty report instead of a crash; the desktop (electron) and game (unity)
+// prompt variants, and a url-less electron run. `claude` is a fake exec; disk writes go
 // to temp dirs, never the real config/ directory.
 // ============================================================================
 
@@ -185,6 +186,78 @@ test('shipConfirm prompt is built from the ship criteria only', () => {
   const prompt = P.buildPlaytestPrompt({ mode: 'shipConfirm', url: URL_, testPlan: TEST_PLAN, shipCriteria: SHIP });
   assert.ok(prompt.includes('Totals are correct'));
   assert.ok(!prompt.includes('Enter 10 m of steel'));
+});
+
+// ---- desktop app / game prompt variants (LW 3.35 / 3.36b) --------------------------
+
+test('desktop prompt: two window sizes, keyboard shortcuts, menus, every window - no browser, no url', () => {
+  const prompt = P.buildPlaytestPrompt({ mode: 'explore', target: 'electron', url: '', testPlan: TEST_PLAN, shipCriteria: SHIP });
+  assert.match(prompt, /desktop app \(Electron\)/);
+  assert.ok(prompt.includes(`resize_window ${P.WINDOW_WIDE.width}x${P.WINDOW_WIDE.height}`));
+  assert.ok(prompt.includes(`resize_window ${P.WINDOW_COMPACT.width}x${P.WINDOW_COMPACT.height}`));
+  assert.match(prompt, /keyboard/i);
+  assert.match(prompt, /shortcut/i);
+  assert.match(prompt, /list_menu/);
+  assert.match(prompt, /tray/);
+  assert.match(prompt, /list_windows/);
+  assert.match(prompt, /<screen>-wide" \/ "<screen>-compact"/);
+  assert.ok(prompt.includes('Enter 10 m of steel') && prompt.includes('Totals are correct'));
+  assert.ok(!/Playwright|browser|localhost|http:/i.test(prompt), 'nothing web-only');
+
+  const ship = P.buildPlaytestPrompt({ mode: 'shipConfirm', target: 'electron', testPlan: TEST_PLAN, shipCriteria: SHIP });
+  assert.match(ship, /SHIP confirmation tester for a desktop app/);
+  assert.ok(ship.includes('Totals are correct') && !ship.includes('Enter 10 m of steel'));
+  assert.match(ship, /both window sizes/);
+});
+
+test('game prompt: drives the PlaytestDriver tools and judges by screenshot and game state', () => {
+  const prompt = P.buildPlaytestPrompt({ mode: 'explore', target: 'unity', testPlan: TEST_PLAN, shipCriteria: SHIP });
+  assert.match(prompt, /Unity game running in play mode/);
+  for (const tool of ['send_input', 'game_state', 'screenshot', 'console_errors']) assert.ok(prompt.includes(tool), tool);
+  assert.ok(!/Playwright|resize_window|browser/i.test(prompt));
+  assert.deepEqual(P.TARGETS, ['web', 'electron', 'unity']);
+});
+
+/** A real electron adapter on fakes: the app prints the wrapper's ready line. */
+function electronAdapter() {
+  const runsRoot = path.join(tmpDir('lw-pt-runs-'), 'runs');
+  return A.createAdapter('electron', {
+    projectDir: tmpDir('lw-pt-desktop-'),
+    runsRoot,
+    runId: 'run1',
+    iteration: 1,
+    spawn: () => {
+      const child = Object.assign(new EventEmitter(), { pid: 4242, stdout: new PassThrough(), stderr: new PassThrough() });
+      child.stdout.write('[luna-playtest] ready {"port":51234,"windows":1}\n');
+      return child;
+    },
+    sleep: () => new Promise((resolve) => setImmediate(resolve)),
+    execFile: (file, args, options, cb) => cb(null),
+    env: {},
+    callControl: async (control, tool) => (tool === 'list_windows' ? { windows: [] } : {}),
+  });
+}
+
+test('an electron run needs no url: the desktop prompt and the bridge tools only', async () => {
+  const adapter = electronAdapter();
+  const fake = fakeClaude({ raw: full() });
+  const unstarted = await P.runPlaytest({ projectDir: fakeProject(), adapter, execImpl: fake.execImpl });
+  assert.equal(unstarted.error, 'badAdapter', 'no tools before the app runs');
+  assert.equal(fake.calls.length, 0);
+
+  await adapter.start({ adapter: 'electron', startCommand: 'npm start', readyTimeoutSec: 5 });
+  try {
+    const res = await P.runPlaytest({ projectDir: fakeProject(), adapter, execImpl: fake.execImpl });
+    assert.equal(res.ok, true, JSON.stringify(res.error));
+    const [call] = fake.calls;
+    assert.match(call.prompt, /desktop app \(Electron\)/);
+    assert.ok(!call.prompt.includes('Playwright'));
+    const allowed = argAfter(call.args, '--allowedTools').split(',');
+    assert.ok(allowed.length > 0 && allowed.every((t) => t.startsWith('mcp__electron-app__')), allowed.join(','));
+    assert.equal(call.options.cwd, adapter.evidenceDir);
+  } finally {
+    await adapter.stop();
+  }
 });
 
 // ---- models ---------------------------------------------------------------------
