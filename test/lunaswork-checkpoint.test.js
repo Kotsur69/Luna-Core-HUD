@@ -6,7 +6,9 @@
 // the rolled-back work becomes a bug card with the evidence and the reverted
 // commits, DECISIONS.md gets the rollback, a rejected push leaves origin as
 // it was - and, over every git args list the module issued, that no force
-// push or reset was ever run.
+// push or reset was ever run. Staging data (LW 3.29, src/lunasworkStaging.js)
+// with a fake command runner: the backup runs before the migration, a failed
+// backup blocks it, and a rollback restores the data with the code.
 // ============================================================================
 
 'use strict';
@@ -33,8 +35,18 @@ const {
   createCheckpoints,
 } = require('../src/lunasworkCheckpoint');
 const { REPRO_ACCEPTANCE } = require('../src/lunasworkCritic');
+const { createStaging, backupDirFor, MANIFEST_FILE } = require('../src/lunasworkStaging');
+const { validateProfile } = require('../src/lunasworkSettings');
 
 const RUN = 'lwrun1';
+const STAGING_PROFILE = validateProfile({
+  startCommand: 'npm start',
+  stagingUrl: 'https://staging.example.test',
+  stagingMigrateCommand: 'supabase db push --project-ref stagingrefabcdefghij',
+  stagingDeployCommand: 'vercel deploy --yes',
+  stagingBackupCommand: 'supabase db dump --data-only -f "%LUNA_BACKUP_DIR%/data.sql"',
+  stagingRestoreCommand: 'psql -f "%LUNA_BACKUP_DIR%/data.sql"',
+}).profile;
 // Every args list the module sent to git, across all tests in this file.
 const issued = [];
 
@@ -332,6 +344,195 @@ test('no good tag: nothing is reverted', async (t) => {
   assert.equal(res.ok, false);
   assert.equal(res.error, 'noGoodTag');
   assert.equal(originMain(origin), before);
+});
+
+// ---- staging data: backup before migrate, restore with the rollback (LW 3.29) -----------
+
+/** A schema change committed straight on main and pushed. */
+function commitMigration(repo, name) {
+  const dir = path.join(repo, 'supabase', 'migrations');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, name), `create table ${name.replace(/\W/g, '_')} (id int);\n`);
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-m', `feat: migration ${name}`);
+  git(repo, 'push', 'origin', 'HEAD:refs/heads/main');
+}
+
+/** The staging flow over the real repo with a fake command runner. */
+function stagingOver(root, onStep) {
+  const runsRoot = path.join(root, 'runs');
+  const steps = [];
+  const staging = createStaging({
+    git: recorder(),
+    runsRoot: () => runsRoot,
+    now: () => 1,
+    runCommand: async (o) => {
+      steps.push(o.step);
+      const answer = onStep ? onStep(o) : null;
+      if (answer) return answer;
+      if (o.step === 'backup') fs.writeFileSync(path.join(o.env.LUNA_BACKUP_DIR, 'data.sql'), 'snapshot');
+      return { ok: true, code: 0 };
+    },
+  });
+  // The last staged commit, as the previous iteration left it.
+  const stagedAt = (repo, sha = git(repo, 'rev-parse', 'HEAD')) => {
+    const file = path.join(runsRoot, `lunaswork-${RUN}`, 'staging.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ lastAppliedSha: sha, production: [] }));
+  };
+  return { staging, steps, runsRoot, stagedAt };
+}
+
+function stagingCtx(repo, store, events, iteration = 2) {
+  return {
+    run: () => ({
+      id: RUN,
+      iteration,
+      repoPath: repo,
+      profile: STAGING_PROFILE,
+      startedAt: null,
+      history: [{ n: 1, milestone: 'core', selfCheck: 'green', coreJourneysOk: true, rolledBack: false }],
+      laps: [],
+      decisions: [],
+    }),
+    ask: () => assert.fail('nothing here touches production'),
+    logEvent: (text) => events.push(text),
+    todoStore: store,
+  };
+}
+
+test('staging: the backup runs before the migration and is linked to the checkpoint tag', async (t) => {
+  const { root, repo } = makeRepo(t);
+  const { staging, steps, runsRoot, stagedAt } = stagingOver(root);
+  stagedAt(repo);
+  const before = git(repo, 'rev-parse', 'HEAD');
+  commitMigration(repo, '20261027_quotes.sql');
+  const events = [];
+  const res = await staging.applyIteration(stagingCtx(repo, memoryStore(), events));
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.migrated, true);
+  assert.deepEqual(steps, ['backup', 'migrate', 'deploy']);
+  const dir = backupDirFor(runsRoot, RUN, 2);
+  assert.equal(res.backup, dir);
+  assert.equal(fs.readFileSync(path.join(dir, 'data.sql'), 'utf8'), 'snapshot');
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, MANIFEST_FILE), 'utf8'));
+  assert.equal(manifest.tag, 'luna-work/lwrun1/iter-2');
+  assert.equal(manifest.dataOf, 'luna-work/lwrun1/iter-1');
+  assert.deepEqual(manifest.migrations, ['supabase/migrations/20261027_quotes.sql']);
+  // A restart before the iteration was recorded: the same diff again keeps the
+  // snapshot from before the migration - a new one would hold migrated data.
+  steps.length = 0;
+  stagedAt(repo, before);
+  fs.writeFileSync(path.join(dir, 'data.sql'), 'snapshot');
+  const again = await staging.applyIteration(stagingCtx(repo, memoryStore(), events));
+  assert.equal(again.ok, true);
+  assert.deepEqual(steps, ['migrate', 'deploy']);
+  assert.ok(events.some((e) => /backup from before the restart kept/.test(e)), events.join(' | '));
+  // The next iteration without a schema change takes no backup at all.
+  steps.length = 0;
+  git(repo, 'commit', '--allow-empty', '-m', 'chore: nothing');
+  const next = await staging.applyIteration(stagingCtx(repo, memoryStore(), events, 3));
+  assert.equal(next.ok, true);
+  assert.equal(next.migrated, false);
+  assert.deepEqual(steps, ['migrate', 'deploy']);
+});
+
+test('staging: a failed backup blocks the migration - a card and a note instead', async (t) => {
+  const { root, repo } = makeRepo(t);
+  const { staging, steps, runsRoot, stagedAt } = stagingOver(root, (o) => (o.step === 'backup' ? { ok: false, code: 1, detail: 'pg_dump: connection refused' } : null));
+  stagedAt(repo);
+  const before = git(repo, 'rev-parse', 'HEAD');
+  commitMigration(repo, '20261027_quotes.sql');
+  const store = memoryStore();
+  const events = [];
+  const res = await staging.applyIteration(stagingCtx(repo, store, events));
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'backupFailed');
+  assert.deepEqual(steps, ['backup'], 'neither migrate nor deploy ran');
+  assert.equal(fs.existsSync(path.join(backupDirFor(runsRoot, RUN, 2), MANIFEST_FILE)), false);
+  assert.ok(events.some((e) => /backup failed \(pg_dump: connection refused\) - the migration was NOT applied/.test(e)), events.join(' | '));
+  assert.equal(store.list.length, 1);
+  assert.match(store.list[0].text, /Staging backup failed - the migration was not applied/);
+  assert.match(store.list[0].details, /20261027_quotes\.sql/);
+  // The migration is still pending: the next try starts from the same commit.
+  const state = JSON.parse(fs.readFileSync(path.join(runsRoot, `lunaswork-${RUN}`, 'staging.json'), 'utf8'));
+  assert.equal(state.lastAppliedSha, before);
+});
+
+test('staging: a rollback restores the matching data snapshot together with the code revert', async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  mergePackage(repo, 'good');
+  const cp = createCheckpoints({ git: recorder(), tmpDir: () => root });
+  assert.equal((await cp.tagIteration({ repoPath: repo, runId: RUN, iteration: 1 })).ok, true);
+  const good = originMain(origin);
+  const restores = [];
+  const { staging, stagedAt } = stagingOver(root, (o) => {
+    if (o.step !== 'restore') return null;
+    restores.push({ dir: o.env.LUNA_BACKUP_DIR, originAtRestore: originMain(origin), command: o.command });
+    return { ok: true, code: 0 };
+  });
+  // Iteration 2: a schema change, snapshotted before it went to staging, then the playtest broke.
+  stagedAt(repo);
+  commitMigration(repo, '20261027_quotes.sql');
+  const store = memoryStore();
+  assert.equal((await staging.applyIteration(stagingCtx(repo, store, []))).ok, true);
+  const broken = originMain(origin);
+
+  const res = await cp.rollback({
+    repoPath: repo,
+    runId: RUN,
+    iteration: 2,
+    toIteration: 1,
+    reason: 'coreJourneyBroken',
+    todoStore: store,
+    restoreData: (ctx) => staging.restoreData({ ...ctx, profile: STAGING_PROFILE, todoStore: store }),
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(git(origin, 'diff', '--stat', good, originMain(origin)), '', 'the code is back at the good tag');
+  assert.deepEqual(res.data, {
+    restored: true,
+    iteration: 2,
+    note: "staging data restored from the snapshot taken before iteration 2's schema change",
+  });
+  assert.equal(restores.length, 1);
+  assert.equal(restores[0].dir, backupDirFor(path.join(root, 'runs'), RUN, 2));
+  assert.equal(restores[0].command, STAGING_PROFILE.stagingRestoreCommand);
+  assert.notEqual(restores[0].originAtRestore, broken, 'the data goes back only once the revert is on origin');
+  const decisions = fs.readFileSync(path.join(repo, 'design', 'DECISIONS.md'), 'utf8');
+  assert.match(decisions, /with 1 revert commit\(s\) and restore the staging data snapshot of iteration 2 because/);
+  const card = store.list.find((c) => /Redo the work rolled back/.test(c.text));
+  assert.match(card.details, /Staging data: staging data restored/);
+});
+
+test('staging: a failed restore keeps the code rollback, files a card and says so', async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  mergePackage(repo, 'good');
+  const cp = createCheckpoints({ git: recorder(), tmpDir: () => root });
+  await cp.tagIteration({ repoPath: repo, runId: RUN, iteration: 1 });
+  const { staging, stagedAt } = stagingOver(root, (o) => (o.step === 'restore' ? { ok: false, code: 2, detail: 'psql: FATAL password' } : null));
+  stagedAt(repo);
+  commitMigration(repo, '20261027_quotes.sql');
+  const store = memoryStore();
+  await staging.applyIteration(stagingCtx(repo, store, []));
+  const broken = originMain(origin);
+  const res = await cp.rollback({
+    repoPath: repo,
+    runId: RUN,
+    iteration: 2,
+    toIteration: 1,
+    reason: 'scoreDrop',
+    todoStore: store,
+    restoreData: (ctx) => staging.restoreData({ ...ctx, profile: STAGING_PROFILE, todoStore: store }),
+  });
+  assert.equal(res.ok, true, 'the code revert stands');
+  assert.notEqual(originMain(origin), broken);
+  assert.equal(res.data.restored, false);
+  assert.match(res.data.note, /NOT restored from the iter-2 snapshot/);
+  // The note goes into the repo's DECISIONS.md: the command output stays in the card.
+  assert.doesNotMatch(res.data.note, /psql|[\\/]runs[\\/]/);
+  const restoreCard = store.list.find((c) => /Staging data was not restored after a rollback/.test(c.text));
+  assert.match(restoreCard.details, /psql: FATAL password/);
+  assert.doesNotMatch(fs.readFileSync(path.join(repo, 'design', 'DECISIONS.md'), 'utf8'), /and restore the staging data/);
 });
 
 // ---- the never-rule ---------------------------------------------------------------------

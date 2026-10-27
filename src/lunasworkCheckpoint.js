@@ -17,6 +17,9 @@
 //   3. the rolled-back work becomes a `bug` card tagged run:<id>, with the
 //      evidence and the reverted commit list
 //   4. the rollback goes into design/DECISIONS.md
+//   5. with o.restoreData (LW 3.29, src/lunasworkStaging.js) the staging data
+//      snapshot that matches the good tag is restored right after the revert
+//      reached origin; the restore goes into the card and DECISIONS.md too
 //
 // NEVER a force-push or a reset, in any code path: history on origin only
 // grows. Every git call goes through guardedGit(), which refuses `reset`,
@@ -231,7 +234,7 @@ function journeyLine(j) {
  * commits and the cards whose work went with them.
  * @returns {{kind:'bug', severity:string, text:string, details:string, acceptance:string[], files:string[], updatesCardId:null}}
  */
-function rollbackCard({ iteration, fromTag, toTag, reason, evidence = {}, reverted = [] }) {
+function rollbackCard({ iteration, fromTag, toTag, reason, evidence = {}, reverted = [], data = null }) {
   const why = reasonText(reason, evidence);
   const journeys = (evidence.failedJourneys || []).filter(isObj).slice(0, MAX_LISTED).map(journeyLine);
   const findings = (evidence.findings || [])
@@ -250,6 +253,7 @@ function rollbackCard({ iteration, fromTag, toTag, reason, evidence = {}, revert
     ...(evidence.evidenceDir ? [`Evidence folder: ${oneLine(evidence.evidenceDir, 300)}`, ''] : []),
     ...bulletList('Cards whose work was reverted (reopened)', cards),
     ...bulletList('Reverted commits', commits),
+    ...(isObj(data) && data.note ? [`Staging data: ${oneLine(data.note, 300)}`, ''] : []),
     'Start from a failing test that reproduces the problem, then redo the work without breaking it.',
   ].join('\n');
   return {
@@ -362,23 +366,38 @@ function createCheckpoints(deps = {}) {
     }
   }
 
+  /**
+   * C5: the staging data restore that goes with the revert (o.restoreData,
+   * src/lunasworkStaging.js). Null when there is none. Never throws.
+   */
+  async function restoreData(o) {
+    if (typeof o.restoreData !== 'function') return null;
+    try {
+      const res = await o.restoreData({ repoPath: o.repoPath, runId: o.runId, iteration: o.iteration, toIteration: o.toIteration });
+      return isObj(res) ? res : null;
+    } catch (err) {
+      return { restored: false, error: 'restoreFailed', note: `staging data not restored: ${oneLine(errText(err), 200)}` };
+    }
+  }
+
   /** The card and the DECISIONS.md line of a rollback that went through. */
-  function recordRollback({ repoPath, runId, iteration, fromTag, toTag, reason, evidence, reverted, todoStore }) {
+  function recordRollback({ repoPath, runId, iteration, fromTag, toTag, reason, evidence, reverted, todoStore, data }) {
     let cards = [];
     let cardError = null;
     const tag = runTag(runId);
     if (todoStore && tag) {
       try {
-        const applied = applyCards(todoStore, [rollbackCard({ iteration, fromTag, toTag, reason, evidence, reverted })], tag);
+        const applied = applyCards(todoStore, [rollbackCard({ iteration, fromTag, toTag, reason, evidence, reverted, data })], tag);
         cards = applied.created.map((c) => c.at);
         cardError = applied.error || null;
       } catch (err) {
         cardError = errText(err);
       }
     }
+    const restored = isObj(data) && data.restored === true ? ` and restore the staging data snapshot of iteration ${data.iteration}` : '';
     const op = pack.appendDecision({
-      choice: `to roll main back from ${fromTag} to ${toTag} with ${reverted.length} revert commit(s)`,
-      because: reasonText(reason, evidence),
+      choice: `to roll main back from ${fromTag} to ${toTag} with ${reverted.length} revert commit(s)${restored}`,
+      because: `${reasonText(reason, evidence)}${isObj(data) && data.note ? `; ${oneLine(data.note, 200)}` : ''}`,
       source: `Luna's Work checkpoint, iteration ${iteration}`,
     });
     const written = op ? pack.applyWrite(repoPath, op) : { ok: false, error: 'rejected' };
@@ -390,9 +409,11 @@ function createCheckpoints(deps = {}) {
   /**
    * Reverts origin's base branch to the last good tag with revert commits.
    * @param {{repoPath:string, runId:string, iteration:number, toIteration:number, reason:string,
-   *   evidence?:object, todoStore?:{read:Function, write:Function}}} o
+   *   evidence?:object, todoStore?:{read:Function, write:Function},
+   *   restoreData?:(ctx:{repoPath:string, runId:string, iteration:number, toIteration:number})=>Promise<object|null>}} o
    * @returns {Promise<{ok:boolean, nothing?:boolean, fromTag?:string, toTag?:string,
    *   reverted?:Array<{sha:string, subject:string}>, cards?:number[], decision?:boolean,
+   *   data?:{restored:boolean, iteration?:number, note:string, error?:string},
    *   error?:string, detail?:string}>}
    */
   async function rollback(o) {
@@ -422,8 +443,10 @@ function createCheckpoints(deps = {}) {
     const kept = await tagAndPush(o.repoPath, fromTag, head.sha);
     if (!kept.ok) log(`[lunaswork] ${fromTag} not pushed: ${kept.error}${kept.detail ? ` (${kept.detail})` : ''}`);
     const reverted = commits.map(({ sha, subject }) => ({ sha, subject }));
-    const recorded = recordRollback({ ...o, fromTag, toTag, reverted, evidence: isObj(o.evidence) ? o.evidence : {} });
-    return { ...base, ok: true, reverted, headAfter: res.headAfter, ...recorded };
+    // C5: the staging data goes back with the code - only once the revert is on origin.
+    const data = await restoreData(o);
+    const recorded = recordRollback({ ...o, fromTag, toTag, reverted, evidence: isObj(o.evidence) ? o.evidence : {}, data });
+    return { ...base, ok: true, reverted, headAfter: res.headAfter, ...recorded, ...(data ? { data } : {}) };
   }
 
   return { tagIteration, rollback };

@@ -117,6 +117,7 @@ const {
 } = require('./lunasworkRules');
 const { checkList } = require('./lunasworkChecks');
 const { rollbackEvidence, reasonText } = require('./lunasworkCheckpoint');
+const { createStaging } = require('./lunasworkStaging');
 const {
   PREPROD,
   HANDED,
@@ -231,6 +232,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   gitLog?: (repoPath:string)=>Promise<string>,
  *   syncCheckout?: (repoPath:string)=>Promise<{ok:boolean, detail?:string}>,
  *   checkpoints?: {tagIteration:(o:object)=>Promise<object>, rollback:(o:object)=>Promise<object>},
+ *   staging?: {runCommand?:Function, git?:Function, runsRoot?:()=>string},
  *   limitResumeAt?: (res:object)=>number|null,
  *   awake?: {hold:()=>void, release:()=>void},
  *   recordDecision?: (ctx:{repoPath:string, line:string, decision:object})=>boolean,
@@ -265,6 +267,8 @@ function createLunasWork(deps) {
     ask: (spec) => ask(spec),
     replayPass: () => replayPass(),
   });
+  // LW 3.28a + 3.29: staging, the production guard and staging data backups.
+  const staging = createStaging({ log, now, ...deps.staging });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
   let run = null;
@@ -834,7 +838,9 @@ function createLunasWork(deps) {
   }
 
   async function stepLaunching() {
-    const started = await startApp();
+    // A staging profile applies the iteration to staging first (src/lunasworkStaging.js).
+    const staged = await staging.applyIteration({ run: () => run, ask, logEvent, todoStore: deps.todoStore(run.projectId) });
+    const started = staged.ok ? await startApp() : { ok: false, error: staged.error };
     if (!started.ok) logEvent(`app did not start: ${started.error}`);
     transition('playtesting', { current: { ...run.current, launch: started } });
   }
@@ -971,9 +977,12 @@ function createLunasWork(deps) {
       reason: decision.reason,
       evidence,
       todoStore: deps.todoStore(run.projectId),
+      // C5: the matching staging data snapshot goes back with the code.
+      restoreData: (ctx) => staging.restoreData({ ...ctx, profile: run.profile, todoStore: deps.todoStore(run.projectId) }),
     });
     const r = isObj(res) ? res : { ok: false, error: 'failed' };
-    const base = { reason: decision.reason, why, toIteration: decision.toIteration };
+    const dataNote = isObj(r.data) && r.data.note ? `; ${r.data.note}` : '';
+    const base = { reason: decision.reason, why: `${why}${dataNote}`, toIteration: decision.toIteration };
     if (r.ok && r.nothing) {
       logEvent('rollback: main already matches the last good tag, nothing to revert');
       return { note: 'nothing to revert' };
@@ -984,7 +993,7 @@ function createLunasWork(deps) {
     }
     cardBook.reopen(run.projectId, closed);
     const reverted = Array.isArray(r.reverted) ? r.reverted : [];
-    logEvent(`rolled back ${r.fromTag} -> ${r.toTag}: ${reverted.length} revert commit(s), ${(r.cards || []).length} card(s)`);
+    logEvent(`rolled back ${r.fromTag} -> ${r.toTag}: ${reverted.length} revert commit(s), ${(r.cards || []).length} card(s)${dataNote}`);
     await syncCheckout();
     return { rollback: { ...r, ...base, reopened: closed } };
   }

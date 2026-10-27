@@ -10,7 +10,10 @@
 //
 // Only `web` exists. It spawns the profile's startCommand in the project dir,
 // logs stdout/stderr to server.log in the evidence dir, polls the profile url
-// until it answers 2xx/3xx, and kills the whole process tree on stop.
+// until it answers 2xx/3xx, and kills the whole process tree on stop. With a
+// stagingUrl in the profile (LW 3.28a) nothing is launched: the iteration was
+// deployed to staging (src/lunasworkStaging.js), so start() only waits for
+// stagingUrl and the Playtester tests that.
 //
 // TRUST BOUNDARY: the command comes ONLY from the profile, which only ever
 // comes from lunasworkSettings (LunaCore's local file). start() re-validates it
@@ -195,14 +198,16 @@ function createWebAdapter(ctx) {
     if (!valid) throw new Error(`invalid project profile: ${reason}`);
     if (valid.adapter !== 'web') throw new Error(`profile adapter is '${valid.adapter}', not 'web'`);
 
-    launch(valid);
-    const ready = await waitReady(valid);
+    // Staging: the app already runs remotely - wait for stagingUrl, launch nothing.
+    const target = valid.stagingUrl ? { ...valid, url: valid.stagingUrl } : valid;
+    if (!valid.stagingUrl) launch(valid);
+    const ready = await waitReady(target);
     if (!ready.ok) {
       await stop();
-      throw new Error(`${ready.reason} - see ${path.join(ctx.evidenceDir, SERVER_LOG)}`);
+      throw new Error(valid.stagingUrl ? ready.reason : `${ready.reason} - see ${path.join(ctx.evidenceDir, SERVER_LOG)}`);
     }
-    readyUrl = valid.url;
-    return { url: valid.url };
+    readyUrl = target.url;
+    return { url: target.url };
   }
 
   async function shutdown() {

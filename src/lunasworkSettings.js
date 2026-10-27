@@ -14,11 +14,21 @@
 //                           models when a run starts
 //                 profile - how LunaCore launches the app under test
 //
-// TRUST BOUNDARY: the project profile (startCommand, checkCommand, url) is only
-// ever read from this local file, which only the LunaCore UI writes. It is
-// never read from the project repo or from model output, so nothing a model
-// writes can change the command LunaCore runs - the same boundary as God
-// Mode's planner. Do not add a code path that fills a profile from either.
+// Optional staging fields (LW 3.28a + 3.29, flow in src/lunasworkStaging.js):
+//   stagingUrl             the Playtester tests this instead of a local launch
+//   stagingMigrateCommand  migrations + edge functions -> the STAGING project
+//   stagingDeployCommand   deploys the app to staging
+//   stagingBackupCommand   data snapshot before every schema change
+//   stagingRestoreCommand  puts a snapshot back on a rollback
+// The commands need stagingUrl; backup and restore come as a pair, and a
+// migrate command needs both (no schema change without a snapshot first).
+//
+// TRUST BOUNDARY: the project profile (startCommand, checkCommand, url, the
+// staging fields) is only ever read from this local file, which only the
+// LunaCore UI writes. It is never read from the project repo or from model
+// output, so nothing a model writes can change the command LunaCore runs -
+// the same boundary as God Mode's planner. Do not add a code path that fills
+// a profile from either.
 //
 // Contract (same as the other config loaders): a missing or broken file reads
 // as defaults, a write returns false on failure, nothing here throws.
@@ -47,6 +57,7 @@ const MAX_READY_TIMEOUT_SEC = 600;
 const MAX_COMMAND_CHARS = 500;
 const MAX_URL_CHARS = 500;
 const MAX_PROJECTS = 200;
+const STAGING_COMMANDS = ['stagingMigrateCommand', 'stagingDeployCommand', 'stagingBackupCommand', 'stagingRestoreCommand'];
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
@@ -65,17 +76,44 @@ function commandProblem(cmd, name) {
   return null;
 }
 
-function urlProblem(url) {
-  if (typeof url !== 'string' || !url.trim()) return 'url must be a non-empty string';
-  if (url.length > MAX_URL_CHARS) return `url is longer than ${MAX_URL_CHARS} characters`;
+function urlProblem(url, name = 'url') {
+  if (typeof url !== 'string' || !url.trim()) return `${name} must be a non-empty string`;
+  if (url.length > MAX_URL_CHARS) return `${name} is longer than ${MAX_URL_CHARS} characters`;
   let parsed;
   try {
     parsed = new URL(url.trim());
   } catch {
-    return 'url is not a valid URL';
+    return `${name} is not a valid URL`;
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'url must be http or https';
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return `${name} must be http or https`;
   return null;
+}
+
+/**
+ * The optional staging fields, checked like startCommand / url. Only the set
+ * ones are kept, so a profile without staging looks exactly as before.
+ * @returns {{fields: object|null, reason: string|null}}
+ */
+function stagingFields(raw) {
+  const fields = {};
+  for (const key of STAGING_COMMANDS) {
+    if (raw[key] === undefined) continue;
+    const problem = commandProblem(raw[key], key);
+    if (problem) return { fields: null, reason: problem };
+    if (raw[key].trim()) fields[key] = raw[key].trim();
+  }
+  if (raw.stagingUrl !== undefined && raw.stagingUrl !== '') {
+    const badUrl = urlProblem(raw.stagingUrl, 'stagingUrl');
+    if (badUrl) return { fields: null, reason: badUrl };
+    fields.stagingUrl = raw.stagingUrl.trim();
+  }
+  const fail = (reason) => ({ fields: null, reason });
+  if (!fields.stagingUrl && Object.keys(fields).length) return fail('staging commands need a stagingUrl');
+  if (!fields.stagingBackupCommand !== !fields.stagingRestoreCommand) return fail('stagingBackupCommand and stagingRestoreCommand go together');
+  if (fields.stagingMigrateCommand && !fields.stagingBackupCommand) {
+    return fail('stagingMigrateCommand needs stagingBackupCommand and stagingRestoreCommand (a data snapshot before every schema change)');
+  }
+  return { fields, reason: null };
 }
 
 /**
@@ -111,6 +149,9 @@ function validateProfile(raw) {
   // Optional: the iteration-0 stack template for a new project (src/lunasworkScaffold.js).
   if (raw.stack !== undefined && !PROFILE_STACKS.includes(raw.stack)) return invalid(`unknown stack '${String(raw.stack)}'`);
 
+  const staging = stagingFields(raw);
+  if (!staging.fields) return invalid(staging.reason);
+
   return {
     profile: {
       adapter,
@@ -119,6 +160,7 @@ function validateProfile(raw) {
       readyTimeoutSec: timeout,
       checkCommand: check.trim(),
       ...(raw.stack !== undefined ? { stack: raw.stack } : {}),
+      ...staging.fields,
     },
     reason: null,
   };
@@ -242,6 +284,7 @@ module.exports = {
   MAX_READY_TIMEOUT_SEC,
   MAX_COMMAND_CHARS,
   PROFILE_STACKS,
+  STAGING_COMMANDS,
   validateProfile,
   normalizeModelOverride,
   normalizeSettings,

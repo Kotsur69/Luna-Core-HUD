@@ -142,6 +142,7 @@ const { registerCloudIpc } = require('./cloudipc');
 const { registerLunasworkIpc } = require('./lunasworkipc');
 const { createGodModeBuilder } = require('./lunasworkBuild');
 const { createLunasWorkRuntime, createMachineRuntime, wireDecisionSync } = require('./lunasworkWiring');
+const { stagingLines } = require('./lunasworkStaging');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -1209,6 +1210,8 @@ const lunaswork = createLunasWorkRuntime({
         `Start command: ${profile.startCommand}`,
         `App URL: ${profile.url}`,
         `Self-check command: ${checkCommand || 'npm test'}`,
+        // LW 3.28a: the staging URL and every staging command, when the profile has them.
+        ...stagingLines(profile),
         // Iteration 0 on an empty repo; a suggested profile is saved on Start.
         ...(scaffold
           ? ['', `Empty repo: iteration 0 scaffolds ${scaffold.label} first.${scaffold.profileSuggested ? ' The commands above are its defaults and become the project profile.' : ''}`]

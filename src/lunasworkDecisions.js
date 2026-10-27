@@ -39,8 +39,9 @@
 
 // stuckCard: a card that failed two iterations and the Critic did not split
 // (B4). outOfScope: a card outside DESIGN.md / ROADMAP.md (B5). Both are
-// asked by the controller, never by needsDecision().
-const KINDS = ['dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'feedbackScope', 'clientScope', 'other'];
+// asked by the controller, never by needsDecision(). production: an iteration
+// diff that touches production (src/lunasworkStaging.js), default reject.
+const KINDS = ['dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'feedbackScope', 'clientScope', 'production', 'other'];
 const ANSWERED_BY = ['mati', 'default'];
 const STATUSES = ['pending', 'answered'];
 
@@ -620,6 +621,7 @@ module.exports = {
   APPROVE,
   REJECT,
   CARD_CHOICES,
+  MIGRATION_PATH_RE,
   ANSWER_LIST_KEY,
   DEFAULT_DEADLINE_MS,
   MAX_FREE_TEXT,
