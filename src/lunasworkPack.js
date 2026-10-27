@@ -246,6 +246,20 @@ function appendDesign(text) {
   return { file: 'DESIGN.md', update: (current) => withBlock(current, block) };
 }
 
+/**
+ * Researcher (idea #14, src/lunasworkResearch.js): a short "References
+ * (research, <date>)" section at the end of DESIGN.md, one bullet per
+ * researched product; existing text is kept as is. The heading is what the
+ * reference scan skips, so cited sources never count as new references.
+ */
+function appendReferences(lines, date) {
+  const items = (Array.isArray(lines) ? lines : []).map((l) => cleanText(l, MAX_APPEND_CHARS)).filter(Boolean).map(oneLine);
+  if (!items.length) return null;
+  const day = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `, ${date}` : '';
+  const text = `## References (research${day})\n\n${items.map((l) => `- ${l}`).join('\n')}`;
+  return text.length <= MAX_APPEND_CHARS ? appendDesign(text) : null;
+}
+
 /** Critic only: one iteration entry at the end of PLAYTEST_LOG.md. */
 function appendPlaytestLog(entry) {
   const block = cleanText(entry, MAX_APPEND_CHARS);
@@ -451,6 +465,7 @@ module.exports = {
   scaffoldPack,
   readPackFile,
   appendDesign,
+  appendReferences,
   appendPlaytestLog,
   appendDecision,
   appendDecisionEntry,
