@@ -29,6 +29,17 @@
 // Both emails list the run's feedback items with their status
 // (lunasworkFeedback.emailLines).
 //
+// Media (deps.launch / deps.demo, optional):
+//   SHIP       the launch assets (lunasworkLaunch.js, C10) are written into
+//              the project's marketing/ first, then the return pack lists
+//              them under ## Launch assets
+//   demo       a walkthrough video per milestone gate and at SHIP
+//              (lunasworkDemo.js, B13): attached to that email when small
+//              enough, else linked by its place under runs/; every demo of
+//              the run is listed under ## Demo videos. An unknown Remotion
+//              setup becomes a "Needs you" line asking for its path.
+// Neither ever blocks a report or an email: a failure is a line in them.
+//
 // Model text (card titles, journey names, decisions, commit subjects) is
 // quoted on one line with control characters out; the HTML escapes every
 // string. The email names the repo, never its path, and shows evidence
@@ -208,6 +219,52 @@ function evidence(run, forEmail) {
 
 const bullets = (items, none = '- none') => (items.length ? items.map((i) => `- ${i}`) : [none]);
 
+// ---- media: launch assets (C10) and demo videos (B13) -------------------------------
+
+/** A demo video: its full path locally, its place under LunaCore's runs/ in an email. */
+const videoName = (file, runId, forEmail) =>
+  (forEmail ? `runs/lunaswork-${oneLine(runId, 64)}/${oneLine(path.basename(String(file)), 120)}` : oneLine(file, 500));
+
+/** "Needs you" lines from the media: the Remotion path when it is unknown. */
+function mediaNeeds(media) {
+  const demo = isObj(media) && isObj(media.demo) ? media.demo : null;
+  return demo && isObj(demo.note) ? [`${oneLine(demo.note.en, 400)} (PL: ${oneLine(demo.note.pl, 400)})`] : [];
+}
+
+/** ## Launch assets: an intro line and the written files; null when there were none to make. */
+function launchSection(media) {
+  const launch = isObj(media) && isObj(media.launch) ? media.launch : null;
+  if (!launch || launch.skipped) return null;
+  if (!launch.ok) {
+    const detail = launch.detail ? ` (${oneLine(launch.detail, 160)})` : '';
+    return { intro: `The marketing agent wrote nothing: ${oneLine(launch.error || 'failed', 80)}${detail}.`, items: [] };
+  }
+  const files = (Array.isArray(launch.files) ? launch.files : []).slice(0, MAX_LIST).map((f) => oneLine(f, 200));
+  return { intro: "In the project's marketing/ folder, not committed - review, then commit.", items: files };
+}
+
+/** ## Demo videos: every rendered video of the run, and why the last one did not render. */
+function demoSection(run, media, forEmail) {
+  const m = isObj(media) ? media : {};
+  const videos = (Array.isArray(m.videos) ? m.videos : []).slice(0, MAX_LIST).map((f) => videoName(f, run.id, forEmail));
+  const demo = isObj(m.demo) ? m.demo : null;
+  if (!videos.length && !demo) return null;
+  // Written before the email goes out, so it never claims the video was attached.
+  let intro = '';
+  if (demo && demo.error) {
+    const props = demo.propsFile ? ` - its props are in ${forEmail ? oneLine(path.basename(path.dirname(demo.propsFile)), 80) : oneLine(demo.propsFile, 500)}` : '';
+    intro = `The SHIP walkthrough did not render (${oneLine(demo.error, 80)})${props}.`;
+  }
+  // Nothing rendered and nothing to say (no evidence, or the path note in Needs you).
+  if (!videos.length && !intro) return null;
+  return { intro, items: videos };
+}
+
+function sectionMarkdown(title, section) {
+  if (!section) return [];
+  return [`## ${title}`, '', ...(section.intro ? [section.intro, ''] : []), ...(section.items.length ? [...bullets(section.items), ''] : [])];
+}
+
 // ---- markdown ---------------------------------------------------------------------
 
 function rollbackMarkdown(run) {
@@ -236,14 +293,15 @@ function iterationTable(laps) {
 
 /**
  * @param {object} run the finished run (the controller's onRunEnd snapshot)
- * @param {{now?:number, forEmail?:boolean}} [extra]
+ * @param {{now?:number, forEmail?:boolean, media?:{launch?:object, demo?:object, videos?:string[]}}} [extra]
  * @returns {string} markdown
  */
 function buildRunReport(run, extra = {}) {
   const r = isObj(run) ? run : {};
   const verdict = verdictOf(r);
   const laps = list(r.laps);
-  const needs = needsYou(r);
+  const needs = [...needsYou(r), ...mediaNeeds(extra.media)];
+  const forEmail = extra.forEmail === true;
   const ended = Number.isFinite(r.endedAt) ? r.endedAt : extra.now;
   const lines = [
     `# Luna's Work run ${oneLine(r.id, 64)}`,
@@ -283,8 +341,10 @@ function buildRunReport(run, extra = {}) {
     '',
     '## Evidence',
     '',
-    ...bullets(evidence(r, extra.forEmail === true)),
+    ...bullets(evidence(r, forEmail)),
     '',
+    ...sectionMarkdown('Launch assets', launchSection(extra.media)),
+    ...sectionMarkdown('Demo videos', demoSection(r, extra.media, forEmail)),
     '## Timeline',
     '',
     `- Started: ${fmt(r.startedAt)} UTC`,
@@ -320,9 +380,14 @@ function scoresHtml(run) {
     .join('');
 }
 
+function mediaHtml(title, section, empty) {
+  if (!section) return '';
+  return h.section(title, `${section.intro ? `<p>${esc(section.intro)}</p>` : ''}${section.items.length || !section.intro ? h.list(section.items, empty) : ''}`);
+}
+
 /**
  * @param {object} run the finished run
- * @param {{now?:number}} [extra]
+ * @param {{now?:number, media?:{launch?:object, demo?:object, videos?:string[]}}} [extra]
  * @returns {string} a standalone HTML page, every string escaped
  */
 function renderRunReportHtml(run, extra = {}) {
@@ -341,7 +406,7 @@ function renderRunReportHtml(run, extra = {}) {
       { label: 'Cards opened', value: opened, tone: 'muted' },
       { label: 'Rollbacks', value: rolled, tone: rolled ? 'warn' : 'muted' },
     ]),
-    h.section('Needs you', h.list(needsYou(r), 'Nothing - all done')),
+    h.section('Needs you', h.list([...needsYou(r), ...mediaNeeds(extra.media)], 'Nothing - all done')),
     h.section('Verdict', `<p>${esc(`${VERDICT_LABEL[verdict]} - ${verdictWhy(r)}`)}</p>`),
     h.section('Iterations', h.table(ITERATION_HEAD, laps.map((l) => iterationCells(l).map((c) => esc(c))), 'No iteration finished')),
     h.section('Scores per milestone', scoresHtml(r)),
@@ -349,7 +414,9 @@ function renderRunReportHtml(run, extra = {}) {
     h.section('Model choices', h.list(modelChoices(r), 'No model choice logged')),
     h.section('Decisions', h.list(decisions(r), 'No decisions')),
     h.section('Evidence', h.list(evidence(r, false), 'No evidence folder')),
-  ].join('\n');
+    mediaHtml('Launch assets', launchSection(extra.media), 'No files'),
+    mediaHtml('Demo videos', demoSection(r, extra.media, false), 'No video'),
+  ].filter(Boolean).join('\n');
   return h.page({
     title: `Luna's Work run ${oneLine(r.id, 64)}`,
     subtitle: `${repoName(r)} · ${VERDICT_LABEL[verdict]} · milestone ${oneLine(r.milestone, 80) || '-'}`,
@@ -372,27 +439,38 @@ const plain = (text, max) => String(text || '').slice(0, max).replace(/[\x00-\x0
 
 /**
  * @param {object} run the finished run
- * @param {{now?:number, logTail?:string}} [opts]
+ * @param {{now?:number, logTail?:string, media?:{launch?:object, demo?:object, videos?:string[]}}} [opts]
  * @returns {{subject:string, text:string}}
  */
 function buildRunEmail(run, opts = {}) {
   const r = isObj(run) ? run : {};
   const verdict = verdictOf(r);
-  const needs = needsYou(r);
+  const needs = [...needsYou(r), ...mediaNeeds(opts.media)];
   const subject = `Luna's Work: ${repoName(r)} - ${VERDICT_LABEL[verdict]}${needs.length ? ' - needs you' : ''}`;
   const lines = ['NEEDS YOU', ...bullets(needs, '- nothing'), '', `${VERDICT_LABEL[verdict]}: ${verdictWhy(r)}`, ''];
   const tail = (verdict === 'plateau' || verdict === 'red') && opts.logTail ? plain(opts.logTail, MAX_TAIL_CHARS) : '';
   if (tail) lines.push('PLAYTEST LOG (latest entries)', '', tail, '');
   // The run is over: statuses only, no link to send more.
   if (Array.isArray(r.feedback) && r.feedback.length) lines.push(...feedbackLines(r.feedback, { link: null }), '');
-  lines.push('FULL REPORT', '', plain(buildRunReport(r, { now: opts.now, forEmail: true }), MAX_REPORT));
+  lines.push('FULL REPORT', '', plain(buildRunReport(r, { now: opts.now, forEmail: true, media: opts.media }), MAX_REPORT));
   return { subject, text: lines.join('\n') };
+}
+
+/** The DEMO VIDEO block of the milestone email; [] without a demo result. */
+function demoEmailLines(run, demo) {
+  if (!isObj(demo) || demo.skipped === 'no-evidence' || demo.skipped === 'bad-run') return [];
+  let line;
+  if (demo.attach) line = `Attached: ${oneLine(demo.attach.filename, 120)}`;
+  else if (demo.ok && demo.link) line = `Too big to attach - saved as ${videoName(demo.link, run.id, true)} in LunaCore's config folder.`;
+  else if (isObj(demo.note)) line = `${oneLine(demo.note.en, 400)}\n  PL: ${oneLine(demo.note.pl, 400)}`;
+  else line = `Not rendered (${oneLine(demo.error || 'failed', 80)}) - the run goes on.`;
+  return ['DEMO VIDEO', `- ${line}`, ''];
 }
 
 /**
  * The milestone email: a gate passed and the run goes on.
  * @param {object} run the run right after the gate (already on the next milestone)
- * @param {{milestone:string}} ctx the milestone that was reached
+ * @param {{milestone:string, demo?:object}} ctx the milestone that was reached, and its demo video result
  * @returns {{subject:string, text:string}}
  */
 function buildMilestoneEmail(run, ctx) {
@@ -409,6 +487,7 @@ function buildMilestoneEmail(run, ctx) {
     'SCORES PER MILESTONE',
     ...bullets(scoresByMilestone(r).map(([name, points]) => `${name}: ${scoreLine(points)}`)),
     '',
+    ...demoEmailLines(r, ctx && ctx.demo),
     ...feedbackLines(r.feedback),
   ];
   return { subject: `Luna's Work: ${repoName(r)} - milestone ${reached} reached`, text: lines.join('\n') };
@@ -421,10 +500,14 @@ function buildMilestoneEmail(run, ctx) {
  *   runsDir: ()=>string,
  *   mail?: {sender:{status:Function, send:Function}, prefs:{loadPrefs:Function, loadState:Function, updateState:Function},
  *     enabled:(prefs:object, connected:boolean)=>boolean},
+ *   launch?: (run:object)=>Promise<object>,
+ *   demo?: {make:(run:object, ctx:object)=>Promise<object>, videos:(runId:string)=>string[]},
  *   readFile?: (repoPath:string, name:string)=>string|null,
  *   writeFile?: (file:string, text:string)=>void,
  *   now?: ()=>number, log?: (line:string)=>void,
  * }} deps
+ *   launch  the SHIP launch assets (lunasworkLaunch.runLaunchAssets) - SHIP only
+ *   demo    the walkthrough video (lunasworkDemo.createDemoMaker)
  */
 function createLunasWorkReporter(deps) {
   const now = deps.now || Date.now;
@@ -440,17 +523,17 @@ function createLunasWorkReporter(deps) {
   const inFlight = new Set();
 
   /** Writes the .md and .html. */
-  function writeReports(run) {
+  function writeReports(run, media) {
     const base = path.join(deps.runsDir(), `lunaswork-${run.id}`);
     const out = { file: null, html: null, htmlText: null };
     try {
-      writeFile(`${base}.md`, buildRunReport(run, { now: now() }));
+      writeFile(`${base}.md`, buildRunReport(run, { now: now(), media }));
       out.file = `${base}.md`;
     } catch (err) {
       log(`[lunaswork] report not written: ${errText(err)}`);
     }
     try {
-      out.htmlText = renderRunReportHtml(run, { now: now() });
+      out.htmlText = renderRunReportHtml(run, { now: now(), media });
       writeFile(`${base}.html`, out.htmlText);
       out.html = `${base}.html`;
     } catch (err) {
@@ -473,8 +556,26 @@ function createLunasWorkReporter(deps) {
     });
   }
 
+  /**
+   * Sends; a send with the demo video that Gmail turned down (an HTTP error)
+   * goes once more without it - the email matters more. A network error or
+   * timeout is not retried: Gmail may have taken it, and a resend would
+   * duplicate the email.
+   */
+  async function sendMail(m, msg, video) {
+    if (!video) return m.sender.send(msg);
+    try {
+      return await m.sender.send({ ...msg, attachments: [...(msg.attachments || []), video] });
+    } catch (err) {
+      const rejected = err && err.reason === 'gmail-failed' && /^HTTP \d+$/.test(String(err.message));
+      if (!rejected) throw err;
+      log(`[lunaswork] email with the demo video failed, sending it without: ${errText(err)}`);
+      return m.sender.send({ ...msg, text: `${msg.text}\n\n(The demo video could not be attached.)` });
+    }
+  }
+
   /** @returns {Promise<{sent:boolean, skipped?:string, error?:string}>} never rejects */
-  async function mail(run, htmlText) {
+  async function mail(run, htmlText, media) {
     const m = deps.mail;
     if (!m) return { sent: false, skipped: 'no-mailer' };
     try {
@@ -488,9 +589,10 @@ function createLunasWorkReporter(deps) {
       if (inFlight.has(run.id)) return { sent: false, skipped: 'busy' };
       inFlight.add(run.id);
       try {
-        const email = buildRunEmail(run, { now: now(), logTail: playtestLogTail(readFile(run.repoPath, 'PLAYTEST_LOG.md')) });
+        const email = buildRunEmail(run, { now: now(), logTail: playtestLogTail(readFile(run.repoPath, 'PLAYTEST_LOG.md')), media });
         const attachments = htmlText ? [{ filename: `lunaswork-run-${run.id}.html`, mimeType: 'text/html', content: htmlText }] : [];
-        await m.sender.send({ subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) });
+        const video = media && media.demo && media.demo.attach ? media.demo.attach : null;
+        await sendMail(m, { subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) }, video);
         if (persist) markSent(m, run);
         return { sent: true };
       } finally {
@@ -503,45 +605,105 @@ function createLunasWorkReporter(deps) {
     }
   }
 
+  /** A media step that must never break the report: its result, or a failure record. */
+  async function safely(what, fn) {
+    try {
+      const res = await fn();
+      return isObj(res) ? res : { ok: false, error: 'failed' };
+    } catch (err) {
+      log(`[lunaswork] ${what} failed: ${errText(err)}`);
+      return { ok: false, error: 'crashed' };
+    }
+  }
+
   const milestonesSent = new Set();
+  // Demo videos already made (run id + milestone), so a replayed hook never renders twice.
+  const demosMade = new Set();
+  const remember = (set, key) => {
+    set.add(key);
+    if (set.size > MAX_MILESTONE_KEYS) set.delete(set.values().next().value);
+  };
+
+  /** Why the milestone email does not go out, or null when it does. Throws on a broken sender. */
+  function milestoneMailSkip(m) {
+    if (!m) return 'no-mailer';
+    const st = m.sender.status();
+    const prefs = m.prefs.loadPrefs();
+    if (!st.connected && prefs.godmodeEmail !== false) return 'not-connected';
+    if (!m.enabled(prefs, st.connected)) return 'off';
+    return null;
+  }
+
+  async function milestoneDemo(run, ctx, key) {
+    if (!deps.demo || demosMade.has(key)) return null;
+    remember(demosMade, key);
+    const fallback = Math.max(0, (Number.isInteger(run.iteration) ? run.iteration : 1) - 1);
+    const iteration = Number.isInteger(ctx && ctx.iteration) ? ctx.iteration : fallback;
+    return safely('demo video', () => deps.demo.make(run, { ...ctx, iteration }));
+  }
 
   /**
-   * The controller's onMilestone hook: one email per run and milestone.
-   * @returns {Promise<{sent:boolean, skipped?:string, error?:string}>} never rejects
+   * The controller's onMilestone hook: the demo video, then one email per run
+   * and milestone with the video attached or linked.
+   * @returns {Promise<{sent:boolean, skipped?:string, error?:string, demo?:object}>} never rejects
    */
   async function onMilestone(run, ctx) {
     const m = deps.mail;
     if (!isObj(run) || typeof run.id !== 'string' || !FILE_ID_RE.test(run.id)) return { sent: false, skipped: 'bad-run' };
-    if (!m) return { sent: false, skipped: 'no-mailer' };
     const key = `${run.id}|${oneLine(ctx && ctx.milestone, 80)}`;
     if (milestonesSent.has(key)) return { sent: false, skipped: 'duplicate' };
+    let skip;
     try {
-      const st = m.sender.status();
-      const prefs = m.prefs.loadPrefs();
-      if (!st.connected && prefs.godmodeEmail !== false) return { sent: false, skipped: 'not-connected' };
-      if (!m.enabled(prefs, st.connected)) return { sent: false, skipped: 'off' };
-      milestonesSent.add(key);
-      if (milestonesSent.size > MAX_MILESTONE_KEYS) milestonesSent.delete(milestonesSent.values().next().value);
-      const email = buildMilestoneEmail(run, ctx);
-      await m.sender.send({ subject: email.subject, text: email.text });
-      return { sent: true };
+      skip = milestoneMailSkip(m);
+    } catch (err) {
+      skip = 'gmail-failed';
+      log(`[lunaswork] milestone email failed: ${skip} ${errText(err)}`);
+    }
+    if (!skip) remember(milestonesSent, key);
+    const demo = await milestoneDemo(run, ctx, key);
+    const withDemo = demo ? { demo } : {};
+    if (skip === 'gmail-failed') return { sent: false, error: skip, ...withDemo };
+    if (skip) return { sent: false, skipped: skip, ...withDemo };
+    try {
+      const email = buildMilestoneEmail(run, { ...ctx, demo });
+      await sendMail(m, { subject: email.subject, text: email.text }, demo && demo.attach ? demo.attach : null);
+      return { sent: true, ...withDemo };
     } catch (err) {
       const reason = (err && err.reason) || 'gmail-failed';
       log(`[lunaswork] milestone email failed: ${reason} ${errText(err)}`);
-      return { sent: false, error: reason };
+      return { sent: false, error: reason, ...withDemo };
     }
   }
 
+  /** At SHIP: the launch assets, then the last milestone's walkthrough; every demo of the run. */
+  async function runMedia(run) {
+    const media = {};
+    if (run.verdict === 'ship' && deps.launch) media.launch = await safely('launch assets', () => deps.launch(run));
+    if (!deps.demo) return media;
+    const key = `${run.id}|${oneLine(run.milestone, 80)}`;
+    if (run.verdict === 'ship' && !demosMade.has(key)) {
+      remember(demosMade, key);
+      media.demo = await safely('demo video', () => deps.demo.make(run, { milestone: run.milestone }));
+    }
+    try {
+      media.videos = deps.demo.videos(run.id);
+    } catch (err) {
+      log(`[lunaswork] demo videos not listed: ${errText(err)}`);
+    }
+    return media;
+  }
+
   /**
-   * The controller's onRunEnd hook: report files, then one email.
-   * @returns {Promise<{ok:boolean, file?:string|null, html?:string|null, mail?:object, skipped?:string}>}
+   * The controller's onRunEnd hook: media at SHIP, report files, then one email.
+   * @returns {Promise<{ok:boolean, file?:string|null, html?:string|null, mail?:object, media?:object, skipped?:string}>}
    */
   async function onRunEnd(run) {
     if (!isObj(run) || typeof run.id !== 'string' || !FILE_ID_RE.test(run.id)) return { ok: false, skipped: 'bad-run' };
     if (!FINAL_VERDICTS.includes(run.verdict)) return { ok: false, skipped: 'not-ended' };
-    const written = writeReports(run);
-    const sent = await mail(run, written.htmlText);
-    return { ok: !!written.file, file: written.file, html: written.html, mail: sent };
+    const media = await runMedia(run);
+    const written = writeReports(run, media);
+    const sent = await mail(run, written.htmlText, media);
+    return { ok: !!written.file, file: written.file, html: written.html, mail: sent, media };
   }
 
   return { onRunEnd, onMilestone };

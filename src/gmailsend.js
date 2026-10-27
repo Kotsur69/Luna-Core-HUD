@@ -44,9 +44,13 @@ const MAX_SUBJECT = 200;
 /** Gmail's own cap is 25 MB; a report is a few KB. */
 const MAX_BODY = 200 * 1024;
 const MAX_ATTACHMENT = 2 * 1024 * 1024;
+// A Buffer attachment (the Luna's Work demo video) goes out byte for byte;
+// one over this cap is left out whole - cutting it would corrupt the file.
+const MAX_BINARY_ATTACHMENT = 4 * 1024 * 1024;
 const MAX_ATTACHMENTS = 5;
 const MAX_FILENAME = 100;
 const ATTACHMENT_TYPES = new Set(['text/html', 'text/plain', 'text/markdown']);
+const BINARY_TYPES = new Set(['video/mp4']);
 const EMAIL_RE = /^[^\s@<>()",;:\\[\]]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
 
 class GmailError extends Error {
@@ -94,6 +98,10 @@ const safeFilename = (v) => oneLine(v, MAX_FILENAME).replace(/[^A-Za-z0-9._-]+/g
 /** One base64 attachment part; an unknown type goes out as octet-stream. */
 function attachmentPart(a) {
   const name = safeFilename(a.filename);
+  if (Buffer.isBuffer(a.content)) {
+    const binType = BINARY_TYPES.has(a.mimeType) ? a.mimeType : 'application/octet-stream';
+    return [`Content-Type: ${binType}; name="${name}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${name}"`, '', a.content.toString('base64').replace(/.{76}/g, '$&\r\n')];
+  }
   const type = ATTACHMENT_TYPES.has(a.mimeType) ? `${a.mimeType}; charset=UTF-8` : 'application/octet-stream';
   return [`Content-Type: ${type}; name="${name}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${name}"`, '', b64Lines(String(a.content || '').slice(0, MAX_ATTACHMENT))];
 }
@@ -124,7 +132,7 @@ function buildMime({ address, subject, text, html = false, boundary, attachments
       '',
     ];
   }
-  const files = attachments.slice(0, MAX_ATTACHMENTS);
+  const files = attachments.filter((a) => !Buffer.isBuffer(a.content) || a.content.length <= MAX_BINARY_ATTACHMENT).slice(0, MAX_ATTACHMENTS);
   if (!files.length) return [...head, ...content].join('\r\n');
   return [
     ...head,
@@ -321,4 +329,4 @@ function createGmailSender(deps = {}) {
   return { status, connect, disconnect, send };
 }
 
-module.exports = { createGmailSender, GmailError, emailFromIdToken, buildMime, SCOPE, TOKEN_FILE };
+module.exports = { createGmailSender, GmailError, emailFromIdToken, buildMime, SCOPE, TOKEN_FILE, MAX_BINARY_ATTACHMENT };
