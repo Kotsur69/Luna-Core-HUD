@@ -5027,6 +5027,24 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 }
 .lw-start__save { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-2) 0; font-size: var(--fs-sm); }
 .lw-steer { margin-top: var(--space-3); }
+/* Luna's Work project queue (modules/lunasworkQueuePanel.js). */
+.lw-queue__list {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+}
+.lw-queue__list:empty { display: none; }
+.lw-queue__item { display: list-item; }
+.lw-queue__item > * { vertical-align: middle; }
+.lw-queue__text { display: inline-grid; gap: 2px; min-width: 0; max-width: calc(100% - 7.5rem); }
+.lw-queue__label { color: var(--text); }
+.lw-queue__cmd { font-family: var(--font-mono); color: var(--text-dim); word-break: break-all; }
+.lw-queue__actions { display: inline-flex; gap: var(--space-1); float: right; }
+.lw-queue__btn { min-width: 2rem; padding: var(--space-1) var(--space-2); }
+.lw-queue__btn:disabled,
+.lw-queue .pad-send:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
 .termcustom__hint.is-bad { color: var(--bad); }
 .orchestra__example { display: block; font-size: var(--fs-xs); color: var(--text); word-break: break-all; }
 .orchestra__actions .pad-send,

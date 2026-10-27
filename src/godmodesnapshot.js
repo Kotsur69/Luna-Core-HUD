@@ -28,6 +28,9 @@
 // `feedback` (optional, B17): the current run's feedback items with their
 // status (src/lunasworkFeedback.js publicFeedback); new feedback goes back
 // through the `todos` scope too.
+// `queue` (optional, B16): the PC's Luna's Work project queue, in order -
+// project labels only (src/lunasworkQueue.js phoneQueue). Read-only on the
+// phone: the queue is edited in the HUD panel.
 // ============================================================================
 
 'use strict';
@@ -56,6 +59,7 @@ const MAX_LINES = 20;
 const MAX_LINE = 300;
 const MAX_SEEN = 50;
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
+const MAX_QUEUE = 20;
 const SELF_CHECK_STATES = ['ok', 'failed', 'none'];
 const LIVE_STATES = ['running', 'paused', 'settled', 'killed'];
 const LIVE_PACKAGE_STATES = ['queued', 'launched', 'working', 'approval', 'verifying', 'pushed', 'failed', 'killed'];
@@ -388,7 +392,16 @@ function addSeen(prev, id, { machine, now = Date.now() }) {
  * `snap` (this PC's run history, addRun output or null) with the live run
  * and tab lights laid over it and a fresh `at`. A null `live` drops it.
  */
-function withLive(snap, { live = null, tabs = [], decisions = [], feedback = null } = {}, { machine, now = Date.now() }) {
+/** The project queue (B16): [{label}], capped, labels cleaned. */
+function cleanQueue(list) {
+  return (Array.isArray(list) ? list : [])
+    .slice(0, MAX_QUEUE)
+    .map((e) => (isObject(e) ? clean(e.label, MAX_NAME) : null))
+    .filter(Boolean)
+    .map((label) => ({ label }));
+}
+
+function withLive(snap, { live = null, tabs = [], decisions = [], feedback = null, queue = [] } = {}, { machine, now = Date.now() }) {
   const base = isObject(snap) && snap.v === VERSION && Array.isArray(snap.runs) ? snap.runs.map((r) => cleanRun(r, now)).filter(Boolean) : [];
   const out = { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs: base.slice(0, MAX_RUNS), seen: seenOf(snap), tabs: cleanTabs(tabs) };
   const l = cleanLive(live, now);
@@ -396,7 +409,9 @@ function withLive(snap, { live = null, tabs = [], decisions = [], feedback = nul
   const d = publicDecisions(decisions);
   // Luna's Work feedback of the current run, with each item's status (B17).
   const f = publicFeedback(feedback);
-  return { ...out, ...(l ? { live: l } : {}), ...(d.length ? { decisions: d } : {}), ...(f ? { feedback: f } : {}) };
+  // Luna's Work project queue (B16): labels only.
+  const q = cleanQueue(queue);
+  return { ...out, ...(l ? { live: l } : {}), ...(d.length ? { decisions: d } : {}), ...(f ? { feedback: f } : {}), ...(q.length ? { queue: q } : {}) };
 }
 
 /** A `godmode` row ({machine, data}) -> {machine, at, runs, live, tabs} or null. Never throws. */
@@ -419,6 +434,7 @@ function parseGodmodePeer(row, now = Date.now()) {
       tabs: cleanTabs(d.tabs),
       decisions: publicDecisions(d.decisions).filter((x) => x.runId),
       feedback: publicFeedback(d.feedback),
+      queue: cleanQueue(d.queue),
     };
   } catch {
     return null;
@@ -481,6 +497,19 @@ function feedbackFrom(rows, now = Date.now()) {
   return p ? { ...p.feedback, machine: p.machine, stale: now - p.at > LIVE_STALE_MS } : null;
 }
 
+/**
+ * The Luna's Work project queue (B16) of every PC that has one, newest
+ * first: [{machine, stale, items:[{label}]}].
+ * @returns {object[]}
+ */
+function queueFrom(rows, now = Date.now()) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((r) => parseGodmodePeer(r, now))
+    .filter((p) => p && p.queue.length)
+    .sort((a, b) => b.at - a.at)
+    .map((p) => ({ machine: p.machine, stale: now - p.at > LIVE_STALE_MS, items: p.queue }));
+}
+
 /** Counters for the phone's headline: pushed / working / waiting for Mati / pending / failed. */
 function liveCounts(live) {
   const c = { pushed: 0, working: 0, waiting: 0, pending: 0, failed: 0 };
@@ -517,6 +546,8 @@ module.exports = {
   tabsFrom,
   decisionsFrom,
   feedbackFrom,
+  queueFrom,
+  cleanQueue,
   liveCounts,
   scrubPaths,
   RUN_ID_RE,

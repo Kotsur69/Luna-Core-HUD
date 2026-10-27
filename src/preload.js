@@ -411,6 +411,15 @@ contextBridge.exposeInMainWorld('lunacore', {
   lunasworkHandOver: (runId) => ipcRenderer.invoke('lunaswork:handOver', typeof runId === 'string' ? { runId } : {}),
   /** Hands the wheel back (or withdraws the request): manual commits recorded, the run goes on. Same answer. */
   lunasworkHandBack: (runId) => ipcRenderer.invoke('lunaswork:handBack', typeof runId === 'string' ? { runId } : {}),
+  // Project queue (B16): a project id only; main checks profile + design pack.
+  /** Promise<{ok, queue:[{projectId, label, startCommand, url, addedAt}]} | {ok:false, reason}>. */
+  lunasworkQueueList: () => ipcRenderer.invoke('lunaswork:queueList'),
+  /** Same answer. */
+  lunasworkQueueAdd: (projectId) => ipcRenderer.invoke('lunaswork:queueAdd', { projectId }),
+  /** Same answer. */
+  lunasworkQueueRemove: (projectId) => ipcRenderer.invoke('lunaswork:queueRemove', { projectId }),
+  /** delta: -1 (up) or 1 (down). Same answer. */
+  lunasworkQueueMove: (projectId, delta) => ipcRenderer.invoke('lunaswork:queueMove', { projectId, delta }),
   /** {type, status} on every phase transition, wait, resume and stop. Returns an unsubscribe function. */
   onLunasworkEvent: (cb) => {
     const listener = (_e, event) => cb(event);

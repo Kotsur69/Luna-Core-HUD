@@ -1748,3 +1748,124 @@ test('a phone wheel unit from far in the future is ignored and does not block la
   build.resolve(doneBuild());
   await h.settle();
 });
+
+// ---- project queue (B16) -------------------------------------------------------------
+
+/** A harness with a second project and an in-memory queue holding it. */
+function queueHarness({ pinned, deps = {} } = {}) {
+  let ids = 0;
+  const box = { queue: null, writes: 0 };
+  const h = harness({
+    deps: {
+      newRunId: () => `lwtest${(ids += 1)}`,
+      queue: {
+        read: () => clone(box.queue),
+        write: (q) => {
+          box.queue = clone(q);
+          box.writes += 1;
+          return true;
+        },
+      },
+      ...deps,
+    },
+  });
+  h.projects.next = path.join(os.tmpdir(), 'lw-next-repo');
+  box.queue = { v: 1, entries: [{ projectId: 'next', label: 'Next game', profile: pinned || h.profile, checkCommand: h.godMode.checkCommand, addedAt: 1 }] };
+  h.box = box;
+  return h;
+}
+
+test('B16 queue: a SHIP starts the next queued project with a new run id, without the start dialog', async () => {
+  const h = queueHarness();
+  h.next.critic.push(shipCritic());
+  // The queued run is stopped by its Director right away.
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  await until(() => h.ended.length === 2);
+
+  assert.equal(h.ended[0].verdict, 'ship');
+  assert.equal(h.ended[0].queue.state, 'advancing');
+  assert.equal(h.ended[0].queue.nextLabel, 'Next game');
+  const second = h.ctl.status();
+  assert.equal(second.projectId, 'next');
+  assert.equal(second.runId, 'lwtest2');
+  // Only the manual start asked; the queued one was confirmed when it was queued.
+  assert.equal(h.confirms.length, 1);
+  assert.deepEqual(h.box.queue.entries, []);
+  // Nothing more waits: the queued run's end has no queue note.
+  assert.equal(h.ended[1].queue, undefined);
+});
+
+for (const [verdict, setup] of [
+  ['plateau', (h) => {
+    h.scores.push(50, 50, 48, 50);
+    for (let i = 0; i < 6; i += 1) h.next.director.push(NO_CARDS);
+  }],
+  ['stop', (h) => h.next.director.push(STOP_CARD)],
+  ['red', (h) => {
+    const red = (o) => ({
+      ok: true,
+      planId: 'p1',
+      killed: false,
+      integration: { state: 'failed', error: 'red', skipped: [], selfCheck: { tests: 'failed', fixups: 1, pushedIntegrationBranch: 'luna/x-integration' } },
+      plan: { packages: [{ id: 'pk', merged: true, todos: o.cards.map((c) => c.text) }] },
+    });
+    h.next.build.push(red, red, red);
+  }],
+]) {
+  test(`B16 queue: ${verdict.toUpperCase()} does not advance the queue - the run email says it is paused`, async () => {
+    const h = queueHarness();
+    setup(h);
+    await h.start();
+    await h.settle();
+    assert.equal(h.ctl.status().verdict, verdict);
+    assert.equal(h.ctl.status().projectId, 'game');
+    assert.equal(h.ended.length, 1);
+    assert.equal(h.ended[0].queue.state, 'paused');
+    assert.equal(h.ended[0].queue.waiting, 1);
+    assert.equal(h.box.queue.entries.length, 1);
+    assert.equal(h.box.writes, 0);
+  });
+}
+
+test('B16 queue: God Mode on the queued project blocks the advance; the entry stays', async () => {
+  const h = queueHarness({ deps: { godModeActive: ({ projectId }) => projectId === 'next' } });
+  h.next.critic.push(shipCritic());
+  await h.start();
+  await h.settle();
+  assert.equal(h.ctl.status().projectId, 'game');
+  assert.equal(h.ended[0].queue.state, 'blocked');
+  assert.match(h.ended[0].queue.why, /God Mode/);
+  assert.equal(h.box.queue.entries.length, 1);
+});
+
+test('B16 queue: a profile changed since the project was queued is not started', async () => {
+  const h = queueHarness({ pinned: { adapter: 'web', startCommand: 'npm run other', url: 'http://localhost:3000', readyTimeoutSec: 60, checkCommand: '' } });
+  h.next.critic.push(shipCritic());
+  await h.start();
+  await h.settle();
+  assert.equal(h.ctl.status().projectId, 'game');
+  assert.equal(h.ended[0].queue.state, 'blocked');
+  assert.match(h.ended[0].queue.why, /commands changed/);
+  assert.equal(h.box.queue.entries.length, 1);
+});
+
+test('B16 queue: a self-check command changed since the project was queued is not started', async () => {
+  const h = queueHarness();
+  h.next.critic.push(shipCritic());
+  // Queued with `npm test`; God Mode's setting changed before the SHIP.
+  h.godMode.checkCommand = 'npm run evil';
+  await h.start();
+  await h.settle();
+  assert.equal(h.ctl.status().projectId, 'game');
+  assert.equal(h.ended[0].queue.state, 'blocked');
+  assert.equal(h.box.queue.entries.length, 1);
+});
+
+test('B16 queue: start() takes no confirmation from its caller', async () => {
+  const h = harness();
+  h.confirm = false;
+  const res = await h.ctl.start({ projectId: 'game' }, () => true);
+  assert.equal(res.reason, 'declined');
+  assert.equal(h.confirms.length, 1);
+});

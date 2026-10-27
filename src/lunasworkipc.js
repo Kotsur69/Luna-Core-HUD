@@ -18,6 +18,16 @@
 // lunaswork:handBack       {runId?} -> {ok, status} | {ok:false, reason, message?}
 //                          "Hand me the wheel" (C11); runId, when sent, must
 //                          be the current run's - a stale panel is refused
+// With a queue store passed in (B16, src/lunasworkQueue.js):
+// lunaswork:queueList      (no payload) -> {ok, queue}
+// lunaswork:queueAdd       {projectId} -> {ok, queue} | {ok:false, reason}
+//                          only a known project with a folder, a valid
+//                          profile and a complete design pack, and only
+//                          after Mati confirms its commands natively
+//                          (confirmQueueAdd); profile + check command pinned
+// lunaswork:queueRemove    {projectId} -> {ok, queue} | {ok:false, reason}
+// lunaswork:queueMove      {projectId, delta: -1|1} -> {ok, queue} | {ok:false, reason}
+//                          queue = [{projectId, label, startCommand, url, addedAt}]
 // lunaswork:event          main -> renderer push, {type, status}, on every
 //                          controller event (phase, wait, resume, stopping, wheel)
 //
@@ -47,6 +57,7 @@ const { keyFor } = require('./todo');
 const { publicStatus, publicEvent, evidenceDirOf } = require('./lunasworkStatus');
 const { STEER_TAG, MAX_ITEMS: MAX_TODO_ITEMS, MAX_TEXT_CHARS: MAX_STEER_CHARS } = require('./todorows');
 const { RUN_ID_RE } = require('./lunasworkWheel');
+const queueStore = require('./lunasworkQueue');
 
 const MAX_ID_CHARS = 200;
 // Opening a tab is a side effect a double click must not repeat.
@@ -78,6 +89,21 @@ function parseWheelRequest(req) {
   if (keys.some((k) => k !== 'runId')) return null;
   if (req.runId === undefined) return {};
   return typeof req.runId === 'string' && RUN_ID_RE.test(req.runId) ? { runId: req.runId } : null;
+}
+
+/**
+ * A queue request: exactly the listed keys, a well-formed project id, and
+ * for a move a delta of -1 or 1. Null when anything else is in it.
+ * @returns {{projectId:string, delta?:number}|null}
+ */
+function parseQueueRequest(req, { move = false } = {}) {
+  if (!isObject(req)) return null;
+  const allowed = move ? ['projectId', 'delta'] : ['projectId'];
+  if (Object.keys(req).some((k) => !allowed.includes(k))) return null;
+  const projectId = queueStore.cleanProjectId(projectIdOf(req));
+  if (!projectId) return null;
+  if (!move) return { projectId };
+  return req.delta === -1 || req.delta === 1 ? { projectId, delta: req.delta } : null;
 }
 
 /** The project id of a request, or null when it is malformed. */
@@ -137,6 +163,9 @@ function defaultWriteBrief(file, text) {
  *   send?:(channel:string, payload:object)=>void,
  *   todos?:{read:(projectId:string)=>object[], write:(projectId:string, list:object[])=>boolean, changed:(projectId:string)=>void},
  *   runsRoot?:()=>string, openPath?:(dir:string)=>Promise<string>|string,
+ *   queue?:{read:()=>object, write:(q:object)=>boolean}, queueChanged?:()=>void,
+ *   confirmQueueAdd?:(ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
+ *   checkCommandFor?:(profile:object)=>string,
  *   settingsFile?:string, writeBrief?:Function, resolveDir?:Function,
  *   now?:()=>number}} deps  settingsFile / writeBrief / resolveDir / now: test seams
  */
@@ -152,6 +181,10 @@ function registerLunasworkIpc(deps) {
     runsRoot,
     openPath,
     settingsFile,
+    queue,
+    queueChanged,
+    confirmQueueAdd,
+    checkCommandFor = (profile) => profile.checkCommand || '',
     writeBrief = defaultWriteBrief,
     resolveDir = resolveProjectDir,
     now = Date.now,
@@ -274,6 +307,10 @@ function registerLunasworkIpc(deps) {
     return { ok: true, pack: pack.packCompleteness(repo) };
   }));
 
+  if (queue) {
+    registerQueueIpc({ ipcMain, queue, queueChanged, confirmQueueAdd, checkCommandFor, projectOf, repoOf, readSettings: read, guarded, now });
+  }
+
   if (controller) {
     const isKnownProject = (id) => !!projectOf({ projectId: id });
     registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, todos, runsRoot, openPath, now });
@@ -364,6 +401,66 @@ function registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, 
 }
 
 /**
+ * The project queue (B16). Only main decides whether a project may join: the
+ * renderer sends a project id, the folder, profile and pack are looked up here.
+ */
+function registerQueueIpc({ ipcMain, queue, queueChanged, confirmQueueAdd, checkCommandFor, projectOf, repoOf, readSettings, guarded, now }) {
+  const isKnownProject = (id) => !!projectOf({ projectId: id });
+  const listed = (q) => ({ ok: true, queue: queueStore.publicQueue(q, isKnownProject) });
+  /** Writes an edit's result and tells the phone snapshot; the refusal reason otherwise. */
+  const commit = ({ queue: next, reason }) => {
+    if (reason) return { ok: false, reason };
+    if (!queue.write(next)) return { ok: false, reason: 'write-failed' };
+    if (typeof queueChanged === 'function') queueChanged();
+    return listed(queue.read());
+  };
+
+  ipcMain.handle('lunaswork:queueList', guarded('queueList', () => listed(queue.read())));
+
+  // One confirmation dialog at a time: a double click cannot stack another.
+  let confirming = false;
+  ipcMain.handle('lunaswork:queueAdd', async (_event, req) => {
+    try {
+      const parsed = parseQueueRequest(req);
+      const project = parsed && projectOf(parsed);
+      if (!project) return { ok: false, reason: 'bad-project' };
+      const repoPath = repoOf(project);
+      const profile = settingsStore.profileFor(readSettings(), project.id);
+      const problem = queueStore.joinProblem({ project, repoPath, profile, pack: repoPath ? pack.packCompleteness(repoPath) : null });
+      if (problem) return { ok: false, reason: problem };
+      if (queue.read().entries.some((e) => e.projectId === project.id)) return { ok: false, reason: 'queued-already' };
+      // The renderer can write a profile: only Mati's native yes pins it.
+      if (typeof confirmQueueAdd !== 'function' || confirming) return { ok: false, reason: 'queue-busy' };
+      const checkCommand = checkCommandFor(profile);
+      confirming = true;
+      let confirmed = false;
+      try {
+        confirmed = (await confirmQueueAdd({ projectId: project.id, repoPath, profile, checkCommand })) === true;
+      } finally {
+        confirming = false;
+      }
+      if (!confirmed) return { ok: false, reason: 'queue-declined' };
+      return commit(queueStore.addEntry(queue.read(), { projectId: project.id, label: project.label, profile, checkCommand, addedAt: now() }));
+    } catch (err) {
+      console.error('[lunaswork] queueAdd failed:', err && err.message);
+      return { ok: false, reason: 'failed' };
+    }
+  });
+
+  ipcMain.handle('lunaswork:queueRemove', guarded('queueRemove', (req) => {
+    const parsed = parseQueueRequest(req);
+    if (!parsed) return { ok: false, reason: 'bad-project' };
+    return commit(queueStore.removeEntry(queue.read(), parsed.projectId));
+  }));
+
+  ipcMain.handle('lunaswork:queueMove', guarded('queueMove', (req) => {
+    const parsed = parseQueueRequest(req, { move: true });
+    if (!parsed) return { ok: false, reason: 'bad-move' };
+    return commit(queueStore.moveEntry(queue.read(), parsed.projectId, parsed.delta));
+  }));
+}
+
+/**
  * Quick-adds Mati's `steer` card to a known project's to-do list. The text is
  * the only free input; the card's id, tags and state are set here.
  */
@@ -399,6 +496,7 @@ module.exports = {
   parseProfile,
   parseSteerText,
   parseWheelRequest,
+  parseQueueRequest,
   fieldOf,
   INTERVIEW_GAP_MS,
 };

@@ -16,6 +16,8 @@
 //                      put the history with them over it (the phone answers)
 //   godmode.feedback(s) the current run's feedback section changed (B17):
 //                      put the history with it over it (the phone shows status)
+//   godmode.queue(list) the Luna's Work project queue changed (B16, labels
+//                      only): put the history with it over it (the phone lists it)
 //
 // Every put is skipped while logged out, and a failure only logs - it never
 // throws into the git station or the end of a God Mode run. cloudsnapshots
@@ -99,7 +101,9 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
   let lastDecisions = [];
   // Luna's Work feedback section of the current run (B17): memory only too.
   let lastFeedback = null;
-  const overlay = () => ({ ...lastLive, decisions: lastDecisions, feedback: lastFeedback });
+  // Luna's Work project queue (B16, labels only): memory only too.
+  let lastQueue = [];
+  const overlay = () => ({ ...lastLive, decisions: lastDecisions, feedback: lastFeedback, queue: lastQueue });
 
   /** Rewrites the local history file with `step(prev)` and puts it with the live run over it. */
   function writeHistory(step) {
@@ -144,6 +148,11 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     /** Puts the run history with the current run's feedback section (null clears it). Never throws. */
     feedback(section) {
       lastFeedback = section && typeof section === 'object' ? section : null;
+      return putOverlay();
+    },
+    /** Puts the run history with the Luna's Work project queue ([] clears it). Never throws. */
+    queue(list) {
+      lastQueue = Array.isArray(list) ? list : [];
       return putOverlay();
     },
     /** Marks run `id` seen in this PC's own row (the attention inbox). Never throws. */

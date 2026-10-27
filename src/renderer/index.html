@@ -2156,6 +2156,18 @@
                 </div>
               </form>
             </div>
+            <!-- The project queue (B16, modules/lunasworkQueuePanel.js): after a
+                 SHIP the next queued project starts. -->
+            <div class="termcustom__group lw-queue">
+              <h3 class="termcustom__section" data-i18n="lw.queue.section">Kolejka projektow</h3>
+              <p class="termcustom__hint" data-i18n="lw.queue.hint">Po SHIP rusza nastepny projekt z kolejki. PLATEAU, RED i STOP wstrzymuja kolejke.</p>
+              <ol id="lw-queue-list" class="lw-queue__list"></ol>
+              <p id="lw-queue-empty" class="termcustom__hint" data-i18n="lw.queue.empty">Kolejka jest pusta.</p>
+              <p id="lw-queue-error" class="termcustom__hint lw-error" role="alert" hidden></p>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="lw-queue-add" class="pad-send" data-i18n="lw.queue.add">Dodaj ten projekt do kolejki</button>
+              </div>
+            </div>
             <div class="termcustom__group">
               <h3 class="termcustom__section" data-i18n="lw.models.section">Modele rol</h3>
               <p class="termcustom__hint" data-i18n="lw.models.hint">auto = Luna decyduje (wybor i powod trafiaja do raportu przebiegu).</p>

@@ -21,6 +21,8 @@
 //                   disk cleanup, low-disk stop + email (lunasworkMachine)
 //   hand-back       lunasworkHandback (C11): main's commit at the pause, then
 //                   Mati's commits since -> DECISIONS.md + ARCHITECTURE.md
+//   project queue   lunasworkQueue (B16): config/lunaswork-queue.local.json;
+//                   the run email gets its QUEUE block (advancing / paused)
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -48,6 +50,7 @@ const { createScaffolder } = require('./lunasworkScaffold');
 const { createMachineGuard } = require('./lunasworkMachine');
 const { handbackHead, readCommits } = require('./lunasworkHandback');
 const { wheelFromTodoPeers } = require('./lunasworkWheel');
+const { fileQueueStore, queueEmailNote } = require('./lunasworkQueue');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -105,6 +108,25 @@ function createAwake(powerSaveBlocker) {
 }
 
 /**
+ * The reporter's mail with the run's QUEUE block (B16) put on top of the text.
+ * @param {{sender:{status:Function, send:Function}}|undefined} mail
+ * @param {string} note queueEmailNote output ('' = unchanged)
+ */
+function mailWithNote(mail, note) {
+  if (!mail || !note) return mail;
+  const { sender } = mail;
+  return {
+    ...mail,
+    sender: {
+      status: () => sender.status(),
+      send: (msg) => sender.send({ ...msg, text: `${note}
+
+${msg.text}` }),
+    },
+  };
+}
+
+/**
  * @param {{
  *   projects: ()=>object[], resolveDir: (p:string)=>string|null,
  *   readTodos: (projectId:string)=>object[], writeTodos: (projectId:string, list:object[])=>boolean,
@@ -118,6 +140,7 @@ function createAwake(powerSaveBlocker) {
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
  *   runsDir?: ()=>string, mail?: {sender:object, prefs:object},
+ *   queue?: {read:()=>object, write:(q:object)=>boolean},
  * }} ctx
  */
 function createLunasWorkRuntime(ctx) {
@@ -155,13 +178,15 @@ function createLunasWorkRuntime(ctx) {
     return decision.action === 'wait' ? decision.resumeAt : null;
   };
 
-  const reporter = ctx.runsDir
-    ? createLunasWorkReporter({
-      runsDir: ctx.runsDir,
-      mail: ctx.mail ? { sender: ctx.mail.sender, prefs: ctx.mail.prefs, enabled: godmodeEmailOn } : undefined,
-      log: ctx.log,
-    })
-    : null;
+  const reporterMail = ctx.mail ? { sender: ctx.mail.sender, prefs: ctx.mail.prefs, enabled: godmodeEmailOn } : undefined;
+  const reporter = ctx.runsDir ? createLunasWorkReporter({ runsDir: ctx.runsDir, mail: reporterMail, log: ctx.log }) : null;
+  // B16: a run that ends with something queued gets its own reporter, whose
+  // mail carries the QUEUE block; the files and the dedupe mark are the same.
+  const onRunEndReport = (run) => {
+    const note = queueEmailNote(run && run.queue);
+    if (!note) return reporter.onRunEnd(run);
+    return createLunasWorkReporter({ runsDir: ctx.runsDir, mail: mailWithNote(reporterMail, note), log: ctx.log }).onRunEnd(run);
+  };
 
   return createLunasWork({
     store: { load: lunasworkStore.loadRun, save: lunasworkStore.saveRun },
@@ -210,9 +235,10 @@ function createLunasWorkRuntime(ctx) {
         return res.ok;
       },
     },
-    onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
+    onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [onRunEndReport] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: reporter ? [reporter.onMilestone] : [],
+    queue: ctx.queue || fileQueueStore(),
     log: ctx.log,
   });
 }
@@ -265,12 +291,15 @@ function createMachineRuntime(ctx) {
  *        applyFeedback() (lunasworkFeedback.feedbackFromTodoPeers)
  * So does the wheel (C11): its state rides in the feedback section, and the
  * phone's `lunaswork-wheel:<id>` units go to applyWheel() (newest one, once).
+ * The project queue (B16) goes out only: putQueue gets readQueue()'s list on
+ * every controller event and every publish() (the IPC calls it after an edit).
  * @param {{controller:{subscribe:Function, status:Function, applyAnswers:Function, applyFeedback?:Function, applyWheel?:Function},
  *   cloud:{onPulled:Function, hooks:Function}|null, putDecisions:(list:object[])=>unknown,
- *   putFeedback?:(section:object|null)=>unknown, log?:(line:string)=>void}} ctx
+ *   putFeedback?:(section:object|null)=>unknown, readQueue?:()=>object[], putQueue?:(list:object[])=>unknown,
+ *   log?:(line:string)=>void}} ctx
  * @returns {{publish:()=>void, pullAnswers:()=>number}}
  */
-function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, log = () => {} }) {
+function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, readQueue, putQueue, log = () => {} }) {
   /** Puts `value` through `put` only when it changed since the last put. */
   const changedPut = (what, put) => {
     let last = null;
@@ -287,9 +316,17 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, log = 
   };
   const putDecisionList = changedPut('decisions', putDecisions);
   const putFeedbackSection = typeof putFeedback === 'function' ? changedPut('feedback', putFeedback) : null;
+  const putQueueList = typeof putQueue === 'function' && typeof readQueue === 'function' ? changedPut('queue', putQueue) : null;
   const publish = (status = controller.status()) => {
     putDecisionList(status && Array.isArray(status.pendingDecisions) ? status.pendingDecisions : []);
     if (putFeedbackSection) putFeedbackSection((status && status.feedback) || null);
+    if (putQueueList) {
+      try {
+        putQueueList(readQueue());
+      } catch (err) {
+        log(`[lunaswork] queue not read: ${err && err.message}`);
+      }
+    }
   };
   const pullAnswers = () => {
     if (!cloud) return 0;
@@ -310,4 +347,4 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, log = 
   return { publish, pullAnswers };
 }
 
-module.exports = { createLunasWorkRuntime, createMachineRuntime, createAwake, syncCheckout, wireDecisionSync };
+module.exports = { createLunasWorkRuntime, createMachineRuntime, createAwake, syncCheckout, wireDecisionSync, mailWithNote };
