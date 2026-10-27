@@ -180,6 +180,7 @@ const {
   decisionLine,
   publicDecision,
 } = require('./lunasworkDecisions');
+const { revokeOnRunEnd } = require('./lunasworkWidget');
 const { wheelState, newestWheelAction } = require('./lunasworkWheel');
 const { handbackDecisionLine, architectureBlock } = require('./lunasworkHandback');
 
@@ -356,6 +357,8 @@ function createLunasWork(deps) {
 
   function notifyRunEnd() {
     if (!run || run.endNotified) return;
+    // LW 3.28b: the client feedback widget's token dies with the run.
+    revokeOnRunEnd(deps.widget, run.id, log);
     const snapshot = { ...run };
     for (const fn of runEndHooks) {
       try {

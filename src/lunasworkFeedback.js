@@ -11,7 +11,10 @@
 //             web app's feedback form. The form writes one unit into the
 //             existing `todos` cloud scope under `lunaswork-feedback:<id>`
 //             ({runId, text}); only Mati's own account can write there, so
-//             the author of such an item is always Mati.
+//             the author of such an item is always Mati. The third channel
+//             is the client widget on a staging build (src/lunasworkWidget.js):
+//             its items are always author `client`, with context lines
+//             (withContext) that the card shows and triage skips.
 //   store     createItem / restoreFeedback: {id, author, text (capped),
 //             createdAt, status, parts} per run
 //   triage    triageText: free text -> parts, one card each ("the header is
@@ -92,6 +95,32 @@ function cleanText(raw) {
     .slice(0, MAX_TEXT);
 }
 
+// Context lines LunaCore appends to a client widget item (src/lunasworkWidget.js):
+// they reach the card's details, never triage, so a page path is never a card.
+const CONTEXT_LINE_RE = /^\[(?:page|screenshot)\] /;
+const MAX_CONTEXT_CHARS = 200;
+
+/**
+ * Client text with its context lines: the page it was sent from and the
+ * screenshot file. The text is cut first, so the lines always fit MAX_TEXT.
+ * Client lines that look like context lines are dropped: only LunaCore adds them.
+ * @param {string} text
+ * @param {{page?:string|null, screenshot?:string|null}} [ctx]
+ * @returns {string}
+ */
+function withContext(text, ctx = {}) {
+  const lines = [
+    ctx.page ? `[page] ${oneLine(ctx.page, MAX_CONTEXT_CHARS)}` : null,
+    ctx.screenshot ? `[screenshot] ${oneLine(ctx.screenshot, MAX_CONTEXT_CHARS)}` : null,
+  ].filter(Boolean);
+  const room = MAX_TEXT - lines.reduce((n, l) => n + l.length + 1, 0);
+  const own = cleanText(text)
+    .split('\n')
+    .filter((line) => !CONTEXT_LINE_RE.test(line))
+    .join('\n');
+  return [own.slice(0, room).trim(), ...lines].filter(Boolean).join('\n');
+}
+
 // ---- triage ---------------------------------------------------------------------
 
 const LEADING_JOIN_RE = /^(?:but|and|also|plus|ale|oraz|i|a)\s+/i;
@@ -169,7 +198,10 @@ function splitJoins(clause) {
  * @returns {Array<{type:'look'|'bug'|'scope', text:string}>}
  */
 function triageText(text) {
-  const clean = cleanText(text);
+  const clean = cleanText(text)
+    .split('\n')
+    .filter((line) => !CONTEXT_LINE_RE.test(line))
+    .join('\n');
   if (!clean) return [];
   const clauses = foldClauses(clean.split(/[\n;!?]+|\.(?=\s|$)|,/));
   const kept = clauses.flatMap(splitJoins).filter((f) => classify(f) !== null);
@@ -481,6 +513,7 @@ module.exports = {
   MAX_TEXT,
   MAX_ITEMS,
   cleanText,
+  withContext,
   classify,
   triageText,
   cardFor,

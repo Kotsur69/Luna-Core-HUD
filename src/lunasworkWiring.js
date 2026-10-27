@@ -21,6 +21,8 @@
 //                   disk cleanup, low-disk stop + email (lunasworkMachine)
 //   hand-back       lunasworkHandback (C11): main's commit at the pause, then
 //                   Mati's commits since -> DECISIONS.md + ARCHITECTURE.md
+//   client widget   lunasworkWidget (LW 3.28b): ctx.widget into the staging
+//                   deploy step and the run-end revoke
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -118,6 +120,7 @@ function createAwake(powerSaveBlocker) {
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
  *   runsDir?: ()=>string, mail?: {sender:object, prefs:object},
+ *   widget?: {prepare:Function, revoke:Function} (lunasworkWidget.createWidget),
  * }} ctx
  */
 function createLunasWorkRuntime(ctx) {
@@ -190,6 +193,9 @@ function createLunasWorkRuntime(ctx) {
     gitLog,
     syncCheckout,
     checkpoints: createCheckpoints({ log: ctx.log }),
+    // LW 3.28b: the client feedback widget - baked into staging deploys only,
+    // its token revoked when the run ends.
+    ...(ctx.widget ? { widget: ctx.widget, staging: { widget: ctx.widget } } : {}),
     limitResumeAt,
     awake: createAwake(ctx.powerSaveBlocker),
     // Every decision-queue answer, one line in the project's design/DECISIONS.md.

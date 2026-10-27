@@ -17,7 +17,10 @@
 // Optional staging fields (LW 3.28a + 3.29, flow in src/lunasworkStaging.js):
 //   stagingUrl             the Playtester tests this instead of a local launch
 //   stagingMigrateCommand  migrations + edge functions -> the STAGING project
-//   stagingDeployCommand   deploys the app to staging
+//   stagingDeployCommand   deploys the app to staging; with cloud sync on it
+//                          gets $LUNA_FEEDBACK_WIDGET, the client feedback
+//                          widget script to include in the staging build
+//                          (src/lunasworkWidget.js, LW 3.28b)
 //   stagingBackupCommand   data snapshot before every schema change
 //   stagingRestoreCommand  puts a snapshot back on a rollback
 // The commands need stagingUrl; backup and restore come as a pair, and a

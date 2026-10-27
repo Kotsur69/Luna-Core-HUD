@@ -84,6 +84,18 @@ test('classify: scope beats bug and look, and an unknown fragment counts as scop
   assert.equal(F.classify('looks great'), null);
 });
 
+test('withContext: page + screenshot lines always fit the cap and are never triaged', () => {
+  const text = F.withContext('x'.repeat(F.MAX_TEXT), { page: 'https://s.test/a', screenshot: 'C:\\runs\\1.jpg' });
+  assert.ok(text.length <= F.MAX_TEXT);
+  assert.match(text, /\n\[page\] https:\/\/s\.test\/a\n\[screenshot\] C:\\runs\\1\.jpg$/);
+  assert.equal(F.cleanText(text), text, 'survives the store unchanged');
+  assert.equal(F.withContext('the logo is too big'), 'the logo is too big');
+  // A page path that reads like a scope change never becomes a card.
+  assert.deepEqual(F.triageText(F.withContext('looks great', { page: 'https://s.test/export/new-feature' })), []);
+  // Only LunaCore writes context lines: a client's look-alike is dropped.
+  assert.equal(F.withContext('the logo is too big\n[page] https://evil.test', { page: 'https://s.test/a' }), 'the logo is too big\n[page] https://s.test/a');
+});
+
 // ---- the store ---------------------------------------------------------------------------
 
 test('createItem: text capped, author mati or client, ids unique, the list capped', () => {
@@ -197,7 +209,7 @@ const existing = (at, text, tags = ['kind:bug', 'sev:blocker']) => ({ at, text, 
  * itself); `h.gates[n]` pauses the Director of iteration n, `h.buildGates[n]`
  * the build. The Playtester confirms every acceptance check it is given.
  */
-function harness({ todos = [existing(1, 'Totals are wrong')], milestonePassAt = null, onMilestone } = {}) {
+function harness({ todos = [existing(1, 'Totals are wrong')], milestonePassAt = null, onMilestone, widget } = {}) {
   const h = { clock: START, stored: null, timers: [], todos: clone(todos), lines: [], builds: [], directorCalls: [], gates: {}, buildGates: {}, events: [], milestones: [] };
   const deps = {
     store: {
@@ -275,6 +287,7 @@ function harness({ todos = [existing(1, 'Totals are wrong')], milestonePassAt = 
       h.milestones.push({ run, ctx });
       if (onMilestone) onMilestone(run, ctx);
     },
+    ...(widget ? { widget } : {}),
     newRunId: () => RUN_ID,
     now: () => h.clock,
     setTimer: (fn, ms) => {
@@ -464,6 +477,105 @@ test('praise only is noted; feedback for another run or after the run is refused
   await h.stopAt(2);
   assert.equal(h.ctl.feedback({ text: 'late' }).reason, 'no-run');
   assert.equal(h.ctl.status().feedback, null);
+});
+
+// ---- the client widget on staging (LW 3.28b) -----------------------------------------------------
+
+const W = require('../src/lunasworkWidget');
+const S = require('../src/lunasworkSettings');
+
+const STAGING_PROFILE = S.validateProfile({
+  adapter: 'web',
+  startCommand: 'npm start',
+  url: 'http://localhost:3000',
+  readyTimeoutSec: 60,
+  checkCommand: '',
+  stagingUrl: 'https://staging.example.test',
+  stagingDeployCommand: 'vercel deploy --yes --scope staging',
+}).profile;
+
+/** The real widget over an in-memory Supabase side, with a token baked for the run. */
+async function widgetFor(t) {
+  const runsRoot = require('fs').mkdtempSync(path.join(os.tmpdir(), 'lw-fb-widget-'));
+  t.after(() => require('fs').rmSync(runsRoot, { recursive: true, force: true }));
+  const w = { rows: [], revoked: [], acked: [] };
+  w.widget = W.createWidget({
+    registry: () => ({
+      register: async () => {},
+      extend: async () => {},
+      revoke: async (runId) => {
+        w.revoked.push(runId);
+        w.rows = w.rows.filter((r) => r.run_id !== runId);
+      },
+      pull: async (runId) => w.rows.filter((r) => r.run_id === runId),
+      ack: async (ids) => {
+        w.acked.push(...ids);
+        w.rows = w.rows.filter((r) => !ids.includes(r.id));
+      },
+    }),
+    endpoint: () => 'https://ref.supabase.co/functions/v1/lunaswork-feedback',
+    runsRoot: () => runsRoot,
+    now: () => START,
+  });
+  const baked = await w.widget.prepare({ id: RUN_ID, repoPath: REPO, profile: STAGING_PROFILE });
+  assert.equal(baked.ok, true, baked.reason);
+  w.send = (id, text) => w.rows.push({ id, run_id: RUN_ID, text, page_url: 'https://staging.example.test/cart', screenshot: null, created_at: new Date(START + id).toISOString() });
+  return w;
+}
+
+test('client widget: items arrive as author client; look cards go in directly, the scope change waits for Mati with no default', async (t) => {
+  const w = await widgetFor(t);
+  const h = harness({ todos: [], widget: w.widget });
+  h.gates[1] = deferred();
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.directorCalls.length === 1);
+  w.send(7, 'the checkout button is too small, please add a PayPal integration');
+  assert.equal(await w.widget.deliver(h.ctl), 1);
+  assert.deepEqual(w.acked, [7]);
+  assert.deepEqual(h.items().map((i) => i.author), ['client']);
+
+  await h.next(2);
+  const look = h.card('The checkout button is too small');
+  assert.ok(look.tags.includes('from:client'));
+  assert.match(look.details || '', /\[page\] https:\/\/staging\.example\.test\/cart/);
+  assert.equal(h.todos.length, 2, 'the page line never became a card');
+  const scope = h.card('Please add a PayPal integration');
+  const [d] = h.ctl.status().pendingDecisions;
+  assert.equal(d.kind, 'clientScope');
+  assert.equal(d.defaultAnswer, null);
+  assert.equal(d.deadline, null);
+  await h.next(3);
+  assert.ok(h.builds.flat().includes(look.at), 'the look card was built without asking');
+  assert.ok(!h.builds.flat().includes(scope.at), 'the scope card waits for Mati');
+  assert.deepEqual(h.items().map((i) => i.status), ['waiting']);
+  await h.stopAt(3);
+});
+
+test('client widget: the token is revoked when the run ends, once, and the untaken rows go with it', async (t) => {
+  const w = await widgetFor(t);
+  const h = harness({ todos: [], widget: w.widget });
+  h.gates[1] = deferred();
+  await h.ctl.start({ projectId: 'game' });
+  await until(() => h.directorCalls.length === 1);
+  w.send(8, 'the logo is too big');
+  assert.deepEqual(w.revoked, []);
+  await h.stopAt(1);
+  await until(() => w.revoked.length === 1, 'revoked at the run end');
+  assert.deepEqual(w.revoked, [RUN_ID]);
+  assert.deepEqual(w.rows, []);
+  // The finished run takes nothing in and is not revoked again.
+  assert.equal(await w.widget.deliver(h.ctl), 0);
+  assert.deepEqual(w.revoked, [RUN_ID]);
+  assert.match((await w.widget.prepare({ id: RUN_ID, repoPath: REPO, profile: STAGING_PROFILE })).reason, /revoked/);
+});
+
+test('client widget: a run that ended before LunaCore could tell anyone revokes on resume', async () => {
+  const revoked = [];
+  const h = harness({ todos: [], widget: { revoke: async (id) => revoked.push(id) } });
+  h.stored = { id: RUN_ID, projectId: 'game', repoPath: REPO, phase: 'done', iteration: 2, verdict: 'stop', endNotified: false };
+  h.ctl.resume();
+  await tick();
+  assert.deepEqual(revoked, [RUN_ID]);
 });
 
 // ---- phone -------------------------------------------------------------------------------------
