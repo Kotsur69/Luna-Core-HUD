@@ -463,8 +463,12 @@ function createLunasWork(deps) {
     update({ endNotified: true });
   }
 
-  /** The milestone email (B12 / B17): a gate passed and the run goes on. */
-  function notifyMilestone(milestone) {
+  /**
+   * The milestone email (B12 / B17): a gate passed and the run goes on.
+   * `evidence` = the gate iteration's playtest report, evidence folder and
+   * number (the demo video, B13) - the snapshot is already on the next one.
+   */
+  function notifyMilestone(milestone, evidence = {}) {
     // LW 2.18: exactly one email per gate, across restarts.
     const mailed = Array.isArray(run.gatesMailed) ? run.gatesMailed : [];
     if (!milestone || mailed.includes(milestone)) return;
@@ -472,7 +476,7 @@ function createLunasWork(deps) {
     const snapshot = { ...run };
     for (const fn of milestoneHooks) {
       try {
-        Promise.resolve(fn(snapshot, { milestone })).catch((err) => log(`[lunaswork] onMilestone failed: ${errText(err)}`));
+        Promise.resolve(fn(snapshot, { ...evidence, milestone })).catch((err) => log(`[lunaswork] onMilestone failed: ${errText(err)}`));
       } catch (err) {
         log(`[lunaswork] onMilestone failed: ${errText(err)}`);
       }
@@ -1250,7 +1254,9 @@ function createLunasWork(deps) {
       iteration: run.iteration + 1,
       current: emptyCurrent(),
     });
-    if (critic.milestone && critic.milestone.passed && milestone) notifyMilestone(milestone);
+    if (critic.milestone && critic.milestone.passed && milestone) {
+      notifyMilestone(milestone, { report: c.report || null, evidenceDir: lap ? lap.evidenceDir : null, iteration: record.n });
+    }
   }
 
   // ---- hand me the wheel (C11) ----
