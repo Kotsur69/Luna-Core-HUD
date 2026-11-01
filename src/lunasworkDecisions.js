@@ -42,9 +42,11 @@
 // asked by the controller, never by needsDecision(). designVariant (LW 2.25a)
 // and prototype (LW 2.25b) are the toggles' own questions, asked by
 // lunasworkVariantFlow / lunasworkPrototype with their own options.
+// production: an iteration diff that touches production
+// (src/lunasworkStaging.js), default reject.
 const KINDS = [
   'dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'feedbackScope', 'clientScope',
-  'designVariant', 'prototype', 'other',
+  'designVariant', 'prototype', 'production', 'other',
 ];
 const ANSWERED_BY = ['mati', 'default'];
 const STATUSES = ['pending', 'answered'];
@@ -625,6 +627,7 @@ module.exports = {
   APPROVE,
   REJECT,
   CARD_CHOICES,
+  MIGRATION_PATH_RE,
   ANSWER_LIST_KEY,
   DEFAULT_DEADLINE_MS,
   MAX_FREE_TEXT,

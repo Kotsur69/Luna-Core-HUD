@@ -14,7 +14,9 @@
 // until it answers 2xx/3xx, and kills the whole process tree on stop. LW
 // 2.21a: an optional seedCommand runs to completion first (same dir, same
 // log), so the Playtester meets the builders' fixtures; a failing seed fails
-// the start.
+// the start. With a stagingUrl in the profile (LW 3.28a) nothing is launched
+// or seeded: the iteration was deployed to staging (src/lunasworkStaging.js),
+// so start() only waits for stagingUrl and the Playtester tests that.
 //
 // TRUST BOUNDARY: the command comes ONLY from the profile, which only ever
 // comes from lunasworkSettings (LunaCore's local file). start() re-validates it
@@ -287,21 +289,26 @@ function createWebAdapter(ctx) {
     if (valid.adapter !== 'web') throw new Error(`profile adapter is '${valid.adapter}', not 'web'`);
 
     log = openLog(ctx.evidenceDir);
-    if (valid.seedCommand) {
-      const seeded = await seed(valid.seedCommand);
-      if (!seeded.ok) {
-        await stop();
-        throw new Error(`${seeded.reason} - see ${path.join(ctx.evidenceDir, SERVER_LOG)}`);
+    // Staging: the app already runs remotely - wait for stagingUrl, seed and
+    // launch nothing locally.
+    const target = valid.stagingUrl ? { ...valid, url: valid.stagingUrl } : valid;
+    if (!valid.stagingUrl) {
+      if (valid.seedCommand) {
+        const seeded = await seed(valid.seedCommand);
+        if (!seeded.ok) {
+          await stop();
+          throw new Error(`${seeded.reason} - see ${path.join(ctx.evidenceDir, SERVER_LOG)}`);
+        }
       }
+      launch(valid);
     }
-    launch(valid);
-    const ready = await waitReady(valid);
+    const ready = await waitReady(target);
     if (!ready.ok) {
       await stop();
-      throw new Error(`${ready.reason} - see ${path.join(ctx.evidenceDir, SERVER_LOG)}`);
+      throw new Error(valid.stagingUrl ? ready.reason : `${ready.reason} - see ${path.join(ctx.evidenceDir, SERVER_LOG)}`);
     }
-    readyUrl = valid.url;
-    return { url: valid.url };
+    readyUrl = target.url;
+    return { url: target.url };
   }
 
   async function shutdown() {
