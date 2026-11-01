@@ -15,7 +15,9 @@
 //               and backup.json links it to the checkpoint tag. A failed
 //               backup means the migration is NOT applied.
 //   3. migrate  stagingMigrateCommand (migrations + edge functions)
-//   4. deploy   stagingDeployCommand
+//   4. deploy   stagingDeployCommand; with deps.widget (LW 3.28b) it gets
+//               $LUNA_FEEDBACK_WIDGET, the client feedback widget script
+//               (src/lunasworkWidget.js) - this step only, never another
 //   5. the web adapter then tests stagingUrl instead of a local launch
 //
 // Every failed step is a bug card (once while it is open) and a run-log note;
@@ -74,6 +76,8 @@ const MAX_KEYS = 1000;
 const MAX_ENTRIES = 50;
 const MAX_NAMES = 20;
 const TAIL_CHARS = 600;
+// The deploy step's env key for the client feedback widget (src/lunasworkWidget.js ENV_KEY).
+const WIDGET_ENV_KEY = 'LUNA_FEEDBACK_WIDGET';
 // Lock files are huge and never point at an environment.
 const DIFF_EXCLUDES = [':(exclude,glob)**/package-lock.json', ':(exclude,glob)**/pnpm-lock.yaml', ':(exclude,glob)**/*.lock'];
 
@@ -510,7 +514,8 @@ function fileCard(store, runId, card) {
 /**
  * @param {{runCommand?:(o:{step:string, command:string, cwd:string, env:object, logFile:string})=>Promise<{ok:boolean, code?:number|null, detail?:string}>,
  *   git?:(cwd:string, args:string[])=>Promise<{ok:boolean, out:string, err:string}>,
- *   runsRoot?:()=>string, now?:()=>number, log?:(line:string)=>void}} [deps]
+ *   runsRoot?:()=>string, now?:()=>number, log?:(line:string)=>void,
+ *   widget?:{prepare:(run:object)=>Promise<{ok:boolean, env?:object, reason?:string}>}}} [deps]
  */
 function createStaging(deps = {}) {
   const runCommand = deps.runCommand || runShell;
@@ -522,13 +527,35 @@ function createStaging(deps = {}) {
   /** One profile command. Never throws. */
   async function runStep(step, profile, o) {
     const command = profile[STEP_COMMANDS[step]];
-    const env = { LUNA_STAGING_STEP: step, LUNA_RUN_ID: o.runId, LUNA_ITERATION: String(o.iteration), ...(o.backupDir ? { LUNA_BACKUP_DIR: o.backupDir } : {}) };
+    const env = { ...(o.extraEnv || {}), LUNA_STAGING_STEP: step, LUNA_RUN_ID: o.runId, LUNA_ITERATION: String(o.iteration), ...(o.backupDir ? { LUNA_BACKUP_DIR: o.backupDir } : {}) };
     try {
       const res = await runCommand({ step, command, cwd: o.repoPath, env, logFile: o.logFile });
       return isObj(res) ? { ok: res.ok === true, detail: oneLine(redact(res.detail || (res.ok ? '' : `exit ${res.code}`)), 300) } : { ok: false, detail: 'no result' };
     } catch (err) {
       return { ok: false, detail: oneLine(redact(errText(err)), 300) };
     }
+  }
+
+  /**
+   * LW 3.28b: the client feedback widget for THIS staging deploy only
+   * (src/lunasworkWidget.js guards it again). Only its one key gets through;
+   * a refusal just leaves the widget out. Never throws.
+   */
+  async function widgetEnv(run, note) {
+    if (!deps.widget || typeof deps.widget.prepare !== 'function') return {};
+    let res;
+    try {
+      res = await deps.widget.prepare(run);
+    } catch (err) {
+      res = { ok: false, reason: errText(err) };
+    }
+    const file = isObj(res) && res.ok && isObj(res.env) ? res.env[WIDGET_ENV_KEY] : null;
+    if (typeof file === 'string' && path.isAbsolute(file)) {
+      note('client feedback widget baked into the staging build');
+      return { [WIDGET_ENV_KEY]: file };
+    }
+    note(`client feedback widget left out (${oneLine(isObj(res) ? res.reason : 'no result', 120)})`);
+    return {};
   }
 
   /** Where the diff starts: the last staged commit, else main before the run, else the empty tree. */
@@ -679,7 +706,8 @@ function createStaging(deps = {}) {
     }
     for (const step of ['migrate', 'deploy']) {
       if (!run.profile[STEP_COMMANDS[step]]) continue;
-      const res = await runStep(step, run.profile, o);
+      const extraEnv = step === 'deploy' ? await widgetEnv(run, note) : {};
+      const res = await runStep(step, run.profile, { ...o, extraEnv });
       if (!res.ok) return fail(step, res.detail);
       note(`${step} ok`);
     }

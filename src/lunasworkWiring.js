@@ -23,7 +23,7 @@
 //                   disk cleanup, low-disk stop + email (lunasworkMachine)
 //   hand-back       lunasworkHandback (C11): main's commit at the pause, then
 //                   Mati's commits since -> DECISIONS.md + ARCHITECTURE.md
-//   loop hooks      lunasworkHookDeps: graph + codemaps refresh after a merge
+//   loop hooks     lunasworkHookDeps: graph + codemaps refresh after a merge
 //                   (LW 2.23), i18n card, Lighthouse, reviews, second opinion,
 //                   project skills at a passed gate (LW 2.16)
 //   toggles         LW 2.25a: the Critic's variant pick at the deadline
@@ -44,6 +44,8 @@
 //                   questions to the ask service; main.js creates it
 //   project queue   lunasworkQueue (B16): config/lunaswork-queue.local.json;
 //                   the run email gets its QUEUE block (advancing / paused)
+//   client widget   lunasworkWidget (LW 3.28b): ctx.widget into the staging
+//                   deploy step and the run-end revoke
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -206,6 +208,7 @@ ${msg.text}` }),
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
  *   runsDir?: ()=>string, mail?: {sender:object, prefs:object}, secretStore?: object,
  *   queue?: {read:()=>object, write:(q:object)=>boolean},
+ *   widget?: {prepare:Function, revoke:Function} (lunasworkWidget.createWidget),
  * }} ctx
  */
 function createLunasWorkRuntime(ctx) {
@@ -321,6 +324,9 @@ function createLunasWorkRuntime(ctx) {
     gitLog,
     syncCheckout,
     checkpoints: createCheckpoints({ log: ctx.log }),
+    // LW 3.28b: the client feedback widget - baked into staging deploys only,
+    // its token revoked when the run ends.
+    ...(ctx.widget ? { widget: ctx.widget, staging: { widget: ctx.widget } } : {}),
     limitResumeAt,
     awake: createAwake(ctx.powerSaveBlocker),
     // Every decision-queue answer, one line in the project's design/DECISIONS.md.

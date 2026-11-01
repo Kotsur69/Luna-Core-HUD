@@ -146,6 +146,7 @@ const { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, wireDeci
 const { stagingLines } = require('./lunasworkStaging');
 const { fileQueueStore, phoneQueue } = require('./lunasworkQueue');
 const { checkCommandFor: lunasworkCheckCommandFor } = require('./lunasworkRun');
+const { createWidget, supabaseRegistry, endpointFor, startClientFeedbackPoll } = require('./lunasworkWidget');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -1196,10 +1197,20 @@ const lunasworkQueue = fileQueueStore();
 // Set once the phone sync is wired: publishes the queue after a panel edit.
 let lunasworkPublish = null;
 
+// LW 3.28b: the client feedback widget on staging builds (src/lunasworkWidget.js),
+// over the logged-in cloud session; `cloud` starts later, so it is read lazily.
+const lunasworkWidget = createWidget({
+  registry: () => (cloud && cloud.client && cloud.status().loggedIn ? supabaseRegistry(cloud.client) : null),
+  endpoint: () => (cloud ? endpointFor(cloud.url) : null),
+  runsRoot: () => path.join(userDir(), RUN_REPORT_DIR),
+  log: (line) => console.info(line),
+});
+
 // Luna's Work run controller (src/lunaswork.js): all of its deps are built in
 // src/lunasworkWiring.js; main only hands over what it owns.
 const lunaswork = createLunasWorkRuntime({
   queue: lunasworkQueue,
+  widget: lunasworkWidget,
   projects: () => projects,
   resolveDir: (p) => resolveProjectDir(p),
   readTodos,
@@ -3674,6 +3685,8 @@ app.whenReady().then(() => {
   lunasworkPublish = () => lunasworkSync.publish();
   // The stored answers, so the phone sees them after a restart too.
   snapshotPuts.godmode.asks(lunasworkAsk.section());
+  // LW 3.28b: client feedback from the staging widget into the run (author client).
+  startClientFeedbackPoll({ controller: lunaswork, widget: lunasworkWidget, log: (line) => console.error(line) });
   // Luna's Work: a run the previous LunaCore left goes on from its phase.
   // The machine guard follows it (attached first, so it sees the resume).
   if (!probing) {

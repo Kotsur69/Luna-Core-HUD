@@ -207,6 +207,7 @@ const {
   decisionLine,
   publicDecision,
 } = require('./lunasworkDecisions');
+const { revokeOnRunEnd } = require('./lunasworkWidget');
 const { wheelState, newestWheelAction } = require('./lunasworkWheel');
 const { createErrorTracking } = require('./lunasworkErrorTracking');
 const { handbackDecisionLine, architectureBlock } = require('./lunasworkHandback');
@@ -469,6 +470,8 @@ function createLunasWork(deps) {
 
   function notifyRunEnd() {
     if (!run || run.endNotified) return;
+    // LW 3.28b: the client feedback widget's token dies with the run.
+    revokeOnRunEnd(deps.widget, run.id, log);
     // B16: only SHIP starts the next queued project; the note rides to the run email.
     const queued = deps.queue ? planAfterRun(deps.queue.read(), run, (projectId) => startProblem({ projectId })) : null;
     const snapshot = queued ? { ...run, queue: queued.note } : { ...run };

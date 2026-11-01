@@ -331,6 +331,8 @@ function startCloud({ machine, legacyMachine }) {
     snapshots,
     /** The logged-in client, for the host's command loop (src/hostcommands.js). */
     client: auth.client,
+    /** The project URL (no key): edge function URLs are built on it (src/lunasworkWidget.js). */
+    url: config.url,
   };
 }
 
