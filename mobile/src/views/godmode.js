@@ -12,7 +12,8 @@
 // wheel ("Hand me the wheel" / "Hand back", wheel.js), then the run's
 // feedback with each item's status and the feedback form (feedback.js) - the
 // parts that write: an answer, a wheel action or new feedback goes back
-// through the `todos` outbox.
+// through the `todos` outbox. The Luna's Work project queue (queue.js) is
+// listed read-only.
 // Otherwise read-only; every string is text, and a PR link is github.com
 // only (the reader already dropped anything else).
 // ============================================================================
@@ -26,6 +27,7 @@ import { decisionsCard, createDecisionAnswers } from './decisions.js';
 import { feedbackCard, createFeedbackSender } from './feedback.js';
 import { wheelCard, createWheelSender } from './wheel.js';
 import { lunasworkLinkCard } from './lunaswork.js';
+import { queueCard } from './queue.js';
 
 const RECENT_MS = 24 * 60 * 60 * 1000;
 const PR_PREFIX = 'https://github.com/';
@@ -103,8 +105,9 @@ export function mountGodmode(main, deps) {
     const helm = wheelCard(rows, now, { mirror: wheel.mirror(), send: wheel.send });
     // LW 2.17b: the Luna's Work page (run status, scores, tokens, time to SHIP).
     const lw = lunasworkLinkCard(rows, now);
-    if (!runs.length && !live && !tabs && !decisions && !notes && !lw) return h('p', { class: 'empty' }, t('godmodeEmpty'));
-    return h('div', { class: 'stack' }, lw, decisions, helm, notes, live ? liveCard(live, now) : null, tabs, runs.map((r) => runCard(r, now)));
+    const queued = queueCard(rows, now);
+    if (!runs.length && !live && !tabs && !decisions && !notes && !lw && !queued) return h('p', { class: 'empty' }, t('godmodeEmpty'));
+    return h('div', { class: 'stack' }, lw, decisions, helm, notes, live ? liveCard(live, now) : null, queued, tabs, runs.map((r) => runCard(r, now)));
   });
   repaintWhileShown(main, view);
   return view;

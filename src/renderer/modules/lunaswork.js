@@ -26,6 +26,7 @@ import { onLangChange } from './bus.js';
 import { mountLunasWorkPanel } from './lunasworkPanel.js';
 import { mountLunasWorkDashboard } from './lunasworkDashboard.js';
 import { mountLunasWorkAsk } from './lunasworkAsk.js';
+import { mountLunasWorkQueue } from './lunasworkQueuePanel.js';
 
 const MODEL_LABELS = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 const SAVED_FLASH_MS = 2000;
@@ -263,9 +264,13 @@ export function mountLunasWorkSettings(root) {
     });
   }
 
+  // The project queue (B16): add the picked project, reorder, remove.
+  const queuePanel = mountLunasWorkQueue(root, { projectId });
+
   el.project.addEventListener('change', () => {
     sfx.navClick();
     runPanel.projectChanged();
+    queuePanel.refresh();
     refresh();
   });
 

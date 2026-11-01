@@ -22,7 +22,7 @@ const { summarize, weekWindow } = ledgerCalc;
 const { parseYazioPeer } = yazio;
 const { newestUsage, windowNow } = usage;
 const { reposFrom: mergeReposRows } = reposSnap;
-const { runsFrom, liveFrom, tabsFrom, decisionsFrom, feedbackFrom, liveCounts } = godmodeSnap;
+const { runsFrom, liveFrom, tabsFrom, decisionsFrom, feedbackFrom, queueFrom, liveCounts } = godmodeSnap;
 
 /** Projects listed on the phone; the rest only count in the total. */
 export const MAX_PROJECTS = 20;
@@ -149,6 +149,11 @@ export function godmodeFeedbackFrom(rows, now) {
 /** The Luna's Work run snapshot of the newest PC (LW 2.17b), with `machine` and `stale`, or null. */
 export function lunasworkFrom(rows, now) {
   return lunasworkSnap.lunasworkFrom(rows, now);
+}
+
+/** Luna's Work project queues (B16): [{machine, stale, items:[{label}]}], newest PC first. */
+export function godmodeQueueFrom(rows, now) {
+  return queueFrom(rows, now);
 }
 
 /** {pushed, working, waiting, pending, failed} of a live run. */

@@ -143,6 +143,8 @@ const { registerLunasworkIpc } = require('./lunasworkipc');
 const { createGodModeBuilder } = require('./lunasworkBuild');
 const { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, wireDecisionSync } = require('./lunasworkWiring');
 const { stagingLines } = require('./lunasworkStaging');
+const { fileQueueStore, phoneQueue } = require('./lunasworkQueue');
+const { checkCommandFor: lunasworkCheckCommandFor } = require('./lunasworkRun');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -1179,9 +1181,15 @@ const orchestra = createOrchestra({
   },
 });
 
+// Luna's Work project queue (B16): one store for the controller and the IPC.
+const lunasworkQueue = fileQueueStore();
+// Set once the phone sync is wired: publishes the queue after a panel edit.
+let lunasworkPublish = null;
+
 // Luna's Work run controller (src/lunaswork.js): all of its deps are built in
 // src/lunasworkWiring.js; main only hands over what it owns.
 const lunaswork = createLunasWorkRuntime({
+  queue: lunasworkQueue,
   projects: () => projects,
   resolveDir: (p) => resolveProjectDir(p),
   readTodos,
@@ -2822,6 +2830,33 @@ function registerIpc() {
     createSession,
     briefDir: () => path.join(userDir(), BRIEF_DIR),
     controller: lunaswork,
+    queue: lunasworkQueue,
+    queueChanged: () => lunasworkPublish && lunasworkPublish(),
+    // B16: the commands a queued run will use, as start() computes them.
+    checkCommandFor: (profile) => lunasworkCheckCommandFor(profile, readUiPrefs().orchestraCheckCommand),
+    // Queuing is the start confirmation of an unattended run: Mati sees the
+    // commands natively, the same way a manual start shows them.
+    confirmQueueAdd: async ({ repoPath, profile, checkCommand }) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ["Add to Luna's Work queue", 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        title: "Luna's Work - queue a project",
+        message: `Queue Luna's Work for "${repoPath}"?`,
+        detail: [
+          'When the run before it ends with SHIP, this project starts on its own - no further confirmation. Every iteration is built by God Mode and merged into the base branch and pushed, after the self-check.',
+          '',
+          `Start command: ${profile.startCommand}`,
+          `App URL: ${profile.url}`,
+          `Self-check command: ${checkCommand || 'npm test'}`,
+          '',
+          'If these commands change before it starts, the queue pauses instead.',
+        ].join('\n'),
+      });
+      return response === 0;
+    },
     // The HUD panel: lunaswork:event pushes, steer cards and the evidence folder.
     send,
     todos: {
@@ -3610,7 +3645,7 @@ app.whenReady().then(() => {
   // Luna's Work decision queue: pending decisions to the phone snapshot,
   // answers back from the `todos` cloud scope. Wired before resume() so a
   // resumed run's decisions are published at once.
-  wireDecisionSync({
+  const lunasworkSync = wireDecisionSync({
     controller: lunaswork,
     cloud,
     putDecisions: (list) => snapshotPuts.godmode.decisions(list),
@@ -3620,8 +3655,12 @@ app.whenReady().then(() => {
     putLunasWork: (snap) => snapshotPuts.godmode.lunaswork(snap),
     // LW 2.27: the phone's questions in, checked and rate-limited here.
     ask: lunasworkAsk,
+    // B16: the project queue out (labels only), on every event and panel edit.
+    readQueue: () => phoneQueue(lunasworkQueue.read(), (id) => projects.some((p) => p.id === id)),
+    putQueue: (list) => snapshotPuts.godmode.queue(list),
     log: (line) => console.error(line),
   });
+  lunasworkPublish = () => lunasworkSync.publish();
   // The stored answers, so the phone sees them after a restart too.
   snapshotPuts.godmode.asks(lunasworkAsk.section());
   // Luna's Work: a run the previous LunaCore left goes on from its phase.
@@ -3631,6 +3670,8 @@ app.whenReady().then(() => {
     lunaswork.resume();
     lunasworkMachine.reconcile();
   }
+  // B16: the queue to the phone once at start, not only on the next event.
+  lunasworkPublish();
   setInterval(() => orchestra.tick(), ORCHESTRA_TICK_MS).unref();
   // Back from sleep: re-arm or resume a paused run, drop the wake task.
   powerMonitor.on('resume', () => orchestra.onSystemResume());

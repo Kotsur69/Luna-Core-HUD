@@ -42,6 +42,8 @@
 //                   wireDecisionSync puts it throttled on every phase change
 //   ask luna        lunasworkAsk (LW 2.27): wireDecisionSync hands the phone's
 //                   questions to the ask service; main.js creates it
+//   project queue   lunasworkQueue (B16): config/lunaswork-queue.local.json;
+//                   the run email gets its QUEUE block (advancing / paused)
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -81,6 +83,7 @@ const { keyScreens } = require('./lunasworkRun');
 const { createAskService } = require('./lunasworkAsk');
 const { runLaunchAssets } = require('./lunasworkLaunch');
 const { createDemoMaker } = require('./lunasworkDemo');
+const { fileQueueStore, queueEmailNote } = require('./lunasworkQueue');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -169,6 +172,25 @@ function createAwake(powerSaveBlocker) {
 }
 
 /**
+ * The reporter's mail with the run's QUEUE block (B16) put on top of the text.
+ * @param {{sender:{status:Function, send:Function}}|undefined} mail
+ * @param {string} note queueEmailNote output ('' = unchanged)
+ */
+function mailWithNote(mail, note) {
+  if (!mail || !note) return mail;
+  const { sender } = mail;
+  return {
+    ...mail,
+    sender: {
+      status: () => sender.status(),
+      send: (msg) => sender.send({ ...msg, text: `${note}
+
+${msg.text}` }),
+    },
+  };
+}
+
+/**
  * @param {{
  *   projects: ()=>object[], resolveDir: (p:string)=>string|null,
  *   readTodos: (projectId:string)=>object[], writeTodos: (projectId:string, list:object[])=>boolean,
@@ -182,6 +204,7 @@ function createAwake(powerSaveBlocker) {
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
  *   runsDir?: ()=>string, mail?: {sender:object, prefs:object},
+ *   queue?: {read:()=>object, write:(q:object)=>boolean},
  * }} ctx
  */
 function createLunasWorkRuntime(ctx) {
@@ -219,16 +242,24 @@ function createLunasWorkRuntime(ctx) {
     return decision.action === 'wait' ? decision.resumeAt : null;
   };
 
-  const reporter = ctx.runsDir
-    ? createLunasWorkReporter({
+  const reporterMail = ctx.mail ? { sender: ctx.mail.sender, prefs: ctx.mail.prefs, enabled: godmodeEmailOn } : undefined;
+  const reporterOpts = ctx.runsDir
+    ? {
       runsDir: ctx.runsDir,
-      mail: ctx.mail ? { sender: ctx.mail.sender, prefs: ctx.mail.prefs, enabled: godmodeEmailOn } : undefined,
       // C10: launch assets at SHIP; B13: a walkthrough video per milestone gate.
       launch: (run) => runLaunchAssets({ run, env: ctx.env() }),
       demo: createDemoMaker({ runsDir: ctx.runsDir, log: ctx.log }),
       log: ctx.log,
-    })
+    }
     : null;
+  const reporter = reporterOpts ? createLunasWorkReporter({ ...reporterOpts, mail: reporterMail }) : null;
+  // B16: a run that ends with something queued gets its own reporter, whose
+  // mail carries the QUEUE block; the files and the dedupe mark are the same.
+  const onRunEndReport = (run) => {
+    const note = queueEmailNote(run && run.queue);
+    if (!note) return reporter.onRunEnd(run);
+    return createLunasWorkReporter({ ...reporterOpts, mail: mailWithNote(reporterMail, note) }).onRunEnd(run);
+  };
 
   // LW 2.17a: the run's token accounting; the controller drains it at every phase change.
   const meter = createUsageMeter();
@@ -323,9 +354,10 @@ function createLunasWorkRuntime(ctx) {
     // LW 2.22a: SHIP is final only after the docs iteration (README, user guide, release).
     shipDocs: createShipDocsDeps({ env: ctx.env }),
     usageMeter: meter,
-    onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [reporter.onRunEnd] : [])],
+    onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [onRunEndReport] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: milestoneMail ? [milestoneMail] : [],
+    queue: ctx.queue || fileQueueStore(),
     log: ctx.log,
   });
 
@@ -421,14 +453,18 @@ function createAskRuntime(ctx) {
  * `lunaswork-ask:<id>` questions go to ask.pullQuestions(), which validates,
  * caps and rate-limits them here on the PC; the answers go out by the
  * service's own onChange.
+ *
+ * The project queue (B16) goes out only: putQueue gets readQueue()'s list on
+ * every controller event and every publish() (the IPC calls it after an edit).
  * @param {{controller:{subscribe:Function, status:Function, applyAnswers:Function, applyFeedback?:Function, applyWheel?:Function},
  *   cloud:{onPulled:Function, hooks:Function}|null, putDecisions:(list:object[])=>unknown,
  *   putFeedback?:(section:object|null)=>unknown, putLunasWork?:(snap:object|null)=>unknown,
  *   ask?:{pullQuestions:(peers:unknown)=>number},
+ *   readQueue?:()=>object[], putQueue?:(list:object[])=>unknown,
  *   throttle?:object, log?:(line:string)=>void}} ctx
  * @returns {{publish:()=>void, pullAnswers:()=>number}}
  */
-function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLunasWork, ask, throttle = {}, log = () => {} }) {
+function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLunasWork, ask, readQueue, putQueue, throttle = {}, log = () => {} }) {
   /** Puts `value` through `put` only when it changed since the last put. */
   const changedPut = (what, put) => {
     let last = null;
@@ -445,9 +481,17 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLun
   };
   const putDecisionList = changedPut('decisions', putDecisions);
   const putFeedbackSection = typeof putFeedback === 'function' ? changedPut('feedback', putFeedback) : null;
+  const putQueueList = typeof putQueue === 'function' && typeof readQueue === 'function' ? changedPut('queue', putQueue) : null;
   const publish = (status = controller.status()) => {
     putDecisionList(status && Array.isArray(status.pendingDecisions) ? status.pendingDecisions : []);
     if (putFeedbackSection) putFeedbackSection((status && status.feedback) || null);
+    if (putQueueList) {
+      try {
+        putQueueList(readQueue());
+      } catch (err) {
+        log(`[lunaswork] queue not read: ${err && err.message}`);
+      }
+    }
   };
   const pullAnswers = () => {
     if (!cloud) return 0;
@@ -482,4 +526,4 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLun
   return { publish, pullAnswers };
 }
 
-module.exports = { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, createAwake, syncCheckout, wireDecisionSync, thumbnailsOf };
+module.exports = { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, createAwake, syncCheckout, wireDecisionSync, thumbnailsOf, mailWithNote };

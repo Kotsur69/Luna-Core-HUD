@@ -213,6 +213,7 @@ const { closePhase } = require('./lunasworkUsage');
 const { togglesFor } = require('./lunasworkSettings');
 const { createVariantFlow } = require('./lunasworkVariantFlow');
 const { createPrototype } = require('./lunasworkPrototype');
+const { planAfterRun, startQueued } = require('./lunasworkQueue');
 
 const PHASE_ROLE = {
   preprod: null,
@@ -282,6 +283,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *     (LW 2.22a, the docs iteration at SHIP, see src/lunasworkShipDocs.js; without it SHIP ends at once)
  *   usageMeter?: {drain:()=>{role:string, usage:object}[]}
  *     (LW 2.17a, src/lunasworkUsage.js createUsageMeter: the tokens of the role calls, booked per phase)
+ *   queue?: {read:()=>object, write:(queue:object)=>boolean},
  *   newRunId?: ()=>string, now?: ()=>number, setTimer?: Function, clearTimer?: Function,
  *   log?: (line:string)=>void,
  * }} deps
@@ -459,7 +461,9 @@ function createLunasWork(deps) {
 
   function notifyRunEnd() {
     if (!run || run.endNotified) return;
-    const snapshot = { ...run };
+    // B16: only SHIP starts the next queued project; the note rides to the run email.
+    const queued = deps.queue ? planAfterRun(deps.queue.read(), run, (projectId) => startProblem({ projectId })) : null;
+    const snapshot = queued ? { ...run, queue: queued.note } : { ...run };
     for (const fn of runEndHooks) {
       try {
         Promise.resolve(fn(snapshot)).catch((err) => log(`[lunaswork] onRunEnd failed: ${errText(err)}`));
@@ -468,6 +472,8 @@ function createLunasWork(deps) {
       }
     }
     update({ endNotified: true });
+    // After the step loop settled: start() cannot kick a loop that is still running.
+    if (queued && queued.next) loopDone.then(() => startQueued({ store: deps.queue, entry: queued.next, start, log }));
   }
 
   /**
@@ -1447,9 +1453,10 @@ function createLunasWork(deps) {
   /**
    * Starts a run on a known project.
    * @param {{projectId:string, models?:object}} payload models: per-role override for this run only
+   * @param {Function} [confirm] the confirmation; a queued start (B16) passes its pinned-profile check
    * @returns {Promise<{ok:true, status:object}|{ok:false, reason:string, message:string, missing?:string[]}>}
    */
-  async function start(payload) {
+  async function start(payload, confirm = deps.confirmStart) {
     // One confirmation dialog at a time: a second start cannot stack another.
     if (starting) return refuse('busy', "Luna's Work is already asking to start a run.");
     const checked = startProblem(isObj(payload) ? payload : {});
@@ -1459,9 +1466,9 @@ function createLunasWork(deps) {
     let confirmed = true;
     try {
       // Mati sees the commands that will run; the run keeps exactly these.
-      if (deps.confirmStart) {
+      if (confirm) {
         const ctx = { projectId: project.id, repoPath: project.repoPath, profile, checkCommand, ...(scaffold ? { scaffold } : {}) };
-        confirmed = (await deps.confirmStart(ctx)) === true;
+        confirmed = (await confirm(ctx)) === true;
       }
     } finally {
       starting = false;
@@ -1811,7 +1818,8 @@ function createLunasWork(deps) {
   }
 
   return {
-    start,
+    // One argument only: the confirmation is never the caller's to replace.
+    start: (payload) => start(payload),
     stop,
     resume,
     ask,

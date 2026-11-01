@@ -20,6 +20,8 @@
 //                      lunasworksnapshot.js) changed: put it as `lunaswork`
 //   godmode.asks(s)    the "Ask Luna" answers changed (LW 2.27,
 //                      lunasworkAsk.js): put them as `asks`
+//   godmode.queue(list) the Luna's Work project queue changed (B16, labels
+//                      only): put the history with it over it (the phone lists it)
 //
 // Every put is skipped while logged out, and a failure only logs - it never
 // throws into the git station or the end of a God Mode run. cloudsnapshots
@@ -105,7 +107,9 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
   let lastDecisions = [];
   // Luna's Work feedback section of the current run (B17): memory only too.
   let lastFeedback = null;
-  const overlay = () => ({ ...lastLive, decisions: lastDecisions, feedback: lastFeedback });
+  // Luna's Work project queue (B16, labels only): memory only too.
+  let lastQueue = [];
+  const overlay = () => ({ ...lastLive, decisions: lastDecisions, feedback: lastFeedback, queue: lastQueue });
   // Luna's Work run snapshot for the phone (LW 2.17b): memory only too.
   let lastLunasWork = null;
   // "Ask Luna" answers for the phone (LW 2.27): the service keeps them on disk.
@@ -171,6 +175,11 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     /** Puts the run history with the "Ask Luna" section (lunasworkAskModel.publicAsks; null clears it). Never throws. */
     asks(section) {
       lastAsks = section && typeof section === 'object' ? section : null;
+      return putOverlay();
+    },
+    /** Puts the run history with the Luna's Work project queue ([] clears it). Never throws. */
+    queue(list) {
+      lastQueue = Array.isArray(list) ? list : [];
       return putOverlay();
     },
     /** Marks run `id` seen in this PC's own row (the attention inbox). Never throws. */
