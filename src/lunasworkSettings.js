@@ -34,6 +34,10 @@
 // The commands need stagingUrl; backup and restore come as a pair, and a
 // migrate command needs both (no schema change without a snapshot first).
 //
+// Optional load-test thresholds (LW 3.30, src/lunasworkLoad.js):
+//   loadP95Ms      p95 latency limit in ms (50-60000)
+//   loadErrorRate  error rate limit, 0-1 (0.01 = 1%)
+//
 // TRUST BOUNDARY: the project profile (startCommand, checkCommand, seedCommand,
 // url, the staging fields) is only ever read from this local file, which only
 // the LunaCore UI writes. It is never read from the project repo or from model
@@ -71,6 +75,8 @@ const MAX_COMMAND_CHARS = 500;
 const MAX_URL_CHARS = 500;
 const MAX_PROJECTS = 200;
 const STAGING_COMMANDS = ['stagingMigrateCommand', 'stagingDeployCommand', 'stagingBackupCommand', 'stagingRestoreCommand'];
+const MIN_LOAD_P95_MS = 50;
+const MAX_LOAD_P95_MS = 60000;
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
@@ -129,6 +135,24 @@ function stagingFields(raw) {
   return { fields, reason: null };
 }
 
+/** The optional load-test thresholds; only the set ones are kept. */
+function loadFields(raw) {
+  const fields = {};
+  if (raw.loadP95Ms !== undefined) {
+    if (!Number.isInteger(raw.loadP95Ms) || raw.loadP95Ms < MIN_LOAD_P95_MS || raw.loadP95Ms > MAX_LOAD_P95_MS) {
+      return { fields: null, reason: `loadP95Ms must be a whole number from ${MIN_LOAD_P95_MS} to ${MAX_LOAD_P95_MS}` };
+    }
+    fields.loadP95Ms = raw.loadP95Ms;
+  }
+  if (raw.loadErrorRate !== undefined) {
+    if (typeof raw.loadErrorRate !== 'number' || !Number.isFinite(raw.loadErrorRate) || raw.loadErrorRate < 0 || raw.loadErrorRate > 1) {
+      return { fields: null, reason: 'loadErrorRate must be a number from 0 to 1' };
+    }
+    fields.loadErrorRate = raw.loadErrorRate;
+  }
+  return { fields, reason: null };
+}
+
 /**
  * Strict validation of one project profile.
  * @param {unknown} raw
@@ -172,6 +196,8 @@ function validateProfile(raw) {
 
   const staging = stagingFields(raw);
   if (!staging.fields) return invalid(staging.reason);
+  const load = loadFields(raw);
+  if (!load.fields) return invalid(load.reason);
 
   return {
     profile: {
@@ -183,6 +209,7 @@ function validateProfile(raw) {
       ...(seedCommand ? { seedCommand } : {}),
       ...(raw.stack !== undefined ? { stack: raw.stack } : {}),
       ...staging.fields,
+      ...load.fields,
     },
     reason: null,
   };
