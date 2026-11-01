@@ -84,6 +84,7 @@ const { createAskService } = require('./lunasworkAsk');
 const { runLaunchAssets } = require('./lunasworkLaunch');
 const { createDemoMaker } = require('./lunasworkDemo');
 const { fileQueueStore, queueEmailNote } = require('./lunasworkQueue');
+const { createSecretStore } = require('./lunasworkErrorTracking');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -203,7 +204,7 @@ ${msg.text}` }),
  *   confirmStart: (ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
- *   runsDir?: ()=>string, mail?: {sender:object, prefs:object},
+ *   runsDir?: ()=>string, mail?: {sender:object, prefs:object}, secretStore?: object,
  *   queue?: {read:()=>object, write:(q:object)=>boolean},
  * }} ctx
  */
@@ -354,6 +355,8 @@ function createLunasWorkRuntime(ctx) {
     // LW 2.22a: SHIP is final only after the docs iteration (README, user guide, release).
     shipDocs: createShipDocsDeps({ env: ctx.env }),
     usageMeter: meter,
+    // C9: the error tracking DSN, kept on this PC (safeStorage, else a gitignored *.local.json).
+    errorTracking: { store: ctx.secretStore || createSecretStore({ log: ctx.log }), log: ctx.log },
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [onRunEndReport] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: milestoneMail ? [milestoneMail] : [],
