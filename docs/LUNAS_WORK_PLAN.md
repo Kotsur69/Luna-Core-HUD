@@ -278,8 +278,15 @@ email or a push, and the next iteration plans it in.
   run continues meanwhile).
 - **Closing the loop:** each feedback item gets a status (planned / built /
   verified in app), visible on the phone and in the next milestone email.
-- **Later option:** reply to the milestone email itself. That needs Gmail read
-  access, which LunaCore does not have today (it only sends).
+- **Reply to the email (opt-in, off by default):** with "Read replies to
+  Luna's Work emails" on (mail settings; its own `gmail.readonly` consent,
+  separate from the send grant), a reply to a milestone or run-end email
+  becomes a feedback item (`lunasworkMailReplies.js`). Only the run's own
+  threads are read, every 10 minutes while the run is active. Mati's address
+  counts as `mati`, an address he allow-listed for the project as `client`
+  (aligned SPF / DKIM pass required); quoted history and signatures are cut,
+  links and attachments are never opened, and the item goes through the
+  normal triage and trust rules.
 
 ## Build plan
 

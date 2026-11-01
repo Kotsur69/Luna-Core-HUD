@@ -27,7 +27,9 @@
 //      to the phone / web feedback form. Once per run and milestone.
 //
 // Both emails list the run's feedback items with their status
-// (lunasworkFeedback.emailLines).
+// (lunasworkFeedback.emailLines). Gmail's message and thread id of each sent
+// email go to deps.threads.record (lunasworkMailReplies), so a reply to it
+// can become feedback when Mati turned reply reading on.
 //
 // Media (deps.launch / deps.demo, optional):
 //   SHIP       the launch assets (lunasworkLaunch.js, C10) are written into
@@ -502,6 +504,7 @@ function buildMilestoneEmail(run, ctx) {
  *     enabled:(prefs:object, connected:boolean)=>boolean},
  *   launch?: (run:object)=>Promise<object>,
  *   demo?: {make:(run:object, ctx:object)=>Promise<object>, videos:(runId:string)=>string[]},
+ *   threads?: {record:(runId:string, info:{threadId:string, messageId:string|null, kind:string})=>boolean},
  *   readFile?: (repoPath:string, name:string)=>string|null,
  *   writeFile?: (file:string, text:string)=>void,
  *   now?: ()=>number, log?: (line:string)=>void,
@@ -574,6 +577,15 @@ function createLunasWorkReporter(deps) {
     }
   }
 
+  /**
+   * The Gmail message + thread id of an email that went out, stored with the
+   * run so a reply can be matched to it (B17, src/lunasworkMailReplies.js).
+   */
+  function recordThread(run, kind, res) {
+    if (!deps.threads || !isObj(res) || !res.threadId) return;
+    deps.threads.record(run.id, { threadId: res.threadId, messageId: res.id, kind });
+  }
+
   /** @returns {Promise<{sent:boolean, skipped?:string, error?:string}>} never rejects */
   async function mail(run, htmlText, media) {
     const m = deps.mail;
@@ -592,8 +604,9 @@ function createLunasWorkReporter(deps) {
         const email = buildRunEmail(run, { now: now(), logTail: playtestLogTail(readFile(run.repoPath, 'PLAYTEST_LOG.md')), media });
         const attachments = htmlText ? [{ filename: `lunaswork-run-${run.id}.html`, mimeType: 'text/html', content: htmlText }] : [];
         const video = media && media.demo && media.demo.attach ? media.demo.attach : null;
-        await sendMail(m, { subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) }, video);
+        const res = await sendMail(m, { subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) }, video);
         if (persist) markSent(m, run);
+        recordThread(run, 'runEnd', res);
         return { sent: true };
       } finally {
         inFlight.delete(run.id);
@@ -666,7 +679,8 @@ function createLunasWorkReporter(deps) {
     if (skip) return { sent: false, skipped: skip, ...withDemo };
     try {
       const email = buildMilestoneEmail(run, { ...ctx, demo });
-      await sendMail(m, { subject: email.subject, text: email.text }, demo && demo.attach ? demo.attach : null);
+      const res = await sendMail(m, { subject: email.subject, text: email.text }, demo && demo.attach ? demo.attach : null);
+      recordThread(run, 'milestone', res);
       return { sent: true, ...withDemo };
     } catch (err) {
       const reason = (err && err.reason) || 'gmail-failed';

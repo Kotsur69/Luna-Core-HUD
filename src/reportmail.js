@@ -1,8 +1,9 @@
 // ============================================================================
 // LunaCore - report email composition root (main process)
 // ----------------------------------------------------------------------------
-// Builds the Gmail sender, the mail settings store, the God Mode run mailer
-// and the nightly summary once, from main's accessors, so main.js only wires
+// Builds the Gmail sender, the opt-in reply reader (gmail.readonly, off by
+// default - src/gmailread.js), the mail settings store, the God Mode run
+// mailer and the nightly summary once, from main's accessors, so main.js only wires
 // them (it is far past the file-size guideline).
 // ============================================================================
 
@@ -11,6 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createGmailSender } = require('./gmailsend');
+const { createGmailReader } = require('./gmailread');
 const { createMailPrefs, godmodeEmailOn } = require('./mailprefs');
 const { createGodModeMailer } = require('./godmodemail');
 const { createNightlyDigest } = require('./nightlydigest');
@@ -38,6 +40,7 @@ function readRunHtml(runsDir, id) {
  */
 function createReportMail(deps) {
   const sender = createGmailSender();
+  const reader = createGmailReader();
   const prefs = createMailPrefs();
   const godmode = createGodModeMailer({ sender, prefs, enabled: godmodeEmailOn, readHtml: (id) => readRunHtml(deps.runsDir(), id) });
   const gitstation = () => require('./gitstation');
@@ -53,7 +56,7 @@ function createReportMail(deps) {
     getEnv: deps.getEnv,
     onResume: deps.onResume,
   });
-  return { sender, prefs, godmode, nightly };
+  return { sender, reader, prefs, godmode, nightly };
 }
 
 module.exports = { createReportMail, readRunHtml };

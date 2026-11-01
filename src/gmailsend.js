@@ -2,7 +2,8 @@
 // LunaCore - Gmail sender (OAuth 2.0, gmail.send only)
 // ----------------------------------------------------------------------------
 // Sends LunaCore's own reports (the nightly summary, the God Mode run email)
-// to Mati, from Mati, through the Gmail API. Nothing is read from the inbox.
+// to Mati, from Mati, through the Gmail API. Nothing is read from the inbox
+// here; the opt-in reply reader (src/gmailread.js) is a separate grant.
 //
 // Auth reuses src/gcal.js's installed-app flow and the same Desktop OAuth
 // client (google-oauth.local.json), but as a SEPARATE grant and token:
@@ -16,6 +17,9 @@
 //   - the refresh token and that address are stored together, encrypted with
 //     Electron safeStorage, in gmail-token.local.json. No safeStorage -> memory
 //     only, never written in clear (same rule as gcal).
+//
+// send() returns the Gmail message and thread id, so a reply can be matched
+// to the email it answers (src/lunasworkMailReplies.js).
 //
 // THE RECIPIENT IS ALWAYS THAT ADDRESS. send() takes no `to`: nothing synced,
 // pulled from the cloud or sent by a renderer can turn this into a mailer to
@@ -31,8 +35,10 @@ const crypto = require('crypto');
 const paths = require('./paths');
 const { parseClientFile, buildAuthUrl, startRedirectServer, base64url, readJson, CLIENT_FILE } = require('./gcal');
 
-const SCOPE = 'openid email https://www.googleapis.com/auth/gmail.send';
+const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+const SCOPE = `openid email ${SEND_SCOPE}`;
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 const SEND_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 const TOKEN_FILE = 'gmail-token.local.json';
 const ISSUERS = new Set(['https://accounts.google.com', 'accounts.google.com']);
@@ -52,6 +58,10 @@ const MAX_FILENAME = 100;
 const ATTACHMENT_TYPES = new Set(['text/html', 'text/plain', 'text/markdown']);
 const BINARY_TYPES = new Set(['video/mp4']);
 const EMAIL_RE = /^[^\s@<>()",;:\\[\]]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
+
+// Gmail message and thread ids (hex in practice): safe inside a URL path.
+const GMAIL_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const gmailId = (v) => (typeof v === 'string' && GMAIL_ID_RE.test(v) ? v : null);
 
 class GmailError extends Error {
   constructor(reason, detail) {
@@ -149,16 +159,21 @@ function buildMime({ address, subject, text, html = false, boundary, attachments
 const tokenTtl = (body) => (Number.isFinite(body.expires_in) ? body.expires_in * 1000 : DEFAULT_TTL_MS);
 
 /**
+ * One Google grant for Gmail: the installed-app consent, the encrypted
+ * refresh token + verified address, and short-lived access tokens. The send
+ * grant and the opt-in read grant (src/gmailread.js) are two of these, each
+ * with its own scope and token file, so neither ever widens the other.
+ * @param {{scope:string, requiredScope:string, tokenName:string}} spec
  * @param {{fetchImpl?:Function, openExternal?:Function, safeStorage?:object,
  *   clientPath?:string, tokenPath?:string, redirectServer?:Function}} [deps]
  *   Injectable so tests never touch the network, a browser or the keychain.
  */
-function createGmailSender(deps = {}) {
+function createGmailGrant(spec, deps = {}) {
   const doFetch = deps.fetchImpl || ((...a) => fetch(...a));
   const openExternal = deps.openExternal || ((url) => require('electron').shell.openExternal(url));
   const redirectServer = deps.redirectServer || startRedirectServer;
   const storage = () => deps.safeStorage || require('electron').safeStorage;
-  const tokenFile = () => deps.tokenPath || paths.local(TOKEN_FILE);
+  const tokenFile = () => deps.tokenPath || paths.local(spec.tokenName);
   const loadClient = () => parseClientFile(readJson(deps.clientPath || paths.local(CLIENT_FILE)));
 
   let grant = null; // { refreshToken, email }
@@ -207,6 +222,26 @@ function createGmailSender(deps = {}) {
       fs.rmSync(tokenFile(), { force: true });
     } catch (err) {
       console.error('[gmail] could not remove token:', err && err.message);
+    }
+  }
+
+  /**
+   * Revokes the refresh token at Google (best effort), then forgets it here.
+   * The local grant is gone even when Google cannot be reached.
+   */
+  async function revoke() {
+    const g = load();
+    disconnect();
+    if (!g) return;
+    try {
+      await doFetch(REVOKE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: g.refreshToken }).toString(),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+    } catch (err) {
+      console.error('[gmail] could not revoke the grant at Google:', err && err.message);
     }
   }
 
@@ -259,7 +294,7 @@ function createGmailSender(deps = {}) {
     let body;
     try {
       try {
-        await openExternal(buildAuthUrl({ clientId: client.clientId, redirectUri, state, challenge, scope: SCOPE }));
+        await openExternal(buildAuthUrl({ clientId: client.clientId, redirectUri, state, challenge, scope: spec.scope }));
       } catch (err) {
         throw new GmailError('gmail-failed', `could not open the browser: ${err && err.message}`);
       }
@@ -282,7 +317,7 @@ function createGmailSender(deps = {}) {
     }
     if (typeof body.refresh_token !== 'string') throw new GmailError('gmail-failed', 'no refresh_token');
     const scopes = typeof body.scope === 'string' ? body.scope.split(' ') : [];
-    if (!scopes.includes('https://www.googleapis.com/auth/gmail.send')) throw new GmailError('gmail-scope');
+    if (!scopes.includes(spec.requiredScope)) throw new GmailError('gmail-scope');
     const email = emailFromIdToken(body.id_token, client.clientId);
     if (!email) throw new GmailError('gmail-no-email');
     save({ refreshToken: body.refresh_token, email });
@@ -292,17 +327,44 @@ function createGmailSender(deps = {}) {
     return { email };
   }
 
+  const status = () => {
+    const g = load();
+    return { configured: !!loadClient(), connected: !!g, email: g ? g.email : null };
+  };
+
+  /** The connected address (lower case), or null. */
+  const email = () => {
+    const g = load();
+    return g ? g.email : null;
+  };
+
+  /** A 401 from the API: the cached access token is dropped, the next call refreshes. */
+  const invalidate = () => {
+    access = null;
+  };
+
+  return { status, connect, disconnect, revoke, accessToken, email, invalidate, fetch: doFetch };
+}
+
+/**
+ * @param {{fetchImpl?:Function, openExternal?:Function, safeStorage?:object,
+ *   clientPath?:string, tokenPath?:string, redirectServer?:Function}} [deps]
+ *   Injectable so tests never touch the network, a browser or the keychain.
+ */
+function createGmailSender(deps = {}) {
+  const grant = createGmailGrant({ scope: SCOPE, requiredScope: SEND_SCOPE, tokenName: TOKEN_FILE }, deps);
+
   /**
    * Sends one message to the connected address.
    * @param {{subject:string, text:string, html?:boolean, attachments?:Array<{filename:string, mimeType:string, content:string}>}} msg
-   * @returns {Promise<{id:string|null}>}
+   * @returns {Promise<{id:string|null, threadId:string|null}>} threadId = the Gmail thread a reply lands in
    */
   async function send({ subject, text, html = false, attachments = [] }) {
-    const token = await accessToken();
-    const raw = base64url(Buffer.from(buildMime({ address: grant.email, subject, text, html, attachments }), 'utf8'));
+    const token = await grant.accessToken();
+    const raw = base64url(Buffer.from(buildMime({ address: grant.email(), subject, text, html, attachments }), 'utf8'));
     let res;
     try {
-      res = await doFetch(SEND_URL, {
+      res = await grant.fetch(SEND_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ raw }),
@@ -313,20 +375,27 @@ function createGmailSender(deps = {}) {
     }
     const body = await res.json().catch(() => ({}));
     if (res.status === 401) {
-      access = null;
+      grant.invalidate();
       throw new GmailError('gmail-auth', 'HTTP 401');
     }
     if (res.status === 403) throw new GmailError('gmail-scope', 'HTTP 403');
     if (!res.ok) throw new GmailError('gmail-failed', `HTTP ${res.status}`);
-    return { id: typeof body.id === 'string' ? body.id.slice(0, 64) : null };
+    return { id: gmailId(body.id), threadId: gmailId(body.threadId) };
   }
 
-  const status = () => {
-    const g = load();
-    return { configured: !!loadClient(), connected: !!g, email: g ? g.email : null };
-  };
-
-  return { status, connect, disconnect, send };
+  return { status: grant.status, connect: grant.connect, disconnect: grant.disconnect, send };
 }
 
-module.exports = { createGmailSender, GmailError, emailFromIdToken, buildMime, SCOPE, TOKEN_FILE, MAX_BINARY_ATTACHMENT };
+module.exports = {
+  createGmailSender,
+  createGmailGrant,
+  GmailError,
+  emailFromIdToken,
+  buildMime,
+  gmailId,
+  SCOPE,
+  TOKEN_FILE,
+  EMAIL_RE,
+  FETCH_TIMEOUT_MS,
+  MAX_BINARY_ATTACHMENT,
+};

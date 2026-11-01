@@ -25,6 +25,9 @@
 //                   Mati's commits since -> DECISIONS.md + ARCHITECTURE.md
 //   client widget   lunasworkWidget (LW 3.28b): ctx.widget into the staging
 //                   deploy step and the run-end revoke
+//   email replies   lunasworkMailReplies (B17, opt-in): the reporter records
+//                   each sent email's thread, the controller's events start /
+//                   stop the poll, replies come back through feedback()
 //
 // The project folder is always resolved here from the registered projects,
 // and the profile from LunaCore's local settings - never from the renderer.
@@ -125,6 +128,7 @@ function createAwake(powerSaveBlocker) {
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
  *   runsDir?: ()=>string, mail?: {sender:object, prefs:object},
  *   widget?: {prepare:Function, revoke:Function} (lunasworkWidget.createWidget),
+ *   mailReplies?: {record:Function, sync:Function, attach:Function} (lunasworkMailReplies.createMailReplies),
  * }} ctx
  */
 function createLunasWorkRuntime(ctx) {
@@ -169,11 +173,12 @@ function createLunasWorkRuntime(ctx) {
       // C10: launch assets at SHIP; B13: a walkthrough video per milestone gate.
       launch: (run) => runLaunchAssets({ run, env: ctx.env() }),
       demo: createDemoMaker({ runsDir: ctx.runsDir, log: ctx.log }),
+      ...(ctx.mailReplies ? { threads: ctx.mailReplies } : {}),
       log: ctx.log,
     })
     : null;
 
-  return createLunasWork({
+  const controller = createLunasWork({
     store: { load: lunasworkStore.loadRun, save: lunasworkStore.saveRun },
     settings: () => settingsStore.readSettings(),
     projectOf,
@@ -203,6 +208,8 @@ function createLunasWorkRuntime(ctx) {
     // LW 3.28b: the client feedback widget - baked into staging deploys only,
     // its token revoked when the run ends.
     ...(ctx.widget ? { widget: ctx.widget, staging: { widget: ctx.widget } } : {}),
+    // B17 opt-in: email replies; polled only while a run is active and the setting is on.
+    ...(ctx.mailReplies ? { mailReplies: ctx.mailReplies } : {}),
     limitResumeAt,
     awake: createAwake(ctx.powerSaveBlocker),
     // Every decision-queue answer, one line in the project's design/DECISIONS.md.
@@ -228,6 +235,8 @@ function createLunasWorkRuntime(ctx) {
     onMilestone: reporter ? [reporter.onMilestone] : [],
     log: ctx.log,
   });
+  if (ctx.mailReplies) ctx.mailReplies.attach(controller);
+  return controller;
 }
 
 /**

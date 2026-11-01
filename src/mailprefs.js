@@ -9,6 +9,13 @@
 //                   never touched, which means ON once Gmail is connected
 //   weeklyEmail     boolean | null - mail the weekly review (Life Settings);
 //                   null = never touched = ON once Gmail is connected
+//   replyRead       boolean, default false - "Read replies to Luna's Work
+//                   emails" (src/lunasworkMailReplies.js). Set only through
+//                   setReplyRead, after its own gmail.readonly consent - never
+//                   by the generic savePrefs patch
+//   replyClients    {projectId: ['client@x.com', ...]} - addresses Mati
+//                   allow-listed per project; their replies count as client
+//                   feedback (setReplyClients)
 //
 // config/mail-state.local.json - what was already sent, so a restart never
 // sends twice:
@@ -35,8 +42,26 @@ const RUN_KEY_RE = /^\d{1,4}\|[a-z]{1,24}$/;
 const TODO_KEY_MAX = 300;
 const MAX_BASELINE = 5000;
 const MAX_RUNS = 50;
+const PROJECT_ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
+// Same shape as gmailsend's EMAIL_RE: one bare address, nothing to inject.
+const EMAIL_RE = /^[^\s@<>()",;:\\[\]]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
+const MAX_CLIENTS = 10;
+const MAX_CLIENT_PROJECTS = 50;
+// Keys that would reach the prototype of a plain object instead of an own entry.
+const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+const projectIdOk = (id) => typeof id === 'string' && PROJECT_ID_RE.test(id) && !RESERVED_IDS.has(id);
 
-const DEFAULT_PREFS = Object.freeze({ nightlyEnabled: false, nightlyTime: '22:30', sendWhenEmpty: false, godmodeEmail: null, weeklyEmail: null });
+const DEFAULT_PREFS = Object.freeze({
+  nightlyEnabled: false,
+  nightlyTime: '22:30',
+  sendWhenEmpty: false,
+  godmodeEmail: null,
+  weeklyEmail: null,
+  replyRead: false,
+  replyClients: Object.freeze({}),
+});
+// What a renderer patch (mail:set) may change; the reply settings have their own setters.
+const PATCH_KEYS = ['nightlyEnabled', 'nightlyTime', 'sendWhenEmpty', 'godmodeEmail', 'weeklyEmail'];
 
 function readJson(file) {
   try {
@@ -55,6 +80,23 @@ function writeJson(file, data, isDefault) {
 
 const bool = (v, fallback) => (typeof v === 'boolean' ? v : fallback);
 
+/** A project's allow-listed addresses: valid, lower case, unique, capped; null when the list is bad. */
+function cleanClientList(list) {
+  if (!Array.isArray(list) || list.length > MAX_CLIENTS) return null;
+  if (!list.every((a) => typeof a === 'string' && EMAIL_RE.test(a.trim()))) return null;
+  return [...new Set(list.map((a) => a.trim().toLowerCase()))];
+}
+
+function normalizeClients(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [id, list] of Object.entries(raw).slice(0, MAX_CLIENT_PROJECTS)) {
+    const clean = projectIdOk(id) ? cleanClientList(list) : null;
+    if (clean && clean.length) out[id] = clean;
+  }
+  return out;
+}
+
 function normalizePrefs(raw) {
   const r = raw && typeof raw === 'object' ? raw : {};
   return {
@@ -63,6 +105,8 @@ function normalizePrefs(raw) {
     sendWhenEmpty: bool(r.sendWhenEmpty, DEFAULT_PREFS.sendWhenEmpty),
     godmodeEmail: typeof r.godmodeEmail === 'boolean' ? r.godmodeEmail : null,
     weeklyEmail: typeof r.weeklyEmail === 'boolean' ? r.weeklyEmail : null,
+    replyRead: r.replyRead === true,
+    replyClients: normalizeClients(r.replyClients),
   };
 }
 
@@ -99,7 +143,7 @@ function createMailPrefs(opts = {}) {
   function savePrefs(patch) {
     if (!patch || typeof patch !== 'object') throw new Error('bad payload');
     const next = { ...loadPrefs() };
-    for (const key of Object.keys(DEFAULT_PREFS)) {
+    for (const key of PATCH_KEYS) {
       if (!Object.hasOwn(patch, key)) continue;
       const v = patch[key];
       if (key === 'nightlyTime') {
@@ -113,6 +157,34 @@ function createMailPrefs(opts = {}) {
     return next;
   }
 
+  /**
+   * "Read replies to Luna's Work emails". Main calls it only after the read
+   * consent went through (on) or after revoking it (off).
+   */
+  function setReplyRead(on) {
+    if (typeof on !== 'boolean') throw new Error('bad value');
+    const next = { ...loadPrefs(), replyRead: on };
+    writeJson(prefsFile(), next, !opts.prefsPath);
+    return next;
+  }
+
+  /** One project's allow-listed client addresses; [] removes the project. Throws on a bad list. */
+  function setReplyClients(projectId, list) {
+    if (!projectIdOk(projectId)) throw new Error('bad value');
+    const clean = cleanClientList(list);
+    if (!clean) throw new Error('bad value');
+    const prev = loadPrefs();
+    const replyClients = { ...prev.replyClients };
+    delete replyClients[projectId];
+    if (clean.length) {
+      if (Object.keys(replyClients).length >= MAX_CLIENT_PROJECTS) throw new Error('bad value');
+      replyClients[projectId] = clean;
+    }
+    const next = { ...prev, replyClients };
+    writeJson(prefsFile(), next, !opts.prefsPath);
+    return next;
+  }
+
   /** Applies `fn(state)` -> new state and saves it; returns what was saved. */
   function updateState(fn) {
     const next = normalizeState(fn(loadState()));
@@ -120,7 +192,7 @@ function createMailPrefs(opts = {}) {
     return next;
   }
 
-  return { loadPrefs, savePrefs, loadState, updateState };
+  return { loadPrefs, savePrefs, setReplyRead, setReplyClients, loadState, updateState };
 }
 
 /** "Email me when a run finishes": an explicit choice, else ON when connected. */
@@ -129,4 +201,4 @@ const godmodeEmailOn = (prefs, connected) => connected && (prefs.godmodeEmail ==
 /** The weekly review email: an explicit choice, else ON when connected. */
 const weeklyEmailOn = (prefs, connected) => connected && (prefs.weeklyEmail === null ? true : prefs.weeklyEmail);
 
-module.exports = { createMailPrefs, normalizePrefs, normalizeState, godmodeEmailOn, weeklyEmailOn, DEFAULT_PREFS, MAX_RUNS };
+module.exports = { createMailPrefs, normalizePrefs, normalizeState, godmodeEmailOn, weeklyEmailOn, DEFAULT_PREFS, MAX_RUNS, MAX_CLIENTS };

@@ -144,6 +144,7 @@ const { createGodModeBuilder } = require('./lunasworkBuild');
 const { createLunasWorkRuntime, createMachineRuntime, wireDecisionSync } = require('./lunasworkWiring');
 const { stagingLines } = require('./lunasworkStaging');
 const { createWidget, supabaseRegistry, endpointFor, startClientFeedbackPoll } = require('./lunasworkWidget');
+const { createMailReplies } = require('./lunasworkMailReplies');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -1189,10 +1190,20 @@ const lunasworkWidget = createWidget({
   log: (line) => console.info(line),
 });
 
+// B17 opt-in: replies to Luna's Work emails become feedback (src/lunasworkMailReplies.js).
+const lunasworkMailReplies = createMailReplies({
+  reader: reportMail.reader,
+  sender: reportMail.sender,
+  prefs: reportMail.prefs,
+  runsRoot: () => path.join(userDir(), RUN_REPORT_DIR),
+  log: (line) => console.info(line),
+});
+
 // Luna's Work run controller (src/lunaswork.js): all of its deps are built in
 // src/lunasworkWiring.js; main only hands over what it owns.
 const lunaswork = createLunasWorkRuntime({
   widget: lunasworkWidget,
+  mailReplies: lunasworkMailReplies,
   projects: () => projects,
   resolveDir: (p) => resolveProjectDir(p),
   readTodos,
@@ -2867,7 +2878,15 @@ function registerIpc() {
     ledger: mission.ledger,
     github: mission.github,
   });
-  registerMailIpc({ ipcMain, sender: reportMail.sender, prefs: reportMail.prefs, nightly: reportMail.nightly });
+  registerMailIpc({
+    ipcMain,
+    sender: reportMail.sender,
+    prefs: reportMail.prefs,
+    nightly: reportMail.nightly,
+    reader: reportMail.reader,
+    replies: lunasworkMailReplies,
+    projects: () => projects.map((p) => ({ id: p.id, label: p.label })),
+  });
   // Attention inbox ('!' chip): God Mode runs to review from every PC, check-in, weekly goals, Gmail not connected.
   registerInboxIpc({
     ipcMain,
