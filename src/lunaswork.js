@@ -190,6 +190,7 @@ const {
   cardAts,
   publicFeedback,
 } = require('./lunasworkFeedback');
+const { createResearchStep } = require('./lunasworkResearch');
 const {
   APPROVE,
   needsDecision,
@@ -261,6 +262,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   playtest: (opts:object)=>Promise<object>,
  *   shipGate: (ctx:{repoPath:string, scores:object[]})=>{allPassed:boolean},
  *   critic: (opts:object)=>Promise<object>,
+ *   research?: (opts:object)=>Promise<object>,
  *   gitLog?: (repoPath:string)=>Promise<string>,
  *   syncCheckout?: (repoPath:string)=>Promise<{ok:boolean, detail?:string}>,
  *   checkpoints?: {tagIteration:(o:object)=>Promise<object>, rollback:(o:object)=>Promise<object>},
@@ -353,6 +355,11 @@ function createLunasWork(deps) {
   });
   // LW 3.28a + 3.29: staging, the production guard and staging data backups.
   const staging = createStaging({ log, now, ...deps.staging });
+  const researchStep = createResearchStep({
+    research: deps.research,
+    logEvent: (text) => logEvent(text),
+    logModel: (role, model, reason) => logModel(role, model, reason),
+  });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
   let run = null;
@@ -818,6 +825,8 @@ function createLunasWork(deps) {
   async function stepDirecting() {
     // LW 2.25b: the real build waits for the prototype approval (or its deadline).
     if (prototype.gate()) return;
+    // Idea #14 (src/lunasworkResearch.js): new "like X" references researched first; never blocks.
+    await researchStep.beforeDirecting(run);
     // LW 2.25a: a variant choice answered since the last iteration gets its cleanup card.
     await variantFlow.settle();
     // B17: feedback that came in since the last iteration is planned in first.
