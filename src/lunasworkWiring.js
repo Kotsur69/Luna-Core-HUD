@@ -35,6 +35,7 @@ const pack = require('./lunasworkPack');
 const { runDirector } = require('./lunasworkDirector');
 const { runCritic, gateStatus } = require('./lunasworkCritic');
 const { runResearch } = require('./lunasworkResearch');
+const { runStyleCheck } = require('./lunasworkAssets');
 const { runPlaytest } = require('./lunasworkPlaytest');
 const { createAdapter } = require('./lunasworkAdapters');
 const { planWaitDecision } = require('./orchestraPlanWait');
@@ -190,6 +191,8 @@ function createLunasWorkRuntime(ctx) {
     critic: (opts) => runCritic({ ...opts, env: ctx.env() }),
     // Idea #14: "like X" references in the pack researched into design/references/.
     research: (opts) => runResearch({ ...opts, env: ctx.env(), log: ctx.log }),
+    // LW 3.37: the Critic's art-direction check of new game assets (design/ASSETS.md).
+    styleCheck: (opts) => runStyleCheck({ ...opts, env: ctx.env() }),
     gitLog,
     syncCheckout,
     checkpoints: createCheckpoints({ log: ctx.log }),

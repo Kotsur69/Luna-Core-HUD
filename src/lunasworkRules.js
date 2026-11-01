@@ -359,8 +359,8 @@ const wordsOf = (text) =>
 
 /**
  * B5: whether a card stays inside DESIGN.md / ROADMAP.md. Mati's steer cards,
- * feedback cards (B17: a scope part is held by its own decision) and bug
- * cards (broken work is never new scope) always do. Otherwise at
+ * feedback cards (B17: a scope part is held by its own decision), bug cards
+ * (broken work is never new scope) and asset cards (LW 3.37) always do. Otherwise at
  * least SCOPE_MIN_SHARE of the card title's terms must appear in the pack. An
  * empty pack cannot be judged against, so nothing is out of it.
  * @param {{text?:string, kind?:string, steer?:boolean, feedback?:boolean, tags?:string[]}} card
@@ -372,6 +372,8 @@ function scopeCheck(card, packText) {
   if (card.steer === true || (Array.isArray(card.tags) && card.tags.includes('steer'))) return { inScope: true, reason: 'steer' };
   if (card.feedback === true || (Array.isArray(card.tags) && card.tags.includes('feedback'))) return { inScope: true, reason: 'feedback' };
   if (cardKind(card) === 'bug') return { inScope: true, reason: 'bug' };
+  // LW 3.37: an asset card comes from a row of design/ASSETS.md, itself part of the pack.
+  if (Array.isArray(card.tags) && card.tags.includes('asset')) return { inScope: true, reason: 'asset' };
   const vocabulary = new Set(wordsOf(packText));
   if (!vocabulary.size) return { inScope: true, reason: 'noPack' };
   const terms = [...new Set(wordsOf(card.text))].filter((w) => w.length >= SCOPE_MIN_CHARS && !SCOPE_STOPWORDS.has(w));

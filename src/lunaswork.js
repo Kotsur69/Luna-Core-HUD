@@ -166,6 +166,7 @@ const {
   publicFeedback,
 } = require('./lunasworkFeedback');
 const { createResearchStep } = require('./lunasworkResearch');
+const { createAssetStep } = require('./lunasworkAssets');
 const {
   APPROVE,
   needsDecision,
@@ -231,6 +232,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   shipGate: (ctx:{repoPath:string, scores:object[]})=>{allPassed:boolean},
  *   critic: (opts:object)=>Promise<object>,
  *   research?: (opts:object)=>Promise<object>,
+ *   styleCheck?: (opts:object)=>Promise<object>,
  *   gitLog?: (repoPath:string)=>Promise<string>,
  *   syncCheckout?: (repoPath:string)=>Promise<{ok:boolean, detail?:string}>,
  *   checkpoints?: {tagIteration:(o:object)=>Promise<object>, rollback:(o:object)=>Promise<object>},
@@ -273,6 +275,14 @@ function createLunasWork(deps) {
   const staging = createStaging({ log, now, ...deps.staging });
   const researchStep = createResearchStep({
     research: deps.research,
+    logEvent: (text) => logEvent(text),
+    logModel: (role, model, reason) => logModel(role, model, reason),
+  });
+  // LW 3.37 (src/lunasworkAssets.js): design/ASSETS.md -> asset cards, cost gate, style check.
+  const assetStep = createAssetStep({
+    todoStore: (projectId) => deps.todoStore(projectId),
+    ask: (spec) => ask(spec),
+    styleCheck: deps.styleCheck,
     logEvent: (text) => logEvent(text),
     logModel: (role, model, reason) => logModel(role, model, reason),
   });
@@ -703,6 +713,8 @@ function createLunasWork(deps) {
   async function stepDirecting() {
     // Idea #14 (src/lunasworkResearch.js): new "like X" references researched first; never blocks.
     await researchStep.beforeDirecting(run);
+    // LW 3.37: planned assets become cards before the Director plans; never blocks.
+    await assetStep.beforeDirecting(run);
     // B17: feedback that came in since the last iteration is planned in first.
     triageFeedback();
     const held = heldNow();
