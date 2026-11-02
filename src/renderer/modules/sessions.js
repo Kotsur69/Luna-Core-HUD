@@ -30,6 +30,7 @@ import {
   setActiveSessionId,
   showPane,
   pruneTerms,
+  isTerminalHostMounted,
   fitAndResize,
   term,
 } from './terminals.js';
@@ -51,6 +52,7 @@ import { syncTodoProject, setTodoToolsState } from './todo.js';
 import { sfx } from './sound.js';
 import { agentStream } from './keysynth.js';
 import { targetSlot, siblingOffsets, clampDx } from './tabdrag.js';
+import { createEarlyPtyBuffer } from './earlypty.js';
 
 // A2f: set once by mountTabs() - see modules/terminal.js.
 let tabEls = null;
@@ -96,8 +98,21 @@ function syncActiveProfile() {
 
 // ---- pty stream, routed by sessionId ----------------------------------------
 
+// Output that arrived before the `terminal` widget mounted #terminal (the
+// startup tab's pty is spawned while the renderer is still booting). Replayed
+// by flushEarlyPty() from mountTabs(), which runs after mountTerminalHost().
+const earlyPty = createEarlyPtyBuffer();
+
 // PASSIVE OBSERVER: output from the Claude CLI -> the RIGHT tab's screen.
 window.lunacore.onData(({ sessionId, data }) => {
+  if (!isTerminalHostMounted()) {
+    earlyPty.pushData(sessionId, data);
+    return;
+  }
+  writeData(sessionId, data);
+});
+
+function writeData(sessionId, data) {
   const s = ensureTerm(sessionId);
   if (sessionList.some((m) => m.id === sessionId && m.readOnly)) s.term.options.disableStdin = true;
   s.term.write(data);
@@ -108,10 +123,26 @@ window.lunacore.onData(({ sessionId, data }) => {
     markWorking(sessionId);
     agentStream(data.length);
   } else markBucketWorking(s);
-});
+}
 
 // Connection status of one tab's pty.
 window.lunacore.onExit(({ sessionId, code }) => {
+  if (!isTerminalHostMounted()) {
+    earlyPty.pushExit(sessionId, code);
+    return;
+  }
+  writeExit(sessionId, code);
+});
+
+/** Replays everything parked in earlyPty, data before that session's exit. */
+function flushEarlyPty() {
+  for (const { sessionId, data, hasExit, exitCode } of earlyPty.drain()) {
+    if (data) writeData(sessionId, data);
+    if (hasExit) writeExit(sessionId, exitCode);
+  }
+}
+
+function writeExit(sessionId, code) {
   const s = ensureTerm(sessionId);
   s.alive = false;
   markBucketDead(s);
@@ -121,7 +152,7 @@ window.lunacore.onExit(({ sessionId, code }) => {
     setPtyStatus(false, 'ptystatus.ended', { code });
   }
   renderTabs();
-});
+}
 
 // A tab's status light moved (main pushes on change only, already debounced).
 window.lunacore.onSessionStatus(({ sessionId, state, since, resetsAt }) => {
@@ -644,6 +675,7 @@ export function mountTabs(root) {
   const wtButton = root.querySelector('#tab-worktree');
   wtButton.addEventListener('click', () => openWorktreeField(wtButton));
   renderTabs();
+  flushEarlyPty();
 }
 
 /**
