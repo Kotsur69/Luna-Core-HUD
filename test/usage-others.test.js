@@ -25,6 +25,36 @@ test('readOthers re-reads at most every othersEveryMs, and refresh() forces it',
   assert.equal(reads, 2);
 });
 
+test('every OK read is emitted even when the numbers did not change', async () => {
+  const emitted = [];
+  const w = new UsageWatcher((u) => emitted.push(u));
+  w.running = false; // no follow-up timer
+  w.getAllProfiles = () => [];
+  let now = 1000;
+  w.fetchPrimary = async () => ({
+    status: 'ok',
+    limits: [{ window: '5h', percentUsed: 12 }],
+    updatedAt: (now += 90000),
+  });
+  await w.tick();
+  await w.tick();
+  // Same percentages twice - the UI still has to learn the read happened,
+  // or its "updated Xs ago" label keeps growing until the next change.
+  assert.equal(emitted.length, 2);
+  assert.ok(emitted[1].updatedAt > emitted[0].updatedAt);
+});
+
+test('an unchanged error read is not re-emitted', async () => {
+  const emitted = [];
+  const w = new UsageWatcher((u) => emitted.push(u));
+  w.running = false;
+  w.getAllProfiles = () => [];
+  w.fetchPrimary = async () => ({ status: 'error', limits: [], updatedAt: Date.now() });
+  await w.tick();
+  await w.tick();
+  assert.equal(emitted.length, 1);
+});
+
 test('limitLabel localizes the generic windows and keeps provider labels', () => {
   const tr = (key) => `T:${key}`;
   assert.equal(limitLabel({ window: '5h', label: '5-hour window' }, tr), 'T:usage.window.5h');

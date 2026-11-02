@@ -46,8 +46,15 @@ test('a 429 without Retry-After doubles the interval per consecutive 429', () =>
   const limited = { status: 'error', rateLimited: true, retryAfterMs: null };
   assert.equal(nextPollDelay(limited, INTERVAL, HEARTBEAT, 1), INTERVAL);
   assert.equal(nextPollDelay(limited, INTERVAL, HEARTBEAT, 2), INTERVAL * 2);
-  assert.equal(nextPollDelay(limited, INTERVAL, HEARTBEAT, 3), INTERVAL * 4);
+  // 4x the interval (6 min) is already past the 5 min cap.
+  assert.equal(nextPollDelay(limited, INTERVAL, HEARTBEAT, 3), MAX_BACKOFF_MS);
   assert.equal(nextPollDelay(limited, INTERVAL, HEARTBEAT, 50), MAX_BACKOFF_MS);
+});
+
+test('a 429 never freezes the meter longer than 5 minutes', () => {
+  const thirtyMin = 30 * 60 * 1000;
+  const limited = { status: 'error', rateLimited: true, retryAfterMs: thirtyMin };
+  assert.equal(nextPollDelay(limited, INTERVAL, HEARTBEAT, 1), 5 * 60 * 1000);
 });
 
 test('parseRetryAfter reads delta-seconds and HTTP dates, null for junk or the past', () => {

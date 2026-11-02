@@ -931,6 +931,11 @@ class UsageWatcher {
     return this.others;
   }
 
+  /** The Claude/active-profile read; a seam so tests can stub the network. */
+  fetchPrimary(profile) {
+    return fetchUsage(profile);
+  }
+
   async tick() {
     if (this.busy) return;
     this.busy = true;
@@ -938,7 +943,7 @@ class UsageWatcher {
     let usage;
     try {
       const profile = this.getActiveProfile();
-      const [primary, others] = await Promise.all([fetchUsage(profile), this.readOthers()]);
+      const [primary, others] = await Promise.all([this.fetchPrimary(profile), this.readOthers()]);
       usage = { ...primary, others };
       this.rateLimitedStreak = primary && primary.rateLimited ? this.rateLimitedStreak + 1 : 0;
       const cmp = JSON.stringify({
@@ -946,7 +951,12 @@ class UsageWatcher {
         updatedAt: 0,
         others: others.map((o) => ({ ...o, updatedAt: 0 })),
       });
-      if (cmp !== this.lastJson) {
+      // A good read is always emitted, even with unchanged numbers: the
+      // renderer's "updated Xs ago" label comes from updatedAt, so swallowing
+      // it made the label grow for minutes until the percentages moved (or
+      // the refresh button forced an emit). Unchanged errors stay deduped.
+      const isOk = primary && primary.status === 'ok';
+      if (isOk || cmp !== this.lastJson) {
         this.lastJson = cmp;
         this.onUpdate(usage);
       }
@@ -975,8 +985,12 @@ class UsageWatcher {
 // UTILITY FUNCTIONS
 // ============================================================================
 
-/** Longest wait between usage reads while rate limited. */
-const MAX_BACKOFF_MS = 30 * 60 * 1000;
+/**
+ * Longest wait between usage reads while rate limited. Was 30 min, which
+ * left the tile frozen for half an hour after a single 429 burst; 5 min
+ * still backs off politely (90 s -> 3 min -> cap) but recovers quickly.
+ */
+const MAX_BACKOFF_MS = 5 * 60 * 1000;
 
 /**
  * Retry-After header -> ms to wait, or null. Accepts delta-seconds or an
