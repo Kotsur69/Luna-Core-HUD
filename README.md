@@ -7,7 +7,25 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.19.0 — Luna's Work goes from build to launch.**
+> **Current release: v0.20.0 — two accounts, one God Mode.**
+> - **Account failover:** store several Claude logins; when one hits its 5 h
+>   or weekly limit, tabs, God Mode planning and Luna's Work switch to the
+>   other account instead of waiting.
+> - **God Mode v2 only:** the old v1 to-do runner is gone; every v2 worker now
+>   holds the overnight guard (keep-awake + LM Studio watchdog). The kill
+>   switch leads the Ctrl+/ overlay, and a compact green/red keep-awake chip
+>   sits in the terminal bar.
+> - **Codex/Gemini tabs:** carry the project's approved `.mcp.json` servers,
+>   with secrets read by variable name, never written to files.
+> - **Host mode:** toggle it in the running HUD.
+> - **To-do:** a view-only sort, auto-growing edit fields, and a
+>   `luna_todo_done` MCP tool so Luna can tick cards on request.
+> - **Polish:** synthesized cues for the four silent UI sounds; a privacy
+>   policy page for the Google OAuth consent screen.
+> - **Fixes:** the usage meter's "updated Xs ago" stays fresh; the files
+>   scope chip no longer stretches the panel header.
+>
+> **v0.19.0 — Luna's Work goes from build to launch.**
 > - **Staging:** a staging environment with a production guard and data
 >   backup/restore; load tests run on staging at the "complete" gate and
 >   before SHIP.
