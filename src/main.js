@@ -966,6 +966,31 @@ function usageResetAt() {
   return Number.isFinite(at) ? at : null;
 }
 
+/**
+ * The registered project whose folder a stored run's repoPath is, or null.
+ * Re-homed first: a run saved under another user's home still matches the
+ * same registered project here (restore() re-homes the rest).
+ */
+function projectForStoredRepo(repoPath) {
+  if (typeof repoPath !== 'string' || !repoPath) return null;
+  const repo = path.resolve(resolveStoredPath(repoPath) || repoPath);
+  return projects.find((p) => p.path && path.resolve(p.path) === repo) || null;
+}
+
+// Which project file (orchestraStore.js) the God Mode run lives in: a plan
+// keeps the file it was restored from or first saved to, so a discard
+// (saveState(null)) clears that same one, and a new plan for another project
+// clears the old plan's file.
+let storedOrchestraRun = { projectId: null, planId: null };
+function saveOrchestraRun(data) {
+  const prev = storedOrchestraRun;
+  const samePlan = !!data && data.id === prev.planId;
+  const projectId = data && !samePlan ? (typeof data.projectId === 'string' ? data.projectId : null) : prev.projectId;
+  if (data && !samePlan && prev.planId && prev.projectId !== projectId) orchestraStore.saveRun(prev.projectId, null);
+  storedOrchestraRun = { projectId, planId: data ? data.id : null };
+  if (!orchestraStore.saveRun(projectId, data)) console.error('[orchestra] could not save the God Mode run (config/orchestra)');
+}
+
 /** The tail of a worker's transcript -> {rule, example} its prompt is about. */
 function approvalRuleFor(session) {
   const none = { rule: null, example: null };
@@ -1170,15 +1195,16 @@ const orchestra = createOrchestra({
   // registered projects - the file is on disk, so it is not trusted to name
   // where LunaCore opens tabs and runs git.
   loadState: () => {
-    const raw = orchestraStore.loadRun();
-    // Re-homed first: a run saved under another user's home still matches
-    // the same registered project here (restore() re-homes the rest).
-    const repo = raw && typeof raw.repoPath === 'string' ? path.resolve(resolveStoredPath(raw.repoPath) || raw.repoPath) : null;
-    return repo && projects.some((p) => p.path && path.resolve(p.path) === repo) ? raw : null;
+    for (const projectId of orchestraStore.listStored()) {
+      const raw = orchestraStore.loadRun(projectId);
+      if (raw && projectForStoredRepo(raw.repoPath)) {
+        storedOrchestraRun = { projectId, planId: raw.id };
+        return raw;
+      }
+    }
+    return null;
   },
-  saveState: (data) => {
-    if (!orchestraStore.saveRun(data)) console.error('[orchestra] could not save config/orchestra.local.json');
-  },
+  saveState: (data) => saveOrchestraRun(data),
   onChange: (view) => {
     send('orchestra:changed', view);
     lunasworkBuilder.onChange(view);
@@ -3768,8 +3794,15 @@ app.whenReady().then(() => {
   const probing = process.argv.includes('--luna-probe');
   // God Mode v2: bring back the last run's board (held - nothing launches
   // until Approve/Retry) and start the worker-time watchdog. After the
-  // projects load: a restored run must belong to one of them.
-  if (!probing) orchestra.restore();
+  // projects load: a restored run must belong to one of them. The single-run
+  // file older builds wrote moves to the per-project layout first.
+  if (!probing) {
+    orchestraStore.migrateLegacy((raw) => {
+      const project = projectForStoredRepo(raw.repoPath);
+      return project ? project.id : null;
+    });
+    orchestra.restore();
+  }
   // Luna's Work decision queue: pending decisions to the phone snapshot,
   // answers back from the `todos` cloud scope. Wired before resume() so a
   // resumed run's decisions are published at once.
