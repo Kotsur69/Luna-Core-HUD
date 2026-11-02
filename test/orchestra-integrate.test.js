@@ -335,6 +335,102 @@ test('integrateMerge: beforePush sees merged + skipped and can stop the push', a
   assert.ok(git3.calls.includes('git push origin HEAD:refs/heads/main'));
 });
 
+// ---- a red verify names what failed, never a lone `}` ------------------------------
+
+const { verifyDetail } = require('../src/orchestraVerifyDetail.js');
+
+// node --test (spec reporter, Node 24): two failures, the output ends with the
+// `}` that closes the last error object - what run pmvqhos4s reported.
+const SPEC_RED = [
+  '\u2716 adds numbers (4.9ms)',
+  '\u2714 passes (0.5ms)',
+  '\u2716 loads the adapter (1.2ms)',
+  '\u2139 tests 3',
+  '\u2139 pass 1',
+  '\u2139 fail 2',
+  '',
+  '\u2716 failing tests:',
+  '',
+  'test at test\\adapters.test.js:3:1',
+  '\u2716 adds numbers (4.9ms)',
+  '  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:',
+  '',
+  '  2 !== 3',
+  '',
+  '      at TestContext.<anonymous> (C:\\wt\\int\\test\\adapters.test.js:3:37) {',
+  "    code: 'ERR_ASSERTION',",
+  '    actual: 2,',
+  '    expected: 3',
+  '  }',
+  '',
+  'test at test\\adapters.test.js:9:1',
+  '\u2716 loads the adapter (1.2ms)',
+  "  Error: Cannot find module './tester'",
+  '  Require stack:',
+  '  - C:\\wt\\int\\src\\adapters.js {',
+  "    code: 'MODULE_NOT_FOUND'",
+  '  }',
+].join('\n');
+
+test('verifyDetail: names the failing tests with their file and the first error, not the trailing `}`', () => {
+  const detail = verifyDetail(SPEC_RED, { root: 'C:\\wt\\int' });
+  assert.equal(
+    detail,
+    'failing: adds numbers (test/adapters.test.js), loads the adapter (test/adapters.test.js); ' +
+      'AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:',
+  );
+  assert.notEqual(detail, '}');
+});
+
+test("verifyDetail: TAP 'not ok' lines, a whole failing file, and an error with the worktree path cut out", () => {
+  const tap = [
+    'TAP version 13',
+    'not ok 1 - adds numbers',
+    '  ---',
+    'ok 2 - later # SKIP',
+    'not ok 3 - C:\\wt\\int\\test\\b.test.js',
+    "Error: ENOENT: no such file or directory, open 'C:\\wt\\int\\data\\x.json'",
+    '1..3',
+  ].join('\n');
+  assert.equal(
+    verifyDetail(tap, { root: 'C:\\wt\\int' }),
+    "failing: adds numbers, test/b.test.js; Error: ENOENT: no such file or directory, open 'data\\x.json'",
+  );
+});
+
+test('verifyDetail: conflict markers left in the code are named first, with the file node pointed at', () => {
+  const out = ['C:\\wt\\int\\src\\main.js:12', '<<<<<<< HEAD', '^^^^^^^', '', "SyntaxError: Unexpected token '<<'"].join('\n');
+  assert.equal(verifyDetail(out, { root: 'C:\\wt\\int' }), "conflict markers left in: src/main.js; SyntaxError: Unexpected token '<<'");
+  assert.match(verifyDetail('>>>>>>> luna/b\n}'), /^conflict markers left in: unknown files/);
+});
+
+test('verifyDetail: bounded to 5 names and 300 chars; no test lines falls back to the last line that says something', () => {
+  const many = Array.from({ length: 9 }, (_, i) => `\u2716 a rather long failing test name number ${i} (1ms)`).join('\n');
+  const detail = verifyDetail(`${many}\nTypeError: x is not a function`);
+  assert.ok(detail.length <= 300, `${detail.length} chars`);
+  assert.ok((detail.match(/number \d/g) || []).length <= 5);
+  assert.match(detail, /\(\+\d+ more\)/);
+  assert.match(detail, /TypeError: x is not a function$/);
+  assert.equal(verifyDetail('FAIL x\n}\n'), 'FAIL x');
+  assert.equal(verifyDetail('}'), 'tests failed with no output');
+  assert.match(verifyDetail('ok\n[LunaCore: verify timed out]'), /^verify timed out/);
+});
+
+test('integrateMerge: a red verify is skipped with the failing tests as its detail', async () => {
+  const git = fakeExec({ 'rev-parse': { ok: true, stdout: 'sha1\n' } });
+  const { deps } = integDeps(git, { verify: async (cmd) => (cmd === 'red' ? { ok: false, output: SPEC_RED } : { ok: true, output: '' }) });
+  const res = await integ.integrateMerge(
+    args([
+      { id: 'tester-adapters', branch: 'luna/tester-adapters', verify: 'red' },
+      { id: 'core', branch: 'luna/core', verify: 'green' },
+    ]),
+    deps,
+  );
+  assert.equal(res.skipped[0].stage, 'verify');
+  assert.match(res.skipped[0].detail, /^failing: adds numbers \(test\/adapters\.test\.js\)/);
+  assert.match(res.skipped[0].detail, /AssertionError/);
+});
+
 // ---- a second pass of the same run: leftovers never block it ---------------------
 
 test('integrateMerge: a leftover branch from an earlier pass is deleted before the build', async () => {

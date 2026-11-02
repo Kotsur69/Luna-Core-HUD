@@ -23,7 +23,7 @@
 
 const path = require('path');
 const h = require('./reportHtml');
-const { diagnosePackage, diagnoseIntegration, diagnoseSkip } = require('./orchestraDiagnose');
+const { diagnosePackage, diagnoseIntegration, diagnoseSkip, skipDetailLabel } = require('./orchestraDiagnose');
 
 const NOTE_TAG = '[LunaCore run';
 const MAX_NOTE_CHARS = 600;
@@ -119,10 +119,13 @@ function packageLines(view, skippedIds) {
   return out;
 }
 
+/** A skip's detail as evidence: 'Git said' only where git spoke (orchestraDiagnose.js). */
+const skipDetail = (s) => (s.detail ? `${skipDetailLabel(s.stage)}: ${code(s.detail, 300)}` : '');
+
 function skippedLine(s, view) {
   const files = list(s.files).slice(0, 10).map((f) => code(f)).join(', ');
   const pkg = list(view.packages).find((p) => isObject(p) && p.id === s.id) || {};
-  const why = oneLine(s.detail);
+  const why = s.stage === 'depSkipped' && s.detail ? `depends on: ${oneLine(s.detail, 64)}` : oneLine(s.detail);
   const stage = oneLine(s.stage, 32) || 'merge';
   return `${label({ id: s.id, title: pkg.title })} - skipped at ${stage}${why ? ` (${why})` : ''}${
     files ? `; files: ${files}` : ''
@@ -230,9 +233,9 @@ function problems(view) {
     const files = list(s.files).slice(0, 10).map((f) => code(f));
     out.push({
       title: `${label({ id: s.id, title: pkg.title })} - left out of the merge (${oneLine(s.stage, 32) || 'merge'})`,
-      ...diagnoseSkip(s.stage),
+      ...diagnoseSkip(s.stage, s.detail),
       evidence: [
-        s.detail ? `Git said: ${code(s.detail, 300)}` : '',
+        skipDetail(s),
         files.length ? `Files: ${files.join(', ')}` : '',
         pkg.branch ? `Branch: ${code(pkg.branch, 120)}` : '',
       ].filter(Boolean),

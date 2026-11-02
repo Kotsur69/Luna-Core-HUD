@@ -31,6 +31,7 @@ const { execFile } = require('child_process');
 const { runGit, firstLine, gitError, slugify, branchFor } = require('./worktrees');
 const { runVerify } = require('./orchestraFinish');
 const { checkCwd } = require('./projects');
+const { verifyDetail } = require('./orchestraVerifyDetail');
 
 const GH_TIMEOUT_MS = 60 * 1000;
 const RESOLVER_TIMEOUT_MS = 15 * 60 * 1000;
@@ -361,7 +362,7 @@ async function mergeAndVerify(wt, pkg, deps, verifyImpl) {
   let verified = await verifyImpl(pkg.verify, wt.cwd);
   if (!verified.ok) verified = await verifyImpl(pkg.verify, wt.cwd);
   if (verified.ok) return { ok: true };
-  return { ok: false, stage: 'verify', detail: listLines(verified.output).pop(), files: [] };
+  return { ok: false, stage: 'verify', detail: verifyDetail(verified.output, { root: wt.root }), files: [] };
 }
 
 /** deps.beforePush, if any: {ok:false, reason} stops the push; a throw does too. */
