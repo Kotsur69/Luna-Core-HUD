@@ -246,7 +246,10 @@ function givenCards(allOpen, cards) {
  *   listOwnBranches?: Function, worktreeBranches?: Function, log?: Function,
  *   power?: object, awake?: {release:Function, restore:Function}, flush?: Function,
  *   notifyPower?: Function, appendReport?: Function, otherRunsActive?: () => boolean,
+ *   repoBusy?: (repoPath:string) => boolean,
  * }} deps
+ *   repoBusy: multi God Mode (orchestraRegistry.js) - another project's run
+ *   holds this repo, so makePlan refuses with 'repoBusy'.
  */
 function createOrchestra(deps) {
   const now = deps.now || Date.now;
@@ -277,6 +280,9 @@ function createOrchestra(deps) {
   /** @type {null|object} */
   let plan = null;
   let busy = false;
+  // The repo a makePlan in flight plans for (no plan exists yet), so a second
+  // project cannot plan the same repo meanwhile.
+  let planningRepo = null;
   let pumping = false;
   /** pkgId -> pending nudge timer */
   const nudgeTimers = new Map();
@@ -585,6 +591,9 @@ function createOrchestra(deps) {
   async function makePlan(ctx) {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
+    // One run per repo across projects - checked here, so a replan after a
+    // limit wait is refused too when another project took the repo meanwhile.
+    if (deps.repoBusy && deps.repoBusy(ctx.repoPath)) return { ok: false, error: 'repoBusy' };
     // A manual item is the user's own job: the planner never sees it.
     const allOpen = deps.readTodos(ctx.projectId).filter((t) => !t.done && t.manual !== true);
     if (!allOpen.length) return { ok: false, error: 'noTodos' };
@@ -596,6 +605,7 @@ function createOrchestra(deps) {
     if (planWaiter.isWaiting()) planWaiter.clear();
 
     busy = true;
+    planningRepo = ctx.repoPath;
     try {
       const [res, dirty, baseBranch] = await Promise.all([
         deps.runPlanner({ cwd: ctx.repoPath, env: ctx.env, openTodos }),
@@ -694,6 +704,7 @@ function createOrchestra(deps) {
       return { ok: true, plan: view() };
     } finally {
       busy = false;
+      planningRepo = null;
     }
   }
 
@@ -1521,6 +1532,9 @@ function createOrchestra(deps) {
     cancelPlanWait: () => planWaiter.cancel(),
     isBusy,
     isRunning: () => !!plan && plan.started && !plan.killed && plan.packages.some(sup.isActive),
+    // Multi God Mode's same-repo guard (orchestraRegistry.repoBusy).
+    repoPath: () => (plan ? plan.repoPath : null),
+    planningRepo: () => planningRepo,
   };
 }
 
