@@ -480,6 +480,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   cloudMachines: () => ipcRenderer.invoke('cloud:machines'),
   /** Deletes another PC's cloud rows (never this PC's; checked in main). Promise<{ok, removed} | {ok:false, reason}>. */
   cloudForget: (machine) => ipcRenderer.invoke('cloud:forget', typeof machine === 'string' ? machine : ''),
+  // --- Host mode in this HUD (src/hostmodeipc.js) ---
+  /** action: 'status' | 'start' | 'stop' | 'make-default' (whitelisted in main).
+   *  Promise<{ok, on, isDefault, machine} | {ok:false, reason}>. */
+  hostMode: (action) => ipcRenderer.invoke('hostMode:run', typeof action === 'string' ? action : ''),
 
   // --- Highlight extractor (batch clip trimmer) ---
   /** Checks whether ffmpeg is on PATH (not bundled). Promise<{ok, version}>. */

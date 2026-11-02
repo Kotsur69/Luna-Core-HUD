@@ -18,7 +18,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker,
 // headless src/hostmain.js instead of the HUD, before any HUD module loads.
 // A CommonJS module may return at the top level: nothing below runs then.
 // eslint-disable-next-line no-use-before-define
-if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud, chatTabs: phoneTabs }) }) !== 'hud') return;
+if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud, chatTabs: phoneTabs, configSync }) }) !== 'hud') return;
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -2978,6 +2978,8 @@ function registerIpc() {
     briefDir: () => path.join(userDir(), BRIEF_DIR),
     controller: lunaswork,
     queue: lunasworkQueue,
+  // Settings -> Host mode: host mode inside this HUD, no restart (src/hostswitch.js).
+  require('./hostmodeipc').registerHostModeIpc({ ipcMain, control: require('./hostmain').hostControl() });
     queueChanged: () => lunasworkPublish && lunasworkPublish(),
     // B16: the commands a queued run will use, as start() computes them.
     checkCommandFor: (profile) => lunasworkCheckCommandFor(profile, readUiPrefs().orchestraCheckCommand),

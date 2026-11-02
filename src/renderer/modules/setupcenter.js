@@ -17,6 +17,7 @@
 
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
+import { mountHostModeSettings } from './hostmodesettings.js';
 
 const DOT = { ok: 'diag-item__dot--ok', warning: 'diag-item__dot--warn', missing: 'diag-item__dot--fail' };
 
@@ -353,6 +354,7 @@ function mountModuleSwitches(root, prefs) {
 export function mountSetupCenter(root, prefs = {}) {
   applyModuleVisibility(prefs);
   mountModuleSwitches(root, prefs);
+  mountHostModeSettings(root);
   const rows = root.querySelector('#setup-rows');
   if (!rows || typeof api().getSetupStatus !== 'function') return;
   els = { rows };

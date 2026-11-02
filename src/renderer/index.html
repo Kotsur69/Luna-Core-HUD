@@ -1461,6 +1461,22 @@
                 <span class="switch-field__text"><span class="switch-field__label" data-i18n="setup.modules.godmode">Ukryj God Mode</span></span>
                 <span class="switch"><input type="checkbox" id="setup-hide-godmode" class="switch__input" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
               </label>
+              <!-- Host mode in this HUD, no restart and no launcher script
+                   (modules/hostmodesettings.js -> src/hostmodeipc.js). -->
+              <h3 class="termcustom__section" data-i18n="setup.host.title">Tryb hosta</h3>
+              <p class="termcustom__hint" data-i18n="setup.host.hint">
+                Telefon steruje tym komputerem: czaty, repozytoria, polecenia. Bez ponownego uruchamiania LunaCore.
+              </p>
+              <label class="switch-field">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="setup.host.toggle">Uruchom tryb hosta</span>
+                  <span id="setup-host-status" class="switch-field__status" data-i18n="setup.host.off">wylaczony</span>
+                </span>
+                <span class="switch"><input type="checkbox" id="setup-host-toggle" class="switch__input" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="setup-host-default" class="termcustom__reset" data-i18n="setup.host.makeDefault">Ustaw ten komputer jako domyslny host</button>
+              </div>
             </div>
             <div class="termcustom__group">
               <h3 class="termcustom__section" data-i18n="termcustom.section.general">Ogolne</h3>

@@ -217,9 +217,10 @@ function actionDeps({ cloud, repos, puts, configSync, after }) {
  *   cloud?: object|null, onStop?: () => void, chatTabs?: object|null}} opts
  *   cloud = the HUD's running cloud (switch mode), else one is started here;
  *   onStop = what Stop does instead of quitting (switch mode: show the HUD);
- *   chatTabs = the HUD's read-only tabs for phone sessions (switch mode only)
+ *   chatTabs = the HUD's read-only tabs for phone sessions (switch mode only);
+ *   onDefaultSet = runs after a default write when there is no own configSync
  */
-function startHost({ electron, machine, makeDefault = false, cloud: given = null, onStop = null, chatTabs = null }) {
+function startHost({ electron, machine, makeDefault = false, cloud: given = null, onStop = null, chatTabs = null, onDefaultSet = null }) {
   const { app, Tray, Menu, shell, dialog, powerSaveBlocker, nativeImage } = electron;
   const { execFile } = require('child_process');
   const paths = require('./paths');
@@ -284,7 +285,9 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   function setDefault() {
     try {
       writeDefault(defaultFile, machine);
+      // Switch mode has no configSync of its own: the HUD's pushes host:default.
       if (configSync) configSync.soon();
+      else if (onDefaultSet) onDefaultSet();
     } catch (err) {
       console.error('[hostmain] --make-default failed:', err.message);
     }
@@ -469,6 +472,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
         ...(state === 'login' ? [{ label: tx('login'), click: () => login() }] : []),
         ...(pairing && cloud.status().loggedIn ? [{ label: pairOpen ? tx('pairOpen') : tx('pair'), enabled: !pairOpen, click: () => openPairing() }] : []),
         { label: tx('forget'), enabled: hasPairedPhone(keysPath), click: () => forgetPhones().catch((err) => console.error('[hostmain] forget failed:', err.message)) },
+        ...(readDefault(defaultFile) === machine ? [] : [{ label: tx('makeDefault'), click: () => setDefault() }]),
         { type: 'separator' },
         { label: tx('openLog'), click: () => shell.openPath(logFile) },
         { label: tx('stop'), click: () => stop() },
@@ -522,6 +526,25 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   return { stop, setDefault };
 }
 
+/** The HUD's host switch (src/hostswitch.js) wired to this process. */
+function hudSwitch({ electron, machine, hud }) {
+  const { createHostSwitch } = require('./hostswitch');
+  return createHostSwitch({
+    machine,
+    startHost: (opts) => startHost({ electron, ...opts }),
+    hud,
+    windows: () => electron.BrowserWindow.getAllWindows(),
+    // Required on use: boot() runs before any HUD module loads.
+    isDefault: () => require('./hostdefault').readDefault(require('./paths').local('host-default.local.json')) === machine,
+  });
+}
+
+// Set by boot() in a HUD launch; null in a headless host.
+let hudControl = null;
+
+/** The running HUD's host switch, for src/hostmodeipc.js. Null outside the HUD. */
+const hostControl = () => hudControl;
+
 /**
  * main.js's first call. Takes the single-instance lock and routes the launch.
  * @param {{argv: string[], hud: () => ({cloud: object|null})}} opts
@@ -530,7 +553,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
  */
 function boot({ argv, hud }) {
   const electron = require('electron');
-  const { app, BrowserWindow } = electron;
+  const { app } = electron;
   const { machineName } = require('./missionledgersync');
   const args = parseHostArgs(argv);
   const gotLock = app.requestSingleInstanceLock();
@@ -542,41 +565,25 @@ function boot({ argv, hud }) {
     return decision;
   }
   const machine = machineName(os.hostname());
+  // Headless `--host` run; host mode inside the HUD lives in `control`.
   let host = null;
-  const mode = () => (host ? 'host' : decision);
+  const control = hudSwitch({ electron, machine, hud });
+  if (decision === 'hud') hudControl = control;
+  const mode = () => (host || control.isOn() ? 'host' : decision);
 
   if (gotLock) {
     app.on('second-instance', (_event, commandLine) => {
       const what = decideSecondInstance({ mode: mode(), argv: commandLine });
-      if (what === 'make-default' && host) host.setDefault();
+      if (what === 'make-default') {
+        // A headless host still starting has host === null: wait for it, never
+        // reach the HUD switch (main.js returned early, its hud() would throw).
+        if (host) host.setDefault();
+        else if (decision === 'hud') control.makeDefault();
+      }
       if (what !== 'switch') return;
       // Only once the HUD is up: its cloud must exist, or a second one would start.
       app.whenReady().then(() => {
-        const { cloud } = hud();
-        if (host || !cloud) {
-          if (!cloud) console.error('[hostmain] HUD cloud not ready, host switch ignored');
-          return;
-        }
-        const windows = BrowserWindow.getAllWindows();
-        const showAll = () => windows.filter((w) => !w.isDestroyed()).forEach((w) => w.show());
-        windows.forEach((w) => w.hide());
-        try {
-          host = startHost({
-            electron,
-            machine,
-            makeDefault: parseHostArgs(commandLine).makeDefault,
-            cloud,
-            chatTabs: hud().chatTabs || null,
-            onStop: () => {
-              host = null;
-              showAll();
-            },
-          });
-        } catch (err) {
-          console.error('[hostmain] switch into host mode failed:', err.message);
-          host = null;
-          showAll();
-        }
+        control.start({ makeDefault: parseHostArgs(commandLine).makeDefault, hideWindows: true });
       });
     });
   }
@@ -596,4 +603,4 @@ function boot({ argv, hud }) {
   return decision;
 }
 
-module.exports = { WATCHDOG_FLAG, isWatchdogLaunch, boot, startHost, parseHostArgs, decideBoot, decideSecondInstance, trayLabel, skillNames, commandVerifier, actionDeps };
+module.exports = { WATCHDOG_FLAG, isWatchdogLaunch, boot, startHost, hostControl, parseHostArgs, decideBoot, decideSecondInstance, trayLabel, skillNames, commandVerifier, actionDeps };
