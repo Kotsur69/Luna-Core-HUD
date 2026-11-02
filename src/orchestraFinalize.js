@@ -10,8 +10,12 @@
 //                  new ones.
 //   2. cleanup   - close pushed packages' tabs, remove their worktrees (the
 //                  branch is on the remote). Stalled ones stay for inspection.
-//   3. notes     - unfinished packages leave a note on their to-dos.
-//   4. report    - markdown in <userDir>/runs/<plan>.md + an OS notification,
+//   3. post-merge - only when this pass merged into the base branch: the
+//                  POST_MERGE_STEPS below, in order (update the local base
+//                  checkout, ...). Each result lands in
+//                  integration.postMerge[<step>] for the board and report.
+//   4. notes     - unfinished packages leave a note on their to-dos.
+//   5. report    - markdown in <userDir>/runs/<plan>.md + an OS notification,
 //                  and the run for the phone's `godmode` snapshot.
 //
 // State lives in orchestra.js; this module gets accessors, never the object
@@ -26,6 +30,7 @@ const { prBody } = require('./orchestraIntegrate');
 const { buildReport, appendStallNotes } = require('./orchestraReport');
 const { runEntry } = require('./godmodesnapshot');
 const { selfCheckGate } = require('./orchestraSelfCheck');
+const { branchFor } = require('./worktrees');
 
 // Lets a closed tab's processes let go of the worktree folder (Windows).
 const TAB_CLOSE_SETTLE_MS = 2500;
@@ -42,6 +47,54 @@ const EMAIL_NOT_CONNECTED = 'gmail-not-connected';
 
 /** The integration worktree / branch name part for a run: `luna/<slug>-integration`. */
 const slugOf = (plan) => plan.id.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 24) || 'run';
+
+const errText = (err) => (err instanceof Error ? err.message : String(err)).slice(0, 300);
+
+/**
+ * What runs after a merge landed on the base branch, in this order - after
+ * the package worktrees are cleaned up, before the report (so the report and
+ * the run email carry the results). Per step:
+ *   name  its result lands in integration.postMerge[name]
+ *   impl  the deps.postMerge function doing the work, called with the
+ *         post-merge context (postMergeContext); without it the step is
+ *         left out
+ *   when  (ctx) -> true to run, false to leave out silently, or a string:
+ *         the reason it is skipped (kept as {skipped: reason})
+ * A step that throws is recorded as {error} and the next one still runs.
+ * Adding a step (e.g. 'apply Supabase actions') is one more entry here plus
+ * its deps.postMerge implementation.
+ */
+const POST_MERGE_STEPS = Object.freeze([
+  // 1. ff the main checkout when it is clean on the base branch (+ npm ci).
+  { name: 'localBase', impl: 'updateLocalBase', when: () => true },
+]);
+
+/**
+ * The read-only facts a post-merge step gets. `results` fills in as the
+ * steps of this pass run; `previous` is what earlier passes of the run left.
+ */
+function postMergeContext(plan, res, slug) {
+  const integ = plan.integration || {};
+  const skippedIds = new Set((Array.isArray(res.skipped) ? res.skipped : []).map((s) => s && s.id));
+  return {
+    planId: plan.id,
+    projectId: plan.projectId,
+    repoPath: plan.repoPath,
+    base: plan.baseBranch,
+    headSha: res.headSha || null,
+    integrationBranch: branchFor(`${slug}-integration`),
+    packages: plan.packages.map((p) => ({
+      id: p.id,
+      branch: p.branch || null,
+      merged: p.merged === true,
+      skipped: skippedIds.has(p.id),
+    })),
+    options: sup.normalizeOptions(plan.options),
+    selfCheck: integ.selfCheck || null,
+    previous: { ...(integ.postMerge || {}) },
+    results: {},
+  };
+}
 
 /**
  * @param {{
@@ -132,7 +185,9 @@ function createFinalizer(deps) {
     const skipped = Array.isArray(res.skipped) ? res.skipped : [];
     if (res.ok) {
       for (const id of res.merged) deps.patch(id, { merged: true });
-      return { ok: true, skipped, partial: skipped.length > 0, ...checked(gate) };
+      // landed: this pass pushed merges onto the base branch (post-merge steps run).
+      const landed = Array.isArray(res.merged) && res.merged.length > 0;
+      return { ok: true, skipped, partial: skipped.length > 0, landed, slug, headSha: res.headSha || null, ...checked(gate) };
     }
     const detail = [res.failedId, res.detail].filter(Boolean).join(': ');
     // A red self-check is its own open question: the merged result sits on
@@ -204,6 +259,38 @@ function createFinalizer(deps) {
       else deps.onRunEvent('cleanupFailed', { id: p.id, error: res.error || 'gitFailed' });
     }
     deps.commit();
+  }
+
+  /**
+   * The POST_MERGE_STEPS, in order, after a pass that merged into the base
+   * branch. Never throws; stops when the plan was discarded meanwhile.
+   */
+  async function runPostMerge(plan, res) {
+    const impls = deps.postMerge || {};
+    if (!res.landed || !plan.baseBranch) return;
+    const ctx = postMergeContext(plan, res, res.slug || slugOf(plan));
+    for (const step of POST_MERGE_STEPS) {
+      const fn = impls[step.impl];
+      if (typeof fn !== 'function') continue;
+      const gate = step.when(ctx);
+      if (gate === false) continue;
+      let result;
+      if (typeof gate === 'string') {
+        result = { skipped: gate };
+      } else {
+        try {
+          result = (await fn(ctx)) || {};
+        } catch (err) {
+          result = { error: errText(err) };
+        }
+      }
+      if (deps.getPlan() !== plan) return;
+      ctx.results[step.name] = result;
+      const postMerge = { ...(plan.integration.postMerge || {}), [step.name]: { ...result, at: deps.now() } };
+      setIntegration(plan, { postMerge });
+      deps.commit();
+      deps.onRunEvent('postMerge', { step: step.name });
+    }
   }
 
   function leaveNotes(plan) {
@@ -320,9 +407,13 @@ function createFinalizer(deps) {
         ? { state: 'done', error: null, detail: null, at: deps.now(), skipped, partial: skipped.length > 0 }
         : { state: 'failed', error: res.error || 'failed', detail: res.detail || null, at: deps.now(), skipped, partial: false },
     );
+    // The base head this run landed: "Release now" checks it reached the checkout.
+    if (res.landed && res.headSha) setIntegration(plan, { headSha: res.headSha });
     deps.commit();
     try {
       await cleanup(plan);
+      await runPostMerge(plan, res);
+      if (deps.getPlan() !== plan) return false;
       leaveNotes(plan);
       setIntegration(plan, { reportPath: report(plan) });
     } catch (err) {
@@ -336,4 +427,4 @@ function createFinalizer(deps) {
   return { finalize, isRunning: () => running };
 }
 
-module.exports = { createFinalizer, TAB_CLOSE_SETTLE_MS };
+module.exports = { createFinalizer, postMergeContext, POST_MERGE_STEPS, TAB_CLOSE_SETTLE_MS, EMAIL_NOT_CONNECTED };

@@ -241,6 +241,7 @@ const orchestraStore = require('./orchestraStore');
 const orchestraIntegrate = require('./orchestraIntegrate');
 const { reportFileFor, renderRunReportHtml, repoPathOf } = require('./orchestraReport');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
+const { createPostMergeServices } = require('./orchestraPostMerge');
 const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSupervisor');
 const { createStatusBoard } = require('./sessionstatus');
 
@@ -1029,7 +1030,11 @@ const lunasworkSecretGate = createSecretGate({
   log: (line) => console.info(line),
 });
 
+// After a merge landed: ff the local base checkout (src/orchestraPostMerge.js).
+const orchestraPostMerge = createPostMergeServices({ appPath: () => app.getAppPath() });
+
 const orchestra = createOrchestra({
+  postMerge: orchestraPostMerge.impls,
   runPlanner: lunasworkBuilder.wrapPlanner(runPlanner),
   addWorktree,
   dirtyCount,

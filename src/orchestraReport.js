@@ -347,6 +347,37 @@ function selfCheckSection(integ) {
   return lines;
 }
 
+/** One install line of the local base step: npm ci done / failed / skipped. */
+function installLine(install) {
+  if (!isObject(install)) return [];
+  if (install.skipped) return [`- npm ci skipped: ${oneLine(install.skipped)}`];
+  return [install.ok ? '- npm ci: done' : `- npm ci failed: ${oneLine(install.detail) || 'failed'}`];
+}
+
+/** Report lines per post-merge step (orchestraFinalize.js POST_MERGE_STEPS). */
+const POST_MERGE_LINES = {
+  localBase: (r, base) => {
+    if (!r.updated) return [`- local ${base} not updated: ${oneLine(r.reason) || 'unknown'}`];
+    const moved = sha7(r.from) && sha7(r.to) && r.from !== r.to;
+    return [moved ? `- Local ${base} fast-forwarded: ${sha7(r.from)}..${sha7(r.to)}` : `- Local ${base}: already up to date`, ...installLine(r.install)];
+  },
+};
+
+/** What ran after the merge landed: the local base update, cleanup, release. */
+function postMergeSection(view) {
+  const integ = isObject(view.integration) ? view.integration : {};
+  const steps = isObject(integ.postMerge) ? integ.postMerge : {};
+  const base = oneLine(view.baseBranch, 100) || 'base';
+  const lines = [];
+  for (const [name, result] of Object.entries(steps)) {
+    if (!isObject(result)) continue;
+    if (result.skipped && name !== 'release') lines.push(`- ${name}: skipped - ${oneLine(result.skipped)}`);
+    else if (result.error) lines.push(`- ${name} failed: ${oneLine(result.error)}`);
+    else if (POST_MERGE_LINES[name]) lines.push(...POST_MERGE_LINES[name](result, base));
+  }
+  return lines.length ? ['', '## After the merge', '', ...lines] : [];
+}
+
 function suggestionSection(suggestions) {
   const lines = ['', '## Allow-rule suggestions', ''];
   const items = list(suggestions).filter(isObject);
@@ -392,6 +423,7 @@ function buildReport(view, extra) {
     ...wrongSection(view),
     ...manualSection(integ),
     ...mergedSection(view),
+    ...postMergeSection(view),
     ...selfCheckSection(integ),
     ...suggestionSection(extra.suggestions),
     ...timelineSection(view, extra.now),

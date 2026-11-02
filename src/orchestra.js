@@ -341,6 +341,9 @@ function createOrchestra(deps) {
     onReport: deps.onReport,
     sleep: deps.sleep,
     onIdle: () => afterFinalize(),
+    // After a merge landed: the post-merge step implementations
+    // (orchestraFinalize.js POST_MERGE_STEPS, built by orchestraPostMerge.js).
+    postMerge: deps.postMerge || null,
   });
   const isBusy = () => busy || pumping || finalizer.isRunning();
 
