@@ -1099,13 +1099,14 @@ const orchestra = createOrchestra({
       resolve: (r) => orchestraIntegrate.runResolver({ ...r, env: orchestraToolEnv() }),
     }),
   createPr: (args) => orchestraIntegrate.createPr({ ...args, env: orchestraToolEnv() }),
-  // extra.beforePush: the end-of-run self-check gate (orchestraFinalize.js).
+  // extra: the end-of-run self-check gate (orchestraFinalize.js beforePush),
+  // the merge fix-up worker and the stop check (orchestra.js fixup / stopped).
   integrateMerge: (args, extra) =>
     orchestraIntegrate.integrateMerge(args, {
       addWorktree,
       removeWorktree,
       resolve: (r) => orchestraIntegrate.runResolver({ ...r, env: orchestraToolEnv() }),
-      ...(extra && typeof extra.beforePush === 'function' ? { beforePush: extra.beforePush } : {}),
+      ...orchestraIntegrate.runDeps(extra),
     }),
   runSelfCheck: lunasworkSecretGate.wrapSelfCheck((args) => orchestraSelfCheck.runSelfCheck(args)),
   pushBranch: lunasworkSecretGate.wrapPushBranch((root, branch) => orchestraSelfCheck.pushBranch(root, branch)),

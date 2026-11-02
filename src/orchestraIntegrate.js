@@ -10,8 +10,9 @@
 //   merge    - an integration worktree from origin/<base>; packages merged in
 //              dependency order, verify after each; a conflict gets ONE
 //              headless `claude -p` resolver (one stronger retry), checked
-//              for leftover markers. A package that stays red is reset away
-//              and skipped with its dependents; the rest is pushed with
+//              for leftover markers. A package red after its merge gets
+//              ONE fix-up worker (orchestraMergeFixup.js); one that stays
+//              red is reset away and skipped with its dependents; the rest is pushed with
 //              `git push origin HEAD:refs/heads/<base>` (never --force: a
 //              remote that moved on rejects it). Nothing merged -> nothing
 //              pushed.
@@ -32,6 +33,7 @@ const { runGit, firstLine, gitError, slugify, branchFor } = require('./worktrees
 const { runVerify } = require('./orchestraFinish');
 const { checkCwd } = require('./projects');
 const { verifyDetail } = require('./orchestraVerifyDetail');
+const { fixAfterMerge } = require('./orchestraMergeFixup');
 
 const GH_TIMEOUT_MS = 60 * 1000;
 const RESOLVER_TIMEOUT_MS = 15 * 60 * 1000;
@@ -348,10 +350,14 @@ function skippedDependency(pkg, dependsOf, skippedIds) {
 /**
  * Merges one package into the integration worktree and verifies it. A merge
  * or conflict failure gets ONE more try with the stronger resolver; a red
- * verify is run once more (timing-sensitive tests). Never throws.
- * @returns {Promise<{ok:true} | {ok:false, stage:string, detail:string, files:string[]}>}
+ * verify is run once more (timing-sensitive tests), then gets ONE fix-up
+ * worker (orchestraMergeFixup.js) before it counts as red. Never throws.
+ * @param {{wt:object, deps:object, verifyImpl:Function, baseSha:string, fixIo:object}} ctx
+ * @returns {Promise<{ok:true, fixedUp?:true}
+ *   | {ok:false, stage:string, detail:string, files:string[], fixup?:'failed'}>}
  */
-async function mergeAndVerify(wt, pkg, deps, verifyImpl) {
+async function mergeAndVerify(ctx, pkg) {
+  const { wt, deps, verifyImpl } = ctx;
   const resolve = safeResolver(deps.resolve);
   let res = await mergeOne(wt.root, pkg.branch, { execImpl: deps.execImpl, resolve });
   if (!res.ok && (res.stage === 'merge' || res.stage === 'conflict')) {
@@ -362,7 +368,38 @@ async function mergeAndVerify(wt, pkg, deps, verifyImpl) {
   let verified = await verifyImpl(pkg.verify, wt.cwd);
   if (!verified.ok) verified = await verifyImpl(pkg.verify, wt.cwd);
   if (verified.ok) return { ok: true };
-  return { ok: false, stage: 'verify', detail: verifyDetail(verified.output, { root: wt.root }), files: [] };
+  const fixed = await fixAfterMerge({ root: wt.root, cwd: wt.cwd, pkg, output: verified.output, baseSha: ctx.baseSha }, ctx.fixIo);
+  if (fixed.tried && fixed.ok) return { ok: true, fixedUp: true };
+  const red = { ok: false, stage: 'verify', detail: verifyDetail(fixed.tried ? fixed.output : verified.output, { root: wt.root }), files: [] };
+  return fixed.tried ? { ...red, fixup: 'failed' } : red;
+}
+
+/** One integration.skipped entry; `fixup` only when a fix-up was tried. */
+function skipEntry(id, res) {
+  const entry = { id, stage: res.stage, detail: String(res.detail || '').slice(0, 300), files: (res.files || []).slice(0, 10) };
+  return res.fixup ? { ...entry, fixup: res.fixup } : entry;
+}
+
+/** deps.stopped (a kill / pause during the integration) as a check that never throws. */
+function stopCheck(stopped) {
+  if (typeof stopped !== 'function') return () => false;
+  return () => {
+    try {
+      return stopped() === true;
+    } catch {
+      return true;
+    }
+  };
+}
+
+// The run-side deps of integrateMerge (finalize's gate, orchestra.js's fix-up
+// worker and stop check). main passes exactly these through, nothing else.
+const RUN_DEPS = ['beforePush', 'fixup', 'stopped'];
+
+/** The functions among RUN_DEPS in `extra`. */
+function runDeps(extra) {
+  const o = extra && typeof extra === 'object' ? extra : {};
+  return Object.fromEntries(RUN_DEPS.filter((k) => typeof o[k] === 'function').map((k) => [k, o[k]]));
 }
 
 /** deps.beforePush, if any: {ok:false, reason} stops the push; a throw does too. */
@@ -427,9 +464,13 @@ async function clearStaleIntegration(repoPath, name, deps) {
  *   packages:Array<{id:string, branch:string, verify:string, dependsOn?:string[]}>}} args
  * @param {{addWorktree:Function, removeWorktree:Function, resolve:Function,
  *   execImpl?:Function, verifyImpl?:Function, installImpl?:Function,
- *   beforePush?:(root:string, info:{merged:string[], skipped:object[], baseSha:string}) => Promise<{ok:boolean, reason?:string}>}} deps
- * @returns {Promise<{ok:boolean, merged:string[],
- *   skipped:Array<{id:string, stage:string, detail:string, files:string[]}>,
+ *   beforePush?:(root:string, info:{merged:string[], skipped:object[], baseSha:string}) => Promise<{ok:boolean, reason?:string}>,
+ *   fixup?:(args:{root:string, brief:string, capMs:number, id:string}) => Promise<{ok:boolean}>,
+ *   stopped?:() => boolean}} deps fixup: the one-at-a-time fix-up worker
+ *   (orchestraFixup.js); stopped: true once the run is killed or paused -
+ *   no new fix-up starts then
+ * @returns {Promise<{ok:boolean, merged:string[], fixedUp?:string[],
+ *   skipped:Array<{id:string, stage:string, detail:string, files:string[], fixup?:'failed'}>,
  *   stage?:string, failedId?:string|null, detail?:string, headSha?:string|null, root?:string|null}>}
  */
 async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, deps) {
@@ -437,6 +478,8 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
   const verifyImpl = deps.verifyImpl || runVerify;
   const merged = [];
   const skipped = [];
+  // Kept in thanks to the merge fix-up worker (orchestraMergeFixup.js).
+  const fixedUp = [];
   const fail = (stage, detail, failedId) => ({
     ok: false,
     merged,
@@ -468,32 +511,41 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
         await runGit(repoPath, ['branch', '-D', wt.branch], execImpl);
       }
     }
-    return { ...result, root: result.ok || checkOnly ? null : wt.root };
+    return { ...result, fixedUp: [...fixedUp], root: result.ok || checkOnly ? null : wt.root };
   };
 
   const installed = await (deps.installImpl || ensureInstall)(wt.root, verifyImpl);
   if (!installed.ok) return done(fail('install', listLines(installed.output).pop()));
 
+  const ctx = {
+    wt,
+    deps,
+    verifyImpl,
+    baseSha,
+    // A check-only build is a throwaway for the self-check: no fix-up worker.
+    fixIo: { execImpl, verifyImpl, fixup: checkOnly ? null : deps.fixup, stopped: stopCheck(deps.stopped) },
+  };
   const dependsOf = new Map(packages.map((p) => [p.id, Array.isArray(p.dependsOn) ? p.dependsOn : []]));
   const skippedIds = new Set();
-  const skip = (id, stage, detail, files) => {
+  const skip = (id, res) => {
     skippedIds.add(id);
-    skipped.push({ id, stage, detail: String(detail || '').slice(0, 300), files: (files || []).slice(0, 10) });
+    skipped.push(skipEntry(id, res));
   };
   for (const pkg of packages) {
     const blocker = skippedDependency(pkg, dependsOf, skippedIds);
     if (blocker) {
-      skip(pkg.id, 'depSkipped', blocker, []);
+      skip(pkg.id, { stage: 'depSkipped', detail: blocker });
       continue;
     }
     const pre = await runGit(wt.root, ['rev-parse', 'HEAD'], execImpl);
     const preSha = pre.ok ? firstLine(pre.stdout) : '';
-    const res = await mergeAndVerify(wt, pkg, deps, verifyImpl);
+    const res = await mergeAndVerify(ctx, pkg);
     if (res.ok) {
       merged.push(pkg.id);
+      if (res.fixedUp) fixedUp.push(pkg.id);
       continue;
     }
-    skip(pkg.id, res.stage, res.detail, res.files);
+    skip(pkg.id, res);
     // Back to the tree before this package; without that nothing later may
     // be merged or pushed - the bad package could ride along.
     const reset = preSha ? await runGit(wt.root, ['reset', '--hard', preSha], execImpl) : { ok: false, stderr: 'no HEAD' };
@@ -522,6 +574,7 @@ module.exports = {
   runResolver,
   resolverPrompt,
   integrateMerge,
+  runDeps,
   clearStaleIntegration,
   mergeOne,
   RESOLVER_TOOLS,

@@ -696,6 +696,8 @@ function normalizeIntegration(raw) {
     // Packages a merge-mode integration left out (orchestraIntegrate.js).
     skipped: (Array.isArray(o.skipped) ? o.skipped : []).map(normalizeSkipped).filter(Boolean).slice(0, MAX_SKIPPED),
     partial: o.partial === true,
+    // Merged only thanks to the merge fix-up worker (orchestraMergeFixup.js).
+    fixedUp: idList(o.fixedUp),
     // End-of-run self-check (orchestraSelfCheck.js), null until one ran.
     selfCheck: normalizeSelfCheck(o.selfCheck),
     manualActions: (Array.isArray(o.manualActions) ? o.manualActions : [])
@@ -707,6 +709,9 @@ function normalizeIntegration(raw) {
 
 const MAX_SKIPPED = 50;
 const MAX_MANUAL_ACTIONS = 40;
+// The self-check's own fix-up plus the merge's (one per package and pass).
+const MAX_FIXUPS = 50;
+const idList = (v) => (Array.isArray(v) ? v.filter((id) => typeof id === 'string' && SLUG_RE.test(id)).slice(0, MAX_SKIPPED) : []);
 const MAX_SELFCHECK_TAIL = 4000;
 const CHECK_STATES = new Set(['ok', 'failed', 'skipped']);
 const MANUAL_KINDS = new Set(['migration', 'edgeFunction', 'env', 'note']);
@@ -721,7 +726,7 @@ function normalizeSelfCheck(raw) {
     tests: state(raw.tests),
     syntax: state(raw.syntax),
     smoke: state(raw.smoke),
-    fixups: Number.isFinite(raw.fixups) ? Math.max(0, Math.min(1, Math.round(raw.fixups))) : 0,
+    fixups: Number.isFinite(raw.fixups) ? Math.max(0, Math.min(MAX_FIXUPS, Math.round(raw.fixups))) : 0,
     tail: str(raw.tail, MAX_SELFCHECK_TAIL),
     pushedIntegrationBranch: typeof branch === 'string' && INTEGRATION_BRANCH_RE.test(branch) ? branch : null,
   };
@@ -736,12 +741,14 @@ function normalizeManualAction(raw) {
 
 function normalizeSkipped(raw) {
   if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !SLUG_RE.test(raw.id)) return null;
-  return {
+  const entry = {
     id: raw.id,
     stage: str(raw.stage, 32),
     detail: str(raw.detail, MAX_DETAIL_CHARS),
     files: (Array.isArray(raw.files) ? raw.files : []).filter(isRelPath).slice(0, MAX_DEP_MERGE_ITEMS),
   };
+  // A merge fix-up was tried and the tests stayed red (orchestraMergeFixup.js).
+  return raw.fixup === 'failed' ? { ...entry, fixup: 'failed' } : entry;
 }
 
 /**

@@ -129,7 +129,13 @@ function skippedLine(s, view) {
   const stage = oneLine(s.stage, 32) || 'merge';
   return `${label({ id: s.id, title: pkg.title })} - skipped at ${stage}${why ? ` (${why})` : ''}${
     files ? `; files: ${files}` : ''
-  }. Next step: ${NEXT_STEP}.`;
+  }${s.fixup === 'failed' ? '; a fix-up worker tried and the tests stayed red' : ''}. Next step: ${NEXT_STEP}.`;
+}
+
+/** What the integration did for a package beyond a plain merge, for the Notes column. */
+function integrationNotes(p, integ) {
+  const has = (key) => list(integ[key]).includes(p.id);
+  return [has('fixedUp') ? 'fixed by fix-up after the merge' : ''].filter(Boolean);
 }
 
 function selfCheckLine(sc, view) {
@@ -236,6 +242,7 @@ function problems(view) {
       ...diagnoseSkip(s.stage, s.detail),
       evidence: [
         skipDetail(s),
+        s.fixup === 'failed' ? 'Fix-up: one fix-up worker tried after the merge; the tests stayed red, so it was taken out' : '',
         files.length ? `Files: ${files.join(', ')}` : '',
         pkg.branch ? `Branch: ${code(pkg.branch, 120)}` : '',
       ].filter(Boolean),
@@ -316,10 +323,12 @@ function mergedSection(view) {
     '|---|---|---|---|---|---|',
   ];
   const merge = view.integrationMode === 'merge';
+  const integ = isObject(view.integration) ? view.integration : {};
   for (const p of list(view.packages).filter(isObject)) {
     const mergedText = merge && p.state === 'pushed' ? `merged: ${p.merged ? 'yes' : 'no'}` : p.merged ? 'merged' : '';
     const notes = [
       oneLine(reasonOf(p), MAX_ITEM_CHARS),
+      ...integrationNotes(p, integ),
       p.depMerge && p.depMerge.strategy === 'worker' ? 'dependencies merged by the worker' : '',
       p.escalated ? 'escalated to Opus' : '',
       p.cleaned ? 'worktree removed' : '',
@@ -513,6 +522,7 @@ function wrongHtml(view) {
 
 function packageTable(view, packages, now) {
   const merge = view.integrationMode === 'merge';
+  const integ = isObject(view.integration) ? view.integration : {};
   const rows = packages.map((p) => {
     const ms = packageMs(p, now);
     // Only an https link becomes an href (the plan shape-checks it already).
@@ -525,7 +535,7 @@ function packageTable(view, packages, now) {
       h.escapeHtml(sha7(p.headSha) || '-'),
       h.escapeHtml(ms === null ? '-' : duration(ms)),
       pr || h.escapeHtml(mergedText || '-'),
-      h.escapeHtml(oneLine(reasonOf(p), MAX_ITEM_CHARS)),
+      h.escapeHtml([oneLine(reasonOf(p), MAX_ITEM_CHARS), ...integrationNotes(p, integ)].filter(Boolean).join('; ')),
     ];
   });
   return h.section('Packages', h.table(['Package', 'State', 'Branch', 'Commit', 'Time', 'PR / merge', 'Notes'], rows, 'No packages'));

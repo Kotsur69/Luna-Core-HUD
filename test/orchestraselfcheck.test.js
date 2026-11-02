@@ -399,7 +399,8 @@ test('normalizeStoredPlan: selfCheck and manualActions validated and capped; leg
     },
   });
   const s = stored.integration.selfCheck;
-  assert.deepEqual([s.tests, s.syntax, s.smoke, s.fixups], ['failed', 'skipped', 'ok', 1]);
+  // Capped: the self-check's own fix-up plus the merge's (orchestraMergeRun.js).
+  assert.deepEqual([s.tests, s.syntax, s.smoke, s.fixups], ['failed', 'skipped', 'ok', 50]);
   assert.ok(s.tail.length <= 4000);
   assert.equal(s.pushedIntegrationBranch, 'luna/p1-integration');
   const m = stored.integration.manualActions;
