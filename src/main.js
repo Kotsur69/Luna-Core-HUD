@@ -2971,6 +2971,8 @@ function registerIpc() {
   // other PCs through the cloud, like the to-dos.
   cloud = startCloud({ machine: machineName(os.hostname()) });
   registerCloudIpc({ ipcMain, cloud });
+  // Settings -> Host mode: host mode inside this HUD, no restart (src/hostswitch.js).
+  require('./hostmodeipc').registerHostModeIpc({ ipcMain, control: require('./hostmain').hostControl() });
   registerLunasworkIpc({
     ipcMain,
     projects: () => projects,
@@ -2978,8 +2980,6 @@ function registerIpc() {
     briefDir: () => path.join(userDir(), BRIEF_DIR),
     controller: lunaswork,
     queue: lunasworkQueue,
-  // Settings -> Host mode: host mode inside this HUD, no restart (src/hostswitch.js).
-  require('./hostmodeipc').registerHostModeIpc({ ipcMain, control: require('./hostmain').hostControl() });
     queueChanged: () => lunasworkPublish && lunasworkPublish(),
     // B16: the commands a queued run will use, as start() computes them.
     checkCommandFor: (profile) => lunasworkCheckCommandFor(profile, readUiPrefs().orchestraCheckCommand),
