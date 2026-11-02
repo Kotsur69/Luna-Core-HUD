@@ -43,6 +43,10 @@ config/lmstudio-empty-mcp.json
 # God Mode worker briefs (src/orchestra.js), written per launch.
 config/tasks/
 
+# Runtime output: God Mode run snapshot and weekly HTML reports, per machine.
+config/runs/
+config/weekly/
+
 # Python bytecode (helpers/agent-reach, the vendored News fetcher).
 __pycache__/
 
