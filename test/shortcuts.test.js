@@ -22,6 +22,7 @@ const path = require('path');
 
 const {
   SHORTCUT_GROUPS,
+  FEATURED_SHORTCUT,
   flattenShortcuts,
 } = require('../src/renderer/modules/shortcuts.js');
 
@@ -38,7 +39,13 @@ const I18N_EN = I18N_SRC.slice(EN_AT);
 /** Every i18n key the table references (group titles, row descriptions, and
  *  any localized `{ t }` token), plus the section's own static keys. */
 function referencedI18nKeys() {
-  const keys = new Set(['shortcuts.title', 'shortcuts.macNote']);
+  const keys = new Set([
+    'shortcuts.title',
+    'shortcuts.macNote',
+    'shortcuts.featured.title',
+    FEATURED_SHORTCUT.descKey,
+    FEATURED_SHORTCUT.hintKey,
+  ]);
   for (const group of SHORTCUT_GROUPS) {
     keys.add(group.titleKey);
     for (const row of group.rows) {
@@ -82,6 +89,15 @@ test('every row is well formed', () => {
     assert.equal(typeof row.source.file, 'string');
     assert.ok(row.source.marker.length > 0);
   }
+});
+
+test('the God Mode kill switch is featured first (Mati, 2026-11-02)', () => {
+  assert.deepEqual(FEATURED_SHORTCUT.chords, [['Ctrl', 'Shift', 'K']]);
+  assert.equal(FEATURED_SHORTCUT.descKey, 'shortcuts.killGodMode');
+  assert.match(FEATURED_SHORTCUT.hintKey, /^shortcuts\./);
+  // First in the flattened list, so the drift guard and the row checks
+  // below cover it like any other row.
+  assert.equal(flattenShortcuts()[0], FEATURED_SHORTCUT);
 });
 
 test('row descriptions are unique', () => {

@@ -219,9 +219,22 @@ export const SHORTCUT_GROUPS = [
   },
 ];
 
-/** Every row across every group, flattened - for the drift-guard test. */
+/**
+ * The one chord Mati must never have to look up: the God Mode kill switch.
+ * Rendered above every group as a bigger, highlighted row (Mati, 2026-11-02).
+ * main.js only claims the chord while a run has workers; otherwise it reaches
+ * the terminal as before - `hintKey` says so.
+ */
+export const FEATURED_SHORTCUT = {
+  chords: [['Ctrl', 'Shift', 'K']],
+  descKey: 'shortcuts.killGodMode',
+  hintKey: 'shortcuts.killGodMode.hint',
+  source: { file: 'src/main.js', marker: "input.code === 'KeyK' && orchestra.isRunning()" },
+};
+
+/** Every row (the featured one first, then every group's), flattened - for the drift-guard test. */
 export function flattenShortcuts() {
-  return SHORTCUT_GROUPS.flatMap((g) => g.rows);
+  return [FEATURED_SHORTCUT, ...SHORTCUT_GROUPS.flatMap((g) => g.rows)];
 }
 
 /** One <kbd>, its text either a literal token or a localized `{ t }` token. */
@@ -255,9 +268,36 @@ function chordCell(chords) {
   return cell;
 }
 
+/** The featured row: same chord cell, bigger and tinted, with a one-line hint. */
+function featuredSection() {
+  const section = document.createElement('div');
+  section.className = 'shortcuts__group shortcuts__featured';
+
+  const title = document.createElement('div');
+  title.className = 'shortcuts__grouptitle';
+  title.textContent = t('shortcuts.featured.title');
+
+  const line = document.createElement('div');
+  line.className = 'shortcuts__row shortcuts__featured-row';
+  const text = document.createElement('span');
+  text.className = 'shortcuts__desc';
+  const desc = document.createElement('strong');
+  desc.className = 'shortcuts__featured-desc';
+  desc.textContent = t(FEATURED_SHORTCUT.descKey);
+  const hint = document.createElement('span');
+  hint.className = 'shortcuts__featured-hint';
+  hint.textContent = t(FEATURED_SHORTCUT.hintKey);
+  text.append(desc, hint);
+  line.append(chordCell(FEATURED_SHORTCUT.chords), text);
+
+  section.append(title, line);
+  return section;
+}
+
 /** Builds the whole list into `container` (cleared first). */
 function render(container) {
   container.textContent = '';
+  container.appendChild(featuredSection());
 
   for (const group of SHORTCUT_GROUPS) {
     const section = document.createElement('div');

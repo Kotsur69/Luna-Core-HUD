@@ -3323,6 +3323,36 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   color: var(--text-dim);
 }
 
+/* The featured row (shortcuts.js FEATURED_SHORTCUT): the God Mode kill switch,
+   above every group, bigger and tinted so it is the one chord Mati remembers.
+   Tinted panel + full border, not a side stripe. */
+.shortcuts__featured {
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--bad);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+}
+.shortcuts__featured .shortcuts__grouptitle { color: var(--bad); }
+.shortcuts__featured-row { align-items: center; }
+.shortcuts__featured-row .shortcuts__keys kbd {
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  border-color: var(--bad);
+}
+.shortcuts__featured-row .shortcuts__plus { font-size: var(--fs-sm); }
+.shortcuts__featured-desc {
+  display: block;
+  font-size: var(--fs-base);
+  color: var(--text);
+}
+.shortcuts__featured-hint {
+  display: block;
+  margin-top: var(--space-hair);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
 /* ---- Recommended libraries & tools (Ctrl+B) --------------------------------
    Reuses .palette's overlay/backdrop/modal/bar/foot rules directly, same
    pairing as .gitquick and .shortcuts-overlay above. Only the wider modal, the
