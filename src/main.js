@@ -939,6 +939,8 @@ const intakeServer = new IntakeServer({
         if (ok && todoSync) todoSync.soon();
         return ok;
       },
+      // God Mode workers must never tick cards; only the user's own tabs may.
+      canMarkDone: !orchestra.ownsSession(sessionId),
     };
   },
 });

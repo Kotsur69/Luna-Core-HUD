@@ -11,6 +11,7 @@ const http = require('http');
 const {
   applyAdd,
   applyUpdate,
+  applyDone,
   listView,
   freshAts,
   handleRpc,
@@ -247,7 +248,7 @@ test('IntakeServer enforces token, host, origin and method; serves tools', async
 
     const listed = await post(port, { headers: auth, body: listMsg });
     assert.equal(listed.status, 200);
-    assert.deepEqual(listed.json.result.tools.map((t) => t.name), ['luna_todo_add', 'luna_todo_list', 'luna_todo_update']);
+    assert.deepEqual(listed.json.result.tools.map((t) => t.name), ['luna_todo_add', 'luna_todo_list', 'luna_todo_update', 'luna_todo_done']);
 
     const note = await post(port, { headers: auth, body: { jsonrpc: '2.0', method: 'notifications/initialized' } });
     assert.equal(note.status, 202);
@@ -304,6 +305,46 @@ test('luna_todo_list filters by tag (open only unless includeDone)', () => {
   assert.deepEqual(listView(list, true, 'STEER').map((x) => x.text), ['steer open', 'steer done']);
   assert.deepEqual(listView(list, false, '').map((x) => x.text), ['steer open', 'run card', 'plain']);
   assert.deepEqual(callList(memoryStore(list), { tag: 'run:r1' }).map((x) => x.at), [3]);
+});
+
+// ---- luna_todo_done ----------------------------------------------------------------
+
+test('applyDone ticks with doneAt, reopens without it, never mutates', () => {
+  const list = [{ text: 'a', done: false, at: 1 }, { text: 'b', done: false, at: 2 }];
+  const ticked = applyDone(list, 1, undefined, NOW);
+  assert.equal(ticked.ok, true);
+  assert.deepEqual(ticked.card, { text: 'a', done: true, at: 1, doneAt: NOW });
+  assert.equal(list[0].done, false);
+  assert.equal(ticked.list[1], list[1]);
+  const reopened = applyDone(ticked.list, 1, false, NOW + 1);
+  assert.deepEqual(reopened.card, { text: 'a', done: false, at: 1 });
+});
+
+test('applyDone rejects bad input', () => {
+  const list = [{ text: 'a', done: false, at: 1 }];
+  assert.equal(applyDone(list, '1', true, NOW).ok, false);
+  assert.equal(applyDone(list, 1, 'yes', NOW).ok, false);
+  assert.match(applyDone(list, 9, true, NOW).error, /no card/);
+});
+
+test('luna_todo_done needs canMarkDone (God Mode workers are refused)', () => {
+  const call = (store, args) =>
+    handleRpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'luna_todo_done', arguments: args } }, store).result;
+  const worker = memoryStore([{ text: 'a', done: false, at: 1 }]);
+  const refused = call(worker, { at: 1 });
+  assert.equal(refused.isError, true);
+  assert.equal(worker.list[0].done, false);
+
+  const own = { ...memoryStore([{ text: 'a', done: false, at: 1 }]), canMarkDone: true };
+  let saved = null;
+  own.write = (next) => {
+    saved = next;
+    return true;
+  };
+  const ok = call(own, { at: 1 });
+  assert.equal(ok.isError, undefined);
+  assert.equal(JSON.parse(ok.content[0].text).ticked.done, true);
+  assert.equal(saved[0].doneAt, NOW);
 });
 
 test('tool schemas advertise tags and the list tag filter', () => {

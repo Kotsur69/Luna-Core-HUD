@@ -126,7 +126,7 @@ const TOOLS = [
     name: 'luna_todo_update',
     description:
       'Refine one existing card, identified by its `at` id from luna_todo_list. ' +
-      'Only the fields given change; null removes a field. Cannot mark a card done.',
+      'Only the fields given change; null removes a field. Cannot mark a card done (use luna_todo_done).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -146,6 +146,21 @@ const TOOLS = [
         },
       },
       required: ['at', 'patch'],
+    },
+  },
+  {
+    name: 'luna_todo_done',
+    description:
+      'Tick (or untick) one card, identified by its `at` id from luna_todo_list. ' +
+      'Only when the user explicitly asks you to mark that card done or reopen it. ' +
+      'Refused in God Mode worker tabs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        at: { type: 'number', description: 'The card id (`at`) from luna_todo_list.' },
+        done: { type: 'boolean', description: 'true = mark done (default), false = reopen.' },
+      },
+      required: ['at'],
     },
   },
 ];
@@ -250,6 +265,21 @@ function applyUpdate(list, at, patch) {
 }
 
 /**
+ * luna_todo_done on a list: same shape as the widget's checkbox (closing
+ * stamps doneAt, reopening drops it). Never mutates `list`.
+ * @returns {{ok:true, list:Array, card:object}|{ok:false, error:string}}
+ */
+function applyDone(list, at, done, now) {
+  if (typeof at !== 'number' || !Number.isFinite(at)) return { ok: false, error: 'at must be a number' };
+  if (done !== undefined && typeof done !== 'boolean') return { ok: false, error: 'done must be a boolean' };
+  const index = list.findIndex((item) => item.at === at);
+  if (index < 0) return { ok: false, error: `no card with at=${at}` };
+  const { doneAt: _doneAt, ...rest } = list[index];
+  const card = done === false ? { ...rest, done: false } : { ...rest, done: true, doneAt: now };
+  return { ok: true, list: list.map((item, i) => (i === index ? card : item)), card };
+}
+
+/**
  * luna_todo_list's view: open cards only unless asked otherwise, and only
  * the ones carrying `tag` when one is given (matched case-insensitively,
  * like tags are stored).
@@ -280,7 +310,9 @@ function toolText(payload, isError = false) {
  * Runs one tool against a project's store.
  * @param {string} name
  * @param {object} args
- * @param {{read:() => Array, write:(list:Array) => boolean, now?:() => number}} store
+ * @param {{read:() => Array, write:(list:Array) => boolean, now?:() => number,
+ *   canMarkDone?:boolean}} store canMarkDone must be true for luna_todo_done
+ *   (main sets it false for God Mode worker tabs, which must not tick cards)
  */
 function callTool(name, args, store) {
   const a = args && typeof args === 'object' ? args : {};
@@ -291,12 +323,16 @@ function callTool(name, args, store) {
     outcome = applyAdd(normalizeTodos(store.read()), a.tasks, store.now ? store.now() : Date.now());
   } else if (name === 'luna_todo_update') {
     outcome = applyUpdate(normalizeTodos(store.read()), a.at, a.patch);
+  } else if (name === 'luna_todo_done') {
+    if (store.canMarkDone !== true) return toolText('ticking cards is not allowed in this tab', true);
+    outcome = applyDone(normalizeTodos(store.read()), a.at, a.done, store.now ? store.now() : Date.now());
   } else {
     return null; // unknown tool - the caller answers with a protocol error
   }
   if (!outcome.ok) return toolText(outcome.error, true);
   if (!store.write(outcome.list)) return toolText('could not save the to-do list', true);
-  return toolText(name === 'luna_todo_add' ? { added: outcome.added } : { updated: outcome.card });
+  if (name === 'luna_todo_add') return toolText({ added: outcome.added });
+  return toolText(name === 'luna_todo_done' ? { ticked: outcome.card } : { updated: outcome.card });
 }
 
 /**
@@ -552,6 +588,7 @@ module.exports = {
   freshAts,
   applyAdd,
   applyUpdate,
+  applyDone,
   listView,
   callTool,
   handleRpc,
