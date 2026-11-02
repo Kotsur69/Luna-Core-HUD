@@ -22,8 +22,11 @@ free-model fallback chains + the "Free providers" God Mode mode
   only when its fingerprint changes (`src/lunasyncfingerprint.js`,
   `<overlay>.fingerprint.json`). "Not installed" = no desktop install folder
   found - a stopped Docker gateway also reads as not installed.
+- **Built + live-checked 2026-11-02:** project `.mcp.json` servers in
+  Codex/Gemini Luna tabs for that project only; claude.ai connectors named as
+  skipped with a reason - see "Project MCP servers + claude.ai connectors".
 - **Not planned:** hooks and `ecc:` agents for Codex/Gemini (no equivalent);
-  claude.ai connectors (Anthropic-hosted).
+  carrying claude.ai connectors (their auth is the claude.ai login).
 
 ## How to use it (agreed with Mati, 2026-10-20)
 
@@ -60,7 +63,7 @@ the gateway rotates models as daily caps run out.
 | Providers | FreeLLMAPI gateway (one connection, all 3 CLIs) + direct templates. |
 | Switch | Per profile, **default off**. Off = tab behaves exactly like today. |
 | Skills | The 9 personal `~/.claude/skills` always + plugin skills the user ticks in a Settings list (latest version of each, deduped). ~3.2k plugin SKILL.md files exist, so "everything" is not an option. |
-| MCP | `~/.claude.json` user servers + local (stdio) servers from enabled plugins. claude.ai connectors are Anthropic-hosted and cannot be carried over. |
+| MCP | `~/.claude.json` user servers + servers from enabled plugins; since 2026-11-02 also the open project's approved `.mcp.json` / local-scope servers, per tab. claude.ai connectors are Anthropic-hosted and cannot be carried over - each is reported as skipped. |
 | Instructions | Global `~/.claude/CLAUDE.md` + rules **and** the project's `CLAUDE.md`. |
 
 ## Verified live (2026-10-20, this machine)
@@ -185,7 +188,8 @@ CLIs; Codex prompt contains "User = **Mati**", "assistant = **Luna**".
 `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` hash-identical.
 Only 3 MCP servers come from `~/.claude.json` + enabled plugins' `.mcp.json`;
 servers Mati sees in Claude from elsewhere (project `.mcp.json`, claude.ai
-connectors) are not carried over yet - revisit in S3 if wanted.
+connectors) were not carried over then - done 2026-11-02, see "Project MCP
+servers + claude.ai connectors" below.
 Note: FreeLLMAPI's desktop app listens on **31415**, not the docs' 3001.
 
 #### S2 review follow-up (2026-10-20)
@@ -218,6 +222,94 @@ names; SSE / `${VAR}` servers reported as skipped for Codex.
 - Security review (IPC payload, overlay paths, args from templates only).
 
 ### S4 — Docs, i18n (pl/en), tests, review
+
+## Project MCP servers + claude.ai connectors (2026-11-02): built, live-checked
+
+`src/lunasyncproject.js` (+ builders in `src/lunasync.js`), wired in
+`lunaLaunchFor()` with the tab's cwd.
+
+**Which servers.** What Claude Code itself loads for the tab's folder: every
+`.mcp.json` from the folder up to the drive root (nearer wins - Claude does
+this too, e.g. Luna-Core-HUD picks up `repos/.mcp.json`), **approved only**
+(`enableAllProjectMcpServers` / `enabledMcpjsonServers` minus
+`disabledMcpjsonServers`, from `~/.claude/settings.json`,
+`<dir>/.claude/settings{,.local}.json` and `~/.claude.json` `projects[<dir>]`),
+plus Claude's local-scope servers (`~/.claude.json` `projects[<dir>].mcpServers`).
+A server Claude never approved is not started in another CLI either
+(`not-approved` / `disabled-in-claude`). **Trust gate:** `.mcp.json` servers
+(and the repo's own `.claude/` approvals) count only once Claude's workspace
+trust dialog was accepted for the folder or a parent
+(`projects[<dir>].hasTrustDialogAccepted`) - otherwise `folder-not-trusted`,
+so a cloned repo cannot approve its own servers (review finding, fixed).
+A revoked/removed server, or a gateway tab with the switch off, clears that
+folder's layer.
+
+**Scoped per project, outside the shared overlay.** The shared overlay and its
+fingerprint/copy-skip are unchanged (a project switch never rebuilds it or
+re-copies skills); a small per-project layer sits next to it, rewritten only
+when its content changes:
+- Codex: `<overlay>/luna<hash>.config.toml` + `--profile luna<hash>` appended
+  to the tab's command. Codex 0.146 layers `<CODEX_HOME>/<name>.config.toml`
+  over `config.toml`, `mcp_servers` merged by name with the profile winning
+  (same precedence as Claude: project over user). Skipped with a reason when
+  the tab's own args already pass `-p/--profile` or the overlay `config.toml`
+  holds a legacy `profile =` / `[profiles.x]` (Codex then refuses `--profile`).
+- Gemini: an extension `<overlay>/.gemini/extensions/luna<hash>/` that
+  `extension-enablement.json` turns on for that folder only
+  (`["!/*", "/C:/path/", "/c:/path/"]` - Gemini matches case-sensitively).
+  Gemini's own entries in that file are kept; an unparsable one is never
+  overwritten. A same-named server in the overlay `settings.json` wins in
+  Gemini, so it is reported as `name-taken`. First try was a
+  `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` layer - **Gemini 0.60 refuses it** unless
+  its folder is admin/SYSTEM-owned ("Security Warning: Skipping system defaults
+  file").
+
+**Secrets.** Nothing is resolved by LunaCore. Gemini expands `${VAR}` itself
+(settings and extension configs), so placeholders are copied as-is. Codex has
+no expansion, but reads env vars by name: `KEY: "${KEY}"` -> `env_vars`,
+`Authorization: Bearer ${T}` -> `bearer_token_env_var`, a header that is
+exactly `${T}` -> `env_http_headers`; the value stays in the tab's env, never
+in a file or on the command line. Any other `${...}` (in args, inside a JSON
+string, a renamed var, `${X:-default}`) is skipped as `env-placeholder`, as
+before. This also applies to user-level servers. Literal values are copied
+exactly as before (overlay in the user-only `%APPDATA%`).
+
+**claude.ai connectors.** Claude keeps only their names locally
+(`~/.claude.json` `claudeAiMcpEverConnected`) and reaches them through
+Anthropic with the claude.ai login - even the "Claude Docs" connector URL
+(`api.anthropic.com/v1/pages/mcp`) answers 401 without it. That login is never
+handed to another CLI, so both Codex and Gemini support remote MCP but every
+connector is reported as skipped: `connector-auth`.
+
+**Tab notice.** A second line names every skip with its reason (pl/en), e.g.
+`Skipped: claude.ai Gmail, ... (claude.ai connector - its login stays with
+Claude); notion, supabase (${VAR} this CLI cannot fill).` The first line adds
+`project: N (names)`.
+
+**Live check (this PC, Luna-Core-HUD, real `~/.claude`, the real
+`lunaLaunchFor` into a scratch overlay under `%APPDATA%\LunaCore-smoke-check`):**
+- Codex 0.146 with the returned env + `--profile`: `claude-flow` and
+  `context7` started (their stdio banners in the log), `github` loaded and
+  asked for `GITHUB_PERSONAL_ACCESS_TOKEN` (not set on this PC - Claude warns
+  about the same). Same home **without** `--profile`: none of them start.
+  `notion` / `supabase` skipped (`${VAR}` inside a JSON env value / an arg).
+- Gemini 0.60: extension `✓ Enabled (Workspace)` in the project, `✗` in the
+  parent `repos` folder; `gemini mcp list` in the project: `claude-flow`,
+  `playwright`, `context7`, `notion`, `supabase` **Connected** (from the
+  extension), `github` disconnected (same missing token). A marker-file probe
+  server started in the project and not in the parent.
+- On disk: only `${...}` placeholders, no token value (grep for the token
+  prefix: 0 hits). Note `gemini mcp list` itself prints the EXPANDED args,
+  i.e. the supabase token, like Claude's own `claude mcp list`.
+- 6 connectors reported as skipped (`connector-auth`) in both CLIs.
+- Not clicked through in the running app (no Luna Codex/Gemini tab exists on
+  this PC); the first real tab still needs the one-time login + folder trust.
+- `npm test`: 4211 pass. `ecc:typescript-reviewer`: 2 HIGH (repo self-approval,
+  stale Gemini layer on revoke) fixed; open LOWs: Gemini prefers the user-level
+  server on a name clash where Codex/Claude prefer the project's (reported as
+  `name-taken`); per-project layers are never pruned (one small file/folder per
+  project ever opened); a Gemini rule matches the cwd spelling of the last tab
+  that spawned there.
 
 ## Out of scope
 

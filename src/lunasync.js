@@ -219,23 +219,99 @@ function tomlArray(items) {
   return `[${items.map(tomlString).join(', ')}]`;
 }
 
-/** One neutral server -> a Codex inline table, or null (no SSE in Codex). */
-function toCodexServer(server) {
-  if (server.kind === 'stdio') {
-    const env = Object.keys(server.env).length ? `, env = ${tomlInlineTable(server.env)}` : '';
-    return `{ command = ${tomlString(server.command)}, args = ${tomlArray(server.args)}${env} }`;
+/** A value that is exactly one `${NAME}` placeholder (no default, nothing around it). */
+const WHOLE_PLACEHOLDER_RE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const BEARER_PLACEHOLDER_RE = /^Bearer \$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+
+const hasPlaceholder = (v) => typeof v === 'string' && v.includes('${');
+
+/**
+ * Splits a map into literal entries and the ones Codex can read from the tab's
+ * own environment instead. Codex has no `${VAR}` expansion, but it can pass a
+ * named env var through (`env_vars`, `env_http_headers`, `bearer_token_env_var`),
+ * so a secret the source keeps as a placeholder never lands in config.toml.
+ */
+function splitPlaceholders(map, match) {
+  const literal = {};
+  const fromEnv = {};
+  let unsupported = false;
+  for (const [key, value] of Object.entries(map)) {
+    const name = match(key, value);
+    if (name) fromEnv[key] = name;
+    else if (hasPlaceholder(value)) unsupported = true;
+    else literal[key] = value;
   }
-  if (server.kind === 'http') {
-    const headers = Object.keys(server.headers).length ? `, http_headers = ${tomlInlineTable(server.headers)}` : '';
-    return `{ url = ${tomlString(server.url)}${headers} }`;
-  }
-  return null;
+  return { literal, fromEnv, unsupported };
 }
 
-/** True when any string of a server still carries a `${VAR}` placeholder Codex would pass literally. */
-function hasEnvPlaceholder(server) {
-  const values = [server.command, server.url, ...(server.args || []), ...Object.values(server.env || {}), ...Object.values(server.headers || {})];
-  return values.some((v) => typeof v === 'string' && v.includes('${'));
+/** `KEY: "${KEY}"` = pass the tab's own KEY through; a renamed var cannot be expressed in Codex. */
+function passThroughEnvName(key, value) {
+  const m = WHOLE_PLACEHOLDER_RE.exec(value);
+  return m && m[1] === key ? key : null;
+}
+
+function codexStdioEntry(server) {
+  if ([server.command, ...server.args].some(hasPlaceholder)) return { reason: 'env-placeholder' };
+  const env = splitPlaceholders(server.env, passThroughEnvName);
+  if (env.unsupported) return { reason: 'env-placeholder' };
+  const literal = Object.keys(env.literal).length ? `, env = ${tomlInlineTable(env.literal)}` : '';
+  const passed = Object.keys(env.fromEnv);
+  const envVars = passed.length ? `, env_vars = ${tomlArray(passed)}` : '';
+  return { table: `{ command = ${tomlString(server.command)}, args = ${tomlArray(server.args)}${literal}${envVars} }` };
+}
+
+function codexHttpEntry(server) {
+  if (hasPlaceholder(server.url)) return { reason: 'env-placeholder' };
+  let bearer = null;
+  const headers = splitPlaceholders(server.headers, (key, value) => {
+    const auth = key.toLowerCase() === 'authorization' ? BEARER_PLACEHOLDER_RE.exec(value) : null;
+    if (auth) {
+      bearer = auth[1];
+      return auth[1];
+    }
+    const m = WHOLE_PLACEHOLDER_RE.exec(value);
+    return m ? m[1] : null;
+  });
+  if (headers.unsupported) return { reason: 'env-placeholder' };
+  const fromEnv = Object.fromEntries(Object.entries(headers.fromEnv).filter(([key]) => !(bearer && key.toLowerCase() === 'authorization')));
+  const parts = [`url = ${tomlString(server.url)}`];
+  if (bearer) parts.push(`bearer_token_env_var = ${tomlString(bearer)}`);
+  if (Object.keys(headers.literal).length) parts.push(`http_headers = ${tomlInlineTable(headers.literal)}`);
+  if (Object.keys(fromEnv).length) parts.push(`env_http_headers = ${tomlInlineTable(fromEnv)}`);
+  return { table: `{ ${parts.join(', ')} }` };
+}
+
+/**
+ * One neutral server -> `{table}` (a Codex inline table) or `{reason}` when
+ * Codex cannot run it as the source describes it (no SSE; a `${VAR}` Codex
+ * cannot read from the environment by name).
+ */
+function codexServerEntry(server) {
+  if (server.kind === 'stdio') return codexStdioEntry(server);
+  if (server.kind === 'http') return codexHttpEntry(server);
+  return { reason: 'sse-unsupported' };
+}
+
+/**
+ * `mcp_servers.<name> = {...}` lines for the servers Codex can run.
+ * @param {Object<string,Object>} servers normalizeMcpServers() output
+ * @param {Set<string>} [taken] names that must not be written (a table Codex owns)
+ * @returns {{lines:string[], written:string[], skipped:Array<{name:string, reason:string}>}}
+ */
+function codexServerLines(servers, taken = new Set()) {
+  const lines = [];
+  const written = [];
+  const skipped = [];
+  for (const [name, server] of Object.entries(servers)) {
+    const entry = codexServerEntry(server);
+    if (entry.reason) skipped.push({ name, reason: entry.reason });
+    else if (taken.has(name)) skipped.push({ name, reason: 'name-taken' });
+    else {
+      lines.push(`mcp_servers.${tomlKey(name)} = ${entry.table}`);
+      written.push(name);
+    }
+  }
+  return { lines, written, skipped };
 }
 
 /** Escapes a string for use inside a RegExp. */
@@ -280,21 +356,71 @@ function codexConfigMerge(existing, servers, ownedNames) {
   );
   const taken = codexTableServers(kept);
 
-  const ours = [TOML_HEADER, 'project_doc_fallback_filenames = ["CLAUDE.md"]'];
-  const written = [];
-  const skipped = [];
-  for (const [name, server] of Object.entries(servers)) {
-    const table = toCodexServer(server);
-    if (!table) skipped.push({ name, reason: 'sse-unsupported' });
-    else if (hasEnvPlaceholder(server)) skipped.push({ name, reason: 'env-placeholder' });
-    else if (taken.has(name)) skipped.push({ name, reason: 'name-taken' });
-    else {
-      ours.push(`mcp_servers.${tomlKey(name)} = ${table}`);
-      written.push(name);
-    }
-  }
+  const { lines: serverLines, written, skipped } = codexServerLines(servers, taken);
+  const ours = [TOML_HEADER, 'project_doc_fallback_filenames = ["CLAUDE.md"]', ...serverLines];
   const rest = kept.join('\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
   return { text: `${ours.join('\n')}\n${rest ? `\n${rest}\n` : ''}`, written, skipped };
+}
+
+/**
+ * A whole Codex profile file (`<CODEX_HOME>/<name>.config.toml`, layered by
+ * `codex --profile <name>`) holding one project's servers. Codex merges its
+ * `mcp_servers` by name over config.toml's, the profile winning - the same
+ * precedence Claude gives a project server over a user one (verified live,
+ * Codex 0.146). The file is LunaCore's alone, so it is rewritten whole.
+ * @param {Object<string,Object>} servers normalizeMcpServers() output
+ * @returns {{text:string, written:string[], skipped:Array<{name:string, reason:string}>}}
+ */
+function codexProfileText(servers) {
+  const { lines, written, skipped } = codexServerLines(servers);
+  const header = '# lunacore: this whole file is managed by LunaCore Luna sync (project MCP servers) - edits here are overwritten';
+  return { text: `${[header, ...lines].join('\n')}\n`, written, skipped };
+}
+
+/**
+ * A Gemini extension manifest (`gemini-extension.json`) carrying one project's
+ * servers. Gemini expands `${VAR}` in extension configs from the environment
+ * itself, so placeholders are copied as-is and no secret is resolved here.
+ * @param {string} name extension (and folder) name
+ * @param {Object<string,Object>} servers normalizeMcpServers() output
+ * @returns {Object}
+ */
+function geminiProjectExtension(name, servers) {
+  return {
+    name,
+    version: '1.0.0',
+    description: 'Project MCP servers synced by LunaCore from the Claude Code setup - managed, edits are overwritten',
+    mcpServers: Object.fromEntries(Object.entries(servers).map(([n, s]) => [n, toGeminiServer(s)])),
+  };
+}
+
+/** A folder as Gemini's enablement rules spell it: forward slashes, leading and trailing `/` (0.60 loader). */
+function geminiRulePath(dir) {
+  let rule = String(dir).replace(/\\/g, '/');
+  if (!rule.startsWith('/')) rule = `/${rule}`;
+  return rule.endsWith('/') ? rule : `${rule}/`;
+}
+
+/**
+ * Gemini's extension-enablement.json with one extension switched on for one
+ * folder only: `!/*` disables it everywhere, the folder rule (last match wins)
+ * enables it there. Rules are matched case-sensitively, so a Windows drive
+ * letter gets both spellings. Every other entry - Gemini's own - is kept.
+ * @param {Object|null} existing parsed extension-enablement.json
+ * @param {string} name LunaCore's extension
+ * @param {string|null} projectDir null removes LunaCore's entry
+ * @returns {Object}
+ */
+function geminiExtensionEnablement(existing, name, projectDir) {
+  const base = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
+  const { [name]: _previous, ...rest } = base;
+  if (!projectDir) return rest;
+  const rule = geminiRulePath(projectDir);
+  const drive = /^\/([A-Za-z]):/.exec(rule);
+  const spellings = drive
+    ? [...new Set([`/${drive[1].toUpperCase()}${rule.slice(2)}`, `/${drive[1].toLowerCase()}${rule.slice(2)}`])]
+    : [rule];
+  return { ...rest, [name]: { overrides: ['!/*', ...spellings] } };
 }
 
 module.exports = {
@@ -303,6 +429,9 @@ module.exports = {
   normalizeMcpServers,
   geminiSettings,
   codexConfigMerge,
+  codexProfileText,
+  geminiProjectExtension,
+  geminiExtensionEnablement,
   isSafeSkillName,
   stripBom,
   GEMINI_CONTEXT_FILES,

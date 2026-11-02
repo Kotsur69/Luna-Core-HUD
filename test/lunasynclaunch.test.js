@@ -117,3 +117,71 @@ test('a gateway-home template always gets its own home, with the Luna setup only
   assert.deepEqual(calls[1].setup, { full: 1 });
   assert.equal(calls[1].overlayRoot, path.join(base, 'gemini-freellm-gemini'));
 });
+
+// ---- project MCP servers (src/lunasyncproject.js) ---------------------------------
+
+test('lunaLaunchFor layers the project servers on top of the shared overlay result', () => {
+  const calls = [];
+  const base = path.join(os.tmpdir(), 'luna-overlay');
+  const projectDir = path.join(os.tmpdir(), 'some-project');
+  const result = lunaLaunchFor({ ...NO_CLAUDE,
+    profile: { lunaSync: true, args: ['-c', 'x=1'] },
+    template: { id: 'codex-cli', wireVia: 'native', command: 'codex' },
+    overlayBase: base,
+    projectDir,
+    readSetup: () => ({}),
+    sync: (args) => ({ ok: true, env: { CODEX_HOME: args.overlayRoot }, skills: [], servers: ['user1'], skipped: [{ kind: 'connector', name: 'claude.ai Gmail', reason: 'connector-auth' }] }),
+    projectLayer: (args) => (calls.push(args), { args: ['--profile', 'luna0123456789ab'], servers: ['proj1'], skipped: [{ kind: 'mcp', name: 'p2', reason: 'not-approved' }] }),
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].projectDir, projectDir);
+  assert.equal(calls[0].overlayRoot, path.join(base, 'codex'));
+  assert.deepEqual(calls[0].baseServers, ['user1']);
+  assert.deepEqual(calls[0].profileArgs, ['-c', 'x=1']);
+  assert.deepEqual(result.args, ['--profile', 'luna0123456789ab']);
+  assert.deepEqual(result.projectServers, ['proj1']);
+  assert.deepEqual(result.env, { CODEX_HOME: path.join(base, 'codex') });
+  assert.deepEqual(result.skipped.map((s) => s.reason), ['connector-auth', 'not-approved']);
+});
+
+test('lunaLaunchFor only clears the project layer with the switch off, and skips it without a folder or after a failed sync', () => {
+  const calls = [];
+  const base = path.join(os.tmpdir(), 'luna-overlay');
+  const projectLayer = (args) => (calls.push(args), { servers: ['x'], skipped: [] });
+  const gateway = { id: 'freellm-gemini', wireVia: 'native', command: 'gemini', gatewayHome: true };
+  const ok = (args) => ({ ok: true, env: { GEMINI_CLI_HOME: args.overlayRoot }, skills: [], servers: [], skipped: [] });
+  lunaLaunchFor({ ...NO_CLAUDE, profile: { lunaSync: false }, template: gateway, overlayBase: base, projectDir: os.tmpdir(), readSetup: () => ({}), sync: ok, projectLayer });
+  lunaLaunchFor({ ...NO_CLAUDE, profile: { lunaSync: true }, template: NATIVE_GEMINI, overlayBase: base, projectDir: null, readSetup: () => ({}), sync: ok, projectLayer });
+  const failed = lunaLaunchFor({ ...NO_CLAUDE, profile: { lunaSync: true }, template: NATIVE_GEMINI, overlayBase: path.join(base, 'f'), projectDir: os.tmpdir(), readSetup: () => ({}), sync: () => ({ ok: false, reason: 'write-failed' }), projectLayer });
+  // Switch off: only a clear of this folder's layer (a gateway home keeps running on the overlay).
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].clear, true);
+  assert.equal(calls[0].projectDir, os.tmpdir());
+  assert.equal(failed.ok, false);
+});
+
+test('lunaSyncNotice lists project servers and names every skip with its reason', () => {
+  const { lunaSyncNotice } = require('../src/lunasynclaunch');
+  const result = {
+    ok: true,
+    skills: [],
+    servers: ['shadcn'],
+    projectServers: ['github', 'context7'],
+    skipped: [
+      { kind: 'connector', name: 'claude.ai Gmail', reason: 'connector-auth' },
+      { kind: 'connector', name: 'claude.ai Drive\x1b[31m', reason: 'connector-auth' },
+      { kind: 'mcp', name: 'supabase', reason: 'env-placeholder' },
+      { kind: 'mcp', name: 'odd', reason: 'project-write-failed:EPERM' },
+    ],
+  };
+  const en = lunaSyncNotice(result, 'en');
+  const lines = en.split('\r\n').filter(Boolean);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /1 MCP servers \(shadcn\), project: 2 \(github, context7\), 4 skipped/);
+  assert.match(lines[1], /Skipped: claude\.ai Gmail, claude\.ai Drive31m \(claude\.ai connector - its login stays with Claude\); supabase \(\$\{VAR\} this CLI cannot fill\); odd \(could not write the project layer\)/);
+  assert.doesNotMatch(en, /\x1b\[31m/);
+  const pl = lunaSyncNotice(result, 'pl');
+  assert.match(pl, /projekt: 2/);
+  assert.match(pl, /Pominieto: .*logowanie zostaje w Claude/);
+  assert.equal(lunaSyncNotice({ ok: true, skills: [], servers: [], skipped: [] }, 'en').split('\r\n').filter(Boolean).length, 1, 'no skip line when nothing was skipped');
+});

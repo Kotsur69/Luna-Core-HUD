@@ -20,6 +20,9 @@ const {
   normalizeMcpServers,
   geminiSettings,
   codexConfigMerge,
+  codexProfileText,
+  geminiProjectExtension,
+  geminiExtensionEnablement,
   isSafeSkillName,
 } = require('../src/lunasync');
 
@@ -218,4 +221,71 @@ test('geminiSettings pins the auth type when asked, otherwise leaves the stored 
   assert.equal(pinned.security.other, 1);
   const kept = geminiSettings({ security: { auth: { selectedType: 'oauth-personal' } } }, {});
   assert.equal(kept.security.auth.selectedType, 'oauth-personal');
+});
+
+// ---- ${VAR} placeholders -> Codex env pass-through (secrets stay out of the file) ----
+
+test('codexConfigMerge passes a same-named env placeholder through env_vars, never its value', () => {
+  const servers = {
+    gh: { kind: 'stdio', command: 'npx', args: ['gh-mcp'], env: { GITHUB_TOKEN: '${GITHUB_TOKEN}', MODE: 'ro' } },
+    renamed: { kind: 'stdio', command: 'x', args: [], env: { API_KEY: '${OTHER}' } },
+    embedded: { kind: 'stdio', command: 'x', args: [], env: { H: '{"Authorization": "Bearer ${K}"}' } },
+    defaulted: { kind: 'stdio', command: 'x', args: [], env: { K: '${K:-none}' } },
+  };
+  const { text, written, skipped } = codexConfigMerge('', servers, []);
+  assert.ok(text.includes('mcp_servers.gh = { command = "npx", args = ["gh-mcp"], env = { MODE = "ro" }, env_vars = ["GITHUB_TOKEN"] }'), text);
+  assert.deepEqual(written, ['gh']);
+  assert.deepEqual(skipped.map((s) => `${s.name}:${s.reason}`), ['renamed:env-placeholder', 'embedded:env-placeholder', 'defaulted:env-placeholder']);
+});
+
+test('codexConfigMerge turns a Bearer ${VAR} header into bearer_token_env_var and a whole ${VAR} header into env_http_headers', () => {
+  const servers = {
+    github: { kind: 'http', url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}' } },
+    keyed: { kind: 'http', url: 'https://e/mcp', headers: { 'X-Api-Key': '${E_KEY}', 'X-Team': 'core' } },
+    partial: { kind: 'http', url: 'https://e/mcp', headers: { Authorization: 'Token ${T}' } },
+    inurl: { kind: 'http', url: 'https://e/${TENANT}/mcp', headers: {} },
+  };
+  const { text, written, skipped } = codexConfigMerge('', servers, []);
+  assert.ok(text.includes('mcp_servers.github = { url = "https://api.githubcopilot.com/mcp/", bearer_token_env_var = "GITHUB_PERSONAL_ACCESS_TOKEN" }'), text);
+  assert.ok(text.includes('mcp_servers.keyed = { url = "https://e/mcp", http_headers = { X-Team = "core" }, env_http_headers = { X-Api-Key = "E_KEY" } }'), text);
+  assert.deepEqual(written, ['github', 'keyed']);
+  assert.deepEqual(skipped.map((s) => `${s.name}:${s.reason}`), ['partial:env-placeholder', 'inurl:env-placeholder']);
+  assert.ok(!text.includes('${'), 'no placeholder survives into config.toml');
+});
+
+// ---- per-project layers ---------------------------------------------------------
+
+test('codexProfileText is a whole-file profile of top-level server lines with the same skip rules', () => {
+  const { text, written, skipped } = codexProfileText({
+    local: { kind: 'stdio', command: 'node', args: ['s.js'], env: {} },
+    events: { kind: 'sse', url: 'https://e/sse', headers: {} },
+  });
+  assert.match(text, /^# lunacore: this whole file is managed by LunaCore/);
+  assert.ok(text.includes('mcp_servers.local = { command = "node", args = ["s.js"] }'));
+  assert.doesNotMatch(text, /^\[/m, 'no tables');
+  assert.doesNotMatch(text, /project_doc_fallback_filenames/, 'only servers - the base config owns the rest');
+  assert.deepEqual(written, ['local']);
+  assert.deepEqual(skipped, [{ name: 'events', reason: 'sse-unsupported' }]);
+});
+
+test('geminiProjectExtension carries the servers as an extension manifest, placeholders kept for Gemini', () => {
+  const ext = geminiProjectExtension('luna0123456789ab', {
+    tool: { kind: 'stdio', command: 'npx', args: ['t'], env: { T: '${TOKEN}' } },
+    remote: { kind: 'http', url: 'https://e/mcp', headers: { Authorization: 'Bearer ${K}' } },
+  });
+  assert.equal(ext.name, 'luna0123456789ab');
+  assert.equal(ext.version, '1.0.0');
+  assert.deepEqual(ext.mcpServers.tool, { command: 'npx', args: ['t'], env: { T: '${TOKEN}' } });
+  assert.deepEqual(ext.mcpServers.remote, { httpUrl: 'https://e/mcp', headers: { Authorization: 'Bearer ${K}' } });
+});
+
+test('geminiExtensionEnablement turns one extension on for one folder only and keeps Gemini entries', () => {
+  const existing = { theirs: { overrides: ['/D:/work/*'] }, luna0123456789ab: { overrides: ['/old/'] } };
+  const next = geminiExtensionEnablement(existing, 'luna0123456789ab', 'C:\\Users\\x\\repo');
+  assert.deepEqual(next.theirs, { overrides: ['/D:/work/*'] });
+  assert.deepEqual(next.luna0123456789ab, { overrides: ['!/*', '/C:/Users/x/repo/', '/c:/Users/x/repo/'] });
+  assert.deepEqual(existing.luna0123456789ab, { overrides: ['/old/'] }, 'input not mutated');
+  assert.deepEqual(geminiExtensionEnablement(next, 'luna0123456789ab', '/home/x/repo').luna0123456789ab, { overrides: ['!/*', '/home/x/repo/'] });
+  assert.deepEqual(geminiExtensionEnablement(next, 'luna0123456789ab', null), { theirs: { overrides: ['/D:/work/*'] } });
+  assert.deepEqual(geminiExtensionEnablement(null, 'n', null), {});
 });

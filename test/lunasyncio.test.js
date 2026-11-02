@@ -298,3 +298,31 @@ test('syncOverlay with an empty setup writes no Luna instructions but still pins
   const settings = JSON.parse(fs.readFileSync(path.join(overlayRoot, '.gemini', 'settings.json'), 'utf8'));
   assert.equal(settings.security.auth.selectedType, 'gemini-api-key');
 });
+
+// ---- claude.ai connectors --------------------------------------------------------
+
+test('readClaudeSetup lists the claude.ai connectors by name, deduped, junk dropped', () => {
+  const fx = makeFixture();
+  write(fx.claudeJson, JSON.stringify({
+    claudeAiMcpEverConnected: ['claude.ai Gmail', 'claude.ai Gmail', ' claude.ai Google Drive ', '', 42, null],
+  }));
+  const setup = readClaudeSetup({ claudeHome: fx.claudeHome, claudeJson: fx.claudeJson });
+  assert.deepEqual(setup.connectors, ['claude.ai Gmail', 'claude.ai Google Drive']);
+  const none = fs.mkdtempSync(path.join(os.tmpdir(), 'lunasync-noconn-'));
+  assert.deepEqual(readClaudeSetup({ claudeHome: path.join(none, '.claude'), claudeJson: path.join(none, '.claude.json') }).connectors, []);
+});
+
+test('syncOverlay reports every connector as skipped (auth stays with Claude) and writes none of them', () => {
+  const fx = makeFixture();
+  write(fx.claudeJson, JSON.stringify({ mcpServers: { memory: { command: 'mem.exe' } }, claudeAiMcpEverConnected: ['claude.ai Gmail'] }));
+  const setup = readClaudeSetup({ claudeHome: fx.claudeHome, claudeJson: fx.claudeJson });
+  for (const cli of ['codex', 'gemini']) {
+    const overlayRoot = path.join(fx.root, `overlay-conn-${cli}`);
+    const result = syncOverlay({ cli, overlayRoot, setup });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.skipped.filter((s) => s.kind === 'connector'), [{ kind: 'connector', name: 'claude.ai Gmail', reason: 'connector-auth' }]);
+    assert.ok(!result.servers.includes('claude.ai Gmail'));
+    const configFile = cli === 'codex' ? path.join(overlayRoot, 'config.toml') : path.join(overlayRoot, '.gemini', 'settings.json');
+    assert.doesNotMatch(fs.readFileSync(configFile, 'utf8'), /Gmail/);
+  }
+});

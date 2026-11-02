@@ -195,7 +195,25 @@ function readClaudeSetup({ claudeHome = path.join(os.homedir(), '.claude'), clau
     plugins,
     // The user's own servers win a name clash with a plugin's.
     mcpServers: { ...pluginServers, ...normalizeMcpServers(userJson.mcpServers) },
+    connectors: readConnectorNames(userJson),
   };
+}
+
+/** Upper bound on reported connector names - a notice line, not a dump. */
+const MAX_CONNECTORS = 50;
+
+/**
+ * Names of the claude.ai connectors Claude Code has used. They are never
+ * carried over: Claude reaches them through Anthropic with the claude.ai
+ * login (even the docs connector answers 401 without it, checked live
+ * 2026-11-02), and that login is never handed to another CLI. Claude keeps
+ * only their names locally, so the names are all there is to report.
+ * @param {Object} userJson parsed ~/.claude.json
+ * @returns {string[]}
+ */
+function readConnectorNames(userJson) {
+  const list = Array.isArray(userJson.claudeAiMcpEverConnected) ? userJson.claudeAiMcpEverConnected : [];
+  return [...new Set(list.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim().slice(0, 100)))].slice(0, MAX_CONNECTORS);
 }
 
 /**
@@ -419,10 +437,17 @@ function syncOverlay({ cli, overlayRoot, setup, pickedSkillIds = [], homeDir = o
 
     writeAtomic(plan.configFile, plan.configText);
 
-    return { ok: true, env: overlayEnv(cli, overlayRoot), skills: copied, servers: plan.servers, skipped: [...skipped, ...plan.serverSkips] };
+    const connectorSkips = (Array.isArray(setup.connectors) ? setup.connectors : []).map((name) => ({ kind: 'connector', name, reason: 'connector-auth' }));
+    return {
+      ok: true,
+      env: overlayEnv(cli, overlayRoot),
+      skills: copied,
+      servers: plan.servers,
+      skipped: [...skipped, ...plan.serverSkips, ...connectorSkips],
+    };
   } catch (err) {
     return { ok: false, reason: 'write-failed', detail: err && err.code ? err.code : 'unknown' };
   }
 }
 
-module.exports = { readClaudeSetup, listPluginSkills, syncOverlay, overlayEnv };
+module.exports = { readClaudeSetup, listPluginSkills, syncOverlay, overlayEnv, writeAtomic, samePathKey };

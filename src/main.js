@@ -1417,6 +1417,11 @@ function spawnInto(session, profile, launch = null) {
   // LunaCore's overlay home (CODEX_HOME / GEMINI_CLI_HOME) - null for every
   // other tab. A failed sync still starts the tab, on the user's own home,
   // and says so in the terminal below.
+  // The cwd is resolved first: the project's own MCP servers (.mcp.json) are
+  // layered for this tab only (src/lunasyncproject.js).
+  const wantedCwd = session.cwd;
+  const cwd = safeCwd(wantedCwd);
+  const cwdMissing = Boolean(wantedCwd) && cwd === START_CWD && path.normalize(wantedCwd) !== START_CWD;
   const lunaSync = lunaLaunchFor({
     profile,
     // Only template-built profiles can be native; a gateway home (FreeLLMAPI
@@ -1425,6 +1430,8 @@ function spawnInto(session, profile, launch = null) {
     overlayBase: path.join(app.getPath('userData'), 'luna-overlay'),
     pickedSkillIds: loadLunaSyncPrefs().pickedSkills,
     gatewayPort: loadGatewayPrefs().port,
+    // A fallback cwd is not the project the user asked for - no project servers then.
+    projectDir: cwdMissing ? null : cwd,
   });
   const env = withClaudeOnPath(
     buildSessionEnv(
@@ -1449,9 +1456,6 @@ function spawnInto(session, profile, launch = null) {
   session.accountId = env[ACCOUNT_ENV] || null;
   session.ownBackend = usesOwnBackend(env);
 
-  const wantedCwd = session.cwd;
-  const cwd = safeCwd(wantedCwd);
-  const cwdMissing = Boolean(wantedCwd) && cwd === START_CWD && path.normalize(wantedCwd) !== START_CWD;
   session.cwd = cwd;
   session.profileId = profile.id;
   // A restart starts a fresh terminal: the old tail must not leak into the new
@@ -1563,8 +1567,11 @@ function spawnInto(session, profile, launch = null) {
     broadcastSessions();
   });
 
-  // The profile's start command (empty = bare shell, no auto-start).
-  const baseCommand = [profile.command, ...(profile.args || []), ...(launch && profile.command ? launch.extraArgs : [])]
+  // The profile's start command (empty = bare shell, no auto-start). A Luna
+  // Codex tab in a project with its own MCP servers adds `--profile luna<hash>`
+  // (a fixed, shell-safe name from src/lunasyncproject.js - never a secret).
+  const lunaArgs = profile.command && lunaSync && lunaSync.ok && Array.isArray(lunaSync.args) ? lunaSync.args : [];
+  const baseCommand = [profile.command, ...(profile.args || []), ...(launch && profile.command ? launch.extraArgs : []), ...lunaArgs]
     .join(' ')
     .trim();
   // A God Mode worker's first launch carries its brief (slice 3). Consumed
