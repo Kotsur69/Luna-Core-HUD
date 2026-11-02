@@ -12,7 +12,7 @@
 //                  branch is on the remote). Stalled ones stay for inspection.
 //   3. post-merge - only when this pass merged into the base branch: the
 //                  POST_MERGE_STEPS below, in order (update the local base
-//                  checkout, ...). Each result lands in
+//                  checkout, clean up merged branches, ...). Each result lands in
 //                  integration.postMerge[<step>] for the board and report.
 //   4. notes     - unfinished packages leave a note on their to-dos.
 //   5. report    - markdown in <userDir>/runs/<plan>.md + an OS notification,
@@ -67,6 +67,8 @@ const errText = (err) => (err instanceof Error ? err.message : String(err)).slic
 const POST_MERGE_STEPS = Object.freeze([
   // 1. ff the main checkout when it is clean on the base branch (+ npm ci).
   { name: 'localBase', impl: 'updateLocalBase', when: () => true },
+  // 2. remove the integration worktree, delete the merged package branches.
+  { name: 'cleanup', impl: 'cleanupMergedRun', when: () => true },
 ]);
 
 /**
@@ -427,4 +429,4 @@ function createFinalizer(deps) {
   return { finalize, isRunning: () => running };
 }
 
-module.exports = { createFinalizer, postMergeContext, POST_MERGE_STEPS, TAB_CLOSE_SETTLE_MS, EMAIL_NOT_CONNECTED };
+module.exports = { createFinalizer, postMergeContext, slugOf, POST_MERGE_STEPS, TAB_CLOSE_SETTLE_MS, EMAIL_NOT_CONNECTED };

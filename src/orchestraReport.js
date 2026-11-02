@@ -361,6 +361,16 @@ const POST_MERGE_LINES = {
     const moved = sha7(r.from) && sha7(r.to) && r.from !== r.to;
     return [moved ? `- Local ${base} fast-forwarded: ${sha7(r.from)}..${sha7(r.to)}` : `- Local ${base}: already up to date`, ...installLine(r.install)];
   },
+  cleanup: (r) => {
+    const deleted = list(r.deleted).map((b) => code(b, 80));
+    const kept = list(r.kept).filter(isObject).map((k) => `${code(k.branch, 80)} (${oneLine(k.reason, 60)})`);
+    const worktree = r.worktree === 'removed' ? 'integration worktree removed' : r.worktree === 'kept' ? 'integration worktree kept' : 'no integration worktree left';
+    return [
+      `- Cleanup: ${worktree}, ${deleted.length} merged branch${deleted.length === 1 ? '' : 'es'} deleted${r.error ? ` - ${oneLine(r.error)}` : ''}`,
+      ...(deleted.length ? [`  - Deleted: ${deleted.join(', ')}`] : []),
+      ...(kept.length ? [`  - Kept: ${kept.join(', ')}`] : []),
+    ];
+  },
 };
 
 /** What ran after the merge landed: the local base update, cleanup, release. */

@@ -37,7 +37,7 @@ const { validatePlan, estimatePlan, pickTodos, MAX_PARALLEL, MAX_PROMPT_CHARS, P
 const { lastWordsFrom, outputTail } = require('./orchestraDiagnose');
 const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
-const { createFinalizer } = require('./orchestraFinalize');
+const { createFinalizer, postMergeContext, slugOf } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 // A planner limit with another Claude account free: replan after this long.
@@ -1487,6 +1487,17 @@ function createOrchestra(deps) {
     return { ok: true, options: { ...plan.options } };
   }
 
+  /**
+   * The current run as a settled-run ledger entry when its merge landed
+   * (orchestraCleanup.js), else null - the start-up cleanup sweep.
+   */
+  function landedRun() {
+    const integ = plan && plan.integration;
+    if (!integ || plan.integrationMode !== 'merge' || integ.state !== 'done' || !plan.baseBranch) return null;
+    if (!Number.isFinite(integ.at) || !plan.packages.some((p) => p.merged === true)) return null;
+    return { ...postMergeContext(plan, { skipped: integ.skipped }, slugOf(plan)), settledAt: integ.at };
+  }
+
   function discard() {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
@@ -1519,6 +1530,7 @@ function createOrchestra(deps) {
     cancelShutdown: () => powerFlow.cancelShutdown(),
     checkWake: () => powerFlow.checkWake(),
     sweepBranches,
+    landedRun,
     runFixup: (args) => fixup.run(args),
     planWait: () => planWaiter.view(),
     cancelPlanWait: () => planWaiter.cancel(),

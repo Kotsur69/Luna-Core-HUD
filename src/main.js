@@ -1030,8 +1030,13 @@ const lunasworkSecretGate = createSecretGate({
   log: (line) => console.info(line),
 });
 
-// After a merge landed: ff the local base checkout (src/orchestraPostMerge.js).
-const orchestraPostMerge = createPostMergeServices({ appPath: () => app.getAppPath() });
+// After a merge landed: ff the local base checkout, clean up merged branches
+// (src/orchestraPostMerge.js). The start-up sweep only touches registered projects.
+const orchestraPostMerge = createPostMergeServices({
+  appPath: () => app.getAppPath(),
+  isKnownRepo: (repoPath) => projects.some((p) => p.path && path.resolve(p.path) === path.resolve(repoPath)),
+  log: (line) => console.info('[orchestra]', line),
+});
 
 const orchestra = createOrchestra({
   postMerge: orchestraPostMerge.impls,
@@ -3775,6 +3780,8 @@ app.whenReady().then(() => {
   // until Approve/Retry) and start the worker-time watchdog. After the
   // projects load: a restored run must belong to one of them.
   if (!probing) orchestra.restore();
+  // Once per start: settled runs older than a day get the post-merge cleanup again.
+  if (!probing) orchestraPostMerge.sweepAtStart(orchestra.landedRun()).catch((err) => console.error('[orchestra] start-up sweep failed:', err && err.message));
   // Luna's Work decision queue: pending decisions to the phone snapshot,
   // answers back from the `todos` cloud scope. Wired before resume() so a
   // resumed run's decisions are published at once.
