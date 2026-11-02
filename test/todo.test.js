@@ -23,6 +23,7 @@ const {
   removeTodo,
   reorderTodo,
   resolveDrag,
+  sortedIndices,
   edgeScrollSpeed,
   clearDone,
   openCount,
@@ -526,4 +527,23 @@ test('editTodo sets tags from the form and clears them when emptied', () => {
   const list = [{ text: 'a', done: false, at: 1, tags: ['old'] }];
   assert.deepEqual(editTodo(list, 1, { text: 'a', tags: 'steer run:r1' })[0].tags, ['steer', 'run:r1']);
   assert.deepEqual(editTodo(list, 1, { text: 'a', tags: '  ' })[0], { text: 'a', done: false, at: 1 });
+});
+
+// ---- view sort ----------------------------------------------------------------
+
+test('sortedIndices orders the view without touching the list', () => {
+  const list = [
+    { text: 'a', done: false, at: 2 },
+    { text: 'b', done: false, at: 3, manual: true },
+    { text: 'c', done: false, at: 1 },
+    { text: 'd', done: false, at: 4, manual: true },
+  ];
+  assert.deepEqual(sortedIndices(list, 'custom'), [0, 1, 2, 3]);
+  assert.deepEqual(sortedIndices(list, 'newest'), [3, 1, 0, 2]);
+  assert.deepEqual(sortedIndices(list, 'oldest'), [2, 0, 1, 3]);
+  // Ties keep the stored (drag) order inside each group.
+  assert.deepEqual(sortedIndices(list, 'manual'), [1, 3, 0, 2]);
+  assert.deepEqual(sortedIndices(list, 'normal'), [0, 2, 1, 3]);
+  assert.deepEqual(sortedIndices(list, 'bogus'), [0, 1, 2, 3]);
+  assert.deepEqual(sortedIndices(null, 'newest'), []);
 });

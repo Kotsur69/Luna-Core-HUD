@@ -184,6 +184,44 @@ export function resolveDrag(siblings, originalIndex, draggedMid, step) {
   return { shifts, targetIndex };
 }
 
+// View-only sort modes. 'custom' is the stored (drag) order; every other mode
+// just reorders what is painted - `items` itself is never resorted, so
+// switching back to 'custom' restores the hand-made order untouched.
+export const SORT_MODES = ['custom', 'newest', 'oldest', 'manual', 'normal'];
+const SORT_KEY = 'lunacore.todoSort';
+
+/**
+ * The order rows are painted in, as indices into `list`. Ties keep list order
+ * (Array.prototype.sort is stable), so "manual first" still respects the drag
+ * order inside each group. An unknown mode falls back to 'custom'.
+ * @param {Array<{at:number, manual?:boolean}>} list
+ * @param {string} mode
+ * @returns {number[]}
+ */
+export function sortedIndices(list, mode) {
+  const current = Array.isArray(list) ? list : [];
+  const indices = current.map((_item, i) => i);
+  const isManual = (i) => (current[i].manual === true ? 1 : 0);
+  switch (mode) {
+    case 'newest': return indices.sort((a, b) => current[b].at - current[a].at);
+    case 'oldest': return indices.sort((a, b) => current[a].at - current[b].at);
+    case 'manual': return indices.sort((a, b) => isManual(b) - isManual(a));
+    case 'normal': return indices.sort((a, b) => isManual(a) - isManual(b));
+    default: return indices;
+  }
+}
+
+function loadSortMode() {
+  try {
+    const saved = localStorage.getItem(SORT_KEY);
+    return SORT_MODES.includes(saved) ? saved : 'custom';
+  } catch {
+    return 'custom';
+  }
+}
+
+let sortMode = 'custom';
+
 /** Drops every completed item. */
 export function clearDone(list) {
   const current = Array.isArray(list) ? list : [];
@@ -562,7 +600,9 @@ function renderRows() {
   // The row being edited was removed (Claude, another window) - nothing to save into.
   pruneEdit(items);
   els.list.innerHTML = '';
-  items.forEach((item, index) => {
+  const canDrag = sortMode === 'custom';
+  sortedIndices(items, sortMode).forEach((index) => {
+    const item = items[index];
     const li = document.createElement('li');
     const classes = ['todo-item'];
     if (item.done) classes.push('todo-item--done');
@@ -576,7 +616,8 @@ function renderRows() {
 
     // Drag-to-reorder: grab any row and carry it to its new slot. See the
     // `drag` declaration up top for why this is not HTML5 drag-and-drop.
-    li.addEventListener('pointerdown', (e) => startDrag(e, li, index));
+    // Only in custom order: dragging a sorted view would have nothing to keep.
+    if (canDrag) li.addEventListener('pointerdown', (e) => startDrag(e, li, index));
 
     const box = document.createElement('input');
     box.type = 'checkbox';
@@ -786,7 +827,16 @@ defineWidget({
       count: root.querySelector('#todo-count'),
       empty: root.querySelector('#todo-empty'),
       clear: root.querySelector('#todo-clear'),
+      sort: root.querySelector('#todo-sort'),
     };
+
+    sortMode = loadSortMode();
+    els.sort.value = sortMode;
+    els.sort.addEventListener('change', () => {
+      sortMode = SORT_MODES.includes(els.sort.value) ? els.sort.value : 'custom';
+      try { localStorage.setItem(SORT_KEY, sortMode); } catch { /* view pref only */ }
+      renderRows();
+    });
 
     const offLang = onLangChange(render);
     initTodoEdit({ getItems: () => items, commit, repaint: renderRows });

@@ -581,6 +581,17 @@
         ></textarea>
         <button type="submit" class="port-btn" data-i18n-title="todo.add" title="Dodaj">+</button>
       </form>
+      <!-- View-only sort (todo.js sortedIndices); drag reorder works in "custom" only. -->
+      <label class="todo-sort">
+        <span data-i18n="todo.sort.label">Sortuj</span>
+        <select id="todo-sort" class="profile-select">
+          <option value="custom" data-i18n="todo.sort.custom">Moja kolejnosc</option>
+          <option value="newest" data-i18n="todo.sort.newest">Najnowsze</option>
+          <option value="oldest" data-i18n="todo.sort.oldest">Najstarsze</option>
+          <option value="manual" data-i18n="todo.sort.manual">Reczne najpierw</option>
+          <option value="normal" data-i18n="todo.sort.normal">Zwykle najpierw</option>
+        </select>
+      </label>
       <p id="todo-empty" class="hint" data-i18n="todo.empty">Brak zadan.</p>
       <ul id="todo-list" class="todo-list"></ul>
       <button id="todo-clear" class="pad-send" data-i18n="todo.clearDone">Usun zrobione</button>

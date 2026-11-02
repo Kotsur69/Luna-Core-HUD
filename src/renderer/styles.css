@@ -4078,6 +4078,15 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .todo-form textarea:focus { outline: none; border-color: var(--edge-glow); }
 
 .clip-list,
+.todo-sort {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  font-size: 0.85em;
+}
+.todo-sort .profile-select { flex: 1; min-width: 0; }
+
 .todo-list {
   list-style: none;
   margin: 0;
