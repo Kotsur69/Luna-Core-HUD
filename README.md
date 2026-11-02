@@ -7,7 +7,29 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.18.2 — Luna's Work runs the whole loop.**
+> **Current release: v0.19.0 — Luna's Work goes from build to launch.**
+> - **Staging:** a staging environment with a production guard and data
+>   backup/restore; load tests run on staging at the "complete" gate and
+>   before SHIP.
+> - **At SHIP:** error tracking with a secret-safe DSN (asked through the
+>   decision queue, never committed), launch assets, a milestone demo video,
+>   SHIP docs and a return pack.
+> - **Client feedback:** a feedback widget on staging builds, and (opt-in)
+>   replies to Luna's Work emails become feedback cards.
+> - **Project queue:** the next queued project starts after SHIP.
+> - **Research + design:** "like X" references fill `design/references/`;
+>   design variants, clickable-mockup-first, a design match score, seed data
+>   and a GDPR legal pack.
+> - **Quality:** specialist reviews, second opinions, playtester personas with
+>   a browser/device matrix, pl/en completeness and Lighthouse budgets, plus a
+>   fresh code graph after every merge.
+> - **Visibility:** a live HUD dashboard with per-role token accounting, a
+>   phone run snapshot with time-to-SHIP, and "Ask Luna" about the run from
+>   the HUD or the phone.
+> - **Fixes:** `--luna-probe` no longer resumes runs or starts scheduled jobs;
+>   browser servers are origin-locked.
+>
+> **v0.18.2 — Luna's Work runs the whole loop.**
 > - **Luna's Work:** an outer loop controller drives Director -> build ->
 >   Playtester -> Critic until SHIP, PLATEAU, RED or STOP, survives restarts
 >   and waits out usage limits. Each build is one God Mode run in merge mode.
