@@ -318,37 +318,71 @@ function createFinalizer(deps) {
     }
   }
 
-  /**
-   * The run email (godmodemail.js), fire and forget. A failure never breaks
-   * finalize: it lands on the board (integration.emailError) and at the end
-   * of the report file.
-   */
-  function sendReport(plan, view, extra, text) {
-    if (!deps.onReport) return;
+  /** What the run email is built from: godmodesnapshot.runEntry + the integration error. */
+  function runSummary(plan, view, extra) {
     const integ = plan.integration || {};
-    const summary = {
+    return {
       ...runEntry(view, extra),
       integrationError: integ.error ? [integ.error, integ.detail].filter(Boolean).join(': ') : null,
     };
-    const failed = (reason) => {
+  }
+
+  /**
+   * The run email (godmodemail.js), fire and forget. A failure never breaks
+   * finalize: it lands on the board (integration.emailError) and at the end
+   * of the report file. A transient one (Gmail not connected, rate-limited,
+   * busy) comes back `pending` (godmodePending.js): it goes out once Gmail
+   * connects or on the next start (integration.emailPending).
+   */
+  function sendReport(plan, view, extra, text) {
+    if (!deps.onReport) return;
+    const summary = runSummary(plan, view, extra);
+    const failed = (reason, pending) => {
       if (deps.getPlan() !== plan) return;
-      setIntegration(plan, { emailError: String(reason).slice(0, 80) });
+      setIntegration(plan, { emailError: String(reason).slice(0, 80), emailPending: pending === true });
       if (deps.writeReport) deps.writeReport(plan.id, `${text}
 - Email failed: ${String(reason).slice(0, 80)}
 `);
       deps.commit();
     };
-    setIntegration(plan, { emailError: null });
+    setIntegration(plan, { emailError: null, emailPending: false });
     try {
       Promise.resolve(deps.onReport(plan.id, text, summary))
         .then((res) => {
-          if (res && res.error) failed(res.error);
-          else if (res && res.skipped === 'not-connected') failed(EMAIL_NOT_CONNECTED);
+          if (res && res.error) failed(res.error, res.pending);
+          else if (res && res.skipped === 'not-connected') failed(EMAIL_NOT_CONNECTED, res.pending);
         })
         .catch((err) => failed((err && err.reason) || 'failed'));
     } catch (err) {
       failed((err && err.reason) || 'failed');
     }
+  }
+
+  /**
+   * The current run's email summary (for "Resend report email"), or null
+   * when `planId` is not the run on the board.
+   */
+  function emailSummary(planId) {
+    const plan = deps.getPlan();
+    if (!plan || plan.id !== planId) return null;
+    const view = { ...deps.view(), repoPath: plan.repoPath };
+    return runSummary(plan, view, { now: deps.now(), suggestions: sup.allowSuggestions(plan.approvalLog) });
+  }
+
+  /**
+   * A later send of the run email (pending flush, Resend) reached its end:
+   * the board's email line follows. Ignored for a run that is not on the board.
+   * @param {string} planId
+   * @param {{sent:boolean, reason:string|null}} res
+   * @returns {boolean} whether the board's run was updated
+   */
+  function emailResult(planId, res) {
+    const plan = deps.getPlan();
+    if (!plan || plan.id !== planId || !res || typeof res !== 'object') return false;
+    const reason = res.sent ? null : String(res.reason || 'failed').slice(0, 80);
+    setIntegration(plan, { emailError: reason, emailPending: false });
+    deps.commit();
+    return true;
   }
 
   function report(plan) {
@@ -426,7 +460,7 @@ function createFinalizer(deps) {
     return true;
   }
 
-  return { finalize, isRunning: () => running };
+  return { finalize, isRunning: () => running, emailSummary, emailResult };
 }
 
 module.exports = { createFinalizer, postMergeContext, slugOf, POST_MERGE_STEPS, TAB_CLOSE_SETTLE_MS, EMAIL_NOT_CONNECTED };

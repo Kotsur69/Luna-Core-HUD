@@ -43,11 +43,13 @@ const reasonOf = (err) => {
  * @param {{ipcMain:object, sender:object, prefs:object, nightly:{sendNow:Function}, now?:()=>number,
  *   reader?:{status:Function, connect:Function, disconnect:Function},
  *   replies?:{refresh:()=>Promise<number>},
- *   projects?:()=>Array<{id:string, label:unknown}>}} deps
+ *   projects?:()=>Array<{id:string, label:unknown}>, onConnected?:()=>unknown}} deps
  *   reader / replies / projects: the opt-in email replies (B17); without them
  *   the reply channels answer `failed` and the status has replies: null
+ *   onConnected: Gmail just got connected - the pending God Mode run emails
+ *   go out (godmodePending.js flush); never fails the IPC answer
  */
-function registerMailIpc({ ipcMain, sender, prefs, nightly, reader, replies, projects = () => [], now = Date.now }) {
+function registerMailIpc({ ipcMain, sender, prefs, nightly, reader, replies, projects = () => [], onConnected, now = Date.now }) {
   let connecting = false;
   let lastTestAt = -Infinity;
 
@@ -99,6 +101,11 @@ function registerMailIpc({ ipcMain, sender, prefs, nightly, reader, replies, pro
     connecting = true;
     try {
       await sender.connect();
+      if (onConnected) {
+        Promise.resolve()
+          .then(() => onConnected())
+          .catch((err) => console.error('[mail] pending run emails failed:', err && err.message));
+      }
       return status();
     } catch (err) {
       console.error('[mail] gmail connect failed:', err && err.reason, err && err.message);

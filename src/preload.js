@@ -613,6 +613,12 @@ contextBridge.exposeInMainWorld('lunacore', {
    * Promise<{ok:true} | {ok:false, error:'badId'|'noReport'|'openFailed'}>.
    */
   openOrchestraReport: (planId) => ipcRenderer.invoke('orchestra:openReport', typeof planId === 'string' ? planId : null),
+  /**
+   * "Resend report email" on a finished run. Only the run id crosses; main
+   * checks it names a report in the runs folder (src/orchestraFinishIpc.js).
+   * Promise<{ok:true} | {ok:false, reason:string}>.
+   */
+  resendOrchestraEmail: (planId) => ipcRenderer.invoke('orchestra:resend-email', typeof planId === 'string' ? planId : null),
   /** Plan changes (new plan, launches, a worker tab closed); returns an unsubscribe. */
   onOrchestraChanged: (cb) => {
     const listener = (_e, plan) => cb(plan);

@@ -142,6 +142,8 @@ const { createBillCalendar } = require('./gcalbills');
 // Report emails: Gmail sender, God Mode run email, nightly summary.
 const { createReportMail } = require('./reportmail');
 const { registerMailIpc } = require('./mailipc');
+// God Mode finished-run actions: Resend report email (+ release, later).
+const orchestraFinishIpc = require('./orchestraFinishIpc');
 // Weekly review (Life Week tab, Sunday 20:00 + Generate now) and its email.
 const { setupWeeklyReview } = require('./weeklyipc');
 const { startLifeSync } = require('./lifesync');
@@ -995,6 +997,8 @@ const reportMail = createReportMail({
   getUsage: () => latestUsage,
   getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
   onResume: (fn) => powerMonitor.on('resume', fn),
+  // A pending / resent God Mode run email went out (or not): the board follows.
+  onRunMailResult: (planId, res) => orchestra.emailResult(planId, res),
 });
 
 /** Env of the first profile with a free-model chain (Luna's Work freeFallback), or null. */
@@ -1131,7 +1135,8 @@ const orchestra = createOrchestra({
     if (next !== list && writeTodos(projectId, next)) send('todo:changed', { projectId });
   },
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
-  onReport: (planId, text, summary) => reportMail.godmode.onReport(planId, text, summary),
+  // A transient failure leaves the run email pending (src/godmodePending.js).
+  onReport: (planId, text, summary) => reportMail.runMail.report(planId, text, summary),
   writeReport: (planId, text) => {
     if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return null;
     try {
@@ -3074,6 +3079,8 @@ function registerIpc() {
     reader: reportMail.reader,
     replies: lunasworkMailReplies,
     projects: () => projects.map((p) => ({ id: p.id, label: p.label })),
+    // Gmail just connected: the God Mode run emails that waited for it go out.
+    onConnected: () => reportMail.runMail.flush(),
   });
   // Attention inbox ('!' chip): God Mode runs to review from every PC, check-in, weekly goals, Gmail not connected.
   registerInboxIpc({
@@ -3491,6 +3498,12 @@ function registerIpc() {
     return err ? { ok: false, error: 'openFailed' } : { ok: true };
   });
 
+  // Finished-run actions (src/orchestraFinishIpc.js): ids are validated there.
+  orchestraFinishIpc.register(ipcMain, {
+    runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+    resendRunEmail: (planId) => reportMail.runMail.resend(planId, orchestra.emailSummary(planId)),
+  });
+
   // Idea #5: allow a tool for FUTURE workers. Only a rule the current run
   // actually logged from a stalled prompt is accepted - the renderer cannot
   // add an arbitrary one.
@@ -3782,6 +3795,8 @@ app.whenReady().then(() => {
   if (!probing) orchestra.restore();
   // Once per start: settled runs older than a day get the post-merge cleanup again.
   if (!probing) orchestraPostMerge.sweepAtStart(orchestra.landedRun()).catch((err) => console.error('[orchestra] start-up sweep failed:', err && err.message));
+  // Run emails left pending (Gmail was not connected, rate-limited): once, after the restore.
+  if (!probing) reportMail.runMail.flush().catch((err) => console.error('[orchestra] pending run emails failed:', err && err.message));
   // Luna's Work decision queue: pending decisions to the phone snapshot,
   // answers back from the `todos` cloud scope. Wired before resume() so a
   // resumed run's decisions are published at once.

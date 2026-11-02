@@ -1531,6 +1531,9 @@ function createOrchestra(deps) {
     checkWake: () => powerFlow.checkWake(),
     sweepBranches,
     landedRun,
+    // The run email after finalize: "Resend report email" and pending sends (godmodePending.js).
+    emailSummary: (planId) => finalizer.emailSummary(planId),
+    emailResult: (planId, res) => finalizer.emailResult(planId, res),
     runFixup: (args) => fixup.run(args),
     planWait: () => planWaiter.view(),
     cancelPlanWait: () => planWaiter.cancel(),
