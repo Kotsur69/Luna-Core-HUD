@@ -1,7 +1,7 @@
 # Notification hub ("Needs you") - plan
 
-> **🟡 OPEN (2026-10-22).** Planned, not built. Answer the *Open questions*
-> first, then build slice by slice (N1 → N6). Rename to
+> **🟡 OPEN (2026-10-22).** Planned, not built. Open questions answered
+> 2026-11-02 (see *Answers*); build slice by slice (N1 → N6). Rename to
 > `DONE_NOTIFICATION_HUB_PLAN.md` when every slice is built and live-checked.
 
 Same rules as every other plan in this repo: zero extra tokens (the hub only
@@ -11,8 +11,8 @@ user-facing strings need `pl` + `en`.
 
 ## Resume here
 
-- Nothing built yet. Start with the *Open questions* (one AskUserQuestion
-  round), then **N1**.
+- Nothing built yet. Open questions answered 2026-11-02 (N0 done); next =
+  **N1**. One to-do card per slice N1-N6.
 - UI slices (N2, N3) go through the `ui-ux-pro-max` skill first (Mati's
   global rule for UI work). Smoke-test with the in-process Electron wrapper
   (memory: "Smoke-test UI without a CDP port").
@@ -104,7 +104,7 @@ IPC that already exists: `openReport(planId)`, `cancelPower()`,
 | Weekly review ready (Sunday) | "Weekly review is ready" | brief | Open Life → Week | Opened |
 | Weekly / daily brief | The brief card itself (moved from Mission Control) | brief | Brief me / Regenerate | - |
 | Mail "needs your call" | "3 mails need your call" | needs | Open Mission → Mail | Scan applied |
-| Usage ≥ 80 % / 95 % | "Claude weekly at 92 %, resets Mon 09:00" | info | - | Window resets |
+| ~~Usage ≥ 80 % / 95 %~~ | **Dropped from v1** (Answer 2): the usage meter already shows it | - | - | - |
 | Cloud logged out / sync error | "Cloud sync is off: log in" | needs | Open Settings → Cloud | Logged in |
 | Google disconnected | "Google disconnected: reconnect" | needs | Open Settings → Google | Connected |
 | Host needs setup | "Luna host on this PC needs setup" | needs | Open Settings → Host | Paired |
@@ -157,7 +157,8 @@ source returns `[]` and is unit-tested on its own.
 ### N2 - Face icon + badge (renderer)
 - `hubicon.js`: icon in the palette bar next to the Mission Control / Life
   chips, badge = open `needs` count, pulses once when the count goes up
-  (respect `prefers-reduced-motion`). Shortcut (Open question 3).
+  (respect `prefers-reduced-motion`). Line-drawn SVG face in `--accent`
+  (Answer 6). Shortcut **Ctrl+Shift+H** toggles the drawer (Answer 3).
 - **Done when** the badge follows `hub:changed` live and the shortcut toggles
   the drawer.
 
@@ -186,8 +187,8 @@ source returns `[]` and is unit-tested on its own.
   it done on B clears it on A after the next sync.
 
 ### N5 - The rest of the sources + toasts
-- Collectors for mail needs-call, usage ≥ 80 / 95 %, cloud / Google
-  disconnected, host needs setup, `[Mati]` to-dos, weekly review.
+- Collectors for mail needs-call, cloud / Google disconnected, host needs
+  setup, `[Mati]` to-dos, weekly review. (Usage % dropped from v1, Answer 2.)
 - New Needs-you item while unfocused → one toast through `notify.js`
   (respects its opt-in), click focuses the window and opens the drawer.
 - **Done when** each collector has tests and a toast shows once per new item.
@@ -206,19 +207,23 @@ source returns `[]` and is unit-tested on its own.
 - Snooze ("remind me tomorrow").
 - Act on another PC's item (cancel its sleep countdown) through host commands.
 
-## Open questions (ask before N1)
+## Answers (Mati, 2026-11-02)
 
-1. **Auto-open on launch:** only when something needs you (proposed), or
-   always / never?
-2. **Which sources in v1?** The table above is everything; anything to drop
-   (e.g. usage %, update available) or add?
-3. **Shortcut:** Ctrl+Shift+H, or none (icon only)?
-4. **The brief:** move it fully into the drawer (proposed), or keep a
-   one-line headline in Mission Control too?
-5. **Other PCs' runs:** show every run (as FYI) or only runs with Needs-you
-   lines?
-6. **Face icon:** reuse Luna's avatar art, or a simple line-drawn face that
-   follows the theme accent?
+1. **Auto-open on launch:** only when something needs you (unseen Needs-you
+   items). Setting *always / only when needed / never* stays in N6, default
+   "only when needed".
+2. **Sources in v1:** the whole table **except usage ≥ 80 / 95 %** (the usage
+   meter already shows it). Update available and `[Mati]` to-dos stay as
+   `info`. Nothing added.
+3. **Shortcut:** **Ctrl+Shift+H** toggles the drawer, plus the face icon.
+   (Free in `src/` as of 2026-11-02; re-check `shortcuts.js` in N2.)
+4. **The brief:** moves **fully** into the drawer; `#mission-brief` leaves
+   Mission Control, no headline kept. One-time "brief moved to the hub" hint.
+5. **Other PCs' runs:** show **every** run. Runs with Needs-you / manual
+   lines are `needs` (count in the badge); clean runs are `info` under
+   Recent (no badge).
+6. **Face icon:** a simple **line-drawn SVG face** in the theme `--accent`,
+   not the avatar art.
 
 ## Risks
 
