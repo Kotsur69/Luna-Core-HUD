@@ -6,6 +6,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
 
 const { loadSoundConfig, resolveSoundFile, pickSoundEntry } = require('../src/sounds');
 
@@ -13,14 +15,6 @@ const { loadSoundConfig, resolveSoundFile, pickSoundEntry } = require('../src/so
 
 const CFG = {
   sfx: {
-    keystroke: {
-      volume: 35,
-      enabled: true,
-      variants: [
-        { id: 'mechanical', label: 'Mechanical', file: 'sfx/keystroke-mechanical.wav' },
-        { id: 'soft', label: 'Soft', file: 'sfx/keystroke-soft.wav' },
-      ],
-    },
     navClick: { file: 'sfx/nav-click.wav', volume: 55 },
     disabledSfx: { file: 'sfx/nope.wav', volume: 50, enabled: false },
   },
@@ -34,22 +28,10 @@ test('pickSoundEntry returns file+volume for a simple entry', () => {
   assert.deepEqual(pickSoundEntry(CFG, 'voice.done'), { file: 'voice/done.mp3', volume: 80 });
 });
 
-test('pickSoundEntry picks a variant by id', () => {
-  assert.deepEqual(pickSoundEntry(CFG, 'sfx.keystroke', { variant: 'soft' }), {
-    file: 'sfx/keystroke-soft.wav',
-    volume: 35,
-  });
-});
-
-test('pickSoundEntry falls back to variants[0] when the variant id is missing/invalid', () => {
-  assert.deepEqual(pickSoundEntry(CFG, 'sfx.keystroke'), {
-    file: 'sfx/keystroke-mechanical.wav',
-    volume: 35,
-  });
-  assert.deepEqual(pickSoundEntry(CFG, 'sfx.keystroke', { variant: 'nonexistent' }), {
-    file: 'sfx/keystroke-mechanical.wav',
-    volume: 35,
-  });
+test('pickSoundEntry has no variant handling: an entry without `file` is null', () => {
+  // Keystroke sound lives in keysynth.js now; the old `variants` shape is gone.
+  const cfg = { sfx: { k: { volume: 35, variants: [{ id: 'a', file: 'sfx/a.wav' }] } }, voice: {} };
+  assert.equal(pickSoundEntry(cfg, 'sfx.k'), null);
 });
 
 test('pickSoundEntry returns null for enabled:false', () => {
@@ -72,15 +54,18 @@ test('pickSoundEntry defaults volume to 70 when missing from the config', () => 
 // itself - they guard that resolveSoundFile() really finds the files that
 // config/sounds.json promises (see rates.test.js for the same convention).
 
-test('config/sounds.json has all 4 keystroke variants', () => {
+test('config/sounds.json has no mpv keystroke entry (keysynth.js owns typing sound)', () => {
   const { sfx } = loadSoundConfig();
-  assert.equal(sfx.keystroke.variants.length, 4);
-  const ids = sfx.keystroke.variants.map((v) => v.id).sort();
-  assert.deepEqual(ids, ['mechanical', 'scifi', 'soft', 'typewriter']);
+  assert.equal(sfx.keystroke, undefined);
 });
 
-test('resolveSoundFile finds every sfx key (except keystroke)', () => {
-  for (const key of ['sfx.navClick', 'sfx.modeToggle', 'sfx.terminalNew', 'sfx.terminalClose']) {
+test('no keystroke-*.wav left in helpers/sounds/sfx', () => {
+  const dir = path.join(__dirname, '..', 'helpers', 'sounds', 'sfx');
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.startsWith('keystroke-')), []);
+});
+
+test('resolveSoundFile finds every sfx key', () => {
+  for (const key of ['sfx.navClick', 'sfx.modeToggle', 'sfx.terminalNew', 'sfx.terminalClose', 'sfx.moonFlare']) {
     const r = resolveSoundFile(key);
     assert.ok(r, `${key} should resolve`);
     assert.ok(r.path.endsWith('.wav'));
@@ -92,14 +77,6 @@ test('resolveSoundFile finds every one of the 5 voice lines', () => {
     const r = resolveSoundFile(key);
     assert.ok(r, `${key} should resolve`);
     assert.ok(r.path.endsWith('.mp3'));
-  }
-});
-
-test('resolveSoundFile finds every keystroke variant by id', () => {
-  for (const id of ['mechanical', 'soft', 'scifi', 'typewriter']) {
-    const r = resolveSoundFile('sfx.keystroke', { variant: id });
-    assert.ok(r, `variant ${id} should resolve`);
-    assert.ok(r.path.includes(`keystroke-${id}.wav`));
   }
 });
 

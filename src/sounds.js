@@ -3,9 +3,8 @@
 // ----------------------------------------------------------------------------
 // Loads config/sounds.json (shipped defaults, read via paths.bundled() same as
 // theme.js/rates.js/cheatsheets.js) and resolves an event key ('sfx.navClick',
-// 'voice.done') to an absolute asset path + volume. `sfx.keystroke` is special:
-// it holds a `variants` array instead of a single `file` (4-way picker, see
-// SOUNDS_IMPLEMENTATION_PLAN.md §3) - callers pass { variant } to pick one.
+// 'voice.done') to an absolute asset path + volume. Keystroke sound is not
+// here: it is synthesized in the renderer by keysynth.js (Web Audio).
 //
 // Assets live in helpers/sounds/, sitting next to config/ as pure data, same
 // reasoning as assets/fonts and assets/icon-*.png living outside src/. Unlike
@@ -53,41 +52,27 @@ function loadSoundConfig() {
  * for a key - no fs access, so this is the piece unit tests exercise directly
  * (same split as paths.js's resolveUserDir()).
  *
- * `sfx.keystroke` carries `variants` instead of `file` - pass { variant } to
- * pick one by id; an unknown/omitted id falls back to variants[0] rather than
- * failing, so a renamed clip or a corrupt pref never goes fully silent.
- *
  * @param {{sfx: object, voice: object}} cfg
- * @param {string} key e.g. 'sfx.navClick', 'sfx.keystroke', 'voice.done'
- * @param {{variant?: string}} [opts]
+ * @param {string} key e.g. 'sfx.navClick', 'voice.done'
  * @returns {{file: string, volume: number}|null}
  */
-function pickSoundEntry(cfg, key, opts = {}) {
+function pickSoundEntry(cfg, key) {
   const [group, name] = String(key).split('.');
   const entry = cfg && cfg[group] && cfg[group][name];
   if (!entry || typeof entry !== 'object' || entry.enabled === false) return null;
-
+  if (typeof entry.file !== 'string') return null;
   const volume = typeof entry.volume === 'number' ? entry.volume : 70;
-
-  if (Array.isArray(entry.variants)) {
-    const wanted = entry.variants.find((v) => v && v.id === opts.variant);
-    const chosen = wanted || entry.variants[0];
-    if (!chosen || typeof chosen.file !== 'string') return null;
-    return { file: chosen.file, volume };
-  }
-  if (typeof entry.file === 'string') return { file: entry.file, volume };
-  return null;
+  return { file: entry.file, volume };
 }
 
 /**
- * Resolves an event key ('sfx.keystroke', 'voice.done') to an absolute path +
+ * Resolves an event key ('sfx.navClick', 'voice.done') to an absolute path +
  * volume, or null if unresolvable (missing key, disabled, missing asset file).
  * @param {string} key
- * @param {{variant?: string}} [opts]
  * @returns {{path: string, volume: number}|null}
  */
-function resolveSoundFile(key, opts = {}) {
-  const picked = pickSoundEntry(loadSoundConfig(), key, opts);
+function resolveSoundFile(key) {
+  const picked = pickSoundEntry(loadSoundConfig(), key);
   if (!picked) return null;
 
   const full = path.join(ASSETS_DIR, picked.file);

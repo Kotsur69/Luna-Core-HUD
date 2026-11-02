@@ -3653,7 +3653,7 @@ function registerIpc() {
   ipcMain.on('sound:play', (_event, payload) => {
     if (!soundManager || !payload || typeof payload.key !== 'string') return;
     if (payload.key.startsWith('voice.') && readUiPrefs().voiceEnabled === false) return;
-    const resolved = resolveSoundFile(payload.key, payload.opts || {});
+    const resolved = resolveSoundFile(payload.key);
     if (resolved) soundManager.play(resolved.path);
   });
 

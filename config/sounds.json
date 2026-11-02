@@ -1,16 +1,5 @@
 {
   "sfx": {
-    "keystroke": {
-      "volume": 35,
-      "throttleMs": 55,
-      "enabled": true,
-      "variants": [
-        { "id": "mechanical", "label": "Mechanical", "file": "sfx/keystroke-mechanical.wav" },
-        { "id": "soft", "label": "Soft", "file": "sfx/keystroke-soft.wav" },
-        { "id": "scifi", "label": "Sci-fi", "file": "sfx/keystroke-scifi.wav" },
-        { "id": "typewriter", "label": "Typewriter", "file": "sfx/keystroke-typewriter.wav" }
-      ]
-    },
     "navClick": { "file": "sfx/nav-click.wav", "volume": 55 },
     "modeToggle": { "file": "sfx/mode-toggle.wav", "volume": 60 },
     "moonFlare": { "file": "sfx/moon-flare.wav", "volume": 45 },

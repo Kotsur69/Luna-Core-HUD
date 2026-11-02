@@ -8,13 +8,12 @@ python -m edge_tts --voice en-US-AriaNeural --rate=+5% --pitch=+15Hz \
   --text "..." --write-media helpers/sounds/voice/<name>.mp3
 ```
 
-`sfx/keystroke-*.wav` (the 4 variants) are real now — procedurally synthesized
-short clicks (30-55ms each, no external assets/libraries, just raw PCM +
-envelope math), generated 2026-08-17. **Dead as of 2026-08-26**: keystroke sound
-moved entirely off this mpv path onto `src/renderer/modules/keysynth.js` (Web
-Audio, real samples from `assets/keysounds/` - see
-`reference/TYPING_SYNTH_PLAN.md`'s "Resolved 2026-08-26"). Nothing plays these
-4 files anymore; left in place rather than deleted.
+Keystroke sound does not live here. It is played by
+`src/renderer/modules/keysynth.js` (Web Audio, real samples from
+`assets/keysounds/` - see `reference/TYPING_SYNTH_PLAN.md`'s "Resolved
+2026-08-26"); the Settings keystroke-variant picker drives keysynth. The old
+mpv `sfx/keystroke-*.wav` files and the `sfx.keystroke.variants` config block
+were dead since then and were removed on 2026-11-02.
 
 The four UI cues (`nav-click.wav`, `mode-toggle.wav`, `terminal-new.wav`,
 `terminal-close.wav`) are real since 2026-11-02 (until then they were 0-byte

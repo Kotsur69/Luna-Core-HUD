@@ -12,8 +12,8 @@
 
 'use strict';
 
-function playSound(key, opts) {
-  window.lunacore.playSound(key, opts);
+function playSound(key) {
+  window.lunacore.playSound(key);
 }
 
 export const sfx = {

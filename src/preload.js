@@ -758,10 +758,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   /**
    * Fires a UI sound/voice cue by key, e.g. 'sfx.navClick', 'voice.done'.
    * @param {string} key
-   * @param {{variant?: string}} [opts] variant: for 'sfx.keystroke', which of
-   *   the 4 clips to play (id from config/sounds.json's variants list).
    */
-  playSound: (key, opts) => ipcRenderer.send('sound:play', { key, opts }),
+  playSound: (key) => ipcRenderer.send('sound:play', { key }),
   /** Raw bytes of one file in assets/keysounds/ (keysynth.js's sample
    * engine) - the renderer's CSP blocks fetch() outright, so this goes
    * through the main process like every other local resource. Resolves to
