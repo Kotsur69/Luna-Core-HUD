@@ -76,9 +76,21 @@ const { createOvernightGuard, recoverLocalBackend } = require('./overnight');
 // named in config/keepawake.local.json (src/keepawake.js).
 const { createKeepAwake, CONFIG_FILE: KEEP_AWAKE_CONFIG } = require('./keepawake');
 // Env for every `claude` we start: inherited env minus session markers + layers.
-const { withColorSupport, buildSessionEnv } = require('./sessionenv');
+const { withColorSupport, buildSessionEnv, setAccountLayer } = require('./sessionenv');
 // Building the start command: decides whether a session can be pinned by id.
-const { withSessionId, withIntakeMcp, intakeState, withTaskBrief, findExecutable, isClaudeCommand } = require('./launch');
+const {
+  withSessionId,
+  withIntakeMcp,
+  intakeState,
+  withTaskBrief,
+  withAccountResume,
+  findExecutable,
+  isClaudeCommand,
+} = require('./launch');
+// Claude account failover (src/claudeaccounts.js): several subscriptions, one
+// harness. The active account's token rides in every plain Claude launch.
+const { createClaudeAccounts, usesOwnBackend, ACCOUNT_ENV } = require('./claudeaccounts');
+const { registerClaudeAccountsIpc } = require('./claudeaccountsipc');
 // Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject, removeProject, resolveProjectDir, resolveStoredPath } = require('./projects');
 const {
@@ -299,6 +311,26 @@ function missingDirNotice(dir, lang) {
   const text = lang === 'pl'
     ? `[LunaCore] Folder projektu nie istnieje na tym komputerze: ${dir} - start w ${START_CWD}.`
     : `[LunaCore] Project folder not found on this machine: ${dir} - starting in ${START_CWD}.`;
+  return `\x1b[2;33m${text}\x1b[0m\r\n`;
+}
+
+// ---- Claude account failover -----------------------------------------------
+
+const claudeAccounts = createClaudeAccounts({
+  file: () => (ensureUserDir() ? path.join(userDir(), 'claude-accounts.local.json') : null),
+  safeStorage: () => require('electron').safeStorage,
+  log: (line) => console.info(`[accounts] ${line}`),
+  onChange: () => send('claudeAccounts:changed'),
+});
+setAccountLayer((env) => claudeAccounts.authLayer(env));
+/** One tab moves accounts at most this often (a loop guard). */
+const TAB_FAILOVER_MIN_GAP_MS = 60 * 1000;
+
+/** The terminal line shown when a tab continues on another account. */
+function accountSwitchNotice(from, to, lang) {
+  const text = lang === 'pl'
+    ? `[LunaCore] Limit na koncie ${from}. Kontynuuje na koncie ${to}.`
+    : `[LunaCore] Usage limit on ${from}. Continuing on ${to}.`;
   return `\x1b[2;33m${text}\x1b[0m\r\n`;
 }
 
@@ -1154,6 +1186,9 @@ const orchestra = createOrchestra({
   },
   // Planning that hit the Claude limit waits for the reset (orchestraPlanWait.js).
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
+  // ...unless another Claude account is free (src/claudeaccounts.js).
+  accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
+  freshEnv: () => orchestraToolEnv(),
   onPlanWait: (state) => send('orchestra:planWait', state),
   // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
   freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
@@ -1234,6 +1269,7 @@ const lunaswork = createLunasWorkRuntime({
   env: () => orchestraToolEnv(),
   freeEnv: () => lunasworkFreeEnv(),
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
+  accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
   // Every iteration merges into the base branch: Mati confirms it natively,
   // with the commands the run will use (pinned in the run from here on).
   confirmStart: async ({ repoPath, profile, checkCommand, scaffold }) => {
@@ -1396,6 +1432,17 @@ function spawnInto(session, profile, launch = null) {
     ),
   );
 
+  // Which Claude account this process runs on (null: its own backend, or no
+  // accounts set up) - the tab's limit handler reads it (failoverTab).
+  // The `claude setup-token` tab mints a token for whichever account the
+  // browser is signed in to - it must not run under another account's token.
+  if (session.commandOverride) {
+    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete env[ACCOUNT_ENV];
+  }
+  session.accountId = env[ACCOUNT_ENV] || null;
+  session.ownBackend = usesOwnBackend(env);
+
   const wantedCwd = session.cwd;
   const cwd = safeCwd(wantedCwd);
   const cwdMissing = Boolean(wantedCwd) && cwd === START_CWD && path.normalize(wantedCwd) !== START_CWD;
@@ -1516,15 +1563,27 @@ function spawnInto(session, profile, launch = null) {
     .trim();
   // A God Mode worker's first launch carries its brief (slice 3). Consumed
   // here, so a later profile restart of the tab does not start the task again.
-  const command = (session.task && withTaskBrief(baseCommand, session.task)) || baseCommand;
+  const isOverride = Boolean(session.commandOverride);
+  const profileCommand = session.commandOverride || baseCommand;
+  session.commandOverride = null;
+  // Kept, so a resume on another account keeps the worker's flags.
+  if (session.task) session.launchTask = session.task;
+  // Account failover (failoverTab): the same conversation, on the new account.
+  const resumeCommand = session.resumeId
+    ? withAccountResume(baseCommand, session.resumeId, session.launchTask || null)
+    : null;
+  const command = resumeCommand || (session.task && withTaskBrief(profileCommand, session.task)) || profileCommand;
   session.task = null;
   // When WE launch `claude`, we dictate the session id - the transcript is then
   // named exactly <uuid>.jsonl and the watcher looks it up instead of inferring
   // ownership from file timestamps. Null = this session cannot be pinned (bare
   // shell, foreign command, or a resume that brings its own id).
   const transcriptId = randomUUID();
-  const pinnedCommand = withSessionId(command, transcriptId);
+  const pinnedCommand = isOverride ? null : withSessionId(command, transcriptId);
   session.transcriptId = pinnedCommand ? transcriptId : null;
+  // A resume keeps its conversation id (the CLI writes on into <id>.jsonl).
+  if (resumeCommand) session.transcriptId = session.resumeId;
+  session.resumeId = null;
 
   // Its own transcript watcher, scoped to this session's directory.
   if (session.watcher) session.watcher.stop();
@@ -1573,6 +1632,9 @@ function spawnInto(session, profile, launch = null) {
       // parsed reset time so God Mode waits it out instead of stalling.
       onUsageLimit: ({ resetsAt } = {}) => {
         const at = Number.isFinite(resetsAt) ? resetsAt : null;
+        // Another Claude account is free: the tab resumes on it, no waiting
+        // (and a God Mode run is not paused).
+        if (failoverTab(session, at)) return;
         send('godmode:signal', { sessionId: session.id, type: 'usageLimit', resetsAt: at });
         statusBoard.limit(session.id, at);
         // A God Mode v2 worker: the whole run waits (one account, one limit).
@@ -1626,7 +1688,7 @@ function spawnInto(session, profile, launch = null) {
     setTimeout(() => {
       intakeConfig.then((configPath) => {
         if (session.proc !== proc) return;
-        const launched = withIntakeMcp(startCommand, configPath);
+        const launched = withIntakeMcp(startCommand, isOverride ? null : configPath);
         proc.write(`${launched}\r`);
         session.todoTools = intakeState(startCommand, launched);
         broadcastSessions();
@@ -1742,6 +1804,8 @@ function createSession(opts = {}) {
     branch: opts.branch || null,
     // God Mode worker brief {briefPath, model} - main-only, see spawnInto.
     task: opts.task || null,
+    // One-off start command replacing the profile's (`claude setup-token`).
+    commandOverride: opts.commandOverride || null,
     size: { ...lastSize },
     watcher: null,
     gitWatcher: null,
@@ -1891,6 +1955,45 @@ function jumpToProject(digit) {
 
   createSession({ projectId: project.id }); // sets activeSessionId + broadcasts
   playCue('sfx.terminalNew');
+}
+
+/**
+ * Account failover for one tab (src/claudeaccounts.js). Marks the tab's
+ * account as cooling down and, when another account is free, restarts the
+ * tab on it with `--resume` of the same conversation plus "continue".
+ * A tab started before accounts were set up (accountId null, plain Claude)
+ * moves to the free account straight away. False: nothing switched, the
+ * caller waits the limit out as before.
+ * @param {Session} session
+ * @param {number|null} resetsAt
+ * @returns {boolean}
+ */
+function failoverTab(session, resetsAt) {
+  if (session.readOnly || session.ownBackend || !session.transcriptId) return false;
+  const now = Date.now();
+  // The same account failing twice in a row this fast means the switch did not
+  // help (e.g. a resume that cannot start) - stop and wait instead of looping.
+  const sameAccount = session.lastFailoverFrom === (session.accountId || null);
+  if (sameAccount && session.lastFailoverAt && now - session.lastFailoverAt < TAB_FAILOVER_MIN_GAP_MS) return false;
+  const profile = getProfile(profiles, session.profileId);
+  const base = profile ? [profile.command, ...(profile.args || [])].join(' ').trim() : '';
+  if (!withAccountResume(base, session.transcriptId, session.launchTask || null)) return false;
+  const res = session.accountId
+    ? claudeAccounts.markLimited(session.accountId, resetsAt)
+    : { from: { label: 'default login' }, switchTo: claudeAccounts.freeAccount() };
+  if (!res.switchTo) return false;
+  session.lastFailoverAt = now;
+  session.lastFailoverFrom = session.accountId || null;
+  session.resumeId = session.transcriptId;
+  const notice = accountSwitchNotice(res.from.label, res.switchTo.label, readUiPrefs().lang);
+  // Deferred: this runs inside the transcript watcher's read, which the
+  // restart stops.
+  setImmediate(() => {
+    if (sessions.get(session.id) !== session) return;
+    restartSession(session);
+    send('pty:data', { sessionId: session.id, data: notice });
+  });
+  return true;
 }
 
 /**
@@ -2560,6 +2663,11 @@ function registerIpc() {
   ccrControl.registerIpc(ipcMain);
   // FreeLLMAPI gateway port + status row (src/freellmipc.js).
   registerFreeLlmIpc({ ipcMain, shell });
+  registerClaudeAccountsIpc({
+    ipcMain,
+    accounts: claudeAccounts,
+    openTokenTab: () => createSession({ commandOverride: 'claude setup-token' }),
+  });
   // Setup Center rows + cloud form + Getting started (src/setupipc.js).
   // `cloud` is read lazily: startCloud() runs further down in this function.
   registerSetupIpc({

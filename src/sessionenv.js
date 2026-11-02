@@ -100,10 +100,38 @@ function withColorSupport(env) {
  */
 function buildSessionEnv(inherited, ...layers) {
   const env = stripClaudeSessionMarkers({ ...(inherited || {}) });
+  delete env.LUNACORE_CLAUDE_ACCOUNT; // a marker from an outer LunaCore tab
   for (const layer of layers) {
     if (layer && typeof layer === 'object') Object.assign(env, layer);
+  }
+  // Account failover (src/claudeaccounts.js): applied to the MERGED env, so it
+  // can see whether a layer already picked its own backend and stay out.
+  if (accountLayer) {
+    try {
+      Object.assign(env, accountLayer(env) || {});
+    } catch (err) {
+      console.error('[sessionenv] account layer failed:', (err && err.message) || err);
+    }
   }
   return env;
 }
 
-module.exports = { stripClaudeSessionMarkers, withColorSupport, buildSessionEnv, withoutHeader, SHIM_TOKEN_HEADER };
+/** (env) => extra env keys, or null. Set once by main (src/claudeaccounts.js). */
+let accountLayer = null;
+
+/**
+ * Registers the Claude-account layer every buildSessionEnv() applies last.
+ * @param {((env: Record<string,string>) => Record<string,string>)|null} fn
+ */
+function setAccountLayer(fn) {
+  accountLayer = typeof fn === 'function' ? fn : null;
+}
+
+module.exports = {
+  stripClaudeSessionMarkers,
+  withColorSupport,
+  buildSessionEnv,
+  setAccountLayer,
+  withoutHeader,
+  SHIM_TOKEN_HEADER,
+};

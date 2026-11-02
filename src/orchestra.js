@@ -40,6 +40,8 @@ const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./eff
 const { createFinalizer } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
+// A planner limit with another Claude account free: replan after this long.
+const ACCOUNT_SWITCH_RETRY_MS = 3000;
 const { FREE_BRANCH_PREFIX, isSafeFreeBranch, freeRunSettings, integrationFor } = require('./orchestraFree');
 const { cleanupFailedLaunch, sweepOrphanBranches } = require('./orchestraCleanup');
 const { createPowerFlow } = require('./orchestraPower');
@@ -604,6 +606,14 @@ function createOrchestra(deps) {
         const limits = deps.usageLimits ? deps.usageLimits() : [];
         const decision = planWaitDecision({ res, limits, now: now() });
         if (decision.action !== 'wait') return res;
+        // Another Claude account is free (src/claudeaccounts.js): plan again
+        // in a moment on it - the env is rebuilt, the old one carries the
+        // limited account's token.
+        if (deps.accountFailover && deps.accountFailover(decision.resumeAt || null)) {
+          const retryCtx = deps.freshEnv ? { ...ctx, env: deps.freshEnv() } : ctx;
+          planWaiter.arm(retryCtx, { ...decision, resumeAt: now() + ACCOUNT_SWITCH_RETRY_MS, source: 'account' });
+          return { ok: false, error: 'waiting', planWait: planWaiter.view() };
+        }
         planWaiter.arm(ctx, decision);
         return { ok: false, error: 'waiting', planWait: planWaiter.view() };
       }

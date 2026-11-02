@@ -39,6 +39,7 @@ import {
 } from './providerform.js';
 import { refreshProfileList } from './switchers.js';
 import { mountGatewaySettings } from './gatewaysettings.js';
+import { mountClaudeAccountSettings } from './claudeaccountsettings.js';
 
 let templates = []; // getProviders() catalog
 let profiles = []; // redacted profiles from getProfiles()
@@ -693,10 +694,13 @@ export function mountProviderSettings(root) {
   refresh();
   // FreeLLMAPI gateway row, same Settings section.
   const disposeGateway = mountGatewaySettings(root);
+  // Claude account failover list, same Settings section.
+  const disposeAccounts = mountClaudeAccountSettings(root);
 
   return () => {
     offLang();
     disposeGateway();
+    disposeAccounts();
     els = null;
   };
 }

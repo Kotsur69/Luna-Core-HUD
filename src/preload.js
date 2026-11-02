@@ -119,6 +119,22 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Opens the gateway dashboard; main builds the URL and opens it only when the gateway is up. */
   openFreeLlmDashboard: () => ipcRenderer.send('freellm:open-dashboard'),
 
+  // --- Claude account failover (src/claudeaccountsipc.js) ---
+  /** { encryption, accounts:[{id,label,active,limitedUntil}] } - never a token. */
+  listClaudeAccounts: () => ipcRenderer.invoke('claudeAccounts:list'),
+  /** Stores a `claude setup-token` token under a label; main validates both. */
+  addClaudeAccount: (label, token) => ipcRenderer.invoke('claudeAccounts:add', { label, token }),
+  removeClaudeAccount: (id) => ipcRenderer.invoke('claudeAccounts:remove', id),
+  moveClaudeAccountUp: (id) => ipcRenderer.invoke('claudeAccounts:move-up', id),
+  clearClaudeAccountLimit: (id) => ipcRenderer.invoke('claudeAccounts:clear-limit', id),
+  /** Opens a tab running `claude setup-token` - no arguments cross the bridge. */
+  openClaudeTokenTab: () => ipcRenderer.send('claudeAccounts:open-token-tab'),
+  onClaudeAccountsChanged: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('claudeAccounts:changed', listener);
+    return () => ipcRenderer.removeListener('claudeAccounts:changed', listener);
+  },
+
   // --- Setup Center + Getting started (src/setupipc.js) ---
   // States only cross back; main validates every payload and builds every URL.
   /** { ok, rows:[{id, state, note}], ownerUserId, pwaUrl }. */

@@ -104,9 +104,14 @@ function isClaudeCommand(command) {
  * the profile already decides it - same rule as `--model`. So is `effort`.
  * @param {string} command
  * @param {{briefPath:string, model?:string|null, effort?:string|null, permissionMode?:string|null}} task
+ * @param {string} [firstMessage] replaces "read your brief" (a resume after an
+ *   account switch keeps the worker's flags but must not restart the task)
  * @returns {string|null} the command, or null when it cannot carry the task
  */
-function withTaskBrief(command, task) {
+function withTaskBrief(command, task, firstMessage) {
+  // Same quote rule as the brief path: a message that would break the
+  // single-quoted shell argument falls back to the default one.
+  const UNSAFE_QUOTE_RE = /['`\r\n‘-‛]/;
   const cmd = String(command || '').trim();
   const briefPath = task && typeof task.briefPath === 'string' ? task.briefPath : '';
   // U+2018-U+201B: PowerShell treats the typographic quotes as ' too.
@@ -114,7 +119,9 @@ function withTaskBrief(command, task) {
   const [bin, ...rest] = cmd.split(/\s+/);
   // Backticks around the path: unquoted, the model cut a path at its first
   // space and asked for the wrong file (verified live).
-  const message = `Your task brief is in the file \`${briefPath}\` - read it first, then carry it out.`;
+  const message = typeof firstMessage === 'string' && firstMessage && !UNSAFE_QUOTE_RE.test(firstMessage)
+    ? firstMessage
+    : `Your task brief is in the file \`${briefPath}\` - read it first, then carry it out.`;
   const parts = [bin, `'${message}'`, ...rest, '--add-dir', `'${path.dirname(briefPath)}'`];
   if (task.model && /^[a-z0-9.-]+$/i.test(task.model) && !/(^|\s)--model(\s|=|$)/.test(cmd)) {
     parts.push('--model', task.model);
@@ -134,6 +141,31 @@ function withTaskBrief(command, task) {
     parts.push('--allowedTools', ...rules.map((r) => `'${r}'`));
   }
   return parts.join(' ');
+}
+
+/** First message of a tab resumed on another Claude account. No quotes in it. */
+const ACCOUNT_RESUME_MESSAGE =
+  'The usage limit was hit, so LunaCore moved this session to another Claude account. Continue exactly where you left off.';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The start command that resumes conversation `uuid` (same transcript, the
+ * CLI keeps the id unless --fork-session) and sends "continue" as its first
+ * message. A God Mode worker keeps its model / effort / permission flags via
+ * withTaskBrief. Null when the command is not a plain `claude` launch or
+ * already decides its own session (then the caller falls back to waiting).
+ * @param {string} command the profile's start command
+ * @param {string} uuid transcript id to resume
+ * @param {object|null} [task] the worker task the tab was first started with
+ * @returns {string|null}
+ */
+function withAccountResume(command, uuid, task = null) {
+  const cmd = String(command || '').trim();
+  if (!isClaudeCommand(cmd) || !UUID_RE.test(String(uuid || '')) || SESSION_ID_DECIDED.test(cmd)) return null;
+  const withFlags = task ? withTaskBrief(cmd, task, ACCOUNT_RESUME_MESSAGE) : null;
+  if (withFlags) return `${withFlags} --resume ${uuid}`;
+  const [bin, ...rest] = cmd.split(/\s+/);
+  return [bin, `'${ACCOUNT_RESUME_MESSAGE}'`, ...rest, '--resume', uuid].join(' ');
 }
 
 // Permission modes a God Mode worker may be started in. 'default' adds no
@@ -194,6 +226,8 @@ module.exports = {
   withIntakeMcp,
   intakeState,
   withTaskBrief,
+  withAccountResume,
+  ACCOUNT_RESUME_MESSAGE,
   WORKER_PERMISSION_MODES,
   isClaudeCommand,
   SESSION_ID_DECIDED,

@@ -233,6 +233,8 @@ const PHASE_ROLE = {
 const FREE_ROLES = new Set(['builder', 'playtester']);
 // No reset time known for a usage limit: look again after this long.
 const FALLBACK_WAIT_MS = 30 * 60 * 1000;
+// Another Claude account took over (src/claudeaccounts.js): retry this soon.
+const ACCOUNT_SWITCH_RETRY_MS = 3000;
 // God Mode is busy with another project's run: try the build again later.
 const GODMODE_RETRY_MS = 5 * 60 * 1000;
 // A failed step (a throw, a build or Critic error) is retried after this
@@ -275,6 +277,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   load?: {runCommand?:Function, detectTool?:Function, readDoc?:Function, layout?:Function, runsRoot?:()=>string},
  *   errorTracking?: {store:object, log?:Function},
  *   limitResumeAt?: (res:object)=>number|null,
+ *   accountFailover?: (resetsAt:number|null)=>boolean,
  *   awake?: {hold:()=>void, release:()=>void},
  *   recordDecision?: (ctx:{repoPath:string, line:string, decision:object})=>boolean,
  *   handback?: {head:(repoPath:string)=>Promise<string|null>,
@@ -551,6 +554,13 @@ function createLunasWork(deps) {
   function limited(res, role) {
     const at = Number.isFinite(res && res.resumeAt) ? res.resumeAt : deps.limitResumeAt ? deps.limitResumeAt(res) : null;
     const until = Number.isFinite(at) && at > now() ? at : now() + FALLBACK_WAIT_MS;
+    // A second Claude subscription is free: no waiting, the next step's env
+    // already runs on it (the account layer in src/sessionenv.js).
+    if (deps.accountFailover && deps.accountFailover(Number.isFinite(at) ? at : null)) {
+      logEvent(`usage limit (${role}): switched to another Claude account, retrying`);
+      armWait(now() + ACCOUNT_SWITCH_RETRY_MS, 'limit');
+      return;
+    }
     const settings = deps.settings();
     if (settings && settings.freeFallback === true && FREE_ROLES.has(role) && !onFree()) {
       logEvent(`usage limit: ${role} switches to the free providers until ${new Date(until).toISOString()}`);

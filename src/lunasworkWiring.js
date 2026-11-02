@@ -206,6 +206,7 @@ ${msg.text}` }),
  *   godModeCheckCommand: ()=>string,
  *   env: ()=>object, freeEnv: ()=>object|null,
  *   usageLimits: ()=>object[],
+ *   accountFailover?: (resetsAt:number|null)=>boolean,
  *   confirmStart: (ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
@@ -335,6 +336,7 @@ function createLunasWorkRuntime(ctx) {
     // B17 opt-in: email replies; polled only while a run is active and the setting is on.
     ...(ctx.mailReplies ? { mailReplies: ctx.mailReplies } : {}),
     limitResumeAt,
+    accountFailover: ctx.accountFailover,
     awake: createAwake(ctx.powerSaveBlocker),
     // Every decision-queue answer, one line in the project's design/DECISIONS.md.
     recordDecision: ({ repoPath, line }) => {

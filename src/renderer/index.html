@@ -2005,6 +2005,36 @@
               <p id="freellm-port-status" class="hint" role="status" hidden></p>
             </div>
             <div class="termcustom__group">
+              <!-- Claude account failover (src/claudeaccounts.js): filled by
+                   modules/claudeaccountsettings.js. A token goes to main once, on
+                   "Add", and never comes back to the renderer. -->
+              <h3 class="termcustom__section" data-i18n="accounts.title">Konta Claude</h3>
+              <p class="termcustom__hint" data-i18n="accounts.hint">
+                Gdy konto trafi na limit 5 h lub tygodniowy, karty, God Mode i Luna's Work przechodza na nastepne wolne konto i kontynuuja. Pierwsze na liscie jest preferowane.
+              </p>
+              <ul id="claude-accounts-list" class="claude-accounts"></ul>
+              <p id="claude-accounts-empty" class="hint" data-i18n="accounts.empty">Brak kont - karty uzywaja zwyklego logowania /login.</p>
+              <p id="claude-accounts-noenc" class="hint is-fail" data-i18n="accounts.noEncryption" hidden>Szyfrowanie systemowe niedostepne - tokenow nie mozna zapisac.</p>
+              <p class="termcustom__hint" data-i18n="accounts.howTo">
+                Token: zaloguj sie w przegladarce na wybrane konto claude.ai, kliknij "Pobierz token", przejdz logowanie w nowej karcie i wklej wypisany token sk-ant-oat01-... ponizej.
+              </p>
+              <div class="project-row">
+                <button type="button" id="claude-accounts-token-btn" class="termcustom__reset" data-i18n="accounts.getToken">Pobierz token (nowa karta)</button>
+              </div>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="accounts.label">Nazwa konta</span>
+                <input type="text" id="claude-accounts-label" class="profile-select" maxlength="60" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="accounts.token">Token</span>
+                <input type="password" id="claude-accounts-token" class="profile-select" autocomplete="off" spellcheck="false">
+              </label>
+              <div class="project-row">
+                <button type="button" id="claude-accounts-add-btn" class="termcustom__reset" data-i18n="accounts.add">Dodaj konto</button>
+              </div>
+              <p id="claude-accounts-status" class="hint" role="status" hidden></p>
+            </div>
+            <div class="termcustom__group">
               <!-- Luna sync skill picker (docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md S3): which
                    PLUGIN skills a Codex/Gemini tab with "Use my Luna setup" also
                    gets - personal ~/.claude/skills always go along. Built in JS by
