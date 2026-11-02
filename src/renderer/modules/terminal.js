@@ -36,6 +36,7 @@ import { mountMissionChip } from './missionpanel.js';
 import { mountLifeChip } from './lifepanel.js';
 import { mountInboxChip } from './inbox.js';
 import { mountUpdateChip } from './update.js';
+import { mountKeepAwakeChip } from './keepawake.js';
 
 defineWidget({
   id: 'terminal',
@@ -57,6 +58,7 @@ defineWidget({
     mountLifeChip(root);
     mountHighlightsChip(root);
     mountUpdateChip(root);
+    mountKeepAwakeChip(root);
     // No cleanup: this widget is never meant to unmount (see header).
   },
 });

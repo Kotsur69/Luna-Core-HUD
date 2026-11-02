@@ -2734,6 +2734,47 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   box-shadow: none;
 }
 
+/* "Don't sleep" chip (modules/keepawake.js): green while the keep-awake script
+   runs, red while it does not. The icon + label + aria-pressed carry the same
+   state, so it never relies on colour alone. */
+/* Fixed green/red on purpose: themes remap --good (outrun makes it orange),
+   and Mati asked for a literal green = on, red = off. */
+.keepawake-chip {
+  --keepawake-on: #3dff8a;
+  --keepawake-off: #ff3d5a;
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+.keepawake-chip__icon { font-size: var(--fs-xs); line-height: 1; }
+.keepawake-chip.is-on,
+.keepawake-chip.is-on:hover {
+  color: var(--keepawake-on);
+  border-color: var(--keepawake-on);
+}
+.keepawake-chip.is-on:hover { box-shadow: 0 0 var(--glow-size-md) var(--keepawake-on); }
+.keepawake-chip.is-off,
+.keepawake-chip.is-off:hover,
+.keepawake-chip.is-failed,
+.keepawake-chip.is-failed:hover {
+  color: var(--keepawake-off);
+  border-color: var(--keepawake-off);
+}
+.keepawake-chip.is-off:hover,
+.keepawake-chip.is-failed:hover { box-shadow: 0 0 var(--glow-size-md) var(--keepawake-off); }
+.keepawake-chip.is-unavailable,
+.keepawake-chip.is-unavailable:hover {
+  color: var(--text-dim);
+  border-style: dashed;
+  border-color: var(--edge);
+  box-shadow: none;
+  cursor: help;
+  opacity: 0.7;
+}
+.keepawake-chip:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .keepawake-chip { transition: none; }
+}
+
 /* ---- Command palette (Ctrl+K) ----------------------------------------------- */
 
 .palette {

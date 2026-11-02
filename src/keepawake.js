@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - "Don't sleep" toggle (runs an external keep-awake .bat)
 // ----------------------------------------------------------------------------
-// The God Mode panel's second switch. ON launches Mati's own keep-awake script
+// The green/red chip in the terminal bar (renderer/modules/keepawake.js). ON launches Mati's own keep-awake script
 // (a .bat that runs keep-awake.ps1 -KeepDisplayOn: blocks sleep AND the screen
 // timeout); OFF kills that process tree. Windows drops the power request the
 // moment the script's process dies, so killing it is a clean release.
@@ -11,7 +11,7 @@
 //
 // The script path is per-machine, so it lives in config/keepawake.local.json
 // ({ "script": "C:\\...\\Keep Awake.bat" }), never in the repo. No file, no
-// toggle: status() reports available:false and the UI disables the switch.
+// toggle: status() reports available:false and the chip shows a muted hint.
 //
 // Everything that touches the OS (spawn, execFile, fs) is injected so the
 // tests never start a real process.

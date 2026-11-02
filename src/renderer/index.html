@@ -617,21 +617,6 @@
           <span class="switch__track"><span class="switch__thumb"></span></span>
         </span>
       </label>
-      <label
-        id="keepawake-field"
-        class="switch-field godmode-field"
-        data-i18n-title="keepawake.hint"
-        title="Uruchamia skrypt Keep Awake: komputer nie zasnie, a ekran nie zgasnie. Wylaczenie zabija proces."
-      >
-        <span class="switch-field__text">
-          <span class="switch-field__label" data-i18n="keepawake.label">Nie usypiaj - komputer i ekran</span>
-          <span id="keepawake-status" class="switch-field__status" data-i18n="keepawake.off">wylaczone</span>
-        </span>
-        <span class="switch">
-          <input type="checkbox" id="keepawake-toggle" class="switch__input" />
-          <span class="switch__track"><span class="switch__thumb"></span></span>
-        </span>
-      </label>
     </div>
   </template>
 
@@ -1025,6 +1010,21 @@
              in the left panel (see modules/update.js). Only visible when there's
              something to act on (an update available/ready); hidden otherwise -
              so "check failed" never lingers as a permanent scare. -->
+        <!-- "Don't sleep" chip (modules/keepawake.js): green while the keep-awake
+             script runs, red while it does not. Global, so it sits in this
+             always-mounted bar instead of a per-tab widget. -->
+        <button
+          type="button"
+          id="keepawake-chip"
+          class="palette-chip keepawake-chip is-unavailable"
+          aria-pressed="false"
+          aria-disabled="true"
+          data-i18n-title="keepawake.chip.title.unconfigured"
+          title="Nie usypiaj: brak skryptu - ustaw config/keepawake.local.json"
+        >
+          <span id="keepawake-chip-icon" class="keepawake-chip__icon" aria-hidden="true">&#9790;</span>
+          <span id="keepawake-chip-label" class="keepawake-chip__label" data-i18n="keepawake.chip.off">Usypia</span>
+        </button>
         <button id="update-chip" class="palette-chip update-chip" hidden></button>
         <!-- Transient failure notice for a clicked file:line link (traversal
              string, vanished file, no editor configured). Filled + auto-hidden
