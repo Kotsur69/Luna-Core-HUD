@@ -1832,6 +1832,28 @@
                 <span id="mail-test-status" class="orchestra__allowed"></span>
                 <button type="button" id="mail-test" class="pad-send" data-i18n="mailset.test.send">Wyslij test teraz</button>
               </div>
+              <!-- B17 opt-in (src/lunasworkMailReplies.js): replies to Luna's Work emails
+                   become run feedback. Off by default; turning it on asks Google for a
+                   separate read-only consent (gmail.readonly). -->
+              <label id="mail-replies-field" class="switch-field" data-i18n-title="mailset.replies.hint" title="Odpowiedz na mail Luna's Work trafia do biezacego przebiegu jako feedback. Osobna zgoda Google tylko do odczytu (gmail.readonly); czytane sa tylko watki maili przebiegu, co 10 minut, gdy przebieg trwa.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="mailset.replies">Czytaj odpowiedzi na maile Luna's Work</span>
+                  <span id="mail-replies-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="mail-replies-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <div class="ui-field" data-i18n-title="mailset.clients.hint" title="Adresy klienta dla projektu (po przecinku, max 10). Ich odpowiedzi sa feedbackiem klienta: zmiany zakresu czekaja na Twoje tak. Wymagany SPF lub DKIM pass.">
+                <span class="ui-field__label" data-i18n="mailset.clients">Klienci</span>
+                <select id="mail-clients-project" class="profile-select" data-i18n-aria="mailset.clients.project" aria-label="Projekt"></select>
+                <input type="text" id="mail-clients-emails" class="profile-select" data-i18n-ph="mailset.clients.ph" placeholder="klient@firma.pl, ..." data-i18n-aria="mailset.clients" aria-label="Klienci" />
+                <button type="button" id="mail-clients-save" class="pad-send" data-i18n="mailset.clients.save">Zapisz</button>
+              </div>
+              <div class="ui-field">
+                <span id="mail-replies-msg" class="orchestra__allowed" role="status"></span>
+              </div>
             </div>
           </section>
           <section id="termcustom-pane-ai" class="termcustom__pane" data-cat="ai" role="tabpanel" aria-labelledby="termcustom-tab-ai">

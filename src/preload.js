@@ -360,6 +360,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   mailSet: (patch) => ipcRenderer.invoke('mail:set', patch),
   /** Sends the nightly summary now, marked [test]. Promise<{ok} | {ok:false, reason}>. */
   mailTest: () => ipcRenderer.invoke('mail:test'),
+  /**
+   * "Read replies to Luna's Work emails" (B17, opt-in): on = a fresh
+   * gmail.readonly consent in the browser, off = revoked. Main reads only the
+   * threads of its own run emails. Same answer as mailStatus, or {ok:false, reason}.
+   */
+  mailReplies: (on) => ipcRenderer.invoke('mail:replies', { on: on === true }),
+  /** A project's allow-listed client addresses (strings, validated in main). */
+  mailReplyClients: (projectId, emails) => ipcRenderer.invoke('mail:reply-clients', { projectId, emails }),
   // Daily side: check-in, habits, weekly goals, productivity score. Local
   // files only; every payload is re-validated by main's stores.
   /** Promise<{ok, today, entry, days}>. entry null = not asked today. */

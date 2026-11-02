@@ -136,6 +136,7 @@ const {
   nextFailCounts,
   stuckOutcome,
 } = require('./lunasworkRules');
+const { syncMailReplies } = require('./lunasworkMailReplies');
 const { checkList } = require('./lunasworkChecks');
 const { createLoadTest } = require('./lunasworkLoad');
 const { rollbackEvidence, reasonText } = require('./lunasworkCheckpoint');
@@ -397,6 +398,8 @@ function createLunasWork(deps) {
   }
 
   function emit(type) {
+    // B17 opt-in: replies to the run's emails are polled only while it is active.
+    syncMailReplies(deps.mailReplies, run, log);
     const event = { type, status: status() };
     for (const fn of [...listeners]) {
       try {

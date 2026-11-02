@@ -3,7 +3,9 @@
 // ----------------------------------------------------------------------------
 // Connect Gmail (gmail.send only), the nightly summary toggle + time, "send
 // even when empty", "Send test now", and God Mode v2's "Email me when a run
-// finishes" (wired from orchestrasettings.js through mountRunEmailToggle).
+// finishes" (wired from orchestrasettings.js through mountRunEmailToggle),
+// and the opt-in "Read replies to Luna's Work emails" with its per-project
+// client addresses (B17, src/lunasworkMailReplies.js).
 // Main keeps the settings in config/mail.local.json and decides the
 // recipient; this only shows state and sends toggles. Same static-overlay
 // mount shape as orchestrasettings.js.
@@ -12,7 +14,7 @@
 'use strict';
 
 import { sfx } from './sound.js';
-import { t } from './util.js';
+import { t, loc } from './util.js';
 
 const ipcFailed = () => ({ ok: false, reason: 'ipc' });
 const listeners = new Set();
@@ -63,6 +65,71 @@ export function mountRunEmailToggle(root) {
     if (field) field.title = t(s.gmail.connected ? 'orchset.email.hint' : 'orchset.email.needGmail');
   });
   if (last) publish(last);
+}
+
+/** Comma / space separated addresses -> a list (main validates each). */
+const parseEmails = (text) => String(text || '').split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+
+/**
+ * "Read replies to Luna's Work emails" (B17, opt-in) and the per-project
+ * client allow-list. Turning it on opens Google's read-only consent.
+ */
+function mountReplySettings(root) {
+  const box = root.querySelector('#mail-replies-toggle');
+  const project = root.querySelector('#mail-clients-project');
+  const emails = root.querySelector('#mail-clients-emails');
+  const save = root.querySelector('#mail-clients-save');
+  const msg = root.querySelector('#mail-replies-msg');
+  if (!box || !project || !emails || !save) return;
+  const say = (text) => {
+    if (msg) msg.textContent = text;
+  };
+
+  const fillEmails = () => {
+    const clients = last && last.replies ? last.replies.clients : {};
+    emails.value = (clients[project.value] || []).join(', ');
+  };
+
+  listeners.add((s) => {
+    const r = s.replies;
+    if (!r) return;
+    setSwitch(root, 'mail-replies', r.on, s.gmail.connected);
+    const ids = r.projects.map((p) => p.id).join('|');
+    if (project.dataset.ids !== ids) {
+      const keep = project.value;
+      project.replaceChildren(...r.projects.map((p) => new Option(loc(p.label) || p.id, p.id)));
+      if (r.projects.some((p) => p.id === keep)) project.value = keep;
+      project.dataset.ids = ids;
+    }
+    fillEmails();
+    const off = !r.projects.length;
+    project.disabled = off;
+    emails.disabled = off;
+    save.disabled = off;
+  });
+
+  box.addEventListener('change', async () => {
+    sfx.modeToggle();
+    const on = box.checked;
+    box.disabled = true;
+    say(on ? t('mailset.gmail.waiting') : '');
+    const res = await call(() => window.lunacore.mailReplies(on));
+    box.disabled = false;
+    if (!res.ok) {
+      box.checked = !on;
+      say(errText(res.reason));
+    } else {
+      say(on ? t('mailset.replies.ready') : '');
+    }
+  });
+
+  project.addEventListener('change', fillEmails);
+
+  save.addEventListener('click', async () => {
+    sfx.modeToggle();
+    const res = await call(() => window.lunacore.mailReplyClients(project.value, parseEmails(emails.value)));
+    say(res.ok ? t('mailset.clients.saved') : errText(res.reason));
+  });
 }
 
 /** @param {HTMLElement} root the Settings overlay */
@@ -116,6 +183,7 @@ export function mountMailSettings(root) {
     test.disabled = false;
   });
 
+  mountReplySettings(root);
   call(() => window.lunacore.mailStatus());
   // Connected elsewhere (another Settings open, a restart): re-read on show.
   root.addEventListener('focusin', () => {

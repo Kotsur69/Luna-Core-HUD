@@ -109,11 +109,11 @@ test('send refreshes the token and mails the connected address only', async () =
   const fetchImpl = async (url, opts) => {
     calls.push({ url, opts });
     if (url.includes('oauth2')) return json({ access_token: 'at2', expires_in: 3600 });
-    return json({ id: 'msg1' });
+    return json({ id: 'msg1', threadId: 'thr1' });
   };
   const g = createGmailSender({ fetchImpl, safeStorage: fakeStorage, ...f });
   // A `to` field is simply ignored: there is no way to name a recipient.
-  assert.deepEqual(await g.send({ subject: 'Hi', text: 'Body', to: 'evil@x.com' }), { id: 'msg1' });
+  assert.deepEqual(await g.send({ subject: 'Hi', text: 'Body', to: 'evil@x.com' }), { id: 'msg1', threadId: 'thr1' });
   const sendCall = calls.find((c) => c.url.includes('messages/send'));
   assert.equal(sendCall.opts.headers.Authorization, 'Bearer at2');
   const mime = decodeRaw(JSON.parse(sendCall.opts.body).raw);

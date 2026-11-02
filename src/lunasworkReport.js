@@ -38,7 +38,9 @@
 //      check before publishing", lunasworkLegal.findDraftFiles).
 //
 // Both emails list the run's feedback items with their status
-// (lunasworkFeedback.emailLines).
+// (lunasworkFeedback.emailLines). Gmail's message and thread id of each sent
+// email go to deps.threads.record (lunasworkMailReplies), so a reply to it
+// can become feedback when Mati turned reply reading on.
 //
 // Media (deps.launch / deps.demo, optional):
 //   SHIP       the launch assets (lunasworkLaunch.js, C10) are written into
@@ -588,6 +590,7 @@ function buildMilestoneEmail(run, ctx) {
  *     enabled:(prefs:object, connected:boolean)=>boolean},
  *   launch?: (run:object)=>Promise<object>,
  *   demo?: {make:(run:object, ctx:object)=>Promise<object>, videos:(runId:string)=>string[]},
+ *   threads?: {record:(runId:string, info:{threadId:string, messageId:string|null, kind:string})=>boolean},
  *   readFile?: (repoPath:string, name:string)=>string|null,
  *   writeFile?: (file:string, text:string)=>void,
  *   now?: ()=>number, log?: (line:string)=>void,
@@ -677,6 +680,15 @@ function createLunasWorkReporter(deps) {
     }
   }
 
+  /**
+   * The Gmail message + thread id of an email that went out, stored with the
+   * run so a reply can be matched to it (B17, src/lunasworkMailReplies.js).
+   */
+  function recordThread(run, kind, res) {
+    if (!deps.threads || !isObj(res) || !res.threadId) return;
+    deps.threads.record(run.id, { threadId: res.threadId, messageId: res.id, kind });
+  }
+
   /** @returns {Promise<{sent:boolean, skipped?:string, error?:string}>} never rejects */
   async function mail(run, htmlText, media) {
     const m = deps.mail;
@@ -701,8 +713,9 @@ function createLunasWorkReporter(deps) {
           ...shots.map(({ filename, mimeType, content }) => ({ filename, mimeType, content })),
         ];
         const video = media && media.demo && media.demo.attach ? media.demo.attach : null;
-        await sendMail(m, { subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) }, video);
+        const res = await sendMail(m, { subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) }, video);
         if (persist) markSent(m, run);
+        recordThread(run, 'runEnd', res);
         return { sent: true };
       } finally {
         inFlight.delete(run.id);
@@ -736,6 +749,8 @@ function createLunasWorkReporter(deps) {
   // The demo video rides on the milestone mailer's send: build stashes it by
   // subject, the wrapped sender picks it up (with the retry without it).
   const videoBySubject = new Map();
+  // B17: the Gmail result of the last milestone send, so onMilestone can record its thread.
+  let lastMilestoneSend = null;
   const buildWithDemo = (run, ctx) => {
     const email = buildMilestoneEmail(run, ctx);
     const video = ctx && ctx.demo && ctx.demo.attach;
@@ -749,7 +764,10 @@ function createLunasWorkReporter(deps) {
       send: (msg) => {
         const video = videoBySubject.get(msg.subject) || null;
         videoBySubject.delete(msg.subject);
-        return sendMail(deps.mail, msg, video);
+        return sendMail(deps.mail, msg, video).then((res) => {
+          lastMilestoneSend = res;
+          return res;
+        });
       },
     },
   };
@@ -773,7 +791,16 @@ function createLunasWorkReporter(deps) {
     if (!isObj(run) || typeof run.id !== 'string' || !FILE_ID_RE.test(run.id)) return { sent: false, skipped: 'bad-run' };
     const key = `${run.id}|${oneLine(ctx && ctx.milestone, 80)}`;
     const demo = await milestoneDemo(run, ctx, key);
+    lastMilestoneSend = null;
     const res = await milestoneMailer.send(run, demo ? { ...ctx, demo } : ctx);
+    if (res.sent) {
+      try {
+        recordThread(run, 'milestone', lastMilestoneSend);
+      } catch (err) {
+        log(`[lunaswork] milestone thread not recorded: ${errText(err)}`);
+      }
+    }
+    lastMilestoneSend = null;
     return demo ? { ...res, demo } : res;
   }
 
