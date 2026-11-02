@@ -135,7 +135,21 @@ function skippedLine(s, view) {
 /** What the integration did for a package beyond a plain merge, for the Notes column. */
 function integrationNotes(p, integ) {
   const has = (key) => list(integ[key]).includes(p.id);
-  return [has('fixedUp') ? 'fixed by fix-up after the merge' : ''].filter(Boolean);
+  return [has('secondPass') ? 'merged on second pass' : '', has('fixedUp') ? 'fixed by fix-up after the merge' : ''].filter(Boolean);
+}
+
+/** Packages that went in only on the integration's second pass, as their own list. */
+function secondPassLines(view) {
+  const integ = isObject(view.integration) ? view.integration : {};
+  const ids = list(integ.secondPass).filter((id) => typeof id === 'string');
+  if (!ids.length) return [];
+  const byId = new Map(list(view.packages).filter(isObject).map((p) => [p.id, p]));
+  return [
+    '',
+    'Merged on second pass (after the rest was in):',
+    '',
+    ...ids.map((id) => `- ${label({ id, title: (byId.get(id) || {}).title })}`),
+  ];
 }
 
 function selfCheckLine(sc, view) {
@@ -342,6 +356,7 @@ function mergedSection(view) {
       )} | ${cell(notes)} |`,
     );
   }
+  lines.push(...secondPassLines(view));
   const overlaps = list(view.overlaps).filter(isObject);
   if (overlaps.length) lines.push('', 'File overlaps:', '');
   for (const o of overlaps) {

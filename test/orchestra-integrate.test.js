@@ -273,9 +273,10 @@ test('integrateMerge: a verify that passes on the re-run counts as green', async
 test('integrateMerge: an unresolved conflict gets one stronger resolver attempt, then is skipped with its files', async () => {
   const git = fakeExec({
     'rev-parse': { ok: true, stdout: 'sha1\n' },
-    // a: conflict + abort, retry conflict + abort; b: clean
-    merge: [{ ok: false }, { ok: true }, { ok: false }, { ok: true }, { ok: true }],
-    diff: [{ ok: true, stdout: 'src/x.js\n' }, { ok: true, stdout: 'src/x.js\n' }, { ok: true, stdout: '' }],
+    // a: conflict + abort, retry conflict + abort; b: clean; a on the
+    // second pass: conflict + abort again
+    merge: [{ ok: false }, { ok: true }, { ok: false }, { ok: true }, { ok: true }, { ok: false }, { ok: true }],
+    diff: { ok: true, stdout: 'src/x.js\n' },
   });
   const { deps, resolves } = integDeps(git, { resolve: async () => ({ ok: false }) });
   const res = await integ.integrateMerge(
@@ -288,9 +289,11 @@ test('integrateMerge: an unresolved conflict gets one stronger resolver attempt,
   assert.equal(res.ok, true);
   assert.deepEqual(res.merged, ['b']);
   assert.deepEqual(res.skipped, [{ id: 'a', stage: 'conflict', detail: 'src/x.js', files: ['src/x.js'] }]);
+  assert.deepEqual(res.secondPass, []);
   assert.deepEqual(
     resolves.map((r) => r.attempt),
-    [undefined, 2],
+    [undefined, 2, 2],
+    'the second pass goes straight to the stronger resolver',
   );
 });
 
@@ -596,8 +599,9 @@ test('integrateMerge: a green fix-up that deleted tests or moved HEAD off the me
     [(cmd) => (cmd === 'git merge-base --is-ancestor sha1 HEAD' ? { ok: false } : null), /moved HEAD off the merge/],
   ];
   for (const [route, why] of cases) {
-    const git = fixGit(route);
     let fixed = false;
+    // The revert takes the worker's change back out: the second pass is red again.
+    const git = fixGit((cmd) => (cmd.startsWith('git reset --hard') ? ((fixed = false), null) : route(cmd)));
     const { deps } = integDeps(git, { verify: async () => (fixed ? { ok: true, output: '' } : { ok: false, output: SPEC_RED }) });
     deps.fixup = async () => ((fixed = true), { ok: true });
     const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: 'npm test' }]), deps);
@@ -647,7 +651,7 @@ test('createMergeRunDeps: task text in, fix-ups counted on the self-check result
   });
   await mr.integrateMerge({ packages: [{ id: 'a', branch: 'luna/a' }] }, { beforePush: async () => ({ ok: true }) });
   assert.deepEqual(seen, { repoPath: '/r', task: 'do a', gate: 'function', before: false, check: { tests: 'ok', syntax: 'ok', smoke: 'skipped', mergeFixups: 1 }, after: true });
-  assert.deepEqual(plan.integration, { state: 'running', fixedUp: ['a'] });
+  assert.deepEqual(plan.integration, { state: 'running', fixedUp: ['a'], secondPass: [] });
 
   // A run killed earlier and finished by hand still gets its fix-ups.
   let stopped = null;
@@ -690,6 +694,126 @@ test('normalizeStoredPlan keeps integration.fixedUp, a failed fix-up on a skip, 
   assert.equal('fixup' in stored.skipped[1], false);
   assert.equal(stored.selfCheck.fixups, 3);
   assert.deepEqual(sup.normalizeStoredPlan({ id: 'p1', repoPath: '/r', packages: [{ id: 'a' }] }).integration.fixedUp, []);
+});
+
+// ---- the integration's second pass: what the order cost is tried again -----------
+
+/**
+ * Fake git for a plan where luna/b conflicts until luna/a is in: a merge of b
+ * before that leaves src/shared.js unmerged (the resolver cannot fix it).
+ */
+function orderGit() {
+  const inTree = new Set();
+  return routedExec((cmd) => {
+    if (cmd.startsWith('git rev-parse')) return { ok: true, stdout: 'sha1\n' };
+    if (cmd === 'git diff --name-only --diff-filter=U') return { ok: true, stdout: 'src/shared.js\n' };
+    const m = /^git merge --no-ff .* refs\/heads\/(luna\/[a-z]+)$/.exec(cmd);
+    if (!m) return null;
+    if (m[1] === 'luna/b' && !inTree.has('luna/a')) return { ok: false, stderr: 'CONFLICT (content): src/shared.js' };
+    inTree.add(m[1]);
+    return { ok: true };
+  });
+}
+
+const ORDER_PLAN = [
+  { id: 'b', branch: 'luna/b', verify: '' },
+  { id: 'a', branch: 'luna/a', verify: '' },
+  { id: 'c', branch: 'luna/c', verify: '', dependsOn: ['b'] },
+];
+
+test('integrateMerge second pass: B conflicts until A is in, C depends on B -> all three merged', async () => {
+  const git = orderGit();
+  const { deps, resolves } = integDeps(git, { resolve: async () => ({ ok: false }) });
+  const res = await integ.integrateMerge(args(ORDER_PLAN), deps);
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.merged, ['a', 'b', 'c'], 'A on the first pass, then B, then its dependent C');
+  assert.deepEqual(res.skipped, []);
+  assert.deepEqual(res.secondPass, ['b', 'c']);
+  assert.deepEqual(resolves.map((r) => r.attempt), [undefined, 2], 'the first pass tried both resolvers; B then merged clean');
+  const merges = git.calls.filter((c) => c.startsWith('git merge --no-ff')).map((c) => c.split('refs/heads/')[1]);
+  assert.deepEqual(merges, ['luna/b', 'luna/b', 'luna/a', 'luna/b', 'luna/c']);
+  assert.ok(git.calls.includes('git push origin HEAD:refs/heads/main'));
+});
+
+test('integrateMerge second pass: none once the run is stopped, none in a check-only build', async () => {
+  for (const [label, extra, checkOnly] of [
+    ['stopped', { stopped: () => true }, false],
+    ['check only', {}, true],
+  ]) {
+    const git = orderGit();
+    const { deps } = integDeps(git, { resolve: async () => ({ ok: false }) });
+    Object.assign(deps, extra);
+    const res = await integ.integrateMerge({ ...args(ORDER_PLAN), checkOnly }, deps);
+    assert.deepEqual(res.merged, ['a'], label);
+    assert.deepEqual(res.secondPass, [], label);
+    assert.deepEqual(
+      res.skipped.map((s) => [s.id, s.stage, s.detail]),
+      [
+        ['b', 'conflict', 'src/shared.js'],
+        ['c', 'depSkipped', 'b'],
+      ],
+      label,
+    );
+  }
+});
+
+test('integrateMerge second pass: a package red again keeps its stage; a fix-up gets one more go', async () => {
+  const git = fixGit();
+  const fixups = [];
+  const { deps } = integDeps(git, { verify: async (cmd) => (cmd === 'red' ? { ok: false, output: SPEC_RED } : { ok: true, output: '' }) });
+  deps.fixup = async (a) => (fixups.push(a.id), { ok: false });
+  const res = await integ.integrateMerge(
+    args([
+      { id: 'a', branch: 'luna/a', verify: 'red' },
+      { id: 'core', branch: 'luna/core', verify: 'green' },
+      { id: 'ui', branch: 'luna/ui', verify: 'green', dependsOn: ['a'] },
+    ]),
+    deps,
+  );
+  assert.deepEqual(res.merged, ['core']);
+  assert.deepEqual(res.secondPass, []);
+  assert.deepEqual(fixups, ['a', 'a'], 'one fix-up per pass');
+  assert.deepEqual(
+    res.skipped.map((s) => [s.id, s.stage, s.fixup]),
+    [
+      ['a', 'verify', 'failed'],
+      ['ui', 'depSkipped', undefined],
+    ],
+  );
+});
+
+test('the report lists the packages merged on the second pass on their own', () => {
+  const md = buildReport(
+    {
+      id: 'p1',
+      repoPath: '/r',
+      integrationMode: 'merge',
+      integration: { state: 'done', skipped: [], fixedUp: [], secondPass: ['b', 'c'] },
+      packages: [
+        { id: 'a', title: 'Alpha', state: 'pushed', branch: 'luna/a', merged: true },
+        { id: 'b', title: 'Beta', state: 'pushed', branch: 'luna/b', merged: true },
+        { id: 'c', title: 'Gamma', state: 'pushed', branch: 'luna/c', merged: true },
+      ],
+    },
+    { now: 0, suggestions: [] },
+  );
+  assert.match(md, /Merged on second pass \(after the rest was in\):\n\n- `b` Beta\n- `c` Gamma\n/);
+  assert.match(md, /\| b - Beta \|.*merged on second pass/);
+  assert.doesNotMatch(md, /\| a - Alpha \|.*second pass/);
+  const none = buildReport({ id: 'p1', repoPath: '/r', integrationMode: 'merge', integration: { state: 'done' }, packages: [] }, { now: 0, suggestions: [] });
+  assert.doesNotMatch(none, /second pass/);
+});
+
+test('normalizeStoredPlan keeps integration.secondPass (valid ids only)', () => {
+  const stored = sup.normalizeStoredPlan({
+    id: 'p1',
+    repoPath: '/r',
+    packages: [{ id: 'a' }],
+    integration: { state: 'done', secondPass: ['b', 'NOT AN ID', null] },
+  }).integration;
+  assert.deepEqual(stored.secondPass, ['b']);
+  assert.deepEqual(sup.normalizeStoredPlan({ id: 'p1', repoPath: '/r', packages: [{ id: 'a' }] }).integration.secondPass, []);
 });
 
 // ---- a second pass of the same run: leftovers never block it ---------------------

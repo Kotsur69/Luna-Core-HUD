@@ -9,7 +9,8 @@
 //     fix-ups (a run killed earlier and finished by hand is not "stopped").
 // The count reaches integration.selfCheck.fixups through the self-check
 // result (orchestraSelfCheck.js reads result.mergeFixups); the packages the
-// fix-up kept in land on plan.integration.fixedUp for the run report.
+// fix-up kept in land on plan.integration.fixedUp, the ones merged only on
+// the second pass (orchestraSecondPass.js) on .secondPass, for the report.
 // ============================================================================
 
 'use strict';
@@ -52,7 +53,7 @@ function createMergeRunDeps(deps) {
       },
     );
     if (live && deps.getPlan() === run && res && typeof res === 'object') {
-      run.integration = { ...run.integration, fixedUp: idList(res.fixedUp) };
+      run.integration = { ...run.integration, fixedUp: idList(res.fixedUp), secondPass: idList(res.secondPass) };
     }
     return res;
   }
