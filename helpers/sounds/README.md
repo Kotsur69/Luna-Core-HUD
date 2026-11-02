@@ -16,7 +16,17 @@ Audio, real samples from `assets/keysounds/` - see
 `reference/TYPING_SYNTH_PLAN.md`'s "Resolved 2026-08-26"). Nothing plays these
 4 files anymore; left in place rather than deleted.
 
-The other four (`nav-click.wav`, `mode-toggle.wav`, `terminal-new.wav`,
-`terminal-close.wav`) are still 0-byte stubs — nothing plays them yet. mpv/the
-sound engine handle a missing/silent file the same as a missing one (no crash,
-just no sound).
+The four UI cues (`nav-click.wav`, `mode-toggle.wav`, `terminal-new.wav`,
+`terminal-close.wav`) are real since 2026-11-02 (until then they were 0-byte
+stubs that played nothing). Procedurally synthesized by
+`scripts/gen-ui-sounds.js` — decaying sine partials + raised-cosine fades,
+16-bit mono 44.1 kHz, peaks 0.30-0.35 (no clipping), output deterministic:
+- `nav-click` — ~30 ms soft tick (1.9 kHz + tiny noise transient)
+- `mode-toggle` — ~80 ms two-tone up blip (A5 → E6)
+- `terminal-new` — ~150 ms soft rising chime (G5 → D6)
+- `terminal-close` — ~150 ms soft falling chime (D6 → G5)
+
+Regenerate with `node scripts/gen-ui-sounds.js`. `test/ui-sounds.test.js`
+checks the files are valid, < 200 ms, unclipped, and match the generator, so
+tweak the script and regenerate rather than editing the wavs by hand. Per-cue
+volume lives in `config/sounds.json`.
