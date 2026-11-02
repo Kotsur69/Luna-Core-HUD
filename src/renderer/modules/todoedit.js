@@ -113,6 +113,20 @@ function formButton(label, title, onClick) {
   return btn;
 }
 
+const MIN_ROWS_TITLE = 3;
+const MIN_ROWS_BODY = 4;
+
+/**
+ * Grows a textarea to fit its text so the whole draft stays visible while
+ * typing or deleting; the CSS max-height caps it and scrolls beyond that.
+ * @param {HTMLTextAreaElement} input
+ */
+function autoGrow(input) {
+  if (!input.isConnected) return;
+  input.style.height = 'auto';
+  input.style.height = `${input.scrollHeight + 2}px`;
+}
+
 /** One labelled field of the form, bound to editing.draft[key]. */
 function editField(key, labelKey, multiline) {
   const wrap = document.createElement('label');
@@ -126,14 +140,18 @@ function editField(key, labelKey, multiline) {
   const input = document.createElement(multiline ? 'textarea' : 'input');
   input.className = 'todo-edit__input';
   input.dataset.field = key;
-  if (multiline) input.rows = key === 'text' ? 2 : 3;
+  if (multiline) input.rows = key === 'text' ? MIN_ROWS_TITLE : MIN_ROWS_BODY;
   input.value = editing.draft[key];
   // Guarded: a project switch drops `editing` while the old form is still
   // on screen until the new list loads.
   input.addEventListener('input', () => {
+    if (multiline) autoGrow(input);
     if (!editing) return;
     editing = { ...editing, draft: { ...editing.draft, [key]: input.value } };
   });
+  // The form is built detached, so its scrollHeight is only real once the
+  // row is in the DOM - size it on the next frame.
+  if (multiline) requestAnimationFrame(() => autoGrow(input));
   input.addEventListener('focus', () => {
     if (!editing) return;
     editing = { ...editing, focus: key };

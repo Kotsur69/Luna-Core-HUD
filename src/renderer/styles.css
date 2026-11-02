@@ -4213,7 +4213,10 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
-  line-height: 1.35;
+  line-height: 1.45;
+  /* Textareas auto-grow (todoedit.js autoGrow) up to this, then scroll. */
+  max-height: 50vh;
+  overflow-y: auto;
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-md);
   border: var(--border-w) solid var(--edge);
