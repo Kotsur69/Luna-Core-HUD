@@ -1,8 +1,9 @@
 // ============================================================================
 // LunaCore - overnight guard (main-process half of a God Mode run)
 // ----------------------------------------------------------------------------
-// God Mode (src/renderer/modules/godmode.js) is the unattended runner; this is
-// what keeps a long run alive when nobody is at the desk:
+// God Mode v2 (src/orchestra.js) runs workers unattended; this is what keeps a
+// long run alive when nobody is at the desk. Every worker / fix-up tab joins
+// through guardedSessionFactory (main.js) and leaves when its tab closes:
 //
 //   - powerSaveBlocker 'prevent-app-suspension' so Windows does not sleep
 //     mid-run (the screen may still turn off);
@@ -289,8 +290,25 @@ function createOvernightGuard(deps) {
   };
 }
 
+/**
+ * Wraps a tab factory so every tab it opens starts a run on `guard` - God Mode
+ * v2's worker and fix-up tabs get keep-awake + the local-model watchdog for as
+ * long as they live (the tab closing calls guard.forgetSession).
+ * @param {(opts:object)=>({id:string}|null)} createSession
+ * @param {{startRun:(id:string)=>void}} guard
+ * @returns {(opts:object)=>({id:string}|null)}
+ */
+function guardedSessionFactory(createSession, guard) {
+  return (opts) => {
+    const session = createSession(opts);
+    if (session && typeof session.id === 'string') guard.startRun(session.id);
+    return session;
+  };
+}
+
 module.exports = {
   createOvernightGuard,
+  guardedSessionFactory,
   recoverLocalBackend,
   isBackendHealthy,
   MAX_RECOVERY_ATTEMPTS,

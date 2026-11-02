@@ -632,7 +632,7 @@ function foldMcpEvents(open, events) {
  *
  * That misread is what killed auto-proceed. A drop arms a "continue" on a
  * backoff timer; this entry reaches the watcher ~1.5s later (intervalMs), gets
- * reported as a turn end, and autoproceed.js / godmode.js both cancel the
+ * reported as a turn end, and autoproceed.js cancels the
  * pending injection for a session that never recovered. The session then sits
  * idle producing no new stdout, so main.js's connectionError edge never fires
  * again and the drop is never recovered - the "armed, and nothing happens for

@@ -17,7 +17,6 @@ const { workerEffortOf } = require('../src/uiprefs.js');
 const { TOOLS } = require('../src/intake.js');
 const integ = require('../src/orchestraIntegrate.js');
 const sup = require('../src/orchestraSupervisor.js');
-const { effortStep } = require('../src/renderer/modules/godmode.js');
 
 const flagValue = (argv, flag) => argv[argv.indexOf(flag) + 1];
 
@@ -122,12 +121,4 @@ test('a stored run keeps effort, effortOverride and workerEffort; bad values bec
   assert.deepEqual(plan.packages.map((p) => [p.effort, p.effortOverride]), [['high', 'max'], [null, null]]);
   assert.equal(sup.normalizeStoredPlan({ ...raw, workerEffort: 'plan' }).workerEffort, 'plan');
   assert.equal(sup.normalizeStoredPlan({ ...raw, workerEffort: 'low' }).workerEffort, null);
-});
-
-test('v1 effortStep: sent once on a fresh run, then only when the level changes', () => {
-  assert.deepEqual(effortStep({ text: 'x' }, null), { level: 'medium', command: '/effort medium' });
-  assert.equal(effortStep({ text: 'x' }, 'medium'), null);
-  assert.equal(effortStep({ text: 'x', effort: 'low' }, 'medium'), null, 'invalid card effort runs on medium');
-  assert.deepEqual(effortStep({ text: 'x', effort: 'xhigh' }, 'medium'), { level: 'xhigh', command: '/effort xhigh' });
-  assert.equal(effortStep({ text: 'x', effort: 'xhigh' }, 'xhigh'), null);
 });

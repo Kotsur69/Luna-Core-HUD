@@ -542,19 +542,10 @@ contextBridge.exposeInMainWorld('lunacore', {
     return () => ipcRenderer.removeListener('todo:changed', listener);
   },
 
-  // --- God Mode (unattended to-do runner, see reference/GODMODE_PLAN.md) ---
+  // --- Session signals (drops / usage limits / turn starts; read by autoproceed.js) ---
   /** Usage-limit / connection-drop signal from a session's raw stdout: ({ sessionId, type }). */
   onGodModeSignal: (callback) => {
     ipcRenderer.on('godmode:signal', (_event, payload) => callback(payload));
-  },
-  /**
-   * Native "are you sure" popup gating every arm; resolves true only on an
-   * explicit Yes. `counts` is {runnable, skipped, blocked} - main validates it.
-   */
-  confirmGodMode: (counts) => ipcRenderer.invoke('godmode:confirm', counts),
-  /** Reports a tab's run starting (active=true) or ending - drives the overnight guard. */
-  setGodModeRun: (sessionId, active) => {
-    if (typeof sessionId === 'string') ipcRenderer.send('godmode:run', sessionId, active === true);
   },
 
   // --- God Mode v2 planner (reference/ORCHESTRATOR_PLAN.md slice 3) ---

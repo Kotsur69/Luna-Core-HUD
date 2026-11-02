@@ -17,6 +17,7 @@ const {
   createOvernightGuard,
   recoverLocalBackend,
   isBackendHealthy,
+  guardedSessionFactory,
   MAX_RECOVERY_ATTEMPTS,
 } = require('../src/overnight');
 
@@ -361,4 +362,32 @@ test('suspendAwake lets go of keep-awake for God Mode sleep / shutdown; restoreA
   guard.suspendAwake();
   guard.restoreAwake();
   assert.strictEqual(blocker.started.size, 0, 'nothing to hold with no run');
+});
+
+// God Mode v2 worker tabs join the guard (docs/MULTI_GODMODE_PLAN.md, D1):
+// every tab orchestra opens holds keep-awake + the local-model watchdog until
+// it closes (main.js forgets the session on close).
+test('guardedSessionFactory starts a run for every tab it opens', () => {
+  const started = [];
+  const guard = { startRun: (id) => started.push(id) };
+  const opened = [];
+  const create = guardedSessionFactory((opts) => {
+    opened.push(opts);
+    return { id: `s${opened.length}` };
+  }, guard);
+
+  const a = create({ cwd: 'C:\wt\a' });
+  const b = create({ cwd: 'C:\wt\b' });
+
+  assert.deepStrictEqual(a, { id: 's1' }, 'returns the created session unchanged');
+  assert.deepStrictEqual(b, { id: 's2' });
+  assert.deepStrictEqual(opened, [{ cwd: 'C:\wt\a' }, { cwd: 'C:\wt\b' }], 'passes options through');
+  assert.deepStrictEqual(started, ['s1', 's2']);
+});
+
+test('guardedSessionFactory starts nothing when no tab was created', () => {
+  const started = [];
+  const create = guardedSessionFactory(() => null, { startRun: (id) => started.push(id) });
+  assert.strictEqual(create({}), null);
+  assert.deepStrictEqual(started, []);
 });

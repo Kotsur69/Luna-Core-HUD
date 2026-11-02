@@ -4,9 +4,8 @@
 // A toggle in the Actions section, next to Auto-compact. When ARMED, ANY
 // session whose request dies mid-flight ("API Error: Connection lost
 // mid-response" and friends) gets "continue" injected for it automatically
-// after a short backoff. This is the same recovery godmode.js's to-do-runner
-// already does for itself - generalized so it works on ordinary, non-God-Mode
-// work too (Mati's actual complaint: he tasks a normal message, steps away for
+// after a short backoff, on ordinary work as well as God Mode workers (Mati's
+// actual complaint: he tasks a normal message, steps away for
 // a few minutes, and comes back to a dead turn).
 //
 // The drop is read from the CLI's OWN TRANSCRIPT (src/observer.js's
@@ -22,17 +21,11 @@
 // pastePrompt() already accepts a target sessionId, so a backgrounded tab
 // recovers exactly like the one you're looking at.
 //
-// Module-scope listeners, same deliberate deviation godmode.js documents for
-// itself: the whole point is surviving the "not looking at it" case, so
+// Module-scope listeners on purpose: the whole point is surviving the "not looking at it" case, so
 // onTurnEnd/onGodModeSignal/onTools/onSessions are wired ONCE at import time
 // and stay live whether or not this widget's DOM is mounted. The
 // armed/disarmed check inside handleGodModeSignal is the actual gate; the
-// visible toggle is the up-front friction, not continuous visibility (same
-// reasoning godmode.js gives for its own listeners).
-//
-// Skips any session isBoundSession() already claims for godmode.js's own
-// run, so an armed to-do-run and this toggle never both inject "continue"
-// for the same drop.
+// visible toggle is the up-front friction, not continuous visibility.
 // ============================================================================
 
 'use strict';
@@ -40,7 +33,6 @@
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { sfx } from './sound.js';
-import { isBoundSession } from './godmode.js';
 import { defineWidget } from './registry.js';
 
 // Stop after this many "continue"s on one turn that never recovers - past that
@@ -349,7 +341,6 @@ function handleGodModeSignal({ sessionId, type, at } = {}) {
     return;
   }
   if (!autoProceedArmed || type !== 'connectionError') return;
-  if (isBoundSession(sessionId)) return; // godmode.js already owns this tab's recovery
   const s = sessionState(sessionId);
   // The drop's own transcript timestamp (src/observer.js, apiErrorAt), kept
   // monotonic so a batch delivered out of order cannot move the line backwards.
@@ -370,8 +361,7 @@ function handleGodModeSignal({ sessionId, type, at } = {}) {
   }, BACKOFF_MS);
 }
 
-// Module-scope on purpose - see the header note. Guarded the same way
-// godmode.js's own listeners are, in case this module is ever pulled into a
+// Module-scope on purpose - see the header note. Guarded in case this module is ever pulled into a
 // plain-Node test context where window.lunacore doesn't exist.
 if (typeof window !== 'undefined' && window.lunacore) {
   window.lunacore.onTurnEnd(handleTurnEnd);

@@ -1,8 +1,8 @@
 // ============================================================================
 // The `manual` opt-out flag on a to-do: a card only the user can do. It must
-// round-trip through the store, stay out of God Mode's queue and Orchestra's
-// planner, be settable through the intake MCP tools, and leave a plain item
-// byte-identical when it is not set.
+// round-trip through the store, stay out of God Mode's planner, be settable
+// through the intake MCP tools, and leave a plain item byte-identical when it
+// is not set.
 // ============================================================================
 
 'use strict';
@@ -12,13 +12,10 @@ const assert = require('node:assert/strict');
 
 const { normalizeTodo, normalizeCardFields } = require('../src/todo.js');
 const { toggleManual } = require('../src/renderer/modules/todo.js');
-const { pickNextItem, queueStep, runnableCount, armCounts } = require('../src/renderer/modules/godmode.js');
-const { normalizeArmCounts, confirmDetail } = require('../src/godmodeconfirm.js');
 const { createOrchestra } = require('../src/orchestra.js');
 const { applyAdd, applyUpdate, TOOLS } = require('../src/intake.js');
 
 const item = (at, extra = {}) => ({ text: `t${at}`, done: false, at, ...extra });
-const none = new Set();
 
 // ---- data -------------------------------------------------------------------
 
@@ -46,78 +43,6 @@ test('toggleManual sets and clears the flag by index, never mutating', () => {
   assert.deepEqual(off[1], list[1]);
   assert.equal('manual' in off[1], false, 'cleared means no key, not manual:false');
   assert.equal(toggleManual(list, 9), list, 'out of range is a no-op');
-});
-
-// ---- God Mode -----------------------------------------------------------------
-
-test('pickNextItem never takes a manual item', () => {
-  const list = [item(1, { manual: true }), item(2)];
-  assert.equal(pickNextItem(list, none).at, 2);
-  assert.equal(pickNextItem([item(1, { manual: true })], none), null);
-});
-
-test('queueStep finishes once only manual items are left open', () => {
-  const list = [item(1, { manual: true }), item(2, { done: true }), item(3, { manual: true })];
-  assert.deepEqual(queueStep(list, none), { action: 'done' });
-  assert.equal(runnableCount(list), 0);
-});
-
-test('an item depending on an open manual item waits (the deadlock check stalls it)', () => {
-  const list = [item(1, { manual: true }), item(2, { dependsOn: [1] })];
-  assert.deepEqual(queueStep(list, none), { action: 'wait' });
-  const ticked = [item(1, { manual: true, done: true }), item(2, { dependsOn: [1] })];
-  assert.equal(queueStep(ticked, none).item.at, 2, 'ticking the manual item by hand unblocks it');
-});
-
-test('runnableCount counts open items the run may take', () => {
-  assert.equal(runnableCount([item(1), item(2, { manual: true }), item(3, { done: true })]), 1);
-  assert.equal(runnableCount(null), 0);
-});
-
-test('armCounts splits open items into runnable, skipped (manual) and blocked by manual', () => {
-  const list = [
-    item(1, { manual: true }),
-    item(2, { dependsOn: [1] }), // blocked directly
-    item(3, { dependsOn: [2] }), // blocked through 2
-    item(4),
-    item(5, { dependsOn: [4] }), // waits on a runnable item: still runnable
-    item(6, { manual: true, done: true }),
-    item(7, { dependsOn: [6] }), // its manual dependency is done
-    item(8, { done: true }),
-  ];
-  assert.deepEqual(armCounts(list), { runnable: 3, skipped: 1, blocked: 2 });
-  assert.deepEqual(armCounts([]), { runnable: 0, skipped: 0, blocked: 0 });
-  assert.deepEqual(armCounts([item(1, { manual: true }), item(2, { dependsOn: [1] })]), {
-    runnable: 0,
-    skipped: 1,
-    blocked: 1,
-  });
-});
-
-test('normalizeArmCounts never trusts the renderer payload', () => {
-  assert.deepEqual(normalizeArmCounts({ runnable: 3, skipped: 1, blocked: 2 }), { runnable: 3, skipped: 1, blocked: 2 });
-  assert.deepEqual(normalizeArmCounts(null), { runnable: 0, skipped: 0, blocked: 0 });
-  assert.deepEqual(normalizeArmCounts(7), { runnable: 0, skipped: 0, blocked: 0 });
-  assert.deepEqual(normalizeArmCounts({ runnable: -1, skipped: 2.5, blocked: 'x' }), { runnable: 0, skipped: 0, blocked: 0 });
-  assert.deepEqual(normalizeArmCounts({ runnable: 1e9, skipped: Infinity, blocked: NaN }), {
-    runnable: 100,
-    skipped: 0,
-    blocked: 0,
-  });
-});
-
-test('confirmDetail names all three counts in both languages', () => {
-  const counts = { runnable: 3, skipped: 1, blocked: 2 };
-  const en = confirmDetail(counts, false);
-  assert.match(en, /3 open tasks/);
-  assert.match(en, /1 manual/);
-  assert.match(en, /2 .*blocked/);
-  const pl = confirmDetail(counts, true);
-  assert.match(pl, /3 zadania/);
-  assert.match(pl, /Pominie 1 .*recznie/);
-  assert.match(pl, /2 .*zablokowan/);
-  assert.doesNotMatch(pl, /[ąćęłńóśźż]/i, 'no diacritics');
-  assert.doesNotMatch(confirmDetail({ runnable: 1, skipped: 0, blocked: 0 }, false), /manual|blocked/);
 });
 
 // ---- Orchestra ---------------------------------------------------------------

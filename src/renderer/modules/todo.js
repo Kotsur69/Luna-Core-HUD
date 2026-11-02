@@ -27,7 +27,6 @@ import { t, pulse } from './util.js';
 import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { defineWidget } from './registry.js';
-import { mountGodModeControl, refreshGodModeControl } from './godmode.js';
 import { mountOrchestraButton } from './orchestra.js';
 import { mountLunasWorkButton } from './lunaswork.js';
 import { MAX_TEXT_CHARS, STEER_TAG, isCard, cardPrompt, editTodo, refinePrompt, hasTag, toggleTag } from './todocards.js';
@@ -279,7 +278,6 @@ function commit(next) {
  * current tab). Called by sessions.js; a no-op while the widget is unmounted.
  */
 export function syncTodoProject() {
-  refreshGodModeControl(); // the God Mode line shows the active tab's own run
   if (!els) return;
   flushPendingSave();
   // An open form belongs to the previous project's list.
@@ -817,7 +815,6 @@ defineWidget({
 
     els.clear.addEventListener('click', () => commit(clearDone(items)));
 
-    const offGodMode = mountGodModeControl(root);
     const offOrchestra = mountOrchestraButton(root);
     const offLunasWork = mountLunasWorkButton(root);
     // Cards written by Claude (intake MCP tools) land without a reload.
@@ -846,7 +843,6 @@ defineWidget({
       flushSettle();
       forgetEdit();
       offLang();
-      offGodMode();
       offOrchestra();
       offLunasWork();
       offExternal();

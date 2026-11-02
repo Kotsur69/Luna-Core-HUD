@@ -71,7 +71,7 @@ const { findApiPort, listModels: listLmStudioModels, loadModel: loadLmStudioMode
 const { createCcrControl, prepareCcrLaunch } = require('./ccrcontrol');
 // Keeps an unattended God Mode run alive: no sleep, no throttling, and a
 // watchdog that brings a local LM Studio backend back (src/overnight.js).
-const { createOvernightGuard, recoverLocalBackend } = require('./overnight');
+const { createOvernightGuard, recoverLocalBackend, guardedSessionFactory } = require('./overnight');
 // God Mode panel's "Don't sleep" switch: runs/kills the keep-awake .bat
 // named in config/keepawake.local.json (src/keepawake.js).
 const { createKeepAwake, CONFIG_FILE: KEEP_AWAKE_CONFIG } = require('./keepawake');
@@ -176,7 +176,6 @@ const { loadThemes } = require('./theme');
 const { loadLayouts } = require('./layouts');
 // UI preferences (theme + language) persisted in config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
-const { normalizeArmCounts, confirmDetail } = require('./godmodeconfirm');
 // Opt-in "Use my Luna setup" for native Codex/Gemini tabs (docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md).
 const { loadLunaSyncPrefs, saveLunaSyncPrefs, lunaLaunchFor, lunaSyncNotice } = require('./lunasynclaunch');
 const { readClaudeSetup, listPluginSkills } = require('./lunasyncio');
@@ -834,7 +833,6 @@ async function runWidgetProbe(win) {
         sessiontimeline: document.querySelectorAll('#stimeline-track').length,
         devices: document.querySelectorAll('#dev-mic-state').length,
         todo: document.querySelectorAll('#todo-form').length,
-        godmode: document.querySelectorAll('#godmode-toggle').length,
         clipboard: document.querySelectorAll('#clip-enabled').length,
         mcp: document.querySelectorAll('#mcp-list').length,
         git: document.querySelectorAll('#git-list').length,
@@ -1034,7 +1032,10 @@ const orchestra = createOrchestra({
   addWorktree,
   dirtyCount,
   readTodos,
-  createSession,
+  // Every worker / fix-up tab joins the overnight guard: keep-awake while a
+  // run has tabs, plus the LM Studio watchdog for local-model workers. The
+  // tab closing ends it (overnight.forgetSession in the close path).
+  createSession: guardedSessionFactory(createSession, overnight),
   briefDir: () => path.join(userDir(), BRIEF_DIR),
   writeBrief: (file, text) => {
     try {
@@ -1201,7 +1202,10 @@ const orchestra = createOrchestra({
   flush: () => {
     if (todoSync) todoSync.flush();
   },
-  otherRunsActive: () => overnight.current().length > 0,
+  // One God Mode run at a time for now; the overnight guard now holds this
+  // run's own workers, so it must not be read as "another run" (the
+  // multi-run registry replaces this - docs/MULTI_GODMODE_PLAN.md A2).
+  otherRunsActive: () => false,
   appendReport: (planId, line) => {
     if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return;
     try {
@@ -1614,8 +1618,8 @@ function spawnInto(session, profile, launch = null) {
       // §6.1: also forwarded to the renderer for the session timeline widget -
       // checkTurnEnd only ever drove sound/TTS, it never reached the UI before.
       // The drop signal, straight from the CLI's own transcript. Same channel
-      // and payload the stdout scan used to send, so godmode.js and
-      // autoproceed.js need no change - only the provenance is different, and
+      // and payload the stdout scan used to send, so
+      // autoproceed.js needs no change - only the provenance is different, and
       // that is the whole point: this fires once per real dropped request
       // instead of once per repaint of some text that happens to say so.
       //
@@ -3364,24 +3368,6 @@ function registerIpc() {
     return ok;
   });
 
-  // God Mode: the hard confirm gate (GODMODE_PLAN.md decision #5). A NATIVE
-  // OS dialog on purpose, not an in-page modal - it is genuinely modal (no
-  // stray click on the page behind it can double-fire an arm), and it is
-  // literally the "popup window with an are-you-sure message" Mati asked for,
-  // for less code than a hand-rolled overlay/focus-trap. Resolves true only
-  // on the explicit Yes button; closing the dialog any other way is a No.
-  // The renderer reports a tab's God Mode run starting (active=true) or ending.
-  // Several tabs can run at once. Only a live session id starts a run - never
-  // trust the renderer; ending one is always safe.
-  ipcMain.on('godmode:run', (_event, sessionId, active) => {
-    if (typeof sessionId !== 'string') return;
-    if (active === true) {
-      if (sessions.has(sessionId)) overnight.startRun(sessionId);
-    } else {
-      overnight.endRun(sessionId);
-    }
-  });
-
   // God Mode v2 planner (slice 3). The renderer names a tab at most; the
   // project, repo folder, profile and to-do list are all resolved here. The
   // planner runs on the cloud default like /ask (ask:query's reasoning): a
@@ -3500,24 +3486,6 @@ function registerIpc() {
   // comes from the local config, never from the page.
   ipcMain.handle('keepawake:get', () => keepAwake.status());
   ipcMain.handle('keepawake:set', (_event, on) => keepAwake.set(on === true));
-
-  // The renderer's {runnable, skipped, blocked} counts are clamped in
-  // godmodeconfirm.js before they reach the dialog - never trusted as sent.
-  ipcMain.handle('godmode:confirm', async (_event, rawCounts) => {
-    const pl = readUiPrefs().lang === 'pl';
-    const counts = normalizeArmCounts(rawCounts);
-    if (counts.runnable === 0) return false;
-    const { response } = await dialog.showMessageBox(mainWindow, {
-      type: 'question',
-      buttons: pl ? ['Tak', 'Nie'] : ['Yes', 'No'],
-      defaultId: 1,
-      cancelId: 1,
-      title: 'God Mode',
-      message: pl ? 'Uruchomic God Mode?' : 'Start God Mode?',
-      detail: confirmDetail(counts, pl),
-    });
-    return response === 0;
-  });
 
   // Device panel: microphone mute. `action` is whitelisted inside devices.js
   // before it can reach a shell argv, same discipline media:command uses.

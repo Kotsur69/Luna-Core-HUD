@@ -36,7 +36,7 @@
 //     see or disarm is exactly what "zero surprise token spend" rules out - so
 //     canAutoCompactFire() also checks `mounted()`, which covers the 'turns' and
 //     'time' listeners that DO sit at module scope (onTurnEnd has no disposer,
-//     same reason autoproceed.js / godmode.js register it once).
+//     same reason autoproceed.js registers it once).
 //
 // The edge/cooldown/clock/counter state stays at module scope on purpose - a
 // remount must not re-arm the edge or clear the cooldown and hand you a second
@@ -217,7 +217,7 @@ function onTimeTick() {
 
 // onTurnEnd has no disposer (preload just adds the ipcRenderer listener), so it
 // is registered ONCE here, not per-mount - the same module-scope pattern
-// autoproceed.js and godmode.js use. Both handlers self-gate on mode + arm +
+// autoproceed.js uses. Both handlers self-gate on mode + arm +
 // gate(), and gate() checks isMounted(), so nothing fires while the toggle is
 // off screen. Guarded so a plain-Node test require of this module (for the pure
 // exports above) doesn't touch a missing `window`.
