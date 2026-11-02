@@ -4341,7 +4341,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    push the chevron away from its own title text. Keeping the label as the
    grower puts the space back where that rule wanted it - between the text and
    the control on the right - with the chevron pinned to the label. */
-.panel__title--fold.usage-head > span:not(.panel__fold):not(.panel__grip):not(.count) { flex: 1; }
+.panel__title--fold.usage-head > span:not(.panel__fold):not(.panel__grip):not(.count):not(.afile-scope) { flex: 1; }
 
 .panel__fold {
   flex: none;
