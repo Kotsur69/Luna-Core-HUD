@@ -20,29 +20,71 @@
 
 'use strict';
 
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const { runGit, firstLine } = require('./worktrees');
 const { checkCwd } = require('./projects');
 
 const VERIFY_TIMEOUT_MS = 15 * 60 * 1000;
 const VERIFY_MAX_BUFFER = 4 * 1024 * 1024;
+const TIMED_OUT_NOTE = '[LunaCore: verify timed out]';
+
+/**
+ * Stops a verify that ran past its cap together with everything it started.
+ * exec's own `timeout` kills only the shell: on Windows the npm and
+ * `node --test` processes under it kept running for hours, and the CPU they
+ * held timed out the next package's verify too. taskkill /T takes the whole
+ * tree; child.kill() afterwards is the fallback, and the only step elsewhere.
+ * @param {{pid?:number, kill:Function}} child
+ * @param {{platform?:string, execFileImpl?:Function}} [io]
+ */
+function killTree(child, io = {}) {
+  const fallback = () => {
+    try {
+      child.kill();
+    } catch {
+      /* already gone */
+    }
+  };
+  const platform = io.platform || process.platform;
+  if (platform !== 'win32' || !child || !Number.isInteger(child.pid)) return fallback();
+  (io.execFileImpl || execFile)('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, fallback);
+}
 
 /**
  * Runs a verify command in `cwd`. Output is stdout + stderr, for pasting the
- * failure back to the worker.
+ * failure back to the worker. Past VERIFY_TIMEOUT_MS the whole process tree
+ * is stopped (killTree) and the output ends with TIMED_OUT_NOTE.
+ * @param {string} command
+ * @param {string} cwd
+ * @param {Function} [execImpl]
+ * @param {{capMs?:number, setTimer?:Function, clearTimer?:Function, killTree?:Function}} [io] test seams
  * @returns {Promise<{ok:boolean, output:string}>}
  */
-function runVerify(command, cwd, execImpl = exec) {
+function runVerify(command, cwd, execImpl = exec, io = {}) {
+  const setTimer = io.setTimer || setTimeout;
+  const clearTimer = io.clearTimer || clearTimeout;
+  const stop = io.killTree || killTree;
   return new Promise((resolve) => {
-    execImpl(
-      command,
-      { cwd, windowsHide: true, timeout: VERIFY_TIMEOUT_MS, maxBuffer: VERIFY_MAX_BUFFER },
-      (err, stdout, stderr) => {
-        const output = `${String(stdout || '')}\n${String(stderr || '')}`.trim();
-        const timedOut = err && err.killed;
-        resolve({ ok: !err, output: timedOut ? `${output}\n[LunaCore: verify timed out]` : output });
-      },
-    );
+    let capped = false;
+    let settled = false;
+    let timer = null;
+    // No exec `timeout`: it would kill the shell first, and the tree under it
+    // can no longer be found from there.
+    const child = execImpl(command, { cwd, windowsHide: true, maxBuffer: VERIFY_MAX_BUFFER }, (err, stdout, stderr) => {
+      settled = true;
+      if (timer) clearTimer(timer);
+      const output = `${String(stdout || '')}\n${String(stderr || '')}`.trim();
+      // err.killed: exec stopped it itself (its output went over maxBuffer).
+      const timedOut = capped || Boolean(err && err.killed);
+      resolve({ ok: !err && !capped, output: timedOut ? `${output}\n${TIMED_OUT_NOTE}` : output });
+    });
+    if (settled) return;
+    timer = setTimer(() => {
+      capped = true;
+      stop(child);
+    }, io.capMs || VERIFY_TIMEOUT_MS);
+    // The verify's own process keeps a real run alive; the timer must not.
+    if (timer && typeof timer.unref === 'function') timer.unref();
   });
 }
 
@@ -119,4 +161,4 @@ async function changedFiles(pkg, execImpl) {
     .slice(0, 300);
 }
 
-module.exports = { finishPackage, runVerify, headSha, VERIFY_TIMEOUT_MS };
+module.exports = { finishPackage, runVerify, killTree, headSha, VERIFY_TIMEOUT_MS };
