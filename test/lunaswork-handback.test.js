@@ -32,6 +32,16 @@ const { publicFeedback } = require('../src/lunasworkFeedback');
 const NOW = 1_760_000_000_000;
 const RUN = 'lwwheel1';
 
+/**
+ * Removes a throwaway folder git just worked in. On a busy Windows machine a
+ * git whose run hit its timeout can hold the folder a little longer (the
+ * killed `git` leaves its `git.exe` child), so removing it answers EPERM for
+ * a moment: retried with backoff (up to ~24 s) instead of failing the test.
+ * fs.promises.rm, not rmSync: Node 24's rmSync gives up on that EPERM at once
+ * whatever maxRetries says.
+ */
+const removeDir = (dir) => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+
 function gitRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-handback-'));
   const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true }).trim();
@@ -46,7 +56,7 @@ function gitRepo() {
     git('add', '-A');
     git('commit', '-q', '-m', subject);
   };
-  return { dir, git, commit, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { dir, git, commit, done: () => removeDir(dir) };
 }
 
 // ---- reading the commits ----------------------------------------------------------
@@ -71,7 +81,7 @@ test('readCommits: every commit since the pause, oldest first, with its diff sta
     assert.deepEqual(await readCommits(r.dir, 'HEAD~1'), { ok: false, error: 'no base commit' }, 'only a sha is ever passed to git');
     assert.equal((await readCommits(r.dir, 'f'.repeat(40))).ok, false, 'an unknown base is a plain failure');
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -80,7 +90,7 @@ test('handbackHead is null outside a repo', async () => {
   try {
     assert.equal(await handbackHead(dir), null);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    await removeDir(dir);
   }
 });
 
