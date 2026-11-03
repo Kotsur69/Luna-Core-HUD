@@ -142,6 +142,8 @@ const { createBillCalendar } = require('./gcalbills');
 // Report emails: Gmail sender, God Mode run email, nightly summary.
 const { createReportMail } = require('./reportmail');
 const { registerMailIpc } = require('./mailipc');
+// God Mode finished-run actions: Resend report email (+ release, later).
+const orchestraFinishIpc = require('./orchestraFinishIpc');
 // Weekly review (Life Week tab, Sunday 20:00 + Generate now) and its email.
 const { setupWeeklyReview } = require('./weeklyipc');
 const { startLifeSync } = require('./lifesync');
@@ -238,6 +240,9 @@ const orchestraStore = require('./orchestraStore');
 const { createOrchestraRegistry } = require('./orchestraRegistry');
 const { makeOrchestraDeps, legacyRunProject, approvalRuleFor, godModeFacade } = require('./orchestraWiring');
 const { registerOrchestraIpc } = require('./orchestraIpc');
+const { RUN_ID_RE } = require('./orchestraReport');
+const { createPostMergeServices } = require('./orchestraPostMerge');
+const { cutRelease, unreleasedCount, releaseResult } = require('./releaseCut');
 const { createStatusBoard } = require('./sessionstatus');
 
 const { micState } = require('./devices');
@@ -965,6 +970,11 @@ const reportMail = createReportMail({
   getUsage: () => latestUsage,
   getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
   onResume: (fn) => powerMonitor.on('resume', fn),
+  // A pending / resent God Mode run email went out (or not): the board follows.
+  onRunMailResult: (planId, res) => {
+    const hit = orchestraRuns.byPlanId(planId);
+    if (hit) hit.controller.emailResult(planId, res);
+  },
 });
 
 /** Env of the first profile with a free-model chain (Luna's Work freeFallback), or null. */
@@ -997,6 +1007,29 @@ const lunasworkSecretGate = createSecretGate({
   log: (line) => console.info(line),
 });
 
+/** One line at the end of a run's report (<userDir>/runs/<id>.md). */
+function appendRunReport(planId, line) {
+  if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return;
+  try {
+    fs.appendFileSync(path.join(userDir(), RUN_REPORT_DIR, `${planId}.md`), `${line}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch (err) {
+    console.error('[orchestra] could not append to the run report:', err && err.message);
+  }
+}
+
+/** releaseCut.cutRelease with the tool env (gh, npm on PATH). */
+const runReleaseCut = (opts) => cutRelease(opts, { env: orchestraToolEnv(), log: (line) => console.info('[orchestra]', line) });
+
+// After a merge landed: ff the local base checkout, clean up merged branches,
+// cut a release when ticked (src/orchestraPostMerge.js). The start-up sweep
+// only touches registered projects.
+const orchestraPostMerge = createPostMergeServices({
+  appPath: () => app.getAppPath(),
+  isKnownRepo: (repoPath) => projects.some((p) => p.path && path.resolve(p.path) === path.resolve(repoPath)),
+  release: runReleaseCut,
+  log: (line) => console.info('[orchestra]', line),
+});
+
 // God Mode v2: one controller per project (src/orchestraRegistry.js). Their
 // deps are built in src/orchestraWiring.js; main only hands its handles over.
 const orchestraCtx = {
@@ -1018,7 +1051,8 @@ const orchestraCtx = {
   runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
   worktrees: { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, worktreeBranches },
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
-  onReport: (planId, text, summary) => reportMail.godmode.onReport(planId, text, summary),
+  // A transient failure leaves the run email pending (src/godmodePending.js).
+  onReport: (planId, text, summary) => reportMail.runMail.report(planId, text, summary),
   // The phone's live run view (godmodelivepub.js): the latest run to change.
   onLive: (view) => {
     latestLiveView = view;
@@ -1040,8 +1074,36 @@ const orchestraCtx = {
   log: (line) => console.info('[orchestra]', line),
   logError: (line) => console.error(line),
 };
+
+/**
+ * The wiring's merge confirmation, unless "Create a new release after finish"
+ * was ticked: then the dialog says so, and a Luna's Work build is asked too.
+ */
+function confirmMergeFor(deps) {
+  return async (base, extra = {}) => {
+    if (!extra || extra.release !== true) return deps.confirmMerge(base);
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['Merge, push and release', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'God Mode - merge into base branch',
+      message: `Merge every pushed package into "${base || '?'}" and push it? Then cut a new release.`,
+      detail:
+        'Packages are merged in dependency order in a separate worktree and verified after each merge. Nothing is pushed if a verify fails or a conflict cannot be resolved. There is no PR review.' +
+        '\n\nAfter the merge lands and the self-check is green: npm version bump, README release block, commit + tag, push of the base branch and the tag, npm run dist and a GitHub release with the installers.',
+    });
+    return response === 0;
+  };
+}
+
 const orchestraRuns = createOrchestraRegistry({
-  makeController: (projectId) => createOrchestra(makeOrchestraDeps(projectId, orchestraCtx)),
+  makeController: (projectId) => {
+    const deps = makeOrchestraDeps(projectId, orchestraCtx);
+    // Post-merge services (src/orchestraPostMerge.js) are shared by every project's run.
+    return createOrchestra({ ...deps, postMerge: orchestraPostMerge.impls, confirmMerge: confirmMergeFor(deps) });
+  },
   log: (line) => console.error(line),
 });
 
@@ -2868,6 +2930,8 @@ function registerIpc() {
     reader: reportMail.reader,
     replies: lunasworkMailReplies,
     projects: () => projects.map((p) => ({ id: p.id, label: p.label })),
+    // Gmail just connected: the God Mode run emails that waited for it go out.
+    onConnected: () => reportMail.runMail.flush(),
   });
   // Attention inbox ('!' chip): God Mode runs to review from every PC, check-in, weekly goals, Gmail not connected.
   registerInboxIpc({
@@ -3210,6 +3274,49 @@ function registerIpc() {
     writeUiPrefs,
   });
 
+  // Finished-run actions (src/orchestraFinishIpc.js): ids are validated there.
+  // Each run is found by its plan id in the per-project registry.
+  orchestraFinishIpc.register(ipcMain, {
+    runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+    resendRunEmail: (planId) => {
+      const hit = orchestraRuns.byPlanId(planId);
+      return reportMail.runMail.resend(planId, hit ? hit.controller.emailSummary(planId) : null);
+    },
+    projects: () => projects.map((p) => ({ id: p.id, path: p.path })),
+    // The finish IPC asks without a project, so the landed, not yet released
+    // run is preferred; the IPC still checks it belongs to the asking project.
+    releaseTarget: () => {
+      const targets = orchestraRuns
+        .entries()
+        .map(({ controller }) => controller.releaseTarget())
+        .filter(Boolean);
+      return targets.find((t) => t.landed && !t.released) || targets[0] || null;
+    },
+    unreleasedCount: (repoPath) => unreleasedCount(repoPath, { env: orchestraToolEnv() }),
+    cutRelease: runReleaseCut,
+    releaseResult,
+    recordRelease: (planId, result) => {
+      const hit = orchestraRuns.byPlanId(planId);
+      if (hit) hit.controller.recordRelease(planId, result);
+    },
+    appendReport: appendRunReport,
+    // Pushing a tag and publishing installers: Mati confirms natively.
+    confirmRelease: async ({ base, count }) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['Release now', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'God Mode - release now',
+        message: `Cut a new release from "${base}"${Number.isInteger(count) ? ` (${count} commits since the last tag)` : ''}?`,
+        detail:
+          'npm test, npm version bump, README release block, commit + tag, push of the base branch and the tag, npm run dist and a GitHub release with the installers. Refused on a dirty tree, red tests or no gh auth.',
+      });
+      return response === 0;
+    },
+  });
+
   // "Don't sleep" switch. The renderer only says on/off - the script path
   // comes from the local config, never from the page.
   ipcMain.handle('keepawake:get', () => keepAwake.status());
@@ -3490,6 +3597,15 @@ app.whenReady().then(() => {
   if (!probing) {
     orchestraStore.migrateLegacy((raw) => legacyRunProject(orchestraCtx, raw));
     orchestraRuns.restoreAll(orchestraStore.listStored());
+    // Once per start: settled runs older than a day get the post-merge cleanup
+    // again. The ledger holds every project's; a restored landed run joins it.
+    const landed = orchestraRuns
+      .entries()
+      .map(({ controller }) => controller.landedRun())
+      .find(Boolean);
+    orchestraPostMerge.sweepAtStart(landed || null).catch((err) => console.error('[orchestra] start-up sweep failed:', err && err.message));
+    // Run emails left pending (Gmail was not connected, rate-limited): once, after the restore.
+    reportMail.runMail.flush().catch((err) => console.error('[orchestra] pending run emails failed:', err && err.message));
   }
   // Luna's Work decision queue: pending decisions to the phone snapshot,
   // answers back from the `todos` cloud scope. Wired before resume() so a

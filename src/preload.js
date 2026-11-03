@@ -631,6 +631,25 @@ contextBridge.exposeInMainWorld('lunacore', {
    */
   openOrchestraReport: (planId, projectId) =>
     ipcRenderer.invoke('orchestra:openReport', typeof planId === 'string' ? planId : null, orchestraScope(projectId)),
+  /**
+   * "Resend report email" on a finished run. Only the run id crosses; main
+   * checks it names a report in the runs folder (src/orchestraFinishIpc.js).
+   * Promise<{ok:true} | {ok:false, reason:string}>.
+   */
+  resendOrchestraEmail: (planId) => ipcRenderer.invoke('orchestra:resend-email', typeof planId === 'string' ? planId : null),
+  /**
+   * Commits since the last v* tag in a project's checkout (for "Release now").
+   * Only the project id crosses; main maps it to a registered project.
+   * Promise<{ok:true, count:number, tag:string} | {ok:false, reason:string}>.
+   */
+  orchestraUnreleasedCount: (projectId) =>
+    ipcRenderer.invoke('orchestra:unreleased-count', typeof projectId === 'string' ? projectId : null),
+  /**
+   * "Release now" on the finished run (src/releaseCut.js). Only the project
+   * id crosses; main checks it is the board's landed run and asks Mati in a
+   * native dialog. Promise<{ok:true, version, tag, url} | {ok:false, reason:string}>.
+   */
+  releaseOrchestraNow: (projectId) => ipcRenderer.invoke('orchestra:release-now', typeof projectId === 'string' ? projectId : null),
   /** Plan changes (new plan, launches, a worker tab closed): cb(view, projectId); returns an unsubscribe. */
   onOrchestraChanged: (cb) => {
     const listener = (_e, msg) => cb(msg && typeof msg === 'object' ? msg.view : null, msg && typeof msg === 'object' ? msg.projectId : null);

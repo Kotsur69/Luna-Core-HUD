@@ -23,6 +23,8 @@
 //   todoBaseline    {date, done: ['<project>|<at>']} - to-dos already done
 //                   when the day was first seen (todos carry no done time)
 //   godmode         {runId: 'pushed|integrationState'} - the run emails sent
+//   godmodePending  [{id, at, reason, summary}] - run emails waiting for
+//                   Gmail (src/godmodePending.js), oldest first
 //
 // Same loader contract as the other config files: safe read, validate at the
 // boundary, a broken file yields the defaults.
@@ -32,6 +34,7 @@
 
 const fs = require('fs');
 const paths = require('./paths');
+const { normalizePending } = require('./godmodePending');
 
 const PREFS_FILE = 'mail.local.json';
 const STATE_FILE = 'mail-state.local.json';
@@ -126,6 +129,7 @@ function normalizeState(raw) {
         ? { date: b.date, done: b.done.filter((k) => typeof k === 'string' && k.length <= TODO_KEY_MAX).slice(0, MAX_BASELINE) }
         : null,
     godmode,
+    godmodePending: normalizePending(r.godmodePending),
   };
 }
 

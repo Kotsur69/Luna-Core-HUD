@@ -245,6 +245,38 @@ module.exports = {
   saveRun: defaultStore.saveRun,
   listStored: defaultStore.listStored,
   migrateLegacy: defaultStore.migrateLegacy,
+  loadSettledRuns,
+  saveSettledRuns,
   STORE_DIR,
   LEGACY_FILE,
 };
+
+// config/orchestra-settled.local.json: runs whose merge landed, for the
+// one-time start-up cleanup sweep (orchestraCleanup.js sweepSettledRuns -
+// entries are validated there). Same contract: broken -> [], write -> bool.
+const settledFile = () => paths.local('orchestra-settled.local.json');
+
+/** @returns {unknown[]} the stored ledger entries (unchecked), [] when none */
+function loadSettledRuns() {
+  try {
+    const data = JSON.parse(fs.readFileSync(settledFile(), 'utf8'));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+/** @param {object[]} list @returns {boolean} */
+function saveSettledRuns(list) {
+  try {
+    if (!paths.ensureUserDir()) return false;
+    const target = settledFile();
+    const tmp = `${target}.tmp`;
+    // Owner-only: it holds local repo paths.
+    fs.writeFileSync(tmp, JSON.stringify(Array.isArray(list) ? list : [], null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, target);
+    return true;
+  } catch {
+    return false;
+  }
+}

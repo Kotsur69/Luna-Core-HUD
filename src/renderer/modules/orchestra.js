@@ -27,6 +27,7 @@ import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { failureBlock, runOptionsRow, powerBanner } from './orchestraDetails.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
+import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice } from './orchestraFinish.js';
 
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
@@ -176,8 +177,11 @@ function startOptions() {
       el('span', 'orchestra__optlabel', t('orch.integ')),
       selectEl(integrationOptions(), chosenIntegration(), (v) => {
         startOpts.integration = v;
+        render();
       }),
     );
+    // A release only follows a merge into the base branch.
+    if (chosenIntegration() === 'merge') row.append(releaseAfterBox(plan.projectId, phase !== 'idle'));
   }
   return row;
 }
@@ -409,11 +413,11 @@ function renderPlan() {
   if (plan.started && !running && plan.packages.some((p) => p.state !== 'pending')) body.append(finishRow());
   const integ = integrationText();
   if (integ) body.append(integ);
-  // The run email (src/godmodemail.js) failed: the run itself is fine.
-  if (plan.integration && plan.integration.emailError) {
-    const reason = plan.integration.emailError;
-    body.append(msg(reason === 'gmail-not-connected' ? t('orch.emailNotConnected') : t('orch.emailFailed', { reason }), 'is-warn'));
-  }
+  // The run email (src/godmodemail.js): its state + "Resend report email".
+  if (hasReport()) body.append(runEmailRow(plan, () => isOpen && render()));
+  // "Create a new release after finish" result, or "Release now" (orchestraFinish.js).
+  const release = hasReport() ? releaseRow(plan, () => isOpen && render()) : null;
+  if (release) body.append(release);
   for (const o of plan.overlaps || []) {
     body.append(msg(t('orch.overlap', { a: o.a, b: o.b, files: o.files.join(', ') }), 'is-warn'));
   }
@@ -636,13 +640,14 @@ async function launch(ids) {
         : null;
   const free = approve && startOpts.free;
   const integration = approve && !free ? chosenIntegration() : null;
+  const releaseAfter = integration === 'merge' && releaseAfterChoice(plan.projectId);
   phase = 'launching';
   busyPkg = Array.isArray(ids) && ids.length === 1 ? ids[0] : null;
   failure = null;
   render();
   let res;
   try {
-    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free });
+    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free, releaseAfter });
   } catch {
     res = { ok: false, error: 'failed' };
   }
