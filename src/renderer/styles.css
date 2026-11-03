@@ -5858,9 +5858,8 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .gm-sum__state.is-stalled, .gm-sum__state.is-failed { color: var(--bad); }
 .gm-sum__state.is-pending { color: var(--warn); }
 
-/* Mission Control top bar: the 'Brief' button. */
-.mission-brief-btn,
-.mission-brief--overlay .mc-btn {
+/* The brief's buttons inside the notification hub drawer (hub.css, hubpanel.js). */
+.mission-brief--hub .mc-btn {
   padding: var(--space-2) var(--space-5);
   border: var(--border-w) solid var(--edge);
   border-radius: var(--radius-sm);
@@ -5871,20 +5870,17 @@ body.is-arranging .panel__grip { cursor: grabbing; }
   cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease-sharp), color var(--dur-fast) var(--ease-sharp);
 }
-.mission-brief-btn:hover,
-.mission-brief--overlay .mc-btn:hover { border-color: var(--edge-glow); color: var(--neon-cyan); }
-.mission-brief-btn:focus-visible,
-.mission-brief--overlay .mc-btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
-.mission-brief--overlay .mc-btn:disabled { opacity: 0.5; cursor: progress; }
-.mission-brief--overlay .mc-btn.pad-send { border-color: var(--neon-cyan); color: var(--neon-cyan); }
-.mission-brief--overlay .mc-btn.mc-danger { border-color: var(--bad); color: var(--bad); }
+.mission-brief--hub .mc-btn:hover { border-color: var(--edge-glow); color: var(--neon-cyan); }
+.mission-brief--hub .mc-btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.mission-brief--hub .mc-btn:disabled { opacity: 0.5; cursor: progress; }
+.mission-brief--hub .mc-btn.pad-send { border-color: var(--neon-cyan); color: var(--neon-cyan); }
+.mission-brief--hub .mc-btn.mc-danger { border-color: var(--bad); color: var(--bad); }
 
-/* The brief inside its overlay: no strip box or height cap of its own. */
-.mission-brief.mission-brief--overlay { margin: 0; padding: 0; border: none; background: transparent; max-height: none; overflow: visible; color: var(--text); }
-.mission-brief--overlay .mc-input { flex: none; width: auto; }
-.mission-brief--overlay .mc-input option { background: var(--surface-panel); color: var(--text); }
-.mission-brief--overlay .mission-brief__bar { position: sticky; top: calc(-1 * var(--space-7)); z-index: 1; padding: var(--space-3) 0; background: var(--surface-panel); border-bottom: var(--border-w) solid var(--edge); }
-.mission-brief--overlay .mission-brief__body { margin-top: var(--space-5); line-height: 1.5; }
+/* The brief inside the drawer: no strip box or height cap of its own. */
+.mission-brief.mission-brief--hub { margin: 0; padding: 0; border: none; background: transparent; max-height: none; overflow: visible; color: var(--text); }
+.mission-brief--hub .mc-input { flex: none; width: auto; max-width: 100%; }
+.mission-brief--hub .mc-input option { background: var(--surface-panel); color: var(--text); }
+.mission-brief--hub .mission-brief__body { margin-top: var(--space-5); line-height: 1.5; }
 
 /* ---- Setup Center (Ctrl+L, top section; modules/setupcenter.js) ---------- */
 .setup-rows { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-5); }

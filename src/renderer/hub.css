@@ -91,4 +91,142 @@
   overscroll-behavior: contain;
   padding: var(--space-5) var(--space-6) var(--space-8);
 }
-.hub-drawer__plain { margin: 0; padding-left: var(--space-6); font-size: var(--fs-sm); }
+.hub-drawer.is-resizing { user-select: none; animation: none; }
+.hub-drawer__status { margin: 0 0 var(--space-5); color: var(--warn); }
+.hub-drawer__status[hidden] { display: none; }
+
+/* Left-edge resize grip: an 8px hit area, a 2px line that lights up on hover,
+   drag or keyboard focus (arrow keys resize by 16px). */
+.hub-drawer__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 1;
+}
+.hub-drawer__handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-sharp);
+}
+.hub-drawer__handle:hover::after,
+.hub-drawer__handle:focus-visible::after,
+.hub-drawer.is-resizing .hub-drawer__handle::after { background: var(--edge-glow); }
+.hub-drawer__handle:focus-visible { outline: none; }
+
+/* ---- Sections ------------------------------------------------------------- */
+.hub-sec { margin: 0 0 var(--space-7); }
+.hub-sec__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.hub-sec--needs .hub-sec__head { color: var(--text); }
+.hub-sec__count {
+  min-width: 1.2rem;
+  padding: 0 var(--space-2);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  line-height: 1.2rem;
+  text-align: center;
+  letter-spacing: 0;
+}
+.hub-sec--needs .hub-sec__count { border-color: var(--bad); color: var(--bad); }
+.hub-sec__cards { display: flex; flex-direction: column; gap: var(--space-4); }
+.hub-sec--needs { display: flex; flex-direction: column; gap: var(--space-4); }
+.hub-sec--needs > .hub-sec__head { margin-bottom: 0; }
+.hub-sec__empty { margin: 0; }
+.hub-sec--briefs .hub-sec__cards:not(:empty) { margin-bottom: var(--space-5); }
+details.hub-sec > summary { cursor: pointer; list-style: none; }
+details.hub-sec > summary::-webkit-details-marker { display: none; }
+details.hub-sec > summary::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--ease-sharp);
+}
+details.hub-sec[open] > summary::before { transform: rotate(45deg); }
+details.hub-sec > summary:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+/* ---- Cards ---------------------------------------------------------------- */
+.hub-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-6);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+}
+/* Needs cards carry an accent rule on the left: the one thing to scan for. */
+.hub-card--needs { border-left: 3px solid var(--bad); }
+.hub-card.is-done { opacity: 0.7; }
+.hub-card.is-done .hub-card__title { text-decoration: line-through; text-decoration-color: var(--text-dim); }
+.hub-card__title { margin: 0; font-size: var(--fs-sm); font-weight: 600; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.hub-card__detail { margin: 0; font-size: var(--fs-xs); line-height: 1.45; color: var(--text-dim); overflow-wrap: anywhere; }
+.hub-card__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); font-size: var(--fs-2xs); color: var(--text-dim); }
+.hub-card__chip {
+  padding: 0 var(--space-3);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-pill);
+  line-height: 1.4rem;
+  color: var(--text-dim);
+}
+.hub-card__chip.is-local { border-style: dashed; }
+.hub-card__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-2); }
+.hub-card__error { margin: 0; font-size: var(--fs-xs); color: var(--bad); }
+
+.hub-btn {
+  min-height: 28px;
+  padding: var(--space-2) var(--space-5);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-sharp), color var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
+}
+.hub-btn:hover { border-color: var(--edge-glow); color: var(--text); }
+.hub-btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.hub-btn:disabled { opacity: 0.5; cursor: progress; }
+.hub-btn--primary { border-color: var(--accent, var(--neon-cyan)); color: var(--accent, var(--neon-cyan)); font-weight: 600; }
+.hub-btn--primary:hover { color: var(--accent, var(--neon-cyan)); box-shadow: 0 0 var(--glow-size-md) var(--glow); }
+
+/* ---- One-time "brief moved" hint under the Mission Control chip ----------- */
+.hub-hint {
+  position: fixed;
+  z-index: 96;
+  max-width: 280px;
+  padding: var(--space-4) var(--space-5);
+  border: var(--border-w) solid var(--edge-glow);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-2);
+  box-shadow: 0 0 var(--glow-size-md) var(--glow);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+  animation: hub-in var(--dur-normal) var(--ease-smooth);
+}
+.hub-hint:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }

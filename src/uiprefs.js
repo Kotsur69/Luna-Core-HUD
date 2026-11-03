@@ -325,7 +325,16 @@ const DEFAULTS = {
   hideLife: false,
   hideMission: false,
   hideGodMode: false,
+  // Notification hub drawer (renderer/modules/hubpanel.js): its dragged width
+  // and whether the one-time "the brief moved to the hub" hint was shown.
+  hubWidth: 420,
+  hubBriefHintSeen: false,
 };
+
+const HUB_WIDTH_MIN = 320;
+const HUB_WIDTH_MAX = 900;
+/** Strict: only an integer in range is a width; anything else reads as the default. */
+const cleanHubWidth = (v) => (Number.isInteger(v) && v >= HUB_WIDTH_MIN && v <= HUB_WIDTH_MAX ? v : DEFAULTS.hubWidth);
 
 const MAX_COLLAPSED = 64;
 const MODULE_HIDE_KEYS = ['hideLife', 'hideMission', 'hideGodMode'];
@@ -733,6 +742,8 @@ function readUiPrefs() {
       welcomeChecked: obj.welcomeChecked === true,
       pwaUrl: normalizePwaUrl(obj.pwaUrl),
       ...Object.fromEntries(MODULE_HIDE_KEYS.map((k) => [k, obj[k] === true])),
+      hubWidth: cleanHubWidth(obj.hubWidth),
+      hubBriefHintSeen: obj.hubBriefHintSeen === true,
       ...clampAutoCompactPrefs(obj),
       ...clampTermPrefs(obj),
       ...clampModifierPrefs(obj),
@@ -884,6 +895,8 @@ function writeUiPrefs(partial) {
     for (const key of MODULE_HIDE_KEYS) {
       if (partial && typeof partial[key] === 'boolean') next[key] = partial[key];
     }
+    if (partial && 'hubWidth' in partial) next.hubWidth = cleanHubWidth(partial.hubWidth);
+    if (partial && typeof partial.hubBriefHintSeen === 'boolean') next.hubBriefHintSeen = partial.hubBriefHintSeen;
     // Only the term* keys actually present in `partial` should move; anything
     // omitted keeps its current (already-validated) value from `next` rather
     // than reverting to DEFAULTS - clampTermPrefs still re-validates the
@@ -943,6 +956,7 @@ module.exports = {
   clampAutoCompactPrefs,
   clampModifierPrefs,
   cleanEffectsStrength,
+  cleanHubWidth,
   cleanCollapsed,
   cleanLayoutSizes,
   cleanWidgetSlots,

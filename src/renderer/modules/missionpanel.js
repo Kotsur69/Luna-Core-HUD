@@ -17,7 +17,6 @@
 
 import { mountWidget, unmountWidget, isMounted } from './host.js';
 import { closeWithExit, cancelExit } from './motion.js';
-import { openBriefOverlay } from './missionbriefview.js';
 import { anyTallOpen } from './talloverlay.js';
 
 // Column id in index.html -> widget id. Order is visual order.
@@ -71,8 +70,8 @@ overlayEl.addEventListener('click', (e) => {
   if (e.target.hasAttribute('data-mission-close')) close();
 });
 
-// The brief lives in its own tall overlay on top of this panel.
-document.getElementById('mission-brief-open').addEventListener('click', () => openBriefOverlay());
+// The weekly / daily brief lives in the notification hub drawer (hubpanel.js),
+// not here: the four columns keep the full height.
 
 // Capture phase, to get ahead of xterm.js - same as Ctrl+K / Ctrl+B. Escape is
 // handled here too rather than on the overlay: focus is not guaranteed to be
@@ -82,7 +81,7 @@ window.addEventListener(
   'keydown',
   (e) => {
     if (isOpen && e.key === 'Escape') {
-      // A tall overlay on top (the brief) closes first, on its own.
+      // A tall overlay on top (inbox, run summary) closes first, on its own.
       if (anyTallOpen()) return;
       // The calendar draft and edit card own Escape inside themselves (cancel).
       if (e.target instanceof Element && e.target.closest('#mc-cal-draft, .mc-edit')) return;

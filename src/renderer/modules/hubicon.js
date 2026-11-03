@@ -11,6 +11,10 @@
 // like Ctrl+Shift+M / N: the physical key is what the user learns. Free in
 // main.js's before-input-event (it only claims Ctrl+Shift+K there) and in
 // every other renderer module; capture phase gets ahead of xterm.js.
+//
+// One time only (hubBriefHintSeen in ui.local.json): a small hint under the
+// Mission Control chip says the brief moved to the hub. Clicking it opens the
+// drawer; it goes away on its own after a few seconds.
 // ============================================================================
 
 'use strict';
@@ -18,9 +22,15 @@
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { startHub, onHubView } from './hubstate.js';
-import { toggleHub, onHubOpenChange } from './hubpanel.js';
+import { toggleHub, openHub, onHubOpenChange } from './hubpanel.js';
 
 const PULSE_CLASS = 'is-bumped';
+/** Past the boot sequence, so the hint is not covered by it. */
+const HINT_DELAY_MS = 5000;
+const HINT_SHOW_MS = 12000;
+const HINT_GAP_PX = 8;
+
+const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => null);
 
 let chipEl = null;
 let badgeEl = null;
@@ -53,6 +63,39 @@ function paint(view) {
   shownNeeds = needs;
 }
 
+function showBriefMovedHint(mcChip) {
+  const r = mcChip.getBoundingClientRect();
+  // A chip that is not on screen (hidden module, collapsed bar) gets no hint
+  // and the hint stays unseen for the next launch.
+  if (!r.width || !r.height) return;
+  call('setUiPrefs', { hubBriefHintSeen: true });
+  const tip = document.createElement('button');
+  tip.type = 'button';
+  tip.className = 'hub-hint';
+  tip.textContent = t('hub.briefMoved');
+  tip.setAttribute('role', 'status');
+  tip.style.top = `${Math.round(r.bottom + HINT_GAP_PX)}px`;
+  tip.style.right = `${Math.max(HINT_GAP_PX, Math.round(window.innerWidth - r.right))}px`;
+  const dismiss = () => tip.remove();
+  tip.addEventListener('click', () => {
+    dismiss();
+    openHub();
+  });
+  document.body.append(tip);
+  setTimeout(dismiss, HINT_SHOW_MS);
+}
+
+async function maybeBriefMovedHint(root) {
+  const mcChip = root.querySelector('#mission-open');
+  if (!mcChip) return;
+  const prefs = await call('getUiPrefs');
+  if (!prefs || prefs.hubBriefHintSeen === true) return;
+  setTimeout(() => {
+    if (document.documentElement.dataset.hideMission === '1') return;
+    showBriefMovedHint(mcChip);
+  }, HINT_DELAY_MS);
+}
+
 /** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
 export function mountHubChip(root) {
   chipEl = root.querySelector('#hub-open');
@@ -64,6 +107,7 @@ export function mountHubChip(root) {
   onHubView(paint);
   onLangChange(() => label(shownNeeds));
   startHub();
+  maybeBriefMovedHint(root);
 }
 
 window.addEventListener(
