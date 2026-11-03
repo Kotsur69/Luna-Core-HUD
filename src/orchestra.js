@@ -903,6 +903,9 @@ function createOrchestra(deps) {
    * package, finalize or another God Mode run still going.
    */
   function afterFinalize() {
+    // The finalizer's last commit went out while isRunning() was still true;
+    // the board and the phone get the settled view (running: false) now.
+    if (plan) commit();
     fireRunSettled();
     if (!settledFinalize || !plan) return;
     settledFinalize = false;

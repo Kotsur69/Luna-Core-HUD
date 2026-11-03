@@ -1,7 +1,10 @@
 // ============================================================================
 // LunaCore - God Mode finished-run actions (split out of orchestra.js)
 // ----------------------------------------------------------------------------
-//  - runEmailRow(): what happened to the run email (integration.emailError /
+//  - integrationLine(): the "Integration (...)" line from the stored
+//    integration.state (orchestraIntegStatus.js), with a live elapsed time
+//    while the step really runs.
+//  - runEmailRow():what happened to the run email (integration.emailError /
 //    emailPending from src/orchestraFinalize.js) + "Resend report email".
 //    Only the run id goes to main (orchestra:resend-email).
 //  - releaseAfterBox() / releaseAfterChoice(): the launch screen's "Create a
@@ -18,8 +21,16 @@
 'use strict';
 
 import { t } from './util.js';
+import { integrationStatus, fmtElapsed } from './orchestraIntegStatus.js';
 
 const NOT_CONNECTED = 'gmail-not-connected';
+// Integration errors with their own message (orchestraFinalize / Integrate).
+const INTEG_ERRORS = new Set([
+  'noBaseBranch', 'noGh', 'missingCwd', 'ghFailed', 'fetchFailed', 'worktreeFailed', 'installFailed', 'mergeFailed',
+  'conflictFailed', 'verifyFailed', 'pushFailed', 'baseMoved', 'nothingMergedFailed', 'beforePushFailed',
+]);
+const ELAPSED_TICK_MS = 1000;
+const ELAPSED_ATTR = 'data-orch-started';
 // Resend answers with their own text (orch.resend.err.<reason>).
 const RESEND_ERRORS = new Set(['badId', 'unknownRun', 'busy', 'rate-limited', 'gmail-not-connected', 'no-report']);
 
@@ -34,6 +45,57 @@ function el(tag, cls, text) {
 }
 
 const msg = (text, cls = '') => el('p', `orchestra__msg ${cls}`.trim(), text);
+
+// ---------------------------------------------------------------------------
+// Integration status
+// ---------------------------------------------------------------------------
+
+let elapsedTimer = null;
+
+/** Repaints only the elapsed counters (a full render would reset edited prompts). */
+function tickElapsed() {
+  const nodes = typeof document !== 'undefined' ? document.querySelectorAll(`[${ELAPSED_ATTR}]`) : [];
+  if (!nodes.length) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+    return;
+  }
+  for (const node of nodes) node.textContent = fmtElapsed(Date.now() - Number(node.getAttribute(ELAPSED_ATTR)));
+}
+
+function elapsedNode(startedAt, elapsedMs) {
+  const span = el('span', 'orchestra__elapsed', fmtElapsed(elapsedMs));
+  span.setAttribute(ELAPSED_ATTR, String(startedAt));
+  if (!elapsedTimer) elapsedTimer = setInterval(tickElapsed, ELAPSED_TICK_MS);
+  return span;
+}
+
+function integFailWhy(s) {
+  const why = INTEG_ERRORS.has(s.error) ? t(`orch.integerr.${s.error}`) : s.error || '';
+  return s.detail ? `${why}: ${s.detail}` : why;
+}
+
+/**
+ * The integration line, derived from the stored integration.state - so a
+ * settled run reads done / partial / failed on open and on every update,
+ * whatever the finalizer's `running` flag says.
+ * @param {object} plan the board's run view
+ * @returns {HTMLElement|null}
+ */
+export function integrationLine(plan) {
+  const s = integrationStatus(plan, Date.now());
+  if (!s) return null;
+  const mode = t(`orch.integ.${s.mode}`);
+  if (s.kind === 'running') {
+    const line = msg(t('orch.integ.running', { mode }));
+    if (s.elapsedMs !== null) line.append(' ', elapsedNode(plan.integration.startedAt, s.elapsedMs));
+    return line;
+  }
+  if (s.kind === 'failed') return msg(t('orch.integ.failed', { mode, why: integFailWhy(s) }), 'is-bad');
+  if (s.kind === 'partial') return msg(t('orch.integ.partial', { mode, n: s.merged, m: s.total, sha: s.sha || '-' }), 'is-warn');
+  if (s.mode === 'merge' && s.sha) return msg(t('orch.integ.merged', { base: s.base || '-', sha: s.sha }));
+  return msg(t('orch.integ.done', { mode }));
+}
 
 /** The run email's state line, or null when it went out. */
 function emailStatus(integ) {

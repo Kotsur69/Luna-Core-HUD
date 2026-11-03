@@ -27,8 +27,7 @@ import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { failureBlock, runOptionsRow, powerBanner } from './orchestraDetails.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
-import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice } from './orchestraFinish.js';
-
+import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine } from './orchestraFinish.js';
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
 const q = (sel) => (overlay ? overlay.querySelector(sel) : null);
@@ -47,11 +46,6 @@ const FAIL_CODES = new Set([
   'lunasWorkActive',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
-// Integration errors with their own message (orchestraFinalize / Integrate).
-const INTEG_ERRORS = new Set([
-  'noBaseBranch', 'noGh', 'missingCwd', 'ghFailed', 'fetchFailed', 'worktreeFailed', 'installFailed', 'mergeFailed',
-  'conflictFailed', 'verifyFailed', 'pushFailed', 'baseMoved', 'nothingMergedFailed', 'beforePushFailed',
-]);
 // "Open report" errors main can return (orchestra:openReport).
 const REPORT_ERRORS = new Set(['badId', 'noReport', 'openFailed']);
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).
@@ -184,18 +178,6 @@ function startOptions() {
     if (chosenIntegration() === 'merge') row.append(releaseAfterBox(plan.projectId, phase !== 'idle'));
   }
   return row;
-}
-
-function integrationText() {
-  const integ = plan.integration || {};
-  const mode = t(`orch.integ.${plan.integrationMode || 'pr'}`);
-  if (integ.running || integ.state === 'running') return msg(t('orch.integ.running', { mode }));
-  if (integ.state === 'done') return msg(t('orch.integ.done', { mode }));
-  if (integ.state === 'failed') {
-    const why = INTEG_ERRORS.has(integ.error) ? t(`orch.integerr.${integ.error}`) : integ.error || '';
-    return msg(t('orch.integ.failed', { mode, why: integ.detail ? `${why}: ${integ.detail}` : why }), 'is-bad');
-  }
-  return null;
 }
 
 /** After the run: wrap it up by hand (integrate + clean up + report). */
@@ -411,7 +393,7 @@ function renderPlan() {
   if (!plan.started && !plan.scheduledAt && !plan.errors.length) body.append(startOptions());
   if (plan.scheduledAt) body.append(scheduledRow());
   if (plan.started && !running && plan.packages.some((p) => p.state !== 'pending')) body.append(finishRow());
-  const integ = integrationText();
+  const integ = integrationLine(plan);
   if (integ) body.append(integ);
   // The run email (src/godmodemail.js): its state + "Resend report email".
   if (hasReport()) body.append(runEmailRow(plan, () => isOpen && render()));

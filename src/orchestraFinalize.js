@@ -448,7 +448,8 @@ function createFinalizer(deps) {
   }
 
   async function finalizeOnce(plan) {
-    setIntegration(plan, { state: 'running', error: null, detail: null });
+    // startedAt: the board shows how long the step has really been running.
+    setIntegration(plan, { state: 'running', error: null, detail: null, startedAt: deps.now() });
     deps.commit();
     let res;
     try {
