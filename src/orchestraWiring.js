@@ -63,6 +63,23 @@ function projectForStoredRepo(ctx, repoPath) {
   return ctx.projects().find((p) => p.path && path.resolve(p.path) === repo) || null;
 }
 
+/**
+ * The repo a project's run works on, by name, for toasts and power notices
+ * (several runs at once): the project folder's name, else the run's repo
+ * folder, else the project's label or id.
+ */
+function repoNameOf(projectId, ctx, self) {
+  const project = (ctx.projects() || []).find((p) => p && p.id === projectId);
+  if (project && typeof project.path === 'string' && project.path) return path.basename(project.path);
+  const controller = self();
+  const repo = controller && typeof controller.repoPath === 'function' ? controller.repoPath() : null;
+  if (typeof repo === 'string' && repo) return path.basename(repo);
+  return (project && project.label) || projectId || null;
+}
+
+/** "<repo>: <text>", or the text alone when the repo has no name. */
+const withRepo = (name, text) => (name ? `${name}: ${text}` : text);
+
 /** orchestraStore.migrateLegacy's repoPath match: the legacy run's project id, or null. */
 function legacyRunProject(ctx, raw) {
   const project = projectForStoredRepo(ctx, raw && raw.repoPath);
@@ -210,7 +227,7 @@ function integrationDeps(ctx) {
 }
 
 /** The run report (<runsDir>/<planId>.md + .html), snapshots and the morning toast. */
-function reportDeps(ctx, self) {
+function reportDeps(projectId, ctx, self) {
   return {
     putSnapshot: (run) => ctx.putSnapshot(run),
     onReport: (planId, text, summary) => ctx.onReport(planId, text, summary),
@@ -242,10 +259,12 @@ function reportDeps(ctx, self) {
         ctx.logError(`[orchestra] could not append to the run report: ${errText(err)}`);
       }
     },
-    // The morning report toast, when OS notifications are on (Settings).
+    // The morning report toast, when OS notifications are on (Settings). It
+    // names the repo: several projects can finish overnight.
     notify: ({ pushed, total, failed }) => {
       if (!ctx.readUiPrefs().notificationsEnabled) return;
-      ctx.toast(TOAST_TITLE, `${pushed}/${total} pushed${failed ? ' - integration needs you' : ''}`);
+      const body = `${pushed}/${total} pushed${failed ? ' - integration needs you' : ''}`;
+      ctx.toast(TOAST_TITLE, withRepo(repoNameOf(projectId, ctx, self), body));
     },
     onRunEvent: (kind) => {
       if (ctx.readUiPrefs().voiceEnabled === false) return;
@@ -279,7 +298,8 @@ function stateDeps(projectId, ctx, store) {
       ctx.send('orchestra:changed', { projectId, view });
       ctx.builder.onChange(view, projectId);
     },
-    onLive: (view) => ctx.onLive(view),
+    // The phone keeps one live view per project (main, godmodesnapshot.livesEntry).
+    onLive: (view) => ctx.onLive(view, projectId),
     onPlanWait: (state) => ctx.send('orchestra:planWait', { projectId, state }),
     // A restored run's folders and briefs re-homed onto this PC (src/projects.js).
     resolvePath: (p) => ctx.resolveStoredPath(p),
@@ -289,7 +309,7 @@ function stateDeps(projectId, ctx, store) {
 }
 
 /** Usage limits, free providers, sleep / shutdown and the cross-run guards. */
-function powerDeps(projectId, ctx) {
+function powerDeps(projectId, ctx, self) {
   return {
     // Planning that hit the Claude limit waits for the reset (orchestraPlanWait.js).
     usageLimits: () => ctx.usageLimits(),
@@ -306,9 +326,10 @@ function powerDeps(projectId, ctx) {
     // The same repo twice is refused (makePlan -> 'repoBusy').
     repoBusy: (repoPath) => ctx.registry().repoBusy(projectId, repoPath),
     // Shown whether or not toasts are on in Settings: the PC is about to go.
+    // Named by repo: which run asked for it.
     notifyPower: (kind) => {
       const body = POWER_NOTICES[kind];
-      if (body) ctx.toast(TOAST_TITLE, body);
+      if (body) ctx.toast(TOAST_TITLE, withRepo(repoNameOf(projectId, ctx, self), body));
     },
   };
 }
@@ -371,7 +392,7 @@ function builderDeps(projectId, ctx, self) {
  *   toolEnv: () => object, userDir: () => string, ensureUserDir: () => boolean, runsDir: () => string,
  *   worktrees: {addWorktree:Function, dirtyCount:Function, removeWorktree:Function,
  *     deleteBranch:Function, listOwnBranches:Function, worktreeBranches:Function},
- *   putSnapshot: Function, onReport: Function, onLive: Function,
+ *   putSnapshot: Function, onReport: Function, onLive: (view:object|null, projectId:string|null) => void,
  *   messageBox: (opts:object) => Promise<{response:number}>|null, toast: (title:string, body:string) => void,
  *   projects: () => object[], resolveStoredPath: Function, flushTodos: () => void,
  *   usageLimits: () => object[], accountFailover: Function, freeProfileId: () => string|null,
@@ -388,9 +409,9 @@ function makeOrchestraDeps(projectId, ctx) {
     ...sessionDeps(ctx),
     ...todoDeps(ctx),
     ...integrationDeps(ctx),
-    ...reportDeps(ctx, self),
+    ...reportDeps(projectId, ctx, self),
     ...stateDeps(projectId, ctx, store),
-    ...powerDeps(projectId, ctx),
+    ...powerDeps(projectId, ctx, self),
     ...builderDeps(projectId, ctx, self),
     log: (line) => ctx.log(line),
   };

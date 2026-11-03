@@ -196,7 +196,7 @@ const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
 const { usageSnapshot } = require('./usagesnapshot');
 const { createSnapshotPuts } = require('./snapshotputs');
 const { createLivePublisher } = require('./godmodelivepub');
-const { liveEntry, tabsEntry } = require('./godmodesnapshot');
+const { livesEntry, tabsEntry } = require('./godmodesnapshot');
 const { registerInboxIpc } = require('./inboxipc');
 // E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
 // zero network - Passive Observer in the strictest possible sense.
@@ -528,7 +528,9 @@ function sessionSummary(s) {
 // The phone's live God Mode view (src/godmodelivepub.js), set up next to the
 // snapshot puts. Null until then; tab changes before it are not published.
 let godmodeLive = null;
-let latestLiveView = null;
+// The latest live view per project (one God Mode run each): projectId -> view,
+// the latest to change last. A discarded run (null view) drops out.
+const latestLiveViews = new Map();
 const pokeGodmodeLive = () => godmodeLive && godmodeLive.poke();
 
 /** Broadcasts the full tab list + which one is active. */
@@ -1053,9 +1055,11 @@ const orchestraCtx = {
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
   // A transient failure leaves the run email pending (src/godmodePending.js).
   onReport: (planId, text, summary) => reportMail.runMail.report(planId, text, summary),
-  // The phone's live run view (godmodelivepub.js): the latest run to change.
-  onLive: (view) => {
-    latestLiveView = view;
+  // The phone's live run views (godmodelivepub.js), one per project.
+  onLive: (view, projectId) => {
+    const key = typeof projectId === 'string' ? projectId : null;
+    latestLiveViews.delete(key);
+    if (view) latestLiveViews.set(key, view);
     pokeGodmodeLive();
   },
   messageBox: (opts) => (mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, opts) : null),
@@ -2042,10 +2046,13 @@ const snapshotPuts = createSnapshotPuts({
 
 // The live run + tab lights for the phone: throttled, skipped when unchanged.
 godmodeLive = createLivePublisher({
-  build: () => ({
-    live: liveEntry(latestLiveView, { now: Date.now(), tabState: (id) => (statusBoard.current(id) || {}).state || null }),
-    tabs: tabsEntry([...sessions.values()].map(sessionSummary)),
-  }),
+  // lives: every project's run, the latest to change first; live: that first
+  // one, for phone builds from before several runs at once.
+  build: () => {
+    const views = [...latestLiveViews.values()].reverse();
+    const lives = livesEntry(views, { now: Date.now(), tabState: (id) => (statusBoard.current(id) || {}).state || null });
+    return { live: lives[0] || null, lives, tabs: tabsEntry([...sessions.values()].map(sessionSummary)) };
+  },
   publish: (section) => snapshotPuts.godmode.live(section),
 });
 
