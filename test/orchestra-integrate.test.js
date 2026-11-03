@@ -461,8 +461,8 @@ const fixGit = (extra = () => null) =>
     const hit = extra(cmd);
     if (hit) return hit;
     if (cmd.startsWith('git rev-parse')) return { ok: true, stdout: 'sha1\n' };
-    if (cmd === 'git diff --name-only HEAD^1 HEAD') return { ok: true, stdout: 'src/x.js\nsrc/y.js\n' };
-    if (cmd === 'git diff --name-only sha1 HEAD^1') return { ok: true, stdout: 'src/x.js\nsrc/z.js\n' };
+    if (cmd === 'git diff --name-only -z HEAD^1 HEAD') return { ok: true, stdout: 'src/x.js\0src/y.js\0' };
+    if (cmd === 'git diff --name-only -z sha1 HEAD^1') return { ok: true, stdout: 'src/x.js\0src/z.js\0' };
     if (cmd === 'git diff --cached --quiet') return { ok: false };
     return null;
   });
@@ -538,16 +538,16 @@ test('integrateMerge: a fix-up that leaves the tests red -> reverted, skipped as
     },
     { now: 0, suggestions: [] },
   );
-  assert.match(md, /- Fix-up: one fix-up worker tried after the merge; the tests stayed red/);
-  assert.match(md, /a fix-up worker tried and the tests stayed red/, 'the Needs-you line says so too');
+  assert.match(md, /- Fix-up: one fix-up worker tried after the merge and could not get it green \(the detail says why\)/);
+  assert.match(md, /a fix-up worker tried and could not get it green/, 'the Needs-you line says so too');
 });
 
 test('integrateMerge: a failed fix-up leaves no new untracked files behind; files there before stay', async () => {
   let listed = 0;
   const git = fixGit((cmd) => {
-    if (cmd !== 'git ls-files --others --exclude-standard') return null;
+    if (cmd !== 'git ls-files -z --others --exclude-standard') return null;
     listed += 1;
-    return { ok: true, stdout: listed === 1 ? 'notes.txt\n' : 'notes.txt\nsrc/helper.js\n' };
+    return { ok: true, stdout: listed === 1 ? 'notes.txt\0' : 'notes.txt\0src/helper.js\0' };
   });
   const { deps } = integDeps(git, { verify: async () => ({ ok: false, output: SPEC_RED }) });
   deps.fixup = async () => ({ ok: false });
@@ -593,9 +593,14 @@ test('integrateMerge: no fix-up once the run is stopped, in a check-only build, 
   assert.deepEqual(Object.keys(res.skipped[0]), ['id', 'stage', 'detail', 'files'], 'no fixer: the entry looks as before');
 });
 
+// --no-renames: a test moved out of test/ is a deletion, not a rename.
+const DELETED_CMD = 'git diff --cached --name-only -z --no-renames --diff-filter=D sha1';
+
 test('integrateMerge: a green fix-up that deleted tests or moved HEAD off the merge is refused', async () => {
   const cases = [
-    [(cmd) => (cmd === 'git diff --cached --name-only --diff-filter=D sha1' ? { ok: true, stdout: 'test/a.test.js\n' } : null), /deleted tests: test\/a\.test\.js/],
+    [(cmd) => (cmd === DELETED_CMD ? { ok: true, stdout: 'test/a.test.js\0' } : null), /deleted tests: test\/a\.test\.js/],
+    // -z: a non-ASCII name arrives unquoted, so the test-file check still sees it.
+    [(cmd) => (cmd === DELETED_CMD ? { ok: true, stdout: 'test/zażółć.test.js\0' } : null), /deleted tests: test\/zaż/],
     [(cmd) => (cmd === 'git merge-base --is-ancestor sha1 HEAD' ? { ok: false } : null), /moved HEAD off the merge/],
   ];
   for (const [route, why] of cases) {
@@ -660,6 +665,29 @@ test('createMergeRunDeps: task text in, fix-ups counted on the self-check result
   await again.integrateMerge({ packages: [] }, {});
   assert.equal(stopped, false);
   assert.equal(again.runSelfCheck, undefined, 'no self-check dep -> none handed on');
+});
+
+test('createMergeRunDeps: fix-ups count per run; lists only from an integration that went through, added up over passes', async () => {
+  let plan = { id: 'p1', repoPath: '/r', integration: {}, packages: [] };
+  let answer = { ok: true, fixedUp: ['a'], secondPass: ['b'] };
+  const mr = createMergeRunDeps({
+    getPlan: () => plan,
+    runFixup: async () => ({ ok: true }),
+    runSelfCheck: async () => ({ tests: 'ok' }),
+    integrateMerge: async (_a, extra) => (await extra.fixup({ root: '/wt', brief: 'x' }), answer),
+  });
+  await mr.integrateMerge({ packages: [] }, {});
+  answer = { ok: true, fixedUp: ['c'], secondPass: ['b'] };
+  await mr.integrateMerge({ packages: [] }, {});
+  assert.deepEqual(plan.integration, { fixedUp: ['a', 'c'], secondPass: ['b'] }, 'a Retry pass adds to the first');
+  assert.equal((await mr.runSelfCheck({})).mergeFixups, 2, 'both passes of the same run count');
+
+  answer = { ok: false, stage: 'push', fixedUp: ['d'], secondPass: ['e'] };
+  await mr.integrateMerge({ packages: [] }, {});
+  assert.deepEqual(plan.integration, { fixedUp: ['a', 'c'], secondPass: ['b'] }, 'a failed push merged nothing into the base');
+
+  plan = { id: 'p2', repoPath: '/r', integration: {}, packages: [] };
+  assert.equal((await mr.runSelfCheck({})).mergeFixups, 0, 'a new run inherits no fix-ups');
 });
 
 test("selfCheckGate: merge fix-ups count in selfCheck.fixups with the gate's own", async () => {

@@ -129,7 +129,7 @@ function skippedLine(s, view) {
   const stage = oneLine(s.stage, 32) || 'merge';
   return `${label({ id: s.id, title: pkg.title })} - skipped at ${stage}${why ? ` (${why})` : ''}${
     files ? `; files: ${files}` : ''
-  }${s.fixup === 'failed' ? '; a fix-up worker tried and the tests stayed red' : ''}. Next step: ${NEXT_STEP}.`;
+  }${s.fixup === 'failed' ? '; a fix-up worker tried and could not get it green' : ''}. Next step: ${NEXT_STEP}.`;
 }
 
 /** What the integration did for a package beyond a plain merge, for the Notes column. */
@@ -256,7 +256,7 @@ function problems(view) {
       ...diagnoseSkip(s.stage, s.detail),
       evidence: [
         skipDetail(s),
-        s.fixup === 'failed' ? 'Fix-up: one fix-up worker tried after the merge; the tests stayed red, so it was taken out' : '',
+        s.fixup === 'failed' ? 'Fix-up: one fix-up worker tried after the merge and could not get it green (the detail says why), so it was taken out' : '',
         files.length ? `Files: ${files.join(', ')}` : '',
         pkg.branch ? `Branch: ${code(pkg.branch, 120)}` : '',
       ].filter(Boolean),

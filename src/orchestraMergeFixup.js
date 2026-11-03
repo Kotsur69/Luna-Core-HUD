@@ -29,19 +29,17 @@ const CLEAN_CHUNK = 100;
 const REV_RE = /^[0-9A-Za-z][0-9A-Za-z._/-]{0,99}$/;
 const TEST_FILE_RE = /(^|\/)(test|tests|__tests__)\/|\.(test|spec)\.[a-z]+$/i;
 
-const lines = (text) =>
-  String(text || '')
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
+// Path lists come from git with -z: NUL-separated and never quoted (a
+// non-ASCII name would otherwise arrive as "test/za\305\274...").
+const nulList = (text) => String(text || '').split('\0').filter(Boolean);
 // Text that goes inside a ``` block of the brief: it cannot close the block.
 const fenced = (text) => String(text || '').replace(/```/g, "'''");
 const ticked = (text) => String(text || '').replace(/`/g, "'");
 
 /** Paths changed between two revisions, [] when git cannot tell. */
 async function changedBetween(root, from, to, execImpl) {
-  const res = await runGit(root, ['diff', '--name-only', from, to], execImpl);
-  return res.ok ? lines(res.stdout) : [];
+  const res = await runGit(root, ['diff', '--name-only', '-z', from, to], execImpl);
+  return res.ok ? nulList(res.stdout) : [];
 }
 
 /**
@@ -126,9 +124,10 @@ async function commitFix(root, mergeSha, pkgId, execImpl) {
   if (!onTop.ok) return { ok: false, detail: 'the fix-up moved HEAD off the merge' };
   const staged = await gitSteps(root, [['reset', '--soft', mergeSha], ['add', '-A']], execImpl);
   if (!staged.ok) return staged;
-  const deleted = await runGit(root, ['diff', '--cached', '--name-only', '--diff-filter=D', mergeSha], execImpl);
+  // --no-renames: a test moved out of test/ counts as deleted, not renamed.
+  const deleted = await runGit(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', '--diff-filter=D', mergeSha], execImpl);
   if (!deleted.ok) return { ok: false, detail: gitError(deleted.stderr) || 'git diff failed' };
-  const tests = lines(deleted.stdout).filter((f) => TEST_FILE_RE.test(f));
+  const tests = nulList(deleted.stdout).filter((f) => TEST_FILE_RE.test(f));
   if (tests.length) return { ok: false, detail: `the fix-up deleted tests: ${tests.slice(0, 5).join(', ')}` };
   // Exit 0 = nothing staged: the tests went green without a change.
   const same = await runGit(root, ['diff', '--cached', '--quiet'], execImpl);
@@ -139,8 +138,8 @@ async function commitFix(root, mergeSha, pkgId, execImpl) {
 
 /** Untracked, not ignored paths in `root`, or null when git cannot tell. */
 async function untrackedFiles(root, execImpl) {
-  const res = await runGit(root, ['ls-files', '--others', '--exclude-standard'], execImpl);
-  return res.ok ? lines(res.stdout) : null;
+  const res = await runGit(root, ['ls-files', '-z', '--others', '--exclude-standard'], execImpl);
+  return res.ok ? nulList(res.stdout) : null;
 }
 
 /**

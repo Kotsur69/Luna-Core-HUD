@@ -749,7 +749,7 @@ function normalizeSkipped(raw) {
     detail: str(raw.detail, MAX_DETAIL_CHARS),
     files: (Array.isArray(raw.files) ? raw.files : []).filter(isRelPath).slice(0, MAX_DEP_MERGE_ITEMS),
   };
-  // A merge fix-up was tried and the tests stayed red (orchestraMergeFixup.js).
+  // A merge fix-up was tried and did not get the package green (orchestraMergeFixup.js).
   return raw.fixup === 'failed' ? { ...entry, fixup: 'failed' } : entry;
 }
 
