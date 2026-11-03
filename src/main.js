@@ -3074,6 +3074,8 @@ function registerIpc() {
     openExternal: (url) => shell.openExternal(url),
     gmail: () => reportMail.sender.status(),
   });
+  // Notification hub (face icon + right drawer): docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
+  require('./hubipc').registerHubIpc({ ipcMain, send, orchestra, runsDir: () => path.join(userDir(), RUN_REPORT_DIR), update: () => updateState });
   // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".
   weeklyReview = setupWeeklyReview({
     ipcMain,

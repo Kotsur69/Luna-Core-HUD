@@ -465,6 +465,22 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** 'Email it': sends that week's review to the connected Gmail address. */
   lifeWeekEmail: (week) => ipcRenderer.invoke('life:week-email', { week }),
   lifeWeekModel: (model, week) => ipcRenderer.invoke('life:week-model', { model, week }),
+  // --- Notification hub (src/hubipc.js) ---
+  // Read-only list plus "mark done" by id. Main checks the id against its
+  // regex; item actions are whitelisted names the renderer maps to the IPC
+  // below - nothing here runs an action named by data.
+  /** Promise<{ok, items, done, needs} | {ok:false, reason}>. */
+  hubList: () => ipcRenderer.invoke('hub:list'),
+  /** Marks one item done. Promise<{ok} | {ok:false, reason}>. */
+  hubDone: (id) => ipcRenderer.invoke('hub:done', typeof id === 'string' ? id : ''),
+  /** Pushed when the list changes: ({items, done, needs}); returns an unsubscribe. */
+  onHubChanged: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_e, view) => cb(view);
+    ipcRenderer.on('hub:changed', listener);
+    return () => ipcRenderer.removeListener('hub:changed', listener);
+  },
+
   // --- Cloud sync (src/cloudipc.js) ---
   // No payloads except cloudForget's machine name. Main answers from a whitelist: who is logged in and the sync
   // state - never a token. Login opens GitHub in the system browser.
