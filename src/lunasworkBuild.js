@@ -33,7 +33,8 @@
 const MODEL_RANK = { haiku: 0, sonnet: 1, opus: 2 };
 // God Mode workers run on these (orchestraPlan.js MODELS).
 const WORKER_MODELS = ['sonnet', 'opus'];
-const BUSY_ERRORS = new Set(['busy', 'runActive']);
+// repoBusy: another project's God Mode run holds this repo (orchestraRegistry.js).
+const BUSY_ERRORS = new Set(['busy', 'runActive', 'repoBusy']);
 const NOTHING_TO_BUILD = new Set(['noTodos', 'noneSelected']);
 const CARD_FIELDS = ['text', 'details', 'files', 'size', 'acceptance', 'verify', 'model'];
 
@@ -65,8 +66,11 @@ function planCard(card) {
 }
 
 /**
- * @param {{orchestra:{makePlan:Function, launch:Function, cancelPlanWait:Function,
- *   view?:Function, planWait?:Function, finishRun?:Function},
+ * God Mode runs one plan per project (orchestraRegistry.js): view, planWait
+ * and cancelPlanWait take the build's projectId; launch and finishRun find
+ * the run by the planId in their payload.
+ * @param {{orchestra:{makePlan:Function, launch:Function, cancelPlanWait:(projectId:string)=>unknown,
+ *   view?:(projectId:string)=>object|null, planWait?:(projectId:string)=>object|null, finishRun?:Function},
  *   profileId:()=>string|null, env:()=>object, freeEnv?:()=>object|null,
  *   log?:(line:string)=>void}} deps
  */
@@ -82,7 +86,7 @@ function createGodModeBuilder(deps) {
    */
   function interruptedPlan(opts) {
     if (!opts.resumePlanId || typeof deps.orchestra.view !== 'function') return null;
-    const view = deps.orchestra.view();
+    const view = deps.orchestra.view(opts.projectId);
     if (!isObj(view) || view.id !== opts.resumePlanId || view.projectId !== opts.projectId) return null;
     if (view.settled || view.killed) return null;
     const packages = Array.isArray(view.packages) ? view.packages : [];
@@ -90,14 +94,15 @@ function createGodModeBuilder(deps) {
   }
 
   /**
-   * God Mode holds one plan for the whole app. A plan this run did not make
-   * that is still open (held, running, or waiting for a usage reset) belongs
-   * to Mati - makePlan would silently replace it, so the build waits instead.
+   * God Mode holds one plan per project. A plan on the build's project this
+   * run did not make that is still open (held, running, or waiting for a
+   * usage reset) belongs to Mati - makePlan would silently replace it, so the
+   * build waits instead.
    */
   function foreignPlanOpen(opts) {
     const own = new Set(Array.isArray(opts.ownPlanIds) ? opts.ownPlanIds : []);
-    const view = typeof deps.orchestra.view === 'function' ? deps.orchestra.view() : null;
-    const wait = typeof deps.orchestra.planWait === 'function' ? deps.orchestra.planWait() : null;
+    const view = typeof deps.orchestra.view === 'function' ? deps.orchestra.view(opts.projectId) : null;
+    const wait = typeof deps.orchestra.planWait === 'function' ? deps.orchestra.planWait(opts.projectId) : null;
     const openPlan = isObj(view) && !view.settled && !view.killed && !own.has(view.id);
     const waiting = isObj(wait) && wait.state !== 'failed';
     return openPlan || waiting;
@@ -117,7 +122,7 @@ function createGodModeBuilder(deps) {
     const error = (isObj(made) && made.error) || 'failed';
     if (error === 'waiting') {
       // The controller owns the WAIT: God Mode must not re-plan on its own.
-      deps.orchestra.cancelPlanWait();
+      deps.orchestra.cancelPlanWait(active ? active.projectId : undefined);
       const wait = isObj(made.planWait) ? made.planWait : {};
       return { ok: false, error: 'limit', resumeAt: Number.isFinite(wait.resumeAt) ? wait.resumeAt : null };
     }
@@ -190,9 +195,12 @@ function createGodModeBuilder(deps) {
   /**
    * God Mode's onChange view, forwarded by main: a kill or a discard of the
    * build's plan settles the build (onRunSettled never fires for those).
+   * `projectId` names the run that changed; another project's run is not
+   * the build's, whatever its view says (a discard sends a null view).
    */
-  function onChange(view) {
+  function onChange(view, projectId) {
     if (!active || !active.planId) return;
+    if (projectId !== undefined && projectId !== active.projectId) return;
     if (!isObj(view) || view.id !== active.planId) {
       active.settle({ ok: false, error: 'discarded' });
       return;

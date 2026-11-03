@@ -201,7 +201,7 @@ ${msg.text}` }),
  *   projects: ()=>object[], resolveDir: (p:string)=>string|null,
  *   readTodos: (projectId:string)=>object[], writeTodos: (projectId:string, list:object[])=>boolean,
  *   onTodosChanged: (projectId:string)=>void,
- *   orchestra: {view:()=>object|null, planWait:()=>object|null},
+ *   orchestra: {view:(projectId:string)=>object|null, planWait:(projectId:string)=>object|null},
  *   builder: {build:Function},
  *   godModeCheckCommand: ()=>string,
  *   env: ()=>object, freeEnv: ()=>object|null,
@@ -224,12 +224,14 @@ function createLunasWorkRuntime(ctx) {
   };
 
   // Mutual exclusion, Luna's Work side: an unsettled God Mode plan (held or
-  // running) or a planning wait on the same project.
+  // running) or a planning wait on the same project. God Mode keeps one run
+  // per project (orchestraRegistry.js), so what comes back is that project's
+  // own run - also a run filed under it from an older build's single file.
   const godModeActive = ({ projectId }) => {
-    const view = ctx.orchestra.view();
-    const wait = ctx.orchestra.planWait();
-    const planOpen = !!view && view.projectId === projectId && !view.settled && !view.killed;
-    const waiting = !!wait && wait.projectId === projectId && wait.state !== 'failed';
+    const view = ctx.orchestra.view(projectId);
+    const wait = ctx.orchestra.planWait(projectId);
+    const planOpen = !!view && !view.settled && !view.killed;
+    const waiting = !!wait && wait.state !== 'failed';
     return planOpen || waiting;
   };
 
