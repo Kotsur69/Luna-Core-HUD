@@ -88,6 +88,19 @@ function relTime(ms) {
   return rtf.format(Math.round(diff / MINUTE), 'minute');
 }
 
+const timeText = (at, done) => (done ? t('hub.doneAt', { when: relTime(at) }) : relTime(at));
+
+/** The minute tick: only the <time> texts change, so focus and scroll stay put. */
+function refreshTimes() {
+  if (!drawer) return;
+  for (const time of drawer.querySelectorAll('.hub-card__time')) {
+    time.textContent = timeText(Number(time.dataset.at), time.dataset.done === '1');
+  }
+}
+
+/** True while a palette or Settings-style overlay (z 100) sits above the drawer. */
+const modalOnTop = () => Boolean(document.querySelector('.palette:not([hidden]), .termcustom:not([hidden])'));
+
 /** A localized line for an item key, or the English fallback main sent. */
 function localized(key, vars, fallback) {
   if (!key) return fallback || '';
@@ -129,8 +142,10 @@ function card(item, { done = false } = {}) {
   if (detail) box.append(el('p', 'hub-card__detail', detail));
   const meta = el('div', 'hub-card__meta');
   const at = done ? item.doneAt : item.at;
-  const time = el('time', 'hub-card__time', done ? t('hub.doneAt', { when: relTime(at) }) : relTime(at));
+  const time = el('time', 'hub-card__time', timeText(at, done));
   if (Number.isFinite(at)) time.dateTime = new Date(at).toISOString();
+  time.dataset.at = String(at);
+  if (done) time.dataset.done = '1';
   meta.append(time);
   if (item.machine) meta.append(chip(t('hub.from', { machine: machineLabel(item.machine) })));
   if (item.local) meta.append(chip(t('hub.thisPc'), 'is-local'));
@@ -160,6 +175,14 @@ function section(titleKey, count) {
 
 function render() {
   if (!els) return;
+  // A push can replace the card that held focus (Mark done removes it): keep
+  // focus inside the drawer so the keyboard and Esc keep working.
+  const hadFocus = drawer.contains(document.activeElement);
+  paint();
+  if (hadFocus && !drawer.contains(document.activeElement)) drawer.focus();
+}
+
+function paint() {
   const { items, done } = lastView;
   const needs = items.filter((i) => i.kind === 'needs');
   const briefs = items.filter((i) => i.kind === 'brief');
@@ -187,10 +210,17 @@ function clampWidth(w) {
   return Math.round(Math.min(Math.max(Number(w) || WIDTH_DEFAULT, WIDTH_MIN), max));
 }
 
+/** Sets the wanted width; the shown one is clamped to the current window. */
 function applyWidth(w) {
-  width = clampWidth(w);
-  drawer.style.setProperty('--hub-w', `${width}px`);
-  els.handle.setAttribute('aria-valuenow', String(width));
+  width = Math.round(Math.min(Math.max(Number(w) || WIDTH_DEFAULT, WIDTH_MIN), WIDTH_MAX));
+  const shown = clampWidth(width);
+  drawer.style.setProperty('--hub-w', `${shown}px`);
+  els.handle.setAttribute('aria-valuenow', String(shown));
+}
+
+/** Re-clamps for a resized window without forgetting the wanted width. */
+function fitWidth() {
+  drawer.style.setProperty('--hub-w', `${clampWidth(width)}px`);
 }
 
 const saveWidth = () => call('setUiPrefs', { hubWidth: width });
@@ -202,7 +232,7 @@ function wireResize(handle) {
     if (e.button !== 0) return;
     e.preventDefault();
     startX = e.clientX;
-    startW = width;
+    startW = clampWidth(width);
     handle.setPointerCapture(e.pointerId);
     drawer.classList.add('is-resizing');
   });
@@ -210,14 +240,13 @@ function wireResize(handle) {
     if (!handle.hasPointerCapture(e.pointerId)) return;
     applyWidth(startW + (startX - e.clientX));
   });
-  const end = (e) => {
-    if (!handle.hasPointerCapture(e.pointerId)) return;
-    handle.releasePointerCapture(e.pointerId);
+  // lostpointercapture fires for pointerup, pointercancel AND a capture dropped
+  // because the drawer was hidden mid-drag - so a drag always ends and saves.
+  handle.addEventListener('lostpointercapture', () => {
+    if (!drawer.classList.contains('is-resizing')) return;
     drawer.classList.remove('is-resizing');
     saveWidth();
-  };
-  handle.addEventListener('pointerup', end);
-  handle.addEventListener('pointercancel', end);
+  });
   handle.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowLeft' ? WIDTH_STEP : e.key === 'ArrowRight' ? -WIDTH_STEP : 0;
     if (!step) return;
@@ -289,7 +318,7 @@ function build() {
     if (prefs && Number.isInteger(prefs.hubWidth)) applyWidth(prefs.hubWidth);
   });
   window.addEventListener('resize', () => {
-    if (isOpen) applyWidth(width);
+    if (isOpen) fitWidth();
   });
   onLangChange(() => {
     label();
@@ -312,12 +341,15 @@ export function openHub() {
   cancelExit(drawer);
   isOpen = true;
   returnFocus = document.activeElement;
+  fitWidth();
   render();
   showBrief(briefRoot);
   drawer.hidden = false;
-  drawer.focus();
+  // Not a modal: under a palette or Settings overlay it opens without taking
+  // focus from that overlay's input.
+  if (!modalOnTop()) drawer.focus();
   // Relative times go stale while the drawer stays open.
-  tick = setInterval(render, TICK_MS);
+  tick = setInterval(refreshTimes, TICK_MS);
   emitOpen();
 }
 
@@ -326,6 +358,7 @@ export function closeHub() {
   isOpen = false;
   clearInterval(tick);
   tick = null;
+  drawer.classList.remove('is-resizing');
   closeWithExit(drawer);
   if (returnFocus && typeof returnFocus.focus === 'function' && drawer.contains(document.activeElement)) returnFocus.focus();
   returnFocus = null;

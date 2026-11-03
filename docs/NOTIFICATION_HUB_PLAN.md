@@ -11,8 +11,17 @@ user-facing strings need `pl` + `en`.
 
 ## Resume here
 
-- Nothing built yet. Open questions answered 2026-11-02 (N0 done); next =
-  **N1**. One to-do card per slice N1-N6.
+- **N1-N3 built 2026-11-03** (branch `luna/hub-core-qozyi`): `src/hub.js`,
+  `src/hubcollect.js`, `src/hubipc.js`; renderer `hubstate.js`, `hubicon.js`,
+  `hubpanel.js`, `hub.css`. Next = **N4** (across PCs).
+- Deviations from the text below: the theme has no `--accent` token, so the
+  face uses `var(--accent, var(--neon-cyan))`; `#mission-brief` was already
+  gone (commit 672af30 moved it into a tall overlay behind a "Brief" button) -
+  N3 removed that button and overlay and mounts the brief in the drawer.
+  Godmode needs/manual item ids carry a hash of the line text, not its index.
+- The older attention inbox ('!' chip, `src/inbox.js`, `inbox.js`) still
+  runs beside the hub; it covers other PCs' runs until N4. Fold it into the
+  hub in N4 so there is one badge, not two.
 - UI slices (N2, N3) go through the `ui-ux-pro-max` skill first (Mati's
   global rule for UI work). Smoke-test with the in-process Electron wrapper
   (memory: "Smoke-test UI without a CDP port").
