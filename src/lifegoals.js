@@ -94,4 +94,4 @@ function goalsView(s, nowMs = Date.now()) {
   return { week, goals: s.weeks[week] || null, lastWeek, last: s.weeks[lastWeek] || null, isMonday: new Date(nowMs).getDay() === 1 };
 }
 
-module.exports = { loadGoals, applyGoals, goalsView, goalsFraction, normalize, OP_NAMES, MAX_GOALS, MAX_TEXT, STATUSES };
+module.exports = { loadGoals, applyGoals, goalsView, goalsFraction, normalize, store, OP_NAMES, MAX_GOALS, MAX_TEXT, STATUSES };

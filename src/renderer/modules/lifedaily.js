@@ -73,6 +73,56 @@ export async function setScorePrefs(weights, focusTargetH) {
   return res;
 }
 
+// Quiet reloads for another PC's changes: a failed background read keeps the last answer.
+const RELOADS = {
+  checkin: async () => accept('checkin', await call('lifeCheckin'), true),
+  habits: async () => accept('habits', await call('lifeHabits'), true),
+  goals: async () => accept('goals', await call('lifeGoals'), true),
+};
+
+/**
+ * Another PC's check-in / habits / goals / score settings were merged here
+ * (main's life:changed): reload those parts, so subscribers (the check-in and
+ * goals prompts, the inbox badge) re-evaluate without a restart.
+ */
+async function onSynced(payload) {
+  const parts = payload && Array.isArray(payload.parts) ? payload.parts : [];
+  await Promise.all(parts.filter((p) => Object.hasOwn(RELOADS, p)).map((p) => RELOADS[p]()));
+  if (parts.length) await loadScore();
+}
+
+/** A field of the Life dashboard has focus: a redraw now would wipe what is being typed. */
+function typingInLife() {
+  const el = document.activeElement;
+  return Boolean(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && el.closest && el.closest('#life'));
+}
+
+// Parts another PC changed while a field had focus; reloaded once it loses focus.
+let heldParts = new Set();
+
+function applySynced(parts) {
+  onSynced({ parts }).catch(() => {
+    // The next dashboard open or inbox refresh reads again.
+  });
+}
+
+if (typeof window !== 'undefined' && window.lunacore && typeof window.lunacore.onLifeChanged === 'function') {
+  window.lunacore.onLifeChanged((payload) => {
+    const parts = payload && Array.isArray(payload.parts) ? payload.parts : [];
+    if (!typingInLife()) return applySynced(parts);
+    heldParts = new Set([...heldParts, ...parts]);
+  });
+  document.addEventListener('focusout', () => {
+    // After the focus has moved: tabbing to the next field still holds the reload.
+    setTimeout(() => {
+      if (!heldParts.size || typingInLife()) return;
+      const parts = [...heldParts];
+      heldParts = new Set();
+      applySynced(parts);
+    }, 0);
+  });
+}
+
 /** Live while the dashboard is open: the score (focus, Now strip) refreshes every minute. */
 export function startLive() {
   stopLive();

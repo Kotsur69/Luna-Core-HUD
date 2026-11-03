@@ -57,4 +57,4 @@ function setScorePrefs(data, file) {
   return store.update(() => ({ v: 1, weights, focusTargetH: data.focusTargetH }), file);
 }
 
-module.exports = { loadScorePrefs, setScorePrefs, normalizeWeights, PARTS, DEFAULT_TARGET_H };
+module.exports = { loadScorePrefs, setScorePrefs, normalizeWeights, normalize, store, PARTS, DEFAULT_TARGET_H };

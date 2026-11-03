@@ -138,4 +138,4 @@ function applyHabits(op, data, file, nowMs = Date.now()) {
   return store.update((cur) => OPS[op](cur, data, nowMs), file);
 }
 
-module.exports = { loadHabits, applyHabits, normalize, OP_NAMES, MAX_HABITS, MAX_NAME };
+module.exports = { loadHabits, applyHabits, normalize, store, OP_NAMES, MAX_HABITS, MAX_NAME };
