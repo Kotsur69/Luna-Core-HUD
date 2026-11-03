@@ -19,6 +19,7 @@ const {
   pickActive,
   authLayerFor,
   usesOwnBackend,
+  failoverEligible,
   extractToken,
   sanitize,
   ACCOUNT_ENV,
@@ -214,4 +215,24 @@ test('buildSessionEnv: applies the account layer last, sees the merged env', () 
   } finally {
     setAccountLayer(null);
   }
+});
+
+// Regression: every account-steered tab looked like a provider profile,
+// because the token the account layer itself injected counted as "own
+// backend" - so failoverTab bailed out and the tab waited on the limit.
+test('failoverEligible: a launch steered by the account layer can fail over', () => {
+  const tok = 'sk-ant-oat01-' + 'a'.repeat(40);
+  const env = { PATH: 'x', ...authLayerFor({ PATH: 'x' }, { id: 'acc1', token: tok }) };
+  assert.equal(usesOwnBackend(env), true);
+  assert.equal(failoverEligible(env), true);
+});
+
+test('failoverEligible: plain /login launch (no accounts) can fail over', () => {
+  assert.equal(failoverEligible({ PATH: 'x' }), true);
+});
+
+test('failoverEligible: a provider profile or own token stays out', () => {
+  assert.equal(failoverEligible({ ANTHROPIC_BASE_URL: 'http://localhost:1234' }), false);
+  assert.equal(failoverEligible({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-' + 'b'.repeat(40) }), false);
+  assert.equal(failoverEligible(null), true);
 });

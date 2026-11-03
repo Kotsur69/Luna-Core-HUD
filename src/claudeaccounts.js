@@ -105,6 +105,19 @@ function usesOwnBackend(env) {
   return BACKEND_KEYS.some((k) => typeof e[k] === 'string' && e[k] !== '');
 }
 
+/**
+ * True when a launched process may be moved to another account on a limit.
+ * The token the account layer itself injected (marked by ACCOUNT_ENV) is not
+ * "its own backend" - only what the env carried before that layer counts.
+ * @param {Record<string,string>|null|undefined} env the final launch env
+ */
+function failoverEligible(env) {
+  const e = env || {};
+  if (!e[ACCOUNT_ENV]) return !usesOwnBackend(e);
+  const { CLAUDE_CODE_OAUTH_TOKEN: _injected, ...rest } = e;
+  return !usesOwnBackend(rest);
+}
+
 /** Drops expired cooldowns and ones for accounts that no longer exist. */
 function pruneLimits(limits, accounts, now) {
   const ids = new Set(accounts.map((a) => a.id));
@@ -323,6 +336,7 @@ module.exports = {
   pickActive,
   authLayerFor,
   usesOwnBackend,
+  failoverEligible,
   extractToken,
   isValidToken,
   sanitize,

@@ -89,7 +89,7 @@ const {
 } = require('./launch');
 // Claude account failover (src/claudeaccounts.js): several subscriptions, one
 // harness. The active account's token rides in every plain Claude launch.
-const { createClaudeAccounts, usesOwnBackend, ACCOUNT_ENV } = require('./claudeaccounts');
+const { createClaudeAccounts, failoverEligible, ACCOUNT_ENV } = require('./claudeaccounts');
 const { registerClaudeAccountsIpc } = require('./claudeaccountsipc');
 // Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject, removeProject, resolveProjectDir, resolveStoredPath } = require('./projects');
@@ -1258,7 +1258,9 @@ function spawnInto(session, profile, launch = null) {
     delete env[ACCOUNT_ENV];
   }
   session.accountId = env[ACCOUNT_ENV] || null;
-  session.ownBackend = usesOwnBackend(env);
+  // Not usesOwnBackend(env): the account layer's own token would count and
+  // switch failover off for every account-steered tab.
+  session.ownBackend = !failoverEligible(env);
 
   session.cwd = cwd;
   session.profileId = profile.id;
