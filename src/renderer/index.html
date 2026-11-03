@@ -42,6 +42,8 @@
   <link rel="stylesheet" href="styles.css" />
   <!-- Life dashboard (Ctrl+Shift+N); separate because styles.css is past the size guideline. -->
   <link rel="stylesheet" href="life.css" />
+  <!-- Notification hub: face chip + right drawer (Ctrl+Shift+H), same reason. -->
+  <link rel="stylesheet" href="hub.css" />
 </head>
 <body>
   <!-- ================= HUD =================
@@ -971,6 +973,18 @@
              opens - same rationale as the Ctrl+G and Ctrl+/ chips above. -->
         <button id="libraries-open" class="palette-chip" data-i18n-title="libraries.chip.title" title="Polecane biblioteki i narzedzia (Ctrl+B)">
           <kbd>Ctrl</kbd><kbd>B</kbd>
+        </button>
+        <!-- Notification hub (modules/hubicon.js): a line-drawn face in the
+             theme accent plus the count of open "needs" items, hidden at 0.
+             Click or Ctrl+Shift+H toggles the right drawer (modules/hubpanel.js).
+             Static markup: the SVG carries no data. -->
+        <button id="hub-open" class="palette-chip hub-chip" data-i18n-title="hub.chip.title" title="Centrum powiadomien (Ctrl+Shift+H)" aria-label="Centrum powiadomien" aria-expanded="false">
+          <svg class="hub-chip__face" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9 9.6v1.2M15 9.6v1.2" />
+            <path d="M8.4 14.4c.9 1.2 2.2 1.9 3.6 1.9s2.7-.7 3.6-1.9" />
+          </svg>
+          <span id="hub-count" class="hub-chip__badge" hidden>0</span>
         </button>
         <!-- Mission Control (mail cleanup + calendar), same discoverability
              rationale as the chips above. -->

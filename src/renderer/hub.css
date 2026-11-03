@@ -1,0 +1,94 @@
+/* ==========================================================================
+   Notification hub: the face chip (modules/hubicon.js) and the right drawer
+   (modules/hubpanel.js). Theme tokens only - no hard-coded colours - so it
+   reads the same on every theme. The drawer sits on --surface-panel; on glass
+   themes that token is translucent and the backdrop blur gives the acrylic
+   panel, on opaque themes the blur has nothing to show and costs nothing.
+   No new :root tokens (test/theme.test.js guards that block): the accent is
+   resolved locally as var(--accent, var(--neon-cyan)).
+   ========================================================================== */
+
+/* ---- Face chip + badge ---------------------------------------------------- */
+.hub-chip { position: relative; color: var(--accent, var(--neon-cyan)); }
+.hub-chip__face {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.hub-chip:hover { color: var(--accent, var(--neon-cyan)); }
+.hub-chip:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.hub-chip[aria-expanded='true'] { border-color: var(--edge-glow); box-shadow: 0 0 var(--glow-size-md) var(--glow); }
+.hub-chip__badge {
+  min-width: 1.1rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bad);
+  color: var(--bg-panel-2);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  line-height: 1.1rem;
+  text-align: center;
+}
+.hub-chip__badge[hidden] { display: none; }
+/* One pulse when the count goes up. Transform only; the duration token drops
+   to 0 under reduced motion, and hubicon.js skips the class then anyway. */
+.hub-chip__badge.is-bumped { animation: hub-bump var(--dur-normal) var(--ease-smooth); }
+@keyframes hub-bump {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
+/* ---- Drawer --------------------------------------------------------------- */
+/* Above the panels and the texture overlay (50), below the palettes and the
+   Settings-style overlays (100) so a modal opened from a card lands on top. */
+.hub-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  width: var(--hub-w, 420px);
+  max-width: calc(100vw - 160px);
+  border-left: var(--border-w) solid var(--edge);
+  background: var(--surface-panel);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: -12px 0 32px -16px var(--glow);
+  color: var(--text);
+  animation: hub-in var(--dur-normal) var(--ease-smooth);
+}
+.hub-drawer[hidden] { display: none; }
+.hub-drawer:focus { outline: none; }
+.hub-drawer.is-leaving { animation: hub-out var(--dur-fast) var(--ease-sharp) forwards; }
+@keyframes hub-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes hub-out { from { transform: none; opacity: 1; } to { transform: translateX(24px); opacity: 0; } }
+
+.hub-drawer__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: var(--border-w) solid var(--edge);
+}
+.hub-drawer__title {
+  flex: 1;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  letter-spacing: var(--tracking-title, 0);
+  color: var(--text);
+}
+.hub-drawer__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-5) var(--space-6) var(--space-8);
+}
+.hub-drawer__plain { margin: 0; padding-left: var(--space-6); font-size: var(--fs-sm); }

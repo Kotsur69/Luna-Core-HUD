@@ -126,6 +126,14 @@ export const SHORTCUT_GROUPS = [
         },
       },
       {
+        chords: [['Ctrl', 'Shift', 'H']],
+        descKey: 'shortcuts.hub',
+        source: {
+          file: 'src/renderer/modules/hubicon.js',
+          marker: "e.code === 'KeyH'",
+        },
+      },
+      {
         chords: [['Ctrl', 'Shift', 'N']],
         descKey: 'shortcuts.life',
         source: {
