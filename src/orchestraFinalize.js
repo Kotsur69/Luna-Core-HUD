@@ -69,7 +69,30 @@ const POST_MERGE_STEPS = Object.freeze([
   { name: 'localBase', impl: 'updateLocalBase', when: () => true },
   // 2. remove the integration worktree, delete the merged package branches.
   { name: 'cleanup', impl: 'cleanupMergedRun', when: () => true },
+  // 3. "Create a new release after finish" (src/releaseCut.js), once per run.
+  { name: 'release', impl: 'releaseAfterMerge', when: releaseGate },
 ]);
+
+const SELF_CHECK_KEYS = ['tests', 'syntax', 'smoke'];
+
+/**
+ * The release step runs only when Mati ticked it at Approve, at most once
+ * per run (a later pass that merges more leaves a done release alone), and
+ * only on a green self-check: its tests passed, nothing failed. The release
+ * goes to every installed copy (auto-update), so a self-check that did not
+ * run is not green. The rest (dirty tree, the merge not in the local
+ * checkout, red tests, no gh) releaseCut refuses with its own reason.
+ */
+function releaseGate(ctx) {
+  if (!ctx.options || ctx.options.releaseAfter !== true) return false;
+  const done = ctx.previous && ctx.previous.release;
+  if (done && done.released === true) return false;
+  const sc = ctx.selfCheck;
+  if (!sc || typeof sc !== 'object') return 'self-check did not run';
+  if (SELF_CHECK_KEYS.some((k) => sc[k] === 'failed')) return 'self-check failed';
+  if (sc.tests !== 'ok') return 'self-check tests did not run';
+  return true;
+}
 
 /**
  * The read-only facts a post-merge step gets. `results` fills in as the
@@ -460,7 +483,22 @@ function createFinalizer(deps) {
     return true;
   }
 
-  return { finalize, isRunning: () => running, emailSummary, emailResult };
+  /**
+   * A post-merge step run by hand after finalize ("Release now"): its result
+   * lands in integration.postMerge[step] like the automatic ones.
+   * @returns {boolean} whether the board's run was updated
+   */
+  function recordPostMerge(planId, step, result) {
+    const plan = deps.getPlan();
+    if (!plan || plan.id !== planId || !POST_MERGE_STEPS.some((s) => s.name === step) || !result || typeof result !== 'object') return false;
+    const postMerge = { ...((plan.integration && plan.integration.postMerge) || {}), [step]: { ...result, at: deps.now() } };
+    setIntegration(plan, { postMerge });
+    deps.commit();
+    deps.onRunEvent('postMerge', { step });
+    return true;
+  }
+
+  return { finalize, isRunning: () => running, emailSummary, emailResult, recordPostMerge };
 }
 
-module.exports = { createFinalizer, postMergeContext, slugOf, POST_MERGE_STEPS, TAB_CLOSE_SETTLE_MS, EMAIL_NOT_CONNECTED };
+module.exports = { createFinalizer, postMergeContext, releaseGate, slugOf, POST_MERGE_STEPS, TAB_CLOSE_SETTLE_MS, EMAIL_NOT_CONNECTED };

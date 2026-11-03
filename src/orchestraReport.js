@@ -371,6 +371,12 @@ const POST_MERGE_LINES = {
       ...(kept.length ? [`  - Kept: ${kept.join(', ')}`] : []),
     ];
   },
+  release: (r) => {
+    if (r.skipped) return [`- Release skipped: ${oneLine(r.skipped)}`];
+    if (!r.released) return [];
+    const url = typeof r.url === 'string' && /^https:\/\/github\.com\//.test(r.url) ? oneLine(r.url, 300) : 'no release URL';
+    return [`- Released ${code(r.tag || `v${oneLine(r.version, 20)}`, 24)}: ${url}`];
+  },
 };
 
 /** What ran after the merge landed: the local base update, cleanup, release. */

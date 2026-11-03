@@ -244,6 +244,7 @@ const orchestraIntegrate = require('./orchestraIntegrate');
 const { reportFileFor, renderRunReportHtml, repoPathOf } = require('./orchestraReport');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
 const { createPostMergeServices } = require('./orchestraPostMerge');
+const { cutRelease, unreleasedCount, releaseResult } = require('./releaseCut');
 const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSupervisor');
 const { createStatusBoard } = require('./sessionstatus');
 
@@ -1034,11 +1035,26 @@ const lunasworkSecretGate = createSecretGate({
   log: (line) => console.info(line),
 });
 
-// After a merge landed: ff the local base checkout, clean up merged branches
-// (src/orchestraPostMerge.js). The start-up sweep only touches registered projects.
+/** One line at the end of a run's report (<userDir>/runs/<id>.md). */
+function appendRunReport(planId, line) {
+  if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return;
+  try {
+    fs.appendFileSync(path.join(userDir(), RUN_REPORT_DIR, `${planId}.md`), `${line}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch (err) {
+    console.error('[orchestra] could not append to the run report:', err && err.message);
+  }
+}
+
+/** releaseCut.cutRelease with the tool env (gh, npm on PATH). */
+const runReleaseCut = (opts) => cutRelease(opts, { env: orchestraToolEnv(), log: (line) => console.info('[orchestra]', line) });
+
+// After a merge landed: ff the local base checkout, clean up merged branches,
+// cut a release when ticked (src/orchestraPostMerge.js). The start-up sweep
+// only touches registered projects.
 const orchestraPostMerge = createPostMergeServices({
   appPath: () => app.getAppPath(),
   isKnownRepo: (repoPath) => projects.some((p) => p.path && path.resolve(p.path) === path.resolve(repoPath)),
+  release: runReleaseCut,
   log: (line) => console.info('[orchestra]', line),
 });
 
@@ -1160,18 +1176,23 @@ const orchestra = createOrchestra({
   // Merge mode pushes the base branch with no PR review: Mati confirms it
   // here, natively - a renderer can ask for it, never grant it. A Luna's
   // Work build's own plan was confirmed the same way when Mati started that run.
-  confirmMerge: async (base) => {
-    if (lunasworkBuilder.ownsMerge(orchestra.view())) return true;
+  // {release}: "Create a new release after finish" was ticked - the dialog says so.
+  confirmMerge: async (base, extra = {}) => {
+    if (lunasworkBuilder.ownsMerge(orchestra.view()) && !extra.release) return true;
     if (!mainWindow || mainWindow.isDestroyed()) return false;
+    const release = extra.release === true;
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
-      buttons: ['Merge and push', 'Cancel'],
+      buttons: [release ? 'Merge, push and release' : 'Merge and push', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
       title: 'God Mode - merge into base branch',
-      message: `Merge every pushed package into "${base || '?'}" and push it?`,
+      message: `Merge every pushed package into "${base || '?'}" and push it?${release ? ' Then cut a new release.' : ''}`,
       detail:
-        'Packages are merged in dependency order in a separate worktree and verified after each merge. Nothing is pushed if a verify fails or a conflict cannot be resolved. There is no PR review.',
+        'Packages are merged in dependency order in a separate worktree and verified after each merge. Nothing is pushed if a verify fails or a conflict cannot be resolved. There is no PR review.' +
+        (release
+          ? '\n\nAfter the merge lands and the self-check is green: npm version bump, README release block, commit + tag, push of the base branch and the tag, npm run dist and a GitHub release with the installers.'
+          : ''),
     });
     return response === 0;
   },
@@ -1223,14 +1244,7 @@ const orchestra = createOrchestra({
   // run's own workers, so it must not be read as "another run" (the
   // multi-run registry replaces this - docs/MULTI_GODMODE_PLAN.md A2).
   otherRunsActive: () => false,
-  appendReport: (planId, line) => {
-    if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return;
-    try {
-      fs.appendFileSync(path.join(userDir(), RUN_REPORT_DIR, `${planId}.md`), `${line}\n`, { encoding: 'utf8', mode: 0o600 });
-    } catch (err) {
-      console.error('[orchestra] could not append to the run report:', err && err.message);
-    }
-  },
+  appendReport: (planId, line) => appendRunReport(planId, line),
   // Shown whether or not toasts are on in Settings: the PC is about to go.
   notifyPower: (kind) => {
     if (!Notification.isSupported()) return;
@@ -3502,6 +3516,28 @@ function registerIpc() {
   orchestraFinishIpc.register(ipcMain, {
     runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
     resendRunEmail: (planId) => reportMail.runMail.resend(planId, orchestra.emailSummary(planId)),
+    projects: () => projects.map((p) => ({ id: p.id, path: p.path })),
+    releaseTarget: () => orchestra.releaseTarget(),
+    unreleasedCount: (repoPath) => unreleasedCount(repoPath, { env: orchestraToolEnv() }),
+    cutRelease: runReleaseCut,
+    releaseResult,
+    recordRelease: (planId, result) => orchestra.recordRelease(planId, result),
+    appendReport: appendRunReport,
+    // Pushing a tag and publishing installers: Mati confirms natively.
+    confirmRelease: async ({ base, count }) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['Release now', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'God Mode - release now',
+        message: `Cut a new release from "${base}"${Number.isInteger(count) ? ` (${count} commits since the last tag)` : ''}?`,
+        detail:
+          'npm test, npm version bump, README release block, commit + tag, push of the base branch and the tag, npm run dist and a GitHub release with the installers. Refused on a dirty tree, red tests or no gh auth.',
+      });
+      return response === 0;
+    },
   });
 
   // Idea #5: allow a tool for FUTURE workers. Only a rule the current run
