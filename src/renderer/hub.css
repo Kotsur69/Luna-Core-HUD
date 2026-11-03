@@ -176,8 +176,9 @@ details.hub-sec > summary:focus-visible { outline: 2px solid var(--edge-glow); o
   border-radius: var(--radius-md);
   background: var(--surface-panel-2);
 }
-/* Needs cards carry an accent rule on the left: the one thing to scan for. */
-.hub-card--needs { border-left: 3px solid var(--bad); }
+/* Needs cards: the whole border leans toward --bad, no side stripe. The red
+   count in the section head already carries the urgency. */
+.hub-card--needs { border-color: color-mix(in srgb, var(--bad) 45%, var(--edge)); }
 .hub-card.is-done { opacity: 0.7; }
 .hub-card.is-done .hub-card__title { text-decoration: line-through; text-decoration-color: var(--text-dim); }
 .hub-card__title { margin: 0; font-size: var(--fs-sm); font-weight: 600; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
