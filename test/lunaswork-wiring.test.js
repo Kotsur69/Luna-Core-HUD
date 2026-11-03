@@ -50,7 +50,11 @@ function setupRepos() {
     git(other, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
     return git(other, 'rev-parse', 'HEAD');
   };
-  return { dir, checkout, pushFromElsewhere, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  // fs.promises.rm with retries, not rmSync: on a busy Windows machine a git
+  // that just ran here can hold the folder a moment longer (EPERM), and Node
+  // 24's rmSync gives up on that at once whatever maxRetries says.
+  const done = () => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+  return { dir, checkout, pushFromElsewhere, done };
 }
 
 test('syncCheckout fast-forwards the checkout to the merged origin branch', async () => {
@@ -62,7 +66,7 @@ test('syncCheckout fast-forwards the checkout to the merged origin branch', asyn
     assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), merged);
     assert.equal(read(path.join(r.checkout, 'app.js')), 'v2\n');
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -75,7 +79,7 @@ test("syncCheckout keeps the Critic's uncommitted design/ edits that the merge d
     assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), merged);
     assert.match(read(path.join(r.checkout, 'design', 'PLAYTEST_LOG.md')), /Iteration 1/);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -92,7 +96,7 @@ test('syncCheckout never merges over local work: a diverged checkout is reported
     assert.match(res.detail, /no fast-forward/);
     assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), before);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -105,7 +109,7 @@ test('syncCheckout refuses a detached HEAD and a folder that is not a repo', asy
     fs.mkdirSync(plain);
     assert.equal((await syncCheckout(plain)).ok, false);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -171,7 +175,7 @@ test('iterationDiff: from the previous checkpoint tag when there is one, else th
     assert.ok(!(await iterationDiff(r.checkout, 'lwtest1', 2)).includes('CODEMAPS'));
     assert.equal(await iterationDiff(path.join(r.dir, 'nowhere'), 'lwtest1', 2), '');
   } finally {
-    r.done();
+    await r.done();
   }
 });
 

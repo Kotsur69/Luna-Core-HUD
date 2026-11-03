@@ -13,7 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 const {
   parseCommitLog,
@@ -42,6 +42,20 @@ const RUN = 'lwwheel1';
  */
 const removeDir = (dir) => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
 
+/**
+ * The module's git runner (same answer shape) with a patient cap. The app's
+ * 15 s cap is not what this test is about; with several package suites running
+ * at once one real `git log` took longer than that, so readCommits answered
+ * ok:false on a correct repo.
+ */
+const PATIENT_GIT_MS = 120000;
+const patientGit = (cwd, args) =>
+  new Promise((resolve) => {
+    execFile('git', args, { cwd, timeout: PATIENT_GIT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) =>
+      resolve({ ok: !err, out: String(stdout || ''), err: String(stderr || '').trim().split('\n')[0] }),
+    );
+  });
+
 function gitRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-handback-'));
   const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true }).trim();
@@ -65,21 +79,21 @@ test('readCommits: every commit since the pause, oldest first, with its diff sta
   const r = gitRepo();
   try {
     r.commit('src/app.js', 'one\n', 'Iteration 1 by Luna');
-    const base = await handbackHead(r.dir);
+    const base = await handbackHead(r.dir, patientGit);
     assert.match(base, /^[0-9a-f]{40}$/);
 
     r.commit('src/Header.tsx', 'a\nb\nc\n', 'Fix the header size');
     r.commit('src/export/pdf.ts', 'x\n', 'Add PDF export');
-    const res = await readCommits(r.dir, base);
-    assert.equal(res.ok, true);
+    const res = await readCommits(r.dir, base, patientGit);
+    assert.equal(res.ok, true, res.error);
     assert.equal(res.more, 0);
     assert.deepEqual(res.commits.map((c) => c.subject), ['Fix the header size', 'Add PDF export']);
     assert.deepEqual(res.commits[0].files, [{ path: 'src/Header.tsx', added: 3, deleted: 0 }]);
     assert.equal(res.commits[1].sha, r.git('rev-parse', 'HEAD'));
 
-    assert.deepEqual((await readCommits(r.dir, await handbackHead(r.dir))).commits, [], 'nothing since the pause');
-    assert.deepEqual(await readCommits(r.dir, 'HEAD~1'), { ok: false, error: 'no base commit' }, 'only a sha is ever passed to git');
-    assert.equal((await readCommits(r.dir, 'f'.repeat(40))).ok, false, 'an unknown base is a plain failure');
+    assert.deepEqual((await readCommits(r.dir, await handbackHead(r.dir, patientGit), patientGit)).commits, [], 'nothing since the pause');
+    assert.deepEqual(await readCommits(r.dir, 'HEAD~1', patientGit), { ok: false, error: 'no base commit' }, 'only a sha is ever passed to git');
+    assert.equal((await readCommits(r.dir, 'f'.repeat(40), patientGit)).ok, false, 'an unknown base is a plain failure');
   } finally {
     await r.done();
   }
