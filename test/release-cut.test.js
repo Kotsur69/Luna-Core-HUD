@@ -370,7 +370,7 @@ test('releaseGate: ticked only, once per run, never on a red self-check', () => 
   assert.equal(releaseGate(ctx({ selfCheck: { tests: 'failed' } })), 'self-check failed');
   assert.equal(releaseGate(ctx({ selfCheck: null })), 'self-check did not run');
   assert.equal(releaseGate(ctx({ selfCheck: { tests: 'skipped', syntax: 'ok', smoke: 'ok' } })), 'self-check tests did not run');
-  assert.deepEqual(POST_MERGE_STEPS.map((s) => s.name), ['localBase', 'cleanup', 'release']);
+  assert.deepEqual(POST_MERGE_STEPS.map((s) => s.name), ['localBase', 'cleanup', 'supabase', 'release']);
 });
 
 function finalizePlan(over = {}) {

@@ -2151,6 +2151,15 @@
                 <span class="ui-field__label" data-i18n="orchset.check">Komenda koncowego sprawdzenia</span>
                 <input id="orchestra-check-command" class="mc-input" maxlength="200" spellcheck="false" autocomplete="off" data-i18n-ph="orchset.check.ph" placeholder="npm test" />
               </label>
+              <!-- After a merge: the run's Supabase migrations / edge functions (src/orchestraApplyActions.js). -->
+              <label class="ui-field" data-i18n-title="orchset.supabase.hint" title="Po scaleniu: migracje i edge functions z przebiegu, przez supabase CLI albo serwer MCP Supabase. Pytaj = okno na HUD i pytanie na telefonie; brak odpowiedzi = nic nie jest stosowane. Ryzykowny SQL (DROP, TRUNCATE, DELETE, UPDATE i inne) oraz wszystko przez MCP zawsze pyta.">
+                <span class="ui-field__label" data-i18n="orchset.supabase">Zastosuj akcje Supabase</span>
+                <select id="orchestra-supabase-apply" class="profile-select">
+                  <option value="off" data-i18n="orchset.supabase.off">Wylaczone (recznie)</option>
+                  <option value="ask" data-i18n="orchset.supabase.ask">Pytaj</option>
+                  <option value="automatic" data-i18n="orchset.supabase.automatic">Automatycznie</option>
+                </select>
+              </label>
               <div class="ui-field" data-i18n-title="orchset.allowed.hint" title="Reguly --allowedTools dodane z tablicy, gdy pytanie o zgode zatrzymalo workera.">
                 <span class="ui-field__label" data-i18n="orchset.allowed">Dozwolone narzedzia workerow</span>
                 <span id="orchestra-allowed" class="orchestra__allowed">brak</span>

@@ -50,9 +50,12 @@ const STATE_LABEL = {
 const MANUAL_GROUPS = [
   ['migration', 'Migrations'],
   ['edgeFunction', 'Edge functions'],
+  ['secret', 'Secrets'],
   ['env', 'Env vars'],
   ['note', 'Notes'],
 ];
+// Apply-step states (orchestraApplyActions.js) that leave nothing for Mati.
+const DONE_STATES = new Set(['applied', 'unchanged']);
 
 const CHECKS = [
   ['tests', 'Tests'],
@@ -71,6 +74,62 @@ const code = (v, max = 160) => `\`${oneLine(v, max).replace(/`/g, "'") || '-'}\`
 const list = (v) => (Array.isArray(v) ? v.slice(0, MAX_LIST) : []);
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const sha7 = (v) => (typeof v === 'string' && SHA_RE.test(v) ? v.slice(0, 7).toLowerCase() : '');
+
+// --- Manual actions + the Supabase apply step --------------------------------
+// integration.manualActions is what the self-check found; the 'supabase'
+// post-merge step (orchestraApplyActions.js) leaves one item per action in
+// integration.postMerge.supabase.items, plus the secrets the functions need.
+
+const itemKey = (kind, what) => `${kind}\x00${what}`;
+
+/**
+ * The manual-action rows with the apply step's item for each: the self-check's
+ * actions (an env name the step handled as a secret shows under Secrets), then
+ * the step's secrets.
+ * @returns {{res:object|null, rows:Array<{kind:string, what:string, from?:string, item:object|null}>}}
+ */
+function manualRows(integ) {
+  const pm = isObject(integ.postMerge) ? integ.postMerge : {};
+  const res = isObject(pm.supabase) ? pm.supabase : null;
+  const items = list(res && res.items).filter((i) => isObject(i) && typeof i.kind === 'string' && typeof i.what === 'string');
+  const byKey = new Map(items.map((i) => [itemKey(i.kind, i.what), i]));
+  const secrets = items.filter((i) => i.kind === 'secret');
+  const secretNames = new Set(secrets.map((s) => s.what));
+  const rows = list(integ.manualActions)
+    .filter((a) => isObject(a) && !(a.kind === 'env' && secretNames.has(a.what)))
+    .map((a) => ({ ...a, item: byKey.get(itemKey(a.kind, a.what)) || null }));
+  return { res, rows: [...rows, ...secrets.map((s) => ({ kind: 'secret', what: s.what, item: s }))] };
+}
+
+/** Rows that still wait for Mati: not applied, not already set. */
+const openRows = (integ) => manualRows(integ).rows.filter((r) => !(r.item && DONE_STATES.has(r.item.state)));
+
+/** " - applied <time>", " - failed: <error>", " - still manual: <why>. Run: <command>". */
+function applyStatus(item, quote = code) {
+  if (!isObject(item)) return '';
+  if (item.state === 'applied') return ` - applied ${fmt(item.at)} UTC${item.note ? ` (${oneLine(item.note, 120)})` : ''}`;
+  if (item.state === 'failed') return ` - failed: ${oneLine(item.error, 200) || 'unknown error'}`;
+  if (item.state === 'unchanged') return ' - already set, left unchanged';
+  if (item.state !== 'manual') return '';
+  return ` - still manual: ${oneLine(item.why, 240) || 'not applied'}${item.command ? `. Run: ${quote(item.command, 200)}` : ''}`;
+}
+
+/** The section's first line: which tool applied, or why nothing was. */
+function applyHeadline(res) {
+  if (!res) return null;
+  const ref = res.ref ? ` (project ${code(res.ref, 40)})` : '';
+  if (res.error) return `Supabase: the apply step failed - ${oneLine(res.error)}`;
+  if (res.missing) return `Supabase: nothing applied - ${oneLine(res.missing, 300)}. Run the commands below from the repo root.`;
+  if (res.stopped) return `Supabase: you approved, but nothing applied - ${oneLine(res.stopped, 200)}${ref}.`;
+  if (res.decision === 'off') return 'Supabase: Apply Supabase actions is off in Settings - run the commands below by hand.';
+  if (res.decision === 'declined') return `Supabase: you declined applying${ref} - run the commands below when ready.`;
+  if (res.decision === 'timeout') return `Supabase: no answer before the deadline - nothing applied${ref}.`;
+  if (res.decision === 'approved' || res.decision === 'automatic') {
+    const tool = res.toolDetail ? ` with the ${oneLine(res.toolDetail, 80)}` : '';
+    return `Supabase: run${tool}${ref}, ${res.decision === 'approved' ? 'approved by you' : 'automatically'}.`;
+  }
+  return null;
+}
 
 /** "1 h 5 min", "12 min", "0 min". */
 function duration(ms) {
@@ -157,7 +216,7 @@ function needsYouLines(view) {
     const error = [integ.error, integ.detail].filter(Boolean).map((v) => oneLine(v)).join(': ');
     lines.push(`Integration failed${error ? `: ${error}` : ''}`);
   }
-  const manual = list(integ.manualActions).filter(isObject).length;
+  const manual = openRows(integ).length;
   if (manual) lines.push(`${manual} manual action${manual === 1 ? '' : 's'} to apply live - see Manual actions.`);
   // Last: the report puts the check's output tail right under it.
   if (selfCheckRed(integ.selfCheck)) lines.push(selfCheckLine(integ.selfCheck, view));
@@ -287,18 +346,20 @@ function wrongSection(view) {
 }
 
 function manualSection(integ) {
-  const actions = list(integ.manualActions).filter(isObject);
+  const { res, rows } = manualRows(integ);
   const lines = ['', '## Manual actions', ''];
-  if (!actions.length) return [...lines, 'None.'];
+  if (!rows.length) return [...lines, 'None.'];
+  const headline = applyHeadline(res);
+  if (headline) lines.push(headline);
   for (const [kind, title] of MANUAL_GROUPS) {
-    const group = actions.filter((a) => a.kind === kind);
+    const group = rows.filter((a) => a.kind === kind);
     if (!group.length) continue;
     if (lines[lines.length - 1] !== '') lines.push('');
     lines.push(`### ${title}`, '');
     for (const a of group) {
       const from = sha7(a.from);
       const what = kind === 'note' ? oneLine(a.what, 160) : code(a.what);
-      lines.push(`- ${what}${from ? ` (from ${from})` : ''}`);
+      lines.push(`- ${what}${from ? ` (from ${from})` : ''}${applyStatus(a.item)}`);
     }
   }
   return lines;
@@ -376,6 +437,19 @@ const POST_MERGE_LINES = {
     if (!r.released) return [];
     const url = typeof r.url === 'string' && /^https:\/\/github\.com\//.test(r.url) ? oneLine(r.url, 300) : 'no release URL';
     return [`- Released ${code(r.tag || `v${oneLine(r.version, 20)}`, 24)}: ${url}`];
+  },
+  supabase: (r) => {
+    const items = list(r.items).filter(isObject);
+    if (!items.length) return [];
+    const count = (state) => items.filter((i) => i.state === state).length;
+    const parts = [
+      [count('applied'), 'applied'],
+      [count('failed'), 'failed'],
+      [count('manual'), 'still manual'],
+    ]
+      .filter(([n]) => n)
+      .map(([n, word]) => `${n} ${word}`);
+    return [`- Supabase: ${parts.join(', ') || 'nothing to apply'} - see Manual actions`];
   },
 };
 
@@ -578,9 +652,8 @@ function packageTable(view, packages, now) {
 
 function detailSections(integ, suggestions) {
   const groupTitle = (kind) => (MANUAL_GROUPS.find(([k]) => k === kind) || [kind, 'Other'])[1];
-  const manual = list(integ.manualActions)
-    .filter(isObject)
-    .map((a) => `${groupTitle(a.kind)}: ${oneLine(a.what, 160)}`);
+  const plain = (v, max) => `"${oneLine(v, max)}"`;
+  const manual = manualRows(integ).rows.map((a) => `${groupTitle(a.kind)}: ${oneLine(a.what, 160)}${applyStatus(a.item, plain)}`);
   const rules = list(suggestions)
     .filter(isObject)
     .map((s) => `${oneLine(s.rule, 160)} - ${Math.max(0, s.count | 0)} worker(s)`);

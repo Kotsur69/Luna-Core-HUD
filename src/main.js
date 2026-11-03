@@ -244,6 +244,8 @@ const orchestraIntegrate = require('./orchestraIntegrate');
 const { reportFileFor, renderRunReportHtml, repoPathOf } = require('./orchestraReport');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
 const { createPostMergeServices } = require('./orchestraPostMerge');
+const { applyManualActions } = require('./orchestraApplyActions');
+const { createOrchestraAsk } = require('./orchestraAsk');
 const { cutRelease, unreleasedCount, releaseResult } = require('./releaseCut');
 const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSupervisor');
 const { createStatusBoard } = require('./sessionstatus');
@@ -1048,13 +1050,65 @@ function appendRunReport(planId, line) {
 /** releaseCut.cutRelease with the tool env (gh, npm on PATH). */
 const runReleaseCut = (opts) => cutRelease(opts, { env: orchestraToolEnv(), log: (line) => console.info('[orchestra]', line) });
 
+// The phone's decision list is Luna's Work's pending decisions plus God
+// Mode's own questions (src/orchestraAsk.js); either side republishes both.
+let lunasworkDecisionList = [];
+const publishDecisions = () => snapshotPuts.godmode.decisions([...lunasworkDecisionList, ...orchestraAsk.pending()]);
+
+// God Mode questions for Mati: a native dialog (the renderer cannot answer
+// it) and the phone; the first answer wins, the default at the deadline.
+const orchestraAsk = createOrchestraAsk({
+  confirm: async ({ question, detail }, signal) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return null;
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['Apply', 'Skip'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'God Mode - apply Supabase actions',
+      message: question,
+      detail: `${detail || ''}\n\nThis changes the live project. Skip, or no answer here or on the phone by the deadline, applies nothing.`,
+      signal,
+    });
+    return response === 0;
+  },
+  onChange: () => {
+    Promise.resolve(publishDecisions()).catch((err) => console.error('[orchestra] decisions snapshot failed:', err && err.message));
+  },
+  log: (line) => console.info(line),
+});
+
+/** Settings -> "Apply Supabase actions: automatic": a native yes first (ui:set). */
+async function confirmSupabaseAutomatic() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    buttons: ['Automatic', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    title: 'God Mode - apply Supabase actions automatically',
+    message: 'Apply the run\'s Supabase migrations and edge functions to the live project after each merge, without asking?',
+    detail: 'Only through the supabase CLI. Risky SQL (DROP, DELETE, UPDATE, grants, ...) and anything through MCP still ask first.',
+  });
+  return response === 0;
+}
+
 // After a merge landed: ff the local base checkout, clean up merged branches,
-// cut a release when ticked (src/orchestraPostMerge.js). The start-up sweep
-// only touches registered projects.
+// apply the run's Supabase actions (Settings: off / ask / automatic), cut a
+// release when ticked (src/orchestraPostMerge.js). The start-up sweep only
+// touches registered projects.
 const orchestraPostMerge = createPostMergeServices({
   appPath: () => app.getAppPath(),
   isKnownRepo: (repoPath) => projects.some((p) => p.path && path.resolve(p.path) === path.resolve(repoPath)),
   release: runReleaseCut,
+  // The mode is read (and validated by readUiPrefs) when the step runs, not when the run started.
+  applyActions: (ctx) =>
+    applyManualActions(ctx, {
+      mode: () => readUiPrefs().orchestraSupabaseApply,
+      env: orchestraToolEnv,
+      ask: (spec) => orchestraAsk.ask(spec),
+      log: (line) => console.info('[orchestra]', line),
+    }),
   log: (line) => console.info('[orchestra]', line),
 });
 
@@ -3642,7 +3696,15 @@ function registerIpc() {
 
   // UI preferences: reads {theme, lang} and writes a partial update (returns the new state).
   ipcMain.handle('ui:get', () => readUiPrefs());
-  ipcMain.handle('ui:set', (_event, partial) => {
+  ipcMain.handle('ui:set', async (_event, partial) => {
+    // "Apply Supabase actions: automatic" changes a live project with no
+    // question after each merge: only Mati turns it on, natively.
+    if (partial && typeof partial === 'object' && partial.orchestraSupabaseApply === 'automatic' && readUiPrefs().orchestraSupabaseApply !== 'automatic') {
+      if (!(await confirmSupabaseAutomatic())) {
+        const { orchestraSupabaseApply: _refused, ...rest } = partial;
+        partial = rest;
+      }
+    }
     // God Mode worker allow rules only GROW through orchestra:allow (evidence
     // from a stalled prompt); from here the renderer may only remove some.
     if (partial && typeof partial === 'object' && 'orchestraAllowedTools' in partial) {
@@ -3839,7 +3901,10 @@ app.whenReady().then(() => {
   const lunasworkSync = wireDecisionSync({
     controller: lunaswork,
     cloud,
-    putDecisions: (list) => snapshotPuts.godmode.decisions(list),
+    putDecisions: (list) => {
+      lunasworkDecisionList = Array.isArray(list) ? list : [];
+      return publishDecisions();
+    },
     // B17: the run's feedback (per-item status) out, phone feedback back in.
     putFeedback: (section) => snapshotPuts.godmode.feedback(section),
     // LW 2.17b: the run snapshot (status, scores, tokens, thumbnails), throttled.
@@ -3852,6 +3917,8 @@ app.whenReady().then(() => {
     log: (line) => console.error(line),
   });
   lunasworkPublish = () => lunasworkSync.publish();
+  // God Mode's own questions (apply Supabase actions): the phone's answers too.
+  if (cloud) cloud.onPulled((scope) => scope === 'todos' && orchestraAsk.pullAnswers(cloud));
   // The stored answers, so the phone sees them after a restart too.
   snapshotPuts.godmode.asks(lunasworkAsk.section());
   // LW 3.28b: client feedback from the staging widget into the run (author client).

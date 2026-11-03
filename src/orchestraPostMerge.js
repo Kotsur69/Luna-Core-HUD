@@ -8,6 +8,8 @@
 //                      (src/orchestraCleanup.js); the run is also written to
 //                      the settled-run ledger for the start-up sweep
 //   releaseAfterMerge - "Create a new release after finish" (src/releaseCut.js)
+//   applySupabaseActions - the run's migrations / edge functions
+//                      (src/orchestraApplyActions.js, gated by Settings)
 // and sweepAtStart(): the one-time start-up sweep of settled runs older
 // than a day, with the same rules.
 //
@@ -48,11 +50,14 @@ const GIT_DEFAULTS = {
  *   store?: {loadSettledRuns: () => unknown[], saveSettledRuns: (list:object[]) => boolean},
  *   isKnownRepo?: (repoPath:string) => boolean,
  *   release?: (opts:{repoPath:string, base:string, landedSha:string|null}) => Promise<object>,
+ *   applyActions?: (ctx:object) => Promise<object>,
  *   now?: () => number,
  *   log?: (line:string) => void,
  * }} deps
  *   release: releaseCut.cutRelease bound to its side effects (main gives
  *   it the tool env for gh); tests pass a fake
+ *   applyActions: orchestraApplyActions.applyManualActions bound to the
+ *   setting, the tool env and the ask service; without it the step is left out
  *   appPath: the folder LunaCore itself runs from - `npm ci` never runs
  *   there (it would delete the node_modules the running app loads from)
  *   isKnownRepo: the start-up sweep only touches registered projects
@@ -97,6 +102,7 @@ function createPostMergeServices(deps = {}) {
       log(result.released ? `released ${result.tag}: ${result.url || '-'}` : `release skipped: ${result.skipped || result.error}`);
       return result;
     },
+    ...(typeof deps.applyActions === 'function' ? { applySupabaseActions: (ctx) => deps.applyActions(ctx) } : {}),
   };
 
   /**
