@@ -3282,15 +3282,17 @@ function registerIpc() {
       const hit = orchestraRuns.byPlanId(planId);
       return reportMail.runMail.resend(planId, hit ? hit.controller.emailSummary(planId) : null);
     },
+    // The board's projectId on a resend must match the run's own project.
+    planProject: (planId) => {
+      const hit = orchestraRuns.byPlanId(planId);
+      return hit ? hit.projectId : undefined;
+    },
     projects: () => projects.map((p) => ({ id: p.id, path: p.path })),
-    // The finish IPC asks without a project, so the landed, not yet released
-    // run is preferred; the IPC still checks it belongs to the asking project.
-    releaseTarget: () => {
-      const targets = orchestraRuns
-        .entries()
-        .map(({ controller }) => controller.releaseTarget())
-        .filter(Boolean);
-      return targets.find((t) => t.landed && !t.released) || targets[0] || null;
+    // The asking (already validated) project's own run; the IPC still checks
+    // the target's project and folder match.
+    releaseTarget: (projectId) => {
+      const controller = orchestraRuns.get(projectId);
+      return controller ? controller.releaseTarget() : null;
     },
     unreleasedCount: (repoPath) => unreleasedCount(repoPath, { env: orchestraToolEnv() }),
     cutRelease: runReleaseCut,

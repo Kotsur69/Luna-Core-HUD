@@ -17,6 +17,9 @@
 // After it: overlap warnings, allow-rule suggestions from stalled prompts,
 // PR links, and "Finish run" to integrate + report by hand. The plan itself lives in main; this module only renders the
 // view main pushes on orchestra:changed and sends back ids + edited prompts.
+// Several projects can run at once (MULTI_GODMODE_PLAN.md A4): the board shows
+// one of them (orchestraBoard.js, switcher strip in orchestraSwitcher.js) and
+// every action passes that project's id; planning still uses the active tab.
 // ============================================================================
 
 'use strict';
@@ -27,7 +30,9 @@ import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { failureBlock, runOptionsRow, powerBanner } from './orchestraDetails.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
-import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine } from './orchestraFinish.js';
+import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine, reportRow } from './orchestraFinish.js';
+import * as board from './orchestraBoard.js';
+import { switcherStrip } from './orchestraSwitcher.js';
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
 const q = (sel) => (overlay ? overlay.querySelector(sel) : null);
@@ -43,11 +48,9 @@ const FAIL_CODES = new Set([
   'noTodos', 'busy', 'runActive', 'noClaude', 'noRepo', 'timeout', 'budget', 'limit', 'badJson', 'failed',
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
   'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile', 'badOptions', 'noneSelected',
-  'lunasWorkActive',
+  'lunasWorkActive', 'repoBusy',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
-// "Open report" errors main can return (orchestra:openReport).
-const REPORT_ERRORS = new Set(['badId', 'noReport', 'openFailed']);
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).
 const ACTIVE = new Set(['launched', 'finishing']);
 const RETRYABLE = new Set(['stalled', 'closed', 'killed']);
@@ -95,6 +98,7 @@ function fmtMinutes(total) {
 }
 
 function failText(code) {
+  if (code === 'repoBusy') return t('orch.err.repoBusy');
   return t(`orch.fail.${FAIL_CODES.has(code) ? code : 'failed'}`);
 }
 
@@ -209,7 +213,7 @@ function suggestionRow(s) {
   btn.type = 'button';
   btn.title = t('orch.allow.hint');
   btn.disabled = phase !== 'idle';
-  btn.addEventListener('click', () => act(() => window.lunacore.allowOrchestraTool(s.rule)).then(refetchAndRender));
+  btn.addEventListener('click', () => act(() => window.lunacore.allowOrchestraTool(s.rule, board.project())).then(refetchAndRender));
   row.append(btn);
   return row;
 }
@@ -262,6 +266,8 @@ function pkgCard(pkg) {
   if (pkg.files.length) meta.push(t('orch.files', { n: pkg.files.length }));
   if (pkg.verify) meta.push(t('orch.verify', { cmd: pkg.verify }));
   if (pkg.model) meta.push(pkg.model);
+  // The Claude account the worker is on (claude-accounts failover), when main says.
+  if (typeof pkg.account === 'string' && pkg.account) meta.push(t('orch.account.on', { account: pkg.account }));
   if (pkg.branch) meta.push(pkg.branch);
   if (meta.length) {
     const line = el('div', 'orchestra__meta', meta.join(' · '));
@@ -299,7 +305,7 @@ function pkgCard(pkg) {
     link.href = '#';
     link.addEventListener('click', (e) => {
       e.preventDefault();
-      window.lunacore.openOrchestraPr(pkg.id);
+      window.lunacore.openOrchestraPr(pkg.id, board.project());
     });
     card.append(link);
   }
@@ -338,7 +344,7 @@ async function setRunOption(key, value) {
   render();
   let res;
   try {
-    res = await window.lunacore.orchestraSetOptions({ [key]: value });
+    res = await window.lunacore.orchestraSetOptions({ [key]: value }, board.project());
   } catch {
     res = { ok: false, error: 'failed' };
   }
@@ -350,7 +356,7 @@ async function setRunOption(key, value) {
 /** "Cancel sleep" / "Cancel shutdown"; main pushes the new view back. */
 async function cancelPower(what) {
   try {
-    await window.lunacore.cancelOrchestraPower(what);
+    await window.lunacore.cancelOrchestraPower(what, board.project());
   } catch {
     failure = 'failed';
     if (isOpen) render();
@@ -362,7 +368,7 @@ let wakeChecked = false;
 function checkWakeOnce() {
   if (wakeChecked || !window.lunacore.checkOrchestraWake) return;
   wakeChecked = true;
-  window.lunacore.checkOrchestraWake().catch(() => {});
+  window.lunacore.checkOrchestraWake(board.project()).catch(() => {});
 }
 
 // A countdown that started opens the board once, so its Cancel is in reach.
@@ -396,7 +402,7 @@ function renderPlan() {
   const integ = integrationLine(plan);
   if (integ) body.append(integ);
   // The run email (src/godmodemail.js): its state + "Resend report email".
-  if (hasReport()) body.append(runEmailRow(plan, () => isOpen && render()));
+  if (hasReport()) body.append(runEmailRow(plan, () => isOpen && render(), board.project()));
   // "Create a new release after finish" result, or "Release now" (orchestraFinish.js).
   const release = hasReport() ? releaseRow(plan, () => isOpen && render()) : null;
   if (release) body.append(release);
@@ -404,14 +410,18 @@ function renderPlan() {
     body.append(msg(t('orch.overlap', { a: o.a, b: o.b, files: o.files.join(', ') }), 'is-warn'));
   }
   for (const s of plan.suggestions || []) body.append(suggestionRow(s));
-  if (plan.pausedUntil) body.append(msg(t('orch.paused', { time: clock(plan.pausedUntil) }), 'is-warn'));
+  if (plan.pausedUntil) {
+    // Every Claude account limited: the run waits for the first reset.
+    const key = plan.allAccountsLimited === true ? 'orch.account.waitReset' : 'orch.paused';
+    body.append(msg(t(key, { time: clock(plan.pausedUntil) }), 'is-warn'));
+  }
   if (plan.killed) body.append(msg(t('orch.killed'), 'is-bad'));
   if (plan.settled) {
     const pushed = (plan.tally && plan.tally.pushed) || 0;
     const total = plan.packages.length;
     body.append(msg(t('orch.settled', { pushed, total }), pushed === total ? '' : 'is-warn'));
   }
-  if (hasReport()) body.append(reportRow());
+  if (hasReport()) body.append(reportRow(plan, board.project()));
   if (plan.dirty > 0) body.append(msg(t('orch.dirty', { n: plan.dirty }), 'is-warn'));
   for (const e of plan.errors) body.append(msg(errorText(e), 'is-bad'));
   for (const w of plan.warnings) body.append(msg(warningText(w), 'is-warn'));
@@ -425,39 +435,13 @@ function hasReport() {
   return plan.settled || state === 'done' || state === 'failed';
 }
 
-/** "Open report": only the plan id goes to main, which builds the path. */
-function reportRow() {
-  const row = el('div', 'orchestra__options');
-  const btn = el('button', 'pad-send', t('orch.openReport'));
-  btn.type = 'button';
-  btn.title = t('orch.openReport.hint');
-  const status = el('span', 'orchestra__msg is-bad');
-  status.hidden = true;
-  btn.addEventListener('click', async () => {
-    let res;
-    try {
-      res = await window.lunacore.openOrchestraReport(plan.id);
-    } catch {
-      res = { ok: false, error: 'openFailed' };
-    }
-    const failed = !res || !res.ok;
-    status.hidden = !failed;
-    if (failed) {
-      const code = res && REPORT_ERRORS.has(res.error) ? res.error : 'openFailed';
-      status.textContent = t(`orch.openReport.${code}`);
-    }
-  });
-  row.append(btn, status);
-  return row;
-}
-
 function scheduledRow() {
   const row = el('div', 'orchestra__options');
   row.append(el('span', 'orchestra__msg', t('orch.scheduled', { time: clock(plan.scheduledAt) })));
   const btn = el('button', 'pad-send', t('orch.unschedule'));
   btn.type = 'button';
   btn.disabled = phase !== 'idle';
-  btn.addEventListener('click', () => act(() => window.lunacore.unscheduleOrchestra(plan.id)));
+  btn.addEventListener('click', () => act(() => window.lunacore.unscheduleOrchestra(plan.id, board.project())));
   row.append(btn);
   return row;
 }
@@ -479,7 +463,8 @@ function updateButtons() {
     approveBtn.textContent = t(scheduling ? 'orch.schedule' : 'orch.approve');
   }
   if (replanBtn) {
-    replanBtn.hidden = picking;
+    // Planning goes by the active tab: no Replan on another project's board.
+    replanBtn.hidden = picking || !board.onActiveProject();
     replanBtn.disabled = !idle || running;
   }
   if (discardBtn) {
@@ -500,7 +485,7 @@ function fmtResume(at) {
 
 /** The waiting state: why, when planning resumes, and a way out. */
 function renderPlanWait() {
-  if (!planWait) return;
+  if (!planWait || !board.onActiveProject()) return;
   if (planWait.state === 'planning') {
     body.append(msg(t('orch.planning')));
     return;
@@ -517,7 +502,7 @@ function renderPlanWait() {
 
 async function cancelPlanWait() {
   try {
-    await window.lunacore.cancelOrchestraPlanWait();
+    await window.lunacore.cancelOrchestraPlanWait(await board.refreshActive());
   } catch {
     /* the wait state event below repaints either way */
   }
@@ -527,7 +512,11 @@ async function cancelPlanWait() {
 
 function render() {
   if (!body) return;
+  const active = document.activeElement;
+  const chipFocused = !!(active && active.closest && active.closest('.orchestra-runs') && body.contains(active));
   body.replaceChildren();
+  const strip = switcherStrip({ chips: board.chips(), selected: board.project(), onSelect: selectBoard, focus: chipFocused });
+  if (strip) body.append(strip);
   if (phase === 'planning') body.append(msg(t('orch.planning')));
   renderPlanWait();
   if (failure) body.append(msg(failText(failure), 'is-bad'));
@@ -559,12 +548,24 @@ async function openPicker() {
   render();
 }
 
-async function refetch() {
-  try {
-    plan = await window.lunacore.getOrchestra();
-  } catch {
-    plan = null;
-  }
+/** @param {{reset?: boolean, project?: string|null}} [opts] see orchestraBoard.refresh */
+async function refetch(opts) {
+  await board.refresh(opts);
+  plan = board.view();
+}
+
+/** A switcher chip: show that project's run (or plan the active tab's). */
+function selectBoard(projectId) {
+  if (phase !== 'idle') return;
+  board.select(projectId);
+  plan = board.view();
+  failure = null;
+  picking = false;
+  startOpts.when = 'now';
+  startOpts.integration = null;
+  startOpts.free = false;
+  render();
+  if (!plan && board.onActiveProject()) openPicker();
 }
 
 async function refetchAndRender() {
@@ -587,7 +588,9 @@ async function startPlanning(ats) {
   }
   phase = 'idle';
   if (res && res.ok) {
-    plan = res.plan;
+    board.apply(res.plan);
+    board.select(res.plan.projectId);
+    plan = board.view();
     planWait = null;
     drafts.clear();
     startOpts.when = 'now';
@@ -623,20 +626,23 @@ async function launch(ids) {
   const free = approve && startOpts.free;
   const integration = approve && !free ? chosenIntegration() : null;
   const releaseAfter = integration === 'merge' && releaseAfterChoice(plan.projectId);
+  const scope = board.project();
   phase = 'launching';
   busyPkg = Array.isArray(ids) && ids.length === 1 ? ids[0] : null;
   failure = null;
   render();
   let res;
   try {
-    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free, releaseAfter });
+    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free, releaseAfter, projectId: scope });
   } catch {
     res = { ok: false, error: 'failed' };
   }
   phase = 'idle';
   busyPkg = null;
-  if (res && res.ok) plan = res.plan;
-  else failure = (res && res.error) || 'failed';
+  if (res && res.ok) {
+    board.apply(res.plan, scope);
+    plan = board.view();
+  } else failure = (res && res.error) || 'failed';
   if (isOpen) render();
 }
 
@@ -659,10 +665,13 @@ async function act(call) {
 }
 
 async function discard() {
-  const res = await act(() => window.lunacore.discardOrchestra());
+  const scope = board.project();
+  const res = await act(() => window.lunacore.discardOrchestra(scope));
   if (!res || !res.ok) return;
-  plan = null;
-  drafts.clear();
+  const planId = plan ? plan.id : null;
+  board.apply(null, scope);
+  plan = board.view();
+  for (const key of [...drafts.keys()]) if (key.startsWith(`${planId}:`)) drafts.delete(key);
   render();
 }
 
@@ -670,7 +679,7 @@ async function retry(id) {
   if (!plan || phase !== 'idle') return;
   busyPkg = id;
   try {
-    await act(() => window.lunacore.retryOrchestra(plan.id, id));
+    await act(() => window.lunacore.retryOrchestra(plan.id, id, board.project()));
   } finally {
     busyPkg = null;
     if (isOpen) render();
@@ -678,21 +687,27 @@ async function retry(id) {
 }
 
 function finishRun() {
-  if (plan) act(() => window.lunacore.finishOrchestra(plan.id, chosenIntegration()));
+  if (plan) act(() => window.lunacore.finishOrchestra(plan.id, chosenIntegration(), board.project()));
 }
 
 /** Outside act(): it must work while a launch holds the board busy. */
 async function kill() {
   try {
-    await window.lunacore.killOrchestra();
+    await window.lunacore.killOrchestra(board.project());
   } catch {
     failure = 'failed';
   }
   if (isOpen) render();
 }
 
-async function openOrchestra() {
+/**
+ * Opens the board on the active tab's project (or, for a countdown, on the
+ * run that started it).
+ * @param {string|null} [projectId]
+ */
+async function openOrchestra(projectId) {
   if (!overlay) return;
+  const fromTab = !isOpen;
   if (!isOpen) {
     isOpen = true;
     cancelExit(overlay);
@@ -701,16 +716,17 @@ async function openOrchestra() {
     overlay.focus();
   }
   if (phase === 'idle') {
-    await refetch();
+    const target = typeof projectId === 'string' || projectId === null ? { project: projectId } : { reset: fromTab };
+    await refetch(target);
     try {
-      planWait = await window.lunacore.getOrchestraPlanWait();
+      planWait = await window.lunacore.getOrchestraPlanWait(board.activeProject());
     } catch {
       planWait = null;
     }
   }
   render();
   checkWakeOnce();
-  if (!plan && !planWait && phase === 'idle' && !picking) openPicker();
+  if (!plan && !planWait && phase === 'idle' && !picking && board.onActiveProject()) openPicker();
 }
 
 function closeOrchestra() {
@@ -737,21 +753,24 @@ if (overlay) {
   if (discardBtn) discardBtn.addEventListener('click', discard);
   if (killBtn) killBtn.addEventListener('click', kill);
 
-  window.lunacore.onOrchestraChanged((next) => {
-    plan = next;
+  window.lunacore.onOrchestraChanged((next, projectId) => {
+    board.apply(next, projectId);
+    plan = board.view();
     // A run that starts (a scheduled start firing) takes the board back from the picker.
-    if (next && next.started) picking = false;
+    if (next && next.started && plan === next) picking = false;
     const key = countdownKey(next);
     if (key && key !== shownCountdown) {
       shownCountdown = key;
       if (!isOpen) {
-        openOrchestra();
+        openOrchestra(projectId === undefined ? null : projectId);
         return;
       }
     }
     if (isOpen) render();
   });
-  window.lunacore.onOrchestraPlanWait((state) => {
+  window.lunacore.onOrchestraPlanWait(async (state, projectId) => {
+    // Only the active tab plans; another project's wait is not this board's.
+    if ((projectId || null) !== (await board.refreshActive())) return;
     if (state && state.state === 'failed') {
       failure = state.error || 'failed';
       planWait = null;
@@ -774,6 +793,7 @@ if (overlay) {
 export function mountOrchestraButton(root) {
   const btn = root.querySelector('#orchestra-plan');
   if (!btn) return () => {};
-  btn.addEventListener('click', openOrchestra);
-  return () => btn.removeEventListener('click', openOrchestra);
+  const open = () => openOrchestra();
+  btn.addEventListener('click', open);
+  return () => btn.removeEventListener('click', open);
 }

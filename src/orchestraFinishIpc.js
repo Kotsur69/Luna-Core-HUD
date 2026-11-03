@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - God Mode finished-run IPC (main process)
 // ----------------------------------------------------------------------------
-// orchestra:resend-email {planId}         -> {ok} | {ok:false, reason}
+// orchestra:resend-email planId, {projectId}? -> {ok} | {ok:false, reason}
 //   "Resend report email" on the finished run: the run's report email again
 //   (godmodePending.resend), same report text and HTML attachment.
 // orchestra:unreleased-count {projectId}  -> {ok, count, tag} | {ok:false, reason}
@@ -92,8 +92,9 @@ function releaseLine(res) {
  * @param {{
  *   runsDir: () => string|null,
  *   resendRunEmail: (planId:string) => Promise<{ok:boolean, reason?:string}>,
+ *   planProject?: (planId:string) => string|null|undefined, the project whose controller holds the run (undefined: none),
  *   projects?: () => Array<{id:string, path:string}>,
- *   releaseTarget?: () => {planId:string, projectId:string, repoPath:string, base:string|null,
+ *   releaseTarget?: (projectId:string) => {planId:string, projectId:string, repoPath:string, base:string|null,
  *     headSha:string|null, landed:boolean, releaseAfter:boolean, released:boolean, busy:boolean}|null,
  *   unreleasedCount?: (repoPath:string) => Promise<{ok:boolean, count?:number, tag?:string, reason?:string}>,
  *   cutRelease?: (opts:{repoPath:string, base:string, landedSha:string}) => Promise<object>,
@@ -112,8 +113,23 @@ function register(ipcMain, deps) {
   let releasing = false;
   let declinedAt = -Infinity;
 
-  ipcMain.handle('orchestra:resend-email', async (_event, planId) => {
+  /**
+   * The board's optional {projectId}: when the run is still in a project's
+   * controller, it must be that project's run. A run no longer on any board
+   * (only its report is left) resends by its id alone.
+   */
+  function scopeFits(planId, opts) {
+    if (opts === undefined || opts === null) return true;
+    if (typeof opts !== 'object' || Array.isArray(opts) || !Object.prototype.hasOwnProperty.call(opts, 'projectId')) return false;
+    const pid = opts.projectId;
+    if (pid !== null && (typeof pid !== 'string' || !pid || pid.length > MAX_PROJECT_ID)) return false;
+    const owner = deps.planProject ? deps.planProject(planId) : undefined;
+    return owner === undefined || owner === pid;
+  }
+
+  ipcMain.handle('orchestra:resend-email', async (_event, planId, opts) => {
     if (!isKnownRunId(deps.runsDir, planId)) return { ok: false, reason: 'badId' };
+    if (!scopeFits(planId, opts)) return { ok: false, reason: 'unknownRun' };
     if (resending) return { ok: false, reason: 'busy' };
     const at = now();
     if (at - lastResendAt < RESEND_GAP_MS) return { ok: false, reason: 'rate-limited' };
@@ -156,7 +172,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('orchestra:release-now', async (_event, projectId) => {
     const project = knownProject(projects, projectId);
     if (!project || !deps.cutRelease || !deps.releaseTarget) return { ok: false, reason: 'unknownProject' };
-    const target = deps.releaseTarget();
+    const target = deps.releaseTarget(project.id);
     const refusal = releaseRefusal(project, target);
     if (refusal) return { ok: false, reason: refusal };
     if (releasing) return { ok: false, reason: 'busy' };
@@ -173,7 +189,7 @@ function register(ipcMain, deps) {
         return { ok: false, reason: 'declined' };
       }
       // The dialog may have been open a while: the run must still be the same one, untouched.
-      const after = deps.releaseTarget();
+      const after = deps.releaseTarget(project.id);
       const changed = releaseRefusal(project, after);
       if (changed) return { ok: false, reason: changed };
       if (after.planId !== target.planId || after.headSha !== target.headSha) return { ok: false, reason: 'noRun' };

@@ -15,6 +15,7 @@ const path = require('path');
 
 const { registerOrchestraIpc, runSummary, MAX_PROJECT_ID_CHARS } = require('../src/orchestraIpc.js');
 const { createOrchestraRegistry } = require('../src/orchestraRegistry.js');
+const orchestraFinishIpc = require('../src/orchestraFinishIpc.js');
 
 const PR_URL = 'https://github.com/luna/core/pull/7';
 
@@ -117,6 +118,24 @@ function setup({ runs = {}, active = 'alpha', blocked = [] } = {}) {
     writeUiPrefs: (patch) => {
       out.prefs = { ...out.prefs, ...patch };
     },
+  });
+  // The finished-run channels (resend email, release) live in their own
+  // module; main registers both on the same ipcMain.
+  out.resent = [];
+  out.releaseAsked = [];
+  orchestraFinishIpc.register(ipcMain, {
+    runsDir: () => runsDir,
+    resendRunEmail: async (planId) => (out.resent.push(planId), { ok: true }),
+    planProject: (planId) => {
+      const hit = registry.byPlanId(planId);
+      return hit ? hit.projectId : undefined;
+    },
+    projects: () => [
+      { id: 'alpha', path: '/repo/alpha' },
+      { id: 'beta', path: '/repo/beta' },
+    ],
+    releaseTarget: (projectId) => (out.releaseAsked.push(projectId), null),
+    cutRelease: async () => ({ ok: false }),
   });
   const invoke = (channel, ...args) => handlers.get(channel)({}, ...args);
   const emit = (channel, ...args) => listeners.get(channel)({}, ...args);
@@ -364,4 +383,23 @@ test('every orchestra channel the preload bridge calls has a handler in main', (
     const handled = s.handlers.has(channel) || s.listeners.has(channel);
     assert.ok(handled || pushed.has(channel), `${channel} has a handler`);
   }
+});
+
+test('resend email: the board projectId must own the run; no projectId resends by id', async (t) => {
+  const s = setup({ runs: { alpha: view('pa'), beta: view('pb') } });
+  t.after(s.cleanup);
+  fs.writeFileSync(path.join(s.runsDir, 'pa.md'), '# report');
+  assert.deepEqual(await s.invoke('orchestra:resend-email', 'pa', { projectId: 'beta' }), { ok: false, reason: 'unknownRun' });
+  assert.deepEqual(await s.invoke('orchestra:resend-email', 'pa', { projectId: 7 }), { ok: false, reason: 'unknownRun' });
+  assert.deepEqual(await s.invoke('orchestra:resend-email', 'pa', 'alpha'), { ok: false, reason: 'unknownRun' });
+  assert.deepEqual(s.out.resent, []);
+  assert.deepEqual(await s.invoke('orchestra:resend-email', 'pa', { projectId: 'alpha' }), { ok: true });
+  assert.deepEqual(s.out.resent, ['pa']);
+});
+
+test('release now asks for the asking project\'s own run', async (t) => {
+  const s = setup({ runs: { alpha: view('pa'), beta: view('pb') } });
+  t.after(s.cleanup);
+  assert.deepEqual(await s.invoke('orchestra:release-now', 'beta'), { ok: false, reason: 'noRun' });
+  assert.deepEqual(s.out.releaseAsked, ['beta']);
 });

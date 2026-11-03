@@ -4,7 +4,9 @@
 //  - integrationLine(): the "Integration (...)" line from the stored
 //    integration.state (orchestraIntegStatus.js), with a live elapsed time
 //    while the step really runs.
-//  - runEmailRow():what happened to the run email (integration.emailError /
+//  - reportRow(): "Open report" - only the plan id (+ the board's project)
+//    goes to main, which builds the path.
+//  - runEmailRow(): what happened to the run email (integration.emailError /
 //    emailPending from src/orchestraFinalize.js) + "Resend report email".
 //    Only the run id goes to main (orchestra:resend-email).
 //  - releaseAfterBox() / releaseAfterChoice(): the launch screen's "Create a
@@ -29,6 +31,8 @@ const INTEG_ERRORS = new Set([
   'noBaseBranch', 'noGh', 'missingCwd', 'ghFailed', 'fetchFailed', 'worktreeFailed', 'installFailed', 'mergeFailed',
   'conflictFailed', 'verifyFailed', 'pushFailed', 'baseMoved', 'nothingMergedFailed', 'beforePushFailed',
 ]);
+// "Open report" errors main can return (orchestra:openReport).
+const REPORT_ERRORS = new Set(['badId', 'noReport', 'openFailed']);
 const ELAPSED_TICK_MS = 1000;
 const ELAPSED_ATTR = 'data-orch-started';
 // Resend answers with their own text (orch.resend.err.<reason>).
@@ -118,12 +122,44 @@ function resendStatus(planId) {
 }
 
 /**
+ * "Open report" for a settled run (runs/<id>.md).
+ * @param {{id:string}} plan
+ * @param {string|null} scope the board's project
+ * @returns {HTMLElement}
+ */
+export function reportRow(plan, scope) {
+  const row = el('div', 'orchestra__options');
+  const btn = el('button', 'pad-send', t('orch.openReport'));
+  btn.type = 'button';
+  btn.title = t('orch.openReport.hint');
+  const status = el('span', 'orchestra__msg is-bad');
+  status.hidden = true;
+  btn.addEventListener('click', async () => {
+    let res;
+    try {
+      res = await window.lunacore.openOrchestraReport(plan.id, scope);
+    } catch {
+      res = { ok: false, error: 'openFailed' };
+    }
+    const failed = !res || !res.ok;
+    status.hidden = !failed;
+    if (failed) {
+      const code = res && REPORT_ERRORS.has(res.error) ? res.error : 'openFailed';
+      status.textContent = t(`orch.openReport.${code}`);
+    }
+  });
+  row.append(btn, status);
+  return row;
+}
+
+/**
  * The finished run's email line + "Resend report email".
  * @param {{id:string, integration?:object}} plan
  * @param {() => void} rerender redraws the board after an answer
+ * @param {string|null} scope the board's project
  * @returns {HTMLElement}
  */
-export function runEmailRow(plan, rerender) {
+export function runEmailRow(plan, rerender, scope) {
   const integ = plan.integration || {};
   const box = el('div', 'orchestra__email');
   const status = emailStatus(integ);
@@ -139,7 +175,7 @@ export function runEmailRow(plan, rerender) {
     rerender();
     let res;
     try {
-      res = await window.lunacore.resendOrchestraEmail(planId);
+      res = await window.lunacore.resendOrchestraEmail(planId, scope);
     } catch {
       res = { ok: false, reason: 'failed' };
     }
