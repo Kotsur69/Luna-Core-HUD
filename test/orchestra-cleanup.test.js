@@ -404,33 +404,37 @@ const realGitOps = {
   deleteMergedBranch: (repo, branch, base) => wt.deleteMergedBranch(repo, branch, base),
 };
 
-/** A clone of a bare origin with one commit on main pushed. */
+// Every git spawn counts here: under a loaded machine (several packages
+// running the suite at once) a spawn costs ~0.6 s and a push ~3.5 s. So the
+// repo config is set at clone time and each test pushes once, all refs in
+// one call, instead of once per branch.
+
+/** A clone of a bare origin with one local commit on main (nothing pushed yet). */
 function tempRepo() {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'luna-pm-')));
   const origin = path.join(dir, 'origin.git');
   const repo = path.join(dir, 'repo');
   execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin], { windowsHide: true });
-  execFileSync('git', ['clone', '-q', origin, repo], { windowsHide: true, stdio: 'ignore' });
-  realGit(repo, 'config', 'user.email', 'luna@test');
-  realGit(repo, 'config', 'user.name', 'Luna');
-  realGit(repo, 'config', 'commit.gpgsign', 'false');
+  execFileSync(
+    'git',
+    ['clone', '-q', '-c', 'user.email=luna@test', '-c', 'user.name=Luna', '-c', 'commit.gpgsign=false', origin, repo],
+    { windowsHide: true, stdio: 'ignore' },
+  );
   realGit(repo, 'checkout', '-q', '-b', 'main');
   // No trailing slash: matches a junction / symlink as well as a folder.
   fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules\n');
   fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
   realGit(repo, 'add', '.');
   realGit(repo, 'commit', '-q', '-m', 'init');
-  realGit(repo, 'push', '-q', '-u', 'origin', 'main');
   return { dir, repo };
 }
 
-/** A `luna/` branch off main with one commit of its own, pushed to origin. */
+/** A local `luna/` branch off main with one commit of its own (the test pushes it). */
 function packageBranch(repo, branch, file) {
   realGit(repo, 'checkout', '-q', '-b', branch, 'main');
   fs.writeFileSync(path.join(repo, file), `${branch}\n`);
   realGit(repo, 'add', file);
   realGit(repo, 'commit', '-q', '-m', `feat: ${file}`);
-  realGit(repo, 'push', '-q', 'origin', branch);
   realGit(repo, 'checkout', '-q', 'main');
 }
 
@@ -451,10 +455,11 @@ test('cleanupMergedRun: integration worktree removed with its junctions unlinked
     packageBranch(repo, 'luna/ui-cd34e', 'ui.txt');
     packageBranch(repo, 'luna/skip-ef56g', 'skip.txt');
     packageBranch(repo, 'luna/wip-gh78i', 'wip.txt');
-    // The integration merged core + ui and pushed main.
+    // The integration merged core + ui and pushed main; every package branch
+    // was pushed by its worker (one push for all of it).
     realGit(repo, 'merge', '-q', '--no-ff', '-m', 'merge core', 'luna/core-ab12c');
     realGit(repo, 'merge', '-q', '--no-ff', '-m', 'merge ui', 'luna/ui-cd34e');
-    realGit(repo, 'push', '-q', 'origin', 'main');
+    realGit(repo, 'push', '-q', 'origin', 'main', 'luna/core-ab12c', 'luna/ui-cd34e', 'luna/skip-ef56g', 'luna/wip-gh78i');
     // The integration worktree is still there (a locked file kept it), with
     // node_modules junctions to a "real" install outside it.
     const shared = path.join(dir, 'shared_modules');
@@ -513,7 +518,7 @@ test('cleanupMergedRun never force-deletes: a "merged" branch with later commits
     packageBranch(repo, 'luna/doc-ij90k', 'doc.txt');
     realGit(repo, 'merge', '-q', '--no-ff', '-m', 'merge core', 'luna/core-ab12c');
     realGit(repo, 'merge', '-q', '--no-ff', '-m', 'merge doc', 'luna/doc-ij90k');
-    realGit(repo, 'push', '-q', 'origin', 'main');
+    realGit(repo, 'push', '-q', 'origin', 'main', 'luna/core-ab12c', 'luna/doc-ij90k');
     // core got another commit after the merge; doc still sits in its worktree.
     realGit(repo, 'checkout', '-q', 'luna/core-ab12c');
     fs.writeFileSync(path.join(repo, 'late.txt'), 'late\n');
