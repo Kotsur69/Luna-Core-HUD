@@ -1,6 +1,8 @@
 # Implementation Plan: Multi God Mode v2, v1 removal, compact keep-awake chip
 
-Status: CONFIRMED 2026-11-02 - turned into to-do cards. Nothing built yet.
+Status: CONFIRMED 2026-11-02 - turned into to-do cards. Built so far: C (keep-awake chip, `41c4c52`),
+B (v1 removed, `5283848`), A1 (per-project storage, `5b2ee02`) and A2 (registry, one run per project,
+`d96cf80`), released in v0.20.0 together with the two-account failover (`1d05f8a`).
 
 ## Overview
 Three independent deliverables, smallest first:
@@ -27,8 +29,8 @@ Three independent deliverables, smallest first:
   - One live run per project, several projects at once.
   - The legacy `orchestra.local.json` is migrated.
   - IPC carries projectId and main validates it.
-  - A limit hit pauses every run on the same Claude account.
-  - A run can be pinned to an account.
+  - A limit hit moves workers to the other Claude account; runs pause only when every account is
+    limited (D2 - no per-run account pin).
   - shutdownWhenDone and sleepOnLimit consider ALL runs.
   - The same repo twice is refused.
   - Board, phone, mail, inbox and digest handle N runs.
@@ -275,6 +277,7 @@ build this if live use shows contention.
 - [ ] C: green/red chip in the terminal bar with icon, label and aria-pressed; nothing left in the to-do widget
 - [ ] B: zero references to v1; v2 and auto-proceed work
 - [ ] A: two projects run at once; a restart restores both; the same repo twice is refused
-- [ ] A: a limit pauses only same-account runs; a pinned run uses its own subscription
+- [ ] A: one account at its limit moves the workers to the other account and nothing pauses; every run
+  pauses only when both accounts are limited, until the earliest reset (D2: no per-run account pin)
 - [ ] A: sleep and shutdown consider all runs; phone, mail, inbox and digest show each run
 - [ ] All `node --test` green after every slice

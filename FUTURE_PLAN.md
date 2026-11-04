@@ -38,9 +38,13 @@ LunaCore to-do list, not in the file.
   Gmail and the Google OAuth app are set up.
 - **Still open:** Luna host + phone pairing
   ([`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md)), and the cards in
-  the to-do list (LM Studio via CCR, FreeLLMAPI port + status row, overlay
-  copy skip, `js-yaml` audit, cloud "forget this PC", host security M1 / M2 /
-  M4).
+  the to-do list.
+- **Built since (moved out of "Still open" / "Known issues"):** LM Studio via
+  CCR (`2fa07c5`), the `js-yaml` audit fix (`5e5eb4e`), cloud "forget this PC"
+  (`ee209e9`), host security M1 / M2 (`30f4e77`) and M4 phone CSP, the
+  FreeLLMAPI port + gateway status row + overlay copy skip and the Setup
+  Center + getting-started guide (all `e9a385f`), and usage limits for the
+  active tab's provider only (`696a870`).
 
 ## Next
 
@@ -54,9 +58,8 @@ LunaCore to-do list, not in the file.
    (open questions first).
 4. **Release prep for friends** - decided 2026-10-22: **option B**, every
    new user brings their **own** Supabase project (Mati's stays single-user,
-   sign-ups off). Cards: Setup Center in Ctrl+L (status + guide for every
-   integration) and a first-launch getting-started guide that never shows
-   again once dismissed.
+   sign-ups off). The Setup Center in Ctrl+L and the first-launch
+   getting-started guide are built (`e9a385f`).
 5. **Think through ideas 3 + 4 together** (polish batch + local transcript
    archive) - see *Ideas kept*.
 
@@ -67,8 +70,22 @@ LunaCore to-do list, not in the file.
   the wall is hit during a run, then check the planner resumes on its own at
   the reset time (the board shows the resume time + Cancel meanwhile).
 - Auto-proceed against a real dropped connection in the wild.
-- The packaged-build spawn check (§D2a in the engineering notes) was last done
-  on Electron 33; redo it on the current Electron 43 build.
+- ~~The packaged-build spawn check (§D2a) on Electron 43~~ - **PASS
+  2026-11-04** on a `v0.20.0` `npm run dist` build (Electron 43.7.5, Node
+  24.21, ABI 148). (1) An in-process check ran the packaged `LunaCore.exe`
+  as Node (`ELECTRON_RUN_AS_NODE`). It loaded `@lydell/node-pty` from
+  `app.asar` (native addon from `app.asar.unpacked`), spawned the default
+  shell in a real ConPTY, and `claude --version` printed `2.1.318 (Claude
+  Code)`. (2) `--luna-probe` on the packaged exe ran with
+  `PORTABLE_EXECUTABLE_DIR` and `--user-data-dir` in a temp folder, so the
+  live config was untouched. Results: 25 widgets mounted and remounted, 9
+  presets and 28 themes from inside the asar, equal bus counts, every `rows`
+  1. Terminal tab `s1` was created with its intake MCP config. (3) The asar
+  holds 0 `*.local.json`. The `helpers/` that are rewritten to
+  `app.asar.unpacked` (agent-reach, playtest-bridge) resolve. **Failed:**
+  the three `.ps1` helpers do not resolve (see *Known issues*). Still
+  eyes-only: the HUD fonts, theme persistence across a restart and the
+  taskbar icon.
 - **Luna host + phone pairing** on KT-PC-LLM, KT-NO-MMAZUR and the MacBook,
   then a signed `news.scan`, `repo.clone` and a chat with Allow / Deny /
   Always, Stop, End, Resume; "Forget all phones" must refuse the next
@@ -78,9 +95,15 @@ LunaCore to-do list, not in the file.
 
 ## Known issues
 
-- **Usage panel lists every provider at once** - Mati wants only the active
-  tab's profile provider (Claude limits on a Claude tab, Codex on a Codex
-  tab). Card in the to-do list.
+- **Packaged build: mic state, now playing / volume and TTS cannot find
+  their scripts** (found by the 2026-11-04 spawn check). `src/devices.js`,
+  `src/media.js` and `src/tts.js` hand PowerShell
+  `-File <resources>\app.asar\helpers\...\*.ps1`. That path exists only
+  inside the archive, so an external process cannot open it (`Test-Path`
+  False). The files do ship unpacked. Fix: apply the same
+  `.replace('app.asar' + sep, 'app.asar.unpacked' + sep)` that
+  `src/missionnews.js` / `src/lunasworkBridge.js` use. `npm start` is not
+  affected.
 - **CCR settings never clicked through with a real provider** - confirm the
   Router section and a CCR template work end to end. `[Mati]` card in the
   to-do list.

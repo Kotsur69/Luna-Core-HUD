@@ -1,8 +1,14 @@
 # Luna's Work — plan
 
-> Status: **IN PROGRESS.** Written 2026-10-22. Phase 1 slice 1 done
-> (`9f65d6a`). **Resume here: Phase 1, slice 2** (button + settings +
-> pre-production pack).
+> Status: **IN PROGRESS.** Written 2026-10-22. Phases 1-3 are largely
+> built and released (v0.19.0, 2026-11-02, "Luna's Work goes from build to
+> launch"). The Electron and Unity tester adapters (LW 3.35 / 3.36b) and the
+> game asset pipeline (LW 3.37) are merged as well. **Resume here: the live
+> checks.** (1) The web Playtester on AMSteel_Quote (slice 3). (2) A full
+> outer-loop run to SHIP (slice 5). (3) The Electron adapter on a real
+> desktop app. (4) The Unity adapter on the Unity PC, starting with its
+> PlaytestDriver spike. After those, the end-to-end check that renames this
+> doc to `DONE_`.
 
 ## What it is
 
@@ -148,9 +154,9 @@ Playtester is allowed), `stop()`, `evidenceDir`.
 
 | Adapter | Status | How it plays |
 |---|---|---|
-| **web** | Slice 3 | LunaCore runs the project's start command (from the project profile, not from model output), waits for the URL, Playtester drives it via Playwright MCP: clicks, forms, screenshots, console errors, mobile + desktop width |
-| electron | Later | The in-process Electron wrapper already used for smoke tests (memory: smoke-test without a CDP port) |
-| unity | Later, other PC | Unity MCP: play mode, screenshots, console. Needs a `PlaytestDriver` dev-only script in the game (scripted inputs + JSON state dump). Constraint: one editor = one Unity MCP connection, so code workers run in parallel worktrees but scene/prefab work goes through **one scene worker**; one owner per scene; UnityYAMLMerge as git merge driver. Starts with a live spike (install, play mode, screenshot, one scripted input) before any design work. |
+| **web** | Built (slice 3) | LunaCore runs the project's start command (from the project profile, not from model output), waits for the URL, Playtester drives it via Playwright MCP: clicks, forms, screenshots, console errors, mobile + desktop width |
+| electron | Built (LW 3.35, `src/lunasworkElectron.js`), not live-checked | The in-process Electron wrapper already used for smoke tests (memory: smoke-test without a CDP port) |
+| unity | Built (LW 3.36b, `src/lunasworkUnity.js`), not live-checked (other PC) | Unity MCP: play mode, screenshots, console. Needs a `PlaytestDriver` dev-only script in the game (scripted inputs + JSON state dump). Constraint: one editor = one Unity MCP connection, so code workers run in parallel worktrees but scene/prefab work goes through **one scene worker**; one owner per scene; UnityYAMLMerge as git merge driver. Starts with a live spike (install, play mode, screenshot, one scripted input) before any design work. |
 
 ### Project profile (LunaCore local settings, not the repo)
 
