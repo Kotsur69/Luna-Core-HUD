@@ -7,7 +7,20 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.20.0 — two accounts, one God Mode.**
+> **Current release: v0.21.0 — one God Mode run per project.**
+> - **God Mode per project:** each project keeps its own run, stored in its
+>   own file and restored after a restart; two projects can run at once, and
+>   the same repo is refused in a second project. Ctrl+Shift+K stops every
+>   run. The old single-run file is migrated on first start.
+> - **Account failover fix:** tabs LunaCore put on a stored account now
+>   switch to the next account on a usage limit instead of showing the
+>   limit clock.
+> - **God Mode fixes:** a git timeout under load no longer reads as "not a
+>   git repository"; the Impeccable hook cache is no longer tracked, so it
+>   stops dirtying every package, faking file overlaps and breaking the
+>   merge into the base branch.
+>
+> **v0.20.0 — two accounts, one God Mode.**
 > - **Account failover:** store several Claude logins; when one hits its 5 h
 >   or weekly limit, tabs, God Mode planning and Luna's Work switch to the
 >   other account instead of waiting.
