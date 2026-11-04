@@ -290,8 +290,21 @@ async function hasMarkers(root, files, execImpl) {
 }
 
 /**
+ * The `files` the integration tree's .gitignore covers. `--no-index` so a
+ * path an older branch still tracks counts too; exit 1 means none matched.
+ */
+async function ignoredPaths(root, files, execImpl) {
+  if (!files.length) return [];
+  const res = await runGit(root, ['check-ignore', '--no-index', '--', ...files], execImpl);
+  return res.ok ? listLines(res.stdout).filter((f) => files.includes(f)) : [];
+}
+
+/**
  * Merges one branch into the integration worktree, with the resolver on a
- * conflict. Leaves the worktree clean either way (aborts on failure).
+ * conflict. A conflict on an ignored path (a machine-local cache an older
+ * branch still tracks, e.g. .impeccable/hook.cache.json) is settled by
+ * dropping that path from the index - it never reaches the resolver.
+ * Leaves the worktree clean either way (aborts on failure).
  */
 async function mergeOne(root, branch, deps) {
   const { execImpl, resolve } = deps;
@@ -305,10 +318,19 @@ async function mergeOne(root, branch, deps) {
     return { ok: false, stage: 'merge', detail: firstLine(res.stderr) || firstLine(res.stdout), files: [] };
   }
   const files = conflicted.slice(0, 10);
-  const resolved = await resolve({ cwd: root, branch, files: conflicted });
+  const ignored = await ignoredPaths(root, conflicted, execImpl);
+  if (ignored.length) {
+    const dropped = await runGit(root, ['rm', '--cached', '--quiet', '--', ...ignored], execImpl);
+    if (!dropped.ok) {
+      await runGit(root, ['merge', '--abort'], execImpl);
+      return { ok: false, stage: 'conflict', detail: firstLine(dropped.stderr) || ignored.join(', '), files };
+    }
+  }
+  const rest = conflicted.filter((f) => !ignored.includes(f));
+  const resolved = rest.length ? await resolve({ cwd: root, branch, files: rest }) : { ok: true };
   // Markers first, then LunaCore stages exactly the conflicted files.
-  const markers = resolved.ok ? await hasMarkers(root, conflicted, execImpl) : true;
-  const staged = !markers ? await runGit(root, ['add', '--', ...conflicted], execImpl) : { ok: false };
+  const markers = resolved.ok ? await hasMarkers(root, rest, execImpl) : true;
+  const staged = markers ? { ok: false } : rest.length ? await runGit(root, ['add', '--', ...rest], execImpl) : { ok: true };
   const left = staged.ok ? await unmergedFiles(root, execImpl) : null;
   if (!resolved.ok || markers || !left || left.length) {
     await runGit(root, ['merge', '--abort'], execImpl);

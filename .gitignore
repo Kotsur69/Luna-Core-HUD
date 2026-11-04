@@ -60,3 +60,8 @@ __pycache__/
 # Never in git, never read from the cloud.
 host-keys.local.json
 host-nonces.local.json
+
+# Impeccable hook's per-session edit cache (absolute paths, edit counts).
+# Machine-local; tracked, it made every God Mode package "touch" it and
+# conflict on merge (src/orchestraIntegrate.js drops it from old branches).
+.impeccable/hook.cache.json

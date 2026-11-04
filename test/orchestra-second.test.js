@@ -246,6 +246,34 @@ test('mergeOne: a resolved conflict is committed; markers left behind abort the 
   assert.ok(!bad.calls.includes('git commit --no-edit'));
 });
 
+test('mergeOne: an ignored path (machine-local cache) is dropped from the index, never sent to the resolver', async () => {
+  const cache = '.impeccable/hook.cache.json';
+  const only = fakeExec({
+    merge: { ok: false },
+    diff: [{ ok: true, stdout: `${cache}\n` }, { ok: true, stdout: '' }],
+    'check-ignore': { ok: true, stdout: `${cache}\n` },
+  });
+  let asked = 0;
+  const res = await integ.mergeOne('/wt', 'luna/a', { execImpl: only.execImpl, resolve: async () => (asked++, { ok: true }) });
+  assert.deepEqual(res, { ok: true, resolved: 1 });
+  assert.equal(asked, 0, 'resolver not started for an ignored-only conflict');
+  assert.ok(only.calls.includes(`git rm --cached --quiet -- ${cache}`));
+  assert.ok(!only.calls.some((c) => c.startsWith('git add')));
+  assert.ok(only.calls.includes('git commit --no-edit'));
+
+  const mixed = fakeExec({
+    merge: { ok: false },
+    diff: [{ ok: true, stdout: `${cache}\nsrc/a.js\n` }, { ok: true, stdout: '' }],
+    'check-ignore': { ok: true, stdout: `${cache}\n` },
+    grep: { ok: false },
+  });
+  const seen = [];
+  const res2 = await integ.mergeOne('/wt', 'luna/a', { execImpl: mixed.execImpl, resolve: async (r) => (seen.push(r.files), { ok: true }) });
+  assert.equal(res2.ok, true);
+  assert.deepEqual(seen, [['src/a.js']], 'resolver gets only the real conflict');
+  assert.ok(mixed.calls.includes('git add -- src/a.js'));
+});
+
 test('integrateMerge merges in order, verifies each, pushes the base; a red verify pushes nothing', async () => {
   const wt = { ok: true, root: '/wt/int', cwd: '/wt/int', branch: 'luna/p-integration' };
   const removed = [];
