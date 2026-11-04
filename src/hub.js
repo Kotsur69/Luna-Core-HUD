@@ -164,19 +164,33 @@ const unseenCount = (items, seen) => (Array.isArray(items) ? items.filter((i) =>
 
 /** A store stand-in that remembers nothing (tests, or no seen store given). */
 const NO_MARKS = { load: () => new Map(), markAll: () => 0 };
+/** Every source runs (no Settings -> per-source switches given). */
+const ALL_ON = () => () => true;
+
+/** sourceFilter() -> (name) => boolean, read once per refresh; a broken one keeps every source on. */
+function sourcePredicate(sourceFilter, log) {
+  try {
+    const fn = sourceFilter();
+    return typeof fn === 'function' ? fn : () => true;
+  } catch (err) {
+    log(`[hub] source settings unreadable: ${err && err.message}`);
+    return () => true;
+  }
+}
 
 /**
  * @param {{
  *   sources: Object<string, {collect:Function, read:() => object, slow?:boolean}>,
  *   doneStore: {load:() => Map<string,number>, mark:(id:string) => boolean},
  *   seenStore?: {load:() => Map<string,number>, markAll:(ids:string[]) => number},
+ *   sourceFilter?: () => ((name:string) => boolean),
  *   now?: () => number, setTimer?: Function, clearTimer?: Function,
  *   tickMs?: number, slowMs?: number, log?: Function,
  * }} deps
  *   sources: name -> collector + a reader of its state. A slow source (files)
  *   is re-read at most every slowMs; a reader that throws gives [].
  */
-function createHub({ sources, doneStore, seenStore = NO_MARKS, now = Date.now, setTimer = setInterval, clearTimer = clearInterval, tickMs = TICK_MS, slowMs = SLOW_MS, log = () => {} }) {
+function createHub({ sources, doneStore, seenStore = NO_MARKS, sourceFilter = ALL_ON, now = Date.now, setTimer = setInterval, clearTimer = clearInterval, tickMs = TICK_MS, slowMs = SLOW_MS, log = () => {} }) {
   const events = new EventEmitter();
   const cache = new Map(); // source name -> {at, items}
   let view = { items: [], done: [], needs: 0, unseen: 0 };
@@ -199,7 +213,9 @@ function createHub({ sources, doneStore, seenStore = NO_MARKS, now = Date.now, s
 
   /** Re-collects (slow sources only when stale, or when forced) and emits on change. */
   function refresh(force = false) {
-    const lists = Object.entries(sources || {}).map(([name, src]) => collectOne(name, src, force));
+    // Settings -> Notification hub can switch source groups off: those are not even read.
+    const isOn = sourcePredicate(sourceFilter, log);
+    const lists = Object.entries(sources || {}).filter(([name]) => isOn(name)).map(([name, src]) => collectOne(name, src, force));
     const merged = mergeItems(lists, { done: doneStore.load(), now: now() });
     const next = { ...merged, needs: needsCount(merged.items), unseen: unseenCount(merged.items, seenStore.load()) };
     const sig = JSON.stringify(next);

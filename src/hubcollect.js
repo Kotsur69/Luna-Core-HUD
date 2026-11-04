@@ -329,6 +329,17 @@ const HOST_PENDING = new Set(['no-cloud', 'login', 'pair']);
 const midnight = (now) => new Date(now).setHours(0, 0, 0, 0);
 
 /**
+ * 'YYYY-MM-DD' (local) of `now`. A standing per-PC condition (logged out,
+ * disconnected, host setup) carries it in its id: done marks sync to every
+ * PC and live 30 days, so a constant id would hide the condition everywhere
+ * for a month. With the day in it, "Mark done" snoozes it until tomorrow.
+ */
+const dayKey = (now) => {
+  const d = new Date(now);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/**
  * Mission Control's last mail scan: threads the model put in "needs your
  * call" (missioncontrolipc.js lastPreview). One item per scan; it clears when
  * the scan is applied and none are left.
@@ -361,12 +372,12 @@ function collectCloud(state) {
   if (!c || c.configured === false || !isTime(state.now)) return [];
   const primary = { action: 'openSettings', arg: SETTINGS_SETUP };
   if (c.loggedIn !== true) {
-    return [{ id: 'cloud:loggedout', kind: 'needs', source: 'cloud', title: 'Cloud sync is off: log in', key: 'hub.item.cloudLoggedOut', at: midnight(state.now), primary }];
+    return [{ id: `cloud:loggedout:${dayKey(state.now)}`, kind: 'needs', source: 'cloud', title: 'Cloud sync is off: log in', key: 'hub.item.cloudLoggedOut', at: midnight(state.now), primary }];
   }
-  if (!c.error) return [];
-  const since = isTime(c.lastSync) ? c.lastSync : 0;
-  if (since && state.now - since < CLOUD_ERROR_GRACE_MS) return [];
-  return [{ id: `cloud:error:${since || 'never'}`, kind: 'needs', source: 'cloud', title: 'Cloud sync keeps failing', key: 'hub.item.cloudError', at: since || midnight(state.now), primary }];
+  // Without a last good sync there is no telling how long it has failed (an
+  // offline launch): the Setup Center shows that case, the hub waits.
+  if (!c.error || !isTime(c.lastSync) || state.now - c.lastSync < CLOUD_ERROR_GRACE_MS) return [];
+  return [{ id: `cloud:error:${c.lastSync}`, kind: 'needs', source: 'cloud', title: 'Cloud sync keeps failing', key: 'hub.item.cloudError', at: c.lastSync, primary }];
 }
 
 /**
@@ -377,7 +388,7 @@ function collectCloud(state) {
 function collectGoogle(state) {
   const g = isObject(state) && isObject(state.google) ? state.google : null;
   if (!g || g.configured !== true || g.connected !== false || !isTime(state.now)) return [];
-  return [{ id: 'google:disconnected', kind: 'needs', source: 'google', title: 'Google disconnected: reconnect', key: 'hub.item.googleOff', at: midnight(state.now), primary: { action: 'openSettings', arg: SETTINGS_SETUP } }];
+  return [{ id: `google:disconnected:${dayKey(state.now)}`, kind: 'needs', source: 'google', title: 'Google disconnected: reconnect', key: 'hub.item.googleOff', at: midnight(state.now), primary: { action: 'openSettings', arg: SETTINGS_SETUP } }];
 }
 
 /**
@@ -388,7 +399,7 @@ function collectGoogle(state) {
 function collectHost(state) {
   const h = isObject(state) && isObject(state.host) ? state.host : null;
   if (!h || h.on !== true || !HOST_PENDING.has(h.state) || !isTime(state.now)) return [];
-  return [{ id: `host:setup:${h.state}`, kind: 'needs', source: 'host', title: 'Luna host on this PC needs setup', key: 'hub.item.hostSetup', at: midnight(state.now), local: true, primary: { action: 'openSettings', arg: SETTINGS_SETUP } }];
+  return [{ id: `host:setup:${h.state}:${dayKey(state.now)}`, kind: 'needs', source: 'host', title: 'Luna host on this PC needs setup', key: 'hub.item.hostSetup', at: midnight(state.now), local: true, primary: { action: 'openSettings', arg: SETTINGS_SETUP } }];
 }
 
 /**

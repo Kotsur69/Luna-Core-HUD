@@ -235,6 +235,13 @@ function fitWidth() {
 
 const saveWidth = () => call('setUiPrefs', { hubWidth: width });
 
+/** Settings -> Notification hub -> reset width: back to the default, saved, applied if built. */
+export function resetHubWidth() {
+  width = WIDTH_DEFAULT;
+  if (drawer) applyWidth(WIDTH_DEFAULT);
+  return saveWidth();
+}
+
 function wireResize(handle) {
   let startX = 0;
   let startW = 0;

@@ -35,6 +35,7 @@ const { createHub, isHubId } = require('./hub');
 const { COLLECTORS, GODMODE_WINDOW_MS, MAX_RUNS } = require('./hubcollect');
 const { createDoneStore, createSeenStore, createHubDoneProvider, DONE_FILE, SEEN_FILE } = require('./hubdone');
 const { collectPeers, createHubPeers } = require('./hubpeers');
+const { isCollectorOn } = require('./hubsources');
 const checkinStore = require('./lifecheckin');
 const goalStore = require('./lifegoals');
 const budgetStore = require('./lifebudget');
@@ -165,6 +166,7 @@ function hubSources({ runsDir, orchestra, update, now, peers = null, accounts = 
  *   snapshots?: () => ({list: Function}|null), onDone?: () => void,
  *   accounts?: {mail?:()=>({needsCall:number, at:number}|null), cloud?:()=>object|null,
  *     google?:()=>object|null, hostOn?:()=>boolean},
+ *   sourcePrefs?: () => object  the stored hubSources ({group: false}, src/hubsources.js),
  *   timers?: {setTimer?:Function, clearTimer?:Function}, autoStart?: boolean,
  * }} deps
  * @returns {ReturnType<typeof createHub> & {doneProvider: object}}
@@ -179,6 +181,7 @@ function registerHubIpc({
   seenFile = () => paths.local(SEEN_FILE),
   snapshots = () => null,
   accounts = {},
+  sourcePrefs = () => ({}),
   onDone = () => {},
   now = Date.now,
   readers,
@@ -195,6 +198,11 @@ function registerHubIpc({
     sources: hubSources({ runsDir, orchestra, update, now, peers, accounts, readers }),
     doneStore,
     seenStore,
+    // Settings -> Notification hub -> sources: the stored hubSources, read once per refresh.
+    sourceFilter: () => {
+      const off = sourcePrefs();
+      return (name) => isCollectorOn(name, off);
+    },
     now,
     log,
     ...timers,

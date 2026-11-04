@@ -49,7 +49,8 @@ test('cloud: logged out, a lasting error; nothing without a cloud or in the grac
   assert.deepEqual(c.collectCloud({ cloud: { configured: false, loggedIn: false }, now: NOW }), [], 'no cloud configured');
   assert.deepEqual(c.collectCloud({ cloud: { loggedIn: true, error: null }, now: NOW }), []);
   const [out] = clean(c.collectCloud({ cloud: { configured: true, loggedIn: false }, now: NOW }));
-  assert.equal(out.id, 'cloud:loggedout');
+  assert.match(out.id, /^cloud:loggedout:\d{4}-\d{2}-\d{2}$/, 'per day: a synced done mark snoozes it until tomorrow, not for 30 days');
+  assert.notEqual(clean(c.collectCloud({ cloud: { loggedIn: false }, now: NOW + DAY }))[0].id, out.id);
   assert.deepEqual(out.primary, { action: 'openSettings', arg: 'setup-center' });
   const fresh = { loggedIn: true, error: 'push-failed', lastSync: NOW - 60 * 1000 };
   assert.deepEqual(c.collectCloud({ cloud: fresh, now: NOW }), [], 'one failed poll is noise');
@@ -57,7 +58,7 @@ test('cloud: logged out, a lasting error; nothing without a cloud or in the grac
   const [err] = clean(c.collectCloud({ cloud: lasting, now: NOW }));
   assert.equal(err.id, `cloud:error:${lasting.lastSync}`);
   assert.ok(!JSON.stringify(err).includes('push-failed'), 'the error text never travels');
-  assert.equal(clean(c.collectCloud({ cloud: { loggedIn: true, error: 'failed', lastSync: null }, now: NOW }))[0].id, 'cloud:error:never');
+  assert.deepEqual(c.collectCloud({ cloud: { loggedIn: true, error: 'failed', lastSync: null }, now: NOW }), [], 'never synced (offline launch): no telling how long, so no item');
 });
 
 test('google: a set-up client whose grant is gone; nothing when not set up', () => {
@@ -65,7 +66,7 @@ test('google: a set-up client whose grant is gone; nothing when not set up', () 
   assert.deepEqual(c.collectGoogle({ google: { configured: false, connected: false }, now: NOW }), []);
   assert.deepEqual(c.collectGoogle({ google: { configured: true, connected: true }, now: NOW }), []);
   const [item] = clean(c.collectGoogle({ google: { configured: true, connected: false }, now: NOW }));
-  assert.equal(item.id, 'google:disconnected');
+  assert.match(item.id, /^google:disconnected:\d{4}-\d{2}-\d{2}$/);
   assert.equal(item.kind, 'needs');
 });
 
@@ -75,7 +76,7 @@ test('host: host mode on and not ready; off or ready is nothing', () => {
   assert.deepEqual(c.collectHost({ host: { on: true, state: 'ready' }, now: NOW }), []);
   assert.deepEqual(c.collectHost({ host: { on: true, state: 'bogus' }, now: NOW }), []);
   const [item] = clean(c.collectHost({ host: { on: true, state: 'pair' }, now: NOW }));
-  assert.equal(item.id, 'host:setup:pair');
+  assert.match(item.id, /^host:setup:pair:\d{4}-\d{2}-\d{2}$/);
   assert.equal(item.local, true);
 });
 
@@ -152,7 +153,7 @@ test('registerHubIpc wires the new sources; a throwing getter yields nothing', a
   const res = await handlers.get('hub:list')();
   const ids = res.items.map((i) => i.id);
   assert.ok(ids.includes(`mail:needscall:${NOW}`));
-  assert.ok(ids.includes('google:disconnected'));
+  assert.ok(ids.some((id) => id.startsWith('google:disconnected:')));
   assert.ok(ids.includes('todo:manual:1'));
   assert.ok(!ids.some((id) => id.startsWith('cloud:') || id.startsWith('host:')));
 });

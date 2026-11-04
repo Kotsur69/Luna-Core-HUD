@@ -1820,6 +1820,31 @@
               </label>
             </div>
             <div class="termcustom__group">
+              <!-- Notification hub (face icon + right drawer, Ctrl+Shift+H):
+                   modules/hubsettings.js. The select's options and the
+                   per-source switches are built there from fixed lists. -->
+              <h3 id="hub-section" class="termcustom__section" data-i18n="hubset.section">Centrum powiadomien</h3>
+              <label class="ui-field" data-i18n-title="hubset.autoOpen.hint" title="Czy panel otwiera sie sam przy starcie LunaCore.">
+                <span class="ui-field__label" data-i18n="hubset.autoOpen">Otwieraj przy starcie</span>
+                <select id="hubset-autoopen" class="profile-select"></select>
+              </label>
+              <label id="hubset-toasts-field" class="switch-field" data-i18n-title="hubset.toasts.hint" title="Jedno powiadomienie systemowe na nowa rzecz, gdy okno nie jest aktywne. Wymaga tez wlaczonych powiadomien systemowych powyzej.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="hubset.toasts">Powiadomienia o nowych rzeczach</span>
+                  <span id="hubset-toasts-status" class="switch-field__status" data-i18n="hubset.on">wlaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="hubset-toasts" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <p class="termcustom__hint" data-i18n="hubset.sources.hint">Zrodla, ktore centrum pokazuje.</p>
+              <div id="hubset-sources" class="hubset-sources"></div>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="hubset-width-reset" class="termcustom__reset" data-i18n="hubset.widthReset">Przywroc szerokosc panelu</button>
+              </div>
+            </div>
+            <div class="termcustom__group">
               <!-- Report emails (src/mailipc.js, modules/mailsettings.js): a separate
                    gmail.send-only Google grant; every email goes to that same address. -->
               <h3 id="mail-section" class="termcustom__section" data-i18n="mailset.section">Raporty e-mail</h3>

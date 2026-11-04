@@ -2975,6 +2975,8 @@ function registerIpc() {
         return Boolean(control && control.status().on);
       },
     },
+    // Settings -> Notification hub: the source groups switched off.
+    sourcePrefs: () => readUiPrefs().hubSources,
     onDone: () => configSync && configSync.soon(),
   });
   // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".
