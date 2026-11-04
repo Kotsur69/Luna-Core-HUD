@@ -193,6 +193,7 @@ const {
   publicFeedback,
 } = require('./lunasworkFeedback');
 const { createResearchStep } = require('./lunasworkResearch');
+const { createAssetStep } = require('./lunasworkAssets');
 const {
   APPROVE,
   needsDecision,
@@ -270,6 +271,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   shipGate: (ctx:{repoPath:string, scores:object[]})=>{allPassed:boolean},
  *   critic: (opts:object)=>Promise<object>,
  *   research?: (opts:object)=>Promise<object>,
+ *   styleCheck?: (opts:object)=>Promise<object>,
  *   gitLog?: (repoPath:string)=>Promise<string>,
  *   syncCheckout?: (repoPath:string)=>Promise<{ok:boolean, detail?:string}>,
  *   checkpoints?: {tagIteration:(o:object)=>Promise<object>, rollback:(o:object)=>Promise<object>},
@@ -375,6 +377,14 @@ function createLunasWork(deps) {
   });
   // LW 3.30: the load test on staging (src/lunasworkLoad.js).
   const loadTest = createLoadTest({ log, now, ...deps.load });
+  // LW 3.37 (src/lunasworkAssets.js): design/ASSETS.md -> asset cards, cost gate, style check.
+  const assetStep = createAssetStep({
+    todoStore: (projectId) => deps.todoStore(projectId),
+    ask: (spec) => ask(spec),
+    styleCheck: deps.styleCheck,
+    logEvent: (text) => logEvent(text),
+    logModel: (role, model, reason) => logModel(role, model, reason),
+  });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
   let run = null;
@@ -861,6 +871,8 @@ function createLunasWork(deps) {
     await researchStep.beforeDirecting(run);
     // LW 2.25a: a variant choice answered since the last iteration gets its cleanup card.
     await variantFlow.settle();
+    // LW 3.37: planned assets become cards before the Director plans; never blocks.
+    await assetStep.beforeDirecting(run);
     // B17: feedback that came in since the last iteration is planned in first.
     triageFeedback();
     const held = heldNow();
