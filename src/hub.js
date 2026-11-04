@@ -67,8 +67,12 @@ const isTime = (v) => Number.isSafeInteger(v) && v > 0;
 // report lines must not spoof how a title reads.
 // eslint-disable-next-line no-control-regex
 const UNSAFE_CHARS_RE = /[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]+/g;
-/** Absolute paths (Windows drive, POSIX home) and token-like strings never reach the renderer. */
-const PATH_RES = [/\b[A-Za-z]:[\\/][^\s'"`]*/g, /(?:^|(?<=[\s(]))\/(?:home|Users|root)\/[^\s'"`]*/g];
+/** Absolute paths (Windows drive, UNC share, POSIX home, ~/) and token-like strings never reach the renderer. */
+const PATH_RES = [
+  /\b[A-Za-z]:[\\/][^\s'"`]*/g,
+  /\\\\[^\s\\'"`]+\\[^\s'"`]*/g,
+  /(?:^|(?<=[\s(]))(?:\/(?:home|Users|root|mnt|var)\/|~[\\/])[^\s'"`]*/g,
+];
 // Linear on purpose (no per-position lookahead): long runs are matched once,
 // then kept unless they mix letters and digits like a key or token.
 const LONG_RUN_RE = /[A-Za-z0-9_-]{32,}/g;

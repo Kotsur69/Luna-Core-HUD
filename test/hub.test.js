@@ -88,6 +88,8 @@ test('cleanItem redacts absolute paths and tokens and strips bidi / zero-width c
   }));
   assert.equal(out.title, 'see \u2026 and \u2026 key \u2026');
   assert.equal(out.detail, 'a b c supabase/migrations/001.sql', 'relative paths stay');
+  const more = hub.cleanItem(item({ title: 'see \\\\nas\\users\\mati\\keys.txt, ~/notes.md and /mnt/c/x' }));
+  assert.equal(more.title, 'see … … and …', 'UNC, ~/ and /mnt paths are redacted');
   const huge = hub.cleanItem(item({ title: `${'a1'.repeat(200000)} end` }));
   assert.ok(huge.title.length <= 200, 'a huge line is capped before the regexes');
 });
