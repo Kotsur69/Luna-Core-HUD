@@ -98,10 +98,14 @@ class Refusal extends Error {
   }
 }
 
-/** Write next to the target, then rename: a crash never leaves half a file. */
+/**
+ * Write next to the target, then rename: a crash never leaves half a file.
+ * 0600 like src/hostpairing.js: the rename replaces the keys file with the
+ * temp file, so the temp file's mode is the one the keys file ends up with.
+ */
 function writeAtomic(file, data) {
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data) + '\n', 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify(data) + '\n', { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 

@@ -36,6 +36,11 @@ function fakeChild() {
     child.killed = true;
   };
   child.say = (obj) => child.stdout.write(`${JSON.stringify(obj)}\n`);
+  // A real child: 'exit', then 'close' once stdio drained.
+  child.finish = (code) => {
+    child.emit('exit', code);
+    child.emit('close', code);
+  };
   return child;
 }
 
@@ -235,7 +240,7 @@ test('chat.end closes stdin, kills after a grace period, and cleans up', async (
   await tick();
   assert.equal((await host.handlers['chat.end']({ sessionId: SID })).status, 'ending');
   assert.equal(c.stdin.destroyed, true);
-  c.emit('exit', 0);
+  c.finish(0);
   assert.deepEqual(host.sessions(), []);
   assert.equal(timers.pending.size, 0, 'kill timer cleared');
   assert.equal(c.listenerCount('exit'), 0);
@@ -245,7 +250,7 @@ test('chat.end closes stdin, kills after a grace period, and cleans up', async (
 test('a crashed child: status error, failed notification, session gone', async () => {
   const { host, children, events, notes } = setup();
   await host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
-  children[0].emit('exit', 1);
+  children[0].finish(1);
   assert.deepEqual(events.at(-1)[2], { status: 'error', reason: 'exit 1' });
   assert.deepEqual(notes, [['failed', SID]]);
   assert.deepEqual(host.sessions(), []);
@@ -265,7 +270,7 @@ test('chat.resume reopens a known session with --resume in the same repo', async
   const { host, spawns, children } = setup();
   await host.handlers['chat.start']({ repoId: 'luna', prompt: 'go', model: 'opus' });
   await host.handlers['chat.end']({ sessionId: SID });
-  children[0].emit('exit', 0);
+  children[0].finish(0);
   assert.equal((await host.handlers['chat.resume']({ sessionId: 'bad' })).status, 'refused: sessionId');
   const res = await host.handlers['chat.resume']({ sessionId: SID, prompt: 'continue' });
   assert.deepEqual(res, { status: 'resumed', sessionId: SID });
@@ -366,6 +371,128 @@ test('S-M3: the session spawns the resolved absolute path; none found -> failed:
   assert.equal(b.spawns.length, 0);
 });
 
+test('claude.cmd: native claude.exe anywhere on PATH wins; the npm shim is the fallback; never inside the repo', () => {
+  const npm = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+  const local = 'C:\\Users\\me\\.local\\bin';
+  const win = (files, PATH, cwd = 'C:\\repo') => chat.claudePath({ Path: PATH }, cwd, { platform: 'win32', isFile: (f) => files.includes(f) });
+  // The shim comes first on PATH, but the native binary later on still wins.
+  assert.equal(win([`${npm}\\claude.cmd`, `${local}\\claude.exe`], `${npm};${local}`), `${local}\\claude.exe`);
+  assert.equal(win([`${npm}\\claude.cmd`], `${npm};${local}`), `${npm}\\claude.cmd`);
+  assert.equal(win(['C:\\repo\\claude.cmd'], 'C:\\repo'), null, 'a shim committed to the repo is refused');
+  assert.equal(chat.claudePath({ PATH: '/npm' }, '/repo', { platform: 'linux', isFile: (f) => f === '/npm/claude.cmd' }), null, 'no .cmd off Windows');
+});
+
+test('claude.cmd: runs through System32 cmd.exe with a quoted path and verbatim args; unsafe paths refused', () => {
+  const args = chat.chatArgs({ model: 'sonnet', mode: 'plan', sessionId: SID });
+  const shim = 'C:\\Program Files\\npm\\claude.cmd';
+  const how = chat.claudeLaunch(shim, args, { SystemRoot: 'D:\\Win' });
+  assert.equal(how.file, 'D:\\Win\\System32\\cmd.exe');
+  assert.equal(how.verbatim, true);
+  assert.deepEqual(how.args.slice(0, 4), ['/d', '/v:off', '/s', '/c']);
+  assert.equal(how.args[4], `""${shim}" ${args.join(' ')}"`);
+  // The shim's own bare `node` must never be found in the repo (the cwd).
+  assert.deepEqual(how.env, { NoDefaultCurrentDirectoryInExePath: '1' });
+  assert.deepEqual(chat.claudeLaunch('C:\\bin\\claude.exe', args, {}), { file: 'C:\\bin\\claude.exe', args, verbatim: false, env: {} });
+  for (const bad of ['C:\\%USERPROFILE%\\claude.cmd', 'C:\\a"b\\claude.cmd', 'C:\\a!b\\claude.cmd', 'npm\\claude.cmd', '\\\\evil\\share\\claude.cmd']) {
+    assert.equal(chat.claudeLaunch(bad, args, {}), null, bad);
+  }
+  assert.equal(chat.claudeLaunch(shim, [...args, 'a&b'], {}), null, 'an arg needing quotes is refused');
+  for (const sr of ['%x%', '\\\\evil\\share', 'Windows']) {
+    assert.equal(chat.claudeLaunch(shim, args, { SYSTEMROOT: sr }).file, 'C:\\Windows\\System32\\cmd.exe', `unsafe SystemRoot ${sr} falls back`);
+  }
+});
+
+test('claude.cmd: a UNC PATH entry is never used', () => {
+  const isFile = (f) => f === '\\\\srv\\tools\\claude.exe' || f === 'C:\\npm\\claude.cmd';
+  assert.equal(chat.claudePath({ Path: '\\\\srv\\tools;C:\\npm' }, 'C:\\repo', { platform: 'win32', isFile }), 'C:\\npm\\claude.cmd');
+});
+
+test('claude.cmd: chat.start passes NoDefaultCurrentDirectoryInExePath to the shim, not to a native exe', async () => {
+  const a = setup({ claudePath: () => 'C:\\npm\\claude.cmd', env: () => ({ PATH: 'C:\\npm', NODEFAULTCURRENTDIRECTORYINEXEPATH: '' }) });
+  await a.host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
+  assert.equal(a.spawns[0].opts.env.NoDefaultCurrentDirectoryInExePath, '1');
+  assert.equal('NODEFAULTCURRENTDIRECTORYINEXEPATH' in a.spawns[0].opts.env, false, 'no case variant shadows it');
+  assert.equal(a.spawns[0].opts.env.PATH, 'C:\\npm');
+  const b = setup({ claudePath: () => 'C:\\bin\\claude.exe' });
+  await b.host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
+  assert.equal('NoDefaultCurrentDirectoryInExePath' in b.spawns[0].opts.env, false);
+});
+
+test('claude.cmd: chat.start spawns cmd.exe with windowsVerbatimArguments; a native exe spawns plain', async () => {
+  const a = setup({ claudePath: () => 'C:\\npm\\claude.cmd', env: () => ({ SystemRoot: 'C:\\Windows' }) });
+  assert.equal((await a.host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' })).status, 'started');
+  assert.equal(a.spawns[0].cmd, 'C:\\Windows\\System32\\cmd.exe');
+  assert.equal(a.spawns[0].opts.windowsVerbatimArguments, true);
+  assert.ok(a.spawns[0].args[4].startsWith('""C:\\npm\\claude.cmd" -p '));
+  const b = setup({ claudePath: () => 'C:\\bin\\claude.exe' });
+  await b.host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
+  assert.equal(b.spawns[0].cmd, 'C:\\bin\\claude.exe');
+  assert.equal('windowsVerbatimArguments' in b.spawns[0].opts, false);
+  const c = setup({ claudePath: () => 'C:\\%x%\\claude.cmd' });
+  assert.equal((await c.host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' })).status, 'failed: no claude');
+  assert.equal(c.spawns.length, 0);
+});
+
+test('killTree: Windows ends the whole tree via System32 taskkill; failure or no pid falls back to kill()', () => {
+  const calls = [];
+  const child = { pid: 4242, killed: 0, kill() { this.killed++; } };
+  chat.killTree(child, { platform: 'win32', sysRoot: 'C:\\Windows', execFile: (f, a, o, cb) => { calls.push([f, a]); cb(null); } });
+  assert.deepEqual(calls, [['C:\\Windows\\System32\\taskkill.exe', ['/pid', '4242', '/T', '/F']]]);
+  assert.equal(child.killed, 0);
+  chat.killTree(child, { platform: 'win32', sysRoot: 'C:\\Windows', execFile: (f, a, o, cb) => cb(new Error('no such process')) });
+  assert.equal(child.killed, 1);
+  chat.killTree({ ...child, pid: undefined, kill() { child.killed++; } }, { platform: 'win32', execFile: () => assert.fail('no taskkill without a pid') });
+  chat.killTree(child, { platform: 'linux', execFile: () => assert.fail('no taskkill off Windows') });
+  assert.equal(child.killed, 3);
+});
+
+test('chat.end kills the tree after the grace period; stopAll kills at once', async () => {
+  const killed = [];
+  const { host, children, timers } = setup({ killTree: (c) => killed.push(c) });
+  await host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
+  await host.handlers['chat.end']({ sessionId: SID });
+  assert.equal(killed.length, 0);
+  timers.fireAll();
+  assert.deepEqual(killed, [children[0]]);
+  host.stopAll();
+  assert.equal(killed.length, 2);
+});
+
+test('J-M5: the last stdout lines after exit are still read; close finalizes, exit alone falls back', async () => {
+  const a = setup();
+  await a.host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
+  await a.host.handlers['chat.end']({ sessionId: SID });
+  a.children[0].emit('exit', 0);
+  assert.equal(a.host.sessions().length, 1, 'exit alone does not finalize');
+  a.children[0].say({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.1, num_turns: 2 });
+  await tick();
+  a.children[0].emit('close', 0);
+  assert.deepEqual(a.notes, [['done', SID]], 'the final result arrived after exit and still counted');
+  assert.ok(a.events.some((e) => e[1] === 'cost'));
+  assert.deepEqual(a.host.sessions(), []);
+  assert.equal(a.timers.pending.size, 0, 'fallback and kill timers cleared');
+
+  // A grandchild holding the pipe: no 'close' ever; the fallback finalizes.
+  const b = setup();
+  await b.host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
+  b.children[0].emit('exit', 1);
+  b.timers.fireAll();
+  assert.deepEqual(b.notes, [['failed', SID]]);
+  assert.deepEqual(b.host.sessions(), []);
+});
+
+test('an interrupt while idle does not hide the next turn\'s failure', async () => {
+  const { host, children, notes } = setup();
+  await host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
+  children[0].say({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0, num_turns: 1 });
+  await tick();
+  assert.equal((await host.handlers['chat.interrupt']({ sessionId: SID })).status, 'interrupting');
+  await host.handlers['chat.send']({ sessionId: SID, text: 'again' });
+  children[0].say({ type: 'result', subtype: 'error_max_turns', is_error: true, total_cost_usd: 0, num_turns: 1 });
+  await tick();
+  assert.deepEqual(notes.map((n) => n[0]), ['done', 'failed']);
+});
+
 test('J-H1: an EPIPE on stdin is handled, and nothing is written after chat.end', async () => {
   // A stdin that is a real emitter: an 'error' with no listener throws.
   const spawn = () => {
@@ -399,7 +526,7 @@ test('J-H2: chat.resume continues the stored seq before the first new event', as
   });
   await host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
   await host.handlers['chat.end']({ sessionId: SID });
-  children[0].emit('exit', 0);
+  children[0].finish(0);
   order.length = 0;
   await host.handlers['chat.resume']({ sessionId: SID, prompt: 'again' });
   assert.equal(order[0], `continue:${SID}`);
@@ -412,7 +539,7 @@ test('J-H3: a resumed session notifies with a new key (the push function fires a
   children[0].say({ type: 'result', subtype: 'success', is_error: false });
   await tick();
   await host.handlers['chat.end']({ sessionId: SID });
-  children[0].emit('exit', 0);
+  children[0].finish(0);
   await host.handlers['chat.resume']({ sessionId: SID, prompt: 'again' });
   children[1].say({ type: 'result', subtype: 'success', is_error: false });
   await tick();
@@ -428,6 +555,6 @@ test('J-M6: a throwing onSessionsChanged never strands a session slot', async ()
     },
   });
   await host.handlers['chat.start']({ repoId: 'luna', prompt: 'go' });
-  children[0].emit('exit', 1);
+  children[0].finish(1);
   assert.deepEqual(host.sessions(), []);
 });

@@ -39,9 +39,11 @@ function fakeClient(initial = []) {
   const table = initial.map((r) => ({ ...r }));
   const channel = { statusCb: null, eventCb: null };
   function query() {
-    const q = { op: 'select', patch: null, returning: false, filters: [], max: Infinity };
+    const q = { op: 'select', patch: null, returning: false, filters: [], notIn: [], max: Infinity };
     const run = () => {
-      const hits = table.filter((r) => q.filters.every(([c, v]) => r[c] === v) && (!q.below || r[q.below[0]] < q.below[1]));
+      const hits = table.filter(
+        (r) => q.filters.every(([c, v]) => r[c] === v) && (!q.below || r[q.below[0]] < q.below[1]) && !q.notIn.some(([c, list]) => list.includes(r[c])),
+      );
       if (q.op === 'update') {
         hits.forEach((r) => Object.assign(r, q.patch));
         return { data: q.returning ? hits.map((r) => ({ id: r.id })) : null, error: null };
@@ -64,6 +66,12 @@ function fakeClient(initial = []) {
       },
       lt(c, v) {
         q.below = [c, v];
+        return api;
+      },
+      // PostgREST form: .not('id', 'in', '(a,b)').
+      not(c, op, v) {
+        assert.equal(op, 'in');
+        q.notIn.push([c, String(v).replace(/^\(|\)$/g, '').split(',')]);
         return api;
       },
       order: () => api,
@@ -321,6 +329,68 @@ test('the handler gets a copy: it cannot change what the verifier saw', async ()
   loop.start();
   await loop.read();
   assert.deepEqual(seen, { a: 1 });
+  loop.stop();
+});
+
+test('J-M7: a failed final write is retried, so the row does not stay claimed', async () => {
+  const r = row();
+  const client = fakeClient([r]);
+  const from = client.from;
+  let failures = 2;
+  // The first two writes of the final status fail, the third goes through.
+  client.from = () => {
+    const q = from();
+    const update = q.update;
+    q.update = (patch) => {
+      if (patch.status === 'done' && failures-- > 0) return { eq: () => ({ eq: async () => ({ error: { code: 'fetch failed' } }) }) };
+      return update(patch);
+    };
+    return q;
+  };
+  const { loop, t, logs } = setup({ client });
+  loop.start();
+  const reading = loop.read();
+  for (let i = 0; i < 10 && client.table[0].status !== 'done'; i++) {
+    await settle();
+    await t.fireAll();
+  }
+  await reading;
+  assert.equal(client.table[0].status, 'done');
+  assert.equal(logs.filter((l) => l.includes('writing done failed')).length, 2);
+  loop.stop();
+});
+
+test('J-M7: a stop/start does not fail a command this process is still running', async () => {
+  const id = '0d7c4f2e-1111-4222-8333-444455556666';
+  let release;
+  const handlers = { 'git.fetchAll': () => new Promise((res) => (release = res)) };
+  const client = fakeClient([row({ id })]);
+  const { loop } = setup({ client, handlers });
+  loop.start();
+  const reading = loop.read();
+  for (let i = 0; i < 5 && !release; i++) await settle();
+  assert.equal(client.table[0].status, 'claimed');
+  // The row ages past the max expiry while it runs; then the host restarts.
+  client.table[0].created_at = new Date(NOW - MAX_TTL_MS - 1000).toISOString();
+  loop.stop();
+  loop.start();
+  await settle();
+  await settle();
+  assert.equal(client.table[0].status, 'claimed', 'not failed as host-restarted');
+  release({ ok: 1 });
+  await reading;
+  await settle();
+  assert.equal(client.table[0].status, 'done');
+  loop.stop();
+});
+
+test('a result JSON cannot hold fails the row instead of leaving it claimed', async () => {
+  const r = row();
+  const handlers = { 'git.fetchAll': async () => ({ n: 1n }) };
+  const { client, loop } = setup({ rows: [r], handlers });
+  loop.start();
+  await loop.read();
+  assert.equal(client.table[0].status, 'failed');
   loop.stop();
 });
 

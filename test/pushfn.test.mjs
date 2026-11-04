@@ -3,7 +3,7 @@
 // owner's session (or the schedule's secret) gets through.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { notification, parsePushRequest, offlineKey, sameSecret, fanOut, handle, OFFLINE_MS } from '../supabase/functions/push/core.mjs';
+import { notification, parsePushRequest, offlineKey, sameSecret, fanOut, handle, pushEndpointAllowed, OFFLINE_MS } from '../supabase/functions/push/core.mjs';
 
 const OWNER = '11111111-2222-4333-8444-555555555555';
 const OTHER = '99999999-2222-4333-8444-555555555555';
@@ -11,7 +11,9 @@ const TOKEN = 'eyJhbGciOiJIUzI1NiJ9.payload.signature';
 const NOW = 1_800_000_000_000;
 const ENV = { SUPABASE_URL: 'https://ref.supabase.co', SUPABASE_ANON_KEY: 'anon', OWNER_USER_ID: OWNER, CRON_SECRET: 'cron-secret-123', PUSH_LANG: 'en' };
 
-function fakeDb({ seen = null, subs = [{ id: 's1', endpoint: 'https://push.example/a', p256dh: 'k', auth: 'a' }] } = {}) {
+const FCM = 'https://fcm.googleapis.com/fcm/send/';
+
+function fakeDb({ seen = null, subs = [{ id: 's1', endpoint: `${FCM}a`, p256dh: 'k', auth: 'a' }] } = {}) {
   const claimed = new Set();
   const dropped = [];
   return {
@@ -67,14 +69,46 @@ test('sameSecret', () => {
 });
 
 test('fanOut drops 404/410 subscriptions and keeps others', async () => {
-  const db = fakeDb({ subs: [{ id: 'gone', endpoint: 'x' }, { id: 'ok', endpoint: 'y' }, { id: 'flaky', endpoint: 'z' }] });
+  const db = fakeDb({ subs: [{ id: 'gone', endpoint: `${FCM}x` }, { id: 'ok', endpoint: `${FCM}y` }, { id: 'flaky', endpoint: `${FCM}z` }] });
   const sendPush = async (sub) => {
-    if (sub.endpoint === 'x') throw Object.assign(new Error('gone'), { statusCode: 410 });
-    if (sub.endpoint === 'z') throw Object.assign(new Error('busy'), { statusCode: 500 });
+    if (sub.endpoint === `${FCM}x`) throw Object.assign(new Error('gone'), { statusCode: 410 });
+    if (sub.endpoint === `${FCM}z`) throw Object.assign(new Error('busy'), { statusCode: 500 });
   };
   const r = await fanOut({ db, sendPush, userId: OWNER, payload: {}, log: () => {} });
   assert.deepEqual(r, { sent: 1, dropped: 1 });
   assert.deepEqual(db.dropped, ['gone']);
+});
+
+// L1 (docs/REMOTE_HOST_PLAN.md "Security review"): a subscription row is the
+// phone's own write, so a stolen session could aim the function anywhere.
+test('L1: only the browsers\' push services are allowed endpoints', () => {
+  for (const ok of [
+    `${FCM}abc`,
+    'https://updates.push.services.mozilla.com/wpush/v2/abc',
+    'https://web.push.apple.com/QH1x',
+    'https://wns2-db5p.notify.windows.com/w/?token=abc',
+  ]) assert.equal(pushEndpointAllowed(ok), true, ok);
+  for (const bad of [
+    'http://fcm.googleapis.com/fcm/send/abc',
+    'https://fcm.googleapis.com.evil.com/x',
+    'https://evilfcm.googleapis.com.attacker.net/x',
+    'https://notfcm-googleapis.com/x',
+    'https://user:pw@fcm.googleapis.com/x',
+    'https://fcm.googleapis.com:8443/x',
+    'https://169.254.169.254/latest/meta-data',
+    'https://ref.supabase.co/rest/v1/',
+    'not a url',
+    null,
+  ]) assert.equal(pushEndpointAllowed(bad), false, String(bad));
+});
+
+test('L1: fanOut never posts to an endpoint off the allow-list, and keeps its row', async () => {
+  const db = fakeDb({ subs: [{ id: 'evil', endpoint: 'https://internal.example/hook' }, { id: 'ok', endpoint: `${FCM}y` }] });
+  const posted = [];
+  const r = await fanOut({ db, sendPush: async (sub) => posted.push(sub.endpoint), userId: OWNER, payload: {}, log: () => {} });
+  assert.deepEqual(posted, [`${FCM}y`]);
+  assert.deepEqual(r, { sent: 1, dropped: 0 });
+  assert.deepEqual(db.dropped, []);
 });
 
 test('the owner can send; each key fires once', async () => {

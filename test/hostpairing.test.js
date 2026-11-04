@@ -282,6 +282,20 @@ test('addKey replaces the same credential and keeps the others', () => {
   assert.ok(keys.every((k) => k.signCount === 0));
 });
 
+test('L5: the same credential id with a different key is refused; a re-pair keeps the sign count', () => {
+  const a = makePhone();
+  const b = makePhone();
+  assert.equal(addKey(keysPath, { credentialId: a.credentialId, publicKey: a.pub, label: 'A' }, 1), 'added');
+  const stored = JSON.parse(fs.readFileSync(keysPath, 'utf8'));
+  fs.writeFileSync(keysPath, JSON.stringify({ ...stored, keys: stored.keys.map((k) => ({ ...k, signCount: 7 })) }));
+  assert.throws(() => addKey(keysPath, { credentialId: a.credentialId, publicKey: b.pub, label: 'evil' }, 2), /already paired with another key/);
+  assert.equal(readPairedKeys(keysPath)[0].publicKey, a.pub, 'the paired key stays');
+  assert.equal(addKey(keysPath, { credentialId: a.credentialId, publicKey: a.pub, label: 'A again' }, 3), 'refreshed');
+  const [k] = readPairedKeys(keysPath);
+  assert.equal(k.label, 'A again');
+  assert.equal(k.signCount, 7, 'an older assertion can not replay after a re-pair');
+});
+
 test('hasPairedPhone: missing or broken file is no phone', () => {
   assert.equal(hasPairedPhone(keysPath), false);
   fs.writeFileSync(keysPath, '{nope');

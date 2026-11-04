@@ -10,13 +10,15 @@ import { handle, createDb } from './core.mjs';
 
 const env = new Proxy({}, { get: (_, key) => (typeof key === 'string' ? Deno.env.get(key) : undefined) });
 
+const PUSH_TIMEOUT_MS = 10000;
 let vapidReady = false;
 function sendPush(subscription, payload) {
   if (!vapidReady) {
     webpush.setVapidDetails(env.VAPID_SUBJECT || 'mailto:lunacore@example.invalid', env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
     vapidReady = true;
   }
-  return webpush.sendNotification(subscription, payload, { TTL: 3600, urgency: 'high' });
+  // timeout: a push service that never answers must not hold the function.
+  return webpush.sendNotification(subscription, payload, { TTL: 3600, urgency: 'high', timeout: PUSH_TIMEOUT_MS });
 }
 
 const configured = () => Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
