@@ -86,14 +86,31 @@ const safeGet = (fn) => () => {
 };
 
 /**
+ * Host mode in this HUD: {on, state} (hostsetup.js decideSetup()), or null
+ * while host mode is off - the pairing file is only read when it is on.
+ * @param {{hostOn?:()=>boolean, cloud?:()=>object|null}} acc
+ */
+function hostState(acc) {
+  if (safeGet(acc.hostOn)() !== true) return null;
+  const { decideSetup } = require('./hostsetup');
+  const { hasPairedPhone } = require('./hostpairing');
+  const s = safeGet(acc.cloud)() || {};
+  return {
+    on: true,
+    state: decideSetup({ configured: s.configured !== false, loggedIn: s.loggedIn === true, paired: hasPairedPhone(paths.local('host-keys.local.json')) }),
+  };
+}
+
+/**
  * Source name -> {collect, read, slow}. Every reader is injectable for tests.
  * @param {{runsDir:()=>string|null,
  *   orchestra:{views?:()=>Array<{projectId, view}>, planWaits?:()=>Array<{projectId, wait}>,
  *     view?:Function, planWait?:Function}|null,
  *   update:()=>object|null, now:()=>number, readers?:object}} deps
  */
-function hubSources({ runsDir, orchestra, update, now, peers = null, readers = {} }) {
+function hubSources({ runsDir, orchestra, update, now, peers = null, accounts = {}, readers = {} }) {
   const o = orchestra || {};
+  const acc = accounts || {};
   const r = {
     godmode: () => {
       const dir = runsDir();
@@ -122,10 +139,19 @@ function hubSources({ runsDir, orchestra, update, now, peers = null, readers = {
     update: () => ({ update: safeGet(update)() }),
     // In memory: hubpeers fetches in the background and only hands back its last list.
     peers: () => ({ rows: peers ? peers.rows() : [] }),
+    // N5. In memory (cheap, every tick): the last mail scan, cloud / Google status.
+    mail: () => ({ mail: safeGet(acc.mail)() }),
+    cloud: () => ({ cloud: safeGet(acc.cloud)() }),
+    google: () => ({ google: safeGet(acc.google)() }),
+    // Files (slow): the host's pairing keys, every to-do list, the weekly reviews.
+    host: () => ({ host: hostState(acc) }),
+    todo: () => ({ store: require('./todo').readStore() }),
+    weekly: () => ({ weekly: require('./weeklyreview').createWeeklyStore().load() }),
+    approval: () => ({ views: typeof o.views === 'function' ? safeGet(o.views)() || [] : [] }),
     ...readers,
   };
   const collectors = { ...COLLECTORS, peers: collectPeers };
-  const slow = new Set(['godmode', 'checkin', 'goals', 'bills']);
+  const slow = new Set(['godmode', 'checkin', 'goals', 'bills', 'host', 'todo', 'weekly']);
   return Object.fromEntries(Object.keys(collectors).map((name) => [name, { collect: collectors[name], read: r[name], slow: slow.has(name) }]));
 }
 
@@ -137,6 +163,8 @@ function hubSources({ runsDir, orchestra, update, now, peers = null, readers = {
  *   orchestra?: {view:()=>object|null, planWait:()=>object|null}, update?: () => object|null,
  *   doneFile?: () => string|null, seenFile?: () => string|null, now?: () => number, readers?: object,
  *   snapshots?: () => ({list: Function}|null), onDone?: () => void,
+ *   accounts?: {mail?:()=>({needsCall:number, at:number}|null), cloud?:()=>object|null,
+ *     google?:()=>object|null, hostOn?:()=>boolean},
  *   timers?: {setTimer?:Function, clearTimer?:Function}, autoStart?: boolean,
  * }} deps
  * @returns {ReturnType<typeof createHub> & {doneProvider: object}}
@@ -150,6 +178,7 @@ function registerHubIpc({
   doneFile = () => paths.local(DONE_FILE),
   seenFile = () => paths.local(SEEN_FILE),
   snapshots = () => null,
+  accounts = {},
   onDone = () => {},
   now = Date.now,
   readers,
@@ -163,7 +192,7 @@ function registerHubIpc({
   // A fetch that brought other rows re-collects at once instead of on the next tick.
   const peers = createHubPeers({ snapshots, now, log, onChange: () => hub && hub.refresh(false) });
   hub = createHub({
-    sources: hubSources({ runsDir, orchestra, update, now, peers, readers }),
+    sources: hubSources({ runsDir, orchestra, update, now, peers, accounts, readers }),
     doneStore,
     seenStore,
     now,

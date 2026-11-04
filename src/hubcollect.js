@@ -314,6 +314,144 @@ function collectUpdate(state) {
   }];
 }
 
+// --- N5: the remaining sources ------------------------------------------------
+
+/** A cloud sync error only counts once it has lasted this long (one failed poll is noise). */
+const CLOUD_ERROR_GRACE_MS = 10 * 60 * 1000;
+/** A weekly review is "ready" for this long after it was written. */
+const WEEKLY_READY_MS = 7 * DAY_MS;
+const SETTINGS_SETUP = 'setup-center';
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const MAX_APPROVALS = 20;
+const HOST_PENDING = new Set(['no-cloud', 'login', 'pair']);
+
+/** Local midnight of the day holding `now`: a stable `at` for a standing condition. */
+const midnight = (now) => new Date(now).setHours(0, 0, 0, 0);
+
+/**
+ * Mission Control's last mail scan: threads the model put in "needs your
+ * call" (missioncontrolipc.js lastPreview). One item per scan; it clears when
+ * the scan is applied and none are left.
+ * @param {{mail:{needsCall:number, at:number}|null}} state
+ */
+function collectMail(state) {
+  const m = isObject(state) && isObject(state.mail) ? state.mail : null;
+  if (!m || !Number.isSafeInteger(m.needsCall) || m.needsCall < 1 || !isTime(m.at)) return [];
+  const count = Math.min(m.needsCall, 999);
+  return [{
+    id: `mail:needscall:${m.at}`,
+    kind: 'needs',
+    source: 'mail',
+    title: `${count} mails need your call`,
+    key: 'hub.item.mailNeedsCall',
+    vars: { count },
+    at: m.at,
+    primary: { action: 'openMission' },
+  }];
+}
+
+/**
+ * Cloud sync (cloudsync.js status()): configured but logged out, or an error
+ * that has lasted CLOUD_ERROR_GRACE_MS. No cloud configured = nothing (a
+ * friend without Supabase is not nagged). The error text never travels.
+ * @param {{cloud:{configured?:boolean, loggedIn?:boolean, error?:string|null, lastSync?:number|null}|null, now:number}} state
+ */
+function collectCloud(state) {
+  const c = isObject(state) && isObject(state.cloud) ? state.cloud : null;
+  if (!c || c.configured === false || !isTime(state.now)) return [];
+  const primary = { action: 'openSettings', arg: SETTINGS_SETUP };
+  if (c.loggedIn !== true) {
+    return [{ id: 'cloud:loggedout', kind: 'needs', source: 'cloud', title: 'Cloud sync is off: log in', key: 'hub.item.cloudLoggedOut', at: midnight(state.now), primary }];
+  }
+  if (!c.error) return [];
+  const since = isTime(c.lastSync) ? c.lastSync : 0;
+  if (since && state.now - since < CLOUD_ERROR_GRACE_MS) return [];
+  return [{ id: `cloud:error:${since || 'never'}`, kind: 'needs', source: 'cloud', title: 'Cloud sync keeps failing', key: 'hub.item.cloudError', at: since || midnight(state.now), primary }];
+}
+
+/**
+ * Google Calendar (gcal.js status()): a client was set up, the grant is gone.
+ * Not set up at all = nothing.
+ * @param {{google:{configured:boolean, connected:boolean}|null, now:number}} state
+ */
+function collectGoogle(state) {
+  const g = isObject(state) && isObject(state.google) ? state.google : null;
+  if (!g || g.configured !== true || g.connected !== false || !isTime(state.now)) return [];
+  return [{ id: 'google:disconnected', kind: 'needs', source: 'google', title: 'Google disconnected: reconnect', key: 'hub.item.googleOff', at: midnight(state.now), primary: { action: 'openSettings', arg: SETTINGS_SETUP } }];
+}
+
+/**
+ * Host mode is on in this HUD but not ready (hostsetup.js decideSetup():
+ * 'no-cloud' | 'login' | 'pair' | 'ready'). Host mode off = nothing.
+ * @param {{host:{on:boolean, state:string}|null, now:number}} state
+ */
+function collectHost(state) {
+  const h = isObject(state) && isObject(state.host) ? state.host : null;
+  if (!h || h.on !== true || !HOST_PENDING.has(h.state) || !isTime(state.now)) return [];
+  return [{ id: `host:setup:${h.state}`, kind: 'needs', source: 'host', title: 'Luna host on this PC needs setup', key: 'hub.item.hostSetup', at: midnight(state.now), local: true, primary: { action: 'openSettings', arg: SETTINGS_SETUP } }];
+}
+
+/**
+ * Open to-do items flagged `manual` (the [Mati] cards God Mode leaves to the
+ * user) across every project list (todo.js readStore()): one info count.
+ * Keyed by the count, so a new manual card brings a dismissed count back.
+ * @param {{store:Object<string, Array<{done?:boolean, manual?:boolean}>>|null, now:number}} state
+ */
+function collectTodo(state) {
+  const store = isObject(state) && isObject(state.store) ? state.store : null;
+  if (!store || !isTime(state.now)) return [];
+  const count = Object.values(store).reduce((n, items) => n + list(items).filter((i) => isObject(i) && i.manual === true && i.done !== true).length, 0);
+  if (!count) return [];
+  return [{ id: `todo:manual:${count}`, kind: 'info', source: 'todo', title: `${count} manual to-dos`, key: 'hub.item.todoManual', vars: { count }, at: midnight(state.now) }];
+}
+
+/**
+ * The newest weekly review (weeklyreview.js store load()), while it is fresh:
+ * a 'brief' that opens Life -> Week. A failed review is not "ready".
+ * @param {{weekly:{weeks:Object<string, {at:number, review:object|null}>}|null, now:number}} state
+ */
+function collectWeekly(state) {
+  const w = isObject(state) && isObject(state.weekly) && isObject(state.weekly.weeks) ? state.weekly.weeks : null;
+  if (!w || !isTime(state.now)) return [];
+  const week = Object.keys(w).filter((k) => WEEK_RE.test(k)).sort().pop();
+  const entry = week ? w[week] : null;
+  if (!isObject(entry) || !entry.review || !isTime(entry.at)) return [];
+  if (entry.at > state.now || state.now - entry.at > WEEKLY_READY_MS) return [];
+  return [{ id: `life:weekly:${week}`, kind: 'brief', source: 'life', title: 'Weekly review is ready', key: 'hub.item.weeklyReady', at: entry.at, primary: { action: 'openLife', arg: 'week' } }];
+}
+
+/**
+ * God Mode workers sitting on a permission prompt (orchestra view() packages
+ * stalled with 'needsApproval'), for every project's run. The primary action
+ * jumps to the worker's tab. Clears when the prompt is answered.
+ * @param {{views:Array<{projectId:string, view:{id:string, packages:object[]}|null}>, now:number}} state
+ */
+function collectApproval(state) {
+  if (!isObject(state) || !isTime(state.now)) return [];
+  const items = [];
+  for (const v of list(state.views)) {
+    const view = isObject(v) && isObject(v.view) ? v.view : null;
+    if (!view || !RUN_ID_RE.test(String(view.id))) continue;
+    for (const p of list(view.packages)) {
+      if (!isObject(p) || p.state !== 'stalled' || p.error !== 'needsApproval') continue;
+      if (typeof p.sessionId !== 'string' || !SESSION_ID_RE.test(p.sessionId) || !keyPart(p.id)) continue;
+      const name = typeof p.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 80) : String(p.id);
+      items.push({
+        id: `approval:${view.id}:${keyPart(p.id)}`,
+        kind: 'needs',
+        source: 'approval',
+        title: `${name} waits for an approval`,
+        key: 'hub.item.approval',
+        vars: { name },
+        at: isTime(p.startedAt) ? p.startedAt : midnight(state.now),
+        local: true,
+        primary: { action: 'openTab', arg: p.sessionId },
+      });
+    }
+  }
+  return items.slice(0, MAX_APPROVALS);
+}
+
 /** Source name -> collector. src/hubipc.js builds one state per name. */
 const COLLECTORS = {
   godmode: collectGodmode,
@@ -323,6 +461,13 @@ const COLLECTORS = {
   goals: collectGoals,
   bills: collectBills,
   update: collectUpdate,
+  mail: collectMail,
+  cloud: collectCloud,
+  google: collectGoogle,
+  host: collectHost,
+  todo: collectTodo,
+  weekly: collectWeekly,
+  approval: collectApproval,
 };
 
 /** Runs one collector; a throw or a non-array answer becomes []. */
@@ -345,6 +490,15 @@ module.exports = {
   collectGoals,
   collectBills,
   collectUpdate,
+  collectMail,
+  collectCloud,
+  collectGoogle,
+  collectHost,
+  collectTodo,
+  collectWeekly,
+  collectApproval,
+  CLOUD_ERROR_GRACE_MS,
+  WEEKLY_READY_MS,
   manualFromReport,
   runItems,
   lineKey,

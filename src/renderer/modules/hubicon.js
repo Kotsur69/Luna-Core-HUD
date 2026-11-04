@@ -24,6 +24,7 @@ import { onLangChange } from './bus.js';
 import { startHub, onHubView, hubLoaded } from './hubstate.js';
 import { toggleHub, openHub, onHubOpenChange } from './hubpanel.js';
 import { shouldAutoOpen, normalizeAutoOpen } from './hubrules.js';
+import { wireHubToasts } from './hubtoast.js';
 
 const PULSE_CLASS = 'is-bumped';
 /** Past the boot sequence, so the hint is not covered by it. */
@@ -136,6 +137,7 @@ export function mountHubChip(root) {
   onHubView(paint);
   onLangChange(() => label(shownNeeds));
   wireAutoOpen();
+  wireHubToasts();
   startHub();
   maybeBriefMovedHint(root);
 }

@@ -177,6 +177,8 @@ function registerMissionIpc({
   // Other PCs' last briefings (`news` snapshots), keyed like a local scan.
   const newsPeers = createNewsPeers({ cloud: cloudSnapshots });
   let lastPreview = null;
+  // When lastPreview was scanned: the notification hub keys its item by it.
+  let lastPreviewAt = 0;
   /** key -> name of the projects in the last ledger report, for mission:project-pin. */
   let knownProjects = new Map();
   const busy = new Set();
@@ -274,6 +276,7 @@ function registerMissionIpc({
       });
       if (!res.ok) return res;
       lastPreview = mail.parseMailPreview(res.answer);
+      lastPreviewAt = Date.now();
       return { ok: true, preview: lastPreview, costUsd: res.costUsd };
     })
   );
@@ -673,6 +676,9 @@ function registerMissionIpc({
     ledger: { report: (req) => getLedger().report(req), range: (req) => getLedger().range(req) },
     github,
     brief,
+    // The notification hub (src/hubipc.js): how many threads of the last scan
+    // still wait for Mati's call. Counts only - no sender or subject leaves.
+    mailNeeds: () => (lastPreview && Array.isArray(lastPreview.needsCall) ? { needsCall: lastPreview.needsCall.length, at: lastPreviewAt } : null),
   };
 }
 

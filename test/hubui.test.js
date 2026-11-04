@@ -72,7 +72,7 @@ test('primary actions are a fixed whitelist matching main', () => {
 
 test('every hub.* key is defined in pl and en', () => {
   const used = new Set();
-  for (const src of [PANEL, ICON, read('src/hubcollect.js'), read('src/hubpeers.js')]) {
+  for (const src of [PANEL, ICON, read('src/hubcollect.js'), read('src/hubpeers.js'), read('src/renderer/modules/hubtoast.js')]) {
     for (const m of src.matchAll(/'(hub\.[a-zA-Z.]+[a-zA-Z])'/g)) used.add(m[1]);
   }
   for (const m of HTML.matchAll(/data-i18n[a-z-]*="(hub\.[^"]+)"/g)) used.add(m[1]);

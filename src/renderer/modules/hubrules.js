@@ -33,3 +33,27 @@ export function shouldAutoOpen({ mode, unseen = 0, opened = false, sinceLaunchMs
   if (m === 'never') return false;
   return Number.isInteger(unseen) && unseen > 0;
 }
+
+/** A burst (a peer row bringing ten lines at once) shows this many toasts, not ten. */
+export const MAX_TOASTS_PER_VIEW = 3;
+/** The ids remembered per session; the oldest fall out first. */
+export const MAX_KNOWN_IDS = 2000;
+
+/**
+ * Which Needs-you items of a new view get an OS toast (N5): each id toasts
+ * at most once per session, only while the window is unfocused, only with
+ * both opt-ins on. `known` = null is the launch baseline: everything already
+ * there counts as known and nothing toasts (the auto-open covers it). An item
+ * that appears while the window is focused becomes known without a toast.
+ * @param {{known: Set<string>|null, items: Array<{id:string, kind:string}>, enabled?: boolean,
+ *   hubToasts?: boolean, focused?: boolean}} input
+ * @returns {{known: Set<string>, toast: object[]}}
+ */
+export function toastPlan({ known, items, enabled = false, hubToasts = true, focused = true }) {
+  const needs = (Array.isArray(items) ? items : []).filter((i) => i && i.kind === 'needs' && typeof i.id === 'string');
+  const fresh = known ? needs.filter((i) => !known.has(i.id)) : [];
+  const next = [...(known || []), ...needs.map((i) => i.id)];
+  const nextKnown = new Set(next.slice(-MAX_KNOWN_IDS));
+  const allowed = enabled === true && hubToasts !== false && focused !== true;
+  return { known: nextKnown, toast: allowed ? fresh.slice(0, MAX_TOASTS_PER_VIEW) : [] };
+}

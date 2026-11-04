@@ -2965,6 +2965,16 @@ function registerIpc() {
     runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
     update: () => updateState,
     snapshots: () => (cloud ? cloud.snapshots : null),
+    // N5 sources: the last mail scan, cloud / Google status, host mode on.
+    accounts: {
+      mail: () => mission.mailNeeds(),
+      cloud: () => (cloud ? cloud.status() : null),
+      google: () => gcal.status(),
+      hostOn: () => {
+        const control = require('./hostmain').hostControl();
+        return Boolean(control && control.status().on);
+      },
+    },
     onDone: () => configSync && configSync.soon(),
   });
   // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".

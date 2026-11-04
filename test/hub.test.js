@@ -169,6 +169,9 @@ test('hub:list over IPC returns sorted, deduped, done-filtered items', async () 
       checkin: () => ({ checkin: { today: '2026-11-02', entry: null } }),
       goals: () => { throw new Error('broken goals file'); },
       bills: () => ({ summary: null }),
+      // Hermetic: the real to-do and weekly files live in config/.
+      todo: () => ({}),
+      weekly: () => ({}),
     },
     autoStart: false,
   });
@@ -197,7 +200,7 @@ test('hub:done rejects bad ids and marks good ones', async () => {
     doneFile: () => doneFile,
     seenFile: () => null,
     now: () => clock,
-    readers: { checkin: () => ({ checkin: { today: '2026-11-02', entry: null } }), goals: () => ({}), bills: () => ({}) },
+    readers: { checkin: () => ({ checkin: { today: '2026-11-02', entry: null } }), goals: () => ({}), bills: () => ({}), todo: () => ({}), weekly: () => ({}) },
     autoStart: false,
   });
   for (const bad of [undefined, null, 42, '', 'x', 'a:../b', { id: 'a:b' }, `a:${'x'.repeat(200)}`]) {
@@ -244,7 +247,7 @@ test('hub reads every project run (one God Mode run per project) and scopes the 
       ],
       planWaits: () => [{ projectId: 'beta', wait: { state: 'waiting', resumeAt: at + 5 } }, { projectId: 'alpha', wait: null }],
     },
-    readers: { checkin: () => ({}), goals: () => ({}), bills: () => ({}) },
+    readers: { checkin: () => ({}), goals: () => ({}), bills: () => ({}), todo: () => ({}), weekly: () => ({}) },
     autoStart: false,
   });
   const res = await ipcMain.invoke('hub:list');

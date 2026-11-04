@@ -50,7 +50,10 @@ const ACTIONS = {
   openReport: (arg, item) => call('openOrchestraReport', arg, item.project),
   cancelPower: (arg, item) => call('cancelOrchestraPower', arg, item.project),
   cancelPlanWait: (_arg, item) => call('cancelOrchestraPlanWait', item.project),
+  openTab: (arg) => call('activateSession', arg),
   openLife: (arg) => openLifeTab(arg),
+  // Loaded on use: missionpanel.js pulls in the widget host, which imports this chain.
+  openMission: () => import('./missionpanel.js').then((m) => m.openMission()),
   openSettings: (arg) => openSettingsAt(arg),
   installUpdate: () => call('installUpdate'),
 };
@@ -114,6 +117,9 @@ function localized(key, vars, fallback) {
   const text = t(key, values);
   return text === key ? fallback || '' : text;
 }
+
+/** An item's title in the UI language (the drawer card, the OS toast). */
+export const itemTitle = (item) => localized(item.key, item.vars, item.title);
 
 async function runPrimary(item, btn) {
   const fn = Object.prototype.hasOwnProperty.call(ACTIONS, item.primary.action) ? ACTIONS[item.primary.action] : null;

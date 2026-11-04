@@ -60,6 +60,11 @@ function close() {
   returnFocus = null;
 }
 
+/** Opens the panel from elsewhere (the notification hub's "Open Mission Control"). */
+export function openMission() {
+  open();
+}
+
 /** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
 export function mountMissionChip(root) {
   const btn = root.querySelector('#mission-open');

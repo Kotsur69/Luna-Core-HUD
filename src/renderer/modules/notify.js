@@ -67,14 +67,25 @@ export function nextContextNotifyState(fired, pct) {
   return { fired: true, shouldFire: true };
 }
 
-/** Silent OS toast; clicking it brings the HUD forward and jumps to the tab. */
-function fireToast(title, body, sessionId) {
+/** The Settings opt-in (notificationsEnabled): other toast sources (hubtoast.js) honour it too. */
+export const isNotifyEnabled = () => notifyEnabled;
+
+/**
+ * Silent OS toast; clicking it brings the HUD forward, then runs onClick.
+ * Callers check isNotifyEnabled() first - this only shows it.
+ */
+export function fireNotification(title, body, onClick) {
   if (typeof Notification === 'undefined') return;
   const toast = new Notification(title, { body, silent: true });
   toast.onclick = () => {
     window.lunacore.focusWindow();
-    window.lunacore.activateSession(sessionId);
+    if (typeof onClick === 'function') onClick();
   };
+}
+
+/** Silent OS toast; clicking it brings the HUD forward and jumps to the tab. */
+function fireToast(title, body, sessionId) {
+  fireNotification(title, body, () => window.lunacore.activateSession(sessionId));
 }
 
 /**
