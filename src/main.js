@@ -190,6 +190,7 @@ const LUNA_SKILL_CACHE_MS = 30000;
 const { loadEditorConfig, resolveInRoot, buildEditorInvocation } = require('./editor');
 // Usage limit counter (5h + week) - GET read from the CLI's OAuth endpoint.
 const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
+const { createAccountUsage } = require('./usageaccounts');
 // REMOTE_HOST_PLAN U1: the same read as a `usage` snapshot for the phone.
 const { usageSnapshot } = require('./usagesnapshot');
 const { createSnapshotPuts } = require('./snapshotputs');
@@ -2011,6 +2012,20 @@ function startUsageWatcher() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('usage:update', usage);
     }
+  });
+  // Phase 2: one row per Claude account. The tokens stay in this process;
+  // the payload's `accounts` view carries labels and numbers only. A real
+  // reset from the meter corrects the failover cooldown and God Mode's
+  // memory; a window back under 90 % ends the cooldown on its own.
+  usageWatcher.accountUsage = createAccountUsage({
+    credentials: () => claudeAccounts.usageCredentials(),
+    accounts: () => claudeAccounts.list().accounts,
+    onLimit: (id, until) => {
+      claudeAccounts.setLimit(id, until);
+      orchestraRuns.setAccountLimit(id, until);
+    },
+    onClear: (id) => claudeAccounts.clearLimit(id),
+    log: (line) => console.info(`[usage-accounts] ${line}`),
   });
   usageWatcher.start();
   usageSnapshotTimer = setInterval(putUsageSnapshot, USAGE_SNAPSHOT_EVERY_MS);
