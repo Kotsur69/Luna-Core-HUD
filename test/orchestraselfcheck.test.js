@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
+const { removeDir } = require('../test-support/under-load');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
@@ -56,7 +57,7 @@ function commit(dir, files, message) {
   return git(dir, 'rev-parse', '--short=7', 'HEAD');
 }
 
-const rm = (dir) => fs.rmSync(dir, { recursive: true, force: true });
+const rm = (dir) => removeDir(dir);
 
 // ---- runSelfCheck ---------------------------------------------------------------
 
@@ -78,7 +79,7 @@ test('runSelfCheck: a red check command fails tests and keeps the last 40 output
     assert.equal(tail[0], 'line 20');
     assert.equal(tail[39], 'line 59');
   } finally {
-    rm(dir);
+    await rm(dir);
   }
 });
 
@@ -109,7 +110,7 @@ test('runSelfCheck: node --check catches a syntax error in a changed file, skips
     assert.equal(fixed.syntax, 'ok');
     assert.equal(fixed.tail, '');
   } finally {
-    rm(dir);
+    await rm(dir);
   }
 });
 
@@ -148,7 +149,7 @@ test('runSelfCheck: manual actions - migrations, edge functions, env vars, commi
     assert.equal(notes[0].what, 'The migrations are not applied yet - apply them live.');
     assert.equal(notes[0].from, sha);
   } finally {
-    rm(dir);
+    await rm(dir);
   }
 });
 
@@ -168,7 +169,7 @@ test('runSelfCheck: smoke is skipped (not failed) in a repo without electron / l
     assert.equal((await sc.runSmoke(dir, { execImpl })).state, 'skipped');
     assert.deepEqual(calls, []);
   } finally {
-    rm(dir);
+    await rm(dir);
   }
 });
 
@@ -199,7 +200,7 @@ test('runSmoke: launches the app with --luna-probe, time-boxed; error lines or a
     const exit = await sc.runSmoke(dir, { execImpl: answer(Object.assign(new Error('x'), { code: 1 }), 'quiet') });
     assert.equal(exit.state, 'failed');
   } finally {
-    rm(dir);
+    await rm(dir);
   }
 });
 

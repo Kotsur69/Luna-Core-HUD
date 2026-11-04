@@ -14,6 +14,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { removeDir, patientGitExecFile } = require('../test-support/under-load');
+
+// syncCheckout and iterationDiff cap git at 15-30 s and have no runner seam;
+// under load a real git here took longer. Patched before the modules load.
+patientGitExecFile(require('child_process'));
 
 const { syncCheckout, createAwake } = require('../src/lunasworkWiring');
 
@@ -50,7 +55,7 @@ function setupRepos() {
     git(other, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
     return git(other, 'rev-parse', 'HEAD');
   };
-  return { dir, checkout, pushFromElsewhere, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { dir, checkout, pushFromElsewhere, done: () => removeDir(dir) };
 }
 
 test('syncCheckout fast-forwards the checkout to the merged origin branch', async () => {
@@ -62,7 +67,7 @@ test('syncCheckout fast-forwards the checkout to the merged origin branch', asyn
     assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), merged);
     assert.equal(read(path.join(r.checkout, 'app.js')), 'v2\n');
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -75,7 +80,7 @@ test("syncCheckout keeps the Critic's uncommitted design/ edits that the merge d
     assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), merged);
     assert.match(read(path.join(r.checkout, 'design', 'PLAYTEST_LOG.md')), /Iteration 1/);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -92,7 +97,7 @@ test('syncCheckout never merges over local work: a diverged checkout is reported
     assert.match(res.detail, /no fast-forward/);
     assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), before);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -105,7 +110,7 @@ test('syncCheckout refuses a detached HEAD and a folder that is not a repo', asy
     fs.mkdirSync(plain);
     assert.equal((await syncCheckout(plain)).ok, false);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -171,7 +176,7 @@ test('iterationDiff: from the previous checkpoint tag when there is one, else th
     assert.ok(!(await iterationDiff(r.checkout, 'lwtest1', 2)).includes('CODEMAPS'));
     assert.equal(await iterationDiff(path.join(r.dir, 'nowhere'), 'lwtest1', 2), '');
   } finally {
-    r.done();
+    await r.done();
   }
 });
 

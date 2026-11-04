@@ -14,6 +14,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { removeDir, patientGit } = require('../test-support/under-load');
 
 const {
   parseCommitLog,
@@ -46,7 +47,7 @@ function gitRepo() {
     git('add', '-A');
     git('commit', '-q', '-m', subject);
   };
-  return { dir, git, commit, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { dir, git, commit, done: () => removeDir(dir) };
 }
 
 // ---- reading the commits ----------------------------------------------------------
@@ -55,23 +56,23 @@ test('readCommits: every commit since the pause, oldest first, with its diff sta
   const r = gitRepo();
   try {
     r.commit('src/app.js', 'one\n', 'Iteration 1 by Luna');
-    const base = await handbackHead(r.dir);
+    const base = await handbackHead(r.dir, patientGit);
     assert.match(base, /^[0-9a-f]{40}$/);
 
     r.commit('src/Header.tsx', 'a\nb\nc\n', 'Fix the header size');
     r.commit('src/export/pdf.ts', 'x\n', 'Add PDF export');
-    const res = await readCommits(r.dir, base);
-    assert.equal(res.ok, true);
+    const res = await readCommits(r.dir, base, patientGit);
+    assert.equal(res.ok, true, res.error);
     assert.equal(res.more, 0);
     assert.deepEqual(res.commits.map((c) => c.subject), ['Fix the header size', 'Add PDF export']);
     assert.deepEqual(res.commits[0].files, [{ path: 'src/Header.tsx', added: 3, deleted: 0 }]);
     assert.equal(res.commits[1].sha, r.git('rev-parse', 'HEAD'));
 
-    assert.deepEqual((await readCommits(r.dir, await handbackHead(r.dir))).commits, [], 'nothing since the pause');
-    assert.deepEqual(await readCommits(r.dir, 'HEAD~1'), { ok: false, error: 'no base commit' }, 'only a sha is ever passed to git');
-    assert.equal((await readCommits(r.dir, 'f'.repeat(40))).ok, false, 'an unknown base is a plain failure');
+    assert.deepEqual((await readCommits(r.dir, await handbackHead(r.dir, patientGit), patientGit)).commits, [], 'nothing since the pause');
+    assert.deepEqual(await readCommits(r.dir, 'HEAD~1', patientGit), { ok: false, error: 'no base commit' }, 'only a sha is ever passed to git');
+    assert.equal((await readCommits(r.dir, 'f'.repeat(40), patientGit)).ok, false, 'an unknown base is a plain failure');
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -80,7 +81,7 @@ test('handbackHead is null outside a repo', async () => {
   try {
     assert.equal(await handbackHead(dir), null);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    await removeDir(dir);
   }
 });
 
