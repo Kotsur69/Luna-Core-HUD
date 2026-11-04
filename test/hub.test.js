@@ -15,6 +15,7 @@ const os = require('os');
 const path = require('path');
 
 const hub = require('../src/hub.js');
+const hubdone = require('../src/hubdone.js');
 const { registerHubIpc, readRunReports } = require('../src/hubipc.js');
 
 const NOW = 1_800_000_000_000;
@@ -107,16 +108,16 @@ test('done store: survives a broken file, writes, prunes and ignores bad ids', (
   const file = tmpFile();
   fs.writeFileSync(file, '{not json');
   let at = NOW;
-  const store = hub.createDoneStore({ file: () => file, now: () => at });
+  const store = hubdone.createDoneStore({ file: () => file, now: () => at });
   assert.equal(store.load().size, 0);
   assert.equal(store.mark('bad id'), false);
   assert.equal(store.mark('a:one'), true);
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.deepEqual(saved, { v: 1, done: { 'a:one': NOW } });
+  assert.deepEqual(saved, { v: 2, done: { 'a:one': NOW } });
   // A fresh store reading after 31 days prunes it.
-  at = NOW + hub.DONE_KEEP_MS + 1;
-  assert.equal(hub.createDoneStore({ file: () => file, now: () => at }).load().size, 0);
-  assert.equal(hub.normalizeDone({ done: { 'a:x': NOW, 'Bad': NOW, 'a:y': 'x' } }, NOW).size, 1);
+  at = NOW + hubdone.DONE_KEEP_MS + 1;
+  assert.equal(hubdone.createDoneStore({ file: () => file, now: () => at }).load().size, 0);
+  assert.equal(hubdone.normalizeDone({ done: { 'a:x': NOW, 'Bad': NOW, 'a:y': 'x' } }, NOW).size, 1);
 });
 
 test('createHub collects, marks done and emits hub:changed only on a change', () => {
@@ -127,7 +128,7 @@ test('createHub collects, marks done and emits hub:changed only on a change', ()
     life: { collect: () => [item({ id: 'life:checkin:2026-11-02', kind: 'needs' })], read: () => ({}), slow: true },
     bad: { collect: () => [], read: () => { if (broken) throw new Error('boom'); return {}; } },
   };
-  const h = hub.createHub({ sources, doneStore: hub.createDoneStore({ file: () => null, now: () => NOW }), now: () => NOW });
+  const h = hub.createHub({ sources, doneStore: hubdone.createDoneStore({ file: () => null, now: () => NOW }), now: () => NOW });
   const seen = [];
   h.on('hub:changed', (v) => seen.push(v));
   let view = h.refresh(true);
@@ -163,6 +164,7 @@ test('hub:list over IPC returns sorted, deduped, done-filtered items', async () 
     orchestra: { view: () => ({ power: { sleep: null, shutdown: { phase: 'countdown', at: Date.now() + 60000 } } }), planWait: () => null },
     update: () => ({ state: 'available', info: { version: '0.21.0' } }),
     doneFile: () => doneFile,
+    seenFile: () => null,
     readers: {
       checkin: () => ({ checkin: { today: '2026-11-02', entry: null } }),
       goals: () => { throw new Error('broken goals file'); },
@@ -193,6 +195,7 @@ test('hub:done rejects bad ids and marks good ones', async () => {
     ipcMain,
     send: () => {},
     doneFile: () => doneFile,
+    seenFile: () => null,
     now: () => clock,
     readers: { checkin: () => ({ checkin: { today: '2026-11-02', entry: null } }), goals: () => ({}), bills: () => ({}) },
     autoStart: false,
@@ -223,4 +226,30 @@ test('readRunReports: missing dir, filters names and the 14-day window', () => {
   const old = new Date(Date.now() - 20 * 24 * 3600 * 1000);
   fs.utimesSync(path.join(dir, 'p3.md'), old, old);
   assert.deepEqual(readRunReports(dir, Date.now()).map((r) => r.id), ['p1']);
+});
+
+test('hub reads every project run (one God Mode run per project) and scopes the action', async () => {
+  const ipcMain = fakeIpc();
+  const at = Date.now() + 60000;
+  registerHubIpc({
+    ipcMain,
+    send: () => {},
+    doneFile: () => null,
+    seenFile: () => null,
+    orchestra: {
+      views: () => [
+        { projectId: 'alpha', view: { power: { sleep: { phase: 'countdown', at } } } },
+        { projectId: 'beta', view: { power: null } },
+        { projectId: 'bad id!', view: { power: { shutdown: { phase: 'countdown', at: at + 1 } } } },
+      ],
+      planWaits: () => [{ projectId: 'beta', wait: { state: 'waiting', resumeAt: at + 5 } }, { projectId: 'alpha', wait: null }],
+    },
+    readers: { checkin: () => ({}), goals: () => ({}), bills: () => ({}) },
+    autoStart: false,
+  });
+  const res = await ipcMain.invoke('hub:list');
+  const byId = Object.fromEntries(res.items.map((i) => [i.id, i]));
+  assert.equal(byId[`power:sleep:${at}`].project, 'alpha');
+  assert.equal(byId[`power:shutdown:${at + 1}`].project, undefined, 'an id outside the charset falls back to the active run');
+  assert.equal(byId[`planwait:${at + 5}`].project, 'beta');
 });

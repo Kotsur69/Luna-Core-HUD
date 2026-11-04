@@ -487,7 +487,9 @@ contextBridge.exposeInMainWorld('lunacore', {
   hubList: () => ipcRenderer.invoke('hub:list'),
   /** Marks one item done. Promise<{ok} | {ok:false, reason}>. */
   hubDone: (id) => ipcRenderer.invoke('hub:done', typeof id === 'string' ? id : ''),
-  /** Pushed when the list changes: ({items, done, needs}); returns an unsubscribe. */
+  /** The drawer is showing: main marks its open Needs-you items seen. No payload. Promise<{ok, unseen}>. */
+  hubSeen: () => ipcRenderer.invoke('hub:seen'),
+  /** Pushed when the list changes: ({items, done, needs, unseen}); returns an unsubscribe. */
   onHubChanged: (cb) => {
     if (typeof cb !== 'function') return () => {};
     const listener = (_e, view) => cb(view);

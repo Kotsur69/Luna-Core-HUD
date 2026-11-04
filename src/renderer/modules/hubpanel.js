@@ -23,7 +23,7 @@
 import { t, machineLabel } from './util.js';
 import { onLangChange } from './bus.js';
 import { closeWithExit, cancelExit } from './motion.js';
-import { onHubView, markHubDone } from './hubstate.js';
+import { onHubView, markHubDone, markHubSeen } from './hubstate.js';
 import { showBrief } from './missionbriefview.js';
 import { openLifeTab } from './lifepanel.js';
 import { openSettingsAt } from './termcustom.js';
@@ -41,11 +41,15 @@ const DAY = 24 * HOUR;
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
 
-/** Whitelisted action name -> what the primary button does. */
+/**
+ * Whitelisted action name -> what the primary button does: (arg, item).
+ * item.project scopes an orchestra call to that project's run (one God Mode
+ * run per project); without it main uses the active tab's run.
+ */
 const ACTIONS = {
-  openReport: (arg) => call('openOrchestraReport', arg),
-  cancelPower: (arg) => call('cancelOrchestraPower', arg),
-  cancelPlanWait: () => call('cancelOrchestraPlanWait'),
+  openReport: (arg, item) => call('openOrchestraReport', arg, item.project),
+  cancelPower: (arg, item) => call('cancelOrchestraPower', arg, item.project),
+  cancelPlanWait: (_arg, item) => call('cancelOrchestraPlanWait', item.project),
   openLife: (arg) => openLifeTab(arg),
   openSettings: (arg) => openSettingsAt(arg),
   installUpdate: () => call('installUpdate'),
@@ -116,7 +120,7 @@ async function runPrimary(item, btn) {
   if (!fn) return;
   btn.disabled = true;
   try {
-    await fn(item.primary.arg);
+    await fn(item.primary.arg, item);
   } finally {
     btn.disabled = false;
   }
@@ -327,7 +331,10 @@ function build() {
   onHubView((view, failed) => {
     lastView = view;
     lastFailed = failed;
-    if (isOpen) render();
+    if (!isOpen) return;
+    render();
+    // What the open drawer shows counts as seen (the launch auto-open rule).
+    markHubSeen();
   });
 }
 
@@ -343,6 +350,7 @@ export function openHub() {
   returnFocus = document.activeElement;
   fitWidth();
   render();
+  markHubSeen();
   showBrief(briefRoot);
   drawer.hidden = false;
   // Not a modal: under a palette or Settings overlay it opens without taking

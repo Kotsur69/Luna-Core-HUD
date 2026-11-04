@@ -138,9 +138,10 @@ const FIRST_SYNC_MS = 5000;
  * The real thing for main.js: a sync every minute, soon() after a local
  * change, and one soon after the cloud brings another PC's changes.
  * onChanged(names) gets the providers whose local data changed.
- * @param {{cloud: object, onChanged: (names: string[]) => void}} opts
+ * extraProviders: providers built elsewhere (the hub's done marks, src/hubdone.js).
+ * @param {{cloud: object, onChanged: (names: string[]) => void, extraProviders?: object[]}} opts
  */
-function startConfigSync({ cloud, onChanged }) {
+function startConfigSync({ cloud, onChanged, extraProviders = [] }) {
   const paths = require('./paths');
   const { projectFiles } = require('./projects');
   const { createProjectsProvider } = require('./projectsync');
@@ -155,6 +156,7 @@ function startConfigSync({ cloud, onChanged }) {
       createNewsProvider(paths.local('mission-news.local.json')),
       createMissionProjectsProvider(paths.local('mission-projects.local.json')),
       createHostDefaultProvider(paths.local('host-default.local.json')),
+      ...(Array.isArray(extraProviders) ? extraProviders : []),
     ],
     metaFile: paths.local('config-sync.local.json'),
     ...cloud.hooks('config'),

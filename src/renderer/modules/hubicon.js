@@ -21,8 +21,9 @@
 
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
-import { startHub, onHubView } from './hubstate.js';
+import { startHub, onHubView, hubLoaded } from './hubstate.js';
 import { toggleHub, openHub, onHubOpenChange } from './hubpanel.js';
+import { shouldAutoOpen, normalizeAutoOpen } from './hubrules.js';
 
 const PULSE_CLASS = 'is-bumped';
 /** Past the boot sequence, so the hint is not covered by it. */
@@ -96,6 +97,34 @@ async function maybeBriefMovedHint(root) {
   }, HINT_DELAY_MS);
 }
 
+/**
+ * Launch auto-open (hubrules.js shouldAutoOpen): the drawer opens once, by
+ * itself, when a view in the first AUTO_OPEN_WINDOW_MS has unseen Needs-you
+ * items (or always / never, per the hubAutoOpen setting). The listener stays
+ * subscribed but goes inert after its one decision.
+ */
+function wireAutoOpen() {
+  const launchedAt = Date.now();
+  let opened = false;
+  let mode = null;
+  let latest = null;
+  function check() {
+    if (opened || mode === null || !latest || !hubLoaded()) return;
+    if (!shouldAutoOpen({ mode, unseen: latest.unseen, opened, sinceLaunchMs: Date.now() - launchedAt })) return;
+    opened = true;
+    openHub();
+  }
+  onHubView((view) => {
+    latest = view;
+    check();
+  });
+  // The prefs answer may land after the first view: it re-checks the latest one.
+  call('getUiPrefs').then((prefs) => {
+    mode = normalizeAutoOpen(prefs && prefs.hubAutoOpen);
+    check();
+  });
+}
+
 /** Called once by the `terminal` widget's mount() - see modules/terminal.js. */
 export function mountHubChip(root) {
   chipEl = root.querySelector('#hub-open');
@@ -106,6 +135,7 @@ export function mountHubChip(root) {
   onHubOpenChange((open) => chipEl.setAttribute('aria-expanded', String(open)));
   onHubView(paint);
   onLangChange(() => label(shownNeeds));
+  wireAutoOpen();
   startHub();
   maybeBriefMovedHint(root);
 }

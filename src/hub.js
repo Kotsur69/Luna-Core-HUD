@@ -16,14 +16,14 @@
 // sources every tick, file-backed ones at most every 60 s. It emits
 // 'hub:changed' with the new view only when the list really changed.
 //
-// Done state lives in <config>/hub-done.local.json: {v:1, done:{id: epochMs}},
-// pruned after 30 days and capped. Synced across PCs in N4 (hubdone.js).
+// Done state (synced across PCs) and the seen state (which Needs-you items
+// this PC already showed, for the launch auto-open) live in src/hubdone.js;
+// createHub() gets both stores injected. The view carries `unseen`: open
+// Needs-you items this PC has not shown yet.
 // ============================================================================
 
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const { EventEmitter } = require('events');
 const { runCollector } = require('./hubcollect');
 
@@ -54,19 +54,16 @@ const MAX_ITEMS = 200;
 const MAX_DONE_SHOWN = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RECENT_MS = 7 * DAY_MS;
-const DONE_KEEP_MS = 30 * DAY_MS;
-const MAX_DONE_KEPT = 500;
 const TICK_MS = 5000;
 const SLOW_MS = 60 * 1000;
-const DONE_FILE = 'hub-done.local.json';
-const MAX_DONE_FILE_BYTES = 512 * 1024;
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const isTime = (v) => Number.isSafeInteger(v) && v > 0;
 // Control, line-separator, bidi-override and zero-width characters: model-written
 // report lines must not spoof how a title reads.
-// eslint-disable-next-line no-control-regex
-const UNSAFE_CHARS_RE = /[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]+/g;
+// Every control / format (zero-width, bidi, soft hyphen, tags) / line or
+// paragraph separator character.
+const UNSAFE_CHARS_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu;
 /** Absolute paths (Windows drive, UNC share, POSIX home, ~/) and token-like strings never reach the renderer. */
 const PATH_RES = [
   /\b[A-Za-z]:[\\/][^\s'"`]*/g,
@@ -122,6 +119,8 @@ function cleanItem(raw) {
   const primary = cleanPrimary(raw.primary);
   if (primary) item.primary = primary;
   if (raw.local === true) item.local = true;
+  // The God Mode project a local action is scoped to; main validates it again on the call.
+  if (item.local && typeof raw.project === 'string' && ARG_RE.test(raw.project)) item.project = raw.project;
   if (isTime(raw.expiresAt)) item.expiresAt = raw.expiresAt;
   return item;
 }
@@ -141,7 +140,11 @@ function mergeItems(lists, { done = new Map(), now }) {
     const item = cleanItem(raw);
     if (!item || (item.expiresAt && item.expiresAt <= now)) continue;
     const prev = byId.get(item.id);
-    if (!prev || item.at > prev.at) byId.set(item.id, item);
+    // A run shares its ids across PCs (so a done mark syncs): this PC's own
+    // item always beats another PC's copy, whatever `at` the row claims.
+    const localWins = prev && !prev.machine && item.machine;
+    const remoteLoses = prev && prev.machine && !item.machine;
+    if (!prev || remoteLoses || (!localWins && item.at > prev.at)) byId.set(item.id, item);
   }
   const all = [...byId.values()];
   const open = all.filter((i) => !doneMap.has(i.id)).sort(byRank).slice(0, MAX_ITEMS);
@@ -156,74 +159,27 @@ function mergeItems(lists, { done = new Map(), now }) {
 /** Badge number: open 'needs' items. */
 const needsCount = (items) => (Array.isArray(items) ? items.filter((i) => i.kind === 'needs').length : 0);
 
-/** {id: epochMs} from a parsed file: valid ids only, pruned, newest MAX_DONE_KEPT. */
-function normalizeDone(raw, now) {
-  const src = isObject(raw) && isObject(raw.done) ? raw.done : {};
-  const entries = Object.entries(src)
-    .filter(([id, at]) => isHubId(id) && isTime(at) && at >= now - DONE_KEEP_MS)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, MAX_DONE_KEPT);
-  return new Map(entries);
-}
+/** Open Needs-you items this PC has not shown yet (`seen` = id -> epochMs). */
+const unseenCount = (items, seen) => (Array.isArray(items) ? items.filter((i) => i.kind === 'needs' && !seen.has(i.id)).length : 0);
 
-/**
- * Done state on disk. A missing or broken file reads as "nothing done"; a
- * failed write keeps the in-memory state and logs.
- * @param {{file:()=>string|null, now?:()=>number, log?:Function}} deps
- */
-function createDoneStore({ file, now = Date.now, log = () => {} }) {
-  let cache = null;
-
-  function load() {
-    if (cache) return cache;
-    const f = file();
-    try {
-      // A runaway file reads as "nothing done" rather than stalling main on parse.
-      const ok = f && fs.statSync(f).size <= MAX_DONE_FILE_BYTES;
-      cache = normalizeDone(ok ? JSON.parse(fs.readFileSync(f, 'utf8')) : null, now());
-    } catch {
-      cache = new Map();
-    }
-    return cache;
-  }
-
-  function mark(id) {
-    if (!isHubId(id)) return false;
-    const current = load();
-    if (current.has(id)) return true;
-    const next = normalizeDone({ done: { ...Object.fromEntries(current), [id]: now() } }, now());
-    cache = next;
-    const f = file();
-    if (!f) return true;
-    try {
-      fs.mkdirSync(path.dirname(f), { recursive: true });
-      // Write-then-rename: a crash mid-write must not resurface every done item.
-      const tmp = `${f}.tmp`;
-      fs.writeFileSync(tmp, `${JSON.stringify({ v: 1, done: Object.fromEntries(next) }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-      fs.renameSync(tmp, f);
-    } catch (err) {
-      log(`[hub] could not save ${DONE_FILE}: ${err && err.message}`);
-    }
-    return true;
-  }
-
-  return { load, mark };
-}
+/** A store stand-in that remembers nothing (tests, or no seen store given). */
+const NO_MARKS = { load: () => new Map(), markAll: () => 0 };
 
 /**
  * @param {{
  *   sources: Object<string, {collect:Function, read:() => object, slow?:boolean}>,
  *   doneStore: {load:() => Map<string,number>, mark:(id:string) => boolean},
+ *   seenStore?: {load:() => Map<string,number>, markAll:(ids:string[]) => number},
  *   now?: () => number, setTimer?: Function, clearTimer?: Function,
  *   tickMs?: number, slowMs?: number, log?: Function,
  * }} deps
  *   sources: name -> collector + a reader of its state. A slow source (files)
  *   is re-read at most every slowMs; a reader that throws gives [].
  */
-function createHub({ sources, doneStore, now = Date.now, setTimer = setInterval, clearTimer = clearInterval, tickMs = TICK_MS, slowMs = SLOW_MS, log = () => {} }) {
+function createHub({ sources, doneStore, seenStore = NO_MARKS, now = Date.now, setTimer = setInterval, clearTimer = clearInterval, tickMs = TICK_MS, slowMs = SLOW_MS, log = () => {} }) {
   const events = new EventEmitter();
   const cache = new Map(); // source name -> {at, items}
-  let view = { items: [], done: [], needs: 0 };
+  let view = { items: [], done: [], needs: 0, unseen: 0 };
   let signature = '';
   let timer = null;
 
@@ -245,7 +201,7 @@ function createHub({ sources, doneStore, now = Date.now, setTimer = setInterval,
   function refresh(force = false) {
     const lists = Object.entries(sources || {}).map(([name, src]) => collectOne(name, src, force));
     const merged = mergeItems(lists, { done: doneStore.load(), now: now() });
-    const next = { ...merged, needs: needsCount(merged.items) };
+    const next = { ...merged, needs: needsCount(merged.items), unseen: unseenCount(merged.items, seenStore.load()) };
     const sig = JSON.stringify(next);
     view = next;
     if (sig !== signature) {
@@ -267,6 +223,16 @@ function createHub({ sources, doneStore, now = Date.now, setTimer = setInterval,
     return { ok: true };
   }
 
+  /**
+   * The drawer is showing: every open Needs-you item counts as seen. Takes no
+   * ids from the renderer - only what the hub itself lists can be marked.
+   */
+  function markSeen() {
+    const ids = view.items.filter((i) => i.kind === 'needs').map((i) => i.id);
+    if (seenStore.markAll(ids) > 0) refresh(false);
+    return { ok: true, unseen: view.unseen };
+  }
+
   function start() {
     if (timer) return;
     refresh(true);
@@ -283,6 +249,7 @@ function createHub({ sources, doneStore, now = Date.now, setTimer = setInterval,
     list: () => view,
     refresh,
     markDone,
+    markSeen,
     start,
     stop,
     on: (event, fn) => events.on(event, fn),
@@ -292,15 +259,12 @@ function createHub({ sources, doneStore, now = Date.now, setTimer = setInterval,
 
 module.exports = {
   createHub,
-  createDoneStore,
   mergeItems,
   cleanItem,
   needsCount,
-  normalizeDone,
+  unseenCount,
   isHubId,
   ID_RE,
   ACTIONS,
-  DONE_FILE,
   RECENT_MS,
-  DONE_KEEP_MS,
 };

@@ -229,6 +229,9 @@ let todoSync = null;
 // The project list (and later other settings) shared through the cloud.
 const { startConfigSync } = require('./configsync');
 let configSync = null;
+// The notification hub (src/hubipc.js): set in registerIpc(), its done
+// provider joins the config sync.
+let hubApi = null;
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
@@ -2950,7 +2953,20 @@ function registerIpc() {
     gmail: () => reportMail.sender.status(),
   });
   // Notification hub (face icon + right drawer): docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
-  require('./hubipc').registerHubIpc({ ipcMain, send, orchestra, runsDir: () => path.join(userDir(), RUN_REPORT_DIR), update: () => updateState });
+  // Other PCs' runs come from their `godmode` rows; done marks sync as config units.
+  hubApi = require('./hubipc').registerHubIpc({
+    ipcMain,
+    send,
+    // One God Mode run per project: the hub reads every run's countdowns and plan wait.
+    orchestra: {
+      views: () => orchestraRuns.views(),
+      planWaits: () => orchestraRuns.entries().map(({ projectId, controller }) => ({ projectId, wait: controller.planWait() })),
+    },
+    runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+    update: () => updateState,
+    snapshots: () => (cloud ? cloud.snapshots : null),
+    onDone: () => configSync && configSync.soon(),
+  });
   // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".
   weeklyReview = setupWeeklyReview({
     ipcMain,
@@ -3593,6 +3609,7 @@ app.whenReady().then(() => {
   configSync = startConfigSync({
     cloud,
     onChanged: (names) => names.includes('projects') && reloadProjects(),
+    extraProviders: hubApi ? [hubApi.doneProvider] : [],
   });
   // A --luna-probe instance shares userData with the live LunaCore - often the
   // very one running the God Mode self-check that started it. Resuming the

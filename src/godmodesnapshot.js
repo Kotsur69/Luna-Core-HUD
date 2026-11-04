@@ -22,6 +22,14 @@
 // (src/inbox.js unions them across machines). A row written before any of
 // these reads as empty lists.
 //
+// v2 (docs/NOTIFICATION_HUB_PLAN.md N4): each run written since also carries
+// `needsYou` and `manualActionLines` - the report's Needs-you and Manual
+// actions lines for the notification hub on the other PCs, at most
+// HUB_MAX_LINES each, HUB_MAX_LINE chars, paths scrubbed, control characters
+// out (reportLines()). A run without them (a v1 row, or an older run carried
+// over in this PC's history) reads with counts only: the hub then says
+// "details in your email". Readers take v1 and v2 rows alike.
+//
 // `decisions` (optional): the Luna's Work decisions of the PC's current run
 // that wait for Mati (src/lunasworkDecisions.js publicDecision). The phone
 // answers them through the `todos` cloud scope, never through this row.
@@ -39,7 +47,12 @@ const { needsFromReport } = require('./godmodeneeds');
 const { publicDecisions } = require('./lunasworkDecisions');
 const { publicFeedback } = require('./lunasworkFeedback');
 
-const VERSION = 1;
+const VERSION = 2;
+/** Row versions a reader accepts: v1 rows (no hub lines) still parse. */
+const READ_VERSIONS = new Set([1, 2]);
+const isKnownVersion = (v) => READ_VERSIONS.has(v);
+const HUB_MAX_LINES = 10;
+const HUB_MAX_LINE = 200;
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
 const SHA_RE = /^[0-9a-f]{7}$/;
 const PR_PREFIX = 'https://github.com/';
@@ -290,6 +303,60 @@ function tabsEntry(sessions) {
 /** Up to MAX_LINES cleaned, non-empty lines. */
 const lines = (v) => (Array.isArray(v) ? v : []).slice(0, MAX_LINES).map((l) => clean(l, MAX_LINE)).filter(Boolean);
 
+/**
+ * One hub line (v2 `needsYou` / `manualActionLines`): paths scrubbed (against
+ * `roots`, then any absolute path down to its last segment), backticks and
+ * control / bidi / zero-width characters out, whitespace squeezed, capped.
+ * Idempotent, so a reader re-cleaning a writer's line keeps it as it was.
+ */
+function hubLine(text, roots = []) {
+  if (typeof text !== 'string') return '';
+  return scrubPaths(text.slice(0, 4 * HUB_MAX_LINE).replace(/`/g, ''), roots)
+    // Control, format (zero-width, bidi, soft hyphen, tags) and separator characters.
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, HUB_MAX_LINE)
+    .trim();
+}
+
+/** Up to HUB_MAX_LINES unique, non-empty hub lines. */
+const hubLines = (v, roots = []) =>
+  [...new Set((Array.isArray(v) ? v : []).slice(0, 4 * HUB_MAX_LINES).map((l) => hubLine(l, roots)).filter(Boolean))].slice(0, HUB_MAX_LINES);
+
+/** The '## Manual actions' bullet lines of a run report ([] for 'None.' or no section). */
+function manualFromReport(text) {
+  const all = String(text || '').slice(0, 60000).split(/\r?\n/);
+  const start = all.indexOf('## Manual actions');
+  if (start < 0) return [];
+  const out = [];
+  for (const line of all.slice(start + 1)) {
+    if (line.startsWith('## ')) break;
+    if (line.startsWith('- ')) out.push(line.slice(2));
+  }
+  return out;
+}
+
+/** The Needs-you line that only points at the Manual actions section. */
+const isManualPointer = (line) => /manual actions? to apply live/i.test(line);
+
+/**
+ * A run report's hub lines: {needsYou, manualActionLines}. The Needs-you
+ * section without the self-check's indented output tail and without the
+ * pointer to the manual actions (they come as their own lines). The same
+ * function feeds this PC's hub (hubcollect.js) and the snapshot the other
+ * PCs read, so a line gets the same id - and the same synced done mark -
+ * everywhere.
+ * @param {string} report  orchestraReport.buildReport markdown
+ * @param {string[]} [roots]  repo root(s) cut out of paths
+ */
+function reportLines(report, roots = []) {
+  const needs = (needsFromReport(report, { maxItems: 4 * HUB_MAX_LINES, maxLine: 4 * HUB_MAX_LINE }) || [])
+    .filter((l) => !/^\s/.test(l) && !isManualPointer(l))
+    .map((l) => l.replace(/^- /, ''));
+  return { needsYou: hubLines(needs, roots), manualActionLines: hubLines(manualFromReport(report), roots) };
+}
+
 /** Seen run ids: well-formed, unique, newest first, at most MAX_SEEN. */
 const cleanSeen = (v) =>
   [...new Set((Array.isArray(v) ? v : []).filter((id) => typeof id === 'string' && RUN_ID_RE.test(id)))].slice(0, MAX_SEEN);
@@ -325,6 +392,11 @@ function cleanRun(r, now) {
     selfCheck: SELF_CHECK_STATES.includes(r.selfCheck) ? r.selfCheck : 'none',
     needs: lines(r.needs),
     manual: lines(r.manual),
+    // v2 hub lines, only when the run has them: a run without them stays
+    // "counts only" even after this PC re-cleans its own history.
+    ...(Array.isArray(r.needsYou) || Array.isArray(r.manualActionLines)
+      ? { needsYou: hubLines(r.needsYou), manualActionLines: hubLines(r.manualActionLines) }
+      : {}),
   };
 }
 
@@ -377,14 +449,20 @@ function runEntry(view, { now = Date.now(), suggestions = [], report = '' } = {}
           : null,
       ),
       approvalSuggestions: (Array.isArray(suggestions) ? suggestions : []).map((s) => (isObject(s) ? s.rule : null)),
-      needs: needsFromReport(report, { maxItems: MAX_LINES, maxLine: MAX_LINE }) || [],
+      // Scrubbed like the hub lines: the report names local paths.
+      needs: (needsFromReport(report, { maxItems: MAX_LINES, maxLine: MAX_LINE }) || []).map((l) => scrubPaths(l, [view.repoPath])),
       manual: (Array.isArray(integ.manualActions) ? integ.manualActions : []).slice(0, MAX_LINES).map(manualLine),
+      // Only the repo root is cut (not the worktree roots): this PC's hub
+      // reads the same lines from the report, which names the repo only.
+      ...reportLines(report, [view.repoPath]),
     },
     now,
   );
 }
 
-const seenOf = (snap) => (isObject(snap) && snap.v === VERSION ? cleanSeen(snap.seen) : []);
+const seenOf = (snap) => (isObject(snap) && isKnownVersion(snap.v) ? cleanSeen(snap.seen) : []);
+/** A snapshot this PC (or a reader) can build on: v1 or v2 with a runs list. */
+const runsOf = (snap) => (isObject(snap) && isKnownVersion(snap.v) && Array.isArray(snap.runs) ? snap.runs : []);
 
 /**
  * The next `godmode` snapshot: `run` in front of the previous snapshot's
@@ -392,7 +470,7 @@ const seenOf = (snap) => (isObject(snap) && snap.v === VERSION ? cleanSeen(snap.
  * `prev` is this PC's own last snapshot, read back from disk: cleaned too.
  */
 function addRun(prev, run, { machine, now = Date.now() }) {
-  const old = isObject(prev) && prev.v === VERSION && Array.isArray(prev.runs) ? prev.runs : [];
+  const old = runsOf(prev);
   const fresh = cleanRun(run, now);
   const runs = [fresh, ...old.map((r) => cleanRun(r, now))]
     .filter(Boolean)
@@ -407,7 +485,7 @@ function addRun(prev, run, { machine, now = Date.now() }) {
  * Runs are kept as they are (cleaned); an unknown or malformed id changes nothing.
  */
 function addSeen(prev, id, { machine, now = Date.now() }) {
-  const old = isObject(prev) && prev.v === VERSION && Array.isArray(prev.runs) ? prev.runs : [];
+  const old = runsOf(prev);
   const runs = old.map((r) => cleanRun(r, now)).filter(Boolean).slice(0, MAX_RUNS);
   const seen = cleanSeen([...(typeof id === 'string' && RUN_ID_RE.test(id) ? [id] : []), ...seenOf(prev)]);
   return { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs, seen };
@@ -427,7 +505,7 @@ function cleanQueue(list) {
 }
 
 function withLive(snap, { live = null, lives = null, tabs = [], decisions = [], feedback = null, queue = [] } = {}, { machine, now = Date.now() }) {
-  const base = isObject(snap) && snap.v === VERSION && Array.isArray(snap.runs) ? snap.runs.map((r) => cleanRun(r, now)).filter(Boolean) : [];
+  const base = runsOf(snap).map((r) => cleanRun(r, now)).filter(Boolean);
   const out = { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs: base.slice(0, MAX_RUNS), seen: seenOf(snap), tabs: cleanTabs(tabs) };
   const one = cleanLive(live, now);
   // Every live run (`lives`); `live` stays the first one for older phone builds.
@@ -447,7 +525,7 @@ function parseGodmodePeer(row, now = Date.now()) {
   try {
     if (!isObject(row) || typeof row.machine !== 'string' || !MACHINE_RE.test(row.machine)) return null;
     const d = row.data;
-    if (!isObject(d) || d.v !== VERSION || !isTime(d.at) || !Array.isArray(d.runs)) return null;
+    if (!isObject(d) || !isKnownVersion(d.v) || !isTime(d.at) || !Array.isArray(d.runs)) return null;
     const runs = d.runs
       .slice(0, MAX_RUNS)
       .map((r) => cleanRun(r, now))
@@ -604,8 +682,13 @@ module.exports = {
   cleanQueue,
   liveCounts,
   scrubPaths,
+  hubLine,
+  reportLines,
+  manualFromReport,
   RUN_ID_RE,
   VERSION,
+  HUB_MAX_LINES,
+  HUB_MAX_LINE,
   MAX_RUNS,
   MAX_LIVES,
   MAX_SEEN,

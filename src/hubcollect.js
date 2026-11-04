@@ -19,7 +19,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { needsFromReport } = require('./godmodeneeds');
+const { reportLines } = require('./godmodesnapshot');
 const { SLEEP_COUNTDOWN_MS, SHUTDOWN_DELAY_S } = require('./orchestraPower');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -67,23 +67,48 @@ const lineKey = (line) => crypto.createHash('sha1').update(String(line)).digest(
 
 const baseName = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || '';
 
-/** The '## Manual actions' bullet lines of a run report ([] for 'None.' or no section). */
-function manualFromReport(text) {
-  const lines = String(text || '').split(/\r?\n/);
-  const start = lines.indexOf('## Manual actions');
-  if (start < 0) return [];
-  const out = [];
-  for (const line of lines.slice(start + 1)) {
-    if (line.startsWith('## ')) break;
-    if (!line.startsWith('- ')) continue;
-    const body = line.slice(2).replace(/`/g, '').trim();
-    if (body) out.push(body);
-  }
-  return out;
-}
+/** The '## Manual actions' bullet lines of a run report, as hub lines ([] for 'None.' or no section). */
+const manualFromReport = (text) => reportLines(text).manualActionLines;
 
-/** True for the Needs-you line that only points at the Manual actions section. */
-const isManualPointer = (line) => /manual actions? to apply live/i.test(line);
+/**
+ * Hub items for one God Mode run - shared by this PC's reports (here) and
+ * the other PCs' snapshot rows (hubpeers.js), so a run and each of its lines
+ * get the same id on every PC and a synced done mark clears them everywhere.
+ * @param {{id:string, at:number, repo:string, result:string, needsYou:string[],
+ *   manualActionLines:string[], runKind?:'needs'|'info', linesKind?:'needs'|'info',
+ *   detail?:string, detailKey?:string, extraVars?:object, primary?:object, machine?:string}} run
+ */
+function runItems(run) {
+  const common = {
+    source: 'godmode',
+    at: run.at,
+    ...(run.primary ? { primary: run.primary } : {}),
+    ...(run.machine ? { machine: run.machine } : {}),
+  };
+  const items = [{
+    ...common,
+    id: `godmode:${run.id}`,
+    kind: run.runKind || 'info',
+    title: run.result ? `God Mode: ${run.repo} - ${run.result}` : `God Mode: ${run.repo}`,
+    key: 'hub.item.gmRun',
+    vars: { repo: run.repo, result: run.result, ...(run.extraVars || {}) },
+    ...(run.detail ? { detail: run.detail } : {}),
+    ...(run.detailKey ? { detailKey: run.detailKey } : {}),
+  }];
+  // Keyed by the line's text, not its index: a changed line is a new item,
+  // so an old done mark never hides it.
+  const line = (section) => (text) => ({
+    ...common,
+    id: `godmode:${run.id}:${section}:${lineKey(text)}`,
+    kind: run.linesKind || 'needs',
+    title: text,
+    detail: `God Mode: ${run.repo}`,
+    detailKey: section === 'manual' ? 'hub.item.gmManualFrom' : 'hub.item.gmNeedsFrom',
+    vars: { repo: run.repo },
+  });
+  items.push(...list(run.needsYou).map(line('needs')), ...list(run.manualActionLines).map(line('manual')));
+  return items;
+}
 
 /**
  * This PC's God Mode run reports -> one info item per run, plus one needs
@@ -97,52 +122,41 @@ function collectGodmode(state) {
     .filter((r) => r.mtime >= state.now - GODMODE_WINDOW_MS)
     .sort((a, b) => b.mtime - a.mtime)
     .slice(0, MAX_RUNS);
-  const items = [];
-  for (const run of runs) {
+  return runs.flatMap((run) => {
     const repoMatch = REPO_LINE_RE.exec(run.text);
     const resultMatch = RESULT_LINE_RE.exec(run.text);
-    const repo = baseName(repoMatch ? repoMatch[1] : '') || run.id;
-    const result = resultMatch ? resultMatch[1].trim() : '';
-    const open = { action: 'openReport', arg: run.id };
-    const needs = (needsFromReport(run.text) || [])
-      .filter((l) => !/^\s/.test(l) && !isManualPointer(l))
-      .map((l) => l.replace(/^- /, ''))
-      .filter(Boolean)
-      .slice(0, MAX_LINES_PER_RUN);
-    const manual = manualFromReport(run.text).slice(0, MAX_LINES_PER_RUN);
-    items.push({
-      id: `godmode:${run.id}`,
-      kind: 'info',
-      source: 'godmode',
-      title: result ? `God Mode: ${repo} - ${result}` : `God Mode: ${repo}`,
-      key: 'hub.item.gmRun',
-      vars: { repo, result },
+    const repoPath = repoMatch ? repoMatch[1] : '';
+    const { needsYou, manualActionLines } = reportLines(run.text, repoPath ? [repoPath] : []);
+    return runItems({
+      id: run.id,
       at: run.mtime,
-      primary: open,
+      repo: baseName(repoPath) || run.id,
+      result: resultMatch ? resultMatch[1].trim() : '',
+      needsYou: needsYou.slice(0, MAX_LINES_PER_RUN),
+      manualActionLines: manualActionLines.slice(0, MAX_LINES_PER_RUN),
+      primary: { action: 'openReport', arg: run.id },
     });
-    // Keyed by the line's text, not its index: a changed line is a new item,
-    // so an old done mark never hides it.
-    const line = (section) => (text) => ({
-      id: `godmode:${run.id}:${section}:${lineKey(text)}`,
-      kind: 'needs',
-      source: 'godmode',
-      title: text,
-      detail: `God Mode: ${repo}`,
-      detailKey: section === 'manual' ? 'hub.item.gmManualFrom' : 'hub.item.gmNeedsFrom',
-      vars: { repo },
-      at: run.mtime,
-      primary: open,
-    });
-    items.push(...needs.map(line('needs')), ...manual.map(line('manual')));
-  }
-  return items;
+  });
 }
 
 /**
- * The sleep / shutdown countdowns (orchestraPower view()) while they run.
- * @param {{power:object|null, now:number}} state
+ * The God Mode project a local action belongs to (one run per project): the
+ * drawer passes it to the scoped orchestra IPC. src/hub.js re-checks it.
+ */
+const projectRef = (projectId) => (typeof projectId === 'string' && projectId ? { project: projectId } : {});
+
+/**
+ * The sleep / shutdown countdowns of every project's run ({powers:
+ * [{projectId, power}]}) or of one run ({power}, orchestraPower view()).
  */
 function collectPower(state) {
+  if (!isObject(state)) return [];
+  if (!Array.isArray(state.powers)) return powerItems(state);
+  return state.powers.filter(isObject).flatMap((p) => powerItems({ power: p.power, projectId: p.projectId, now: state.now }));
+}
+
+/** One run's countdowns while they run. */
+function powerItems(state) {
   if (!isObject(state) || !isObject(state.power) || !isTime(state.now)) return [];
   const items = [];
   const { sleep, shutdown } = state.power;
@@ -156,6 +170,7 @@ function collectPower(state) {
       at: sleep.at - SLEEP_COUNTDOWN_MS,
       expiresAt: sleep.at,
       local: true,
+      ...projectRef(state.projectId),
       primary: { action: 'cancelPower', arg: 'sleep' },
     });
   }
@@ -169,6 +184,7 @@ function collectPower(state) {
       at: shutdown.at - SHUTDOWN_DELAY_S * 1000,
       expiresAt: shutdown.at,
       local: true,
+      ...projectRef(state.projectId),
       primary: { action: 'cancelPower', arg: 'shutdown' },
     });
   }
@@ -179,7 +195,7 @@ function collectPower(state) {
  * Planning that waits for the Claude limit reset (orchestraPlanWait view()).
  * @param {{wait:object|null, now:number}} state
  */
-function collectPlanWait(state) {
+function planWaitItems(state) {
   if (!isObject(state) || !isObject(state.wait) || !isTime(state.now)) return [];
   const { wait } = state;
   if (wait.state !== 'waiting' || !isTime(wait.resumeAt)) return [];
@@ -194,8 +210,19 @@ function collectPlanWait(state) {
     vars: { time },
     at: wait.resumeAt,
     local: true,
+    ...projectRef(state.projectId),
     primary: { action: 'cancelPlanWait' },
   }];
+}
+
+/**
+ * Planning waits of every project's run ({waits: [{projectId, wait}]}, one
+ * God Mode run per project) or of one run ({wait}).
+ */
+function collectPlanWait(state) {
+  if (!isObject(state)) return [];
+  if (!Array.isArray(state.waits)) return planWaitItems(state);
+  return state.waits.filter(isObject).flatMap((w) => planWaitItems({ wait: w.wait, projectId: w.projectId, now: state.now }));
 }
 
 /**
@@ -319,6 +346,7 @@ module.exports = {
   collectBills,
   collectUpdate,
   manualFromReport,
+  runItems,
   lineKey,
   weekStart,
   dayStart,

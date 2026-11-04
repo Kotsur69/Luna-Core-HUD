@@ -10,11 +10,12 @@
 
 'use strict';
 
-const EMPTY = Object.freeze({ items: [], done: [], needs: 0 });
+const EMPTY = Object.freeze({ items: [], done: [], needs: 0, unseen: 0 });
 
 let view = EMPTY;
 let failed = false;
 let started = false;
+let loaded = false;
 const listeners = new Set();
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
@@ -24,7 +25,9 @@ function shapeOf(raw) {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items)) return null;
   const items = raw.items.filter((i) => i && typeof i === 'object' && typeof i.id === 'string');
   const done = Array.isArray(raw.done) ? raw.done.filter((i) => i && typeof i === 'object' && typeof i.id === 'string') : [];
-  return { items, done, needs: items.filter((i) => i.kind === 'needs').length };
+  const needs = items.filter((i) => i.kind === 'needs').length;
+  const unseen = Number.isInteger(raw.unseen) && raw.unseen >= 0 ? Math.min(raw.unseen, needs) : 0;
+  return { items, done, needs, unseen };
 }
 
 function publish() {
@@ -40,9 +43,15 @@ function publish() {
 function accept(raw) {
   const next = shapeOf(raw);
   failed = !next;
-  if (next) view = next;
+  if (next) {
+    view = next;
+    loaded = true;
+  }
   publish();
 }
+
+/** True once main has answered with a real view (not the empty placeholder). */
+export const hubLoaded = () => loaded;
 
 /** Asks main for the list now (launch, window focus, after a mark). */
 export async function refreshHub() {
@@ -70,5 +79,12 @@ export function onHubView(fn) {
 export async function markHubDone(id) {
   const res = await call('hubDone', id);
   if (res && res.ok) await refreshHub();
+  return res || { ok: false, reason: 'ipc' };
+}
+
+/** The drawer shows the list: main marks its open Needs-you items seen (no ids cross). */
+export async function markHubSeen() {
+  if (!view.unseen) return { ok: true, unseen: 0 };
+  const res = await call('hubSeen');
   return res || { ok: false, reason: 'ipc' };
 }
