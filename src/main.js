@@ -190,6 +190,7 @@ const LUNA_SKILL_CACHE_MS = 30000;
 const { loadEditorConfig, resolveInRoot, buildEditorInvocation } = require('./editor');
 // Usage limit counter (5h + week) - GET read from the CLI's OAuth endpoint.
 const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
+const { createAccountUsage } = require('./usageaccounts');
 // REMOTE_HOST_PLAN U1: the same read as a `usage` snapshot for the phone.
 const { usageSnapshot } = require('./usagesnapshot');
 const { createSnapshotPuts } = require('./snapshotputs');
@@ -236,7 +237,7 @@ const { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, 
 const { createOrchestra, BRIEF_DIR } = require('./orchestra');
 const orchestraStore = require('./orchestraStore');
 const { createOrchestraRegistry } = require('./orchestraRegistry');
-const { makeOrchestraDeps, legacyRunProject, approvalRuleFor, godModeFacade } = require('./orchestraWiring');
+const { makeOrchestraDeps, sharedPowerDeps, legacyRunProject, approvalRuleFor, godModeFacade } = require('./orchestraWiring');
 const { registerOrchestraIpc } = require('./orchestraIpc');
 const { createStatusBoard } = require('./sessionstatus');
 
@@ -316,6 +317,11 @@ const claudeAccounts = createClaudeAccounts({
   safeStorage: () => require('electron').safeStorage,
   log: (line) => console.info(`[accounts] ${line}`),
   onChange: () => send('claudeAccounts:changed'),
+  // Multi God Mode A3: the God Mode registry's memory of accounts that are
+  // out joins every pick, so a worker launched later starts on one with room.
+  // Read lazily - the registry is built further down.
+  extraLimits: () => orchestraRuns.limitedAccounts(),
+  onLimitCleared: (id) => orchestraRuns.clearAccountLimit(id),
 });
 setAccountLayer((env) => claudeAccounts.authLayer(env));
 /** One tab moves accounts at most this often (a loop guard). */
@@ -1041,7 +1047,14 @@ const orchestraCtx = {
   logError: (line) => console.error(line),
 };
 const orchestraRuns = createOrchestraRegistry({
-  makeController: (projectId) => createOrchestra(makeOrchestraDeps(projectId, orchestraCtx)),
+  makeController: (projectId, shared) => createOrchestra(makeOrchestraDeps(projectId, orchestraCtx, shared)),
+  // A3: one sleep / shutdown flow over every run, and the account-aware pause.
+  power: sharedPowerDeps(orchestraCtx),
+  accounts: () => claudeAccounts.list().accounts,
+  onClaudeAccount: (sessionId) => {
+    const s = sessions.get(sessionId);
+    return Boolean(s) && !s.ownBackend;
+  },
   log: (line) => console.error(line),
 });
 
@@ -1451,13 +1464,16 @@ function spawnInto(session, profile, launch = null) {
       // parsed reset time so God Mode waits it out instead of stalling.
       onUsageLimit: ({ resetsAt } = {}) => {
         const at = Number.isFinite(resetsAt) ? resetsAt : null;
+        // The God Mode registry remembers the account is out until its reset.
+        if (session.accountId && !session.ownBackend) orchestraRuns.noteAccountLimit(session.accountId, at);
         // Another Claude account is free: the tab resumes on it, no waiting
         // (and a God Mode run is not paused).
         if (failoverTab(session, at)) return;
         send('godmode:signal', { sessionId: session.id, type: 'usageLimit', resetsAt: at });
         statusBoard.limit(session.id, at);
-        // A God Mode v2 worker: its whole run waits (one account, one limit).
-        orchestraRuns.onUsageLimit(session.id, at);
+        // A God Mode v2 worker: with every Claude account out, every run waits
+        // for the earliest reset; otherwise only its own run waits.
+        orchestraRuns.onUsageLimit(session.id, at, { onAccount: !session.ownBackend });
       },
       // Same channel/shape as onApiError above - autoproceed.js's proof that an
       // armed "continue" (or Mati's own typing) was actually consumed, so a
@@ -1998,6 +2014,20 @@ function startUsageWatcher() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('usage:update', usage);
     }
+  });
+  // Phase 2: one row per Claude account. The tokens stay in this process;
+  // the payload's `accounts` view carries labels and numbers only. A real
+  // reset from the meter corrects the failover cooldown and God Mode's
+  // memory; a window back under 90 % ends the cooldown on its own.
+  usageWatcher.accountUsage = createAccountUsage({
+    credentials: () => claudeAccounts.usageCredentials(),
+    accounts: () => claudeAccounts.list().accounts,
+    onLimit: (id, until) => {
+      claudeAccounts.setLimit(id, until);
+      orchestraRuns.setAccountLimit(id, until);
+    },
+    onClear: (id) => claudeAccounts.clearLimit(id),
+    log: (line) => console.info(`[usage-accounts] ${line}`),
   });
   usageWatcher.start();
   usageSnapshotTimer = setInterval(putUsageSnapshot, USAGE_SNAPSHOT_EVERY_MS);

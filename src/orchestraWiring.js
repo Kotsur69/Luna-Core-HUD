@@ -14,8 +14,10 @@
 //                (orchestraStore.js) - bound here, so a discard
 //                (saveState(null)) clears the right file
 //   renderer     orchestra:changed / orchestra:planWait carry {projectId, ...}
-//   power        sleep at the limit / shutdown when done; otherRunsActive is
-//                the registry's othersActive(projectId)
+//   power        sleep at the limit / shutdown when done: ONE flow for every
+//                project (sharedPowerDeps -> the registry), handed to each
+//                controller; otherRunsActive is the registry's
+//                othersActive(projectId)
 //
 // Luna's Work overlays (worker settings, planner models) apply only to the
 // project its build runs on; every other project's run is plain God Mode.
@@ -25,7 +27,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { BRIEF_DIR } = require('./orchestra');
+const { BRIEF_DIR, RESUME_GRACE_MS } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha } = require('./orchestraFinish');
 const orchestraIntegrate = require('./orchestraIntegrate');
@@ -209,6 +211,18 @@ function integrationDeps(ctx) {
   };
 }
 
+/** (planId, line) => void: one line appended to <runsDir>/<planId>.md. */
+function appendRunReport(ctx) {
+  return (planId, line) => {
+    if (typeof planId !== 'string' || !RUN_ID_RE.test(planId) || !ctx.ensureUserDir()) return;
+    try {
+      fs.appendFileSync(path.join(ctx.runsDir(), `${planId}.md`), `${line}\n`, { encoding: 'utf8', mode: 0o600 });
+    } catch (err) {
+      ctx.logError(`[orchestra] could not append to the run report: ${errText(err)}`);
+    }
+  };
+}
+
 /** The run report (<runsDir>/<planId>.md + .html), snapshots and the morning toast. */
 function reportDeps(ctx, self) {
   return {
@@ -234,14 +248,7 @@ function reportDeps(ctx, self) {
         return null;
       }
     },
-    appendReport: (planId, line) => {
-      if (!RUN_ID_RE.test(planId) || !ctx.ensureUserDir()) return;
-      try {
-        fs.appendFileSync(path.join(ctx.runsDir(), `${planId}.md`), `${line}\n`, { encoding: 'utf8', mode: 0o600 });
-      } catch (err) {
-        ctx.logError(`[orchestra] could not append to the run report: ${errText(err)}`);
-      }
-    },
+    appendReport: appendRunReport(ctx),
     // The morning report toast, when OS notifications are on (Settings).
     notify: ({ pushed, total, failed }) => {
       if (!ctx.readUiPrefs().notificationsEnabled) return;
@@ -289,7 +296,7 @@ function stateDeps(projectId, ctx, store) {
 }
 
 /** Usage limits, free providers, sleep / shutdown and the cross-run guards. */
-function powerDeps(projectId, ctx) {
+function powerDeps(projectId, ctx, shared) {
   return {
     // Planning that hit the Claude limit waits for the reset (orchestraPlanWait.js).
     usageLimits: () => ctx.usageLimits(),
@@ -298,18 +305,39 @@ function powerDeps(projectId, ctx) {
     freshEnv: () => ctx.toolEnv(),
     // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
     freeProfileId: () => ctx.freeProfileId(),
-    // Sleep at the usage limit / shut down when done (src/orchestraPower.js).
-    power: createPowerCtl(),
-    awake: { release: () => ctx.overnight.suspendAwake(), restore: () => ctx.overnight.restoreAwake() },
+    // Sleep at the usage limit / shut down when done: the registry's one flow
+    // for every run (sharedPowerDeps). Missing = a powerless single run.
+    ...(shared && shared.powerFlow ? { powerFlow: shared.powerFlow } : {}),
     // Shutdown when done waits for every other project's run too.
     otherRunsActive: () => ctx.registry().othersActive(projectId),
     // The same repo twice is refused (makePlan -> 'repoBusy').
     repoBusy: (repoPath) => ctx.registry().repoBusy(projectId, repoPath),
+  };
+}
+
+/**
+ * The deps of the registry's ONE sleep / shutdown flow (orchestraPower.js
+ * createPowerFlow minus getRun, which the registry aggregates over its
+ * runs). A change re-sends every run's view: they all carry the same power
+ * state.
+ * @param {object} ctx the same ctx makeOrchestraDeps takes
+ */
+function sharedPowerDeps(ctx) {
+  return {
+    power: createPowerCtl(),
+    awake: { release: () => ctx.overnight.suspendAwake(), restore: () => ctx.overnight.restoreAwake() },
+    flush: () => ctx.flushTodos(),
     // Shown whether or not toasts are on in Settings: the PC is about to go.
-    notifyPower: (kind) => {
+    notify: (kind) => {
       const body = POWER_NOTICES[kind];
       if (body) ctx.toast(TOAST_TITLE, body);
     },
+    appendReport: appendRunReport(ctx),
+    onChange: () => {
+      for (const { projectId, view } of ctx.registry().views()) ctx.send('orchestra:changed', { projectId, view });
+    },
+    graceMs: RESUME_GRACE_MS,
+    log: (line) => ctx.log(`[power] ${line}`),
   };
 }
 
@@ -378,9 +406,10 @@ function builderDeps(projectId, ctx, self) {
  *   playCue: (key:string) => void, log: (line:string) => void, logError: (line:string) => void,
  *   store?: {loadRun:Function, saveRun:Function},
  * }} ctx
+ * @param {{powerFlow?: object|null}} [shared] what the registry shares between its runs
  * @returns {object} createOrchestra deps
  */
-function makeOrchestraDeps(projectId, ctx) {
+function makeOrchestraDeps(projectId, ctx, shared = {}) {
   const store = ctx.store || defaultStore;
   // This controller, once the registry has made it (deps are built first).
   const self = () => ctx.registry().get(projectId);
@@ -390,10 +419,17 @@ function makeOrchestraDeps(projectId, ctx) {
     ...integrationDeps(ctx),
     ...reportDeps(ctx, self),
     ...stateDeps(projectId, ctx, store),
-    ...powerDeps(projectId, ctx),
+    ...powerDeps(projectId, ctx, shared),
     ...builderDeps(projectId, ctx, self),
     log: (line) => ctx.log(line),
   };
 }
 
-module.exports = { makeOrchestraDeps, projectForStoredRepo, legacyRunProject, approvalRuleFor, godModeFacade };
+module.exports = {
+  makeOrchestraDeps,
+  sharedPowerDeps,
+  projectForStoredRepo,
+  legacyRunProject,
+  approvalRuleFor,
+  godModeFacade,
+};

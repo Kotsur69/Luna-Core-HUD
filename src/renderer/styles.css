@@ -1532,6 +1532,79 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .usage-provider__title { font-size: var(--fs-sm); font-weight: 700; }
 
+/* Several Claude accounts (modules/usage.js accountGroups): one group per
+   window, one row per account - dot, name, bar, %, reset. The reset column is
+   fixed-width and dim (text-dim, no extra opacity: ~6.5:1 on the panel), and
+   turns --bad only on the limited account, the one time it matters. Below
+   ~280px of tile width the reset wraps under the bar. */
+.usage-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  container-type: inline-size;
+}
+.usage-acct-group { display: flex; flex-direction: column; gap: var(--space-2); }
+.usage-acct-group__title {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.usage-acct {
+  display: grid;
+  grid-template-columns: 8px minmax(3.5em, 8.5em) minmax(2.5rem, 1fr) 3.2em 5.4em;
+  grid-template-areas: 'dot name bar pct reset';
+  align-items: center;
+  column-gap: var(--space-3);
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+}
+.usage-acct__dot {
+  grid-area: dot;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  justify-self: center;
+}
+.usage-acct.is-active .usage-acct__dot { background: var(--neon-cyan); }
+.usage-acct__name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.usage-acct.is-active .usage-acct__name { color: var(--text); font-weight: 600; }
+.usage-acct__bar { grid-area: bar; height: 6px; min-width: 0; }
+.usage-acct__pct {
+  grid-area: pct;
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.usage-acct.is-empty .usage-acct__pct { color: var(--text-dim); font-weight: 400; }
+.usage-acct__reset {
+  grid-area: reset;
+  text-align: right;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.usage-acct.is-limited .usage-acct__reset { color: var(--bad); font-weight: 700; }
+@container (max-width: 280px) {
+  .usage-acct {
+    grid-template-columns: 8px minmax(3em, 7em) minmax(2rem, 1fr) 3.2em;
+    grid-template-areas:
+      'dot name bar pct'
+      '. . reset reset';
+    row-gap: var(--space-1);
+  }
+  .usage-acct__reset { text-align: left; }
+}
+
 /* ---- Sparkline burn-rate (context window percentage over time) ---------------- */
 
 .ctx-spark {

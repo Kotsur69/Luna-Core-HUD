@@ -223,6 +223,17 @@ it mounts once. layout.js only parks `#app-chrome`. Result: a chip next to `#upd
   - One account limited: workers fail over and nothing pauses.
   - Both accounts limited: every run pauses until the earliest reset.
   - A worker launched while one account is limited starts on the free account.
+- **Status (2026-11-04, branch `luna/multi-gm-accounts-r1jqz`)**: built and unit-tested. It still
+  needs Mati's live check with two real accounts and two projects.
+  - The registry's limited-accounts memory joins claudeAccounts' picks through `extraLimits`. It is
+    never persisted, and a Settings "clear" clears it too.
+  - `onUsageLimit` with `{onAccount: true}` pauses every run only when no account has room left;
+    otherwise it pauses just the owner run (the loop guard, or a run on its own backend).
+  - The power view is `aggregatePowerRun()`. A kill re-checks the shutdown instead of always
+    cancelling it, so another settled run's countdown keeps going. A canceled countdown is not
+    re-armed by the next run to settle, and the busy check runs again after the pre-shutdown flush.
+  - Not built yet: cancelling a shutdown countdown when a new run starts during the 120 s countdown
+    (single-run behaviour today).
 
 ### A4 - Renderer board with a project switcher
 - New pure `orchestraRuns.js`:

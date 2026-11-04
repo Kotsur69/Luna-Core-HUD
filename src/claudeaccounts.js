@@ -144,14 +144,55 @@ function sanitize(data) {
 }
 
 /**
+ * `limits` plus cooldowns known elsewhere (`extra`): for each account the
+ * later of the two. Neither input is changed; junk entries are skipped.
+ * @param {Record<string,number>} limits
+ * @param {Record<string,number>} extra
+ */
+function mergeLimits(limits, extra) {
+  const out = { ...limits };
+  for (const [id, at] of Object.entries(extra && typeof extra === 'object' ? extra : {})) {
+    if (Number.isFinite(at) && !(out[id] >= at)) out[id] = at;
+  }
+  return out;
+}
+
+/**
  * @param {{file:()=>string|null, safeStorage:()=>object|null, now?:()=>number,
- *   log?:(line:string)=>void, onChange?:()=>void}} deps
+ *   log?:(line:string)=>void, onChange?:()=>void,
+ *   extraLimits?:()=>Record<string,number>, onLimitCleared?:(id:string)=>void}} deps
+ *   extraLimits: cooldowns remembered outside this store (the God Mode
+ *     registry, multi God Mode A3) - merged into every pick, never written
+ *   onLimitCleared: Mati ended a cooldown by hand - the registry forgets it too
  */
 function createClaudeAccounts(deps) {
   const now = deps.now || Date.now;
   const log = deps.log || (() => {});
   let state = { accounts: [], limits: {} };
   let loadedMtime = null;
+
+  // The last extra-limits failure logged: a broken source is read on every
+  // pick, so the same error is logged once, not once per pick.
+  let extraLimitsError = null;
+
+  /**
+   * The stored cooldowns plus the extra ones (deps.extraLimits). A source
+   * that throws falls back to the stored ones - picking an account must not
+   * fail because God Mode's memory could not be read.
+   */
+  function effectiveLimits(limits = state.limits) {
+    if (!deps.extraLimits) return limits;
+    try {
+      const merged = mergeLimits(limits, deps.extraLimits());
+      extraLimitsError = null;
+      return merged;
+    } catch (err) {
+      const message = (err && err.message) || 'error';
+      if (message !== extraLimitsError) log(`claude accounts: extra limits unreadable (${message})`);
+      extraLimitsError = message;
+      return limits;
+    }
+  }
 
   const storage = () => {
     try {
@@ -216,21 +257,22 @@ function createClaudeAccounts(deps) {
 
   function active() {
     refresh();
-    return pickActive(state.accounts, state.limits, now());
+    return pickActive(state.accounts, effectiveLimits(), now());
   }
 
   /** Public view - never carries a token. */
   function list() {
     refresh();
     const t = now();
-    const current = pickActive(state.accounts, state.limits, t);
+    const limits = effectiveLimits();
+    const current = pickActive(state.accounts, limits, t);
     return {
       encryption: Boolean(storage()),
       accounts: state.accounts.map((a) => ({
         id: a.id,
         label: a.label,
         active: Boolean(current && current.id === a.id),
-        limitedUntil: Number.isFinite(state.limits[a.id]) && state.limits[a.id] > t ? state.limits[a.id] : null,
+        limitedUntil: Number.isFinite(limits[a.id]) && limits[a.id] > t ? limits[a.id] : null,
       })),
     };
   }
@@ -268,9 +310,10 @@ function createClaudeAccounts(deps) {
     return save({ accounts, limits: state.limits });
   }
 
-  /** Manually ends a cooldown (Mati knows the limit is back). */
+  /** Ends a cooldown (Mati knows the limit is back, or the meter saw it reset). */
   function clearLimit(id) {
     refresh();
+    if (deps.onLimitCleared && state.accounts.some((a) => a.id === id)) deps.onLimitCleared(id);
     if (!Number.isFinite(state.limits[id])) return { ok: true };
     const { [id]: _gone, ...limits } = state.limits;
     return save({ accounts: state.accounts, limits });
@@ -294,8 +337,9 @@ function createClaudeAccounts(deps) {
     const limits = pruneLimits({ ...state.limits, [id]: Math.max(prev, until) }, state.accounts, t);
     // Kept in memory even if the write fails, so this process still moves on.
     if (!persist({ accounts: state.accounts, limits })) state = { accounts: state.accounts, limits };
-    const next = pickActive(state.accounts, limits, t);
-    const usable = Boolean(next) && next.id !== id && !(limits[next.id] > t);
+    const known = effectiveLimits(limits);
+    const next = pickActive(state.accounts, known, t);
+    const usable = Boolean(next) && next.id !== id && !(known[next.id] > t);
     log(usable
       ? `claude accounts: "${from.label}" hit its limit - switching to "${next.label}"`
       : `claude accounts: "${from.label}" hit its limit - no other account free`);
@@ -321,18 +365,51 @@ function createClaudeAccounts(deps) {
   function freeAccount() {
     refresh();
     const t = now();
-    const a = pickActive(state.accounts, state.limits, t);
-    return a && !(state.limits[a.id] > t) ? { id: a.id, label: a.label } : null;
+    const limits = effectiveLimits();
+    const a = pickActive(state.accounts, limits, t);
+    return a && !(limits[a.id] > t) ? { id: a.id, label: a.label } : null;
+  }
+
+  /**
+   * Sets a cooldown to the usage meter's REAL reset (Phase 2). Unlike
+   * markLimited it replaces the stored time, so the hour guessed when the CLI
+   * gave no reset gets corrected. An unknown account or a time that is not
+   * in the future is refused.
+   * @returns {{ok:true}|{ok:false,error:string}}
+   */
+  function setLimit(id, until) {
+    refresh();
+    const t = now();
+    if (!state.accounts.some((a) => a.id === id)) return { ok: false, error: 'notFound' };
+    if (!Number.isFinite(until) || until <= t) return { ok: false, error: 'badTime' };
+    if (state.limits[id] === until) return { ok: true };
+    const limits = pruneLimits({ ...state.limits, [id]: until }, state.accounts, t);
+    // Kept in memory even if the write fails, like markLimited.
+    if (!persist({ accounts: state.accounts, limits })) state = { accounts: state.accounts, limits };
+    return { ok: true };
+  }
+
+  /**
+   * MAIN PROCESS ONLY - the usage meter's reads (src/usageaccounts.js). The
+   * one call that hands tokens out besides authLayer; never wire it to IPC.
+   * @returns {Array<{id:string, label:string, token:string}>} preference order
+   */
+  function usageCredentials() {
+    refresh();
+    return state.accounts.map((a) => ({ id: a.id, label: a.label, token: a.token }));
   }
 
   /** The env keys for one launch (see authLayerFor). */
   const authLayer = (env) => authLayerFor(env, active());
 
-  return { list, add, remove, moveUp, clearLimit, active, freeAccount, markLimited, failoverActive, authLayer };
+  return {
+    list, add, remove, moveUp, clearLimit, setLimit, active, freeAccount, markLimited, failoverActive, authLayer, usageCredentials,
+  };
 }
 
 module.exports = {
   createClaudeAccounts,
+  mergeLimits,
   pickActive,
   authLayerFor,
   usesOwnBackend,
