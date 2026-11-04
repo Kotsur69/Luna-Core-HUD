@@ -36,7 +36,7 @@ test('savePrefs takes only known keys, each validated', () => {
 
 test('state keeps only well-formed rows', () => {
   const s = normalizeState({ lastNightly: '2026-10-20', godmode: { abc: '2|done', 'BAD ID': '1|done', x: 'nope' }, todoBaseline: { date: 'x', done: [] } });
-  assert.deepEqual(s, { lastNightly: '2026-10-20', godmode: { abc: '2|done' }, todoBaseline: null });
+  assert.deepEqual(s, { lastNightly: '2026-10-20', godmode: { abc: '2|done' }, todoBaseline: null, godmodePending: [] });
 });
 
 const fakeStorage = { isEncryptionAvailable: () => true, encryptString: (t) => Buffer.from(t), decryptString: (b) => b.toString() };

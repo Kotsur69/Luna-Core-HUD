@@ -37,7 +37,7 @@ const { validatePlan, estimatePlan, pickTodos, MAX_PARALLEL, MAX_PROMPT_CHARS, P
 const { lastWordsFrom, outputTail } = require('./orchestraDiagnose');
 const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
-const { createFinalizer } = require('./orchestraFinalize');
+const { createFinalizer, postMergeContext, slugOf } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 // A planner limit with another Claude account free: replan after this long.
@@ -246,7 +246,10 @@ function givenCards(allOpen, cards) {
  *   listOwnBranches?: Function, worktreeBranches?: Function, log?: Function,
  *   power?: object, awake?: {release:Function, restore:Function}, flush?: Function,
  *   notifyPower?: Function, appendReport?: Function, otherRunsActive?: () => boolean,
+ *   repoBusy?: (repoPath:string) => boolean,
  * }} deps
+ *   repoBusy: multi God Mode (orchestraRegistry.js) - another project's run
+ *   holds this repo, so makePlan refuses with 'repoBusy'.
  */
 function createOrchestra(deps) {
   const now = deps.now || Date.now;
@@ -261,10 +264,11 @@ function createOrchestra(deps) {
     (() => ({ model: 'opus', effort: 'plan', permissionMode: 'bypassPermissions', integration: 'pr', allowedTools: [] }));
   const closeSession = deps.closeSession || noop;
   // Merging into the base branch pushes it: main asks Mati natively. No
-  // dialog available = no merge.
-  const confirmMerge = () =>
+  // dialog available = no merge. {release: true} - the same dialog also
+  // names the release cut after the merge ("Create a new release after finish").
+  const confirmMerge = (extra = {}) =>
     deps.confirmMerge
-      ? Promise.resolve(deps.confirmMerge(plan.baseBranch)).then((yes) => yes === true, () => false)
+      ? Promise.resolve(deps.confirmMerge(plan.baseBranch, { release: extra.release === true })).then((yes) => yes === true, () => false)
       : Promise.resolve(false);
   const saveState = deps.saveState || noop;
   const onChange = deps.onChange || noop;
@@ -277,6 +281,9 @@ function createOrchestra(deps) {
   /** @type {null|object} */
   let plan = null;
   let busy = false;
+  // The repo a makePlan in flight plans for (no plan exists yet), so a second
+  // project cannot plan the same repo meanwhile.
+  let planningRepo = null;
   let pumping = false;
   /** pkgId -> pending nudge timer */
   const nudgeTimers = new Map();
@@ -341,6 +348,9 @@ function createOrchestra(deps) {
     onReport: deps.onReport,
     sleep: deps.sleep,
     onIdle: () => afterFinalize(),
+    // After a merge landed: the post-merge step implementations
+    // (orchestraFinalize.js POST_MERGE_STEPS, built by orchestraPostMerge.js).
+    postMerge: deps.postMerge || null,
   });
   const isBusy = () => busy || pumping || finalizer.isRunning();
 
@@ -585,6 +595,9 @@ function createOrchestra(deps) {
   async function makePlan(ctx) {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
+    // One run per repo across projects - checked here, so a replan after a
+    // limit wait is refused too when another project took the repo meanwhile.
+    if (deps.repoBusy && deps.repoBusy(ctx.repoPath)) return { ok: false, error: 'repoBusy' };
     // A manual item is the user's own job: the planner never sees it.
     const allOpen = deps.readTodos(ctx.projectId).filter((t) => !t.done && t.manual !== true);
     if (!allOpen.length) return { ok: false, error: 'noTodos' };
@@ -596,6 +609,7 @@ function createOrchestra(deps) {
     if (planWaiter.isWaiting()) planWaiter.clear();
 
     busy = true;
+    planningRepo = ctx.repoPath;
     try {
       const [res, dirty, baseBranch] = await Promise.all([
         deps.runPlanner({ cwd: ctx.repoPath, env: ctx.env, openTodos }),
@@ -694,6 +708,7 @@ function createOrchestra(deps) {
       return { ok: true, plan: view() };
     } finally {
       busy = false;
+      planningRepo = null;
     }
   }
 
@@ -888,6 +903,9 @@ function createOrchestra(deps) {
    * package, finalize or another God Mode run still going.
    */
   function afterFinalize() {
+    // The finalizer's last commit went out while isRunning() was still true;
+    // the board and the phone get the settled view (running: false) now.
+    if (plan) commit();
     fireRunSettled();
     if (!settledFinalize || !plan) return;
     settledFinalize = false;
@@ -979,8 +997,15 @@ function createOrchestra(deps) {
       plan.integrationMode = free.integrationMode;
     }
     const wanted = integrationFor(plan, mode);
-    if (wanted === 'merge' && !plan.started && !(await confirmMerge())) return { ok: false, error: 'mergeDeclined' };
+    // "Create a new release after finish": merge runs only, set at Approve
+    // (confirmed natively with the merge), stored as options.releaseAfter.
+    const release = o.releaseAfter === true && wanted === 'merge' && !plan.started;
+    if (wanted === 'merge' && !plan.started && !(await confirmMerge({ release }))) return { ok: false, error: 'mergeDeclined' };
     if (wanted && !plan.started) plan.integrationMode = wanted;
+    if (!plan.started) {
+      const { releaseAfter: _previous, ...rest } = plan.options || {};
+      plan.options = sup.normalizeOptions(release ? { ...rest, releaseAfter: true } : rest);
+    }
     if (startAt) {
       freezeSettings();
       plan.scheduledAt = startAt;
@@ -1484,6 +1509,38 @@ function createOrchestra(deps) {
     return { ok: true, options: { ...plan.options } };
   }
 
+  /**
+   * The current run as a settled-run ledger entry when its merge landed
+   * (orchestraCleanup.js), else null - the start-up cleanup sweep.
+   */
+  function landedRun() {
+    const integ = plan && plan.integration;
+    if (!integ || plan.integrationMode !== 'merge' || integ.state !== 'done' || !plan.baseBranch) return null;
+    if (!Number.isFinite(integ.at) || !plan.packages.some((p) => p.merged === true)) return null;
+    return { ...postMergeContext(plan, { skipped: integ.skipped }, slugOf(plan)), settledAt: integ.at };
+  }
+
+  /**
+   * What "Release now" needs about the run on the board, or null without
+   * one: its project and checkout, the base and the head its merge landed.
+   */
+  function releaseTarget() {
+    if (!plan) return null;
+    const integ = plan.integration || {};
+    const done = integ.postMerge && integ.postMerge.release;
+    return {
+      planId: plan.id,
+      projectId: plan.projectId,
+      repoPath: plan.repoPath,
+      base: plan.baseBranch,
+      headSha: integ.headSha || null,
+      landed: plan.integrationMode === 'merge' && integ.state === 'done' && !!integ.headSha,
+      releaseAfter: sup.normalizeOptions(plan.options).releaseAfter === true,
+      released: !!(done && done.released === true),
+      busy: isBusy(),
+    };
+  }
+
   function discard() {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
@@ -1516,11 +1573,21 @@ function createOrchestra(deps) {
     cancelShutdown: () => powerFlow.cancelShutdown(),
     checkWake: () => powerFlow.checkWake(),
     sweepBranches,
+    landedRun,
+    // The run email after finalize: "Resend report email" and pending sends (godmodePending.js).
+    emailSummary: (planId) => finalizer.emailSummary(planId),
+    emailResult: (planId, res) => finalizer.emailResult(planId, res),
+    // "Release now" on the finished run (src/orchestraFinishIpc.js).
+    releaseTarget,
+    recordRelease: (planId, result) => finalizer.recordPostMerge(planId, 'release', result),
     runFixup: (args) => fixup.run(args),
     planWait: () => planWaiter.view(),
     cancelPlanWait: () => planWaiter.cancel(),
     isBusy,
     isRunning: () => !!plan && plan.started && !plan.killed && plan.packages.some(sup.isActive),
+    // Multi God Mode's same-repo guard (orchestraRegistry.repoBusy).
+    repoPath: () => (plan ? plan.repoPath : null),
+    planningRepo: () => planningRepo,
   };
 }
 

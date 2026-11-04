@@ -230,14 +230,15 @@ export const SHORTCUT_GROUPS = [
 /**
  * The one chord Mati must never have to look up: the God Mode kill switch.
  * Rendered above every group as a bigger, highlighted row (Mati, 2026-11-02).
- * main.js only claims the chord while a run has workers; otherwise it reaches
- * the terminal as before - `hintKey` says so.
+ * main.js only claims the chord while any project's run has workers, and then
+ * kills every run (orchestraRegistry.killAll); otherwise it reaches the
+ * terminal as before - `hintKey` says so.
  */
 export const FEATURED_SHORTCUT = {
   chords: [['Ctrl', 'Shift', 'K']],
   descKey: 'shortcuts.killGodMode',
   hintKey: 'shortcuts.killGodMode.hint',
-  source: { file: 'src/main.js', marker: "input.code === 'KeyK' && orchestra.isRunning()" },
+  source: { file: 'src/main.js', marker: "input.code === 'KeyK' && orchestraRuns.anyRunning()" },
 };
 
 /** Every row (the featured one first, then every group's), flattened - for the drift-guard test. */

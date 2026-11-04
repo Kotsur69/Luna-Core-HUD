@@ -397,6 +397,9 @@ function createGmailSender(deps = {}) {
       throw new GmailError('gmail-auth', 'HTTP 401');
     }
     if (res.status === 403) throw new GmailError('gmail-scope', 'HTTP 403');
+    // Worth a later try (godmodePending.js keeps a run email for it).
+    if (res.status === 429) throw new GmailError('rate-limited', 'HTTP 429');
+    if (res.status === 503) throw new GmailError('busy', 'HTTP 503');
     if (!res.ok) throw new GmailError('gmail-failed', `HTTP ${res.status}`);
     return { id: gmailId(body.id), threadId: gmailId(body.threadId) };
   }

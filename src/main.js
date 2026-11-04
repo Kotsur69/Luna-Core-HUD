@@ -71,7 +71,7 @@ const { findApiPort, listModels: listLmStudioModels, loadModel: loadLmStudioMode
 const { createCcrControl, prepareCcrLaunch } = require('./ccrcontrol');
 // Keeps an unattended God Mode run alive: no sleep, no throttling, and a
 // watchdog that brings a local LM Studio backend back (src/overnight.js).
-const { createOvernightGuard, recoverLocalBackend, guardedSessionFactory } = require('./overnight');
+const { createOvernightGuard, recoverLocalBackend } = require('./overnight');
 // God Mode panel's "Don't sleep" switch: runs/kills the keep-awake .bat
 // named in config/keepawake.local.json (src/keepawake.js).
 const { createKeepAwake, CONFIG_FILE: KEEP_AWAKE_CONFIG } = require('./keepawake');
@@ -142,6 +142,8 @@ const { createBillCalendar } = require('./gcalbills');
 // Report emails: Gmail sender, God Mode run email, nightly summary.
 const { createReportMail } = require('./reportmail');
 const { registerMailIpc } = require('./mailipc');
+// God Mode finished-run actions: Resend report email (+ release, later).
+const orchestraFinishIpc = require('./orchestraFinishIpc');
 // Weekly review (Life Week tab, Sunday 20:00 + Generate now) and its email.
 const { setupWeeklyReview } = require('./weeklyipc');
 const { startLifeSync } = require('./lifesync');
@@ -194,7 +196,7 @@ const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
 const { usageSnapshot } = require('./usagesnapshot');
 const { createSnapshotPuts } = require('./snapshotputs');
 const { createLivePublisher } = require('./godmodelivepub');
-const { liveEntry, tabsEntry } = require('./godmodesnapshot');
+const { livesEntry, tabsEntry } = require('./godmodesnapshot');
 const { registerInboxIpc } = require('./inboxipc');
 // E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
 // zero network - Passive Observer in the strictest possible sense.
@@ -234,14 +236,13 @@ const { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, 
 // God Mode v2 (ORCHESTRATOR_PLAN.md slices 3-5): headless planner, plan board,
 // supervisor + per-worker finish (verify, push, tick to-dos), integrator.
 const { createOrchestra, BRIEF_DIR } = require('./orchestra');
-const { createPowerCtl } = require('./powerctl');
-const { runPlanner } = require('./orchestraPlan');
-const { finishPackage, headSha } = require('./orchestraFinish');
 const orchestraStore = require('./orchestraStore');
-const orchestraIntegrate = require('./orchestraIntegrate');
-const { reportFileFor, renderRunReportHtml, repoPathOf } = require('./orchestraReport');
-const orchestraSelfCheck = require('./orchestraSelfCheck');
-const { lastOpenToolUse, allowRuleFor, exampleFor, isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSupervisor');
+const { createOrchestraRegistry } = require('./orchestraRegistry');
+const { makeOrchestraDeps, legacyRunProject, approvalRuleFor, godModeFacade } = require('./orchestraWiring');
+const { registerOrchestraIpc } = require('./orchestraIpc');
+const { RUN_ID_RE } = require('./orchestraReport');
+const { createPostMergeServices } = require('./orchestraPostMerge');
+const { cutRelease, unreleasedCount, releaseResult } = require('./releaseCut');
 const { createStatusBoard } = require('./sessionstatus');
 
 const { micState } = require('./devices');
@@ -527,7 +528,9 @@ function sessionSummary(s) {
 // The phone's live God Mode view (src/godmodelivepub.js), set up next to the
 // snapshot puts. Null until then; tab changes before it are not published.
 let godmodeLive = null;
-let latestLiveView = null;
+// The latest live view per project (one God Mode run each): projectId -> view,
+// the latest to change last. A discarded run (null view) drops out.
+const latestLiveViews = new Map();
 const pokeGodmodeLive = () => godmodeLive && godmodeLive.poke();
 
 /** Broadcasts the full tab list + which one is active. */
@@ -660,12 +663,12 @@ function createWindow() {
   // branch below can claim the chord.
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || input.isAutoRepeat) return;
-    // God Mode v2 kill switch (slice 4). Checked before the Shift bail-out
-    // below, and only claimed while a run has workers - otherwise Ctrl+Shift+K
-    // reaches the terminal as before.
-    if (input.shift && input.control && !input.alt && input.code === 'KeyK' && orchestra.isRunning()) {
+    // God Mode v2 kill switch (slice 4): every run of every project. Checked
+    // before the Shift bail-out below, and only claimed while a run has
+    // workers - otherwise Ctrl+Shift+K reaches the terminal as before.
+    if (input.shift && input.control && !input.alt && input.code === 'KeyK' && orchestraRuns.anyRunning()) {
       event.preventDefault();
-      orchestra.kill();
+      orchestraRuns.killAll();
       return;
     }
     if (input.shift) return;
@@ -940,7 +943,7 @@ const intakeServer = new IntakeServer({
         return ok;
       },
       // God Mode workers must never tick cards; only the user's own tabs may.
-      canMarkDone: !orchestra.ownsSession(sessionId),
+      canMarkDone: !orchestraRuns.ownsSession(sessionId),
     };
   },
 });
@@ -950,11 +953,7 @@ const intakeServer = new IntakeServer({
 // one, and a folder of their own, so the tab's --add-dir grants nothing else.
 // How often the supervisor checks workers against their working-time cap.
 const ORCHESTRA_TICK_MS = 60 * 1000;
-// How much of a worker's transcript is read to name the tool a permission
-// prompt is about (idea #5) - once per prompt appearance, worker tabs only.
-const APPROVAL_TAIL_BYTES = 256 * 1024;
 const RUN_REPORT_DIR = 'runs';
-const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 /** Same env the planner runs with: claude and gh on PATH, cloud default. */
 const orchestraToolEnv = () => withClaudeOnPath(buildSessionEnv(process.env, {}));
 
@@ -966,27 +965,6 @@ function usageResetAt() {
   return Number.isFinite(at) ? at : null;
 }
 
-/** The tail of a worker's transcript -> {rule, example} its prompt is about. */
-function approvalRuleFor(session) {
-  const none = { rule: null, example: null };
-  const file = session.watcher && session.watcher.currentFile;
-  if (!file) return none;
-  let fd = null;
-  try {
-    fd = fs.openSync(file, 'r');
-    const size = fs.fstatSync(fd).size;
-    const length = Math.min(size, APPROVAL_TAIL_BYTES);
-    const buf = Buffer.alloc(length);
-    fs.readSync(fd, buf, 0, length, size - length);
-    const open = lastOpenToolUse(buf.toString('utf8'));
-    return { rule: allowRuleFor(open), example: exampleFor(open) };
-  } catch {
-    return none;
-  } finally {
-    if (fd !== null) fs.closeSync(fd);
-  }
-}
-
 const gcal = createGcal();
 const reportMail = createReportMail({
   runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
@@ -994,6 +972,11 @@ const reportMail = createReportMail({
   getUsage: () => latestUsage,
   getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
   onResume: (fn) => powerMonitor.on('resume', fn),
+  // A pending / resent God Mode run email went out (or not): the board follows.
+  onRunMailResult: (planId, res) => {
+    const hit = orchestraRuns.byPlanId(planId);
+    if (hit) hit.controller.emailResult(planId, res);
+  },
 });
 
 /** Env of the first profile with a free-model chain (Luna's Work freeFallback), or null. */
@@ -1003,17 +986,14 @@ function lunasworkFreeEnv() {
   return profile ? withClaudeOnPath(buildSessionEnv(process.env, profile.env || {})) : null;
 }
 
+// Luna's Work's view of God Mode: one run per project (orchestraWiring.js).
+const lunasworkGodMode = godModeFacade(() => orchestraRuns);
+
 // Luna's Work builds through God Mode (src/lunasworkBuild.js). Its overlays
-// below only apply while one of its builds runs; idle, God Mode is unchanged.
+// only apply to the run of the project a build runs on; every other run,
+// and every run while no build runs, is plain God Mode.
 const lunasworkBuilder = createGodModeBuilder({
-  orchestra: {
-    makePlan: (ctx) => orchestra.makePlan(ctx),
-    launch: (payload) => orchestra.launch(payload),
-    cancelPlanWait: () => orchestra.cancelPlanWait(),
-    view: () => orchestra.view(),
-    planWait: () => orchestra.planWait(),
-    finishRun: (payload) => orchestra.finishRun(payload),
-  },
+  orchestra: lunasworkGodMode,
   profileId: () => activeProfileId,
   env: () => orchestraToolEnv(),
   freeEnv: () => lunasworkFreeEnv(),
@@ -1029,209 +1009,106 @@ const lunasworkSecretGate = createSecretGate({
   log: (line) => console.info(line),
 });
 
-const orchestra = createOrchestra({
-  runPlanner: lunasworkBuilder.wrapPlanner(runPlanner),
-  addWorktree,
-  dirtyCount,
+/** One line at the end of a run's report (<userDir>/runs/<id>.md). */
+function appendRunReport(planId, line) {
+  if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return;
+  try {
+    fs.appendFileSync(path.join(userDir(), RUN_REPORT_DIR, `${planId}.md`), `${line}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch (err) {
+    console.error('[orchestra] could not append to the run report:', err && err.message);
+  }
+}
+
+/** releaseCut.cutRelease with the tool env (gh, npm on PATH). */
+const runReleaseCut = (opts) => cutRelease(opts, { env: orchestraToolEnv(), log: (line) => console.info('[orchestra]', line) });
+
+// After a merge landed: ff the local base checkout, clean up merged branches,
+// cut a release when ticked (src/orchestraPostMerge.js). The start-up sweep
+// only touches registered projects.
+const orchestraPostMerge = createPostMergeServices({
+  appPath: () => app.getAppPath(),
+  isKnownRepo: (repoPath) => projects.some((p) => p.path && path.resolve(p.path) === path.resolve(repoPath)),
+  release: runReleaseCut,
+  log: (line) => console.info('[orchestra]', line),
+});
+
+// God Mode v2: one controller per project (src/orchestraRegistry.js). Their
+// deps are built in src/orchestraWiring.js; main only hands its handles over.
+const orchestraCtx = {
+  registry: () => orchestraRuns,
+  builder: lunasworkBuilder,
+  secretGate: lunasworkSecretGate,
+  overnight,
+  sessions,
+  send,
+  readUiPrefs,
   readTodos,
-  // Every worker / fix-up tab joins the overnight guard: keep-awake while a
-  // run has tabs, plus the LM Studio watchdog for local-model workers. The
-  // tab closing ends it (overnight.forgetSession in the close path).
-  createSession: guardedSessionFactory(createSession, overnight),
-  briefDir: () => path.join(userDir(), BRIEF_DIR),
-  writeBrief: (file, text) => {
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  // Slice 4 supervisor.
-  finishPackage,
-  headSha,
-  sessionAlive: (id) => {
-    const s = sessions.get(id);
-    return !!(s && s.proc);
-  },
-  // Multi-line text goes in as a bracketed paste + Enter (see pty:paste);
-  // a bare control byte (the kill switch's Esc) is written raw. Pasted text
-  // can carry tool output (a failed verify), so control characters are
-  // stripped first: an embedded ESC[201~ would end the paste early and turn
-  // the rest into live keystrokes.
-  writePty: (id, text, opts = {}) => {
-    const s = sessions.get(id);
-    if (!s || !s.proc) return false;
-    if (opts.paste) {
-      // eslint-disable-next-line no-control-regex
-      const clean = String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
-      s.proc.write(`\x1b[200~${clean}\x1b[201~`);
-      s.proc.write('\r');
-    } else {
-      s.proc.write(text);
-    }
-    return true;
-  },
-  tickTodos: (projectId, ats) => {
-    const wanted = new Set(ats);
-    const list = readTodos(projectId);
-    const next = list.map((t) => (wanted.has(t.at) && !t.done ? { ...t, done: true, doneAt: Date.now() } : t));
-    if (next.some((t, i) => t !== list[i]) && writeTodos(projectId, next)) send('todo:changed', { projectId });
-  },
-  workerSettings: () => {
-    const prefs = readUiPrefs();
-    return lunasworkBuilder.workerSettings({
-      model: prefs.orchestraWorkerModel,
-      permissionMode: prefs.orchestraPermissionMode,
-      effort: prefs.orchestraWorkerEffort,
-      integration: prefs.orchestraIntegration,
-      allowedTools: prefs.orchestraAllowedTools,
-      checkCommand: prefs.orchestraCheckCommand,
-    });
-  },
-  // Second pass + slice 5.
+  writeTodos,
+  createSession,
   closeSession: (id) => closeSession(id),
   usageResetAt,
-  baseBranchOf: (repoPath) => orchestraIntegrate.baseBranchOf(repoPath),
-  mergeDeps: (root, branches) =>
-    orchestraIntegrate.mergeDeps(root, branches, {
-      resolve: (r) => orchestraIntegrate.runResolver({ ...r, env: orchestraToolEnv() }),
-    }),
-  createPr: (args) => orchestraIntegrate.createPr({ ...args, env: orchestraToolEnv() }),
-  // extra.beforePush: the end-of-run self-check gate (orchestraFinalize.js).
-  integrateMerge: (args, extra) =>
-    orchestraIntegrate.integrateMerge(args, {
-      addWorktree,
-      removeWorktree,
-      resolve: (r) => orchestraIntegrate.runResolver({ ...r, env: orchestraToolEnv() }),
-      ...(extra && typeof extra.beforePush === 'function' ? { beforePush: extra.beforePush } : {}),
-    }),
-  runSelfCheck: lunasworkSecretGate.wrapSelfCheck((args) => orchestraSelfCheck.runSelfCheck(args)),
-  pushBranch: lunasworkSecretGate.wrapPushBranch((root, branch) => orchestraSelfCheck.pushBranch(root, branch)),
-  removeWorktree,
-  // Failed-launch cleanup + the orphan-branch sweep (orchestraCleanup.js).
-  deleteBranch,
-  listOwnBranches,
-  worktreeBranches,
-  log: (line) => console.info('[orchestra]', line),
-  updateTodos: (projectId, fn) => {
-    const list = readTodos(projectId);
-    const next = fn(list);
-    if (next !== list && writeTodos(projectId, next)) send('todo:changed', { projectId });
-  },
+  toolEnv: orchestraToolEnv,
+  userDir,
+  ensureUserDir,
+  runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+  worktrees: { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, worktreeBranches },
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
-  onReport: (planId, text, summary) => reportMail.godmode.onReport(planId, text, summary),
-  writeReport: (planId, text) => {
-    if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return null;
-    try {
-      const dir = path.join(userDir(), RUN_REPORT_DIR);
-      fs.mkdirSync(dir, { recursive: true });
-      const file = path.join(dir, `${planId}.md`);
-      fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
-      // The same run as a standalone page with charts, next to the .md.
-      try {
-        const view = orchestra.view() || {};
-        const html = renderRunReportHtml(view, { now: Date.now(), suggestions: view.suggestions, repoPath: repoPathOf(text) });
-        fs.writeFileSync(path.join(dir, `${planId}.html`), html, { encoding: 'utf8', mode: 0o600 });
-      } catch (err) {
-        console.error('[orchestra] html report failed:', err && err.message);
-      }
-      return file;
-    } catch {
-      return null;
-    }
+  // A transient failure leaves the run email pending (src/godmodePending.js).
+  onReport: (planId, text, summary) => reportMail.runMail.report(planId, text, summary),
+  // The phone's live run views (godmodelivepub.js), one per project.
+  onLive: (view, projectId) => {
+    const key = typeof projectId === 'string' ? projectId : null;
+    latestLiveViews.delete(key);
+    if (view) latestLiveViews.set(key, view);
+    pokeGodmodeLive();
   },
-  // Merge mode pushes the base branch with no PR review: Mati confirms it
-  // here, natively - a renderer can ask for it, never grant it. A Luna's
-  // Work build's own plan was confirmed the same way when Mati started that run.
-  confirmMerge: async (base) => {
-    if (lunasworkBuilder.ownsMerge(orchestra.view())) return true;
+  messageBox: (opts) => (mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, opts) : null),
+  toast: (title, body) => {
+    if (Notification.isSupported()) new Notification({ title, body }).show();
+  },
+  projects: () => projects,
+  resolveStoredPath,
+  flushTodos: () => {
+    if (todoSync) todoSync.flush();
+  },
+  usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
+  accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
+  freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
+  playCue,
+  log: (line) => console.info('[orchestra]', line),
+  logError: (line) => console.error(line),
+};
+
+/**
+ * The wiring's merge confirmation, unless "Create a new release after finish"
+ * was ticked: then the dialog says so, and a Luna's Work build is asked too.
+ */
+function confirmMergeFor(deps) {
+  return async (base, extra = {}) => {
+    if (!extra || extra.release !== true) return deps.confirmMerge(base);
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
-      buttons: ['Merge and push', 'Cancel'],
+      buttons: ['Merge, push and release', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
       title: 'God Mode - merge into base branch',
-      message: `Merge every pushed package into "${base || '?'}" and push it?`,
+      message: `Merge every pushed package into "${base || '?'}" and push it? Then cut a new release.`,
       detail:
-        'Packages are merged in dependency order in a separate worktree and verified after each merge. Nothing is pushed if a verify fails or a conflict cannot be resolved. There is no PR review.',
+        'Packages are merged in dependency order in a separate worktree and verified after each merge. Nothing is pushed if a verify fails or a conflict cannot be resolved. There is no PR review.' +
+        '\n\nAfter the merge lands and the self-check is green: npm version bump, README release block, commit + tag, push of the base branch and the tag, npm run dist and a GitHub release with the installers.',
     });
     return response === 0;
+  };
+}
+
+const orchestraRuns = createOrchestraRegistry({
+  makeController: (projectId) => {
+    const deps = makeOrchestraDeps(projectId, orchestraCtx);
+    // Post-merge services (src/orchestraPostMerge.js) are shared by every project's run.
+    return createOrchestra({ ...deps, postMerge: orchestraPostMerge.impls, confirmMerge: confirmMergeFor(deps) });
   },
-  // The morning report toast, when OS notifications are on (Settings).
-  notify: ({ pushed, total, failed }) => {
-    if (!readUiPrefs().notificationsEnabled || !Notification.isSupported()) return;
-    const body = `${pushed}/${total} pushed${failed ? ' - integration needs you' : ''}`;
-    new Notification({ title: 'LunaCore God Mode', body }).show();
-  },
-  // A saved run is only brought back for a folder that is still one of the
-  // registered projects - the file is on disk, so it is not trusted to name
-  // where LunaCore opens tabs and runs git.
-  loadState: () => {
-    const raw = orchestraStore.loadRun();
-    // Re-homed first: a run saved under another user's home still matches
-    // the same registered project here (restore() re-homes the rest).
-    const repo = raw && typeof raw.repoPath === 'string' ? path.resolve(resolveStoredPath(raw.repoPath) || raw.repoPath) : null;
-    return repo && projects.some((p) => p.path && path.resolve(p.path) === repo) ? raw : null;
-  },
-  saveState: (data) => {
-    if (!orchestraStore.saveRun(data)) console.error('[orchestra] could not save config/orchestra.local.json');
-  },
-  onChange: (view) => {
-    send('orchestra:changed', view);
-    lunasworkBuilder.onChange(view);
-  },
-  onLive: (view) => {
-    latestLiveView = view;
-    pokeGodmodeLive();
-  },
-  // Planning that hit the Claude limit waits for the reset (orchestraPlanWait.js).
-  usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
-  // ...unless another Claude account is free (src/claudeaccounts.js).
-  accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
-  freshEnv: () => orchestraToolEnv(),
-  onPlanWait: (state) => send('orchestra:planWait', state),
-  // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
-  freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
-  // A restored run's folders and briefs re-homed onto this PC (src/projects.js).
-  resolvePath: (p) => resolveStoredPath(p),
-  resolveFile: (p) => resolveStoredPath(p, (f) => fs.existsSync(f)),
-  // Sleep at the usage limit / shut down when done (src/orchestraPower.js).
-  power: createPowerCtl(),
-  awake: { release: () => overnight.suspendAwake(), restore: () => overnight.restoreAwake() },
-  flush: () => {
-    if (todoSync) todoSync.flush();
-  },
-  // One God Mode run at a time for now; the overnight guard now holds this
-  // run's own workers, so it must not be read as "another run" (the
-  // multi-run registry replaces this - docs/MULTI_GODMODE_PLAN.md A2).
-  otherRunsActive: () => false,
-  appendReport: (planId, line) => {
-    if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return;
-    try {
-      fs.appendFileSync(path.join(userDir(), RUN_REPORT_DIR, `${planId}.md`), `${line}\n`, { encoding: 'utf8', mode: 0o600 });
-    } catch (err) {
-      console.error('[orchestra] could not append to the run report:', err && err.message);
-    }
-  },
-  // Shown whether or not toasts are on in Settings: the PC is about to go.
-  notifyPower: (kind) => {
-    if (!Notification.isSupported()) return;
-    const body = {
-      sleepSoon: 'Usage limit - the PC sleeps in 60 s and wakes for the reset. Cancel on the God Mode board.',
-      sleepFailed: 'Could not schedule the wake-up, so the PC stays awake.',
-      shutdownSoon: 'Run finished - the PC shuts down in 2 minutes. Cancel on the God Mode board.',
-      shutdownFailed: 'Could not schedule the shutdown.',
-    }[kind];
-    if (body) new Notification({ title: 'LunaCore God Mode', body }).show();
-  },
-  onRunEvent: (kind) => {
-    if (readUiPrefs().voiceEnabled === false) return;
-    if (kind === 'done') playCue('voice.done');
-    else if (kind === 'needYou' || kind === 'stalled' || kind === 'overlap') playCue('voice.needYou');
-  },
+  log: (line) => console.error(line),
 });
 
 // Luna's Work project queue (B16): one store for the controller and the IPC.
@@ -1268,7 +1145,7 @@ const lunaswork = createLunasWorkRuntime({
   readTodos,
   writeTodos,
   onTodosChanged: (projectId) => send('todo:changed', { projectId }),
-  orchestra,
+  orchestra: lunasworkGodMode,
   builder: lunasworkBuilder,
   secretStore: lunasworkSecrets,
   godModeCheckCommand: () => readUiPrefs().orchestraCheckCommand,
@@ -1324,10 +1201,8 @@ const lunasworkMachine = createMachineRuntime({
   // What the watchdog task starts: this LunaCore (dev: electron + the app folder).
   launch: { command: process.execPath, args: app.isPackaged ? [] : [app.getAppPath()] },
   runsRoot: () => path.join(userDir(), RUN_REPORT_DIR),
-  godModeBusy: () => {
-    const view = orchestra.view();
-    return !!view && !view.settled && !view.killed;
-  },
+  // Any open God Mode run: a worktree cleanup only ever waits longer for it.
+  godModeBusy: () => orchestraRuns.anyOpen(),
   // A worktree with an open tab is never removed.
   worktreeInUse: (root) => {
     const base = path.resolve(root).toLowerCase();
@@ -1336,11 +1211,6 @@ const lunasworkMachine = createMachineRuntime({
   mail: { sender: reportMail.sender },
   log: (line) => console.info(line),
 });
-/** God Mode's side of the mutual exclusion for actions on the current plan: a refusal, or null. */
-const lunasworkBlocksPlan = () => {
-  const view = orchestra.view();
-  return view ? lunaswork.godModeBlock(view.projectId) : null;
-};
 
 /**
  * Gives a tab its own intake token and --mcp-config file.
@@ -1508,9 +1378,9 @@ function spawnInto(session, profile, launch = null) {
     if (!session.approvalShowing && detectApprovalPrompt(scan, triggers.approvalPrompt)) {
       session.approvalShowing = true;
       statusBoard.approval(session.id);
-      if (orchestra.ownsSession(session.id)) {
+      if (orchestraRuns.ownsSession(session.id)) {
         const { rule, example } = approvalRuleFor(session);
-        orchestra.onApproval(session.id, rule, example);
+        orchestraRuns.onApproval(session.id, rule, example);
       }
       if (soundManager && readUiPrefs().voiceEnabled !== false) {
         const resolved = resolveSoundFile('voice.needYou');
@@ -1650,8 +1520,8 @@ function spawnInto(session, profile, launch = null) {
         if (failoverTab(session, at)) return;
         send('godmode:signal', { sessionId: session.id, type: 'usageLimit', resetsAt: at });
         statusBoard.limit(session.id, at);
-        // A God Mode v2 worker: the whole run waits (one account, one limit).
-        orchestra.onUsageLimit(session.id, at);
+        // A God Mode v2 worker: its whole run waits (one account, one limit).
+        orchestraRuns.onUsageLimit(session.id, at);
       },
       // Same channel/shape as onApiError above - autoproceed.js's proof that an
       // armed "continue" (or Mati's own typing) was actually consumed, so a
@@ -1666,7 +1536,7 @@ function spawnInto(session, profile, launch = null) {
         statusBoard.turnEnd(session.id, isViewed(session.id));
         send('metrics:turnend', { sessionId: session.id, turn });
         // God Mode v2 worker: LUNA_DONE / LUNA_BLOCKED / nudge (slice 4).
-        orchestra.onTurnEnd(session.id, turn.text);
+        orchestraRuns.onTurnEnd(session.id, turn.text);
       },
     },
   );
@@ -1685,7 +1555,7 @@ function spawnInto(session, profile, launch = null) {
     });
     send('metrics:gitfiles', { sessionId: session.id, files: own, repoFiles: files });
     // God Mode v2 live file-overlap guard (idea #7).
-    orchestra.onFiles(session.id, files.map((f) => f.file));
+    orchestraRuns.onFiles(session.id, files.map((f) => f.file));
   });
   session.gitWatcher.start();
 
@@ -1895,7 +1765,7 @@ function closeSession(sessionId) {
   intakeServer.revoke(sessionId);
   removeSessionConfig(userDir(), sessionId);
   overnight.forgetSession(sessionId);
-  orchestra.onSessionClosed(sessionId);
+  orchestraRuns.onSessionClosed(sessionId);
   sessions.delete(sessionId);
   statusBoard.remove(sessionId);
 
@@ -2176,10 +2046,13 @@ const snapshotPuts = createSnapshotPuts({
 
 // The live run + tab lights for the phone: throttled, skipped when unchanged.
 godmodeLive = createLivePublisher({
-  build: () => ({
-    live: liveEntry(latestLiveView, { now: Date.now(), tabState: (id) => (statusBoard.current(id) || {}).state || null }),
-    tabs: tabsEntry([...sessions.values()].map(sessionSummary)),
-  }),
+  // lives: every project's run, the latest to change first; live: that first
+  // one, for phone builds from before several runs at once.
+  build: () => {
+    const views = [...latestLiveViews.values()].reverse();
+    const lives = livesEntry(views, { now: Date.now(), tabState: (id) => (statusBoard.current(id) || {}).state || null });
+    return { live: lives[0] || null, lives, tabs: tabsEntry([...sessions.values()].map(sessionSummary)) };
+  },
   publish: (section) => snapshotPuts.godmode.live(section),
 });
 
@@ -3064,6 +2937,8 @@ function registerIpc() {
     reader: reportMail.reader,
     replies: lunasworkMailReplies,
     projects: () => projects.map((p) => ({ id: p.id, label: p.label })),
+    // Gmail just connected: the God Mode run emails that waited for it go out.
+    onConnected: () => reportMail.runMail.flush(),
   });
   // Attention inbox ('!' chip): God Mode runs to review from every PC, check-in, weekly goals, Gmail not connected.
   registerInboxIpc({
@@ -3381,118 +3256,76 @@ function registerIpc() {
     return ok;
   });
 
-  // God Mode v2 planner (slice 3). The renderer names a tab at most; the
-  // project, repo folder, profile and to-do list are all resolved here. The
-  // planner runs on the cloud default like /ask (ask:query's reasoning): a
-  // tab's local-model profile must not silently plan the whole run.
-  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts) => {
-    // The picker's selection: to-do `at` values only, capped like the list
-    // itself. No selection (null) = every open to-do; an off-shape one fails
-    // closed ([] -> 'noneSelected'). makePlan re-checks each value against
-    // the list it reads.
-    let picked = null;
-    if (todoAts != null) {
-      const unique = Array.isArray(todoAts) ? [...new Set(todoAts)] : [];
-      picked = unique.length <= MAX_TODO_ITEMS && unique.every(Number.isFinite) ? unique : [];
-    }
-    const session = resolveSession(sessionId);
-    if (!session) return { ok: false, error: 'noTab' };
-    // Never God Mode and Luna's Work on the same project at once.
-    const blocked = lunaswork.godModeBlock(session.projectId);
-    if (blocked) return blocked;
-    const project = getProject(projects, session.projectId);
-    // A missing cwd makes execFile fail with ENOENT, which would read as
-    // "claude not found" - check the folder first and say what is wrong.
-    const repoPath = resolveProjectDir(project ? project.path : session.cwd);
-    if (!repoPath) return { ok: false, error: 'noRepo' };
-    const res = await orchestra.makePlan({
-      projectId: session.projectId,
-      repoPath,
-      profileId: session.profileId,
-      env: withClaudeOnPath(buildSessionEnv(process.env, {})),
-      todoAts: picked,
-    });
-    if (res.ok) send('orchestra:changed', res.plan);
-    return res;
+  // God Mode v2 (src/orchestraIpc.js): every handler resolves its run here,
+  // by a validated projectId or the active tab - never trusting the page.
+  registerOrchestraIpc(ipcMain, {
+    registry: orchestraRuns,
+    projects: () => projects,
+    activeProjectId: () => {
+      const session = activeSession();
+      return session ? session.projectId : null;
+    },
+    // A closed tab's id is refused, never redirected to the tab on screen.
+    resolveSession: resolveTargetSession,
+    repoFor: (session) => {
+      const project = getProject(projects, session.projectId);
+      return resolveProjectDir(project ? project.path : session.cwd);
+    },
+    toolEnv: orchestraToolEnv,
+    maxTodoItems: MAX_TODO_ITEMS,
+    godModeBlock: (projectId) => lunaswork.godModeBlock(projectId),
+    send,
+    playCue,
+    openExternal: (url) => shell.openExternal(url),
+    openPath: (file) => shell.openPath(file),
+    runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+    readUiPrefs,
+    writeUiPrefs,
   });
 
-  ipcMain.handle('orchestra:get', () => orchestra.view());
-  // A planning wait for the usage-limit reset: replay its state, or cancel it.
-  // No payload crosses either way.
-  ipcMain.handle('orchestra:planWait', () => orchestra.planWait());
-  ipcMain.handle('orchestra:cancelPlanWait', () => orchestra.cancelPlanWait());
-
-  // Approve / Launch. orchestra.launch() validates the payload: only a known
-  // plan id, ids of its own packages and capped prompt strings get through.
-  ipcMain.handle('orchestra:launch', async (_event, payload) => {
-    const blocked = lunasworkBlocksPlan();
-    if (blocked) return blocked;
-    const res = await orchestra.launch(payload);
-    if (res.ok) {
-      playCue('sfx.terminalNew');
-      send('orchestra:changed', res.plan);
-    }
-    return res;
-  });
-
-  // Discard is refused while a worker still runs (kill the run first).
-  // Discard / Retry / Finish are also refused while Luna's Work runs on the
-  // plan's project; Kill always works.
-  ipcMain.handle('orchestra:discard', () => lunasworkBlocksPlan() || orchestra.discard());
-
-  // Slice 4. Retry: {planId, id} - validated in orchestra.retry(). Kill: no
-  // payload; same as the Ctrl+Shift+K hotkey.
-  ipcMain.handle('orchestra:retry', (_event, payload) => lunasworkBlocksPlan() || orchestra.retry(payload));
-  ipcMain.handle('orchestra:kill', () => orchestra.kill());
-
-  // Second pass + slice 5: cancel a scheduled start; finish a run by hand
-  // (integrate + clean up + report). Both validated in orchestra.js.
-  ipcMain.handle('orchestra:unschedule', (_event, payload) => orchestra.unschedule(payload));
-  ipcMain.handle('orchestra:finish', (_event, payload) => lunasworkBlocksPlan() || orchestra.finishRun(payload));
-  // Sleep / shutdown countdowns: only the two known names are accepted, and
-  // the renderer can only ever cancel - never start one.
-  ipcMain.handle('orchestra:cancel-power', (_event, what) => {
-    if (what === 'sleep') return orchestra.cancelSleep();
-    if (what === 'shutdown') return orchestra.cancelShutdown();
-    return { ok: false, error: 'badPower' };
-  });
-  ipcMain.handle('orchestra:check-wake', () => orchestra.checkWake());
-  // Live run options: a plain object of known boolean flags, checked here -
-  // the renderer is untrusted.
-  ipcMain.handle('orchestra:set-options', (_event, patch) =>
-    isOptionsPatch(patch) ? orchestra.setOptions(patch) : { ok: false, error: 'badOptions' },
-  );
-  // The URL comes from the plan (gh's own output, shape-checked), never from
-  // the page.
-  ipcMain.on('orchestra:openPr', (_event, id) => {
-    const view = orchestra.view();
-    const pkg = view && typeof id === 'string' ? view.packages.find((p) => p.id === id) : null;
-    if (pkg && typeof pkg.prUrl === 'string' && PR_URL_RE.test(pkg.prUrl)) shell.openExternal(pkg.prUrl);
-  });
-  // "Open report": only the run id crosses; the path is built here
-  // (<userDir>/runs/<id>.md) and must be a plain file.
-  ipcMain.handle('orchestra:openReport', async (_event, planId) => {
-    const file = reportFileFor(path.join(userDir(), RUN_REPORT_DIR), planId);
-    if (!file) return { ok: false, error: 'badId' };
-    try {
-      if (!fs.lstatSync(file).isFile()) return { ok: false, error: 'noReport' };
-    } catch {
-      return { ok: false, error: 'noReport' };
-    }
-    const err = await shell.openPath(file);
-    return err ? { ok: false, error: 'openFailed' } : { ok: true };
-  });
-
-  // Idea #5: allow a tool for FUTURE workers. Only a rule the current run
-  // actually logged from a stalled prompt is accepted - the renderer cannot
-  // add an arbitrary one.
-  ipcMain.handle('orchestra:allow', (_event, rule) => {
-    const view = orchestra.view();
-    if (!isAllowRule(rule) || !view || !view.suggestions.some((s) => s.rule === rule)) return { ok: false, error: 'badRule' };
-    const prefs = readUiPrefs();
-    const list = [...new Set([...(prefs.orchestraAllowedTools || []), rule])];
-    writeUiPrefs({ orchestraAllowedTools: list });
-    return { ok: true, allowed: readUiPrefs().orchestraAllowedTools };
+  // Finished-run actions (src/orchestraFinishIpc.js): ids are validated there.
+  // Each run is found by its plan id in the per-project registry.
+  orchestraFinishIpc.register(ipcMain, {
+    runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+    resendRunEmail: (planId) => {
+      const hit = orchestraRuns.byPlanId(planId);
+      return reportMail.runMail.resend(planId, hit ? hit.controller.emailSummary(planId) : null);
+    },
+    // The board's projectId on a resend must match the run's own project.
+    planProject: (planId) => {
+      const hit = orchestraRuns.byPlanId(planId);
+      return hit ? hit.projectId : undefined;
+    },
+    projects: () => projects.map((p) => ({ id: p.id, path: p.path })),
+    // The asking (already validated) project's own run; the IPC still checks
+    // the target's project and folder match.
+    releaseTarget: (projectId) => {
+      const controller = orchestraRuns.get(projectId);
+      return controller ? controller.releaseTarget() : null;
+    },
+    unreleasedCount: (repoPath) => unreleasedCount(repoPath, { env: orchestraToolEnv() }),
+    cutRelease: runReleaseCut,
+    releaseResult,
+    recordRelease: (planId, result) => {
+      const hit = orchestraRuns.byPlanId(planId);
+      if (hit) hit.controller.recordRelease(planId, result);
+    },
+    appendReport: appendRunReport,
+    // Pushing a tag and publishing installers: Mati confirms natively.
+    confirmRelease: async ({ base, count }) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['Release now', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'God Mode - release now',
+        message: `Cut a new release from "${base}"${Number.isInteger(count) ? ` (${count} commits since the last tag)` : ''}?`,
+        detail:
+          'npm test, npm version bump, README release block, commit + tag, push of the base branch and the tag, npm run dist and a GitHub release with the installers. Refused on a dirty tree, red tests or no gh auth.',
+      });
+      return response === 0;
+    },
   });
 
   // "Don't sleep" switch. The renderer only says on/off - the script path
@@ -3768,10 +3601,23 @@ app.whenReady().then(() => {
   // calls and outlive app.quit(), so the probe never exits. Neither belongs in
   // a widget check.
   const probing = process.argv.includes('--luna-probe');
-  // God Mode v2: bring back the last run's board (held - nothing launches
-  // until Approve/Retry) and start the worker-time watchdog. After the
-  // projects load: a restored run must belong to one of them.
-  if (!probing) orchestra.restore();
+  // God Mode v2: bring back every project's stored run (held - nothing
+  // launches until Approve/Retry) and start the worker-time watchdog. After
+  // the projects load: a restored run must belong to one of them. The
+  // single-run file older builds wrote moves to the per-project layout first.
+  if (!probing) {
+    orchestraStore.migrateLegacy((raw) => legacyRunProject(orchestraCtx, raw));
+    orchestraRuns.restoreAll(orchestraStore.listStored());
+    // Once per start: settled runs older than a day get the post-merge cleanup
+    // again. The ledger holds every project's; a restored landed run joins it.
+    const landed = orchestraRuns
+      .entries()
+      .map(({ controller }) => controller.landedRun())
+      .find(Boolean);
+    orchestraPostMerge.sweepAtStart(landed || null).catch((err) => console.error('[orchestra] start-up sweep failed:', err && err.message));
+    // Run emails left pending (Gmail was not connected, rate-limited): once, after the restore.
+    reportMail.runMail.flush().catch((err) => console.error('[orchestra] pending run emails failed:', err && err.message));
+  }
   // Luna's Work decision queue: pending decisions to the phone snapshot,
   // answers back from the `todos` cloud scope. Wired before resume() so a
   // resumed run's decisions are published at once.
@@ -3804,9 +3650,9 @@ app.whenReady().then(() => {
   }
   // B16: the queue to the phone once at start, not only on the next event.
   lunasworkPublish();
-  setInterval(() => orchestra.tick(), ORCHESTRA_TICK_MS).unref();
+  setInterval(() => orchestraRuns.tick(), ORCHESTRA_TICK_MS).unref();
   // Back from sleep: re-arm or resume a paused run, drop the wake task.
-  powerMonitor.on('resume', () => orchestra.onSystemResume());
+  powerMonitor.on('resume', () => orchestraRuns.onSystemResume());
   setInterval(() => statusBoard.tick(), STATUS_TICK_MS).unref();
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();

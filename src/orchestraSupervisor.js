@@ -24,6 +24,7 @@ const { WORKTREE_DIR, BRANCH_PREFIX } = require('./worktrees');
 const { normalizeEffort } = require('./efforts');
 const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
 const { compileOwnership, ownerOf } = require('./ownership');
+const { normalizePostMerge, normalizeSha } = require('./orchestraPostMergeState');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -213,6 +214,9 @@ function normalizeOptions(raw) {
   const valid = typeof min === 'number' && Number.isFinite(min) && min >= 0;
   const out = { unattendedApprovalMin: valid ? Math.min(Math.round(min), MAX_APPROVAL_MIN) : DEFAULT_APPROVAL_MIN };
   for (const key of RUN_OPTION_FLAGS) out[key] = o[key] === true;
+  // "Create a new release after finish": set at Approve only (with the merge
+  // confirm), never a live switch. Absent means off, so older runs load as-is.
+  if (o.releaseAfter === true) out.releaseAfter = true;
   return out;
 }
 
@@ -702,6 +706,25 @@ function normalizeIntegration(raw) {
       .map(normalizeManualAction)
       .filter(Boolean)
       .slice(0, MAX_MANUAL_ACTIONS),
+    ...landedFields(o),
+  };
+}
+
+/**
+ * What a merge that landed left on the integration (only the keys that are
+ * set, so a run without them reads back unchanged): the landed head sha, the
+ * post-merge step results (orchestraPostMergeState.js) and the run email
+ * state - a pending email is sent once Gmail connects (godmodePending.js).
+ */
+function landedFields(o) {
+  const headSha = normalizeSha(o.headSha);
+  const postMerge = normalizePostMerge(o.postMerge);
+  const emailError = strOrNull(o.emailError, 80);
+  return {
+    ...(headSha ? { headSha } : {}),
+    ...(Object.keys(postMerge).length ? { postMerge } : {}),
+    ...(emailError ? { emailError } : {}),
+    ...(o.emailPending === true ? { emailPending: true } : {}),
   };
 }
 

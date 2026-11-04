@@ -2,7 +2,8 @@
 // LunaCore - when the live God Mode snapshot goes out (main, pure timers)
 // ----------------------------------------------------------------------------
 // orchestra.js commit() and the tab status board poke() this on every change;
-// it decides whether the `godmode` snapshot's `live` / `tabs` go out now:
+// it decides whether the `godmode` snapshot's `live` / `lives` / `tabs` go
+// out now (`lives`: one per project's run, MULTI_GODMODE_PLAN.md A5):
 //
 //   - at once when a package changes state, the run pauses / resumes,
 //     settles or is killed (the "urgent" key moved);
@@ -21,26 +22,32 @@
 const MIN_MS = 15 * 1000;
 const HEARTBEAT_MS = 60 * 1000;
 
-const isActive = (section) => Boolean(section && section.live && (section.live.state === 'running' || section.live.state === 'paused'));
+/** Every live run in a section: `lives`, or the one `live` of an older build. */
+const livesOf = (section) => {
+  if (!section) return [];
+  if (Array.isArray(section.lives)) return section.lives.filter(Boolean);
+  return section.live ? [section.live] : [];
+};
+const isActive = (section) => livesOf(section).some((l) => l.state === 'running' || l.state === 'paused');
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 
-/** What must go out at once: run identity / state and every package's state. */
+/** What must go out at once: each run's identity / state and every package's state. */
 function urgentKey(section) {
-  const l = section && section.live;
-  if (!l) return 'none';
-  return JSON.stringify([l.id, l.state, l.pausedUntil, l.packages.map((p) => [p.id, p.state])]);
+  const lives = livesOf(section);
+  if (!lives.length) return 'none';
+  return JSON.stringify(lives.map((l) => [l.id, l.state, l.pausedUntil, l.packages.map((p) => [p.id, p.state])]));
 }
 
 /** Everything but the clock: elapsed times alone are not a change. */
 function contentKey(section) {
   if (!section) return 'none';
-  const live = section.live ? { ...section.live, packages: section.live.packages.map((p) => ({ ...p, elapsedMs: null })) } : null;
-  return JSON.stringify({ live, tabs: section.tabs || [] });
+  const lives = livesOf(section).map((l) => ({ ...l, packages: l.packages.map((p) => ({ ...p, elapsedMs: null })) }));
+  return JSON.stringify({ lives, tabs: section.tabs || [] });
 }
 
 /**
  * @param {{
- *   build: () => ({live: object|null, tabs: object[]}|null),
+ *   build: () => ({live: object|null, lives?: object[], tabs: object[]}|null),
  *   publish: (section: object) => unknown,
  *   now?: () => number, setTimer?: Function, clearTimer?: Function,
  *   minMs?: number, heartbeatMs?: number, log?: (msg: string) => void,

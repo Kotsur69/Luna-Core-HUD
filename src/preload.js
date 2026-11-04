@@ -8,6 +8,20 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+// God Mode runs one plan per project (src/orchestraIpc.js): the optional
+// projectId of an orchestra call crosses only as a string, or as null for the
+// run of a tab with no project (orchestra:list reports it so); anything else
+// is dropped and main falls back to the active tab's run. Main validates it.
+const isScope = (projectId) => typeof projectId === 'string' || projectId === null;
+const orchestraScope = (projectId) => (isScope(projectId) ? { projectId } : undefined);
+const withProject = (payload, projectId) => (isScope(projectId) ? { ...payload, projectId } : payload);
+// A payload object whose own projectId is re-checked like the argument form.
+const scopedPayload = (payload) => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const { projectId, ...rest } = payload;
+  return withProject(rest, projectId);
+};
+
 contextBridge.exposeInMainWorld('lunacore', {
   // --- PASSIVE OBSERVER: PTY stdout stream -> renderer ---
   // NOTE: since the tabs version, every event carries a sessionId. The renderer
@@ -574,64 +588,101 @@ contextBridge.exposeInMainWorld('lunacore', {
   // Passed as-is: main validates and fails closed on a bad shape.
   planOrchestra: (sessionId, todoAts) =>
     ipcRenderer.invoke('orchestra:plan', typeof sessionId === 'string' ? sessionId : null, Array.isArray(todoAts) ? todoAts : null),
-  /** The current plan view, or null. */
-  getOrchestra: () => ipcRenderer.invoke('orchestra:get'),
+  // Every call below takes an optional projectId last (one God Mode run per
+  // project); without it main uses the active tab's run, or the only one.
+  /** Summaries of every project's run: Promise<Array<{projectId, label, planId, ...}>>. */
+  listOrchestra: () => ipcRenderer.invoke('orchestra:list'),
+  /** A run's plan view, or null. */
+  getOrchestra: (projectId) => ipcRenderer.invoke('orchestra:get', orchestraScope(projectId)),
   /** Planning waiting for the Claude limit reset: {state, resumeAt, ...} or null. */
-  getOrchestraPlanWait: () => ipcRenderer.invoke('orchestra:planWait'),
-  /** Cancels that wait. No payload. */
-  cancelOrchestraPlanWait: () => ipcRenderer.invoke('orchestra:cancelPlanWait'),
-  /** Wait state changes (armed, planning, failed, cleared); returns an unsubscribe. */
+  getOrchestraPlanWait: (projectId) => ipcRenderer.invoke('orchestra:planWait', orchestraScope(projectId)),
+  /** Cancels that wait. */
+  cancelOrchestraPlanWait: (projectId) => ipcRenderer.invoke('orchestra:cancelPlanWait', orchestraScope(projectId)),
+  /** Wait state changes (armed, planning, failed, cleared): cb(state, projectId); returns an unsubscribe. */
   onOrchestraPlanWait: (cb) => {
-    const listener = (_e, state) => cb(state);
+    const listener = (_e, msg) => cb(msg && typeof msg === 'object' ? msg.state : null, msg && typeof msg === 'object' ? msg.projectId : null);
     ipcRenderer.on('orchestra:planWait', listener);
     return () => ipcRenderer.removeListener('orchestra:planWait', listener);
   },
-  /** Approve (ids null) or launch chosen packages; main validates the payload. */
-  launchOrchestra: (payload) => ipcRenderer.invoke('orchestra:launch', payload),
+  /** Approve (ids null) or launch chosen packages; main validates the payload (projectId included). */
+  launchOrchestra: (payload) => ipcRenderer.invoke('orchestra:launch', scopedPayload(payload)),
   /** Promise<{ok, error?}> - refused ('runActive') while a worker runs. */
-  discardOrchestra: () => ipcRenderer.invoke('orchestra:discard'),
+  discardOrchestra: (projectId) => ipcRenderer.invoke('orchestra:discard', orchestraScope(projectId)),
   /** Slice 4: pick a stalled / closed / killed package back up. Only ids cross. */
-  retryOrchestra: (planId, id) =>
-    ipcRenderer.invoke('orchestra:retry', {
-      planId: typeof planId === 'string' ? planId : null,
-      id: typeof id === 'string' ? id : null,
-    }),
-  /** Slice 4 kill switch: no new workers, Esc to the running ones. */
-  killOrchestra: () => ipcRenderer.invoke('orchestra:kill'),
+  retryOrchestra: (planId, id, projectId) =>
+    ipcRenderer.invoke(
+      'orchestra:retry',
+      withProject({ planId: typeof planId === 'string' ? planId : null, id: typeof id === 'string' ? id : null }, projectId),
+    ),
+  /** Slice 4 kill switch for one run: no new workers, Esc to the running ones. */
+  killOrchestra: (projectId) => ipcRenderer.invoke('orchestra:kill', orchestraScope(projectId)),
   /** Cancels a scheduled start (idea #2). Only the plan id crosses. */
-  unscheduleOrchestra: (planId) =>
-    ipcRenderer.invoke('orchestra:unschedule', { planId: typeof planId === 'string' ? planId : null }),
+  unscheduleOrchestra: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:unschedule', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
   /** Slice 5: integrate + clean up + report by hand; mode 'pr'|'merge'|'branches' (validated in main). */
-  finishOrchestra: (planId, integration) =>
-    ipcRenderer.invoke('orchestra:finish', {
-      planId: typeof planId === 'string' ? planId : null,
-      integration: typeof integration === 'string' ? integration : null,
-    }),
+  finishOrchestra: (planId, integration, projectId) =>
+    ipcRenderer.invoke(
+      'orchestra:finish',
+      withProject(
+        { planId: typeof planId === 'string' ? planId : null, integration: typeof integration === 'string' ? integration : null },
+        projectId,
+      ),
+    ),
   /**
    * Live run options, e.g. {sleepOnLimit: true}; main keeps only known
    * boolean flags. Promise<{ok, options?, error?}>.
    */
-  orchestraSetOptions: (patch) =>
-    ipcRenderer.invoke('orchestra:set-options', patch && typeof patch === 'object' ? { ...patch } : null),
+  orchestraSetOptions: (patch, projectId) =>
+    ipcRenderer.invoke('orchestra:set-options', patch && typeof patch === 'object' ? { ...patch } : null, orchestraScope(projectId)),
   /** Cancels the sleep or shutdown countdown: what = 'sleep' | 'shutdown'. */
-  cancelOrchestraPower: (what) => ipcRenderer.invoke('orchestra:cancel-power', what === 'sleep' || what === 'shutdown' ? what : null),
+  cancelOrchestraPower: (what, projectId) =>
+    ipcRenderer.invoke('orchestra:cancel-power', what === 'sleep' || what === 'shutdown' ? what : null, orchestraScope(projectId)),
   /** Best-effort "can this PC wake itself": Promise<{ok, reason}>. */
-  checkOrchestraWake: () => ipcRenderer.invoke('orchestra:check-wake'),
+  checkOrchestraWake: (projectId) => ipcRenderer.invoke('orchestra:check-wake', orchestraScope(projectId)),
   /** Idea #5: allow a rule the run logged from a stalled prompt, for future workers. */
-  allowOrchestraTool: (rule) => ipcRenderer.invoke('orchestra:allow', typeof rule === 'string' ? rule : null),
+  allowOrchestraTool: (rule, projectId) =>
+    ipcRenderer.invoke('orchestra:allow', typeof rule === 'string' ? rule : null, orchestraScope(projectId)),
   /** Opens a package's PR in the browser - only the package id crosses; main has the URL. */
-  openOrchestraPr: (id) => {
-    if (typeof id === 'string') ipcRenderer.send('orchestra:openPr', id);
+  openOrchestraPr: (id, projectId) => {
+    if (typeof id === 'string') ipcRenderer.send('orchestra:openPr', id, orchestraScope(projectId));
   },
   /**
    * Opens a settled run's morning report (runs/<id>.md) in the default app.
    * Only the run id crosses; main builds and checks the path.
-   * Promise<{ok:true} | {ok:false, error:'badId'|'noReport'|'openFailed'}>.
+   * Promise<{ok:true} | {ok:false, error:'badId'|'noReport'|'openFailed'|'noPlan'}>.
    */
-  openOrchestraReport: (planId) => ipcRenderer.invoke('orchestra:openReport', typeof planId === 'string' ? planId : null),
-  /** Plan changes (new plan, launches, a worker tab closed); returns an unsubscribe. */
+  openOrchestraReport: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:openReport', typeof planId === 'string' ? planId : null, orchestraScope(projectId)),
+  /**
+   * "Resend report email" on a finished run. Only the run id (+ the board's
+   * projectId, string or null) crosses; main
+   * checks it names a report in the runs folder (src/orchestraFinishIpc.js).
+   * Promise<{ok:true} | {ok:false, reason:string}>.
+   */
+  resendOrchestraEmail: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:resend-email', typeof planId === 'string' ? planId : null, orchestraScope(projectId)),
+  /**
+   * Commits since the last v* tag in a project's checkout (for "Release now").
+   * Only the project id crosses; main maps it to a registered project.
+   * Promise<{ok:true, count:number, tag:string} | {ok:false, reason:string}>.
+   */
+  orchestraUnreleasedCount: (projectId) =>
+    ipcRenderer.invoke('orchestra:unreleased-count', typeof projectId === 'string' ? projectId : null),
+  /**
+   * "Release now" on the finished run (src/releaseCut.js). Only the project
+   * id crosses; main checks it is the board's landed run and asks Mati in a
+   * native dialog. Promise<{ok:true, version, tag, url} | {ok:false, reason:string}>.
+   */
+  releaseOrchestraNow: (projectId) => ipcRenderer.invoke('orchestra:release-now', typeof projectId === 'string' ? projectId : null),
+  /**
+   * Plan changes (new plan, launches, a worker tab closed): cb(view, projectId);
+   * returns an unsubscribe. main always names the project (string, or null for
+   * a tab with no project); anything else is dropped, never read as null.
+   */
   onOrchestraChanged: (cb) => {
-    const listener = (_e, plan) => cb(plan);
+    const listener = (_e, msg) => {
+      if (msg && typeof msg === 'object' && isScope(msg.projectId)) cb(msg.view || null, msg.projectId);
+    };
     ipcRenderer.on('orchestra:changed', listener);
     return () => ipcRenderer.removeListener('orchestra:changed', listener);
   },

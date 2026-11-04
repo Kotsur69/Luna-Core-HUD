@@ -103,20 +103,25 @@ function createGodModeMailer({ sender, prefs, enabled, readHtml, maxRuns = 50 })
   const inFlight = new Set();
 
   /**
+   * @param {{force?:boolean}} [opts] force: Mati's "Resend report email" -
+   *   past the dedupe and the "email me when a run finishes" switch (it is
+   *   an explicit ask); Gmail must still be connected
    * @returns {Promise<{sent:boolean, skipped?:string, error?:string}>} never rejects
    */
-  async function onReport(runId, text, summary) {
+  async function onReport(runId, text, summary, opts = {}) {
     try {
       if (!summary || typeof runId !== 'string') return { sent: false, skipped: 'bad-input' };
+      const force = !!(opts && opts.force === true);
       const st = sender.status();
       const mailPrefs = prefs.loadPrefs();
+      if (force && !st.connected) return { sent: false, skipped: 'not-connected' };
       // Not connected is told apart from switched off: the board says so,
       // or the run email would just never come. An explicit "off" stays quiet.
       if (!st.connected && mailPrefs.godmodeEmail !== false) return { sent: false, skipped: 'not-connected' };
-      if (!enabled(mailPrefs, st.connected)) return { sent: false, skipped: 'off' };
+      if (!force && !enabled(mailPrefs, st.connected)) return { sent: false, skipped: 'off' };
       const key = resultKey(summary);
       const prev = prefs.loadState().godmode[runId];
-      if (prev === key) return { sent: false, skipped: 'duplicate' };
+      if (!force && prev === key) return { sent: false, skipped: 'duplicate' };
       if (inFlight.has(runId)) return { sent: false, skipped: 'busy' };
       inFlight.add(runId);
       try {

@@ -22,7 +22,7 @@ import { h, icon, ICONS } from '../dom.js';
 import { t, tf } from '../i18n.js';
 import { godmodeRunsFrom } from '../snapmodel.js';
 import { mountSnapshots, when } from './snapshotview.js';
-import { liveToShow, liveCard, tabsCard, liveTodayCard, repaintWhileShown } from './godmodelive.js';
+import { livesToShow, liveCard, tabsCard, liveTodayCard, repaintWhileShown } from './godmodelive.js';
 import { decisionsCard, createDecisionAnswers } from './decisions.js';
 import { feedbackCard, createFeedbackSender } from './feedback.js';
 import { wheelCard, createWheelSender } from './wheel.js';
@@ -98,7 +98,8 @@ export function mountGodmode(main, deps) {
   const view = mountSnapshots(main, deps, ['godmode'], (byKind, now) => {
     const rows = byKind.godmode;
     const runs = godmodeRunsFrom(rows, now);
-    const live = liveToShow(rows, now);
+    // Every project's live run (an older PC build sends one).
+    const lives = livesToShow(rows, now);
     const tabs = tabsCard(rows, now);
     const decisions = decisionsCard(rows, now, { mirror: answers.mirror(), send: answers.send });
     const notes = feedbackCard(rows, now, { mirror: feedback.mirror(), send: feedback.send });
@@ -106,8 +107,8 @@ export function mountGodmode(main, deps) {
     // LW 2.17b: the Luna's Work page (run status, scores, tokens, time to SHIP).
     const lw = lunasworkLinkCard(rows, now);
     const queued = queueCard(rows, now);
-    if (!runs.length && !live && !tabs && !decisions && !notes && !lw && !queued) return h('p', { class: 'empty' }, t('godmodeEmpty'));
-    return h('div', { class: 'stack' }, lw, decisions, helm, notes, live ? liveCard(live, now) : null, queued, tabs, runs.map((r) => runCard(r, now)));
+    if (!runs.length && !lives.length && !tabs && !decisions && !notes && !lw && !queued) return h('p', { class: 'empty' }, t('godmodeEmpty'));
+    return h('div', { class: 'stack' }, lw, decisions, helm, notes, lives.map((live, i) => liveCard(live, now, i)), queued, tabs, runs.map((r) => runCard(r, now)));
   });
   repaintWhileShown(main, view);
   return view;

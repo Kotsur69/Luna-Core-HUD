@@ -4998,6 +4998,63 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__state.is-stalled,
 .orchestra__state.is-killed { color: var(--warn); border-color: var(--warn); }
 
+/* A4 project switcher (orchestraSwitcher.js): one chip per project's run.
+   The state is always spelled out next to the dot - never colour alone. */
+.orchestra-runs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+  border-bottom: var(--border-w) solid var(--edge);
+}
+.orchestra-runs__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 32px;
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-pill);
+  border: var(--border-w) solid var(--edge);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-smooth), background-color var(--dur-fast) var(--ease-smooth),
+    color var(--dur-fast) var(--ease-smooth);
+}
+.orchestra-runs__chip:hover { border-color: var(--edge-glow); color: var(--text); }
+.orchestra-runs__chip[aria-selected='true'] {
+  border-color: var(--edge-glow);
+  background: var(--surface-panel);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--edge-glow);
+}
+.orchestra-runs__chip:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
+.orchestra-runs__label { font-weight: 600; }
+.orchestra-runs__state { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-dim); }
+.orchestra-runs__dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.orchestra-runs__chip.is-running .orchestra-runs__dot,
+.orchestra-runs__chip.is-settled .orchestra-runs__dot { background: var(--good); }
+.orchestra-runs__chip.is-paused .orchestra-runs__dot,
+.orchestra-runs__chip.is-scheduled .orchestra-runs__dot { background: var(--warn); }
+.orchestra-runs__chip.is-needsYou .orchestra-runs__dot { background: var(--bad); }
+/* No plan yet: a hollow dot. */
+.orchestra-runs__chip.is-none .orchestra-runs__dot { background: transparent; box-shadow: inset 0 0 0 1px var(--text-dim); }
+@media (prefers-reduced-motion: no-preference) {
+  .orchestra-runs__chip.is-running .orchestra-runs__dot { animation: orchestra-runs-pulse 2s var(--ease-smooth) infinite; }
+}
+@keyframes orchestra-runs-pulse {
+  50% { opacity: 0.45; }
+}
+.orchestra__elapsed { font-family: var(--font-mono); color: var(--text-dim); }
+
 .orchestra__todos { margin: 0; padding-left: var(--space-7); font-size: var(--fs-xs); color: var(--text); }
 
 .orchestra__prompt {
