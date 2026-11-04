@@ -403,7 +403,18 @@ HIGH (the npm shim's bare `node` found in the repo) and the MEDIUM (UNC
 `%SystemRoot%`) are fixed, as are two LOWs (a result JSON can't hold now
 fails the row instead of stranding it; the migration is re-runnable). Left
 as is: a subscription off the push allow-list is skipped on each send, not
-deleted (log noise only).
+deleted (log noise only). A second review on the committed result found no
+CRITICAL / HIGH and confirmed both fixes. Five LOWs were noted, not fixed:
+1. `claudePath`'s repo check is lexical, so a PATH junction into the repo
+   would pass. That needs a planted link outside the repo, which is already a
+   local compromise.
+2. A late `killTree` timer after `exit` could hit a recycled pid (window ~2 s).
+3. A killed `git` can leave a `git-remote-https` child holding files, so the
+   partial-clone removal fails. The folder then stays and shows "folder
+   exists", which costs availability only and is logged.
+4. `hostauth`'s temp file has a predictable name (POSIX with a hostile local
+   user only).
+5. The push allow-list trusts the vendors' subdomains.
 
 | # | Finding | Now |
 |---|---|---|
