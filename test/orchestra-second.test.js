@@ -619,6 +619,42 @@ test('merge mode: a partial integration is done with partial + skipped; dependsO
   assert.equal(none.orch.view().integration.skipped.length, 1);
 });
 
+test('merge mode: a package red after its merge gets the fix-up tab; it counts in selfCheck.fixups', async () => {
+  let fixupRes = null;
+  const s = await started(
+    {
+      packages: [pkg('a', [1])],
+      extraDeps: {
+        confirmMerge: async () => true,
+        runSelfCheck: async () => ({ tests: 'ok', syntax: 'ok', smoke: 'skipped', manualActions: [], tail: '' }),
+        integrateMerge: async (args, extra) => {
+          assert.equal(args.packages[0].task, 'do a', 'the task text reaches the fix-up brief');
+          assert.equal(extra.stopped(), false);
+          fixupRes = await extra.fixup({ root: '/wt/int', brief: '# fix a', capMs: 20 * 60 * 1000, id: 'a' });
+          const gate = await extra.beforePush('/wt/int', { merged: ['a'], skipped: [], baseSha: 'abc1234' });
+          return gate.ok
+            ? { ok: true, merged: ['a'], skipped: [], fixedUp: ['a'], headSha: 'x' }
+            : { ok: false, merged: [], skipped: [], stage: 'beforePush', detail: gate.reason };
+        },
+      },
+    },
+    { integration: 'merge' },
+  );
+  s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  await s.flush(8);
+  assert.equal(s.log.sessions.length, 2);
+  assert.equal(s.log.sessions[1].cwd, '/wt/int', 'the fix-up tab works in the integration worktree');
+  s.orch.onTurnEnd('s2', turn('LUNA_DONE selfcheck'));
+  await s.flush(8);
+  assert.deepEqual(fixupRes, { ok: true });
+  assert.ok(s.log.closed.includes('s2'), 'the fix-up tab is closed afterwards');
+  const v = s.orch.view();
+  assert.equal(v.integration.state, 'done');
+  assert.equal(v.integration.selfCheck.fixups, 1);
+  assert.deepEqual(v.integration.fixedUp, ['a']);
+  assert.match(s.log.report, /fixed by fix-up after the merge/);
+});
+
 test('merge mode needs the native confirmation; the checkout must still be on the base branch', async () => {
   const declined = await started({ packages: [pkg('a', [1])], extraDeps: { confirmMerge: async () => false } }, { integration: 'merge' });
   assert.equal(declined.res.error, 'mergeDeclined');

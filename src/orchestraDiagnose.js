@@ -263,7 +263,24 @@ const SKIP = {
     why: 'It works alone but breaks something the other packages brought in.',
     fix: 'Rebase the branch on the merged base, fix the failing test, then Retry.',
   },
+  // <dependency> is filled in from the skip's detail (the blocking package id).
+  depSkipped: {
+    what: 'Not merged because a package it depends on was left out.',
+    why: 'It needs <dependency> first.',
+    fix: 'Get <dependency> merged first, then Retry this one.',
+  },
 };
+
+// What a skip's detail is, per stage: git's words only where git spoke.
+const SKIP_DETAIL_LABEL = {
+  merge: 'Git said',
+  conflict: 'Git said',
+  verify: 'Tests said',
+  depSkipped: 'Depends on',
+};
+
+// A package id as the planner makes it; anything else is not quoted as one.
+const DEP_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 const UNKNOWN = {
   what: 'The package stopped with a reason LunaCore has no explanation for yet.',
@@ -286,9 +303,22 @@ function diagnoseIntegration(code) {
   return INTEGRATION[code] || { ...UNKNOWN, what: 'Integration stopped with an unexplained error.' };
 }
 
-/** Same, for one package the integration skipped. */
-function diagnoseSkip(stage) {
-  return SKIP[stage] || SKIP.merge;
+/**
+ * Same, for one package the integration skipped.
+ * @param {string} stage
+ * @param {string} [detail] for 'depSkipped': the id of the package it waits on
+ * @returns {{what:string, why:string, fix:string}}
+ */
+function diagnoseSkip(stage, detail) {
+  const words = SKIP[stage] || SKIP.merge;
+  if (stage !== 'depSkipped') return words;
+  const dep = typeof detail === 'string' && DEP_ID_RE.test(detail) ? detail : 'the package it depends on';
+  return { what: words.what, why: words.why.replace('<dependency>', dep), fix: words.fix.replace('<dependency>', dep) };
+}
+
+/** How the report labels a skip's detail: 'Git said' only for merge / conflict. */
+function skipDetailLabel(stage) {
+  return SKIP_DETAIL_LABEL[stage] || 'Detail';
 }
 
 /**
@@ -327,6 +357,7 @@ module.exports = {
   diagnosePackage,
   diagnoseIntegration,
   diagnoseSkip,
+  skipDetailLabel,
   lastWordsFrom,
   outputTail,
   MAX_LAST_WORDS,

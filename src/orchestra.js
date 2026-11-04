@@ -39,6 +39,7 @@ const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
 const { createFinalizer } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
+const { createMergeRunDeps } = require('./orchestraMergeRun');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 // A planner limit with another Claude account free: replan after this long.
 const ACCOUNT_SWITCH_RETRY_MS = 3000;
@@ -321,6 +322,15 @@ function createOrchestra(deps) {
     clearTimer: (t) => clearTimer(t),
   });
 
+  // The merge's own deps (orchestraMergeRun.js): task text, the same fix-up
+  // worker for a package red after its merge, the stop check, the count.
+  const mergeRun = createMergeRunDeps({
+    getPlan: () => plan,
+    integrateMerge: deps.integrateMerge,
+    runSelfCheck: deps.runSelfCheck,
+    runFixup: (args) => fixup.run(args),
+  });
+
   const finalizer = createFinalizer({
     getPlan: () => plan,
     patch: (id, fields) => patch(id, fields),
@@ -329,10 +339,8 @@ function createOrchestra(deps) {
     onRunEvent: (...args) => onRunEvent(...args),
     now,
     createPr: deps.createPr ? (args) => deps.createPr({ ...args, repoPath: plan.repoPath }) : null,
-    integrateMerge: deps.integrateMerge
-      ? (args, extra) => deps.integrateMerge({ ...args, repoPath: plan.repoPath }, extra)
-      : null,
-    runSelfCheck: deps.runSelfCheck,
+    integrateMerge: deps.integrateMerge ? mergeRun.integrateMerge : null,
+    runSelfCheck: mergeRun.runSelfCheck,
     pushBranch: deps.pushBranch,
     runFixup: (args) => fixup.run(args),
     checkCommand: () => workerSettings().checkCommand,

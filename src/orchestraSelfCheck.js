@@ -370,11 +370,15 @@ async function safeCheck(deps, args) {
   return { tests: 'failed', syntax: 'skipped', smoke: 'skipped', manualActions: [], tail: 'self-check returned nothing' };
 }
 
+// Fix-up workers the merge already ran before this gate (orchestraMergeRun.js
+// puts the count on the self-check result): they count with the gate's own.
+const mergeFixups = (r) => (Number.isInteger(r.mergeFixups) && r.mergeFixups > 0 ? r.mergeFixups : 0);
+
 const summary = (r, fixups, pushedIntegrationBranch) => ({
   tests: r.tests,
   syntax: r.syntax,
   smoke: r.smoke,
-  fixups,
+  fixups: fixups + mergeFixups(r),
   tail: String(r.tail || ''),
   pushedIntegrationBranch,
 });
