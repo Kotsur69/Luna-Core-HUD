@@ -96,14 +96,23 @@ function gitError(text) {
   return lines.find((l) => /^(fatal|error):/i.test(l)) || lines[0] || '';
 }
 
-/** Runs git without a shell; resolves {ok, stdout, stderr}, never rejects. */
+/**
+ * Why git never answered, or '' when it ran and exited non-zero. A killed
+ * process (our timeout) or a spawn error (string code, e.g. ENOENT) says
+ * nothing about the folder - git's own exit code does.
+ */
+function gitBroke(err) {
+  if (!err) return '';
+  if (err.killed || err.signal) return `git timed out after ${GIT_TIMEOUT_MS / 1000}s`;
+  if (typeof err.code === 'string') return `git did not start (${err.code})`;
+  return '';
+}
+
+/** Runs git without a shell; resolves {ok, stdout, stderr, broke}, never rejects. */
 function runGit(cwd, args, execImpl = execFile) {
   return new Promise((resolve) => {
-    execImpl(
-      'git',
-      ['-C', cwd, ...args],
-      { windowsHide: true, timeout: GIT_TIMEOUT_MS },
-      (err, stdout, stderr) => resolve({ ok: !err, stdout: String(stdout || ''), stderr: String(stderr || '') }),
+    execImpl('git', ['-C', cwd, ...args], { windowsHide: true, timeout: GIT_TIMEOUT_MS }, (err, stdout, stderr) =>
+      resolve({ ok: !err, stdout: String(stdout || ''), stderr: String(stderr || ''), broke: gitBroke(err) }),
     );
   });
 }
@@ -158,6 +167,9 @@ async function addWorktree(repoPath, name, deps = {}) {
   if (!slug) return { ok: false, error: 'badName' };
 
   const top = await runGit(repoPath, ['rev-parse', '--show-toplevel'], execImpl);
+  // A hung or missing git is not "no repo": a timeout under load must not
+  // read as a broken project (God Mode would give up on a fine package).
+  if (top.broke) return { ok: false, error: 'gitFailed', detail: top.broke };
   const repoRoot = top.ok ? firstLine(top.stdout) : '';
   if (!repoRoot) return { ok: false, error: 'notRepo' };
   const root = path.resolve(repoRoot);

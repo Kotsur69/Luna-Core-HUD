@@ -22,6 +22,33 @@ const {
   MAX_SLUG_CHARS,
 } = require('../src/worktrees.js');
 
+// ---- rev-parse failure classification (fake git) ------------------------------
+
+/** A fake execFile whose first call (rev-parse --show-toplevel) fails with `err`. */
+function failingTopLevel(err, stderr = '') {
+  return (cmd, args, opts, cb) => cb(err, '', stderr);
+}
+
+test('addWorktree: git refusing the folder (exit code) is notRepo', async () => {
+  const err = Object.assign(new Error('Command failed'), { code: 128 });
+  const res = await addWorktree('C:\\nowhere', 'x', { execImpl: failingTopLevel(err, 'fatal: not a git repository\n') });
+  assert.deepEqual(res, { ok: false, error: 'notRepo' });
+});
+
+test('addWorktree: a git timeout is gitFailed with a reason, not notRepo', async () => {
+  const err = Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', code: null });
+  const res = await addWorktree('C:\\repo', 'x', { execImpl: failingTopLevel(err) });
+  assert.equal(res.error, 'gitFailed');
+  assert.match(res.detail, /timed out/);
+});
+
+test('addWorktree: git failing to start is gitFailed with the spawn code', async () => {
+  const err = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+  const res = await addWorktree('C:\\repo', 'x', { execImpl: failingTopLevel(err) });
+  assert.equal(res.error, 'gitFailed');
+  assert.match(res.detail, /ENOENT/);
+});
+
 // ---- pure helpers -----------------------------------------------------------
 
 test('gitError picks the fatal/error line over git progress output', () => {
