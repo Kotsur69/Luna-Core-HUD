@@ -51,6 +51,7 @@ function fakeController(projectId, view) {
     cancelShutdown: rec('cancelShutdown', { ok: true }),
     checkWake: rec('checkWake', { ok: true, reason: 'ok' }),
     setOptions: rec('setOptions', { ok: true }),
+    abortFinalize: rec('abortFinalize', { ok: true }),
   };
 }
 
@@ -363,5 +364,151 @@ test('every orchestra channel the preload bridge calls has a handler in main', (
   for (const channel of used) {
     const handled = s.handlers.has(channel) || s.listeners.has(channel);
     assert.ok(handled || pushed.has(channel), `${channel} has a handler`);
+  }
+});
+
+// ---- Abort finish + why Retry was refused ---------------------------------------
+
+test('orchestra:abortFinalize: bad payloads and a wrong project are refused, the right run is aborted', async (t) => {
+  const s = setup({ runs: { alpha: view('pa'), beta: view('pb') } });
+  t.after(s.cleanup);
+  for (const junk of [null, undefined, 'pa', ['pa'], 5, {}, { planId: 42 }, { planId: '' }, { planId: ['pa'] }]) {
+    assert.deepEqual(await s.invoke('orchestra:abortFinalize', junk), { ok: false, error: 'badPayload' }, JSON.stringify(junk));
+  }
+  assert.deepEqual(await s.invoke('orchestra:abortFinalize', { projectId: 'ghost', planId: 'pa' }), { ok: false, error: 'unknownProject' });
+  assert.deepEqual(await s.invoke('orchestra:abortFinalize', { projectId: 7, planId: 'pa' }), { ok: false, error: 'badProject' });
+  // alpha's plan named under beta: refused, neither run touched.
+  assert.deepEqual(await s.invoke('orchestra:abortFinalize', { projectId: 'beta', planId: 'pa' }), { ok: false, error: 'noPlan' });
+  assert.deepEqual(await s.invoke('orchestra:abortFinalize', { planId: 'zzz' }), { ok: false, error: 'noPlan' });
+  assert.deepEqual(calledNames(s.controllers.alpha), []);
+  assert.deepEqual(calledNames(s.controllers.beta), []);
+
+  // Only the plan id crosses to the controller - nothing else from the page.
+  const res = await s.invoke('orchestra:abortFinalize', { projectId: 'beta', planId: 'pb', error: 'rm -rf', force: true });
+  assert.deepEqual(res, { ok: true });
+  assert.deepEqual(s.controllers.beta.calls, [['abortFinalize', { planId: 'pb' }]]);
+  assert.deepEqual(calledNames(s.controllers.alpha), [], "the other project's finish is untouched");
+  assert.deepEqual(s.out.sent, [['orchestra:changed', { projectId: 'beta', view: view('pb') }]]);
+});
+
+test("orchestra:abortFinalize passes the controller's own refusal through and pushes no view", async (t) => {
+  const s = setup({ runs: { alpha: view('pa') } });
+  t.after(s.cleanup);
+  s.controllers.alpha.abortFinalize = () => ({ ok: false, error: 'tooEarly' });
+  assert.deepEqual(await s.invoke('orchestra:abortFinalize', { planId: 'pa' }), { ok: false, error: 'tooEarly' });
+  assert.deepEqual(s.out.sent, []);
+});
+
+test('the preload bridge sends only the plan id (and scope) for Abort finish', () => {
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
+  assert.match(
+    preload,
+    /abortOrchestraFinalize: \(planId, projectId\) =>\s+ipcRenderer\.invoke\('orchestra:abortFinalize', withProject\(\{ planId: typeof planId === 'string' \? planId : null \}, projectId\)\)/,
+  );
+});
+
+/** pl and en blocks of src/renderer/i18n.js, as source text. */
+function i18nBlocks() {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'i18n.js'), 'utf8');
+  const enAt = src.indexOf('\n  en: {');
+  return { pl: src.slice(0, enAt), en: src.slice(enAt) };
+}
+
+/** The value of `key` in one block, or null. */
+function entry(block, key) {
+  const line = block.split('\n').find((l) => l.includes(`'${key}':`));
+  if (!line) return null;
+  const m = /:\s*(['"])(.*)\1,\s*$/.exec(line);
+  return m ? m[2] : null;
+}
+
+test('every Retry refusal code maps to its own pl and en message, shown beside the package', async () => {
+  const { retryRefusal, RETRY_REFUSALS } = await import('../src/renderer/modules/orchestraRetry.js');
+  const { pl, en } = i18nBlocks();
+  const idle = { integration: { running: false } };
+  const seen = new Set();
+  for (const code of ['busy', 'paused', 'notRetryable', 'noTab', 'briefFailed']) {
+    assert.ok(RETRY_REFUSALS.includes(code), code);
+    const { key } = retryRefusal(code, idle);
+    assert.equal(key, `orch.retryRefused.${code}`);
+    seen.add(key);
+    assert.ok(entry(pl, key), `pl ${key}`);
+    assert.ok(entry(en, key), `en ${key}`);
+    assert.notEqual(entry(en, key), entry(en, 'orch.retryRefused.failed'), `${code} has its own text`);
+  }
+  assert.equal(seen.size, 5, 'one message per code');
+  assert.equal(retryRefusal('somethingNew', idle).key, 'orch.retryRefused.failed');
+  assert.equal(retryRefusal(undefined, null).key, 'orch.retryRefused.failed');
+});
+
+test("Retry refused as 'busy' while the run finishes names the time it started", async () => {
+  const { retryRefusal } = await import('../src/renderer/modules/orchestraRetry.js');
+  const at = Date.UTC(2026, 10, 5, 2, 40);
+  assert.deepEqual(retryRefusal('busy', { integration: { running: true, startedAt: at } }), {
+    key: 'orch.retryRefused.busyFinishing',
+    at,
+  });
+  // Busy with something else (planning / launching): the plain message.
+  assert.equal(retryRefusal('busy', { integration: { running: false, startedAt: at } }).key, 'orch.retryRefused.busy');
+  const { pl, en } = i18nBlocks();
+  assert.equal(entry(en, 'orch.retryRefused.busyFinishing'), 'Finishing the run (merge + tests) since {time} - Retry waits for it.');
+  assert.match(entry(pl, 'orch.retryRefused.busyFinishing'), /\{time\}/);
+});
+
+test('a stale refusal goes once what was in the way is gone', async () => {
+  const { refusalStillValid } = await import('../src/renderer/modules/orchestraRetry.js');
+  assert.equal(refusalStillValid('busy', { integration: { running: true } }), true);
+  assert.equal(refusalStillValid('busy', { integration: { running: false } }), false);
+  // A 'busy' from planning / launching (not the finish) stays until the next Retry.
+  assert.equal(refusalStillValid('busy', { integration: { running: false } }, false), true);
+  assert.equal(refusalStillValid('paused', { pausedUntil: 5 }), true);
+  assert.equal(refusalStillValid('paused', { pausedUntil: null }), false);
+  assert.equal(refusalStillValid('batteryLow', { battery: { held: true } }), true);
+  assert.equal(refusalStillValid('batteryLow', { battery: { held: false } }), false);
+  assert.equal(refusalStillValid('noTab', {}), true);
+  assert.equal(refusalStillValid('noTab', null), false);
+});
+
+test('a finish past the threshold exposes Abort finish; before it, or once done, it does not', async () => {
+  const { canAbortFinish } = await import('../src/renderer/modules/orchestraRetry.js');
+  const { ABORT_FINISH_AFTER_MS } = require('../src/orchestraFinalize.js');
+  assert.equal(ABORT_FINISH_AFTER_MS, 30 * 60 * 1000);
+  const startedAt = 1_000_000;
+  const plan = { integration: { running: true, startedAt, abortAfter: startedAt + ABORT_FINISH_AFTER_MS } };
+  assert.equal(canAbortFinish(plan, startedAt + ABORT_FINISH_AFTER_MS - 1), false);
+  assert.equal(canAbortFinish(plan, startedAt + ABORT_FINISH_AFTER_MS), true);
+  assert.equal(canAbortFinish({ integration: { ...plan.integration, running: false } }, startedAt * 10), false);
+  assert.equal(canAbortFinish({ integration: { running: true, abortAfter: null } }, startedAt * 10), false);
+  assert.equal(canAbortFinish(null, startedAt * 10), false);
+});
+
+test('every new board string has pl (without diacritics) and en', () => {
+  const { pl, en } = i18nBlocks();
+  const keys = [
+    'orch.retryRefused.busy',
+    'orch.retryRefused.busyFinishing',
+    'orch.retryRefused.paused',
+    'orch.retryRefused.notRetryable',
+    'orch.retryRefused.noTab',
+    'orch.retryRefused.briefFailed',
+    'orch.retryRefused.batteryLow',
+    'orch.retryRefused.failed',
+    'orch.abortFinish',
+    'orch.abortFinish.hint',
+    'orch.fail.batteryLow',
+    'orch.fail.notFinishing',
+    'orch.fail.tooEarly',
+    'orch.fail.notAbortable',
+    'orch.integerr.abortedByUser',
+    'orch.battery.on',
+    'orch.battery.pct',
+    'orch.battery.held',
+  ];
+  for (const key of keys) {
+    const p = entry(pl, key);
+    assert.ok(p, `pl ${key}`);
+    assert.ok(entry(en, key), `en ${key}`);
+    assert.doesNotMatch(p, /[^\x00-\x7f]/, `pl ${key} without diacritics`);
+    assert.notEqual(p, entry(en, key), `${key} is translated`);
   }
 });

@@ -18,12 +18,24 @@
 // with "Cancel shutdown" (shutdown /a). The run report gets the time.
 //
 // State lives here only as long as a countdown does; nothing is persisted.
+//
+// Battery (createBatteryGuard, one per process): the OS sleeps a laptop on
+// its own battery policy and nothing here can block that. So on battery the
+// board warns once per battery period (plus one notification), and where a
+// percentage can be read, below LOW_BATTERY_PCT no new worker launches and
+// no new verify starts until the PC is plugged in. A running worker is never
+// stopped. Without a percentage it only warns. powerMonitor's 'on-battery' /
+// 'on-ac' arrive through injected subscribe functions (main.js).
 // ============================================================================
 
 'use strict';
 
 const SLEEP_COUNTDOWN_MS = 60 * 1000;
 const SHUTDOWN_DELAY_S = 120;
+// Below this battery percentage new workers and verifies wait for the charger.
+const LOW_BATTERY_PCT = 20;
+// How often the percentage is read while on battery.
+const BATTERY_POLL_MS = 2 * 60 * 1000;
 
 const hhmm = (ms) => {
   const d = new Date(ms);
@@ -270,4 +282,179 @@ function createPowerFlow(deps) {
   return { onPaused, cancelSleep, onSystemResume, afterFinalize, cancelShutdown, onOptions, checkWake, view };
 }
 
-module.exports = { createPowerFlow, SLEEP_COUNTDOWN_MS, SHUTDOWN_DELAY_S };
+/** A battery percentage reading, or null when there is none. */
+function percentOf(value) {
+  const n = typeof value === 'number' ? value : value && typeof value === 'object' ? value.percent : NaN;
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? Math.round(n) : null;
+}
+
+/**
+ * The process-wide battery guard every God Mode run shares.
+ * @param {{
+ *   isOnBattery?: () => boolean,
+ *   onBatteryEvent?: (fn:Function) => void, onAcEvent?: (fn:Function) => void,
+ *   readPercent?: () => Promise<number|{ok:boolean, percent?:number}|null>,
+ *   anyRunActive?: () => boolean,
+ *   notify?: (kind:'battery'|'batteryLow', info:{percent:number|null, thresholdPct:number}) => void,
+ *   thresholdPct?: number, pollMs?: number,
+ *   setTimer?: Function, clearTimer?: Function, log?: Function,
+ * }} deps
+ */
+function createBatteryGuard(deps = {}) {
+  const noop = () => {};
+  const notify = deps.notify || noop;
+  const anyRunActive = deps.anyRunActive || (() => false);
+  const thresholdPct = Number.isFinite(deps.thresholdPct) ? deps.thresholdPct : LOW_BATTERY_PCT;
+  const pollMs = Number.isFinite(deps.pollMs) && deps.pollMs > 0 ? deps.pollMs : BATTERY_POLL_MS;
+  const setTimer = deps.setTimer || setTimeout;
+  const clearTimer = deps.clearTimer || clearTimeout;
+  const log = deps.log || noop;
+
+  let onBattery = false;
+  let percent = null;
+  // Bumped on every switch to battery: warnings are once per period.
+  let period = 0;
+  let warnedPeriod = 0;
+  let lowWarnedPeriod = 0;
+  let pollTimer = null;
+  let started = false;
+  const listeners = new Set();
+  /** @type {Array<() => void>} verifies waiting for power */
+  let waiters = [];
+
+  const isHeld = () => onBattery && percent !== null && percent < thresholdPct;
+
+  function view() {
+    return { onBattery, percent, held: isHeld(), thresholdPct };
+  }
+
+  function emit() {
+    const v = view();
+    for (const fn of listeners) {
+      try {
+        fn(v);
+      } catch (err) {
+        log(`battery listener failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  function releaseWaiters() {
+    if (isHeld() || !waiters.length) return;
+    const ready = waiters;
+    waiters = [];
+    for (const resolve of ready) resolve();
+  }
+
+  /** The board warning's notification, once per battery period. */
+  function warn() {
+    if (!onBattery) return;
+    const info = { percent, thresholdPct };
+    if (warnedPeriod !== period) {
+      warnedPeriod = period;
+      notify('battery', info);
+    }
+    if (isHeld() && lowWarnedPeriod !== period) {
+      lowWarnedPeriod = period;
+      notify('batteryLow', info);
+    }
+  }
+
+  function stopPoll() {
+    if (pollTimer) clearTimer(pollTimer);
+    pollTimer = null;
+  }
+
+  function armPoll(token) {
+    stopPoll();
+    pollTimer = setTimer(() => {
+      pollTimer = null;
+      readNow(token);
+    }, pollMs);
+  }
+
+  /** Reads the percentage once; ignored when the period moved on meanwhile. */
+  async function readNow(token = period) {
+    if (!deps.readPercent || !onBattery) return percent;
+    let next = null;
+    try {
+      next = percentOf(await deps.readPercent());
+    } catch (err) {
+      log(`battery read failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!onBattery || token !== period) return percent;
+    const wasHeld = isHeld();
+    percent = next;
+    if (isHeld() !== wasHeld) log(isHeld() ? `battery at ${percent}%: holding new workers and verifies` : 'battery hold lifted');
+    if (anyRunActive()) warn();
+    releaseWaiters();
+    emit();
+    armPoll(token);
+    return percent;
+  }
+
+  /** powerMonitor 'on-battery' (or on battery at start). */
+  function handleBattery() {
+    if (onBattery) return;
+    onBattery = true;
+    percent = null;
+    period += 1;
+    if (anyRunActive()) warn();
+    emit();
+    readNow(period).catch(noop);
+  }
+
+  /** powerMonitor 'on-ac': plugged in - every hold lifts. */
+  function handleAc() {
+    if (!onBattery) return;
+    onBattery = false;
+    percent = null;
+    stopPoll();
+    releaseWaiters();
+    emit();
+  }
+
+  /** Subscribes to powerMonitor and reads the current state. Once. */
+  function start() {
+    if (started) return;
+    started = true;
+    if (deps.onBatteryEvent) deps.onBatteryEvent(() => handleBattery());
+    if (deps.onAcEvent) deps.onAcEvent(() => handleAc());
+    let now = false;
+    try {
+      now = !!(deps.isOnBattery && deps.isOnBattery());
+    } catch {
+      now = false;
+    }
+    if (now) handleBattery();
+  }
+
+  /** A run started (or is running): warns when on battery, once per period. */
+  function onRunStart() {
+    warn();
+  }
+
+  /** Resolves when a new verify may start (at once unless held). */
+  function whenAllowed() {
+    if (!isHeld()) return Promise.resolve();
+    return new Promise((resolve) => waiters.push(resolve));
+  }
+
+  /** @param {(view:object) => void} fn called on every change; returns an unsubscribe */
+  function subscribe(fn) {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
+  }
+
+  return { start, onBattery: handleBattery, onAc: handleAc, readNow, onRunStart, isHeld, whenAllowed, subscribe, view };
+}
+
+module.exports = {
+  createPowerFlow,
+  createBatteryGuard,
+  percentOf,
+  SLEEP_COUNTDOWN_MS,
+  SHUTDOWN_DELAY_S,
+  LOW_BATTERY_PCT,
+  BATTERY_POLL_MS,
+};

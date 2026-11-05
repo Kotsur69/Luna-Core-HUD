@@ -16,6 +16,8 @@
 //   renderer     orchestra:changed / orchestra:planWait carry {projectId, ...}
 //   power        sleep at the limit / shutdown when done; otherRunsActive is
 //                the registry's othersActive(projectId)
+//   battery      one process-wide guard (makeBatteryGuard) every project's
+//                run shares: on-battery warning, low-battery hold
 //
 // Luna's Work overlays (worker settings, planner models) apply only to the
 // project its build runs on; every other project's run is plain God Mode.
@@ -38,6 +40,7 @@ const defaultStore = require('./orchestraStore');
 const { lastOpenToolUse, allowRuleFor, exampleFor } = require('./orchestraSupervisor');
 const { guardedSessionFactory } = require('./overnight');
 const { createPowerCtl } = require('./powerctl');
+const { createBatteryGuard } = require('./orchestraPower');
 const { createProcessScope } = require('./procTree');
 const { WATCHDOG_TICK_MS } = require('./orchestraSleep');
 
@@ -52,6 +55,58 @@ const POWER_NOTICES = {
   shutdownSoon: 'Run finished - the PC shuts down in 2 minutes. Cancel on the God Mode board.',
   shutdownFailed: 'Could not schedule the shutdown.',
 };
+
+// The battery notification, in the UI language (pl without diacritics).
+const BATTERY_NOTICES = {
+  battery: {
+    pl: 'Komputer dziala na baterii - system moze go uspic i przerwac przebieg God Mode. Podlacz zasilacz.',
+    en: 'The PC is on battery - Windows may put it to sleep and interrupt the God Mode run. Plug in the charger.',
+  },
+  batteryLow: {
+    pl: 'Bateria {pct}% - nowe paczki i weryfikacje czekaja na zasilacz. Dzialajace paczki pracuja dalej.',
+    en: 'Battery at {pct}% - new packages and verifies wait for the charger. Running ones carry on.',
+  },
+};
+
+/**
+ * The battery notification body for `kind`, or null for an unknown one.
+ * @param {string} kind 'battery' | 'batteryLow'
+ * @param {unknown} lang 'pl' | anything else = en
+ * @param {{percent?:number|null}} [info]
+ * @returns {string|null}
+ */
+function batteryNotice(kind, lang, info = {}) {
+  const entry = Object.prototype.hasOwnProperty.call(BATTERY_NOTICES, kind) ? BATTERY_NOTICES[kind] : null;
+  if (!entry) return null;
+  const pct = info && Number.isFinite(info.percent) ? String(info.percent) : '?';
+  return entry[lang === 'pl' ? 'pl' : 'en'].replace('{pct}', pct);
+}
+
+/**
+ * The process-wide battery guard (src/orchestraPower.js) over Electron's
+ * powerMonitor, which main hands over as plain functions.
+ * @param {{
+ *   anyRunActive: () => boolean, lang: () => string, toast: (title:string, body:string) => void,
+ *   isOnBattery: () => boolean, onBatteryEvent: (fn:Function) => void, onAcEvent: (fn:Function) => void,
+ *   log?: (line:string) => void, power?: {batteryPercent:Function},
+ * }} hooks
+ */
+function makeBatteryGuard(hooks) {
+  const power = hooks.power || createPowerCtl();
+  return createBatteryGuard({
+    isOnBattery: hooks.isOnBattery,
+    onBatteryEvent: hooks.onBatteryEvent,
+    onAcEvent: hooks.onAcEvent,
+    readPercent: () => power.batteryPercent(),
+    anyRunActive: hooks.anyRunActive,
+    // Shown whether or not toasts are on in Settings, like the power notices.
+    notify: (kind, info) => {
+      const body = batteryNotice(kind, hooks.lang(), info);
+      if (body) hooks.toast(TOAST_TITLE, body);
+    },
+    log: (line) => (hooks.log ? hooks.log(`[battery] ${line}`) : undefined),
+  });
+}
 
 const errText = (err) => (err && err.message) || String(err);
 
@@ -334,6 +389,8 @@ function powerDeps(projectId, ctx) {
     // Sleep at the usage limit / shut down when done (src/orchestraPower.js).
     power: createPowerCtl(),
     awake: { release: () => ctx.overnight.suspendAwake(), restore: () => ctx.overnight.restoreAwake() },
+    // Low battery holds new workers / verifies (one guard for every run).
+    battery: ctx.battery || null,
     // Shutdown when done waits for every other project's run too.
     otherRunsActive: () => ctx.registry().othersActive(projectId),
     // The same repo twice is refused (makePlan -> 'repoBusy').
@@ -432,4 +489,13 @@ function makeOrchestraDeps(projectId, ctx) {
   };
 }
 
-module.exports = { makeOrchestraDeps, projectForStoredRepo, legacyRunProject, approvalRuleFor, godModeFacade };
+module.exports = {
+  makeOrchestraDeps,
+  projectForStoredRepo,
+  legacyRunProject,
+  approvalRuleFor,
+  godModeFacade,
+  makeBatteryGuard,
+  batteryNotice,
+  BATTERY_NOTICES,
+};

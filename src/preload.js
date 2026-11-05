@@ -597,6 +597,12 @@ contextBridge.exposeInMainWorld('lunacore', {
     ipcRenderer.invoke('orchestra:resume', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
   /** Slice 4 kill switch for one run: no new workers, Esc to the running ones. */
   killOrchestra: (projectId) => ipcRenderer.invoke('orchestra:kill', orchestraScope(projectId)),
+  /**
+   * "Abort finish": ends the run's hung finish (merge + tests) once it ran
+   * past main's threshold. Only the plan id crosses; main checks the rest.
+   */
+  abortOrchestraFinalize: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:abortFinalize', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
   /** Cancels a scheduled start (idea #2). Only the plan id crosses. */
   unscheduleOrchestra: (planId, projectId) =>
     ipcRenderer.invoke('orchestra:unschedule', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),

@@ -50,6 +50,9 @@ const INTEGRATE_PER_PACKAGE_MS = 60 * 60 * 1000;
 // How long an aborted integrate pass may take to unwind before finalize
 // moves on (the integration worktree it removes is the re-run's path).
 const ABANDONED_DRAIN_MS = 30 * 1000;
+// A finish (integrate + tests) running longer than this may be aborted by
+// hand from the board ("Abort finish"); before that it is left alone.
+const ABORT_FINISH_AFTER_MS = 30 * 60 * 1000;
 const noop = () => {};
 
 /**
@@ -450,7 +453,8 @@ function createFinalizer(deps) {
   }
 
   async function finalizeOnce(plan) {
-    setIntegration(plan, { state: 'running', error: null, detail: null });
+    // startedAt: the board's "finishing since HH:MM" and the Abort finish threshold.
+    setIntegration(plan, { state: 'running', error: null, detail: null, startedAt: deps.now() });
     deps.commit();
     const res = await guardedIntegrate(plan);
     if (deps.getPlan() !== plan) return false; // discarded meanwhile
@@ -494,6 +498,8 @@ function createFinalizer(deps) {
    */
   function abort(error = 'aborted') {
     if (!running || !inFlight) return false;
+    // Aborted by hand: the board is freed, no queued second pass starts.
+    again = false;
     inFlight.stop({ ok: false, error: typeof error === 'string' && error ? error.slice(0, 64) : 'aborted' });
     return true;
   }
@@ -519,4 +525,5 @@ module.exports = {
   INTEGRATE_BASE_MS,
   INTEGRATE_PER_PACKAGE_MS,
   ABANDONED_DRAIN_MS,
+  ABORT_FINISH_AFTER_MS,
 };

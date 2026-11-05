@@ -25,8 +25,9 @@ import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
-import { failureBlock, runOptionsRow, powerBanner } from './orchestraDetails.js';
+import { failureBlock, runOptionsRow, powerBanner, batteryBanner } from './orchestraDetails.js';
 import { pkgStateKey } from './orchestraState.js';
+import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetry.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
 
 // Guarded: node tests import the to-do widget chain without a document.
@@ -45,13 +46,14 @@ const FAIL_CODES = new Set([
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
   'noNodeModules', 'notHeld', 'installFailed',
   'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile', 'badOptions', 'noneSelected',
-  'lunasWorkActive',
+  'lunasWorkActive', 'batteryLow', 'notFinishing', 'tooEarly', 'notAbortable',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Integration errors with their own message (orchestraFinalize / Integrate).
 const INTEG_ERRORS = new Set([
   'noBaseBranch', 'noGh', 'missingCwd', 'ghFailed', 'fetchFailed', 'worktreeFailed', 'installFailed', 'mergeFailed',
   'conflictFailed', 'verifyFailed', 'pushFailed', 'baseMoved', 'nothingMergedFailed', 'beforePushFailed',
+  'abortedByUser',
 ]);
 // "Open report" errors main can return (orchestra:openReport).
 const REPORT_ERRORS = new Set(['badId', 'noReport', 'openFailed']);
@@ -76,6 +78,10 @@ let failure = null;
 let planWait = null;
 /** The package whose single Launch / Retry is in flight, or null. */
 let busyPkg = null;
+/** Why the last Retry of a package was refused: pkgId -> {code, whileFinishing}. */
+const retryRefusals = new Map();
+/** Re-renders the board when "Abort finish" becomes available. */
+let abortRevealTimer = null;
 /** A run-options change on its way to main. */
 let optionsBusy = false;
 /** The to-do picker is on screen instead of the board (orchestraPick.js). */
@@ -187,13 +193,63 @@ function startOptions() {
 function integrationText() {
   const integ = plan.integration || {};
   const mode = t(`orch.integ.${plan.integrationMode || 'pr'}`);
-  if (integ.running || integ.state === 'running') return msg(t('orch.integ.running', { mode }));
+  if (integ.running || integ.state === 'running') {
+    const line = msg(t('orch.integ.running', { mode }));
+    if (!canAbortFinish(plan, Date.now())) return line;
+    const box = el('div', 'orchestra__power');
+    box.append(line, abortFinishRow());
+    return box;
+  }
   if (integ.state === 'done') return msg(t('orch.integ.done', { mode }));
   if (integ.state === 'failed') {
     const why = INTEG_ERRORS.has(integ.error) ? t(`orch.integerr.${integ.error}`) : integ.error || '';
     return msg(t('orch.integ.failed', { mode, why: integ.detail ? `${why}: ${integ.detail}` : why }), 'is-bad');
   }
   return null;
+}
+
+/** "Abort finish" with its hint: frees a board stuck in a long finish. */
+function abortFinishRow() {
+  const row = el('div', 'orchestra__actions');
+  row.append(el('span', 'orchestra__meta', t('orch.abortFinish.hint')));
+  const btn = el('button', 'pad-send', t('orch.abortFinish'));
+  btn.type = 'button';
+  btn.disabled = phase !== 'idle';
+  btn.addEventListener('click', abortFinish);
+  row.append(btn);
+  return row;
+}
+
+/** Once the finish passes main's threshold the board shows "Abort finish" on its own. */
+function armAbortReveal() {
+  if (abortRevealTimer) clearTimeout(abortRevealTimer);
+  abortRevealTimer = null;
+  const integ = (plan && plan.integration) || {};
+  if (!isOpen || !integ.running || !Number.isFinite(integ.abortAfter)) return;
+  const wait = integ.abortAfter - Date.now();
+  if (wait <= 0) return;
+  abortRevealTimer = setTimeout(() => {
+    abortRevealTimer = null;
+    if (isOpen) render();
+  }, wait + 1000);
+}
+
+/** Why Retry was refused, beside the package's own buttons; stale ones go. */
+function refusalBlock(pkg) {
+  const refusal = retryRefusals.get(pkg.id);
+  if (!refusal) return null;
+  const { code, whileFinishing } = refusal;
+  if (!RETRYABLE.has(pkg.state) || !refusalStillValid(code, plan, whileFinishing)) {
+    retryRefusals.delete(pkg.id);
+    return null;
+  }
+  const { key, at } = retryRefusal(code, plan);
+  const box = el('div', 'orchestra__failure');
+  const line = msg(t(key, at === null ? {} : { time: clock(at) }), 'is-warn');
+  line.setAttribute('role', 'status');
+  box.append(line);
+  if (code === 'busy' && canAbortFinish(plan, Date.now())) box.append(abortFinishRow());
+  return box;
 }
 
 /** After the run: wrap it up by hand (integrate + clean up + report). */
@@ -346,6 +402,8 @@ function pkgCard(pkg) {
     );
   }
   if (actions.childElementCount) card.append(actions);
+  const refused = refusalBlock(pkg);
+  if (refused) card.append(refused);
   return card;
 }
 
@@ -396,6 +454,9 @@ function countdownKey(next) {
 function renderPlan() {
   const banner = powerBanner(plan, { onCancel: cancelPower });
   if (banner) body.append(banner);
+  const onBattery = batteryBanner(plan);
+  if (onBattery) body.append(onBattery);
+  armAbortReveal();
   // Always on top and usable during the run: the switches are live.
   body.append(runOptionsRow(plan, { disabled: optionsBusy, onToggle: setRunOption }));
   const est = plan.estimate;
@@ -622,6 +683,7 @@ async function startPlanning(ats) {
     plan = res.plan;
     planWait = null;
     drafts.clear();
+    retryRefusals.clear();
     startOpts.when = 'now';
     startOpts.integration = null;
     startOpts.free = false;
@@ -671,8 +733,11 @@ async function launch(ids) {
   if (isOpen) render();
 }
 
-/** Runs one main-side action with the board locked; main pushes the new view. */
-async function act(call) {
+/**
+ * Runs one main-side action with the board locked; main pushes the new view.
+ * opts.local: a refusal is shown by the caller (beside its row), not above the board.
+ */
+async function act(call, opts = {}) {
   if (phase !== 'idle') return null;
   phase = 'launching';
   failure = null;
@@ -684,7 +749,7 @@ async function act(call) {
     res = { ok: false, error: 'failed' };
   }
   phase = 'idle';
-  if (res && res.ok === false) failure = res.error || 'failed';
+  if (res && res.ok === false && !opts.local) failure = res.error || 'failed';
   if (isOpen) render();
   return res;
 }
@@ -700,8 +765,13 @@ async function discard() {
 async function retry(id) {
   if (!plan || phase !== 'idle') return;
   busyPkg = id;
+  retryRefusals.delete(id);
   try {
-    await act(() => window.lunacore.retryOrchestra(plan.id, id));
+    const res = await act(() => window.lunacore.retryOrchestra(plan.id, id), { local: true });
+    if (res && res.ok === false) {
+      const whileFinishing = !!(plan && plan.integration && plan.integration.running === true);
+      retryRefusals.set(id, { code: res.error || 'failed', whileFinishing });
+    }
   } finally {
     busyPkg = null;
     if (isOpen) render();
@@ -710,6 +780,16 @@ async function retry(id) {
 
 function finishRun() {
   if (plan) act(() => window.lunacore.finishOrchestra(plan.id, chosenIntegration()));
+}
+
+/** "Abort finish": main ends the hung finish; the board frees once it reports. */
+async function abortFinish() {
+  if (!plan) return;
+  const res = await act(() => window.lunacore.abortOrchestraFinalize(plan.id));
+  if (res && res.ok) {
+    for (const [id, r] of retryRefusals) if (r.code === 'busy') retryRefusals.delete(id);
+    if (isOpen) render();
+  }
 }
 
 /** Outside act(): it must work while a launch holds the board busy. */
@@ -749,6 +829,8 @@ function closeOrchestra() {
   isOpen = false;
   failure = null;
   picking = false;
+  if (abortRevealTimer) clearTimeout(abortRevealTimer);
+  abortRevealTimer = null;
   closeWithExit(overlay);
   term.focus();
 }

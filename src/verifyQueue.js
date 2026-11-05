@@ -14,6 +14,9 @@
 //     the result says timedOut so the caller never hands it to a worker as
 //     a test failure
 //   - hooks.onQueued / onStart let the board show "waiting to verify"
+//   - hooks.whenAllowed (the battery guard, src/orchestraPower.js) holds a
+//     verify at the head of the queue until it may start: low on battery,
+//     no new suite starts until the PC is plugged in
 //
 // Clock, timers, exec and the tree-kill are injected (tests); the process
 // wide instance is sharedVerifyQueue(). Never rejects.
@@ -73,7 +76,18 @@ function createVerifyQueue(deps = {}) {
     }
   }
 
+  /** Waits for hooks.whenAllowed(); a throwing hook never holds the queue. */
+  async function holdIfNeeded(hooks) {
+    if (typeof hooks.whenAllowed !== 'function') return;
+    try {
+      await hooks.whenAllowed();
+    } catch {
+      /* no hold: the verify goes on */
+    }
+  }
+
   async function runJob(command, cwd, hooks, queuedAt) {
+    await holdIfNeeded(hooks);
     waiting -= 1;
     // A run killed while this verify waited: nothing to verify for any more,
     // and the next run's verify should not wait behind it.
@@ -111,7 +125,8 @@ function createVerifyQueue(deps = {}) {
    * Queues one verify; resolves when it has run (after everything queued before it).
    * @param {string} command
    * @param {string} cwd
-   * @param {{onQueued?:Function, onStart?:Function, onRerun?:Function, isCancelled?:() => boolean}} [hooks]
+   * @param {{onQueued?:Function, onStart?:Function, onRerun?:Function, isCancelled?:() => boolean,
+   *   whenAllowed?:() => Promise<void>}} [hooks]
    * @returns {Promise<{ok:boolean, output:string, timedOut:boolean, reruns:number, waitedMs:number, ranMs:number}>}
    */
   function run(command, cwd, hooks = {}) {

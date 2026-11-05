@@ -10,10 +10,21 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 
-const { createPowerCtl, wakeTaskXml, localStamp, hasSleepState, wakeTimerSetting, WAKE_TASK_NAME, SHUTDOWN_COMMENT } =
-  require('../src/powerctl.js');
+const {
+  createPowerCtl,
+  wakeTaskXml,
+  localStamp,
+  hasSleepState,
+  wakeTimerSetting,
+  parseBatteryPercent,
+  WAKE_TASK_NAME,
+  SHUTDOWN_COMMENT,
+} = require('../src/powerctl.js');
 const { createOrchestra, RESUME_GRACE_MS } = require('../src/orchestra.js');
-const { SLEEP_COUNTDOWN_MS } = require('../src/orchestraPower.js');
+const { SLEEP_COUNTDOWN_MS, createBatteryGuard, percentOf, LOW_BATTERY_PCT } = require('../src/orchestraPower.js');
+const { ABORT_FINISH_AFTER_MS } = require('../src/orchestraFinalize.js');
+const { createVerifyQueue } = require('../src/verifyQueue.js');
+const { batteryNotice, BATTERY_NOTICES } = require('../src/orchestraWiring.js');
 
 const POWERCFG_A = [
   'The following sleep states are available on this system:',
@@ -132,7 +143,7 @@ const turn = (text) =>
   JSON.stringify({ type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text }] } });
 const pkg = (id, todoAts) => ({ id, title: `T ${id}`, todoAts, prompt: `do ${id}`, files: [], dependsOn: [], verify: 'npm test', model: 'opus' });
 
-function setup({ answers = {}, packages = [pkg('a', [1]), pkg('b', [2])], createPr } = {}) {
+function setup({ answers = {}, packages = [pkg('a', [1]), pkg('b', [2])], createPr, extra = {} } = {}) {
   let clock = new Date(2026, 9, 22, 1, 0).getTime();
   let seq = 0;
   const timers = [];
@@ -181,6 +192,7 @@ function setup({ answers = {}, packages = [pkg('a', [1]), pkg('b', [2])], create
       log.flushed += 1;
     },
     appendReport: (id, line) => log.appended.push([id, line]),
+    ...extra,
   });
   const ctx = { projectId: 'p1', repoPath: '/repo', profileId: 'cloud', env: {} };
   const advance = (ms) => {
@@ -396,4 +408,258 @@ test('unticking during the shutdown countdown aborts it', async () => {
   await s.flush();
   assert.equal(s.ran('shutdown.exe', '/a').length, 1);
   assert.match(s.log.appended[1][1], /^- Shutdown canceled at \d\d:\d\d$/);
+});
+
+// ---- battery ------------------------------------------------------------------
+
+test('powerctl batteryPercent: Win32_Battery through powershell, parsed; none without a battery', async () => {
+  assert.equal(parseBatteryPercent('87\r\n'), 87);
+  assert.equal(parseBatteryPercent('42,6'), 43);
+  assert.equal(parseBatteryPercent(''), null, 'no battery: powershell prints nothing');
+  assert.equal(parseBatteryPercent('140'), null);
+  assert.equal(parseBatteryPercent('n/a'), null);
+  const win = winCtl({ 'powershell.exe': { stdout: '63\r\n' } });
+  assert.deepEqual(await win.ctl.batteryPercent(), { ok: true, percent: 63 });
+  assert.equal(win.calls[0].file, 'powershell.exe');
+  assert.match(win.calls[0].args.join(' '), /Win32_Battery/);
+  const desktop = winCtl({ 'powershell.exe': { stdout: '' } });
+  assert.deepEqual(await desktop.ctl.batteryPercent(), { ok: false, reason: 'noBattery' });
+  assert.deepEqual(await createPowerCtl({ platform: 'linux' }).batteryPercent(), { ok: false, reason: 'unsupported' });
+  assert.equal(percentOf({ ok: true, percent: 15 }), 15);
+  assert.equal(percentOf({ ok: false, reason: 'noBattery' }), null);
+});
+
+/**
+ * A battery guard over a fake powerMonitor. `state.percent` is what the next
+ * read returns (null = no percentage available).
+ */
+function fakeBattery({ onBattery = false, percent = null, anyRunActive = () => true } = {}) {
+  const state = { onBattery, percent, notices: [], reads: 0 };
+  const events = {};
+  const guard = createBatteryGuard({
+    isOnBattery: () => state.onBattery,
+    onBatteryEvent: (fn) => {
+      events.battery = fn;
+    },
+    onAcEvent: (fn) => {
+      events.ac = fn;
+    },
+    readPercent: async () => {
+      state.reads += 1;
+      return state.percent === null ? { ok: false, reason: 'noBattery' } : { ok: true, percent: state.percent };
+    },
+    anyRunActive: () => anyRunActive(),
+    notify: (kind, info) => state.notices.push([kind, info.percent]),
+    // The poll never fires on its own here; tests read by hand.
+    setTimer: () => ({}),
+    clearTimer: () => {},
+  });
+  const unplug = (pct = state.percent) => {
+    state.onBattery = true;
+    state.percent = pct;
+    events.battery();
+  };
+  const plugIn = () => {
+    state.onBattery = false;
+    events.ac();
+  };
+  return { guard, state, unplug, plugIn };
+}
+
+const settle = async (n = 8) => {
+  for (let i = 0; i < n; i += 1) await new Promise((r) => setImmediate(r));
+};
+
+test('battery guard: one warning per battery period, a new period warns again', async () => {
+  const b = fakeBattery();
+  b.guard.start();
+  assert.deepEqual(b.state.notices, []);
+  b.unplug(80);
+  await settle();
+  b.guard.onRunStart();
+  b.guard.onRunStart();
+  await b.guard.readNow();
+  assert.deepEqual(b.state.notices, [['battery', null]], 'once, not on every check');
+  assert.deepEqual(b.guard.view(), { onBattery: true, percent: 80, held: false, thresholdPct: LOW_BATTERY_PCT });
+  b.plugIn();
+  b.guard.onRunStart();
+  assert.equal(b.state.notices.length, 1, 'on mains: no warning');
+  b.unplug(70);
+  await settle();
+  assert.equal(b.state.notices.length, 2, 'a new battery period warns once more');
+});
+
+test('battery guard: no warning while no run is live; started on battery warns at the run start', async () => {
+  let live = false;
+  const b = fakeBattery({ onBattery: true, percent: 50, anyRunActive: () => live });
+  b.guard.start();
+  await settle();
+  assert.deepEqual(b.state.notices, []);
+  live = true;
+  b.guard.onRunStart();
+  assert.deepEqual(b.state.notices, [['battery', 50]]);
+});
+
+test('battery notification text: pl without diacritics, en, the level filled in', () => {
+  assert.match(batteryNotice('battery', 'en'), /on battery/);
+  assert.match(batteryNotice('batteryLow', 'pl', { percent: 12 }), /^Bateria 12% /);
+  assert.match(batteryNotice('batteryLow', 'en', { percent: 12 }), /^Battery at 12% /);
+  assert.equal(batteryNotice('nope', 'en'), null);
+  for (const entry of Object.values(BATTERY_NOTICES)) {
+    assert.ok(entry.pl && entry.en);
+    assert.doesNotMatch(entry.pl, /[^\x00-\x7f]/, 'pl without diacritics');
+  }
+});
+
+test('verify queue: a held verify waits at the head of the queue and runs once allowed', async () => {
+  let ran = 0;
+  const queue = createVerifyQueue({
+    runImpl: async () => {
+      ran += 1;
+      return { ok: true, output: '' };
+    },
+  });
+  let allow;
+  const hold = new Promise((r) => {
+    allow = r;
+  });
+  const first = queue.run('npm test', '/wt/a', { whenAllowed: () => hold });
+  const second = queue.run('npm test', '/wt/b', {});
+  await settle();
+  assert.equal(ran, 0, 'nothing starts while held - not even the next one');
+  allow();
+  assert.equal((await first).ok, true);
+  assert.equal((await second).ok, true);
+  assert.equal(ran, 2);
+});
+
+/** A started run with a battery guard and the real serial verify queue. */
+async function batteryRun({ onBattery = false, percent = null } = {}) {
+  let orch = null;
+  const b = fakeBattery({ onBattery, percent, anyRunActive: () => !!(orch && orch.view() && orch.view().started) });
+  const verifies = [];
+  const queue = createVerifyQueue({
+    runImpl: async (_cmd, cwd) => {
+      verifies.push(cwd);
+      return { ok: true, output: '' };
+    },
+  });
+  const s = setup({
+    extra: {
+      battery: b.guard,
+      finishPackage: async (p, hooks) => {
+        const res = await queue.run('npm test', p.root, hooks);
+        return res.ok ? { ok: true, headSha: `${p.id}5678aaa`, files: [] } : { ok: false, stage: 'verify', output: res.output };
+      },
+    },
+  });
+  orch = s.orch;
+  b.guard.start();
+  await settle();
+  const { plan } = await s.orch.makePlan(s.ctx);
+  await s.orch.launch({ planId: plan.id });
+  await s.flush();
+  return { ...s, b, verifies, planId: plan.id };
+}
+
+test('starting a run on battery shows the warning once (board + notification)', async () => {
+  const r = await batteryRun({ onBattery: true, percent: 64 });
+  assert.equal(r.alive.size, 2, 'above the threshold the workers launch');
+  assert.deepEqual(r.b.state.notices, [['battery', 64]]);
+  assert.deepEqual(r.orch.view().battery, { onBattery: true, percent: 64, held: false, thresholdPct: LOW_BATTERY_PCT });
+  r.orch.tick();
+  r.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  await r.flush(10);
+  assert.equal(r.b.state.notices.length, 1, 'not repeated while the run goes on');
+});
+
+test('below the threshold no worker launches; plugging in launches them', async () => {
+  const r = await batteryRun({ onBattery: true, percent: 12 });
+  assert.equal(r.orch.view().started, true, 'Approve still starts the run');
+  assert.equal(r.alive.size, 0, 'no worker on a low battery');
+  assert.equal(r.orch.view().battery.held, true);
+  assert.deepEqual(r.b.state.notices, [['battery', 12], ['batteryLow', 12]]);
+  assert.deepEqual(await r.orch.launch({ planId: r.planId, ids: ['a'] }), { ok: false, error: 'batteryLow' });
+  r.b.plugIn();
+  await r.flush(10);
+  assert.equal(r.alive.size, 2, 'plugged in: the held packages launch');
+  assert.equal(r.orch.view().battery.onBattery, false);
+});
+
+test('below the threshold a new verify waits, the running worker is not killed; plugging in resumes the verify', async () => {
+  const r = await batteryRun();
+  assert.equal(r.alive.size, 2);
+  r.b.unplug(15);
+  await r.flush(10);
+  assert.equal(r.orch.view().battery.held, true);
+  r.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  await r.flush(10);
+  const a = r.orch.view().packages.find((p) => p.id === 'a');
+  const b = r.orch.view().packages.find((p) => p.id === 'b');
+  assert.equal(r.verifies.length, 0, 'the verify did not start');
+  assert.deepEqual([a.state, a.verifyPhase], ['finishing', 'queued']);
+  assert.equal(b.state, 'launched', 'the other worker keeps running');
+  assert.ok(r.alive.has('s2'), 'its tab is not closed');
+  r.b.plugIn();
+  await r.flush(12);
+  assert.equal(r.verifies.length, 1, 'plugged in: the verify runs');
+  assert.equal(r.orch.view().packages.find((p) => p.id === 'a').state, 'pushed');
+});
+
+test('no battery percentage available: warns only, nothing is held', async () => {
+  const r = await batteryRun({ onBattery: true, percent: null });
+  assert.equal(r.alive.size, 2);
+  assert.deepEqual(r.b.state.notices, [['battery', null]]);
+  assert.equal(r.orch.view().battery.held, false);
+  r.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  await r.flush(10);
+  assert.equal(r.verifies.length, 1);
+});
+
+test('a Retry that would launch a worker is refused on a low battery; a live tab is only nudged', async () => {
+  const r = await batteryRun();
+  r.alive.delete('s2');
+  r.orch.onSessionClosed('s2');
+  await r.flush();
+  r.b.unplug(10);
+  await r.flush();
+  assert.deepEqual(await r.orch.retry({ planId: r.planId, id: 'b' }), { ok: false, error: 'batteryLow' });
+  r.b.plugIn();
+  await r.flush();
+  assert.equal((await r.orch.retry({ planId: r.planId, id: 'b' })).ok, true);
+});
+
+// ---- Abort finish ---------------------------------------------------------------
+
+test('a finish past the threshold can be aborted; Retry is refused before and works after', async () => {
+  // The PR step hangs forever: the finish never ends on its own.
+  const s = await started({ createPr: () => new Promise(() => {}), extra: { integrateDrainMs: 0 } });
+  s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  await s.flush(10);
+  s.alive.delete('s2');
+  s.orch.onSessionClosed('s2');
+  await s.flush(10);
+  const integ = s.orch.view().integration;
+  assert.equal(integ.running, true, 'the run is finishing');
+  assert.equal(integ.startedAt, s.now());
+  assert.equal(integ.abortAfter, integ.startedAt + ABORT_FINISH_AFTER_MS);
+  assert.deepEqual(await s.orch.retry({ planId: s.planId, id: 'b' }), { ok: false, error: 'busy' });
+  assert.deepEqual(s.orch.abortFinalize({ planId: s.planId }), { ok: false, error: 'tooEarly' });
+
+  s.setClock(s.now() + ABORT_FINISH_AFTER_MS + 1000);
+  assert.deepEqual(s.orch.abortFinalize({ planId: 'another' }), { ok: false, error: 'noPlan' });
+  assert.deepEqual(s.orch.abortFinalize(null), { ok: false, error: 'noPlan' });
+  assert.deepEqual(s.orch.abortFinalize({ planId: s.planId }), { ok: true });
+  for (let i = 0; i < 5; i += 1) {
+    await new Promise((r) => setTimeout(r, 0));
+    await s.flush(10);
+  }
+  const after = s.orch.view().integration;
+  assert.equal(after.running, false, 'the board is free');
+  assert.deepEqual([after.state, after.error], ['failed', 'abortedByUser']);
+  assert.ok(s.log.report, 'the report is still written');
+  assert.deepEqual(s.orch.abortFinalize({ planId: s.planId }), { ok: false, error: 'notFinishing' });
+  const retried = await s.orch.retry({ planId: s.planId, id: 'b' });
+  assert.equal(retried.ok, true, 'Retry works again');
+  assert.equal(s.orch.view().packages.find((p) => p.id === 'b').state, 'launched');
 });
