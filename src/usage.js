@@ -132,6 +132,48 @@ function extractRateLimitHeaders(headers) {
   return null;
 }
 
+/**
+ * The /api/oauth/usage body -> the 5 h + weekly limit entries (shared by the
+ * /login read here and the per-account reads in src/claudeaccountusage.js).
+ * @param {object} data parsed response body
+ * @returns {UsageLimit[]}
+ */
+function claudeLimits(data) {
+  const fiveHour = pickWindow(data && data.five_hour);
+  const sevenDay = pickWindow(data && data.seven_day);
+  const limits = [];
+  if (fiveHour) {
+    limits.push({
+      window: '5h',
+      label: '5-hour window',
+      unit: 'messages',
+      used: Math.round((fiveHour.pct / 100) * 1000), // estimated based on percentage
+      limit: 1000,
+      percentUsed: fiveHour.pct,
+      resetsAt: fiveHour.resetsAt,
+      source: 'account',
+    });
+  }
+  if (sevenDay) {
+    limits.push({
+      window: 'weekly',
+      label: 'Weekly limit',
+      unit: 'messages',
+      used: Math.round((sevenDay.pct / 100) * 7000),
+      limit: 7000,
+      percentUsed: sevenDay.pct,
+      resetsAt: sevenDay.resetsAt,
+      source: 'account',
+    });
+  }
+  return limits;
+}
+
+/** One read-only GET of the Claude usage endpoint with `token` (zero tokens spent). */
+function getClaudeUsage(token) {
+  return httpsGet('api.anthropic.com', '/api/oauth/usage', token);
+}
+
 // ============================================================================
 // BASE ADAPTER INTERFACE
 // ============================================================================
@@ -261,34 +303,7 @@ class ClaudeAdapter extends UsageAdapter {
       };
     }
 
-    const fiveHour = pickWindow(data.five_hour);
-    const sevenDay = pickWindow(data.seven_day);
-
-    const limits = [];
-    if (fiveHour) {
-      limits.push({
-        window: '5h',
-        label: '5-hour window',
-        unit: 'messages',
-        used: Math.round((fiveHour.pct / 100) * 1000), // estimated based on percentage
-        limit: 1000,
-        percentUsed: fiveHour.pct,
-        resetsAt: fiveHour.resetsAt,
-        source: 'account',
-      });
-    }
-    if (sevenDay) {
-      limits.push({
-        window: 'weekly',
-        label: 'Weekly limit',
-        unit: 'messages',
-        used: Math.round((sevenDay.pct / 100) * 7000),
-        limit: 7000,
-        percentUsed: sevenDay.pct,
-        resetsAt: sevenDay.resetsAt,
-        source: 'account',
-      });
-    }
+    const limits = claudeLimits(data);
 
     return {
       providerId: this.providerId,
@@ -881,6 +896,23 @@ class UsageWatcher {
     this.others = [];
     this.othersAt = 0;
     this.othersEveryMs = OTHERS_EVERY_MS;
+    // Per-account Claude reads (src/claudeaccountusage.js), set by the HUD.
+    // Null (host mode, tests) -> the payload carries no `accounts` field.
+    this.accountUsage = null;
+    this.forceAccounts = false;
+  }
+
+  /** One entry per stored Claude account, or null when no reader is set. */
+  async readAccounts(primary) {
+    if (!this.accountUsage) return null;
+    const force = this.forceAccounts;
+    this.forceAccounts = false;
+    try {
+      const entries = await this.accountUsage.read({ force, mainUsage: primary });
+      return Array.isArray(entries) ? entries : [];
+    } catch {
+      return [];
+    }
   }
 
   start() {
@@ -944,12 +976,15 @@ class UsageWatcher {
     try {
       const profile = this.getActiveProfile();
       const [primary, others] = await Promise.all([this.fetchPrimary(profile), this.readOthers()]);
-      usage = { ...primary, others };
+      // After the primary read: an account on the main ~/.claude login reuses it.
+      const accounts = await this.readAccounts(primary);
+      usage = accounts ? { ...primary, others, accounts } : { ...primary, others };
       this.rateLimitedStreak = primary && primary.rateLimited ? this.rateLimitedStreak + 1 : 0;
       const cmp = JSON.stringify({
         ...usage,
         updatedAt: 0,
         others: others.map((o) => ({ ...o, updatedAt: 0 })),
+        accounts: (accounts || []).map((a) => ({ ...a, updatedAt: 0 })),
       });
       // A good read is always emitted, even with unchanged numbers: the
       // renderer's "updated Xs ago" label comes from updatedAt, so swallowing
@@ -973,6 +1008,7 @@ class UsageWatcher {
   refresh() {
     this.lastJson = ''; // force an emit on the next read
     this.othersAt = 0; // the refresh button re-reads every provider
+    this.forceAccounts = true; // ...and every connected account
     if (this.timer) {
       clearTimeout(this.timer); // avoid duplicating the already-scheduled next tick
       this.timer = null;
@@ -1053,6 +1089,8 @@ module.exports = {
   parseRetryAfter,
   MAX_BACKOFF_MS,
   forceRefresh,
+  claudeLimits,
+  getClaudeUsage,
 
   // Adapters exported for testing
   ClaudeAdapter,

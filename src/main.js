@@ -91,6 +91,9 @@ const {
 // harness. The active account's token rides in every plain Claude launch.
 const { createClaudeAccounts, failoverEligible, ACCOUNT_ENV } = require('./claudeaccounts');
 const { registerClaudeAccountsIpc } = require('./claudeaccountsipc');
+// Per-account 5 h + weekly usage through usage-only logins (src/claudeaccountusage.js).
+const { createAccountUsage } = require('./claudeaccountusage');
+const { claudePath } = require('./hostchat');
 const { createTabFailover } = require('./claudefailover');
 // Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject, removeProject, resolveProjectDir, resolveStoredPath } = require('./projects');
@@ -329,6 +332,17 @@ const claudeAccounts = createClaudeAccounts({
   onChange: () => send('claudeAccounts:changed'),
 });
 setAccountLayer((env) => claudeAccounts.authLayer(env));
+// Usage-only logins per account; the watcher (startUsageWatcher) reads them.
+const accountUsage = createAccountUsage({
+  accounts: claudeAccounts,
+  // An absolute claude.exe from PATH (never a bare name, never a .cmd shim).
+  claudeBin: () => claudePath(withClaudeOnPath({ ...process.env }), null),
+  log: (line) => console.info(`[accounts] ${line}`),
+  onConnected: () => {
+    send('claudeAccounts:changed');
+    if (usageWatcher) usageWatcher.refresh();
+  },
+});
 // A tab on a usage limit moves to the next free account (src/claudefailover.js).
 // Every dep is read lazily: profiles, sessions and restartSession are set up
 // further down, before any tab can hit a limit.
@@ -1973,6 +1987,7 @@ function startUsageWatcher() {
       mainWindow.webContents.send('usage:update', usage);
     }
   });
+  usageWatcher.accountUsage = accountUsage;
   usageWatcher.start();
   usageSnapshotTimer = setInterval(putUsageSnapshot, USAGE_SNAPSHOT_EVERY_MS);
   usageSnapshotTimer.unref();
@@ -2460,6 +2475,7 @@ function registerIpc() {
   registerClaudeAccountsIpc({
     ipcMain,
     accounts: claudeAccounts,
+    accountUsage,
     openTokenTab: () => createSession({ commandOverride: 'claude setup-token' }),
   });
   // Setup Center rows + cloud form + Getting started (src/setupipc.js).

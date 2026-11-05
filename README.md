@@ -356,7 +356,7 @@ process:**
 
 | Request | When | Why | Off switch |
 |---------|------|-----|------------|
-| `GET https://api.anthropic.com/api/oauth/usage` | every 90 s | Draws the usage gauge (5-hour + weekly limits). | `ENABLE_USAGE_METER = false` in [`src/main.js`](src/main.js) |
+| `GET https://api.anthropic.com/api/oauth/usage` | every 90 s, **once per Claude account** with a usage login (staggered ~2 s apart; an account on the main `~/.claude` login reuses the main read) | Draws the usage gauge (5-hour + weekly limits per account). | `ENABLE_USAGE_METER = false` in [`src/main.js`](src/main.js) |
 | `GET https://open.bigmodel.cn/…/billing/balance` or `GET https://api.openai.com/v1/dashboard/billing/…` | every 90 s, **instead of** the row above, only when the gauge's profile is GLM or has an `OPENAI_API_KEY` | Provider-aware usage (see [Usage-limits gauge](#usage-limits-gauge)). Each host only ever receives the key it issued. | same switch |
 | `GET https://api.github.com/repos/Kotsur69/Luna-Core-HUD/releases/…` | **once, at launch** | Asks whether a newer LunaCore exists. | `ENABLE_AUTO_UPDATE = false` in [`src/main.js`](src/main.js) |
 | `POST https://oauth2.googleapis.com/token`, `GET https://www.googleapis.com/calendar/v3/…` | **only after you connected Google Calendar**, when the Mission Control calendar loads or you flip a month | Reads your calendars and events (read-only scope). The consent itself runs in your browser with a one-shot `127.0.0.1` redirect listener. | don't connect, or revoke access in your Google account |
@@ -1732,6 +1732,33 @@ Gemini, Grok and CCR-routed profiles report *not configured*: their key was
 issued by another host and is never sent to OpenAI. The caveat: the gauge
 currently follows the **first profile** in your list (normally Claude Cloud),
 not the active tab — so in everyday use it still shows your Claude limits.
+
+**Every Claude account, not just `~/.claude`.** With more than one subscription
+set up under *Settings → Claude accounts* (the failover list), the gauge shows a
+labelled **5-hour + weekly bar pair per account**, with a dot and an *active* tag
+on the account new work runs on. The failover accounts run on `claude
+setup-token` tokens, and those **cannot read the usage endpoint** (403 — no
+`user:profile` scope), so each account gets a separate **usage-only login**:
+
+- **Connect usage** runs `claude auth login` with
+  `CLAUDE_CONFIG_DIR=~/.claude-usage-<id>` (your browser opens — sign in to that
+  account), then `claude auth status` to read back and show the email. That
+  login's token is used for nothing but the read-only GET above; sessions keep
+  running on the setup tokens and failover is unchanged.
+- **Use main login** lets the main `~/.claude` login stand in for the account it
+  belongs to (no CLI call; its read is shared with the main gauge read).
+- A 401/403 marks **only that account** *reconnect* (button in Settings); the
+  others keep updating. A usage login whose token expires within 10 minutes gets
+  one `claude auth status` under its own config dir, then the file is re-read.
+  The main `~/.claude` login is **never** refreshed by LunaCore.
+- Only the folder path is stored (encrypted, in `claude-accounts.local.json`),
+  never a token, and it must sit inside your home folder. Tokens never reach the
+  renderer or the `usage:update` payload — the code is in
+  [`src/claudeaccountusage.js`](src/claudeaccountusage.js).
+
+The phone's usage card follows: the PC's `usage` snapshot gains one row per
+account with a healthy read, while the top-level 5 h / weekly pair stays the
+main read, so an older phone build still shows what it showed before.
 
 ## Layout presets & the builder
 
