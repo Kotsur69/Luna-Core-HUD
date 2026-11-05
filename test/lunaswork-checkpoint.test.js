@@ -19,6 +19,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { removeDir } = require('../test-support/under-load');
 
 const {
   tagName,
@@ -57,9 +58,9 @@ function git(cwd, ...args) {
 /** A bare origin and a clone on `main`, with one pushed commit. */
 function makeRepo(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-cp-'));
-  t.after(() => {
+  t.after(async () => {
     try {
-      fs.rmSync(root, { recursive: true, force: true });
+      await removeDir(root);
     } catch {
       // Windows may still hold a handle; the OS temp cleanup gets it later.
     }

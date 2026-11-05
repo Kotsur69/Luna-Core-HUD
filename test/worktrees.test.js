@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
+const { removeDir } = require('../test-support/under-load');
 const path = require('node:path');
 const { execFile, execFileSync } = require('node:child_process');
 
@@ -245,7 +246,7 @@ function makeRepo({ commit = true } = {}) {
     git(repo, 'add', '.');
     git(repo, 'commit', '-q', '-m', 'init');
   }
-  return { parent, repo, cleanup: () => fs.rmSync(parent, { recursive: true, force: true }) };
+  return { parent, repo, cleanup: () => removeDir(parent) };
 }
 
 test('addWorktree creates branch + checkout beside the repo', async () => {
@@ -266,7 +267,7 @@ test('addWorktree creates branch + checkout beside the repo', async () => {
     // The main checkout is untouched: still on its own branch, still clean.
     assert.equal(git(repo, 'status', '--porcelain'), '');
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
@@ -277,7 +278,7 @@ test('addWorktree opens the same sub-folder inside the worktree', async () => {
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(res.cwd, path.join(parent, WORKTREE_DIR, 'app', 'sub', 'pkg'));
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
@@ -289,7 +290,7 @@ test('addWorktree refuses a name that is already taken', async () => {
     assert.equal(again.ok, false);
     assert.equal(again.error, 'exists');
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
@@ -302,7 +303,7 @@ test('addWorktree reports a branch git refuses as gitFailed', async () => {
     assert.equal(res.error, 'gitFailed');
     assert.match(res.detail, /taken/);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
@@ -318,7 +319,7 @@ test('addWorktree errors: bad name, not a repo, no commits', async () => {
     if (res.error !== 'noCommits') assert.equal(res.error, 'notRepo');
     assert.equal((await addWorktree(repo, 'x', PATIENT)).error, 'noCommits');
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 

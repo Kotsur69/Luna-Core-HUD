@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
+const { waitFor } = require('../test-support/under-load');
 const path = require('path');
 
 const ask = require('../src/lunasworkAsk');
@@ -319,7 +320,7 @@ test('pullQuestions: each phone question once, old and future ones never; answer
   ]))];
   assert.equal(svc.pullQuestions(peers), 1);
   assert.equal(svc.pullQuestions(peers), 0, 'the same question is not asked twice');
-  await settle();
+  await waitFor(() => changes.length > 0 && changes[changes.length - 1].items[0]?.status === 'answered', { message: 'the phone question answered' });
   assert.equal(calls.length, 1);
   const last = changes[changes.length - 1];
   assert.equal(last.items[0].from, 'phone');
@@ -335,7 +336,10 @@ test('phone questions over the limit come back as `limited`, not asked', async (
   const { svc, calls, changes } = service(s);
   const units = Array.from({ length: askModel.RATE_LIMIT + 3 }, (_, i) => askModel.askUnit(`q${i}`, NOW - 100 + i));
   assert.equal(svc.pullQuestions([rows.todoPeer(mirrorOf(units))]), askModel.RATE_LIMIT + 3);
-  await settle();
+  await waitFor(() => {
+    const last = changes.length > 0 ? changes[changes.length - 1].items : [];
+    return last.filter((i) => i.status === 'answered').length >= askModel.RATE_LIMIT && last.filter((i) => i.status === 'limited').length >= 3;
+  }, { message: 'every phone question answered or limited' });
   assert.equal(calls.length, askModel.RATE_LIMIT);
   const items = changes[changes.length - 1].items;
   assert.equal(items.filter((i) => i.status === 'limited').length, 3);

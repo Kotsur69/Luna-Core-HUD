@@ -9,6 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
+const { waitFor } = require('../test-support/under-load');
 const path = require('path');
 
 const ET = require('../src/lunasworkErrorTracking');
@@ -242,7 +243,7 @@ test('controller: the first SHIP files the card and asks the DSN; the answer is 
     log: () => {},
   });
   await ctl.start({ projectId: 'game' });
-  for (let i = 0; i < 200 && h.directors < 2; i += 1) await new Promise((r) => setTimeout(r, 5));
+  await waitFor(() => h.directors >= 2, { message: 'the run reaches iteration 2' });
   assert.equal(h.directors, 2, 'SHIP held: the run went on to iteration 2');
   assert.ok(h.todos.some((t) => t.text === ET.CARD_TEXT && !t.done), 'the error tracking card is open for iteration 2');
   const [q] = ctl.status().pendingDecisions;
@@ -259,7 +260,7 @@ test('controller: the first SHIP files the card and asks the DSN; the answer is 
 
   ctl.stop();
   release();
-  for (let i = 0; i < 200 && ctl.status().active; i += 1) await new Promise((r) => setTimeout(r, 5));
+  await waitFor(() => !ctl.status().active, { message: 'the stopped run goes inactive' });
   assert.equal(ctl.status().active, false);
 });
 

@@ -15,6 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile, execFileSync } = require('child_process');
+const { removeDir } = require('../test-support/under-load');
 
 const G = require('../src/lunasworkGraph');
 
@@ -35,7 +36,7 @@ function setupRepo() {
   git(checkout, 'add', '-A');
   git(checkout, 'commit', '-q', '-m', 'first');
   git(checkout, 'push', '-q', '-u', 'origin', 'main');
-  return { dir, origin, checkout, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { dir, origin, checkout, done: () => removeDir(dir) };
 }
 
 const envelope = (raw) => ({ stdout: JSON.stringify({ structured_output: raw, total_cost_usd: 0.01 }) });
@@ -98,7 +99,7 @@ test('re-index via claude without the CLI; the codemaps are committed and pushed
     assert.equal(again.codemaps, 'unchanged');
     assert.equal(again.ok, true);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -127,7 +128,7 @@ test('the codebase-memory CLI is used when it is on PATH; its error is a note', 
     assert.equal(second.ok, false);
     assert.deepEqual(second.notes, ['code graph not re-indexed (cli): repo not found']);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -151,7 +152,7 @@ test('a stray edit outside docs/CODEMAPS is restored, a new stray file reported,
     assert.match(res.notes.join('\n'), /touched 1 file\(s\) outside docs\/CODEMAPS - restored/);
     assert.match(res.notes.join('\n'), /left 1 new file\(s\) outside docs\/CODEMAPS: stray\.txt/);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -171,7 +172,7 @@ test('a codemaps commit that cannot be pushed moves nothing locally, so the chec
     assert.equal(git(r.checkout, 'status', '--porcelain'), '', 'the maps are discarded: nothing blocks the next fast-forward');
     assert.match(res.notes.join('\n'), /codemaps not pushed \(fetch failed: .*\) - maps discarded/);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -188,7 +189,7 @@ test('a checkout with a commit origin lacks is never published with the maps', a
     assert.equal(git(r.origin, 'rev-parse', 'main'), originBefore, 'origin untouched');
     assert.match(res.notes.join('\n'), /the checkout has commits origin does not have\) - maps discarded/);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -205,7 +206,7 @@ test('the codemaps commit leaves what Mati staged alone', async () => {
     assert.equal(git(r.checkout, 'diff', '--cached', '--name-only'), 'notes.md', 'still staged, not committed');
     assert.equal(git(r.checkout, 'status', '--porcelain', '--', 'docs/CODEMAPS'), '', 'the checkout is on the new commit');
   } finally {
-    r.done();
+    await r.done();
   }
 });
 
@@ -236,7 +237,7 @@ test('failures never throw: a failed index and a failed updater are notes, nothi
     const noRepo = await crashing.refreshGraph({ repoPath: 'relative/path', iteration: 1 });
     assert.deepEqual(noRepo.notes, ['graph refresh skipped: no repo folder']);
   } finally {
-    r.done();
+    await r.done();
   }
 });
 

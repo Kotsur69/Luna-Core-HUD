@@ -16,6 +16,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
+const { removeDir } = require('../test-support/under-load');
 const path = require('path');
 
 const S = require('../src/lunasworkSettings');
@@ -60,7 +61,7 @@ const PROFILE = S.validateProfile(RAW_PROFILE).profile;
 
 function tmpDir(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeDir(dir));
   return dir;
 }
 
