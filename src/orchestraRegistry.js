@@ -206,6 +206,8 @@ function createOrchestraRegistry(deps) {
     othersActive,
     repoBusy,
     tick: () => each((c) => c.tick(), 'tick'),
+    // powerMonitor 'suspend': the start of a sleep that is not worker time.
+    onSystemSuspend: () => each((c) => c.onSystemSuspend(), 'suspend'),
     onSystemResume: () => each((c) => c.onSystemResume(), 'resume'),
     restoreAll,
     killAll,

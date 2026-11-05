@@ -3540,6 +3540,7 @@ app.whenReady().then(() => {
   setInterval(() => orchestraRuns.tick(), ORCHESTRA_TICK_MS).unref();
   // Back from sleep: re-arm or resume a paused run, drop the wake task.
   powerMonitor.on('resume', () => orchestraRuns.onSystemResume());
+  powerMonitor.on('suspend', () => orchestraRuns.onSystemSuspend());
   setInterval(() => statusBoard.tick(), STATUS_TICK_MS).unref();
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();

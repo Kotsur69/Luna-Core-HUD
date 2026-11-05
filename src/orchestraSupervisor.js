@@ -24,6 +24,7 @@ const { WORKTREE_DIR, BRANCH_PREFIX } = require('./worktrees');
 const { normalizeEffort } = require('./efforts');
 const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
 const { compileOwnership, ownerOf } = require('./ownership');
+const { normalizeSleeps } = require('./orchestraSleep');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -707,12 +708,15 @@ const INTEGRATION_STATES = new Set(['idle', 'running', 'done', 'failed']);
 
 function normalizeIntegration(raw) {
   const o = raw && typeof raw === 'object' ? raw : {};
+  // Stored 'running' = the LunaCore that ran it is gone (restart, crash, a
+  // hang after a sleep): it comes back failed 'interrupted', never running -
+  // nothing is integrating now. A rerun is safe (every package records what
+  // was already done for it).
+  const interrupted = o.state === 'running';
   return {
-    // A run interrupted mid-integration comes back idle; it reruns safely
-    // (every package records what was already done for it).
-    state: INTEGRATION_STATES.has(o.state) && o.state !== 'running' ? o.state : 'idle',
-    error: strOrNull(o.error, 64),
-    detail: strOrNull(o.detail, MAX_DETAIL_CHARS),
+    state: interrupted ? 'failed' : INTEGRATION_STATES.has(o.state) ? o.state : 'idle',
+    error: interrupted ? 'interrupted' : strOrNull(o.error, 64),
+    detail: interrupted ? null : strOrNull(o.detail, MAX_DETAIL_CHARS),
     at: Number.isFinite(o.at) ? o.at : null,
     // Packages a merge-mode integration left out (orchestraIntegrate.js).
     skipped: (Array.isArray(o.skipped) ? o.skipped : []).map(normalizeSkipped).filter(Boolean).slice(0, MAX_SKIPPED),
@@ -813,6 +817,8 @@ function normalizeStoredPlan(raw) {
       .map((e) => ({ pkgId: e.pkgId, rule: isAllowRule(e.rule) ? e.rule : null, example: cleanExample(e.example) }))
       .slice(-MAX_APPROVAL_LOG),
     integration: normalizeIntegration(raw.integration),
+    // Each time the PC slept during the run (orchestraSleep.js).
+    sleeps: normalizeSleeps(raw.sleeps),
     options: normalizeOptions(raw.options),
     todoText: new Map(todoText),
     packages,
