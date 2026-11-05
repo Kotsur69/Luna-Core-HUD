@@ -7,7 +7,25 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.21.0 — one God Mode run per project.**
+> **Current release: v0.22.0 — God Mode that survives the night.**
+> - **Sleep-proof finishing:** PC sleep no longer counts as worker time, so a
+>   laptop that slept mid-run does not time its packages out; the finish step
+>   has a watchdog that kills a hung merge and frees the board.
+> - **Board controls:** Retry says why it was refused, a long finish can be
+>   aborted, and on battery new packages wait for the charger.
+> - **Safer finish pipeline:** package verifies share one serial queue, a
+>   rejected push is handled in full and pushes are scanned for secrets.
+> - **Dependencies per worktree:** each package installs its own
+>   node_modules; a missing install pauses the run instead of failing tests.
+> - **Self-healing:** known environment stalls are fixed automatically, with
+>   one question when a fix needs you.
+> - **Usage for every account:** the gauge shows 5 h and weekly limits for
+>   each stored Claude login.
+> - **Reports and worktrees:** stall history and honest "not a repo"
+>   diagnosis in the run report; safe worktree removal with truthful git
+>   errors and leftover cleanup; test-suite flakes under load fixed.
+>
+> **v0.21.0 — one God Mode run per project.**
 > - **God Mode per project:** each project keeps its own run, stored in its
 >   own file and restored after a restart; two projects can run at once, and
 >   the same repo is refused in a second project. Ctrl+Shift+K stops every
