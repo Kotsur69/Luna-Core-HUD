@@ -37,6 +37,11 @@ const RESULT_BYTES = 1024;
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_SCAN = 1000;
 const PRUNE_IDS = 50;
+/** Live sessions skipped by later scans: at most this many (the URL stays short), rechecked after a day. */
+const PRUNE_SKIP_MAX = 100;
+const PRUNE_RECHECK_MS = 24 * 60 * 60 * 1000;
+/** A host_events insert that hangs longer than this is given up on. */
+const INSERT_TIMEOUT_MS = 15000;
 const MAX_TEXT = 16384;
 const MAX_SHORT = 300;
 const KINDS = ['text', 'prompt', 'tool', 'tool_result', 'permission', 'decision', 'status', 'cost'];
@@ -157,8 +162,9 @@ function sessionsToDrop(old, recent) {
 }
 
 /**
- * The host's writer. Rows go out one at a time in emit order, so `seq` order
- * is insert order. A failed insert is logged and dropped: the chat goes on.
+ * The host's writer. A session's rows go out one at a time in emit order, so
+ * `seq` order is insert order; sessions write independently. A failed or hung
+ * (15 s) insert is logged and dropped: the chat goes on.
  * @param {{client: object, host: string, now?: () => number,
  *   setTimer?: Function, clearTimer?: Function, log?: (line: string) => void,
  *   batchMs?: number}} deps
@@ -166,7 +172,40 @@ function sessionsToDrop(old, recent) {
 function createHostEvents({ client, host, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, log = (l) => console.error(l), batchMs = BATCH_MS }) {
   const seqs = new Map(); // sessionId -> next seq
   const buffers = new Map(); // sessionId -> {text, timer}
-  let chain = Promise.resolve();
+  // One write queue per session: order holds inside a session, and a hung
+  // insert of one session never stalls another session's feed.
+  const chains = new Map(); // sessionId -> tail of its queue
+  // Sessions the prune found still live: skipped by the next scans for a
+  // while, so one long session can't fill every scan (sessionId -> until).
+  const liveOld = new Map();
+
+  const tailOf = (sessionId) => chains.get(sessionId) || Promise.resolve();
+
+  function enqueue(sessionId, step) {
+    const next = tailOf(sessionId).then(step);
+    chains.set(sessionId, next);
+    next.then(() => {
+      if (chains.get(sessionId) === next) chains.delete(sessionId);
+    });
+    return next;
+  }
+
+  /** Resolves with the insert's answer, or {timedOut: true} once it hangs too long. */
+  function bounded(promise) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimer(() => resolve({ timedOut: true }), INSERT_TIMEOUT_MS);
+      promise.then(
+        (v) => {
+          clearTimer(timer);
+          resolve(v);
+        },
+        (err) => {
+          clearTimer(timer);
+          reject(err);
+        },
+      );
+    });
+  }
 
   function nextSeq(sessionId) {
     const n = seqs.get(sessionId) || 0;
@@ -178,27 +217,43 @@ function createHostEvents({ client, host, now = Date.now, setTimer = setTimeout,
     const clean = storedData(kind, data);
     if (!clean || !isSessionId(sessionId)) {
       log(`[hostevents] dropped a malformed ${kind} event`);
-      return chain;
+      return tailOf(sessionId);
     }
     const row = { session_id: sessionId, seq: nextSeq(sessionId), host, kind, data: clean, at: new Date(now()).toISOString() };
-    chain = chain.then(async () => {
+    return enqueue(sessionId, async () => {
       try {
-        const { error } = await client.from('host_events').insert(row);
-        if (error) log(`[hostevents] insert ${kind} failed: ${error.code || 'error'}`);
+        const res = await bounded(Promise.resolve(client.from('host_events').insert(row)));
+        if (res && res.timedOut) log(`[hostevents] insert ${kind} timed out, the feed goes on`);
+        else if (res && res.error) log(`[hostevents] insert ${kind} failed: ${res.error.code || 'error'}`);
       } catch (err) {
         log(`[hostevents] insert ${kind} crashed: ${err && err.message}`);
       }
     });
-    return chain;
   }
 
   /** Writes the session's buffered text now (no-op when empty). */
   function flush(sessionId) {
     const b = buffers.get(sessionId);
-    if (!b) return chain;
+    if (!b) return tailOf(sessionId);
     buffers.delete(sessionId);
     clearTimer(b.timer);
-    return b.text ? insert(sessionId, 'text', { text: b.text }) : chain;
+    return b.text ? insert(sessionId, 'text', { text: b.text }) : tailOf(sessionId);
+  }
+
+  /** The sessions to leave out of the next prune scan (still within their recheck time). */
+  function skipList() {
+    const t = now();
+    for (const [id, until] of liveOld) if (until <= t) liveOld.delete(id);
+    return [...liveOld.keys()].slice(-PRUNE_SKIP_MAX);
+  }
+
+  function rememberLive(ids) {
+    const until = now() + PRUNE_RECHECK_MS;
+    for (const id of ids) {
+      liveOld.delete(id); // re-insert: newest last
+      liveOld.set(id, until);
+    }
+    while (liveOld.size > PRUNE_SKIP_MAX) liveOld.delete(liveOld.keys().next().value);
   }
 
   return {
@@ -219,8 +274,8 @@ function createHostEvents({ client, host, now = Date.now, setTimer = setTimeout,
       return insert(sessionId, kind, data);
     },
     flush,
-    /** Resolves once every row emitted so far was written (or failed). */
-    idle: () => chain,
+    /** Resolves once every row emitted so far was written (or failed / timed out). */
+    idle: () => Promise.all([...chains.values()]).then(() => undefined),
     /**
      * Before a resumed session writes again: its next seq comes after the
      * highest one already stored. A failed read leaves the counter as it is
@@ -253,7 +308,10 @@ function createHostEvents({ client, host, now = Date.now, setTimer = setTimeout,
     /** Deletes this host's events of sessions idle for 14 days. @returns {Promise<number>} sessions dropped */
     async prune() {
       const cutoff = new Date(now() - RETENTION_MS).toISOString();
-      const { data: old, error } = await client.from('host_events').select('session_id').eq('host', host).lt('at', cutoff).limit(PRUNE_SCAN);
+      let scan = client.from('host_events').select('session_id').eq('host', host).lt('at', cutoff);
+      const skip = skipList();
+      if (skip.length) scan = scan.not('session_id', 'in', `(${skip.join(',')})`);
+      const { data: old, error } = await scan.limit(PRUNE_SCAN);
       if (error || !Array.isArray(old)) {
         log(`[hostevents] prune read failed: ${(error && error.code) || 'error'}`);
         return 0;
@@ -267,6 +325,7 @@ function createHostEvents({ client, host, now = Date.now, setTimer = setTimeout,
         return 0;
       }
       const drop = sessionsToDrop(old, recent);
+      rememberLive(candidates.filter((id) => !drop.includes(id)));
       if (!drop.length) return 0;
       const { error: err3 } = await client.from('host_events').delete().eq('host', host).in('session_id', drop);
       if (err3) {

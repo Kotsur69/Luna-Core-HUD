@@ -103,11 +103,23 @@ function hasPairedPhone(file) {
   }
 }
 
-/** Adds one confirmed key (replacing the same credential). Throws when it can't be stored. */
+/**
+ * Adds one confirmed key. Re-pairing the same passkey (same credential id and
+ * public key) refreshes its label and keeps its sign count, so an older
+ * assertion can't replay. The same credential id with a different public key
+ * is refused: a real authenticator never does that, and a silent swap would
+ * lock the paired phone out. Throws when it can't be stored.
+ * @returns {'added'|'refreshed'}
+ */
 function addKey(file, { credentialId, publicKey, label }, now = Date.now()) {
-  const keys = readPairedKeys(file).filter((k) => k.credentialId !== credentialId);
+  const all = readPairedKeys(file);
+  const prev = all.find((k) => k.credentialId === credentialId);
+  if (prev && prev.publicKey !== publicKey) throw new Error('credential already paired with another key');
+  const keys = all.filter((k) => k.credentialId !== credentialId);
   if (keys.length >= MAX_KEYS) throw new Error('too many paired phones');
-  writeAtomic(file, { v: 1, keys: [...keys, { credentialId, publicKey, signCount: 0, label, pairedAt: now }] });
+  const signCount = prev && Number.isInteger(prev.signCount) && prev.signCount > 0 ? prev.signCount : 0;
+  writeAtomic(file, { v: 1, keys: [...keys, { credentialId, publicKey, signCount, label, pairedAt: now }] });
+  return prev ? 'refreshed' : 'added';
 }
 
 /** "Forget all phones": no key left, so no grant verifies any more. */
@@ -192,13 +204,14 @@ function createHostPairing({
       log(`[hostpairing] confirm dialog failed: ${errText(err)}`);
     }
     if (!ok) return setStatus(snap.id, 'rejected');
+    let how;
     try {
-      addKey(keysPath, snap, now());
+      how = addKey(keysPath, snap, now());
     } catch (err) {
       log(`[hostpairing] storing the key failed: ${errText(err)}`);
       return setStatus(snap.id, 'rejected');
     }
-    log(`[hostpairing] paired ${snap.label}`);
+    log(`[hostpairing] paired ${snap.label}${how === 'refreshed' ? ' (same passkey paired again)' : ''}`);
     await setStatus(snap.id, 'confirmed');
     openUntil = 0;
     onPaired();

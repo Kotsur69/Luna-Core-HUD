@@ -37,6 +37,10 @@ const MAX_ERROR = 300;
 const KIND_RE = /^[a-z][a-z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)+$/;
 const COLUMNS = 'id,host,kind,payload,nonce,expires_at,sig,grant,status,created_at';
 const BROKEN = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
+/** The final status write: tries, and the base delay between them (x attempt). */
+const FINISH_ATTEMPTS = 3;
+const FINISH_RETRY_MS = 2000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 /** Kinds whose payload is dropped once the row finished (the column is NOT NULL: {}). */
@@ -93,11 +97,28 @@ function createHostCommands({
   let again = false;
   let stopped = true;
   let polling = false;
+  /** Ids this process claimed and is still running: a restart's failStale leaves them alone. */
+  const inFlight = new Set();
 
+  const wait = (ms) => new Promise((resolve) => setTimer(resolve, ms));
+
+  /**
+   * The final write, retried: one failed write would leave the row 'claimed'
+   * until the next host start, with the phone waiting on it.
+   */
   async function finish(id, kind, status, result) {
     const patch = { status, result: scrubDeep(result), ...(dropsPayload(kind) ? { payload: {} } : {}) };
-    const { error } = await client.from('host_commands').update(patch).eq('id', id).eq('status', 'claimed');
-    if (error) log(`[hostcommands] ${id}: writing ${status} failed: ${error.code || 'error'}`);
+    for (let attempt = 1; attempt <= FINISH_ATTEMPTS; attempt++) {
+      let error;
+      try {
+        ({ error } = await client.from('host_commands').update(patch).eq('id', id).eq('status', 'claimed'));
+      } catch (err) {
+        error = { code: errText(err) };
+      }
+      if (!error) return;
+      log(`[hostcommands] ${id}: writing ${status} failed (attempt ${attempt}/${FINISH_ATTEMPTS}): ${error.code || 'error'}`);
+      if (attempt < FINISH_ATTEMPTS) await wait(FINISH_RETRY_MS * attempt);
+    }
   }
 
   async function refuse(id, kind, reason) {
@@ -141,6 +162,15 @@ function createHostCommands({
   async function handle(raw) {
     const id = isObject(raw) && typeof raw.id === 'string' ? raw.id : null;
     if (!id || !(await claim(id))) return;
+    inFlight.add(id);
+    try {
+      await runClaimed(id, raw);
+    } finally {
+      inFlight.delete(id);
+    }
+  }
+
+  async function runClaimed(id, raw) {
     const row = cleanRow(raw);
     if (!row) {
       // Its kind is unchecked, so it is not logged; a chat.* payload still goes.
@@ -149,13 +179,15 @@ function createHostCommands({
     }
     const why = await refusal(row);
     if (why) return refuse(id, row.kind, why);
+    let result;
     try {
-      const result = await handlers[row.kind]({ ...row.payload }, row);
-      await finish(id, row.kind, 'done', fitResult(result));
+      // fitResult inside: a result JSON can't hold (BigInt, a cycle) fails the row instead of stranding it.
+      result = fitResult(await handlers[row.kind]({ ...row.payload }, row));
     } catch (err) {
       log(`[hostcommands] ${row.kind} ${id} failed: ${errText(err)}`);
-      await finish(id, row.kind, 'failed', { error: errText(err) });
+      return finish(id, row.kind, 'failed', { error: errText(err) });
     }
+    return finish(id, row.kind, 'done', result);
   }
 
   async function readOnce() {
@@ -249,12 +281,17 @@ function createHostCommands({
    */
   async function failStale() {
     const cutoff = new Date(now() - MAX_TTL_MS).toISOString();
-    const { error } = await client
+    let q = client
       .from('host_commands')
       .update({ status: 'failed', result: { error: 'host-restarted' } })
       .eq('host', host)
       .eq('status', 'claimed')
       .lt('created_at', cutoff);
+    // A stop/start inside one process: a command still running here (a long
+    // clone) is not stale. Ids went through the claim, but only UUIDs go in.
+    const running = [...inFlight].filter((id) => UUID_RE.test(id));
+    if (running.length) q = q.not('id', 'in', `(${running.join(',')})`);
+    const { error } = await q;
     if (error) log(`[hostcommands] clearing stale claims failed: ${error.code || 'error'}`);
   }
 

@@ -79,10 +79,28 @@ function assertCurrent(gen) {
   if (gen !== generation) throw new Error('hostkey: wiped while in use');
 }
 
-async function session() {
+/**
+ * The live session key. Concurrent first calls share one load / creation:
+ * two parallel signCommands would otherwise each make a key, the second
+ * overwriting the first, and a grant would name a key that no longer signs.
+ */
+let loadingSession = null;
+
+function session() {
+  if (current && current.expiresAt > Date.now()) return Promise.resolve(current);
+  if (!loadingSession) {
+    const p = loadSession().finally(() => {
+      if (loadingSession === p) loadingSession = null;
+    });
+    loadingSession = p;
+  }
+  return loadingSession;
+}
+
+async function loadSession() {
   const now = Date.now();
-  if (current && current.expiresAt > now) return current;
-  if (current) await wipe();
+  // An expired key goes; not via wipe(), which would drop this very load.
+  if (current) await forget();
   const gen = generation;
   const stored = await idb.get(STORE_KEY).catch(() => null);
   if (isSession(stored, now)) {
@@ -156,6 +174,8 @@ export async function grantFor(host, { credentialId } = {}) {
 export async function signCommand(host, kind, payload, opts) {
   const grant = await grantFor(host, opts);
   const s = await session();
+  // The host checks the command against the key the grant names: never sign with another.
+  if (grant.grant.sessionKeyPub !== s.pub) throw new Error('hostkey: session key changed, try again');
   const command = { host, kind, payload, nonce: randomNonce(), expires_at: Date.now() + canon.COMMAND_TTL_MAX_MS - CLOCK_MARGIN_MS };
   const sig = await crypto.subtle.sign(SIGN, s.privateKey, utf8(canon.canonicalCommand(command)));
   return { command, sig: b64u(sig), grant };
@@ -172,6 +192,12 @@ export async function dropGrant(host) {
 
 /** Logout / expiry: the key and every grant are gone from memory and IndexedDB. */
 export async function wipe() {
+  loadingSession = null; // a load from before the wipe fails on its generation check
+  await forget();
+}
+
+/** The key and grants gone; work started before it never stores its result. */
+async function forget() {
   generation++;
   current = null;
   pendingGrants.clear();

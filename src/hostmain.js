@@ -29,6 +29,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { createHostLog } = require('./hostlog');
 
 const HOST_FLAG = '--host';
 const DEFAULT_FLAG = '--make-default';
@@ -112,21 +113,14 @@ let teed = false;
 function teeConsole(file) {
   if (teed) return; // a second switch into host mode must not wrap console twice
   teed = true;
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (fs.existsSync(file) && fs.statSync(file).size > MAX_LOG_BYTES) fs.renameSync(file, `${file}.old`);
-  } catch (err) {
-    console.error('[hostmain] log rotate failed:', err.message);
-  }
+  const origError = console.error.bind(console);
+  // Rotates whenever the file passes the cap, not only here at start.
+  const hostLog = createHostLog(file, { maxBytes: MAX_LOG_BYTES, onError: (what, err) => origError(`[hostmain] log ${what} failed:`, err.message) });
   for (const name of ['log', 'error']) {
     const orig = console[name].bind(console);
     console[name] = (...args) => {
       orig(...args);
-      try {
-        fs.appendFileSync(file, `${new Date().toISOString()} ${args.map(String).join(' ')}\n`);
-      } catch {
-        // The log is a convenience; a locked file must not break the host.
-      }
+      hostLog.append(`${new Date().toISOString()} ${args.map(String).join(' ')}`);
     };
   }
 }

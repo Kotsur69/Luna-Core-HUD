@@ -395,26 +395,48 @@ claim race (`update … where status = 'new'`, serial handling).
   the phone origin could sign commands for 12 h. No `innerHTML` today. Next:
   `script-src 'self'; object-src 'none'; base-uri 'none'; connect-src` the
   Supabase project.
-- **L1-L6** (security): push endpoints not allow-listed to push services and
-  sent without a timeout; caller-chosen push keys can be pre-claimed or used
-  for "approval needed" spam by a stolen session; `host_commands` status /
-  result writable by the owner's session (denial of service, fake results,
-  never a run); a host restart refuses a hardware passkey's cached grant once
-  (sign count; the phone re-asks Face ID); pairing silently replaces a key
-  with the same credential id; auto-clone pulls any repo of an allow-listed
-  owner named by a synced row.
-- **J-M5, J-M7 - J-M13** (JS): finalize on `exit` may drop the child's last
-  stdout lines; a failed final `finish` strands a command in `claimed` until
-  the next start (and a stop/start can fail a running one); one hung event
-  insert stalls every session's feed; a cancelled approval after the final
-  status re-opens a HUD tab; `host.log` rotates only at start; two
-  concurrent first `signCommand`s on the phone can race to two session keys;
-  prune can stall on one long session; a timed-out clone leaves a partial
-  folder that counts as present.
-- **JS LOW:** interrupt flag set when idle; `child.kill()` on Windows leaves
-  grandchildren; an npm-installed `claude.cmd` is not found (native installer
-  only); `storeSignCount` drops the keys file's 0600 mode; no retention for
-  `host_commands` / `push_sent`.
+**L / J / JS LOW, re-checked against the code 2026-11-04** (package
+`host-hardening`, one commit `fix: host-mode hardening leftovers` on
+`luna/host-hardening-6rugq`). Each is fixed with a test, or still accepted
+with the reason. `ecc:security-reviewer` on the result: no CRITICAL; the one
+HIGH (the npm shim's bare `node` found in the repo) and the MEDIUM (UNC
+`%SystemRoot%`) are fixed, as are two LOWs (a result JSON can't hold now
+fails the row instead of stranding it; the migration is re-runnable). Left
+as is: a subscription off the push allow-list is skipped on each send, not
+deleted (log noise only). A second review on the committed result found no
+CRITICAL / HIGH and confirmed both fixes. Five LOWs were noted, not fixed:
+1. `claudePath`'s repo check is lexical, so a PATH junction into the repo
+   would pass. That needs a planted link outside the repo, which is already a
+   local compromise.
+2. A late `killTree` timer after `exit` could hit a recycled pid (window ~2 s).
+3. A killed `git` can leave a `git-remote-https` child holding files, so the
+   partial-clone removal fails. The folder then stays and shows "folder
+   exists", which costs availability only and is logged.
+4. `hostauth`'s temp file has a predictable name (POSIX with a hostile local
+   user only).
+5. The push allow-list trusts the vendors' subdomains.
+
+| # | Finding | Now |
+|---|---|---|
+| L1 | Push endpoints not allow-listed, sent without a timeout | **Fixed.** `fanOut` posts only to https FCM / Mozilla / Apple / WNS hosts (`pushEndpointAllowed`: no port, no userinfo, host or subdomain), others are skipped and kept; `webpush.sendNotification` gets `timeout: 10 s` (the session check's fetch had one already, `core.mjs` `FETCH_TIMEOUT_MS`). Test: `pushfn.test.mjs` L1 ×2. Needs a `supabase functions deploy push`. |
+| L2 | Caller-chosen push keys can be pre-claimed or spammed by a stolen session | **Accepted.** Takes the owner's session; the worst case is a missing or an extra generic notification, never a run or a leak (bodies are built from the event). A real fix means host-signed push requests (a host key the function trusts): not cheap. |
+| L3 | `host_commands` status / result writable by the owner's session | **Accepted.** The host writes them with that same session, so RLS can't tell host from phone without a per-host identity. A rewritten row can fake a result or block one, never run anything: the signature covers the row's own columns and the nonce is spent before the handler runs, so setting a row back to `new` is refused as a replay. |
+| L4 | A host restart refuses a hardware passkey's cached grant once (sign count) | **Accepted.** It is the replay check working in the safe direction; the phone drops the grant and asks Face ID once. |
+| L5 | Pairing silently replaces a key with the same credential id | **Fixed.** `addKey` refuses the same credential id with a different public key; re-pairing the same passkey keeps its sign count (no replay after a re-pair) and is logged. Test: `hostpairing.test.js` L5. |
+| L6 | Auto-clone pulls any repo of an allow-listed owner named by a synced row | **Accepted.** By design: the owner allow-list (`host.local.json -> owners`) is the gate, a clone runs no code from the repo (no hooks in a fresh clone), and a chat in it still needs a signed command. |
+| J-M5 | Finalize on `exit` may drop the child's last stdout lines | **Fixed.** The session finalizes on `close` (stdio drained); `exit` only arms a 2 s fallback for a grandchild holding the pipe. Test: `hostchat.test.js` J-M5. |
+| J-M7 | A failed final `finish` strands a command in `claimed`; a stop/start can fail a running one | **Fixed.** The final write is retried 3× (2 s, 4 s); `failStale` skips ids this process still runs (`not id in (…)`, UUIDs only). Test: `hostcommands.test.js` J-M7 ×2. |
+| J-M8 | One hung event insert stalls every session's feed | **Fixed.** One write queue per session, and an insert hanging 15 s is given up (logged). Test: `hostevents.test.js` J-M8. |
+| J-M9 | A cancelled approval after the final status re-opens a HUD tab | **Fixed.** An ended session's trailing events open nothing; only a resume (`prompt` / `status: working`) opens a new tab. Test: `hostchattabs.test.js` J-M9. |
+| J-M10 | `host.log` rotates only at start | **Fixed.** `src/hostlog.js` counts what it writes and rotates (one `.old`) whenever the file passes 2 MB. Test: `hostlog.test.js`. |
+| J-M11 | Two concurrent first `signCommand`s on the phone race to two session keys | **Fixed.** `session()` shares one in-flight load / creation (a wipe drops it), and `signCommand` refuses to sign with a key its grant does not name. Test: `mobilehostkey.test.mjs` ×2. |
+| J-M12 | Prune can stall on one long session | **Fixed.** Sessions a prune found still live are left out of the next scans for a day (at most 100), so the scan reaches the idle ones behind them. Test: `hostevents.test.js` J-M12. |
+| J-M13 | A timed-out clone leaves a partial folder that counts as present | **Fixed.** The clone creates its target with a non-recursive `mkdir` first (proof it is ours; a folder that appeared meanwhile is `skipped: folder exists`); on failure / timeout that folder goes (`removeClonedFolder`: refuses a link in its place, lstat-walks without following junctions inside, retries a busy file). Tests: `hostrepos.test.js` J-M13 ×4 (fake fs and a real temp dir, pre-existing folder untouched). |
+| LOW | Interrupt flag set when idle | **Fixed.** Set only while a turn runs, so the next turn's real failure still notifies. Test: `hostchat.test.js`. |
+| LOW | `child.kill()` on Windows leaves grandchildren | **Fixed.** Session ends go through `killTree`: `%SystemRoot%\System32\taskkill /pid N /T /F`, `child.kill()` as the fallback. Test: `hostchat.test.js` killTree + chat.end. |
+| LOW | An npm-installed `claude.cmd` is not found | **Fixed.** `claudePath` takes native `claude.exe` from the whole PATH first, then `claude.cmd` (still absolute PATH entries only, never inside the repo); `claudeLaunch` runs a shim through `System32\cmd.exe /d /v:off /s /c` with the quoted path, verbatim args, and refuses a path with `" % !` or an arg needing quotes. The npm shim starts a bare `node`, which cmd.exe would look up in the cwd (the repo) first: the shim gets `NoDefaultCurrentDirectoryInExePath=1` (security review HIGH, probed live: without it a repo's `node.cmd` ran, with it the real node). UNC PATH entries and a UNC / relative `%SystemRoot%` are refused. Probed live with a shim in a path with spaces. Tests: `hostchat.test.js` claude.cmd ×5. |
+| LOW | `storeSignCount` drops the keys file's 0600 mode | **Fixed.** `hostauth` writes the temp file with `mode: 0o600` like `hostpairing`. Test: `hostauth.test.js`. |
+| LOW | No retention for `host_commands` / `push_sent` | **Fixed (not applied).** Migration `20261104120000_host_retention.sql`: `prune_host_retention(30)` deletes finished commands (`done` / `refused` / `failed`) and push keys older than 30 days, never a `new` / `claimed` row; not callable by anon / logged-in users; daily pg_cron job `lunacore-host-retention` at 03:17 UTC. Test: `hostretention.test.js` (SQL text). Mati applies it (`supabase db push`; pg_cron is enabled by the migration). |
 
 ## Risks
 

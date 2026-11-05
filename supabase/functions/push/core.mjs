@@ -163,8 +163,27 @@ export function createDb({ url, serviceKey, fetchImpl = fetch }) {
   };
 }
 
+// The browsers' push services (Chrome / Android, Firefox, Safari / iOS, Edge).
+// A subscription row is written by the phone, so a stolen session could
+// point it anywhere: the function only ever posts to these hosts.
+const PUSH_HOSTS = ['fcm.googleapis.com', 'android.googleapis.com', 'push.services.mozilla.com', 'push.apple.com', 'notify.windows.com'];
+
+/** Whether `endpoint` is plain https on a known push service (host or subdomain). */
+export function pushEndpointAllowed(endpoint) {
+  let u;
+  try {
+    u = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port) return false;
+  const host = u.hostname.toLowerCase();
+  return PUSH_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+}
+
 /**
  * Sends one notification to every subscription; drops the gone ones.
+ * A subscription off the push-service allow-list is skipped, never posted to.
  * @returns {Promise<{sent: number, dropped: number}>}
  */
 export async function fanOut({ db, sendPush, userId, payload, log }) {
@@ -172,6 +191,10 @@ export async function fanOut({ db, sendPush, userId, payload, log }) {
   let sent = 0;
   let dropped = 0;
   for (const s of subs) {
+    if (!pushEndpointAllowed(s.endpoint)) {
+      log('[push] subscription skipped: endpoint is not a known push service');
+      continue;
+    }
     try {
       await sendPush({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(payload));
       sent++;

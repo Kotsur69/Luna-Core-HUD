@@ -126,6 +126,16 @@ test('a valid grant from a paired passkey is accepted and the sign count is stor
   assert.equal(JSON.parse(fs.readFileSync(keysPath, 'utf8')).keys[0].signCount, 4);
 });
 
+test('storing the sign count keeps the keys file private (0600)', (t) => {
+  const { envelope } = setup();
+  const writes = t.mock.method(fs, 'writeFileSync');
+  assert.equal(auth().verifyGrant(envelope).ok, true);
+  const keyWrite = writes.mock.calls.find((c) => String(c.arguments[0]).startsWith(keysPath));
+  assert.ok(keyWrite, 'the keys file was written');
+  assert.equal(keyWrite.arguments[2].mode, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(keysPath).mode & 0o777, 0o600);
+});
+
 test('the passkey public key comes only from the injected keys file', () => {
   const { passkey, session } = setup();
   const stranger = makePasskey(0);

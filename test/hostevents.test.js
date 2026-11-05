@@ -37,15 +37,21 @@ function fakeTimers() {
 }
 
 /** A supabase-js-like client recording inserts and answering prune reads. */
-function fakeClient({ old = [], recent = [] } = {}) {
+function fakeClient({ old = [], recent = [], insert = null } = {}) {
   const inserts = [];
   const deletes = [];
+  const scans = [];
   const query = (table) => {
     const q = { table, filters: [] };
     const chain = {
       insert: async (row) => {
+        if (insert) return insert(row, inserts);
         inserts.push(row);
         return { error: null };
+      },
+      not(k, op, v) {
+        q.filters.push(['not', k, op, v]);
+        return chain;
       },
       select() {
         q.op = 'select';
@@ -76,7 +82,9 @@ function fakeClient({ old = [], recent = [] } = {}) {
         return chain;
       },
       limit() {
-        return Promise.resolve({ data: old, error: null });
+        scans.push(q.filters);
+        const skipped = q.filters.filter((f) => f[0] === 'not').flatMap((f) => f[3].replace(/^\(|\)$/g, '').split(','));
+        return Promise.resolve({ data: old.filter((r) => !skipped.includes(r.session_id)), error: null });
       },
       then(resolve) {
         // The "recent" read ends on .gte(): awaited directly.
@@ -85,7 +93,7 @@ function fakeClient({ old = [], recent = [] } = {}) {
     };
     return chain;
   };
-  return { client: { from: query }, inserts, deletes };
+  return { client: { from: query }, inserts, deletes, scans };
 }
 
 test('partial text is batched into one row after the window', async () => {
@@ -166,6 +174,45 @@ test('prune with nothing old touches nothing', async () => {
   const w = ev.createHostEvents({ client, host: 'KT-PC', now: () => NOW, log: () => {} });
   assert.equal(await w.prune(), 0);
   assert.deepEqual(deletes, []);
+});
+
+test('J-M8: a hung insert of one session never stalls another; it times out and its own feed goes on', async () => {
+  const timers = fakeTimers();
+  const logs = [];
+  let hang = true;
+  const { client, inserts } = fakeClient({
+    insert: (row, list) => {
+      if (row.session_id === SID && hang) {
+        hang = false;
+        return new Promise(() => {}); // the network never answers
+      }
+      list.push(row);
+      return Promise.resolve({ error: null });
+    },
+  });
+  const w = ev.createHostEvents({ client, host: 'KT-PC', now: () => NOW, ...timers, log: (l) => logs.push(l) });
+  w.emit(SID, 'status', { status: 'working' });
+  w.emit(SID, 'status', { status: 'done' });
+  await w.emit(SID2, 'status', { status: 'working' });
+  assert.deepEqual(inserts.map((r) => r.session_id), [SID2], 'the other session was written');
+  timers.fire(); // the hung insert's timeout
+  await w.idle();
+  assert.deepEqual(inserts.map((r) => [r.session_id, r.seq]), [[SID2, 0], [SID, 1]]);
+  assert.ok(logs.some((l) => l.includes('timed out')));
+  assert.equal(timers.pending.size, 0, 'no timeout left behind');
+});
+
+test('J-M12: a long live session does not fill every prune scan', async () => {
+  // The scan's 1000 rows are all the live session's; the idle one sits behind them.
+  const old = [...Array.from({ length: 5 }, () => ({ session_id: SID2 }))];
+  const { client, deletes, scans } = fakeClient({ old, recent: [{ session_id: SID2 }] });
+  const w = ev.createHostEvents({ client, host: 'KT-PC', now: () => NOW, log: () => {} });
+  assert.equal(await w.prune(), 0);
+  old.push({ session_id: SID }); // what the next scan can now reach
+  assert.equal(await w.prune(), 1);
+  assert.deepEqual(scans[1].find((f) => f[0] === 'not'), ['not', 'session_id', 'in', `(${SID2})`]);
+  assert.deepEqual(deletes, [[SID]]);
+  assert.equal(scans[0].some((f) => f[0] === 'not'), false, 'nothing skipped on the first scan');
 });
 
 test('parseEvent: known kinds only, fields cleaned', () => {

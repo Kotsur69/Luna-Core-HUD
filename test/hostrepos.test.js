@@ -16,19 +16,20 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createHostRepos, parseRemote, readOwners, validName } = require('../src/hostrepos.js');
+const { createHostRepos, parseRemote, readOwners, validName, removeClonedFolder } = require('../src/hostrepos.js');
 const { createHostDefaultProvider, writeDefault, readDefault } = require('../src/hostdefault.js');
 
 const ROOT = path.join(path.sep === '\\' ? 'C:\\' : '/', 'home', 'host', 'source', 'repos');
 
-function setup({ existing = [], fail = null, owners } = {}) {
+function setup({ existing = [], fail = null, owners, killed = false, appearsBeforeClaim = null } = {}) {
   const present = new Set(existing);
   const calls = [];
+  const removed = [];
   const execFile = (cmd, args, opts, cb) => {
     calls.push({ cmd, args, opts });
     setImmediate(() => {
       if (fail) {
-        const err = new Error('Command failed');
+        const err = Object.assign(new Error('Command failed'), killed ? { killed: true, signal: 'SIGTERM' } : {});
         cb(err, '', fail);
         return;
       }
@@ -42,9 +43,18 @@ function setup({ existing = [], fail = null, owners } = {}) {
     owners: () => owners || ['Kotsur69'],
     exists: (p) => present.has(p),
     mkdir: () => {},
+    claimTarget: (p) => {
+      if (appearsBeforeClaim === p) present.add(p);
+      if (present.has(p)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+      present.add(p);
+    },
+    removeOwn: async (p) => {
+      removed.push(p);
+      present.delete(p);
+    },
     log: () => {},
   });
-  return { repos, calls, present };
+  return { repos, calls, present, removed };
 }
 
 const project = (id, remote, p = `/elsewhere/${id}`) => ({ id, remote, path: p });
@@ -129,6 +139,65 @@ test('repo.clone: any owner, same folder rules', async () => {
   assert.equal((await repos.clone('https://github.com/stranger/taken')).status, 'skipped: folder exists');
   assert.equal((await repos.clone('https://github.com/a/../../x')).status, 'failed: other');
   assert.equal(calls.length, 1);
+});
+
+test('J-M13: a timed-out clone removes the folder it created and does not count as present', async () => {
+  const { repos, present, removed } = setup({ fail: 'fatal: early EOF', killed: true });
+  const target = path.join(ROOT, 'app');
+  const out = await repos.sync([project('app', 'https://github.com/kotsur69/app')]);
+  assert.equal(out.get('app'), 'failed: other');
+  assert.deepEqual(removed, [target]);
+  assert.equal(present.has(target), false);
+  assert.equal(repos.dirOf(project('app', 'https://github.com/kotsur69/app')), null);
+});
+
+test('J-M13: a folder that appears between the check and the clone is never cloned into or removed', async () => {
+  const target = path.join(ROOT, 'app');
+  const { repos, calls, removed, present } = setup({ appearsBeforeClaim: target });
+  assert.equal((await repos.clone('https://github.com/kotsur69/app')).status, 'skipped: folder exists');
+  assert.equal(calls.length, 0);
+  assert.deepEqual(removed, []);
+  assert.equal(present.has(target), true);
+});
+
+test('J-M13: real fs - a killed clone leaves no partial folder; a pre-existing folder is untouched', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lc-hostrepos-'));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5 }));
+  const keep = path.join(root, 'keep');
+  fs.mkdirSync(keep);
+  fs.writeFileSync(path.join(keep, 'mine.txt'), 'x');
+  // A fake git that writes part of a checkout, then is killed by the timeout.
+  const execFile = (_cmd, args, _opts, cb) => {
+    const target = args[args.length - 1];
+    fs.mkdirSync(path.join(target, '.git', 'objects'), { recursive: true });
+    fs.writeFileSync(path.join(target, '.git', 'objects', 'pack.tmp'), 'partial');
+    setImmediate(() => cb(Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' }), '', ''));
+  };
+  const repos = createHostRepos({ execFile, reposRoot: root, log: () => {} });
+  assert.equal((await repos.clone('https://github.com/kotsur69/app')).status, 'failed: other');
+  assert.equal(fs.existsSync(path.join(root, 'app')), false, 'partial folder removed');
+  assert.equal((await repos.clone('https://github.com/kotsur69/keep')).status, 'skipped: folder exists');
+  assert.equal(fs.readFileSync(path.join(keep, 'mine.txt'), 'utf8'), 'x', 'pre-existing folder untouched');
+});
+
+test('J-M13: removeClonedFolder leaves a link in place of the folder alone and does not follow links inside', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lc-hostrepos-link-'));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5 }));
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'precious.txt'), 'keep');
+  // 'junction' needs no admin rights on Windows; ignored elsewhere.
+  const swapped = path.join(root, 'swapped');
+  fs.symlinkSync(outside, swapped, 'junction');
+  await assert.rejects(removeClonedFolder(swapped), /not a plain folder/);
+  assert.equal(fs.existsSync(path.join(outside, 'precious.txt')), true);
+  const partial = path.join(root, 'partial');
+  fs.mkdirSync(partial);
+  fs.symlinkSync(outside, path.join(partial, 'link'), 'junction');
+  await removeClonedFolder(partial);
+  assert.equal(fs.existsSync(partial), false);
+  assert.equal(fs.readFileSync(path.join(outside, 'precious.txt'), 'utf8'), 'keep', 'link target untouched');
+  await removeClonedFolder(path.join(root, 'gone')); // missing: no throw
 });
 
 test('host:default: --make-default writes the unit; the provider syncs it', () => {

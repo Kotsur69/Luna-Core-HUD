@@ -51,6 +51,20 @@ test('the end marks the tab ended and keeps it; a turn being done does not', () 
   assert.ok(open.has('s1'), 'stays open until closed by hand');
 });
 
+test('J-M9: an approval cancelled after the final status opens no new tab; a resume does', () => {
+  const { tabs, writes } = setup();
+  tabs.onEvent('A', 'permission', { tool: 'Bash', summary: 'ls' }, { name: 'luna' });
+  tabs.onEvent('A', 'status', { status: 'done', reason: 'ended' }, { name: 'luna' });
+  // hostchat's cleanup reports the pending approval it dropped.
+  tabs.onEvent('A', 'decision', { requestId: 'r1', decision: 'cancelled' }, { name: 'luna' });
+  tabs.onEvent('A', 'cost', { usd: 0.1 }, { name: 'luna' });
+  assert.deepEqual(writes.filter((w) => w[1].startsWith('<open')).map((w) => w[0]), ['s1'], 'no second tab');
+  tabs.onEvent('A', 'status', { status: 'working' }, { name: 'luna' });
+  tabs.onEvent('A', 'prompt', { text: 'continue' }, { name: 'luna' });
+  assert.deepEqual(writes.filter((w) => w[1].startsWith('<open')).map((w) => w[0]), ['s1', 's2'], 'a resume opens a tab');
+  assert.ok(writes.some(([id, d]) => id === 's2' && d.includes('continue')));
+});
+
 test('a tab closed by hand reopens when the session goes on', () => {
   const { tabs, open, writes } = setup();
   tabs.onEvent('A', 'text', { text: 'x' }, { name: 'luna' });

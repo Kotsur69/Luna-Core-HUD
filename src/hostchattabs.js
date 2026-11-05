@@ -110,9 +110,27 @@ function readOnlySession(id, name) {
  *   lang?: () => 'pl'|'en',
  * }} deps
  */
+/** Ended sessions remembered so their trailing events open nothing. */
+const MAX_ENDED = 50;
+
+/** What a resumed session sends first: the only events that reopen an ended session's tab. */
+const startsAgain = (kind, data) => kind === 'prompt' || (kind === 'status' && data && data.status === 'working');
+
 function createHostChatTabs({ open, isOpen, write, end, lang = () => 'en' }) {
   /** phone session id -> tab id */
   const tabs = new Map();
+  /**
+   * Sessions whose tab was marked ended. hostchat's cleanup reports the
+   * approvals it cancels after the final status: without this, such a
+   * 'decision' would open a fresh tab for a session that is over.
+   */
+  const ended = new Set();
+
+  function markEnded(sessionId) {
+    ended.delete(sessionId);
+    ended.add(sessionId);
+    while (ended.size > MAX_ENDED) ended.delete(ended.values().next().value);
+  }
 
   function tabFor(sessionId, name) {
     const have = tabs.get(sessionId);
@@ -124,12 +142,17 @@ function createHostChatTabs({ open, isOpen, write, end, lang = () => 'en' }) {
   }
 
   function onEvent(sessionId, kind, data, meta) {
+    if (ended.has(sessionId)) {
+      if (!startsAgain(kind, data)) return;
+      ended.delete(sessionId); // a resume: a new tab
+    }
     const id = tabFor(sessionId, meta && meta.name);
     const text = formatEvent(kind, data, lang());
     if (text) write(id, text);
     if (kind === 'status' && data && (data.status === 'error' || (data.status === 'done' && data.reason === 'ended'))) {
       end(id);
       tabs.delete(sessionId);
+      markEnded(sessionId);
     }
   }
 

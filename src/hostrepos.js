@@ -74,6 +74,23 @@ function isInside(root, dir, allowSelf) {
 
 const OUTSIDE = 'refused: repo outside the repos root';
 
+const RM_RETRIES = 5;
+const RM_RETRY_DELAY_MS = 200;
+
+/**
+ * Removes a partial clone folder. The folder itself must still be a real
+ * directory (a symlink / junction swapped in is left alone). fs.promises.rm
+ * lstat-walks the tree and unlinks links inside it without following them,
+ * so a junction in the partial checkout never pulls its target in. Retries
+ * cover a killed git whose helper still holds a file for a moment.
+ */
+async function removeClonedFolder(target) {
+  const st = await fs.promises.lstat(target).catch((err) => (err && err.code === 'ENOENT' ? null : Promise.reject(err)));
+  if (!st) return; // git already cleaned up after itself
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('not a plain folder, left alone');
+  await fs.promises.rm(target, { recursive: true, force: true, maxRetries: RM_RETRIES, retryDelay: RM_RETRY_DELAY_MS });
+}
+
 /** A failed clone -> the status the phone shows. */
 const failureOf = (err) => (AUTH_RE.test(`${(err && err.stderr) || ''} ${(err && err.message) || ''}`) ? 'failed: auth' : 'failed: other');
 
@@ -86,6 +103,8 @@ const failureOf = (err) => (AUTH_RE.test(`${(err && err.stderr) || ''} ${(err &&
  *   realpath?: (p: string) => string,   fs.realpathSync (throws when missing)
  *   exists?: (p: string) => boolean,
  *   mkdir?: (p: string) => void,
+ *   claimTarget?: (p: string) => void,  creates the clone folder itself; throws EEXIST when it exists
+ *   removeOwn?: (p: string) => Promise<void>,  removes a folder this clone created
  *   log?: (line: string) => void,
  * }} deps
  */
@@ -97,6 +116,8 @@ function createHostRepos({
   realpath = (p) => fs.realpathSync(p),
   exists = (p) => fs.existsSync(p),
   mkdir = (p) => fs.mkdirSync(p, { recursive: true }),
+  claimTarget = (p) => fs.mkdirSync(p),
+  removeOwn = removeClonedFolder,
   log = (line) => console.error(line),
 }) {
   let statuses = new Map(); // project id -> last clone status
@@ -126,11 +147,28 @@ function createHostRepos({
     if (exists(target)) return { status: 'skipped: folder exists', dir: target };
     try {
       mkdir(reposRoot);
+      // A non-recursive mkdir is the proof of ownership: it fails when the
+      // folder appeared since the check above, so only a folder this clone
+      // created is ever removed below. git clones into an empty folder fine.
+      claimTarget(target);
+    } catch (err) {
+      if (err && err.code === 'EEXIST') return { status: 'skipped: folder exists', dir: target };
+      log(`[hostrepos] clone ${r.owner}/${r.name}: target not created: ${err && err.code}`);
+      return { status: 'failed: other', dir: null };
+    }
+    try {
       await gitClone(r.url, target);
       return { status: 'cloned', dir: target };
     } catch (err) {
       const status = failureOf(err);
-      log(`[hostrepos] clone ${r.owner}/${r.name}: ${status}`);
+      log(`[hostrepos] clone ${r.owner}/${r.name}: ${status}${err && err.killed ? ' (timed out)' : ''}`);
+      // A timed-out or failed clone leaves a partial folder that would count
+      // as present on the next pass; it is ours, so it goes.
+      try {
+        await removeOwn(target);
+      } catch (rmErr) {
+        log(`[hostrepos] partial clone ${r.name} not removed: ${rmErr && (rmErr.code || rmErr.message)}`);
+      }
       return { status, dir: null };
     }
   }
@@ -218,4 +256,4 @@ function createHostRepos({
   };
 }
 
-module.exports = { createHostRepos, parseRemote, readOwners, readChatDirs, isInside, validName, failureOf, DEFAULT_OWNERS };
+module.exports = { createHostRepos, parseRemote, readOwners, readChatDirs, isInside, validName, failureOf, removeClonedFolder, DEFAULT_OWNERS };

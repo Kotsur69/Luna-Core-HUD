@@ -39,6 +39,7 @@ const MAX_SESSIONS = 2;
 const MAX_PROMPT = 20000;
 const MAX_TIMEOUT_MIN = 24 * 60;
 const KILL_GRACE_MS = 5000;
+const CLOSE_GRACE_MS = 2000;
 const MAX_KNOWN = 50;
 const MAX_PREVIEW_LINES = 40;
 const MODELS = { sonnet: 'sonnet', opus: 'opus' };
@@ -57,26 +58,113 @@ const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
  * a bare 'claude': on Windows a bare name is looked up in the child's cwd
  * (the repo) before PATH, so a `claude.exe` committed to a cloned repo would
  * run instead of the CLI. A match inside `cwd` is refused. null = not found.
+ * On Windows the native `claude.exe` wins over the whole PATH; only when no
+ * PATH entry has one is an npm-installed `claude.cmd` shim taken.
  */
 function claudePath(env, cwd, { platform = process.platform, isFile = (f) => fs.statSync(f, { throwIfNoEntry: false })?.isFile() === true } = {}) {
   const p = platform === 'win32' ? path.win32 : path.posix;
   const key = Object.keys(env || {}).find((k) => k.toLowerCase() === 'path');
   const dirs = String((key && env[key]) || '').split(platform === 'win32' ? ';' : ':');
-  const names = platform === 'win32' ? ['claude.exe'] : ['claude'];
+  const names = platform === 'win32' ? ['claude.exe', 'claude.cmd'] : ['claude'];
   const root = cwd ? p.resolve(cwd) : null;
+  const usable = [];
   for (const dir of dirs) {
     if (!dir || !p.isAbsolute(dir)) continue;
+    // A UNC entry (\\server\share) would run the CLI off the network.
+    if (platform === 'win32' && !DRIVE_PATH_RE.test(dir)) continue;
     const resolved = p.resolve(dir);
     if (root) {
       const rel = p.relative(root, resolved);
       if (!rel || (!rel.startsWith('..') && !p.isAbsolute(rel))) continue;
     }
-    for (const name of names) {
-      const file = p.join(resolved, name);
+    usable.push(resolved);
+  }
+  for (const name of names) {
+    for (const dir of usable) {
+      const file = p.join(dir, name);
       if (isFile(file)) return file;
     }
   }
   return null;
+}
+
+// cmd.exe expands %VAR% (and !VAR! with delayed expansion) even inside quotes,
+// and a quote would end the quoted path: such a shim path is refused.
+const CMD_UNSAFE_RE = /["%!\r\n]/;
+// Every chatArgs() token: flags, allow-listed names and a UUID.
+const CMD_ARG_RE = /^[A-Za-z0-9._=-]+$/;
+// A local drive path (C:\...): never UNC, never relative.
+const DRIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+
+/** %SystemRoot% when it is a plain local drive path, else C:\Windows. */
+function systemRoot(env) {
+  const e = env || {};
+  const key = Object.keys(e).find((k) => k.toLowerCase() === 'systemroot');
+  const v = key ? String(e[key]) : '';
+  return DRIVE_PATH_RE.test(v) && !CMD_UNSAFE_RE.test(v) ? v : 'C:\\Windows';
+}
+
+/**
+ * How to start the resolved CLI: {file, args, verbatim, env}. A native binary
+ * runs as is. Node refuses to spawn a .cmd without a shell (CVE-2024-27980),
+ * so an npm `claude.cmd` runs through the system's own cmd.exe (never
+ * %ComSpec% or a PATH lookup) with AutoRun off (/d), delayed expansion off
+ * (/v:off), the absolute shim path quoted, and only argv tokens that need no
+ * quoting. The shim itself starts a bare `node` when none sits next to it,
+ * and cmd.exe would look for that in the cwd (the repo) first: `env` sets
+ * NoDefaultCurrentDirectoryInExePath, so only PATH is searched.
+ * null = the shim path or an argument is not safe on a cmd.exe line.
+ */
+function claudeLaunch(command, args, env) {
+  if (!/\.cmd$/i.test(command)) return { file: command, args, verbatim: false, env: {} };
+  if (CMD_UNSAFE_RE.test(command) || !DRIVE_PATH_RE.test(command)) return null;
+  if (!args.every((a) => typeof a === 'string' && CMD_ARG_RE.test(a))) return null;
+  const line = [`"${command}"`, ...args].join(' ');
+  return {
+    file: path.win32.join(systemRoot(env), 'System32', 'cmd.exe'),
+    args: ['/d', '/v:off', '/s', '/c', `"${line}"`],
+    verbatim: true,
+    env: { NoDefaultCurrentDirectoryInExePath: '1' },
+  };
+}
+
+/**
+ * `base` with `extra` set. Windows env names ignore case: a variant of an
+ * extra key (e.g. an empty NODEFAULTCURRENTDIRECTORYINEXEPATH) is dropped so
+ * it can't shadow the value set here.
+ */
+function withEnv(base, extra) {
+  const names = Object.keys(extra || {}).map((k) => k.toLowerCase());
+  const out = {};
+  for (const [k, v] of Object.entries(base || {})) if (!names.includes(k.toLowerCase())) out[k] = v;
+  return { ...out, ...extra };
+}
+
+const TASKKILL_TIMEOUT_MS = 10000;
+
+/**
+ * Ends a session child with everything it started. On Windows child.kill()
+ * ends only the direct child: a cmd.exe wrapper (claudeLaunch) or claude's
+ * own tool processes would survive, so the tree goes via the system's
+ * taskkill /T /F; if that fails, the direct child is killed anyway.
+ */
+function killTree(child, { platform = process.platform, execFile = require('child_process').execFile, sysRoot = systemRoot(process.env) } = {}) {
+  const plain = () => {
+    try {
+      child.kill();
+    } catch {
+      // Gone already.
+    }
+  };
+  if (platform !== 'win32' || !Number.isInteger(child && child.pid)) return plain();
+  try {
+    execFile(path.win32.join(sysRoot, 'System32', 'taskkill.exe'), ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: TASKKILL_TIMEOUT_MS }, (err) => {
+      if (err) plain();
+    });
+  } catch {
+    plain();
+  }
+  return undefined;
 }
 
 /** The approval the phone signed must name the card it showed: what the host emitted, field by field. */
@@ -239,6 +327,7 @@ function createHostChat(deps) {
   const log = deps.log || ((l) => console.error(l));
   const maxSessions = deps.maxSessions || MAX_SESSIONS;
   const resolveClaude = deps.claudePath || ((env, cwd) => claudePath(env, cwd));
+  const kill = deps.killTree || ((child) => killTree(child));
   // Callbacks into the host must never throw into a session's teardown.
   const guard = (fn, what) => (...args) => {
     try {
@@ -376,8 +465,10 @@ function createHostChat(deps) {
     s.ended = true;
     dropPending(s, 'cancelled');
     clearTimer(s.killTimer);
+    clearTimer(s.closeTimer);
     if (s.rl) s.rl.close();
     s.child.removeAllListeners('exit');
+    s.child.removeAllListeners('close');
     s.child.removeAllListeners('error');
     if (s.child.stdout) s.child.stdout.removeAllListeners('data');
     if (s.child.stderr) s.child.stderr.removeAllListeners('data');
@@ -408,9 +499,20 @@ function createHostChat(deps) {
       log('[hostchat] claude not found on PATH');
       return { status: 'failed: no claude' };
     }
+    const how = claudeLaunch(command, chatArgs({ ...opts, sessionId, resume }), env);
+    if (!how) {
+      log('[hostchat] claude shim path is not safe for cmd.exe');
+      return { status: 'failed: no claude' };
+    }
     let child;
     try {
-      child = deps.spawn(command, chatArgs({ ...opts, sessionId, resume }), { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child = deps.spawn(how.file, how.args, {
+        cwd,
+        env: withEnv(env, how.env),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+        ...(how.verbatim ? { windowsVerbatimArguments: true } : {}),
+      });
     } catch (err) {
       log(`[hostchat] spawn failed: ${err.message}`);
       return { status: 'failed: spawn' };
@@ -429,6 +531,8 @@ function createHostChat(deps) {
       interrupting: false,
       cleaned: false,
       killTimer: null,
+      closeTimer: null,
+      exitCode: null,
       rl: null,
       stderrTail: '',
       turn: 0,
@@ -453,7 +557,15 @@ function createHostChat(deps) {
         cleanup(s);
       }
     });
-    child.on('exit', (code) => onExit(s, code));
+    // 'exit' can come before the last stdout lines (the final result) were
+    // read; 'close' comes after stdio drained. A grandchild that inherited the
+    // pipe can hold 'close' back, so 'exit' arms a fallback.
+    child.on('exit', (code) => {
+      s.exitCode = code;
+      clearTimer(s.closeTimer);
+      s.closeTimer = setTimer(() => onExit(s, code), CLOSE_GRACE_MS);
+    });
+    child.on('close', (code) => onExit(s, code === null || code === undefined ? s.exitCode : code));
     setStatus(s, 'working');
     if (prompt) {
       emit(s, 'prompt', { text: prompt });
@@ -525,7 +637,9 @@ function createHostChat(deps) {
   async function interrupt(p) {
     const s = liveSession(p);
     if (!s) return { status: 'refused: no session' };
-    s.interrupting = true;
+    // Only a running turn can be interrupted: a flag set while idle would mark
+    // the next turn's real error as an interrupt and swallow its "failed" push.
+    if (s.status === 'working' || s.status === 'waiting') s.interrupting = true;
     write(s, { type: 'control_request', request_id: `int-${deps.randomUUID()}`, request: { subtype: 'interrupt' } });
     return { status: 'interrupting' };
   }
@@ -538,13 +652,7 @@ function createHostChat(deps) {
     } catch {
       // Already closed: the kill below still ends the child.
     }
-    s.killTimer = setTimer(() => {
-      try {
-        s.child.kill();
-      } catch {
-        // Gone already.
-      }
-    }, KILL_GRACE_MS);
+    s.killTimer = setTimer(() => kill(s.child), KILL_GRACE_MS);
   }
 
   async function end(p) {
@@ -574,11 +682,7 @@ function createHostChat(deps) {
     stopAll() {
       for (const s of [...live.values()]) {
         endSession(s);
-        try {
-          s.child.kill();
-        } catch {
-          // Gone already.
-        }
+        kill(s.child);
         cleanup(s);
       }
       listeners.clear();
@@ -591,6 +695,8 @@ module.exports = {
   sessionOptions,
   chatArgs,
   claudePath,
+  claudeLaunch,
+  killTree,
   sameCard,
   translate,
   toolSummary,
