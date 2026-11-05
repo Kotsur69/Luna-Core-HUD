@@ -10,7 +10,8 @@
 //                  new ones.
 //   2. cleanup   - close pushed packages' tabs, remove their worktrees (the
 //                  branch is on the remote). Stalled ones stay for inspection.
-//   3. notes     - unfinished packages leave a note on their to-dos.
+//   3. notes     - unfinished packages leave ONE note on their to-dos (it
+//                  replaces an earlier run's); pushed / merged ones lose it.
 //   4. report    - markdown in <userDir>/runs/<plan>.md + an OS notification,
 //                  and the run for the phone's `godmode` snapshot.
 //
@@ -23,7 +24,8 @@
 const sup = require('./orchestraSupervisor');
 const { topoOrder } = require('./orchestraPlan');
 const { prBody } = require('./orchestraIntegrate');
-const { buildReport, appendStallNotes } = require('./orchestraReport');
+const { buildReport, syncStallNotes } = require('./orchestraReport');
+const { gitDirExists } = require('./orchestraDiagnose');
 const { runEntry } = require('./godmodesnapshot');
 const { selfCheckGate } = require('./orchestraSelfCheck');
 
@@ -54,7 +56,7 @@ const slugOf = (plan) => plan.id.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice
  *   runSelfCheck?: (args:{root:string, baseSha:string|null, checkCommand:string}) => Promise<object>,
  *   runFixup?: (args:{root:string, brief:string}) => Promise<{ok:boolean}>,
  *   pushBranch?: (root:string, branch:string) => Promise<{ok:boolean}>,
- *   checkCommand?: () => string, onIdle?: () => void,
+ *   checkCommand?: () => string, onIdle?: () => void, gitDirExists?: (repoPath:string) => boolean|null,
  * }} deps
  */
 function createFinalizer(deps) {
@@ -62,6 +64,9 @@ function createFinalizer(deps) {
   let running = false;
   // A settle that came in while finalizing (a package pushed by hand meanwhile).
   let again = false;
+
+  // Whether <repo>/.git exists: a notRepo diagnosis advises `git init` only when it does not.
+  const repoFacts = (plan) => ({ gitDirExists: (deps.gitDirExists || gitDirExists)(plan.repoPath) });
 
   const setIntegration = (plan, fields) => {
     plan.integration = { ...plan.integration, ...fields };
@@ -215,7 +220,8 @@ function createFinalizer(deps) {
     const waiting = (p) =>
       p.state === 'stalled' && p.error === 'needsApproval' && p.sessionId && deps.sessionAlive && deps.sessionAlive(p.sessionId);
     const notable = plan.packages.filter((p) => !waiting(p));
-    deps.updateTodos(plan.projectId, (list) => appendStallNotes(list, notable, plan.id, MAX_TODO_DETAILS));
+    const facts = repoFacts(plan);
+    deps.updateTodos(plan.projectId, (list) => syncStallNotes(list, notable, plan.id, MAX_TODO_DETAILS, facts));
   }
 
   // The phone's God Mode page (godmodesnapshot.js). main puts it only while
@@ -267,7 +273,7 @@ function createFinalizer(deps) {
   function report(plan) {
     const view = { ...deps.view(), repoPath: plan.repoPath };
     const extra = { now: deps.now(), suggestions: sup.allowSuggestions(plan.approvalLog) };
-    const text = buildReport(view, extra);
+    const text = buildReport(view, { ...extra, ...repoFacts(plan) });
     const file = deps.writeReport ? deps.writeReport(plan.id, text) : null;
     const pushed = plan.packages.filter((p) => p.state === 'pushed').length;
     if (deps.notify) deps.notify({ pushed, total: plan.packages.length, failed: plan.integration.state === 'failed' });

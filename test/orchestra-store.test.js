@@ -182,3 +182,19 @@ test('migration never overwrites a newer stored run or an earlier .migrated file
   assert.equal(res.renamedTo, path.join(dir, `${LEGACY_FILE}.migrated.2`));
   assert.equal(JSON.parse(fs.readFileSync(res.renamedTo, 'utf8')).id, 'pold');
 });
+
+test('an older stored run without a stall history still loads (empty history)', (t) => {
+  const sup = require('../src/orchestraSupervisor.js');
+  const { store, cleanup } = tempStore();
+  t.after(cleanup);
+  const legacy = run('p1', { packages: [{ id: 'a', state: 'stalled', error: 'noMarker', detail: 'last only', stalls: 3 }] });
+  assert.equal(store.saveRun('alpha', legacy), true);
+  const plan = sup.normalizeStoredPlan(store.loadRun('alpha'));
+  assert.ok(plan, 'loads');
+  assert.deepEqual(plan.packages[0].stallHistory, []);
+  assert.equal(plan.packages[0].error, 'noMarker');
+  // A newer run keeps its history through the store.
+  const entry = { at: 5, kind: 'stall', reason: 'timeout', detail: null };
+  store.saveRun('alpha', run('p2', { packages: [{ id: 'a', state: 'stalled', stallHistory: [entry] }] }));
+  assert.deepEqual(sup.normalizeStoredPlan(store.loadRun('alpha')).packages[0].stallHistory, [entry]);
+});

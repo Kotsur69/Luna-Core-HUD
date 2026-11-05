@@ -30,6 +30,7 @@ const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha } = require('./orchestraFinish');
 const orchestraIntegrate = require('./orchestraIntegrate');
 const { renderRunReportHtml, repoPathOf } = require('./orchestraReport');
+const { gitDirExists } = require('./orchestraDiagnose');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
 const defaultStore = require('./orchestraStore');
 const { lastOpenToolUse, allowRuleFor, exampleFor } = require('./orchestraSupervisor');
@@ -224,7 +225,8 @@ function reportDeps(ctx, self) {
         // The same run as a standalone page with charts, next to the .md.
         try {
           const view = self().view() || {};
-          const html = renderRunReportHtml(view, { now: Date.now(), suggestions: view.suggestions, repoPath: repoPathOf(text) });
+          const repoPath = repoPathOf(text);
+          const html = renderRunReportHtml(view, { now: Date.now(), suggestions: view.suggestions, repoPath, gitDirExists: gitDirExists(repoPath) });
           fs.writeFileSync(path.join(dir, `${planId}.html`), html, { encoding: 'utf8', mode: 0o600 });
         } catch (err) {
           ctx.logError(`[orchestra] html report failed: ${errText(err)}`);

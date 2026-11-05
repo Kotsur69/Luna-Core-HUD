@@ -168,3 +168,52 @@ test('report: a clean run says Nothing under What went wrong; HTML carries the s
   assert.match(html, /How to fix: Run the verify command/);
   assert.doesNotMatch(html, /<script>alert/);
 });
+
+// ---- notRepo: honest about what git said ----------------------------------------
+
+const path = require('path');
+const { gitDirExists } = require('../src/orchestraDiagnose.js');
+const { stallNote } = require('../src/orchestraReport.js');
+// The advice to create a repo, as opposed to the warning not to.
+const INIT_ADVICE = /`git init` and make a first commit/;
+
+test('notRepo suggests git init only when the folder really has no .git, and quotes git', () => {
+  const pkgNotRepo = { state: 'failed', error: 'notRepo', detail: 'git rev-parse --show-toplevel in C:/r: exit 128: fatal: not a git repository' };
+  for (const facts of [{ gitDirExists: true }, { gitDirExists: null }, {}, undefined]) {
+    const d = diagnosePackage(pkgNotRepo, facts);
+    assert.doesNotMatch(`${d.what} ${d.why} ${d.fix}`, INIT_ADVICE, `no git init for ${JSON.stringify(facts)}`);
+    assert.match(d.what, /could not confirm/);
+    assert.ok(d.why.includes('Git said: "git rev-parse --show-toplevel in C:/r: exit 128: fatal: not a git repository"'), d.why);
+  }
+  assert.match(diagnosePackage(pkgNotRepo, { gitDirExists: true }).why, /does have a \.git/);
+  const none = diagnosePackage(pkgNotRepo, { gitDirExists: false });
+  assert.match(none.fix, INIT_ADVICE);
+  assert.match(none.why, /Git said:/);
+  // The detail is model-free git output, still kept to one quoted line.
+  assert.doesNotMatch(diagnosePackage({ error: 'notRepo', detail: 'a\nb"c' }).why, /[\n]|b"c/);
+  assert.match(diagnosePackage({ error: 'notRepo' }).why, /Git gave no message/);
+});
+
+test('gitDirExists checks <repo>/.git through the injected fs; unknown is null', () => {
+  const seen = [];
+  const fsFake = (answer) => ({ existsSync: (p) => (seen.push(p), answer) });
+  assert.equal(gitDirExists(path.join('/r'), fsFake(true)), true);
+  assert.equal(seen[0], path.join('/r', '.git'));
+  assert.equal(gitDirExists('/r', fsFake(false)), false);
+  assert.equal(gitDirExists('', fsFake(true)), null);
+  assert.equal(gitDirExists(null, fsFake(true)), null);
+  assert.equal(gitDirExists('/r', { existsSync: () => { throw new Error('EPERM'); } }), null);
+});
+
+test('the report and the card note carry the notRepo advice the .git fact allows', () => {
+  const view = {
+    id: 'pq',
+    repoPath: '/repo',
+    packages: [{ id: 'a', title: 'A', state: 'failed', error: 'notRepo', detail: 'exit 128', todoAts: [1] }],
+    integration: { state: 'done' },
+  };
+  assert.doesNotMatch(buildReport(view, { now: 0, gitDirExists: true }), INIT_ADVICE);
+  assert.match(buildReport(view, { now: 0, gitDirExists: false }), INIT_ADVICE);
+  assert.doesNotMatch(stallNote('pq', view.packages[0], { gitDirExists: true }), INIT_ADVICE);
+  assert.match(stallNote('pq', view.packages[0], { gitDirExists: false }), INIT_ADVICE);
+});

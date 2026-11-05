@@ -63,6 +63,10 @@ const NUDGE_DELAY_MS = 5000;
 const DEFAULT_PAUSE_MS = 30 * 60 * 1000;
 // Resume a little after the reset, not on the second.
 const RESUME_GRACE_MS = 60 * 1000;
+// A turn that ended while a background process of the worker's own still
+// ran (a test suite) is not nudged: LunaCore waits for the process to report
+// back, at most this long, so a stuck process cannot hold the package forever.
+const BACKGROUND_WAIT_MS = 30 * 60 * 1000;
 // A launch that failed on machinery (worktree, brief, tab) is tried again
 // by itself after this long, at most sup.MAX_AUTO_RETRIES times.
 const AUTO_RETRY_DELAY_MS = 2 * 60 * 1000;
@@ -103,6 +107,7 @@ function briefText(pkg, branch, opts = {}) {
     '',
     '## Verify',
     pkg.verify ? `Run \`${pkg.verify}\` and fix until it passes.` : "Check your work with the project's tests before you finish.",
+    'Run the verify command in the foreground and wait for it to finish. Do not end your turn while a test run (or any other command) of yours is still running in the background: an ended turn tells LunaCore you stopped.',
     '',
     '## Rules',
     '- Work only in this worktree. Do not push, merge or switch branches.',
@@ -291,8 +296,12 @@ function createOrchestra(deps) {
   // project cannot plan the same repo meanwhile.
   let planningRepo = null;
   let pumping = false;
-  /** pkgId -> pending nudge timer */
+  /** pkgId -> pending nudge timer (also the bounded wait on a background process) */
   const nudgeTimers = new Map();
+  /** sessionId -> background processes the worker started that have not reported back */
+  const backgroundOpen = new Map();
+  /** sessionId -> when the worker last showed activity (its git status changed) */
+  const lastActivity = new Map();
   /** pkgId -> scheduled automatic relaunch after a machinery failure */
   const retryTimers = new Map();
   /** pkgId -> automatic retries spent on a git that did not answer (orchestraLaunchRetry.js) */
@@ -411,7 +420,7 @@ function createOrchestra(deps) {
     // Folders saved on another PC / under another user name re-homed here.
     const stored = normalized && deps.resolvePath ? sup.rehomePlanPaths(normalized, deps.resolvePath, deps.resolveFile) : normalized;
     if (!stored || plan) return false;
-    plan = { ...sup.restoreAfterRestart(stored), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, settled: false };
+    plan = { ...sup.restoreAfterRestart(stored, now()), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, settled: false };
     // A schedule Mati armed survives a restart; one already missed does not
     // start the run late - the run stays held.
     if (plan.scheduledAt && plan.scheduledAt > now()) armSchedule(plan.scheduledAt);
@@ -494,6 +503,7 @@ function createOrchestra(deps) {
         startedAt: p.startedAt,
         finishedAt: p.finishedAt || null,
         stalls: p.stalls,
+        stallHistory: p.stallHistory || [],
         escalated: p.escalated,
         prUrl: p.prUrl,
         merged: p.merged,
@@ -566,6 +576,8 @@ function createOrchestra(deps) {
   function clearAllTimers() {
     for (const id of [...nudgeTimers.keys()]) cancelNudge(id);
     for (const id of [...retryTimers.keys()]) cancelAutoRetry(id);
+    backgroundOpen.clear();
+    lastActivity.clear();
     if (resumeTimer) clearTimer(resumeTimer);
     resumeTimer = null;
     clearSchedule();
@@ -695,6 +707,7 @@ function createOrchestra(deps) {
           startedAt: null,
           pausedMs: 0,
           stalls: 0,
+          stallHistory: [],
           escalated: false,
           modelOverride: null,
           effortOverride: null,
@@ -1119,8 +1132,11 @@ function createOrchestra(deps) {
   function stall(id, reason, detail = null) {
     cancelNudge(id);
     const before = findPkg(id);
+    forgetSession(before.sessionId);
     const stalls = (before.stalls || 0) + 1;
-    patch(id, { state: 'stalled', error: reason, detail, stalls, stalledAt: now() });
+    // Each stall is kept (time, reason, short detail), not only the last error.
+    const stallHistory = sup.withHistoryEntry(before.stallHistory, { at: now(), kind: 'stall', reason, detail });
+    patch(id, { state: 'stalled', error: reason, detail, stalls, stallHistory, stalledAt: now() });
     const pkg = findPkg(id);
     const live = !plan.killed && !plan.pausedUntil;
     if (live && sup.shouldEscalate(pkg, modelFor(pkg), reason) && escalate(pkg, reason, detail)) {
@@ -1269,6 +1285,7 @@ function createOrchestra(deps) {
     const lastWords = lastWordsFrom(fragment);
     if (lastWords) patch(pkg.id, { lastWords });
     const marker = sup.markerFrom(fragment, pkg.id);
+    const background = trackBackground(sessionId, fragment);
     if (pkg.state === 'stalled') {
       if (marker && marker.kind === 'done') finish(pkg.id);
       return;
@@ -1278,10 +1295,47 @@ function createOrchestra(deps) {
     if (action.type === 'finish') finish(pkg.id);
     else if (action.type === 'stall' && action.reason === 'blocked') stall(pkg.id, action.reason, action.detail || null);
     else if (!plan.pausedUntil) {
-      // No marker: nudge or noMarker stall, decided after the delay.
       cancelNudge(pkg.id);
+      if (background.length) {
+        // The turn ended on a background process of the worker's own (a test
+        // run): its report back starts the next turn. No nudge is spent;
+        // after BACKGROUND_WAIT_MS the process is given up on and the usual
+        // nudge follows.
+        onRunEvent('waitingOnBackground', { id: pkg.id, tasks: background.length });
+        const armedAt = now();
+        nudgeTimers.set(pkg.id, setTimer(() => giveUpOnBackground(pkg.id, sessionId, armedAt), BACKGROUND_WAIT_MS));
+        return;
+      }
+      // No marker: nudge or noMarker stall, decided after the delay.
       nudgeTimers.set(pkg.id, setTimer(() => sendNudge(pkg.id), NUDGE_DELAY_MS));
     }
+  }
+
+  /** The session's still-running background processes after this fragment. */
+  function trackBackground(sessionId, fragment) {
+    const open = sup.openBackgroundTasks(fragment, backgroundOpen.get(sessionId) || []);
+    if (open.length) backgroundOpen.set(sessionId, open);
+    else backgroundOpen.delete(sessionId);
+    return open;
+  }
+
+  /**
+   * The bounded wait ran out: forget the process (it never reported) and
+   * nudge - unless the worker got busy again meanwhile (its git status
+   * changed): then a new turn is under way and its end decides.
+   */
+  function giveUpOnBackground(id, sessionId, armedAt) {
+    nudgeTimers.delete(id);
+    backgroundOpen.delete(sessionId);
+    if ((lastActivity.get(sessionId) || 0) > armedAt) return;
+    sendNudge(id);
+  }
+
+  /** Drops what LunaCore tracked about one worker tab's turns. */
+  function forgetSession(sessionId) {
+    if (!sessionId) return;
+    backgroundOpen.delete(sessionId);
+    lastActivity.delete(sessionId);
   }
 
   function resume() {
@@ -1365,6 +1419,8 @@ function createOrchestra(deps) {
   function onFiles(sessionId, absFiles) {
     const pkg = bySession(sessionId);
     if (!pkg || !pkg.root || !sup.isActive(pkg)) return;
+    // Activity: a background wait that runs out does not nudge a busy worker.
+    lastActivity.set(sessionId, now());
     const touched = sup.mergeTouched(pkg.touched, sup.relTouched(pkg.root, absFiles));
     if (touched === pkg.touched) return;
     const key = (o) => `${o.a}|${o.b}`;
@@ -1597,6 +1653,7 @@ module.exports = {
   withStallNote,
   BRIEF_DIR,
   NUDGE_DELAY_MS,
+  BACKGROUND_WAIT_MS,
   RESUME_GRACE_MS,
   AUTO_RETRY_DELAY_MS,
   MAX_AUTO_RETRIES: sup.MAX_AUTO_RETRIES,
