@@ -320,6 +320,8 @@ test('Retry after a fixed install opens the worker in the same worktree', async 
     install: () => (fail ? { ok: false, output: 'boom' } : { ok: true, output: '' }),
   });
   assert.equal(s.view('a').error, 'installFailed');
+  // The run settled on the stall: let the finalizer's pass end, or Retry is refused as busy.
+  await flush(10);
   fail = false;
   const res = await s.orch.retry({ planId: s.planId, id: 'a' });
   assert.equal(res.ok, true);
