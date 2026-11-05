@@ -18,6 +18,10 @@
 //                    screens" list plus mapping rows marked `key` (LW 2.25a)
 //   legal         -> appendLegalJourneys: the GDPR journeys of an EU web app
 //                    into TEST_PLAN.md, each once (LW 2.26)
+//   games       -> GAME_TEMPLATES: ASSETS.md, the asset list (LW 3.37,
+//                    src/lunasworkAssets.js). Readable and writable like any
+//                    pack file, scaffolded only for a game (scaffoldPack
+//                    { game: true }), so a web app's pack never gets one.
 //   interview     -> interviewBrief: system prompt for the Interviewer tab
 //
 // Same contract as cheatsheets.js / lunasworkStore.js: a missing or broken
@@ -162,10 +166,30 @@ match. Drop files here; DESIGN.md and SHIP_CRITERIA.md may point at them.
 | --- | --- | --- |
 `;
 
+// Game-only pack files: never part of PACK_FILES, so a non-game pack is unchanged.
+const GAME_TEMPLATES = Object.freeze({
+  'ASSETS.md': `# Assets
+
+<!-- The asset list: the single source of truth for every game asset. One row
+     per asset; the asset step (src/lunasworkAssets.js) never generates a
+     name or a spec hash twice and files one builder card per planned row.
+     Type: sprite, texture, model, material, animation, audio, ui, vfx, other.
+     Source: generated (a generation API), blender (Blender MCP) or library.
+     Status: leave "planned" (or empty) for new rows; the run moves it through
+     queued -> done -> approved / restyle. Hash is filled in by the run. -->
+
+Batch limit: 5
+
+| Name | Type | Spec | Source | File | Status | Hash | Ref |
+|---|---|---|---|---|---|---|---|
+`,
+});
+
 const PACK_FILES = Object.freeze(Object.keys(TEMPLATES));
 // LW 2.12: written by the Director before a parallel build, never scaffolded.
 const CONTRACTS_FILE = 'CONTRACTS.md';
-const WRITABLE_FILES = Object.freeze([...PACK_FILES, CONTRACTS_FILE]);
+const GAME_FILES = Object.freeze(Object.keys(GAME_TEMPLATES));
+const WRITABLE_FILES = Object.freeze([...PACK_FILES, ...GAME_FILES, CONTRACTS_FILE]);
 const REQUIRED_FILES = Object.freeze(['BRIEF.md', 'DESIGN.md', 'SHIP_CRITERIA.md', 'TEST_PLAN.md']);
 
 const PURPOSE = Object.freeze({
@@ -226,11 +250,13 @@ function createIfMissing(target, content) {
 }
 
 /**
- * Writes every missing pack file plus design/references/README.md. Never
- * overwrites an existing file.
+ * Writes every missing pack file plus design/references/README.md, and for a
+ * game the game files (ASSETS.md) too. Never overwrites an existing file.
+ * @param {string} repoDir
+ * @param {{game?:boolean}} [opts]
  * @returns {{ok:boolean, created:string[], skipped:string[], failed:string[]}}
  */
-function scaffoldPack(repoDir) {
+function scaffoldPack(repoDir, { game = false } = {}) {
   const result = { ok: false, created: [], skipped: [], failed: [] };
   if (!isRepoDir(repoDir)) return result;
   const root = designDir(repoDir);
@@ -245,6 +271,7 @@ function scaffoldPack(repoDir) {
   }
   const entries = [
     ...PACK_FILES.map((file) => [file, path.join(root, file), TEMPLATES[file]]),
+    ...(game ? GAME_FILES.map((file) => [file, path.join(root, file), GAME_TEMPLATES[file]]) : []),
     [`${REFERENCES_DIR}/README.md`, path.join(root, REFERENCES_DIR, 'README.md'), REFERENCES_README],
   ];
   for (const [name, target, content] of entries) result[createIfMissing(target, content)].push(name);
@@ -825,8 +852,10 @@ when it is, and that he can start the run.`;
 module.exports = {
   DESIGN_DIR,
   TEMPLATES,
+  GAME_TEMPLATES,
   PACK_FILES,
   CONTRACTS_FILE,
+  GAME_FILES,
   REQUIRED_FILES,
   MAX_APPEND_CHARS,
   MAX_ARCHITECTURE_CHARS,

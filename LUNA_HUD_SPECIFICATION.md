@@ -106,9 +106,11 @@ A scan reference so a new idea can be checked against what's already built.
 - **Right panel / observers:** `context.js`, `spark.js`, `usage.js`,
   `thresholds.js`, `skilltracker.js`, `activefiles.js`, `sessiontimeline.js`,
   `mcp.js`, `git.js`, `ports.js`, `telemetry.js`, `media.js`, `devices.js`.
-- **Automation:** `todo.js`, `godmode.js` (v1 per-tab runs), `orchestra.js`
-  (God Mode v2 plan board / run board), `orchestrasettings.js`, `autocompact.js`,
-  `autoproceed.js`, `keepawake.js`, `notify.js`.
+- **Automation:** `todo.js`, `orchestra.js` (God Mode v2 plan board / run
+  board, one run per project), `orchestraDetails.js`, `orchestraPick.js`,
+  `orchestrasettings.js`, `autocompact.js`, `autoproceed.js`, `keepawake.js`
+  (the "Don't sleep" chip), `notify.js`. God Mode v1 (`godmode.js`, per-tab
+  to-do runs) was removed in v0.20.0.
 - **AI providers & tools:** `providersettings.js`, `providerform.js`,
   `ccrsettings.js`, `lmstudiomodels.js`, `lmstudioloadform.js`, `ask.js` /
   `askview.js` / `askcommand.js` (`/ask`), `highlights.js` / `highlightsview.js`

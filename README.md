@@ -1392,25 +1392,31 @@ line, and the input grows to about eight lines before it scrolls. Drag an item
 by its handle to reorder it. The list auto-scrolls near its edges, and the
 whole app still scrolls with the wheel while you hold an item.
 
-**God Mode** works through that list unattended. It pastes the next open item,
-waits for Claude's turn to end, ticks the item off and moves on. It waits out a
-usage-limit wall, retries a dropped connection up to three times, and then
-stops and calls you instead of looping on a dead session. The list is live: an
-item you add mid-run joins the run. Arming it always goes through a Yes/No
-confirmation, because nothing else in LunaCore types into your session without
-you ([`src/renderer/modules/godmode.js`](src/renderer/modules/godmode.js)).
+**God Mode** builds that list unattended. *Plan packages* groups the open
+to-dos into packages, and after you approve the plan, parallel workers build
+them, each in its own git worktree and tab. This is the Orchestra
+([`src/orchestra.js`](src/orchestra.js)), described in full under
+[God Mode v2](#god-mode-v2--parallel-workers-in-worktrees) below. Each
+project has its own run, and several projects can run at once
+([`src/orchestraRegistry.js`](src/orchestraRegistry.js)). Starting a second
+run on the same repo is refused. When one Claude account hits its limit,
+workers switch to the other account. The run pauses only when every account
+is limited. The old runner, which pasted to-dos one by one into a single tab
+(God Mode v1), was removed in v0.20.0.
 
-While a run is armed, the **overnight guard** ([`src/overnight.js`](src/overnight.js))
-keeps it alive with nobody at the desk. It blocks system sleep and background
-throttling for the run's lifetime only, so a minimized window keeps its
-timers. On an LM Studio tab it also runs a 30 s watchdog. A bad probe is
-confirmed before anything happens; then the guard wakes LM Studio and reloads
-the model the run was using, and God Mode waits for the backend instead of
-spending its connection retries.
+While a run has live workers, the **overnight guard**
+([`src/overnight.js`](src/overnight.js)) keeps them going with nobody at the
+desk. Every worker and fix-up tab joins the guard when it launches and leaves
+when its tab closes. While any run is live, the guard blocks system sleep and
+background throttling, so a minimized window keeps its timers. On an LM Studio
+tab it also runs a 30 s watchdog. It confirms a failed probe before acting on
+it. Then it wakes LM Studio and reloads the model the run was using, and the
+run waits for the backend instead of spending its connection retries.
 
-**Don't sleep** is a second, independent switch under God Mode. It runs *your
-own* keep-awake script, which keeps the **screen** on too (the overnight guard
-does not). Point `config/keepawake.local.json` at it:
+**Don't sleep** is a separate green/red chip in the terminal bar
+([`src/renderer/modules/keepawake.js`](src/renderer/modules/keepawake.js)). It
+runs *your own* keep-awake script, which also keeps the **screen** on. The
+overnight guard does not. Point `config/keepawake.local.json` at it:
 
 ```json
 { "script": "C:\\Tools\\Keep Awake.bat" }

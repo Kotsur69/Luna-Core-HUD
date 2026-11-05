@@ -940,8 +940,11 @@ could settle is settled, and what is left genuinely needs eyes:
       **Note the folder is created lazily on first write**, so a fresh portable
       run that changes nothing correctly leaves no folder — that absence is not a
       bug, and it is why the injected-theme test was needed at all.
-- [ ] **Terminal spawns and `claude` actually runs.** The native module loading
-      is proven; a real PTY session is not.
+- [x] **Terminal spawns and `claude` actually runs.** Proven 2026-11-04 on
+      Electron 43. The packaged exe ran as Node and spawned a real ConPTY
+      shell, where `claude --version` answered (see FUTURE_PLAN "Owed live
+      checks"). The same check found the `.ps1` helpers that are not
+      rewritten to `app.asar.unpacked` (FUTURE_PLAN "Known issues").
 - [ ] Headings render in Chakra Petch, not Segoe — a fallback means `assets/`
       did not ship (the asar listing says it did; eyes beat listings).
 - [ ] **Change theme → close → reopen → it remembered.** Needs a click: the

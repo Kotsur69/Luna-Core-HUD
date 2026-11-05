@@ -1,6 +1,6 @@
 # Luna host + phone control — plan
 
-> **🟡 OPEN (2026-10-22).** Built and released in v0.17.0; push notifications are set up and live. Still open: pairing the phone with each host (see "Resume here") and the security follow-ups M1 / M2 / M4 (cards in the to-do list).
+> **🟡 OPEN (2026-10-22).** Built and released in v0.17.0; push notifications are set up and live. Still open: pairing the phone with each host (see "Resume here"). The security follow-ups M1 / M2 (`30f4e77`) and M4 phone CSP (`e9a385f`) are done.
 
 Status: **confirmed by Mati 2026-10-20. U1, U2, H1, H2, H3 and H4 built
 (2026-10-20 - 2026-10-21); security + JS review of the whole command path
@@ -391,10 +391,11 @@ claim race (`update … where status = 'new'`, serial handling).
   only a folder that, after `fs.realpathSync` (symlinks / junctions), sits
   under the repos root or `host.local.json -> chatDirs`; otherwise the phone
   gets `refused: repo outside the repos root`. Tests: `hostsecurity.test.js`.
-- **M4 phone CSP** (security, card in the to-do list): only `frame-ancestors` is set; a future XSS on
-  the phone origin could sign commands for 12 h. No `innerHTML` today. Next:
-  `script-src 'self'; object-src 'none'; base-uri 'none'; connect-src` the
-  Supabase project.
+- ~~**M4 phone CSP**~~ fixed (`e9a385f`): `mobile/vercel.json` sends a full
+  Content-Security-Policy (`default-src 'self'; script-src 'self'; object-src 'none';
+  base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, `connect-src`
+  only the Supabase project and Open-Meteo). Injected inline script no longer
+  runs, and the page can reach no other origin.
 **L / J / JS LOW, re-checked against the code 2026-11-04** (package
 `host-hardening`, one commit `fix: host-mode hardening leftovers` on
 `luna/host-hardening-6rugq`). Each is fixed with a test, or still accepted

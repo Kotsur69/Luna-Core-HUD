@@ -1,8 +1,11 @@
 # LunaCore - "God Mode" (unattended to-do runner)
 
-**Status: v1 shipped 2026-08-19 (`71610db`).** Its multi-tab successor, God
-Mode v2 (planner, worktree workers, supervisor, integrator), is designed and
-tracked in [`ORCHESTRATOR_PLAN.md`](ORCHESTRATOR_PLAN.md).
+**Status: REMOVED in v0.20.0 (`5283848`, 2026-11-02).** v1 shipped
+2026-08-19 (`71610db`). `src/renderer/modules/godmode.js` and everything
+below no longer exist. The overnight guard moved to God Mode v2's workers.
+This file is history only. God Mode today is v2 (planner, worktree workers,
+supervisor, integrator, one run per project):
+[`ORCHESTRATOR_PLAN.md`](ORCHESTRATOR_PLAN.md).
 
 ## Goal
 
