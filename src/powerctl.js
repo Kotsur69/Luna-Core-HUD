@@ -10,6 +10,8 @@
 //     SetSuspendState - never rundll32 powrprof, which hibernates instead.
 //   - canWake(): best effort - is there a sleep state, are wake timers on.
 //   - shutdownIn(seconds) / abortShutdown(): shutdown /s /t, shutdown /a.
+//   - batteryPercent(): the charge left (Win32_Battery), for the battery
+//     guard in src/orchestraPower.js; {ok:false} on a PC without a battery.
 //
 // Every child process goes through execFile with an argv array, never a
 // shell string. On any other OS every function is a no-op that returns
@@ -33,6 +35,9 @@ const SUSPEND_SCRIPT =
   "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false) | Out-Null";
 // RTCWAKE: "Allow wake timers" under the current power scheme's Sleep group.
 const WAKE_TIMER_QUERY = ['/query', 'SCHEME_CURRENT', 'SUB_SLEEP', 'RTCWAKE'];
+// The average charge of every battery, or nothing when there is none.
+const BATTERY_SCRIPT =
+  '(Get-CimInstance -ClassName Win32_Battery | Measure-Object -Property EstimatedChargeRemaining -Average).Average';
 
 const UNSUPPORTED = Object.freeze({ ok: false, reason: 'unsupported' });
 
@@ -56,6 +61,18 @@ const pad = (n) => String(n).padStart(2, '0');
 function localStamp(ms) {
   const d = new Date(ms);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/**
+ * powershell's battery output -> a percentage 0..100, or null.
+ * @param {string} text
+ * @returns {number|null}
+ */
+function parseBatteryPercent(text) {
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*$/.exec(String(text || ''));
+  if (!m) return null;
+  const n = Math.round(Number(m[1].replace(',', '.')));
+  return n >= 0 && n <= 100 ? n : null;
 }
 
 /**
@@ -146,7 +163,15 @@ function createPowerCtl(deps = {}) {
 
   if (platform !== 'win32') {
     const none = async () => UNSUPPORTED;
-    return { scheduleWake: none, cancelWake: none, sleepNow: none, canWake: none, shutdownIn: none, abortShutdown: none };
+    return {
+      scheduleWake: none,
+      cancelWake: none,
+      sleepNow: none,
+      canWake: none,
+      shutdownIn: none,
+      abortShutdown: none,
+      batteryPercent: none,
+    };
   }
 
   const fail = (res, reason) => ({ ok: false, reason, detail: (res.stderr || res.stdout || '').trim().slice(0, 200) || null });
@@ -205,7 +230,14 @@ function createPowerCtl(deps = {}) {
     return res.ok ? { ok: true } : fail(res, 'shutdownFailed');
   }
 
-  return { scheduleWake, cancelWake, sleepNow, canWake, shutdownIn, abortShutdown };
+  async function batteryPercent() {
+    const res = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', BATTERY_SCRIPT]);
+    if (!res.ok) return fail(res, 'batteryFailed');
+    const percent = parseBatteryPercent(res.stdout);
+    return percent === null ? { ok: false, reason: 'noBattery' } : { ok: true, percent };
+  }
+
+  return { scheduleWake, cancelWake, sleepNow, canWake, shutdownIn, abortShutdown, batteryPercent };
 }
 
 module.exports = {
@@ -215,6 +247,7 @@ module.exports = {
   localStamp,
   hasSleepState,
   wakeTimerSetting,
+  parseBatteryPercent,
   WAKE_TASK_NAME,
   SHUTDOWN_COMMENT,
 };

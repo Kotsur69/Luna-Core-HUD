@@ -9,6 +9,8 @@
 //    plan.options as main pushes it.
 //  - powerBanner(): the sleep / shutdown countdown with its cancel button
 //    (src/orchestraPower.js), counting down on its own.
+//  - batteryBanner(): the one on-battery warning (createBatteryGuard), with
+//    the low-battery hold when new workers and verifies wait for the charger.
 // Every git- or model-derived string goes in through textContent only.
 // ============================================================================
 
@@ -114,6 +116,25 @@ function powerText(kind, state) {
   }
   if (state.phase === 'arming') return t('orch.power.shutdownArming');
   return t('orch.power.shutdownCountdown', { s: secondsLeft(state.at) });
+}
+
+/**
+ * The on-battery warning, or null on mains power. One line: the hold when
+ * the battery is low, else the warning (with the level when it is known).
+ * @param {{battery?:object|null}} plan
+ * @returns {HTMLElement|null}
+ */
+export function batteryBanner(plan) {
+  const b = plan.battery && typeof plan.battery === 'object' ? plan.battery : null;
+  if (!b || b.onBattery !== true) return null;
+  const pct = Number.isFinite(b.percent) ? b.percent : null;
+  const text =
+    b.held === true && pct !== null
+      ? t('orch.battery.held', { pct, min: b.thresholdPct })
+      : `${t('orch.battery.on')}${pct !== null ? ` ${t('orch.battery.pct', { pct })}` : ''}`;
+  const line = el('p', `orchestra__msg ${b.held === true ? 'is-bad' : 'is-warn'}`, text);
+  line.setAttribute('role', 'status');
+  return line;
 }
 
 /**

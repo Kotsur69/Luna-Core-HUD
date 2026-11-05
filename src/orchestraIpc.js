@@ -10,8 +10,9 @@
 //              else is refused. Missing, the call falls back to the active
 //              tab's project, or else to the only run there is - so the
 //              single-run board keeps working unchanged.
-//   planId     calls about a plan (launch, retry, unschedule, finish, open
-//              report) are cross-checked against the resolved run's plan.
+//   planId     calls about a plan (launch, retry, unschedule, finish, abort
+//              finish, open report) are cross-checked against the resolved
+//              run's plan.
 //              Without a projectId the planId itself names the run.
 //   planning   orchestra:plan never takes a project from the renderer: it is
 //              the tab's own project, folder and profile.
@@ -143,7 +144,7 @@ function registerOrchestraIpc(ipcMain, ctx) {
     return typeof planId === 'string' && view && view.id === planId ? run : refuse('noPlan');
   }
 
-  /** {projectId, planId, ...} payloads (launch, retry, unschedule, finish). */
+  /** {projectId, planId, ...} payloads (launch, retry, unschedule, finish, abortFinalize). */
   const runForPayload = (payload) =>
     isPlainObject(payload) ? runForPlan(scopeOf(payload), payload.planId) : refuse('badPayload');
 
@@ -261,6 +262,18 @@ function registerOrchestraIpc(ipcMain, ctx) {
     const run = runForPayload(payload);
     if (!run.ok) return run;
     return ctx.godModeBlock(run.projectId) || run.controller.finishRun(payload);
+  });
+
+  // "Abort finish": {projectId?, planId} and nothing else is read. The run is
+  // resolved and its plan id cross-checked here; the controller then aborts
+  // only its own in-flight finalize, and only past ABORT_FINISH_AFTER_MS.
+  ipcMain.handle('orchestra:abortFinalize', (_event, payload) => {
+    if (!isPlainObject(payload) || typeof payload.planId !== 'string' || !payload.planId) return refuse('badPayload');
+    const run = runForPayload(payload);
+    if (!run.ok) return run;
+    const res = run.controller.abortFinalize({ planId: payload.planId });
+    if (res && res.ok) changed(run.projectId, run.controller.view());
+    return res;
   });
 
   // Sleep / shutdown countdowns: only the two known names are accepted, and
