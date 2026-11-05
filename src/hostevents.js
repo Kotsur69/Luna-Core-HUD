@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - a host chat's event feed over the cloud (main + phone)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md H2, table `host_events` {session_id, seq, host,
+// docs/tbc_docs/REMOTE_HOST_PLAN.md H2, table `host_events` {session_id, seq, host,
 // kind, data, at}. The host (src/hostchat.js) writes what a phone-driven
 // claude session does; the phone (mobile/src/views/host.js) reads it back.
 //

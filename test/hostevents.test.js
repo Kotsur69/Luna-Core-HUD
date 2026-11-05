@@ -238,7 +238,7 @@ test('eventsFrom sorts by seq and drops duplicates', () => {
   assert.deepEqual(ev.eventsFrom(rows).map((e) => e.data.text), ['a', 'c']);
 });
 
-// Review J-H2 (docs/REMOTE_HOST_PLAN.md "Security review"): a resumed session
+// Review J-H2 (docs/tbc_docs/REMOTE_HOST_PLAN.md "Security review"): a resumed session
 // restarted seq at 0 and every row hit the unique (user_id, session_id, seq) index.
 test('continueSession: a resumed session writes after its highest stored seq', async () => {
   const sid = '11111111-2222-4333-8444-555555555555';

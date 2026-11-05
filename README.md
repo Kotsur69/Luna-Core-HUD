@@ -205,7 +205,7 @@ injects prompts or touches the `claude` binary.
 > a YAZIO Body tab), and optional cloud sync of the budget and to-dos between
 > PCs over your own Supabase project with GitHub login. No `cloud.local.json`
 > means no cloud: everything stays local. Plan and status:
-> [`docs/DONE_CLOUD_SYNC_PLAN.md`](docs/DONE_CLOUD_SYNC_PLAN.md).
+> [`docs/done_docs/DONE_CLOUD_SYNC_PLAN.md`](docs/done_docs/DONE_CLOUD_SYNC_PLAN.md).
 >
 > **v0.14.0 — Mission Control.** A **Ctrl+Shift+M** dashboard
 > for the rest of your day: Gmail cleanup (dry run, then confirm), Google
@@ -1512,7 +1512,7 @@ A **Luna host** is any PC (or Mac) that the phone app drives like a terminal
 at home: pick a repo, chat with Claude Code live, approve tool calls, get push
 notifications. The phone also shows every PC's usage limits, repo status and
 God Mode runs. Design, protocol and security review:
-[docs/REMOTE_HOST_PLAN.md](docs/REMOTE_HOST_PLAN.md).
+[docs/tbc_docs/REMOTE_HOST_PLAN.md](docs/tbc_docs/REMOTE_HOST_PLAN.md).
 
 > **This is remote code execution by design.** Whoever can sign a command owns
 > the host. The gate is a passkey (Face ID) paired on the host's own screen;
@@ -1639,7 +1639,7 @@ Recent.
 The hub costs no tokens: it only reads what the other modules already
 produce. Item text is cleaned in main and rendered as plain text; actions are
 names from a fixed list, never a URL or command from a synced row. Plan and
-design notes: [`docs/NOTIFICATION_HUB_PLAN.md`](docs/NOTIFICATION_HUB_PLAN.md).
+design notes: [`docs/tbc_docs/NOTIFICATION_HUB_PLAN.md`](docs/tbc_docs/NOTIFICATION_HUB_PLAN.md).
 
 ## Mission Control (Ctrl+Shift+M)
 

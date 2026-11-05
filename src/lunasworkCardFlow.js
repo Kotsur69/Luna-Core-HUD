@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work card rules in the run (docs/LUNAS_WORK_PLAN.md B1,
+// LunaCore - Luna's Work card rules in the run (docs/tbc_docs/LUNAS_WORK_PLAN.md B1,
 // #3, B4, B5, B9)
 // ----------------------------------------------------------------------------
 // The controller's side of the card rules, split out of src/lunaswork.js. The

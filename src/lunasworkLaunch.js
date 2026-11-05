@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work launch assets at SHIP (docs/LUNAS_WORK_PLAN.md C10, LW 3.31b)
+// LunaCore - Luna's Work launch assets at SHIP (docs/tbc_docs/LUNAS_WORK_PLAN.md C10, LW 3.31b)
 // ----------------------------------------------------------------------------
 // Once a run ends with SHIP - never at any other verdict - the ECC marketing
 // agent runs headless over design/BRIEF.md, design/DESIGN.md and the SHIP

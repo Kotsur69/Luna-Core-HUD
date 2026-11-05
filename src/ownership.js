@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - file ownership map (docs/LUNAS_WORK_PLAN.md, idea #2 / LW 2.12)
+// LunaCore - file ownership map (docs/tbc_docs/LUNAS_WORK_PLAN.md, idea #2 / LW 2.12)
 // ----------------------------------------------------------------------------
 // Before a parallel build the Director says which package owns which files:
 // a repo-relative path or glob -> an owner id. Two readers share this module:

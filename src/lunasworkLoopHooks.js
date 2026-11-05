@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work loop hooks (docs/LUNAS_WORK_PLAN.md, LW 2.23 + the
+// LunaCore - Luna's Work loop hooks (docs/tbc_docs/LUNAS_WORK_PLAN.md, LW 2.23 + the
 // wiring of 2.15, 2.20, 2.21b and 2.19b)
 // ----------------------------------------------------------------------------
 // The extra steps the outer loop controller (src/lunaswork.js) runs around

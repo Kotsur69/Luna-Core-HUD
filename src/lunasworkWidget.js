@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work client feedback widget (docs/LUNAS_WORK_PLAN.md B17, LW 3.28b)
+// LunaCore - Luna's Work client feedback widget (docs/tbc_docs/LUNAS_WORK_PLAN.md B17, LW 3.28b)
 // ----------------------------------------------------------------------------
 // For web apps with a staging profile: a small script on the STAGING build
 // lets a client send feedback without a LunaCore account. A floating

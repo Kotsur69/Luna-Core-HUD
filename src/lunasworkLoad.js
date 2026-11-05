@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work load test (docs/LUNAS_WORK_PLAN.md C8, LW 3.30)
+// LunaCore - Luna's Work load test (docs/tbc_docs/LUNAS_WORK_PLAN.md C8, LW 3.30)
 // ----------------------------------------------------------------------------
 // For apps with a backend, a SHORT stress run (ramping virtual users, under
 // two minutes) against the STAGING copy, at two moments of a run:

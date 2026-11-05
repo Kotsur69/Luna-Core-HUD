@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - God Mode runs over the cloud (main + phone)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md, same pattern as usagesnapshot.js / repossnapshot.js.
+// docs/tbc_docs/REMOTE_HOST_PLAN.md, same pattern as usagesnapshot.js / repossnapshot.js.
 // When a God Mode run is finalized (orchestraFinalize.js report()), the PC
 // adds it to its `godmode` snapshot: the last MAX_RUNS runs, newest first.
 // The phone lists them and shows each run's packages.
@@ -22,7 +22,7 @@
 // (src/inbox.js unions them across machines). A row written before any of
 // these reads as empty lists.
 //
-// v2 (docs/NOTIFICATION_HUB_PLAN.md N4): each run written since also carries
+// v2 (docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N4): each run written since also carries
 // `needsYou` and `manualActionLines` - the report's Needs-you and Manual
 // actions lines for the notification hub on the other PCs, at most
 // HUB_MAX_LINES each, HUB_MAX_LINE chars, paths scrubbed, control characters

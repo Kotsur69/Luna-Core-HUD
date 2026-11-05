@@ -14,7 +14,7 @@
 
 const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker, Notification, powerMonitor } = require('electron');
 
-// Host mode (docs/REMOTE_HOST_PLAN.md, "Host runtime"): `--host` runs the
+// Host mode (docs/tbc_docs/REMOTE_HOST_PLAN.md, "Host runtime"): `--host` runs the
 // headless src/hostmain.js instead of the HUD, before any HUD module loads.
 // A CommonJS module may return at the top level: nothing below runs then.
 // eslint-disable-next-line no-use-before-define
@@ -151,11 +151,11 @@ const orchestraFinishIpc = require('./orchestraFinishIpc');
 // Weekly review (Life Week tab, Sunday 20:00 + Generate now) and its email.
 const { setupWeeklyReview } = require('./weeklyipc');
 const { startLifeSync } = require('./lifesync');
-// Cloud sync (docs/DONE_CLOUD_SYNC_PLAN.md): Supabase carries the budget, the
+// Cloud sync (docs/done_docs/DONE_CLOUD_SYNC_PLAN.md): Supabase carries the budget, the
 // to-dos, settings and snapshots between PCs. Off without config/cloud.local.json.
 const { startCloud } = require('./cloudsync');
 const { registerCloudIpc } = require('./cloudipc');
-// Luna's Work settings + pre-production (docs/LUNAS_WORK_PLAN.md slice 1.2c)
+// Luna's Work settings + pre-production (docs/tbc_docs/LUNAS_WORK_PLAN.md slice 1.2c)
 // and the outer loop run (src/lunaswork.js via src/lunasworkWiring.js).
 const { registerLunasworkIpc } = require('./lunasworkipc');
 const { createGodModeBuilder } = require('./lunasworkBuild');
@@ -182,7 +182,7 @@ const { loadThemes } = require('./theme');
 const { loadLayouts } = require('./layouts');
 // UI preferences (theme + language) persisted in config/ui.local.json.
 const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
-// Opt-in "Use my Luna setup" for native Codex/Gemini tabs (docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md).
+// Opt-in "Use my Luna setup" for native Codex/Gemini tabs (docs/done_docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md).
 const { loadLunaSyncPrefs, saveLunaSyncPrefs, lunaLaunchFor, lunaSyncNotice } = require('./lunasynclaunch');
 const { readClaudeSetup, listPluginSkills } = require('./lunasyncio');
 const { loadGatewayPrefs, withGatewayPort } = require('./freellmgateway');
@@ -3032,7 +3032,7 @@ function registerIpc() {
     openExternal: (url) => shell.openExternal(url),
     gmail: () => reportMail.sender.status(),
   });
-  // Notification hub (face icon + right drawer): docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
+  // Notification hub (face icon + right drawer): docs/tbc_docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
   // Other PCs' runs come from their `godmode` rows; done marks sync as config units.
   hubApi = require('./hubipc').registerHubIpc({
     ipcMain,

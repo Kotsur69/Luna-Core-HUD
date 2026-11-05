@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - host security M1 + M2 (docs/REMOTE_HOST_PLAN.md "Security review")
+// LunaCore - host security M1 + M2 (docs/tbc_docs/REMOTE_HOST_PLAN.md "Security review")
 // ----------------------------------------------------------------------------
 // M1: every secret shape is masked (src/hostscrub.js) before host_events /
 // host_commands writes, tool results are capped at 1 KB, a finished chat.*

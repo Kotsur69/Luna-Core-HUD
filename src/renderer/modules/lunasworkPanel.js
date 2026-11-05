@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work run panel (docs/LUNAS_WORK_PLAN.md, slice 1.7)
+// LunaCore - Luna's Work run panel (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 1.7)
 // ----------------------------------------------------------------------------
 // The "Run" group of the Luna's Work Settings pane:
 //   - Start: a start dialog with the effective model per role (LunaCore's

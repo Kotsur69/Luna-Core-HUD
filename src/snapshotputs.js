@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - the `repos` and `godmode` snapshot puts (main)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md U2. Glue between the git station / God Mode and
+// docs/tbc_docs/REMOTE_HOST_PLAN.md U2. Glue between the git station / God Mode and
 // cloudsnapshots.js, kept out of main.js:
 //
 //   repos.after(rows)  after a git-station refresh: put these rows

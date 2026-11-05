@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work token accounting (LW 2.17a, docs/LUNAS_WORK_PLAN.md #12)
+// LunaCore - Luna's Work token accounting (LW 2.17a, docs/tbc_docs/LUNAS_WORK_PLAN.md #12)
 // ----------------------------------------------------------------------------
 // What every `claude -p --output-format json` call of a run cost, per role
 // and per iteration, plus how long each phase took. Pure, except the meter.

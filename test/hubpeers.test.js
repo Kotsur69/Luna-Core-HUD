@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - notification hub across PCs (docs/NOTIFICATION_HUB_PLAN.md N4)
+// LunaCore - notification hub across PCs (docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N4)
 // ----------------------------------------------------------------------------
 // - godmodesnapshot v2: a run carries needsYou / manualActionLines, capped,
 //   paths scrubbed, control characters out; v1 rows still parse;

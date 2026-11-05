@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 // No DOM, no imports - so node --test can pin them (test/hubrules.test.js):
 //   - shouldAutoOpen(): whether the drawer opens by itself at launch
-//     (docs/NOTIFICATION_HUB_PLAN.md Answer 1: only when unseen Needs-you
+//     (docs/tbc_docs/NOTIFICATION_HUB_PLAN.md Answer 1: only when unseen Needs-you
 //     items exist, unless Settings say "always" or "never");
 //   - normalizeAutoOpen(): a stored setting -> one of AUTO_OPEN_MODES.
 // ============================================================================

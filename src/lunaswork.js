@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work outer loop controller (docs/LUNAS_WORK_PLAN.md, 1.5b)
+// LunaCore - Luna's Work outer loop controller (docs/tbc_docs/LUNAS_WORK_PLAN.md, 1.5b)
 // ----------------------------------------------------------------------------
 // The run state machine:
 //
@@ -69,7 +69,7 @@
 // called once per run at its final verdict, and deps.onMilestone, called when
 // a milestone gate passed and the run goes on (the milestone email).
 //
-// Card rules (lunasworkRules.js, docs/LUNAS_WORK_PLAN.md B1, #3, B4, B5, B9):
+// Card rules (lunasworkRules.js, docs/tbc_docs/LUNAS_WORK_PLAN.md B1, #3, B4, B5, B9):
 //   built    a landed card is *built*, not done; the next Playtester pass
 //            gets its acceptance checks and closes it, or reopens it with
 //            the evidence (lunasworkChecks.js). A landed `bug` card whose

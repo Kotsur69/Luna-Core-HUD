@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work decision queue (docs/LUNAS_WORK_PLAN.md idea #11, 1.6)
+// LunaCore - Luna's Work decision queue (docs/tbc_docs/LUNAS_WORK_PLAN.md idea #11, 1.6)
 // ----------------------------------------------------------------------------
 // Risky choices go to Mati's phone with a default answer and a deadline. The
 // run never blocks on one: the cards a decision covers are held, every other

@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - notification hub: one OS toast per new Needs-you item (renderer)
 // ----------------------------------------------------------------------------
-// docs/NOTIFICATION_HUB_PLAN.md N5. A Needs-you item that shows up while the
+// docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N5. A Needs-you item that shows up while the
 // window is unfocused fires ONE native toast through notify.js - which keeps
 // its opt-in (notificationsEnabled, off by default) - and the hub's own
 // switch (hubToasts, Settings -> Notification hub) must be on too. Clicking

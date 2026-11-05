@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Claude usage limits over the cloud (main + phone)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md, slice U1. A PC puts its last Claude usage read
+// docs/tbc_docs/REMOTE_HOST_PLAN.md, slice U1. A PC puts its last Claude usage read
 // (5 h + weekly window) as its `usage` snapshot; the phone shows the newest
 // one. The top-level fiveHour/sevenDay is the main ~/.claude login's read
 // (or, when that read failed, the active account's), so a reader that knows

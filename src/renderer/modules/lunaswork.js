@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work entry point (docs/LUNAS_WORK_PLAN.md slice 1.2c)
+// LunaCore - Luna's Work entry point (docs/tbc_docs/LUNAS_WORK_PLAN.md slice 1.2c)
 // ----------------------------------------------------------------------------
 // Its own button (next to God Mode in the to-do widget) and its own Settings
 // pane: models per role, the free-providers fallback, the project profile and

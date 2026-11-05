@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - notification hub: done marks, synced across PCs (main)
 // ----------------------------------------------------------------------------
-// docs/NOTIFICATION_HUB_PLAN.md N4. "Mark done" on one PC clears the item on
+// docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N4. "Mark done" on one PC clears the item on
 // every PC: each mark is the cloud unit `hub:done:<itemId>` = {at} in the
 // `config` scope (src/configsync.js - newest `u` wins per unit, a delete is a
 // tombstone), so no new table and no migration on the server.

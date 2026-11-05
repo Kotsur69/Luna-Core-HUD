@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - host first-run setup: state, tray strings, pairing dialog (main)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md, "Host runtime". A new host needs two things before
+// docs/tbc_docs/REMOTE_HOST_PLAN.md, "Host runtime". A new host needs two things before
 // it does anything for the phone:
 //
 //   login   the GitHub PKCE browser login of the HUD (src/cloudauth.js, the

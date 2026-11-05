@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - phone-driven host sessions as read-only HUD tabs (main)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md H2: "On a Windows host running the full HUD, the
+// docs/tbc_docs/REMOTE_HOST_PLAN.md H2: "On a Windows host running the full HUD, the
 // session also shows as a read-only tab, so you can sit down and see what
 // happened." Only the full HUD switched into host mode attaches this (main.js
 // passes it to src/hostmain.js); a headless host has no tabs and no effect.

@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work staging (docs/LUNAS_WORK_PLAN.md #10 + C5, LW 3.28a + 3.29)
+// LunaCore - Luna's Work staging (docs/tbc_docs/LUNAS_WORK_PLAN.md #10 + C5, LW 3.28a + 3.29)
 // ----------------------------------------------------------------------------
 // With a stagingUrl in the project profile, every iteration goes to a staging
 // copy before the Playtester sees it. applyIteration() runs in the launching

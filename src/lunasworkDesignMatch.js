@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work design match score (docs/LUNAS_WORK_PLAN.md B6, LW 2.19a)
+// LunaCore - Luna's Work design match score (docs/tbc_docs/LUNAS_WORK_PLAN.md B6, LW 2.19a)
 // ----------------------------------------------------------------------------
 // The mockups in design/references/ (mapped to screens by the table in
 // design/references/README.md, lunasworkPack.readDesignMappings) against what

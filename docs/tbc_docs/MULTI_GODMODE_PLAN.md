@@ -1,8 +1,24 @@
 # Implementation Plan: Multi God Mode v2, v1 removal, compact keep-awake chip
 
-Status: CONFIRMED 2026-11-02 - turned into to-do cards. Built so far: C (keep-awake chip, `41c4c52`),
-B (v1 removed, `5283848`), A1 (per-project storage, `5b2ee02`) and A2 (registry, one run per project,
-`d96cf80`), released in v0.20.0 together with the two-account failover (`1d05f8a`).
+> **🟡 BUILT, LIVE CHECK OWED (re-checked against `main` 2026-11-05, v0.23.0).** Every slice
+> is on `main`: Slice 0 (accounts work committed, `1d05f8a`), C (keep-awake chip, `41c4c52`),
+> B (v1 removed, `5283848`), A1 (per-project storage, `5b2ee02`), A2 (registry, one run per
+> project, `d96cf80`) - released in v0.20.0; A3 (account-aware pause + shared power flow,
+> `310086e`), A4 (board project switcher, `5945e9f`) and A5 (phone lists every run, repo name in
+> toasts, `36fdc6e`) - merged in the 0.23.0 integration (`c7f9804`, `3cf542a`, `db03801`).
+> A6 (global worker cap) is optional and not built, by decision.
+
+## Resume here
+
+1. **Live check (Mati, card "Live check: run God Mode v2 on Luna-Core-HUD and amsteel-quote at the
+   same time"):** two projects run in parallel on the board switcher; a restart mid-run restores
+   both; the same repo twice is refused; an account limit moves workers to the other account and
+   both accounts limited pauses every run until the earliest reset; keep-awake chip green/red;
+   Ctrl+/ shows the God Mode kill row first. Needs an installed build of v0.23.0 or later.
+2. **Not built (small):** cancelling a running 120 s shutdown countdown when a new run starts
+   during it (A3 note below). Single-run behaviour today.
+3. A6 only if live use shows worker contention.
+4. When 1 passes: `git mv` this doc to `docs/done_docs/DONE_MULTI_GODMODE_PLAN.md`.
 
 ## Overview
 Three independent deliverables, smallest first:
@@ -35,7 +51,7 @@ Three independent deliverables, smallest first:
   - The same repo twice is refused.
   - Board, phone, mail, inbox and digest handle N runs.
 
-## Slice 0 - Land the uncommitted claude-accounts work first (BLOCKER)
+## Slice 0 - Land the uncommitted claude-accounts work first (BLOCKER) - done (`1d05f8a`)
 The working tree holds the claude-accounts feature, uncommitted:
 - modified: launch, lunaswork, lunasworkWiring, main, orchestra, preload, i18n, index.html,
   providersettings, sessionenv;
@@ -225,8 +241,9 @@ it mounts once. layout.js only parks `#app-chrome`. Result: a chip next to `#upd
   - One account limited: workers fail over and nothing pauses.
   - Both accounts limited: every run pauses until the earliest reset.
   - A worker launched while one account is limited starts on the free account.
-- **Status (2026-11-04, branch `luna/multi-gm-accounts-r1jqz`)**: built and unit-tested. It still
-  needs Mati's live check with two real accounts and two projects.
+- **Status (2026-11-05)**: built and unit-tested on `luna/multi-gm-accounts-r1jqz`, merged into
+  `main` in the 0.23.0 integration (`c7f9804`). It still needs Mati's live check with two real
+  accounts and two projects.
   - The registry's limited-accounts memory joins claudeAccounts' picks through `extraLimits`. It is
     never persisted, and a Settings "clear" clears it too.
   - `onUsageLimit` with `{onAccount: true}` pauses every run only when no account has room left;
@@ -285,10 +302,11 @@ build this if live use shows contention.
 - **Global worker cap**: left optional (A6).
 
 ## Success criteria
-- [ ] C: green/red chip in the terminal bar with icon, label and aria-pressed; nothing left in the to-do widget
-- [ ] B: zero references to v1; v2 and auto-proceed work
-- [ ] A: two projects run at once; a restart restores both; the same repo twice is refused
-- [ ] A: one account at its limit moves the workers to the other account and nothing pauses; every run
-  pauses only when both accounts are limited, until the earliest reset (D2: no per-run account pin)
-- [ ] A: sleep and shutdown consider all runs; phone, mail, inbox and digest show each run
-- [ ] All `node --test` green after every slice
+Ticked = built and covered by tests on `main`. "(live)" = the live part is still owed (Resume here 1).
+- [x] C: green/red chip in the terminal bar with icon, label and aria-pressed; nothing left in the to-do widget (`41c4c52`; `powercfg` live check owed)
+- [x] B: zero references to v1; v2 and auto-proceed work (`5283848`)
+- [ ] A (live): two projects run at once; a restart restores both; the same repo twice is refused - built (A1/A2/A4, `repoBusy` tested)
+- [ ] A (live): one account at its limit moves the workers to the other account and nothing pauses; every run
+  pauses only when both accounts are limited, until the earliest reset (D2: no per-run account pin) - built (A3, `godmode-power.test.js`)
+- [ ] A (live): sleep and shutdown consider all runs; phone, mail, inbox and digest show each run - built (A3/A5)
+- [x] All `node --test` green after every slice

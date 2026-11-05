@@ -1,5 +1,5 @@
 // ============================================================================
-// God Mode v2 IPC (src/orchestraIpc.js, docs/MULTI_GODMODE_PLAN.md A2) on a
+// God Mode v2 IPC (src/orchestraIpc.js, docs/tbc_docs/MULTI_GODMODE_PLAN.md A2) on a
 // fake ipcMain: the renderer is untrusted, so every handler resolves its run
 // in main - a validated projectId, a planId cross-checked against that run,
 // or (no projectId, today's renderer) the active tab's run.

@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - the host's command loop (main, host mode)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md, slice H1. The phone writes a signed row into
+// docs/tbc_docs/REMOTE_HOST_PLAN.md, slice H1. The phone writes a signed row into
 // `host_commands`; the host named in it picks it up here:
 //
 //   realtime event / poll -> read the 'new' rows for this host

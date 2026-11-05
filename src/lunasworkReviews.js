@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work scheduled specialist reviews (docs/LUNAS_WORK_PLAN.md,
+// LunaCore - Luna's Work scheduled specialist reviews (docs/tbc_docs/LUNAS_WORK_PLAN.md,
 // idea #7, slice 2.15)
 // ----------------------------------------------------------------------------
 // On a schedule, one headless READ-ONLY `claude -p --json-schema` call per due

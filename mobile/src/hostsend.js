@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore phone - send one signed command to a host and wait for its answer
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md H1/H2. Every command is signed with the session
+// docs/tbc_docs/REMOTE_HOST_PLAN.md H1/H2. Every command is signed with the session
 // key (hostkey.js; Face ID once per session and host, with the passkey paired
 // with that host) and written to host_commands; the host claims it, runs it
 // and writes status + result. A host that refuses the grant (it restarted,

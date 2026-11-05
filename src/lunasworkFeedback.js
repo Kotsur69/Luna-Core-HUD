@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work mid-run feedback (docs/LUNAS_WORK_PLAN.md B17)
+// LunaCore - Luna's Work mid-run feedback (docs/tbc_docs/LUNAS_WORK_PLAN.md B17)
 // ----------------------------------------------------------------------------
 // The run NEVER pauses for feedback. Mati (or later a client) gives input
 // whenever he looks at the run; the next iteration plans it in. This module

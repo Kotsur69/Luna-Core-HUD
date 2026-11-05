@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - the host's first signed actions (main, host mode)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md H1, "First fixed actions". Handlers for
+// docs/tbc_docs/REMOTE_HOST_PLAN.md H1, "First fixed actions". Handlers for
 // src/hostcommands.js, which runs one only after src/hostauth.js verified the
 // grant and the command signature. What a handler returns is written to
 // host_commands.result.

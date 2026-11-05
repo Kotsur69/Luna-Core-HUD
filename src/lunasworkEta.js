@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work time-to-SHIP inputs (LW 2.22b, docs/LUNAS_WORK_PLAN.md)
+// LunaCore - Luna's Work time-to-SHIP inputs (LW 2.22b, docs/tbc_docs/LUNAS_WORK_PLAN.md)
 // ----------------------------------------------------------------------------
 // Gathers what lunasworkRules.timeToShip needs from a run record and the
 // project's files, and words the result for the milestone email:

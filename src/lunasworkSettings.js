@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work settings (docs/LUNAS_WORK_PLAN.md, slice 1.2b)
+// LunaCore - Luna's Work settings (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 1.2b)
 // ----------------------------------------------------------------------------
 // Per-machine settings in config/lunaswork-settings.local.json (gitignored by
 // the config/*.local.* pattern):

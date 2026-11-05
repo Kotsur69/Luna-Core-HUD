@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work Director (docs/LUNAS_WORK_PLAN.md, slice 1.4b)
+// LunaCore - Luna's Work Director (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 1.4b)
 // ----------------------------------------------------------------------------
 // One `claude -p --output-format json --json-schema <DIRECTOR_SCHEMA>` call,
 // run in the project repo with read-only tools (orchestraPlan.js pattern). It

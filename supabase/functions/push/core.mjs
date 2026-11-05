@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Supabase Edge Function `push` (logic; index.js is the Deno entry)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md H4. Sends Web Push to the owner's phone
+// docs/tbc_docs/REMOTE_HOST_PLAN.md H4. Sends Web Push to the owner's phone
 // subscriptions (table push_subscriptions) with the VAPID key from the
 // function's secrets. Two callers:
 //

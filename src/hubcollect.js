@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - notification hub: one pure collector per source (main process)
 // ----------------------------------------------------------------------------
-// docs/NOTIFICATION_HUB_PLAN.md "Sources -> items". Each collector is
+// docs/tbc_docs/NOTIFICATION_HUB_PLAN.md "Sources -> items". Each collector is
 // (state) -> HubItem[] and does no I/O: src/hubipc.js reads the files and
 // in-memory views and hands them in. A broken or missing state yields [];
 // runCollector() also turns a throw into [] so one bad source never takes the

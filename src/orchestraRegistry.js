@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - multi God Mode registry (docs/MULTI_GODMODE_PLAN.md A2)
+// LunaCore - multi God Mode registry (docs/tbc_docs/MULTI_GODMODE_PLAN.md A2)
 // ----------------------------------------------------------------------------
 // One God Mode controller (src/orchestra.js createOrchestra, still single-plan)
 // per project, several projects at once. A tab with no project plans under
@@ -17,7 +17,7 @@
 //             waits for every run), repoBusy (the same repo twice is refused:
 //             resolved, case-insensitive paths)
 //
-// A3 - accounts and power (docs/MULTI_GODMODE_PLAN.md):
+// A3 - accounts and power (docs/tbc_docs/MULTI_GODMODE_PLAN.md):
 //   limits    a worker that hits its 5 h / weekly wall first moves to another
 //             Claude account (main's failoverTab) and nothing pauses. Only
 //             when every account is out does onUsageLimit call pauseAll: each

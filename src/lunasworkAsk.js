@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - "Ask Luna about the run" (LW 2.27, docs/LUNAS_WORK_PLAN.md C13)
+// LunaCore - "Ask Luna about the run" (LW 2.27, docs/tbc_docs/LUNAS_WORK_PLAN.md C13)
 // ----------------------------------------------------------------------------
 // Mati asks "why did you roll back iteration 14?" from the HUD's Luna's Work
 // panel or the phone; a headless `claude -p` answers from the run's records.

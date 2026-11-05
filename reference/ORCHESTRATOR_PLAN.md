@@ -2,7 +2,7 @@
 
 Status: **BUILT** - released in v0.14.0 (2026-10-09), hardened in v0.17.0,
 first live run 2026-10-20. Since v0.20.0 there is one run per project, and
-several projects can run at once (`docs/MULTI_GODMODE_PLAN.md`). The per-tab
+several projects can run at once (`docs/tbc_docs/MULTI_GODMODE_PLAN.md`). The per-tab
 v1 runner mentioned below (Slice 2) is gone. The history below is kept as
 written. Original plan dated 2026-10-04. Slice 0 (task intake) BUILT 2026-10-04:
 `src/intake.js`, card fields in `src/todo.js`, widget cards + live repaint,
@@ -70,7 +70,7 @@ branches), the run email (`src/godmodemail.js`, Gmail) and the phone
 `godmode` snapshot (`src/godmodesnapshot.js`).
 
 **First live run 2026-10-20 night** (report:
-[`docs/DONE_GODMODE_RUN_2026-10-20.md`](../docs/DONE_GODMODE_RUN_2026-10-20.md)): 47
+[`docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md`](../docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md)): 47
 cards / 12 pushed branches, good code, but the run blocked after ~15 min on
 a dependency merge at launch (`depMergeFailed`; Retry repeats the same
 plain `git merge`), and the merge-mode integration stopped at its first

@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work: "Hand me the wheel" (docs/LUNAS_WORK_PLAN.md C11)
+// LunaCore - Luna's Work: "Hand me the wheel" (docs/tbc_docs/LUNAS_WORK_PLAN.md C11)
 // ----------------------------------------------------------------------------
 // The pure half shared by the PC and the phone:
 //

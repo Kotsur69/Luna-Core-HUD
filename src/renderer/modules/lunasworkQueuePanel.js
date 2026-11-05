@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work project queue panel (docs/LUNAS_WORK_PLAN.md, B16)
+// LunaCore - Luna's Work project queue panel (docs/tbc_docs/LUNAS_WORK_PLAN.md, B16)
 // ----------------------------------------------------------------------------
 // The "Queue" group of the Luna's Work Settings pane: the projects waiting for
 // a run, in order, each with the start command and URL that were pinned when

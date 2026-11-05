@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Luna sync: the open project's MCP servers, for that tab only
 // ----------------------------------------------------------------------------
-// docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md, "Project MCP servers". The shared
+// docs/done_docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md, "Project MCP servers". The shared
 // overlay (src/lunasyncio.js) holds the user-level setup and is the same for
 // every project, so its fingerprint/copy-skip is untouched by which folder a
 // tab opens in. A project's servers go into a small per-project layer next to

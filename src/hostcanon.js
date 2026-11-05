@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - canonical JSON for host grants and commands (main + phone)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md, "Passkey + session key". The phone signs these
+// docs/tbc_docs/REMOTE_HOST_PLAN.md, "Passkey + session key". The phone signs these
 // bytes (mobile/src/hostkey.js) and the host verifies them (src/hostauth.js),
 // so both sides import this one file: the form is byte-identical by build.
 //

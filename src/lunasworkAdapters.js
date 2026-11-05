@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work tester adapters (docs/LUNAS_WORK_PLAN.md, slice 1.3a)
+// LunaCore - Luna's Work tester adapters (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 1.3a)
 // ----------------------------------------------------------------------------
 // One interface per adapter (plan: "Tester adapters"):
 //

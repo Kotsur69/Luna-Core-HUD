@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - host mode inside the running HUD (main)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md, "Host runtime". One owner for "this HUD is also a
+// docs/tbc_docs/REMOTE_HOST_PLAN.md, "Host runtime". One owner for "this HUD is also a
 // host": a second `--host` launch (src/hostmain.js second-instance) and the
 // in-app toggle (Settings -> Host mode, src/hostmodeipc.js) both go through
 // here, so there is exactly one startHost() per process.

@@ -1,5 +1,5 @@
 // ============================================================================
-// God Mode v2 per-project run storage (docs/MULTI_GODMODE_PLAN.md A1):
+// God Mode v2 per-project run storage (docs/tbc_docs/MULTI_GODMODE_PLAN.md A1):
 // config/orchestra/<sha1(projectId)[0..16]>.local.json, plus the one-time
 // migration of the single-run config/orchestra.local.json older builds wrote.
 // Every test runs against its own temp config root.

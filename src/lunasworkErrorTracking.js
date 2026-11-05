@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work error tracking at SHIP (docs/LUNAS_WORK_PLAN.md C9, LW 3.31a)
+// LunaCore - Luna's Work error tracking at SHIP (docs/tbc_docs/LUNAS_WORK_PLAN.md C9, LW 3.31a)
 // ----------------------------------------------------------------------------
 // When the Critic first says SHIP, the run files one card - wire error
 // tracking (Sentry or the stack's equivalent) into the app, the DSN read from

@@ -1,5 +1,5 @@
 // ============================================================================
-// Multi God Mode registry (docs/MULTI_GODMODE_PLAN.md A2): one God Mode
+// Multi God Mode registry (docs/tbc_docs/MULTI_GODMODE_PLAN.md A2): one God Mode
 // controller per project. Most tests drive fake controllers, so routing and
 // the cross-run guards are checked in isolation; the last ones run two real
 // createOrchestra controllers on a temp per-project store (two projects side
@@ -346,7 +346,7 @@ test('the same repo in a second project is refused with repoBusy', async (t) => 
   assert.equal((await registry.get('alpha').makePlan({ projectId: 'alpha', repoPath: repo, profileId: 'p', env: {} })).ok, true);
 });
 
-// --- A3: account-aware pause (docs/MULTI_GODMODE_PLAN.md) -------------------
+// --- A3: account-aware pause (docs/tbc_docs/MULTI_GODMODE_PLAN.md) -------------------
 
 const { createClaudeAccounts, ACCOUNT_ENV } = require('../src/claudeaccounts.js');
 

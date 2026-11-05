@@ -1,5 +1,5 @@
 // ============================================================================
-// Luna's Work (docs/LUNAS_WORK_PLAN.md, slice 1): the pure rules in
+// Luna's Work (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 1): the pure rules in
 // lunasworkRules.js - models per role, phases, card order, milestone gate,
 // plateau / red / rollback / stop verdicts and stored-run validation.
 // ============================================================================

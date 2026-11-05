@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - the host log file (src/hostlog.js)
 // ----------------------------------------------------------------------------
-// J-M (docs/REMOTE_HOST_PLAN.md "Security review"): host.log rotated only at
+// J-M (docs/tbc_docs/REMOTE_HOST_PLAN.md "Security review"): host.log rotated only at
 // start. Now it rotates whenever it passes the cap, one .old generation, and a
 // failing write never throws into console.log.
 // ============================================================================

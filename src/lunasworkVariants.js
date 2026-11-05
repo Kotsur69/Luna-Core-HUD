@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work design variants (docs/LUNAS_WORK_PLAN.md C1, LW 2.25a)
+// LunaCore - Luna's Work design variants (docs/tbc_docs/LUNAS_WORK_PLAN.md C1, LW 2.25a)
 // ----------------------------------------------------------------------------
 // The 'Design variants' toggle (lunasworkSettings, per project, off by
 // default). The pure half; the controller side is src/lunasworkVariantFlow.js.

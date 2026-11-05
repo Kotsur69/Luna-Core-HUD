@@ -1,6 +1,6 @@
 # Luna host + phone control — plan
 
-> **🟡 OPEN (2026-10-22).** Built and released in v0.17.0; push notifications are set up and live. Still open: pairing the phone with each host (see "Resume here"). The security follow-ups M1 / M2 (`30f4e77`) and M4 phone CSP (`e9a385f`) are done.
+> **🟡 BUILT, LIVE CHECKS OWED (re-checked against `main` 2026-11-05, v0.23.0).** Built and released in v0.17.0; push notifications are set up and live. All security follow-ups are done: M1 / M2 (`30f4e77`), M4 phone CSP (`e9a385f`, `mobile/vercel.json` + `mobile/index.html`), and the L1-L6 / J-M5..M13 / LOW leftovers (fixed or accepted with a reason, `luna/host-hardening-6rugq`, merged in 0.23.0 `6335f3e`). The in-app host mode toggle is on `main` (`a8823a9`). What is left is Mati's live checks plus two deploy steps (see "Resume here").
 
 Status: **confirmed by Mati 2026-10-20. U1, U2, H1, H2, H3 and H4 built
 (2026-10-20 - 2026-10-21); security + JS review of the whole command path
@@ -23,6 +23,18 @@ gate, `news.scan` / `git.fetchAll` / `repo.clone`), H2 live chat
 (`hostchat.js`, `host_events`, Host page, read-only HUD tabs), H3 pickers +
 model / mode, H4 Web Push (edge function, phone subscription) and the review
 fixes below.
+
+**What is really left (2026-11-05):**
+
+- **Deploy (Mati):** `supabase functions deploy push --no-verify-jwt` for the L1
+  push allow-list + timeout, and `supabase db push` for the
+  `20261104120000_host_retention.sql` migration (both are on `main`; no
+  record yet that either was deployed / applied).
+- **Live check:** the in-app host mode toggle on KT-PC-LLM (card "Live check:
+  in-app host mode toggle").
+- **Live check:** item 1 (U1 usage on the phone) and item 4 (pairing + chat on
+  all 3 hosts) below.
+- When all pass: `git mv` this doc to `docs/done_docs/DONE_REMOTE_HOST_PLAN.md`.
 
 **Needs a live check (Mati; also in `FUTURE_PLAN.md`):**
 

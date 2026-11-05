@@ -364,7 +364,7 @@ test('suspendAwake lets go of keep-awake for God Mode sleep / shutdown; restoreA
   assert.strictEqual(blocker.started.size, 0, 'nothing to hold with no run');
 });
 
-// God Mode v2 worker tabs join the guard (docs/MULTI_GODMODE_PLAN.md, D1):
+// God Mode v2 worker tabs join the guard (docs/tbc_docs/MULTI_GODMODE_PLAN.md, D1):
 // every tab orchestra opens holds keep-awake + the local-model watchdog until
 // it closes (main.js forgets the session on close).
 test('guardedSessionFactory starts a run for every tab it opens', () => {

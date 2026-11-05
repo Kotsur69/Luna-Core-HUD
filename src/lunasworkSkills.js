@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work self-learning project skills (docs/LUNAS_WORK_PLAN.md,
+// LunaCore - Luna's Work self-learning project skills (docs/tbc_docs/LUNAS_WORK_PLAN.md,
 // LW 2.16)
 // ----------------------------------------------------------------------------
 // At a passed milestone gate ONLY (src/lunasworkLoopHooks.js atGate):

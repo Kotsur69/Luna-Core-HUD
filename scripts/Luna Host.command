@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# LunaCore - start this Mac as a Luna host (docs/REMOTE_HOST_PLAN.md)
+# LunaCore - start this Mac as a Luna host (docs/tbc_docs/REMOTE_HOST_PLAN.md)
 # ----------------------------------------------------------------------------
 # Double-click in Finder. Lives in a clone of this repo: pulls it, installs the
 # dependencies only when package-lock.json changed, keeps the Mac awake with

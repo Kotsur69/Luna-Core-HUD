@@ -1,6 +1,6 @@
 @echo off
 rem ===========================================================================
-rem LunaCore - start this PC as a Luna host (docs/REMOTE_HOST_PLAN.md)
+rem LunaCore - start this PC as a Luna host (docs/tbc_docs/REMOTE_HOST_PLAN.md)
 rem ---------------------------------------------------------------------------
 rem Runs the installed or portable LunaCore.exe headless: tray icon only, and
 rem this PC becomes the host the phone preselects. No admin rights, no Node.

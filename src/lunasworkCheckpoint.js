@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work checkpoints + rollback (docs/LUNAS_WORK_PLAN.md #4)
+// LunaCore - Luna's Work checkpoints + rollback (docs/tbc_docs/LUNAS_WORK_PLAN.md #4)
 // ----------------------------------------------------------------------------
 // After every green iteration the base branch on origin is tagged
 // `luna-work/<runId>/iter-<N>` and the tag is pushed. After the playtest the

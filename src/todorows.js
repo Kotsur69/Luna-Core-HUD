@@ -2,7 +2,7 @@
 // LunaCore - to-do item validation (pure, shared by main and the phone app)
 // ----------------------------------------------------------------------------
 // The shape rules of one to-do item and one list, with no fs / paths, so the
-// phone app (mobile/, docs/DONE_CLOUD_SYNC_PLAN.md phase 4) bundles the exact code
+// phone app (mobile/, docs/done_docs/DONE_CLOUD_SYNC_PLAN.md phase 4) bundles the exact code
 // a PC uses: todosync.js drops a pulled item unless normalizeTodo() accepts
 // it, so the phone must write items this code already produced.
 // src/todo.js re-exports everything here; persistence stays there.
@@ -30,12 +30,12 @@ const MAX_FILES = 50;
 const MAX_DEPENDS = 50;
 const SIZES = ['S', 'M', 'L'];
 const MODELS = ['sonnet', 'opus'];
-// Tags (docs/LUNAS_WORK_PLAN.md): Luna's Work files its backlog under a run
+// Tags (docs/tbc_docs/LUNAS_WORK_PLAN.md): Luna's Work files its backlog under a run
 // tag and reads Mati's `steer` cards. God Mode ignores them.
 const MAX_TAGS = 10;
 const TAG_RE = /^[a-z0-9][a-z0-9:_-]{0,39}$/;
 const STEER_TAG = 'steer';
-// Card states beyond open / done (docs/LUNAS_WORK_PLAN.md B1): a Luna's Work
+// Card states beyond open / done (docs/tbc_docs/LUNAS_WORK_PLAN.md B1): a Luna's Work
 // card whose work is merged but not yet confirmed in the running app is
 // `built` - still open (done: false) until the Playtester confirms it.
 const BUILT_STATE = 'built';

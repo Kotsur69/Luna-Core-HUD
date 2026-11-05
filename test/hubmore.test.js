@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - notification hub N5: the remaining sources + OS toasts
 // ----------------------------------------------------------------------------
-// docs/NOTIFICATION_HUB_PLAN.md N5. Each new collector (mail needs-call,
+// docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N5. Each new collector (mail needs-call,
 // cloud, Google, host setup, manual to-dos, weekly review, worker approval)
 // with empty / broken / normal input, the readers wired through
 // registerHubIpc, and the toast rule (once per new Needs-you item, only

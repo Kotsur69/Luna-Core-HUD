@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - notification hub core (main process)
 // ----------------------------------------------------------------------------
-// docs/NOTIFICATION_HUB_PLAN.md slice N1. Merges what the collectors
+// docs/tbc_docs/NOTIFICATION_HUB_PLAN.md slice N1. Merges what the collectors
 // (src/hubcollect.js) produce into one list:
 //   - every item cleaned at the boundary: id must match ID_RE, text is plain
 //     one-line text (control characters out, capped), the primary action is

@@ -9,7 +9,7 @@
 // `remote` is the normalised https URL of the repo's origin
 // ("https://github.com/<owner>/<repo>", see src/missionrepokey.js), filled by
 // any PC that has the repo, so a host without it can clone it
-// (docs/REMOTE_HOST_PLAN.md H1). Entries without it still load. A PC that
+// (docs/tbc_docs/REMOTE_HOST_PLAN.md H1). Entries without it still load. A PC that
 // lacks the repo keeps the remote another PC sent (stored in its local file):
 // it never overwrites a known remote with none.
 //

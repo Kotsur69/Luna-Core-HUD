@@ -1,8 +1,11 @@
 # Notification hub ("Needs you") - plan
 
-> **🟡 BUILT, LIVE CHECK OWED (2026-11-04).** All six slices (N1 → N6) are
-> built and tested. Rename to `DONE_NOTIFICATION_HUB_PLAN.md` only after
-> Mati's live check (see *Live check owed* below) - not before.
+> **🟡 BUILT, LIVE CHECK OWED (re-checked against `main` 2026-11-05, v0.23.0).**
+> All six slices (N1 → N6) are built, tested and on `main`: built on
+> `luna/hub-core-qozyi` + `luna/hub-rest-5zstq`, merged in the 0.23.0
+> integration (`f8dffca`) and released in v0.23.0. Move to
+> `docs/done_docs/DONE_NOTIFICATION_HUB_PLAN.md` only after Mati's live check
+> (see *Live check owed* below) - not before.
 
 Same rules as every other plan in this repo: zero extra tokens (the hub only
 *reads* what other modules already produce), config-driven, a broken source
@@ -25,6 +28,9 @@ user-facing strings need `pl` + `en`.
   with unseen Needs-you items; a toast fires once for a new item while the
   window is unfocused (with notifications on); every Settings switch works
   and survives a restart; the drawer on 3 themes. Then rename to `DONE_`.
+- **Left after the live check:** fold the old '!' attention inbox
+  (`src/inbox.js`, renderer `inbox.js`) into the hub so there is one badge,
+  not two; the "Later (not v1)" list below.
 - Deviations in N4-N6: Settings live in `termcustom.js` (there is no
   `settings.js`); the Settings anchor for cloud / Google / host is the Setup
   Center (`setup-center`); the old '!' inbox chip still runs beside the hub
@@ -34,9 +40,6 @@ user-facing strings need `pl` + `en`.
   gone (commit 672af30 moved it into a tall overlay behind a "Brief" button) -
   N3 removed that button and overlay and mounts the brief in the drawer.
   Godmode needs/manual item ids carry a hash of the line text, not its index.
-- The older attention inbox ('!' chip, `src/inbox.js`, `inbox.js`) still
-  runs beside the hub; it covers other PCs' runs until N4. Fold it into the
-  hub in N4 so there is one badge, not two.
 - UI slices (N2, N3) go through the `ui-ux-pro-max` skill first (Mati's
   global rule for UI work). Smoke-test with the in-process Electron wrapper
   (memory: "Smoke-test UI without a CDP port").

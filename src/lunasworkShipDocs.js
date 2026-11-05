@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work docs at SHIP (docs/LUNAS_WORK_PLAN.md, LW 2.22a)
+// LunaCore - Luna's Work docs at SHIP (docs/tbc_docs/LUNAS_WORK_PLAN.md, LW 2.22a)
 // ----------------------------------------------------------------------------
 // A SHIP verdict is not final yet. The controller (src/lunaswork.js) calls
 // begin() instead of finishing, and one last docs iteration is built from a

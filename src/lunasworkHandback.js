@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work: the Critic's hand-back pass (docs/LUNAS_WORK_PLAN.md C11)
+// LunaCore - Luna's Work: the Critic's hand-back pass (docs/tbc_docs/LUNAS_WORK_PLAN.md C11)
 // ----------------------------------------------------------------------------
 // When Mati hands the wheel back, every commit he made on the run's branch
 // since the pause is read (git log + diff stat) and becomes:

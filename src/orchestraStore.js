@@ -1,6 +1,6 @@
 // ============================================================================
 // LunaCore - God Mode v2 run persistence (ORCHESTRATOR_PLAN.md slice 4,
-// per project since docs/MULTI_GODMODE_PLAN.md A1)
+// per project since docs/tbc_docs/MULTI_GODMODE_PLAN.md A1)
 // ----------------------------------------------------------------------------
 // One file per project: config/orchestra/<sha1(projectId)[0..16]>.local.json
 // (per machine, gitignored like every *.local.*), holding the whole run - plan,

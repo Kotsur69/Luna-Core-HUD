@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - host gate for remote commands (passkey grant + session key)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md, "Passkey + session key". This is the only thing
+// docs/tbc_docs/REMOTE_HOST_PLAN.md, "Passkey + session key". This is the only thing
 // standing between a row in the cloud and code running on this machine, so
 // it trusts nothing that came through the cloud:
 //

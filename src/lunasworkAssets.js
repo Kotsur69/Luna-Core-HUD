@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work asset pipeline, games only (docs/LUNAS_WORK_PLAN.md
+// LunaCore - Luna's Work asset pipeline, games only (docs/tbc_docs/LUNAS_WORK_PLAN.md
 // idea #15, LW 3.37)
 // ----------------------------------------------------------------------------
 // design/ASSETS.md is the single source of truth for a game's assets: one

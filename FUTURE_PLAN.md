@@ -7,9 +7,13 @@ Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 
 **Doc naming:** a plan whose feature is fully built and live-checked is
 renamed with a `DONE_` prefix (`DONE_MISSION_CONTROL_ROADMAP.md`,
-`docs/DONE_CLOUD_SYNC_PLAN.md`, ...). Files without the prefix still have
+`docs/done_docs/DONE_CLOUD_SYNC_PLAN.md`, ...). Files without the prefix still have
 open work. Leftover small items of a `DONE_` plan live as cards in the
-LunaCore to-do list, not in the file.
+LunaCore to-do list, not in the file. Plans in `docs/` sit in one of three
+folders: `docs/done_docs/` (finished), `docs/tbc_docs/` (to be continued:
+partly built or built with live checks owed) and `docs/untouched_docs/`
+(planned, no work started). Reference guides that are not plans go in
+`docs/reference/`. Move a plan with `git mv` when its state changes.
 
 ## Where things stand (2026-10-22)
 
@@ -30,15 +34,22 @@ LunaCore to-do list, not in the file.
   providers, provider-aware usage, overnight guard, "Don't sleep".
 - **Done (`DONE_` docs):** Mission Control W1-W8
   ([`DONE_MISSION_CONTROL_ROADMAP.md`](DONE_MISSION_CONTROL_ROADMAP.md)),
-  cloud sync + iPhone PWA ([`docs/DONE_CLOUD_SYNC_PLAN.md`](docs/DONE_CLOUD_SYNC_PLAN.md)),
-  free providers + Luna sync ([`docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md`](docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md)),
-  the path audit ([`docs/DONE_PATH_AUDIT.md`](docs/DONE_PATH_AUDIT.md)) and
-  the first God Mode run report ([`docs/DONE_GODMODE_RUN_2026-10-20.md`](docs/DONE_GODMODE_RUN_2026-10-20.md)).
+  cloud sync + iPhone PWA ([`docs/done_docs/DONE_CLOUD_SYNC_PLAN.md`](docs/done_docs/DONE_CLOUD_SYNC_PLAN.md)),
+  free providers + Luna sync ([`docs/done_docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md`](docs/done_docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md)),
+  the path audit ([`docs/done_docs/DONE_PATH_AUDIT.md`](docs/done_docs/DONE_PATH_AUDIT.md)) and
+  the first God Mode run report ([`docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md`](docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md)).
   Mati's live checks of all of it passed 2026-10-22; push notifications,
   Gmail and the Google OAuth app are set up.
-- **Still open:** Luna host + phone pairing
-  ([`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md)), and the cards in
-  the to-do list.
+- **Still open (re-checked 2026-11-05, v0.23.0):** every plan in
+  `docs/tbc_docs/` is built and on `main`; each owes Mati's live checks
+  (its "Resume here" lists them): Luna host + phone pairing
+  ([`docs/tbc_docs/REMOTE_HOST_PLAN.md`](docs/tbc_docs/REMOTE_HOST_PLAN.md)),
+  Claude account failover + per-account meter, plus the usage-login refresh fix
+  ([`docs/tbc_docs/CLAUDE_ACCOUNTS_PLAN.md`](docs/tbc_docs/CLAUDE_ACCOUNTS_PLAN.md)),
+  multi God Mode ([`docs/tbc_docs/MULTI_GODMODE_PLAN.md`](docs/tbc_docs/MULTI_GODMODE_PLAN.md)),
+  the notification hub ([`docs/tbc_docs/NOTIFICATION_HUB_PLAN.md`](docs/tbc_docs/NOTIFICATION_HUB_PLAN.md))
+  and Luna's Work ([`docs/tbc_docs/LUNAS_WORK_PLAN.md`](docs/tbc_docs/LUNAS_WORK_PLAN.md)).
+  The cards in the to-do list cover the rest.
 - **Built since (moved out of "Still open" / "Known issues"):** LM Studio via
   CCR (`2fa07c5`), the `js-yaml` audit fix (`5e5eb4e`), cloud "forget this PC"
   (`ee209e9`), host security M1 / M2 (`30f4e77`) and M4 phone CSP, the
@@ -52,10 +63,9 @@ LunaCore to-do list, not in the file.
    host plan nobody has run yet.
 2. **Work the to-do cards** above (a God Mode night run can take them; the
    `[Mati]` cards are marked manual and stay out of it).
-3. **Notification hub** - face icon + badge, a vertical "Needs you" drawer,
-   the God Mode summary on every PC, the brief moved out of Mission Control.
-   Plan: [`docs/NOTIFICATION_HUB_PLAN.md`](docs/NOTIFICATION_HUB_PLAN.md)
-   (open questions first).
+3. **Notification hub** - built (N1-N6, released in v0.23.0); live check
+   owed, then fold the old '!' inbox into it.
+   Plan: [`docs/tbc_docs/NOTIFICATION_HUB_PLAN.md`](docs/tbc_docs/NOTIFICATION_HUB_PLAN.md).
 4. **Release prep for friends** - decided 2026-10-22: **option B**, every
    new user brings their **own** Supabase project (Mati's stays single-user,
    sign-ups off). The Setup Center in Ctrl+L and the first-launch
@@ -89,7 +99,7 @@ LunaCore to-do list, not in the file.
 - **Luna host + phone pairing** on KT-PC-LLM, KT-NO-MMAZUR and the MacBook,
   then a signed `news.scan`, `repo.clone` and a chat with Allow / Deny /
   Always, Stop, End, Resume; "Forget all phones" must refuse the next
-  command. Steps: [`docs/REMOTE_HOST_PLAN.md`](docs/REMOTE_HOST_PLAN.md)
+  command. Steps: [`docs/tbc_docs/REMOTE_HOST_PLAN.md`](docs/tbc_docs/REMOTE_HOST_PLAN.md)
   "Resume here". The claude CLI on a Windows host must be the native install
   (`~/.local/bin/claude.exe`).
 

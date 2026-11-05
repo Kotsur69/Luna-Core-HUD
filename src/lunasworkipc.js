@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work IPC (main process, docs/LUNAS_WORK_PLAN.md slice 1.2c)
+// LunaCore - Luna's Work IPC (main process, docs/tbc_docs/LUNAS_WORK_PLAN.md slice 1.2c)
 // ----------------------------------------------------------------------------
 // lunaswork:getSettings    {projectId} -> view
 // lunaswork:saveSettings   {projectId, models?, projectModels?, freeFallback?, profile?,

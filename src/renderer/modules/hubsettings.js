@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Settings (Ctrl+L) -> Notification hub (renderer, N6)
 // ----------------------------------------------------------------------------
-// docs/NOTIFICATION_HUB_PLAN.md N6. Static markup in index.html
+// docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N6. Static markup in index.html
 // (#hub-section ...), wired once from termcustom.js like notify.js:
 //   - auto-open at launch: always / only when needed (default) / never
 //     (hubAutoOpen, read by hubicon.js at launch);

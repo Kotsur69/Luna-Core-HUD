@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - which host the phone preselects (main)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md, host runtime. `--make-default` writes the sync
+// docs/tbc_docs/REMOTE_HOST_PLAN.md, host runtime. `--make-default` writes the sync
 // unit `host:default` = {machine} (scope `config`, newest wins) through the
 // configsync.js provider below; every PC keeps the cloud's value in
 // host-default.local.json, so a later --make-default on another host wins

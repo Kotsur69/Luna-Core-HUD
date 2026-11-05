@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work research step (docs/LUNAS_WORK_PLAN.md, idea #14)
+// LunaCore - Luna's Work research step (docs/tbc_docs/LUNAS_WORK_PLAN.md, idea #14)
 // ----------------------------------------------------------------------------
 // When the design pack points at other products ("like Linear", "similar to
 // Notion", a URL), a headless researcher fills design/references/ before the

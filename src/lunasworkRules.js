@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work rules (docs/LUNAS_WORK_PLAN.md, slice 1)
+// LunaCore - Luna's Work rules (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 1)
 // ----------------------------------------------------------------------------
 // Pure decisions only - no timers, no git, no tabs, no disk. The Luna's Work
 // controller owns the state and the side effects and asks this module:

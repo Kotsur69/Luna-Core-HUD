@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 IPC (main process, docs/MULTI_GODMODE_PLAN.md A2)
+// LunaCore - God Mode v2 IPC (main process, docs/tbc_docs/MULTI_GODMODE_PLAN.md A2)
 // ----------------------------------------------------------------------------
 // The orchestra:* handlers, one God Mode run per project (orchestraRegistry).
 // The renderer is untrusted: every handler resolves the run here, in main.

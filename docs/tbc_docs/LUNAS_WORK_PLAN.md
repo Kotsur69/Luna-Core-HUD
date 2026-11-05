@@ -1,14 +1,21 @@
 # Luna's Work — plan
 
-> Status: **IN PROGRESS.** Written 2026-10-22. Phases 1-3 are largely
-> built and released (v0.19.0, 2026-11-02, "Luna's Work goes from build to
-> launch"). The Electron and Unity tester adapters (LW 3.35 / 3.36b) and the
-> game asset pipeline (LW 3.37) are merged as well. **Resume here: the live
-> checks.** (1) The web Playtester on AMSteel_Quote (slice 3). (2) A full
-> outer-loop run to SHIP (slice 5). (3) The Electron adapter on a real
-> desktop app. (4) The Unity adapter on the Unity PC, starting with its
-> PlaytestDriver spike. After those, the end-to-end check that renames this
-> doc to `DONE_`.
+> **🟡 BUILT, LIVE CHECKS OWED (re-checked against `main` 2026-11-05, v0.23.0).**
+> Written 2026-10-22. Every build-plan item (1-37) is on `main`: Phase 1 in
+> v0.18.1-v0.18.2, Phases 2 and 3 in v0.19.0 (2026-11-02, "Luna's Work goes
+> from build to launch"), and the Electron + Unity tester adapters (LW 3.35 /
+> 3.36b, `da7e87b`) and the game asset pipeline (LW 3.37, `5ac4ed9`) in the
+> 0.23.0 integration. Nothing has been live-checked yet.
+>
+> **Resume here - the live checks (each is a `[Mati]` to-do card):**
+> 1. The web Playtester on AMSteel_Quote (slice 3, card "LW 1.3c").
+> 2. The outer loop on a throwaway repo: merge to main, red gate, rollback,
+>    stop (slice 5, card "LW 1.5e").
+> 3. The Electron adapter on a real desktop app.
+> 4. The Unity adapter on the Unity PC, starting with its PlaytestDriver
+>    spike (card "LW 3.36a").
+> 5. Then the end-to-end run (card "LW final") that moves this doc to
+>    `docs/done_docs/DONE_LUNAS_WORK_PLAN.md`.
 
 ## What it is
 
@@ -299,6 +306,9 @@ email or a push, and the next iteration plans it in.
 Each slice: `/plan` → TDD → `/code-review` → security review for IPC. The full
 God Mode suite runs green on every slice. Live-checked end to end before this
 doc becomes `DONE_LUNAS_WORK_PLAN.md`.
+
+All 37 items below are built (see the status at the top); only the live
+checks are open.
 
 ### Phase 1 — the loop works on a web app
 

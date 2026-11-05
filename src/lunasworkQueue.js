@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work project queue (docs/LUNAS_WORK_PLAN.md, B16)
+// LunaCore - Luna's Work project queue (docs/tbc_docs/LUNAS_WORK_PLAN.md, B16)
 // ----------------------------------------------------------------------------
 // config/lunaswork-queue.local.json (per machine, gitignored like every
 // *.local.*): the projects waiting for a Luna's Work run, in order.

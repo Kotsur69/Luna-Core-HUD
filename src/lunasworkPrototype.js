@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work clickable mockup first (docs/LUNAS_WORK_PLAN.md C2, LW 2.25b)
+// LunaCore - Luna's Work clickable mockup first (docs/tbc_docs/LUNAS_WORK_PLAN.md C2, LW 2.25b)
 // ----------------------------------------------------------------------------
 // The 'Clickable mockup first' toggle (lunasworkSettings, per project, off by
 // default; pinned in the run at start as run.toggles.mockupFirst). With it on,

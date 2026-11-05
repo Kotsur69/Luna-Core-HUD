@@ -1,6 +1,6 @@
 // ============================================================================
 // LunaCore - God Mode run list (pure half of the board's project switcher,
-// docs/MULTI_GODMODE_PLAN.md A4)
+// docs/tbc_docs/MULTI_GODMODE_PLAN.md A4)
 // ----------------------------------------------------------------------------
 // One God Mode run per project. main's orchestra:list gives a summary per run
 // (orchestraIpc.runSummary); orchestra:changed gives a full view for one

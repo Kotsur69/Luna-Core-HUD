@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work milestone demo video (docs/LUNAS_WORK_PLAN.md B13, LW 3.33)
+// LunaCore - Luna's Work milestone demo video (docs/tbc_docs/LUNAS_WORK_PLAN.md B13, LW 3.33)
 // ----------------------------------------------------------------------------
 // At a milestone gate the iteration's playtest evidence becomes a 30-90 s
 // walkthrough, rendered with Mati's existing "Remotion vids" setup:

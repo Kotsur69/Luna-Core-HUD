@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work design pack (docs/LUNAS_WORK_PLAN.md, slice 2)
+// LunaCore - Luna's Work design pack (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 2)
 // ----------------------------------------------------------------------------
 // The pre-production pack lives in the PROJECT repo under `design/`:
 //

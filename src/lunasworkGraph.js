@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work fresh code graph (docs/LUNAS_WORK_PLAN.md, B19,
+// LunaCore - Luna's Work fresh code graph (docs/tbc_docs/LUNAS_WORK_PLAN.md, B19,
 // LW 2.23)
 // ----------------------------------------------------------------------------
 // After every merge the controller (via src/lunasworkLoopHooks.js) calls

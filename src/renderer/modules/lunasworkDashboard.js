@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work live dashboard (LW 2.17a, docs/LUNAS_WORK_PLAN.md #12)
+// LunaCore - Luna's Work live dashboard (LW 2.17a, docs/tbc_docs/LUNAS_WORK_PLAN.md #12)
 // ----------------------------------------------------------------------------
 // Opened from the run panel (Settings -> Luna's Work -> Dashboard). Shows the
 // current run from lunaswork:dashboard (src/lunasworkDashboardView.js):

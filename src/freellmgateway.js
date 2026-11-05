@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - FreeLLMAPI gateway: port setting, URL building, status probe
 // ----------------------------------------------------------------------------
-// docs/FREE_PROVIDERS_SYNC_PLAN.md ("Resume here"). The FreeLLMAPI desktop app
+// docs/done_docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md ("Resume here"). The FreeLLMAPI desktop app
 // listens on 127.0.0.1:31415, the Docker image on 3001 - so the port is a
 // setting (config/freellm.local.json, gitignored like every *.local.json).
 //

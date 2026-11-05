@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - secret scrubber for what a host writes to the cloud (main + phone)
 // ----------------------------------------------------------------------------
-// docs/REMOTE_HOST_PLAN.md "Security review" M1. Tool results, approval
+// docs/tbc_docs/REMOTE_HOST_PLAN.md "Security review" M1. Tool results, approval
 // previews and prompts sit in `host_events` / `host_commands` for 14 days,
 // readable by anyone holding the cloud session: a session that reads `.env`
 // would put its keys there. Every string the host inserts goes through

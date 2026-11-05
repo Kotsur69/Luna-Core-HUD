@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work headless Playtester (docs/LUNAS_WORK_PLAN.md, slice 1.3b)
+// LunaCore - Luna's Work headless Playtester (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 1.3b)
 // ----------------------------------------------------------------------------
 // One `claude -p --output-format json --json-schema <PLAYTEST_SCHEMA>` call that
 // plays the running app through the tester adapter's tools (Playwright MCP for

@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Settings -> Notification hub (docs/NOTIFICATION_HUB_PLAN.md N6)
+// LunaCore - Settings -> Notification hub (docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N6)
 // ----------------------------------------------------------------------------
 // - the stored prefs are validated (auto-open mode, toasts, source groups);
 // - a switched-off source group is not even read by the hub, and turning it

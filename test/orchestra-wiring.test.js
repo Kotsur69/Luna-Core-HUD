@@ -1,5 +1,5 @@
 // ============================================================================
-// God Mode v2 wiring (src/orchestraWiring.js, docs/MULTI_GODMODE_PLAN.md A2):
+// God Mode v2 wiring (src/orchestraWiring.js, docs/tbc_docs/MULTI_GODMODE_PLAN.md A2):
 // one controller's deps are bound to its project - the stored run file, the
 // renderer events and the cross-run guards all name that project, and Luna's
 // Work sees one run per project through godModeFacade. No Electron, no IO

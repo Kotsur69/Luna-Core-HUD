@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work run persistence (docs/LUNAS_WORK_PLAN.md, slice 1)
+// LunaCore - Luna's Work run persistence (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 1)
 // ----------------------------------------------------------------------------
 // config/lunaswork.local.json (per machine, gitignored like every *.local.*):
 // the whole run - phase, iteration, models, history - written on every

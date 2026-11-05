@@ -1,5 +1,5 @@
 // ============================================================================
-// Luna's Work (docs/LUNAS_WORK_PLAN.md, slice 2): the design pack in
+// Luna's Work (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 2): the design pack in
 // lunasworkPack.js - scaffold, ownership ops, writes kept inside design/,
 // ship-criteria parsing, completeness and the interview brief.
 // ============================================================================

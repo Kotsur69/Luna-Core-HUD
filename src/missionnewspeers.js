@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Mission Control: other PCs' news briefings (main)
 // ----------------------------------------------------------------------------
-// docs/DONE_CLOUD_SYNC_PLAN.md phase 2c. Every PC puts its last briefing as the
+// docs/done_docs/DONE_CLOUD_SYNC_PLAN.md phase 2c. Every PC puts its last briefing as the
 // `news` cloud snapshot (missionnews.js newsSnapshot); this reads the other
 // machines' rows and turns each into a read-only report for "Ready reports".
 //

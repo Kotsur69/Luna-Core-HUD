@@ -670,7 +670,7 @@ function rowActions(item, index) {
   });
   manual.setAttribute('aria-pressed', String(isManual));
 
-  // Steer: a card Luna's Work schedules first (docs/LUNAS_WORK_PLAN.md).
+  // Steer: a card Luna's Work schedules first (docs/tbc_docs/LUNAS_WORK_PLAN.md).
   const isSteer = hasTag(item, STEER_TAG);
   const steer = rowButton('🧭', t(isSteer ? 'todo.steerOff' : 'todo.steerOn'), () => {
     commit(toggleTag(items, item.at, STEER_TAG));

@@ -1,6 +1,6 @@
 // ============================================================================
 // LunaCore - Luna's Work second opinion at milestone gates
-// (docs/LUNAS_WORK_PLAN.md, B8, slice 2.20)
+// (docs/tbc_docs/LUNAS_WORK_PLAN.md, B8, slice 2.20)
 // ----------------------------------------------------------------------------
 // At a milestone gate only, another vendor's agent CLI (Codex or Gemini,
 // whichever is first installed AND logged in, in a configurable order) reads

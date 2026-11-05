@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - notification hub: God Mode runs from the other PCs (main)
 // ----------------------------------------------------------------------------
-// docs/NOTIFICATION_HUB_PLAN.md N4, same pattern as src/missionnewspeers.js.
+// docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N4, same pattern as src/missionnewspeers.js.
 // Every PC puts its last runs in its `godmode` cloud snapshot
 // (godmodesnapshot.js); this reads the OTHER machines' rows
 // (cloudsnapshots list() leaves this PC's own row out - its runs come from the

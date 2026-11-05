@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work pl/en completeness (docs/LUNAS_WORK_PLAN.md, B11,
+// LunaCore - Luna's Work pl/en completeness (docs/tbc_docs/LUNAS_WORK_PLAN.md, B11,
 // slice 2.21b)
 // ----------------------------------------------------------------------------
 // For a project that ships both Polish and English, every key one language

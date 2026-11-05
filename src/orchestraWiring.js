@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 wiring (main process, docs/MULTI_GODMODE_PLAN.md A2)
+// LunaCore - God Mode v2 wiring (main process, docs/tbc_docs/MULTI_GODMODE_PLAN.md A2)
 // ----------------------------------------------------------------------------
 // Builds the real deps of one God Mode controller (src/orchestra.js
 // createOrchestra) for ONE project, from what main.js already has - the same

@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work GDPR / legal pack for EU web apps (docs/LUNAS_WORK_PLAN.md C6, LW 2.26)
+// LunaCore - Luna's Work GDPR / legal pack for EU web apps (docs/tbc_docs/LUNAS_WORK_PLAN.md C6, LW 2.26)
 // ----------------------------------------------------------------------------
 //   detection  euWebApp({brief, design}) - the pack flag "EU web app: yes/no"
 //              in BRIEF.md or DESIGN.md wins; otherwise an EU audience or an

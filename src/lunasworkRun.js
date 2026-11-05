@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work run record (docs/LUNAS_WORK_PLAN.md, 1.5b)
+// LunaCore - Luna's Work run record (docs/tbc_docs/LUNAS_WORK_PLAN.md, 1.5b)
 // ----------------------------------------------------------------------------
 // The pure half of the outer loop controller (src/lunaswork.js): no timers,
 // no IO, nothing kept between calls.

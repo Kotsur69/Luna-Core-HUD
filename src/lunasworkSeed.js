@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work realistic seed data (docs/LUNAS_WORK_PLAN.md B10, LW 2.21a)
+// LunaCore - Luna's Work realistic seed data (docs/tbc_docs/LUNAS_WORK_PLAN.md B10, LW 2.21a)
 // ----------------------------------------------------------------------------
 // When design/references/ holds data files (csv / tsv / json / xlsx / pdf -
 // real prices, real quotes), the Director schedules a "seed data" card so the

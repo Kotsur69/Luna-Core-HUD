@@ -2,7 +2,7 @@
 // LunaCore - Supabase Edge Function `lunaswork-feedback` (logic; index.js is
 // the Deno entry)
 // ----------------------------------------------------------------------------
-// docs/LUNAS_WORK_PLAN.md B17, LW 3.28b. The client feedback widget on a
+// docs/tbc_docs/LUNAS_WORK_PLAN.md B17, LW 3.28b. The client feedback widget on a
 // Luna's Work STAGING build posts here, without a LunaCore account:
 //
 //   POST {token, runId, text, url?, screenshot?}   Content-Type: application/json

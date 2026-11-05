@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - notification hub: the source groups a user can switch off
 // ----------------------------------------------------------------------------
-// docs/NOTIFICATION_HUB_PLAN.md N6 ("per-source on / off - a friend without
+// docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N6 ("per-source on / off - a friend without
 // Life turns it off"). Settings (Ctrl+L -> Notification hub) shows one switch
 // per GROUP; each group covers one or more collectors (src/hubcollect.js and
 // src/hubpeers.js). The choice is stored as hubSources: {group: false} in

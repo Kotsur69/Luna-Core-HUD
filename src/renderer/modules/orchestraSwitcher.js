@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode board project switcher (docs/MULTI_GODMODE_PLAN.md A4)
+// LunaCore - God Mode board project switcher (docs/tbc_docs/MULTI_GODMODE_PLAN.md A4)
 // ----------------------------------------------------------------------------
 // A role="tablist" strip of chips, one per project with a run (plus the
 // active tab's project when it has none yet, to plan it). Each chip: label,

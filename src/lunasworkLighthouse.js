@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work web quality budgets (docs/LUNAS_WORK_PLAN.md, B7,
+// LunaCore - Luna's Work web quality budgets (docs/tbc_docs/LUNAS_WORK_PLAN.md, B7,
 // slice 2.19b)
 // ----------------------------------------------------------------------------
 // A separate headless `claude -p --json-schema` step whose ONLY allowed tools

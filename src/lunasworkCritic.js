@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Luna's Work Critic (docs/LUNAS_WORK_PLAN.md, slice 1.4a)
+// LunaCore - Luna's Work Critic (docs/tbc_docs/LUNAS_WORK_PLAN.md, slice 1.4a)
 // ----------------------------------------------------------------------------
 // One `claude -p --output-format json --json-schema <CRITIC_SCHEMA>` call, run
 // in the project repo with read-only tools (orchestraPlan.js pattern). It
