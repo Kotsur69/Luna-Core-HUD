@@ -10,8 +10,11 @@
 //   merge    - an integration worktree from origin/<base>; packages merged in
 //              dependency order, verify after each; a conflict gets ONE
 //              headless `claude -p` resolver (one stronger retry), checked
-//              for leftover markers. A package that stays red is reset away
-//              and skipped with its dependents; the rest is pushed with
+//              for leftover markers. A package red after its merge gets
+//              ONE fix-up worker (orchestraMergeFixup.js); one that stays
+//              red is reset away and skipped with its dependents. ONE
+//              second pass (orchestraSecondPass.js) retries the skipped
+//              ones on top of the rest, then their dependents. The rest is pushed with
 //              `git push origin HEAD:refs/heads/<base>` (never --force: a
 //              remote that moved on rejects it). Nothing merged -> nothing
 //              pushed.
@@ -31,6 +34,9 @@ const { execFile } = require('child_process');
 const { runGit, firstLine, gitError, slugify, branchFor } = require('./worktrees');
 const { runVerify } = require('./orchestraFinish');
 const { checkCwd } = require('./projects');
+const { verifyDetail } = require('./orchestraVerifyDetail');
+const { fixAfterMerge } = require('./orchestraMergeFixup');
+const { secondPass, skippedDependency, skipEntry } = require('./orchestraSecondPass');
 
 const GH_TIMEOUT_MS = 60 * 1000;
 const RESOLVER_TIMEOUT_MS = 15 * 60 * 1000;
@@ -353,45 +359,80 @@ async function mergeOne(root, branch, deps) {
 }
 
 /**
- * The first skipped package `pkg` depends on, directly or through another
- * package of this integration, or null.
- * @param {{dependsOn?:string[]}} pkg
- * @param {Map<string, string[]>} dependsOf id -> dependsOn of every package
- * @param {Set<string>} skippedIds
+ * mergeOne with the resolver attempts given: [1, 2] is a first merge (the
+ * stronger resolver only when the first one fails), [2] the second pass.
  */
-function skippedDependency(pkg, dependsOf, skippedIds) {
-  const seen = new Set();
-  const walk = (ids) => {
-    for (const id of ids) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      if (skippedIds.has(id)) return id;
-      const hit = walk(dependsOf.get(id) || []);
-      if (hit) return id;
-    }
-    return null;
-  };
-  return walk(Array.isArray(pkg.dependsOn) ? pkg.dependsOn : []);
+async function mergeAttempts(ctx, pkg, attempts) {
+  const resolve = safeResolver(ctx.deps.resolve);
+  let res = { ok: false, stage: 'merge', detail: 'not tried', files: [] };
+  for (const attempt of attempts) {
+    const resolveFor = attempt === 2 ? (r) => resolve({ ...r, attempt: 2 }) : resolve;
+    res = await mergeOne(ctx.wt.root, pkg.branch, { execImpl: ctx.deps.execImpl, resolve: resolveFor });
+    if (res.ok) break;
+  }
+  return res;
 }
 
 /**
  * Merges one package into the integration worktree and verifies it. A merge
- * or conflict failure gets ONE more try with the stronger resolver; a red
- * verify is run once more (timing-sensitive tests). Never throws.
- * @returns {Promise<{ok:true} | {ok:false, stage:string, detail:string, files:string[]}>}
+ * or conflict failure gets ONE more try with the stronger resolver (a
+ * second-pass `retry` goes straight to it); a red verify is run once more
+ * (timing-sensitive tests), then gets ONE fix-up worker
+ * (orchestraMergeFixup.js) before it counts as red. Never throws.
+ * @param {{wt:object, deps:object, verifyImpl:Function, baseSha:string, fixIo:object}} ctx
+ * @param {{retry?:boolean}} [opts]
+ * @returns {Promise<{ok:true, fixedUp?:true}
+ *   | {ok:false, stage:string, detail:string, files:string[], fixup?:'failed'}>}
  */
-async function mergeAndVerify(wt, pkg, deps, verifyImpl) {
-  const resolve = safeResolver(deps.resolve);
-  let res = await mergeOne(wt.root, pkg.branch, { execImpl: deps.execImpl, resolve });
-  if (!res.ok && (res.stage === 'merge' || res.stage === 'conflict')) {
-    res = await mergeOne(wt.root, pkg.branch, { execImpl: deps.execImpl, resolve: (r) => resolve({ ...r, attempt: 2 }) });
-  }
+async function mergeAndVerify(ctx, pkg, opts = {}) {
+  const { wt, verifyImpl } = ctx;
+  const res = await mergeAttempts(ctx, pkg, opts.retry ? [2] : [1, 2]);
   if (!res.ok) return { ok: false, stage: res.stage, detail: res.detail, files: res.files || [] };
   if (!pkg.verify) return { ok: true };
   let verified = await verifyImpl(pkg.verify, wt.cwd);
   if (!verified.ok) verified = await verifyImpl(pkg.verify, wt.cwd);
   if (verified.ok) return { ok: true };
-  return { ok: false, stage: 'verify', detail: listLines(verified.output).pop(), files: [] };
+  const fixed = await fixAfterMerge({ root: wt.root, cwd: wt.cwd, pkg, output: verified.output, baseSha: ctx.baseSha }, ctx.fixIo);
+  if (fixed.tried && fixed.ok) return { ok: true, fixedUp: true };
+  const red = { ok: false, stage: 'verify', detail: verifyDetail(fixed.tried ? fixed.output : verified.output, { root: wt.root }), files: [] };
+  return fixed.tried ? { ...red, fixup: 'failed' } : red;
+}
+
+/**
+ * mergeAndVerify plus the way back: a package that did not go in is reset
+ * away, so nothing later rides on it. `fatal` when even that reset failed -
+ * the integration cannot go on then.
+ */
+async function tryPackage(ctx, pkg, opts) {
+  const { execImpl } = ctx.deps;
+  const pre = await runGit(ctx.wt.root, ['rev-parse', 'HEAD'], execImpl);
+  const preSha = pre.ok ? firstLine(pre.stdout) : '';
+  const res = await mergeAndVerify(ctx, pkg, opts);
+  if (res.ok) return res;
+  const reset = preSha ? await runGit(ctx.wt.root, ['reset', '--hard', preSha], execImpl) : { ok: false, stderr: 'no HEAD' };
+  return reset.ok ? res : { ...res, fatal: gitError(reset.stderr) || 'reset failed' };
+}
+
+/** deps.stopped (a kill / pause during the integration) as a check that never throws. */
+function stopCheck(stopped) {
+  if (typeof stopped !== 'function') return () => false;
+  return () => {
+    try {
+      return stopped() === true;
+    } catch {
+      return true;
+    }
+  };
+}
+
+// The run-side deps of integrateMerge (finalize's gate, orchestra.js's fix-up
+// worker and stop check). main passes exactly these through, nothing else.
+const RUN_DEPS = ['beforePush', 'fixup', 'stopped'];
+
+/** The functions among RUN_DEPS in `extra`. */
+function runDeps(extra) {
+  const o = extra && typeof extra === 'object' ? extra : {};
+  return Object.fromEntries(RUN_DEPS.filter((k) => typeof o[k] === 'function').map((k) => [k, o[k]]));
 }
 
 /** deps.beforePush, if any: {ok:false, reason} stops the push; a throw does too. */
@@ -496,23 +537,35 @@ async function resetForReuse(wt, baseSha, execImpl) {
  * Mode C: integration branch from origin/<base>, merge each package in
  * order, verify after each. A package that cannot be merged or stays red is
  * reset away and skipped, with every later package that depends on it
- * (their branches carry its commits); the rest is pushed to the base branch.
- * `checkOnly: true` builds the same worktree, runs deps.beforePush (the
- * self-check) and never pushes; the worktree and its branch are removed.
+ * (their branches carry its commits). Then ONE second pass merges the
+ * skipped ones again on top of the rest, and their dependents once they
+ * are in (orchestraSecondPass.js); what is in is pushed to the base branch.
+ * `checkOnly: true` builds the same worktree (first pass only), runs
+ * deps.beforePush (the self-check) and never pushes; the worktree and its
+ * branch are removed.
  * @param {{repoPath:string, base:string, slug:string, checkOnly?:boolean,
  *   packages:Array<{id:string, branch:string, verify:string, dependsOn?:string[]}>}} args
  * @param {{addWorktree:Function, removeWorktree:Function, resolve:Function,
  *   execImpl?:Function, verifyImpl?:Function, installImpl?:Function,
- *   beforePush?:(root:string, info:{merged:string[], skipped:object[], baseSha:string}) => Promise<{ok:boolean, reason?:string}>}} deps
- * @returns {Promise<{ok:boolean, merged:string[],
- *   skipped:Array<{id:string, stage:string, detail:string, files:string[]}>,
+ *   beforePush?:(root:string, info:{merged:string[], skipped:object[], baseSha:string}) => Promise<{ok:boolean, reason?:string}>,
+ *   fixup?:(args:{root:string, brief:string, capMs:number, id:string}) => Promise<{ok:boolean}>,
+ *   stopped?:() => boolean}} deps fixup: the one-at-a-time fix-up worker
+ *   (orchestraFixup.js); stopped: true once the run is killed or paused -
+ *   no new fix-up starts then
+ * @returns {Promise<{ok:boolean, merged:string[], fixedUp?:string[], secondPass?:string[],
+ *   skipped:Array<{id:string, stage:string, detail:string, files:string[], fixup?:'failed'}>,
  *   stage?:string, failedId?:string|null, detail?:string, headSha?:string|null, root?:string|null}>}
  */
 async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, deps) {
   const execImpl = deps.execImpl;
   const verifyImpl = deps.verifyImpl || runVerify;
   const merged = [];
-  const skipped = [];
+  // Replaced by the second pass's final list (orchestraSecondPass.js).
+  let skipped = [];
+  // Kept in thanks to the merge fix-up worker (orchestraMergeFixup.js).
+  const fixedUp = [];
+  // Merged only on the second pass.
+  const secondPassIds = [];
   const fail = (stage, detail, failedId) => ({
     ok: false,
     merged,
@@ -546,36 +599,53 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
         await runGit(repoPath, ['branch', '-D', wt.branch], execImpl);
       }
     }
-    return { ...result, root: result.ok || checkOnly ? null : wt.root };
+    return { ...result, fixedUp: [...fixedUp], secondPass: [...secondPassIds], root: result.ok || checkOnly ? null : wt.root };
   };
 
   const installed = await (deps.installImpl || ensureInstall)(wt.root, verifyImpl);
   if (!installed.ok) return done(fail('install', listLines(installed.output).pop()));
 
+  const ctx = {
+    wt,
+    deps,
+    verifyImpl,
+    baseSha,
+    // A check-only build is a throwaway for the self-check: no fix-up worker.
+    fixIo: { execImpl, verifyImpl, fixup: checkOnly ? null : deps.fixup, stopped: stopCheck(deps.stopped) },
+  };
   const dependsOf = new Map(packages.map((p) => [p.id, Array.isArray(p.dependsOn) ? p.dependsOn : []]));
   const skippedIds = new Set();
-  const skip = (id, stage, detail, files) => {
+  const skip = (id, res) => {
     skippedIds.add(id);
-    skipped.push({ id, stage, detail: String(detail || '').slice(0, 300), files: (files || []).slice(0, 10) });
+    skipped.push(skipEntry(id, res));
   };
   for (const pkg of packages) {
     const blocker = skippedDependency(pkg, dependsOf, skippedIds);
     if (blocker) {
-      skip(pkg.id, 'depSkipped', blocker, []);
+      skip(pkg.id, { stage: 'depSkipped', detail: blocker });
       continue;
     }
-    const pre = await runGit(wt.root, ['rev-parse', 'HEAD'], execImpl);
-    const preSha = pre.ok ? firstLine(pre.stdout) : '';
-    const res = await mergeAndVerify(wt, pkg, deps, verifyImpl);
+    // A package that did not go in is reset away; without that nothing
+    // later may be merged or pushed - the bad package could ride along.
+    const res = await tryPackage(ctx, pkg);
     if (res.ok) {
       merged.push(pkg.id);
+      if (res.fixedUp) fixedUp.push(pkg.id);
       continue;
     }
-    skip(pkg.id, res.stage, res.detail, res.files);
-    // Back to the tree before this package; without that nothing later may
-    // be merged or pushed - the bad package could ride along.
-    const reset = preSha ? await runGit(wt.root, ['reset', '--hard', preSha], execImpl) : { ok: false, stderr: 'no HEAD' };
-    if (!reset.ok) return done(fail('reset', gitError(reset.stderr), pkg.id));
+    skip(pkg.id, res);
+    if (res.fatal) return done(fail('reset', res.fatal, pkg.id));
+  }
+
+  // One second pass (orchestraSecondPass.js) for what the order may have
+  // cost; not in a check-only throwaway build.
+  if (skipped.length && !checkOnly) {
+    const second = await secondPass({ packages, skipped, tryPackage: (pkg, opts) => tryPackage(ctx, pkg, opts), stopped: ctx.fixIo.stopped });
+    merged.push(...second.merged);
+    fixedUp.push(...second.fixedUp);
+    secondPassIds.push(...second.merged);
+    skipped = second.skipped;
+    if (second.fatal) return done(fail('reset', second.fatal.detail, second.fatal.failedId));
   }
 
   if (!merged.length) return done(fail('nothingMerged', skipped.map((s) => s.id).join(', ')));
@@ -600,6 +670,7 @@ module.exports = {
   runResolver,
   resolverPrompt,
   integrateMerge,
+  runDeps,
   clearStaleIntegration,
   mergeOne,
   RESOLVER_TOOLS,

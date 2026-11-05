@@ -20,7 +20,8 @@ const { createOrchestraStore } = require('../src/orchestraStore.js');
 
 /**
  * A controller double: records every call, answers from `spec`.
- * spec: {view, running, busy, repo, planningRepo, sessions, fixups, restores, throws}
+ * spec: {view, running, busy, repo, planningRepo, sessions, fixups, restores, throws,
+ *   workers (tabs running right now - pauseExternal pauses only with some)}
  */
 function fakeController(projectId, spec = {}) {
   const calls = [];
@@ -57,6 +58,11 @@ function fakeController(projectId, spec = {}) {
     onSessionClosed: (id) => {
       record('closed')(id);
       return owned.has(id) || fixups.has(id);
+    },
+    workerSessions: () => spec.workers || [],
+    pauseExternal: (until) => {
+      record('pauseExternal')(until);
+      return (spec.workers || []).length > 0;
     },
   };
 }
@@ -338,4 +344,196 @@ test('the same repo in a second project is refused with repoBusy', async (t) => 
   assert.equal(registry.get('beta').view(), null, 'no plan was made');
   // Alpha's own replan is not blocked by itself.
   assert.equal((await registry.get('alpha').makePlan({ projectId: 'alpha', repoPath: repo, profileId: 'p', env: {} })).ok, true);
+});
+
+// --- A3: account-aware pause (docs/MULTI_GODMODE_PLAN.md) -------------------
+
+const { createClaudeAccounts, ACCOUNT_ENV } = require('../src/claudeaccounts.js');
+
+const TOKEN_A = `sk-ant-oat01-${'a'.repeat(40)}`;
+const TOKEN_B = `sk-ant-oat01-${'b'.repeat(40)}`;
+const HOUR = 60 * 60 * 1000;
+
+/** A reversible stand-in for Electron's safeStorage. */
+const fakeStorage = () => ({
+  isEncryptionAvailable: () => true,
+  encryptString: (s) => Buffer.from(`enc:${s}`, 'utf8'),
+  decryptString: (b) => b.toString('utf8').replace(/^enc:/, ''),
+});
+
+/**
+ * Fake runs over the REAL account store, wired like main.js: the store merges
+ * the registry's memory into its picks; the registry reads the store's list.
+ * `ids` are the accounts to add, in preference order (none: no accounts set up).
+ */
+function accountSetup(t, specs, { ids = ['a', 'b'], ownBackend = [] } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-orch-acc-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const clock = { now: 1_700_000_000_000 };
+  let registry = null;
+  const accounts = createClaudeAccounts({
+    file: () => path.join(dir, 'claude-accounts.local.json'),
+    safeStorage: fakeStorage,
+    now: () => clock.now,
+    extraLimits: () => registry.limitedAccounts(),
+    onLimitCleared: (id) => registry.clearAccountLimit(id),
+  });
+  const tokens = { a: TOKEN_A, b: TOKEN_B };
+  const idOf = {};
+  for (const name of ids) idOf[name] = accounts.add(name, tokens[name]).id;
+  const made = {};
+  registry = createOrchestraRegistry({
+    now: () => clock.now,
+    accounts: () => accounts.list().accounts,
+    onClaudeAccount: (sessionId) => !ownBackend.includes(sessionId),
+    makeController: (projectId) => {
+      made[projectId] = fakeController(projectId, specs[projectId]);
+      return made[projectId];
+    },
+  });
+  Object.keys(specs).forEach((id) => registry.ensure(id));
+  /**
+   * main.js's transcript onUsageLimit for a worker on `account`: the registry
+   * notes the limit, failoverTab moves the tab when another account is free,
+   * and only otherwise does the registry decide who waits.
+   */
+  const workerLimit = (sessionId, account, resetsAt) => {
+    const accountId = account ? idOf[account] : null;
+    if (accountId) registry.noteAccountLimit(accountId, resetsAt);
+    const res = accountId ? accounts.markLimited(accountId, resetsAt) : { switchTo: accounts.freeAccount() };
+    if (res.switchTo) return { movedTo: res.switchTo.label };
+    registry.onUsageLimit(sessionId, resetsAt, { onAccount: !ownBackend.includes(sessionId) });
+    return { movedTo: null };
+  };
+  const launchAccount = () => {
+    const id = accounts.authLayer({})[ACCOUNT_ENV] || null;
+    return Object.keys(idOf).find((name) => idOf[name] === id) || null;
+  };
+  return { registry, accounts, made, clock, idOf, workerLimit, launchAccount };
+}
+
+const pausesOf = (c) => c.calls.filter((call) => call[0] === 'pauseExternal');
+
+test('A3: one account limited - the worker moves to the other account and no run pauses', (t) => {
+  const env = accountSetup(t, {
+    alpha: { sessions: ['s-a'], workers: ['s-a'] },
+    beta: { sessions: ['s-b'], workers: ['s-b'] },
+  });
+  const res = env.workerLimit('s-a', 'a', env.clock.now + 2 * HOUR);
+  assert.deepEqual(res, { movedTo: 'b' });
+  for (const c of Object.values(env.made)) {
+    assert.deepEqual(names(c).filter((n) => n === 'usageLimit' || n === 'pauseExternal'), [], `${c.projectId} keeps going`);
+  }
+  assert.deepEqual(env.registry.allAccountsOut(null), { out: false, until: null });
+});
+
+test('A3: both accounts limited - every run with live workers pauses until the EARLIEST reset', (t) => {
+  const env = accountSetup(t, {
+    alpha: { sessions: ['s-a'], workers: ['s-a'] },
+    beta: { sessions: ['s-b'], workers: ['s-b'] },
+    held: { view: { id: 'p3', started: false } },
+  });
+  const weekly = env.clock.now + 3 * 24 * HOUR;
+  const fiveHour = env.clock.now + 2 * HOUR;
+  assert.deepEqual(env.workerLimit('s-a', 'a', weekly), { movedTo: 'b' }, 'a goes first: its tab moves to b');
+  assert.deepEqual(env.workerLimit('s-b', 'b', fiveHour), { movedTo: null }, 'then b runs out too');
+  assert.deepEqual(pausesOf(env.made.alpha), [['pauseExternal', fiveHour]]);
+  assert.deepEqual(pausesOf(env.made.beta), [['pauseExternal', fiveHour]], 'b resets first, so every run resumes then');
+  assert.deepEqual(names(env.made.held), [], 'a run with no live worker is left alone');
+  assert.equal(names(env.made.beta).includes('usageLimit'), false, 'the owner pauses through pauseAll, not twice');
+});
+
+test('A3: a worker launched while one account is out starts on the free account, and back on the preferred one after its reset', (t) => {
+  const env = accountSetup(t, { alpha: {} });
+  assert.equal(env.launchAccount(), 'a', 'preferred account first');
+  // Only the registry knows (e.g. the usage meter saw it): the store has no cooldown.
+  env.registry.noteAccountLimit(env.idOf.a, env.clock.now + HOUR);
+  assert.equal(env.accounts.list().accounts.find((x) => x.id === env.idOf.a).limitedUntil, env.clock.now + HOUR);
+  assert.equal(env.launchAccount(), 'b');
+  env.clock.now += HOUR + 1;
+  assert.equal(env.launchAccount(), 'a', 'the limit cleared on its own');
+  assert.deepEqual(env.registry.limitedAccounts(), {});
+});
+
+test('A3: Mati clearing a cooldown in Settings clears the registry memory too', (t) => {
+  const env = accountSetup(t, { alpha: {} });
+  env.registry.noteAccountLimit(env.idOf.a, env.clock.now + HOUR);
+  assert.equal(env.launchAccount(), 'b');
+  env.accounts.clearLimit(env.idOf.a);
+  assert.equal(env.launchAccount(), 'a');
+  assert.deepEqual(env.registry.limitedAccounts(), {});
+});
+
+test('A3: another account still free (the failover loop guard said no) or its own backend - only that run waits', (t) => {
+  const env = accountSetup(t, {
+    alpha: { sessions: ['s-a'], workers: ['s-a'] },
+    beta: { sessions: ['s-b'], workers: ['s-b'] },
+  });
+  env.registry.onUsageLimit('s-a', env.clock.now + HOUR, { onAccount: true });
+  env.registry.onUsageLimit('s-b', env.clock.now + HOUR, { onAccount: false });
+  assert.deepEqual(names(env.made.alpha), ['usageLimit']);
+  assert.deepEqual(names(env.made.beta), ['usageLimit']);
+  assert.equal(pausesOf(env.made.alpha).length + pausesOf(env.made.beta).length, 0);
+});
+
+test('A3: a run whose workers all use their own backend is not paused when the Claude accounts run out', (t) => {
+  const env = accountSetup(
+    t,
+    { alpha: { sessions: ['s-a'], workers: ['s-a'] }, zai: { sessions: ['s-z'], workers: ['s-z'] } },
+    { ownBackend: ['s-z'] },
+  );
+  env.workerLimit('s-a', 'a', env.clock.now + HOUR);
+  env.workerLimit('s-a', 'b', env.clock.now + 2 * HOUR);
+  assert.deepEqual(pausesOf(env.made.alpha), [['pauseExternal', env.clock.now + HOUR]]);
+  assert.deepEqual(names(env.made.zai), []);
+});
+
+test('A3: no accounts set up - every run on the /login account pauses until the reported reset', (t) => {
+  const env = accountSetup(t, { alpha: { sessions: ['s-a'], workers: ['s-a'] }, beta: { workers: ['s-b'] } }, { ids: [] });
+  const until = env.clock.now + HOUR;
+  assert.deepEqual(env.workerLimit('s-a', null, until), { movedTo: null });
+  assert.deepEqual(pausesOf(env.made.alpha), [['pauseExternal', until]]);
+  assert.deepEqual(pausesOf(env.made.beta), [['pauseExternal', until]]);
+  // A tab no run owns (a plain terminal) pauses nothing.
+  env.registry.onUsageLimit('plain-tab', until, { onAccount: true });
+  assert.equal(pausesOf(env.made.alpha).length, 1);
+});
+
+test('A3: the account memory keeps the later reset, takes the meter exactly, forgets expired ones and ignores junk', () => {
+  let now = 1000;
+  const registry = createOrchestraRegistry({ now: () => now, makeController: () => fakeController(null) });
+  registry.noteAccountLimit('a', 5000);
+  registry.noteAccountLimit('a', 3000);
+  assert.deepEqual(registry.limitedAccounts(), { a: 5000 }, 'a weekly wall outlasts a 5 h one');
+  registry.setAccountLimit('a', 2000);
+  assert.deepEqual(registry.limitedAccounts(), { a: 2000 }, "the meter's real reset replaces the guess");
+  registry.noteAccountLimit('b', null);
+  assert.equal(registry.limitedAccounts().b, 1000 + 60 * 60 * 1000, 'no readable reset: an hour');
+  registry.clearAccountLimit('b');
+  registry.noteAccountLimit('', 9000);
+  registry.noteAccountLimit({ id: 'x' }, 9000);
+  registry.setAccountLimit('c', 500);
+  assert.deepEqual(registry.limitedAccounts(), { a: 2000 });
+  now = 2001;
+  assert.deepEqual(registry.limitedAccounts(), {});
+});
+
+test('A3: every controller gets the same shared power flow; none without power deps', () => {
+  const seen = [];
+  const power = { power: { scheduleWake: async () => ({ ok: true }) } };
+  const registry = createOrchestraRegistry({
+    power,
+    makeController: (projectId, shared) => {
+      seen.push(shared.powerFlow);
+      return fakeController(projectId);
+    },
+  });
+  registry.ensure('alpha');
+  registry.ensure('beta');
+  assert.ok(registry.powerFlow);
+  assert.equal(seen[0], registry.powerFlow);
+  assert.equal(seen[1], registry.powerFlow);
+  const bare = setup({ alpha: {} });
+  bare.registry.ensure('alpha');
+  assert.equal(bare.registry.powerFlow, null);
 });

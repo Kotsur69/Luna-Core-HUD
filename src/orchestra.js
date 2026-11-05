@@ -40,6 +40,7 @@ const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./eff
 const { createFinalizer, ABORT_FINISH_AFTER_MS, postMergeContext, slugOf } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
 const pushSecrets = require('./pushSecrets');
+const { createMergeRunDeps } = require('./orchestraMergeRun');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 // A planner limit with another Claude account free: replan after this long.
 const ACCOUNT_SWITCH_RETRY_MS = 3000;
@@ -272,10 +273,13 @@ function givenCards(allOpen, cards) {
  *   listOwnBranches?: Function, worktreeBranches?: Function, log?: Function,
  *   power?: object, awake?: {release:Function, restore:Function}, flush?: Function,
  *   notifyPower?: Function, appendReport?: Function, otherRunsActive?: () => boolean,
- *   repoBusy?: (repoPath:string) => boolean,
+ *   repoBusy?: (repoPath:string) => boolean, powerFlow?: ReturnType<typeof createPowerFlow>,
  * }} deps
  *   repoBusy: multi God Mode (orchestraRegistry.js) - another project's run
  *   holds this repo, so makePlan refuses with 'repoBusy'.
+ *   powerFlow: multi God Mode A3 - the registry's ONE sleep / shutdown flow
+ *   over every run. Without it the controller builds its own from `power`,
+ *   `awake`, `flush`, `notifyPower` and `appendReport` (a single run).
  */
 function createOrchestra(deps) {
   const now = deps.now || Date.now;
@@ -360,6 +364,15 @@ function createOrchestra(deps) {
     clearTimer: (t) => clearTimer(t),
   });
 
+  // The merge's own deps (orchestraMergeRun.js): task text, the same fix-up
+  // worker for a package red after its merge, the stop check, the count.
+  const mergeRun = createMergeRunDeps({
+    getPlan: () => plan,
+    integrateMerge: deps.integrateMerge,
+    runSelfCheck: deps.runSelfCheck,
+    runFixup: (args) => fixup.run(args),
+  });
+
   const finalizer = createFinalizer({
     getPlan: () => plan,
     patch: (id, fields) => patch(id, fields),
@@ -368,10 +381,8 @@ function createOrchestra(deps) {
     onRunEvent: (...args) => onRunEvent(...args),
     now,
     createPr: deps.createPr ? (args) => deps.createPr({ ...args, repoPath: plan.repoPath }) : null,
-    integrateMerge: deps.integrateMerge
-      ? (args, extra) => deps.integrateMerge({ ...args, repoPath: plan.repoPath }, extra)
-      : null,
-    runSelfCheck: deps.runSelfCheck,
+    integrateMerge: deps.integrateMerge ? mergeRun.integrateMerge : null,
+    runSelfCheck: mergeRun.runSelfCheck,
     pushBranch: deps.pushBranch,
     runFixup: (args) => fixup.run(args),
     checkCommand: () => workerSettings().checkCommand,
@@ -455,10 +466,11 @@ function createOrchestra(deps) {
     log,
   });
 
-  // Sleep at the usage limit / shut down when done (orchestraPower.js).
+  // Sleep at the usage limit / shut down when done (orchestraPower.js): the
+  // registry's shared flow, or this run's own.
   const approvalsPending = () =>
     plan.packages.some((p) => p.state === 'stalled' && p.error === 'needsApproval' && p.sessionId && sessionAlive(p.sessionId));
-  const powerFlow = createPowerFlow({
+  const powerFlow = deps.powerFlow || createPowerFlow({
     power: deps.power || createPowerCtl({ platform: 'unsupported' }),
     getRun: () =>
       plan
@@ -1188,9 +1200,16 @@ function createOrchestra(deps) {
     if (!settledFinalize || !plan) return;
     settledFinalize = false;
     if (!plan.settled || plan.killed) return;
-    const busyNow =
-      isBusy() || recover.pending('run') || plan.packages.some(sup.isActive) || !!(deps.otherRunsActive && deps.otherRunsActive());
-    background(powerFlow.afterFinalize({ busy: busyNow }), 'shutdown');
+    // Read again after the flush: a replaced or discarded plan, or another
+    // run that started meanwhile, stops the shutdown.
+    const settledPlan = plan;
+    const busyNow = () =>
+      isBusy() ||
+      recover.pending('run') ||
+      plan !== settledPlan ||
+      plan.packages.some(sup.isActive) ||
+      !!(deps.otherRunsActive && deps.otherRunsActive());
+    background(powerFlow.afterFinalize({ busy: busyNow(), stillBusy: busyNow, planId: plan.id }), 'shutdown');
   }
 
   /**
@@ -1801,7 +1820,7 @@ function createOrchestra(deps) {
     onRunEvent('resumed');
     commit();
     kick();
-    background(powerFlow.cancelSleep(), 'sleep');
+    background(powerFlow.refresh(), 'sleep');
   }
 
   /**
@@ -1835,7 +1854,8 @@ function createOrchestra(deps) {
   }
 
   /**
-   * The usage limit hit a worker: the whole run waits (it is one account).
+   * The usage limit hit a worker and its tab could not move to another
+   * account: the whole run waits.
    * @param {string} sessionId
    * @param {number|null} resetsAt epoch ms, when the CLI said
    */
@@ -1846,6 +1866,26 @@ function createOrchestra(deps) {
     if (plan.pausedUntil && plan.pausedUntil >= until) return;
     // Another stored account first; none -> pause until the reset, resume on its own.
     if (recover.onUsageLimit(pkg, until) === 'failover') return;
+    pauseUntil(until);
+  }
+
+  /**
+   * Multi God Mode A3: every Claude account is out, so the registry pauses
+   * every run with live workers until the earliest reset - this run too,
+   * whichever worker hit the wall.
+   * @param {number|null} resetsAt epoch ms
+   * @returns {boolean} the run is paused now
+   */
+  function pauseExternal(resetsAt) {
+    if (!plan || !plan.started || plan.killed || !plan.packages.some(sup.isActive)) return false;
+    pauseUntil(resetsAt);
+    return true;
+  }
+
+  /** Pauses the run until `resetsAt` (+ grace); a longer pause already set wins. */
+  function pauseUntil(resetsAt) {
+    const until = Number.isFinite(resetsAt) && resetsAt > now() ? resetsAt : now() + DEFAULT_PAUSE_MS;
+    if (plan.pausedUntil && plan.pausedUntil >= until) return;
     for (const id of [...nudgeTimers.keys()]) cancelNudge(id);
     if (!plan.pausedUntil) plan.pauseStartedAt = now();
     plan.pausedUntil = until;
@@ -2021,8 +2061,10 @@ function createOrchestra(deps) {
     settledFinalize = false;
     // A kill ends the hold too: Retry checks node_modules again.
     releaseHold();
-    background(powerFlow.cancelSleep(), 'sleep');
-    background(powerFlow.cancelShutdown(), 'shutdown');
+    // Shared flow: another run may still be paused and allow the sleep, or
+    // have settled and asked for the shutdown already counting down.
+    background(powerFlow.refresh(), 'sleep');
+    background(powerFlow.refreshShutdown(), 'shutdown');
     onRunEvent('killed');
     commit();
     return true;
@@ -2256,6 +2298,34 @@ function createOrchestra(deps) {
     };
   }
 
+  /**
+   * This run's slice of the shared power view (orchestraPower.js
+   * aggregatePowerRun): planning or finalizing counts as live, like a
+   * started run that is neither killed nor settled. Null with no plan and
+   * nothing going.
+   */
+  function powerState() {
+    const working = isBusy();
+    if (!plan) {
+      return working
+        ? { planId: null, live: true, settled: false, pausedUntil: null, killed: false, approvalsPending: false, options: sup.normalizeOptions(null) }
+        : null;
+    }
+    return {
+      planId: plan.id,
+      live: working || (plan.started === true && !plan.killed && !plan.settled),
+      settled: plan.settled === true,
+      pausedUntil: plan.pausedUntil || null,
+      killed: plan.killed === true,
+      approvalsPending: approvalsPending(),
+      options: sup.normalizeOptions(plan.options),
+    };
+  }
+
+  /** The tabs of this run's workers that are running right now (registry.pauseAll). */
+  const workerSessions = () =>
+    plan ? plan.packages.filter((p) => p.state === 'launched' && p.sessionId).map((p) => p.sessionId) : [];
+
   function discard() {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
@@ -2277,6 +2347,9 @@ function createOrchestra(deps) {
     tick,
     onTurnEnd,
     onUsageLimit,
+    pauseExternal,
+    powerState,
+    workerSessions,
     onApproval,
     onFiles,
     ownsSession,

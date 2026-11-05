@@ -25,7 +25,7 @@
 
 const path = require('path');
 const h = require('./reportHtml');
-const { diagnosePackage, diagnoseIntegration, diagnoseSkip } = require('./orchestraDiagnose');
+const { diagnosePackage, diagnoseIntegration, diagnoseSkip, skipDetailLabel } = require('./orchestraDiagnose');
 const { sleepSummary } = require('./orchestraSleep');
 const { recoveryEntries } = require('./orchestraRecover');
 
@@ -127,14 +127,37 @@ function packageLines(view, skippedIds) {
   return out;
 }
 
+/** A skip's detail as evidence: 'Git said' only where git spoke (orchestraDiagnose.js). */
+const skipDetail = (s) => (s.detail ? `${skipDetailLabel(s.stage)}: ${code(s.detail, 300)}` : '');
+
 function skippedLine(s, view) {
   const files = list(s.files).slice(0, 10).map((f) => code(f)).join(', ');
   const pkg = list(view.packages).find((p) => isObject(p) && p.id === s.id) || {};
-  const why = oneLine(s.detail);
+  const why = s.stage === 'depSkipped' && s.detail ? `depends on: ${oneLine(s.detail, 64)}` : oneLine(s.detail);
   const stage = oneLine(s.stage, 32) || 'merge';
   return `${label({ id: s.id, title: pkg.title })} - skipped at ${stage}${why ? ` (${why})` : ''}${
     files ? `; files: ${files}` : ''
-  }. Next step: ${NEXT_STEP}.`;
+  }${s.fixup === 'failed' ? '; a fix-up worker tried and could not get it green' : ''}. Next step: ${NEXT_STEP}.`;
+}
+
+/** What the integration did for a package beyond a plain merge, for the Notes column. */
+function integrationNotes(p, integ) {
+  const has = (key) => list(integ[key]).includes(p.id);
+  return [has('secondPass') ? 'merged on second pass' : '', has('fixedUp') ? 'fixed by fix-up after the merge' : ''].filter(Boolean);
+}
+
+/** Packages that went in only on the integration's second pass, as their own list. */
+function secondPassLines(view) {
+  const integ = isObject(view.integration) ? view.integration : {};
+  const ids = list(integ.secondPass).filter((id) => typeof id === 'string');
+  if (!ids.length) return [];
+  const byId = new Map(list(view.packages).filter(isObject).map((p) => [p.id, p]));
+  return [
+    '',
+    'Merged on second pass (after the rest was in):',
+    '',
+    ...ids.map((id) => `- ${label({ id, title: (byId.get(id) || {}).title })}`),
+  ];
 }
 
 function selfCheckLine(sc, view) {
@@ -275,9 +298,10 @@ function problems(view, facts = {}) {
     const files = list(s.files).slice(0, 10).map((f) => code(f));
     out.push({
       title: `${label({ id: s.id, title: pkg.title })} - left out of the merge (${oneLine(s.stage, 32) || 'merge'})`,
-      ...diagnoseSkip(s.stage),
+      ...diagnoseSkip(s.stage, s.detail),
       evidence: [
-        s.detail ? `Git said: ${code(s.detail, 300)}` : '',
+        skipDetail(s),
+        s.fixup === 'failed' ? 'Fix-up: one fix-up worker tried after the merge and could not get it green (the detail says why), so it was taken out' : '',
         files.length ? `Files: ${files.join(', ')}` : '',
         pkg.branch ? `Branch: ${code(pkg.branch, 120)}` : '',
       ].filter(Boolean),
@@ -358,10 +382,12 @@ function mergedSection(view) {
     '|---|---|---|---|---|---|',
   ];
   const merge = view.integrationMode === 'merge';
+  const integ = isObject(view.integration) ? view.integration : {};
   for (const p of list(view.packages).filter(isObject)) {
     const mergedText = merge && p.state === 'pushed' ? `merged: ${p.merged ? 'yes' : 'no'}` : p.merged ? 'merged' : '';
     const notes = [
       oneLine(reasonOf(p), MAX_ITEM_CHARS),
+      ...integrationNotes(p, integ),
       p.depMerge && p.depMerge.strategy === 'worker' ? 'dependencies merged by the worker' : '',
       p.escalated ? 'escalated to Opus' : '',
       p.cleaned ? 'worktree removed' : '',
@@ -375,6 +401,7 @@ function mergedSection(view) {
       )} | ${cell(notes)} |`,
     );
   }
+  lines.push(...secondPassLines(view));
   const overlaps = list(view.overlaps).filter(isObject);
   if (overlaps.length) lines.push('', 'File overlaps:', '');
   for (const o of overlaps) {
@@ -634,6 +661,7 @@ function wrongHtml(view, facts) {
 
 function packageTable(view, packages, now) {
   const merge = view.integrationMode === 'merge';
+  const integ = isObject(view.integration) ? view.integration : {};
   const rows = packages.map((p) => {
     const ms = packageMs(p, now);
     // Only an https link becomes an href (the plan shape-checks it already).
@@ -646,7 +674,7 @@ function packageTable(view, packages, now) {
       h.escapeHtml(sha7(p.headSha) || '-'),
       h.escapeHtml(ms === null ? '-' : duration(ms)),
       pr || h.escapeHtml(mergedText || '-'),
-      h.escapeHtml(oneLine(reasonOf(p), MAX_ITEM_CHARS)),
+      h.escapeHtml([oneLine(reasonOf(p), MAX_ITEM_CHARS), ...integrationNotes(p, integ)].filter(Boolean).join('; ')),
     ];
   });
   return h.section('Packages', h.table(['Package', 'State', 'Branch', 'Commit', 'Time', 'PR / merge', 'Notes'], rows, 'No packages'));

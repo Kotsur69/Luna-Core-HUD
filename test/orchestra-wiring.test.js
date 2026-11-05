@@ -189,3 +189,31 @@ test("legacyRunProject matches a legacy run's repoPath against the registered pr
   assert.equal(legacyRunProject(ctx, {}), null);
   assert.equal(legacyRunProject(ctx, null), null);
 });
+
+test('sharedPowerDeps: one flow for every run - a change re-sends every run view; makeOrchestraDeps hands the shared flow over', (t) => {
+  const fs = require('fs');
+  const { sharedPowerDeps } = require('../src/orchestraWiring.js');
+  const written = [];
+  t.mock.method(fs, 'appendFileSync', (file, text) => written.push([file, text]));
+  const { ctx, out, registry } = fakeCtx();
+  registry.views = () => [
+    { projectId: 'alpha', view: { id: 'p1' } },
+    { projectId: 'beta', view: { id: 'p2' } },
+  ];
+  const shared = sharedPowerDeps(ctx);
+  assert.equal(typeof shared.power.scheduleWake, 'function');
+  shared.onChange();
+  assert.deepEqual(out.sent, [
+    ['orchestra:changed', { projectId: 'alpha', view: { id: 'p1' } }],
+    ['orchestra:changed', { projectId: 'beta', view: { id: 'p2' } }],
+  ]);
+  shared.appendReport('../evil', 'x');
+  shared.appendReport(null, 'x');
+  assert.deepEqual(written, [], 'a junk plan id is never a file name');
+  shared.appendReport('p1', '- PC shut down at 07:00');
+  assert.deepEqual(written, [[path.join(path.sep, 'cfg', 'runs', 'p1.md'), '- PC shut down at 07:00\n']]);
+  assert.deepEqual(out.errors, []);
+  const flow = { view: () => null };
+  assert.equal(makeOrchestraDeps('alpha', ctx, { powerFlow: flow }).powerFlow, flow);
+  assert.equal('powerFlow' in makeOrchestraDeps('alpha', ctx), false, 'no shared flow: the controller builds its own');
+});

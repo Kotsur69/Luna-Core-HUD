@@ -8,6 +8,10 @@
 // `LUNA_BLOCKED selfcheck` (the supervisor's own turn-end marker parsing with
 // the synthetic id 'selfcheck'), when its tab closes, or after a 45 min cap;
 // the tab is closed afterwards. One at a time. Never throws.
+//
+// The merge itself uses the same runner (orchestraMergeFixup.js): a package
+// red right after its merge gets one fix-up, with a shorter cap, before it
+// is taken back out.
 // ============================================================================
 
 'use strict';
@@ -43,7 +47,8 @@ function createFixupRunner(deps) {
   }
 
   /**
-   * @param {{root:string, brief:string}} args
+   * @param {{root:string, brief:string, capMs?:number}} args capMs: a
+   *   shorter cap (the merge fix-up's 20 min); never longer than 45 min
    * @returns {Promise<{ok:boolean}>}
    */
   function run(args) {
@@ -69,7 +74,8 @@ function createFixupRunner(deps) {
     if (!session || !session.id) return Promise.resolve({ ok: false });
     return new Promise((resolve) => {
       current = { sessionId: session.id, resolve, timer: null };
-      const timer = deps.setTimer(() => settle(false), FIXUP_CAP_MS);
+      const cap = Number.isFinite(o.capMs) && o.capMs > 0 ? Math.min(o.capMs, FIXUP_CAP_MS) : FIXUP_CAP_MS;
+      const timer = deps.setTimer(() => settle(false), cap);
       // A real timer must not keep a test process (or a quitting app) alive.
       if (timer && typeof timer.unref === 'function') timer.unref();
       if (current) current.timer = timer;

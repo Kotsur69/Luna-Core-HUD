@@ -663,3 +663,307 @@ test('a finish past the threshold can be aborted; Retry is refused before and wo
   assert.equal(retried.ok, true, 'Retry works again');
   assert.equal(s.orch.view().packages.find((p) => p.id === 'b').state, 'launched');
 });
+
+// ---- two runs, one shared power flow (multi God Mode A3) ------------------------
+
+const { createOrchestraRegistry } = require('../src/orchestraRegistry.js');
+
+/** Two real controllers (alpha, beta) on one registry and its ONE power flow. */
+async function twoRuns({ answers = {} } = {}) {
+  let clock = new Date(2026, 9, 22, 1, 0).getTime();
+  let seq = 0;
+  const timers = [];
+  const alive = new Set();
+  const log = { awake: [], appended: [], flushed: 0, notices: [] };
+  const power = winCtl(answers);
+  const setTimer = (fn, ms) => {
+    const t = { fn, at: clock + ms, done: false };
+    timers.push(t);
+    return t;
+  };
+  const clearTimer = (t) => {
+    if (t) t.done = true;
+  };
+  let registry = null;
+  registry = createOrchestraRegistry({
+    now: () => clock,
+    power: {
+      power: power.ctl,
+      awake: { release: () => log.awake.push('release'), restore: () => log.awake.push('restore') },
+      flush: () => {
+        log.flushed += 1;
+      },
+      notify: (kind) => log.notices.push(kind),
+      appendReport: (id, line) => log.appended.push([id, line]),
+      graceMs: RESUME_GRACE_MS,
+      now: () => clock,
+      setTimer,
+      clearTimer,
+    },
+    makeController: (projectId, shared) =>
+      createOrchestra({
+        now: () => clock,
+        readTodos: () => [1, 2].map((at) => ({ at, text: `t${at}`, done: false })),
+        dirtyCount: async () => 0,
+        baseBranchOf: async () => 'main',
+        runPlanner: async () => ({ ok: true, raw: { packages: [pkg('a', [1]), pkg('b', [2])], notes: '' }, costUsd: 0 }),
+        addWorktree: async (_repo, name) => ({ ok: true, root: path.join('/wt', projectId, name), cwd: path.join('/wt', name), branch: `luna/${name}` }),
+        headSha: async () => 'base0000',
+        briefDir: () => '/cfg/tasks',
+        writeBrief: () => true,
+        createSession: () => {
+          seq += 1;
+          alive.add(`s${seq}`);
+          return { id: `s${seq}` };
+        },
+        closeSession: (id) => alive.delete(id),
+        finishPackage: async (p) => ({ ok: true, headSha: `${p.id}5678aaa`, files: [] }),
+        writePty: (id) => alive.has(id),
+        sessionAlive: (id) => alive.has(id),
+        workerSettings: () => ({ model: 'opus', permissionMode: 'bypassPermissions', integration: 'pr', allowedTools: [] }),
+        createPr: async () => ({ ok: true, url: 'https://github.com/o/r/pull/1' }),
+        removeWorktree: async () => ({ ok: true }),
+        writeReport: (id) => `/cfg/runs/${id}.md`,
+        sleep: async () => {},
+        setTimer,
+        clearTimer,
+        powerFlow: shared.powerFlow,
+        otherRunsActive: () => registry.othersActive(projectId),
+      }),
+  });
+  const flush = async (n = 6) => {
+    for (let i = 0; i < n; i += 1) await new Promise((r) => setImmediate(r));
+  };
+  const advance = (ms) => {
+    clock += ms;
+    for (const t of timers) {
+      if (!t.done && t.at <= clock) {
+        t.done = true;
+        t.fn();
+      }
+    }
+  };
+  const alpha = registry.ensure('alpha');
+  const beta = registry.ensure('beta');
+  const planA = (await alpha.makePlan({ projectId: 'alpha', repoPath: '/repo-a', profileId: 'cloud', env: {} })).plan;
+  await alpha.launch({ planId: planA.id });
+  const planB = (await beta.makePlan({ projectId: 'beta', repoPath: '/repo-b', profileId: 'cloud', env: {} })).plan;
+  await beta.launch({ planId: planB.id });
+  await flush();
+  // alpha's workers are s1, s2; beta's are s3, s4.
+  const ran = (file, first) => power.calls.filter((c) => c.file === file && (!first || c.args[0] === first));
+  return { registry, alpha, beta, planA, planB, log, power, ran, flush, advance, now: () => clock };
+}
+
+const wakeStamp = (s) => {
+  const create = s.ran('schtasks.exe', '/Create');
+  return create.length ? s.power.files.written.get(create[create.length - 1].args[4]).toString('utf16le').match(/<StartBoundary>([^<]+)</)[1] : null;
+};
+
+test('two runs: no sleep while one still works; once both are paused the PC sleeps until the EARLIEST reset', async () => {
+  const s = await twoRuns();
+  s.alpha.setOptions({ sleepOnLimit: true });
+  s.beta.setOptions({ sleepOnLimit: true });
+  const late = s.now() + 3 * 3_600_000;
+  const early = s.now() + 3_600_000;
+  s.alpha.onUsageLimit('s1', late);
+  await s.flush();
+  assert.equal(s.ran('schtasks.exe', '/Create').length, 0, 'beta is still working');
+  assert.deepEqual(s.log.awake, []);
+  s.beta.onUsageLimit('s3', early);
+  await s.flush();
+  assert.equal(s.ran('schtasks.exe', '/Create').length, 1);
+  assert.equal(wakeStamp(s), localStamp(early + RESUME_GRACE_MS), 'wakes for the run that resets first');
+  assert.deepEqual(s.log.awake, ['release']);
+  s.advance(SLEEP_COUNTDOWN_MS);
+  await s.flush();
+  assert.equal(s.ran('powershell.exe').length, 1, 'suspended');
+});
+
+test('two runs: one run with sleepOnLimit off keeps the PC awake - the opt-out wins', async () => {
+  const s = await twoRuns();
+  s.alpha.setOptions({ sleepOnLimit: true });
+  s.alpha.onUsageLimit('s1', s.now() + 3_600_000);
+  s.beta.onUsageLimit('s3', s.now() + 3_600_000);
+  await s.flush();
+  s.advance(SLEEP_COUNTDOWN_MS * 2);
+  await s.flush();
+  assert.equal(s.ran('schtasks.exe', '/Create').length, 0);
+  assert.equal(s.ran('powershell.exe').length, 0);
+
+  // Beta allows it too: now the sleep is armed. Alpha unticking stops it again.
+  s.beta.setOptions({ sleepOnLimit: true });
+  await s.flush();
+  assert.equal(s.ran('schtasks.exe', '/Create').length, 1);
+  s.alpha.setOptions({ sleepOnLimit: false });
+  await s.flush();
+  s.advance(SLEEP_COUNTDOWN_MS);
+  await s.flush();
+  assert.equal(s.ran('schtasks.exe', '/Delete').length, 1);
+  assert.equal(s.ran('powershell.exe').length, 0);
+  assert.deepEqual(s.log.awake, ['release', 'restore']);
+});
+
+test('two runs: a worker of either run on a permission prompt keeps the PC awake', async () => {
+  const s = await twoRuns();
+  s.alpha.setOptions({ sleepOnLimit: true });
+  s.beta.setOptions({ sleepOnLimit: true });
+  s.beta.onApproval('s4', 'Bash(npm test:*)');
+  s.alpha.onUsageLimit('s1', s.now() + 3_600_000);
+  s.beta.onUsageLimit('s3', s.now() + 3_600_000);
+  await s.flush();
+  s.advance(SLEEP_COUNTDOWN_MS);
+  await s.flush();
+  assert.equal(s.ran('schtasks.exe', '/Create').length, 0);
+  assert.equal(s.ran('powershell.exe').length, 0);
+});
+
+test('two runs: pauseAll (every account out) pauses both until the earliest reset and arms ONE sleep', async () => {
+  const s = await twoRuns();
+  s.alpha.setOptions({ sleepOnLimit: true });
+  s.beta.setOptions({ sleepOnLimit: true });
+  const until = s.now() + 2 * 3_600_000;
+  assert.equal(s.registry.pauseAll(until), 2);
+  await s.flush();
+  assert.equal(s.alpha.view().pausedUntil, until);
+  assert.equal(s.beta.view().pausedUntil, until);
+  assert.equal(s.ran('schtasks.exe', '/Create').length, 1);
+  assert.equal(wakeStamp(s), localStamp(until + RESUME_GRACE_MS));
+  assert.deepEqual(s.alpha.view().power, s.beta.view().power, 'the power view is global');
+  // The board's cancel on either run cancels the one sleep.
+  await s.beta.cancelSleep();
+  assert.equal(s.alpha.view().power.sleep, null);
+  assert.equal(s.ran('schtasks.exe', '/Delete').length, 1);
+});
+
+test('two runs: killing the run that still works lets the paused one sleep', async () => {
+  const s = await twoRuns();
+  s.alpha.setOptions({ sleepOnLimit: true });
+  s.beta.setOptions({ sleepOnLimit: true });
+  s.alpha.onUsageLimit('s1', s.now() + 3_600_000);
+  await s.flush();
+  assert.equal(s.ran('schtasks.exe', '/Create').length, 0);
+  s.beta.kill();
+  await s.flush();
+  assert.equal(s.ran('schtasks.exe', '/Create').length, 1, 'only paused runs are left');
+  s.advance(SLEEP_COUNTDOWN_MS);
+  await s.flush();
+  assert.equal(s.ran('powershell.exe').length, 1);
+});
+
+test('two runs: shutdown waits for the LAST run to settle, then follows the run that asked for it', async () => {
+  const s = await twoRuns();
+  s.alpha.setOptions({ shutdownWhenDone: true });
+  s.alpha.onTurnEnd('s1', turn('LUNA_DONE a'));
+  s.alpha.onTurnEnd('s2', turn('LUNA_DONE b'));
+  await s.flush(20);
+  assert.equal(s.alpha.view().settled, true);
+  assert.equal(s.ran('shutdown.exe').length, 0, 'beta still runs');
+  s.beta.onTurnEnd('s3', turn('LUNA_DONE a'));
+  s.beta.onTurnEnd('s4', turn('LUNA_DONE b'));
+  await s.flush(20);
+  assert.equal(s.beta.view().settled, true);
+  assert.equal(s.ran('shutdown.exe', '/s').length, 1, "beta settled last: alpha's option shuts the PC down");
+  assert.deepEqual(s.log.appended.map(([id]) => id), [s.planA.id], 'noted in the report of the run that asked');
+  assert.equal(s.log.flushed, 1);
+  // Beta unticking its own (already off) option does not cancel alpha's shutdown.
+  s.beta.setOptions({ shutdownWhenDone: false });
+  await s.flush();
+  assert.equal(s.ran('shutdown.exe', '/a').length, 0);
+});
+
+test('two runs: killing a run during the shutdown countdown keeps the shutdown another run asked for', async () => {
+  const s = await twoRuns();
+  s.alpha.setOptions({ shutdownWhenDone: true });
+  for (const [ctl, ids] of [[s.alpha, ['s1', 's2']], [s.beta, ['s3', 's4']]]) {
+    ctl.onTurnEnd(ids[0], turn('LUNA_DONE a'));
+    ctl.onTurnEnd(ids[1], turn('LUNA_DONE b'));
+    await s.flush(20);
+  }
+  assert.equal(s.ran('shutdown.exe', '/s').length, 1);
+  assert.equal(s.beta.kill(), true);
+  await s.flush();
+  assert.equal(s.ran('shutdown.exe', '/a').length, 0, "alpha's ask still stands");
+  assert.equal(s.alpha.view().power.shutdown.phase, 'countdown');
+  // Killing the run that asked leaves nobody asking: now it is canceled.
+  s.alpha.kill();
+  await s.flush();
+  assert.equal(s.ran('shutdown.exe', '/a').length, 1);
+  assert.equal(s.alpha.view().power.shutdown, null);
+});
+
+/** A settled run's power state, as the controller reports it. */
+const settledRun = (planId, shutdownWhenDone) => ({
+  planId, live: false, settled: true, pausedUntil: null, killed: false, approvalsPending: false,
+  options: { sleepOnLimit: false, shutdownWhenDone },
+});
+
+test('shutdown: a canceled countdown is not re-armed by the next run to settle; a run that settles again asks again', async () => {
+  const { createPowerFlow, aggregatePowerRun } = require('../src/orchestraPower.js');
+  const power = winCtl();
+  let states = [settledRun('pa', true), settledRun('pb', false)];
+  const flow = createPowerFlow({ power: power.ctl, getRun: () => aggregatePowerRun(states) });
+  const shut = () => power.calls.filter((c) => c.file === 'shutdown.exe' && c.args[0] === '/s').length;
+  assert.equal((await flow.afterFinalize({ busy: false, planId: 'pb' })).ok, true);
+  assert.equal(shut(), 1);
+  await flow.cancelShutdown();
+  states = [...states, settledRun('pc', false)];
+  assert.equal((await flow.afterFinalize({ busy: false, planId: 'pc' })).ok, false, "Mati canceled pa's shutdown");
+  assert.equal(shut(), 1);
+  assert.equal((await flow.afterFinalize({ busy: false, planId: 'pa' })).ok, true, 'pa settled again: a fresh ask');
+  assert.equal(shut(), 2);
+});
+
+test('shutdown: a run that starts while the writes flush stops the shutdown, and the ask stays for later', async () => {
+  const { createPowerFlow, aggregatePowerRun } = require('../src/orchestraPower.js');
+  const power = winCtl();
+  const awake = [];
+  let busy = false;
+  let flushes = 0;
+  const flow = createPowerFlow({
+    power: power.ctl,
+    getRun: () => aggregatePowerRun([settledRun('pa', true)]),
+    awake: { release: () => awake.push('release'), restore: () => awake.push('restore') },
+    // Another run starts during the FIRST flush only.
+    flush: () => {
+      flushes += 1;
+      if (flushes === 1) busy = true;
+    },
+  });
+  const res = await flow.afterFinalize({ busy: false, stillBusy: () => busy, planId: 'pa' });
+  assert.deepEqual(res, { ok: false, reason: 'busy' });
+  assert.equal(power.calls.filter((c) => c.file === 'shutdown.exe').length, 0);
+  assert.equal(flow.view().shutdown, null);
+  assert.deepEqual(awake, ['release', 'restore']);
+  busy = false;
+  assert.equal((await flow.afterFinalize({ busy: false, stillBusy: () => busy })).ok, true, 'the last run to finish shuts down');
+  assert.equal(power.calls.filter((c) => c.file === 'shutdown.exe' && c.args[0] === '/s').length, 1);
+});
+
+test('two runs: no shutdown when no settled run asked for it', async () => {
+  const s = await twoRuns();
+  s.alpha.onTurnEnd('s1', turn('LUNA_DONE a'));
+  s.alpha.onTurnEnd('s2', turn('LUNA_DONE b'));
+  s.beta.onTurnEnd('s3', turn('LUNA_DONE a'));
+  s.beta.onTurnEnd('s4', turn('LUNA_DONE b'));
+  await s.flush(30);
+  assert.equal(s.alpha.view().settled && s.beta.view().settled, true);
+  assert.equal(s.ran('shutdown.exe').length, 0);
+});
+
+test('aggregatePowerRun: no runs is null; planning counts as live and blocks the sleep; killed runs never ask for shutdown', () => {
+  const { aggregatePowerRun } = require('../src/orchestraPower.js');
+  const opts = (sleepOnLimit, shutdownWhenDone = false) => ({ sleepOnLimit, shutdownWhenDone });
+  assert.equal(aggregatePowerRun([]), null);
+  assert.equal(aggregatePowerRun([null, undefined]), null);
+  const paused = { planId: 'p1', live: true, settled: false, pausedUntil: 500, killed: false, approvalsPending: false, options: opts(true) };
+  const planning = { planId: null, live: true, settled: false, pausedUntil: null, killed: false, approvalsPending: false, options: opts(false) };
+  const killedDone = { planId: 'p3', live: false, settled: true, pausedUntil: null, killed: true, approvalsPending: false, options: opts(true, true) };
+  assert.equal(aggregatePowerRun([paused]).pausedUntil, 500);
+  const both = aggregatePowerRun([paused, planning, killedDone]);
+  assert.equal(both.pausedUntil, null, 'a run that is planning is not paused');
+  assert.equal(both.options.sleepOnLimit, false);
+  assert.equal(both.options.shutdownWhenDone, false, 'a killed run never shuts the PC down');
+  assert.equal(both.planId, 'p1');
+  assert.deepEqual(both.planIds, []);
+});
