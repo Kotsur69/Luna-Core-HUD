@@ -67,9 +67,9 @@ function createVerifyQueue(deps = {}) {
   /** @type {null|{cwd:string, startedAt:number}} */
   let active = null;
 
-  async function runOnce(command, cwd) {
+  async function runOnce(command, cwd, timeoutMs) {
     try {
-      const res = await runImpl(command, cwd, { timeoutMs: limitMs });
+      const res = await runImpl(command, cwd, { timeoutMs });
       return res && typeof res === 'object' ? res : { ok: false, output: 'verify returned nothing', timedOut: false };
     } catch (err) {
       return { ok: false, output: err instanceof Error ? err.message : String(err), timedOut: false };
@@ -97,16 +97,20 @@ function createVerifyQueue(deps = {}) {
     const startedAt = now();
     active = { cwd, startedAt };
     safeCall(hooks.onStart, { waitedMs: startedAt - queuedAt });
+    // The recovery playbook (orchestraRecover.js) re-runs a timed-out verify
+    // alone with a longer limit and no further re-run.
+    const limit = Number.isFinite(hooks.limitMs) && hooks.limitMs > 0 ? hooks.limitMs : limitMs;
+    const maxReruns = Number.isInteger(hooks.timeoutReruns) && hooks.timeoutReruns >= 0 ? hooks.timeoutReruns : TIMEOUT_RERUNS;
     try {
-      let res = await runOnce(command, cwd);
+      let res = await runOnce(command, cwd, limit);
       let reruns = 0;
       // No re-run when the timed-out tree could not be stopped: two suites
       // side by side is what this queue exists to prevent.
-      while (res.timedOut && !res.killFailed && reruns < TIMEOUT_RERUNS) {
+      while (res.timedOut && !res.killFailed && reruns < maxReruns) {
         reruns += 1;
-        log(`[verify-queue] ${cwd}: timed out after ${Math.round(limitMs / 60000)} min, running it once more`);
+        log(`[verify-queue] ${cwd}: timed out after ${Math.round(limit / 60000)} min, running it once more`);
         safeCall(hooks.onRerun, { attempt: reruns + 1 });
-        res = await runOnce(command, cwd);
+        res = await runOnce(command, cwd, limit);
       }
       return {
         ok: res.ok === true && !res.timedOut,
@@ -126,7 +130,8 @@ function createVerifyQueue(deps = {}) {
    * @param {string} command
    * @param {string} cwd
    * @param {{onQueued?:Function, onStart?:Function, onRerun?:Function, isCancelled?:() => boolean,
-   *   whenAllowed?:() => Promise<void>}} [hooks]
+   *   whenAllowed?:() => Promise<void>, limitMs?:number, timeoutReruns?:number}} [hooks]
+   *   limitMs / timeoutReruns: this run's own limit and re-run count
    * @returns {Promise<{ok:boolean, output:string, timedOut:boolean, reruns:number, waitedMs:number, ranMs:number}>}
    */
   function run(command, cwd, hooks = {}) {

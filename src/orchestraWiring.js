@@ -18,6 +18,8 @@
 //                the registry's othersActive(projectId)
 //   battery      one process-wide guard (makeBatteryGuard) every project's
 //                run shares: on-battery warning, low-battery hold
+//   recovery     the playbook's git / gh actions and its one notification
+//                (orchestraRecover.js)
 //
 // Luna's Work overlays (worker settings, planner models) apply only to the
 // project its build runs on; every other project's run is plain God Mode.
@@ -43,6 +45,7 @@ const { createPowerCtl } = require('./powerctl');
 const { createBatteryGuard } = require('./orchestraPower');
 const { createProcessScope } = require('./procTree');
 const { WATCHDOG_TICK_MS } = require('./orchestraSleep');
+const orchestraRecover = require('./orchestraRecover');
 
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 // How much of a worker's transcript is read to name the tool a permission
@@ -333,12 +336,66 @@ function reportDeps(ctx, self) {
     },
     onRunEvent: (kind, data) => {
       // The whole run waits for Mati: say so even with the board closed.
-      if (kind === 'noNodeModules' && ctx.readUiPrefs().notificationsEnabled) {
+      // Not when the recovery playbook's ask already said it (orchestraRecover.js).
+      if (kind === 'noNodeModules' && !(data && data.asked) && ctx.readUiPrefs().notificationsEnabled) {
         ctx.toast(TOAST_TITLE, orchestraDeps.noNodeModulesText((data && data.dir) || '?'));
       }
       if (ctx.readUiPrefs().voiceEnabled === false) return;
       if (kind === 'done') ctx.playCue('voice.done');
-      else if (kind === 'needYou' || kind === 'stalled' || kind === 'overlap' || kind === 'noNodeModules') ctx.playCue('voice.needYou');
+      else if (kind === 'needYou' || kind === 'stalled' || kind === 'overlap' || kind === 'noNodeModules' || kind === 'recoverAsk') {
+        ctx.playCue('voice.needYou');
+      }
+    },
+  };
+}
+
+/**
+ * Renames the package branch in its worktree (`git branch -m`), so the next
+ * push goes out under the new name. Both names must be LunaCore's own shape.
+ * @returns {Promise<{ok:boolean, detail?:string}>}
+ */
+async function renameBranchGit(root, from, to, execImpl) {
+  const { runGit, firstLine } = require('./worktrees');
+  if (!orchestraRecover.BRANCH_RE.test(String(from || '')) || !orchestraRecover.BRANCH_RE.test(String(to || ''))) return { ok: false, detail: 'not a LunaCore branch name' };
+  const res = await runGit(root, ['branch', '-m', from, to], execImpl);
+  return res.ok ? { ok: true } : { ok: false, detail: firstLine(res.stderr) || 'git branch -m failed' };
+}
+
+/**
+ * `gh auth status`: true = logged in, false = gh says it is not, null =
+ * cannot tell (gh missing, timed out) - the retry then goes ahead.
+ * @param {object} env
+ * @param {Function} [execImpl] child_process.execFile shape
+ * @returns {Promise<boolean|null>}
+ */
+function ghAuthStatus(env, execImpl) {
+  const run = execImpl || require('child_process').execFile;
+  return new Promise((resolve) => {
+    try {
+      run('gh', ['auth', 'status'], { env, windowsHide: true, timeout: 20000 }, (err) => {
+        if (!err) return resolve(true);
+        resolve(err.code === 'ENOENT' || err.killed ? null : false);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+/**
+ * The recovery playbook's process-bound actions (orchestraRecover.js): the
+ * branch rename, `gh auth status`, and the ask - an OS toast in the UI
+ * language, shown whether or not toasts are on (the run cannot go on alone).
+ * The board shows the same ask from the package's stall history.
+ */
+function recoverDeps(ctx) {
+  return {
+    renameBranch: (root, from, to) => renameBranchGit(root, from, to),
+    ghAuthOk: () => ghAuthStatus(ctx.toolEnv()),
+    notifyRecover: (ask) => {
+      const lang = ctx.readUiPrefs().lang === 'pl' ? 'pl' : 'en';
+      const text = ask && ask.text && ask.text[lang];
+      if (text) ctx.toast(text.title, text.body);
     },
   };
 }
@@ -482,6 +539,7 @@ function makeOrchestraDeps(projectId, ctx) {
     ...stateDeps(projectId, ctx, store),
     ...powerDeps(projectId, ctx),
     ...builderDeps(projectId, ctx, self),
+    ...recoverDeps(ctx),
     // The watchdog interval (main.js ticks the registry at it): a tick much
     // later than this means the PC slept (orchestraSleep.js).
     tickMs: WATCHDOG_TICK_MS,
@@ -498,4 +556,6 @@ module.exports = {
   makeBatteryGuard,
   batteryNotice,
   BATTERY_NOTICES,
+  renameBranchGit,
+  ghAuthStatus,
 };

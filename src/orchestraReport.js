@@ -12,6 +12,7 @@
 //   ## Manual actions         what he has to apply live (migrations, ...)
 //   ## Merged / pushed         per package: branch, sha, PR / merged, notes
 //   ## Self-check              tests / syntax / smoke / fix-ups
+//   ## Automatic fixes         every playbook fix and ask (orchestraRecover.js)
 //   ## Allow-rule suggestions  approval prompts that stalled workers
 //   ## Timeline                started, finished, time paused on limits,
 //                              how often the PC slept and for how long
@@ -26,6 +27,7 @@ const path = require('path');
 const h = require('./reportHtml');
 const { diagnosePackage, diagnoseIntegration, diagnoseSkip } = require('./orchestraDiagnose');
 const { sleepSummary } = require('./orchestraSleep');
+const { recoveryEntries } = require('./orchestraRecover');
 
 const NOTE_TAG = '[LunaCore run';
 // A whole note line: the tag with a run id, as stallNote() writes it.
@@ -397,6 +399,19 @@ function selfCheckSection(integ) {
   return lines;
 }
 
+/** Every automatic fix (cause, action, result) and every ask, oldest first. */
+function recoverySection(view) {
+  const lines = ['', '## Automatic fixes', ''];
+  const items = recoveryEntries(view).slice(-MAX_LIST);
+  if (!items.length) return [...lines, 'None.'];
+  for (const e of items) {
+    const who = e.pkg ? `${code(e.pkg, 64)} ` : 'run ';
+    const what = e.kind === 'ask' ? 'asked you once' : 'fixed automatically';
+    lines.push(`- ${fmt(e.at)} UTC ${who}${code(e.cause, 32)}: ${what}${e.detail ? ` - ${code(e.detail, 160)}` : ''}`);
+  }
+  return lines;
+}
+
 function suggestionSection(suggestions) {
   const lines = ['', '## Allow-rule suggestions', ''];
   const items = list(suggestions).filter(isObject);
@@ -453,6 +468,7 @@ function buildReport(view, extra) {
     ...manualSection(integ),
     ...mergedSection(view),
     ...selfCheckSection(integ),
+    ...recoverySection(view),
     ...suggestionSection(extra.suggestions),
     ...timelineSection(view, extra.now),
   ];

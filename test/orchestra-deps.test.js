@@ -321,6 +321,8 @@ test('Retry after a fixed install opens the worker in the same worktree', async 
   });
   assert.equal(s.view('a').error, 'installFailed');
   fail = false;
+  // The settled run's finalize goes idle first (Retry refuses while it runs).
+  await flush(10);
   const res = await s.orch.retry({ planId: s.planId, id: 'a' });
   assert.equal(res.ok, true);
   assert.equal(s.view('a').state, 'launched');
@@ -355,6 +357,13 @@ test('an empty node_modules refuses the launch and holds the run; Resume after t
   const check = (root) =>
     broken ? { ok: false, reason: 'empty', dir: root, detail: `${root}/node_modules is empty` } : { ok: true, needed: true };
   const s = await started({ packages: [pkg('a', [1]), pkg('b', [2])], check });
+  // The recovery playbook first reinstalls IN the package worktree; only
+  // when that does not help is Mati told (orchestraRecover.js).
+  await flush();
+  const wt = path.join('/wt', s.log.worktrees[0]);
+  assert.deepEqual(s.log.installs, [wt, wt]);
+  assert.equal(s.log.installOpts[1].fresh, true, 'a fresh npm ci in the worktree');
+  assert.equal(s.log.events.filter(([k]) => k === 'recoverAsk').length, 1, 'asked once');
 
   // No worker started, the whole run held, no package stalled for it.
   assert.equal(s.log.sessions.length, 0);
