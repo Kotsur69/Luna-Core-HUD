@@ -25,6 +25,11 @@
 // states the next 15 s heartbeat (src/usage.js UsageWatcher) can't fix on
 // its own - the user has to do something (run `claude`, flip the flag).
 //
+// SEVERAL CLAUDE ACCOUNTS: once an account in Settings has a usage login,
+// the Claude view becomes one block per account (name, 5 h + weekly bars, a
+// dot + "active" tag on the one new work runs on, or a 'reconnect' note). See
+// visibleAccounts() / usageAccountBlock().
+//
 // ONE PROVIDER AT A TIME: the tile shows only the limits of the profile the
 // active terminal tab runs - Claude's rows on a Claude tab, that provider's
 // block on a Codex / GLM / ... tab, never both. See selectVisibleUsage().
@@ -51,6 +56,37 @@ let lastError = null; // status value of most recent error/unconfigured payload
 let lastOthers = [];
 // Profile id of the active terminal tab (bus replay), null with no tab.
 let activeProfileId = null;
+// One entry per stored Claude account (src/claudeaccountusage.js). Like
+// `others`, only the watcher's payload carries it; a payload without the
+// field keeps the last list.
+let lastAccounts = [];
+
+/**
+ * The accounts the tile draws: all of them once at least one has a usage
+ * login, none while nothing is connected (the tile then shows the single
+ * ~/.claude read exactly as before).
+ * @param {Array<object>} accounts the payload's `accounts` list
+ * @returns {Array<object>}
+ */
+export function visibleAccounts(accounts) {
+  const list = Array.isArray(accounts) ? accounts.filter((a) => a && typeof a === 'object') : [];
+  return list.some((a) => a.status !== 'unconnected') ? list : [];
+}
+
+/**
+ * The message an account shows instead of (or under) its bars, or null when
+ * the bars say it all. Stale bars stay on a transient error.
+ * @param {{status?: string, main?: boolean, limits?: Array<object>}} account
+ * @returns {string|null} i18n key
+ */
+export function accountMessageKey(account) {
+  const status = account && account.status;
+  const hasBars = Boolean(account && Array.isArray(account.limits) && account.limits.length > 0);
+  if (status === 'reconnect') return account.main ? 'usage.account.reconnectMain' : 'usage.account.reconnect';
+  if (status === 'unconnected') return 'usage.account.unconnected';
+  if (hasBars) return null;
+  return status === 'error' ? 'usage.unavailable' : 'usage.loading';
+}
 
 /**
  * Which provider's limits the tile shows for the active tab. `others` only
@@ -73,6 +109,7 @@ export function selectVisibleUsage(others, profileId) {
 /** Applies a fresh payload to module state. Pure state update, no render. */
 function applyUsage(usage) {
   if (usage && Array.isArray(usage.others)) lastOthers = usage.others;
+  if (usage && Array.isArray(usage.accounts)) lastAccounts = usage.accounts;
   if (usage && usage.status === 'ok') {
     lastGoodUsage = usage;
     lastError = null;
@@ -226,7 +263,9 @@ function usageMessage(key) {
 function renderFreshness() {
   if (!els || !els.updated) return;
   const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
-  const source = entry || lastGoodUsage;
+  const accountTimes = visibleAccounts(lastAccounts).map((a) => a.updatedAt).filter((v) => typeof v === 'number');
+  const newestAccount = accountTimes.length > 0 ? { updatedAt: Math.max(...accountTimes) } : null;
+  const source = entry || newestAccount || lastGoodUsage;
   const when = source ? fmtAgo(source.updatedAt) : null;
   els.updated.textContent = when ? t('usage.updatedAgo', { when }) : '';
 }
@@ -237,9 +276,48 @@ function renderUsage() {
   const usageBody = els.body;
   usageBody.innerHTML = '';
   const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
+  const accounts = visibleAccounts(lastAccounts);
   if (entry) usageBody.appendChild(usageProviderBlock(entry));
+  else if (accounts.length > 0) usageBody.append(...accounts.map(usageAccountBlock));
   else renderClaudeRows(usageBody);
   renderFreshness();
+}
+
+/**
+ * One Claude account: its name (dot + "active" tag on the account new work
+ * runs on - the tag, not the colour, carries the meaning), then its 5 h and
+ * weekly bars, or the message for a login that needs Mati.
+ */
+function usageAccountBlock(account) {
+  const block = document.createElement('div');
+  block.className = 'usage-account';
+  block.classList.toggle('is-active', Boolean(account.active));
+  const head = document.createElement('div');
+  head.className = 'usage-account__head';
+  const dot = document.createElement('span');
+  dot.className = 'usage-account__dot';
+  dot.setAttribute('aria-hidden', 'true');
+  const name = document.createElement('span');
+  name.className = 'usage-account__name';
+  name.textContent = account.label || '';
+  head.append(dot, name);
+  if (account.active) {
+    const tag = document.createElement('span');
+    tag.className = 'usage-account__tag';
+    tag.textContent = t('usage.account.active');
+    head.appendChild(tag);
+  }
+  block.appendChild(head);
+  for (const limit of account.limits || []) {
+    if (typeof limit.percentUsed === 'number') block.appendChild(usageRowForLimit(limit));
+  }
+  const key = accountMessageKey(account);
+  if (key) {
+    const msg = usageMessage(key);
+    if (account.status === 'reconnect') msg.classList.add('usage-account__warn');
+    block.appendChild(msg);
+  }
+  return block;
 }
 
 /** Claude's rows. Error states become a message. */
@@ -337,7 +415,7 @@ defineWidget({
     // Refresh the reset labels every 30 s (the countdown is computed locally
     // from resetsAt, with no new network request).
     const countdown = setInterval(() => {
-      if (lastGoodUsage || lastOthers.length > 0) renderUsage();
+      if (lastGoodUsage || lastOthers.length > 0 || lastAccounts.length > 0) renderUsage();
     }, COUNTDOWN_MS);
 
     // Tick the "updated Xs ago" label every second - a plain textContent

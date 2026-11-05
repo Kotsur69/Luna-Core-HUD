@@ -109,11 +109,19 @@ export function bodyFrom(rows, now) {
 /**
  * The newest usage read across machines as it stands at `now` (a window whose
  * reset passed shows empty), or null.
- * @returns {{machine: string, at: number, fiveHour: object|null, sevenDay: object|null}|null}
+ * `accounts` is one row per Claude account when the PC reads several, else [].
+ * @returns {{machine: string, at: number, fiveHour: object|null, sevenDay: object|null, accounts: object[]}|null}
  */
 export function usageFrom(rows, now) {
   const u = newestUsage(rows, now);
-  return u && { machine: u.machine, at: u.at, fiveHour: windowNow(u.fiveHour, now), sevenDay: windowNow(u.sevenDay, now) };
+  if (!u) return null;
+  const accounts = (u.accounts || []).map((a) => ({
+    label: a.label,
+    active: a.active,
+    fiveHour: windowNow(a.fiveHour, now),
+    sevenDay: windowNow(a.sevenDay, now),
+  }));
+  return { machine: u.machine, at: u.at, fiveHour: windowNow(u.fiveHour, now), sevenDay: windowNow(u.sevenDay, now), accounts };
 }
 
 /** Every PC's `repos` row, validated and merged into one entry per repo (repossnapshot.js). */

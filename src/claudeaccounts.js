@@ -19,6 +19,12 @@
 // own backend (a z.ai / LM Studio / CCR profile, an API key, an explicit
 // token): only plain Claude-subscription launches are steered.
 //
+// USAGE LOGIN (optional, per account): a setup-token cannot read the usage
+// endpoint (403, no user:profile scope), so an account may carry `usageDir` -
+// the CLAUDE_CONFIG_DIR of a separate `claude auth login` used ONLY to read its
+// usage (src/claudeaccountusage.js). Only the path is stored, never a token,
+// and only a path strictly inside the home dir survives sanitize().
+//
 // Storage: one safeStorage-encrypted file (claude-accounts.local.json, same
 // pattern as cloudauth.js). No encryption available -> nothing is written;
 // a plaintext token never touches disk. The file is re-read when its mtime
@@ -28,6 +34,8 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const VERSION = 1;
 /** Env keys that mean "this launch already picked its backend / credentials". */
@@ -47,6 +55,9 @@ const TOKEN_IN_TEXT_RE = /sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,}/;
 const ID_RE = /^[a-z0-9]{1,20}$/;
 const MAX_ACCOUNTS = 8;
 const MAX_LABEL = 60;
+const MAX_USAGE_DIR = 400;
+const MAX_EMAIL = 254;
+const EMAIL_RE = /^[^\s@<>"'`]+@[^\s@<>"'`]+$/;
 /** Limit with no readable reset time: look again after this long. */
 const UNKNOWN_RESET_MS = 60 * 60 * 1000;
 
@@ -118,6 +129,45 @@ function failoverEligible(env) {
   return !usesOwnBackend(rest);
 }
 
+/**
+ * True when `dir` is an absolute, already-normalized path strictly inside
+ * `home` (no `..` segments, no other drive, not home itself).
+ * @param {unknown} dir
+ * @param {string} home
+ */
+function isUsageDirAllowed(dir, home) {
+  if (typeof dir !== 'string' || !dir || dir.length > MAX_USAGE_DIR || dir.includes('\0')) return false;
+  if (typeof home !== 'string' || !home || !path.isAbsolute(dir)) return false;
+  if (dir.split(/[\\/]+/).some((seg) => seg === '..' || seg === '.')) return false;
+  const resolved = path.resolve(dir);
+  const rel = path.relative(path.resolve(home), resolved);
+  return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/** Path equality, case-insensitive on Windows. */
+function samePath(a, b) {
+  const norm = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+  return norm(a) === norm(b);
+}
+
+/**
+ * The only two dirs account `id` may read usage from: the main ~/.claude
+ * login, or its own ~/.claude-usage-<id>. A tampered store can not point a
+ * usage read (or `claude auth status`) at any other folder.
+ * @param {unknown} dir
+ * @param {string} home
+ * @param {string} id
+ */
+function isUsageDirFor(dir, home, id) {
+  if (!isUsageDirAllowed(dir, home) || typeof id !== 'string' || !ID_RE.test(id)) return false;
+  return samePath(dir, path.join(home, '.claude')) || samePath(dir, path.join(home, `.claude-usage-${id}`));
+}
+
+/** A usage-login email as `claude auth status` reports it, or null. */
+function cleanEmail(email) {
+  return typeof email === 'string' && email.length <= MAX_EMAIL && EMAIL_RE.test(email) ? email : null;
+}
+
 /** Drops expired cooldowns and ones for accounts that no longer exist. */
 function pruneLimits(limits, accounts, now) {
   const ids = new Set(accounts.map((a) => a.id));
@@ -128,12 +178,25 @@ function pruneLimits(limits, accounts, now) {
   return out;
 }
 
-/** Validated store contents; anything malformed is dropped, never thrown. */
-function sanitize(data) {
+/** One stored account with only its validated fields (usage fields optional). */
+function cleanAccount(a, home) {
+  const out = { id: a.id, label: String(a.label || a.id).slice(0, MAX_LABEL), token: a.token };
+  if (!isUsageDirFor(a.usageDir, home, a.id)) return out;
+  const email = cleanEmail(a.usageEmail);
+  return email ? { ...out, usageDir: a.usageDir, usageEmail: email } : { ...out, usageDir: a.usageDir };
+}
+
+/**
+ * Validated store contents; anything malformed is dropped, never thrown. A
+ * bad usageDir drops only that field, not the account.
+ * @param {unknown} data
+ * @param {string} [home] the dir every usageDir must sit inside
+ */
+function sanitize(data, home = os.homedir()) {
   const raw = data && typeof data === 'object' ? data : {};
   const accounts = (Array.isArray(raw.accounts) ? raw.accounts : [])
     .filter((a) => a && typeof a.id === 'string' && ID_RE.test(a.id) && isValidToken(a.token))
-    .map((a) => ({ id: a.id, label: String(a.label || a.id).slice(0, MAX_LABEL), token: a.token }))
+    .map((a) => cleanAccount(a, home))
     .slice(0, MAX_ACCOUNTS);
   const rawLimits = raw.limits && typeof raw.limits === 'object' && !Array.isArray(raw.limits) ? raw.limits : {};
   const limits = {};
@@ -145,10 +208,11 @@ function sanitize(data) {
 
 /**
  * @param {{file:()=>string|null, safeStorage:()=>object|null, now?:()=>number,
- *   log?:(line:string)=>void, onChange?:()=>void}} deps
+ *   log?:(line:string)=>void, onChange?:()=>void, homeDir?:()=>string}} deps
  */
 function createClaudeAccounts(deps) {
   const now = deps.now || Date.now;
+  const homeDir = deps.homeDir || os.homedir;
   const log = deps.log || (() => {});
   let state = { accounts: [], limits: {} };
   let loadedMtime = null;
@@ -184,7 +248,7 @@ function createClaudeAccounts(deps) {
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (raw && raw.v === VERSION && typeof raw.enc === 'string') {
-        state = sanitize(JSON.parse(s.decryptString(Buffer.from(raw.enc, 'base64'))));
+        state = sanitize(JSON.parse(s.decryptString(Buffer.from(raw.enc, 'base64'))), homeDir());
       }
       loadedMtime = mtime;
     } catch (err) {
@@ -328,7 +392,46 @@ function createClaudeAccounts(deps) {
   /** The env keys for one launch (see authLayerFor). */
   const authLayer = (env) => authLayerFor(env, active());
 
-  return { list, add, remove, moveUp, clearLimit, active, freeAccount, markLimited, failoverActive, authLayer };
+  /**
+   * Main-process only (the usage reader): every account with its usage login
+   * dir. Never carries a token; never sent to the renderer as is.
+   * @returns {{id:string,label:string,active:boolean,usageDir:string|null,usageEmail:string|null}[]}
+   */
+  function usageTargets() {
+    refresh();
+    const current = pickActive(state.accounts, state.limits, now());
+    return state.accounts.map((a) => ({
+      id: a.id,
+      label: a.label,
+      active: Boolean(current && current.id === a.id),
+      usageDir: a.usageDir || null,
+      usageEmail: a.usageEmail || null,
+    }));
+  }
+
+  /**
+   * Points account `id` at a usage login dir (null disconnects it). The dir
+   * must be inside the home dir; the email is display-only.
+   * @returns {{ok:true}|{ok:false,error:string}}
+   */
+  function setUsage(id, usageDir, usageEmail = null) {
+    refresh();
+    if (!state.accounts.some((a) => a.id === id)) return { ok: false, error: 'notFound' };
+    if (usageDir !== null && !isUsageDirFor(usageDir, homeDir(), id)) return { ok: false, error: 'badDir' };
+    const email = usageDir === null ? null : cleanEmail(usageEmail);
+    const accounts = state.accounts.map((a) => {
+      if (a.id !== id) return a;
+      const { usageDir: _d, usageEmail: _e, ...rest } = a;
+      if (usageDir === null) return rest;
+      return email ? { ...rest, usageDir, usageEmail: email } : { ...rest, usageDir };
+    });
+    return save({ accounts, limits: state.limits });
+  }
+
+  return {
+    list, add, remove, moveUp, clearLimit, active, freeAccount, markLimited, failoverActive, authLayer,
+    usageTargets, setUsage,
+  };
 }
 
 module.exports = {
@@ -340,6 +443,10 @@ module.exports = {
   extractToken,
   isValidToken,
   sanitize,
+  isUsageDirAllowed,
+  isUsageDirFor,
+  cleanEmail,
+  BACKEND_KEYS,
   ACCOUNT_ENV,
   UNKNOWN_RESET_MS,
 };

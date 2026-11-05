@@ -7,6 +7,7 @@ and carries on. The HUD meter shows both.
 ## Resume here
 
 - Phase 1 (failover) is **built, unit-tested, smoke-tested, not committed**.
+- Phase 2 (per-account meter via usage-only logins) is **built and unit-tested** - see its section.
 - Next: Mati adds both tokens -> live failover test (T1-T3) -> Phase 2 probe (P0).
 
 ## Mechanism (verified live, CLI 2.1.316)
@@ -49,7 +50,38 @@ CRITICAL/HIGH; setup-token tab no longer inherits a token).
 - **T3** God Mode: a run with matitrampolin first -> workers resume on onet,
   the run is not paused.
 
-## Phase 2 - usage meter for both accounts (planned)
+## Phase 2 - usage meter for both accounts (built 2026-11-05, needs the live check)
+
+### What was built (branch `luna/usage-all-accounts-qy902`)
+
+P0 answered: a setup-token token gets **403** on `GET /api/oauth/usage` (no
+`user:profile` scope). So instead of the header fallback below, each account
+gets a **usage-only login** (`claude auth login` under
+`CLAUDE_CONFIG_DIR=~/.claude-usage-<id>`), used for nothing but that GET.
+
+| Piece | Where |
+|-------|-------|
+| Per-account read, stagger, 401/403 -> reconnect, renewal, connect | `src/claudeaccountusage.js` |
+| `usageDir` / `usageEmail` per account (path only, inside home) | `src/claudeaccounts.js` |
+| IPC (id only crosses) | `src/claudeaccountsipc.js`, `src/preload.js` |
+| Watcher hook (payload gains `accounts`) | `src/usage.js` `UsageWatcher.accountUsage` |
+| One block per account, active dot + tag, reconnect note | `src/renderer/modules/usage.js` |
+| Connect usage / Use main login / Reconnect / Disconnect | `src/renderer/modules/claudeaccountsettings.js` |
+| Phone rows per account (old readers unchanged) | `src/usagesnapshot.js`, `mobile/src/views/usage.js` |
+
+Layout: one block per account (name, then its 5 h + weekly bars), not the
+window-grouped layout sketched below.
+
+**Renewal is unconfirmed.** A usage login near expiry gets `claude auth status`
+under its own config dir, assuming that call refreshes the token; nothing in
+this repo recorded whether it does. The main `~/.claude` login is never touched.
+
+Live check: connect both accounts in Settings -> the gauge shows two labelled
+pairs, the active one marked; let a usage login expire (or delete its
+`.credentials.json`) -> only that account says *reconnect*; watch the log
+around the token's `expiresAt` to see whether `auth status` renewed it.
+
+### Original plan
 
 ### Layout (approved by Mati)
 

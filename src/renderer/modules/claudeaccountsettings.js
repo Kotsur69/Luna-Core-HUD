@@ -5,6 +5,9 @@
 // active, which is cooling down after a limit and until when, reorder (first
 // = preferred), remove, and add one from a `claude setup-token` token. A
 // token goes renderer -> main once, on "Add"; the list never carries one.
+// Per account: "Connect usage" / "Use main login" / "Reconnect" for the
+// usage-only login that feeds the gauge (src/claudeaccountusage.js) - only
+// the account id crosses; an email and a status come back.
 // DOM/IPC only - the selection logic is unit-tested in src/claudeaccounts.js.
 // ============================================================================
 
@@ -15,7 +18,8 @@ import { onLangChange } from './bus.js';
 
 let els = null;
 let view = { encryption: true, accounts: [] };
-let note = null; // {key, fail}
+let note = null; // {key, fail, params?}
+let connecting = false; // a `claude auth login` is running in main
 
 const clock = (ms) => new Date(ms).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -46,6 +50,61 @@ async function act(fn, id) {
   await refresh();
 }
 
+/** The account's usage-login line ("usage: <email>", "login expired", ...). */
+function usageText(u) {
+  if (!u || !u.connected) return t('accounts.usage.none');
+  if (u.status === 'reconnect') return t('accounts.usage.expired');
+  const email = u.email || '?';
+  return t(u.main ? 'accounts.usage.connectedMain' : 'accounts.usage.connectedAs', { email });
+}
+
+const USAGE_ERRORS = {
+  busy: 'accounts.usage.err.busy',
+  noClaude: 'accounts.usage.err.noClaude',
+  timeout: 'accounts.usage.err.timeout',
+  loginFailed: 'accounts.usage.err.loginFailed',
+  noMainLogin: 'accounts.usage.err.noMainLogin',
+  badDir: 'accounts.usage.err.badDir',
+};
+
+/** Connects (or re-connects) a usage login; the browser login can take minutes. */
+async function connectUsage(fn, id) {
+  if (connecting) return;
+  connecting = true;
+  note = { key: 'accounts.usage.connecting', fail: false };
+  render();
+  let res = null;
+  try {
+    res = await fn(id);
+  } catch {
+    res = null;
+  }
+  connecting = false;
+  note = res && res.ok
+    ? { key: 'accounts.usage.connected', fail: false, params: { email: res.email || '?' } }
+    : { key: USAGE_ERRORS[res && res.error] || 'accounts.saveFailed', fail: true };
+  await refresh();
+}
+
+/** The usage-login buttons of one row. */
+function usageButtons(a) {
+  const u = a.usage;
+  if (!u || typeof window.lunacore.connectClaudeUsage !== 'function') return [];
+  const out = [];
+  if (!u.connected) {
+    out.push(button('accounts.usage.connect', () => connectUsage(window.lunacore.connectClaudeUsage, a.id), 'accounts.usage.connectHint'));
+    out.push(button('accounts.usage.useMain', () => connectUsage(window.lunacore.useMainClaudeUsage, a.id), 'accounts.usage.useMainHint'));
+  } else {
+    // The main login is renewed by running `claude`, not from here.
+    if (u.status === 'reconnect' && !u.main) {
+      out.push(button('accounts.usage.reconnect', () => connectUsage(window.lunacore.connectClaudeUsage, a.id), 'accounts.usage.connectHint'));
+    }
+    out.push(button('accounts.usage.disconnect', () => act(window.lunacore.disconnectClaudeUsage, a.id)));
+  }
+  for (const b of out) b.disabled = connecting;
+  return out;
+}
+
 function renderRow(a, index) {
   const li = document.createElement('li');
   li.className = 'project-row';
@@ -56,8 +115,15 @@ function renderRow(a, index) {
   label.className = 'ui-field__label';
   label.textContent = `${index + 1}. ${a.label} - ${statusText(a)}`;
   li.append(dot, label);
+  if (a.usage) {
+    const usage = document.createElement('span');
+    usage.className = a.usage.status === 'reconnect' ? 'hint is-fail' : 'hint';
+    usage.textContent = usageText(a.usage);
+    li.append(usage);
+  }
   if (index > 0) li.append(button('accounts.moveUp', () => act(window.lunacore.moveClaudeAccountUp, a.id), 'accounts.moveUpHint'));
   if (a.limitedUntil) li.append(button('accounts.clearLimit', () => act(window.lunacore.clearClaudeAccountLimit, a.id)));
+  li.append(...usageButtons(a));
   li.append(button('accounts.remove', () => act(window.lunacore.removeClaudeAccount, a.id)));
   return li;
 }
@@ -69,7 +135,7 @@ function render() {
   els.noEncryption.hidden = view.encryption !== false;
   els.status.hidden = !note;
   if (note) {
-    els.status.textContent = t(note.key);
+    els.status.textContent = t(note.key, note.params);
     els.status.classList.toggle('is-fail', note.fail);
   }
 }

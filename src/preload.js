@@ -128,8 +128,16 @@ contextBridge.exposeInMainWorld('lunacore', {
   openFreeLlmDashboard: () => ipcRenderer.send('freellm:open-dashboard'),
 
   // --- Claude account failover (src/claudeaccountsipc.js) ---
-  /** { encryption, accounts:[{id,label,active,limitedUntil}] } - never a token. */
+  /** { encryption, accounts:[{id,label,active,limitedUntil,usage}] } - never a token. */
   listClaudeAccounts: () => ipcRenderer.invoke('claudeAccounts:list'),
+  /**
+   * Usage-only login for one account (`claude auth login` in main, browser
+   * OAuth). Only the account id crosses; main derives the dir. -> {ok, email}.
+   */
+  connectClaudeUsage: (id) => ipcRenderer.invoke('claudeAccounts:connect-usage', id),
+  /** Lets the main ~/.claude login read this account's usage. */
+  useMainClaudeUsage: (id) => ipcRenderer.invoke('claudeAccounts:use-main-usage', id),
+  disconnectClaudeUsage: (id) => ipcRenderer.invoke('claudeAccounts:disconnect-usage', id),
   /** Stores a `claude setup-token` token under a label; main validates both. */
   addClaudeAccount: (label, token) => ipcRenderer.invoke('claudeAccounts:add', { label, token }),
   removeClaudeAccount: (id) => ipcRenderer.invoke('claudeAccounts:remove', id),

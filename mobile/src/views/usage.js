@@ -2,8 +2,9 @@
 // LunaCore phone - Claude usage limits card (REMOTE_HOST_PLAN U1)
 // ----------------------------------------------------------------------------
 // The newest PC's `usage` snapshot: two bars (5 h + weekly) with reset
-// countdowns. Shown on Today and in the Mission -> Claude tab. All PCs share
-// one account, so one row is the whole picture; "from" names the PC.
+// countdowns. Shown on Today and in the Mission -> Claude tab. A PC with
+// several Claude accounts sends a row per account: then a labelled bar pair
+// each, the active one marked. "from" names the PC.
 // ============================================================================
 
 import { h } from '../dom.js';
@@ -42,15 +43,28 @@ function bar(label, w, now) {
   );
 }
 
+/** One account's name (and "active" on the one new work runs on) over its two bars. */
+function accountBlock(a, now) {
+  const name = a.active ? `${a.label} · ${t('usageActive')}` : a.label;
+  return [
+    h('h3', { class: 'hint' }, name),
+    h('ul', { class: 'rows' }, bar(t('usage5h'), a.fiveHour, now), bar(t('usageWeek'), a.sevenDay, now)),
+  ];
+}
+
 /** The card for the `usage` rows (snapRows output). */
 export function usageCard(rows, now) {
   const u = usageFrom(rows, now);
+  // Several Claude accounts on the PC: a labelled bar pair each; else the one pair as before.
+  const body = u && u.accounts.length > 0
+    ? u.accounts.flatMap((a) => accountBlock(a, now))
+    : u && [h('ul', { class: 'rows' }, bar(t('usage5h'), u.fiveHour, now), bar(t('usageWeek'), u.sevenDay, now))];
   return h(
     'section',
     { class: 'card stack-sm', 'aria-labelledby': 'usage-title' },
     h('h2', { class: 'section-title', id: 'usage-title' }, t('usageTitle')),
     u
-      ? [h('ul', { class: 'rows' }, bar(t('usage5h'), u.fiveHour, now), bar(t('usageWeek'), u.sevenDay, now)), h('p', { class: 'hint' }, tf('fromAt', { time: when(u.at, now), machine: u.machine }))]
+      ? [...body, h('p', { class: 'hint' }, tf('fromAt', { time: when(u.at, now), machine: u.machine }))]
       : h('p', { class: 'hint' }, t('usageEmpty')),
   );
 }

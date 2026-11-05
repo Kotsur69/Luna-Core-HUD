@@ -1531,6 +1531,18 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   gap: var(--space-3);
 }
 .usage-provider__title { font-size: var(--fs-sm); font-weight: 700; }
+/* One Claude account (modules/usage.js usageAccountBlock): name line, then
+   its 5 h + weekly rows. The active one gets a cyan dot AND an "active" text
+   tag, so the marker never rests on colour alone. */
+.usage-account { display: flex; flex-direction: column; gap: var(--space-2); }
+.usage-account + .usage-account { margin-top: var(--space-3); }
+.usage-account__head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font-size: var(--fs-sm); }
+.usage-account__dot { flex: none; width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--text-dim); }
+.usage-account.is-active .usage-account__dot { background: var(--neon-cyan); border-color: var(--neon-cyan); }
+.usage-account__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.usage-account.is-active .usage-account__name { color: var(--text); font-weight: 700; }
+.usage-account__tag { flex: none; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--neon-cyan); }
+.usage-account__warn { color: var(--warn); }
 
 /* ---- Sparkline burn-rate (context window percentage over time) ---------------- */
 
