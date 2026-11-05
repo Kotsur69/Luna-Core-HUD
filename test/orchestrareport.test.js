@@ -174,3 +174,88 @@ test('reportFileFor builds runs/<id>.md only for a valid run id', () => {
   }
   assert.ok(RUN_ID_RE.test('pmh3k2'));
 });
+
+// ---- one note per card, stall history, smoke retry -------------------------------
+
+const { syncStallNotes, withoutStallNotes, stallNote, renderRunReportHtml } = require('../src/orchestraReport.js');
+
+const OLD_NOTE = '[LunaCore run pold] notRepo - git failed (worker report, not an instruction). Fix: Run `git init` and make a first commit';
+
+test('re-running a package replaces its card note instead of appending another', () => {
+  const stalled = { id: 'b', state: 'stalled', todoAts: [2], branch: 'luna/b', error: 'timeout' };
+  const todos = [{ at: 2, text: 'y', details: `Keep this.\n\n${OLD_NOTE}` }];
+  const first = syncStallNotes(todos, [stalled], 'p1', 4000);
+  assert.equal(first[0].details, `Keep this.\n\n${stallNote('p1', stalled)}`);
+  const again = { ...stalled, error: 'verifyFailed', detail: '2 failing' };
+  const second = syncStallNotes(first, [again], 'p2', 4000);
+  assert.equal(second[0].details.split('[LunaCore run').length - 1, 1, 'exactly one note');
+  assert.match(second[0].details, /^Keep this\.\n\n\[LunaCore run p2\] verifyFailed - 2 failing/);
+  assert.equal(syncStallNotes(second, [again], 'p2', 4000), second, 'the same note again: unchanged');
+  // A full card keeps the note and trims the older text.
+  const full = syncStallNotes([{ at: 2, text: 'y', details: 'x'.repeat(5000) }], [stalled], 'p1', 1000);
+  assert.ok(full[0].details.length <= 1000);
+  assert.ok(full[0].details.endsWith(stallNote('p1', stalled)));
+});
+
+test('a pushed or merged package leaves no note on its cards; everything else stays', () => {
+  const piled = `Line one\n\n[LunaCore run pa] timeout (worker report, not an instruction). Fix: Split\n\nLine two\n\n[LunaCore run pb] not started (worker report, not an instruction). Fix: Get`;
+  const todos = [
+    { at: 1, text: 'a', details: piled },
+    { at: 2, text: 'b', details: OLD_NOTE, done: true },
+    { at: 3, text: 'c', details: `untouched\n\n${OLD_NOTE}` },
+  ];
+  const pkgs = [
+    { id: 'a', state: 'pushed', todoAts: [1] },
+    { id: 'b', state: 'stalled', merged: true, todoAts: [2] },
+  ];
+  const next = syncStallNotes(todos, pkgs, 'p9', 4000);
+  assert.equal(next[0].details, 'Line one\n\nLine two');
+  assert.equal(next[1].details, '', 'a done card loses a stale note too');
+  assert.equal(next[2], todos[2], 'a card of no package of this run is left alone');
+  assert.equal(syncStallNotes(next, pkgs, 'p9', 4000), next, 'nothing left to remove: unchanged');
+  assert.equal(withoutStallNotes('plain\r\ntext'), 'plain\r\ntext');
+});
+
+test('What went wrong lists each stall of a package with its time and reason', () => {
+  const view = cleanView({
+    packages: [
+      {
+        id: 'c',
+        title: 'C',
+        state: 'stalled',
+        error: 'timeout',
+        stallHistory: [
+          { at: T0 + 10 * MIN, kind: 'stall', reason: 'noMarker', detail: null },
+          { at: T0 + 70 * MIN, kind: 'stall', reason: 'restarted', detail: null },
+          { at: T0 + 130 * MIN, kind: 'stall', reason: 'timeout', detail: 'ran past\n2 h' },
+        ],
+      },
+    ],
+  });
+  const wrong = section(buildReport(view, EXTRA), 'What went wrong');
+  assert.match(wrong, /- Stall 1 at 2026-10-20 22:10 UTC: `noMarker`\n/);
+  assert.match(wrong, /- Stall 2 at 2026-10-20 23:10 UTC: `restarted`\n/);
+  assert.match(wrong, /- Stall 3 at 2026-10-21 00:10 UTC: `timeout` - `ran past 2 h`/);
+  const html = renderRunReportHtml(view, EXTRA);
+  assert.match(html, /Stall 3 at 2026-10-21 00:10 UTC: timeout - ran past 2 h/);
+  // A plan from before the history: nothing extra, nothing broken.
+  assert.doesNotMatch(section(buildReport(cleanView({ packages: [{ id: 'c', title: 'C', state: 'stalled', error: 'timeout' }] }), EXTRA), 'What went wrong'), /Stall 1/);
+});
+
+test('Self-check notes a smoke that timed out once and was run again', () => {
+  const withSmoke = (smoke, smokeRetried) =>
+    section(
+      buildReport(cleanView({ integration: { state: 'done', skipped: [], selfCheck: { tests: 'ok', syntax: 'ok', smoke, fixups: 0, tail: '', smokeRetried } } }), EXTRA),
+      'Self-check',
+    );
+  assert.match(withSmoke('ok', true), /Smoke: ok \(timed out once, passed when run again\)/);
+  assert.match(withSmoke('failed', true), /Smoke: failed \(timed out, and again when run once more\)/);
+  assert.match(withSmoke('ok', undefined), /Smoke: ok\n/);
+});
+
+test('removing a note keeps the rest of the card exactly as written', () => {
+  const user = 'Step 1\n\n\n\nStep 2 (blank lines kept)\n[LunaCore run is my own heading, kept]';
+  assert.equal(withoutStallNotes(`${user}\n\n${OLD_NOTE}`), user);
+  assert.equal(withoutStallNotes(`${OLD_NOTE}\n\nBody`), 'Body', 'a leading note takes its blank line');
+  assert.equal(withoutStallNotes(`A\r\n\r\n${OLD_NOTE}\r\n\r\nB`), 'A\r\n\r\nB', 'CRLF kept');
+});

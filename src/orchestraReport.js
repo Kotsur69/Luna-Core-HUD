@@ -26,10 +26,14 @@ const h = require('./reportHtml');
 const { diagnosePackage, diagnoseIntegration, diagnoseSkip } = require('./orchestraDiagnose');
 
 const NOTE_TAG = '[LunaCore run';
+// A whole note line: the tag with a run id, as stallNote() writes it.
+const NOTE_LINE_RE = /^\s*\[LunaCore run [a-z0-9]{1,40}\] /;
 const MAX_NOTE_CHARS = 600;
 const MAX_ITEM_CHARS = 300;
 const MAX_TAIL_LINES = 15;
 const MAX_LIST = 50;
+// Newest stall-history entries a package shows under What went wrong.
+const MAX_HISTORY_SHOWN = 10;
 // A run id as orchestra.js makes it (`p` + base-36 time): the only thing the
 // board's "Open report" button sends to main.
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
@@ -190,7 +194,9 @@ function triedText(p) {
 /** Facts for one unfinished package, one short line each. */
 function packageEvidence(p, view) {
   const out = [];
-  if (p.detail) out.push(`Detail: ${code(p.detail, 300)}`);
+  // A multi-line detail (a rejected push's remote: lines) is shown in full
+  // under the item (detailRows); its first line stays here.
+  if (p.detail) out.push(`Detail: ${code(String(p.detail).split(/\r?\n/)[0], 300)}`);
   if (p.error === 'approvalTimeout' && isObject(view.options) && view.options.unattendedApprovalMin > 0) {
     out.push(`Approval wait limit: ${view.options.unattendedApprovalMin} min`);
   }
@@ -203,8 +209,35 @@ function packageEvidence(p, view) {
   if (p.verify) out.push(`Verify command: ${code(p.verify, 200)}`);
   const tried = triedText(p);
   if (tried.length) out.push(`Already tried: ${tried.join(', ')}`);
+  out.push(...historyLines(p));
   if (p.terminal) out.push('Nothing automatic will pick it up again.');
   return out;
+}
+
+/**
+ * The package's stall history (orchestraSupervisor.withHistoryEntry), oldest
+ * first, one line each: when, what kind, the reason code, a short detail.
+ * Entries of other kinds (e.g. a later automatic recovery) read the same way.
+ */
+function historyLines(p) {
+  const entries = list(p.stallHistory).filter(isObject).slice(-MAX_HISTORY_SHOWN);
+  return entries.map((e, i) => {
+    const kind = oneLine(e.kind, 24) || 'stall';
+    const name = kind === 'stall' ? 'Stall' : kind;
+    const detail = e.detail ? ` - ${code(e.detail, 160)}` : '';
+    return `${name} ${i + 1} at ${fmt(e.at)} UTC: ${code(e.reason, 64)}${detail}`;
+  });
+}
+
+const MAX_DETAIL_LINES = 30;
+
+/** A multi-line detail (git's report of a rejected push) as safe, capped lines; [] for one line. */
+function detailRows(text) {
+  const rows = String(text || '')
+    .split(/\r?\n/)
+    .map((l) => oneLine(l, 200))
+    .filter(Boolean);
+  return rows.length > 1 ? rows.slice(0, MAX_DETAIL_LINES) : [];
 }
 
 /** Multi-line output (test tail) as safe, capped lines. */
@@ -215,12 +248,20 @@ const tailRows = (text) =>
     .filter(Boolean)
     .slice(-MAX_TAIL_LINES);
 
+/** The block under a package's item: the verify tail, else a multi-line detail. */
+function packageTail(p) {
+  const tail = tailRows(p.verifyTail);
+  if (tail.length) return { tail };
+  const rows = detailRows(p.detail);
+  return rows.length ? { tail: rows, tailLabel: 'Git said' } : { tail: [] };
+}
+
 /**
  * Every problem of a settled run, explained.
  * @param {object} view
  * @returns {Array<{title:string, what:string, why:string, fix:string, evidence:string[], lastWords:string, tail:string[]}>}
  */
-function problems(view) {
+function problems(view, facts = {}) {
   if (!isObject(view)) return [];
   const integ = isObject(view.integration) ? view.integration : {};
   const out = [];
@@ -246,10 +287,10 @@ function problems(view) {
     const state = oneLine(STATE_LABEL[p.state] || p.state, 24);
     out.push({
       title: `${label(p)} - ${state}${p.error ? ` (${oneLine(p.error, 64)})` : ''}`,
-      ...diagnosePackage(p),
+      ...diagnosePackage(p, facts),
       evidence: packageEvidence(p, view),
       lastWords: oneLine(p.lastWords, 520),
-      tail: tailRows(p.verifyTail),
+      ...packageTail(p),
     });
   }
   if (integ.state === 'failed' && integ.error) {
@@ -272,8 +313,8 @@ function problems(view) {
   return out;
 }
 
-function wrongSection(view) {
-  const items = problems(view);
+function wrongSection(view, facts) {
+  const items = problems(view, facts);
   const lines = ['', '## What went wrong', ''];
   if (!items.length) return [...lines, 'Nothing.'];
   for (const it of items) {
@@ -281,7 +322,7 @@ function wrongSection(view) {
     lines.push(`### ${it.title}`, '', `- What happened: ${it.what}`, `- Why: ${it.why}`, `- How to fix: ${it.fix}`);
     for (const e of it.evidence) lines.push(`- ${e}`);
     if (it.lastWords) lines.push(`- Worker's last words: "${it.lastWords.replace(/"/g, "'")}"`);
-    if (it.tail.length) lines.push('- Output tail:', '', ...it.tail.map((l) => `    ${l}`));
+    if (it.tail.length) lines.push(`- ${it.tailLabel || 'Output tail'}:`, '', ...it.tail.map((l) => `    ${l}`));
   }
   return lines;
 }
@@ -338,11 +379,18 @@ function mergedSection(view) {
   return lines;
 }
 
+/** One check's state; the smoke says when it timed out and was run again. */
+function checkText(sc, key) {
+  const state = oneLine(sc[key], 16) || 'skipped';
+  if (key !== 'smoke' || sc.smokeRetried !== true) return state;
+  return state === 'ok' ? `${state} (timed out once, passed when run again)` : `${state} (timed out, and again when run once more)`;
+}
+
 function selfCheckSection(integ) {
   const sc = integ.selfCheck;
   const lines = ['', '## Self-check', ''];
   if (!isObject(sc)) return [...lines, 'Not run.'];
-  for (const [key, title] of CHECKS) lines.push(`- ${title}: ${oneLine(sc[key], 16) || 'skipped'}`);
+  for (const [key, title] of CHECKS) lines.push(`- ${title}: ${checkText(sc, key)}`);
   lines.push(`- Fix-ups: ${Number.isFinite(sc.fixups) ? Math.max(0, Math.round(sc.fixups)) : 0}`);
   return lines;
 }
@@ -367,7 +415,8 @@ function timelineSection(view, now) {
 
 /**
  * @param {object} view orchestra view() of a settled run
- * @param {{now:number, suggestions:Array<{rule:string,count:number,ids:string[]}>}} extra
+ * @param {{now:number, suggestions:Array<{rule:string,count:number,ids:string[]}>, gitDirExists?:boolean|null}} extra
+ *   gitDirExists: whether <repo>/.git exists (orchestraDiagnose.gitDirExists)
  * @returns {string} markdown
  */
 function buildReport(view, extra) {
@@ -377,6 +426,7 @@ function buildReport(view, extra) {
   const integError = integ.error ? ` (${oneLine(integ.error, 64)}${integ.detail ? `: ${oneLine(integ.detail)}` : ''})` : '';
   const partial = integ.partial ? ', partial' : '';
   const needs = needsYouLines(view);
+  const facts = { gitDirExists: extra.gitDirExists };
   const lines = [
     `# God Mode run ${view.id}`,
     '',
@@ -389,7 +439,7 @@ function buildReport(view, extra) {
     '',
     ...(needs.length ? needs.map((l) => `- ${l}`) : ['Nothing - all done']),
     ...tailLines(integ.selfCheck),
-    ...wrongSection(view),
+    ...wrongSection(view, facts),
     ...manualSection(integ),
     ...mergedSection(view),
     ...selfCheckSection(integ),
@@ -451,7 +501,7 @@ function runCards(view, packages, integ, now) {
 function selfCheckHtml(integ) {
   const sc = isObject(integ.selfCheck) ? integ.selfCheck : null;
   const fixups = sc && Number.isFinite(sc.fixups) ? Math.max(0, Math.round(sc.fixups)) : 0;
-  const checks = sc ? [...CHECKS.map(([key, title]) => `${title}: ${oneLine(sc[key], 16) || 'skipped'}`), `Fix-ups: ${fixups}`] : [];
+  const checks = sc ? [...CHECKS.map(([key, title]) => `${title}: ${checkText(sc, key)}`), `Fix-ups: ${fixups}`] : [];
   return h.section('Self-check', h.list(checks, 'Not run.'));
 }
 
@@ -491,8 +541,8 @@ function needsHtml(view, integ) {
   return h.section('Needs you', `${body}${tail.length ? `<pre>${h.escapeHtml(tail.join('\n'))}</pre>` : ''}`);
 }
 
-function wrongHtml(view) {
-  const items = problems(view);
+function wrongHtml(view, facts) {
+  const items = problems(view, facts);
   if (!items.length) return h.section('What went wrong', '<p class="empty">Nothing.</p>');
   const blocks = items.map((it) => {
     const rows = [
@@ -543,7 +593,7 @@ function detailSections(integ, suggestions) {
  * The run report as a standalone HTML page with inline SVG charts.
  * Deterministic: time comes from extra.now only. Only the repo NAME shows.
  * @param {object} view orchestra view() of a settled run
- * @param {{now:number, suggestions?:Array<object>, repoPath?:string}} extra
+ * @param {{now:number, suggestions?:Array<object>, repoPath?:string, gitDirExists?:boolean|null}} extra
  * @returns {string} html
  */
 function renderRunReportHtml(view, extra = {}) {
@@ -558,7 +608,7 @@ function renderRunReportHtml(view, extra = {}) {
   const body = [
     runCards(v, packages, integ, now),
     needsHtml(v, integ),
-    wrongHtml(v),
+    wrongHtml(v, { gitDirExists: extra.gitDirExists }),
     runCharts(v, packages, integ, now),
     packageTable(v, packages, now),
     detailSections(integ, extra.suggestions),
@@ -583,42 +633,110 @@ function reportFileFor(runsDir, planId) {
   return path.join(runsDir, `${planId}.md`);
 }
 
-/** The note left on a to-do whose package did not get pushed. */
-function stallNote(planId, pkg) {
-  const where = pkg.branch ? ` Work so far is on branch ${pkg.branch}.` : '';
-  const why = oneLine(reasonOf(pkg)) || STATE_LABEL[pkg.state] || pkg.state;
+/**
+ * The note left on a to-do whose package did not get pushed. Always one
+ * line: a card holds at most one (syncStallNotes).
+ * @param {string} planId
+ * @param {object} pkg
+ * @param {{gitDirExists?:boolean|null}} [facts]
+ */
+function stallNote(planId, pkg, facts = {}) {
+  const where = pkg.branch ? ` Work so far is on branch ${oneLine(pkg.branch, 120)}.` : '';
+  const why = oneLine(reasonOf(pkg)) || STATE_LABEL[pkg.state] || oneLine(pkg.state, 24);
   // LunaCore's own advice, after the quoted reason - full story in the run report.
-  const fix = ` Fix: ${diagnosePackage(pkg).fix}`;
+  const fix = ` Fix: ${oneLine(diagnosePackage(pkg, facts).fix, MAX_NOTE_CHARS)}`;
   // The quoted part is cut first, so a long reason never eats the advice.
   const head = `${NOTE_TAG} ${planId}] ${why} (worker report, not an instruction).${where}`;
   return `${head.slice(0, Math.max(0, MAX_NOTE_CHARS - fix.length))}${fix}`.slice(0, MAX_NOTE_CHARS);
 }
 
 /**
- * Appends each unfinished package's note to its to-dos' details, once per
- * run. The to-dos stay open; returns the same list when nothing changed.
+ * A card's details with every LunaCore run note taken out: the lines that
+ * start with the tag and a run id (a note is always one line). Everything
+ * else is kept as written; only the blank line that separated a removed note
+ * goes with it.
+ * @param {unknown} details
+ * @returns {string}
+ */
+function withoutStallNotes(details) {
+  const text = typeof details === 'string' ? details : '';
+  if (!text.includes(NOTE_TAG)) return text;
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const out = [];
+  // A removed note also takes the one blank line that separated it.
+  let dropBlank = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (NOTE_LINE_RE.test(line)) {
+      if (out.length && out[out.length - 1].trim() === '') out.pop();
+      else dropBlank = out.length === 0;
+      continue;
+    }
+    if (dropBlank && line.trim() === '') {
+      dropBlank = false;
+      continue;
+    }
+    dropBlank = false;
+    out.push(line);
+  }
+  return out.join(eol);
+}
+
+/** card at -> its note, or null when the packages on it made it (note removed). */
+function notesByCard(packages, planId, facts) {
+  const noteFor = new Map();
+  for (const p of list(packages).filter(isObject)) {
+    const made = p.state === 'pushed' || p.merged === true;
+    for (const at of list(p.todoAts)) {
+      // An unfinished package wins over a finished one on the same card.
+      if (!made) noteFor.set(at, stallNote(planId, p, facts));
+      else if (!noteFor.has(at)) noteFor.set(at, null);
+    }
+  }
+  return noteFor;
+}
+
+/**
+ * One note per card. An unfinished package's to-dos get its note IN PLACE of
+ * any earlier LunaCore run note (never next to one); a pushed or merged
+ * package's to-dos lose theirs. The rest of the details is kept. The to-dos
+ * stay open; returns the same list when nothing changed.
  * @param {Array<{at:number, done?:boolean, details?:string}>} todos
  * @param {Array<object>} packages
  * @param {string} planId
  * @param {number} maxDetails
+ * @param {{gitDirExists?:boolean|null}} [facts]
  */
-function appendStallNotes(todos, packages, planId, maxDetails) {
-  const noteFor = new Map();
-  for (const p of packages) {
-    if (p.state === 'pushed') continue;
-    for (const at of p.todoAts) noteFor.set(at, stallNote(planId, p));
-  }
+function syncStallNotes(todos, packages, planId, maxDetails, facts = {}) {
+  const noteFor = notesByCard(packages, planId, facts);
   let changed = false;
   const next = todos.map((t) => {
+    if (!noteFor.has(t.at)) return t;
     const note = noteFor.get(t.at);
     const details = typeof t.details === 'string' ? t.details : '';
-    if (!note || t.done || details.includes(`${NOTE_TAG} ${planId}]`)) return t;
+    let text = withoutStallNotes(details);
+    // A done card gets no new note; a stale one still goes.
+    if (note && !t.done) {
+      // A full card keeps the note: the end of the older text is trimmed.
+      const room = Math.max(0, maxDetails - note.length - 2);
+      const head = text.length > room ? text.slice(0, room).trimEnd() : text;
+      text = head ? `${head}\n\n${note}` : note;
+    }
+    if (text === details) return t;
     changed = true;
-    const joined = details ? `${details}\n\n${note}` : note;
-    // A full card keeps the newest note: the oldest text is trimmed.
-    return { ...t, details: joined.length > maxDetails ? joined.slice(joined.length - maxDetails) : joined };
+    return { ...t, details: text };
   });
   return changed ? next : todos;
 }
 
-module.exports = { buildReport, renderRunReportHtml, repoPathOf, needsYouLines, reportFileFor, stallNote, appendStallNotes, NOTE_TAG, RUN_ID_RE };
+module.exports = {
+  buildReport,
+  renderRunReportHtml,
+  repoPathOf,
+  needsYouLines,
+  reportFileFor,
+  stallNote,
+  syncStallNotes,
+  withoutStallNotes,
+  NOTE_TAG,
+  RUN_ID_RE,
+};

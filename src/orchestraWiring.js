@@ -28,8 +28,10 @@ const path = require('path');
 const { BRIEF_DIR } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha, runVerify } = require('./orchestraFinish');
+const { sharedVerifyQueue } = require('./verifyQueue');
 const orchestraIntegrate = require('./orchestraIntegrate');
 const { renderRunReportHtml, repoPathOf } = require('./orchestraReport');
+const { gitDirExists } = require('./orchestraDiagnose');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
 const defaultStore = require('./orchestraStore');
 const { lastOpenToolUse, allowRuleFor, exampleFor } = require('./orchestraSupervisor');
@@ -137,8 +139,10 @@ function sessionDeps(ctx) {
         return false;
       }
     },
-    // Slice 4 supervisor.
-    finishPackage,
+    // Slice 4 supervisor. Package verifies of every project's run share one
+    // serial queue (verifyQueue.js); hooks feed the board's "waiting to verify".
+    finishPackage: (pkg, hooks) =>
+      finishPackage(pkg, { verifyImpl: (command, cwd) => sharedVerifyQueue().run(command, cwd, hooks || {}) }),
     headSha,
     sessionAlive: (id) => {
       const s = ctx.sessions.get(id);
@@ -240,7 +244,8 @@ function reportDeps(ctx, self) {
         // The same run as a standalone page with charts, next to the .md.
         try {
           const view = self().view() || {};
-          const html = renderRunReportHtml(view, { now: Date.now(), suggestions: view.suggestions, repoPath: repoPathOf(text) });
+          const repoPath = repoPathOf(text);
+          const html = renderRunReportHtml(view, { now: Date.now(), suggestions: view.suggestions, repoPath, gitDirExists: gitDirExists(repoPath) });
           fs.writeFileSync(path.join(dir, `${planId}.html`), html, { encoding: 'utf8', mode: 0o600 });
         } catch (err) {
           ctx.logError(`[orchestra] html report failed: ${errText(err)}`);
