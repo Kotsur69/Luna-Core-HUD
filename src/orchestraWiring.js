@@ -28,6 +28,7 @@ const path = require('path');
 const { BRIEF_DIR } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha, runVerify } = require('./orchestraFinish');
+const { sharedVerifyQueue } = require('./verifyQueue');
 const orchestraIntegrate = require('./orchestraIntegrate');
 const { renderRunReportHtml, repoPathOf } = require('./orchestraReport');
 const { gitDirExists } = require('./orchestraDiagnose');
@@ -138,8 +139,10 @@ function sessionDeps(ctx) {
         return false;
       }
     },
-    // Slice 4 supervisor.
-    finishPackage,
+    // Slice 4 supervisor. Package verifies of every project's run share one
+    // serial queue (verifyQueue.js); hooks feed the board's "waiting to verify".
+    finishPackage: (pkg, hooks) =>
+      finishPackage(pkg, { verifyImpl: (command, cwd) => sharedVerifyQueue().run(command, cwd, hooks || {}) }),
     headSha,
     sessionAlive: (id) => {
       const s = ctx.sessions.get(id);
