@@ -9,14 +9,15 @@
 // main.js on purpose (main.js is far past the file-size guideline); main.js
 // only calls registerMissionIpc() once.
 //
+// Calendar channels live in missioncalipc.js and News in missionnewsipc.js;
+// this file builds the shared helpers and services and hands them over.
+//
 // State held here, and why:
 //   - lastPreview: the validated mail preview. mission:mail-apply only trashes
 //     ids found in it (see missionmail.js approvedTrashIds) - the renderer can
 //     tick and untick, but it cannot introduce a thread id of its own.
 //   - busy: one job per kind at a time. A double-click must not start two
 //     overlapping inbox scans, each costing a full model call.
-//   - seenEvents: the calendar events main itself read from Google. Event
-//     weather is worked out from these, never from events the renderer sends.
 // ============================================================================
 
 'use strict';
@@ -24,16 +25,17 @@
 const { runJob, MISSION_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunner');
 const { loadMissionConfig } = require('./missionconfig');
 const mail = require('./missionmail');
-const cal = require('./missioncal');
 const { createGcal } = require('./gcal');
 const { createWeather } = require('./missionweather');
 const { createGithub } = require('./missiongithub');
 const { createTrending, buildDescribePrompt, parseDescription } = require('./missiontrending');
-const { createNews, buildNewsPrompt, parseNewsSummary, publicSections, newsSnapshot } = require('./missionnews');
+const { createNews } = require('./missionnews');
 const newsStore = require('./missionnewsstore');
-const { createNewsPeers } = require('./missionnewspeers');
 const projectStore = require('./missionprojects');
 const { createBrief, createBriefStore, defaultSources, KINDS: BRIEF_KINDS } = require('./missionbrief');
+const { LANGS, localIsoNow, typedFailure } = require('./missionipcshared');
+const { registerCalendarIpc, defaultPickClientFile } = require('./missioncalipc');
+const { registerNewsIpc } = require('./missionnewsipc');
 
 /** The real ledger: this PC's ~/.claude/projects, priced with config/rates.json. */
 function defaultLedgerService(cloudSnapshots) {
@@ -79,68 +81,10 @@ function defaultBriefSources({ getLedger, gcal, weather, projectNames }) {
   });
 }
 
-/** Native file dialog for the Google Desktop-app client JSON. */
-async function defaultPickClientFile() {
-  const { dialog, BrowserWindow } = require('electron');
-  const win = BrowserWindow.getFocusedWindow();
-  const opts = {
-    title: 'Google OAuth client (Desktop app) JSON',
-    properties: ['openFile'],
-    filters: [{ name: 'JSON', extensions: ['json'] }],
-  };
-  const result = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
-  return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
-}
-
 /** Minimum gap between two links opened from the renderer. */
 const OPEN_GAP_MS = 500;
 
 const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, news: 180000, describe: 90000 };
-const LANGS = ['pl', 'en'];
-const DAY_MS = 24 * 60 * 60 * 1000;
-const MAX_SEEN_EVENTS = 1000;
-/** Min gap between two event edits or creates (a person saves one card at a time). */
-const UPDATE_GAP_MS = 1000;
-/** At most this many new events per window (a person adds a few at a time). */
-const MAX_CREATES_PER_WINDOW = 30;
-const CREATE_WINDOW_MS = 10 * 60 * 1000;
-const EVENT_ID_RE = /^[A-Za-z0-9_@.-]{1,256}$/;
-/** Min gap between two quick searches (X / Reddit ride the user's main accounts). */
-const QUICK_SEARCH_GAP_MS = 10000;
-
-/** Local ISO 8601 with the zone offset, e.g. 2026-10-08T14:03:00+02:00. */
-function localIsoNow(date = new Date()) {
-  const pad = (n) => String(Math.abs(n)).padStart(2, '0');
-  const off = -date.getTimezoneOffset();
-  const sign = off >= 0 ? '+' : '-';
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
-    `${sign}${pad(Math.trunc(off / 60))}:${pad(off % 60)}`
-  );
-}
-
-const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-
-/** The opaque calendar keys gcal.listCalendars() hands out. */
-const CAL_KEY_RE = /^[0-9a-f]{16}$/;
-
-/** A GcalError keeps its reason; anything else is logged and made generic. */
-function gcalFailure(err) {
-  if (err && typeof err.reason === 'string') {
-    console.error('[mission] google calendar:', err.reason, err.message);
-    return { ok: false, reason: err.reason };
-  }
-  console.error('[mission] google calendar failed:', err && err.message);
-  return { ok: false, reason: 'gcal-failed' };
-}
-
-/** A typed error (GithubError, NewsError) keeps its reason; anything else gets `fallback`. */
-function typedFailure(label, err, fallback) {
-  const reason = err && typeof err.reason === 'string' ? err.reason : fallback;
-  console.error(`[mission] ${label}:`, reason, err && err.message);
-  return { ok: false, reason };
-}
 
 /**
  * @param {{ipcMain:object, getModel:()=>string, getEnv:()=>Record<string,string>, run?:Function,
@@ -174,27 +118,11 @@ function registerMissionIpc({
   // Built on first use: requiring it is cheap, but tests never need the real one.
   let ledger = ledgerService;
   const getLedger = () => ledger || (ledger = defaultLedgerService(cloudSnapshots));
-  // Other PCs' last briefings (`news` snapshots), keyed like a local scan.
-  const newsPeers = createNewsPeers({ cloud: cloudSnapshots });
   let lastPreview = null;
   /** key -> name of the projects in the last ledger report, for mission:project-pin. */
   let knownProjects = new Map();
   const busy = new Set();
-  const seenEvents = new Map();
-  /** Keeps the newest copy of each listed event; the oldest fall out first. */
-  const rememberEvents = (events) => {
-    for (const ev of events) {
-      if (!ev || !ev.id) continue;
-      seenEvents.delete(ev.id);
-      seenEvents.set(ev.id, ev);
-    }
-    while (seenEvents.size > MAX_SEEN_EVENTS) seenEvents.delete(seenEvents.keys().next().value);
-  };
   let lastOpenAt = 0;
-  let lastQuickAt = 0;
-  let lastUpdateAt = 0;
-  let lastCreateAt = 0;
-  let createTimes = [];
 
   /** Opens what `resolve` maps the renderer's key to - throttled, so a
    *  misbehaving renderer cannot fire a burst of browser tabs. */
@@ -209,21 +137,6 @@ function registerMissionIpc({
   const model = () => {
     const m = getModel();
     return MISSION_MODELS.includes(m) ? m : DEFAULT_MISSION_MODEL;
-  };
-
-  /** The last briefing for the phone and other PCs; never waits, never throws -
-   *  a broken snapshot must not discard a paid summary. */
-  const putNewsSnapshot = (build) => {
-    const log = (err) => console.error('[mission] news cloud snapshot failed:', err && err.message);
-    try {
-      const cloud = cloudSnapshots();
-      if (!cloud) return;
-      Promise.resolve()
-        .then(() => cloud.put('news', build()))
-        .catch(log);
-    } catch (err) {
-      log(err);
-    }
   };
 
   /** Runs `fn` under the per-kind busy guard; always resolves. */
@@ -297,99 +210,7 @@ function registerMissionIpc({
     })
   );
 
-  // No argument: the next `days` days from now (the week list). `{month}`:
-  // that whole calendar month (the month grid). Read from the Calendar API.
-  ipcMain.handle('mission:cal-agenda', (_event, req) =>
-    guarded('agenda', async () => {
-      const { calendar } = loadMissionConfig();
-      let from;
-      let to;
-      if (req && req.month !== undefined) {
-        const bounds = cal.monthBounds(req.month);
-        if (!bounds) return { ok: false, reason: 'bad-range' };
-        ({ start: from, end: to } = bounds);
-      } else {
-        from = new Date();
-        to = new Date(from.getTime() + calendar.days * DAY_MS);
-      }
-      try {
-        const { events } = await gcal.listEvents({
-          fromIso: localIsoNow(from),
-          toIso: localIsoNow(to),
-          categories: calendar.categories,
-        });
-        rememberEvents(events);
-        return { ok: true, events };
-      } catch (err) {
-        return gcalFailure(err);
-      }
-    })
-  );
-
-  // Click-to-edit: title, times and location of one event main listed earlier.
-  // The draft is validated like a quick-add draft; gcal decides which calendar.
-  ipcMain.handle('mission:cal-update', (_event, req) =>
-    guarded('update', async () => {
-      const id = req && typeof req.id === 'string' && EVENT_ID_RE.test(req.id) ? req.id : null;
-      if (!id) return { ok: false, reason: 'bad-draft' };
-      const { calendar } = loadMissionConfig();
-      const checked = cal.normalizeDraft(req.draft, calendar.categories);
-      if (!checked.ok) return checked;
-      // A person saves one card at a time; a renderer looping over every
-      // editable event is throttled to a crawl. Only well-formed saves count.
-      const nowMs = Date.now();
-      if (nowMs - lastUpdateAt < UPDATE_GAP_MS) return { ok: false, reason: 'rate-limited' };
-      lastUpdateAt = nowMs;
-      try {
-        const { event } = await gcal.updateEvent(id, checked.draft, calendar.categories);
-        rememberEvents([event]);
-        return { ok: true, event };
-      } catch (err) {
-        return gcalFailure(err);
-      }
-    })
-  );
-
-  // Weather for the listed events that have a place (Open-Meteo, free).
-  // Not under `busy`: an idempotent read, and a dropped second call would be
-  // the one that already sees a just-saved event.
-  ipcMain.handle('mission:cal-weather', async () => {
-    try {
-      const { calendar } = loadMissionConfig();
-      return { ok: true, weather: await weather.forEvents([...seenEvents.values()], calendar.weather) };
-    } catch (err) {
-      console.error('[mission] weather failed:', err && err.message);
-      return { ok: false, reason: 'generic' };
-    }
-  });
-
-  // Opens the browser for Google consent and waits (up to 3 min) for the
-  // loopback redirect. One at a time: a second click while waiting is `busy`.
-  // The Google "Desktop app" client JSON: picked in a native dialog here, so
-  // the renderer never names a path; gcal.importClient validates and copies it.
-  ipcMain.handle('mission:gcal-import-client', () =>
-    guarded('gcal-import', async () => {
-      const file = await pickClientFile();
-      if (!file) return { ok: false, reason: 'cancelled' };
-      try {
-        gcal.importClient(file);
-        return { ok: true, gcal: gcal.status() };
-      } catch (err) {
-        return gcalFailure(err);
-      }
-    })
-  );
-
-  ipcMain.handle('mission:gcal-connect', () =>
-    guarded('gcal-connect', async () => {
-      try {
-        await gcal.connect();
-        return { ok: true, gcal: gcal.status() };
-      } catch (err) {
-        return gcalFailure(err);
-      }
-    })
-  );
+  registerCalendarIpc({ ipcMain, guarded, job, gcal, weather, pickClientFile });
 
   // GitHub telemetry through the `gh` CLI (src/missiongithub.js) - free.
   ipcMain.handle('mission:github', () =>
@@ -476,155 +297,7 @@ function registerMissionIpc({
     }
   });
 
-  // ---- News: Agent-Reach fetch (src/missionnews.js) + one lean Haiku job ----
-
-  ipcMain.handle('mission:news-config', () => store.loadNews());
-
-  ipcMain.handle('mission:news-save', (_event, raw) => {
-    try {
-      return { ok: true, news: store.saveNews(raw) };
-    } catch (err) {
-      console.error('[mission] news save failed:', err && err.message);
-      return { ok: false, reason: 'generic' };
-    }
-  });
-
-  ipcMain.handle('mission:news-status', () => guarded('news-status', async () => ({ ok: true, status: await news.status() })));
-
-  // Creates the dedicated venv and installs Agent-Reach's dependencies (~1 min).
-  ipcMain.handle('mission:news-setup', () =>
-    guarded('news-setup', async () => {
-      try {
-        return { ok: true, status: await news.setup() };
-      } catch (err) {
-        return typedFailure('news setup', err, 'news-setup-failed');
-      }
-    })
-  );
-
-  // Adds twitter-cli + rdt-cli to the News venv (pinned, base pins as constraints).
-  ipcMain.handle('mission:news-setup-social', () =>
-    guarded('news-setup-social', async () => {
-      try {
-        return { ok: true, status: await news.setupSocial() };
-      } catch (err) {
-        return typedFailure('news setup social', err, 'news-setup-failed');
-      }
-    })
-  );
-
-  // 'x' | 'reddit': opens the bridge's own console where the user pastes the
-  // login. The cookies never come through here - only this word does.
-  ipcMain.handle('mission:news-configure', (_event, which) => {
-    try {
-      news.configure(typeof which === 'string' ? which : '');
-      return { ok: true };
-    } catch (err) {
-      return typedFailure('news configure', err, 'bad-input');
-    }
-  });
-
-  // req: {sourceIds[], topicIds[], adhoc?: {query, platform}, lang}. Ids are
-  // looked up in the saved store; a quick search is re-validated like a saved
-  // topic. The renderer cannot introduce a URL or a platform of its own.
-  ipcMain.handle('mission:news-scan', (_event, req) =>
-    guarded('news-scan', async () => {
-      const raw = req && req.adhoc;
-      const topic = raw && typeof raw === 'object' ? newsStore.normalizeTopic({ query: raw.query, platforms: [raw.platform] }) : null;
-      const adhoc = topic ? { query: topic.query, platforms: topic.platforms } : null;
-      if (adhoc) {
-        // The logins are Mati's main accounts: no burst of quick searches.
-        if (Date.now() - lastQuickAt < QUICK_SEARCH_GAP_MS) return { ok: false, reason: 'rate-limited' };
-        lastQuickAt = Date.now();
-      }
-      const selection = { sourceIds: req && req.sourceIds, topicIds: req && req.topicIds, adhoc };
-      let sections;
-      try {
-        sections = await news.fetchSections(store.loadNews(), selection);
-      } catch (err) {
-        return typedFailure('news fetch', err, 'news-fetch-failed');
-      }
-      // Nothing came back: no point paying for a summary of nothing.
-      if (!sections.some((s) => s.entries.length)) {
-        return { ok: true, briefing: [], sections: publicSections(sections), costUsd: null };
-      }
-      const lang = LANGS.includes(req && req.lang) ? req.lang : 'pl';
-      const res = await job('news', buildNewsPrompt(sections, lang), { lean: true });
-      if (!res.ok) return { ...res, sections: publicSections(sections) };
-      const { briefing, summaries } = parseNewsSummary(res.answer, sections);
-      // A quick search is a one-off: it must not replace the briefing the phone shows.
-      if (!adhoc) {
-        putNewsSnapshot(() => newsSnapshot({ briefing, sections, summaries, at: Date.now(), lang }));
-        brief.rememberNews(briefing);
-      }
-      return { ok: true, briefing, sections: publicSections(sections, summaries), costUsd: res.costUsd };
-    })
-  );
-
-  // Other PCs' last briefings as read-only reports: keys, never URLs.
-  ipcMain.handle('mission:news-peers', () => guarded('news-peers', async () => ({ ok: true, reports: await newsPeers.list() })));
-
-  ipcMain.on('mission:news-open', openResolved((key) => news.urlFor(key) || newsPeers.urlFor(key)));
-
-  ipcMain.handle('mission:cal-parse', (_event, text) =>
-    guarded('parse', async () => {
-      if (typeof text !== 'string' || !text.trim()) return { ok: false, reason: 'empty' };
-      const { calendar } = loadMissionConfig();
-      const prompt = cal.buildParsePrompt({
-        text,
-        nowIso: localIsoNow(),
-        timeZone: timeZone(),
-        categories: calendar.categories,
-      });
-      const res = await job('parse', prompt, { lean: true });
-      if (!res.ok) return res;
-      const parsed = cal.normalizeDraft(res.answer, calendar.categories);
-      return parsed.ok ? { ...parsed, costUsd: res.costUsd } : parsed;
-    })
-  );
-
-  // The calendars a new event can go to, as opaque keys (a calendar id is an
-  // email address; the renderer never sees one).
-  ipcMain.handle('mission:cal-calendars', () =>
-    guarded('calendars', async () => {
-      try {
-        return { ok: true, calendars: await gcal.listCalendars() };
-      } catch (err) {
-        return gcalFailure(err);
-      }
-    })
-  );
-
-  // Creates the confirmed draft in the chosen calendar through the Calendar
-  // API - no model. {draft, calendar}: the draft is re-validated (it has been
-  // through the renderer since PARSE), the key must be one gcal handed out.
-  ipcMain.handle('mission:cal-create', (_event, req) =>
-    guarded('create', async () => {
-      const key = req && typeof req.calendar === 'string' && CAL_KEY_RE.test(req.calendar) ? req.calendar : null;
-      if (!key) return { ok: false, reason: 'bad-draft' };
-      const { calendar } = loadMissionConfig();
-      const checked = cal.normalizeDraft(req.draft, calendar.categories);
-      if (!checked.ok) return checked;
-      // Same throttle as edits: a renderer looping creates cannot flood the calendar.
-      const nowMs = Date.now();
-      if (nowMs - lastCreateAt < UPDATE_GAP_MS) return { ok: false, reason: 'rate-limited' };
-      // And a ceiling per window: one a second would still be 3600 an hour.
-      createTimes = createTimes.filter((at) => nowMs - at < CREATE_WINDOW_MS);
-      if (createTimes.length >= MAX_CREATES_PER_WINDOW) return { ok: false, reason: 'rate-limited' };
-      createTimes.push(nowMs);
-      lastCreateAt = nowMs;
-      try {
-        const { event } = await gcal.createEvent(key, checked.draft, calendar.categories);
-        rememberEvents([event]);
-        return { ok: true, event };
-      } catch (err) {
-        // A network error can land after Google stored the event: say so
-        // rather than invite a retry that duplicates it.
-        if (err && err.reason === 'gcal-network') return { ok: false, reason: 'maybe-created' };
-        return gcalFailure(err);
-      }
-    })
-  );
+  registerNewsIpc({ ipcMain, guarded, job, openResolved, news, store, cloudSnapshots, brief });
 
   // ---- Brief (src/missionbrief.js): weekly on its own, daily on click ----
 

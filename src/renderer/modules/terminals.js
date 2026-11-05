@@ -55,6 +55,14 @@ export function mountTerminalHost(root) {
 }
 
 /**
+ * True once #terminal exists. Until then ensureTerm() has nowhere to put a
+ * pane, so sessions.js parks early pty output (see earlypty.js).
+ */
+export function isTerminalHostMounted() {
+  return termHost !== null;
+}
+
+/**
  * sessionId -> session bucket.
  *
  * This module owns `{ id, term, fitAddon, el, alive }`. Everything else on the

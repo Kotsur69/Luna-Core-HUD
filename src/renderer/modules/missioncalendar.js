@@ -11,32 +11,28 @@
 // straight through the Calendar API - no model. Events with a place in the
 // next 7 days carry an Open-Meteo weather badge (main's missionweather.js), also free.
 //
-// Quick add is parse -> editable draft -> Add. The draft card is the "modal":
-// inline, because the HUD has no free floating space, but it has the same
-// contract - nothing is created until the user presses Add, Escape cancels.
+// Quick add (parse -> editable draft -> Add) lives in missioncalquickadd.js;
+// event ordering / grouping helpers in missioncalevents.js.
 // ============================================================================
 
 'use strict';
 
 import { t, loc } from './util.js';
 import { defineWidget } from './registry.js';
-import { errorText, costSuffix, setStatus, ipcFailed } from './missionshared.js';
-import { buildMonthGrid, eventsByDay, monthKeyOf, shiftMonth, shiftDate, dateKey, startDay } from './missioncalmonth.js';
-import { toInputValue, fromInputValue, field, input, buildEditor, weatherRow } from './missioncaledit.js';
+import { errorText, setStatus, ipcFailed } from './missionshared.js';
+import { buildMonthGrid, eventsByDay, monthKeyOf, shiftMonth, dateKey } from './missioncalmonth.js';
+import { buildEditor, weatherRow } from './missioncaledit.js';
+import { groupByDay, timeLabel, monthsOf, withEvent } from './missioncalevents.js';
+import { mountQuickAdd, loadCalendars } from './missioncalquickadd.js';
 
 let config = { categories: [], days: 7, gcal: { configured: false, connected: false } };
 let agenda = null;
-let draft = null;
 let els = null;
 // Click-to-edit: the id of the event whose card is open, and event weather
 // by event id (main works it out from the events it listed itself).
 let editingId = null;
 let card = null; // {id, row} - the open card's DOM, kept across re-renders
 let weather = {};
-// Calendars a new event can go to ({key, name, color, primary}); null until loaded.
-let calendars = null;
-const LAST_CAL_KEY = 'lc.mc.lastCalendar';
-const TRACKDAY_RE = /\btrack ?days?\b/i;
 // Event ids whose hourly forecast is unfolded (kept across re-renders).
 const wxOpen = new Set();
 let weatherSeq = 0;
@@ -49,12 +45,6 @@ let selectedDay = dateKey(new Date());
 let monthLoading = false;
 const months = new Map();
 
-/** Same order as main's compareEvents (src/missioncal.js). */
-function compareEvents(a, b) {
-  const at = (ev) => Date.parse(ev.allDay ? `${ev.start}T00:00:00` : ev.start);
-  return at(a) - at(b) || (b.allDay === true) - (a.allDay === true);
-}
-
 const category = (id) => config.categories.find((c) => c.id === id) || null;
 
 /** The event's category when it has one, otherwise the calendar it sits in. */
@@ -66,15 +56,6 @@ function chip(ev) {
   if (color) span.style.setProperty('--mc-cat', color);
   span.textContent = cat ? loc(cat.label) : ev.calendar || t('mc.cal.uncategorized');
   return span;
-}
-
-/** Local calendar day key for grouping; all-day events already carry one. */
-const dayKey = (ev) => (ev.allDay ? ev.start.slice(0, 10) : toInputValue(ev.start, false).slice(0, 10));
-
-function timeLabel(ev) {
-  if (ev.allDay) return t('mc.cal.allDay');
-  const hm = (iso) => toInputValue(iso, false).slice(11, 16);
-  return ev.end && ev.end !== ev.start ? `${hm(ev.start)}–${hm(ev.end)}` : hm(ev.start);
 }
 
 /** @param {boolean} withCard  this list is the visible view (only it shows the edit card) */
@@ -176,15 +157,6 @@ function closeEdit(id) {
   if (row) row.focus();
 }
 
-/** Local 'YYYY-MM' keys an event touches, as a test (all-day end is exclusive). */
-function monthsOf(ev) {
-  const first = startDay(ev);
-  const lastDay = ev.allDay ? shiftDate(ev.end, -1) : toInputValue(ev.end, false).slice(0, 10);
-  const from = first.slice(0, 7);
-  const to = (lastDay > first ? lastDay : first).slice(0, 7);
-  return (key) => key >= from && key <= to;
-}
-
 /**
  * Swaps the edited event into the loaded lists: every cached month it now
  * touches (it may have moved, or span two), and the week list only if it was
@@ -193,7 +165,7 @@ function monthsOf(ev) {
 function replaceEvent(ev) {
   const touches = monthsOf(ev);
   const without = (list) => list.filter((e) => e.id !== ev.id);
-  const swap = (list) => [...without(list), ev].sort(compareEvents);
+  const swap = (list) => withEvent(without(list), ev);
   if (agenda && agenda.some((e) => e.id === ev.id)) agenda = swap(agenda);
   for (const [key, list] of months) months.set(key, touches(key) ? swap(list) : without(list));
 }
@@ -239,12 +211,7 @@ function renderAgenda() {
     els.agenda.append(p);
     return;
   }
-  const groups = new Map();
-  for (const ev of agenda) {
-    const key = dayKey(ev);
-    groups.set(key, [...(groups.get(key) || []), ev]);
-  }
-  for (const [key, events] of groups) {
+  for (const [key, events] of groupByDay(agenda)) {
     const section = document.createElement('section');
     section.className = 'mc-bucket';
     const h = document.createElement('h3');
@@ -260,130 +227,6 @@ function renderAgenda() {
     section.append(h, ul);
     els.agenda.append(section);
   }
-}
-
-function renderDraft() {
-  if (!els) return;
-  els.draft.replaceChildren();
-  els.draft.hidden = !draft;
-  if (!draft) return;
-  const type = draft.allDay ? 'date' : 'datetime-local';
-  const title = input('text', draft.title);
-  title.maxLength = 200;
-  const start = input(type, toInputValue(draft.start, draft.allDay));
-  // Google's all-day end date is exclusive; the field shows the inclusive
-  // last day (what a person means) and the +1 goes back on submit.
-  const end = input(type, draft.allDay ? shiftDate(draft.end, -1) : toInputValue(draft.end, false));
-  const where = input('text', draft.location);
-  where.maxLength = 500;
-  const cat = document.createElement('select');
-  cat.className = 'profile-select';
-  cat.append(
-    new Option(t('mc.cal.uncategorized'), ''),
-    ...config.categories.map((c) => new Option(loc(c.label), c.id))
-  );
-  cat.value = draft.category || '';
-  const calSelect = document.createElement('select');
-  calSelect.className = 'profile-select';
-  fillCalendars(calSelect, pickCalendar(draft));
-  // A trackday category moves the event to the trackday calendar - until the
-  // user picks a calendar by hand, which then stays.
-  let calTouched = false;
-  calSelect.addEventListener('change', () => (calTouched = true));
-  cat.addEventListener('change', () => {
-    if (!calTouched) calSelect.value = pickCalendar({ ...draft, title: title.value, category: cat.value || null }) || calSelect.value;
-  });
-  els.calSelect = calSelect;
-
-  const add = document.createElement('button');
-  add.type = 'button';
-  add.className = 'pad-send';
-  add.textContent = t('mc.cal.add');
-  const cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.className = 'port-btn mc-draft__cancel';
-  cancel.textContent = t('mc.cal.cancel');
-  const actions = document.createElement('div');
-  actions.className = 'mc-draft__actions';
-  actions.append(add, cancel);
-
-  cancel.addEventListener('click', closeDraft);
-  add.addEventListener('click', () =>
-    create(
-      {
-        ...draft,
-        title: title.value,
-        start: fromInputValue(start.value, draft.allDay),
-        end: draft.allDay ? shiftDate(end.value, 1) : fromInputValue(end.value, false),
-        location: where.value,
-        category: cat.value || null,
-      },
-      calSelect.value,
-      add
-    )
-  );
-
-  els.draft.append(
-    field('mc.cal.f.title', title),
-    field('mc.cal.f.start', start),
-    field('mc.cal.f.end', end),
-    field('mc.cal.f.category', cat),
-    field('mc.cal.f.calendar', calSelect),
-    field('mc.cal.f.location', where),
-    actions
-  );
-  title.focus();
-}
-
-/** Last calendar used for a new event, if this browser profile remembers one. */
-function lastCalendar() {
-  try {
-    return localStorage.getItem(LAST_CAL_KEY);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The calendar a draft should default to: a trackday goes to the calendar
- * named like "Trackdays"; otherwise the last one used, else the primary one.
- */
-function pickCalendar(d) {
-  if (!calendars || !calendars.length) return '';
-  const trackday = (config.weatherCategory && d.category === config.weatherCategory) || TRACKDAY_RE.test(d.title || '');
-  const trackCal = trackday ? calendars.find((c) => /track/i.test(c.name)) : null;
-  if (trackCal) return trackCal.key;
-  const last = lastCalendar();
-  if (last && calendars.some((c) => c.key === last)) return last;
-  return (calendars.find((c) => c.primary) || calendars[0]).key;
-}
-
-/** Options for the calendar select; a placeholder while the list loads. */
-function fillCalendars(select, selected) {
-  if (!calendars) {
-    select.replaceChildren(new Option(t('mc.cal.calLoading'), ''));
-    select.disabled = true;
-    return;
-  }
-  select.disabled = false;
-  select.replaceChildren(...calendars.map((c) => new Option(c.name || t('mc.cal.mainCalendar'), c.key)));
-  if (selected) select.value = selected;
-}
-
-/** Fetches the calendar list once per mount; fills an open draft's select in place. */
-async function loadCalendars() {
-  const res = await window.lunacore.missionCalCalendars().catch(ipcFailed);
-  if (!res.ok) return;
-  calendars = res.calendars;
-  // Filled in place: re-rendering the draft would drop the user's edits.
-  if (els && els.calSelect && draft) fillCalendars(els.calSelect, pickCalendar(draft));
-}
-
-function closeDraft() {
-  draft = null;
-  if (els) els.calSelect = null;
-  renderDraft();
-  if (els) els.input.focus();
 }
 
 // ---- Google connection ----------------------------------------------------------
@@ -552,65 +395,18 @@ function applyView() {
   if (view === 'month') renderMonth();
 }
 
+/** A newly created event (as Google stored it) spliced into whatever is loaded. */
+function spliceCreated(ev) {
+  const touches = monthsOf(ev);
+  if (agenda) agenda = withEvent(agenda, ev);
+  for (const [key, list] of months) if (touches(key)) months.set(key, withEvent(list, ev));
+}
+
 function setView(next) {
   if (next === view) return;
   view = next;
   applyView();
   loadVisible();
-}
-
-async function parse(text) {
-  els.input.disabled = true;
-  setStatus(els.status, t('mc.cal.parsing'));
-  const res = await window.lunacore.missionCalParse(text).catch(ipcFailed);
-  if (res.ok) draft = res.draft;
-  if (!els) return;
-  els.input.disabled = false;
-  if (!res.ok) {
-    setStatus(els.status, errorText(res.reason) + costSuffix(res.costUsd), true);
-    els.input.focus();
-    return;
-  }
-  setStatus(els.status, t('mc.cal.review') + costSuffix(res.costUsd));
-  renderDraft();
-}
-
-async function create(edited, calendarKey, button) {
-  if (!calendarKey) {
-    setStatus(els.status, t('mc.cal.calLoading'), true);
-    return;
-  }
-  button.disabled = true;
-  setStatus(els.status, t('mc.cal.creating'));
-  const res = await window.lunacore.missionCalCreate(edited, calendarKey).catch(ipcFailed);
-  if (res.ok) {
-    // The event as Google stored it, spliced into whatever is loaded rather
-    // than paying for a reload.
-    const ev = res.event;
-    const touches = monthsOf(ev);
-    if (agenda) agenda = [...agenda, ev].sort(compareEvents);
-    for (const [key, list] of months) if (touches(key)) months.set(key, [...list, ev].sort(compareEvents));
-    try {
-      localStorage.setItem(LAST_CAL_KEY, calendarKey);
-    } catch {
-      // A convenience only: without storage the primary calendar stays the default.
-    }
-  }
-  if (!els) return;
-  button.disabled = false;
-  if (!res.ok) {
-    setStatus(els.status, errorText(res.reason), true);
-    // A token from before editing existed: one reconnect grants the write scope.
-    if (res.reason === 'gcal-scope') els.connect.hidden = false;
-    return;
-  }
-  const cal = (calendars || []).find((c) => c.key === calendarKey);
-  setStatus(els.status, t('mc.cal.createdIn', { title: res.event.title, calendar: cal ? cal.name : '' }));
-  loadWeather();
-  els.input.value = '';
-  closeDraft();
-  renderAgenda();
-  if (view === 'month') renderMonth();
 }
 
 defineWidget({
@@ -657,25 +453,16 @@ defineWidget({
         // No config -> no categories; events still render, uncategorized.
       });
     els.refresh.addEventListener('click', () => (view === 'week' ? loadAgenda() : loadMonth(monthKey)));
-    els.form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      // An open draft holds the user's edits; a new parse would replace it
-      // silently. Finish or cancel that one first.
-      if (draft) {
-        setStatus(els.status, t('mc.cal.draftOpen'), true);
-        return;
-      }
-      const text = els.input.value.trim();
-      if (text) parse(text);
-    });
-    els.draft.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
-      // Handled here: the Mission Control panel closes on an unhandled Escape.
-      e.preventDefault();
-      closeDraft();
-    });
     renderAgenda();
-    renderDraft();
+    const unmountQuickAdd = mountQuickAdd(els, {
+      config: () => config,
+      onCreated: spliceCreated,
+      loadWeather,
+      renderViews: () => {
+        renderAgenda();
+        if (view === 'month') renderMonth();
+      },
+    });
     applyView();
     // Events survive remounts, so their weather is re-asked on every open and
     // hourly while open. Main caches forecasts for an hour: this costs nothing
@@ -686,10 +473,10 @@ defineWidget({
     }, WEATHER_REFRESH_MS);
     return () => {
       clearInterval(weatherTimer);
+      unmountQuickAdd();
       els = null;
       editingId = null;
       card = null;
-      calendars = null;
     };
   },
 });
