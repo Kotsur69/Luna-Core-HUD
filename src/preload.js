@@ -15,6 +15,12 @@ const { contextBridge, ipcRenderer } = require('electron');
 const isScope = (projectId) => typeof projectId === 'string' || projectId === null;
 const orchestraScope = (projectId) => (isScope(projectId) ? { projectId } : undefined);
 const withProject = (payload, projectId) => (isScope(projectId) ? { ...payload, projectId } : payload);
+// A payload object whose own projectId is re-checked like the argument form.
+const scopedPayload = (payload) => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const { projectId, ...rest } = payload;
+  return withProject(rest, projectId);
+};
 
 contextBridge.exposeInMainWorld('lunacore', {
   // --- PASSIVE OBSERVER: PTY stdout stream -> renderer ---
@@ -488,6 +494,24 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** 'Email it': sends that week's review to the connected Gmail address. */
   lifeWeekEmail: (week) => ipcRenderer.invoke('life:week-email', { week }),
   lifeWeekModel: (model, week) => ipcRenderer.invoke('life:week-model', { model, week }),
+  // --- Notification hub (src/hubipc.js) ---
+  // Read-only list plus "mark done" by id. Main checks the id against its
+  // regex; item actions are whitelisted names the renderer maps to the IPC
+  // below - nothing here runs an action named by data.
+  /** Promise<{ok, items, done, needs} | {ok:false, reason}>. */
+  hubList: () => ipcRenderer.invoke('hub:list'),
+  /** Marks one item done. Promise<{ok} | {ok:false, reason}>. */
+  hubDone: (id) => ipcRenderer.invoke('hub:done', typeof id === 'string' ? id : ''),
+  /** The drawer is showing: main marks its open Needs-you items seen. No payload. Promise<{ok, unseen}>. */
+  hubSeen: () => ipcRenderer.invoke('hub:seen'),
+  /** Pushed when the list changes: ({items, done, needs, unseen}); returns an unsubscribe. */
+  onHubChanged: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_e, view) => cb(view);
+    ipcRenderer.on('hub:changed', listener);
+    return () => ipcRenderer.removeListener('hub:changed', listener);
+  },
+
   // --- Cloud sync (src/cloudipc.js) ---
   // No payloads except cloudForget's machine name. Main answers from a whitelist: who is logged in and the sync
   // state - never a token. Login opens GitHub in the system browser.
@@ -598,7 +622,7 @@ contextBridge.exposeInMainWorld('lunacore', {
     return () => ipcRenderer.removeListener('orchestra:planWait', listener);
   },
   /** Approve (ids null) or launch chosen packages; main validates the payload (projectId included). */
-  launchOrchestra: (payload) => ipcRenderer.invoke('orchestra:launch', payload),
+  launchOrchestra: (payload) => ipcRenderer.invoke('orchestra:launch', scopedPayload(payload)),
   /** Promise<{ok, error?}> - refused ('runActive') while a worker runs. */
   discardOrchestra: (projectId) => ipcRenderer.invoke('orchestra:discard', orchestraScope(projectId)),
   /** Slice 4: pick a stalled / closed / killed package back up. Only ids cross. */
@@ -655,9 +679,36 @@ contextBridge.exposeInMainWorld('lunacore', {
    */
   openOrchestraReport: (planId, projectId) =>
     ipcRenderer.invoke('orchestra:openReport', typeof planId === 'string' ? planId : null, orchestraScope(projectId)),
-  /** Plan changes (new plan, launches, a worker tab closed): cb(view, projectId); returns an unsubscribe. */
+  /**
+   * "Resend report email" on a finished run. Only the run id (+ the board's
+   * projectId, string or null) crosses; main
+   * checks it names a report in the runs folder (src/orchestraFinishIpc.js).
+   * Promise<{ok:true} | {ok:false, reason:string}>.
+   */
+  resendOrchestraEmail: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:resend-email', typeof planId === 'string' ? planId : null, orchestraScope(projectId)),
+  /**
+   * Commits since the last v* tag in a project's checkout (for "Release now").
+   * Only the project id crosses; main maps it to a registered project.
+   * Promise<{ok:true, count:number, tag:string} | {ok:false, reason:string}>.
+   */
+  orchestraUnreleasedCount: (projectId) =>
+    ipcRenderer.invoke('orchestra:unreleased-count', typeof projectId === 'string' ? projectId : null),
+  /**
+   * "Release now" on the finished run (src/releaseCut.js). Only the project
+   * id crosses; main checks it is the board's landed run and asks Mati in a
+   * native dialog. Promise<{ok:true, version, tag, url} | {ok:false, reason:string}>.
+   */
+  releaseOrchestraNow: (projectId) => ipcRenderer.invoke('orchestra:release-now', typeof projectId === 'string' ? projectId : null),
+  /**
+   * Plan changes (new plan, launches, a worker tab closed): cb(view, projectId);
+   * returns an unsubscribe. main always names the project (string, or null for
+   * a tab with no project); anything else is dropped, never read as null.
+   */
   onOrchestraChanged: (cb) => {
-    const listener = (_e, msg) => cb(msg && typeof msg === 'object' ? msg.view : null, msg && typeof msg === 'object' ? msg.projectId : null);
+    const listener = (_e, msg) => {
+      if (msg && typeof msg === 'object' && isScope(msg.projectId)) cb(msg.view || null, msg.projectId);
+    };
     ipcRenderer.on('orchestra:changed', listener);
     return () => ipcRenderer.removeListener('orchestra:changed', listener);
   },

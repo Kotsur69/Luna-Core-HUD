@@ -1,8 +1,9 @@
 // ============================================================================
 // LunaCore phone - God Mode: the run going on right now
 // ----------------------------------------------------------------------------
-// A PC publishes `live` + `tabs` in its `godmode` snapshot while a run goes
-// (godmodelivepub.js, at least every minute). This draws, on top of the
+// A PC publishes `live` + `lives` + `tabs` in its `godmode` snapshot while a
+// run goes (godmodelivepub.js, at least every minute) - `lives` holds one run
+// per project, an older PC build only `live`. This draws, per run, on top of the
 // God Mode page: counters, a "paused until" banner, the packages grouped by
 // state with the HUD's tab-light glyphs, and every PC's tab lights. A
 // snapshot older than LIVE_STALE_MS gets a 'stale' badge - the PC may be
@@ -13,7 +14,7 @@
 
 import { h, icon, ICONS } from '../dom.js';
 import { t, tf, locale } from '../i18n.js';
-import { godmodeLiveFrom, godmodeTabsFrom, godmodeLiveCounts } from '../snapmodel.js';
+import { godmodeLivesFrom, godmodeTabsFrom, godmodeLiveCounts } from '../snapmodel.js';
 import { when } from './snapshotview.js';
 
 /** A finished (settled / killed) live run stays on top this long, then the history has it. */
@@ -70,11 +71,11 @@ export function repaintWhileShown(node, view) {
   }, REPAINT_MS);
 }
 
-/** The live run worth showing: going, or finished in the last few hours. */
-export function liveToShow(rows, now) {
-  const live = godmodeLiveFrom(rows, now);
-  if (!live) return null;
-  return isGoing(live) || now - live.at < FINISHED_SHOWN_MS ? live : null;
+const worthShowing = (live, now) => isGoing(live) || now - live.at < FINISHED_SHOWN_MS;
+
+/** Every live run worth showing: going, or finished in the last few hours (several projects can run at once). */
+export function livesToShow(rows, now) {
+  return godmodeLivesFrom(rows, now).filter((live) => worthShowing(live, now));
 }
 
 function light(state, label) {
@@ -159,15 +160,16 @@ function runTone(state) {
   return state === 'settled' ? 'tag is-good' : 'tag';
 }
 
-/** The full live card on the God Mode page. */
-export function liveCard(live, now) {
+/** The full live card on the God Mode page; `index` keeps heading ids unique. */
+export function liveCard(live, now, index = 0) {
+  const headingId = index ? `godmode-live-${index}` : 'godmode-live';
   return h(
     'section',
-    { class: 'card stack-sm', 'aria-labelledby': 'godmode-live' },
+    { class: 'card stack-sm', 'aria-labelledby': headingId },
     h(
       'div',
       { class: 'row' },
-      h('h2', { class: 'section-title grow', id: 'godmode-live' }, `${t('godmodeLive')} · ${live.title || live.id}`),
+      h('h2', { class: 'section-title grow', id: headingId }, `${t('godmodeLive')} · ${live.title || live.id}`),
       staleBadge(live),
       h('span', { class: runTone(live.state) }, t(RUN_STATE_KEY[live.state])),
     ),
@@ -205,10 +207,8 @@ export function tabsCard(rows, now) {
   );
 }
 
-/** Today's card while a run is going: title, counters line, pause banner, stale badge. Null otherwise. */
-export function liveTodayCard(rows, now) {
-  const live = godmodeLiveFrom(rows, now);
-  if (!live || !isGoing(live)) return null;
+/** One going run on Today: pause banner, then a link row with its counters line. */
+function todayRunRows(live, now, withState) {
   const c = godmodeLiveCounts(live);
   const line = [
     tf('godmodePushed', { n: c.pushed, total: live.packages.length }),
@@ -216,16 +216,34 @@ export function liveTodayCard(rows, now) {
     c.waiting ? `${c.waiting} ${t('godmodeCountWaiting')}` : '',
     c.failed ? `${c.failed} ${t('godmodeCountFailed')}` : '',
   ].filter(Boolean);
-  return h(
-    'section',
-    { class: 'card stack-sm', 'aria-labelledby': 'today-godmode' },
-    h('div', { class: 'row' }, h('h2', { class: 'section-title grow', id: 'today-godmode' }, t('godmodeLive')), staleBadge(live), h('span', { class: runTone(live.state) }, t(RUN_STATE_KEY[live.state]))),
+  return [
     pausedBanner(live),
     h(
       'a',
       { class: 'link-row', href: '#godmode' },
       h('span', { class: 'grow' }, h('span', { class: 'link-title' }, live.title || live.id), h('span', { class: `hint ${c.waiting ? 'is-warn' : ''}`.trim() }, line.join(' · '))),
+      withState ? staleBadge(live) : null,
+      withState ? h('span', { class: runTone(live.state) }, t(RUN_STATE_KEY[live.state])) : null,
       h('span', { class: 'hint num' }, when(live.startedAt, now)),
     ),
+  ];
+}
+
+/**
+ * Today's card while runs are going: one row per run (title, counters line,
+ * pause banner, stale badge). Null when none is going.
+ */
+export function liveTodayCard(rows, now) {
+  const going = godmodeLivesFrom(rows, now).filter(isGoing);
+  if (!going.length) return null;
+  const one = going.length === 1 ? going[0] : null;
+  const head = h(
+    'div',
+    { class: 'row' },
+    h('h2', { class: 'section-title grow', id: 'today-godmode' }, one ? t('godmodeLive') : `${t('godmodeLive')} (${going.length})`),
+    one ? staleBadge(one) : null,
+    one ? h('span', { class: runTone(one.state) }, t(RUN_STATE_KEY[one.state])) : null,
   );
+  // One run keeps its state in the header; several carry it per row.
+  return h('section', { class: 'card stack-sm', 'aria-labelledby': 'today-godmode' }, head, going.flatMap((live) => todayRunRows(live, now, !one)));
 }

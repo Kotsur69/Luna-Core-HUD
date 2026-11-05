@@ -47,6 +47,8 @@ test('runEntry keeps the repo name only, packages and approval rules', () => {
     selfCheck: 'none',
     needs: [],
     manual: [],
+    needsYou: [],
+    manualActionLines: [],
   });
   assert.ok(!/Users|mati|wt/.test(JSON.stringify(run)));
   assert.equal(runEntry(null), null);
@@ -117,7 +119,8 @@ const data = (runs, over = {}) => ({ v: 1, at: NOW, machine: 'PC1', runs, ...ove
 test('parseGodmodePeer rejects bad rows and never throws', () => {
   assert.equal(parseGodmodePeer(null, NOW), null);
   assert.equal(parseGodmodePeer({ machine: 'x y', data: data([]) }, NOW), null);
-  assert.equal(parseGodmodePeer({ machine: 'PC1', data: data([], { v: 2 }) }, NOW), null);
+  assert.equal(parseGodmodePeer({ machine: 'PC1', data: data([], { v: 3 }) }, NOW), null, 'an unknown version');
+  assert.equal(parseGodmodePeer({ machine: 'PC1', data: data([], { v: '2' }) }, NOW), null);
   assert.equal(parseGodmodePeer({ machine: 'PC1', data: { v: 1, at: NOW } }, NOW), null);
   const hostile = { machine: 'PC1', data: data([]) };
   Object.defineProperty(hostile.data, 'runs', {

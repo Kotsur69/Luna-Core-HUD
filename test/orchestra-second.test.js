@@ -651,6 +651,33 @@ test('merge mode: a partial integration is done with partial + skipped; dependsO
   assert.equal(none.orch.view().integration.skipped.length, 1);
 });
 
+test('"Create a new release after finish": merge runs only, named in the native merge confirm, kept in options', async () => {
+  const asked = [];
+  const confirmMerge = async (base, extra) => {
+    asked.push([base, extra]);
+    return true;
+  };
+  const merge = await started(
+    { packages: [pkg('a', [1])], extraDeps: { confirmMerge, baseBranchOf: async () => 'main' } },
+    { integration: 'merge', releaseAfter: true },
+  );
+  assert.equal(merge.res.ok, true);
+  assert.deepEqual(asked, [['main', { release: true }]]);
+  assert.equal(merge.orch.view().options.releaseAfter, true);
+  // Not a live switch: the options patch cannot turn it off or on.
+  assert.equal(merge.orch.setOptions({ releaseAfter: false }).ok, false);
+  assert.equal(merge.orch.view().options.releaseAfter, true);
+
+  const pr = await started({ packages: [pkg('a', [1])] }, { integration: 'pr', releaseAfter: true });
+  assert.equal(pr.res.ok, true);
+  assert.equal(pr.orch.view().options.releaseAfter, undefined);
+
+  const unticked = await started({ packages: [pkg('a', [1])], extraDeps: { confirmMerge } }, { integration: 'merge', releaseAfter: 'yes' });
+  assert.equal(unticked.res.ok, true);
+  assert.equal(unticked.orch.view().options.releaseAfter, undefined);
+  assert.deepEqual(asked[asked.length - 1][1], { release: false });
+});
+
 test('merge mode needs the native confirmation; the checkout must still be on the base branch', async () => {
   const declined = await started({ packages: [pkg('a', [1])], extraDeps: { confirmMerge: async () => false } }, { integration: 'merge' });
   assert.equal(declined.res.error, 'mergeDeclined');

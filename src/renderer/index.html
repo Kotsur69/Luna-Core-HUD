@@ -42,6 +42,8 @@
   <link rel="stylesheet" href="styles.css" />
   <!-- Life dashboard (Ctrl+Shift+N); separate because styles.css is past the size guideline. -->
   <link rel="stylesheet" href="life.css" />
+  <!-- Notification hub: face chip + right drawer (Ctrl+Shift+H), same reason. -->
+  <link rel="stylesheet" href="hub.css" />
 </head>
 <body>
   <!-- ================= HUD =================
@@ -972,6 +974,18 @@
         <button id="libraries-open" class="palette-chip" data-i18n-title="libraries.chip.title" title="Polecane biblioteki i narzedzia (Ctrl+B)">
           <kbd>Ctrl</kbd><kbd>B</kbd>
         </button>
+        <!-- Notification hub (modules/hubicon.js): a line-drawn face in the
+             theme accent plus the count of open "needs" items, hidden at 0.
+             Click or Ctrl+Shift+H toggles the right drawer (modules/hubpanel.js).
+             Static markup: the SVG carries no data. -->
+        <button id="hub-open" class="palette-chip hub-chip" data-i18n-title="hub.chip.title" title="Centrum powiadomien (Ctrl+Shift+H)" aria-label="Centrum powiadomien" aria-expanded="false">
+          <svg class="hub-chip__face" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9 9.6v1.2M15 9.6v1.2" />
+            <path d="M8.4 14.4c.9 1.2 2.2 1.9 3.6 1.9s2.7-.7 3.6-1.9" />
+          </svg>
+          <span id="hub-count" class="hub-chip__badge" hidden>0</span>
+        </button>
         <!-- Mission Control (mail cleanup + calendar), same discoverability
              rationale as the chips above. -->
         <button id="mission-open" class="palette-chip" data-i18n-title="mc.chip.title" title="Mission Control - poczta, kalendarz, telemetria, newsy (Ctrl+Shift+M)">
@@ -1213,9 +1227,8 @@
       <div class="palette__bar">
         <span class="palette__glyph">◎</span>
         <span class="mission-overlay__heading" data-i18n="mc.panel.title">Mission Control</span>
-        <!-- Weekly / daily brief: its own tall overlay (modules/missionbriefview.js),
-             so the four columns below get the full height. -->
-        <button type="button" id="mission-brief-open" class="mission-brief-btn" data-i18n="mc.brief.open" data-i18n-title="mc.brief.openTitle" title="Brief tygodniowy i dzienny">Brief</button>
+        <!-- The weekly / daily brief moved to the notification hub drawer
+             (Ctrl+Shift+H, modules/hubpanel.js): the columns get the full height. -->
         <button type="button" class="libraries__closebtn" data-mission-close data-i18n-title="libraries.close" data-i18n-aria="libraries.close" title="Zamknij" aria-label="Zamknij">×</button>
       </div>
       <div class="mission-overlay__body">
@@ -1805,6 +1818,31 @@
                   <span class="switch__track"><span class="switch__thumb"></span></span>
                 </span>
               </label>
+            </div>
+            <div class="termcustom__group">
+              <!-- Notification hub (face icon + right drawer, Ctrl+Shift+H):
+                   modules/hubsettings.js. The select's options and the
+                   per-source switches are built there from fixed lists. -->
+              <h3 id="hub-section" class="termcustom__section" data-i18n="hubset.section">Centrum powiadomien</h3>
+              <label class="ui-field" data-i18n-title="hubset.autoOpen.hint" title="Czy panel otwiera sie sam przy starcie LunaCore.">
+                <span class="ui-field__label" data-i18n="hubset.autoOpen">Otwieraj przy starcie</span>
+                <select id="hubset-autoopen" class="profile-select"></select>
+              </label>
+              <label id="hubset-toasts-field" class="switch-field" data-i18n-title="hubset.toasts.hint" title="Jedno powiadomienie systemowe na nowa rzecz, gdy okno nie jest aktywne. Wymaga tez wlaczonych powiadomien systemowych powyzej.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="hubset.toasts">Powiadomienia o nowych rzeczach</span>
+                  <span id="hubset-toasts-status" class="switch-field__status" data-i18n="hubset.on">wlaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="hubset-toasts" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <p class="termcustom__hint" data-i18n="hubset.sources.hint">Zrodla, ktore centrum pokazuje.</p>
+              <div id="hubset-sources" class="hubset-sources"></div>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="hubset-width-reset" class="termcustom__reset" data-i18n="hubset.widthReset">Przywroc szerokosc panelu</button>
+              </div>
             </div>
             <div class="termcustom__group">
               <!-- Report emails (src/mailipc.js, modules/mailsettings.js): a separate

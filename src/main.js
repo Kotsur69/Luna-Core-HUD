@@ -146,6 +146,8 @@ const { createBillCalendar } = require('./gcalbills');
 // Report emails: Gmail sender, God Mode run email, nightly summary.
 const { createReportMail } = require('./reportmail');
 const { registerMailIpc } = require('./mailipc');
+// God Mode finished-run actions: Resend report email (+ release, later).
+const orchestraFinishIpc = require('./orchestraFinishIpc');
 // Weekly review (Life Week tab, Sunday 20:00 + Generate now) and its email.
 const { setupWeeklyReview } = require('./weeklyipc');
 const { startLifeSync } = require('./lifesync');
@@ -198,7 +200,7 @@ const { fetchUsage, UsageWatcher, nextUsageAnnounced } = require('./usage');
 const { usageSnapshot } = require('./usagesnapshot');
 const { createSnapshotPuts } = require('./snapshotputs');
 const { createLivePublisher } = require('./godmodelivepub');
-const { liveEntry, tabsEntry } = require('./godmodesnapshot');
+const { livesEntry, tabsEntry } = require('./godmodesnapshot');
 const { registerInboxIpc } = require('./inboxipc');
 // E1: machine telemetry (RAM / CPU / uptime). Plain `os`, zero dependencies,
 // zero network - Passive Observer in the strictest possible sense.
@@ -232,6 +234,9 @@ let todoSync = null;
 const { startConfigSync } = require('./configsync');
 const { lifeParts } = require('./lifedailysync');
 let configSync = null;
+// The notification hub (src/hubipc.js): set in registerIpc(), its done
+// provider joins the config sync.
+let hubApi = null;
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
@@ -253,6 +258,9 @@ const orchestraStore = require('./orchestraStore');
 const { createOrchestraRegistry } = require('./orchestraRegistry');
 const { makeOrchestraDeps, legacyRunProject, approvalRuleFor, godModeFacade, makeBatteryGuard } = require('./orchestraWiring');
 const { registerOrchestraIpc } = require('./orchestraIpc');
+const { RUN_ID_RE } = require('./orchestraReport');
+const { createPostMergeServices } = require('./orchestraPostMerge');
+const { cutRelease, unreleasedCount, releaseResult } = require('./releaseCut');
 const { createStatusBoard } = require('./sessionstatus');
 
 const { micState } = require('./devices');
@@ -551,7 +559,9 @@ function sessionSummary(s) {
 // The phone's live God Mode view (src/godmodelivepub.js), set up next to the
 // snapshot puts. Null until then; tab changes before it are not published.
 let godmodeLive = null;
-let latestLiveView = null;
+// The latest live view per project (one God Mode run each): projectId -> view,
+// the latest to change last. A discarded run (null view) drops out.
+const latestLiveViews = new Map();
 const pokeGodmodeLive = () => godmodeLive && godmodeLive.poke();
 
 /** Broadcasts the full tab list + which one is active. */
@@ -993,6 +1003,11 @@ const reportMail = createReportMail({
   getUsage: () => latestUsage,
   getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
   onResume: (fn) => powerMonitor.on('resume', fn),
+  // A pending / resent God Mode run email went out (or not): the board follows.
+  onRunMailResult: (planId, res) => {
+    const hit = orchestraRuns.byPlanId(planId);
+    if (hit) hit.controller.emailResult(planId, res);
+  },
 });
 
 /** Env of the first profile with a free-model chain (Luna's Work freeFallback), or null. */
@@ -1039,6 +1054,29 @@ const orchestraBattery = makeBatteryGuard({
   log: (line) => console.info('[orchestra]', line),
 });
 
+/** One line at the end of a run's report (<userDir>/runs/<id>.md). */
+function appendRunReport(planId, line) {
+  if (!RUN_ID_RE.test(planId) || !ensureUserDir()) return;
+  try {
+    fs.appendFileSync(path.join(userDir(), RUN_REPORT_DIR, `${planId}.md`), `${line}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch (err) {
+    console.error('[orchestra] could not append to the run report:', err && err.message);
+  }
+}
+
+/** releaseCut.cutRelease with the tool env (gh, npm on PATH). */
+const runReleaseCut = (opts) => cutRelease(opts, { env: orchestraToolEnv(), log: (line) => console.info('[orchestra]', line) });
+
+// After a merge landed: ff the local base checkout, clean up merged branches,
+// cut a release when ticked (src/orchestraPostMerge.js). The start-up sweep
+// only touches registered projects.
+const orchestraPostMerge = createPostMergeServices({
+  appPath: () => app.getAppPath(),
+  isKnownRepo: (repoPath) => projects.some((p) => p.path && path.resolve(p.path) === path.resolve(repoPath)),
+  release: runReleaseCut,
+  log: (line) => console.info('[orchestra]', line),
+});
+
 // God Mode v2: one controller per project (src/orchestraRegistry.js). Their
 // deps are built in src/orchestraWiring.js; main only hands its handles over.
 const orchestraCtx = {
@@ -1061,10 +1099,13 @@ const orchestraCtx = {
   runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
   worktrees: { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, worktreeBranches },
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
-  onReport: (planId, text, summary) => reportMail.godmode.onReport(planId, text, summary),
-  // The phone's live run view (godmodelivepub.js): the latest run to change.
-  onLive: (view) => {
-    latestLiveView = view;
+  // A transient failure leaves the run email pending (src/godmodePending.js).
+  onReport: (planId, text, summary) => reportMail.runMail.report(planId, text, summary),
+  // The phone's live run views (godmodelivepub.js), one per project.
+  onLive: (view, projectId) => {
+    const key = typeof projectId === 'string' ? projectId : null;
+    latestLiveViews.delete(key);
+    if (view) latestLiveViews.set(key, view);
     pokeGodmodeLive();
   },
   messageBox: (opts) => (mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, opts) : null),
@@ -1083,8 +1124,36 @@ const orchestraCtx = {
   log: (line) => console.info('[orchestra]', line),
   logError: (line) => console.error(line),
 };
+
+/**
+ * The wiring's merge confirmation, unless "Create a new release after finish"
+ * was ticked: then the dialog says so, and a Luna's Work build is asked too.
+ */
+function confirmMergeFor(deps) {
+  return async (base, extra = {}) => {
+    if (!extra || extra.release !== true) return deps.confirmMerge(base);
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['Merge, push and release', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'God Mode - merge into base branch',
+      message: `Merge every pushed package into "${base || '?'}" and push it? Then cut a new release.`,
+      detail:
+        'Packages are merged in dependency order in a separate worktree and verified after each merge. Nothing is pushed if a verify fails or a conflict cannot be resolved. There is no PR review.' +
+        '\n\nAfter the merge lands and the self-check is green: npm version bump, README release block, commit + tag, push of the base branch and the tag, npm run dist and a GitHub release with the installers.',
+    });
+    return response === 0;
+  };
+}
+
 const orchestraRuns = createOrchestraRegistry({
-  makeController: (projectId) => createOrchestra(makeOrchestraDeps(projectId, orchestraCtx)),
+  makeController: (projectId) => {
+    const deps = makeOrchestraDeps(projectId, orchestraCtx);
+    // Post-merge services (src/orchestraPostMerge.js) are shared by every project's run.
+    return createOrchestra({ ...deps, postMerge: orchestraPostMerge.impls, confirmMerge: confirmMergeFor(deps) });
+  },
   log: (line) => console.error(line),
 });
 
@@ -1986,10 +2055,13 @@ const snapshotPuts = createSnapshotPuts({
 
 // The live run + tab lights for the phone: throttled, skipped when unchanged.
 godmodeLive = createLivePublisher({
-  build: () => ({
-    live: liveEntry(latestLiveView, { now: Date.now(), tabState: (id) => (statusBoard.current(id) || {}).state || null }),
-    tabs: tabsEntry([...sessions.values()].map(sessionSummary)),
-  }),
+  // lives: every project's run, the latest to change first; live: that first
+  // one, for phone builds from before several runs at once.
+  build: () => {
+    const views = [...latestLiveViews.values()].reverse();
+    const lives = livesEntry(views, { now: Date.now(), tabState: (id) => (statusBoard.current(id) || {}).state || null });
+    return { live: lives[0] || null, lives, tabs: tabsEntry([...sessions.values()].map(sessionSummary)) };
+  },
   publish: (section) => snapshotPuts.godmode.live(section),
 });
 
@@ -2879,6 +2951,8 @@ function registerIpc() {
     reader: reportMail.reader,
     replies: lunasworkMailReplies,
     projects: () => projects.map((p) => ({ id: p.id, label: p.label })),
+    // Gmail just connected: the God Mode run emails that waited for it go out.
+    onConnected: () => reportMail.runMail.flush(),
   });
   // Attention inbox ('!' chip): God Mode runs to review from every PC, check-in, weekly goals, Gmail not connected.
   registerInboxIpc({
@@ -2888,6 +2962,33 @@ function registerIpc() {
     machine: machineName(os.hostname()),
     openExternal: (url) => shell.openExternal(url),
     gmail: () => reportMail.sender.status(),
+  });
+  // Notification hub (face icon + right drawer): docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
+  // Other PCs' runs come from their `godmode` rows; done marks sync as config units.
+  hubApi = require('./hubipc').registerHubIpc({
+    ipcMain,
+    send,
+    // One God Mode run per project: the hub reads every run's countdowns and plan wait.
+    orchestra: {
+      views: () => orchestraRuns.views(),
+      planWaits: () => orchestraRuns.entries().map(({ projectId, controller }) => ({ projectId, wait: controller.planWait() })),
+    },
+    runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+    update: () => updateState,
+    snapshots: () => (cloud ? cloud.snapshots : null),
+    // N5 sources: the last mail scan, cloud / Google status, host mode on.
+    accounts: {
+      mail: () => mission.mailNeeds(),
+      cloud: () => (cloud ? cloud.status() : null),
+      google: () => gcal.status(),
+      hostOn: () => {
+        const control = require('./hostmain').hostControl();
+        return Boolean(control && control.status().on);
+      },
+    },
+    // Settings -> Notification hub: the source groups switched off.
+    sourcePrefs: () => readUiPrefs().hubSources,
+    onDone: () => configSync && configSync.soon(),
   });
   // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".
   weeklyReview = setupWeeklyReview({
@@ -3221,6 +3322,51 @@ function registerIpc() {
     writeUiPrefs,
   });
 
+  // Finished-run actions (src/orchestraFinishIpc.js): ids are validated there.
+  // Each run is found by its plan id in the per-project registry.
+  orchestraFinishIpc.register(ipcMain, {
+    runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+    resendRunEmail: (planId) => {
+      const hit = orchestraRuns.byPlanId(planId);
+      return reportMail.runMail.resend(planId, hit ? hit.controller.emailSummary(planId) : null);
+    },
+    // The board's projectId on a resend must match the run's own project.
+    planProject: (planId) => {
+      const hit = orchestraRuns.byPlanId(planId);
+      return hit ? hit.projectId : undefined;
+    },
+    projects: () => projects.map((p) => ({ id: p.id, path: p.path })),
+    // The asking (already validated) project's own run; the IPC still checks
+    // the target's project and folder match.
+    releaseTarget: (projectId) => {
+      const controller = orchestraRuns.get(projectId);
+      return controller ? controller.releaseTarget() : null;
+    },
+    unreleasedCount: (repoPath) => unreleasedCount(repoPath, { env: orchestraToolEnv() }),
+    cutRelease: runReleaseCut,
+    releaseResult,
+    recordRelease: (planId, result) => {
+      const hit = orchestraRuns.byPlanId(planId);
+      if (hit) hit.controller.recordRelease(planId, result);
+    },
+    appendReport: appendRunReport,
+    // Pushing a tag and publishing installers: Mati confirms natively.
+    confirmRelease: async ({ base, count }) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['Release now', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'God Mode - release now',
+        message: `Cut a new release from "${base}"${Number.isInteger(count) ? ` (${count} commits since the last tag)` : ''}?`,
+        detail:
+          'npm test, npm version bump, README release block, commit + tag, push of the base branch and the tag, npm run dist and a GitHub release with the installers. Refused on a dirty tree, red tests or no gh auth.',
+      });
+      return response === 0;
+    },
+  });
+
   // "Don't sleep" switch. The renderer only says on/off - the script path
   // comes from the local config, never from the page.
   ipcMain.handle('keepawake:get', () => keepAwake.status());
@@ -3491,6 +3637,7 @@ app.whenReady().then(() => {
       const parts = lifeParts(names);
       if (parts.length) send('life:changed', { parts });
     },
+    extraProviders: hubApi ? [hubApi.doneProvider] : [],
   });
   // A --luna-probe instance shares userData with the live LunaCore - often the
   // very one running the God Mode self-check that started it. Resuming the
@@ -3506,6 +3653,15 @@ app.whenReady().then(() => {
   if (!probing) {
     orchestraStore.migrateLegacy((raw) => legacyRunProject(orchestraCtx, raw));
     orchestraRuns.restoreAll(orchestraStore.listStored());
+    // Once per start: settled runs older than a day get the post-merge cleanup
+    // again. The ledger holds every project's; a restored landed run joins it.
+    const landed = orchestraRuns
+      .entries()
+      .map(({ controller }) => controller.landedRun())
+      .find(Boolean);
+    orchestraPostMerge.sweepAtStart(landed || null).catch((err) => console.error('[orchestra] start-up sweep failed:', err && err.message));
+    // Run emails left pending (Gmail was not connected, rate-limited): once, after the restore.
+    reportMail.runMail.flush().catch((err) => console.error('[orchestra] pending run emails failed:', err && err.message));
   }
   // Luna's Work decision queue: pending decisions to the phone snapshot,
   // answers back from the `todos` cloud scope. Wired before resume() so a

@@ -412,6 +412,53 @@ function recoverySection(view) {
   return lines;
 }
 
+/** One install line of the local base step: npm ci done / failed / skipped. */
+function installLine(install) {
+  if (!isObject(install)) return [];
+  if (install.skipped) return [`- npm ci skipped: ${oneLine(install.skipped)}`];
+  return [install.ok ? '- npm ci: done' : `- npm ci failed: ${oneLine(install.detail) || 'failed'}`];
+}
+
+/** Report lines per post-merge step (orchestraFinalize.js POST_MERGE_STEPS). */
+const POST_MERGE_LINES = {
+  localBase: (r, base) => {
+    if (!r.updated) return [`- local ${base} not updated: ${oneLine(r.reason) || 'unknown'}`];
+    const moved = sha7(r.from) && sha7(r.to) && r.from !== r.to;
+    return [moved ? `- Local ${base} fast-forwarded: ${sha7(r.from)}..${sha7(r.to)}` : `- Local ${base}: already up to date`, ...installLine(r.install)];
+  },
+  cleanup: (r) => {
+    const deleted = list(r.deleted).map((b) => code(b, 80));
+    const kept = list(r.kept).filter(isObject).map((k) => `${code(k.branch, 80)} (${oneLine(k.reason, 60)})`);
+    const worktree = r.worktree === 'removed' ? 'integration worktree removed' : r.worktree === 'kept' ? 'integration worktree kept' : 'no integration worktree left';
+    return [
+      `- Cleanup: ${worktree}, ${deleted.length} merged branch${deleted.length === 1 ? '' : 'es'} deleted${r.error ? ` - ${oneLine(r.error)}` : ''}`,
+      ...(deleted.length ? [`  - Deleted: ${deleted.join(', ')}`] : []),
+      ...(kept.length ? [`  - Kept: ${kept.join(', ')}`] : []),
+    ];
+  },
+  release: (r) => {
+    if (r.skipped) return [`- Release skipped: ${oneLine(r.skipped)}`];
+    if (!r.released) return [];
+    const url = typeof r.url === 'string' && /^https:\/\/github\.com\//.test(r.url) ? oneLine(r.url, 300) : 'no release URL';
+    return [`- Released ${code(r.tag || `v${oneLine(r.version, 20)}`, 24)}: ${url}`];
+  },
+};
+
+/** What ran after the merge landed: the local base update, cleanup, release. */
+function postMergeSection(view) {
+  const integ = isObject(view.integration) ? view.integration : {};
+  const steps = isObject(integ.postMerge) ? integ.postMerge : {};
+  const base = oneLine(view.baseBranch, 100) || 'base';
+  const lines = [];
+  for (const [name, result] of Object.entries(steps)) {
+    if (!isObject(result)) continue;
+    if (result.skipped && name !== 'release') lines.push(`- ${name}: skipped - ${oneLine(result.skipped)}`);
+    else if (result.error) lines.push(`- ${name} failed: ${oneLine(result.error)}`);
+    else if (POST_MERGE_LINES[name]) lines.push(...POST_MERGE_LINES[name](result, base));
+  }
+  return lines.length ? ['', '## After the merge', '', ...lines] : [];
+}
+
 function suggestionSection(suggestions) {
   const lines = ['', '## Allow-rule suggestions', ''];
   const items = list(suggestions).filter(isObject);
@@ -467,6 +514,7 @@ function buildReport(view, extra) {
     ...wrongSection(view, facts),
     ...manualSection(integ),
     ...mergedSection(view),
+    ...postMergeSection(view),
     ...selfCheckSection(integ),
     ...recoverySection(view),
     ...suggestionSection(extra.suggestions),

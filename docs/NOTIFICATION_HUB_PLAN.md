@@ -1,8 +1,8 @@
 # Notification hub ("Needs you") - plan
 
-> **🟡 OPEN (2026-10-22).** Planned, not built. Open questions answered
-> 2026-11-02 (see *Answers*); build slice by slice (N1 → N6). Rename to
-> `DONE_NOTIFICATION_HUB_PLAN.md` when every slice is built and live-checked.
+> **🟡 BUILT, LIVE CHECK OWED (2026-11-04).** All six slices (N1 → N6) are
+> built and tested. Rename to `DONE_NOTIFICATION_HUB_PLAN.md` only after
+> Mati's live check (see *Live check owed* below) - not before.
 
 Same rules as every other plan in this repo: zero extra tokens (the hub only
 *reads* what other modules already produce), config-driven, a broken source
@@ -11,8 +11,32 @@ user-facing strings need `pl` + `en`.
 
 ## Resume here
 
-- Nothing built yet. Open questions answered 2026-11-02 (N0 done); next =
-  **N1**. One to-do card per slice N1-N6.
+- **N1-N3 built 2026-11-03** (branch `luna/hub-core-qozyi`): `src/hub.js`,
+  `src/hubcollect.js`, `src/hubipc.js`; renderer `hubstate.js`, `hubicon.js`,
+  `hubpanel.js`, `hub.css`.
+- **N4-N6 built 2026-11-04** (branch `luna/hub-rest-5zstq`, one commit each):
+  N4 `godmodesnapshot.js` v2, `src/hubpeers.js`, `src/hubdone.js` (done marks
+  as `config` units), launch auto-open (`hubrules.js`); N5 the remaining
+  collectors in `hubcollect.js` + `hubtoast.js`; N6 Settings ->
+  Notifications -> Notification hub (`hubsettings.js`, `src/hubsources.js`)
+  and the README section. Tests: `hubpeers`, `hubmore`, `hubsettings`.
+- **Live check owed (Mati):** a run finished on PC A shows on PC B at launch
+  and Mark done on B clears it on A after a sync; the drawer auto-opens only
+  with unseen Needs-you items; a toast fires once for a new item while the
+  window is unfocused (with notifications on); every Settings switch works
+  and survives a restart; the drawer on 3 themes. Then rename to `DONE_`.
+- Deviations in N4-N6: Settings live in `termcustom.js` (there is no
+  `settings.js`); the Settings anchor for cloud / Google / host is the Setup
+  Center (`setup-center`); the old '!' inbox chip still runs beside the hub
+  (folding it in is left for after the live check).
+- Deviations from the text below: the theme has no `--accent` token, so the
+  face uses `var(--accent, var(--neon-cyan))`; `#mission-brief` was already
+  gone (commit 672af30 moved it into a tall overlay behind a "Brief" button) -
+  N3 removed that button and overlay and mounts the brief in the drawer.
+  Godmode needs/manual item ids carry a hash of the line text, not its index.
+- The older attention inbox ('!' chip, `src/inbox.js`, `inbox.js`) still
+  runs beside the hub; it covers other PCs' runs until N4. Fold it into the
+  hub in N4 so there is one badge, not two.
 - UI slices (N2, N3) go through the `ui-ux-pro-max` skill first (Mati's
   global rule for UI work). Smoke-test with the in-process Electron wrapper
   (memory: "Smoke-test UI without a CDP port").
@@ -173,7 +197,7 @@ source returns `[]` and is unit-tested on its own.
 - **Done when** a smoke screenshot shows the drawer on 3 themes and Mission
   Control's columns are full height.
 
-### N4 - Across PCs
+### N4 - Across PCs (built 2026-11-04, live check owed)
 - `godmodesnapshot.js` **v2**: each run also carries `needsYou: string[]`
   and `manualActionLines: string[]` (max 10 each, 200 chars, paths scrubbed
   with `scrubPaths`, control characters out). A v1 row still reads (counts
@@ -186,14 +210,14 @@ source returns `[]` and is unit-tested on its own.
 - **Done when** a run finished on PC A shows on PC B at launch, and marking
   it done on B clears it on A after the next sync.
 
-### N5 - The rest of the sources + toasts
+### N5 - The rest of the sources + toasts (built 2026-11-04, live check owed)
 - Collectors for mail needs-call, cloud / Google disconnected, host needs
   setup, `[Mati]` to-dos, weekly review. (Usage % dropped from v1, Answer 2.)
 - New Needs-you item while unfocused → one toast through `notify.js`
   (respects its opt-in), click focuses the window and opens the drawer.
 - **Done when** each collector has tests and a toast shows once per new item.
 
-### N6 - Settings + polish
+### N6 - Settings + polish (built 2026-11-04, live check owed)
 - Ctrl+L → "Notification hub": auto-open (always / only when needed /
   never), toasts on / off, per-source on / off (a friend without Life turns
   it off), drawer width reset.

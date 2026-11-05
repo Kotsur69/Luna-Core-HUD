@@ -100,9 +100,10 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     },
   };
 
-  // The last live run + tab lights (godmodelivepub.js). Memory only: the
-  // history file holds finished runs, and a restart publishes afresh.
-  let lastLive = { live: null, tabs: [] };
+  // The last live runs + tab lights (godmodelivepub.js): `lives` holds every
+  // project's run, `live` the first one. Memory only: the history file holds
+  // finished runs, and a restart publishes afresh.
+  let lastLive = { live: null, lives: [], tabs: [] };
   // Luna's Work decisions waiting for Mati: memory only, like the live run.
   let lastDecisions = [];
   // Luna's Work feedback section of the current run (B17): memory only too.
@@ -154,7 +155,10 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
     },
     /** Puts the run history with this live run / tab list over it. Never throws. */
     live(section) {
-      lastLive = { live: (section && section.live) || null, tabs: (section && section.tabs) || [] };
+      const live = (section && section.live) || null;
+      // An older caller sends only `live`: it is the one run.
+      const lives = section && Array.isArray(section.lives) ? section.lives : live ? [live] : [];
+      lastLive = { live, lives, tabs: (section && section.tabs) || [] };
       return putOverlay();
     },
     /** Puts the run history with these pending Luna's Work decisions ([] clears them). Never throws. */

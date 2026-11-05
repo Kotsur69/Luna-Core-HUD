@@ -325,7 +325,26 @@ const DEFAULTS = {
   hideLife: false,
   hideMission: false,
   hideGodMode: false,
+  // Notification hub drawer (renderer/modules/hubpanel.js): its dragged width
+  // and whether the one-time "the brief moved to the hub" hint was shown.
+  hubWidth: 420,
+  hubBriefHintSeen: false,
+  // Settings -> Notification hub (N6): open the drawer at launch 'always' /
+  // 'needed' (only when unseen Needs-you items exist) / 'never'; one OS toast
+  // per new Needs-you item (also needs notificationsEnabled); the source
+  // groups switched off ({group: false}, src/hubsources.js).
+  hubAutoOpen: 'needed',
+  hubToasts: true,
+  hubSources: {},
 };
+
+const HUB_WIDTH_MIN = 320;
+const HUB_WIDTH_MAX = 900;
+/** Strict: only an integer in range is a width; anything else reads as the default. */
+const cleanHubWidth = (v) => (Number.isInteger(v) && v >= HUB_WIDTH_MIN && v <= HUB_WIDTH_MAX ? v : DEFAULTS.hubWidth);
+const HUB_AUTO_OPEN = ['always', 'needed', 'never'];
+const cleanHubAutoOpen = (v) => (HUB_AUTO_OPEN.includes(v) ? v : DEFAULTS.hubAutoOpen);
+const { cleanHubSources } = require('./hubsources');
 
 const MAX_COLLAPSED = 64;
 const MODULE_HIDE_KEYS = ['hideLife', 'hideMission', 'hideGodMode'];
@@ -733,6 +752,12 @@ function readUiPrefs() {
       welcomeChecked: obj.welcomeChecked === true,
       pwaUrl: normalizePwaUrl(obj.pwaUrl),
       ...Object.fromEntries(MODULE_HIDE_KEYS.map((k) => [k, obj[k] === true])),
+      hubWidth: cleanHubWidth(obj.hubWidth),
+      hubBriefHintSeen: obj.hubBriefHintSeen === true,
+      hubAutoOpen: cleanHubAutoOpen(obj.hubAutoOpen),
+      // Missing key => toasts on (they still need notificationsEnabled).
+      hubToasts: obj.hubToasts !== false,
+      hubSources: cleanHubSources(obj.hubSources),
       ...clampAutoCompactPrefs(obj),
       ...clampTermPrefs(obj),
       ...clampModifierPrefs(obj),
@@ -884,6 +909,12 @@ function writeUiPrefs(partial) {
     for (const key of MODULE_HIDE_KEYS) {
       if (partial && typeof partial[key] === 'boolean') next[key] = partial[key];
     }
+    if (partial && 'hubWidth' in partial) next.hubWidth = cleanHubWidth(partial.hubWidth);
+    if (partial && typeof partial.hubBriefHintSeen === 'boolean') next.hubBriefHintSeen = partial.hubBriefHintSeen;
+    if (partial && HUB_AUTO_OPEN.includes(partial.hubAutoOpen)) next.hubAutoOpen = partial.hubAutoOpen;
+    if (partial && typeof partial.hubToasts === 'boolean') next.hubToasts = partial.hubToasts;
+    // Sent WHOLE, like collapsed / layoutSizes: turning a group back on must be expressible.
+    if (partial && partial.hubSources && typeof partial.hubSources === 'object') next.hubSources = cleanHubSources(partial.hubSources);
     // Only the term* keys actually present in `partial` should move; anything
     // omitted keeps its current (already-validated) value from `next` rather
     // than reverting to DEFAULTS - clampTermPrefs still re-validates the
@@ -943,6 +974,8 @@ module.exports = {
   clampAutoCompactPrefs,
   clampModifierPrefs,
   cleanEffectsStrength,
+  cleanHubWidth,
+  cleanHubAutoOpen,
   cleanCollapsed,
   cleanLayoutSizes,
   cleanWidgetSlots,

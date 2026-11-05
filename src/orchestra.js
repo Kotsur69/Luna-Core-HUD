@@ -37,7 +37,7 @@ const { validatePlan, estimatePlan, pickTodos, MAX_PARALLEL, MAX_PROMPT_CHARS, P
 const { lastWordsFrom, outputTail } = require('./orchestraDiagnose');
 const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
-const { createFinalizer, ABORT_FINISH_AFTER_MS } = require('./orchestraFinalize');
+const { createFinalizer, ABORT_FINISH_AFTER_MS, postMergeContext, slugOf } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
 const pushSecrets = require('./pushSecrets');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
@@ -290,10 +290,11 @@ function createOrchestra(deps) {
     (() => ({ model: 'opus', effort: 'plan', permissionMode: 'bypassPermissions', integration: 'pr', allowedTools: [] }));
   const closeSession = deps.closeSession || noop;
   // Merging into the base branch pushes it: main asks Mati natively. No
-  // dialog available = no merge.
-  const confirmMerge = () =>
+  // dialog available = no merge. {release: true} - the same dialog also
+  // names the release cut after the merge ("Create a new release after finish").
+  const confirmMerge = (extra = {}) =>
     deps.confirmMerge
-      ? Promise.resolve(deps.confirmMerge(plan.baseBranch)).then((yes) => yes === true, () => false)
+      ? Promise.resolve(deps.confirmMerge(plan.baseBranch, { release: extra.release === true })).then((yes) => yes === true, () => false)
       : Promise.resolve(false);
   const saveState = deps.saveState || noop;
   const onChange = deps.onChange || noop;
@@ -392,6 +393,9 @@ function createOrchestra(deps) {
     drainMs: deps.integrateDrainMs,
     // An aborted pass's fix-up tab goes too: it edits the integration worktree.
     onAbort: () => fixup.abort(),
+    // After a merge landed: the post-merge step implementations
+    // (orchestraFinalize.js POST_MERGE_STEPS, built by orchestraPostMerge.js).
+    postMerge: deps.postMerge || null,
   });
   const isBusy = () => busy || pumping || finalizer.isRunning();
   // The process-wide battery guard (orchestraPower.js createBatteryGuard):
@@ -1173,6 +1177,9 @@ function createOrchestra(deps) {
    * package, finalize or another God Mode run still going.
    */
   function afterFinalize() {
+    // The finalizer's last commit went out while isRunning() was still true;
+    // the board and the phone get the settled view (running: false) now.
+    if (plan) commit();
     fireRunSettled();
     // A fetch / push the network or auth refused is run again after a backoff.
     const integ = plan && !plan.killed ? plan.integration : null;
@@ -1275,8 +1282,15 @@ function createOrchestra(deps) {
       plan.integrationMode = free.integrationMode;
     }
     const wanted = integrationFor(plan, mode);
-    if (wanted === 'merge' && !plan.started && !(await confirmMerge())) return { ok: false, error: 'mergeDeclined' };
+    // "Create a new release after finish": merge runs only, set at Approve
+    // (confirmed natively with the merge), stored as options.releaseAfter.
+    const release = o.releaseAfter === true && wanted === 'merge' && !plan.started;
+    if (wanted === 'merge' && !plan.started && !(await confirmMerge({ release }))) return { ok: false, error: 'mergeDeclined' };
     if (wanted && !plan.started) plan.integrationMode = wanted;
+    if (!plan.started) {
+      const { releaseAfter: _previous, ...rest } = plan.options || {};
+      plan.options = sup.normalizeOptions(release ? { ...rest, releaseAfter: true } : rest);
+    }
     if (startAt) {
       freezeSettings();
       plan.scheduledAt = startAt;
@@ -2210,6 +2224,38 @@ function createOrchestra(deps) {
     return { ok: true, options: { ...plan.options } };
   }
 
+  /**
+   * The current run as a settled-run ledger entry when its merge landed
+   * (orchestraCleanup.js), else null - the start-up cleanup sweep.
+   */
+  function landedRun() {
+    const integ = plan && plan.integration;
+    if (!integ || plan.integrationMode !== 'merge' || integ.state !== 'done' || !plan.baseBranch) return null;
+    if (!Number.isFinite(integ.at) || !plan.packages.some((p) => p.merged === true)) return null;
+    return { ...postMergeContext(plan, { skipped: integ.skipped }, slugOf(plan)), settledAt: integ.at };
+  }
+
+  /**
+   * What "Release now" needs about the run on the board, or null without
+   * one: its project and checkout, the base and the head its merge landed.
+   */
+  function releaseTarget() {
+    if (!plan) return null;
+    const integ = plan.integration || {};
+    const done = integ.postMerge && integ.postMerge.release;
+    return {
+      planId: plan.id,
+      projectId: plan.projectId,
+      repoPath: plan.repoPath,
+      base: plan.baseBranch,
+      headSha: integ.headSha || null,
+      landed: plan.integrationMode === 'merge' && integ.state === 'done' && !!integ.headSha,
+      releaseAfter: sup.normalizeOptions(plan.options).releaseAfter === true,
+      released: !!(done && done.released === true),
+      busy: isBusy(),
+    };
+  }
+
   function discard() {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
@@ -2245,6 +2291,13 @@ function createOrchestra(deps) {
     cancelShutdown: () => powerFlow.cancelShutdown(),
     checkWake: () => powerFlow.checkWake(),
     sweepBranches,
+    landedRun,
+    // The run email after finalize: "Resend report email" and pending sends (godmodePending.js).
+    emailSummary: (planId) => finalizer.emailSummary(planId),
+    emailResult: (planId, res) => finalizer.emailResult(planId, res),
+    // "Release now" on the finished run (src/orchestraFinishIpc.js).
+    releaseTarget,
+    recordRelease: (planId, result) => finalizer.recordPostMerge(planId, 'release', result),
     runFixup: (args) => fixup.run(args),
     planWait: () => planWaiter.view(),
     cancelPlanWait: () => planWaiter.cancel(),

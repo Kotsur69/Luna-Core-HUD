@@ -20,6 +20,7 @@
 import { term, applyTerminalAppearance, setScreenshotPasteEnabled } from './terminals.js';
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
+import { mountHubSettings } from './hubsettings.js';
 import { mountAutoCompactSettings } from './autocompact.js';
 import { mountOrchestraSettings } from './orchestrasettings.js';
 import { mountLunasWorkSettings } from './lunaswork.js';
@@ -583,6 +584,8 @@ export async function initTermcustomSettings() {
   // Notifications: same "static overlay, never unmounted" shape as boot above
   // - moved out of the widget registry entirely (2026-08-19), see notify.js.
   mountNotify(termcustomEl);
+  // Notification hub: auto-open, toasts, sources, drawer width (hubsettings.js).
+  mountHubSettings(termcustomEl, prefs);
 
   // Feature #4: the auto-compact trigger-mode picker (context / turns / time).
   // Same static-overlay shape as mountNotify above - the arm toggle itself

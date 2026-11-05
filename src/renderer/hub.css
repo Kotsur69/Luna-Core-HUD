@@ -1,0 +1,233 @@
+/* ==========================================================================
+   Notification hub: the face chip (modules/hubicon.js) and the right drawer
+   (modules/hubpanel.js). Theme tokens only - no hard-coded colours - so it
+   reads the same on every theme. The drawer sits on --surface-panel; on glass
+   themes that token is translucent and the backdrop blur gives the acrylic
+   panel, on opaque themes the blur has nothing to show and costs nothing.
+   No new :root tokens (test/theme.test.js guards that block): the accent is
+   resolved locally as var(--accent, var(--neon-cyan)).
+   ========================================================================== */
+
+/* ---- Face chip + badge ---------------------------------------------------- */
+.hub-chip { position: relative; color: var(--accent, var(--neon-cyan)); }
+.hub-chip__face {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.hub-chip:hover { color: var(--accent, var(--neon-cyan)); }
+.hub-chip:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.hub-chip[aria-expanded='true'] { border-color: var(--edge-glow); box-shadow: 0 0 var(--glow-size-md) var(--glow); }
+.hub-chip__badge {
+  min-width: 1.1rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bad);
+  color: var(--bg-panel-2);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  line-height: 1.1rem;
+  text-align: center;
+}
+.hub-chip__badge[hidden] { display: none; }
+/* One pulse when the count goes up. Transform only; the duration token drops
+   to 0 under reduced motion, and hubicon.js skips the class then anyway. */
+.hub-chip__badge.is-bumped { animation: hub-bump var(--dur-normal) var(--ease-smooth); }
+@keyframes hub-bump {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
+/* ---- Drawer --------------------------------------------------------------- */
+/* Above the panels and the texture overlay (50), below the palettes and the
+   Settings-style overlays (100) so a modal opened from a card lands on top. */
+.hub-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  width: var(--hub-w, 420px);
+  max-width: calc(100vw - 160px);
+  border-left: var(--border-w) solid var(--edge);
+  background: var(--surface-panel);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: -12px 0 32px -16px var(--glow);
+  color: var(--text);
+  animation: hub-in var(--dur-normal) var(--ease-smooth);
+}
+.hub-drawer[hidden] { display: none; }
+.hub-drawer:focus { outline: none; }
+.hub-drawer.is-leaving { animation: hub-out var(--dur-fast) var(--ease-sharp) forwards; }
+@keyframes hub-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes hub-out { from { transform: none; opacity: 1; } to { transform: translateX(24px); opacity: 0; } }
+
+.hub-drawer__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: var(--border-w) solid var(--edge);
+}
+.hub-drawer__title {
+  flex: 1;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  letter-spacing: var(--tracking-title, 0);
+  color: var(--text);
+}
+.hub-drawer__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-5) var(--space-6) var(--space-8);
+}
+.hub-drawer.is-resizing { user-select: none; animation: none; }
+.hub-drawer__status { margin: 0 0 var(--space-5); color: var(--warn); }
+.hub-drawer__status[hidden] { display: none; }
+
+/* Left-edge resize grip: an 8px hit area, a 2px line that lights up on hover,
+   drag or keyboard focus (arrow keys resize by 16px). */
+.hub-drawer__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 1;
+}
+.hub-drawer__handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-sharp);
+}
+.hub-drawer__handle:hover::after,
+.hub-drawer__handle:focus-visible::after,
+.hub-drawer.is-resizing .hub-drawer__handle::after { background: var(--edge-glow); }
+.hub-drawer__handle:focus-visible { outline: none; }
+
+/* ---- Sections ------------------------------------------------------------- */
+.hub-sec { margin: 0 0 var(--space-7); }
+.hub-sec__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.hub-sec--needs .hub-sec__head { color: var(--text); }
+.hub-sec__count {
+  min-width: 1.2rem;
+  padding: 0 var(--space-2);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  line-height: 1.2rem;
+  text-align: center;
+  letter-spacing: 0;
+}
+.hub-sec--needs .hub-sec__count { border-color: var(--bad); color: var(--bad); }
+.hub-sec__cards { display: flex; flex-direction: column; gap: var(--space-4); }
+.hub-sec--needs { display: flex; flex-direction: column; gap: var(--space-4); }
+.hub-sec--needs > .hub-sec__head { margin-bottom: 0; }
+.hub-sec__empty { margin: 0; }
+.hub-sec--briefs .hub-sec__cards:not(:empty) { margin-bottom: var(--space-5); }
+details.hub-sec > summary { cursor: pointer; list-style: none; }
+details.hub-sec > summary::-webkit-details-marker { display: none; }
+details.hub-sec > summary::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--ease-sharp);
+}
+details.hub-sec[open] > summary::before { transform: rotate(45deg); }
+details.hub-sec > summary:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+/* ---- Cards ---------------------------------------------------------------- */
+.hub-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-6);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+}
+/* Needs cards: the whole border leans toward --bad, no side stripe. The red
+   count in the section head already carries the urgency. */
+.hub-card--needs { border-color: color-mix(in srgb, var(--bad) 45%, var(--edge)); }
+.hub-card.is-done { opacity: 0.7; }
+.hub-card.is-done .hub-card__title { text-decoration: line-through; text-decoration-color: var(--text-dim); }
+.hub-card__title { margin: 0; font-size: var(--fs-sm); font-weight: 600; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.hub-card__detail { margin: 0; font-size: var(--fs-xs); line-height: 1.45; color: var(--text-dim); overflow-wrap: anywhere; }
+.hub-card__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); font-size: var(--fs-2xs); color: var(--text-dim); }
+.hub-card__chip {
+  padding: 0 var(--space-3);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-pill);
+  line-height: 1.4rem;
+  color: var(--text-dim);
+}
+.hub-card__chip.is-local { border-style: dashed; }
+.hub-card__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-2); }
+.hub-card__error { margin: 0; font-size: var(--fs-xs); color: var(--bad); }
+
+.hub-btn {
+  min-height: 28px;
+  padding: var(--space-2) var(--space-5);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-sharp), color var(--dur-fast) var(--ease-sharp), background var(--dur-fast) var(--ease-sharp);
+}
+.hub-btn:hover { border-color: var(--edge-glow); color: var(--text); }
+.hub-btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.hub-btn:disabled { opacity: 0.5; cursor: progress; }
+.hub-btn--primary { border-color: var(--accent, var(--neon-cyan)); color: var(--accent, var(--neon-cyan)); font-weight: 600; }
+.hub-btn--primary:hover { color: var(--accent, var(--neon-cyan)); box-shadow: 0 0 var(--glow-size-md) var(--glow); }
+
+/* ---- One-time "brief moved" hint under the Mission Control chip ----------- */
+.hub-hint {
+  position: fixed;
+  z-index: 96;
+  max-width: 280px;
+  padding: var(--space-4) var(--space-5);
+  border: var(--border-w) solid var(--edge-glow);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-2);
+  box-shadow: 0 0 var(--glow-size-md) var(--glow);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+  animation: hub-in var(--dur-normal) var(--ease-smooth);
+}
+.hub-hint:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
