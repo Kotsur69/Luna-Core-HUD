@@ -26,7 +26,7 @@ import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { failureBlock, runOptionsRow, powerBanner, batteryBanner } from './orchestraDetails.js';
-import { pkgStateKey } from './orchestraState.js';
+import { pkgStateKey, recoverAsk } from './orchestraState.js';
 import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetry.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
 
@@ -364,6 +364,12 @@ function pkgCard(pkg) {
     // A failed dependency install: the end of npm's output says why.
     if (pkg.error === 'installFailed' && pkg.verifyTail) card.append(el('pre', 'orchestra__tail', pkg.verifyTail));
   }
+
+  // The recovery playbook's one ask: cause, what was tried, the next step.
+  const ask = recoverAsk(pkg);
+  // {dir}: the worktree folder, named like the branch slug (the board has no paths).
+  const folder = pkg.branch ? `.luna-worktrees/.../${pkg.branch.split('/').pop()}` : pkg.id;
+  if (ask) card.append(msg(t(ask.key, { pkg: pkg.id, dir: folder, branch: pkg.branch || '?' }), 'is-bad'));
 
   const progress = progressText(pkg);
   if (progress) card.append(el('div', 'orchestra__meta', progress));

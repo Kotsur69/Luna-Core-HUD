@@ -190,7 +190,8 @@ function verifyFailure(pkg, verified) {
  * @param {{id:string, root:string, cwd:string, branch:string, baseSha:string|null, verify:string,
  *          pushOnVerifyFail?:boolean, scanSecrets?:boolean, pushBlockedSha?:string|null}} pkg
  *   scanSecrets: scan the unpushed commits for secret shapes before verify;
- *   pushBlockedSha: the HEAD GitHub already rejected (GH013) - never pushed as-is again
+ *   pushBlockedSha: the HEAD GitHub already rejected (GH013) - never pushed as-is again;
+ *   verifiedSha: a HEAD that already passed verify (a retried push) - not verified again
  * @param {{execImpl?:Function, verifyImpl?:Function}} [deps]
  * @returns {Promise<
  *   {ok:true, headSha:string|null, files:string[]}
@@ -229,7 +230,10 @@ async function finishPackage(pkg, deps = {}) {
   // Full ref name: a branch value can never be read as a push option.
   const pushBranch = () => runGit(pkg.root, ['push', '-u', 'origin', `refs/heads/${pkg.branch}`], execImpl);
 
-  if (pkg.verify) {
+  // A push retried by the recovery playbook (orchestraRecover.js): the very
+  // HEAD that already passed verify is not verified again.
+  const alreadyVerified = !!pkg.verifiedSha && (await headSha(pkg.root, execImpl)) === pkg.verifiedSha;
+  if (pkg.verify && !alreadyVerified) {
     const verified = await verifyImpl(pkg.verify, pkg.cwd || pkg.root);
     if (!verified.ok) {
       const failed = verifyFailure(pkg, verified);
@@ -248,7 +252,11 @@ async function finishPackage(pkg, deps = {}) {
     // Every remote: line (GitHub names rule, file and commit there), redacted.
     const detail = secrets.pushRejectionDetail(push.stderr);
     const kind = secrets.pushBlockKind(push.stderr);
-    if (!kind) return { ok: false, stage: 'push', detail };
+    // headSha: the verified HEAD, so a retried push skips the verify.
+    if (!kind) {
+      const verified = pkg.verify ? await headSha(pkg.root, execImpl) : null;
+      return { ok: false, stage: 'push', detail, ...(verified ? { headSha: verified } : {}) };
+    }
     return { ok: false, stage: 'push', detail, blocked: kind, headSha: await headSha(pkg.root, execImpl), range: await unpushedRange(pkg, execImpl) };
   }
 

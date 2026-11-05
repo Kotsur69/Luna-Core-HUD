@@ -272,7 +272,9 @@ async function hungFinalize(opts) {
 }
 
 test('controller: a hung integrate times out, the finalizer goes idle and Retry works', async () => {
-  const s = await hungFinalize({ integrateMerge: never, integrateTimeoutMs: 25 });
+  // The watchdog runs on real timers: leave enough time for hungFinalize's own
+  // 'running' check to happen first, even on a loaded machine.
+  const s = await hungFinalize({ integrateMerge: never, integrateTimeoutMs: 300 });
   await until(() => !s.orch.isBusy());
   await s.flush();
   assert.deepEqual([s.integ().state, s.integ().error, s.integ().running], ['failed', 'integrateTimeout', false]);

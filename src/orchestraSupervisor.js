@@ -916,6 +916,8 @@ function normalizeStoredPlan(raw) {
     integration: normalizeIntegration(raw.integration),
     // Each time the PC slept during the run (orchestraSleep.js).
     sleeps: normalizeSleeps(raw.sleeps),
+    // Run-level automatic fixes (orchestraRecover.js), same shape as a stall history.
+    recoveries: normalizeStallHistory(raw.recoveries),
     options: normalizeOptions(raw.options),
     todoText: new Map(todoText),
     packages,

@@ -55,6 +55,7 @@ const { launchRetryDecision, createResumeGate } = require('./orchestraLaunchRetr
 const { createPowerFlow } = require('./orchestraPower');
 const { createPowerCtl } = require('./powerctl');
 const { createSleepWatch, sleepCredit, recordSleep } = require('./orchestraSleep');
+const { createRecoverer } = require('./orchestraRecover');
 
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
@@ -400,6 +401,55 @@ function createOrchestra(deps) {
   // PC sleeps are not worker time (orchestraSleep.js). deps.tickMs = the
   // watchdog interval; it turns on the missed-'suspend' gap check.
   const sleepWatch = createSleepWatch({ now, tickMs: deps.tickMs });
+  // The recovery playbook (orchestraRecover.js): a known environment stall
+  // gets its automatic fix; Mati is asked once when that did not help.
+  const recover = createRecoverer({
+    getPkg: (id) => findPkg(id),
+    findByRoot: (dir) => (plan ? plan.packages.find((p) => p.root && path.resolve(p.root) === path.resolve(dir)) : null) || null,
+    record: (id, entry) => {
+      const p = findPkg(id);
+      if (!p) return;
+      patch(id, { stallHistory: sup.withHistoryEntry(p.stallHistory, entry) });
+      commit();
+    },
+    recordRun: (entry) => {
+      if (!plan) return;
+      plan.recoveries = sup.withHistoryEntry(plan.recoveries, entry);
+      commit();
+    },
+    repoPath: () => (plan ? plan.repoPath : null),
+    installDeps: (root, opts) => installDeps(root, opts),
+    checkDeps: (root) => checkDeps(root),
+    refinish: (id, extra) => refinish(id, extra),
+    fixupRound: (id, res) => (res.stage === 'secrets' ? onSecretsFound(id, res) : onPushBlocked(id, res)),
+    renameBranch: deps.renameBranch,
+    setBranch: (id, branch) => patch(id, { branch }),
+    ghAuthOk: deps.ghAuthOk,
+    stall: (id, reason, detail, extra) => {
+      if (!plan || !findPkg(id)) return;
+      if (extra) patch(id, extra);
+      stall(id, reason, detail);
+    },
+    resumeHeld: () => resumeHeldRun(),
+    // The automatic install did not fix the hold: the usual message (no second toast).
+    holdUnfixed: (res, asked) => onRunEvent('noNodeModules', { dir: res.dir, detail: res.detail || null, asked }),
+    refinishRun: () => {
+      if (!plan) return;
+      // The retried pass may still sleep / shut the PC down when done.
+      if (plan.settled) settledFinalize = true;
+      background(finishRun({ planId: plan.id }).then((r) => r.ok || log(`[recover] finish run refused: ${r.error}`)), 'finishRun');
+    },
+    // Account failover already ran in main (claudefailover.js failoverTab)
+    // before a limit reaches the run, so the playbook goes straight to the pause.
+    notify: (ask) => {
+      onRunEvent('recoverAsk', { id: ask.pkgId, cause: ask.cause });
+      if (deps.notifyRecover) deps.notifyRecover(ask);
+    },
+    now,
+    setTimer: (fn, ms) => setTimer(fn, ms),
+    clearTimer: (t) => clearTimer(t),
+    log,
+  });
 
   // Sleep at the usage limit / shut down when done (orchestraPower.js).
   const approvalsPending = () =>
@@ -520,6 +570,8 @@ function createOrchestra(deps) {
       pausedTotalMs: plan.pausedTotalMs || 0,
       // Each PC sleep during the run: [{start, durationMs}] (orchestraSleep.js).
       sleeps: Array.isArray(plan.sleeps) ? plan.sleeps.map((s) => ({ ...s })) : [],
+      // Run-level automatic fixes (integration retries, orchestraRecover.js).
+      recoveries: Array.isArray(plan.recoveries) ? plan.recoveries.map((e) => ({ ...e })) : [],
       freeMode: plan.freeMode === true,
       options: sup.normalizeOptions(plan.options),
       integration: {
@@ -634,6 +686,7 @@ function createOrchestra(deps) {
   function clearAllTimers() {
     for (const id of [...nudgeTimers.keys()]) cancelNudge(id);
     for (const id of [...retryTimers.keys()]) cancelAutoRetry(id);
+    recover.cancel('run');
     backgroundOpen.clear();
     lastActivity.clear();
     if (resumeTimer) clearTimer(resumeTimer);
@@ -973,7 +1026,9 @@ function createOrchestra(deps) {
     // A killed run holds nothing: Retry checks again.
     if (plan.hold || plan.killed) return;
     plan.hold = { reason: 'noNodeModules', dir: res.dir, detail: res.detail || null, at: now() };
-    onRunEvent('noNodeModules', { dir: res.dir, detail: res.detail || null });
+    // The playbook installs the package worktree's dependencies and resumes;
+    // Mati is told only when it cannot.
+    if (!recover.onHold(res)) onRunEvent('noNodeModules', { dir: res.dir, detail: res.detail || null });
   }
 
   /** Drops the hold and every package's waiting flag (restart, kill). */
@@ -1038,6 +1093,12 @@ function createOrchestra(deps) {
    */
   function onLaunchFailed(before, result) {
     if (plan.killed) return;
+    // Just after a wake: the playbook's own wait-and-retry-once comes first.
+    const wake = recover.onLaunchFailed(before, result);
+    if (wake) {
+      armAutoRetry(before.id, wake.delayMs);
+      return;
+    }
     const transientTries = transientRetries.get(before.id) || 0;
     const decision = launchRetryDecision({
       before,
@@ -1053,10 +1114,14 @@ function createOrchestra(deps) {
     // A git that did not answer has its own ladder (backoff, no repeat rule).
     if (decision.transient) transientRetries.set(before.id, transientTries + 1);
     else patch(before.id, { autoRetries: (before.autoRetries || 0) + 1 });
-    const timer = setTimer(() => fireAutoRetry(before.id), decision.delayMs);
+    armAutoRetry(before.id, decision.delayMs);
+  }
+
+  function armAutoRetry(id, delayMs) {
+    const timer = setTimer(() => fireAutoRetry(id), delayMs);
     // A real timer must not keep a test process (or a quitting app) alive.
     if (timer && typeof timer.unref === 'function') timer.unref();
-    retryTimers.set(before.id, timer);
+    retryTimers.set(id, timer);
   }
 
   /** The scheduled relaunch: back to pending, the pump launches it in a free slot. */
@@ -1080,6 +1145,8 @@ function createOrchestra(deps) {
     patch(id, { terminal: true });
     plan.packages = sup.withBlockedBy(plan.packages);
     onRunEvent('terminal', { id, reason });
+    // A known cause whose automatic fix already ran: Mati is asked once.
+    recover.onTerminal(findPkg(id), reason);
   }
 
   /** Ends the run once nothing more can happen on its own, then finalizes it. */
@@ -1107,10 +1174,15 @@ function createOrchestra(deps) {
    */
   function afterFinalize() {
     fireRunSettled();
+    // A fetch / push the network or auth refused is run again after a backoff.
+    const integ = plan && !plan.killed ? plan.integration : null;
+    if (integ && integ.state === 'done') recover.onIntegrationOk();
+    else if (integ) recover.onIntegration(integ, plan.id);
     if (!settledFinalize || !plan) return;
     settledFinalize = false;
     if (!plan.settled || plan.killed) return;
-    const busyNow = isBusy() || plan.packages.some(sup.isActive) || !!(deps.otherRunsActive && deps.otherRunsActive());
+    const busyNow =
+      isBusy() || recover.pending('run') || plan.packages.some(sup.isActive) || !!(deps.otherRunsActive && deps.otherRunsActive());
     background(powerFlow.afterFinalize({ busy: busyNow }), 'shutdown');
   }
 
@@ -1406,11 +1478,22 @@ function createOrchestra(deps) {
     return {
       // Only when something is ahead: an empty queue starts at once.
       onQueued: (info) => {
+        recover.stepWaiting(id);
         if ((info && info.ahead > 0) || batteryHeld()) set('queued');
       },
       // Low on battery a new verify waits for the charger (verifyQueue.js).
-      whenAllowed: () => (battery ? battery.whenAllowed() : Promise.resolve()),
-      onStart: () => set('running'),
+      whenAllowed: () => {
+        recover.stepWaiting(id);
+        return battery ? battery.whenAllowed() : Promise.resolve();
+      },
+      onStart: () => {
+        recover.stepProgress(id);
+        set('running');
+      },
+      onRerun: () => recover.stepProgress(id),
+      // The playbook's longer re-run of a timed-out verify (orchestraRecover.js).
+      limitMs: (findPkg(id) || {}).verifyLimitMs || undefined,
+      timeoutReruns: (findPkg(id) || {}).verifyReruns,
       // A killed or discarded run's verify is skipped once its turn comes.
       isCancelled: () => !plan || plan.id !== planId || plan.killed === true,
     };
@@ -1489,21 +1572,31 @@ function createOrchestra(deps) {
     let res;
     try {
       const before = findPkg(id);
-      res = await finishPackage(
-        {
-          ...before,
-          pushOnVerifyFail: plan.freeMode === true,
-          // Once per package: after its fix-up round, GitHub's own check decides.
-          scanSecrets: !before.scanFixup && !before.pushFixup,
-        },
-        verifyHooks(plan.id, id),
-      );
+      // Under the wake watchdog: a step that never settles is aborted (stepHung).
+      res = await recover.guardStep(id, (step) => {
+        const hooks = verifyHooks(plan.id, id);
+        return finishPackage(
+          {
+            ...before,
+            pushOnVerifyFail: plan.freeMode === true,
+            // Once per package: after its fix-up round, GitHub's own check decides.
+            scanSecrets: !before.scanFixup && !before.pushFixup,
+          },
+          { ...hooks, isCancelled: () => step.isAborted() || hooks.isCancelled() },
+        );
+      });
     } catch (err) {
       res = { ok: false, stage: 'push', detail: err instanceof Error ? err.message : 'finish failed' };
     }
     const pkg = findPkg(id);
     if (!plan || !pkg) return;
-    patch(id, { verifyPhase: null });
+    // The playbook's verify overrides are spent by this run.
+    patch(id, { verifyPhase: null, verifyLimitMs: null, verifyReruns: undefined, verifiedSha: null });
+    // A known environment cause gets its automatic fix (orchestraRecover.js).
+    if (!plan.killed && recover.onFinish(findPkg(id), res)) {
+      commit();
+      return;
+    }
 
     if (res.stage === 'secrets') {
       onSecretsFound(id, res);
@@ -1546,6 +1639,28 @@ function createOrchestra(deps) {
     patch(id, { state: 'launched', verifyRounds: pkg.verifyRounds + 1, nudges: 0 });
     writePty(pkg.sessionId, sup.verifyFailText(pkg.id, pkg.verify, res.output), { paste: true });
     commit();
+  }
+
+  /** The playbook runs a package's finish again (verify / push), with its overrides. */
+  function refinish(id, extra = {}) {
+    if (!plan || !findPkg(id)) return;
+    if (plan.killed) {
+      patch(id, { state: 'killed' });
+      commit();
+      return;
+    }
+    patch(id, { verifiedSha: null, verifyLimitMs: null, verifyReruns: undefined, ...extra });
+    background(finish(id), 'finish');
+  }
+
+  /** The playbook's install fixed the held node_modules: Resume on its own. */
+  function resumeHeldRun(tries = 0) {
+    if (!plan || !plan.hold) return;
+    resumeRun({ planId: plan.id }).then((r) => {
+      if (r.ok) return;
+      if (r.error === 'busy' && tries < 3) setTimer(() => resumeHeldRun(tries + 1), NUDGE_DELAY_MS);
+      else log(`[recover] automatic resume refused: ${r.error}`);
+    }, noop);
   }
 
   /**
@@ -1601,7 +1716,8 @@ function createOrchestra(deps) {
    * @param {null|{start:number, durationMs:number, source:string}} sleep
    */
   function applySleep(sleep) {
-    if (!sleep || !plan) return;
+    if (!sleep || !plan) return false;
+    recover.onWake();
     const t = now();
     const pauseStartedAt = plan.pausedUntil ? plan.pauseStartedAt : null;
     for (const p of plan.packages.filter(sup.isActive)) {
@@ -1614,6 +1730,7 @@ function createOrchestra(deps) {
     }
     onRunEvent('slept', { start: sleep.start, durationMs: sleep.durationMs, source: sleep.source });
     commit();
+    return true;
   }
 
   /** A sleep the watchdog gap reveals, credited before anything reads the clock. */
@@ -1682,7 +1799,8 @@ function createOrchestra(deps) {
    */
   function onSystemResume() {
     applySleep(sleepWatch.onResume());
-    if (finalizer.interrupt()) onRunEvent('finalizeInterrupted');
+    recover.onWake();
+    interruptFinalize();
     resumeGate.onResume();
     background(powerFlow.onSystemResume(), 'sleep');
     if (!plan || !plan.pausedUntil) return;
@@ -1690,6 +1808,16 @@ function createOrchestra(deps) {
     resumeTimer = null;
     if (now() >= plan.pausedUntil) resume();
     else resumeTimer = setTimer(resume, plan.pausedUntil - now() + RESUME_GRACE_MS);
+  }
+
+  /** After a wake an integrate step in flight is aborted and run again (logged as a fix). */
+  function interruptFinalize() {
+    if (!finalizer.interrupt()) return;
+    onRunEvent('finalizeInterrupted');
+    if (plan) {
+      const detail = 'finalize step in flight at a wake: aborted and run again';
+      plan.recoveries = sup.withHistoryEntry(plan.recoveries, { at: now(), kind: 'recover', reason: 'stepHung', detail });
+    }
   }
 
   /**
@@ -1702,6 +1830,8 @@ function createOrchestra(deps) {
     if (!pkg || !sup.isActive(pkg) || plan.killed) return;
     const until = Number.isFinite(resetsAt) && resetsAt > now() ? resetsAt : now() + DEFAULT_PAUSE_MS;
     if (plan.pausedUntil && plan.pausedUntil >= until) return;
+    // Another stored account first; none -> pause until the reset, resume on its own.
+    if (recover.onUsageLimit(pkg, until) === 'failover') return;
     for (const id of [...nudgeTimers.keys()]) cancelNudge(id);
     if (!plan.pausedUntil) plan.pauseStartedAt = now();
     plan.pausedUntil = until;
@@ -1816,7 +1946,9 @@ function createOrchestra(deps) {
    * hours of work.
    */
   function tick() {
-    catchUpSleep();
+    // A sleep only the tick gap revealed ('resume' never came): same as a resume.
+    if (catchUpSleep()) interruptFinalize();
+    recover.tick();
     if (!plan || plan.pausedUntil || plan.killed) return;
     for (const p of plan.packages) {
       if (p.state === 'launched' && !p.awaitingDeps && sup.timedOut(p, now())) stall(p.id, 'timeout');
@@ -1865,6 +1997,11 @@ function createOrchestra(deps) {
     plan.pauseStartedAt = null;
     for (const p of plan.packages.filter((x) => x.state === 'launched')) {
       writePty(p.sessionId, ESC);
+      patch(p.id, { state: 'killed' });
+    }
+    // Waiting on a playbook backoff: stopped too, its timer dropped.
+    for (const p of plan.packages.filter((x) => recover.pending(x.id))) {
+      recover.cancel(p.id);
       patch(p.id, { state: 'killed' });
     }
     settledFinalize = false;
@@ -1925,6 +2062,8 @@ function createOrchestra(deps) {
     // A Retry by hand: the package is back in play, its dependents unblocked.
     cancelAutoRetry(pkg.id);
     transientRetries.delete(pkg.id);
+    // Fresh playbook attempts for every cause.
+    recover.onManualRetry(pkg.id);
     // Mati may have fixed (or allowed) a GH013 by hand: the push gets a fresh
     // fix-up round and the rejected HEAD may be pushed again.
     patch(pkg.id, { terminal: false, autoRetries: 0, pushFixup: false, pushBlockedSha: null, pushBlockDetail: null });

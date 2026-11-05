@@ -19,3 +19,26 @@ export function pkgStateKey(pkg) {
   if (pkg.state === 'finishing' && pkg.verifyPhase === 'queued') return 'waitingVerify';
   return pkg.state;
 }
+
+// Causes the recovery playbook (src/orchestraRecover.js) can ask about; each
+// has an orch.recover.ask.<cause> text in pl and en.
+export const RECOVER_ASK_CAUSES = [
+  'depsMissing', 'secretFound', 'pushBlocked', 'branchTaken', 'network', 'auth',
+  'verifyTimeout', 'verifyLoad', 'stepHung', 'usageLimit', 'wakeGit',
+];
+
+/**
+ * The open ask of a package: the playbook's last 'ask' entry in its stall
+ * history, unless a manual Retry came after it. Null when there is none.
+ * @param {{stallHistory?:Array<{kind?:string, reason?:string}>}} pkg
+ * @returns {null|{key:string, cause:string}}
+ */
+export function recoverAsk(pkg) {
+  const history = pkg && Array.isArray(pkg.stallHistory) ? pkg.stallHistory : [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const e = history[i] || {};
+    if (e.kind === 'retry') return null;
+    if (e.kind === 'ask' && RECOVER_ASK_CAUSES.includes(e.reason)) return { key: `orch.recover.ask.${e.reason}`, cause: e.reason };
+  }
+  return null;
+}
