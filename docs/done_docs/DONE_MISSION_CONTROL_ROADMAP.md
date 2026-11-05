@@ -40,7 +40,7 @@ under *Open questions*.
   Sunday email), W4 weekly goals, W6 weekly + daily brief, W1 pin /
   re-class, W8 pip hash locks + HN Algolia + usage-429 last-good, bill due
   dates into Google Calendar, Gmail sender + nightly summary. Report:
-  [`docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md`](docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md).
+  [`docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md`](DONE_GODMODE_RUN_2026-10-20.md).
 - ~~**None of it is live-checked by Mati yet.**~~ ✅ checked 2026-10-22. Was: pull `main`, restart,
   connect Gmail (Settings → Report emails), then open the Life dashboard
   (check-in prompt, Habits, Week tab) and Mission Control (brief strip,
@@ -52,7 +52,7 @@ under *Open questions*.
 - **Cloud sync:** phases 1-3 released (latest `v0.16.2`, 2026-10-19). Supabase
   is the only transport; the Syncthing folder and the ledger's "Share with
   other PCs" UI are removed. **Next: iPhone PWA (phase 4)** — start at
-  [`docs/done_docs/DONE_CLOUD_SYNC_PLAN.md`](docs/done_docs/DONE_CLOUD_SYNC_PLAN.md) "Next session: start here".
+  [`docs/done_docs/DONE_CLOUD_SYNC_PLAN.md`](DONE_CLOUD_SYNC_PLAN.md) "Next session: start here".
 - **Active workstream: W3+ Life Dashboard** (Ctrl+Shift+N). Phase 2 Money
   shipped in `393c07d`; the **budget redesign (5 buckets, tabs, charts,
   undo everywhere)** landed after it - see "Phase 2b" in the W3+ section.
@@ -648,7 +648,7 @@ itself was smoke-tested with a fake event in a second instance.
   mode expires refresh tokens after 7 days), click Connect.
 - ~~**God Mode v2 live run**~~ ✅ done by Mati 2026-10-20 night; it built
   most of this file's open work but blocked on merges - see
-  [`docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md`](docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md).
+  [`docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md`](DONE_GODMODE_RUN_2026-10-20.md).
 
 ---
 

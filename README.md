@@ -214,7 +214,7 @@ injects prompts or touches the `claude` binary.
 > with pace flags, and News — sources and topics fetched by a vendored
 > [Agent-Reach](https://github.com/Panniantong/Agent-Reach) and summarised by
 > Haiku. See [Mission Control](#mission-control-ctrlshiftm) and what is next in
-> [`DONE_MISSION_CONTROL_ROADMAP.md`](DONE_MISSION_CONTROL_ROADMAP.md).
+> [`docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md`](docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md).
 >
 > Also in v0.14.0: **God Mode v2** — a headless planner splits a project's
 > To-Do list into work packages, each runs in its own tab and git worktree,
@@ -1006,7 +1006,7 @@ the reasoning behind the contract are in
 | + | Window transparency — the `glass` theme family (Win11 acrylic), tunable (v0.11.0) | ✅ done |
 | v2 | God Mode v2: task intake (Luna MCP + `/luna-plan`), worktree tabs, per-tab runs, headless planner + plan board | ✅ done (v0.14.0) |
 | MC | Mission Control (Ctrl+Shift+M): Gmail cleanup, Google Calendar API + quick add, GitHub / Claude-budget telemetry, Agent-Reach News with Haiku summaries (v0.14.0) | ✅ done |
-| MC2 | Weekly review + email, Morning brief, Claude % per project, focus time, X / Reddit + presets, goals, trackday weather, Life dashboard — see [`DONE_MISSION_CONTROL_ROADMAP.md`](DONE_MISSION_CONTROL_ROADMAP.md) | ✅ done (v0.17.0) |
+| MC2 | Weekly review + email, Morning brief, Claude % per project, focus time, X / Reddit + presets, goals, trackday weather, Life dashboard — see [`docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md`](docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md) | ✅ done (v0.17.0) |
 | v2 | God Mode v2 supervisor + integrator: DONE markers, verify + push per worker, Retry, kill switch, scheduled start, Sonnet→Opus escalation, file-overlap guard, PRs / merge, run report ([`ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md)) | ✅ done, live-run 2026-10-20 |
 | v2 | God Mode never blocks: self-healing dependency merge, integration skips bad packages, retry ladder, end-of-run self-check + fix-up worker, morning report, sleep at the usage limit with a wake task (v0.17.0) | ✅ done |
 
@@ -1659,7 +1659,7 @@ Agent-Reach ([Panniantong/Agent-Reach](https://github.com/Panniantong/Agent-Reac
 MIT) lives unchanged in [`helpers/agent-reach/`](helpers/agent-reach/) next to
 LunaCore's small bridge, `lunacore_fetch.py`. v0.14.0 uses only its public,
 login-free paths; X and Reddit are next in
-[`DONE_MISSION_CONTROL_ROADMAP.md`](DONE_MISSION_CONTROL_ROADMAP.md).
+[`docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md`](docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md).
 
 ## Action cheat-sheets
 

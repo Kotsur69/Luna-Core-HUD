@@ -6,7 +6,7 @@ cost) lives in [`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md
 Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 
 **Doc naming:** a plan whose feature is fully built and live-checked is
-renamed with a `DONE_` prefix (`DONE_MISSION_CONTROL_ROADMAP.md`,
+renamed with a `DONE_` prefix (`docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md`,
 `docs/done_docs/DONE_CLOUD_SYNC_PLAN.md`, ...). Files without the prefix still have
 open work. Leftover small items of a `DONE_` plan live as cards in the
 LunaCore to-do list, not in the file. Plans in `docs/` sit in one of three
@@ -33,7 +33,7 @@ partly built or built with live checks owed) and `docs/untouched_docs/`
   (2026-10-09) - Mission Control + God Mode v2. `v0.13.0` (2026-09-25) - AI
   providers, provider-aware usage, overnight guard, "Don't sleep".
 - **Done (`DONE_` docs):** Mission Control W1-W8
-  ([`DONE_MISSION_CONTROL_ROADMAP.md`](DONE_MISSION_CONTROL_ROADMAP.md)),
+  ([`docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md`](docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md)),
   cloud sync + iPhone PWA ([`docs/done_docs/DONE_CLOUD_SYNC_PLAN.md`](docs/done_docs/DONE_CLOUD_SYNC_PLAN.md)),
   free providers + Luna sync ([`docs/done_docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md`](docs/done_docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md)),
   the path audit ([`docs/done_docs/DONE_PATH_AUDIT.md`](docs/done_docs/DONE_PATH_AUDIT.md)) and
