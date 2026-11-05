@@ -28,6 +28,7 @@ const path = require('path');
 const { BRIEF_DIR } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha, runVerify } = require('./orchestraFinish');
+const { sharedVerifyQueue } = require('./verifyQueue');
 const orchestraIntegrate = require('./orchestraIntegrate');
 const orchestraDeps = require('./orchestraDeps');
 const { renderRunReportHtml, repoPathOf } = require('./orchestraReport');
@@ -143,8 +144,10 @@ function sessionDeps(ctx) {
     // time across every run), checked before a worker starts or a verify runs.
     installDeps: (root, opts) => orchestraDeps.installWorktreeDeps(root, { fresh: !!(opts && opts.fresh) }),
     checkDeps: (root) => orchestraDeps.checkNodeModules(root),
-    // Slice 4 supervisor.
-    finishPackage,
+    // Slice 4 supervisor. Package verifies of every project's run share one
+    // serial queue (verifyQueue.js); hooks feed the board's "waiting to verify".
+    finishPackage: (pkg, hooks) =>
+      finishPackage(pkg, { verifyImpl: (command, cwd) => sharedVerifyQueue().run(command, cwd, hooks || {}) }),
     headSha,
     sessionAlive: (id) => {
       const s = ctx.sessions.get(id);

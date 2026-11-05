@@ -217,3 +217,62 @@ test('the report and the card note carry the notRepo advice the .git fact allows
   assert.doesNotMatch(stallNote('pq', view.packages[0], { gitDirExists: true }), INIT_ADVICE);
   assert.match(stallNote('pq', view.packages[0], { gitDirExists: false }), INIT_ADVICE);
 });
+
+// ---- GH013: push protection is not "no remote / no network / auth" -----------
+
+const GH013_DETAIL = [
+  'error: GH013: Repository rule violations found for refs/heads/luna/a-1.',
+  '- GITHUB PUSH PROTECTION',
+  '- Push cannot contain secrets',
+  'Stripe Test API Secret Key',
+  'locations:',
+  '- commit: 1a2b3c4d5e6f7a8b9c0d',
+  'path: test/pay.test.js:12',
+].join('\n');
+const WRONG_PUSH_ADVICE = /gh auth status|no network|expired GitHub auth/;
+
+test('GH013 diagnosis: fix or remove the string, rewrite the unpushed commits, Retry', () => {
+  for (const error of ['pushBlocked', 'pushFailed']) {
+    const d = diagnosePackage({ state: 'stalled', error, detail: GH013_DETAIL });
+    assert.match(d.what, /push protection/i, error);
+    assert.match(d.why, /EVERY pushed commit/);
+    assert.match(d.why, /fix commit on top does not help/);
+    assert.match(d.fix, /Fix or remove the string/);
+    assert.match(d.fix, /rewrite the commits that never reached origin/);
+    assert.match(d.fix, /Retry/);
+    assert.doesNotMatch(`${d.why} ${d.fix}`, WRONG_PUSH_ADVICE, `${error}: no remote/auth advice for GH013`);
+  }
+  // A GH013 for another rule: still no network advice, still rewrite + Retry.
+  const rule = diagnosePackage({ state: 'stalled', error: 'pushBlocked', detail: 'error: GH013: Repository rule violations found\n- Commits must have verified signatures' });
+  assert.match(rule.what, /repository rule \(GH013\)/);
+  assert.match(rule.fix, /rewrite them/);
+  assert.doesNotMatch(`${rule.why} ${rule.fix}`, WRONG_PUSH_ADVICE);
+  // A plain push failure keeps the remote / auth advice.
+  assert.match(diagnosePackage({ state: 'stalled', error: 'pushFailed', detail: 'fatal: no remote' }).fix, /gh auth status/);
+  // The new stop reasons all have their own explanation.
+  for (const error of ['secretFound', 'verifyTimeout']) {
+    assert.doesNotMatch(diagnosePackage({ state: 'stalled', error }).what, /no explanation/, error);
+  }
+  assert.match(diagnosePackage({ state: 'stalled', error: 'verifyTimeout' }).why, /not a test failure/);
+});
+
+test('report: a GH013 stall shows the rule, the file and the commit from the full detail', () => {
+  const view = {
+    id: 'gh',
+    repoPath: '/repo',
+    packages: [{ id: 'a', title: 'A', state: 'stalled', error: 'pushBlocked', detail: GH013_DETAIL, branch: 'luna/a-1', terminal: true, todoAts: [1] }],
+    integration: { state: 'done' },
+  };
+  const md = buildReport(view, { now: 2, suggestions: [] });
+  const wrong = md.slice(md.indexOf('\n## What went wrong\n'));
+  assert.match(wrong, /### `a` A - stalled \(pushBlocked\)/);
+  assert.match(wrong, /Detail: `error: GH013: Repository rule violations found/);
+  assert.match(wrong, /- Git said:/);
+  assert.match(wrong, / {4}- Push cannot contain secrets/);
+  assert.match(wrong, / {4}Stripe Test API Secret Key/);
+  assert.match(wrong, / {4}path: test\/pay\.test\.js:12/);
+  assert.match(wrong, / {4}- commit: 1a2b3c4d5e6f7a8b9c0d/);
+  assert.doesNotMatch(wrong, WRONG_PUSH_ADVICE);
+  const html = renderRunReportHtml(view, { now: 2 });
+  assert.match(html, /path: test\/pay\.test\.js:12/);
+});

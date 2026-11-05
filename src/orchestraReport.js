@@ -194,7 +194,9 @@ function triedText(p) {
 /** Facts for one unfinished package, one short line each. */
 function packageEvidence(p, view) {
   const out = [];
-  if (p.detail) out.push(`Detail: ${code(p.detail, 300)}`);
+  // A multi-line detail (a rejected push's remote: lines) is shown in full
+  // under the item (detailRows); its first line stays here.
+  if (p.detail) out.push(`Detail: ${code(String(p.detail).split(/\r?\n/)[0], 300)}`);
   if (p.error === 'approvalTimeout' && isObject(view.options) && view.options.unattendedApprovalMin > 0) {
     out.push(`Approval wait limit: ${view.options.unattendedApprovalMin} min`);
   }
@@ -227,6 +229,17 @@ function historyLines(p) {
   });
 }
 
+const MAX_DETAIL_LINES = 30;
+
+/** A multi-line detail (git's report of a rejected push) as safe, capped lines; [] for one line. */
+function detailRows(text) {
+  const rows = String(text || '')
+    .split(/\r?\n/)
+    .map((l) => oneLine(l, 200))
+    .filter(Boolean);
+  return rows.length > 1 ? rows.slice(0, MAX_DETAIL_LINES) : [];
+}
+
 /** Multi-line output (test tail) as safe, capped lines. */
 const tailRows = (text) =>
   String(text || '')
@@ -234,6 +247,14 @@ const tailRows = (text) =>
     .map((l) => oneLine(l, 200))
     .filter(Boolean)
     .slice(-MAX_TAIL_LINES);
+
+/** The block under a package's item: the verify tail, else a multi-line detail. */
+function packageTail(p) {
+  const tail = tailRows(p.verifyTail);
+  if (tail.length) return { tail };
+  const rows = detailRows(p.detail);
+  return rows.length ? { tail: rows, tailLabel: 'Git said' } : { tail: [] };
+}
 
 /**
  * Every problem of a settled run, explained.
@@ -269,7 +290,7 @@ function problems(view, facts = {}) {
       ...diagnosePackage(p, facts),
       evidence: packageEvidence(p, view),
       lastWords: oneLine(p.lastWords, 520),
-      tail: tailRows(p.verifyTail),
+      ...packageTail(p),
     });
   }
   if (integ.state === 'failed' && integ.error) {
@@ -301,7 +322,7 @@ function wrongSection(view, facts) {
     lines.push(`### ${it.title}`, '', `- What happened: ${it.what}`, `- Why: ${it.why}`, `- How to fix: ${it.fix}`);
     for (const e of it.evidence) lines.push(`- ${e}`);
     if (it.lastWords) lines.push(`- Worker's last words: "${it.lastWords.replace(/"/g, "'")}"`);
-    if (it.tail.length) lines.push('- Output tail:', '', ...it.tail.map((l) => `    ${l}`));
+    if (it.tail.length) lines.push(`- ${it.tailLabel || 'Output tail'}:`, '', ...it.tail.map((l) => `    ${l}`));
   }
   return lines;
 }

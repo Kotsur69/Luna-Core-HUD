@@ -36,6 +36,8 @@ const WORKER_CAP_MS = 120 * 60 * 1000;
 // sometimes adds a sentence after it despite the brief.
 const MARKER_TAIL_LINES = 6;
 const MAX_DETAIL_CHARS = 300;
+// A package's stored detail: a GH013 push rejection keeps every remote: line.
+const MAX_PKG_DETAIL_CHARS = 2000;
 const MAX_VERIFY_OUTPUT_CHARS = 3000;
 
 const ACTIVE_STATES = new Set(['launched', 'finishing']);
@@ -717,9 +719,16 @@ function normalizePackage(raw) {
     briefPath: null,
     headSha: typeof raw.headSha === 'string' && SHA_RE.test(raw.headSha) ? raw.headSha : null,
     error: strOrNull(raw.error, 64),
-    detail: strOrNull(raw.detail, MAX_DETAIL_CHARS),
+    // A rejected push keeps every remote: line (pushSecrets.js), so more room.
+    detail: strOrNull(raw.detail, MAX_PKG_DETAIL_CHARS),
     nudges: num(raw.nudges),
     verifyRounds: num(raw.verifyRounds),
+    scanFixup: raw.scanFixup === true,
+    pushFixup: raw.pushFixup === true,
+    pushBlockedSha: typeof raw.pushBlockedSha === 'string' && SHA_RE.test(raw.pushBlockedSha) ? raw.pushBlockedSha : null,
+    pushBlockDetail: strOrNull(raw.pushBlockDetail, MAX_PKG_DETAIL_CHARS),
+    // Never restored: a restored package is not in the verify queue.
+    verifyPhase: null,
     startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
     finishedAt: Number.isFinite(raw.finishedAt) ? raw.finishedAt : null,
     pausedMs: num(raw.pausedMs),

@@ -39,6 +39,7 @@ const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
 const { createFinalizer } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
+const pushSecrets = require('./pushSecrets');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 // A planner limit with another Claude account free: replan after this long.
 const ACCOUNT_SWITCH_RETRY_MS = 3000;
@@ -114,6 +115,7 @@ function briefText(pkg, branch, opts = {}) {
     '- Work only in this worktree. Do not push, merge or switch branches.',
     `- ${DEPS_RULE}`,
     '- When the work is done and verified, commit it on this branch with a conventional commit message.',
+    pushSecrets.FAKE_SECRET_RULE,
     `- End your final message with the line \`LUNA_DONE ${pkg.id}\`, or \`LUNA_BLOCKED ${pkg.id}: <reason>\` if you cannot finish.`,
     '',
   ].join('\n');
@@ -550,6 +552,9 @@ function createOrchestra(deps) {
         lastWords: p.lastWords || null,
         verifyTail: p.verifyTail || null,
         awaitingDeps: p.awaitingDeps === true,
+        verifyPhase: p.state === 'finishing' ? p.verifyPhase || null : null,
+        scanFixup: p.scanFixup === true,
+        pushFixup: p.pushFixup === true,
       })),
     };
   }
@@ -755,6 +760,14 @@ function createOrchestra(deps) {
           blockedBy: null,
           stalledAt: null,
           failure: null,
+          // Push protection (pushSecrets.js): one fix-up round each for the
+          // pre-push secret scan and for a GH013 rejection.
+          scanFixup: false,
+          pushFixup: false,
+          pushBlockedSha: null,
+          pushBlockDetail: null,
+          // 'queued' | 'running' while finishing (verifyQueue.js), else null.
+          verifyPhase: null,
         })),
       };
       runSettledHook = typeof ctx.onRunSettled === 'function' ? { planId: plan.id, fn: ctx.onRunSettled } : null;
@@ -1352,6 +1365,84 @@ function createOrchestra(deps) {
     commit();
   }
 
+  /**
+   * The verify queue's hooks (verifyQueue.js) for the board: 'queued' reads
+   * "waiting to verify", 'running' the usual verifying. Ignored once the run
+   * or the package moved on.
+   */
+  function verifyHooks(planId, id) {
+    const set = (phase) => {
+      const p = plan && plan.id === planId ? findPkg(id) : null;
+      if (!p || p.state !== 'finishing' || p.verifyPhase === phase) return;
+      patch(id, { verifyPhase: phase });
+      commit();
+    };
+    return {
+      // Only when something is ahead: an empty queue starts at once.
+      onQueued: (info) => {
+        if (info && info.ahead > 0) set('queued');
+      },
+      onStart: () => set('running'),
+      // A killed or discarded run's verify is skipped once its turn comes.
+      isCancelled: () => !plan || plan.id !== planId || plan.killed === true,
+    };
+  }
+
+  /**
+   * One push-protection fix-up round: `text` goes to the worker's open tab,
+   * or into a fresh brief in a reopened tab in its worktree.
+   * @returns {boolean} false when neither worked
+   */
+  function sendFixup(pkg, text, fields) {
+    if (plan.killed) return false;
+    if (sessionAlive(pkg.sessionId) && writePty(pkg.sessionId, text, { paste: true })) {
+      patch(pkg.id, { ...fields, state: 'launched', nudges: 0 });
+      return true;
+    }
+    if (!pkg.root || !pkg.branch) return false;
+    const brief = `${briefText(pkg, pkg.branch, { resume: true })}\n## LunaCore fix-up round\n\n${text}\n`;
+    if (!reopenInWorktree(pkg, brief).ok) return false;
+    patch(pkg.id, fields);
+    return true;
+  }
+
+  /** The pre-push scan found secret shapes: one fix-up round (file:line, never the value). */
+  function onSecretsFound(id, res) {
+    const pkg = findPkg(id);
+    const detail = pushSecrets.hitsSummary(res.hits);
+    const stallHistory = sup.withHistoryEntry(pkg.stallHistory, { at: now(), kind: 'fixup', reason: 'secretFound', detail });
+    if (!sendFixup(pkg, pushSecrets.secretScanText(pkg.id, res.hits, res.range), { scanFixup: true, stallHistory })) {
+      stall(id, 'secretFound', detail);
+      return;
+    }
+    onRunEvent('secretFixup', { id });
+    commit();
+  }
+
+  /**
+   * GitHub rejected the push with GH013. Never pushed again unchanged: one
+   * fix-up round (rewrite only the unpushed commits), then one more push; a
+   * second rejection - or a HEAD the worker did not change - stops the package.
+   */
+  function onPushBlocked(id, res) {
+    const pkg = findPkg(id);
+    const detail = res.blocked === 'unchanged' && pkg.pushBlockDetail ? `${res.detail}\n${pkg.pushBlockDetail}` : res.detail;
+    const capped = String(detail || '').slice(0, pushSecrets.MAX_DETAIL_CHARS) || null;
+    if (res.blocked === 'unchanged' || pkg.pushFixup) {
+      stall(id, 'pushBlocked', capped);
+      return;
+    }
+    const firstRule = String(res.detail || '').split('\n').find((l) => /GH013|secret|rule/i.test(l)) || res.detail;
+    const stallHistory = sup.withHistoryEntry(pkg.stallHistory, { at: now(), kind: 'fixup', reason: 'pushBlocked', detail: firstRule });
+    const fields = { pushFixup: true, pushBlockedSha: res.headSha || null, pushBlockDetail: capped, stallHistory };
+    if (!sendFixup(pkg, pushSecrets.pushBlockText(pkg.id, res.detail, res.range, res.blocked), fields)) {
+      stall(id, 'pushBlocked', capped);
+      return;
+    }
+    onRunEvent('pushFixup', { id });
+    commit();
+  }
+
   async function finish(id) {
     cancelNudge(id);
     // The post-DONE verify runs a plain `npm test` in the worktree: not
@@ -1365,17 +1456,47 @@ function createOrchestra(deps) {
     // A package finishing after the run settled (Mati unblocked it by hand)
     // reopens the run, so its end gets its own cue.
     plan.settled = false;
-    patch(id, { state: 'finishing', error: null, detail: null });
+    patch(id, { state: 'finishing', error: null, detail: null, verifyPhase: null });
     commit();
     let res;
     try {
-      res = await finishPackage({ ...findPkg(id), pushOnVerifyFail: plan.freeMode === true });
+      const before = findPkg(id);
+      res = await finishPackage(
+        {
+          ...before,
+          pushOnVerifyFail: plan.freeMode === true,
+          // Once per package: after its fix-up round, GitHub's own check decides.
+          scanSecrets: !before.scanFixup && !before.pushFixup,
+        },
+        verifyHooks(plan.id, id),
+      );
     } catch (err) {
       res = { ok: false, stage: 'push', detail: err instanceof Error ? err.message : 'finish failed' };
     }
     const pkg = findPkg(id);
     if (!plan || !pkg) return;
+    patch(id, { verifyPhase: null });
 
+    if (res.stage === 'secrets') {
+      onSecretsFound(id, res);
+      return;
+    }
+    if (res.stage === 'push' && res.blocked) {
+      onPushBlocked(id, res);
+      return;
+    }
+    // A verify that ran past its limit twice is no test failure: it is never
+    // pasted to the worker as one.
+    if (res.stage === 'verifyTimeout') {
+      stall(id, 'verifyTimeout', res.detail || null);
+      return;
+    }
+    // Killed while waiting for its verify: stopped like a running worker is.
+    if (res.stage === 'verifyCancelled') {
+      patch(id, { state: 'killed' });
+      commit();
+      return;
+    }
     if (res.ok) {
       const touched = sup.mergeTouched(pkg.touched, sup.relTouched(pkg.root, res.files || []));
       patch(id, { state: 'pushed', headSha: res.headSha || null, error: null, detail: null, touched, terminal: false });
@@ -1445,33 +1566,6 @@ function createOrchestra(deps) {
     }
   }
 
-  /** The session's still-running background processes after this fragment. */
-  function trackBackground(sessionId, fragment) {
-    const open = sup.openBackgroundTasks(fragment, backgroundOpen.get(sessionId) || []);
-    if (open.length) backgroundOpen.set(sessionId, open);
-    else backgroundOpen.delete(sessionId);
-    return open;
-  }
-
-  /**
-   * The bounded wait ran out: forget the process (it never reported) and
-   * nudge - unless the worker got busy again meanwhile (its git status
-   * changed): then a new turn is under way and its end decides.
-   */
-  function giveUpOnBackground(id, sessionId, armedAt) {
-    nudgeTimers.delete(id);
-    backgroundOpen.delete(sessionId);
-    if ((lastActivity.get(sessionId) || 0) > armedAt) return;
-    sendNudge(id);
-  }
-
-  /** Drops what LunaCore tracked about one worker tab's turns. */
-  function forgetSession(sessionId) {
-    if (!sessionId) return;
-    backgroundOpen.delete(sessionId);
-    lastActivity.delete(sessionId);
-  }
-
   /**
    * The PC slept (orchestraSleep.js): the active packages get the slept
    * time back on pausedMs, the run logs it. Never credits the part an open
@@ -1500,6 +1594,33 @@ function createOrchestra(deps) {
   /** electron powerMonitor 'suspend'. */
   function onSystemSuspend() {
     sleepWatch.onSuspend();
+  }
+
+  /** The session's still-running background processes after this fragment. */
+  function trackBackground(sessionId, fragment) {
+    const open = sup.openBackgroundTasks(fragment, backgroundOpen.get(sessionId) || []);
+    if (open.length) backgroundOpen.set(sessionId, open);
+    else backgroundOpen.delete(sessionId);
+    return open;
+  }
+
+  /**
+   * The bounded wait ran out: forget the process (it never reported) and
+   * nudge - unless the worker got busy again meanwhile (its git status
+   * changed): then a new turn is under way and its end decides.
+   */
+  function giveUpOnBackground(id, sessionId, armedAt) {
+    nudgeTimers.delete(id);
+    backgroundOpen.delete(sessionId);
+    if ((lastActivity.get(sessionId) || 0) > armedAt) return;
+    sendNudge(id);
+  }
+
+  /** Drops what LunaCore tracked about one worker tab's turns. */
+  function forgetSession(sessionId) {
+    if (!sessionId) return;
+    backgroundOpen.delete(sessionId);
+    lastActivity.delete(sessionId);
   }
 
   function resume() {
@@ -1755,7 +1876,9 @@ function createOrchestra(deps) {
     // A Retry by hand: the package is back in play, its dependents unblocked.
     cancelAutoRetry(pkg.id);
     transientRetries.delete(pkg.id);
-    patch(pkg.id, { terminal: false, autoRetries: 0 });
+    // Mati may have fixed (or allowed) a GH013 by hand: the push gets a fresh
+    // fix-up round and the rejected HEAD may be pushed again.
+    patch(pkg.id, { terminal: false, autoRetries: 0, pushFixup: false, pushBlockedSha: null, pushBlockDetail: null });
     plan.packages = sup.withBlockedBy(plan.packages);
     // Only once the package is back in play does the run resume.
     plan.started = true;

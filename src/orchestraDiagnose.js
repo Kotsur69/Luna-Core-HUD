@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const { findTurnEndMessage, textBlocks } = require('./ttsExtract');
+const { pushBlockKind } = require('./pushSecrets');
 
 const MAX_LAST_WORDS = 500;
 const MAX_TAIL_LINES = 12;
@@ -76,8 +77,25 @@ const PACKAGE = {
   },
   pushFailed: {
     what: 'Pushing the package branch failed.',
-    why: 'The remote refused it: no remote / no network, expired GitHub auth, or a branch with that name already exists there with other commits.',
-    fix: 'Check `gh auth status` and `git remote -v`, push the branch by hand from the worktree if needed, then Retry.',
+    why: 'The remote refused it: no remote / no network, expired GitHub auth, or a branch with that name already exists there with other commits. Git\'s full answer is under Detail.',
+    fix: 'Read the Detail below first. Then check `gh auth status` and `git remote -v`, push the branch by hand from the worktree if needed, then Retry.',
+  },
+  // A GH013 rejection (pushSecrets.pushBlockKind): pushBlockedDiagnosis()
+  // picks the secret or the plain-rule wording from the stored detail.
+  pushBlocked: {
+    what: 'GitHub rejected the branch because of a repository rule (GH013), even after one fix-up round.',
+    why: 'A ruleset on the repo refuses one of the pushed commits; GitHub\'s report (rule, file, commit) is under Detail.',
+    fix: 'Fix what the rule names in the commits that never reached origin (rewrite them - a fix commit on top does not help), then Retry.',
+  },
+  secretFound: {
+    what: 'LunaCore found secret-shaped strings in the commits it was about to push, and could not hand them back to the worker.',
+    why: 'GitHub push protection rejects a push when ANY commit contains a key-shaped string, even a fake one in a test. File and line are under Detail; the value is never shown.',
+    fix: 'Remove each string (assemble a fake key at runtime from parts, read a real one from an environment variable), rewrite the unpushed commits so none of them contains it (`git reset --soft <base>` and commit again), then Retry.',
+  },
+  verifyTimeout: {
+    what: 'The verify command ran past its 30 min limit twice (it was re-run once), so LunaCore stopped it.',
+    why: 'This is not a test failure, so the worker was not sent back. Usually the suite hangs (an open handle, a test waiting on a service) or the machine was overloaded.',
+    fix: 'Run the verify command in the worktree and watch where it hangs; fix the hang (or the card\'s verify field), then Retry.',
   },
   briefFailed: {
     what: 'LunaCore could not write the worker\'s brief file.',
@@ -286,7 +304,26 @@ const UNKNOWN = {
 function diagnosePackage(pkg, facts = {}) {
   const key = (pkg && pkg.error) || (pkg && pkg.state);
   if (key === 'notRepo') return notRepoDiagnosis(pkg, facts);
+  // An older run stored a GH013 rejection as a plain pushFailed.
+  if (key === 'pushBlocked' || (key === 'pushFailed' && pushBlockKind(pkg.detail))) return pushBlockedDiagnosis(pkg);
   return PACKAGE[key] || UNKNOWN;
+}
+
+/**
+ * GH013, honestly: push protection found a secret (the usual case, e.g. a
+ * fake Stripe-shaped key in a test) or another repository rule refused a
+ * commit. Either way no network / auth advice, and no plain re-push: GitHub
+ * checks every pushed commit, so only rewriting the unpushed ones helps.
+ * @param {{detail?:string|null}} pkg
+ * @returns {{what:string, why:string, fix:string}}
+ */
+function pushBlockedDiagnosis(pkg) {
+  if (pushBlockKind(pkg && pkg.detail) !== 'secret') return PACKAGE.pushBlocked;
+  return {
+    what: 'GitHub push protection rejected the branch (GH013: Push cannot contain secrets).',
+    why: 'A commit on the branch adds a secret-shaped string - often a fake key literal in a test. GitHub checks EVERY pushed commit, so a fix commit on top does not help; the secret type, file and commit are under Detail (the value is never stored).',
+    fix: 'Fix or remove the string (assemble a fake key at runtime from parts; read a real key from an environment variable), rewrite the commits that never reached origin so none of them contains it (`git reset --soft <first unpushed commit>^` and commit again, or `git commit --amend`), then Retry. Allow it via GitHub\'s unblock link only if it really is a harmless fake.',
+  };
 }
 
 /**
