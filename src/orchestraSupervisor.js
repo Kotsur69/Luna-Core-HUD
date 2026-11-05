@@ -5,7 +5,9 @@
 // state and the side effects and asks this module what a signal means:
 //
 //   turn end   -> did the worker print LUNA_DONE / LUNA_BLOCKED for ITS
-//                 package? none -> nudge (max MAX_NUDGES) -> stalled
+//                 package? none -> nudge (max MAX_NUDGES) -> stalled -
+//                 unless a background process the worker started is still
+//                 running (openBackgroundTasks): then LunaCore waits for it
 //   finish     -> verify failed -> paste it back (max MAX_VERIFY_ROUNDS)
 //   slot freed -> which pending packages have every dependency pushed
 //   restart    -> anything that was running is stalled (tab ids do not
@@ -83,6 +85,48 @@ function turnEndAction(pkg, marker) {
   if (marker && marker.kind === 'blocked') return { type: 'stall', reason: 'blocked', detail: marker.reason };
   if ((pkg.nudges || 0) < MAX_NUDGES) return { type: 'nudge' };
   return { type: 'stall', reason: 'noMarker' };
+}
+
+// A Claude Code background shell: the tool result that started it, and the
+// <task-notification> that reports it ended (status completed / failed /
+// killed). In raw JSONL the notification's newlines are escaped, so the gap
+// between task id and status is matched loosely, but bounded.
+const BG_START_RE = /Command running in background with ID: ([A-Za-z0-9_-]{1,64})/g;
+const BG_END_RE = /<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>[\s\S]{0,2000}?<status>([a-z_]{1,24})<\/status>/g;
+const MAX_OPEN_BACKGROUND = 20;
+
+/** One JSONL line's `type`, or '' for a line that is not a JSON object. */
+function lineType(line) {
+  try {
+    const obj = JSON.parse(line);
+    return obj && typeof obj === 'object' && typeof obj.type === 'string' ? obj.type : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The background processes a worker started and that have not reported back
+ * yet, after one more transcript fragment. Only non-assistant lines count
+ * (tool results, notifications): a worker merely quoting the phrase in its
+ * own message starts nothing.
+ * @param {string} fragment raw JSONL appended since the last read
+ * @param {string[]} [open] ids still open before this fragment
+ * @returns {string[]} ids still open after it
+ */
+function openBackgroundTasks(fragment, open = []) {
+  const ids = new Set(Array.isArray(open) ? open.filter((id) => typeof id === 'string') : []);
+  const rows = String(fragment || '')
+    .split(/\r?\n/)
+    .filter((l) => {
+      const type = l.trim() ? lineType(l) : '';
+      return type !== '' && type !== 'assistant';
+    });
+  for (const row of rows) {
+    for (const m of row.matchAll(BG_START_RE)) ids.add(m[1]);
+    for (const m of row.matchAll(BG_END_RE)) if (m[2] !== 'running') ids.delete(m[1]);
+  }
+  return [...ids].slice(-MAX_OPEN_BACKGROUND);
 }
 
 /**
@@ -558,6 +602,47 @@ function allowSuggestions(log) {
 const str = (v, max = 4000) => (typeof v === 'string' ? v.slice(0, max) : '');
 const strOrNull = (v, max = 4000) => (typeof v === 'string' && v ? v.slice(0, max) : null);
 const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
+
+// ---- stall history -----------------------------------------------------------
+// Every stall used to overwrite the last error; the history keeps each one so
+// the report can tell the story. Entry: {at, kind, reason, detail}. `kind` is
+// 'stall' today; a later automatic-recovery step writes its own kind into the
+// same list, so unknown kinds are kept, not dropped.
+
+const MAX_STALL_HISTORY = 20;
+const MAX_HISTORY_DETAIL = 160;
+const HISTORY_KIND_RE = /^[a-z][a-zA-Z0-9]{0,31}$/;
+
+/** One history entry, shape-checked; null when it has no reason. */
+function normalizeHistoryEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const reason = str(raw.reason, 64).replace(/[\x00-\x1f\x7f]/g, ' ').trim();
+  if (!reason) return null;
+  const detail = strOrNull(raw.detail, MAX_HISTORY_DETAIL);
+  return {
+    at: Number.isFinite(raw.at) ? raw.at : null,
+    kind: typeof raw.kind === 'string' && HISTORY_KIND_RE.test(raw.kind) ? raw.kind : 'stall',
+    reason,
+    detail: detail ? detail.replace(/[\x00-\x1f\x7f]+/g, ' ').trim() || null : null,
+  };
+}
+
+/** A stored history: oldest first, capped to the newest MAX_STALL_HISTORY. Old plans have none -> []. */
+function normalizeStallHistory(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizeHistoryEntry).filter(Boolean).slice(-MAX_STALL_HISTORY);
+}
+
+/**
+ * The history with one more entry at the end (a new array; the cap drops the oldest).
+ * @param {unknown} history
+ * @param {{at:number, kind?:string, reason:string, detail?:string|null}} entry
+ */
+function withHistoryEntry(history, entry) {
+  const next = normalizeHistoryEntry({ kind: 'stall', ...entry });
+  const list = normalizeStallHistory(history);
+  return next ? [...list, next].slice(-MAX_STALL_HISTORY) : list;
+}
 const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 200) : []);
 
 // Restored values that later reach git argv, a shell cwd or a new tab must
@@ -639,6 +724,7 @@ function normalizePackage(raw) {
     finishedAt: Number.isFinite(raw.finishedAt) ? raw.finishedAt : null,
     pausedMs: num(raw.pausedMs),
     stalls: num(raw.stalls),
+    stallHistory: normalizeStallHistory(raw.stallHistory),
     escalated: raw.escalated === true,
     modelOverride: raw.modelOverride === 'opus' ? 'opus' : null,
     effortOverride: normalizeEffort(raw.effortOverride),
@@ -749,6 +835,8 @@ function normalizeSelfCheck(raw) {
     fixups: Number.isFinite(raw.fixups) ? Math.max(0, Math.min(1, Math.round(raw.fixups))) : 0,
     tail: str(raw.tail, MAX_SELFCHECK_TAIL),
     pushedIntegrationBranch: typeof branch === 'string' && INTEGRATION_BRANCH_RE.test(branch) ? branch : null,
+    // The smoke timed out once and was run again (orchestraSelfCheck.js).
+    ...(raw.smokeRetried === true ? { smokeRetried: true } : {}),
   };
 }
 
@@ -856,11 +944,20 @@ function serializePlan(plan) {
  * After a LunaCore restart no worker tab exists any more: whatever was running
  * becomes stalled, worktree and branch kept so Retry can pick it up.
  */
-function restoreAfterRestart(plan) {
+function restoreAfterRestart(plan, nowMs = null) {
+  const at = Number.isFinite(nowMs) ? nowMs : null;
   return {
     ...plan,
     packages: plan.packages.map((p) =>
-      isActive(p) ? { ...p, state: 'stalled', error: 'restarted', sessionId: null } : { ...p, sessionId: null },
+      isActive(p)
+        ? {
+            ...p,
+            state: 'stalled',
+            error: 'restarted',
+            sessionId: null,
+            stallHistory: withHistoryEntry(p.stallHistory, { at, reason: 'restarted' }),
+          }
+        : { ...p, sessionId: null },
     ),
   };
 }
@@ -908,6 +1005,10 @@ module.exports = {
   isActive,
   markerFrom,
   turnEndAction,
+  openBackgroundTasks,
+  withHistoryEntry,
+  normalizeStallHistory,
+  MAX_STALL_HISTORY,
   verifyFailAction,
   nudgeText,
   verifyFailText,

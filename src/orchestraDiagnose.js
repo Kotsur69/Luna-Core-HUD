@@ -6,7 +6,8 @@
 // turns every code God Mode can leave behind into those three plain sentences,
 // plus the evidence the run kept (git / test / worker output). Pure: the
 // report (orchestraReport.js) and the to-do stall note read it; nothing here
-// runs anything.
+// runs anything. The one disk fact a diagnosis needs (does <repo>/.git
+// exist?) is looked up by gitDirExists() with an injectable fs, by callers.
 //
 // Evidence can quote model or test output: callers pass it through the
 // report's own oneLine()/code() caps before it reaches markdown or HTML.
@@ -14,11 +15,14 @@
 
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { findTurnEndMessage, textBlocks } = require('./ttsExtract');
 
 const MAX_LAST_WORDS = 500;
 const MAX_TAIL_LINES = 12;
 const MAX_TAIL_CHARS = 1500;
+const MAX_QUOTE_CHARS = 200;
 
 /**
  * Package stop reasons (pkg.error, or pkg.state when there is no error).
@@ -115,10 +119,12 @@ const PACKAGE = {
     why: 'The package id made an invalid git branch or folder name.',
     fix: 'Plan again - the planner picks a new id.',
   },
+  // diagnosePackage() answers notRepo per package (notRepoDiagnosis): this
+  // entry is the fallback when nothing about the folder is known.
   notRepo: {
-    what: 'The project folder is not a git repository.',
-    why: 'God Mode works in git worktrees and needs a repo.',
-    fix: 'Run `git init` and make a first commit in the project, then plan again.',
+    what: 'Git could not confirm that the project folder is a git repository.',
+    why: 'Git\'s own answer is quoted below.',
+    fix: 'Run `git status` in the project folder to see what git says now, fix what it reports, then Retry. Do not run `git init` on an existing repo.',
   },
   noCommits: {
     what: 'The repo has no commits yet, so no worktree can branch from it.',
@@ -273,12 +279,73 @@ const UNKNOWN = {
 
 /**
  * What happened / why / fix for a package that did not get pushed.
- * @param {{state:string, error?:string|null}} pkg
+ * @param {{state:string, error?:string|null, detail?:string|null}} pkg
+ * @param {{gitDirExists?:boolean|null}} [facts] what the caller checked on disk
  * @returns {{what:string, why:string, fix:string}}
  */
-function diagnosePackage(pkg) {
+function diagnosePackage(pkg, facts = {}) {
   const key = (pkg && pkg.error) || (pkg && pkg.state);
+  if (key === 'notRepo') return notRepoDiagnosis(pkg, facts);
   return PACKAGE[key] || UNKNOWN;
+}
+
+/**
+ * Whether <repoPath>/.git exists (a folder, or the file a worktree has).
+ * @param {unknown} repoPath
+ * @param {{existsSync:(p:string)=>boolean}} [fsImpl]
+ * @returns {boolean|null} null when it cannot be told (no path, fs threw)
+ */
+function gitDirExists(repoPath, fsImpl = fs) {
+  if (typeof repoPath !== 'string' || !repoPath) return null;
+  try {
+    return fsImpl.existsSync(path.join(repoPath, '.git')) === true;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A detail quoted inside a sentence: one line, no control characters, capped.
+ * The report prints the sentence as markdown, so the characters that could
+ * make a link, HTML or a table cell out of git's text are swapped too.
+ */
+const quoteOf = (v) =>
+  String(v == null ? '' : v)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, ' ')
+    .replace(/["`]/g, "'")
+    .replace(/\[/g, '(')
+    .replace(/\]/g, ')')
+    .replace(/[<>]/g, "'")
+    .replace(/\|/g, '/')
+    .trim()
+    .slice(0, MAX_QUOTE_CHARS);
+
+/**
+ * notRepo, honestly: git did not confirm the repo - which a real run showed
+ * can happen to a perfectly fine repo. `git init` is advised only when the
+ * caller checked that <repo>/.git really does not exist
+ * (facts.gitDirExists === false); a present or unknown .git never gets it.
+ * @param {{detail?:string|null}} pkg
+ * @param {{gitDirExists?:boolean|null}} facts
+ * @returns {{what:string, why:string, fix:string}}
+ */
+function notRepoDiagnosis(pkg, facts) {
+  const detail = quoteOf(pkg && pkg.detail);
+  const said = detail ? `Git said: "${detail}".` : 'Git gave no message.';
+  if (facts && facts.gitDirExists === false) {
+    return {
+      what: 'Git could not confirm that the project folder is a git repository, and the folder has no .git.',
+      why: `${said} God Mode works in git worktrees and needs a repo.`,
+      fix: 'Run `git init` and make a first commit in the project, then plan again.',
+    };
+  }
+  const has = facts && facts.gitDirExists === true ? ' The folder does have a .git, so the repo itself is most likely fine.' : '';
+  return {
+    what: PACKAGE.notRepo.what,
+    why: `${said}${has}`,
+    fix: PACKAGE.notRepo.fix,
+  };
 }
 
 /** Same, for the integration's error code ('<stage>Failed' or a plain code). */
@@ -327,6 +394,7 @@ module.exports = {
   diagnosePackage,
   diagnoseIntegration,
   diagnoseSkip,
+  gitDirExists,
   lastWordsFrom,
   outputTail,
   MAX_LAST_WORDS,

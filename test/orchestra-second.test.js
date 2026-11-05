@@ -14,7 +14,7 @@ const sup = require('../src/orchestraSupervisor.js');
 const { createOrchestra } = require('../src/orchestra.js');
 const { withTaskBrief } = require('../src/launch.js');
 const integ = require('../src/orchestraIntegrate.js');
-const { buildReport, appendStallNotes, stallNote } = require('../src/orchestraReport.js');
+const { buildReport, syncStallNotes: appendStallNotes, stallNote } = require('../src/orchestraReport.js');
 const { removeWorktree } = require('../src/worktrees.js');
 
 const turn = (text) =>

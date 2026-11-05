@@ -9,7 +9,10 @@
 //   syntax  - `node --check` on every added/modified .js/.cjs/.mjs file since
 //             the base commit (node_modules skipped).
 //   smoke   - an Electron app whose main file knows `--luna-probe` is started
-//             with that flag (widget probe, then quit), time-boxed.
+//             with that flag (widget probe, then quit), time-boxed. A smoke
+//             that ONLY timed out (no error line) runs once more after
+//             about a minute - a busy PC can make a fine app slow to boot;
+//             one that printed a real error is never re-run.
 //   manual  - detection only, never executes anything: new Supabase
 //             migrations, changed edge functions, new env var names, and
 //             commit lines saying something is "not applied" / "apply live".
@@ -32,6 +35,8 @@ const { runVerify } = require('./orchestraFinish');
 
 const TAIL_LINES = 40;
 const SMOKE_TIMEOUT_MS = 180 * 1000;
+// Wait before the one re-run of a smoke that only timed out.
+const SMOKE_RETRY_DELAY_MS = 60 * 1000;
 const SYNTAX_TIMEOUT_MS = 30 * 1000;
 const GIT_TIMEOUT_MS = 60 * 1000;
 const GIT_MAX_BUFFER = 16 * 1024 * 1024;
@@ -155,8 +160,9 @@ function electronBinary(root, fsImpl) {
 
 /**
  * Starts the app with --luna-probe when root is an Electron app whose main
- * entry handles that flag; otherwise skipped.
- * @returns {Promise<{state:'ok'|'failed'|'skipped', output:string}>}
+ * entry handles that flag; otherwise skipped. `timedOut` is true only when
+ * the time box killed it AND it printed no error line.
+ * @returns {Promise<{state:'ok'|'failed'|'skipped', output:string, timedOut?:true}>}
  */
 async function runSmoke(root, io = {}) {
   const fsImpl = io.fs || fsDefault;
@@ -184,7 +190,30 @@ async function runSmoke(root, io = {}) {
   const bad = String(output).split(/\r?\n/).some((l) => SMOKE_ERROR_RE.test(l));
   if (res.ok && !bad) return { state: 'ok', output: '' };
   const why = res.killed ? '\n[LunaCore: smoke timed out]' : res.ok ? '' : `\n[LunaCore: exit ${res.code}]`;
-  return { state: 'failed', output: `${output}${why}` };
+  return { state: 'failed', output: `${output}${why}`, ...(res.killed && !bad ? { timedOut: true } : {}) };
+}
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * runSmoke, and once more after io.smokeRetryDelayMs (default about a
+ * minute) when it failed ONLY by timing out. The second result stands; a
+ * smoke that printed an error line never gets a second run.
+ * @param {string} root
+ * @param {{execImpl?:Function, fs?:object, sleep?:(ms:number)=>Promise<void>, smokeRetryDelayMs?:number}} [io]
+ * @returns {Promise<{state:'ok'|'failed'|'skipped', output:string, retried?:true}>}
+ */
+async function runSmokeWithRetry(root, io = {}) {
+  const first = await runSmoke(root, io);
+  if (first.state !== 'failed' || first.timedOut !== true) return first;
+  const delay = Number.isFinite(io.smokeRetryDelayMs) && io.smokeRetryDelayMs >= 0 ? io.smokeRetryDelayMs : SMOKE_RETRY_DELAY_MS;
+  try {
+    await (io.sleep || defaultSleep)(delay);
+  } catch {
+    /* a broken sleep only shortens the wait */
+  }
+  const second = await runSmoke(root, io);
+  return { ...second, retried: true };
 }
 
 // ---- manual actions ---------------------------------------------------------
@@ -286,8 +315,8 @@ function dedupe(actions) {
 
 /**
  * @param {{root:string, baseSha:string|null, checkCommand:string}} args
- * @param {{execImpl?:Function, verifyImpl?:Function, fs?:object}} [io]
- * @returns {Promise<{tests:string, syntax:string, smoke:string,
+ * @param {{execImpl?:Function, verifyImpl?:Function, fs?:object, sleep?:Function, smokeRetryDelayMs?:number}} [io]
+ * @returns {Promise<{tests:string, syntax:string, smoke:string, smokeRetried?:true,
  *   manualActions:Array<{kind:string, what:string, from?:string}>, tail:string}>}
  */
 async function runSelfCheck({ root, baseSha, checkCommand }, io = {}) {
@@ -308,7 +337,7 @@ async function runSelfCheck({ root, baseSha, checkCommand }, io = {}) {
   const base = typeof baseSha === 'string' && SHA_RE.test(baseSha) ? baseSha : null;
   const changed = base ? await changedFiles(root, base, 'AM', execImpl) : null;
   const syntax = changed ? await runSyntax(root, changed, execImpl) : { state: 'skipped', output: '' };
-  const smoke = await runSmoke(root, { execImpl, fs: fsImpl });
+  const smoke = await runSmokeWithRetry(root, { execImpl, fs: fsImpl, sleep: io.sleep, smokeRetryDelayMs: io.smokeRetryDelayMs });
   let manualActions = [];
   try {
     manualActions = base ? await detectManualActions(root, base, changed, execImpl) : [];
@@ -320,6 +349,8 @@ async function runSelfCheck({ root, baseSha, checkCommand }, io = {}) {
     tests: tests.state,
     syntax: syntax.state,
     smoke: smoke.state,
+    // Present only when the smoke was run a second time (a report note).
+    ...(smoke.retried ? { smokeRetried: true } : {}),
     manualActions,
     tail: firstRed ? tailOf(firstRed.output) : '',
   };
@@ -377,6 +408,7 @@ const summary = (r, fixups, pushedIntegrationBranch) => ({
   fixups,
   tail: String(r.tail || ''),
   pushedIntegrationBranch,
+  ...(r.smokeRetried === true ? { smokeRetried: true } : {}),
 });
 
 /**
@@ -423,6 +455,7 @@ async function selfCheckGate({ root, baseSha, checkCommand, slug }, deps) {
 module.exports = {
   runSelfCheck,
   runSmoke,
+  runSmokeWithRetry,
   detectManualActions,
   selfCheckGate,
   fixupBrief,
@@ -430,6 +463,7 @@ module.exports = {
   isGreen,
   tailOf,
   SMOKE_TIMEOUT_MS,
+  SMOKE_RETRY_DELAY_MS,
   TAIL_LINES,
   MAX_ACTIONS,
 };
