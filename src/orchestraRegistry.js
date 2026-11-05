@@ -203,6 +203,8 @@ function createOrchestraRegistry(deps) {
         const view = c.view();
         return !!view && !view.settled && !view.killed;
       }),
+    // A run that is live anywhere (the battery warning).
+    anyLive: () => [...runs.values()].some(isLive),
     othersActive,
     repoBusy,
     tick: () => each((c) => c.tick(), 'tick'),

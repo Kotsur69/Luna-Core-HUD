@@ -37,7 +37,7 @@ const { validatePlan, estimatePlan, pickTodos, MAX_PARALLEL, MAX_PROMPT_CHARS, P
 const { lastWordsFrom, outputTail } = require('./orchestraDiagnose');
 const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
-const { createFinalizer } = require('./orchestraFinalize');
+const { createFinalizer, ABORT_FINISH_AFTER_MS } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
 const pushSecrets = require('./pushSecrets');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
@@ -379,6 +379,10 @@ function createOrchestra(deps) {
     onAbort: () => fixup.abort(),
   });
   const isBusy = () => busy || pumping || finalizer.isRunning();
+  // The process-wide battery guard (orchestraPower.js createBatteryGuard):
+  // low on battery, no new worker or verify starts until the PC is plugged in.
+  const battery = deps.battery || null;
+  const batteryHeld = () => !!(battery && battery.isHeld());
   // PC sleeps are not worker time (orchestraSleep.js). deps.tickMs = the
   // watchdog interval; it turns on the missed-'suspend' gap check.
   const sleepWatch = createSleepWatch({ now, tickMs: deps.tickMs });
@@ -421,6 +425,14 @@ function createOrchestra(deps) {
   const ownershipNudged = new Set();
   const background = (promise, where) =>
     promise.catch((err) => onRunEvent('error', { where, message: err instanceof Error ? err.message : String(err) }));
+  // A battery change repaints the board; plugged in, what waited launches.
+  if (battery) {
+    battery.subscribe(() => {
+      if (!plan) return;
+      onChange(view());
+      if (!batteryHeld()) kick();
+    });
+  }
 
   /**
    * Brings back the run saved by the previous LunaCore. Not in the
@@ -492,8 +504,17 @@ function createOrchestra(deps) {
       sleeps: Array.isArray(plan.sleeps) ? plan.sleeps.map((s) => ({ ...s })) : [],
       freeMode: plan.freeMode === true,
       options: sup.normalizeOptions(plan.options),
-      integration: { ...plan.integration, running: finalizer.isRunning() },
+      integration: {
+        ...plan.integration,
+        running: finalizer.isRunning(),
+        // From then on the board offers "Abort finish".
+        abortAfter:
+          finalizer.isRunning() && Number.isFinite((plan.integration || {}).startedAt)
+            ? plan.integration.startedAt + ABORT_FINISH_AFTER_MS
+            : null,
+      },
       power: powerFlow.view(),
+      battery: battery ? battery.view() : null,
       overlaps: sup.liveOverlaps(plan.packages),
       suggestions: sup.allowSuggestions(plan.approvalLog).filter((s) => !(plan.allowedTools || []).includes(s.rule)),
       tally: sup.tally(plan.packages),
@@ -881,8 +902,8 @@ function createOrchestra(deps) {
     if (resumeGate.waitMs() > 0) await settleAfterResume();
     const stamp = now().toString(36).slice(-5);
     for (const pkg of chosen) {
-      // Kill / pause while an earlier launch was awaiting git: stop here.
-      if (plan.killed || plan.pausedUntil) break;
+      // Kill / pause / low battery while an earlier launch was awaiting git: stop here.
+      if (plan.killed || plan.pausedUntil || batteryHeld()) break;
       cancelAutoRetry(pkg.id);
       const before = findPkg(pkg.id) || pkg;
       const { retryable, ...result } = await launchOne(before, stamp);
@@ -1017,11 +1038,13 @@ function createOrchestra(deps) {
 
   /** Launches whatever is ready, while slots are free. Re-entrancy safe. */
   async function pump() {
-    if (!plan || !plan.started || plan.killed || plan.pausedUntil || pumping) return;
+    // On battery while the run goes: one warning per battery period.
+    if (battery && plan && plan.started && !plan.killed && !plan.settled) battery.onRunStart();
+    if (!plan || !plan.started || plan.killed || plan.pausedUntil || pumping || batteryHeld()) return;
     pumping = true;
     try {
       let ready = sup.readyToLaunch(plan.packages, MAX_PARALLEL);
-      while (ready.length && !plan.killed && !plan.pausedUntil) {
+      while (ready.length && !plan.killed && !plan.pausedUntil && !batteryHeld()) {
         await launchPackages(ready);
         ready = sup.readyToLaunch(plan.packages, MAX_PARALLEL);
       }
@@ -1050,6 +1073,9 @@ function createOrchestra(deps) {
     if (plan.errors.length) return { ok: false, error: 'planErrors' };
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan.pausedUntil) return { ok: false, error: 'paused' };
+    // Approve still starts a held run (it launches once plugged in); a
+    // launch by hand would start a worker now.
+    if (Array.isArray(o.ids) && batteryHeld()) return { ok: false, error: 'batteryLow' };
     const mode = sup.INTEGRATION_MODES.includes(o.integration) ? o.integration : null;
     let startAt = null;
     if (o.schedule != null && !Array.isArray(o.ids) && !plan.started) {
@@ -1273,8 +1299,10 @@ function createOrchestra(deps) {
     return {
       // Only when something is ahead: an empty queue starts at once.
       onQueued: (info) => {
-        if (info && info.ahead > 0) set('queued');
+        if ((info && info.ahead > 0) || batteryHeld()) set('queued');
       },
+      // Low on battery a new verify waits for the charger (verifyQueue.js).
+      whenAllowed: () => (battery ? battery.whenAllowed() : Promise.resolve()),
       onStart: () => set('running'),
       // A killed or discarded run's verify is skipped once its turn comes.
       isCancelled: () => !plan || plan.id !== planId || plan.killed === true,
@@ -1645,6 +1673,24 @@ function createOrchestra(deps) {
   }
 
   /**
+   * "Abort finish": ends this run's integrate step when it has run past
+   * ABORT_FINISH_AFTER_MS. Its process tree is killed, the pass settles as
+   * failed ('abortedByUser') and reports; then the board is free and Retry
+   * works again. Never trusts the payload beyond the plan id.
+   * @param {unknown} payload {planId}
+   */
+  function abortFinalize(payload) {
+    const o = payload && typeof payload === 'object' ? payload : {};
+    if (!plan || o.planId !== plan.id) return { ok: false, error: 'noPlan' };
+    if (!finalizer.isRunning()) return { ok: false, error: 'notFinishing' };
+    const startedAt = plan.integration && plan.integration.startedAt;
+    if (!Number.isFinite(startedAt) || now() - startedAt < ABORT_FINISH_AFTER_MS) return { ok: false, error: 'tooEarly' };
+    if (!finalizer.abort('abortedByUser')) return { ok: false, error: 'notAbortable' };
+    onRunEvent('finalizeAborted');
+    return { ok: true };
+  }
+
+  /**
    * Called every minute or so: workers over their working time stall. A
    * sleep the tick gap reveals is credited first, so a wake never reads as
    * hours of work.
@@ -1722,9 +1768,12 @@ function createOrchestra(deps) {
     if (!pkg || !(sup.RETRYABLE_STATES.has(pkg.state) || pkg.state === 'failed')) return { ok: false, error: 'notRetryable' };
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan.pausedUntil) return { ok: false, error: 'paused' };
+    // Nudging a live tab is no new worker; anything else would launch one.
+    const liveTab = !!(pkg.sessionId && sessionAlive(pkg.sessionId));
+    if (!liveTab && batteryHeld()) return { ok: false, error: 'batteryLow' };
 
     freezeSettings();
-    if (pkg.sessionId && sessionAlive(pkg.sessionId)) {
+    if (liveTab) {
       patch(pkg.id, { ...freshRun(), state: 'launched' });
       // A tab stalled on a permission prompt: Mati answers it there. Pasting
       // a nudge + Enter now would land IN the prompt and answer it blindly.
@@ -1813,8 +1862,7 @@ function createOrchestra(deps) {
     setOptions,
     onSystemSuspend,
     onSystemResume,
-    // "Abort finish": ends a hung integrate step now (orchestraFinalize.js).
-    abortFinalize: () => finalizer.abort('aborted'),
+    abortFinalize,
     cancelSleep: () => powerFlow.cancelSleep(),
     cancelShutdown: () => powerFlow.cancelShutdown(),
     checkWake: () => powerFlow.checkWake(),

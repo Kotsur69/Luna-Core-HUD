@@ -157,6 +157,23 @@ test('Self-check and Timeline sections', () => {
   assert.match(section(md, 'Allow-rule suggestions'), /`Bash\(npm publish:\*\)` - 1 worker/);
 });
 
+test('the Timeline lists how often the PC slept and for how long in total', () => {
+  // A 25 h run that slept 9 times on battery: 8 x 40 min + 1 x 1 h 20 min.
+  const sleeps = [
+    ...Array.from({ length: 8 }, (_, i) => ({ start: T0 + (i + 1) * 120 * MIN, durationMs: 40 * MIN })),
+    { start: T0 + 20 * 60 * MIN, durationMs: 80 * MIN },
+  ];
+  const md = buildReport(cleanView({ sleeps }), EXTRA);
+  assert.match(section(md, 'Timeline'), /^- PC slept: 9 times, 6 h 40 min in total$/m);
+  const one = buildReport(cleanView({ sleeps: [{ start: T0, durationMs: 25 * MIN }] }), EXTRA);
+  assert.match(section(one, 'Timeline'), /PC slept: 1 time, 25 min in total/);
+  assert.match(section(buildReport(cleanView(), EXTRA), 'Timeline'), /PC slept: never/);
+  // Junk entries (zero length, no start) are not counted.
+  const junk = buildReport(cleanView({ sleeps: [{ start: T0, durationMs: 0 }, { durationMs: 5 * MIN }, null] }), EXTRA);
+  assert.match(section(junk, 'Timeline'), /PC slept: never/);
+  assert.match(renderRunReportHtml(cleanView({ sleeps }), { now: T0 + 25 * 60 * MIN }), /PC slept 9 times, 6 h 40 min in total/);
+});
+
 test('the nightly digest still reads the new report layout', () => {
   const run = nd.parseRunReport(buildReport(messyView(), EXTRA));
   assert.equal(run.id, 'pabc');

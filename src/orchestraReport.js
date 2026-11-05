@@ -13,7 +13,8 @@
 //   ## Merged / pushed         per package: branch, sha, PR / merged, notes
 //   ## Self-check              tests / syntax / smoke / fix-ups
 //   ## Allow-rule suggestions  approval prompts that stalled workers
-//   ## Timeline                started, finished, time paused on limits
+//   ## Timeline                started, finished, time paused on limits,
+//                              how often the PC slept and for how long
 // The header keeps the Repo / Result / Integration lines nightlydigest.js
 // parses. Details, tails and manual actions can quote model or test output:
 // control characters out, one line each, capped.
@@ -24,6 +25,7 @@
 const path = require('path');
 const h = require('./reportHtml');
 const { diagnosePackage, diagnoseIntegration, diagnoseSkip } = require('./orchestraDiagnose');
+const { sleepSummary } = require('./orchestraSleep');
 
 const NOTE_TAG = '[LunaCore run';
 // A whole note line: the tag with a run id, as stallNote() writes it.
@@ -410,7 +412,15 @@ function timelineSection(view, now) {
   const lines = ['', '## Timeline', '', `- Started: ${fmt(started)}`, `- Finished: ${fmt(now)}`];
   if (started && Number.isFinite(now) && now >= started) lines.push(`- Took: ${duration(now - started)}`);
   lines.push(`- Paused on usage limits: ${duration(view.pausedTotalMs)}`);
+  lines.push(`- PC slept: ${sleepText(view.sleeps)}`);
   return lines;
+}
+
+/** "9 times, 3 h 12 min in total" / "never". */
+function sleepText(sleeps) {
+  const { count, totalMs } = sleepSummary(sleeps);
+  if (!count) return 'never';
+  return `${count} ${count === 1 ? 'time' : 'times'}, ${duration(totalMs)} in total`;
 }
 
 /**
@@ -617,7 +627,9 @@ function renderRunReportHtml(view, extra = {}) {
     title: `God Mode run ${oneLine(v.id, 40)}`,
     subtitle: `${repo || 'repo'}${base} · workers ${oneLine(v.workerModel, 32) || '-'} · integration ${integLine}`,
     body,
-    footer: `Started ${fmt(v.runStartedAt)} UTC · finished ${fmt(now)} UTC · paused on limits ${duration(v.pausedTotalMs)}`,
+    footer: `Started ${fmt(v.runStartedAt)} UTC · finished ${fmt(now)} UTC · paused on limits ${duration(
+      v.pausedTotalMs,
+    )} · PC slept ${sleepText(v.sleeps)}`,
   });
 }
 

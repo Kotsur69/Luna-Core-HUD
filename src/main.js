@@ -246,7 +246,7 @@ const {
 const { createOrchestra, BRIEF_DIR } = require('./orchestra');
 const orchestraStore = require('./orchestraStore');
 const { createOrchestraRegistry } = require('./orchestraRegistry');
-const { makeOrchestraDeps, legacyRunProject, approvalRuleFor, godModeFacade } = require('./orchestraWiring');
+const { makeOrchestraDeps, legacyRunProject, approvalRuleFor, godModeFacade, makeBatteryGuard } = require('./orchestraWiring');
 const { registerOrchestraIpc } = require('./orchestraIpc');
 const { createStatusBoard } = require('./sessionstatus');
 
@@ -1007,9 +1007,24 @@ const lunasworkSecretGate = createSecretGate({
   log: (line) => console.info(line),
 });
 
+// God Mode on battery: one guard for every run (src/orchestraPower.js).
+// powerMonitor is only read once the app is ready (start() below).
+const orchestraBattery = makeBatteryGuard({
+  anyRunActive: () => orchestraRuns.anyLive(),
+  lang: () => readUiPrefs().lang,
+  toast: (title, body) => {
+    if (Notification.isSupported()) new Notification({ title, body }).show();
+  },
+  isOnBattery: () => powerMonitor.isOnBatteryPower(),
+  onBatteryEvent: (fn) => powerMonitor.on('on-battery', fn),
+  onAcEvent: (fn) => powerMonitor.on('on-ac', fn),
+  log: (line) => console.info('[orchestra]', line),
+});
+
 // God Mode v2: one controller per project (src/orchestraRegistry.js). Their
 // deps are built in src/orchestraWiring.js; main only hands its handles over.
 const orchestraCtx = {
+  battery: orchestraBattery,
   registry: () => orchestraRuns,
   builder: lunasworkBuilder,
   secretGate: lunasworkSecretGate,
@@ -3541,6 +3556,7 @@ app.whenReady().then(() => {
   // Back from sleep: re-arm or resume a paused run, drop the wake task.
   powerMonitor.on('resume', () => orchestraRuns.onSystemResume());
   powerMonitor.on('suspend', () => orchestraRuns.onSystemSuspend());
+  orchestraBattery.start();
   setInterval(() => statusBoard.tick(), STATUS_TICK_MS).unref();
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();
