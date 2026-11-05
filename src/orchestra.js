@@ -53,6 +53,7 @@ const {
 const { launchRetryDecision, createResumeGate } = require('./orchestraLaunchRetry');
 const { createPowerFlow } = require('./orchestraPower');
 const { createPowerCtl } = require('./powerctl');
+const { createSleepWatch, sleepCredit, recordSleep } = require('./orchestraSleep');
 
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
@@ -381,8 +382,18 @@ function createOrchestra(deps) {
     onReport: deps.onReport,
     sleep: deps.sleep,
     onIdle: () => afterFinalize(),
+    // The integrate watchdog (default: orchestraFinalize integrateTimeoutFor)
+    // and the per-pass process scope whose children it kills (src/procTree.js).
+    integrateTimeoutMs: deps.integrateTimeoutMs,
+    createScope: deps.createProcessScope || null,
+    drainMs: deps.integrateDrainMs,
+    // An aborted pass's fix-up tab goes too: it edits the integration worktree.
+    onAbort: () => fixup.abort(),
   });
   const isBusy = () => busy || pumping || finalizer.isRunning();
+  // PC sleeps are not worker time (orchestraSleep.js). deps.tickMs = the
+  // watchdog interval; it turns on the missed-'suspend' gap check.
+  const sleepWatch = createSleepWatch({ now, tickMs: deps.tickMs });
 
   // Sleep at the usage limit / shut down when done (orchestraPower.js).
   const approvalsPending = () =>
@@ -493,6 +504,8 @@ function createOrchestra(deps) {
       // The morning report's Timeline (orchestraReport.js).
       runStartedAt: plan.runStartedAt || null,
       pausedTotalMs: plan.pausedTotalMs || 0,
+      // Each PC sleep during the run: [{start, durationMs}] (orchestraSleep.js).
+      sleeps: Array.isArray(plan.sleeps) ? plan.sleeps.map((s) => ({ ...s })) : [],
       freeMode: plan.freeMode === true,
       options: sup.normalizeOptions(plan.options),
       integration: { ...plan.integration, running: finalizer.isRunning() },
@@ -707,6 +720,7 @@ function createOrchestra(deps) {
         hold: null,
         runStartedAt: null,
         pausedTotalMs: 0,
+        sleeps: [],
         todoText: new Map(openTodos.map((t) => [t.at, t.text])),
         // LW 2.12: only a plan made with an ownership map carries the key.
         ...(ownership ? { ownership } : {}),
@@ -1458,9 +1472,42 @@ function createOrchestra(deps) {
     lastActivity.delete(sessionId);
   }
 
+  /**
+   * The PC slept (orchestraSleep.js): the active packages get the slept
+   * time back on pausedMs, the run logs it. Never credits the part an open
+   * usage-limit pause covers - resume() credits that pause whole.
+   * @param {null|{start:number, durationMs:number, source:string}} sleep
+   */
+  function applySleep(sleep) {
+    if (!sleep || !plan) return;
+    const t = now();
+    const pauseStartedAt = plan.pausedUntil ? plan.pauseStartedAt : null;
+    for (const p of plan.packages.filter(sup.isActive)) {
+      const credit = sleepCredit(sleep, p, { now: t, pauseStartedAt });
+      if (credit > 0) patch(p.id, { pausedMs: (p.pausedMs || 0) + credit });
+    }
+    // Only a sleep during the run is the run's (a later report counts them).
+    if (plan.runStartedAt && (plan.packages.some(sup.isActive) || finalizer.isRunning())) {
+      plan.sleeps = recordSleep(plan.sleeps, sleep);
+    }
+    onRunEvent('slept', { start: sleep.start, durationMs: sleep.durationMs, source: sleep.source });
+    commit();
+  }
+
+  /** A sleep the watchdog gap reveals, credited before anything reads the clock. */
+  const catchUpSleep = () => applySleep(sleepWatch.onTick());
+
+  /** electron powerMonitor 'suspend'. */
+  function onSystemSuspend() {
+    sleepWatch.onSuspend();
+  }
+
   function resume() {
     resumeTimer = null;
     if (!plan || !plan.pausedUntil) return;
+    // A resume timer that fired on the wake, before 'resume' / the tick: the
+    // sleep is credited first, while the pause is still open.
+    catchUpSleep();
     const pausedFor = now() - (plan.pauseStartedAt || now());
     plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, pausedFor);
     plan.pausedUntil = null;
@@ -1479,9 +1526,14 @@ function createOrchestra(deps) {
 
   /**
    * electron powerMonitor 'resume': timers may not have counted the sleep.
+   * The slept time is credited to the workers first. An integrate step in
+   * flight is treated as interrupted (its children may be gone, its promise
+   * may never settle): aborted, and finalize runs once more.
    * Past the reset -> resume now; before it -> re-arm the resume timer.
    */
   function onSystemResume() {
+    applySleep(sleepWatch.onResume());
+    if (finalizer.interrupt()) onRunEvent('finalizeInterrupted');
     resumeGate.onResume();
     background(powerFlow.onSystemResume(), 'sleep');
     if (!plan || !plan.pausedUntil) return;
@@ -1591,8 +1643,13 @@ function createOrchestra(deps) {
     return { ok: true, plan: view() };
   }
 
-  /** Called every minute or so: workers over their working time stall. */
+  /**
+   * Called every minute or so: workers over their working time stall. A
+   * sleep the tick gap reveals is credited first, so a wake never reads as
+   * hours of work.
+   */
   function tick() {
+    catchUpSleep();
     if (!plan || plan.pausedUntil || plan.killed) return;
     for (const p of plan.packages) {
       if (p.state === 'launched' && !p.awaitingDeps && sup.timedOut(p, now())) stall(p.id, 'timeout');
@@ -1870,7 +1927,10 @@ function createOrchestra(deps) {
     unschedule,
     finishRun,
     setOptions,
+    onSystemSuspend,
     onSystemResume,
+    // "Abort finish": ends a hung integrate step now (orchestraFinalize.js).
+    abortFinalize: () => finalizer.abort('aborted'),
     cancelSleep: () => powerFlow.cancelSleep(),
     cancelShutdown: () => powerFlow.cancelShutdown(),
     checkWake: () => powerFlow.checkWake(),

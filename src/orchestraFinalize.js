@@ -41,6 +41,26 @@ const RETRY_STAGES = new Set(['fetch', 'worktree', 'install', 'reset', 'push']);
 const RETRY_DELAY_MS = 5000;
 // emailError when Gmail is not connected in LunaCore (the board shows a hint).
 const EMAIL_NOT_CONNECTED = 'gmail-not-connected';
+// Integrate-step watchdog, longer than the longest legitimate integrate:
+// the base covers the install (15 min verify cap), the self-check (tests
+// 15 min + smoke 3 min), one fix-up worker (45 min cap) and the re-check;
+// each package adds its verify (15 min) plus both resolver tries (15 + 30).
+const INTEGRATE_BASE_MS = 2 * 60 * 60 * 1000;
+const INTEGRATE_PER_PACKAGE_MS = 60 * 60 * 1000;
+// How long an aborted integrate pass may take to unwind before finalize
+// moves on (the integration worktree it removes is the re-run's path).
+const ABANDONED_DRAIN_MS = 30 * 1000;
+const noop = () => {};
+
+/**
+ * The default integrate watchdog for a plan: base + per package.
+ * @param {{packages?:object[]}} plan
+ * @returns {number} ms
+ */
+function integrateTimeoutFor(plan) {
+  const n = plan && Array.isArray(plan.packages) ? plan.packages.length : 0;
+  return INTEGRATE_BASE_MS + Math.max(1, n) * INTEGRATE_PER_PACKAGE_MS;
+}
 
 /** The integration worktree / branch name part for a run: `luna/<slug>-integration`. */
 const slugOf = (plan) => plan.id.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 24) || 'run';
@@ -57,13 +77,32 @@ const slugOf = (plan) => plan.id.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice
  *   runFixup?: (args:{root:string, brief:string}) => Promise<{ok:boolean}>,
  *   pushBranch?: (root:string, branch:string) => Promise<{ok:boolean}>,
  *   checkCommand?: () => string, onIdle?: () => void, gitDirExists?: (repoPath:string) => boolean|null,
- * }} deps
+ *   integrateTimeoutMs?: number|((plan:object) => number),
+ *   createScope?: () => {execFile:Function, exec:Function, killAll:() => Promise<{killed:number, failed:number}>},
+ *   setTimer?: Function, clearTimer?: Function, onAbort?: () => void, drainMs?: number,
+ * }} deps integrateTimeoutMs: the integrate watchdog (default
+ *   integrateTimeoutFor). createScope: a src/procTree.js process scope per
+ *   pass; what integrate spawns through it is killed on a timeout / abort.
+ *   onAbort: stops side work the scope cannot see (the fix-up tab).
+ *   drainMs: how long an aborted pass may unwind (ABANDONED_DRAIN_MS).
  */
 function createFinalizer(deps) {
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  // Real timers by default, unref'd: the watchdog never keeps the process up.
+  const setTimer =
+    deps.setTimer ||
+    ((fn, ms) => {
+      const t = setTimeout(fn, ms);
+      if (t && typeof t.unref === 'function') t.unref();
+      return t;
+    });
+  const clearTimer = deps.clearTimer || clearTimeout;
   let running = false;
   // A settle that came in while finalizing (a package pushed by hand meanwhile).
   let again = false;
+  // The integrate step in flight: stop() settles it early (watchdog / abort).
+  /** @type {null|{stop:(res:object) => void}} */
+  let inFlight = null;
 
   // Whether <repo>/.git exists: a notRepo diagnosis advises `git init` only when it does not.
   const repoFacts = (plan) => ({ gitDirExists: (deps.gitDirExists || gitDirExists)(plan.repoPath) });
@@ -103,25 +142,33 @@ function createFinalizer(deps) {
   // Self-check results travel back with the integration result.
   const checked = (gate) => (gate ? { selfCheck: gate.selfCheck, manualActions: gate.manualActions } : {});
 
-  async function mergeAll(plan, todo) {
+  // What a pass spawns goes through its process scope, when it has one.
+  const scoped = (scope) => ({
+    extra: scope ? { scope } : {},
+    runSelfCheck: deps.runSelfCheck && scope ? (a) => deps.runSelfCheck({ ...a, scope }) : deps.runSelfCheck,
+  });
+
+  async function mergeAll(plan, todo, scope) {
     if (!deps.integrateMerge) return { ok: false, error: 'unavailable' };
     if (!todo.length) return { ok: true };
     const slug = slugOf(plan);
+    const sc = scoped(scope);
     let gate = null;
     // The self-check gate runs on the integration worktree right before the
     // base push (orchestraIntegrate.js deps.beforePush): one fix-up worker,
     // and a red result never reaches the base branch.
     const extra = deps.runSelfCheck
       ? {
+          ...sc.extra,
           beforePush: async (root, info) => {
             gate = await selfCheckGate(
               { root, baseSha: (info && info.baseSha) || null, checkCommand: checkCommand(), slug },
-              { runSelfCheck: deps.runSelfCheck, runFixup: deps.runFixup, pushBranch: deps.pushBranch },
+              { runSelfCheck: sc.runSelfCheck, runFixup: deps.runFixup, pushBranch: deps.pushBranch },
             );
             return gate.ok ? { ok: true } : { ok: false, reason: gate.reason };
           },
         }
-      : {};
+      : sc.extra;
     const args = { base: plan.baseBranch, slug, packages: packagesFor(todo) };
     let res = await deps.integrateMerge(args, extra);
     // A leftover worktree with local changes is refused every time - no
@@ -154,19 +201,21 @@ function createFinalizer(deps) {
    * worker; only the results are kept. Free runs are left out: the merge
    * resolver is a paid Claude call.
    */
-  async function checkOnly(plan) {
+  async function checkOnly(plan, scope) {
     if (!deps.integrateMerge || !deps.runSelfCheck || !plan.baseBranch || plan.freeMode) return {};
     const todo = ordered(plan, (p) => p.state === 'pushed' && p.branch);
     if (!todo.length) return {};
+    const sc = scoped(scope);
     let gate = null;
     try {
       await deps.integrateMerge(
         { base: plan.baseBranch, slug: `${slugOf(plan).slice(0, 18)}-check`, packages: packagesFor(todo), checkOnly: true },
         {
+          ...sc.extra,
           beforePush: async (root, info) => {
             gate = await selfCheckGate(
               { root, baseSha: (info && info.baseSha) || null, checkCommand: checkCommand(), slug: slugOf(plan) },
-              { runSelfCheck: deps.runSelfCheck },
+              { runSelfCheck: sc.runSelfCheck },
             );
             return { ok: false, reason: 'checkOnly' };
           },
@@ -178,9 +227,9 @@ function createFinalizer(deps) {
     return checked(gate);
   }
 
-  async function integrate(plan) {
+  async function integrate(plan, scope) {
     const mode = plan.integrationMode || 'branches';
-    if (mode === 'branches') return { ok: true, ...(await checkOnly(plan)) };
+    if (mode === 'branches') return { ok: true, ...(await checkOnly(plan, scope)) };
     if (!plan.baseBranch) return { ok: false, error: 'noBaseBranch' };
     // The checkout must still be on the branch the plan was made on - the
     // stored name is never trusted alone to pick what gets PRs or a push.
@@ -189,9 +238,100 @@ function createFinalizer(deps) {
     }
     if (mode === 'pr') {
       const prs = await openPrs(plan, ordered(plan, (p) => p.state === 'pushed' && !p.prUrl && p.branch));
-      return { ...prs, ...(await checkOnly(plan)) };
+      return { ...prs, ...(await checkOnly(plan, scope)) };
     }
-    return mergeAll(plan, ordered(plan, (p) => p.state === 'pushed' && !p.merged && p.branch));
+    return mergeAll(plan, ordered(plan, (p) => p.state === 'pushed' && !p.merged && p.branch), scope);
+  }
+
+  const timeoutFor = (plan) => {
+    const t = typeof deps.integrateTimeoutMs === 'function' ? deps.integrateTimeoutMs(plan) : deps.integrateTimeoutMs;
+    return Number.isFinite(t) && t > 0 ? t : integrateTimeoutFor(plan);
+  };
+
+  function newScope() {
+    if (!deps.createScope) return null;
+    try {
+      return deps.createScope() || null;
+    } catch (err) {
+      deps.onRunEvent('error', { where: 'finalizeScope', message: err instanceof Error ? err.message : String(err) });
+      return null;
+    }
+  }
+
+  /** Kills what an abandoned pass still runs; closes its scope. Never throws. */
+  async function killScope(scope, error) {
+    let killed = { killed: 0, failed: 0 };
+    if (scope) {
+      try {
+        killed = (await scope.killAll()) || killed;
+      } catch (err) {
+        deps.onRunEvent('error', { where: 'finalizeKill', message: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    deps.onRunEvent('integrationAborted', { error, killed: killed.killed, failed: killed.failed });
+  }
+
+  /**
+   * Gives the abandoned pass a bounded moment to unwind: with its children
+   * killed and its scope closed its git calls fail at once, and it removes
+   * or leaves its integration worktree BEFORE a re-run builds on the same
+   * path. A pass that truly hangs is waited for no longer than drainMs.
+   */
+  function drain(work) {
+    const ms = Number.isFinite(deps.drainMs) && deps.drainMs >= 0 ? deps.drainMs : ABANDONED_DRAIN_MS;
+    let timer = null;
+    const cap = new Promise((resolve) => {
+      timer = setTimer(resolve, ms);
+    });
+    return Promise.race([work.then(noop, noop), cap]).finally(() => clearTimer(timer));
+  }
+
+  /** Stops what integrate started outside its process scope (the fix-up tab). */
+  function stopSideWork() {
+    if (!deps.onAbort) return;
+    try {
+      deps.onAbort();
+    } catch (err) {
+      deps.onRunEvent('error', { where: 'finalizeAbort', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /**
+   * integrate() under the watchdog. Settles with the integrate result, or
+   * early: {ok:false, error:'integrateTimeout'} when the watchdog fires, the
+   * abort's error on abort() / interrupt(). An early settle kills the pass's
+   * process tree, closes its scope (the abandoned integrate can start
+   * nothing new), stops the fix-up tab and lets the pass unwind briefly;
+   * its late result is dropped.
+   */
+  async function guardedIntegrate(plan) {
+    const scope = newScope();
+    let stop = null;
+    const early = new Promise((resolve) => {
+      stop = resolve;
+    });
+    const ms = timeoutFor(plan);
+    const timer = setTimer(
+      () => stop({ ok: false, error: 'integrateTimeout', detail: `no result after ${Math.round(ms / 1000)} s`, early: true }),
+      ms,
+    );
+    inFlight = { stop: (res) => stop({ ...res, early: true }) };
+    const work = Promise.resolve()
+      .then(() => integrate(plan, scope))
+      .catch((err) => ({ ok: false, error: 'integrateThrew', detail: err instanceof Error ? err.message.slice(0, 300) : null }));
+    let res;
+    try {
+      res = await Promise.race([work, early]);
+    } finally {
+      clearTimer(timer);
+      inFlight = null;
+    }
+    if (!res.early) return res;
+    await killScope(scope, res.error);
+    stopSideWork();
+    await drain(work);
+    const { early: _early, ...rest } = res;
+    return rest;
   }
 
   async function cleanup(plan) {
@@ -312,13 +452,17 @@ function createFinalizer(deps) {
   async function finalizeOnce(plan) {
     setIntegration(plan, { state: 'running', error: null, detail: null });
     deps.commit();
-    let res;
-    try {
-      res = await integrate(plan);
-    } catch (err) {
-      res = { ok: false, error: 'integrateThrew', detail: err instanceof Error ? err.message.slice(0, 300) : null };
-    }
+    const res = await guardedIntegrate(plan);
     if (deps.getPlan() !== plan) return false; // discarded meanwhile
+    if (res.rerun) {
+      // Interrupted (the PC slept): recorded, then finalize runs once more.
+      // The next pass cleans up and writes the report, so this one stops.
+      setIntegration(plan, { state: 'failed', error: res.error, detail: null, at: deps.now(), partial: false });
+      deps.commit();
+      again = true;
+      deps.onRunEvent('finalized', { ok: false, interrupted: true });
+      return true;
+    }
     const skipped = Array.isArray(res.skipped) ? res.skipped : [];
     // Kept from the last check when this pass ran none (nothing new to merge).
     if (res.selfCheck) setIntegration(plan, { selfCheck: res.selfCheck, manualActions: res.manualActions || [] });
@@ -341,7 +485,38 @@ function createFinalizer(deps) {
     return true;
   }
 
-  return { finalize, isRunning: () => running };
+  /**
+   * Ends the integrate step in flight now: its process tree is killed and
+   * the pass settles as failed with `error`, then cleans up and reports as
+   * usual. False when no integrate step is running. For "Abort finish".
+   * @param {string} [error]
+   * @returns {boolean}
+   */
+  function abort(error = 'aborted') {
+    if (!running || !inFlight) return false;
+    inFlight.stop({ ok: false, error: typeof error === 'string' && error ? error.slice(0, 64) : 'aborted' });
+    return true;
+  }
+
+  /**
+   * The PC slept during the integrate step (powerMonitor 'resume'): the
+   * pass is aborted as 'interrupted' and finalize runs once more.
+   * @returns {boolean}
+   */
+  function interrupt() {
+    if (!running || !inFlight) return false;
+    inFlight.stop({ ok: false, error: 'interrupted', rerun: true });
+    return true;
+  }
+
+  return { finalize, abort, interrupt, isRunning: () => running };
 }
 
-module.exports = { createFinalizer, TAB_CLOSE_SETTLE_MS };
+module.exports = {
+  createFinalizer,
+  integrateTimeoutFor,
+  TAB_CLOSE_SETTLE_MS,
+  INTEGRATE_BASE_MS,
+  INTEGRATE_PER_PACKAGE_MS,
+  ABANDONED_DRAIN_MS,
+};
