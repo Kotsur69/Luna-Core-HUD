@@ -91,6 +91,7 @@ const {
 // harness. The active account's token rides in every plain Claude launch.
 const { createClaudeAccounts, failoverEligible, ACCOUNT_ENV } = require('./claudeaccounts');
 const { registerClaudeAccountsIpc } = require('./claudeaccountsipc');
+const { createTabFailover } = require('./claudefailover');
 // Project switcher: session working directories (cwd) from config/projects.json.
 const { loadProjects, getProject, addProject, removeProject, resolveProjectDir, resolveStoredPath } = require('./projects');
 const {
@@ -328,16 +329,18 @@ const claudeAccounts = createClaudeAccounts({
   onChange: () => send('claudeAccounts:changed'),
 });
 setAccountLayer((env) => claudeAccounts.authLayer(env));
-/** One tab moves accounts at most this often (a loop guard). */
-const TAB_FAILOVER_MIN_GAP_MS = 60 * 1000;
-
-/** The terminal line shown when a tab continues on another account. */
-function accountSwitchNotice(from, to, lang) {
-  const text = lang === 'pl'
-    ? `[LunaCore] Limit na koncie ${from}. Kontynuuje na koncie ${to}.`
-    : `[LunaCore] Usage limit on ${from}. Continuing on ${to}.`;
-  return `\x1b[2;33m${text}\x1b[0m\r\n`;
-}
+// A tab on a usage limit moves to the next free account (src/claudefailover.js).
+// Every dep is read lazily: profiles, sessions and restartSession are set up
+// further down, before any tab can hit a limit.
+const { failoverTab } = createTabFailover({
+  accounts: claudeAccounts,
+  getProfile: (profileId) => getProfile(profiles, profileId),
+  withAccountResume,
+  restartSession: (session) => restartSession(session),
+  send: (channel, payload) => send(channel, payload),
+  isCurrent: (session) => sessions.get(session.id) === session,
+  lang: () => readUiPrefs().lang,
+});
 
 // ---- Global state ----------------------------------------------------------
 
@@ -1784,45 +1787,6 @@ function jumpToProject(digit) {
 
   createSession({ projectId: project.id }); // sets activeSessionId + broadcasts
   playCue('sfx.terminalNew');
-}
-
-/**
- * Account failover for one tab (src/claudeaccounts.js). Marks the tab's
- * account as cooling down and, when another account is free, restarts the
- * tab on it with `--resume` of the same conversation plus "continue".
- * A tab started before accounts were set up (accountId null, plain Claude)
- * moves to the free account straight away. False: nothing switched, the
- * caller waits the limit out as before.
- * @param {Session} session
- * @param {number|null} resetsAt
- * @returns {boolean}
- */
-function failoverTab(session, resetsAt) {
-  if (session.readOnly || session.ownBackend || !session.transcriptId) return false;
-  const now = Date.now();
-  // The same account failing twice in a row this fast means the switch did not
-  // help (e.g. a resume that cannot start) - stop and wait instead of looping.
-  const sameAccount = session.lastFailoverFrom === (session.accountId || null);
-  if (sameAccount && session.lastFailoverAt && now - session.lastFailoverAt < TAB_FAILOVER_MIN_GAP_MS) return false;
-  const profile = getProfile(profiles, session.profileId);
-  const base = profile ? [profile.command, ...(profile.args || [])].join(' ').trim() : '';
-  if (!withAccountResume(base, session.transcriptId, session.launchTask || null)) return false;
-  const res = session.accountId
-    ? claudeAccounts.markLimited(session.accountId, resetsAt)
-    : { from: { label: 'default login' }, switchTo: claudeAccounts.freeAccount() };
-  if (!res.switchTo) return false;
-  session.lastFailoverAt = now;
-  session.lastFailoverFrom = session.accountId || null;
-  session.resumeId = session.transcriptId;
-  const notice = accountSwitchNotice(res.from.label, res.switchTo.label, readUiPrefs().lang);
-  // Deferred: this runs inside the transcript watcher's read, which the
-  // restart stops.
-  setImmediate(() => {
-    if (sessions.get(session.id) !== session) return;
-    restartSession(session);
-    send('pty:data', { sessionId: session.id, data: notice });
-  });
-  return true;
 }
 
 /**
