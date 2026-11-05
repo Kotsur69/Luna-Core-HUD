@@ -42,6 +42,7 @@ const killBtn = q('#orchestra-kill');
 const FAIL_CODES = new Set([
   'noTodos', 'busy', 'runActive', 'noClaude', 'noRepo', 'timeout', 'budget', 'limit', 'badJson', 'failed',
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
+  'noNodeModules', 'notHeld', 'installFailed',
   'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile', 'badOptions', 'noneSelected',
   'lunasWorkActive',
 ]);
@@ -230,6 +231,7 @@ function suggestionRow(s) {
 
 /** One line under the title: what the supervisor is doing with this package. */
 function progressText(pkg) {
+  if (pkg.awaitingDeps) return t('orch.progress.awaitingDeps');
   if (pkg.state === 'pushed' && pkg.merged) return t('orch.progress.merged');
   if (pkg.state === 'pushed' && pkg.headSha) return t('orch.progress.pushed', { sha: pkg.headSha.slice(0, 7) });
   if (pkg.state === 'launched' && (pkg.nudges || pkg.verifyRounds)) {
@@ -302,6 +304,8 @@ function pkgCard(pkg) {
   } else if (pkg.error) {
     const text = pkg.detail ? `${pkgErrorText(pkg.error)}: ${pkg.detail}` : pkgErrorText(pkg.error);
     card.append(msg(text, 'is-bad'));
+    // A failed dependency install: the end of npm's output says why.
+    if (pkg.error === 'installFailed' && pkg.verifyTail) card.append(el('pre', 'orchestra__tail', pkg.verifyTail));
   }
 
   const progress = progressText(pkg);
@@ -419,6 +423,7 @@ function renderPlan() {
   }
   for (const s of plan.suggestions || []) body.append(suggestionRow(s));
   if (plan.pausedUntil) body.append(msg(t('orch.paused', { time: clock(plan.pausedUntil) }), 'is-warn'));
+  if (plan.hold && plan.hold.reason === 'noNodeModules') body.append(holdRow());
   if (plan.killed) body.append(msg(t('orch.killed'), 'is-bad'));
   if (plan.settled) {
     const pushed = (plan.tally && plan.tally.pushed) || 0;
@@ -472,6 +477,18 @@ function scheduledRow() {
   btn.type = 'button';
   btn.disabled = phase !== 'idle';
   btn.addEventListener('click', () => act(() => window.lunacore.unscheduleOrchestra(plan.id)));
+  row.append(btn);
+  return row;
+}
+
+/** The run is held for an empty node_modules: the message and Resume (main checks again). */
+function holdRow() {
+  const row = el('div', 'orchestra__options');
+  row.append(el('span', 'orchestra__msg is-bad', t('orch.noNodeModules', { repo: plan.hold.dir || '?' })));
+  const btn = el('button', 'pad-send', t('orch.resume'));
+  btn.type = 'button';
+  btn.disabled = phase !== 'idle';
+  btn.addEventListener('click', () => act(() => window.lunacore.resumeOrchestra(plan.id)));
   row.append(btn);
   return row;
 }

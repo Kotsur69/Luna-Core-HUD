@@ -592,6 +592,9 @@ contextBridge.exposeInMainWorld('lunacore', {
       'orchestra:retry',
       withProject({ planId: typeof planId === 'string' ? planId : null, id: typeof id === 'string' ? id : null }, projectId),
     ),
+  /** Resume a run held for an empty node_modules ('noNodeModules'); main re-checks. Only the plan id crosses. */
+  resumeOrchestra: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:resume', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
   /** Slice 4 kill switch for one run: no new workers, Esc to the running ones. */
   killOrchestra: (projectId) => ipcRenderer.invoke('orchestra:kill', orchestraScope(projectId)),
   /** Cancels a scheduled start (idea #2). Only the plan id crosses. */

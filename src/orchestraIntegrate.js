@@ -194,21 +194,26 @@ async function originHost(repoPath, execImpl) {
  * root, then every DIRECT subfolder with its own package-lock.json and no
  * node_modules (e.g. mobile/, which verify commands like
  * `npm test && cd mobile && npm run build` need too).
+ * @param {string} root
+ * @param {Function} [verifyImpl]
+ * @param {{npmCommand?:string}} [opts] npmCommand: what installs a lockfile
+ *   (God Mode package worktrees pass `npm ci --ignore-scripts`)
  * @returns {Promise<{ok:boolean, output:string}>} a failure's last output
  *   line names the folder
  */
-async function ensureInstall(root, verifyImpl = runVerify) {
+async function ensureInstall(root, verifyImpl = runVerify, opts = {}) {
+  const npmCommand = opts && typeof opts.npmCommand === 'string' && opts.npmCommand ? opts.npmCommand : 'npm ci';
   const has = (f) => fs.existsSync(path.join(root, f));
   let cmd = null;
-  if (has('package-lock.json') && !has('node_modules')) cmd = 'npm ci';
+  if (has('package-lock.json') && !has('node_modules')) cmd = npmCommand;
   else if (has('uv.lock') && !has('.venv')) cmd = 'uv sync';
   if (cmd) {
     const res = await verifyImpl(cmd, root);
     if (!res.ok) return res;
   }
   for (const name of npmSubfolders(root)) {
-    const res = await verifyImpl('npm ci', path.join(root, name));
-    if (!res.ok) return { ok: false, output: `${String(res.output || '')}\nnpm ci failed in ${name}/` };
+    const res = await verifyImpl(npmCommand, path.join(root, name));
+    if (!res.ok) return { ok: false, output: `${String(res.output || '')}\n${npmCommand} failed in ${name}/` };
   }
   return { ok: true, output: '' };
 }

@@ -4958,6 +4958,7 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__msg { font-size: var(--fs-sm); color: var(--text-dim); margin: 0; }
 .orchestra__msg.is-warn { color: var(--warn); }
 .orchestra__msg.is-bad { color: var(--bad); }
+.orchestra__tail { font-size: var(--fs-xs); color: var(--text-dim); margin: 4px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
 
 .orchestra__pkg {
   display: flex;

@@ -239,6 +239,13 @@ function registerOrchestraIpc(ipcMain, ctx) {
     if (!run.ok) return run;
     return ctx.godModeBlock(run.projectId) || run.controller.retry(payload);
   });
+  // Resume after a 'noNodeModules' hold: {planId}. Main checks node_modules
+  // again itself; the renderer can only ask.
+  ipcMain.handle('orchestra:resume', (_event, payload) => {
+    const run = runForPayload(payload);
+    if (!run.ok) return run;
+    return ctx.godModeBlock(run.projectId) || run.controller.resumeRun(payload);
+  });
   ipcMain.handle('orchestra:kill', (_event, opts) => {
     const run = resolveRun(projectIdOf(opts));
     return run.ok ? run.controller.kill() : false;
