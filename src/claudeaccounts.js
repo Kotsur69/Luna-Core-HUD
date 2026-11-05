@@ -370,41 +370,10 @@ function createClaudeAccounts(deps) {
     return a && !(limits[a.id] > t) ? { id: a.id, label: a.label } : null;
   }
 
-  /**
-   * Sets a cooldown to the usage meter's REAL reset (Phase 2). Unlike
-   * markLimited it replaces the stored time, so the hour guessed when the CLI
-   * gave no reset gets corrected. An unknown account or a time that is not
-   * in the future is refused.
-   * @returns {{ok:true}|{ok:false,error:string}}
-   */
-  function setLimit(id, until) {
-    refresh();
-    const t = now();
-    if (!state.accounts.some((a) => a.id === id)) return { ok: false, error: 'notFound' };
-    if (!Number.isFinite(until) || until <= t) return { ok: false, error: 'badTime' };
-    if (state.limits[id] === until) return { ok: true };
-    const limits = pruneLimits({ ...state.limits, [id]: until }, state.accounts, t);
-    // Kept in memory even if the write fails, like markLimited.
-    if (!persist({ accounts: state.accounts, limits })) state = { accounts: state.accounts, limits };
-    return { ok: true };
-  }
-
-  /**
-   * MAIN PROCESS ONLY - the usage meter's reads (src/usageaccounts.js). The
-   * one call that hands tokens out besides authLayer; never wire it to IPC.
-   * @returns {Array<{id:string, label:string, token:string}>} preference order
-   */
-  function usageCredentials() {
-    refresh();
-    return state.accounts.map((a) => ({ id: a.id, label: a.label, token: a.token }));
-  }
-
   /** The env keys for one launch (see authLayerFor). */
   const authLayer = (env) => authLayerFor(env, active());
 
-  return {
-    list, add, remove, moveUp, clearLimit, setLimit, active, freeAccount, markLimited, failoverActive, authLayer, usageCredentials,
-  };
+  return { list, add, remove, moveUp, clearLimit, active, freeAccount, markLimited, failoverActive, authLayer };
 }
 
 module.exports = {

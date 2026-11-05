@@ -855,8 +855,6 @@ function forceRefresh() {
 
 /** Minimum gap between two reads of the non-Claude providers. */
 const OTHERS_EVERY_MS = 5 * 60 * 1000;
-/** The longest a usage read waits for the per-account pass. */
-const ACCOUNTS_WAIT_MS = 12 * 1000;
 
 /**
  * Periodically fetches usage and emits when it changes.
@@ -883,12 +881,6 @@ class UsageWatcher {
     this.others = [];
     this.othersAt = 0;
     this.othersEveryMs = OTHERS_EVERY_MS;
-    // Per-account Claude usage (src/usageaccounts.js), set by main when the
-    // meter is on: {tick, refresh, applyTo}. Null -> the payload as before.
-    this.accountUsage = null;
-    // The longest the primary emit waits for that pass; a slower pass
-    // finishes in the background and shows on the next emit.
-    this.accountsWaitMs = ACCOUNTS_WAIT_MS;
   }
 
   start() {
@@ -944,51 +936,26 @@ class UsageWatcher {
     return fetchUsage(profile);
   }
 
-  /**
-   * The per-account pass (it paces each account itself). Never throws, and
-   * never holds the primary read up for more than accountsWaitMs: a hung or
-   * slow pass must not freeze the meter (busy would stay set forever).
-   */
-  async readAccounts(forced = false) {
-    if (!this.accountUsage) return;
-    const hook = this.accountUsage;
-    // A failing pass leaves the rows on their last reading; the next tick retries.
-    const pass = Promise.resolve()
-      .then(() => (forced ? hook.refresh() : hook.tick()))
-      .catch(() => undefined);
-    let timer = null;
-    const cap = new Promise((resolve) => {
-      timer = setTimeout(resolve, this.accountsWaitMs);
-    });
-    try {
-      await Promise.race([pass, cap]);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  async tick(forced = false) {
+  async tick() {
     if (this.busy) return;
     this.busy = true;
 
-    let primary;
+    let usage;
     try {
       const profile = this.getActiveProfile();
-      let others;
-      [primary, others] = await Promise.all([this.fetchPrimary(profile), this.readOthers(), this.readAccounts(forced)]);
-      const usage = this.accountUsage ? this.accountUsage.applyTo({ ...primary, others }) : { ...primary, others };
+      const [primary, others] = await Promise.all([this.fetchPrimary(profile), this.readOthers()]);
+      usage = { ...primary, others };
       this.rateLimitedStreak = primary && primary.rateLimited ? this.rateLimitedStreak + 1 : 0;
       const cmp = JSON.stringify({
         ...usage,
         updatedAt: 0,
         others: others.map((o) => ({ ...o, updatedAt: 0 })),
-        ...(usage.accounts ? { accounts: { ...usage.accounts, updatedAt: 0 } } : {}),
       });
       // A good read is always emitted, even with unchanged numbers: the
       // renderer's "updated Xs ago" label comes from updatedAt, so swallowing
       // it made the label grow for minutes until the percentages moved (or
       // the refresh button forced an emit). Unchanged errors stay deduped.
-      const isOk = usage.status === 'ok';
+      const isOk = primary && primary.status === 'ok';
       if (isOk || cmp !== this.lastJson) {
         this.lastJson = cmp;
         this.onUpdate(usage);
@@ -996,8 +963,7 @@ class UsageWatcher {
     } finally {
       this.busy = false;
       if (this.running) {
-        // The cadence follows the primary read's own health (its 429 backoff).
-        const delay = nextPollDelay(primary, this.intervalMs, this.heartbeatMs, this.rateLimitedStreak);
+        const delay = nextPollDelay(usage, this.intervalMs, this.heartbeatMs, this.rateLimitedStreak);
         this.timer = setTimeout(() => this.tick(), delay);
       }
     }
@@ -1011,7 +977,7 @@ class UsageWatcher {
       clearTimeout(this.timer); // avoid duplicating the already-scheduled next tick
       this.timer = null;
     }
-    return this.tick(true);
+    return this.tick();
   }
 }
 

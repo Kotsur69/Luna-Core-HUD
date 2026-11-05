@@ -28,13 +28,6 @@
 // ONE PROVIDER AT A TIME: the tile shows only the limits of the profile the
 // active terminal tab runs - Claude's rows on a Claude tab, that provider's
 // block on a Codex / GLM / ... tab, never both. See selectVisibleUsage().
-//
-// SEVERAL CLAUDE ACCOUNTS (docs/CLAUDE_ACCOUNTS_PLAN.md Phase 2): with
-// accounts set up in Settings the watcher's payload carries `accounts` -
-// groups per window (5-hour, Weekly), one row per account, the active one
-// first and dotted. Claude's rows then render from it; `accounts: null` (no
-// accounts, no reading yet) keeps the meter exactly as before. A payload
-// without the field (the refresh button's direct read) keeps the last view.
 // ============================================================================
 
 'use strict';
@@ -58,37 +51,6 @@ let lastError = null; // status value of most recent error/unconfigured payload
 let lastOthers = [];
 // Profile id of the active terminal tab (bus replay), null with no tab.
 let activeProfileId = null;
-// The per-account view (Phase 2), null when there is none - see accountViewOf().
-let lastAccounts = null;
-
-const isRecord = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
-
-/**
- * The per-account view to keep after a payload: the payload's own when it
- * carries the field (null = no accounts -> the meter as before), the
- * previous one when it does not. A malformed view counts as none.
- * @param {object|null} usage
- * @param {object|null} previous
- */
-export function accountViewOf(usage, previous) {
-  if (!isRecord(usage) || !Object.prototype.hasOwnProperty.call(usage, 'accounts')) return previous;
-  const view = usage.accounts;
-  if (!isRecord(view) || !Array.isArray(view.groups)) return null;
-  const groups = view.groups.filter((g) => isRecord(g) && typeof g.window === 'string' && Array.isArray(g.rows));
-  return groups.length ? { ...view, groups } : null;
-}
-
-/**
- * What a screen reader hears for one account row's bar:
- * "34%, resets in 2h 10m" / "100%, limit reached, resets in 1h 5m".
- */
-export function accountMeterText(row, when, translate = t) {
-  if (typeof row.pct !== 'number') return translate('usage.accounts.noData');
-  const parts = [`${row.pct}%`];
-  if (row.limited) parts.push(translate('usage.accounts.limited'));
-  if (when) parts.push(translate('usage.resetIn', { when }));
-  return parts.join(', ');
-}
 
 /**
  * Which provider's limits the tile shows for the active tab. `others` only
@@ -111,7 +73,6 @@ export function selectVisibleUsage(others, profileId) {
 /** Applies a fresh payload to module state. Pure state update, no render. */
 function applyUsage(usage) {
   if (usage && Array.isArray(usage.others)) lastOthers = usage.others;
-  lastAccounts = accountViewOf(usage, lastAccounts);
   if (usage && usage.status === 'ok') {
     lastGoodUsage = usage;
     lastError = null;
@@ -214,79 +175,6 @@ function usageProviderBlock(entry) {
   return block;
 }
 
-/** A usage bar filled to `pct` (0..100); colour: >=90 bad, >=70 warn, else good. */
-function usageBar(pct) {
-  const bar = document.createElement('div');
-  bar.className = 'usage-bar';
-  const fill = document.createElement('div');
-  fill.className = 'usage-bar__fill';
-  fill.style.setProperty('--usage', String(pct / 100));
-  fill.dataset.level = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : 'good';
-  bar.appendChild(fill);
-  return bar;
-}
-
-function span(className, text) {
-  const el = document.createElement('span');
-  el.className = className;
-  el.textContent = text;
-  return el;
-}
-
-/**
- * One account in a window group: dot (active), name, bar, %, reset. The
- * reset sits in a fixed, dim right column and turns full colour (plus
- * "limit reached" for screen readers) when this account is the limited one.
- */
-function accountUsageRow(row) {
-  const el = document.createElement('div');
-  el.className = 'usage-acct';
-  el.classList.toggle('is-active', row.active === true);
-  el.classList.toggle('is-limited', row.limited === true);
-  const hasPct = typeof row.pct === 'number';
-  el.classList.toggle('is-empty', !hasPct);
-  const when = fmtResetWhen(typeof row.resetsAt === 'string' ? row.resetsAt : null);
-
-  const dot = span('usage-acct__dot', '');
-  dot.setAttribute('aria-hidden', 'true');
-  const label = String(row.label || '');
-  const name = span('usage-acct__name', label);
-  name.title = row.active ? `${label} - ${t('usage.accounts.active')}` : label;
-
-  const bar = usageBar(hasPct ? row.pct : 0);
-  bar.classList.add('usage-acct__bar');
-  bar.setAttribute('role', 'meter');
-  bar.setAttribute('aria-valuemin', '0');
-  bar.setAttribute('aria-valuemax', '100');
-  bar.setAttribute('aria-valuenow', String(hasPct ? row.pct : 0));
-  bar.setAttribute('aria-label', row.active ? `${label} (${t('usage.accounts.active')})` : label);
-  bar.setAttribute('aria-valuetext', accountMeterText(row, when));
-
-  const pct = span('usage-acct__pct', hasPct ? `${row.pct}%` : '-');
-  const reset = span('usage-acct__reset', when || '');
-  if (row.limited) reset.title = t('usage.accounts.limited');
-  el.append(dot, name, bar, pct, reset);
-  return el;
-}
-
-/** Every window group of the per-account view. */
-function accountGroups(view) {
-  const wrap = document.createElement('div');
-  wrap.className = 'usage-accounts';
-  for (const group of view.groups) {
-    const block = document.createElement('div');
-    block.className = 'usage-acct-group';
-    const title = document.createElement('div');
-    title.className = 'usage-acct-group__title';
-    title.textContent = limitLabel({ window: group.window });
-    block.setAttribute('role', 'group');
-    block.setAttribute('aria-label', title.textContent);
-    block.append(title, ...group.rows.filter(isRecord).map(accountUsageRow));
-    wrap.appendChild(block);
-  }
-  return wrap;
-}
-
 /** Builds one usage row from a limit object in the new format. */
 function usageRowForLimit(limit) {
   const row = document.createElement('div');
@@ -302,7 +190,15 @@ function usageRowForLimit(limit) {
   pct.textContent = `${limit.percentUsed}%`;
   head.append(label, pct);
 
-  const bar = usageBar(limit.percentUsed);
+  const bar = document.createElement('div');
+  bar.className = 'usage-bar';
+  const fill = document.createElement('div');
+  fill.className = 'usage-bar__fill';
+  fill.style.setProperty('--usage', String(limit.percentUsed / 100));
+  // Colour thresholds: >=90 bad (red), >=70 warn (orange), otherwise ok.
+  fill.dataset.level =
+    limit.percentUsed >= 90 ? 'bad' : limit.percentUsed >= 70 ? 'warn' : 'good';
+  bar.appendChild(fill);
 
   const reset = document.createElement('div');
   reset.className = 'usage-row__reset hint';
@@ -330,7 +226,7 @@ function usageMessage(key) {
 function renderFreshness() {
   if (!els || !els.updated) return;
   const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
-  const source = entry || lastAccounts || lastGoodUsage;
+  const source = entry || lastGoodUsage;
   const when = source ? fmtAgo(source.updatedAt) : null;
   els.updated.textContent = when ? t('usage.updatedAgo', { when }) : '';
 }
@@ -342,7 +238,6 @@ function renderUsage() {
   usageBody.innerHTML = '';
   const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
   if (entry) usageBody.appendChild(usageProviderBlock(entry));
-  else if (lastAccounts) usageBody.appendChild(accountGroups(lastAccounts));
   else renderClaudeRows(usageBody);
   renderFreshness();
 }
@@ -442,7 +337,7 @@ defineWidget({
     // Refresh the reset labels every 30 s (the countdown is computed locally
     // from resetsAt, with no new network request).
     const countdown = setInterval(() => {
-      if (lastGoodUsage || lastAccounts || lastOthers.length > 0) renderUsage();
+      if (lastGoodUsage || lastOthers.length > 0) renderUsage();
     }, COUNTDOWN_MS);
 
     // Tick the "updated Xs ago" label every second - a plain textContent
