@@ -591,6 +591,26 @@ function storedLocation(raw) {
   return { root: path.resolve(raw.root), cwd, branch: raw.branch, baseSha };
 }
 
+const MAX_LEFTOVERS = 10;
+
+/**
+ * Worktrees of earlier failed launches that could not be removed then
+ * (orchestraCleanup.clearEarlierLaunches retries them before the next
+ * launch). Off-shape entries are dropped.
+ * @returns {Array<{root:string, branch:string|null, base:string|null}>}
+ */
+function normalizeLeftovers(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((l) => l && typeof l === 'object' && isWorktreeRoot(l.root))
+    .slice(-MAX_LEFTOVERS)
+    .map((l) => ({
+      root: path.resolve(l.root),
+      branch: isBranch(l.branch) ? l.branch : null,
+      base: typeof l.base === 'string' && SHA_RE.test(l.base) ? l.base : null,
+    }));
+}
+
 function normalizePackage(raw) {
   if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !SLUG_RE.test(raw.id)) return null;
   return {
@@ -632,6 +652,7 @@ function normalizePackage(raw) {
     blockedBy: typeof raw.blockedBy === 'string' && SLUG_RE.test(raw.blockedBy) ? raw.blockedBy : null,
     stalledAt: Number.isFinite(raw.stalledAt) ? raw.stalledAt : null,
     failure: normalizeFailure(raw.failure),
+    leftovers: normalizeLeftovers(raw.leftovers),
     // Report evidence (orchestraDiagnose.js): the worker's last message and
     // the end of a failed verify run. Model / test output - display only.
     lastWords: strOrNull(raw.lastWords, MAX_LAST_WORDS + 3),

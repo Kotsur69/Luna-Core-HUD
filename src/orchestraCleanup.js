@@ -51,6 +51,62 @@ async function cleanupFailedLaunch(git, repoPath, wt, base) {
   return out;
 }
 
+// Worktrees of earlier failed launches remembered per package (pkg.leftovers).
+const MAX_LEFTOVERS = 10;
+
+/**
+ * Pure: the worktrees of earlier failed launches a package still holds - the
+ * recorded `leftovers`, then its own `root`. Only a pending / failed package
+ * qualifies: those states come from a launch that never got a worker going.
+ * @param {{state?:string, root?:string|null, branch?:string|null, baseSha?:string|null,
+ *   leftovers?:Array<{root?:string|null, branch?:string|null, base?:string|null}>}} pkg
+ * @returns {Array<{root:string, branch:string|null, base:string|null}>}
+ */
+function earlierWorktrees(pkg) {
+  if (!pkg || (pkg.state !== 'pending' && pkg.state !== 'failed')) return [];
+  const out = [];
+  const add = (root, branch, base) => {
+    if (typeof root === 'string' && root && !out.some((w) => w.root === root)) {
+      out.push({ root, branch: branch || null, base: base || null });
+    }
+  };
+  for (const l of Array.isArray(pkg.leftovers) ? pkg.leftovers : []) if (l) add(l.root, l.branch, l.base);
+  add(pkg.root, pkg.branch, pkg.baseSha);
+  return out;
+}
+
+/**
+ * A package about to be launched again may still hold worktrees of earlier
+ * failed launches (their removal failed then, or the failure kept them); the
+ * new launch would make another one beside them. Each is removed with its
+ * branch; removeWorktree still refuses uncommitted changes and deleteBranch a
+ * branch with its own commits, so no work is lost. What could not be removed
+ * is handed back in `kept`, so it stays recorded.
+ * @param {{removeWorktree?: Function, deleteBranch?: Function}} git
+ * @param {string} repoPath
+ * @param {object} pkg see earlierWorktrees
+ * @returns {Promise<{kept:Array<{root:string, branch:string|null, base:string|null}>,
+ *   rootCleared:boolean, errors:string[]}>} rootCleared: pkg.root itself is gone
+ */
+async function clearEarlierLaunches(git, repoPath, pkg) {
+  const kept = [];
+  const errors = [];
+  let rootCleared = false;
+  for (const wt of earlierWorktrees(pkg)) {
+    const res = await cleanupFailedLaunch(git, repoPath, wt, wt.base);
+    if (res.removed) rootCleared = rootCleared || wt.root === pkg.root;
+    else kept.push(wt);
+    if (res.error) errors.push(`${wt.root}: ${res.error}`);
+  }
+  return { kept, rootCleared, errors };
+}
+
+/** The leftovers list with one more worktree, newest last, capped. */
+function withLeftover(leftovers, wt) {
+  const list = (Array.isArray(leftovers) ? leftovers : []).filter((l) => l && l.root !== wt.root);
+  return [...list, wt].slice(-MAX_LEFTOVERS);
+}
+
 /**
  * The branch's package id when it looks like one of this plan's launches.
  * @param {string} branch
@@ -101,4 +157,13 @@ async function sweepOrphanBranches({ repoPath, packages, git }) {
   }
 }
 
-module.exports = { cleanupFailedLaunch, orphanBranches, sweepOrphanBranches, launchIdOf };
+module.exports = {
+  cleanupFailedLaunch,
+  earlierWorktrees,
+  clearEarlierLaunches,
+  withLeftover,
+  orphanBranches,
+  sweepOrphanBranches,
+  launchIdOf,
+  MAX_LEFTOVERS,
+};

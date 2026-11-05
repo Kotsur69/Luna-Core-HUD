@@ -230,7 +230,17 @@ let configSync = null;
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
-const { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, worktreeBranches } = require('./worktrees');
+const {
+  addWorktree,
+  dirtyCount,
+  removeWorktree,
+  deleteBranch,
+  listOwnBranches,
+  worktreeBranches,
+  runGit,
+  headFailureReason,
+  gitDetail,
+} = require('./worktrees');
 // God Mode v2 (ORCHESTRATOR_PLAN.md slices 3-5): headless planner, plan board,
 // supervisor + per-worker finish (verify, push, tick to-dos), integrator.
 const { createOrchestra, BRIEF_DIR } = require('./orchestra');
@@ -2327,7 +2337,8 @@ function registerIpc() {
     const active = activeSessionId ? sessions.get(activeSessionId) : null;
     const project = getProject(projects, (active && active.projectId) || activeProjectId);
     const wanted = project ? project.path : activeCwd;
-    if (!wanted) return { ok: false, error: 'notRepo' };
+    // No project and no tab folder: nothing to ask git about - not "not a repo".
+    if (!wanted) return { ok: false, error: 'noFolder', detail: 'no project folder for the active tab' };
     // A project folder missing on this PC is its own error, not "not a repo".
     const base = resolveProjectDir(wanted);
     if (!base) return { ok: false, error: 'noFolder' };
@@ -2601,9 +2612,10 @@ function registerIpc() {
     if (!rel) return fail('outside');
 
     const cwd = session.cwd;
-    // No repo / no commits yet (no HEAD) / git missing -> reason, never a throw.
-    const head = await git(cwd, ['rev-parse', '--verify', 'HEAD']);
-    if (!head.ok) return fail('notRepo');
+    // No repo / no commits yet (no HEAD) / git hung or missing -> its own
+    // reason, never a throw; 'notRepo' only when git says so.
+    const head = await runGit(cwd, ['rev-parse', '--verify', 'HEAD']);
+    if (!head.ok) return { ...fail(headFailureReason(head)), detail: gitDetail(head) };
 
     const res = await git(cwd, ['diff', 'HEAD', '--', rel]);
     if (!res.ok) return fail('gitFailed');

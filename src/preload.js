@@ -214,8 +214,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Checks fs.existsSync for a list of paths; returns { [path]: boolean }. */
   checkFilesExist: (paths) => ipcRenderer.invoke('files:check-exist', paths),
   /** Accumulated `git diff HEAD -- <file>` behind a heatmap row, on an explicit
-   *  click. Read-only local git read: ({ ok, diff, truncated, reason }),
-   *  reason is 'notRepo' | 'noSession' | 'outside' | 'gitFailed' | null. */
+   *  click. Read-only local git read: ({ ok, diff, truncated, reason, detail? }),
+   *  reason is 'notRepo' | 'noCommits' | 'noSession' | 'outside' | 'gitFailed' | null. */
   getFileDiff: (sessionId, file) => ipcRenderer.invoke('files:diff', { sessionId, file }),
 
   // --- 7B: localhost port tracker ---
