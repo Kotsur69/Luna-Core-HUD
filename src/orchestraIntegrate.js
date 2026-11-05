@@ -45,6 +45,9 @@ const RESOLVER_EFFORT = 'medium';
 const RESOLVER_TOOLS = 'Read,Edit,Grep,Glob';
 const RESOLVER_DENIED = 'Bash,PowerShell,WebFetch,WebSearch,Task,Write,NotebookEdit';
 const MAX_BODY_CHARS = 60000;
+// A leftover integration worktree whose removal failed (not 'dirty') gets one
+// more try after this long: a file still held, git still busy.
+const STALE_REMOVE_RETRY_MS = 5000;
 const PR_URL_LINE = /^https:\/\/([A-Za-z0-9.-]+)\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/\d{1,9}$/;
 
 /** Runs a binary without a shell; resolves {ok, stdout, stderr, code}. */
@@ -407,13 +410,46 @@ function worktreeOfBranch(porcelain, branch) {
   return null;
 }
 
+/** Same folder, compared the way the OS does (Windows paths ignore case). */
+function samePath(a, b) {
+  const norm = (p) => path.resolve(p);
+  return process.platform === 'win32' ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
+}
+
+/**
+ * True only when `dir` is itself a working tree (its own top level - a half
+ * removed worktree without its .git must not resolve to some repo above it)
+ * and `git status` shows nothing uncommitted.
+ */
+async function isCleanOwnWorktree(dir, execImpl) {
+  const top = await runGit(dir, ['rev-parse', '--show-toplevel'], execImpl);
+  if (!top.ok || !samePath(firstLine(top.stdout), dir)) return false;
+  const status = await runGit(dir, ['status', '--porcelain'], execImpl);
+  return status.ok && !status.stdout.trim();
+}
+
+/** removeWorktree, tried once more after a short wait unless it refused local changes. */
+async function removeStale(repoPath, stale, deps) {
+  const removed = await deps.removeWorktree(repoPath, stale);
+  if (!removed || removed.ok !== false || removed.error === 'dirty') return removed;
+  const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  await sleep(STALE_REMOVE_RETRY_MS);
+  return deps.removeWorktree(repoPath, stale);
+}
+
 /**
  * Clears what an earlier pass of the same run left behind: its integration
  * worktree (kept for inspection after a failure) and its local branch.
  * Without this a second finalize (packages pushed after "proceed", a Retry)
  * cannot create `luna/<slug>-integration` again. The branch holds nothing
  * unique - every pass rebuilds it from the package branches.
- * @returns {Promise<{ok:true} | {ok:false, detail:string}>}
+ *
+ * A leftover that will not go away (git timed out deleting its node_modules,
+ * a file held open) but has no local changes is this run's own integration
+ * worktree: it is handed back as `reuse` and rebuilt in place instead of
+ * failing the integration.
+ * @returns {Promise<{ok:true, reuse?:{ok:true, root:string, cwd:string, branch:string}}
+ *   | {ok:false, detail:string}>}
  */
 async function clearStaleIntegration(repoPath, name, deps) {
   const execImpl = deps.execImpl;
@@ -424,9 +460,12 @@ async function clearStaleIntegration(repoPath, name, deps) {
   const stale = listed.ok ? worktreeOfBranch(listed.stdout, branch) : null;
   if (stale) {
     // removeWorktree refuses uncommitted changes; that leftover is reported, not forced away.
-    const removed = await deps.removeWorktree(repoPath, stale);
+    const removed = await removeStale(repoPath, stale, deps);
     if (removed && removed.ok === false) {
-      return { ok: false, detail: `leftover ${stale}: ${[removed.error, removed.detail].filter(Boolean).join(' ')}` };
+      const detail = `leftover ${stale}: ${[removed.error, removed.detail].filter(Boolean).join(' ')}`;
+      if (removed.error === 'dirty') return { ok: false, detail };
+      if (await isCleanOwnWorktree(stale, execImpl)) return { ok: true, reuse: { ok: true, root: stale, cwd: stale, branch } };
+      return { ok: false, detail };
     }
   }
   // A folder deleted by hand leaves a registration that blocks the branch delete.
@@ -435,6 +474,17 @@ async function clearStaleIntegration(repoPath, name, deps) {
   if (!exists.ok) return { ok: true };
   const del = await runGit(repoPath, ['branch', '-D', branch], execImpl);
   return del.ok ? { ok: true } : { ok: false, detail: gitError(del.stderr) };
+}
+
+/**
+ * A clean leftover integration worktree, moved to the fresh base: the same
+ * starting point `addWorktree(..., {base})` would have given.
+ * @returns {Promise<{ok:true, root:string, cwd:string, branch:string} | {ok:false, error:string, detail:string}>}
+ */
+async function resetForReuse(wt, baseSha, execImpl) {
+  const reset = await runGit(wt.root, ['reset', '--hard', baseSha], execImpl);
+  if (!reset.ok) return { ok: false, error: 'gitFailed', detail: `reuse ${wt.root}: ${gitError(reset.stderr) || 'reset failed'}` };
+  return wt;
 }
 
 /**
@@ -476,7 +526,9 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
   const name = `${slug}-integration`;
   const cleared = await clearStaleIntegration(repoPath, name, deps);
   if (!cleared.ok) return fail('worktree', cleared.detail);
-  const wt = await deps.addWorktree(repoPath, name, { base: baseSha });
+  const wt = cleared.reuse
+    ? await resetForReuse(cleared.reuse, baseSha, execImpl)
+    : await deps.addWorktree(repoPath, name, { base: baseSha });
   if (!wt.ok) return fail('worktree', wt.detail || wt.error);
   const done = async (result) => {
     // Removed only after a successful push; a failed integration is left in

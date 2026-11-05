@@ -32,7 +32,7 @@ const TAB_CLOSE_SETTLE_MS = 2500;
 const MAX_TODO_DETAILS = 4000;
 const DEFAULT_CHECK_COMMAND = 'npm test';
 // Integration stages a second try can fix on its own: the network, a
-// leftover from an earlier pass (cleared at the start of the next one), a
+// leftover from an earlier pass (cleared or reused by the next one), a
 // flaky install, a base that moved on during the push. Conflicts, red
 // verifies and a red self-check are not retried - they need a human.
 const RETRY_STAGES = new Set(['fetch', 'worktree', 'install', 'reset', 'push']);
@@ -119,9 +119,11 @@ function createFinalizer(deps) {
       : {};
     const args = { base: plan.baseBranch, slug, packages: packagesFor(todo) };
     let res = await deps.integrateMerge(args, extra);
-    // A leftover worktree with local changes is refused every time - no retry.
-    const leftover = /^leftover /.test(String(res.detail || ''));
-    if (!res.ok && RETRY_STAGES.has(res.stage) && !leftover) {
+    // A leftover worktree with local changes is refused every time - no
+    // retry. Any other leftover (its removal failed or timed out) gets one:
+    // the next pass retries the removal or reuses it when it is clean.
+    const dirtyLeftover = /^leftover .*: dirty\b/.test(String(res.detail || ''));
+    if (!res.ok && RETRY_STAGES.has(res.stage) && !dirtyLeftover) {
       deps.onRunEvent('integrationRetry', { stage: res.stage, detail: res.detail || null });
       await sleep(RETRY_DELAY_MS);
       gate = null;

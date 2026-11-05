@@ -43,7 +43,14 @@ const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 // A planner limit with another Claude account free: replan after this long.
 const ACCOUNT_SWITCH_RETRY_MS = 3000;
 const { FREE_BRANCH_PREFIX, isSafeFreeBranch, freeRunSettings, integrationFor } = require('./orchestraFree');
-const { cleanupFailedLaunch, sweepOrphanBranches } = require('./orchestraCleanup');
+const {
+  cleanupFailedLaunch,
+  earlierWorktrees,
+  clearEarlierLaunches,
+  withLeftover,
+  sweepOrphanBranches,
+} = require('./orchestraCleanup');
+const { launchRetryDecision, createResumeGate } = require('./orchestraLaunchRetry');
 const { createPowerFlow } = require('./orchestraPower');
 const { createPowerCtl } = require('./powerctl');
 
@@ -288,6 +295,10 @@ function createOrchestra(deps) {
   const nudgeTimers = new Map();
   /** pkgId -> scheduled automatic relaunch after a machinery failure */
   const retryTimers = new Map();
+  /** pkgId -> automatic retries spent on a git that did not answer (orchestraLaunchRetry.js) */
+  const transientRetries = new Map();
+  // Launches wait a little right after a system resume.
+  const resumeGate = createResumeGate({ now });
   let resumeTimer = null;
   let scheduleTimer = null;
   // Planning that hit the 5 h / weekly limit waits for the reset and then
@@ -746,6 +757,16 @@ function createOrchestra(deps) {
    */
   async function launchOne(pkg, stamp) {
     const made = { wt: null, base: null, depBranch: null };
+    let leftovers = Array.isArray(pkg.leftovers) ? pkg.leftovers : [];
+    // Awaited only when there is something to clear: a plain launch reaches
+    // git without yielding first.
+    if (earlierWorktrees(pkg).length) {
+      const earlier = await clearEarlierLaunches(cleanupGit(), plan.repoPath, pkg);
+      for (const e of earlier.errors) log(`earlier launch of ${pkg.id} not fully cleaned up: ${e}`);
+      leftovers = earlier.kept;
+      const gone = earlier.rootCleared ? { root: null, cwd: null, branch: null, briefPath: null, baseSha: null } : {};
+      patch(pkg.id, { ...gone, leftovers });
+    }
     let result;
     try {
       result = await launchOneUnsafe(pkg, stamp, made);
@@ -755,16 +776,18 @@ function createOrchestra(deps) {
     if (result.state !== 'failed') return { ...result, failure: null };
     const failure = failureOf(result, made.depBranch, now());
     if (!made.wt) return { ...result, failure };
-    const cleaned = await cleanupFailedLaunch(
-      { removeWorktree: deps.removeWorktree, deleteBranch: deps.deleteBranch },
-      plan.repoPath,
-      made.wt,
-      made.base,
-    );
+    const cleaned = await cleanupFailedLaunch(cleanupGit(), plan.repoPath, made.wt, made.base);
     if (cleaned.error) log(`failed launch of ${pkg.id} not fully cleaned up: ${cleaned.error}`);
     // Worktree gone: Retry starts a fresh launch instead of reopening it.
-    const gone = cleaned.removed ? { branch: null, root: null, cwd: null, briefPath: null, baseSha: null } : {};
+    // Still there: remembered, so the next launch clears it first.
+    const gone = cleaned.removed
+      ? { branch: null, root: null, cwd: null, briefPath: null, baseSha: null }
+      : { leftovers: withLeftover(leftovers, { root: made.wt.root, branch: made.wt.branch || null, base: made.base }) };
     return { ...result, ...gone, failure };
+  }
+
+  function cleanupGit() {
+    return { removeWorktree: deps.removeWorktree, deleteBranch: deps.deleteBranch };
   }
 
   /**
@@ -781,7 +804,11 @@ function createOrchestra(deps) {
       base: baseDep ? baseDep.headSha : undefined,
       ...(plan.freeMode ? { branchPrefix: FREE_BRANCH_PREFIX } : {}),
     });
-    if (!wt.ok) return { state: 'failed', error: wt.error, detail: wt.detail || null };
+    if (!wt.ok) {
+      // git got as far as creating the folder: launchOne() cleans it up.
+      if (wt.root) made.wt = { root: wt.root, branch: wt.branch || null };
+      return { state: 'failed', error: wt.error, detail: wt.detail || null, retryable: wt.retryable === true };
+    }
     // From here on every failure is cleaned up by launchOne().
     made.wt = wt;
     made.base = baseDep ? baseDep.headSha : null;
@@ -810,43 +837,66 @@ function createOrchestra(deps) {
   }
 
   async function launchPackages(chosen) {
+    // Awaited only right after a resume: a plain launch reaches git without yielding.
+    if (resumeGate.waitMs() > 0) await settleAfterResume();
     const stamp = now().toString(36).slice(-5);
     for (const pkg of chosen) {
       // Kill / pause while an earlier launch was awaiting git: stop here.
       if (plan.killed || plan.pausedUntil) break;
       cancelAutoRetry(pkg.id);
       const before = findPkg(pkg.id) || pkg;
-      const result = await launchOne(pkg, stamp);
+      const { retryable, ...result } = await launchOne(before, stamp);
       if (plan.killed && result.state === 'launched') {
         // The kill landed during this very launch: the tab exists, stop it too.
         writePty(result.sessionId, ESC);
         patch(pkg.id, { ...result, state: 'killed' });
       } else {
         patch(pkg.id, result);
-        if (result.state === 'failed') onLaunchFailed(before, result);
+        if (result.state === 'failed') onLaunchFailed(before, { ...result, retryable });
+        else transientRetries.delete(pkg.id);
       }
       commit();
     }
   }
 
+  /** Right after a system resume git is slow to answer: wait it out first. */
+  async function settleAfterResume() {
+    // One wait, capped by the gate: a clock that stands still or steps back never loops.
+    const wait = resumeGate.waitMs();
+    if (wait <= 0) return;
+    await new Promise((resolve) => {
+      const timer = setTimer(resolve, wait);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    });
+  }
+
   /**
    * Machinery auto-retry: a failed launch is tried again by itself after
    * AUTO_RETRY_DELAY_MS, at most MAX_AUTO_RETRIES times. The same error +
-   * detail twice in a row means it will not fix itself: terminal.
+   * detail twice in a row means it will not fix itself: terminal. A git that
+   * did not answer (result.retryable) backs off instead and is never terminal
+   * on a repeat (orchestraLaunchRetry.js).
    * @param {object} before the package as it was before this launch
    * @param {{error?:string, detail?:string|null}} result
    */
   function onLaunchFailed(before, result) {
     if (plan.killed) return;
-    const tries = before.autoRetries || 0;
-    const repeated =
-      tries > 0 && before.error === (result.error || null) && (before.detail || null) === (result.detail || null);
-    if (repeated || tries >= sup.MAX_AUTO_RETRIES) {
+    const transientTries = transientRetries.get(before.id) || 0;
+    const decision = launchRetryDecision({
+      before,
+      result,
+      transientTries,
+      maxRetries: sup.MAX_AUTO_RETRIES,
+      delayMs: AUTO_RETRY_DELAY_MS,
+    });
+    if (decision.action === 'terminal') {
       markTerminal(before.id, result.error || 'failed');
       return;
     }
-    patch(before.id, { autoRetries: tries + 1 });
-    const timer = setTimer(() => fireAutoRetry(before.id), AUTO_RETRY_DELAY_MS);
+    // A git that did not answer has its own ladder (backoff, no repeat rule).
+    if (decision.transient) transientRetries.set(before.id, transientTries + 1);
+    else patch(before.id, { autoRetries: (before.autoRetries || 0) + 1 });
+    const timer = setTimer(() => fireAutoRetry(before.id), decision.delayMs);
     // A real timer must not keep a test process (or a quitting app) alive.
     if (timer && typeof timer.unref === 'function') timer.unref();
     retryTimers.set(before.id, timer);
@@ -1013,6 +1063,7 @@ function createOrchestra(deps) {
         // A launch by hand starts the automatic ladder afresh.
         for (const p of chosen) {
           cancelAutoRetry(p.id);
+          transientRetries.delete(p.id);
           patch(p.id, { autoRetries: 0, terminal: false });
         }
         plan.packages = sup.withBlockedBy(plan.packages);
@@ -1257,6 +1308,7 @@ function createOrchestra(deps) {
    * Past the reset -> resume now; before it -> re-arm the resume timer.
    */
   function onSystemResume() {
+    resumeGate.onResume();
     background(powerFlow.onSystemResume(), 'sleep');
     if (!plan || !plan.pausedUntil) return;
     if (resumeTimer) clearTimer(resumeTimer);
@@ -1451,6 +1503,7 @@ function createOrchestra(deps) {
     }
     // A Retry by hand: the package is back in play, its dependents unblocked.
     cancelAutoRetry(pkg.id);
+    transientRetries.delete(pkg.id);
     patch(pkg.id, { terminal: false, autoRetries: 0 });
     plan.packages = sup.withBlockedBy(plan.packages);
     // Only once the package is back in play does the run resume.

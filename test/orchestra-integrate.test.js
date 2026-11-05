@@ -486,3 +486,131 @@ test('normalizeStoredPlan: integration.skipped capped and validated, partial is 
   const junk = sup.normalizeStoredPlan({ ...base, integration: { skipped: 'nope', partial: 'yes' } }).integration;
   assert.deepEqual([junk.skipped, junk.partial], [[], false]);
 });
+
+// ---- leftover integration worktrees: retried, then reused when clean ------------
+
+const STALE_LISTING = 'worktree /r\nHEAD abc\nbranch refs/heads/main\n\nworktree /wt/old\nHEAD def\nbranch refs/heads/luna/p-integration\n';
+
+/** Fake git that records [cwd, ...args] and answers by subcommand + folder. */
+function cwdExec(answer) {
+  const calls = [];
+  const execImpl = (bin, args, _opts, cb) => {
+    const cwd = args[1];
+    const sub = args.slice(2);
+    calls.push([cwd, ...sub]);
+    const a = answer(cwd, sub) || { ok: true, stdout: '' };
+    setImmediate(() => cb(a.ok ? null : Object.assign(new Error('x'), { code: a.code || 1 }), a.stdout || '', a.stderr || ''));
+  };
+  return { execImpl, calls };
+}
+
+const leftoverGit = (staleStatus = '', staleTop = '/wt/old') =>
+  cwdExec((cwd, sub) => {
+    if (sub[0] === 'worktree' && sub[1] === 'list') return { ok: true, stdout: STALE_LISTING };
+    if (sub[0] === 'rev-parse' && sub[1] === '--show-toplevel') return { ok: true, stdout: `${staleTop}\n` };
+    if (sub[0] === 'rev-parse') return { ok: true, stdout: 'sha1\n' };
+    if (sub[0] === 'status' && cwd === '/wt/old') return { ok: true, stdout: staleStatus };
+    return { ok: true, stdout: '' };
+  });
+
+test('integrateMerge: a leftover whose removal failed (not dirty) is tried again after a short wait', async () => {
+  const git = leftoverGit();
+  const { deps } = integDeps(git);
+  const tries = [];
+  const waits = [];
+  deps.sleep = async (ms) => waits.push(ms);
+  deps.removeWorktree = async (_r, root) => {
+    tries.push(root);
+    return tries.length === 1
+      ? { ok: false, error: 'gitFailed', detail: 'git worktree remove -- /wt/old in /r: timed out after 600s (killed, no exit code)' }
+      : { ok: true };
+  };
+  const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(tries.slice(0, 2), ['/wt/old', '/wt/old']);
+  assert.equal(waits.length, 1);
+  assert.ok(waits[0] > 0 && waits[0] <= 30000, 'a short wait');
+});
+
+test('integrateMerge: a clean leftover of the same run that will not go away is reused, not a failure', async () => {
+  const git = leftoverGit('');
+  const { deps } = integDeps(git);
+  deps.sleep = async () => {};
+  let added = false;
+  deps.addWorktree = async () => ((added = true), WT);
+  const removals = [];
+  deps.removeWorktree = async (_r, root) => {
+    removals.push(root);
+    return root === '/wt/old'
+      ? { ok: false, error: 'gitFailed', detail: 'git worktree remove -- /wt/old in /r: timed out after 600s (killed, no exit code)' }
+      : { ok: true };
+  };
+  const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.merged, ['a']);
+  assert.equal(added, false, 'no second integration worktree beside the leftover');
+  assert.ok(
+    git.calls.some((c) => c[0] === '/wt/old' && c.slice(1).join(' ') === 'reset --hard sha1'),
+    'the leftover is moved to the fresh base first',
+  );
+  assert.ok(git.calls.some((c) => c[0] === '/wt/old' && c[1] === 'merge'), 'merged in the reused worktree');
+  const firstMerge = git.calls.findIndex((c) => c[1] === 'merge');
+  const deletedBefore = git.calls.slice(0, firstMerge).some((c) => c[1] === 'branch' && c[2] === '-D');
+  assert.equal(deletedBefore, false, 'its checked-out branch is not deleted before the build');
+});
+
+test('integrateMerge: a half-removed leftover that resolves to another repo is never reused', async () => {
+  const git = leftoverGit('', '/r');
+  const { deps } = integDeps(git);
+  deps.sleep = async () => {};
+  deps.removeWorktree = async () => ({ ok: false, error: 'gitFailed', detail: 'timed out after 600s' });
+  const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps);
+  assert.equal(res.ok, false);
+  assert.equal(res.stage, 'worktree');
+  assert.ok(!git.calls.some((c) => c[1] === 'reset'), 'nothing is reset anywhere');
+});
+
+test('integrateMerge: a leftover that will not go away and has local changes still fails as worktree', async () => {
+  const git = leftoverGit(' M src/x.js\n');
+  const { deps } = integDeps(git);
+  deps.sleep = async () => {};
+  deps.removeWorktree = async () => ({ ok: false, error: 'gitFailed', detail: 'timed out after 600s' });
+  let added = false;
+  deps.addWorktree = async () => ((added = true), WT);
+  const res = await integ.integrateMerge(args([{ id: 'a', branch: 'luna/a', verify: '' }]), deps);
+  assert.equal(res.ok, false);
+  assert.equal(res.stage, 'worktree');
+  assert.match(res.detail, /leftover \/wt\/old: gitFailed timed out after 600s/);
+  assert.equal(added, false);
+});
+
+test('finalize: a leftover that is not dirty is retried; the retry can reuse it', async () => {
+  const { createFinalizer } = require('../src/orchestraFinalize.js');
+  const plan = {
+    id: 'run1',
+    repoPath: '/r',
+    baseBranch: 'main',
+    integrationMode: 'merge',
+    integration: { state: 'idle' },
+    approvalLog: [],
+    packages: [{ id: 'a', title: 'A', state: 'pushed', branch: 'luna/a', dependsOn: [] }],
+  };
+  const answers = [
+    { ok: false, merged: [], skipped: [], stage: 'worktree', detail: 'leftover /wt/run1-integration: gitFailed git status --porcelain in /wt/run1-integration: timed out after 30s' },
+    { ok: true, merged: ['a'], skipped: [] },
+  ];
+  const calls = [];
+  const fin = createFinalizer({
+    getPlan: () => plan,
+    patch: () => {},
+    commit: () => {},
+    view: () => ({ id: plan.id, packages: plan.packages, integration: plan.integration, overlaps: [] }),
+    onRunEvent: () => {},
+    now: () => 1,
+    sleep: async () => {},
+    integrateMerge: async (a) => (calls.push(a), answers.shift()),
+  });
+  await fin.finalize();
+  assert.equal(calls.length, 2, 'a gitFailed leftover gets the retry');
+  assert.equal(plan.integration.state, 'done');
+});

@@ -11,12 +11,19 @@
 //
 // What git does not carry: top-level `.env*` files are copied. `node_modules`
 // is deliberately NOT linked - the plan's "cheap junction" idea is a trap:
-// `git worktree remove --force` follows a junction and empties the MAIN
-// checkout's node_modules (verified). The tab runs its own install instead.
+// `git worktree remove` follows a junction while it deletes the worktree's
+// ignored files and empties the junction's TARGET - the MAIN checkout's
+// node_modules. Verified on git 2.53.0.windows.1 with AND without --force:
+// git exits 0 and the target is left with 0 entries. The tab runs its own
+// install instead, and removeWorktree unlinks any such link first (below).
 //
 // Removal (removeWorktree) is only for God Mode packages whose branch is
 // pushed, and refuses a worktree with anything uncommitted: it may hold the
-// only copy of that work. No --force, so git itself re-checks.
+// only copy of that work. No --force, so git itself re-checks. Before git
+// runs, every junction / symlink at <root>/node_modules, <root>/<dir>/
+// node_modules and directly inside those folders is unlinked - the link
+// only, never a recursive delete. A link that cannot be unlinked stops the
+// removal before git is run.
 //
 // Branch deletion (deleteBranch) is only for branches a failed God Mode
 // launch left behind: `luna/` names only, never the checked-out branch, and
@@ -33,6 +40,16 @@ const WORKTREE_DIR = '.luna-worktrees';
 const BRANCH_PREFIX = 'luna/';
 const MAX_SLUG_CHARS = 48;
 const GIT_TIMEOUT_MS = 30000;
+// `git worktree remove` deletes the folder's ignored files too: a real
+// node_modules on Windows can take minutes, far longer than GIT_TIMEOUT_MS.
+const REMOVE_TIMEOUT_MS = 10 * 60 * 1000;
+const STDERR_TAIL_CHARS = 300;
+// git's own words for "this folder is in no repository".
+const NOT_REPO_RE = /not a git repository/i;
+// `git worktree add` failures that can clear up on their own (a lock held by
+// another git, a file still busy) - worth an automatic retry.
+const TRANSIENT_ADD_RE = /\.lock\b|unable to (create|lock|unlink)|permission denied|resource (temporarily )?unavailable|device or resource busy/i;
+const DEPENDENCY_DIR = 'node_modules';
 const ENV_FILE_RE = /^\.env(\..+)?$/;
 // A commit a new worktree may start from instead of HEAD (a dependency's
 // pushed head) - full or abbreviated hex only, never a ref or an option.
@@ -101,20 +118,73 @@ function gitError(text) {
  * process (our timeout) or a spawn error (string code, e.g. ENOENT) says
  * nothing about the folder - git's own exit code does.
  */
-function gitBroke(err) {
+function gitBroke(err, timeoutMs = GIT_TIMEOUT_MS) {
   if (!err) return '';
-  if (err.killed || err.signal) return `git timed out after ${GIT_TIMEOUT_MS / 1000}s`;
+  if (isTimeout(err)) return `git timed out after ${Math.round(timeoutMs / 1000)}s`;
   if (typeof err.code === 'string') return `git did not start (${err.code})`;
   return '';
 }
 
-/** Runs git without a shell; resolves {ok, stdout, stderr, broke}, never rejects. */
-function runGit(cwd, args, execImpl = execFile) {
+/** A process killed by our timer (execFile sets killed / signal). */
+function isTimeout(err) {
+  return !!(err && (err.killed || err.signal));
+}
+
+/** git's exit code: 0 on success, null when it never exited on its own. */
+function exitCode(err) {
+  if (!err) return 0;
+  return typeof err.code === 'number' ? err.code : null;
+}
+
+/**
+ * Runs git without a shell; never rejects. Resolves
+ * {ok, stdout, stderr, broke, timedOut, code, cwd, args, timeoutMs} - enough
+ * for gitDetail() to say exactly what happened.
+ * @param {{timeoutMs?: number}} [opts]
+ */
+function runGit(cwd, args, execImpl = execFile, opts = {}) {
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : GIT_TIMEOUT_MS;
   return new Promise((resolve) => {
-    execImpl('git', ['-C', cwd, ...args], { windowsHide: true, timeout: GIT_TIMEOUT_MS }, (err, stdout, stderr) =>
-      resolve({ ok: !err, stdout: String(stdout || ''), stderr: String(stderr || ''), broke: gitBroke(err) }),
+    execImpl('git', ['-C', cwd, ...args], { windowsHide: true, timeout: timeoutMs }, (err, stdout, stderr) =>
+      resolve({
+        ok: !err,
+        stdout: String(stdout || ''),
+        stderr: String(stderr || ''),
+        broke: gitBroke(err, timeoutMs),
+        timedOut: isTimeout(err),
+        code: exitCode(err),
+        cwd,
+        args,
+        timeoutMs,
+      }),
     );
   });
+}
+
+/** The end of git's stderr on one line - the reason is usually last. */
+function stderrTail(text) {
+  const flat = String(text || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join(' | ');
+  return flat.length > STDERR_TAIL_CHARS ? `...${flat.slice(-STDERR_TAIL_CHARS)}` : flat;
+}
+
+/**
+ * One line that says what git was asked, where, and how it ended: exit code
+ * or timeout, and the tail of its stderr. Never empty.
+ * @param {{args?:string[], cwd?:string, ok?:boolean, timedOut?:boolean, broke?:string,
+ *   code?:number|null, stderr?:string, timeoutMs?:number}} res a runGit result
+ */
+function gitDetail(res) {
+  const cmd = `git ${(res.args || []).join(' ')}`.trim();
+  let how;
+  if (res.timedOut) how = `timed out after ${Math.round((res.timeoutMs || GIT_TIMEOUT_MS) / 1000)}s (killed, no exit code)`;
+  else if (res.broke) how = res.broke;
+  else how = `exit ${res.code == null ? (res.ok ? 0 : 'unknown') : res.code}, not timed out`;
+  const tail = stderrTail(res.stderr);
+  return `${cmd} in ${res.cwd || '?'}: ${how}${tail ? `; stderr: ${tail}` : '; no stderr'}`;
 }
 
 /**
@@ -145,6 +215,24 @@ function copyEnvFiles(fromDir, toDir, fsImpl = fs) {
 }
 
 /**
+ * Why `git rev-parse --show-toplevel` gave no top level. 'notRepo' only when
+ * git itself says the folder is in no repository; a timeout, a git that did
+ * not start, or any other failure is 'gitFailed' (retryable) - right after a
+ * PC wake a fine repo can fail this way, and it must not read as "not a repo".
+ * Both always carry a detail naming the command, the folder, the exit code or
+ * timeout, and git's stderr.
+ * @param {object} top a runGit result
+ * @returns {{ok:false, error:'notRepo'|'gitFailed', detail:string, retryable?:boolean}}
+ */
+function topLevelFailure(top) {
+  if (!top.ok) {
+    if (!top.broke && NOT_REPO_RE.test(top.stderr)) return { ok: false, error: 'notRepo', detail: gitDetail(top) };
+    return { ok: false, error: 'gitFailed', detail: gitDetail(top), retryable: true };
+  }
+  return { ok: false, error: 'gitFailed', detail: `${gitDetail(top)}; printed no top-level folder`, retryable: true };
+}
+
+/**
  * Creates a worktree + branch for a new tab, branching from the current HEAD
  * of the checkout `repoPath` lives in.
  *
@@ -156,26 +244,29 @@ function copyEnvFiles(fromDir, toDir, fsImpl = fs) {
  * @param {{execImpl?: Function, fsImpl?: typeof fs, base?: string, branchPrefix?: string}} [deps]
  *   base: commit sha to branch from instead of HEAD
  *   branchPrefix: 'luna/' (default) or 'luna-free/' - anything else is ignored
+ * A failure that may clear up on its own (git hung, did not start, a lock)
+ * carries `retryable: true`. A failure after git already created the folder
+ * carries its `root` and `branch`, so the caller can clean it up.
  * @returns {Promise<{ok:true, cwd:string, root:string, branch:string, envCopied:number}
- *   | {ok:false, error:'badName'|'notRepo'|'noCommits'|'exists'|'gitFailed', detail?:string}>}
+ *   | {ok:false, error:'badName'|'notRepo'|'noCommits'|'exists'|'gitFailed', detail?:string,
+ *      retryable?:boolean, root?:string, branch?:string}>}
  */
 async function addWorktree(repoPath, name, deps = {}) {
   const execImpl = deps.execImpl || execFile;
   const fsImpl = deps.fsImpl || fs;
 
   const slug = slugify(name);
-  if (!slug) return { ok: false, error: 'badName' };
+  if (!slug) return { ok: false, error: 'badName', detail: `no usable letters or digits in ${JSON.stringify(String(name))}` };
 
   const top = await runGit(repoPath, ['rev-parse', '--show-toplevel'], execImpl);
-  // A hung or missing git is not "no repo": a timeout under load must not
-  // read as a broken project (God Mode would give up on a fine package).
-  if (top.broke) return { ok: false, error: 'gitFailed', detail: top.broke };
   const repoRoot = top.ok ? firstLine(top.stdout) : '';
-  if (!repoRoot) return { ok: false, error: 'notRepo' };
+  if (!repoRoot) return topLevelFailure(top);
   const root = path.resolve(repoRoot);
 
   const head = await runGit(root, ['rev-parse', '--verify', 'HEAD'], execImpl);
-  if (!head.ok) return { ok: false, error: 'noCommits' };
+  // A hung git says nothing about the commits either.
+  if (head.broke) return { ok: false, error: 'gitFailed', detail: gitDetail(head), retryable: true };
+  if (!head.ok) return { ok: false, error: 'noCommits', detail: gitDetail(head) };
 
   const target = worktreePathFor(root, slug);
   if (fsImpl.existsSync(target)) return { ok: false, error: 'exists', detail: target };
@@ -183,7 +274,17 @@ async function addWorktree(repoPath, name, deps = {}) {
   const branch = branchFor(slug, deps.branchPrefix);
   const base =typeof deps.base === 'string' && BASE_SHA_RE.test(deps.base) ? deps.base : 'HEAD';
   const add = await runGit(root, ['worktree', 'add', '-b', branch, target, base], execImpl);
-  if (!add.ok) return { ok: false, error: 'gitFailed', detail: gitError(add.stderr) };
+  if (!add.ok) {
+    const reason = gitError(add.stderr);
+    const failed = {
+      ok: false,
+      error: 'gitFailed',
+      detail: reason && !add.broke ? reason : gitDetail(add),
+      retryable: !!add.broke || TRANSIENT_ADD_RE.test(add.stderr),
+    };
+    // The folder did not exist before this call: whatever is there now is ours.
+    return fsImpl.existsSync(target) ? { ...failed, root: target, branch } : failed;
+  }
 
   const envCopied = copyEnvFiles(root, target, fsImpl);
 
@@ -206,20 +307,128 @@ async function dirtyCount(repoPath, deps = {}) {
   return res.stdout.split('\n').filter((l) => l.trim()).length;
 }
 
+/** fs.lstatSync or null - a missing path is simply not a link. */
+function lstatOrNull(p, fsImpl) {
+  try {
+    return fsImpl.lstatSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/** Directory entry names, [] when the folder cannot be read. */
+function namesIn(dir, fsImpl) {
+  try {
+    return fsImpl.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Removes ONE link - the link itself, never what it points to. A Windows
+ * junction is a directory reparse point: unlink handles it on current Node,
+ * rmdir (non-recursive) is the fallback. Throws when neither works.
+ */
+function unlinkOnly(p, fsImpl) {
+  try {
+    fsImpl.unlinkSync(p);
+  } catch (unlinkErr) {
+    try {
+      fsImpl.rmdirSync(p);
+    } catch {
+      throw unlinkErr;
+    }
+  }
+}
+
+/**
+ * Every place under `root` where a dependency link can sit: node_modules of
+ * the root and of each direct sub-folder (e.g. mobile/node_modules).
+ * @returns {string[]}
+ */
+function dependencyDirs(root, fsImpl) {
+  const dirs = [path.join(root, DEPENDENCY_DIR)];
+  for (const name of namesIn(root, fsImpl)) {
+    if (name === DEPENDENCY_DIR || name === '.git') continue;
+    const sub = path.join(root, name);
+    const st = lstatOrNull(sub, fsImpl);
+    if (st && st.isDirectory() && !st.isSymbolicLink()) dirs.push(path.join(sub, DEPENDENCY_DIR));
+  }
+  return dirs;
+}
+
+/**
+ * The links in one node_modules: the folder itself when it is a link, else
+ * the links directly inside it and inside its @scope folders (npm link,
+ * workspaces).
+ * @returns {string[]}
+ */
+function linksIn(dir, fsImpl) {
+  const st = lstatOrNull(dir, fsImpl);
+  if (!st) return [];
+  if (st.isSymbolicLink()) return [dir];
+  if (!st.isDirectory()) return [];
+  const links = [];
+  for (const name of namesIn(dir, fsImpl)) {
+    const p = path.join(dir, name);
+    const entry = lstatOrNull(p, fsImpl);
+    if (!entry) continue;
+    if (entry.isSymbolicLink()) links.push(p);
+    else if (name.startsWith('@') && entry.isDirectory()) {
+      for (const scoped of namesIn(p, fsImpl)) {
+        const sp = path.join(p, scoped);
+        const se = lstatOrNull(sp, fsImpl);
+        if (se && se.isSymbolicLink()) links.push(sp);
+      }
+    }
+  }
+  return links;
+}
+
+/**
+ * Unlinks every dependency junction / symlink under `root` (see the header):
+ * git would otherwise delete THROUGH it and empty the target.
+ * @returns {{ok:true, unlinked:string[]} | {ok:false, detail:string}}
+ */
+function unlinkDependencyLinks(root, fsImpl = fs) {
+  const unlinked = [];
+  for (const dir of dependencyDirs(root, fsImpl)) {
+    for (const link of linksIn(dir, fsImpl)) {
+      try {
+        unlinkOnly(link, fsImpl);
+        unlinked.push(link);
+      } catch (err) {
+        const why = err && err.code ? err.code : err instanceof Error ? err.message : String(err);
+        return { ok: false, detail: `cannot unlink ${link} (${why}); git worktree remove was not run` };
+      }
+    }
+  }
+  return { ok: true, unlinked };
+}
+
 /**
  * Removes a worktree whose work is safe elsewhere (pushed). Refuses when it
- * has uncommitted changes; the branch itself is kept.
+ * has uncommitted changes; the branch itself is kept. Dependency links are
+ * unlinked first, and a link that will not go stops the removal before git
+ * runs. git gets REMOVE_TIMEOUT_MS: deleting a real node_modules is slow.
  * @param {string} repoPath any folder of the main checkout
  * @param {string} root the worktree's top folder
- * @returns {Promise<{ok:true} | {ok:false, error:'dirty'|'gitFailed', detail?:string}>}
+ * @param {{execImpl?: Function, fsImpl?: typeof fs}} [deps]
+ * @returns {Promise<{ok:true} | {ok:false, error:'dirty'|'linkRemoveFailed'|'gitFailed', detail?:string}>}
  */
 async function removeWorktree(repoPath, root, deps = {}) {
   const execImpl = deps.execImpl || execFile;
+  const fsImpl = deps.fsImpl || fs;
   const status = await runGit(root, ['status', '--porcelain'], execImpl);
-  if (!status.ok) return { ok: false, error: 'gitFailed', detail: firstLine(status.stderr) };
-  if (status.stdout.trim()) return { ok: false, error: 'dirty' };
-  const res = await runGit(repoPath, ['worktree', 'remove', '--', root], execImpl);
-  return res.ok ? { ok: true } : { ok: false, error: 'gitFailed', detail: gitError(res.stderr) };
+  if (!status.ok) return { ok: false, error: 'gitFailed', detail: gitDetail(status) };
+  if (status.stdout.trim()) return { ok: false, error: 'dirty', detail: firstLine(status.stdout) };
+  const links = unlinkDependencyLinks(root, fsImpl);
+  if (!links.ok) return { ok: false, error: 'linkRemoveFailed', detail: links.detail };
+  const res = await runGit(repoPath, ['worktree', 'remove', '--', root], execImpl, { timeoutMs: REMOVE_TIMEOUT_MS });
+  if (res.ok) return { ok: true };
+  const reason = res.broke ? '' : gitError(res.stderr);
+  return { ok: false, error: 'gitFailed', detail: reason ? `${reason} (${gitDetail(res)})` : gitDetail(res) };
 }
 
 // Only branches LunaCore itself names (`luna/<slug>`) may ever be deleted.
@@ -297,8 +506,27 @@ async function worktreeBranches(repoPath, deps = {}) {
     .map((l) => l.slice('branch refs/heads/'.length));
 }
 
+/**
+ * Why `git rev-parse --verify HEAD` failed, in the words other callers use:
+ * 'notRepo' only when git says so, 'noCommits' for a repo without a HEAD,
+ * else 'gitFailed' (a timeout, a git that did not start, anything else).
+ * @param {object} res a failed runGit result
+ * @returns {'notRepo'|'noCommits'|'gitFailed'}
+ */
+function headFailureReason(res) {
+  if (res.broke) return 'gitFailed';
+  if (NOT_REPO_RE.test(res.stderr)) return 'notRepo';
+  if (/needed a single revision|unknown revision|ambiguous argument 'HEAD'/i.test(res.stderr)) return 'noCommits';
+  return 'gitFailed';
+}
+
 module.exports = {
   removeWorktree,
+  unlinkDependencyLinks,
+  headFailureReason,
+  gitDetail,
+  GIT_TIMEOUT_MS,
+  REMOVE_TIMEOUT_MS,
   deleteBranch,
   listOwnBranches,
   worktreeBranches,

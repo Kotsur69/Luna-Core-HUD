@@ -12,7 +12,16 @@ const assert = require('node:assert/strict');
 const path = require('path');
 
 const { deleteBranch, listOwnBranches, worktreeBranches } = require('../src/worktrees.js');
-const { orphanBranches, sweepOrphanBranches, launchIdOf } = require('../src/orchestraCleanup.js');
+const {
+  orphanBranches,
+  sweepOrphanBranches,
+  launchIdOf,
+  earlierWorktrees,
+  clearEarlierLaunches,
+  withLeftover,
+  MAX_LEFTOVERS,
+} = require('../src/orchestraCleanup.js');
+const { RESUME_SETTLE_MS, transientDelayMs, MAX_TRANSIENT_RETRIES } = require('../src/orchestraLaunchRetry.js');
 const { createOrchestra } = require('../src/orchestra.js');
 const sup = require('../src/orchestraSupervisor.js');
 
@@ -373,4 +382,235 @@ test('isOptionsPatch: the main-side IPC check is strict', () => {
   assert.equal(sup.isOptionsPatch({ sleepOnLimit: true, extra: true }), false);
   assert.equal(sup.isOptionsPatch(Object.create({ sleepOnLimit: true })), false);
   assert.equal(sup.isOptionsPatch(new Date()), false);
+});
+
+// ---------------------------------------------------------------------------
+// a retried launch never leaves its earlier worktree behind
+// ---------------------------------------------------------------------------
+
+test('earlierWorktrees: only a pending / failed package; recorded leftovers, then its own root, no duplicates', () => {
+  assert.deepEqual(earlierWorktrees({ state: 'launched', root: '/wt/a-1', branch: 'luna/a-1' }), []);
+  assert.deepEqual(earlierWorktrees({ state: 'pending', root: null }), []);
+  assert.deepEqual(
+    earlierWorktrees({
+      state: 'failed',
+      root: '/wt/a-2',
+      branch: 'luna/a-2',
+      baseSha: 'bbbbbbb',
+      leftovers: [{ root: '/wt/a-1', branch: 'luna/a-1', base: 'abcdef1' }, { root: '/wt/a-2', branch: 'luna/a-2', base: null }],
+    }),
+    [
+      { root: '/wt/a-1', branch: 'luna/a-1', base: 'abcdef1' },
+      { root: '/wt/a-2', branch: 'luna/a-2', base: null },
+    ],
+  );
+});
+
+test('clearEarlierLaunches: keeps what will not go, says whether the own root went', async () => {
+  const removed = [];
+  const deleted = [];
+  const git = {
+    removeWorktree: async (_r, root) => (removed.push(root), root === '/wt/a-1' ? { ok: false, error: 'dirty' } : { ok: true }),
+    deleteBranch: async (_r, branch, opts) => (deleted.push([branch, opts.base]), { ok: true }),
+  };
+  const res = await clearEarlierLaunches(git, '/repo', {
+    state: 'failed',
+    root: '/wt/a-2',
+    branch: 'luna/a-2',
+    baseSha: 'bbbbbbb',
+    leftovers: [{ root: '/wt/a-1', branch: 'luna/a-1', base: 'abcdef1' }],
+  });
+  assert.deepEqual(res.kept, [{ root: '/wt/a-1', branch: 'luna/a-1', base: 'abcdef1' }], 'a dirty one stays recorded');
+  assert.equal(res.rootCleared, true);
+  assert.deepEqual(removed, ['/wt/a-1', '/wt/a-2']);
+  assert.deepEqual(deleted, [['luna/a-2', 'bbbbbbb']], 'the dirty one keeps its branch');
+  assert.equal(res.errors.length, 1);
+
+  const onlyLeftover = await clearEarlierLaunches(git, '/repo', {
+    state: 'pending',
+    root: null,
+    leftovers: [{ root: '/wt/a-3', branch: 'luna/a-3', base: null }],
+  });
+  assert.equal(onlyLeftover.rootCleared, false, 'a recorded leftover never clears a root it is not');
+});
+
+test('withLeftover appends newest last, dedups, caps', () => {
+  const many = Array.from({ length: MAX_LEFTOVERS }, (_, i) => ({ root: `/wt/x-${i}` }));
+  const next = withLeftover(many, { root: '/wt/new' });
+  assert.equal(next.length, MAX_LEFTOVERS);
+  assert.equal(next[next.length - 1].root, '/wt/new');
+  assert.deepEqual(withLeftover([{ root: '/wt/a' }], { root: '/wt/a' }), [{ root: '/wt/a' }]);
+});
+
+test('a leftover kept by one attempt is still recorded after the next attempt cleans its own worktree', async () => {
+  let sessions = 0;
+  const { orch, log, ctx, tick } = setup({
+    deps: {
+      createSession: () => ((sessions += 1), sessions <= 2 ? null : { id: 's1' }),
+      // The first launch's worktree will not go (twice); everything else does.
+      removeWorktree: async (_repo, root) => {
+        log.removed.push(root);
+        return log.removed.filter((r) => r === log.removed[0]).length <= 2 && root === log.removed[0]
+          ? { ok: false, error: 'linkRemoveFailed', detail: 'cannot unlink' }
+          : { ok: true };
+      },
+    },
+  });
+  const { plan } = await orch.makePlan(ctx);
+  await orch.launch({ planId: plan.id, ids: ['a'] });
+  const first = log.removed[0];
+  tick(60000);
+  await orch.launch({ planId: plan.id, ids: ['a'] }); // clears first: fails again; own worktree cleaned
+  tick(60000);
+  await orch.launch({ planId: plan.id, ids: ['a'] }); // clears first: works now
+  assert.equal(orch.view().packages[0].state, 'launched');
+  assert.equal(log.removed.filter((r) => r === first).length, 3, 'the first worktree is tried until it goes');
+});
+
+test('a retried launch first removes the worktree its earlier failed launch could not', async () => {
+  let removeCalls = 0;
+  let sessions = 0;
+  const { orch, log, ctx, tick } = setup({
+    deps: {
+      createSession: () => ((sessions += 1), sessions === 1 ? null : { id: 's1' }),
+      removeWorktree: async (_repo, root) => {
+        removeCalls += 1;
+        log.removed.push(root);
+        return removeCalls === 1
+          ? { ok: false, error: 'gitFailed', detail: 'git worktree remove: timed out after 600s (killed, no exit code)' }
+          : { ok: true };
+      },
+    },
+  });
+  const { plan } = await orch.makePlan(ctx);
+  await orch.launch({ planId: plan.id, ids: ['a'] });
+  assert.equal(orch.view().packages[0].state, 'failed');
+  const earlier = log.removed[0];
+  assert.equal(log.deletedBranches.length, 0, 'branch kept while its worktree is still there');
+
+  tick(60000);
+  await orch.launch({ planId: plan.id, ids: ['a'] });
+  const a = orch.view().packages[0];
+  assert.equal(a.state, 'launched');
+  assert.equal(log.removed[1], earlier, 'the earlier worktree is removed before the new launch');
+  assert.equal(log.deletedBranches.length, 1);
+  assert.equal(log.deletedBranches[0], `luna/${path.basename(earlier)}`);
+  assert.notEqual(a.root, earlier);
+});
+
+test('a leftover from a failed launch survives a store round-trip; junk is dropped', () => {
+  const root = path.resolve('/.luna-worktrees/repo/a-abcde');
+  const ok = sup.normalizeStoredPlan({
+    id: 'p',
+    repoPath: path.resolve('/repo'),
+    packages: [{ ...pkg('a'), state: 'failed', leftovers: [{ root, branch: 'luna/a-abcde', base: 'abcdef1' }] }],
+  });
+  assert.deepEqual(ok.packages[0].leftovers, [{ root, branch: 'luna/a-abcde', base: 'abcdef1' }]);
+  const junk = sup.normalizeStoredPlan({
+    id: 'p',
+    repoPath: path.resolve('/repo'),
+    packages: [{ ...pkg('a'), state: 'failed', leftovers: [{ root: 'C:/Windows', branch: 'main' }, 'x'] }],
+  });
+  assert.deepEqual(junk.packages[0].leftovers, []);
+  const legacy = sup.normalizeStoredPlan({ id: 'p', repoPath: path.resolve('/repo'), packages: [{ ...pkg('a') }] });
+  assert.deepEqual(legacy.packages[0].leftovers, []);
+});
+
+// ---------------------------------------------------------------------------
+// a git that does not answer (after a PC wake) is retried, never terminal
+// ---------------------------------------------------------------------------
+
+function timedSetup(addWorktree) {
+  let clock = 1700000000000;
+  const timers = [];
+  const worktrees = [];
+  const s = setup({
+    deps: {
+      now: () => clock,
+      addWorktree: async (_repo, name) => {
+        worktrees.push(name);
+        return addWorktree(worktrees.length, name);
+      },
+      setTimer: (fn, ms) => {
+        const t = { fn, at: clock + ms, done: false };
+        timers.push(t);
+        return t;
+      },
+      clearTimer: (t) => {
+        if (t) t.done = true;
+      },
+    },
+  });
+  const advance = (ms) => {
+    clock += ms;
+    for (const t of [...timers]) {
+      if (!t.done && t.at <= clock) {
+        t.done = true;
+        t.fn();
+      }
+    }
+  };
+  const flush = async (n = 6) => {
+    for (let i = 0; i < n; i += 1) await new Promise((r) => setImmediate(r));
+  };
+  return { ...s, worktrees, advance, flush };
+}
+
+const TIMEOUT_FAIL = {
+  ok: false,
+  error: 'gitFailed',
+  detail: 'git rev-parse --show-toplevel in /repo: timed out after 30s (killed, no exit code); no stderr',
+  retryable: true,
+};
+const made = (name) => ({ ok: true, root: path.join('/wt', name), cwd: path.join('/wt', name), branch: `luna/${name}` });
+
+test('a git timeout at launch is retried with backoff and never goes terminal on a repeat', async () => {
+  const s = timedSetup((n, name) => (n <= 3 ? TIMEOUT_FAIL : made(name)));
+  const { plan } = await s.orch.makePlan(s.ctx);
+  await s.orch.launch({ planId: plan.id, ids: ['a'] });
+  for (let i = 0; i < 3; i += 1) {
+    const a = s.orch.view().packages[0];
+    assert.deepEqual([a.state, a.error, a.terminal], ['failed', 'gitFailed', false], `attempt ${i + 1}`);
+    assert.match(a.detail, /timed out/);
+    s.advance(transientDelayMs(i) - 1);
+    await s.flush();
+    assert.equal(s.worktrees.length, i + 1, 'not before the backoff');
+    s.advance(1);
+    await s.flush();
+  }
+  assert.equal(s.worktrees.length, 4);
+  assert.equal(s.orch.view().packages[0].state, 'launched');
+  assert.ok(transientDelayMs(1) > transientDelayMs(0), 'backoff grows');
+});
+
+test('a git that keeps timing out goes terminal only after the transient ladder', async () => {
+  const s = timedSetup(() => TIMEOUT_FAIL);
+  const { plan } = await s.orch.makePlan(s.ctx);
+  await s.orch.launch({ planId: plan.id, ids: ['a'] });
+  for (let i = 0; i < MAX_TRANSIENT_RETRIES; i += 1) {
+    s.advance(transientDelayMs(i));
+    await s.flush();
+  }
+  assert.equal(s.worktrees.length, 1 + MAX_TRANSIENT_RETRIES);
+  assert.equal(s.orch.view().packages[0].terminal, true);
+});
+
+test('a launch right after a system resume waits first, and a timeout then does not go terminal', async () => {
+  const s = timedSetup((n, name) => (n === 1 ? TIMEOUT_FAIL : made(name)));
+  const { plan } = await s.orch.makePlan(s.ctx);
+  s.orch.onSystemResume();
+  const launching = s.orch.launch({ planId: plan.id, ids: ['a'] });
+  await s.flush();
+  assert.equal(s.worktrees.length, 0, 'no git right after the resume');
+  s.advance(RESUME_SETTLE_MS - 1);
+  await s.flush();
+  assert.equal(s.worktrees.length, 0);
+  s.advance(1);
+  await launching;
+  assert.equal(s.worktrees.length, 1);
+  const a = s.orch.view().packages[0];
+  assert.deepEqual([a.state, a.error, a.terminal], ['failed', 'gitFailed', false]);
+  s.advance(transientDelayMs(0));
+  await s.flush();
+  assert.equal(s.orch.view().packages[0].state, 'launched');
 });
