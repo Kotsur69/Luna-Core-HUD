@@ -29,6 +29,7 @@ const { BRIEF_DIR } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
 const { finishPackage, headSha } = require('./orchestraFinish');
 const orchestraIntegrate = require('./orchestraIntegrate');
+const orchestraDeps = require('./orchestraDeps');
 const { renderRunReportHtml, repoPathOf } = require('./orchestraReport');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
 const defaultStore = require('./orchestraStore');
@@ -135,6 +136,10 @@ function sessionDeps(ctx) {
         return false;
       }
     },
+    // Each package worktree gets its own dependencies (one install at a
+    // time across every run), checked before a worker starts or a verify runs.
+    installDeps: (root, opts) => orchestraDeps.installWorktreeDeps(root, { fresh: !!(opts && opts.fresh) }),
+    checkDeps: (root) => orchestraDeps.checkNodeModules(root),
     // Slice 4 supervisor.
     finishPackage,
     headSha,
@@ -197,6 +202,8 @@ function integrationDeps(ctx) {
         addWorktree: wt.addWorktree,
         removeWorktree: wt.removeWorktree,
         resolve,
+        // The integration worktree's install queues behind the package installs.
+        installImpl: (root, verifyImpl) => orchestraDeps.runQueued(() => orchestraIntegrate.ensureInstall(root, verifyImpl)),
         ...(extra && typeof extra.beforePush === 'function' ? { beforePush: extra.beforePush } : {}),
       }),
     runSelfCheck: ctx.secretGate.wrapSelfCheck((args) => orchestraSelfCheck.runSelfCheck(args)),
@@ -247,10 +254,14 @@ function reportDeps(ctx, self) {
       if (!ctx.readUiPrefs().notificationsEnabled) return;
       ctx.toast(TOAST_TITLE, `${pushed}/${total} pushed${failed ? ' - integration needs you' : ''}`);
     },
-    onRunEvent: (kind) => {
+    onRunEvent: (kind, data) => {
+      // The whole run waits for Mati: say so even with the board closed.
+      if (kind === 'noNodeModules' && ctx.readUiPrefs().notificationsEnabled) {
+        ctx.toast(TOAST_TITLE, orchestraDeps.noNodeModulesText((data && data.dir) || '?'));
+      }
       if (ctx.readUiPrefs().voiceEnabled === false) return;
       if (kind === 'done') ctx.playCue('voice.done');
-      else if (kind === 'needYou' || kind === 'stalled' || kind === 'overlap') ctx.playCue('voice.needYou');
+      else if (kind === 'needYou' || kind === 'stalled' || kind === 'overlap' || kind === 'noNodeModules') ctx.playCue('voice.needYou');
     },
   };
 }

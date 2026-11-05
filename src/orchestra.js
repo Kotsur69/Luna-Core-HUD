@@ -106,11 +106,21 @@ function briefText(pkg, branch, opts = {}) {
     '',
     '## Rules',
     '- Work only in this worktree. Do not push, merge or switch branches.',
+    `- ${DEPS_RULE}`,
     '- When the work is done and verified, commit it on this branch with a conventional commit message.',
     `- End your final message with the line \`LUNA_DONE ${pkg.id}\`, or \`LUNA_BLOCKED ${pkg.id}: <reason>\` if you cannot finish.`,
     '',
   ].join('\n');
 }
+
+// LunaCore installs every package worktree's dependencies before the worker
+// starts (orchestraDeps.js). A worker that links node_modules to the main
+// checkout empties it when the worktree is removed.
+const DEPS_RULE =
+  'Dependencies are already installed in this worktree (node_modules). Do not link node_modules to another checkout and do not reinstall, delete or replace them. If they look broken, stop and end with LUNA_BLOCKED.';
+
+/** A package a 'noNodeModules' hold keeps waiting (verify, launch, restart or Retry). */
+const isHeld = (p) => p.awaitingDeps === true || !!p.heldResume || p.heldLaunch === true || p.heldRetry === true;
 
 // One line of model-facing text from git output: no control characters.
 const oneLine = (v) => String(v).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 300);
@@ -283,6 +293,10 @@ function createOrchestra(deps) {
   const setTimer = deps.setTimer || setTimeout;
   const clearTimer = deps.clearTimer || clearTimeout;
   const log = deps.log || noop;
+  // Package worktree dependencies (orchestraDeps.js): install after
+  // addWorktree, check before a worker starts and before the post-DONE verify.
+  const installDeps = deps.installDeps || (async () => ({ ok: true, output: '' }));
+  const checkDeps = deps.checkDeps || (() => ({ ok: true, needed: false }));
 
   /** @type {null|object} */
   let plan = null;
@@ -412,6 +426,8 @@ function createOrchestra(deps) {
     const stored = normalized && deps.resolvePath ? sup.rehomePlanPaths(normalized, deps.resolvePath, deps.resolveFile) : normalized;
     if (!stored || plan) return false;
     plan = { ...sup.restoreAfterRestart(stored), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, settled: false };
+    // A held run is held anyway after a restart; Approve / Retry check again.
+    releaseHold();
     // A schedule Mati armed survives a restart; one already missed does not
     // start the run late - the run stays held.
     if (plan.scheduledAt && plan.scheduledAt > now()) armSchedule(plan.scheduledAt);
@@ -462,6 +478,8 @@ function createOrchestra(deps) {
       killed: plan.killed,
       settled: plan.settled,
       pausedUntil: plan.pausedUntil,
+      // A machine problem holding the whole run ('noNodeModules'); Resume clears it.
+      hold: plan.hold ? { reason: plan.hold.reason, dir: plan.hold.dir, detail: plan.hold.detail || null, at: plan.hold.at } : null,
       scheduledAt: plan.scheduledAt,
       // The morning report's Timeline (orchestraReport.js).
       runStartedAt: plan.runStartedAt || null,
@@ -508,6 +526,7 @@ function createOrchestra(deps) {
         failure: p.failure || null,
         lastWords: p.lastWords || null,
         verifyTail: p.verifyTail || null,
+        awaitingDeps: p.awaitingDeps === true,
       })),
     };
   }
@@ -673,6 +692,7 @@ function createOrchestra(deps) {
         settled: false,
         pausedUntil: null,
         pauseStartedAt: null,
+        hold: null,
         runStartedAt: null,
         pausedTotalMs: 0,
         todoText: new Map(openTodos.map((t) => [t.at, t.text])),
@@ -757,6 +777,8 @@ function createOrchestra(deps) {
    */
   async function launchOne(pkg, stamp) {
     const made = { wt: null, base: null, depBranch: null };
+    // A fresh launch replaces any held one (its worktree is cleared below).
+    if (pkg.heldLaunch) patch(pkg.id, { heldLaunch: false });
     let leftovers = Array.isArray(pkg.leftovers) ? pkg.leftovers : [];
     // Awaited only when there is something to clear: a plain launch reaches
     // git without yielding first.
@@ -828,12 +850,77 @@ function createOrchestra(deps) {
     if (baseSha) made.base = baseSha;
     const briefPath = path.join(deps.briefDir(), `${path.basename(wt.root)}.md`);
     const where = { branch: wt.branch, root: wt.root, cwd: wt.cwd, briefPath, baseSha, depMerge };
-    if (!deps.writeBrief(briefPath, briefText(pkg, wt.branch, { depMerge }))) {
+    // The worktree's own dependencies, before the worker starts. A failed
+    // install keeps the worktree (Retry installs again) and stalls the package.
+    const installed = await installDeps(wt.root);
+    if (!installed.ok) return { ...where, ...installFailedFields(installed.output) };
+    const ready = checkDeps(wt.root);
+    // No package is stalled for a machine problem: the run holds and Resume
+    // starts this worker in the same worktree.
+    if (!ready.ok) return { ...where, state: 'pending', heldLaunch: true, held: ready };
+    return startWorker(pkg, where);
+  }
+
+  /**
+   * Brief + tab for a package whose worktree is ready.
+   * @param {object} pkg
+   * @param {{branch:string, root:string, cwd:string, briefPath:string, baseSha:string|null, depMerge:object|null}} where
+   */
+  function startWorker(pkg, where) {
+    if (!deps.writeBrief(where.briefPath, briefText(pkg, where.branch, { depMerge: where.depMerge }))) {
       return { ...where, state: 'failed', error: 'briefFailed' };
     }
-    const session = openTab(pkg, wt.cwd, wt.branch, briefPath);
+    const session = openTab(pkg, where.cwd, where.branch, where.briefPath);
     if (!session) return { ...where, state: 'failed', error: 'noTab' };
-    return { ...where, ...freshRun(), state: 'launched', sessionId: session.id };
+    return { ...where, ...freshRun(), state: 'launched', sessionId: session.id, heldLaunch: false };
+  }
+
+  /** A failed dependency install: its own error, the last line and the output tail. */
+  function installFailedFields(output) {
+    const lines = String(output || '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    return {
+      state: 'stalled',
+      error: 'installFailed',
+      detail: (lines.pop() || 'npm ci failed').slice(0, 300),
+      verifyTail: outputTail(output),
+      stalledAt: now(),
+    };
+  }
+
+  /**
+   * The safety net before a worker starts or a verify runs: the package's
+   * node_modules must hold its dependencies. A held run passes nothing.
+   * @returns {boolean}
+   */
+  function depsReady(pkg) {
+    if (plan.hold) return false;
+    const res = checkDeps(pkg && pkg.root);
+    if (res.ok) return true;
+    holdRun(res);
+    return false;
+  }
+
+  /**
+   * Holds the WHOLE run: no launch, no reopen and no verify until Resume.
+   * Workers already running carry on in their own worktrees.
+   * @param {{dir:string, detail?:string}} res a failed checkNodeModules
+   */
+  function holdRun(res) {
+    // A killed run holds nothing: Retry checks again.
+    if (plan.hold || plan.killed) return;
+    plan.hold = { reason: 'noNodeModules', dir: res.dir, detail: res.detail || null, at: now() };
+    onRunEvent('noNodeModules', { dir: res.dir, detail: res.detail || null });
+  }
+
+  /** Drops the hold and every package's waiting flag (restart, kill). */
+  function releaseHold() {
+    plan.hold = null;
+    plan.packages = plan.packages.map((p) =>
+      isHeld(p) ? { ...p, awaitingDeps: false, heldResume: null, heldLaunch: false, heldRetry: false } : p,
+    );
   }
 
   async function launchPackages(chosen) {
@@ -841,11 +928,11 @@ function createOrchestra(deps) {
     if (resumeGate.waitMs() > 0) await settleAfterResume();
     const stamp = now().toString(36).slice(-5);
     for (const pkg of chosen) {
-      // Kill / pause while an earlier launch was awaiting git: stop here.
-      if (plan.killed || plan.pausedUntil) break;
+      // Kill / pause / hold while an earlier launch was awaiting git: stop here.
+      if (plan.killed || plan.pausedUntil || plan.hold) break;
       cancelAutoRetry(pkg.id);
       const before = findPkg(pkg.id) || pkg;
-      const { retryable, ...result } = await launchOne(before, stamp);
+      const { retryable, held, ...result } = await launchOne(before, stamp);
       if (plan.killed && result.state === 'launched') {
         // The kill landed during this very launch: the tab exists, stop it too.
         writePty(result.sessionId, ESC);
@@ -854,6 +941,15 @@ function createOrchestra(deps) {
         patch(pkg.id, result);
         if (result.state === 'failed') onLaunchFailed(before, { ...result, retryable });
         else transientRetries.delete(pkg.id);
+        if (held) holdRun(held);
+        // Killed during the install: no held launch to resume, the next
+        // launch clears this worktree like any earlier one.
+        if (held && plan.killed) patch(pkg.id, { heldLaunch: false });
+        if (result.state === 'stalled') {
+          // An install failure: nothing automatic installs again, Retry does.
+          markTerminal(pkg.id, result.error);
+          onRunEvent('stalled', { id: pkg.id, reason: result.error });
+        }
       }
       commit();
     }
@@ -977,11 +1073,11 @@ function createOrchestra(deps) {
 
   /** Launches whatever is ready, while slots are free. Re-entrancy safe. */
   async function pump() {
-    if (!plan || !plan.started || plan.killed || plan.pausedUntil || pumping) return;
+    if (!plan || !plan.started || plan.killed || plan.pausedUntil || plan.hold || pumping) return;
     pumping = true;
     try {
       let ready = sup.readyToLaunch(plan.packages, MAX_PARALLEL);
-      while (ready.length && !plan.killed && !plan.pausedUntil) {
+      while (ready.length && !plan.killed && !plan.pausedUntil && !plan.hold) {
         await launchPackages(ready);
         ready = sup.readyToLaunch(plan.packages, MAX_PARALLEL);
       }
@@ -1010,6 +1106,7 @@ function createOrchestra(deps) {
     if (plan.errors.length) return { ok: false, error: 'planErrors' };
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan.pausedUntil) return { ok: false, error: 'paused' };
+    if (plan.hold) return { ok: false, error: plan.hold.reason };
     const mode = sup.INTEGRATION_MODES.includes(o.integration) ? o.integration : null;
     let startAt = null;
     if (o.schedule != null && !Array.isArray(o.ids) && !plan.started) {
@@ -1123,11 +1220,19 @@ function createOrchestra(deps) {
     patch(id, { state: 'stalled', error: reason, detail, stalls, stalledAt: now() });
     const pkg = findPkg(id);
     const live = !plan.killed && !plan.pausedUntil;
-    if (live && sup.shouldEscalate(pkg, modelFor(pkg), reason) && escalate(pkg, reason, detail)) {
+    const wantsEscalate = live && sup.shouldEscalate(pkg, modelFor(pkg), reason);
+    const wantsResume = live && sup.shouldAutoResume(pkg, reason);
+    if (wantsEscalate && escalate(pkg, reason, detail)) {
       commit();
       return;
     }
-    if (live && sup.shouldAutoResume(pkg, reason) && autoResume(pkg, reason, detail)) {
+    if (wantsResume && autoResume(pkg, reason, detail)) {
+      commit();
+      return;
+    }
+    if ((wantsEscalate || wantsResume) && plan.hold) {
+      // The restart waits for Resume instead of being spent on a broken node_modules.
+      patch(id, { heldResume: { reason, detail } });
       commit();
       return;
     }
@@ -1146,6 +1251,7 @@ function createOrchestra(deps) {
    * @returns {{ok:true} | {ok:false, error:'briefFailed'|'noTab'}}
    */
   function reopenInWorktree(pkg, text) {
+    if (!depsReady(pkg)) return { ok: false, error: 'noNodeModules' };
     // Recomputed, never taken from the saved run: only LunaCore's own
     // brief folder is ever written to.
     const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
@@ -1176,6 +1282,7 @@ function createOrchestra(deps) {
    * @returns {boolean} false when the new tab could not be opened (stays stalled)
    */
   function escalate(pkg, reason, detail) {
+    if (!depsReady(pkg)) return false;
     const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
     const text = briefText(pkg, pkg.branch, { resume: true, escalation: { reason, detail } });
     if (!deps.writeBrief(briefPath, text)) return false;
@@ -1201,7 +1308,7 @@ function createOrchestra(deps) {
   function sendNudge(id) {
     nudgeTimers.delete(id);
     const pkg = plan ? findPkg(id) : null;
-    if (!pkg || pkg.state !== 'launched' || plan.pausedUntil || plan.killed) return;
+    if (!pkg || pkg.state !== 'launched' || pkg.awaitingDeps || plan.pausedUntil || plan.killed) return;
     const action = sup.turnEndAction(pkg, null);
     if (action.type === 'stall') {
       stall(id, action.reason);
@@ -1217,6 +1324,14 @@ function createOrchestra(deps) {
 
   async function finish(id) {
     cancelNudge(id);
+    // The post-DONE verify runs a plain `npm test` in the worktree: not
+    // without its dependencies. The package waits for Resume, unstalled.
+    if (!depsReady(findPkg(id))) {
+      patch(id, { awaitingDeps: true });
+      commit();
+      return;
+    }
+    if (findPkg(id).awaitingDeps) patch(id, { awaitingDeps: false });
     // A package finishing after the run settled (Mati unblocked it by hand)
     // reopens the run, so its end gets its own cue.
     plan.settled = false;
@@ -1268,6 +1383,11 @@ function createOrchestra(deps) {
     // Evidence for the report's "What went wrong": what the worker said last.
     const lastWords = lastWordsFrom(fragment);
     if (lastWords) patch(pkg.id, { lastWords });
+    // LUNA_DONE already came; the verify waits for Resume.
+    if (pkg.awaitingDeps) {
+      commit();
+      return;
+    }
     const marker = sup.markerFrom(fragment, pkg.id);
     if (pkg.state === 'stalled') {
       if (marker && marker.kind === 'done') finish(pkg.id);
@@ -1419,7 +1539,7 @@ function createOrchestra(deps) {
   function tick() {
     if (!plan || plan.pausedUntil || plan.killed) return;
     for (const p of plan.packages) {
-      if (p.state === 'launched' && sup.timedOut(p, now())) stall(p.id, 'timeout');
+      if (p.state === 'launched' && !p.awaitingDeps && sup.timedOut(p, now())) stall(p.id, 'timeout');
     }
     expireApprovals();
   }
@@ -1468,6 +1588,8 @@ function createOrchestra(deps) {
       patch(p.id, { state: 'killed' });
     }
     settledFinalize = false;
+    // A kill ends the hold too: Retry checks node_modules again.
+    releaseHold();
     background(powerFlow.cancelSleep(), 'sleep');
     background(powerFlow.cancelShutdown(), 'shutdown');
     onRunEvent('killed');
@@ -1488,6 +1610,7 @@ function createOrchestra(deps) {
     if (!pkg || !(sup.RETRYABLE_STATES.has(pkg.state) || pkg.state === 'failed')) return { ok: false, error: 'notRetryable' };
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan.pausedUntil) return { ok: false, error: 'paused' };
+    if (plan.hold) return { ok: false, error: plan.hold.reason };
 
     freezeSettings();
     if (pkg.sessionId && sessionAlive(pkg.sessionId)) {
@@ -1496,8 +1619,23 @@ function createOrchestra(deps) {
       // a nudge + Enter now would land IN the prompt and answer it blindly.
       if (pkg.error !== 'needsApproval') writePty(pkg.sessionId, sup.nudgeText(pkg.id), { paste: true });
     } else if (pkg.root && pkg.branch) {
-      const reopened = reopenInWorktree(pkg, briefText(pkg, pkg.branch, { resume: true }));
-      if (!reopened.ok) return { ok: false, error: reopened.error };
+      // A new worker in the old worktree: install what is missing first
+      // (an earlier install failed, or an older build never installed).
+      const killedBefore = plan.killed;
+      const installed = await installForRetry(pkg);
+      if (!installed.ok) return installed;
+      // The install can take minutes: a kill, pause or hold that landed meanwhile wins.
+      if ((plan.killed && !killedBefore) || plan.pausedUntil || plan.hold) {
+        commit();
+        return { ok: false, error: plan.killed ? 'notRetryable' : plan.pausedUntil ? 'paused' : plan.hold.reason };
+      }
+      const reopened = reopenInWorktree(findPkg(pkg.id), briefText(pkg, pkg.branch, { resume: true }));
+      if (!reopened.ok) {
+        // Held for node_modules: Resume reopens it, no second Retry needed.
+        if (reopened.error === 'noNodeModules') patch(pkg.id, { heldRetry: true });
+        commit();
+        return { ok: false, error: reopened.error };
+      }
     } else {
       patch(pkg.id, { state: 'pending', error: null, detail: null });
     }
@@ -1515,6 +1653,106 @@ function createOrchestra(deps) {
     commit();
     await pump();
     return { ok: true, plan: view() };
+  }
+
+  /**
+   * Retry's install in an existing worktree, holding `busy` so nothing else
+   * acts on the run meanwhile. A failure stalls the package with the output.
+   * @returns {Promise<{ok:true} | {ok:false, error:'installFailed'}>}
+   */
+  async function installForRetry(pkg) {
+    busy = true;
+    let installed;
+    try {
+      // After a failed install a partial node_modules would make the
+      // install a no-op: start from scratch.
+      installed = await installDeps(pkg.root, { fresh: pkg.error === 'installFailed' });
+    } finally {
+      busy = false;
+    }
+    if (installed.ok) return { ok: true };
+    patch(pkg.id, { ...installFailedFields(installed.output), terminal: true });
+    plan.packages = sup.withBlockedBy(plan.packages);
+    onRunEvent('stalled', { id: pkg.id, reason: 'installFailed' });
+    commit();
+    return { ok: false, error: 'installFailed' };
+  }
+
+  /**
+   * Resume after a 'noNodeModules' hold: every folder the hold is about is
+   * checked again; still broken -> stays held. Then the held work goes on:
+   * held launches start their worker, deferred verifies run, held automatic
+   * restarts happen, and the pump launches the rest.
+   * @param {unknown} payload {planId}
+   */
+  async function resumeRun(payload) {
+    const o = payload && typeof payload === 'object' ? payload : {};
+    if (!plan || o.planId !== plan.id) return { ok: false, error: 'noPlan' };
+    if (!plan.hold || plan.killed) return { ok: false, error: 'notHeld' };
+    if (plan.pausedUntil) return { ok: false, error: 'paused' };
+    if (isBusy()) return { ok: false, error: 'busy' };
+    const waiting = plan.packages.filter(isHeld);
+    const dirs = [...new Set([plan.hold.dir, ...waiting.map((p) => p.root)].filter(Boolean))];
+    for (const dir of dirs) {
+      const res = checkDeps(dir);
+      if (!res.ok) {
+        plan.hold = { ...plan.hold, dir: res.dir, detail: res.detail || null };
+        commit();
+        return { ok: false, error: 'noNodeModules', plan: view() };
+      }
+    }
+    plan.hold = null;
+    onRunEvent('resumed', { reason: 'noNodeModules' });
+    for (const p of waiting) resumeHeld(p.id);
+    commit();
+    for (const p of waiting) {
+      const current = findPkg(p.id);
+      if (current && current.awaitingDeps) background(finish(p.id), 'finish');
+    }
+    await pump();
+    return { ok: true, plan: view() };
+  }
+
+  /** One package the hold kept waiting: a held launch or restart goes on now. */
+  function resumeHeld(id) {
+    const p = findPkg(id);
+    if (p.heldLaunch) {
+      const before = p;
+      const result = startWorker(p, { branch: p.branch, root: p.root, cwd: p.cwd, briefPath: p.briefPath, baseSha: p.baseSha, depMerge: p.depMerge || null });
+      if (result.state === 'failed') {
+        // The worktree stays recorded: the automatic relaunch clears it first.
+        patch(id, { ...result, heldLaunch: false, failure: failureOf(result, null, now()) });
+        onLaunchFailed(before, result);
+      } else {
+        patch(id, result);
+      }
+      return;
+    }
+    if (p.heldRetry) {
+      patch(id, { heldRetry: false });
+      const reopened = reopenInWorktree(findPkg(id), briefText(p, p.branch, { resume: true }));
+      if (reopened.ok) {
+        patch(id, { terminal: false, autoRetries: 0 });
+        plan.packages = sup.withBlockedBy(plan.packages);
+      } else if (reopened.error === 'noNodeModules') {
+        // Held again: the next Resume reopens it.
+        patch(id, { heldRetry: true });
+      } else {
+        patch(id, { error: reopened.error, detail: null });
+      }
+      return;
+    }
+    if (p.heldResume) {
+      const { reason, detail } = p.heldResume;
+      patch(id, { heldResume: null });
+      const pkg = findPkg(id);
+      const restarted =
+        (sup.shouldEscalate(pkg, modelFor(pkg), reason) && escalate(pkg, reason, detail)) ||
+        (sup.shouldAutoResume(pkg, reason) && autoResume(pkg, reason, detail));
+      // Held again: the next Resume restarts it; otherwise it has had its chance.
+      if (!restarted && plan.hold) patch(id, { heldResume: { reason, detail } });
+      else if (!restarted) markTerminal(id, reason);
+    }
   }
 
   /** A closed tab leaves its worktree; the board says so and the slot frees. */
@@ -1564,6 +1802,7 @@ function createOrchestra(deps) {
     view,
     discard,
     retry,
+    resumeRun,
     kill,
     tick,
     onTurnEnd,
