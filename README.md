@@ -7,7 +7,33 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.22.0 — God Mode that survives the night.**
+> **Current release: v0.23.0 — one hub, every run.**
+> - **Notification hub:** a face chip with a live "needs you" badge
+>   (Ctrl+Shift+H) opens a drawer with Needs you / Briefs / Recent, including
+>   runs from your other PCs, done marks synced between them and one OS toast
+>   per new item.
+> - **Every God Mode run on one board:** a project switcher on the board, the
+>   phone shows every live run, and toasts name the repo. When every Claude
+>   account is limited, all runs pause until the earliest reset under one
+>   shared sleep / shutdown flow.
+> - **After the merge:** the local base checkout is fast-forwarded (plus
+>   `npm ci` when the lockfile changed), the integration worktree and merged
+>   branches are cleaned up, and a release can be cut automatically or with
+>   "Release now". A run email waits for Gmail and can be resent.
+> - **Supabase actions applied for you:** a run's migrations and edge
+>   functions can be applied after the merge (off / ask / automatic); risky
+>   SQL always asks first.
+> - **Smarter merges:** a package that goes red after its merge gets one
+>   fix-up worker, skipped packages get a second merge pass, and the report
+>   says why a package was left out.
+> - **Life sync and host hardening:** check-in, habits, weekly goals and score
+>   settings sync between PCs; host-mode leftovers from the security review
+>   are fixed.
+> - **Luna's Work:** Electron and Unity tester adapters and a game-asset
+>   pipeline; terminal output that arrives before the tab mounts is no
+>   longer lost.
+>
+> **v0.22.0 — God Mode that survives the night.**
 > - **Sleep-proof finishing:** PC sleep no longer counts as worker time, so a
 >   laptop that slept mid-run does not time its packages out; the finish step
 >   has a watchdog that kills a hung merge and frees the board.
