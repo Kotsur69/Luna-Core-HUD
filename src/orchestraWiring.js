@@ -27,15 +27,19 @@ const fs = require('fs');
 const path = require('path');
 const { BRIEF_DIR } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
-const { finishPackage, headSha } = require('./orchestraFinish');
+const { finishPackage, headSha, runVerify } = require('./orchestraFinish');
+const { sharedVerifyQueue } = require('./verifyQueue');
 const orchestraIntegrate = require('./orchestraIntegrate');
 const orchestraDeps = require('./orchestraDeps');
 const { renderRunReportHtml, repoPathOf } = require('./orchestraReport');
+const { gitDirExists } = require('./orchestraDiagnose');
 const orchestraSelfCheck = require('./orchestraSelfCheck');
 const defaultStore = require('./orchestraStore');
 const { lastOpenToolUse, allowRuleFor, exampleFor } = require('./orchestraSupervisor');
 const { guardedSessionFactory } = require('./overnight');
 const { createPowerCtl } = require('./powerctl');
+const { createProcessScope } = require('./procTree');
+const { WATCHDOG_TICK_MS } = require('./orchestraSleep');
 
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 // How much of a worker's transcript is read to name the tool a permission
@@ -140,8 +144,10 @@ function sessionDeps(ctx) {
     // time across every run), checked before a worker starts or a verify runs.
     installDeps: (root, opts) => orchestraDeps.installWorktreeDeps(root, { fresh: !!(opts && opts.fresh) }),
     checkDeps: (root) => orchestraDeps.checkNodeModules(root),
-    // Slice 4 supervisor.
-    finishPackage,
+    // Slice 4 supervisor. Package verifies of every project's run share one
+    // serial queue (verifyQueue.js); hooks feed the board's "waiting to verify".
+    finishPackage: (pkg, hooks) =>
+      finishPackage(pkg, { verifyImpl: (command, cwd) => sharedVerifyQueue().run(command, cwd, hooks || {}) }),
     headSha,
     sessionAlive: (id) => {
       const s = ctx.sessions.get(id);
@@ -187,6 +193,12 @@ function todoDeps(ctx) {
   };
 }
 
+/** execImpl / verifyImpl whose children a process scope tracks. */
+const scopedIo = (scope) => ({
+  execImpl: scope.execFile,
+  verifyImpl: (command, cwd) => runVerify(command, cwd, scope.exec),
+});
+
 /** Merge, PR, self-check and branch cleanup (orchestraIntegrate / orchestraSelfCheck). */
 function integrationDeps(ctx) {
   const resolve = (r) => orchestraIntegrate.runResolver({ ...r, env: ctx.toolEnv() });
@@ -197,16 +209,25 @@ function integrationDeps(ctx) {
     mergeDeps: (root, branches) => orchestraIntegrate.mergeDeps(root, branches, { resolve }),
     createPr: (args) => orchestraIntegrate.createPr({ ...args, env: ctx.toolEnv() }),
     // extra.beforePush: the end-of-run self-check gate (orchestraFinalize.js).
-    integrateMerge: (args, extra) =>
-      orchestraIntegrate.integrateMerge(args, {
+    // extra.scope: the pass's process scope (src/procTree.js) - git, npm
+    // and the resolver run through it, so a timed-out pass can be killed.
+    integrateMerge: (args, extra) => {
+      const scope = extra && extra.scope ? extra.scope : null;
+      return orchestraIntegrate.integrateMerge(args, {
         addWorktree: wt.addWorktree,
         removeWorktree: wt.removeWorktree,
-        resolve,
-        // The integration worktree's install queues behind the package installs.
+        resolve: scope ? (r) => orchestraIntegrate.runResolver({ ...r, env: ctx.toolEnv() }, scope.execFile) : resolve,
+        // The integration worktree's install queues behind the package installs;
+        // verifyImpl comes from integrateMerge, so a scoped pass stays killable.
         installImpl: (root, verifyImpl) => orchestraDeps.runQueued(() => orchestraIntegrate.ensureInstall(root, verifyImpl)),
+        ...(scope ? scopedIo(scope) : {}),
         ...(extra && typeof extra.beforePush === 'function' ? { beforePush: extra.beforePush } : {}),
-      }),
-    runSelfCheck: ctx.secretGate.wrapSelfCheck((args) => orchestraSelfCheck.runSelfCheck(args)),
+      });
+    },
+    runSelfCheck: ctx.secretGate.wrapSelfCheck((args) =>
+      orchestraSelfCheck.runSelfCheck(args, args && args.scope ? scopedIo(args.scope) : undefined),
+    ),
+    createProcessScope: () => createProcessScope(),
     pushBranch: ctx.secretGate.wrapPushBranch((root, branch) => orchestraSelfCheck.pushBranch(root, branch)),
     removeWorktree: wt.removeWorktree,
     // Failed-launch cleanup + the orphan-branch sweep (orchestraCleanup.js).
@@ -231,7 +252,8 @@ function reportDeps(ctx, self) {
         // The same run as a standalone page with charts, next to the .md.
         try {
           const view = self().view() || {};
-          const html = renderRunReportHtml(view, { now: Date.now(), suggestions: view.suggestions, repoPath: repoPathOf(text) });
+          const repoPath = repoPathOf(text);
+          const html = renderRunReportHtml(view, { now: Date.now(), suggestions: view.suggestions, repoPath, gitDirExists: gitDirExists(repoPath) });
           fs.writeFileSync(path.join(dir, `${planId}.html`), html, { encoding: 'utf8', mode: 0o600 });
         } catch (err) {
           ctx.logError(`[orchestra] html report failed: ${errText(err)}`);
@@ -403,6 +425,9 @@ function makeOrchestraDeps(projectId, ctx) {
     ...stateDeps(projectId, ctx, store),
     ...powerDeps(projectId, ctx),
     ...builderDeps(projectId, ctx, self),
+    // The watchdog interval (main.js ticks the registry at it): a tick much
+    // later than this means the PC slept (orchestraSleep.js).
+    tickMs: WATCHDOG_TICK_MS,
     log: (line) => ctx.log(line),
   };
 }

@@ -39,6 +39,7 @@ const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
 const { createFinalizer } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
+const pushSecrets = require('./pushSecrets');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 // A planner limit with another Claude account free: replan after this long.
 const ACCOUNT_SWITCH_RETRY_MS = 3000;
@@ -53,6 +54,7 @@ const {
 const { launchRetryDecision, createResumeGate } = require('./orchestraLaunchRetry');
 const { createPowerFlow } = require('./orchestraPower');
 const { createPowerCtl } = require('./powerctl');
+const { createSleepWatch, sleepCredit, recordSleep } = require('./orchestraSleep');
 
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
@@ -63,6 +65,10 @@ const NUDGE_DELAY_MS = 5000;
 const DEFAULT_PAUSE_MS = 30 * 60 * 1000;
 // Resume a little after the reset, not on the second.
 const RESUME_GRACE_MS = 60 * 1000;
+// A turn that ended while a background process of the worker's own still
+// ran (a test suite) is not nudged: LunaCore waits for the process to report
+// back, at most this long, so a stuck process cannot hold the package forever.
+const BACKGROUND_WAIT_MS = 30 * 60 * 1000;
 // A launch that failed on machinery (worktree, brief, tab) is tried again
 // by itself after this long, at most sup.MAX_AUTO_RETRIES times.
 const AUTO_RETRY_DELAY_MS = 2 * 60 * 1000;
@@ -103,11 +109,13 @@ function briefText(pkg, branch, opts = {}) {
     '',
     '## Verify',
     pkg.verify ? `Run \`${pkg.verify}\` and fix until it passes.` : "Check your work with the project's tests before you finish.",
+    'Run the verify command in the foreground and wait for it to finish. Do not end your turn while a test run (or any other command) of yours is still running in the background: an ended turn tells LunaCore you stopped.',
     '',
     '## Rules',
     '- Work only in this worktree. Do not push, merge or switch branches.',
     `- ${DEPS_RULE}`,
     '- When the work is done and verified, commit it on this branch with a conventional commit message.',
+    pushSecrets.FAKE_SECRET_RULE,
     `- End your final message with the line \`LUNA_DONE ${pkg.id}\`, or \`LUNA_BLOCKED ${pkg.id}: <reason>\` if you cannot finish.`,
     '',
   ].join('\n');
@@ -305,8 +313,12 @@ function createOrchestra(deps) {
   // project cannot plan the same repo meanwhile.
   let planningRepo = null;
   let pumping = false;
-  /** pkgId -> pending nudge timer */
+  /** pkgId -> pending nudge timer (also the bounded wait on a background process) */
   const nudgeTimers = new Map();
+  /** sessionId -> background processes the worker started that have not reported back */
+  const backgroundOpen = new Map();
+  /** sessionId -> when the worker last showed activity (its git status changed) */
+  const lastActivity = new Map();
   /** pkgId -> scheduled automatic relaunch after a machinery failure */
   const retryTimers = new Map();
   /** pkgId -> automatic retries spent on a git that did not answer (orchestraLaunchRetry.js) */
@@ -372,8 +384,18 @@ function createOrchestra(deps) {
     onReport: deps.onReport,
     sleep: deps.sleep,
     onIdle: () => afterFinalize(),
+    // The integrate watchdog (default: orchestraFinalize integrateTimeoutFor)
+    // and the per-pass process scope whose children it kills (src/procTree.js).
+    integrateTimeoutMs: deps.integrateTimeoutMs,
+    createScope: deps.createProcessScope || null,
+    drainMs: deps.integrateDrainMs,
+    // An aborted pass's fix-up tab goes too: it edits the integration worktree.
+    onAbort: () => fixup.abort(),
   });
   const isBusy = () => busy || pumping || finalizer.isRunning();
+  // PC sleeps are not worker time (orchestraSleep.js). deps.tickMs = the
+  // watchdog interval; it turns on the missed-'suspend' gap check.
+  const sleepWatch = createSleepWatch({ now, tickMs: deps.tickMs });
 
   // Sleep at the usage limit / shut down when done (orchestraPower.js).
   const approvalsPending = () =>
@@ -425,7 +447,7 @@ function createOrchestra(deps) {
     // Folders saved on another PC / under another user name re-homed here.
     const stored = normalized && deps.resolvePath ? sup.rehomePlanPaths(normalized, deps.resolvePath, deps.resolveFile) : normalized;
     if (!stored || plan) return false;
-    plan = { ...sup.restoreAfterRestart(stored), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, settled: false };
+    plan = { ...sup.restoreAfterRestart(stored, now()), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, settled: false };
     // A held run is held anyway after a restart; Approve / Retry check again.
     releaseHold();
     // A schedule Mati armed survives a restart; one already missed does not
@@ -484,6 +506,8 @@ function createOrchestra(deps) {
       // The morning report's Timeline (orchestraReport.js).
       runStartedAt: plan.runStartedAt || null,
       pausedTotalMs: plan.pausedTotalMs || 0,
+      // Each PC sleep during the run: [{start, durationMs}] (orchestraSleep.js).
+      sleeps: Array.isArray(plan.sleeps) ? plan.sleeps.map((s) => ({ ...s })) : [],
       freeMode: plan.freeMode === true,
       options: sup.normalizeOptions(plan.options),
       integration: { ...plan.integration, running: finalizer.isRunning() },
@@ -512,6 +536,7 @@ function createOrchestra(deps) {
         startedAt: p.startedAt,
         finishedAt: p.finishedAt || null,
         stalls: p.stalls,
+        stallHistory: p.stallHistory || [],
         escalated: p.escalated,
         prUrl: p.prUrl,
         merged: p.merged,
@@ -527,6 +552,9 @@ function createOrchestra(deps) {
         lastWords: p.lastWords || null,
         verifyTail: p.verifyTail || null,
         awaitingDeps: p.awaitingDeps === true,
+        verifyPhase: p.state === 'finishing' ? p.verifyPhase || null : null,
+        scanFixup: p.scanFixup === true,
+        pushFixup: p.pushFixup === true,
       })),
     };
   }
@@ -585,6 +613,8 @@ function createOrchestra(deps) {
   function clearAllTimers() {
     for (const id of [...nudgeTimers.keys()]) cancelNudge(id);
     for (const id of [...retryTimers.keys()]) cancelAutoRetry(id);
+    backgroundOpen.clear();
+    lastActivity.clear();
     if (resumeTimer) clearTimer(resumeTimer);
     resumeTimer = null;
     clearSchedule();
@@ -695,6 +725,7 @@ function createOrchestra(deps) {
         hold: null,
         runStartedAt: null,
         pausedTotalMs: 0,
+        sleeps: [],
         todoText: new Map(openTodos.map((t) => [t.at, t.text])),
         // LW 2.12: only a plan made with an ownership map carries the key.
         ...(ownership ? { ownership } : {}),
@@ -715,6 +746,7 @@ function createOrchestra(deps) {
           startedAt: null,
           pausedMs: 0,
           stalls: 0,
+          stallHistory: [],
           escalated: false,
           modelOverride: null,
           effortOverride: null,
@@ -728,6 +760,14 @@ function createOrchestra(deps) {
           blockedBy: null,
           stalledAt: null,
           failure: null,
+          // Push protection (pushSecrets.js): one fix-up round each for the
+          // pre-push secret scan and for a GH013 rejection.
+          scanFixup: false,
+          pushFixup: false,
+          pushBlockedSha: null,
+          pushBlockDetail: null,
+          // 'queued' | 'running' while finishing (verifyQueue.js), else null.
+          verifyPhase: null,
         })),
       };
       runSettledHook = typeof ctx.onRunSettled === 'function' ? { planId: plan.id, fn: ctx.onRunSettled } : null;
@@ -1216,8 +1256,11 @@ function createOrchestra(deps) {
   function stall(id, reason, detail = null) {
     cancelNudge(id);
     const before = findPkg(id);
+    forgetSession(before.sessionId);
     const stalls = (before.stalls || 0) + 1;
-    patch(id, { state: 'stalled', error: reason, detail, stalls, stalledAt: now() });
+    // Each stall is kept (time, reason, short detail), not only the last error.
+    const stallHistory = sup.withHistoryEntry(before.stallHistory, { at: now(), kind: 'stall', reason, detail });
+    patch(id, { state: 'stalled', error: reason, detail, stalls, stallHistory, stalledAt: now() });
     const pkg = findPkg(id);
     const live = !plan.killed && !plan.pausedUntil;
     const wantsEscalate = live && sup.shouldEscalate(pkg, modelFor(pkg), reason);
@@ -1322,6 +1365,84 @@ function createOrchestra(deps) {
     commit();
   }
 
+  /**
+   * The verify queue's hooks (verifyQueue.js) for the board: 'queued' reads
+   * "waiting to verify", 'running' the usual verifying. Ignored once the run
+   * or the package moved on.
+   */
+  function verifyHooks(planId, id) {
+    const set = (phase) => {
+      const p = plan && plan.id === planId ? findPkg(id) : null;
+      if (!p || p.state !== 'finishing' || p.verifyPhase === phase) return;
+      patch(id, { verifyPhase: phase });
+      commit();
+    };
+    return {
+      // Only when something is ahead: an empty queue starts at once.
+      onQueued: (info) => {
+        if (info && info.ahead > 0) set('queued');
+      },
+      onStart: () => set('running'),
+      // A killed or discarded run's verify is skipped once its turn comes.
+      isCancelled: () => !plan || plan.id !== planId || plan.killed === true,
+    };
+  }
+
+  /**
+   * One push-protection fix-up round: `text` goes to the worker's open tab,
+   * or into a fresh brief in a reopened tab in its worktree.
+   * @returns {boolean} false when neither worked
+   */
+  function sendFixup(pkg, text, fields) {
+    if (plan.killed) return false;
+    if (sessionAlive(pkg.sessionId) && writePty(pkg.sessionId, text, { paste: true })) {
+      patch(pkg.id, { ...fields, state: 'launched', nudges: 0 });
+      return true;
+    }
+    if (!pkg.root || !pkg.branch) return false;
+    const brief = `${briefText(pkg, pkg.branch, { resume: true })}\n## LunaCore fix-up round\n\n${text}\n`;
+    if (!reopenInWorktree(pkg, brief).ok) return false;
+    patch(pkg.id, fields);
+    return true;
+  }
+
+  /** The pre-push scan found secret shapes: one fix-up round (file:line, never the value). */
+  function onSecretsFound(id, res) {
+    const pkg = findPkg(id);
+    const detail = pushSecrets.hitsSummary(res.hits);
+    const stallHistory = sup.withHistoryEntry(pkg.stallHistory, { at: now(), kind: 'fixup', reason: 'secretFound', detail });
+    if (!sendFixup(pkg, pushSecrets.secretScanText(pkg.id, res.hits, res.range), { scanFixup: true, stallHistory })) {
+      stall(id, 'secretFound', detail);
+      return;
+    }
+    onRunEvent('secretFixup', { id });
+    commit();
+  }
+
+  /**
+   * GitHub rejected the push with GH013. Never pushed again unchanged: one
+   * fix-up round (rewrite only the unpushed commits), then one more push; a
+   * second rejection - or a HEAD the worker did not change - stops the package.
+   */
+  function onPushBlocked(id, res) {
+    const pkg = findPkg(id);
+    const detail = res.blocked === 'unchanged' && pkg.pushBlockDetail ? `${res.detail}\n${pkg.pushBlockDetail}` : res.detail;
+    const capped = String(detail || '').slice(0, pushSecrets.MAX_DETAIL_CHARS) || null;
+    if (res.blocked === 'unchanged' || pkg.pushFixup) {
+      stall(id, 'pushBlocked', capped);
+      return;
+    }
+    const firstRule = String(res.detail || '').split('\n').find((l) => /GH013|secret|rule/i.test(l)) || res.detail;
+    const stallHistory = sup.withHistoryEntry(pkg.stallHistory, { at: now(), kind: 'fixup', reason: 'pushBlocked', detail: firstRule });
+    const fields = { pushFixup: true, pushBlockedSha: res.headSha || null, pushBlockDetail: capped, stallHistory };
+    if (!sendFixup(pkg, pushSecrets.pushBlockText(pkg.id, res.detail, res.range, res.blocked), fields)) {
+      stall(id, 'pushBlocked', capped);
+      return;
+    }
+    onRunEvent('pushFixup', { id });
+    commit();
+  }
+
   async function finish(id) {
     cancelNudge(id);
     // The post-DONE verify runs a plain `npm test` in the worktree: not
@@ -1335,17 +1456,47 @@ function createOrchestra(deps) {
     // A package finishing after the run settled (Mati unblocked it by hand)
     // reopens the run, so its end gets its own cue.
     plan.settled = false;
-    patch(id, { state: 'finishing', error: null, detail: null });
+    patch(id, { state: 'finishing', error: null, detail: null, verifyPhase: null });
     commit();
     let res;
     try {
-      res = await finishPackage({ ...findPkg(id), pushOnVerifyFail: plan.freeMode === true });
+      const before = findPkg(id);
+      res = await finishPackage(
+        {
+          ...before,
+          pushOnVerifyFail: plan.freeMode === true,
+          // Once per package: after its fix-up round, GitHub's own check decides.
+          scanSecrets: !before.scanFixup && !before.pushFixup,
+        },
+        verifyHooks(plan.id, id),
+      );
     } catch (err) {
       res = { ok: false, stage: 'push', detail: err instanceof Error ? err.message : 'finish failed' };
     }
     const pkg = findPkg(id);
     if (!plan || !pkg) return;
+    patch(id, { verifyPhase: null });
 
+    if (res.stage === 'secrets') {
+      onSecretsFound(id, res);
+      return;
+    }
+    if (res.stage === 'push' && res.blocked) {
+      onPushBlocked(id, res);
+      return;
+    }
+    // A verify that ran past its limit twice is no test failure: it is never
+    // pasted to the worker as one.
+    if (res.stage === 'verifyTimeout') {
+      stall(id, 'verifyTimeout', res.detail || null);
+      return;
+    }
+    // Killed while waiting for its verify: stopped like a running worker is.
+    if (res.stage === 'verifyCancelled') {
+      patch(id, { state: 'killed' });
+      commit();
+      return;
+    }
     if (res.ok) {
       const touched = sup.mergeTouched(pkg.touched, sup.relTouched(pkg.root, res.files || []));
       patch(id, { state: 'pushed', headSha: res.headSha || null, error: null, detail: null, touched, terminal: false });
@@ -1389,6 +1540,7 @@ function createOrchestra(deps) {
       return;
     }
     const marker = sup.markerFrom(fragment, pkg.id);
+    const background = trackBackground(sessionId, fragment);
     if (pkg.state === 'stalled') {
       if (marker && marker.kind === 'done') finish(pkg.id);
       return;
@@ -1398,15 +1550,85 @@ function createOrchestra(deps) {
     if (action.type === 'finish') finish(pkg.id);
     else if (action.type === 'stall' && action.reason === 'blocked') stall(pkg.id, action.reason, action.detail || null);
     else if (!plan.pausedUntil) {
-      // No marker: nudge or noMarker stall, decided after the delay.
       cancelNudge(pkg.id);
+      if (background.length) {
+        // The turn ended on a background process of the worker's own (a test
+        // run): its report back starts the next turn. No nudge is spent;
+        // after BACKGROUND_WAIT_MS the process is given up on and the usual
+        // nudge follows.
+        onRunEvent('waitingOnBackground', { id: pkg.id, tasks: background.length });
+        const armedAt = now();
+        nudgeTimers.set(pkg.id, setTimer(() => giveUpOnBackground(pkg.id, sessionId, armedAt), BACKGROUND_WAIT_MS));
+        return;
+      }
+      // No marker: nudge or noMarker stall, decided after the delay.
       nudgeTimers.set(pkg.id, setTimer(() => sendNudge(pkg.id), NUDGE_DELAY_MS));
     }
+  }
+
+  /**
+   * The PC slept (orchestraSleep.js): the active packages get the slept
+   * time back on pausedMs, the run logs it. Never credits the part an open
+   * usage-limit pause covers - resume() credits that pause whole.
+   * @param {null|{start:number, durationMs:number, source:string}} sleep
+   */
+  function applySleep(sleep) {
+    if (!sleep || !plan) return;
+    const t = now();
+    const pauseStartedAt = plan.pausedUntil ? plan.pauseStartedAt : null;
+    for (const p of plan.packages.filter(sup.isActive)) {
+      const credit = sleepCredit(sleep, p, { now: t, pauseStartedAt });
+      if (credit > 0) patch(p.id, { pausedMs: (p.pausedMs || 0) + credit });
+    }
+    // Only a sleep during the run is the run's (a later report counts them).
+    if (plan.runStartedAt && (plan.packages.some(sup.isActive) || finalizer.isRunning())) {
+      plan.sleeps = recordSleep(plan.sleeps, sleep);
+    }
+    onRunEvent('slept', { start: sleep.start, durationMs: sleep.durationMs, source: sleep.source });
+    commit();
+  }
+
+  /** A sleep the watchdog gap reveals, credited before anything reads the clock. */
+  const catchUpSleep = () => applySleep(sleepWatch.onTick());
+
+  /** electron powerMonitor 'suspend'. */
+  function onSystemSuspend() {
+    sleepWatch.onSuspend();
+  }
+
+  /** The session's still-running background processes after this fragment. */
+  function trackBackground(sessionId, fragment) {
+    const open = sup.openBackgroundTasks(fragment, backgroundOpen.get(sessionId) || []);
+    if (open.length) backgroundOpen.set(sessionId, open);
+    else backgroundOpen.delete(sessionId);
+    return open;
+  }
+
+  /**
+   * The bounded wait ran out: forget the process (it never reported) and
+   * nudge - unless the worker got busy again meanwhile (its git status
+   * changed): then a new turn is under way and its end decides.
+   */
+  function giveUpOnBackground(id, sessionId, armedAt) {
+    nudgeTimers.delete(id);
+    backgroundOpen.delete(sessionId);
+    if ((lastActivity.get(sessionId) || 0) > armedAt) return;
+    sendNudge(id);
+  }
+
+  /** Drops what LunaCore tracked about one worker tab's turns. */
+  function forgetSession(sessionId) {
+    if (!sessionId) return;
+    backgroundOpen.delete(sessionId);
+    lastActivity.delete(sessionId);
   }
 
   function resume() {
     resumeTimer = null;
     if (!plan || !plan.pausedUntil) return;
+    // A resume timer that fired on the wake, before 'resume' / the tick: the
+    // sleep is credited first, while the pause is still open.
+    catchUpSleep();
     const pausedFor = now() - (plan.pauseStartedAt || now());
     plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, pausedFor);
     plan.pausedUntil = null;
@@ -1425,9 +1647,14 @@ function createOrchestra(deps) {
 
   /**
    * electron powerMonitor 'resume': timers may not have counted the sleep.
+   * The slept time is credited to the workers first. An integrate step in
+   * flight is treated as interrupted (its children may be gone, its promise
+   * may never settle): aborted, and finalize runs once more.
    * Past the reset -> resume now; before it -> re-arm the resume timer.
    */
   function onSystemResume() {
+    applySleep(sleepWatch.onResume());
+    if (finalizer.interrupt()) onRunEvent('finalizeInterrupted');
     resumeGate.onResume();
     background(powerFlow.onSystemResume(), 'sleep');
     if (!plan || !plan.pausedUntil) return;
@@ -1485,6 +1712,8 @@ function createOrchestra(deps) {
   function onFiles(sessionId, absFiles) {
     const pkg = bySession(sessionId);
     if (!pkg || !pkg.root || !sup.isActive(pkg)) return;
+    // Activity: a background wait that runs out does not nudge a busy worker.
+    lastActivity.set(sessionId, now());
     const touched = sup.mergeTouched(pkg.touched, sup.relTouched(pkg.root, absFiles));
     if (touched === pkg.touched) return;
     const key = (o) => `${o.a}|${o.b}`;
@@ -1535,8 +1764,13 @@ function createOrchestra(deps) {
     return { ok: true, plan: view() };
   }
 
-  /** Called every minute or so: workers over their working time stall. */
+  /**
+   * Called every minute or so: workers over their working time stall. A
+   * sleep the tick gap reveals is credited first, so a wake never reads as
+   * hours of work.
+   */
   function tick() {
+    catchUpSleep();
     if (!plan || plan.pausedUntil || plan.killed) return;
     for (const p of plan.packages) {
       if (p.state === 'launched' && !p.awaitingDeps && sup.timedOut(p, now())) stall(p.id, 'timeout');
@@ -1642,7 +1876,9 @@ function createOrchestra(deps) {
     // A Retry by hand: the package is back in play, its dependents unblocked.
     cancelAutoRetry(pkg.id);
     transientRetries.delete(pkg.id);
-    patch(pkg.id, { terminal: false, autoRetries: 0 });
+    // Mati may have fixed (or allowed) a GH013 by hand: the push gets a fresh
+    // fix-up round and the rejected HEAD may be pushed again.
+    patch(pkg.id, { terminal: false, autoRetries: 0, pushFixup: false, pushBlockedSha: null, pushBlockDetail: null });
     plan.packages = sup.withBlockedBy(plan.packages);
     // Only once the package is back in play does the run resume.
     plan.started = true;
@@ -1814,7 +2050,10 @@ function createOrchestra(deps) {
     unschedule,
     finishRun,
     setOptions,
+    onSystemSuspend,
     onSystemResume,
+    // "Abort finish": ends a hung integrate step now (orchestraFinalize.js).
+    abortFinalize: () => finalizer.abort('aborted'),
     cancelSleep: () => powerFlow.cancelSleep(),
     cancelShutdown: () => powerFlow.cancelShutdown(),
     checkWake: () => powerFlow.checkWake(),
@@ -1836,6 +2075,7 @@ module.exports = {
   withStallNote,
   BRIEF_DIR,
   NUDGE_DELAY_MS,
+  BACKGROUND_WAIT_MS,
   RESUME_GRACE_MS,
   AUTO_RETRY_DELAY_MS,
   MAX_AUTO_RETRIES: sup.MAX_AUTO_RETRIES,

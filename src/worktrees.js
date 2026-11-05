@@ -140,12 +140,14 @@ function exitCode(err) {
  * Runs git without a shell; never rejects. Resolves
  * {ok, stdout, stderr, broke, timedOut, code, cwd, args, timeoutMs} - enough
  * for gitDetail() to say exactly what happened.
- * @param {{timeoutMs?: number}} [opts]
+ * @param {{timeoutMs?: number, maxBuffer?: number}} [opts]
  */
 function runGit(cwd, args, execImpl = execFile, opts = {}) {
   const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : GIT_TIMEOUT_MS;
   return new Promise((resolve) => {
-    execImpl('git', ['-C', cwd, ...args], { windowsHide: true, timeout: timeoutMs }, (err, stdout, stderr) =>
+    const execOpts = { windowsHide: true, timeout: timeoutMs };
+    if (Number.isFinite(opts.maxBuffer) && opts.maxBuffer > 0) execOpts.maxBuffer = opts.maxBuffer;
+    execImpl('git', ['-C', cwd, ...args], execOpts, (err, stdout, stderr) =>
       resolve({
         ok: !err,
         stdout: String(stdout || ''),

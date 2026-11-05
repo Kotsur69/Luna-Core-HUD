@@ -646,3 +646,115 @@ test('Settings field: final check command has pl + en strings and an input in th
     assert.equal(i18n.split(`'${key}':`).length - 1, 2, `${key} in pl and en`);
   }
 });
+
+// ---- smoke retry: a timeout alone gets one more run -------------------------------
+
+const { buildReport } = require('../src/orchestraReport.js');
+
+const TIMED_OUT = () => Object.assign(new Error('timed out'), { killed: true, code: null, signal: 'SIGTERM' });
+
+/** An Electron app repo whose smoke answers come from `answers` in order: [err, stdout]. */
+function smokeRepo(answers) {
+  const repo = tempRepo({
+    'package.json': JSON.stringify({ main: 'main.js', devDependencies: { electron: '^43' } }),
+    'main.js': "if (process.argv.includes('--luna-probe')) {}\n",
+  });
+  const calls = [];
+  const sleeps = [];
+  const io = {
+    execImpl: (bin, args, opts, cb) => {
+      calls.push(args);
+      const [err, stdout] = answers.shift() || [null, ''];
+      cb(err, stdout, '');
+    },
+    sleep: async (ms) => sleeps.push(ms),
+  };
+  return { ...repo, calls, sleeps, io };
+}
+
+const checkArgs = (dir) => ({ root: dir, baseSha: null, checkCommand: '' });
+
+test('smoke: a timeout then a pass is ok, waited about a minute, and noted as retried', async () => {
+  const r = smokeRepo([[TIMED_OUT(), 'booting'], [null, '[luna-probe] ok']]);
+  try {
+    const res = await sc.runSelfCheck(checkArgs(r.dir), r.io);
+    assert.equal(res.smoke, 'ok');
+    assert.equal(res.smokeRetried, true);
+    assert.equal(r.calls.length, 2, 'run twice');
+    assert.deepEqual(r.sleeps, [sc.SMOKE_RETRY_DELAY_MS]);
+    assert.equal(sc.SMOKE_RETRY_DELAY_MS, 60 * 1000);
+
+    // Through the gate: green, so no fix-up worker; the report says it was retried.
+    const r2 = smokeRepo([[TIMED_OUT(), ''], [null, '']]);
+    const fixups = [];
+    try {
+      const gate = await sc.selfCheckGate(
+        { ...checkArgs(r2.dir), slug: 'p1' },
+        { runSelfCheck: (args) => sc.runSelfCheck(args, r2.io), runFixup: async (a) => (fixups.push(a), { ok: true }) },
+      );
+      assert.equal(gate.ok, true);
+      assert.equal(fixups.length, 0, 'no fix-up worker');
+      assert.equal(gate.selfCheck.smoke, 'ok');
+      assert.equal(gate.selfCheck.smokeRetried, true);
+      const stored = sup.normalizeStoredPlan({ id: 'p', repoPath: path.resolve('/r'), packages: [{ id: 'a' }], integration: { selfCheck: gate.selfCheck } });
+      assert.equal(stored.integration.selfCheck.smokeRetried, true, 'survives a save');
+      const md = buildReport(
+        { id: 'p1', repoPath: '/r', integrationMode: 'merge', packages: [], integration: { state: 'done', selfCheck: stored.integration.selfCheck } },
+        { now: 0, suggestions: [] },
+      );
+      assert.match(md, /Smoke: ok \(timed out once, passed when run again\)/);
+    } finally {
+      rm(r2.dir);
+    }
+  } finally {
+    rm(r.dir);
+  }
+});
+
+test('smoke: two timeouts stay failed and start the fix-up worker', async () => {
+  // Gate: first check (timeout, timeout), fix-up, second check (ok at once).
+  const r = smokeRepo([[TIMED_OUT(), ''], [TIMED_OUT(), ''], [null, '']]);
+  const fixups = [];
+  try {
+    const gate = await sc.selfCheckGate(
+      { ...checkArgs(r.dir), slug: 'p1' },
+      { runSelfCheck: (args) => sc.runSelfCheck(args, r.io), runFixup: async (a) => (fixups.push(a), { ok: true }) },
+    );
+    assert.equal(fixups.length, 1, 'one fix-up worker after the second timeout');
+    assert.match(fixups[0].brief, /smoke/);
+    assert.match(fixups[0].brief, /smoke timed out/);
+    assert.equal(r.calls.length, 3);
+    assert.equal(gate.ok, true);
+    assert.equal(gate.selfCheck.smokeRetried, undefined, 'the final check passed at once');
+
+    const twice = smokeRepo([[TIMED_OUT(), ''], [TIMED_OUT(), '']]);
+    try {
+      const res = await sc.runSelfCheck(checkArgs(twice.dir), twice.io);
+      assert.deepEqual([res.smoke, res.smokeRetried], ['failed', true]);
+      assert.match(res.tail, /smoke timed out/);
+    } finally {
+      rm(twice.dir);
+    }
+  } finally {
+    rm(r.dir);
+  }
+});
+
+test('smoke: a real error line (even with a timeout) or a bad exit is not retried', async () => {
+  for (const answer of [
+    [TIMED_OUT(), 'boot\nUncaught TypeError: x is not a function'],
+    [null, '[luna-probe] FAILED Error: boom'],
+    [Object.assign(new Error('exit'), { code: 1 }), 'quiet'],
+  ]) {
+    const r = smokeRepo([answer, [null, '']]);
+    try {
+      const res = await sc.runSelfCheck(checkArgs(r.dir), r.io);
+      assert.equal(res.smoke, 'failed');
+      assert.equal(res.smokeRetried, undefined);
+      assert.equal(r.calls.length, 1, 'run once');
+      assert.deepEqual(r.sleeps, []);
+    } finally {
+      rm(r.dir);
+    }
+  }
+});

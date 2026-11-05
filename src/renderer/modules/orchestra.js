@@ -26,6 +26,7 @@ import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { failureBlock, runOptionsRow, powerBanner } from './orchestraDetails.js';
+import { pkgStateKey } from './orchestraState.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
 
 // Guarded: node tests import the to-do widget chain without a document.
@@ -249,7 +250,7 @@ function ladderLines(pkg) {
   const out = [];
   if (pkg.blockedBy) {
     const blocker = plan.packages.find((p) => p.id === pkg.blockedBy);
-    const reason = blocker && blocker.error ? pkgErrorText(blocker.error) : t(`orch.state.${blocker ? blocker.state : 'pending'}`);
+    const reason = blocker && blocker.error ? pkgErrorText(blocker.error) : t(`orch.state.${pkgStateKey(blocker)}`);
     out.push(t('orch.progress.blockedBy', { id: pkg.blockedBy, reason }));
   }
   if (pkg.autoRetries && !pkg.terminal && pkg.state === 'failed') {
@@ -269,7 +270,7 @@ function pkgCard(pkg) {
   head.append(
     el('span', 'orchestra__title', pkg.title),
     el('span', 'orchestra__id', pkg.id),
-    el('span', `orchestra__state is-${pkg.state}`, t(`orch.state.${pkg.state}`)),
+    el('span', `orchestra__state is-${pkg.state}`, t(`orch.state.${pkgStateKey(pkg)}`)),
   );
   card.append(head);
 

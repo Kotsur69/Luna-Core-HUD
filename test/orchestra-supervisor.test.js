@@ -110,7 +110,7 @@ const pkg = (id, todoAts, extra = {}) => ({
   ...extra,
 });
 
-function setup({ packages, finish = async () => ({ ok: true, headSha: 'abc' }), stored = null, settings } = {}) {
+function setup({ packages, finish = async () => ({ ok: true, headSha: 'abc' }), stored = null, settings, extraDeps = {} } = {}) {
   let clock = 1_000_000;
   let seq = 0;
   const log = { sessions: [], writes: [], ticks: [], events: [], saved: null, finishes: [] };
@@ -155,6 +155,7 @@ function setup({ packages, finish = async () => ({ ok: true, headSha: 'abc' }), 
     clearTimer: (t) => {
       if (t) t.done = true;
     },
+    ...extraDeps,
   });
   orch.restore();
   const ctx = { projectId: 'p1', repoPath: '/repo', profileId: 'cloud', env: {} };
@@ -419,4 +420,263 @@ test('a package gets finishedAt when it settles, cleared again on a relaunch (re
   assert.ok(Number.isFinite(stalled.finishedAt) && stalled.finishedAt >= stalled.startedAt);
   assert.equal((await s.orch.retry({ planId: s.planId, id: 'a' })).ok, true);
   assert.equal(s.orch.view().packages[0].finishedAt, null);
+});
+
+// ---- PC sleep is not worker time (orchestraSleep.js) ---------------------------
+
+const sleepMod = require('../src/orchestraSleep.js');
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+
+test('sleepCredit: never before the start, never a pause already credited, never past the net running time', () => {
+  const sleep = { start: 10 * MIN, durationMs: 3 * HOUR };
+  const end = sleep.start + sleep.durationMs;
+  assert.equal(sleepMod.sleepCredit(sleep, { startedAt: 0, pausedMs: 0 }, { now: end }), 3 * HOUR);
+  assert.equal(sleepMod.sleepCredit(sleep, { startedAt: 40 * MIN, pausedMs: 0 }, { now: end }), 3 * HOUR - 30 * MIN, 'started mid-sleep');
+  assert.equal(sleepMod.sleepCredit(sleep, { startedAt: end + 1, pausedMs: 0 }, { now: end + 2 }), 0, 'started after it');
+  assert.equal(sleepMod.sleepCredit(sleep, { startedAt: 0, pausedMs: 0 }, { now: end, pauseStartedAt: 70 * MIN }), HOUR, 'paused from 70 min');
+  assert.equal(sleepMod.sleepCredit(sleep, { startedAt: 0, pausedMs: end - 5 * MIN }, { now: end }), 5 * MIN, 'net running time');
+  assert.equal(sleepMod.sleepCredit(sleep, { startedAt: null }, { now: end }), 0);
+  assert.equal(sleepMod.sleepCredit(null, { startedAt: 0 }, { now: end }), 0);
+});
+
+test('sleep watch: a suspend/resume pair, the tick gap, and no double count when the tick beats resume', () => {
+  let t = 0;
+  const w = sleepMod.createSleepWatch({ now: () => t, tickMs: MIN });
+  w.onTick();
+  w.onSuspend();
+  t += 3 * HOUR;
+  assert.deepEqual(w.onResume(), { start: 0, durationMs: 3 * HOUR, source: 'suspend' });
+  t += MIN;
+  assert.equal(w.onTick(), null, 'the next tick after the resume sees no gap');
+
+  // No 'suspend': the gap minus one interval.
+  t += 2 * HOUR;
+  const gap = w.onTick();
+  assert.deepEqual([gap.durationMs, gap.source], [2 * HOUR - MIN, 'gap']);
+  assert.equal(w.onResume(), null, 'already closed by the tick');
+
+  // Suspend seen, the tick after the wake comes before 'resume'.
+  w.onSuspend();
+  const from = t;
+  t += HOUR;
+  assert.deepEqual(w.onTick(), { start: from, durationMs: HOUR, source: 'suspend' });
+  assert.equal(w.onResume(), null);
+
+  // A 'suspend' the PC never acted on goes stale under normal ticks.
+  w.onSuspend();
+  for (let i = 0; i < 5; i += 1) {
+    t += MIN;
+    w.onTick();
+  }
+  assert.equal(w.isSuspended(), false);
+
+  // Without tickMs only suspend/resume pairs count (tests jump the clock).
+  const plain = sleepMod.createSleepWatch({ now: () => t });
+  plain.onTick();
+  t += 5 * HOUR;
+  assert.equal(plain.onTick(), null);
+});
+
+test('sleep log: recorded per run, capped, validated; summary counts it', () => {
+  let log = [];
+  for (let i = 0; i < sleepMod.MAX_SLEEP_LOG + 5; i += 1) log = sleepMod.recordSleep(log, { start: i, durationMs: 10 });
+  assert.equal(log.length, sleepMod.MAX_SLEEP_LOG);
+  assert.equal(log[0].start, 5, 'newest kept');
+  assert.deepEqual(sleepMod.normalizeSleeps([{ start: 1, durationMs: 2 }, { start: 'x' }, null, { start: 1, durationMs: -1 }]), [
+    { start: 1, durationMs: 2 },
+  ]);
+  assert.deepEqual(sleepMod.sleepSummary([{ start: 1, durationMs: 2 }, { start: 5, durationMs: 3 }]), { count: 2, totalMs: 5 });
+});
+
+test('a 3 h sleep during a 30 min-old worker does not time it out', async () => {
+  const s = await started({ packages: [pkg('a', [1])], extraDeps: { tickMs: MIN } });
+  s.advance(30 * MIN);
+  s.orch.tick();
+  s.orch.onSystemSuspend();
+  s.advance(3 * HOUR);
+  s.orch.onSystemResume();
+  s.orch.tick();
+  const a = s.orch.view().packages[0];
+  assert.deepEqual([a.state, a.sessionId, a.autoResumed || false], ['launched', 's1', false], 'not timed out');
+  assert.equal(s.log.saved.packages[0].pausedMs, 3 * HOUR);
+  assert.deepEqual(s.orch.view().sleeps, [{ start: 1_000_000 + 30 * MIN, durationMs: 3 * HOUR }]);
+  assert.deepEqual(sup.normalizeStoredPlan(s.log.saved).sleeps, s.orch.view().sleeps, 'kept on restore');
+  assert.ok(s.log.events.includes('slept'));
+  // 30 + 89 min of real work: still inside the cap.
+  for (let i = 0; i < 89; i += 1) {
+    s.advance(MIN);
+    s.orch.tick();
+  }
+  assert.equal(s.orch.view().packages[0].sessionId, 's1');
+});
+
+test('real work past 120 min still times out with the gap check on', async () => {
+  const s = await started({ packages: [pkg('a', [1])], extraDeps: { tickMs: MIN } });
+  for (let i = 0; i <= 120; i += 1) {
+    s.advance(MIN);
+    s.orch.tick();
+  }
+  const a = s.orch.view().packages[0];
+  assert.equal(a.autoResumed, true, 'the timeout stall got its one automatic resume');
+  assert.equal(s.log.sessions.length, 2);
+  assert.deepEqual(s.orch.view().sleeps, []);
+});
+
+test('a missed suspend is covered by the watchdog gap check; the timeout check waits for the credit', async () => {
+  const s = await started({ packages: [pkg('a', [1])], extraDeps: { tickMs: MIN } });
+  for (let i = 0; i < 30; i += 1) {
+    s.advance(MIN);
+    s.orch.tick();
+  }
+  // Slept 3 h with no 'suspend' (and no 'resume' yet): the first tick after the wake.
+  s.advance(3 * HOUR);
+  s.orch.tick();
+  const a = s.orch.view().packages[0];
+  assert.deepEqual([a.state, a.sessionId], ['launched', 's1'], 'not timed out');
+  assert.equal(s.log.saved.packages[0].pausedMs, 3 * HOUR - MIN);
+  // The late 'resume' adds nothing.
+  s.orch.onSystemResume();
+  assert.equal(s.log.saved.packages[0].pausedMs, 3 * HOUR - MIN);
+  assert.equal(s.orch.view().sleeps.length, 1);
+});
+
+test('a sleep inside a usage-limit pause is credited once, by the pause', async () => {
+  const s = await started({ packages: [pkg('a', [1])], extraDeps: { tickMs: MIN } });
+  s.advance(10 * MIN);
+  s.orch.tick();
+  s.orch.onUsageLimit('s1', 1_000_000 + 10 * MIN + HOUR);
+  s.orch.onSystemSuspend();
+  s.advance(2 * HOUR);
+  s.orch.onSystemResume();
+  assert.equal(s.orch.view().pausedUntil, null, 'past the reset: resumed');
+  assert.equal(s.log.saved.packages[0].pausedMs, 2 * HOUR, 'the pause, not pause + sleep');
+});
+
+// ---- stall history, the foreground rule, background processes -------------------
+
+const { briefText, BACKGROUND_WAIT_MS } = require('../src/orchestra.js');
+
+/** The tool result Claude Code writes when a Bash command goes to the background. */
+const bgStart = (id) =>
+  JSON.stringify({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: `Command running in background with ID: ${id}. Output is being written to: C:\\t\\${id}.output` }],
+    },
+  });
+/** The notification that the background command ended. */
+const bgEnd = (id, status = 'completed') =>
+  JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: `<task-notification>\n<task-id>${id}</task-id>\n<output-file>x</output-file>\n<status>${status}</status>\n</task-notification>` },
+  });
+const nudgesSent = (s, id = 'a') => s.log.writes.filter(([, t]) => t.includes(`LUNA_DONE ${id}`)).length;
+
+test('openBackgroundTasks: a started shell stays open until it reports back; quoting the phrase starts nothing', () => {
+  assert.deepEqual(sup.openBackgroundTasks(bgStart('b1')), ['b1']);
+  assert.deepEqual(sup.openBackgroundTasks(bgEnd('b1'), ['b1']), []);
+  assert.deepEqual(sup.openBackgroundTasks(bgEnd('b1', 'failed'), ['b1']), []);
+  assert.deepEqual(sup.openBackgroundTasks(bgEnd('b1', 'running'), ['b1']), ['b1']);
+  assert.deepEqual(sup.openBackgroundTasks([bgStart('b1'), bgEnd('b1')].join('\n')), [], 'start and end in one fragment');
+  assert.deepEqual(sup.openBackgroundTasks([bgStart('a1'), bgStart('a2')].join('\n')), ['a1', 'a2']);
+  assert.deepEqual(sup.openBackgroundTasks(turn('Command running in background with ID: fake1')), [], 'the worker quoting it');
+  assert.deepEqual(sup.openBackgroundTasks('not json\n{"type":', ['x']), ['x'], 'a torn fragment changes nothing');
+});
+
+test('the worker brief says: verify in the foreground, never end a turn on a background test run', () => {
+  const text = briefText({ id: 'a', title: 'T', prompt: 'do it', verify: 'npm test' }, 'luna/a');
+  assert.match(text, /Run the verify command in the foreground/);
+  assert.match(text, /Do not end your turn while a test run \(or any other command\) of yours is still running in the background/);
+  assert.match(briefText({ id: 'a', title: 'T', prompt: 'x', verify: '' }, 'luna/a'), /in the foreground/);
+});
+
+test('a background test run does not use up nudges; when it reports back the usual rules apply', async () => {
+  const s = await started({ packages: [pkg('a', [1])] });
+  s.orch.onTurnEnd('s1', [bgStart('t1'), turn('The suite is running in the background, I will check back.')].join('\n'));
+  s.advance(10 * 60 * 1000);
+  assert.equal(nudgesSent(s), 0, 'no nudge while the own test run is going');
+  assert.equal(s.orch.view().packages[0].nudges, 0);
+  assert.equal(s.orch.view().packages[0].state, 'launched');
+  assert.ok(s.log.events.includes('waitingOnBackground'));
+  // The shell reports back, which starts a new turn; no marker again -> the normal nudge.
+  s.orch.onTurnEnd('s1', [bgEnd('t1'), turn('All tests pass. Committing next.')].join('\n'));
+  s.advance(10_000);
+  assert.equal(nudgesSent(s), 1);
+  assert.equal(s.orch.view().packages[0].nudges, 1);
+});
+
+test('a background process that never reports back is waited on only BACKGROUND_WAIT_MS', async () => {
+  const s = await started({ packages: [pkg('a', [1])] });
+  s.orch.onTurnEnd('s1', [bgStart('t1'), turn('waiting on the tests')].join('\n'));
+  s.advance(BACKGROUND_WAIT_MS - 1000);
+  assert.equal(nudgesSent(s), 0);
+  s.advance(2000);
+  assert.equal(nudgesSent(s), 1, 'the bound ran out: nudged');
+  // Given up on: the next marker-less turn is nudged without waiting again.
+  s.orch.onTurnEnd('s1', turn('hm'));
+  s.advance(10_000);
+  assert.equal(nudgesSent(s), 2);
+});
+
+test('each stall lands in the package history with time, reason and detail; a restart adds one', async () => {
+  const s = await started({ packages: [pkg('a', [1])] });
+  s.orch.onTurnEnd('s1', turn('LUNA_BLOCKED a: no API key'));
+  const history = s.orch.view().packages[0].stallHistory;
+  assert.deepEqual(history, [{ at: 1_000_000, kind: 'stall', reason: 'blocked', detail: 'no API key' }]);
+  const stored = sup.normalizeStoredPlan(s.log.saved);
+  assert.deepEqual(stored.packages[0].stallHistory, history, 'kept on disk');
+  const back = sup.restoreAfterRestart({ ...stored, packages: [{ ...stored.packages[0], state: 'launched' }] }, 2_000_000);
+  assert.deepEqual(
+    back.packages[0].stallHistory.map((e) => [e.at, e.reason]),
+    [
+      [1_000_000, 'blocked'],
+      [2_000_000, 'restarted'],
+    ],
+  );
+});
+
+test('stall history: capped to the newest, junk dropped, other kinds kept, old plans load with none', () => {
+  let h = [];
+  for (let i = 0; i < sup.MAX_STALL_HISTORY + 5; i += 1) h = sup.withHistoryEntry(h, { at: i, reason: `r${i}` });
+  assert.equal(h.length, sup.MAX_STALL_HISTORY);
+  assert.equal(h[0].reason, 'r5', 'the oldest are dropped');
+  const other = sup.withHistoryEntry([], { at: 1, kind: 'recovery', reason: 'autoRebase', detail: 'x\ny'.repeat(200) });
+  assert.deepEqual(other.map((e) => [e.kind, e.detail.length <= 160, /\n/.test(e.detail)]), [['recovery', true, false]]);
+  assert.deepEqual(sup.normalizeStallHistory([null, { reason: '' }, { at: 'x', reason: 'timeout', kind: 'Bad Kind!' }, 'junk']), [
+    { at: null, kind: 'stall', reason: 'timeout', detail: null },
+  ]);
+  const old = sup.normalizeStoredPlan({ id: 'p1', repoPath: '/r', packages: [{ id: 'a', state: 'stalled', error: 'timeout', stalls: 2 }] });
+  assert.deepEqual(old.packages[0].stallHistory, []);
+  assert.equal(old.packages[0].stalls, 2);
+});
+
+test('a background wait that runs out does not nudge a worker that got busy again', async () => {
+  const s = await started({ packages: [pkg('a', [1])] });
+  s.orch.onTurnEnd('s1', [bgStart('t1'), turn('waiting on the tests')].join('\n'));
+  s.advance(10 * 60 * 1000);
+  // The shell reported back and a long new turn is editing files.
+  s.orch.onFiles('s1', [path.join('/wt', 'x', 'src', 'x.js')]);
+  s.advance(BACKGROUND_WAIT_MS);
+  assert.equal(nudgesSent(s), 0, 'no nudge pasted into a turn in progress');
+  // That turn ends without a marker: the usual nudge, no second wait.
+  s.orch.onTurnEnd('s1', turn('done editing'));
+  s.advance(10_000);
+  assert.equal(nudgesSent(s), 1);
+});
+
+test('a stall forgets the tab\'s open background processes', async () => {
+  // b keeps the run from settling, so the Retry below is not refused as busy.
+  const s = await started({ packages: [pkg('a', [1]), pkg('b', [2])] });
+  s.orch.onTurnEnd('s1', [bgStart('t1'), turn('tests running in the background')].join('\n'));
+  // An approval stall keeps the same tab open; a Retry picks it up there.
+  s.orch.onApproval('s1');
+  assert.equal(s.orch.view().packages[0].state, 'stalled');
+  assert.equal((await s.orch.retry({ planId: s.planId, id: 'a' })).ok, true);
+  assert.deepEqual([s.orch.view().packages[0].state, s.orch.view().packages[0].sessionId], ['launched', 's1']);
+  const before = nudgesSent(s);
+  s.orch.onTurnEnd('s1', turn('working'));
+  s.advance(10_000);
+  assert.equal(nudgesSent(s), before + 1, 'nudged after the short delay, no stale wait');
 });

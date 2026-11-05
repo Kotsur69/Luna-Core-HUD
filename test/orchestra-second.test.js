@@ -14,7 +14,7 @@ const sup = require('../src/orchestraSupervisor.js');
 const { createOrchestra } = require('../src/orchestra.js');
 const { withTaskBrief } = require('../src/launch.js');
 const integ = require('../src/orchestraIntegrate.js');
-const { buildReport, appendStallNotes, stallNote } = require('../src/orchestraReport.js');
+const { buildReport, syncStallNotes: appendStallNotes, stallNote } = require('../src/orchestraReport.js');
 const { removeWorktree } = require('../src/worktrees.js');
 
 const turn = (text) =>
@@ -122,7 +122,11 @@ test('stored second-pass fields are validated on restore', () => {
   assert.equal(stored.integrationMode, null);
   assert.deepEqual(stored.allowedTools, ['Bash(npm test:*)']);
   assert.deepEqual(stored.approvalLog, [{ pkgId: 'a', rule: 'Edit', example: null }]);
-  assert.equal(stored.integration.state, 'idle', 'an interrupted integration comes back idle');
+  assert.deepEqual(
+    [stored.integration.state, stored.integration.error],
+    ['failed', 'interrupted'],
+    'an interrupted integration comes back failed, never running',
+  );
   const p = stored.packages[0];
   assert.equal(p.prUrl, null);
   assert.deepEqual(p.touched, ['src/x.js']);

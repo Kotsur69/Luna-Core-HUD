@@ -5,7 +5,9 @@
 // state and the side effects and asks this module what a signal means:
 //
 //   turn end   -> did the worker print LUNA_DONE / LUNA_BLOCKED for ITS
-//                 package? none -> nudge (max MAX_NUDGES) -> stalled
+//                 package? none -> nudge (max MAX_NUDGES) -> stalled -
+//                 unless a background process the worker started is still
+//                 running (openBackgroundTasks): then LunaCore waits for it
 //   finish     -> verify failed -> paste it back (max MAX_VERIFY_ROUNDS)
 //   slot freed -> which pending packages have every dependency pushed
 //   restart    -> anything that was running is stalled (tab ids do not
@@ -24,6 +26,7 @@ const { WORKTREE_DIR, BRANCH_PREFIX } = require('./worktrees');
 const { normalizeEffort } = require('./efforts');
 const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
 const { compileOwnership, ownerOf } = require('./ownership');
+const { normalizeSleeps } = require('./orchestraSleep');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -33,6 +36,8 @@ const WORKER_CAP_MS = 120 * 60 * 1000;
 // sometimes adds a sentence after it despite the brief.
 const MARKER_TAIL_LINES = 6;
 const MAX_DETAIL_CHARS = 300;
+// A package's stored detail: a GH013 push rejection keeps every remote: line.
+const MAX_PKG_DETAIL_CHARS = 2000;
 const MAX_VERIFY_OUTPUT_CHARS = 3000;
 
 const ACTIVE_STATES = new Set(['launched', 'finishing']);
@@ -82,6 +87,48 @@ function turnEndAction(pkg, marker) {
   if (marker && marker.kind === 'blocked') return { type: 'stall', reason: 'blocked', detail: marker.reason };
   if ((pkg.nudges || 0) < MAX_NUDGES) return { type: 'nudge' };
   return { type: 'stall', reason: 'noMarker' };
+}
+
+// A Claude Code background shell: the tool result that started it, and the
+// <task-notification> that reports it ended (status completed / failed /
+// killed). In raw JSONL the notification's newlines are escaped, so the gap
+// between task id and status is matched loosely, but bounded.
+const BG_START_RE = /Command running in background with ID: ([A-Za-z0-9_-]{1,64})/g;
+const BG_END_RE = /<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>[\s\S]{0,2000}?<status>([a-z_]{1,24})<\/status>/g;
+const MAX_OPEN_BACKGROUND = 20;
+
+/** One JSONL line's `type`, or '' for a line that is not a JSON object. */
+function lineType(line) {
+  try {
+    const obj = JSON.parse(line);
+    return obj && typeof obj === 'object' && typeof obj.type === 'string' ? obj.type : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The background processes a worker started and that have not reported back
+ * yet, after one more transcript fragment. Only non-assistant lines count
+ * (tool results, notifications): a worker merely quoting the phrase in its
+ * own message starts nothing.
+ * @param {string} fragment raw JSONL appended since the last read
+ * @param {string[]} [open] ids still open before this fragment
+ * @returns {string[]} ids still open after it
+ */
+function openBackgroundTasks(fragment, open = []) {
+  const ids = new Set(Array.isArray(open) ? open.filter((id) => typeof id === 'string') : []);
+  const rows = String(fragment || '')
+    .split(/\r?\n/)
+    .filter((l) => {
+      const type = l.trim() ? lineType(l) : '';
+      return type !== '' && type !== 'assistant';
+    });
+  for (const row of rows) {
+    for (const m of row.matchAll(BG_START_RE)) ids.add(m[1]);
+    for (const m of row.matchAll(BG_END_RE)) if (m[2] !== 'running') ids.delete(m[1]);
+  }
+  return [...ids].slice(-MAX_OPEN_BACKGROUND);
 }
 
 /**
@@ -557,6 +604,47 @@ function allowSuggestions(log) {
 const str = (v, max = 4000) => (typeof v === 'string' ? v.slice(0, max) : '');
 const strOrNull = (v, max = 4000) => (typeof v === 'string' && v ? v.slice(0, max) : null);
 const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
+
+// ---- stall history -----------------------------------------------------------
+// Every stall used to overwrite the last error; the history keeps each one so
+// the report can tell the story. Entry: {at, kind, reason, detail}. `kind` is
+// 'stall' today; a later automatic-recovery step writes its own kind into the
+// same list, so unknown kinds are kept, not dropped.
+
+const MAX_STALL_HISTORY = 20;
+const MAX_HISTORY_DETAIL = 160;
+const HISTORY_KIND_RE = /^[a-z][a-zA-Z0-9]{0,31}$/;
+
+/** One history entry, shape-checked; null when it has no reason. */
+function normalizeHistoryEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const reason = str(raw.reason, 64).replace(/[\x00-\x1f\x7f]/g, ' ').trim();
+  if (!reason) return null;
+  const detail = strOrNull(raw.detail, MAX_HISTORY_DETAIL);
+  return {
+    at: Number.isFinite(raw.at) ? raw.at : null,
+    kind: typeof raw.kind === 'string' && HISTORY_KIND_RE.test(raw.kind) ? raw.kind : 'stall',
+    reason,
+    detail: detail ? detail.replace(/[\x00-\x1f\x7f]+/g, ' ').trim() || null : null,
+  };
+}
+
+/** A stored history: oldest first, capped to the newest MAX_STALL_HISTORY. Old plans have none -> []. */
+function normalizeStallHistory(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizeHistoryEntry).filter(Boolean).slice(-MAX_STALL_HISTORY);
+}
+
+/**
+ * The history with one more entry at the end (a new array; the cap drops the oldest).
+ * @param {unknown} history
+ * @param {{at:number, kind?:string, reason:string, detail?:string|null}} entry
+ */
+function withHistoryEntry(history, entry) {
+  const next = normalizeHistoryEntry({ kind: 'stall', ...entry });
+  const list = normalizeStallHistory(history);
+  return next ? [...list, next].slice(-MAX_STALL_HISTORY) : list;
+}
 const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 200) : []);
 
 // Restored values that later reach git argv, a shell cwd or a new tab must
@@ -631,13 +719,21 @@ function normalizePackage(raw) {
     briefPath: null,
     headSha: typeof raw.headSha === 'string' && SHA_RE.test(raw.headSha) ? raw.headSha : null,
     error: strOrNull(raw.error, 64),
-    detail: strOrNull(raw.detail, MAX_DETAIL_CHARS),
+    // A rejected push keeps every remote: line (pushSecrets.js), so more room.
+    detail: strOrNull(raw.detail, MAX_PKG_DETAIL_CHARS),
     nudges: num(raw.nudges),
     verifyRounds: num(raw.verifyRounds),
+    scanFixup: raw.scanFixup === true,
+    pushFixup: raw.pushFixup === true,
+    pushBlockedSha: typeof raw.pushBlockedSha === 'string' && SHA_RE.test(raw.pushBlockedSha) ? raw.pushBlockedSha : null,
+    pushBlockDetail: strOrNull(raw.pushBlockDetail, MAX_PKG_DETAIL_CHARS),
+    // Never restored: a restored package is not in the verify queue.
+    verifyPhase: null,
     startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
     finishedAt: Number.isFinite(raw.finishedAt) ? raw.finishedAt : null,
     pausedMs: num(raw.pausedMs),
     stalls: num(raw.stalls),
+    stallHistory: normalizeStallHistory(raw.stallHistory),
     escalated: raw.escalated === true,
     modelOverride: raw.modelOverride === 'opus' ? 'opus' : null,
     effortOverride: normalizeEffort(raw.effortOverride),
@@ -707,12 +803,15 @@ const INTEGRATION_STATES = new Set(['idle', 'running', 'done', 'failed']);
 
 function normalizeIntegration(raw) {
   const o = raw && typeof raw === 'object' ? raw : {};
+  // Stored 'running' = the LunaCore that ran it is gone (restart, crash, a
+  // hang after a sleep): it comes back failed 'interrupted', never running -
+  // nothing is integrating now. A rerun is safe (every package records what
+  // was already done for it).
+  const interrupted = o.state === 'running';
   return {
-    // A run interrupted mid-integration comes back idle; it reruns safely
-    // (every package records what was already done for it).
-    state: INTEGRATION_STATES.has(o.state) && o.state !== 'running' ? o.state : 'idle',
-    error: strOrNull(o.error, 64),
-    detail: strOrNull(o.detail, MAX_DETAIL_CHARS),
+    state: interrupted ? 'failed' : INTEGRATION_STATES.has(o.state) ? o.state : 'idle',
+    error: interrupted ? 'interrupted' : strOrNull(o.error, 64),
+    detail: interrupted ? null : strOrNull(o.detail, MAX_DETAIL_CHARS),
     at: Number.isFinite(o.at) ? o.at : null,
     // Packages a merge-mode integration left out (orchestraIntegrate.js).
     skipped: (Array.isArray(o.skipped) ? o.skipped : []).map(normalizeSkipped).filter(Boolean).slice(0, MAX_SKIPPED),
@@ -745,6 +844,8 @@ function normalizeSelfCheck(raw) {
     fixups: Number.isFinite(raw.fixups) ? Math.max(0, Math.min(1, Math.round(raw.fixups))) : 0,
     tail: str(raw.tail, MAX_SELFCHECK_TAIL),
     pushedIntegrationBranch: typeof branch === 'string' && INTEGRATION_BRANCH_RE.test(branch) ? branch : null,
+    // The smoke timed out once and was run again (orchestraSelfCheck.js).
+    ...(raw.smokeRetried === true ? { smokeRetried: true } : {}),
   };
 }
 
@@ -813,6 +914,8 @@ function normalizeStoredPlan(raw) {
       .map((e) => ({ pkgId: e.pkgId, rule: isAllowRule(e.rule) ? e.rule : null, example: cleanExample(e.example) }))
       .slice(-MAX_APPROVAL_LOG),
     integration: normalizeIntegration(raw.integration),
+    // Each time the PC slept during the run (orchestraSleep.js).
+    sleeps: normalizeSleeps(raw.sleeps),
     options: normalizeOptions(raw.options),
     todoText: new Map(todoText),
     packages,
@@ -850,11 +953,20 @@ function serializePlan(plan) {
  * After a LunaCore restart no worker tab exists any more: whatever was running
  * becomes stalled, worktree and branch kept so Retry can pick it up.
  */
-function restoreAfterRestart(plan) {
+function restoreAfterRestart(plan, nowMs = null) {
+  const at = Number.isFinite(nowMs) ? nowMs : null;
   return {
     ...plan,
     packages: plan.packages.map((p) =>
-      isActive(p) ? { ...p, state: 'stalled', error: 'restarted', sessionId: null } : { ...p, sessionId: null },
+      isActive(p)
+        ? {
+            ...p,
+            state: 'stalled',
+            error: 'restarted',
+            sessionId: null,
+            stallHistory: withHistoryEntry(p.stallHistory, { at, reason: 'restarted' }),
+          }
+        : { ...p, sessionId: null },
     ),
   };
 }
@@ -902,6 +1014,10 @@ module.exports = {
   isActive,
   markerFrom,
   turnEndAction,
+  openBackgroundTasks,
+  withHistoryEntry,
+  normalizeStallHistory,
+  MAX_STALL_HISTORY,
   verifyFailAction,
   nudgeText,
   verifyFailText,
