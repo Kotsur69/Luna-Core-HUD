@@ -148,6 +148,7 @@ function registerLifeIpc({
   ledger = null,
   github = null,
   readTodoStore = () => require('./todo').readStore(),
+  onDailyWrite = () => {},
 }) {
   /** Shares the Body data with the other PCs and the phone; never waits, never throws. */
   const putYazio = (body) => {
@@ -278,7 +279,7 @@ function registerLifeIpc({
   });
 
   const dailyBody = () => bodyForDaily(yazio, peerBody);
-  registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, bodyForDaily: dailyBody });
+  registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, bodyForDaily: dailyBody, onWrite: onDailyWrite });
 
   /** One background fetch + upload; never throws. A bad login stays blocked in lifeyazio (no network). */
   const refreshBody = async () => {
@@ -331,7 +332,7 @@ async function bodyForDaily(yazio, peerBody) {
  * Every store validates its whole payload and throws a fixed message; it
  * crosses back as a reason code. Each store has its own write rate limit.
  */
-function registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, bodyForDaily: getBody }) {
+function registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, bodyForDaily: getBody, onWrite }) {
   const lastWrite = new Map();
   /** Runs one write unless the same store was written within MIN_WRITE_GAP_MS. */
   const write = (key, fn) => {
@@ -340,11 +341,19 @@ function registerDailyIpc({ ipcMain, files, now, ledger, github, readTodoStore, 
     lastWrite.set(key, at);
     // Any write can move the score: the next read computes it afresh.
     readCache.clear();
+    let res;
     try {
-      return fn(at);
+      res = fn(at);
     } catch (err) {
       return { ok: false, reason: reasonOf(err) };
     }
+    // The other PCs get it soon (src/lifedailysync.js); a sync hiccup never fails the write.
+    try {
+      onWrite(key);
+    } catch (err) {
+      console.error('[life] daily sync trigger failed:', err && err.message);
+    }
+    return res;
   };
   const isReq = (req) => Boolean(req) && typeof req === 'object';
 

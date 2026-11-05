@@ -230,6 +230,7 @@ const { startTodoSync } = require('./todosync');
 let todoSync = null;
 // The project list (and later other settings) shared through the cloud.
 const { startConfigSync } = require('./configsync');
+const { lifeParts } = require('./lifedailysync');
 let configSync = null;
 // Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
@@ -2864,6 +2865,7 @@ function registerIpc() {
   const life = registerLifeIpc({
     ipcMain,
     sync: lifeSync,
+    onDailyWrite: () => configSync && configSync.soon(),
     cloud: () => (cloud ? cloud.snapshots : null),
     billCal,
     ledger: mission.ledger,
@@ -3483,7 +3485,12 @@ app.whenReady().then(() => {
   });
   configSync = startConfigSync({
     cloud,
-    onChanged: (names) => names.includes('projects') && reloadProjects(),
+    onChanged: (names) => {
+      if (names.includes('projects')) reloadProjects();
+      // Another PC's check-in / habits / goals / score settings: the renderer reloads those parts.
+      const parts = lifeParts(names);
+      if (parts.length) send('life:changed', { parts });
+    },
   });
   // A --luna-probe instance shares userData with the live LunaCore - often the
   // very one running the God Mode self-check that started it. Resuming the

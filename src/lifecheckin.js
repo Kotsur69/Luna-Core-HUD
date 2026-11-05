@@ -73,4 +73,4 @@ function checkinView(s, nowMs = Date.now()) {
   return { today, entry: s.days[today] || null, days };
 }
 
-module.exports = { loadCheckin, setCheckin, checkinView, normalize, EDIT_DAYS };
+module.exports = { loadCheckin, setCheckin, checkinView, normalize, store, EDIT_DAYS };

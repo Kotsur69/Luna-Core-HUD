@@ -93,7 +93,37 @@ function createStore({ fileName, defaults, normalize }) {
     return save(normalize(fn(loadForWrite(file))), file);
   }
 
-  return { load, update, defaultFile };
+  /**
+   * For the sync with other PCs (src/lifedailysync.js): the store as it is on
+   * disk plus the raw JSON, so the caller can tell a hand-damaged file from
+   * one save() wrote. Only a missing file is `exists: false`; an unreadable
+   * or unparsable one throws 'unreadable', never "everything was deleted".
+   * @returns {{data: object, raw: unknown, exists: boolean, mtimeMs: number}}
+   */
+  function readForSync(file = defaultFile()) {
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return { data: defaults(), raw: null, exists: false, mtimeMs: 0 };
+      throw new Error('unreadable');
+    }
+    let raw;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      throw new Error('unreadable');
+    }
+    let mtimeMs = 0;
+    try {
+      mtimeMs = fs.statSync(file).mtimeMs;
+    } catch {
+      // Gone between the read and the stat: the read is what counts.
+    }
+    return { data: normalize(raw), raw, exists: true, mtimeMs };
+  }
+
+  return { load, update, readForSync, defaultFile };
 }
 
 module.exports = { createStore, cleanText, newId, TEXT_RE };

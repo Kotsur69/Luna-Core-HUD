@@ -9,9 +9,14 @@
 //   name                 'projects', ...
 //   owns(k)              whether a unit key is its own (keys carry a prefix)
 //   valid(k, v)          a cloud value -> clean value, or null (untrusted input)
-//   read(now)            {units: [[k, v]], base, gone?} - base stamps the first
-//                        sync (0 = this PC never wins), gone seeds tombstones;
-//                        throws when the local file is unreadable
+//   read(now)            {units: [[k, v]], base, gone?, fresh?} - base stamps
+//                        the first sync (0 = this PC never wins), gone seeds
+//                        tombstones, fresh = the local file is missing, so the
+//                        last snapshot is ignored (a lost file is not "all
+//                        deleted"); throws when the local file is unreadable
+//                        isDefault?(k, v): on a first sync, a unit that is
+//                        still the store's untouched default is stamped 0,
+//                        so any real peer version or delete beats it
 //   resolve?(merged, local)  the units to keep (default: the merge as is)
 //   write(units, local)  store them
 //
@@ -30,12 +35,25 @@ const { MAX_DOC_BYTES } = require('./docsync');
 
 const VERSION = 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MAX_UNITS = 5000;
+// Per peer body, all providers together: the Life daily stores alone can reach
+// ~12.5k units (30 habits x 400 ticked days + 400 check-in days + 52 weeks).
+const MAX_UNITS = 20000;
 
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const validStamp = (t, now) => typeof t === 'number' && Number.isFinite(t) && t >= 0 && t <= now + DAY_MS;
 const validKey = (k) => typeof k === 'string' && k.length > 0 && k.length <= MAX_KEY && k !== '__proto__' && !Object.hasOwn(Object.prototype, k);
 const emptyMeta = () => ({ snap: {}, u: {}, gone: {} });
+/**
+ * First sync only (`local` is null otherwise): units the provider marks as its
+ * untouched defaults get stamp 0. A file a fresh PC wrote for one action also
+ * holds the store's defaults; stamped with the file mtime they would beat the
+ * other PCs' older real edits and deletes.
+ */
+function firstSyncDefaults(stamped, local) {
+  if (!local || typeof local.isDefault !== 'function') return stamped;
+  const low = local.units.filter(([k, v]) => local.isDefault(k, v)).map(([k]) => [k, 0]);
+  return low.length ? { ...stamped, u: { ...stamped.u, ...Object.fromEntries(low) } } : stamped;
+}
 /**
  * Whether the server would take the unit. One refused row fails its whole
  * push batch on every retry, so a too-long key or too-big value stays local.
@@ -99,8 +117,11 @@ function createConfigSync({ providers, metaFile, now = Date.now, extraPeers = ()
         console.error(`[configsync] ${provider.name}: local data unreadable, skipped:`, err && (err.code || err.message));
         continue;
       }
-      const prev = metas[provider.name];
-      const stamped = stamp(local.units, prev || { ...emptyMeta(), gone: local.gone || {} }, t, prev ? t : local.base);
+      const prev = local.fresh ? null : metas[provider.name];
+      const stamped = firstSyncDefaults(
+        stamp(local.units, prev || { ...emptyMeta(), gone: local.gone || {} }, t, prev ? t : local.base),
+        prev ? null : local,
+      );
       const merged = merge(local.units, stamped, cloud.map((p) => peerFor(provider, p, t)), t);
       const final = provider.resolve ? provider.resolve(merged.units, local) : merged.units;
       if (!sameUnits(final, local.units)) {
@@ -147,6 +168,7 @@ function startConfigSync({ cloud, onChanged }) {
   const { docProviders } = require('./docsync');
   const { createNewsProvider, createMissionProjectsProvider } = require('./missionsync');
   const { createHostDefaultProvider } = require('./hostdefault');
+  const { lifeProviders } = require('./lifedailysync');
   paths.ensureUserDir();
   const sync = createConfigSync({
     providers: [
@@ -155,6 +177,7 @@ function startConfigSync({ cloud, onChanged }) {
       createNewsProvider(paths.local('mission-news.local.json')),
       createMissionProjectsProvider(paths.local('mission-projects.local.json')),
       createHostDefaultProvider(paths.local('host-default.local.json')),
+      ...lifeProviders(),
     ],
     metaFile: paths.local('config-sync.local.json'),
     ...cloud.hooks('config'),

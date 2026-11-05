@@ -418,6 +418,13 @@ contextBridge.exposeInMainWorld('lunacore', {
   lifeScore: () => ipcRenderer.invoke('life:score'),
   /** Promise<{ok, prefs} | {ok:false, reason}>. Weights are normalised to 100 in main. */
   lifeScorePrefs: (weights, focusTargetH) => ipcRenderer.invoke('life:score-prefs', { weights, focusTargetH }),
+  /** Another PC's daily data arrived (src/lifedailysync.js): ({ parts }) with
+   *  parts from 'checkin' | 'habits' | 'goals' | 'score'. Returns an unsubscribe function. */
+  onLifeChanged: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on('life:changed', listener);
+    return () => ipcRenderer.removeListener('life:changed', listener);
+  },
   // Attention inbox (src/inboxipc.js). Machine + run id only, validated in main.
   /** Promise<{ok, items} | {ok:false, reason}>. */
   inboxList: () => ipcRenderer.invoke('inbox:list'),
