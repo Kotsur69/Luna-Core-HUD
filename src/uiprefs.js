@@ -127,6 +127,10 @@ const allowedToolList = (v) =>
 const MAX_CHECK_COMMAND = 200;
 // eslint-disable-next-line no-control-regex
 const checkCommandOf = (v) => (typeof v === 'string' && v.trim() && v.length <= MAX_CHECK_COMMAND && !/[\x00-\x1f\x7f]/.test(v) ? v.trim() : null);
+// After a merge: apply the run's Supabase migrations / edge functions
+// (src/orchestraApplyActions.js). 'ask' by default - this touches a
+// production database; a destructive migration asks even on 'automatic'.
+const SUPABASE_APPLY_MODES = ['off', 'ask', 'automatic'];
 
 const DEFAULTS = {
   theme: 'cyberpunk',
@@ -223,6 +227,7 @@ const DEFAULTS = {
   orchestraIntegration: 'pr',
   orchestraAllowedTools: [],
   orchestraCheckCommand: 'npm test',
+  orchestraSupabaseApply: 'ask',
   // /ask (Ctrl+B's tool recommender, src/ask.js). Default OFF: without this,
   // ask:query always calls the cloud `claude` CLI with --model sonnet -
   // switching a profile's terminal tab to a local endpoint must never make
@@ -731,6 +736,10 @@ function readUiPrefs() {
         : DEFAULTS.orchestraIntegration,
       orchestraAllowedTools: allowedToolList(obj.orchestraAllowedTools) || [],
       orchestraCheckCommand: checkCommandOf(obj.orchestraCheckCommand) || DEFAULTS.orchestraCheckCommand,
+      // Missing or unknown => 'ask', never a silent 'automatic'.
+      orchestraSupabaseApply: SUPABASE_APPLY_MODES.includes(obj.orchestraSupabaseApply)
+        ? obj.orchestraSupabaseApply
+        : DEFAULTS.orchestraSupabaseApply,
       // Missing key => disabled (prefs file written before this option existed).
       askUseLocalModel:
         typeof obj.askUseLocalModel === 'boolean' ? obj.askUseLocalModel : DEFAULTS.askUseLocalModel,
@@ -855,6 +864,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && checkCommandOf(partial.orchestraCheckCommand)) {
       next.orchestraCheckCommand = checkCommandOf(partial.orchestraCheckCommand);
+    }
+    if (partial && SUPABASE_APPLY_MODES.includes(partial.orchestraSupabaseApply)) {
+      next.orchestraSupabaseApply = partial.orchestraSupabaseApply;
     }
     if (partial && typeof partial.autoProceedArmed === 'boolean') {
       next.autoProceedArmed = partial.autoProceedArmed;
@@ -984,4 +996,5 @@ module.exports = {
   MISSION_MODELS,
   checkCommandOf,
   workerEffortOf,
+  SUPABASE_APPLY_MODES,
 };

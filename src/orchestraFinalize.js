@@ -32,6 +32,7 @@ const { buildReport, syncStallNotes } = require('./orchestraReport');
 const { gitDirExists } = require('./orchestraDiagnose');
 const { runEntry } = require('./godmodesnapshot');
 const { selfCheckGate } = require('./orchestraSelfCheck');
+const { supabaseGate } = require('./orchestraApplyActions');
 const { branchFor } = require('./worktrees');
 
 // Lets a closed tab's processes let go of the worktree folder (Windows).
@@ -94,7 +95,9 @@ const POST_MERGE_STEPS = Object.freeze([
   { name: 'localBase', impl: 'updateLocalBase', when: () => true },
   // 2. remove the integration worktree, delete the merged package branches.
   { name: 'cleanup', impl: 'cleanupMergedRun', when: () => true },
-  // 3. "Create a new release after finish" (src/releaseCut.js), once per run.
+  // 3. the run's Supabase migrations / edge functions (src/orchestraApplyActions.js) - before a release ships code that needs them.
+  { name: 'supabase', impl: 'applySupabaseActions', when: supabaseGate },
+  // 4. "Create a new release after finish" (src/releaseCut.js), once per run.
   { name: 'release', impl: 'releaseAfterMerge', when: releaseGate },
 ]);
 
@@ -141,6 +144,7 @@ function postMergeContext(plan, res, slug) {
     })),
     options: sup.normalizeOptions(plan.options),
     selfCheck: integ.selfCheck || null,
+    manualActions: Array.isArray(integ.manualActions) ? integ.manualActions : [],
     previous: { ...(integ.postMerge || {}) },
     results: {},
   };

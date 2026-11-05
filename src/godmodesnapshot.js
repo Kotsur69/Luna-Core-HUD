@@ -403,6 +403,20 @@ function cleanRun(r, now) {
 /** A manual action ({kind, what, from}) as one line: 'migration: x.sql'. */
 const manualLine = (a) => (isObject(a) && a.what ? `${clean(a.kind, MAX_STATE) || 'note'}: ${clean(a.what, MAX_LINE)}` : null);
 
+/** Manual action lines, each with what the Supabase apply step did to it (' - applied' / ' - failed'). */
+function manualLines(integ) {
+  const res = isObject(integ.postMerge) && isObject(integ.postMerge.supabase) ? integ.postMerge.supabase : null;
+  const items = (res && Array.isArray(res.items) ? res.items : []).filter(isObject);
+  const suffix = (a) => {
+    const hit = items.find((i) => i.kind === a.kind && i.what === a.what);
+    return hit && (hit.state === 'applied' || hit.state === 'failed') ? ` - ${hit.state}` : '';
+  };
+  return (Array.isArray(integ.manualActions) ? integ.manualActions : []).slice(0, MAX_LINES).map((a) => {
+    const line = manualLine(a);
+    return line ? `${line}${suffix(a)}` : null;
+  });
+}
+
 /** 'failed' when any check went red, 'ok' when it ran, 'none' when it did not run. */
 function selfCheckState(sc) {
   if (!isObject(sc)) return 'none';
@@ -451,7 +465,7 @@ function runEntry(view, { now = Date.now(), suggestions = [], report = '' } = {}
       approvalSuggestions: (Array.isArray(suggestions) ? suggestions : []).map((s) => (isObject(s) ? s.rule : null)),
       // Scrubbed like the hub lines: the report names local paths.
       needs: (needsFromReport(report, { maxItems: MAX_LINES, maxLine: MAX_LINE }) || []).map((l) => scrubPaths(l, [view.repoPath])),
-      manual: (Array.isArray(integ.manualActions) ? integ.manualActions : []).slice(0, MAX_LINES).map(manualLine),
+      manual: manualLines(integ),
       // Only the repo root is cut (not the worktree roots): this PC's hub
       // reads the same lines from the report, which names the repo only.
       ...reportLines(report, [view.repoPath]),

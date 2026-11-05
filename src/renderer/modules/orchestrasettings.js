@@ -3,7 +3,8 @@
 // ----------------------------------------------------------------------------
 // Two selects in Settings (Ctrl+L): which model every worker runs on (Opus by
 // default, or the planner's per-package pick) and its permission mode
-// (bypassPermissions by default). Main reads both from ui.local.json when a
+// (bypassPermissions by default) - plus the run-end ones (integration, final
+// check command, "Apply Supabase actions": off / ask / automatic). Main reads both from ui.local.json when a
 // run STARTS and freezes them for that run, so there is no live state here -
 // only the controls. Same static-overlay mount shape as autocompact.js's
 // mountAutoCompactSettings.
@@ -20,6 +21,8 @@ const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 // 'plan' + src/efforts.js EFFORTS (the renderer cannot require main-side modules).
 const EFFORT_OPTIONS = ['plan', 'medium', 'high', 'xhigh', 'max'];
+// src/uiprefs.js SUPABASE_APPLY_MODES (main validates the value again).
+const SUPABASE_APPLY_MODES = ['off', 'ask', 'automatic'];
 
 /**
  * @param {HTMLElement} root the Settings overlay
@@ -83,6 +86,20 @@ export function mountOrchestraSettings(root, prefs) {
       sfx.modeToggle();
       const next = await window.lunacore.setUiPrefs({ orchestraCheckCommand: value });
       if (next && typeof next.orchestraCheckCommand === 'string') check.value = next.orchestraCheckCommand;
+    });
+  }
+
+  // After a merge: apply the run's Supabase migrations / edge functions
+  // (src/orchestraApplyActions.js). 'ask' by default.
+  const supabase = root.querySelector('#orchestra-supabase-apply');
+  if (supabase) {
+    supabase.value = SUPABASE_APPLY_MODES.includes(prefs.orchestraSupabaseApply) ? prefs.orchestraSupabaseApply : 'ask';
+    supabase.addEventListener('change', async () => {
+      if (!SUPABASE_APPLY_MODES.includes(supabase.value)) return;
+      sfx.modeToggle();
+      const next = await window.lunacore.setUiPrefs({ orchestraSupabaseApply: supabase.value });
+      // Main asks before 'automatic'; a Cancel there keeps the old value.
+      if (next && SUPABASE_APPLY_MODES.includes(next.orchestraSupabaseApply)) supabase.value = next.orchestraSupabaseApply;
     });
   }
 
