@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Surface transparency (Settings overlay, Ctrl+L)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/TRANSPARENCY_PLAN.md. Four sliders over the per-layer alpha tokens
+// docs/done_docs/DONE_TRANSPARENCY_PLAN.md. Four sliders over the per-layer alpha tokens
 // that styles.css derives every surface colour from.
 //
 // FOUR sliders and not one, because the layers NEST: html/body -> .app ->

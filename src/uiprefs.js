@@ -177,7 +177,7 @@ const DEFAULTS = {
   termScrollback: 5000,
   termBgOpacity: 100, // percent, 0-100
   termBgBlur: 0, // px, 0-20
-  // Per-layer surface transparency (docs/tbc_docs/TRANSPARENCY_PLAN.md). null is
+  // Per-layer surface transparency (docs/done_docs/DONE_TRANSPARENCY_PLAN.md). null is
   // not "0%" - it means FOLLOW THE ACTIVE THEME, which is why the default is
   // null on all four: an untouched install must render every theme exactly as
   // the theme authored it. Percent 0-100 once a slider has actually moved.

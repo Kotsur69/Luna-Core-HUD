@@ -4,11 +4,10 @@
 `v0.10.0` on 2026-09-01.** Kept as the design record; the hand-off notes below
 are history.
 
-> **🟡 Resume here (2026-11-06):** shipped and in daily use; two small items
-> left. (1) One `npm start` look at the half-pixel shifts from the type /
-> spacing scale normalization ("Two things still owed" below). (2) Optional:
-> a real auto-hiding `zen` rail, only if Mati wants it. When (1) is done,
-> `git mv` this doc to `docs/done_docs/DONE_FLUIDITY_THEMING_PLAN.md`.
+> **✅ DONE (2026-11-06).** Mati checked it in the running app: the
+> half-pixel shifts from the type / spacing normalization ("Two things still
+> owed" below) look fine. A real auto-hiding `zen` rail stays an optional
+> idea, not owed work.
 
 Plan doc for the update Mati asked for on 2026-08-27: *"whole app has to have more
 fluidity like folding in folding out animations, more templates, more schemes."*

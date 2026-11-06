@@ -214,7 +214,7 @@
   /* A theme publishes OPAQUE colour and knows nothing about transparency; this
      block decides how much of it actually gets painted. That split is the whole
      reason config/themes.json needs no edit to support a see-through HUD - see
-     docs/tbc_docs/TRANSPARENCY_PLAN.md.
+     docs/done_docs/DONE_TRANSPARENCY_PLAN.md.
 
      --surface-alpha is the headline knob and the DEFAULT for the four layer
      tokens under it. At 100% every color-mix below resolves to exactly the
@@ -237,7 +237,7 @@
        --alpha-term    the terminal's ground.
 
      Borders that use --edge stay opaque on purpose; only backgrounds are
-     alpha'd. See docs/tbc_docs/TRANSPARENCY_PLAN.md. */
+     alpha'd. See docs/done_docs/DONE_TRANSPARENCY_PLAN.md. */
   --surface-alpha: 100%;
   --alpha-ground: var(--surface-alpha);
   --alpha-edge:   var(--surface-alpha);
@@ -1208,7 +1208,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   max-width: 220px;
   transition: background var(--dur-fast) var(--ease-sharp), color var(--dur-fast) var(--ease-sharp);
 }
-.tab.is-active { background: var(--bg); /* deliberately opaque - see TRANSPARENCY_PLAN.md */ color: var(--neon-cyan); border-color: var(--neon-cyan); position: relative; }
+.tab.is-active { background: var(--bg); /* deliberately opaque - see DONE_TRANSPARENCY_PLAN.md */ color: var(--neon-cyan); border-color: var(--neon-cyan); position: relative; }
 .tab.is-dead .tab__label { text-decoration: line-through; opacity: 0.6; }
 
 /* Live drag-to-reorder (sessions.js + tabdrag.js), Chrome-style: the dragged
@@ -3855,7 +3855,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   /* Deliberately opaque, unlike every other full-window surface: boot runs
      before the user can react to anything, and a see-through boot sequence over
      an arbitrary desktop is noise during the one moment the HUD is theatrical.
-     See docs/tbc_docs/TRANSPARENCY_PLAN.md. */
+     See docs/done_docs/DONE_TRANSPARENCY_PLAN.md. */
   position: fixed;
   inset: 0;
   z-index: 200; /* above the palette (100) - this is the first thing on screen */

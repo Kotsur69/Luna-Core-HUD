@@ -647,7 +647,7 @@ function createWindow() {
     // covers the material completely and this costs nothing - which is why the
     // window needs no toggle, no IPC and no recreation when the theme changes.
     // Non-Win11 ignores backgroundMaterial; the transparent backgroundColor is
-    // covered by index.html's pre-CSS paint. See docs/tbc_docs/TRANSPARENCY_PLAN.md.
+    // covered by index.html's pre-CSS paint. See docs/done_docs/DONE_TRANSPARENCY_PLAN.md.
     backgroundColor: '#00000000',
     // Which material is Mati's choice of how smeared the backdrop is: acrylic
     // blurs live windows behind, mica only tints the wallpaper, tabbed is a
@@ -661,7 +661,7 @@ function createWindow() {
     // with --alpha-ground: 0% is the whole app going white mid-session. Adding
     // transparent: true was tried on 2026-09-13 and did NOT hold it either, so
     // the only honest position is that this build has no stable sharp
-    // see-through. See docs/tbc_docs/TRANSPARENCY_PLAN.md.
+    // see-through. See docs/done_docs/DONE_TRANSPARENCY_PLAN.md.
     backgroundMaterial: readUiPrefs().windowMaterial,
     title: 'LunaCore',
     webPreferences: {
