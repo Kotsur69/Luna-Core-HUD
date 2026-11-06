@@ -163,6 +163,16 @@ function isUsageDirFor(dir, home, id) {
   return samePath(dir, path.join(home, '.claude')) || samePath(dir, path.join(home, `.claude-usage-${id}`));
 }
 
+// Control characters (C0 + DEL) and bidi overrides. A label reaches the
+// terminal (the failover notice is written to the PTY) and the log, so an
+// ESC or a newline in it could fake output or forge a log line.
+const LABEL_JUNK_RE = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]+/g;
+
+/** A display label made safe to show anywhere: no control chars, trimmed, capped. */
+function cleanLabel(label) {
+  return typeof label === 'string' ? label.replace(LABEL_JUNK_RE, ' ').trim().slice(0, MAX_LABEL) : '';
+}
+
 /** A usage-login email as `claude auth status` reports it, or null. */
 function cleanEmail(email) {
   return typeof email === 'string' && email.length <= MAX_EMAIL && EMAIL_RE.test(email) ? email : null;
@@ -180,7 +190,7 @@ function pruneLimits(limits, accounts, now) {
 
 /** One stored account with only its validated fields (usage fields optional). */
 function cleanAccount(a, home) {
-  const out = { id: a.id, label: String(a.label || a.id).slice(0, MAX_LABEL), token: a.token };
+  const out = { id: a.id, label: cleanLabel(a.label) || a.id, token: a.token };
   if (!isUsageDirFor(a.usageDir, home, a.id)) return out;
   const email = cleanEmail(a.usageEmail);
   return email ? { ...out, usageDir: a.usageDir, usageEmail: email } : { ...out, usageDir: a.usageDir };
@@ -346,7 +356,7 @@ function createClaudeAccounts(deps) {
     refresh();
     const token = extractToken(tokenText);
     if (!token) return { ok: false, error: 'badToken' };
-    const name = typeof label === 'string' ? label.trim().slice(0, MAX_LABEL) : '';
+    const name = cleanLabel(label);
     if (!name) return { ok: false, error: 'badLabel' };
     if (!storage()) return { ok: false, error: 'noEncryption' };
     if (state.accounts.some((a) => a.token === token)) return { ok: false, error: 'duplicate' };
@@ -361,6 +371,20 @@ function createClaudeAccounts(deps) {
     if (!state.accounts.some((a) => a.id === id)) return { ok: false, error: 'notFound' };
     const accounts = state.accounts.filter((a) => a.id !== id);
     return save({ accounts, limits: pruneLimits(state.limits, accounts, now()) });
+  }
+
+  /**
+   * Renames an account. The label is only a display name: the token, the
+   * order, cooldowns and the usage login all stay as they are.
+   * @returns {{ok:true}|{ok:false,error:'notFound'|'badLabel'|string}}
+   */
+  function rename(id, label) {
+    refresh();
+    if (!state.accounts.some((a) => a.id === id)) return { ok: false, error: 'notFound' };
+    const name = cleanLabel(label);
+    if (!name) return { ok: false, error: 'badLabel' };
+    const accounts = state.accounts.map((a) => (a.id === id ? { ...a, label: name } : a));
+    return save({ accounts, limits: state.limits });
   }
 
   /** Moves an account one place up (towards "preferred"). */
@@ -474,7 +498,7 @@ function createClaudeAccounts(deps) {
   }
 
   return {
-    list, add, remove, moveUp, clearLimit, active, freeAccount, markLimited, failoverActive, authLayer,
+    list, add, rename, remove, moveUp, clearLimit, active, freeAccount, markLimited, failoverActive, authLayer,
     usageTargets, setUsage,
   };
 }
@@ -489,6 +513,7 @@ module.exports = {
   extractToken,
   isValidToken,
   sanitize,
+  cleanLabel,
   isUsageDirAllowed,
   isUsageDirFor,
   cleanEmail,

@@ -1482,12 +1482,6 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .usage-refresh.is-spinning { animation: usage-spin 0.6s linear infinite; }
 @keyframes usage-spin { to { transform: rotate(360deg); } }
 
-/* Freshness readout ("updated Xs ago") so the tile never has to blank itself
-   to say something changed - see modules/usage.js renderFreshness(). Empty
-   text collapses via :empty so it costs no layout space before first data. */
-.usage-updated { font-size: 10px; margin: -4px 0 2px; }
-.usage-updated:empty { display: none; }
-
 .usage { display: flex; flex-direction: column; gap: 10px; }
 .usage-row { display: flex; flex-direction: column; gap: 3px; }
 .usage-row__head {
@@ -1517,10 +1511,10 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   background: var(--bar-sheen), linear-gradient(90deg, var(--bar-from), var(--bar-to));
   transition: transform var(--dur-normal) var(--ease-smooth), background var(--dur-normal) var(--ease-smooth);
 }
-.usage-bar__fill[data-level='warn'] { background: linear-gradient(90deg, var(--warn), #ffb347); }
+.usage-bar__fill[data-level='warn'] { background: var(--bar-sheen), var(--warn); }
 /* Same reason as .ctx-bar__fill.is-high - `ctx-alarm 1s infinite` had a fixed
    duration, so it survived prefers-reduced-motion. Only the color remains. */
-.usage-bar__fill[data-level='bad'] { background: linear-gradient(90deg, var(--bad), #ff3b6b); }
+.usage-bar__fill[data-level='bad'] { background: var(--bar-sheen), var(--bad); }
 .usage-row__reset { font-size: 10px; opacity: 0.6; }
 /* God Mode planning parked on a spent Claude limit: message + cancel. */
 .orchestra__wait { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
@@ -1531,18 +1525,60 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   gap: var(--space-3);
 }
 .usage-provider__title { font-size: var(--fs-sm); font-weight: 700; }
-/* One Claude account (modules/usage.js usageAccountBlock): name line, then
-   its 5 h + weekly rows. The active one gets a cyan dot AND an "active" text
-   tag, so the marker never rests on colour alone. */
-.usage-account { display: flex; flex-direction: column; gap: var(--space-2); }
-.usage-account + .usage-account { margin-top: var(--space-3); }
-.usage-account__head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font-size: var(--fs-sm); }
-.usage-account__dot { flex: none; width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--text-dim); }
-.usage-account.is-active .usage-account__dot { background: var(--neon-cyan); border-color: var(--neon-cyan); }
-.usage-account__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
-.usage-account.is-active .usage-account__name { color: var(--text); font-weight: 700; }
-.usage-account__tag { flex: none; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--neon-cyan); }
-.usage-account__warn { color: var(--warn); }
+/* Compact usage grid (modules/usage.js usageGrid): one line per window x
+   account. Every line is a subgrid of one shared grid, so the bar, percent
+   and reset columns line up across all lines. Columns: window | active dot |
+   account | bar | percent | reset; the --solo variant drops dot + account. */
+.usage-grid {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, max-content) minmax(24px, 1fr) auto auto;
+  column-gap: var(--space-2);
+  row-gap: var(--space-2);
+  align-items: center;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 0;
+}
+.usage-grid--solo { grid-template-columns: auto minmax(24px, 1fr) auto auto; }
+.usage-line {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  min-width: 0;
+}
+/* The only separation between window groups: a little more air. */
+.usage-line.is-group-start:not(:first-child) { margin-top: var(--space-3); }
+.usage-line > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.usage-line__win { max-width: 7em; color: var(--text-dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em; }
+.usage-line__mark { width: 1ch; color: var(--neon-cyan); font-size: 8px; line-height: 1; text-align: center; }
+.usage-line__name { max-width: 9em; color: var(--text-dim); }
+.usage-line.is-active .usage-line__name { color: var(--text); font-weight: 700; }
+.usage-line .usage-bar { height: 6px; }
+.usage-line__pct { text-align: right; font-weight: 700; }
+.usage-line__reset { text-align: right; font-size: var(--fs-xs); color: var(--text-dim); }
+/* A 5 h line whose weekly limit is spent: the room can't be used, so the
+   line steps back and its bar goes neutral, whatever its own level says. */
+.usage-line.is-blocked { opacity: 0.4; }
+.usage-line.is-blocked .usage-bar__fill { background: var(--text-dim); }
+/* A value-only limit (balance, credits) fills bar + percent + reset. */
+.usage-line__value { grid-column: span 3; text-align: right; font-weight: 700; }
+/* An account without bars: one muted line where its bar would be. */
+.usage-line__msg { grid-column: span 2; color: var(--text-dim); font-style: italic; }
+.usage-line__link {
+  justify-self: end;
+  background: none;
+  border: 0;
+  padding: 0 var(--space-1);
+  color: var(--neon-cyan);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.usage-line__link:hover { color: var(--text); }
+.usage-line__link:focus-visible { outline: var(--border-w) solid var(--neon-cyan); outline-offset: 1px; }
 
 /* ---- Sparkline burn-rate (context window percentage over time) ---------------- */
 

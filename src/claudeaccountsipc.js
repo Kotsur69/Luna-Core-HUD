@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Claude accounts IPC (Settings -> Claude accounts)
 // ----------------------------------------------------------------------------
-// The renderer lists, adds, removes and reorders accounts. A token only ever
+// The renderer lists, adds, renames, removes and reorders accounts. A token only ever
 // travels renderer -> main (the paste on "Add"); list() never returns one.
 // Every payload is validated here - the renderer is not trusted.
 //
@@ -34,6 +34,12 @@ function registerClaudeAccountsIpc({ ipcMain, accounts, openTokenTab, accountUsa
     return accounts.add(p.label, p.token);
   });
 
+  ipcMain.handle('claudeAccounts:rename', (_event, payload) => {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    if (!validId(p.id)) return bad('notFound');
+    if (typeof p.label !== 'string' || p.label.length > MAX_LABEL_IN) return bad('badLabel');
+    return accounts.rename(p.id, p.label);
+  });
   ipcMain.handle('claudeAccounts:remove', (_event, id) => (validId(id) ? accounts.remove(id) : bad('notFound')));
   ipcMain.handle('claudeAccounts:move-up', (_event, id) => (validId(id) ? accounts.moveUp(id) : bad('notFound')));
   ipcMain.handle('claudeAccounts:clear-limit', (_event, id) => (validId(id) ? accounts.clearLimit(id) : bad('notFound')));

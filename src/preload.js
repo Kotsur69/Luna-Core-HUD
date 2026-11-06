@@ -146,6 +146,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   disconnectClaudeUsage: (id) => ipcRenderer.invoke('claudeAccounts:disconnect-usage', id),
   /** Stores a `claude setup-token` token under a label; main validates both. */
   addClaudeAccount: (label, token) => ipcRenderer.invoke('claudeAccounts:add', { label, token }),
+  renameClaudeAccount: (id, label) => ipcRenderer.invoke('claudeAccounts:rename', { id, label }),
   removeClaudeAccount: (id) => ipcRenderer.invoke('claudeAccounts:remove', id),
   moveClaudeAccountUp: (id) => ipcRenderer.invoke('claudeAccounts:move-up', id),
   clearClaudeAccountLimit: (id) => ipcRenderer.invoke('claudeAccounts:clear-limit', id),

@@ -551,6 +551,23 @@ test('IPC: without a usage reader the old handlers stay as they were', () => {
   assert.deepEqual(handlers.get('claudeAccounts:list')(), { accounts: [] });
 });
 
+test('IPC: rename validates id and label in main before the store sees them', () => {
+  const seen = [];
+  const accounts = { list: () => ({ accounts: [] }), rename: (id, label) => { seen.push([id, label]); return { ok: true }; } };
+  const { handlers, ipcMain } = fakeIpc();
+  registerClaudeAccountsIpc({ ipcMain, accounts, openTokenTab: () => {} });
+  const rename = handlers.get('claudeAccounts:rename');
+  for (const bad of [null, 'gmail', 42, { id: '../x', label: 'a' }, { id: 'A', label: 'a' }]) {
+    assert.deepEqual(rename({}, bad), { ok: false, error: 'notFound' });
+  }
+  for (const label of [undefined, 42, {}, 'x'.repeat(201)]) {
+    assert.deepEqual(rename({}, { id: 'gmail', label }), { ok: false, error: 'badLabel' });
+  }
+  assert.deepEqual(seen, []);
+  assert.deepEqual(rename({}, { id: 'gmail', label: 'gmail' }), { ok: true });
+  assert.deepEqual(seen, [['gmail', 'gmail']]);
+});
+
 // ---- watcher hook --------------------------------------------------------
 
 test('watcher: refresh forces the account pass; no reader -> no accounts field', async () => {

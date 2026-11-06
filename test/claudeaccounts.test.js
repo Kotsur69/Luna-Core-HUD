@@ -24,6 +24,7 @@ const {
   sanitize,
   ACCOUNT_ENV,
   UNKNOWN_RESET_MS,
+  cleanLabel,
 } = require('../src/claudeaccounts');
 const { withAccountResume, ACCOUNT_RESUME_MESSAGE } = require('../src/launch');
 const { buildSessionEnv, setAccountLayer } = require('../src/sessionenv');
@@ -163,6 +164,43 @@ test('store: moveUp, clearLimit and remove', () => {
   assert.equal(store.remove(b).ok, true);
   assert.equal(store.active().id, a);
   assert.equal(store.remove('zzz').error, 'notFound');
+});
+
+test('store: rename changes only the label, keeps order, token and cooldown', () => {
+  const { store, clock } = makeStore();
+  const a = store.add('Gmail', TOKEN_A).id;
+  const b = store.add('Onet', TOKEN_B).id;
+  store.markLimited(a, clock.now + 9999);
+  assert.equal(store.rename(a, '  gmail  ').ok, true);
+  const { accounts } = store.list();
+  assert.deepEqual(accounts.map((x) => [x.id, x.label]), [[a, 'gmail'], [b, 'Onet']]);
+  assert.ok(accounts[0].limitedUntil, 'the cooldown survives a rename');
+  assert.equal(store.active().id, b);
+  assert.ok(accounts.every((x) => !('token' in x)), 'list still never returns a token');
+});
+
+test('store: rename rejects an empty name and an unknown id, caps the length', () => {
+  const { store } = makeStore();
+  const a = store.add('A', TOKEN_A).id;
+  assert.equal(store.rename(a, '   ').error, 'badLabel');
+  assert.equal(store.rename(a, 42).error, 'badLabel');
+  assert.equal(store.rename('zzz', 'x').error, 'notFound');
+  assert.equal(store.list().accounts[0].label, 'A');
+  store.rename(a, 'x'.repeat(500));
+  assert.equal(store.list().accounts[0].label.length, 60);
+});
+
+test('labels lose control chars and bidi overrides on add, rename and load', () => {
+  const { store } = makeStore();
+  const id = store.add('Gm\u001b[2Jail', TOKEN_A).id;
+  assert.equal(store.list().accounts[0].label, 'Gm [2Jail');
+  assert.equal(store.rename(id, 'line\r\nforged\u202e').ok, true);
+  assert.equal(store.list().accounts[0].label, 'line forged');
+  assert.equal(store.rename(id, '\u0007\u0000').error, 'badLabel', 'nothing left once cleaned');
+  assert.equal(cleanLabel(42), '');
+  // A hand-edited store file is cleaned on load too.
+  assert.equal(sanitize({ accounts: [{ id: 'a', label: 'a\u0007b', token: TOKEN_A }] }).accounts[0].label, 'a b');
+  assert.equal(sanitize({ accounts: [{ id: 'a', label: '\u0007', token: TOKEN_A }] }).accounts[0].label, 'a', 'falls back to the id');
 });
 
 test('store: a second process sees writes from the first (mtime refresh)', () => {

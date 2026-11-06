@@ -514,8 +514,8 @@
         >&#8635;</button>
       </h2>
       <!-- Usage tile (5h + weekly). Bars are built by modules/usage.js from the IPC
-           usage:update event (a GET read from the OAuth CLI endpoint, zero tokens spent). -->
-      <div id="usage-updated" class="usage-updated hint"></div>
+           usage:update event (a GET read from the OAuth CLI endpoint, zero tokens spent).
+           "Updated Xs ago" lives in the refresh button's tooltip. -->
       <div id="usage-body" class="usage">
         <p class="hint" data-i18n="usage.loading">Sprawdzanie limitow...</p>
       </div>
@@ -2058,7 +2058,7 @@
               <!-- Claude account failover (src/claudeaccounts.js): filled by
                    modules/claudeaccountsettings.js. A token goes to main once, on
                    "Add", and never comes back to the renderer. -->
-              <h3 class="termcustom__section" data-i18n="accounts.title">Konta Claude</h3>
+              <h3 id="claude-accounts-section" class="termcustom__section" data-i18n="accounts.title">Konta Claude</h3>
               <p class="termcustom__hint" data-i18n="accounts.hint">
                 Gdy konto trafi na limit 5 h lub tygodniowy, karty, God Mode i Luna's Work przechodza na nastepne wolne konto i kontynuuja. Pierwsze na liscie jest preferowane.
               </p>

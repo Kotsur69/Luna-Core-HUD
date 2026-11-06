@@ -19,16 +19,17 @@
 // poll) used to wipe the bars and show an error sentence instead, so the tile
 // looked like it kept disappearing every few polls. Now the bars always
 // render from the last GOOD payload (lastGoodUsage); a transient error only
-// leaves the "updated Xs ago" label to grow instead of resetting - see
+// leaves the "updated Xs ago" tooltip to grow instead of resetting - see
 // renderFreshness(). Only 'reauth' (no valid token) and 'off' (feature
 // disabled) still take over the whole tile, because those are real, lasting
 // states the next 15 s heartbeat (src/usage.js UsageWatcher) can't fix on
 // its own - the user has to do something (run `claude`, flip the flag).
 //
 // SEVERAL CLAUDE ACCOUNTS: once an account in Settings has a usage login,
-// the Claude view becomes one block per account (name, 5 h + weekly bars, a
-// dot + "active" tag on the one new work runs on, or a 'reconnect' note). See
-// visibleAccounts() / usageAccountBlock().
+// the Claude view becomes one compact grid grouped by window: the window
+// label once per group, then one line per account (dot on the one new work
+// runs on, name, bar, percent, reset), plus one muted line per account that
+// needs attention. See visibleAccounts() / groupUsageRows() / usageGrid().
 //
 // ONE PROVIDER AT A TIME: the tile shows only the limits of the profile the
 // active terminal tab runs - Claude's rows on a Claude tab, that provider's
@@ -44,7 +45,7 @@ import { defineWidget } from './registry.js';
 /** How often the "resets in ..." labels are recomputed (locally, no request). */
 const COUNTDOWN_MS = 30000;
 
-/** How often the "updated Xs ago" label ticks (locally, no request). */
+/** How often the "updated Xs ago" tooltip ticks (locally, no request). */
 const FRESHNESS_MS = 1000;
 
 // Elements of the current mount, or null when this widget is not on screen.
@@ -158,32 +159,235 @@ const WINDOW_LABEL_KEYS = {
   monthly: 'usage.window.month',
 };
 
+/** Short forms of the same windows, for the tile's narrow left column. */
+const WINDOW_SHORT_KEYS = {
+  '5h': 'usage.window.short.5h',
+  daily: 'usage.window.short.day',
+  weekly: 'usage.window.short.week',
+  monthly: 'usage.window.short.month',
+};
+
+/** Group order: shortest window first; anything else follows in arrival order. */
+const WINDOW_ORDER = ['5h', 'daily', 'weekly', 'monthly'];
+
+/** Provider labels that just restate the window, so ours may replace them. */
+const GENERIC_LABELS = ['5-hour window', 'Daily limit', 'Weekly limit', 'Monthly limit'];
+
+/** One-line forms of the messages accountMessageKey() picks. */
+const SHORT_MESSAGE_KEYS = {
+  'usage.account.reconnect': 'usage.account.short.reconnect',
+  'usage.account.reconnectMain': 'usage.account.short.reconnectMain',
+  'usage.account.unconnected': 'usage.account.short.unconnected',
+  'usage.unavailable': 'usage.account.short.unavailable',
+  'usage.loading': 'usage.account.short.loading',
+};
+
+/** Settings anchor the muted row's arrow opens (index.html, Claude accounts). */
+const ACCOUNTS_SETTINGS_ANCHOR = 'claude-accounts-section';
+
+function hasGenericLabel(limit) {
+  return Boolean(WINDOW_LABEL_KEYS[limit && limit.window]) && (!limit.label || GENERIC_LABELS.includes(limit.label));
+}
+
 /**
  * The row label: the localized window name when the provider's label is the
  * generic English one, otherwise the provider's own (a model name, "MCP").
  */
 export function limitLabel(limit, translate = t) {
-  const generic = ['5-hour window', 'Daily limit', 'Weekly limit', 'Monthly limit'];
-  const key = WINDOW_LABEL_KEYS[limit && limit.window];
-  if (key && (!limit.label || generic.includes(limit.label))) return translate(key);
+  if (hasGenericLabel(limit)) return translate(WINDOW_LABEL_KEYS[limit.window]);
   return (limit && limit.label) || translate('usage.window.custom');
 }
 
-/** A value-only row (prepaid balance, credits) - no bar, no reset. */
-function usageValueRow(limit) {
-  const row = document.createElement('div');
-  row.className = 'usage-row';
-  const head = document.createElement('div');
-  head.className = 'usage-row__head';
-  const label = document.createElement('span');
-  label.className = 'usage-row__label';
-  label.textContent = limitLabel(limit);
-  const value = document.createElement('span');
-  value.className = 'usage-row__pct';
-  value.textContent = limit.valueText;
-  head.append(label, value);
-  row.append(head);
-  return row;
+/** The left-column label: "5h" / "wk" for shared windows, else limitLabel(). */
+export function windowShortLabel(limit, translate = t) {
+  if (hasGenericLabel(limit)) return translate(WINDOW_SHORT_KEYS[limit.window]);
+  return limitLabel(limit, translate);
+}
+
+/** The one-line key for a message key from accountMessageKey(). */
+export function shortMessageKey(key) {
+  return SHORT_MESSAGE_KEYS[key] || key;
+}
+
+/** Bar level by percent: neutral < 70, warn >= 70, bad >= 90. */
+export function usageLevel(percent) {
+  return percent >= 90 ? 'bad' : percent >= 70 ? 'warn' : 'good';
+}
+
+/** Rows with the same key share a group: the window, or window + label for custom ones. */
+function groupKey(limit) {
+  return hasGenericLabel(limit) ? limit.window : `${limit.window || 'custom'}:${limit.label || ''}`;
+}
+
+/**
+ * The spent weekly limit that makes a 5 h reading moot, or null. With the
+ * week at 100% the 5 h room can't be used, so the tile dims that row.
+ * @param {object} limit the row's limit
+ * @param {Array<object>} siblings every limit of the same account / source
+ * @returns {object|null} the weekly limit doing the blocking
+ */
+export function blockingWeekly(limit, siblings) {
+  if (!limit || limit.window !== '5h' || !Array.isArray(siblings)) return null;
+  return siblings.find((l) => l && l.window === 'weekly' && hasGenericLabel(l)
+    && typeof l.percentUsed === 'number' && l.percentUsed >= 100) || null;
+}
+
+function isDrawable(limit) {
+  return Boolean(limit) && (typeof limit.percentUsed === 'number' || typeof limit.valueText === 'string');
+}
+
+/**
+ * Regroups per-account limits into per-window groups: 5 h first, then daily,
+ * weekly, monthly, then any other window in arrival order. Inside a group the
+ * rows keep the account order. Accounts that have a message to show (see
+ * accountMessageKey) land in `notices`, once each, whether or not they also
+ * still have (stale) bars.
+ * @param {Array<{account?: object|null, limits?: Array<object>}>} sources
+ * Each row carries `blockedBy`: the spent weekly limit that makes a 5 h row
+ * moot (see blockingWeekly), or null.
+ * @returns {{groups: Array<{key: string, rows: Array<{account: object|null, limit: object, blockedBy: object|null}>}>,
+ *   notices: Array<{account: object, key: string}>}}
+ */
+export function groupUsageRows(sources) {
+  const byKey = new Map();
+  const notices = [];
+  for (const source of Array.isArray(sources) ? sources : []) {
+    if (!source || typeof source !== 'object') continue;
+    const account = source.account || null;
+    const limits = Array.isArray(source.limits) ? source.limits : [];
+    for (const limit of limits) {
+      if (!isDrawable(limit)) continue;
+      const key = groupKey(limit);
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push({ account, limit, blockedBy: blockingWeekly(limit, limits) });
+    }
+    const message = account ? accountMessageKey(account) : null;
+    if (message) notices.push({ account, key: message });
+  }
+  const rank = (key) => {
+    const i = WINDOW_ORDER.indexOf(key);
+    return i === -1 ? WINDOW_ORDER.length : i;
+  };
+  const groups = [...byKey.keys()]
+    .map((key, arrival) => ({ key, arrival }))
+    .sort((a, b) => rank(a.key) - rank(b.key) || a.arrival - b.arrival)
+    .map(({ key }) => ({ key, rows: byKey.get(key) }));
+  return { groups, notices };
+}
+
+function span(className, text) {
+  const el = document.createElement('span');
+  el.className = className;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+/** The marker + name cells of an account row (multi-account grid only). */
+function accountCells(account) {
+  const isActive = Boolean(account && account.active);
+  const mark = span('usage-line__mark', isActive ? '●' : '');
+  if (isActive) {
+    mark.setAttribute('role', 'img');
+    mark.setAttribute('aria-label', t('usage.account.active'));
+  } else {
+    mark.setAttribute('aria-hidden', 'true');
+  }
+  const label = (account && account.label) || '';
+  const name = span('usage-line__name', label);
+  name.title = label;
+  return [mark, name];
+}
+
+/** The bar, percent and reset cells of one limit (or one value cell). */
+function limitCells(limit) {
+  if (typeof limit.percentUsed !== 'number') {
+    return [span('usage-line__value', limit.valueText)];
+  }
+  const bar = document.createElement('div');
+  bar.className = 'usage-bar';
+  const fill = document.createElement('div');
+  fill.className = 'usage-bar__fill';
+  fill.style.setProperty('--usage', String(Math.min(100, Math.max(0, limit.percentUsed)) / 100));
+  fill.dataset.level = usageLevel(limit.percentUsed);
+  bar.appendChild(fill);
+  const pct = span('usage-line__pct', `${limit.percentUsed}%`);
+  // Only a real resetsAt from the provider is trustworthy. A "now + window"
+  // fallback restarts on every repaint and pins the label at the full window.
+  const when = fmtResetWhen(typeof limit.resetsAt === 'string' ? limit.resetsAt : null);
+  const reset = span('usage-line__reset', when || t('usage.resetNow'));
+  reset.title = when ? t('usage.resetIn', { when }) : t('usage.resetting');
+  return [bar, pct, reset];
+}
+
+/** One grid row. `win` is the window label, or null on a group's later rows. */
+function usageLine({ win, account, withAccount, cells }) {
+  const line = document.createElement('div');
+  line.className = 'usage-line';
+  const winCell = span('usage-line__win', win ? win.short : '');
+  if (win) {
+    line.classList.add('is-group-start');
+    winCell.title = win.full;
+  }
+  line.appendChild(winCell);
+  if (withAccount) line.append(...accountCells(account));
+  line.classList.toggle('is-active', Boolean(account && account.active));
+  line.append(...cells);
+  return line;
+}
+
+/** Dims a 5 h line whose week is spent; the tooltip says why and until when. */
+function markBlocked(line, weekly) {
+  line.classList.add('is-blocked');
+  const when = fmtResetWhen(typeof weekly.resetsAt === 'string' ? weekly.resetsAt : null);
+  line.title = t('usage.blockedByWeekly', { when: when || t('usage.resetNow') });
+  // The cell tooltips (reset time, account name) would hide the line's one.
+  for (const cell of line.querySelectorAll('[title]')) cell.removeAttribute('title');
+}
+
+/** The muted one-line stand-in for an account's bars, with a Settings arrow. */
+function noticeCells({ account, key }) {
+  const msg = span('usage-line__msg', t(shortMessageKey(key)));
+  msg.title = t(key);
+  if (key === 'usage.loading') return [msg];
+  const link = document.createElement('button');
+  link.type = 'button';
+  link.className = 'usage-line__link';
+  link.textContent = '↗';
+  link.title = t('usage.account.openSettings');
+  link.setAttribute('aria-label', `${(account && account.label) || ''} - ${t('usage.account.openSettings')}`);
+  link.addEventListener('click', () => {
+    import('./termcustom.js')
+      .then((m) => m.openSettingsAt(ACCOUNTS_SETTINGS_ANCHOR))
+      .catch((err) => console.error('[usage] could not open Settings:', err));
+  });
+  return [msg, link];
+}
+
+/**
+ * The compact grid: one line per (window, account), the window label only on
+ * a group's first line, then one muted line per account with a message.
+ * @param {Array<{account?: object|null, limits?: Array<object>}>} sources
+ * @param {boolean} withAccount true for the multi-account view (marker + name columns)
+ */
+function usageGrid(sources, withAccount) {
+  const grid = document.createElement('div');
+  grid.className = withAccount ? 'usage-grid' : 'usage-grid usage-grid--solo';
+  const { groups, notices } = groupUsageRows(sources);
+  for (const group of groups) {
+    group.rows.forEach(({ account, limit, blockedBy }, i) => {
+      const win = i === 0 ? { short: windowShortLabel(limit), full: limitLabel(limit) } : null;
+      const line = usageLine({ win, account, withAccount, cells: limitCells(limit) });
+      if (blockedBy) markBlocked(line, blockedBy);
+      grid.appendChild(line);
+    });
+  }
+  notices.forEach((notice, i) => {
+    const line = usageLine({ win: null, account: notice.account, withAccount, cells: noticeCells(notice) });
+    line.classList.add('is-muted');
+    if (i === 0 && groups.length > 0) line.classList.add('is-group-start');
+    grid.appendChild(line);
+  });
+  return grid;
 }
 
 /** One non-Claude provider: a heading, then its rows or "not available". */
@@ -194,13 +398,9 @@ function usageProviderBlock(entry) {
   title.className = 'usage-provider__title';
   title.textContent = loc(entry.displayName) || entry.profileId || '';
   block.appendChild(title);
-  const rows = (entry.status === 'ok' ? entry.limits || [] : []).map((limit) => {
-    if (typeof limit.percentUsed === 'number') return usageRowForLimit(limit);
-    if (typeof limit.valueText === 'string') return usageValueRow(limit);
-    return null;
-  }).filter(Boolean);
-  if (rows.length > 0) {
-    block.append(...rows);
+  const limits = entry.status === 'ok' ? (entry.limits || []).filter(isDrawable) : [];
+  if (limits.length > 0) {
+    block.appendChild(usageGrid([{ account: null, limits }], false));
   } else {
     const key = entry.status === 'unconfigured' ? 'usage.other.unconfigured'
       : entry.status === 'error' ? 'usage.unavailable'
@@ -212,42 +412,6 @@ function usageProviderBlock(entry) {
   return block;
 }
 
-/** Builds one usage row from a limit object in the new format. */
-function usageRowForLimit(limit) {
-  const row = document.createElement('div');
-  row.className = 'usage-row';
-
-  const head = document.createElement('div');
-  head.className = 'usage-row__head';
-  const label = document.createElement('span');
-  label.className = 'usage-row__label';
-  label.textContent = limitLabel(limit);
-  const pct = document.createElement('span');
-  pct.className = 'usage-row__pct';
-  pct.textContent = `${limit.percentUsed}%`;
-  head.append(label, pct);
-
-  const bar = document.createElement('div');
-  bar.className = 'usage-bar';
-  const fill = document.createElement('div');
-  fill.className = 'usage-bar__fill';
-  fill.style.setProperty('--usage', String(limit.percentUsed / 100));
-  // Colour thresholds: >=90 bad (red), >=70 warn (orange), otherwise ok.
-  fill.dataset.level =
-    limit.percentUsed >= 90 ? 'bad' : limit.percentUsed >= 70 ? 'warn' : 'good';
-  bar.appendChild(fill);
-
-  const reset = document.createElement('div');
-  reset.className = 'usage-row__reset hint';
-  // Only a real resetsAt from the provider is trustworthy. A "now + window"
-  // fallback restarts on every repaint and pins the label at the full window.
-  const when = fmtResetWhen(typeof limit.resetsAt === 'string' ? limit.resetsAt : null);
-  reset.textContent = when ? t('usage.resetIn', { when }) : t('usage.resetting');
-
-  row.append(head, bar, reset);
-  return row;
-}
-
 function usageMessage(key) {
   const p = document.createElement('p');
   p.className = 'hint';
@@ -256,18 +420,19 @@ function usageMessage(key) {
 }
 
 /**
- * Updates the "updated Xs ago" hint from lastGoodUsage.updatedAt. Only ever
- * touches one textContent - never rebuilds the tile - so it is safe to call
- * every second without risking the flicker a full renderUsage() would cause.
+ * Puts "updated Xs ago" into the refresh button's tooltip. Only ever touches
+ * one attribute - never rebuilds the tile - so it is safe to call every second
+ * without risking the flicker a full renderUsage() would cause.
  */
 function renderFreshness() {
-  if (!els || !els.updated) return;
+  if (!els || !els.refresh) return;
   const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
   const accountTimes = visibleAccounts(lastAccounts).map((a) => a.updatedAt).filter((v) => typeof v === 'number');
   const newestAccount = accountTimes.length > 0 ? { updatedAt: Math.max(...accountTimes) } : null;
   const source = entry || newestAccount || lastGoodUsage;
   const when = source ? fmtAgo(source.updatedAt) : null;
-  els.updated.textContent = when ? t('usage.updatedAgo', { when }) : '';
+  const base = t('usage.refresh.title');
+  els.refresh.title = when ? `${base} · ${t('usage.updatedAgo', { when })}` : base;
 }
 
 /** Renders the tile from the current state: the active tab's provider only. */
@@ -278,46 +443,9 @@ function renderUsage() {
   const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
   const accounts = visibleAccounts(lastAccounts);
   if (entry) usageBody.appendChild(usageProviderBlock(entry));
-  else if (accounts.length > 0) usageBody.append(...accounts.map(usageAccountBlock));
+  else if (accounts.length > 0) usageBody.appendChild(usageGrid(accounts.map((a) => ({ account: a, limits: a.limits })), true));
   else renderClaudeRows(usageBody);
   renderFreshness();
-}
-
-/**
- * One Claude account: its name (dot + "active" tag on the account new work
- * runs on - the tag, not the colour, carries the meaning), then its 5 h and
- * weekly bars, or the message for a login that needs Mati.
- */
-function usageAccountBlock(account) {
-  const block = document.createElement('div');
-  block.className = 'usage-account';
-  block.classList.toggle('is-active', Boolean(account.active));
-  const head = document.createElement('div');
-  head.className = 'usage-account__head';
-  const dot = document.createElement('span');
-  dot.className = 'usage-account__dot';
-  dot.setAttribute('aria-hidden', 'true');
-  const name = document.createElement('span');
-  name.className = 'usage-account__name';
-  name.textContent = account.label || '';
-  head.append(dot, name);
-  if (account.active) {
-    const tag = document.createElement('span');
-    tag.className = 'usage-account__tag';
-    tag.textContent = t('usage.account.active');
-    head.appendChild(tag);
-  }
-  block.appendChild(head);
-  for (const limit of account.limits || []) {
-    if (typeof limit.percentUsed === 'number') block.appendChild(usageRowForLimit(limit));
-  }
-  const key = accountMessageKey(account);
-  if (key) {
-    const msg = usageMessage(key);
-    if (account.status === 'reconnect') msg.classList.add('usage-account__warn');
-    block.appendChild(msg);
-  }
-  return block;
 }
 
 /** Claude's rows. Error states become a message. */
@@ -345,20 +473,12 @@ function renderClaudeRows(usageBody) {
   }
 
   const u = lastGoodUsage;
-
-  // New format: iterate over limits[] array
-  let any = false;
-  for (const limit of u.limits || []) {
-    if (typeof limit.percentUsed === 'number') {
-      usageBody.appendChild(usageRowForLimit(limit));
-      any = true;
-    }
-  }
-
-  if (!any) {
+  const limits = (u.limits || []).filter((l) => l && typeof l.percentUsed === 'number');
+  if (limits.length === 0) {
     usageBody.appendChild(usageMessage('usage.unavailable'));
     return;
   }
+  usageBody.appendChild(usageGrid([{ account: null, limits }], false));
 
   // Show fallback indicator if applicable
   if (u.isFallback) {
@@ -374,7 +494,6 @@ defineWidget({
     els = {
       body: root.querySelector('#usage-body'),
       refresh: root.querySelector('#usage-refresh'),
-      updated: root.querySelector('#usage-updated'),
     };
 
     // Via feeds.js, not straight off IPC - see the note there on disposability.
@@ -418,7 +537,7 @@ defineWidget({
       if (lastGoodUsage || lastOthers.length > 0 || lastAccounts.length > 0) renderUsage();
     }, COUNTDOWN_MS);
 
-    // Tick the "updated Xs ago" label every second - a plain textContent
+    // Tick the "updated Xs ago" tooltip every second - a plain attribute
     // write, not a body rebuild, so it can't cause the flicker a full
     // renderUsage() on the same cadence would.
     const freshness = setInterval(renderFreshness, FRESHNESS_MS);

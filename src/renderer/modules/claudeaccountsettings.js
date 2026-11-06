@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 // The account failover list (src/claudeaccounts.js): which subscription is
 // active, which is cooling down after a limit and until when, reorder (first
-// = preferred), remove, and add one from a `claude setup-token` token. A
+// = preferred), rename (inline Edit), remove, and add one from a `claude setup-token` token. A
 // token goes renderer -> main once, on "Add"; the list never carries one.
 // Per account: "Connect usage" / "Use main login" / "Reconnect" for the
 // usage-only login that feeds the gauge (src/claudeaccountusage.js) - only
@@ -20,6 +20,11 @@ let els = null;
 let view = { encryption: true, accounts: [] };
 let note = null; // {key, fail, params?}
 let connecting = false; // a `claude auth login` is running in main
+let editingId = null; // the account whose name is being edited inline, if any
+// The editor's text. Kept here because the 60 s refresh and every
+// accounts-changed event rebuild the list, which would wipe a half-typed name.
+let editDraft = '';
+let editJustOpened = false; // select the text on open only, not on every rebuild
 
 const clock = (ms) => new Date(ms).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -105,7 +110,69 @@ function usageButtons(a) {
   return out;
 }
 
+/** Saves the inline rename; on a bad name the editor stays open with a note. */
+async function saveRename(id, value) {
+  let res = null;
+  try {
+    res = await window.lunacore.renameClaudeAccount(id, value);
+  } catch {
+    res = null;
+  }
+  if (res && res.ok) {
+    editingId = null;
+    note = { key: 'accounts.renamed', fail: false };
+  } else {
+    note = { key: res && res.error === 'badLabel' ? 'accounts.err.badLabel' : 'accounts.saveFailed', fail: true };
+  }
+  await refresh();
+}
+
+/** The inline editor that replaces a row's name while editing. */
+function renameEditor(a) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'profile-select';
+  input.maxLength = 60;
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.value = editDraft;
+  input.setAttribute('aria-label', t('accounts.label'));
+  const cancel = () => {
+    editingId = null;
+    render();
+  };
+  input.addEventListener('input', () => {
+    editDraft = input.value;
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveRename(a.id, input.value);
+    else if (e.key === 'Escape') {
+      // Close only the editor, not the Settings overlay around it.
+      e.stopPropagation();
+      cancel();
+    }
+  });
+  // Focus once the row is in the DOM (render() appends it right after).
+  const selectAll = editJustOpened;
+  editJustOpened = false;
+  queueMicrotask(() => {
+    input.focus();
+    if (selectAll) input.select();
+  });
+  return [
+    input,
+    button('accounts.save', () => saveRename(a.id, input.value)),
+    button('accounts.cancel', cancel),
+  ];
+}
+
 function renderRow(a, index) {
+  if (a.id === editingId) {
+    const li = document.createElement('li');
+    li.className = 'project-row';
+    li.append(...renameEditor(a));
+    return li;
+  }
   const li = document.createElement('li');
   li.className = 'project-row';
   const dot = document.createElement('span');
@@ -124,6 +191,15 @@ function renderRow(a, index) {
   if (index > 0) li.append(button('accounts.moveUp', () => act(window.lunacore.moveClaudeAccountUp, a.id), 'accounts.moveUpHint'));
   if (a.limitedUntil) li.append(button('accounts.clearLimit', () => act(window.lunacore.clearClaudeAccountLimit, a.id)));
   li.append(...usageButtons(a));
+  if (typeof window.lunacore.renameClaudeAccount === 'function') {
+    li.append(button('accounts.edit', () => {
+      editingId = a.id;
+      editDraft = a.label || '';
+      editJustOpened = true;
+      note = null;
+      render();
+    }, 'accounts.editHint'));
+  }
   li.append(button('accounts.remove', () => act(window.lunacore.removeClaudeAccount, a.id)));
   return li;
 }
