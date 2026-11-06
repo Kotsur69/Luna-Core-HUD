@@ -613,7 +613,9 @@ main {
 .decision-options { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .ask-answer { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .is-warn { color: var(--warn); }
-.run > summary { display: grid; gap: var(--space-1); cursor: pointer; list-style: none; }
+/* Stacked: name + time, then "N of M pushed", then machine. `details.card.run` outranks
+   the Host page's `details.card > summary { display: flex }`, which laid these side by side. */
+details.card.run > summary { display: grid; align-items: stretch; gap: var(--space-1); cursor: pointer; list-style: none; }
 .run > summary::-webkit-details-marker { display: none; }
 .run[open] > summary { margin-bottom: var(--space-3); }
 
