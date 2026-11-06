@@ -117,7 +117,7 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout, o
     }),
   );
 
-  // Live + last-24 h host sessions (hostmodel.menuSessions), filled by setSessions().
+  // Running host sessions (hostmodel.menuSessions), filled by setSessions().
   const sessionsList = h('div', { class: 'nav' });
   const sessionsNav = h('nav', { class: 'nav-sessions', 'aria-label': t('hostSessions'), hidden: true }, h('div', { class: 'nav-label' }, t('hostSessions')), sessionsList);
 

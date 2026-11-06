@@ -93,20 +93,20 @@ test('chatHash / chatRoute round-trip and reject anything else', async () => {
   assert.equal(chatRoute(undefined), null);
 });
 
-test('menuSessions: live first, then ended ones from the last 24 h, capped', async () => {
+test('menuSessions: running sessions only, minus the ones this phone just ended', async () => {
   const { menuSessions } = await import('../mobile/src/hostmodel.js');
   const SID3 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-  const hosts = hostList([{ machine: 'KT-PC', data: { v: 1, at: NOW, repos: [{ id: 'luna', name: 'LunaCore', cloned: true }], sessions: [{ id: SID2, repoId: 'luna', status: 'working' }] }, updated_at: at(NOW) }], NOW);
+  const hosts = hostList([{ machine: 'KT-PC', data: { v: 1, at: NOW, repos: [{ id: 'luna', name: 'LunaCore', cloned: true }], sessions: [{ id: SID2, repoId: 'luna', status: 'working' }, { id: SID3, repoId: 'luna', status: 'done' }] }, updated_at: at(NOW) }], NOW);
   const rows = [
     ev(3, 'status', { status: 'done' }, SID, NOW - 60_000),
     ev(1, 'status', { status: 'working' }, SID2, NOW - 3_600_000),
-    ev(4, 'status', { status: 'done' }, SID3, NOW - 25 * 3_600_000),
+    ev(4, 'status', { status: 'done' }, SID3, NOW - 120_000),
   ];
-  const list = menuSessions(rows, hosts, NOW, { [SID]: 'Synthara' });
-  assert.deepEqual(list.map((s) => [s.sessionId, s.live, s.label]), [[SID2, true, 'LunaCore'], [SID, false, 'Synthara']]);
+  const list = menuSessions(rows, hosts, { [SID3]: 'Synthara' });
+  assert.deepEqual(list.map((s) => [s.sessionId, s.label]), [[SID3, 'LunaCore'], [SID2, 'LunaCore']], 'the ended SID is gone');
   assert.equal(list[0].host, 'KT-PC');
-  const many = Array.from({ length: 12 }, (_, i) => ev(i, 'status', { status: 'done' }, `${String(i).padStart(8, '0')}-2222-4333-8444-555555555555`, NOW - i * 1000));
-  assert.equal(menuSessions(many, [], NOW, {}).length, 8);
+  // Ended here a moment ago: hidden before the host's next heartbeat drops it.
+  assert.deepEqual(menuSessions(rows, hosts, {}, new Set([SID2])).map((s) => s.sessionId), [SID3]);
 });
 
 test('sessionLight: status -> light class, an ended "working" session is idle', async () => {

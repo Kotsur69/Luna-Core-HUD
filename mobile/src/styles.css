@@ -730,7 +730,7 @@ details[open] > summary .tool-head::before { transform: rotate(90deg); }
 .swipe-row > .nav-item[aria-current='page'] { background: var(--bg-raised); }
 .swipe-row.is-dragging > .nav-item { transition: none; }
 
-/* Menu: live + last-24 h host sessions, below the pages. */
+/* Menu: running host sessions, below the pages. */
 .nav-sessions { margin-top: var(--space-4); display: grid; gap: var(--space-1); }
 .nav-sessions[hidden] { display: none; }
 .nav-label { padding: 0 var(--space-3); font: 600 12px var(--font-display); letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); }

@@ -7,7 +7,7 @@
 //   new session   model, mode, "deny after N min", skills/commands picker
 //                 inserting "/name", prompt -> chat.start
 //   all sessions  collapsed list of every host's sessions (live = heartbeat);
-//                 the live + last-24 h ones are in the menu (shell.js)
+//                 the running ones are also in the menu (shell.js)
 //
 // A session opens as its own page, #chat/<host>/<id> (views/chat.js).
 //

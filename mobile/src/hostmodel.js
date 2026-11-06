@@ -120,7 +120,6 @@ export function sessionList(rows, hosts) {
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
 const SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CHAT_HASH_RE = /^#chat\/([^/]+)\/([^/]+)$/;
-const MENU_WINDOW_MS = 24 * 60 * 60 * 1000;
 const MENU_MAX = 8;
 
 /** The URL hash of one session's chat page. */
@@ -142,13 +141,16 @@ export function sessionLight(s) {
 }
 
 /**
- * The menu's session list: live sessions first, then the ones that ended in
- * the last 24 h, newest first, at most 8. `label` is the repo name from the
- * heartbeat, else the one this phone remembered (`names`: sessionId -> name).
+ * The menu's session list: running sessions only, newest first, at most 8
+ * (an ended one lives on under Host -> All sessions). `ended` = ids this
+ * phone just ended, hidden before the host's next heartbeat drops them.
+ * `label` is the repo name from the heartbeat, else the one this phone
+ * remembered (`names`: sessionId -> name).
  */
-export function menuSessions(rows, hosts, now, names = {}) {
-  const list = sessionList(rows, hosts).filter((s) => s.live || now - s.at <= MENU_WINDOW_MS);
-  const ordered = [...list.filter((s) => s.live), ...list.filter((s) => !s.live)].slice(0, MENU_MAX);
+export function menuSessions(rows, hosts, names = {}, ended = new Set()) {
+  const ordered = sessionList(rows, hosts)
+    .filter((s) => s.live && !ended.has(s.sessionId))
+    .slice(0, MENU_MAX);
   return ordered.map((s) => {
     const repo = sessionRepo(hosts, s.sessionId);
     const known = Object.prototype.hasOwnProperty.call(names, s.sessionId) ? names[s.sessionId] : '';

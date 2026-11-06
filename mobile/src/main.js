@@ -30,6 +30,8 @@ import { t } from './i18n.js';
 const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody, repos: mountRepos, godmode: mountGodmode, lunaswork: mountLunasWork, host: mountHost, pair: mountPair, chat: mountChat };
 /** A burst of realtime events (a PC pushing 500 units) becomes one pull. */
 const REALTIME_DEBOUNCE_MS = 1500;
+/** A host heartbeats every 30 s (and at once when a chat exits); past this its own list is current. */
+const ENDED_HIDE_MS = 60 * 1000;
 const root = document.getElementById('app');
 const config = cloudConfig();
 // The shell exists only once logged in; the hooks reach it through this.
@@ -47,22 +49,26 @@ function showApp(user) {
   shownUser = user.id;
   let view = null;
   let menuSeq = 0;
-  /** The menu's live + last-24 h sessions; a failed pull keeps the last list. */
+  /** The menu's running sessions; a failed pull keeps the last list. */
   async function refreshMenu() {
     const mine = ++menuSeq;
     try {
       const [hostRows, rows] = await Promise.all([cloud.snapshots('host'), cloud.hostSessions()]);
       if (mine !== menuSeq) return;
-      const now = Date.now();
-      shell.setSessions(menuSessions(rows, hostList(hostRows, now), now, readLabels()));
+      shell.setSessions(menuSessions(rows, hostList(hostRows, Date.now()), readLabels(), recentlyEnded()));
     } catch {
       // Offline or not paired yet: the menu just has no session list.
     }
   }
   // The menu's swipe-to-end: the same signed chat.end as the chat page's End button.
   const runMenu = createRunner({ cloud, toast: (m, bad) => shell.toast(m, bad), onBusy: () => {} });
+  // Sessions ended from this phone (id -> when): off the menu at once, before the host's
+  // heartbeat catches up. The mark expires, so a session resumed later shows again.
+  const endedHere = new Map();
+  const recentlyEnded = () => new Set([...endedHere].filter(([, at]) => Date.now() - at < ENDED_HIDE_MS).map(([id]) => id));
   async function endSession(s) {
     if (!(await runMenu(s.host, 'chat.end', { sessionId: s.sessionId }))) return;
+    endedHere.set(s.sessionId, Date.now());
     shell.toast(t('chatEndedToast'));
     refreshMenu();
     if (pageFromHash() === 'chat') view.refresh();
