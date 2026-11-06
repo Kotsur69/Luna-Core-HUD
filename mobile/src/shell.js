@@ -125,8 +125,8 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout, o
     'aside',
     { class: 'drawer', id: 'drawer', 'aria-label': t('menu') },
     h('div', { class: 'drawer-head' }, 'LUNACORE', closeBtn),
-    nav,
-    sessionsNav,
+    // Pages + sessions scroll between the pinned head and foot, so Logout never falls off a short screen.
+    h('div', { class: 'drawer-scroll' }, nav, sessionsNav),
     h('div', { class: 'drawer-foot' }, h('div', { class: 'who' }, who), h('button', { class: 'btn btn-ghost', onclick: onLogout }, icon(ICONS.logout), t('logout'))),
   );
   drawer.inert = true;

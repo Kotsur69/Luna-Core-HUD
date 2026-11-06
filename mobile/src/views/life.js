@@ -122,8 +122,10 @@ export function mountLife(main, { cloud, toast }) {
   let mirror = {};
   let busy = false;
   // Kept outside the DOM: a refresh re-renders the screen while Mati types.
-  const draft = { amount: '', category: '', note: '', deposit: '' };
+  const draft = { amount: '', category: '', note: '', deposit: '', pay: '' };
   let savingInto = null;
+  /** `${bill id}:${month}` of the bill whose paid-amount editor is open. */
+  let paying = null;
   // Bumped by every pull and write: a result older than the newest request is
   // dropped, so a slow pull never repaints over a write (or feeds it old stamps).
   let seq = 0;
@@ -203,23 +205,81 @@ export function mountLife(main, { cloud, toast }) {
     return form;
   }
 
+  const billKey = (b) => `${b.id}:${b.month}`;
+
+  function closePay() {
+    paying = null;
+    draft.pay = '';
+    render(mirror);
+  }
+
+  /** Pay (or fix a paid bill): the editor starts at the expected / paid amount, like on the PC. */
+  function openPay(b) {
+    paying = billKey(b);
+    savingInto = null;
+    draft.pay = String(b.status === 'paid' ? b.paid : b.expected).replace('.', ',');
+    render(mirror);
+    const input = document.getElementById('life-pay');
+    input?.focus();
+    input?.select();
+  }
+
+  function payForm(b) {
+    const input = boundInput(
+      { class: 'field num', id: 'life-pay', type: 'text', inputmode: 'decimal', autocomplete: 'off', enterkeyhint: 'done', 'aria-label': tf('paidAmountFor', { name: b.name }) },
+      () => draft.pay,
+      (v) => (draft.pay = v),
+    );
+    const form = h(
+      'form',
+      { class: 'stack-sm pay-form' },
+      h('label', { class: 'label', for: 'life-pay' }, tf('paidAmountFor', { name: b.name })),
+      h('div', { class: 'add-row' }, input, h('button', { class: 'btn btn-primary', type: 'submit' }, t('save')), h('button', { class: 'btn btn-ghost', type: 'button', onclick: closePay }, t('cancel'))),
+      h('span', { class: 'hint' }, tf('expectedAmount', { amount: fmt(b.expected) })),
+    );
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const value = parseAmount(draft.pay);
+      // Zero is allowed (a bill waived this month), like on the PC.
+      if (!(value >= 0)) {
+        toast(t('badAmount'), true);
+        input.focus();
+        return;
+      }
+      // Fixing the amount of a paid bill keeps the day it was paid.
+      const data = { id: b.id, month: b.month, amount: value, paidOn: b.status === 'paid' ? b.paidOn : undefined };
+      if (await act('payBill', data, tf('paidMsg', { name: b.name, amount: fmt(value) }))) closePay();
+    });
+    return form;
+  }
+
   function billLine(b) {
     const paid = b.status === 'paid';
+    const open = paying === billKey(b);
     const date = shortDate(paid ? b.paidOn : b.dueDate);
-    const button = paid
-      ? h('button', { class: 'btn btn-ghost btn-sm', onclick: () => act('unpayBill', { id: b.id, month: b.month }) }, t('unpay'))
-      : h(
-          'button',
-          { class: 'btn btn-sm', onclick: () => act('payBill', { id: b.id, month: b.month, amount: b.expected }, tf('paidMsg', { name: b.name, amount: fmt(b.expected) })) },
-          icon(ICONS.check),
-          t('pay'),
-        );
+    // While the editor is open its own Save / Cancel are the actions.
+    let actions = null;
+    if (paid && !open)
+      actions = h(
+        'div',
+        { class: 'bill-acts' },
+        h('button', { class: 'icon-btn', 'aria-label': `${t('editAmount')}: ${b.name}`, onclick: () => openPay(b) }, icon(ICONS.edit)),
+        h('button', { class: 'btn btn-ghost btn-sm', onclick: () => act('unpayBill', { id: b.id, month: b.month }) }, t('unpay')),
+      );
+    else if (!open) actions = h('button', { class: 'btn btn-sm', onclick: () => openPay(b) }, icon(ICONS.check), t('pay'));
+    // Paid more or less than expected (rent +/- 30 zl): say by how much.
+    const diff = paid && b.diff ? h('div', { class: `hint ${b.diff > 0 ? 'is-bad' : 'is-good'}` }, tf('vsExpected', { diff: `${b.diff > 0 ? '+' : '−'}${fmt(Math.abs(b.diff))}`, expected: fmt(b.expected) })) : null;
     return h(
       'li',
-      { class: `row bill is-${b.status}` },
-      h('div', { class: 'grow' }, h('div', {}, b.name), h('div', { class: 'hint status' }, tf(BILL_STATUS[b.status], { date }))),
-      h('span', { class: 'num' }, fmt(paid ? b.paid : b.expected)),
-      button,
+      { class: `row-col bill is-${b.status}` },
+      h(
+        'div',
+        { class: 'row' },
+        h('div', { class: 'grow' }, h('div', {}, b.name), h('div', { class: 'hint status' }, tf(BILL_STATUS[b.status], { date })), diff),
+        h('span', { class: 'num' }, fmt(paid ? b.paid : b.expected)),
+        actions,
+      ),
+      open ? payForm(b) : null,
     );
   }
 
@@ -263,6 +323,7 @@ export function mountLife(main, { cloud, toast }) {
   function goalLine(g) {
     const open = () => {
       savingInto = g.id;
+      paying = null;
       draft.deposit = '';
       render(mirror);
       document.getElementById('life-deposit')?.focus();

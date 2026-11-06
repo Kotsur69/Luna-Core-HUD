@@ -234,7 +234,22 @@ main {
   color: var(--text-dim);
 }
 
-.drawer-foot { margin-top: auto; display: grid; gap: var(--space-2); }
+/* The only scrolling part of the drawer: head and foot (Logout) stay in view. */
+.drawer-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.drawer-foot {
+  flex: none;
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--edge-glow);
+}
 .drawer-foot .who { font-size: 14px; color: var(--text-dim); padding: 0 var(--space-3); overflow-wrap: anywhere; }
 
 /* --- controls ----------------------------------------------------------- */
@@ -394,7 +409,18 @@ main {
 .grid-2 { display: grid; grid-template-columns: 1fr 1.3fr; gap: var(--space-2); }
 
 .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* The name column of a row. A real basis + floor (not flex: 1 / min-width: 0):
+   with basis 0 a neighbour with longer text took the whole row first and the
+   name broke every letter or two ("Lu / na / Co / re"). Now the neighbour
+   wraps its own words, and only a single over-long word breaks. */
+.grow { flex: 1 1 8em; min-width: min(7em, 45%); overflow-wrap: break-word; }
+/* Secondary text beside a name (a state, a status, a time) gives way first. */
+.row > .hint:not(.grow) { flex: 0 1 auto; text-align: right; }
+.row > .tag { flex: none; }
+/* Luna's Work facts (views/lunaswork.js): label left, value right, the value wraps between its words. */
+.fact { align-items: baseline; }
+.fact-value { white-space: normal; text-align: right; flex: 0 1 auto; }
+.row-col > .fact-value { text-align: left; }
 .hint { font-size: 13px; color: var(--text-dim); }
 .is-bad { color: var(--bad); }
 .is-good { color: var(--good); }
@@ -455,6 +481,12 @@ main {
 .bill.is-overdue .status { color: var(--bad); }
 .bill.is-soon .status { color: var(--warn); }
 .bill.is-paid .status { color: var(--good); }
+.news-bar { gap: var(--space-3); }
+.news-bar .btn { flex: none; width: auto; }
+.btn[aria-busy='true'] svg { animation: spin 900ms linear infinite; }
+.bill-acts { display: flex; align-items: center; gap: var(--space-1); flex: none; }
+.pay-form { padding: var(--space-3); border: 1px solid var(--edge-glow); border-radius: var(--radius); background: var(--bg-raised); }
+.pay-form .label { margin: 0; }
 
 .meter { height: 6px; border-radius: 999px; background: var(--bg-raised); overflow: hidden; }
 .meter span { display: block; height: 100%; background: var(--neon-cyan); transform-origin: left; transition: transform var(--dur) var(--ease-out); }

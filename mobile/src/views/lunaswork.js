@@ -51,7 +51,8 @@ function scrollTo(id) {
 }
 
 function fact(label, value) {
-  return h('div', { class: 'row' }, h('span', { class: 'hint grow' }, label), h('span', { class: 'num' }, value));
+  // `fact-value`, not plain `num`: a long value (ETA, tokens) wraps instead of squeezing the label.
+  return h('div', { class: 'row fact' }, h('span', { class: 'hint grow' }, label), h('span', { class: 'num fact-value' }, value));
 }
 
 function scoresBlock(scores) {
@@ -63,7 +64,7 @@ function scoresBlock(scores) {
     h(
       'ul',
       { class: 'rows' },
-      scores.map((m) => h('li', { class: 'row-col' }, h('span', {}, m.milestone || t('lwNoMilestone')), h('span', { class: 'hint num' }, m.points.map((p) => `#${p.n} ${p.score}`).join(' · ')))),
+      scores.map((m) => h('li', { class: 'row-col' }, h('span', {}, m.milestone || t('lwNoMilestone')), h('span', { class: 'hint num fact-value' }, m.points.map((p) => `#${p.n} ${p.score}`).join(' · ')))),
     ),
   );
 }

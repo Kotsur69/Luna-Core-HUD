@@ -70,6 +70,27 @@ test('payBill writes only the payment unit', () => {
   assert.deepEqual(out, [{ k: 'p:2026-10:gas', v: { amount: 380, paidOn: '2026-10-19' }, u: NOW, d: null }]);
 });
 
+test('re-editing a paid bill amount keeps the day it was paid and outstamps the first payment', () => {
+  // Arrange: rent went up - paid 430 instead of the expected 400 on the 15th.
+  const first = opUnits(mirrorOf(pcUnits()).mirror, 'payBill', { id: 'gas', month: '2026-10', amount: 430, paidOn: '2026-10-15' }, NOW);
+  const state = mirrorOf([...pcUnits(), ...first]);
+
+  // Act: the phone fixes it to 370 later, sending the paidOn it shows (views/life.js payForm).
+  const out = opUnits(state.mirror, 'payBill', { id: 'gas', month: '2026-10', amount: 370, paidOn: '2026-10-15' }, NOW);
+
+  // Assert
+  assert.equal(out.length, 1);
+  assert.equal(out[0].k, 'p:2026-10:gas');
+  assert.deepEqual(out[0].v, { amount: 370, paidOn: '2026-10-15' });
+  assert.ok(out[0].u > first[0].u);
+});
+
+test('payBill accepts zero (a waived bill) but refuses a negative amount', () => {
+  const mirror = mirrorOf(pcUnits()).mirror;
+  assert.equal(opUnits(mirror, 'payBill', { id: 'gas', month: '2026-10', amount: 0 }, NOW)[0].v.amount, 0);
+  assert.throws(() => opUnits(mirror, 'payBill', { id: 'gas', month: '2026-10', amount: -30 }, NOW));
+});
+
 test('deleteGoal tombstones the goal and its deposits and unlinks the saving bill', () => {
   const out = opUnits(mirrorOf(pcUnits()).mirror, 'deleteGoal', { id: 'pot' }, NOW);
   const byKey = Object.fromEntries(out.map((x) => [x.k, x]));

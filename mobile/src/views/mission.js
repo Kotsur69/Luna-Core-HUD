@@ -5,6 +5,7 @@
 // PC's own validators. News text is LLM output over fetched pages: it goes in
 // as text only. Links were re-checked (safeUrl + public host); each one shows
 // its host and opens outside the app with noopener noreferrer.
+// "Get fresh news" asks a PC for a new briefing (signed `news.scan`).
 // ============================================================================
 
 import { h, icon, ICONS } from '../dom.js';
@@ -12,6 +13,8 @@ import { t, tf, locale } from '../i18n.js';
 import { newsFrom, ledgerFrom } from '../snapmodel.js';
 import { mountSnapshots, when } from './snapshotview.js';
 import { usageCard } from './usage.js';
+import { sendHostCommand } from '../hostsend.js';
+import { hostList, pickHost } from '../hostmodel.js';
 import ratecalc from '../../../src/ratecalc.js';
 import baseRates from '../../../config/rates.json';
 
@@ -19,6 +22,16 @@ const { mergeRates, formatUsd } = ratecalc;
 // The shipped price table; a PC's rates.local.json override stays on that PC.
 const RATES = mergeRates(baseRates, null);
 const TAB_KEY = 'lunacore.mission.tab';
+/** The host picked on the Host page (views/host.js PICK_KEY). */
+const HOST_PICK_KEY = 'lunacore.host.pick';
+
+function readHostPick() {
+  try {
+    return localStorage.getItem(HOST_PICK_KEY) || '';
+  } catch {
+    return '';
+  }
+}
 const TABS = [
   ['news', 'tabNews'],
   ['claude', 'tabClaude'],
@@ -70,12 +83,72 @@ function section(s, i) {
   );
 }
 
-function news(rows, now) {
+/**
+ * "Get fresh news": the signed `news.scan` host command (src/hostactions.js) on
+ * the host picked on the Host page (else the default / first online one). The
+ * PC fetches every saved source + topic, runs the Haiku briefing and puts the
+ * `news` snapshot; realtime repaints the page, `onDone` pulls once more.
+ * The bar is one node kept across repaints, so its busy state survives them.
+ * @param {{cloud: object, toast: (m: string, bad?: boolean) => void}} deps
+ * @param {() => void} onDone
+ */
+function createNewsRefresh({ cloud, toast }, onDone) {
+  const label = h('span', {}, t('newsRefresh'));
+  const btn = h('button', { class: 'btn btn-sm', type: 'button' }, icon(ICONS.sync), label);
+  const status = h('span', { class: 'hint grow', role: 'status' });
+  const el = h('div', { class: 'row news-bar' }, status, btn);
+
+  function setBusy(host) {
+    btn.disabled = Boolean(host);
+    btn.setAttribute('aria-busy', String(Boolean(host)));
+    label.textContent = t(host ? 'newsRefreshing' : 'newsRefresh');
+    status.textContent = host ? tf('newsRefreshOn', { host }) : '';
+  }
+
+  async function pick() {
+    const raw = await cloud.snapshots('host').catch(() => cloud.cachedSnapshots('host').catch(() => []));
+    return pickHost(hostList(raw, Date.now()), readHostPick());
+  }
+
+  /** Maps the command's outcome to one toast. */
+  function report({ status: rowStatus, result }) {
+    const verdict = typeof result.status === 'string' ? result.status : rowStatus;
+    if (rowStatus === 'timeout') return toast(t('newsStillWorking'));
+    if (rowStatus !== 'done' || /^(refused|failed)/.test(verdict)) return toast(tf('hostRefused', { why: typeof result.error === 'string' ? result.error : verdict }), true);
+    if (verdict === 'empty') return toast(t('newsNothingNew'));
+    return toast(t('newsRefreshed'));
+  }
+
+  // Set before the first await: a double tap must not start two paid scans.
+  let running = false;
+  btn.addEventListener('click', async () => {
+    if (running) return;
+    running = true;
+    try {
+      const host = await pick();
+      if (!host) return toast(t('hostNone'), true);
+      if (!host.online) return toast(tf('newsHostOffline', { host: host.machine }), true);
+      setBusy(host.machine);
+      report(await sendHostCommand(cloud, host.machine, 'news.scan', {}));
+      onDone();
+    } catch (err) {
+      toast(t(err && err.name === 'NotAllowedError' ? 'pairCancelled' : 'hostSendFailed'), true);
+    } finally {
+      running = false;
+      setBusy('');
+    }
+  });
+
+  return { el };
+}
+
+function news(rows, now, bar) {
   const r = newsFrom(rows, now);
-  if (!r) return h('p', { class: 'empty' }, t('newsEmpty'));
+  if (!r) return h('div', { class: 'stack' }, bar, h('p', { class: 'empty' }, t('newsEmpty')));
   return h(
     'div',
     { class: 'stack' },
+    bar,
     h('p', { class: 'hint' }, tf('fromAt', { time: when(r.at, now), machine: r.machine })),
     r.briefing.length
       ? h('section', { class: 'card hero', 'aria-labelledby': 'news-brief' }, h('h2', { class: 'label', id: 'news-brief' }, t('briefing')), h('ul', { class: 'bullets' }, r.briefing.map((b) => h('li', {}, b))))
@@ -132,8 +205,9 @@ export function mountMission(main, deps) {
   const tabs = h('div', { class: 'segmented', role: 'tablist', 'aria-label': t('navMission') });
   main.replaceChildren(h('div', { class: 'stack' }, tabs, panel));
 
+  const fresh = createNewsRefresh(deps, () => view.refresh());
   const claude = () => h('div', { class: 'stack' }, usageCard(last.byKind.usage, last.now), ledger(last.byKind.ledger, last.now));
-  const content = () => (tab === 'news' ? news(last.byKind.news, last.now) : claude());
+  const content = () => (tab === 'news' ? news(last.byKind.news, last.now, fresh.el) : claude());
 
   function select(id) {
     tab = id;
@@ -151,8 +225,9 @@ export function mountMission(main, deps) {
   }
   drawTabs();
 
-  return mountSnapshots(panel, deps, ['news', 'ledger', 'usage'], (byKind, now) => {
+  const view = mountSnapshots(panel, deps, ['news', 'ledger', 'usage'], (byKind, now) => {
     last = { byKind, now };
     return content();
   });
+  return view;
 }
