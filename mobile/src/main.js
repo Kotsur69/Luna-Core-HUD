@@ -21,9 +21,12 @@ import { mountGodmode } from './views/godmode.js';
 import { mountLunasWork } from './views/lunaswork.js';
 import { mountPair } from './views/pair.js';
 import { mountHost } from './views/host.js';
+import { mountChat } from './views/chat.js';
+import { hostList, menuSessions, chatRoute } from './hostmodel.js';
+import { readLabels } from './sessionlabels.js';
 import { t } from './i18n.js';
 
-const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody, repos: mountRepos, godmode: mountGodmode, lunaswork: mountLunasWork, host: mountHost, pair: mountPair };
+const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody, repos: mountRepos, godmode: mountGodmode, lunaswork: mountLunasWork, host: mountHost, pair: mountPair, chat: mountChat };
 /** A burst of realtime events (a PC pushing 500 units) becomes one pull. */
 const REALTIME_DEBOUNCE_MS = 1500;
 const root = document.getElementById('app');
@@ -42,7 +45,21 @@ function showApp(user) {
   if (shownUser === user.id) return;
   shownUser = user.id;
   let view = null;
+  let menuSeq = 0;
+  /** The menu's live + last-24 h sessions; a failed pull keeps the last list. */
+  async function refreshMenu() {
+    const mine = ++menuSeq;
+    try {
+      const [hostRows, rows] = await Promise.all([cloud.snapshots('host'), cloud.hostSessions()]);
+      if (mine !== menuSeq) return;
+      const now = Date.now();
+      shell.setSessions(menuSessions(rows, hostList(hostRows, now), now, readLabels()));
+    } catch {
+      // Offline or not paired yet: the menu just has no session list.
+    }
+  }
   const shell = mountShell(root, {
+    onDrawerOpen: refreshMenu,
     who: user.user_metadata?.user_name || user.email || '',
     current: pageFromHash(),
     onNavigate: (id) => {
@@ -65,11 +82,12 @@ function showApp(user) {
     // A fresh host per page: a late pull of the page left behind renders into a detached node.
     const host = document.createElement('div');
     shell.main.replaceChildren(host);
-    view = VIEWS[id](host, { cloud, toast: shell.toast });
+    view = VIEWS[id](host, { cloud, toast: shell.toast, route: chatRoute(location.hash), setHeader: shell.setHeader });
     view.refresh();
   }
   shellRef = shell;
   show(pageFromHash());
+  refreshMenu();
   cloud.pending().catch(() => {});
 
   /** Queued writes of every scope go out first, then the page pulls. */

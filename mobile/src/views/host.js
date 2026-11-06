@@ -6,13 +6,12 @@
 //   repo picker   a repo the host hasn't cloned -> Clone (repo.clone)
 //   new session   model, mode, "deny after N min", skills/commands picker
 //                 inserting "/name", prompt -> chat.start
-//   sessions      every host's sessions from host_events (live = heartbeat)
-//   chat          host_events of the open session, TEXT ONLY (textContent via
-//                 dom.js h(); never innerHTML: this is model output over
-//                 untrusted files), approval cards with Allow / Deny / Always,
-//                 Send, Stop (chat.interrupt), End, Resume
+//   all sessions  collapsed list of every host's sessions (live = heartbeat);
+//                 the live + last-24 h ones are in the menu (shell.js)
 //
-// Every command is signed (hostsend.js -> hostkey.js). The static parts (the
+// A session opens as its own page, #chat/<host>/<id> (views/chat.js).
+//
+// Every command is signed (hostrun.js -> hostsend.js). The static parts (the
 // forms and the text the user is typing) are built once; refresh() repaints
 // only what came from the cloud.
 // ============================================================================
@@ -22,12 +21,12 @@ import { t, tf } from '../i18n.js';
 import { snapRows } from '../snapmodel.js';
 import { usageCard } from './usage.js';
 import { when } from './snapshotview.js';
-import { sendHostCommand } from '../hostsend.js';
+import { createRunner } from './hostrun.js';
 import { pushState, enablePush } from '../push.js';
-import { MODELS, MODES, TIMEOUTS, hostList, pickHost, cloneUrl, insertName, pickerNames, chatModel, sessionList, sessionRepo } from '../hostmodel.js';
+import { rememberLabel, readLabels } from '../sessionlabels.js';
+import { MODELS, MODES, TIMEOUTS, hostList, pickHost, cloneUrl, insertName, pickerNames, sessionList, sessionRepo, sessionLight, chatHash } from '../hostmodel.js';
 
 const PICK_KEY = 'lunacore.host.pick';
-const MAX_EVENTS = 5000;
 const MAX_SESSIONS_SHOWN = 20;
 
 const readPick = () => {
@@ -58,10 +57,6 @@ export function mountHost(main, { cloud, toast }) {
   let hostName = readPick();
   let sessionsRaw = [];
   let usageRows = [];
-  let open = null; // {sessionId, host}
-  let eventRows = [];
-  let lastSeq = -1;
-  let busy = false;
   let seq = 0;
 
   // ---- static parts ----
@@ -77,15 +72,6 @@ export function mountHost(main, { cloud, toast }) {
   const prompt = h('textarea', { class: 'field', rows: '4', maxlength: '20000', placeholder: t('hostPrompt'), 'aria-label': t('hostPrompt') });
   const startBtn = h('button', { class: 'btn btn-primary', type: 'submit' }, t('hostStart'));
   const sessionsBox = h('ul', { class: 'rows' });
-  const chatTitle = h('h2', { class: 'section-title' });
-  const chatLog = h('div', { class: 'chat', role: 'log', 'aria-live': 'polite' });
-  const reply = h('textarea', { class: 'field', rows: '3', maxlength: '20000', placeholder: t('hostReply'), 'aria-label': t('hostReply') });
-  const replyPicker = h('select', { class: 'field', 'aria-label': t('hostInsert') });
-  const sendBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'submit' }, t('hostSend'));
-  const stopBtn = h('button', { class: 'btn btn-sm', type: 'button' }, t('hostStop'));
-  const endBtn = h('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, t('hostEnd'));
-  const resumeBtn = h('button', { class: 'btn btn-sm', type: 'button', hidden: true }, t('hostResume'));
-  const closeBtn = h('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, t('hostBack'));
   const pushBtn = h('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, t('pushEnable'));
 
   options(modelSel, MODELS.map((m) => [m, m === 'opus' ? 'Opus' : 'Sonnet']), 'sonnet');
@@ -107,47 +93,15 @@ export function mountHost(main, { cloud, toast }) {
     prompt,
     startBtn,
   );
-  const sessionsCard = h('section', { class: 'card stack-sm' }, h('h2', { class: 'section-title' }, t('hostSessions')), sessionsBox);
-  const replyForm = h('form', { class: 'stack-sm' }, replyPicker, reply, h('div', { class: 'row' }, sendBtn, stopBtn, endBtn, resumeBtn));
-  const chatCard = h('section', { class: 'card stack-sm', hidden: true }, h('div', { class: 'row' }, chatTitle, closeBtn), chatLog, replyForm);
+  const sessionsCard = h('details', { class: 'card stack-sm' }, h('summary', { class: 'section-title' }, t('hostAllSessions')), sessionsBox);
   const pushCard = h('div', { class: 'row' }, pushBtn);
 
-  main.replaceChildren(h('div', { class: 'stack' }, usageBox, chatCard, newForm, sessionsCard, pushCard));
+  main.replaceChildren(h('div', { class: 'stack' }, usageBox, newForm, sessionsCard, pushCard));
 
   const currentHost = () => hosts.find((x) => x.machine === hostName) || null;
   const statusText = (s) => t(`hostStatus_${s}`) || s;
-
-  /** Runs one signed command with the UI locked; returns the handler's result or null. */
-  async function run(host, kind, payload) {
-    if (busy) return null;
-    busy = true;
-    [startBtn, sendBtn, stopBtn, endBtn, resumeBtn, cloneBtn].forEach((b) => (b.disabled = true));
-    try {
-      const { status, result } = await sendHostCommand(cloud, host, kind, payload);
-      const verdict = typeof result.status === 'string' ? result.status : status;
-      if (status !== 'done' || /^(refused|failed)/.test(verdict)) {
-        toast(tf('hostRefused', { why: typeof result.error === 'string' ? result.error : verdict }), true);
-        return null;
-      }
-      return result;
-    } catch (err) {
-      toast(t(err && err.name === 'NotAllowedError' ? 'pairCancelled' : 'hostSendFailed'), true);
-      return null;
-    } finally {
-      busy = false;
-      [startBtn, sendBtn, stopBtn, endBtn, resumeBtn, cloneBtn].forEach((b) => (b.disabled = false));
-    }
-  }
-
-  function openSession(sessionId, host) {
-    if (!open || open.sessionId !== sessionId) {
-      eventRows = [];
-      lastSeq = -1;
-    }
-    open = { sessionId, host };
-    chatCard.hidden = false;
-    refresh();
-  }
+  const lockables = [startBtn, cloneBtn];
+  const run = createRunner({ cloud, toast, onBusy: (b) => lockables.forEach((x) => (x.disabled = b)) });
 
   // ---- painting ----
   function paintHosts() {
@@ -160,8 +114,7 @@ export function mountHost(main, { cloud, toast }) {
     options(repoSel, (host ? host.repos : []).map((r) => [r.id, r.cloned ? r.name : `${r.name} (${t('hostNotCloned')})`]), repoPick);
     const repo = host && host.repos.find((r) => r.id === repoSel.value);
     cloneBtn.hidden = !repo || repo.cloned || !cloneUrl(repo.key);
-    const names = pickerNames(host);
-    for (const sel of [pickerSel, replyPicker]) options(sel, [['', t('hostInsert')], ...names.map((n) => [n, `/${n}`])], '');
+    options(pickerSel, [['', t('hostInsert')], ...pickerNames(host).map((n) => [n, `/${n}`])], '');
     startBtn.disabled = !host || !host.online;
   }
 
@@ -171,17 +124,20 @@ export function mountHost(main, { cloud, toast }) {
       sessionsBox.replaceChildren(h('li', { class: 'hint' }, t('hostNoSessions')));
       return;
     }
+    const labels = readLabels();
     sessionsBox.replaceChildren(
       ...list.map((s) => {
         const repo = sessionRepo(hosts, s.sessionId);
+        const name = (repo && repo.name) || labels[s.sessionId] || '';
         return h(
           'li',
           {},
           h(
-            'button',
-            { class: 'row btn-ghost session-row', type: 'button', onclick: () => openSession(s.sessionId, s.host) },
-            h('span', { class: 'grow' }, `${s.host}${repo ? ` · ${repo.name}` : ''}`),
-            h('span', { class: s.status === 'error' ? 'tag is-bad' : s.status === 'waiting' ? 'tag is-warn' : s.live ? 'tag is-good' : 'tag' }, statusText(s.status)),
+            'a',
+            { class: 'row session-row', href: chatHash(s.host, s.sessionId) },
+            h('span', { class: `light ${sessionLight(s)}`, 'aria-hidden': 'true' }, '●'),
+            h('span', { class: 'grow' }, name ? `${name} · ${s.host}` : s.host),
+            h('span', { class: 'hint' }, statusText(s.status)),
             h('span', { class: 'hint num' }, when(s.at)),
           ),
         );
@@ -189,69 +145,10 @@ export function mountHost(main, { cloud, toast }) {
     );
   }
 
-  function approvalCard(a) {
-    const decide = (decision) => async () => {
-      // The card as shown: the host refuses an approval of anything else (a cloud row edited behind its back).
-      const r = await run(open.host, 'chat.approve', { requestId: a.requestId, decision, card: { tool: a.tool, summary: a.summary, preview: a.preview } });
-      if (r) refresh();
-    };
-    return h(
-      'div',
-      { class: 'approval' },
-      h('div', { class: 'row' }, h('strong', { class: 'grow' }, `${t('hostApproval')}: ${a.tool}`), a.decision ? h('span', { class: 'tag' }, t(`hostDecision_${a.decision}`)) : null),
-      a.summary ? h('code', { class: 'mono' }, a.summary) : null,
-      a.preview ? h('pre', { class: 'diff' }, a.preview) : null,
-      a.decision
-        ? null
-        : h(
-            'div',
-            { class: 'row' },
-            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: decide('allow') }, t('hostAllow')),
-            h('button', { class: 'btn btn-sm', type: 'button', onclick: decide('deny') }, t('hostDeny')),
-            h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: decide('always') }, t('hostAlways')),
-          ),
-    );
-  }
-
-  function chatItem(it) {
-    if (it.type === 'prompt') return h('p', { class: 'msg msg-me' }, it.text);
-    if (it.type === 'text') return h('p', { class: 'msg' }, it.text);
-    if (it.type === 'tool') {
-      return h(
-        'div',
-        { class: 'tool' },
-        h('span', { class: 'hint mono' }, `● ${it.name}(${it.summary})`),
-        it.result ? h('pre', { class: it.result.isError ? 'tool-out is-bad' : 'tool-out' }, it.result.text) : null,
-      );
-    }
-    if (it.type === 'approval') return approvalCard(it);
-    if (it.type === 'status') return h('p', { class: it.status === 'error' ? 'hint is-bad' : 'hint is-good' }, `${statusText(it.status)}${it.reason ? ` (${it.reason})` : ''}`);
-    if (it.type === 'cost') return h('p', { class: 'hint num' }, `$${it.usd.toFixed(4)}`);
-    return null;
-  }
-
-  function paintChat() {
-    if (!open) {
-      chatCard.hidden = true;
-      return;
-    }
-    const model = chatModel(eventRows);
-    const live = hosts.some((x) => x.machine === open.host && x.online && x.sessions.some((s) => s.id === open.sessionId));
-    chatTitle.textContent = `${open.host} · ${statusText(model.status || 'working')}`;
-    const atBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 40;
-    chatLog.replaceChildren(...model.items.map(chatItem).filter(Boolean));
-    if (atBottom) chatLog.scrollTop = chatLog.scrollHeight;
-    sendBtn.hidden = !live;
-    stopBtn.hidden = !live || model.status === 'done';
-    endBtn.hidden = !live;
-    resumeBtn.hidden = live;
-  }
-
   function paint() {
     usageBox.replaceChildren(usageCard(snapRows(usageRows, Date.now()), Date.now()));
     paintHosts();
     paintSessions();
-    paintChat();
     const ps = pushState();
     pushBtn.hidden = ps === 'unsupported' || ps === 'unconfigured' || ps === 'granted';
   }
@@ -264,16 +161,14 @@ export function mountHost(main, { cloud, toast }) {
   });
   repoSel.addEventListener('change', paintHosts);
 
-  const insertFrom = (sel, area) => () => {
-    if (!sel.value) return;
-    const r = insertName(area.value, area.selectionStart, sel.value);
-    area.value = r.text;
-    area.focus();
-    area.setSelectionRange(r.cursor, r.cursor);
-    sel.value = '';
-  };
-  pickerSel.addEventListener('change', insertFrom(pickerSel, prompt));
-  replyPicker.addEventListener('change', insertFrom(replyPicker, reply));
+  pickerSel.addEventListener('change', () => {
+    if (!pickerSel.value) return;
+    const r = insertName(prompt.value, prompt.selectionStart, pickerSel.value);
+    prompt.value = r.text;
+    prompt.focus();
+    prompt.setSelectionRange(r.cursor, r.cursor);
+    pickerSel.value = '';
+  });
 
   cloneBtn.addEventListener('click', async () => {
     const host = currentHost();
@@ -289,6 +184,7 @@ export function mountHost(main, { cloud, toast }) {
     const host = currentHost();
     const text = prompt.value.trim();
     if (!host || !repoSel.value || !text) return toast(t('hostMissing'), true);
+    const repo = host.repos.find((r) => r.id === repoSel.value);
     const timeout = Number(timeoutSel.value);
     const r = await run(host.machine, 'chat.start', {
       repoId: repoSel.value,
@@ -299,39 +195,12 @@ export function mountHost(main, { cloud, toast }) {
     });
     if (r && typeof r.sessionId === 'string') {
       prompt.value = '';
-      openSession(r.sessionId, host.machine);
+      if (repo) rememberLabel(r.sessionId, repo.name);
+      // Left the page during the signed round-trip: the menu has the session, no jump.
+      if (main.isConnected) location.hash = chatHash(host.machine, r.sessionId);
     }
   });
 
-  replyForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const text = reply.value.trim();
-    if (!open || !text) return;
-    const r = await run(open.host, 'chat.send', { sessionId: open.sessionId, text });
-    if (r) {
-      reply.value = '';
-      refresh();
-    }
-  });
-  stopBtn.addEventListener('click', async () => {
-    if (open && (await run(open.host, 'chat.interrupt', { sessionId: open.sessionId }))) refresh();
-  });
-  endBtn.addEventListener('click', async () => {
-    if (open && confirm(t('hostEndConfirm')) && (await run(open.host, 'chat.end', { sessionId: open.sessionId }))) refresh();
-  });
-  resumeBtn.addEventListener('click', async () => {
-    const text = reply.value.trim();
-    if (!open) return;
-    const r = await run(open.host, 'chat.resume', { sessionId: open.sessionId, ...(text ? { prompt: text } : {}) });
-    if (r) {
-      reply.value = '';
-      refresh();
-    }
-  });
-  closeBtn.addEventListener('click', () => {
-    open = null;
-    paintChat();
-  });
   pushBtn.addEventListener('click', async () => {
     try {
       const state = await enablePush(cloud);
@@ -346,17 +215,11 @@ export function mountHost(main, { cloud, toast }) {
   async function refresh() {
     const mine = ++seq;
     const [hostRows, uRows, sRows] = await Promise.allSettled([cloud.snapshots('host'), cloud.snapshots('usage'), cloud.hostSessions()]);
-    let events = null;
-    if (open) events = await cloud.hostEvents(open.sessionId, lastSeq).catch(() => null);
     if (mine !== seq) return;
     if (hostRows.status === 'fulfilled') hosts = hostList(hostRows.value, Date.now());
     else hosts = hostList(await cloud.cachedSnapshots('host').catch(() => []), Date.now());
     if (uRows.status === 'fulfilled') usageRows = uRows.value;
     if (sRows.status === 'fulfilled') sessionsRaw = sRows.value;
-    if (events && events.length) {
-      eventRows = eventRows.concat(events).slice(-MAX_EVENTS);
-      lastSeq = Math.max(lastSeq, ...events.map((r) => (Number.isInteger(r.seq) ? r.seq : -1)));
-    }
     if (hostRows.status !== 'fulfilled') toast(t('pullFailed'), true);
     paint();
   }

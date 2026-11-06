@@ -11,6 +11,7 @@
 
 import { h, icon, ICONS } from './dom.js';
 import { t, tf } from './i18n.js';
+import { chatHash, chatRoute, sessionLight } from './hostmodel.js';
 
 const HINT_KEY = 'lunacore.installHint.dismissed';
 
@@ -65,8 +66,9 @@ const NAV = [
 ];
 const TOAST_MS = 3500;
 
-/** The page named by the URL hash, or the first ready one. */
+/** The page named by the URL hash ('chat' for #chat/<host>/<id>), or the to-do list. */
 export function pageFromHash(hash = location.hash) {
+  if (chatRoute(hash)) return 'chat';
   const id = hash.replace(/^#/, '');
   return NAV.some((n) => n.ready && n.id === id) ? id : 'todos';
 }
@@ -76,13 +78,17 @@ export function pageFromHash(hash = location.hash) {
  * @param {{who: string, current: string, onNavigate: (id: string) => void, onSync: () => Promise<void>, onLogout: () => void}} opts
  * @returns {{main: HTMLElement, toast: (msg: string, bad?: boolean) => void, setPage: (id: string) => void, setPending: (n: number) => void}}
  */
-export function mountShell(root, { who, current, onNavigate, onSync, onLogout }) {
+export function mountShell(root, { who, current, onNavigate, onSync, onLogout, onDrawerOpen = () => {} }) {
   const menuBtn = h('button', { class: 'icon-btn', 'aria-label': t('menu'), 'aria-expanded': 'false', 'aria-controls': 'drawer' }, icon(ICONS.menu));
+  const backBtn = h('button', { class: 'icon-btn', 'aria-label': t('chatBack'), hidden: true, onclick: () => onNavigate('host') }, icon(ICONS.back));
   const badge = h('span', { class: 'badge', hidden: true, 'aria-hidden': 'true' });
   const syncBtn = h('button', { class: 'icon-btn has-badge', 'aria-label': t('sync') }, icon(ICONS.sync), badge);
   const closeBtn = h('button', { class: 'icon-btn', 'aria-label': t('closeMenu') }, icon(ICONS.close));
 
-  const title = h('h1', {});
+  const titleMain = h('span', { class: 'title-main' });
+  const titleSub = h('span', { class: 'title-sub', hidden: true });
+  const titleLight = h('span', { class: 'light', hidden: true, 'aria-hidden': 'true' }, '●');
+  const title = h('h1', {}, h('span', { class: 'title-row' }, titleLight, titleMain), titleSub);
   const items = new Map();
   const nav = h(
     'nav',
@@ -107,11 +113,16 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout })
     }),
   );
 
+  // Live + last-24 h host sessions (hostmodel.menuSessions), filled by setSessions().
+  const sessionsList = h('div', { class: 'nav' });
+  const sessionsNav = h('nav', { class: 'nav-sessions', 'aria-label': t('hostSessions'), hidden: true }, h('div', { class: 'nav-label' }, t('hostSessions')), sessionsList);
+
   const drawer = h(
     'aside',
     { class: 'drawer', id: 'drawer', 'aria-label': t('menu') },
     h('div', { class: 'drawer-head' }, 'LUNACORE', closeBtn),
     nav,
+    sessionsNav,
     h('div', { class: 'drawer-foot' }, h('div', { class: 'who' }, who), h('button', { class: 'btn btn-ghost', onclick: onLogout }, icon(ICONS.logout), t('logout'))),
   );
   drawer.inert = true;
@@ -121,6 +132,7 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout })
     menuBtn.setAttribute('aria-expanded', String(open));
     drawer.inert = !open;
     (open ? closeBtn : menuBtn).focus();
+    if (open) onDrawerOpen();
   }
 
   menuBtn.addEventListener('click', () => openDrawer(true));
@@ -144,7 +156,7 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout })
   let toastTimer = 0;
 
   const hint = installHint();
-  root.replaceChildren(...[h('header', { class: 'topbar' }, menuBtn, title, syncBtn), hint, main, scrim, drawer, toastEl].filter(Boolean));
+  root.replaceChildren(...[h('header', { class: 'topbar' }, backBtn, menuBtn, title, syncBtn), hint, main, scrim, drawer, toastEl].filter(Boolean));
 
   function toast(msg, bad = false) {
     toastEl.textContent = msg;
@@ -156,16 +168,60 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout })
     }, TOAST_MS);
   }
 
+  /** The top bar title; a chat page adds a status light and a second line. */
+  function setHeader({ title: main, sub = '', light = '' }) {
+    titleMain.textContent = main;
+    titleSub.textContent = sub;
+    titleSub.hidden = !sub;
+    titleLight.className = `light ${light}`;
+    titleLight.hidden = !light;
+  }
+
+  let sessionRows = [];
+  /** Marks the open chat in the menu's session list. */
+  function markSession() {
+    const route = chatRoute(location.hash);
+    for (const { el, s } of sessionRows) {
+      if (route && route.sessionId === s.sessionId) el.setAttribute('aria-current', 'page');
+      else el.removeAttribute('aria-current');
+    }
+  }
+
   /** Marks `id` as the current page in the title and the menu. */
   function setPage(id) {
     const page = NAV.find((n) => n.id === id);
-    title.textContent = t(page.label);
+    const chat = id === 'chat';
+    document.body.classList.toggle('page-chat', chat);
+    backBtn.hidden = !chat;
+    setHeader({ title: chat ? '' : t(page.label) });
     for (const [key, item] of items) {
       if (key === id) item.setAttribute('aria-current', 'page');
       else item.removeAttribute('aria-current');
     }
+    markSession();
   }
   setPage(current);
+
+  /**
+   * The menu's sessions (hostmodel.menuSessions):
+   * [{sessionId, host, status, live, at, label}]. Empty hides the section.
+   */
+  function setSessions(list) {
+    sessionRows = list.map((s) => {
+      const name = s.label || s.host;
+      const state = t(s.live ? `hostStatus_${s.status}` : 'chatEnded') || s.status;
+      const el = h(
+        'a',
+        { class: 'nav-item nav-session', href: chatHash(s.host, s.sessionId), onclick: () => openDrawer(false) },
+        h('span', { class: `light ${sessionLight(s)}`, 'aria-hidden': 'true' }, '●'),
+        h('span', { class: 'nav-session-text' }, h('span', { class: 'nav-session-name' }, name), h('span', { class: 'nav-session-sub' }, s.label ? `${s.host} · ${state}` : state)),
+      );
+      return { el, s };
+    });
+    sessionsList.replaceChildren(...sessionRows.map((r) => r.el));
+    sessionsNav.hidden = !sessionRows.length;
+    markSession();
+  }
 
   /** Shows how many writes wait to be sent (0 hides the badge). */
   function setPending(n) {
@@ -174,5 +230,5 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout })
     syncBtn.setAttribute('aria-label', n ? `${t('sync')} (${tf('pendingLabel', { n })})` : t('sync'));
   }
 
-  return { main, toast, setPage, setPending };
+  return { main, toast, setPage, setPending, setSessions, setHeader };
 }

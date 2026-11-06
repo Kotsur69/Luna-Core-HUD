@@ -308,7 +308,8 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     const statuses = repos.statuses();
     const { createRepoKeys } = require('./missionrepokey');
     const keys = createRepoKeys();
-    const list = listProjects().map((p) => {
+    // A repo a phone chat would be refused in (e.g. `home` = ~) is not offered at all.
+    const list = listProjects().filter((p) => repos.offeredToPhone(p)).map((p) => {
       const dir = repos.dirOf(p);
       const key = dir ? keys.resolve(dir).key : null;
       return { id: p.id, key: key && key.startsWith('git:') ? key : null, name: p.name, cloned: Boolean(dir), status: statuses.get(p.id) || null };

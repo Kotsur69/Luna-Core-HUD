@@ -612,20 +612,102 @@ main {
   .light { animation: none; }
 }
 
-/* ---- Host chat (REMOTE_HOST_PLAN H2): text only, model output never as HTML ---- */
-.chat { display: grid; gap: var(--space-2); max-height: 60vh; overflow-y: auto; overscroll-behavior: contain; }
-.msg { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
-.msg-me { justify-self: end; max-width: 85%; padding: var(--space-2) var(--space-3); border-radius: var(--radius); background: var(--bg-raised); border: 1px solid var(--edge); }
+/* ---- Host chat page (#chat/<host>/<id>): Messenger layout, text only ---- */
+.topbar h1 { min-width: 0; display: grid; }
+.title-row { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.title-main { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title-sub { font: 400 13px/1.3 var(--font-ui); letter-spacing: 0; text-transform: none; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title-sub[hidden], .light[hidden], .icon-btn[hidden] { display: none; }
+
+.page-chat main { padding-bottom: 0; }
+.chat-page { display: flex; flex-direction: column; }
+/* Room for the fixed composer below the last message. */
+.chat-log { display: flex; flex-direction: column; gap: var(--space-2); padding-bottom: calc(var(--safe-bottom) + 84px); }
+
+.bubble {
+  align-self: flex-start; max-width: 82%; margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 18px 18px 18px 6px;
+  background: var(--bg-panel); border: 1px solid var(--edge);
+  white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45;
+}
+.bubble-me {
+  align-self: flex-end;
+  border-radius: 18px 18px 6px 18px;
+  background: color-mix(in srgb, var(--neon-magenta) 20%, var(--bg-raised));
+  border-color: var(--edge-glow);
+}
+
+.tool-row { align-self: stretch; border-radius: var(--radius); }
+.tool-row summary { list-style: none; cursor: pointer; }
+.tool-row summary::-webkit-details-marker { display: none; }
+.tool-head {
+  display: flex; align-items: center; gap: var(--space-2); min-height: var(--tap);
+  padding: 0 var(--space-3); border: 1px solid var(--edge); border-radius: var(--radius);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 13px; color: var(--text-dim);
+}
+.tool-head::before { content: '\203A'; flex: none; color: var(--text-dim); transition: transform var(--dur) var(--ease-out); }
+details[open] > summary .tool-head::before { transform: rotate(90deg); }
+.tool-row.is-pending .tool-head::before { content: '\25CF'; color: var(--neon-cyan); animation: light-pulse 1.4s ease-in-out infinite; }
+.tool-row.is-bad .tool-head { border-color: var(--bad); }
+.tool-name { flex: none; color: var(--neon-cyan); }
+.tool-row.is-bad .tool-name { color: var(--bad); }
+.tool-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-row .tool-out { margin-top: var(--space-1); }
+
+.sys { align-self: center; margin: var(--space-1) 0; font-size: 13px; color: var(--text-dim); text-align: center; }
+.sys.is-bad { color: var(--bad); }
+
+.composer {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+  display: flex; align-items: flex-end; gap: var(--space-1);
+  max-width: 640px; margin: 0 auto;
+  padding: var(--space-2) calc(var(--safe-right) + var(--space-3)) calc(var(--safe-bottom) + var(--space-2)) calc(var(--safe-left) + var(--space-3));
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--edge);
+}
+.composer [hidden], .composer[hidden] { display: none; }
+.composer-input {
+  flex: 1; min-width: 0; min-height: var(--tap); max-height: 160px; resize: none;
+  padding: 10px var(--space-4); border-radius: 22px;
+  border: 1px solid var(--edge); background: var(--bg-panel); color: var(--text);
+  font: 16px/1.4 var(--font-ui);
+}
+.composer-input:focus { border-color: var(--neon-magenta); outline: none; box-shadow: 0 0 0 3px var(--glow); }
+.composer .send { background: var(--neon-magenta); color: var(--bg); border-radius: 50%; }
+.composer .send:active { background: var(--neon-cyan); color: var(--bg); }
+.composer .icon-btn:disabled { opacity: 0.45; }
+.slash { position: relative; }
+.slash-pick { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 16px; cursor: pointer; }
+.slash:focus-within { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
+
+/* Menu: live + last-24 h host sessions, below the pages. */
+.nav-sessions { margin-top: var(--space-4); display: grid; gap: var(--space-1); }
+.nav-sessions[hidden] { display: none; }
+.nav-label { padding: 0 var(--space-3); font: 600 12px var(--font-display); letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); }
+a.nav-item { color: inherit; text-decoration: none; }
+.nav-session { min-height: 52px; }
+.nav-session-text { display: grid; min-width: 0; }
+.nav-session-name, .nav-session-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-session-sub { font-size: 13px; color: var(--text-dim); }
+
+/* Shared by the chat page and the approval card. */
 .mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
-.tool { display: grid; gap: var(--space-1); }
 .tool-out, .diff {
   margin: 0; padding: var(--space-2); max-height: 12rem; overflow: auto;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12px;
   white-space: pre-wrap; overflow-wrap: anywhere;
   background: var(--bg); border: 1px solid var(--edge); border-radius: var(--radius-sm); color: var(--text-dim);
 }
-.approval { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--warn); border-radius: var(--radius); }
-.session-row { width: 100%; text-align: left; background: transparent; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; }
+.approval { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--warn); border-radius: var(--radius); background: var(--bg-panel); }
+a.session-row { color: inherit; text-decoration: none; }
+details.card > summary { cursor: pointer; min-height: var(--tap); display: flex; align-items: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-head::before { transition: none; }
+  .tool-row.is-pending .tool-head::before { animation: none; }
+}
 textarea.field { resize: vertical; min-height: 4.5rem; line-height: 1.4; }
 
 /* Luna's Work (LW 2.17b): the newest screenshot thumbnails, side by side. */

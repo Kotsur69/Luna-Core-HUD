@@ -79,3 +79,47 @@ test('sessionList: newest status per session, live from the heartbeat', () => {
   const list = sessionList(rows, hosts);
   assert.deepEqual(list.map((s) => [s.sessionId, s.status, s.live]), [[SID, 'done', true], [SID2, 'error', false]]);
 });
+
+// ---- Messenger-style chat page: route, menu list, status light ----------------
+
+test('chatHash / chatRoute round-trip and reject anything else', async () => {
+  const { chatHash, chatRoute } = await import('../mobile/src/hostmodel.js');
+  assert.equal(chatHash('KT-PC-LLM', SID), `#chat/KT-PC-LLM/${SID}`);
+  assert.deepEqual(chatRoute(`#chat/KT-PC-LLM/${SID}`), { host: 'KT-PC-LLM', sessionId: SID });
+  assert.equal(chatRoute('#host'), null);
+  assert.equal(chatRoute(`#chat/bad host/${SID}`), null);
+  assert.equal(chatRoute('#chat/KT-PC/not-a-uuid'), null);
+  assert.equal(chatRoute(`#chat/KT-PC/${SID}/extra`), null);
+  assert.equal(chatRoute(undefined), null);
+});
+
+test('menuSessions: live first, then ended ones from the last 24 h, capped', async () => {
+  const { menuSessions } = await import('../mobile/src/hostmodel.js');
+  const SID3 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const hosts = hostList([{ machine: 'KT-PC', data: { v: 1, at: NOW, repos: [{ id: 'luna', name: 'LunaCore', cloned: true }], sessions: [{ id: SID2, repoId: 'luna', status: 'working' }] }, updated_at: at(NOW) }], NOW);
+  const rows = [
+    ev(3, 'status', { status: 'done' }, SID, NOW - 60_000),
+    ev(1, 'status', { status: 'working' }, SID2, NOW - 3_600_000),
+    ev(4, 'status', { status: 'done' }, SID3, NOW - 25 * 3_600_000),
+  ];
+  const list = menuSessions(rows, hosts, NOW, { [SID]: 'Synthara' });
+  assert.deepEqual(list.map((s) => [s.sessionId, s.live, s.label]), [[SID2, true, 'LunaCore'], [SID, false, 'Synthara']]);
+  assert.equal(list[0].host, 'KT-PC');
+  const many = Array.from({ length: 12 }, (_, i) => ev(i, 'status', { status: 'done' }, `${String(i).padStart(8, '0')}-2222-4333-8444-555555555555`, NOW - i * 1000));
+  assert.equal(menuSessions(many, [], NOW, {}).length, 8);
+});
+
+test('sessionLight: status -> light class, an ended "working" session is idle', async () => {
+  const { sessionLight } = await import('../mobile/src/hostmodel.js');
+  assert.equal(sessionLight({ status: 'working', live: true }), 'is-working');
+  assert.equal(sessionLight({ status: 'waiting', live: true }), 'is-approval');
+  assert.equal(sessionLight({ status: 'error', live: false }), 'is-failed');
+  assert.equal(sessionLight({ status: 'done', live: false }), 'is-done');
+  assert.equal(sessionLight({ status: 'working', live: false }), 'is-idle');
+});
+
+test('sessionList drops sessions whose host is no valid machine name (no dead links)', () => {
+  const bad = { ...ev(1, 'status', { status: 'done' }, SID2), host: 'evil/host' };
+  const list = sessionList([ev(2, 'status', { status: 'done' }), bad], []);
+  assert.deepEqual(list.map((s) => s.sessionId), [SID]);
+});

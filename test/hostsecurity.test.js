@@ -252,6 +252,19 @@ test('a symlink / junction under the root pointing outside is refused', (t) => {
   assert.deepEqual(reposFor(tree.root).chatDirOf({ id: 's', path: link }), { error: 'refused: repo outside the repos root' });
 });
 
+test('offeredToPhone hides only repos a chat would refuse as outside the root', (t) => {
+  const tree = tmpTree();
+  t.after(tree.done);
+  const lines = [];
+  const repos = createHostRepos({ execFile: () => {}, reposRoot: tree.root, log: (l) => lines.push(l) });
+  assert.equal(repos.offeredToPhone({ id: 'luna', path: path.join(tree.root, 'luna') }), true);
+  assert.equal(repos.offeredToPhone({ id: 'home', path: tree.outside }), false);
+  // Not cloned yet: still offered, so the phone can clone it.
+  assert.equal(repos.offeredToPhone({ id: 'new', path: path.join(tree.root, 'missing'), remote: 'https://github.com/o/missing' }), true);
+  assert.deepEqual(lines, [], 'the 30 s heartbeat check never logs');
+  assert.equal(createHostRepos({ execFile: () => {}, reposRoot: tree.root, chatDirs: () => [tree.outside], log: () => {} }).offeredToPhone({ id: 'home', path: tree.outside }), true);
+});
+
 test('a folder on the host-local allow-list is accepted', (t) => {
   const tree = tmpTree();
   t.after(tree.done);

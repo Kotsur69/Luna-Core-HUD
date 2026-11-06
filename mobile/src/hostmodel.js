@@ -106,12 +106,54 @@ export function sessionList(rows, hosts) {
   const bySession = new Map();
   for (const r of Array.isArray(rows) ? rows : []) {
     const e = parseEvent(r);
-    if (!e || e.kind !== 'status') continue;
+    // A host name the chat route would reject only makes a dead link.
+    if (!e || e.kind !== 'status' || !MACHINE_RE.test(e.host)) continue;
     const prev = bySession.get(e.sessionId);
     if (prev && (prev.at > e.at || (prev.at === e.at && prev.seq > e.seq))) continue;
     bySession.set(e.sessionId, { sessionId: e.sessionId, host: e.host, status: e.data.status, at: e.at, seq: e.seq, live: liveIds.has(e.sessionId) });
   }
   return [...bySession.values()].sort((a, b) => b.at - a.at).map(({ seq, ...s }) => s);
+}
+
+// ---- the chat page (#chat/<host>/<sessionId>) and the menu's session list ----
+
+const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
+const SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const CHAT_HASH_RE = /^#chat\/([^/]+)\/([^/]+)$/;
+const MENU_WINDOW_MS = 24 * 60 * 60 * 1000;
+const MENU_MAX = 8;
+
+/** The URL hash of one session's chat page. */
+export const chatHash = (host, sessionId) => `#chat/${host}/${sessionId}`;
+
+/** A chat page hash -> {host, sessionId}, or null for anything malformed. */
+export function chatRoute(hash) {
+  const m = typeof hash === 'string' ? CHAT_HASH_RE.exec(hash) : null;
+  if (!m || !MACHINE_RE.test(m[1]) || !SESSION_RE.test(m[2])) return null;
+  return { host: m[1], sessionId: m[2] };
+}
+
+/** A session's state -> the `.light` class the menu and the chat header show. */
+export function sessionLight(s) {
+  if (s.status === 'error') return 'is-failed';
+  if (s.status === 'done') return 'is-done';
+  if (!s.live) return 'is-idle'; // it stopped without a final status
+  return s.status === 'waiting' ? 'is-approval' : 'is-working';
+}
+
+/**
+ * The menu's session list: live sessions first, then the ones that ended in
+ * the last 24 h, newest first, at most 8. `label` is the repo name from the
+ * heartbeat, else the one this phone remembered (`names`: sessionId -> name).
+ */
+export function menuSessions(rows, hosts, now, names = {}) {
+  const list = sessionList(rows, hosts).filter((s) => s.live || now - s.at <= MENU_WINDOW_MS);
+  const ordered = [...list.filter((s) => s.live), ...list.filter((s) => !s.live)].slice(0, MENU_MAX);
+  return ordered.map((s) => {
+    const repo = sessionRepo(hosts, s.sessionId);
+    const known = Object.prototype.hasOwnProperty.call(names, s.sessionId) ? names[s.sessionId] : '';
+    return { ...s, label: (repo && repo.name) || (typeof known === 'string' ? known : '') };
+  });
 }
 
 /** The repo a live session runs in, from its host's heartbeat (or null). */

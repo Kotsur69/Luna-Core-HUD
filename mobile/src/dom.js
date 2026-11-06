@@ -35,6 +35,11 @@ export function icon(paths) {
 
 export const ICONS = {
   menu: ['M4 6h16', 'M4 12h16', 'M4 18h16'],
+  back: ['M15 18l-6-6 6-6'],
+  send: ['M22 2 11 13', 'M22 2l-7 20-4-9-9-4 20-7z'],
+  stop: ['M7 7h10v10H7z'],
+  power: ['M12 2v10', 'M18.4 6.6a9 9 0 1 1-12.8 0'],
+  slash: ['M16 4 8 20'],
   close: ['M18 6 6 18', 'M6 6l12 12'],
   sync: ['M21 12a9 9 0 0 1-15.5 6.2L3 16', 'M3 21v-5h5', 'M3 12a9 9 0 0 1 15.5-6.2L21 8', 'M21 3v5h-5'],
   trash: ['M3 6h18', 'M8 6V4h8v2', 'M19 6l-1 14H6L5 6'],

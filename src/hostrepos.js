@@ -213,11 +213,8 @@ function createHostRepos({
     }
   };
 
-  /**
-   * The folder a phone chat may run in, as a real path, or why not.
-   * @returns {{dir: string}|{error: string}}
-   */
-  function chatDirOf(p) {
+  /** chatDirOf without the refusal log line; `quiet` also silences the allow-list error. */
+  function resolveChatDir(p, quiet) {
     const dir = dirOf(p);
     if (!dir) return { error: 'refused: unknown repo' };
     const real = realOrNull(dir);
@@ -228,15 +225,32 @@ function createHostRepos({
     try {
       extra = chatDirs();
     } catch (err) {
-      log(`[hostrepos] chat allow-list unreadable: ${err && err.message}`);
+      if (!quiet) log(`[hostrepos] chat allow-list unreadable: ${err && err.message}`);
     }
     for (const d of Array.isArray(extra) ? extra : []) {
       const allowed = typeof d === 'string' ? realOrNull(d) : null;
       if (allowed && isInside(allowed, real, true)) return { dir: real };
     }
-    log(`[hostrepos] chat refused for ${p && p.id}: ${real} is outside the repos root`);
+    return { error: OUTSIDE, real };
+  }
+
+  /**
+   * The folder a phone chat may run in, as a real path, or why not.
+   * @returns {{dir: string}|{error: string}}
+   */
+  function chatDirOf(p) {
+    const r = resolveChatDir(p, false);
+    if (r.error !== OUTSIDE) return r;
+    log(`[hostrepos] chat refused for ${p && p.id}: ${r.real} is outside the repos root`);
     return { error: OUTSIDE };
   }
+
+  /**
+   * Whether the phone's repo picker lists `p`: everything except a folder a
+   * chat would refuse as outside the root (a not-yet-cloned repo stays, so
+   * Clone works). Runs on every heartbeat, so it never logs.
+   */
+  const offeredToPhone = (p) => resolveChatDir(p, true).error !== OUTSIDE;
 
   return {
     /** One pass at a time; a call during a pass waits for it. */
@@ -253,6 +267,7 @@ function createHostRepos({
     statuses: () => new Map(statuses),
     dirOf,
     chatDirOf,
+    offeredToPhone,
   };
 }
 
