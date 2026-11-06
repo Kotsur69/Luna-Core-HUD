@@ -58,7 +58,9 @@ export function mountChat(main, { cloud, toast, route, setHeader }) {
   const stopBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': t('hostStop') }, icon(ICONS.stop));
   const sendBtn = h('button', { class: 'icon-btn send', type: 'submit', 'aria-label': t('hostSend') }, icon(ICONS.send));
   const composer = h('form', { class: 'composer' }, endBtn, slash, input, stopBtn, sendBtn);
-  main.replaceChildren(h('div', { class: 'chat-page' }, log, composer));
+  // Outside the log on purpose: the log is rebuilt every pull, which would restart the dots.
+  const typing = h('div', { class: 'typing', role: 'status', 'aria-label': t('chatTyping'), hidden: true }, h('span'), h('span'), h('span'));
+  main.replaceChildren(h('div', { class: 'chat-page' }, log, typing, composer));
 
   const buttons = [endBtn, stopBtn, sendBtn];
   const run = createRunner({ cloud, toast, onBusy: (b) => buttons.forEach((x) => (x.disabled = b)) });
@@ -126,6 +128,8 @@ export function mountChat(main, { cloud, toast, route, setHeader }) {
     setHeader({ title: name, sub: `${machine} · ${state}`, light: hostsKnown ? sessionLight({ status, live }) : '' });
 
     const stick = !painted || nearBottom();
+    // Working, not waiting: while an approval card is open the next move is yours.
+    typing.hidden = foreign || !live || status !== 'working';
     const items = foreign ? [h('p', { class: 'sys is-bad' }, t('chatForeign'))] : model.items.map(chatItem).filter(Boolean);
     log.replaceChildren(...(items.length ? items : [h('p', { class: 'sys' }, t('loading'))]));
     if (stick) toBottom();

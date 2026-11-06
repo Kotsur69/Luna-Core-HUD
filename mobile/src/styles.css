@@ -682,6 +682,54 @@ details[open] > summary .tool-head::before { transform: rotate(90deg); }
 .slash-pick { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 16px; cursor: pointer; }
 .slash:focus-within { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
 
+/* Claude is working: three dots in an incoming bubble, a slow staggered wave
+   (transform + opacity only). Sits between the log and the fixed composer. */
+.chat-log:has(+ .typing:not([hidden])) { padding-bottom: var(--space-2); }
+.typing {
+  align-self: flex-start; display: inline-flex; gap: 5px;
+  margin-bottom: calc(var(--safe-bottom) + 84px);
+  padding: 12px 14px; border-radius: 18px 18px 18px 6px;
+  background: var(--bg-panel); border: 1px solid var(--edge);
+  animation: typing-in 200ms var(--ease-out);
+}
+.typing[hidden] { display: none; }
+.typing span {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--neon-magenta);
+  animation: typing-wave 1.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.typing span:nth-child(2) { animation-delay: 150ms; }
+.typing span:nth-child(3) { animation-delay: 300ms; }
+@keyframes typing-wave {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+@keyframes typing-in { from { opacity: 0; transform: translateY(4px); } }
+
+/* Swipe a running session left to reveal End (swipe.js). */
+.swipe-row { position: relative; overflow: hidden; border-radius: var(--radius); }
+.swipe-action {
+  position: absolute; inset: 0 0 0 auto; width: 88px;
+  display: grid; place-items: center; align-content: center; gap: 2px;
+  border: 0; border-radius: var(--radius);
+  background: var(--bad); color: var(--bg);
+  font: 600 12px var(--font-ui);
+}
+.swipe-action svg { width: 20px; height: 20px; }
+.swipe-action:disabled { opacity: 0.6; }
+/* At rest the red would fringe the rounded corners: hide it once the row has slid shut. */
+.swipe-row .swipe-action { opacity: 0; transition: opacity 0s linear var(--dur); }
+.swipe-row.is-open .swipe-action,
+.swipe-row.is-dragging .swipe-action { opacity: 1; transition-delay: 0s; }
+.swipe-row.is-open .swipe-action:disabled { opacity: 0.6; }
+.swipe-row > .nav-item {
+  position: relative; z-index: 1;
+  background: var(--bg-panel); touch-action: pan-y;
+  transition: transform var(--dur) var(--ease-out);
+}
+.swipe-row > .nav-item[aria-current='page'] { background: var(--bg-raised); }
+.swipe-row.is-dragging > .nav-item { transition: none; }
+
 /* Menu: live + last-24 h host sessions, below the pages. */
 .nav-sessions { margin-top: var(--space-4); display: grid; gap: var(--space-1); }
 .nav-sessions[hidden] { display: none; }
@@ -707,6 +755,12 @@ details.card > summary { cursor: pointer; min-height: var(--tap); display: flex;
 @media (prefers-reduced-motion: reduce) {
   .tool-head::before { transition: none; }
   .tool-row.is-pending .tool-head::before { animation: none; }
+  /* Static dots, still readable as "typing"; rows snap without sliding. */
+  .typing { animation: none; }
+  .typing span { animation: none; opacity: 0.5; }
+  .typing span:nth-child(2) { opacity: 0.75; }
+  .typing span:nth-child(3) { opacity: 1; }
+  .swipe-row > .nav-item { transition: none; }
 }
 textarea.field { resize: vertical; min-height: 4.5rem; line-height: 1.4; }
 

@@ -12,6 +12,10 @@
 import { h, icon, ICONS } from './dom.js';
 import { t, tf } from './i18n.js';
 import { chatHash, chatRoute, sessionLight } from './hostmodel.js';
+import { attachSwipe } from './swipe.js';
+
+/** Width of the End action a swiped session row reveals. */
+const SWIPE_ACTION_PX = 88;
 
 const HINT_KEY = 'lunacore.installHint.dismissed';
 
@@ -78,7 +82,7 @@ export function pageFromHash(hash = location.hash) {
  * @param {{who: string, current: string, onNavigate: (id: string) => void, onSync: () => Promise<void>, onLogout: () => void}} opts
  * @returns {{main: HTMLElement, toast: (msg: string, bad?: boolean) => void, setPage: (id: string) => void, setPending: (n: number) => void}}
  */
-export function mountShell(root, { who, current, onNavigate, onSync, onLogout, onDrawerOpen = () => {} }) {
+export function mountShell(root, { who, current, onNavigate, onSync, onLogout, onDrawerOpen = () => {}, onEndSession = async () => {} }) {
   const menuBtn = h('button', { class: 'icon-btn', 'aria-label': t('menu'), 'aria-expanded': 'false', 'aria-controls': 'drawer' }, icon(ICONS.menu));
   const backBtn = h('button', { class: 'icon-btn', 'aria-label': t('chatBack'), hidden: true, onclick: () => onNavigate('host') }, icon(ICONS.back));
   const badge = h('span', { class: 'badge', hidden: true, 'aria-hidden': 'true' });
@@ -133,6 +137,7 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout, o
     drawer.inert = !open;
     (open ? closeBtn : menuBtn).focus();
     if (open) onDrawerOpen();
+    else closeSwipes();
   }
 
   menuBtn.addEventListener('click', () => openDrawer(true));
@@ -206,7 +211,27 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout, o
    * The menu's sessions (hostmodel.menuSessions):
    * [{sessionId, host, status, live, at, label}]. Empty hides the section.
    */
+  let swipes = [];
+  let ending = 0; // End taps still waiting on the host
+  let heldList = null; // a list that arrived while a row was in use
+  const rowsBusy = () => ending > 0 || swipes.some((x) => x.isActive());
+  /** Applies a list held back while a row was open, dragged or ending. */
+  function flushHeld() {
+    if (heldList && !rowsBusy()) setSessions(heldList);
+  }
+  function closeSwipes() {
+    swipes.forEach((x) => x.close());
+    flushHeld();
+  }
+
   function setSessions(list) {
+    // Never swap rows out from under a finger or a pending End: keep the newest, apply later.
+    if (rowsBusy()) {
+      heldList = list;
+      return;
+    }
+    heldList = null;
+    swipes = [];
     sessionRows = list.map((s) => {
       const name = s.label || s.host;
       const state = t(s.live ? `hostStatus_${s.status}` : 'chatEnded') || s.status;
@@ -216,9 +241,32 @@ export function mountShell(root, { who, current, onNavigate, onSync, onLogout, o
         h('span', { class: `light ${sessionLight(s)}`, 'aria-hidden': 'true' }, '●'),
         h('span', { class: 'nav-session-text' }, h('span', { class: 'nav-session-name' }, name), h('span', { class: 'nav-session-sub' }, s.label ? `${s.host} · ${state}` : state)),
       );
-      return { el, s };
+      if (!s.live) return { el, s, wrap: el };
+      // A running session: swipe left reveals End (the chat page's own End button is the non-gesture way).
+      const action = h('button', { class: 'swipe-action', type: 'button', 'aria-label': `${t('hostEnd')}: ${name}` }, icon(ICONS.power), t('hostEnd'));
+      const wrap = h('div', { class: 'swipe-row' }, action, el);
+      const swipe = attachSwipe(wrap, el, action, {
+        width: SWIPE_ACTION_PX,
+        onOpen: () => swipes.forEach((x) => x !== swipe && x.close()),
+        onClose: flushHeld,
+      });
+      swipes.push(swipe);
+      action.addEventListener('click', async () => {
+        if (action.disabled) return;
+        action.disabled = true;
+        ending += 1;
+        try {
+          await onEndSession(s);
+        } finally {
+          ending -= 1;
+          action.disabled = false;
+          swipe.close();
+          flushHeld();
+        }
+      });
+      return { el, s, wrap };
     });
-    sessionsList.replaceChildren(...sessionRows.map((r) => r.el));
+    sessionsList.replaceChildren(...sessionRows.map((r) => r.wrap));
     sessionsNav.hidden = !sessionRows.length;
     markSession();
   }

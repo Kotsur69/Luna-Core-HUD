@@ -24,6 +24,7 @@ import { mountHost } from './views/host.js';
 import { mountChat } from './views/chat.js';
 import { hostList, menuSessions, chatRoute } from './hostmodel.js';
 import { readLabels } from './sessionlabels.js';
+import { createRunner } from './views/hostrun.js';
 import { t } from './i18n.js';
 
 const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody, repos: mountRepos, godmode: mountGodmode, lunaswork: mountLunasWork, host: mountHost, pair: mountPair, chat: mountChat };
@@ -58,8 +59,17 @@ function showApp(user) {
       // Offline or not paired yet: the menu just has no session list.
     }
   }
+  // The menu's swipe-to-end: the same signed chat.end as the chat page's End button.
+  const runMenu = createRunner({ cloud, toast: (m, bad) => shell.toast(m, bad), onBusy: () => {} });
+  async function endSession(s) {
+    if (!(await runMenu(s.host, 'chat.end', { sessionId: s.sessionId }))) return;
+    shell.toast(t('chatEndedToast'));
+    refreshMenu();
+    if (pageFromHash() === 'chat') view.refresh();
+  }
   const shell = mountShell(root, {
     onDrawerOpen: refreshMenu,
+    onEndSession: endSession,
     who: user.user_metadata?.user_name || user.email || '',
     current: pageFromHash(),
     onNavigate: (id) => {
