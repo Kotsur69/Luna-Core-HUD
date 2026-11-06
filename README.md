@@ -7,7 +7,20 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.23.0 — one hub, every run.**
+> **Current release: v0.24.0 — chat from your phone.**
+> - **Phone host chat:** a Messenger-style chat page for live Claude Code
+>   sessions on the phone, with typing dots and swipe-to-end; the phone menu
+>   lists only running sessions and no longer cuts off Logout.
+> - **Claude accounts:** a compact usage-limits tile showing every account,
+>   and usage logins renew with a real OAuth refresh instead of
+>   `claude auth status`.
+> - **Luna's Work:** the Electron and Unity tester adapters can now be picked
+>   in the project profile; the app's own run folders are no longer packed
+>   into the installer.
+> - **Fixes:** editable bill amounts and news refresh in Life on the phone,
+>   God Mode text and run card headers no longer squeezed.
+>
+> **v0.23.0 — one hub, every run.**
 > - **Notification hub:** a face chip with a live "needs you" badge
 >   (Ctrl+Shift+H) opens a drawer with Needs you / Briefs / Recent, including
 >   runs from your other PCs, done marks synced between them and one OS toast
