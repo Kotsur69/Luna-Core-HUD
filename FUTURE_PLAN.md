@@ -44,8 +44,6 @@ partly built or built with live checks owed) and `docs/untouched_docs/`
   `docs/tbc_docs/` is built and on `main`; each owes Mati's live checks
   (its "Resume here" lists them): Luna host + phone pairing
   ([`docs/tbc_docs/REMOTE_HOST_PLAN.md`](docs/tbc_docs/REMOTE_HOST_PLAN.md)),
-  Claude account failover + per-account meter, plus the usage-login refresh fix
-  ([`docs/tbc_docs/CLAUDE_ACCOUNTS_PLAN.md`](docs/tbc_docs/CLAUDE_ACCOUNTS_PLAN.md)),
   multi God Mode ([`docs/tbc_docs/MULTI_GODMODE_PLAN.md`](docs/tbc_docs/MULTI_GODMODE_PLAN.md)),
   the notification hub ([`docs/tbc_docs/NOTIFICATION_HUB_PLAN.md`](docs/tbc_docs/NOTIFICATION_HUB_PLAN.md))
   and Luna's Work ([`docs/tbc_docs/LUNAS_WORK_PLAN.md`](docs/tbc_docs/LUNAS_WORK_PLAN.md)).
