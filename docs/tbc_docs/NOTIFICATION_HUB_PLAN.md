@@ -28,7 +28,11 @@ user-facing strings need `pl` + `en`.
   with unseen Needs-you items; a toast fires once for a new item while the
   window is unfocused (with notifications on); every Settings switch works
   and survives a restart; the drawer on 3 themes. Then rename to `DONE_`.
-- **Left after the live check:** fold the old '!' attention inbox
+- **Live check N1-N6 passed (Mati, 2026-11-06).**
+- **Next to build: N7 "Same hub on every PC"** then **N8 "One '!' badge"**
+  (both below, To-do cards added 2026-11-06). When both are built and
+  live-checked, rename to `docs/done_docs/DONE_NOTIFICATION_HUB_PLAN.md`.
+- **Originally left after the live check (now N8):** fold the old '!' attention inbox
   (`src/inbox.js`, renderer `inbox.js`) into the hub so there is one badge,
   not two; the "Later (not v1)" list below.
 - Deviations in N4-N6: Settings live in `termcustom.js` (there is no
@@ -227,6 +231,93 @@ source returns `[]` and is unit-tested on its own.
 - README section, pl + en strings, `npx electron . --luna-probe` clean
   (subscriber counts equal before / after remount).
 - **Done when** every setting works and the probe is clean.
+
+### N7 - Same hub on every PC (planned 2026-11-06, not built)
+
+**Why (Mati, 2026-11-06):** "notification hub choices have to go from PC to
+PC - I lose context when each PC shows notifications differently; my work
+must not depend on the PC."
+
+**Cause (verified in code):** every hub choice is per PC.
+- `hubAutoOpen`, `hubToasts`, `hubSources`, `hubWidth` and the OS-toast
+  opt-in `notificationsEnabled` live in `ui.local.json` (`src/uiprefs.js`),
+  which no sync touches. `notificationsEnabled` defaults to **off**, so a PC
+  where it was never switched on shows no hub toasts at all.
+- "Seen" marks (`hub-seen.local.json`, `src/hubdone.js` `createSeenStore`)
+  are "local only - never synced", so the launch auto-open differs per PC.
+- Only the done marks (`hub:done:*`) are synced today.
+
+**Decisions (Mati, 2026-11-06):** sync it the same way to-dos sync (cloud
+units, newest edit wins, a delete is a tombstone - `configsync.js` already
+uses that model and `todosync.js`'s fingerprint). `notificationsEnabled` IS
+synced, so the terminal toasts (busy -> idle, context >= 85%) follow it too.
+
+**Plan:**
+1. `src/hubprefsync.js` - a new `configsync.js` provider (same contract as
+   `hubdone.js` / `hostdefault.js`), units in the `config` scope:
+   `hub:pref:autoOpen`, `hub:pref:toasts`, `hub:pref:sources`,
+   `hub:pref:notify` (= `notificationsEnabled`). `valid()` reuses the
+   `uiprefs.js` cleaners (`cleanHubAutoOpen`, `cleanHubSources`, booleans);
+   `isDefault()` marks untouched defaults so a fresh PC never overwrites the
+   real choice made on another PC; `write()` goes through `writeUiPrefs()`
+   (partial merge), never a raw file write. Registered via `extraProviders`
+   next to `hubApi.doneProvider` - no logic added to `main.js`.
+2. Seen marks synced too: `hub:seen:<id>` units through the same provider
+   pattern as done marks (30-day prune, 500 cap), so an item already opened on
+   one PC does not auto-open the drawer again on the next.
+3. Live apply: when configsync reports `hubprefs` changed, main sends one
+   `hub:prefsChanged` push; `hubtoast.js`, `hubicon.js` and `hubsettings.js`
+   re-read `getUiPrefs()` (no restart needed). Preload gets
+   `onHubPrefsChanged(cb)` only (no payload from the renderer -> quick
+   security review).
+4. Settings -> Notification hub: one line "Synced across your PCs" (pl + en),
+   shown when cloud sync is on; "This PC only" otherwise.
+5. Stays local on purpose: `hubWidth` (screen sizes differ) and
+   `hubBriefHintSeen`.
+
+**Tests:** provider valid / invalid cloud values, first-sync default stamped
+0, newest-wins between two PCs, seen-mark prune, `writeUiPrefs` partial merge
+leaves other prefs alone.
+
+**Done when:** change auto-open / a source switch / toasts on PC A -> after a
+sync PC B shows the same setting without a restart; open the drawer on A ->
+B does not auto-open for the same items.
+
+### N8 - One '!' badge: fold the old inbox into the hub (planned 2026-11-06)
+
+**Decision (Mati, 2026-11-06):** merge the two, but the chip shows **'!'**,
+not the face - Mati prefers the '!'.
+
+**What the old inbox has that the hub lacks** (`src/inbox.js`,
+`src/inboxipc.js`, renderer `inbox.js`):
+- `gmail`: the report-email Gmail grant is missing (`gmailsend.js status()`).
+  The hub has no such collector.
+- God Mode items open the **run summary window** (`godmodesummary.js` via
+  `inboxRun(machine, id)`, plus `inboxOpenPr`), also for another PC's runs.
+  Hub godmode items only open the local report or mark done.
+- `checkin` / `goals` - already hub collectors (nothing to move).
+
+**Plan:**
+1. Hub collector `gmail` (`needs`, primary `openSettings('report-email')`),
+   in the `accounts` source group in `src/hubsources.js`.
+2. Hub godmode items (local and peer) get an `openRunSummary` action in the
+   whitelist, using the existing validated `inbox:run` / `inbox:open-pr`
+   handlers (rename to `hub:run` / `hub:open-pr` only if it stays trivial).
+3. The hub chip shows '!' (text glyph, theme accent) instead of the SVG face;
+   the badge, pulse and Ctrl+Shift+H stay as they are.
+4. Remove the old chip `#inbox-open` (index.html), renderer `inbox.js`, its
+   CSS and its i18n keys; remove `inbox:list` from preload and main once
+   nothing calls it; delete `src/inbox.js` if the hub covers everything.
+   Run `ecc:refactor-cleaner` after the removal.
+5. Security review: preload loses methods and adds none (or one rename).
+
+**Tests:** gmail collector (missing / granted / broken status), godmode item
+carries the summary action, `hubsettings.test.js` still pins the groups,
+no reference to `inbox-open` left.
+
+**Done when:** one '!' chip in the palette bar, its count matches the hub's
+Needs-you items, a God Mode item (local and from another PC) opens the run
+summary, and a missing Gmail grant shows as a Needs-you item.
 
 ### Later (not v1)
 - Same items on the phone's Today page (the phone already reads the
