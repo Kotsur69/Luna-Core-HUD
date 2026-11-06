@@ -61,7 +61,7 @@ worktrees (stalled ones kept), note unfinished packages on their to-dos, write
 `<userDir>/runs/<plan>.md` + an OS toast when notifications are on. Not
 built (dropped 2026-10-06): budget cap (§3); not built: `config/orchestra.json` allowlist file (rules live in
 ui prefs instead), per-worktree `npm ci` for workers (the worker installs).
-Successor of `GODMODE_PLAN.md` (v1 = one tab, one list, sequential).
+Successor of God Mode v1 (one tab, one list, sequential; removed in v0.20.0, `5283848`).
 
 Added 2026-10-20/21 (by the first live run itself): the planner waits for
 the Claude 5 h / weekly reset instead of failing (`src/orchestraPlanWait.js`),
@@ -70,7 +70,7 @@ branches), the run email (`src/godmodemail.js`, Gmail) and the phone
 `godmode` snapshot (`src/godmodesnapshot.js`).
 
 **First live run 2026-10-20 night** (report:
-[`docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md`](../docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md)): 47
+[`docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md`](DONE_GODMODE_RUN_2026-10-20.md)): 47
 cards / 12 pushed branches, good code, but the run blocked after ~15 min on
 a dependency merge at launch (`depMergeFailed`; Retry repeats the same
 plain `git merge`), and the merge-mode integration stopped at its first

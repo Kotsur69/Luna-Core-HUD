@@ -16,7 +16,7 @@
 // before Claude touched anything (mirrors observer.js's TranscriptWatcher.
 // snapshotBaseline()).
 //
-// Known v1 simplifications, same spirit as ACTIVE_FILES_HEATMAP_PLAN.md §4:
+// Known v1 simplifications, same spirit as DONE_ACTIVE_FILES_HEATMAP_PLAN.md §4:
 //   - a path already dirty at baseline stays excluded even if edited further
 //     during the session - the same tradeoff the transcript path makes for a
 //     resumed (--continue) session.

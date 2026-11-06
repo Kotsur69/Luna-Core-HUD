@@ -4,6 +4,12 @@
 `v0.10.0` on 2026-09-01.** Kept as the design record; the hand-off notes below
 are history.
 
+> **🟡 Resume here (2026-11-06):** shipped and in daily use; two small items
+> left. (1) One `npm start` look at the half-pixel shifts from the type /
+> spacing scale normalization ("Two things still owed" below). (2) Optional:
+> a real auto-hiding `zen` rail, only if Mati wants it. When (1) is done,
+> `git mv` this doc to `docs/done_docs/DONE_FLUIDITY_THEMING_PLAN.md`.
+
 Plan doc for the update Mati asked for on 2026-08-27: *"whole app has to have more
 fluidity like folding in folding out animations, more templates, more schemes."*
 
@@ -122,7 +128,7 @@ Four things worth knowing before touching any of it:
 Two items the plan named that this deliberately does not do, and why:
 
 * **`todo.js` got no FLIP.** It already has bespoke drag-reorder motion
-  (`TODO_DRAG_REORDER_PLAN.md`); a second animation system on top of a live
+  (`DONE_TODO_DRAG_REORDER_PLAN.md`); a second animation system on top of a live
   pointer gesture would fight it for the same transform.
 * **`skilltracker` got no FLIP.** It turned out to have no list at all — it
   toggles classes on a fixed set of tiles. The plan assumed otherwise.
@@ -446,7 +452,7 @@ it rather than from the middle of the screen.
 
 ### 3.3 List row enter / exit / reorder
 
-Generalize the FLIP already shipped for todo drag (`TODO_DRAG_REORDER_PLAN.md`)
+Generalize the FLIP already shipped for todo drag (`DONE_TODO_DRAG_REORDER_PLAN.md`)
 into `src/renderer/modules/flip.js` — a pure `measure → apply → play` helper with
 no DOM at module scope, so it is `require()`-able from a plain CJS test like
 `panels.js` and `widgetarrange.js` are.

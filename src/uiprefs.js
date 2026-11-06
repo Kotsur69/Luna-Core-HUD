@@ -95,7 +95,7 @@ function cleanEffectsStrength(v) {
 // still carrying windowMaterial:'none' from 2026-09-13 fails validation and
 // falls back to the default, which migrates that install on next read.
 const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
-// God Mode v2 workers (ORCHESTRATOR_PLAN.md slice 4). 'plan' = the model
+// God Mode v2 workers (DONE_ORCHESTRATOR_PLAN.md slice 4). 'plan' = the model
 // the planner picked per package; the others force one model for every
 // worker. Permission modes map 1:1 to `claude --permission-mode`, except
 // 'default', which adds no flag.
@@ -165,7 +165,7 @@ const DEFAULTS = {
   // potentially long/sensitive text, so it must never surprise-narrate a
   // room; Mati opts in explicitly from the Appearance panel.
   soundReadOutputEnabled: false,
-  // Terminal Appearance Customizer (TERMINAL_CUSTOMIZER_PLAN.md). Global, not
+  // Terminal Appearance Customizer (DONE_TERMINAL_CUSTOMIZER_PLAN.md). Global, not
   // per-tab/per-profile - confirmed 2026-08-13, matches how theme/sound prefs
   // already behave app-wide.
   termFontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
@@ -177,7 +177,7 @@ const DEFAULTS = {
   termScrollback: 5000,
   termBgOpacity: 100, // percent, 0-100
   termBgBlur: 0, // px, 0-20
-  // Per-layer surface transparency (reference/TRANSPARENCY_PLAN.md). null is
+  // Per-layer surface transparency (docs/tbc_docs/TRANSPARENCY_PLAN.md). null is
   // not "0%" - it means FOLLOW THE ACTIVE THEME, which is why the default is
   // null on all four: an untouched install must render every theme exactly as
   // the theme authored it. Percent 0-100 once a slider has actually moved.

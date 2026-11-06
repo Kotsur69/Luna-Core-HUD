@@ -1,6 +1,6 @@
 // ============================================================================
 // LunaCore - diff-stat extraction for the Active-Files Edit Heatmap
-// (ACTIVE_FILES_HEATMAP_PLAN.md §3.1).
+// (DONE_ACTIVE_FILES_HEATMAP_PLAN.md §3.1).
 // ----------------------------------------------------------------------------
 // Pure functions over the `toolUseResult` object the CLI already writes into
 // the transcript (a sibling of `message`, not inside it) - no fs reads, no

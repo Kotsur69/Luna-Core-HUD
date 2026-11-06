@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 supervisor rules (ORCHESTRATOR_PLAN.md slice 4)
+// LunaCore - God Mode v2 supervisor rules (DONE_ORCHESTRATOR_PLAN.md slice 4)
 // ----------------------------------------------------------------------------
 // Pure decisions only - no timers, no git, no tabs. src/orchestra.js owns the
 // state and the side effects and asks this module what a signal means:

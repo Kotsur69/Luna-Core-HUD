@@ -206,7 +206,7 @@
       <ul id="mcp-list" class="mcp-list"></ul>
       <p id="mcp-empty" class="hint" data-i18n="mcp.idle">Kliknij odswiez, aby przeskanowac.</p>
 
-      <!-- reference/MCP_DEBUGGER_PLAN.md safe half: live flow pulse on the rows
+      <!-- docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md safe half: live flow pulse on the rows
            above, JSON-RPC Inspector history here. Click a row -> #mcpcall-modal. -->
       <h3 class="panel__subtitle mcpcall-heading" data-i18n="mcp.calls.title">Ostatnie wywolania</h3>
       <ul id="mcp-calls-list" class="mcpcall-list"></ul>
@@ -597,7 +597,7 @@
       <p id="todo-empty" class="hint" data-i18n="todo.empty">Brak zadan.</p>
       <ul id="todo-list" class="todo-list"></ul>
       <button id="todo-clear" class="pad-send" data-i18n="todo.clearDone">Usun zrobione</button>
-      <!-- God Mode v2 planner (ORCHESTRATOR_PLAN.md slice 3) - opens #orchestra. -->
+      <!-- God Mode v2 planner (DONE_ORCHESTRATOR_PLAN.md slice 3) - opens #orchestra. -->
       <button
         id="orchestra-plan"
         class="pad-send"
@@ -953,7 +953,7 @@
         <button id="palette-open" class="palette-chip" data-i18n-title="palette.chip.title" title="Paleta komend (Ctrl+K)">
           <kbd>Ctrl</kbd><kbd>K</kbd>
         </button>
-        <!-- TERMINAL_CUSTOMIZER_PLAN.md §3: manual trigger, so Ctrl+L isn't the only way in. -->
+        <!-- DONE_TERMINAL_CUSTOMIZER_PLAN.md §3: manual trigger, so Ctrl+L isn't the only way in. -->
         <button id="termcustom-open" class="palette-chip" data-i18n-title="termcustom.chip.title" title="Ustawienia (Ctrl+L)">
           <kbd>Ctrl</kbd><kbd>L</kbd>
         </button>
@@ -1146,7 +1146,7 @@
     </div>
   </div>
 
-  <!-- ============ God Mode v2 plan review (ORCHESTRATOR_PLAN.md slice 3) ============ -->
+  <!-- ============ God Mode v2 plan review (DONE_ORCHESTRATOR_PLAN.md slice 3) ============ -->
   <!-- modules/orchestra.js. Opened by #orchestra-plan in the to-do widget.
        Reuses .palette's overlay/backdrop/modal/bar/foot CSS and
        .libraries-overlay's width + scroll body, like #ask below. The body is
@@ -1402,7 +1402,7 @@
   </div>
 
   <!-- ================= Settings (Ctrl+L) ================= -->
-  <!-- TERMINAL_CUSTOMIZER_PLAN.md - the overlay markup is empty and holds only
+  <!-- DONE_TERMINAL_CUSTOMIZER_PLAN.md - the overlay markup is empty and holds only
        static fields (no JS-built list like the palette), but opening/closing/
        binding lives in modules/termcustom.js, same as the palette lives in
        modules/palette.js. Global, not per-tab (§0).
@@ -1557,7 +1557,7 @@
             </div>
             <div class="termcustom__group">
               <h3 class="termcustom__section" data-i18n="surfacealpha.title">Przezroczystosc</h3>
-              <!-- reference/TRANSPARENCY_PLAN.md. Four sliders and not one because the
+              <!-- docs/tbc_docs/TRANSPARENCY_PLAN.md. Four sliders and not one because the
                    layers NEST - html/body under .app under .panel - so a single shared
                    alpha composites to 1-(1-a)^n and reads as opaque. Each axis follows
                    the active theme until its slider is moved. -->
@@ -2144,7 +2144,7 @@
           <section id="termcustom-pane-godmode" class="termcustom__pane" data-cat="godmode" role="tabpanel" aria-labelledby="termcustom-tab-godmode">
             <h2 class="termcustom__pane-title" data-i18n="termcustom.cat.godmode">God Mode</h2>
             <div class="termcustom__group">
-              <!-- God Mode v2 workers (ORCHESTRATOR_PLAN.md slice 4, modules/orchestrasettings.js).
+              <!-- God Mode v2 workers (DONE_ORCHESTRATOR_PLAN.md slice 4, modules/orchestrasettings.js).
                    Frozen per run when it starts. bypassPermissions is the default by
                    Mati's choice: a worktree contains a worker's git damage, not its
                    filesystem damage - the hint says so. -->
@@ -2502,7 +2502,7 @@
     </div>
   </div>
 
-  <!-- reference/MCP_DEBUGGER_PLAN.md safe half: the JSON-RPC Inspector's call detail.
+  <!-- docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md safe half: the JSON-RPC Inspector's call detail.
        Same overlay skeleton as #stimeline-modal above - opening/closing and
        filling it in lives in modules/mcp.js. -->
   <div id="mcpcall-modal" class="stimeline-modal" hidden>
@@ -2529,7 +2529,7 @@
   <!-- i18n (PL/EN) - must load before renderer.js -->
   <script src="i18n.js"></script>
   <!-- LunaCore renderer logic. type="module" - renderer.js is now just the
-       entry point, the actual code lives in modules/*.js (see reference/ENGINEERING_NOTES.md, A1).
+       entry point, the actual code lives in modules/*.js (see docs/reference/ENGINEERING_NOTES.md, A1).
        A module is deferred, so it runs after DOM parsing and after the
        classic <script> tags above - xterm and window.i18n are already ready. -->
   <script type="module" src="renderer.js"></script>

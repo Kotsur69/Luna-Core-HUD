@@ -213,7 +213,7 @@ const { GpuSampler } = require('./gpu');
 // than being stamped onto another watcher's tick like GpuSampler is.
 const { MediaSampler, sendTransportCommand, getVolume, setVolume, toggleMute } = require('./media');
 
-// Clipboard history + pin-board todos + device panel (LUNACORE_HUD_WIDGET_PLAN.md).
+// Clipboard history + pin-board todos + device panel (DONE_LUNACORE_HUD_WIDGET_PLAN.md).
 const {
   ClipboardWatcher,
   readHistory,
@@ -237,7 +237,7 @@ let configSync = null;
 // The notification hub (src/hubipc.js): set in registerIpc(), its done
 // provider joins the config sync.
 let hubApi = null;
-// Task intake (ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
+// Task intake (DONE_ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
 const {
@@ -251,7 +251,7 @@ const {
   headFailureReason,
   gitDetail,
 } = require('./worktrees');
-// God Mode v2 (ORCHESTRATOR_PLAN.md slices 3-5): headless planner, plan board,
+// God Mode v2 (DONE_ORCHESTRATOR_PLAN.md slices 3-5): headless planner, plan board,
 // supervisor + per-worker finish (verify, push, tick to-dos), integrator.
 const { createOrchestra, BRIEF_DIR } = require('./orchestra');
 const orchestraStore = require('./orchestraStore');
@@ -647,7 +647,7 @@ function createWindow() {
     // covers the material completely and this costs nothing - which is why the
     // window needs no toggle, no IPC and no recreation when the theme changes.
     // Non-Win11 ignores backgroundMaterial; the transparent backgroundColor is
-    // covered by index.html's pre-CSS paint. See reference/TRANSPARENCY_PLAN.md.
+    // covered by index.html's pre-CSS paint. See docs/tbc_docs/TRANSPARENCY_PLAN.md.
     backgroundColor: '#00000000',
     // Which material is Mati's choice of how smeared the backdrop is: acrylic
     // blurs live windows behind, mica only tints the wallpaper, tabbed is a
@@ -661,7 +661,7 @@ function createWindow() {
     // with --alpha-ground: 0% is the whole app going white mid-session. Adding
     // transparent: true was tried on 2026-09-13 and did NOT hold it either, so
     // the only honest position is that this build has no stable sharp
-    // see-through. See reference/TRANSPARENCY_PLAN.md.
+    // see-through. See docs/tbc_docs/TRANSPARENCY_PLAN.md.
     backgroundMaterial: readUiPrefs().windowMaterial,
     title: 'LunaCore',
     webPreferences: {
@@ -1502,7 +1502,7 @@ function spawnInto(session, profile, launch = null) {
       }
     }
 
-    // God Mode (GODMODE_PLAN.md): same generic matcher as the approval-prompt
+    // God Mode: same generic matcher as the approval-prompt
     // scan above, two sibling config categories instead of a new detection
     // mechanism - and, like that scan, fired once per APPEARANCE rather than
     // once per matching chunk.
@@ -1604,7 +1604,7 @@ function spawnInto(session, profile, launch = null) {
         statusBoard.activity(session.id);
         send('metrics:tools', { sessionId: session.id, events });
       },
-      // reference/MCP_DEBUGGER_PLAN.md safe half: MCP call start/end lifecycle, same
+      // docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md safe half: MCP call start/end lifecycle, same
       // shape/channel-pattern as onTools above.
       onMcp: (events) => send('metrics:mcp', { sessionId: session.id, events }),
       // §4.3/§11.1: "All done" voice line, gated on turn duration in checkTurnEnd.
@@ -2059,7 +2059,7 @@ function checkUsageThresholds(usage) {
   if (resolved) soundManager.play(resolved.path);
 }
 
-// ---- Passive Observer: long task end (SOUNDS_IMPLEMENTATION_PLAN.md §3) --
+// ---- Passive Observer: long task end (DONE_SOUNDS_IMPLEMENTATION_PLAN.md §3) --
 
 /** Plays voice.done, but only when the completed turn ran long enough (§3). */
 function checkTurnEnd({ startedAt, endedAt, text }) {
@@ -3829,7 +3829,7 @@ app.whenReady().then(() => {
   });
   narrationManager.setEnabled(readUiPrefs().soundEnabled !== false);
   narrationManager.start();
-  // Startup greeting (SOUNDS_IMPLEMENTATION_PLAN.md §3) - delayed
+  // Startup greeting (DONE_SOUNDS_IMPLEMENTATION_PLAN.md §3) - delayed
   // so it fires after the mpv IPC socket is actually up (see
   // STARTUP_GREETING_DELAY_MS above); play() is a silent no-op if mpv never
   // came up or the user disabled sound in the meantime.

@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 integrator (ORCHESTRATOR_PLAN.md slice 5)
+// LunaCore - God Mode v2 integrator (DONE_ORCHESTRATOR_PLAN.md slice 5)
 // ----------------------------------------------------------------------------
 // Runs once a run settles, on the packages whose branches are pushed. Mode
 // is picked per run (Settings default, board selector):

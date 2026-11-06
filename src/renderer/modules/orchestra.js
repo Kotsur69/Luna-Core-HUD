@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 plan review + run board (ORCHESTRATOR_PLAN.md 3 + 4)
+// LunaCore - God Mode v2 plan review + run board (DONE_ORCHESTRATOR_PLAN.md 3 + 4)
 // ----------------------------------------------------------------------------
 // The DOM half of src/orchestra.js. "Plan packages" in the to-do widget opens
 // #orchestra (static markup in index.html, .palette overlay CSS like #ask):

@@ -2,7 +2,9 @@
 
 **Status: shipped 2026-08-26** as sample-based keystroke sounds (see
 "Resolved 2026-08-26" below). The v2 ideas this plan mentions (agent-output
-texture, LED/scanline sync) were dropped 2026-10-06.
+texture, LED/scanline sync) were dropped 2026-10-06. The "works once then goes silent" note in step 3
+is history: the mpv keystroke path it describes was removed (`45161b0`)
+and keystrokes play through Web Audio only.
 
 ## Goal
 
@@ -55,7 +57,7 @@ tight/fast as typing speeds up. From `CONCEPT_TYPING_SYNTH.md`.
   way (`els.*` lookup, `change` listener, `window.lunacore.setUiPrefs`).
 - The "pure function tested, OS/DOM wrapper manual-verified" split
   `src/sounds.js`'s `pickSoundEntry()` already establishes
-  (`reference/SOUNDS_IMPLEMENTATION_PLAN.md` §6) — the WPM→sound mapping
+  (`docs/done_docs/DONE_SOUNDS_IMPLEMENTATION_PLAN.md` §6) — the WPM→sound mapping
   is pure and tested; the actual `AudioContext` graph is not.
 
 ## New pieces
@@ -108,7 +110,7 @@ bigger. This closes what §1 used to call the "open question."
 
 **Paused 2026-08-19.** Root-caused as far as "not the `onData` gate,
 somewhere in the IPC→main→soundManager→mpv chain" and then set aside in
-favor of the Auto-proceed feature (`AUTOPROCEED_PLAN.md`), which Mati
+favor of the Auto-proceed feature (`DONE_AUTOPROCEED_PLAN.md`), which Mati
 judged higher-value: connection drops during real work cost him time
 directly, a silent keystroke click does not. Pick up at §1 above.
 

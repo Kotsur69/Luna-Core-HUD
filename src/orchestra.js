@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 run controller (ORCHESTRATOR_PLAN.md slices 3 + 4)
+// LunaCore - God Mode v2 run controller (DONE_ORCHESTRATOR_PLAN.md slices 3 + 4)
 // ----------------------------------------------------------------------------
 // One plan at a time lives here, in the main process: the renderer only ever
 // sees a view of it and refers to it by id, so it can approve, edit a prompt,

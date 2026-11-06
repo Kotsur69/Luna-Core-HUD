@@ -8,7 +8,7 @@
 // detection, no new file I/O.
 //
 // ZERO EXTRA TOKENS: this is plain regex/string stripping, never a
-// "summarize this turn" model call - see SOUNDS_IMPLEMENTATION_PLAN.md
+// "summarize this turn" model call - see DONE_SOUNDS_IMPLEMENTATION_PLAN.md
 // §1. Whatever comes out is a pure substring of what Claude already
 // wrote; no rephrasing, no LLM-in-the-loop.
 // ============================================================================

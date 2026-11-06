@@ -5,8 +5,8 @@
 // same as sounds.js/theme.js/rates.js/cheatsheets.js). Holds three sibling
 // pattern lists, all literal substrings matched against ANSI-stripped stdout
 // via observer.js's generic detectApprovalPrompt(raw, patterns):
-//   - approvalPrompt   (SOUNDS_IMPLEMENTATION_PLAN.md §3) - the y/n TUI prompt.
-//   - usageLimit       (GODMODE_PLAN.md §"New pieces") - the wall God Mode has
+//   - approvalPrompt   (DONE_SOUNDS_IMPLEMENTATION_PLAN.md §3) - the y/n TUI prompt.
+//   - usageLimit       (God Mode) - the wall God Mode has
 //     to notice and wait out on its own.
 //
 // connectionError is still loaded, so a hand-edited config never crashes, but

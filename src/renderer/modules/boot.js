@@ -35,7 +35,7 @@ const bootLogEl = document.getElementById('boot-log');
 
 // A2/2026-08-13: boot-toggle / boot-status live inside the #termcustom
 // Settings overlay's static markup (the "Sekwencja startowa" switch-field,
-// moved there from the `appearance` widget - see TERMINAL_CUSTOMIZER_PLAN.md),
+// moved there from the `appearance` widget - see DONE_TERMINAL_CUSTOMIZER_PLAN.md),
 // so they don't exist at import time - looked up in mountBoot() instead.
 // Elements of the current mount, or null before that ever runs.
 let bootEls = null;

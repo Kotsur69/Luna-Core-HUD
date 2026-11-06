@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 run report (ORCHESTRATOR_PLAN.md slice 5, idea #8)
+// LunaCore - God Mode v2 run report (DONE_ORCHESTRATOR_PLAN.md slice 5, idea #8)
 // ----------------------------------------------------------------------------
 // Pure text: the morning report (markdown, written to
 // <userDir>/runs/<plan>.md by main) and the note a package that did not make

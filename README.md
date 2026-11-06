@@ -961,7 +961,7 @@ and opts out of remounting — see §A2f). A `[data-slot]` placeholder is
 `display: contents`, so converted and unconverted blocks sat side by side
 without disturbing the flex layout during the migration. Conversion order and
 the reasoning behind the contract are in
-[`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md) §A2a–§A2f.
+[`docs/reference/ENGINEERING_NOTES.md`](docs/reference/ENGINEERING_NOTES.md) §A2a–§A2f.
 
 ---
 
@@ -993,8 +993,8 @@ the reasoning behind the contract are in
 | B5–B7 | Port filter toggle, copy-transcript-path, skill search box | ✅ done |
 | A2 | Widget contract + teardown probe — all 13 blocks converted: **right panel** (`ports`, `scratchpad`, `usage`, `skilltracker`, `context`), `autocompact`, left-panel list builders (`cheatsheets`, `prompts`, `skills`), `switchers`/`actions`/`appearance`, and `terminal` last | ✅ done |
 | + | PL/EN localization of `config/*.json`, not just the UI chrome | ✅ done |
-| + | Optional sound & voice feedback (mpv-based sfx cues + TTS voice lines, Appearance panel controls) — click/keystroke sfx, usage-threshold voice cues, task-complete, approval-prompt and startup-greeting triggers, plus offline-SAPI read-output-aloud | ✅ done (see [`SOUNDS_IMPLEMENTATION_PLAN.md`](reference/SOUNDS_IMPLEMENTATION_PLAN.md)) |
-| + | Active-Files Edit Heatmap — real `+`/`-` diff-stat counts per file, live-edit pulse, self-heal, deleted-file indicator | ✅ done (see [`ACTIVE_FILES_HEATMAP_PLAN.md`](reference/ACTIVE_FILES_HEATMAP_PLAN.md)) |
+| + | Optional sound & voice feedback (mpv-based sfx cues + TTS voice lines, Appearance panel controls) — click/keystroke sfx, usage-threshold voice cues, task-complete, approval-prompt and startup-greeting triggers, plus offline-SAPI read-output-aloud | ✅ done (see [`DONE_SOUNDS_IMPLEMENTATION_PLAN.md`](docs/done_docs/DONE_SOUNDS_IMPLEMENTATION_PLAN.md)) |
+| + | Active-Files Edit Heatmap — real `+`/`-` diff-stat counts per file, live-edit pulse, self-heal, deleted-file indicator | ✅ done (see [`DONE_ACTIVE_FILES_HEATMAP_PLAN.md`](docs/done_docs/DONE_ACTIVE_FILES_HEATMAP_PLAN.md)) |
 | + | Multi-repo project switching — "+" button, native folder picker, writes `projects.local.json` | ✅ done |
 | + | GPU usage row in the System widget (Windows, Task-Manager-style counters) | ✅ done |
 | + | Ctrl+B recommended libraries & tools directory — filterable catalog, validated id→URL resolution (shipped in `f989b36`/`c72cfef`; this README caught up in v0.12.0) | ✅ done |
@@ -1007,7 +1007,7 @@ the reasoning behind the contract are in
 | v2 | God Mode v2: task intake (Luna MCP + `/luna-plan`), worktree tabs, per-tab runs, headless planner + plan board | ✅ done (v0.14.0) |
 | MC | Mission Control (Ctrl+Shift+M): Gmail cleanup, Google Calendar API + quick add, GitHub / Claude-budget telemetry, Agent-Reach News with Haiku summaries (v0.14.0) | ✅ done |
 | MC2 | Weekly review + email, Morning brief, Claude % per project, focus time, X / Reddit + presets, goals, trackday weather, Life dashboard — see [`docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md`](docs/done_docs/DONE_MISSION_CONTROL_ROADMAP.md) | ✅ done (v0.17.0) |
-| v2 | God Mode v2 supervisor + integrator: DONE markers, verify + push per worker, Retry, kill switch, scheduled start, Sonnet→Opus escalation, file-overlap guard, PRs / merge, run report ([`ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md)) | ✅ done, live-run 2026-10-20 |
+| v2 | God Mode v2 supervisor + integrator: DONE markers, verify + push per worker, Retry, kill switch, scheduled start, Sonnet→Opus escalation, file-overlap guard, PRs / merge, run report ([`DONE_ORCHESTRATOR_PLAN.md`](docs/done_docs/DONE_ORCHESTRATOR_PLAN.md)) | ✅ done, live-run 2026-10-20 |
 | v2 | God Mode never blocks: self-healing dependency merge, integration skips bad packages, retry ladder, end-of-run self-check + fix-up worker, morning report, sleep at the usage limit with a wake task (v0.17.0) | ✅ done |
 
 That closes the whole approved shortlist and the first slice of the structural
@@ -1023,7 +1023,7 @@ blocks converted), A3 (test harness), A4 (dead-code cleanup) and A5 (async
 skill scan — `scanSkills()` no longer blocks the main process). What's next,
 the live checks still owed and the known issues are in
 [`FUTURE_PLAN.md`](FUTURE_PLAN.md); how each phase was built is in
-[`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md).
+[`docs/reference/ENGINEERING_NOTES.md`](docs/reference/ENGINEERING_NOTES.md).
 
 ### Tests
 
@@ -1455,7 +1455,7 @@ immediately.
 ## God Mode v2 — parallel workers in worktrees
 
 Status: released (v0.14.0, hardened in v0.17.0); first live run 2026-10-20. Design,
-decisions and status per slice: [`reference/ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md).
+decisions and status per slice: [`docs/done_docs/DONE_ORCHESTRATOR_PLAN.md`](docs/done_docs/DONE_ORCHESTRATOR_PLAN.md).
 
 **Getting tasks in.** Every LunaCore tab gets a small local MCP server
 ([`src/intake.js`](src/intake.js), loopback only, one token per tab) with
@@ -2160,7 +2160,7 @@ triggered today, debounced both ways (re-arms only once usage drops back under
 announcement). `welcome`/`needYou`/`done` have real generated audio waiting but
 nothing calls them yet — startup greeting, approval-prompt detection and
 task-complete detection are still open build-order steps; see
-[`SOUNDS_IMPLEMENTATION_PLAN.md`](reference/SOUNDS_IMPLEMENTATION_PLAN.md).
+[`DONE_SOUNDS_IMPLEMENTATION_PLAN.md`](docs/done_docs/DONE_SOUNDS_IMPLEMENTATION_PLAN.md).
 
 The five voice lines are real, generated via
 [Edge-TTS](https://github.com/rany2/edge-tts) (`en-US-AriaNeural`,

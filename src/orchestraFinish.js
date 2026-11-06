@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 per-worker finish (ORCHESTRATOR_PLAN.md slice 4, §4)
+// LunaCore - God Mode v2 per-worker finish (DONE_ORCHESTRATOR_PLAN.md slice 4, §4)
 // ----------------------------------------------------------------------------
 // Deterministic, run by LunaCore rather than trusted to the worker, after a
 // worker prints LUNA_DONE:

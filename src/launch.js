@@ -89,7 +89,7 @@ function isClaudeCommand(command) {
 }
 
 /**
- * Hands a God Mode worker tab its task (ORCHESTRATOR_PLAN.md slice 3): the
+ * Hands a God Mode worker tab its task (DONE_ORCHESTRATOR_PLAN.md slice 3): the
  * brief sits in a file, `--add-dir` lets the tab read it without a
  * permission prompt, and the first message - a positional argument - tells
  * Claude to read it. A positional prompt is delivered by the CLI itself, so

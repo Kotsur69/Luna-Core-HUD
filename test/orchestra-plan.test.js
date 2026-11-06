@@ -1,5 +1,5 @@
 // ============================================================================
-// God Mode v2 planner (ORCHESTRATOR_PLAN.md slice 3): argv, envelope parsing,
+// God Mode v2 planner (DONE_ORCHESTRATOR_PLAN.md slice 3): argv, envelope parsing,
 // plan validation (the trust boundary) and the pre-launch estimate.
 // ============================================================================
 

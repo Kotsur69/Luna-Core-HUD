@@ -587,7 +587,7 @@ const I18N_DICT = {
     'termcustom.cursorStyle.bar': 'Kreska',
     'termcustom.cursorBlink': 'Migajacy kursor',
     'termcustom.scrollback': 'Bufor przewijania (linie)',
-    // Per-layer surface transparency (reference/TRANSPARENCY_PLAN.md).
+    // Per-layer surface transparency (docs/tbc_docs/TRANSPARENCY_PLAN.md).
     'surfacealpha.title': 'Przezroczystosc',
     'surfacealpha.hint':
       'Gorne pole ustawia JAK CZYSTO widac to, co za oknem. Suwaki ustawiaja ILE tego widac - kazda warstwa lezy na poprzedniej, wiec nizsze wartosci na gorze daja wiecej glebi.',

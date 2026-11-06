@@ -18,7 +18,7 @@ const { normalizeEffort } = require('./efforts');
 const MAX_ITEMS = 100;
 const MAX_TEXT_CHARS = 1000;
 
-// Task-card fields (ORCHESTRATOR_PLAN.md "Task cards instead of one-line
+// Task-card fields (DONE_ORCHESTRATOR_PLAN.md "Task cards instead of one-line
 // to-dos"). All optional: an item without them is a plain pin-board line and
 // round-trips byte-identical to how it did before cards existed. Written
 // mostly by Claude through the intake MCP server (src/intake.js), so the caps

@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - task intake MCP server (ORCHESTRATOR_PLAN.md, build slice 0)
+// LunaCore - task intake MCP server (DONE_ORCHESTRATOR_PLAN.md, build slice 0)
 // ----------------------------------------------------------------------------
 // "Describe it to Claude, it lands in To-do." A tiny MCP server, hosted by the
 // main process, that lets the `claude` running in a LunaCore tab write task

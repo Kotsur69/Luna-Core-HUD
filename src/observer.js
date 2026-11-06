@@ -19,7 +19,7 @@ const os = require('os');
 const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('./models');
 // Price table for session cost estimation (B4). Reads only from config/, no network.
 const { loadRates, rateFor, estimateCost } = require('./rates');
-// Diff-stat extraction for the Active-Files Heatmap (ACTIVE_FILES_HEATMAP_PLAN.md).
+// Diff-stat extraction for the Active-Files Heatmap (DONE_ACTIVE_FILES_HEATMAP_PLAN.md).
 const { fileStatFromEntry, estimateTokens } = require('./filestat');
 
 // ---- 1. Tool detection from stdout -----------------------------------------
@@ -80,7 +80,7 @@ function detectTools(raw) {
  * Detects whether a raw stdout fragment contains an approval prompt (Claude
  * Code's y/n TUI). A heuristic over LITERAL substrings from
  * config/sound-triggers.json - see src/soundTriggers.js and
- * SOUNDS_IMPLEMENTATION_PLAN.md §3. Deliberately version-fragile: the TUI text
+ * DONE_SOUNDS_IMPLEMENTATION_PLAN.md §3. Deliberately version-fragile: the TUI text
  * can change between CLI releases, which is why it is data (config), not a
  * constant in code.
  *
@@ -414,7 +414,7 @@ function toolsFromLines(text) {
  * of its own; foldToolEvents() resolves it from the id that opened it.
  *
  * Also carries file identity + diff stats for the Active-Files Heatmap
- * (ACTIVE_FILES_HEATMAP_PLAN.md §3.2): a start event's `file` comes from the
+ * (DONE_ACTIVE_FILES_HEATMAP_PLAN.md §3.2): a start event's `file` comes from the
  * tool's own `input.file_path` (the documented tool schema); an end event's
  * `added`/`removed` come from the entry's top-level `toolUseResult` (an
  * undocumented CLI artefact - see plan §12/R4), read via fileStatFromEntry()
@@ -494,7 +494,7 @@ function toolEventsFromLines(text) {
  * identity survives the same cross-chunk gap the tile already does - the
  * file path is the identical "the end doesn't repeat what the start said"
  * problem the tile has, so it belongs here rather than in a per-widget join
- * map in the renderer (ACTIVE_FILES_HEATMAP_PLAN.md §3.2). The diff stat
+ * map in the renderer (DONE_ACTIVE_FILES_HEATMAP_PLAN.md §3.2). The diff stat
  * itself (`added`/`removed`) is NOT joined through `open` - it travels on
  * the end event directly, straight from toolEventsFromLines().
  *
@@ -528,7 +528,7 @@ function foldToolEvents(open, events) {
   return out;
 }
 
-// ---- MCP call lifecycle (reference/MCP_DEBUGGER_PLAN.md, safe half: no interception,
+// ---- MCP call lifecycle (docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md, safe half: no interception,
 // no config writes - just the same transcript tailing every other Passive
 // Observer here already does) -------------------------------------------------
 
@@ -621,7 +621,7 @@ function foldMcpEvents(open, events) {
   return out;
 }
 
-// ---- 3. Task-complete detection (turn start/end, SOUNDS_IMPLEMENTATION_PLAN.md §3) --
+// ---- 3. Task-complete detection (turn start/end, DONE_SOUNDS_IMPLEMENTATION_PLAN.md §3) --
 
 /**
  * True for the synthetic entry Claude Code writes when a request dies
@@ -981,7 +981,7 @@ class TranscriptWatcher {
     // B8: tools currently in flight, id -> tile. Spans ticks by design - a tool
     // routinely starts in one appended chunk and finishes in a later one.
     this.openTools = new Map();
-    // Optional: called with MCP call start/end events (reference/MCP_DEBUGGER_PLAN.md,
+    // Optional: called with MCP call start/end events (docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md,
     // safe half) - same shape/reasoning as onTools, for mcp__ calls specifically.
     this.onMcp = typeof opts.onMcp === 'function' ? opts.onMcp : null;
     this.openMcp = new Map();

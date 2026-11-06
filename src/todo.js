@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - pin-board todo list (LUNACORE_HUD_WIDGET_PLAN.md §4)
+// LunaCore - pin-board todo list (DONE_LUNACORE_HUD_WIDGET_PLAN.md §4)
 // ----------------------------------------------------------------------------
 // Per-project task tracking, persisted to config/todo.local.json (gitignored
 // by the config/*.local.* pattern). One file, keyed by projectId, so a list

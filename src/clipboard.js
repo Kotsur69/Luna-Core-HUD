@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - clipboard history (LUNACORE_HUD_WIDGET_PLAN.md §2)
+// LunaCore - clipboard history (DONE_LUNACORE_HUD_WIDGET_PLAN.md §2)
 // ----------------------------------------------------------------------------
 // Keeps the last MAX_ENTRIES text clips in config/clipboard.local.json so a
 // snippet copied ten minutes ago can still be injected into the session.

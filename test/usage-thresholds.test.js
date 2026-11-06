@@ -1,5 +1,5 @@
 // nextUsageAnnounced() - pure decision behind the 50%/80% voice announcements
-// (SOUNDS_IMPLEMENTATION_PLAN.md §3). main.js does the actual
+// (DONE_SOUNDS_IMPLEMENTATION_PLAN.md §3). main.js does the actual
 // soundManager.play(); this only tests the state machine.
 
 'use strict';

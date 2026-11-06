@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Settings overlay (Ctrl+L)
 // ----------------------------------------------------------------------------
-// TERMINAL_CUSTOMIZER_PLAN.md. Mirrors palette.js's shape exactly - the only
+// DONE_TERMINAL_CUSTOMIZER_PLAN.md. Mirrors palette.js's shape exactly - the only
 // other standalone (non-widget-registry) overlay in this codebase: markup is
 // static in index.html (not a <template>), so elements are queried once at
 // module load time, and Escape/backdrop-click/global-keybind all follow the

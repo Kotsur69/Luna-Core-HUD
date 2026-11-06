@@ -11,7 +11,7 @@
 // window.i18n come from classic <script> tags that execute earlier.
 //
 // The renderer reaches the main process ONLY through window.lunacore - the
-// contextBridge in preload.js. See docs in reference/ENGINEERING_NOTES.md (A1).
+// contextBridge in preload.js. See docs in docs/reference/ENGINEERING_NOTES.md (A1).
 // ============================================================================
 
 'use strict';

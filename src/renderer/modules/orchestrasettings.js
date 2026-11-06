@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 worker settings (ORCHESTRATOR_PLAN.md slice 4)
+// LunaCore - God Mode v2 worker settings (DONE_ORCHESTRATOR_PLAN.md slice 4)
 // ----------------------------------------------------------------------------
 // Two selects in Settings (Ctrl+L): which model every worker runs on (Opus by
 // default, or the planner's per-package pick) and its permission mode

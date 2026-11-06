@@ -214,7 +214,7 @@
   /* A theme publishes OPAQUE colour and knows nothing about transparency; this
      block decides how much of it actually gets painted. That split is the whole
      reason config/themes.json needs no edit to support a see-through HUD - see
-     reference/TRANSPARENCY_PLAN.md.
+     docs/tbc_docs/TRANSPARENCY_PLAN.md.
 
      --surface-alpha is the headline knob and the DEFAULT for the four layer
      tokens under it. At 100% every color-mix below resolves to exactly the
@@ -237,7 +237,7 @@
        --alpha-term    the terminal's ground.
 
      Borders that use --edge stay opaque on purpose; only backgrounds are
-     alpha'd. See reference/TRANSPARENCY_PLAN.md. */
+     alpha'd. See docs/tbc_docs/TRANSPARENCY_PLAN.md. */
   --surface-alpha: 100%;
   --alpha-ground: var(--surface-alpha);
   --alpha-edge:   var(--surface-alpha);
@@ -1116,7 +1116,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .switch-field.is-stalled .switch-field__status { color: var(--bad); }
 
 /* Sits right under the to-do list's clear-done button, not the Actions panel
-   - it is "run THIS list," not a global toggle (GODMODE_PLAN.md §UI). */
+   - it is "run THIS list," not a global toggle (God Mode v1, removed in 5283848). */
 
 .switch { position: relative; flex: none; width: 38px; height: 22px; }
 .switch__input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
@@ -1351,7 +1351,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 /* One pane per session; the rest stay mounted in the background but hidden,
    so xterm keeps their scrollback without re-rendering them. */
-/* TERMINAL_CUSTOMIZER_PLAN.md §2/§4: pure CSS, no xterm involvement - the
+/* DONE_TERMINAL_CUSTOMIZER_PLAN.md §2/§4: pure CSS, no xterm involvement - the
    value is a plain px length, set/removed by terminals.js's
    applyTerminalAppearance(). Defaults to 0px (no blur) via the var() fallback
    so a launch before that ever runs looks exactly as before this knob existed. */
@@ -1656,7 +1656,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   }
 }
 
-/* ---- Active files (ACTIVE_FILES_HEATMAP_PLAN.md) ---------------------------
+/* ---- Active files (DONE_ACTIVE_FILES_HEATMAP_PLAN.md) ---------------------------
    Glow is EXCLUSIVE to .is-live (Mati, 2026-08-13 manual test: an always-on
    magnitude glow read as "still lit" long after the edit finished, even with
    .is-live correctly off). A settled row is visually flat - its +/- numbers
@@ -2258,7 +2258,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .git-fetch:disabled { cursor: default; opacity: 0.5; }
 
-/* ---- reference/MCP_DEBUGGER_PLAN.md safe half: live flow + JSON-RPC Inspector ----
+/* ---- docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md safe half: live flow + JSON-RPC Inspector ----
    Glow is exclusive to --live, same rule .afile.is-live already established
    (2026-08-13 manual test: an always-on glow reads as "still lit" long after
    the call finished) - reuses that rule's afile-pulse keyframe rather than
@@ -3009,7 +3009,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 /* ---- Terminal customization (Ctrl+L) ------------------------------------
    Same overlay as the palette (fixed + backdrop + centered modal), but the
    body is a vertical list of form fields instead of a JS-built results list -
-   hence its own class instead of .palette__list. TERMINAL_CUSTOMIZER_PLAN.md §3.
+   hence its own class instead of .palette__list. DONE_TERMINAL_CUSTOMIZER_PLAN.md §3.
 
    2026-10-22: rebuilt from a narrow 420px column (read as a phone view on a
    desktop HUD) into a large dialog - category rail on the left, the selected
@@ -3811,7 +3811,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   margin: 0 var(--space-8) var(--space-7);
 }
 
-/* ---- reference/MCP_DEBUGGER_PLAN.md safe half: JSON-RPC Inspector call modal -----
+/* ---- docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md safe half: JSON-RPC Inspector call modal -----
    Reuses .stimeline-modal's overlay/backdrop/panel/bar/closebtn/text shape
    directly (same fixed+backdrop+centered-modal precedent .gitquick's reuse
    of .palette__modal already set) - only what differs (title, badge, two
@@ -3855,7 +3855,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   /* Deliberately opaque, unlike every other full-window surface: boot runs
      before the user can react to anything, and a see-through boot sequence over
      an arbitrary desktop is noise during the one moment the HUD is theatrical.
-     See reference/TRANSPARENCY_PLAN.md. */
+     See docs/tbc_docs/TRANSPARENCY_PLAN.md. */
   position: fixed;
   inset: 0;
   z-index: 200; /* above the palette (100) - this is the first thing on screen */
@@ -4013,7 +4013,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 
 /* ----------------------------------------------------------------------------
    Clipboard history, pin-board todos, device panel
-   (LUNACORE_HUD_WIDGET_PLAN.md). Rows reuse .ports-list's shape - including
+   (DONE_LUNACORE_HUD_WIDGET_PLAN.md). Rows reuse .ports-list's shape - including
    `flex: none`, without which a flex child collapses instead of scrolling,
    which this stylesheet has now been bitten by three times (.skill-entry,
    .prompt-row, .port-item).

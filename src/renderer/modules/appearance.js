@@ -17,7 +17,7 @@
 // OUT of this widget into termcustom.js's Settings overlay (Ctrl+L) - Mati
 // wanted the left panel decluttered down to theme/layout/language. This
 // module no longer imports sound.js's setKeystrokeVariant or boot.js at all.
-// See TERMINAL_CUSTOMIZER_PLAN.md.
+// See DONE_TERMINAL_CUSTOMIZER_PLAN.md.
 // ============================================================================
 
 'use strict';
@@ -220,7 +220,7 @@ export async function initAppearance() {
   // Before any tab exists (initSessions() runs after initAppearance() in
   // renderer.js), so this only updates terminals.js's currentTermAppearance -
   // ensureTerm() then picks it up for the very first tab, same as
-  // currentTermTheme already does for the theme (TERMINAL_CUSTOMIZER_PLAN.md
+  // currentTermTheme already does for the theme (DONE_TERMINAL_CUSTOMIZER_PLAN.md
   // §4/§5). A fallback `prefs` with no term* keys is a safe no-op here.
   applyTerminalAppearance(prefs);
 

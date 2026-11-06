@@ -1,8 +1,8 @@
 # LunaCore — Auto-proceed (connection-error auto-recovery)
 
 **Status: shipped 2026-08-19**, hardened 2026-09-11/14 (drops are now read
-from the transcript, not stdout). Still owed: a check against a real dropped
-connection in the wild. The God Mode v1 runner (`godmode.js`) that this
+from the transcript, not stdout). Checked against a real dropped connection by Mati
+2026-11-06: it works. The God Mode v1 runner (`godmode.js`) that this
 plan defers to below was removed in v0.20.0 (`5283848`). Auto-proceed no
 longer checks for v1 runs. The rest of the design is unchanged.
 

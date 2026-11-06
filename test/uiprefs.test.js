@@ -1,5 +1,5 @@
 // clampTermPrefs() - the pure validator behind the Terminal Appearance
-// Customizer (TERMINAL_CUSTOMIZER_PLAN.md). readUiPrefs()/writeUiPrefs()
+// Customizer (DONE_TERMINAL_CUSTOMIZER_PLAN.md). readUiPrefs()/writeUiPrefs()
 // themselves are thin fs wrappers (same category as soundManager.js/tts.js)
 // and are not covered here - only the pure sanitize-a-raw-object boundary is.
 

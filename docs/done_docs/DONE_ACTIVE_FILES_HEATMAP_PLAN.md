@@ -1,6 +1,6 @@
 # Active-Files Edit Heatmap (Reference)
 
-**Status: shipped, done.** This used to be a 791-line build plan (decision
+**Status: shipped, done; diff modal hand-checked by Mati 2026-11-06.** This used to be a 791-line build plan (decision
 table, transcript research, build order, a 14-item risk log, and a manual
 test checklist). That's all history now — the code is the source of truth.
 This is the compact version: what the feature does, where the data comes
@@ -144,18 +144,18 @@ semantics.
   (clickable rows + modal), `src/renderer/i18n.js` (`activefiles.diff.*`,
   PL + EN).
 
-### Manual checklist (DOM / modal — same style as §5)
+### Manual checklist (DOM / modal — same style as §5) - all passed, Mati 2026-11-06
 
-- [ ] Click a **CHANGED** row → modal opens with the accumulated diff, add
+- [x] Click a **CHANGED** row → modal opens with the accumulated diff, add
       lines green, del lines red, `@@` / `diff --git` headers dim, context
       plain.
-- [ ] Click a **DELETED** row → modal shows the full removal diff.
-- [ ] Click a **pure read-only** row → nothing happens (no cursor, no modal).
-- [ ] Untracked file (created via Bash) → modal shows an all-`+` diff of the
+- [x] Click a **DELETED** row → modal shows the full removal diff.
+- [x] Click a **pure read-only** row → nothing happens (no cursor, no modal).
+- [x] Untracked file (created via Bash) → modal shows an all-`+` diff of the
       new content.
-- [ ] Non-git directory / repo with no commits → modal shows
+- [x] Non-git directory / repo with no commits → modal shows
       "No changes to show" / "Not a git repository", no crash.
-- [ ] **Esc**, the **×** button, and a **backdrop** click each close the modal.
-- [ ] A diff over ~20000 chars → the truncated hint shows under the `<pre>`.
-- [ ] PL / EN: title, empty string, not-a-repo string, truncated hint, close
+- [x] **Esc**, the **×** button, and a **backdrop** click each close the modal.
+- [x] A diff over ~20000 chars → the truncated hint shows under the `<pre>`.
+- [x] PL / EN: title, empty string, not-a-repo string, truncated hint, close
       tooltip all switch with the language.

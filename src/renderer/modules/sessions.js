@@ -216,7 +216,7 @@ window.lunacore.onTools(({ sessionId, events, tiles }) => {
   if (tiles && active) lightTiles(tiles);
 });
 
-// reference/MCP_DEBUGGER_PLAN.md safe half: MCP call start/end lifecycle. Same
+// docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md safe half: MCP call start/end lifecycle. Same
 // active/background split as onTools above.
 window.lunacore.onMcp(({ sessionId, events }) => {
   if (!Array.isArray(events)) return;

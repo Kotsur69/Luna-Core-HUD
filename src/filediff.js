@@ -1,6 +1,6 @@
 // ============================================================================
 // LunaCore - unified-diff line classifier for the Active-Files Heatmap's
-// accumulated diff viewer (reference/ACTIVE_FILES_HEATMAP_PLAN.md
+// accumulated diff viewer (docs/done_docs/DONE_ACTIVE_FILES_HEATMAP_PLAN.md
 // "§ Accumulated diff viewer").
 // ----------------------------------------------------------------------------
 // PASSIVE OBSERVER, same class as activefiles.js / sessiontimeline.js: the

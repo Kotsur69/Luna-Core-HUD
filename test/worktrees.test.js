@@ -1,5 +1,5 @@
 // Tests for src/worktrees.js - the "New tab in worktree" plumbing
-// (ORCHESTRATOR_PLAN.md slice 1). Pure helpers first, then real temp git
+// (DONE_ORCHESTRATOR_PLAN.md slice 1). Pure helpers first, then real temp git
 // repos for addWorktree, since the whole point is what git actually does.
 
 'use strict';

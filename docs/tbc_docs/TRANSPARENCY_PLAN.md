@@ -3,13 +3,19 @@
 **Status: shipped in `v0.11.0`** as the `glass` theme family; tuned further
 2026-09-14 (`d6b2417`). Kept as the design record.
 
+> **🟡 Resume here (2026-11-06):** shipped and in daily use; only eyes-on
+> checks are left: Phase 0 check 2 (acrylic fallback when the window is
+> unfocused), check 3 (native titlebar, rounded corners and snap layouts
+> with `transparent: true`) and check 4 (live toggle via Ctrl+Alt+B). When
+> they pass, `git mv` this doc to `docs/done_docs/DONE_TRANSPARENCY_PLAN.md`.
+
 Plan doc for the project Mati asked for on 2026-09-11: *"the whole transparent
 thing that we previously planned … but I want to leave the current appearance
 themes bcs I love them."*
 
 Branch: `feat/window-transparency` → one `v0.11.0` release at the end.
 
-**Supersedes** [`TERMINAL_CUSTOMIZER_PLAN.md`](TERMINAL_CUSTOMIZER_PLAN.md) §4
+**Supersedes** [`DONE_TERMINAL_CUSTOMIZER_PLAN.md`](../done_docs/DONE_TERMINAL_CUSTOMIZER_PLAN.md) §4
 ("Explicitly deferred, not built").
 
 ---
@@ -253,7 +259,7 @@ This is where the real time goes. Phases 1–3 are mechanical; this is not.
   bulk of the wall-clock time in the whole project.
 - PL/EN labels for the axis in `renderer/i18n.js`, under the existing
   `termcustom.*` key prefix (`:152+`).
-- Docs: flip `TERMINAL_CUSTOMIZER_PLAN.md` §4 from "deferred" to shipped and
+- Docs: flip `DONE_TERMINAL_CUSTOMIZER_PLAN.md` §4 from "deferred" to shipped and
   point here.
 
 ---

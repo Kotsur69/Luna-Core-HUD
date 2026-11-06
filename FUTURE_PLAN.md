@@ -2,7 +2,7 @@
 
 Short and current on purpose. What LunaCore *is* lives in `README.md`; how it
 got here (widget contract, layout engine, packaging, the lessons each phase
-cost) lives in [`reference/ENGINEERING_NOTES.md`](reference/ENGINEERING_NOTES.md).
+cost) lives in [`docs/reference/ENGINEERING_NOTES.md`](docs/reference/ENGINEERING_NOTES.md).
 Cleaned up 2026-10-06: ideas Mati did not keep were deleted, not parked.
 
 **Doc naming:** a plan whose feature is fully built and live-checked is

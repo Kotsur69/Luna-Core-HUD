@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Active-Files Edit Heatmap (ACTIVE_FILES_HEATMAP_PLAN.md)
+// LunaCore - Active-Files Edit Heatmap (DONE_ACTIVE_FILES_HEATMAP_PLAN.md)
 // ----------------------------------------------------------------------------
 // PASSIVE OBSERVER, the narrowest kind: rides the Skill Tracker's existing
 // tool_use/tool_result lifecycle (observer.js's toolEventsFromLines() /

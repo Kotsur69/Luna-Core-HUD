@@ -576,7 +576,7 @@ test('foldToolEvents handles a tool that starts and ends inside one tick', () =>
   assert.equal(open.size, 0);
 });
 
-// ---- file identity + diff stats (Active-Files Heatmap, ACTIVE_FILES_HEATMAP_PLAN.md §3.2) --
+// ---- file identity + diff stats (Active-Files Heatmap, DONE_ACTIVE_FILES_HEATMAP_PLAN.md §3.2) --
 
 test('toolEventsFromLines carries input.file_path onto the start event', () => {
   const [start] = toolEventsFromLines(useLine(['t0', 'Edit', { file_path: 'C:\\repo\\a.js' }]));
@@ -638,7 +638,7 @@ test('foldToolEvents drops an orphan end, stat and all', () => {
   assert.deepEqual(out, []);
 });
 
-// ---- mcpEventsFromLines / foldMcpEvents (reference/MCP_DEBUGGER_PLAN.md safe half) --
+// ---- mcpEventsFromLines / foldMcpEvents (docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md safe half) --
 
 /** User line closing one MCP tool call with a specific result payload and
  *  error flag - resLine() above always writes content:'ok', ok:true. */
@@ -727,7 +727,7 @@ test('foldMcpEvents drops a duplicate start (re-read of the same appended line)'
   assert.equal(foldMcpEvents(open, starts).length, 0);
 });
 
-// ---- hasTurnEnd / hasUserPromptStart / isLongTurn (SOUNDS_IMPLEMENTATION_PLAN.md §3) --
+// ---- hasTurnEnd / hasUserPromptStart / isLongTurn (DONE_SOUNDS_IMPLEMENTATION_PLAN.md §3) --
 
 const endLine = (reason) =>
   JSON.stringify({ timestamp: TS, message: { role: 'assistant', stop_reason: reason } });

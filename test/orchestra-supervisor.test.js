@@ -1,5 +1,5 @@
 // ============================================================================
-// God Mode v2 supervisor (ORCHESTRATOR_PLAN.md slice 4): the pure rules in
+// God Mode v2 supervisor (DONE_ORCHESTRATOR_PLAN.md slice 4): the pure rules in
 // orchestraSupervisor.js, then the run controller driving them with every
 // side effect (git, tabs, timers, disk) faked.
 // ============================================================================

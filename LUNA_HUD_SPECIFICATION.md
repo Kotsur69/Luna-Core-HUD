@@ -15,9 +15,12 @@
 
 - **`README.md`** — current features, exact IPC data flow, tech stack, install/build.
 - **`FUTURE_PLAN.md`** — the short roadmap: next steps, owed live checks, known issues, kept ideas.
-- **`reference/`** — one design/build record per shipped feature (God Mode v2 in
-  `ORCHESTRATOR_PLAN.md`, sounds, heatmap, transparency, ...) plus
-  `ENGINEERING_NOTES.md`, the widget-contract and phase history code comments cite.
+- **`docs/`** — one design/build record per feature, sorted by state:
+  `docs/done_docs/` (finished, `DONE_` prefix: God Mode v2 in
+  `DONE_ORCHESTRATOR_PLAN.md`, sounds, heatmap, ...), `docs/tbc_docs/` (built or
+  partly built, checks owed), `docs/untouched_docs/` (planned, not started), plus
+  `docs/reference/` with `ENGINEERING_NOTES.md`, the widget-contract and phase
+  history code comments cite.
 - **This document** — §1–4 are a short orientation, §5 is the reusable recipe for
   adding a widget, §6 is the record of module ideas and what became of them.
 
@@ -54,7 +57,7 @@ on its own to call a model still fails the spec by construction.
 | Terminal core | [`@lydell/node-pty`](https://www.npmjs.com/package/@lydell/node-pty) + [`@xterm/xterm`](https://www.npmjs.com/package/@xterm/xterm) + `@xterm/addon-fit` | N-API prebuilt binaries — survives Electron's Node-ABI jumps without a rebuild |
 | Frontend | Vanilla HTML / CSS / JS | CSS custom-property theming (32 themes incl. the `glass` family), PL/EN i18n, no framework, no bundler |
 | Audio (optional) | [`mpv`](https://mpv.io/) | Persistent `--idle` process over a JSON IPC pipe; not bundled, every sound feature degrades silently without it |
-| Voice synthesis (optional) | Windows SAPI via `System.Speech` | Fully offline — see `reference/SOUNDS_IMPLEMENTATION_PLAN.md` §2 |
+| Voice synthesis (optional) | Windows SAPI via `System.Speech` | Fully offline — see `docs/done_docs/DONE_SOUNDS_IMPLEMENTATION_PLAN.md` §2 |
 | Git / GitHub | `git` (worktrees, push), `gh` (God Mode PRs) | Run via `execFile`, never a shell; `gh` only needed for PR mode |
 
 ---
@@ -154,7 +157,7 @@ A repeatable recipe:
 5. **Add the renderer widget module.** New file in `src/renderer/modules/`,
    registered via `registry.js`'s `defineWidget()`. Repaint from module state on
    mount (a remount must reflect truth, not the template's authored defaults —
-   `reference/ENGINEERING_NOTES.md` §A2c).
+   `docs/reference/ENGINEERING_NOTES.md` §A2c).
 6. **i18n.** Every user-facing string gets a PL and EN entry in `i18n.js`.
 7. **Test the pure functions, not the OS wrappers.** Thin process/IPC wrappers
    (`soundManager.js`, `tts.js`) aren't tested; pure logic is.
@@ -171,11 +174,11 @@ stack. Kept as a record so an idea is not proposed twice.
 | Idea | Outcome |
 | :--- | :--- |
 | Session Timeline & Snapshot Scrubber | **Shipped** 2026-08-17; Markdown export 2026-08-27. |
-| Active-Files Edit Heatmap | **Shipped** 2026-08-13 — [`reference/ACTIVE_FILES_HEATMAP_PLAN.md`](reference/ACTIVE_FILES_HEATMAP_PLAN.md). |
+| Active-Files Edit Heatmap | **Shipped** 2026-08-13 — [`docs/done_docs/DONE_ACTIVE_FILES_HEATMAP_PLAN.md`](docs/done_docs/DONE_ACTIVE_FILES_HEATMAP_PLAN.md). |
 | Media Deck (now-playing + volume) | **Shipped** 2026-08-17 via Windows GSMTC + Core Audio (no Spotify API, no network). Voice ducking shipped later (`src/voiceduck.js`). |
-| Terminal Appearance Customizer | **Shipped** 2026-08-13, grew into the Ctrl+L Settings overlay — [`reference/TERMINAL_CUSTOMIZER_PLAN.md`](reference/TERMINAL_CUSTOMIZER_PLAN.md). |
+| Terminal Appearance Customizer | **Shipped** 2026-08-13, grew into the Ctrl+L Settings overlay — [`docs/done_docs/DONE_TERMINAL_CUSTOMIZER_PLAN.md`](docs/done_docs/DONE_TERMINAL_CUSTOMIZER_PLAN.md). |
 | Multi-Agent (Subagent) Stream Visualizer | **Kept** — on the roadmap, gated on a research spike (`FUTURE_PLAN.md`). |
-| Parallel multi-model task routing | **Became God Mode v2** — explicit, user-approved planning + worktree workers, not a silent router — [`reference/ORCHESTRATOR_PLAN.md`](reference/ORCHESTRATOR_PLAN.md). |
+| Parallel multi-model task routing | **Became God Mode v2** — explicit, user-approved planning + worktree workers, not a silent router — [`docs/done_docs/DONE_ORCHESTRATOR_PLAN.md`](docs/done_docs/DONE_ORCHESTRATOR_PLAN.md). |
 | Local-LLM Hybrid Router (auto-route) | **Dropped** — a background routing decision breaks the zero-token rule. Explicit local models exist instead (AI providers, LM Studio profiles). |
 
 ---
@@ -183,4 +186,4 @@ stack. Kept as a record so an idea is not proposed twice.
 ## 7. What this document deliberately does not contain
 
 No milestones, no schedule, no boilerplate. When an idea gets picked up it goes
-into `FUTURE_PLAN.md` and, once real, its own short plan doc under `reference/`.
+into `FUTURE_PLAN.md` and, once real, its own short plan doc under `docs/untouched_docs/`.

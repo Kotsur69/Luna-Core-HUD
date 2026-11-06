@@ -24,7 +24,7 @@ const TERM_OPTIONS = {
   // be changed later without executing it again"). Without this, the canvas
   // paints theme.background fully opaque no matter what alpha value it
   // carries - termBgOpacity silently doing nothing was this, not a wiring bug
-  // (TERMINAL_CUSTOMIZER_PLAN.md §2/§4, found 2026-08-13 from Mati's report).
+  // (DONE_TERMINAL_CUSTOMIZER_PLAN.md §2/§4, found 2026-08-13 from Mati's report).
   allowTransparency: true,
   // Starting palette (cyberpunk); a theme may override it via term.options.theme.
   theme: {
@@ -81,7 +81,7 @@ let activeSessionId = null;
 // otherwise they would be born in the default cyberpunk despite another theme.
 let currentTermTheme = null;
 
-// TERMINAL_CUSTOMIZER_PLAN.md §4: last customized appearance, mirroring
+// DONE_TERMINAL_CUSTOMIZER_PLAN.md §4: last customized appearance, mirroring
 // currentTermTheme's role - a newly created tab must be born with it instead
 // of the hardcoded TERM_OPTIONS defaults. Global, not per-tab (§0). Starts as
 // a copy of TERM_OPTIONS's own values so an app launch with no customization
@@ -268,7 +268,7 @@ export function ensureTerm(sessionId) {
     // in/out escapes (\x1b[I / \x1b[O) and other multi-byte sequences (e.g.
     // arrow keys send \x1b[A), neither of which is "a keystroke" for sound
     // purposes. Confirmed via direct instrumentation (reference/
-    // TYPING_SYNTH_PLAN.md, 2026-08-19): real typing always arrives as a
+    // DONE_TYPING_SYNTH_PLAN.md, 2026-08-19): real typing always arrives as a
     // clean length-1 chunk here - this gate was never the bug, so it stays.
     if (data.length === 1 && data >= ' ') userKeystroke();
     window.lunacore.write(data, sessionId);
@@ -473,7 +473,7 @@ export function ensureTerm(sessionId) {
   });
 
   // Clickable file:line links. registerLinkProvider() returns an IDisposable
-  // that MUST be torn down with the instance (reference/ENGINEERING_NOTES.md §A2a/§A2b) - see
+  // that MUST be torn down with the instance (docs/reference/ENGINEERING_NOTES.md §A2a/§A2b) - see
   // pruneTerms() below. Each tab resolves its own links against its own cwd,
   // so the closure captures THIS sessionId.
   const linkDisposer = mountFileLinks(instance, () => sessionId);

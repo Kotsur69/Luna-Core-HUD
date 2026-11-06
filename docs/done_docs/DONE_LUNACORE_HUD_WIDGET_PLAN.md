@@ -59,6 +59,5 @@ global first (matching the scratchpad's own scoping call), then promoted
 tab/project switch flushes any pending save under the project it was typed
 for first, so mid-edit text can't land on the wrong list.
 
-**Still owed:** manual `npm start` verification on a real desktop of
-whether `mic.ps1` resolves a capture endpoint on Mati's machine — the one
-thing no unit test can answer.
+**Verified by Mati 2026-11-06:** with a mic connected, the widget finds the
+capture endpoint and mute works on a real desktop.

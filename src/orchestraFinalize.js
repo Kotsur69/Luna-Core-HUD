@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 end of run (ORCHESTRATOR_PLAN.md slice 5, §5 + §6)
+// LunaCore - God Mode v2 end of run (DONE_ORCHESTRATOR_PLAN.md slice 5, §5 + §6)
 // ----------------------------------------------------------------------------
 // When a run settles (nothing running, nothing launchable) - or Mati presses
 // "Finish run" - this does, in order:

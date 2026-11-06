@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - Device panel (LUNACORE_HUD_WIDGET_PLAN.md §3, narrowed)
+// LunaCore - Device panel (DONE_LUNACORE_HUD_WIDGET_PLAN.md §3, narrowed)
 // ----------------------------------------------------------------------------
 // Wraps helpers/devices/mic.ps1 the same way media.js wraps its two scripts:
 // execFile with an ARGS ARRAY (never a shell string), a bounded timeout, and

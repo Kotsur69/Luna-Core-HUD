@@ -1,5 +1,5 @@
 // Tests for the pure diff-stat extraction functions behind the Active-Files
-// Heatmap (ACTIVE_FILES_HEATMAP_PLAN.md §3.1, §10). Zero I/O - works on objects
+// Heatmap (DONE_ACTIVE_FILES_HEATMAP_PLAN.md §3.1, §10). Zero I/O - works on objects
 // already parsed from JSONL, same as the rest of observer.js.
 
 'use strict';

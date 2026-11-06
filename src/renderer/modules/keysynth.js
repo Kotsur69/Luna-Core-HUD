@@ -15,7 +15,7 @@
 //
 // No IPC hop for any of this: decode + slice + playback all happen right here
 // in the renderer via native decodeAudioData(), same reasoning as the original
-// keysynth.js had for keystrokes - see reference/TYPING_SYNTH_PLAN.md.
+// keysynth.js had for keystrokes - see docs/done_docs/DONE_TYPING_SYNTH_PLAN.md.
 // ============================================================================
 
 'use strict';
@@ -266,7 +266,7 @@ function playSample(buffer, { rate, gain }) {
 
 /**
  * Call for one confirmed real keystroke (terminals.js's onData, gated to
- * length-1 chunks - reference/TYPING_SYNTH_PLAN.md settled that real typing
+ * length-1 chunks - docs/done_docs/DONE_TYPING_SYNTH_PLAN.md settled that real typing
  * is never anything else).
  *
  * Base pitch tracks typing speed (the interval since the last call, same

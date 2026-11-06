@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - git worktrees for tabs (ORCHESTRATOR_PLAN.md, build slice 1)
+// LunaCore - git worktrees for tabs (DONE_ORCHESTRATOR_PLAN.md, build slice 1)
 // ----------------------------------------------------------------------------
 // "New tab in worktree": one isolated checkout + branch per tab, so two
 // Claudes working on the same project never edit the same files on disk.

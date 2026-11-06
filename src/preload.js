@@ -50,7 +50,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   onTurnEnd: (callback) => {
     ipcRenderer.on('metrics:turnend', (_event, payload) => callback(payload));
   },
-  /** reference/MCP_DEBUGGER_PLAN.md: an MCP call start/end: ({ sessionId, events }). */
+  /** docs/done_docs/DONE_MCP_DEBUGGER_PLAN.md: an MCP call start/end: ({ sessionId, events }). */
   onMcp: (callback) => {
     ipcRenderer.on('metrics:mcp', (_event, payload) => callback(payload));
   },
@@ -599,7 +599,7 @@ contextBridge.exposeInMainWorld('lunacore', {
     ipcRenderer.on('godmode:signal', (_event, payload) => callback(payload));
   },
 
-  // --- God Mode v2 planner (reference/ORCHESTRATOR_PLAN.md slice 3) ---
+  // --- God Mode v2 planner (docs/done_docs/DONE_ORCHESTRATOR_PLAN.md slice 3) ---
   /** Plans the tab's project to-dos with a headless `claude -p`: Promise<{ok, plan?, error?}>. */
   // todoAts: the picker's ticked to-dos (`at` values); null = all open ones.
   // Passed as-is: main validates and fails closed on a bad shape.

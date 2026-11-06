@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - God Mode v2 planner (ORCHESTRATOR_PLAN.md, build slice 3)
+// LunaCore - God Mode v2 planner (DONE_ORCHESTRATOR_PLAN.md, build slice 3)
 // ----------------------------------------------------------------------------
 // Turns a project's open to-dos into work packages with ONE headless call:
 // `claude -p --output-format json --json-schema <PLAN_SCHEMA>`, run in the
@@ -43,7 +43,7 @@ const MAX_FILES = 50;
 const MAX_FILE_CHARS = 300;
 const MAX_VERIFY_CHARS = 300;
 
-// Default parallel workers (ORCHESTRATOR_PLAN.md "Max parallel").
+// Default parallel workers (DONE_ORCHESTRATOR_PLAN.md "Max parallel").
 const MAX_PARALLEL = 3;
 
 // Rough wall-clock minutes per card size, for the pre-launch estimate (idea

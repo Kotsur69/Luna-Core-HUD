@@ -1,5 +1,5 @@
 // ============================================================================
-// God Mode v2 run controller (ORCHESTRATOR_PLAN.md slice 3): plan -> review ->
+// God Mode v2 run controller (DONE_ORCHESTRATOR_PLAN.md slice 3): plan -> review ->
 // launch, with every side effect (planner, git, tabs, files) faked. Plus the
 // launch-command helper that hands a worker tab its brief.
 // ============================================================================
