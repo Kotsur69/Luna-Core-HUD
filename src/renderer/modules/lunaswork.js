@@ -82,6 +82,8 @@ export function mountLunasWorkSettings(root) {
     adapter: root.querySelector('#lw-adapter'),
     start: root.querySelector('#lw-start'),
     url: root.querySelector('#lw-url'),
+    unityUrl: root.querySelector('#lw-unity-url'),
+    scene: root.querySelector('#lw-scene'),
     timeout: root.querySelector('#lw-timeout'),
     check: root.querySelector('#lw-check'),
     profileError: root.querySelector('#lw-profile-error'),
@@ -126,14 +128,40 @@ export function mountLunasWorkSettings(root) {
     }
   }
 
+  /** Shows only the fields the chosen adapter uses (data-lw-adapters on each label). */
+  function paintAdapterFields() {
+    const adapter = el.adapter.value;
+    for (const field of el.form.querySelectorAll('[data-lw-adapters]')) {
+      field.hidden = !field.dataset.lwAdapters.split(' ').includes(adapter);
+    }
+  }
+
   function paintProfile() {
     if (!state) return;
     const p = state.profile;
     el.adapter.value = p ? p.adapter : 'web';
-    el.start.value = p ? p.startCommand : '';
-    el.url.value = p ? p.url : '';
+    el.start.value = (p && p.startCommand) || '';
+    el.url.value = (p && p.url) || '';
+    el.unityUrl.value = (p && p.unityMcpUrl) || '';
+    el.scene.value = (p && p.scene) || '';
     el.timeout.value = p ? String(p.readyTimeoutSec) : '';
     el.check.value = p ? p.checkCommand : '';
+    paintAdapterFields();
+  }
+
+  /** The profile payload for the chosen adapter; empty optional fields -> main's defaults. */
+  function profileFromForm() {
+    const adapter = el.adapter.value;
+    const timeout = el.timeout.value.trim();
+    const opt = (key, input) => (input.value.trim() ? { [key]: input.value.trim() } : {});
+    return {
+      adapter,
+      ...(adapter === 'unity' ? {} : { startCommand: el.start.value }),
+      ...(adapter === 'web' ? opt('url', el.url) : {}),
+      ...(adapter === 'unity' ? { ...opt('unityMcpUrl', el.unityUrl), ...opt('scene', el.scene) } : {}),
+      ...(timeout ? { readyTimeoutSec: Number(timeout) } : {}),
+      checkCommand: el.check.value,
+    };
   }
 
   function paintPack() {
@@ -222,19 +250,12 @@ export function mountLunasWorkSettings(root) {
     });
   }
 
+  el.adapter.addEventListener('change', paintAdapterFields);
+
   el.form.addEventListener('submit', async (e) => {
     e.preventDefault();
     el.saved.hidden = true;
-    const timeout = el.timeout.value.trim();
-    const profile = {
-      adapter: el.adapter.value,
-      startCommand: el.start.value,
-      // Empty URL / timeout -> main's defaults (localhost, 60 s).
-      ...(el.url.value.trim() ? { url: el.url.value.trim() } : {}),
-      ...(timeout ? { readyTimeoutSec: Number(timeout) } : {}),
-      checkCommand: el.check.value,
-    };
-    if (await save({ profile }, el.profileError)) {
+    if (await save({ profile: profileFromForm() }, el.profileError)) {
       sfx.modeToggle();
       el.saved.hidden = false;
       clearTimeout(savedTimer);

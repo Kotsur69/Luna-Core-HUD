@@ -162,6 +162,7 @@ const { createGodModeBuilder } = require('./lunasworkBuild');
 const { createSecretStore, createSecretGate } = require('./lunasworkErrorTracking');
 const { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, wireDecisionSync } = require('./lunasworkWiring');
 const { stagingLines } = require('./lunasworkStaging');
+const { profileSummary: lunasworkProfileSummary } = require('./lunasworkSettings');
 const { fileQueueStore, phoneQueue } = require('./lunasworkQueue');
 const { checkCommandFor: lunasworkCheckCommandFor } = require('./lunasworkRun');
 const { createWidget, supabaseRegistry, endpointFor, startClientFeedbackPoll } = require('./lunasworkWidget');
@@ -1279,8 +1280,8 @@ const lunaswork = createLunasWorkRuntime({
       detail: [
         'Every iteration is built by God Mode and merged into the base branch and pushed, after the self-check. A red result is never pushed to the base branch. The run goes on until SHIP, a plateau, two red iterations in a row, or Stop.',
         '',
-        `Start command: ${profile.startCommand}`,
-        `App URL: ${profile.url}`,
+        // Per adapter: web = start command + URL, electron = start command, unity = MCP URL + scene.
+        ...lunasworkProfileSummary(profile).map((r) => `${r.label}: ${r.value}`),
         `Self-check command: ${checkCommand || 'npm test'}`,
         // LW 3.28a: the staging URL and every staging command, when the profile has them.
         ...stagingLines(profile),
@@ -2959,8 +2960,7 @@ function registerIpc() {
         detail: [
           'When the run before it ends with SHIP, this project starts on its own - no further confirmation. Every iteration is built by God Mode and merged into the base branch and pushed, after the self-check.',
           '',
-          `Start command: ${profile.startCommand}`,
-          `App URL: ${profile.url}`,
+          ...lunasworkProfileSummary(profile).map((r) => `${r.label}: ${r.value}`),
           `Self-check command: ${checkCommand || 'npm test'}`,
           '',
           'If these commands change before it starts, the queue pauses instead.',

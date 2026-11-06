@@ -143,7 +143,14 @@ function moveEntry(queue, projectId, delta) {
 function publicQueue(queue, isKnownProject = () => true) {
   return normalizeQueue(queue)
     .entries.filter((e) => isKnownProject(e.projectId))
-    .map((e) => ({ projectId: e.projectId, label: e.label, startCommand: e.profile.startCommand, url: e.profile.url, addedAt: e.addedAt }));
+    // A unity profile has no start command, and its address is the editor's MCP URL.
+    .map((e) => ({
+      projectId: e.projectId,
+      label: e.label,
+      startCommand: e.profile.startCommand || '',
+      url: e.profile.url || e.profile.unityMcpUrl || '',
+      addedAt: e.addedAt,
+    }));
 }
 
 /** The phone's copy: labels only (the snapshot leaves the PC). */

@@ -67,7 +67,7 @@ export function mountLunasWorkQueue(root, { projectId }) {
   function item(entry, i) {
     const li = el('li', 'lw-queue__item');
     const text = el('div', 'lw-queue__text');
-    text.append(el('span', 'lw-queue__label', entry.label), el('span', 'lw-queue__cmd', `${entry.startCommand} · ${entry.url}`));
+    text.append(el('span', 'lw-queue__label', entry.label), el('span', 'lw-queue__cmd', [entry.startCommand, entry.url].filter(Boolean).join(' · ')));
     const actions = el('div', 'lw-queue__actions');
     actions.append(
       iconButton(t('lw.queue.up'), '↑', () => act(() => window.lunacore.lunasworkQueueMove(entry.projectId, -1)), busy || i === 0),

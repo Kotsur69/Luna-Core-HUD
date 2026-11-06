@@ -2337,17 +2337,26 @@
                   <span class="ui-field__label" data-i18n="lw.profile.adapter">Adapter</span>
                   <select id="lw-adapter" class="profile-select">
                     <option value="web" data-i18n="lw.adapter.web">Aplikacja web</option>
-                    <option value="electron" disabled data-i18n="lw.adapter.electron">Electron (wkrotce)</option>
-                    <option value="unity" disabled data-i18n="lw.adapter.unity">Unity (wkrotce)</option>
+                    <option value="electron" data-i18n="lw.adapter.electron">Aplikacja Electron</option>
+                    <option value="unity" data-i18n="lw.adapter.unity">Gra Unity</option>
                   </select>
                 </label>
-                <label class="ui-field">
+                <!-- data-lw-adapters: the adapters that use this field; the rest are hidden. -->
+                <label class="ui-field" data-lw-adapters="web electron">
                   <span class="ui-field__label" data-i18n="lw.profile.start">Komenda startowa</span>
                   <input id="lw-start" class="mc-input" maxlength="500" spellcheck="false" autocomplete="off" placeholder="npm run dev" />
                 </label>
-                <label class="ui-field">
+                <label class="ui-field" data-lw-adapters="web">
                   <span class="ui-field__label" data-i18n="lw.profile.url">URL</span>
                   <input id="lw-url" class="mc-input" maxlength="500" spellcheck="false" autocomplete="off" placeholder="http://localhost:3000" />
+                </label>
+                <label class="ui-field" data-lw-adapters="unity" hidden>
+                  <span class="ui-field__label" data-i18n="lw.profile.unityMcpUrl">URL serwera Unity MCP</span>
+                  <input id="lw-unity-url" class="mc-input" maxlength="500" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8080/mcp" />
+                </label>
+                <label class="ui-field" data-lw-adapters="unity" hidden>
+                  <span class="ui-field__label" data-i18n="lw.profile.scene">Scena</span>
+                  <input id="lw-scene" class="mc-input" maxlength="260" spellcheck="false" autocomplete="off" data-i18n-ph="lw.profile.scene.ph" placeholder="opcjonalnie, np. Assets/Scenes/Main.unity" />
                 </label>
                 <label class="ui-field">
                   <span class="ui-field__label" data-i18n="lw.profile.timeout">Czas na start (s)</span>

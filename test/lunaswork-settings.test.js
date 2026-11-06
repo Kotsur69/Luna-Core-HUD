@@ -96,13 +96,56 @@ test('profile validation rejects a timeout out of range', () => {
   assert.equal(S.validateProfile({ ...goodProfile, readyTimeoutSec: 600 }).profile.readyTimeoutSec, 600);
 });
 
-test('profile validation rejects unknown and reserved adapters', () => {
-  assert.match(S.validateProfile({ ...goodProfile, adapter: 'android' }).reason, /unknown adapter/);
-  for (const adapter of S.RESERVED_ADAPTERS) {
+test('profile validation rejects unknown adapters', () => {
+  assert.deepEqual(S.ADAPTERS, ['web', 'electron', 'unity']);
+  for (const adapter of ['android', '', null, 7]) {
     const r = S.validateProfile({ ...goodProfile, adapter });
-    assert.equal(r.profile, null);
-    assert.match(r.reason, /not supported yet/);
+    assert.equal(r.profile, null, `adapter=${String(adapter)}`);
+    assert.match(r.reason, /unknown adapter/);
   }
+});
+
+test('an electron profile keeps its start command and drops web-only fields', () => {
+  const r = S.validateProfile({ adapter: 'electron', startCommand: ' npx electron . ', url: 'http://localhost:3000', readyTimeoutSec: 30 });
+  assert.equal(r.reason, null);
+  assert.deepEqual(r.profile, { adapter: 'electron', startCommand: 'npx electron .', readyTimeoutSec: 30, checkCommand: '' });
+  for (const startCommand of ['', '  ', undefined, 'npm start\nrm -rf /']) {
+    const bad = S.validateProfile({ adapter: 'electron', startCommand });
+    assert.equal(bad.profile, null, `startCommand=${JSON.stringify(startCommand)}`);
+    assert.match(bad.reason, /startCommand/);
+  }
+});
+
+test('a unity profile needs a loopback MCP URL and a project scene path', () => {
+  const r = S.validateProfile({ adapter: 'unity', scene: 'Assets\\Scenes\\Main.unity' });
+  assert.equal(r.reason, null);
+  assert.deepEqual(r.profile, {
+    adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp', scene: 'Assets/Scenes/Main.unity', readyTimeoutSec: 60, checkCommand: '',
+  });
+  for (const unityMcpUrl of ['http://example.com/mcp', 'file:///c:/x', 'not a url', 7]) {
+    const bad = S.validateProfile({ adapter: 'unity', unityMcpUrl });
+    assert.equal(bad.profile, null, `unityMcpUrl=${String(unityMcpUrl)}`);
+    assert.match(bad.reason, /^unityMcpUrl/);
+  }
+  for (const scene of ['Assets/../x.unity', 'C:/game/Main.unity', 'Assets/Main.txt']) {
+    const bad = S.validateProfile({ adapter: 'unity', scene });
+    assert.equal(bad.profile, null, `scene=${scene}`);
+    assert.match(bad.reason, /^scene/);
+  }
+});
+
+test('profileSummary lists the launch fields each adapter has', () => {
+  const lines = (p) => S.profileSummary(p).map((r) => `${r.label}: ${r.value}`);
+  assert.deepEqual(lines(S.validateProfile(goodProfile).profile), [
+    'Adapter: web', 'Start command: npm run dev', 'App URL: http://localhost:5173',
+  ]);
+  assert.deepEqual(lines(S.validateProfile({ adapter: 'electron', startCommand: 'npm start' }).profile), [
+    'Adapter: electron', 'Start command: npm start',
+  ]);
+  assert.deepEqual(lines(S.validateProfile({ adapter: 'unity', scene: 'Assets/Main.unity' }).profile), [
+    'Adapter: unity', 'Unity MCP URL: http://127.0.0.1:8080/mcp', 'Scene: Assets/Main.unity',
+  ]);
+  assert.deepEqual(S.profileSummary(null), []);
 });
 
 test('profile validation rejects an empty or malformed startCommand', () => {

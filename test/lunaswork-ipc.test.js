@@ -187,7 +187,10 @@ test('saveSettings reports profile validation errors with the field', async () =
     [{ startCommand: '' }, 'startCommand'],
     [{ startCommand: 'npm start', url: 'ftp://x' }, 'url'],
     [{ startCommand: 'npm start', readyTimeoutSec: 0 }, 'readyTimeoutSec'],
-    [{ startCommand: 'npm start', adapter: 'unity' }, 'adapter'],
+    [{ startCommand: 'npm start', adapter: 'android' }, 'adapter'],
+    [{ adapter: 'unity', unityMcpUrl: 'http://example.com/mcp' }, 'unityMcpUrl'],
+    [{ adapter: 'unity', scene: '../evil.unity' }, 'scene'],
+    [{ adapter: 'electron', startCommand: '' }, 'startCommand'],
     [{ startCommand: 'npm start', checkCommand: 'a\nb' }, 'checkCommand'],
     ['npm start', 'profile'],
     [{ startCommand: 'x'.repeat(5000) }, 'profile'],
@@ -200,6 +203,27 @@ test('saveSettings reports profile validation errors with the field', async () =
     assert.equal(typeof res.detail, 'string');
   }
   assert.equal((await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' })).profile, null);
+  s.done();
+});
+
+test('saveSettings stores electron and unity profiles with only their own fields', async () => {
+  const s = setup();
+  const electron = await s.ipc.invoke('lunaswork:saveSettings', {
+    projectId: 'game',
+    profile: { adapter: 'electron', startCommand: ' npm start ', url: 'http://localhost:3000', checkCommand: '' },
+  });
+  assert.equal(electron.ok, true, JSON.stringify(electron));
+  assert.deepEqual(electron.profile, { adapter: 'electron', startCommand: 'npm start', readyTimeoutSec: 60, checkCommand: '' });
+
+  const unity = await s.ipc.invoke('lunaswork:saveSettings', {
+    projectId: 'game',
+    profile: { adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp', scene: 'Assets/Scenes/Main.unity', readyTimeoutSec: 120, checkCommand: '' },
+  });
+  assert.equal(unity.ok, true, JSON.stringify(unity));
+  assert.deepEqual(unity.profile, {
+    adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp', scene: 'Assets/Scenes/Main.unity', readyTimeoutSec: 120, checkCommand: '',
+  });
+  assert.deepEqual((await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' })).profile, unity.profile);
   s.done();
 });
 

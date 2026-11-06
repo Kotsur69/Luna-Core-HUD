@@ -294,7 +294,7 @@ function createWebAdapter(ctx) {
     if (child || log) throw new Error('web adapter is already started');
     const { profile: valid, reason } = validateProfile(profile);
     if (!valid) throw new Error(`invalid project profile: ${reason}`);
-    if (valid.adapter !== 'web') throw new Error(`profile adapter is '${valid.adapter}', not 'web'`);
+    if (valid.adapter !== 'web') throw new Error(`invalid project profile: adapter is '${valid.adapter}', not 'web'`);
 
     log = openLog(ctx.evidenceDir);
     // Staging: the app already runs remotely - wait for stagingUrl, seed and

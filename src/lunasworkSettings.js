@@ -64,9 +64,9 @@ const { SECOND_OPINION_CLIS } = require('./lunasworkSecondOpinion');
 const FILE_NAME = 'lunaswork-settings.local.json';
 const defaultFile = () => paths.local(FILE_NAME);
 
-const ADAPTERS = ['web'];
-// Planned adapters (plan: "Electron and Unity come after"); rejected until built.
-const RESERVED_ADAPTERS = ['electron', 'unity'];
+// web is validated here; electron and unity by src/lunasworkAdapterProfiles.js
+// (LW 3.35 / 3.36b), the same validators their adapters re-run in start().
+const ADAPTERS = ['web', 'electron', 'unity'];
 const DEFAULT_ADAPTER = 'web';
 // The stack templates of src/lunasworkScaffold.js (TEMPLATES keys).
 const PROFILE_STACKS = ['nextjs', 'python'];
@@ -165,8 +165,12 @@ function validateProfile(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return invalid('profile must be an object');
 
   const adapter = raw.adapter === undefined ? DEFAULT_ADAPTER : raw.adapter;
-  if (RESERVED_ADAPTERS.includes(adapter)) return invalid(`adapter '${adapter}' is not supported yet`);
   if (!ADAPTERS.includes(adapter)) return invalid(`unknown adapter '${String(adapter)}'`);
+  if (adapter !== 'web') {
+    // Lazy: lunasworkAdapterProfiles reads this module's limits at load time.
+    const { validateElectronProfile, validateUnityProfile } = require('./lunasworkAdapterProfiles');
+    return adapter === 'electron' ? validateElectronProfile(raw) : validateUnityProfile(raw);
+  }
 
   const startProblem = commandProblem(raw.startCommand, 'startCommand');
   if (startProblem) return invalid(startProblem);
@@ -216,6 +220,25 @@ function validateProfile(raw) {
     },
     reason: null,
   };
+}
+
+/**
+ * What a confirm dialog shows for a profile: the launch commands per adapter
+ * (web has a start command + URL, electron a start command, unity the editor's
+ * MCP URL + scene). Only the set fields, in a fixed order.
+ * @param {object|null} profile a validated profile
+ * @returns {Array<{label:string, value:string}>}
+ */
+function profileSummary(profile) {
+  if (!profile || typeof profile !== 'object') return [];
+  const rows = [
+    ['Adapter', profile.adapter],
+    ['Start command', profile.startCommand],
+    ['App URL', profile.url],
+    ['Unity MCP URL', profile.unityMcpUrl],
+    ['Scene', profile.scene],
+  ];
+  return rows.filter(([, v]) => typeof v === 'string' && v).map(([label, value]) => ({ label, value }));
 }
 
 // ---- models -----------------------------------------------------------------------
@@ -405,7 +428,6 @@ function writeSettings(settings, filePath = defaultFile()) {
 
 module.exports = {
   ADAPTERS,
-  RESERVED_ADAPTERS,
   DEFAULT_URL,
   DEFAULT_READY_TIMEOUT_SEC,
   MIN_READY_TIMEOUT_SEC,
@@ -415,6 +437,7 @@ module.exports = {
   TOGGLES,
   STAGING_COMMANDS,
   validateProfile,
+  profileSummary,
   validateBudgets,
   normalizeBudgets,
   normalizeCliOrder,
