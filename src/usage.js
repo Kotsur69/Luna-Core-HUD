@@ -254,6 +254,9 @@ class ClaudeAdapter extends UsageAdapter {
         displayName: this.displayName,
         status: 'error',
         errorMessage: 'Claude OAuth token expired or invalid (401/403)',
+        // A dead token does not heal in 15 s: poll at the normal cadence, or
+        // the fast heartbeat hammers the endpoint into a 429.
+        authFailed: true,
         limits: [],
         isFallback: false,
         updatedAt: Date.now(),
@@ -1052,6 +1055,7 @@ function nextPollDelay(usage, intervalMs, heartbeatMs, rateLimitedStreak = 1) {
     const wait = typeof usage.retryAfterMs === 'number' ? usage.retryAfterMs : backoff;
     return Math.min(MAX_BACKOFF_MS, Math.max(intervalMs, wait));
   }
+  if (usage && usage.authFailed) return intervalMs;
   return usage && usage.status === 'error' ? heartbeatMs : intervalMs;
 }
 

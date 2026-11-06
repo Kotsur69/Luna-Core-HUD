@@ -14,10 +14,13 @@
 //              'ok' | 'reconnect' | 'unconnected' | 'error' | 'loading'.
 //              Calls are sequential with a gap (staggered), each account at
 //              most once per readEveryMs; a 401/403 marks that account only.
-//   renewal    a usage login whose expiresAt is < 10 min away gets
-//              `claude auth status` under its own CLAUDE_CONFIG_DIR, then the
-//              file is re-read. The main ~/.claude login is never touched -
-//              the CLI refreshes that one itself.
+//   renewal    a usage login whose token expires within 10 min (or already
+//              has, or the GET answered 401) gets a real OAuth refresh_token
+//              grant (src/claudeoauthrefresh.js), written back atomically, and
+//              the file is re-read. A rejected refresh -> 'reconnect'. One
+//              attempt per account per RENEW_RETRY_MS. The main ~/.claude
+//              login is never touched - the CLI refreshes that one itself.
+//              (`claude auth status` does NOT refresh - verified 2026-11-05.)
 //   connect()  `claude auth login` (opens the browser), then `claude auth
 //              status` to read back the email.
 //
@@ -34,6 +37,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { isUsageDirFor, cleanEmail, BACKEND_KEYS, ACCOUNT_ENV } = require('./claudeaccounts');
 const { claudeLimits, getClaudeUsage, parseRetryAfter } = require('./usage');
+const { refreshUsageLogin } = require('./claudeoauthrefresh');
 
 const ID_RE = /^[a-z0-9]{1,20}$/;
 /** Just under the watcher's 90 s, so every regular tick reads each account. */
@@ -42,7 +46,7 @@ const READ_EVERY_MS = 85 * 1000;
 const STAGGER_MS = 2000;
 /** Renew a usage login whose token expires sooner than this. */
 const RENEW_BEFORE_MS = 10 * 60 * 1000;
-/** One renewal attempt per account per this long (a failing CLI is not looped). */
+/** One renewal attempt per account per this long (a failing refresh is not looped). */
 const RENEW_RETRY_MS = 10 * 60 * 1000;
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 const STATUS_TIMEOUT_MS = 30 * 1000;
@@ -144,7 +148,9 @@ function mainEmail(readFile, home) {
 }
 
 /** What one account's slot starts as before its first read. */
-const EMPTY = Object.freeze({ status: 'loading', limits: [], updatedAt: null, nextAt: 0, renewAt: 0, rateStreak: 0 });
+const EMPTY = Object.freeze({
+  status: 'loading', limits: [], updatedAt: null, nextAt: 0, renewAt: 0, renewFail: null, rateStreak: 0,
+});
 
 /** Only the display fields of a limit (usage.js shape) - nothing else travels. */
 const copyLimit = (l) => ({
@@ -165,6 +171,8 @@ const copyLimit = (l) => ({
  *   readFile?: (file:string) => string,
  *   mkdir?: (dir:string) => void,
  *   fetchUsage?: (token:string) => Promise<{status:number, body:string, headers:object}>,
+ *   postToken?: (host:string, pathname:string, payload:object) => Promise<{status:number, body:string}>,
+ *   writeFile?: (file:string, text:string) => void,
  *   execFile?: Function,
  *   claudeBin: () => string|null,
  *   env?: () => Record<string,string|undefined>,
@@ -189,6 +197,18 @@ function createAccountUsage(deps) {
   const onConnected = deps.onConnected || (() => {});
   const readEveryMs = deps.readEveryMs || READ_EVERY_MS;
   const staggerMs = deps.staggerMs === undefined ? STAGGER_MS : deps.staggerMs;
+  // A grant whose write failed, per dir: retried without a second POST (the
+  // old refresh token may already be revoked). Main-process memory only.
+  const pendingGrants = new Map();
+  // Undefined deps fall back to the real https POST / atomic file write.
+  const refreshLogin = (dir) => refreshUsageLogin({
+    dir,
+    readFile,
+    now,
+    pending: pendingGrants,
+    ...(deps.postToken ? { post: deps.postToken } : {}),
+    ...(deps.writeFile ? { writeFile: deps.writeFile } : {}),
+  });
 
   /** account id -> its last read state (never a token). */
   let cache = new Map();
@@ -230,28 +250,42 @@ function createAccountUsage(deps) {
     });
   }
 
-  /** Renews a usage login near expiry; never for the main ~/.claude login. */
-  async function maybeRenew(dir, cred, slot, t) {
-    const nearExpiry = cred && cred.expiresAt !== null && cred.expiresAt - t < RENEW_BEFORE_MS;
-    if (!nearExpiry || isMain(dir) || t < slot.renewAt) return { cred, renewAt: slot.renewAt };
+  /**
+   * Refreshes a usage login whose token expires soon or already has (or any
+   * time with `force`, after a 401). Never the main ~/.claude login, and at
+   * most once per RENEW_RETRY_MS. renewFail: null | 'reconnect' | 'error'.
+   */
+  async function maybeRenew(dir, cred, slot, t, force = false) {
+    const keep = { cred, renewAt: slot.renewAt, renewFail: slot.renewFail };
+    const due = cred && (force || (cred.expiresAt !== null && cred.expiresAt - t < RENEW_BEFORE_MS));
+    if (!due || isMain(dir) || t < slot.renewAt) return keep;
     const renewAt = t + RENEW_RETRY_MS;
-    await runClaude(['auth', 'status'], dir, STATUS_TIMEOUT_MS);
-    return { cred: readCredentials(readFile, dir), renewAt };
-  }
-
-  /** One account's GET -> its next slot. */
-  async function readOne(dir, slot) {
-    const t = now();
-    const renewed = await maybeRenew(dir, readCredentials(readFile, dir), slot, t);
-    const base = { ...slot, renewAt: renewed.renewAt, nextAt: t + readEveryMs };
-    if (!renewed.cred) return { ...base, status: 'reconnect', limits: [] };
     let res;
     try {
-      res = await fetchUsage(renewed.cred.accessToken);
+      res = await refreshLogin(dir);
     } catch {
-      res = { status: 0, body: '', headers: {} };
+      res = { ok: false, error: 'http' };
     }
-    const status = res && res.status;
+    if (res && res.ok) return { cred: readCredentials(readFile, dir), renewAt, renewFail: null };
+    const error = (res && res.error) || 'http';
+    log(`usage login: token refresh failed (${error})`); // an error code only, never a token
+    return { cred, renewAt, renewFail: error === 'rejected' || error === 'noRefreshToken' ? 'reconnect' : 'error' };
+  }
+
+  /** A slot that skips the GET: reconnect drops the bars, error keeps them. */
+  const failed = (base, kind) => ({ ...base, status: kind, limits: kind === 'error' ? base.limits : [] });
+
+  async function getUsage(token) {
+    try {
+      return (await fetchUsage(token)) || { status: 0, body: '', headers: {} };
+    } catch {
+      return { status: 0, body: '', headers: {} };
+    }
+  }
+
+  /** The usage GET's answer -> the account's next slot. */
+  function classify(res, base, slot, t) {
+    const status = res.status;
     if (status === 401 || status === 403) return { ...base, status: 'reconnect', limits: [], rateStreak: 0 };
     if (status === 429) {
       const streak = slot.rateStreak + 1;
@@ -269,6 +303,26 @@ function createAccountUsage(deps) {
     }
     if (limits.length === 0) return { ...base, status: 'error', rateStreak: 0 };
     return { ...base, status: 'ok', limits, updatedAt: t, rateStreak: 0 };
+  }
+
+  /** One account's GET -> its next slot. */
+  async function readOne(dir, slot) {
+    const t = now();
+    let renewed = await maybeRenew(dir, readCredentials(readFile, dir), slot, t);
+    let base = { ...slot, renewAt: renewed.renewAt, renewFail: renewed.renewFail, nextAt: t + readEveryMs };
+    if (!renewed.cred) return failed(base, 'reconnect');
+    // Expired and not refreshed (failed or throttled): the GET would only 401.
+    const expired = renewed.cred.expiresAt !== null && renewed.cred.expiresAt <= t;
+    if (expired && !isMain(dir)) return failed(base, renewed.renewFail || 'reconnect');
+    let res = await getUsage(renewed.cred.accessToken);
+    if (res.status === 401 && !isMain(dir) && t >= base.renewAt) {
+      // Revoked or clock-skewed token: one forced refresh, then one retry.
+      renewed = await maybeRenew(dir, renewed.cred, base, t, true);
+      base = { ...base, renewAt: renewed.renewAt, renewFail: renewed.renewFail };
+      if (renewed.renewFail || !renewed.cred) return failed(base, renewed.renewFail || 'reconnect');
+      res = await getUsage(renewed.cred.accessToken);
+    }
+    return classify(res, base, slot, t);
   }
 
   /** The public entry of one account: display fields only, never a token. */

@@ -26,6 +26,11 @@ test('a read with an error -> faster heartbeat', () => {
   }
 });
 
+test('a 401/403 (dead token) -> normal interval, not the fast heartbeat', () => {
+  const authFailed = { status: 'error', authFailed: true, errorMessage: 'expired' };
+  assert.equal(nextPollDelay(authFailed, INTERVAL, HEARTBEAT), INTERVAL);
+});
+
 test('a healthy provider read -> normal interval', () => {
   assert.equal(nextPollDelay({ status: 'ok' }, INTERVAL, HEARTBEAT), INTERVAL);
 });

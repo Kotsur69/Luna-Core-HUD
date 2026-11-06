@@ -33,15 +33,24 @@ const usageBody = (five, week) => JSON.stringify({
   seven_day: { utilization: week, resets_at: new Date(NOW + 3 * 24 * 60 * MIN).toISOString() },
 });
 
-const credFile = (token, expiresAt = NOW + 8 * 60 * MIN) => JSON.stringify({ claudeAiOauth: { accessToken: token, expiresAt } });
+const refreshOf = (token) => ['rt', token].join('-');
+const credFile = (token, expiresAt = NOW + 8 * 60 * MIN) => JSON.stringify({
+  claudeAiOauth: { accessToken: token, refreshToken: refreshOf(token), expiresAt, scopes: ['user:profile'] },
+});
+/** A token endpoint that hands out `fresh` (and rotates the refresh token). */
+const grantOk = (fresh) => () => ({
+  status: 200,
+  body: JSON.stringify({ access_token: fresh, refresh_token: refreshOf(fresh), expires_in: 8 * 3600 }),
+});
 
 /**
  * A fake world: files by path, targets as the store would list them, a GET
- * answering per token, an execFile recording every CLI call.
+ * answering per token, an execFile recording every CLI call, a token
+ * endpoint (`token(payload)`) and a file write recording every write.
  */
-function world({ targets, files = {}, answers = {}, cli = {} } = {}) {
+function world({ targets, files = {}, answers = {}, cli = {}, token = null, failWrite = false } = {}) {
   const fileMap = new Map(Object.entries(files));
-  const calls = { fetch: [], exec: [], sleep: [], setUsage: [], connected: 0 };
+  const calls = { fetch: [], exec: [], sleep: [], setUsage: [], connected: 0, post: [], write: [], log: [] };
   let list = targets;
   const accounts = {
     usageTargets: () => list,
@@ -60,6 +69,16 @@ function world({ targets, files = {}, answers = {}, cli = {} } = {}) {
       return fileMap.get(file);
     },
     mkdir: () => {},
+    postToken: async (host, pathname, payload) => {
+      calls.post.push({ host, pathname, payload });
+      return token ? token(payload) : { status: 0, body: '' };
+    },
+    writeFile: (file, text) => {
+      calls.write.push(file);
+      if (failWrite) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      fileMap.set(file, text);
+    },
+    log: (line) => { calls.log.push(line); },
     fetchUsage: async (token) => {
       calls.fetch.push(token);
       return answers[token] || { status: 0, body: '', headers: {} };
@@ -114,9 +133,12 @@ test('401/403 marks only that account reconnect; the others keep updating', asyn
     targets: ['a', 'b', 'c'].map((id) => ({ id, label: id.toUpperCase(), active: id === 'a', usageDir: dirOf(id) })),
     files: { [credPath(dirOf('a'))]: credFile(tA), [credPath(dirOf('b'))]: credFile(tB), [credPath(dirOf('c'))]: credFile(tC) },
     answers: { [tA]: { status: 200, body: usageBody(5, 5) }, [tB]: { status: 401, body: '' }, [tC]: { status: 403, body: '' } },
+    // B's 401 forces one refresh; its refresh token is dead too.
+    token: () => ({ status: 400, body: '{"error":"invalid_grant"}' }),
   });
   const entries = await w.usage.read();
   assert.deepEqual(entries.map((e) => e.status), ['ok', 'reconnect', 'reconnect']);
+  assert.equal(w.calls.post.length, 1, 'only the 401 tries a refresh, a 403 does not');
   assert.equal(entries[0].limits.length, 2);
   assert.deepEqual(entries[1].limits, []);
 });
@@ -201,33 +223,98 @@ test('an account is read at most once per interval unless forced', async () => {
   assert.equal(w.calls.fetch.length, 2);
 });
 
-test('renewal runs `claude auth status` near expiry under the usage dir, then re-reads the file', async () => {
+test('an expired usage login is refreshed via OAuth and the bars come back - no Connect click', async () => {
   const old = fakeToken('old');
   const fresh = fakeToken('fresh');
   const dir = dirOf('a');
   const w = world({
     targets: [{ id: 'a', label: 'A', active: true, usageDir: dir }],
-    files: { [credPath(dir)]: credFile(old, NOW + 5 * MIN) },
+    files: { [credPath(dir)]: credFile(old, NOW - 30 * MIN) },
     answers: { [old]: { status: 401, body: '' }, [fresh]: { status: 200, body: usageBody(7, 8) } },
-    cli: {
-      'auth status': (opts, files) => {
-        files.set(path.join(opts.env.CLAUDE_CONFIG_DIR, '.credentials.json'), credFile(fresh, NOW + 8 * 60 * MIN));
-        return { stdout: JSON.stringify({ loggedIn: true, email: 'a@example.com' }) };
-      },
-    },
+    token: grantOk(fresh),
+  });
+  const [entry] = await w.usage.read();
+  assert.equal(entry.status, 'ok');
+  assert.deepEqual(entry.limits.map((l) => l.percentUsed), [7, 8]);
+  assert.deepEqual(w.calls.fetch, [fresh], 'the dead token is never sent to the usage GET');
+  assert.equal(w.calls.exec.length, 0, 'the CLI is not run any more');
+  assert.equal(w.calls.post.length, 1);
+  assert.equal(w.calls.post[0].payload.refresh_token, refreshOf(old));
+  assert.deepEqual(w.calls.write, [credPath(dir)]);
+  const saved = JSON.parse(w.fileMap.get(credPath(dir))).claudeAiOauth;
+  assert.equal(saved.accessToken, fresh);
+  assert.equal(saved.refreshToken, refreshOf(fresh), 'a rotated refresh token is kept');
+  assert.deepEqual(saved.scopes, ['user:profile'], 'other fields survive');
+});
+
+test('a token expiring within 10 min is refreshed before the GET', async () => {
+  const old = fakeToken('soon');
+  const fresh = fakeToken('soon-fresh');
+  const dir = dirOf('a');
+  const w = world({
+    targets: [{ id: 'a', label: 'A', active: true, usageDir: dir }],
+    files: { [credPath(dir)]: credFile(old, NOW + 5 * MIN) },
+    answers: { [fresh]: { status: 200, body: usageBody(1, 2) } },
+    token: grantOk(fresh),
   });
   const [entry] = await w.usage.read();
   assert.equal(entry.status, 'ok');
   assert.deepEqual(w.calls.fetch, [fresh]);
-  assert.equal(w.calls.exec.length, 1);
-  const call = w.calls.exec[0];
-  assert.deepEqual(call.args, ['auth', 'status']);
-  assert.equal(call.opts.env.CLAUDE_CONFIG_DIR, dir);
-  assert.equal(call.opts.shell, undefined, 'never through a shell');
-  assert.equal(call.opts.env.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'the setup token must not steer the usage login');
 });
 
-test('renewal never touches the main ~/.claude login, and is not retried in a loop', async () => {
+test('a refresh answered 400/401 marks the account reconnect', async () => {
+  for (const status of [400, 401]) {
+    const old = fakeToken(`dead${status}`);
+    const dir = dirOf('a');
+    const w = world({
+      targets: [{ id: 'a', label: 'A', active: true, usageDir: dir }],
+      files: { [credPath(dir)]: credFile(old, NOW - MIN) },
+      token: () => ({ status, body: '{"error":"invalid_grant"}' }),
+    });
+    const [entry] = await w.usage.read();
+    assert.equal(entry.status, 'reconnect', `status ${status}`);
+    assert.equal(w.calls.fetch.length, 0);
+    assert.equal(w.calls.write.length, 0, 'nothing is written on a rejected refresh');
+  }
+});
+
+test('a 401 from the usage GET forces one refresh and one retry', async () => {
+  const old = fakeToken('revoked');
+  const fresh = fakeToken('revoked-fresh');
+  const dir = dirOf('a');
+  const w = world({
+    targets: [{ id: 'a', label: 'A', active: true, usageDir: dir }],
+    files: { [credPath(dir)]: credFile(old, NOW + 4 * 60 * MIN) },
+    answers: { [old]: { status: 401, body: '' }, [fresh]: { status: 200, body: usageBody(3, 4) } },
+    token: grantOk(fresh),
+  });
+  const [entry] = await w.usage.read();
+  assert.equal(entry.status, 'ok');
+  assert.deepEqual(w.calls.fetch, [old, fresh]);
+});
+
+test('a failed credentials write keeps the bars as an error, and logs no token', async () => {
+  const old = fakeToken('wfail');
+  const fresh = fakeToken('wfail-fresh');
+  const dir = dirOf('a');
+  const w = world({
+    targets: [{ id: 'a', label: 'A', active: true, usageDir: dir }],
+    files: { [credPath(dir)]: credFile(old, NOW - MIN) },
+    token: grantOk(fresh),
+    failWrite: true,
+  });
+  const [entry] = await w.usage.read();
+  assert.equal(entry.status, 'error');
+  assert.equal(w.calls.fetch.length, 0);
+  assert.equal(JSON.parse(w.fileMap.get(credPath(dir))).claudeAiOauth.accessToken, old, 'the file is untouched');
+  const logs = w.calls.log.join('\n');
+  assert.match(logs, /writeFailed/);
+  for (const secret of [old, fresh, refreshOf(old), refreshOf(fresh)]) {
+    assert.ok(!logs.includes(secret), 'a token leaked into the log');
+  }
+});
+
+test('refresh never touches the main ~/.claude login, and a failing one is throttled', async () => {
   const tMain = fakeToken('main');
   const tA = fakeToken('a');
   const w = world({
@@ -235,15 +322,23 @@ test('renewal never touches the main ~/.claude login, and is not retried in a lo
       { id: 'm', label: 'M', active: true, usageDir: MAIN_DIR },
       { id: 'a', label: 'A', active: false, usageDir: dirOf('a') },
     ],
-    files: { [credPath(MAIN_DIR)]: credFile(tMain, NOW + MIN), [credPath(dirOf('a'))]: credFile(tA, NOW + MIN) },
-    answers: { [tMain]: { status: 200, body: usageBody(1, 1) }, [tA]: { status: 200, body: usageBody(1, 1) } },
+    files: { [credPath(MAIN_DIR)]: credFile(tMain, NOW - MIN), [credPath(dirOf('a'))]: credFile(tA, NOW - MIN) },
+    answers: { [tMain]: { status: 401, body: '' } },
+    token: () => ({ status: 503, body: '' }),
   });
-  await w.usage.read();
-  for (const c of w.calls.exec) assert.notEqual(path.resolve(c.opts.env.CLAUDE_CONFIG_DIR), path.resolve(MAIN_DIR));
-  assert.equal(w.calls.exec.length, 1, 'only the usage login is renewed');
+  const [main, a] = await w.usage.read();
+  assert.equal(w.calls.post.length, 1, 'only the usage login is refreshed');
+  assert.equal(w.calls.post[0].payload.refresh_token, refreshOf(tA));
+  for (const file of w.calls.write) assert.notEqual(path.resolve(file), path.resolve(credPath(MAIN_DIR)));
+  assert.equal(main.status, 'reconnect');
+  assert.equal(a.status, 'error', 'a transient refresh failure is not a reconnect');
   w.clock.now += 2 * MIN;
+  const [, again] = await w.usage.read({ force: true });
+  assert.equal(w.calls.post.length, 1, 'one refresh attempt per retry window');
+  assert.equal(again.status, 'error');
+  w.clock.now += 10 * MIN;
   await w.usage.read({ force: true });
-  assert.equal(w.calls.exec.length, 1, 'one renewal attempt per retry window');
+  assert.equal(w.calls.post.length, 2, 'retried once the window passed');
 });
 
 test('a usage login connects and the email reads back (faked CLI)', async () => {
