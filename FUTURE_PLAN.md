@@ -79,7 +79,7 @@ partly built or built with live checks owed) and `docs/untouched_docs/`
   (`src/orchestraPlanWait.js` `LIMIT_TEXT_RE`) - confirm it the first time
   the wall is hit during a run, then check the planner resumes on its own at
   the reset time (the board shows the resume time + Cancel meanwhile).
-- Auto-proceed against a real dropped connection in the wild.
+- ~~Auto-proceed against a real dropped connection in the wild.~~ - **PASS 2026-11-06** (Mati).
 - ~~The packaged-build spawn check (§D2a) on Electron 43~~ - **PASS
   2026-11-04** on a `v0.20.0` `npm run dist` build (Electron 43.7.5, Node
   24.21, ABI 148). (1) An in-process check ran the packaged `LunaCore.exe`
