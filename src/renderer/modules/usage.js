@@ -341,7 +341,8 @@ function markBlocked(line, weekly) {
   const when = fmtResetWhen(typeof weekly.resetsAt === 'string' ? weekly.resetsAt : null);
   line.title = t('usage.blockedByWeekly', { when: when || t('usage.resetNow') });
   // The cell tooltips (reset time, account name) would hide the line's one.
-  for (const cell of line.querySelectorAll('[title]')) cell.removeAttribute('title');
+  // The window label keeps its own: it names the group, not this account.
+  for (const cell of line.querySelectorAll(':not(.usage-line__win)[title]')) cell.removeAttribute('title');
 }
 
 /** The muted one-line stand-in for an account's bars, with a Settings arrow. */

@@ -1559,8 +1559,9 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .usage-line__pct { text-align: right; font-weight: 700; }
 .usage-line__reset { text-align: right; font-size: var(--fs-xs); color: var(--text-dim); }
 /* A 5 h line whose weekly limit is spent: the room can't be used, so the
-   line steps back and its bar goes neutral, whatever its own level says. */
-.usage-line.is-blocked { opacity: 0.4; }
+   account's cells step back and its bar goes neutral, whatever its own level
+   says. The window label stays - it heads the whole group, not this account. */
+.usage-line.is-blocked > :not(.usage-line__win) { opacity: 0.4; }
 .usage-line.is-blocked .usage-bar__fill { background: var(--text-dim); }
 /* A value-only limit (balance, credits) fills bar + percent + reset. */
 .usage-line__value { grid-column: span 3; text-align: right; font-weight: 700; }
