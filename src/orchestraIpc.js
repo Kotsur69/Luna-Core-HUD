@@ -27,6 +27,7 @@
 const fs = require('fs');
 const { reportFileFor } = require('./orchestraReport');
 const { isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSupervisor');
+const { plannerEffortOf } = require('./orchestraPlan');
 
 const MAX_PROJECT_ID_CHARS = 200;
 // A payload that is present but not a plain object.
@@ -154,7 +155,7 @@ function registerOrchestraIpc(ipcMain, ctx) {
   // project, repo folder, profile and to-do list are all resolved here. The
   // planner runs on the cloud default like /ask (ask:query's reasoning): a
   // tab's local-model profile must not silently plan the whole run.
-  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts) => {
+  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts, effort) => {
     // The picker's selection: to-do `at` values only, capped like the list
     // itself. No selection (null) = every open to-do; an off-shape one fails
     // closed ([] -> 'noneSelected'). makePlan re-checks each value against
@@ -167,6 +168,9 @@ function registerOrchestraIpc(ipcMain, ctx) {
       const unique = fits ? [...new Set(todoAts)] : [];
       picked = unique.every(Number.isFinite) ? unique : [];
     }
+    // The planner's --effort from the picker: one of the four levels only,
+    // anything else (missing, 'low', a non-string) plans at the default high.
+    const plannerEffort = plannerEffortOf(effort);
     // No tab id = the active tab; an id that no longer resolves (the tab
     // closed) is refused rather than planning in whatever tab is on screen.
     const session = ctx.resolveSession(sessionId);
@@ -185,6 +189,7 @@ function registerOrchestraIpc(ipcMain, ctx) {
       profileId: session.profileId,
       env: ctx.toolEnv(),
       todoAts: picked,
+      plannerEffort,
     });
     if (res.ok) changed(projectId, res.plan);
     return res;

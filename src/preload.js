@@ -604,8 +604,15 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Plans the tab's project to-dos with a headless `claude -p`: Promise<{ok, plan?, error?}>. */
   // todoAts: the picker's ticked to-dos (`at` values); null = all open ones.
   // Passed as-is: main validates and fails closed on a bad shape.
-  planOrchestra: (sessionId, todoAts) =>
-    ipcRenderer.invoke('orchestra:plan', typeof sessionId === 'string' ? sessionId : null, Array.isArray(todoAts) ? todoAts : null),
+  // effort: the planner's --effort level; main falls back to 'high' for
+  // anything that is not one of src/efforts.js EFFORTS.
+  planOrchestra: (sessionId, todoAts, effort) =>
+    ipcRenderer.invoke(
+      'orchestra:plan',
+      typeof sessionId === 'string' ? sessionId : null,
+      Array.isArray(todoAts) ? todoAts : null,
+      typeof effort === 'string' ? effort : null,
+    ),
   // Every call below takes an optional projectId last (one God Mode run per
   // project); without it main uses the active tab's run, or the only one.
   /** Summaries of every project's run: Promise<Array<{projectId, label, planId, ...}>>. */

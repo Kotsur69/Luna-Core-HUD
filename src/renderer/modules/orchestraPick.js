@@ -13,8 +13,15 @@
 import { t } from './util.js';
 import { pickable, manualCount, mergeSelection, missingDeps, withDeps } from './orchestraPickRules.js';
 
+// src/efforts.js EFFORTS (the renderer cannot require main-side modules,
+// see EFFORT_OPTIONS in orchestrasettings.js). Never 'low'.
+const PLANNER_EFFORTS = ['medium', 'high', 'xhigh', 'max'];
+const DEFAULT_PLANNER_EFFORT = 'high';
+
 /** Open cards on screen, or null before the first load. */
 let cards = null;
+/** The planner --effort chosen in the footer (ui pref orchestraPlannerEffort). */
+let plannerEffort = DEFAULT_PLANNER_EFFORT;
 let manual = 0;
 let selected = new Set();
 const seen = new Set();
@@ -35,9 +42,26 @@ export async function loadPicker(sessionId) {
   }
   cards = pickable(todos);
   manual = manualCount(todos);
+  await loadPlannerEffort();
   selected = mergeSelection(cards, selected, seen);
   for (const c of cards) seen.add(c.at);
   return true;
+}
+
+/** Opens the select at the saved level; an unreadable pref keeps the last one. */
+async function loadPlannerEffort() {
+  try {
+    const prefs = await window.lunacore.getUiPrefs();
+    const saved = prefs && prefs.orchestraPlannerEffort;
+    plannerEffort = PLANNER_EFFORTS.includes(saved) ? saved : DEFAULT_PLANNER_EFFORT;
+  } catch {
+    /* prefs unreadable: keep the level already on screen (default high) */
+  }
+}
+
+/** The planner effort the next plan uses. */
+export function chosenPlannerEffort() {
+  return plannerEffort;
 }
 
 /** The ticked cards' `at` values, in list order. */
@@ -58,6 +82,28 @@ function button(label, onClick, disabled) {
   b.disabled = disabled;
   b.addEventListener('click', onClick);
   return b;
+}
+
+/** "Planner effort" label + select; a change is saved as the ui pref. */
+function effortSelect(disabled) {
+  const label = el('label', 'orchestra__pick-effort');
+  label.append(el('span', '', t('orch.pick.effort')));
+  const sel = el('select', 'profile-select');
+  for (const level of PLANNER_EFFORTS) {
+    const opt = el('option', '', level);
+    opt.value = level;
+    sel.append(opt);
+  }
+  sel.value = plannerEffort;
+  sel.disabled = disabled;
+  sel.addEventListener('change', () => {
+    if (!PLANNER_EFFORTS.includes(sel.value)) return;
+    plannerEffort = sel.value;
+    // Main validates again; a failed save only loses the remembered level.
+    Promise.resolve(window.lunacore.setUiPrefs({ orchestraPlannerEffort: plannerEffort })).catch(() => {});
+  });
+  label.append(sel);
+  return label;
 }
 
 function cardRow(card, missing, disabled, repaint) {
@@ -81,7 +127,7 @@ function cardRow(card, missing, disabled, repaint) {
 
 /**
  * The picker block for #orchestra-body.
- * @param {{disabled:boolean, canCancel:boolean, onPlan:(ats:number[]) => void,
+ * @param {{disabled:boolean, canCancel:boolean, onPlan:(ats:number[], effort:string) => void,
  *   onCancel:() => void, repaint:() => void}} opts
  * @returns {HTMLElement}
  */
@@ -126,7 +172,11 @@ export function pickerView({ disabled, canCancel, onPlan, onCancel, repaint }) {
   if (manual) box.append(el('p', 'orchestra__msg', t('orch.pick.manual', { n: manual })));
 
   const foot = el('div', 'orchestra__pick-bar');
-  foot.append(button(t('orch.pick.plan', { n: count }), () => onPlan(selectedAts()), disabled || !count));
+  const planDisabled = disabled || !count;
+  foot.append(
+    effortSelect(planDisabled),
+    button(t('orch.pick.plan', { n: count }), () => onPlan(selectedAts(), plannerEffort), planDisabled),
+  );
   if (canCancel) foot.append(button(t('orch.pick.back'), onCancel, disabled));
   box.append(foot);
   return box;

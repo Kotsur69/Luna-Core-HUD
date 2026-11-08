@@ -33,7 +33,7 @@
 'use strict';
 
 const path = require('path');
-const { validatePlan, estimatePlan, pickTodos, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
+const { validatePlan, estimatePlan, pickTodos, plannerEffortOf, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
 const { lastWordsFrom, outputTail } = require('./orchestraDiagnose');
 const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
@@ -567,6 +567,8 @@ function createOrchestra(deps) {
       errors: plan.errors,
       estimate: plan.estimate,
       costUsd: plan.costUsd,
+      // null on a plan stored before the picker had the select.
+      plannerEffort: plan.plannerEffort || null,
       dirty: plan.dirty,
       model: PLANNER_MODEL,
       workerModel: plan.workerModel || workerSettings().model,
@@ -735,7 +737,7 @@ function createOrchestra(deps) {
    * `ownership` (LW 2.12, `{path|glob: owner}` with owner = package id or
    * card `at`) stops a worker that edits a file another package owns.
    * @param {{projectId:string|null, repoPath:string, profileId:string, env:object,
-   *   todoAts?:number[]|null, cards?:Array<number|object>, onRunSettled?:Function,
+   *   todoAts?:number[]|null, plannerEffort?:string, cards?:Array<number|object>, onRunSettled?:Function,
    *   ownership?:object|object[]}} ctx
    */
   async function makePlan(ctx) {
@@ -754,11 +756,14 @@ function createOrchestra(deps) {
     // is in state 'planning' and keeps it.
     if (planWaiter.isWaiting()) planWaiter.clear();
 
+    const plannerEffort = plannerEffortOf(ctx.plannerEffort);
     busy = true;
     planningRepo = ctx.repoPath;
     try {
       const [res, dirty, baseBranch] = await Promise.all([
-        deps.runPlanner({ cwd: ctx.repoPath, env: ctx.env, openTodos }),
+        // The picker's planner effort rides in ctx too, so a limit-wait or
+        // account-failover replan plans at the same level.
+        deps.runPlanner({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort }),
         deps.dirtyCount(ctx.repoPath),
         deps.baseBranchOf ? deps.baseBranchOf(ctx.repoPath) : null,
       ]);
@@ -791,6 +796,7 @@ function createOrchestra(deps) {
         errors: checked.errors,
         estimate: estimatePlan(checked.packages, openTodos),
         costUsd: res.costUsd,
+        plannerEffort,
         dirty,
         workerModel: null,
         workerEffort: null,
