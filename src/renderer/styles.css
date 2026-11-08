@@ -5094,6 +5094,7 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__pick-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
 .orchestra__pick-bar .pad-send { padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); }
 .orchestra__pick-count { font-size: var(--fs-xs); color: var(--text-dim); margin-right: auto; }
+.orchestra__pick-effort { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--fs-xs); color: var(--text-dim); }
 .orchestra__pick-list { display: flex; flex-direction: column; gap: var(--space-2); }
 .orchestra__pick-row {
   display: grid;

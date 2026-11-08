@@ -11,6 +11,7 @@
 // autoCompactMode, autoCompactEveryTurns, autoCompactAfterMinutes,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
+// orchestraPlannerEffort,
 // collapsed, layoutSizes, widgetSlots, railedRegions, density, fontPack, glow,
 // motion, effectsStrength, welcomeSeen, welcomeChecked, pwaUrl, hideLife,
 // hideMission, hideGodMode.
@@ -25,7 +26,7 @@
 
 const fs = require('fs');
 const paths = require('./paths');
-const { EFFORTS } = require('./efforts');
+const { EFFORTS, isEffort } = require('./efforts');
 
 // Per-machine state, so it lives in the WRITABLE root - which in a dev clone is
 // still the repo's config/, and in a packaged build is %APPDATA%/LunaCore/config
@@ -224,6 +225,9 @@ const DEFAULTS = {
   orchestraWorkerModel: 'opus',
   orchestraPermissionMode: 'bypassPermissions',
   orchestraWorkerEffort: 'plan',
+  // The God Mode v2 planner's --effort, picked in the to-do picker. Never
+  // 'low' and never 'plan' - only src/efforts.js isEffort() levels.
+  orchestraPlannerEffort: 'high',
   orchestraIntegration: 'pr',
   orchestraAllowedTools: [],
   orchestraCheckCommand: 'npm test',
@@ -731,6 +735,9 @@ function readUiPrefs() {
         ? obj.orchestraPermissionMode
         : DEFAULTS.orchestraPermissionMode,
       orchestraWorkerEffort: workerEffortOf(obj.orchestraWorkerEffort) || DEFAULTS.orchestraWorkerEffort,
+      orchestraPlannerEffort: isEffort(obj.orchestraPlannerEffort)
+        ? obj.orchestraPlannerEffort
+        : DEFAULTS.orchestraPlannerEffort,
       orchestraIntegration: ORCHESTRA_INTEGRATION_MODES.includes(obj.orchestraIntegration)
         ? obj.orchestraIntegration
         : DEFAULTS.orchestraIntegration,
@@ -855,6 +862,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && workerEffortOf(partial.orchestraWorkerEffort)) {
       next.orchestraWorkerEffort = partial.orchestraWorkerEffort;
+    }
+    if (partial && isEffort(partial.orchestraPlannerEffort)) {
+      next.orchestraPlannerEffort = partial.orchestraPlannerEffort;
     }
     if (partial && ORCHESTRA_INTEGRATION_MODES.includes(partial.orchestraIntegration)) {
       next.orchestraIntegration = partial.orchestraIntegration;
