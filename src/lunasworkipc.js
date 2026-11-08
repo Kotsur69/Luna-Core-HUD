@@ -15,6 +15,8 @@
 // lunaswork:status         (no payload) -> {ok, status}
 // lunaswork:steer          {projectId, text} -> {ok} | {ok:false, reason}
 // lunaswork:openEvidence   (no payload) -> {ok} | {ok:false, reason}
+//                          {what:'playtestOnce'}: the last "Run Playtester pass"
+//                          folder instead (src/lunasworkPlaytestOnce.js); same checks
 // lunaswork:handOver       {runId?} -> {ok, status} | {ok:false, reason, message?}
 // lunaswork:handBack       {runId?} -> {ok, status} | {ok:false, reason, message?}
 //                          "Hand me the wheel" (C11); runId, when sent, must
@@ -183,6 +185,7 @@ function defaultWriteBrief(file, text) {
  *   queue?:{read:()=>object, write:(q:object)=>boolean}, queueChanged?:()=>void,
  *   confirmQueueAdd?:(ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
  *   checkCommandFor?:(profile:object)=>string,
+ *   playtestPass?:{lastEvidence:()=>{projectId:string, runId:string, evidenceDir:string}|null},
  *   settingsFile?:string, writeBrief?:Function, resolveDir?:Function,
  *   now?:()=>number}} deps  settingsFile / writeBrief / resolveDir / now: test seams
  */
@@ -198,6 +201,7 @@ function registerLunasworkIpc(deps) {
     runsRoot,
     openPath,
     ask,
+    playtestPass,
     settingsFile,
     queue,
     queueChanged,
@@ -339,7 +343,7 @@ function registerLunasworkIpc(deps) {
 
   if (controller) {
     const isKnownProject = (id) => !!projectOf({ projectId: id });
-    registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, todos, runsRoot, openPath, now });
+    registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, todos, runsRoot, openPath, playtestPass, now });
   }
 
   if (ask) registerAskIpc(ipcMain, ask);
@@ -378,7 +382,7 @@ function registerAskIpc(ipcMain, ask) {
 }
 
 /** start / stop / status / steer / evidence of a run (src/lunaswork.js), and its event push. */
-function registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, todos, runsRoot, openPath, now }) {
+function registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, todos, runsRoot, openPath, playtestPass, now }) {
   // Whatever the controller answers, the renderer only sees the public status.
   const withPublicStatus = (res) =>
     isObject(res) && res.status !== undefined ? { ...res, status: publicStatus(res.status, isKnownProject) } : res;
@@ -444,13 +448,15 @@ function registerRunIpc({ ipcMain, controller, projectOf, isKnownProject, send, 
 
   if (runsRoot) registerDashboardIpc({ ipcMain, controller, isKnownProject, runsRoot });
 
-  // Only the current run's evidence folder, checked to sit in its runs folder.
+  // Only the current run's evidence folder - or, asked for by name, the last
+  // Playtester pass's - checked to sit in its own folder under the runs root.
   if (runsRoot && openPath) {
-    ipcMain.handle('lunaswork:openEvidence', async () => {
+    const passEvidence = () => (playtestPass && typeof playtestPass.lastEvidence === 'function' ? playtestPass.lastEvidence() : null);
+    ipcMain.handle('lunaswork:openEvidence', async (_event, req) => {
       try {
-        const status = controller.status();
-        if (!isObject(status) || !isKnownProject(status.projectId)) return { ok: false, reason: 'no-evidence' };
-        const dir = evidenceDirOf(status, runsRoot());
+        const source = isObject(req) && req.what === 'playtestOnce' ? passEvidence() : controller.status();
+        if (!isObject(source) || !isKnownProject(source.projectId)) return { ok: false, reason: 'no-evidence' };
+        const dir = evidenceDirOf(source, runsRoot());
         if (!dir) return { ok: false, reason: 'no-evidence' };
         const error = await openPath(dir);
         return error ? { ok: false, reason: 'open-failed' } : { ok: true };

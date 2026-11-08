@@ -20,7 +20,7 @@ const { removeDir, patientGitExecFile } = require('../test-support/under-load');
 // under load a real git here took longer. Patched before the modules load.
 patientGitExecFile(require('child_process'));
 
-const { syncCheckout, createAwake } = require('../src/lunasworkWiring');
+const { syncCheckout, createAwake, meteredPass } = require('../src/lunasworkWiring');
 
 // The machine's own autocrlf must not rewrite the test files' line endings.
 const git = (cwd, ...args) =>
@@ -190,4 +190,24 @@ test('createHookDeps: the second opinion is off without a CLI order; no review d
   assert.deepEqual(reviews.due, []);
   assert.equal(await on.lighthouse({ projectId: 'p', repoPath: os.tmpdir(), url: 'not a url' }), null);
   for (const key of ['refreshGraph', 'i18n', 'lighthouse', 'reviews', 'secondOpinion']) assert.equal(typeof on[key], 'function', key);
+});
+
+test('meteredPass: a Playtester pass outside a run gets its own claude -p tokens as usage', async () => {
+  const stdout = JSON.stringify({ type: 'result', total_cost_usd: 0.5, usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 7 } });
+  const fakeExec = (file, args, options, callback) => callback(null, stdout, '');
+  const res = await meteredPass(async (meter) => {
+    const exec = meter.exec('playtester', fakeExec);
+    // The Playtester call and the design-match judge: both claude -p, both booked.
+    await new Promise((resolve) => exec('claude', [], {}, resolve));
+    await new Promise((resolve) => exec('claude', [], {}, resolve));
+    // Anything that is not claude (the app's own commands) is not.
+    await new Promise((resolve) => exec('git', [], {}, resolve));
+    return { ok: true, report: {} };
+  });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.usage, { calls: 2, inputTokens: 240, outputTokens: 60, cacheReadTokens: 14, cacheWriteTokens: 0, costUsd: 1 });
+
+  const none = await meteredPass(async () => ({ ok: false, error: 'limit' }));
+  assert.deepEqual(none, { ok: false, error: 'limit', usage: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 } });
+  assert.equal(await meteredPass(async () => null), null);
 });

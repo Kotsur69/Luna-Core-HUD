@@ -166,6 +166,7 @@ const { fileQueueStore, phoneQueue } = require('./lunasworkQueue');
 const { checkCommandFor: lunasworkCheckCommandFor } = require('./lunasworkRun');
 const { createWidget, supabaseRegistry, endpointFor, startClientFeedbackPoll } = require('./lunasworkWidget');
 const { createMailReplies } = require('./lunasworkMailReplies');
+const { createPlaytestOnce, createConfirmDialog: createPlaytestPassConfirm, registerPlaytestOnceIpc } = require('./lunasworkPlaytestOnce');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostPush } = require('./hostpush');
@@ -1296,6 +1297,16 @@ const lunaswork = createLunasWorkRuntime({
   // Run report (<userDir>/runs/lunaswork-<id>.md + .html) and the run-end email.
   runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
   mail: { sender: reportMail.sender, prefs: reportMail.prefs },
+  log: (line) => console.info(line),
+});
+// "Run Playtester pass" (src/lunasworkPlaytestOnce.js): one explore pass outside a run.
+const lunasworkPlaytestPass = createPlaytestOnce({
+  projects: () => projects,
+  controller: lunaswork,
+  confirm: createPlaytestPassConfirm({ dialog, getWindow: () => mainWindow }),
+  playtest: (opts) => lunaswork.playtestOnce(opts),
+  limitResumeAt: (res) => lunaswork.limitResumeAt(res),
+  accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
   log: (line) => console.info(line),
 });
 // Luna's Work machine guard (src/lunasworkMachine.js): watchdog task, Windows
@@ -2982,7 +2993,10 @@ function registerIpc() {
     runsRoot: () => path.join(userDir(), RUN_REPORT_DIR),
     openPath: (dir) => shell.openPath(dir),
     ask: lunasworkAsk,
+    // lunaswork:openEvidence {what:'playtestOnce'}: the last pass's folder.
+    playtestPass: lunasworkPlaytestPass,
   });
+  registerPlaytestOnceIpc({ ipcMain, service: lunasworkPlaytestPass, send });
   const lifeSync = startLifeSync({ cloud });
   const billCal = createBillCalendar({
     gcal,

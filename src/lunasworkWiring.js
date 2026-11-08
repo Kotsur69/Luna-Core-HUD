@@ -40,6 +40,9 @@
 //   phone snapshot  lunasworksnapshot (LW 2.17b): controller.phoneSnapshot()
 //                   with the newest screenshots as small JPEG thumbnails;
 //                   wireDecisionSync puts it throttled on every phase change
+//   playtest pass   runtime.playtestOnce: one Playtester call outside a run
+//                   ("Run Playtester pass", src/lunasworkPlaytestOnce.js),
+//                   on Claude, metered on its own meter into result.usage
 //   ask luna        lunasworkAsk (LW 2.27): wireDecisionSync hands the phone's
 //                   questions to the ask service; main.js creates it
 //   project queue   lunasworkQueue (B16): config/lunaswork-queue.local.json;
@@ -80,7 +83,7 @@ const { handbackHead, readCommits } = require('./lunasworkHandback');
 const { wheelFromTodoPeers } = require('./lunasworkWheel');
 const { createHookDeps } = require('./lunasworkHookDeps');
 const { createShipDocsDeps } = require('./lunasworkShipDocs');
-const { createUsageMeter } = require('./lunasworkUsage');
+const { createUsageMeter, addUsage, emptyUsage } = require('./lunasworkUsage');
 const { execClaude } = require('./lunasworkCritic');
 const { runCriticPick } = require('./lunasworkVariants');
 const { shipEstimate, etaLine } = require('./lunasworkEta');
@@ -131,6 +134,19 @@ async function syncCheckout(repoPath) {
   if (!fetched.ok) return { ok: false, detail: `fetch failed: ${fetched.err}` };
   const merged = await git(repoPath, ['merge', '--ff-only', 'FETCH_HEAD']);
   return merged.ok ? { ok: true } : { ok: false, detail: `no fast-forward: ${merged.err}` };
+}
+
+/**
+ * One call booked on a fresh meter of its own; the answer gets its tokens as
+ * `usage` (lunasworkUsage's Usage shape, all zero when nothing was recorded),
+ * replacing any `usage` the answer had - the meter is the one source.
+ * @param {(meter:{exec:Function, runner:Function})=>Promise<unknown>} call
+ */
+async function meteredPass(call) {
+  const own = createUsageMeter();
+  const res = await call(own);
+  const usage = own.drain().reduce((sum, entry) => addUsage(sum, entry.usage), emptyUsage());
+  return res && typeof res === 'object' && !Array.isArray(res) ? { ...res, usage } : res;
 }
 
 const THUMB_WIDTH = 240;
@@ -276,6 +292,18 @@ function createLunasWorkRuntime(ctx) {
 
   // LW 2.17a: the run's token accounting; the controller drains it at every phase change.
   const meter = createUsageMeter();
+
+  /** The Playtester call booked on `m`; free providers only when asked for (freeFallback). */
+  const playtestOn = (m) => ({ free, ...opts }) => runPlaytest({
+    ...opts,
+    env: (free && ctx.freeEnv()) || ctx.env(),
+    execImpl: m.exec('playtester', execFile),
+  });
+
+  // "Run Playtester pass": always on Claude (ctx.env() with the account layer),
+  // metered on its own meter - a run on another project must not be booked with it.
+  const playtestOnce = (opts) => meteredPass((own) => playtestOn(own)({ ...opts, free: false }));
+
   const build = async (opts) => {
     const res = await ctx.builder.build(opts);
     // God Mode's planner is the one `claude -p` of a build; its workers' tabs are not metered here.
@@ -321,11 +349,7 @@ function createLunasWorkRuntime(ctx) {
     build,
     createAdapter: (name, opts) => createAdapter(name, opts),
     // Free providers for the Playtester while Claude is limited (freeFallback).
-    playtest: ({ free, ...opts }) => runPlaytest({
-      ...opts,
-      env: (free && ctx.freeEnv()) || ctx.env(),
-      execImpl: meter.exec('playtester', execFile),
-    }),
+    playtest: playtestOn(meter),
     shipGate: ({ repoPath, scores }) => gateStatus({ shipCriteria: pack.readPackFile(repoPath, 'SHIP_CRITERIA.md') || '', scores }),
     critic: (opts) => runCritic({ ...opts, env: ctx.env(), runClaude: meter.runner('critic', execClaude) }),
     // Idea #14: "like X" references in the pack researched into design/references/.
@@ -395,6 +419,10 @@ function createLunasWorkRuntime(ctx) {
       if (!run) return null;
       return buildSnapshot({ status: controller.status(), run, eta: estimateOf(run), shots: thumbnailsOf(run) });
     },
+    /** One Playtester pass outside a run (src/lunasworkPlaytestOnce.js); result.usage = its tokens. */
+    playtestOnce,
+    /** The reset time of a usage-limit answer, or null - as the run computes it. */
+    limitResumeAt,
   };
 }
 
@@ -550,4 +578,7 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLun
   return { publish, pullAnswers };
 }
 
-module.exports = { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, createAwake, syncCheckout, wireDecisionSync, thumbnailsOf, mailWithNote };
+module.exports = {
+  createLunasWorkRuntime, createMachineRuntime, createAskRuntime, createAwake, syncCheckout, wireDecisionSync,
+  thumbnail, thumbnailsOf, mailWithNote, meteredPass,
+};
