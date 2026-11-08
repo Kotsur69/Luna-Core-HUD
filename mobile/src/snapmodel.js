@@ -22,7 +22,7 @@ const { summarize, weekWindow } = ledgerCalc;
 const { parseYazioPeer } = yazio;
 const { newestUsage, windowNow } = usage;
 const { reposFrom: mergeReposRows } = reposSnap;
-const { runsFrom, liveFrom, livesFrom, tabsFrom, decisionsFrom, feedbackFrom, queueFrom, liveCounts } = godmodeSnap;
+const { runsFrom, liveFrom, livesFrom, tabsFrom, decisionsFrom, feedbackFrom, queueFrom, liveCounts, plansFrom } = godmodeSnap;
 
 /** Projects listed on the phone; the rest only count in the total. */
 export const MAX_PROJECTS = 20;
@@ -171,6 +171,27 @@ export function lunasworkFrom(rows, now) {
 /** Luna's Work project queues (B16): [{machine, stale, items:[{label}]}], newest PC first. */
 export function godmodeQueueFrom(rows, now) {
   return queueFrom(rows, now);
+}
+
+/**
+ * Every PC's pending God Mode plans (Phone God Mode C), newest PC first, one
+ * per PC and project, each with `machine` and `stale`:
+ * {planId, projectId, repoName, state: planning|ready|failed, errors,
+ * packages: [{id, title, deps, model}], todos}. Text only; a ready plan
+ * without a plan id or packages reads as failed, never as launchable.
+ */
+export function godmodePlansFrom(rows, now) {
+  const seen = new Set();
+  const out = [];
+  for (const p of plansFrom(rows, now)) {
+    // Two rows of one machine (a casing change): the newest wins.
+    const key = `${p.machine.toLowerCase()}|${p.projectId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const broken = p.state === 'ready' && (!p.planId || !p.packages.length);
+    out.push(broken ? { ...p, state: 'failed', errors: p.errors.length ? p.errors : ['noPlan'] } : p);
+  }
+  return out;
 }
 
 /** {pushed, working, waiting, pending, failed} of a live run. */

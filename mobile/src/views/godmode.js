@@ -14,6 +14,10 @@
 // parts that write: an answer, a wheel action or new feedback goes back
 // through the `todos` outbox. The Luna's Work project queue (queue.js) is
 // listed read-only.
+// Phone God Mode C/D: a pending plan per project sits above the live runs
+// (godmodeplan.js: review, Launch, Discard), and a live run on a PC whose
+// `host` heartbeat says godmode: true gets Kill / Retry failed / Finish -
+// signed commands to that PC (hostrun.js).
 // Otherwise read-only; every string is text, and a PR link is github.com
 // only (the reader already dropped anything else).
 // ============================================================================
@@ -22,7 +26,12 @@ import { h, icon, ICONS } from '../dom.js';
 import { t, tf } from '../i18n.js';
 import { godmodeRunsFrom } from '../snapmodel.js';
 import { mountSnapshots, when } from './snapshotview.js';
-import { livesToShow, liveCard, tabsCard, liveTodayCard, repaintWhileShown } from './godmodelive.js';
+import { livesToShow, liveCard, tabsCard, liveTodayCard, repaintWhileShown, createLiveControls } from './godmodelive.js';
+import { createPlanCards } from './godmodeplan.js';
+import { createRunners } from './hostrun.js';
+import { confirmSheet } from './sheet.js';
+import { hostList } from '../hostmodel.js';
+import { hostForMachine } from '../godmodestart.js';
 import { decisionsCard, createDecisionAnswers } from './decisions.js';
 import { feedbackCard, createFeedbackSender } from './feedback.js';
 import { wheelCard, createWheelSender } from './wheel.js';
@@ -95,8 +104,15 @@ export function mountGodmode(main, deps) {
   const feedback = createFeedbackSender(deps, () => view.repaint());
   // C11: hand me the wheel / hand back, the same way.
   const wheel = createWheelSender(deps, () => view.repaint());
-  const view = mountSnapshots(main, deps, ['godmode'], (byKind, now) => {
+  // Phone God Mode C + D: signed commands to the PC that published the plan / run.
+  const runnerFor = createRunners(deps);
+  const planCards = createPlanCards(deps, runnerFor, () => view.repaint());
+  const liveControls = createLiveControls(deps, runnerFor, () => view.repaint(), confirmSheet);
+  const view = mountSnapshots(main, deps, ['godmode', 'host'], (byKind, now) => {
     const rows = byKind.godmode;
+    // The `host` heartbeats say which PC takes godmode.* commands (godmode: true).
+    const hosts = hostList(byKind.host, now);
+    const plans = planCards(rows, hosts, now);
     const runs = godmodeRunsFrom(rows, now);
     // Every project's live run (an older PC build sends one).
     const lives = livesToShow(rows, now);
@@ -107,8 +123,9 @@ export function mountGodmode(main, deps) {
     // LW 2.17b: the Luna's Work page (run status, scores, tokens, time to SHIP).
     const lw = lunasworkLinkCard(rows, now);
     const queued = queueCard(rows, now);
-    if (!runs.length && !lives.length && !tabs && !decisions && !notes && !lw && !queued) return h('p', { class: 'empty' }, t('godmodeEmpty'));
-    return h('div', { class: 'stack' }, lw, decisions, helm, notes, lives.map((live, i) => liveCard(live, now, i)), queued, tabs, runs.map((r) => runCard(r, now)));
+    if (!runs.length && !lives.length && !plans.length && !tabs && !decisions && !notes && !lw && !queued) return h('p', { class: 'empty' }, t('godmodeEmpty'));
+    const liveCards = lives.map((live, i) => liveCard(live, now, i, liveControls(live, hostForMachine(hosts, live.machine))));
+    return h('div', { class: 'stack' }, lw, decisions, helm, notes, plans, liveCards, queued, tabs, runs.map((r) => runCard(r, now)));
   });
   repaintWhileShown(main, view);
   return view;
