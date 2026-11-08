@@ -1978,6 +1978,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .media-btn:disabled:hover { color: var(--text-dim); border-color: var(--edge); }
 .media-btn--main { width: 30px; height: 30px; font-size: 14px; }
 .media-btn.is-muted { color: var(--neon-cyan); border-color: var(--neon-cyan); }
+.media-btn.is-error { border-color: var(--bad); }
+.media-btn[aria-busy="true"] { cursor: progress; }
 
 .media-deck__volume {
   display: flex;
