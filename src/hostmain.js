@@ -208,13 +208,16 @@ function actionDeps({ cloud, repos, puts, configSync, after }) {
 /**
  * Starts host mode in this process.
  * @param {{electron: object, machine: string, makeDefault?: boolean,
- *   cloud?: object|null, onStop?: () => void, chatTabs?: object|null}} opts
+ *   cloud?: object|null, onStop?: () => void, chatTabs?: object|null,
+ *   godmode?: object|null}} opts
  *   cloud = the HUD's running cloud (switch mode), else one is started here;
  *   onStop = what Stop does instead of quitting (switch mode: show the HUD);
  *   chatTabs = the HUD's read-only tabs for phone sessions (switch mode only);
- *   onDefaultSet = runs after a default write when there is no own configSync
+ *   onDefaultSet = runs after a default write when there is no own configSync;
+ *   godmode = the HUD's phone God Mode (src/hostgodmode.js, switch mode only):
+ *   without it every godmode.* command is refused with needsHud
  */
-function startHost({ electron, machine, makeDefault = false, cloud: given = null, onStop = null, chatTabs = null, onDefaultSet = null }) {
+function startHost({ electron, machine, makeDefault = false, cloud: given = null, onStop = null, chatTabs = null, onDefaultSet = null, godmode = null }) {
   const { app, Tray, Menu, shell, dialog, powerSaveBlocker, nativeImage } = electron;
   const { execFile } = require('child_process');
   const paths = require('./paths');
@@ -236,6 +239,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   const { createHostChat } = require('./hostchat');
   const { createHostEvents } = require('./hostevents');
   const { createHostPush } = require('./hostpush');
+  const { needsHudHandlers } = require('./hostgodmode');
   const { spawn } = require('child_process');
   const { randomUUID } = require('crypto');
 
@@ -319,6 +323,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
         version: app.getVersion(),
         os: process.platform,
         isDefault: readDefault(defaultFile) === machine,
+        godmode: Boolean(godmode),
         repos: list,
         skills,
         commands: commandNames(),
@@ -354,13 +359,15 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
       })
     : null;
   const detachTabs = chat && chatTabs ? chatTabs.attach(chat) : null;
+  // planReady / planFailed for phone-started God Mode plans (HUD host mode only).
+  const detachGodmode = godmode && push ? godmode.attach((kind, info) => push.plan(kind, info)) : null;
   const pruneEvents = () => {
     if (events && setupState() === 'ready') events.prune().catch((err) => console.error('[hostmain] event prune failed:', err.message));
   };
 
-  // ---- signed commands (src/hostactions.js, src/hostchat.js) ----
+  // ---- signed commands (src/hostactions.js, src/hostchat.js, src/hostgodmode.js) ----
   const auth = createHostAuth({ host: machine, keysPath, noncesPath: paths.local('host-nonces.local.json'), log: console.error });
-  const handlers = { ...createHostActions(actionDeps({ cloud, repos, puts, configSync, after: heartbeat })), ...(chat ? chat.handlers : {}) };
+  const handlers = { ...createHostActions(actionDeps({ cloud, repos, puts, configSync, after: heartbeat })), ...(chat ? chat.handlers : {}), ...(godmode ? godmode.handlers : needsHudHandlers()) };
   const commands = cloud.client ? createHostCommands({ client: cloud.client, host: machine, verify: commandVerifier(auth), handlers, log: console.error }) : null;
   let commandsOn = false;
 
@@ -507,6 +514,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     timeouts.forEach(clearTimeout);
     if (commands) commands.stop();
     if (detachTabs) detachTabs();
+    if (detachGodmode) detachGodmode();
     if (chat) chat.stopAll();
     if (pairing) pairing.close();
     if (usageWatcher) usageWatcher.stop();

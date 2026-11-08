@@ -5,8 +5,10 @@
 // subscriptions (table push_subscriptions) with the VAPID key from the
 // function's secrets. Two callers:
 //
-//   a host / PC   (the owner's session token)  {event, machine, key, window?, level?}
-//                 event = approval | done | failed | usage
+//   a host / PC   (the owner's session token)  {event, machine, key, window?, level?, repo?}
+//                 event = approval | done | failed | usage | planReady | planFailed
+//                 (planReady / planFailed: a phone-started God Mode plan, with
+//                 the repo's folder name, checked against REPO_RE)
 //   the schedule  (header x-cron-secret = CRON_SECRET)  {event: 'offline-check'}
 //                 the default host's heartbeat (snapshots kind 'host') older
 //                 than OFFLINE_MS -> "host offline", once per outage
@@ -30,7 +32,10 @@ export const OFFLINE_MS = 5 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
 const KEY_RE = /^[A-Za-z0-9:._-]{1,120}$/;
-const HOST_EVENTS = ['approval', 'done', 'failed', 'usage'];
+const HOST_EVENTS = ['approval', 'done', 'failed', 'usage', 'planReady', 'planFailed'];
+const PLAN_EVENTS = ['planReady', 'planFailed'];
+/** A repo folder name (src/hostpush.js sends the same shape); anything else is dropped. */
+const REPO_RE = /^[A-Za-z0-9._-]{1,60}$/;
 const WINDOWS = ['fiveHour', 'sevenDay'];
 const LEVELS = [80, 95];
 
@@ -39,6 +44,8 @@ const TEXT = {
     approval: 'Potrzebna zgoda na {machine}',
     done: 'Sesja zakonczona na {machine}',
     failed: 'Sesja nie powiodla sie na {machine}',
+    planReady: 'Plan God Mode gotowy: {repo} na {machine}',
+    planFailed: 'Plan God Mode nieudany: {repo} na {machine}',
     offline: 'Host {machine} jest offline',
     fiveHour: 'Limit Claude 5 h: {level}%',
     sevenDay: 'Limit Claude tygodniowy: {level}%',
@@ -47,6 +54,8 @@ const TEXT = {
     approval: 'Approval needed on {machine}',
     done: 'Session finished on {machine}',
     failed: 'Session failed on {machine}',
+    planReady: 'God Mode plan ready: {repo} on {machine}',
+    planFailed: 'God Mode plan failed: {repo} on {machine}',
     offline: 'Host {machine} is offline',
     fiveHour: 'Claude 5 h limit at {level}%',
     sevenDay: 'Claude weekly limit at {level}%',
@@ -64,6 +73,10 @@ export function notification(req, lang = 'pl') {
   if (req.event === 'usage') {
     return { title: 'LunaCore', body: fill(t[req.window], { level: req.level }), tag: `usage-${req.window}`, url: '/#today' };
   }
+  if (PLAN_EVENTS.includes(req.event)) {
+    const repo = typeof req.repo === 'string' && REPO_RE.test(req.repo) ? req.repo : 'God Mode';
+    return { title: 'LunaCore', body: fill(t[req.event], { machine: req.machine, repo }), tag: `plan-${req.machine}`, url: '/#godmode' };
+  }
   return { title: 'LunaCore', body: fill(t[req.event], { machine: req.machine }), tag: `${req.event}-${req.machine}`, url: '/#host' };
 }
 
@@ -77,6 +90,10 @@ export function parsePushRequest(body) {
   if (body.event === 'usage') {
     if (!WINDOWS.includes(body.window) || !LEVELS.includes(body.level)) return { ok: false };
     return { ok: true, event: 'usage', machine: body.machine, key: body.key, window: body.window, level: body.level };
+  }
+  if (PLAN_EVENTS.includes(body.event)) {
+    const repo = typeof body.repo === 'string' && REPO_RE.test(body.repo) ? body.repo : null;
+    return { ok: true, event: body.event, machine: body.machine, key: body.key, ...(repo ? { repo } : {}) };
   }
   return { ok: true, event: body.event, machine: body.machine, key: body.key };
 }

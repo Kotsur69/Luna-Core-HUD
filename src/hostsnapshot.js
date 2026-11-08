@@ -4,8 +4,12 @@
 // docs/tbc_docs/REMOTE_HOST_PLAN.md, slice H1. A PC in host mode puts its `host`
 // snapshot every 30 s: what the phone may pick from on that host.
 //
-//   {v, at, version, os, default, repos: [{id, key, name, cloned, status}],
+//   {v, at, version, os, default, godmode, repos: [{id, key, name, cloned, status}],
 //    skills, commands, mcp, sessions}
+//
+// `godmode` is true only when host mode runs inside the full HUD
+// (src/hostswitch.js): only then are the signed godmode.* commands
+// (src/hostgodmode.js) live. A headless `--host` refuses them with needsHud.
 //
 // Repos travel by project id (the phone sends an id back, never a path) plus
 // the repo key and folder name; no local path ever leaves the host. `at` is
@@ -97,7 +101,7 @@ function cleanList(list, fn, max) {
 /**
  * This host's `host` snapshot. Everything passes the same cleaning the
  * reader applies, so a put never carries what a reader would drop.
- * @param {{version?: string, os?: string, isDefault?: boolean, repos?: object[],
+ * @param {{version?: string, os?: string, isDefault?: boolean, godmode?: boolean, repos?: object[],
  *   skills?: string[], commands?: string[], mcp?: string[], sessions?: object[]}} parts
  * @param {number} [now]
  */
@@ -108,6 +112,7 @@ function hostSnapshot(parts = {}, now = Date.now()) {
     version: clean(parts.version, MAX_VERSION),
     os: OS_LIST.includes(parts.os) ? parts.os : 'linux',
     default: parts.isDefault === true,
+    godmode: parts.godmode === true,
     repos: cleanList(parts.repos, cleanRepo, MAX_REPOS),
     skills: cleanNames(parts.skills),
     commands: cleanNames(parts.commands),
@@ -139,6 +144,7 @@ function parseHostPeer(row, now = Date.now()) {
       version: clean(d.version, MAX_VERSION),
       os: OS_LIST.includes(d.os) ? d.os : 'linux',
       default: d.default === true,
+      godmode: d.godmode === true,
       repos: cleanList(d.repos, cleanRepo, MAX_REPOS),
       skills: cleanNames(d.skills),
       commands: cleanNames(d.commands),
