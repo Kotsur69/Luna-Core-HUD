@@ -109,9 +109,15 @@ const DENIED_TOOLS = [
 ];
 // Evidence-dir files the Playtester must not read even though they sit in
 // its cwd: the dev server's / app's logs (server.log, app.log, browsers.log)
-// can print source lines on a compile error, and the Lighthouse report folder
-// names the app's scripts. A deny rule wins over READ_RULE.
-const DENIED_READS = ['Read(./*.log)', 'Read(./**/*.log)', 'Read(./lighthouse/**)'];
+// and the Unity console dump (unity-console.json, unity-state.json) can print
+// source lines on a compile error, the Lighthouse report folder names the
+// app's scripts, and the Electron bridge's control file holds its token.
+// LunaCore writes all of them under these fixed lowercase names. A deny rule
+// wins over READ_RULE.
+const DENIED_READS = [
+  'Read(./*.log)', 'Read(./**/*.log)', 'Read(./lighthouse/**)',
+  'Read(./unity-*.json)', 'Read(./.playtest-control.json)',
+];
 const MCP_TOOL_RE = /^mcp__([A-Za-z0-9_-]+?)__[A-Za-z0-9_]+$/;
 
 const KINDS = ['bug', 'feel', 'missing', 'idea'];

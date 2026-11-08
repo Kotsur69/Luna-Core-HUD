@@ -130,6 +130,8 @@ test('argv allows the adapter MCP tools plus Read inside the evidence dir, and d
   }
   assert.ok(!denied.includes('Read'), 'Read itself is not denied');
   assert.ok(denied.includes('Read(./**/*.log)'), 'the dev server log stays unreadable');
+  assert.ok(denied.includes('Read(./unity-*.json)'), 'the Unity console dump stays unreadable');
+  assert.ok(denied.includes('Read(./.playtest-control.json)'), 'the Electron bridge token stays unreadable');
   for (const t of denied) assert.ok(!allowed.includes(t));
   for (const t of ['Bash', 'Grep', 'Glob', 'Edit', 'Write', 'WebFetch']) {
     assert.ok(!allowed.some((a) => a === t || a.startsWith(`${t}(`)), `${t} not allowed`);
