@@ -67,6 +67,13 @@ function renderVolume() {
   els.mute.classList.toggle('is-muted', volumeState.muted);
 }
 
+/** Flags (or clears) a failed mute toggle on the button: red outline + tooltip. */
+function setMuteError(failed) {
+  if (!els) return;
+  els.mute.classList.toggle('is-error', failed);
+  els.mute.title = t(failed ? 'media.muteError' : 'media.mute');
+}
+
 async function refreshVolume() {
   const v = await window.lunacore.mediaCommand({ type: 'volume', action: 'get' });
   if (v) {
@@ -119,11 +126,32 @@ defineWidget({
       window.lunacore.mediaCommand({ type: 'transport', action: 'next' });
     });
     els.mute.addEventListener('click', async () => {
-      const v = await window.lunacore.mediaCommand({ type: 'volume', action: 'mute' });
+      // The PowerShell round trip can take 10 s+ on a slow machine. Disable
+      // the button meanwhile so a second click can't queue a second toggle
+      // that silently undoes the first.
+      if (els.mute.disabled) return;
+      const button = els.mute;
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      let v = null;
+      try {
+        v = await window.lunacore.mediaCommand({ type: 'volume', action: 'mute' });
+      } catch (err) {
+        console.warn('[media] mute toggle failed:', err);
+      } finally {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+      }
       if (v) {
+        setMuteError(false);
         volumeState = v;
         renderVolume();
+        return;
       }
+      // Keep the previous state, flag the failure (main logs the reason),
+      // then re-read in case the toggle landed but its reply did not.
+      setMuteError(true);
+      refreshVolume();
     });
     els.volume.addEventListener('change', async () => {
       const v = await window.lunacore.mediaCommand({
