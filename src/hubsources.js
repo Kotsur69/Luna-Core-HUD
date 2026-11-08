@@ -19,7 +19,7 @@ const HUB_SOURCE_GROUPS = Object.freeze({
   power: Object.freeze(['power', 'planwait']),
   life: Object.freeze(['checkin', 'goals', 'bills', 'weekly']),
   mail: Object.freeze(['mail']),
-  accounts: Object.freeze(['cloud', 'google', 'host']),
+  accounts: Object.freeze(['cloud', 'google', 'gmail', 'host']),
   todo: Object.freeze(['todo']),
   update: Object.freeze(['update']),
 });

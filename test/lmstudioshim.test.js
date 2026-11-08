@@ -535,19 +535,19 @@ test('shim ends a stream that goes silent mid-answer with an SSE error event', a
 });
 
 test('shim sends SSE pings while the upstream thinks between events', async () => {
-  let release;
-  const gate = new Promise((r) => { release = r; });
   const upstream = await startUpstream(async (req, res) => {
     req.resume();
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     res.write('data: 1\n\n');
-    await gate;
+    // The think pause starts after the first event, not at test start: under
+    // a loaded full run the request alone can take most of a fixed window,
+    // leaving the 30 ms keep-alive no time to fire.
+    await new Promise((r) => setTimeout(r, 200));
     res.end('data: 2\n\n');
   });
   const shim = new LmStudioShim({ upstream: `http://127.0.0.1:${upstream.address().port}`, idleTimeoutMs: 5000, keepAliveMs: 30 });
   const { port, token } = await shim.start();
   try {
-    setTimeout(release, 200);
     const res = await request(port, { method: 'POST', path: '/v1/messages', body: '{"messages":[]}', token });
     assert.match(res.body, /event: ping\ndata: \{"type": "ping"\}\n\n/);
     // Pings sit between whole events, never inside one.

@@ -83,7 +83,7 @@ const RELOADS = {
 /**
  * Another PC's check-in / habits / goals / score settings were merged here
  * (main's life:changed): reload those parts, so subscribers (the check-in and
- * goals prompts, the inbox badge) re-evaluate without a restart.
+ * goals prompts) re-evaluate without a restart.
  */
 async function onSynced(payload) {
   const parts = payload && Array.isArray(payload.parts) ? payload.parts : [];
@@ -102,7 +102,7 @@ let heldParts = new Set();
 
 function applySynced(parts) {
   onSynced({ parts }).catch(() => {
-    // The next dashboard open or inbox refresh reads again.
+    // The next dashboard open reads again.
   });
 }
 

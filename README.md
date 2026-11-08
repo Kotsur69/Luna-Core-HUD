@@ -1616,8 +1616,8 @@ deploy, cron) is listed in the plan under H4.
 
 ## Notification hub (Ctrl+Shift+H)
 
-Everything that waits for you, in one place: the little line-drawn **face**
-in the palette bar (next to the Mission Control / Life chips) carries a badge
+Everything that waits for you, in one place: the **'!'** chip in the theme
+accent in the palette bar (next to the Mission Control / Life chips) carries a badge
 with the number of open **Needs you** items, and clicking it - or
 **Ctrl+Shift+H** - opens a vertical drawer on the right edge. It is not a
 modal: the terminal stays usable next to it, and you can drag its left edge
@@ -1625,18 +1625,21 @@ to resize it. Three sections:
 
 | Section | What is in it |
 |---------|---------------|
-| **Needs you** | Things with one clear action: a God Mode run's "Needs you" and "Manual actions" lines, a worker waiting on an approval, a sleep / shutdown countdown, today's check-in, this week's goals, a bill due in 3 days or overdue, mails that need your call, cloud logged out or failing, Google disconnected, the Luna host needing setup. |
+| **Needs you** | Things with one clear action: a God Mode run's "Needs you" and "Manual actions" lines, a worker waiting on an approval, a sleep / shutdown countdown, today's check-in, this week's goals, a bill due in 3 days or overdue, mails that need your call, cloud logged out or failing, Google disconnected, Gmail for report emails not connected, the Luna host needing setup. |
 | **Briefs** | The weekly / daily brief (moved here from Mission Control) and "Weekly review is ready". |
 | **Recent** | FYI items (a clean run, an update, the `[Mati]` manual to-do count) and what you marked done in the last 7 days. Collapsed by default. |
 
 **Across PCs.** A God Mode run's Needs-you and Manual-action lines travel in
 that PC's `godmode` cloud snapshot (capped, paths scrubbed), so a run that
 finished on the work PC shows up "from <that PC>" when you launch LunaCore at
-home. Those items only offer **Mark done** (the full report is in your email
-or on that PC). **Mark done is synced**: it is a `hub:done:<id>` unit in the
+home. A run item - from this PC or another one - opens its **run summary**
+(merged / pushed, Needs-you lines, manual actions, PR links); this PC's lines
+also open the full local report. **Mark done is synced**: it is a `hub:done:<id>` unit in the
 `config` sync scope, so dismissing an item on one PC clears it on every PC
-after the next sync. Marks are kept 30 days; runs older than 14 days drop to
-Recent.
+after the next sync. What the drawer has shown is synced the same way
+(`hub:seen:<id>`), so an item you saw on one PC does not auto-open the drawer
+on the next. Marks are kept 30 days (500 at most); runs older than 14 days drop
+to Recent.
 
 **Settings (Ctrl+L -> Notifications -> Notification hub).**
 - *Open at launch*: **only when something needs me** (default - the drawer
@@ -1645,9 +1648,15 @@ Recent.
 - *Toasts for new items*: one native toast per **new** Needs-you item while
   the window is not focused; clicking it opens the drawer. It also needs the
   System notifications switch above it (off by default).
-- One switch per source (God Mode, countdowns, Life, mail, accounts, manual
+- One switch per source (God Mode, countdowns, Life, mail, accounts incl. Gmail, manual
   to-dos, updates) - turn Life off if you do not use it.
 - *Reset the drawer width*.
+- **Synced across your PCs** while you are logged in to the cloud: open at
+  launch, toasts, the source switches and the System notifications switch are
+  `hub:pref:*` units in the `config` scope (newest choice wins; a fresh PC
+  never overwrites a choice made elsewhere) and apply live, without a restart.
+  The drawer width stays per PC. The line under the heading says which
+  (*Synced across your PCs* / *This PC only*).
 
 The hub costs no tokens: it only reads what the other modules already
 produce. Item text is cleaned in main and rendered as plain text; actions are

@@ -267,7 +267,7 @@ function close() {
   returnFocus = null;
 }
 
-/** Opens the dashboard on one tab (the brief links to Week, the attention inbox to Health / Week). */
+/** Opens the dashboard on one tab (the brief links to Week, hub items to Health / Week / Bills). */
 export async function openLifeTab(id) {
   if (TABS.some(([t2]) => t2 === id)) {
     tab = id;

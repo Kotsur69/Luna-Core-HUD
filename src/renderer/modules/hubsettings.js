@@ -10,6 +10,12 @@
 //     collectors of a switched-off group, src/hubsources.js);
 //   - drawer width reset (hubWidth back to the default, applied live).
 // Every value is validated again in main (src/uiprefs.js).
+//
+// N7: auto-open, toasts, sources and the system notification switch sync
+// across PCs (src/hubprefsync.js) while the cloud is logged in; the line under
+// the heading says which ("Synced across your PCs" / "This PC only", checked
+// on every Settings open). A choice made on another PC repaints the switches
+// live (hubstate.js onHubPrefs). The drawer width stays per PC.
 // ============================================================================
 
 'use strict';
@@ -20,7 +26,7 @@ import { sfx } from './sound.js';
 import { AUTO_OPEN_MODES, normalizeAutoOpen } from './hubrules.js';
 import { setHubToastsEnabled } from './hubtoast.js';
 import { resetHubWidth } from './hubpanel.js';
-import { refreshHub } from './hubstate.js';
+import { refreshHub, onHubPrefs } from './hubstate.js';
 
 /**
  * The source groups, in display order - the same names as src/hubsources.js
@@ -32,6 +38,37 @@ const save = (partial) => Promise.resolve().then(() => window.lunacore.setUiPref
 
 let els = null;
 let state = { autoOpen: 'needed', toasts: true, sources: {} };
+/** null until the cloud status answered; then whether the switches sync. */
+let synced = null;
+
+/** The stored prefs -> this module's state (unknown groups dropped). */
+function stateOf(prefs) {
+  const p = prefs && typeof prefs === 'object' ? prefs : {};
+  const sources = p.hubSources && typeof p.hubSources === 'object' ? p.hubSources : {};
+  return {
+    autoOpen: normalizeAutoOpen(p.hubAutoOpen),
+    toasts: p.hubToasts !== false,
+    sources: Object.fromEntries(HUB_SOURCE_GROUPS.filter((g) => sources[g] === false).map((g) => [g, false])),
+  };
+}
+
+function paintSync() {
+  if (!els || !els.sync) return;
+  els.sync.textContent = t(synced ? 'hubset.sync.synced' : 'hubset.sync.local');
+  els.sync.classList.toggle('is-synced', synced === true);
+}
+
+/** Re-checks whether the hub Settings sync (cloud configured + logged in). Never throws. */
+export async function refreshHubSyncLine() {
+  let status = null;
+  try {
+    status = await window.lunacore.cloudStatus();
+  } catch {
+    status = null;
+  }
+  synced = Boolean(status && status.ok !== false && status.configured !== false && status.loggedIn === true);
+  paintSync();
+}
 
 function switchRow(group) {
   const label = document.createElement('label');
@@ -83,6 +120,7 @@ function paint() {
     row.name.textContent = t(`hubset.src.${group}`);
     row.input.checked = state.sources[group] !== false;
   }
+  paintSync();
 }
 
 /** Called once from termcustom.js initTermcustomSettings() with #termcustom as root. */
@@ -100,15 +138,11 @@ export function mountHubSettings(root, prefs) {
     rows,
     toastsField: root.querySelector('#hubset-toasts-field'),
     toastsStatus: root.querySelector('#hubset-toasts-status'),
+    sync: root.querySelector('#hubset-sync'),
   };
-  const p = prefs && typeof prefs === 'object' ? prefs : {};
-  const sources = p.hubSources && typeof p.hubSources === 'object' ? p.hubSources : {};
-  state = {
-    autoOpen: normalizeAutoOpen(p.hubAutoOpen),
-    toasts: p.hubToasts !== false,
-    sources: Object.fromEntries(HUB_SOURCE_GROUPS.filter((g) => sources[g] === false).map((g) => [g, false])),
-  };
+  state = stateOf(prefs);
   paint();
+  refreshHubSyncLine();
 
   select.addEventListener('change', () => {
     sfx.modeToggle();
@@ -128,8 +162,14 @@ export function mountHubSettings(root, prefs) {
   });
   // Static overlay, never unmounted (same as notify.js): permanent for the app's life.
   const offLang = onLangChange(paint);
+  // N7: another PC's choice re-reads getUiPrefs() and repaints the switches live.
+  const offPrefs = onHubPrefs((next) => {
+    state = stateOf(next);
+    paint();
+  });
   return () => {
     offLang();
+    offPrefs();
     els = null;
   };
 }

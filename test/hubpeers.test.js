@@ -103,12 +103,13 @@ test('v1 rows still parse, without hub lines (counts only)', () => {
 
 // --- hubpeers ---------------------------------------------------------------
 
-test('peers: a v2 run with lines gives needs items from <machine>, without actions', () => {
+test('peers: a v2 run with lines gives needs items from <machine>; the only action opens the run summary', () => {
   const run = snap.runEntry(view(), { now: NOW - DAY, report: REPORT });
   const items = collectPeers({ rows: [row('KT-PC', [run])], now: NOW });
   const needs = items.filter((i) => i.kind === 'needs');
   assert.equal(needs.length, 3);
-  assert.ok(items.every((i) => i.machine === 'KT-PC' && !i.primary));
+  assert.ok(items.every((i) => i.machine === 'KT-PC'));
+  assert.ok(items.every((i) => i.primary && i.primary.action === 'openRunSummary' && i.primary.arg === 'KT-PC:p1abc'), 'N8: summary of that run');
   assert.equal(items.find((i) => i.id === 'godmode:p1abc').kind, 'info');
   // The same ids as the PC that ran it (so a synced done mark clears both).
   const local = collectGodmode({ runs: [{ id: 'p1abc', mtime: NOW - DAY, text: REPORT }], now: NOW });

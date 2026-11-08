@@ -974,27 +974,18 @@
         <button id="libraries-open" class="palette-chip" data-i18n-title="libraries.chip.title" title="Polecane biblioteki i narzedzia (Ctrl+B)">
           <kbd>Ctrl</kbd><kbd>B</kbd>
         </button>
-        <!-- Notification hub (modules/hubicon.js): a line-drawn face in the
-             theme accent plus the count of open "needs" items, hidden at 0.
-             Click or Ctrl+Shift+H toggles the right drawer (modules/hubpanel.js).
-             Static markup: the SVG carries no data. -->
+        <!-- Notification hub (modules/hubicon.js): the one '!' chip (N8 folded
+             the old attention inbox into it), in the theme accent, plus the
+             count of open "needs" items, hidden at 0. Click or Ctrl+Shift+H
+             toggles the right drawer (modules/hubpanel.js). Static markup. -->
         <button id="hub-open" class="palette-chip hub-chip" data-i18n-title="hub.chip.title" title="Centrum powiadomien (Ctrl+Shift+H)" aria-label="Centrum powiadomien" aria-expanded="false">
-          <svg class="hub-chip__face" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
-            <circle cx="12" cy="12" r="9" />
-            <path d="M9 9.6v1.2M15 9.6v1.2" />
-            <path d="M8.4 14.4c.9 1.2 2.2 1.9 3.6 1.9s2.7-.7 3.6-1.9" />
-          </svg>
+          <span class="hub-chip__mark" aria-hidden="true">!</span>
           <span id="hub-count" class="hub-chip__badge" hidden>0</span>
         </button>
         <!-- Mission Control (mail cleanup + calendar), same discoverability
              rationale as the chips above. -->
         <button id="mission-open" class="palette-chip" data-i18n-title="mc.chip.title" title="Mission Control - poczta, kalendarz, telemetria, newsy (Ctrl+Shift+M)">
           <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd>
-        </button>
-        <!-- Attention inbox ('!'): what needs Mati on every PC (modules/inbox.js).
-             The red count badge stays hidden at 0; nothing opens by itself. -->
-        <button id="inbox-open" class="palette-chip inbox-chip" data-i18n-title="inbox.chip.title" title="Co czeka na ciebie">
-          <span aria-hidden="true">!</span><span id="inbox-count" class="inbox-chip__badge" hidden>0</span>
         </button>
         <!-- Life dashboard (budget, bills, goals), same discoverability
              rationale as the chips above. -->
@@ -1824,6 +1815,8 @@
                    modules/hubsettings.js. The select's options and the
                    per-source switches are built there from fixed lists. -->
               <h3 id="hub-section" class="termcustom__section" data-i18n="hubset.section">Centrum powiadomien</h3>
+              <!-- N7: whether these switches travel to the other PCs (cloud logged in). -->
+              <p id="hubset-sync" class="termcustom__hint hubset-sync" role="status">Tylko ten komputer - zaloguj sie do chmury, aby synchronizowac</p>
               <label class="ui-field" data-i18n-title="hubset.autoOpen.hint" title="Czy panel otwiera sie sam przy starcie LunaCore.">
                 <span class="ui-field__label" data-i18n="hubset.autoOpen">Otwieraj przy starcie</span>
                 <select id="hubset-autoopen" class="profile-select"></select>

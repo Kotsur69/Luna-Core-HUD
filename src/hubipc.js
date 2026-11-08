@@ -21,9 +21,10 @@
 // PCs' `godmode` cloud rows (src/hubpeers.js, fetched in the background at
 // most every 60 s; untrusted).
 //
-// Done marks are synced (src/hubdone.js): registerHubIpc() returns the hub
-// with `doneProvider`, which main hands to the config sync, and calls
-// onDone() after a local mark so the sync runs soon.
+// Done and seen marks are synced (src/hubdone.js), and so are the hub's
+// Settings (src/hubprefsync.js, N7): registerHubIpc() returns the hub with
+// `doneProvider`, `seenProvider` and `prefsProvider`, which main hands to the
+// config sync, and calls onDone() after a local mark so the sync runs soon.
 // ============================================================================
 
 'use strict';
@@ -33,7 +34,8 @@ const path = require('path');
 const paths = require('./paths');
 const { createHub, isHubId } = require('./hub');
 const { COLLECTORS, GODMODE_WINDOW_MS, MAX_RUNS } = require('./hubcollect');
-const { createDoneStore, createSeenStore, createHubDoneProvider, DONE_FILE, SEEN_FILE } = require('./hubdone');
+const { createDoneStore, createSeenStore, createHubDoneProvider, createHubSeenProvider, DONE_FILE, SEEN_FILE } = require('./hubdone');
+const { createHubPrefsProvider } = require('./hubprefsync');
 const { collectPeers, createHubPeers } = require('./hubpeers');
 const { isCollectorOn } = require('./hubsources');
 const checkinStore = require('./lifecheckin');
@@ -77,6 +79,12 @@ function readRunReports(dir, now) {
   return runs;
 }
 
+/** ui.local.json through src/uiprefs.js (required on use: tests inject their own). */
+function defaultPrefs() {
+  const { readUiPrefs, writeUiPrefs } = require('./uiprefs');
+  return { readPrefs: readUiPrefs, writePrefs: writeUiPrefs, file: () => paths.local('ui.local.json') };
+}
+
 /** A getter that must never break the hub: null on any failure. */
 const safeGet = (fn) => () => {
   try {
@@ -109,13 +117,14 @@ function hostState(acc) {
  *     view?:Function, planWait?:Function}|null,
  *   update:()=>object|null, now:()=>number, readers?:object}} deps
  */
-function hubSources({ runsDir, orchestra, update, now, peers = null, accounts = {}, readers = {} }) {
+function hubSources({ runsDir, orchestra, update, now, machine = null, peers = null, accounts = {}, readers = {} }) {
   const o = orchestra || {};
   const acc = accounts || {};
   const r = {
     godmode: () => {
       const dir = runsDir();
-      return { runs: dir ? readRunReports(dir, now()) : [] };
+      // machine: this PC's name, so a run item can open its summary (N8).
+      return { runs: dir ? readRunReports(dir, now()) : [], machine };
     },
     // The countdowns live in each project's plan view (orchestraPower view());
     // no plan, no countdown. One God Mode run per project: every run counts.
@@ -144,6 +153,8 @@ function hubSources({ runsDir, orchestra, update, now, peers = null, accounts = 
     mail: () => ({ mail: safeGet(acc.mail)() }),
     cloud: () => ({ cloud: safeGet(acc.cloud)() }),
     google: () => ({ google: safeGet(acc.google)() }),
+    // N8: the report-email Gmail grant (gmailsend.js status(), local token only).
+    gmail: () => ({ gmail: safeGet(acc.gmail)() }),
     // Files (slow): the host's pairing keys, every to-do list, the weekly reviews.
     host: () => ({ host: hostState(acc) }),
     todo: () => ({ store: require('./todo').readStore() }),
@@ -152,7 +163,7 @@ function hubSources({ runsDir, orchestra, update, now, peers = null, accounts = 
     ...readers,
   };
   const collectors = { ...COLLECTORS, peers: collectPeers };
-  const slow = new Set(['godmode', 'checkin', 'goals', 'bills', 'host', 'todo', 'weekly']);
+  const slow = new Set(['godmode', 'checkin', 'goals', 'bills', 'gmail', 'host', 'todo', 'weekly']);
   return Object.fromEntries(Object.keys(collectors).map((name) => [name, { collect: collectors[name], read: r[name], slow: slow.has(name) }]));
 }
 
@@ -165,11 +176,14 @@ function hubSources({ runsDir, orchestra, update, now, peers = null, accounts = 
  *   doneFile?: () => string|null, seenFile?: () => string|null, now?: () => number, readers?: object,
  *   snapshots?: () => ({list: Function}|null), onDone?: () => void,
  *   accounts?: {mail?:()=>({needsCall:number, at:number}|null), cloud?:()=>object|null,
- *     google?:()=>object|null, hostOn?:()=>boolean},
+ *     google?:()=>object|null, gmail?:()=>({configured:boolean, connected:boolean}|null), hostOn?:()=>boolean},
+ *   machine?: string  this PC's name (the run summary of a local God Mode run),
+ *   prefs?: {readPrefs:()=>object, writePrefs:(partial:object)=>object|null, file:()=>string|null}
+ *     the ui.local.json access the synced Settings use (default: src/uiprefs.js),
  *   sourcePrefs?: () => object  the stored hubSources ({group: false}, src/hubsources.js),
  *   timers?: {setTimer?:Function, clearTimer?:Function}, autoStart?: boolean,
  * }} deps
- * @returns {ReturnType<typeof createHub> & {doneProvider: object}}
+ * @returns {ReturnType<typeof createHub> & {doneProvider: object, seenProvider: object, prefsProvider: object}}
  */
 function registerHubIpc({
   ipcMain,
@@ -181,6 +195,8 @@ function registerHubIpc({
   seenFile = () => paths.local(SEEN_FILE),
   snapshots = () => null,
   accounts = {},
+  machine = null,
+  prefs = null,
   sourcePrefs = () => ({}),
   onDone = () => {},
   now = Date.now,
@@ -190,12 +206,12 @@ function registerHubIpc({
 }) {
   const log = (line) => console.error(line);
   const doneStore = createDoneStore({ file: doneFile, now, log, onMark: () => onDone() });
-  const seenStore = createSeenStore({ file: seenFile, now, log });
+  const seenStore = createSeenStore({ file: seenFile, now, log, onMark: () => onDone() });
   let hub = null;
   // A fetch that brought other rows re-collects at once instead of on the next tick.
   const peers = createHubPeers({ snapshots, now, log, onChange: () => hub && hub.refresh(false) });
   hub = createHub({
-    sources: hubSources({ runsDir, orchestra, update, now, peers, accounts, readers }),
+    sources: hubSources({ runsDir, orchestra, update, now, machine, peers, accounts, readers }),
     doneStore,
     seenStore,
     // Settings -> Notification hub -> sources: the stored hubSources, read once per refresh.
@@ -253,7 +269,12 @@ function registerHubIpc({
   });
 
   if (autoStart) hub.start();
-  return { ...hub, doneProvider: createHubDoneProvider(doneStore, { now }) };
+  return {
+    ...hub,
+    doneProvider: createHubDoneProvider(doneStore, { now }),
+    seenProvider: createHubSeenProvider(seenStore, { now }),
+    prefsProvider: createHubPrefsProvider(prefs || defaultPrefs()),
+  };
 }
 
 module.exports = { registerHubIpc, hubSources, readRunReports };

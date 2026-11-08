@@ -432,9 +432,8 @@ contextBridge.exposeInMainWorld('lunacore', {
     ipcRenderer.on('life:changed', listener);
     return () => ipcRenderer.removeListener('life:changed', listener);
   },
-  // Attention inbox (src/inboxipc.js). Machine + run id only, validated in main.
-  /** Promise<{ok, items} | {ok:false, reason}>. */
-  inboxList: () => ipcRenderer.invoke('inbox:list'),
+  // God Mode run summary (src/inboxipc.js; opened from a hub item, N8).
+  // Machine + run id only, validated in main.
   /** One God Mode run for the summary window; marks it seen. Promise<{ok, run} | {ok:false, reason}>. */
   inboxRun: (machine, id) => ipcRenderer.invoke('inbox:run', { machine, id }),
   /** Opens one package's PR (github.com only); main looks the URL up itself. */
@@ -511,6 +510,13 @@ contextBridge.exposeInMainWorld('lunacore', {
     const listener = (_e, view) => cb(view);
     ipcRenderer.on('hub:changed', listener);
     return () => ipcRenderer.removeListener('hub:changed', listener);
+  },
+  /** N7: another PC changed the synced hub Settings. cb() gets no payload - re-read getUiPrefs(). Returns an unsubscribe. */
+  onHubPrefsChanged: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = () => cb();
+    ipcRenderer.on('hub:prefsChanged', listener);
+    return () => ipcRenderer.removeListener('hub:prefsChanged', listener);
   },
 
   // --- Cloud sync (src/cloudipc.js) ---

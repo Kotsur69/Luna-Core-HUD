@@ -10,7 +10,7 @@
 //                      file, then put the last runs
 //   godmode.live(s)    a live run / tab lights changed (godmodelivepub.js):
 //                      put the history with `live` and `tabs` over it
-//   godmode.markSeen(id) the attention inbox opened run `id`: add it to
+//   godmode.markSeen(id) the run summary opened run `id`: add it to
 //                      the same file's `seen` list, then put
 //   godmode.decisions(list) Luna's Work decisions waiting for Mati changed:
 //                      put the history with them over it (the phone answers)
@@ -186,7 +186,7 @@ function createSnapshotPuts({ snapshots, loggedIn, machine, readAll, historyFile
       lastQueue = Array.isArray(list) ? list : [];
       return putOverlay();
     },
-    /** Marks run `id` seen in this PC's own row (the attention inbox). Never throws. */
+    /** Marks run `id` seen in this PC's own row (the run summary window). Never throws. */
     markSeen(id) {
       return safePut('godmode', async () => {
         if (typeof id !== 'string' || !RUN_ID_RE.test(id)) return false;

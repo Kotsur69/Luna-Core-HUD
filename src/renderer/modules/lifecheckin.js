@@ -4,7 +4,7 @@
 // Sleep hours (0-16, half hours) and energy 1-5. The Health tab holds it:
 // the form while today is open (it can be skipped - the skip is saved), else
 // today's answer and the last week; its tab button carries a '1' badge while
-// today is open, and the attention inbox lists it. The Overview card shows
+// today is open, and the notification hub lists it. The Overview card shows
 // the same and edits today at any time. Stored by src/lifecheckin.js through
 // lifedaily.js.
 // ============================================================================

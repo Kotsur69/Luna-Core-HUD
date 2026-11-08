@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Notification hub: the face chip (modules/hubicon.js) and the right drawer
+   Notification hub: the '!' chip (modules/hubicon.js) and the right drawer
    (modules/hubpanel.js). Theme tokens only - no hard-coded colours - so it
    reads the same on every theme. The drawer sits on --surface-panel; on glass
    themes that token is translucent and the backdrop blur gives the acrylic
@@ -8,15 +8,15 @@
    resolved locally as var(--accent, var(--neon-cyan)).
    ========================================================================== */
 
-/* ---- Face chip + badge ---------------------------------------------------- */
+/* ---- '!' chip + badge (N8: the one attention chip) ------------------------- */
 .hub-chip { position: relative; color: var(--accent, var(--neon-cyan)); }
-.hub-chip__face {
+.hub-chip__mark {
   display: block;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  min-width: 0.6rem;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  color: currentColor;
 }
 .hub-chip:hover { color: var(--accent, var(--neon-cyan)); }
 .hub-chip:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
@@ -231,3 +231,6 @@ details.hub-sec > summary:focus-visible { outline: 2px solid var(--edge-glow); o
   animation: hub-in var(--dur-normal) var(--ease-smooth);
 }
 .hub-hint:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+
+/* ---- Settings -> Notification hub: synced / this PC only (N7) -------------- */
+.hubset-sync.is-synced { color: var(--accent, var(--neon-cyan)); }

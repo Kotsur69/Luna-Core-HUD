@@ -27,6 +27,7 @@ import { onHubView, markHubDone, markHubSeen } from './hubstate.js';
 import { showBrief } from './missionbriefview.js';
 import { openLifeTab } from './lifepanel.js';
 import { openSettingsAt } from './termcustom.js';
+import { openRunSummary } from './godmodesummary.js';
 
 const WIDTH_DEFAULT = 420;
 const WIDTH_MIN = 320;
@@ -40,6 +41,19 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
+/** openRunSummary's arg: '<machine>:<runId>' (main checks the same shape in src/hub.js). */
+const RUN_SUMMARY_ARG_RE = /^([A-Za-z0-9-]{1,63}):([a-z0-9]{1,40})$/;
+
+/**
+ * N8: a God Mode run's summary window (godmodesummary.js), for a run of this
+ * PC or another one. Main looks the run up again by machine + id (inbox:run)
+ * and opens PR links itself - nothing from the item is executed.
+ */
+function runSummary(arg) {
+  const m = RUN_SUMMARY_ARG_RE.exec(typeof arg === 'string' ? arg : '');
+  if (!m) return null;
+  return openRunSummary(m[1], m[2]);
+}
 
 /**
  * Whitelisted action name -> what the primary button does: (arg, item).
@@ -56,6 +70,7 @@ const ACTIONS = {
   openMission: () => import('./missionpanel.js').then((m) => m.openMission()),
   openSettings: (arg) => openSettingsAt(arg),
   installUpdate: () => call('installUpdate'),
+  openRunSummary: (arg) => runSummary(arg),
 };
 
 let drawer = null;
