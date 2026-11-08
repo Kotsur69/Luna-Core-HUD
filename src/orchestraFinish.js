@@ -4,6 +4,9 @@
 // Deterministic, run by LunaCore rather than trusted to the worker, after a
 // worker prints LUNA_DONE:
 //
+//   0. plan guard - plan-run packages only (pkg.planRun): changes outside
+//                   docs/plans/<run>/ are reverted and the package stalls;
+//                   a topic doc without sources stalls (orchestraPlanRun.js)
 //   1. leftovers  - uncommitted changes in the worktree are committed as
 //                   `chore: luna wip <pkg>` so nothing is lost
 //   2. commits?   - a branch with no commit past its base did no work
@@ -27,10 +30,13 @@
 'use strict';
 
 const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const { runGit, firstLine } = require('./worktrees');
 const { checkCwd } = require('./projects');
 const { killTree } = require('./procTree');
 const secrets = require('./pushSecrets');
+const planRun = require('./orchestraPlanRun');
 
 // Counted from the moment a verify starts (verifyQueue.js queues them); the
 // full suite alone takes 11-14 min.
@@ -173,6 +179,89 @@ async function prePushBlock(pkg, execImpl) {
   return { ok: false, stage: 'secrets', hits: scan.hits, range: await unpushedRange(pkg, execImpl) };
 }
 
+/** A file's text, or null when it cannot be read. */
+async function readTextOrNull(file) {
+  try {
+    return await fs.promises.readFile(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+// git argv that undoes one change outside the plan folder. Literal pathspecs:
+// a path from `git status` / `git diff` is never read as pathspec magic.
+const REVERT_ARGS = {
+  checkout: (p) => ['--literal-pathspecs', 'checkout', 'HEAD', '--', p],
+  rmIndexed: (p) => ['--literal-pathspecs', 'rm', '-f', '-q', '--', p],
+  remove: (p) => ['--literal-pathspecs', 'clean', '-f', '-q', '--', p],
+  restoreBase: (p, base) => ['--literal-pathspecs', 'checkout', base, '--', p],
+  dropAdded: (p) => ['--literal-pathspecs', 'rm', '-f', '-q', '--', p],
+};
+
+/** Runs revert actions; returns the paths that were and were not reverted. */
+async function runReverts(pkg, actions, execImpl) {
+  const done = [];
+  const failed = [];
+  for (const r of actions) {
+    const res = await runGit(pkg.root, REVERT_ARGS[r.action](r.path, pkg.baseSha), execImpl);
+    (res.ok ? done : failed).push(r.path);
+  }
+  return { done, failed };
+}
+
+/**
+ * The plan-run finish guard (orchestraPlanRun.planRunFinishCheck): changes
+ * outside docs/plans/<run>/ are reverted and the package stalls
+ * `outsidePlanFolder` - uncommitted ones (tracked -> checkout, untracked ->
+ * removed) and committed ones since the base (restored to the base, then
+ * committed, so the next finish does not undo the revert). A topic doc
+ * without sources stalls `noSources`. Resolves the failed result, or null.
+ * @returns {Promise<null | {ok:false, stage:'planGuard'|'commit', reason?:string, detail:string,
+ *   reverted?:string[], revertFailed?:string[]}>}
+ */
+async function planRunGuard(pkg, execImpl, readFileImpl = readTextOrNull) {
+  const pr = pkg.planRun;
+  const status = await runGit(pkg.root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], execImpl);
+  if (!status.ok) return { ok: false, stage: 'commit', detail: firstLine(status.stderr) };
+  let committed = '';
+  if (pkg.baseSha) {
+    const diff = await runGit(pkg.root, ['diff', '--name-status', '-z', '--no-renames', `${pkg.baseSha}..HEAD`, '--'], execImpl);
+    if (!diff.ok) return { ok: false, stage: 'commit', detail: firstLine(diff.stderr) };
+    committed = diff.stdout;
+  }
+  const topicDoc =
+    pr.role === planRun.ROLE_TOPIC
+      ? await readFileImpl(path.join(pkg.root, planRun.topicDocPath(pr.runSlug, pr.topic)))
+      : null;
+  const check = planRun.planRunFinishCheck({ planRun: pr, status: status.stdout, committed, topicDoc });
+  if (check.ok) return null;
+  if (check.reason !== planRun.STALL_OUTSIDE) {
+    return { ok: false, stage: 'planGuard', reason: check.reason, detail: check.detail };
+  }
+  // Uncommitted first (back to HEAD), then committed (back to the base).
+  const loose = await runReverts(pkg, check.revert, execImpl);
+  const old = await runReverts(pkg, check.revertCommitted, execImpl);
+  const reverted = [...loose.done];
+  const revertFailed = [...loose.failed, ...old.failed];
+  if (old.done.length) {
+    const folder = planRun.planFolder(pr.runSlug);
+    const commit = await runGit(
+      pkg.root,
+      ['--literal-pathspecs', 'commit', '-q', '-m', `chore: luna revert changes outside ${folder}`, '--', ...old.done],
+      execImpl,
+    );
+    (commit.ok ? reverted : revertFailed).push(...old.done);
+  }
+  const detail = [
+    reverted.length ? `reverted outside ${planRun.planFolder(pr.runSlug)}: ${[...new Set(reverted)].join(', ')}` : '',
+    revertFailed.length ? `could not revert: ${[...new Set(revertFailed)].join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join('; ')
+    .slice(0, 600);
+  return { ok: false, stage: 'planGuard', reason: check.reason, detail, reverted, revertFailed };
+}
+
 /** A verify that did not pass, as finishPackage's result. */
 function verifyFailure(pkg, verified) {
   // The run was killed while this verify waited in the queue: never ran.
@@ -197,6 +286,8 @@ function verifyFailure(pkg, verified) {
  *   {ok:true, headSha:string|null, files:string[]}
  *   | {ok:false, stage:'commit'|'noCommits'|'push'|'verifyTimeout', detail:string,
  *      blocked?:'secret'|'rule'|'unchanged', headSha?:string|null, range?:string}
+ *   | {ok:false, stage:'planGuard', reason:'outsidePlanFolder'|'noSources'|'badPlanRun', detail:string,
+ *      reverted?:string[], revertFailed?:string[]}
  *   | {ok:false, stage:'secrets', hits:Array<object>, range:string}
  *   | {ok:false, stage:'verify', output:string}>}
  */
@@ -207,6 +298,16 @@ async function finishPackage(pkg, deps = {}) {
   // restore): say so instead of a git/verify ENOENT.
   const cwdOk = checkCwd(pkg.root, deps.isDirImpl);
   if (!cwdOk.ok) return { ok: false, stage: 'commit', detail: `worktree folder missing: ${cwdOk.detail}` };
+
+  // Plan runs only (explicit pkg.planRun flag): before the leftovers commit
+  // could sweep a change outside the plan folder into the branch.
+  if (pkg.planRun != null) {
+    if (!planRun.isPlanRunPackage(pkg)) {
+      return { ok: false, stage: 'planGuard', reason: planRun.STALL_BAD_PLAN_RUN, detail: 'unreadable planRun flag' };
+    }
+    const guarded = await planRunGuard(pkg, execImpl, deps.readFileImpl);
+    if (guarded) return guarded;
+  }
 
   const status = await runGit(pkg.root, ['status', '--porcelain'], execImpl);
   if (!status.ok) return { ok: false, stage: 'commit', detail: firstLine(status.stderr) };
