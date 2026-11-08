@@ -7,7 +7,16 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.24.0 — chat from your phone.**
+> **Current release: v0.25.0 — phone God Mode start, plan review/launch and live run con.**
+> - phone God Mode start, plan review/launch and live run controls
+> - signed godmode.* phone commands in HUD host mode
+> - sync hub settings and seen marks across PCs, fold the '!' inbox into the
+>   hub
+> - plan-run core - topics, package graph, task sizing, finish guard
+> - choose the God Mode planner effort per plan in the to-do picker
+> - Fix: media mute toggle silently did nothing on the slow laptop
+>
+> **v0.24.0 — chat from your phone.**
 > - **Phone host chat:** a Messenger-style chat page for live Claude Code
 >   sessions on the phone, with typing dots and swipe-to-end; the phone menu
 >   lists only running sessions and no longer cuts off Logout.
