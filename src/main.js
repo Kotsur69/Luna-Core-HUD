@@ -2149,7 +2149,8 @@ godmodeLive = createLivePublisher({
   // lives: every project's run, the latest to change first; live: that first
   // one, for phone builds from before several runs at once.
   build: () => {
-    const views = [...latestLiveViews.values()].reverse();
+    // projectId rides along: the phone's Kill / Retry / Finish name the project (src/hostgodmode.js).
+    const views = [...latestLiveViews.entries()].reverse().map(([projectId, view]) => (view && projectId ? { ...view, projectId } : view));
     const lives = livesEntry(views, { now: Date.now(), tabState: (id) => (statusBoard.current(id) || {}).state || null });
     // plans: each project's plan not started yet (src/hostgodmode.js).
     return { live: lives[0] || null, lives, tabs: tabsEntry([...sessions.values()].map(sessionSummary)), plans: phoneGodmode.plans() };

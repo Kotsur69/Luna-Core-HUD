@@ -633,3 +633,41 @@ textarea.field { resize: vertical; min-height: 4.5rem; line-height: 1.4; }
 .lw-shot { margin: 0; display: grid; gap: var(--space-1); min-width: 0; }
 .lw-shot img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--edge); }
 .lw-shot figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- Phone God Mode B-D: start from to-dos, plan review, run controls ---- */
+.gm-start { align-self: flex-start; border-color: var(--neon-magenta); }
+.gm-check { display: flex; align-items: flex-start; gap: var(--space-3); min-height: var(--tap); padding: var(--space-1) 0; cursor: pointer; }
+.gm-check input { flex: none; width: 22px; height: 22px; margin: 2px 0 0; accent-color: var(--neon-magenta); }
+.gm-check-text { display: grid; gap: 2px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.gm-check.is-disabled { cursor: default; opacity: 0.55; }
+.gm-actions { flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+.gm-actions .btn-primary { width: auto; flex: 1; }
+.btn-danger { border-color: var(--bad); color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+
+.spinner {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--edge-glow);
+  border-top-color: var(--neon-cyan);
+  border-radius: 50%;
+  animation: spin 900ms linear infinite;
+}
+
+/* Confirm sheet (views/sheet.js): above the toast's layer, below nothing. */
+.sheet-wrap { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-end; justify-content: center; }
+.sheet-scrim { position: absolute; inset: 0; background: var(--scrim); }
+.sheet {
+  position: relative;
+  width: min(480px, 100%);
+  padding: var(--space-4) var(--space-4) calc(var(--safe-bottom) + var(--space-4));
+  border: 1px solid var(--edge-glow);
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--bg-panel);
+  box-shadow: 0 0 32px var(--glow);
+  animation: sheet-in var(--dur) var(--ease-out);
+}
+.sheet-actions { display: flex; gap: var(--space-2); }
+.sheet-actions .btn { flex: 1; }
+@keyframes sheet-in { from { transform: translateY(24px); opacity: 0; } }

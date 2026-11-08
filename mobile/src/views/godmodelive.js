@@ -160,8 +160,70 @@ function runTone(state) {
   return state === 'settled' ? 'tag is-good' : 'tag';
 }
 
-/** The full live card on the God Mode page; `index` keeps heading ids unique. */
-export function liveCard(live, now, index = 0) {
+const RETRYABLE = new Set(['failed']);
+
+/** Which controls a live run offers: Kill while going, Retry with a failed package, Finish once settled. */
+export function liveActions(live) {
+  return {
+    kill: isGoing(live),
+    retry: live.state !== 'killed' && live.packages.some((p) => RETRYABLE.has(p.state)),
+    finish: live.state === 'settled',
+  };
+}
+
+/**
+ * Phone God Mode D: Kill / Retry failed / Finish on a live run, sent signed
+ * to the PC that published it - only when that PC's `host` snapshot says
+ * godmode: true and the run names its project. Buttons are disabled while a
+ * command for the run is in flight; a refusal comes back as a toast
+ * (hostrun.js). Kill asks first (`confirm`: sheet.confirmSheet).
+ * @param {{toast: (m: string, bad?: boolean) => void}} deps
+ * @param {(host: string) => {run: (kind: string, payload: object) => Promise<object|null>}} runnerFor
+ * @param {() => void} repaint
+ * @param {(opts: object) => Promise<boolean>} confirm
+ * @returns {(live: object, host: object|null) => Node|null}
+ */
+export function createLiveControls(deps, runnerFor, repaint, confirm) {
+  const inflight = new Set();
+  const keyOf = (live) => `${String(live.machine).toLowerCase()}|${live.projectId}`;
+
+  async function send(live, kind, okKey) {
+    const key = keyOf(live);
+    if (inflight.has(key)) return;
+    inflight.add(key);
+    repaint();
+    try {
+      const res = await runnerFor(live.machine).run(kind, { projectId: live.projectId });
+      if (res) deps.toast(tf(okKey, { repo: live.title || live.id }));
+    } finally {
+      inflight.delete(key);
+      repaint();
+    }
+  }
+
+  async function kill(live) {
+    const ok = await confirm({ title: tf('gmKillConfirm', { repo: live.title || live.id }), text: t('gmKillConfirmText'), ok: t('gmKill'), danger: true });
+    if (ok) await send(live, 'godmode.kill', 'gmKilled');
+  }
+
+  return (live, host) => {
+    if (!live.projectId || !host || !host.godmode) return null;
+    const can = liveActions(live);
+    if (!can.kill && !can.retry && !can.finish) return null;
+    const busy = inflight.has(keyOf(live));
+    const btn = (show, cls, key, onclick) => (show ? h('button', { class: `btn btn-sm ${cls}`.trim(), type: 'button', disabled: busy, 'aria-busy': busy ? 'true' : null, onclick }, t(key)) : null);
+    return h(
+      'div',
+      { class: 'row gm-actions' },
+      btn(can.retry, '', 'gmRetry', () => send(live, 'godmode.retry', 'gmRetried')),
+      btn(can.finish, 'btn-primary', 'gmFinish', () => send(live, 'godmode.finish', 'gmFinishing')),
+      btn(can.kill, 'btn-danger', 'gmKill', () => kill(live)),
+    );
+  };
+}
+
+/** The full live card on the God Mode page; `index` keeps heading ids unique, `controls` (createLiveControls) sits under the header. */
+export function liveCard(live, now, index = 0, controls = null) {
   const headingId = index ? `godmode-live-${index}` : 'godmode-live';
   return h(
     'section',
@@ -176,6 +238,7 @@ export function liveCard(live, now, index = 0) {
     h('span', { class: 'hint' }, [live.machine, live.baseBranch, tf('godmodeStarted', { time: when(live.startedAt, now) }), tf('godmodeReported', { time: hhmm(live.at) })].filter(Boolean).join(' · ')),
     pausedBanner(live),
     optionTags(live),
+    controls,
     counters(live),
     live.packages.length ? groups(live) : h('p', { class: 'hint' }, t('godmodeNoPackages')),
   );

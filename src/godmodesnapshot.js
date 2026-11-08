@@ -91,6 +91,8 @@ const MAX_ERROR = 40;
 const MAX_DETAIL = 160;
 const MAX_ELAPSED_MS = 7 * 24 * 60 * 60 * 1000;
 const PLAN_STATES = ['planning', 'ready', 'failed'];
+/** src/hostgodmode.js PROJECT_ID_RE: a HUD project id. */
+const PROJECT_ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const isTime = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
@@ -175,8 +177,11 @@ function cleanLivePackage(p) {
 function cleanLive(l, now) {
   if (!isObject(l) || !LIVE_STATES.includes(l.state) || !isTime(l.startedAt)) return null;
   const opts = isObject(l.options) ? l.options : {};
+  const projectId = typeof l.projectId === 'string' && PROJECT_ID_RE.test(l.projectId) ? l.projectId : null;
   return {
     id: clean(l.id, MAX_ID),
+    // The HUD project the run belongs to (optional): the phone's godmode.kill / retry / finish name it.
+    ...(projectId ? { projectId } : {}),
     title: clean(l.title, MAX_TITLE),
     baseBranch: clean(l.baseBranch, MAX_BRANCH),
     startedAt: Math.min(l.startedAt, now),
@@ -253,6 +258,7 @@ function liveEntry(view, { now = Date.now(), tabState = () => null } = {}) {
   return cleanLive(
     {
       id: view.id,
+      projectId: view.projectId,
       title: baseName(view.repoPath),
       baseBranch: view.baseBranch,
       startedAt: isTime(view.runStartedAt) ? view.runStartedAt : now,
