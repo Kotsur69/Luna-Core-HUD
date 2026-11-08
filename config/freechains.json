@@ -1,5 +1,5 @@
 {
-  "_comment": "Ordered fallback chains of CAPABLE free models, tried top to bottom by src/fallbackproxy.js. Ids are FreeLLMAPI catalog ids - check yours with GET http://127.0.0.1:31415/v1/models; an id the gateway does not know is skipped, never fatal. Weak models (flash, flash-lite, mini, nano, small 7-8B) are refused by src/freechains.js. Overrides go in freechains.local.json next to this file. See docs/reference/FREE_PROVIDERS.md.",
+  "_comment": "Ordered fallback chains of CAPABLE free models, tried top to bottom by src/fallbackproxy.js. Ids are FreeLLMAPI catalog ids - check yours with GET http://127.0.0.1:31415/v1/models; an id the gateway does not know is skipped, never fatal. Weak models (flash, flash-lite, mini, nano, small 7-8B) are refused by src/freechains.js. Overrides go in freechains.local.json next to this file. Optional per chain: \"expect\": [\"nemotron-3-ultra\", \"gpt-oss-120b\"] - substrings of the gateway's X-Routed-Via header; a God Mode build-run answer routed to any other model is refused and the next model tried (1-16 short strings, a malformed list is ignored with a warning). See docs/reference/FREE_PROVIDERS.md.",
   "chains": [
     {
       "id": "free-coding",
