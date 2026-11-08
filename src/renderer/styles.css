@@ -5862,8 +5862,8 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__power { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
 
 /* ==========================================================================
-   Attention inbox, God Mode run summary, Mission Control brief overlay
-   (modules/talloverlay.js, inbox.js, godmodesummary.js, missionbriefview.js).
+   God Mode run summary, Mission Control brief overlay
+   (modules/talloverlay.js, godmodesummary.js, missionbriefview.js).
    The Settings overlay (.termcustom) at a taller size; theme tokens only, so
    it reads the same in dark and light themes.
    ========================================================================== */
@@ -5871,45 +5871,6 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .tall-overlay__modal { width: min(820px, 94vw); height: 84vh; max-height: 84vh; }
 .tall-overlay__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tall-overlay__body { flex: 1; overscroll-behavior: contain; }
-
-/* '!' chip and its red count badge (hidden at 0 via [hidden]). */
-.inbox-chip { position: relative; font-weight: 700; }
-.inbox-chip__badge {
-  min-width: 1.1rem;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-pill);
-  background: var(--bad);
-  color: var(--bg-panel-2);
-  font-size: var(--fs-2xs);
-  font-weight: 700;
-  line-height: 1.1rem;
-  text-align: center;
-}
-.inbox-chip__badge[hidden] { display: none; }
-
-.inbox__list { display: flex; flex-direction: column; gap: var(--space-3); }
-.inbox__item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-5);
-  width: 100%;
-  padding: var(--space-5) var(--space-6);
-  border: var(--border-w) solid var(--edge);
-  border-radius: var(--radius-md);
-  background: var(--surface-panel-2);
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
-}
-.inbox__item:hover { border-color: var(--edge-glow); box-shadow: 0 0 var(--glow-size-md) var(--glow); }
-.inbox__item:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
-.inbox__glyph { flex: none; width: 1.5rem; color: var(--neon-cyan); font-size: var(--fs-lg); text-align: center; }
-.inbox__text { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
-.inbox__title { font-weight: 600; overflow-wrap: anywhere; }
-.inbox__sub { font-size: var(--fs-xs); color: var(--text-dim); }
-.inbox__empty { padding: var(--space-8) 0; text-align: center; }
 
 .gm-sum__facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-7); margin: 0 0 var(--space-7); font-size: var(--fs-sm); }
 .gm-sum__facts dt { color: var(--text-dim); }

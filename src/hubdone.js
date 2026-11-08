@@ -26,6 +26,7 @@ const { isHubId } = require('./hub');
 
 const VERSION = 2;
 const KEY_PREFIX = 'hub:done:';
+const SEEN_KEY_PREFIX = 'hub:seen:';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DONE_KEEP_MS = 30 * DAY_MS;
 /** A clock skew allowance for marks from another PC. */
@@ -142,49 +143,60 @@ function createDoneStore({ file, now = Date.now, log = () => {}, onMark = () => 
 }
 
 /**
- * Which Needs-you items this PC has already shown in the drawer (the launch
- * auto-open rule): <config>/hub-seen.local.json, the same layout and window
- * as the done file, local only - never synced.
+ * Which Needs-you items have already been shown in the drawer (the launch
+ * auto-open rule): <config>/hub-seen.local.json, the same layout, window and
+ * cap as the done file. N7: synced as `hub:seen:<id>` units, so an item seen
+ * on one PC does not auto-open the drawer on the next; onMark (main: a config
+ * sync soon) is passed through like the done store's.
  */
-const createSeenStore = (deps) => createDoneStore({ ...deps, onMark: () => {} });
+const createSeenStore = (deps) => createDoneStore({ onMark: () => {}, ...deps });
 
 /** A cloud unit's value -> {at}, or null when it is not a usable mark. */
-function validMark(k, v, now) {
-  if (typeof k !== 'string' || !k.startsWith(KEY_PREFIX) || !isHubId(k.slice(KEY_PREFIX.length))) return null;
+function validMark(k, v, now, prefix = KEY_PREFIX) {
+  if (typeof k !== 'string' || !k.startsWith(prefix) || !isHubId(k.slice(prefix.length))) return null;
   if (!isObject(v) || !isTime(v.at) || v.at < now - DONE_KEEP_MS || v.at > now + FUTURE_SLACK_MS) return null;
   return { at: Math.min(v.at, now) };
 }
 
 /**
- * The configsync.js provider for the `hub:done:*` units.
+ * The configsync.js provider for one marks store: `<prefix><itemId>` = {at}.
  * @param {ReturnType<typeof createDoneStore>} store
- * @param {{now?:()=>number}} [opts]
+ * @param {{name:string, prefix:string, now?:()=>number}} opts
  */
-function createHubDoneProvider(store, { now = Date.now } = {}) {
+function createHubMarksProvider(store, { name, prefix, now = Date.now }) {
   return {
-    name: 'hubdone',
-    owns: (k) => typeof k === 'string' && k.startsWith(KEY_PREFIX),
-    valid: (k, v) => validMark(k, v, now()),
+    name,
+    owns: (k) => typeof k === 'string' && k.startsWith(prefix),
+    valid: (k, v) => validMark(k, v, now(), prefix),
     read() {
       // Pruned: a mark past the window leaves the units -> a tombstone.
-      const units = [...store.prune()].sort((a, b) => a[0].localeCompare(b[0])).map(([id, at]) => [`${KEY_PREFIX}${id}`, { at }]);
+      const units = [...store.prune()].sort((a, b) => a[0].localeCompare(b[0])).map(([id, at]) => [`${prefix}${id}`, { at }]);
       return { units, base: now() };
     },
     write(units) {
-      store.replace(units.filter(([k]) => k.startsWith(KEY_PREFIX)).map(([k, v]) => [k.slice(KEY_PREFIX.length), v && v.at]));
+      store.replace(units.filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k.slice(prefix.length), v && v.at]));
     },
   };
 }
+
+/** The `hub:done:*` units ("Mark done" clears an item on every PC). */
+const createHubDoneProvider = (store, { now = Date.now } = {}) => createHubMarksProvider(store, { name: 'hubdone', prefix: KEY_PREFIX, now });
+
+/** The `hub:seen:*` units (N7: the launch auto-open counts what any PC showed). */
+const createHubSeenProvider = (store, { now = Date.now } = {}) => createHubMarksProvider(store, { name: 'hubseen', prefix: SEEN_KEY_PREFIX, now });
 
 module.exports = {
   createDoneStore,
   createSeenStore,
   createHubDoneProvider,
+  createHubSeenProvider,
   normalizeDone,
   validMark,
   DONE_FILE,
   SEEN_FILE,
   DONE_KEEP_MS,
   KEY_PREFIX,
+  SEEN_KEY_PREFIX,
+  MAX_DONE_KEPT,
   VERSION,
 };

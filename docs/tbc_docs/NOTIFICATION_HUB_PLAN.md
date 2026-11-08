@@ -28,13 +28,34 @@ user-facing strings need `pl` + `en`.
   with unseen Needs-you items; a toast fires once for a new item while the
   window is unfocused (with notifications on); every Settings switch works
   and survives a restart; the drawer on 3 themes. Then rename to `DONE_`.
-- **Left after the live check:** fold the old '!' attention inbox
-  (`src/inbox.js`, renderer `inbox.js`) into the hub so there is one badge,
-  not two; the "Later (not v1)" list below.
+- [x] **N7 built 2026-11-08** (branch `luna/hub-n7-n8-wtrks`): hub Settings
+  (`hubAutoOpen`, `hubToasts`, `hubSources`, `notificationsEnabled`) sync as
+  `hub:pref:*` `config` units (`src/hubprefsync.js`, newest wins, a fresh
+  PC's defaults are stamped 0, `valid()` rejects anything the uiprefs
+  cleaners would change, `write()` = one `writeUiPrefs()` partial merge);
+  seen marks sync as `hub:seen:<id>` (30 days, 500 cap). Another PC's choice
+  pushes `hub:prefsChanged`; toasts, auto-open, Settings and the System
+  notifications switch re-read `getUiPrefs()` live. Settings -> Notification
+  hub shows *Synced across your PCs* / *This PC only*. `hubWidth` and
+  `hubBriefHintSeen` stay local. Tests: `hubprefsync`.
+- [x] **N8 built 2026-11-08** (same branch): one '!' chip (text, theme
+  accent) replaces the SVG face; the old attention inbox (`src/inbox.js`,
+  renderer `inbox.js`, `#inbox-open`, `inbox:list`) is gone. New `gmail`
+  collector (accounts group) -> Settings -> Report emails. God Mode run items
+  (local and other PCs) open the run summary (`openRunSummary`,
+  '<machine>:<runId>', through the validated `inbox:run` / `inbox:open-pr`
+  handlers, kept in `src/inboxipc.js`). Tests: `hubmore`, `hubui`,
+  `hubsettings`, `inboxipc`.
+  Deviation: the Settings anchor is `mail-section` (the Report emails
+  heading); there is no `report-email` id.
+- **Live check owed for N7 / N8 (Mati):** change a hub switch on PC A, see
+  it on PC B without a restart; a fresh PC keeps A's choices; the '!' badge
+  on 3 themes; a remote run item opens its summary.
+- **Left after the live check:** the "Later (not v1)" list below.
 - Deviations in N4-N6: Settings live in `termcustom.js` (there is no
   `settings.js`); the Settings anchor for cloud / Google / host is the Setup
-  Center (`setup-center`); the old '!' inbox chip still runs beside the hub
-  (folding it in is left for after the live check).
+  Center (`setup-center`); the old '!' inbox chip ran beside the hub until
+  N8 folded it in.
 - Deviations from the text below: the theme has no `--accent` token, so the
   face uses `var(--accent, var(--neon-cyan))`; `#mission-brief` was already
   gone (commit 672af30 moved it into a tall overlay behind a "Brief" button) -

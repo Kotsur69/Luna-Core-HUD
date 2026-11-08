@@ -106,7 +106,8 @@ test('Settings markup and wiring', () => {
   }
   assert.ok(html.indexOf('id="hub-section"') > html.indexOf('id="termcustom-pane-notifications"'), 'in the Notifications pane');
   const custom = read('src/renderer/modules/termcustom.js');
-  assert.ok(custom.includes("import { mountHubSettings } from './hubsettings.js'") && custom.includes('mountHubSettings(termcustomEl, prefs)'));
+  assert.ok(custom.includes("import { mountHubSettings, refreshHubSyncLine } from './hubsettings.js'") && custom.includes('mountHubSettings(termcustomEl, prefs)'));
+  assert.ok(custom.includes('refreshHubSyncLine();'), 'N7: the synced / this-PC line re-checks on every Settings open');
   const settings = read('src/renderer/modules/hubsettings.js');
   assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML/.test(settings), 'textContent only');
   for (const key of ['hubAutoOpen', 'hubToasts', 'hubSources']) assert.ok(settings.includes(`${key}:`), `persists ${key}`);
@@ -115,6 +116,31 @@ test('Settings markup and wiring', () => {
   assert.ok(read('src/renderer/modules/hubicon.js').includes('prefs.hubAutoOpen'), 'the launch auto-open reads the setting');
   assert.ok(read('src/renderer/modules/hubtoast.js').includes('prefs.hubToasts'), 'the toasts read the setting');
   assert.ok(read('src/main.js').includes('sourcePrefs: () => readUiPrefs().hubSources'), 'main hands the hub the source switches');
+});
+
+test('N7: synced Settings apply live, the sync line is in place, hubWidth stays local', () => {
+  const html = read('src/renderer/index.html');
+  const section = html.indexOf('id="hub-section"');
+  const syncAt = html.indexOf('id="hubset-sync"');
+  assert.ok(syncAt > section && syncAt < html.indexOf('id="hubset-autoopen"'), 'the line sits under the heading');
+  const settings = read('src/renderer/modules/hubsettings.js');
+  assert.ok(settings.includes("'hubset.sync.synced'") && settings.includes("'hubset.sync.local'"));
+  assert.ok(settings.includes('cloudStatus()'), 'synced only while the cloud is logged in');
+  // Every live consumer re-reads the prefs when another PC changed them.
+  for (const rel of ['hubsettings.js', 'hubtoast.js', 'hubicon.js', 'notify.js']) {
+    assert.ok(read(`src/renderer/modules/${rel}`).includes('onHubPrefs('), `${rel} applies a synced choice live`);
+  }
+  const state = read('src/renderer/modules/hubstate.js');
+  assert.ok(state.includes("call('getUiPrefs')") && state.includes('onHubPrefsChanged('), 're-reads getUiPrefs() on the push');
+  // preload: a no-payload subscription only, no setter or arbitrary channel.
+  const preload = read('src/preload.js');
+  assert.ok(preload.includes("ipcRenderer.on('hub:prefsChanged', listener)") && preload.includes('const listener = () => cb();'));
+  // main: one line registers the provider, one forwards its change.
+  const main = read('src/main.js');
+  assert.ok(main.includes('extraProviders: hubApi ? [hubApi.doneProvider, hubApi.seenProvider, hubApi.prefsProvider] : []'));
+  assert.ok(main.includes("if (names.includes('hubprefs')) send('hub:prefsChanged', {});"));
+  const { SYNCED_PREFS } = require('../src/hubprefsync.js');
+  assert.ok(!SYNCED_PREFS.includes('hubWidth') && !SYNCED_PREFS.includes('hubBriefHintSeen'), 'per-PC prefs stay local');
 });
 
 test('every hubset.* key is defined in pl and en', () => {

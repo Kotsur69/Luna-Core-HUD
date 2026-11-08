@@ -2,7 +2,7 @@
 // LunaCore - tall, scrollable Settings-style overlay (renderer)
 // ----------------------------------------------------------------------------
 // The Settings overlay's look (.termcustom, Ctrl+L) at a bigger size, for the
-// attention inbox, the God Mode run summary and the Mission Control brief.
+// God Mode run summary and the Mission Control brief.
 // Built in JS and appended to <body> on first use, so index.html carries no
 // markup for it. Overlays stack: Esc closes only the top one, and the panels
 // under it (Mission Control) ask anyTallOpen() before taking Esc themselves.

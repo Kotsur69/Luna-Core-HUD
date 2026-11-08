@@ -11,8 +11,10 @@
 // parseGodmodePeer() (version, caps, control characters), every hub line is
 // re-cleaned with hubLine() (paths scrubbed again, capped), the run id must
 // match RUN_ID_RE, and src/hub.js cleans every item once more at the boundary.
-// A remote item never carries an action: the only thing Mati can do with it
-// here is "Mark done" (synced, src/hubdone.js).
+// A remote item carries one action only (N8): openRunSummary, which opens the
+// run summary window through the validated inbox:run handler (main looks the
+// run up again by machine + id - nothing from the row is executed). Besides
+// that, "Mark done" (synced, src/hubdone.js).
 //
 // Rules (plan Answers 5 + Risks):
 //   - every run shows; one with Needs-you / manual lines gets one 'needs' item
@@ -30,7 +32,7 @@
 'use strict';
 
 const { parseGodmodePeer, hubLine, RUN_ID_RE, HUB_MAX_LINES } = require('./godmodesnapshot');
-const { runItems } = require('./hubcollect');
+const { runItems, summaryAction } = require('./hubcollect');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_MS = 14 * DAY_MS;
@@ -71,6 +73,7 @@ function peerRunItems(run, machine, now) {
     repo: hubLine(run.repoName).slice(0, 100) || run.id,
     result: resultOf(run),
     machine,
+    primary: summaryAction(machine, run.id),
   };
   if (needsYou || manualActionLines) {
     return runItems({

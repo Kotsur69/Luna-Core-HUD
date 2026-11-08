@@ -20,7 +20,7 @@
 import { term, applyTerminalAppearance, setScreenshotPasteEnabled } from './terminals.js';
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
-import { mountHubSettings } from './hubsettings.js';
+import { mountHubSettings, refreshHubSyncLine } from './hubsettings.js';
 import { mountAutoCompactSettings } from './autocompact.js';
 import { mountOrchestraSettings } from './orchestrasettings.js';
 import { mountLunasWorkSettings } from './lunaswork.js';
@@ -299,6 +299,8 @@ async function openTermcustom() {
   renderVersion();
   // Setup rows re-probe on every open (main caches for a few seconds).
   refreshSetupCenter();
+  // Notification hub: synced across PCs / this PC only (N7).
+  refreshHubSyncLine();
 
   let prefs = TERM_DEFAULTS;
   try {

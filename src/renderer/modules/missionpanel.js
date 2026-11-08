@@ -86,7 +86,7 @@ window.addEventListener(
   'keydown',
   (e) => {
     if (isOpen && e.key === 'Escape') {
-      // A tall overlay on top (inbox, run summary) closes first, on its own.
+      // A tall overlay on top (run summary) closes first, on its own.
       if (anyTallOpen()) return;
       // The calendar draft and edit card own Escape inside themselves (cancel).
       if (e.target instanceof Element && e.target.closest('#mc-cal-draft, .mc-edit')) return;

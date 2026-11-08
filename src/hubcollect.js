@@ -31,7 +31,7 @@ const MAX_LINES_PER_RUN = 10;
 /** The same window the Life dashboard uses for "due soon" (lifebudgetcalc SOON_DAYS). */
 const BILL_STATUSES = new Set(['overdue', 'soon']);
 const BILL_KINDS = new Set(['bill', 'subscription']);
-const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
+const RUN_ID_RE = /^[a-z0-9]{1,40}$/;  // godmodesnapshot.js RUN_ID_RE
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const WEEK_RE = /^\d{4}-W\d{2}$/;
 const KEY_PART_RE = /[^A-Za-z0-9._-]+/g;
@@ -70,13 +70,27 @@ const baseName = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || 
 /** The '## Manual actions' bullet lines of a run report, as hub lines ([] for 'None.' or no section). */
 const manualFromReport = (text) => reportLines(text).manualActionLines;
 
+const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
+
+/**
+ * The run summary window's action (N8, renderer godmodesummary.js through the
+ * validated inbox:run handler): arg = '<machine>:<runId>', or undefined when
+ * either part is unusable.
+ */
+function summaryAction(machine, runId) {
+  if (typeof machine !== 'string' || !MACHINE_RE.test(machine) || typeof runId !== 'string' || !RUN_ID_RE.test(runId)) return undefined;
+  return { action: 'openRunSummary', arg: `${machine}:${runId}` };
+}
+
 /**
  * Hub items for one God Mode run - shared by this PC's reports (here) and
  * the other PCs' snapshot rows (hubpeers.js), so a run and each of its lines
  * get the same id on every PC and a synced done mark clears them everywhere.
+ * `primary` is the lines' action; the run item takes `runPrimary` when set.
  * @param {{id:string, at:number, repo:string, result:string, needsYou:string[],
  *   manualActionLines:string[], runKind?:'needs'|'info', linesKind?:'needs'|'info',
- *   detail?:string, detailKey?:string, extraVars?:object, primary?:object, machine?:string}} run
+ *   detail?:string, detailKey?:string, extraVars?:object, primary?:object,
+ *   runPrimary?:object, machine?:string}} run
  */
 function runItems(run) {
   const common = {
@@ -87,6 +101,7 @@ function runItems(run) {
   };
   const items = [{
     ...common,
+    ...(run.runPrimary ? { primary: run.runPrimary } : {}),
     id: `godmode:${run.id}`,
     kind: run.runKind || 'info',
     title: run.result ? `God Mode: ${run.repo} - ${run.result}` : `God Mode: ${run.repo}`,
@@ -113,7 +128,9 @@ function runItems(run) {
 /**
  * This PC's God Mode run reports -> one info item per run, plus one needs
  * item per Needs-you line and per manual action (those carry the badge).
- * @param {{runs:Array<{id:string, mtime:number, text:string}>, now:number}} state
+ * The run item opens the run summary (N8; needs this PC's machine name), each
+ * line the full local report.
+ * @param {{runs:Array<{id:string, mtime:number, text:string}>, machine?:string, now:number}} state
  */
 function collectGodmode(state) {
   if (!isObject(state) || !isTime(state.now)) return [];
@@ -135,6 +152,7 @@ function collectGodmode(state) {
       needsYou: needsYou.slice(0, MAX_LINES_PER_RUN),
       manualActionLines: manualActionLines.slice(0, MAX_LINES_PER_RUN),
       primary: { action: 'openReport', arg: run.id },
+      runPrimary: summaryAction(state.machine, run.id),
     });
   });
 }
@@ -245,7 +263,7 @@ function collectCheckin(state) {
 
 /**
  * This ISO week's goals not set yet - null means "not asked", [] means skipped
- * (lifegoals goalsView(); the same rule as the inbox and the Life dashboard).
+ * (lifegoals goalsView(); the same rule as the Life dashboard).
  * @param {{goals:{week:string, goals:Array|null}|null}} state
  */
 function collectGoals(state) {
@@ -321,6 +339,8 @@ const CLOUD_ERROR_GRACE_MS = 10 * 60 * 1000;
 /** A weekly review is "ready" for this long after it was written. */
 const WEEKLY_READY_MS = 7 * DAY_MS;
 const SETTINGS_SETUP = 'setup-center';
+/** Settings -> Report emails (index.html #mail-section), where Gmail is connected. */
+const SETTINGS_REPORT_EMAIL = 'mail-section';
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const MAX_APPROVALS = 20;
 const HOST_PENDING = new Set(['no-cloud', 'login', 'pair']);
@@ -389,6 +409,30 @@ function collectGoogle(state) {
   const g = isObject(state) && isObject(state.google) ? state.google : null;
   if (!g || g.configured !== true || g.connected !== false || !isTime(state.now)) return [];
   return [{ id: `google:disconnected:${dayKey(state.now)}`, kind: 'needs', source: 'google', title: 'Google disconnected: reconnect', key: 'hub.item.googleOff', at: midnight(state.now), primary: { action: 'openSettings', arg: SETTINGS_SETUP } }];
+}
+
+/**
+ * The report-email Gmail grant (gmailsend.js status()) is missing, so the God
+ * Mode / nightly / weekly emails cannot go out - folded in from the old '!'
+ * inbox (N8). Unknown status = nothing. Day-keyed like the other standing
+ * conditions, so "Mark done" snoozes it until tomorrow. The address never travels.
+ * @param {{gmail:{configured:boolean, connected:boolean}|null, now:number}} state
+ */
+function collectGmail(state) {
+  const g = isObject(state) && isObject(state.gmail) ? state.gmail : null;
+  if (!g || g.connected !== false || !isTime(state.now)) return [];
+  const configured = g.configured === true;
+  return [{
+    id: `gmail:disconnected:${dayKey(state.now)}`,
+    kind: 'needs',
+    source: 'gmail',
+    title: 'Gmail not connected: report emails cannot go out',
+    key: 'hub.item.gmailOff',
+    detail: configured ? 'Connect Gmail in Settings -> Report emails' : 'No Google OAuth client yet - set it up in Settings',
+    detailKey: configured ? 'hub.item.gmailOffDetail' : 'hub.item.gmailNoClient',
+    at: midnight(state.now),
+    primary: { action: 'openSettings', arg: SETTINGS_REPORT_EMAIL },
+  }];
 }
 
 /**
@@ -475,6 +519,7 @@ const COLLECTORS = {
   mail: collectMail,
   cloud: collectCloud,
   google: collectGoogle,
+  gmail: collectGmail,
   host: collectHost,
   todo: collectTodo,
   weekly: collectWeekly,
@@ -504,6 +549,7 @@ module.exports = {
   collectMail,
   collectCloud,
   collectGoogle,
+  collectGmail,
   collectHost,
   collectTodo,
   collectWeekly,
@@ -512,6 +558,7 @@ module.exports = {
   WEEKLY_READY_MS,
   manualFromReport,
   runItems,
+  summaryAction,
   lineKey,
   weekStart,
   dayStart,

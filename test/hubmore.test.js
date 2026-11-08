@@ -199,3 +199,76 @@ test('toasts go through notify.js (its opt-in) and open the drawer', () => {
   assert.ok(src.includes('openHub()'), 'the click opens the drawer');
   assert.ok(fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'modules', 'hubicon.js'), 'utf8').includes('wireHubToasts()'));
 });
+
+// --- N8: the old '!' inbox folded into the hub --------------------------------
+
+test('gmail: a needs item while the report-email grant is missing, nothing otherwise', () => {
+  neverThrows(c.collectGmail);
+  assert.deepEqual(c.collectGmail({ gmail: null, now: NOW }), [], 'unknown status = nothing');
+  assert.deepEqual(c.collectGmail({ gmail: { configured: true, connected: true }, now: NOW }), []);
+  assert.deepEqual(c.collectGmail({ gmail: { configured: true }, now: NOW }), [], 'connected must be an explicit false');
+  assert.deepEqual(c.collectGmail({ gmail: { configured: true, connected: false }, now: 'x' }), []);
+  const [item] = clean(c.collectGmail({ gmail: { configured: true, connected: false, address: 'someone@example.com' }, now: NOW }));
+  assert.equal(item.kind, 'needs');
+  assert.equal(item.source, 'gmail');
+  assert.match(item.id, /^gmail:disconnected:\d{4}-\d{2}-\d{2}$/, 'day-keyed: Mark done snoozes it until tomorrow');
+  assert.deepEqual(item.primary, { action: 'openSettings', arg: 'mail-section' }, 'Settings -> Report emails');
+  assert.equal(item.detailKey, 'hub.item.gmailOffDetail');
+  assert.ok(!JSON.stringify(item).includes('someone@'), 'the address never travels');
+  const [noClient] = c.collectGmail({ gmail: { configured: false, connected: false }, now: NOW });
+  assert.equal(noClient.detailKey, 'hub.item.gmailNoClient');
+});
+
+test('gmail: in the accounts group, wired through registerHubIpc, and its anchor exists', async () => {
+  const { HUB_SOURCE_GROUPS, isCollectorOn } = require('../src/hubsources.js');
+  assert.ok(HUB_SOURCE_GROUPS.accounts.includes('gmail'));
+  assert.equal(isCollectorOn('gmail', { accounts: false }), false);
+  const handlers = new Map();
+  registerHubIpc({
+    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
+    send: () => {},
+    doneFile: () => null,
+    seenFile: () => null,
+    runsDir: () => null,
+    update: () => null,
+    accounts: { gmail: () => ({ configured: true, connected: false }) },
+    prefs: { readPrefs: () => ({}), writePrefs: () => ({}), file: () => null },
+    readers: { checkin: () => ({}), goals: () => ({}), bills: () => ({}), todo: () => ({}), weekly: () => ({}), host: () => ({}) },
+    now: () => NOW,
+    autoStart: false,
+  });
+  const { items } = await handlers.get('hub:list')();
+  assert.ok(items.some((i) => i.source === 'gmail' && i.kind === 'needs'));
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'index.html'), 'utf8');
+  assert.ok(html.includes('id="mail-section"'), 'openSettings lands on the Report emails heading');
+});
+
+test('summaryAction: openRunSummary with a validated <machine>:<runId> arg', () => {
+  assert.deepEqual(c.summaryAction('KT-PC', 'p1abc'), { action: 'openRunSummary', arg: 'KT-PC:p1abc' });
+  for (const [m, id] of [[null, 'p1abc'], ['KT PC', 'p1abc'], ['KT-PC', 'P1ABC'], ['KT-PC', '../x'], ['KT-PC', ''], ['', 'p1abc'], ['a'.repeat(64), 'p1abc'], ['KT-PC:x', 'p1abc']]) {
+    assert.equal(c.summaryAction(m, id), undefined, `${m} ${id}`);
+  }
+});
+
+test('local godmode: the run item opens its summary, each line still opens the report', () => {
+  const report = ['# God Mode', '', '- Repo: `C:\\r\\Repo`', '- Result: 2 of 2 packages pushed', '', '## Needs you', '', '- merge by hand', '', '## Manual actions', '', 'None.'].join('\n');
+  const items = clean(c.collectGodmode({ runs: [{ id: 'p1abc', mtime: NOW - DAY, text: report }], machine: 'HOME-PC', now: NOW }));
+  const run = items.find((i) => i.id === 'godmode:p1abc');
+  assert.deepEqual(run.primary, { action: 'openRunSummary', arg: 'HOME-PC:p1abc' });
+  const lines = items.filter((i) => i.id !== 'godmode:p1abc');
+  assert.ok(lines.length > 0 && lines.every((i) => i.primary.action === 'openReport' && i.primary.arg === 'p1abc'));
+  // No usable machine name: the run item falls back to the local report.
+  const bare = c.collectGodmode({ runs: [{ id: 'p1abc', mtime: NOW - DAY, text: report }], machine: 'bad name', now: NOW });
+  assert.deepEqual(bare.find((i) => i.id === 'godmode:p1abc').primary, { action: 'openReport', arg: 'p1abc' });
+});
+
+test('hub boundary: openRunSummary needs a <machine>:<runId> arg', () => {
+  const base = { id: 'godmode:p1abc', kind: 'info', source: 'godmode', title: 'Run', at: NOW };
+  const keep = (primary) => mergeItems([[{ ...base, primary }]], { now: NOW }).items[0].primary;
+  assert.deepEqual(keep({ action: 'openRunSummary', arg: 'PC1:p1abc' }), { action: 'openRunSummary', arg: 'PC1:p1abc' });
+  for (const arg of [undefined, 'p1abc', 'PC1:P1ABC', 'PC 1:p1abc', 'PC1:p1abc:extra', 'https://x', 42]) {
+    assert.equal(keep({ action: 'openRunSummary', arg }), undefined, String(arg));
+  }
+});

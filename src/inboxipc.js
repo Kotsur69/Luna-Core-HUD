@@ -1,30 +1,51 @@
 // ============================================================================
-// LunaCore - attention inbox IPC (main)
+// LunaCore - God Mode run summary IPC (main)
 // ----------------------------------------------------------------------------
-//   inbox:list            -> {ok, items}  src/inbox.js buildInbox()
 //   inbox:run {machine, id} -> {ok, run} | {ok:false, reason}
-//                            one God Mode run for the summary window; opening
-//                            it marks it seen in this PC's own `godmode` row
+//                            one God Mode run for the summary window
+//                            (renderer godmodesummary.js, opened from a hub
+//                            item's openRunSummary action); opening it marks
+//                            it seen in this PC's own `godmode` row
 //   inbox:open-pr {machine, id, pkg}  opens that package's PR link in the
 //                            browser (github.com only), never a renderer URL
 //
-// Sources: this PC's run history file (snapshotputs.js godmode.read()), the
+// The channel names are the old attention inbox's: N8
+// (docs/tbc_docs/NOTIFICATION_HUB_PLAN.md) folded its '!' chip and its list
+// (inbox:list) into the notification hub and kept these two validated handlers.
+//
+// Sources: this PC's run history file (snapshotputs.js godmode.read()) and the
 // other PCs' `godmode` rows (cloudsnapshots list(), untrusted - parsed by
-// godmodesnapshot.js), today's check-in and this week's goals (local files),
-// and the report-email Gmail sender's status (no network, local token only).
-// The renderer names a run only by machine + id; both are validated here.
+// godmodesnapshot.js parseGodmodePeer()). The renderer names a run only by
+// machine + id; both are validated here.
 // ============================================================================
 
 'use strict';
 
-const { peersOf, collectRuns, seenUnion, buildInbox, findRun, MACHINE_RE } = require('./inbox');
-const { RUN_ID_RE, prUrlOf } = require('./godmodesnapshot');
-const checkinStore = require('./lifecheckin');
-const goalStore = require('./lifegoals');
+const { parseGodmodePeer, RUN_ID_RE, prUrlOf } = require('./godmodesnapshot');
+
+const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
+const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * This PC's own snapshot (read back from disk) and the other PCs' rows, each
+ * parsed and validated. A broken own file or row is just left out.
+ * @returns {Array<{machine:string, runs:object[]}>}
+ */
+function peersOf(own, rows, machine, now) {
+  const mine = isObject(own) && MACHINE_RE.test(machine) ? parseGodmodePeer({ machine, data: own }, now) : null;
+  const others = (Array.isArray(rows) ? rows : []).map((r) => parseGodmodePeer(r, now));
+  return [mine, ...others].filter(Boolean);
+}
+
+/** Every machine's runs tagged with the machine, newest first. */
+const collectRuns = (peers) => peers.flatMap((p) => p.runs.map((r) => ({ ...r, machine: p.machine }))).sort((a, b) => b.finishedAt - a.finishedAt);
+
+/** One run by machine + id, or null. */
+const findRun = (runs, machine, id) => runs.find((r) => r.machine === machine && r.id === id) || null;
 
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 
-/** A local read that must never break the inbox: null on any failure. */
+/** A local read that must never break the summary: null on any failure. */
 function safe(label, fn) {
   try {
     return fn();
@@ -36,20 +57,9 @@ function safe(label, fn) {
 
 /**
  * @param {{ipcMain:object, snapshots:()=>({list:Function}|null), godmode:{read:Function, markSeen:Function},
- *   machine:string, openExternal?:(url:string)=>Promise<void>, now?:()=>number, checkin?:(at:number)=>object|null, goals?:(at:number)=>object|null,
- *   gmail?:()=>({configured:boolean, connected:boolean}|null)}} deps
+ *   machine:string, openExternal?:(url:string)=>Promise<void>, now?:()=>number}} deps
  */
-function registerInboxIpc({
-  ipcMain,
-  snapshots,
-  godmode,
-  machine,
-  openExternal = null,
-  now = Date.now,
-  checkin = (at) => checkinStore.checkinView(checkinStore.loadCheckin(), at),
-  goals = (at) => goalStore.goalsView(goalStore.loadGoals(), at),
-  gmail = () => null,
-}) {
+function registerInboxIpc({ ipcMain, snapshots, godmode, machine, openExternal = null, now = Date.now }) {
   async function peerRows() {
     const s = snapshots();
     if (!s) return [];
@@ -64,25 +74,6 @@ function registerInboxIpc({
   async function allPeers(at) {
     return peersOf(safe('history', () => godmode.read()), await peerRows(), machine, at);
   }
-
-  ipcMain.handle('inbox:list', async () => {
-    try {
-      const at = now();
-      const peers = await allPeers(at);
-      const items = buildInbox({
-        runs: collectRuns(peers),
-        seen: seenUnion(peers),
-        checkin: safe('checkin', () => checkin(at)),
-        goals: safe('goals', () => goals(at)),
-        gmail: safe('gmail', () => gmail()),
-        now: at,
-      });
-      return { ok: true, items };
-    } catch (err) {
-      console.error('[inbox] list failed:', errText(err));
-      return { ok: false, reason: 'failed' };
-    }
-  });
 
   ipcMain.handle('inbox:run', async (_event, req) => {
     const ok = req && typeof req === 'object' && typeof req.machine === 'string' && typeof req.id === 'string';
@@ -115,4 +106,4 @@ function registerInboxIpc({
   });
 }
 
-module.exports = { registerInboxIpc };
+module.exports = { registerInboxIpc, peersOf, collectRuns, findRun };

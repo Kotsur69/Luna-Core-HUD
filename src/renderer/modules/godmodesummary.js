@@ -1,7 +1,8 @@
 // ============================================================================
 // LunaCore - God Mode run summary window (renderer)
 // ----------------------------------------------------------------------------
-// One finalized run, from this PC or any other (src/inboxipc.js inbox:run):
+// One finalized run, from this PC or any other (src/inboxipc.js inbox:run),
+// opened from a notification hub item (hubpanel.js openRunSummary, N8):
 // repo name, PC, finished time, merged / pushed count, integration state,
 // the Needs-you lines, manual actions, PR links and every package's state.
 // Opening it marks the run seen on all PCs (main does that on inbox:run).

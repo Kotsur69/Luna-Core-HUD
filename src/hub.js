@@ -38,7 +38,10 @@ const ACTIONS = new Set([
   'openMission',
   'openSettings',
   'installUpdate',
+  'openRunSummary',
 ]);
+/** openRunSummary's arg: '<machine>:<runId>' (godmodesnapshot.js MACHINE / RUN_ID shapes). */
+const RUN_SUMMARY_ARG_RE = /^[A-Za-z0-9-]{1,63}:[a-z0-9]{1,40}$/;
 const KINDS = ['needs', 'brief', 'info'];
 const KIND_RANK = { needs: 0, brief: 1, info: 2 };
 const SOURCE_RE = /^[a-z]{1,20}$/;
@@ -96,8 +99,10 @@ function cleanVars(raw) {
 function cleanPrimary(raw) {
   if (!isObject(raw) || !ACTIONS.has(raw.action)) return undefined;
   const primary = { action: raw.action };
+  if (raw.action === 'openRunSummary' && raw.arg === undefined) return undefined;
   if (raw.arg !== undefined) {
     if (typeof raw.arg !== 'string' || !ARG_RE.test(raw.arg)) return undefined;
+    if (raw.action === 'openRunSummary' && !RUN_SUMMARY_ARG_RE.test(raw.arg)) return undefined;
     primary.arg = raw.arg;
   }
   return primary;
