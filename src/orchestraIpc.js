@@ -27,7 +27,7 @@
 const fs = require('fs');
 const { reportFileFor } = require('./orchestraReport');
 const { isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSupervisor');
-const { plannerEffortOf } = require('./orchestraPlan');
+const { todoSelection, planTarget, runPlan } = require('./orchestraPlanStart');
 
 const MAX_PROJECT_ID_CHARS = 200;
 // A payload that is present but not a plain object.
@@ -155,44 +155,20 @@ function registerOrchestraIpc(ipcMain, ctx) {
   // project, repo folder, profile and to-do list are all resolved here. The
   // planner runs on the cloud default like /ask (ask:query's reasoning): a
   // tab's local-model profile must not silently plan the whole run.
+  // The selection rules, refusals and makePlan call are shared with the
+  // phone's godmode.plan (src/orchestraPlanStart.js).
   ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts, effort) => {
-    // The picker's selection: to-do `at` values only, capped like the list
-    // itself. No selection (null) = every open to-do; an off-shape one fails
-    // closed ([] -> 'noneSelected'). makePlan re-checks each value against
-    // the list it reads.
-    // The length is capped before anything walks the array: a renderer that
-    // sends millions of entries must not stall main building a Set.
-    let picked = null;
-    if (todoAts != null) {
-      const fits = Array.isArray(todoAts) && todoAts.length <= ctx.maxTodoItems;
-      const unique = fits ? [...new Set(todoAts)] : [];
-      picked = unique.every(Number.isFinite) ? unique : [];
-    }
-    // The planner's --effort from the picker: one of the four levels only,
-    // anything else (missing, 'low', a non-string) plans at the default high.
-    const plannerEffort = plannerEffortOf(effort);
+    // To-do `at` values only, capped like the list itself; an off-shape
+    // selection fails closed ([] -> 'noneSelected'). makePlan re-checks each
+    // value against the list it reads.
+    const { picked } = todoSelection(todoAts, ctx.maxTodoItems);
     // No tab id = the active tab; an id that no longer resolves (the tab
     // closed) is refused rather than planning in whatever tab is on screen.
     const session = ctx.resolveSession(sessionId);
     if (!session) return refuse('noTab');
-    const projectId = keyOf(session.projectId);
-    // Never God Mode and Luna's Work on the same project at once.
-    const blocked = ctx.godModeBlock(projectId);
-    if (blocked) return blocked;
-    // A missing cwd makes execFile fail with ENOENT, which would read as
-    // "claude not found" - check the folder first and say what is wrong.
-    const repoPath = ctx.repoFor(session);
-    if (!repoPath) return refuse('noRepo');
-    const res = await registry.ensure(projectId).makePlan({
-      projectId: session.projectId,
-      repoPath,
-      profileId: session.profileId,
-      env: ctx.toolEnv(),
-      todoAts: picked,
-      plannerEffort,
-    });
-    if (res.ok) changed(projectId, res.plan);
-    return res;
+    const target = planTarget(ctx, session);
+    if (!target.ok) return target;
+    return runPlan(ctx, session, target, { picked, effort });
   });
 
   ipcMain.handle('orchestra:list', () => {

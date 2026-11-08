@@ -15,6 +15,10 @@
 //
 // The launcher switch hides the HUD windows (as before); the in-app toggle
 // leaves them up - the user is looking at the Settings pane that flipped it.
+//
+// Only this path hands startHost() the HUD's God Mode (src/hostgodmode.js):
+// the phone's signed godmode.* commands run in HUD host mode only, a headless
+// `--host` refuses them with needsHud.
 // ============================================================================
 
 'use strict';
@@ -23,7 +27,8 @@
  * @param {{
  *   machine: string,
  *   startHost: (opts: object) => {stop: () => void, setDefault: () => void},
- *   hud: () => ({cloud: object|null, chatTabs?: object|null, configSync?: {soon: () => void}|null}),
+ *   hud: () => ({cloud: object|null, chatTabs?: object|null, configSync?: {soon: () => void}|null,
+ *     godmode?: object|null}),
  *   windows: () => Array<{hide: () => void, show: () => void, isDestroyed: () => boolean}>,
  *   isDefault: () => boolean,
  *   log?: (...args: unknown[]) => void,
@@ -46,7 +51,7 @@ function createHostSwitch({ machine, startHost, hud, windows, isDefault, log = c
       return status();
     }
     // Only once the HUD is up: its cloud must exist, or a second one would start.
-    const { cloud, chatTabs } = hud() || {};
+    const { cloud, chatTabs, godmode } = hud() || {};
     if (!cloud) {
       log('[hostswitch] HUD cloud not ready, host mode not started');
       return { ok: false, reason: 'notReady' };
@@ -60,6 +65,7 @@ function createHostSwitch({ machine, startHost, hud, windows, isDefault, log = c
         makeDefault,
         cloud,
         chatTabs: chatTabs || null,
+        godmode: godmode || null,
         // Every default write (start flag, this switch, the host tray's item).
         onDefaultSet: pushDefaultSoon,
         onStop: () => {

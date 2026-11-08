@@ -39,6 +39,11 @@
 // `queue` (optional, B16): the PC's Luna's Work project queue, in order -
 // project labels only (src/lunasworkQueue.js phoneQueue). Read-only on the
 // phone: the queue is edited in the HUD panel.
+// `plans` (optional, Phone God Mode A): the current plan of each project
+// that has one not started yet (src/hostgodmode.js plans()): {planId,
+// projectId, repoName, state: planning|ready|failed, errors, packages:
+// [{id, title, deps, model}], todos: the picked to-do titles}. Text only,
+// paths scrubbed from errors. The phone launches a ready plan by its ids.
 // ============================================================================
 
 'use strict';
@@ -85,6 +90,7 @@ const MAX_TABS = 30;
 const MAX_ERROR = 40;
 const MAX_DETAIL = 160;
 const MAX_ELAPSED_MS = 7 * 24 * 60 * 60 * 1000;
+const PLAN_STATES = ['planning', 'ready', 'failed'];
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const isTime = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
@@ -357,6 +363,49 @@ function reportLines(report, roots = []) {
   return { needsYou: hubLines(needs, roots), manualActionLines: hubLines(manualFromReport(report), roots) };
 }
 
+/** One plan package ({id, title, deps, model}), writer or reader side, or null. */
+function cleanPlanPackage(p) {
+  if (!isObject(p)) return null;
+  const id = clean(p.id, MAX_ID);
+  if (!id) return null;
+  return {
+    id,
+    title: clean(scrubPaths(p.title), MAX_TITLE),
+    deps: (Array.isArray(p.deps) ? p.deps : []).slice(0, MAX_DEPS).map((d) => clean(d, MAX_ID)).filter(Boolean),
+    model: clean(p.model, MAX_STATE),
+  };
+}
+
+/** One project's current plan (see the header's `plans`), or null to drop it. */
+function cleanPlan(p) {
+  if (!isObject(p) || !PLAN_STATES.includes(p.state)) return null;
+  const projectId = clean(p.projectId, MAX_ID);
+  if (!projectId) return null;
+  return {
+    planId: clean(p.planId, MAX_ID) || null,
+    projectId,
+    repoName: clean(baseName(p.repoName), MAX_NAME),
+    state: p.state,
+    errors: (Array.isArray(p.errors) ? p.errors : []).slice(0, MAX_LINES).map((e) => clean(scrubPaths(e), MAX_LINE)).filter(Boolean),
+    packages: (Array.isArray(p.packages) ? p.packages : []).slice(0, MAX_PACKAGES).map(cleanPlanPackage).filter(Boolean),
+    todos: (Array.isArray(p.todos) ? p.todos : []).slice(0, MAX_LINES).map((t) => clean(scrubPaths(t), MAX_TITLE)).filter(Boolean),
+  };
+}
+
+/** The `plans` list: one per project (the first wins), at most MAX_LIVES. */
+function cleanPlans(list) {
+  const out = [];
+  const seen = new Set();
+  for (const p of (Array.isArray(list) ? list : []).slice(0, MAX_LIVES * 2)) {
+    const c = cleanPlan(p);
+    if (!c || seen.has(c.projectId)) continue;
+    seen.add(c.projectId);
+    out.push(c);
+    if (out.length >= MAX_LIVES) break;
+  }
+  return out;
+}
+
 /** Seen run ids: well-formed, unique, newest first, at most MAX_SEEN. */
 const cleanSeen = (v) =>
   [...new Set((Array.isArray(v) ? v : []).filter((id) => typeof id === 'string' && RUN_ID_RE.test(id)))].slice(0, MAX_SEEN);
@@ -518,7 +567,7 @@ function cleanQueue(list) {
     .map((label) => ({ label }));
 }
 
-function withLive(snap, { live = null, lives = null, tabs = [], decisions = [], feedback = null, queue = [] } = {}, { machine, now = Date.now() }) {
+function withLive(snap, { live = null, lives = null, tabs = [], decisions = [], feedback = null, queue = [], plans = [] } = {}, { machine, now = Date.now() }) {
   const base = runsOf(snap).map((r) => cleanRun(r, now)).filter(Boolean);
   const out = { v: VERSION, at: now, machine: MACHINE_RE.test(machine) ? machine : 'unknown', runs: base.slice(0, MAX_RUNS), seen: seenOf(snap), tabs: cleanTabs(tabs) };
   const one = cleanLive(live, now);
@@ -531,7 +580,17 @@ function withLive(snap, { live = null, lives = null, tabs = [], decisions = [], 
   const f = publicFeedback(feedback);
   // Luna's Work project queue (B16): labels only.
   const q = cleanQueue(queue);
-  return { ...out, ...(l ? { live: l } : {}), ...(ls.length ? { lives: ls } : {}), ...(d.length ? { decisions: d } : {}), ...(f ? { feedback: f } : {}), ...(q.length ? { queue: q } : {}) };
+  // Plans not started yet, one per project (Phone God Mode A).
+  const pl = cleanPlans(plans);
+  return {
+    ...out,
+    ...(l ? { live: l } : {}),
+    ...(ls.length ? { lives: ls } : {}),
+    ...(d.length ? { decisions: d } : {}),
+    ...(f ? { feedback: f } : {}),
+    ...(q.length ? { queue: q } : {}),
+    ...(pl.length ? { plans: pl } : {}),
+  };
 }
 
 /** A `godmode` row ({machine, data}) -> {machine, at, runs, live, tabs} or null. Never throws. */
@@ -555,6 +614,7 @@ function parseGodmodePeer(row, now = Date.now()) {
       decisions: publicDecisions(d.decisions).filter((x) => x.runId),
       feedback: publicFeedback(d.feedback),
       queue: cleanQueue(d.queue),
+      plans: cleanPlans(d.plans),
     };
   } catch {
     return null;
@@ -654,6 +714,19 @@ function queueFrom(rows, now = Date.now()) {
     .map((p) => ({ machine: p.machine, stale: now - p.at > LIVE_STALE_MS, items: p.queue }));
 }
 
+/**
+ * Every PC's current plans, newest PC first, each tagged with its machine
+ * and whether the snapshot is stale.
+ * @returns {object[]}
+ */
+function plansFrom(rows, now = Date.now()) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((r) => parseGodmodePeer(r, now))
+    .filter((p) => p && p.plans.length)
+    .sort((a, b) => b.at - a.at)
+    .flatMap((p) => p.plans.map((pl) => ({ ...pl, machine: p.machine, stale: now - p.at > LIVE_STALE_MS })));
+}
+
 /** Counters for the phone's headline: pushed / working / waiting for Mati / pending / failed. */
 function liveCounts(live) {
   const c = { pushed: 0, working: 0, waiting: 0, pending: 0, failed: 0 };
@@ -694,6 +767,8 @@ module.exports = {
   feedbackFrom,
   queueFrom,
   cleanQueue,
+  cleanPlans,
+  plansFrom,
   liveCounts,
   scrubPaths,
   hubLine,

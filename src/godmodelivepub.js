@@ -2,11 +2,13 @@
 // LunaCore - when the live God Mode snapshot goes out (main, pure timers)
 // ----------------------------------------------------------------------------
 // orchestra.js commit() and the tab status board poke() this on every change;
-// it decides whether the `godmode` snapshot's `live` / `lives` / `tabs` go
-// out now (`lives`: one per project's run, MULTI_GODMODE_PLAN.md A5):
+// it decides whether the `godmode` snapshot's `live` / `lives` / `tabs` /
+// `plans` go out now (`lives`: one per project's run, MULTI_GODMODE_PLAN.md
+// A5; `plans`: plans not started yet, src/hostgodmode.js):
 //
 //   - at once when a package changes state, the run pauses / resumes,
-//     settles or is killed (the "urgent" key moved);
+//     settles or is killed, or a plan starts / finishes planning (the
+//     "urgent" key moved);
 //   - otherwise at most every MIN_MS (elapsed times, tab lights);
 //   - while a run is running or paused, at least every HEARTBEAT_MS, so the
 //     phone can tell a quiet run from a PC that went away (its 'stale' badge
@@ -28,26 +30,32 @@ const livesOf = (section) => {
   if (Array.isArray(section.lives)) return section.lives.filter(Boolean);
   return section.live ? [section.live] : [];
 };
+/** The section's plans not started yet (older callers send none). */
+const plansOf = (section) => (section && Array.isArray(section.plans) ? section.plans.filter(Boolean) : []);
 const isActive = (section) => livesOf(section).some((l) => l.state === 'running' || l.state === 'paused');
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 
-/** What must go out at once: each run's identity / state and every package's state. */
+/** What must go out at once: each run's identity / state, every package's state, each plan's state. */
 function urgentKey(section) {
   const lives = livesOf(section);
-  if (!lives.length) return 'none';
-  return JSON.stringify(lives.map((l) => [l.id, l.state, l.pausedUntil, l.packages.map((p) => [p.id, p.state])]));
+  const plans = plansOf(section);
+  if (!lives.length && !plans.length) return 'none';
+  return JSON.stringify([
+    lives.map((l) => [l.id, l.state, l.pausedUntil, l.packages.map((p) => [p.id, p.state])]),
+    plans.map((p) => [p.projectId, p.planId, p.state]),
+  ]);
 }
 
 /** Everything but the clock: elapsed times alone are not a change. */
 function contentKey(section) {
   if (!section) return 'none';
   const lives = livesOf(section).map((l) => ({ ...l, packages: l.packages.map((p) => ({ ...p, elapsedMs: null })) }));
-  return JSON.stringify({ lives, tabs: section.tabs || [] });
+  return JSON.stringify({ lives, tabs: section.tabs || [], plans: plansOf(section) });
 }
 
 /**
  * @param {{
- *   build: () => ({live: object|null, lives?: object[], tabs: object[]}|null),
+ *   build: () => ({live: object|null, lives?: object[], tabs: object[], plans?: object[]}|null),
  *   publish: (section: object) => unknown,
  *   now?: () => number, setTimer?: Function, clearTimer?: Function,
  *   minMs?: number, heartbeatMs?: number, log?: (msg: string) => void,
