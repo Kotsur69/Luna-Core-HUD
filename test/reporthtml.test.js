@@ -262,3 +262,40 @@ test('weekly HTML escapes project names, repo names, to-dos and model text', () 
 test('weekly HTML is deterministic for the same entry', () => {
   assert.equal(renderWeeklyReportHtml(weekEntry()), renderWeeklyReportHtml(weekEntry()));
 });
+
+// --- readable layout -----------------------------------------------------------
+
+test('page: an eyebrow, an escaped summary lead, print and dark styles', () => {
+  const html = h.page({ title: 'T', kind: EVIL, summary: EVIL, subtitle: 's', body: '' });
+  assertInert(html);
+  assert.match(html, /<p class="eyebrow">&lt;img/);
+  assert.match(html, /<p class="summary">&lt;img/);
+  assert.match(html, /@media print\{/);
+  assert.match(html, /prefers-color-scheme:dark[\s\S]*--ok-fg:/);
+  assert.ok(!h.page({ title: 'T', body: '' }).includes('class="summary"'), 'no summary, no lead');
+  assert.match(h.page({ title: 'T', body: '' }), /<p class="eyebrow">LunaCore report<\/p>/);
+});
+
+test('table: number columns are right-aligned, text and placeholders do not count', () => {
+  const out = h.table(
+    ['Package', 'Time', 'Cost', 'Commit'],
+    [
+      ['a', '30 min', '$12.50', 'abcdef1'],
+      ['b', '-', '$1', 'fedcba9'],
+      ['c', '1 h 5 min', '40%', '1234abc'],
+    ],
+  );
+  assert.match(out, /<th>Package<\/th><th class="num">Time<\/th><th class="num">Cost<\/th><th>Commit<\/th>/);
+  assert.match(out, /<td>a<\/td><td class="num">30 min<\/td><td class="num">\$12\.50<\/td><td>abcdef1<\/td>/);
+  assert.match(out, /<td class="num">-<\/td>/);
+  // A column of placeholders only stays a text column.
+  assert.match(h.table(['X'], [['-'], ['-']]), /<th>X<\/th>/);
+});
+
+test('the shared CSS has zebra rows, wrapped long cells and readable pills', () => {
+  const html = h.page({ title: 'T', body: '' });
+  assert.match(html, /tbody tr:nth-child\(even\) td\{background:var\(--zebra\)\}/);
+  assert.match(html, /td\{overflow-wrap:anywhere/);
+  assert.match(html, /\.pill\.ok\{color:var\(--ok-fg\);background:var\(--ok-bg\)\}/);
+  assert.match(html, /max-width:1000px/);
+});

@@ -286,7 +286,9 @@ function renderWeeklyReportHtml(entry) {
   const at = Number.isFinite(e.at) ? new Date(e.at).toISOString().replace('T', ' ').slice(0, 16) : '-';
   return h.page({
     title: `Weekly review - ${week}`,
-    subtitle: [range, data.partial ? 'week in progress' : '', headline].filter(Boolean).join(' · '),
+    kind: 'LunaCore weekly review',
+    summary: headline,
+    subtitle: [range, data.partial ? 'week in progress' : ''].filter(Boolean).join(' · '),
     body,
     footer: `Generated ${at} UTC${cost}`,
   });

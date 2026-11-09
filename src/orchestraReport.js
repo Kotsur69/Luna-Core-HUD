@@ -807,6 +807,7 @@ function renderRunReportHtml(view, extra = {}) {
   ].join('\n');
   return h.page({
     title: `God Mode run ${oneLine(v.id, 40)}`,
+    kind: 'LunaCore God Mode run report',
     subtitle: `${repo || 'repo'}${base} · workers ${oneLine(v.workerModel, 32) || '-'} · integration ${integLine}`,
     body,
     footer: `Started ${fmt(v.runStartedAt)} UTC · finished ${fmt(now)} UTC · paused on limits ${duration(

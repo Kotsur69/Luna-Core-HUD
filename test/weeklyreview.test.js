@@ -248,3 +248,23 @@ test('a throwing writeHtml never fails the review', async () => {
   const res = await h.review.generate('2026-W43');
   assert.equal(res.ok, true);
 });
+
+test('the weekly HTML page leads with the headline and keeps the review data', async () => {
+  const pages = [];
+  const h = setup({ writeHtml: (week, html) => pages.push({ week, html }) });
+  await h.review.generate('2026-W43');
+  const { html } = pages[0];
+  assert.match(html, /<p class="eyebrow">LunaCore weekly review<\/p>/);
+  assert.match(html, /<p class="summary">A fun-heavy week\.<\/p>/);
+  assert.match(html, /<header>[\s\S]*2026-10-19 - 2026-10-25[\s\S]*<\/header>/);
+  for (const key of ['LunaCore got most of it.', 'Two to-dos open.', 'Fix login', 'Ship week tab', '3 commits']) {
+    assert.ok(html.includes(key), `${key} still in the page`);
+  }
+});
+
+test('the weekly email goes out with the readable HTML alternative', async () => {
+  const h = setup();
+  await h.review.tick();
+  assert.equal(h.sent[0].html, true);
+  assert.match(h.sent[0].text, /^Weekly review - 2026-W43\n/);
+});
