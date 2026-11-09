@@ -25,9 +25,12 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const { reportFileFor } = require('./orchestraReport');
 const { isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSupervisor');
 const { todoSelection, planTarget, runPlan } = require('./orchestraPlanStart');
+const { validatePlanRunPayload, planRunTarget } = require('./orchestraPlanRunStart');
+const { planDocsDir } = require('./orchestraPlanRunView');
 
 const MAX_PROJECT_ID_CHARS = 200;
 // A payload that is present but not a plain object.
@@ -94,7 +97,10 @@ function runSummary(entry, projects) {
  *   runsDir: () => string,
  *   readUiPrefs: () => object,
  *   writeUiPrefs: (patch:object) => void,
+ *   planRunEnv?: () => object|null,
  * }} ctx
+ *   planRunEnv: the freellm-auto profile's env for the free topic planner
+ *   (null when that profile is not configured)
  * @returns {{resolveRun: Function, runForPlan: Function}} for tests
  */
 function registerOrchestraIpc(ipcMain, ctx) {
@@ -169,6 +175,53 @@ function registerOrchestraIpc(ipcMain, ctx) {
     const target = planTarget(ctx, session);
     if (!target.ok) return target;
     return runPlan(ctx, session, target, { picked, effort });
+  });
+
+  // Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js): the request
+  // text is length-capped, the planner one of two names, a repoPath must be a
+  // registered project whose folder and .git exist (D4) - all checked here.
+  // The run starts right away (Q6); its workers are locked down in main.
+  ipcMain.handle('orchestra:planRun:start', async (_event, payload) => {
+    const req = validatePlanRunPayload(payload);
+    if (!req.ok) return req;
+    const target = planRunTarget(ctx, req);
+    if (!target.ok) return target;
+    const env = req.planner === 'free' ? (ctx.planRunEnv ? ctx.planRunEnv() : null) : ctx.toolEnv();
+    if (!env) return refuse('noPlanProfile');
+    const res = await registry.ensure(target.projectId).makePlanRun({
+      projectId: target.projectId,
+      repoPath: target.repoPath,
+      env,
+      request: req.request,
+      planner: req.planner,
+      planRunRequest: true,
+    });
+    if (res.ok) {
+      ctx.playCue('sfx.terminalNew');
+      changed(target.projectId, res.plan);
+    }
+    return res;
+  });
+
+  // A written plan doc: only the run id and the package id cross; the file
+  // is the run's own copy (<runsDir>/<planId>-plan/<file>.md), named by the
+  // controller's view, and must be a plain file.
+  ipcMain.handle('orchestra:planRun:openDoc', async (_event, planId, pkgId, opts) => {
+    const dir = planDocsDir(planId);
+    if (!dir || typeof pkgId !== 'string') return refuse('badId');
+    const run = runForPlan(projectIdOf(opts), planId);
+    if (!run.ok) return run;
+    const view = run.controller.view();
+    const doc = view && view.planRun ? view.planRun.docs.find((d) => d.id === pkgId) : null;
+    if (!doc) return refuse('noDoc');
+    const file = path.join(ctx.runsDir(), dir, doc.file);
+    try {
+      if (!fs.lstatSync(file).isFile()) return refuse('noDoc');
+    } catch {
+      return refuse('noDoc');
+    }
+    const err = await ctx.openPath(file);
+    return err ? refuse('openFailed') : { ok: true };
   });
 
   ipcMain.handle('orchestra:list', () => {

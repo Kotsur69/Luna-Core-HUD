@@ -618,6 +618,33 @@ contextBridge.exposeInMainWorld('lunacore', {
       Array.isArray(todoAts) ? todoAts : null,
       typeof effort === 'string' ? effort : null,
     ),
+  /**
+   * Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js). Two fixed
+   * actions, two fixed channels - main validates every field:
+   *   'start'   {request, planner: 'claude'|'free', sessionId?, repoPath?}
+   *   'openDoc' {planId, id, projectId?} - a written plan doc
+   * Promise<{ok, plan?, error?}>.
+   */
+  orchestraPlanRun: (action, payload) => {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    if (action === 'start') {
+      return ipcRenderer.invoke('orchestra:planRun:start', {
+        request: typeof p.request === 'string' ? p.request : null,
+        planner: typeof p.planner === 'string' ? p.planner : null,
+        sessionId: typeof p.sessionId === 'string' ? p.sessionId : null,
+        ...(typeof p.repoPath === 'string' ? { repoPath: p.repoPath } : {}),
+      });
+    }
+    if (action === 'openDoc') {
+      return ipcRenderer.invoke(
+        'orchestra:planRun:openDoc',
+        typeof p.planId === 'string' ? p.planId : null,
+        typeof p.id === 'string' ? p.id : null,
+        orchestraScope(p.projectId),
+      );
+    }
+    return Promise.resolve({ ok: false, error: 'badAction' });
+  },
   // Every call below takes an optional projectId last (one God Mode run per
   // project); without it main uses the active tab's run, or the only one.
   /** Summaries of every project's run: Promise<Array<{projectId, label, planId, ...}>>. */

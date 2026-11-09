@@ -48,6 +48,9 @@ const { createBatteryGuard } = require('./orchestraPower');
 const { createProcessScope } = require('./procTree');
 const { WATCHDOG_TICK_MS } = require('./orchestraSleep');
 const orchestraRecover = require('./orchestraRecover');
+const planRunStart = require('./orchestraPlanRunStart');
+const planRunView = require('./orchestraPlanRunView');
+const planLaunch = require('./orchestraPlanRunLaunch');
 
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 // How much of a worker's transcript is read to name the tool a permission
@@ -426,6 +429,115 @@ function recoverDeps(ctx) {
   };
 }
 
+// A plan doc is Markdown: anything bigger is not read (copy / sizing).
+const MAX_PLAN_DOC_BYTES = 512 * 1024;
+// Task sizing counts lines of existing files; bigger files count as huge.
+const MAX_SIZING_FILE_BYTES = 4 * 1024 * 1024;
+
+/** A file's text, or null (missing, not a file, too big, unreadable). */
+function readCapped(file, maxBytes) {
+  try {
+    const st = fs.lstatSync(file);
+    if (!st.isFile() || st.size > maxBytes) return null;
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** `rel` inside `root` (no escape through `..`, a drive or a backslash path), as an absolute path, or null. */
+function insideRoot(root, rel) {
+  if (typeof root !== 'string' || !root || typeof rel !== 'string' || !rel) return null;
+  const abs = path.resolve(root, rel);
+  const back = path.relative(path.resolve(root), abs);
+  return back && !back.startsWith('..') && !path.isAbsolute(back) ? abs : null;
+}
+
+/**
+ * Like insideRoot, but after resolving symlinks / junctions on both sides: a
+ * committed link in an intermediate folder cannot point the read outside the
+ * worktree. Null for a missing path too.
+ */
+function insideRealRoot(root, rel) {
+  const abs = insideRoot(root, rel);
+  if (!abs) return null;
+  try {
+    const real = fs.realpathSync(abs);
+    const back = path.relative(fs.realpathSync(root), real);
+    return back && !back.startsWith('..') && !path.isAbsolute(back) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The plan workers' Playwright-only MCP config file, next to the briefs. */
+const PLAN_MCP_FILE = 'luna-plan-mcp.json';
+
+/**
+ * Free God Mode v2 plan runs (orchestraPlanRunStart / -Launch / -View): the
+ * topic split, the plan profile, and the doc side - copies of every written
+ * .md next to the run report (<runsDir>/<planId>-plan/) and the fs helpers
+ * PLAN.md's task sizing reads the worktree with.
+ */
+function planRunDeps(ctx) {
+  return {
+    runTopicSplit: (args) => planRunStart.runTopicSplit(args),
+    planProfile: () => (ctx.planRunProfile ? ctx.planRunProfile() : null),
+    // Written on every worker start (a stale or edited copy never survives);
+    // null = the worker runs without Playwright, still locked down.
+    planMcpConfigPath: () => {
+      const file = path.join(ctx.userDir(), BRIEF_DIR, PLAN_MCP_FILE);
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(planLaunch.planMcpConfig(), null, 2), { encoding: 'utf8', mode: 0o600 });
+        return file;
+      } catch (err) {
+        ctx.logError(`[orchestra] could not write the plan workers' MCP config: ${errText(err)}`);
+        return null;
+      }
+    },
+    planDocs: {
+      read: (pkg) => {
+        const abs = pkg && pkg.planRun ? insideRealRoot(pkg.root, pkg.planRun.outputPath) : null;
+        return abs ? readCapped(abs, MAX_PLAN_DOC_BYTES) : null;
+      },
+      save: (planId, file, text) => {
+        const dir = planRunView.planDocsDir(planId);
+        if (!dir || !/^[A-Za-z0-9-]+\.md$/.test(String(file)) || !ctx.ensureUserDir()) return false;
+        try {
+          const folder = path.join(ctx.runsDir(), dir);
+          fs.mkdirSync(folder, { recursive: true });
+          fs.writeFileSync(path.join(folder, file), String(text), { encoding: 'utf8', mode: 0o600 });
+          return true;
+        } catch (err) {
+          ctx.logError(`[orchestra] could not copy the plan doc ${file}: ${errText(err)}`);
+          return false;
+        }
+      },
+      sizing: (text, { root, splitsSent, planPath }) =>
+        planRunView.planSizingStep(text, {
+          repoRoot: root,
+          splitsSent,
+          planPath,
+          // Model-written paths: only files inside the worktree are looked at.
+          fileExists: (_abs, rel) => {
+            const abs = insideRealRoot(root, rel);
+            try {
+              return !!abs && fs.lstatSync(abs).isFile();
+            } catch {
+              return false;
+            }
+          },
+          lineCount: (_abs, rel) => {
+            const abs = insideRealRoot(root, rel);
+            const body = abs ? readCapped(abs, MAX_SIZING_FILE_BYTES) : null;
+            return body === null ? Number.MAX_SAFE_INTEGER : body.split(/\r?\n/).length;
+          },
+        }),
+    },
+  };
+}
+
 /** This project's stored run and the renderer events, bound to `projectId`. */
 function stateDeps(projectId, ctx, store) {
   return {
@@ -577,6 +689,7 @@ function builderDeps(projectId, ctx, self) {
  *   messageBox: (opts:object) => Promise<{response:number}>|null, toast: (title:string, body:string) => void,
  *   projects: () => object[], resolveStoredPath: Function, flushTodos: () => void,
  *   usageLimits: () => object[], accountFailover: Function, freeProfileId: () => string|null,
+ *   planRunProfile?: () => {id:string, command:string, env:object}|null,
  *   playCue: (key:string) => void, log: (line:string) => void, logError: (line:string) => void,
  *   store?: {loadRun:Function, saveRun:Function},
  * }} ctx
@@ -596,6 +709,7 @@ function makeOrchestraDeps(projectId, ctx, shared = {}) {
     ...powerDeps(projectId, ctx, shared, self),
     ...builderDeps(projectId, ctx, self),
     ...recoverDeps(ctx),
+    ...planRunDeps(ctx),
     // The watchdog interval (main.js ticks the registry at it): a tick much
     // later than this means the PC slept (orchestraSleep.js).
     tickMs: WATCHDOG_TICK_MS,

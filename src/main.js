@@ -62,6 +62,8 @@ const { resolveLocalLaunch, prepareLocalLaunch, prepareChainLaunch, launchWhenRe
 const { ensureFallbackProxy, stopAllFallbackProxies, onRoute: onFreeRoute } = require('./fallbackproxy');
 const { loadChains, resolveProfileChain } = require('./freechains');
 const { pickFreeProfileId } = require('./orchestraFree');
+// Free God Mode v2 plan runs: the plan-worker lockdown and its profile.
+const { workerLaunchCommand, lockedRestartCommand, planProfileFrom } = require('./orchestraPlanRunLaunch');
 const { userDir, ensureUserDir } = require('./paths');
 const { detectLmsCli, wakeLmStudio } = require('./lmstudiocli');
 const { findApiPort, listModels: listLmStudioModels, loadModel: loadLmStudioModel } = require('./lmstudiosdk');
@@ -82,7 +84,6 @@ const {
   withSessionId,
   withIntakeMcp,
   intakeState,
-  withTaskBrief,
   withAccountResume,
   findExecutable,
   isClaudeCommand,
@@ -1180,6 +1181,7 @@ const orchestraCtx = {
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
   accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
   freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
+  planRunProfile: () => planProfileFrom(profiles),
   playCue,
   log: (line) => console.info('[orchestra]', line),
   logError: (line) => console.error(line),
@@ -1595,7 +1597,12 @@ function spawnInto(session, profile, launch = null) {
   const resumeCommand = session.resumeId
     ? withAccountResume(baseCommand, session.resumeId, session.launchTask || null)
     : null;
-  const command = resumeCommand || (session.task && withTaskBrief(profileCommand, session.task)) || profileCommand;
+  // A plan-run worker never falls back to the unlocked profile command, not on
+  // its first launch and not on a restart / failover (orchestraPlanRunLaunch.js).
+  const taskCommand = session.task
+    ? workerLaunchCommand(profileCommand, session.task)
+    : lockedRestartCommand(profileCommand, session.launchTask || null);
+  const command = resumeCommand || taskCommand || profileCommand;
   session.task = null;
   // When WE launch `claude`, we dictate the session id - the transcript is then
   // named exactly <uuid>.jsonl and the watcher looks it up instead of inferring
@@ -3414,6 +3421,11 @@ function registerIpc() {
     runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
     readUiPrefs,
     writeUiPrefs,
+    // The free topic planner runs on the plan profile (freellm-auto).
+    planRunEnv: () => {
+      const p = planProfileFrom(profiles);
+      return p ? withClaudeOnPath(buildSessionEnv(process.env, p.env)) : null;
+    },
   });
 
   // Finished-run actions (src/orchestraFinishIpc.js): ids are validated there.

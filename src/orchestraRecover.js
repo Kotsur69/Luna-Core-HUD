@@ -66,7 +66,7 @@ const STEP_WAKE_GRACE_MS = VERIFY_TIMEOUT_MS + KILL_GRACE_MS + 5 * MIN;
 // How much of an unknown failure's output goes to the log.
 const MAX_LOG_CHARS = 20000;
 const MAX_TRIED_CHARS = 160;
-const BRANCH_RE = /^(luna|luna-free)\/[a-z0-9-]{1,64}$/;
+const BRANCH_RE = /^(luna|luna-free|luna-plan)\/[a-z0-9-]{1,64}$/;
 
 /**
  * The playbook: cause -> automatic action and how often it may run per

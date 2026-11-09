@@ -85,13 +85,14 @@ const FREE_PARALLEL_ENV = 'LUNACORE_FREE_MAX_PARALLEL';
 
 /**
  * How many packages a run may have running at once.
- * @param {{freeMode?:boolean}|null} plan
+ * @param {{freeMode?:boolean, planRun?:object|null}|null} plan
  * @param {number} max the run-wide maximum (orchestraPlan.js MAX_PARALLEL)
  * @param {Object<string,string|undefined>} [env]
  * @returns {number}
  */
 function maxParallelFor(plan, max, env = process.env) {
-  if (!plan || !plan.freeMode) return max;
+  // Plan runs (orchestraPlanRunLaunch.js) share the same free gateway.
+  if (!plan || (!plan.freeMode && !plan.planRun)) return max;
   const raw = Number(env && env[FREE_PARALLEL_ENV]);
   const cap = Number.isInteger(raw) && raw >= 1 ? raw : FREE_MAX_PARALLEL;
   return Math.max(1, Math.min(max, cap));
@@ -102,6 +103,7 @@ module.exports = {
   FREE_INTEGRATION,
   FREE_MAX_PARALLEL,
   FREE_PARALLEL_ENV,
+  PROTECTED_BRANCHES,
   maxParallelFor,
   freeBranchName,
   isSafeFreeBranch,

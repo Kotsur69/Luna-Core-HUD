@@ -5116,6 +5116,32 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__link { font-size: var(--fs-xs); color: var(--neon-cyan); word-break: break-all; }
 .orchestra__allowed { font-size: var(--fs-xs); color: var(--text-dim); word-break: break-word; }
 
+/* Free God Mode v2 "Plan only" (modules/orchestraPlanRun.js). */
+.orchestra__seg { display: inline-flex; gap: var(--space-hair); }
+.orchestra__options .orchestra__seg-btn[aria-pressed='true'] { border-color: var(--neon-cyan); color: var(--neon-cyan); }
+.orchestra__planrun { display: flex; flex-direction: column; gap: var(--space-3); }
+section.orchestra__planrun {
+  padding: var(--space-5) var(--space-6);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-2);
+}
+.orchestra__request { min-height: 8rem; font-family: inherit; font-size: var(--fs-sm); }
+.orchestra__phases { display: flex; flex-wrap: wrap; gap: var(--space-4); list-style: none; margin: 0; padding: 0; }
+.orchestra__phase {
+  display: inline-flex;
+  gap: var(--space-2);
+  padding: var(--space-hair) var(--space-3);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+.orchestra__phase-state { color: var(--text-dim); }
+.orchestra__phase.is-running { border-color: var(--neon-cyan); }
+.orchestra__phase.is-done { border-color: var(--good); }
+.orchestra__phase.is-stalled { border-color: var(--warn); }
+.orchestra__ready { color: var(--good); font-weight: 600; }
+
 /* Luna's Work settings pane (modules/lunaswork.js). */
 .lw-error { color: var(--bad); margin-bottom: var(--space-3); }
 .lw-pack-list {

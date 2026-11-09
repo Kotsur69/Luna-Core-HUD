@@ -28,6 +28,7 @@ const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
 const { compileOwnership, ownerOf } = require('./ownership');
 const { normalizeSleeps } = require('./orchestraSleep');
 const { normalizePostMerge, normalizeSha } = require('./orchestraPostMergeState');
+const { normalizeStoredPlanRunFlag, normalizeStoredPlanRun } = require('./orchestraPlanRunView');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -677,7 +678,7 @@ function isInside(child, parent) {
 /** Location fields of a restored package, or all null when any is off-shape. */
 function storedLocation(raw) {
   const none = { root: null, cwd: null, branch: null, baseSha: null };
-  if (!isWorktreeRoot(raw.root) || !isBranch(raw.branch)) return none;
+  if (!isWorktreeRoot(raw.root) || !isOwnBranch(raw.branch)) return none;
   const cwd = typeof raw.cwd === 'string' && isInside(raw.cwd, raw.root) ? path.resolve(raw.cwd) : path.resolve(raw.root);
   const baseSha = typeof raw.baseSha === 'string' && SHA_RE.test(raw.baseSha) ? raw.baseSha : null;
   return { root: path.resolve(raw.root), cwd, branch: raw.branch, baseSha };
@@ -757,6 +758,10 @@ function normalizePackage(raw) {
     // the end of a failed verify run. Model / test output - display only.
     lastWords: strOrNull(raw.lastWords, MAX_LAST_WORDS + 3),
     verifyTail: strOrNull(raw.verifyTail, MAX_TAIL_CHARS),
+    // Plan runs: the finish guard's flag must survive a restart (fails closed).
+    ...(raw.planRun != null ? { planRun: normalizeStoredPlanRunFlag(raw.planRun) } : {}),
+    // A plan run's synthesis: its one split round is spent once.
+    ...(Number.isInteger(raw.planSplits) && raw.planSplits > 0 ? { planSplits: Math.min(raw.planSplits, 9) } : {}),
   };
 }
 
@@ -770,7 +775,7 @@ const MAX_FAILURE_FILES = 50;
  */
 function normalizeFailure(raw) {
   if (!raw || typeof raw !== 'object' || typeof raw.code !== 'string' || !raw.code) return null;
-  const branch = typeof raw.branch === 'string' && (isBranch(raw.branch) || isFreeBranch(raw.branch)) ? raw.branch : null;
+  const branch = typeof raw.branch === 'string' && isOwnBranch(raw.branch) ? raw.branch : null;
   return {
     code: raw.code.slice(0, 64),
     stage: strOrNull(raw.stage, 32),
@@ -782,6 +787,12 @@ function normalizeFailure(raw) {
 }
 
 const isFreeBranch = (b) => typeof b === 'string' && b.startsWith('luna-free/') && SLUG_RE.test(b.slice(10));
+// Plan runs (orchestraPlanRunLaunch.js) work on luna-plan/<slug>.
+const isPlanBranch = (b) => typeof b === 'string' && b.startsWith('luna-plan/') && SLUG_RE.test(b.slice(10));
+/** Any branch LunaCore itself makes for a package: luna/, luna-free/ or luna-plan/. */
+function isOwnBranch(b) {
+  return isBranch(b) || isFreeBranch(b) || isPlanBranch(b);
+}
 
 /**
  * Dependency branches a worker was told to merge itself (orchestra.js
@@ -790,7 +801,7 @@ const isFreeBranch = (b) => typeof b === 'string' && b.startsWith('luna-free/') 
  */
 function normalizeDepMerge(raw) {
   if (!raw || typeof raw !== 'object' || raw.strategy !== 'worker') return null;
-  const ok = (b) => isBranch(b) || isFreeBranch(b);
+  const ok = (b) => isOwnBranch(b);
   const branches = (Array.isArray(raw.branches) ? raw.branches : []).filter(ok).slice(0, MAX_DEP_MERGE_ITEMS);
   if (!branches.length) return null;
   const files = (Array.isArray(raw.files) ? raw.files : []).filter(isRelPath).slice(0, MAX_DEP_MERGE_ITEMS);
@@ -913,6 +924,7 @@ function normalizeStoredPlan(raw) {
     ? raw.todoText.filter((e) => Array.isArray(e) && Number.isFinite(e[0]) && typeof e[1] === 'string')
     : [];
   const ownership = normalizeOwnership(raw.ownership);
+  const planRun = normalizeStoredPlanRun(raw.planRun);
   return {
     id: raw.id.slice(0, 64),
     projectId: strOrNull(raw.projectId, 200),
@@ -934,7 +946,7 @@ function normalizeStoredPlan(raw) {
     allowedTools: strList(raw.allowedTools).filter(isAllowRule).slice(0, 50),
     // A free run (orchestraFree.js) stays branches-only after a restart too.
     freeMode: raw.freeMode === true,
-    integrationMode: raw.freeMode === true
+    integrationMode: raw.freeMode === true || planRun
       ? 'branches'
       : (INTEGRATION_MODES.includes(raw.integrationMode) ? raw.integrationMode : null),
     baseBranch: isBaseBranch(raw.baseBranch) ? raw.baseBranch : null,
@@ -957,6 +969,8 @@ function normalizeStoredPlan(raw) {
     packages,
     // LW 2.12: only a plan made with an ownership map carries the key.
     ...(ownership ? { ownership } : {}),
+    // Free God Mode v2 plan runs: topics, request, written docs, flagged tasks.
+    ...(planRun ? { planRun } : {}),
   };
 }
 

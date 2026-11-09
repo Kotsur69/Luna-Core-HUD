@@ -113,6 +113,9 @@ function withTaskBrief(command, task, firstMessage) {
   // single-quoted shell argument falls back to the default one.
   const UNSAFE_QUOTE_RE = /['`\r\n‘-‛]/;
   const cmd = String(command || '').trim();
+  // A plan-run worker's task never starts without its lockdown
+  // (orchestraPlanRunLaunch.js withPlanLockdown builds that command).
+  if (task && task.lockdown) return null;
   const briefPath = task && typeof task.briefPath === 'string' ? task.briefPath : '';
   // U+2018-U+201B: PowerShell treats the typographic quotes as ' too.
   if (!isClaudeCommand(cmd) || !briefPath || /['`\r\n‘-‛]/.test(briefPath)) return null;
@@ -162,6 +165,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function withAccountResume(command, uuid, task = null) {
   const cmd = String(command || '').trim();
   if (!isClaudeCommand(cmd) || !UUID_RE.test(String(uuid || '')) || SESSION_ID_DECIDED.test(cmd)) return null;
+  // A plan-run worker is never resumed without its lockdown: the caller waits instead.
+  if (task && task.lockdown) return null;
   const withFlags = task ? withTaskBrief(cmd, task, ACCOUNT_RESUME_MESSAGE) : null;
   if (withFlags) return `${withFlags} --resume ${uuid}`;
   const [bin, ...rest] = cmd.split(/\s+/);
