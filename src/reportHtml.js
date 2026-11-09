@@ -63,7 +63,7 @@ header{padding:4px 2px 6px;border-bottom:1px solid var(--line)}
 header .eyebrow{margin:0 0 4px;color:var(--accent);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
 header h1{margin:0 0 6px;font-size:28px;line-height:1.25;color:var(--strong);letter-spacing:-.01em;overflow-wrap:anywhere}
 header p{margin:0 0 10px;color:var(--muted);max-width:72ch;overflow-wrap:anywhere}
-.summary{margin:18px 0 0;padding:14px 18px;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;font-size:16px;max-width:none}
+.summary{margin:18px 0 0;padding:14px 18px;background:var(--accent-bg);color:var(--strong);border-radius:10px;font-size:16px;max-width:none}
 h2{font-size:17px;line-height:1.35;margin:0 0 14px;color:var(--strong);display:flex;align-items:center;gap:8px}
 h2::before{content:"";width:4px;height:16px;border-radius:2px;background:var(--accent);flex:none}
 h3{font-size:14px;margin:16px 0 8px;color:var(--strong)}
@@ -72,9 +72,7 @@ p{max-width:80ch}
 section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-top:20px;min-width:0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
 section>p:last-child,section>ul:last-child{margin-bottom:0}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:20px}
-.card{background:var(--panel);border:1px solid var(--line);border-top:3px solid var(--idle);border-radius:12px;padding:14px 16px;min-width:0}
-.card.ok{border-top-color:var(--ok)}.card.bad{border-top-color:var(--bad)}.card.warn{border-top-color:var(--warn)}
-.card.info{border-top-color:var(--info)}.card.accent{border-top-color:var(--accent)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;min-width:0}
 .card .v{font-size:26px;font-weight:700;line-height:1.2;color:var(--strong);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .card .k{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
 .card.ok .v{color:var(--ok)}.card.bad .v{color:var(--bad)}.card.warn .v{color:var(--warn)}.card.info .v{color:var(--info)}.card.accent .v{color:var(--accent)}
