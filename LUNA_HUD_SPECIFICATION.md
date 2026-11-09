@@ -1,7 +1,7 @@
 # ARCHITECTURAL SPECIFICATION & MODULE ROADMAP
 ## Project: LunaCore HUD — Electron Dashboard for the Claude Code CLI
 
-**Document Version:** 2.1.0 (2026-10-06 — inventory and idea record brought up to date)
+**Document Version:** 2.2.0 (2026-11-10 — theme count, module inventory and God Mode modules brought up to date)
 **Target Environment:** Windows (primary, current release target) — Electron is cross-platform, so macOS/Linux are not blocked, just untested
 **Core Ecosystem:** Electron 43, Node.js, `@lydell/node-pty`, `@xterm/xterm`, vanilla HTML/CSS/JS
 **Integration Target:** Claude Code CLI (`claude`), run as a real child process — never reimplemented, never prompted
@@ -55,7 +55,7 @@ on its own to call a model still fails the spec by construction.
 | :--- | :--- | :--- |
 | Desktop framework | Electron 43 | `contextIsolation: true`, `nodeIntegration: false`, CSP `default-src 'none'` |
 | Terminal core | [`@lydell/node-pty`](https://www.npmjs.com/package/@lydell/node-pty) + [`@xterm/xterm`](https://www.npmjs.com/package/@xterm/xterm) + `@xterm/addon-fit` | N-API prebuilt binaries — survives Electron's Node-ABI jumps without a rebuild |
-| Frontend | Vanilla HTML / CSS / JS | CSS custom-property theming (32 themes incl. the `glass` family), PL/EN i18n, no framework, no bundler |
+| Frontend | Vanilla HTML / CSS / JS | CSS custom-property theming (28 themes incl. the four-theme `glass` family), PL/EN i18n, no framework, no bundler |
 | Audio (optional) | [`mpv`](https://mpv.io/) | Persistent `--idle` process over a JSON IPC pipe; not bundled, every sound feature degrades silently without it |
 | Voice synthesis (optional) | Windows SAPI via `System.Speech` | Fully offline — see `docs/done_docs/DONE_SOUNDS_IMPLEMENTATION_PLAN.md` §2 |
 | Git / GitHub | `git` (worktrees, push), `gh` (God Mode PRs) | Run via `execFile`, never a shell; `gh` only needed for PR mode |
@@ -109,11 +109,24 @@ A scan reference so a new idea can be checked against what's already built.
 - **Right panel / observers:** `context.js`, `spark.js`, `usage.js`,
   `thresholds.js`, `skilltracker.js`, `activefiles.js`, `sessiontimeline.js`,
   `mcp.js`, `git.js`, `ports.js`, `telemetry.js`, `media.js`, `devices.js`.
-- **Automation:** `todo.js`, `orchestra.js` (God Mode v2 plan board / run
-  board, one run per project), `orchestraDetails.js`, `orchestraPick.js`,
-  `orchestrasettings.js`, `autocompact.js`, `autoproceed.js`, `keepawake.js`
-  (the "Don't sleep" chip), `notify.js`. God Mode v1 (`godmode.js`, per-tab
-  to-do runs) was removed in v0.20.0.
+- **Automation:** `todo.js`, `todocards.js`, `todoedit.js`, `orchestra.js`
+  (God Mode v2 plan board / run board, one run per project),
+  `orchestraState.js`, `orchestraBoard.js`, `orchestraSwitcher.js`,
+  `orchestraRuns.js`, `orchestraDetails.js`, `orchestraPick.js`,
+  `orchestraPickRules.js`, `orchestraPlanRun.js` (Plan only runs),
+  `orchestraHybridView.js`, `orchestraRetry.js`, `orchestraFinish.js`,
+  `orchestraIntegStatus.js`, `orchestrasettings.js`, `godmodesummary.js`,
+  `autocompact.js`, `autoproceed.js`, `keepawake.js` (the "Don't sleep" chip),
+  `notify.js`. God Mode v1 (per-tab to-do runs) was removed in v0.20.0.
+- **Notification hub:** `hubstate.js`, `hubicon.js`, `hubpanel.js`,
+  `hubrules.js`, `hubtoast.js`, `hubsettings.js`.
+- **Luna's Work:** `lunaswork.js`, `lunasworkPanel.js`, `lunasworkDashboard.js`,
+  `lunasworkQueuePanel.js`, `lunasworkAsk.js`, `lunasworkPlaytestPass.js`.
+- **Mission Control (Ctrl+Shift+M) and Life (Ctrl+Shift+N):** the `mission*.js`
+  and `life*.js` modules, one per tab or view.
+- **Settings & setup:** `setupcenter.js`, `welcome.js`, `settingsnav.js`,
+  `settingsearch.js`, `claudeaccountsettings.js`, `gatewaysettings.js`,
+  `hostmodesettings.js`, `mailsettings.js`, `themepick.js`.
 - **AI providers & tools:** `providersettings.js`, `providerform.js`,
   `ccrsettings.js`, `lmstudiomodels.js`, `lmstudioloadform.js`, `ask.js` /
   `askview.js` / `askcommand.js` (`/ask`), `highlights.js` / `highlightsview.js`
@@ -126,7 +139,11 @@ A scan reference so a new idea can be checked against what's already built.
 `filediff.js`, `worktrees.js`; God Mode `todo.js`, `intake.js` (Luna MCP),
 `overnight.js`, `orchestra.js`, `orchestraPlan.js`, `orchestraSupervisor.js`,
 `orchestraFinish.js`, `orchestraFinalize.js`, `orchestraIntegrate.js`,
-`orchestraReport.js`, `orchestraStore.js`; providers `profiles.js`,
+`orchestraReport.js`, `orchestraStore.js`, `orchestraDeps.js` (per-package
+`node_modules` + temp-folder self-heal), `orchestraHoldWatch.js`,
+`orchestraRecover.js`, `orchestraFree.js`, `orchestraHybridGuard.js`,
+`orchestraPlanRun.js`, `plainFs.js`; reports and mail `reportHtml.js`,
+`mailHtml.js`, `gmailsend.js`, `godmodemail.js`, `weeklyreview.js`; providers `profiles.js`,
 `providers.js`, `profileinput.js`, `sessionenv.js`, `launch.js`, `locallaunch.js`,
 `lmstudio*.js`, `ccr.js`, `ccrcontrol.js`, `usage.js`; sound `soundManager.js`,
 `soundTriggers.js`, `sounds.js`, `tts.js`, `ttsExtract.js`, `voiceduck.js`;

@@ -1,18 +1,29 @@
 # Implementation Plan: Free God Mode v2 - plan-only runs, best-models-only coding, wait instead of downgrade
 
-> **⚪ PLANNING (written 2026-11-06).** Gateway side is done and live-checked (see
-> "Already in place"). D1-D4 and Q1-Q10 decided; not building until Mati says go.
+> **🟡 BUILT, LIVE CHECKS OWED (re-checked against `main` 2026-11-10, after v0.25.0).**
+> Written 2026-11-06 as a planning doc. Every slice is now on `main`: the plan-run core
+> (`src/orchestraPlanRun.js`, released in v0.25.0), F1 lockdown / start / board (`89b377f`),
+> F2 + F3 proxy 429, gateway request window and substitution guard (`88cbc66`,
+> `src/fallbackproxy.js`, `src/freeLimit.js`, `src/freePacer.js`), F4 approve plan, build from
+> plan and Q8 auto-split (`d0277a0`), F6a / F6b Workers selector, hybrid `free` model and risk
+> guard (`21ba3d7`), F6c / F6d / F5 free packages, Claude review gate, 1 h hand-over and opt-in
+> branch review (`62be1b4`). The F1-F6 work after v0.25.0 is not released yet. What is left is
+> Mati's live checks (see "Resume here").
 
 ## Resume here
 
-1. All questions answered (Q1-Q10, D1-D4). Plan is ready to build when Mati says go.
-2. Search keys added and every pre-build live check done (2026-11-06, see "Live checks done").
-3. When Mati says go: build F1 (plan-only runs). It is useful on its own: idea / research / plan runs for
-   Blade & Bullet or a new SaaS, with zero risk to code.
-4. Then F2 (wait instead of downgrade), F3 (substitution guard), F4 (plan -> build hand-off).
-5. F6 (hybrid runs, "Plan with free models in mind") after F2 + F3, since it relies on the
-   wait and the substitution guard.
-6. F5 (Claude review of free branches) is optional.
+1. Built: F1-F6 and Q8 (see the status banner). The text below the "Goal" section is the
+   original plan, kept as the design record.
+2. Live checks owed (unit tests cannot clear these), taken from "Success criteria":
+   - a real plan run (e.g. Blade & Bullet "story, physics, mechanics") writes the topic docs,
+     `CRITIQUE.md` and `PLAN.md` on `luna-plan/<slug>` and nothing outside `docs/plans/<slug>/`;
+   - a build run's log shows only `auto:coding` models (F3);
+   - with every coding model limited, the run pauses, shows the retry time and continues on
+     its own after the reset (F2), including the CLI's transcript entry for the proxy's 429;
+   - Approve plan creates exactly one to-do per unchecked task, also when clicked twice (F4);
+   - a hybrid run ("Plan with free models in mind") sends a simple package to a free worker,
+     passes the Claude review gate and integrates.
+3. When the live checks pass, `git mv` this file to `docs/done_docs/DONE_FREE_GODMODE_V2_PLAN.md`.
 
 ## Goal
 

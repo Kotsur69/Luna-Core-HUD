@@ -40,20 +40,26 @@ partly built or built with live checks owed) and `docs/untouched_docs/`
   the first God Mode run report ([`docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md`](docs/done_docs/DONE_GODMODE_RUN_2026-10-20.md)).
   Mati's live checks of all of it passed 2026-10-22; push notifications,
   Gmail and the Google OAuth app are set up.
-- **Still open (re-checked 2026-11-05, v0.23.0):** every plan in
+- **Still open (re-checked 2026-11-10, v0.25.0 + `main`):** every plan in
   `docs/tbc_docs/` is built and on `main`; each owes Mati's live checks
   (its "Resume here" lists them): Luna host + phone pairing
   ([`docs/tbc_docs/REMOTE_HOST_PLAN.md`](docs/tbc_docs/REMOTE_HOST_PLAN.md)),
   multi God Mode ([`docs/tbc_docs/MULTI_GODMODE_PLAN.md`](docs/tbc_docs/MULTI_GODMODE_PLAN.md)),
-  the notification hub ([`docs/tbc_docs/NOTIFICATION_HUB_PLAN.md`](docs/tbc_docs/NOTIFICATION_HUB_PLAN.md))
-  and Luna's Work ([`docs/tbc_docs/LUNAS_WORK_PLAN.md`](docs/tbc_docs/LUNAS_WORK_PLAN.md)).
+  the notification hub ([`docs/tbc_docs/NOTIFICATION_HUB_PLAN.md`](docs/tbc_docs/NOTIFICATION_HUB_PLAN.md)),
+  Luna's Work ([`docs/tbc_docs/LUNAS_WORK_PLAN.md`](docs/tbc_docs/LUNAS_WORK_PLAN.md))
+  and Free God Mode v2
+  ([`docs/tbc_docs/FREE_GODMODE_V2_PLAN.md`](docs/tbc_docs/FREE_GODMODE_V2_PLAN.md),
+  F1-F6 on `main`, not released yet).
   The cards in the to-do list cover the rest.
 - **Built since (moved out of "Still open" / "Known issues"):** LM Studio via
   CCR (`2fa07c5`), the `js-yaml` audit fix (`5e5eb4e`), cloud "forget this PC"
   (`ee209e9`), host security M1 / M2 (`30f4e77`) and M4 phone CSP, the
   FreeLLMAPI port + gateway status row + overlay copy skip and the Setup
-  Center + getting-started guide (all `e9a385f`), and usage limits for the
-  active tab's provider only (`696a870`).
+  Center + getting-started guide (all `e9a385f`), usage limits for the
+  active tab's provider only (`696a870`), the '!' inbox folded into the
+  notification hub (`0c82b45`, v0.25.0), Free God Mode v2 (F1-F6, see
+  above) and the God Mode self-heal of a broken package `node_modules`
+  (`765c91a`).
 
 ## Next
 
@@ -61,8 +67,8 @@ partly built or built with live checks owed) and `docs/untouched_docs/`
    host plan nobody has run yet.
 2. **Work the to-do cards** above (a God Mode night run can take them; the
    `[Mati]` cards are marked manual and stay out of it).
-3. **Notification hub** - built (N1-N6, released in v0.23.0); live check
-   owed, then fold the old '!' inbox into it.
+3. **Notification hub** - built (N1-N6, released in v0.23.0) and the old
+   '!' inbox is folded into it (v0.25.0); live check owed.
    Plan: [`docs/tbc_docs/NOTIFICATION_HUB_PLAN.md`](docs/tbc_docs/NOTIFICATION_HUB_PLAN.md).
 4. **Release prep for friends** - decided 2026-10-22: **option B**, every
    new user brings their **own** Supabase project (Mati's stays single-user,
@@ -77,6 +83,11 @@ partly built or built with live checks owed) and `docs/untouched_docs/`
   (`src/orchestraPlanWait.js` `LIMIT_TEXT_RE`) - confirm it the first time
   the wall is hit during a run, then check the planner resumes on its own at
   the reset time (the board shows the resume time + Cancel meanwhile).
+- **Free God Mode v2:** a real plan run, a free build run that pauses on
+  the free limit and resumes, Approve plan -> to-dos, and a hybrid run
+  through the Claude review gate. Steps:
+  [`docs/tbc_docs/FREE_GODMODE_V2_PLAN.md`](docs/tbc_docs/FREE_GODMODE_V2_PLAN.md)
+  "Resume here".
 - ~~Auto-proceed against a real dropped connection in the wild.~~ - **PASS 2026-11-06** (Mati).
 - ~~The packaged-build spawn check (§D2a) on Electron 43~~ - **PASS
   2026-11-04** on a `v0.20.0` `npm run dist` build (Electron 43.7.5, Node

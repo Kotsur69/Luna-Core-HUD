@@ -119,7 +119,10 @@ breaks a session - but it wastes a round trip, so keep the list current.
 
 ## 4. God Mode on free providers
 
-Tick **Free providers** next to Approve on the God Mode board. The run then:
+The **Workers** selector (in the to-do picker and next to Approve on the God
+Mode board) replaced the old *Free providers* tick. It has three settings:
+**Claude only**, **Plan with free models in mind** (hybrid, below) and
+**Free only**. A *Free only* run:
 
 - launches every worker on the first profile that has a fallback chain;
 - works on `luna-free/<package>-<stamp>` branches - never `luna/`, never the
@@ -131,7 +134,30 @@ Tick **Free providers** next to Approve on the God Mode board. The run then:
   normal target branch. Review the `luna-free/*` branches and merge by hand.
 
 No chain profile configured -> Approve answers "No profile with a free-model
-chain" and nothing launches.
+chain" and nothing launches. An opt-in run option (off by default) has Claude
+review each pushed `luna-free/*` branch read-only when the run settles and
+write the result to `docs/plans/<slug>/REVIEW.md`
+(`docs/plans/free-run-<id>/` when the run did not come from a plan).
+
+**Hybrid runs** (*Plan with free models in mind*): Claude plans and may mark
+very simple packages `free`. `src/orchestraHybridGuard.js` moves such a
+package to Sonnet when it lists 0 or more than 2 files, touches a protected
+path (`config/hybrid-protected.json` plus the repo's
+`.lunacore/hybrid-protected.json`) or has no verify. Free packages run on
+the *FreeLLMAPI - coding* profile (never `freellm-auto` or an `auto:easy` chain); Approve without
+such a profile is refused. Before a free package joins the run it passes
+verify and one short read-only Sonnet review of its diff; a failed review,
+or a second stall, hands it to Sonnet in its own worktree. Only the free
+package waits on free limits - the run goes on - and after 1 hour with Claude
+packages depending on it, it is handed to Sonnet.
+
+**Plan only runs** write Markdown, never code: topic docs, a critique and a
+`PLAN.md` under `docs/plans/<slug>/`, on `luna-plan/` branches that are
+never merged. Plan workers run on the `freellm-auto` profile, locked down
+to read tools plus Edit/Write inside that folder (no shell, no subagents,
+read-only Playwright). **Approve plan** merges `PLAN.md` into the base
+branch and turns its unchecked tasks into to-dos tagged `plan:<slug>`.
+Plan: [`../tbc_docs/FREE_GODMODE_V2_PLAN.md`](../tbc_docs/FREE_GODMODE_V2_PLAN.md).
 
 ### Live checks done
 
