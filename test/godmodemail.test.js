@@ -305,3 +305,15 @@ test('readRunHtml: reads <runsDir>/<id>.html, null for a bad id or a missing fil
   assert.equal(readRunHtml(dir, '../abc123'), null);
   assert.equal(readRunHtml('', 'abc123'), null);
 });
+
+test('the run email asks for the readable HTML alternative of its text', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmmail-test-'));
+  const prefs = createMailPrefs({ prefsPath: path.join(dir, 'mail.local.json'), statePath: path.join(dir, 'mail-state.local.json') });
+  const sent = [];
+  const sender = { status: () => ({ connected: true }), send: async (m) => sent.push(m) };
+  const mailer = createGodModeMailer({ sender, prefs, enabled: godmodeEmailOn, readHtml: () => null });
+  assert.deepEqual(await mailer.onReport('abc123', REPORT, summary()), { sent: true });
+  assert.equal(sent[0].html, true);
+  assert.match(sent[0].text, /Result: 1 of 2 packages pushed/);
+  assert.ok(!sent[0].text.includes('C:\Users'), 'the body still names the repo only');
+});

@@ -658,3 +658,22 @@ test("LW 2.26: onRunEnd puts the repo's legal drafts into the saved and the mail
   assert.match(attached.content, /- `src\/privacy\.html`/);
   assert.ok(!attached.content.includes(repo), 'repo-relative, never a local path');
 });
+
+test('the HTML report leads with the verdict and keeps every section', () => {
+  const html = renderRunReportHtml(makeRun('plateau'));
+  assert.match(html, /<p class="eyebrow">LunaCore Luna&#39;s Work report<\/p>/);
+  assert.match(html, /<p class="summary">[^<]+ - [^<]+<\/p>/);
+  for (const title of ['Needs you', 'Verdict', 'Iterations', 'Scores per milestone', 'Rollbacks', 'Model choices', 'Decisions', 'Notes', 'Evidence']) {
+    assert.match(html, new RegExp(`<h2>${title}</h2>`));
+  }
+  assert.match(html, /core flows/);
+});
+
+test('the run email asks for the readable HTML alternative', async (t) => {
+  const runsDir = tempDir(t);
+  const mail = fakeMail();
+  const reporter = createLunasWorkReporter({ runsDir: () => runsDir, mail: mail.deps, readFile: () => null });
+  const res = await reporter.onRunEnd(makeRun('ship'));
+  assert.equal(res.mail && res.mail.sent, true);
+  assert.equal(mail.sends[0].html, true);
+});

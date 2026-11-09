@@ -35,6 +35,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const paths = require('./paths');
 const { parseClientFile, buildAuthUrl, startRedirectServer, base64url, readJson, CLIENT_FILE } = require('./gcal');
+const { textToMailHtml } = require('./mailHtml');
 
 const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 const SCOPE = `openid email ${SEND_SCOPE}`;
@@ -97,8 +98,6 @@ const oneLine = (v, max) => String(v == null ? '' : v).replace(/[\x00-\x1f\x7f\u
 // eslint-disable-next-line no-control-regex
 const plainBody = (v) => String(v == null ? '' : v).slice(0, MAX_BODY).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').replace(/\r?\n/g, '\r\n');
 
-const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
 /** RFC 2047 encoded-word, so a Polish subject survives any mail client. */
 const encodeHeader = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s, 'utf8').toString('base64')}?=`);
 
@@ -148,7 +147,8 @@ function buildMime({ address, subject, text, html = false, boundary, attachments
   let content = part('text/plain', body);
   if (html) {
     const alt = attachments.length ? `${b}-alt` : b;
-    const htmlBody = `<!doctype html><meta charset="utf-8"><pre style="font:13px/1.45 ui-monospace,Consolas,monospace;white-space:pre-wrap">${escapeHtml(body)}</pre>`;
+    // A readable layout derived from the text; every piece of text is escaped (mailHtml.js).
+    const htmlBody = textToMailHtml(body);
     content = [
       `Content-Type: multipart/alternative; boundary="${alt}"`,
       '',
