@@ -529,6 +529,42 @@ test('openEvidence opens only the current run folder inside the runs root', asyn
   s.done();
 });
 
+test('openEvidence {what: playtestOnce} opens only the last pass folder of a known project inside the runs root', async () => {
+  let last = null;
+  const sent = [];
+  const opened = [];
+  const controller = fakeController();
+  controller.subscribe = () => {};
+  const s = setup({
+    controller,
+    extra: (dir) => ({
+      send: (ch, payload) => sent.push({ ch, payload }),
+      runsRoot: () => path.join(dir, 'runs'),
+      openPath: (p) => (opened.push(p), ''),
+      playtestPass: { lastEvidence: () => last },
+    }),
+  });
+  const ask = { what: 'playtestOnce' };
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence', ask), { ok: false, reason: 'no-evidence' });
+  const inside = path.join(s.dir, 'runs', 'lunaswork-ptabc1', 'iter-1');
+  fs.mkdirSync(inside, { recursive: true });
+  last = { projectId: 'game', runId: 'ptabc1', evidenceDir: inside };
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence', ask), { ok: true });
+  assert.deepEqual(opened, [inside]);
+  // Outside its own run folder, an unknown project or a malformed run id: refused.
+  last = { projectId: 'game', runId: 'ptabc1', evidenceDir: s.dir };
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence', ask), { ok: false, reason: 'no-evidence' });
+  last = { projectId: 'nope', runId: 'ptabc1', evidenceDir: inside };
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence', ask), { ok: false, reason: 'no-evidence' });
+  last = { projectId: 'game', runId: '../x', evidenceDir: inside };
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence', ask), { ok: false, reason: 'no-evidence' });
+  // Without the name it is still the current run's folder (none here).
+  last = { projectId: 'game', runId: 'ptabc1', evidenceDir: inside };
+  assert.deepEqual(await s.ipc.invoke('lunaswork:openEvidence'), { ok: false, reason: 'no-evidence' });
+  assert.equal(opened.length, 1);
+  s.done();
+});
+
 test('saveSettings stores a project model override from the start dialog; null clears it', async () => {
   const s = setup();
   const saved = await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', projectModels: { critic: 'haiku' } });

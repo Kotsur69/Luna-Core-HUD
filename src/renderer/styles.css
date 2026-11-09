@@ -5309,6 +5309,38 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .lw-queue__btn { min-width: 2rem; padding: var(--space-1) var(--space-2); }
 .lw-queue__btn:disabled,
 .lw-queue .pad-send:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+/* Luna's Work "Run Playtester pass" (modules/lunasworkPlaytestPass.js). */
+.lw-pt .pad-send:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+.lw-pt__report:empty { display: none; }
+.lw-pt__report { display: grid; gap: var(--space-3); margin-top: var(--space-3); }
+.lw-pt__heading { margin: 0 0 var(--space-2); font-size: var(--fs-sm); font-weight: normal; color: var(--text-dim); }
+.lw-pt__findings { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); font-size: var(--fs-xs); }
+.lw-pt__finding {
+  padding: var(--space-2) var(--space-3);
+  border-left: var(--border-w) solid var(--edge);
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+}
+.lw-pt__finding-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.lw-pt__title { color: var(--text); word-break: break-word; }
+.lw-pt__sev, .lw-pt__verdict { flex: none; font-family: var(--font-mono); text-transform: uppercase; }
+.lw-pt__sev.is-blocker, .lw-pt__sev.is-high, .lw-pt__verdict.is-fail { color: var(--bad); }
+.lw-pt__sev.is-medium { color: var(--warn); }
+.lw-pt__sev.is-low { color: var(--text-dim); }
+.lw-pt__verdict.is-pass { color: var(--good); }
+.lw-pt__steps { margin: var(--space-2) 0 0; padding-left: var(--space-5); color: var(--text-dim); }
+.lw-pt__meta { margin-top: var(--space-1); font-family: var(--font-mono); color: var(--text-dim); word-break: break-all; }
+.lw-pt__thumb {
+  display: block;
+  margin-top: var(--space-2);
+  max-width: 240px;
+  width: 100%;
+  border: var(--border-w) solid var(--edge);
+  border-radius: 4px;
+  background: var(--surface-panel-2);
+}
+.lw-pt__list { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-1); font-size: var(--fs-xs); }
+.lw-pt__list.is-mono { font-family: var(--font-mono); color: var(--text-dim); word-break: break-word; }
 .termcustom__hint.is-bad { color: var(--bad); }
 .orchestra__example { display: block; font-size: var(--fs-xs); color: var(--text); word-break: break-all; }
 .orchestra__actions .pad-send,

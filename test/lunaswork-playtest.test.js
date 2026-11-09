@@ -107,23 +107,35 @@ const full = (over = {}) => ({ findings: [], scores: [], journeys: [], screens: 
 
 // ---- argv -----------------------------------------------------------------------
 
-test('argv allows only the adapter MCP tools and disallows every code tool', async () => {
+test('argv allows the adapter MCP tools plus Read inside the evidence dir, and disallows every code tool', async () => {
   const tools = (await fakeAdapter()).tools();
   const args = P.buildPlaytestArgs({ model: 'sonnet', tools });
 
-  assert.equal(argAfter(args, '--tools'), '', 'no built-in tools at all');
+  assert.equal(argAfter(args, '--tools'), 'Read', 'Read is the only built-in');
   assert.ok(args.includes('--strict-mcp-config'));
   assert.equal(argAfter(args, '--permission-mode'), 'dontAsk');
   assert.equal(argAfter(args, '--setting-sources'), '');
   assert.deepEqual(JSON.parse(argAfter(args, '--mcp-config')), tools.mcpConfig);
 
   const allowed = argAfter(args, '--allowedTools').split(',');
-  assert.ok(allowed.length > 0);
-  for (const t of allowed) assert.match(t, /^mcp__playwright__browser_[a-z_]+$/);
+  assert.ok(allowed.includes('Read(./**)'), 'Read scoped to the cwd (the evidence dir)');
+  assert.ok(!allowed.includes('Read'), 'never an unscoped Read');
+  const mcp = allowed.filter((t) => t !== 'Read(./**)');
+  assert.ok(mcp.length > 0);
+  for (const t of mcp) assert.match(t, /^mcp__playwright__browser_[a-z_]+$/);
 
   const denied = argAfter(args, '--disallowedTools').split(',');
-  for (const t of ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash']) assert.ok(denied.includes(t), `${t} denied`);
+  for (const t of ['Grep', 'Glob', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Task', 'Agent']) {
+    assert.ok(denied.includes(t), `${t} denied`);
+  }
+  assert.ok(!denied.includes('Read'), 'Read itself is not denied');
+  assert.ok(denied.includes('Read(./**/*.log)'), 'the dev server log stays unreadable');
+  assert.ok(denied.includes('Read(./unity-*.json)'), 'the Unity console dump stays unreadable');
+  assert.ok(denied.includes('Read(./.playtest-control.json)'), 'the Electron bridge token stays unreadable');
   for (const t of denied) assert.ok(!allowed.includes(t));
+  for (const t of ['Bash', 'Grep', 'Glob', 'Edit', 'Write', 'WebFetch']) {
+    assert.ok(!allowed.some((a) => a === t || a.startsWith(`${t}(`)), `${t} not allowed`);
+  }
 });
 
 test('built-in or foreign-server tools from the adapter never reach --allowedTools', () => {
@@ -252,7 +264,7 @@ test('an electron run needs no url: the desktop prompt and the bridge tools only
     const [call] = fake.calls;
     assert.match(call.prompt, /desktop app \(Electron\)/);
     assert.ok(!call.prompt.includes('Playwright'));
-    const allowed = argAfter(call.args, '--allowedTools').split(',');
+    const allowed = argAfter(call.args, '--allowedTools').split(',').filter((t) => t !== 'Read(./**)');
     assert.ok(allowed.length > 0 && allowed.every((t) => t.startsWith('mcp__electron-app__')), allowed.join(','));
     assert.equal(call.options.cwd, adapter.evidenceDir);
     // No browser matrix for a desktop app: core journeys only, fixed finding fields.
@@ -350,6 +362,89 @@ test('screenshot paths outside the evidence dir, missing or stale are dropped', 
   assert.deepEqual(report.scores.map((s) => s.criterion), ['f1.png']);
   assert.equal(report.findings.length, 1, 'the finding itself is kept');
   assert.equal(report.findings[0].screenshot, null, 'its foreign screenshot is not');
+});
+
+/** A minimal file with a real PDF header (validation checks the first bytes only). */
+function writePdf(file) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n');
+}
+
+test('a finding may cite a real PDF of this run; a fake, foreign or old PDF is dropped', () => {
+  const { evidenceDir } = evidenceWorld();
+  writePdf(path.join(evidenceDir, 'invoice-42.pdf'));
+  fs.writeFileSync(path.join(evidenceDir, 'fake.pdf'), 'just text named like a PDF');
+  const outside = path.join(tmpDir('lw-pt-outside-pdf-'), 'other.pdf');
+  writePdf(outside);
+  const old = path.join(evidenceDir, 'old.pdf');
+  writePdf(old);
+  const past = new Date(Date.now() - 60 * 60 * 1000);
+  fs.utimesSync(old, past, past);
+  fs.symlinkSync(path.dirname(outside), path.join(evidenceDir, 'lnk'), 'junction');
+  const since = Date.now() - 10 * 60 * 1000;
+
+  const finding = (files) => ({
+    kind: 'bug', severity: 'high', title: 'Invoice total wrong', steps: ['Download the invoice'],
+    screenshot: 'f1.png', consoleErrors: [], files,
+  });
+  const first = ['invoice-42.pdf', 'fake.pdf', outside, '../other.pdf', 'lnk/other.pdf'];
+  const second = ['old.pdf', 'missing.pdf', 'f1.png', 'invoice-42.pdf', 'invoice-42.pdf'];
+  const raw = full({ findings: [finding(first), finding(second), finding(undefined), finding([...second, 'invoice-42.pdf'])] });
+  const report = P.validateReport(raw, { evidenceDir, since });
+  const real = fs.realpathSync.native(path.join(evidenceDir, 'invoice-42.pdf'));
+
+  assert.equal(report.findings.length, 4, 'the findings themselves are kept');
+  assert.deepEqual(report.findings[0].files, [real]);
+  assert.equal(report.findings[0].screenshot, fs.realpathSync.native(path.join(evidenceDir, 'f1.png')));
+  assert.deepEqual(report.findings[1].files, [real], 'a file cited twice is listed once');
+  assert.deepEqual(report.findings[2].files, [], 'no files cited -> an empty list');
+  assert.equal(report.findings[3].files.length, 1, 'at most five names are looked at');
+  // first: 4 bad; second and fourth: old, missing, f1.png each.
+  assert.equal(report.warnings.filter((w) => w.code === 'badFile').length, 4 + 3 + 3);
+});
+
+test('a PDF is never a screenshot: scores still need an image', () => {
+  const { evidenceDir } = evidenceWorld();
+  writePdf(path.join(evidenceDir, 'invoice.pdf'));
+  const raw = full({
+    scores: [{ milestone: 'M', criterion: 'pdf only', score: 9, evidence: ev('invoice.pdf') }],
+    journeys: [{ name: 'Invoice', passed: true, evidence: ev('invoice.pdf') }],
+  });
+  const report = P.validateReport(raw, { evidenceDir });
+  assert.deepEqual(report.scores, []);
+  assert.equal(report.journeys[0].passed, false);
+});
+
+test('the web prompt tells the Playtester to open downloads with Read and check their contents', () => {
+  const prompt = P.buildPlaytestPrompt({ mode: 'explore', url: URL_, testPlan: TEST_PLAN, shipCriteria: SHIP });
+  assert.match(prompt, /Downloaded files are saved in the current folder/);
+  assert.match(prompt, /Read tool/);
+  assert.match(prompt, /line items/);
+  assert.match(prompt, /totals/);
+  assert.match(prompt, /language/);
+  assert.match(prompt, /"files"/);
+  assert.ok(P.PLAYTEST_SCHEMA.properties.findings.items.properties.files, 'findings may list files');
+  assert.ok(!P.PLAYTEST_SCHEMA.properties.findings.items.required.includes('files'), 'files is optional');
+});
+
+test('a PDF downloaded during the pass is kept on its finding end to end', async () => {
+  const adapter = await fakeAdapter();
+  const fake = fakeClaude({
+    onCall: (cwd) => {
+      writePng(path.join(cwd, 'f1.png'), 4, 4, red);
+      writePdf(path.join(cwd, 'offer.pdf'));
+    },
+    raw: full({
+      findings: [{
+        kind: 'bug', severity: 'high', title: 'Offer PDF lost the Polish letters', steps: ['Download the offer'],
+        screenshot: 'f1.png', consoleErrors: [], persona: 'core', engine: 'chromium', width: 1440, engineOnly: false,
+        files: ['offer.pdf'],
+      }],
+    }),
+  });
+  const res = await P.runPlaytest({ projectDir: fakeProject(), adapter, url: URL_, execImpl: fake.execImpl });
+  assert.equal(res.ok, true, JSON.stringify(res.error));
+  assert.equal(path.basename(res.report.findings[0].files[0]), 'offer.pdf');
 });
 
 test('a journey claimed as passed without evidence does not count as passed', () => {
@@ -802,7 +897,7 @@ test('LW 2.19a: a mockup outside design/references or not an image is not a targ
   assert.deepEqual(res.warnings.map((w) => w.screen), ['Fake', 'Gone']);
 });
 
-/** A fake `claude` for the playtest call and the judge call (told apart by its Read tool). */
+/** A fake `claude` for the playtest call and the judge call (told apart by the judge's Read-only allow list). */
 function designClaude({ playtest, judge, shot = (x) => (x < 20 ? [255, 0, 0] : [0, 0, 255]) }) {
   const calls = [];
   const execImpl = (file, args, options, cb) => {
@@ -813,7 +908,8 @@ function designClaude({ playtest, judge, shot = (x) => (x < 20 ? [255, 0, 0] : [
       call.prompt += d;
     });
     stdin.on('finish', () => {
-      const isJudge = argAfter(args, '--tools') === 'Read';
+      // Both calls get `--tools Read`; only the judge has no MCP tool to allow.
+      const isJudge = argAfter(args, '--allowedTools') === 'Read(./**)';
       if (!isJudge) writePng(path.join(options.cwd, 'design-home.png'), 40, 20, shot);
       const raw = isJudge ? judge : playtest;
       setImmediate(() => cb(null, JSON.stringify({ structured_output: raw, total_cost_usd: 0.5 })));

@@ -2272,6 +2272,20 @@
                 <div id="lw-ask-answer" class="lw-ask__answer" aria-live="polite" hidden></div>
               </form>
             </div>
+            <!-- "Run Playtester pass" (modules/lunasworkPlaytestPass.js): one explore
+                 pass on the picked project's app, without a run. Main confirms the
+                 profile's commands natively; progress comes on lunaswork:event. -->
+            <div id="lw-pt" class="termcustom__group lw-pt" aria-busy="false">
+              <h3 class="termcustom__section" data-i18n="lw.pt.section">Jeden przebieg Playtestera</h3>
+              <p class="termcustom__hint" data-i18n="lw.pt.hint">Uruchamia aplikacje, Playtester gra w nia raz i aplikacja sie zatrzymuje. Nic nie jest budowane, commitowane ani pushowane.</p>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="lw-pt-run" class="pad-send">Uruchom przebieg Playtestera</button>
+                <button type="button" id="lw-pt-evidence" class="pad-send" hidden data-i18n="lw.pt.evidence">Otworz folder dowodow</button>
+              </div>
+              <p id="lw-pt-status" class="termcustom__hint" role="status" aria-live="polite" hidden></p>
+              <p id="lw-pt-error" class="termcustom__hint lw-error" role="alert" hidden></p>
+              <div id="lw-pt-report" class="lw-pt__report"></div>
+            </div>
             <!-- The project queue (B16, modules/lunasworkQueuePanel.js): after a
                  SHIP the next queued project starts. -->
             <div class="termcustom__group lw-queue">

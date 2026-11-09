@@ -717,6 +717,127 @@ test('freeFallback without a free profile waits for the reset after all', async 
   assert.equal(h.ctl.status().waitUntil, START_CLOCK + 2 * HOUR);
 });
 
+// ---- account failover (deps.accountFailover, src/claudeaccounts.js) ------------------
+
+// src/lunaswork.js ACCOUNT_SWITCH_RETRY_MS (not exported): another account took over.
+const ACCOUNT_SWITCH_RETRY_MS = 3000;
+
+/** A harness whose accountFailover records each reset time it is given and answers `answer`. */
+function failoverHarness(answer, opts = {}) {
+  const asked = [];
+  const h = harness({
+    ...opts,
+    deps: {
+      ...(opts.deps || {}),
+      accountFailover: (resetsAt) => {
+        asked.push(resetsAt);
+        return typeof answer === 'function' ? answer(resetsAt) : answer;
+      },
+    },
+  });
+  h.asked = asked;
+  return h;
+}
+
+test('account failover: another Claude account retries after a few seconds, never at the reset', async () => {
+  const h = failoverHarness(true);
+  h.next.critic.push({ ok: false, error: 'limit', detail: 'Claude AI usage limit reached' }, shipCritic());
+  await h.start();
+
+  const status = h.ctl.status();
+  assert.equal(status.phase, 'critiquing');
+  assert.equal(status.waitReason, 'limit');
+  assert.equal(status.waitUntil, START_CLOCK + ACCOUNT_SWITCH_RETRY_MS, 'a short retry, not the reset hour');
+  assert.deepEqual(h.asked, [START_CLOCK + HOUR], 'accountFailover gets the reset time');
+  assert.match(logText(h), /usage limit \(critic\): switched to another Claude account, retrying/);
+  assert.doesNotMatch(logText(h), /waiting until/);
+
+  await h.fire();
+  assert.equal(h.clock, START_CLOCK + ACCOUNT_SWITCH_RETRY_MS, 'the retry fired at the short delay');
+  assert.equal(h.calls.critic.length, 2, 'the step was retried');
+  assert.equal(h.ctl.status().verdict, 'ship');
+  assert.equal(h.calls.director.length, 1, 'the iteration was not repeated');
+});
+
+test('account failover: a builder limit with its own reset time hands that time over and retries the build', async () => {
+  const h = failoverHarness(true, { settings: { models: {}, freeFallback: true, projects: {} } });
+  h.next.build.push({ ok: false, error: 'limit', resumeAt: START_CLOCK + 3 * HOUR });
+  h.next.critic.push(shipCritic());
+  await h.start();
+  assert.deepEqual(h.asked, [START_CLOCK + 3 * HOUR]);
+  assert.equal(h.ctl.status().waitUntil, START_CLOCK + ACCOUNT_SWITCH_RETRY_MS);
+  assert.match(logText(h), /usage limit \(builder\): switched to another Claude account/);
+
+  await h.fire();
+  // The switch wins over freeFallback: the retry stays on Claude.
+  assert.deepEqual(h.calls.build.map((b) => b.free), [false, false]);
+  assert.equal(h.ctl.status().verdict, 'ship');
+});
+
+test('account failover: an unknown reset time is handed over as null', async () => {
+  const h = failoverHarness(true, { deps: { limitResumeAt: () => null } });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  await h.start();
+  assert.deepEqual(h.asked, [null]);
+  assert.equal(h.ctl.status().waitUntil, START_CLOCK + ACCOUNT_SWITCH_RETRY_MS);
+});
+
+test('account failover: a reset time that is not a number is handed over as null', async () => {
+  const h = failoverHarness(true, { deps: { limitResumeAt: () => Number.NaN } });
+  h.next.playtest.push({ ok: false, error: 'limit' });
+  await h.start();
+  assert.deepEqual(h.asked, [null]);
+  assert.match(logText(h), /usage limit \(playtester\): switched to another Claude account/);
+});
+
+test('no other account: the run waits until the reset', async () => {
+  const h = failoverHarness(false);
+  h.next.build.push({ ok: false, error: 'limit', resumeAt: START_CLOCK + 2 * HOUR });
+  h.next.critic.push(shipCritic());
+  await h.start();
+  assert.deepEqual(h.asked, [START_CLOCK + 2 * HOUR]);
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.ctl.status().waitUntil, START_CLOCK + 2 * HOUR, 'waits for the reset, not the short retry');
+  assert.doesNotMatch(logText(h), /switched to another Claude account/);
+  assert.match(logText(h), /usage limit \(builder\): waiting until/);
+
+  await h.fire();
+  assert.equal(h.clock, START_CLOCK + 2 * HOUR);
+  assert.equal(h.ctl.status().verdict, 'ship');
+});
+
+test('no other account and no reset time: the run looks again after the fallback wait', async () => {
+  const h = failoverHarness(false, { deps: { limitResumeAt: () => null } });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  await h.start();
+  assert.deepEqual(h.asked, [null]);
+  assert.equal(h.ctl.status().waitUntil, START_CLOCK + FALLBACK_WAIT_MS);
+});
+
+test('no other account + freeFallback: the builder and the Playtester fall to the free providers', async () => {
+  for (const [dep, role] of [['build', 'builder'], ['playtest', 'playtester']]) {
+    const h = failoverHarness(false, { settings: { models: {}, freeFallback: true, projects: {} } });
+    h.next[dep].push({ ok: false, error: 'limit', resumeAt: START_CLOCK + 2 * HOUR });
+    h.next.critic.push(shipCritic());
+    await h.start();
+    assert.deepEqual(h.asked, [START_CLOCK + 2 * HOUR], role);
+    assert.equal(h.timers.length, 0, `${role}: no wait`);
+    assert.match(logText(h), new RegExp(`${role} switches to the free providers`));
+    const calls = dep === 'build' ? h.calls.build : h.calls.playtest.filter((c) => c.mode === 'explore');
+    assert.deepEqual(calls.map((c) => c.free), [false, true], role);
+    assert.equal(h.ctl.status().verdict, 'ship', role);
+  }
+});
+
+test('no other account + freeFallback: the Critic still waits for the reset', async () => {
+  const h = failoverHarness(false, { settings: { models: {}, freeFallback: true, projects: {} } });
+  h.next.critic.push({ ok: false, error: 'limit' });
+  await h.start();
+  assert.deepEqual(h.asked, [START_CLOCK + HOUR]);
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.ctl.status().waitUntil, START_CLOCK + HOUR);
+});
+
 test('God Mode busy with another run: the build is tried again later', async () => {
   const h = harness();
   h.next.build.push({ ok: false, error: 'godModeBusy' });

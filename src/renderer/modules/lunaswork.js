@@ -16,6 +16,8 @@
 // The run panel's Dashboard button opens the live run dashboard (LW 2.17a,
 // modules/lunasworkDashboard.js) in its own overlay over Settings, and the
 // "Ask Luna" box (LW 2.27, modules/lunasworkAsk.js) sits under the steer form.
+// "Run Playtester pass" (modules/lunasworkPlaytestPass.js) plays the picked
+// project's app once, without a run.
 // ============================================================================
 
 'use strict';
@@ -27,6 +29,7 @@ import { mountLunasWorkPanel } from './lunasworkPanel.js';
 import { mountLunasWorkDashboard } from './lunasworkDashboard.js';
 import { mountLunasWorkAsk } from './lunasworkAsk.js';
 import { mountLunasWorkQueue } from './lunasworkQueuePanel.js';
+import { mountLunasWorkPlaytestPass } from './lunasworkPlaytestPass.js';
 
 const MODEL_LABELS = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 const SAVED_FLASH_MS = 2000;
@@ -288,10 +291,14 @@ export function mountLunasWorkSettings(root) {
   // The project queue (B16): add the picked project, reorder, remove.
   const queuePanel = mountLunasWorkQueue(root, { projectId });
 
+  // One Playtester pass on the picked project, outside a run.
+  const playtestPass = mountLunasWorkPlaytestPass(root, { projectId });
+
   el.project.addEventListener('change', () => {
     sfx.navClick();
     runPanel.projectChanged();
     queuePanel.refresh();
+    playtestPass.projectChanged();
     refresh();
   });
 

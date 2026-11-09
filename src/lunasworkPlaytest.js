@@ -16,12 +16,18 @@
 // design/TEST_PLAN.md and design/SHIP_CRITERIA.md - nothing else:
 //   - the prompt is built only from those two files and the app url; the
 //     criteria's checkbox state ([x] = an earlier gate verdict) is cleared
-//   - the argv is the guarantee, not the prompt: `--tools ""` (no built-ins),
-//     DENIED_TOOLS by name on top, `--strict-mcp-config` + the adapter's own
-//     --mcp-config (no user MCP servers), `--setting-sources ""` (no allow
-//     rules or hooks), `--permission-mode dontAsk` (nothing outside
-//     --allowedTools is callable)
-//   - cwd is the iteration's evidence dir, never the project repo
+//   - the argv is the guarantee, not the prompt: `--tools Read` (the only
+//     built-in), allowed as `Read(./**)` - inside its cwd only - so it can open
+//     the files the app downloads (a PDF invoice) the way the design-match
+//     judge reads its images; DENIED_TOOLS by name on top (every other
+//     built-in), DENIED_READS for the evidence dir's own logs (a dev server's
+//     compile error prints source lines), `--strict-mcp-config` + the
+//     adapter's own --mcp-config (no user MCP servers), `--setting-sources ""`
+//     (no allow rules or hooks), `--permission-mode dontAsk` (nothing outside
+//     --allowedTools is callable - a Read outside the evidence dir is refused)
+//   - cwd is the iteration's evidence dir, never the project repo; Playwright
+//     MCP's --output-dir is that same dir, so downloads land next to the
+//     screenshots and nothing of the repo is reachable through Read
 //   - B1: the explore pass also gets the app checks of the cards that were
 //     just built (src/lunasworkChecks.js) - card text, never code
 //
@@ -33,7 +39,9 @@
 // THE TRUST BOUNDARY IS validateReport(). Scores without evidence are dropped;
 // a screenshot only counts when it is a real image file inside the evidence
 // dir written during THIS run (so a ship pass cannot cite an explore pass's
-// screenshot); every text field is capped.
+// screenshot); every text field is capped. A finding may also cite downloaded
+// files (`files`): only real PDFs (`%PDF-`) under the same inside-the-dir and
+// written-this-run rules. Scores and journeys still need a screenshot.
 //
 // Screen comparison: `screens` (named key-screen screenshots) are pixel-diffed
 // against config/runs/lunaswork-<runId>/baselines/<name>.png. The baseline
@@ -88,11 +96,27 @@ const TARGETS = ['web', 'electron', 'unity'];
 const WINDOW_WIDE = { width: 1440, height: 900 };
 const WINDOW_COMPACT = { width: 1024, height: 700 };
 
-// Denied by name on top of `--tools ""`: a removed tool does not exist in the
-// session at all, so even a future CLI default cannot hand one back.
+// The one built-in the Playtester gets, and the only paths it may use it on:
+// its cwd, the evidence dir (downloaded files, its own screenshots).
+const BUILTIN_TOOLS = 'Read';
+const READ_RULE = 'Read(./**)';
+// Denied by name on top of `--tools Read`: a removed tool does not exist in the
+// session at all, so even a future CLI default cannot hand one back. Read is
+// not here - it is scoped by READ_RULE and DENIED_READS instead.
 const DENIED_TOOLS = [
-  'Read', 'Grep', 'Glob', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit',
+  'Grep', 'Glob', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit',
   'Bash', 'PowerShell', 'WebFetch', 'WebSearch', 'Task', 'Agent',
+];
+// Evidence-dir files the Playtester must not read even though they sit in
+// its cwd: the dev server's / app's logs (server.log, app.log, browsers.log)
+// and the Unity console dump (unity-console.json, unity-state.json) can print
+// source lines on a compile error, the Lighthouse report folder names the
+// app's scripts, and the Electron bridge's control file holds its token.
+// LunaCore writes all of them under these fixed lowercase names. A deny rule
+// wins over READ_RULE.
+const DENIED_READS = [
+  'Read(./*.log)', 'Read(./**/*.log)', 'Read(./lighthouse/**)',
+  'Read(./unity-*.json)', 'Read(./.playtest-control.json)',
 ];
 const MCP_TOOL_RE = /^mcp__([A-Za-z0-9_-]+?)__[A-Za-z0-9_]+$/;
 
@@ -115,9 +139,15 @@ const MAX_STEP_CHARS = 300;
 const MAX_CONSOLE_ERRORS = 20;
 const MAX_CONSOLE_CHARS = 500;
 const MAX_PATH_CHARS = 500;
+const MAX_FINDING_FILES = 5;
 const IMAGE_EXT = /\.(png|jpe?g)$/i;
+const PDF_EXT = /\.pdf$/i;
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
+const PDF_MAGIC = Buffer.from('%PDF-', 'latin1');
+// What a cited evidence file must be: its extension AND its first bytes.
+const IMAGE_FILE = { ext: IMAGE_EXT, magic: [PNG_MAGIC, JPEG_MAGIC] };
+const PDF_FILE = { ext: PDF_EXT, magic: [PDF_MAGIC] };
 // Written into the evidence dir when a pass starts; its mtime is the "written
 // during this run" line, on the file system's own clock (no Date.now skew).
 const START_MARKER = '.playtest-start';
@@ -169,6 +199,8 @@ const PLAYTEST_SCHEMA = {
           width: { type: 'integer', enum: WIDTH_VALUES },
           // True when the bug shows in this engine only.
           engineOnly: { type: 'boolean' },
+          // Optional: downloaded files (PDF) the finding is about, by file name.
+          files: { type: 'array', maxItems: MAX_FINDING_FILES, items: { type: 'string' } },
         },
       },
     },
@@ -343,13 +375,21 @@ function personaLines(personas) {
   return personas.map((p) => `  - ${p.label} (persona "${p.id}"): ${p.prompt}`);
 }
 
+// A web app's downloads (invoice, offer, report) are saved by the browser into
+// the Playtester's cwd; Read is its only way to see what is inside them.
+const DOWNLOAD_RULES = [
+  '- Downloaded files are saved in the current folder under the name the browser reports. Open each one with the Read tool (for example Read "invoice-42.pdf") and check its contents against the journey\'s expected result: line items, quantities, totals and taxes, language, names and special characters (accents, Polish letters). A wrong or unreadable file is a finding.',
+  '- A finding about a downloaded file also lists its exact file name in "files" (PDF only). You may Read only files in the current folder - nothing else.',
+];
+
 /** Rules for every pass; the matrix decides the browsers and widths. */
 const sharedRules = (matrix, servers) => [
   '- Check everything in every browser and width below. Each browser has its own tools; browser_resize to the width before you test it:',
   ...matrixLines(matrix, servers),
   '- Read the browser console (browser_console_messages) after every journey and screen; put the errors that belong to a finding in its consoleErrors.',
   '- Every finding needs a screenshot: browser_take_screenshot with a short, unique filename (for example "f3-mobile-cart.png"). Put exactly that filename in "screenshot".',
-  '- Judge only what you see in the browser. You have no access to the source code; do not ask for it or guess at it.',
+  ...DOWNLOAD_RULES,
+  '- Judge only what you see in the browser and in the files the app gave you. You have no access to the source code; do not ask for it or guess at it.',
   ...REPORT_RULES,
   '- Every finding: persona = the persona id whose lens found it ("core" for the test-plan journeys), engine + width = where you saw it.',
   '- When a bug shows in one browser only (you checked another and it works there), set engineOnly true and name the browser in the title. Otherwise engineOnly false.',
@@ -544,7 +584,8 @@ function allowedAdapterTools(tools) {
 
 /**
  * argv for the headless Playtester - never a shell string. The prompt goes in
- * on stdin (a long test plan can outgrow the Windows command line).
+ * on stdin (a long test plan can outgrow the Windows command line). Read is
+ * the one built-in, scoped to the cwd (the evidence dir) - see ANTI-SELF-GRADING.
  * @param {{model:string, tools:{mcpConfig:object, allowedTools:string[]}, budgetUsd?:number}} opts
  * @returns {string[]}
  */
@@ -556,13 +597,13 @@ function buildPlaytestArgs({ model, tools, budgetUsd = PLAYTEST_BUDGET_USD }) {
     '--output-format', 'json',
     '--json-schema', JSON.stringify(PLAYTEST_SCHEMA),
     '--model', model,
-    '--tools', '',
+    '--tools', BUILTIN_TOOLS,
     '--permission-mode', 'dontAsk',
     '--setting-sources', '',
     '--strict-mcp-config',
     '--mcp-config', JSON.stringify(tools.mcpConfig),
-    '--allowedTools', allowed.join(','),
-    '--disallowedTools', DENIED_TOOLS.join(','),
+    '--allowedTools', [...allowed, READ_RULE].join(','),
+    '--disallowedTools', [...DENIED_TOOLS, ...DENIED_READS].join(','),
     '--max-budget-usd', String(budgetUsd),
     '--no-session-persistence',
   ];
@@ -570,35 +611,55 @@ function buildPlaytestArgs({ model, tools, budgetUsd = PLAYTEST_BUDGET_USD }) {
 
 // ---- validation ---------------------------------------------------------------------
 
-/** True when the file starts with a PNG or JPEG signature - not text named x.png. */
-function hasImageMagic(file) {
+/** True when the file starts with one of the signatures - not text named x.png or x.pdf. */
+function hasMagic(file, magics) {
   const fd = fs.openSync(file, 'r');
   try {
-    const head = Buffer.alloc(PNG_MAGIC.length);
+    const head = Buffer.alloc(Math.max(...magics.map((m) => m.length)));
     const n = fs.readSync(fd, head, 0, head.length, 0);
-    return (n >= PNG_MAGIC.length && head.equals(PNG_MAGIC)) || head.subarray(0, 3).equals(JPEG_MAGIC);
+    return magics.some((m) => n >= m.length && head.subarray(0, m.length).equals(m));
   } finally {
     fs.closeSync(fd);
   }
 }
 
 /**
- * A screenshot path the report may cite: a real image file inside the
- * evidence dir (after resolving links), written at or after `since`.
+ * A file the report may cite: of the given kind by extension AND first bytes,
+ * inside the evidence dir (after resolving links), written at or after `since`.
+ * @param {{ext:RegExp, magic:Buffer[]}} kind IMAGE_FILE | PDF_FILE
  * @returns {string|null} the absolute path, null when unusable
  */
-function evidenceFile(raw, { evidenceDir, since }) {
+function citedFile(raw, { evidenceDir, since }, kind) {
   const p = clean(raw, MAX_PATH_CHARS);
-  if (!p || !IMAGE_EXT.test(p)) return null;
+  if (!p || !kind.ext.test(p)) return null;
   try {
     const root = fs.realpathSync.native(evidenceDir);
     const file = fs.realpathSync.native(path.resolve(root, p));
-    if (!isInside(root, file) || !IMAGE_EXT.test(file)) return null;
+    if (!isInside(root, file) || !kind.ext.test(file)) return null;
     const st = fs.statSync(file);
-    return st.isFile() && st.mtimeMs >= since && hasImageMagic(file) ? file : null;
+    return st.isFile() && st.mtimeMs >= since && hasMagic(file, kind.magic) ? file : null;
   } catch {
     return null;
   }
+}
+
+/** A screenshot the report may cite: a real PNG / JPEG of this run (citedFile). */
+const evidenceFile = (raw, ctx) => citedFile(raw, ctx, IMAGE_FILE);
+
+/**
+ * The downloaded files a finding cites: real PDFs of this run inside the
+ * evidence dir, deduplicated and capped. Every dropped name is a warning.
+ * @returns {string[]} absolute paths
+ */
+function evidencePdfs(raw, ctx, warnings, title) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const name of raw.slice(0, MAX_FINDING_FILES)) {
+    const file = citedFile(name, ctx, PDF_FILE);
+    if (!file) warnings.push({ code: 'badFile', title, file: clean(name, MAX_NAME_CHARS) });
+    else if (!out.includes(file)) out.push(file);
+  }
+  return out;
 }
 
 function cleanEvidence(raw, ctx) {
@@ -635,6 +696,7 @@ function cleanFinding(f, ctx, warnings) {
     engineOnly,
     steps: strings(f.steps, MAX_STEPS, MAX_STEP_CHARS),
     screenshot,
+    files: evidencePdfs(f.files, ctx, warnings, title),
     consoleErrors: strings(f.consoleErrors, MAX_CONSOLE_ERRORS, MAX_CONSOLE_CHARS),
   };
 }
@@ -821,6 +883,7 @@ function compareOne(screen, ctx) {
       screenshot: screen.screenshot,
       baseline: kept,
       diff,
+      files: [],
       consoleErrors: [],
       // Key screens are always taken in the chromium baseline browser.
       persona: null,

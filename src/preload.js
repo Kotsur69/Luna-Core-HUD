@@ -460,8 +460,10 @@ contextBridge.exposeInMainWorld('lunacore', {
   lunasworkSteer: (projectId, text) => ipcRenderer.invoke('lunaswork:steer', { projectId, text }),
   /** LW 2.27 "Ask Luna": a read-only answer about the run. Main trims, caps (500) and rate-limits. Promise<{ok, item} | {ok:false, reason, retryAt?}>. */
   lunasworkAsk: (question) => ipcRenderer.invoke('lunaswork:ask', { question: typeof question === 'string' ? question : '' }),
-  /** Opens the current run's latest evidence folder; main resolves and checks the path. */
-  lunasworkOpenEvidence: () => ipcRenderer.invoke('lunaswork:openEvidence'),
+  /** Opens the current run's latest evidence folder - or, with 'playtestOnce', the last Playtester pass's; main resolves and checks the path. */
+  lunasworkOpenEvidence: (what) => ipcRenderer.invoke('lunaswork:openEvidence', what === 'playtestOnce' ? { what } : undefined),
+  /** "Run Playtester pass": one explore pass outside a run; main confirms natively. Promise<{ok, result} | {ok:false, reason, resetsAt?, error?, detail?, evidence?}>. Progress on onLunasworkEvent as {type:'playtestOnce', stage, projectId}. */
+  lunasworkPlaytestOnce: (projectId) => ipcRenderer.invoke('lunaswork:playtestOnce', { projectId }),
   /** LW 2.17a: the current run's HUD dashboard. Promise<{ok, dashboard|null} | {ok:false, reason}>. */
   lunasworkDashboard: () => ipcRenderer.invoke('lunaswork:dashboard'),
   /** One image of config/runs/lunaswork-<runId>/ (file relative to it; main refuses anything outside). Promise<{ok, dataUrl} | {ok:false, reason}>. */
@@ -479,7 +481,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   lunasworkQueueRemove: (projectId) => ipcRenderer.invoke('lunaswork:queueRemove', { projectId }),
   /** delta: -1 (up) or 1 (down). Same answer. */
   lunasworkQueueMove: (projectId, delta) => ipcRenderer.invoke('lunaswork:queueMove', { projectId, delta }),
-  /** {type, status} on every phase transition, wait, resume and stop. Returns an unsubscribe function. */
+  /** {type, status} on every phase transition, wait, resume and stop; {type:'playtestOnce', stage, projectId} during a pass. Returns an unsubscribe function. */
   onLunasworkEvent: (cb) => {
     const listener = (_e, event) => cb(event);
     ipcRenderer.on('lunaswork:event', listener);
