@@ -13,7 +13,9 @@
 //
 // Only the repo NAME goes out, never its path (the report's Repo line is
 // rewritten). Every string is stripped of control characters; the body is
-// never HTML (the attachment is the escaped page reportHtml.js renders).
+// text, sent with a readable HTML alternative that gmailsend.js derives from
+// that text (mailHtml.js, every piece escaped). The attachment is the escaped
+// page reportHtml.js renders.
 //
 // Dedupe: (run id, pushed count, integration state) is persisted in
 // mail-state.local.json. A re-finalize with the same result sends nothing; a
@@ -127,7 +129,7 @@ function createGodModeMailer({ sender, prefs, enabled, readHtml, maxRuns = 50 })
       try {
         const mail = buildRunEmail(text, summary, { updated: !!prev });
         const attachments = htmlAttachments(readHtml, runId);
-        await sender.send({ subject: mail.subject, text: mail.text, ...(attachments.length ? { attachments } : {}) });
+        await sender.send({ subject: mail.subject, text: mail.text, html: true, ...(attachments.length ? { attachments } : {}) });
         prefs.updateState((s) => {
           const godmode = { ...s.godmode };
           delete godmode[runId];

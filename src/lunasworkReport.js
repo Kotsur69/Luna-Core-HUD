@@ -455,6 +455,8 @@ function renderRunReportHtml(run, extra = {}) {
   ].filter(Boolean).join('\n');
   return h.page({
     title: `Luna's Work run ${oneLine(r.id, 64)}`,
+    kind: "LunaCore Luna's Work report",
+    summary: `${VERDICT_LABEL[verdict]} - ${verdictWhy(r)}`,
     subtitle: `${repoName(r)} · ${VERDICT_LABEL[verdict]} · milestone ${oneLine(r.milestone, 80) || '-'}`,
     body,
     footer: `Started ${fmt(r.startedAt)} UTC · ended ${fmt(ended)} UTC`,
@@ -713,7 +715,8 @@ function createLunasWorkReporter(deps) {
           ...shots.map(({ filename, mimeType, content }) => ({ filename, mimeType, content })),
         ];
         const video = media && media.demo && media.demo.attach ? media.demo.attach : null;
-        const res = await sendMail(m, { subject: email.subject, text: email.text, ...(attachments.length ? { attachments } : {}) }, video);
+        // html: a readable, escaped alternative of the same text (gmailsend.js / mailHtml.js).
+        const res = await sendMail(m, { subject: email.subject, text: email.text, html: true, ...(attachments.length ? { attachments } : {}) }, video);
         if (persist) markSent(m, run);
         recordThread(run, 'runEnd', res);
         return { sent: true };

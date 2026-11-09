@@ -276,3 +276,19 @@ test('removing a note keeps the rest of the card exactly as written', () => {
   assert.equal(withoutStallNotes(`${OLD_NOTE}\n\nBody`), 'Body', 'a leading note takes its blank line');
   assert.equal(withoutStallNotes(`A\r\n\r\n${OLD_NOTE}\r\n\r\nB`), 'A\r\n\r\nB', 'CRLF kept');
 });
+
+// --- HTML page -------------------------------------------------------------------
+
+test('the HTML run report keeps its key data in the readable layout', () => {
+  const html = renderRunReportHtml(messyView(), EXTRA);
+  assert.match(html, /<p class="eyebrow">LunaCore God Mode run report<\/p>/);
+  assert.match(html, /<h1>God Mode run pabc<\/h1>/);
+  assert.match(html, /<div class="cards">/);
+  assert.ok(html.indexOf('class="cards"') < html.indexOf('<section>'), 'the summary cards come first');
+  for (const key of ['luna/pabc-integration', '20261020_add_x.sql', 'STRIPE_KEY', 'approvalTimeout', 'worktreeFailed', 'src/x.js', 'not ok 3 - adds']) {
+    assert.ok(html.includes(key), `${key} still in the page`);
+  }
+  assert.match(html, /<th>Package<\/th>/);
+  assert.match(html, /@media print/);
+  assert.ok(!/<script|<link|<img/.test(html), 'self-contained, no external assets');
+});

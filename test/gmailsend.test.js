@@ -181,3 +181,62 @@ test('buildMime attachments: a PNG / JPEG Buffer goes inline, any other Buffer o
   assert.ok(Buffer.from(data.replace(/\r\n/g, ''), 'base64').equals(png), 'the image bytes, unchanged');
   assert.ok(!mime.includes('secret.html') && !mime.includes('huge.jpg'));
 });
+
+// --- readable HTML alternative (src/mailHtml.js) ------------------------------
+
+const htmlPartOf = (mime) => Buffer.from(mime.split('--B')[2].split('\r\n\r\n')[1].replace(/\r\n/g, ''), 'base64').toString('utf8');
+const textPartOf = (mime) => Buffer.from(mime.split('--B')[1].split('\r\n\r\n')[1].replace(/\r\n/g, ''), 'base64').toString('utf8');
+
+test('buildMime html part: headings, bullets, numbered items and code from the text, all escaped', () => {
+  const text = [
+    'Weekly review - 2026-W43',
+    '',
+    'A <b>fun</b> week & more.',
+    '',
+    'FUN',
+    '- LunaCore <img src=x onerror=alert(1)>',
+    '* second bullet',
+    '',
+    'Needs you:',
+    '1. Merge `luna/<x>`',
+    '2. See https://example.com/run?a=1&b=2.',
+    '',
+    '## Merged / pushed',
+    '```',
+    'npm test <script>',
+    '```',
+  ].join('\n');
+  const mime = buildMime({ address: 'me@example.com', subject: 's', text, html: true, boundary: 'B' });
+  const html = htmlPartOf(mime);
+  assert.match(html, /^<!doctype html>/);
+  assert.match(html, /max-width:680px/);
+  assert.match(html, /sans-serif/);
+  assert.match(html, /<h1 [^>]*>Weekly review - 2026-W43<\/h1>/);
+  assert.match(html, /<h3 [^>]*>FUN<\/h3>/);
+  assert.match(html, /<h3 [^>]*>Needs you<\/h3>/);
+  assert.match(html, /<h2 [^>]*>Merged \/ pushed<\/h2>/);
+  assert.match(html, /<ul [^>]*><li [^>]*>LunaCore &lt;img src=x onerror=alert\(1\)&gt;<\/li><li [^>]*>second bullet<\/li><\/ul>/);
+  assert.match(html, /<ol [^>]*><li [^>]*>Merge <code [^>]*>luna\/&lt;x&gt;<\/code><\/li>/);
+  assert.match(html, /<a href="https:\/\/example\.com\/run\?a=1&amp;b=2" [^>]*>https:\/\/example\.com\/run\?a=1&amp;b=2<\/a>\./);
+  assert.match(html, /<pre [^>]*monospace[^>]*>npm test &lt;script&gt;<\/pre>/);
+  assert.match(html, /A &lt;b&gt;fun&lt;\/b&gt; week &amp; more\./);
+  // Only the code-like lines are monospace; the body font is sans-serif.
+  assert.match(html, /<body style="[^"]*sans-serif/);
+  for (const raw of ['<img', '<script', '<b>']) assert.ok(!html.includes(raw), `raw ${raw} must not reach the html part`);
+  assert.ok(!/<style|<link|<script/.test(html), 'inline styles only, no external assets');
+  // The plain-text alternative stays exactly the text.
+  assert.equal(textPartOf(mime), text.replace(/\n/g, '\r\n'));
+});
+
+test('buildMime html part: a javascript: URL never becomes a link', () => {
+  const html = htmlPartOf(buildMime({ address: 'me@example.com', subject: 's', text: 'go javascript:alert(1) now', html: true, boundary: 'B' }));
+  assert.ok(!html.includes('href='));
+  assert.match(html, /go javascript:alert\(1\) now/);
+});
+
+test('buildMime html part: indented to-dos stay in their list, markdown tables are monospace', () => {
+  const text = 'WORK\n- Client: two open\n    [ ] Fix login\n\n| Package | State |\n| a | pushed |';
+  const html = htmlPartOf(buildMime({ address: 'me@example.com', subject: 's', text, html: true, boundary: 'B' }));
+  assert.match(html, /<li [^>]*>Client: two open<\/li><li [^>]*><span [^>]*>\[ \]<\/span> Fix login<\/li>/);
+  assert.match(html, /<pre [^>]*>\| Package \| State \|\n\| a \| pushed \|<\/pre>/);
+});
