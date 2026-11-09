@@ -18,8 +18,8 @@
 //
 // Each run also carries what waits for Mati: `needs` (the report's '## Needs
 // you' lines) and `manual` (the manual actions to apply live). The snapshot's
-// `seen` lists the run ids this PC has opened in the attention inbox
-// (src/inbox.js unions them across machines). A row written before any of
+// `seen` lists the run ids this PC has opened in the run summary window
+// (src/inboxipc.js inbox:run, opened from a hub item). A row written before any of
 // these reads as empty lists.
 //
 // v2 (docs/tbc_docs/NOTIFICATION_HUB_PLAN.md N4): each run written since also carries

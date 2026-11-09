@@ -36,6 +36,7 @@ import { onActiveContext, onBackgroundContext, onBusyIdle, onLangChange } from '
 import { getActiveBucket, getActiveSessionId } from './terminals.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
 import { sfx } from './sound.js';
+import { onHubPrefs } from './hubstate.js';
 
 // Elements of the current mount, or null before mountNotify() has run.
 let els = null;
@@ -65,6 +66,15 @@ export function nextContextNotifyState(fired, pct) {
   if (pct < CTX_WARN_HIGH) return { fired: !!fired, shouldFire: false };
   if (fired) return { fired: true, shouldFire: false };
   return { fired: true, shouldFire: true };
+}
+
+/** Applies a notificationsEnabled value to the module and, when mounted, to the switch. */
+function applyNotifyEnabled(on) {
+  notifyEnabled = on === true;
+  if (!els) return;
+  els.toggle.checked = notifyEnabled;
+  els.field.classList.toggle('is-armed', notifyEnabled);
+  renderStatus();
 }
 
 /** The Settings opt-in (notificationsEnabled): other toast sources (hubtoast.js) honour it too. */
@@ -186,12 +196,11 @@ export function mountNotify(root) {
     .getUiPrefs()
     .then((prefs) => {
       if (!els || !prefs) return;
-      notifyEnabled = prefs.notificationsEnabled === true;
-      els.toggle.checked = notifyEnabled;
-      els.field.classList.toggle('is-armed', notifyEnabled);
-      renderStatus();
+      applyNotifyEnabled(prefs.notificationsEnabled);
     })
     .catch(() => {});
+  // N7: notificationsEnabled syncs with the hub Settings - another PC's choice applies live.
+  const offPrefs = onHubPrefs((prefs) => applyNotifyEnabled(prefs.notificationsEnabled));
 
   const offLang = onLangChange(renderStatus);
   // The overlay being closed does not mean the user cannot see a toast - a
@@ -207,6 +216,7 @@ export function mountNotify(root) {
     offBusyIdle();
     offActiveCtx();
     offBackgroundCtx();
+    offPrefs();
     els = null;
   };
 }

@@ -6,6 +6,11 @@
 // the drawer (hubpanel.js) both read it through onHubView(). Main already
 // cleans and caps every item; this module only checks the shape, so a broken
 // push can never throw inside a renderer listener.
+//
+// N7: the hub Settings sync across PCs. When another PC's choice lands, main
+// pushes 'hub:prefsChanged' (no payload); onHubPrefs() listeners get the
+// freshly re-read getUiPrefs() so toasts, auto-open, Settings and the system
+// notification switch apply it live, without a restart.
 // ============================================================================
 
 'use strict';
@@ -73,6 +78,38 @@ export function onHubView(fn) {
   listeners.add(fn);
   fn(view, failed);
   return () => listeners.delete(fn);
+}
+
+const prefsListeners = new Set();
+let prefsWired = false;
+
+async function rereadPrefs() {
+  const prefs = await call('getUiPrefs');
+  if (!prefs || typeof prefs !== 'object' || prefs.ok === false) return;
+  for (const fn of prefsListeners) {
+    try {
+      fn(prefs);
+    } catch (err) {
+      console.error('[hub] prefs listener failed', err);
+    }
+  }
+  // A switched-off source group changes the list: ask main for it now.
+  refreshHub();
+}
+
+/**
+ * fn(prefs) whenever another PC changed the synced hub Settings (N7); the
+ * prefs are the whole re-read ui.local.json. Returns an unsubscribe.
+ */
+export function onHubPrefs(fn) {
+  prefsListeners.add(fn);
+  if (!prefsWired && window.lunacore && typeof window.lunacore.onHubPrefsChanged === 'function') {
+    prefsWired = true;
+    window.lunacore.onHubPrefsChanged(() => {
+      rereadPrefs();
+    });
+  }
+  return () => prefsListeners.delete(fn);
 }
 
 /** Marks one item done in main; the push that follows repaints everything. */

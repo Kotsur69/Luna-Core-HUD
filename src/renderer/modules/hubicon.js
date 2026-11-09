@@ -1,8 +1,9 @@
 // ============================================================================
-// LunaCore - notification hub: the face chip and its badge (renderer, N2)
+// LunaCore - notification hub: the '!' chip and its badge (renderer, N2 / N8)
 // ----------------------------------------------------------------------------
-// The chip sits in the palette bar next to Mission Control / Life. Its face is
-// static SVG in index.html, stroked in the theme accent (hub.css). The badge
+// The chip sits in the palette bar next to Mission Control / Life. Since N8
+// it is the ONE attention chip: a static '!' in index.html in the theme
+// accent (hub.css) - the old attention inbox chip is folded into it. The badge
 // is the number of open "needs" items from hubstate.js: hidden at 0, live on
 // every hub:changed push, and it pulses once when the count goes up (never
 // under prefers-reduced-motion or the in-app motion "off").
@@ -21,7 +22,7 @@
 
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
-import { startHub, onHubView, hubLoaded } from './hubstate.js';
+import { startHub, onHubView, hubLoaded, onHubPrefs } from './hubstate.js';
 import { toggleHub, openHub, onHubOpenChange } from './hubpanel.js';
 import { shouldAutoOpen, normalizeAutoOpen } from './hubrules.js';
 import { wireHubToasts } from './hubtoast.js';
@@ -122,6 +123,11 @@ function wireAutoOpen() {
   // The prefs answer may land after the first view: it re-checks the latest one.
   call('getUiPrefs').then((prefs) => {
     mode = normalizeAutoOpen(prefs && prefs.hubAutoOpen);
+    check();
+  });
+  // N7: a choice synced from another PC during the launch window applies too.
+  onHubPrefs((prefs) => {
+    mode = normalizeAutoOpen(prefs.hubAutoOpen);
     check();
   });
 }

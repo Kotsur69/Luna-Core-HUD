@@ -28,13 +28,44 @@ const ICON = read('src/renderer/modules/hubicon.js');
 const I18N = read('src/renderer/i18n.js');
 const EN_AT = I18N.indexOf('\n  en: {');
 
-test('the face chip sits in the palette bar with a hidden badge', () => {
+test("the '!' chip sits in the palette bar with a hidden badge", () => {
   const chip = HTML.slice(HTML.indexOf('id="hub-open"'), HTML.indexOf('</button>', HTML.indexOf('id="hub-open"')));
   assert.ok(chip.includes('palette-chip'), 'same chip class as its neighbours');
-  assert.ok(chip.includes('<svg') && chip.includes('<circle'), 'a line-drawn SVG face');
+  assert.ok(/class="hub-chip__mark"[^>]*>!<\/span>/.test(chip), "N8: a text '!' instead of the SVG face");
+  assert.ok(!chip.includes('<svg'), 'the SVG face is gone');
   assert.ok(/id="hub-count"[^>]*hidden/.test(chip), 'the badge starts hidden (count 0)');
   assert.ok(HTML.indexOf('id="hub-open"') < HTML.indexOf('id="mission-open"'), 'next to the Mission Control chip');
   assert.ok(HTML.includes('href="hub.css"'));
+});
+
+test("N8: one '!' chip - no old attention inbox leftovers", () => {
+  const files = [
+    'src/renderer/index.html',
+    'src/preload.js',
+    'src/main.js',
+    'src/renderer/i18n.js',
+    'src/renderer/styles.css',
+    'src/renderer/modules/terminal.js',
+  ];
+  for (const rel of files) {
+    const src = read(rel);
+    for (const gone of ['inbox-open', 'inbox-count', 'inbox-chip', 'inboxList', "'inbox:list'", 'mountInboxChip', "'inbox.chip"]) {
+      assert.ok(!src.includes(gone), `${rel} still names ${gone}`);
+    }
+  }
+  assert.ok(!fs.existsSync(path.join(ROOT, 'src/inbox.js')), 'src/inbox.js deleted');
+  assert.ok(!fs.existsSync(path.join(ROOT, 'src/renderer/modules/inbox.js')), 'renderer inbox.js deleted');
+  // The chip keeps its badge pulse and shortcut.
+  assert.ok(ICON.includes('hub-count') || HTML.includes('id="hub-count"'));
+  assert.ok(/Ctrl\+Shift\+H/.test(HTML));
+});
+
+test('N8: run items open the run summary through the validated inbox:run handler', () => {
+  assert.ok(PANEL.includes("import { openRunSummary } from './godmodesummary.js'"));
+  assert.ok(/openRunSummary: \(arg\) => runSummary\(arg\)/.test(PANEL));
+  const preload = read('src/preload.js');
+  assert.ok(preload.includes("ipcRenderer.invoke('inbox:run', { machine, id })"), 'machine + id only');
+  assert.ok(read('src/renderer/modules/godmodesummary.js').includes("call('inboxRun', machine, id)"));
 });
 
 test('the brief left Mission Control', () => {

@@ -3050,14 +3050,13 @@ function registerIpc() {
     // Gmail just connected: the God Mode run emails that waited for it go out.
     onConnected: () => reportMail.runMail.flush(),
   });
-  // Attention inbox ('!' chip): God Mode runs to review from every PC, check-in, weekly goals, Gmail not connected.
+  // God Mode run summary (hub items open it): one run from any PC, its PR links.
   registerInboxIpc({
     ipcMain,
     snapshots: () => (cloud ? cloud.snapshots : null),
     godmode: snapshotPuts.godmode,
     machine: machineName(os.hostname()),
     openExternal: (url) => shell.openExternal(url),
-    gmail: () => reportMail.sender.status(),
   });
   // Notification hub (face icon + right drawer): docs/tbc_docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
   // Other PCs' runs come from their `godmode` rows; done marks sync as config units.
@@ -3077,6 +3076,7 @@ function registerIpc() {
       mail: () => mission.mailNeeds(),
       cloud: () => (cloud ? cloud.status() : null),
       google: () => gcal.status(),
+      gmail: () => reportMail.sender.status(),
       hostOn: () => {
         const control = require('./hostmain').hostControl();
         return Boolean(control && control.status().on);
@@ -3084,6 +3084,7 @@ function registerIpc() {
     },
     // Settings -> Notification hub: the source groups switched off.
     sourcePrefs: () => readUiPrefs().hubSources,
+    machine: machineName(os.hostname()),
     onDone: () => configSync && configSync.soon(),
   });
   // One model call a week (Sunday 20:00, catch-up on launch) - README "Core constraint".
@@ -3576,6 +3577,8 @@ function registerIpc() {
       partial = rest;
     }
     const next = writeUiPrefs(partial);
+    // The synced hub Settings (src/hubprefsync.js) travel to the other PCs soon.
+    if (next && configSync && require('./hubprefsync').touchesSyncedPrefs(partial)) configSync.soon();
     // Sound prefs take effect immediately, no restart - same live-apply as
     // theme/lang. soundManager may still be null if this fires before
     // app.whenReady()'s init line runs.
@@ -3737,8 +3740,9 @@ app.whenReady().then(() => {
       // Another PC's check-in / habits / goals / score settings: the renderer reloads those parts.
       const parts = lifeParts(names);
       if (parts.length) send('life:changed', { parts });
+      if (names.includes('hubprefs')) send('hub:prefsChanged', {});
     },
-    extraProviders: hubApi ? [hubApi.doneProvider] : [],
+    extraProviders: hubApi ? [hubApi.doneProvider, hubApi.seenProvider, hubApi.prefsProvider] : [],
   });
   // A --luna-probe instance shares userData with the live LunaCore - often the
   // very one running the God Mode self-check that started it. Resuming the

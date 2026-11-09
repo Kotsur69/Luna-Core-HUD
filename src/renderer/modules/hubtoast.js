@@ -15,7 +15,7 @@
 'use strict';
 
 import { t } from './util.js';
-import { onHubView, hubLoaded } from './hubstate.js';
+import { onHubView, hubLoaded, onHubPrefs } from './hubstate.js';
 import { openHub, itemTitle } from './hubpanel.js';
 import { isNotifyEnabled, fireNotification } from './notify.js';
 import { toastPlan } from './hubrules.js';
@@ -42,6 +42,8 @@ export function wireHubToasts() {
     .then(() => window.lunacore.getUiPrefs())
     .then((prefs) => setHubToastsEnabled(!prefs || prefs.hubToasts !== false))
     .catch(() => {});
+  // N7: another PC switched toasts on / off.
+  onHubPrefs((prefs) => setHubToastsEnabled(prefs.hubToasts !== false));
   onHubView((view, failed) => {
     if (failed || !hubLoaded()) return;
     const plan = toastPlan({
