@@ -360,6 +360,9 @@ function createOrchestraRegistry(deps) {
     onUsageLimit,
     onApproval: (sessionId, rule, example) => route(sessionId, (c) => c.onApproval(sessionId, rule, example)),
     onFiles: (sessionId, files) => route(sessionId, (c) => c.onFiles(sessionId, files)),
+    // Free God Mode v2 F3: the model that really answered a free worker
+    // (src/fallbackproxy.js onRoute) - each free run notes it in its log.
+    onFreeRoute: (info) => each((c) => (typeof c.onFreeRoute === 'function' ? c.onFreeRoute(info) : undefined), 'freeRoute'),
     // A3: accounts and the shared power flow.
     pauseAll,
     noteAccountLimit,

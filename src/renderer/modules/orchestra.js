@@ -492,8 +492,9 @@ function renderPlan() {
   }
   for (const s of plan.suggestions || []) body.append(suggestionRow(s));
   if (plan.pausedUntil) {
-    // Every Claude account limited: the run waits for the first reset.
-    const key = plan.allAccountsLimited === true ? 'orch.account.waitReset' : 'orch.paused';
+    // Every Claude account limited: the run waits for the first reset. A free
+    // run waits for its free chain (src/freeLimit.js), then retries on its own.
+    const key = plan.allAccountsLimited === true ? 'orch.account.waitReset' : plan.freeMode ? 'orch.free.paused' : 'orch.paused';
     body.append(msg(t(key, { time: clock(plan.pausedUntil) }), 'is-warn'));
   }
   if (plan.hold && plan.hold.reason === 'noNodeModules') body.append(holdRow());

@@ -44,7 +44,7 @@ const { createMergeRunDeps } = require('./orchestraMergeRun');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 // A planner limit with another Claude account free: replan after this long.
 const ACCOUNT_SWITCH_RETRY_MS = 3000;
-const { FREE_BRANCH_PREFIX, isSafeFreeBranch, freeRunSettings, integrationFor } = require('./orchestraFree');
+const { FREE_BRANCH_PREFIX, isSafeFreeBranch, freeRunSettings, integrationFor, maxParallelFor } = require('./orchestraFree');
 const {
   cleanupFailedLaunch,
   earlierWorktrees,
@@ -332,6 +332,8 @@ function createOrchestra(deps) {
   // Launches wait a little right after a system resume.
   const resumeGate = createResumeGate({ now });
   let resumeTimer = null;
+  // The last "model X answered by Y" a free run logged (onFreeRoute).
+  let lastFreeRoute = null;
   let scheduleTimer = null;
   // Planning that hit the 5 h / weekly limit waits for the reset and then
   // plans on its own (orchestraPlanWait.js).
@@ -1173,7 +1175,7 @@ function createOrchestra(deps) {
 
   /** Ends the run once nothing more can happen on its own, then finalizes it. */
   function checkSettled() {
-    if (!plan.started || plan.killed || plan.settled || !sup.isSettled(plan.packages, MAX_PARALLEL)) return;
+    if (!plan.started || plan.killed || plan.settled || !sup.isSettled(plan.packages, maxParallelFor(plan, MAX_PARALLEL))) return;
     // A scheduled automatic relaunch keeps the run open.
     if (retryTimers.size) return;
     plan.settled = true;
@@ -1243,10 +1245,10 @@ function createOrchestra(deps) {
     if (!plan || !plan.started || plan.killed || plan.pausedUntil || plan.hold || pumping || batteryHeld()) return;
     pumping = true;
     try {
-      let ready = sup.readyToLaunch(plan.packages, MAX_PARALLEL);
+      let ready = sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL));
       while (ready.length && !plan.killed && !plan.pausedUntil && !plan.hold && !batteryHeld()) {
         await launchPackages(ready);
-        ready = sup.readyToLaunch(plan.packages, MAX_PARALLEL);
+        ready = sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL));
       }
       checkSettled();
       commit();
@@ -1299,7 +1301,7 @@ function createOrchestra(deps) {
     const chosen = Array.isArray(o.ids)
       ? plan.packages.filter((p) => (p.state === 'pending' || p.state === 'failed') && o.ids.includes(p.id))
       : null;
-    if (chosen ? !chosen.length : !sup.readyToLaunch(plan.packages, MAX_PARALLEL).length) {
+    if (chosen ? !chosen.length : !sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL)).length) {
       return { ok: false, error: 'nothingToLaunch' };
     }
 
@@ -1921,6 +1923,29 @@ function createOrchestra(deps) {
     stall(pkg.id, 'needsApproval', entry.rule);
   }
 
+  /**
+   * Free God Mode v2 F3: which model really answered a free worker
+   * (src/fallbackproxy.js onRoute). A free run with live workers writes a
+   * line to its run log each time that changes, and every refused
+   * substitution, so the report shows who actually wrote the code.
+   * @param {{chainId:string, model:string, routedVia:string|null, substituted:boolean}} info
+   */
+  function onFreeRoute(info) {
+    if (!plan || !plan.freeMode || !plan.started || plan.killed || plan.settled) return;
+    if (!info || typeof info.model !== 'string' || !plan.packages.some(sup.isActive)) return;
+    const real = info.routedVia || info.model;
+    const key = `${info.chainId}|${info.model}|${real}`;
+    if (!info.substituted && key === lastFreeRoute) return;
+    if (!info.substituted) lastFreeRoute = key;
+    const detail = info.substituted
+      ? `${info.chainId}: ${info.model} was answered by ${real} - refused, next model tried`
+      : `${info.chainId}: ${info.model} answered by ${real}`;
+    plan.recoveries = sup.withHistoryEntry(plan.recoveries, {
+      at: now(), kind: 'free', reason: info.substituted ? 'freeSubstituted' : 'freeModel', detail,
+    });
+    commit();
+  }
+
   /** True when the tab is one of this run's workers (cheap pre-check for main). */
   function ownsSession(sessionId) {
     return !!bySession(sessionId);
@@ -2358,6 +2383,7 @@ function createOrchestra(deps) {
     tick,
     onTurnEnd,
     onUsageLimit,
+    onFreeRoute,
     pauseExternal,
     powerState,
     workerSessions,

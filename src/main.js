@@ -59,7 +59,7 @@ const { localEndpointFromProfile, resolveAutoModel, LocalModelWatcher, probeEndp
 // LM Studio tabs: role-rewriting loopback shim + pre-spawn env/flag prep.
 const { ensureShim, stopAllShims } = require('./lmstudioshim');
 const { resolveLocalLaunch, prepareLocalLaunch, prepareChainLaunch, launchWhenReady, ensureEmptyMcpConfig } = require('./locallaunch');
-const { ensureFallbackProxy, stopAllFallbackProxies } = require('./fallbackproxy');
+const { ensureFallbackProxy, stopAllFallbackProxies, onRoute: onFreeRoute } = require('./fallbackproxy');
 const { loadChains, resolveProfileChain } = require('./freechains');
 const { pickFreeProfileId } = require('./orchestraFree');
 const { userDir, ensureUserDir } = require('./paths');
@@ -1225,6 +1225,10 @@ const orchestraRuns = createOrchestraRegistry({
   },
   log: (line) => console.error(line),
 });
+
+// Free God Mode v2 F3: the model that really answered a free worker goes to
+// the free runs' logs (substitutions included).
+onFreeRoute((info) => orchestraRuns.onFreeRoute(info));
 
 // Luna's Work project queue (B16): one store for the controller and the IPC.
 const lunasworkQueue = fileQueueStore();
