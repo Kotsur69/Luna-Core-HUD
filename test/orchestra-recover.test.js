@@ -197,6 +197,24 @@ test('depsMissing on the hold: install in the held worktree, then Resume on its 
   assert.deepEqual(names(still.calls), ['install', 'holdUnfixed']);
   assert.equal(still.asks.length, 1, 'asked once');
   assert.equal(still.calls[1][1], true, 'the hold message knows the ask went out');
+  assert.equal(still.asks[0].cause, 'depsMissing');
+});
+
+test('depsMissing on the hold: an install that hit a file LunaCore holds asks to restart LunaCore', async () => {
+  const locked = harness({
+    install: () => ({ ok: false, locked: true, output: ['npm ci ok in temp', 'a file in node_modules is locked by LunaCore - restart LunaCore, then Retry'].join('\n') }),
+    check: () => ({ ok: false, detail: 'electron is not in node_modules' }),
+  });
+  assert.equal(locked.r.onHold({ dir: ROOT, detail: 'empty' }), true);
+  await flush();
+  assert.deepEqual(names(locked.calls), ['install', 'holdUnfixed']);
+  assert.equal(locked.asks.length, 1);
+  assert.equal(locked.asks[0].cause, 'depsLocked', 'the ask names the real cause');
+  assert.match(locked.asks[0].text.en.body, /locked by LunaCore/);
+  assert.match(locked.asks[0].text.en.body, /restart LunaCore/);
+  assert.match(locked.asks[0].text.pl.body, /zablokowany przez LunaCore/);
+  // Asked once: a later stop of the same package does not ask again.
+  assert.equal(locked.r.onTerminal(locked.pkg(), 'installFailed'), false);
 });
 
 test('secretFound and pushBlocked: one fix-up round each, then no more', () => {
@@ -452,7 +470,7 @@ test("a terminal stop without an automatic attempt keeps today's behaviour (no a
 test('every cause has an ask text in pl and en, and the board finds the open ask', async () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'i18n.js'), 'utf8');
   const texts = rec.parseAskTexts(src);
-  for (const cause of Object.keys(rec.PLAYBOOK)) {
+  for (const cause of [...Object.keys(rec.PLAYBOOK), ...rec.ASK_ONLY_CAUSES]) {
     for (const lang of ['pl', 'en']) {
       const body = texts[lang][`orch.recover.ask.${cause}`];
       assert.ok(body, `${lang} ${cause}`);
@@ -466,7 +484,7 @@ test('every cause has an ask text in pl and en, and the board finds the open ask
   assert.ok(src.indexOf("'orch.recover.title'", hold) - hold < 200);
 
   const { recoverAsk, RECOVER_ASK_CAUSES } = await import('../src/renderer/modules/orchestraState.js');
-  assert.deepEqual([...RECOVER_ASK_CAUSES].sort(), Object.keys(rec.PLAYBOOK).sort());
+  assert.deepEqual([...RECOVER_ASK_CAUSES].sort(), [...Object.keys(rec.PLAYBOOK), ...rec.ASK_ONLY_CAUSES].sort());
   const asked = { stallHistory: [{ kind: 'recover', reason: 'network' }, { kind: 'ask', reason: 'network' }] };
   assert.deepEqual(recoverAsk(asked), { key: 'orch.recover.ask.network', cause: 'network' });
   assert.equal(recoverAsk({ stallHistory: [...asked.stallHistory, { kind: 'retry', reason: 'manual' }] }), null);

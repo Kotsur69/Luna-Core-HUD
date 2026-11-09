@@ -138,13 +138,36 @@ test('checkNodeModules on real folders: an empty node_modules fails, a dangling 
   assert.equal(checkNodeModules(dir).ok, false);
 });
 
-test('the board / notification text names the folder', () => {
-  assert.equal(noNodeModulesText('C:/repo'), 'node_modules in C:/repo is empty - run npm install, then Resume');
+test('the hold text names the folder, the real reason and the missing package', () => {
+  assert.equal(
+    noNodeModulesText('C:/repo', { cause: 'missing' }),
+    'node_modules in C:/repo: the folder does not exist - run npm install; the run resumes on its own once it is fixed',
+  );
+  assert.match(noNodeModulesText('C:/repo', { cause: 'empty' }), /: the folder is empty - /);
+  assert.match(noNodeModulesText('C:/repo', { cause: 'unresolved', missing: 'electron' }), /: electron is not installed - /);
+  assert.match(noNodeModulesText('C:/repo', { cause: 'unresolved' }), /: a dependency is not installed - /);
+  assert.match(noNodeModulesText('C:/repo'), /^node_modules in C:\/repo: it is incomplete - /, 'no reason known');
+  assert.doesNotMatch(noNodeModulesText('C:/repo', { cause: 'missing' }), /is empty/);
+
+  // The check carries the name of the first package that is not installed.
+  const partial = checkNodeModules('/w', fakeFs(project({ '/w/node_modules': ['pngjs'], '/w/node_modules/pngjs/package.json': '{}' })));
+  assert.deepEqual([partial.reason, partial.missing], ['unresolved', '@scope/tool']);
+
   const i18n = fs.readFileSync(path.join(REPO_ROOT, 'src', 'renderer', 'i18n.js'), 'utf8');
-  const lines = i18n.split(/\r?\n/).filter((l) => l.includes("'orch.noNodeModules'"));
+  const all = i18n.split(/\r?\n/);
+  const lines = all.filter((l) => l.includes("'orch.noNodeModules'"));
   assert.equal(lines.length, 2, 'pl + en');
-  assert.ok(lines.some((l) => l.includes('node_modules in {repo} is empty - run npm install, then Resume')));
-  for (const l of lines) assert.doesNotMatch(l, /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, 'Polish without diacritics');
+  for (const l of lines) assert.match(l, /\{repo\}.*\{why\}/, 'the board names the folder and the reason');
+  for (const cause of ['missing', 'empty', 'unresolved', 'unknown']) {
+    const keyLines = all.filter((l) => l.includes(`'orch.noNodeModules.${cause}'`));
+    assert.equal(keyLines.length, 2, `pl + en for ${cause}`);
+    if (cause === 'unresolved') for (const l of keyLines) assert.match(l, /\{pkg\}/, 'names the missing package');
+  }
+  const failLines = all.filter((l) => l.includes("'orch.fail.noNodeModules'"));
+  assert.equal(failLines.length, 2);
+  for (const l of failLines) assert.match(l, /\{why\}/);
+  const related = all.filter((l) => /'orch\.(noNodeModules|fail\.noNodeModules|recover\.ask\.depsLocked)/.test(l));
+  for (const l of related) assert.doesNotMatch(l, /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, 'Polish without diacritics');
 });
 
 // ---- the install -----------------------------------------------------------------

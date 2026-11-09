@@ -40,6 +40,8 @@
 
 const fs = require('fs');
 const path = require('path');
+// Walks of node_modules use the non-asar fs (src/plainFs.js).
+const { plainFs } = require('./plainFs');
 const { execFile, exec } = require('child_process');
 
 const WORKTREE_DIR = '.luna-worktrees';
@@ -409,7 +411,7 @@ function linksIn(dir, fsImpl) {
  * git would otherwise delete THROUGH it and empty the target.
  * @returns {{ok:true, unlinked:string[]} | {ok:false, detail:string}}
  */
-function unlinkDependencyLinks(root, fsImpl = fs) {
+function unlinkDependencyLinks(root, fsImpl = plainFs()) {
   const unlinked = [];
   for (const dir of dependencyDirs(root, fsImpl)) {
     for (const link of linksIn(dir, fsImpl)) {
@@ -436,7 +438,7 @@ function unlinkDependencyLinks(root, fsImpl = fs) {
  * @param {typeof fs} [fsImpl]
  * @returns {string[]} the unlinked paths
  */
-function unlinkNodeModulesLinks(root, fsImpl = fs) {
+function unlinkNodeModulesLinks(root, fsImpl = plainFs()) {
   const candidates = [path.join(root, NODE_MODULES)];
   try {
     for (const entry of fsImpl.readdirSync(root, { withFileTypes: true })) {
@@ -485,7 +487,7 @@ function unlinkNodeModulesLinks(root, fsImpl = fs) {
  */
 async function removeWorktree(repoPath, root, deps = {}) {
   const execImpl = deps.execImpl || execFile;
-  const fsImpl = deps.fsImpl || fs;
+  const fsImpl = deps.fsImpl || plainFs();
   const status = await runGit(root, ['status', '--porcelain'], execImpl);
   if (!status.ok) return { ok: false, error: 'gitFailed', detail: gitDetail(status) };
   if (status.stdout.trim()) return { ok: false, error: 'dirty', detail: firstLine(status.stdout) };

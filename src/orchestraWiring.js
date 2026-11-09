@@ -228,6 +228,7 @@ function sessionDeps(ctx) {
     // time across every run), checked before a worker starts or a verify runs.
     installDeps: (root, opts) => orchestraDeps.installWorktreeDeps(root, { fresh: !!(opts && opts.fresh) }),
     checkDeps: (root) => orchestraDeps.checkNodeModules(root),
+    depsBusy: (root) => orchestraDeps.installInFlight(root),
     // Slice 4 supervisor. Package verifies of every project's run share one
     // serial queue (verifyQueue.js); hooks feed the board's "waiting to verify".
     finishPackage: (pkg, hooks) =>
@@ -371,7 +372,7 @@ function reportDeps(projectId, ctx, self) {
       // The whole run waits for Mati: say so even with the board closed.
       // Not when the recovery playbook's ask already said it (orchestraRecover.js).
       if (kind === 'noNodeModules' && !(data && data.asked) && ctx.readUiPrefs().notificationsEnabled) {
-        ctx.toast(TOAST_TITLE, orchestraDeps.noNodeModulesText((data && data.dir) || '?'));
+        ctx.toast(TOAST_TITLE, orchestraDeps.noNodeModulesText((data && data.dir) || '?', { cause: data && data.cause, missing: data && data.missing }));
       }
       if (ctx.readUiPrefs().voiceEnabled === false) return;
       if (kind === 'done') ctx.playCue('voice.done');

@@ -57,6 +57,8 @@ const { createPowerFlow } = require('./orchestraPower');
 const { createPowerCtl } = require('./powerctl');
 const { createSleepWatch, sleepCredit, recordSleep } = require('./orchestraSleep');
 const { createRecoverer } = require('./orchestraRecover');
+const { createHoldWatch } = require('./orchestraHoldWatch');
+const { holdCause } = require('./orchestraDeps');
 // Free God Mode v2 plan runs: lockdown + branches, start, view (logic lives there).
 const planLaunch = require('./orchestraPlanRunLaunch');
 const planStart = require('./orchestraPlanRunStart');
@@ -418,6 +420,27 @@ function createOrchestra(deps) {
   // Launches wait a little right after a system resume.
   const resumeGate = createResumeGate({ now });
   let resumeTimer = null;
+  // A 'noNodeModules' hold checks its folders again every minute and resumes
+  // on its own once they pass (orchestraHoldWatch.js).
+  const holdWatch = createHoldWatch({
+    isHeld: () => !!(plan && plan.hold && plan.hold.reason === 'noNodeModules' && !plan.killed),
+    dirs: () => heldDirs(),
+    check: (dir) => checkDeps(dir),
+    // orchestraDeps.installInFlight: no resume while an install fills the folder.
+    busy: (dir) => !!(deps.depsBusy && deps.depsBusy(dir)),
+    resume: () => (plan ? resumeRun({ planId: plan.id }) : { ok: false, error: 'noPlan' }),
+    onStill: (res) => {
+      if (!plan || !plan.hold || !res.dir) return;
+      const next = { ...plan.hold, ...holdFields(res) };
+      if (next.dir === plan.hold.dir && next.detail === plan.hold.detail && next.cause === plan.hold.cause) return;
+      plan.hold = next;
+      commit();
+    },
+    intervalMs: deps.holdRecheckMs,
+    setTimer: (fn, ms) => setTimer(fn, ms),
+    clearTimer: (t) => clearTimer(t),
+    log,
+  });
   // The last "model X answered by Y" a free run logged (onFreeRoute).
   let lastFreeRoute = null;
   let scheduleTimer = null;
@@ -535,7 +558,7 @@ function createOrchestra(deps) {
     },
     resumeHeld: () => resumeHeldRun(),
     // The automatic install did not fix the hold: the usual message (no second toast).
-    holdUnfixed: (res, asked) => onRunEvent('noNodeModules', { dir: res.dir, detail: res.detail || null, asked }),
+    holdUnfixed: (res, asked) => onRunEvent('noNodeModules', { ...holdFields(res), asked }),
     refinishRun: () => {
       if (!plan) return;
       // The retried pass may still sleep / shut the PC down when done.
@@ -716,7 +739,17 @@ function createOrchestra(deps) {
       settled: plan.settled,
       pausedUntil: plan.pausedUntil,
       // A machine problem holding the whole run ('noNodeModules'); Resume clears it.
-      hold: plan.hold ? { reason: plan.hold.reason, dir: plan.hold.dir, detail: plan.hold.detail || null, at: plan.hold.at } : null,
+      hold: plan.hold
+        ? {
+          reason: plan.hold.reason,
+          dir: plan.hold.dir,
+          detail: plan.hold.detail || null,
+          // Why node_modules fails ('missing' | 'empty' | 'unresolved') and the missing package.
+          cause: plan.hold.cause || null,
+          missing: plan.hold.missing || null,
+          at: plan.hold.at,
+        }
+        : null,
       scheduledAt: plan.scheduledAt,
       // The morning report's Timeline (orchestraReport.js).
       runStartedAt: plan.runStartedAt || null,
@@ -862,6 +895,7 @@ function createOrchestra(deps) {
     lastActivity.clear();
     if (resumeTimer) clearTimer(resumeTimer);
     resumeTimer = null;
+    holdWatch.cancel();
     clearSchedule();
   }
 
@@ -1405,15 +1439,29 @@ function createOrchestra(deps) {
   function holdRun(res) {
     // A killed run holds nothing: Retry checks again.
     if (plan.hold || plan.killed) return;
-    plan.hold = { reason: 'noNodeModules', dir: res.dir, detail: res.detail || null, at: now() };
+    plan.hold = { reason: 'noNodeModules', ...holdFields(res), at: now() };
+    // Fixed by hand or by a late install: the run resumes on its own.
+    holdWatch.arm();
     // The playbook installs the package worktree's dependencies and resumes;
     // Mati is told only when it cannot.
-    if (!recover.onHold(res)) onRunEvent('noNodeModules', { dir: res.dir, detail: res.detail || null });
+    if (!recover.onHold(res)) onRunEvent('noNodeModules', holdFields(res));
+  }
+
+  /** What a hold / its message carries from a failed checkNodeModules. */
+  function holdFields(res) {
+    return { dir: res.dir, detail: res.detail || null, cause: holdCause(res), missing: res.missing || null };
+  }
+
+  /** Every folder a 'noNodeModules' hold is about: its own and each held package's. */
+  function heldDirs() {
+    if (!plan || !plan.hold) return [];
+    return [...new Set([plan.hold.dir, ...plan.packages.filter(isHeld).map((p) => p.root)].filter(Boolean))];
   }
 
   /** Drops the hold and every package's waiting flag (restart, kill). */
   function releaseHold() {
     plan.hold = null;
+    holdWatch.cancel();
     plan.packages = plan.packages.map((p) =>
       isHeld(p) ? { ...p, awaitingDeps: false, heldResume: null, heldLaunch: false, heldRetry: false } : p,
     );
@@ -2633,16 +2681,18 @@ function createOrchestra(deps) {
     if (plan.pausedUntil) return { ok: false, error: 'paused' };
     if (isBusy()) return { ok: false, error: 'busy' };
     const waiting = plan.packages.filter(isHeld);
-    const dirs = [...new Set([plan.hold.dir, ...waiting.map((p) => p.root)].filter(Boolean))];
-    for (const dir of dirs) {
+    for (const dir of heldDirs()) {
       const res = checkDeps(dir);
       if (!res.ok) {
-        plan.hold = { ...plan.hold, dir: res.dir, detail: res.detail || null };
+        plan.hold = { ...plan.hold, ...holdFields(res) };
+        // Still broken: the watch keeps checking and resumes once it is fixed.
+        holdWatch.arm();
         commit();
         return { ok: false, error: 'noNodeModules', plan: view() };
       }
     }
     plan.hold = null;
+    holdWatch.cancel();
     onRunEvent('resumed', { reason: 'noNodeModules' });
     for (const p of waiting) resumeHeld(p.id);
     commit();

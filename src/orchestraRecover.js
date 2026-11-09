@@ -13,6 +13,8 @@
 //   cause          what it looks like                     automatic action
 //   depsMissing    'Cannot find module' / empty            npm ci --ignore-scripts IN THE
 //                  node_modules in verify or the hold      PACKAGE WORKTREE, verify again
+//                                                          (a held file: temp-folder install;
+//                                                          still failing asks 'depsLocked')
 //   secretFound    the pre-push scan found key shapes      one fix-up worker round
 //   pushBlocked    GH013 push rejection                    one fix-up worker round, push again
 //   branchTaken    the branch name exists remotely         push under a suffixed name
@@ -67,6 +69,11 @@ const STEP_WAKE_GRACE_MS = VERIFY_TIMEOUT_MS + KILL_GRACE_MS + 5 * MIN;
 const MAX_LOG_CHARS = 20000;
 const MAX_TRIED_CHARS = 160;
 const BRANCH_RE = /^(luna|luna-free|luna-plan)\/[a-z0-9-]{1,64}$/;
+// The last line of an install that could not get around a file LunaCore
+// holds open (orchestraDeps.js LOCKED_TEXT): the ask says to restart LunaCore.
+const LOCKED_RE = /locked by LunaCore/i;
+// Causes with an ask text but no playbook row of their own.
+const ASK_ONLY_CAUSES = Object.freeze(['depsLocked']);
 
 /**
  * The playbook: cause -> automatic action and how often it may run per
@@ -389,16 +396,20 @@ function createRecoverer(deps) {
     log(`[recover] ${id}: unknown stall cause (${stage || '?'}) - no playbook entry, stalled as before. Output (secrets redacted):\n${text || '(none)'}`);
   }
 
-  /** ONE notification per cause (since the last manual Retry), pl + en. */
+  /**
+   * ONE notification per cause (since the last manual Retry), pl + en. A
+   * depsMissing whose install (temp-folder route included) failed on a file
+   * LunaCore itself holds asks as 'depsLocked': restarting LunaCore is the fix.
+   */
   function ask(pkg, cause) {
-    if (askedFor(pkg.stallHistory, cause)) return false;
-    const tried = sinceRetry(pkg.stallHistory)
-      .filter((e) => e.kind === 'recover' && e.reason === cause)
-      .map((e) => String(e.detail || '').slice(0, MAX_TRIED_CHARS));
-    deps.record(pkg.id, { at: now(), kind: 'ask', reason: cause, detail: tried.join('; ').slice(0, MAX_TRIED_CHARS) || null });
-    const text = askText(cause, { pkg: pkg.id, dir: pkg.root || '?', branch: pkg.branch || '?' }, deps.texts);
-    log(`[recover] ${pkg.id}: ${cause} still there after ${tried.length} automatic fix(es) - asking once`);
-    call(deps.notify, { pkgId: pkg.id, cause, tried, text });
+    const entries = sinceRetry(pkg.stallHistory).filter((e) => e.kind === 'recover' && e.reason === cause);
+    const askCause = cause === 'depsMissing' && entries.some((e) => LOCKED_RE.test(String(e.detail || ''))) ? 'depsLocked' : cause;
+    if (askedFor(pkg.stallHistory, askCause)) return false;
+    const tried = entries.map((e) => String(e.detail || '').slice(0, MAX_TRIED_CHARS));
+    deps.record(pkg.id, { at: now(), kind: 'ask', reason: askCause, detail: tried.join('; ').slice(0, MAX_TRIED_CHARS) || null });
+    const text = askText(askCause, { pkg: pkg.id, dir: pkg.root || '?', branch: pkg.branch || '?' }, deps.texts);
+    log(`[recover] ${pkg.id}: ${askCause} still there after ${tried.length} automatic fix(es) - asking once`);
+    call(deps.notify, { pkgId: pkg.id, cause: askCause, tried, text });
     return true;
   }
 
@@ -753,6 +764,7 @@ function createRecoverer(deps) {
 
 module.exports = {
   PLAYBOOK,
+  ASK_ONLY_CAUSES,
   BACKOFF_MS,
   WAKE_RETRY_MS,
   WAKE_WINDOW_MS,

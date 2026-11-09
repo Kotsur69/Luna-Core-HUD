@@ -27,6 +27,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { plainFs } = require('./plainFs');
 
 const { validRemote } = require('./projectsync');
 const { REPO_OWNER } = require('./update');
@@ -88,7 +89,9 @@ async function removeClonedFolder(target) {
   const st = await fs.promises.lstat(target).catch((err) => (err && err.code === 'ENOENT' ? null : Promise.reject(err)));
   if (!st) return; // git already cleaned up after itself
   if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('not a plain folder, left alone');
-  await fs.promises.rm(target, { recursive: true, force: true, maxRetries: RM_RETRIES, retryDelay: RM_RETRY_DELAY_MS });
+  // The plain fs: Electron's asar-patched fs would open any *.asar in the
+  // checkout as an archive and keep it locked (src/plainFs.js).
+  await plainFs().promises.rm(target, { recursive: true, force: true, maxRetries: RM_RETRIES, retryDelay: RM_RETRY_DELAY_MS });
 }
 
 /** A failed clone -> the status the phone shows. */
