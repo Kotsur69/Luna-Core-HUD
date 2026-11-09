@@ -123,7 +123,17 @@ function failText(code, detail) {
   if (detail && (code === 'outsidePlanFolder' || code === 'notOnBase' || code === 'mergeConflict')) {
     return `${t(`orch.fail.${code}`)} ${detail}`;
   }
+  // A Resume refused for node_modules says why it is still broken.
+  if (code === 'noNodeModules') return t('orch.fail.noNodeModules', { why: holdWhy(plan && plan.hold) });
   return t(`orch.fail.${FAIL_CODES.has(code) ? code : 'failed'}`);
+}
+
+/** Why a 'noNodeModules' hold holds: missing / empty / which package is not installed. */
+function holdWhy(hold) {
+  const cause = hold ? hold.cause : null;
+  if (cause === 'unresolved' && hold.missing) return t('orch.noNodeModules.unresolved', { pkg: hold.missing });
+  if (cause === 'missing' || cause === 'empty') return t(`orch.noNodeModules.${cause}`);
+  return t('orch.noNodeModules.unknown');
 }
 
 function warningText(w) {
@@ -590,10 +600,13 @@ function scheduledRow() {
   return row;
 }
 
-/** The run is held for an empty node_modules: the message and Resume (main checks again). */
+/**
+ * The run is held for a broken node_modules: the message with the real reason
+ * and Resume (main checks again; it also checks every minute on its own).
+ */
 function holdRow() {
   const row = el('div', 'orchestra__options');
-  row.append(el('span', 'orchestra__msg is-bad', t('orch.noNodeModules', { repo: plan.hold.dir || '?' })));
+  row.append(el('span', 'orchestra__msg is-bad', t('orch.noNodeModules', { repo: plan.hold.dir || '?', why: holdWhy(plan.hold) })));
   const btn = el('button', 'pad-send', t('orch.resume'));
   btn.type = 'button';
   btn.disabled = phase !== 'idle';

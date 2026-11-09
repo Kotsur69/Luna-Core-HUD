@@ -21,9 +21,10 @@ export function pkgStateKey(pkg) {
 }
 
 // Causes the recovery playbook (src/orchestraRecover.js) can ask about; each
-// has an orch.recover.ask.<cause> text in pl and en.
+// has an orch.recover.ask.<cause> text in pl and en. 'depsLocked' is an ask
+// only (a depsMissing whose install hit a file LunaCore holds open).
 export const RECOVER_ASK_CAUSES = [
-  'depsMissing', 'secretFound', 'pushBlocked', 'branchTaken', 'network', 'auth',
+  'depsMissing', 'depsLocked', 'secretFound', 'pushBlocked', 'branchTaken', 'network', 'auth',
   'verifyTimeout', 'verifyLoad', 'stepHung', 'usageLimit', 'wakeGit',
 ];
 
