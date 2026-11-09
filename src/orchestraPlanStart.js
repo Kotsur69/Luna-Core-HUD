@@ -66,17 +66,23 @@ function planTarget(ctx, session) {
  * @param {{registry: object, toolEnv: () => object, send: Function}} ctx
  * @param {{projectId?: string|null, profileId?: string}} session
  * @param {{projectId: string|null, repoPath: string}} target planTarget()'s answer
- * @param {{picked: number[]|null, effort?: unknown}} opts
+ * @param {{picked: number[]|null, effort?: unknown, planner?: unknown}} opts
  */
-async function runPlan(ctx, session, target, { picked, effort }) {
+async function runPlan(ctx, session, target, { picked, effort, planner }) {
+  // D1 "Planner: Claude / Free": exactly 'free' picks the free planner on the
+  // coding profile's env; anything else is today's Claude planner.
+  const free = planner === 'free';
+  const env = free ? (ctx.freePlannerEnv ? ctx.freePlannerEnv() : null) : ctx.toolEnv();
+  if (!env) return { ok: false, error: 'noFreeProfile' };
   const res = await ctx.registry.ensure(target.projectId).makePlan({
     projectId: session.projectId,
     repoPath: target.repoPath,
     profileId: session.profileId,
-    env: ctx.toolEnv(),
+    env,
     todoAts: picked,
     // One of the four levels only; anything else plans at the default high.
     plannerEffort: plannerEffortOf(effort),
+    ...(free ? { planner: 'free' } : {}),
   });
   if (res.ok) ctx.send('orchestra:changed', { projectId: target.projectId, view: res.plan });
   return res;

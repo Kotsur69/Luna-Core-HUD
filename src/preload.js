@@ -614,18 +614,21 @@ contextBridge.exposeInMainWorld('lunacore', {
   // Passed as-is: main validates and fails closed on a bad shape.
   // effort: the planner's --effort level; main falls back to 'high' for
   // anything that is not one of src/efforts.js EFFORTS.
-  planOrchestra: (sessionId, todoAts, effort) =>
+  // planner: 'claude' | 'free' (D1); main treats anything but 'free' as Claude.
+  planOrchestra: (sessionId, todoAts, effort, planner) =>
     ipcRenderer.invoke(
       'orchestra:plan',
       typeof sessionId === 'string' ? sessionId : null,
       Array.isArray(todoAts) ? todoAts : null,
       typeof effort === 'string' ? effort : null,
+      planner === 'free' ? 'free' : 'claude',
     ),
   /**
    * Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js). Two fixed
    * actions, two fixed channels - main validates every field:
    *   'start'   {request, planner: 'claude'|'free', sessionId?, repoPath?}
    *   'openDoc' {planId, id, projectId?} - a written plan doc
+   *   'approve' {planId, projectId?} - "Approve plan": merge + to-dos (F4a)
    * Promise<{ok, plan?, error?}>.
    */
   orchestraPlanRun: (action, payload) => {
@@ -645,6 +648,9 @@ contextBridge.exposeInMainWorld('lunacore', {
         typeof p.id === 'string' ? p.id : null,
         orchestraScope(p.projectId),
       );
+    }
+    if (action === 'approve') {
+      return ipcRenderer.invoke('orchestra:planRun:approve', typeof p.planId === 'string' ? p.planId : null, orchestraScope(p.projectId));
     }
     return Promise.resolve({ ok: false, error: 'badAction' });
   },

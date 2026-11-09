@@ -22,6 +22,9 @@ const DEFAULT_PLANNER_EFFORT = 'high';
 let cards = null;
 /** The planner --effort chosen in the footer (ui pref orchestraPlannerEffort). */
 let plannerEffort = DEFAULT_PLANNER_EFFORT;
+/** D1 "Planner: Claude / Free" for a Build run; Claude unless Mati picks Free. */
+const BUILD_PLANNERS = ['claude', 'free'];
+let buildPlanner = 'claude';
 let manual = 0;
 let selected = new Set();
 const seen = new Set();
@@ -84,6 +87,26 @@ function button(label, onClick, disabled) {
   return b;
 }
 
+/** "Planner: Claude / Free" (D1). Free plans on the coding profile; the run is free-only. */
+function plannerSelect(disabled) {
+  const label = el('label', 'orchestra__pick-effort');
+  label.title = t('orch.pick.planner.hint');
+  label.append(el('span', '', t('orch.pick.planner')));
+  const sel = el('select', 'profile-select');
+  for (const p of BUILD_PLANNERS) {
+    const opt = el('option', '', t(`orch.pick.planner.${p}`));
+    opt.value = p;
+    sel.append(opt);
+  }
+  sel.value = buildPlanner;
+  sel.disabled = disabled;
+  sel.addEventListener('change', () => {
+    buildPlanner = BUILD_PLANNERS.includes(sel.value) ? sel.value : 'claude';
+  });
+  label.append(sel);
+  return label;
+}
+
 /** "Planner effort" label + select; a change is saved as the ui pref. */
 function effortSelect(disabled) {
   const label = el('label', 'orchestra__pick-effort');
@@ -127,7 +150,7 @@ function cardRow(card, missing, disabled, repaint) {
 
 /**
  * The picker block for #orchestra-body.
- * @param {{disabled:boolean, canCancel:boolean, onPlan:(ats:number[], effort:string) => void,
+ * @param {{disabled:boolean, canCancel:boolean, onPlan:(ats:number[], effort:string, planner:string) => void,
  *   onCancel:() => void, repaint:() => void}} opts
  * @returns {HTMLElement}
  */
@@ -174,8 +197,9 @@ export function pickerView({ disabled, canCancel, onPlan, onCancel, repaint }) {
   const foot = el('div', 'orchestra__pick-bar');
   const planDisabled = disabled || !count;
   foot.append(
+    plannerSelect(planDisabled),
     effortSelect(planDisabled),
-    button(t('orch.pick.plan', { n: count }), () => onPlan(selectedAts(), plannerEffort), planDisabled),
+    button(t('orch.pick.plan', { n: count }), () => onPlan(selectedAts(), plannerEffort, buildPlanner), planDisabled),
   );
   if (canCancel) foot.append(button(t('orch.pick.back'), onCancel, disabled));
   box.append(foot);

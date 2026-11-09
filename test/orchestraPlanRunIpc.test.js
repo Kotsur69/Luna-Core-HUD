@@ -20,9 +20,13 @@ function fakeController(state) {
     planWait: () => null,
     isRunning: () => false,
     isBusy: () => false,
-    repoPath: () => null,
+    repoPath: () => state.repoPath || null,
     planningRepo: () => null,
     ownsSession: () => false,
+    notePlanApproved(planId, res) {
+      this.approved = [planId, res];
+      return true;
+    },
     async makePlanRun(ctx) {
       this.calls.push(ctx);
       if (state.fail) return { ok: false, error: state.fail };
@@ -32,7 +36,7 @@ function fakeController(state) {
   };
 }
 
-function setup({ planRunEnv = () => ({ ANTHROPIC_MODEL: 'auto:easy' }), fail = null, withGit = true } = {}) {
+function setup({ planRunEnv = () => ({ ANTHROPIC_MODEL: 'auto:easy' }), fail = null, withGit = true, approvePlan = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-planrun-ipc-'));
   const repo = path.join(root, 'repo');
   fs.mkdirSync(repo);
@@ -42,7 +46,7 @@ function setup({ planRunEnv = () => ({ ANTHROPIC_MODEL: 'auto:easy' }), fail = n
 
   const handlers = new Map();
   const ipcMain = { handle: (ch, fn) => handlers.set(ch, fn), on: () => {} };
-  const state = { view: null, fail };
+  const state = { view: null, fail, repoPath: repo, block: null };
   const controllers = {};
   const registry = createOrchestraRegistry({
     makeController: (projectId) => {
@@ -62,7 +66,8 @@ function setup({ planRunEnv = () => ({ ANTHROPIC_MODEL: 'auto:easy' }), fail = n
     toolEnv: () => ({ PATH: 'tool' }),
     planRunEnv,
     maxTodoItems: 5,
-    godModeBlock: () => null,
+    godModeBlock: () => state.block,
+    ...(approvePlan ? { approvePlan } : {}),
     send: (channel, payload) => out.sent.push([channel, payload]),
     playCue: (key) => out.cues.push(key),
     openExternal: () => {},
@@ -148,4 +153,42 @@ test('openDoc: only a doc of the run view, as a plain file in the run copy folde
   fs.mkdirSync(path.join(dir, 'CRITIQUE.md'));
   assert.equal((await s.invoke('orchestra:planRun:openDoc', 'run1', 'critique', opts)).error, 'noDoc');
   assert.equal(s.out.opened.length, 1);
+});
+
+test('approve: ids and runs checked in main; the approver gets the run repo + view; ok notes the run', async (t) => {
+  const calls = [];
+  const approvePlan = async (args) => {
+    calls.push(args);
+    return { ok: true, created: 2, skipped: 0 };
+  };
+  const s = setup({ approvePlan });
+  t.after(s.cleanup);
+  const opts = { projectId: 'alpha' };
+  assert.equal((await s.invoke('orchestra:planRun:approve', '../x', opts)).error, 'badId');
+  assert.equal((await s.invoke('orchestra:planRun:approve', 42, opts)).error, 'badId');
+  assert.equal((await s.invoke('orchestra:planRun:approve', 'run1', 'nope')).error, 'badPayload');
+  assert.equal((await s.invoke('orchestra:planRun:approve', 'run1', opts)).error, 'noPlan', 'no run yet');
+  assert.equal(calls.length, 0);
+
+  await s.invoke('orchestra:planRun:start', { request: 'plan it', planner: 'claude', sessionId: 'tab-a' });
+  assert.equal((await s.invoke('orchestra:planRun:approve', 'other', opts)).error, 'noPlan', 'another plan id');
+  s.out.sent.length = 0;
+  const res = await s.invoke('orchestra:planRun:approve', 'run1', opts);
+  assert.deepEqual(res, { ok: true, created: 2, skipped: 0 });
+  assert.deepEqual(calls, [{ projectId: 'alpha', repoPath: s.repo, view: s.state.view }]);
+  assert.deepEqual(s.controllers.alpha.approved, ['run1', res]);
+  assert.ok(s.out.sent.some(([ch]) => ch === 'orchestra:changed'));
+});
+
+test('approve: refused when God Mode is blocked or no approver is wired', async (t) => {
+  const blocked = setup({ approvePlan: async () => ({ ok: true }) });
+  t.after(blocked.cleanup);
+  await blocked.invoke('orchestra:planRun:start', { request: 'plan it', planner: 'claude', sessionId: 'tab-a' });
+  blocked.state.block = { ok: false, error: 'godModeOff' };
+  assert.deepEqual(await blocked.invoke('orchestra:planRun:approve', 'run1', { projectId: 'alpha' }), { ok: false, error: 'godModeOff' });
+
+  const bare = setup();
+  t.after(bare.cleanup);
+  await bare.invoke('orchestra:planRun:start', { request: 'plan it', planner: 'claude', sessionId: 'tab-a' });
+  assert.deepEqual(await bare.invoke('orchestra:planRun:approve', 'run1', { projectId: 'alpha' }), { ok: false, error: 'unavailable' });
 });

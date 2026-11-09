@@ -51,6 +51,8 @@ const orchestraRecover = require('./orchestraRecover');
 const planRunStart = require('./orchestraPlanRunStart');
 const planRunView = require('./orchestraPlanRunView');
 const planLaunch = require('./orchestraPlanRunLaunch');
+const { validateRunSlug, planPath: planDocPath } = require('./orchestraPlanRun');
+const { sizePackages } = require('./orchestraPlanBuild');
 
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 // How much of a worker's transcript is read to name the tool a permission
@@ -515,25 +517,61 @@ function planRunDeps(ctx) {
         }
       },
       sizing: (text, { root, splitsSent, planPath }) =>
-        planRunView.planSizingStep(text, {
-          repoRoot: root,
-          splitsSent,
-          planPath,
-          // Model-written paths: only files inside the worktree are looked at.
-          fileExists: (_abs, rel) => {
-            const abs = insideRealRoot(root, rel);
-            try {
-              return !!abs && fs.lstatSync(abs).isFile();
-            } catch {
-              return false;
-            }
-          },
-          lineCount: (_abs, rel) => {
-            const abs = insideRealRoot(root, rel);
-            const body = abs ? readCapped(abs, MAX_SIZING_FILE_BYTES) : null;
-            return body === null ? Number.MAX_SAFE_INTEGER : body.split(/\r?\n/).length;
-          },
-        }),
+        planRunView.planSizingStep(text, { splitsSent, planPath, ...sizingFs(root) }),
+    },
+  };
+}
+
+/**
+ * The fs helpers strict task sizing (planTasks.js) reads a tree with.
+ * Model-written paths: only files inside `root` are looked at.
+ * @param {string} root a worktree or the repo
+ */
+function sizingFs(root) {
+  return {
+    repoRoot: root,
+    fileExists: (_abs, rel) => {
+      const abs = insideRealRoot(root, rel);
+      try {
+        return !!abs && fs.lstatSync(abs).isFile();
+      } catch {
+        return false;
+      }
+    },
+    lineCount: (_abs, rel) => {
+      const abs = insideRealRoot(root, rel);
+      const body = abs ? readCapped(abs, MAX_SIZING_FILE_BYTES) : null;
+      return body === null ? Number.MAX_SAFE_INTEGER : body.split(/\r?\n/).length;
+    },
+  };
+}
+
+// The worktree state an auto-split planner sees: short, never the diff itself.
+const MAX_STATE_CHARS = 4000;
+
+/**
+ * Free God Mode v2 build runs (orchestraPlanBuild.js / orchestraAutoSplit.js):
+ * an approved plan's PLAN.md, strict sizing against the repo, the free
+ * planner's env (the coding profile) and a stuck worktree's state.
+ */
+function planBuildDeps(ctx) {
+  return {
+    // Only docs/plans/<slug>/PLAN.md inside the repo, for a valid slug.
+    readPlanDoc: (repoPath, slug) => {
+      if (!validateRunSlug(slug).ok) return null;
+      const abs = insideRealRoot(repoPath, planDocPath(slug));
+      return abs ? readCapped(abs, MAX_PLAN_DOC_BYTES) : null;
+    },
+    sizePackages: (repoPath, packages) => sizePackages(packages, sizingFs(repoPath)),
+    freePlannerEnv: () => (ctx.freePlannerEnv ? ctx.freePlannerEnv() : null),
+    worktreeState: async (root, baseSha) => {
+      const { runGit } = require('./worktrees');
+      const stat = baseSha ? await runGit(root, ['diff', '--stat', baseSha, '--']) : { ok: false };
+      const status = await runGit(root, ['status', '--short']);
+      return {
+        diffStat: stat.ok ? stat.stdout.slice(0, MAX_STATE_CHARS) : '',
+        status: status.ok ? status.stdout.slice(0, MAX_STATE_CHARS) : '',
+      };
     },
   };
 }
@@ -690,6 +728,7 @@ function builderDeps(projectId, ctx, self) {
  *   projects: () => object[], resolveStoredPath: Function, flushTodos: () => void,
  *   usageLimits: () => object[], accountFailover: Function, freeProfileId: () => string|null,
  *   planRunProfile?: () => {id:string, command:string, env:object}|null,
+ *   freePlannerEnv?: () => object|null,
  *   playCue: (key:string) => void, log: (line:string) => void, logError: (line:string) => void,
  *   store?: {loadRun:Function, saveRun:Function},
  * }} ctx
@@ -710,6 +749,7 @@ function makeOrchestraDeps(projectId, ctx, shared = {}) {
     ...builderDeps(projectId, ctx, self),
     ...recoverDeps(ctx),
     ...planRunDeps(ctx),
+    ...planBuildDeps(ctx),
     // The watchdog interval (main.js ticks the registry at it): a tick much
     // later than this means the PC slept (orchestraSleep.js).
     tickMs: WATCHDOG_TICK_MS,

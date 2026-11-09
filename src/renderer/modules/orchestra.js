@@ -56,6 +56,9 @@ const FAIL_CODES = new Set([
   // Free God Mode v2 plan runs (orchestraPlanRun.js).
   'noPlanProfile', 'noLockdown', 'badTopics', 'emptyRequest', 'requestTooLong', 'badPlanner', 'badRepo',
   'unknownRepo', 'noDoc',
+  // "Approve plan" (orchestraPlanApprove.js, F4a).
+  'notPlanRun', 'notReady', 'noPlanDoc', 'noBase', 'unsafeBranch', 'notOnBase', 'noBranch',
+  'outsidePlanFolder', 'mergeConflict', 'mergeInProgress', 'gitFailed', 'noTasks', 'todoWriteFailed', 'badId', 'unavailable',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).
@@ -72,6 +75,8 @@ let plan = null;
 let phase = 'idle';
 /** Error code of the last plan/launch attempt, shown above the board. */
 let failure = null;
+/** What an Approve plan refusal names (paths, branch); shown after the reason. */
+let failureDetail = null;
 /**
  * Planning parked on a spent Claude limit (main's orchestraPlanWait.js):
  * {state:'waiting'|'planning', resumeAt, window} or null.
@@ -110,12 +115,18 @@ function fmtMinutes(total) {
   return h ? t('orch.time.h', { h, m }) : t('orch.time.m', { m });
 }
 
-function failText(code) {
+function failText(code, detail) {
   if (code === 'repoBusy') return t('orch.err.repoBusy');
+  // Approve plan names what was in the way (paths, the branch on screen).
+  if (detail && (code === 'outsidePlanFolder' || code === 'notOnBase' || code === 'mergeConflict')) {
+    return `${t(`orch.fail.${code}`)} ${detail}`;
+  }
   return t(`orch.fail.${FAIL_CODES.has(code) ? code : 'failed'}`);
 }
 
 function warningText(w) {
+  // Free planner (orchestraPlanBuild.js): a package still too big after one resize round.
+  if (w.code === 'sizing') return t('orch.warn.sizing', { id: w.id, reasons: (w.reasons || []).join('; ') });
   if (w.code === 'uncovered') return t('orch.warn.uncovered', { list: w.texts.join('; ') });
   if (w.code === 'overlap') return t('orch.warn.overlap', { a: w.a, b: w.b, files: w.files.join(', ') });
   return t(`orch.warn.${w.code}`, { id: w.id, dep: w.dep });
@@ -317,7 +328,11 @@ function ladderLines(pkg) {
     out.push(t('orch.progress.autoRetry', { n: pkg.autoRetries }));
   }
   if (pkg.autoResumed) out.push(t('orch.progress.autoResumed'));
-  if (pkg.terminal) out.push(t('orch.progress.terminal'));
+  // Q8 auto-split (free-planned runs): being split, replaced, or made by one.
+  if (pkg.splitting) out.push(t('orch.progress.splitting'));
+  if (Array.isArray(pkg.splitInto) && pkg.splitInto.length) out.push(t('orch.progress.splitInto', { ids: pkg.splitInto.join(', ') }));
+  else if (pkg.terminal) out.push(t('orch.progress.terminal'));
+  if (pkg.splitOf) out.push(t('orch.progress.splitOf', { id: pkg.splitOf }));
   return out;
 }
 
@@ -472,7 +487,9 @@ function renderPlan() {
   // Always on top and usable during the run: the switches are live.
   body.append(runOptionsRow(plan, { disabled: optionsBusy, onToggle: setRunOption }));
   // A plan run: topics, progress, guard stalls, flagged tasks, doc links.
-  if (plan.planRun) body.append(planRunPanel(plan.planRun, { pkgErrorText, onOpenDoc: openPlanDoc, disabled: phase !== 'idle' }));
+  if (plan.planRun) {
+    body.append(planRunPanel(plan.planRun, { pkgErrorText, onOpenDoc: openPlanDoc, onApprove: approvePlan, disabled: phase !== 'idle' }));
+  }
   const est = plan.estimate;
   let line = t('orch.summary', {
     n: plan.packages.length,
@@ -482,6 +499,7 @@ function renderPlan() {
   });
   if (Number.isFinite(plan.costUsd)) line += ` · ${t('orch.cost', { usd: plan.costUsd.toFixed(2) })}`;
   if (plan.plannerEffort) line += ` · ${t('orch.plannerEffort', { effort: plan.plannerEffort })}`;
+  if (plan.buildPlanner === 'free') line += ` · ${t('orch.pick.planner.freeUsed')}`;
   body.append(el('div', 'orchestra__summary', line));
   body.append(el('div', 'orchestra__meta', t('orch.workers', { model: plan.workerModel, perm: plan.permissionMode })));
   const running = plan.packages.some(isActive);
@@ -622,7 +640,7 @@ function render() {
   if (strip) body.append(strip);
   if (phase === 'planning') body.append(msg(t('orch.planning')));
   renderPlanWait();
-  if (failure) body.append(msg(failText(failure), 'is-bad'));
+  if (failure) body.append(msg(failText(failure, failureDetail), 'is-bad'));
   if (picking && phase === 'idle') {
     body.append(runTypeSwitch({ mode: runMode, disabled: phase !== 'idle', onChange: setRunMode }));
   }
@@ -633,7 +651,7 @@ function render() {
       pickerView({
         disabled: phase !== 'idle',
         canCancel: !!plan,
-        onPlan: (ats, effort) => startPlanning(ats, effort),
+        onPlan: (ats, effort, planner) => startPlanning(ats, effort, planner),
         onCancel: () => {
           picking = false;
           render();
@@ -684,8 +702,9 @@ async function refetchAndRender() {
 /**
  * @param {number[]} ats the picker's ticked to-dos
  * @param {string} [effort] the planner --effort (main falls back to high)
+ * @param {'claude'|'free'} [planner] D1: who plans the build run
  */
-async function startPlanning(ats, effort) {
+async function startPlanning(ats, effort, planner) {
   if (phase !== 'idle') return;
   phase = 'planning';
   picking = false;
@@ -693,7 +712,7 @@ async function startPlanning(ats, effort) {
   render();
   let res;
   try {
-    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort);
+    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort, planner);
   } catch {
     res = { ok: false, error: 'failed' };
   }
@@ -762,6 +781,20 @@ async function startPlanRun(request, planner) {
     // Back to the form (the draft is kept), the error above it.
     picking = true;
   }
+  if (isOpen) render();
+}
+
+/**
+ * "Approve plan" (F4a): main merges the plan branch into the base and turns
+ * the unchecked tasks into to-dos. A refusal says why (with what was in the way).
+ */
+async function approvePlan() {
+  if (!plan) return;
+  const planId = plan.id;
+  const res = await act(() => window.lunacore.orchestraPlanRun('approve', { planId, projectId: board.project() }));
+  failureDetail = res && res.ok === false && typeof res.detail === 'string' ? res.detail.slice(0, 300) : null;
+  // The panel shows the outcome from the run's view (planRun.approved).
+  if (res && res.ok) await refetch();
   if (isOpen) render();
 }
 

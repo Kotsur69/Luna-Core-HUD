@@ -97,7 +97,16 @@ function planRunView(plan) {
     flagged: (Array.isArray(pr.flagged) ? pr.flagged : []).slice(0, MAX_FLAGGED),
     docs,
     ready: synthesis.length > 0 && synthesis.every((p) => p.state === 'pushed'),
+    // F4a: when "Approve plan" merged it and how many to-dos it made.
+    approved: normalizeApproved(pr.approved),
   };
+}
+
+/** A stored / live "Approve plan" outcome, or null. */
+function normalizeApproved(raw) {
+  if (!raw || typeof raw !== 'object' || !Number.isFinite(raw.at)) return null;
+  const n = (v) => (Number.isInteger(v) && v >= 0 ? Math.min(v, 1000) : 0);
+  return { at: raw.at, created: n(raw.created), skipped: n(raw.skipped) };
 }
 
 // eslint-disable-next-line no-control-regex
@@ -228,6 +237,7 @@ function normalizeStoredPlanRun(raw) {
     topics,
     saved: (Array.isArray(raw.saved) ? raw.saved : []).filter((id) => typeof id === 'string' && /^[a-z0-9-]{1,24}$/.test(id)).slice(0, 12),
     flagged,
+    ...(normalizeApproved(raw.approved) ? { approved: normalizeApproved(raw.approved) } : {}),
   };
 }
 

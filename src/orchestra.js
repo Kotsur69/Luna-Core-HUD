@@ -62,6 +62,25 @@ const planLaunch = require('./orchestraPlanRunLaunch');
 const planStart = require('./orchestraPlanRunStart');
 const planView = require('./orchestraPlanRunView');
 const { ROLE_SYNTHESIS, planPath: planDocPath } = require('./orchestraPlanRun');
+// Free God Mode v2 build runs: plan context, free planner, auto-split (logic lives there).
+const planBuild = require('./orchestraPlanBuild');
+const autoSplit = require('./orchestraAutoSplit');
+
+/**
+ * The runPlanner args. A Claude plan without plan docs gets exactly the args
+ * it always had; the free planner, plan docs and a follow-up request add keys.
+ */
+function plannerArgs({ cwd, env, openTodos, effort, planner, planDocs, extraPrompt }) {
+  return {
+    cwd,
+    env,
+    openTodos,
+    effort,
+    ...(planner === 'free' ? { planner: 'free' } : {}),
+    ...(planDocs && planDocs.length ? { planDocs } : {}),
+    ...(extraPrompt ? { extraPrompt } : {}),
+  };
+}
 
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
@@ -384,6 +403,8 @@ function createOrchestra(deps) {
   const lastActivity = new Map();
   /** pkgId -> scheduled automatic relaunch after a machinery failure */
   const retryTimers = new Map();
+  /** pkgIds whose auto-split planner call is in flight (Q8): the run stays open */
+  const splitting = new Set();
   /** pkgId -> automatic retries spent on a git that did not answer (orchestraLaunchRetry.js) */
   const transientRetries = new Map();
   // Launches wait a little right after a system resume.
@@ -650,6 +671,8 @@ function createOrchestra(deps) {
       // Run-level automatic fixes (integration retries, orchestraRecover.js).
       recoveries: Array.isArray(plan.recoveries) ? plan.recoveries.map((e) => ({ ...e })) : [],
       freeMode: plan.freeMode === true,
+      // D1: who planned this build run ('claude' for every older plan).
+      buildPlanner: plan.buildPlanner === 'free' ? 'free' : 'claude',
       // Plan runs (orchestraPlanRunView.js): topics, progress, stalls, flagged tasks, docs.
       planRun: planView.planRunView(plan),
       options: sup.normalizeOptions(plan.options),
@@ -707,6 +730,10 @@ function createOrchestra(deps) {
         verifyPhase: p.state === 'finishing' ? p.verifyPhase || null : null,
         scanFixup: p.scanFixup === true,
         pushFixup: p.pushFixup === true,
+        // Q8 auto-split: being split now, made by a split, replaced by a split.
+        splitting: p.splitting === true,
+        splitOf: p.splitOf || null,
+        splitInto: Array.isArray(p.splitInto) ? [...p.splitInto] : null,
       })),
     };
   }
@@ -818,16 +845,23 @@ function createOrchestra(deps) {
     if (planWaiter.isWaiting()) planWaiter.clear();
 
     const plannerEffort = plannerEffortOf(ctx.plannerEffort);
+    // D1: "Planner: Claude / Free". Plan to-dos bring their PLAN.md (F4b).
+    const planner = planBuild.plannerOf(ctx.planner);
+    const planDocs = readPlanDocs(ctx.repoPath, openTodos);
+    const callPlanner = (extraPrompt) =>
+      // The picker's planner effort rides in ctx too, so a limit-wait or
+      // account-failover replan plans at the same level.
+      deps.runPlanner(plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, planner, planDocs, extraPrompt }));
     busy = true;
     planningRepo = ctx.repoPath;
     try {
       const [res, dirty, baseBranch] = await Promise.all([
-        // The picker's planner effort rides in ctx too, so a limit-wait or
-        // account-failover replan plans at the same level.
-        deps.runPlanner({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort }),
+        callPlanner(null),
         deps.dirtyCount(ctx.repoPath),
         deps.baseBranchOf ? deps.baseBranchOf(ctx.repoPath) : null,
       ]);
+      // Only the Claude planner waits for its window; a free one just fails.
+      if (!res.ok && planner === 'free') return res;
       if (!res.ok) {
         const limits = deps.usageLimits ? deps.usageLimits() : [];
         const decision = planWaitDecision({ res, limits, now: now() });
@@ -843,7 +877,8 @@ function createOrchestra(deps) {
         planWaiter.arm(ctx, decision);
         return { ok: false, error: 'waiting', planWait: planWaiter.view() };
       }
-      const checked = validatePlan(res.raw, openTodos);
+      const built = await plannedPackages({ res, openTodos, planner, callPlanner, repoPath: ctx.repoPath });
+      const { checked } = built;
       const ownership = sup.normalizeOwnership(ctx.ownership);
       clearAllTimers();
       ownershipNudged.clear();
@@ -856,8 +891,10 @@ function createOrchestra(deps) {
         warnings: checked.warnings,
         errors: checked.errors,
         estimate: estimatePlan(checked.packages, openTodos),
-        costUsd: res.costUsd,
+        costUsd: built.costUsd,
         plannerEffort,
+        // A free planner makes a free-only run (D1) that may auto-split (Q8).
+        ...(planner === 'free' ? { buildPlanner: 'free' } : {}),
         dirty,
         workerModel: null,
         workerEffort: null,
@@ -895,6 +932,105 @@ function createOrchestra(deps) {
       busy = false;
       planningRepo = null;
     }
+  }
+
+  /** PLAN.md of every plan the to-dos came from (F4b), read in main. */
+  function readPlanDocs(repoPath, todos) {
+    if (!deps.readPlanDoc) return [];
+    return planBuild
+      .planSlugsOf(todos)
+      .map((slug) => ({ slug, text: deps.readPlanDoc(repoPath, slug) }))
+      .filter((d) => typeof d.text === 'string');
+  }
+
+  /** Strict sizing of packages against the repo; no fs helpers = accepted. */
+  const sizeOf = (repoPath, packages) => (deps.sizePackages ? deps.sizePackages(repoPath, packages) : { ok: true, failing: [] });
+
+  /**
+   * The planner's answer -> validated packages. The free planner also gets
+   * strict sizing with ONE resize round (flagged after that); every package
+   * built from plan to-dos links the plan and its acceptance tests.
+   */
+  async function plannedPackages({ res, openTodos, planner, callPlanner, repoPath }) {
+    const validate = (raw) => validatePlan(raw, openTodos);
+    let checked = validate(res.raw);
+    let costUsd = res.costUsd;
+    if (planner === 'free') {
+      const round = await planBuild.freeSizingRound({ checked, costUsd, rerun: callPlanner, validate, size: (pkgs) => sizeOf(repoPath, pkgs) });
+      checked = { ...round.checked, warnings: [...round.checked.warnings, ...round.warnings] };
+      costUsd = round.costUsd;
+    }
+    return { checked: { ...checked, packages: planBuild.withPlanLinks(checked.packages, openTodos) }, costUsd };
+  }
+
+  /**
+   * Q8: a free-planned package that stalled twice goes back to the free
+   * planner to be split (orchestraAutoSplit.js). Async; the package stays
+   * stalled (and the run open) until the answer is in. False = no free
+   * planner env, the stall is handled as usual.
+   */
+  function startAutoSplit(pkg, reason, detail) {
+    const env = deps.freePlannerEnv ? deps.freePlannerEnv() : null;
+    if (!env || splitting.has(pkg.id) || !deps.runPlanner) return false;
+    splitting.add(pkg.id);
+    patch(pkg.id, { splitting: true });
+    onRunEvent('autoSplit', { id: pkg.id, reason });
+    const planId = plan.id;
+    background(
+      runAutoSplit(planId, pkg.id, { reason, detail, env }).finally(() => splitting.delete(pkg.id)),
+      'autoSplit',
+    );
+    return true;
+  }
+
+  async function runAutoSplit(planId, id, { reason, detail, env }) {
+    const live = () => plan && plan.id === planId && !plan.killed;
+    const before = findPkg(id);
+    const worktree = deps.worktreeState && before.root ? await deps.worktreeState(before.root, before.baseSha) : null;
+    const todos = autoSplit.splitTodos(before, deps.readTodos(plan.projectId), plan.todoText);
+    const request = autoSplit.buildSplitRequest({ pkg: before, reason, detail, worktree });
+    const planDocs = readPlanDocs(plan.repoPath, todos);
+    const call = (extra) =>
+      deps.runPlanner(
+        plannerArgs({ cwd: plan.repoPath, env, openTodos: todos, effort: null, planner: 'free', planDocs, extraPrompt: extra ? `${request}\n${extra}` : request }),
+      );
+    const res = await call(null);
+    if (!live()) return;
+    let outcome = { ok: false, error: res.ok ? 'invalid' : res.error || 'failed' };
+    let warnings = [];
+    if (res.ok) {
+      const validate = (raw) => validatePlan(raw, todos);
+      const round = await planBuild.freeSizingRound({
+        checked: validate(res.raw),
+        costUsd: null,
+        rerun: call,
+        validate,
+        size: (pkgs) => sizeOf(plan.repoPath, pkgs),
+      });
+      if (!live()) return;
+      warnings = round.warnings;
+      const split = autoSplit.checkSplit(round.checked);
+      outcome = split.ok
+        ? autoSplit.applySplit(plan.packages, id, planBuild.withPlanLinks(split.packages, todos), { toRun: runPackage })
+        : split;
+    }
+    finishAutoSplit(id, reason, outcome, warnings);
+  }
+
+  function finishAutoSplit(id, reason, outcome, warnings) {
+    const old = findPkg(id);
+    if (outcome.ok) {
+      plan.packages = sup.withBlockedBy(outcome.packages.map((p) => (p.id === id ? { ...p, splitting: false } : p)));
+      if (warnings.length) plan.warnings = [...plan.warnings, ...warnings];
+      if (old && old.sessionId && sessionAlive(old.sessionId)) closeSession(old.sessionId);
+      onRunEvent('autoSplitDone', { id, into: outcome.ids });
+    } else {
+      patch(id, { splitting: false, splitFailed: true });
+      markTerminal(id, reason);
+      onRunEvent('autoSplitFailed', { id, error: outcome.error });
+    }
+    commit();
+    kick();
   }
 
   /**
@@ -1317,8 +1453,8 @@ function createOrchestra(deps) {
   /** Ends the run once nothing more can happen on its own, then finalizes it. */
   function checkSettled() {
     if (!plan.started || plan.killed || plan.settled || !sup.isSettled(plan.packages, maxParallelFor(plan, MAX_PARALLEL))) return;
-    // A scheduled automatic relaunch keeps the run open.
-    if (retryTimers.size) return;
+    // A scheduled automatic relaunch keeps the run open, and so does a split in flight.
+    if (retryTimers.size || splitting.size) return;
     plan.settled = true;
     settledFinalize = true;
     const allPushed = plan.packages.every((p) => p.state === 'pushed');
@@ -1447,7 +1583,9 @@ function createOrchestra(deps) {
     }
 
     // "Free providers" (orchestraFree.js): chosen at Approve, fixed for the run.
-    if (o.free === true && !plan.started && !plan.freeMode && !plan.planRun) {
+    // A free-planned run is always a free run (D1: "Free only").
+    const wantsFree = o.free === true || plan.buildPlanner === 'free';
+    if (wantsFree && !plan.started && !plan.freeMode && !plan.planRun) {
       const free = freeRunSettings({ freeProfileId: deps.freeProfileId ? deps.freeProfileId() : null });
       if (!free.ok) return { ok: false, error: free.error };
       plan.freeMode = true;
@@ -1548,6 +1686,12 @@ function createOrchestra(deps) {
     patch(id, { state: 'stalled', error: reason, detail, stalls, stallHistory, stalledAt: now() });
     const pkg = findPkg(id);
     const live = !plan.killed && !plan.pausedUntil;
+    // Q8: a free-planned run splits a package that stalled twice; Claude
+    // runs never get here (shouldAutoSplit) and escalate as before.
+    if (live && autoSplit.shouldAutoSplit(plan, pkg, reason) && startAutoSplit(pkg, reason, detail)) {
+      commit();
+      return;
+    }
     const wantsEscalate = live && sup.shouldEscalate(pkg, modelFor(pkg), reason);
     const wantsResume = live && sup.shouldAutoResume(pkg, reason);
     if (wantsEscalate && escalate(pkg, reason, detail)) {
@@ -2268,6 +2412,8 @@ function createOrchestra(deps) {
     if (!plan || o.planId !== plan.id) return { ok: false, error: 'noPlan' };
     const pkg = typeof o.id === 'string' ? findPkg(o.id) : null;
     if (!pkg || !(sup.RETRYABLE_STATES.has(pkg.state) || pkg.state === 'failed')) return { ok: false, error: 'notRetryable' };
+    // Replaced by (or being replaced by) an auto-split: its work lives on in the split packages.
+    if (pkg.splitting === true || (Array.isArray(pkg.splitInto) && pkg.splitInto.length)) return { ok: false, error: 'notRetryable' };
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan.pausedUntil) return { ok: false, error: 'paused' };
     if (plan.hold) return { ok: false, error: plan.hold.reason };
@@ -2513,6 +2659,20 @@ function createOrchestra(deps) {
   const workerSessions = () =>
     plan ? plan.packages.filter((p) => p.state === 'launched' && p.sessionId).map((p) => p.sessionId) : [];
 
+  /**
+   * F4a: "Approve plan" merged the plan and imported its tasks (main,
+   * orchestraPlanApprove.js); the board shows the outcome. Plan runs only.
+   * @param {string} planId
+   * @param {{created:number, skipped:number}} result
+   */
+  function notePlanApproved(planId, result) {
+    if (!plan || plan.id !== planId || !plan.planRun) return false;
+    const n = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+    plan.planRun = { ...plan.planRun, approved: { at: now(), created: n(result && result.created), skipped: n(result && result.skipped) } };
+    commit();
+    return true;
+  }
+
   function discard() {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
@@ -2561,6 +2721,7 @@ function createOrchestra(deps) {
     recordRelease: (planId, result) => finalizer.recordPostMerge(planId, 'release', result),
     runFixup: (args) => fixup.run(args),
     makePlanRun,
+    notePlanApproved,
     planWait: () => planWaiter.view(),
     cancelPlanWait: () => planWaiter.cancel(),
     isBusy,

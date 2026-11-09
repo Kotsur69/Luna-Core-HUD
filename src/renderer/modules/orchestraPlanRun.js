@@ -161,11 +161,30 @@ function docList(docs, onOpenDoc, disabled) {
 }
 
 /**
+ * "Approve plan" (F4a): merge PLAN.md's branch into the base and turn its
+ * unchecked tasks into to-dos. Approving again is safe (no duplicates), so
+ * the button stays, relabelled, after the first approve.
+ * @param {{approved:{created:number, skipped:number}|null}} pr
+ */
+function approveRow(pr, onApprove, disabled) {
+  const row = el('div', 'orchestra__options');
+  const approved = pr.approved;
+  const label = approved ? t('orch.planRun.approveAgain') : t('orch.planRun.approve');
+  const btn = button(label, () => onApprove && onApprove(), disabled || !onApprove);
+  btn.title = t('orch.planRun.approve.hint');
+  row.append(btn);
+  if (approved) {
+    row.append(el('span', 'orchestra__meta', t('orch.planRun.approved', { created: approved.created, skipped: approved.skipped })));
+  }
+  return row;
+}
+
+/**
  * The plan run on the board.
  * @param {object} pr the view's planRun (orchestraPlanRunView.planRunView)
- * @param {{pkgErrorText:(code:string)=>string, onOpenDoc:(id:string)=>void, disabled:boolean}} opts
+ * @param {{pkgErrorText:(code:string)=>string, onOpenDoc:(id:string)=>void, onApprove?:()=>void, disabled:boolean}} opts
  */
-export function planRunPanel(pr, { pkgErrorText, onOpenDoc, disabled }) {
+export function planRunPanel(pr, { pkgErrorText, onOpenDoc, onApprove, disabled }) {
   const box = el('section', 'orchestra__planrun');
   box.append(
     el('div', 'orchestra__summary', t('orch.planRun.title', { slug: pr.runSlug })),
@@ -192,5 +211,6 @@ export function planRunPanel(pr, { pkgErrorText, onOpenDoc, disabled }) {
   if (pr.flagged.length) box.append(el('div', 'orchestra__optlabel', t('orch.planRun.flagged')), flaggedList(pr.flagged));
   if (pr.docs.length) box.append(el('div', 'orchestra__optlabel', t('orch.planRun.docs')), docList(pr.docs, onOpenDoc, disabled));
   if (pr.ready) box.append(el('p', 'orchestra__msg orchestra__ready', t('orch.planRun.ready')));
+  if (pr.ready) box.append(approveRow(pr, onApprove, disabled));
   return box;
 }
