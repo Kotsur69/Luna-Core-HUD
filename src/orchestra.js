@@ -65,12 +65,16 @@ const { ROLE_SYNTHESIS, planPath: planDocPath } = require('./orchestraPlanRun');
 // Free God Mode v2 build runs: plan context, free planner, auto-split (logic lives there).
 const planBuild = require('./orchestraPlanBuild');
 const autoSplit = require('./orchestraAutoSplit');
+// Hybrid runs (F6): the "Workers" choice and the guard over "free" packages.
+const workersRules = require('./orchestraWorkers');
+const hybridGuard = require('./orchestraHybridGuard');
 
 /**
  * The runPlanner args. A Claude plan without plan docs gets exactly the args
- * it always had; the free planner, plan docs and a follow-up request add keys.
+ * it always had; the free planner, plan docs, a follow-up request and a
+ * hybrid run add keys.
  */
-function plannerArgs({ cwd, env, openTodos, effort, planner, planDocs, extraPrompt }) {
+function plannerArgs({ cwd, env, openTodos, effort, planner, planDocs, extraPrompt, hybrid }) {
   return {
     cwd,
     env,
@@ -79,6 +83,7 @@ function plannerArgs({ cwd, env, openTodos, effort, planner, planDocs, extraProm
     ...(planner === 'free' ? { planner: 'free' } : {}),
     ...(planDocs && planDocs.length ? { planDocs } : {}),
     ...(extraPrompt ? { extraPrompt } : {}),
+    ...(hybrid === true ? { hybrid: true } : {}),
   };
 }
 
@@ -673,6 +678,8 @@ function createOrchestra(deps) {
       freeMode: plan.freeMode === true,
       // D1: who planned this build run ('claude' for every older plan).
       buildPlanner: plan.buildPlanner === 'free' ? 'free' : 'claude',
+      // F6 "Workers": claude / hybrid / free (older plans migrate from the tick).
+      workers: workersRules.storedWorkers(plan),
       // Plan runs (orchestraPlanRunView.js): topics, progress, stalls, flagged tasks, docs.
       planRun: planView.planRunView(plan),
       options: sup.normalizeOptions(plan.options),
@@ -698,6 +705,8 @@ function createOrchestra(deps) {
         dependsOn: p.dependsOn,
         verify: p.verify,
         model: p.modelOverride || p.model,
+        // F6 guard: why a "free" package was upgraded to Sonnet (null = it was not).
+        hybridGuard: p.hybridGuard || null,
         effort: p.effortOverride || p.effort || null,
         todos: p.todoAts.map((at) => plan.todoText.get(at) || String(at)),
         state: p.state,
@@ -810,7 +819,9 @@ function createOrchestra(deps) {
     if (!plan.allowedTools) plan.allowedTools = (s.allowedTools || []).filter(sup.isAllowRule);
   }
 
-  const modelFor = (pkg) => pkg.modelOverride || (plan.workerModel === 'plan' ? pkg.model : plan.workerModel);
+  // A hybrid "free" package runs on Sonnet until free workers take them (F6).
+  const modelFor = (pkg) =>
+    pkg.modelOverride || (plan.workerModel === 'plan' ? workersRules.claudeModelOf(pkg.model) : plan.workerModel);
   /** Escalation override, then a forced Settings level, then the planner's pick, then medium. */
   const effortFor = (pkg) =>
     normalizeEffort(pkg.effortOverride) || normalizeEffort(plan.workerEffort) || normalizeEffort(pkg.effort) || DEFAULT_EFFORT;
@@ -847,11 +858,14 @@ function createOrchestra(deps) {
     const plannerEffort = plannerEffortOf(ctx.plannerEffort);
     // D1: "Planner: Claude / Free". Plan to-dos bring their PLAN.md (F4b).
     const planner = planBuild.plannerOf(ctx.planner);
+    // F6 "Workers": a free planner is always free-only; hybrid plans with Claude.
+    const workers = workersRules.planWorkers(ctx.workers, planner);
+    const hybrid = workers === 'hybrid';
     const planDocs = readPlanDocs(ctx.repoPath, openTodos);
     const callPlanner = (extraPrompt) =>
       // The picker's planner effort rides in ctx too, so a limit-wait or
       // account-failover replan plans at the same level.
-      deps.runPlanner(plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, planner, planDocs, extraPrompt }));
+      deps.runPlanner(plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, planner, planDocs, extraPrompt, hybrid }));
     busy = true;
     planningRepo = ctx.repoPath;
     try {
@@ -877,7 +891,7 @@ function createOrchestra(deps) {
         planWaiter.arm(ctx, decision);
         return { ok: false, error: 'waiting', planWait: planWaiter.view() };
       }
-      const built = await plannedPackages({ res, openTodos, planner, callPlanner, repoPath: ctx.repoPath });
+      const built = await plannedPackages({ res, openTodos, planner, callPlanner, repoPath: ctx.repoPath, hybrid });
       const { checked } = built;
       const ownership = sup.normalizeOwnership(ctx.ownership);
       clearAllTimers();
@@ -895,6 +909,8 @@ function createOrchestra(deps) {
         plannerEffort,
         // A free planner makes a free-only run (D1) that may auto-split (Q8).
         ...(planner === 'free' ? { buildPlanner: 'free' } : {}),
+        // F6 "Workers"; a Claude-only plan carries no key (as before the selector).
+        ...(workers !== 'claude' ? { workers } : {}),
         dirty,
         workerModel: null,
         workerEffort: null,
@@ -951,8 +967,8 @@ function createOrchestra(deps) {
    * strict sizing with ONE resize round (flagged after that); every package
    * built from plan to-dos links the plan and its acceptance tests.
    */
-  async function plannedPackages({ res, openTodos, planner, callPlanner, repoPath }) {
-    const validate = (raw) => validatePlan(raw, openTodos);
+  async function plannedPackages({ res, openTodos, planner, callPlanner, repoPath, hybrid = false }) {
+    const validate = (raw) => validatePlan(raw, openTodos, hybrid ? { hybrid: true } : undefined);
     let checked = validate(res.raw);
     let costUsd = res.costUsd;
     if (planner === 'free') {
@@ -960,8 +976,14 @@ function createOrchestra(deps) {
       checked = { ...round.checked, warnings: [...round.checked.warnings, ...round.warnings] };
       costUsd = round.costUsd;
     }
-    return { checked: { ...checked, packages: planBuild.withPlanLinks(checked.packages, openTodos) }, costUsd };
+    const linked = planBuild.withPlanLinks(checked.packages, openTodos);
+    // F6 guard: after the plan links, so a plan's acceptance tests count as verify.
+    const packages = hybrid ? hybridGuard.applyHybridGuard(linked, protectedRules(repoPath)) : linked;
+    return { checked: { ...checked, packages }, costUsd };
   }
+
+  /** The repo's protected paths (config + repo extension); none wired = built-in defaults. */
+  const protectedRules = (repoPath) => (deps.hybridProtected ? deps.hybridProtected(repoPath) : hybridGuard.DEFAULT_PROTECTED);
 
   /**
    * Q8: a free-planned package that stalled twice goes back to the free
@@ -1582,9 +1604,15 @@ function createOrchestra(deps) {
       return { ok: false, error: 'nothingToLaunch' };
     }
 
-    // "Free providers" (orchestraFree.js): chosen at Approve, fixed for the run.
-    // A free-planned run is always a free run (D1: "Free only").
-    const wantsFree = o.free === true || plan.buildPlanner === 'free';
+    // "Workers" (F6; "Free only" = orchestraFree.js): chosen at Approve, fixed
+    // for the run. A free-planned run is always a free run (D1: "Free only").
+    const workers = plan.started ? workersRules.storedWorkers(plan) : workersRules.approveWorkers(plan, o);
+    // In place, like freeMode below: the run's plan object stays the same one.
+    if (!plan.started && !plan.planRun) {
+      if (workers === 'claude') delete plan.workers;
+      else plan.workers = workers;
+    }
+    const wantsFree = workers === 'free';
     if (wantsFree && !plan.started && !plan.freeMode && !plan.planRun) {
       const free = freeRunSettings({ freeProfileId: deps.freeProfileId ? deps.freeProfileId() : null });
       if (!free.ok) return { ok: false, error: free.error };

@@ -97,7 +97,8 @@ const drafts = new Map();
 /** Where a new run starts: 'build' (the to-do picker) or 'plan' (Plan only). */
 let runMode = 'build';
 /** Start options picked on the board before Approve. */
-const startOpts = { when: 'now', time: '01:00', integration: null, free: false };
+// workers: F6 "Workers" picked on the board (null = the plan's own choice).
+const startOpts = { when: 'now', time: '01:00', integration: null, workers: null };
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -158,6 +159,20 @@ function selectEl(options, value, onChange) {
 const integrationOptions = () => INTEGRATION_MODES.map((m) => [m, t(`orch.integ.${m}`)]);
 const chosenIntegration = () => startOpts.integration || plan.integrationMode || 'pr';
 
+/**
+ * F6 "Workers" at Approve. "Plan with free models in mind" is offered only
+ * for a plan the planner made that way; a free-planned plan is free-only.
+ */
+function workerOptions() {
+  if (plan.buildPlanner === 'free') return ['free'];
+  return plan.workers === 'hybrid' ? ['claude', 'hybrid', 'free'] : ['claude', 'free'];
+}
+const chosenWorkers = () => {
+  const options = workerOptions();
+  if (options.includes(startOpts.workers)) return startOpts.workers;
+  return options.includes(plan.workers) ? plan.workers : options[0];
+};
+
 /** Before the start: when to start and what to do with the pushed branches. */
 function startOptions() {
   const row = el('div', 'orchestra__options');
@@ -180,21 +195,23 @@ function startOptions() {
     });
     row.append(time);
   }
-  // Free providers: workers on the fallback-chain profile, luna-free/
-  // branches only - so the integration select has nothing to choose.
-  const free = el('label', 'orchestra__optlabel');
-  const box = el('input');
-  box.type = 'checkbox';
-  box.checked = startOpts.free;
-  box.disabled = phase !== 'idle';
-  box.addEventListener('change', () => {
-    startOpts.free = box.checked;
-    render();
-  });
-  free.append(box, document.createTextNode(` ${t('orch.free')}`));
-  free.title = t('orch.free.hint');
-  row.append(free);
-  if (!startOpts.free) {
+  // F6 "Workers" (replaces the "Free providers" tick). Free only = workers on
+  // the fallback-chain profile, luna-free/ branches only - so the integration
+  // select has nothing to choose.
+  const workersLabel = el('span', 'orchestra__optlabel', t('orch.workerMode'));
+  workersLabel.title = t('orch.workerMode.hint');
+  const workersSel = selectEl(
+    workerOptions().map((w) => [w, t(`orch.workerMode.${w}`)]),
+    chosenWorkers(),
+    (v) => {
+      startOpts.workers = v;
+      render();
+    },
+  );
+  // A free-planned plan is always free-only (D1).
+  if (plan.buildPlanner === 'free') workersSel.disabled = true;
+  row.append(workersLabel, workersSel);
+  if (chosenWorkers() !== 'free') {
     row.append(
       el('span', 'orchestra__optlabel', t('orch.integ')),
       selectEl(integrationOptions(), chosenIntegration(), (v) => {
@@ -338,6 +355,18 @@ function ladderLines(pkg) {
 
 const canLaunch = (pkg) => pkg.state === 'pending' || pkg.state === 'failed';
 
+/**
+ * Why the hybrid guard (src/orchestraHybridGuard.js) moved a "free" package
+ * to Sonnet; null when it did not. Protected kinds come from config (a repo
+ * can add its own), so the kind name is shown as it is.
+ * @param {{from:string, reasons:Array<{code:string, n?:number, kind?:string, file?:string}>}|null} g
+ */
+function hybridGuardText(g) {
+  if (!g || !Array.isArray(g.reasons) || !g.reasons.length) return null;
+  const reasons = g.reasons.map((r) => t(`orch.hybrid.r.${r.code}`, { n: r.n, kind: r.kind, file: r.file }));
+  return t('orch.hybrid.upgraded', { reasons: reasons.join('; ') });
+}
+
 function pkgCard(pkg) {
   const card = el('section', `orchestra__pkg is-${pkg.state}`);
 
@@ -362,6 +391,9 @@ function pkgCard(pkg) {
     if (pkg.files.length) line.title = pkg.files.join('\n');
     card.append(line);
   }
+  // F6 guard: the planner marked it "free", the rules moved it to Sonnet.
+  const guard = hybridGuardText(pkg.hybridGuard);
+  if (guard) card.append(msg(guard, 'is-warn'));
 
   if (pkg.todos.length) {
     const list = el('ul', 'orchestra__todos');
@@ -651,7 +683,7 @@ function render() {
       pickerView({
         disabled: phase !== 'idle',
         canCancel: !!plan,
-        onPlan: (ats, effort, planner) => startPlanning(ats, effort, planner),
+        onPlan: (ats, effort, planner, workers) => startPlanning(ats, effort, planner, workers),
         onCancel: () => {
           picking = false;
           render();
@@ -689,7 +721,7 @@ function selectBoard(projectId) {
   picking = false;
   startOpts.when = 'now';
   startOpts.integration = null;
-  startOpts.free = false;
+  startOpts.workers = null;
   render();
   if (!plan && board.onActiveProject()) openPicker();
 }
@@ -703,8 +735,9 @@ async function refetchAndRender() {
  * @param {number[]} ats the picker's ticked to-dos
  * @param {string} [effort] the planner --effort (main falls back to high)
  * @param {'claude'|'free'} [planner] D1: who plans the build run
+ * @param {'claude'|'hybrid'|'free'} [workers] F6 "Workers"
  */
-async function startPlanning(ats, effort, planner) {
+async function startPlanning(ats, effort, planner, workers) {
   if (phase !== 'idle') return;
   phase = 'planning';
   picking = false;
@@ -712,7 +745,7 @@ async function startPlanning(ats, effort, planner) {
   render();
   let res;
   try {
-    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort, planner);
+    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort, planner, workers);
   } catch {
     res = { ok: false, error: 'failed' };
   }
@@ -726,7 +759,8 @@ async function startPlanning(ats, effort, planner) {
     retryRefusals.clear();
     startOpts.when = 'now';
     startOpts.integration = null;
-    startOpts.free = false;
+    // The new plan carries the picker's choice; the board starts from it.
+    startOpts.workers = null;
   } else if (res && res.error === 'waiting') {
     planWait = res.planWait || null;
   } else {
@@ -820,7 +854,9 @@ async function launch(ids) {
       : approve && startOpts.when === 'reset'
         ? { kind: 'reset' }
         : null;
-  const free = approve && startOpts.free;
+  // F6 "Workers"; `free` stays for an older main that only knows the tick.
+  const workers = approve ? chosenWorkers() : null;
+  const free = workers === 'free';
   const integration = approve && !free ? chosenIntegration() : null;
   const releaseAfter = integration === 'merge' && releaseAfterChoice(plan.projectId);
   const scope = board.project();
@@ -830,7 +866,7 @@ async function launch(ids) {
   render();
   let res;
   try {
-    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free, releaseAfter, projectId: scope });
+    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free, ...(workers ? { workers } : {}), releaseAfter, projectId: scope });
   } catch {
     res = { ok: false, error: 'failed' };
   }

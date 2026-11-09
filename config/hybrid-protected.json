@@ -1,0 +1,39 @@
+{
+  "_comment": "Hybrid God Mode guard (src/orchestraHybridGuard.js): a package the planner marked 'free' that touches any of these paths runs on Claude Sonnet instead. Globs over repo-relative paths, case-insensitive: ** = any folders, * = any characters but /. A repo adds its own in .lunacore/hybrid-protected.json (same shape; it can only add).",
+  "protected": [
+    { "kind": "entry", "patterns": ["src/main.js", "main.js", "electron/main.js"] },
+    { "kind": "preload", "patterns": ["src/preload.js", "**/preload.js", "**/preload.ts"] },
+    { "kind": "ipc", "patterns": ["**/*ipc*.js", "**/*ipc*.ts", "**/ipc/**"] },
+    {
+      "kind": "secrets",
+      "patterns": [
+        "**/auth/**", "**/auth*.js", "**/auth*.ts", "**/*secret*", "**/*credential*", "**/keys/**",
+        "**/*apikey*", "**/*api-key*", "**/*api_key*", "**/.env", "**/.env.*", "**/*.pem", "**/*.key"
+      ]
+    },
+    { "kind": "migrations", "patterns": ["**/migrations/**", "**/*migration*", "**/*.sql"] },
+    {
+      "kind": "dependencies",
+      "patterns": [
+        "**/package.json", "**/package-lock.json", "**/npm-shrinkwrap.json", "**/yarn.lock",
+        "**/pnpm-lock.yaml", "**/bun.lockb", "**/requirements*.txt", "**/poetry.lock", "**/pyproject.toml", "**/Cargo.lock"
+      ]
+    },
+    {
+      "kind": "build",
+      "patterns": [
+        "**/electron-builder.*", "**/webpack.config.*", "**/vite.config.*", "**/rollup.config.*", "**/tsconfig*.json",
+        "**/babel.config.*", "**/.babelrc", "**/esbuild.*", "**/next.config.*", "build/**", "scripts/**", "**/Makefile", "**/Dockerfile"
+      ]
+    },
+    { "kind": "ci", "patterns": [".github/**", ".gitlab-ci.yml", ".circleci/**", "azure-pipelines.yml", ".husky/**"] },
+    {
+      "kind": "tests",
+      "patterns": [
+        "test/helpers/**", "test/fixtures/**", "**/test-utils/**", "**/jest.config.*", "**/vitest.config.*",
+        "**/playwright.config.*", "**/.mocharc*", "**/karma.conf.*", "**/.nycrc*", "**/test/setup*"
+      ]
+    },
+    { "kind": "lunacore", "patterns": [".lunacore/**"] }
+  ]
+}

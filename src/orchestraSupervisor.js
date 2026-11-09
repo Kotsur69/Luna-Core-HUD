@@ -29,6 +29,8 @@ const { compileOwnership, ownerOf } = require('./ownership');
 const { normalizeSleeps } = require('./orchestraSleep');
 const { normalizePostMerge, normalizeSha } = require('./orchestraPostMergeState');
 const { normalizeStoredPlanRunFlag, normalizeStoredPlanRun } = require('./orchestraPlanRunView');
+const { normalizeStoredGuard } = require('./orchestraHybridGuard');
+const { storedWorkers } = require('./orchestraWorkers');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -769,6 +771,8 @@ function normalizePackage(raw) {
       ? { splitInto: raw.splitInto.filter((id) => typeof id === 'string' && SLUG_RE.test(id)).slice(0, 3) }
       : {}),
     ...(raw.splitFailed === true ? { splitFailed: true } : {}),
+    // F6 hybrid guard: why a "free" package runs on Sonnet (the board shows it).
+    ...(normalizeStoredGuard(raw.hybridGuard) ? { hybridGuard: normalizeStoredGuard(raw.hybridGuard) } : {}),
   };
 }
 
@@ -955,6 +959,9 @@ function normalizeStoredPlan(raw) {
     freeMode: raw.freeMode === true,
     // D1: a free-planned build run keeps its planner (auto-split, Q8).
     ...(raw.buildPlanner === 'free' ? { buildPlanner: 'free' } : {}),
+    // F6 "Workers"; a plan stored with only the old "Free providers" tick
+    // (freeMode) migrates to 'free'. Claude-only carries no key, as before.
+    ...(storedWorkers(raw) !== 'claude' ? { workers: storedWorkers(raw) } : {}),
     integrationMode: raw.freeMode === true || planRun
       ? 'branches'
       : (INTEGRATION_MODES.includes(raw.integrationMode) ? raw.integrationMode : null),

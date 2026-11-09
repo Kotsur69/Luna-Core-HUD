@@ -92,6 +92,34 @@ const PLAN_SCHEMA = {
   },
 };
 
+// Hybrid runs (FREE_GODMODE_V2_PLAN.md F6): "Plan with free models in mind"
+// adds "free" to the per-package model. A Claude-only run never sees it.
+const HYBRID_MODELS = [...MODELS, 'free'];
+const HYBRID_PLAN_SCHEMA = (() => {
+  const items = PLAN_SCHEMA.properties.packages.items;
+  return {
+    ...PLAN_SCHEMA,
+    properties: {
+      ...PLAN_SCHEMA.properties,
+      packages: {
+        ...PLAN_SCHEMA.properties.packages,
+        items: { ...items, properties: { ...items.properties, model: { type: 'string', enum: HYBRID_MODELS } } },
+      },
+    },
+  };
+})();
+
+/** The schema for a run: hybrid adds "free" to the model enum. */
+function planSchemaFor(hybrid) {
+  return hybrid === true ? HYBRID_PLAN_SCHEMA : PLAN_SCHEMA;
+}
+
+// The planner's rule for "free" (F6), only in a hybrid prompt.
+const HYBRID_MODEL_RULES = [
+  '- "model": "free" is also allowed in this run. Free models are much weaker than Claude: use "free" ONLY for small, mechanical, low-risk changes - styling, layout, copy, i18n strings, a config value - in 1-2 files, with no logic, state, IPC, security, data or build changes. When in doubt: "sonnet".',
+  '- A "free" package must list its files and have a "verify" command. Never mark a package "free" when it touches an entry point, preload, IPC handlers, auth / keys / secrets, migrations, package.json / lockfiles, build config, CI or test infrastructure.',
+];
+
 /** Trimmed, capped string ('' when unusable). */
 function clean(raw, max) {
   return typeof raw === 'string' ? raw.trim().slice(0, max) : '';
@@ -160,6 +188,7 @@ function buildPlannerPrompt(openTodos, opts = {}) {
     '- "dependsOn" lists other package ids that must be finished first. Mark real dependencies only.',
     '- "verify" is the command that proves the package works (e.g. "npm test"); use the to-do\'s own verify when it has one.',
     '- "model": "opus" for hard or cross-cutting work, "sonnet" otherwise.',
+    ...(opts.hybrid === true ? HYBRID_MODEL_RULES : []),
     '- "effort": the to-do\'s own effort when it has one; otherwise "medium" for routine work, "high" or "xhigh" for hard or cross-cutting work, "max" only for the heaviest.',
     '- "id": short kebab-case, unique. "notes": one short paragraph on why you grouped it this way.',
     '',
@@ -193,7 +222,7 @@ function plannerCaps(effort) {
   return PLANNER_CAPS[plannerEffortOf(effort)];
 }
 
-function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd, planner = 'claude' } = {}) {
+function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd, planner = 'claude', hybrid = false } = {}) {
   // The free planner (D1): the same call on the coding profile. The model is
   // the coding chain; no effort and no dollar cap (the CLI's cost estimate
   // means nothing on a free gateway).
@@ -218,7 +247,8 @@ function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budg
     '--output-format',
     'json',
     '--json-schema',
-    JSON.stringify(PLAN_SCHEMA),
+    // Hybrid (F6) is a Claude-planned run only; the free planner never gets it.
+    JSON.stringify(planSchemaFor(hybrid)),
     '--model',
     model,
     '--effort',
@@ -309,7 +339,9 @@ function topoOrder(packages) {
  * @param {Array<{at:number, text:string}>} openTodos
  * @returns {{packages:Array<object>, notes:string, warnings:Array<object>, errors:Array<object>}}
  */
-function validatePlan(raw, openTodos) {
+function validatePlan(raw, openTodos, { hybrid = false } = {}) {
+  // "free" is a valid pick only in a hybrid plan (F6).
+  const models = hybrid === true ? HYBRID_MODELS : MODELS;
   const warnings = [];
   const errors = [];
   const openAts = new Set(openTodos.map((t) => t.at));
@@ -354,7 +386,7 @@ function validatePlan(raw, openTodos) {
         .slice(0, MAX_FILES),
       dependsOn: (Array.isArray(p.dependsOn) ? p.dependsOn : []).map(slugId).filter(Boolean),
       verify: clean(p.verify, MAX_VERIFY_CHARS),
-      model: MODELS.includes(p.model) ? p.model : null,
+      model: models.includes(p.model) ? p.model : null,
       effort: normalizeEffort(p.effort),
     });
   }
@@ -464,7 +496,10 @@ function runPlanner({
   planner = 'claude',
   planDocs = null,
   extraPrompt = null,
+  hybrid = false,
 }) {
+  // Hybrid (F6) only with the Claude planner: the free planner plans free-only runs.
+  const hybridRun = hybrid === true && planner !== 'free';
   const level = plannerEffortOf(effort);
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : plannerCaps(level).timeoutMs;
   // A missing cwd fails execFile with ENOENT - that is a missing project
@@ -474,7 +509,7 @@ function runPlanner({
   return new Promise((resolve) => {
     const child = execImpl(
       'claude',
-      buildPlannerArgs({ effort: level, planner: planner === 'free' ? 'free' : 'claude' }),
+      buildPlannerArgs({ effort: level, planner: planner === 'free' ? 'free' : 'claude', ...(hybridRun ? { hybrid: true } : {}) }),
       { cwd, env, timeout, maxBuffer: 20 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
         if (error && error.code === 'ENOENT') return resolve({ ok: false, error: 'noClaude' });
@@ -491,13 +526,15 @@ function runPlanner({
     );
     if (child && child.stdin) {
       child.stdin.on('error', () => {}); // a child that died early must not crash main
-      child.stdin.end(buildPlannerPrompt(openTodos, { planDocs, extraPrompt }));
+      child.stdin.end(buildPlannerPrompt(openTodos, { planDocs, extraPrompt, ...(hybridRun ? { hybrid: true } : {}) }));
     }
   });
 }
 
 module.exports = {
   PLAN_SCHEMA,
+  HYBRID_PLAN_SCHEMA,
+  planSchemaFor,
   PLANNER_MODEL,
   PLANNER_EFFORT,
   PLANNER_CAPS,
