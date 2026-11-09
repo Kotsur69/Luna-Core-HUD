@@ -7,7 +7,22 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.25.0 — phone God Mode start, plan review/launch and live run con.**
+> **On `main` since v0.25.0 (not released yet).**
+> - **Free God Mode v2:** a *Workers* selector (Claude only / Plan with free
+>   models in mind / Free only), *Plan only* runs that write Markdown plans
+>   with free models, *Approve plan* -> to-dos -> build from the plan, and a
+>   Claude review gate for packages a free model built (see
+>   [God Mode v2](#god-mode-v2--parallel-workers-in-worktrees)).
+> - **Self-healing node_modules:** a package worktree whose dependencies are
+>   broken or locked is repaired without you, and a run held for it resumes
+>   on its own (see [Dependencies per package](#dependencies-per-package)).
+> - **Readable mail and report HTML:** run, Luna's Work and weekly-review
+>   emails carry a readable HTML version of their text, and the standalone
+>   HTML reports got a clearer layout.
+> - **Luna's Work:** a *Run Playtester pass* button (one explore pass without
+>   a run), and the Playtester can open downloaded PDFs.
+>
+> **Current release: v0.25.0 — phone God Mode start, plan review/launch and live run controls.**
 > - phone God Mode start, plan review/launch and live run controls
 > - signed godmode.* phone commands in HUD host mode
 > - sync hub settings and seen marks across PCs, fold the '!' inbox into the
@@ -263,7 +278,7 @@ injects prompts or touches the `claude` binary.
 - **Providers** — launch profiles built from 16 provider templates in
   Settings → AI providers, an LM Studio model loader, and `claude-code-router`
   lifecycle management (see [AI providers](#ai-providers)).
-- **Look** — 28 contrast-tested themes plus four `glass` (window
+- **Look** — 28 contrast-tested themes, four of them `glass` (window
   transparency) themes, four look-&-feel axes (density · font
   pack · glow · motion), nine layout presets plus a layout builder, and
   foldable / resizable / drag-to-rearrange panels, all in PL or EN.
@@ -322,8 +337,8 @@ God Mode can be hidden there too.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.17.1.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.17.1-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.25.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.25.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
@@ -749,6 +764,12 @@ Luna-Core-HUD/
 │   ├── orchestraIntegrate.js # PRs via gh, or merge into the base branch with verify
 │   ├── orchestraReport.js # run report markdown + stall notes (pure)
 │   ├── orchestraStore.js  # orchestra.local.json persistence
+│   ├── orchestraDeps.js   # per-package node_modules: install queue, check, temp-folder self-heal
+│   ├── orchestraHoldWatch.js # a 'noNodeModules' hold re-checks every 60 s and resumes on its own
+│   ├── orchestraRecover.js # recovery playbook: known stall causes -> automatic fix, one ask
+│   ├── plainFs.js         # Electron's original-fs for deleting / walking real folders (no asar lock)
+│   ├── reportHtml.js      # standalone HTML report page (run report, weekly review)
+│   ├── mailHtml.js        # readable, escaped HTML alternative of a plain-text email
 │   ├── sounds.js          # load config/sounds.json → resolveSoundFile(key, opts) (pure + config read)
 │   ├── soundManager.js    # persistent `mpv --idle` process + its JSON IPC socket
 │   ├── usagesnapshot.js   # `usage` snapshot writer + reader (shared with the phone)
@@ -846,7 +867,7 @@ Luna-Core-HUD/
 ├── test/                  # unit tests over the pure modules (`npm test`, node --test)
 ├── FUTURE_PLAN.md         # short roadmap: next steps, owed live checks, known issues, kept ideas
 ├── LUNA_HUD_SPECIFICATION.md # orientation, module inventory, widget recipe, idea record
-├── reference/             # one design/build record per feature + ENGINEERING_NOTES.md (history)
+├── docs/                  # plans by state (done_docs/, tbc_docs/, untouched_docs/) + reference/ (ENGINEERING_NOTES.md, FREE_PROVIDERS.md)
 └── README.md
 ```
 
@@ -1050,8 +1071,12 @@ the live checks still owed and the known issues are in
 ### Tests
 
 ```bash
-npm test        # node --test — 1508 tests, ~3s, no extra dependencies
+npm test        # node --test — 296 test files, ~5300 tests, a few minutes (real git worktrees), no extra dependencies
 ```
+
+`node --test test/` runs the same suite on Node 21+ too (`test/index.js` is
+the folder's entry and starts a fresh run over `test/**/*.test.*`), which is
+the form God Mode verify commands often use.
 
 Covers the side-effect-free modules only: context metrics, transcript-dir
 encoding, tool detection, profile/project validation, port parsing, skill
@@ -1478,6 +1503,8 @@ immediately.
 
 Status: released (v0.14.0, hardened in v0.17.0); first live run 2026-10-20. Design,
 decisions and status per slice: [`docs/done_docs/DONE_ORCHESTRATOR_PLAN.md`](docs/done_docs/DONE_ORCHESTRATOR_PLAN.md).
+Free models and plan-only runs:
+[`docs/tbc_docs/FREE_GODMODE_V2_PLAN.md`](docs/tbc_docs/FREE_GODMODE_V2_PLAN.md).
 
 **Getting tasks in.** Every LunaCore tab gets a small local MCP server
 ([`src/intake.js`](src/intake.js), loopback only, one token per tab) with
@@ -1521,7 +1548,89 @@ the base branch (a separate worktree, verify after each merge, one sandboxed
 headless resolver per conflict, push only if everything is green; you confirm it
 in a native dialog), or **branches only**. Pushed packages' tabs close and their
 worktrees are removed; stalled ones are kept and get a note on their to-dos; a
-report lands in `runs/<plan>.md` in the config folder.
+report lands in `runs/<plan>.md` plus a standalone `runs/<plan>.html` in the
+config folder.
+
+**Reports and emails.** The HTML report ([`src/reportHtml.js`](src/reportHtml.js),
+shared with the weekly review) is one self-contained page with no script and
+no network: a report-kind eyebrow and summary lead, section cards, zebra
+tables with right-aligned number columns, tinted status pills, inline SVG
+charts, light/dark, mobile and print styles. Every interpolated value is
+escaped. The run email (and the Luna's Work and weekly-review emails) stays
+plain text, sent with a readable HTML alternative built from that text
+([`src/mailHtml.js`](src/mailHtml.js)): inline styles only, a ~680px
+column, headings, lists and paragraphs, monospace only for code-like lines,
+linked `https` URLs, every piece of text escaped.
+
+### Dependencies per package
+
+Each package worktree installs its own `node_modules` with
+`npm ci --ignore-scripts` ([`src/orchestraDeps.js`](src/orchestraDeps.js));
+workers never link `node_modules` to another checkout. Installs run one at
+a time across every run (a shared queue). Before a worker starts and before
+the post-`LUNA_DONE` verify, the folder must exist, be non-empty and hold every declared dependency. If not,
+the **whole run is held** (`noNodeModules`): it is a machine problem, not the
+package's. The board, the toast and a refused Resume name the real reason
+(missing / empty / which package is not installed), in PL and EN.
+
+The run repairs itself where it can:
+
+- **Fresh install.** The recovery playbook
+  ([`src/orchestraRecover.js`](src/orchestraRecover.js)) reinstalls the
+  package worktree's dependencies. It checks again first and removes nothing
+  when `node_modules` already passes; only one install per folder runs at a
+  time, so nothing is removed under a running install.
+- **No asar lock.** Recursive deletes and walks of worktrees and
+  `node_modules` use Electron's `original-fs`
+  ([`src/plainFs.js`](src/plainFs.js)), so
+  `electron/dist/resources/default_app.asar` is never opened as an archive
+  and held open for the life of the process.
+- **Temp-folder fallback.** When removing the old folder still fails on a
+  held file (EBUSY / EPERM), the install runs in a sibling temp folder
+  (`_deps-<package>-<timestamp>`) and its entries are moved in: existing
+  entries are kept, half-deleted package folders are replaced,
+  `electron/dist` is never touched. The temp folder is removed and the check
+  runs again.
+- **Auto-Resume.** While a `noNodeModules` hold lasts, the held folders are
+  checked again every 60 s ([`src/orchestraHoldWatch.js`](src/orchestraHoldWatch.js))
+  and the run resumes on its own once they pass, whether they were fixed by
+  that install or by hand. Kill, discard and Resume stop the timer.
+
+You are asked only when all of that failed. If the temp-folder route could
+not get around the lock either, the question says a file in `node_modules`
+is locked by LunaCore: restart LunaCore, then Retry.
+
+### Free models
+
+The **Workers** selector (in the to-do picker and at Approve) chooses who
+writes code:
+
+- **Claude only** — the run as described above.
+- **Plan with free models in mind** — Claude plans and may mark very simple
+  packages `free`. A guard ([`src/orchestraHybridGuard.js`](src/orchestraHybridGuard.js))
+  moves such a package to Sonnet when it lists no files or more than two,
+  touches a protected path (`config/hybrid-protected.json` plus the repo's
+  `.lunacore/hybrid-protected.json`) or has no verify. Free packages run on
+  the *FreeLLMAPI - coding* profile. Before one joins the run it must pass
+  verify and a short read-only Sonnet review of its diff; a failed review or
+  a second stall hands it to Sonnet. Only the free package waits on free
+  limits; after an hour with Claude packages depending on it, it goes to
+  Sonnet.
+- **Free only** — every worker on the free-model fallback-chain profile,
+  each package on its own `luna-free/…` branch, integrated as branches only.
+  An opt-in run option has Claude review each pushed `luna-free/*` branch
+  (read-only) and write `REVIEW.md`.
+
+**Plan only** runs (the Build / Plan only switch on the board) write no code.
+A request is split into topics, free models write one Markdown doc per topic
+under `docs/plans/<run>/`, then a critique and a `PLAN.md`. Plan workers run
+locked down (read tools plus Edit/Write inside that folder only, no shell) on
+`luna-plan/` branches that are never merged. **Approve plan** merges
+`PLAN.md` into the base branch and turns its unchecked tasks into to-dos
+tagged `plan:<slug>`; a later build run from those to-dos quotes the plan's
+acceptance tests in every brief. Free gateway details (fallback chains,
+limits, the substitution guard):
+[`docs/reference/FREE_PROVIDERS.md`](docs/reference/FREE_PROVIDERS.md).
 
 Settings → God Mode v2: worker model (default **Opus**, or the planner's pick),
 permission mode (default **bypassPermissions** — a worktree contains a worker's
