@@ -31,6 +31,8 @@ const { normalizePostMerge, normalizeSha } = require('./orchestraPostMergeState'
 const { normalizeStoredPlanRunFlag, normalizeStoredPlanRun } = require('./orchestraPlanRunView');
 const { normalizeStoredGuard } = require('./orchestraHybridGuard');
 const { storedWorkers } = require('./orchestraWorkers');
+const { normalizeStoredHybrid, normalizeStoredProfileId } = require('./orchestraHybrid');
+const { normalizeStoredFreeReview } = require('./orchestraFreeReview');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -251,6 +253,10 @@ function shouldAutoResume(pkg, reason) {
 // Live run switches Mati can flip during the run (orchestra.setOptions).
 // What they do lives elsewhere; here they are only stored. Default off.
 const RUN_OPTION_FLAGS = ['sleepOnLimit', 'shutdownWhenDone'];
+// Live switches stored only while on (F5 "Claude review of luna-free/
+// branches", orchestraFreeReview.js): an older run loads exactly as it was.
+const OPT_IN_FLAGS = ['freeReview'];
+const LIVE_OPTION_KEYS = [...RUN_OPTION_FLAGS, ...OPT_IN_FLAGS];
 
 /**
  * Run options with defaults; a legacy plan without them loads with every
@@ -264,6 +270,7 @@ function normalizeOptions(raw) {
   const valid = typeof min === 'number' && Number.isFinite(min) && min >= 0;
   const out = { unattendedApprovalMin: valid ? Math.min(Math.round(min), MAX_APPROVAL_MIN) : DEFAULT_APPROVAL_MIN };
   for (const key of RUN_OPTION_FLAGS) out[key] = o[key] === true;
+  for (const key of OPT_IN_FLAGS) if (o[key] === true) out[key] = true;
   // "Create a new release after finish": set at Approve only (with the merge
   // confirm), never a live switch. Absent means off, so older runs load as-is.
   if (o.releaseAfter === true) out.releaseAfter = true;
@@ -279,7 +286,7 @@ function normalizeOptions(raw) {
 function optionsPatch(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const out = {};
-  for (const key of RUN_OPTION_FLAGS) {
+  for (const key of LIVE_OPTION_KEYS) {
     if (Object.prototype.hasOwnProperty.call(raw, key) && typeof raw[key] === 'boolean') out[key] = raw[key];
   }
   return out;
@@ -296,7 +303,7 @@ function isOptionsPatch(raw) {
   const proto = Object.getPrototypeOf(raw);
   if (proto !== Object.prototype && proto !== null) return false;
   const keys = Object.keys(raw);
-  return keys.length > 0 && keys.every((k) => RUN_OPTION_FLAGS.includes(k) && typeof raw[k] === 'boolean');
+  return keys.length > 0 && keys.every((k) => LIVE_OPTION_KEYS.includes(k) && typeof raw[k] === 'boolean');
 }
 
 /**
@@ -742,7 +749,8 @@ function normalizePackage(raw) {
     stalls: num(raw.stalls),
     stallHistory: normalizeStallHistory(raw.stallHistory),
     escalated: raw.escalated === true,
-    modelOverride: raw.modelOverride === 'opus' ? 'opus' : null,
+    // 'opus' = escalated; 'sonnet' = a hybrid free package handed to Claude (F6c).
+    modelOverride: raw.modelOverride === 'opus' || raw.modelOverride === 'sonnet' ? raw.modelOverride : null,
     effortOverride: normalizeEffort(raw.effortOverride),
     touched: strList(raw.touched).filter(isRelPath).slice(0, MAX_TOUCHED),
     prUrl: typeof raw.prUrl === 'string' && PR_URL_RE.test(raw.prUrl) ? raw.prUrl : null,
@@ -773,6 +781,8 @@ function normalizePackage(raw) {
     ...(raw.splitFailed === true ? { splitFailed: true } : {}),
     // F6 hybrid guard: why a "free" package runs on Sonnet (the board shows it).
     ...(normalizeStoredGuard(raw.hybridGuard) ? { hybridGuard: normalizeStoredGuard(raw.hybridGuard) } : {}),
+    // F6c/F6d: review result and hand-overs of a hybrid free package (the report shows them).
+    ...(normalizeStoredHybrid(raw.hybrid) ? { hybrid: normalizeStoredHybrid(raw.hybrid) } : {}),
   };
 }
 
@@ -962,6 +972,10 @@ function normalizeStoredPlan(raw) {
     // F6 "Workers"; a plan stored with only the old "Free providers" tick
     // (freeMode) migrates to 'free'. Claude-only carries no key, as before.
     ...(storedWorkers(raw) !== 'claude' ? { workers: storedWorkers(raw) } : {}),
+    // F6c: the coding profile a hybrid run's free packages run on (never auto:easy).
+    ...(normalizeStoredProfileId(raw.hybridProfileId) ? { hybridProfileId: normalizeStoredProfileId(raw.hybridProfileId) } : {}),
+    // F5: the opt-in review of luna-free/ branches, once it ran.
+    ...(normalizeStoredFreeReview(raw.freeReview) ? { freeReview: normalizeStoredFreeReview(raw.freeReview) } : {}),
     integrationMode: raw.freeMode === true || planRun
       ? 'branches'
       : (INTEGRATION_MODES.includes(raw.integrationMode) ? raw.integrationMode : null),

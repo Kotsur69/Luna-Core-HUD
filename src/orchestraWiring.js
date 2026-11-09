@@ -54,6 +54,7 @@ const planRunView = require('./orchestraPlanRunView');
 const planLaunch = require('./orchestraPlanRunLaunch');
 const { validateRunSlug, planPath: planDocPath } = require('./orchestraPlanRun');
 const { sizePackages } = require('./orchestraPlanBuild');
+const orchestraReview = require('./orchestraReview');
 
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 // How much of a worker's transcript is read to name the tool a permission
@@ -473,6 +474,53 @@ function insideRealRoot(root, rel) {
   }
 }
 
+// docs/plans/<slug>/REVIEW.md - the only file the free-branch review writes.
+const REVIEW_DOC_RE = /^docs\/plans\/([a-z0-9]+(?:-[a-z0-9]+)*)\/REVIEW\.md$/;
+
+/**
+ * F5: writes docs/plans/<slug>/REVIEW.md in the repo checkout. The path is
+ * LunaCore's own shape, checked again here; the folder is made inside the
+ * repo and re-checked after symlinks / junctions are resolved.
+ * @returns {boolean}
+ */
+function writeReviewDoc(ctx, repoPath, relPath, text) {
+  const m = REVIEW_DOC_RE.exec(String(relPath || ''));
+  if (!m || !validateRunSlug(m[1]).ok || typeof text !== 'string') return false;
+  const abs = insideRoot(repoPath, relPath);
+  if (!abs) return false;
+  try {
+    // One level at a time, each checked after links are resolved BEFORE the
+    // next is made: a docs/ or docs/plans/ junction never gets a folder made
+    // outside the repo.
+    for (const dir of ['docs', 'docs/plans', `docs/plans/${m[1]}`]) {
+      if (!fs.existsSync(path.join(repoPath, dir))) fs.mkdirSync(path.join(repoPath, dir));
+      if (!insideRealRoot(repoPath, dir) || !fs.statSync(path.join(repoPath, dir)).isDirectory()) return false;
+    }
+    // An existing REVIEW.md must be a plain file, never a link to elsewhere.
+    const existing = fs.lstatSync(abs, { throwIfNoEntry: false });
+    if (existing && !existing.isFile()) return false;
+    fs.writeFileSync(abs, text, 'utf8');
+    return true;
+  } catch (err) {
+    ctx.logError(`[orchestra] could not write ${relPath}: ${errText(err)}`);
+    return false;
+  }
+}
+
+/**
+ * Hybrid runs (F6c) and the opt-in free-branch review (F5): the read-only
+ * headless Claude review, the diff it reads, the coding profile hybrid free
+ * packages run on (never auto:easy) and REVIEW.md in the repo.
+ */
+function reviewDeps(ctx) {
+  return {
+    runReview: (args) => orchestraReview.runReview(args),
+    reviewDiff: (input) => orchestraReview.readDiff(input, require('./worktrees').runGit),
+    codingProfileId: () => (ctx.codingProfileId ? ctx.codingProfileId() : null),
+    writeReviewDoc: (repoPath, relPath, text) => writeReviewDoc(ctx, repoPath, relPath, text),
+  };
+}
+
 /** The plan workers' Playwright-only MCP config file, next to the briefs. */
 const PLAN_MCP_FILE = 'luna-plan-mcp.json';
 
@@ -731,6 +779,7 @@ function builderDeps(projectId, ctx, self) {
  *   messageBox: (opts:object) => Promise<{response:number}>|null, toast: (title:string, body:string) => void,
  *   projects: () => object[], resolveStoredPath: Function, flushTodos: () => void,
  *   usageLimits: () => object[], accountFailover: Function, freeProfileId: () => string|null,
+ *   codingProfileId?: () => string|null,
  *   planRunProfile?: () => {id:string, command:string, env:object}|null,
  *   freePlannerEnv?: () => object|null,
  *   playCue: (key:string) => void, log: (line:string) => void, logError: (line:string) => void,
@@ -754,6 +803,7 @@ function makeOrchestraDeps(projectId, ctx, shared = {}) {
     ...recoverDeps(ctx),
     ...planRunDeps(ctx),
     ...planBuildDeps(ctx),
+    ...reviewDeps(ctx),
     // The watchdog interval (main.js ticks the registry at it): a tick much
     // later than this means the PC slept (orchestraSleep.js).
     tickMs: WATCHDOG_TICK_MS,
@@ -763,6 +813,7 @@ function makeOrchestraDeps(projectId, ctx, shared = {}) {
 
 module.exports = {
   makeOrchestraDeps,
+  writeReviewDoc,
   sharedPowerDeps,
   projectForStoredRepo,
   legacyRunProject,

@@ -38,6 +38,8 @@ function setup({ packages = PACKAGES, extraDeps = {} } = {}) {
       return { id: `s${log.sessions.length}` };
     },
     freeProfileId: () => 'free-a',
+    // Hybrid free packages run on 'FreeLLMAPI - coding' (F6c), never auto:easy.
+    codingProfileId: () => 'free-coding',
     hybridProtected: (repoPath) => {
       log.protectedFor.push(repoPath);
       return DEFAULT_PROTECTED;
@@ -94,7 +96,7 @@ test('Approve "Free only" (workers) starts a free run like the old tick', async 
   assert.equal(log.sessions[0].profileId, 'free-a');
 });
 
-test('Approve hybrid: a free package runs on Sonnet for now, the run stays a Claude run', async () => {
+test('Approve hybrid: a free package runs on the coding profile, the run stays a Claude run', async () => {
   // Worker model "As planned" (Settings): each package's planner pick counts.
   const workerSettings = () => ({ model: 'plan', effort: 'plan', permissionMode: 'bypassPermissions', integration: 'pr', allowedTools: [] });
   const { orch, log } = setup({ packages: [{ ...PACKAGES[0] }], extraDeps: { workerSettings } });
@@ -103,8 +105,26 @@ test('Approve hybrid: a free package runs on Sonnet for now, the run stays a Cla
   assert.equal(res.ok, true);
   assert.equal(res.plan.freeMode, false);
   assert.equal(res.plan.workers, 'hybrid');
-  assert.equal(log.sessions[0].profileId, 'claude-cloud');
+  assert.equal(log.sessions[0].profileId, 'free-coding');
   assert.equal(log.sessions[0].task.model, 'sonnet');
+});
+
+test('Approve hybrid with free packages but no coding profile is refused', async () => {
+  const { orch, log } = setup({ packages: [{ ...PACKAGES[0] }], extraDeps: { codingProfileId: () => null } });
+  const { plan } = await orch.makePlan({ ...ctx, workers: 'hybrid' });
+  const res = await orch.launch({ planId: plan.id, ids: null, prompts: {}, workers: 'hybrid', integration: 'branches' });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'noFreeProfile');
+  assert.equal(log.sessions.length, 0);
+});
+
+test('Approve hybrid never puts a free package on the easy-tasks profile', async () => {
+  const { orch, log } = setup({ packages: [{ ...PACKAGES[0] }], extraDeps: { codingProfileId: () => 'freellm-auto' } });
+  const { plan } = await orch.makePlan({ ...ctx, workers: 'hybrid' });
+  const res = await orch.launch({ planId: plan.id, ids: null, prompts: {}, workers: 'hybrid', integration: 'branches' });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'noFreeProfile');
+  assert.equal(log.sessions.length, 0);
 });
 
 test('Approve hybrid on a Claude-planned plan is a Claude-only run', async () => {

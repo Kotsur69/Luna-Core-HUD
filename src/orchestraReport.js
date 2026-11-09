@@ -29,6 +29,7 @@ const { diagnosePackage, diagnoseIntegration, diagnoseSkip, skipDetailLabel } = 
 const { sleepSummary } = require('./orchestraSleep');
 const { recoveryEntries } = require('./orchestraRecover');
 const { planRunResult, planRunReportLines } = require('./orchestraPlanRunView');
+const { hybridReportLines, hybridReportRows } = require('./orchestraHybrid');
 
 const NOTE_TAG = '[LunaCore run';
 // A whole note line: the tag with a run id, as stallNote() writes it.
@@ -614,6 +615,7 @@ function buildReport(view, extra) {
     '',
     ...(needs.length ? needs.map((l) => `- ${l}`) : ['Nothing - all done']),
     ...planRunReportLines(view),
+    ...hybridReportLines(view),
     ...tailLines(integ.selfCheck),
     ...wrongSection(view, facts),
     ...manualSection(integ),
@@ -757,6 +759,17 @@ function packageTable(view, packages, now) {
   return h.section('Packages', h.table(['Package', 'State', 'Branch', 'Commit', 'Time', 'PR / merge', 'Notes'], rows, 'No packages'));
 }
 
+/** Hybrid runs (F6d): per free package - planned free, guard upgrade, review, hand-overs. */
+function hybridHtml(view) {
+  const rows = hybridReportRows(view);
+  if (!rows) return '';
+  const cells = rows.map((r) => r.map((c, i) => (i === 0 ? `<code>${h.escapeHtml(c)}</code>` : h.escapeHtml(c))));
+  return h.section(
+    'Free packages (hybrid run)',
+    h.table(['Package', 'Planned free', 'Guard upgrade', 'Review', 'Hand-overs'], cells, 'No packages'),
+  );
+}
+
 function detailSections(integ, suggestions) {
   const groupTitle = (kind) => (MANUAL_GROUPS.find(([k]) => k === kind) || [kind, 'Other'])[1];
   const plain = (v, max) => `"${oneLine(v, max)}"`;
@@ -789,6 +802,7 @@ function renderRunReportHtml(view, extra = {}) {
     wrongHtml(v, { gitDirExists: extra.gitDirExists }),
     runCharts(v, packages, integ, now),
     packageTable(v, packages, now),
+    hybridHtml(v),
     detailSections(integ, extra.suggestions),
   ].join('\n');
   return h.page({
