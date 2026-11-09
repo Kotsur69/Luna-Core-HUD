@@ -250,7 +250,7 @@ test('orchestra:plan takes the project, folder and profile from the tab, never f
   assert.equal(res.ok, true);
   const [call] = s.controllers.beta.calls;
   assert.equal(call[0], 'makePlan');
-  assert.deepEqual(call[1], { projectId: 'beta', repoPath: '/repo/beta', profileId: 'claude', env: { PATH: 'x' }, todoAts: [1, 2] });
+  assert.deepEqual(call[1], { projectId: 'beta', repoPath: '/repo/beta', profileId: 'claude', env: { PATH: 'x' }, todoAts: [1, 2], plannerEffort: 'high' });
   assert.deepEqual(s.out.sent.at(-1), ['orchestra:changed', { projectId: 'beta', view: res.plan }]);
   // An off-shape selection fails closed to "none picked".
   await s.invoke('orchestra:plan', 'tab-a', ['1', 2]);
@@ -273,6 +273,15 @@ test('an explicit projectId null addresses the run of a tab with no project, nev
   assert.deepEqual(calledNames(s.controllers.alpha), []);
   // A missing projectId still falls back as before.
   assert.equal((await s.invoke('orchestra:get', {})).id, 'pa');
+});
+
+test('orchestra:plan passes a valid planner effort, anything else falls back to high', async (t) => {
+  const s = setup({ runs: {} });
+  t.after(s.cleanup);
+  const sent = ['xhigh', 'max', 'medium', undefined, null, 'low', 'HIGH', 'max --dangerously-skip-permissions', 5, { effort: 'max' }];
+  for (const effort of sent) await s.invoke('orchestra:plan', 'tab-a', null, effort);
+  const got = s.controllers.alpha.calls.filter((c) => c[0] === 'makePlan').map((c) => c[1].plannerEffort);
+  assert.deepEqual(got, ['xhigh', 'max', 'medium', 'high', 'high', 'high', 'high', 'high', 'high', 'high']);
 });
 
 test('orchestra:plan refuses an oversized selection before walking it', async (t) => {

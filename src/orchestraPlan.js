@@ -25,12 +25,18 @@ const { checkCwd } = require('./projects');
 const { EFFORTS, normalizeEffort } = require('./efforts');
 
 const PLANNER_MODEL = 'opus';
-// Planning reads code across the repo and weighs grouping: one notch above routine.
+// Planning reads code across the repo and weighs grouping: one notch above
+// routine by default. Mati can pick another level per plan in the to-do picker.
 const PLANNER_EFFORT = 'high';
-const PLANNER_BUDGET_USD = 3;
-// Opus at high effort over a big to-do set (e.g. 9 packages, ~$2.3) can run
-// past 8 min; a timeout throws the whole plan away, so leave headroom.
-const PLANNER_TIMEOUT_MS = 15 * 60 * 1000;
+// Spend cap and wall-clock timeout per planner effort. Opus at high effort over
+// a big to-do set (e.g. 9 packages, ~$2.3) can run past 8 min; a timeout throws
+// the whole plan away, so every level leaves headroom. Keys = src/efforts.js EFFORTS.
+const PLANNER_CAPS = Object.freeze({
+  medium: Object.freeze({ budgetUsd: 2, timeoutMs: 10 * 60 * 1000 }),
+  high: Object.freeze({ budgetUsd: 3, timeoutMs: 15 * 60 * 1000 }),
+  xhigh: Object.freeze({ budgetUsd: 5, timeoutMs: 20 * 60 * 1000 }),
+  max: Object.freeze({ budgetUsd: 8, timeoutMs: 30 * 60 * 1000 }),
+});
 // Read-only: the planner may look at the code, never change it.
 const PLANNER_TOOLS = 'Read,Grep,Glob';
 
@@ -161,7 +167,27 @@ function buildPlannerPrompt(openTodos) {
  * in on stdin, not here: a list of full task cards can outgrow the Windows
  * command-line limit (32k chars).
  */
-function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd = PLANNER_BUDGET_USD } = {}) {
+/**
+ * The planner effort to use: one of the four levels, else the default (high).
+ * @param {unknown} effort
+ * @returns {string}
+ */
+function plannerEffortOf(effort) {
+  return normalizeEffort(effort) || PLANNER_EFFORT;
+}
+
+/**
+ * Budget and timeout for a planner effort (an unknown level gets high's).
+ * @param {unknown} effort
+ * @returns {{budgetUsd:number, timeoutMs:number}}
+ */
+function plannerCaps(effort) {
+  return PLANNER_CAPS[plannerEffortOf(effort)];
+}
+
+function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd } = {}) {
+  const level = plannerEffortOf(effort);
+  const budget = Number.isFinite(budgetUsd) && budgetUsd > 0 ? budgetUsd : plannerCaps(level).budgetUsd;
   return [
     '-p',
     '--output-format',
@@ -171,11 +197,11 @@ function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budg
     '--model',
     model,
     '--effort',
-    effort,
+    level,
     '--tools',
     PLANNER_TOOLS,
     '--max-budget-usd',
-    String(budgetUsd),
+    String(budget),
     '--no-session-persistence',
   ];
 }
@@ -394,11 +420,15 @@ function estimatePlan(packages, todos, maxParallel = MAX_PARALLEL) {
 
 /**
  * Runs the headless planner in `cwd`. Always resolves.
- * @param {{cwd:string, env:object, openTodos:Array<object>, execImpl?:Function, timeoutMs?:number}} args
+ * @param {{cwd:string, env:object, openTodos:Array<object>, effort?:string, execImpl?:Function, timeoutMs?:number}} args
+ *   effort: the planner's --effort level (invalid/missing -> high); it also
+ *   picks the budget and the timeout from PLANNER_CAPS.
  * @returns {Promise<{ok:true, raw:unknown, costUsd:number|null, durationMs:number}
  *   | {ok:false, error:'noClaude'|'timeout'|'failed'|'budget'|'badJson', detail?:string}>}
  */
-function runPlanner({ cwd, env, openTodos, execImpl = execFile, timeoutMs = PLANNER_TIMEOUT_MS, isDirImpl = undefined }) {
+function runPlanner({ cwd, env, openTodos, effort = PLANNER_EFFORT, execImpl = execFile, timeoutMs, isDirImpl = undefined }) {
+  const level = plannerEffortOf(effort);
+  const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : plannerCaps(level).timeoutMs;
   // A missing cwd fails execFile with ENOENT - that is a missing project
   // folder, not a missing `claude`.
   if (!checkCwd(cwd, isDirImpl).ok) return Promise.resolve({ ok: false, error: 'noRepo', detail: String(cwd || '') });
@@ -406,8 +436,8 @@ function runPlanner({ cwd, env, openTodos, execImpl = execFile, timeoutMs = PLAN
   return new Promise((resolve) => {
     const child = execImpl(
       'claude',
-      buildPlannerArgs(),
-      { cwd, env, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024, windowsHide: true },
+      buildPlannerArgs({ effort: level }),
+      { cwd, env, timeout, maxBuffer: 20 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
         if (error && error.code === 'ENOENT') return resolve({ ok: false, error: 'noClaude' });
         if (error && error.killed) return resolve({ ok: false, error: 'timeout' });
@@ -432,7 +462,9 @@ module.exports = {
   PLAN_SCHEMA,
   PLANNER_MODEL,
   PLANNER_EFFORT,
-  PLANNER_BUDGET_USD,
+  PLANNER_CAPS,
+  plannerEffortOf,
+  plannerCaps,
   MAX_PARALLEL,
   MAX_PROMPT_CHARS,
   SIZE_MINUTES,

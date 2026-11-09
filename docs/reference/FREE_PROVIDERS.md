@@ -64,12 +64,55 @@ owns the chain:
 When such a tab starts, LunaCore starts a loopback **fallback proxy**
 (`src/fallbackproxy.js`) in front of the gateway and points the tab at it.
 Every request goes out with `model` set to the first model of the chain that
-is not cooling down. On a **429 / quota**, **5xx / 529 / connection error**
-or **"unknown model"** answer, that model cools down (Retry-After, else 1 min
-for limits, 30 s for outages, 1 h for unknown ids) and the *same request* is
-sent to the next model. Only a success or a non-retryable error (a bad
-gateway key, a malformed request) reaches the CLI. The tab's options never
-change; the answering model is in the `x-lunacore-model` response header.
+is not cooling down. On an **"All models ..." 429 / quota**, **5xx / 529 /
+connection error** or **"unknown model"** answer, that model cools down and
+the *same request* is sent to the next model. Only a success or a
+non-retryable error (a bad gateway key, a malformed request) reaches the CLI.
+The tab's options never change; the model that really answered (the
+gateway's `X-Routed-Via`, else the chain model) is in the `x-lunacore-model`
+response header and, for a God Mode free run, in the run log.
+
+Cooldowns: a limit waits for the gateway's Retry-After, else the
+"Soonest cooldown reset ~Xm" hint in its message, else 30 min (a daily cap
+names no reset); 30 s for outages; 10 min for a substitution; 1 h for an
+unknown id.
+
+**Every model used up.** The proxy then answers HTTP 429 with
+`Free coding models: usage limit reached · resets Nov 8, 3:40pm` (local time:
+the first moment any model of the chain is back - each model cools for the
+gateway's Retry-After, else its ~Xm hint, else its default - else +30 min;
+at least 1 min, at most 6 h; `src/freeLimit.js`). Claude Code records that as the
+usage-limit wall, so a God Mode run pauses until then and resumes by itself,
+and the board says "Free coding models limited - retrying at HH:MM". Until the
+reset the proxy sends nothing upstream; after it, ONE model is re-probed before
+the chain is walked again.
+
+**The gateway's own window.** FreeLLMAPI allows 120 requests per minute per
+client (`X-RateLimit-Limit: 120`), shared by every free worker. The proxy
+spaces requests to stay under it (`src/freePacer.js`, keeping 10 in reserve
+and trusting `X-RateLimit-Remaining` / `X-RateLimit-Reset` when present). A
+429 that is NOT "All models ..." ("Rate limit exceeded: more than 120 requests
+per minute. Retry in 7s.") is that window: the proxy waits the Retry-After and
+sends the same request to the same model again (3 retries), it does not pause
+the run. A free run also runs at most `FREE_MAX_PARALLEL` workers at once
+(`src/orchestraFree.js`; override with `LUNACORE_FREE_MAX_PARALLEL`).
+
+**Substitution guard.** A gateway may answer from a different model than the
+one asked for. A chain can list the models it accepts as substrings of
+`X-Routed-Via` (`<platform>/<model>`):
+
+```json
+{ "id": "free-coding", "models": ["nemotron-3-ultra", "gpt-oss-120b", "nemotron-3-super"],
+  "expect": ["nemotron-3-ultra", "gpt-oss-120b", "nemotron-3-super"] }
+```
+
+An answer routed elsewhere is refused as `substituted` - decided on the
+response headers, before a byte of it reaches the CLI (streams too) - and the
+next model is tried; all substituted means the "usage limit reached" answer
+above. No `X-Routed-Via` header: accepted, with a warning. Requests for an
+`auto:*` model (God Mode plan runs) skip the guard - any member is fine there.
+A malformed `expect` (not 1-16 short strings) is ignored with a warning; the
+chain itself still loads.
 
 An id the gateway does not know is simply skipped, so a stale preset never
 breaks a session - but it wastes a round trip, so keep the list current.
@@ -89,6 +132,27 @@ Tick **Free providers** next to Approve on the God Mode board. The run then:
 
 No chain profile configured -> Approve answers "No profile with a free-model
 chain" and nothing launches.
+
+### Live checks done
+
+- **CLI records the proxy's 429 as the usage-limit wall** (2026-11-08,
+  Claude Code 2.1.319, fake gateway answering "All models rate-limited ...
+  Soonest cooldown reset ~12m" with `Retry-After: 720`). The CLI sent the
+  request once (the proxy's `x-should-retry: false` is honoured - no retry
+  burn) and wrote a transcript entry with `isApiErrorMessage: true`,
+  `apiErrorStatus: 429`, `error: "rate_limit"` and the text
+  `API Error: Server is temporarily limiting requests (not your usage limit) ·
+  Free coding models: usage limit reached · resets Nov 8, 9:50pm`.
+  `usageLimitFrom()` read it as 21:50 local - the 12 min rounded up to the
+  minute. No body change was needed.
+- **Gateway 429 shapes** (FreeLLMAPI source, `server/src/lib/fallback-loop.ts`,
+  `services/router.ts`, `middleware/rateLimit.ts`):
+  `All models rate-limited after N attempts. Soonest cooldown reset ~12m. ...`
+  with `Retry-After`; `All models exhausted: N routes checked (...). ... Soonest
+  reset ~45m.` without it; and the per-client window `Rate limit exceeded: more
+  than 120 requests per minute. Retry in Ns.` with `Retry-After` and
+  `X-RateLimit-Limit / -Remaining / -Reset` (epoch seconds). None of them names a
+  clock time, which is why the proxy rewrites them.
 
 ## 5. Working continuously
 

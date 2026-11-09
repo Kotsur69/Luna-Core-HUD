@@ -473,6 +473,7 @@ function renderPlan() {
     work: fmtMinutes(est.workMinutes),
   });
   if (Number.isFinite(plan.costUsd)) line += ` · ${t('orch.cost', { usd: plan.costUsd.toFixed(2) })}`;
+  if (plan.plannerEffort) line += ` · ${t('orch.plannerEffort', { effort: plan.plannerEffort })}`;
   body.append(el('div', 'orchestra__summary', line));
   body.append(el('div', 'orchestra__meta', t('orch.workers', { model: plan.workerModel, perm: plan.permissionMode })));
   const running = plan.packages.some(isActive);
@@ -491,8 +492,9 @@ function renderPlan() {
   }
   for (const s of plan.suggestions || []) body.append(suggestionRow(s));
   if (plan.pausedUntil) {
-    // Every Claude account limited: the run waits for the first reset.
-    const key = plan.allAccountsLimited === true ? 'orch.account.waitReset' : 'orch.paused';
+    // Every Claude account limited: the run waits for the first reset. A free
+    // run waits for its free chain (src/freeLimit.js), then retries on its own.
+    const key = plan.allAccountsLimited === true ? 'orch.account.waitReset' : plan.freeMode ? 'orch.free.paused' : 'orch.paused';
     body.append(msg(t(key, { time: clock(plan.pausedUntil) }), 'is-warn'));
   }
   if (plan.hold && plan.hold.reason === 'noNodeModules') body.append(holdRow());
@@ -618,7 +620,7 @@ function render() {
       pickerView({
         disabled: phase !== 'idle',
         canCancel: !!plan,
-        onPlan: (ats) => startPlanning(ats),
+        onPlan: (ats, effort) => startPlanning(ats, effort),
         onCancel: () => {
           picking = false;
           render();
@@ -666,8 +668,11 @@ async function refetchAndRender() {
   if (isOpen) render();
 }
 
-/** @param {number[]} ats the picker's ticked to-dos */
-async function startPlanning(ats) {
+/**
+ * @param {number[]} ats the picker's ticked to-dos
+ * @param {string} [effort] the planner --effort (main falls back to high)
+ */
+async function startPlanning(ats, effort) {
   if (phase !== 'idle') return;
   phase = 'planning';
   picking = false;
@@ -675,7 +680,7 @@ async function startPlanning(ats) {
   render();
   let res;
   try {
-    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats);
+    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort);
   } catch {
     res = { ok: false, error: 'failed' };
   }

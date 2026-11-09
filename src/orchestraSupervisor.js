@@ -924,6 +924,8 @@ function normalizeStoredPlan(raw) {
     estimate:
       raw.estimate && typeof raw.estimate === 'object' ? raw.estimate : { wallMinutes: 0, workMinutes: 0, workers: 0 },
     costUsd: Number.isFinite(raw.costUsd) ? raw.costUsd : null,
+    // The planner's --effort (one of the four levels); older files have none.
+    plannerEffort: normalizeEffort(raw.plannerEffort),
     dirty: Number.isFinite(raw.dirty) ? raw.dirty : null,
     workerModel: strOrNull(raw.workerModel, 32),
     // 'plan' or one of the four levels; anything else re-freezes from Settings.

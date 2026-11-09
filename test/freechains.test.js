@@ -83,7 +83,10 @@ test('attemptOrder keeps chain order and moves cooling models to the back', () =
 
 test('classifyFailure: limit, outage, unknown model move on; a bad key does not', () => {
   assert.equal(chains.classifyFailure(200), 'ok');
-  assert.equal(chains.classifyFailure(429), 'limit');
+  // A 429 is a model limit only when the gateway says the whole route is out;
+  // any other 429 is its per-key request window (see test/fallbackproxy.test.js).
+  assert.equal(chains.classifyFailure(429, '{"error":{"message":"All models rate-limited."}}'), 'limit');
+  assert.equal(chains.classifyFailure(429), 'throttled');
   assert.equal(chains.classifyFailure(529), 'outage');
   assert.equal(chains.classifyFailure(503), 'outage');
   assert.equal(chains.classifyFailure(404, '{"error":{"message":"model not found"}}'), 'unknown');
@@ -145,7 +148,7 @@ test('proxy: a limited model hands the SAME request to the next one', async () =
   const { server, seen } = await startGateway((model, res) => {
     if (model === 'strong-a') {
       res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '60' });
-      return res.end('{"error":"rate limited"}');
+      return res.end('{"type":"error","error":{"type":"rate_limit_error","message":"All models rate-limited after 2 attempts."}}');
     }
     if (model === 'strong-b') {
       res.writeHead(404, { 'content-type': 'application/json' });

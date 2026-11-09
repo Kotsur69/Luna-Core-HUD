@@ -14,7 +14,7 @@ const { normalizeStoredPlan } = require('../src/orchestraSupervisor');
 
 const pkg = { id: 'a', title: 'A', todoAts: [1], prompt: 'do', files: [], dependsOn: [], verify: 'npm test', model: 'sonnet' };
 
-function setup({ freeProfileId = 'free-a', branchOverride = null } = {}) {
+function setup({ freeProfileId = 'free-a', branchOverride = null, extraDeps = {} } = {}) {
   const log = { worktreeOpts: [], sessions: [] };
   const orch = createOrchestra({
     now: () => 1700000000000,
@@ -35,6 +35,7 @@ function setup({ freeProfileId = 'free-a', branchOverride = null } = {}) {
       return { id: `s${log.sessions.length}` };
     },
     freeProfileId: () => freeProfileId,
+    ...extraDeps,
   });
   return { orch, log };
 }
@@ -133,4 +134,133 @@ test('addWorktree honours only the known branch prefixes', async () => {
   assert.equal((await run('luna-free/')).res.branch, 'luna-free/pkg-one');
   assert.equal((await run(undefined)).res.branch, 'luna/pkg-one');
   assert.equal((await run('main')).res.branch, 'luna/pkg-one', 'an unknown prefix falls back to luna/');
+});
+
+// --- Free God Mode v2 F2a / F3: the free chain's limit and real model -----------------
+
+const http = require('http');
+const { FallbackProxy } = require('../src/fallbackproxy');
+const { RequestPacer } = require('../src/freePacer');
+const { usageLimitFrom } = require('../src/observer');
+const { SHIM_TOKEN_HEADER } = require('../src/sessionenv');
+const { RESUME_TEXT } = require('../src/orchestraSupervisor');
+
+/** Fake clock + timers for a run that pauses and resumes. */
+function clocked() {
+  const c = { t: new Date(2026, 10, 8, 14, 7, 30).getTime(), timers: [], writes: [], events: [] };
+  c.deps = {
+    now: () => c.t,
+    setTimer: (fn, ms) => {
+      const timer = { fn, at: c.t + ms, done: false };
+      c.timers.push(timer);
+      return timer;
+    },
+    clearTimer: (timer) => {
+      if (timer) timer.done = true;
+    },
+    writePty: (sessionId, text) => {
+      c.writes.push([sessionId, text]);
+      return true;
+    },
+    sessionAlive: () => true,
+    onRunEvent: (kind) => c.events.push(kind),
+  };
+  c.advance = (ms) => {
+    c.t += ms;
+    for (const timer of c.timers) {
+      if (!timer.done && timer.at <= c.t) {
+        timer.done = true;
+        timer.fn();
+      }
+    }
+  };
+  return c;
+}
+
+/** What the proxy answers once every model of the chain is out (real gateway bodies). */
+async function exhaustedAnswer(now) {
+  const gateway = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '720' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'All models rate-limited after 2 attempts. Soonest cooldown reset ~12m. Last error: 429' } }));
+    });
+  });
+  await new Promise((r) => gateway.listen(0, '127.0.0.1', r));
+  const proxy = new FallbackProxy({
+    upstream: `http://127.0.0.1:${gateway.address().port}`,
+    chain: { id: 'free-coding', models: ['a', 'b'] },
+    now,
+    pacer: new RequestPacer({ now, minGapMs: 0 }),
+  });
+  const { port, token } = await proxy.start();
+  try {
+    return await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/messages', headers: { [SHIM_TOKEN_HEADER]: token } }, (res) => {
+        const chunks = [];
+        res.on('data', (ch) => chunks.push(ch));
+        res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
+      });
+      req.on('error', reject);
+      req.end('{"model":"a","messages":[]}');
+    });
+  } finally {
+    await proxy.stop();
+    gateway.close();
+  }
+}
+
+test('a free run whose chain is exhausted pauses until the chain resets and resumes on its own', async () => {
+  const c = clocked();
+  const { orch } = setup({ extraDeps: c.deps });
+  const { plan } = await orch.makePlan(ctx);
+  await orch.launch({ planId: plan.id, ids: null, prompts: {}, free: true });
+  const answer = await exhaustedAnswer(c.deps.now);
+  assert.equal(answer.status, 429);
+  // The CLI's transcript entry for that 429 (live check, claude 2.1.319).
+  const entry = JSON.stringify({
+    type: 'assistant',
+    isApiErrorMessage: true,
+    apiErrorStatus: 429,
+    message: { model: '<synthetic>', content: [{ type: 'text', text: `API Error: Server is temporarily limiting requests (not your usage limit) · ${JSON.parse(answer.body).error.message}` }] },
+  });
+  const limit = usageLimitFrom(entry, c.t);
+  const expected = Math.ceil((c.t + 12 * 60 * 1000) / 60000) * 60000;
+  assert.equal(limit.resetsAt, expected);
+  orch.onUsageLimit('s1', limit.resetsAt);
+  assert.equal(orch.view().pausedUntil, expected);
+  assert.ok(c.events.includes('paused'));
+  c.advance(11 * 60 * 1000);
+  assert.equal(c.writes.length, 0, 'still waiting');
+  c.advance(3 * 60 * 1000);
+  assert.equal(orch.view().pausedUntil, null);
+  assert.deepEqual(c.writes, [['s1', RESUME_TEXT]]);
+  assert.ok(c.events.includes('resumed'));
+});
+
+test('a free run logs which model really answered, once per change, and every substitution', async () => {
+  const c = clocked();
+  const { orch } = setup({ extraDeps: c.deps });
+  const { plan } = await orch.makePlan(ctx);
+  await orch.launch({ planId: plan.id, ids: null, prompts: {}, free: true });
+  const route = (model, routedVia, substituted = false) => orch.onFreeRoute({ chainId: 'free-coding', model, routedVia, substituted, at: c.t });
+  route('a', 'nvidia/nemotron-3-ultra');
+  route('a', 'nvidia/nemotron-3-ultra');
+  route('a', 'groq/llama-3.3-70b', true);
+  route('b', 'openrouter/gpt-oss-120b');
+  const lines = orch.view().recoveries.filter((e) => e.kind === 'free').map((e) => [e.reason, e.detail]);
+  assert.deepEqual(lines, [
+    ['freeModel', 'free-coding: a answered by nvidia/nemotron-3-ultra'],
+    ['freeSubstituted', 'free-coding: a was answered by groq/llama-3.3-70b - refused, next model tried'],
+    ['freeModel', 'free-coding: b answered by openrouter/gpt-oss-120b'],
+  ]);
+});
+
+test('a normal (Claude) run ignores free-model route events', async () => {
+  const c = clocked();
+  const { orch } = setup({ extraDeps: c.deps });
+  const { plan } = await orch.makePlan(ctx);
+  await orch.launch({ planId: plan.id, ids: null, prompts: {} });
+  orch.onFreeRoute({ chainId: 'free-coding', model: 'a', routedVia: 'x/y', substituted: false });
+  assert.equal(orch.view().recoveries.filter((e) => e.kind === 'free').length, 0);
 });

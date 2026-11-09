@@ -74,9 +74,35 @@ function integrationFor(plan, requested) {
   return plan && plan.freeMode ? FREE_INTEGRATION : requested;
 }
 
+/**
+ * Free workers running at once in one run. They all share the gateway's
+ * 120-requests-per-minute window (src/freePacer.js spaces the requests, so
+ * this is a throughput knob, not the guarantee). Override with the
+ * LUNACORE_FREE_MAX_PARALLEL environment variable (1..run maximum).
+ */
+const FREE_MAX_PARALLEL = 3;
+const FREE_PARALLEL_ENV = 'LUNACORE_FREE_MAX_PARALLEL';
+
+/**
+ * How many packages a run may have running at once.
+ * @param {{freeMode?:boolean}|null} plan
+ * @param {number} max the run-wide maximum (orchestraPlan.js MAX_PARALLEL)
+ * @param {Object<string,string|undefined>} [env]
+ * @returns {number}
+ */
+function maxParallelFor(plan, max, env = process.env) {
+  if (!plan || !plan.freeMode) return max;
+  const raw = Number(env && env[FREE_PARALLEL_ENV]);
+  const cap = Number.isInteger(raw) && raw >= 1 ? raw : FREE_MAX_PARALLEL;
+  return Math.max(1, Math.min(max, cap));
+}
+
 module.exports = {
   FREE_BRANCH_PREFIX,
   FREE_INTEGRATION,
+  FREE_MAX_PARALLEL,
+  FREE_PARALLEL_ENV,
+  maxParallelFor,
   freeBranchName,
   isSafeFreeBranch,
   pickFreeProfileId,
