@@ -64,6 +64,7 @@ const { loadChains, resolveProfileChain } = require('./freechains');
 const { pickFreeProfileId } = require('./orchestraFree');
 // Free God Mode v2 plan runs: the plan-worker lockdown and its profile.
 const { workerLaunchCommand, lockedRestartCommand, planProfileFrom } = require('./orchestraPlanRunLaunch');
+const { createPlanApprover } = require('./orchestraPlanApprove');
 const { userDir, ensureUserDir } = require('./paths');
 const { detectLmsCli, wakeLmStudio } = require('./lmstudiocli');
 const { findApiPort, listModels: listLmStudioModels, loadModel: loadLmStudioModel } = require('./lmstudiosdk');
@@ -1026,6 +1027,17 @@ function lunasworkFreeEnv() {
   return profile ? withClaudeOnPath(buildSessionEnv(process.env, profile.env || {})) : null;
 }
 
+// Free God Mode v2 "Approve plan" (src/orchestraPlanApprove.js): the plan's
+// tasks land in the run project's to-do list; the board and the phone follow.
+const planApprover = createPlanApprover({
+  readTodos,
+  writeTodos,
+  onTodosChanged: (projectId) => {
+    send('todo:changed', { projectId });
+    if (todoSync) todoSync.soon();
+  },
+});
+
 // Luna's Work's view of God Mode: one run per project (orchestraWiring.js).
 const lunasworkGodMode = godModeFacade(() => orchestraRuns);
 
@@ -1182,6 +1194,8 @@ const orchestraCtx = {
   accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
   freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
   planRunProfile: () => planProfileFrom(profiles),
+  // Free God Mode v2 build runs: the free planner and its auto-split (Q8).
+  freePlannerEnv: () => lunasworkFreeEnv(),
   playCue,
   log: (line) => console.info('[orchestra]', line),
   logError: (line) => console.error(line),
@@ -3426,6 +3440,10 @@ function registerIpc() {
       const p = planProfileFrom(profiles);
       return p ? withClaudeOnPath(buildSessionEnv(process.env, p.env)) : null;
     },
+    // D1: the free BUILD planner runs on the coding profile (freellm-chain).
+    freePlannerEnv: () => lunasworkFreeEnv(),
+    // F4a "Approve plan" (src/orchestraPlanApprove.js): merge + to-do import.
+    approvePlan: planApprover,
   });
 
   // Finished-run actions (src/orchestraFinishIpc.js): ids are validated there.

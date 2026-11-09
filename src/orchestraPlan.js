@@ -23,6 +23,7 @@ const { execFile } = require('child_process');
 const { isUsageLimitText } = require('./orchestraPlanWait');
 const { checkCwd } = require('./projects');
 const { EFFORTS, normalizeEffort } = require('./efforts');
+const { FREE_PLANNER_MODEL, planContextLines } = require('./orchestraPlanBuild');
 
 const PLANNER_MODEL = 'opus';
 // Planning reads code across the repo and weighs grouping: one notch above
@@ -140,7 +141,12 @@ function todoBrief(openTodos) {
  * @param {Array<object>} openTodos
  * @returns {string}
  */
-function buildPlannerPrompt(openTodos) {
+function buildPlannerPrompt(openTodos, opts = {}) {
+  // Free God Mode v2 (orchestraPlanBuild.js): an approved plan as context,
+  // and a follow-up request (re-size, auto-split). Without them the prompt
+  // is exactly what it always was.
+  const context = planContextLines(opts.planDocs);
+  const extra = typeof opts.extraPrompt === 'string' && opts.extraPrompt.trim() ? ['', opts.extraPrompt.trim()] : [];
   return [
     'You are the planner for LunaCore God Mode. Split the open to-dos below into work packages.',
     'Each package is done by a separate Claude Code session in its own git worktree, in parallel with the others.',
@@ -159,6 +165,8 @@ function buildPlannerPrompt(openTodos) {
     '',
     'Open to-dos (JSON):',
     JSON.stringify(todoBrief(openTodos), null, 2),
+    ...context,
+    ...extra,
   ].join('\n');
 }
 
@@ -185,7 +193,24 @@ function plannerCaps(effort) {
   return PLANNER_CAPS[plannerEffortOf(effort)];
 }
 
-function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd } = {}) {
+function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd, planner = 'claude' } = {}) {
+  // The free planner (D1): the same call on the coding profile. The model is
+  // the coding chain; no effort and no dollar cap (the CLI's cost estimate
+  // means nothing on a free gateway).
+  if (planner === 'free') {
+    return [
+      '-p',
+      '--output-format',
+      'json',
+      '--json-schema',
+      JSON.stringify(PLAN_SCHEMA),
+      '--model',
+      FREE_PLANNER_MODEL,
+      '--tools',
+      PLANNER_TOOLS,
+      '--no-session-persistence',
+    ];
+  }
   const level = plannerEffortOf(effort);
   const budget = Number.isFinite(budgetUsd) && budgetUsd > 0 ? budgetUsd : plannerCaps(level).budgetUsd;
   return [
@@ -423,10 +448,23 @@ function estimatePlan(packages, todos, maxParallel = MAX_PARALLEL) {
  * @param {{cwd:string, env:object, openTodos:Array<object>, effort?:string, execImpl?:Function, timeoutMs?:number}} args
  *   effort: the planner's --effort level (invalid/missing -> high); it also
  *   picks the budget and the timeout from PLANNER_CAPS.
+ *   planner: 'free' runs the same call on model auto:coding (the caller
+ *   passes the coding profile's env); planDocs / extraPrompt extend the prompt.
  * @returns {Promise<{ok:true, raw:unknown, costUsd:number|null, durationMs:number}
  *   | {ok:false, error:'noClaude'|'timeout'|'failed'|'budget'|'badJson', detail?:string}>}
  */
-function runPlanner({ cwd, env, openTodos, effort = PLANNER_EFFORT, execImpl = execFile, timeoutMs, isDirImpl = undefined }) {
+function runPlanner({
+  cwd,
+  env,
+  openTodos,
+  effort = PLANNER_EFFORT,
+  execImpl = execFile,
+  timeoutMs,
+  isDirImpl = undefined,
+  planner = 'claude',
+  planDocs = null,
+  extraPrompt = null,
+}) {
   const level = plannerEffortOf(effort);
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : plannerCaps(level).timeoutMs;
   // A missing cwd fails execFile with ENOENT - that is a missing project
@@ -436,7 +474,7 @@ function runPlanner({ cwd, env, openTodos, effort = PLANNER_EFFORT, execImpl = e
   return new Promise((resolve) => {
     const child = execImpl(
       'claude',
-      buildPlannerArgs({ effort: level }),
+      buildPlannerArgs({ effort: level, planner: planner === 'free' ? 'free' : 'claude' }),
       { cwd, env, timeout, maxBuffer: 20 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
         if (error && error.code === 'ENOENT') return resolve({ ok: false, error: 'noClaude' });
@@ -453,7 +491,7 @@ function runPlanner({ cwd, env, openTodos, effort = PLANNER_EFFORT, execImpl = e
     );
     if (child && child.stdin) {
       child.stdin.on('error', () => {}); // a child that died early must not crash main
-      child.stdin.end(buildPlannerPrompt(openTodos));
+      child.stdin.end(buildPlannerPrompt(openTodos, { planDocs, extraPrompt }));
     }
   });
 }

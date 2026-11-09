@@ -98,6 +98,8 @@ function runSummary(entry, projects) {
  *   readUiPrefs: () => object,
  *   writeUiPrefs: (patch:object) => void,
  *   planRunEnv?: () => object|null,
+ *   freePlannerEnv?: () => object|null,
+ *   approvePlan?: (args:{projectId:string|null, repoPath:string|null, view:object|null}) => Promise<object>,
  * }} ctx
  *   planRunEnv: the freellm-auto profile's env for the free topic planner
  *   (null when that profile is not configured)
@@ -163,7 +165,7 @@ function registerOrchestraIpc(ipcMain, ctx) {
   // tab's local-model profile must not silently plan the whole run.
   // The selection rules, refusals and makePlan call are shared with the
   // phone's godmode.plan (src/orchestraPlanStart.js).
-  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts, effort) => {
+  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts, effort, planner) => {
     // To-do `at` values only, capped like the list itself; an off-shape
     // selection fails closed ([] -> 'noneSelected'). makePlan re-checks each
     // value against the list it reads.
@@ -174,7 +176,8 @@ function registerOrchestraIpc(ipcMain, ctx) {
     if (!session) return refuse('noTab');
     const target = planTarget(ctx, session);
     if (!target.ok) return target;
-    return runPlan(ctx, session, target, { picked, effort });
+    // D1: only the exact word 'free' picks the free planner (runPlan).
+    return runPlan(ctx, session, target, { picked, effort, planner: planner === 'free' ? 'free' : 'claude' });
   });
 
   // Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js): the request
@@ -222,6 +225,24 @@ function registerOrchestraIpc(ipcMain, ctx) {
     }
     const err = await ctx.openPath(file);
     return err ? refuse('openFailed') : { ok: true };
+  });
+
+  // F4a "Approve plan": only the run id crosses (plus the optional project
+  // scope). Main finds the run, checks it is a finished plan run, and the
+  // approver (orchestraPlanApprove.js) refuses a branch that touches anything
+  // outside docs/plans/<slug>/ or does not merge cleanly.
+  ipcMain.handle('orchestra:planRun:approve', async (_event, planId, opts) => {
+    if (typeof planId !== 'string' || !planDocsDir(planId)) return refuse('badId');
+    const run = runForPlan(projectIdOf(opts), planId);
+    if (!run.ok) return run;
+    const blocked = ctx.godModeBlock(run.projectId);
+    if (blocked) return blocked;
+    if (!ctx.approvePlan) return refuse('unavailable');
+    const res = await ctx.approvePlan({ projectId: run.projectId, repoPath: run.controller.repoPath(), view: run.controller.view() });
+    if (res && res.ok && run.controller.notePlanApproved && run.controller.notePlanApproved(planId, res)) {
+      changed(run.projectId, run.controller.view());
+    }
+    return res;
   });
 
   ipcMain.handle('orchestra:list', () => {

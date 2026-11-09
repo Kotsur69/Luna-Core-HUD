@@ -762,6 +762,13 @@ function normalizePackage(raw) {
     ...(raw.planRun != null ? { planRun: normalizeStoredPlanRunFlag(raw.planRun) } : {}),
     // A plan run's synthesis: its one split round is spent once.
     ...(Number.isInteger(raw.planSplits) && raw.planSplits > 0 ? { planSplits: Math.min(raw.planSplits, 9) } : {}),
+    // Q8 auto-split (orchestraAutoSplit.js): made by a split / replaced by one /
+    // its split failed. A split in flight is not restored (`splitting`).
+    ...(typeof raw.splitOf === 'string' && SLUG_RE.test(raw.splitOf) ? { splitOf: raw.splitOf } : {}),
+    ...(Array.isArray(raw.splitInto) && raw.splitInto.length
+      ? { splitInto: raw.splitInto.filter((id) => typeof id === 'string' && SLUG_RE.test(id)).slice(0, 3) }
+      : {}),
+    ...(raw.splitFailed === true ? { splitFailed: true } : {}),
   };
 }
 
@@ -946,6 +953,8 @@ function normalizeStoredPlan(raw) {
     allowedTools: strList(raw.allowedTools).filter(isAllowRule).slice(0, 50),
     // A free run (orchestraFree.js) stays branches-only after a restart too.
     freeMode: raw.freeMode === true,
+    // D1: a free-planned build run keeps its planner (auto-split, Q8).
+    ...(raw.buildPlanner === 'free' ? { buildPlanner: 'free' } : {}),
     integrationMode: raw.freeMode === true || planRun
       ? 'branches'
       : (INTEGRATION_MODES.includes(raw.integrationMode) ? raw.integrationMode : null),
