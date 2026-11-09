@@ -615,13 +615,15 @@ contextBridge.exposeInMainWorld('lunacore', {
   // effort: the planner's --effort level; main falls back to 'high' for
   // anything that is not one of src/efforts.js EFFORTS.
   // planner: 'claude' | 'free' (D1); main treats anything but 'free' as Claude.
-  planOrchestra: (sessionId, todoAts, effort, planner) =>
+  // workers: 'claude' | 'hybrid' | 'free' (F6); main treats anything else as Claude only.
+  planOrchestra: (sessionId, todoAts, effort, planner, workers) =>
     ipcRenderer.invoke(
       'orchestra:plan',
       typeof sessionId === 'string' ? sessionId : null,
       Array.isArray(todoAts) ? todoAts : null,
       typeof effort === 'string' ? effort : null,
       planner === 'free' ? 'free' : 'claude',
+      typeof workers === 'string' ? workers : null,
     ),
   /**
    * Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js). Two fixed

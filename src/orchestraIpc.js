@@ -165,7 +165,7 @@ function registerOrchestraIpc(ipcMain, ctx) {
   // tab's local-model profile must not silently plan the whole run.
   // The selection rules, refusals and makePlan call are shared with the
   // phone's godmode.plan (src/orchestraPlanStart.js).
-  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts, effort, planner) => {
+  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts, effort, planner, workers) => {
     // To-do `at` values only, capped like the list itself; an off-shape
     // selection fails closed ([] -> 'noneSelected'). makePlan re-checks each
     // value against the list it reads.
@@ -177,7 +177,8 @@ function registerOrchestraIpc(ipcMain, ctx) {
     const target = planTarget(ctx, session);
     if (!target.ok) return target;
     // D1: only the exact word 'free' picks the free planner (runPlan).
-    return runPlan(ctx, session, target, { picked, effort, planner: planner === 'free' ? 'free' : 'claude' });
+    // F6 "Workers": runPlan accepts one of three names only; anything else is Claude only.
+    return runPlan(ctx, session, target, { picked, effort, planner: planner === 'free' ? 'free' : 'claude', workers });
   });
 
   // Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js): the request

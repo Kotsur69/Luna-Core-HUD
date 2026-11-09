@@ -25,6 +25,12 @@ let plannerEffort = DEFAULT_PLANNER_EFFORT;
 /** D1 "Planner: Claude / Free" for a Build run; Claude unless Mati picks Free. */
 const BUILD_PLANNERS = ['claude', 'free'];
 let buildPlanner = 'claude';
+/**
+ * F6 "Workers" (ui pref orchestraWorkers): Claude only / Plan with free models
+ * in mind / Free only. Mirrors src/orchestraWorkers.js WORKERS.
+ */
+const WORKERS = ['claude', 'hybrid', 'free'];
+let workers = 'claude';
 let manual = 0;
 let selected = new Set();
 const seen = new Set();
@@ -57,9 +63,26 @@ async function loadPlannerEffort() {
     const prefs = await window.lunacore.getUiPrefs();
     const saved = prefs && prefs.orchestraPlannerEffort;
     plannerEffort = PLANNER_EFFORTS.includes(saved) ? saved : DEFAULT_PLANNER_EFFORT;
+    workers = workersPrefOf(prefs);
   } catch {
-    /* prefs unreadable: keep the level already on screen (default high) */
+    /* prefs unreadable: keep the level and workers already on screen */
   }
+}
+
+/**
+ * The saved "Workers" choice. Main migrates the old "Free providers" tick
+ * (orchestraFree) already; an older main may still hand the raw tick over.
+ * @param {{orchestraWorkers?:unknown, orchestraFree?:unknown}|null} prefs
+ */
+export function workersPrefOf(prefs) {
+  if (!prefs || typeof prefs !== 'object') return 'claude';
+  if (WORKERS.includes(prefs.orchestraWorkers)) return prefs.orchestraWorkers;
+  return prefs.orchestraFree === true ? 'free' : 'claude';
+}
+
+/** The workers the next plan uses: a free planner always plans a free-only run (D1). */
+export function chosenWorkers() {
+  return buildPlanner === 'free' ? 'free' : workers;
 }
 
 /** The planner effort the next plan uses. */
@@ -88,7 +111,7 @@ function button(label, onClick, disabled) {
 }
 
 /** "Planner: Claude / Free" (D1). Free plans on the coding profile; the run is free-only. */
-function plannerSelect(disabled) {
+function plannerSelect(disabled, repaint) {
   const label = el('label', 'orchestra__pick-effort');
   label.title = t('orch.pick.planner.hint');
   label.append(el('span', '', t('orch.pick.planner')));
@@ -102,6 +125,33 @@ function plannerSelect(disabled) {
   sel.disabled = disabled;
   sel.addEventListener('change', () => {
     buildPlanner = BUILD_PLANNERS.includes(sel.value) ? sel.value : 'claude';
+    // The Workers select follows: a free planner locks it to "Free only".
+    repaint();
+  });
+  label.append(sel);
+  return label;
+}
+
+/**
+ * F6 "Workers": replaces the old "Free providers" tick. Chosen before
+ * planning because "Plan with free models in mind" changes the planner.
+ */
+function workersSelect(disabled) {
+  const label = el('label', 'orchestra__pick-effort');
+  label.title = t('orch.workerMode.hint');
+  label.append(el('span', '', t('orch.workerMode')));
+  const sel = el('select', 'profile-select');
+  for (const w of WORKERS) {
+    const opt = el('option', '', t(`orch.workerMode.${w}`));
+    opt.value = w;
+    sel.append(opt);
+  }
+  sel.value = chosenWorkers();
+  sel.disabled = disabled || buildPlanner === 'free';
+  sel.addEventListener('change', () => {
+    workers = WORKERS.includes(sel.value) ? sel.value : 'claude';
+    // Fire-and-forget like the effort pref: a failed write keeps the choice on screen.
+    Promise.resolve(window.lunacore.setUiPrefs({ orchestraWorkers: workers })).catch(() => {});
   });
   label.append(sel);
   return label;
@@ -150,7 +200,7 @@ function cardRow(card, missing, disabled, repaint) {
 
 /**
  * The picker block for #orchestra-body.
- * @param {{disabled:boolean, canCancel:boolean, onPlan:(ats:number[], effort:string, planner:string) => void,
+ * @param {{disabled:boolean, canCancel:boolean, onPlan:(ats:number[], effort:string, planner:string, workers:string) => void,
  *   onCancel:() => void, repaint:() => void}} opts
  * @returns {HTMLElement}
  */
@@ -197,9 +247,10 @@ export function pickerView({ disabled, canCancel, onPlan, onCancel, repaint }) {
   const foot = el('div', 'orchestra__pick-bar');
   const planDisabled = disabled || !count;
   foot.append(
-    plannerSelect(planDisabled),
+    plannerSelect(planDisabled, repaint),
+    workersSelect(planDisabled),
     effortSelect(planDisabled),
-    button(t('orch.pick.plan', { n: count }), () => onPlan(selectedAts(), plannerEffort, buildPlanner), planDisabled),
+    button(t('orch.pick.plan', { n: count }), () => onPlan(selectedAts(), plannerEffort, buildPlanner, chosenWorkers()), planDisabled),
   );
   if (canCancel) foot.append(button(t('orch.pick.back'), onCancel, disabled));
   box.append(foot);

@@ -21,6 +21,7 @@
 'use strict';
 
 const { plannerEffortOf } = require('./orchestraPlan');
+const { normalizeWorkers } = require('./orchestraWorkers');
 
 const keyOf = (projectId) => (typeof projectId === 'string' ? projectId : null);
 
@@ -66,9 +67,9 @@ function planTarget(ctx, session) {
  * @param {{registry: object, toolEnv: () => object, send: Function}} ctx
  * @param {{projectId?: string|null, profileId?: string}} session
  * @param {{projectId: string|null, repoPath: string}} target planTarget()'s answer
- * @param {{picked: number[]|null, effort?: unknown, planner?: unknown}} opts
+ * @param {{picked: number[]|null, effort?: unknown, planner?: unknown, workers?: unknown}} opts
  */
-async function runPlan(ctx, session, target, { picked, effort, planner }) {
+async function runPlan(ctx, session, target, { picked, effort, planner, workers }) {
   // D1 "Planner: Claude / Free": exactly 'free' picks the free planner on the
   // coding profile's env; anything else is today's Claude planner.
   const free = planner === 'free';
@@ -83,6 +84,9 @@ async function runPlan(ctx, session, target, { picked, effort, planner }) {
     // One of the four levels only; anything else plans at the default high.
     plannerEffort: plannerEffortOf(effort),
     ...(free ? { planner: 'free' } : {}),
+    // F6 "Workers": only "Plan with free models in mind" changes planning; a
+    // Claude-only request passes no key (the makePlan call as before).
+    ...(!free && normalizeWorkers(workers) === 'hybrid' ? { workers: 'hybrid' } : {}),
   });
   if (res.ok) ctx.send('orchestra:changed', { projectId: target.projectId, view: res.plan });
   return res;

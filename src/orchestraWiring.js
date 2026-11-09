@@ -33,6 +33,7 @@ const fs = require('fs');
 const path = require('path');
 const { BRIEF_DIR, RESUME_GRACE_MS } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
+const { loadProtected } = require('./orchestraHybridGuard');
 const { finishPackage, headSha, runVerify } = require('./orchestraFinish');
 const { sharedVerifyQueue } = require('./verifyQueue');
 const orchestraIntegrate = require('./orchestraIntegrate');
@@ -620,6 +621,9 @@ function powerDeps(projectId, ctx, shared, self) {
     freshEnv: () => ctx.toolEnv(),
     // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
     freeProfileId: () => ctx.freeProfileId(),
+    // Hybrid runs (F6): the shipped protected paths plus the repo's own
+    // .lunacore/hybrid-protected.json; a broken file never throws.
+    hybridProtected: (repoPath) => loadProtected({ repoPath }),
     // Sleep at the usage limit / shut down when done: the registry's one flow
     // for every run (sharedPowerDeps). Missing = a powerless single run.
     ...(shared && shared.powerFlow ? { powerFlow: shared.powerFlow } : {}),
