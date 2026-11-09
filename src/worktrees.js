@@ -98,8 +98,8 @@ function worktreePathFor(repoRoot, slug) {
   return path.join(path.dirname(repoRoot), WORKTREE_DIR, path.basename(repoRoot), slug);
 }
 
-/** Branch prefixes a caller may ask for (God Mode free runs use luna-free/). */
-const BRANCH_PREFIXES = new Set([BRANCH_PREFIX, 'luna-free/']);
+/** Branch prefixes a caller may ask for (God Mode free runs use luna-free/, plan runs luna-plan/). */
+const BRANCH_PREFIXES = new Set([BRANCH_PREFIX, 'luna-free/', 'luna-plan/']);
 
 /** @param {string} slug @param {string} [prefix] one of BRANCH_PREFIXES */
 function branchFor(slug, prefix = BRANCH_PREFIX) {
@@ -261,7 +261,7 @@ function topLevelFailure(top) {
  * @param {unknown} name tab / branch name as typed
  * @param {{execImpl?: Function, fsImpl?: typeof fs, base?: string, branchPrefix?: string}} [deps]
  *   base: commit sha to branch from instead of HEAD
- *   branchPrefix: 'luna/' (default) or 'luna-free/' - anything else is ignored
+ *   branchPrefix: 'luna/' (default), 'luna-free/' or 'luna-plan/' - anything else is ignored
  * A failure that may clear up on its own (git hung, did not start, a lock)
  * carries `retryable: true`. A failure after git already created the folder
  * carries its `root` and `branch`, so the caller can clean it up.

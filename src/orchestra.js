@@ -57,6 +57,11 @@ const { createPowerFlow } = require('./orchestraPower');
 const { createPowerCtl } = require('./powerctl');
 const { createSleepWatch, sleepCredit, recordSleep } = require('./orchestraSleep');
 const { createRecoverer } = require('./orchestraRecover');
+// Free God Mode v2 plan runs: lockdown + branches, start, view (logic lives there).
+const planLaunch = require('./orchestraPlanRunLaunch');
+const planStart = require('./orchestraPlanRunStart');
+const planView = require('./orchestraPlanRunView');
+const { ROLE_SYNTHESIS, planPath: planDocPath } = require('./orchestraPlanRun');
 
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
@@ -88,6 +93,8 @@ const ESC = '\x1b';
  * @returns {string}
  */
 function briefText(pkg, branch, opts = {}) {
+  // A plan-run worker has no shell: its own brief, no verify, no git.
+  if (pkg.planRun) return planLaunch.planBriefText(pkg, branch, opts);
   const esc = opts.escalation;
   const depMerge = opts.depMerge !== undefined ? opts.depMerge : pkg.depMerge;
   return [
@@ -257,6 +264,53 @@ function givenCards(allOpen, cards) {
 }
 
 /**
+ * A planned package with its fresh run state (makePlan and makePlanRun).
+ * @param {object} p a validatePlan() / buildPlanRunPackages() package
+ */
+function runPackage(p) {
+  return {
+    ...p,
+    state: 'pending',
+    sessionId: null,
+    branch: null,
+    root: null,
+    cwd: null,
+    briefPath: null,
+    baseSha: null,
+    headSha: null,
+    error: null,
+    detail: null,
+    nudges: 0,
+    verifyRounds: 0,
+    startedAt: null,
+    pausedMs: 0,
+    stalls: 0,
+    stallHistory: [],
+    escalated: false,
+    modelOverride: null,
+    effortOverride: null,
+    touched: [],
+    prUrl: null,
+    merged: false,
+    cleaned: false,
+    autoRetries: 0,
+    autoResumed: false,
+    terminal: false,
+    blockedBy: null,
+    stalledAt: null,
+    failure: null,
+    // Push protection (pushSecrets.js): one fix-up round each for the
+    // pre-push secret scan and for a GH013 rejection.
+    scanFixup: false,
+    pushFixup: false,
+    pushBlockedSha: null,
+    pushBlockDetail: null,
+    // 'queued' | 'running' while finishing (verifyQueue.js), else null.
+    verifyPhase: null,
+  };
+}
+
+/**
  * @param {{
  *   runPlanner: Function, addWorktree: Function, createSession: Function,
  *   readTodos: Function, dirtyCount: Function, writeBrief: Function,
@@ -309,8 +363,11 @@ function createOrchestra(deps) {
   const log = deps.log || noop;
   // Package worktree dependencies (orchestraDeps.js): install after
   // addWorktree, check before a worker starts and before the post-DONE verify.
-  const installDeps = deps.installDeps || (async () => ({ ok: true, output: '' }));
-  const checkDeps = deps.checkDeps || (() => ({ ok: true, needed: false }));
+  const rawInstallDeps = deps.installDeps || (async () => ({ ok: true, output: '' }));
+  const rawCheckDeps = deps.checkDeps || (() => ({ ok: true, needed: false }));
+  // A plan run runs no code and no verify: no package worktree needs node_modules.
+  const installDeps = (root, opts) => (plan && plan.planRun ? Promise.resolve({ ok: true, output: '' }) : rawInstallDeps(root, opts));
+  const checkDeps = (root) => (plan && plan.planRun ? { ok: true, needed: false } : rawCheckDeps(root));
 
   /** @type {null|object} */
   let plan = null;
@@ -342,7 +399,7 @@ function createOrchestra(deps) {
     clearTimer,
     now,
     onChange: deps.onPlanWait || noop,
-    replan: (ctx) => makePlan(ctx),
+    replan: (ctx) => (ctx && ctx.planRunRequest ? makePlanRun(ctx) : makePlan(ctx)),
   });
 
   // The end-of-run self-check's one fix-up worker (orchestraFixup.js): a
@@ -593,6 +650,8 @@ function createOrchestra(deps) {
       // Run-level automatic fixes (integration retries, orchestraRecover.js).
       recoveries: Array.isArray(plan.recoveries) ? plan.recoveries.map((e) => ({ ...e })) : [],
       freeMode: plan.freeMode === true,
+      // Plan runs (orchestraPlanRunView.js): topics, progress, stalls, flagged tasks, docs.
+      planRun: planView.planRunView(plan),
       options: sup.normalizeOptions(plan.options),
       integration: {
         ...plan.integration,
@@ -827,46 +886,7 @@ function createOrchestra(deps) {
         todoText: new Map(openTodos.map((t) => [t.at, t.text])),
         // LW 2.12: only a plan made with an ownership map carries the key.
         ...(ownership ? { ownership } : {}),
-        packages: checked.packages.map((p) => ({
-          ...p,
-          state: 'pending',
-          sessionId: null,
-          branch: null,
-          root: null,
-          cwd: null,
-          briefPath: null,
-          baseSha: null,
-          headSha: null,
-          error: null,
-          detail: null,
-          nudges: 0,
-          verifyRounds: 0,
-          startedAt: null,
-          pausedMs: 0,
-          stalls: 0,
-          stallHistory: [],
-          escalated: false,
-          modelOverride: null,
-          effortOverride: null,
-          touched: [],
-          prUrl: null,
-          merged: false,
-          cleaned: false,
-          autoRetries: 0,
-          autoResumed: false,
-          terminal: false,
-          blockedBy: null,
-          stalledAt: null,
-          failure: null,
-          // Push protection (pushSecrets.js): one fix-up round each for the
-          // pre-push secret scan and for a GH013 rejection.
-          scanFixup: false,
-          pushFixup: false,
-          pushBlockedSha: null,
-          pushBlockDetail: null,
-          // 'queued' | 'running' while finishing (verifyQueue.js), else null.
-          verifyPhase: null,
-        })),
+        packages: checked.packages.map(runPackage),
       };
       runSettledHook = typeof ctx.onRunSettled === 'function' ? { planId: plan.id, fn: ctx.onRunSettled } : null;
       commit();
@@ -877,13 +897,129 @@ function createOrchestra(deps) {
     }
   }
 
+  /**
+   * A topic split that hit a Claude limit: wait for the reset (or switch to a
+   * free Claude account), like makePlan. Returns the refusal to hand back.
+   */
+  function armPlanWait(ctx, res) {
+    const limits = deps.usageLimits ? deps.usageLimits() : [];
+    const decision = planWaitDecision({ res, limits, now: now() });
+    if (decision.action !== 'wait') return res;
+    if (deps.accountFailover && deps.accountFailover(decision.resumeAt || null)) {
+      const retryCtx = deps.freshEnv ? { ...ctx, env: deps.freshEnv() } : ctx;
+      planWaiter.arm(retryCtx, { ...decision, resumeAt: now() + ACCOUNT_SWITCH_RETRY_MS, source: 'account' });
+    } else {
+      planWaiter.arm(ctx, decision);
+    }
+    return { ok: false, error: 'waiting', planWait: planWaiter.view() };
+  }
+
+  /**
+   * Free God Mode v2 plan run (orchestraPlanRunStart.js): ONE topic split,
+   * then the topic -> critique -> synthesis packages start right away (Q6),
+   * locked down on the plan profile (orchestraPlanRunLaunch.js).
+   * @param {{projectId:string|null, repoPath:string, env:object, request:string,
+   *   planner:'claude'|'free', planRunRequest:true}} ctx validated in main
+   */
+  async function makePlanRun(ctx) {
+    if (isBusy()) return { ok: false, error: 'busy' };
+    if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
+    if (deps.repoBusy && deps.repoBusy(ctx.repoPath)) return { ok: false, error: 'repoBusy' };
+    const profile = deps.planProfile ? deps.planProfile() : null;
+    const settings = planLaunch.planRunSettings({ profileExists: !!profile });
+    if (!settings.ok) return { ok: false, error: settings.error };
+    // Refused up front: a worker that could not be locked down never starts.
+    if (!planLaunch.canLockdown(profile.command)) return { ok: false, error: 'noLockdown' };
+    if (!deps.runTopicSplit) return { ok: false, error: 'failed' };
+    if (planWaiter.isWaiting()) planWaiter.clear();
+
+    busy = true;
+    planningRepo = ctx.repoPath;
+    try {
+      const [res, dirty, baseBranch] = await Promise.all([
+        deps.runTopicSplit({ cwd: ctx.repoPath, env: ctx.env, request: ctx.request, planner: ctx.planner }),
+        deps.dirtyCount(ctx.repoPath),
+        deps.baseBranchOf ? deps.baseBranchOf(ctx.repoPath) : null,
+      ]);
+      // Only the Claude planner waits for its window; a free one just fails.
+      if (!res.ok) return ctx.planner === 'claude' ? armPlanWait(ctx, res) : res;
+      const runSlug = planStart.deriveRunSlug(ctx.request, now());
+      const built = planStart.planRunSetup({ request: ctx.request, raw: res.raw, runSlug });
+      if (!built.ok) return { ok: false, error: built.error, errors: built.errors };
+      clearAllTimers();
+      ownershipNudged.clear();
+      plan = planStart.planRunState({
+        id: `p${now().toString(36)}`,
+        ctx,
+        settings,
+        runSlug,
+        built,
+        costUsd: res.costUsd,
+        dirty,
+        baseBranch: sup.isBaseBranch(baseBranch) ? baseBranch : null,
+        options: sup.normalizeOptions({ unattendedApprovalMin: workerSettings().unattendedApprovalMin, sleepOnLimit: false, shutdownWhenDone: false }),
+        estimate: estimatePlan(built.packages, []),
+        packages: built.packages.map(runPackage),
+      });
+      runSettledHook = null;
+      // Q6: no review step - the run starts now.
+      freezeSettings();
+      plan.started = true;
+      plan.runStartedAt = now();
+      commit();
+    } finally {
+      busy = false;
+      planningRepo = null;
+    }
+    await pump();
+    return { ok: true, plan: view() };
+  }
+
+  /**
+   * A plan-run package pushed its doc: a copy goes next to the run report
+   * (deps.planDocs), and PLAN.md's tasks are sized - ONE split round back to
+   * the synthesis worker, then flagged on the board. True when the package
+   * went back to work (the split round).
+   */
+  function onPlanDocPushed(id) {
+    const pkg = findPkg(id);
+    const docs = deps.planDocs;
+    if (!docs || !plan.planRun || !pkg) return false;
+    const file = planView.planDocFile(pkg);
+    const text = file ? docs.read(pkg) : null;
+    if (typeof text === 'string' && docs.save(plan.id, file, text)) {
+      plan.planRun = { ...plan.planRun, saved: [...new Set([...(plan.planRun.saved || []), id])] };
+    }
+    if (pkg.planRun.role !== ROLE_SYNTHESIS) return false;
+    const alive = sessionAlive(pkg.sessionId);
+    const step = docs.sizing(text, {
+      root: pkg.root,
+      // No live worker to send the split to: straight to the board.
+      splitsSent: alive ? pkg.planSplits || 0 : Infinity,
+      planPath: planDocPath(plan.planRun.runSlug),
+    });
+    if (step.action === 'split') {
+      patch(id, { state: 'launched', planSplits: (pkg.planSplits || 0) + 1, nudges: 0 });
+      writePty(pkg.sessionId, planView.splitRoundText(id, step.brief), { paste: true });
+      return true;
+    }
+    plan.planRun = { ...plan.planRun, flagged: step.action === 'flag' ? step.flagged : [] };
+    return false;
+  }
+
   function openTab(pkg, cwd, branch, briefPath) {
     return deps.createSession({
       profileId: plan.profileId,
       projectId: plan.projectId,
       cwd,
       branch,
-      task: { briefPath, model: modelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] },
+      task: plan.planRun
+        ? planLaunch.planWorkerTask({
+            briefPath,
+            runSlug: plan.planRun.runSlug,
+            mcpConfigPath: deps.planMcpConfigPath ? deps.planMcpConfigPath() : null,
+          })
+        : { briefPath, model: modelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] },
     });
   }
 
@@ -963,6 +1099,7 @@ function createOrchestra(deps) {
     const wt = await deps.addWorktree(plan.repoPath, `${pkg.id}-${stamp}`, {
       base: baseDep ? baseDep.headSha : undefined,
       ...(plan.freeMode ? { branchPrefix: FREE_BRANCH_PREFIX } : {}),
+      ...(plan.planRun ? { branchPrefix: planLaunch.PLAN_BRANCH_PREFIX } : {}),
     });
     if (!wt.ok) {
       // git got as far as creating the folder: launchOne() cleans it up.
@@ -974,6 +1111,10 @@ function createOrchestra(deps) {
     made.base = baseDep ? baseDep.headSha : null;
     // A free run never works on (or pushes) the target branch.
     if (plan.freeMode && !isSafeFreeBranch(wt.branch, plan.baseBranch)) {
+      return { state: 'failed', error: 'unsafeBranch', detail: wt.branch || null };
+    }
+    // Nor does a plan run (orchestraPlanRunLaunch.js): luna-plan/ only.
+    if (plan.planRun && !planLaunch.isSafePlanBranch(wt.branch, plan.baseBranch)) {
       return { state: 'failed', error: 'unsafeBranch', detail: wt.branch || null };
     }
     const others = pushedDeps.filter((d) => d !== baseDep).map((d) => d.branch);
@@ -1306,14 +1447,14 @@ function createOrchestra(deps) {
     }
 
     // "Free providers" (orchestraFree.js): chosen at Approve, fixed for the run.
-    if (o.free === true && !plan.started && !plan.freeMode) {
+    if (o.free === true && !plan.started && !plan.freeMode && !plan.planRun) {
       const free = freeRunSettings({ freeProfileId: deps.freeProfileId ? deps.freeProfileId() : null });
       if (!free.ok) return { ok: false, error: free.error };
       plan.freeMode = true;
       plan.profileId = free.profileId;
       plan.integrationMode = free.integrationMode;
     }
-    const wanted = integrationFor(plan, mode);
+    const wanted = planLaunch.planIntegrationFor(plan, integrationFor(plan, mode));
     // "Create a new release after finish": merge runs only, set at Approve
     // (confirmed natively with the merge), stored as options.releaseAfter.
     const release = o.releaseAfter === true && wanted === 'merge' && !plan.started;
@@ -1667,9 +1808,19 @@ function createOrchestra(deps) {
     if (res.ok) {
       const touched = sup.mergeTouched(pkg.touched, sup.relTouched(pkg.root, res.files || []));
       patch(id, { state: 'pushed', headSha: res.headSha || null, error: null, detail: null, touched, terminal: false });
+      // A plan doc: copied next to the report; PLAN.md's tasks sized (one split round).
+      if (pkg.planRun && onPlanDocPushed(id)) {
+        commit();
+        return;
+      }
       tickTodos(plan.projectId, pkg.todoAts);
       commit();
       kick();
+      return;
+    }
+    // The plan-run finish guard says why itself: outsidePlanFolder / noSources / badPlanRun.
+    if (res.stage === 'planGuard') {
+      stall(id, res.reason || 'planGuardFailed', res.detail || null);
       return;
     }
     if (res.stage !== 'verify') {
@@ -2409,6 +2560,7 @@ function createOrchestra(deps) {
     releaseTarget,
     recordRelease: (planId, result) => finalizer.recordPostMerge(planId, 'release', result),
     runFixup: (args) => fixup.run(args),
+    makePlanRun,
     planWait: () => planWaiter.view(),
     cancelPlanWait: () => planWaiter.cancel(),
     isBusy,

@@ -35,6 +35,7 @@ import { loadPicker, pickerView } from './orchestraPick.js';
 import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine, reportRow } from './orchestraFinish.js';
 import * as board from './orchestraBoard.js';
 import { switcherStrip } from './orchestraSwitcher.js';
+import { runTypeSwitch, planOnlyForm, resetPlanOnlyForm, planRunPanel } from './orchestraPlanRun.js';
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
 const q = (sel) => (overlay ? overlay.querySelector(sel) : null);
@@ -52,6 +53,9 @@ const FAIL_CODES = new Set([
   'noNodeModules', 'notHeld', 'installFailed',
   'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile', 'badOptions', 'noneSelected',
   'lunasWorkActive', 'batteryLow', 'notFinishing', 'tooEarly', 'notAbortable', 'repoBusy',
+  // Free God Mode v2 plan runs (orchestraPlanRun.js).
+  'noPlanProfile', 'noLockdown', 'badTopics', 'emptyRequest', 'requestTooLong', 'badPlanner', 'badRepo',
+  'unknownRepo', 'noDoc',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).
@@ -85,6 +89,8 @@ let optionsBusy = false;
 let picking = false;
 /** Edited prompts, `${planId}:${pkgId}` -> text, until launched. */
 const drafts = new Map();
+/** Where a new run starts: 'build' (the to-do picker) or 'plan' (Plan only). */
+let runMode = 'build';
 /** Start options picked on the board before Approve. */
 const startOpts = { when: 'now', time: '01:00', integration: null, free: false };
 
@@ -465,6 +471,8 @@ function renderPlan() {
   armAbortReveal();
   // Always on top and usable during the run: the switches are live.
   body.append(runOptionsRow(plan, { disabled: optionsBusy, onToggle: setRunOption }));
+  // A plan run: topics, progress, guard stalls, flagged tasks, doc links.
+  if (plan.planRun) body.append(planRunPanel(plan.planRun, { pkgErrorText, onOpenDoc: openPlanDoc, disabled: phase !== 'idle' }));
   const est = plan.estimate;
   let line = t('orch.summary', {
     n: plan.packages.length,
@@ -616,6 +624,11 @@ function render() {
   renderPlanWait();
   if (failure) body.append(msg(failText(failure), 'is-bad'));
   if (picking && phase === 'idle') {
+    body.append(runTypeSwitch({ mode: runMode, disabled: phase !== 'idle', onChange: setRunMode }));
+  }
+  if (picking && phase === 'idle' && runMode === 'plan') {
+    body.append(planOnlyForm({ disabled: phase !== 'idle', onStart: startPlanRun }));
+  } else if (picking && phase === 'idle') {
     body.append(
       pickerView({
         disabled: phase !== 'idle',
@@ -704,6 +717,58 @@ async function startPlanning(ats, effort) {
     if (!plan) picking = true;
   }
   if (isOpen) render();
+}
+
+/** Build / Plan only switch: only where a new run starts. */
+function setRunMode(mode) {
+  if (phase !== 'idle' || (mode !== 'build' && mode !== 'plan')) return;
+  runMode = mode;
+  failure = null;
+  render();
+}
+
+/**
+ * "Plan only": ONE topic split in main, then the run starts right away (Q6).
+ * @param {string} request the free text
+ * @param {'claude'|'free'} planner who splits it into topics
+ */
+async function startPlanRun(request, planner) {
+  if (phase !== 'idle') return;
+  phase = 'planning';
+  picking = false;
+  failure = null;
+  render();
+  let res;
+  try {
+    res = await window.lunacore.orchestraPlanRun('start', { request, planner, sessionId: getActiveSessionId() });
+  } catch {
+    res = { ok: false, error: 'failed' };
+  }
+  phase = 'idle';
+  if (res && res.ok) {
+    board.apply(res.plan);
+    board.select(res.plan.projectId);
+    plan = board.view();
+    planWait = null;
+    drafts.clear();
+    retryRefusals.clear();
+    resetPlanOnlyForm();
+    runMode = 'build';
+  } else if (res && res.error === 'waiting') {
+    planWait = res.planWait || null;
+  } else {
+    failure = (res && res.error) || 'failed';
+    await refetch();
+    // Back to the form (the draft is kept), the error above it.
+    picking = true;
+  }
+  if (isOpen) render();
+}
+
+/** A written plan doc: main opens its copy next to the run report. */
+function openPlanDoc(id) {
+  if (!plan) return;
+  act(() => window.lunacore.orchestraPlanRun('openDoc', { planId: plan.id, id, projectId: board.project() }));
 }
 
 /** @param {string[]|null} ids null = Approve (all ready packages) */

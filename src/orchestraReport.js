@@ -28,6 +28,7 @@ const h = require('./reportHtml');
 const { diagnosePackage, diagnoseIntegration, diagnoseSkip, skipDetailLabel } = require('./orchestraDiagnose');
 const { sleepSummary } = require('./orchestraSleep');
 const { recoveryEntries } = require('./orchestraRecover');
+const { planRunResult, planRunReportLines } = require('./orchestraPlanRunView');
 
 const NOTE_TAG = '[LunaCore run';
 // A whole note line: the tag with a run id, as stallNote() writes it.
@@ -605,12 +606,14 @@ function buildReport(view, extra) {
     '',
     `- Repo: \`${view.repoPath}\`${view.baseBranch ? ` (base \`${view.baseBranch}\`)` : ''}`,
     `- Workers: ${view.workerModel}, ${view.permissionMode}`,
-    `- Result: ${pushed} of ${packages.length} packages pushed`,
+    // A plan run's result is about its docs (the hub item shows this line).
+    `- Result: ${view.planRun ? planRunResult(view.planRun, packages.length) : `${pushed} of ${packages.length} packages pushed`}`,
     `- Integration: ${view.integrationMode || 'branches'} - ${integ.state || 'idle'}${partial}${integError}`,
     '',
     '## Needs you',
     '',
     ...(needs.length ? needs.map((l) => `- ${l}`) : ['Nothing - all done']),
+    ...planRunReportLines(view),
     ...tailLines(integ.selfCheck),
     ...wrongSection(view, facts),
     ...manualSection(integ),

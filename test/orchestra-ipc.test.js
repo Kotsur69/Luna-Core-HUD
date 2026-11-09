@@ -385,10 +385,12 @@ test('every orchestra channel the preload bridge calls has a handler in main', (
   const s = setup();
   t.after(s.cleanup);
   const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
-  const used = new Set([...preload.matchAll(/'(orchestra:[A-Za-z-]+)'/g)].map((m) => m[1]));
+  const used = new Set([...preload.matchAll(/'(orchestra:[A-Za-z:-]+)'/g)].map((m) => m[1]));
   // Pushed from main to the page, not handled.
   const pushed = new Set(['orchestra:changed', 'orchestra:planWait']);
   assert.ok(used.has('orchestra:list'));
+  assert.ok(used.has('orchestra:planRun:start'));
+  assert.ok(used.has('orchestra:planRun:openDoc'));
   for (const channel of used) {
     const handled = s.handlers.has(channel) || s.listeners.has(channel);
     assert.ok(handled || pushed.has(channel), `${channel} has a handler`);
