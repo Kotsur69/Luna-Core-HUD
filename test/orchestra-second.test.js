@@ -721,6 +721,23 @@ test('merge mode needs the native confirmation; the checkout must still be on th
   const none = await started({ packages: [pkg('a', [1])] }, { integration: 'merge' });
   assert.equal(none.res.error, 'mergeDeclined', 'no dialog available = no merge');
 
+  // The phone's signed godmode.launch passes the trusted second argument: no
+  // dialog. The same flag inside the (renderer-supplied) payload is ignored.
+  let asked = 0;
+  const confirmMerge = async () => {
+    asked += 1;
+    return false;
+  };
+  const fromPayload = await started({ packages: [pkg('a', [1])], extraDeps: { confirmMerge } }, { integration: 'merge', mergeConfirmed: true });
+  assert.equal(fromPayload.res.error, 'mergeDeclined', 'a payload cannot skip the dialog');
+  assert.equal(asked, 1);
+  const signed = setup({ packages: [pkg('a', [1])], extraDeps: { confirmMerge } });
+  const { plan: signedPlan } = await signed.orch.makePlan(signed.ctx);
+  const signedRes = await signed.orch.launch({ planId: signedPlan.id, integration: 'merge' }, { mergeConfirmed: true });
+  assert.equal(signedRes.ok, true);
+  assert.equal(asked, 1, 'the dialog is skipped on the signed path');
+  assert.equal(signed.orch.view().integrationMode, 'merge');
+
   let branch = 'main';
   const moved = await started({ packages: [pkg('a', [1])], extraDeps: { baseBranchOf: async () => branch } });
   branch = 'feature';

@@ -5,6 +5,8 @@
 // notification (supabase/functions/push); this side only says what happened:
 //
 //   chat events   approval needed, session done / failed (src/hostchat.js)
+//   God Mode      a phone-started plan is ready / failed (src/hostgodmode.js),
+//                 with the repo's folder name
 //   usage         80 % and 95 % of the 5 h and weekly limits, once per window
 //                 (a window is identified by its reset time), from wherever
 //                 the PC puts its `usage` snapshot
@@ -19,6 +21,9 @@ const LEVELS = [80, 95];
 const WINDOWS = ['fiveHour', 'sevenDay'];
 const MAX_SENT = 64;
 const KEY_RE = /^[A-Za-z0-9:._-]{1,120}$/;
+const PLAN_EVENTS = ['planReady', 'planFailed'];
+/** A repo folder name the push function accepts (same rule there). */
+const REPO_RE = /^[A-Za-z0-9._-]{1,60}$/;
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 
@@ -74,6 +79,16 @@ function createHostPush({ invoke, machine, log = (l) => console.error(l) }) {
       if (!['approval', 'done', 'failed'].includes(kind) || !info || typeof info.key !== 'string') return Promise.resolve();
       return post({ event: kind, machine, key: info.key });
     },
+    /**
+     * A phone-started God Mode plan finished planning (src/hostgodmode.js):
+     * 'planReady' | 'planFailed' with the repo's folder name, never a path.
+     * One push per plan request (the key carries its id).
+     */
+    plan(kind, info) {
+      if (!PLAN_EVENTS.includes(kind) || !info || typeof info.key !== 'string') return Promise.resolve();
+      const repo = typeof info.repo === 'string' && REPO_RE.test(info.repo) ? info.repo : null;
+      return post({ event: kind, machine, key: info.key, ...(repo ? { repo } : {}) });
+    },
     /** After each usage put: the 80 % / 95 % alerts not sent yet. */
     usage(snap) {
       const r = usageAlerts(snap, sent);
@@ -83,4 +98,4 @@ function createHostPush({ invoke, machine, log = (l) => console.error(l) }) {
   };
 }
 
-module.exports = { createHostPush, usageAlerts, LEVELS };
+module.exports = { createHostPush, usageAlerts, LEVELS, PLAN_EVENTS };

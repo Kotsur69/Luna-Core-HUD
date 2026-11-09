@@ -18,7 +18,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker,
 // headless src/hostmain.js instead of the HUD, before any HUD module loads.
 // A CommonJS module may return at the top level: nothing below runs then.
 // eslint-disable-next-line no-use-before-define
-if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud, chatTabs: phoneTabs, configSync }) }) !== 'hud') return;
+if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud, chatTabs: phoneTabs, configSync, godmode: phoneGodmode }) }) !== 'hud') return;
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -168,6 +168,7 @@ const { createWidget, supabaseRegistry, endpointFor, startClientFeedbackPoll } =
 const { createMailReplies } = require('./lunasworkMailReplies');
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
+const { createHostGodmode } = require('./hostgodmode');
 const { createHostPush } = require('./hostpush');
 let cloud = null;
 let weeklyReview = null;
@@ -1328,6 +1329,27 @@ const lunasworkMachine = createMachineRuntime({
   log: (line) => console.info(line),
 });
 
+/** A God Mode tab's repo folder: its project's, else the tab's own cwd. */
+const orchestraRepoFor = (session) => {
+  const project = getProject(projects, session.projectId);
+  return resolveProjectDir(project ? project.path : session.cwd);
+};
+
+// The phone's signed godmode.* commands (src/hostgodmode.js): live only when
+// this HUD is switched into host mode (src/hostswitch.js attaches it).
+const phoneGodmode = createHostGodmode({
+  registry: orchestraRuns,
+  projects: () => projects,
+  repoFor: orchestraRepoFor,
+  godModeBlock: (projectId) => lunaswork.godModeBlock(projectId),
+  toolEnv: orchestraToolEnv,
+  send,
+  maxTodoItems: MAX_TODO_ITEMS,
+  openTab: (projectId) => createSession({ projectId }),
+  readTodos,
+  onChange: pokeGodmodeLive,
+});
+
 /**
  * Gives a tab its own intake token and --mcp-config file.
  * @param {Session} session
@@ -2133,7 +2155,8 @@ godmodeLive = createLivePublisher({
   build: () => {
     const views = [...latestLiveViews.values()].reverse();
     const lives = livesEntry(views, { now: Date.now(), tabState: (id) => (statusBoard.current(id) || {}).state || null });
-    return { live: lives[0] || null, lives, tabs: tabsEntry([...sessions.values()].map(sessionSummary)) };
+    // plans: each project's plan not started yet (src/hostgodmode.js).
+    return { live: lives[0] || null, lives, tabs: tabsEntry([...sessions.values()].map(sessionSummary)), plans: phoneGodmode.plans() };
   },
   publish: (section) => snapshotPuts.godmode.live(section),
 });
@@ -3379,10 +3402,7 @@ function registerIpc() {
     },
     // A closed tab's id is refused, never redirected to the tab on screen.
     resolveSession: resolveTargetSession,
-    repoFor: (session) => {
-      const project = getProject(projects, session.projectId);
-      return resolveProjectDir(project ? project.path : session.cwd);
-    },
+    repoFor: orchestraRepoFor,
     toolEnv: orchestraToolEnv,
     maxTodoItems: MAX_TODO_ITEMS,
     godModeBlock: (projectId) => lunaswork.godModeBlock(projectId),

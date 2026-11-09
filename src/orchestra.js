@@ -1268,9 +1268,14 @@ function createOrchestra(deps) {
    * starts named pending packages by hand, dependencies or not. Prompt edits
    * from the review overlay apply before launch.
    * @param {unknown} payload {planId, ids?: string[]|null, prompts?: {[id]: string}}
+   * @param {{mergeConfirmed?: boolean}} [trusted] main-only, never from a
+   *   payload: mergeConfirmed = the merge was already confirmed (the phone's
+   *   Face ID-signed godmode.launch IS the confirmation), so the native
+   *   dialog is skipped. orchestra:launch (renderer IPC) never passes it.
    */
-  async function launch(payload) {
+  async function launch(payload, trusted = {}) {
     const o = payload && typeof payload === 'object' ? payload : {};
+    const mergeConfirmed = Boolean(trusted) && trusted.mergeConfirmed === true;
     if (!plan || o.planId !== plan.id) return { ok: false, error: 'noPlan' };
     if (plan.errors.length) return { ok: false, error: 'planErrors' };
     if (isBusy()) return { ok: false, error: 'busy' };
@@ -1312,7 +1317,7 @@ function createOrchestra(deps) {
     // "Create a new release after finish": merge runs only, set at Approve
     // (confirmed natively with the merge), stored as options.releaseAfter.
     const release = o.releaseAfter === true && wanted === 'merge' && !plan.started;
-    if (wanted === 'merge' && !plan.started && !(await confirmMerge({ release }))) return { ok: false, error: 'mergeDeclined' };
+    if (wanted === 'merge' && !plan.started && !mergeConfirmed && !(await confirmMerge({ release }))) return { ok: false, error: 'mergeDeclined' };
     if (wanted && !plan.started) plan.integrationMode = wanted;
     if (!plan.started) {
       const { releaseAfter: _previous, ...rest } = plan.options || {};
