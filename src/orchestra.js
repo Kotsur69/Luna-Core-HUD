@@ -68,6 +68,9 @@ const autoSplit = require('./orchestraAutoSplit');
 // Hybrid runs (F6): the "Workers" choice and the guard over "free" packages.
 const workersRules = require('./orchestraWorkers');
 const hybridGuard = require('./orchestraHybridGuard');
+// Hybrid runs, execution side (F6c/F6d) and the opt-in free-branch review (F5).
+const hybridRules = require('./orchestraHybrid');
+const { createFreeReviewer } = require('./orchestraFreeReview');
 
 /**
  * The runPlanner args. A Claude plan without plan docs gets exactly the args
@@ -551,6 +554,53 @@ function createOrchestra(deps) {
     log,
   });
 
+  // Hybrid runs (orchestraHybrid.js): free packages on the coding profile,
+  // the Claude review gate, hand-overs to Sonnet, per-package free waits.
+  const hybridRun = hybridRules.createHybridRun({
+    getPlan: () => plan,
+    findPkg: (id) => findPkg(id),
+    patch: (id, fields) => patch(id, fields),
+    commit: () => commit(),
+    kick: () => kick(),
+    now,
+    setTimer: (fn, ms) => setTimer(fn, ms),
+    clearTimer: (t) => clearTimer(t),
+    onRunEvent: (...args) => onRunEvent(...args),
+    log,
+    stallReasons: sup.ESCALATE_REASONS,
+    resumeText: sup.RESUME_TEXT,
+    cancelNudge: (id) => cancelNudge(id),
+    writePty: (sessionId, text, opts) => writePty(sessionId, text, opts),
+    briefText: (pkg, branch, opts) => briefText(pkg, branch, opts),
+    reopen: (pkg, text) => reopenInWorktree(pkg, text),
+    landPushed: (id) => landPushed(id),
+    stall: (id, reason, detail) => stall(id, reason, detail),
+    runReview: deps.runReview || null,
+    reviewDiff: deps.reviewDiff || null,
+    reviewEnv: () => (deps.freshEnv ? deps.freshEnv() : null),
+    usageLimits: () => (deps.usageLimits ? deps.usageLimits() : []),
+  });
+  // F5: Claude review of a settled free run's luna-free/ branches, opt-in.
+  const freeReviewer = createFreeReviewer({
+    getPlan: () => plan,
+    setState: (state) => {
+      if (!plan) return;
+      plan.freeReview = state;
+      commit();
+    },
+    runReview: deps.runReview || null,
+    reviewDiff: deps.reviewDiff || null,
+    reviewEnv: () => (deps.freshEnv ? deps.freshEnv() : null),
+    usageLimits: () => (deps.usageLimits ? deps.usageLimits() : []),
+    readTodos: (projectId) => deps.readTodos(projectId),
+    writeDoc: deps.writeReviewDoc || null,
+    now,
+    setTimer: (fn, ms) => setTimer(fn, ms),
+    clearTimer: (t) => clearTimer(t),
+    onRunEvent: (...args) => onRunEvent(...args),
+    log,
+  });
+
   // Sleep at the usage limit / shut down when done (orchestraPower.js): the
   // registry's shared flow, or this run's own.
   const approvalsPending = () =>
@@ -680,6 +730,8 @@ function createOrchestra(deps) {
       buildPlanner: plan.buildPlanner === 'free' ? 'free' : 'claude',
       // F6 "Workers": claude / hybrid / free (older plans migrate from the tick).
       workers: workersRules.storedWorkers(plan),
+      // F5: the opt-in review of a free run's branches (null = none ran).
+      freeReview: plan.freeReview ? { ...plan.freeReview } : null,
       // Plan runs (orchestraPlanRunView.js): topics, progress, stalls, flagged tasks, docs.
       planRun: planView.planRunView(plan),
       options: sup.normalizeOptions(plan.options),
@@ -707,6 +759,8 @@ function createOrchestra(deps) {
         model: p.modelOverride || p.model,
         // F6 guard: why a "free" package was upgraded to Sonnet (null = it was not).
         hybridGuard: p.hybridGuard || null,
+        // F6c/F6d: free worker, review, hand-overs, free wait (null outside hybrid runs).
+        hybrid: hybridRun.view(p),
         effort: p.effortOverride || p.effort || null,
         todos: p.todoAts.map((at) => plan.todoText.get(at) || String(at)),
         state: p.state,
@@ -802,6 +856,8 @@ function createOrchestra(deps) {
     for (const id of [...nudgeTimers.keys()]) cancelNudge(id);
     for (const id of [...retryTimers.keys()]) cancelAutoRetry(id);
     recover.cancel('run');
+    hybridRun.cancelAll();
+    freeReviewer.cancel();
     backgroundOpen.clear();
     lastActivity.clear();
     if (resumeTimer) clearTimer(resumeTimer);
@@ -1167,7 +1223,8 @@ function createOrchestra(deps) {
 
   function openTab(pkg, cwd, branch, briefPath) {
     return deps.createSession({
-      profileId: plan.profileId,
+      // A hybrid free package runs on the coding profile (never auto:easy).
+      profileId: hybridRun.profileFor(pkg, plan.profileId),
       projectId: plan.projectId,
       cwd,
       branch,
@@ -1499,6 +1556,8 @@ function createOrchestra(deps) {
     // The finalizer's last commit went out while isRunning() was still true;
     // the board and the phone get the settled view (running: false) now.
     if (plan) commit();
+    // F5 (opt-in): a settled free run's branches get one Claude review each.
+    freeReviewer.start();
     fireRunSettled();
     // A fetch / push the network or auth refused is run again after a backoff.
     const integ = plan && !plan.killed ? plan.integration : null;
@@ -1612,6 +1671,15 @@ function createOrchestra(deps) {
       if (workers === 'claude') delete plan.workers;
       else plan.workers = workers;
     }
+    // Hybrid (F6c): the coding profile its free packages run on, fixed for the run.
+    if (!plan.started && !plan.planRun) {
+      const coding = workers === 'hybrid'
+        ? hybridRules.approveProfile(plan, deps.codingProfileId ? deps.codingProfileId() : null)
+        : { ok: true, profileId: null };
+      if (!coding.ok) return { ok: false, error: coding.error };
+      if (coding.profileId) plan.hybridProfileId = coding.profileId;
+      else delete plan.hybridProfileId;
+    }
     const wantsFree = workers === 'free';
     if (wantsFree && !plan.started && !plan.freeMode && !plan.planRun) {
       const free = freeRunSettings({ freeProfileId: deps.freeProfileId ? deps.freeProfileId() : null });
@@ -1706,6 +1774,7 @@ function createOrchestra(deps) {
 
   function stall(id, reason, detail = null) {
     cancelNudge(id);
+    hybridRun.forget(id);
     const before = findPkg(id);
     forgetSession(before.sessionId);
     const stalls = (before.stalls || 0) + 1;
@@ -1718,6 +1787,16 @@ function createOrchestra(deps) {
     // runs never get here (shouldAutoSplit) and escalate as before.
     if (live && autoSplit.shouldAutoSplit(plan, pkg, reason) && startAutoSplit(pkg, reason, detail)) {
       commit();
+      return;
+    }
+    // F6c: a hybrid free package that stalled twice goes to Sonnet, not Opus.
+    if (live && hybridRun.wantsHandOver(pkg, reason)) {
+      if (!hybridRun.handOver(pkg, 'twoStalls', { detail: detail ? `${reason}: ${detail}` : reason })) {
+        markTerminal(id, reason);
+        onRunEvent('stalled', { id, reason });
+      }
+      commit();
+      kick();
       return;
     }
     const wantsEscalate = live && sup.shouldEscalate(pkg, modelFor(pkg), reason);
@@ -1808,7 +1887,7 @@ function createOrchestra(deps) {
   function sendNudge(id) {
     nudgeTimers.delete(id);
     const pkg = plan ? findPkg(id) : null;
-    if (!pkg || pkg.state !== 'launched' || pkg.awaitingDeps || plan.pausedUntil || plan.killed) return;
+    if (!pkg || pkg.state !== 'launched' || pkg.awaitingDeps || plan.pausedUntil || plan.killed || hybridRun.isWaiting(pkg)) return;
     const action = sup.turnEndAction(pkg, null);
     if (action.type === 'stall') {
       stall(id, action.reason);
@@ -1915,6 +1994,7 @@ function createOrchestra(deps) {
 
   async function finish(id) {
     cancelNudge(id);
+    hybridRun.forget(id);
     // The post-DONE verify runs a plain `npm test` in the worktree: not
     // without its dependencies. The package waits for Resume, unstalled.
     if (!depsReady(findPkg(id))) {
@@ -1979,15 +2059,13 @@ function createOrchestra(deps) {
     }
     if (res.ok) {
       const touched = sup.mergeTouched(pkg.touched, sup.relTouched(pkg.root, res.files || []));
-      patch(id, { state: 'pushed', headSha: res.headSha || null, error: null, detail: null, touched, terminal: false });
-      // A plan doc: copied next to the report; PLAN.md's tasks sized (one split round).
-      if (pkg.planRun && onPlanDocPushed(id)) {
+      patch(id, { headSha: res.headSha || null, error: null, detail: null, touched, terminal: false });
+      // F6c gate: a hybrid free package is reviewed by Claude before it counts as pushed.
+      if (hybridRun.gate(id)) {
         commit();
         return;
       }
-      tickTodos(plan.projectId, pkg.todoAts);
-      commit();
-      kick();
+      landPushed(id);
       return;
     }
     // The plan-run finish guard says why itself: outsidePlanFolder / noSources / badPlanRun.
@@ -2008,6 +2086,20 @@ function createOrchestra(deps) {
     patch(id, { state: 'launched', verifyRounds: pkg.verifyRounds + 1, nudges: 0 });
     writePty(pkg.sessionId, sup.verifyFailText(pkg.id, pkg.verify, res.output), { paste: true });
     commit();
+  }
+
+  /** A verified, pushed package lands: to-dos ticked, dependants may launch. */
+  function landPushed(id) {
+    const pkg = findPkg(id);
+    patch(id, { state: 'pushed', terminal: false });
+    // A plan doc: copied next to the report; PLAN.md's tasks sized (one split round).
+    if (pkg.planRun && onPlanDocPushed(id)) {
+      commit();
+      return;
+    }
+    tickTodos(plan.projectId, pkg.todoAts);
+    commit();
+    kick();
   }
 
   /** The playbook runs a package's finish again (verify / push), with its overrides. */
@@ -2061,7 +2153,7 @@ function createOrchestra(deps) {
     const action = sup.turnEndAction(pkg, marker);
     if (action.type === 'finish') finish(pkg.id);
     else if (action.type === 'stall' && action.reason === 'blocked') stall(pkg.id, action.reason, action.detail || null);
-    else if (!plan.pausedUntil) {
+    else if (!plan.pausedUntil && !hybridRun.isWaiting(pkg)) {
       cancelNudge(pkg.id);
       if (background.length) {
         // The turn ended on a background process of the worker's own (a test
@@ -2151,7 +2243,8 @@ function createOrchestra(deps) {
       // Never credit more pause than the package has been running.
       const credit = Math.max(0, Math.min(pausedFor, now() - (p.startedAt || now())));
       patch(p.id, { pausedMs: p.pausedMs + credit });
-      if (p.state === 'launched') writePty(p.sessionId, sup.RESUME_TEXT, { paste: true });
+      // A free package waiting on its own free limits resumes at its own reset.
+      if (p.state === 'launched' && !hybridRun.isWaiting(p)) writePty(p.sessionId, sup.RESUME_TEXT, { paste: true });
     }
     onRunEvent('resumed');
     commit();
@@ -2198,6 +2291,8 @@ function createOrchestra(deps) {
   function onUsageLimit(sessionId, resetsAt) {
     const pkg = bySession(sessionId);
     if (!pkg || !sup.isActive(pkg) || plan.killed) return;
+    // Q9: a hybrid free package waits alone; Claude packages keep going.
+    if (hybridRun.onUsageLimit(pkg, resetsAt)) return;
     const until = Number.isFinite(resetsAt) && resetsAt > now() ? resetsAt : now() + DEFAULT_PAUSE_MS;
     if (plan.pausedUntil && plan.pausedUntil >= until) return;
     // Another stored account first; none -> pause until the reset, resume on its own.
@@ -2364,7 +2459,7 @@ function createOrchestra(deps) {
     recover.tick();
     if (!plan || plan.pausedUntil || plan.killed) return;
     for (const p of plan.packages) {
-      if (p.state === 'launched' && !p.awaitingDeps && sup.timedOut(p, now())) stall(p.id, 'timeout');
+      if (p.state === 'launched' && !p.awaitingDeps && !hybridRun.isWaiting(p) && sup.timedOut(p, now())) stall(p.id, 'timeout');
     }
     expireApprovals();
   }
@@ -2399,6 +2494,8 @@ function createOrchestra(deps) {
    */
   function kill() {
     if (!plan || !plan.started) return false;
+    // A review waiting for the Claude limit stops with the run.
+    const reviewsWaiting = hybridRun.cancelAll();
     clearAllTimers();
     plan.scheduledAt = null;
     plan.killed = true;
@@ -2411,6 +2508,9 @@ function createOrchestra(deps) {
     for (const p of plan.packages.filter((x) => x.state === 'launched')) {
       writePty(p.sessionId, ESC);
       patch(p.id, { state: 'killed' });
+    }
+    for (const id of reviewsWaiting) {
+      if ((findPkg(id) || {}).state === 'finishing') patch(id, { state: 'killed' });
     }
     // Waiting on a playbook backoff: stopped too, its timer dropped.
     for (const p of plan.packages.filter((x) => recover.pending(x.id))) {
@@ -2602,6 +2702,8 @@ function createOrchestra(deps) {
     const pkg = bySession(sessionId);
     if (!pkg) return false;
     cancelNudge(pkg.id);
+    // A free wait (F6d) ends with its tab; Retry reopens it without one.
+    hybridRun.forget(pkg.id);
     // A FINISHING package keeps finishing - verify and push need no tab, and
     // marking it closed would let Retry open a second writer in its worktree.
     patch(pkg.id, { sessionId: null, ...(pkg.state === 'launched' ? { state: 'closed' } : {}) });
@@ -2623,6 +2725,8 @@ function createOrchestra(deps) {
     plan.options = sup.normalizeOptions({ ...plan.options, ...changes });
     onRunEvent('options', { ...plan.options });
     commit();
+    // F5 ticked after the run settled: the review starts now.
+    if (changes.freeReview === true && !finalizer.isRunning()) freeReviewer.start();
     background(powerFlow.onOptions(plan.options), 'options');
     return { ok: true, options: { ...plan.options } };
   }

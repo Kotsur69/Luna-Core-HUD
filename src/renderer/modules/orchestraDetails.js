@@ -17,6 +17,7 @@
 'use strict';
 
 import { t } from './util.js';
+import { freeReviewLine } from './orchestraHybridView.js';
 
 // Codes with their own "what now" hint (orch.hint.<code>).
 const HINT_CODES = new Set(['depMergeFailed', 'conflict', 'depVerifyFailed', 'launchThrew', 'noTab', 'briefFailed']);
@@ -26,6 +27,8 @@ const STAGES = new Set(['worktree', 'brief', 'tab', 'launch', 'depMerge', 'depVe
 const MAX_FILES_SHOWN = 10;
 // Live run switches (orchestraSupervisor RUN_OPTION_FLAGS).
 const RUN_OPTIONS = ['sleepOnLimit', 'shutdownWhenDone'];
+// F5, a free build run only: one Claude review per luna-free/* branch (opt-in).
+const FREE_RUN_OPTIONS = ['freeReview'];
 // canWake() reasons with their own text (orch.wake.<reason>).
 const WAKE_REASONS = new Set(['noSleepState', 'wakeTimersOff', 'wakeTimersImportantOnly', 'unsupported', 'unknown']);
 const COUNTDOWN_TICK_MS = 1000;
@@ -85,7 +88,8 @@ export function runOptionsRow(plan, { disabled, onToggle }) {
   const options = plan.options && typeof plan.options === 'object' ? plan.options : {};
   const row = el('div', 'orchestra__runopts');
   row.append(el('span', 'orchestra__optlabel', t('orch.runopts')));
-  for (const key of RUN_OPTIONS) {
+  const keys = plan.freeMode === true ? [...RUN_OPTIONS, ...FREE_RUN_OPTIONS] : RUN_OPTIONS;
+  for (const key of keys) {
     const item = el('div', 'orchestra__runopt');
     const label = el('label', 'orchestra__optlabel');
     const box = el('input');
@@ -99,6 +103,8 @@ export function runOptionsRow(plan, { disabled, onToggle }) {
     if (key === 'sleepOnLimit' && wake && WAKE_REASONS.has(wake.reason)) {
       item.append(el('div', `orchestra__meta${wake.ok ? '' : ' is-warn'}`, t(`orch.wake.${wake.reason}`)));
     }
+    const status = key === 'freeReview' ? freeReviewLine(plan) : null;
+    if (status) item.append(el('div', `orchestra__meta${status.cls ? ` ${status.cls}` : ''}`, status.text));
     row.append(item);
   }
   return row;

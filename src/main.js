@@ -62,6 +62,7 @@ const { resolveLocalLaunch, prepareLocalLaunch, prepareChainLaunch, launchWhenRe
 const { ensureFallbackProxy, stopAllFallbackProxies, onRoute: onFreeRoute } = require('./fallbackproxy');
 const { loadChains, resolveProfileChain } = require('./freechains');
 const { pickFreeProfileId } = require('./orchestraFree');
+const { pickCodingProfileId } = require('./orchestraHybrid');
 // Free God Mode v2 plan runs: the plan-worker lockdown and its profile.
 const { workerLaunchCommand, lockedRestartCommand, planProfileFrom } = require('./orchestraPlanRunLaunch');
 const { createPlanApprover } = require('./orchestraPlanApprove');
@@ -1193,6 +1194,8 @@ const orchestraCtx = {
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
   accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
   freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
+  // Hybrid runs (F6c): free packages run on 'FreeLLMAPI - coding', never auto:easy.
+  codingProfileId: () => pickCodingProfileId(profiles, loadProviders().providers, loadChains()),
   planRunProfile: () => planProfileFrom(profiles),
   // Free God Mode v2 build runs: the free planner and its auto-split (Q8).
   freePlannerEnv: () => lunasworkFreeEnv(),

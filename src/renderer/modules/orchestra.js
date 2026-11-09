@@ -29,6 +29,7 @@ import { onLangChange } from './bus.js';
 import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { failureBlock, runOptionsRow, powerBanner, batteryBanner } from './orchestraDetails.js';
+import { hybridLines } from './orchestraHybridView.js';
 import { pkgStateKey, recoverAsk } from './orchestraState.js';
 import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetry.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
@@ -394,6 +395,8 @@ function pkgCard(pkg) {
   // F6 guard: the planner marked it "free", the rules moved it to Sonnet.
   const guard = hybridGuardText(pkg.hybridGuard);
   if (guard) card.append(msg(guard, 'is-warn'));
+  // F6c/F6d: runs free, the Claude review, limit waits, hand-overs to Sonnet.
+  for (const line of hybridLines(pkg)) card.append(msg(line.text, line.cls));
 
   if (pkg.todos.length) {
     const list = el('ul', 'orchestra__todos');
