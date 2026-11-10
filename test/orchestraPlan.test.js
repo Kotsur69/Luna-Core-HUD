@@ -85,9 +85,11 @@ test('Claude-only prompt never mentions the free model', () => {
 // ---- Claude-only run: byte-for-byte unchanged ----------------------------------
 
 // Hashes of the Claude-only argv, prompt and schema taken from the planner
-// before Slice F6 (commit d0277a0). Any drift fails here.
+// before Slice F6 (commit d0277a0). Any drift fails here. The argv hash was
+// re-pinned when the planner caps were raised (high: $3 -> $6); the flag set
+// and order are unchanged.
 const PRE_F6 = {
-  args: '1a5a6a6ed0ef6212132060042d415b11a465e5bef5ec0e731ab3d39ef2e94e83',
+  args: '9e2d3832cef4b0efb5c6a3607f5eaa73489d9c55b635f509e68c58bf53b4caf5',
   prompt: 'f60c4f58b4aec53a5bfa36b960cb64e49825512a389adee78cab05eba04be0c7',
   schema: '7bd3bd70025be36c866b7a79ea900a29b61a32768290f1b95e96a6227236ef89',
 };

@@ -32,12 +32,12 @@ const MIN = 60 * 1000;
 
 // ---- caps table / argv ----------------------------------------------------------
 
-test('PLANNER_CAPS: one budget + timeout per level, high keeps the old values', () => {
+test('PLANNER_CAPS: one budget + timeout per level, above the headless startup cost', () => {
   assert.deepEqual(Object.keys(PLANNER_CAPS), [...EFFORTS]);
-  assert.deepEqual(PLANNER_CAPS.medium, { budgetUsd: 2, timeoutMs: 10 * MIN });
-  assert.deepEqual(PLANNER_CAPS.high, { budgetUsd: 3, timeoutMs: 15 * MIN });
-  assert.deepEqual(PLANNER_CAPS.xhigh, { budgetUsd: 5, timeoutMs: 20 * MIN });
-  assert.deepEqual(PLANNER_CAPS.max, { budgetUsd: 8, timeoutMs: 30 * MIN });
+  assert.deepEqual(PLANNER_CAPS.medium, { budgetUsd: 4, timeoutMs: 10 * MIN });
+  assert.deepEqual(PLANNER_CAPS.high, { budgetUsd: 6, timeoutMs: 15 * MIN });
+  assert.deepEqual(PLANNER_CAPS.xhigh, { budgetUsd: 8, timeoutMs: 20 * MIN });
+  assert.deepEqual(PLANNER_CAPS.max, { budgetUsd: 12, timeoutMs: 30 * MIN });
   assert.ok(Object.isFrozen(PLANNER_CAPS) && Object.isFrozen(PLANNER_CAPS.high));
 });
 
@@ -58,7 +58,7 @@ test('buildPlannerArgs: --effort and --max-budget-usd follow the level', () => {
   }
   const fallback = buildPlannerArgs({ effort: 'low' });
   assert.equal(flagValue(fallback, '--effort'), 'high');
-  assert.equal(flagValue(fallback, '--max-budget-usd'), '3');
+  assert.equal(flagValue(fallback, '--max-budget-usd'), '6');
   assert.equal(flagValue(buildPlannerArgs(), '--effort'), 'high');
   assert.equal(flagValue(buildPlannerArgs({ effort: 'max', budgetUsd: 1 }), '--max-budget-usd'), '1', 'explicit budget wins');
 });

@@ -37,12 +37,15 @@ const PLANNER_MODELS = CLAUDE_MODELS;
 const PLANNER_EFFORT = 'high';
 // Spend cap and wall-clock timeout per planner effort. Opus at high effort over
 // a big to-do set (e.g. 9 packages, ~$2.3) can run past 8 min; a timeout throws
-// the whole plan away, so every level leaves headroom. Keys = src/efforts.js EFFORTS.
+// the whole plan away, so every level leaves headroom. A headless session's
+// startup context alone (hooks, plugins, MCP tool schemas) can cost ~$1.5-2
+// before the first file is read, so the caps sit well above that floor.
+// Keys = src/efforts.js EFFORTS.
 const PLANNER_CAPS = Object.freeze({
-  medium: Object.freeze({ budgetUsd: 2, timeoutMs: 10 * 60 * 1000 }),
-  high: Object.freeze({ budgetUsd: 3, timeoutMs: 15 * 60 * 1000 }),
-  xhigh: Object.freeze({ budgetUsd: 5, timeoutMs: 20 * 60 * 1000 }),
-  max: Object.freeze({ budgetUsd: 8, timeoutMs: 30 * 60 * 1000 }),
+  medium: Object.freeze({ budgetUsd: 4, timeoutMs: 10 * 60 * 1000 }),
+  high: Object.freeze({ budgetUsd: 6, timeoutMs: 15 * 60 * 1000 }),
+  xhigh: Object.freeze({ budgetUsd: 8, timeoutMs: 20 * 60 * 1000 }),
+  max: Object.freeze({ budgetUsd: 12, timeoutMs: 30 * 60 * 1000 }),
 });
 // Read-only: the planner may look at the code, never change it.
 const PLANNER_TOOLS = 'Read,Grep,Glob';
