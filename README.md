@@ -7,7 +7,7 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **On `main` since v0.25.0 (not released yet).**
+> **Current release: v0.26.0 — Free God Mode v2.**
 > - **Free God Mode v2:** a *Workers* selector (Claude only / Plan with free
 >   models in mind / Free only), *Plan only* runs that write Markdown plans
 >   with free models, *Approve plan* -> to-dos -> build from the plan, and a
@@ -22,7 +22,7 @@ injects prompts or touches the `claude` binary.
 > - **Luna's Work:** a *Run Playtester pass* button (one explore pass without
 >   a run), and the Playtester can open downloaded PDFs.
 >
-> **Current release: v0.25.0 — phone God Mode start, plan review/launch and live run controls.**
+> **v0.25.0 — phone God Mode start, plan review/launch and live run controls.**
 > - phone God Mode start, plan review/launch and live run controls
 > - signed godmode.* phone commands in HUD host mode
 > - sync hub settings and seen marks across PCs, fold the '!' inbox into the
@@ -337,8 +337,8 @@ God Mode can be hidden there too.
 
 | File | What it is |
 |------|------------|
-| `LunaCore-Setup-0.25.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
-| `LunaCore-0.25.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
+| `LunaCore-Setup-0.26.0.exe` | Installer (NSIS). Installs **per-user, so there is no admin prompt**. Adds Start Menu and desktop shortcuts, and an uninstaller. |
+| `LunaCore-0.26.0-portable.exe` | One file, no installation. Keeps its settings in a `LunaCore-config` folder **next to the `.exe`**, so it travels with a USB stick or a synced folder. |
 
 You still need the **Claude Code CLI** installed and logged in — LunaCore runs the
 real `claude`, it does not replace or reimplement it. If `claude` is not on your
