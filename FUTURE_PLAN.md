@@ -42,9 +42,7 @@ partly built or built with live checks owed) and `docs/untouched_docs/`
   Gmail and the Google OAuth app are set up.
 - **Still open (re-checked 2026-11-10, v0.25.0 + `main`):** every plan in
   `docs/tbc_docs/` is built and on `main`; each owes Mati's live checks
-  (its "Resume here" lists them): Luna host + phone pairing
-  ([`docs/tbc_docs/REMOTE_HOST_PLAN.md`](docs/tbc_docs/REMOTE_HOST_PLAN.md)),
-  multi God Mode ([`docs/tbc_docs/MULTI_GODMODE_PLAN.md`](docs/tbc_docs/MULTI_GODMODE_PLAN.md)),
+  (its "Resume here" lists them): multi God Mode ([`docs/tbc_docs/MULTI_GODMODE_PLAN.md`](docs/tbc_docs/MULTI_GODMODE_PLAN.md)),
   the notification hub ([`docs/tbc_docs/NOTIFICATION_HUB_PLAN.md`](docs/tbc_docs/NOTIFICATION_HUB_PLAN.md)),
   Luna's Work ([`docs/tbc_docs/LUNAS_WORK_PLAN.md`](docs/tbc_docs/LUNAS_WORK_PLAN.md))
   and Free God Mode v2
@@ -105,12 +103,9 @@ partly built or built with live checks owed) and `docs/untouched_docs/`
   the three `.ps1` helpers do not resolve (see *Known issues*). Still
   eyes-only: the HUD fonts, theme persistence across a restart and the
   taskbar icon.
-- **Luna host + phone pairing** on KT-PC-LLM, KT-NO-MMAZUR and the MacBook,
-  then a signed `news.scan`, `repo.clone` and a chat with Allow / Deny /
-  Always, Stop, End, Resume; "Forget all phones" must refuse the next
-  command. Steps: [`docs/tbc_docs/REMOTE_HOST_PLAN.md`](docs/tbc_docs/REMOTE_HOST_PLAN.md)
-  "Resume here". The claude CLI on a Windows host must be the native install
-  (`~/.local/bin/claude.exe`).
+- ~~**Luna host + phone pairing** on KT-PC-LLM, KT-NO-MMAZUR and the MacBook~~
+  ✅ passed 2026-11-10 (Mati); plan moved to
+  [`docs/done_docs/DONE_REMOTE_HOST_PLAN.md`](docs/done_docs/DONE_REMOTE_HOST_PLAN.md).
 
 ## Known issues
 

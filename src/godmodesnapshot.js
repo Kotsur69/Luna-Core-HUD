@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - God Mode runs over the cloud (main + phone)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md, same pattern as usagesnapshot.js / repossnapshot.js.
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md, same pattern as usagesnapshot.js / repossnapshot.js.
 // When a God Mode run is finalized (orchestraFinalize.js report()), the PC
 // adds it to its `godmode` snapshot: the last MAX_RUNS runs, newest first.
 // The phone lists them and shows each run's packages.

@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - live Claude Code chat driven from the phone (main, host mode)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md H2 and "H2 protocol (probed)". One `claude` child
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md H2 and "H2 protocol (probed)". One `claude` child
 // per session, in stream-json mode, with the host's own login, settings,
 // CLAUDE.md, skills, plugins and MCP servers. Max 2 live sessions per host.
 //

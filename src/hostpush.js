@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - Web Push requests from a PC / host (main)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md H4. The `push` edge function sends the actual
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md H4. The `push` edge function sends the actual
 // notification (supabase/functions/push); this side only says what happened:
 //
 //   chat events   approval needed, session done / failed (src/hostchat.js)

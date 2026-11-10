@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - a host's heartbeat and menu over the cloud (main + phone)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md, slice H1. A PC in host mode puts its `host`
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md, slice H1. A PC in host mode puts its `host`
 // snapshot every 30 s: what the phone may pick from on that host.
 //
 //   {v, at, version, os, default, godmode, repos: [{id, key, name, cloned, status}],

@@ -1643,7 +1643,7 @@ A **Luna host** is any PC (or Mac) that the phone app drives like a terminal
 at home: pick a repo, chat with Claude Code live, approve tool calls, get push
 notifications. The phone also shows every PC's usage limits, repo status and
 God Mode runs. Design, protocol and security review:
-[docs/tbc_docs/REMOTE_HOST_PLAN.md](docs/tbc_docs/REMOTE_HOST_PLAN.md).
+[docs/done_docs/DONE_REMOTE_HOST_PLAN.md](docs/done_docs/DONE_REMOTE_HOST_PLAN.md).
 
 > **This is remote code execution by design.** Whoever can sign a command owns
 > the host. The gate is a passkey (Face ID) paired on the host's own screen;

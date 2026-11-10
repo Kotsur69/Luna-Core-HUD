@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - repo status over the cloud (main + phone)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md, slice U2. A PC puts the git station's view of its
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md, slice U2. A PC puts the git station's view of its
 // repos as its `repos` snapshot; the phone reads every PC's row and merges
 // them by repo, so "pushed on one PC, behind on the other" shows at a glance.
 //

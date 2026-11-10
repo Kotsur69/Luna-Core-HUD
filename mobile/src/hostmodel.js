@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore phone - Host page model (pure; test/mobilehostmodel.test.mjs)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md H2/H3. Everything the Host page shows comes from
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md H2/H3. Everything the Host page shows comes from
 // rows another machine wrote: `host` snapshots (src/hostsnapshot.js parses
 // them) and `host_events` (src/hostevents.js parses them). This file turns
 // the parsed values into what the view renders; it never builds HTML.

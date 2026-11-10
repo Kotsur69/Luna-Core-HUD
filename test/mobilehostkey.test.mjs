@@ -1,4 +1,4 @@
-// Phone session key (mobile/src/hostkey.js), J-M11 of docs/tbc_docs/REMOTE_HOST_PLAN.md
+// Phone session key (mobile/src/hostkey.js), J-M11 of docs/done_docs/DONE_REMOTE_HOST_PLAN.md
 // "Security review": two concurrent first signCommands used to make two
 // session keys, the second overwriting the first, so one command was signed
 // by a key its grant did not name. A fake IndexedDB and a fake passkey stand

@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - the host clones the synced projects it lacks (main, host mode)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md, slice H1. Every synced project with a `remote`
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md, slice H1. Every synced project with a `remote`
 // (src/projectsync.js) that this host does not have is cloned into
 // <repos root>/<repo name> (~/source/repos/<name>) with the host's own git
 // credentials. Only when the owner is on the host's allow-list

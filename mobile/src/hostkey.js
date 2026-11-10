@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore phone - session key for host commands
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md, "Passkey + session key". The host side is
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md, "Passkey + session key". The host side is
 // src/hostauth.js; both sign/verify the canonical form of src/hostcanon.js.
 //
 //   session key  WebCrypto ECDSA P-256, generated with extractable = false

@@ -79,7 +79,7 @@ test('fanOut drops 404/410 subscriptions and keeps others', async () => {
   assert.deepEqual(db.dropped, ['gone']);
 });
 
-// L1 (docs/tbc_docs/REMOTE_HOST_PLAN.md "Security review"): a subscription row is the
+// L1 (docs/done_docs/DONE_REMOTE_HOST_PLAN.md "Security review"): a subscription row is the
 // phone's own write, so a stolen session could aim the function anywhere.
 test('L1: only the browsers\' push services are allowed endpoints', () => {
   for (const ok of [
@@ -143,7 +143,7 @@ test('offline-check needs the cron secret and fires once per outage', async () =
   assert.equal(sent.length, 1);
 });
 
-// Review H4 (docs/tbc_docs/REMOTE_HOST_PLAN.md "Security review"): the dedupe key was
+// Review H4 (docs/done_docs/DONE_REMOTE_HOST_PLAN.md "Security review"): the dedupe key was
 // spent before delivery, so a notification that reached no phone was lost.
 test('a notification that reached no phone releases its key, so a retry is sent', async () => {
   const db = fakeDb();

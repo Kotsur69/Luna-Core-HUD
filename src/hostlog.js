@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - the host log file (main, host mode)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md, "Security review" J-M: host.log used to rotate
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md, "Security review" J-M: host.log used to rotate
 // only when host mode started, and a host runs for days. This appender keeps
 // the size it wrote in memory and rotates (file -> file.old, one generation)
 // as soon as the file passes the cap, at any time, not just at start.

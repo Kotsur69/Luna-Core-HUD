@@ -14,7 +14,7 @@
 
 const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker, Notification, powerMonitor } = require('electron');
 
-// Host mode (docs/tbc_docs/REMOTE_HOST_PLAN.md, "Host runtime"): `--host` runs the
+// Host mode (docs/done_docs/DONE_REMOTE_HOST_PLAN.md, "Host runtime"): `--host` runs the
 // headless src/hostmain.js instead of the HUD, before any HUD module loads.
 // A CommonJS module may return at the top level: nothing below runs then.
 // eslint-disable-next-line no-use-before-define

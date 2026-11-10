@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - headless host mode (main)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md, "Host runtime". `LunaCore --host` starts Electron
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md, "Host runtime". `LunaCore --host` starts Electron
 // without the HUD window: a tray icon ("Luna host · <machine> · default",
 // Stop, Open log) and only the cloud auth / sync, snapshots, usage, git
 // station and host modules. None of the Windows-only HUD code is loaded, so

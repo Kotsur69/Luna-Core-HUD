@@ -318,7 +318,7 @@ test('shownPath never shows a path outside the repo', () => {
   assert.equal(chat.shownPath(process.platform === 'win32' ? 'C:\\Users\\me\\secret.txt' : '/home/me/secret.txt', REPO_DIR), 'secret.txt');
 });
 
-// ---- security review fixes (docs/tbc_docs/REMOTE_HOST_PLAN.md "Security review") ----
+// ---- security review fixes (docs/done_docs/DONE_REMOTE_HOST_PLAN.md "Security review") ----
 
 const askBash = (c, id, command) => c.say({ type: 'control_request', request_id: id, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command } } });
 

@@ -1,6 +1,6 @@
 # Luna host + phone control — plan
 
-> **🟡 BUILT, LIVE CHECKS OWED (re-checked against `main` 2026-11-05, v0.23.0).** Built and released in v0.17.0; push notifications are set up and live. All security follow-ups are done: M1 / M2 (`30f4e77`), M4 phone CSP (`e9a385f`, `mobile/vercel.json` + `mobile/index.html`), and the L1-L6 / J-M5..M13 / LOW leftovers (fixed or accepted with a reason, `luna/host-hardening-6rugq`, merged in 0.23.0 `6335f3e`). The in-app host mode toggle is on `main` (`a8823a9`). What is left is Mati's live checks plus two deploy steps (see "Resume here").
+> **✅ DONE (Mati, 2026-11-10).** Phone pairing + chat live-checked on all 3 hosts (KT-PC-LLM, KT-NO-MMAZUR, MacBook); Mati closed the plan. Built and released in v0.17.0; push notifications are set up and live. All security follow-ups are done: M1 / M2 (`30f4e77`), M4 phone CSP (`e9a385f`, `mobile/vercel.json` + `mobile/index.html`), and the L1-L6 / J-M5..M13 / LOW leftovers (fixed or accepted with a reason, `luna/host-hardening-6rugq`, merged in 0.23.0 `6335f3e`). The in-app host mode toggle is on `main` (`a8823a9`).
 
 Status: **confirmed by Mati 2026-10-20. U1, U2, H1, H2, H3 and H4 built
 (2026-10-20 - 2026-10-21); security + JS review of the whole command path
@@ -8,7 +8,7 @@ done 2026-10-21, every CRITICAL/HIGH fixed with a test (see "Security
 review"). Merged into `main` 2026-10-21 (`c9cfa41`) and all 6 migrations
 applied to Supabase the same day; released in v0.17.0. The `push` edge
 function, its secrets / cron and the Vercel key are set up (Mati,
-2026-10-22). Open: phone pairing with each host.** Builds on `DONE_CLOUD_SYNC_PLAN.md`
+2026-10-22). Phone pairing with each host passed 2026-11-10; plan DONE.** Builds on `DONE_CLOUD_SYNC_PLAN.md`
 (Supabase project `phkigyuhvbanadwmxqqs`, phone at
 `https://luna-core-hud.vercel.app`). Same rules apply: pulled rows are
 untrusted, realtime only triggers a read, every slice is done only when the
@@ -24,7 +24,7 @@ gate, `news.scan` / `git.fetchAll` / `repo.clone`), H2 live chat
 model / mode, H4 Web Push (edge function, phone subscription) and the review
 fixes below.
 
-**What is really left (2026-11-05):**
+**Closed by Mati 2026-11-10** (the list below is kept as history):
 
 - **Deploy (Mati):** `supabase functions deploy push --no-verify-jwt` for the L1
   push allow-list + timeout, and `supabase db push` for the
@@ -32,9 +32,9 @@ fixes below.
   record yet that either was deployed / applied).
 - **Live check:** the in-app host mode toggle on KT-PC-LLM (card "Live check:
   in-app host mode toggle").
-- **Live check:** item 1 (U1 usage on the phone) and item 4 (pairing + chat on
-  all 3 hosts) below.
-- When all pass: `git mv` this doc to `docs/done_docs/DONE_REMOTE_HOST_PLAN.md`.
+- **Live check:** item 1 (U1 usage on the phone) below. Item 4 (pairing +
+  chat on all 3 hosts) passed 2026-11-10.
+- ~~When all pass: `git mv` this doc to `docs/done_docs/DONE_REMOTE_HOST_PLAN.md`.~~ ✅ 2026-11-10.
 
 **Needs a live check (Mati; also in `FUTURE_PLAN.md`):**
 
@@ -51,11 +51,11 @@ fixes below.
    from the `google` function): `supabase functions deploy push
    --no-verify-jwt`, its secrets and the 2-min cron (H4 below), Vercel env
    `VITE_VAPID_PUBLIC_KEY`, then redeploy the phone.
-4. **Real phone pairing** on each host (KT-PC-LLM, KT-NO-MMAZUR, MacBook):
+4. ~~**Real phone pairing** on each host (KT-PC-LLM, KT-NO-MMAZUR, MacBook):
    first `--host` run → login → pairing window → codes match → confirm; then
    one `news.scan`, one `repo.clone`, one chat with an approval (Allow,
    Deny, Always), Stop, End, Resume; "Forget all phones" refuses the next
-   command.
+   command.~~ ✅ 2026-11-10: passed on all 3 hosts (Mati).
 5. ~~**Push on iOS:**~~ ✅ set up 2026-10-22. PWA installed from Safari, "Enable notifications", then an
    approval, a session done, the default host stopped > 5 min, a usage alert.
 6. Gotcha: a `src/*.js` module the phone imports must be added to the

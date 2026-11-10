@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - passkey pairing on the host's own screen (main, host mode)
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md, "Passkey + session key". The phone
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md, "Passkey + session key". The phone
 // (mobile/src/views/pair.js) creates a passkey and offers its public key to
 // this host through `host_pairings`, commit-reveal (src/hostcanon.js):
 //

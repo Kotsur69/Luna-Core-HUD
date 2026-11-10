@@ -2,7 +2,7 @@
 // ============================================================================
 // LunaCore - probe of the claude CLI's stream-json control protocol
 // ----------------------------------------------------------------------------
-// docs/tbc_docs/REMOTE_HOST_PLAN.md H2, "Probe first". A throwaway run that records
+// docs/done_docs/DONE_REMOTE_HOST_PLAN.md H2, "Probe first". A throwaway run that records
 // what src/hostchat.js has to speak:
 //
 //   claude -p --input-format stream-json --output-format stream-json
