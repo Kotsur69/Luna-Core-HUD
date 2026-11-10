@@ -1311,6 +1311,8 @@ class TranscriptWatcher {
     // a real question, and the answer is worth one click instead of a hunt.
     metrics.file = file;
     metrics.totals = { ...this.totals };
+    // The same totals per model (God Mode books a worker tab's tokens from it).
+    metrics.byModel = Object.fromEntries([...this.byModel].map(([model, t]) => [model, { ...t }]));
     metrics.elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
     // Cost only for models in the price table - an unknown backend gets no made-up amount.
     // Priced per model, so switching mid-session does not re-price the history.

@@ -53,6 +53,7 @@ import { sfx } from './sound.js';
 import { agentStream } from './keysynth.js';
 import { targetSlot, siblingOffsets, clampDx } from './tabdrag.js';
 import { createEarlyPtyBuffer } from './earlypty.js';
+import { mountTabResume } from './tabresume.js';
 
 // A2f: set once by mountTabs() - see modules/terminal.js.
 let tabEls = null;
@@ -674,6 +675,7 @@ export function mountTabs(root) {
   });
   const wtButton = root.querySelector('#tab-worktree');
   wtButton.addEventListener('click', () => openWorktreeField(wtButton));
+  mountTabResume(root);
   renderTabs();
   flushEarlyPty();
 }

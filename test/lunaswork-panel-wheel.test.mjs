@@ -36,3 +36,18 @@ test('summaryKey: stopping wins, then the wheel', () => {
   assert.equal(summaryKey(run({ wheel: 'requested' })), 'lw.run.handRequested');
   assert.equal(summaryKey(run({ wheel: 'running' })), 'lw.run.active');
 });
+
+test('waitLine: limit wait, error retry with its count, and God Mode busy read differently', async () => {
+  const { waitLine } = await import('../src/renderer/modules/lunasworkPanel.js');
+  const at = (ms) => `T${ms}`;
+  assert.deepEqual(waitLine(run({ waitUntil: 5, waitReason: 'limit' }), at), { key: 'lw.run.waiting', vars: { time: 'T5' } });
+  assert.equal(waitLine(run({ waitUntil: 5 }), at).key, 'lw.run.waiting');
+  assert.equal(waitLine(run({ waitUntil: 5, waitReason: 'whatever' }), at).key, 'lw.run.waiting');
+  assert.deepEqual(waitLine(run({ waitUntil: 5, waitReason: 'error', stepFailures: { count: 2, max: 3 } }), at), {
+    key: 'lw.run.retrying',
+    vars: { count: 2, max: 3, time: 'T5' },
+  });
+  assert.equal(waitLine(run({ waitUntil: 5, waitReason: 'error' }), at).key, 'lw.run.retryingPlain');
+  assert.equal(waitLine(run({ waitUntil: 5, waitReason: 'godModeBusy' }), at).key, 'lw.run.godModeBusy');
+  assert.equal(waitLine(run({}), at), null);
+});

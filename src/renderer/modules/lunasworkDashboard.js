@@ -22,6 +22,7 @@ import { t } from './util.js';
 import { onLangChange } from './bus.js';
 import { lineChart, stackedBars } from './lifecharts.js';
 import { decisionText, elapsed } from './lunasworkPanel.js';
+import { openLightbox } from './lightbox.js';
 
 // Series colours, same neon family as the theme variables.
 const PALETTE = ['#5ff2d6', '#c774ff', '#ffd86b', '#7cff9b', '#ff6b8a', '#6bb8ff', '#ff9f5f', '#b0b0ff'];
@@ -300,7 +301,15 @@ export function mountLunasWorkDashboard(root) {
       const fig = el('figure', 'lw-dash__shot');
       const img = el('img');
       img.alt = s.name;
-      fig.append(img, el('figcaption', 'termcustom__hint', `${s.name} · #${s.n}`));
+      // The thumbnail is a button: click / Enter opens the screenshot large.
+      const zoom = el('button', 'lw-dash__shot-btn');
+      zoom.type = 'button';
+      zoom.setAttribute('aria-label', t('lw.shot.enlarge', { name: s.name }));
+      zoom.addEventListener('click', () => {
+        if (img.src) openLightbox({ src: img.src, alt: s.name, closeLabel: t('lw.shot.close') });
+      });
+      zoom.append(img);
+      fig.append(zoom, el('figcaption', 'termcustom__hint', `${s.name} · #${s.n}`));
       grid.append(fig);
       loadShot(d.runId, s.file, img);
     }

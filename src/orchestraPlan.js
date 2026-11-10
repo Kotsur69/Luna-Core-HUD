@@ -23,9 +23,15 @@ const { execFile } = require('child_process');
 const { isUsageLimitText } = require('./orchestraPlanWait');
 const { checkCwd } = require('./projects');
 const { EFFORTS, normalizeEffort } = require('./efforts');
+const { CLAUDE_MODELS } = require('./claudeModels');
+const { usageFromEnvelope } = require('./orchestraUsage');
 const { FREE_PLANNER_MODEL, planContextLines } = require('./orchestraPlanBuild');
 
 const PLANNER_MODEL = 'opus';
+// The Claude CLI model aliases Mati may pick for the planner in the to-do
+// picker (and Luna's Work passes for its builds). Anything else plans on
+// PLANNER_MODEL. The spend cap and timeout stay per effort (PLANNER_CAPS).
+const PLANNER_MODELS = CLAUDE_MODELS;
 // Planning reads code across the repo and weighs grouping: one notch above
 // routine by default. Mati can pick another level per plan in the to-do picker.
 const PLANNER_EFFORT = 'high';
@@ -60,6 +66,11 @@ const SIZE_MINUTES = { S: 20, M: 45, L: 90 };
 const DEFAULT_MINUTES = SIZE_MINUTES.M;
 
 const MODELS = ['sonnet', 'opus'];
+// What a validated package may carry. The planner is only ever OFFERED MODELS
+// (schema enum + prompt, both pinned by test/orchestraPlan.test.js): 'fable'
+// is a manual choice - Luna's Work sets it on a package from its builder model
+// (lunasworkBuild.wrapPlanner) - and must survive validatePlan().
+const PACKAGE_MODELS = [...MODELS, 'fable'];
 
 /** JSON schema handed to `--json-schema`. Mirrors validatePlan() below. */
 const PLAN_SCHEMA = {
@@ -222,6 +233,16 @@ function plannerCaps(effort) {
   return PLANNER_CAPS[plannerEffortOf(effort)];
 }
 
+/**
+ * The planner model to use: one of PLANNER_MODELS, else the default (opus).
+ * This is the allow-list in front of the planner's `--model` flag.
+ * @param {unknown} model
+ * @returns {string}
+ */
+function plannerModelOf(model) {
+  return PLANNER_MODELS.includes(model) ? model : PLANNER_MODEL;
+}
+
 function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd, planner = 'claude', hybrid = false } = {}) {
   // The free planner (D1): the same call on the coding profile. The model is
   // the coding chain; no effort and no dollar cap (the CLI's cost estimate
@@ -250,7 +271,7 @@ function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budg
     // Hybrid (F6) is a Claude-planned run only; the free planner never gets it.
     JSON.stringify(planSchemaFor(hybrid)),
     '--model',
-    model,
+    plannerModelOf(model),
     '--effort',
     level,
     '--tools',
@@ -264,10 +285,14 @@ function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budg
 /**
  * Reads the CLI's JSON envelope. `structured_output` is where --json-schema
  * puts the answer; `result` (a JSON string) is the fallback.
+ * A successful answer also carries `usage` (tokens in / out / cache, per
+ * model - src/orchestraUsage.js) when the envelope reports any: additive, and
+ * absent on an envelope without token counts.
  * @param {string} stdout
- * @returns {{ok:true, raw:unknown, costUsd:number|null} | {ok:false, error:string, detail?:string}}
+ * @param {string} [model] the --model of the call, for a usage without a per-model split
+ * @returns {{ok:true, raw:unknown, costUsd:number|null, usage?:object} | {ok:false, error:string, detail?:string}}
  */
-function parsePlannerOutput(stdout) {
+function parsePlannerOutput(stdout, model) {
   let env;
   try {
     env = JSON.parse(String(stdout || ''));
@@ -285,11 +310,15 @@ function parsePlannerOutput(stdout) {
     const error = limit ? 'limit' : budget ? 'budget' : 'failed';
     return { ok: false, error, detail: clean(String(env.result || env.subtype || ''), 300) };
   }
+  // Only an envelope that reports tokens adds the key: a cost alone is costUsd
+  // already, and every result without token data keeps its old shape.
+  const usage = usageFromEnvelope(env, model);
+  const tokens = usage && usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens > 0 ? { usage } : {};
   if (env.structured_output && typeof env.structured_output === 'object') {
-    return { ok: true, raw: env.structured_output, costUsd };
+    return { ok: true, raw: env.structured_output, costUsd, ...tokens };
   }
   try {
-    return { ok: true, raw: JSON.parse(env.result), costUsd };
+    return { ok: true, raw: JSON.parse(env.result), costUsd, ...tokens };
   } catch {
     return { ok: false, error: 'badJson' };
   }
@@ -341,7 +370,7 @@ function topoOrder(packages) {
  */
 function validatePlan(raw, openTodos, { hybrid = false } = {}) {
   // "free" is a valid pick only in a hybrid plan (F6).
-  const models = hybrid === true ? HYBRID_MODELS : MODELS;
+  const models = hybrid === true ? [...HYBRID_MODELS, 'fable'] : PACKAGE_MODELS;
   const warnings = [];
   const errors = [];
   const openAts = new Set(openTodos.map((t) => t.at));
@@ -480,6 +509,7 @@ function estimatePlan(packages, todos, maxParallel = MAX_PARALLEL) {
  * @param {{cwd:string, env:object, openTodos:Array<object>, effort?:string, execImpl?:Function, timeoutMs?:number}} args
  *   effort: the planner's --effort level (invalid/missing -> high); it also
  *   picks the budget and the timeout from PLANNER_CAPS.
+ *   model: the planner's --model, one of PLANNER_MODELS (invalid/missing -> opus).
  *   planner: 'free' runs the same call on model auto:coding (the caller
  *   passes the coding profile's env); planDocs / extraPrompt extend the prompt.
  * @returns {Promise<{ok:true, raw:unknown, costUsd:number|null, durationMs:number}
@@ -490,6 +520,7 @@ function runPlanner({
   env,
   openTodos,
   effort = PLANNER_EFFORT,
+  model = PLANNER_MODEL,
   execImpl = execFile,
   timeoutMs,
   isDirImpl = undefined,
@@ -509,7 +540,13 @@ function runPlanner({
   return new Promise((resolve) => {
     const child = execImpl(
       'claude',
-      buildPlannerArgs({ effort: level, planner: planner === 'free' ? 'free' : 'claude', ...(hybridRun ? { hybrid: true } : {}) }),
+      buildPlannerArgs({
+        effort: level,
+        // Allow-listed again here: the free planner ignores it (its model is the coding chain).
+        model: plannerModelOf(model),
+        planner: planner === 'free' ? 'free' : 'claude',
+        ...(hybridRun ? { hybrid: true } : {}),
+      }),
       { cwd, env, timeout, maxBuffer: 20 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
         if (error && error.code === 'ENOENT') return resolve({ ok: false, error: 'noClaude' });
@@ -520,7 +557,7 @@ function runPlanner({
           const detail = clean(error.message, 300);
           return resolve({ ok: false, error: isUsageLimitText(detail) ? 'limit' : 'failed', detail });
         }
-        const parsed = parsePlannerOutput(stdout);
+        const parsed = parsePlannerOutput(stdout, planner === 'free' ? FREE_PLANNER_MODEL : plannerModelOf(model));
         resolve(parsed.ok ? { ...parsed, durationMs: Date.now() - started } : parsed);
       },
     );
@@ -536,6 +573,9 @@ module.exports = {
   HYBRID_PLAN_SCHEMA,
   planSchemaFor,
   PLANNER_MODEL,
+  PLANNER_MODELS,
+  PACKAGE_MODELS,
+  plannerModelOf,
   PLANNER_EFFORT,
   PLANNER_CAPS,
   plannerEffortOf,

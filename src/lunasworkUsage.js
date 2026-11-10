@@ -8,7 +8,9 @@
 //   createUsageMeter()         collects usage between phase transitions:
 //     runner(role, runClaude)  a runClaude({args, prompt, ...}) that records stdout's usage
 //     exec(role, execImpl)     the same for a child_process.execFile-style function
-//     add(role, usage)         records a usage directly (God Mode's planner cost)
+//     add(role, usage)         records a usage directly (a build's God Mode usage)
+//   godModeUsage(plan)         a settled God Mode plan view -> the build's Usage:
+//                              the tokens its Claude calls reported, per model
 //     drain()                  the entries since the last drain, cleared
 //   closePhase(ledger, {iteration, phase, startedAt, at, entries})
 //                              the ledger with the entries and the phase's time added
@@ -17,6 +19,8 @@
 //
 // ledger = {total, byRole:{role:Usage}, iterations:[{n, byRole, phases:{phase:ms}}]}
 // Usage  = {calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd}
+//          plus, only when a call reported a per-model split (God Mode builds):
+//          byModel: {<model>: {the same six fields}} - summed like the rest
 //
 // The ledger is kept with the run (lunasworkRun.restoreRun) and summed by the
 // controller in its one transition() - no step knows about it.
@@ -25,6 +29,8 @@
 'use strict';
 
 const { ROLES } = require('./lunasworkRules');
+// The per-model split is God Mode's shape (pure module, nothing of God Mode runs here).
+const gmUsage = require('./orchestraUsage');
 
 const USAGE_KEYS = ['calls', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'costUsd'];
 const MAX_ITERATIONS = 200;
@@ -42,6 +48,9 @@ function emptyUsage() {
   return { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
 }
 
+/** `byModel` as a key to spread: present only when a model has numbers. */
+const splitOf = (byModel) => (Object.keys(byModel).length ? { byModel } : {});
+
 function cleanUsage(raw) {
   if (!isObj(raw)) return emptyUsage();
   return {
@@ -51,13 +60,17 @@ function cleanUsage(raw) {
     cacheReadTokens: count(raw.cacheReadTokens),
     cacheWriteTokens: count(raw.cacheWriteTokens),
     costUsd: money(raw.costUsd),
+    ...splitOf(gmUsage.cleanUsage({ byModel: raw.byModel }).byModel),
   };
 }
 
 function addUsage(a, b) {
   const x = cleanUsage(a);
   const y = cleanUsage(b);
-  return Object.fromEntries(USAGE_KEYS.map((k) => [k, x[k] + y[k]]));
+  return {
+    ...Object.fromEntries(USAGE_KEYS.map((k) => [k, x[k] + y[k]])),
+    ...splitOf(gmUsage.addUsage({ byModel: x.byModel }, { byModel: y.byModel }).byModel),
+  };
 }
 
 /** Every token of a usage, input side and output side together. */
@@ -95,6 +108,23 @@ function usageFromStdout(stdout) {
     costUsd: money(env.total_cost_usd),
   };
   return totalTokens(usage) || usage.costUsd ? usage : null;
+}
+
+/**
+ * What one God Mode build used, from its settled plan view (lunasworkBuild's
+ * result): the tokens God Mode's own Claude calls reported - planner, worker
+ * tabs, reviews - with the per-model split (`plan.usage`, orchestraUsage.js).
+ * The cost is what the CLI reported: the planner's (`plan.costUsd`) at least.
+ * A plan without token data still books the planner's cost, as before.
+ * @param {unknown} plan the God Mode board view of the build's plan
+ * @returns {object|null} a Usage for the builder role, or null (nothing to book)
+ */
+function godModeUsage(plan) {
+  if (!isObj(plan)) return null;
+  const planCost = money(plan.costUsd);
+  const total = isObj(plan.usage) ? cleanUsage(plan.usage.total) : emptyUsage();
+  if (!totalTokens(total) && !total.costUsd) return planCost ? { ...emptyUsage(), calls: 1, costUsd: planCost } : null;
+  return { ...total, calls: total.calls || (planCost ? 1 : 0), costUsd: Math.max(total.costUsd, planCost) };
 }
 
 function emptyLedger() {
@@ -243,6 +273,7 @@ module.exports = {
   addUsage,
   totalTokens,
   usageFromStdout,
+  godModeUsage,
   emptyLedger,
   cleanLedger,
   closePhase,

@@ -20,7 +20,7 @@
 
 'use strict';
 
-const { plannerEffortOf } = require('./orchestraPlan');
+const { plannerEffortOf, plannerModelOf, PLANNER_MODEL } = require('./orchestraPlan');
 const { normalizeWorkers } = require('./orchestraWorkers');
 
 const keyOf = (projectId) => (typeof projectId === 'string' ? projectId : null);
@@ -67,14 +67,17 @@ function planTarget(ctx, session) {
  * @param {{registry: object, toolEnv: () => object, send: Function}} ctx
  * @param {{projectId?: string|null, profileId?: string}} session
  * @param {{projectId: string|null, repoPath: string}} target planTarget()'s answer
- * @param {{picked: number[]|null, effort?: unknown, planner?: unknown, workers?: unknown}} opts
+ * @param {{picked: number[]|null, effort?: unknown, planner?: unknown, workers?: unknown, model?: unknown}} opts
+ *   model: the Claude planner's model, allow-listed here (orchestraPlan.js PLANNER_MODELS)
  */
-async function runPlan(ctx, session, target, { picked, effort, planner, workers }) {
+async function runPlan(ctx, session, target, { picked, effort, planner, workers, model }) {
   // D1 "Planner: Claude / Free": exactly 'free' picks the free planner on the
   // coding profile's env; anything else is today's Claude planner.
   const free = planner === 'free';
   const env = free ? (ctx.freePlannerEnv ? ctx.freePlannerEnv() : null) : ctx.toolEnv();
   if (!env) return { ok: false, error: 'noFreeProfile' };
+  // One of the allow-listed aliases only; anything else plans on the default.
+  const plannerModel = plannerModelOf(model);
   const res = await ctx.registry.ensure(target.projectId).makePlan({
     projectId: session.projectId,
     repoPath: target.repoPath,
@@ -84,6 +87,9 @@ async function runPlan(ctx, session, target, { picked, effort, planner, workers 
     // One of the four levels only; anything else plans at the default high.
     plannerEffort: plannerEffortOf(effort),
     ...(free ? { planner: 'free' } : {}),
+    // The default model passes no key (the makePlan call as before); the free
+    // planner has its own model.
+    ...(!free && plannerModel !== PLANNER_MODEL ? { plannerModel } : {}),
     // F6 "Workers": only "Plan with free models in mind" changes planning; a
     // Claude-only request passes no key (the makePlan call as before).
     ...(!free && normalizeWorkers(workers) === 'hybrid' ? { workers: 'hybrid' } : {}),

@@ -84,6 +84,7 @@ const { withColorSupport, buildSessionEnv, setAccountLayer } = require('./sessio
 // Building the start command: decides whether a session can be pinned by id.
 const {
   withSessionId,
+  withPlainResume,
   withIntakeMcp,
   intakeState,
   withAccountResume,
@@ -161,6 +162,8 @@ const { registerCloudIpc } = require('./cloudipc');
 // Luna's Work settings + pre-production (docs/tbc_docs/LUNAS_WORK_PLAN.md slice 1.2c)
 // and the outer loop run (src/lunaswork.js via src/lunasworkWiring.js).
 const { registerLunasworkIpc } = require('./lunasworkipc');
+const { createTabResume } = require('./tabResume');
+const { createEditorAutosave } = require('./editorAutosave');
 const { createGodModeBuilder } = require('./lunasworkBuild');
 const { createSecretStore, createSecretGate } = require('./lunasworkErrorTracking');
 const { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, wireDecisionSync } = require('./lunasworkWiring');
@@ -584,6 +587,43 @@ function broadcastSessions() {
     activeSessionId,
   });
   pokeGodmodeLive();
+  saveOpenTabs();
+}
+
+// Unity / Blender auto-save scripts (Settings -> General -> Editor auto-save).
+const editorAutosave = createEditorAutosave({
+  projects: () => projects,
+  blenderConfigDir: () => (process.env.APPDATA ? path.join(process.env.APPDATA, 'Blender Foundation', 'Blender') : null),
+  log: (line) => console.info(line),
+});
+
+// The tabs of the last run, offered once after a crash (src/tabResume.js).
+const TAB_RESUME_SAVE_MS = 60 * 1000;
+const tabResume = createTabResume({
+  dir: () => (ensureUserDir() ? userDir() : null),
+  // Only a conversation that reached the disk can be resumed.
+  hasTranscript: (tab) =>
+    fs.existsSync(tab.cwd) &&
+    fs.existsSync(path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(tab.cwd), `${tab.transcriptId}.jsonl`)),
+  log: (line) => console.info(line),
+});
+let tabResumeLoaded = false;
+
+/** Remembers the open tabs; a no-op until last run's list has been read. */
+function saveOpenTabs() {
+  if (tabResumeLoaded) tabResume.save([...sessions.values()]);
+}
+
+/** Reopens last run's tabs, each in its folder on its own conversation. */
+function resumeLastTabs() {
+  let opened = 0;
+  for (const tab of tabResume.take()) {
+    // A profile that is gone must not silently become another CLI.
+    if (!getProfile(profiles, tab.profileId)) continue;
+    const session = createSession({ profileId: tab.profileId, projectId: tab.projectId || undefined, cwd: tab.cwd, resumeId: tab.transcriptId, resumeQuiet: true });
+    if (session) opened += 1;
+  }
+  return opened;
 }
 
 // Every tab's status light. Pushed on change only - the board debounces.
@@ -1623,9 +1663,12 @@ function spawnInto(session, profile, launch = null) {
   // Kept, so a resume on another account keeps the worker's flags.
   if (session.task) session.launchTask = session.task;
   // Account failover (failoverTab): the same conversation, on the new account.
+  // Crash resume (resumeLastTabs): the same conversation, nothing sent.
+  const resumeWith = session.resumeQuiet ? withPlainResume : withAccountResume;
   const resumeCommand = session.resumeId
-    ? withAccountResume(baseCommand, session.resumeId, session.launchTask || null)
+    ? resumeWith(baseCommand, session.resumeId, session.launchTask || null)
     : null;
+  session.resumeQuiet = false;
   // A plan-run worker never falls back to the unlocked profile command, not on
   // its first launch and not on a restart / failover (orchestraPlanRunLaunch.js).
   const taskCommand = session.task
@@ -1652,7 +1695,11 @@ function spawnInto(session, profile, launch = null) {
   // there would only adopt ANOTHER tab's newest .jsonl in the same cwd.
   const isForeignCli = Boolean(command) && !isClaudeCommand(command);
   session.watcher = isForeignCli ? null : new TranscriptWatcher(
-    (metrics) => send('metrics:context', { sessionId: session.id, metrics }),
+    (metrics) => {
+      // God Mode books its own worker tabs' tokens (orchestraUsage.js); other tabs are ignored there.
+      if (metrics && metrics.byModel) orchestraRuns.onSessionUsage(session.id, metrics.byModel);
+      send('metrics:context', { sessionId: session.id, metrics });
+    },
     {
       cwd,
       sessionUuid: session.transcriptId,
@@ -1868,6 +1915,10 @@ function createSession(opts = {}) {
     task: opts.task || null,
     // One-off start command replacing the profile's (`claude setup-token`).
     commandOverride: opts.commandOverride || null,
+    // Conversation to reopen instead of starting a new one (spawnInto);
+    // resumeQuiet = send nothing (crash resume), main-only like cwd.
+    resumeId: opts.resumeId || null,
+    resumeQuiet: Boolean(opts.resumeQuiet),
     size: { ...lastSize },
     watcher: null,
     gitWatcher: null,
@@ -2517,6 +2568,21 @@ function registerIpc() {
     sessions: [...sessions.values()].map(sessionSummary),
     activeSessionId,
   }));
+
+  // Editor auto-save (src/editorAutosave.js): the only renderer input is the
+  // interval, validated there; the folders written are main's own findings.
+  ipcMain.handle('autosave:status', () => editorAutosave.status());
+  ipcMain.handle('autosave:install', (_event, minutes) => editorAutosave.install(minutes));
+  ipcMain.handle('autosave:remove', () => editorAutosave.remove());
+
+  // Last run's tabs (src/tabResume.js). No payload: what is reopened, and
+  // where, comes only from main's own store.
+  ipcMain.handle('tabresume:pending', () => ({ count: tabResume.pending().length }));
+  ipcMain.handle('tabresume:run', () => ({ opened: resumeLastTabs() }));
+  ipcMain.handle('tabresume:dismiss', () => {
+    tabResume.take();
+    return { ok: true };
+  });
 
   // New tab: defaults to the same profile and project as currently selected.
   // Only the two ids pass through - cwd/branch are main-only overrides, so the
@@ -3859,6 +3925,10 @@ app.whenReady().then(() => {
   powerMonitor.on('suspend', () => orchestraRuns.onSystemSuspend());
   orchestraBattery.start();
   setInterval(() => statusBoard.tick(), STATUS_TICK_MS).unref();
+  // Before the first tab: what was open last run becomes the Resume offer.
+  tabResume.load();
+  tabResumeLoaded = true;
+  setInterval(saveOpenTabs, TAB_RESUME_SAVE_MS).unref(); // also catches /clear (a new conversation id)
   startActiveProfile(); // opens the first tab (with its watcher)
   startPortWatcher();
   startUsageWatcher();

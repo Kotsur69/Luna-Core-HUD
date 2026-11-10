@@ -73,6 +73,7 @@ const { planWaitDecision } = require('./orchestraPlanWait');
 const { getProject } = require('./projects');
 const { createLunasWork } = require('./lunaswork');
 const { createCheckpoints } = require('./lunasworkCheckpoint');
+const { commitDesignPack } = require('./lunasworkPackCommit');
 const { createLunasWorkReporter } = require('./lunasworkReport');
 const { godmodeEmailOn } = require('./mailprefs');
 const { answersFromTodoPeers } = require('./lunasworkDecisions');
@@ -83,7 +84,7 @@ const { handbackHead, readCommits } = require('./lunasworkHandback');
 const { wheelFromTodoPeers } = require('./lunasworkWheel');
 const { createHookDeps } = require('./lunasworkHookDeps');
 const { createShipDocsDeps } = require('./lunasworkShipDocs');
-const { createUsageMeter, addUsage, emptyUsage } = require('./lunasworkUsage');
+const { createUsageMeter, addUsage, emptyUsage, godModeUsage } = require('./lunasworkUsage');
 const { execClaude } = require('./lunasworkCritic');
 const { runCriticPick } = require('./lunasworkVariants');
 const { shipEstimate, etaLine } = require('./lunasworkEta');
@@ -306,9 +307,10 @@ function createLunasWorkRuntime(ctx) {
 
   const build = async (opts) => {
     const res = await ctx.builder.build(opts);
-    // God Mode's planner is the one `claude -p` of a build; its workers' tabs are not metered here.
-    const plan = res && typeof res === 'object' ? res.plan : null;
-    if (plan && Number.isFinite(plan.costUsd) && plan.costUsd > 0) meter.add('builder', { calls: 1, costUsd: plan.costUsd });
+    // The build's God Mode run, booked under the builder: the tokens its planner,
+    // worker tabs and reviews reported, per model (plan.usage), and the CLI's own cost.
+    const usage = godModeUsage(res && typeof res === 'object' ? res.plan : null);
+    if (usage) meter.add('builder', usage);
     return res;
   };
 
@@ -359,6 +361,8 @@ function createLunasWorkRuntime(ctx) {
     gitLog,
     syncCheckout,
     checkpoints: createCheckpoints({ log: ctx.log }),
+    // Commits + pushes the design pack the Critic / Director wrote (src/lunasworkPackCommit.js).
+    packCommit: (opts) => commitDesignPack(opts),
     // LW 3.28b: the client feedback widget - baked into staging deploys only,
     // its token revoked when the run ends.
     ...(ctx.widget ? { widget: ctx.widget, staging: { widget: ctx.widget } } : {}),

@@ -1454,6 +1454,31 @@ test('checkpoints: a green iteration is tagged; a score drop past the margin is 
   assert.ok(h.ctl.runLog().some((e) => /rolled back luna-work\/lwtest1\/iter-2-rolled-back -> luna-work\/lwtest1\/iter-1/.test(e.text || '')));
 });
 
+test('design pack: committed after the Critic and before the checkpoint tag; a failure is logged and the run goes on', async () => {
+  const order = [];
+  const cp = fakeCheckpoints();
+  const orig = cp.dep.tagIteration;
+  cp.dep.tagIteration = async (o) => {
+    order.push('tag');
+    return orig(o);
+  };
+  let n = 0;
+  const packCommit = async (o) => {
+    n += 1;
+    order.push(`pack:${o.label}`);
+    return n === 1 ? { ok: false, committed: true, pushed: false, files: [], error: 'pushFailed', detail: 'no remote' } : { ok: true, committed: true, pushed: true, files: ['design/PLAYTEST_LOG.md'] };
+  };
+  const todos = Array.from({ length: 3 }, (_, i) => card(i + 1));
+  const h = harness({ todos, scores: [60, 70], deps: { checkpoints: cp.dep, packCommit } });
+  h.next.director.push(oneCardEach(h), oneCardEach(h), STOP_CARD);
+  await h.start();
+  assert.ok(order.indexOf('pack:iteration 1 design pack') >= 0);
+  assert.ok(order.indexOf('pack:iteration 1 design pack') < order.indexOf('tag'), order.join(','));
+  const log = h.ctl.runLog().map((e) => e.text || '');
+  assert.ok(log.some((t) => /design pack commit failed \(pushFailed: no remote\)/.test(t)));
+  assert.ok(log.some((t) => /design pack committed \(1 file\(s\)\), pushed/.test(t)), 'the run carried on after the failure');
+});
+
 test('checkpoints: only a journey that passed before rolls back; one that never passed does not', async () => {
   const cp = fakeCheckpoints();
   const h = harness({ todos: Array.from({ length: 6 }, (_, i) => card(i + 1)), scores: [50, 50, 50], deps: { checkpoints: cp.dep } });

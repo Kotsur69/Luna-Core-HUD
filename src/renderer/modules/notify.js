@@ -119,9 +119,38 @@ export function busyIdleCues({ isActiveTab, hasFocus }) {
   };
 }
 
+// A busy -> idle edge only counts as "a turn finished" when the session had
+// been printing for at least this long. A tab that redraws one line a second
+// (a CLI "Retrying in 12s" countdown, a clock, `watch`) goes busy -> idle on
+// every tick with a span near zero; without this floor it fired one toast and
+// one taskbar flash per second.
+export const NOTIFY_MIN_BUSY_MS = 2000;
+// And never more than one busy -> idle cue per session inside this window.
+export const NOTIFY_COOLDOWN_MS = 10000;
+
+/**
+ * Whether a busy -> idle edge deserves a cue at all. Pure.
+ * @param {{busyMs: number, lastCueAt: number|undefined, now: number}} edge
+ * @returns {boolean}
+ */
+export function busyIdleWorthNotifying({ busyMs, lastCueAt, now }) {
+  if (!(busyMs >= NOTIFY_MIN_BUSY_MS)) return false;
+  return typeof lastCueAt !== 'number' || now - lastCueAt >= NOTIFY_COOLDOWN_MS;
+}
+
+/** sessionId -> time of its last busy -> idle cue. */
+const lastCueAt = new Map();
+const MAX_TRACKED_SESSIONS = 200;
+
 /** A session just went from working to waiting - active tab or background. */
-function handleBusyIdle(sessionId) {
+function handleBusyIdle(sessionId, busyMs) {
   if (!notifyEnabled) return;
+  const now = Date.now();
+  if (!busyIdleWorthNotifying({ busyMs, lastCueAt: lastCueAt.get(sessionId), now })) return;
+  // Closed tabs leave their entry behind; keep the map small (oldest first).
+  if (lastCueAt.size >= MAX_TRACKED_SESSIONS) lastCueAt.delete(lastCueAt.keys().next().value);
+  lastCueAt.delete(sessionId);
+  lastCueAt.set(sessionId, now);
   const { toast, flash } = busyIdleCues({
     isActiveTab: sessionId === getActiveSessionId(),
     hasFocus: document.hasFocus(),

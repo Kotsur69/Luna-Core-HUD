@@ -193,10 +193,12 @@ function runReview({ cwd, env, prompt, execImpl = execFile, timeoutMs }) {
             const detail = oneLine(error.message, 300);
             return resolve({ ok: false, error: isUsageLimitText(detail) ? 'limit' : 'failed', detail });
           }
-          const parsed = parsePlannerOutput(stdout);
+          const parsed = parsePlannerOutput(stdout, REVIEW_MODEL);
           if (!parsed.ok) return resolve(parsed);
           const verdict = validateVerdict(parsed.raw);
-          resolve(verdict ? { ok: true, ...verdict, costUsd: parsed.costUsd } : { ok: false, error: 'badVerdict' });
+          // `usage` (tokens, when the CLI reported any) is bookkeeping only.
+          const tokens = parsed.usage ? { usage: parsed.usage } : {};
+          resolve(verdict ? { ok: true, ...verdict, costUsd: parsed.costUsd, ...tokens } : { ok: false, error: 'badVerdict' });
         },
       );
     } catch (err) {

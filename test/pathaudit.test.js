@@ -10,6 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 
 const { resolveStoredPath, checkCwd, toPortablePath } = require('../src/projects');
 const { localPaths, portableRepoList, readRepoStatus } = require('../src/gitstation');
@@ -103,25 +104,85 @@ test('git station row for a folder that is not on this PC says missingDir', asyn
 
 // --- the audit itself: no literal user home in shipped code or config -----------------
 
-test('no literal user-home path in src/ (outside comments), config/ or scripts/', () => {
-  const HOME_RE = /[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s'"`]+|\/Users\/[^/\s'"`]+|\/home\/[^/\s'"`]+|Kotsur69|mmazur/;
-  const ALLOWED = [/REPO_OWNER = 'Kotsur69'/]; // the GitHub owner the updater reads releases from
-  const root = path.join(__dirname, '..');
+const HOME_RE = /[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s'"`]+|\/Users\/[^/\s'"`]+|\/home\/[^/\s'"`]+|Kotsur69|mmazur/;
+const ALLOWED = [/REPO_OWNER = 'Kotsur69'/]; // the GitHub owner the updater reads releases from
+const AUDITED_DIRS = ['src', 'config', 'scripts'];
+const AUDITED_EXT = /\.(js|mjs|cjs|json|ps1|sh|bat)$/;
+
+/** True for a file the audit judges: shipped code or config, never a *.local.json. */
+function isAudited(rel) {
+  const posix = rel.replace(/\\/g, '/');
+  return AUDITED_DIRS.some((d) => posix.startsWith(`${d}/`)) && AUDITED_EXT.test(posix) && !/\.local\.json$/.test(posix);
+}
+
+/** `file:line` for every code line of `text` that names a user home. */
+function homePathHits(rel, text) {
   const hits = [];
-  const walk = (dir) => {
-    for (const name of fs.readdirSync(dir)) {
-      const full = path.join(dir, name);
-      if (fs.statSync(full).isDirectory()) {
-        walk(full);
-        continue;
+  text.split(/\r?\n/).forEach((line, i) => {
+    const code = line.replace(/\/\*.*?\*\//g, '').replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
+    if (HOME_RE.test(code) && !ALLOWED.some((re) => re.test(code))) hits.push(`${rel}:${i + 1}`);
+  });
+  return hits;
+}
+
+/**
+ * The files git tracks under the audited dirs. Runtime output (config/runs/
+ * Luna's Work artifacts, logs, caches) is gitignored, never shipped, and may
+ * hold absolute paths of this PC - the audit must not judge it.
+ * Returns null when git is not usable here (e.g. a source tarball).
+ */
+function trackedFiles(root) {
+  try {
+    const out = execFileSync('git', ['ls-files', '-z', '--', ...AUDITED_DIRS], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    const files = out.split('\0').filter(Boolean);
+    return files.length ? files : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fallback without git: walk the audited dirs, skipping known runtime output. */
+function walkedFiles(root) {
+  const RUNTIME_DIRS = new Set(['config/runs', 'node_modules']);
+  const files = [];
+  const walk = (rel) => {
+    for (const name of fs.readdirSync(path.join(root, rel))) {
+      const child = `${rel}/${name}`;
+      if (fs.statSync(path.join(root, child)).isDirectory()) {
+        if (!RUNTIME_DIRS.has(child) && name !== 'node_modules') walk(child);
+      } else {
+        files.push(child);
       }
-      if (!/\.(js|mjs|cjs|json|ps1|sh|bat)$/.test(name) || /\.local\.json$/.test(name)) continue;
-      fs.readFileSync(full, 'utf8').split(/\r?\n/).forEach((line, i) => {
-        const code = line.replace(/\/\*.*?\*\//g, '').replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
-        if (HOME_RE.test(code) && !ALLOWED.some((re) => re.test(code))) hits.push(`${path.relative(root, full)}:${i + 1}`);
-      });
     }
   };
-  for (const d of ['src', 'config', 'scripts']) walk(path.join(root, d));
+  for (const d of AUDITED_DIRS) if (fs.existsSync(path.join(root, d))) walk(d);
+  return files;
+}
+
+test('no literal user-home path in tracked src/ (outside comments), config/ or scripts/', () => {
+  const root = path.join(__dirname, '..');
+  const files = (trackedFiles(root) || walkedFiles(root)).filter(isAudited);
+  assert.ok(files.length > 50, 'the audit found its files');
+  const hits = [];
+  for (const rel of files) {
+    const full = path.join(root, rel);
+    if (!fs.existsSync(full)) continue; // tracked but deleted in the working tree
+    hits.push(...homePathHits(rel, fs.readFileSync(full, 'utf8')));
+  }
   assert.deepEqual(hits, []);
+});
+
+test('the audit skips runtime output and still catches a home path in tracked code or config', () => {
+  // Luna's Work run artifacts are gitignored, so git never lists them.
+  const tracked = trackedFiles(path.join(__dirname, '..'));
+  if (tracked) assert.deepEqual(tracked.filter((f) => f.startsWith('config/runs/')), []);
+  assert.equal(isAudited('src/main.js'), true);
+  assert.equal(isAudited('config\\themes.json'), true);
+  assert.equal(isAudited('config/lunaswork.local.json'), false);
+  assert.equal(isAudited('docs/notes.json'), false);
+  assert.equal(isAudited('src/readme.md'), false);
+
+  assert.deepEqual(homePathHits('src/x.js', "const a = 1;\nconst p = 'C:\\\\Users\\\\someone\\\\repo';"), ['src/x.js:2']);
+  assert.deepEqual(homePathHits('config/x.json', '{\n  "shot": "/home/someone/shot.png"\n}'), ['config/x.json:2']);
+  assert.deepEqual(homePathHits('src/x.js', "// lives in C:\\Users\\someone\nconst REPO_OWNER = 'Kotsur69';"), []);
 });

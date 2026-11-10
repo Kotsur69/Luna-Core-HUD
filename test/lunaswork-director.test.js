@@ -318,14 +318,12 @@ test('bad input fails without a call', async () => {
 
 // ---- B5: the scope guard; B1: built cards are not scheduled ------------------------
 
-test('a card outside DESIGN.md / ROADMAP.md is not scheduled and comes back in outOfScope (B5)', async () => {
+test('the scope guard is off: a card whose words are not in DESIGN.md is scheduled, no outOfScope (B5)', async () => {
+  assert.equal(D.SCOPE_GUARD_ENABLED, false);
   const list = [runCard(1, { text: 'Quote totals' }), runCard(2, { text: 'Multiplayer leaderboard chat' })];
-  const { res, calls } = await direct({ list, answer: { cardIds: [1, 2], notes: '' } });
-  assert.deepEqual(res.cardIds, [1]);
-  assert.deepEqual(res.outOfScope.map((c) => c.at), [2]);
-  assert.ok(res.outOfScope[0].missing.includes('leaderboard'));
-  // The model never even sees the out-of-scope card.
-  assert.doesNotMatch(calls[0].prompt, /Multiplayer leaderboard/);
+  const { res } = await direct({ list, answer: { cardIds: [1, 2], notes: '' } });
+  assert.deepEqual(res.cardIds, [1, 2]);
+  assert.deepEqual(res.outOfScope, []);
 });
 
 test('a decision-queue entry lets an out-of-scope card through (B5)', async () => {
@@ -348,20 +346,22 @@ test('ROADMAP.md counts as scope too, and steer and bug cards are never out of s
   assert.deepEqual(res.outOfScope, []);
 });
 
-test('validateDirection drops a picked out-of-scope id with a warning (B5)', () => {
+test('validateDirection keeps a card outside the pack while the guard is off (B5)', () => {
   const cards = [runCard(1, { text: 'Quote totals', kind: 'feel' }), runCard(2, { text: 'Multiplayer leaderboard chat', kind: 'feel' })];
   const out = D.validateDirection({ cardIds: [2, 1], notes: '' }, { cards, scopeText: DESIGN_BODY, decided: new Set() });
-  assert.deepEqual(out.cards.map((c) => c.at), [1]);
-  assert.deepEqual(out.outOfScope.map((c) => c.at), [2]);
-  assert.ok(out.warnings.some((w) => w.code === 'outOfScope' && w.at === 2));
+  assert.deepEqual(out.cards.map((c) => c.at), [2, 1]);
+  assert.deepEqual(out.outOfScope, []);
 });
 
-test('splitByScope: no scope text means no guard (B5)', () => {
+test('splitByScope: guard switched on still uses scopeCheck; off lets every card through (B5)', () => {
   const cards = [runCard(1, { text: 'Multiplayer leaderboard chat' })];
-  assert.deepEqual(D.splitByScope(cards, '', new Set()).outOfScope, []);
-  const guarded = D.splitByScope(cards, DESIGN_BODY, new Set());
+  assert.deepEqual(D.splitByScope(cards, '', new Set(), true).outOfScope, []);
+  const guarded = D.splitByScope(cards, DESIGN_BODY, new Set(), true);
   assert.deepEqual(guarded.inScope, []);
   assert.equal(guarded.outOfScope[0].text, 'Multiplayer leaderboard chat');
+  const off = D.splitByScope(cards, DESIGN_BODY, new Set());
+  assert.equal(off.inScope.length, 1);
+  assert.deepEqual(off.outOfScope, []);
 });
 
 test('a built card is never scheduled: it waits for the Playtester (B1)', async () => {

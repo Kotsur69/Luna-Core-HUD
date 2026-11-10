@@ -64,6 +64,18 @@ contextBridge.exposeInMainWorld('lunacore', {
   // --- Tabs (multi-session) ---
   /** Fetches { sessions: [{id,profileId,profileLabel,folder,alive}], activeSessionId }. */
   getSessions: () => ipcRenderer.invoke('sessions:list'),
+  /** Editor auto-save (Unity / Blender): { minutes: number[], targets: [{kind,name,state,minutes}] }. */
+  getEditorAutosave: () => ipcRenderer.invoke('autosave:status'),
+  /** Installs / refreshes the in-editor script everywhere; `minutes` is validated in main. */
+  installEditorAutosave: (minutes) => ipcRenderer.invoke('autosave:install', minutes),
+  /** Removes the scripts LunaCore installed. */
+  removeEditorAutosave: () => ipcRenderer.invoke('autosave:remove'),
+  /** Tabs of the last run that can be reopened after a crash: { count }. */
+  getResumableTabs: () => ipcRenderer.invoke('tabresume:pending'),
+  /** Reopens them, each on its own conversation: { opened }. */
+  resumeLastTabs: () => ipcRenderer.invoke('tabresume:run'),
+  /** Forgets them without reopening. */
+  dismissResumableTabs: () => ipcRenderer.invoke('tabresume:dismiss'),
   /** Change to the tab list or the active one: ({ sessions, activeSessionId }). */
   onSessions: (callback) => {
     ipcRenderer.on('sessions:update', (_event, payload) => callback(payload));
@@ -616,7 +628,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   // anything that is not one of src/efforts.js EFFORTS.
   // planner: 'claude' | 'free' (D1); main treats anything but 'free' as Claude.
   // workers: 'claude' | 'hybrid' | 'free' (F6); main treats anything else as Claude only.
-  planOrchestra: (sessionId, todoAts, effort, planner, workers) =>
+  // model: the Claude planner's model alias; main allow-lists it (anything else = opus).
+  planOrchestra: (sessionId, todoAts, effort, planner, workers, model) =>
     ipcRenderer.invoke(
       'orchestra:plan',
       typeof sessionId === 'string' ? sessionId : null,
@@ -624,6 +637,7 @@ contextBridge.exposeInMainWorld('lunacore', {
       typeof effort === 'string' ? effort : null,
       planner === 'free' ? 'free' : 'claude',
       typeof workers === 'string' ? workers : null,
+      typeof model === 'string' ? model : null,
     ),
   /**
    * Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js). Two fixed

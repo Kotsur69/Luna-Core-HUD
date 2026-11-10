@@ -16,7 +16,7 @@ import { sfx } from './sound.js';
 import { t } from './util.js';
 import { mountRunEmailToggle } from './mailsettings.js';
 
-const MODELS = ['opus', 'sonnet', 'plan'];
+const MODELS = ['opus', 'sonnet', 'fable', 'plan'];
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 // 'plan' + src/efforts.js EFFORTS (the renderer cannot require main-side modules).

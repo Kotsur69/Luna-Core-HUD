@@ -173,6 +173,20 @@ function withAccountResume(command, uuid, task = null) {
   return [bin, `'${ACCOUNT_RESUME_MESSAGE}'`, ...rest, '--resume', uuid].join(' ');
 }
 
+/**
+ * The start command that reopens conversation `uuid` and sends nothing: the
+ * tabs of the last run after a crash (src/tabResume.js). Null when the command
+ * is not a plain `claude` launch or already decides its own session.
+ * @param {string} command the profile's start command
+ * @param {string} uuid transcript id to resume
+ * @returns {string|null}
+ */
+function withPlainResume(command, uuid) {
+  const cmd = String(command || '').trim();
+  if (!isClaudeCommand(cmd) || !UUID_RE.test(String(uuid || '')) || SESSION_ID_DECIDED.test(cmd)) return null;
+  return `${cmd} --resume ${uuid}`;
+}
+
 // Permission modes a God Mode worker may be started in. 'default' adds no
 // flag on purpose: it is what the CLI does anyway.
 const WORKER_PERMISSION_MODES = ['acceptEdits', 'bypassPermissions'];
@@ -228,6 +242,7 @@ function findExecutable(name, pathEnv, isWindows, exists) {
 
 module.exports = {
   withSessionId,
+  withPlainResume,
   withIntakeMcp,
   intakeState,
   withTaskBrief,

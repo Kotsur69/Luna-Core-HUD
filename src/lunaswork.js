@@ -274,6 +274,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   styleCheck?: (opts:object)=>Promise<object>,
  *   gitLog?: (repoPath:string)=>Promise<string>,
  *   syncCheckout?: (repoPath:string)=>Promise<{ok:boolean, detail?:string}>,
+ *   packCommit?: (o:{repoPath:string, label:string})=>Promise<{ok:boolean, committed:boolean, pushed:boolean, files:string[], error?:string, detail?:string}>,
  *   checkpoints?: {tagIteration:(o:object)=>Promise<object>, rollback:(o:object)=>Promise<object>},
  *   staging?: {runCommand?:Function, git?:Function, runsRoot?:()=>string},
  *   load?: {runCommand?:Function, detectTool?:Function, readDoc?:Function, layout?:Function, runsRoot?:()=>string},
@@ -898,6 +899,8 @@ function createLunasWork(deps) {
     if (r.stop) requestStop('steer');
     // B5: work outside DESIGN.md / ROADMAP.md waits for Mati.
     cardFlow.askAboutScope(r.outOfScope);
+    // A DESIGN.md append must be on main before the builders branch from it.
+    if (r.designAppended) await commitPack(`iteration ${run.iteration} design append`);
     // Read the holds again: a decision may have been answered (or taken its
     // default) while the Director was thinking.
     const stillHeld = heldNow();
@@ -1160,7 +1163,22 @@ function createLunasWork(deps) {
       }
       shipConfirmed = ship.agrees === true;
     }
+    // Before the checkpoint tag, so the tag holds the design pack.
+    await commitPack(`iteration ${run.iteration} design pack`);
     await endIteration(critic, shipConfirmed);
+  }
+
+  /** Commits + pushes the design/ files Luna's Work wrote. Never throws; a failure is only logged. */
+  async function commitPack(label) {
+    if (!deps.packCommit) return;
+    try {
+      const res = await deps.packCommit({ repoPath: run.repoPath, label });
+      if (!isObj(res)) return;
+      if (!res.ok) logEvent(`design pack commit failed (${res.error || 'failed'}${res.detail ? `: ${String(res.detail).slice(0, 150)}` : ''})`);
+      else if (res.committed) logEvent(`design pack committed (${(res.files || []).length} file(s))${res.pushed ? ', pushed' : ''}`);
+    } catch (err) {
+      logEvent(`design pack commit failed (${errText(err).slice(0, 150)})`);
+    }
   }
 
   // ---- checkpoints ----
@@ -1812,6 +1830,9 @@ function createLunasWork(deps) {
       phaseStartedAt: run.phaseStartedAt,
       waitUntil: run.waitUntil,
       waitReason: run.waitReason,
+      // The panel's "Retrying after error (N of 3)" line (lunasworkStatus.js).
+      failures: run.failures ? { ...run.failures } : null,
+      maxStepFailures: MAX_STEP_FAILURES,
       freeUntil: onFree() ? run.limitedUntil : null,
       scores: scoresByMilestone(run.history),
       // B9: the flaky tests quarantined in this run.

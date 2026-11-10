@@ -29,7 +29,9 @@ const MAX_ENTRY_CHARS = 300;
 const MAX_FILES = 50;
 const MAX_DEPENDS = 50;
 const SIZES = ['S', 'M', 'L'];
-const MODELS = ['sonnet', 'opus'];
+// A card's suggested worker model. 'fable' is a manual pick: the intake and
+// the God Mode planner only ever suggest sonnet / opus.
+const MODELS = ['sonnet', 'opus', 'fable'];
 // Tags (docs/tbc_docs/LUNAS_WORK_PLAN.md): Luna's Work files its backlog under a run
 // tag and reads Mati's `steer` cards. God Mode ignores them.
 const MAX_TAGS = 10;

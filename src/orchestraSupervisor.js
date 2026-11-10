@@ -24,6 +24,7 @@ const path = require('path');
 const { findTurnEndMessage, textBlocks } = require('./ttsExtract');
 const { WORKTREE_DIR, BRANCH_PREFIX } = require('./worktrees');
 const { normalizeEffort } = require('./efforts');
+const { CLAUDE_MODELS } = require('./claudeModels');
 const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
 const { compileOwnership, ownerOf } = require('./ownership');
 const { normalizeSleeps } = require('./orchestraSleep');
@@ -959,6 +960,8 @@ function normalizeStoredPlan(raw) {
     costUsd: Number.isFinite(raw.costUsd) ? raw.costUsd : null,
     // The planner's --effort (one of the four levels); older files have none.
     plannerEffort: normalizeEffort(raw.plannerEffort),
+    // The planner's model when Mati picked another than opus; opus carries no key.
+    ...(CLAUDE_MODELS.includes(raw.plannerModel) && raw.plannerModel !== 'opus' ? { plannerModel: raw.plannerModel } : {}),
     dirty: Number.isFinite(raw.dirty) ? raw.dirty : null,
     workerModel: strOrNull(raw.workerModel, 32),
     // 'plan' or one of the four levels; anything else re-freezes from Settings.

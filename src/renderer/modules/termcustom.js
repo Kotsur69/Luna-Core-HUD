@@ -20,6 +20,7 @@
 import { term, applyTerminalAppearance, setScreenshotPasteEnabled } from './terminals.js';
 import { mountBoot, startBoot } from './boot.js';
 import { mountNotify } from './notify.js';
+import { mountEditorAutosave } from './editorautosave.js';
 import { mountHubSettings, refreshHubSyncLine } from './hubsettings.js';
 import { mountAutoCompactSettings } from './autocompact.js';
 import { mountOrchestraSettings } from './orchestrasettings.js';
@@ -586,6 +587,8 @@ export async function initTermcustomSettings() {
   // Notifications: same "static overlay, never unmounted" shape as boot above
   // - moved out of the widget registry entirely (2026-08-19), see notify.js.
   mountNotify(termcustomEl);
+  // Editor auto-save (Unity / Blender): install / remove the in-editor script.
+  mountEditorAutosave(termcustomEl);
   // Notification hub: auto-open, toasts, sources, drawer width (hubsettings.js).
   mountHubSettings(termcustomEl, prefs);
 

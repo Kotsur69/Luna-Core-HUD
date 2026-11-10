@@ -1044,6 +1044,8 @@
         ></div>
         <button id="tab-new" class="tabs__new" data-i18n-title="tabs.new" title="Nowa sesja (Ctrl+T)">+</button>
         <button id="tab-worktree" class="tabs__new" data-i18n-title="tabs.worktree" title="Nowa sesja w worktree (osobna galaz)">&#x2442;</button>
+        <!-- Shown only when the last run left resumable tabs behind (modules/tabresume.js). -->
+        <button id="tab-resume" class="tabs__new tabs__resume" hidden></button>
       </div>
       <!-- Terminal host: one .terminal__pane per session, only the active one visible -->
       <div id="terminal" class="terminal"></div>
@@ -1481,6 +1483,27 @@
               <div class="termcustom__bgimage-row">
                 <button type="button" id="setup-host-default" class="termcustom__reset" data-i18n="setup.host.makeDefault">Ustaw ten komputer jako domyslny host</button>
               </div>
+            </div>
+            <div class="termcustom__group">
+              <!-- Editor auto-save: an in-editor script for Unity projects and
+                   Blender (modules/editorautosave.js -> src/editorAutosave.js).
+                   Rows are built there from main's answer. -->
+              <h3 class="termcustom__section" data-i18n="autosave.title">Autozapis w edytorach</h3>
+              <p class="termcustom__hint" data-i18n="autosave.hint">
+                Instaluje maly skrypt w projektach Unity i w Blenderze, ktory co kilka minut zapisuje prace. Dziala takze, gdy LunaCore jest zamkniete.
+              </p>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="autosave.interval">Zapisuj co</span>
+                <select id="autosave-minutes" class="profile-select"></select>
+              </label>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="autosave-install" class="termcustom__reset" data-i18n="autosave.install">Zainstaluj / zaktualizuj</button>
+                <button type="button" id="autosave-remove" class="termcustom__reset" data-i18n="autosave.remove">Usun</button>
+              </div>
+              <div id="autosave-rows" class="autosave-rows" role="status"></div>
+              <p class="termcustom__hint" data-i18n="autosave.note">
+                Blender: uruchom go ponownie po instalacji. Unity: skrypt trafia do Assets/Editor - zacommituj go, a zadziala tez na drugim komputerze.
+              </p>
             </div>
             <div class="termcustom__group">
               <h3 class="termcustom__section" data-i18n="termcustom.section.general">Ogolne</h3>
@@ -2147,6 +2170,7 @@
                 <select id="orchestra-worker-model" class="profile-select">
                   <option value="opus">Opus</option>
                   <option value="sonnet">Sonnet</option>
+                  <option value="fable">Fable</option>
                   <option value="plan" data-i18n="orchset.model.plan">Wg planu</option>
                 </select>
               </label>

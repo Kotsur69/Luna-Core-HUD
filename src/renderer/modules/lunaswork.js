@@ -31,7 +31,7 @@ import { mountLunasWorkAsk } from './lunasworkAsk.js';
 import { mountLunasWorkQueue } from './lunasworkQueuePanel.js';
 import { mountLunasWorkPlaytestPass } from './lunasworkPlaytestPass.js';
 
-const MODEL_LABELS = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+const MODEL_LABELS = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 const SAVED_FLASH_MS = 2000;
 
 let refreshPane = null;

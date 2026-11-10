@@ -43,6 +43,8 @@ const { applyCards, REPRO_ACCEPTANCE } = require('./lunasworkCritic');
 const { runTag, MAX_DETAILS_CHARS, MAX_TEXT_CHARS } = require('./todorows');
 
 const TAG_PREFIX = 'luna-work';
+// Subject prefix of the design-pack commits (src/lunasworkPackCommit.js).
+const PACK_COMMIT_PREFIX = 'docs(luna-work):';
 const GIT_TIMEOUT_MS = 60 * 1000;
 const MAX_REVERTS = 200;
 const MAX_LISTED = 20;
@@ -416,6 +418,14 @@ function createCheckpoints(deps = {}) {
    *   data?:{restored:boolean, iteration?:number, note:string, error?:string},
    *   error?:string, detail?:string}>}
    */
+  /** True when the commit changes at least one file and nothing outside design/*.md. */
+  async function touchesOnlyDesignDocs(repoPath, sha) {
+    const res = await git(repoPath, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]);
+    if (!res.ok) return false;
+    const files = res.out.split('\n').map((f) => f.trim()).filter(Boolean);
+    return files.length > 0 && files.every((f) => /^design\/[^/]+\.md$/.test(f));
+  }
+
   async function rollback(o) {
     const toTag = tagName(o.runId, o.toIteration);
     const fromTag = rolledBackTagName(o.runId, o.iteration);
@@ -433,7 +443,13 @@ function createCheckpoints(deps = {}) {
     if (same.ok) return { ...base, ok: true, nothing: true, reverted: [], cards: [] };
     const listed = await git(o.repoPath, ['log', '--first-parent', '--format=%H%x09%P%x09%s', `${good}..${head.sha}`]);
     if (!listed.ok) return fail('logFailed', listed.err);
-    const commits = parseLog(listed.out);
+    // Design-pack commits (src/lunasworkPackCommit.js) are docs only: a revert
+    // keeps them. The subject alone is not trusted - a commit is kept only when
+    // every file it touches is a design/*.md file.
+    const commits = [];
+    for (const c of parseLog(listed.out)) {
+      if (!c.subject.startsWith(PACK_COMMIT_PREFIX) || !(await touchesOnlyDesignDocs(o.repoPath, c.sha))) commits.push(c);
+    }
     if (!commits.length) return { ...base, ok: true, nothing: true, reverted: [], cards: [] };
     if (commits.length > MAX_REVERTS) return fail('tooManyCommits');
     const res = await revertInWorktree(o.repoPath, head.branch, head.sha, commits);
@@ -454,6 +470,7 @@ function createCheckpoints(deps = {}) {
 
 module.exports = {
   TAG_PREFIX,
+  PACK_COMMIT_PREFIX,
   tagName,
   rolledBackTagName,
   forbiddenGit,

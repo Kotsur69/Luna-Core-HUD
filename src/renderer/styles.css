@@ -1315,6 +1315,14 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    with padding so you can hit the close button without aiming for a pixel. */
 .tab__close { font-size: 14px; padding: 4px 6px; }
 .tabs__new { font-size: 16px; padding: 4px 12px; align-self: center; }
+.tabs__resume { font-size: var(--fs-sm); white-space: nowrap; color: var(--neon-cyan); }
+.tabs__resume[hidden] { display: none; }
+.autosave-rows { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.autosave-row { display: flex; justify-content: space-between; gap: 12px; font-size: var(--fs-sm); }
+.autosave-row__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.autosave-row__state { opacity: 0.75; text-align: right; }
+.autosave-row__state.is-on { color: var(--neon-cyan); opacity: 1; }
+.autosave-row__state.is-bad { color: var(--bad); opacity: 1; }
 #tab-worktree { padding: 4px 8px; }
 /* Inline name field that replaces the worktree button while typing */
 .tabs__wt-input {
@@ -5287,6 +5295,21 @@ section.orchestra__planrun {
 .lw-dash__dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .lw-dash__shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-3); }
 .lw-dash__shot { margin: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.lw-dash__shot-btn { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.lw-dash__shot-btn:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
+.lw-lightbox {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--space-4);
+  background: rgba(0, 0, 0, 0.86);
+}
+.lw-lightbox__img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+.lw-lightbox__close {
+  position: absolute; top: var(--space-3); right: var(--space-3);
+  width: 36px; height: 36px; border-radius: 50%;
+  border: var(--border-w) solid var(--edge); background: var(--surface-panel-2); color: inherit;
+  font-size: var(--fs-2xl); line-height: 1; cursor: pointer;
+}
 .lw-dash__shot img {
   width: 100%;
   aspect-ratio: 16 / 10;

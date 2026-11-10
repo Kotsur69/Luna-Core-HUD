@@ -33,7 +33,7 @@
 'use strict';
 
 const path = require('path');
-const { validatePlan, estimatePlan, pickTodos, plannerEffortOf, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
+const { validatePlan, estimatePlan, pickTodos, plannerEffortOf, plannerModelOf, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
 const { lastWordsFrom, outputTail } = require('./orchestraDiagnose');
 const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
@@ -73,18 +73,21 @@ const hybridGuard = require('./orchestraHybridGuard');
 // Hybrid runs, execution side (F6c/F6d) and the opt-in free-branch review (F5).
 const hybridRules = require('./orchestraHybrid');
 const { createFreeReviewer } = require('./orchestraFreeReview');
+// Token bookkeeping of a run (additive: nothing here decides anything).
+const { createUsageBook } = require('./orchestraUsage');
 
 /**
  * The runPlanner args. A Claude plan without plan docs gets exactly the args
  * it always had; the free planner, plan docs, a follow-up request and a
- * hybrid run add keys.
+ * hybrid run add keys - and so does a planner model other than the default.
  */
-function plannerArgs({ cwd, env, openTodos, effort, planner, planDocs, extraPrompt, hybrid }) {
+function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, extraPrompt, hybrid }) {
   return {
     cwd,
     env,
     openTodos,
     effort,
+    ...(model && model !== PLANNER_MODEL && planner !== 'free' ? { model } : {}),
     ...(planner === 'free' ? { planner: 'free' } : {}),
     ...(planDocs && planDocs.length ? { planDocs } : {}),
     ...(extraPrompt ? { extraPrompt } : {}),
@@ -577,6 +580,18 @@ function createOrchestra(deps) {
     log,
   });
 
+  // The run's token usage (orchestraUsage.js): the planner's and the
+  // reviewer's `claude -p` envelopes and the worker tabs' transcript totals.
+  const usageBook = createUsageBook();
+  /** deps.runReview, with the review's reported tokens booked; the result is untouched. */
+  const meteredReview = deps.runReview
+    ? async (args) => {
+        const res = await deps.runReview(args);
+        if (res && res.ok && res.usage) usageBook.add('review', res.usage);
+        return res;
+      }
+    : null;
+
   // Hybrid runs (orchestraHybrid.js): free packages on the coding profile,
   // the Claude review gate, hand-overs to Sonnet, per-package free waits.
   const hybridRun = hybridRules.createHybridRun({
@@ -598,7 +613,7 @@ function createOrchestra(deps) {
     reopen: (pkg, text) => reopenInWorktree(pkg, text),
     landPushed: (id) => landPushed(id),
     stall: (id, reason, detail) => stall(id, reason, detail),
-    runReview: deps.runReview || null,
+    runReview: meteredReview,
     reviewDiff: deps.reviewDiff || null,
     reviewEnv: () => (deps.freshEnv ? deps.freshEnv() : null),
     usageLimits: () => (deps.usageLimits ? deps.usageLimits() : []),
@@ -611,7 +626,7 @@ function createOrchestra(deps) {
       plan.freeReview = state;
       commit();
     },
-    runReview: deps.runReview || null,
+    runReview: meteredReview,
     reviewDiff: deps.reviewDiff || null,
     reviewEnv: () => (deps.freshEnv ? deps.freshEnv() : null),
     usageLimits: () => (deps.usageLimits ? deps.usageLimits() : []),
@@ -684,6 +699,8 @@ function createOrchestra(deps) {
     const stored = normalized && deps.resolvePath ? sup.rehomePlanPaths(normalized, deps.resolvePath, deps.resolveFile) : normalized;
     if (!stored || plan) return false;
     plan = { ...sup.restoreAfterRestart(stored, now()), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, settled: false };
+    // Tokens are not stored with the run: the book starts empty and counts what runs from here on.
+    usageBook.begin(plan.id);
     // A held run is held anyway after a restart; Approve / Retry check again.
     releaseHold();
     // A schedule Mati armed survives a restart; one already missed does not
@@ -725,10 +742,14 @@ function createOrchestra(deps) {
       errors: plan.errors,
       estimate: plan.estimate,
       costUsd: plan.costUsd,
+      // Tokens the run's Claude calls reported so far ({total, bySource}), or
+      // null. Read by Luna's Work only; kept in memory, not with the stored run.
+      usage: usageBook.snapshot(plan.id),
       // null on a plan stored before the picker had the select.
       plannerEffort: plan.plannerEffort || null,
       dirty: plan.dirty,
-      model: PLANNER_MODEL,
+      // The planner's model: the picker's choice, opus on every plan without one.
+      model: plannerModelOf(plan.plannerModel),
       workerModel: plan.workerModel || workerSettings().model,
       workerEffort: plan.workerEffort || workerSettings().effort || 'plan',
       permissionMode: plan.permissionMode || workerSettings().permissionMode,
@@ -926,7 +947,7 @@ function createOrchestra(deps) {
    * `ownership` (LW 2.12, `{path|glob: owner}` with owner = package id or
    * card `at`) stops a worker that edits a file another package owns.
    * @param {{projectId:string|null, repoPath:string, profileId:string, env:object,
-   *   todoAts?:number[]|null, plannerEffort?:string, cards?:Array<number|object>, onRunSettled?:Function,
+   *   todoAts?:number[]|null, plannerEffort?:string, plannerModel?:string, cards?:Array<number|object>, onRunSettled?:Function,
    *   ownership?:object|object[]}} ctx
    */
   async function makePlan(ctx) {
@@ -946,16 +967,26 @@ function createOrchestra(deps) {
     if (planWaiter.isWaiting()) planWaiter.clear();
 
     const plannerEffort = plannerEffortOf(ctx.plannerEffort);
+    // The picker's planner model (allow-listed; anything else = opus).
+    const plannerModel = plannerModelOf(ctx.plannerModel);
     // D1: "Planner: Claude / Free". Plan to-dos bring their PLAN.md (F4b).
     const planner = planBuild.plannerOf(ctx.planner);
     // F6 "Workers": a free planner is always free-only; hybrid plans with Claude.
     const workers = workersRules.planWorkers(ctx.workers, planner);
     const hybrid = workers === 'hybrid';
     const planDocs = readPlanDocs(ctx.repoPath, openTodos);
-    const callPlanner = (extraPrompt) =>
-      // The picker's planner effort rides in ctx too, so a limit-wait or
-      // account-failover replan plans at the same level.
-      deps.runPlanner(plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, planner, planDocs, extraPrompt, hybrid }));
+    // Every planner call of this plan that reported tokens (a free sizing
+    // round calls it twice); booked once the plan exists.
+    const plannerUsage = [];
+    const callPlanner = async (extraPrompt) => {
+      // The picker's planner effort and model ride in ctx too, so a limit-wait
+      // or account-failover replan plans at the same level on the same model.
+      const res = await deps.runPlanner(
+        plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, model: plannerModel, planner, planDocs, extraPrompt, hybrid }),
+      );
+      if (res && res.ok && res.usage) plannerUsage.push(res.usage);
+      return res;
+    };
     busy = true;
     planningRepo = ctx.repoPath;
     try {
@@ -997,6 +1028,8 @@ function createOrchestra(deps) {
         estimate: estimatePlan(checked.packages, openTodos),
         costUsd: built.costUsd,
         plannerEffort,
+        // Only a plan made on another model than the default carries the key.
+        ...(plannerModel !== PLANNER_MODEL && planner !== 'free' ? { plannerModel } : {}),
         // A free planner makes a free-only run (D1) that may auto-split (Q8).
         ...(planner === 'free' ? { buildPlanner: 'free' } : {}),
         // F6 "Workers"; a Claude-only plan carries no key (as before the selector).
@@ -1032,6 +1065,8 @@ function createOrchestra(deps) {
         packages: checked.packages.map(runPackage),
       };
       runSettledHook = typeof ctx.onRunSettled === 'function' ? { planId: plan.id, fn: ctx.onRunSettled } : null;
+      usageBook.begin(plan.id);
+      for (const usage of plannerUsage) usageBook.add('planner', usage);
       commit();
       return { ok: true, plan: view() };
     } finally {
@@ -2418,6 +2453,20 @@ function createOrchestra(deps) {
   }
 
   /**
+   * A tab's transcript token totals per model (src/observer.js). Booked only
+   * for this run's own tabs - a package worker or the fix-up worker; any other
+   * tab is ignored. Bookkeeping only: no commit, no board repaint.
+   * @param {string} sessionId
+   * @param {unknown} byModel {<model>: {input, output, cacheRead, cacheWrite}}
+   * @returns {boolean} true when the tab was this run's
+   */
+  function onSessionUsage(sessionId, byModel) {
+    if (!plan || !(bySession(sessionId) || fixup.owns(sessionId))) return false;
+    usageBook.setSession(sessionId, byModel);
+    return true;
+  }
+
+  /**
    * Idea #7: a worker's git status changed. Its files are kept relative to
    * its worktree; a NEW pair of workers sharing a file is announced once.
    * @param {string} sessionId
@@ -2883,6 +2932,7 @@ function createOrchestra(deps) {
     onApproval,
     onFiles,
     ownsSession,
+    onSessionUsage,
     onSessionClosed,
     unschedule,
     finishRun,

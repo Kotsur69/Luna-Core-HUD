@@ -544,6 +544,8 @@ function renderPlan() {
   });
   if (Number.isFinite(plan.costUsd)) line += ` · ${t('orch.cost', { usd: plan.costUsd.toFixed(2) })}`;
   if (plan.plannerEffort) line += ` · ${t('orch.plannerEffort', { effort: plan.plannerEffort })}`;
+  // Only a planner model Mati picked instead of the default is worth a mention.
+  if (plan.model && plan.model !== 'opus' && plan.buildPlanner !== 'free') line += ` · ${t('orch.plannerModel', { model: plan.model })}`;
   if (plan.buildPlanner === 'free') line += ` · ${t('orch.pick.planner.freeUsed')}`;
   body.append(el('div', 'orchestra__summary', line));
   body.append(el('div', 'orchestra__meta', t('orch.workers', { model: plan.workerModel, perm: plan.permissionMode })));
@@ -699,7 +701,7 @@ function render() {
       pickerView({
         disabled: phase !== 'idle',
         canCancel: !!plan,
-        onPlan: (ats, effort, planner, workers) => startPlanning(ats, effort, planner, workers),
+        onPlan: (ats, effort, planner, workers, model) => startPlanning(ats, effort, planner, workers, model),
         onCancel: () => {
           picking = false;
           render();
@@ -752,8 +754,9 @@ async function refetchAndRender() {
  * @param {string} [effort] the planner --effort (main falls back to high)
  * @param {'claude'|'free'} [planner] D1: who plans the build run
  * @param {'claude'|'hybrid'|'free'} [workers] F6 "Workers"
+ * @param {string} [model] the Claude planner's model (main falls back to opus)
  */
-async function startPlanning(ats, effort, planner, workers) {
+async function startPlanning(ats, effort, planner, workers, model) {
   if (phase !== 'idle') return;
   phase = 'planning';
   picking = false;
@@ -761,7 +764,7 @@ async function startPlanning(ats, effort, planner, workers) {
   render();
   let res;
   try {
-    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort, planner, workers);
+    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort, planner, workers, model);
   } catch {
     res = { ok: false, error: 'failed' };
   }

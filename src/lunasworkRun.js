@@ -43,7 +43,7 @@ const DONE = 'done';
 // C11: `handed` - paused between iterations while Mati works by hand.
 const ALL_PHASES = [PREPROD, ...PHASES, HANDED, DONE];
 const FINAL_VERDICTS = ['ship', 'plateau', 'red', 'stop'];
-const BUILDER_MODELS = ['haiku', 'sonnet', 'opus'];
+const BUILDER_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
 const MODEL_SOURCES = ['run', 'project', 'global'];
 
 const MAX_LOG = 400;

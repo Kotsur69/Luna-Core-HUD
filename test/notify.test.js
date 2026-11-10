@@ -10,7 +10,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { nextContextNotifyState, busyIdleCues } = require('../src/renderer/modules/notify.js');
+const {
+  nextContextNotifyState,
+  busyIdleCues,
+  busyIdleWorthNotifying,
+  NOTIFY_MIN_BUSY_MS,
+  NOTIFY_COOLDOWN_MS,
+} = require('../src/renderer/modules/notify.js');
+const { nextBusySpan, busySpanMs } = require('../src/renderer/modules/led.js');
 const { CTX_WARN_MID, CTX_WARN_HIGH } = require('../src/renderer/modules/thresholds.js');
 
 test('below CTX_WARN_MID: never fires, and clears a stale fired flag', () => {
@@ -90,4 +97,29 @@ test('background tab, window unfocused: both cues', () => {
     toast: true,
     flash: true,
   });
+});
+
+// A tab that redraws one line a second (a CLI retry countdown) goes busy ->
+// idle on every tick. It fired a toast per second until the edge had to carry
+// a real busy span.
+
+test('a once-a-second ticker never earns a busy -> idle cue', () => {
+  // Each tick is one lone chunk followed by an idle gap: a fresh span of 0 ms.
+  for (let tick = 0; tick < 5; tick += 1) {
+    const span = nextBusySpan(undefined, tick * 1000);
+    assert.equal(busySpanMs(span), 0);
+    assert.equal(busyIdleWorthNotifying({ busyMs: busySpanMs(span), lastCueAt: undefined, now: tick * 1000 + 800 }), false);
+  }
+  assert.equal(busyIdleWorthNotifying({ busyMs: undefined, lastCueAt: undefined, now: 1 }), false);
+});
+
+test('a real turn (continuous output) earns a cue, once per cooldown', () => {
+  let span;
+  for (let ms = 0; ms <= NOTIFY_MIN_BUSY_MS + 400; ms += 200) span = nextBusySpan(span, 5000 + ms);
+  const busyMs = busySpanMs(span);
+  assert.ok(busyMs >= NOTIFY_MIN_BUSY_MS);
+  assert.equal(busyIdleWorthNotifying({ busyMs, lastCueAt: undefined, now: 9000 }), true);
+  assert.equal(busyIdleWorthNotifying({ busyMs, lastCueAt: 9000, now: 9000 + NOTIFY_COOLDOWN_MS - 1 }), false);
+  assert.equal(busyIdleWorthNotifying({ busyMs, lastCueAt: 9000, now: 9000 + NOTIFY_COOLDOWN_MS }), true);
+  assert.equal(busyIdleWorthNotifying({ busyMs: NOTIFY_MIN_BUSY_MS - 1, lastCueAt: undefined, now: 9000 }), false);
 });

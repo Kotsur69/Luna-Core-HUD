@@ -30,7 +30,7 @@ import { sfx } from './sound.js';
 import { onLangChange } from './bus.js';
 import { sparkPoints } from './spark.js';
 
-const MODEL_LABELS = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+const MODEL_LABELS = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 const TICK_MS = 1000;
 const FLASH_MS = 2000;
 const SPARK_W = 80;
@@ -186,6 +186,26 @@ function optionLabel(option) {
 }
 
 /**
+ * The i18n key + values of the phase line while the run waits, or null when it
+ * does not: a usage-limit wait (also an unknown reason), a failed step being
+ * retried, or God Mode holding the project.
+ * @param {{waitUntil?:number|null, waitReason?:string|null, stepFailures?:{count:number,max:number}|null}} s
+ * @param {(ms:number)=>string} [timeOf]
+ * @returns {{key:string, vars:object}|null}
+ */
+export function waitLine(s, timeOf = clock) {
+  if (!s || !s.waitUntil) return null;
+  const time = timeOf(s.waitUntil);
+  if (s.waitReason === 'error') {
+    const f = s.stepFailures;
+    if (f) return { key: 'lw.run.retrying', vars: { count: f.count, max: f.max, time } };
+    return { key: 'lw.run.retryingPlain', vars: { time } };
+  }
+  if (s.waitReason === 'godModeBusy') return { key: 'lw.run.godModeBusy', vars: { time } };
+  return { key: 'lw.run.waiting', vars: { time } };
+}
+
+/**
  * One pending decision as text lines (tested): kind, question, the options
  * with the default marked, and when the default is taken (or that it never is).
  * @param {{kind:string, question:string, detail?:string|null, options:string[],
@@ -259,7 +279,8 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
   // ---- live status ----
 
   function phaseLine(s) {
-    if (s.waitUntil) return t('lw.run.waiting', { time: clock(s.waitUntil) });
+    const wait = waitLine(s);
+    if (wait) return t(wait.key, wait.vars);
     const phase = s.phase ? t(`lw.phase.${s.phase}`) : '-';
     return s.role ? `${phase} · ${t(`lw.role.${s.role}`)}` : phase;
   }

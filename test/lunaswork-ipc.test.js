@@ -126,7 +126,7 @@ test('getSettings returns the defaults for a fresh machine', async () => {
   assert.deepEqual(res.models, DEFAULT_MODELS);
   assert.equal(res.freeFallback, false);
   assert.equal(res.profile, null);
-  assert.deepEqual(res.choices, ['opus', 'sonnet', 'haiku', 'auto']);
+  assert.deepEqual(res.choices, ['opus', 'sonnet', 'haiku', 'fable', 'auto']);
   s.done();
 });
 
@@ -892,4 +892,12 @@ test('lunaswork:ask turns a throwing service into a plain failure; no service, n
   const none = setup();
   assert.equal(none.ipc.channels().includes('lunaswork:ask'), false);
   none.done();
+});
+
+test('publicStatus carries the step-failure count and its max for the retry line', () => {
+  const base = { runId: 'lwabc1', waitUntil: 9, waitReason: 'error' };
+  assert.deepEqual(publicStatus({ ...base, failures: { phase: 'build', count: 2 } }, () => true).stepFailures, { count: 2, max: 3 });
+  assert.deepEqual(publicStatus({ ...base, failures: { count: 1 }, maxStepFailures: 5 }, () => true).stepFailures, { count: 1, max: 5 });
+  assert.equal(publicStatus(base, () => true).stepFailures, null);
+  assert.equal(publicStatus({ ...base, failures: { count: 'x' } }, () => true).stepFailures, null);
 });

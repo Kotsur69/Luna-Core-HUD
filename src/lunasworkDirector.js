@@ -19,7 +19,8 @@
 // A steer card whose text is `stop` is not work: it is never scheduled and
 // returns stop: true - the run ends after the current iteration.
 //
-// Scope guard (B5): a card outside DESIGN.md / ROADMAP.md
+// Scope guard (B5) - currently OFF (SCOPE_GUARD_ENABLED = false, 2026-11-10;
+// only the seed-pii card still asks). When on: a card outside DESIGN.md / ROADMAP.md
 // (lunasworkRules.scopeCheck) is never scheduled unless the decision queue
 // already has an entry for it (opts.decidedCards). It comes back in
 // `outOfScope` and the controller asks Mati. Built cards (B1) wait for the
@@ -69,6 +70,11 @@ const {
   isAutoCard, isPiiCard, isSeedCard, isLegalCard, PII_MISSING, legalDue, scheduleAutoCards,
 } = require('./lunasworkAutoCards');
 const { isVariantCard } = require('./lunasworkVariants');
+
+// B5 scope guard switch. Off since 2026-11-10: the title-word match against
+// DESIGN.md / ROADMAP.md gave false positives in a real run. While off every
+// card is in scope; only the seed-pii card still goes to the decision queue.
+const SCOPE_GUARD_ENABLED = false;
 
 const DIRECTOR_EFFORT = 'high';
 const DIRECTOR_BUDGET_USD = 2;
@@ -227,14 +233,14 @@ function withBuilderBrief(card, owned = [], skills = []) {
  * @param {Set<number>} decided cards the decision queue already covers
  * @returns {{inScope:object[], outOfScope:Array<{at:number, text:string, missing:string[]}>}}
  */
-function splitByScope(cards, scopeText, decided) {
+function splitByScope(cards, scopeText, decided, guardEnabled = SCOPE_GUARD_ENABLED) {
   const inScope = [];
   const outOfScope = [];
   for (const card of cards) {
     let check;
     if (decided.has(card.at)) check = { inScope: true };
     else if (isPiiCard(card)) check = { inScope: false, missing: [PII_MISSING] };
-    else if (isAutoCard(card)) check = { inScope: true };
+    else if (isAutoCard(card) || !guardEnabled) check = { inScope: true };
     else check = scopeCheck(card, scopeText);
     if (check.inScope) inScope.push(card);
     else outOfScope.push({ at: card.at, text: card.text, missing: check.missing || [] });
@@ -741,6 +747,7 @@ module.exports = {
   isStopCard,
   schedulable,
   splitByScope,
+  SCOPE_GUARD_ENABLED,
   withBuilderBrief,
   validateDirection,
   validateContracts,

@@ -27,7 +27,8 @@
 const path = require('path');
 
 const ROLES = ['director', 'builder', 'playtester', 'critic', 'reviewer', 'researcher'];
-const MODEL_CHOICES = ['opus', 'sonnet', 'haiku', 'auto'];
+// 'fable' is a manual choice only: `auto` never picks it (autoModel below).
+const MODEL_CHOICES = ['opus', 'sonnet', 'haiku', 'fable', 'auto'];
 // Mati's standard (2026-10-22): director + builders opus, playtester sonnet.
 // Critic and reviewers are Luna's defaults for the roles he did not name.
 const DEFAULT_MODELS = Object.freeze({

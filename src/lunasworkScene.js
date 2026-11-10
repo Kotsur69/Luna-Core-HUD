@@ -40,7 +40,7 @@ const SCENE_FILE_RE = /\.(?:unity|prefab)$/i;
 // A scene / prefab file named in card text: "Main.unity", not "com.unity.inputsystem".
 const SCENE_MENTION_RE = /[\w-]\.(?:unity|prefab)\b(?![.\w])/i;
 const SCENE_GLOBS = Object.freeze(['**/*.unity', '**/*.prefab']);
-const MODEL_RANK = { sonnet: 0, opus: 1 };
+const MODEL_RANK = { sonnet: 0, opus: 1, fable: 2 };
 // God Mode's planner limits (orchestraPlan.js).
 const MAX_PROMPT_CHARS = 8000;
 const MAX_TITLE_CHARS = 120;

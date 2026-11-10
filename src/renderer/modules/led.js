@@ -24,6 +24,39 @@ let ledTimer = null;
 let ledDead = false;
 let ledState = 'waiting'; // 'working' | 'waiting' | 'dead' - the label comes from i18n
 
+// How long each session has been pouring output without an idle gap:
+// sessionId -> { since, last } (ms). Lives outside the buckets so a tab switch
+// mid-burst (active timer <-> bucket timer) does not reset the span. The
+// busy -> idle edge carries it, so a listener can tell real work from a tab
+// that merely redraws one line a second (a CLI retry countdown, a clock).
+const busySpans = new Map();
+
+/**
+ * Next span for a session that just printed a chunk. Pure.
+ * @param {{since: number, last: number}|undefined} span
+ * @param {number} now
+ * @returns {{since: number, last: number}}
+ */
+export function nextBusySpan(span, now) {
+  return span ? { since: span.since, last: now } : { since: now, last: now };
+}
+
+/** Length of a finished busy span in ms (0 for an unknown one). Pure. */
+export function busySpanMs(span) {
+  return span ? Math.max(0, span.last - span.since) : 0;
+}
+
+function noteOutput(sessionId) {
+  if (sessionId) busySpans.set(sessionId, nextBusySpan(busySpans.get(sessionId), Date.now()));
+}
+
+/** Ends the session's busy span and announces the busy -> idle edge with its length. */
+function announceIdle(sessionId) {
+  const busyMs = busySpanMs(busySpans.get(sessionId));
+  busySpans.delete(sessionId);
+  emitBusyIdle(sessionId, busyMs);
+}
+
 /** Paints the LED from its state (text via i18n, so a language switch refreshes it). */
 export function renderLed() {
   if (!els) return;
@@ -47,13 +80,14 @@ export function mountLed(root) {
  */
 export function markWorking(sessionId) {
   if (ledDead) return;
+  noteOutput(sessionId);
   ledState = 'working';
   renderLed();
   clearTimeout(ledTimer);
   ledTimer = setTimeout(() => {
     ledState = 'waiting';
     renderLed();
-    emitBusyIdle(sessionId);
+    announceIdle(sessionId);
   }, LED_IDLE_MS);
 }
 
@@ -82,16 +116,18 @@ export function isLedDead() {
 // had arrived, and notify.js has nothing to listen for without one.
 export function markBucketWorking(bucket) {
   if (bucket.ledDead) return;
+  noteOutput(bucket.id);
   bucket.ledState = 'working';
   clearTimeout(bucket.ledIdleTimer);
   bucket.ledIdleTimer = setTimeout(() => {
     bucket.ledState = 'waiting';
-    emitBusyIdle(bucket.id);
+    announceIdle(bucket.id);
   }, LED_IDLE_MS);
 }
 
 export function markBucketDead(bucket) {
   clearTimeout(bucket.ledIdleTimer);
+  busySpans.delete(bucket.id);
   bucket.ledDead = true;
   bucket.ledState = 'dead';
 }

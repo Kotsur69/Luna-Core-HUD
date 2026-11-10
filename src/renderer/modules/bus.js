@@ -218,13 +218,16 @@ export function emitClipboardUpdate(list) {
 
 const busyIdle = channel();
 
-/** A session just went from working to waiting. cb(sessionId) -> disposer */
+/**
+ * A session just went from working to waiting. cb(sessionId, busyMs) -> disposer.
+ * busyMs = how long it had been printing without an idle gap (0 = one lone chunk).
+ */
 export function onBusyIdle(cb) {
   return busyIdle.on(cb);
 }
 
-export function emitBusyIdle(sessionId) {
-  if (sessionId) busyIdle.emit(sessionId);
+export function emitBusyIdle(sessionId, busyMs = 0) {
+  if (sessionId) busyIdle.emit(sessionId, busyMs);
 }
 
 // ---- Per-tab view state -----------------------------------------------------

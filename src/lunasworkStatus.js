@@ -35,6 +35,9 @@ const MAX_TEXT = 200;
 const MAX_MILESTONES = 20;
 const MAX_SCORES = 10;
 const MAX_PENDING = 10000;
+// Mirrors MAX_STEP_FAILURES in src/lunaswork.js (not exported there); used when
+// the controller status carries no maxStepFailures of its own.
+const DEFAULT_MAX_STEP_FAILURES = 3;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const time = (v) => (Number.isFinite(v) && v > 0 ? v : null);
@@ -92,6 +95,7 @@ function publicStatus(raw, isKnownProject) {
     phaseStartedAt: time(raw.phaseStartedAt),
     waitUntil: time(raw.waitUntil),
     waitReason: text(raw.waitReason),
+    stepFailures: stepFailuresOf(raw),
     freeUntil: time(raw.freeUntil),
     endedAt: time(raw.endedAt),
     scores: cleanScores(raw.scores),
@@ -113,6 +117,14 @@ function pendingOf(pending) {
     return { pendingDecisions: decisions.length, decisions };
   }
   return Number.isInteger(pending) && pending >= 0 ? { pendingDecisions: Math.min(pending, MAX_PENDING) } : {};
+}
+
+/** { count, max } of the current phase's failed tries, or null when there are none. */
+function stepFailuresOf(raw) {
+  const f = raw.failures;
+  if (!isObj(f) || !Number.isInteger(f.count) || f.count < 1) return null;
+  const max = Number.isInteger(raw.maxStepFailures) && raw.maxStepFailures >= f.count ? raw.maxStepFailures : DEFAULT_MAX_STEP_FAILURES;
+  return { count: Math.min(f.count, max), max };
 }
 
 /** A pushed event, or null when its type is unknown. */

@@ -38,9 +38,10 @@
 
 const scene = require('./lunasworkScene');
 
-const MODEL_RANK = { haiku: 0, sonnet: 1, opus: 2 };
-// God Mode workers run on these (orchestraPlan.js MODELS).
-const WORKER_MODELS = ['sonnet', 'opus'];
+const { MODEL_RANK, isClaudeModel, strongerModel } = require('./claudeModels');
+
+// God Mode workers run on these (orchestraPlan.js PACKAGE_MODELS).
+const WORKER_MODELS = ['sonnet', 'opus', 'fable'];
 // repoBusy: another project's God Mode run holds this repo (orchestraRegistry.js).
 const BUSY_ERRORS = new Set(['busy', 'runActive', 'repoBusy']);
 const NOTHING_TO_BUILD = new Set(['noTodos', 'noneSelected']);
@@ -64,6 +65,18 @@ function packageModel(todoAts, cardModels, fallback) {
   }
   if (best === null) return fallback;
   return WORKER_MODELS.includes(best) ? best : 'sonnet';
+}
+
+/**
+ * The model God Mode's planner runs on for a build: the strongest model the
+ * controller gave this build's cards (its builder setting, or `auto`'s pick
+ * per card), so a run set to Haiku does not plan on Opus. Null (God Mode's
+ * own default) when no card names a known model.
+ * @param {object[]} cards
+ * @returns {string|null}
+ */
+function plannerModelFor(cards) {
+  return (Array.isArray(cards) ? cards : []).reduce((best, c) => strongerModel(best, isObj(c) ? c.model : null), null);
 }
 
 /** The card object handed to makePlan's Hook A: its `at` plus the fields the planner reads. */
@@ -160,8 +173,9 @@ function createGodModeBuilder(deps) {
    * After a restart (resumePlanId = the plan this build made before) a
    * restored plan with pushed work is finished and merged instead.
    * @param {{projectId:string, repoPath:string, cards:object[], checkCommand:string, free?:boolean,
-   *   resumePlanId?:string|null, ownPlanIds?:string[], onPlan?:(planId:string)=>void}} opts
-   *   ownPlanIds: plans this run made (replaceable); onPlan: the plan id, once made
+   *   resumePlanId?:string|null, ownPlanIds?:string[], onPlan?:(planId:string)=>void, plannerModel?:string}} opts
+   *   ownPlanIds: plans this run made (replaceable); onPlan: the plan id, once made;
+   *   plannerModel: God Mode's planner model (default: the strongest model of the cards)
    * @returns {Promise<object>} the onRunSettled result {planId, killed, integration, plan} plus ok,
    *   or {ok:false, error} - 'limit' (with resumeAt), 'godModeBusy', or God Mode's own error
    */
@@ -192,6 +206,8 @@ function createGodModeBuilder(deps) {
       if (foreignPlanOpen(opts)) return { ok: false, error: 'godModeBusy' };
       const unity = isUnityProject(opts.repoPath);
       if (unity) await prepareUnity(opts.repoPath);
+      // A free build plans on the free providers: the Claude alias means nothing there.
+      const plannerModel = opts.free ? null : (isClaudeModel(opts.plannerModel) ? opts.plannerModel : plannerModelFor(cards));
       const made = await deps.orchestra.makePlan({
         projectId: opts.projectId,
         repoPath: opts.repoPath,
@@ -200,6 +216,8 @@ function createGodModeBuilder(deps) {
         env: (opts.free && typeof deps.freeEnv === 'function' && deps.freeEnv()) || deps.env(),
         cards: cards.map(planCard),
         onRunSettled: (result) => settle(result),
+        // God Mode allow-lists it again (orchestraPlan.plannerModelOf).
+        ...(plannerModel ? { plannerModel } : {}),
         // Only a Unity build carries the key: every other plan is made exactly as before.
         ...(unity ? { ownership: scene.sceneOwnership() } : {}),
       });
@@ -280,4 +298,4 @@ function createGodModeBuilder(deps) {
   };
 }
 
-module.exports = { createGodModeBuilder, packageModel, planCard };
+module.exports = { createGodModeBuilder, packageModel, planCard, plannerModelFor };

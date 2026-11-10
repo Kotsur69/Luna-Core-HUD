@@ -237,7 +237,7 @@ permission profile for builders) are **dropped** by Mati's decision.
 | B2 | Iteration 0 (new projects) | For an empty repo: scaffold from a stack template (Next.js/TS, Python, …) with tests, lint, CI and `.env.example` before any feature card. | 1 |
 | B3 | Survive the machine | Watchdog restarts LunaCore and resumes the run; Windows updates paused for the run's length; disk cleanup of old evidence and settled worktrees; low-disk stops the run and emails Mati. | 1 |
 | B4 | Stuck cards | A card that fails two iterations is split into smaller cards by the Critic, or goes to the decision queue. | 1 |
-| B5 | Scope guard | The Director cannot schedule work outside `DESIGN.md` / `ROADMAP.md` without a decision-queue entry. | 1 |
+| B5 | Scope guard | The Director cannot schedule work outside `DESIGN.md` / `ROADMAP.md` without a decision-queue entry. **Guard OFF since 2026-11-10** (`SCOPE_GUARD_ENABLED = false` in `src/lunasworkDirector.js`): the title-word match against DESIGN.md / ROADMAP.md gave false positives in a real run, so every card counts as in scope. `scopeCheck` stays intact and unit-tested; only the seed-pii card still goes to the decision queue first. | 1 |
 | B6 | Design match score | Screenshots compared with the mockups in `design/references/`; a per-screen fidelity score in the playtest. | 2 |
 | B7 | Web quality budgets | Lighthouse (performance, a11y, best practices, SEO) every iteration via chrome-devtools MCP, trend on the dashboard, a drop creates cards. | 2 |
 | B8 | Second-opinion model | At milestone gates a different model (Codex / Gemini) reviews alongside the Critic. | 2 |

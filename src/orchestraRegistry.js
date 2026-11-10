@@ -360,6 +360,10 @@ function createOrchestraRegistry(deps) {
     onUsageLimit,
     onApproval: (sessionId, rule, example) => route(sessionId, (c) => c.onApproval(sessionId, rule, example)),
     onFiles: (sessionId, files) => route(sessionId, (c) => c.onFiles(sessionId, files)),
+    // A tab's transcript token totals: offered to every run, because a fix-up
+    // worker's tab is not a package (ownsSession does not know it).
+    onSessionUsage: (sessionId, byModel) =>
+      each((c) => (typeof c.onSessionUsage === 'function' ? c.onSessionUsage(sessionId, byModel) : undefined), 'sessionUsage'),
     // Free God Mode v2 F3: the model that really answered a free worker
     // (src/fallbackproxy.js onRoute) - each free run notes it in its log.
     onFreeRoute: (info) => each((c) => (typeof c.onFreeRoute === 'function' ? c.onFreeRoute(info) : undefined), 'freeRoute'),

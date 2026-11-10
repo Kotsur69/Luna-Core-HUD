@@ -15,6 +15,7 @@
 
 import { h } from '../dom.js';
 import { t, tf } from '../i18n.js';
+import { openLightbox } from '../../../src/renderer/modules/lightbox.js';
 import { lunasworkFrom } from '../snapmodel.js';
 import { mountSnapshots, when } from './snapshotview.js';
 import { repaintWhileShown } from './godmodelive.js';
@@ -79,12 +80,26 @@ function tokensBlock(snap) {
   );
 }
 
+/** A screenshot thumbnail as a button: tap opens it large (pinch to zoom, tap to close). */
+function shotButton(s) {
+  return h(
+    'button',
+    {
+      type: 'button',
+      class: 'lw-shot__btn',
+      'aria-label': tf('lwShotEnlarge', { name: s.name }),
+      onclick: () => openLightbox({ src: s.src, alt: s.name, closeLabel: t('lwShotClose'), closeOnImageClick: true }),
+    },
+    h('img', { src: s.src, alt: s.name, loading: 'lazy' }),
+  );
+}
+
 function shotsBlock(shots) {
   if (!shots.length) return null;
   return h(
     'div',
     { class: 'lw-shots' },
-    shots.map((s) => h('figure', { class: 'lw-shot' }, h('img', { src: s.src, alt: s.name, loading: 'lazy' }), h('figcaption', { class: 'hint' }, `${s.name} · #${s.n}`))),
+    shots.map((s) => h('figure', { class: 'lw-shot' }, shotButton(s), h('figcaption', { class: 'hint' }, `${s.name} · #${s.n}`))),
   );
 }
 

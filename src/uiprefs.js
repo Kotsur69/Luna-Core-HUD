@@ -11,7 +11,7 @@
 // autoCompactMode, autoCompactEveryTurns, autoCompactAfterMinutes,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
-// orchestraPlannerEffort, orchestraWorkers,
+// orchestraPlannerEffort, orchestraPlannerModel, orchestraWorkers,
 // collapsed, layoutSizes, widgetSlots, railedRegions, density, fontPack, glow,
 // motion, effectsStrength, welcomeSeen, welcomeChecked, pwaUrl, hideLife,
 // hideMission, hideGodMode.
@@ -27,6 +27,7 @@
 const fs = require('fs');
 const paths = require('./paths');
 const { EFFORTS, isEffort } = require('./efforts');
+const { CLAUDE_MODELS } = require('./claudeModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
 
 // Per-machine state, so it lives in the WRITABLE root - which in a dev clone is
@@ -101,7 +102,9 @@ const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
 // the planner picked per package; the others force one model for every
 // worker. Permission modes map 1:1 to `claude --permission-mode`, except
 // 'default', which adds no flag.
-const ORCHESTRA_WORKER_MODELS = ['opus', 'sonnet', 'plan'];
+// 'plan' = the planner's per-package pick. Fable is a manual choice only: the
+// planner itself still assigns sonnet / opus (orchestraPlan.js MODELS).
+const ORCHESTRA_WORKER_MODELS = ['opus', 'sonnet', 'fable', 'plan'];
 const ORCHESTRA_PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 // Worker --effort: 'plan' = the planner's per-package pick (medium if none);
 // the others force one level. Never 'low' (src/efforts.js).
@@ -229,6 +232,10 @@ const DEFAULTS = {
   // The God Mode v2 planner's --effort, picked in the to-do picker. Never
   // 'low' and never 'plan' - only src/efforts.js isEffort() levels.
   orchestraPlannerEffort: 'high',
+  // The God Mode v2 planner's model, picked next to the effort. Opus unless
+  // Mati picks another alias (src/claudeModels.js); main allow-lists it again
+  // when a plan starts (orchestraPlan.js plannerModelOf).
+  orchestraPlannerModel: 'opus',
   // God Mode "Workers" (F6): 'claude' | 'hybrid' | 'free', picked in the to-do
   // picker. An older prefs file's boolean orchestraFree tick migrates.
   orchestraWorkers: 'claude',
@@ -742,6 +749,9 @@ function readUiPrefs() {
       orchestraPlannerEffort: isEffort(obj.orchestraPlannerEffort)
         ? obj.orchestraPlannerEffort
         : DEFAULTS.orchestraPlannerEffort,
+      orchestraPlannerModel: CLAUDE_MODELS.includes(obj.orchestraPlannerModel)
+        ? obj.orchestraPlannerModel
+        : DEFAULTS.orchestraPlannerModel,
       orchestraWorkers: workersPrefOf(obj),
       orchestraIntegration: ORCHESTRA_INTEGRATION_MODES.includes(obj.orchestraIntegration)
         ? obj.orchestraIntegration
@@ -870,6 +880,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && isEffort(partial.orchestraPlannerEffort)) {
       next.orchestraPlannerEffort = partial.orchestraPlannerEffort;
+    }
+    if (partial && CLAUDE_MODELS.includes(partial.orchestraPlannerModel)) {
+      next.orchestraPlannerModel = partial.orchestraPlannerModel;
     }
     if (partial && normalizeWorkers(partial.orchestraWorkers)) {
       next.orchestraWorkers = partial.orchestraWorkers;
@@ -1012,6 +1025,7 @@ module.exports = {
   cleanRailedRegions,
   cleanCustomLayouts,
   MISSION_MODELS,
+  ORCHESTRA_WORKER_MODELS,
   checkCommandOf,
   workerEffortOf,
   SUPABASE_APPLY_MODES,
