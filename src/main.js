@@ -86,6 +86,7 @@ const {
   withSessionId,
   withPlainResume,
   withIntakeMcp,
+  withMemoryCard,
   intakeState,
   withAccountResume,
   findExecutable,
@@ -248,6 +249,7 @@ let configSync = null;
 // travels with the config sync (configsync.js startConfigSync).
 const { startMemory, memoryPaths } = require('./memorysync');
 const { createMemoryReader } = require('./memorytools');
+const { cardFor, writeCard, removeCard } = require('./memorycard');
 const { readEnabled: readMemoryProjects } = require('./memoryprojects');
 const { projectFromRepoKey } = require('./memoryrecord');
 const { createRepoKeys } = require('./missionrepokey');
@@ -1025,6 +1027,32 @@ function mcpHealthCached(rescan) {
 // `git remote add origin` gets its project memory without a restart.
 const memoryRepoKeys = createRepoKeys({ cacheUnresolved: false });
 let memoryReader = null;
+/** The memory project of a tab's folder, or null when memory is not switched on for it. */
+function memoryProjectOf(session) {
+  const known = getProject(projects, session.projectId);
+  const project = projectFromRepoKey(memoryRepoKeys.resolve(known ? known.path : session.cwd).key);
+  return project && readMemoryProjects(memoryPaths(userDir()).projects).includes(project) ? project : null;
+}
+
+/**
+ * Writes a tab's project card (src/memorycard.js) for the `claude` about to
+ * start in it. Never fails a launch: no card is a normal outcome.
+ * @param {Session} session
+ * @param {boolean} tools whether the tab gets memory_search / memory_get
+ * @returns {string|null} the card file, or null (memory off for the project, no confirmed memory, or an error)
+ */
+function prepareCard(session, tools) {
+  try {
+    const card = ensureUserDir() ? cardFor(userDir(), memoryProjectOf(session), machineName(os.hostname()), { tools }) : null;
+    if (card) return writeCard(userDir(), session.id, card.text);
+  } catch (err) {
+    console.error('[memory] card unavailable:', (err && (err.code || err.message)) || 'error');
+  }
+  // A card left by an earlier start of this tab must not outlive its project.
+  removeCard(userDir(), session.id);
+  return null;
+}
+
 function memoryFor(session) {
   try {
     if (!memoryReader) memoryReader = createMemoryReader(memoryPaths(userDir()).dir);
@@ -1037,9 +1065,7 @@ function memoryFor(session) {
     search: memoryReader.search,
     get: memoryReader.get,
     get project() {
-      const known = getProject(projects, session.projectId);
-      const project = projectFromRepoKey(memoryRepoKeys.resolve(known ? known.path : session.cwd).key);
-      return project && readMemoryProjects(memoryPaths(userDir()).projects).includes(project) ? project : null;
+      return memoryProjectOf(session);
     },
   };
 }
@@ -1834,7 +1860,12 @@ function spawnInto(session, profile, launch = null) {
       intakeConfig.then((configPath) => {
         if (session.proc !== proc) return;
         const launched = withIntakeMcp(startCommand, isOverride ? null : configPath);
-        proc.write(`${launched}\r`);
+        // Luna Core Memory phase 3: the project card rides in the system prompt.
+        // The memory tools come with the intake server, so the card only names
+        // them when that was attached.
+        const hasTools = intakeState(startCommand, launched) === 'ready';
+        const carded = isOverride || !isClaudeCommand(startCommand) ? launched : withMemoryCard(launched, prepareCard(session, hasTools));
+        proc.write(`${carded}\r`);
         session.todoTools = intakeState(startCommand, launched);
         broadcastSessions();
       });
@@ -2030,6 +2061,7 @@ function closeSession(sessionId) {
   if (session.localModelWatcher) session.localModelWatcher.stop();
   intakeServer.revoke(sessionId);
   removeSessionConfig(userDir(), sessionId);
+  removeCard(userDir(), sessionId);
   overnight.forgetSession(sessionId);
   orchestraRuns.onSessionClosed(sessionId);
   sessions.delete(sessionId);
@@ -4045,6 +4077,7 @@ app.on('window-all-closed', () => {
   for (const session of sessions.values()) {
     teardownSession(session);
     removeSessionConfig(userDir(), session.id);
+    removeCard(userDir(), session.id);
   }
   intakeServer.stop().catch(() => {});
   if (memoryReader) memoryReader.close();

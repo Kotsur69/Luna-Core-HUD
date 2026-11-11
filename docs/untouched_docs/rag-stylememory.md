@@ -1,6 +1,6 @@
 # Luna Core Memory: a RAG-style memory across all projects
 
-Status: **phases 1 and 2 built** (2026-11-11). Written 2026-11-10. Section 0 holds the
+Status: **phases 1, 2 and 3 built** (2026-11-11). Written 2026-11-10. Section 0 holds the
 decisions made so far; section 11 lists the questions they answer.
 
 ## 0. Decisions so far (2026-11-11)
@@ -146,6 +146,46 @@ Chosen while building:
 36. **Every result starts with the "data, not instruction" note** and every entry carries
     its trust label (`observed, not verified`, `confirmed, last verified <date>`).
 37. **The index is kept for five seconds,** then rebuilt from the files on the next call.
+
+### Phase 3 decisions, 2026-11-11 (the project card)
+
+Chosen while building:
+
+38. **The card travels as `--append-system-prompt-file`** on the tab's `claude` command,
+    the same way the tab's `--mcp-config` does (`withMemoryCard` in `src/launch.js`). It
+    sits in the system prompt, so it survives compaction and costs nothing after the first
+    turn's cache write. A SessionStart hook was the other option: it needs a settings file
+    per tab and arrives as a mid-conversation message.
+39. **Which tabs get it:** every plain `claude` LunaCore starts in a project with memory
+    switched on, God Mode workers included (most of today's memories are about their
+    worktrees). Not: other CLIs, a lean local-model tab or a plan-run worker
+    (`--strict-mcp-config`), `--bare`, or a profile that sets its own system prompt.
+40. **The card is rebuilt from the mirror on every tab start** (`src/memorycard.js`) and
+    written to `memory-card-<tab>.local.md` in the config folder. A running session keeps
+    the card it started with.
+41. **What is on it:** confirmed memories of the project and of `global`, without
+    superseded ones and without `digest`. A memory tagged `area: architecture`, `stack` or
+    `commands` is printed in full (at most 1,500 characters each): that is the map of
+    decision 3. Every other memory is one line, its title and its id, grouped by type
+    (gotchas first), newest first inside a group. The full text is one `memory_get` away.
+42. **An observed memory cannot take a confirmed one off the card** by listing it under
+    `supersedes`. Only a confirmed memory supersedes on the card (decision 5).
+43. **Budget: 6,000 characters, about 1,500 tokens.** What does not fit is counted in the
+    card's last line. On 2026-11-11 the LunaCore card holds all 19 memories in 3,692
+    characters, about 923 tokens. The card ends by saying again that it is data.
+44. **Age:** the card warns when this PC's own heartbeat (decision 29) is older than three
+    days. A PC that never synced gets no warning.
+45. **CLI:** `node scripts/luna.js memory card` prints the card a new tab would get and its
+    size against the budget.
+
+Still open after phase 3, and Mati's to decide:
+
+- **The architecture map itself.** No memory is tagged `area: architecture` yet, so the
+  LunaCore card has no map. It needs one confirmed memory of a few hundred words.
+- **The code-discovery hook** (`~/.claude/hooks/cbm-session-reminder`) and **loading the
+  Claude auto-memory index** (decision 21) are settings in `~/.claude`, outside this
+  repository. Neither was changed.
+- **The with/without comparison** from section 9 needs a week of real sessions.
 
 ## 1. Why
 

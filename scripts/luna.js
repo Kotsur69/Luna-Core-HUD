@@ -7,6 +7,7 @@
 //   node scripts/luna.js memory search "worktree junction"
 //   node scripts/luna.js memory list | status | enable | disable
 //   node scripts/luna.js memory import-auto        Claude Code auto-memory -> mirror
+//   node scripts/luna.js memory card               the project card a new tab gets
 //   node scripts/luna.js memory eval golden.json   recall of a golden question set
 //
 // It reads and writes the same files as the app (the mirror under
@@ -30,6 +31,7 @@ const { createIndex, DEFAULT_LIMIT } = require('../src/memoryindex');
 const { importAutoMemory, autoMemoryDir } = require('../src/memoryimport');
 const { setEnabled, readEnabled } = require('../src/memoryprojects');
 const { localStatus, memoryPaths } = require('../src/memorysync');
+const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
 const { createRepoKeys } = require('../src/missionrepokey');
 const { machineName } = require('../src/missionledgersync');
 
@@ -40,6 +42,7 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
   status                counts, broken files, sync health per PC
   enable | disable      switch memory on/off for the project
   import-auto           import Claude Code auto-memory   [--from <folder>] [--force]
+  card                  the project card a new tab gets, and its size
   eval <golden.json>    recall@k of [{"q": "...", "expect": "<id>"}]   [--limit n]
 
   --project <host/owner/repo>   default: the repository of the current folder
@@ -160,6 +163,20 @@ function cmdImportAuto({ configDir, dir, project, values }) {
   if (failed.length) process.exitCode = 1;
 }
 
+/** The project card a tab of this project would get (phase 3), with its size against the budget. */
+function cmdCard({ configDir, project }) {
+  needProject(project);
+  if (!readEnabled(memoryPaths(configDir).projects).includes(project)) {
+    out(`Memory is switched off for ${project}: its tabs get no card. ("memory enable" switches it on.)`);
+    return;
+  }
+  const card = cardFor(configDir, project, machineName(os.hostname()));
+  if (!card) return out(`No confirmed memory for ${project} yet: its tabs get no card.`);
+  out(card.text);
+  out();
+  out(`-- ${card.shown} of ${card.total} confirmed memories, ${card.chars} characters, about ${card.tokens} tokens (budget ${MAX_CARD_CHARS} characters)`);
+}
+
 function cmdEval({ dir, project, values, positionals }) {
   const file = positionals[0];
   if (!file) throw new UsageError('eval needs a golden file');
@@ -188,6 +205,7 @@ const COMMANDS = {
   enable: (ctx) => cmdEnable(ctx, true),
   disable: (ctx) => cmdEnable(ctx, false),
   'import-auto': cmdImportAuto,
+  card: cmdCard,
   eval: cmdEval,
 };
 
