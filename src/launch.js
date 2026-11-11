@@ -68,6 +68,29 @@ function withIntakeMcp(command, configPath) {
   return `${cmd} --mcp-config '${configPath}'`;
 }
 
+// Flags meaning "this launch decides its own system prompt, or wants nothing
+// extra": a lean local-model tab (--strict-mcp-config), --bare, or a profile
+// that already sets or appends a system prompt.
+const CARD_DECIDED = /(^|\s)(--strict-mcp-config|--bare|--(append-)?system-prompt(-file)?)(\s|=|$)/;
+
+/**
+ * Appends `--append-system-prompt-file '<path>'` (the project card of Luna
+ * Core Memory, src/memorycard.js) to a plain `claude` start command. Same
+ * rules as withIntakeMcp: other programs and commands matching CARD_DECIDED
+ * are left alone, and a path that would break the single-quoted shell
+ * argument is refused.
+ * @param {string} command
+ * @param {string|null} cardPath
+ * @returns {string} the command, with or without the flag
+ */
+function withMemoryCard(command, cardPath) {
+  const cmd = String(command || '').trim();
+  // U+2018-U+201B: PowerShell treats the typographic quotes as ' too.
+  if (!cmd || typeof cardPath !== 'string' || !cardPath || /['`\r\n‘-‛]/.test(cardPath)) return cmd;
+  if (!isClaudeCommand(cmd) || CARD_DECIDED.test(cmd)) return cmd;
+  return `${cmd} --append-system-prompt-file '${cardPath}'`;
+}
+
 /**
  * What a tab's start command means for the intake MCP tools, for the to-do
  * widget's "rewrite with Claude" button: 'ready' when withIntakeMcp() really
@@ -244,6 +267,7 @@ module.exports = {
   withSessionId,
   withPlainResume,
   withIntakeMcp,
+  withMemoryCard,
   intakeState,
   withTaskBrief,
   withAccountResume,
