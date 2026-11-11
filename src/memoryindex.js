@@ -28,6 +28,8 @@ const MAX_LIMIT = 50;
 const MAX_TERMS = 16;
 const MAX_QUERY = 500;
 const SNIPPET_TOKENS = 24;
+/** Matches ranked per search before the project and superseded filters cut them down. */
+const MAX_CANDIDATES = 2000;
 
 const BM25_WEIGHTS = { title: 4, tags: 2, body: 1 };
 const PROJECT_BOOST = 1.5;
@@ -54,6 +56,16 @@ function tagsOf(record) {
 function createIndex(records) {
   const { DatabaseSync } = require('node:sqlite');
   const db = new DatabaseSync(':memory:');
+  try {
+    return buildIndex(db, records);
+  } catch (err) {
+    // Nobody else holds the handle yet: a failed build must not leak it.
+    db.close();
+    throw err;
+  }
+}
+
+function buildIndex(db, records) {
   db.exec("create virtual table mem using fts5(key unindexed, title, tags, body, tokenize = 'unicode61 remove_diacritics 2')");
   const insert = db.prepare('insert into mem (key, title, tags, body) values (?, ?, ?, ?)');
   const byKey = new Map();
@@ -67,7 +79,7 @@ function createIndex(records) {
   const find = db.prepare(
     `select key, bm25(mem, 0, ${title}, ${tags}, ${body}) as rank,
             snippet(mem, 3, '', '', ' ... ', ${SNIPPET_TOKENS}) as snippet
-     from mem where mem match ? order by rank limit 200`,
+     from mem where mem match ? order by rank limit ${MAX_CANDIDATES}`,
   );
 
   /**

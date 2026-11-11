@@ -161,3 +161,20 @@ test('builds the match expression from quoted prefix terms', () => {
   assert.equal(toMatch('Worktree junction, a worktree!'), '"worktree"* OR "junction"*');
   assert.equal(toMatch(''), null);
 });
+
+test('thisProjectOnly hits are not crowded out by many better matches elsewhere', () => {
+  const crowd = Array.from({ length: 300 }, (_v, i) => rec(`crowd-${i}`, 'zebra zebra zebra', 'zebra zebra', { project: OTHER }));
+  const index = createIndex([...crowd, rec('lonely', 'A note', 'It mentions a zebra once, far down the ranking.')].map((r) => [keyOf(r), r]));
+
+  const hits = index.search('zebra', { project: PROJECT, only: PROJECT });
+  index.close();
+
+  assert.deepEqual(
+    hits.map((h) => h.id),
+    ['lonely'],
+  );
+});
+
+test('a record the index cannot take fails the build instead of leaking it', () => {
+  assert.throws(() => createIndex([['k', { ...rec('bad', 'title', 'body'), body: { not: 'text' } }]]));
+});

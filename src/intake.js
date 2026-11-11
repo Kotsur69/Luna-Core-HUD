@@ -32,6 +32,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { normalizeTodo, normalizeTodos, MAX_ITEMS, MAX_TAGS } = require('./todo');
 const { EFFORTS } = require('./efforts');
+const { MEMORY_TOOLS, callMemoryTool } = require('./memorytools');
 
 const MCP_PATH = '/mcp';
 const MAX_BODY_BYTES = 256 * 1024;
@@ -311,11 +312,15 @@ function toolText(payload, isError = false) {
  * @param {string} name
  * @param {object} args
  * @param {{read:() => Array, write:(list:Array) => boolean, now?:() => number,
- *   canMarkDone?:boolean}} store canMarkDone must be true for luna_todo_done
- *   (main sets it false for God Mode worker tabs, which must not tick cards)
+ *   canMarkDone?:boolean, memory?:object}} store canMarkDone must be true for
+ *   luna_todo_done (main sets it false for God Mode worker tabs, which must not
+ *   tick cards); memory = the reader behind memory_search / memory_get
+ *   (src/memorytools.js), absent when the tab has no memory tools
  */
 function callTool(name, args, store) {
   const a = args && typeof args === 'object' ? args : {};
+  const recalled = store.memory ? callMemoryTool(name, a, store.memory) : null;
+  if (recalled) return recalled.ok ? toolText(recalled.payload) : toolText(recalled.error, true);
   if (name === 'luna_todo_list') return toolText(listView(normalizeTodos(store.read()), a.includeDone, a.tag));
 
   let outcome;
@@ -362,7 +367,7 @@ function handleRpc(msg, store, version = '0.0.0') {
     case 'ping':
       return rpcResult(id, {});
     case 'tools/list':
-      return rpcResult(id, { tools: TOOLS });
+      return rpcResult(id, { tools: store.memory ? [...TOOLS, ...MEMORY_TOOLS] : TOOLS });
     case 'tools/call': {
       const result = callTool(params.name, params.arguments, store);
       return result ? rpcResult(id, result) : rpcError(id, -32602, `Unknown tool: ${params.name}`);
