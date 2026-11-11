@@ -1,6 +1,6 @@
 # Luna Core Memory: a RAG-style memory across all projects
 
-Status: **phases 1, 2 and 3 built** (2026-11-11). Written 2026-11-10. Section 0 holds the
+Status: **phases 1 to 4 built** (2026-11-11). Written 2026-11-10. Section 0 holds the
 decisions made so far; section 11 lists the questions they answer.
 
 ## 0. Decisions so far (2026-11-11)
@@ -195,6 +195,117 @@ Still open:
   session end (what was being built, what is done, what is left) and shown on the card,
   so a new session can continue half-done work without an explanation. Proposed, not
   yet decided.
+- **Feature notes**, also for phase 4: when a feature ships, one note says what it does,
+  which files hold it and what to watch for when porting it. This is what makes "use
+  the same logic in another app" work. Proposed, not yet decided.
+
+### Phase 4 decisions, 2026-11-11 (capture and the inbox)
+
+Chosen while building:
+
+46. **There is no separate inbox store.** A memory that is not `confirmed` is an inbox
+    entry. Capture saves its candidates as `observed` memories in the mirror, so they are
+    searchable at once, they sync like every other memory, and a candidate captured on
+    one PC can be approved on the other (decisions 5 and 11). Section 4's `inbox/` folder
+    is not built.
+47. **Capture runs in LunaCore's main process, not in a Claude Code hook**
+    (`src/memorycapture.js`). A hook needs a settings file per tab and dies with the
+    session. LunaCore knows every tab's transcript already. A ledger
+    (`memory-capture.local.json`) keeps, per transcript, the byte offset read so far.
+48. **When a session is captured:** one minute after its tab closed, or after 20 minutes
+    without a new line in a tab that stays open. Only the text after the offset is read,
+    so a long or resumed session is captured piece by piece and never twice. Sessions
+    open when LunaCore quits are captured on the next start. At most three model calls
+    per five-minute tick.
+49. **Only the user's own tabs, only projects with memory switched on.** God Mode worker
+    tabs are not captured: one run starts many short sessions. Revisit if their lessons
+    turn out to be missing.
+50. **The model reads a digest, not the transcript** (`src/memorydigest.js`): what the
+    user typed, what the assistant answered, and one line per tool call. Tool results
+    are never copied (section 7, external text). The one exception is the first 300
+    characters of a failed local call (shell, file read or edit). At most 60,000
+    characters; a longer piece keeps its start and its end. A piece under 600 characters
+    costs no model call.
+51. **The extractor is `claude -p --model haiku`** with no tools, no settings and no MCP
+    servers (`missionrunner.runJob`, lean). The prompt goes in through stdin because it
+    does not fit a Windows command line. Measured on one real session of 2026-11-10:
+    22 seconds, 5 candidates.
+52. **Filter** (`src/memoryextract.js`): each candidate is rebuilt by `checkRecord`; the
+    model cannot set id, project, source or confidence. Dropped: a `digest`, a secret,
+    a near-duplicate of an existing memory or of an earlier candidate. At most five per
+    piece. The digest is scrubbed for secrets before it is sent.
+53. **A proposed supersede does nothing until approved.** Only a `confirmed` memory
+    takes another one out of search and off the card (this extends decision 42 to the
+    index and to `memory_get`).
+54. **Approve, edit, reject** (`src/memoryinbox.js`). Approve sets `confirmed` and
+    `last_verified`. Reject deletes the file, which syncs as a tombstone. Edit changes
+    title, text, type or area and keeps the entry waiting. Near-duplicates among the
+    waiting entries are shown as one; a decision on it removes the others (decision 17).
+55. **In the HUD** the notification hub shows "N memories to review" (it counts on the
+    hub's badge and has its own switch in Settings). It opens the inbox window
+    (`src/renderer/modules/memoryinbox.js`).
+56. **A full inbox pauses capture.** 40 entries waiting for a project: no more model
+    calls for it until some are reviewed.
+57. **CLI:** `memory inbox`, `memory approve <id>`, `memory reject <id>`, and
+    `memory capture <transcript.jsonl> [--save]`, which shows what the extractor keeps
+    from one transcript and writes nothing without `--save`.
+58. **Feature notes are in** as a trial: when a session finished a feature the extractor
+    may write one `project-fact` with `area: feature`. They go through the inbox like
+    everything else.
+
+59. **Capture only opens files under `~/.claude/projects`.** The ledger is a file anyone
+    can edit, so a path in it is checked before it is read. A tab's transcript is noted
+    at every turn end, so the session before a `/clear` is not lost.
+
+Found by the security review of 2026-11-11 and left open for Mati:
+
+- **An `observed` memory is returned by `memory_search` before anyone has read it**
+  (decision 5). Text from a failed command or from the assistant's own summary of a
+  web page can end up in one. It is labelled "not verified", but it is in front of a
+  later session. Options: leave it, or keep unapproved memories out of search.
+- **The secret scanner (`src/hostscrub.js`) misses some token shapes:** Stripe
+  `sk_live_`, JWTs (Supabase keys), `Bearer` tokens, Slack `xox`, Google `AIza`, npm
+  tokens, and passwords inside a connection URL. It guards the memory sync since phase
+  1, so this is older than phase 4, but capture makes it matter more.
+- **A captured memory can choose `global`.** One approval then puts it on every
+  project's card. The inbox shows the scope; nothing asks twice.
+- **The inbox does not say whether the session read outside content** (a web page, an
+  MCP tool). A badge for that would help the person approving.
+
+Not built in phase 4:
+
+- **`memory_propose`** (section 7 step 5, "remember this" mid-session). Claude
+  auto-memory still does that job and its index stays loaded (see above).
+- **The "where we stopped" note.** Still proposed, not decided.
+- **Auto-accept for low-risk types** (question 4). Everything is approved by hand until
+  the approval rate is known.
+
+To judge after a week (section 9, inbox quality): the share of candidates approved. Under
+about a third means the extractor prompt is wrong.
+
+### Bonus, wanted by Mati on 2026-11-11: a live work map in LunaCore
+
+Mati wants a panel in the HUD that shows what the session in the active tab is doing,
+in the spirit of the Claude Code plugin `github.com/alexeyw/lot-map` (MIT): the model in
+the centre, stations around it (Files, Shell, Network, Memory, Agents, Skills), a pulse
+to a station when a call starts and back when it ends, errors in red, a ring for the
+context window.
+
+- **Built as LunaCore's own widget, not by installing the plugin.** In a LunaCore tab
+  `claude` runs inside a terminal, where the plugin draws text only and needs 144
+  columns. The widget is a renderer module with its own design in LunaCore's themes.
+- **No new data source and no tokens.** It rides the feed the Skill Tracker already
+  uses: `TranscriptWatcher` -> `metrics:tools` (start and end of each tool call) and
+  `metrics:context`. Subagents, skills and the model come from the same transcript.
+- **Open: hook refusals.** Whether a hook's refusal is visible in the transcript has
+  not been checked. If it is not, the map has no Hooks station.
+- **The Memory station is the part that serves this plan.** It lights up and counts
+  when a session calls `memory_search` or `memory_get`, and marks the card loaded at
+  tab start. That count is the evidence for the with/without comparison of section 9.
+- **Usage counts per memory** come with it: a memory that is never read is flagged for
+  the review list (phase 5), one that is read often moves up the card.
+- **Order:** after phase 4, unless Mati moves it forward. It is a bonus, so it must not
+  delay capture.
 
 ## 1. Why
 

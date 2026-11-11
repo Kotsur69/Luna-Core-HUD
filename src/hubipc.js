@@ -160,10 +160,12 @@ function hubSources({ runsDir, orchestra, update, now, machine = null, peers = n
     todo: () => ({ store: require('./todo').readStore() }),
     weekly: () => ({ weekly: require('./weeklyreview').createWeeklyStore().load() }),
     approval: () => ({ views: typeof o.views === 'function' ? safeGet(o.views)() || [] : [] }),
+    // Luna Core Memory phase 4 (file, slow): how many captured memories wait for approval.
+    memory: () => ({ count: safeGet(acc.memoryInbox)() || 0 }),
     ...readers,
   };
   const collectors = { ...COLLECTORS, peers: collectPeers };
-  const slow = new Set(['godmode', 'checkin', 'goals', 'bills', 'gmail', 'host', 'todo', 'weekly']);
+  const slow = new Set(['godmode', 'checkin', 'goals', 'bills', 'gmail', 'host', 'todo', 'weekly', 'memory']);
   return Object.fromEntries(Object.keys(collectors).map((name) => [name, { collect: collectors[name], read: r[name], slow: slow.has(name) }]));
 }
 

@@ -126,11 +126,16 @@ function parseLooseJson(text) {
  * @param {{prompt:string, model?:string, allowed?:string[], lean?:boolean,
  *          env:Record<string,string>, timeoutMs?:number, exec?:Function}} job
  */
-function runJob({ prompt, model, allowed, lean, env, timeoutMs = DEFAULT_TIMEOUT_MS, exec = execFile }) {
+function runJob({ prompt, model, allowed, lean, env, timeoutMs = DEFAULT_TIMEOUT_MS, exec = execFile, stdin = false }) {
   return new Promise((resolve) => {
-    exec(
+    const args = buildJobArgs({ prompt, model, allowed, lean });
+    // `stdin`: the prompt is piped in instead of passed as an argument. A long
+    // prompt does not fit a Windows command line (32,767 characters); `-p`
+    // with no prompt reads it from standard input.
+    if (stdin) args.splice(1, 1);
+    const child = exec(
       'claude',
-      buildJobArgs({ prompt, model, allowed, lean }),
+      args,
       { env, cwd: os.tmpdir(), timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
         if (error) {
@@ -147,6 +152,11 @@ function runJob({ prompt, model, allowed, lean, env, timeoutMs = DEFAULT_TIMEOUT
         return resolve({ ok: true, answer, costUsd });
       }
     );
+    if (stdin && child && child.stdin) {
+      // A CLI that exits early closes the pipe: the exec callback reports that failure.
+      child.stdin.on('error', () => {});
+      child.stdin.end(prompt);
+    }
   });
 }
 

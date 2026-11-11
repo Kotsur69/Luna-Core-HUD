@@ -71,6 +71,8 @@ const ACTIONS = {
   openSettings: (arg) => openSettingsAt(arg),
   installUpdate: () => call('installUpdate'),
   openRunSummary: (arg) => runSummary(arg),
+  // Loaded on use, like Mission Control: the inbox is rarely opened.
+  openMemoryInbox: () => import('./memoryinbox.js').then((m) => m.openMemoryInbox()),
 };
 
 let drawer = null;

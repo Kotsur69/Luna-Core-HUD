@@ -39,6 +39,7 @@ const ACTIONS = new Set([
   'openSettings',
   'installUpdate',
   'openRunSummary',
+  'openMemoryInbox',
 ]);
 /** openRunSummary's arg: '<machine>:<runId>' (godmodesnapshot.js MACHINE / RUN_ID shapes). */
 const RUN_SUMMARY_ARG_RE = /^[A-Za-z0-9-]{1,63}:[a-z0-9]{1,40}$/;

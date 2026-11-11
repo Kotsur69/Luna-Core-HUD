@@ -450,6 +450,24 @@ contextBridge.exposeInMainWorld('lunacore', {
   inboxRun: (machine, id) => ipcRenderer.invoke('inbox:run', { machine, id }),
   /** Opens one package's PR (github.com only); main looks the URL up itself. */
   inboxOpenPr: (machine, id, pkg) => ipcRenderer.send('inbox:open-pr', { machine, id, pkg }),
+  // Luna Core Memory inbox (src/memoryipc.js): memories capture proposed, waiting
+  // for approval. A memory is named by its key only; main validates the key and
+  // refuses anything that is not waiting.
+  /** The waiting memories. Promise<{ok, items, total, capture} | {ok:false, reason}>. */
+  memoryInbox: () => ipcRenderer.invoke('memory:inbox'),
+  /** Approves one: it joins the project card. Promise<{ok, key, removed} | {ok:false, reason}>. */
+  memoryInboxApprove: (key) => ipcRenderer.invoke('memory:approve', typeof key === 'string' ? key : ''),
+  /** Rejects one: it is deleted. Promise<{ok, key, removed} | {ok:false, reason}>. */
+  memoryInboxReject: (key) => ipcRenderer.invoke('memory:reject', typeof key === 'string' ? key : ''),
+  /** Corrects a waiting one's {title, body, type, area}. Promise<{ok, key} | {ok:false, reason}>. */
+  memoryInboxUpdate: (key, edits) => ipcRenderer.invoke('memory:update', { key: typeof key === 'string' ? key : '', edits }),
+  /** The memory files changed (capture, a sync, an approval). Returns an unsubscribe. */
+  onMemoryChanged: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = () => cb();
+    ipcRenderer.on('memory:changed', listener);
+    return () => ipcRenderer.removeListener('memory:changed', listener);
+  },
   // Luna's Work (src/lunasworkipc.js). The renderer names a known project by
   // id only; main validates every payload and resolves the folder itself.
   /** Promise<{ok, projectId, roles, choices, models, projectModels, freeFallback, profile} | {ok:false, reason}>. */

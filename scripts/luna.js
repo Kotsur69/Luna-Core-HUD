@@ -9,6 +9,8 @@
 //   node scripts/luna.js memory import-auto        Claude Code auto-memory -> mirror
 //   node scripts/luna.js memory card               the project card a new tab gets
 //   node scripts/luna.js memory eval golden.json   recall of a golden question set
+//   node scripts/luna.js memory inbox | approve <id> | reject <id>
+//   node scripts/luna.js memory capture <transcript.jsonl>   what capture would keep
 //
 // It reads and writes the same files as the app (the mirror under
 // <config>/memory). The app is what syncs them: a memory written here is
@@ -25,8 +27,11 @@ const os = require('os');
 const path = require('path');
 const { parseArgs } = require('node:util');
 
-const { projectFromRepoKey, GLOBAL } = require('../src/memoryrecord');
-const { scan } = require('../src/memorystore');
+const { projectFromRepoKey, splitKey, GLOBAL } = require('../src/memoryrecord');
+const { scan, writeRecord } = require('../src/memorystore');
+const { listInbox, approve, reject } = require('../src/memoryinbox');
+const { extractPiece } = require('../src/memorycapture');
+const { runJob } = require('../src/missionrunner');
 const { createIndex, DEFAULT_LIMIT } = require('../src/memoryindex');
 const { importAutoMemory, autoMemoryDir } = require('../src/memoryimport');
 const { setEnabled, readEnabled } = require('../src/memoryprojects');
@@ -44,6 +49,10 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
   import-auto           import Claude Code auto-memory   [--from <folder>] [--force]
   card                  the project card a new tab gets, and its size
   eval <golden.json>    recall@k of [{"q": "...", "expect": "<id>"}]   [--limit n]
+  inbox                 memories that wait for approval
+  approve | reject <id> approve or delete one of them
+  capture <transcript>  run the extractor over a Claude Code transcript   [--save]
+                        (one small-model call; without --save nothing is written)
 
   --project <host/owner/repo>   default: the repository of the current folder
   --dir <config folder>         default: LUNA_CONFIG_DIR, an installed LunaCore, this clone
@@ -198,6 +207,67 @@ function cmdEval({ dir, project, values, positionals }) {
   out(`recall@${limit}: ${found}/${golden.length} (${pct(found)}), top hit: ${first}/${golden.length} (${pct(first)})`);
 }
 
+const today = () => new Date().toISOString().slice(0, 10);
+
+/** Phase 4: the memories that wait for approval, newest first. */
+function cmdInbox({ dir }) {
+  const { items, total } = listInbox(dir);
+  if (!total) return out('The inbox is empty.');
+  for (const item of items) {
+    out(`[${item.type}] ${item.title}`);
+    out(`   ${item.key}`);
+    out(`   created ${item.created}${item.source ? `, ${item.source}` : ''}${item.duplicates ? `, +${item.duplicates} duplicate(s)` : ''}`);
+    for (const old of item.supersedes) out(`   would replace: ${old.id} (${old.title})`);
+    if (item.similar) out(`   looks like the confirmed memory ${item.similar.key}`);
+  }
+  out(`${total} waiting`);
+}
+
+/** A key as typed: a full key, or a bare id of this project or of global. */
+function resolveKey(dir, project, wanted) {
+  if (!wanted) throw new UsageError('give the id or the key of a memory (see "memory inbox")');
+  if (splitKey(wanted)) return wanted;
+  const waiting = new Set(listInbox(dir).items.map((i) => i.key));
+  const key = [project ? `${project}/${wanted}` : null, `${GLOBAL}/${wanted}`].find((k) => k && waiting.has(k));
+  if (!key) throw new UsageError(`no waiting memory with the id ${wanted}`);
+  return key;
+}
+
+function cmdDecide({ dir, project, positionals }, accept) {
+  const key = resolveKey(dir, project, positionals[0]);
+  const res = accept ? approve(dir, key, today()) : reject(dir, key);
+  if (!res.ok) throw new UsageError(`${key}: ${res.reason}`);
+  out(`${accept ? 'Approved' : 'Rejected'} ${key}${res.removed.length ? ` (and ${res.removed.length} duplicate(s) removed)` : ''}`);
+}
+
+const CAPTURE_TIMEOUT_MS = 180000;
+
+/** Phase 4: what capture would keep from one transcript. Writes only with --save. */
+async function cmdCapture({ dir, project, values, positionals }) {
+  needProject(project);
+  const file = positionals[0];
+  if (!file) throw new UsageError('capture needs a transcript file (~/.claude/projects/<folder>/<session>.jsonl)');
+  const res = await extractPiece({
+    text: fs.readFileSync(path.resolve(file), 'utf8'),
+    project,
+    dir,
+    source: `captured from session ${path.basename(file, '.jsonl').slice(0, 8)} on ${machineName(os.hostname())}`,
+    today: today(),
+    run: ({ prompt }) => runJob({ prompt, model: 'haiku', lean: true, stdin: true, env: process.env, timeoutMs: CAPTURE_TIMEOUT_MS }),
+  });
+  if (!res.ok) throw new Error(`the extractor failed: ${res.reason}`);
+  for (const record of res.records) {
+    out(`[${record.type}] ${record.title}`);
+    out(`   ${record.project}/${record.id}${record.supersedes.length ? `  replaces: ${record.supersedes.join(', ')}` : ''}`);
+    out(record.body.replace(/^/gm, '   '));
+    out();
+    if (values.save) writeRecord(dir, record);
+  }
+  for (const r of res.rejected) out(`dropped (${r.reason}): ${r.title}`);
+  const wrote = values.save ? 'saved to the inbox' : 'nothing written (--save writes them)';
+  out(`${res.records.length} candidate(s), ${res.rejected.length} dropped (${res.reason}) - ${wrote}`);
+}
+
 const COMMANDS = {
   search: cmdSearch,
   list: cmdList,
@@ -207,6 +277,10 @@ const COMMANDS = {
   'import-auto': cmdImportAuto,
   card: cmdCard,
   eval: cmdEval,
+  inbox: cmdInbox,
+  approve: (ctx) => cmdDecide(ctx, true),
+  reject: (ctx) => cmdDecide(ctx, false),
+  capture: cmdCapture,
 };
 
 function main(argv) {
@@ -222,6 +296,7 @@ function main(argv) {
       all: { type: 'boolean' },
       json: { type: 'boolean' },
       force: { type: 'boolean' },
+      save: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -231,17 +306,21 @@ function main(argv) {
     return values.help ? 0 : 1;
   }
   const configDir = resolveConfigDir(values.dir);
-  COMMANDS[command]({ configDir, dir: memoryPaths(configDir).dir, project: resolveProject(values.project), values, positionals: rest });
-  return process.exitCode || 0;
+  const done = COMMANDS[command]({ configDir, dir: memoryPaths(configDir).dir, project: resolveProject(values.project), values, positionals: rest });
+  // `capture` calls a model and is the one asynchronous command.
+  return done && typeof done.then === 'function' ? done.then(() => process.exitCode || 0) : process.exitCode || 0;
 }
 
 if (require.main === module) {
-  try {
-    process.exitCode = main(process.argv.slice(2));
-  } catch (err) {
-    process.stderr.write(`${err instanceof UsageError ? err.message : `failed: ${(err && err.message) || err}`}\n`);
-    process.exitCode = 1;
-  }
+  Promise.resolve()
+    .then(() => main(process.argv.slice(2)))
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err) => {
+      process.stderr.write(`${err instanceof UsageError ? err.message : `failed: ${(err && err.message) || err}`}\n`);
+      process.exitCode = 1;
+    });
 }
 
 module.exports = { main, resolveConfigDir, installedConfigDir };

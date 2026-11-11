@@ -21,6 +21,7 @@ const HUB_SOURCE_GROUPS = Object.freeze({
   mail: Object.freeze(['mail']),
   accounts: Object.freeze(['cloud', 'google', 'gmail', 'host']),
   todo: Object.freeze(['todo']),
+  memory: Object.freeze(['memory']),
   update: Object.freeze(['update']),
 });
 

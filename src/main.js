@@ -253,7 +253,14 @@ const { cardFor, writeCard, removeCard } = require('./memorycard');
 const { readEnabled: readMemoryProjects } = require('./memoryprojects');
 const { projectFromRepoKey } = require('./memoryrecord');
 const { createRepoKeys } = require('./missionrepokey');
+// Phase 4: capture from finished sessions (src/memorycapture.js) and the inbox.
+const { createCapture } = require('./memorycapture');
+const { listInbox: listMemoryInbox } = require('./memoryinbox');
+const { registerMemoryIpc } = require('./memoryipc');
+const { runJob: runMemoryJob } = require('./missionrunner');
+const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
 let memorySync = null;
+let memoryCapture = null;
 // The notification hub (src/hubipc.js): set in registerIpc(), its done
 // provider joins the config sync.
 let hubApi = null;
@@ -1053,6 +1060,33 @@ function prepareCard(session, tools) {
   return null;
 }
 
+/**
+ * What memory capture may read of one tab: its transcript and its project.
+ * Null for a tab with no Claude transcript, for a project with memory switched
+ * off, and for a God Mode worker: a run starts many short worker sessions, and
+ * what they learn reaches the user's own tab through the run report.
+ * @returns {{file: string, project: string}|null}
+ */
+function captureSourceOf(session) {
+  try {
+    if (!session || orchestraRuns.ownsSession(session.id)) return null;
+    const id = (session.watcher && session.watcher.sessionUuid) || session.transcriptId;
+    const pinned = session.watcher && (session.watcher.pinned || session.watcher.currentFile);
+    const file = pinned || (id && session.cwd ? path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(session.cwd), `${id}.jsonl`) : null);
+    const project = file ? memoryProjectOf(session) : null;
+    return project ? { file, project } : null;
+  } catch (err) {
+    console.error('[memory] capture source unavailable:', (err && (err.code || err.message)) || 'error');
+    return null;
+  }
+}
+
+/** A tab is going away: its session is remembered for the next capture tick. */
+function trackForCapture(session) {
+  const source = memoryCapture ? captureSourceOf(session) : null;
+  if (source) memoryCapture.track(source);
+}
+
 function memoryFor(session) {
   try {
     if (!memoryReader) memoryReader = createMemoryReader(memoryPaths(userDir()).dir);
@@ -1825,6 +1859,9 @@ function spawnInto(session, profile, launch = null) {
         send('metrics:turnend', { sessionId: session.id, turn });
         // God Mode v2 worker: LUNA_DONE / LUNA_BLOCKED / nudge (slice 4).
         orchestraRuns.onTurnEnd(session.id, turn.text);
+        // Memory capture learns of the transcript now: after /clear the tab
+        // moves to a new file and nothing else would remember this one.
+        trackForCapture(session);
       },
     },
   );
@@ -2055,6 +2092,8 @@ function closeSession(sessionId) {
   const session = sessions.get(sessionId);
   if (!session) return;
 
+  // Before the watcher is stopped: it knows which transcript the tab ended on.
+  trackForCapture(session);
   teardownSession(session);
   // Only stopped HERE, not in teardownSession() - see the session field's own
   // comment: a restart must not lose this watcher's warm sample.
@@ -3231,6 +3270,16 @@ function registerIpc() {
     machine: machineName(os.hostname()),
     openExternal: (url) => shell.openExternal(url),
   });
+  // Luna Core Memory inbox (hub item "N memories to review" opens it).
+  registerMemoryIpc({
+    ipcMain,
+    dir: () => memoryPaths(userDir()).dir,
+    onChanged: () => {
+      if (memorySync) memorySync.soon();
+      send('memory:changed', {});
+    },
+    captureStatus: () => (memoryCapture ? memoryCapture.status() : null),
+  });
   // Notification hub (face icon + right drawer): docs/tbc_docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
   // Other PCs' runs come from their `godmode` rows; done marks sync as config units.
   hubApi = require('./hubipc').registerHubIpc({
@@ -3250,6 +3299,7 @@ function registerIpc() {
       cloud: () => (cloud ? cloud.status() : null),
       google: () => gcal.status(),
       gmail: () => reportMail.sender.status(),
+      memoryInbox: () => listMemoryInbox(memoryPaths(userDir()).dir).total,
       hostOn: () => {
         const control = require('./hostmain').hostControl();
         return Boolean(control && control.status().on);
@@ -3926,7 +3976,13 @@ app.whenReady().then(() => {
     },
     extraProviders: hubApi ? [hubApi.doneProvider, hubApi.seenProvider, hubApi.prefsProvider] : [],
   });
-  memorySync = startMemory({ cloud, machine: machineName(os.hostname()), configDir: userDir() });
+  memorySync = startMemory({
+    cloud,
+    machine: machineName(os.hostname()),
+    configDir: userDir(),
+    // Another PC's memories or inbox decisions arrived: an open inbox repaints.
+    onChanged: () => send('memory:changed', {}),
+  });
   // A --luna-probe instance shares userData with the live LunaCore - often the
   // very one running the God Mode self-check that started it. Resuming the
   // stored run there would drive the live run from a second process, and the
@@ -3938,6 +3994,29 @@ app.whenReady().then(() => {
   // launches until Approve/Retry) and start the worker-time watchdog. After
   // the projects load: a restored run must belong to one of them. The
   // single-run file older builds wrote moves to the per-project layout first.
+  // Memory capture spends a small-model call per finished session: not in a probe.
+  if (!probing) {
+    memoryCapture = createCapture({
+      configDir: userDir(),
+      machine: machineName(os.hostname()),
+      // Lean: no tools, no settings, no MCP servers. The digest goes in through stdin.
+      run: ({ prompt }) =>
+        runMemoryJob({
+          prompt,
+          model: 'haiku',
+          lean: true,
+          stdin: true,
+          env: withClaudeOnPath(buildSessionEnv(process.env, {})),
+          timeoutMs: MEMORY_EXTRACT_TIMEOUT_MS,
+        }),
+      live: () => [...sessions.values()].map(captureSourceOf).filter(Boolean),
+      onSaved: () => {
+        if (memorySync) memorySync.soon();
+        send('memory:changed', {});
+      },
+    });
+    memoryCapture.start();
+  }
   if (!probing) {
     orchestraStore.migrateLegacy((raw) => legacyRunProject(orchestraCtx, raw));
     orchestraRuns.restoreAll(orchestraStore.listStored());
@@ -4075,10 +4154,13 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   // Every tab has its own process and its own watcher - clean up all of them.
   for (const session of sessions.values()) {
+    // The ledger is a file: these sessions are captured on the next start.
+    trackForCapture(session);
     teardownSession(session);
     removeSessionConfig(userDir(), session.id);
     removeCard(userDir(), session.id);
   }
+  if (memoryCapture) memoryCapture.stop();
   intakeServer.stop().catch(() => {});
   if (memoryReader) memoryReader.close();
   sessions.clear();
