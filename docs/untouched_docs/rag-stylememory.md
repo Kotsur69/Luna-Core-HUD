@@ -272,6 +272,12 @@ Found by the security review of 2026-11-11 and left open for Mati:
 - **The inbox does not say whether the session read outside content** (a web page, an
   MCP tool). A badge for that would help the person approving.
 
+These four are queued as to-do cards for a God Mode run (2026-11-11): unapproved
+memories come back from search without their text, the scanner learns the missing token
+shapes, a captured memory becomes global only by a "Make global" click, and the inbox
+shows when the session read outside content. Each card replaces its bullet above when
+it lands.
+
 Not built in phase 4:
 
 - **`memory_propose`** (section 7 step 5, "remember this" mid-session). Claude
@@ -282,6 +288,34 @@ Not built in phase 4:
 
 To judge after a week (section 9, inbox quality): the share of candidates approved. Under
 about a third means the extractor prompt is wrong.
+
+### Improvements proposed after phase 4 (2026-11-11)
+
+Recommended by Luna, in the order she would build them. None is decided yet.
+
+1. **Measure for a week before adding anything.** Log per capture what was proposed,
+   approved, edited and rejected, per type. Under about a third approved means the
+   extractor prompt is wrong, and nothing below is worth building until that number is
+   known. The read side (how often a memory is searched or opened) comes from the same
+   log.
+2. **Feed rejections back to the extractor.** The titles of the last 20 rejected
+   candidates go into the prompt as "not wanted". A rejected file is deleted today, so
+   this needs a small local list of rejected titles.
+3. **The "where we stopped" note.** One short note per project, overwritten at each
+   capture: what was being built, what is done, what is left. It is shown on the card
+   and needs no approval, because it is a status that decays, not a fact.
+4. **Keyboard review in the inbox.** `A` approve, `R` reject, `E` edit, arrows to move.
+5. **Approve from the phone.** The inbox already syncs; the phone app needs the list and
+   two buttons.
+6. **Embeddings (phase 2b).** Three of the four misses on the golden set are Polish
+   questions against English memories. It matters more as captured memories pile up.
+7. **Capture a God Mode run once, from its run report,** not per worker tab (decision
+   49). One model call per run, and workers meet exactly the gotchas worth keeping.
+8. **Auto-accept low-risk types** once a type's approval rate has stayed above about
+   90% for a few weeks (question 4).
+
+Items 1 and 2 belong to phase 5 (see section 10). Items 3 to 8 are separate and can be
+taken in any order after it.
 
 ### Bonus, wanted by Mati on 2026-11-11: a live work map in LunaCore
 
@@ -529,7 +563,7 @@ Each phase is usable on its own and each ends with something Mati can judge.
 | 2 | `memory_search` and `memory_get` on the lunacore MCP server. One line in CLAUDE.md | Luna answers the golden questions from memory in a real session |
 | 3 | Project card at session start. Remove the code-discovery hook | The card is under budget and the with/without comparison is done |
 | 4 | Capture: session-end extractor, filter, inbox panel in the HUD | A week of real sessions produces candidates worth approving |
-| 5 | Verification, staleness flags, anchors, the review list | A deliberately broken memory gets flagged |
+| 5 | Verification, staleness flags, anchors, the review list. Plus, from the proposals of 2026-11-11: the capture and usage log, and rejected titles fed back to the extractor | A deliberately broken memory gets flagged, and the approval rate of a week of captures can be read |
 | 6 | Second PC. Optional Supabase mirror for the phone | Both machines return the same results |
 | 7 | Only if the evals ask for it: per-prompt automatic retrieval, reranking | Recall or noise numbers justify it |
 
