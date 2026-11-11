@@ -178,14 +178,23 @@ Chosen while building:
 45. **CLI:** `node scripts/luna.js memory card` prints the card a new tab would get and its
     size against the budget.
 
-Still open after phase 3, and Mati's to decide:
+Settled by Mati on 2026-11-11, after phase 3:
 
-- **The architecture map itself.** No memory is tagged `area: architecture` yet, so the
-  LunaCore card has no map. It needs one confirmed memory of a few hundred words.
-- **The code-discovery hook** (`~/.claude/hooks/cbm-session-reminder`) and **loading the
-  Claude auto-memory index** (decision 21) are settings in `~/.claude`, outside this
-  repository. Neither was changed.
+- **The architecture map** is the confirmed memory `architecture-map`. The LunaCore card
+  is now 20 memories, 4,881 characters, about 1,221 tokens.
+- **The code-discovery hook** (`~/.claude/hooks/cbm-session-reminder`) **stays.** It costs
+  about 200 tokens and answers a different question than the map (who calls what).
+- **The Claude auto-memory index stays loaded** (this reverses decision 21 for now). It
+  costs about 500 tokens, and auto-memory is still the only way a session saves a new
+  fact. Revisit once capture (phase 4) exists.
+
+Still open:
+
 - **The with/without comparison** from section 9 needs a week of real sessions.
+- **A "where we stopped" note** for phase 4: one short note per project written at
+  session end (what was being built, what is done, what is left) and shown on the card,
+  so a new session can continue half-done work without an explanation. Proposed, not
+  yet decided.
 
 ## 1. Why
 
