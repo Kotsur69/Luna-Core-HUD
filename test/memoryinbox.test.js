@@ -40,6 +40,24 @@ function mirror(t, records) {
 
 const stored = (dir) => Object.fromEntries(scan(dir).records);
 
+test('each decision is reported once it is on disk, and a refused one is not', (t) => {
+  const dir = mirror(t, [rec('keep', 'Retry says busy after sleep'), rec('drop', 'Packaging times out on battery'), rec('done', 'Name the installer with dashes', { confidence: 'confirmed' })]);
+  const seen = [];
+  const decided = (event, record) => seen.push([event, record.id, record.title]);
+
+  update(dir, `${PROJECT}/keep`, { title: 'Retry says busy after a sleep' }, decided);
+  approve(dir, `${PROJECT}/keep`, '2026-11-11', decided);
+  reject(dir, `${PROJECT}/drop`, decided);
+  approve(dir, `${PROJECT}/done`, '2026-11-11', decided);
+  reject(dir, `${PROJECT}/nope`, decided);
+
+  assert.deepEqual(seen, [
+    ['edited', 'keep', 'Retry says busy after a sleep'],
+    ['approved', 'keep', 'Retry says busy after a sleep'],
+    ['rejected', 'drop', 'Packaging times out on battery'],
+  ]);
+});
+
 test('lists what is not confirmed, newest first, and leaves confirmed memories out', (t) => {
   const dir = mirror(t, [
     rec('old-one', 'Packaging times out on battery', { created: '2026-11-01' }),

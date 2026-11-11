@@ -28,6 +28,10 @@ let editing = null;
 const expanded = new Set();
 /** key -> reason of the last failed action, shown on that entry. */
 const failed = new Map();
+/** Which list shows: 'inbox' (to approve) or 'review' (to check). Null until the first paint picks one. */
+let tab = null;
+/** The key whose "Retire" waits for a second click, or null. */
+let confirming = null;
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
 
@@ -56,7 +60,7 @@ export function preview(body, max = PREVIEW_CHARS) {
 
 /** The i18n key of a failed action's reason. */
 export function reasonKey(reason) {
-  if (reason === 'not-found' || reason === 'not-pending') return 'mem.inbox.err.gone';
+  if (reason === 'not-found' || reason === 'not-pending' || reason === 'not-confirmed' || reason === 'not-flagged') return 'mem.inbox.err.gone';
   if (reason === 'empty-body' || reason === 'bad-title' || reason === 'body-too-long' || reason === 'record-too-big') return 'mem.inbox.err.text';
   return 'mem.inbox.err.failed';
 }
@@ -161,6 +165,105 @@ function entry(item) {
   return card;
 }
 
+/** Why a confirmed memory is on the review list, in words (never by colour alone). */
+export function flagLine(flag) {
+  if (flag.kind === 'disputed') return t('mem.inbox.review.disputed', { note: flag.note || '-' });
+  if (flag.kind === 'anchor') return t('mem.inbox.review.anchor', { files: (flag.missing || []).join(', ') });
+  return t('mem.inbox.review.stale', { since: flag.since });
+}
+
+/** One confirmed memory that needs a look: still true, or retire (asked twice). */
+function reviewEntry(item) {
+  const card = el('li', 'mem-inbox__item');
+  card.dataset.key = item.key;
+  const head = el('div', 'mem-inbox__head');
+  head.append(el('span', 'mem-inbox__type', item.type), el('span', 'mem-inbox__project', projectLabel(item.project)), el('span', 'mem-inbox__date', item.last_verified || item.created));
+  const shown = expanded.has(item.key) ? { text: item.body, cut: false } : preview(item.body);
+  card.append(head, el('h3', 'mem-inbox__title', item.title), el('p', 'mem-inbox__body', shown.text));
+  if (shown.cut) {
+    card.append(
+      button('gm-sum__link mem-inbox__more', t('mem.inbox.showAll'), () => {
+        expanded.add(item.key);
+        load(item.key);
+      }),
+    );
+  }
+  card.append(...item.flags.map((flag) => el('p', 'mem-inbox__note', flagLine(flag))));
+  const off = busy.has(item.key);
+  const actions = el('div', 'mem-inbox__actions');
+  if (confirming === item.key) {
+    const ask = el('p', 'mem-inbox__ask', t('mem.inbox.review.retireAsk'));
+    ask.setAttribute('role', 'alert');
+    const yes = button('port-btn port-btn--kill mem-inbox__btn', t('mem.inbox.review.retireYes'), () => decide(item.key, 'memoryReviewRetire'));
+    const no = button('port-btn mem-inbox__btn', t('mem.inbox.cancel'), () => {
+      confirming = null;
+      load(item.key);
+    });
+    for (const b of [yes, no]) b.disabled = off;
+    card.append(ask);
+    // Cancel comes first: it is where the keyboard focus lands after the repaint.
+    actions.append(no, yes);
+  } else {
+    const keep = button('port-btn mem-inbox__btn mem-inbox__btn--approve', t('mem.inbox.review.keep'), () => decide(item.key, 'memoryReviewVerify'));
+    const retire = button('port-btn port-btn--kill mem-inbox__btn mem-inbox__btn--reject', t('mem.inbox.review.retire'), () => {
+      confirming = item.key;
+      load(item.key);
+    });
+    for (const b of [keep, retire]) b.disabled = off;
+    actions.append(keep, retire);
+  }
+  card.append(actions);
+  if (failed.has(item.key)) {
+    const err = el('p', 'hint is-fail', t(reasonKey(failed.get(item.key))));
+    err.setAttribute('role', 'alert');
+    card.append(err);
+  }
+  return card;
+}
+
+/** What capture proposed in the last week and what became of it, or '' when there is nothing to say. */
+export function statsLine(stats) {
+  if (!stats || !(stats.proposed || stats.approved || stats.rejected)) return '';
+  if (typeof stats.rate !== 'number') return t('mem.inbox.statsNone', { days: stats.days, proposed: stats.proposed });
+  return t('mem.inbox.stats', { days: stats.days, proposed: stats.proposed, approved: stats.approved, rejected: stats.rejected, rate: Math.round(stats.rate * 100) });
+}
+
+const TABS = [
+  ['inbox', 'mem.inbox.tab.inbox'],
+  ['review', 'mem.inbox.tab.review'],
+];
+const PANEL_ID = 'mem-inbox-panel';
+
+function switchTab(name) {
+  // Not while a draft is open: switching would throw the typed text away.
+  if (name === tab || editing !== null) return;
+  tab = name;
+  confirming = null;
+  load(undefined, undefined, true);
+}
+
+/** The two lists as tabs: arrow keys move between them, Tab goes on into the list. */
+function tabBar(counts) {
+  const bar = el('div', 'mem-inbox__tabs');
+  bar.setAttribute('role', 'tablist');
+  bar.setAttribute('aria-label', t('mem.inbox.tabs'));
+  for (const [name, key] of TABS) {
+    const b = button('mem-inbox__tab', t(key, { count: counts[name] }), () => switchTab(name));
+    b.id = `mem-inbox-tab-${name}`;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', String(name === tab));
+    b.setAttribute('aria-controls', PANEL_ID);
+    b.tabIndex = name === tab ? 0 : -1;
+    bar.append(b);
+  }
+  bar.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    switchTab(tab === 'inbox' ? 'review' : 'inbox');
+  });
+  return bar;
+}
+
 function captureLine(capture) {
   if (!capture || !capture.last) return t('mem.inbox.captureNever');
   const when = new Date(capture.last.at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -171,31 +274,65 @@ function captureLine(capture) {
 function refocus(list, key, index) {
   const cards = [...list.children];
   const target = cards.find((c) => c.dataset.key === key) || cards[Math.min(index, cards.length - 1)];
-  const control = target && target.querySelector('button:not(:disabled), input');
+  // The entry's own actions (or its edit form), not the "show all" link above them.
+  const control = target && target.querySelector('.mem-inbox__actions button:not(:disabled), input');
   if (control) control.focus();
 }
 
-function render(res, focusKey, focusIndex) {
+/**
+ * @param {object} res the inbox (memory:inbox)
+ * @param {{items: object[], total: number}} review the review list (memory:review)
+ * @param {boolean} [focusTab] put the keyboard focus on the selected tab
+ */
+function render(res, review, focusKey, focusIndex, focusTab) {
+  // First paint: an empty inbox with something to check opens on the review list.
+  if (tab === null) tab = !res.total && review.total ? 'review' : 'inbox';
   overlay.setTitle(res.total ? t('mem.inbox.titleCount', { count: res.total }) : '');
-  const intro = el('p', 'hint mem-inbox__intro', t('mem.inbox.intro'));
-  const foot = el('p', 'hint mem-inbox__foot', captureLine(res.capture));
-  if (!res.items.length) {
-    overlay.body.replaceChildren(intro, el('p', 'mem-inbox__empty', t('mem.inbox.empty')), foot);
-    return;
+  const reviewing = tab === 'review';
+  const shown = reviewing ? review : res;
+  // An entry that left the list (decided on another PC) takes its open draft or question with it:
+  // a key that is still set would block every later repaint.
+  const listed = new Set(shown.items.map((item) => item.key));
+  if (editing !== null && !listed.has(editing)) editing = null;
+  if (confirming !== null && !listed.has(confirming)) confirming = null;
+  const panel = el('div');
+  panel.id = PANEL_ID;
+  panel.setAttribute('role', 'tabpanel');
+  panel.setAttribute('aria-labelledby', `mem-inbox-tab-${tab}`);
+  panel.append(el('p', 'hint mem-inbox__intro', t(reviewing ? 'mem.inbox.review.intro' : 'mem.inbox.intro')));
+  let list = null;
+  if (shown.items.length) {
+    list = el('ul', 'mem-inbox__list');
+    for (const item of shown.items) list.append(reviewing ? reviewEntry(item) : entry(item));
+    panel.append(list);
+    if (shown.total > shown.items.length) panel.append(el('p', 'hint', t('mem.inbox.more', { count: shown.total - shown.items.length })));
+  } else {
+    panel.append(el('p', 'mem-inbox__empty', t(reviewing ? 'mem.inbox.review.empty' : 'mem.inbox.empty')));
   }
-  const list = el('ul', 'mem-inbox__list');
-  for (const item of res.items) list.append(entry(item));
-  const more = res.total > res.items.length ? [el('p', 'hint', t('mem.inbox.more', { count: res.total - res.items.length }))] : [];
-  overlay.body.replaceChildren(intro, list, ...more, foot);
-  if (focusKey !== undefined || focusIndex !== undefined) refocus(list, focusKey, focusIndex || 0);
+  const bar = tabBar({ inbox: res.total, review: review.total });
+  const foot = el('p', 'hint mem-inbox__foot', captureLine(res.capture));
+  const stats = statsLine(res.stats);
+  overlay.body.replaceChildren(bar, panel, foot, ...(stats ? [el('p', 'hint', stats)] : []));
+  if (focusTab) bar.querySelector('[aria-selected="true"]').focus();
+  else if (list && (focusKey !== undefined || focusIndex !== undefined)) refocus(list, focusKey, focusIndex || 0);
 }
 
-/** Reads the inbox and repaints. `focusKey` / `focusIndex` say where the keyboard focus goes. */
-async function load(focusKey, focusIndex) {
-  const res = await call('memoryInbox');
-  if (!overlay || !overlay.isOpen()) return;
-  if (res && res.ok && Array.isArray(res.items)) render(res, focusKey, focusIndex);
-  else overlay.body.replaceChildren(el('p', 'hint is-fail', t('mem.inbox.err.load')));
+const NO_REVIEW = { items: [], total: 0 };
+/** Counts load() calls, so a slow answer can tell that a newer one was asked for. */
+let loadSeq = 0;
+
+/** Reads both lists and repaints. `focusKey` / `focusIndex` / `focusTab` say where the keyboard focus goes. */
+async function load(focusKey, focusIndex, focusTab) {
+  const seq = ++loadSeq;
+  const [res, review] = await Promise.all([call('memoryInbox'), call('memoryReview')]);
+  // Only the newest read paints: an older answer arriving late must not undo its focus.
+  if (seq !== loadSeq || !overlay || !overlay.isOpen()) return;
+  if (!res || !res.ok || !Array.isArray(res.items)) {
+    overlay.body.replaceChildren(el('p', 'hint is-fail', t('mem.inbox.err.load')));
+    return;
+  }
+  // The review list failing must not take the inbox down with it.
+  render(res, review && review.ok && Array.isArray(review.items) ? review : NO_REVIEW, focusKey, focusIndex, focusTab);
 }
 
 /** One call for one entry. @returns {Promise<boolean>} whether it worked */
@@ -205,7 +342,8 @@ async function act(key, fn, ...args) {
   failed.delete(key);
   const res = await call(fn, ...args);
   busy.delete(key);
-  if (!res || !res.ok) failed.set(key, (res && res.reason) || 'failed');
+  // A window closed meanwhile has cleared its errors: do not leave one for the next opening.
+  if ((!res || !res.ok) && overlay && overlay.isOpen()) failed.set(key, (res && res.reason) || 'failed');
   return Boolean(res && res.ok);
 }
 
@@ -215,6 +353,7 @@ async function decide(key, fn) {
   const index = Math.max(0, cards.findIndex((c) => c.dataset.key === key));
   for (const b of cards[index] ? cards[index].querySelectorAll('button') : []) b.disabled = true;
   await act(key, fn, key);
+  confirming = null;
   load(key, index);
 }
 
@@ -229,10 +368,13 @@ export async function openMemoryInbox() {
         if (stopListening) stopListening();
         stopListening = null;
         editing = null;
+        confirming = null;
         failed.clear();
       },
     });
   }
+  // Every opening picks its list anew: the inbox, or the review list when the inbox is empty.
+  tab = null;
   overlay.setTitle('');
   overlay.body.replaceChildren(el('p', 'hint', t('mem.inbox.loading')));
   overlay.open();
@@ -240,7 +382,11 @@ export async function openMemoryInbox() {
   // Not while a draft is open: a repaint would throw the typed text away.
   if (!stopListening && typeof window.lunacore.onMemoryChanged === 'function') {
     stopListening = window.lunacore.onMemoryChanged(() => {
-      if (editing === null && busy.size === 0) load();
+      if (editing !== null || busy.size !== 0) return;
+      // The repaint keeps the keyboard where it was: on the same entry, if it is still there.
+      const focused = document.activeElement && document.activeElement.closest ? document.activeElement.closest('.mem-inbox__item') : null;
+      if (focused) load(focused.dataset.key);
+      else load();
     });
   }
   await load();

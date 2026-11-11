@@ -11,6 +11,8 @@
 //   node scripts/luna.js memory eval golden.json   recall of a golden question set
 //   node scripts/luna.js memory inbox | approve <id> | reject <id>
 //   node scripts/luna.js memory capture <transcript.jsonl>   what capture would keep
+//   node scripts/luna.js memory review | verify <id> | retire <id>   confirmed memories that need a look
+//   node scripts/luna.js memory stats              what capture proposed, what was approved, what is read
 //
 // It reads and writes the same files as the app (the mirror under
 // <config>/memory). The app is what syncs them: a memory written here is
@@ -37,7 +39,9 @@ const { importAutoMemory, autoMemoryDir } = require('../src/memoryimport');
 const { setEnabled, readEnabled } = require('../src/memoryprojects');
 const { localStatus, memoryPaths } = require('../src/memorysync');
 const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
-const { createRepoKeys } = require('../src/missionrepokey');
+const { createRepoKeys, findRepo } = require('../src/missionrepokey');
+const { createLog, logPath, captureStats, usage, rejectedTitles, DAY_MS } = require('../src/memorylog');
+const { reviewList, verify, retire } = require('../src/memoryreview');
 const { machineName } = require('../src/missionledgersync');
 
 const USAGE = `Usage: node scripts/luna.js memory <command> [options]
@@ -53,6 +57,9 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
   approve | reject <id> approve or delete one of them
   capture <transcript>  run the extractor over a Claude Code transcript   [--save]
                         (one small-model call; without --save nothing is written)
+  review                confirmed memories that are stale, name a missing file, or were reported wrong
+  verify | retire <id>  say one of them is still true, or delete it on every PC
+  stats                 approval rate of captured memories and how often memories are read   [--days n]
 
   --project <host/owner/repo>   default: the repository of the current folder
   --dir <config folder>         default: LUNA_CONFIG_DIR, an installed LunaCore, this clone
@@ -233,9 +240,12 @@ function resolveKey(dir, project, wanted) {
   return key;
 }
 
-function cmdDecide({ dir, project, positionals }, accept) {
+function cmdDecide({ configDir, dir, project, positionals }, accept) {
   const key = resolveKey(dir, project, positionals[0]);
-  const res = accept ? approve(dir, key, today()) : reject(dir, key);
+  const log = createLog(logPath(configDir));
+  // The same line the app writes: a rejected title goes back to the extractor.
+  const decided = (ev, record) => log.add({ ev, key, type: record.type, ...(ev === 'rejected' ? { title: record.title } : {}) });
+  const res = accept ? approve(dir, key, today(), decided) : reject(dir, key, decided);
   if (!res.ok) throw new UsageError(`${key}: ${res.reason}`);
   out(`${accept ? 'Approved' : 'Rejected'} ${key}${res.removed.length ? ` (and ${res.removed.length} duplicate(s) removed)` : ''}`);
 }
@@ -243,11 +253,13 @@ function cmdDecide({ dir, project, positionals }, accept) {
 const CAPTURE_TIMEOUT_MS = 180000;
 
 /** Phase 4: what capture would keep from one transcript. Writes only with --save. */
-async function cmdCapture({ dir, project, values, positionals }) {
+async function cmdCapture({ configDir, dir, project, values, positionals }) {
   needProject(project);
   const file = positionals[0];
   if (!file) throw new UsageError('capture needs a transcript file (~/.claude/projects/<folder>/<session>.jsonl)');
+  const log = createLog(logPath(configDir));
   const res = await extractPiece({
+    notWanted: rejectedTitles(log.read(), project),
     text: fs.readFileSync(path.resolve(file), 'utf8'),
     project,
     dir,
@@ -261,11 +273,79 @@ async function cmdCapture({ dir, project, values, positionals }) {
     out(`   ${record.project}/${record.id}${record.supersedes.length ? `  replaces: ${record.supersedes.join(', ')}` : ''}`);
     out(record.body.replace(/^/gm, '   '));
     out();
-    if (values.save) writeRecord(dir, record);
+    if (values.save) {
+      writeRecord(dir, record);
+      log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type });
+    }
   }
   for (const r of res.rejected) out(`dropped (${r.reason}): ${r.title}`);
   const wrote = values.save ? 'saved to the inbox' : 'nothing written (--save writes them)';
   out(`${res.records.length} candidate(s), ${res.rejected.length} dropped (${res.reason}) - ${wrote}`);
+}
+
+/** Where the project of the current folder lies, for the anchor check: {<project>: folder}. */
+function rootsHere(project) {
+  const repo = project ? findRepo(process.cwd()) : null;
+  return repo && resolveProject(null) === project ? { [project]: repo.root } : {};
+}
+
+const FLAG_TEXT = {
+  disputed: (f) => `REPORTED WRONG by a session${f.note ? `: ${f.note}` : ''}`,
+  anchor: (f) => `names a file that is gone: ${f.missing.join(', ')}`,
+  stale: (f) => `not verified since ${f.since}`,
+};
+
+/** Phase 5: the confirmed memories that need a look. */
+function cmdReview({ configDir, dir, project }) {
+  const roots = rootsHere(project);
+  const { items, total } = reviewList({ records: scan(dir).records, today: today(), events: createLog(logPath(configDir)).read(), roots });
+  if (!project || !roots[project]) out('(Run this inside a repository to also check the files its memories name.)');
+  if (!total) return out('Nothing to review.');
+  for (const item of items) {
+    out(`[${item.type}] ${item.title}`);
+    out(`   ${item.key}`);
+    for (const flag of item.flags) out(`   ${FLAG_TEXT[flag.kind](flag)}`);
+  }
+  out(`${total} to review ("memory verify <id>" = still true, "memory retire <id>" = delete)`);
+}
+
+/** A confirmed memory as typed: a full key, or a bare id of this project or of global. */
+function resolveConfirmed(dir, project, wanted) {
+  if (!wanted) throw new UsageError('give the id or the key of a memory (see "memory review")');
+  if (splitKey(wanted)) return wanted;
+  const confirmed = new Set(scan(dir).records.filter(([, r]) => r.confidence === 'confirmed').map(([k]) => k));
+  const key = [project ? `${project}/${wanted}` : null, `${GLOBAL}/${wanted}`].find((k) => k && confirmed.has(k));
+  if (!key) throw new UsageError(`no confirmed memory with the id ${wanted}`);
+  return key;
+}
+
+function cmdSettle({ configDir, dir, project, positionals }, keep) {
+  const key = resolveConfirmed(dir, project, positionals[0]);
+  const log = createLog(logPath(configDir));
+  const res = keep ? verify(dir, key, today(), { log, roots: rootsHere(project) }) : retire(dir, key, { log });
+  if (!res.ok) throw new UsageError(`${key}: ${res.reason}`);
+  out(keep ? `Verified ${key}: still true as of ${today()}` : `Retired ${key}: deleted here, and on the other PCs after the next sync`);
+}
+
+const pct = (rate) => (rate === null ? 'n/a' : `${Math.round(rate * 100)}%`);
+const MAX_USAGE_LINES = 15;
+
+/** Phase 5: the approval rate of what capture proposed, and which memories are read. */
+function cmdStats({ configDir, project, values }) {
+  if (values.days !== undefined && !/^[1-9]\d{0,3}$/.test(values.days)) throw new UsageError('--days must be a whole number of days');
+  const days = values.days ? Number.parseInt(values.days, 10) : 7;
+  const events = createLog(logPath(configDir)).read();
+  const since = Date.now() - days * DAY_MS;
+  const stats = captureStats(events, { since, project: values.all ? null : project });
+  out(`Last ${days} day(s)${project && !values.all ? `, ${project}` : ', every project'} (this PC's log):`);
+  out(`  captures: ${stats.captures}, proposed: ${stats.proposed}, approved: ${stats.approved} (${stats.edited} after an edit), rejected: ${stats.rejected}`);
+  out(`  approval rate: ${pct(stats.rate)} of ${stats.approved + stats.rejected} decided${stats.rate !== null && stats.rate < 1 / 3 ? '  <-- under a third: the extractor prompt needs work' : ''}`);
+  for (const [type, c] of Object.entries(stats.byType)) out(`  ${type}: proposed ${c.proposed}, approved ${c.approved}, rejected ${c.rejected}, rate ${pct(c.rate)}`);
+  const dropped = Object.entries(stats.dropped);
+  if (dropped.length) out(`  dropped by the filter: ${dropped.map(([reason, n]) => `${reason} ${n}`).join(', ')}`);
+  const read = [...usage(events, { since })].sort(([, a], [, b]) => b.opened - a.opened || b.found - a.found);
+  out(`  memories read: ${read.length}`);
+  for (const [key, u] of read.slice(0, MAX_USAGE_LINES)) out(`    found ${u.found}x, opened ${u.opened}x  ${key}`);
 }
 
 const COMMANDS = {
@@ -281,6 +361,10 @@ const COMMANDS = {
   approve: (ctx) => cmdDecide(ctx, true),
   reject: (ctx) => cmdDecide(ctx, false),
   capture: cmdCapture,
+  review: cmdReview,
+  verify: (ctx) => cmdSettle(ctx, true),
+  retire: (ctx) => cmdSettle(ctx, false),
+  stats: cmdStats,
 };
 
 function main(argv) {
@@ -292,6 +376,7 @@ function main(argv) {
       project: { type: 'string' },
       from: { type: 'string' },
       limit: { type: 'string' },
+      days: { type: 'string' },
       only: { type: 'boolean' },
       all: { type: 'boolean' },
       json: { type: 'boolean' },

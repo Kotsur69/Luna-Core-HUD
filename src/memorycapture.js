@@ -40,6 +40,7 @@ const { readEnabled } = require('./memoryprojects');
 const { digestTranscript } = require('./memorydigest');
 const { buildPrompt, candidatesFrom } = require('./memoryextract');
 const { pendingCount } = require('./memoryinbox');
+const { rejectedTitles } = require('./memorylog');
 const { scrub } = require('./hostscrub');
 
 const LEDGER_FILE = 'memory-capture.local.json';
@@ -68,6 +69,13 @@ const NEWLINE = 0x0a;
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err && (err.code || err.message)) || 'error';
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/** What the filter dropped, counted by reason: {duplicate: 2, secret: 1}. */
+function countReasons(rejected) {
+  const counts = {};
+  for (const { reason } of rejected) counts[reason] = (counts[reason] || 0) + 1;
+  return counts;
+}
 
 /** The ledger, rebuilt field by field; a missing or broken file is an empty one. */
 function readLedger(file) {
@@ -119,19 +127,20 @@ function readPiece(file, from, size) {
 
 /**
  * Runs the extractor over one piece of a transcript.
- * @param {{text: string, project: string, dir: string, source: string, today: string,
+ * @param {{text: string, project: string, dir: string, source: string, today: string, notWanted?: string[],
  *   run: (job: {prompt: string}) => Promise<{ok: boolean, answer?: object, reason?: string}>}} opts
+ *   notWanted = titles the user rejected lately: the model is told not to propose their kind again
  * @returns {Promise<{ok: true, records: object[], rejected: object[], reason: string}|{ok: false, reason: string}>}
  *   records are NOT written here
  */
-async function extractPiece({ text, project, dir, source, today, run }) {
+async function extractPiece({ text, project, dir, source, today, run, notWanted = [] }) {
   const digest = digestTranscript(text);
   if (!digest.userTurns || digest.text.length < MIN_DIGEST_CHARS) return { ok: true, records: [], rejected: [], reason: 'too-short' };
   const existing = scan(dir)
     .records.map(([, r]) => r)
     .filter((r) => r.project === project || r.project === GLOBAL);
   // The digest leaves this machine a second time here: mask what looks like a secret.
-  const res = await run({ prompt: buildPrompt({ digest: scrub(digest.text), project, today, existing }) });
+  const res = await run({ prompt: buildPrompt({ digest: scrub(digest.text), project, today, existing, notWanted }) });
   if (!res || !res.ok) return { ok: false, reason: `model-${(res && res.reason) || 'failed'}` };
   const { records, rejected } = candidatesFrom(res.answer, { project, today, source, existing });
   return { ok: true, records, rejected, reason: records.length ? 'saved' : 'nothing' };
@@ -141,11 +150,13 @@ async function extractPiece({ text, project, dir, source, today, run }) {
  * @param {{configDir: string, machine: string,
  *   run: (job: {prompt: string}) => Promise<object>,
  *   live?: () => {file: string|null, project: string|null}[],
- *   now?: () => number, onSaved?: (count: number) => void}} opts
+ *   now?: () => number, onSaved?: (count: number) => void,
+ *   log?: {add: (event: object) => boolean, read: () => object[]}|null}} opts
  *   run = the small-model call (missionrunner.runJob with the app's env);
- *   live = the transcripts of the tabs open right now
+ *   live = the transcripts of the tabs open right now;
+ *   log = the memory log (src/memorylog.js): what was proposed goes in, the rejected titles come out
  */
-function createCapture({ configDir, machine, run, live = () => [], now = Date.now, onSaved = () => {}, transcriptsDir = CLAUDE_PROJECTS_DIR }) {
+function createCapture({ configDir, machine, run, live = () => [], now = Date.now, onSaved = () => {}, transcriptsDir = CLAUDE_PROJECTS_DIR, log = null }) {
   const paths = memoryPaths(configDir);
   const ledgerFile = path.join(configDir, LEDGER_FILE);
   const root = path.resolve(transcriptsDir) + path.sep;
@@ -197,7 +208,8 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
       called = true;
       return run(job);
     };
-    const res = await extractPiece({ text: piece.text, project: entry.project, dir: paths.dir, source, today: isoDate(now()), run: counted });
+    const notWanted = log ? rejectedTitles(log.read(), entry.project) : [];
+    const res = await extractPiece({ text: piece.text, project: entry.project, dir: paths.dir, source, today: isoDate(now()), run: counted, notWanted });
     if (!res.ok) {
       const fails = entry.fails + 1;
       // Giving up on a piece moves past it: one bad transcript must not be retried forever.
@@ -209,12 +221,16 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
       try {
         writeRecord(paths.dir, record);
         saved++;
+        if (log) log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type });
       } catch (err) {
         // One candidate that cannot be written must not make the piece be paid for again.
         console.error('[memory] candidate not written:', errText(err));
       }
     }
-    return { entry: { ...entry, done: piece.end, fails: 0, at: now() }, reason: saved ? 'saved' : res.reason === 'saved' ? 'write-failed' : res.reason, saved, called };
+    const reason = saved ? 'saved' : res.reason === 'saved' ? 'write-failed' : res.reason;
+    // Only a piece the model read is a capture worth counting.
+    if (log && called) log.add({ ev: 'capture', project: entry.project, reason, kept: saved, dropped: countReasons(res.rejected) });
+    return { entry: { ...entry, done: piece.end, fails: 0, at: now() }, reason, saved, called };
   }
 
   /**

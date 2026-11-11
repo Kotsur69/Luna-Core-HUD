@@ -461,6 +461,14 @@ contextBridge.exposeInMainWorld('lunacore', {
   memoryInboxReject: (key) => ipcRenderer.invoke('memory:reject', typeof key === 'string' ? key : ''),
   /** Corrects a waiting one's {title, body, type, area}. Promise<{ok, key} | {ok:false, reason}>. */
   memoryInboxUpdate: (key, edits) => ipcRenderer.invoke('memory:update', { key: typeof key === 'string' ? key : '', edits }),
+  // Phase 5, the review list: confirmed memories that are stale, name a file
+  // that is gone, or were reported wrong. Named by key only, as above.
+  /** @returns {Promise<{ok:boolean, items?:Array<object>, total?:number}>} */
+  memoryReview: () => ipcRenderer.invoke('memory:review'),
+  /** "Still true": the verification date moves to today. */
+  memoryReviewVerify: (key) => ipcRenderer.invoke('memory:verify', typeof key === 'string' ? key : ''),
+  /** Deletes a confirmed memory on every PC. */
+  memoryReviewRetire: (key) => ipcRenderer.invoke('memory:retire', typeof key === 'string' ? key : ''),
   /** The memory files changed (capture, a sync, an approval). Returns an unsubscribe. */
   onMemoryChanged: (cb) => {
     if (typeof cb !== 'function') return () => {};

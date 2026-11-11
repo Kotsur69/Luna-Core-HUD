@@ -26,6 +26,8 @@ Thumbs.db
 #   repos (which repos the git station watches)
 config/*.local.json
 config/*.local.md
+# Luna Core Memory log (src/memorylog.js): one JSON object per line.
+config/*.local.jsonl
 # Luna Core Memory mirror (src/memorystore.js): what Luna learned, per user.
 config/memory/
 .env

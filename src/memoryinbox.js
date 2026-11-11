@@ -113,24 +113,29 @@ function findPending(dir, key) {
  * @param {string} dir
  * @param {string} key
  * @param {string} today YYYY-MM-DD
+ * @param {(event: string, record: object) => void} [decided] called once the
+ *   decision is on disk, with 'approved' and the entry as it was (phase 5: the memory log)
  * @returns {{ok: true, key: string, removed: string[]}|{ok: false, reason: string}}
  */
-function approve(dir, key, today) {
+function approve(dir, key, today, decided = () => {}) {
   const found = findPending(dir, key);
   if (!found.record) return { ok: false, reason: found.reason };
   writeRecord(dir, { ...found.record, confidence: 'confirmed', last_verified: today });
   for (const other of found.others) removeRecord(dir, other);
+  decided('approved', found.record);
   return { ok: true, key, removed: found.others };
 }
 
 /**
  * Rejects one entry: it and its duplicates are deleted.
+ * @param {(event: string, record: object) => void} [decided] called with 'rejected' and the deleted entry
  * @returns {{ok: true, key: string, removed: string[]}|{ok: false, reason: string}}
  */
-function reject(dir, key) {
+function reject(dir, key, decided = () => {}) {
   const found = findPending(dir, key);
   if (!found.record) return { ok: false, reason: found.reason };
   for (const k of [key, ...found.others]) removeRecord(dir, k);
+  decided('rejected', found.record);
   return { ok: true, key, removed: found.others };
 }
 
@@ -140,9 +145,10 @@ function reject(dir, key) {
  * @param {string} key
  * @param {{title?: unknown, body?: unknown, type?: unknown, area?: unknown}} edits
  *   area: '' or null removes the tag
+ * @param {(event: string, record: object) => void} [decided] called with 'edited' and the corrected entry
  * @returns {{ok: true, key: string}|{ok: false, reason: string}} reason = the field that failed (memoryrecord.checkRecord)
  */
-function update(dir, key, edits) {
+function update(dir, key, edits, decided = () => {}) {
   const found = findPending(dir, key);
   if (!found.record) return { ok: false, reason: found.reason };
   const e = edits && typeof edits === 'object' && !Array.isArray(edits) ? edits : {};
@@ -158,6 +164,7 @@ function update(dir, key, edits) {
   if (!res.record) return { ok: false, reason: res.error };
   if (keyOf(res.record) !== key) return { ok: false, reason: 'bad-key' };
   writeRecord(dir, res.record);
+  decided('edited', res.record);
   return { ok: true, key };
 }
 

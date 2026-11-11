@@ -252,12 +252,15 @@ const { createMemoryReader } = require('./memorytools');
 const { cardFor, writeCard, removeCard } = require('./memorycard');
 const { readEnabled: readMemoryProjects } = require('./memoryprojects');
 const { projectFromRepoKey } = require('./memoryrecord');
-const { createRepoKeys } = require('./missionrepokey');
+const { createRepoKeys, findRepo } = require('./missionrepokey');
 // Phase 4: capture from finished sessions (src/memorycapture.js) and the inbox.
 const { createCapture } = require('./memorycapture');
 const { listInbox: listMemoryInbox } = require('./memoryinbox');
-const { registerMemoryIpc } = require('./memoryipc');
+const { registerMemoryIpc, reviewCount: memoryReviewCount } = require('./memoryipc');
 const { runJob: runMemoryJob } = require('./missionrunner');
+// Phase 5: the capture and usage log, and the review list of confirmed memories.
+const { createLog: createMemoryLog, logPath: memoryLogPath } = require('./memorylog');
+const { toolVerdict: memoryToolVerdict } = require('./memoryreview');
 const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
 let memorySync = null;
 let memoryCapture = null;
@@ -1101,7 +1104,41 @@ function memoryFor(session) {
     get project() {
       return memoryProjectOf(session);
     },
+    // memory_verify: a session may refresh a verification date or flag a
+    // memory for review, nothing more (src/memoryreview.js toolVerdict).
+    verify: (report) => {
+      const res = memoryToolVerdict(memoryPaths(userDir()).dir, { ...report, today: new Date().toISOString().slice(0, 10), log: memoryLogOf() });
+      if (res.ok && res.changed && memorySync) memorySync.soon();
+      if (res.ok && (res.changed || res.status === 'flagged')) send('memory:changed', {});
+      return res;
+    },
+    log: (event) => memoryLogOf().add(event),
   };
+}
+
+let memoryLog = null;
+/** This PC's memory log (src/memorylog.js): capture, decisions, searches and reports. */
+function memoryLogOf() {
+  if (!memoryLog) memoryLog = createMemoryLog(memoryLogPath(userDir()));
+  return memoryLog;
+}
+
+/**
+ * Where each memory project lies on this PC: {<project>: its repository folder}.
+ * The review list checks there whether a file a memory names still exists.
+ * Only folders LunaCore already knows (its projects and open tabs) are named.
+ */
+function memoryRoots() {
+  const roots = {};
+  const folders = [...projects.map((p) => p && p.path), ...[...sessions.values()].map((s) => s && s.cwd)];
+  for (const folder of folders) {
+    if (typeof folder !== 'string' || !folder) continue;
+    const project = projectFromRepoKey(memoryRepoKeys.resolve(folder).key);
+    if (!project || roots[project]) continue;
+    const repo = findRepo(folder);
+    if (repo) roots[project] = repo.root;
+  }
+  return roots;
 }
 
 // One intake server for the whole app, started lazily by the first tab that
@@ -3279,6 +3316,9 @@ function registerIpc() {
       send('memory:changed', {});
     },
     captureStatus: () => (memoryCapture ? memoryCapture.status() : null),
+    // Resolved per call: the user folder may not exist yet when this is registered.
+    log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
+    roots: memoryRoots,
   });
   // Notification hub (face icon + right drawer): docs/tbc_docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
   // Other PCs' runs come from their `godmode` rows; done marks sync as config units.
@@ -3299,7 +3339,12 @@ function registerIpc() {
       cloud: () => (cloud ? cloud.status() : null),
       google: () => gcal.status(),
       gmail: () => reportMail.sender.status(),
-      memoryInbox: () => listMemoryInbox(memoryPaths(userDir()).dir).total,
+      // Waiting for approval, plus confirmed memories on the review list (phase 5).
+      memoryInbox: () => {
+        const dir = memoryPaths(userDir()).dir;
+        const today = new Date().toISOString().slice(0, 10);
+        return listMemoryInbox(dir).total + memoryReviewCount({ dir, today, events: memoryLogOf().read(), roots: memoryRoots() });
+      },
       hostOn: () => {
         const control = require('./hostmain').hostControl();
         return Boolean(control && control.status().on);
@@ -4010,6 +4055,7 @@ app.whenReady().then(() => {
           timeoutMs: MEMORY_EXTRACT_TIMEOUT_MS,
         }),
       live: () => [...sessions.values()].map(captureSourceOf).filter(Boolean),
+      log: memoryLogOf(),
       onSaved: () => {
         if (memorySync) memorySync.soon();
         send('memory:changed', {});
