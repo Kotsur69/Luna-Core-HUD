@@ -243,6 +243,15 @@ let todoSync = null;
 const { startConfigSync } = require('./configsync');
 const { lifeParts } = require('./lifedailysync');
 let configSync = null;
+// Luna Core Memory (docs/untouched_docs/rag-stylememory.md): the markdown
+// mirror synced through the cloud's `memory` scope. The per-project switch
+// travels with the config sync (configsync.js startConfigSync).
+const { startMemory, memoryPaths } = require('./memorysync');
+const { createMemoryReader } = require('./memorytools');
+const { readEnabled: readMemoryProjects } = require('./memoryprojects');
+const { projectFromRepoKey } = require('./memoryrecord');
+const { createRepoKeys } = require('./missionrepokey');
+let memorySync = null;
 // The notification hub (src/hubipc.js): set in registerIpc(), its done
 // provider joins the config sync.
 let hubApi = null;
@@ -1009,6 +1018,30 @@ function mcpHealthCached(rescan) {
   return mcpHealthPromise;
 }
 
+// memory_search / memory_get for one tab (src/memorytools.js). Every tab can
+// search every project's memories; the tab's own project only ranks higher
+// (and can be searched alone) when memory is switched on for it.
+const memoryRepoKeys = createRepoKeys();
+let memoryReader = null;
+function memoryFor(session) {
+  try {
+    if (!memoryReader) memoryReader = createMemoryReader(memoryPaths(userDir()).dir);
+  } catch (err) {
+    // The to-do tools of the same server must keep working without memory.
+    console.error('[memory] tools unavailable:', (err && (err.code || err.message)) || 'error');
+    return undefined;
+  }
+  return {
+    search: memoryReader.search,
+    get: memoryReader.get,
+    get project() {
+      const known = getProject(projects, session.projectId);
+      const project = projectFromRepoKey(memoryRepoKeys.resolve(known ? known.path : session.cwd).key);
+      return project && readMemoryProjects(memoryPaths(userDir()).projects).includes(project) ? project : null;
+    },
+  };
+}
+
 // One intake server for the whole app, started lazily by the first tab that
 // needs it. storeFor() resolves the CURRENT project of the calling tab on
 // every request, so a tab switched to another project writes there.
@@ -1028,6 +1061,7 @@ const intakeServer = new IntakeServer({
       },
       // God Mode workers must never tick cards; only the user's own tabs may.
       canMarkDone: !orchestraRuns.ownsSession(sessionId),
+      memory: memoryFor(session),
     };
   },
 });
@@ -3858,6 +3892,7 @@ app.whenReady().then(() => {
     },
     extraProviders: hubApi ? [hubApi.doneProvider, hubApi.seenProvider, hubApi.prefsProvider] : [],
   });
+  memorySync = startMemory({ cloud, machine: machineName(os.hostname()), configDir: userDir() });
   // A --luna-probe instance shares userData with the live LunaCore - often the
   // very one running the God Mode self-check that started it. Resuming the
   // stored run there would drive the live run from a second process, and the
@@ -4010,6 +4045,7 @@ app.on('window-all-closed', () => {
     removeSessionConfig(userDir(), session.id);
   }
   intakeServer.stop().catch(() => {});
+  if (memoryReader) memoryReader.close();
   sessions.clear();
   activeSessionId = null;
 

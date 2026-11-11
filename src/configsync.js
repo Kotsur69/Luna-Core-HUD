@@ -49,6 +49,16 @@ const emptyMeta = () => ({ snap: {}, u: {}, gone: {} });
  * holds the store's defaults; stamped with the file mtime they would beat the
  * other PCs' older real edits and deletes.
  */
+/**
+ * First sync only (`local` is null otherwise): a provider whose units each
+ * have their own change time (`stamps: {k: ms}`, one file per unit in
+ * src/memorystore.js) gets those instead of the one `base` for all.
+ */
+function firstSyncStamps(stamped, local, now) {
+  if (!local || !isPlainObject(local.stamps)) return stamped;
+  const own = local.units.filter(([k]) => validStamp(local.stamps[k], now)).map(([k]) => [k, Math.min(Math.floor(local.stamps[k]), now)]);
+  return own.length ? { ...stamped, u: { ...stamped.u, ...Object.fromEntries(own) } } : stamped;
+}
 function firstSyncDefaults(stamped, local) {
   if (!local || typeof local.isDefault !== 'function') return stamped;
   const low = local.units.filter(([k, v]) => local.isDefault(k, v)).map(([k]) => [k, 0]);
@@ -119,7 +129,7 @@ function createConfigSync({ providers, metaFile, now = Date.now, extraPeers = ()
       }
       const prev = local.fresh ? null : metas[provider.name];
       const stamped = firstSyncDefaults(
-        stamp(local.units, prev || { ...emptyMeta(), gone: local.gone || {} }, t, prev ? t : local.base),
+        firstSyncStamps(stamp(local.units, prev || { ...emptyMeta(), gone: local.gone || {} }, t, prev ? t : local.base), prev ? null : local, t),
         prev ? null : local,
       );
       const merged = merge(local.units, stamped, cloud.map((p) => peerFor(provider, p, t)), t);
@@ -170,6 +180,8 @@ function startConfigSync({ cloud, onChanged, extraProviders = [] }) {
   const { createNewsProvider, createMissionProjectsProvider } = require('./missionsync');
   const { createHostDefaultProvider } = require('./hostdefault');
   const { lifeProviders } = require('./lifedailysync');
+  const { createMemoryProjectsProvider } = require('./memoryprojects');
+  const { memoryPaths } = require('./memorysync');
   paths.ensureUserDir();
   const sync = createConfigSync({
     providers: [
@@ -179,6 +191,8 @@ function startConfigSync({ cloud, onChanged, extraProviders = [] }) {
       createMissionProjectsProvider(paths.local('mission-projects.local.json')),
       createHostDefaultProvider(paths.local('host-default.local.json')),
       ...lifeProviders(),
+      // Which projects have Luna Core Memory switched on (src/memoryprojects.js).
+      createMemoryProjectsProvider(memoryPaths(paths.userDir()).projects),
       ...(Array.isArray(extraProviders) ? extraProviders : []),
     ],
     metaFile: paths.local('config-sync.local.json'),
