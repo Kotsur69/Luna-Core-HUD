@@ -17,6 +17,7 @@ const { memoryPaths } = require('../src/memorysync.js');
 const { setEnabled } = require('../src/memoryprojects.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { runJob } = require('../src/missionrunner.js');
+const { createLog, logPath } = require('../src/memorylog.js');
 
 const PROJECT = 'github.com/acme/hud';
 const NOW = Date.parse('2026-11-11T12:00:00Z');
@@ -34,12 +35,14 @@ function setup(t, { enabled = true } = {}) {
   const clock = { at: NOW };
   const calls = [];
   const state = { reply: answer(), live: [] };
+  const log = createLog(logPath(configDir), { now: () => clock.at });
   const capture = createCapture({
     configDir,
     machine: 'PC1',
     transcriptsDir: configDir,
     now: () => clock.at,
     live: () => state.live,
+    log,
     run: async (job) => {
       calls.push(job.prompt);
       return typeof state.reply === 'function' ? state.reply() : state.reply;
@@ -55,8 +58,49 @@ function setup(t, { enabled = true } = {}) {
   };
   const memories = () => scan(memoryPaths(configDir).dir).records.map(([, r]) => r);
   const ledger = () => readLedger(path.join(configDir, LEDGER_FILE));
-  return { configDir, capture, clock, calls, state, transcript, memories, ledger };
+  return { configDir, capture, clock, calls, state, transcript, memories, ledger, log };
 }
+
+test('a capture is logged with what it proposed and what the filter dropped', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('eeeeeeee-5555', session('the sync'));
+  s.state.reply = answer('Name the installer asset with dashes', 'Name the installer asset with dashes');
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  assert.deepEqual(
+    s.log.read().map(({ at, ...event }) => event),
+    [
+      { ev: 'proposed', key: `${PROJECT}/name-the-installer-asset-with-dashes`, type: 'gotcha' },
+      { ev: 'capture', project: PROJECT, reason: 'saved', kept: 1, dropped: { duplicate: 1 } },
+    ],
+  );
+});
+
+test('a session too short for a model call is not logged as a capture', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('ffffffff-6666', `${line('user', 'hi')}\n`);
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  assert.equal(s.calls.length, 0);
+  assert.deepEqual(s.log.read(), []);
+});
+
+test('the titles rejected for the project go to the extractor as not wanted', async (t) => {
+  const s = setup(t);
+  s.log.add({ ev: 'rejected', key: `${PROJECT}/changelog`, type: 'project-fact', title: 'Fixed the login bug today' });
+  s.log.add({ ev: 'rejected', key: 'github.com/acme/other/x', type: 'gotcha', title: 'From another project' });
+  const file = s.transcript('abababab-7777', session('the inbox'));
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  assert.match(s.calls[0], /REJECTED these proposals lately[\s\S]*\n- "Fixed the login bug today"\n/);
+  assert.doesNotMatch(s.calls[0], /From another project/);
+});
 
 test('a finished session becomes observed memories and is not read twice', async (t) => {
   const s = setup(t);

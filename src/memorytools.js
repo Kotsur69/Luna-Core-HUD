@@ -3,7 +3,12 @@
 // ----------------------------------------------------------------------------
 // docs/untouched_docs/rag-stylememory.md, phase 2: `memory_search` and
 // `memory_get`, served by the MCP server every LunaCore tab already has
-// (src/intake.js). Read only: nothing here writes a memory.
+// (src/intake.js). Those two only read.
+//
+// Phase 5 adds `memory_verify`: a session reports how a memory it relied on
+// turned out. It can refresh the verification date of a confirmed memory and
+// flag one as wrong for the user's review list (src/memoryreview.js). It
+// cannot confirm, edit or delete a memory.
 //
 // Every tab gets the tools and can search every project's memories (recall
 // across projects is the point). The tab's own project only ranks higher when
@@ -23,9 +28,13 @@
 const { GLOBAL, splitKey } = require('./memoryrecord');
 const { scan } = require('./memorystore');
 const { createIndex, DEFAULT_LIMIT } = require('./memoryindex');
+const { isStale } = require('./memoryreview');
 
 const SEARCH_TOOL = 'memory_search';
 const GET_TOOL = 'memory_get';
+const VERIFY_TOOL = 'memory_verify';
+const OUTCOMES = ['holds', 'wrong'];
+const MAX_NOTE_CHARS = 300;
 /** Hits one memory_search call may return: a few short entries, not a dump. */
 const MAX_SEARCH_LIMIT = 20;
 const MAX_QUERY_CHARS = 500;
@@ -73,17 +82,44 @@ const MEMORY_TOOLS = [
       required: ['key'],
     },
   },
+  {
+    name: VERIFY_TOOL,
+    description:
+      'Report how a memory turned out AFTER you relied on it. outcome "holds": you acted on it and it was right (its verification date is refreshed). ' +
+      'outcome "wrong": it was wrong or out of date; say what you found in `note`. A wrong memory is flagged for the user to review; ' +
+      'this tool never edits or deletes a memory. Do not call it for a memory you only read.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', maxLength: MAX_KEY_CHARS, description: 'The `key` of the memory, or its bare id.' },
+        outcome: { type: 'string', enum: OUTCOMES, description: '"holds" or "wrong".' },
+        note: { type: 'string', maxLength: MAX_NOTE_CHARS, description: 'Required for "wrong": what was wrong, in one sentence.' },
+      },
+      required: ['key', 'outcome'],
+    },
+  },
 ];
 
-const isMemoryTool = (name) => name === SEARCH_TOOL || name === GET_TOOL;
+/** What memory_verify answers, by the status src/memoryreview.js toolVerdict() returns. */
+const VERDICT_TEXT = {
+  flagged: 'Flagged for the user to review. The memory itself is unchanged; do not rely on it.',
+  waiting: 'Noted. This memory is not confirmed yet: only the user can confirm it.',
+  fresh: 'Noted. It was verified recently, so its date stays.',
+  verified: 'Noted. Its verification date is now today.',
+};
+
+const isMemoryTool = (name) => name === SEARCH_TOOL || name === GET_TOOL || name === VERIFY_TOOL;
 
 /** The trust label every returned memory carries (decision 5). */
 function trustOf(record) {
   if (record.confidence !== 'confirmed') return `${record.confidence}, not verified`;
+  // Phase 5: a gotcha or how-to nobody has checked for a long time says so.
+  if (record.stale) return `confirmed, not verified since ${record.last_verified || record.created}`;
   return record.last_verified ? `confirmed, last verified ${record.last_verified}` : 'confirmed, never re-verified';
 }
 
 const fail = (error) => ({ ok: false, error });
+const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 /**
  * memory_search against a reader.
@@ -131,6 +167,12 @@ function candidateKeys(key, project) {
   return [...(project ? [`${project}/${key}`] : []), `${GLOBAL}/${key}`];
 }
 
+/** The keys a tool call's `key` argument may mean; empty when it is no key at all. */
+function wantedKeys(args, project) {
+  const wanted = typeof args.key === 'string' ? args.key.trim().toLowerCase() : '';
+  return wanted && wanted.length <= MAX_KEY_CHARS ? candidateKeys(wanted, project) : [];
+}
+
 /**
  * memory_get against a reader.
  * @param {{get: Function, project: string|null}} memory
@@ -138,13 +180,12 @@ function candidateKeys(key, project) {
  * @returns {{ok: true, payload: object}|{ok: false, error: string}}
  */
 function runGet(memory, args) {
-  const wanted = typeof args.key === 'string' ? args.key.trim().toLowerCase() : '';
-  const candidates = wanted && wanted.length <= MAX_KEY_CHARS ? candidateKeys(wanted, memory.project) : [];
+  const candidates = wantedKeys(args, memory.project);
   if (!candidates.length) return fail('key must be a memory key (<project>/<id>) or a memory id');
   for (const candidate of candidates) {
     const found = memory.get(candidate);
     if (!found) continue;
-    const { record, supersededBy } = found;
+    const { record, supersededBy, stale } = found;
     return {
       ok: true,
       payload: {
@@ -152,7 +193,7 @@ function runGet(memory, args) {
         key: candidate,
         type: record.type,
         title: record.title,
-        trust: trustOf(record),
+        trust: trustOf({ ...record, stale }),
         created: record.created,
         source: record.source || null,
         ...(record.area ? { area: record.area } : {}),
@@ -167,17 +208,54 @@ function runGet(memory, args) {
 }
 
 /**
+ * memory_verify: a session reports how a memory turned out.
+ * @param {{get: Function, verify?: Function, project: string|null}} memory
+ * @param {{key?: unknown, outcome?: unknown, note?: unknown}} args
+ * @returns {{ok: true, payload: object}|{ok: false, error: string}}
+ */
+function runVerify(memory, args) {
+  if (typeof memory.verify !== 'function') return fail('memory_verify is not available in this terminal');
+  const candidates = wantedKeys(args, memory.project);
+  if (!candidates.length) return fail('key must be a memory key (<project>/<id>) or a memory id');
+  const { outcome, note } = args;
+  if (!OUTCOMES.includes(outcome)) return fail('outcome must be "holds" or "wrong"');
+  if (note !== undefined && (typeof note !== 'string' || note.length > MAX_NOTE_CHARS)) {
+    return fail(`note must be a string of at most ${MAX_NOTE_CHARS} characters`);
+  }
+  if (outcome === 'wrong' && !(note || '').trim()) return fail('say in `note` what was wrong');
+  const key = candidates.find((candidate) => memory.get(candidate));
+  if (!key) return fail('no memory with that key; use the key of a memory_search entry');
+  const res = memory.verify({ key, outcome, note: note || '' });
+  if (!res || !res.ok) return fail('the report could not be saved');
+  return { ok: true, payload: { key, outcome, result: VERDICT_TEXT[res.status] || 'Noted.' } };
+}
+
+/** Tells the memory log what a successful call found or opened. Never fails the call. */
+function logUse(name, res, memory) {
+  if (!res.ok || typeof memory.log !== 'function') return;
+  try {
+    if (name === SEARCH_TOOL) memory.log({ ev: 'search', project: res.payload.project, hits: res.payload.results.map((r) => r.key) });
+    else if (name === GET_TOOL) memory.log({ ev: 'get', key: res.payload.key });
+  } catch (err) {
+    console.error('[memory] use not logged:', (err && (err.code || err.message)) || 'error');
+  }
+}
+
+/**
  * Runs one memory tool.
  * @param {string} name
  * @param {unknown} args
- * @param {{search: Function, get: Function, project: string|null}} memory
+ * @param {{search: Function, get: Function, project: string|null, verify?: Function, log?: Function}} memory
+ *   verify = (report) => memoryreview.toolVerdict()'s result; log = (event) => the memory log
  * @returns {{ok: true, payload: object}|{ok: false, error: string}|null} null = not a memory tool
  */
 function callMemoryTool(name, args, memory) {
   if (!isMemoryTool(name)) return null;
   const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
   try {
-    return name === SEARCH_TOOL ? runSearch(memory, a) : runGet(memory, a);
+    const res = name === SEARCH_TOOL ? runSearch(memory, a) : name === GET_TOOL ? runGet(memory, a) : runVerify(memory, a);
+    logUse(name, res, memory);
+    return res;
   } catch (err) {
     // The file system or the index failed: the tab gets a short reason, never a stack.
     console.error('[memory] tool failed:', (err && (err.code || err.message)) || 'error');
@@ -215,12 +293,13 @@ function createMemoryReader(dir, { now = Date.now, ttlMs = INDEX_TTL_MS } = {}) 
   }
 
   return {
-    search: (query, opts) => load().index.search(query, opts),
-    /** @returns {{record: object, supersededBy: string|null}|null} */
+    // Age counts from here on: an old digest is left out, a stale memory ranks lower.
+    search: (query, opts) => load().index.search(query, { ...opts, today: isoDate(now()) }),
+    /** @returns {{record: object, supersededBy: string|null, stale: boolean}|null} */
     get(key) {
       const { byKey, supersededBy } = load();
       const record = byKey.get(key);
-      return record ? { record, supersededBy: supersededBy.get(key) || null } : null;
+      return record ? { record, supersededBy: supersededBy.get(key) || null, stale: isStale(record, isoDate(now())) } : null;
     },
     close,
   };

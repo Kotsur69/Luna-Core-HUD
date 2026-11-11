@@ -11,9 +11,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { registerMemoryIpc, cleanEdits } = require('../src/memoryipc.js');
+const { registerMemoryIpc, cleanEdits, reviewCount } = require('../src/memoryipc.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { COLLECTORS } = require('../src/hubcollect.js');
+const { createLog, logPath } = require('../src/memorylog.js');
 const { ACTIONS } = require('../src/hub.js');
 
 const PROJECT = 'github.com/acme/hud';
@@ -35,22 +36,146 @@ const rec = (id, over = {}) => ({
   ...over,
 });
 
-function setup(t, records = [rec('busy')]) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-memipc-'));
-  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+function setup(t, records = [rec('busy')], { roots } = {}) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-memipc-'));
+  t.after(() => fs.promises.rm(base, { recursive: true, force: true, maxRetries: 5 }));
+  const dir = path.join(base, 'memory');
+  const repo = path.join(base, 'repo');
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
   for (const r of records) writeRecord(dir, r);
   const handlers = {};
   let changed = 0;
+  const log = createLog(logPath(base), { now: () => NOW });
   registerMemoryIpc({
     ipcMain: { handle: (channel, fn) => (handlers[channel] = fn) },
     dir: () => dir,
     onChanged: () => changed++,
     captureStatus: () => ({ tracked: 2, last: null }),
     now: () => NOW,
+    log,
+    roots: roots || (() => ({ [PROJECT]: repo })),
   });
   const invoke = (channel, arg) => handlers[channel]({}, arg);
-  return { dir, invoke, changed: () => changed, stored: () => Object.fromEntries(scan(dir).records) };
+  const logged = () => log.read().map(({ at, ...event }) => event);
+  return { dir, repo, log, logged, invoke, changed: () => changed, stored: () => Object.fromEntries(scan(dir).records) };
 }
+
+// ---- phase 5: the decisions log, the review list --------------------------------
+
+test('every inbox decision is logged, and only a rejection keeps its title', (t) => {
+  const s = setup(t, [rec('busy'), rec('noise')]);
+
+  s.invoke('memory:update', { key: KEY, edits: { title: 'Retry says busy after sleep' } });
+  s.invoke('memory:approve', KEY);
+  s.invoke('memory:reject', `${PROJECT}/noise`);
+  s.invoke('memory:reject', `${PROJECT}/nope`);
+
+  assert.deepEqual(s.logged(), [
+    { ev: 'edited', key: KEY, type: 'gotcha' },
+    { ev: 'approved', key: KEY, type: 'gotcha' },
+    { ev: 'rejected', key: `${PROJECT}/noise`, type: 'gotcha', title: 'Title of noise' },
+  ]);
+});
+
+test('memory:inbox reports the last week of capture: proposed, decided and the approval rate', (t) => {
+  // Distinct texts: near-duplicates would be folded into one inbox entry.
+  const s = setup(t, [
+    rec('a', { title: 'Packaging times out on battery', body: 'Check the power events first.' }),
+    rec('b', { title: 'Retry says busy after sleep', body: 'Restart the app.' }),
+    rec('c', { title: 'Name the installer with dashes', body: 'Auto-update breaks on spaces.' }),
+  ]);
+  for (const id of ['a', 'b', 'c']) s.log.add({ ev: 'proposed', key: `${PROJECT}/${id}`, type: 'gotcha' });
+  s.invoke('memory:approve', `${PROJECT}/a`);
+  s.invoke('memory:reject', `${PROJECT}/b`);
+
+  assert.deepEqual(s.invoke('memory:inbox').stats, { days: 7, captures: 0, proposed: 3, approved: 1, rejected: 1, edited: 0, rate: 0.5 });
+});
+
+test('memory:review lists a confirmed memory whose file is gone; "still true" clears it', (t) => {
+  const s = setup(t, [rec('broken', { confidence: 'confirmed', body: 'The poller is in `src/removed.js`.' }), rec('busy')]);
+  const key = `${PROJECT}/broken`;
+
+  const before = s.invoke('memory:review');
+  const verified = s.invoke('memory:verify', key);
+
+  assert.equal(before.ok, true);
+  assert.equal(before.total, 1);
+  assert.deepEqual(before.items[0].flags, [{ kind: 'anchor', missing: ['src/removed.js'] }]);
+  assert.deepEqual(verified, { ok: true, key });
+  assert.equal(s.stored()[key].last_verified, '2026-11-11');
+  assert.equal(s.invoke('memory:review').total, 0);
+  assert.equal(s.changed(), 1);
+});
+
+test('memory:retire deletes a confirmed memory and logs it', (t) => {
+  const s = setup(t, [rec('old', { confidence: 'confirmed', created: '2026-01-01' })]);
+  const key = `${PROJECT}/old`;
+
+  assert.deepEqual(s.invoke('memory:retire', key), { ok: true, key });
+
+  assert.deepEqual(s.stored(), {});
+  assert.deepEqual(s.logged(), [{ ev: 'retired', key, type: 'gotcha', title: 'Title of old' }]);
+});
+
+test('verify and retire refuse a bad key and a memory that still waits in the inbox', (t) => {
+  const s = setup(t);
+
+  for (const channel of ['memory:verify', 'memory:retire']) {
+    for (const key of [undefined, null, 5, {}, '', '../../x', 'C:\\Windows\\win.ini', 'x'.repeat(500)]) {
+      assert.deepEqual(s.invoke(channel, key), { ok: false, reason: 'bad-key' });
+    }
+    assert.deepEqual(s.invoke(channel, KEY), { ok: false, reason: 'not-confirmed' });
+  }
+  assert.equal(s.changed(), 0);
+  assert.equal(s.stored()[KEY].confidence, 'observed');
+  assert.deepEqual(s.logged(), []);
+});
+
+test('the window can settle only a memory that is on the review list', (t) => {
+  const s = setup(t, [rec('healthy', { confidence: 'confirmed' })]);
+  const key = `${PROJECT}/healthy`;
+
+  assert.deepEqual(s.invoke('memory:retire', key), { ok: false, reason: 'not-flagged' });
+  assert.deepEqual(s.invoke('memory:verify', key), { ok: false, reason: 'not-flagged' });
+
+  assert.equal(s.stored()[key].last_verified, undefined);
+  assert.equal(s.changed(), 0);
+  assert.deepEqual(s.logged(), []);
+});
+
+test('project folders that cannot be named do not hide the review list', (t) => {
+  const quiet = t.mock.method(console, 'error', () => {});
+  const s = setup(t, [rec('stale', { confidence: 'confirmed', created: '2026-01-01' })], {
+    roots: () => {
+      throw new Error('boom');
+    },
+  });
+
+  const res = s.invoke('memory:review');
+
+  assert.equal(res.total, 1);
+  assert.equal(res.items[0].flags[0].kind, 'stale');
+  assert.equal(quiet.mock.callCount(), 1);
+});
+
+test('reviewCount counts the flagged memories and is zero when the mirror cannot be read', (t) => {
+  const s = setup(t, [rec('stale', { confidence: 'confirmed', created: '2026-01-01' }), rec('fine', { confidence: 'confirmed' })]);
+  const quiet = t.mock.method(console, 'error', () => {});
+
+  assert.equal(reviewCount({ dir: s.dir, today: '2026-11-11' }), 1);
+  assert.equal(reviewCount({ dir: null, today: '2026-11-11' }), 0);
+  assert.equal(quiet.mock.callCount(), 1);
+});
+
+test('the review list uses channels preload exposes', () => {
+  const panel = read('src/renderer/modules/memoryinbox.js');
+  const preload = read('src/preload.js');
+
+  const used = [...panel.matchAll(/'(memoryReview\w*)'/g)].map((m) => m[1]);
+  assert.deepEqual([...new Set(used)].sort(), ['memoryReview', 'memoryReviewRetire', 'memoryReviewVerify']);
+  for (const fn of used) assert.match(preload, new RegExp(`\\b${fn}:`), `${fn} is missing in preload`);
+  for (const channel of ['memory:review', 'memory:verify', 'memory:retire']) assert.ok(preload.includes(`'${channel}'`), `${channel} is missing in preload`);
+});
 
 test('memory:inbox lists the waiting entries with the capture status', (t) => {
   const s = setup(t, [rec('busy'), rec('done', { confidence: 'confirmed' })]);

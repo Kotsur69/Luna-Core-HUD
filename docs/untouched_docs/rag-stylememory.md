@@ -1,6 +1,6 @@
 # Luna Core Memory: a RAG-style memory across all projects
 
-Status: **phases 1 to 4 built** (2026-11-11). Written 2026-11-10. Section 0 holds the
+Status: **phases 1 to 5 built** (2026-11-11). Written 2026-11-10. Section 0 holds the
 decisions made so far; section 11 lists the questions they answer.
 
 ## 0. Decisions so far (2026-11-11)
@@ -293,12 +293,12 @@ about a third means the extractor prompt is wrong.
 
 Recommended by Luna, in the order she would build them. None is decided yet.
 
-1. **Measure for a week before adding anything.** Log per capture what was proposed,
+1. **(Built in phase 5.) Measure for a week before adding anything.** Log per capture what was proposed,
    approved, edited and rejected, per type. Under about a third approved means the
    extractor prompt is wrong, and nothing below is worth building until that number is
    known. The read side (how often a memory is searched or opened) comes from the same
    log.
-2. **Feed rejections back to the extractor.** The titles of the last 20 rejected
+2. **(Built in phase 5.) Feed rejections back to the extractor.** The titles of the last 20 rejected
    candidates go into the prompt as "not wanted". A rejected file is deleted today, so
    this needs a small local list of rejected titles.
 3. **The "where we stopped" note.** One short note per project, overwritten at each
@@ -314,8 +314,101 @@ Recommended by Luna, in the order she would build them. None is decided yet.
 8. **Auto-accept low-risk types** once a type's approval rate has stayed above about
    90% for a few weeks (question 4).
 
-Items 1 and 2 belong to phase 5 (see section 10). Items 3 to 8 are separate and can be
-taken in any order after it.
+Items 1 and 2 were built in phase 5 (decisions 62 to 64 below). Items 3 to 8 are separate
+and can be taken in any order.
+
+### Phase 5 decisions, 2026-11-11 (keeping memories true, and the log)
+
+Numbers 60 and 61 are kept for the two queued inbox cards ("Make global" and the
+outside-content note).
+
+Chosen while building:
+
+62. **One local log per PC** (`src/memorylog.js`, `memory-log.local.jsonl` in the config
+    folder, one JSON object per line). It records each capture (what was kept, what the
+    filter dropped and why), each candidate proposed, each inbox decision (approved,
+    edited, rejected), each `memory_search` and `memory_get`, and each report on a
+    memory. Past 1 MB the older half is dropped. Every line is rebuilt field by field
+    when it is read.
+63. **The log is not synced.** It says what happened on this PC. A candidate captured on
+    one PC and approved on the other is "proposed" here and "approved" there, so **the
+    approval rate is approved over (approved + rejected)**, which is right on either PC.
+    It is shown per type, and "approved after an edit" is counted apart.
+64. **Rejected titles go back to the extractor.** The last 20 titles rejected for the
+    project (and for `global`) are listed in the prompt as "not wanted: do not propose
+    them or their kind again". Only the title of a rejected candidate is kept, in the
+    log; the file is still deleted. A rejection made on the other PC is not known here.
+65. **Stale:** a confirmed `gotcha` or `how-to` that nobody has verified for 180 days.
+    It is still returned and stays on the card, ranks at 0.8 in search, and its trust
+    label reads `confirmed, not verified since <date>`.
+66. **Decay:** a `digest` older than 60 days is left out of search. The file stays.
+67. **Anchors are files only.** A memory's body is read for repository paths in
+    backticks (`src/memorycapture.js`): at least one folder and a file extension, and
+    the top folder must exist in the repository. A bare file name, a `*.local.*` file,
+    a path under `node_modules` or one that starts with a domain is not an anchor.
+    Functions and flags are not checked: that needs a search of the code per memory.
+    The check runs only on a PC where LunaCore knows the repository's folder (one of
+    its projects or an open tab); `global` memories are not checked.
+68. **`memory_verify`**, a third tool beside `memory_search` and `memory_get`. A session
+    reports how a memory it relied on turned out. `holds` moves `last_verified` of a
+    confirmed memory to today, at most once in 7 days (each move is a sync push).
+    `wrong` needs a note and puts the memory on the review list; the memory itself is
+    not changed. **A session cannot confirm, edit or delete a memory**, and its own
+    `holds` does not settle a report: only Mati does. This narrows decision 5: "used
+    later and holds up" refreshes a confirmed memory, it does not confirm an observed
+    one, because that would let a session put text on the project card unread.
+69. **The review list** (`src/memoryreview.js`) is every confirmed, not superseded
+    memory with a flag: reported wrong, names a file that is gone, or stale, in that
+    order. Per entry: **Still true** (`last_verified` becomes today, the flags clear,
+    and the files missing at that moment are not flagged again) or **Retire** (asked
+    twice; the file is deleted and the delete syncs as a tombstone).
+70. **In the HUD** the memory window has two tabs, "To approve" and "To check". It
+    opens on "To check" when nothing waits for approval. The hub item counts both. The
+    footer shows the last 7 days: proposed, approved, rejected and the rate.
+71. **CLI:** `memory review`, `memory verify <id>`, `memory retire <id>` and
+    `memory stats [--days n] [--all]` (approval rate per type, what the filter
+    dropped, and which memories were found and opened most).
+
+From the security and code review of phase 5 (2026-11-11), fixed before the commit:
+
+72. **The log trims reads first.** Every `memory_search` and `memory_get` writes a line,
+    so a session searching in a loop could have pushed a report or a decision out of
+    the log. Past 1 MB the older half of the read lines goes first; reports and
+    decisions go only when they alone are too big.
+73. **One open report per memory.** A second `wrong` on a memory that is already
+    reported adds nothing. A report that cannot be written is answered as a failure,
+    not as "flagged".
+74. **The HUD can settle only what is on the review list.** `memory:verify` and
+    `memory:retire` refuse a confirmed memory that has no flag, so those channels are
+    no way to delete or re-date an arbitrary memory. The CLI has no such limit.
+75. **A rejected title is quoted in the extractor prompt,** and a rejected candidate
+    takes its open report with it.
+
+Known limits, accepted for now:
+
+- **A session's `holds` clears the stale flag.** That is what it is for, but a session
+  steered by text it read could keep a wrong gotcha looking fresh. A report of `wrong`
+  is not affected by it. If this turns out to matter: a separate "verified by a
+  session" date that does not clear the flag.
+- **The anchor check looks at the main checkout.** A worktree is folded into its
+  repository, so a file that exists only on a worktree's branch is flagged as gone.
+- **A log that cannot be read counts as empty** (the error goes to the console). Until
+  it can be read again, reports are missing from the review list.
+- **The hub count reads the mirror and the log once a minute.** Fine for hundreds of
+  memories; cache it if the mirror grows into the thousands.
+
+- **Reports and accepted missing files live in the local log.** A memory a session
+  reported wrong on one PC is not on the other PC's review list. Staleness is read
+  from the record's dates, so that flag is the same everywhere.
+- **Card reads are not counted.** A memory read from the project card needs no tool
+  call, so "never searched or opened" does not mean "never used". A flag for unread
+  memories waits for the work map (below), which sees the card being loaded.
+- **No monthly reminder.** The hub item stays up while anything is on either list.
+
+Done-when of section 10, checked on 2026-11-11: a confirmed memory that names
+`src/removed-poller.js` appears on the review list as "names a file that is gone"
+(`test/memoryreview.test.js`, and `memory review` on the real store), and
+`memory stats` prints the approval rate of the chosen number of days.
 
 ### Bonus, wanted by Mati on 2026-11-11: a live work map in LunaCore
 

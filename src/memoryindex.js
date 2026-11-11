@@ -22,6 +22,7 @@
 'use strict';
 
 const { GLOBAL } = require('./memoryrecord');
+const { isStale, isDecayed } = require('./memoryreview');
 
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 50;
@@ -35,6 +36,8 @@ const BM25_WEIGHTS = { title: 4, tags: 2, body: 1 };
 const PROJECT_BOOST = 1.5;
 const GLOBAL_BOOST = 1.15;
 const CONFIDENCE_BOOST = { confirmed: 1.2, observed: 1, inferred: 0.8 };
+/** A gotcha or how-to nobody has verified for a long time ranks lower (phase 5). */
+const STALE_FACTOR = 0.8;
 
 /** A question -> an FTS5 expression of quoted prefix terms, or null (nothing to search). */
 function toMatch(query) {
@@ -86,13 +89,15 @@ function buildIndex(db, records) {
 
   /**
    * @param {string} query
-   * @param {{project?: string|null, limit?: number, only?: string|null}} [opts]
+   * @param {{project?: string|null, limit?: number, only?: string|null, today?: string|null}} [opts]
    *   project = the session's project: its memories rank higher;
-   *   only = return this project's and global memories and nothing else
+   *   only = return this project's and global memories and nothing else;
+   *   today = YYYY-MM-DD: an old digest is left out and a stale memory ranks
+   *   lower (src/memoryreview.js). Without it, age plays no part.
    * @returns {object[]} best first: {key, id, project, type, title, confidence,
-   *   created, last_verified, source, links, snippet, score}
+   *   created, last_verified, source, links, snippet, stale, score}
    */
-  function search(query, { project = null, limit = DEFAULT_LIMIT, only = null } = {}) {
+  function search(query, { project = null, limit = DEFAULT_LIMIT, only = null, today = null } = {}) {
     const match = toMatch(query);
     if (!match) return [];
     const max = Math.min(Math.max(Number.isInteger(limit) ? limit : DEFAULT_LIMIT, 1), MAX_LIMIT);
@@ -101,6 +106,8 @@ function buildIndex(db, records) {
       const record = byKey.get(row.key);
       if (!record || superseded.has(row.key)) continue;
       if (only && record.project !== only && record.project !== GLOBAL) continue;
+      if (today && isDecayed(record, today)) continue;
+      const stale = Boolean(today) && isStale(record, today);
       const scope = record.project === project ? PROJECT_BOOST : record.project === GLOBAL ? GLOBAL_BOOST : 1;
       hits.push({
         key: row.key,
@@ -114,8 +121,9 @@ function buildIndex(db, records) {
         source: record.source || null,
         links: record.links,
         snippet: row.snippet.replace(/\s+/g, ' ').trim(),
+        stale,
         // bm25() is negative, lower is better.
-        score: -row.rank * scope * CONFIDENCE_BOOST[record.confidence],
+        score: -row.rank * scope * CONFIDENCE_BOOST[record.confidence] * (stale ? STALE_FACTOR : 1),
       });
     }
     return hits.sort((a, b) => b.score - a.score).slice(0, max);
