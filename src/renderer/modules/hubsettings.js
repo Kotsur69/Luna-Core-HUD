@@ -32,7 +32,7 @@ import { refreshHub, onHubPrefs } from './hubstate.js';
  * The source groups, in display order - the same names as src/hubsources.js
  * GROUP_NAMES (CommonJS, main side); test/hubsettings.test.js pins the two.
  */
-export const HUB_SOURCE_GROUPS = Object.freeze(['godmode', 'power', 'life', 'mail', 'accounts', 'todo', 'update']);
+export const HUB_SOURCE_GROUPS = Object.freeze(['godmode', 'power', 'life', 'mail', 'accounts', 'todo', 'memory', 'update']);
 
 const save = (partial) => Promise.resolve().then(() => window.lunacore.setUiPrefs(partial)).catch(() => {});
 

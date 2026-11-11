@@ -206,6 +206,8 @@ function createMemoryReader(dir, { now = Date.now, ttlMs = INDEX_TTL_MS } = {}) 
     const { records } = scan(dir);
     const supersededBy = new Map();
     for (const [key, record] of records) {
+      // Only a confirmed memory replaces another one; an unconfirmed one proposes it.
+      if (record.confidence !== 'confirmed') continue;
       for (const old of record.supersedes) supersededBy.set(`${record.project}/${old}`, key);
     }
     cache = { at, index: createIndex(records), byKey: new Map(records), supersededBy };

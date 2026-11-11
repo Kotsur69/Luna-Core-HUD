@@ -313,6 +313,8 @@ module.exports = {
   CONFIDENCE,
   GLOBAL,
   MAX_BODY,
+  MAX_TITLE,
+  slug,
   validProject,
   projectFromRepoKey,
   keyOf,

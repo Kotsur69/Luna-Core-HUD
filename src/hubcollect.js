@@ -507,6 +507,27 @@ function collectApproval(state) {
   return items.slice(0, MAX_APPROVALS);
 }
 
+/**
+ * Luna Core Memory, phase 4: memories capture proposed that wait for approval
+ * (src/memoryinbox.js). Keyed by the count, so a new candidate brings a
+ * dismissed item back.
+ * @param {{count:number, now:number}} state
+ */
+function collectMemory(state) {
+  const count = isObject(state) && Number.isSafeInteger(state.count) ? state.count : 0;
+  if (count < 1 || !isTime(state.now)) return [];
+  return [{
+    id: `memory:inbox:${count}`,
+    kind: 'needs',
+    source: 'memory',
+    title: `${count} memories to review`,
+    key: 'hub.item.memoryInbox',
+    vars: { count },
+    at: midnight(state.now),
+    primary: { action: 'openMemoryInbox' },
+  }];
+}
+
 /** Source name -> collector. src/hubipc.js builds one state per name. */
 const COLLECTORS = {
   godmode: collectGodmode,
@@ -524,6 +545,7 @@ const COLLECTORS = {
   todo: collectTodo,
   weekly: collectWeekly,
   approval: collectApproval,
+  memory: collectMemory,
 };
 
 /** Runs one collector; a throw or a non-array answer becomes []. */

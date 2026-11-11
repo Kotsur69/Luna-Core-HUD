@@ -1,0 +1,286 @@
+// ============================================================================
+// LunaCore - memory capture: the ledger, the pieces, the ticks (src/memorycapture.js)
+// ----------------------------------------------------------------------------
+// The model is a stub: these tests never start `claude`.
+// ============================================================================
+
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const { createCapture, readPiece, readLedger, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING } = require('../src/memorycapture.js');
+const { memoryPaths } = require('../src/memorysync.js');
+const { setEnabled } = require('../src/memoryprojects.js');
+const { writeRecord, scan } = require('../src/memorystore.js');
+const { runJob } = require('../src/missionrunner.js');
+
+const PROJECT = 'github.com/acme/hud';
+const NOW = Date.parse('2026-11-11T12:00:00Z');
+
+const line = (role, content) => JSON.stringify({ type: role, message: { role, content } });
+/** A session long enough to be worth a model call. */
+const session = (topic) => `${[line('user', `please look at ${topic} ${'detail '.repeat(60)}`), line('assistant', `I looked at ${topic}. ${'finding '.repeat(60)}`)].join('\n')}\n`;
+
+const answer = (...titles) => ({ ok: true, answer: { candidates: titles.map((title) => ({ type: 'gotcha', scope: 'project', title, body: `${title}. Unique body.` })) } });
+
+function setup(t, { enabled = true } = {}) {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-capture-'));
+  t.after(() => fs.promises.rm(configDir, { recursive: true, force: true, maxRetries: 5 }));
+  if (enabled) setEnabled(memoryPaths(configDir).projects, PROJECT, true);
+  const clock = { at: NOW };
+  const calls = [];
+  const state = { reply: answer(), live: [] };
+  const capture = createCapture({
+    configDir,
+    machine: 'PC1',
+    transcriptsDir: configDir,
+    now: () => clock.at,
+    live: () => state.live,
+    run: async (job) => {
+      calls.push(job.prompt);
+      return typeof state.reply === 'function' ? state.reply() : state.reply;
+    },
+  });
+  /** Writes a transcript last touched `ageMs` before the clock. */
+  const transcript = (name, text, ageMs = SETTLE_MS + 1000) => {
+    const file = path.join(configDir, `${name}.jsonl`);
+    fs.writeFileSync(file, text);
+    const when = new Date(clock.at - ageMs);
+    fs.utimesSync(file, when, when);
+    return file;
+  };
+  const memories = () => scan(memoryPaths(configDir).dir).records.map(([, r]) => r);
+  const ledger = () => readLedger(path.join(configDir, LEDGER_FILE));
+  return { configDir, capture, clock, calls, state, transcript, memories, ledger };
+}
+
+test('a finished session becomes observed memories and is not read twice', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('aaaaaaaa-1111', session('the release script'));
+  s.state.reply = answer('Name the installer asset with dashes');
+  s.capture.track({ file, project: PROJECT });
+
+  assert.deepEqual(await s.capture.tick(), { processed: 1, saved: 1 });
+
+  const [memory] = s.memories();
+  assert.equal(memory.confidence, 'observed');
+  assert.equal(memory.project, PROJECT);
+  assert.equal(memory.source, 'captured from session aaaaaaaa on PC1');
+  assert.equal(memory.created, '2026-11-11');
+  assert.match(s.calls[0], /please look at the release script/);
+  assert.equal(s.ledger().files[file].done, fs.statSync(file).size);
+
+  assert.deepEqual(await s.capture.tick(), { processed: 0, saved: 0 });
+  assert.equal(s.calls.length, 1);
+});
+
+test('only what was appended since the last capture goes to the model', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('bbbbbbbb-1', session('the first topic'));
+  s.capture.track({ file, project: PROJECT });
+  await s.capture.tick();
+
+  s.transcript('bbbbbbbb-1', session('the first topic') + session('the second topic'));
+  await s.capture.tick();
+
+  assert.equal(s.calls.length, 2);
+  assert.match(s.calls[1], /the second topic/);
+  assert.doesNotMatch(s.calls[1], /the first topic/);
+});
+
+test('a session whose tab is still open waits until it has been idle', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('cccccccc-1', session('a live tab'), SETTLE_MS + 1000);
+  s.state.live = [{ file, project: PROJECT }];
+
+  assert.equal((await s.capture.tick()).processed, 0);
+
+  s.clock.at += IDLE_MS;
+  assert.equal((await s.capture.tick()).processed, 1);
+});
+
+test('a session that just ended is left alone until its file has settled', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('dddddddd-1', session('a fresh end'), 1000);
+  s.capture.track({ file, project: PROJECT });
+
+  assert.equal((await s.capture.tick()).processed, 0);
+  assert.equal(s.calls.length, 0);
+});
+
+test('a short session costs no model call and is marked read', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('eeeeeeee-1', `${line('user', 'hi')}\n${line('assistant', 'hello')}\n`);
+  s.capture.track({ file, project: PROJECT });
+
+  assert.deepEqual(await s.capture.tick(), { processed: 1, saved: 0 });
+
+  assert.equal(s.calls.length, 0);
+  assert.equal(s.ledger().files[file].done, fs.statSync(file).size);
+  assert.equal(s.ledger().last.reason, 'too-short');
+});
+
+test('a failed model call is retried and given up after MAX_FAILS', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('ffffffff-1', session('a flaky run'));
+  s.state.reply = { ok: false, reason: 'timeout' };
+  s.capture.track({ file, project: PROJECT });
+
+  for (let i = 1; i < MAX_FAILS; i++) {
+    await s.capture.tick();
+    assert.deepEqual([s.ledger().files[file].done, s.ledger().files[file].fails], [0, i]);
+  }
+  await s.capture.tick();
+
+  assert.equal(s.calls.length, MAX_FAILS);
+  assert.equal(s.ledger().files[file].done, fs.statSync(file).size);
+  assert.equal(s.ledger().last.reason, 'model-timeout');
+  assert.deepEqual(s.memories(), []);
+});
+
+test('nothing is captured for a project with memory switched off', async (t) => {
+  const s = setup(t, { enabled: false });
+  const file = s.transcript('11111111-1', session('a private repo'));
+  s.capture.track({ file, project: PROJECT });
+
+  assert.deepEqual(await s.capture.tick(), { processed: 0, saved: 0 });
+
+  assert.equal(s.calls.length, 0);
+  assert.deepEqual(s.ledger().files, {});
+});
+
+test('a full inbox pauses capture for the project without losing the session', async (t) => {
+  const s = setup(t);
+  const dir = memoryPaths(s.configDir).dir;
+  for (let i = 0; i < MAX_PENDING; i++) {
+    writeRecord(dir, { id: `waiting-${i}`, type: 'gotcha', project: PROJECT, title: `Distinct${i} topic${i} lesson${i}`, created: '2026-11-01', confidence: 'observed', supersedes: [], links: [], body: `Text${i} only${i}.` });
+  }
+  const file = s.transcript('22222222-1', session('one more thing'));
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  assert.equal(s.calls.length, 0);
+  assert.equal(s.ledger().files[file].done, 0);
+  assert.equal(s.ledger().last, null);
+});
+
+test('a transcript that is gone is forgotten, and track() refuses what is not a session', async (t) => {
+  const s = setup(t);
+  s.capture.track({ file: path.join(s.configDir, 'gone.jsonl'), project: PROJECT });
+  s.capture.track({ file: 'relative.jsonl', project: PROJECT });
+  s.capture.track({ file: path.join(s.configDir, 'x.jsonl'), project: '../evil' });
+  s.capture.track(null);
+  assert.equal(Object.keys(s.ledger().files).length, 1);
+
+  await s.capture.tick();
+
+  assert.deepEqual(s.ledger().files, {});
+});
+
+test('onSaved fires with the number of new memories', async (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-capture-'));
+  t.after(() => fs.promises.rm(configDir, { recursive: true, force: true, maxRetries: 5 }));
+  setEnabled(memoryPaths(configDir).projects, PROJECT, true);
+  const file = path.join(configDir, '33333333.jsonl');
+  fs.writeFileSync(file, session('two lessons'));
+  const seen = [];
+  const capture = createCapture({
+    configDir,
+    machine: 'PC1',
+    transcriptsDir: configDir,
+    now: () => Date.now() + SETTLE_MS + 5000,
+    run: async () => answer('Alpha lesson about printers', 'Bravo lesson about batteries'),
+    onSaved: (n) => seen.push(n),
+  });
+  capture.track({ file, project: PROJECT });
+
+  await capture.tick();
+
+  assert.deepEqual(seen, [2]);
+});
+
+test('a broken ledger file reads as empty and status() reports the last run', async (t) => {
+  const s = setup(t);
+  fs.writeFileSync(path.join(s.configDir, LEDGER_FILE), '{not json');
+
+  assert.deepEqual(s.capture.status(), { tracked: 0, last: null });
+
+  const file = s.transcript('44444444-1', session('after the break'));
+  s.capture.track({ file, project: PROJECT });
+  await s.capture.tick();
+  assert.deepEqual(s.capture.status(), { tracked: 1, last: { at: NOW, saved: 0, reason: 'nothing' } });
+});
+
+test('readPiece stops at the last complete line', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-piece-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+  const file = path.join(dir, 't.jsonl');
+  fs.writeFileSync(file, 'one\ntwo\nthr');
+
+  assert.deepEqual(readPiece(file, 0, 11), { text: 'one\ntwo\n', end: 8 });
+  assert.deepEqual(readPiece(file, 8, 11), { text: '', end: 8 });
+});
+
+test('runJob can pipe a long prompt through stdin instead of the command line', async () => {
+  const seen = {};
+  const exec = (cmd, args, opts, cb) => {
+    seen.args = args;
+    setImmediate(() => cb(null, JSON.stringify({ result: '{"candidates":[]}' })));
+    return { stdin: { on: () => {}, end: (text) => (seen.stdin = text) } };
+  };
+
+  const res = await runJob({ prompt: 'a very long prompt', model: 'haiku', lean: true, stdin: true, env: {}, exec });
+
+  assert.deepEqual(res.answer, { candidates: [] });
+  assert.equal(seen.stdin, 'a very long prompt');
+  assert.equal(seen.args[0], '-p');
+  assert.equal(seen.args.includes('a very long prompt'), false);
+  assert.ok(seen.args.includes('--strict-mcp-config'));
+});
+
+test('a session tracked while a tick is waiting for the model is not lost', async (t) => {
+  const s = setup(t);
+  const first = s.transcript('55555555-1', session('the first tab'));
+  const second = s.transcript('66666666-1', session('the second tab'), 1000);
+  s.capture.track({ file: first, project: PROJECT });
+  s.state.reply = () => {
+    s.capture.track({ file: second, project: PROJECT });
+    return answer();
+  };
+
+  await s.capture.tick();
+
+  assert.deepEqual(Object.keys(s.ledger().files).sort(), [first, second].sort());
+});
+
+test('a skipped transcript does not use up the model-call budget of a tick', async (t) => {
+  const s = setup(t);
+  for (let i = 0; i < 4; i++) s.capture.track({ file: s.transcript(`7777777${i}-1`, 'no complete line yet'), project: PROJECT });
+  const real = s.transcript('88888888-1', session('the real one'));
+  s.capture.track({ file: real, project: PROJECT });
+
+  assert.deepEqual(await s.capture.tick(), { processed: 1, saved: 0 });
+  assert.equal(s.calls.length, 1);
+});
+
+test('only a transcript under the transcripts folder is ever tracked or read', async (t) => {
+  const s = setup(t);
+  const outside = path.join(os.tmpdir(), 'luna-capture-outside.jsonl');
+  fs.writeFileSync(outside, session('somewhere else'));
+  t.after(() => fs.promises.rm(outside, { force: true }));
+  s.capture.track({ file: outside, project: PROJECT });
+  s.capture.track({ file: path.join(s.configDir, 'notes.txt'), project: PROJECT });
+  assert.deepEqual(s.ledger().files, {});
+
+  // A ledger edited by hand cannot point capture at another file either.
+  fs.writeFileSync(path.join(s.configDir, LEDGER_FILE), JSON.stringify({ files: { [outside]: { project: PROJECT, done: 0, fails: 0, at: 0 } } }));
+  await s.capture.tick();
+
+  assert.equal(s.calls.length, 0);
+  assert.deepEqual(s.ledger().files, {});
+});

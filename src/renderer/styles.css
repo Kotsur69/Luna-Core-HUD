@@ -6010,6 +6010,31 @@ section.orchestra__planrun {
 .gm-sum__state.is-stalled, .gm-sum__state.is-failed { color: var(--bad); }
 .gm-sum__state.is-pending { color: var(--warn); }
 
+/* Memory inbox (modules/memoryinbox.js): captured memories waiting for approval. */
+.mem-inbox__intro { margin-bottom: var(--space-5); }
+.mem-inbox__foot { margin-top: var(--space-7); }
+.mem-inbox__empty { margin: var(--space-7) 0; font-size: var(--fs-sm); color: var(--text-dim); }
+.mem-inbox__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-5); }
+.mem-inbox__item { padding: var(--space-5); border: var(--border-w) solid var(--edge); border-radius: var(--radius-md, 6px); display: flex; flex-direction: column; gap: var(--space-3); }
+.mem-inbox__item:focus-within { border-color: var(--edge-glow); }
+.mem-inbox__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); font-size: var(--fs-xs); color: var(--text-dim); }
+.mem-inbox__type { padding: 0 var(--space-2); border: var(--border-w) solid var(--edge); border-radius: 999px; font-family: var(--font-mono); color: var(--neon-cyan); }
+.mem-inbox__date { margin-left: auto; font-family: var(--font-mono); }
+.mem-inbox__title { margin: 0; font-size: var(--fs-md, 14px); font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.mem-inbox__body { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mem-inbox__more { align-self: flex-start; font-size: var(--fs-xs); }
+.mem-inbox__note { margin: 0; font-size: var(--fs-xs); color: var(--warn); overflow-wrap: anywhere; }
+.mem-inbox__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-2); }
+.mem-inbox__btn { width: auto; min-height: 30px; padding: 0 var(--space-5); font-size: var(--fs-sm); }
+.mem-inbox__btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.mem-inbox__btn:disabled { opacity: 0.5; cursor: default; }
+.mem-inbox__btn--approve { color: var(--good); border-color: var(--good); }
+.mem-inbox__btn--reject { margin-left: auto; }
+.mem-inbox__form { display: flex; flex-direction: column; gap: var(--space-3); }
+.mem-inbox__input { width: 100%; box-sizing: border-box; padding: var(--space-3); border: var(--border-w) solid var(--edge); border-radius: var(--radius-sm, 4px); background: transparent; color: var(--text); font: inherit; font-size: var(--fs-sm); }
+.mem-inbox__input:focus { outline: none; border-color: var(--edge-glow); }
+.mem-inbox__text { resize: vertical; line-height: 1.5; }
+
 /* The brief's buttons inside the notification hub drawer (hub.css, hubpanel.js). */
 .mission-brief--hub .mc-btn {
   padding: var(--space-2) var(--space-5);

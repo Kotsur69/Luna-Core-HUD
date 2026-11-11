@@ -73,7 +73,9 @@ function buildIndex(db, records) {
   for (const [key, record] of records) {
     byKey.set(key, record);
     insert.run(key, record.title, tagsOf(record), record.body);
-    for (const old of record.supersedes) superseded.add(`${record.project}/${old}`);
+    // An unconfirmed memory only proposes to replace another one (phase 4):
+    // what it names stays findable until Mati approves it.
+    if (record.confidence === 'confirmed') for (const old of record.supersedes) superseded.add(`${record.project}/${old}`);
   }
   const { title, tags, body } = BM25_WEIGHTS;
   const find = db.prepare(
