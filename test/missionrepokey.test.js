@@ -92,6 +92,24 @@ test('resolve caches per cwd', () => {
   assert.equal(keys.resolve(repo).key, 'local:cached');
 });
 
+test('cacheUnresolved: false sees a repository and an origin remote added later', () => {
+  const root = tmp();
+  const dir = path.join(root, 'Late');
+  fs.mkdirSync(dir);
+  const keys = createRepoKeys({ cacheUnresolved: false });
+  assert.equal(keys.resolve(dir).key, 'other');
+
+  makeRepo(root, 'Late', null);
+  assert.equal(keys.resolve(dir).key, 'local:late');
+
+  makeRepo(root, 'Late', 'https://github.com/me/late.git');
+  assert.equal(keys.resolve(dir).key, 'git:github.com/me/late');
+
+  // A resolved project is still cached.
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(keys.resolve(dir).key, 'git:github.com/me/late');
+});
+
 test('UNC and relative cwds are "other" without touching the network', () => {
   const keys = createRepoKeys();
   assert.deepEqual(keys.resolve(String.raw`\\evil-host\share\repo`), { key: 'other', name: 'other' });

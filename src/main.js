@@ -1021,7 +1021,9 @@ function mcpHealthCached(rescan) {
 // memory_search / memory_get for one tab (src/memorytools.js). Every tab can
 // search every project's memories; the tab's own project only ranks higher
 // (and can be searched alone) when memory is switched on for it.
-const memoryRepoKeys = createRepoKeys();
+// Unresolved folders are looked at again on every call: a tab opened before
+// `git remote add origin` gets its project memory without a restart.
+const memoryRepoKeys = createRepoKeys({ cacheUnresolved: false });
 let memoryReader = null;
 function memoryFor(session) {
   try {

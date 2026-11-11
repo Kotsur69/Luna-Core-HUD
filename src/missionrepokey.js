@@ -150,16 +150,20 @@ function resolveCwd(rawCwd, aliases) {
 
 /**
  * A cwd -> project resolver with a per-cwd cache.
- * @param {{aliases?:()=>Map<string,{key:string,name:string}>}} [opts] pinned
- *   folder aliases (missionprojects.pinnedAliases), read on a cache miss
+ * @param {{aliases?:()=>Map<string,{key:string,name:string}>, cacheUnresolved?:boolean}} [opts]
+ *   aliases = pinned folder aliases (missionprojects.pinnedAliases), read on a
+ *   cache miss; cacheUnresolved = false keeps only `git:` keys, so a folder
+ *   that gets a repository or an origin remote later is seen without a restart
  */
-function createRepoKeys({ aliases = () => null } = {}) {
+function createRepoKeys({ aliases = () => null, cacheUnresolved = true } = {}) {
   const cache = new Map();
   return {
     resolve(cwd) {
       if (typeof cwd !== 'string') return OTHER;
-      if (!cache.has(cwd)) cache.set(cwd, resolveCwd(cwd, aliases()));
-      return cache.get(cwd);
+      if (cache.has(cwd)) return cache.get(cwd);
+      const resolved = resolveCwd(cwd, aliases());
+      if (cacheUnresolved || resolved.key.startsWith('git:')) cache.set(cwd, resolved);
+      return resolved;
     },
   };
 }
