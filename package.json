@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test",
+    "memory": "node scripts/luna.js memory",
     "dist": "electron-builder --win",
     "pack": "electron-builder --win --dir"
   },

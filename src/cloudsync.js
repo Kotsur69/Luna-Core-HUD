@@ -18,6 +18,11 @@
 // State: cloud-sync.local.json = {v:1, user, scopes: {<scope>: {cursor, pushed, mirror}}}.
 // It belongs to one user: a different user id starts from scratch, and
 // reset() (logout) deletes it and cancels a run that is still in flight.
+//
+// The `memory` scope (docs/untouched_docs/rag-stylememory.md, src/memorysync.js)
+// runs as a second transport with its own state file: the state is rewritten
+// whole on every change and memories would make the shared file grow, and a
+// failing memory sync must not hold back life, to-dos and settings.
 // ============================================================================
 
 'use strict';
@@ -28,6 +33,7 @@ const { createSnapshots, SNAPSHOTS_OFF } = require('./cloudsnapshots');
 
 const VERSION = 1;
 const SCOPES = ['life', 'todos', 'config'];
+const MEMORY_SCOPE = 'memory';
 const PAGE = 1000;
 /** push_units refuses more than 500 units per call. */
 const BATCH = 500;
@@ -35,32 +41,33 @@ const BATCH = 500;
 const MAX_PAGES = 100;
 const COLUMNS = 'key,value,u,deleted_at,rev,machine';
 
-// configsync.js publishes the same {units, gone} body as lifesync.js.
-const PEER_OF = { life: rows.lifePeer, todos: rows.todoPeer, config: rows.lifePeer };
-const UNITS_OF = { life: rows.lifeUnits, todos: rows.todoUnits, config: rows.lifeUnits };
+// configsync.js publishes the same {units, gone} body as lifesync.js, for
+// `config` and for `memory`.
+const PEER_OF = { life: rows.lifePeer, todos: rows.todoPeer, config: rows.lifePeer, memory: rows.lifePeer };
+const UNITS_OF = { life: rows.lifeUnits, todos: rows.todoUnits, config: rows.lifeUnits, memory: rows.lifeUnits };
 
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const emptyScope = () => ({ cursor: 0, pushed: {}, mirror: {} });
-const emptyState = () => Object.fromEntries(SCOPES.map((s) => [s, emptyScope()]));
+const emptyState = (scopes) => Object.fromEntries(scopes.map((s) => [s, emptyScope()]));
 
 function validScope(x) {
   return isPlainObject(x) && Number.isSafeInteger(x.cursor) && x.cursor >= 0 && isPlainObject(x.pushed) && isPlainObject(x.mirror);
 }
 
 /** @returns {{user: string|null, scopes: object}} */
-function readState(file) {
+function readState(file, scopes) {
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (data && data.v === VERSION && isPlainObject(data.scopes)) {
       return {
         user: typeof data.user === 'string' ? data.user : null,
-        scopes: Object.fromEntries(SCOPES.map((s) => [s, validScope(data.scopes[s]) ? data.scopes[s] : emptyScope()])),
+        scopes: Object.fromEntries(scopes.map((s) => [s, validScope(data.scopes[s]) ? data.scopes[s] : emptyScope()])),
       };
     }
   } catch (err) {
     if (err && err.code !== 'ENOENT') console.error('[cloudsync] state unreadable, starting over:', err.code || err.name);
   }
-  return { user: null, scopes: emptyState() };
+  return { user: null, scopes: emptyState(scopes) };
 }
 
 /** Thrown inside a run that a reset() overtook: it must not write anything. */
@@ -68,13 +75,14 @@ class Cancelled extends Error {}
 
 /**
  * @param {{client: object, machine: string, stateFile: string, userId?: () => string|null,
- *   onPulled?: (scope: string) => void, now?: () => number}} deps
+ *   onPulled?: (scope: string) => void, now?: () => number, scopes?: string[]}} deps
  *   client = a logged-in supabase-js client (or a fake with the same calls).
+ *   scopes = the scopes this transport moves and keeps in its state file.
  *   userId() = the logged-in user's id; the state is kept only for that user.
  *   onPulled(scope) fires after a pull brought rows from another machine.
  */
-function createCloudSync({ client, machine, stateFile, userId = () => null, onPulled = () => {}, now = Date.now }) {
-  const saved = readState(stateFile);
+function createCloudSync({ client, machine, stateFile, userId = () => null, onPulled = () => {}, now = Date.now, scopes = SCOPES }) {
+  const saved = readState(stateFile, scopes);
   let owner = saved.user;
   let state = saved.scopes;
   let gen = 0; // bumped by reset(): a run from an older generation stops writing
@@ -139,14 +147,14 @@ function createCloudSync({ client, machine, stateFile, userId = () => null, onPu
       if (uid !== owner) {
         // Another account (or the first login): nothing of the old state applies.
         owner = uid;
-        state = emptyState();
+        state = emptyState(scopes);
         units = {};
         ready = false;
       }
       const news = [];
-      for (const scope of SCOPES) if (await pull(scope, alive)) news.push(scope);
+      for (const scope of scopes) if (await pull(scope, alive)) news.push(scope);
       ready = true;
-      for (const scope of SCOPES) await push(scope, alive);
+      for (const scope of scopes) await push(scope, alive);
       lastSync = now();
       error = null;
       news.forEach((scope) => onPulled(scope));
@@ -178,14 +186,14 @@ function createCloudSync({ client, machine, stateFile, userId = () => null, onPu
       units = { ...units, [scope]: UNITS_OF[scope](doc) };
     },
     status() {
-      const pending = SCOPES.reduce((n, s) => n + rows.unpushed(units[s] || [], state[s].pushed).length, 0);
+      const pending = scopes.reduce((n, s) => n + rows.unpushed(units[s] || [], state[s].pushed).length, 0);
       return { ready, lastSync, pending, error };
     },
     /** Logout: the state belongs to the user that is gone. */
     reset() {
       gen++;
       owner = null;
-      state = emptyState();
+      state = emptyState(scopes);
       units = {};
       ready = false;
       lastSync = null;
@@ -204,6 +212,7 @@ const CLOUD_OFF = {
   hooks: () => ({ extraPeers: () => null, onPublish: () => {} }),
   onPulled: () => {},
   status: () => ({ configured: false, loggedIn: false }),
+  memoryStatus: () => ({ ready: false, lastSync: null, pending: 0, error: null }),
   userId: () => null,
   login: async () => ({ ok: false, reason: 'not-configured' }),
   logout: async () => {},
@@ -245,6 +254,15 @@ function startCloud({ machine, legacyMachine }) {
     userId: () => auth.userId(),
     onPulled: notify,
   });
+  const memory = createCloudSync({
+    client: auth.client,
+    machine,
+    stateFile: paths.local('cloud-sync-memory.local.json'),
+    userId: () => auth.userId(),
+    onPulled: notify,
+    scopes: [MEMORY_SCOPE],
+  });
+  const coreOf = (scope) => (scope === MEMORY_SCOPE ? memory : core);
   const snapshots = createSnapshots({
     client: auth.client,
     machine,
@@ -261,10 +279,14 @@ function startCloud({ machine, legacyMachine }) {
   async function syncNow() {
     if (!auth.status().loggedIn) return { ok: false, reason: 'logged-out' };
     const wasReady = core.status().ready;
+    const memoryWasReady = memory.status().ready;
     const res = await core.syncNow();
     // The session's first pull: let both local syncs run now, so they merge
     // the cloud and publish this PC's units (the first upload on a new PC).
     if (!wasReady && core.status().ready) SCOPES.forEach(notify);
+    // After the main scopes, and whatever it returns: memory never fails them.
+    await memory.syncNow();
+    if (!memoryWasReady && memory.status().ready) notify(MEMORY_SCOPE);
     return res;
   }
   const later = (timer, ms) => {
@@ -298,6 +320,7 @@ function startCloud({ machine, legacyMachine }) {
       } else {
         unsubscribe();
         core.reset();
+        memory.reset();
       }
     }, 0);
   });
@@ -313,15 +336,17 @@ function startCloud({ machine, legacyMachine }) {
   return {
     /** extraPeers / onPublish for createLifeSync ('life') or createTodoSync ('todos'). */
     hooks: (scope) => ({
-      extraPeers: () => (auth.status().loggedIn ? core.peers(scope) : null),
+      extraPeers: () => (auth.status().loggedIn ? coreOf(scope).peers(scope) : null),
       onPublish: (doc) => {
-        core.published(scope, doc);
+        coreOf(scope).published(scope, doc);
         pushTimer = later(pushTimer, PUSH_DEBOUNCE_MS);
       },
     }),
     /** cb(scope) when the cloud brought another machine's changes. */
     onPulled: (cb) => pulledListeners.push(cb),
     status: () => ({ ...auth.status(), ...core.status() }),
+    /** The `memory` scope's own transport: {ready, lastSync, pending, error}. */
+    memoryStatus: () => memory.status(),
     /** The logged-in user's id (Setup Center shows it for OWNER_USER_ID), or null. */
     userId: () => auth.userId(),
     login: () => auth.login(),
@@ -336,4 +361,4 @@ function startCloud({ machine, legacyMachine }) {
   };
 }
 
-module.exports = { createCloudSync, startCloud, SCOPES, PAGE, BATCH };
+module.exports = { createCloudSync, startCloud, SCOPES, MEMORY_SCOPE, PAGE, BATCH };

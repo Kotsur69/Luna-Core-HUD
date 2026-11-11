@@ -28,9 +28,10 @@ function deleteOf(table) {
   return m[1];
 }
 
-test('the migration sorts after every existing one and follows the naming style', () => {
+test('the migration sorts after the ones it builds on and follows the naming style', () => {
   const all = fs.readdirSync(DIR).filter((f) => f.endsWith('.sql')).sort();
-  assert.equal(all[all.length - 1], FILE);
+  // Later migrations may follow it; the host tables it cleans must come first.
+  assert.ok(all.indexOf(FILE) > all.indexOf('20261021130000_host_events.sql'));
   assert.match(FILE, /^\d{14}_[a-z_]+\.sql$/);
 });
 

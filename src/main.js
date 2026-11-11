@@ -243,6 +243,11 @@ let todoSync = null;
 const { startConfigSync } = require('./configsync');
 const { lifeParts } = require('./lifedailysync');
 let configSync = null;
+// Luna Core Memory (docs/untouched_docs/rag-stylememory.md): the markdown
+// mirror synced through the cloud's `memory` scope. The per-project switch
+// travels with the config sync (configsync.js startConfigSync).
+const { startMemory } = require('./memorysync');
+let memorySync = null;
 // The notification hub (src/hubipc.js): set in registerIpc(), its done
 // provider joins the config sync.
 let hubApi = null;
@@ -3858,6 +3863,7 @@ app.whenReady().then(() => {
     },
     extraProviders: hubApi ? [hubApi.doneProvider, hubApi.seenProvider, hubApi.prefsProvider] : [],
   });
+  memorySync = startMemory({ cloud, machine: machineName(os.hostname()), configDir: userDir() });
   // A --luna-probe instance shares userData with the live LunaCore - often the
   // very one running the God Mode self-check that started it. Resuming the
   // stored run there would drive the live run from a second process, and the

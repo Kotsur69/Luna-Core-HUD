@@ -14,7 +14,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createCloudSync, PAGE, BATCH, SCOPES } = require('../src/cloudsync.js');
+const { createCloudSync, PAGE, BATCH, SCOPES, MEMORY_SCOPE } = require('../src/cloudsync.js');
 
 /** In-memory sync_units with the same newest-wins rule as the SQL function. */
 function fakeServer() {
@@ -223,4 +223,37 @@ test('a reset during a running pull drops that pull (logout race)', async () => 
   await new Promise((r) => setImmediate(r));
   assert.equal(cloud.peers('life'), null);
   assert.equal(fs.existsSync(stateFile), false);
+});
+
+test('the memory scope runs as its own transport with its own state file', async () => {
+  const server = fakeServer();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lc-cloud-'));
+  const stateFile = path.join(dir, 'cloud-sync-memory.local.json');
+  const pulled = [];
+  const record = { id: 'note', project: 'github.com/acme/demo', body: 'A fact.' };
+  server.put('memory', 'github.com/acme/demo/note', record, 10);
+  server.put('life', 'e:a', { id: 'a' }, 20);
+  const memory = createCloudSync({
+    client: server.client,
+    machine: 'DESK',
+    stateFile,
+    onPulled: (scope) => pulled.push(scope),
+    now: () => 1000,
+    scopes: [MEMORY_SCOPE],
+  });
+
+  await memory.syncNow();
+  memory.published(MEMORY_SCOPE, { units: [{ k: 'github.com/acme/demo/mine', v: { id: 'mine' }, u: 500 }], gone: {} });
+  await memory.syncNow();
+
+  // Only its own scope is pulled, kept in state and pushed.
+  assert.deepEqual(pulled, ['memory']);
+  assert.deepEqual(memory.peers(MEMORY_SCOPE)[0].units, [{ k: 'github.com/acme/demo/note', v: record, u: 10 }]);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(stateFile, 'utf8')).scopes), ['memory']);
+  assert.deepEqual(
+    server.calls.pushes.map((p) => p.p_scope),
+    ['memory'],
+  );
+  assert.equal(server.rows.get('memory|github.com/acme/demo/mine').machine, 'DESK');
+  assert.equal(SCOPES.includes(MEMORY_SCOPE), false);
 });
