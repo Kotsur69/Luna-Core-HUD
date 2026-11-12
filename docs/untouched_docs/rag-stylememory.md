@@ -276,10 +276,7 @@ Chosen while building:
 Found by the security review of 2026-11-11 and left open for Mati:
 
 - **Fixed 2026-11-11:** `memory_search` returns an unreviewed memory without its snippet (`unreviewed: true`), and `memory_get` adds a warning not to act on its text unchecked.
-- **The secret scanner (`src/hostscrub.js`) misses some token shapes:** Stripe
-  `sk_live_`, JWTs (Supabase keys), `Bearer` tokens, Slack `xox`, Google `AIza`, npm
-  tokens, and passwords inside a connection URL. It guards the memory sync since phase
-  1, so this is older than phase 4, but capture makes it matter more.
+- **Fixed 2026-11-11:** the secret scanner (`src/hostscrub.js`) now masks, in free text, Stripe `sk_`/`rk_` live and test keys and `pk_live_`, JWTs (Supabase keys), `Bearer` tokens (the word stays), Slack `xoxb-`/`xoxp-`/`xoxa-`/`xoxr-`/`xoxs-`, Google `AIza`, npm `npm_`, GitHub `github_pat_` and `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`, and the password in `scheme://user:password@host`.
 - **Fixed 2026-11-11:** capture files every memory under its project and marks a `global` suggestion in `source`; only the inbox's "Make global" moves it (decision 60).
 - **Fixed 2026-11-11:** capture counts the web, subagent and foreign MCP calls of the session into `source`, and the inbox shows a note to check the text (decision 61).
 

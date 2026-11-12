@@ -78,6 +78,107 @@ test('scrub is idempotent, even on a mask cut by a clip', () => {
   assert.equal(scrub('API_KEY=[reda'), 'API_KEY=[reda');
 });
 
+// Fake secrets are assembled at runtime from parts: a full secret shape must
+// never appear as a literal in the source (GitHub push protection).
+const fake = (prefix, filler, n) => prefix + filler.repeat(n);
+const FAKE = {
+  stripe: fake(['sk', 'live', ''].join('_'), 'x', 24),
+  stripeTest: fake(['rk', 'test', ''].join('_'), '7', 20),
+  stripePub: fake(['pk', 'live', ''].join('_'), 'Q', 18),
+  jwt: [fake('ey' + 'J', 'h', 12), 'p'.repeat(20), 's'.repeat(16)].join('.'),
+  slack: fake('xo' + 'xb-', '1', 12),
+  slackUser: fake('xo' + 'xp-', 'a', 14),
+  google: fake('AI' + 'za', 'k', 35),
+  npm: fake('np' + 'm_', 'a', 36),
+  githubPat: fake('github' + '_pat_', 'A', 40),
+  ghs: fake('gh' + 's_', 'B', 36),
+};
+// A Bearer token has no prefix of its own: only 'Bearer ' in front marks it.
+const BEARER_TOKEN = fake('a1B2', 'c3D4', 6);
+
+test('scrub masks Stripe secret, restricted and publishable live keys in free text', () => {
+  // Arrange
+  const text = `charge with ${FAKE.stripe}, refund with ${FAKE.stripeTest} and show ${FAKE.stripePub}`;
+  // Act
+  const out = scrub(text);
+  // Assert
+  assert.equal(out, `charge with sk_live_${MASK}, refund with rk_test_${MASK} and show pk_live_${MASK}`);
+});
+
+test('scrub masks a JWT (Supabase key) in free text', () => {
+  const out = scrub(`anon key: ${FAKE.jwt} done`);
+  assert.equal(out, `anon key: eyJ${MASK} done`);
+});
+
+test('scrub masks a Bearer token but keeps the word Bearer', () => {
+  const out = scrub(`curl -H "Authorization: Bearer ${BEARER_TOKEN}" https://api.example.com`);
+  assert.equal(out, `curl -H "Authorization: Bearer ${MASK}" https://api.example.com`);
+});
+
+test('scrub masks Slack bot and user tokens', () => {
+  const out = scrub(`bot ${FAKE.slack} user ${FAKE.slackUser}`);
+  assert.equal(out, `bot xoxb-${MASK} user xoxp-${MASK}`);
+});
+
+test('scrub masks a Google API key', () => {
+  const out = scrub(`maps key ${FAKE.google} here`);
+  assert.equal(out, `maps key AIza${MASK} here`);
+});
+
+test('scrub masks an npm token', () => {
+  const out = scrub(`//registry.npmjs.org/:_authToken ${FAKE.npm}`);
+  assert.equal(out, `//registry.npmjs.org/:_authToken npm_${MASK}`);
+});
+
+test('scrub masks GitHub fine-grained and ghs_ tokens in free text', () => {
+  const out = scrub(`pat ${FAKE.githubPat} app ${FAKE.ghs}`);
+  assert.equal(out, `pat github_pat_${MASK} app ghs_${MASK}`);
+});
+
+test('scrub masks only the password in scheme://user:password@host', () => {
+  // Arrange
+  const pg = 'postgres://admin:hunter2pass@db.example.com:5432/app';
+  const redis = 'redis://:s3cretpw@cache.local:6379';
+  // Act
+  const out = scrub(`${pg} and ${redis}`);
+  // Assert
+  assert.equal(out, `postgres://admin:${MASK}@db.example.com:5432/app and redis://:${MASK}@cache.local:6379`);
+});
+
+test('scrub is idempotent over a string holding every new shape at once', () => {
+  // Arrange
+  const all = [
+    ...Object.values(FAKE),
+    `Bearer ${BEARER_TOKEN}`,
+    `Bearer ${FAKE.jwt}`,
+    'mysql://root:pw123456@localhost/db',
+    `SUPABASE_KEY=${FAKE.jwt}`,
+  ].join('\n');
+  // Act
+  const once = scrub(all);
+  // Assert
+  assert.equal(scrub(once), once);
+  for (const secret of Object.values(FAKE)) assert.ok(!once.includes(secret), secret.slice(0, 6));
+  assert.ok(!once.includes('pw123456'));
+});
+
+test('scrub leaves git SHAs, UUIDs, plain URLs, paths and the bare word Bearer untouched', () => {
+  const plain = [
+    'commit 3f2a9c1e8b7d6f5a4c3b2a1908f7e6d5c4b3a291',
+    `session ${SID}`,
+    'https://github.com/owner/repo',
+    'ssh://git@github.com/owner/repo.git',
+    'http://localhost:8080/path',
+    'C:\\Users\\someone\\source\\repos\\project\\src\\main.js',
+    '/usr/local/share/applications/very-long-name.desktop',
+    'Send the Bearer header with each request.',
+    'Bearer /usr/local/share/applications/token-file',
+    'use sk- alone, or sk_live_ alone, or xoxb- alone',
+    'an eyJ.short.jwt and AIzaShort and npm_short',
+  ].join('\n');
+  assert.equal(scrub(plain), plain);
+});
+
 test('scrubDeep masks strings in nested objects and arrays without touching the input', () => {
   const input = { a: 'TOKEN=x', b: [{ c: 'ghp_abcdefghijklmnopqrstuvwxyz0123' }], n: 3 };
   const out = scrubDeep(input);
