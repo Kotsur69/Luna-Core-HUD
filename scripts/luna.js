@@ -36,6 +36,7 @@ const { extractPiece } = require('../src/memorycapture');
 const { sourceNotes } = require('../src/memoryextract');
 const { runJob } = require('../src/missionrunner');
 const { createIndex, DEFAULT_LIMIT } = require('../src/memoryindex');
+const { createEmbedder, createVectorStore, vectorsPath } = require('../src/memoryembed');
 const { importAutoMemory, autoMemoryDir } = require('../src/memoryimport');
 const { setEnabled, readEnabled } = require('../src/memoryprojects');
 const { localStatus, memoryPaths } = require('../src/memorysync');
@@ -47,13 +48,14 @@ const { machineName } = require('../src/missionledgersync');
 
 const USAGE = `Usage: node scripts/luna.js memory <command> [options]
 
-  search <question>     search memories        [--limit n] [--only] [--json]
+  search <question>     search memories        [--limit n] [--only] [--json] [--keyword]
+                        (by meaning when LM Studio serves an embedding model; --keyword = keywords only)
   list                  list memories          [--all]
   status                counts, broken files, sync health per PC
   enable | disable      switch memory on/off for the project
   import-auto           import Claude Code auto-memory   [--from <folder>] [--force]
   card                  the project card a new tab gets, and its size
-  eval <golden.json>    recall@k of [{"q": "...", "expect": "<id>"}]   [--limit n]
+  eval <golden.json>    recall@k of [{"q": "...", "expect": "<id>"}]   [--limit n] [--keyword]
   inbox                 memories that wait for approval
   approve | reject <id> approve or delete one of them
   capture <transcript>  run the extractor over a Claude Code transcript   [--save]
@@ -103,10 +105,36 @@ function needProject(project) {
   return project;
 }
 
-function loadIndex(dir) {
+/**
+ * The search of this PC: by meaning and keywords when LM Studio serves an
+ * embedding model (src/memoryembed.js), by keywords otherwise or with --keyword.
+ * @returns {Promise<{search: (query: string, opts: object) => Promise<object[]>, mode: string}>}
+ */
+async function openSearch({ dir, configDir, values }) {
   const { records, invalid } = scan(dir);
   if (invalid.length) process.stderr.write(`warning: ${invalid.length} file(s) are not valid memories (see "memory status")\n`);
-  return { records, index: createIndex(records) };
+  if (values.keyword) {
+    const index = createIndex(records);
+    return { search: async (query, opts) => index.search(query, opts), mode: 'keyword' };
+  }
+  // The embedder's own state lines are replaced by the one `mode` line below.
+  let reason = '';
+  const embedder = createEmbedder({
+    log: (line) => {
+      reason = line.replace(/^\[memory\] /, '');
+    },
+  });
+  const store = createVectorStore({ file: vectorsPath(configDir), embedder });
+  const vectors = store.prepare(records);
+  await store.ready();
+  const index = createIndex(records, { vectors });
+  // The cache can hold vectors while no model answers: then the search is keywords only.
+  const model = await embedder.model();
+  const hybrid = Boolean(model) && model === store.status().model && vectors.size > 0;
+  return {
+    search: async (query, opts) => index.search(query, { ...opts, vector: await store.queryVector(query) }),
+    mode: hybrid ? `meaning + keyword (${model}, ${vectors.size} of ${records.length} memories embedded)` : `keyword (${/ off/.test(reason) ? reason : 'no memory is embedded'})`,
+  };
 }
 
 const verifiedNote = (hit) => (hit.last_verified ? `verified ${hit.last_verified}` : hit.confidence === 'confirmed' ? 'never re-verified' : 'NOT VERIFIED');
@@ -122,13 +150,15 @@ function printHits(hits) {
   });
 }
 
-function cmdSearch({ dir, project, values, positionals }) {
+async function cmdSearch({ configDir, dir, project, values, positionals }) {
   const question = positionals.join(' ').trim();
   if (!question) throw new UsageError('search needs a question');
   const limit = values.limit ? Number.parseInt(values.limit, 10) : DEFAULT_LIMIT;
-  const hits = loadIndex(dir).index.search(question, { project, limit, only: values.only ? needProject(project) : null });
-  if (values.json) out(JSON.stringify(hits, null, 2));
-  else printHits(hits);
+  const { search, mode } = await openSearch({ dir, configDir, values });
+  const hits = await search(question, { project, limit, only: values.only ? needProject(project) : null });
+  if (values.json) return out(JSON.stringify(hits, null, 2));
+  printHits(hits);
+  out(`-- search: ${mode}`);
 }
 
 function cmdList({ dir, project, values }) {
@@ -194,7 +224,7 @@ function cmdCard({ configDir, project }) {
   out(`-- ${card.shown} of ${card.total} confirmed memories, ${card.chars} characters, about ${card.tokens} tokens (budget ${MAX_CARD_CHARS} characters)`);
 }
 
-function cmdEval({ dir, project, values, positionals }) {
+async function cmdEval({ configDir, dir, project, values, positionals }) {
   const file = positionals[0];
   if (!file) throw new UsageError('eval needs a golden file');
   const golden = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
@@ -202,11 +232,12 @@ function cmdEval({ dir, project, values, positionals }) {
     throw new UsageError('the golden file must be [{"q": "...", "expect": "<memory id>"}]');
   }
   const limit = values.limit ? Number.parseInt(values.limit, 10) : DEFAULT_LIMIT;
-  const { index } = loadIndex(dir);
+  const { search, mode } = await openSearch({ dir, configDir, values });
+  out(`search: ${mode}`);
   let found = 0;
   let first = 0;
   for (const { q, expect } of golden) {
-    const rank = index.search(q, { project, limit }).findIndex((h) => h.id === expect) + 1;
+    const rank = (await search(q, { project, limit })).findIndex((h) => h.id === expect) + 1;
     if (rank) found++;
     if (rank === 1) first++;
     else out(`${rank ? `rank ${rank}` : 'MISS  '}  ${expect}  <-  ${q}`);
@@ -384,6 +415,7 @@ function main(argv) {
       limit: { type: 'string' },
       days: { type: 'string' },
       only: { type: 'boolean' },
+      keyword: { type: 'boolean' },
       all: { type: 'boolean' },
       json: { type: 'boolean' },
       force: { type: 'boolean' },
@@ -398,7 +430,7 @@ function main(argv) {
   }
   const configDir = resolveConfigDir(values.dir);
   const done = COMMANDS[command]({ configDir, dir: memoryPaths(configDir).dir, project: resolveProject(values.project), values, positionals: rest });
-  // `capture` calls a model and is the one asynchronous command.
+  // `capture`, `search` and `eval` call a model and are asynchronous.
   return done && typeof done.then === 'function' ? done.then(() => process.exitCode || 0) : process.exitCode || 0;
 }
 

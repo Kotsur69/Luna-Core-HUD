@@ -175,6 +175,80 @@ test('thisProjectOnly hits are not crowded out by many better matches elsewhere'
   );
 });
 
+// ---- phase 2b: ranking by meaning (src/memoryembed.js) -----------------------
+
+/** Unit vectors on a circle: the angle between two of them is their distance in meaning. */
+const at = (degrees) => Float32Array.from([Math.cos((degrees * Math.PI) / 180), Math.sin((degrees * Math.PI) / 180)]);
+const VECTORS = new Map([
+  [`${PROJECT}/package-timeout-battery-sleep`, at(0)],
+  [`${PROJECT}/worktree-node-modules-junction`, at(90)],
+  [`${PROJECT}/release-asset-names`, at(180)],
+]);
+const meaning = (query, vector, opts) =>
+  createIndex(RECORDS.map((r) => [keyOf(r), r]), { vectors: VECTORS })
+    .search(query, { vector, ...opts })
+    .map((h) => h.id);
+
+test('a question in another language finds a memory by meaning alone', () => {
+  const question = 'Usuniecie drzewa roboczego skasowalo zaleznosci';
+
+  assert.deepEqual(index().search(question), [], 'no keyword of it is in any memory');
+  assert.deepEqual(meaning(question, at(80)), ['worktree-node-modules-junction']);
+});
+
+test('a memory found by meaning shows its opening lines', () => {
+  const [hit] = createIndex(RECORDS.map((r) => [keyOf(r), r]), { vectors: VECTORS }).search('zaleznosci', { vector: at(90) });
+
+  assert.match(hit.snippet, /^git worktree remove follows the junction/);
+});
+
+test('meaning outranks a keyword match in a full question', () => {
+  // "release" and "asset" are in another memory; the question is about the worktree one.
+  const ids = meaning('What breaks the release of an asset when a worktree goes away?', at(85));
+
+  assert.equal(ids[0], 'worktree-node-modules-junction');
+  assert.ok(ids.includes('release-asset-names'));
+});
+
+test('an exact token decides between memories that are equally close in meaning', () => {
+  assert.deepEqual(meaning('Kernel-Power 42', at(45)), ['package-timeout-battery-sleep', 'worktree-node-modules-junction']);
+  assert.deepEqual(meaning('--ignore-scripts', at(45)), ['worktree-node-modules-junction', 'package-timeout-battery-sleep']);
+});
+
+test('nothing is returned for a question that is close to no memory', () => {
+  assert.deepEqual(meaning('jak ugotowac pierogi', at(270)), []);
+});
+
+test('a memory without a vector, or with one of another model, is still found by keywords', () => {
+  const vectors = new Map([[`${PROJECT}/worktree-node-modules-junction`, Float32Array.from([1, 0, 0])]]);
+  const idx = createIndex(RECORDS.map((r) => [keyOf(r), r]), { vectors });
+
+  assert.deepEqual(
+    idx.search('junction', { vector: at(0) }).map((h) => h.id),
+    ['worktree-node-modules-junction'],
+  );
+  assert.equal(idx.search('prisma pool', { vector: at(0) })[0].id, 'prisma-pool');
+});
+
+test('the project, superseded and `only` rules hold for meaning too', () => {
+  const pair = [
+    rec('old-rule', 'Separate run for God Mode cards', 'Cards that change God Mode need their own run.'),
+    rec('new-rule', 'God Mode cards may build God Mode cards', 'No separate run rule.', { supersedes: ['old-rule'] }),
+    rec('elsewhere', 'Something similar in another project', 'Same idea.', { project: OTHER }),
+  ];
+  const vectors = new Map(pair.map((r) => [keyOf(r), at(10)]));
+  const idx = createIndex(pair.map((r) => [keyOf(r), r]), { vectors });
+
+  assert.deepEqual(
+    idx.search('czy wolno', { vector: at(10), project: PROJECT }).map((h) => h.id),
+    ['new-rule', 'elsewhere'],
+  );
+  assert.deepEqual(
+    idx.search('czy wolno', { vector: at(10), only: PROJECT }).map((h) => h.id),
+    ['new-rule'],
+  );
+});
+
 test('a record the index cannot take fails the build instead of leaking it', () => {
   assert.throws(() => createIndex([['k', { ...rec('bad', 'title', 'body'), body: { not: 'text' } }]]));
 });

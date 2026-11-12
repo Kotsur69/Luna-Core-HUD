@@ -147,6 +147,95 @@ Chosen while building:
     its trust label (`observed, not verified`, `confirmed, last verified <date>`).
 37. **The index is kept for five seconds,** then rebuilt from the files on the next call.
 
+### Phase 2b decisions, 2026-11-12 (embeddings)
+
+Measured on the PC with LM Studio (RTX 5070 Ti), 24 memories. The 34-question set of
+decision 31 was not on that PC, so a new one was written: 40 questions, one English and
+one Polish paraphrase per memory. The numbers do not compare to the 30/34 above.
+
+| Search | Recall@5 | Top hit | English | Polish |
+|--------|----------|---------|---------|--------|
+| Keyword only | 29/40 | 20/40 | 20/20 | 9/20 |
+| nomic-embed-text v1.5 (English only) | 30/40 | 24/40 | 20/20 | 10/20 |
+| Qwen3-Embedding-0.6B (Q8, 639 MB) | 38/40 | 34/40 | 20/20 | 18/20 |
+| Qwen3-Embedding-4B (Q4_K_M, 2.5 GB) | 40/40 | 36/40 | 20/20 | 20/20 |
+| Qwen3-Embedding-0.6B + keywords, as built | 39/40 | 34/40 | 20/20 | 19/20 |
+| **Qwen3-Embedding-4B + keywords, as built** | **40/40** | **38/40** | 20/20 | 20/20 |
+
+Chosen while building:
+
+76. **The model is Qwen3-Embedding, 4B where it is installed, 0.6B otherwise**
+    (`PREFERRED_MODELS` in `src/memoryembed.js`). Each PC uses the best one LM Studio
+    lists as an embedding model; `LUNA_EMBED_MODEL` names another one. No setting in
+    the HUD. Get one with `lms get https://huggingface.co/Qwen/Qwen3-Embedding-4B-GGUF@q4_k_m`
+    (or `Qwen3-Embedding-0.6B-GGUF`).
+77. **Harrier 0.6B (Microsoft) is not used.** It ranks above Qwen3 0.6B on the public
+    multilingual leaderboard, but LM Studio lists all three GGUF builds tried as an LLM
+    and does not serve embeddings from them, so it could not be measured there.
+78. **LM Studio only, on this machine only** (`http://127.0.0.1:1234`, `LUNA_EMBED_URL`
+    for another local port). A URL on another host switches embeddings off: memory text
+    does not leave the PC.
+79. **A reply is accepted only when it names the model that was asked for.** LM Studio
+    answers a request for a model it cannot serve with whichever embedding model is
+    loaded; vectors of two models must not mix.
+80. **Vectors live in `memory-vectors.local.json`** in the config folder: one per memory,
+    keyed by memory key and a hash of its title and body, with the model's name. Never
+    synced (decision 9). A changed memory is embedded again, a deleted one is dropped, a
+    different model rebuilds the file. Memories are embedded in the background when the
+    index is built; until a memory has its vector it is found by keywords.
+81. **Ranking:** similarity above 0.3, rescaled to 0..1, plus 0.15 of the keyword score
+    (best keyword match = 1); 0.4 for a query of up to three words, which is a lookup of
+    an exact token. Then the same boosts as before (project, global, confidence, stale).
+    A memory no keyword matched is returned only above similarity 0.35, so a question
+    about nothing in memory returns nothing. Plain rank fusion of the two lists was
+    measured and was worse (top hit 31/40).
+82. **No instruction prefix on the question.** It changed no result on the golden set.
+83. **Without a model nothing changes:** no LM Studio, no Qwen3 embedding model, or a
+    question that is not embedded within 8 seconds, and the search is the keyword search
+    of phase 1. One console line says why, once per change of state.
+84. **`memory_search` became asynchronous** for a reader with embeddings: the tool call
+    and the JSON-RPC handler pass a promise through, every other tool answers as before.
+    Its description now says a question may be asked in Polish.
+85. **CLI:** `memory search` and `memory eval` use the same hybrid search and print which
+    one answered; `--keyword` forces keywords only.
+
+From the code and security review of 2026-11-12, fixed before the commit:
+
+86. **The store holds one model's vectors and every index reads the same live view.** The
+    model is checked on every index build, also when every vector is cached, so a model
+    installed later (or `LUNA_EMBED_MODEL`) rebuilds the file in a one-shot CLI run too.
+87. **A redirect from the embedding server is an error,** a reply must answer each input
+    exactly once, and a vector read from the cache file is checked and re-normalized.
+88. **After a failed call, searches answer from keywords for 15 seconds** without asking
+    again. At most four questions are embedded at once, the last 64 question vectors are
+    kept, and one POST to the tools server carries at most 50 messages.
+89. **One memory the model cannot embed does not hold back the rest:** a failed batch is
+    retried one memory at a time.
+
+Added on 2026-11-12, asked for by Mati:
+
+90. **The memory window says which search is in use.** A line under the inbox reads
+    "Search: by meaning and keywords (model, n of m memories)" or "keywords only" with
+    the reason: LM Studio does not answer, no Qwen3-Embedding model, the memories are
+    still being processed, the model did not answer. It travels in the `memory:inbox`
+    reply (`search`, cleaned by `cleanSearchMode` in `src/memoryipc.js`); no new channel.
+    The window repaints when the mode changes.
+91. **LunaCore wakes a silent LM Studio** (`lms server start`, the `wakeLmStudio` of
+    `src/lmstudiocli.js`) in the background, at most once in ten minutes. The search
+    that noticed answers from keywords and does not wait. Not when LM Studio answers
+    but has no embedding model, and not from the CLI.
+
+Known limits, accepted for now:
+
+- **The status line and the wake are covered by tests only;** they were not looked at
+  in a running LunaCore on the day they were built.
+- **While memories are still being embedded,** one without a vector ranks below embedded
+  ones even on an exact keyword hit. On a GPU the first fill takes seconds.
+- **The reply of the local server is read without a size limit.**
+
+Not done: the golden set is not in the repository (it names private memories) and not
+synced; it sits in `config/memory-golden.local.json` on the PC that wrote it.
+
 ### Phase 3 decisions, 2026-11-11 (the project card)
 
 Chosen while building:

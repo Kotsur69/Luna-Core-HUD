@@ -4,7 +4,9 @@
 // docs/untouched_docs/rag-stylememory.md, phase 4. The HUD's inbox panel
 // (renderer memoryinbox.js) reviews what capture proposed:
 //
-//   memory:inbox   ()             -> {ok, items, total, capture}
+//   memory:inbox   ()             -> {ok, items, total, capture, search}
+//                                    search = how memory_search answers here: by meaning
+//                                    (which model) or by keywords only (why)
 //   memory:approve (key)          -> {ok, key, removed} | {ok:false, reason}
 //   memory:reject  (key)          -> same
 //   memory:update  ({key, edits}) -> {ok, key} | {ok:false, reason}
@@ -59,14 +61,44 @@ function cleanEdits(raw) {
   return edits;
 }
 
+const SEARCH_REASONS = new Set(['checking', 'not-local', 'no-server', 'no-model', 'failed', 'building']);
+const MAX_MODEL_CHARS = 120;
+const count = (n) => (Number.isInteger(n) && n >= 0 ? n : 0);
+
+/**
+ * What the status line under the inbox may show of the vector store's mode()
+ * (src/memoryembed.js): a model name comes from LM Studio, so it is cut and
+ * nothing else passes.
+ * @returns {{mode: 'meaning', model: string, embedded: number, total: number}|{mode: 'keywords', reason: string}|null}
+ */
+function cleanSearchMode(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (raw.mode === 'meaning' && typeof raw.model === 'string') {
+    return { mode: 'meaning', model: raw.model.slice(0, MAX_MODEL_CHARS), embedded: count(raw.embedded), total: count(raw.total) };
+  }
+  if (raw.mode === 'keywords') return { mode: 'keywords', reason: SEARCH_REASONS.has(raw.reason) ? raw.reason : 'failed' };
+  return null;
+}
+
 /**
  * @param {{ipcMain: object, dir: () => string, onChanged?: () => void,
  *   captureStatus?: () => object|null, now?: () => number,
- *   log?: {add: Function, read: Function}|null, roots?: () => object}} deps
+ *   log?: {add: Function, read: Function}|null, roots?: () => object,
+ *   searchStatus?: () => object|null}} deps
  *   dir = the mirror folder; onChanged fires after a write (sync soon, repaint);
- *   log = the memory log; roots = {<project>: its folder on this PC}, for the anchor check
+ *   log = the memory log; roots = {<project>: its folder on this PC}, for the anchor check;
+ *   searchStatus = how memory_search answers on this PC (the vector store's mode())
  */
-function registerMemoryIpc({ ipcMain, dir, onChanged = () => {}, captureStatus = () => null, now = Date.now, log = null, roots = () => ({}) }) {
+function registerMemoryIpc({
+  ipcMain,
+  dir,
+  onChanged = () => {},
+  captureStatus = () => null,
+  now = Date.now,
+  log = null,
+  roots = () => ({}),
+  searchStatus = () => null,
+}) {
   /** Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor. */
   const decided = (ev, record) => {
     if (log) log.add({ ev, key: `${record.project}/${record.id}`, type: record.type, ...(ev === 'rejected' ? { title: record.title } : {}) });
@@ -79,6 +111,15 @@ function registerMemoryIpc({ ipcMain, dir, onChanged = () => {}, captureStatus =
     } catch (err) {
       console.error('[memory] project folders unavailable:', errText(err));
       return {};
+    }
+  };
+  /** How memory_search answers on this PC, or null: a failure there must not hide the list. */
+  const searchMode = () => {
+    try {
+      return cleanSearchMode(searchStatus());
+    } catch (err) {
+      console.error('[memory] search status unavailable:', errText(err));
+      return null;
     }
   };
   /** A write: never throws to the renderer, and tells main when files changed. */
@@ -100,6 +141,7 @@ function registerMemoryIpc({ ipcMain, dir, onChanged = () => {}, captureStatus =
         ok: true,
         ...listInbox(dir()),
         capture: captureStatus(),
+        search: searchMode(),
         stats: { days: STATS_DAYS, captures, proposed, approved, rejected, edited, rate },
       };
     } catch (err) {
@@ -158,4 +200,4 @@ function reviewCount({ dir, today, events = [], roots = {} }) {
   }
 }
 
-module.exports = { registerMemoryIpc, cleanEdits, reviewCount, STATS_DAYS };
+module.exports = { registerMemoryIpc, cleanEdits, cleanSearchMode, reviewCount, STATS_DAYS };

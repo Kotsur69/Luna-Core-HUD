@@ -249,6 +249,8 @@ let configSync = null;
 // travels with the config sync (configsync.js startConfigSync).
 const { startMemory, memoryPaths } = require('./memorysync');
 const { createMemoryReader } = require('./memorytools');
+const { createEmbedder, createVectorStore, vectorsPath } = require('./memoryembed');
+const { scan: scanMemory } = require('./memorystore');
 const { cardFor, writeCard, removeCard } = require('./memorycard');
 const { readEnabled: readMemoryProjects } = require('./memoryprojects');
 const { projectFromRepoKey } = require('./memoryrecord');
@@ -1096,9 +1098,32 @@ function trackForCapture(session) {
   if (source) memoryCapture.track(source);
 }
 
+// Phase 2b: memory search ranks by meaning with a local LM Studio embedding
+// model, or by keywords without one (src/memoryembed.js). A silent LM Studio
+// is woken in the background; the search that noticed answers from keywords.
+let memoryVectors = null;
+function memoryVectorsOf() {
+  if (!memoryVectors) {
+    memoryVectors = createVectorStore({
+      file: vectorsPath(userDir()),
+      embedder: createEmbedder({ wake: wakeLmStudio }),
+      // The inbox shows which search is in use: repaint it when that changes.
+      onChange: () => send('memory:changed', {}),
+    });
+  }
+  return memoryVectors;
+}
+
+/** How memory_search answers on this PC right now, for the inbox's status line; looks at the model again in the background. */
+function memorySearchStatus() {
+  const vectors = memoryVectorsOf();
+  vectors.prepare(scanMemory(memoryPaths(userDir()).dir).records);
+  return vectors.mode();
+}
+
 function memoryFor(session) {
   try {
-    if (!memoryReader) memoryReader = createMemoryReader(memoryPaths(userDir()).dir);
+    if (!memoryReader) memoryReader = createMemoryReader(memoryPaths(userDir()).dir, { vectors: memoryVectorsOf() });
   } catch (err) {
     // The to-do tools of the same server must keep working without memory.
     console.error('[memory] tools unavailable:', (err && (err.code || err.message)) || 'error');
@@ -3323,6 +3348,7 @@ function registerIpc() {
       send('memory:changed', {});
     },
     captureStatus: () => (memoryCapture ? memoryCapture.status() : null),
+    searchStatus: memorySearchStatus,
     // Resolved per call: the user folder may not exist yet when this is registered.
     log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
     roots: memoryRoots,

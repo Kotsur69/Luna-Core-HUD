@@ -73,6 +73,59 @@ function memoryOf(t, project = PROJECT, opts, records) {
   return { search: reader.search, get: reader.get, project };
 }
 
+// ---- phase 2b: a reader with embeddings answers asynchronously -----------------
+
+/** A vector store that knows one memory and embeds every question next to it. */
+const vectorsFor = (key, queryVector = Float32Array.from([1, 0])) => ({
+  prepare: () => new Map([[key, Float32Array.from([1, 0])]]),
+  queryVector: async () => queryVector,
+});
+
+test('memory_search over a reader with embeddings finds a memory by meaning', async (t) => {
+  const memory = memoryOf(t, PROJECT, { vectors: vectorsFor(`${PROJECT}/worktree-junction`) });
+  const question = 'usuniecie drzewa roboczego skasowalo zaleznosci';
+
+  const pending = callMemoryTool('memory_search', { query: question }, memory);
+  assert.equal(typeof pending.then, 'function');
+  const res = await pending;
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(
+    res.payload.results.map((r) => r.key),
+    [`${PROJECT}/worktree-junction`],
+  );
+  assert.equal(res.payload.note, DATA_NOTE);
+});
+
+test('a reader with embeddings falls back to keywords when the question has no vector', async (t) => {
+  const memory = memoryOf(t, PROJECT, { vectors: vectorsFor(`${PROJECT}/worktree-junction`, null) });
+
+  const res = await callMemoryTool('memory_search', { query: 'prisma pool' }, memory);
+
+  assert.equal(res.payload.results[0].key, `${OTHER}/prisma-pool`);
+});
+
+test('an asynchronous search is logged, and its failure is a short reason', async () => {
+  const events = [];
+  const hit = { key: 'p/a', type: 'gotcha', title: 't', confidence: 'confirmed', created: '2026-10-21', source: null, snippet: 's', links: [] };
+  const found = await callMemoryTool('memory_search', { query: 'x y' }, { project: null, search: async () => [hit], log: (e) => events.push(e) });
+  const failed = await callMemoryTool('memory_search', { query: 'x y' }, { project: null, search: () => Promise.reject(new Error('boom')) });
+
+  assert.deepEqual(events, [{ ev: 'search', project: null, hits: ['p/a'] }]);
+  assert.deepEqual(failed, { ok: false, error: 'memory is unavailable right now' });
+  assert.equal(found.ok, true);
+});
+
+test('an asynchronous memory_search travels through the JSON-RPC handler', async () => {
+  const memory = { project: null, search: async () => [], get: () => null };
+  const call = { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'memory_search', arguments: { query: 'anything' } } };
+
+  const reply = await handleRpc(call, { read: () => [], write: () => true, memory });
+
+  assert.equal(reply.id, 7);
+  assert.deepEqual(JSON.parse(reply.result.content[0].text).results, []);
+});
+
 // ---- phase 5: staleness, memory_verify, the usage log ---------------------------
 
 test('a stale memory says since when it is unverified, in search and in get', (t) => {

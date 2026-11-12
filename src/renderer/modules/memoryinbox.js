@@ -289,6 +289,22 @@ function captureLine(capture) {
   return t('mem.inbox.captureLast', { when, saved: capture.last.saved });
 }
 
+const SEARCH_REASON_KEYS = {
+  checking: 'mem.inbox.search.checking',
+  building: 'mem.inbox.search.building',
+  'no-server': 'mem.inbox.search.noServer',
+  'no-model': 'mem.inbox.search.noModel',
+  'not-local': 'mem.inbox.search.notLocal',
+  failed: 'mem.inbox.search.failed',
+};
+
+/** How memory search answers on this PC: by meaning (which model) or by keywords only (why). '' when main did not say. */
+export function searchLine(search) {
+  if (!search) return '';
+  if (search.mode === 'meaning') return t('mem.inbox.search.meaning', { model: search.model, embedded: search.embedded, total: search.total });
+  return t(SEARCH_REASON_KEYS[search.reason] || SEARCH_REASON_KEYS.failed);
+}
+
 /** Puts focus back on the list after a repaint: the wanted entry, or the one that took its place. */
 function refocus(list, key, index) {
   const cards = [...list.children];
@@ -331,7 +347,10 @@ function render(res, review, focusKey, focusIndex, focusTab) {
   const bar = tabBar({ inbox: res.total, review: review.total });
   const foot = el('p', 'hint mem-inbox__foot', captureLine(res.capture));
   const stats = statsLine(res.stats);
-  overlay.body.replaceChildren(bar, panel, foot, ...(stats ? [el('p', 'hint', stats)] : []));
+  const search = searchLine(res.search);
+  // Keywords only is worth a second look: a question in Polish finds little that way.
+  const searchNote = search ? el('p', res.search.mode === 'meaning' ? 'hint' : 'mem-inbox__note', search) : null;
+  overlay.body.replaceChildren(bar, panel, foot, ...(stats ? [el('p', 'hint', stats)] : []), ...(searchNote ? [searchNote] : []));
   if (focusTab) bar.querySelector('[aria-selected="true"]').focus();
   else if (list && (focusKey !== undefined || focusIndex !== undefined)) refocus(list, focusKey, focusIndex || 0);
 }

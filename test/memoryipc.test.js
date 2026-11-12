@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { registerMemoryIpc, cleanEdits, reviewCount } = require('../src/memoryipc.js');
+const { registerMemoryIpc, cleanEdits, cleanSearchMode, reviewCount } = require('../src/memoryipc.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { COLLECTORS } = require('../src/hubcollect.js');
 const { createLog, logPath } = require('../src/memorylog.js');
@@ -36,7 +36,7 @@ const rec = (id, over = {}) => ({
   ...over,
 });
 
-function setup(t, records = [rec('busy')], { roots } = {}) {
+function setup(t, records = [rec('busy')], { roots, searchStatus } = {}) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-memipc-'));
   t.after(() => fs.promises.rm(base, { recursive: true, force: true, maxRetries: 5 }));
   const dir = path.join(base, 'memory');
@@ -54,11 +54,37 @@ function setup(t, records = [rec('busy')], { roots } = {}) {
     now: () => NOW,
     log,
     roots: roots || (() => ({ [PROJECT]: repo })),
+    ...(searchStatus ? { searchStatus } : {}),
   });
   const invoke = (channel, arg) => handlers[channel]({}, arg);
   const logged = () => log.read().map(({ at, ...event }) => event);
   return { dir, repo, log, logged, invoke, changed: () => changed, stored: () => Object.fromEntries(scan(dir).records) };
 }
+
+// ---- phase 2b: which search is in use --------------------------------------------
+
+test('memory:inbox says how search answers on this PC, and passes nothing else along', (t) => {
+  const meaning = { mode: 'meaning', model: 'm'.repeat(500), embedded: 3, total: -1, extra: 'dropped' };
+  const s = setup(t, undefined, { searchStatus: () => meaning });
+
+  assert.deepEqual(s.invoke('memory:inbox').search, { mode: 'meaning', model: 'm'.repeat(120), embedded: 3, total: 0 });
+  assert.deepEqual(cleanSearchMode({ mode: 'keywords', reason: 'no-server' }), { mode: 'keywords', reason: 'no-server' });
+  assert.deepEqual(cleanSearchMode({ mode: 'keywords', reason: '<b>x</b>' }), { mode: 'keywords', reason: 'failed' });
+  assert.equal(cleanSearchMode({ mode: 'other' }), null);
+});
+
+test('memory:inbox still lists when the search status is missing or throws', (t) => {
+  const none = setup(t);
+  const broken = setup(t, undefined, {
+    searchStatus: () => {
+      throw new Error('boom');
+    },
+  });
+
+  assert.equal(none.invoke('memory:inbox').search, null);
+  assert.equal(broken.invoke('memory:inbox').ok, true);
+  assert.equal(broken.invoke('memory:inbox').search, null);
+});
 
 // ---- phase 5: the decisions log, the review list --------------------------------
 

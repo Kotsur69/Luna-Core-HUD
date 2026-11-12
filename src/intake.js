@@ -36,6 +36,8 @@ const { MEMORY_TOOLS, callMemoryTool } = require('./memorytools');
 
 const MCP_PATH = '/mcp';
 const MAX_BODY_BYTES = 256 * 1024;
+/** JSON-RPC messages one POST may carry; the CLI sends one, sometimes a handful. */
+const MAX_BATCH_MESSAGES = 50;
 const REQUEST_TIMEOUT_MS = 30 * 1000;
 /** Cards one luna_todo_add call may create - a plan, not a backlog import. */
 const MAX_TASKS_PER_CALL = 20;
@@ -320,7 +322,9 @@ function toolText(payload, isError = false) {
 function callTool(name, args, store) {
   const a = args && typeof args === 'object' ? args : {};
   const recalled = store.memory ? callMemoryTool(name, a, store.memory) : null;
-  if (recalled) return recalled.ok ? toolText(recalled.payload) : toolText(recalled.error, true);
+  const recalledText = (res) => (res.ok ? toolText(res.payload) : toolText(res.error, true));
+  // A memory search that embeds its question answers later (src/memorytools.js).
+  if (recalled) return typeof recalled.then === 'function' ? recalled.then(recalledText) : recalledText(recalled);
   if (name === 'luna_todo_list') return toolText(listView(normalizeTodos(store.read()), a.includeDone, a.tag));
 
   let outcome;
@@ -370,7 +374,9 @@ function handleRpc(msg, store, version = '0.0.0') {
       return rpcResult(id, { tools: store.memory ? [...TOOLS, ...MEMORY_TOOLS] : TOOLS });
     case 'tools/call': {
       const result = callTool(params.name, params.arguments, store);
-      return result ? rpcResult(id, result) : rpcError(id, -32602, `Unknown tool: ${params.name}`);
+      const reply = (done) => (done ? rpcResult(id, done) : rpcError(id, -32602, `Unknown tool: ${params.name}`));
+      // Only a memory search is asynchronous; every other tool answers at once.
+      return result && typeof result.then === 'function' ? result.then(reply) : reply(result);
     }
     default:
       return rpcError(id, -32601, `Method not found: ${method}`);
@@ -526,13 +532,27 @@ class IntakeServer {
       return;
     }
     const messages = Array.isArray(parsed) ? parsed : [parsed];
-    const replies = messages.map((msg) => handleRpc(msg, store, this.version)).filter((r) => r !== null);
-    if (replies.length === 0) {
-      res.writeHead(202);
-      res.end();
+    const send = (answers) => {
+      const replies = answers.filter((r) => r !== null);
+      if (replies.length === 0) {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+      sendJson(res, 200, Array.isArray(parsed) ? replies : replies[0]);
+    };
+    if (messages.length > MAX_BATCH_MESSAGES) {
+      sendJson(res, 400, rpcError(null, -32600, 'Too many messages in one batch'));
       return;
     }
-    sendJson(res, 200, Array.isArray(parsed) ? replies : replies[0]);
+    const answers = messages.map((msg) => handleRpc(msg, store, this.version));
+    if (!answers.some((r) => r && typeof r.then === 'function')) return send(answers);
+    Promise.all(answers)
+      .then(send)
+      .catch((err) => {
+        console.error('[intake] tool call failed:', (err && (err.code || err.message)) || 'error');
+        if (!res.headersSent) sendJson(res, 500, rpcError(null, -32603, 'Internal error'));
+      });
   }
 }
 

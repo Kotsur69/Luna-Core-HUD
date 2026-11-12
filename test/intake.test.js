@@ -265,6 +265,32 @@ test('IntakeServer enforces token, host, origin and method; serves tools', async
   }
 });
 
+test('IntakeServer waits for an asynchronous memory search, alone and in a batch', async () => {
+  const memory = { project: null, get: () => null, search: () => new Promise((resolve) => setTimeout(() => resolve([]), 20)) };
+  const store = { ...memoryStore(), memory };
+  const server = new IntakeServer({ storeFor: () => store, version: '1.0.0' });
+  await server.start();
+  try {
+    const auth = { authorization: `Bearer ${server.issueToken('s1')}`, 'content-type': 'application/json' };
+    const search = { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'memory_search', arguments: { query: 'anything' } } };
+
+    const single = await post(server.port, { headers: auth, body: search });
+    const batch = await post(server.port, { headers: auth, body: [{ jsonrpc: '2.0', id: 4, method: 'ping' }, search] });
+
+    assert.equal(single.status, 200);
+    assert.deepEqual(JSON.parse(single.json.result.content[0].text).results, []);
+    assert.deepEqual(
+      batch.json.map((r) => r.id),
+      [4, 5],
+    );
+
+    const flood = await post(server.port, { headers: auth, body: Array.from({ length: 51 }, () => search) });
+    assert.equal(flood.status, 400);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('intakeState tells a tools-attached claude from a bare one and from a shell', () => {
   const cmd = 'claude --model opus';
   assert.equal(intakeState(cmd, withIntakeMcp(cmd, 'C:/cfg.json')), 'ready');
