@@ -6024,6 +6024,9 @@ section.orchestra__planrun {
 .mem-inbox__body { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .mem-inbox__more { align-self: flex-start; font-size: var(--fs-xs); }
 .mem-inbox__note { margin: 0; font-size: var(--fs-xs); color: var(--warn); overflow-wrap: anywhere; }
+/* A global entry reaches every project's card; a session that read web or MCP content needs a closer look. */
+.mem-inbox__note--global, .mem-inbox__note--warn { padding-left: var(--space-3); border-left: 2px solid currentColor; font-weight: 600; }
+.mem-inbox__note--global { color: var(--neon-cyan); }
 .mem-inbox__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-2); }
 .mem-inbox__btn { width: auto; min-height: 30px; padding: 0 var(--space-5); font-size: var(--fs-sm); }
 .mem-inbox__btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }

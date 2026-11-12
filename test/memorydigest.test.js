@@ -60,7 +60,7 @@ test('leaves out subagent turns, meta entries, compaction summaries, thinking an
     ].join('\n'),
   );
 
-  assert.deepEqual(out, { text: '', userTurns: 0, assistantTurns: 0 });
+  assert.deepEqual(out, { text: '', userTurns: 0, assistantTurns: 0, outside: 0 });
 });
 
 test('strips the blocks the harness adds to a user message', () => {
@@ -91,4 +91,31 @@ test('anything that is not a transcript gives an empty digest', () => {
   for (const input of [undefined, null, '', 'not json', '[]', '42']) {
     assert.equal(digestTranscript(input).text, '');
   }
+});
+
+// ---- outside content (security review of 2026-11-11) -----------------------------
+
+test('counts the calls that read outside content: web, subagents and foreign MCP tools', () => {
+  const out = digestTranscript(
+    [
+      assistant([use('t1', 'WebFetch', { url: 'https://example.com/a' }), use('t2', 'WebSearch', { query: 'electron asar ebusy' })]),
+      assistant([use('t3', 'mcp__github__get_issue', { issue: 7 }), use('t4', 'Agent', { description: 'look around' })]),
+      assistant([use('t5', 'Task', { description: 'old subagent tool' })]),
+    ].join('\n'),
+  );
+
+  assert.equal(out.outside, 5);
+});
+
+test('local tools and the lunacore MCP server are not outside content', () => {
+  const out = digestTranscript(
+    [
+      assistant([use('t1', 'Bash', { command: 'npm test' }), use('t2', 'Read', { file_path: 'src/main.js' })]),
+      assistant([use('t3', 'mcp__lunacore__luna_todo_add', { text: 'x' }), use('t4', 'mcp__lunacore__memory_search', { query: 'x' })]),
+      // A tool result is not a call, and a user turn cannot make one.
+      user([use('t5', 'WebFetch', { url: 'https://example.com' })]),
+    ].join('\n'),
+  );
+
+  assert.equal(out.outside, 0);
 });

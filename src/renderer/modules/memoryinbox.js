@@ -4,7 +4,9 @@
 // docs/untouched_docs/rag-stylememory.md, phase 4. The memories capture
 // proposed from finished sessions wait here (src/memoryinbox.js through
 // src/memoryipc.js). Per entry: approve (it joins the project card), edit the
-// title and text, or reject (it is deleted on every PC).
+// title and text, make a project entry global, or reject (it is deleted on
+// every PC). Capture never files a memory as global by itself: only the
+// 'Make global' button here does (security review of 2026-11-11).
 //
 // Opened from the notification hub item "N memories to review"
 // (hubpanel.js openMemoryInbox). A memory is named to main only by its key.
@@ -114,12 +116,26 @@ function editForm(item) {
   return form;
 }
 
-function notes(item) {
+/** Whether an entry is filed under `global` (it would reach every project's card). */
+export const isGlobal = (item) => item.project === 'global';
+
+/**
+ * The notes under an entry, as [text, modifier]: modifier '' or a mem-inbox__note--* suffix.
+ * @returns {[string, string][]}
+ */
+export function noteLines(item) {
   const lines = [];
-  for (const old of item.supersedes) lines.push(t('mem.inbox.replaces', { title: old.title }));
-  if (item.similar) lines.push(t('mem.inbox.similar', { title: item.similar.title }));
-  if (item.duplicates) lines.push(t('mem.inbox.duplicates', { count: item.duplicates }));
-  return lines.map((line) => el('p', 'mem-inbox__note', line));
+  if (isGlobal(item)) lines.push([t('mem.inbox.globalNote'), 'global']);
+  else if (item.suggestedGlobal) lines.push([t('mem.inbox.suggestedGlobal'), '']);
+  if (item.outside > 0) lines.push([t('mem.inbox.outside', { count: item.outside }), 'warn']);
+  for (const old of item.supersedes) lines.push([t('mem.inbox.replaces', { title: old.title }), '']);
+  if (item.similar) lines.push([t('mem.inbox.similar', { title: item.similar.title }), '']);
+  if (item.duplicates) lines.push([t('mem.inbox.duplicates', { count: item.duplicates }), '']);
+  return lines;
+}
+
+function notes(item) {
+  return noteLines(item).map(([line, mod]) => el('p', mod ? `mem-inbox__note mem-inbox__note--${mod}` : 'mem-inbox__note', line));
 }
 
 function entry(item) {
@@ -150,11 +166,14 @@ function entry(item) {
       editing = item.key;
       load();
     });
-    // The destructive action sits apart from the other two.
+    // Only a project entry can be made global; a global one already is.
+    const global = isGlobal(item) ? null : button('port-btn mem-inbox__btn', t('mem.inbox.makeGlobal'), () => promote(item.key));
+    // The destructive action sits apart from the others.
     const reject = button('port-btn port-btn--kill mem-inbox__btn mem-inbox__btn--reject', t('mem.inbox.reject'), () => decide(item.key, 'memoryInboxReject'));
-    for (const b of [approve, edit, reject]) b.disabled = off;
+    const buttons = [approve, edit, ...(global ? [global] : []), reject];
+    for (const b of buttons) b.disabled = off;
     const actions = el('div', 'mem-inbox__actions');
-    actions.append(approve, edit, reject);
+    actions.append(...buttons);
     card.append(actions);
   }
   if (failed.has(item.key)) {
@@ -335,16 +354,21 @@ async function load(focusKey, focusIndex, focusTab) {
   render(res, review && review.ok && Array.isArray(review.items) ? review : NO_REVIEW, focusKey, focusIndex, focusTab);
 }
 
-/** One call for one entry. @returns {Promise<boolean>} whether it worked */
-async function act(key, fn, ...args) {
-  if (busy.has(key)) return false;
+/** One call for one entry. @returns {Promise<object|null>} main's answer, null when it failed */
+async function actResult(key, fn, ...args) {
+  if (busy.has(key)) return null;
   busy.add(key);
   failed.delete(key);
   const res = await call(fn, ...args);
   busy.delete(key);
   // A window closed meanwhile has cleared its errors: do not leave one for the next opening.
   if ((!res || !res.ok) && overlay && overlay.isOpen()) failed.set(key, (res && res.reason) || 'failed');
-  return Boolean(res && res.ok);
+  return res && res.ok ? res : null;
+}
+
+/** One call for one entry. @returns {Promise<boolean>} whether it worked */
+async function act(key, fn, ...args) {
+  return Boolean(await actResult(key, fn, ...args));
 }
 
 /** Approve or reject: the entry leaves the list and focus moves to its neighbour. */
@@ -355,6 +379,16 @@ async function decide(key, fn) {
   await act(key, fn, key);
   confirming = null;
   load(key, index);
+}
+
+/** Make global: the entry gets a new key, and focus follows it to that key. */
+async function promote(key) {
+  const cards = overlay ? [...overlay.body.querySelectorAll('.mem-inbox__item')] : [];
+  const index = Math.max(0, cards.findIndex((c) => c.dataset.key === key));
+  for (const b of cards[index] ? cards[index].querySelectorAll('button') : []) b.disabled = true;
+  const res = await actResult(key, 'memoryInboxMakeGlobal', key);
+  // A refused move keeps its old key, so its error shows on the same entry.
+  load(res && typeof res.key === 'string' ? res.key : key, index);
 }
 
 /** Opens the inbox. */

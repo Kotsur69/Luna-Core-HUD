@@ -33,6 +33,7 @@ const { projectFromRepoKey, splitKey, GLOBAL } = require('../src/memoryrecord');
 const { scan, writeRecord } = require('../src/memorystore');
 const { listInbox, approve, reject } = require('../src/memoryinbox');
 const { extractPiece } = require('../src/memorycapture');
+const { sourceNotes } = require('../src/memoryextract');
 const { runJob } = require('../src/missionrunner');
 const { createIndex, DEFAULT_LIMIT } = require('../src/memoryindex');
 const { importAutoMemory, autoMemoryDir } = require('../src/memoryimport');
@@ -224,6 +225,9 @@ function cmdInbox({ dir }) {
     out(`[${item.type}] ${item.title}`);
     out(`   ${item.key}`);
     out(`   created ${item.created}${item.source ? `, ${item.source}` : ''}${item.duplicates ? `, +${item.duplicates} duplicate(s)` : ''}`);
+    if (item.project === GLOBAL) out("   GLOBAL: approving puts it on every project's card");
+    else if (item.suggestedGlobal) out('   suggested as global by the extractor (Make global in the HUD inbox)');
+    if (item.outside) out(`   the session read ${item.outside} outside source(s) (web or MCP): check the text before approving`);
     for (const old of item.supersedes) out(`   would replace: ${old.id} (${old.title})`);
     if (item.similar) out(`   looks like the confirmed memory ${item.similar.key}`);
   }
@@ -271,6 +275,7 @@ async function cmdCapture({ configDir, dir, project, values, positionals }) {
   for (const record of res.records) {
     out(`[${record.type}] ${record.title}`);
     out(`   ${record.project}/${record.id}${record.supersedes.length ? `  replaces: ${record.supersedes.join(', ')}` : ''}`);
+    if (sourceNotes(record.source).suggestedGlobal) out('   suggested as global (filed under this project; Make global in the HUD inbox)');
     out(record.body.replace(/^/gm, '   '));
     out();
     if (values.save) {
@@ -280,6 +285,7 @@ async function cmdCapture({ configDir, dir, project, values, positionals }) {
   }
   for (const r of res.rejected) out(`dropped (${r.reason}): ${r.title}`);
   const wrote = values.save ? 'saved to the inbox' : 'nothing written (--save writes them)';
+  if (res.outside) out(`The session read ${res.outside} outside source(s) (web or MCP): the inbox asks to check these before approving.`);
   out(`${res.records.length} candidate(s), ${res.rejected.length} dropped (${res.reason}) - ${wrote}`);
 }
 

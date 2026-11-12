@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { listInbox, pendingCount, approve, reject, update } = require('../src/memoryinbox.js');
+const { listInbox, pendingCount, approve, reject, update, makeGlobal } = require('../src/memoryinbox.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { createIndex } = require('../src/memoryindex.js');
 const { buildCard } = require('../src/memorycard.js');
@@ -209,4 +209,85 @@ test('an empty or missing mirror is an empty inbox', (t) => {
   assert.deepEqual(listInbox(dir), { items: [], total: 0 });
   assert.deepEqual(listInbox(path.join(dir, 'nowhere')), { items: [], total: 0 });
   assert.equal(pendingCount(dir, PROJECT), 0);
+});
+
+// ---- Make global, and the capture notes (security review of 2026-11-11) --------
+
+const SESSION = 'captured from session abc on PC1';
+
+test('listInbox exposes the suggested-global mark and the outside-source count from the source', (t) => {
+  const dir = mirror(t, [
+    rec('suggested', 'Comments are written in English', { source: `${SESSION}, read 2 outside source(s), suggested global`, created: '2026-11-03' }),
+    rec('outside', 'Retry says busy after sleep', { source: `${SESSION}, read 4 outside source(s)`, created: '2026-11-02' }),
+    rec('local', 'Packaging times out on battery', { source: SESSION, created: '2026-11-01' }),
+  ]);
+
+  const byId = Object.fromEntries(listInbox(dir).items.map((i) => [i.id, i]));
+
+  assert.deepEqual([byId.suggested.suggestedGlobal, byId.suggested.outside], [true, 2]);
+  assert.deepEqual([byId.outside.suggestedGlobal, byId.outside.outside], [false, 4]);
+  assert.deepEqual([byId.local.suggestedGlobal, byId.local.outside], [false, 0]);
+});
+
+test('makeGlobal moves a waiting project entry to global, still waiting, without supersedes or the suggestion note', (t) => {
+  const dir = mirror(t, [
+    rec('old-rule', 'Comments may be in Polish', { confidence: 'confirmed' }),
+    rec('english', 'Comments are written in English', { source: `${SESSION}, read 1 outside source(s), suggested global`, supersedes: ['old-rule'], area: 'style' }),
+  ]);
+
+  const res = makeGlobal(dir, `${PROJECT}/english`);
+
+  assert.deepEqual(res, { ok: true, key: 'global/english' });
+  const all = stored(dir);
+  assert.equal(all[`${PROJECT}/english`], undefined);
+  assert.deepEqual(all['global/english'], {
+    ...rec('english', 'Comments are written in English', { area: 'style' }),
+    project: 'global',
+    source: `${SESSION}, read 1 outside source(s)`,
+  });
+  assert.equal(all[`${PROJECT}/old-rule`].confidence, 'confirmed');
+  assert.deepEqual(listInbox(dir).items.map((i) => [i.key, i.suggestedGlobal]), [['global/english', false]]);
+});
+
+test('makeGlobal takes the next free id when the id is taken in global, and gives up after -9', (t) => {
+  const taken = ['english', ...Array.from({ length: 8 }, (_, i) => `english-${i + 2}`)];
+  const dir = mirror(t, [
+    rec('english', 'Comments are written in English'),
+    ...taken.slice(0, 2).map((id) => rec(id, `Unrelated global memory ${id}`, { project: 'global', confidence: 'confirmed', body: `Other text ${id}.` })),
+  ]);
+
+  assert.deepEqual(makeGlobal(dir, `${PROJECT}/english`), { ok: true, key: 'global/english-3' });
+
+  for (const id of taken.slice(2)) writeRecord(dir, rec(id, `Unrelated global memory ${id}`, { project: 'global', confidence: 'confirmed', body: `Other text ${id}.` }));
+  // A second project entry with the same id, now that every candidate id is taken in global.
+  writeRecord(dir, rec('english', 'Write the commit messages in English'));
+  const before = stored(dir);
+
+  assert.deepEqual(makeGlobal(dir, `${PROJECT}/english`), { ok: false, reason: 'id-taken' });
+  assert.deepEqual(stored(dir), before);
+});
+
+test('makeGlobal refuses a confirmed entry, a bad key, a missing one and one that is already global', (t) => {
+  const dir = mirror(t, [
+    rec('done', 'Name the installer with dashes', { confidence: 'confirmed' }),
+    rec('everywhere', 'Comments are written in English', { project: 'global' }),
+  ]);
+  const before = stored(dir);
+
+  assert.deepEqual(makeGlobal(dir, `${PROJECT}/done`), { ok: false, reason: 'not-pending' });
+  assert.deepEqual(makeGlobal(dir, 'global/everywhere'), { ok: false, reason: 'already-global' });
+  assert.deepEqual(makeGlobal(dir, `${PROJECT}/nope`), { ok: false, reason: 'not-found' });
+  for (const key of ['', '../../x', 'C:\Windows\win.ini', undefined]) assert.deepEqual(makeGlobal(dir, key), { ok: false, reason: 'bad-key' });
+  assert.deepEqual(stored(dir), before);
+});
+
+test('makeGlobal leaves the duplicates folded into the entry where they are', (t) => {
+  const dir = mirror(t, [
+    rec('busy-a', 'Retry says busy after a sleep', { created: '2026-11-01' }),
+    rec('busy-b', 'Retry says busy after the sleep', { created: '2026-11-02' }),
+  ]);
+
+  assert.equal(makeGlobal(dir, `${PROJECT}/busy-a`).ok, true);
+
+  assert.deepEqual(Object.keys(stored(dir)).sort(), [`${PROJECT}/busy-b`, 'global/busy-a']);
 });

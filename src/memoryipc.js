@@ -8,6 +8,7 @@
 //   memory:approve (key)          -> {ok, key, removed} | {ok:false, reason}
 //   memory:reject  (key)          -> same
 //   memory:update  ({key, edits}) -> {ok, key} | {ok:false, reason}
+//   memory:make-global (key)      -> {ok, key} | {ok:false, reason}   key = the new global key
 //   memory:changed (push)            the mirror changed: repaint
 //
 // Phase 5, the review list (src/memoryreview.js): confirmed memories that are
@@ -29,7 +30,7 @@
 
 'use strict';
 
-const { listInbox, approve, reject, update } = require('./memoryinbox');
+const { listInbox, approve, reject, update, makeGlobal } = require('./memoryinbox');
 const { MAX_BODY, MAX_TITLE } = require('./memoryrecord');
 const { scan } = require('./memorystore');
 const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
@@ -113,6 +114,7 @@ function registerMemoryIpc({ ipcMain, dir, onChanged = () => {}, captureStatus =
     if (!edits) return { ok: false, reason: 'bad-edits' };
     return guarded('update', () => update(dir(), keyOf(req.key), edits, decided));
   });
+  ipcMain.handle('memory:make-global', (_event, key) => guarded('make-global', () => makeGlobal(dir(), keyOf(key))));
 
   ipcMain.handle('memory:review', () => {
     try {

@@ -13,7 +13,16 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { MEMORY_TOOLS, isMemoryTool, callMemoryTool, createMemoryReader, trustOf, MAX_SEARCH_LIMIT, DATA_NOTE } = require('../src/memorytools.js');
+const {
+  MEMORY_TOOLS,
+  isMemoryTool,
+  callMemoryTool,
+  createMemoryReader,
+  trustOf,
+  MAX_SEARCH_LIMIT,
+  DATA_NOTE,
+  UNREVIEWED_WARNING,
+} = require('../src/memorytools.js');
 const { writeRecord, removeRecord } = require('../src/memorystore.js');
 const { handleRpc, TOOLS } = require('../src/intake.js');
 
@@ -177,6 +186,63 @@ test('memory_search finds another project and labels an observed memory as not v
 
   assert.equal(other[0].key, `${OTHER}/prisma-pool`);
   assert.equal(observed[0].trust, 'observed, not verified');
+});
+
+// ---- unreviewed memories (security review of 2026-11-11) ------------------------
+
+test('memory_search leaves the snippet out of an unreviewed memory and marks it', (t) => {
+  const [hit] = callMemoryTool('memory_search', { query: 'EBUSY asar' }, memoryOf(t)).payload.results;
+
+  assert.equal(hit.key, `${PROJECT}/asar-lock`);
+  assert.equal('snippet' in hit, false);
+  assert.equal(hit.unreviewed, true);
+  assert.equal(hit.title, 'EBUSY on default_app.asar means the app holds it');
+  assert.equal(hit.type, 'gotcha');
+  assert.equal(hit.trust, 'observed, not verified');
+  assert.equal(hit.created, '2026-10-21');
+});
+
+test('memory_search keeps the snippet of a confirmed memory and does not mark it', (t) => {
+  const [hit] = callMemoryTool('memory_search', { query: 'worktree junction' }, memoryOf(t)).payload.results;
+
+  assert.equal(typeof hit.snippet, 'string');
+  assert.match(hit.snippet, /node_modules/);
+  assert.equal('unreviewed' in hit, false);
+});
+
+test('memory_get returns an unreviewed memory with its body and a warning', (t) => {
+  const out = callMemoryTool('memory_get', { key: 'asar-lock' }, memoryOf(t));
+
+  assert.equal(out.ok, true);
+  assert.equal(out.payload.body, 'Install in a sibling temp folder and move the entries in.');
+  assert.equal(out.payload.warning, UNREVIEWED_WARNING);
+  assert.match(out.payload.warning, /nobody has reviewed it/);
+  assert.equal('supersededBy' in out.payload, false);
+});
+
+test('memory_get joins the superseded and the unreviewed warning for an unreviewed, replaced memory', (t) => {
+  const records = [
+    rec('old-guess', 'The build cache lives in the temp folder', 'Clear the temp folder to rebuild.', { confidence: 'observed' }),
+    rec('cache-dir', 'The build cache lives in .cache', 'Delete .cache to rebuild.', { supersedes: ['old-guess'] }),
+  ];
+
+  const out = callMemoryTool('memory_get', { key: 'old-guess' }, memoryOf(t, PROJECT, undefined, records));
+
+  assert.equal(out.payload.supersededBy, `${PROJECT}/cache-dir`);
+  assert.equal(out.payload.warning, `This memory was replaced; read the one that supersedes it. ${UNREVIEWED_WARNING}`);
+  assert.equal(out.payload.body, 'Clear the temp folder to rebuild.');
+});
+
+test('memory_get adds no warning to a confirmed memory', (t) => {
+  const out = callMemoryTool('memory_get', { key: 'worktree-junction' }, memoryOf(t));
+
+  assert.equal('warning' in out.payload, false);
+});
+
+test('the memory_search description says unreviewed entries come without a snippet', () => {
+  const search = MEMORY_TOOLS.find((tool) => tool.name === 'memory_search');
+
+  assert.match(search.description, /Unreviewed entries come without a snippet, and memory_get shows them with a warning\./);
 });
 
 test('memory_search leaves a superseded memory out', (t) => {

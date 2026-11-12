@@ -38,7 +38,7 @@ const { scan, writeRecord } = require('./memorystore');
 const { memoryPaths } = require('./memorysync');
 const { readEnabled } = require('./memoryprojects');
 const { digestTranscript } = require('./memorydigest');
-const { buildPrompt, candidatesFrom } = require('./memoryextract');
+const { buildPrompt, candidatesFrom, outsideNote, withNote } = require('./memoryextract');
 const { pendingCount } = require('./memoryinbox');
 const { rejectedTitles } = require('./memorylog');
 const { scrub } = require('./hostscrub');
@@ -130,20 +130,23 @@ function readPiece(file, from, size) {
  * @param {{text: string, project: string, dir: string, source: string, today: string, notWanted?: string[],
  *   run: (job: {prompt: string}) => Promise<{ok: boolean, answer?: object, reason?: string}>}} opts
  *   notWanted = titles the user rejected lately: the model is told not to propose their kind again
- * @returns {Promise<{ok: true, records: object[], rejected: object[], reason: string}|{ok: false, reason: string}>}
- *   records are NOT written here
+ * @returns {Promise<{ok: true, records: object[], rejected: object[], reason: string, outside: number}|{ok: false, reason: string}>}
+ *   records are NOT written here; outside = the digest's count of calls that read outside
+ *   content, also noted in each record's `source`
  */
 async function extractPiece({ text, project, dir, source, today, run, notWanted = [] }) {
   const digest = digestTranscript(text);
-  if (!digest.userTurns || digest.text.length < MIN_DIGEST_CHARS) return { ok: true, records: [], rejected: [], reason: 'too-short' };
+  if (!digest.userTurns || digest.text.length < MIN_DIGEST_CHARS) return { ok: true, records: [], rejected: [], reason: 'too-short', outside: digest.outside };
   const existing = scan(dir)
     .records.map(([, r]) => r)
     .filter((r) => r.project === project || r.project === GLOBAL);
   // The digest leaves this machine a second time here: mask what looks like a secret.
   const res = await run({ prompt: buildPrompt({ digest: scrub(digest.text), project, today, existing, notWanted }) });
   if (!res || !res.ok) return { ok: false, reason: `model-${(res && res.reason) || 'failed'}` };
-  const { records, rejected } = candidatesFrom(res.answer, { project, today, source, existing });
-  return { ok: true, records, rejected, reason: records.length ? 'saved' : 'nothing' };
+  // The outside note comes before the ', suggested global' one candidatesFrom may add (memoryextract.js).
+  const noted = withNote(source, outsideNote(digest.outside));
+  const { records, rejected } = candidatesFrom(res.answer, { project, today, source: noted, existing });
+  return { ok: true, records, rejected, reason: records.length ? 'saved' : 'nothing', outside: digest.outside };
 }
 
 /**

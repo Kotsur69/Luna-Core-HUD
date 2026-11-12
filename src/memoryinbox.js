@@ -12,6 +12,9 @@
 //            memory is on the project card and its `supersedes` takes effect.
 //   reject   the file is deleted (a tombstone for the other PCs).
 //   update   title, body, type or area are corrected; it stays in the inbox.
+//   make global  a project entry moves to `global`; it stays in the inbox.
+//            Capture never files a memory as global itself (security review of
+//            2026-11-11): a global memory reaches every project's card.
 //
 // Two PCs can propose the same memory from different sessions. Near-duplicates
 // among the waiting entries are shown as ONE entry; approving or rejecting it
@@ -24,10 +27,12 @@
 
 const { GLOBAL, TYPES, checkRecord, splitKey, keyOf } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord } = require('./memorystore');
-const { nearDuplicate } = require('./memoryextract');
+const { nearDuplicate, sourceNotes, withoutSuggestedGlobal } = require('./memoryextract');
 
 /** Entries one listing returns; the count says how many wait in all. */
 const MAX_ITEMS = 100;
+/** `<id>-2` ... `<id>-9` are tried when the id is taken in global. */
+const MAX_ID_SUFFIX = 9;
 
 const isPending = (record) => record.confidence !== 'confirmed';
 /** Oldest first; the key settles a tie so every PC picks the same lead of a group. */
@@ -79,6 +84,9 @@ function listInbox(dir) {
     body: record.body,
     created: record.created,
     source: record.source || null,
+    // The capture notes in `source` (src/memoryextract.js): the model wanted it
+    // global, and how many web or MCP results the session read.
+    ...sourceNotes(record.source),
     // What approving this entry would replace.
     supersedes: record.supersedes
       .map((id) => byKey.get(`${record.project}/${id}`))
@@ -168,4 +176,37 @@ function update(dir, key, edits, decided = () => {}) {
   return { ok: true, key };
 }
 
-module.exports = { listInbox, pendingCount, approve, reject, update, groupPending, isPending, TYPES, MAX_ITEMS };
+/** The first free id for `id` in global: itself, then id-2 ... id-9; null when all are taken. */
+function freeGlobalId(records, id) {
+  const taken = new Set(records.filter(([, r]) => r.project === GLOBAL).map(([, r]) => r.id));
+  if (!taken.has(id)) return id;
+  for (let n = 2; n <= MAX_ID_SUFFIX; n++) {
+    if (!taken.has(`${id}-${n}`)) return `${id}-${n}`;
+  }
+  return null;
+}
+
+/**
+ * Moves a waiting project entry to `global`. It stays unconfirmed: approving
+ * it is a separate step. Its `supersedes` is dropped (those ids belong to the
+ * project), and so is the ', suggested global' note. The duplicates folded
+ * into it stay where they are.
+ * @param {string} dir
+ * @param {string} key
+ * @returns {{ok: true, key: string}|{ok: false, reason: string}}
+ */
+function makeGlobal(dir, key) {
+  const found = findPending(dir, key);
+  if (!found.record) return { ok: false, reason: found.reason };
+  const { record } = found;
+  if (record.project === GLOBAL) return { ok: false, reason: 'already-global' };
+  const id = freeGlobalId(scan(dir).records, record.id);
+  if (!id) return { ok: false, reason: 'id-taken' };
+  const res = checkRecord({ ...record, id, project: GLOBAL, supersedes: [], source: withoutSuggestedGlobal(record.source) || null });
+  if (!res.record) return { ok: false, reason: res.error };
+  writeRecord(dir, res.record);
+  removeRecord(dir, key);
+  return { ok: true, key: keyOf(res.record) };
+}
+
+module.exports = { listInbox, pendingCount, approve, reject, update, makeGlobal, groupPending, isPending, TYPES, MAX_ITEMS };

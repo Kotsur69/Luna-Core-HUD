@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildPrompt, candidatesFrom, nearDuplicate, MAX_CANDIDATES } = require('../src/memoryextract.js');
+const { buildPrompt, candidatesFrom, nearDuplicate, outsideNote, sourceNotes, withoutSuggestedGlobal, MAX_CANDIDATES } = require('../src/memoryextract.js');
 
 const PROJECT = 'github.com/acme/hud';
 const CTX = { project: PROJECT, today: '2026-11-11', source: 'captured from session abc on PC1', existing: [] };
@@ -48,10 +48,79 @@ test('a valid candidate becomes an observed record of the project', () => {
   ]);
 });
 
-test('scope global files the memory under global', () => {
+test('scope global files the memory under the project and marks the suggestion in its source', () => {
   const { records } = candidatesFrom({ candidates: [cand('Node 24 rmSync fails with EPERM under load', { scope: 'global' })] }, CTX);
 
-  assert.equal(records[0].project, 'global');
+  assert.equal(records[0].project, PROJECT);
+  assert.equal(records[0].source, `${CTX.source}, suggested global`);
+  assert.deepEqual(sourceNotes(records[0].source), { suggestedGlobal: true, outside: 0 });
+});
+
+test('candidatesFrom never returns a global memory, whatever the model says', () => {
+  const { records } = candidatesFrom(
+    {
+      candidates: [
+        cand('Comments are always written in English', { scope: 'global', type: 'preference' }),
+        cand('Polish UI strings carry no diacritics', { scope: 'GLOBAL' }),
+        cand('The tests run with node --test', { scope: 'project' }),
+        cand('The worktree poller piles up git calls', { project: 'global' }),
+      ],
+    },
+    CTX,
+  );
+
+  assert.equal(records.length, 4);
+  assert.ok(records.every((r) => r.project === PROJECT));
+  assert.deepEqual(
+    records.map((r) => sourceNotes(r.source).suggestedGlobal),
+    [true, false, false, false],
+  );
+});
+
+test('a suggested-global memory takes its id and its supersedes from the project scope', () => {
+  const ctx = {
+    ...CTX,
+    existing: [
+      existing('english-comments', 'Some old rule about comment language'),
+      existing('old-rule', 'Comments may be in Polish', { project: 'global' }),
+    ],
+  };
+
+  const { records } = candidatesFrom(
+    { candidates: [cand('English comments', { scope: 'global', supersedes: ['old-rule', 'english-comments'], body: 'Write every code comment in English, in every repo.' })] },
+    ctx,
+  );
+
+  assert.equal(records[0].id, 'english-comments-2');
+  assert.deepEqual(records[0].supersedes, ['english-comments']);
+});
+
+test('the suggested-global note survives a source at the length limit', () => {
+  const { records } = candidatesFrom({ candidates: [cand('Node 24 rmSync fails with EPERM under load', { scope: 'global' })] }, { ...CTX, source: 's'.repeat(300) });
+
+  assert.equal(records[0].source.length, 300);
+  assert.equal(sourceNotes(records[0].source).suggestedGlobal, true);
+});
+
+test('a long source loses its session part, never the outside note, when the suggested-global note is added', () => {
+  const source = `${'s'.repeat(300 - outsideNote(2).length)}${outsideNote(2)}`;
+
+  const { records } = candidatesFrom({ candidates: [cand('Node 24 rmSync fails with EPERM under load', { scope: 'global' })] }, { ...CTX, source });
+
+  assert.equal(records[0].source.length, 300);
+  assert.deepEqual(sourceNotes(records[0].source), { suggestedGlobal: true, outside: 2 });
+});
+
+test('the outside note comes before the suggested-global note and both are read back', () => {
+  const source = `${CTX.source}${outsideNote(3)}`;
+
+  const { records } = candidatesFrom({ candidates: [cand('Node 24 rmSync fails with EPERM under load', { scope: 'global' })] }, { ...CTX, source });
+
+  assert.equal(records[0].source, `${CTX.source}, read 3 outside source(s), suggested global`);
+  assert.deepEqual(sourceNotes(records[0].source), { suggestedGlobal: true, outside: 3 });
+  assert.equal(withoutSuggestedGlobal(records[0].source), `${CTX.source}, read 3 outside source(s)`);
+  assert.equal(outsideNote(0), '');
+  assert.deepEqual(sourceNotes(null), { suggestedGlobal: false, outside: 0 });
 });
 
 test('the model cannot choose confidence, id, project or source', () => {

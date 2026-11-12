@@ -12,7 +12,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createCapture, readPiece, readLedger, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING } = require('../src/memorycapture.js');
+const { createCapture, extractPiece, readPiece, readLedger, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING } = require('../src/memorycapture.js');
+const { listInbox } = require('../src/memoryinbox.js');
 const { memoryPaths } = require('../src/memorysync.js');
 const { setEnabled } = require('../src/memoryprojects.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
@@ -327,4 +328,76 @@ test('only a transcript under the transcripts folder is ever tracked or read', a
 
   assert.equal(s.calls.length, 0);
   assert.deepEqual(s.ledger().files, {});
+});
+
+// ---- outside content (security review of 2026-11-11) -----------------------------
+
+/** A session that also called these tools from the assistant turn. */
+const sessionWithTools = (topic, tools) =>
+  `${[
+    line('user', `please look at ${topic} ${'detail '.repeat(60)}`),
+    line('assistant', [
+      { type: 'text', text: `I looked at ${topic}. ${'finding '.repeat(60)}` },
+      ...tools.map((name, i) => ({ type: 'tool_use', id: `t${i}`, name, input: { query: topic } })),
+    ]),
+  ].join('\n')}\n`;
+
+test('a session that read outside content notes the count in the source of its memories', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('bbbbbbbb-2222', sessionWithTools('the release script', ['WebFetch', 'mcp__github__get_issue', 'Bash', 'mcp__lunacore__luna_todo_add']));
+  s.state.reply = answer('Name the installer asset with dashes');
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  const [memory] = s.memories();
+  assert.equal(memory.source, 'captured from session bbbbbbbb on PC1, read 2 outside source(s)');
+  const [item] = listInbox(memoryPaths(s.configDir).dir).items;
+  assert.equal(item.outside, 2);
+  assert.equal(item.suggestedGlobal, false);
+});
+
+test('the outside note comes before the suggested-global note in a captured source', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('cccccccc-3333', sessionWithTools('comment style', ['WebSearch']));
+  s.state.reply = { ok: true, answer: { candidates: [{ type: 'preference', scope: 'global', title: 'Comments are written in English', body: 'Every code comment is English.' }] } };
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  const [memory] = s.memories();
+  assert.equal(memory.project, PROJECT);
+  assert.equal(memory.source, 'captured from session cccccccc on PC1, read 1 outside source(s), suggested global');
+  const [item] = listInbox(memoryPaths(s.configDir).dir).items;
+  assert.deepEqual([item.outside, item.suggestedGlobal], [1, true]);
+});
+
+test('a session that used only local tools gets no outside note', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('dddddddd-4444', sessionWithTools('the release script', ['Bash', 'Read', 'mcp__lunacore__memory_search']));
+  s.state.reply = answer('Name the installer asset with dashes');
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  const [memory] = s.memories();
+  assert.equal(memory.source, 'captured from session dddddddd on PC1');
+  assert.equal(listInbox(memoryPaths(s.configDir).dir).items[0].outside, 0);
+});
+
+test('extractPiece reports the outside count it noted', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-capture-piece-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+
+  const res = await extractPiece({
+    text: sessionWithTools('the release script', ['Agent', 'Task']),
+    project: PROJECT,
+    dir,
+    source: 'captured from session eeeeeeee on PC1',
+    today: '2026-11-11',
+    run: async () => answer('Name the installer asset with dashes'),
+  });
+
+  assert.equal(res.outside, 2);
+  assert.equal(res.records[0].source, 'captured from session eeeeeeee on PC1, read 2 outside source(s)');
 });
