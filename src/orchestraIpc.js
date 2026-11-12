@@ -31,6 +31,7 @@ const { isAllowRule, isOptionsPatch, PR_URL_RE } = require('./orchestraSuperviso
 const { todoSelection, planTarget, runPlan } = require('./orchestraPlanStart');
 const { validatePlanRunPayload, planRunTarget } = require('./orchestraPlanRunStart');
 const { planDocsDir } = require('./orchestraPlanRunView');
+const { planIdPayload } = require('./orchestraResume');
 
 const MAX_PROJECT_ID_CHARS = 200;
 // A payload that is present but not a plain object.
@@ -72,6 +73,8 @@ function runSummary(entry, projects) {
     settled: view.settled === true,
     running: entry.running === true,
     pausedUntil: Number.isFinite(view.pausedUntil) ? view.pausedUntil : null,
+    // Cut by a PC shutdown / paused for one: the board opens on it at start.
+    interrupted: isPlainObject(view.interrupted),
     scheduledAt: Number.isFinite(view.scheduledAt) ? view.scheduledAt : null,
     tally: isPlainObject(view.tally) ? { ...view.tally } : null,
     packages: Array.isArray(view.packages) ? view.packages.length : 0,
@@ -304,6 +307,38 @@ function registerOrchestraIpc(ipcMain, ctx) {
     if (!run.ok) return run;
     return ctx.godModeBlock(run.projectId) || run.controller.resumeRun(payload);
   });
+  // A run a PC shutdown cut (src/orchestraResume.js): {planId, projectId?}
+  // only, shape-checked here; the run and its plan are resolved in main.
+  // Resume now / Pause for shutdown respect Luna's Work; Cancel only ever
+  // holds the run, so it works always (like Kill).
+  const interruptedRun = (payload) => {
+    const clean = planIdPayload(payload);
+    return clean.ok ? runForPayload(clean.payload) : clean;
+  };
+  const sendChanged = (run) => (res) => {
+    if (res && res.ok) changed(run.projectId, run.controller.view());
+    return res;
+  };
+  ipcMain.handle('orchestra:resumeInterrupted', async (_event, payload) => {
+    const run = interruptedRun(payload);
+    if (!run.ok) return run;
+    const blocked = ctx.godModeBlock(run.projectId);
+    if (blocked) return blocked;
+    return sendChanged(run)(await run.controller.resumeInterrupted({ planId: payload.planId }));
+  });
+  ipcMain.handle('orchestra:cancelResume', (_event, payload) => {
+    const run = interruptedRun(payload);
+    if (!run.ok) return run;
+    return sendChanged(run)(run.controller.cancelResume({ planId: payload.planId }));
+  });
+  ipcMain.handle('orchestra:pauseForShutdown', (_event, payload) => {
+    const run = interruptedRun(payload);
+    if (!run.ok) return run;
+    const blocked = ctx.godModeBlock(run.projectId);
+    if (blocked) return blocked;
+    return sendChanged(run)(run.controller.pauseForShutdown({ planId: payload.planId }));
+  });
+
   ipcMain.handle('orchestra:kill', (_event, opts) => {
     const run = resolveRun(projectIdOf(opts));
     return run.ok ? run.controller.kill() : false;

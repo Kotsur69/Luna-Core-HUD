@@ -183,17 +183,21 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * @param {string} command the profile's start command
  * @param {string} uuid transcript id to resume
  * @param {object|null} [task] the worker task the tab was first started with
+ * @param {string|null} [message] first message instead of the account one (a
+ *   God Mode resume after a PC shutdown); one that would break the single
+ *   quotes falls back to the account message
  * @returns {string|null}
  */
-function withAccountResume(command, uuid, task = null) {
+function withAccountResume(command, uuid, task = null, message = null) {
   const cmd = String(command || '').trim();
   if (!isClaudeCommand(cmd) || !UUID_RE.test(String(uuid || '')) || SESSION_ID_DECIDED.test(cmd)) return null;
   // A plan-run worker is never resumed without its lockdown: the caller waits instead.
   if (task && task.lockdown) return null;
-  const withFlags = task ? withTaskBrief(cmd, task, ACCOUNT_RESUME_MESSAGE) : null;
+  const first = typeof message === 'string' && message && !/['`\r\n‘-‛]/.test(message) ? message : ACCOUNT_RESUME_MESSAGE;
+  const withFlags = task ? withTaskBrief(cmd, task, first) : null;
   if (withFlags) return `${withFlags} --resume ${uuid}`;
   const [bin, ...rest] = cmd.split(/\s+/);
-  return [bin, `'${ACCOUNT_RESUME_MESSAGE}'`, ...rest, '--resume', uuid].join(' ');
+  return [bin, `'${first}'`, ...rest, '--resume', uuid].join(' ');
 }
 
 /**

@@ -30,7 +30,9 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { encodeProjectDir } = require('./observer');
 const { BRIEF_DIR, RESUME_GRACE_MS } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
 const { loadProtected } = require('./orchestraHybridGuard');
@@ -258,6 +260,22 @@ function sessionDeps(ctx) {
     },
     // Second pass + slice 5.
     closeSession: (id) => ctx.closeSession(id),
+    // A resume after a PC shutdown (orchestraResume.js): the worker's
+    // conversation id (the watcher's follows /clear, like tabResume.tabRecord)
+    // and whether its transcript reached the disk.
+    transcriptIdOf: (id) => {
+      const s = ctx.sessions.get(id);
+      return s ? (s.watcher && s.watcher.sessionUuid) || s.transcriptId || null : null;
+    },
+    transcriptExists: (cwd, uuid) => {
+      const file = path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(cwd), `${uuid}.jsonl`);
+      try {
+        return fs.statSync(file).isFile();
+      } catch (err) {
+        if (err && err.code !== 'ENOENT') ctx.log(`[orchestra] transcript check failed: ${err.code || err.message}`);
+        return false;
+      }
+    },
   };
 }
 
@@ -727,6 +745,9 @@ function builderDeps(projectId, ctx, self) {
   const building = () => ctx.builder.isBuilding(projectId);
   const wrapped = ctx.builder.wrapPlanner(runPlanner);
   return {
+    // Luna's Work resumes its own build after a restart: God Mode's shutdown
+    // countdown does not drive the same run (Resume now by hand still works).
+    autoResumeBlocked: () => building(),
     runPlanner: (args) => (building() ? wrapped(args) : runPlanner(args)),
     workerSettings: () => {
       const prefs = ctx.readUiPrefs();

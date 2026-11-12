@@ -641,6 +641,8 @@ function normalizeHistoryEntry(raw) {
     kind: typeof raw.kind === 'string' && HISTORY_KIND_RE.test(raw.kind) ? raw.kind : 'stall',
     reason,
     detail: detail ? detail.replace(/[\x00-\x1f\x7f]+/g, ' ').trim() || null : null,
+    // A resume after a shutdown (orchestraResume.js): its own chat or a fresh worker.
+    ...(raw.how === 'chat' || raw.how === 'fresh' ? { how: raw.how } : {}),
   };
 }
 
@@ -668,6 +670,7 @@ const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string'
 // then relaunches the package in a FRESH worktree instead of trusting it).
 const SLUG_RE = /^[a-z0-9-]{1,64}$/;
 const SHA_RE = /^[0-9a-f]{7,64}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // BRANCH_PREFIX is 'luna/' (worktrees.js); a regex-safe prefix check plus
 // the slug alphabet, so no value can start with '-' or contain '..'.
 const isBranch = (v) =>
@@ -729,6 +732,9 @@ function normalizePackage(raw) {
     todoAts: Array.isArray(raw.todoAts) ? raw.todoAts.filter(Number.isFinite) : [],
     state: STATES.has(raw.state) ? raw.state : 'pending',
     sessionId: strOrNull(raw.sessionId, 64),
+    // The worker's Claude conversation (a UUID): a resume after a shutdown
+    // reopens it with `claude --resume` (orchestraResume.js).
+    transcriptId: typeof raw.transcriptId === 'string' && UUID_RE.test(raw.transcriptId) ? raw.transcriptId.toLowerCase() : null,
     ...storedLocation(raw),
     // Never restored: recomputed from the brief folder + worktree name.
     briefPath: null,

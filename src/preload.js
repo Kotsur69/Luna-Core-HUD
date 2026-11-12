@@ -740,6 +740,17 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Resume a run held for an empty node_modules ('noNodeModules'); main re-checks. Only the plan id crosses. */
   resumeOrchestra: (planId, projectId) =>
     ipcRenderer.invoke('orchestra:resume', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
+  /**
+   * A run a PC shutdown cut (src/orchestraResume.js): "Resume now", the
+   * banner's Cancel and "Pause for shutdown". Only the plan id (and the
+   * optional project scope) crosses; main validates both and acts itself.
+   */
+  resumeInterruptedOrchestra: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:resumeInterrupted', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
+  cancelOrchestraResume: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:cancelResume', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
+  pauseOrchestraForShutdown: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:pauseForShutdown', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
   /** Slice 4 kill switch for one run: no new workers, Esc to the running ones. */
   killOrchestra: (projectId) => ipcRenderer.invoke('orchestra:kill', orchestraScope(projectId)),
   /**

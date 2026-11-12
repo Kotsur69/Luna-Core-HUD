@@ -38,6 +38,7 @@ import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrati
 import * as board from './orchestraBoard.js';
 import { switcherStrip } from './orchestraSwitcher.js';
 import { runTypeSwitch, planOnlyForm, resetPlanOnlyForm, planRunPanel } from './orchestraPlanRun.js';
+import { resumeBanner, pauseRow } from './orchestraResumeBanner.js';
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
 const q = (sel) => (overlay ? overlay.querySelector(sel) : null);
@@ -61,6 +62,8 @@ const FAIL_CODES = new Set([
   // "Approve plan" (orchestraPlanApprove.js, F4a).
   'notPlanRun', 'notReady', 'noPlanDoc', 'noBase', 'unsafeBranch', 'notOnBase', 'noBranch',
   'outsidePlanFolder', 'mergeConflict', 'mergeInProgress', 'gitFailed', 'noTasks', 'todoWriteFailed', 'badId', 'unavailable',
+  // Resume after a shutdown / Pause for shutdown (orchestraResumeBanner.js).
+  'notInterrupted', 'notRunning', 'alreadyPaused',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).
@@ -522,6 +525,9 @@ function checkWakeOnce() {
 // A countdown that started opens the board once, so its Cancel is in reach.
 let shownCountdown = null;
 function countdownKey(next) {
+  // A resume countdown after a shutdown opens the board too: Cancel in reach.
+  const i = next && next.interrupted;
+  if (i && Number.isFinite(i.resumeAt)) return `resume:${next.id}:${i.at}`;
   const power = next && next.power;
   if (!power) return null;
   const s = power.shutdown && power.shutdown.phase === 'countdown' ? `shutdown:${power.shutdown.at}` : null;
@@ -531,6 +537,19 @@ function countdownKey(next) {
 function renderPlan() {
   const banner = powerBanner(plan, { onCancel: cancelPower });
   if (banner) body.append(banner);
+  // This run's own resume-after-shutdown banner (one per run / board).
+  const interrupted = resumeBanner(plan, {
+    disabled: phase !== 'idle',
+    onResume: () => act(() => window.lunacore.resumeInterruptedOrchestra(plan.id, board.project())),
+    onCancel: () => act(() => window.lunacore.cancelOrchestraResume(plan.id, board.project())),
+  });
+  if (interrupted) body.append(interrupted);
+  const pause = pauseRow(plan, {
+    running: plan.packages.some(isActive),
+    disabled: phase !== 'idle',
+    onPause: () => act(() => window.lunacore.pauseOrchestraForShutdown(plan.id, board.project())),
+  });
+  if (pause) body.append(pause);
   const onBattery = batteryBanner(plan);
   if (onBattery) body.append(onBattery);
   armAbortReveal();
@@ -1064,6 +1083,18 @@ if (overlay) {
   onLangChange(() => {
     if (isOpen) render();
   });
+  // At start: a run a shutdown cut was restored before this page listened -
+  // its banner (and Cancel) opens once on its own.
+  if (window.lunacore.listOrchestra) {
+    window.lunacore
+      .listOrchestra()
+      .then((runs) => {
+        const cut = Array.isArray(runs) ? runs.find((r) => r && r.interrupted === true) : null;
+        if (cut && !isOpen) openOrchestra(cut.projectId);
+      })
+      // Only the auto-open is lost: the countdown runs in main regardless.
+      .catch((err) => console.warn('[orchestra] run list unavailable:', err && err.message));
+  }
 }
 
 /**
