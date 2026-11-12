@@ -23,8 +23,28 @@
 'use strict';
 
 import { t, pulse } from './util.js';
-import { onLangChange } from './bus.js';
+import { onLangChange, onSetupSwitched } from './bus.js';
 import { defineWidget } from './registry.js';
+
+// A Claude setup switch changes which skills a session loads: rescan then.
+// Module scope (not per mount) because the list itself lives at module scope.
+onSetupSwitched(() => {
+  rescan().catch((err) => console.error('[skills] rescan after setup switch failed:', err && err.message));
+});
+
+// Bumped per rescan: when two overlap (button + setup switch), only the newest
+// answer may land, so an older scan never overwrites a fresher one.
+let rescanSeq = 0;
+
+/** Fresh disk scan through main; re-renders if the widget is on screen. */
+async function rescan() {
+  const seq = ++rescanSeq;
+  const data = await window.lunacore.rescanSkills();
+  if (seq !== rescanSeq) return;
+  allCategories = (data && data.categories) || [];
+  total = (data && data.total) || 0;
+  renderSkills(); // no-op while unmounted
+}
 
 // Elements of the current mount, or null when this widget is not on screen.
 let els = null;
@@ -117,10 +137,7 @@ defineWidget({
       const btn = els.rescan;
       btn.classList.add('is-spinning');
       try {
-        const data = await window.lunacore.rescanSkills();
-        allCategories = (data && data.categories) || [];
-        total = (data && data.total) || 0;
-        renderSkills(); // no-op if we were unmounted while awaiting
+        await rescan();
       } catch {
         /* ignore - the stale list stays on screen */
       } finally {

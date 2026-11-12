@@ -230,6 +230,24 @@ export function emitBusyIdle(sessionId, busyMs = 0) {
   if (sessionId) busyIdle.emit(sessionId, busyMs);
 }
 
+// ---- Claude setup switched ---------------------------------------------------
+//
+// Fired by claudesetup.js after `luna-setup use` touched ~/.claude (applied, or
+// failed partway). The skills widget rescans, since the switch changed which
+// plugins and skills a session loads. Not replayed: a widget mounted later
+// fetches the fresh list on its own.
+
+const setupSwitched = channel();
+
+/** ~/.claude was rewritten by a setup switch. cb() -> disposer */
+export function onSetupSwitched(cb) {
+  return setupSwitched.on(cb);
+}
+
+export function emitSetupSwitched() {
+  setupSwitched.emit();
+}
+
 // ---- Per-tab view state -----------------------------------------------------
 
 const sessionViews = [];
@@ -285,6 +303,7 @@ export function busStats() {
     telemetryUpdate: telemetryUpdate.size,
     mediaUpdate: mediaUpdate.size,
     clipboardUpdate: clipboardUpdate.size,
+    setupSwitched: setupSwitched.size,
     busyIdle: busyIdle.size,
     sessionViews: sessionViews.length,
   };

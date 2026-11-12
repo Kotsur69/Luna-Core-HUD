@@ -1,10 +1,21 @@
 // ============================================================================
 // LunaCore - skill cheat-sheet by category (7A)
 // ----------------------------------------------------------------------------
-// Auto-scans the Claude Code skill directories: finds SKILL.md files, reads
-// `name` and `description` out of the frontmatter, and groups skills
-// heuristically into categories (frontend / backend / devops / tests / data-ml /
-// security / git-review / docs / other).
+// Lists the skills a Claude Code session really loads with the CURRENT setup,
+// reads `name` and `description` out of each SKILL.md frontmatter, and groups
+// skills heuristically into categories (frontend / backend / devops / tests /
+// data-ml / security / git-review / docs / other).
+//
+// What counts as loaded (Claude Code's user-level rules; project-level
+// .claude/ skills and plugin switches are out of scope for this global widget):
+//   * user skills: ~/.claude/skills/<name>/SKILL.md, one level deep only
+//     (synced/ and learned/ hold nested copies the CLI does not load);
+//   * plugin skills: only plugins switched on in settings(.local).json
+//     `enabledPlugins`, at the installPath installed_plugins.json records -
+//     never old cached versions or disabled plugins. Skill folders come from
+//     plugin.json `skills`, else the marketplace entry's `skills` list, else
+//     ./skills. Plugin skills are named `<plugin>:<skill>`, as you invoke them.
+// A switched Claude setup (luna-setup profile) therefore shows its own count.
 //
 // Read-only and purely local - zero tokens. The result is cached after the
 // first scan.
@@ -19,13 +30,128 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// Roots to search for SKILL.md (recursively, with a depth limit).
-const SCAN_ROOTS = [
-  path.join(os.homedir(), '.claude', 'skills'),
-  path.join(os.homedir(), '.claude', 'plugins'),
-];
-const MAX_DEPTH = 7;
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out']);
+const DEFAULT_CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const DEFAULT_SKILL_PATHS = Object.freeze(['./skills']);
+const SKILL_FILE = 'SKILL.md';
+
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const errText = (err) => (err instanceof Error ? err.message : String(err));
+const defaultLog = (line) => console.error(line);
+
+/** Parsed JSON, or null when the file is missing. A broken file is logged, then null. */
+async function readJson(file, log) {
+  let text;
+  try {
+    text = await fs.promises.readFile(file, 'utf8');
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') log(`[skills] cannot read ${file}: ${errText(err)}`);
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    log(`[skills] broken JSON in ${file}: ${errText(err)}`);
+    return null;
+  }
+}
+
+async function isFile(p) {
+  try {
+    return (await fs.promises.stat(p)).isFile();
+  } catch {
+    return false; // missing is the normal "not a skill" answer
+  }
+}
+
+/** `dir` itself when it holds SKILL.md, else its direct subfolders that do. */
+async function skillFilesIn(dir) {
+  const own = path.join(dir, SKILL_FILE);
+  if (await isFile(own)) return [own];
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return []; // folder missing / not readable: no skills there
+  }
+  // Symlinked/junctioned skill folders count too (Claude Code follows them):
+  // the stat in isFile() decides whether a SKILL.md is really behind the link.
+  const candidates = entries
+    .filter((e) => e.isDirectory() || e.isSymbolicLink())
+    .map((e) => path.join(dir, e.name, SKILL_FILE));
+  const found = await Promise.all(candidates.map(async (f) => ((await isFile(f)) ? f : null)));
+  return found.filter(Boolean);
+}
+
+/** Resolves a manifest path under `root`; null when it would climb out of it. */
+function insideRoot(root, rel) {
+  if (typeof rel !== 'string' || !rel) return null;
+  const abs = path.resolve(root, rel);
+  const back = path.relative(root, abs);
+  const climbs = back === '..' || back.startsWith(`..${path.sep}`);
+  return climbs || path.isAbsolute(back) ? null : abs;
+}
+
+const asList = (v) => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.filter((x) => typeof x === 'string') : null);
+
+/** Plugin keys switched on: settings.json, overridden by settings.local.json. */
+async function enabledPluginKeys(claudeDir, log) {
+  const merged = {};
+  for (const name of ['settings.json', 'settings.local.json']) {
+    const settings = await readJson(path.join(claudeDir, name), log);
+    if (isObj(settings) && isObj(settings.enabledPlugins)) Object.assign(merged, settings.enabledPlugins);
+  }
+  return Object.keys(merged).filter((key) => merged[key] === true);
+}
+
+/** The install folder installed_plugins.json records for a key (user scope first). */
+function installPathOf(registry, key) {
+  const entries = isObj(registry) && isObj(registry.plugins) ? registry.plugins[key] : null;
+  if (!Array.isArray(entries)) return null;
+  const valid = entries.filter((e) => isObj(e) && typeof e.installPath === 'string' && e.installPath);
+  const pick = valid.find((e) => e.scope === 'user') || valid[0];
+  return pick ? pick.installPath : null;
+}
+
+/** Skill folders a plugin declares: plugin.json, else its marketplace entry, else ./skills. */
+async function declaredSkillPaths(claudeDir, installPath, pluginName, marketplace, log) {
+  const manifest = await readJson(path.join(installPath, '.claude-plugin', 'plugin.json'), log);
+  const fromManifest = isObj(manifest) ? asList(manifest.skills) : null;
+  if (fromManifest) return fromManifest;
+  const catalogs = [path.join(installPath, '.claude-plugin', 'marketplace.json')];
+  // A marketplace name is a folder name here: never let it climb out.
+  const shared = insideRoot(path.join(claudeDir, 'plugins', 'marketplaces'), marketplace);
+  if (shared) catalogs.push(path.join(shared, '.claude-plugin', 'marketplace.json'));
+  for (const file of catalogs) {
+    const catalog = await readJson(file, log);
+    const plugins = isObj(catalog) && Array.isArray(catalog.plugins) ? catalog.plugins : [];
+    const entry = plugins.find((p) => isObj(p) && p.name === pluginName);
+    const fromEntry = entry ? asList(entry.skills) : null;
+    if (fromEntry) return fromEntry;
+  }
+  return DEFAULT_SKILL_PATHS;
+}
+
+/** SKILL.md files of one enabled plugin, tagged with its `<plugin>:` prefix. */
+async function pluginSkillFiles(claudeDir, registry, key, log) {
+  const installPath = installPathOf(registry, key);
+  if (!installPath) return [];
+  const [pluginName, marketplace = ''] = key.split('@');
+  const rels = await declaredSkillPaths(claudeDir, installPath, pluginName, marketplace, log);
+  const dirs = rels.map((rel) => insideRoot(installPath, rel)).filter(Boolean);
+  const files = (await Promise.all(dirs.map(skillFilesIn))).flat();
+  return files.map((file) => ({ file, prefix: `${pluginName}:` }));
+}
+
+/** [{file, prefix}] for every SKILL.md the current setup loads. */
+async function loadedSkillFiles(claudeDir, log) {
+  const userRoot = path.join(claudeDir, 'skills');
+  // Only <root>/<name>/SKILL.md: a stray SKILL.md in the root itself is not a skill.
+  const userFiles = (await skillFilesIn(userRoot)).filter((f) => path.dirname(path.dirname(f)) === userRoot);
+  const registry = await readJson(path.join(claudeDir, 'plugins', 'installed_plugins.json'), log);
+  const keys = await enabledPluginKeys(claudeDir, log);
+  const perPlugin = await Promise.all(keys.map((key) => pluginSkillFiles(claudeDir, registry, key, log)));
+  return userFiles.map((file) => ({ file, prefix: '' })).concat(perPlugin.flat());
+}
 
 // Categories in match order (first hit wins). Keywords are searched in the
 // skill's name + description + file path (lowercased).
@@ -48,39 +174,13 @@ const CATEGORIES = [
 ];
 const FALLBACK_CATEGORY = 'other';
 
-/**
- * Recursively collects SKILL.md paths under a root.
- *
- * A5: async and concurrent (not sequential) - the ~2.4s this used to cost was
- * I/O latency across ~339 files, not CPU, so fanning subdirectories out with
- * Promise.all makes this both non-blocking AND faster, not just the former.
- */
-async function findSkillFiles(root, depth, acc) {
-  if (depth > MAX_DEPTH) return;
-  let entries;
-  try {
-    entries = await fs.promises.readdir(root, { withFileTypes: true });
-  } catch {
-    return; // directory missing / not readable
-  }
-  const subdirs = [];
-  for (const e of entries) {
-    if (e.isDirectory()) {
-      if (SKIP_DIRS.has(e.name)) continue;
-      subdirs.push(findSkillFiles(path.join(root, e.name), depth + 1, acc));
-    } else if (e.name.toLowerCase() === 'skill.md') {
-      acc.push(path.join(root, e.name));
-    }
-  }
-  await Promise.all(subdirs);
-}
-
 /** Extracts name + description from a SKILL.md frontmatter block. */
-async function parseSkill(file) {
+async function parseSkill({ file, prefix }, log) {
   let text;
   try {
     text = (await fs.promises.readFile(file, 'utf8')).slice(0, 4096); // frontmatter is at the top
-  } catch {
+  } catch (err) {
+    log(`[skills] cannot read ${file}: ${errText(err)}`);
     return null;
   }
   const nameM = text.match(/^name:\s*(.+?)\s*$/m);
@@ -88,7 +188,7 @@ async function parseSkill(file) {
   // Name from the frontmatter, falling back to the skill's directory name.
   const name = (nameM && stripQuotes(nameM[1])) || path.basename(path.dirname(file));
   const description = descM ? stripQuotes(descM[1]) : '';
-  return { name, description, file };
+  return { name: `${prefix}${name}`, description, file };
 }
 
 function stripQuotes(s) {
@@ -107,14 +207,15 @@ function categorize(skill) {
 /**
  * Scans the skill directories and returns skills grouped into categories.
  * `id` is a slug, not a label - the renderer translates it. See CATEGORIES.
+ * @param {{claudeDir?: string, log?: (line: string) => void}} [opts]
+ *   claudeDir defaults to ~/.claude (injectable for tests).
  * @returns {Promise<{categories: Array<{id:string, skills:Array}>, total:number}>}
  */
-async function scanSkills() {
-  const files = [];
-  await Promise.all(SCAN_ROOTS.map((root) => findSkillFiles(root, 0, files)));
+async function scanSkills({ claudeDir = DEFAULT_CLAUDE_DIR, log = defaultLog } = {}) {
+  const files = await loadedSkillFiles(claudeDir, log);
 
-  // Parse + dedupe by name (the same skill can live in several places).
-  const parsed = await Promise.all(files.map(parseSkill));
+  // Parse + dedupe by name (two plugin paths may point at the same skill).
+  const parsed = await Promise.all(files.map((f) => parseSkill(f, log)));
   const byName = new Map();
   for (const skill of parsed) {
     if (skill && skill.name && !byName.has(skill.name)) {

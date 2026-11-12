@@ -274,11 +274,17 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     historyFile: () => null,
   });
   let skills = [];
-  loadSkills()
-    .then((scan) => {
-      skills = skillNames(scan);
-    })
-    .catch((err) => console.error('[hostmain] skill scan failed:', err.message));
+  // Re-read on every heartbeat: loadSkills() is a cached promise, and a rescan
+  // (e.g. after a Claude setup switch) replaces it, so the phone follows the
+  // active setup instead of the one the host booted with.
+  function refreshSkills() {
+    loadSkills()
+      .then((scan) => {
+        skills = skillNames(scan);
+      })
+      .catch((err) => console.error('[hostmain] skill scan failed:', err.message));
+  }
+  refreshSkills();
 
   function setDefault() {
     try {
@@ -333,6 +339,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
       Date.now(),
     );
     cloud.snapshots.put('host', snap).catch((err) => console.error('[hostmain] heartbeat failed:', err.message));
+    refreshSkills();
     refreshTray();
   }
 

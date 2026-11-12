@@ -23,7 +23,7 @@
 'use strict';
 
 import { t } from './util.js';
-import { onLangChange } from './bus.js';
+import { onLangChange, emitSetupSwitched } from './bus.js';
 import { defineWidget } from './registry.js';
 
 const NOTE_MS = 10000;
@@ -301,10 +301,13 @@ async function onApply() {
     render();
     // A timed-out or failed `use` may have written part of ~/.claude: re-read
     // what is really applied. 'busy' means another switch owns that.
-    if (!res || res.error !== 'busy') load();
-    else restoreFocus();
+    if (!res || res.error !== 'busy') {
+      load();
+      emitSetupSwitched();
+    } else restoreFocus();
     return;
   }
+  emitSetupSwitched();
   active = name;
   if (typeof res.tokens === 'number') tokens = res.tokens;
   const n = count(res.running);
