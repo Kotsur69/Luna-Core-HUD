@@ -250,7 +250,7 @@ test('decisionEvent builds the same line for the app and the CLI', () => {
   assert.deepEqual(decisionEvent('edited', { ...record, usefulness: undefined }), { ev: 'edited', key: key('a'), type: 'how-to' });
 });
 
-test('decisions are counted per usefulness band; a decision without a band score is unscored', () => {
+test('decisions are counted per usefulness band; a score under the bands is under, none is unscored', () => {
   const decision = (ev, id, usefulness) => ({ at: NOW, ev, key: key(id), type: 'gotcha', ...(usefulness === undefined ? {} : { usefulness }) });
   const events = [
     decision('approved', 'a', 30),
@@ -263,6 +263,7 @@ test('decisions are counted per usefulness band; a decision without a band score
     decision('rejected', 'h', 100),
     decision('approved', 'i'),
     decision('rejected', 'j', 10),
+    decision('approved', 'l', 0),
     { at: NOW, ev: 'proposed', key: key('k'), type: 'gotcha', usefulness: 90 },
   ];
 
@@ -274,7 +275,8 @@ test('decisions are counted per usefulness band; a decision without a band score
     { label: '70-84', approved: 2, rejected: 0 },
     { label: '85-100', approved: 1, rejected: 1 },
   ]);
-  assert.deepEqual(stats.unscored, { approved: 1, rejected: 1 });
+  assert.deepEqual(stats.under, { approved: 1, rejected: 1 });
+  assert.deepEqual(stats.unscored, { approved: 1, rejected: 0 });
   assert.deepEqual(
     USEFULNESS_BANDS.map((b) => b.label),
     ['30-49', '50-69', '70-84', '85-100'],

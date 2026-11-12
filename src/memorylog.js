@@ -244,9 +244,11 @@ const rateOf = ({ approved, rejected }) => (approved + rejected ? approved / (ap
  * @param {{since?: number, project?: string|null}} [opts] since = ms; project = only this one
  * @returns {{captures: number, proposed: number, approved: number, rejected: number, edited: number,
  *   rate: number|null, dropped: object, byType: object,
- *   bands: {label: string, approved: number, rejected: number}[], unscored: {approved: number, rejected: number}}}
+ *   bands: {label: string, approved: number, rejected: number}[], under: {approved: number, rejected: number},
+ *   unscored: {approved: number, rejected: number}}}
  *   edited = approved memories that were edited first; rate = approved / (approved + rejected);
- *   bands = decisions per usefulness band (USEFULNESS_BANDS); unscored = decisions without a score in a band
+ *   bands = decisions per usefulness band (USEFULNESS_BANDS); under = scored below the lowest band
+ *   (a hand-edited file, or a floor raised later); unscored = decisions without a score
  */
 function captureStats(events, { since = 0, project = null } = {}) {
   const total = { captures: 0, ...emptyCounts() };
@@ -254,10 +256,12 @@ function captureStats(events, { since = 0, project = null } = {}) {
   const dropped = {};
   const editedKeys = new Set();
   const bands = emptyBands();
+  const under = { approved: 0, rejected: 0 };
   const unscored = { approved: 0, rejected: 0 };
   const decide = (usefulness, field) => {
-    const i = usefulness === undefined ? -1 : USEFULNESS_BANDS.findIndex((b) => usefulness >= b.min && usefulness <= b.max);
-    if (i < 0) unscored[field]++;
+    if (usefulness === undefined) return void unscored[field]++;
+    const i = USEFULNESS_BANDS.findIndex((b) => usefulness >= b.min && usefulness <= b.max);
+    if (i < 0) under[field]++;
     else bands[i] = { ...bands[i], [field]: bands[i][field] + 1 };
   };
   const bump = (type, field) => {
@@ -285,7 +289,7 @@ function captureStats(events, { since = 0, project = null } = {}) {
     }
   }
   for (const counts of Object.values(byType)) counts.rate = rateOf(counts);
-  return { ...total, rate: rateOf(total), dropped, byType, bands, unscored };
+  return { ...total, rate: rateOf(total), dropped, byType, bands, under, unscored };
 }
 
 /**

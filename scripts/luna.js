@@ -48,7 +48,7 @@ const { setEnabled, readEnabled } = require('../src/memoryprojects');
 const { localStatus, memoryPaths } = require('../src/memorysync');
 const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
 const { createRepoKeys, findRepo } = require('../src/missionrepokey');
-const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, DAY_MS } = require('../src/memorylog');
+const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
 const { reviewList, verify, retire } = require('../src/memoryreview');
 const { machineName } = require('../src/missionledgersync');
 
@@ -395,6 +395,7 @@ function cmdStats({ configDir, project, values }) {
   // Calibration: a score that predicts the decision shows a rising approval rate band by band.
   out('  by usefulness score (decided):');
   for (const b of stats.bands) out(`    ${b.label.padStart(6)}: approved ${b.approved}, rejected ${b.rejected}`);
+  if (stats.under.approved + stats.under.rejected) out(`    under ${USEFULNESS_BANDS[0].min}: approved ${stats.under.approved}, rejected ${stats.under.rejected}`);
   if (stats.unscored.approved + stats.unscored.rejected) out(`    no score: approved ${stats.unscored.approved}, rejected ${stats.unscored.rejected}`);
   const dropped = Object.entries(stats.dropped);
   if (dropped.length) out(`  dropped by the filter: ${dropped.map(([reason, n]) => `${reason} ${n}`).join(', ')}`);

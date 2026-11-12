@@ -61,6 +61,13 @@ const STOP_WORDS = new Set(['the', 'and', 'for', 'not', 'with', 'that', 'this', 
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 
+/**
+ * The model's usefulness value as checkRecord should see it. A fraction under
+ * 1 means the model answered on a 0-1 scale: rounded, it would fall under the
+ * floor and drop a candidate that may be good, so it counts as unknown.
+ */
+const modelScore = (v) => (typeof v === 'number' && v > 0 && v < 1 ? undefined : v);
+
 // ---- notes in a captured memory's `source` --------------------------------------
 // `source` is the one free line a record has (memoryrecord.checkRecord drops
 // unknown fields), so the capture notes live there, in a fixed order:
@@ -251,7 +258,7 @@ function candidatesFrom(answer, { project, today, source, existing }) {
       links: [],
       body: typeof c.body === 'string' ? c.body.slice(0, MAX_BODY + 1) : '',
       // checkRecord rounds and clamps it; anything else is left unknown.
-      usefulness: c.usefulness,
+      usefulness: modelScore(c.usefulness),
     });
     if (!res.record) {
       reject(c, res.error);

@@ -304,6 +304,22 @@ test(`a candidate scored under USEFULNESS_FLOOR (${USEFULNESS_FLOOR}) is dropped
   assert.equal(LOW_USEFULNESS, 'low usefulness');
 });
 
+test('a 0-1 fraction from the model counts as unknown instead of dropping the candidate', () => {
+  const { records, rejected } = candidatesFrom(
+    { candidates: [cand('Retry says busy after a sleep', { usefulness: 0.85 }), cand('Package times out on battery power', { usefulness: 0 })] },
+    CTX,
+  );
+
+  assert.deepEqual(
+    records.map((r) => r.usefulness),
+    [undefined],
+  );
+  assert.deepEqual(
+    rejected.map((r) => [r.reason, r.usefulness]),
+    [[LOW_USEFULNESS, 0]],
+  );
+});
+
 test('a high score changes nothing about confidence: the candidate still waits in the inbox', () => {
   const { records } = candidatesFrom({ candidates: [cand('Retry says busy after a sleep', { usefulness: 100, confidence: 'confirmed' })] }, CTX);
 
