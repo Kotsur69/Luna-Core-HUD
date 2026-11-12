@@ -2623,6 +2623,9 @@
     <div class="stimeline-modal__panel" role="dialog" aria-modal="true" aria-label="Podglad diffa pliku">
       <div class="stimeline-modal__bar">
         <span id="filediff-modal-title" class="stimeline-modal__time"></span>
+        <!-- Maximize / restore. Glyph, aria-pressed and both i18n keys are
+             flipped by modules/activefiles.js (setDiffMax); F toggles it too. -->
+        <button type="button" id="filediff-modal-maxbtn" class="stimeline-modal__closebtn filediff-modal__maxbtn" data-i18n-title="activefiles.diff.maximize" data-i18n-aria="activefiles.diff.maximize" aria-label="Powieksz" aria-pressed="false">□</button>
         <button type="button" id="filediff-modal-closebtn" class="stimeline-modal__closebtn" data-filediff-close data-i18n-title="activefiles.diff.close" aria-label="Zamknij">×</button>
       </div>
       <pre id="filediff-modal-text" class="stimeline-modal__text filediff__text"></pre>

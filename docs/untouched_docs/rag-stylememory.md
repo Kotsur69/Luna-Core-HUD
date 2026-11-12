@@ -432,8 +432,25 @@ context window.
 - **No new data source and no tokens.** It rides the feed the Skill Tracker already
   uses: `TranscriptWatcher` -> `metrics:tools` (start and end of each tool call) and
   `metrics:context`. Subagents, skills and the model come from the same transcript.
-- **Open: hook refusals.** Whether a hook's refusal is visible in the transcript has
-  not been checked. If it is not, the map has no Hooks station.
+- **Hook refusals: in the transcript, not in what the observer sends (checked
+  2026-11-12).** A PreToolUse refusal (the Fact-Forcing Gate, for example) is written
+  as an ordinary `tool_result` with `"is_error": true`, content starting
+  `PreToolUse:<Tool> hook error: ...`, and a top-level `toolDenialKind` on the entry.
+  Hooks that pass only leave `attachment` entries (`hook_success`,
+  `async_hook_response`, `hook_non_blocking_error`). `src/observer.js` drops all of
+  it for built-in tools: `toolEventsFromLines()` emits an `end` event with no
+  `is_error` and no content, so a refused Edit looks like a finished one on
+  `metrics:tools`. Only `metrics:mcp` carries `ok:false` plus the content, so a refused
+  MCP call shows up as an MCP error, not as a hook refusal. The work map model
+  (`src/renderer/modules/workmapmodel.js`) therefore has **no Hooks station**. Adding
+  one needs the observer to forward `is_error` and a short content prefix (or the
+  `toolDenialKind`) on tool `end` events: a main-process change for its own package.
+  The model already flags a tool end with `ok:false` / `isError:true` as an error,
+  so it is ready for that field.
+- **Skills station gap (found with the above).** `metrics:tools` carries a Skill
+  Tracker tile, not the tool name, and the `Skill` tool has no tile, so observer.js
+  never sends it. The model maps `Skill` by name, but the station stays dark until
+  the observer forwards tool names (the same observer change as above).
 - **The Memory station is the part that serves this plan.** It lights up and counts
   when a session calls `memory_search` or `memory_get`, and marks the card loaded at
   tab start. That count is the evidence for the with/without comparison of section 9.
