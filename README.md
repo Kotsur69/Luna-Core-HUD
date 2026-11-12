@@ -7,7 +7,26 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.26.0 — Free God Mode v2.**
+> **Current release: v0.27.0 — claude setup switcher widget (claude-code-setup profiles).**
+> - Claude setup switcher widget (claude-code-setup profiles)
+> - memory review fixes - hide unreviewed snippets, Make global in the
+>   inbox, outside-content note
+> - Luna Core Memory phase 5 - the review list, memory_verify and the
+>   capture log
+> - Luna Core Memory phase 4 - capture from finished sessions and the
+>   approval inbox
+> - Luna Core Memory phase 3 - project card in every claude tab
+> - Luna Core Memory phase 2 - memory_search and memory_get on the lunacore
+>   MCP server
+> - Luna Core Memory phase 1 - synced markdown memory with keyword search
+> - crash resume, editor auto-save, Fable, planner model, LW fixes
+> - Fix: secret scanner masks Stripe, JWT, Bearer, Slack, Google, npm tokens
+>   and URL passwords
+> - Fix: pick up switched or re-logged Claude accounts without a restart
+> - Fix: memory sees a project whose origin remote was added after the tab
+>   opened
+>
+> **v0.26.0 — Free God Mode v2.**
 > - **Free God Mode v2:** a *Workers* selector (Claude only / Plan with free
 >   models in mind / Free only), *Plan only* runs that write Markdown plans
 >   with free models, *Approve plan* -> to-dos -> build from the plan, and a
