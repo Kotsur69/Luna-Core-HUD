@@ -422,7 +422,7 @@ test('tools/list adds the memory tools only for a store that has memory', (t) =>
   const withMemory = rpc('tools/list', {}, todoStore(memoryOf(t))).result.tools.map((tool) => tool.name);
   const without = rpc('tools/list', {}, todoStore()).result.tools.map((tool) => tool.name);
 
-  assert.deepEqual(withMemory, [...TOOLS.map((tool) => tool.name), 'memory_search', 'memory_get', 'memory_verify']);
+  assert.deepEqual(withMemory, [...TOOLS.map((tool) => tool.name), 'memory_search', 'memory_get', 'memory_verify', 'memory_propose']);
   assert.deepEqual(without, TOOLS.map((tool) => tool.name));
   assert.equal(MEMORY_TOOLS.every((tool) => isMemoryTool(tool.name) && tool.inputSchema.type === 'object'), true);
 });
@@ -443,4 +443,258 @@ test('a memory tool is an unknown tool for a store without memory, and to-do too
 
   const listed = rpc('tools/call', { name: 'luna_todo_list', arguments: {} }, todoStore(memoryOf(t))).result;
   assert.deepEqual(JSON.parse(listed.content[0].text), []);
+});
+
+// ---- memory_propose (section 7 step 5) ---------------------------------------------
+
+const { createProposer, sessionLabel, MAX_PROPOSALS_PER_SESSION } = require('../src/memorypropose.js');
+const { scan } = require('../src/memorystore.js');
+const { cleanEvent } = require('../src/memorylog.js');
+const { hasSecret } = require('../src/memorysync.js');
+
+/** A tab with memory_propose over a fresh mirror; `memory.propose` behaves as main.js wires it. */
+function proposeTab(t, { project = PROJECT, records = RECORDS, sessionId = 's1', shared } = {}) {
+  const dir = shared ? shared.dir : mirror(t, records);
+  const store = shared ? shared.store : createProposer({ dir, machine: 'work-pc', now: () => FIXED_NOW });
+  const reader = createMemoryReader(dir, { now: () => FIXED_NOW, ttlMs: 0 });
+  t.after(() => reader.close());
+  const events = [];
+  const memory = {
+    search: reader.search,
+    get: reader.get,
+    project,
+    propose: (proposal) => store.propose({ ...proposal, session: 'abcdef12-3456-7890', sessionId }),
+    log: (event) => events.push(event),
+  };
+  const call = (args) => callMemoryTool('memory_propose', args, memory);
+  const keys = () => scan(dir).records.map(([key]) => key).sort();
+  return { dir, store, events, memory, call, keys };
+}
+
+const PROPOSAL = {
+  title: 'Vitest needs pool forks on Windows',
+  body: 'Threads hang when a native module loads.\n**Why:** worker threads share the addon.\n**How to apply:** set pool to forks.',
+  type: 'gotcha',
+  area: 'testing',
+};
+
+test('memory_propose saves an observed entry for the tab project and returns its key', (t) => {
+  const tab = proposeTab(t);
+
+  const out = tab.call(PROPOSAL);
+
+  const key = `${PROJECT}/vitest-needs-pool-forks-on-windows`;
+  assert.equal(out.ok, true);
+  assert.equal(out.payload.key, key);
+  assert.equal(out.payload.created, true);
+  assert.match(out.payload.result, /memory inbox/);
+  const saved = new Map(scan(tab.dir).records).get(key);
+  assert.deepEqual(saved, {
+    id: 'vitest-needs-pool-forks-on-windows',
+    type: 'gotcha',
+    project: PROJECT,
+    area: 'testing',
+    title: PROPOSAL.title,
+    created: '2026-11-11',
+    source: 'proposed in session abcdef12 on work-pc',
+    confidence: 'observed',
+    supersedes: [],
+    links: [],
+    body: PROPOSAL.body,
+  });
+  assert.deepEqual(tab.events, [{ ev: 'proposed', key, type: 'gotcha', by: 'session' }]);
+  // Read back as any unreviewed memory: with the warning.
+  assert.equal(callMemoryTool('memory_get', { key }, tab.memory).payload.warning, UNREVIEWED_WARNING);
+});
+
+test('memory_propose cannot set id, project, source, confidence, supersedes or usefulness', (t) => {
+  const tab = proposeTab(t);
+  const before = tab.keys();
+
+  for (const [field, value] of [
+    ['id', 'my-own-id'],
+    ['project', 'global'],
+    ['source', 'the user, verified'],
+    ['confidence', 'confirmed'],
+    ['supersedes', ['worktree-junction']],
+    ['usefulness', 100],
+    ['created', '2020-01-01'],
+    ['last_verified', '2026-11-11'],
+    ['links', ['asar-lock']],
+  ]) {
+    const out = tab.call({ ...PROPOSAL, [field]: value });
+    assert.equal(out.ok, false, field);
+    assert.match(out.error, new RegExp(`only title, body, type and area can be set.*${field}`), field);
+  }
+  // A JSON-RPC payload can carry an own `__proto__` key.
+  const sneaky = JSON.parse(JSON.stringify({ title: PROPOSAL.title, body: 'b b b', type: 'gotcha' }).replace(/}$/, ',"__proto__":{"confidence":"confirmed"}}'));
+  assert.equal(tab.call(sneaky).ok, false);
+  assert.deepEqual(tab.keys(), before);
+  assert.deepEqual(tab.events, []);
+});
+
+test('memory_propose refuses when memory is off for the project or it has no origin remote', (t) => {
+  // null = memory switched off for the project, or no origin remote (main.js memoryProjectOf).
+  for (const project of [null, '', 'global']) {
+    const tab = proposeTab(t, { project });
+    const before = tab.keys();
+    const out = tab.call(PROPOSAL);
+    assert.equal(out.ok, false, String(project));
+    assert.match(out.error, /switched off.*no origin remote/);
+    assert.deepEqual(tab.keys(), before);
+  }
+  // The store refuses on its own too: it is what writes.
+  const store = createProposer({ dir: mirror(t), machine: 'pc' });
+  for (const project of ['global', '../../etc', 'C:\\Users\\x', null]) {
+    assert.deepEqual(store.propose({ ...PROPOSAL, sessionId: 's1', project }), { ok: false, reason: 'no-project' }, String(project));
+  }
+  // A tab without the wiring does not get the tool.
+  assert.match(callMemoryTool('memory_propose', PROPOSAL, memoryOf(t)).error, /not available/);
+});
+
+test('memory_propose masks secrets before anything is saved', (t) => {
+  const tab = proposeTab(t);
+  // Assembled at runtime: no full secret shape appears in the source.
+  const githubToken = ['gh', 'p_', 'a'.repeat(36)].join('');
+  const apiKey = ['s', 'k-', 'b'.repeat(24)].join('');
+  // A zero-width space inside a key: removed when the text is cleaned, so the scrub must come after.
+  const hiddenKey = ['s', 'k-', '\u200B', 'c'.repeat(24)].join('');
+
+  const out = tab.call({
+    title: `Release token ${githubToken} expires monthly`,
+    body: `Set ${apiKey} in the env.\nThe fallback is ${hiddenKey}.\nAPI_TOKEN=${'d'.repeat(20)}`,
+    type: 'how-to',
+  });
+
+  assert.equal(out.ok, true);
+  const [, saved] = scan(tab.dir).records.find(([key]) => key === out.payload.key);
+  const text = JSON.stringify(saved);
+  for (const secret of [githubToken, apiKey, 'c'.repeat(24), 'd'.repeat(20)]) assert.equal(text.includes(secret), false, secret.slice(0, 3));
+  assert.match(saved.title, /\[redacted\]/);
+  assert.match(saved.body, /\[redacted\]/);
+  assert.equal(hasSecret(saved), false);
+  assert.equal(saved.id.includes('a'.repeat(20)), false);
+});
+
+test('memory_propose returns the key of a near-duplicate instead of saving one', (t) => {
+  const tab = proposeTab(t);
+  const before = tab.keys();
+  const propose = (title, body) => tab.call({ title, body, type: 'gotcha' });
+
+  const confirmed = propose('Do not junction node_modules into a worktree', 'It empties node_modules.');
+  const waiting = propose('EBUSY on default_app.asar: the app holds it', 'Install elsewhere and move it.');
+  const global = propose('Code comments are always English', 'Even in Polish prompts.');
+
+  assert.deepEqual(
+    [confirmed, waiting, global].map((out) => [out.payload.key, out.payload.created]),
+    [
+      [`${PROJECT}/worktree-junction`, false],
+      [`${PROJECT}/asar-lock`, false],
+      ['global/english-comments', false],
+    ],
+  );
+  assert.match(confirmed.payload.result, /Nothing saved/);
+  assert.deepEqual(tab.keys(), before);
+  assert.deepEqual(tab.events, []);
+  // Another project's memory is not this project's duplicate.
+  const other = propose('Prisma connection pool exhausts under next dev', 'Reuse one PrismaClient on globalThis.');
+  assert.equal(other.payload.created, true);
+  assert.equal(other.payload.key.startsWith(`${PROJECT}/`), true);
+  // A second proposal of the same lesson in the same session finds the first one.
+  const again = propose('Prisma connection pool exhausts under next dev', 'Reuse one client.');
+  assert.deepEqual([again.payload.key, again.payload.created], [other.payload.key, false]);
+});
+
+const DISTINCT = [
+  ['Vitest needs pool forks on Windows', 'Threads hang with native addons.'],
+  ['Electron builder signs only with CSC variables set', 'Unsigned installers trip SmartScreen.'],
+  ['Supabase realtime channel drops after laptop sleep', 'Resubscribe on the resume event.'],
+  ['Playwright traces land in test-results', 'Open them with show-trace.'],
+  ['Prettier skips the mobile folder', 'Its ignore file lists mobile/dist.'],
+  ['Gradle daemon keeps the lockfile open', 'Stop it before deleting build output.'],
+];
+
+test(`memory_propose refuses the proposal after ${MAX_PROPOSALS_PER_SESSION} in one session`, (t) => {
+  const tab = proposeTab(t, { records: [] });
+  const outs = DISTINCT.map(([title, body]) => tab.call({ title, body, type: 'gotcha' }));
+
+  assert.equal(MAX_PROPOSALS_PER_SESSION, 5);
+  assert.deepEqual(outs.slice(0, 5).map((out) => out.ok && out.payload.created), [true, true, true, true, true]);
+  assert.equal(outs[5].ok, false);
+  assert.match(outs[5].error, /at most 5 proposals per session/);
+  assert.equal(tab.keys().length, 5);
+  assert.equal(tab.store.used('s1'), 5);
+  // Another tab has an allowance of its own.
+  const other = proposeTab(t, { sessionId: 's2', shared: { dir: tab.dir, store: tab.store } });
+  assert.equal(other.call({ title: DISTINCT[5][0], body: DISTINCT[5][1], type: 'gotcha' }).payload.created, true);
+});
+
+test('memory_propose rejects bad input at the boundary and saves nothing', (t) => {
+  const tab = proposeTab(t);
+  const before = tab.keys();
+
+  for (const args of [
+    {},
+    { ...PROPOSAL, title: 7 },
+    { ...PROPOSAL, title: '   ' },
+    { ...PROPOSAL, title: 'x'.repeat(201) },
+    { ...PROPOSAL, title: 'two\nlines' },
+    { ...PROPOSAL, title: 'two\u2028lines' },
+    { ...PROPOSAL, body: undefined },
+    { ...PROPOSAL, body: ['text'] },
+    { ...PROPOSAL, body: ' \n ' },
+    { ...PROPOSAL, body: 'x'.repeat(5001) },
+    { ...PROPOSAL, type: 'digest' },
+    { ...PROPOSAL, type: 'GOTCHA' },
+    { ...PROPOSAL, type: undefined },
+    { ...PROPOSAL, area: 'Bad Area' },
+    { ...PROPOSAL, area: 5 },
+    { ...PROPOSAL, area: 'x'.repeat(41) },
+    { ...PROPOSAL, area: '' },
+  ]) {
+    assert.equal(tab.call(args).ok, false, JSON.stringify(args).slice(0, 80));
+  }
+  assert.equal(callMemoryTool('memory_propose', null, tab.memory).ok, false);
+  assert.equal(callMemoryTool('memory_propose', [PROPOSAL], tab.memory).ok, false);
+  // Caught after cleaning: an invisible-only body, and a title that makes no id.
+  assert.match(tab.call({ ...PROPOSAL, body: '\u200B\u200B' }).error, /body is empty/);
+  assert.match(tab.call({ ...PROPOSAL, title: '!!! ???' }).error, /no memory id/);
+  assert.deepEqual(tab.keys(), before);
+  // Refused calls do not use up the allowance.
+  assert.equal(tab.store.used('s1'), 0);
+  const schema = MEMORY_TOOLS.find((tool) => tool.name === 'memory_propose');
+  assert.equal(schema.inputSchema.additionalProperties, false);
+  assert.equal(schema.inputSchema.properties.type.enum.includes('digest'), false);
+  assert.match(schema.description, /ONLY when the user asks you to remember something/);
+  assert.match(schema.description, /Mati's memory inbox/);
+});
+
+test('memory_propose through the MCP server answers with the key', (t) => {
+  const tab = proposeTab(t);
+
+  const res = rpc('tools/call', { name: 'memory_propose', arguments: PROPOSAL }, todoStore(tab.memory)).result;
+  const bad = rpc('tools/call', { name: 'memory_propose', arguments: { ...PROPOSAL, confidence: 'confirmed' } }, todoStore(tab.memory)).result;
+
+  assert.equal(res.isError, undefined);
+  assert.equal(JSON.parse(res.content[0].text).key, `${PROJECT}/vitest-needs-pool-forks-on-windows`);
+  assert.equal(bad.isError, true);
+});
+
+test('a failing proposal store is a short tool error, and the log keeps only a session `by`', (t) => {
+  const quiet = t.mock.method(console, 'error', () => {});
+  const broken = {
+    ...memoryOf(t),
+    propose: () => {
+      throw new Error('EPERM: C:\\secret\\path');
+    },
+  };
+
+  assert.deepEqual(callMemoryTool('memory_propose', PROPOSAL, broken), { ok: false, error: 'memory is unavailable right now' });
+  assert.equal(quiet.mock.callCount(), 1);
+  const at = FIXED_NOW;
+  const key = `${PROJECT}/x`;
+  assert.deepEqual(cleanEvent({ at, ev: 'proposed', key, type: 'gotcha', by: 'session' }), { at, ev: 'proposed', key, type: 'gotcha', by: 'session' });
+  assert.deepEqual(cleanEvent({ at, ev: 'proposed', key, type: 'gotcha', by: 'user' }), { at, ev: 'proposed', key, type: 'gotcha' });
+  assert.equal(sessionLabel('ab/../cd-ef12345'), 'abcd-ef1');
+  assert.equal(sessionLabel(undefined), 'unknown');
 });
