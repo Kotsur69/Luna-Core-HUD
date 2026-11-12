@@ -355,6 +355,11 @@ export function createSessionsTab(deps = {}) {
   const renderSoon = () => {
     if (shown && dom && !frame) frame = requestAnimationFrame(render);
   };
+  // App-lifetime subscriptions, taken once here and never per show: the
+  // bridge's onTools / onMcp / onContext / onTurnEnd / onSessions /
+  // onRestarted (preload.js) return no unsubscribe. While the tab is hidden
+  // they only fold events into the model - no DOM work, frame or timer.
+  // liveMap.js never remounts a tab, so unmount() leaves them in place.
   const sub = subscribe(bridge, renderSoon, { getActiveSessionId: getActive });
 
   if (typeof bridge.onSessions === 'function') {
@@ -386,15 +391,17 @@ export function createSessionsTab(deps = {}) {
     }
   }
 
-  /** Tab names arrive with the next sessions:update; one read fills them in before that. */
+  /** Tab names arrive with the next sessions:update; one read fills them in before that (retried on the next show if it fails). */
   async function seedLabels() {
     if (seededLabels || typeof bridge.getSessions !== 'function') return;
     seededLabels = true;
     try {
       const res = await bridge.getSessions();
       if (res && Array.isArray(res.sessions)) rememberLabels(res.sessions);
+      else seededLabels = false;
       renderSoon();
     } catch (err) {
+      seededLabels = false;
       console.error('[livemap] sessions map: reading the tab list failed:', err);
     }
   }

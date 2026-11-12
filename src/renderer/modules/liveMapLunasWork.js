@@ -109,6 +109,9 @@ export function createLunasWorkTab() {
   let shown = false;
   let frame = 0;
   let seq = 0;
+  // Push events applied so far: a refresh that started before one keeps its status.
+  let eventCount = 0;
+  let boardSeq = 0;
   let refreshTimer = null;
   let unsubEvents = null;
   let unsubBoard = null;
@@ -170,14 +173,18 @@ export function createLunasWorkTab() {
   // --- data ------------------------------------------------------------------
   async function refresh() {
     const mine = ++seq;
+    const eventsAtStart = eventCount;
     const [st, dash, queue] = await Promise.all([ask('lunasworkStatus'), ask('lunasworkDashboard'), ask('lunasworkQueueList')]);
     // A newer refresh started meanwhile: its answer wins.
     if (mine !== seq) return;
+    const statusOk = !!(st && st.ok);
     const next = { ...input };
-    if (st && st.ok) next.status = st.status;
+    // A push event that landed while this was in flight carries a newer status.
+    if (statusOk && eventCount === eventsAtStart) next.status = st.status;
     if (dash && dash.ok) next.dashboard = dash.dashboard || null;
     if (queue && queue.ok) next.queue = queue.queue;
-    loadFailed = !(st && st.ok) && !loaded;
+    // Failed with nothing to show: say so on every attempt, never "no run".
+    loadFailed = !statusOk && !next.status;
     loaded = true;
     input = next;
     renderSoon();
@@ -191,16 +198,23 @@ export function createLunasWorkTab() {
   function onEvent(event) {
     const next = applyLunasworkEvent(input, event);
     if (next === input) return;
+    eventCount += 1;
     input = next;
+    loadFailed = false;
     renderSoon();
     scheduleRefresh();
   }
 
+  /** Project names, read once; a failed read is retried on the next show. */
   async function readLabels() {
     if (labelsRead) return;
     labelsRead = true;
     const res = await ask('getProjects');
-    for (const p of res && Array.isArray(res.projects) ? res.projects : []) {
+    if (!res || !Array.isArray(res.projects)) {
+      labelsRead = false;
+      return;
+    }
+    for (const p of res.projects) {
       if (p && typeof p.id === 'string') labels.set(p.id, typeof p.label === 'string' && p.label ? p.label : p.id);
     }
     renderSoon();
@@ -218,14 +232,9 @@ export function createLunasWorkTab() {
     unsubBoard = null;
   }
 
-  async function openBuild() {
-    if (mode === 'build') return;
-    mode = 'build';
-    fitPending = true;
-    layoutSig = '';
-    selectedId = null;
-    focusAfter = 'back';
-    watchBoard();
+  /** Re-reads the God Mode board for the run's project; only the latest read ends the loading state. */
+  async function refreshBoard() {
+    const mine = ++boardSeq;
     const project = buildLoopModel(input).project;
     graphLoading = !!project && !board.viewOf(project);
     renderSoon();
@@ -235,9 +244,22 @@ export function createLunasWorkTab() {
     } catch (err) {
       console.error('[livemap] Luna\'s Work: refreshing the God Mode runs failed:', err);
     } finally {
-      graphLoading = false;
-      renderSoon();
+      if (mine === boardSeq) {
+        graphLoading = false;
+        renderSoon();
+      }
     }
+  }
+
+  function openBuild() {
+    if (mode === 'build') return;
+    mode = 'build';
+    fitPending = true;
+    layoutSig = '';
+    selectedId = null;
+    focusAfter = 'back';
+    watchBoard();
+    refreshBoard();
   }
 
   function backToLoop() {
@@ -345,6 +367,8 @@ export function createLunasWorkTab() {
       if (mode === 'build') {
         watchBoard();
         fitPending = true;
+        // The board may have moved on while the overlay was closed.
+        refreshBoard();
       }
       readLabels();
       refresh();
