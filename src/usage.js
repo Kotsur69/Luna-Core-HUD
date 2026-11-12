@@ -903,6 +903,12 @@ class UsageWatcher {
     // Null (host mode, tests) -> the payload carries no `accounts` field.
     this.accountUsage = null;
     this.forceAccounts = false;
+    // The tick in flight (a promise) and whether a refresh() arrived during
+    // it - see refresh() for why that one must not be dropped.
+    this.current = null;
+    this.refreshQueued = false;
+    /** Where a failed read is reported; tests swap it. */
+    this.log = (line) => console.warn(line);
   }
 
   /** One entry per stored Claude account, or null when no reader is set. */
@@ -913,7 +919,9 @@ class UsageWatcher {
     try {
       const entries = await this.accountUsage.read({ force, mainUsage: primary });
       return Array.isArray(entries) ? entries : [];
-    } catch {
+    } catch (err) {
+      // The tile shows the accounts as missing; the reason goes to the log.
+      this.log(`[usage] account usage read failed: ${(err && err.message) || err}`);
       return [];
     }
   }
@@ -926,6 +934,7 @@ class UsageWatcher {
 
   stop() {
     this.running = false;
+    this.refreshQueued = false; // no follow-up read after a stop (app quit)
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
@@ -971,10 +980,19 @@ class UsageWatcher {
     return fetchUsage(profile);
   }
 
-  async tick() {
-    if (this.busy) return;
+  /**
+   * One read + emit. While one is in flight a second call shares it (the
+   * returned promise settles after the read and any refresh queued during it).
+   * Never rejects: a failed read is logged and the next one is scheduled.
+   */
+  tick() {
+    if (this.busy) return this.current;
     this.busy = true;
+    this.current = this.runTick();
+    return this.current;
+  }
 
+  async runTick() {
     let usage;
     try {
       const profile = this.getActiveProfile();
@@ -998,20 +1016,51 @@ class UsageWatcher {
         this.lastJson = cmp;
         this.onUpdate(usage);
       }
+    } catch (err) {
+      this.log(`[usage] read failed: ${(err && err.message) || err}`);
     } finally {
       this.busy = false;
-      if (this.running) {
-        const delay = nextPollDelay(usage, this.intervalMs, this.heartbeatMs, this.rateLimitedStreak);
-        this.timer = setTimeout(() => this.tick(), delay);
-      }
     }
+    if (this.refreshQueued) {
+      // A refresh arrived while this read was in flight: run it now. Its
+      // own tick schedules the next timer, so none is set here.
+      this.refreshQueued = false;
+      this.lastJson = ''; // the read that just ended stored its own; still emit
+      return this.tick();
+    }
+    if (this.running) {
+      const delay = nextPollDelay(usage, this.intervalMs, this.heartbeatMs, this.rateLimitedStreak);
+      this.timer = setTimeout(() => this.tick(), delay);
+    }
+    return undefined;
   }
 
-  /** Forces an immediate read + emit (the refresh button in the UI). */
-  refresh() {
+  /**
+   * Forces an immediate read + emit: the refresh button, a (re)connected
+   * usage login, a change to the account store.
+   *
+   * ROOT CAUSE of the "account reload needs a restart" reports: this used to
+   * call tick() unconditionally, and tick() returns at once while a read is
+   * in flight - which is often, since the per-account pass staggers its GETs
+   * (2 s apart, up to 8 s each). The refresh was silently dropped, so a
+   * re-login or an account switch only showed after the next scheduled tick
+   * (90 s, up to 5 min under 429 backoff). Now it is queued and runs as soon
+   * as the read in flight ends; several refreshes in one read collapse to one.
+   *
+   * @param {{force?: boolean}} [opts] force (default true) re-reads every
+   *   provider and every connected account; false only re-emits with the
+   *   cached account readings (a label / order / active-marker change).
+   */
+  refresh({ force = true } = {}) {
     this.lastJson = ''; // force an emit on the next read
-    this.othersAt = 0; // the refresh button re-reads every provider
-    this.forceAccounts = true; // ...and every connected account
+    if (force) {
+      this.othersAt = 0; // the refresh button re-reads every provider
+      this.forceAccounts = true; // ...and every connected account
+    }
+    if (this.busy) {
+      this.refreshQueued = true;
+      return this.current;
+    }
     if (this.timer) {
       clearTimeout(this.timer); // avoid duplicating the already-scheduled next tick
       this.timer = null;

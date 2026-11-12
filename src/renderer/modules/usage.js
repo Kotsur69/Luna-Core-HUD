@@ -522,8 +522,9 @@ defineWidget({
           applyUsage(u);
           renderUsage(); // no-op if we were unmounted while awaiting
         }
-      } catch {
-        /* ignore - the watcher will emit on its next tick anyway */
+      } catch (err) {
+        // The watcher still emits on its next tick; the tile keeps its last read.
+        console.warn('[usage] refresh failed:', (err && err.message) || err);
       } finally {
         // Purely decorative, and bound to a node inside root: if this widget is
         // gone by now the element goes with it. Nothing to flush (cf. the
