@@ -576,6 +576,19 @@ contextBridge.exposeInMainWorld('lunacore', {
   cloudMachines: () => ipcRenderer.invoke('cloud:machines'),
   /** Deletes another PC's cloud rows (never this PC's; checked in main). Promise<{ok, removed} | {ok:false, reason}>. */
   cloudForget: (machine) => ipcRenderer.invoke('cloud:forget', typeof machine === 'string' ? machine : ''),
+
+  // --- Claude setup switcher (src/claudesetupipc.js) ---
+  // Machine-wide Claude Code setup profiles (claude-code-setup, `luna-setup use`).
+  // Only a profile name crosses; main checks it against the CLI's own list.
+  /** Promise<{ok, profiles:[{name, description, active}], stale} | {ok:false, error}>. */
+  claudeSetupList: () => ipcRenderer.invoke('claudeSetup:list'),
+  /** Promise<{ok, profile, appliedAt, tokens} | {ok:false, error}>; profile null = unmanaged. */
+  claudeSetupStatus: () => ipcRenderer.invoke('claudeSetup:status'),
+  /** Dry run: Promise<{ok, profile, from, steps, warnings, running, tokens} | {ok:false, error}>. */
+  claudeSetupPreview: (name) => ipcRenderer.invoke('claudeSetup:preview', typeof name === 'string' ? name : ''),
+  /** Rewrites ~/.claude (with a backup). Same shape as the preview. */
+  claudeSetupApply: (name) => ipcRenderer.invoke('claudeSetup:apply', typeof name === 'string' ? name : ''),
+
   // --- Host mode in this HUD (src/hostmodeipc.js) ---
   /** action: 'status' | 'start' | 'stop' | 'make-default' (whitelisted in main).
    *  Promise<{ok, on, isDefault, machine} | {ok:false, reason}>. */

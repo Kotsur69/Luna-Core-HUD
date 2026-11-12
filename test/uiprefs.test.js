@@ -230,7 +230,7 @@ test('cleanCollapsed: keeps ids, drops junk, dedupes', () => {
 
 // The whole left rail of the `classic` layout. A fresh HUD opens tidy and the
 // user unfolds what they use; see the comment on DEFAULTS.collapsed.
-const LEFT_RAIL = ['actions', 'appearance', 'project', 'profile', 'cheatsheets', 'prompts', 'skills'];
+const LEFT_RAIL = ['actions', 'appearance', 'project', 'profile', 'setup', 'cheatsheets', 'prompts', 'skills'];
 
 test('cleanCollapsed: nothing stored means the first-run left rail, folded', () => {
   for (const missing of [null, undefined, 'ports', 42, {}]) {

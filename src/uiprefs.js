@@ -288,7 +288,7 @@ const DEFAULTS = {
   // a HUD. Like `lang` above, this is only the FIRST-RUN value - cleanCollapsed
   // returns a stored list untouched, including an empty one, so nobody who has
   // arranged their own panels ever gets re-folded.
-  collapsed: ['actions', 'appearance', 'project', 'profile', 'cheatsheets', 'prompts', 'skills'],
+  collapsed: ['actions', 'appearance', 'project', 'profile', 'setup', 'cheatsheets', 'prompts', 'skills'],
   // C2 resizable panels: layoutId -> the `grid-template-columns` the user
   // dragged that preset to. Per layout because the presets have different
   // column counts, and a width dragged in `classic` means nothing in `focus`.

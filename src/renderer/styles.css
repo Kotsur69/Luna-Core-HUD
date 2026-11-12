@@ -6158,3 +6158,81 @@ section.orchestra__planrun {
 }
 .welcome__cta { color: var(--neon-cyan); border-color: var(--edge-glow); }
 .welcome__dontshow { display: inline-flex; align-items: center; gap: var(--space-3); cursor: pointer; }
+
+/* ---- Claude setup switcher (`setup` widget, modules/claudesetup.js) ---------
+   Sits under the profile/project switchers and reuses their row, select and
+   22px-icon-button language. The confirm panel is inline (not a native
+   confirm(), which would freeze every terminal while it is open): a framed
+   block with the dry-run change list, the running-session warning and
+   Cancel before Switch, so the safe button comes first in tab order. */
+.claude-setup__desc,
+.claude-setup__cost {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.claude-setup__cost {
+  font-family: var(--font-mono);
+  color: var(--neon-cyan);
+}
+.claude-setup__confirm {
+  margin: var(--space-4) 0 0;
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--warn);
+  background: var(--surface-panel-2);
+}
+.claude-setup__confirm-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.claude-setup__steps {
+  margin: 0;
+  padding-left: var(--space-7);
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.claude-setup__steps li + li { margin-top: var(--space-2); }
+.claude-setup__steps li.is-warning { color: var(--warn); }
+.claude-setup__running {
+  margin: var(--space-4) 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--warn);
+}
+.claude-setup__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.claude-setup__btn {
+  min-height: 32px;
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--edge);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-sharp), box-shadow var(--dur-fast) var(--ease-sharp);
+}
+.claude-setup__btn:hover { border-color: var(--edge-glow); }
+.claude-setup__btn.pad-send { border-color: var(--edge-glow); background: var(--btn-grad); }
+.claude-setup__btn:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
+.claude-setup__btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+.claude-setup .project-add-btn:focus-visible,
+.claude-setup .profile-select:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 1px; }
+.claude-setup__note {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.claude-setup__note.is-ok { color: var(--good); }
+.claude-setup__note.is-error { color: var(--bad); }
