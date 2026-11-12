@@ -212,6 +212,9 @@ function createAccountUsage(deps) {
 
   /** account id -> its last read state (never a token). */
   let cache = new Map();
+  // Accounts whose login changed (attach) while a pass was in flight: that
+  // pass started from the old slot and must not write it back.
+  const dropped = new Set();
   let inFlight = null;
   let loginBusy = false;
 
@@ -219,7 +222,8 @@ function createAccountUsage(deps) {
     try {
       const list = deps.accounts.usageTargets();
       return Array.isArray(list) ? list : [];
-    } catch {
+    } catch (err) {
+      log(`usage: account list unreadable (${(err && (err.code || err.message)) || 'error'})`);
       return [];
     }
   };
@@ -364,6 +368,11 @@ function createAccountUsage(deps) {
       }
       out.push(entryOf(target, slot));
     }
+    // A login (re)attached during this pass: the slot read above belongs to
+    // the old login. Writing it back used to undo attach()'s cache.delete, so
+    // the old 'reconnect' / old numbers stayed until that slot's nextAt.
+    for (const id of dropped) next.delete(id);
+    dropped.clear();
     cache = next; // drops removed or disconnected accounts
     return out;
   }
@@ -405,6 +414,7 @@ function createAccountUsage(deps) {
     const res = deps.accounts.setUsage(id, dir, email);
     if (!res || !res.ok) return res || { ok: false, error: 'saveFailed' };
     cache.delete(id);
+    if (inFlight) dropped.add(id);
     onConnected();
     return { ok: true, email: email || null };
   }

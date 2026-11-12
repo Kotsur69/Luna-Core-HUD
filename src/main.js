@@ -370,7 +370,13 @@ const claudeAccounts = createClaudeAccounts({
   file: () => (ensureUserDir() ? path.join(userDir(), 'claude-accounts.local.json') : null),
   safeStorage: () => require('electron').safeStorage,
   log: (line) => console.info(`[accounts] ${line}`),
-  onChange: () => send('claudeAccounts:changed'),
+  // Settings repaints on the event; the usage tile only follows usage:update,
+  // so the watcher re-emits too (cached readings - a label, order or switch
+  // needs no new GETs). It used to wait for the next 90 s tick.
+  onChange: () => {
+    send('claudeAccounts:changed');
+    if (usageWatcher) usageWatcher.refresh({ force: false });
+  },
   // Multi God Mode A3: the God Mode registry's memory of accounts that are
   // out joins every pick, so a worker launched later starts on one with room.
   // Read lazily - the registry is built further down.

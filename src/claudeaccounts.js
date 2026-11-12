@@ -277,10 +277,37 @@ function createClaudeAccounts(deps) {
     }
   };
 
-  /** Re-reads the file when it changed on disk (another process wrote it). */
+  /**
+   * Tells main the accounts changed (main repaints Settings and the usage
+   * tile). A failing listener is logged - it must never undo a good save or
+   * a reload.
+   */
+  function notifyChange() {
+    if (!deps.onChange) return;
+    try {
+      deps.onChange();
+    } catch (err) {
+      log(`claude accounts: change listener failed (${(err && err.message) || 'error'})`);
+    }
+  }
+
+  // False until the first look at the file: what is on disk at start-up is
+  // not a change anyone has to be told about.
+  let primed = false;
+  let skippedMtime = null;
+
+  /**
+   * Re-reads the file when it changed on disk (another process wrote it).
+   * A reload that changed the accounts fires onChange: before, only this
+   * process's own writes did, so an account added, switched or removed by
+   * another LunaCore process (host mode) never reached the open HUD.
+   */
   function refresh() {
     const file = deps.file();
     if (!file) return;
+    const wasPrimed = primed;
+    primed = true;
+    const before = JSON.stringify(state);
     let mtime;
     try {
       mtime = fs.statSync(file).mtimeMs;
@@ -288,6 +315,7 @@ function createClaudeAccounts(deps) {
       if (err && err.code === 'ENOENT') {
         state = { accounts: [], limits: {} };
         loadedMtime = null;
+        if (wasPrimed && JSON.stringify(state) !== before) notifyChange();
       } else {
         log(`claude accounts: cannot stat store (${err && err.code})`);
       }
@@ -295,16 +323,25 @@ function createClaudeAccounts(deps) {
     }
     if (mtime === loadedMtime) return;
     const s = storage();
-    if (!s) return;
+    if (!s) {
+      // Once per file version: refresh() runs on every pick and list.
+      if (mtime !== skippedMtime) log('claude accounts: store changed but encryption is unavailable - not reloaded');
+      skippedMtime = mtime;
+      return;
+    }
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (raw && raw.v === VERSION && typeof raw.enc === 'string') {
         state = sanitize(JSON.parse(s.decryptString(Buffer.from(raw.enc, 'base64'))), homeDir());
+      } else {
+        log('claude accounts: store has an unknown format - not reloaded');
       }
       loadedMtime = mtime;
     } catch (err) {
       log(`claude accounts: store unreadable (${(err && (err.code || err.name)) || 'error'})`);
+      return;
     }
+    if (wasPrimed && JSON.stringify(state) !== before) notifyChange();
   }
 
   /** @returns {boolean} written */
@@ -319,12 +356,14 @@ function createClaudeAccounts(deps) {
       fs.renameSync(tmp, file);
       state = next;
       loadedMtime = fs.statSync(file).mtimeMs;
-      if (deps.onChange) deps.onChange();
-      return true;
     } catch (err) {
       log(`claude accounts: could not store (${(err && (err.code || err.name)) || 'error'})`);
       return false;
     }
+    // Outside the try: a throwing listener used to report a good save as
+    // 'saveFailed' (and skip the rest of the caller's flow).
+    notifyChange();
+    return true;
   }
 
   const save = (next) => (persist(next) ? { ok: true } : { ok: false, error: 'saveFailed' });
