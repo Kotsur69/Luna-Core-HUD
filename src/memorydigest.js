@@ -20,6 +20,12 @@
 //     made of, and it comes from this machine;
 //   - subagent turns, thinking, injected reminders and compaction summaries.
 //
+// It also counts the calls that brought outside text into the session (a web
+// fetch or search, a subagent, an MCP tool other than LunaCore's own): their
+// results are left out, but what the assistant wrote after reading them may
+// still echo them. Capture notes the count in a memory's `source`, and the
+// inbox asks Mati to check the text (security review of 2026-11-11).
+//
 // The digest is capped. When a session is longer, its start and its end are
 // kept and the middle is cut: the task is stated at the start, the outcome at
 // the end.
@@ -29,6 +35,16 @@
 
 /** Tools whose failure text comes from this machine and may be quoted. */
 const LOCAL_TOOLS = new Set(['Bash', 'PowerShell', 'Read', 'Edit', 'Write', 'Grep', 'Glob', 'NotebookEdit']);
+/** Tools whose results are outside content: the web, or another agent's answer. */
+const OUTSIDE_TOOLS = new Set(['WebFetch', 'WebSearch', 'Agent', 'Task']);
+const MCP_PREFIX = 'mcp__';
+/** LunaCore's own MCP server answers from this machine: to-dos and memories. */
+const OWN_MCP_PREFIX = 'mcp__lunacore__';
+
+/** Whether a tool call brings outside text into the session. */
+const readsOutside = (name) =>
+  typeof name === 'string' && (OUTSIDE_TOOLS.has(name) || (name.startsWith(MCP_PREFIX) && !name.startsWith(OWN_MCP_PREFIX)));
+
 /** The input field that says what a tool call was about. */
 const TOOL_SUBJECT = ['command', 'file_path', 'pattern', 'path', 'skill', 'description', 'query', 'url'];
 
@@ -112,8 +128,9 @@ function fit(blocks) {
 
 /**
  * @param {string} jsonl a Claude Code transcript, or the part of one appended since the last capture
- * @returns {{text: string, userTurns: number, assistantTurns: number}}
- *   userTurns = messages the user typed (not tool results)
+ * @returns {{text: string, userTurns: number, assistantTurns: number, outside: number}}
+ *   userTurns = messages the user typed (not tool results);
+ *   outside = tool calls that read outside content (web, subagent, a foreign MCP server)
  */
 function digestTranscript(jsonl) {
   const blocks = [];
@@ -121,6 +138,7 @@ function digestTranscript(jsonl) {
   const calls = new Map();
   let userTurns = 0;
   let assistantTurns = 0;
+  let outside = 0;
 
   for (const line of String(jsonl || '').split('\n')) {
     if (!line.trim()) continue;
@@ -139,6 +157,7 @@ function digestTranscript(jsonl) {
         }
       } else if (part.type === 'tool_use' && turn.role === 'assistant') {
         if (typeof part.id === 'string') calls.set(part.id, { at: blocks.length, name: part.name });
+        if (readsOutside(part.name)) outside++;
         blocks.push(toolLine(part));
       } else if (part.type === 'tool_result' && part.is_error === true) {
         const call = calls.get(part.tool_use_id);
@@ -148,7 +167,7 @@ function digestTranscript(jsonl) {
       }
     }
   }
-  return { text: fit(blocks), userTurns, assistantTurns };
+  return { text: fit(blocks), userTurns, assistantTurns, outside };
 }
 
-module.exports = { digestTranscript, MAX_DIGEST_CHARS, LOCAL_TOOLS };
+module.exports = { digestTranscript, readsOutside, MAX_DIGEST_CHARS, LOCAL_TOOLS };

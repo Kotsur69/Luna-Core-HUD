@@ -232,6 +232,39 @@ test('a bad key, a confirmed memory and bad edits are refused without a change',
   assert.equal(s.stored()[confirmed].confidence, 'confirmed');
 });
 
+test('memory:make-global moves a waiting project entry to global and reports its new key', (t) => {
+  const s = setup(t, [rec('busy', { source: 'captured from session abc on PC1, suggested global' })]);
+
+  assert.deepEqual(s.invoke('memory:make-global', KEY), { ok: true, key: 'global/busy' });
+
+  assert.equal(s.stored()[KEY], undefined);
+  assert.equal(s.stored()['global/busy'].confidence, 'observed');
+  assert.equal(s.stored()['global/busy'].source, 'captured from session abc on PC1');
+  assert.equal(s.changed(), 1);
+});
+
+test('memory:make-global refuses a bad key, a confirmed memory and a global one without a change', (t) => {
+  const s = setup(t, [rec('done', { confidence: 'confirmed' }), rec('everywhere', { project: 'global' })]);
+  const before = s.stored();
+
+  for (const key of [undefined, null, 5, {}, [], '', '../../x', 'C:\\Windows\\win.ini', 'x'.repeat(500)]) {
+    assert.deepEqual(s.invoke('memory:make-global', key), { ok: false, reason: 'bad-key' });
+  }
+  assert.deepEqual(s.invoke('memory:make-global', `${PROJECT}/done`), { ok: false, reason: 'not-pending' });
+  assert.deepEqual(s.invoke('memory:make-global', 'global/everywhere'), { ok: false, reason: 'already-global' });
+  assert.equal(s.changed(), 0);
+  assert.deepEqual(s.stored(), before);
+});
+
+test('memory:inbox items carry the suggested-global mark and the outside count', (t) => {
+  const s = setup(t, [rec('busy', { source: 'captured from session abc on PC1, read 3 outside source(s), suggested global' })]);
+
+  const [item] = s.invoke('memory:inbox').items;
+
+  assert.equal(item.suggestedGlobal, true);
+  assert.equal(item.outside, 3);
+});
+
 test('cleanEdits keeps the four fields and drops the rest', () => {
   assert.deepEqual(cleanEdits({ title: 'a', body: 'b', type: 'gotcha', area: '', id: 'x', __proto__: { y: 1 } }), { title: 'a', body: 'b', type: 'gotcha', area: '' });
   assert.equal(cleanEdits([]), null);
@@ -257,7 +290,7 @@ test('the renderer inbox uses channels preload exposes and never writes markup',
   const used = [...panel.matchAll(/'(memoryInbox\w*)'/g)].map((m) => m[1]);
   assert.ok(used.length >= 4);
   for (const fn of [...used, 'onMemoryChanged']) assert.match(preload, new RegExp(`\\b${fn}:`), `${fn} is missing in preload`);
-  for (const channel of ['memory:inbox', 'memory:approve', 'memory:reject', 'memory:update', 'memory:changed']) {
+  for (const channel of ['memory:inbox', 'memory:approve', 'memory:reject', 'memory:update', 'memory:make-global', 'memory:changed']) {
     assert.ok(preload.includes(`'${channel}'`), `${channel} is missing in preload`);
   }
 });

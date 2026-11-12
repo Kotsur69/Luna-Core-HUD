@@ -256,21 +256,32 @@ Chosen while building:
 59. **Capture only opens files under `~/.claude/projects`.** The ledger is a file anyone
     can edit, so a path in it is checked before it is read. A tab's transcript is noted
     at every turn end, so the session before a `/clear` is not lost.
+60. **A captured memory is never global until Mati clicks "Make global"** (security
+    review fix, 2026-11-11). `candidatesFrom` files every candidate under the session's
+    project; when the model said `global`, the record's `source` ends in
+    `, suggested global` (no new field: `checkRecord` drops unknown ones). The inbox
+    shows that as a note and offers "Make global" (`makeGlobal` in `src/memoryinbox.js`,
+    IPC `memory:make-global`) on any waiting project entry: the same record moves to
+    `global` with the same id (`<id>-2` ... `<id>-9` when taken), loses its
+    `supersedes` and the note, and stays waiting. A global entry carries the note
+    "Global: approving puts this on every project's card". Folded duplicates stay put.
+61. **The inbox says when the captured session read outside content** (security review
+    fix, 2026-11-11). `digestTranscript` counts the tool calls named `WebFetch`,
+    `WebSearch`, `Agent`, `Task` or `mcp__*` (not `mcp__lunacore__*`); `extractPiece`
+    appends `, read <n> outside source(s)` to the `source` before the extractor's
+    `, suggested global` note, which always comes last. `listInbox` reads the number
+    back as `outside`, and the inbox and `luna memory inbox` ask Mati to check the text
+    before approving.
 
 Found by the security review of 2026-11-11 and left open for Mati:
 
-- **An `observed` memory is returned by `memory_search` before anyone has read it**
-  (decision 5). Text from a failed command or from the assistant's own summary of a
-  web page can end up in one. It is labelled "not verified", but it is in front of a
-  later session. Options: leave it, or keep unapproved memories out of search.
+- **Fixed 2026-11-11:** `memory_search` returns an unreviewed memory without its snippet (`unreviewed: true`), and `memory_get` adds a warning not to act on its text unchecked.
 - **The secret scanner (`src/hostscrub.js`) misses some token shapes:** Stripe
   `sk_live_`, JWTs (Supabase keys), `Bearer` tokens, Slack `xox`, Google `AIza`, npm
   tokens, and passwords inside a connection URL. It guards the memory sync since phase
   1, so this is older than phase 4, but capture makes it matter more.
-- **A captured memory can choose `global`.** One approval then puts it on every
-  project's card. The inbox shows the scope; nothing asks twice.
-- **The inbox does not say whether the session read outside content** (a web page, an
-  MCP tool). A badge for that would help the person approving.
+- **Fixed 2026-11-11:** capture files every memory under its project and marks a `global` suggestion in `source`; only the inbox's "Make global" moves it (decision 60).
+- **Fixed 2026-11-11:** capture counts the web, subagent and foreign MCP calls of the session into `source`, and the inbox shows a note to check the text (decision 61).
 
 These four are queued as to-do cards for a God Mode run (2026-11-11): unapproved
 memories come back from search without their text, the scanner learns the missing token

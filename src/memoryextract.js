@@ -18,11 +18,16 @@
 // never on the project card (decision 5). `supersedes` on an observed memory
 // is only a proposal: the index and the card ignore it until Mati approves the
 // memory in the inbox (src/memoryinbox.js).
+//
+// A candidate is never saved as global (security review of 2026-11-11): a
+// global memory reaches every project's card, so only Mati makes one, with
+// 'Make global' in the inbox. When the model says "global", the memory is
+// filed under the session's project and its `source` says ', suggested global'.
 // ============================================================================
 
 'use strict';
 
-const { TYPES, GLOBAL, MAX_BODY, MAX_TITLE, checkRecord, keyOf, slug } = require('./memoryrecord');
+const { TYPES, GLOBAL, MAX_BODY, MAX_TITLE, MAX_SOURCE, checkRecord, keyOf, slug } = require('./memoryrecord');
 const { hasSecret } = require('./memorysync');
 
 /** A `digest` decays and belongs to phase 5; the extractor does not write one. */
@@ -46,6 +51,44 @@ const WHOLE_DUPLICATE = 0.6;
 const STOP_WORDS = new Set(['the', 'and', 'for', 'not', 'with', 'that', 'this', 'from', 'use', 'are', 'was', 'when', 'into', 'its', 'has', 'have', 'you']);
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+// ---- notes in a captured memory's `source` --------------------------------------
+// `source` is the one free line a record has (memoryrecord.checkRecord drops
+// unknown fields), so the capture notes live there, in a fixed order:
+//   <session source>[, read <n> outside source(s)][, suggested global]
+
+/** Ends the source of a memory the model wanted global. */
+const SUGGESTED_GLOBAL = ', suggested global';
+const OUTSIDE_RE = /, read (\d+) outside source\(s\)/;
+
+/** The note a session that read web or MCP content adds to its memories' source. */
+const outsideNote = (count) => (count > 0 ? `, read ${count} outside source(s)` : '');
+
+/**
+ * `source` + a note, cut so the note survives the MAX_SOURCE limit. An outside
+ * note already in `source` survives too: only the session part before it is cut.
+ */
+function withNote(source, note) {
+  const text = String(source || '');
+  const outside = OUTSIDE_RE.exec(text);
+  const tail = outside ? text.slice(outside.index) : '';
+  const base = outside ? text.slice(0, outside.index) : text;
+  return `${base.slice(0, Math.max(0, MAX_SOURCE - tail.length - note.length))}${tail}${note}`;
+}
+
+/**
+ * What the capture notes in a source say.
+ * @param {string|null|undefined} source
+ * @returns {{suggestedGlobal: boolean, outside: number}}
+ */
+function sourceNotes(source) {
+  const text = typeof source === 'string' ? source : '';
+  const outside = OUTSIDE_RE.exec(text);
+  return { suggestedGlobal: text.endsWith(SUGGESTED_GLOBAL), outside: outside ? Number(outside[1]) : 0 };
+}
+
+/** The source without the ', suggested global' ending. */
+const withoutSuggestedGlobal = (source) => (sourceNotes(source).suggestedGlobal ? source.slice(0, -SUGGESTED_GLOBAL.length) : source);
 
 function wordsOf(text) {
   const words = String(text || '').toLowerCase().match(/[\p{L}\p{N}_]+/gu) || [];
@@ -174,7 +217,8 @@ function candidatesFrom(answer, { project, today, source, existing }) {
       reject(c, 'bad-type');
       continue;
     }
-    const scope = c.scope === GLOBAL ? GLOBAL : project;
+    // Always the session's project; 'Make global' in the inbox is Mati's call.
+    const scope = project;
     const id = typeof c.title === 'string' ? idFor(c.title, scope, taken) : null;
     if (!id) {
       reject(c, 'bad-title');
@@ -188,7 +232,7 @@ function candidatesFrom(answer, { project, today, source, existing }) {
       ...(typeof c.area === 'string' && AREA_RE.test(c.area) ? { area: c.area } : {}),
       title: c.title,
       created: today,
-      source,
+      source: c.scope === GLOBAL ? withNote(source, SUGGESTED_GLOBAL) : source,
       confidence: 'observed',
       // Only a memory that exists in the same scope can be replaced.
       supersedes: Array.isArray(c.supersedes) ? c.supersedes.filter((x) => sameScope.has(x)) : [],
@@ -217,4 +261,15 @@ function candidatesFrom(answer, { project, today, source, existing }) {
   return { records, rejected };
 }
 
-module.exports = { buildPrompt, candidatesFrom, nearDuplicate, CANDIDATE_TYPES, MAX_CANDIDATES };
+module.exports = {
+  buildPrompt,
+  candidatesFrom,
+  nearDuplicate,
+  outsideNote,
+  withNote,
+  sourceNotes,
+  withoutSuggestedGlobal,
+  SUGGESTED_GLOBAL,
+  CANDIDATE_TYPES,
+  MAX_CANDIDATES,
+};

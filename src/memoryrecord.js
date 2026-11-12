@@ -314,6 +314,7 @@ module.exports = {
   GLOBAL,
   MAX_BODY,
   MAX_TITLE,
+  MAX_SOURCE,
   slug,
   validProject,
   projectFromRepoKey,

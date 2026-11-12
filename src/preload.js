@@ -461,6 +461,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   memoryInboxReject: (key) => ipcRenderer.invoke('memory:reject', typeof key === 'string' ? key : ''),
   /** Corrects a waiting one's {title, body, type, area}. Promise<{ok, key} | {ok:false, reason}>. */
   memoryInboxUpdate: (key, edits) => ipcRenderer.invoke('memory:update', { key: typeof key === 'string' ? key : '', edits }),
+  /** Moves a waiting project memory to global; it stays waiting. Promise<{ok, key} | {ok:false, reason}>. */
+  memoryInboxMakeGlobal: (key) => ipcRenderer.invoke('memory:make-global', typeof key === 'string' ? key : ''),
   // Phase 5, the review list: confirmed memories that are stale, name a file
   // that is gone, or were reported wrong. Named by key only, as above.
   /** @returns {Promise<{ok:boolean, items?:Array<object>, total?:number}>} */
