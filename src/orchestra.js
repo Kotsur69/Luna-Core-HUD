@@ -69,6 +69,8 @@ const planBuild = require('./orchestraPlanBuild');
 const autoSplit = require('./orchestraAutoSplit');
 // Hybrid runs (F6): the "Workers" choice and the guard over "free" packages.
 const workersRules = require('./orchestraWorkers');
+// The run's worker model (Approve screen / phone) and the model each package runs on.
+const workerModelRules = require('./orchestraWorkerModel');
 const hybridGuard = require('./orchestraHybridGuard');
 // Hybrid runs, execution side (F6c/F6d) and the opt-in free-branch review (F5).
 const hybridRules = require('./orchestraHybrid');
@@ -379,6 +381,8 @@ function createOrchestra(deps) {
     deps.workerSettings ||
     (() => ({ model: 'opus', effort: 'plan', permissionMode: 'bypassPermissions', integration: 'pr', allowedTools: [] }));
   const closeSession = deps.closeSession || noop;
+  // Saves the ui pref orchestraWorkerModel (uiprefs.writeUiPrefs in the wiring).
+  const saveWorkerModel = deps.saveWorkerModel || noop;
   // Merging into the base branch pushes it: main asks Mati natively. No
   // dialog available = no merge. {release: true} - the same dialog also
   // names the release cut after the merge ("Create a new release after finish").
@@ -811,6 +815,8 @@ function createOrchestra(deps) {
         dependsOn: p.dependsOn,
         verify: p.verify,
         model: p.modelOverride || p.model,
+        // The board's model badge tells an override from the planner's pick.
+        modelOverride: p.modelOverride || null,
         // F6 guard: why a "free" package was upgraded to Sonnet (null = it was not).
         hybridGuard: p.hybridGuard || null,
         // F6c/F6d: free worker, review, hand-overs, free wait (null outside hybrid runs).
@@ -930,9 +936,26 @@ function createOrchestra(deps) {
     if (!plan.allowedTools) plan.allowedTools = (s.allowedTools || []).filter(sup.isAllowRule);
   }
 
-  // A hybrid "free" package runs on Sonnet until free workers take them (F6).
-  const modelFor = (pkg) =>
-    pkg.modelOverride || (plan.workerModel === 'plan' ? workersRules.claudeModelOf(pkg.model) : plan.workerModel);
+  // A hybrid "free" package runs on Sonnet until free workers take them (F6);
+  // a 'plan' package the planner gave no model runs on Opus (the board's badge says the same).
+  const modelFor = (pkg) => workerModelRules.packageModelOf(pkg, plan.workerModel);
+
+  /**
+   * The Approve screen's / phone's worker model, before the run starts only:
+   * it becomes the run's choice (frozen by freezeSettings) and the saved pref.
+   * Anything not on the allow-list is ignored - the pref decides, as before.
+   */
+  function applyWorkerModel(asked) {
+    const model = workerModelRules.normalizeWorkerModel(asked);
+    // A plan run keeps its own worker pool (orchestraPlanRunStart.js).
+    if (!model || plan.started || plan.planRun) return;
+    plan.workerModel = model;
+    try {
+      saveWorkerModel(model);
+    } catch (err) {
+      log(`[orchestra] worker model pref not saved: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   /** Escalation override, then a forced Settings level, then the planner's pick, then medium. */
   const effortFor = (pkg) =>
     normalizeEffort(pkg.effortOverride) || normalizeEffort(plan.workerEffort) || normalizeEffort(pkg.effort) || DEFAULT_EFFORT;
@@ -1781,6 +1804,8 @@ function createOrchestra(deps) {
       const { releaseAfter: _previous, ...rest } = plan.options || {};
       plan.options = sup.normalizeOptions(release ? { ...rest, releaseAfter: true } : rest);
     }
+    // After every refusal above: a refused or declined launch saves nothing.
+    applyWorkerModel(o.workerModel);
     if (startAt) {
       freezeSettings();
       plan.scheduledAt = startAt;

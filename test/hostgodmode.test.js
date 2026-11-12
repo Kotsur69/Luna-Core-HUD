@@ -169,7 +169,8 @@ test('plan ready: lands in the snapshot as ready and pushes planReady with the r
   const c = s.registry.ensure('alpha');
   c.state.planning = deferred();
   await s.run('godmode.plan', { projectId: 'alpha' });
-  c.state.planning.resolve({ ok: true, plan: planView() });
+  // The plan view names the run's worker model (the saved pref until Approve).
+  c.state.planning.resolve({ ok: true, plan: planView('pabc123', { workerModel: 'sonnet' }) });
   await flush();
   assert.deepEqual(s.pushes, [['planReady', { key: 'plan:r1', repo: 'alpha-repo' }]]);
   assert.ok(s.sent.some(([ch, p]) => ch === 'orchestra:changed' && p.projectId === 'alpha'), 'the HUD board repaints');
@@ -186,6 +187,7 @@ test('plan ready: lands in the snapshot as ready and pushes planReady with the r
       { id: 'ui', title: 'UI', deps: ['core'], model: 'sonnet' },
     ],
     todos: ['Add login', 'Dark mode'],
+    workerModel: 'sonnet',
   });
   assert.ok(!JSON.stringify(plans).includes('secret prompt'), 'no prompts');
 
@@ -194,6 +196,7 @@ test('plan ready: lands in the snapshot as ready and pushes planReady with the r
   assert.equal(data.plans[0].state, 'ready');
   const peer = parseGodmodePeer({ machine: 'KT-PC', data }, NOW);
   assert.equal(peer.plans[0].planId, 'pabc123');
+  assert.equal(peer.plans[0].workerModel, 'sonnet', 'the phone select opens on it');
   assert.deepEqual(plansFrom([{ machine: 'KT-PC', data }], NOW).map((p) => [p.machine, p.projectId, p.state]), [['KT-PC', 'alpha', 'ready']]);
 });
 
@@ -298,6 +301,23 @@ test('launch merge: the signed command skips the dialog; only checked fields rea
   assert.ok(s.sent.some(([ch]) => ch === 'orchestra:changed'));
 });
 
+test('launch: an allow-listed workerModel reaches the controller; a plan without one says null', async () => {
+  for (const model of ['opus', 'sonnet', 'fable', 'plan']) {
+    const s = setup();
+    const c = s.withPlan();
+    const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', workerModel: model });
+    assert.equal(res.status, 'launched');
+    const [, payload] = c.calls.find((x) => x[0] === 'launch');
+    assert.deepEqual(payload, { planId: 'pabc123', workerModel: model });
+  }
+  // null = not named: the PC's saved pref decides.
+  const s = setup();
+  const c = s.withPlan();
+  await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', workerModel: null });
+  assert.deepEqual(c.calls.find((x) => x[0] === 'launch')[1], { planId: 'pabc123' });
+  assert.equal(s.gm.plans()[0].workerModel, null, 'an unknown model is never published');
+});
+
 test('launch from the renderer IPC never carries the trusted flag', async () => {
   const handlers = new Map();
   const ipcMain = { handle: (ch, fn) => handlers.set(ch, fn), on: () => {} };
@@ -347,6 +367,12 @@ test("launch refusals: unknown project, no plan, foreign or oversized ids, bad f
     [{ ...base, ids: Array.from({ length: 51 }, () => 'core') }, 'badIds'],
     [{ ...base, ids: [{ id: 'core' }] }, 'badIds'],
     [{ ...base, integration: 'force-push' }, 'badIntegration'],
+    [{ ...base, workerModel: 'gpt-5' }, 'badWorkerModel'],
+    [{ ...base, workerModel: 'OPUS' }, 'badWorkerModel'],
+    [{ ...base, workerModel: '' }, 'badWorkerModel'],
+    [{ ...base, workerModel: 1 }, 'badWorkerModel'],
+    [{ ...base, workerModel: ['opus'] }, 'badWorkerModel'],
+    [{ ...base, workerModel: { toString: () => 'opus' } }, 'badWorkerModel'],
     [{ ...base, free: 'yes' }, 'badPayload'],
     [{ ...base, releaseAfter: 1 }, 'badPayload'],
   ];

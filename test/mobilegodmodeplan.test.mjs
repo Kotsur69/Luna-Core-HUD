@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { godmodePlansFrom, snapRows } from '../mobile/src/snapmodel.js';
-import { planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload, INTEGRATION_MODES } from '../mobile/src/godmodeplanmodel.js';
+import { planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload, INTEGRATION_MODES, WORKER_MODELS } from '../mobile/src/godmodeplanmodel.js';
 
 const require = createRequire(import.meta.url);
 const { withLive, parseGodmodePeer } = require('../src/godmodesnapshot.js');
@@ -64,7 +64,7 @@ test('a ready plan without an id or packages reads as failed', () => {
 
 test('planDraft: fresh draft ticks every package; the same plan keeps its draft', () => {
   const fresh = planDraft(readyPlan, null);
-  assert.deepEqual(fresh, { planId: 'pabc123', ticked: ['a', 'b'], integration: 'pr', free: false, releaseAfter: false });
+  assert.deepEqual(fresh, { planId: 'pabc123', ticked: ['a', 'b'], integration: 'pr', free: false, workerModel: 'opus', releaseAfter: false });
   const edited = { ...togglePackage(fresh, 'a'), integration: 'merge', free: true, releaseAfter: true };
   assert.deepEqual(planDraft(readyPlan, edited), { ...edited });
   // A package gone from the plan drops out of the ticks.
@@ -78,7 +78,7 @@ test('planDraft: fresh draft ticks every package; the same plan keeps its draft'
 
 test('launchPayload: ids only when some package is unticked, in plan order', () => {
   const draft = planDraft(readyPlan, null);
-  assert.deepEqual(launchPayload(readyPlan, draft), { projectId: 'p-luna', planId: 'pabc123', integration: 'pr', free: false });
+  assert.deepEqual(launchPayload(readyPlan, draft), { projectId: 'p-luna', planId: 'pabc123', integration: 'pr', free: false, workerModel: 'opus' });
   const onlyB = togglePackage(draft, 'a');
   assert.deepEqual(launchPayload(readyPlan, onlyB).ids, ['b']);
   const reordered = { ...draft, ticked: ['b', 'a'] };
@@ -95,6 +95,30 @@ test('launchPayload: releaseAfter only with a merge; merge needs a confirmation'
   assert.equal(needsMergeConfirm(merge), true);
   assert.equal(needsMergeConfirm(draft), false);
   assert.deepEqual(INTEGRATION_MODES, ['pr', 'merge', 'branches']);
+});
+
+test('worker model: opens on the snapshot model, kept per draft, sent only for Claude workers', () => {
+  assert.deepEqual(WORKER_MODELS, ['opus', 'sonnet', 'fable', 'plan']);
+  const fresh = planDraft({ ...readyPlan, workerModel: 'plan' }, null);
+  assert.equal(fresh.workerModel, 'plan');
+  // An unknown or missing snapshot value starts on the PC default.
+  assert.equal(planDraft({ ...readyPlan, workerModel: 'gpt-5' }, null).workerModel, 'opus');
+  assert.equal(planDraft(readyPlan, null).workerModel, 'opus');
+  // Mati's pick survives a repaint; a bad one falls back to the snapshot's.
+  const picked = { ...fresh, workerModel: 'sonnet' };
+  assert.equal(planDraft({ ...readyPlan, workerModel: 'plan' }, picked).workerModel, 'sonnet');
+  assert.equal(planDraft({ ...readyPlan, workerModel: 'fable' }, { ...fresh, workerModel: 'nope' }).workerModel, 'fable');
+  assert.equal(launchPayload(readyPlan, picked).workerModel, 'sonnet');
+  // Free workers are not on Claude: no workerModel in the signed payload.
+  assert.equal('workerModel' in launchPayload(readyPlan, { ...picked, free: true }), false);
+  assert.equal('workerModel' in launchPayload(readyPlan, { ...picked, workerModel: 'bogus' }), false);
+});
+
+test('a plan in the snapshot carries its worker model to the phone; an unknown one is dropped', () => {
+  const rows = snapRows([row('KT-PC', { plans: [{ ...readyPlan, workerModel: 'fable' }, { ...readyPlan, projectId: 'p-two', workerModel: 'rm -rf' }] })], NOW);
+  const plans = godmodePlansFrom(rows, NOW);
+  assert.equal(plans[0].workerModel, 'fable');
+  assert.equal(plans[1].workerModel, null);
 });
 
 test('launchPayload refuses a plan that is not ready', () => {

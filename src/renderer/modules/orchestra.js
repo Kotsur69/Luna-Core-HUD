@@ -33,6 +33,7 @@ import { hybridLines } from './orchestraHybridView.js';
 import { pkgStateKey, recoverAsk } from './orchestraState.js';
 import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetry.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
+import { loadWorkerModel, chosenWorkerModel, takesWorkerModel, runModelLabel, packageModelBadge, workerModelControls } from './orchestraWorkerModel.js';
 import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine, reportRow } from './orchestraFinish.js';
 import * as board from './orchestraBoard.js';
 import { switcherStrip } from './orchestraSwitcher.js';
@@ -223,6 +224,8 @@ function startOptions() {
   if (plan.buildPlanner === 'free') workersSel.disabled = true;
   row.append(workersLabel, workersSel);
   if (chosenWorkers() !== 'free') {
+    // Which Claude model every worker runs on (saved pref, frozen at start).
+    if (takesWorkerModel(plan)) row.append(...workerModelControls(plan, phase !== 'idle', render));
     row.append(
       el('span', 'orchestra__optlabel', t('orch.integ')),
       selectEl(integrationOptions(), chosenIntegration(), (v) => {
@@ -393,7 +396,9 @@ function pkgCard(pkg) {
   if (pkg.dependsOn.length) meta.push(t('orch.after', { ids: pkg.dependsOn.join(', ') }));
   if (pkg.files.length) meta.push(t('orch.files', { n: pkg.files.length }));
   if (pkg.verify) meta.push(t('orch.verify', { cmd: pkg.verify }));
-  if (pkg.model) meta.push(pkg.model);
+  // The model it WILL run on (override, planner's pick or the run's choice).
+  const badge = packageModelBadge(pkg, plan, plan.started || plan.scheduledAt ? plan.workers : chosenWorkers());
+  if (badge) meta.push(badge);
   // The Claude account the worker is on (claude-accounts failover), when main says.
   if (typeof pkg.account === 'string' && pkg.account) meta.push(t('orch.account.on', { account: pkg.account }));
   if (pkg.branch) meta.push(pkg.branch);
@@ -548,7 +553,7 @@ function renderPlan() {
   if (plan.model && plan.model !== 'opus' && plan.buildPlanner !== 'free') line += ` · ${t('orch.plannerModel', { model: plan.model })}`;
   if (plan.buildPlanner === 'free') line += ` · ${t('orch.pick.planner.freeUsed')}`;
   body.append(el('div', 'orchestra__summary', line));
-  body.append(el('div', 'orchestra__meta', t('orch.workers', { model: plan.workerModel, perm: plan.permissionMode })));
+  body.append(el('div', 'orchestra__meta', t('orch.workers', { model: runModelLabel(plan), perm: plan.permissionMode })));
   const running = plan.packages.some(isActive);
   if (!plan.started && !plan.scheduledAt && !plan.errors.length) body.append(startOptions());
   if (plan.scheduledAt) body.append(scheduledRow());
@@ -878,6 +883,8 @@ async function launch(ids) {
   const free = workers === 'free';
   const integration = approve && !free ? chosenIntegration() : null;
   const releaseAfter = integration === 'merge' && releaseAfterChoice(plan.projectId);
+  // The Approve screen's "Workers model"; a Free-only run has none.
+  const workerModel = approve && !free && takesWorkerModel(plan) ? chosenWorkerModel(plan) : null;
   const scope = board.project();
   phase = 'launching';
   busyPkg = Array.isArray(ids) && ids.length === 1 ? ids[0] : null;
@@ -885,7 +892,9 @@ async function launch(ids) {
   render();
   let res;
   try {
-    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free, ...(workers ? { workers } : {}), releaseAfter, projectId: scope });
+    res = await window.lunacore.launchOrchestra({
+      planId: plan.id, ids, prompts, schedule, integration, free, ...(workers ? { workers } : {}), ...(workerModel ? { workerModel } : {}), releaseAfter, projectId: scope,
+    });
   } catch {
     res = { ok: false, error: 'failed' };
   }
@@ -987,7 +996,8 @@ async function openOrchestra(projectId) {
   }
   if (phase === 'idle') {
     const target = typeof projectId === 'string' || projectId === null ? { project: projectId } : { reset: fromTab };
-    await refetch(target);
+    // Settings may have changed the worker model since the board was last open.
+    await Promise.all([refetch(target), loadWorkerModel()]);
     try {
       planWait = await window.lunacore.getOrchestraPlanWait(board.activeProject());
     } catch {
