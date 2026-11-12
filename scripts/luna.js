@@ -18,8 +18,15 @@
 // <config>/memory). The app is what syncs them: a memory written here is
 // pushed by the next sync of a running LunaCore.
 //
-// Which config folder: --dir, then LUNA_CONFIG_DIR, then an installed
-// LunaCore's folder if there is one, then this clone's config/.
+// Which config folder: --dir, then LUNA_CONFIG_DIR, then the folder the app
+// itself uses. The app decides by app.isPackaged (src/paths.js resolveUserDir):
+// `npm start` from a clone keeps its memories in the clone's config/, an
+// installed LunaCore in %APPDATA%\LunaCore\config (or the platform's
+// equivalent). A plain node script cannot know which of the two Mati runs, so:
+// this clone's config/ when the script runs from a git clone whose mirror holds
+// memories, else the installed folder if it exists, else this clone's config/.
+// When both folders hold memories, one stderr line names the one used and the
+// other (--dir picks explicitly).
 // ============================================================================
 
 'use strict';
@@ -63,30 +70,64 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
   stats                 approval rate of captured memories, per usefulness band, and how often memories are read   [--days n]
 
   --project <host/owner/repo>   default: the repository of the current folder
-  --dir <config folder>         default: LUNA_CONFIG_DIR, an installed LunaCore, this clone
+  --dir <config folder>         default: LUNA_CONFIG_DIR, else this clone's config/ when its memory
+                                folder has memories, else an installed LunaCore's, else this clone's
 `;
 
 const out = (text = '') => process.stdout.write(`${text}\n`);
 
 class UsageError extends Error {}
 
-/** The per-user data folder of an installed LunaCore (Electron's userData + /config). */
-function installedConfigDir() {
-  const home = os.homedir();
+/** The repository this script lies in, and its config/ (what `npm start` uses: src/paths.js BUNDLED_DIR). */
+const REPO_ROOT = path.join(__dirname, '..');
+const CLONE_CONFIG_DIR = path.join(REPO_ROOT, 'config');
+
+/**
+ * The per-user data folder of an installed LunaCore (Electron's userData + /config).
+ * @param {{env?: object, home?: string, platform?: string}} [where] injectable for tests
+ */
+function installedConfigDir({ env = process.env, home = os.homedir(), platform = process.platform } = {}) {
   const base =
-    process.platform === 'win32'
-      ? process.env.APPDATA || path.join(home, 'AppData', 'Roaming')
-      : process.platform === 'darwin'
+    platform === 'win32'
+      ? env.APPDATA || path.join(home, 'AppData', 'Roaming')
+      : platform === 'darwin'
         ? path.join(home, 'Library', 'Application Support')
-        : process.env.XDG_CONFIG_HOME || path.join(home, '.config');
+        : env.XDG_CONFIG_HOME || path.join(home, '.config');
   return path.join(base, 'LunaCore', 'config');
 }
 
-function resolveConfigDir(flag) {
+/** Whether a config folder's memory mirror holds at least one valid memory. */
+const hasMemories = (configDir) => scan(memoryPaths(configDir).dir).records.length > 0;
+
+/**
+ * The config folder the CLI works on (see the header comment for the order).
+ * @param {string|undefined} flag the --dir value
+ * @param {{env?: object, installed?: string, clone?: string, isClone?: boolean,
+ *   warn?: (line: string) => void}} [opts] injectable for tests:
+ *   installed = an installed LunaCore's folder; clone = this clone's config/;
+ *   isClone = whether the script runs from a git checkout; warn = one stderr line
+ * @returns {string} an absolute path
+ */
+function resolveConfigDir(flag, opts = {}) {
+  const {
+    env = process.env,
+    installed = installedConfigDir({ env }),
+    clone = CLONE_CONFIG_DIR,
+    isClone = fs.existsSync(path.join(REPO_ROOT, '.git')),
+    warn = (line) => process.stderr.write(`${line}\n`),
+  } = opts;
   if (flag) return path.resolve(flag);
-  if (process.env.LUNA_CONFIG_DIR) return path.resolve(process.env.LUNA_CONFIG_DIR);
-  const installed = installedConfigDir();
-  return fs.existsSync(installed) ? installed : path.join(__dirname, '..', 'config');
+  if (env.LUNA_CONFIG_DIR) return path.resolve(env.LUNA_CONFIG_DIR);
+  const cloneDir = path.resolve(clone);
+  const installedDir = path.resolve(installed);
+  const cloneHas = hasMemories(cloneDir);
+  const chosen = isClone && cloneHas ? cloneDir : fs.existsSync(installedDir) ? installedDir : cloneDir;
+  const other = chosen === cloneDir ? installedDir : cloneDir;
+  const has = (dir) => (dir === cloneDir ? cloneHas : hasMemories(dir));
+  if (other !== chosen && has(chosen) && has(other)) {
+    warn(`note: memories in ${chosen} (used) and in ${other} (not used); --dir picks one`);
+  }
+  return chosen;
 }
 
 function resolveProject(flag) {
@@ -422,4 +463,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, resolveConfigDir, installedConfigDir };
+module.exports = { main, resolveConfigDir, installedConfigDir, CLONE_CONFIG_DIR };
