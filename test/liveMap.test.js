@@ -141,6 +141,7 @@ const LIVE_MAP_FILES = [
   'src/renderer/modules/liveMapDetails.js',
   'src/renderer/modules/liveMapHelpers.js',
   'src/renderer/modules/orchestraGraphView.js',
+  'src/renderer/modules/workmap.js',
 ];
 
 function usedKeys() {

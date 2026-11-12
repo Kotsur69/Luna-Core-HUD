@@ -12,9 +12,8 @@
 // placeholder markup from index.html is cleared first); onShow / onHide run
 // every time the tab comes into view or leaves it (the overlay closing
 // counts as leaving). onKey(e) gets Escape and plain keys first and returns
-// true when it used them. Every hook is optional. God Mode is registered
-// here; Sessions and Luna's Work keep their placeholders until a later
-// package registers them.
+// true when it used them. Every hook is optional. All three tabs are
+// registered here: Sessions (workmap.js), God Mode (liveMapGodMode.js).
 //
 // Static markup in index.html (#livemap), .palette overlay CSS like Mission
 // Control. Ctrl+Shift+G is matched on e.code ('KeyG'); gitquick.js leaves
@@ -24,11 +23,12 @@
 'use strict';
 
 import { onLangChange } from './bus.js';
-import { term } from './terminals.js';
+import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { anyTallOpen } from './talloverlay.js';
 import { TAB_KEYS, DEFAULT_TAB, STORAGE_TAB, readPref, writePref, nextTab } from './liveMapHelpers.js';
 import { createGodModeTab } from './liveMapGodMode.js';
+import { createSessionsTab } from './workmap.js';
 
 const overlayEl = typeof document !== 'undefined' ? document.getElementById('livemap') : null;
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
@@ -199,6 +199,8 @@ function onOpenKey(e) {
 }
 
 if (overlayEl) {
+  // The work map subscribes now, so its counts start with the app, not with the first open.
+  registerTab('sessions', createSessionsTab({ bridge: window.lunacore, getActiveSessionId }));
   registerTab('godmode', createGodModeTab({ close: (opts) => closeLiveMap(opts) }));
 
   overlayEl.addEventListener('click', (e) => {
