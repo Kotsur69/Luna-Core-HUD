@@ -11,7 +11,7 @@
       },
       "chrome": { "brand": "left", "status": "left" },
       "slots": {
-        "left": ["actions", "appearance", "project", "profile", "cheatsheets", "prompts", "skills"],
+        "left": ["actions", "appearance", "project", "profile", "setup", "cheatsheets", "prompts", "skills"],
         "main": ["terminal"],
         "right": [
           "context",
@@ -43,7 +43,7 @@
       "chrome": { "brand": "side", "status": "side" },
       "slots": {
         "main": ["terminal"],
-        "side": ["actions", "context", "telemetry", "media", "diagnostics", "appearance", "project", "profile"]
+        "side": ["actions", "context", "telemetry", "media", "diagnostics", "appearance", "project", "profile", "setup"]
       }
     },
     {
@@ -56,7 +56,7 @@
       },
       "chrome": { "brand": "left", "status": "left" },
       "slots": {
-        "left": ["actions", "appearance", "project", "profile"],
+        "left": ["actions", "appearance", "project", "profile", "setup"],
         "main": ["terminal"],
         "right": [
           "context",
@@ -91,7 +91,7 @@
       "chrome": { "brand": "dock-a", "status": "dock-a" },
       "slots": {
         "main": ["terminal"],
-        "dock-a": ["actions", "appearance", "project", "profile"],
+        "dock-a": ["actions", "appearance", "project", "profile", "setup"],
         "dock-b": [
           "context",
           "usage",
@@ -131,6 +131,7 @@
           "appearance",
           "project",
           "profile",
+          "setup",
           "context",
           "usage",
           "telemetry",
@@ -163,7 +164,7 @@
       },
       "chrome": { "brand": "port", "status": "port" },
       "slots": {
-        "port": ["actions", "appearance", "project", "profile", "cheatsheets", "prompts", "skills"],
+        "port": ["actions", "appearance", "project", "profile", "setup", "cheatsheets", "prompts", "skills"],
         "main": ["terminal"],
         "starboard": ["context", "usage", "telemetry", "media", "devices", "skilltracker"],
         "dock": ["activefiles", "sessiontimeline", "ports", "git", "mcp", "diagnostics", "scratchpad", "todo", "clipboard"]
@@ -179,7 +180,7 @@
       },
       "chrome": { "brand": "rail", "status": "rail" },
       "slots": {
-        "rail": ["actions", "appearance", "project", "profile"],
+        "rail": ["actions", "appearance", "project", "profile", "setup"],
         "main": ["terminal"],
         "mid": ["context", "usage", "telemetry", "media", "devices", "skilltracker"],
         "far": [
@@ -209,7 +210,7 @@
       "chrome": { "brand": "side", "status": "side" },
       "slots": {
         "main": ["terminal"],
-        "side": ["actions", "appearance", "project", "profile"],
+        "side": ["actions", "appearance", "project", "profile", "setup"],
         "deck-a": ["context", "usage", "telemetry", "cheatsheets", "prompts", "skills"],
         "deck-b": [
           "media",

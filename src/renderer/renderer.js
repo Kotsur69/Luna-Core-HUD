@@ -74,6 +74,8 @@ import './modules/gitquick.js';
 
 // -- Left panel: switchers, ports, appearance ---------------------------------
 import { initProfiles, initProjects } from './modules/switchers.js';
+// Machine-wide Claude Code setup profiles (`setup` widget, luna-setup use).
+import { initClaudeSetup } from './modules/claudesetup.js';
 import { initPorts } from './modules/ports.js';
 import { initAppearance, getThemeIds, selectTheme } from './modules/appearance.js';
 import { initModifiers } from './modules/modifiers.js';
@@ -146,6 +148,8 @@ await initLayout();
 
 initProfiles();
 initProjects();
+// Not awaited: a git fetch + the switcher CLI in main, nothing below needs it.
+initClaudeSetup();
 initCheatsheets();
 initPrompts();
 initSkills();

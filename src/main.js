@@ -3207,6 +3207,7 @@ function registerIpc() {
   // other PCs through the cloud, like the to-dos.
   cloud = startCloud({ machine: machineName(os.hostname()) });
   registerCloudIpc({ ipcMain, cloud });
+  require('./claudesetupipc').registerClaudeSetupIpc({ ipcMain, getEnv: () => withClaudeOnPath({ ...process.env }) });
   // Settings -> Host mode: host mode inside this HUD, no restart (src/hostswitch.js).
   require('./hostmodeipc').registerHostModeIpc({ ipcMain, control: require('./hostmain').hostControl() });
   registerLunasworkIpc({

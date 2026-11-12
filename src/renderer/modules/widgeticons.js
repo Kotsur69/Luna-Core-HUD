@@ -42,6 +42,14 @@ export const WIDGET_ICONS = {
     ['path', { d: 'M4.5 20.5a7.5 7.5 0 0 1 15 0' }],
   ],
 
+  // Three sliders at different stops: the machine-wide Claude setup profile.
+  setup: [
+    ['path', { d: 'M4 6h16M4 12h16M4 18h16' }],
+    ['circle', { cx: 9, cy: 6, r: 2 }],
+    ['circle', { cx: 15.5, cy: 12, r: 2 }],
+    ['circle', { cx: 7, cy: 18, r: 2 }],
+  ],
+
   // Folder: the active project.
   project: [['path', { d: 'M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2.5h8.5A1.5 1.5 0 0 1 21 10v8.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5Z' }]],
 

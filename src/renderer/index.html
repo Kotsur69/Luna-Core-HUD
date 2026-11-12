@@ -891,6 +891,56 @@
     </div>
   </template>
 
+  <template id="w-setup">
+    <div class="panel__section claude-setup">
+      <h2 class="panel__title" data-i18n="claudesetup.title">Setup Claude</h2>
+      <!-- Machine-wide Claude Code setup (claude-code-setup profiles, `luna-setup use`).
+           Filled in by modules/claudesetup.js. Switching rewrites ~/.claude (with a
+           backup) after a dry-run preview and a confirm; running sessions are left alone. -->
+      <div class="project-row">
+        <select
+          id="claude-setup-select"
+          class="profile-select"
+          data-i18n-title="claudesetup.select"
+          data-i18n-aria="claudesetup.select"
+          title="Setup Claude Code dla calego komputera"
+          aria-label="Setup Claude Code dla calego komputera"
+        ></select>
+        <button
+          type="button"
+          id="claude-setup-refresh"
+          class="project-add-btn"
+          data-i18n-title="claudesetup.refresh"
+          data-i18n-aria="claudesetup.refresh"
+          title="Odswiez liste profili"
+          aria-label="Odswiez liste profili"
+        >&#x21bb;</button>
+      </div>
+      <p id="claude-setup-desc" class="claude-setup__desc" hidden></p>
+      <p id="claude-setup-cost" class="claude-setup__cost" hidden></p>
+      <p id="claude-setup-stale" class="hint" data-i18n="claudesetup.stale" hidden>
+        Offline - pokazuje pobrane wczesniej profile.
+      </p>
+      <div
+        id="claude-setup-confirm"
+        class="claude-setup__confirm"
+        role="group"
+        aria-labelledby="claude-setup-confirm-title"
+        hidden
+      >
+        <p id="claude-setup-confirm-title" class="claude-setup__confirm-title"></p>
+        <ul id="claude-setup-steps" class="claude-setup__steps"></ul>
+        <p id="claude-setup-running" class="claude-setup__running"></p>
+        <div class="claude-setup__actions">
+          <button type="button" id="claude-setup-cancel" class="claude-setup__btn" data-i18n="claudesetup.cancel">Anuluj</button>
+          <button type="button" id="claude-setup-apply" class="pad-send claude-setup__btn" data-i18n="claudesetup.apply">Przelacz</button>
+        </div>
+      </div>
+      <p id="claude-setup-note" class="claude-setup__note" role="status" aria-live="polite" hidden></p>
+      <p class="hint" data-i18n="claudesetup.hint">Zmienia ~/.claude dla wszystkich nowych sesji. Dzialajace zakladki trzeba zrestartowac.</p>
+    </div>
+  </template>
+
   <!-- The three list builders from the left panel (A2). Each keeps the
        `--grow` it had as static markup - they're the ones that split the panel's
        free height between themselves. The `.cheats` interior is built by the
