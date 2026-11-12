@@ -71,6 +71,9 @@ import './modules/palette.js';
 // from two read-only IPC calls (catalog, open-by-id) - see modules/libraries.js.
 import './modules/libraries.js';
 import './modules/gitquick.js';
+// Ctrl+Shift+G: the live map overlay (Sessions | God Mode graph | Luna's Work).
+// Renderer-only and read-only: it reads the board's data (orchestraBoard.js).
+import './modules/liveMap.js';
 
 // -- Left panel: switchers, ports, appearance ---------------------------------
 import { initProfiles, initProjects } from './modules/switchers.js';

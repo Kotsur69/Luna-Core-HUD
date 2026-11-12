@@ -221,7 +221,8 @@ export function mountGitquickChip(root) {
 window.addEventListener(
   'keydown',
   (e) => {
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'g' || e.key === 'G')) {
+    // !shiftKey: Ctrl+Shift+G is the live map's (liveMap.js).
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'g' || e.key === 'G')) {
       e.preventDefault();
       e.stopPropagation();
       if (gitquickOpen) { closeGitQuick(); term.focus(); }
