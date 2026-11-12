@@ -42,6 +42,22 @@ export function packageModelOf(pkg, workerModel) {
   return typeof workerModel === 'string' && workerModel ? workerModel : DEFAULT_WORKER_MODEL;
 }
 
+/**
+ * What a package card's badge names: null for a Free-only run (no Claude
+ * worker), 'free' for a hybrid package a free worker takes (src/orchestraHybrid.js
+ * runsFree: marked free, not handed to Claude yet), else packageModelOf.
+ * @param {{modelOverride?:string|null, model?:string|null}|null} pkg
+ * @param {string|null|undefined} workerModel the run's model
+ * @param {string|null|undefined} workers the run's "Workers" choice
+ * @returns {string|null}
+ */
+export function badgeModelOf(pkg, workerModel, workers) {
+  if (workers === 'free') return null;
+  const override = pkg && typeof pkg.modelOverride === 'string' && pkg.modelOverride;
+  if (workers === 'hybrid' && pkg && pkg.model === 'free' && !override) return 'free';
+  return packageModelOf(pkg, workerModel);
+}
+
 /** 'Opus' / 'Sonnet' / ... for a known model, the raw id otherwise. */
 export function modelName(model) {
   return Object.prototype.hasOwnProperty.call(MODEL_NAMES, model) ? MODEL_NAMES[model] : String(model || '');

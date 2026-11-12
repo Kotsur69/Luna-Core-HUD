@@ -941,14 +941,16 @@ function createOrchestra(deps) {
   const modelFor = (pkg) => workerModelRules.packageModelOf(pkg, plan.workerModel);
 
   /**
-   * The Approve screen's / phone's worker model, before the run starts only:
-   * it becomes the run's choice (frozen by freezeSettings) and the saved pref.
-   * Anything not on the allow-list is ignored - the pref decides, as before.
+   * The Approve screen's / phone's worker model, before the run starts or is
+   * scheduled only: it becomes the run's choice (frozen by freezeSettings)
+   * and the saved pref. Anything not on the allow-list is ignored - the pref
+   * decides, as before. A Free-only run has no Claude workers, so it saves
+   * nothing either.
    */
-  function applyWorkerModel(asked) {
+  function applyWorkerModel(asked, workers) {
     const model = workerModelRules.normalizeWorkerModel(asked);
     // A plan run keeps its own worker pool (orchestraPlanRunStart.js).
-    if (!model || plan.started || plan.planRun) return;
+    if (!model || plan.started || plan.scheduledAt || plan.planRun || workers === 'free') return;
     plan.workerModel = model;
     try {
       saveWorkerModel(model);
@@ -1805,7 +1807,7 @@ function createOrchestra(deps) {
       plan.options = sup.normalizeOptions(release ? { ...rest, releaseAfter: true } : rest);
     }
     // After every refusal above: a refused or declined launch saves nothing.
-    applyWorkerModel(o.workerModel);
+    applyWorkerModel(o.workerModel, workers);
     if (startAt) {
       freezeSettings();
       plan.scheduledAt = startAt;

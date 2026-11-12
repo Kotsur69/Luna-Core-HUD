@@ -12,7 +12,7 @@
 'use strict';
 
 import { t } from './util.js';
-import { WORKER_MODELS, normalizeWorkerModel, packageModelOf, modelName, runWorkerModel } from './orchestraWorkerModelRules.js';
+import { WORKER_MODELS, normalizeWorkerModel, badgeModelOf, modelName, runWorkerModel } from './orchestraWorkerModelRules.js';
 
 /** The choice on screen (= the saved pref), or null before it was read. */
 let picked = null;
@@ -49,16 +49,17 @@ export function runModelLabel(plan) {
 }
 
 /**
- * The model badge of a package card, or null for a Free-only run (its
- * workers are not on Claude).
+ * The model badge of a package card: the model it will run on, "free model"
+ * for a hybrid package a free worker takes, null for a Free-only run.
  * @param {object} pkg a plan view package
  * @param {object} plan the plan view
  * @param {string} workers the run's "Workers" choice
  */
 export function packageModelBadge(pkg, plan, workers) {
   if (!takesWorkerModel(plan)) return pkg && pkg.model ? String(pkg.model) : null;
-  if (workers === 'free') return null;
-  return modelName(packageModelOf(pkg, chosenWorkerModel(plan)));
+  const model = badgeModelOf(pkg, chosenWorkerModel(plan), workers);
+  if (!model) return null;
+  return model === 'free' ? t('orch.pkgModel.free') : modelName(model);
 }
 
 /**
@@ -89,9 +90,14 @@ export function workerModelControls(plan, disabled, onChange) {
     const next = normalizeWorkerModel(sel.value);
     if (!next) return;
     picked = next;
-    // Main validates again; a failed save only loses the remembered model.
-    Promise.resolve(window.lunacore.setUiPrefs({ orchestraWorkerModel: next })).catch(() => {});
     onChange();
+    // Main validates again; a failed save only loses the remembered model
+    // (Approve still sends the choice on screen).
+    try {
+      Promise.resolve(window.lunacore.setUiPrefs({ orchestraWorkerModel: next })).catch(() => {});
+    } catch {
+      /* bridge unavailable: same as a failed save */
+    }
   });
   return [label, sel];
 }

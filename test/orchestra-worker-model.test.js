@@ -146,6 +146,27 @@ test('a scheduled start freezes the chosen model too', async () => {
   assert.equal(log.sessions.length, 0);
 });
 
+test('a scheduled run keeps its model: "start now" with another workerModel changes nothing', async () => {
+  const { orch, log } = setup();
+  const { plan } = await orch.makePlan(ctx);
+  await orch.launch(approve(plan, { workerModel: 'sonnet', schedule: { kind: 'time', at: '03:00' } }));
+  const now = await orch.launch(approve(plan, { workerModel: 'fable' }));
+  assert.equal(now.ok, true);
+  assert.equal(now.plan.workerModel, 'sonnet');
+  assert.deepEqual(models(log), ['sonnet', 'sonnet']);
+  assert.deepEqual(log.saved, ['sonnet']);
+});
+
+test('a Free-only run saves no worker model', async () => {
+  const { orch, log } = setup({ extraDeps: { freeProfileId: () => 'free-a' } });
+  const { plan } = await orch.makePlan(ctx);
+  const res = await orch.launch(approve(plan, { workers: 'free', workerModel: 'fable' }));
+  assert.equal(res.ok, true);
+  assert.equal(res.plan.workers, 'free');
+  assert.deepEqual(log.saved, []);
+  assert.notEqual(res.plan.workerModel, 'fable');
+});
+
 test('a pref save that throws does not stop the launch', async () => {
   const { orch, log } = setup({ extraDeps: { saveWorkerModel: () => { throw new Error('disk full'); } } });
   const { plan } = await orch.makePlan(ctx);
@@ -194,6 +215,17 @@ for (const c of CASES) {
   });
 }
 
+test('badgeModelOf: Free-only has no badge; a hybrid free package says free until handed over', () => {
+  assert.equal(rules.badgeModelOf({ model: 'opus' }, 'opus', 'free'), null);
+  assert.equal(rules.badgeModelOf({ model: 'free' }, 'opus', 'hybrid'), 'free');
+  assert.equal(rules.badgeModelOf({ model: 'free' }, 'plan', 'hybrid'), 'free');
+  // A hand-over to Sonnet (orchestraHybrid.js HAND_OVER_MODEL) is an override.
+  assert.equal(rules.badgeModelOf({ model: 'free', modelOverride: 'sonnet' }, 'opus', 'hybrid'), 'sonnet');
+  assert.equal(rules.badgeModelOf({ model: 'opus' }, 'plan', 'hybrid'), 'opus');
+  assert.equal(rules.badgeModelOf({ model: 'sonnet' }, 'fable', 'claude'), 'fable');
+  assert.equal(rules.badgeModelOf({ model: null }, 'plan', 'claude'), 'opus');
+});
+
 test('runWorkerModel: picked before the start, frozen after', () => {
   assert.equal(rules.runWorkerModel({ started: false, workerModel: 'opus' }, 'sonnet'), 'sonnet');
   assert.equal(rules.runWorkerModel({ started: false, workerModel: 'fable' }, null), 'fable');
@@ -230,7 +262,7 @@ test('the Workers model strings exist in pl and en (HUD and phone)', () => {
   const hud = fs.readFileSync(path.join(ROOT, 'src/renderer/i18n.js'), 'utf8');
   const enAt = hud.indexOf('\n  en: {');
   assert.ok(enAt > 0);
-  for (const key of ['orch.workerModel', 'orch.workerModel.hint', 'orchset.model.plan']) {
+  for (const key of ['orch.workerModel', 'orch.workerModel.hint', 'orch.pkgModel.free', 'orchset.model.plan']) {
     assert.ok(hud.slice(0, enAt).includes(`'${key}':`), `pl ${key}`);
     assert.ok(hud.slice(enAt).includes(`'${key}':`), `en ${key}`);
   }
