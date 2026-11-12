@@ -365,6 +365,95 @@ let diffModalOpen = false;
 // user clicked another row, or closed the modal) is dropped rather than
 // painted into the wrong or closed panel.
 let diffReqToken = 0;
+// Maximized or not. Never persisted: every open starts at normal size.
+let diffMaxed = false;
+
+/** Glyphs on the maximize button: the action it will perform next. */
+export const DIFF_MAX_GLYPH = '□'; // white square: "maximize"
+export const DIFF_RESTORE_GLYPH = '❐'; // two overlapping squares: "restore"
+
+/**
+ * Everything the maximize button and panel show for one maximize state.
+ * Pure, so the toggle logic is testable without a DOM.
+ * @param {boolean} isMax
+ * @returns {{isMax:boolean, glyph:string, labelKey:string, ariaPressed:'true'|'false'}}
+ */
+export function diffMaxView(isMax) {
+  const max = isMax === true;
+  return {
+    isMax: max,
+    glyph: max ? DIFF_RESTORE_GLYPH : DIFF_MAX_GLYPH,
+    labelKey: max ? 'activefiles.diff.restore' : 'activefiles.diff.maximize',
+    ariaPressed: max ? 'true' : 'false',
+  };
+}
+
+/**
+ * The state one maximize toggle leads to.
+ * @param {boolean} isMax current state
+ * @returns {ReturnType<typeof diffMaxView>}
+ */
+export function toggleDiffMax(isMax) {
+  return diffMaxView(isMax !== true);
+}
+
+/**
+ * True when a key event is aimed at a field the user is typing into - an
+ * input, select, contenteditable or textarea - EXCEPT xterm's hidden helper
+ * textarea, which is exactly the target F must be kept away from.
+ * @param {unknown} target event target (duck-typed, so tests need no DOM)
+ * @returns {boolean}
+ */
+function isTypingTarget(target) {
+  if (!target || typeof target !== 'object') return false;
+  if (target.isContentEditable === true) return true;
+  const tag = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : '';
+  if (tag === 'INPUT' || tag === 'SELECT') return true;
+  if (tag !== 'TEXTAREA') return false;
+  const inTerminal = typeof target.closest === 'function' && target.closest('.xterm') !== null;
+  return !inTerminal;
+}
+
+/**
+ * True for the key that toggles maximize while the diff is open: a plain F
+ * (Shift allowed, so Caps Lock still works), never with Ctrl/Alt/Meta - those
+ * stay free for app and OS shortcuts. Never while an IME is composing, and
+ * never when the key goes to a text field another overlay (the Ctrl+K
+ * palette, say) opened above the diff: there "f" is just a letter.
+ * @param {{key?:string, ctrlKey?:boolean, altKey?:boolean, metaKey?:boolean,
+ *   isComposing?:boolean, target?:unknown}|null|undefined} e
+ * @returns {boolean}
+ */
+export function isDiffMaxKey(e) {
+  if (!e || (e.key !== 'f' && e.key !== 'F')) return false;
+  if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return false;
+  return !isTypingTarget(e.target);
+}
+
+/** Applies one maximize state to the panel and button. Any size left by a
+ *  corner drag is cleared on every change, so maximize ignores it and restore
+ *  always lands on the default 520px panel. */
+function setDiffMax(isMax) {
+  if (!diffModal) return;
+  const view = diffMaxView(isMax);
+  diffMaxed = view.isMax;
+  const { panel, maxBtn } = diffModal;
+  if (panel) {
+    panel.classList.toggle('is-max', view.isMax);
+    panel.style.removeProperty('width');
+    panel.style.removeProperty('height');
+  }
+  if (maxBtn) {
+    maxBtn.textContent = view.glyph;
+    maxBtn.setAttribute('aria-pressed', view.ariaPressed);
+    // The data-i18n-* keys follow the state, so a language switch while the
+    // modal is open re-labels it correctly (i18n applyStatic reads them).
+    maxBtn.dataset.i18nTitle = view.labelKey;
+    maxBtn.dataset.i18nAria = view.labelKey;
+    maxBtn.setAttribute('title', t(view.labelKey));
+    maxBtn.setAttribute('aria-label', t(view.labelKey));
+  }
+}
 
 function ensureDiffModal() {
   if (diffModal) return;
@@ -372,6 +461,8 @@ function ensureDiffModal() {
   if (!el) return;
   diffModal = {
     el,
+    panel: el.querySelector('.stimeline-modal__panel'),
+    maxBtn: document.getElementById('filediff-modal-maxbtn'),
     title: document.getElementById('filediff-modal-title'),
     text: document.getElementById('filediff-modal-text'),
     truncated: document.getElementById('filediff-modal-truncated'),
@@ -379,9 +470,24 @@ function ensureDiffModal() {
   el.addEventListener('click', (e) => {
     if (e.target.hasAttribute('data-filediff-close')) closeDiffModal();
   });
+  if (diffModal.maxBtn) diffModal.maxBtn.addEventListener('click', () => setDiffMax(!diffMaxed));
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && diffModalOpen) closeDiffModal();
   });
+  // F toggles maximize. Capture phase on window runs before the focused
+  // element's own handler, so with stopPropagation + preventDefault the key
+  // never reaches xterm's textarea (which would write an "f" into the PTY).
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (!diffModalOpen || !isDiffMaxKey(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Holding F must not flicker between the two sizes.
+      if (!e.repeat) setDiffMax(!diffMaxed);
+    },
+    true,
+  );
 }
 
 /** Maps a parseDiff() line kind to its colour class. 'meta' shares the dim
@@ -426,6 +532,9 @@ async function openDiffModal(file) {
   diffModal.title.textContent = `${t('activefiles.diff.title')} · ${shortPath(file)}`;
   diffModal.text.textContent = '';
   diffModal.truncated.hidden = true;
+  // No persistence: every open starts at the default size, not maximized and
+  // without the size a previous corner drag left behind.
+  setDiffMax(false);
   cancelExit(diffModal.el);
   diffModal.el.hidden = false;
   diffModalOpen = true;
