@@ -692,13 +692,9 @@ function createOrchestra(deps) {
       patch(pkg.id, { ...freshRun(), state: 'launched' });
       return writePty(pkg.sessionId, text, { paste: true }) ? { ok: true } : { ok: false, error: 'noTab' };
     },
-    reopenChat: (pkg, text) => reopenChat(pkg, text),
-    reopenFresh: (pkg) => {
-      const res = reopenInWorktree(pkg, briefText(pkg, pkg.branch, { resume: true }));
-      // Held for node_modules: the hold's Resume reopens it (as Retry does).
-      if (!res.ok && res.error === 'noNodeModules') patch(pkg.id, { heldRetry: true });
-      return res;
-    },
+    // Held for node_modules: the hold's Resume reopens it (as Retry does).
+    reopenChat: (pkg, text) => heldOnDeps(pkg, reopenChat(pkg, text)),
+    reopenFresh: (pkg) => heldOnDeps(pkg, reopenInWorktree(pkg, briefText(pkg, pkg.branch, { resume: true }))),
     requeue: (pkg) => patch(pkg.id, { state: 'pending', error: null, detail: null }),
     beforeResume: () => freezeSettings(),
     stopForPause: () => stopForPause(),
@@ -915,7 +911,7 @@ function createOrchestra(deps) {
     // blockedBy follows terminal / state on every transition, never stale.
     if (plan) plan.packages = sup.withBlockedBy(plan.packages);
     // Each live worker's conversation id rides along, for a resume after a shutdown.
-    if (plan && deps.transcriptIdOf) plan.packages = resumeRules.withTranscriptIds(plan.packages, deps.transcriptIdOf);
+    if (plan && deps.transcriptIdOf) plan.packages = resumeRules.withTranscriptIds(plan.packages, deps.transcriptIdOf, log);
     saveState(plan ? sup.serializePlan(plan) : null);
     const v = view();
     onChange(v);
@@ -1599,10 +1595,12 @@ function createOrchestra(deps) {
         writePty(result.sessionId, ESC);
         patch(pkg.id, { ...result, state: 'killed' });
       } else if (plan.interrupted && result.state === 'launched') {
-        // "Pause for shutdown" landed during this launch: stopped like the others.
-        writePty(result.sessionId, ESC);
-        patch(pkg.id, result);
+        // "Pause for shutdown" landed during this launch. An Esc this early
+        // would reach a CLI that has not started yet: the new tab closes, the
+        // resume opens a fresh worker in the same worktree.
+        patch(pkg.id, { ...result, sessionId: null });
         plan.packages = resumeRules.markPausedForShutdown(plan.packages, { stop: new Set([pkg.id]), requeue: new Set(), nowMs: now() });
+        closeSession(result.sessionId);
       } else {
         patch(pkg.id, result);
         if (result.state === 'failed') onLaunchFailed(before, { ...result, retryable });
@@ -2032,10 +2030,19 @@ function createOrchestra(deps) {
     if (!deps.writeBrief(briefPath, briefText(pkg, pkg.branch, { resume: true }))) return { ok: false, error: 'briefFailed' };
     const session = safeOpenTab(pkg, pkg.cwd || pkg.root, pkg.branch, briefPath, { resumeId: transcriptId, resumeMessage: text });
     if (!session) return { ok: false, error: 'noTab' };
+    // Main could not build a --resume command (a profile that decides its own
+    // session): the tab started on its task, i.e. the resume brief just written.
+    const resumed = typeof session.transcriptId !== 'string' || session.transcriptId === transcriptId;
     const old = pkg.sessionId;
-    patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath, transcriptId });
+    patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath, transcriptId: resumed ? transcriptId : null });
     if (old && old !== session.id && sessionAlive(old)) closeSession(old);
-    return { ok: true };
+    return { ok: true, ...(resumed ? {} : { how: 'fresh' }) };
+  }
+
+  /** A reopen refused for node_modules waits for the hold's Resume (heldRetry), like Retry. */
+  function heldOnDeps(pkg, res) {
+    if (!res.ok && res.error === 'noNodeModules') patch(pkg.id, { heldRetry: true });
+    return res;
   }
 
   /**
@@ -2379,7 +2386,8 @@ function createOrchestra(deps) {
     const marker = sup.markerFrom(fragment, pkg.id);
     const background = trackBackground(sessionId, fragment);
     if (pkg.state === 'stalled') {
-      if (marker && marker.kind === 'done') finish(pkg.id);
+      // Paused for shutdown: no verify / push now; the resume asks again.
+      if (marker && marker.kind === 'done' && !plan.interrupted) finish(pkg.id);
       return;
     }
     if (pkg.state !== 'launched') return;
@@ -2497,6 +2505,8 @@ function createOrchestra(deps) {
     recover.onWake();
     interruptFinalize();
     resumeGate.onResume();
+    // The resume-after-shutdown countdown is wall-clock: a sleep may have eaten it.
+    shutdownResume.onWake();
     background(powerFlow.onSystemResume(), 'sleep');
     if (!plan || !plan.pausedUntil) return;
     if (resumeTimer) clearTimer(resumeTimer);

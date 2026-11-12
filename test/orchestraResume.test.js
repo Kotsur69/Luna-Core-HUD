@@ -134,16 +134,30 @@ test('planIdPayload: plain object with a plan-id-shaped string, optional project
   assert.equal('extra' in r.planIdPayload({ planId: 'p', extra: 1 }).payload, false, 'nothing else is read');
 });
 
-test('withTranscriptIds: live packages pick up their session\'s conversation id, validated', () => {
+test('withTranscriptIds: packages with a tab pick up its conversation id, validated', () => {
   const packages = [
     { id: 'a', state: 'launched', sessionId: 's1', transcriptId: null },
-    { id: 'b', state: 'pushed', sessionId: 's2', transcriptId: null },
+    { id: 'b', state: 'stalled', error: 'restarted', sessionId: 's2', transcriptId: UUID_A },
     { id: 'c', state: 'launched', sessionId: 's3', transcriptId: null },
+    { id: 'd', state: 'pending', sessionId: null, transcriptId: null },
   ];
   const ids = { s1: UUID_A.toUpperCase(), s2: UUID_B, s3: 'not-a-uuid' };
   const out = r.withTranscriptIds(packages, (sid) => ids[sid]);
-  assert.deepEqual(out.map((p) => p.transcriptId), [UUID_A, null, null]);
+  assert.deepEqual(out.map((p) => p.transcriptId), [UUID_A, UUID_B, null, null], 'a paused tab after /clear too');
   assert.equal(r.withTranscriptIds(out, (sid) => ids[sid]), out, 'unchanged -> same array');
+  const lines = [];
+  const thrown = r.withTranscriptIds(packages, () => {
+    throw new Error('gone');
+  }, (l) => lines.push(l));
+  assert.equal(thrown, packages);
+  assert.match(lines[0], /gone/, 'a failing lookup is logged, not swallowed');
+});
+
+test('markPausedForShutdown leaves a failed or stalled package its own error', () => {
+  const packages = [{ id: 'a', state: 'failed', error: 'gitFailed' }, { id: 'b', state: 'finishing' }];
+  const out = r.markPausedForShutdown(packages, { stop: new Set(['a', 'b']), requeue: new Set(), nowMs: NOW });
+  assert.equal(out[0], packages[0]);
+  assert.deepEqual([out[1].state, out[1].error], ['stalled', 'restarted']);
 });
 
 test('normalizeStoredPlan keeps a UUID transcriptId only; history keeps how', () => {
@@ -467,6 +481,61 @@ test('Pause for shutdown, then a real shutdown: the next start resumes the same 
 test('Pause for shutdown is refused on a run that is not going', () => {
   const s = setup({ stored: storedRun([storedPkg('a')], { started: false }) });
   assert.deepEqual(s.orch.pauseForShutdown({ planId: 'plan-1' }), { ok: false, error: 'notRunning' });
+});
+
+test('a paused run never resumes on its own, and a LUNA_DONE then does not start a verify', async () => {
+  const s = await running([storedPkg('a', { transcriptId: UUID_A })]);
+  const tab = s.pkgOf('a').sessionId;
+  s.orch.pauseForShutdown({ planId: 'plan-1' });
+  const sessions = s.log.sessions.length;
+  s.advance(10 * r.RESUME_COUNTDOWN_MS);
+  await s.flush();
+  assert.equal(s.log.sessions.length, sessions);
+  assert.equal(s.orch.view().interrupted.by, 'pause', 'still paused');
+  s.orch.onTurnEnd(tab, JSON.stringify({ type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'LUNA_DONE a' }] } }));
+  await s.flush();
+  assert.equal(s.pkgOf('a').state, 'stalled', 'no finish while paused');
+});
+
+test('a chat resume refused for node_modules is held for the hold\'s Resume (heldRetry)', async () => {
+  const dir = root('a-x1');
+  const s = setup({
+    stored: storedRun([storedPkg('a', { transcriptId: UUID_A })]),
+    extraDeps: { checkDeps: () => ({ ok: false, dir, detail: 'empty', missing: null }) },
+  });
+  await s.orch.resumeInterrupted({ planId: 'plan-1' });
+  assert.equal(s.log.sessions.length, 0, 'no tab on a broken node_modules');
+  assert.equal(s.orch.view().hold.reason, 'noNodeModules');
+  assert.equal(s.log.saved.packages[0].heldRetry, true);
+});
+
+test('a chat resume main could not build as --resume is reported as fresh', async () => {
+  let seq = 0;
+  const s = setup({
+    stored: storedRun([storedPkg('a', { transcriptId: UUID_A })]),
+    extraDeps: { createSession: () => ({ id: `n${(seq += 1)}`, transcriptId: UUID_B }) },
+  });
+  await s.orch.resumeInterrupted({ planId: 'plan-1' });
+  const hist = s.pkgOf('a').stallHistory.filter((e) => e.reason === 'resumedAfterShutdown');
+  assert.deepEqual(hist.map((e) => e.how), ['fresh']);
+});
+
+test('blocked automatic resumes keep one recheck chain; plugging in resumes once', async () => {
+  let held = true;
+  const subs = [];
+  const battery = { isHeld: () => held, subscribe: (fn) => subs.push(fn), view: () => ({ held }), onRunStart: () => {} };
+  const s = setup({ stored: storedRun([storedPkg('a', { transcriptId: UUID_A })]), extraDeps: { battery } });
+  s.advance(r.RESUME_COUNTDOWN_MS);
+  for (let i = 0; i < 3; i += 1) {
+    for (const fn of subs) fn();
+    s.advance(r.RESUME_RECHECK_MS);
+  }
+  await s.flush();
+  held = false;
+  for (const fn of subs) fn();
+  s.advance(5 * r.RESUME_RECHECK_MS);
+  await s.flush();
+  assert.equal(s.log.sessions.length, 1, 'resumed exactly once');
 });
 
 test('Kill after Pause for shutdown ends the interruption', async () => {

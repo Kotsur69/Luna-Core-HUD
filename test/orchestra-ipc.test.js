@@ -364,13 +364,13 @@ test('resume after shutdown: payloads are validated in main, the plan id cross-c
   assert.ok(s.out.sent.some(([channel, p]) => channel === 'orchestra:changed' && p.projectId === 'alpha'), 'board refreshed');
 });
 
-test("resume after shutdown: Luna's Work blocks Resume now and Pause, never Cancel", async (t) => {
+test("resume after shutdown: Luna's Work blocks Resume now, Cancel and Pause", async (t) => {
   const s = setup({ runs: { alpha: view('pa') }, blocked: ['alpha'] });
   t.after(s.cleanup);
-  assert.deepEqual(await s.invoke('orchestra:resumeInterrupted', { planId: 'pa' }), { ok: false, error: 'lunasWorkActive' });
-  assert.deepEqual(await s.invoke('orchestra:pauseForShutdown', { planId: 'pa' }), { ok: false, error: 'lunasWorkActive' });
-  assert.deepEqual(await s.invoke('orchestra:cancelResume', { planId: 'pa' }), { ok: true });
-  assert.deepEqual(calledNames(s.controllers.alpha), ['cancelResume']);
+  for (const channel of ['orchestra:resumeInterrupted', 'orchestra:cancelResume', 'orchestra:pauseForShutdown']) {
+    assert.deepEqual(await s.invoke(channel, { planId: 'pa' }), { ok: false, error: 'lunasWorkActive' }, channel);
+  }
+  assert.deepEqual(calledNames(s.controllers.alpha), [], 'nothing reached the controller');
 });
 
 test("openPr opens only the resolved run's own, shape-checked PR URL", async (t) => {

@@ -131,32 +131,37 @@ function resumeMode(p, env) {
   if (env.planRun) return { how: 'fresh', mode: 'reopen' };
   if (p.sessionId && env.sessionAlive(p.sessionId)) return { how: 'chat', mode: 'nudge' };
   const id = normalizeTranscriptId(p.transcriptId);
-  if (id && safeExists(env.transcriptExists, p.cwd || p.root, id)) return { how: 'chat', mode: 'resume' };
+  if (id && safeExists(env, p.cwd || p.root, id)) return { how: 'chat', mode: 'resume' };
   return { how: 'fresh', mode: 'reopen' };
 }
 
-function safeExists(fn, cwd, id) {
+/** A transcript check that throws reads as "not there": the fresh path still resumes the package. */
+function safeExists(env, cwd, id) {
   try {
-    return fn(cwd, id) === true;
-  } catch {
+    return env.transcriptExists(cwd, id) === true;
+  } catch (err) {
+    if (env.log) env.log(`[resume] transcript check failed: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }
 
 /**
  * Live sessions' conversation ids onto their packages (the watcher's id
- * follows /clear). Returns the same array when nothing changed.
+ * follows /clear). Every package with a tab, so one paused for shutdown keeps
+ * its latest id too. Returns the same array when nothing changed.
  * @param {object[]} packages
  * @param {(sessionId:string) => string|null} transcriptIdOf
+ * @param {(line:string) => void} [log]
  */
-function withTranscriptIds(packages, transcriptIdOf) {
+function withTranscriptIds(packages, transcriptIdOf, log = () => {}) {
   let changed = false;
   const next = packages.map((p) => {
-    if (!p.sessionId || !isActive(p)) return p;
+    if (!p.sessionId) return p;
     let id = null;
     try {
       id = normalizeTranscriptId(transcriptIdOf(p.sessionId));
-    } catch {
+    } catch (err) {
+      log(`[resume] conversation id of ${p.id} unavailable: ${err instanceof Error ? err.message : String(err)}`);
       id = null;
     }
     if (!id || id === p.transcriptId) return p;
@@ -175,7 +180,8 @@ function withTranscriptIds(packages, transcriptIdOf) {
  */
 function markPausedForShutdown(packages, { stop, requeue, nowMs }) {
   return packages.map((p) => {
-    if (stop.has(p.id)) {
+    // Only work in flight: a failed / stalled package keeps its own error.
+    if (stop.has(p.id) && isActive(p)) {
       return {
         ...p,
         state: 'stalled',
@@ -273,7 +279,8 @@ function createShutdownResume(deps) {
   }
 
   function fire() {
-    timer = null;
+    // One chain only: a poke that fires early drops the pending recheck.
+    clear();
     resume({ manual: false }).catch((err) => log(`[resume] automatic resume failed: ${err instanceof Error ? err.message : String(err)}`));
   }
 
@@ -283,6 +290,13 @@ function createShutdownResume(deps) {
     const i = plan && plan.interrupted;
     if (!i || !Number.isFinite(i.resumeAt) || deps.now() < i.resumeAt || !i.waiting) return;
     fire();
+  }
+
+  /** After a system sleep: the deadline is wall-clock, the timer may not have counted the sleep. */
+  function onWake() {
+    const plan = deps.getPlan();
+    const i = plan && plan.interrupted;
+    if (i && Number.isFinite(i.resumeAt)) arm(Math.max(i.resumeAt, deps.now()));
   }
 
   function blocker(plan, manual) {
@@ -301,6 +315,8 @@ function createShutdownResume(deps) {
   async function resume({ manual }) {
     const plan = deps.getPlan();
     if (!plan || !plan.interrupted) return { ok: false, error: 'notInterrupted' };
+    // A pause in this session has no countdown: only Mati resumes it.
+    if (!manual && !Number.isFinite(plan.interrupted.resumeAt)) return { ok: false, error: 'notDue' };
     const why = blocker(plan, manual);
     if (why) {
       if (plan.interrupted.waiting !== why) {
@@ -315,6 +331,7 @@ function createShutdownResume(deps) {
       planRun: !!plan.planRun,
       sessionAlive: deps.sessionAlive,
       transcriptExists: deps.transcriptExists,
+      log,
     });
     plan.interrupted = null;
     plan.killed = false;
@@ -322,15 +339,29 @@ function createShutdownResume(deps) {
     plan.started = true;
     if (!plan.runStartedAt) plan.runStartedAt = deps.now();
     deps.beforeResume();
-    const done = picks.map((pick) => resumeOne(plan, pick));
+    const done = picks.map((pick) => safeResumeOne(plan, pick));
+    const resumed = done.filter((d) => d.ok);
     deps.onRunEvent('resumedAfterShutdown', {
-      chat: done.filter((d) => d.how === 'chat').length,
-      fresh: done.filter((d) => d.how === 'fresh').length,
+      chat: resumed.filter((d) => d.how === 'chat').length,
+      fresh: resumed.filter((d) => d.how === 'fresh').length,
+      failed: done.length - resumed.length,
       manual,
     });
     deps.commit();
     await deps.pump();
     return { ok: true, resumed: done };
+  }
+
+  /** resumeOne that never throws: one broken package must not strand the rest (or the commit). */
+  function safeResumeOne(plan, pick) {
+    try {
+      return resumeOne(plan, pick);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`[resume] ${pick.id}: resume threw: ${message}`);
+      deps.patch(pick.id, { detail: `resume failed: ${message.slice(0, 120)}` });
+      return { id: pick.id, how: pick.how, ok: false, error: 'threw' };
+    }
   }
 
   /** One package: its chat first, a fresh worker when that cannot open. */
@@ -351,6 +382,8 @@ function createShutdownResume(deps) {
       how = 'fresh';
       res = deps.reopenFresh(plan.packages.find((p) => p.id === pick.id));
     }
+    // reopenChat may report that main had to start the worker fresh after all.
+    if (res.ok && res.how === 'fresh') how = 'fresh';
     const current = plan.packages.find((p) => p.id === pick.id);
     if (!res.ok) {
       // Held for node_modules: the hold's Resume reopens it. Anything else waits for Retry.
@@ -424,7 +457,7 @@ function createShutdownResume(deps) {
     };
   }
 
-  return { onRestore, resume, cancel, drop, pause, poke, view, dispose: clear };
+  return { onRestore, resume, cancel, drop, pause, poke, onWake, view, dispose: clear };
 }
 
 module.exports = {

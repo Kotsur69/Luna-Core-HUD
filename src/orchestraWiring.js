@@ -33,6 +33,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { encodeProjectDir } = require('./observer');
+const { normalizeTranscriptId } = require('./orchestraResume');
 const { BRIEF_DIR, RESUME_GRACE_MS } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
 const { loadProtected } = require('./orchestraHybridGuard');
@@ -268,6 +269,8 @@ function sessionDeps(ctx) {
       return s ? (s.watcher && s.watcher.sessionUuid) || s.transcriptId || null : null;
     },
     transcriptExists: (cwd, uuid) => {
+      // Defence in depth: only a UUID ever becomes part of the path.
+      if (typeof cwd !== 'string' || !normalizeTranscriptId(uuid)) return false;
       const file = path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(cwd), `${uuid}.jsonl`);
       try {
         return fs.statSync(file).isFile();

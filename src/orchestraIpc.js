@@ -309,8 +309,8 @@ function registerOrchestraIpc(ipcMain, ctx) {
   });
   // A run a PC shutdown cut (src/orchestraResume.js): {planId, projectId?}
   // only, shape-checked here; the run and its plan are resolved in main.
-  // Resume now / Pause for shutdown respect Luna's Work; Cancel only ever
-  // holds the run, so it works always (like Kill).
+  // All three respect Luna's Work: its build resumes its own run, and even
+  // Cancel would flip that run to held under it.
   const interruptedRun = (payload) => {
     const clean = planIdPayload(payload);
     return clean.ok ? runForPayload(clean.payload) : clean;
@@ -329,6 +329,8 @@ function registerOrchestraIpc(ipcMain, ctx) {
   ipcMain.handle('orchestra:cancelResume', (_event, payload) => {
     const run = interruptedRun(payload);
     if (!run.ok) return run;
+    const blocked = ctx.godModeBlock(run.projectId);
+    if (blocked) return blocked;
     return sendChanged(run)(run.controller.cancelResume({ planId: payload.planId }));
   });
   ipcMain.handle('orchestra:pauseForShutdown', (_event, payload) => {
