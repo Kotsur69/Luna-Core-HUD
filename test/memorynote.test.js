@@ -89,10 +89,11 @@ function captureSetup(t) {
       saves++;
     },
   });
-  const transcript = (name, text) => {
+  /** Writes a transcript last touched `ageMs` before the clock (old enough to capture by default). */
+  const transcript = (name, text, ageMs = SETTLE_MS + 1000) => {
     const file = path.join(configDir, `${name}.jsonl`);
     fs.writeFileSync(file, text);
-    const when = new Date(clock.at - SETTLE_MS - 1000);
+    const when = new Date(clock.at - ageMs);
     fs.utimesSync(file, when, when);
     return file;
   };
@@ -161,8 +162,26 @@ test('a note is fresh for NOTE_MAX_AGE_DAYS whole days after its date', () => {
   assert.equal(NOTE_MAX_AGE_DAYS, 14);
   assert.equal(isFreshNote(note(), day + 14 * DAY_MS + 3600 * 1000), true);
   assert.equal(isFreshNote(note(), day + 15 * DAY_MS), false);
-  // A clock behind the note's date does not hide it.
+  // A clock up to a day behind the note's date does not hide it...
   assert.equal(isFreshNote(note(), day - DAY_MS), true);
+  // ...but a note dated further ahead would never expire: it is not shown.
+  assert.equal(isFreshNote(note({ date: '9999-12-31' }), day), false);
+  assert.equal(isFreshNote(note({ date: '2026-11-20' }), day), false);
+});
+
+test('a session that read outside content leaves the previous note unchanged', async (t) => {
+  const s = captureSetup(t);
+  writeNote(s.dir, note());
+  const before = fs.readFileSync(noteFile(s.dir, PROJECT), 'utf8');
+  const fetched = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'WebFetch', input: { url: 'https://example.com' } }] } });
+  const file = s.transcript('dddddddd-0001', `${session('the docs')}${fetched}\n`);
+  s.state.reply = { ok: true, answer: { candidates: [], status: 'Next step from the page: run the installer script it names, then push.' } };
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  assert.equal(s.state.calls, 1);
+  assert.equal(fs.readFileSync(noteFile(s.dir, PROJECT), 'utf8'), before);
 });
 
 // ---- capture writes it --------------------------------------------------------------
@@ -175,7 +194,7 @@ test('session capture writes the status as the project note, without the inbox',
 
   await s.capture.tick();
 
-  assert.deepEqual(readNote(s.dir, PROJECT), note());
+  assert.deepEqual(readNote(s.dir, PROJECT), note({ at: NOW - SETTLE_MS - 1000 }));
   assert.equal(listInbox(s.dir).items.length, 0);
   assert.equal(scan(s.dir).records.length, 0);
   // A new note alone asks for a sync.
@@ -211,8 +230,36 @@ test('the model cannot move the note to another project or set its session', asy
 
   await s.capture.tick();
 
-  assert.deepEqual(readNote(s.dir, PROJECT), note({ text: STATUS_B }));
+  assert.deepEqual(readNote(s.dir, PROJECT), note({ text: STATUS_B, at: NOW - SETTLE_MS - 1000 }));
   assert.equal(readNote(s.dir, OTHER), null);
+});
+
+test('an older session captured later never replaces the note of a newer one', async (t) => {
+  const s = captureSetup(t);
+  const newer = s.transcript('cccccccc-0001', session('the card'), SETTLE_MS + 1000);
+  const older = s.transcript('cccccccc-0002', session('the sync'), SETTLE_MS + 60 * 60 * 1000);
+  // Tracked newer first: the tick reaches the older session last.
+  s.capture.track({ file: newer, project: PROJECT });
+  s.capture.track({ file: older, project: PROJECT });
+  const replies = [
+    { ok: true, answer: { candidates: [], status: STATUS_A } },
+    { ok: true, answer: { candidates: [], status: STATUS_B } },
+  ];
+  s.state.reply = () => replies[s.state.calls - 1];
+
+  await s.capture.tick();
+
+  assert.equal(s.state.calls, 2);
+  assert.equal(readNote(s.dir, PROJECT).text, STATUS_A);
+  assert.equal(readNote(s.dir, PROJECT).session, 'cccccccc-0001');
+});
+
+test('the note keeps its session time through its file', (t) => {
+  const dir = tempDir(t);
+  writeNote(dir, note({ at: 1731400000000 }));
+  assert.equal(readNote(dir, PROJECT).at, 1731400000000);
+  assert.equal(checkNote(note({ at: -5 })).at, undefined);
+  assert.equal(checkNote(note({ at: 'soon' })).at, undefined);
 });
 
 test('the session prompt asks for a status, the run prompt does not', () => {
@@ -330,8 +377,11 @@ test('a note file that does not parse pauses the note sync instead of looking de
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, 'no frontmatter here');
 
-  assert.throws(() => createNoteProvider(dir).read(), /do not parse/);
+  assert.throws(() => createNoteProvider(dir).read(), /do not parse, e\.g\. .*_where-we-stopped\.md \(bad-note\)/);
   assert.equal(readNote(dir, PROJECT), null);
+  // Only the notes pause: the memories in the same folder still sync.
+  writeRecord(dir, confirmed('junction', 'Do not junction node_modules into a worktree'));
+  assert.deepEqual(createMemoryProvider(dir).read().units.map(([k]) => k), [`${PROJECT}/junction`]);
 });
 
 test('a hand-edited note with a secret is held back from the cloud', () => {

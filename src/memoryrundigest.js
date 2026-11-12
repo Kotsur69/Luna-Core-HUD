@@ -48,6 +48,8 @@ const BRANCH_RE = /^luna(?:-free|-plan)?\/([a-z0-9][a-z0-9-]{0,63})$/;
 const MAX_TRANSCRIPTS_PER_PACKAGE = 20;
 /** A bigger transcript is not read: it counts as one outside source (not known, so assumed). */
 const MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
+/** Transcript bytes read per run in all; past it each transcript counts as one outside source. */
+const MAX_RUN_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
 const TOOL_USE_MARK = '"tool_use"';
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -219,8 +221,11 @@ async function readDirNames(dir) {
   }
 }
 
-/** Outside calls in one package's transcript folders; null when no transcript was found. */
-async function packageOutside(transcriptsDir, dirs) {
+/**
+ * Outside calls in one package's transcript folders; null when no transcript was found.
+ * @param {{bytes: number}} budget transcript bytes the run may still read (shared, decremented)
+ */
+async function packageOutside(transcriptsDir, dirs, budget) {
   let found = 0;
   let count = 0;
   for (const dir of dirs) {
@@ -232,7 +237,12 @@ async function packageOutside(transcriptsDir, dirs) {
       const file = path.join(transcriptsDir, dir, name);
       try {
         const stat = await fs.promises.stat(file);
-        count += stat.size > MAX_TRANSCRIPT_BYTES ? 1 : outsideCalls(await fs.promises.readFile(file, 'utf8'));
+        if (stat.size > MAX_TRANSCRIPT_BYTES || stat.size > budget.bytes) {
+          count++;
+          continue;
+        }
+        budget.bytes -= stat.size;
+        count += outsideCalls(await fs.promises.readFile(file, 'utf8'));
       } catch (err) {
         console.error('[memory] run transcript unreadable:', errText(err));
         count++;
@@ -256,10 +266,11 @@ async function countRunOutside({ repoPath, view, transcriptsDir }) {
     .filter(ran);
   if (!packages.length) return 0;
   const names = typeof repoPath === 'string' && repoPath ? await readDirNames(transcriptsDir) : [];
+  const budget = { bytes: MAX_RUN_TRANSCRIPT_BYTES };
   let total = 0;
   for (const p of packages) {
     const dirs = names.length ? packageDirs(names, repoPath, p.branch) : [];
-    const count = dirs.length ? await packageOutside(transcriptsDir, dirs) : null;
+    const count = dirs.length ? await packageOutside(transcriptsDir, dirs, budget) : null;
     total += count === null ? 1 : count;
   }
   return total;

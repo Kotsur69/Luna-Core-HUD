@@ -438,8 +438,17 @@ packages add in the same run.
   is held back from the cloud (`guardPublish`), and one from the cloud is refused.
 - **On the card** right under the header, as "Where we stopped (<date>, not verified)",
   quoted on one line and labelled as unreviewed data. Hidden once it is more than
-  `NOTE_MAX_AGE_DAYS` (14) days old. A fresh note alone is enough for a card.
+  `NOTE_MAX_AGE_DAYS` (14) days old, and when it is dated more than a day ahead (a future
+  date would never expire). A fresh note alone is enough for a card.
+- **No note from a session that read outside content** (security review, 2026-11-13). The
+  note reaches every new session unreviewed, so a piece whose digest counted a web,
+  subagent or foreign MCP call (decision 61) gives no status, and the previous note stays.
+- **Newest session wins.** The note keeps `at`, when its transcript was last written; a
+  capture never replaces a note that came from a later session (pieces are not captured
+  in the order their sessions ran).
 - **CLI:** `memory capture <transcript>` prints the status; `--save` writes the note too.
+- **Known limit:** web access through the shell (`curl`, `gh api`) is not counted as
+  outside content, for sessions and runs alike (decision 61 counts tool names only).
 
 ### Built after phase 5, 2026-11-13: one capture per God Mode run
 

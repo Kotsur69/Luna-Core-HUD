@@ -11,6 +11,7 @@
 //   ---
 //   date: 2026-11-12
 //   session: <the transcript it came from>
+//   at: <when that transcript was last written, ms>
 //   ---
 //   <one paragraph, at most MAX_NOTE_CHARS>
 //
@@ -77,10 +78,17 @@ function fitNote(text) {
   return `${atWord || head}${CUT_MARK}`;
 }
 
+/** A note's `at` (ms): a number, or its text as a frontmatter value is read; anything else is unknown. */
+function atOf(raw) {
+  const n = typeof raw === 'string' && /^\d{1,16}$/.test(raw) ? Number(raw) : raw;
+  return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+}
+
 /**
  * Rebuilds a note from untrusted input (a file, a cloud row).
  * @param {unknown} raw
- * @returns {{project: string, text: string, date: string, session: string}|null}
+ * @returns {{project: string, text: string, date: string, session: string, at?: number}|null}
+ *   at = when the session it came from last wrote its transcript (ms), when known
  */
 function checkNote(raw) {
   if (!isObject(raw)) return null;
@@ -89,7 +97,8 @@ function checkNote(raw) {
   if (!text || text.length > MAX_NOTE_CHARS) return null;
   if (typeof raw.date !== 'string' || !DATE_RE.test(raw.date)) return null;
   if (typeof raw.session !== 'string' || !SESSION_RE.test(raw.session)) return null;
-  return { project: raw.project, text, date: raw.date, session: raw.session };
+  const at = atOf(raw.at);
+  return { project: raw.project, text, date: raw.date, session: raw.session, ...(at !== undefined ? { at } : {}) };
 }
 
 /**
@@ -110,13 +119,15 @@ function noteFile(dir, project) {
   return path.join(dir, 'projects', ...project.split('/'), NOTE_FILE);
 }
 
-const serializeNote = (note) => `---\ndate: ${note.date}\nsession: ${note.session}\n---\n${note.text}\n`;
+const serializeNote = (note) =>
+  `---\ndate: ${note.date}\nsession: ${note.session}\n${note.at !== undefined ? `at: ${note.at}\n` : ''}---\n${note.text}\n`;
 
 /** A note file -> note. The path is the identity: `project` comes from where the file lies. */
 function noteFromFile(text, project) {
   const parsed = parseFrontmatter(text);
   if (!parsed) return null;
-  return checkNote({ project, text: parsed.body, date: parsed.front.date, session: parsed.front.session });
+  const { front, body } = parsed;
+  return checkNote({ project, text: body, date: front.date, session: front.session, at: front.at });
 }
 
 /**
@@ -194,12 +205,18 @@ function writeNote(dir, raw) {
 }
 
 /**
- * writeNote for capture: a note that cannot be written is logged, never thrown,
- * so it cannot make a transcript piece be paid for again.
+ * writeNote for capture. Pieces are not captured in the order their sessions
+ * ran (a backlog after a restart, a long idle tab), so a note never replaces
+ * one from a session that wrote later (`at`). A note that cannot be written is
+ * logged, never thrown, so it cannot make a transcript piece be paid for again.
+ * @param {string} dir
+ * @param {{project: string, text: string, date: string, session: string, at: number}} raw
  * @returns {boolean} whether it was written
  */
 function saveNote(dir, raw) {
   try {
+    const current = isObject(raw) ? readNote(dir, raw.project) : null;
+    if (current && current.at !== undefined && !(atOf(raw.at) >= current.at)) return false;
     writeNote(dir, raw);
     return true;
   } catch (err) {
@@ -212,10 +229,15 @@ function removeNote(dir, project) {
   fs.rmSync(noteFile(dir, project), { force: true });
 }
 
-/** Whole days from the note's date to `now`; a date in the future counts as 0. */
+/**
+ * Whole days from the note's date to `now`. A date up to a day ahead (another
+ * time zone, a clock behind) counts as 0; one further ahead, or no real date,
+ * counts as Infinity: a note dated in the future would otherwise never expire.
+ */
 function noteAgeDays(note, now) {
   const at = Date.parse(`${note.date}T00:00:00Z`);
-  return Number.isFinite(at) ? Math.max(0, Math.floor((now - at) / DAY_MS)) : Infinity;
+  if (!Number.isFinite(at) || at - now > DAY_MS) return Infinity;
+  return Math.max(0, Math.floor((now - at) / DAY_MS));
 }
 
 /** Whether the card still shows a note: at most NOTE_MAX_AGE_DAYS old. */
@@ -238,7 +260,8 @@ function createNoteProvider(dir) {
     },
     read() {
       const { exists, notes, invalid, mtimes } = scanNotes(dir);
-      if (invalid.length) throw new Error(`${invalid.length} where-we-stopped note(s) do not parse`);
+      // configsync logs this on every sync until the file is fixed or a capture rewrites it.
+      if (invalid.length) throw new Error(`${invalid.length} where-we-stopped note(s) do not parse, e.g. ${invalid[0].file} (${invalid[0].error})`);
       // As for the memories: on a first sync each file counts from its own change time.
       return { units: notes, base: 0, stamps: mtimes, fresh: !exists };
     },

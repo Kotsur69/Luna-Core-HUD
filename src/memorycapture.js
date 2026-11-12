@@ -165,7 +165,10 @@ async function extractPiece({ text, project, dir, source, today, run, notWanted 
   // The outside note comes before the ', suggested global' one candidatesFrom may add (memoryextract.js).
   const noted = withNote(source, outsideNote(digest.outside));
   const { records, rejected } = candidatesFrom(res.answer, { project, today, source: noted, existing });
-  return { ok: true, records, rejected, reason: records.length ? 'saved' : 'nothing', outside: digest.outside, status: statusFrom(res.answer) };
+  // The note reaches every new session's card without review, so a piece that
+  // read outside content (a fetched page could dictate it) gives no status at all.
+  const status = digest.outside ? null : statusFrom(res.answer);
+  return { ok: true, records, rejected, reason: records.length ? 'saved' : 'nothing', outside: digest.outside, status };
 }
 
 /**
@@ -216,11 +219,12 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
 
   /**
    * One transcript: reads its new part and saves what the extractor keeps.
-   * @returns {Promise<{entry: object, reason: string, saved: number, called: boolean}|null>}
+   * @param {{size: number, mtimeMs: number}} stat the transcript's fs.Stats
+   * @returns {Promise<{entry: object, reason: string, saved: number, called: boolean, noted: boolean}|null>}
    *   null = nothing to do now (a full inbox, no complete new line): the entry stays as it is;
    *   called = whether the model was asked
    */
-  async function processFile(file, entry, size) {
+  async function processFile(file, entry, { size, mtimeMs }) {
     if (pendingCount(paths.dir, entry.project) >= MAX_PENDING) return null;
     const piece = readPiece(file, entry.done, size);
     if (piece.end <= entry.done) return null;
@@ -249,10 +253,10 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
         console.error('[memory] candidate not written:', errText(err));
       }
     }
-    // The "where we stopped" note: overwritten only when the model gave a status.
-    const noted = res.status
-      ? saveNote(paths.dir, { project: entry.project, text: res.status, date: isoDate(now()), session: path.basename(file, '.jsonl') })
-      : false;
+    // The "where we stopped" note: overwritten only when the model gave a status,
+    // and never by a session that wrote its transcript before the note's own.
+    const note = { project: entry.project, text: res.status, date: isoDate(now()), session: path.basename(file, '.jsonl'), at: Math.floor(mtimeMs) };
+    const noted = res.status ? saveNote(paths.dir, note) : false;
     const reason = saved ? 'saved' : res.reason === 'saved' ? 'write-failed' : res.reason;
     if (log) for (const event of droppedEvents(res.rejected, entry.project)) log.add(event);
     // Only a piece the model read is a capture worth counting.
@@ -303,7 +307,7 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
         // Only model calls count against the budget: a skip must not starve the transcripts after it.
         if (stat.size <= entry.done || quiet < (isLive ? IDLE_MS : SETTLE_MS) || calls >= MAX_PER_TICK) continue;
 
-        const res = await processFile(file, entry, stat.size);
+        const res = await processFile(file, entry, stat);
         if (!res) continue;
         processed++;
         if (res.called) calls++;

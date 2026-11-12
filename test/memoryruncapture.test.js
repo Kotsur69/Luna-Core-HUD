@@ -276,6 +276,32 @@ test('workers that read outside content mark the candidates', async (t) => {
   assert.equal(item.outside, 2);
 });
 
+test('when the outside count fails, the candidates are still marked (one source assumed)', async (t) => {
+  const s = setup(t);
+  const capture = createRunCapture({
+    configDir: s.configDir,
+    machine: 'PC1',
+    now: () => NOW,
+    projectOf: () => `git:${PROJECT}`,
+    countOutside: async () => {
+      throw new Error('EACCES');
+    },
+    run: async () => reply(candidate('Kept despite the count')),
+  });
+  assert.equal((await capture.capture(finished())).saved, 1);
+  const [, record] = scan(s.dir).records[0];
+  assert.equal(record.source, `captured from God Mode run ${RUN_ID} on PC1, read 1 outside source(s)`);
+});
+
+test('the ledger keeps the newest runs by time, whatever order the file has', (t) => {
+  const s = setup(t);
+  const runs = Object.fromEntries(Array.from({ length: 510 }, (_, i) => [`p${509 - i}`, { at: 509 - i, project: PROJECT, reason: 'saved' }]));
+  fs.writeFileSync(path.join(s.configDir, LEDGER_FILE), JSON.stringify({ runs: { ...runs, '../x': { at: 1 } } }));
+  const kept = s.ledger();
+  assert.equal(Object.keys(kept).length, 500);
+  assert.ok(kept.p509 && !kept.p0 && !kept['../x']);
+});
+
 test('outside calls are counted in the workers transcripts; a worker without one counts as one', async (t) => {
   const transcriptsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-runcap-tx-'));
   t.after(() => fs.promises.rm(transcriptsDir, { recursive: true, force: true, maxRetries: 5 }));

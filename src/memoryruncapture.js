@@ -71,16 +71,20 @@ function readRunLedger(file) {
   } catch (err) {
     console.error('[memory] run capture ledger unreadable, starting empty:', errText(err));
   }
-  const runs = {};
-  for (const [id, e] of Object.entries(isObject(doc) && isObject(doc.runs) ? doc.runs : {}).slice(-MAX_RUNS)) {
+  const entries = [];
+  for (const [id, e] of Object.entries(isObject(doc) && isObject(doc.runs) ? doc.runs : {})) {
     if (!RUN_ID_RE.test(id) || !isObject(e)) continue;
-    runs[id] = {
-      at: Number.isFinite(e.at) ? e.at : 0,
-      project: projectFromRepoKey(e.project) || null,
-      reason: String(e.reason || '').slice(0, MAX_REASON_CHARS),
-    };
+    entries.push([
+      id,
+      {
+        at: Number.isFinite(e.at) ? e.at : 0,
+        project: projectFromRepoKey(e.project) || null,
+        reason: String(e.reason || '').slice(0, MAX_REASON_CHARS),
+      },
+    ]);
   }
-  return { runs };
+  // The newest MAX_RUNS by time, whatever order a hand-edited file has.
+  return { runs: Object.fromEntries(entries.sort(([, a], [, b]) => a.at - b.at).slice(-MAX_RUNS)) };
 }
 
 /**
@@ -144,9 +148,19 @@ function createRunCapture({
   }
 
   /** The model call and the filter, for a run already in the ledger. */
+  /** The run's outside-content count; when it cannot be counted, one (assumed, as for a missing transcript). */
+  async function outsideOf(repoPath, view) {
+    try {
+      return await countOutside({ repoPath, view, transcriptsDir });
+    } catch (err) {
+      console.error('[memory] run capture: outside content not counted:', errText(err));
+      return 1;
+    }
+  }
+
   async function extract({ runId, repoPath, view, project, digest }) {
     const today = isoDate(now());
-    const outside = await countOutside({ repoPath, view, transcriptsDir });
+    const outside = await outsideOf(repoPath, view);
     const existing = scan(paths.dir)
       .records.map(([, r]) => r)
       .filter((r) => r.project === project || r.project === GLOBAL);
