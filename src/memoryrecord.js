@@ -337,6 +337,8 @@ module.exports = {
   MAX_TITLE,
   MAX_SOURCE,
   USEFULNESS_MAX,
+  DATE_RE,
+  cleanLine,
   slug,
   usefulnessOf,
   validProject,

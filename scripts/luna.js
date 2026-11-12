@@ -47,6 +47,7 @@ const { importAutoMemory, autoMemoryDir } = require('../src/memoryimport');
 const { setEnabled, readEnabled } = require('../src/memoryprojects');
 const { localStatus, memoryPaths } = require('../src/memorysync');
 const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
+const { writeNote } = require('../src/memorynote');
 const { createRepoKeys, findRepo } = require('../src/missionrepokey');
 const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
 const { reviewList, verify, retire } = require('../src/memoryreview');
@@ -229,10 +230,11 @@ function cmdCard({ configDir, project }) {
     return;
   }
   const card = cardFor(configDir, project, machineName(os.hostname()));
-  if (!card) return out(`No confirmed memory for ${project} yet: its tabs get no card.`);
+  if (!card) return out(`No confirmed memory and no recent "where we stopped" note for ${project} yet: its tabs get no card.`);
   out(card.text);
   out();
-  out(`-- ${card.shown} of ${card.total} confirmed memories, ${card.chars} characters, about ${card.tokens} tokens (budget ${MAX_CARD_CHARS} characters)`);
+  const note = card.note ? ' + the "where we stopped" note' : '';
+  out(`-- ${card.shown} of ${card.total} confirmed memories${note}, ${card.chars} characters, about ${card.tokens} tokens (budget ${MAX_CARD_CHARS} characters)`);
 }
 
 function cmdEval({ dir, project, values, positionals }) {
@@ -329,6 +331,10 @@ async function cmdCapture({ configDir, dir, project, values, positionals }) {
   }
   if (values.save) for (const event of droppedEvents(res.rejected, project)) log.add(event);
   for (const r of res.rejected) out(`dropped (${r.reason}${r.usefulness === undefined ? '' : `, usefulness ${r.usefulness}%`}): ${r.title}`);
+  if (res.status) {
+    out(`Where we stopped: ${res.status}`);
+    if (values.save) writeNote(dir, { project, text: res.status, date: today(), session: path.basename(file, '.jsonl') });
+  }
   const wrote = values.save ? 'saved to the inbox' : 'nothing written (--save writes them)';
   if (res.outside) out(`The session read ${res.outside} outside source(s) (web or MCP): the inbox asks to check these before approving.`);
   out(`${res.records.length} candidate(s), ${res.rejected.length} dropped (${res.reason}) - ${wrote}`);

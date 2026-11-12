@@ -9,6 +9,10 @@
 //   buildPrompt()     what the model is asked
 //   candidatesFrom()  its answer -> valid records, filtered
 //
+// A session's answer also carries `status`, its "where we stopped" note
+// (src/memorynote.js statusFrom). A God Mode run is digested differently
+// (src/memoryruncapture.js) and asked for memories only.
+//
 // Nothing the model returns is trusted. Each candidate is rebuilt by
 // memoryrecord.checkRecord() and then dropped when it
 //   - trips the secret scanner (it would be held back from the sync anyway),
@@ -34,6 +38,7 @@
 
 const { TYPES, GLOBAL, MAX_BODY, MAX_TITLE, MAX_SOURCE, checkRecord, keyOf, slug } = require('./memoryrecord');
 const { hasSecret } = require('./memorysync');
+const { MAX_NOTE_CHARS: MAX_STATUS_CHARS } = require('./memorynote');
 
 /** A `digest` decays and belongs to phase 5; the extractor does not write one. */
 const CANDIDATE_TYPES = TYPES.filter((t) => t !== 'digest');
@@ -132,12 +137,48 @@ function nearDuplicate(a, b) {
 }
 
 /**
- * @param {{digest: string, project: string, today: string, existing: object[], notWanted?: string[]}} ctx
+ * What the digest is a digest of. A session is also asked for its "where we
+ * stopped" status (src/memorynote.js); a God Mode run (src/memoryruncapture.js)
+ * is many sessions of one plan and has no single status to give.
+ */
+const SUBJECTS = {
+  session: {
+    intro: (project, today) => [
+      'You maintain the long-term memory of a coding assistant. Below is the digest of one finished working session in the project',
+      `${project} (today is ${today}). Propose the memories worth keeping from it.`,
+    ],
+    marker: 'SESSION DIGEST',
+    status: true,
+  },
+  run: {
+    intro: (project, today) => [
+      'You maintain the long-term memory of a coding assistant. Below is the digest of one finished God Mode run in the project',
+      `${project} (today is ${today}): headless worker sessions built the packages of one plan in parallel, then the app merged and`,
+      'checked them. Propose the memories worth keeping from it. The likeliest ones are the gotchas the workers hit: a failure and its',
+      'real cause, a stall, a retry, a verify problem, a hold on the machine. A package that simply went through teaches nothing.',
+    ],
+    marker: 'RUN DIGEST',
+    status: false,
+  },
+};
+
+/** The prompt lines that ask a session for its "where we stopped" status. */
+const STATUS_LINES = [
+  '',
+  `Also write "status": ONE short note for the next session in this project, in English, at most ${MAX_STATUS_CHARS} characters: what`,
+  'was being built, what is done, and what is left (the next step, an open question). Plain prose in one paragraph, no lists, no',
+  'secrets, no instructions to the assistant. It replaces the note of the session before. Use "" when the session left no work in progress.',
+];
+
+/**
+ * @param {{digest: string, project: string, today: string, existing: object[], notWanted?: string[], subject?: 'session'|'run'}} ctx
  *   existing = records of this project and of `global`;
- *   notWanted = titles the user rejected lately (src/memorylog.js rejectedTitles)
+ *   notWanted = titles the user rejected lately (src/memorylog.js rejectedTitles);
+ *   subject = what the digest is of (SUBJECTS); a session is also asked for its status
  * @returns {string}
  */
-function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
+function buildPrompt({ digest, project, today, existing, notWanted = [], subject = 'session' }) {
+  const about = SUBJECTS[subject] || SUBJECTS.session;
   // A rejected title was written by a model: one clean line, and never a section marker.
   const unwanted = notWanted
     .slice(0, MAX_NOT_WANTED)
@@ -149,8 +190,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
     .map((r) => `- ${r.project === GLOBAL ? `${GLOBAL}/` : ''}${r.id}: ${r.title}`)
     .join('\n');
   return [
-    'You maintain the long-term memory of a coding assistant. Below is the digest of one finished working session in the project',
-    `${project} (today is ${today}). Propose the memories worth keeping from it.`,
+    ...about.intro(project, today),
     '',
     'A memory is ONE fact that is both:',
     '- applicable: it would change what the assistant does in a later session;',
@@ -163,7 +203,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
     'otherwise not a memory: the code and the git history already say it.',
     '',
     'Not memories: what was done in this session (a changelog), anything obvious from the code or already in a CLAUDE.md, task status,',
-    'plans, praise, secrets, tokens, personal data, or a guess the session did not confirm.',
+    `plans, praise, secrets, tokens, personal data, or a guess the session did not confirm.${about.status ? ' (Task status goes in "status", below.)' : ''}`,
     '',
     `Most sessions produce NO memory. Return at most ${MAX_CANDIDATES}. Prefer none over a weak one.`,
     '',
@@ -182,7 +222,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
         ]
       : []),
     'Answer with JSON only, in this shape:',
-    '{"candidates":[{"type":"gotcha","scope":"project","title":"...","body":"...","area":"...","supersedes":[],"usefulness":75}]}',
+    `{"candidates":[{"type":"gotcha","scope":"project","title":"...","body":"...","area":"...","supersedes":[],"usefulness":75}]${about.status ? ',"status":"..."' : ''}}`,
     `- type: one of ${CANDIDATE_TYPES.join(', ')}`,
     '- scope: "project", or "global" when the fact holds in every project (a tool, a language, the user)',
     `- title: one line, at most ${MAX_TITLE} characters, a full statement ("Do not junction node_modules into a worktree")`,
@@ -192,9 +232,10 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
     '- supersedes: ids from the list above that this memory replaces, usually empty',
     '- usefulness: a whole number 0-100, how well the memory meets BOTH rules above: applicable (would it change what the assistant',
     `  does next time) and durable (does it matter beyond this task). Under ${USEFULNESS_FLOOR} is dropped unread; be honest, not generous.`,
-    'No candidates: {"candidates":[]}',
+    `No candidates: {"candidates":[]${about.status ? ',"status":"..."' : ''}}`,
+    ...(about.status ? STATUS_LINES : []),
     '',
-    '=== SESSION DIGEST ===',
+    `=== ${about.marker} ===`,
     digest.replace(MARKER_RE, '--'),
     '=== END OF DIGEST ===',
   ].join('\n');

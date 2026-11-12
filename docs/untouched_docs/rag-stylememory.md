@@ -418,6 +418,29 @@ Done-when of section 10, checked on 2026-11-11: a confirmed memory that names
 (`test/memoryreview.test.js`, and `memory review` on the real store), and
 `memory stats` prints the approval rate of the chosen number of days.
 
+### Built after phase 5, 2026-11-13: the "where we stopped" note
+
+Item 3 of the improvements above. Unnumbered so it cannot collide with decisions other
+packages add in the same run.
+
+- **One note per project, written by session capture** (`src/memorynote.js`). The same
+  extractor call that proposes memories also returns `status`: what was being built, what
+  is done, what is left, at most 600 characters, English. The model writes the text only;
+  project, date and session id come from the capture. A capture with no meaningful status
+  (empty, "none", under 20 characters) leaves the previous note as it is.
+- **It is no memory.** The file is `projects/<host>/<owner>/<repo>/_where-we-stopped.md`
+  in the mirror; `memorystore.scan()` skips files whose name starts with `_`, so the note
+  never reaches search, `memory_get`, the inbox, the review list or the memory count. It
+  needs no approval: it is a status that decays, not a fact.
+- **Synced as its own unit**, `<project>/_where-we-stopped` in the `memory` scope, by a
+  third provider beside the mirror and the heartbeats. Newest wins, like every unit. Its
+  text is secret-scrubbed before it is written; a hand-edited note that trips the scanner
+  is held back from the cloud (`guardPublish`), and one from the cloud is refused.
+- **On the card** right under the header, as "Where we stopped (<date>, not verified)",
+  quoted on one line and labelled as unreviewed data. Hidden once it is more than
+  `NOTE_MAX_AGE_DAYS` (14) days old. A fresh note alone is enough for a card.
+- **CLI:** `memory capture <transcript>` prints the status; `--save` writes the note too.
+
 ### Bonus, wanted by Mati on 2026-11-11: a live work map in LunaCore
 
 Mati wants a panel in the HUD that shows what the session in the active tab is doing,

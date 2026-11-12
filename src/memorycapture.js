@@ -23,7 +23,9 @@
 // -> filter (src/memoryextract.js) -> the candidates are written to the mirror
 // as `observed` memories. They wait in the inbox (src/memoryinbox.js). A
 // candidate the model scored under the usefulness floor never gets there: it
-// is only logged (src/memorylog.js, `dropped`) with its score.
+// is only logged (src/memorylog.js, `dropped`) with its score. The same model
+// call gives the project's "where we stopped" status: it overwrites the
+// project's note (src/memorynote.js) without the inbox; no status, no change.
 //
 // A full inbox pauses capture for that project: candidates nobody reviews are
 // not worth a model call.
@@ -43,6 +45,7 @@ const { digestTranscript } = require('./memorydigest');
 const { buildPrompt, candidatesFrom, outsideNote, withNote, LOW_USEFULNESS } = require('./memoryextract');
 const { pendingCount } = require('./memoryinbox');
 const { rejectedTitles } = require('./memorylog');
+const { statusFrom, saveNote } = require('./memorynote');
 const { scrub } = require('./hostscrub');
 
 const LEDGER_FILE = 'memory-capture.local.json';
@@ -143,13 +146,16 @@ function readPiece(file, from, size) {
  * @param {{text: string, project: string, dir: string, source: string, today: string, notWanted?: string[],
  *   run: (job: {prompt: string}) => Promise<{ok: boolean, answer?: object, reason?: string}>}} opts
  *   notWanted = titles the user rejected lately: the model is told not to propose their kind again
- * @returns {Promise<{ok: true, records: object[], rejected: object[], reason: string, outside: number}|{ok: false, reason: string}>}
+ * @returns {Promise<{ok: true, records: object[], rejected: object[], reason: string, outside: number, status: string|null}|{ok: false, reason: string}>}
  *   records are NOT written here; outside = the digest's count of calls that read outside
- *   content, also noted in each record's `source`
+ *   content, also noted in each record's `source`; status = the "where we stopped" text
+ *   the model gave (src/memorynote.js), null when it gave nothing meaningful
  */
 async function extractPiece({ text, project, dir, source, today, run, notWanted = [] }) {
   const digest = digestTranscript(text);
-  if (!digest.userTurns || digest.text.length < MIN_DIGEST_CHARS) return { ok: true, records: [], rejected: [], reason: 'too-short', outside: digest.outside };
+  if (!digest.userTurns || digest.text.length < MIN_DIGEST_CHARS) {
+    return { ok: true, records: [], rejected: [], reason: 'too-short', outside: digest.outside, status: null };
+  }
   const existing = scan(dir)
     .records.map(([, r]) => r)
     .filter((r) => r.project === project || r.project === GLOBAL);
@@ -159,7 +165,7 @@ async function extractPiece({ text, project, dir, source, today, run, notWanted 
   // The outside note comes before the ', suggested global' one candidatesFrom may add (memoryextract.js).
   const noted = withNote(source, outsideNote(digest.outside));
   const { records, rejected } = candidatesFrom(res.answer, { project, today, source: noted, existing });
-  return { ok: true, records, rejected, reason: records.length ? 'saved' : 'nothing', outside: digest.outside };
+  return { ok: true, records, rejected, reason: records.length ? 'saved' : 'nothing', outside: digest.outside, status: statusFrom(res.answer) };
 }
 
 /**
@@ -243,11 +249,15 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
         console.error('[memory] candidate not written:', errText(err));
       }
     }
+    // The "where we stopped" note: overwritten only when the model gave a status.
+    const noted = res.status
+      ? saveNote(paths.dir, { project: entry.project, text: res.status, date: isoDate(now()), session: path.basename(file, '.jsonl') })
+      : false;
     const reason = saved ? 'saved' : res.reason === 'saved' ? 'write-failed' : res.reason;
     if (log) for (const event of droppedEvents(res.rejected, entry.project)) log.add(event);
     // Only a piece the model read is a capture worth counting.
     if (log && called) log.add({ ev: 'capture', project: entry.project, reason, kept: saved, dropped: countReasons(res.rejected) });
-    return { entry: { ...entry, done: piece.end, fails: 0, at: now() }, reason, saved, called };
+    return { entry: { ...entry, done: piece.end, fails: 0, at: now() }, reason, saved, called, noted };
   }
 
   /**
@@ -260,6 +270,7 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
     let processed = 0;
     let calls = 0;
     let saved = 0;
+    let noted = 0;
     try {
       const ledger = readLedger(ledgerFile);
       /** Writes the tick's copy, with what track() learned meanwhile. */
@@ -297,6 +308,7 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
         processed++;
         if (res.called) calls++;
         saved += res.saved;
+        if (res.noted) noted++;
         ledger.files[file] = res.entry;
         ledger.last = { at: now(), saved: res.saved, reason: res.reason };
         // Saved after every model call: a crash must not make the next start pay for it again.
@@ -310,7 +322,8 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
       busy = false;
       tracked = [];
     }
-    if (saved) onSaved(saved);
+    // A new note alone is a change worth a sync too.
+    if (saved || noted) onSaved(saved);
     return { processed, saved };
   }
 
