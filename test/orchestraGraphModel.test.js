@@ -129,6 +129,14 @@ test('a long chain of cycles does not blow the stack', () => {
   assert.equal(g.cycles[0].length, 3000);
 });
 
+test('criticalPath on a very long chain does not overflow the stack', () => {
+  const list = [];
+  for (let i = 0; i < 20000; i += 1) list.push(pkg(`c${i}`, { dependsOn: i ? [`c${i - 1}`] : [] }));
+  const path = criticalPath(buildGraph(view(list), { now: NOW }));
+  assert.equal(path.ids.length, 20000);
+  assert.equal(path.ids[0], 'c0');
+});
+
 test('upstream / downstream', () => {
   const g = buildGraph(view([pkg('a'), pkg('b', { dependsOn: ['a'] }), pkg('c', { dependsOn: ['b'] }), pkg('d', { dependsOn: ['a'] })]), { now: NOW });
   assert.deepEqual(upstream(g, 'c'), ['b', 'a']);

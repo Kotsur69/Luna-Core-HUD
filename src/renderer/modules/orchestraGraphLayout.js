@@ -118,7 +118,8 @@ export function layoutGraph(graph, opts = {}) {
   const back = backEdges(ids, edges);
   const layerOf = layersOf(ids, edges, back);
 
-  const layerCount = ids.length ? Math.max(...layerOf.values()) + 1 : 0;
+  // reduce, not Math.max(...): a spread of a huge graph overflows the argument limit.
+  const layerCount = ids.length ? [...layerOf.values()].reduce((m, l) => Math.max(m, l), 0) + 1 : 0;
   let layers = Array.from({ length: layerCount }, () => []);
   for (const id of ids) layers[layerOf.get(id)].push(id);
 

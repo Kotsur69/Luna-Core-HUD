@@ -46,7 +46,9 @@ const setAttrs = (el, attrs) => {
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
 };
 
-const edgeKey = (e) => `${e.from}->${e.to}`;
+// JSON, not "a->b": package ids are not validated, and "a->b"+"c" would collide with "a"+"b->c".
+const pairKey = (from, to) => JSON.stringify([from, to]);
+const edgeKey = (e) => pairKey(e.from, e.to);
 
 /** The cubic path of an edge; back edges arc around instead of crossing the nodes. */
 function edgePath(e, dir) {
@@ -126,7 +128,10 @@ function buildSvg(arrowId) {
   root.setAttribute('aria-label', t('lm.graph.label'));
   const defs = svg('defs');
   const marker = svg('marker');
-  setAttrs(marker, { id: arrowId, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
+  // userSpaceOnUse: the arrow keeps its size on the thicker critical-path edges.
+  setAttrs(marker, {
+    id: arrowId, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 9, markerHeight: 9, markerUnits: 'userSpaceOnUse', orient: 'auto-start-reverse',
+  });
   const tip = svg('path', 'lm-arrow');
   tip.setAttribute('d', 'M0,0 L10,5 L0,10 z');
   marker.append(tip);
@@ -242,7 +247,7 @@ export function createGraphView(host, handlers = {}) {
     layout = lay;
     const emphasis = state.emphasis instanceof Set ? state.emphasis : null;
     const path = Array.isArray(state.path) ? state.path : [];
-    const pathPairs = new Set(path.slice(1).map((id, i) => `${path[i]}->${id}`));
+    const pathPairs = new Set(path.slice(1).map((id, i) => pairKey(path[i], id)));
     drawNodes(graph, lay, state, emphasis, new Set(path));
     drawEdges(lay, emphasis, pathPairs);
     const cycles = Array.isArray(graph.cycles) ? graph.cycles : [];

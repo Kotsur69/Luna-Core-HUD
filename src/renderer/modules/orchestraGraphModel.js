@@ -328,27 +328,34 @@ export function criticalPath(graph) {
   const nodes = ((graph && graph.nodes) || []).filter((n) => !n.ghost && n.state !== 'pushed');
   const inCycle = new Set(((graph && graph.cycles) || []).flat());
   const live = nodes.filter((n) => !inCycle.has(n.id));
-  const liveIds = new Set(live.map((n) => n.id));
+  const byId = new Map(live.map((n) => [n.id, n]));
   const pos = new Map(live.map((n, i) => [n.id, i]));
   const weight = (n) => n.estimateMinutes || DEFAULT_PATH_MINUTES;
+  // Kahn order over the live, cycle-free subgraph: iterative, so a long chain cannot overflow the stack.
+  const deps = new Map(live.map((n) => [n.id, n.dependsOn.filter((d) => byId.has(d))]));
+  const dependents = new Map(live.map((n) => [n.id, []]));
+  const missing = new Map();
+  for (const n of live) {
+    missing.set(n.id, deps.get(n.id).length);
+    for (const d of deps.get(n.id)) dependents.get(d).push(n.id);
+  }
+  const queue = live.filter((n) => missing.get(n.id) === 0).map((n) => n.id);
   const best = new Map();
-  const visit = (n) => {
-    if (best.has(n.id)) return best.get(n.id);
-    best.set(n.id, { minutes: weight(n), prev: null });
+  let end = null;
+  for (let qi = 0; qi < queue.length; qi += 1) {
+    const id = queue[qi];
     let top = null;
-    for (const d of n.dependsOn) {
-      if (!liveIds.has(d)) continue;
-      const r = visit(live[pos.get(d)]);
+    for (const d of deps.get(id)) {
+      const r = best.get(d);
       if (!top || r.minutes > top.minutes || (r.minutes === top.minutes && pos.get(d) < pos.get(top.id))) top = { id: d, minutes: r.minutes };
     }
-    const res = { minutes: weight(n) + (top ? top.minutes : 0), prev: top ? top.id : null };
-    best.set(n.id, res);
-    return res;
-  };
-  let end = null;
-  for (const n of live) {
-    const r = visit(n);
-    if (!end || r.minutes > end.minutes) end = { id: n.id, minutes: r.minutes };
+    const res = { minutes: weight(byId.get(id)) + (top ? top.minutes : 0), prev: top ? top.id : null };
+    best.set(id, res);
+    if (!end || res.minutes > end.minutes || (res.minutes === end.minutes && pos.get(id) < pos.get(end.id))) end = { id, minutes: res.minutes };
+    for (const next of dependents.get(id)) {
+      missing.set(next, missing.get(next) - 1);
+      if (missing.get(next) === 0) queue.push(next);
+    }
   }
   if (!end) return { ids: [], minutes: 0 };
   const ids = [];

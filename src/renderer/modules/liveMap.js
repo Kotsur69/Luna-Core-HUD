@@ -139,15 +139,19 @@ export function openLiveMap(tab) {
   selectTab(key, { focus: true });
 }
 
-/** Closes it; focus goes back where it was (or to the terminal). */
-export function closeLiveMap() {
+/**
+ * Closes it; focus goes back where it was (or to the terminal).
+ * @param {{focusTerminal?: boolean}} [opts] focusTerminal: a worker tab was just
+ *   activated, so the terminal (now showing it) takes focus, not the old element.
+ */
+export function closeLiveMap(opts = {}) {
   if (!isOpen) return;
   isOpen = false;
   if (current) call(current, 'onHide');
   closeWithExit(overlayEl);
   const back = returnFocus;
   returnFocus = null;
-  if (back && back.isConnected && typeof back.focus === 'function' && back !== document.body) back.focus();
+  if (!opts.focusTerminal && back && back.isConnected && typeof back.focus === 'function' && back !== document.body) back.focus();
   else term.focus();
 }
 
@@ -195,7 +199,7 @@ function onOpenKey(e) {
 }
 
 if (overlayEl) {
-  registerTab('godmode', createGodModeTab({ close: closeLiveMap }));
+  registerTab('godmode', createGodModeTab({ close: (opts) => closeLiveMap(opts) }));
 
   overlayEl.addEventListener('click', (e) => {
     if (e.target instanceof Element && e.target.hasAttribute('data-livemap-close')) closeLiveMap();
@@ -224,6 +228,8 @@ if (overlayEl) {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === 'KeyG') {
         e.preventDefault();
         e.stopPropagation();
+        // A held chord would flicker the overlay open and shut.
+        if (e.repeat) return;
         if (isOpen) closeLiveMap();
         else openLiveMap();
         return;

@@ -54,13 +54,35 @@ const storage = () => {
   }
 };
 
+const FOCUSABLE = 'button, input, select, a[href], [tabindex="0"]';
+
+/**
+ * Swaps a container's content without dropping the reader's place: the
+ * focused control (by its position among the focusables) and the scroll
+ * position survive, so a live push never throws keyboard focus to <body>.
+ */
+function replaceKeepingPlace(container, children) {
+  const active = document.activeElement;
+  const items = () => [...container.querySelectorAll(FOCUSABLE)];
+  const index = active && container.contains(active) ? items().indexOf(active) : -1;
+  const scroll = container.scrollTop;
+  container.replaceChildren(...children);
+  container.scrollTop = scroll;
+  if (index < 0) return;
+  const list = items();
+  const target = list[Math.min(index, list.length - 1)];
+  if (target) target.focus();
+}
+
 /**
  * The God Mode tab. `shell` is the live map's own API ({close}).
  * @param {{close:() => void}} shell
  */
 export function createGodModeTab(shell) {
   const s = {
+    // The run on screen, and the one Mati picked (kept while it briefly has no view).
     project: undefined,
+    chosen: undefined,
     direction: readPref(storage(), STORAGE_DIR, DIRECTIONS, 'LR'),
     query: '',
     focusBlocked: false,
@@ -79,6 +101,10 @@ export function createGodModeTab(shell) {
   let tick = null;
   let frame = 0;
   let hoverId = null;
+  let shown = false;
+  let inflight = null;
+  let sideSig = '';
+  let summarySig = '';
 
   const viewNow = () => (s.project === undefined ? null : board.viewOf(s.project));
 
@@ -136,12 +162,18 @@ export function createGodModeTab(shell) {
     renderSoon();
   }
 
-  function selectRun(projectId) {
-    s.project = projectId;
+  /** A different run on screen: nothing of the old one's view state carries over. */
+  function resetRunState() {
     s.selectedId = null;
     s.trace = false;
     fitPending = true;
     layoutSig = '';
+  }
+
+  function selectRun(projectId) {
+    s.chosen = projectId;
+    s.project = projectId;
+    resetRunState();
     renderSoon();
   }
 
@@ -151,7 +183,8 @@ export function createGodModeTab(shell) {
     shell.close();
     try {
       await openOrchestra(project);
-    } catch {
+    } catch (err) {
+      console.error('[livemap] Show on board: opening the board failed:', err);
       return;
     }
     const cards = document.querySelectorAll('#orchestra-body .orchestra__pkg');
@@ -167,7 +200,7 @@ export function createGodModeTab(shell) {
 
   function gotoWorker(sessionId) {
     window.lunacore.activateSession(sessionId);
-    shell.close();
+    shell.close({ focusTerminal: true });
   }
 
   // --- tooltip ---------------------------------------------------------------
@@ -175,7 +208,8 @@ export function createGodModeTab(shell) {
     hoverId = id;
     if (!dom) return;
     const node = id && graph ? graph.nodes.find((n) => n.id === id) : null;
-    if (!node || !rect) {
+    // A late focus frame after the tab hid must not bring the tooltip back.
+    if (!node || !rect || !shown) {
       dom.tip.hidden = true;
       dom.tip.classList.remove('is-visible');
       return;
@@ -199,19 +233,33 @@ export function createGodModeTab(shell) {
     if (!frame) frame = requestAnimationFrame(render);
   }
 
-  /** The run to show: the chosen one while it exists, else the board's, else the first. */
+  /** The run to show: the chosen one while it has a view, else the current, the board's, the first. */
   function pickProject(chips) {
-    if (s.project !== undefined && (board.viewOf(s.project) || !chips.length)) return s.project;
+    for (const key of [s.chosen, s.project, board.project()]) {
+      if (key !== undefined && board.viewOf(key)) return key;
+    }
+    if (chips.length) return chips[0].projectId;
+    if (s.project !== undefined) return s.project;
     const boardProject = board.project();
-    if (boardProject !== undefined && board.viewOf(boardProject)) return boardProject;
-    return chips.length ? chips[0].projectId : boardProject === undefined ? null : boardProject;
+    return boardProject === undefined ? null : boardProject;
   }
 
   function renderRuns(chips) {
     const active = document.activeElement;
     const chipFocused = !!(active && dom.runs.contains(active));
     const strip = switcherStrip({ chips, selected: s.project, onSelect: selectRun, focus: chipFocused });
-    dom.runs.replaceChildren(...(strip ? [strip] : []));
+    if (strip || chips.length !== 1) {
+      dom.runs.replaceChildren(...(strip ? [strip] : []));
+      return;
+    }
+    // One run: no switch to offer, but still say whose graph this is.
+    const only = chips[0];
+    const label = el('div', 'lm-runs__single');
+    label.append(
+      el('span', 'orchestra-runs__label', only.label || only.projectId || t('orch.runs.noProject')),
+      el('span', 'orchestra-runs__state', t(`orch.runs.state.${only.state}`)),
+    );
+    dom.runs.replaceChildren(label);
   }
 
   /** Nodes the toggles keep bright (intersection of every active one), or null for all. */
@@ -256,11 +304,16 @@ export function createGodModeTab(shell) {
     dom.side.hidden = !node;
     if (!node) {
       dom.side.replaceChildren();
+      sideSig = '';
       return;
     }
     const view = viewNow();
+    // Rebuilt only when something it shows changed (a push or the clock tick often changes nothing here).
+    const sig = JSON.stringify([window.i18n.lang, node.id, node.visual, node.waitingOn, node.pkg, graph.edges.filter((e) => e.from === node.id || e.to === node.id), rootBlockers(graph, node.id)]);
+    if (sig === sideSig) return;
+    sideSig = sig;
     dom.side.setAttribute('aria-label', t('lm.side.label'));
-    dom.side.replaceChildren(...detailsPanel(node, {
+    replaceKeepingPlace(dom.side, detailsPanel(node, {
       graph,
       packages: view && Array.isArray(view.packages) ? view.packages : [],
       onSelect: select,
@@ -274,7 +327,10 @@ export function createGodModeTab(shell) {
     frame = 0;
     if (!dom) return;
     const chips = runChips(board.chips());
-    s.project = pickProject(chips);
+    const picked = pickProject(chips);
+    // The run changed under us (its view went away): start clean, like a chip click.
+    if (s.project !== undefined && picked !== s.project) resetRunState();
+    s.project = picked;
     renderRuns(chips);
     const view = viewNow();
     graph = buildGraph(view);
@@ -303,24 +359,40 @@ export function createGodModeTab(shell) {
     dom.summary.hidden = status.kind !== 'summary';
     if (status.kind === 'summary') {
       const total = graph.nodes.filter((n) => !n.ghost).length;
-      dom.summary.replaceChildren(summaryPanel(summaryLists(graph), total, select));
-    } else dom.summary.replaceChildren();
+      const lists = summaryLists(graph);
+      const sig = JSON.stringify([window.i18n.lang, total, lists]);
+      if (sig !== summarySig) {
+        summarySig = sig;
+        replaceKeepingPlace(dom.summary, [summaryPanel(lists, total, select)]);
+      }
+    } else if (summarySig) {
+      summarySig = '';
+      dom.summary.replaceChildren();
+    }
     if (showGraph) renderGraph(emphasis, crit ? crit.ids : null);
     else layoutSig = '';
     if (hoverId && !graph.nodes.some((n) => n.id === hoverId)) hover(null, null);
     renderSide();
   }
 
-  async function refetch() {
+  /** One refresh at a time: a reopen while one runs joins it (two overlapping refreshes could drop a push). */
+  function refetch() {
+    if (inflight) return inflight;
     s.loading = !viewNow();
     renderSoon();
-    try {
-      await board.refresh();
-    } catch {
-      // The board's fetchers swallow IPC errors themselves; nothing new to show.
-    }
-    s.loading = false;
-    renderSoon();
+    inflight = (async () => {
+      try {
+        await board.refresh();
+      } catch (err) {
+        // The board's fetchers swallow IPC errors themselves; anything else is a bug worth seeing.
+        console.error('[livemap] refreshing the God Mode runs failed:', err);
+      } finally {
+        inflight = null;
+        s.loading = false;
+        renderSoon();
+      }
+    })();
+    return inflight;
   }
 
   // --- the tab contract (liveMap.js registerTab) ------------------------------
@@ -334,6 +406,7 @@ export function createGodModeTab(shell) {
       dom = null;
     },
     onShow() {
+      shown = true;
       if (!unsubscribe && window.lunacore && window.lunacore.onOrchestraChanged) {
         // orchestra.js's own listener (registered first) has applied it to the board.
         unsubscribe = window.lunacore.onOrchestraChanged(() => renderSoon());
@@ -343,6 +416,7 @@ export function createGodModeTab(shell) {
       refetch();
     },
     onHide() {
+      shown = false;
       if (unsubscribe) unsubscribe();
       unsubscribe = null;
       if (tick) clearInterval(tick);
@@ -354,6 +428,8 @@ export function createGodModeTab(shell) {
     /** Re-renders labels after a language switch. */
     onLang() {
       layoutSig = '';
+      sideSig = '';
+      summarySig = '';
       renderSoon();
     },
     /**
