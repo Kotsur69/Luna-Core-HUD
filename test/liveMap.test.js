@@ -142,6 +142,8 @@ const LIVE_MAP_FILES = [
   'src/renderer/modules/liveMapHelpers.js',
   'src/renderer/modules/orchestraGraphView.js',
   'src/renderer/modules/workmap.js',
+  'src/renderer/modules/liveMapLunasWork.js',
+  'src/renderer/modules/lunasworkMapView.js',
 ];
 
 function usedKeys() {

@@ -13,7 +13,8 @@
 // every time the tab comes into view or leaves it (the overlay closing
 // counts as leaving). onKey(e) gets Escape and plain keys first and returns
 // true when it used them. Every hook is optional. All three tabs are
-// registered here: Sessions (workmap.js), God Mode (liveMapGodMode.js).
+// registered here: Sessions (workmap.js), God Mode (liveMapGodMode.js),
+// Luna's Work (liveMapLunasWork.js).
 //
 // Static markup in index.html (#livemap), .palette overlay CSS like Mission
 // Control. Ctrl+Shift+G is matched on e.code ('KeyG'); gitquick.js leaves
@@ -29,6 +30,7 @@ import { anyTallOpen } from './talloverlay.js';
 import { TAB_KEYS, DEFAULT_TAB, STORAGE_TAB, readPref, writePref, nextTab } from './liveMapHelpers.js';
 import { createGodModeTab } from './liveMapGodMode.js';
 import { createSessionsTab } from './workmap.js';
+import { createLunasWorkTab } from './liveMapLunasWork.js';
 
 const overlayEl = typeof document !== 'undefined' ? document.getElementById('livemap') : null;
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
@@ -202,6 +204,7 @@ if (overlayEl) {
   // The work map subscribes now, so its counts start with the app, not with the first open.
   registerTab('sessions', createSessionsTab({ bridge: window.lunacore, getActiveSessionId }));
   registerTab('godmode', createGodModeTab({ close: (opts) => closeLiveMap(opts) }));
+  registerTab('lunaswork', createLunasWorkTab());
 
   overlayEl.addEventListener('click', (e) => {
     if (e.target instanceof Element && e.target.hasAttribute('data-livemap-close')) closeLiveMap();
