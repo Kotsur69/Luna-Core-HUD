@@ -21,7 +21,9 @@
 //
 // Processing one piece: digest (src/memorydigest.js) -> prompt -> small model
 // -> filter (src/memoryextract.js) -> the candidates are written to the mirror
-// as `observed` memories. They wait in the inbox (src/memoryinbox.js).
+// as `observed` memories. They wait in the inbox (src/memoryinbox.js). A
+// candidate the model scored under the usefulness floor never gets there: it
+// is only logged (src/memorylog.js, `dropped`) with its score.
 //
 // A full inbox pauses capture for that project: candidates nobody reviews are
 // not worth a model call.
@@ -38,7 +40,7 @@ const { scan, writeRecord } = require('./memorystore');
 const { memoryPaths } = require('./memorysync');
 const { readEnabled } = require('./memoryprojects');
 const { digestTranscript } = require('./memorydigest');
-const { buildPrompt, candidatesFrom, outsideNote, withNote } = require('./memoryextract');
+const { buildPrompt, candidatesFrom, outsideNote, withNote, LOW_USEFULNESS } = require('./memoryextract');
 const { pendingCount } = require('./memoryinbox');
 const { rejectedTitles } = require('./memorylog');
 const { scrub } = require('./hostscrub');
@@ -69,6 +71,17 @@ const NEWLINE = 0x0a;
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err && (err.code || err.message)) || 'error';
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/**
+ * The log lines of the candidates dropped for a low usefulness score, so the
+ * floor can be checked against what it threw away.
+ * @param {{title: string, reason: string, type?: string, usefulness?: number}[]} rejected
+ * @param {string} project
+ */
+const droppedEvents = (rejected, project) =>
+  rejected
+    .filter((r) => r.reason === LOW_USEFULNESS)
+    .map((r) => ({ ev: 'dropped', project, reason: r.reason, type: r.type, title: r.title, usefulness: r.usefulness }));
 
 /** What the filter dropped, counted by reason: {duplicate: 2, secret: 1}. */
 function countReasons(rejected) {
@@ -224,13 +237,14 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
       try {
         writeRecord(paths.dir, record);
         saved++;
-        if (log) log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type });
+        if (log) log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type, usefulness: record.usefulness });
       } catch (err) {
         // One candidate that cannot be written must not make the piece be paid for again.
         console.error('[memory] candidate not written:', errText(err));
       }
     }
     const reason = saved ? 'saved' : res.reason === 'saved' ? 'write-failed' : res.reason;
+    if (log) for (const event of droppedEvents(res.rejected, entry.project)) log.add(event);
     // Only a piece the model read is a capture worth counting.
     if (log && called) log.add({ ev: 'capture', project: entry.project, reason, kept: saved, dropped: countReasons(res.rejected) });
     return { entry: { ...entry, done: piece.end, fails: 0, at: now() }, reason, saved, called };
@@ -320,4 +334,4 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
   };
 }
 
-module.exports = { createCapture, extractPiece, readPiece, readLedger, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING, MIN_DIGEST_CHARS };
+module.exports = { createCapture, extractPiece, readPiece, readLedger, droppedEvents, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING, MIN_DIGEST_CHARS };

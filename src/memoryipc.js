@@ -34,7 +34,7 @@ const { listInbox, approve, reject, update, makeGlobal } = require('./memoryinbo
 const { MAX_BODY, MAX_TITLE } = require('./memoryrecord');
 const { scan } = require('./memorystore');
 const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
-const { captureStats, DAY_MS } = require('./memorylog');
+const { captureStats, decisionEvent, DAY_MS } = require('./memorylog');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -69,7 +69,7 @@ function cleanEdits(raw) {
 function registerMemoryIpc({ ipcMain, dir, onChanged = () => {}, captureStatus = () => null, now = Date.now, log = null, roots = () => ({}) }) {
   /** Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor. */
   const decided = (ev, record) => {
-    if (log) log.add({ ev, key: `${record.project}/${record.id}`, type: record.type, ...(ev === 'rejected' ? { title: record.title } : {}) });
+    if (log) log.add(decisionEvent(ev, record));
   };
   const events = () => (log ? log.read() : []);
   /** The anchor check walks folders main named: a failure there must not hide the list. */

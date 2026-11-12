@@ -19,6 +19,7 @@ const {
   serializeRecord,
   recordFromFile,
   fromAutoMemory,
+  usefulnessOf,
   MAX_BODY,
 } = require('../src/memoryrecord.js');
 
@@ -204,4 +205,31 @@ test('an auto-memory about the user becomes a global preference', () => {
   assert.equal(record.project, 'global');
   assert.equal(record.type, 'preference');
   assert.equal(record.created, '2026-01-01');
+});
+
+test('usefulness is a whole number clamped to 0-100; anything else is unknown, never an error', () => {
+  const score = (usefulness) => checkRecord(base({ usefulness })).record.usefulness;
+
+  assert.equal(score(72), 72);
+  assert.equal(score(72.6), 73);
+  assert.equal(score(-5), 0);
+  assert.equal(score(250), 100);
+  assert.equal(score('85'), 85);
+  assert.equal(score(' 40 '), 40);
+  for (const bad of [undefined, null, NaN, Infinity, 'high', '', '7e1', [50], { v: 50 }, true]) {
+    assert.equal(score(bad), undefined, `${String(bad)} is unknown`);
+    assert.ok(!('usefulness' in checkRecord(base({ usefulness: bad })).record));
+  }
+  assert.equal(usefulnessOf('100.4'), 100);
+});
+
+test('a usefulness score survives the trip through the markdown file', () => {
+  const record = normalizeRecord(base({ usefulness: 64, confidence: 'observed' }));
+
+  const text = serializeRecord(record);
+  const back = recordFromFile(text, { project: record.project, id: record.id });
+
+  assert.match(text, /^usefulness: 64$/m);
+  assert.deepEqual(back.record, record);
+  assert.doesNotMatch(serializeRecord(normalizeRecord(base())), /usefulness/);
 });

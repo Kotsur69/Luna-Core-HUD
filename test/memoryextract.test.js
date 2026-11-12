@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildPrompt, candidatesFrom, nearDuplicate, outsideNote, sourceNotes, withoutSuggestedGlobal, MAX_CANDIDATES } = require('../src/memoryextract.js');
+const { buildPrompt, candidatesFrom, nearDuplicate, outsideNote, sourceNotes, withoutSuggestedGlobal, MAX_CANDIDATES, USEFULNESS_FLOOR, LOW_USEFULNESS } = require('../src/memoryextract.js');
 
 const PROJECT = 'github.com/acme/hud';
 const CTX = { project: PROJECT, today: '2026-11-11', source: 'captured from session abc on PC1', existing: [] };
@@ -260,4 +260,73 @@ test('a title whose id would be a Windows device name is dropped', () => {
 
   assert.deepEqual(records, []);
   assert.deepEqual(rejected.map((r) => r.reason), ['bad-title', 'bad-title']);
+});
+
+test('the usefulness score is kept, clamped, and left unknown when the model gives none', () => {
+  const { records } = candidatesFrom(
+    {
+      candidates: [
+        cand('Retry says busy after a sleep', { usefulness: 88 }),
+        cand('Package times out on battery power', { usefulness: 140 }),
+        cand('Release assets need dashes in the name', { usefulness: 'very' }),
+        cand('Junction targets are emptied on worktree removal'),
+      ],
+    },
+    CTX,
+  );
+
+  assert.deepEqual(
+    records.map((r) => r.usefulness),
+    [88, 100, undefined, undefined],
+  );
+});
+
+test(`a candidate scored under USEFULNESS_FLOOR (${USEFULNESS_FLOOR}) is dropped with its score and type`, () => {
+  const { records, rejected } = candidatesFrom(
+    {
+      candidates: [
+        cand('Retry says busy after a sleep', { usefulness: USEFULNESS_FLOOR - 1 }),
+        cand('Package times out on battery power', { usefulness: USEFULNESS_FLOOR }),
+        cand('Release assets need dashes in the name', { usefulness: -20, type: 'how-to' }),
+      ],
+    },
+    CTX,
+  );
+
+  assert.deepEqual(
+    records.map((r) => [r.title, r.usefulness]),
+    [['Package times out on battery power', USEFULNESS_FLOOR]],
+  );
+  assert.deepEqual(rejected, [
+    { title: 'Retry says busy after a sleep', reason: LOW_USEFULNESS, type: 'gotcha', usefulness: USEFULNESS_FLOOR - 1 },
+    { title: 'Release assets need dashes in the name', reason: LOW_USEFULNESS, type: 'how-to', usefulness: 0 },
+  ]);
+  assert.equal(LOW_USEFULNESS, 'low usefulness');
+});
+
+test('a high score changes nothing about confidence: the candidate still waits in the inbox', () => {
+  const { records } = candidatesFrom({ candidates: [cand('Retry says busy after a sleep', { usefulness: 100, confidence: 'confirmed' })] }, CTX);
+
+  assert.equal(records[0].confidence, 'observed');
+  assert.equal(records[0].usefulness, 100);
+});
+
+test('a dropped low-usefulness candidate does not use up a place among MAX_CANDIDATES', () => {
+  const weak = ['hotel tabs', 'india colours', 'juliet fonts'];
+  const strong = ['alpha rollout', 'bravo printer', 'charlie sync', 'delta worktree', 'echo installer'];
+  const make = (topics, usefulness) => topics.map((t) => cand(`Lesson about ${t}`, { body: `Unique text for ${t}.`, usefulness }));
+
+  const { records, rejected } = candidatesFrom({ candidates: [...make(weak, 5), ...make(strong, 90)] }, CTX);
+
+  assert.equal(records.length, MAX_CANDIDATES);
+  assert.ok(rejected.every((r) => r.reason === LOW_USEFULNESS));
+});
+
+test('the prompt asks for a usefulness score judged by the keep rule, and names the floor', () => {
+  const prompt = buildPrompt({ digest: 'd', project: PROJECT, today: '2026-11-11', existing: [] });
+
+  assert.match(prompt, /"usefulness":75/);
+  assert.match(prompt, /- usefulness: a whole number 0-100/);
+  assert.match(prompt, /applicable \(would it change what the assistant/);
+  assert.match(prompt, new RegExp(`Under ${USEFULNESS_FLOOR} is dropped`));
 });

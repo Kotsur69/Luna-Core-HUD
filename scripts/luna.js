@@ -32,7 +32,7 @@ const { parseArgs } = require('node:util');
 const { projectFromRepoKey, splitKey, GLOBAL } = require('../src/memoryrecord');
 const { scan, writeRecord } = require('../src/memorystore');
 const { listInbox, approve, reject } = require('../src/memoryinbox');
-const { extractPiece } = require('../src/memorycapture');
+const { extractPiece, droppedEvents } = require('../src/memorycapture');
 const { sourceNotes } = require('../src/memoryextract');
 const { runJob } = require('../src/missionrunner');
 const { createIndex, DEFAULT_LIMIT } = require('../src/memoryindex');
@@ -41,7 +41,7 @@ const { setEnabled, readEnabled } = require('../src/memoryprojects');
 const { localStatus, memoryPaths } = require('../src/memorysync');
 const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
 const { createRepoKeys, findRepo } = require('../src/missionrepokey');
-const { createLog, logPath, captureStats, usage, rejectedTitles, DAY_MS } = require('../src/memorylog');
+const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, DAY_MS } = require('../src/memorylog');
 const { reviewList, verify, retire } = require('../src/memoryreview');
 const { machineName } = require('../src/missionledgersync');
 
@@ -54,13 +54,13 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
   import-auto           import Claude Code auto-memory   [--from <folder>] [--force]
   card                  the project card a new tab gets, and its size
   eval <golden.json>    recall@k of [{"q": "...", "expect": "<id>"}]   [--limit n]
-  inbox                 memories that wait for approval
+  inbox                 memories that wait for approval, most useful first
   approve | reject <id> approve or delete one of them
   capture <transcript>  run the extractor over a Claude Code transcript   [--save]
                         (one small-model call; without --save nothing is written)
   review                confirmed memories that are stale, name a missing file, or were reported wrong
   verify | retire <id>  say one of them is still true, or delete it on every PC
-  stats                 approval rate of captured memories and how often memories are read   [--days n]
+  stats                 approval rate of captured memories, per usefulness band, and how often memories are read   [--days n]
 
   --project <host/owner/repo>   default: the repository of the current folder
   --dir <config folder>         default: LUNA_CONFIG_DIR, an installed LunaCore, this clone
@@ -217,12 +217,15 @@ function cmdEval({ dir, project, values, positionals }) {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-/** Phase 4: the memories that wait for approval, newest first. */
+/** The extractor's usefulness score as shown: "72%", or "?" when unknown. */
+const scoreText = (usefulness) => (Number.isInteger(usefulness) ? `${usefulness}%` : '?');
+
+/** Phase 4: the memories that wait for approval, the most useful first (listInbox's order). */
 function cmdInbox({ dir }) {
   const { items, total } = listInbox(dir);
   if (!total) return out('The inbox is empty.');
   for (const item of items) {
-    out(`[${item.type}] ${item.title}`);
+    out(`[${item.type}] ${item.title}  (usefulness ${scoreText(item.usefulness)})`);
     out(`   ${item.key}`);
     out(`   created ${item.created}${item.source ? `, ${item.source}` : ''}${item.duplicates ? `, +${item.duplicates} duplicate(s)` : ''}`);
     if (item.project === GLOBAL) out("   GLOBAL: approving puts it on every project's card");
@@ -248,7 +251,7 @@ function cmdDecide({ configDir, dir, project, positionals }, accept) {
   const key = resolveKey(dir, project, positionals[0]);
   const log = createLog(logPath(configDir));
   // The same line the app writes: a rejected title goes back to the extractor.
-  const decided = (ev, record) => log.add({ ev, key, type: record.type, ...(ev === 'rejected' ? { title: record.title } : {}) });
+  const decided = (ev, record) => log.add(decisionEvent(ev, record));
   const res = accept ? approve(dir, key, today(), decided) : reject(dir, key, decided);
   if (!res.ok) throw new UsageError(`${key}: ${res.reason}`);
   out(`${accept ? 'Approved' : 'Rejected'} ${key}${res.removed.length ? ` (and ${res.removed.length} duplicate(s) removed)` : ''}`);
@@ -273,17 +276,18 @@ async function cmdCapture({ configDir, dir, project, values, positionals }) {
   });
   if (!res.ok) throw new Error(`the extractor failed: ${res.reason}`);
   for (const record of res.records) {
-    out(`[${record.type}] ${record.title}`);
+    out(`[${record.type}] ${record.title}  (usefulness ${scoreText(record.usefulness)})`);
     out(`   ${record.project}/${record.id}${record.supersedes.length ? `  replaces: ${record.supersedes.join(', ')}` : ''}`);
     if (sourceNotes(record.source).suggestedGlobal) out('   suggested as global (filed under this project; Make global in the HUD inbox)');
     out(record.body.replace(/^/gm, '   '));
     out();
     if (values.save) {
       writeRecord(dir, record);
-      log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type });
+      log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type, usefulness: record.usefulness });
     }
   }
-  for (const r of res.rejected) out(`dropped (${r.reason}): ${r.title}`);
+  if (values.save) for (const event of droppedEvents(res.rejected, project)) log.add(event);
+  for (const r of res.rejected) out(`dropped (${r.reason}${r.usefulness === undefined ? '' : `, usefulness ${r.usefulness}%`}): ${r.title}`);
   const wrote = values.save ? 'saved to the inbox' : 'nothing written (--save writes them)';
   if (res.outside) out(`The session read ${res.outside} outside source(s) (web or MCP): the inbox asks to check these before approving.`);
   out(`${res.records.length} candidate(s), ${res.rejected.length} dropped (${res.reason}) - ${wrote}`);
@@ -347,6 +351,10 @@ function cmdStats({ configDir, project, values }) {
   out(`  captures: ${stats.captures}, proposed: ${stats.proposed}, approved: ${stats.approved} (${stats.edited} after an edit), rejected: ${stats.rejected}`);
   out(`  approval rate: ${pct(stats.rate)} of ${stats.approved + stats.rejected} decided${stats.rate !== null && stats.rate < 1 / 3 ? '  <-- under a third: the extractor prompt needs work' : ''}`);
   for (const [type, c] of Object.entries(stats.byType)) out(`  ${type}: proposed ${c.proposed}, approved ${c.approved}, rejected ${c.rejected}, rate ${pct(c.rate)}`);
+  // Calibration: a score that predicts the decision shows a rising approval rate band by band.
+  out('  by usefulness score (decided):');
+  for (const b of stats.bands) out(`    ${b.label.padStart(6)}: approved ${b.approved}, rejected ${b.rejected}`);
+  if (stats.unscored.approved + stats.unscored.rejected) out(`    no score: approved ${stats.unscored.approved}, rejected ${stats.unscored.rejected}`);
   const dropped = Object.entries(stats.dropped);
   if (dropped.length) out(`  dropped by the filter: ${dropped.map(([reason, n]) => `${reason} ${n}`).join(', ')}`);
   const read = [...usage(events, { since })].sort(([, a], [, b]) => b.opened - a.opened || b.found - a.found);

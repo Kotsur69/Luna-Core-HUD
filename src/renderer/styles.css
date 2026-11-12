@@ -6020,6 +6020,7 @@ section.orchestra__planrun {
 .mem-inbox__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); font-size: var(--fs-xs); color: var(--text-dim); }
 .mem-inbox__type { padding: 0 var(--space-2); border: var(--border-w) solid var(--edge); border-radius: 999px; font-family: var(--font-mono); color: var(--neon-cyan); }
 .mem-inbox__date { margin-left: auto; font-family: var(--font-mono); }
+.mem-inbox__score { font-family: var(--font-mono); color: var(--text); cursor: help; }
 .mem-inbox__title { margin: 0; font-size: var(--fs-md, 14px); font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
 .mem-inbox__body { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .mem-inbox__more { align-self: flex-start; font-size: var(--fs-xs); }

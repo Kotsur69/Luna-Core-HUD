@@ -6,8 +6,9 @@
 //
 //   memory-log.local.jsonl
 //   {"at": <ms>, "ev": "capture",  "project", "reason", "kept", "dropped": {"duplicate": 2}}
-//   {"at": <ms>, "ev": "proposed", "key", "type"}
-//   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired", "key", "type", "title"?}
+//   {"at": <ms>, "ev": "proposed", "key", "type", "usefulness"?}
+//   {"at": <ms>, "ev": "dropped",  "project", "reason", "type"?, "title"?, "usefulness"?}
+//   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired", "key", "type", "title"?, "usefulness"?}
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
 //   {"at": <ms>, "ev": "get",      "key"}
 //   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user", "note"?, "missing"?}
@@ -15,7 +16,9 @@
 // It answers the questions of section 9 without a guess: which share of the
 // captured candidates is approved (per type), how often a memory is found and
 // opened, which titles were rejected (they go back to the extractor as "not
-// wanted"), and which memories a session reported as wrong.
+// wanted"), which memories a session reported as wrong, and whether the
+// extractor's usefulness score predicts the decision (`dropped` = a candidate
+// the filter removed before the inbox, with its score).
 //
 // The log is NOT synced: it describes what happened on this PC. A candidate
 // captured here and approved on the other PC counts as proposed here and as
@@ -50,6 +53,15 @@ const DECISIONS = ['approved', 'edited', 'rejected', 'retired'];
 const VERDICTS = ['verified', 'disputed'];
 const BY = ['tool', 'user'];
 
+/** Decided candidates are counted per usefulness band to see whether the score predicts approval. */
+const USEFULNESS_BANDS = [
+  { label: '30-49', min: 30, max: 49 },
+  { label: '50-69', min: 50, max: 69 },
+  { label: '70-84', min: 70, max: 84 },
+  { label: '85-100', min: 85, max: 100 },
+];
+const MAX_SCORE = 100;
+
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err && (err.code || err.message)) || 'error';
 /** One clean line: no control or invisible characters, no line breaks. */
@@ -64,6 +76,8 @@ const line = (v, max) =>
     : '';
 const projectOf = (v) => (v === GLOBAL ? GLOBAL : projectFromRepoKey(v));
 const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
+/** `{usefulness}` when v is a valid score, else nothing. */
+const scored = (v) => (Number.isInteger(v) && v >= 0 && v <= MAX_SCORE ? { usefulness: v } : {});
 
 /** One event rebuilt from untrusted input, or null. */
 function cleanEvent(raw) {
@@ -81,11 +95,18 @@ function cleanEvent(raw) {
     }
     return { at, ev, project, reason: line(raw.reason, MAX_REASON), kept: count(raw.kept), dropped };
   }
-  if (ev === 'proposed') return key && type ? { at, ev, key, type } : null;
+  if (ev === 'proposed') return key && type ? { at, ev, key, type, ...scored(raw.usefulness) } : null;
+  if (ev === 'dropped') {
+    const project = projectOf(raw.project);
+    const reason = line(raw.reason, MAX_REASON);
+    if (!project || !reason) return null;
+    const title = line(raw.title, MAX_TITLE);
+    return { at, ev, project, reason, ...(type ? { type } : {}), ...(title ? { title } : {}), ...scored(raw.usefulness) };
+  }
   if (DECISIONS.includes(ev)) {
     if (!key || !type) return null;
     const title = line(raw.title, MAX_TITLE);
-    return { at, ev, key, type, ...(title ? { title } : {}) };
+    return { at, ev, key, type, ...(title ? { title } : {}), ...scored(raw.usefulness) };
   }
   if (ev === 'search') {
     const hits = Array.isArray(raw.hits) ? raw.hits.filter((k) => splitKey(k)).slice(0, MAX_HITS) : [];
@@ -195,9 +216,25 @@ function createLog(file, { now = Date.now } = {}) {
 }
 
 const logPath = (configDir) => path.join(configDir, LOG_FILE);
+
+/**
+ * The log line of an inbox decision, the same from the app and the CLI. A
+ * rejected title goes back to the extractor as "not wanted"; the score feeds
+ * the per-band calibration of captureStats.
+ * @param {'approved'|'edited'|'rejected'} ev
+ * @param {{project: string, id: string, type: string, title: string, usefulness?: number}} record
+ */
+const decisionEvent = (ev, record) => ({
+  ev,
+  key: `${record.project}/${record.id}`,
+  type: record.type,
+  ...(ev === 'rejected' ? { title: record.title } : {}),
+  ...scored(record.usefulness),
+});
 const projectOfKey = (key) => splitKey(key).project;
 
 const emptyCounts = () => ({ proposed: 0, approved: 0, rejected: 0, edited: 0 });
+const emptyBands = () => USEFULNESS_BANDS.map(({ label }) => ({ label, approved: 0, rejected: 0 }));
 /** Approved over decided, 0 to 1, or null when nothing was decided. */
 const rateOf = ({ approved, rejected }) => (approved + rejected ? approved / (approved + rejected) : null);
 
@@ -206,14 +243,23 @@ const rateOf = ({ approved, rejected }) => (approved + rejected ? approved / (ap
  * @param {object[]} events readLog()
  * @param {{since?: number, project?: string|null}} [opts] since = ms; project = only this one
  * @returns {{captures: number, proposed: number, approved: number, rejected: number, edited: number,
- *   rate: number|null, dropped: object, byType: object}}
- *   edited = approved memories that were edited first; rate = approved / (approved + rejected)
+ *   rate: number|null, dropped: object, byType: object,
+ *   bands: {label: string, approved: number, rejected: number}[], unscored: {approved: number, rejected: number}}}
+ *   edited = approved memories that were edited first; rate = approved / (approved + rejected);
+ *   bands = decisions per usefulness band (USEFULNESS_BANDS); unscored = decisions without a score in a band
  */
 function captureStats(events, { since = 0, project = null } = {}) {
   const total = { captures: 0, ...emptyCounts() };
   const byType = {};
   const dropped = {};
   const editedKeys = new Set();
+  const bands = emptyBands();
+  const unscored = { approved: 0, rejected: 0 };
+  const decide = (usefulness, field) => {
+    const i = usefulness === undefined ? -1 : USEFULNESS_BANDS.findIndex((b) => usefulness >= b.min && usefulness <= b.max);
+    if (i < 0) unscored[field]++;
+    else bands[i] = { ...bands[i], [field]: bands[i][field] + 1 };
+  };
   const bump = (type, field) => {
     byType[type] = byType[type] || emptyCounts();
     byType[type][field]++;
@@ -227,15 +273,19 @@ function captureStats(events, { since = 0, project = null } = {}) {
     if (e.ev === 'capture') {
       total.captures++;
       for (const [reason, n] of Object.entries(e.dropped)) dropped[reason] = (dropped[reason] || 0) + n;
-    } else if (e.ev === 'proposed' || e.ev === 'rejected') {
+    } else if (e.ev === 'proposed') {
       bump(e.type, e.ev);
+    } else if (e.ev === 'rejected') {
+      bump(e.type, e.ev);
+      decide(e.usefulness, e.ev);
     } else if (e.ev === 'approved') {
       bump(e.type, 'approved');
+      decide(e.usefulness, 'approved');
       if (editedKeys.has(e.key)) bump(e.type, 'edited');
     }
   }
   for (const counts of Object.values(byType)) counts.rate = rateOf(counts);
-  return { ...total, rate: rateOf(total), dropped, byType };
+  return { ...total, rate: rateOf(total), dropped, byType, bands, unscored };
 }
 
 /**
@@ -300,6 +350,7 @@ module.exports = {
   readLog,
   logPath,
   cleanEvent,
+  decisionEvent,
   captureStats,
   usage,
   rejectedTitles,
@@ -309,4 +360,5 @@ module.exports = {
   MAX_LOG_BYTES,
   MAX_NOTE,
   DAY_MS,
+  USEFULNESS_BANDS,
 };

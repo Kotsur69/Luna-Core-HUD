@@ -291,3 +291,36 @@ test('makeGlobal leaves the duplicates folded into the entry where they are', (t
 
   assert.deepEqual(Object.keys(stored(dir)).sort(), [`${PROJECT}/busy-b`, 'global/busy-a']);
 });
+
+test('the inbox lists the most useful entry first, newest first within a score, and unknown scores last', (t) => {
+  const dir = mirror(t, [
+    rec('unknown-new', 'Retry says busy after sleep', { created: '2026-11-12' }),
+    rec('mid-old', 'Packaging times out on battery', { created: '2026-11-01', usefulness: 60 }),
+    rec('mid-new', 'Name the installer with dashes', { created: '2026-11-09', usefulness: 60 }),
+    rec('top', 'Junction targets get emptied', { created: '2026-11-02', usefulness: 91 }),
+    rec('low', 'Release notes need a date', { created: '2026-11-11', usefulness: 31 }),
+  ]);
+
+  const { items } = listInbox(dir);
+
+  assert.deepEqual(
+    items.map((i) => [i.id, i.usefulness]),
+    [
+      ['top', 91],
+      ['mid-new', 60],
+      ['mid-old', 60],
+      ['low', 31],
+      ['unknown-new', null],
+    ],
+  );
+});
+
+test('approving keeps the score on the confirmed memory and hands it to the decision log', (t) => {
+  const dir = mirror(t, [rec('keep', 'Retry says busy after sleep', { usefulness: 77 })]);
+  const seen = [];
+
+  approve(dir, `${PROJECT}/keep`, '2026-11-12', (ev, record) => seen.push([ev, record.usefulness]));
+
+  assert.equal(stored(dir)[`${PROJECT}/keep`].usefulness, 77);
+  assert.deepEqual(seen, [['approved', 77]]);
+});

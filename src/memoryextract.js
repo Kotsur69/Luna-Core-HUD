@@ -12,7 +12,12 @@
 // Nothing the model returns is trusted. Each candidate is rebuilt by
 // memoryrecord.checkRecord() and then dropped when it
 //   - trips the secret scanner (it would be held back from the sync anyway),
+//   - scores under USEFULNESS_FLOOR on the model's own keep rule,
 //   - repeats a memory that exists, or an earlier candidate of the same answer.
+//
+// `usefulness` (0-100) is the model's own judgement of the keep rule. It only
+// sorts the inbox and drops the weakest candidates: a high score never
+// approves anything. A candidate without a score is kept, as "unknown".
 //
 // What is kept is saved as `observed`: searchable, labelled "not verified",
 // never on the project card (decision 5). `supersedes` on an observed memory
@@ -33,6 +38,10 @@ const { hasSecret } = require('./memorysync');
 /** A `digest` decays and belongs to phase 5; the extractor does not write one. */
 const CANDIDATE_TYPES = TYPES.filter((t) => t !== 'digest');
 const MAX_CANDIDATES = 5;
+/** A candidate the model itself scores under this is dropped before the inbox. */
+const USEFULNESS_FLOOR = 30;
+/** The rejection reason of such a candidate, as the memory log records it. */
+const LOW_USEFULNESS = 'low usefulness';
 /** Candidates of one answer that are looked at at all. */
 const MAX_RAW_CANDIDATES = 12;
 /** Existing memories listed in the prompt so the model does not repeat them. */
@@ -166,7 +175,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
         ]
       : []),
     'Answer with JSON only, in this shape:',
-    '{"candidates":[{"type":"gotcha","scope":"project","title":"...","body":"...","area":"...","supersedes":[]}]}',
+    '{"candidates":[{"type":"gotcha","scope":"project","title":"...","body":"...","area":"...","supersedes":[],"usefulness":75}]}',
     `- type: one of ${CANDIDATE_TYPES.join(', ')}`,
     '- scope: "project", or "global" when the fact holds in every project (a tool, a language, the user)',
     `- title: one line, at most ${MAX_TITLE} characters, a full statement ("Do not junction node_modules into a worktree")`,
@@ -174,6 +183,8 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
     '  command, file or error string. At most 1500 characters.',
     '- area: optional, one lower-case tag (worktrees, release, sync, feature, ...)',
     '- supersedes: ids from the list above that this memory replaces, usually empty',
+    '- usefulness: a whole number 0-100, how well the memory meets BOTH rules above: applicable (would it change what the assistant',
+    `  does next time) and durable (does it matter beyond this task). Under ${USEFULNESS_FLOOR} is dropped unread; be honest, not generous.`,
     'No candidates: {"candidates":[]}',
     '',
     '=== SESSION DIGEST ===',
@@ -199,7 +210,8 @@ function idFor(title, project, taken) {
  * @param {unknown} answer the parsed JSON the model returned
  * @param {{project: string, today: string, source: string, existing: object[]}} ctx
  *   existing = every record of this project and of `global` in the mirror
- * @returns {{records: object[], rejected: {title: string, reason: string}[]}}
+ * @returns {{records: object[], rejected: {title: string, reason: string, type?: string, usefulness?: number}[]}}
+ *   type and usefulness are set on a LOW_USEFULNESS rejection only
  */
 function candidatesFrom(answer, { project, today, source, existing }) {
   const raw = isObject(answer) && Array.isArray(answer.candidates) ? answer.candidates.filter(isObject).slice(0, MAX_RAW_CANDIDATES) : [];
@@ -238,6 +250,8 @@ function candidatesFrom(answer, { project, today, source, existing }) {
       supersedes: Array.isArray(c.supersedes) ? c.supersedes.filter((x) => sameScope.has(x)) : [],
       links: [],
       body: typeof c.body === 'string' ? c.body.slice(0, MAX_BODY + 1) : '',
+      // checkRecord rounds and clamps it; anything else is left unknown.
+      usefulness: c.usefulness,
     });
     if (!res.record) {
       reject(c, res.error);
@@ -246,6 +260,11 @@ function candidatesFrom(answer, { project, today, source, existing }) {
     const { record } = res;
     if (hasSecret(record)) {
       reject(c, 'secret');
+      continue;
+    }
+    // After the secret check: this rejection carries the title into the memory log.
+    if (record.usefulness !== undefined && record.usefulness < USEFULNESS_FLOOR) {
+      rejected.push({ title: record.title, reason: LOW_USEFULNESS, type: record.type, usefulness: record.usefulness });
       continue;
     }
     // A corrected version of a memory is meant to resemble the one it replaces.
@@ -272,4 +291,6 @@ module.exports = {
   SUGGESTED_GLOBAL,
   CANDIDATE_TYPES,
   MAX_CANDIDATES,
+  USEFULNESS_FLOOR,
+  LOW_USEFULNESS,
 };
