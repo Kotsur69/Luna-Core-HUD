@@ -334,11 +334,33 @@ function appendRunReport(ctx) {
   };
 }
 
+/**
+ * Hands a finished run to main's run capture (src/memoryruncapture.js), which
+ * makes one memory-extractor call per run. Fire and forget: nothing here may
+ * delay or break the report or its email.
+ */
+function captureRun(ctx, self, planId) {
+  if (typeof ctx.onRunReport !== 'function') return;
+  try {
+    const controller = self();
+    const view = controller ? controller.view() : null;
+    const repoPath = controller && typeof controller.repoPath === 'function' ? controller.repoPath() : null;
+    if (!view || view.id !== planId || typeof repoPath !== 'string' || !repoPath) return;
+    Promise.resolve(ctx.onRunReport({ runId: planId, repoPath, view })).catch((err) => ctx.logError(`[orchestra] run capture failed: ${errText(err)}`));
+  } catch (err) {
+    ctx.logError(`[orchestra] run capture failed: ${errText(err)}`);
+  }
+}
+
 /** The run report (<runsDir>/<planId>.md + .html), snapshots and the morning toast. */
 function reportDeps(projectId, ctx, self) {
   return {
     putSnapshot: (run) => ctx.putSnapshot(run),
-    onReport: (planId, text, summary) => ctx.onReport(planId, text, summary),
+    // Called once per report the finalizer writes (orchestraFinalize.js sendReport).
+    onReport: (planId, text, summary) => {
+      captureRun(ctx, self, planId);
+      return ctx.onReport(planId, text, summary);
+    },
     writeReport: (planId, text) => {
       if (!RUN_ID_RE.test(planId) || !ctx.ensureUserDir()) return null;
       try {
@@ -777,6 +799,7 @@ function builderDeps(projectId, ctx, self) {
  *   worktrees: {addWorktree:Function, dirtyCount:Function, removeWorktree:Function,
  *     deleteBranch:Function, listOwnBranches:Function, worktreeBranches:Function},
  *   putSnapshot: Function, onReport: Function, onLive: (view:object|null, projectId:string|null) => void,
+ *   onRunReport?: (run:{runId:string, repoPath:string, view:object}) => Promise<unknown>|void,
  *   messageBox: (opts:object) => Promise<{response:number}>|null, toast: (title:string, body:string) => void,
  *   projects: () => object[], resolveStoredPath: Function, flushTodos: () => void,
  *   usageLimits: () => object[], accountFailover: Function, freeProfileId: () => string|null,

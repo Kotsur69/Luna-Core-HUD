@@ -441,6 +441,38 @@ packages add in the same run.
   `NOTE_MAX_AGE_DAYS` (14) days old. A fresh note alone is enough for a card.
 - **CLI:** `memory capture <transcript>` prints the status; `--save` writes the note too.
 
+### Built after phase 5, 2026-11-13: one capture per God Mode run
+
+Item 7 of the improvements above; it revisits decision 49. Worker tabs are still not
+captured one by one.
+
+- **When:** the finalizer writes a run's report (`orchestraFinalize.js` `report`, which
+  calls `onReport`). `orchestraWiring.js` hands `{runId, repoPath, view}` to
+  `src/memoryruncapture.js`, fire and forget: nothing there can delay or break the report
+  or its email.
+- **What the model reads** (`src/memoryrundigest.js`): the facts of the same view the
+  report renders, one clean capped line each: every package with its state and error,
+  stalls, automatic retries, resumes, escalation, nudges, verify fix-up rounds, the verify
+  command and the last lines of its output, the stall history, the worker's last words,
+  the files a pushed package changed; the merges left out, the second pass, the red
+  self-check and its tail; a hold on the machine; the run-level automatic fixes. At most
+  30,000 characters, secret-scrubbed before the call. The prompt is the session prompt
+  with a run introduction and no status note.
+- **One call per run, never twice.** A ledger (`memory-runcapture.local.json`) gets the
+  run id before the model is called, so a second finish pass, a Retry, a failed call or a
+  crash never pays for the same run again. A run in which no worker started costs no call.
+- **Same filter as a session:** `checkRecord`, secret scan, near-duplicates, the
+  usefulness floor, at most five, the rejected titles as "not wanted". Candidates wait in
+  the inbox as `observed`, with the source `captured from God Mode run <runId> on
+  <machine>`.
+- **Skipped** for a project with memory switched off and while its inbox is full (40
+  waiting); a skipped run gets no ledger entry.
+- **Outside content (decision 61):** the run's worker transcripts (the Claude Code
+  folders of each package worktree) are scanned for `WebFetch`, `WebSearch`, `Agent`,
+  `Task` and foreign `mcp__*` calls. A worker that ran but whose transcript cannot be
+  found counts as one, so its text is still flagged. The count goes into `source` and the
+  inbox asks to check the text.
+
 ### Bonus, wanted by Mati on 2026-11-11: a live work map in LunaCore
 
 Mati wants a panel in the HUD that shows what the session in the active tab is doing,

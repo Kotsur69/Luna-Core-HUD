@@ -255,6 +255,8 @@ const { projectFromRepoKey } = require('./memoryrecord');
 const { createRepoKeys, findRepo } = require('./missionrepokey');
 // Phase 4: capture from finished sessions (src/memorycapture.js) and the inbox.
 const { createCapture } = require('./memorycapture');
+// One capture per finished God Mode run, from its report (src/memoryruncapture.js).
+const { createRunCapture } = require('./memoryruncapture');
 const { listInbox: listMemoryInbox } = require('./memoryinbox');
 const { registerMemoryIpc, reviewCount: memoryReviewCount } = require('./memoryipc');
 const { runJob: runMemoryJob } = require('./missionrunner');
@@ -264,6 +266,7 @@ const { toolVerdict: memoryToolVerdict } = require('./memoryreview');
 const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
 let memorySync = null;
 let memoryCapture = null;
+let memoryRunCapture = null;
 // The notification hub (src/hubipc.js): set in registerIpc(), its done
 // provider joins the config sync.
 let hubApi = null;
@@ -1356,6 +1359,8 @@ const orchestraCtx = {
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
   // A transient failure leaves the run email pending (src/godmodePending.js).
   onReport: (planId, text, summary) => reportMail.runMail.report(planId, text, summary),
+  // A finished run's lessons, once per run, for projects with memory on (src/memoryruncapture.js).
+  onRunReport: (run) => (memoryRunCapture ? memoryRunCapture.capture(run) : null),
   // The phone's live run views (godmodelivepub.js), one per project.
   onLive: (view, projectId) => {
     const key = typeof projectId === 'string' ? projectId : null;
@@ -4048,27 +4053,37 @@ app.whenReady().then(() => {
   // single-run file older builds wrote moves to the per-project layout first.
   // Memory capture spends a small-model call per finished session: not in a probe.
   if (!probing) {
+    // Lean: no tools, no settings, no MCP servers. The digest goes in through stdin.
+    const runMemoryExtractor = ({ prompt }) =>
+      runMemoryJob({
+        prompt,
+        model: 'haiku',
+        lean: true,
+        stdin: true,
+        env: withClaudeOnPath(buildSessionEnv(process.env, {})),
+        timeoutMs: MEMORY_EXTRACT_TIMEOUT_MS,
+      });
+    const onMemorySaved = () => {
+      if (memorySync) memorySync.soon();
+      send('memory:changed', {});
+    };
     memoryCapture = createCapture({
       configDir: userDir(),
       machine: machineName(os.hostname()),
-      // Lean: no tools, no settings, no MCP servers. The digest goes in through stdin.
-      run: ({ prompt }) =>
-        runMemoryJob({
-          prompt,
-          model: 'haiku',
-          lean: true,
-          stdin: true,
-          env: withClaudeOnPath(buildSessionEnv(process.env, {})),
-          timeoutMs: MEMORY_EXTRACT_TIMEOUT_MS,
-        }),
+      run: runMemoryExtractor,
       live: () => [...sessions.values()].map(captureSourceOf).filter(Boolean),
       log: memoryLogOf(),
-      onSaved: () => {
-        if (memorySync) memorySync.soon();
-        send('memory:changed', {});
-      },
+      onSaved: onMemorySaved,
     });
     memoryCapture.start();
+    memoryRunCapture = createRunCapture({
+      configDir: userDir(),
+      machine: machineName(os.hostname()),
+      run: runMemoryExtractor,
+      projectOf: (repoPath) => memoryRepoKeys.resolve(repoPath).key,
+      log: memoryLogOf(),
+      onSaved: onMemorySaved,
+    });
   }
   if (!probing) {
     orchestraStore.migrateLegacy((raw) => legacyRunProject(orchestraCtx, raw));

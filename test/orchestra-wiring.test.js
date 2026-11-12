@@ -217,3 +217,41 @@ test('sharedPowerDeps: one flow for every run - a change re-sends every run view
   assert.equal(makeOrchestraDeps('alpha', ctx, { powerFlow: flow }).powerFlow, flow);
   assert.equal('powerFlow' in makeOrchestraDeps('alpha', ctx), false, 'no shared flow: the controller builds its own');
 });
+
+// ---- memory capture of a finished run (src/memoryruncapture.js) ---------------------
+
+/** A ctx whose registry hands out one controller with this view and repo. */
+function reportCtx(view, overrides = {}) {
+  const { ctx, out } = fakeCtx(overrides);
+  const controller = { view: () => view, repoPath: () => path.resolve('/repo/alpha') };
+  ctx.registry = () => ({ get: () => controller, othersActive: () => false, repoBusy: () => false });
+  return { ctx, out };
+}
+
+test('a written report hands the run to onRunReport once, and the email still gets its answer', () => {
+  const runs = [];
+  const view = { id: 'p1', packages: [] };
+  const { ctx, out } = reportCtx(view, { onReport: () => 'mail-result', onRunReport: (run) => runs.push(run) });
+  const res = makeOrchestraDeps('alpha', ctx).onReport('p1', '# report', {});
+  assert.equal(res, 'mail-result');
+  assert.deepEqual(runs, [{ runId: 'p1', repoPath: path.resolve('/repo/alpha'), view }]);
+  assert.deepEqual(out.errors, []);
+});
+
+test('run capture cannot break the report: a throw or a rejection is only logged', async () => {
+  const throwing = reportCtx({ id: 'p1' }, { onReport: () => 'ok', onRunReport: () => { throw new Error('boom'); } });
+  assert.equal(makeOrchestraDeps('alpha', throwing.ctx).onReport('p1', '', {}), 'ok');
+  assert.match(throwing.out.errors[0], /run capture failed: boom/);
+
+  const rejecting = reportCtx({ id: 'p1' }, { onReport: () => 'ok', onRunReport: () => Promise.reject(new Error('late')) });
+  assert.equal(makeOrchestraDeps('alpha', rejecting.ctx).onReport('p1', '', {}), 'ok');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(rejecting.out.errors[0], /run capture failed: late/);
+});
+
+test('a report for a run that is no longer on the board is not captured', () => {
+  const runs = [];
+  const { ctx } = reportCtx({ id: 'p2' }, { onRunReport: (run) => runs.push(run) });
+  makeOrchestraDeps('alpha', ctx).onReport('p1', '', {});
+  assert.deepEqual(runs, []);
+});
