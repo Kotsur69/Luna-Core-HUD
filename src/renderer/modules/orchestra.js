@@ -31,6 +31,7 @@ import { closeWithExit, cancelExit } from './motion.js';
 import { failureBlock, runOptionsRow, powerBanner, batteryBanner } from './orchestraDetails.js';
 import { hybridLines } from './orchestraHybridView.js';
 import { pkgStateKey, recoverAsk } from './orchestraState.js';
+import { pkgErrorText, progressText, ladderLines } from './orchestraCardLines.js';
 import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetry.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
 import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine, reportRow } from './orchestraFinish.js';
@@ -66,8 +67,6 @@ const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 const ACTIVE = new Set(['launched', 'finishing']);
 const RETRYABLE = new Set(['stalled', 'closed', 'killed']);
 const isActive = (pkg) => ACTIVE.has(pkg.state);
-// Per-package launch errors that come straight from src/worktrees.js.
-const WORKTREE_ERRORS = new Set(['badName', 'notRepo', 'noCommits', 'exists', 'gitFailed']);
 
 let isOpen = false;
 /** Latest plan view from main, or null. */
@@ -146,10 +145,6 @@ function warningText(w) {
 
 function errorText(e) {
   return e.code === 'cycle' ? t('orch.err.cycle', { ids: e.ids.join(', ') }) : t(`orch.err.${e.code}`);
-}
-
-function pkgErrorText(code) {
-  return WORKTREE_ERRORS.has(code) ? t(`tabs.worktree.err.${code}`) : t(`orch.pkgerr.${code}`);
 }
 
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -329,41 +324,6 @@ function suggestionRow(s) {
   return row;
 }
 
-/** One line under the title: what the supervisor is doing with this package. */
-function progressText(pkg) {
-  if (pkg.awaitingDeps) return t('orch.progress.awaitingDeps');
-  if (pkg.state === 'pushed' && pkg.merged) return t('orch.progress.merged');
-  if (pkg.state === 'pushed' && pkg.headSha) return t('orch.progress.pushed', { sha: pkg.headSha.slice(0, 7) });
-  if (pkg.state === 'launched' && (pkg.nudges || pkg.verifyRounds)) {
-    return t('orch.progress.running', { nudges: pkg.nudges, verify: pkg.verifyRounds });
-  }
-  if (pkg.state === 'launched' && pkg.startedAt) return t('orch.progress.since', { time: clock(pkg.startedAt) });
-  return '';
-}
-
-/**
- * What the never-blocks ladder did or is doing with this package: automatic
- * relaunch / resume, gave up, or waiting on a dependency that gave up.
- */
-function ladderLines(pkg) {
-  const out = [];
-  if (pkg.blockedBy) {
-    const blocker = plan.packages.find((p) => p.id === pkg.blockedBy);
-    const reason = blocker && blocker.error ? pkgErrorText(blocker.error) : t(`orch.state.${pkgStateKey(blocker)}`);
-    out.push(t('orch.progress.blockedBy', { id: pkg.blockedBy, reason }));
-  }
-  if (pkg.autoRetries && !pkg.terminal && pkg.state === 'failed') {
-    out.push(t('orch.progress.autoRetry', { n: pkg.autoRetries }));
-  }
-  if (pkg.autoResumed) out.push(t('orch.progress.autoResumed'));
-  // Q8 auto-split (free-planned runs): being split, replaced, or made by one.
-  if (pkg.splitting) out.push(t('orch.progress.splitting'));
-  if (Array.isArray(pkg.splitInto) && pkg.splitInto.length) out.push(t('orch.progress.splitInto', { ids: pkg.splitInto.join(', ') }));
-  else if (pkg.terminal) out.push(t('orch.progress.terminal'));
-  if (pkg.splitOf) out.push(t('orch.progress.splitOf', { id: pkg.splitOf }));
-  return out;
-}
-
 const canLaunch = (pkg) => pkg.state === 'pending' || pkg.state === 'failed';
 
 /**
@@ -440,7 +400,7 @@ function pkgCard(pkg) {
   const progress = progressText(pkg);
   if (progress) card.append(el('div', 'orchestra__meta', progress));
   if (pkg.escalated) card.append(el('div', 'orchestra__meta', t('orch.progress.escalated')));
-  for (const line of ladderLines(pkg)) card.append(el('div', 'orchestra__meta', line));
+  for (const line of ladderLines(pkg, plan.packages)) card.append(el('div', 'orchestra__meta', line));
   if (pkg.prUrl) {
     const link = el('a', 'orchestra__link', pkg.prUrl);
     link.href = '#';
@@ -975,7 +935,7 @@ async function kill() {
  * run that started it).
  * @param {string|null} [projectId]
  */
-async function openOrchestra(projectId) {
+export async function openOrchestra(projectId) {
   if (!overlay) return;
   const fromTab = !isOpen;
   if (!isOpen) {
