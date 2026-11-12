@@ -10,6 +10,13 @@
 //   sk-...                       OpenAI / Anthropic style API keys
 //   ghp_ / gho_ / ghu_ / ghs_ / ghr_ ..., github_pat_...   GitHub tokens
 //   AKIA... / ASIA...            AWS access key ids
+//   sk_live_ / sk_test_ / rk_live_ / rk_test_ / pk_live_ ...   Stripe keys
+//   eyJ... . ... . ...           JWTs (Supabase anon / service keys)
+//   Bearer <token>               the token only; the word Bearer stays
+//   xoxb- / xoxp- / xoxa- / xoxr- / xoxs- ...   Slack tokens
+//   AIza...                      Google API keys
+//   npm_...                      npm tokens
+//   scheme://user:PASSWORD@host  the password only; scheme, user, host stay
 //   -----BEGIN ... KEY----- ... -----END ... KEY-----      PEM key blocks
 //                                (a block cut off before its END line too)
 //   NAME=value                   NAME with a KEY / TOKEN / SECRET / PASSWORD
@@ -34,6 +41,18 @@ const RULES = [
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, `github_pat_${MASK}`],
   [/\b(gh[pousr])_[A-Za-z0-9]{20,}/g, `$1_${MASK}`],
   [/\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, `$1${MASK}`],
+  [/\b((?:sk|rk)_(?:live|test)|pk_live)_[A-Za-z0-9]{16,}/g, `$1_${MASK}`],
+  [/\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g, `eyJ${MASK}`],
+  [/\b(xox[bpars])-[A-Za-z0-9-]{10,}/g, `$1-${MASK}`],
+  [/\bAIza[\w-]{35,}/g, `AIza${MASK}`],
+  [/\bnpm_[A-Za-z0-9]{30,}/g, `npm_${MASK}`],
+  // After the shapes above, so a JWT or key behind Bearer is already masked
+  // and its leftover is too short to match again. Token characters per
+  // RFC 6750; one starting with '/' or '.' is a path, not a token.
+  [/\b([Bb]earer[ \t]+)(?![./])[A-Za-z0-9._~+/=-]{16,}/g, `$1${MASK}`],
+  // scheme://user:PASSWORD@host (the user may be empty: redis://:pw@host).
+  // Re-masking '[redacted]' yields '[redacted]', so this stays idempotent.
+  [/\b([a-z][a-z0-9+.-]*:\/\/[^\s:@/]*:)[^\s@/]+@/gi, `$1${MASK}@`],
   // NAME=value: the name must hold a secret-ish word as one of its _-segments.
   // Spaces around '=' only count at a line start (an .env line), so source code
   // like `const key = map.get(id)` stays readable. A value starting with '[' is
