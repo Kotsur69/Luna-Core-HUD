@@ -20,8 +20,10 @@
 
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { GLOBAL, checkRecord, keyOf, projectFromRepoKey } = require('./memoryrecord');
-const { scan, writeRecord } = require('./memorystore');
+const { scan, writeRecord, fileFor } = require('./memorystore');
 const { nearDuplicate, idFor, CANDIDATE_TYPES } = require('./memoryextract');
 const { hasSecret } = require('./memorysync');
 const { scrub } = require('./hostscrub');
@@ -44,6 +46,23 @@ const sessionLabel = (raw) =>
     .slice(0, SESSION_LABEL_CHARS) || 'unknown';
 
 const refuse = (reason) => ({ ok: false, reason });
+const MEMORY_EXT = '.md';
+
+/**
+ * Every key of `project` that has a file, readable or not. A file that does
+ * not parse (a half-done hand edit) is no record, but its name is still taken:
+ * a proposal must never be written over it (security review of 2026-11-12).
+ * @param {string} dir
+ * @param {string} project
+ * @param {{records: [string, object][], invalid: {file: string}[]}} scanned
+ */
+function takenKeys(dir, project, { records, invalid }) {
+  const folder = path.dirname(fileFor(dir, `${project}/${DRAFT_ID}`));
+  const unreadable = invalid
+    .filter(({ file }) => path.dirname(file) === folder && file.endsWith(MEMORY_EXT))
+    .map(({ file }) => `${project}/${path.basename(file, MEMORY_EXT)}`);
+  return new Set([...records.map(([key]) => key), ...unreadable]);
+}
 
 /**
  * The record a proposal becomes, or the reason it cannot be one. Cleaned by
@@ -97,11 +116,10 @@ function createProposer({ dir, machine, now = Date.now }) {
     if (!CANDIDATE_TYPES.includes(type)) return refuse('bad-type');
     if ((counts.get(sessionId) || 0) >= MAX_PROPOSALS_PER_SESSION) return refuse('rate-limit');
 
-    const existing = scan(dir)
-      .records.map(([, r]) => r)
-      .filter((r) => r.project === project || r.project === GLOBAL);
+    const scanned = scan(dir);
+    const existing = scanned.records.map(([, r]) => r).filter((r) => r.project === project || r.project === GLOBAL);
     const source = `proposed in session ${sessionLabel(session)} on ${machine}`;
-    const built = buildRecord({ project, type, title, body, area, source, today: isoDate(now()), taken: new Set(existing.map(keyOf)) });
+    const built = buildRecord({ project, type, title, body, area, source, today: isoDate(now()), taken: takenKeys(dir, project, scanned) });
     if (!built.record) return refuse(built.reason);
     const { record } = built;
 
@@ -110,6 +128,8 @@ function createProposer({ dir, machine, now = Date.now }) {
       count(sessionId);
       return { ok: true, key: keyOf(twin), type: twin.type, created: false };
     }
+    // The sync may have written this file since the scan: never replace a file.
+    if (fs.existsSync(fileFor(dir, keyOf(record)))) return refuse('id-taken');
     writeRecord(dir, record);
     // Counted once on disk: a failed write does not use up the session's allowance.
     count(sessionId);

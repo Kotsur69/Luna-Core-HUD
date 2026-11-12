@@ -1121,8 +1121,10 @@ function memoryFor(session) {
     },
     // memory_propose: an `observed` inbox entry of this tab's project, never
     // confirmed, never global; at most 5 per tab (src/memorypropose.js).
+    // Not for God Mode workers, as capture is not (captureSourceOf): a run
+    // starts many worker sessions, each with an allowance of its own.
     // sessionId comes last so the tool's input can never choose whose allowance it uses.
-    propose: (proposal) => {
+    propose: orchestraRuns.ownsSession(session.id) ? undefined : (proposal) => {
       const res = memoryProposerOf().propose({
         ...proposal,
         session: (session.watcher && session.watcher.sessionUuid) || session.transcriptId || session.id,

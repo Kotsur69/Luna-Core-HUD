@@ -48,7 +48,8 @@ const PROPOSE_FIELDS = ['title', 'body', 'type', 'area'];
 const AREA_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** CR, LF and the Unicode line and paragraph separators. */
 const LINE_BREAK_RE = /[\r\n\p{Zl}\p{Zp}]/u;
-/** Unknown argument names quoted back in an error, each cut to this length. */
+/** Unknown argument names quoted back in an error: this many, each cut to MAX_NAME_ECHO. */
+const MAX_NAMES_ECHOED = 5;
 const MAX_NAME_ECHO = 40;
 const OUTCOMES = ['holds', 'wrong'];
 const MAX_NOTE_CHARS = 300;
@@ -168,11 +169,14 @@ const PROPOSE_REFUSALS = {
   'body-too-long': `body is longer than ${MAX_BODY} characters`,
   'record-too-big': 'the memory is too big to sync; shorten the body',
   'empty-body': 'body is empty once invisible characters are removed',
-  'bad-title': 'title is empty once invisible characters are removed',
+  // Also when masking a secret made the title longer than the limit.
+  'bad-title': `title is empty once invisible characters are removed, or longer than ${MAX_TITLE} characters`,
+  'bad-area': 'area must be one lower-case tag (letters, digits and dashes, at most 40 characters)',
+  'id-taken': 'a memory file with this id already exists; reword the title',
   secret: 'the text still looks like it holds a secret; nothing was saved',
 };
 
-const isMemoryTool = (name) => name === SEARCH_TOOL || name === GET_TOOL || name === VERIFY_TOOL || name === PROPOSE_TOOL;
+const isMemoryTool = (name) => [SEARCH_TOOL, GET_TOOL, VERIFY_TOOL, PROPOSE_TOOL].includes(name);
 
 /** The trust label every returned memory carries (decision 5). */
 function trustOf(record) {
@@ -310,7 +314,7 @@ function proposeInputError(args) {
   const { title, body, type, area } = args;
   const extra = Object.keys(args).filter((name) => !PROPOSE_FIELDS.includes(name));
   if (extra.length) {
-    const names = extra.slice(0, PROPOSE_FIELDS.length).map((name) => name.slice(0, MAX_NAME_ECHO));
+    const names = extra.slice(0, MAX_NAMES_ECHOED).map((name) => name.slice(0, MAX_NAME_ECHO));
     return `only title, body, type and area can be set (LunaCore sets the rest); remove: ${names.join(', ')}`;
   }
   if (typeof title !== 'string' || !title.trim()) return 'title must be a non-empty string';
@@ -360,6 +364,9 @@ function logUse(name, res, memory) {
   }
 }
 
+/** Each memory tool's runner, by tool name. */
+const RUNNERS = Object.freeze({ [SEARCH_TOOL]: runSearch, [GET_TOOL]: runGet, [VERIFY_TOOL]: runVerify, [PROPOSE_TOOL]: runPropose });
+
 /**
  * Runs one memory tool.
  * @param {string} name
@@ -373,8 +380,7 @@ function callMemoryTool(name, args, memory) {
   if (!isMemoryTool(name)) return null;
   const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
   try {
-    const run = { [SEARCH_TOOL]: runSearch, [GET_TOOL]: runGet, [VERIFY_TOOL]: runVerify, [PROPOSE_TOOL]: runPropose }[name];
-    const res = run(memory, a);
+    const res = RUNNERS[name](memory, a);
     logUse(name, res, memory);
     return res;
   } catch (err) {

@@ -680,17 +680,41 @@ test('memory_propose through the MCP server answers with the key', (t) => {
   assert.equal(bad.isError, true);
 });
 
-test('a failing proposal store is a short tool error, and the log keeps only a session `by`', (t) => {
+test('a failed write is a short tool error and does not use up the allowance', (t) => {
   const quiet = t.mock.method(console, 'error', () => {});
-  const broken = {
-    ...memoryOf(t),
-    propose: () => {
-      throw new Error('EPERM: C:\\secret\\path');
-    },
-  };
+  const root = mirror(t, []);
+  // A file where the project folder should be: the write fails at mkdir.
+  fs.writeFileSync(path.join(root, 'projects'), 'not a folder');
+  const tab = proposeTab(t, { shared: { dir: root, store: createProposer({ dir: root, machine: 'pc' }) } });
 
-  assert.deepEqual(callMemoryTool('memory_propose', PROPOSAL, broken), { ok: false, error: 'memory is unavailable right now' });
+  assert.deepEqual(tab.call(PROPOSAL), { ok: false, error: 'memory is unavailable right now' });
+  assert.equal(tab.store.used('s1'), 0);
+  assert.deepEqual(tab.events, []);
   assert.equal(quiet.mock.callCount(), 1);
+});
+
+test('a near-duplicate answer counts toward the session allowance', (t) => {
+  const tab = proposeTab(t);
+
+  tab.call({ title: 'Do not junction node_modules into a worktree', body: 'It empties node_modules.', type: 'gotcha' });
+
+  assert.equal(tab.store.used('s1'), 1);
+});
+
+test('memory_propose never writes over a memory file that does not parse', (t) => {
+  const tab = proposeTab(t, { records: [] });
+  const file = path.join(tab.dir, 'projects', ...PROJECT.split('/'), 'vitest-needs-pool-forks-on-windows.md');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const broken = '---\nid: half-edited\ncreated: not-a-date\n---\nMati was editing this.\n';
+  fs.writeFileSync(file, broken);
+
+  const out = tab.call(PROPOSAL);
+
+  assert.equal(out.payload.key, `${PROJECT}/vitest-needs-pool-forks-on-windows-2`);
+  assert.equal(fs.readFileSync(file, 'utf8'), broken);
+});
+
+test('the memory log keeps a `by` of session on a proposed event and drops any other', () => {
   const at = FIXED_NOW;
   const key = `${PROJECT}/x`;
   assert.deepEqual(cleanEvent({ at, ev: 'proposed', key, type: 'gotcha', by: 'session' }), { at, ev: 'proposed', key, type: 'gotcha', by: 'session' });
