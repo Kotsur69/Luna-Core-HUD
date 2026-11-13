@@ -331,6 +331,7 @@ function candidatesFrom(answer, { project, today, source, existing }) {
 module.exports = {
   buildPrompt,
   candidatesFrom,
+  idFor,
   nearDuplicate,
   outsideNote,
   withNote,

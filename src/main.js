@@ -249,6 +249,7 @@ let configSync = null;
 // travels with the config sync (configsync.js startConfigSync).
 const { startMemory, memoryPaths } = require('./memorysync');
 const { createMemoryReader } = require('./memorytools');
+const { createProposer: createMemoryProposer } = require('./memorypropose');
 const { cardFor, writeCard, removeCard } = require('./memorycard');
 const { readEnabled: readMemoryProjects } = require('./memoryprojects');
 const { projectFromRepoKey } = require('./memoryrecord');
@@ -1122,8 +1123,32 @@ function memoryFor(session) {
       if (res.ok && (res.changed || res.status === 'flagged')) send('memory:changed', {});
       return res;
     },
+    // memory_propose: an `observed` inbox entry of this tab's project, never
+    // confirmed, never global; at most 5 per tab (src/memorypropose.js).
+    // Not for God Mode workers, as capture is not (captureSourceOf): a run
+    // starts many worker sessions, each with an allowance of its own.
+    // sessionId comes last so the tool's input can never choose whose allowance it uses.
+    propose: orchestraRuns.ownsSession(session.id) ? undefined : (proposal) => {
+      const res = memoryProposerOf().propose({
+        ...proposal,
+        session: (session.watcher && session.watcher.sessionUuid) || session.transcriptId || session.id,
+        sessionId: session.id,
+      });
+      if (res.ok && res.created) {
+        if (memorySync) memorySync.soon();
+        send('memory:changed', {});
+      }
+      return res;
+    },
     log: (event) => memoryLogOf().add(event),
   };
+}
+
+let memoryProposer = null;
+/** One proposer for the app: it holds every tab's memory_propose count. */
+function memoryProposerOf() {
+  if (!memoryProposer) memoryProposer = createMemoryProposer({ dir: memoryPaths(userDir()).dir, machine: machineName(os.hostname()) });
+  return memoryProposer;
 }
 
 let memoryLog = null;

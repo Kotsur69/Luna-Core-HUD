@@ -6,7 +6,7 @@
 //
 //   memory-log.local.jsonl
 //   {"at": <ms>, "ev": "capture",  "project", "reason", "kept", "dropped": {"duplicate": 2}}
-//   {"at": <ms>, "ev": "proposed", "key", "type", "usefulness"?}
+//   {"at": <ms>, "ev": "proposed", "key", "type", "usefulness"?, "by"?: "session"}
 //   {"at": <ms>, "ev": "dropped",  "project", "reason", "type"?, "title"?, "usefulness"?}
 //   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired" | "auto-accepted", "key", "type", "title"?, "usefulness"?}
 //   {"at": <ms>, "ev": "auto-off", "type", "rate"}   a type's auto-accept turned itself off (src/memoryautoaccept.js)
@@ -97,7 +97,8 @@ function cleanEvent(raw) {
     }
     return { at, ev, project, reason: line(raw.reason, MAX_REASON), kept: count(raw.kept), dropped };
   }
-  if (ev === 'proposed') return key && type ? { at, ev, key, type, ...scored(raw.usefulness) } : null;
+  // by 'session' = memory_propose (src/memorypropose.js); without it, capture proposed it.
+  if (ev === 'proposed') return key && type ? { at, ev, key, type, ...scored(raw.usefulness), ...(raw.by === 'session' ? { by: 'session' } : {}) } : null;
   if (ev === 'dropped') {
     const project = projectOf(raw.project);
     const reason = line(raw.reason, MAX_REASON);
