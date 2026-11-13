@@ -460,6 +460,46 @@ test('proxy: requests arriving during a re-probe wait for it instead of probing 
   });
 });
 
+test('proxy: a failed re-probe goes on to the other models already back, instead of moving the reset', async () => {
+  // a cools ~4 min, b ~5 min, c 30 min. At 6 min a is still limited, b is
+  // back: the run must get b's answer, not a later "resets" time.
+  const chain = { id: 'free-coding', models: ['a', 'b', 'c'] };
+  let bOpen = false;
+  await withProxy(chain, (model, res) => {
+    if (model === 'a') return fail(res, 429, EXHAUSTED('~4m'));
+    if (model === 'b') return bOpen ? ok(res, model) : fail(res, 429, EXHAUSTED('~5m'));
+    return fail(res, 429, EXHAUSTED(null));
+  }, async ({ send, seen, clock, proxy }) => {
+    assert.equal((await send()).status, 429);
+    clock.t = NOW + 6 * MIN;
+    bOpen = true;
+    seen.length = 0;
+    const back = await send();
+    assert.equal(back.status, 200, 'b was back - no usage-limit answer');
+    assert.deepEqual(seen.map((s) => s.model), ['a', 'b']);
+    assert.equal(back.headers[MODEL_HEADER], 'b');
+    assert.equal(proxy.exhausted, false, 'the chain is open again');
+  });
+});
+
+test('proxy: a re-probe never asks a model that is still cooling', async () => {
+  const chain = { id: 'free-coding', models: ['a', 'b', 'c'] };
+  const hints = { a: '~5m', b: '~5m' };
+  await withProxy(chain, (model, res) => fail(res, 429, EXHAUSTED(hints[model] || null)), async ({ send, seen, clock }) => {
+    assert.equal((await send()).status, 429);
+    clock.t = NOW + 6 * MIN;
+    // At the re-probe a now names a longer wait than b.
+    hints.a = '~7m';
+    seen.length = 0;
+    const res = await send();
+    assert.equal(res.status, 429);
+    // c (30 min) is not asked, a before b (chain order); the reset is b's, the first one back.
+    assert.deepEqual(seen.map((s) => s.model), ['a', 'b']);
+    const expected = Math.ceil((NOW + 11 * MIN) / MIN) * MIN;
+    assert.equal(usageLimitFrom(cliLimitEntry(JSON.parse(res.body).error.message), clock.now()).resetsAt, expected);
+  });
+});
+
 test('pacer: a client that hung up while queued gives its slot back', async () => {
   const clock = fakeClock();
   const pacer = new RequestPacer({ now: clock.now, sleep: clock.sleep, minGapMs: 1000 });

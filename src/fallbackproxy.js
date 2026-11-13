@@ -15,7 +15,8 @@
 //          models: usage limit reached · resets <time>" (src/freeLimit.js),
 //          which the CLI writes into the transcript and God Mode reads as
 //          the usage-limit wall: the run pauses and resumes on its own. Until
-//          then nothing is sent; afterwards ONE model is re-probed first.
+//          then nothing is sent; afterwards ONE request re-probes the models
+//          that are back (in chain order) while the others wait for it.
 //   - F2b  every request waits for the gateway's 120-per-minute window
 //          (src/freePacer.js, one per gateway). A key-level 429 (not "All
 //          models ...") is a short wait + retry of the same model here, not a
@@ -310,15 +311,17 @@ class FallbackProxy {
     if (closed) return;
     const guard = this.guardFor(parsed.model);
     const ready = chains.readyModels(this.chain, this.cooldowns, this.now());
-    // After a usage-limit answer only ONE model is re-probed; it either opens
-    // the chain again or the limit answer comes back without more requests.
+    // After a usage-limit answer ONE request re-probes the models whose
+    // cooldown ran out (every other request waits for its verdict): it opens
+    // the chain again or the limit answer comes back. Stopping at the first
+    // failed model would report the next model's reset as the chain's while a
+    // model is already back, and the run would pause again for nothing.
     const probe = this.exhausted && ready.length > 0;
-    const order = probe ? ready.slice(0, 1) : ready;
     let endProbe = () => {};
     if (probe) this.probing = new Promise((resolve) => { endProbe = resolve; });
     try {
       const failures = [];
-      for (const model of order) {
+      for (const model of ready) {
         const result = await this.tryModel(req, res, withModel(original, model), model, guard, track, isClosed);
         if (result.done) {
           if (result.ok) this.exhausted = false;

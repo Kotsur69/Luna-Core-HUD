@@ -84,8 +84,10 @@ gateway's Retry-After, else its ~Xm hint, else its default - else +30 min;
 at least 1 min, at most 6 h; `src/freeLimit.js`). Claude Code records that as the
 usage-limit wall, so a God Mode run pauses until then and resumes by itself,
 and the board says "Free coding models limited - retrying at HH:MM". Until the
-reset the proxy sends nothing upstream; after it, ONE model is re-probed before
-the chain is walked again.
+reset the proxy sends nothing upstream; after it, ONE request re-probes the
+models that are back (in chain order, never one still cooling) while every
+other request waits for its verdict. A model that is still limited does not
+hide one that is already back.
 
 **The gateway's own window.** FreeLLMAPI allows 120 requests per minute per
 client (`X-RateLimit-Limit: 120`), shared by every free worker. The proxy
