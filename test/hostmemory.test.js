@@ -21,6 +21,7 @@ const { createLog, captureStats } = require('../src/memorylog.js');
 const { typeStats } = require('../src/memoryautoaccept.js');
 const { hostSnapshot, parseHostPeer } = require('../src/hostsnapshot.js');
 const { createHostSwitch } = require('../src/hostswitch.js');
+const { scrubDeep } = require('../src/hostscrub.js');
 
 const PROJECT = 'github.com/acme/hud';
 const OTHER = 'github.com/acme/quote';
@@ -98,6 +99,44 @@ test('memory.inbox caps the item count and the body length so the result fits th
   assert.ok(res.items.length <= MAX_PHONE_ITEMS);
   assert.ok(res.items.every((i) => i.body.length <= MAX_PHONE_BODY && i.clipped === true));
   assert.ok(Buffer.byteLength(JSON.stringify(res), 'utf8') < 128 * 1024);
+});
+
+test('memory.inbox measures entries after the secret scrub, which can make them longer', async (t) => {
+  // NAME=value lines get masked on the way out ('=1' -> '=[redacted]'): the
+  // budget must count the masked size or the row outgrows the 128 KB column.
+  const line = (i) => ['K', String(i), '_', 'KEY', '=1'].join('');
+  const bodyOf = (i) => Array.from({ length: 400 }, () => line(i)).join('\n').slice(0, MAX_PHONE_BODY);
+  const titleOf = (i) => Array.from({ length: 5 }, (_, j) => `s${i}v${j}`).join(' ');
+  const records = Array.from({ length: MAX_PHONE_ITEMS }, (_, i) => rec(`masked-${i}`, titleOf(i), { body: bodyOf(i) }));
+  const { handlers } = setup(t, records);
+
+  const res = await handlers['memory.inbox']({});
+
+  assert.ok(res.items.length > 0);
+  assert.ok(res.items[0].body.includes('[redacted]'));
+  assert.ok(Buffer.byteLength(JSON.stringify(scrubDeep(res)), 'utf8') < 128 * 1024);
+});
+
+test('a decision that throws after its write still syncs, and answers failed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-hostmem-'));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5 }));
+  writeRecord(root, rec('a', 'Something to keep in mind'));
+  const changed = [];
+  const { handlers } = createHostMemory({
+    dir: () => root,
+    log: {
+      add: () => {
+        throw new Error('log disk full');
+      },
+    },
+    onChanged: () => changed.push(1),
+    now: () => NOW,
+    logLine: () => {},
+  });
+
+  assert.deepEqual(await handlers['memory.approve']({ project: PROJECT, id: 'a' }), { status: 'refused', error: 'failed' });
+  assert.equal(stored(root)[`${PROJECT}/a`].confidence, 'confirmed');
+  assert.equal(changed.length, 1);
 });
 
 test('memory.inbox refuses a payload with fields or of the wrong shape', async (t) => {

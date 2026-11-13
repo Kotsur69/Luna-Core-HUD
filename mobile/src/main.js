@@ -19,6 +19,7 @@ import { mountBody } from './views/body.js';
 import { mountRepos } from './views/repos.js';
 import { mountGodmode } from './views/godmode.js';
 import { mountLunasWork } from './views/lunaswork.js';
+import { mountMemory } from './views/memory.js';
 import { mountPair } from './views/pair.js';
 import { mountHost } from './views/host.js';
 import { mountChat } from './views/chat.js';
@@ -27,7 +28,7 @@ import { readLabels } from './sessionlabels.js';
 import { createRunner } from './views/hostrun.js';
 import { t } from './i18n.js';
 
-const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody, repos: mountRepos, godmode: mountGodmode, lunaswork: mountLunasWork, host: mountHost, pair: mountPair, chat: mountChat };
+const VIEWS = { today: mountToday, mission: mountMission, todos: mountTodos, life: mountLife, body: mountBody, repos: mountRepos, godmode: mountGodmode, lunaswork: mountLunasWork, memory: mountMemory, host: mountHost, pair: mountPair, chat: mountChat };
 /** A burst of realtime events (a PC pushing 500 units) becomes one pull. */
 const REALTIME_DEBOUNCE_MS = 1500;
 /** A host heartbeats every 30 s (and at once when a chat exits); past this its own list is current. */

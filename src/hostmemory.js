@@ -32,6 +32,7 @@ const { listInbox, approve, reject } = require('./memoryinbox');
 const { validProject, splitKey } = require('./memoryrecord');
 const { scan } = require('./memorystore');
 const { decisionEvent } = require('./memorylog');
+const { scrubDeep } = require('./hostscrub');
 
 const KINDS = ['memory.inbox', 'memory.approve', 'memory.reject'];
 /** src/memoryrecord.js ID_RE: no '/', so `${project}/${id}` splits back the same way. */
@@ -81,11 +82,16 @@ function phoneItem(item) {
   };
 }
 
-/** Items in listing order until the budget is spent; a result never outgrows the column. */
+/**
+ * Items in listing order until the budget is spent; a result never outgrows
+ * the column. Each item is measured AFTER the secret scrub hostcommands.js
+ * applies on the way out: a mask can be longer than what it replaces.
+ */
 function fitItems(items) {
   const out = [];
   let bytes = 0;
-  for (const item of items.slice(0, MAX_PHONE_ITEMS)) {
+  // A wrapper, not .map(scrubDeep): map's index would land in scrubDeep's depth argument.
+  for (const item of items.slice(0, MAX_PHONE_ITEMS).map((i) => scrubDeep(i))) {
     const size = Buffer.byteLength(JSON.stringify(item), 'utf8');
     if (bytes + size > RESULT_BUDGET_BYTES) break;
     bytes += size;
@@ -144,7 +150,15 @@ function createHostMemory(deps) {
       if (target.error) return refused(target.error);
       const dir = deps.dir();
       if (!scan(dir).records.some(([, r]) => r.project === target.project)) return refused('unknownProject');
-      const res = act(dir, target.key);
+      let res;
+      try {
+        res = act(dir, target.key);
+      } catch (err) {
+        // The decision may be on disk already (a later delete or the log line
+        // threw): sync anyway, a sync with nothing new costs nothing.
+        onChanged();
+        throw err;
+      }
       if (!res || !res.ok) return refused(REASONS[res && res.reason] || 'failed');
       onChanged();
       return { status: 'decided', key: res.key, removed: res.removed.length };
