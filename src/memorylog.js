@@ -13,6 +13,13 @@
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
 //   {"at": <ms>, "ev": "get",      "key"}
 //   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user", "note"?, "missing"?}
+//   {"at": <ms>, "ev": "card",     "session", "loaded": true | false, "tools"?: bool, "project"?}   a `claude` tab started, with or without its project card
+//
+// `session` (the tab id, "s3") is also kept on search / get / proposed /
+// verified / disputed when a tab's memory tools wrote them (forSession()):
+// the events after a tab's `card` line, up to its next one, are that start's
+// tool calls (src/memoryuse.js). Tab ids repeat across app restarts, so a
+// tool event is only ever read against the latest `card` of its tab.
 //
 // It answers the questions of section 9 without a guess: which share of the
 // captured candidates is approved (per type), how often a memory is found and
@@ -80,6 +87,11 @@ const projectOf = (v) => (v === GLOBAL ? GLOBAL : projectFromRepoKey(v));
 const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
 /** `{usefulness}` when v is a valid score, else nothing. */
 const scored = (v) => (Number.isInteger(v) && v >= 0 && v <= MAX_SCORE ? { usefulness: v } : {});
+/** A tab id as main.js makes them ("s12"); anything else is not kept. */
+const SESSION_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const sessionOf = (v) => (typeof v === 'string' && SESSION_RE.test(v) ? v : null);
+/** `{session}` when v is a valid tab id, else nothing. */
+const tagged = (v) => (sessionOf(v) ? { session: v } : {});
 
 /** One event rebuilt from untrusted input, or null. */
 function cleanEvent(raw) {
@@ -87,6 +99,14 @@ function cleanEvent(raw) {
   const { at, ev } = raw;
   const key = splitKey(raw.key) ? raw.key : null;
   const type = TYPES.includes(raw.type) ? raw.type : null;
+  if (ev === 'card') {
+    const session = sessionOf(raw.session);
+    if (!session || typeof raw.loaded !== 'boolean') return null;
+    const project = projectOf(raw.project);
+    // tools = whether the tab got memory_search / memory_get at all.
+    const tools = typeof raw.tools === 'boolean' ? { tools: raw.tools } : {};
+    return { at, ev, session, loaded: raw.loaded, ...tools, ...(project ? { project } : {}) };
+  }
   if (ev === 'capture') {
     const project = projectOf(raw.project);
     if (!project) return null;
@@ -98,7 +118,9 @@ function cleanEvent(raw) {
     return { at, ev, project, reason: line(raw.reason, MAX_REASON), kept: count(raw.kept), dropped };
   }
   // by 'session' = memory_propose (src/memorypropose.js); without it, capture proposed it.
-  if (ev === 'proposed') return key && type ? { at, ev, key, type, ...scored(raw.usefulness), ...(raw.by === 'session' ? { by: 'session' } : {}) } : null;
+  if (ev === 'proposed') {
+    return key && type ? { at, ev, key, type, ...scored(raw.usefulness), ...(raw.by === 'session' ? { by: 'session' } : {}), ...tagged(raw.session) } : null;
+  }
   if (ev === 'dropped') {
     const project = projectOf(raw.project);
     const reason = line(raw.reason, MAX_REASON);
@@ -113,9 +135,9 @@ function cleanEvent(raw) {
   }
   if (ev === 'search') {
     const hits = Array.isArray(raw.hits) ? raw.hits.filter((k) => splitKey(k)).slice(0, MAX_HITS) : [];
-    return { at, ev, project: projectOf(raw.project), hits };
+    return { at, ev, project: projectOf(raw.project), hits, ...tagged(raw.session) };
   }
-  if (ev === 'get') return key ? { at, ev, key } : null;
+  if (ev === 'get') return key ? { at, ev, key, ...tagged(raw.session) } : null;
   if (ev === 'auto-off') {
     const rate = Number.isFinite(raw.rate) && raw.rate >= 0 && raw.rate <= 1 ? raw.rate : null;
     return type && rate !== null ? { at, ev, type, rate } : null;
@@ -124,7 +146,7 @@ function cleanEvent(raw) {
     if (!key || !BY.includes(raw.by)) return null;
     const note = line(raw.note, MAX_NOTE);
     const missing = Array.isArray(raw.missing) ? raw.missing.map((p) => line(p, MAX_PATH)).filter(Boolean).slice(0, MAX_MISSING) : [];
-    return { at, ev, key, by: raw.by, ...(note ? { note } : {}), ...(missing.length ? { missing } : {}) };
+    return { at, ev, key, by: raw.by, ...(note ? { note } : {}), ...(missing.length ? { missing } : {}), ...tagged(raw.session) };
   }
   return null;
 }
@@ -151,8 +173,11 @@ function readLog(file) {
   return events;
 }
 
-/** A line that only counts a read. Reads are many and cheap to lose; decisions and reports are not. */
-const USE_ROW_RE = /"ev":"(search|get)"/;
+/**
+ * A line that only counts a read or a tab start. They are many and cheap to
+ * lose; decisions and reports are not.
+ */
+const USE_ROW_RE = /"ev":"(search|get|card)"/;
 const bytesOf = (rows) => rows.reduce((sum, row) => sum + Buffer.byteLength(row, 'utf8') + 1, 0);
 
 /**
@@ -223,6 +248,20 @@ function createLog(file, { now = Date.now } = {}) {
 }
 
 const logPath = (configDir) => path.join(configDir, LOG_FILE);
+
+/**
+ * The same log, with every event it adds tagged with one tab's id, so the
+ * calls of a session can be told apart (src/memoryuse.js cardSessions).
+ * @param {{add: Function, read: Function}} log createLog()
+ * @param {string} sessionId the tab id
+ * @returns {{add: (event: object) => boolean, read: () => object[]}}
+ */
+function forSession(log, sessionId) {
+  return {
+    add: (event) => log.add({ ...event, session: sessionId }),
+    read: () => log.read(),
+  };
+}
 
 /**
  * The log line of an inbox decision, the same from the app and the CLI. A
@@ -360,6 +399,7 @@ module.exports = {
   createLog,
   readLog,
   logPath,
+  forSession,
   cleanEvent,
   decisionEvent,
   captureStats,

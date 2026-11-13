@@ -221,6 +221,7 @@ function entry(item) {
 export function flagLine(flag) {
   if (flag.kind === 'disputed') return t('mem.inbox.review.disputed', { note: flag.note || '-' });
   if (flag.kind === 'anchor') return t('mem.inbox.review.anchor', { files: (flag.missing || []).join(', ') });
+  if (flag.kind === 'unopened') return t('mem.inbox.review.unopened', { days: flag.days });
   return t('mem.inbox.review.stale', { since: flag.since });
 }
 
@@ -338,7 +339,9 @@ function refocus(list, key, index) {
  */
 function render(res, review, focusKey, focusIndex, focusTab) {
   // First paint: an empty inbox with something to check opens on the review list.
-  if (tab === null) tab = !res.total && review.total ? 'review' : 'inbox';
+  // Low-priority flags alone ("never opened") do not: `urgent` is what the hub counts.
+  const urgent = Number.isSafeInteger(review.urgent) ? review.urgent : review.total;
+  if (tab === null) tab = !res.total && urgent ? 'review' : 'inbox';
   overlay.setTitle(res.total ? t('mem.inbox.titleCount', { count: res.total }) : '');
   const reviewing = tab === 'review';
   const shown = reviewing ? review : res;

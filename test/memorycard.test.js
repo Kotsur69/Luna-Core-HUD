@@ -215,3 +215,42 @@ test('withMemoryCard appends the flag to plain claude launches only', () => {
     assert.equal(withMemoryCard(`claude ${flag}`, '/card.md'), `claude ${flag}`);
   }
 });
+
+// ---- read order (src/memoryuse.js readCounts) ------------------------------------
+
+test('inside a section the most read memories come first, then the newest; the note stays on top', () => {
+  const records = keyed([
+    rec('newest', 'Newest gotcha', { created: '2026-11-10' }),
+    rec('older', 'Older gotcha', { created: '2026-10-01' }),
+    rec('oldest', 'Oldest gotcha', { created: '2026-09-01' }),
+    rec('map', 'Where things live', { type: 'project-fact', area: 'architecture', body: 'src/main.js is the main process.' }),
+  ]);
+  const note = { project: PROJECT, date: '2026-11-11', session: 'abcdef1234567890', text: 'Half way through the stats', at: NOW };
+  const reads = new Map([[`${PROJECT}/oldest`, 5], [`${PROJECT}/older`, 1]]);
+
+  const text = build(records, { reads, note }).text;
+  const order = ['[oldest]', '[older]', '[newest]'].map((ref) => text.indexOf(ref));
+  assert.ok(order.every((i) => i > 0));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.ok(text.indexOf('Where we stopped') < text.indexOf('## Gotchas'));
+
+  // Without reads the date decides, as before.
+  const plain = build(records).text;
+  assert.ok(plain.indexOf('[newest]') < plain.indexOf('[older]'));
+});
+
+test('cardFor reads the recent reads from the memory log of the config folder', (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-card-reads-'));
+  t.after(() => fs.promises.rm(base, { recursive: true, force: true, maxRetries: 5 }));
+  const { dir } = memoryPaths(base);
+  writeRecord(dir, rec('newest', 'Newest gotcha', { created: '2026-11-10' }));
+  writeRecord(dir, rec('read-a-lot', 'Read a lot', { created: '2026-09-01' }));
+  const { createLog, logPath } = require('../src/memorylog.js');
+  const log = createLog(logPath(base), { now: () => NOW - 1000 });
+  log.add({ ev: 'get', key: `${PROJECT}/read-a-lot` });
+  // A read older than the window does not count.
+  createLog(logPath(base), { now: () => NOW - 365 * 24 * 60 * 60 * 1000 }).add({ ev: 'get', key: `${PROJECT}/newest` });
+
+  const text = cardFor(base, PROJECT, 'pc', { now: NOW }).text;
+  assert.ok(text.indexOf('[read-a-lot]') < text.indexOf('[newest]'));
+});

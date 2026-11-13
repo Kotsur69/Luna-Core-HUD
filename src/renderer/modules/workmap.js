@@ -17,8 +17,14 @@
 //    allowed (prefers-reduced-motion and the in-app motion axis); otherwise
 //    the busy spoke and station are highlighted and nothing travels.
 //  - Data reaches the DOM through textContent / setAttribute only.
-//  - setMemoryStationInfo() is the Memory station's extension point: a later
-//    package hands in per-session memory counts and the "card loaded" mark.
+//  - The Memory station shows how many memory_search / memory_get /
+//    memory_verify / memory_propose calls the session made (the model's
+//    memoryCalls) and a "card loaded" mark. The mark comes from the tab list
+//    main.js already pushes (sessionSummary's `memoryCard`), through
+//    setMemoryStationInfo(), which stays the station's extension point.
+//    The counts are calls started in this tab while the app ran, failed ones
+//    included; `luna memory stats` counts logged successes per tab start, so
+//    the two numbers can differ.
 // The top half is pure (geometry, deltas, formatting) for test/workmap.test.js.
 // ============================================================================
 
@@ -28,7 +34,7 @@ import { t } from './util.js';
 import { tokenMs, tokenEase, EXIT_RATIO } from './motion.js';
 import { truncate } from './liveMapHelpers.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
-import { STATIONS, subscribe, activeTabState, createTabState } from './workmapmodel.js';
+import { STATIONS, MEMORY_CALLS, subscribe, activeTabState, createTabState } from './workmapmodel.js';
 
 // ---- geometry and pure helpers (tested) --------------------------------------
 
@@ -43,6 +49,9 @@ export const STATION_R = 36;
 const SPOKE_GAP_CORE = 12;
 const SPOKE_GAP_STATION = 6;
 const MODEL_LABEL_CHARS = 16;
+// Where the "card loaded" words sit, from the station's upper-right corner (beside the mark).
+const CARD_LABEL_DX = 14;
+const CARD_LABEL_DY = 4;
 const ERROR_TITLE_CHARS = 160;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -188,6 +197,33 @@ export function memoryInfoOf(raw) {
   return memories === null && cardLoaded === null ? null : { memories, cardLoaded };
 }
 
+/**
+ * The memory tools a session called, for the station's status line: only the
+ * tools called at least once, in MEMORY_CALLS order.
+ * @param {unknown} calls TabState.memoryCalls
+ * @returns {Array<{kind:string, n:number}>}
+ */
+export function memoryCallParts(calls) {
+  if (!calls || typeof calls !== 'object') return [];
+  return MEMORY_CALLS.filter((kind) => Number.isSafeInteger(calls[kind]) && calls[kind] > 0).map((kind) => ({ kind, n: calls[kind] }));
+}
+
+/**
+ * The card flags of a pushed tab list: `memoryCard` true / false as main.js
+ * reports it, null when it does not know (not a `claude` tab, not started).
+ * @param {unknown} list sessions:update `sessions`
+ * @returns {Map<string, boolean|null>} tab id -> flag
+ */
+export function cardFlagsOf(list) {
+  const flags = new Map();
+  if (!Array.isArray(list)) return flags;
+  for (const m of list) {
+    if (!m || typeof m !== 'object' || typeof m.id !== 'string' || !m.id) continue;
+    flags.set(m.id, typeof m.memoryCard === 'boolean' ? m.memoryCard : null);
+  }
+  return flags;
+}
+
 // ---- Memory station extension point --------------------------------------------
 
 const memoryInfo = new Map();
@@ -210,6 +246,22 @@ export function setMemoryStationInfo(sessionId, info) {
 
 /** What setMemoryStationInfo() last stored for a session, or null. */
 export const memoryStationInfo = (sessionId) => memoryInfo.get(sessionId) || null;
+
+/**
+ * Takes the card flags of a pushed tab list into the station info, keeping
+ * any memory count already there. A tab no longer in the list is forgotten.
+ * Only a flag that changed notifies the map.
+ * @param {unknown} list sessions:update `sessions`
+ */
+export function applyCardFlags(list) {
+  const flags = cardFlagsOf(list);
+  for (const id of [...memoryInfo.keys()]) if (!flags.has(id)) setMemoryStationInfo(id, null);
+  for (const [id, cardLoaded] of flags) {
+    const known = memoryInfo.get(id) || null;
+    if ((known ? known.cardLoaded : null) === cardLoaded) continue;
+    setMemoryStationInfo(id, { memories: known ? known.memories : undefined, cardLoaded: cardLoaded === null ? undefined : cardLoaded });
+  }
+}
 
 // ---- DOM -----------------------------------------------------------------------
 
@@ -269,12 +321,15 @@ function buildStation(pos) {
   const name = svg('text', 'wm-station__name', { x: pos.x, y: ys.name });
   const status = svg('text', 'wm-station__status', { x: pos.x, y: ys.status });
   g.append(title, halo, disc, count, name, status);
-  const parts = { g, title, disc, count, name, status, card: null };
+  const parts = { g, title, disc, count, name, status, card: null, cardLabel: null };
   if (memory) {
     // The "card loaded" mark: filled = loaded, hollow = not loaded, hidden = unknown.
     const card = svg('rect', 'wm-card', { x: pos.x + STATION_R - 4, y: pos.y - STATION_R - 6, width: 12, height: 12, rx: 2, transform: `rotate(45 ${pos.x + STATION_R + 2} ${pos.y - STATION_R})` });
-    g.append(card);
+    // Said in words too, never by the mark's fill alone.
+    const cardLabel = svg('text', 'wm-card__label', { x: pos.x + STATION_R + CARD_LABEL_DX, y: pos.y - STATION_R + CARD_LABEL_DY });
+    g.append(card, cardLabel);
     parts.card = card;
+    parts.cardLabel = cardLabel;
   }
   return parts;
 }
@@ -368,6 +423,7 @@ export function createSessionsTab(deps = {}) {
       // The pushed list is the source of truth: a closed tab's name goes with it.
       labels.clear();
       rememberLabels(list);
+      applyCardFlags(list);
       const live = new Set(list.map((m) => m && m.id).filter(Boolean));
       for (const id of sub.getState().tabs.keys()) if (!live.has(id)) sub.dispatch({ channel: 'tab:closed', payload: { sessionId: id } });
       if (payload && typeof payload.activeSessionId === 'string') sub.dispatch({ channel: 'tab:active', payload: { sessionId: payload.activeSessionId } });
@@ -397,8 +453,12 @@ export function createSessionsTab(deps = {}) {
     seededLabels = true;
     try {
       const res = await bridge.getSessions();
-      if (res && Array.isArray(res.sessions)) rememberLabels(res.sessions);
-      else seededLabels = false;
+      if (res && Array.isArray(res.sessions)) {
+        rememberLabels(res.sessions);
+        applyCardFlags(res.sessions);
+      } else {
+        seededLabels = false;
+      }
       renderSoon();
     } catch (err) {
       seededLabels = false;
@@ -439,10 +499,21 @@ export function createSessionsTab(deps = {}) {
     setAttr(core.g, 'aria-label', t('lm.wm.coreAria', { model: modelText, pct: fraction === null ? t('lm.wm.ctxNone') : `${Math.round(fraction * 100)}%` }));
   }
 
-  function paintStation(id, item, st, info, moved, travel) {
+  /** The Memory station's own extras: per-tool counts in the status line, the card mark in words. */
+  function memoryExtras(item, calls, info) {
+    const loaded = info ? info.cardLoaded : null;
+    setAttr(item.card, 'class', `wm-card${loaded === true ? ' is-on' : loaded === false ? ' is-off' : ' is-unknown'}`);
+    setText(item.cardLabel, loaded === true ? t('lm.wm.cardLoaded') : '');
+    const cardText = loaded === true ? t('lm.wm.cardLoaded') : loaded === false ? t('lm.wm.cardNone') : '';
+    const parts = memoryCallParts(calls).map(({ kind, n }) => t(`lm.wm.mem.${kind}`, { n }));
+    if (info && info.memories !== null) parts.unshift(t('lm.wm.memories', { n: info.memories }));
+    return { parts, cardText };
+  }
+
+  function paintStation(id, item, st, info, moved, travel, calls) {
     const name = t(`lm.wm.station.${id}`);
-    const parts = [];
-    if (id === 'memory' && info && info.memories !== null) parts.push(t('lm.wm.memories', { n: info.memories }));
+    const extras = item.card ? memoryExtras(item, calls, info) : { parts: [], cardText: '' };
+    const parts = [...extras.parts];
     if (st.inFlight > 0) parts.push(t('lm.wm.running', { n: st.inFlight }));
     if (st.errors > 0) parts.push(t('lm.wm.failed', { n: st.errors }));
     setText(item.count, compactCount(st.total));
@@ -455,13 +526,10 @@ export function createSessionsTab(deps = {}) {
     setAttr(item.g, 'class', cls.join(' '));
     setAttr(item.status, 'class', `wm-station__status${st.errors > 0 ? ' is-bad' : ''}`);
     setAttr(item.spoke, 'class', `wm-spoke${st.inFlight > 0 ? ' is-busy' : ''}`);
-    setAttr(item.g, 'aria-label', t('lm.wm.stationAria', { name, calls: st.total, running: st.inFlight, failed: st.errors }));
+    const aria = t('lm.wm.stationAria', { name, calls: st.total, running: st.inFlight, failed: st.errors });
+    setAttr(item.g, 'aria-label', [aria, ...extras.parts, extras.cardText].filter(Boolean).join(', '));
     const lastError = st.lastError && st.lastError.message ? t('lm.wm.lastError', { msg: truncate(st.lastError.message, ERROR_TITLE_CHARS) }) : '';
-    setText(item.title, [name, lastError].filter(Boolean).join('\n'));
-    if (item.card) {
-      const loaded = info ? info.cardLoaded : null;
-      setAttr(item.card, 'class', `wm-card${loaded === true ? ' is-on' : loaded === false ? ' is-off' : ' is-unknown'}`);
-    }
+    setText(item.title, [name, extras.cardText, lastError].filter(Boolean).join('\n'));
     if (!travel) return;
     if (moved.started > 0) sendPacket(item, true, false);
     else if (moved.ended > 0) sendPacket(item, false, moved.failed > 0);
@@ -492,7 +560,7 @@ export function createSessionsTab(deps = {}) {
     const info = activeId ? memoryStationInfo(activeId) : null;
     paintHead(activeId, tab);
     paintCore(tab);
-    for (const id of STATIONS) paintStation(id, dom.items.get(id), tab.stations[id], info, deltas[id], travel);
+    for (const id of STATIONS) paintStation(id, dom.items.get(id), tab.stations[id], info, deltas[id], travel, tab.memoryCalls);
     let msg = '';
     if (!activeId) msg = t('lm.wm.noTab');
     else if (!data) msg = t('lm.wm.waiting');

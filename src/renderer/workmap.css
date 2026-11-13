@@ -78,6 +78,7 @@
 .wm-card { fill: none; stroke: var(--neon-magenta); stroke-width: 1.4; }
 .wm-card.is-on { fill: var(--neon-magenta); }
 .wm-card.is-unknown { display: none; }
+.wm-card__label { fill: var(--neon-magenta); font-family: var(--font-mono); font-size: 10px; text-anchor: start; }
 
 /* Backstop for the JS gate: no travelling dots when less motion is asked for. */
 @media (prefers-reduced-motion: reduce) {

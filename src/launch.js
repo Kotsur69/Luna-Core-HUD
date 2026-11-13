@@ -105,6 +105,18 @@ function intakeState(command, launched) {
   return launched !== String(command || '').trim() ? 'ready' : 'off';
 }
 
+/**
+ * Whether withMemoryCard() really attached the card: it hands the command
+ * back unchanged (trimmed) when there was no card or the command decides its
+ * own system prompt.
+ * @param {string} launched the command before withMemoryCard()
+ * @param {string} carded what withMemoryCard() returned
+ * @returns {boolean}
+ */
+function memoryCardLoaded(launched, carded) {
+  return typeof carded === 'string' && carded !== withMemoryCard(launched, null);
+}
+
 /** True when a start command launches the `claude` CLI itself. */
 function isClaudeCommand(command) {
   const first = String(command || '').trim().split(/\s+/)[0].replace(/^["']|["']$/g, '');
@@ -274,6 +286,7 @@ module.exports = {
   withPlainResume,
   withIntakeMcp,
   withMemoryCard,
+  memoryCardLoaded,
   intakeState,
   withTaskBrief,
   withAccountResume,

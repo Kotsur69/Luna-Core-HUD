@@ -50,6 +50,7 @@ const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
 const { saveNote } = require('../src/memorynote');
 const { createRepoKeys, findRepo } = require('../src/missionrepokey');
 const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
+const { cardSessions, cardSessionLines } = require('../src/memoryuse');
 const { reviewList, verify, retire } = require('../src/memoryreview');
 const { machineName } = require('../src/missionledgersync');
 
@@ -356,6 +357,7 @@ const FLAG_TEXT = {
   disputed: (f) => `REPORTED WRONG by a session${f.note ? `: ${f.note}` : ''}`,
   anchor: (f) => `names a file that is gone: ${f.missing.join(', ')}`,
   stale: (f) => `not verified since ${f.since}`,
+  unopened: (f) => `never opened in ${f.days} days (low priority)`,
 };
 
 /** Phase 5: the confirmed memories that need a look. */
@@ -414,6 +416,9 @@ function cmdStats({ configDir, project, values }) {
   const read = [...usage(events, { since })].sort(([, a], [, b]) => b.opened - a.opened || b.found - a.found);
   out(`  memories read: ${read.length}`);
   for (const [key, u] of read.slice(0, MAX_USAGE_LINES)) out(`    found ${u.found}x, opened ${u.opened}x  ${key}`);
+  // Section 9: does a session that starts with the card use the memory tools differently?
+  out('  sessions by tab start (memory tool calls that succeeded):');
+  for (const text of cardSessionLines(cardSessions(events, { since, project: values.all ? null : project }))) out(`    ${text}`);
 }
 
 const COMMANDS = {

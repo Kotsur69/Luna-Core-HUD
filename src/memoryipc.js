@@ -218,13 +218,15 @@ function registerMemoryIpc({
 }
 
 /**
- * How many confirmed memories are on the review list (the hub counts them
- * with the inbox). Never throws: a count is not worth a failed hub tick.
+ * How many confirmed memories on the review list need a look (the hub counts
+ * them with the inbox). A memory flagged only as "never opened" is on the
+ * list but not in this number: it is a low-priority hint, not a reason to nag.
+ * Never throws: a count is not worth a failed hub tick.
  * @param {{dir: string, today: string, events?: object[], roots?: object}} ctx
  */
 function reviewCount({ dir, today, events = [], roots = {} }) {
   try {
-    return reviewList({ records: scan(dir).records, today, events, roots }).total;
+    return reviewList({ records: scan(dir).records, today, events, roots }).urgent;
   } catch (err) {
     console.error('[memory] review count failed:', errText(err));
     return 0;

@@ -94,6 +94,15 @@ const NETWORK_MCP_TOKENS = new Set([
 const MCP_NAME_RE = /^mcp__(.+?)__(.+)$/;
 const MEMORY_SERVER = 'lunacore';
 const MEMORY_TOOL_PREFIX = 'memory_';
+/** The Luna Core Memory tools counted one by one on the Memory station, by MCP tool name. */
+const MEMORY_CALL_OF_TOOL = new Map([
+  ['memory_search', 'search'],
+  ['memory_get', 'get'],
+  ['memory_verify', 'verify'],
+  ['memory_propose', 'propose'],
+]);
+/** The keys of TabState.memoryCalls, in display order. */
+export const MEMORY_CALLS = Object.freeze(['search', 'get', 'verify', 'propose']);
 
 // ---- Station mapping -------------------------------------------------------
 
@@ -126,6 +135,18 @@ export function stationForTool(name) {
   const m = MCP_NAME_RE.exec(name);
   if (m) return stationForMcp(m[1], m[2]);
   return 'other';
+}
+
+/**
+ * Which Luna Core Memory tool an MCP call is ('search', 'get', 'verify',
+ * 'propose'), or null for any other call.
+ * @param {unknown} server
+ * @param {unknown} tool
+ * @returns {string|null} one of MEMORY_CALLS, or null
+ */
+export function memoryCallOf(server, tool) {
+  if (server !== MEMORY_SERVER || typeof tool !== 'string') return null;
+  return MEMORY_CALL_OF_TOOL.get(tool) || null;
 }
 
 /**
@@ -167,6 +188,8 @@ export function stationForTile(tile) {
  * @property {string} modelLabel display label, '' if unknown
  * @property {number} turns completed turns seen
  * @property {number|null} lastTurnEndedAt
+ * @property {{search:number, get:number, verify:number, propose:number}} memoryCalls
+ *   Luna Core Memory tool calls started in this tab, one count per tool (MEMORY_CALLS)
  * @property {string[]} endedIds internal: recently finished call ids, oldest
  *   first, capped at MAX_ENDED_IDS. A view should not need it.
  */
@@ -202,6 +225,7 @@ export function createTabState() {
     modelLabel: '',
     turns: 0,
     lastTurnEndedAt: null,
+    memoryCalls: { search: 0, get: 0, verify: 0, propose: 0 },
     endedIds: [],
   };
 }
@@ -304,6 +328,12 @@ function endCall(tab, callId, failure) {
   };
 }
 
+/** One more call of a memory tool; `kind` null leaves the tab as it is. */
+function countMemoryCall(tab, kind) {
+  if (!kind) return tab;
+  return { ...tab, memoryCalls: { ...tab.memoryCalls, [kind]: tab.memoryCalls[kind] + 1 } };
+}
+
 /**
  * Folds a list of lifecycle events into one tab.
  * @param {TabState} tab
@@ -311,15 +341,18 @@ function endCall(tab, callId, failure) {
  * @param {(ev: object) => string} stationOf
  * @param {(ev: object) => ({message:string}|null)} failureOf
  * @param {number|null} now
+ * @param {(ev: object) => (string|null)} memoryKindOf which memory tool a start is, if any
  * @returns {TabState}
  */
-function foldCalls(tab, events, stationOf, failureOf, now) {
+function foldCalls(tab, events, stationOf, failureOf, now, memoryKindOf) {
   let next = tab;
   for (const ev of events) {
     if (!isObject(ev) || typeof ev.id !== 'string' || !ev.id) continue;
     const at = finiteOrNull(ev.at);
     if (ev.phase === 'start') {
-      next = startCall(next, ev.id, stationOf(ev), at !== null ? at : now);
+      const started = startCall(next, ev.id, stationOf(ev), at !== null ? at : now);
+      // Counted only when the start was new: a re-delivered one changes nothing.
+      next = started === next ? next : countMemoryCall(started, memoryKindOf(ev));
     } else if (ev.phase === 'end') {
       const failure = failureOf(ev);
       next = endCall(next, ev.id, failure ? { at, message: failure.message } : null);
@@ -349,11 +382,18 @@ function mcpFailure(ev) {
   return ev.ok === false ? { message: errorText(ev.content) } : null;
 }
 
+function mcpMemoryKind(ev) {
+  return memoryCallOf(ev.server, ev.tool);
+}
+
+/** Memory tools are MCP calls: metrics:tools never carries one, so it never counts one. */
+const noMemoryKind = () => null;
+
 // ---- Per-channel reducers ----------------------------------------------------
 
-function reduceCalls(tab, payload, stationOf, failureOf, now) {
+function reduceCalls(tab, payload, stationOf, failureOf, now, memoryKindOf) {
   if (!Array.isArray(payload.events) || payload.events.length === 0) return tab;
-  return foldCalls(tab, payload.events, stationOf, failureOf, now);
+  return foldCalls(tab, payload.events, stationOf, failureOf, now, memoryKindOf);
 }
 
 function reduceContext(tab, payload) {
@@ -393,8 +433,8 @@ function reduceTurnEnd(tab, payload) {
 }
 
 const TAB_REDUCERS = new Map([
-  ['metrics:tools', (tab, payload, now) => reduceCalls(tab, payload, toolStation, toolFailure, now)],
-  ['metrics:mcp', (tab, payload, now) => reduceCalls(tab, payload, mcpStation, mcpFailure, now)],
+  ['metrics:tools', (tab, payload, now) => reduceCalls(tab, payload, toolStation, toolFailure, now, noMemoryKind)],
+  ['metrics:mcp', (tab, payload, now) => reduceCalls(tab, payload, mcpStation, mcpFailure, now, mcpMemoryKind)],
   ['metrics:context', (tab, payload) => reduceContext(tab, payload)],
   ['metrics:turnend', (tab, payload) => reduceTurnEnd(tab, payload)],
   ['tab:reset', (tab) => settleAll(tab)],

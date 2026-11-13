@@ -7,7 +7,9 @@
 //
 //   - the memories tagged `area: architecture | stack | commands`, in full
 //     (the "what lives where" map of decision 3);
-//   - every other memory as one line, its title and its id, grouped by type.
+//   - every other memory as one line, its title and its id, grouped by type;
+//     inside a group the most read on this PC lately come first (the memory
+//     log, src/memoryuse.js), then the newest.
 //
 // Above them, while it is at most NOTE_MAX_AGE_DAYS old, the project's "where
 // we stopped" note (src/memorynote.js): an unreviewed status the last captured
@@ -35,6 +37,8 @@ const { scan } = require('./memorystore');
 const { summarize, SILENT_MS } = require('./memoryhealth');
 const { memoryPaths } = require('./memorysync');
 const { readNote, isFreshNote } = require('./memorynote');
+const { createLog, logPath } = require('./memorylog');
+const { readCounts, RECENT_READ_DAYS } = require('./memoryuse');
 
 const CHARS_PER_TOKEN = 4;
 /** About 1,500 tokens (decision 2). */
@@ -68,6 +72,15 @@ const refOf = (record) => (record.project === GLOBAL ? `${GLOBAL}/${record.id}` 
 const freshness = (record) => record.last_verified || record.created;
 /** Newest first; the id settles a tie so the card is the same on every PC. */
 const byFreshness = (a, b) => freshness(b).localeCompare(freshness(a)) || refOf(a).localeCompare(refOf(b));
+/**
+ * Most read first (src/memoryuse.js readCounts, this PC's recent reads), then
+ * newest first: inside a section a memory sessions keep using stays on the card.
+ * @param {Map<string, number>} reads key -> reads
+ */
+const byReadsThenFreshness = (reads) => {
+  const readsOf = (record) => reads.get(`${record.project}/${record.id}`) || 0;
+  return (a, b) => readsOf(b) - readsOf(a) || byFreshness(a, b);
+};
 
 /** The confirmed, current memories of the project and of `global`. */
 function cardRecords(records, project) {
@@ -122,12 +135,14 @@ function header({ project, now, total, syncedAt, tools }) {
  * @param {{project: string|null, now?: number, syncedAt?: number|null, tools?: boolean, note?: object|null}} opts
  *   syncedAt = this PC's last successful memory sync (ms), null when unknown;
  *   tools = whether the tab has memory_search / memory_get;
- *   note = the project's "where we stopped" note (memorynote.readNote), shown while fresh
+ *   note = the project's "where we stopped" note (memorynote.readNote), shown while fresh;
+ *   reads = recent reads per memory key (memoryuse.readCounts): one-line entries of a
+ *   section are ordered by them before their date. The note and the full blocks are not.
  * @returns {{text: string, shown: number, total: number, chars: number, tokens: number, note: boolean}|null}
  *   null = nothing to say: no project, or neither a confirmed memory nor a fresh note for it;
  *   note = whether the note is on the card
  */
-function buildCard(records, { project, now = Date.now(), syncedAt = null, tools = true, note = null }) {
+function buildCard(records, { project, now = Date.now(), syncedAt = null, tools = true, note = null, reads = new Map() }) {
   if (!project) return null;
   const all = cardRecords(records, project);
   const status = note && note.project === project && isFreshNote(note, now) ? note : null;
@@ -160,9 +175,10 @@ function buildCard(records, { project, now = Date.now(), syncedAt = null, tools 
     }
   }
 
+  const lineOrder = byReadsThenFreshness(reads instanceof Map ? reads : new Map());
   for (const [type, heading] of SECTIONS) {
     const lines = [];
-    for (const record of all.filter((r) => r.type === type && !inFull.has(r)).sort(byFreshness)) {
+    for (const record of all.filter((r) => r.type === type && !inFull.has(r)).sort(lineOrder)) {
       const line = `- ${record.title} [${refOf(record)}]`;
       // The first line of a section pays for its heading too.
       if (!take(lines.length ? line : `## ${heading}\n${line}`, lines.length ? '\n' : '\n\n')) break;
@@ -190,7 +206,9 @@ function cardFor(configDir, project, machine, { now = Date.now(), tools = true }
   if (!project) return null;
   const p = memoryPaths(configDir);
   const self = summarize(p.health, machine, now).find((m) => m.self);
-  return buildCard(scan(p.dir).records, { project, now, syncedAt: self ? self.at : null, tools, note: readNote(p.dir, project) });
+  // createLog().read() never throws: an unreadable log only loses the read order.
+  const reads = readCounts(createLog(logPath(configDir)).read(), { since: now - RECENT_READ_DAYS * DAY_MS });
+  return buildCard(scan(p.dir).records, { project, now, syncedAt: self ? self.at : null, tools, note: readNote(p.dir, project), reads });
 }
 
 /** Where one tab's card lies. `.local.md`: config/*.local.md is never committed. */
@@ -223,4 +241,7 @@ function removeCard(dir, sessionId) {
   }
 }
 
-module.exports = { buildCard, cardFor, cardPath, writeCard, removeCard, MAX_CARD_CHARS, MAX_FULL_CHARS, STALE_MS };
+/** The `area` values whose memories the card prints in full (no memory_get needed to read them). */
+const FULL_AREA_IDS = Object.freeze(FULL_AREAS.map(([area]) => area));
+
+module.exports = { buildCard, cardFor, cardPath, writeCard, removeCard, MAX_CARD_CHARS, MAX_FULL_CHARS, STALE_MS, FULL_AREA_IDS };

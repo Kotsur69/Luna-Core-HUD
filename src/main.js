@@ -87,6 +87,7 @@ const {
   withPlainResume,
   withIntakeMcp,
   withMemoryCard,
+  memoryCardLoaded,
   intakeState,
   withAccountResume,
   findExecutable,
@@ -262,7 +263,7 @@ const { listInbox: listMemoryInbox } = require('./memoryinbox');
 const { registerMemoryIpc, reviewCount: memoryReviewCount } = require('./memoryipc');
 const { runJob: runMemoryJob } = require('./missionrunner');
 // Phase 5: the capture and usage log, and the review list of confirmed memories.
-const { createLog: createMemoryLog, logPath: memoryLogPath } = require('./memorylog');
+const { createLog: createMemoryLog, logPath: memoryLogPath, forSession: forMemorySession } = require('./memorylog');
 const { toolVerdict: memoryToolVerdict } = require('./memoryreview');
 const { enforceAutoOff: enforceMemoryAutoOff, recentAutoOffs: recentMemoryAutoOffs } = require('./memoryautoaccept');
 const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
@@ -597,6 +598,9 @@ function sessionSummary(s) {
     alive: s.alive || s.preparing === true,
     // 'ready' | 'off' | 'none' | null - drives the to-do widget's ✨ button.
     todoTools: s.todoTools || null,
+    // Whether this tab's `claude` started with the memory project card: the
+    // work map's Memory station mark. null = not a `claude` tab, or not started yet.
+    memoryCard: typeof s.memoryCard === 'boolean' ? s.memoryCard : null,
     // A phone-driven host session (src/hostchattabs.js): no input.
     readOnly: s.readOnly === true,
     // The tab's status light (src/sessionstatus.js); 'session:status' pushes changes.
@@ -1075,6 +1079,23 @@ function prepareCard(session, tools) {
 }
 
 /**
+ * Logs one `claude` tab start, with or without its card (src/memorylog.js
+ * `card`): the start of a session for `luna memory stats`. Never fails a launch.
+ * @param {Session} session
+ * @param {boolean} loaded
+ * @param {boolean} tools whether the tab got the memory tools at all
+ * @returns {boolean} `loaded`, for the tab summary
+ */
+function logCardStart(session, loaded, tools) {
+  try {
+    memoryLogOf().add({ ev: 'card', session: session.id, loaded, tools, project: memoryProjectOf(session) });
+  } catch (err) {
+    console.error('[memory] card start not logged:', (err && (err.code || err.message)) || 'error');
+  }
+  return loaded;
+}
+
+/**
  * What memory capture may read of one tab: its transcript and its project.
  * Null for a tab with no Claude transcript, for a project with memory switched
  * off, and for a God Mode worker: a run starts many short worker sessions, and
@@ -1118,7 +1139,7 @@ function memoryFor(session) {
     // memory_verify: a session may refresh a verification date or flag a
     // memory for review, nothing more (src/memoryreview.js toolVerdict).
     verify: (report) => {
-      const res = memoryToolVerdict(memoryPaths(userDir()).dir, { ...report, today: new Date().toISOString().slice(0, 10), log: memoryLogOf() });
+      const res = memoryToolVerdict(memoryPaths(userDir()).dir, { ...report, today: new Date().toISOString().slice(0, 10), log: memorySessionLog(session.id) });
       if (res.ok && res.changed && memorySync) memorySync.soon();
       if (res.ok && (res.changed || res.status === 'flagged')) send('memory:changed', {});
       return res;
@@ -1140,9 +1161,13 @@ function memoryFor(session) {
       }
       return res;
     },
-    log: (event) => memoryLogOf().add(event),
+    // Tagged with the tab id: `luna memory stats` counts each session's calls.
+    log: (event) => memorySessionLog(session.id).add(event),
   };
 }
+
+/** The memory log, tagging what it adds with one tab's id (src/memorylog.js forSession). */
+const memorySessionLog = (sessionId) => forMemorySession(memoryLogOf(), sessionId);
 
 let memoryProposer = null;
 /** One proposer for the app: it holds every tab's memory_propose count. */
@@ -1979,6 +2004,7 @@ function spawnInto(session, profile, launch = null) {
   // Whether the to-do widget's ✨ can work in this tab - see intakeState().
   // null while a start command is still on its way; a bare shell is 'none'.
   session.todoTools = startCommand ? null : 'none';
+  session.memoryCard = null;
   if (startCommand) {
     const intakeConfig = prepareIntake(session).catch(() => null);
     setTimeout(() => {
@@ -1989,9 +2015,11 @@ function spawnInto(session, profile, launch = null) {
         // The memory tools come with the intake server, so the card only names
         // them when that was attached.
         const hasTools = intakeState(startCommand, launched) === 'ready';
-        const carded = isOverride || !isClaudeCommand(startCommand) ? launched : withMemoryCard(launched, prepareCard(session, hasTools));
+        const claude = !isOverride && isClaudeCommand(startCommand);
+        const carded = claude ? withMemoryCard(launched, prepareCard(session, hasTools)) : launched;
         proc.write(`${carded}\r`);
         session.todoTools = intakeState(startCommand, launched);
+        session.memoryCard = claude ? logCardStart(session, memoryCardLoaded(launched, carded), hasTools) : null;
         broadcastSessions();
       });
     }, 600);
