@@ -18,7 +18,7 @@ const { splitTodoKey, MAX_KEY } = rows;
 const { validKey } = ledger;
 const { normalizeTodo, MAX_TEXT_CHARS, MAX_TAGS, STEER_TAG } = todoRows;
 
-export { STEER_TAG };
+export { STEER_TAG, MAX_TEXT_CHARS };
 
 const validAt = (at) => Number.isSafeInteger(at) && at > 0;
 
