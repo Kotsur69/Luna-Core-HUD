@@ -83,9 +83,12 @@ test('J-M11: two concurrent first signCommands share one session key and one Fac
 
 test('J-M11: a wipe while a key loads never lets the old load become the session', async () => {
   await hostkey.wipe();
-  const first = hostkey.grantFor('KT-PC');
+  // The expectation is attached before the second wipe: the load can fail
+  // while that wipe is still deleting, and a rejection with no handler yet
+  // is reported by node:test as an unhandled failure of this test.
+  const first = assert.rejects(hostkey.grantFor('KT-PC'), /wiped while in use/);
   await hostkey.wipe();
-  await assert.rejects(first, /wiped while in use/);
+  await first;
   const after = await hostkey.signCommand('KT-PC', 'news.scan', {});
   assert.equal(store.get('hostkey:session').pub, after.grant.grant.sessionKeyPub);
 });
