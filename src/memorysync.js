@@ -2,8 +2,9 @@
 // LunaCore - memory between PCs: the mirror <-> the cloud's `memory` scope (main)
 // ----------------------------------------------------------------------------
 // docs/untouched_docs/rag-stylememory.md, decisions 7-9, 14, 15. The engine is
-// configsync.js with two providers: the markdown mirror (src/memorystore.js)
-// and the per-PC heartbeats (src/memoryhealth.js). The transport is the
+// configsync.js with three providers: the markdown mirror (src/memorystore.js),
+// the per-PC heartbeats (src/memoryhealth.js) and the per-project "where we
+// stopped" notes (src/memorynote.js). The transport is the
 // `memory` scope of src/cloudsync.js. No cloud, no sync: the mirror and the
 // search keep working on this PC alone.
 //
@@ -27,6 +28,7 @@ const { createMemoryProvider, scan } = require('./memorystore');
 const { createHealthProvider, touch, summarize } = require('./memoryhealth');
 const { readEnabled } = require('./memoryprojects');
 const { splitKey } = require('./memoryrecord');
+const { createNoteProvider, projectOfNoteKey } = require('./memorynote');
 const { scrub } = require('./hostscrub');
 
 const SCOPE = 'memory';
@@ -44,13 +46,16 @@ function memoryPaths(configDir) {
   };
 }
 
-/** Whether the secret scanner would change anything in the memory's text. */
+/** Whether the secret scanner would change anything in the text of a memory or of a "where we stopped" note. */
 function hasSecret(record) {
-  return [record.title, record.body, record.source].some((s) => typeof s === 'string' && scrub(s) !== s);
+  return [record.title, record.body, record.source, record.text].some((s) => typeof s === 'string' && scrub(s) !== s);
 }
 
+/** A unit whose text the secret scanner guards: a memory or a note (src/memorynote.js). */
+const guarded = (k) => splitKey(k) !== null || projectOfNoteKey(k) !== null;
+
 /**
- * Wraps a publish hook: memories that hold a secret are not handed on.
+ * Wraps a publish hook: memories and notes that hold a secret are not handed on.
  * @param {(doc: {units, gone}) => void} onPublish
  * @param {(keys: string[]) => void} onBlocked called on every publish with the held-back keys
  */
@@ -58,7 +63,7 @@ function guardPublish(onPublish, onBlocked) {
   return (doc) => {
     const blocked = [];
     const units = doc.units.filter(({ k, v }) => {
-      const held = splitKey(k) !== null && hasSecret(v);
+      const held = guarded(k) && hasSecret(v);
       if (held) blocked.push(k);
       return !held;
     });
@@ -105,6 +110,8 @@ function startMemory({ cloud, machine, configDir, onChanged = () => {} }) {
         },
       }),
       createHealthProvider(p.health),
+      // One "where we stopped" note per project, in the same folder (src/memorynote.js).
+      createNoteProvider(p.dir),
     ],
     metaFile: p.meta,
     extraPeers: hooks.extraPeers,

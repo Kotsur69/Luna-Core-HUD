@@ -418,6 +418,70 @@ Done-when of section 10, checked on 2026-11-11: a confirmed memory that names
 (`test/memoryreview.test.js`, and `memory review` on the real store), and
 `memory stats` prints the approval rate of the chosen number of days.
 
+### Built after phase 5, 2026-11-13: the "where we stopped" note
+
+Item 3 of the improvements above. Unnumbered so it cannot collide with decisions other
+packages add in the same run.
+
+- **One note per project, written by session capture** (`src/memorynote.js`). The same
+  extractor call that proposes memories also returns `status`: what was being built, what
+  is done, what is left, at most 600 characters, English. The model writes the text only;
+  project, date and session id come from the capture. A capture with no meaningful status
+  (empty, "none", under 20 characters) leaves the previous note as it is.
+- **It is no memory.** The file is `projects/<host>/<owner>/<repo>/_where-we-stopped.md`
+  in the mirror; `memorystore.scan()` skips files whose name starts with `_`, so the note
+  never reaches search, `memory_get`, the inbox, the review list or the memory count. It
+  needs no approval: it is a status that decays, not a fact.
+- **Synced as its own unit**, `<project>/_where-we-stopped` in the `memory` scope, by a
+  third provider beside the mirror and the heartbeats. Newest wins, like every unit. Its
+  text is secret-scrubbed before it is written; a hand-edited note that trips the scanner
+  is held back from the cloud (`guardPublish`), and one from the cloud is refused.
+- **On the card** right under the header, as "Where we stopped (<date>, not verified)",
+  quoted on one line and labelled as unreviewed data. Hidden once it is more than
+  `NOTE_MAX_AGE_DAYS` (14) days old, and when it is dated more than a day ahead (a future
+  date would never expire). A fresh note alone is enough for a card.
+- **No note from a session that read outside content** (security review, 2026-11-13). The
+  note reaches every new session unreviewed, so a piece whose digest counted a web,
+  subagent or foreign MCP call (decision 61) gives no status, and the previous note stays.
+- **Newest session wins.** The note keeps `at`, when its transcript was last written; a
+  capture never replaces a note that came from a later session (pieces are not captured
+  in the order their sessions ran).
+- **CLI:** `memory capture <transcript>` prints the status; `--save` writes the note too.
+- **Known limit:** web access through the shell (`curl`, `gh api`) is not counted as
+  outside content, for sessions and runs alike (decision 61 counts tool names only).
+
+### Built after phase 5, 2026-11-13: one capture per God Mode run
+
+Item 7 of the improvements above; it revisits decision 49. Worker tabs are still not
+captured one by one.
+
+- **When:** the finalizer writes a run's report (`orchestraFinalize.js` `report`, which
+  calls `onReport`). `orchestraWiring.js` hands `{runId, repoPath, view}` to
+  `src/memoryruncapture.js`, fire and forget: nothing there can delay or break the report
+  or its email.
+- **What the model reads** (`src/memoryrundigest.js`): the facts of the same view the
+  report renders, one clean capped line each: every package with its state and error,
+  stalls, automatic retries, resumes, escalation, nudges, verify fix-up rounds, the verify
+  command and the last lines of its output, the stall history, the worker's last words,
+  the files a pushed package changed; the merges left out, the second pass, the red
+  self-check and its tail; a hold on the machine; the run-level automatic fixes. At most
+  30,000 characters, secret-scrubbed before the call. The prompt is the session prompt
+  with a run introduction and no status note.
+- **One call per run, never twice.** A ledger (`memory-runcapture.local.json`) gets the
+  run id before the model is called, so a second finish pass, a Retry, a failed call or a
+  crash never pays for the same run again. A run in which no worker started costs no call.
+- **Same filter as a session:** `checkRecord`, secret scan, near-duplicates, the
+  usefulness floor, at most five, the rejected titles as "not wanted". Candidates wait in
+  the inbox as `observed`, with the source `captured from God Mode run <runId> on
+  <machine>`.
+- **Skipped** for a project with memory switched off and while its inbox is full (40
+  waiting); a skipped run gets no ledger entry.
+- **Outside content (decision 61):** the run's worker transcripts (the Claude Code
+  folders of each package worktree) are scanned for `WebFetch`, `WebSearch`, `Agent`,
+  `Task` and foreign `mcp__*` calls. A worker that ran but whose transcript cannot be
+  found counts as one, so its text is still flagged. The count goes into `source` and the
+  inbox asks to check the text.
+
 ### Bonus, wanted by Mati on 2026-11-11: a live work map in LunaCore
 
 Mati wants a panel in the HUD that shows what the session in the active tab is doing,
