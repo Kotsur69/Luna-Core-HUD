@@ -76,6 +76,8 @@ test('an open edit takes only Enter (save) and Escape (cancel)', () => {
   // The text area keeps Enter for a new line; Ctrl+Enter saves there.
   assert.equal(keyCommand(press('Enter'), editing('text')), null);
   assert.equal(keyCommand(press('Enter', { ctrlKey: true }), editing('text')), COMMANDS.SAVE);
+  // Enter that ends an IME composition is part of the typing, not a save.
+  assert.equal(keyCommand(press('Enter', { isComposing: true }), editing('line')), null);
   // Typing letters into the draft, or pressing them on its buttons, does nothing else.
   for (const key of ['a', 'r', 'e', 'g', 'j', 'ArrowDown']) {
     assert.equal(keyCommand(press(key), editing('line')), null, key);
@@ -105,6 +107,9 @@ test('keyCommand refuses junk', () => {
 test('typingIn tells a text area from a one-line field and from everything else', () => {
   assert.equal(typingIn({ tagName: 'TEXTAREA' }), 'text');
   assert.equal(typingIn({ tagName: 'INPUT' }), 'line');
+  assert.equal(typingIn({ tagName: 'INPUT', type: 'text' }), 'line');
+  // The auto-accept switches are checkboxes: nobody types into them.
+  assert.equal(typingIn({ tagName: 'INPUT', type: 'checkbox' }), '');
   assert.equal(typingIn({ tagName: 'SELECT' }), 'line');
   assert.equal(typingIn({ tagName: 'DIV', isContentEditable: true }), 'line');
   assert.equal(typingIn({ tagName: 'BUTTON' }), '');
@@ -141,6 +146,10 @@ test('the window wires the keys through the overlay and only uses channels prelo
   const panel = read('src/renderer/modules/memoryinbox.js');
   const overlay = read('src/renderer/modules/talloverlay.js');
   assert.match(panel, /onKeydown: onKey/);
+  // Only keyboard focus selects an entry: a mouse user's first Esc still closes the window.
+  assert.match(panel, /matches\(':focus-visible'\)\) markSelected/);
+  // The retire question is on screen before a second R can answer it.
+  assert.match(panel, /\[COMMANDS\.RETIRE_ASK\]: async \(key\) => \{\s*settling\+\+;/);
   assert.match(panel, /from '\.\/memoryinboxkeys\.js'/);
   // The top overlay's handler runs before Esc closes it.
   assert.ok(overlay.indexOf('top.onKeydown(e)') < overlay.indexOf('top.close()'));

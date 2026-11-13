@@ -507,16 +507,43 @@ function collectApproval(state) {
   return items.slice(0, MAX_APPROVALS);
 }
 
+const MEMORY_TYPE_RE = /^[a-z][a-z-]{0,19}$/;
+const MAX_AUTO_OFF_ITEMS = 8;
+
+/**
+ * Auto-accept switches that turned themselves off (src/memoryautoaccept.js):
+ * one item per switch-off, keyed by its time so a dismissed one stays gone.
+ * @param {unknown} list [{type, rate, at}]
+ */
+function autoOffItems(list) {
+  const items = [];
+  for (const e of Array.isArray(list) ? list.slice(0, MAX_AUTO_OFF_ITEMS) : []) {
+    if (!isObject(e) || typeof e.type !== 'string' || !MEMORY_TYPE_RE.test(e.type) || !isTime(e.at) || !Number.isFinite(e.rate)) continue;
+    const rate = Math.round(Math.min(1, Math.max(0, e.rate)) * 100);
+    items.push({
+      id: `memory:autooff:${e.type}:${e.at}`,
+      kind: 'info',
+      source: 'memory',
+      title: `Auto-accept for ${e.type} switched itself off (${rate}% approved)`,
+      key: 'hub.item.memoryAutoOff',
+      vars: { type: e.type, rate },
+      at: e.at,
+      primary: { action: 'openMemoryInbox' },
+    });
+  }
+  return items;
+}
+
 /**
  * Luna Core Memory, phase 4: memories capture proposed that wait for approval
  * (src/memoryinbox.js). Keyed by the count, so a new candidate brings a
  * dismissed item back.
- * @param {{count:number, now:number}} state
+ * @param {{count:number, now:number, autoOff?: {type: string, rate: number, at: number}[]}} state
  */
 function collectMemory(state) {
-  const count = isObject(state) && Number.isSafeInteger(state.count) ? state.count : 0;
-  if (count < 1 || !isTime(state.now)) return [];
-  return [{
+  if (!isObject(state) || !isTime(state.now)) return [];
+  const count = Number.isSafeInteger(state.count) ? state.count : 0;
+  const waiting = count < 1 ? [] : [{
     id: `memory:inbox:${count}`,
     kind: 'needs',
     source: 'memory',
@@ -526,6 +553,7 @@ function collectMemory(state) {
     at: midnight(state.now),
     primary: { action: 'openMemoryInbox' },
   }];
+  return [...waiting, ...autoOffItems(state.autoOff)];
 }
 
 /** Source name -> collector. src/hubipc.js builds one state per name. */

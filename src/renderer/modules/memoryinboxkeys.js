@@ -42,15 +42,18 @@ export const COMMANDS = Object.freeze({
 
 const MOVES = { ArrowDown: COMMANDS.NEXT, j: COMMANDS.NEXT, ArrowUp: COMMANDS.PREV, k: COMMANDS.PREV };
 const TYPING_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+/** Inputs nobody types into: the keys keep working when one has the focus. */
+const CLICK_INPUTS = new Set(['checkbox', 'radio', 'button', 'submit', 'reset']);
 
 /**
  * Whether a key event's target is a field the user types into.
- * @param {{tagName?: string, isContentEditable?: boolean}|null|undefined} target
+ * @param {{tagName?: string, type?: string, isContentEditable?: boolean}|null|undefined} target
  * @returns {'' | 'line' | 'text'} '' = not a field; 'text' = a multi-line text area
  */
 export function typingIn(target) {
   if (!target) return '';
   if (target.tagName === 'TEXTAREA') return 'text';
+  if (target.tagName === 'INPUT' && CLICK_INPUTS.has(String(target.type).toLowerCase())) return '';
   if (TYPING_TAGS.has(target.tagName) || target.isContentEditable === true) return 'line';
   return '';
 }
@@ -83,7 +86,7 @@ function reviewLetter(letter, ctx) {
 
 /**
  * What a key press means in the memory window.
- * @param {{key: string, ctrlKey?: boolean, altKey?: boolean, metaKey?: boolean, repeat?: boolean}} event
+ * @param {{key: string, ctrlKey?: boolean, altKey?: boolean, metaKey?: boolean, repeat?: boolean, isComposing?: boolean}} event
  * @param {{tab: 'inbox'|'review', typing?: '' | 'line' | 'text', editing?: boolean,
  *   confirming?: boolean, selected?: boolean, canGlobal?: boolean}} ctx
  *   typing = typingIn(event.target); editing = an edit form is open; confirming = the
@@ -93,6 +96,8 @@ function reviewLetter(letter, ctx) {
  */
 export function keyCommand(event, ctx) {
   if (!event || typeof event.key !== 'string' || !ctx) return null;
+  // A key that ends an IME composition belongs to the text being typed.
+  if (event.isComposing) return null;
   const { key } = event;
   const mod = { ctrl: Boolean(event.ctrlKey), alt: Boolean(event.altKey), meta: Boolean(event.metaKey) };
   const typing = ctx.typing || '';

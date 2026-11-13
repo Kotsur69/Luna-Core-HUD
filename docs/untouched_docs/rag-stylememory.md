@@ -292,7 +292,7 @@ Not built in phase 4:
   auto-memory still does that job and its index stays loaded (see above).
 - **The "where we stopped" note.** Still proposed, not decided.
 - **Auto-accept for low-risk types** (question 4). Everything is approved by hand until
-  the approval rate is known.
+  the approval rate is known. (Built later as an opt-in switch per type, 2026-11-13.)
 
 To judge after a week (section 9, inbox quality): the share of candidates approved. Under
 about a third means the extractor prompt is wrong.
@@ -312,14 +312,14 @@ Recommended by Luna, in the order she would build them. None is decided yet.
 3. **The "where we stopped" note.** One short note per project, overwritten at each
    capture: what was being built, what is done, what is left. It is shown on the card
    and needs no approval, because it is a status that decays, not a fact.
-4. **Keyboard review in the inbox.** `A` approve, `R` reject, `E` edit, arrows to move.
+4. **(Built 2026-11-13, see below.) Keyboard review in the inbox.** `A` approve, `R` reject, `E` edit, arrows to move.
 5. **Approve from the phone.** The inbox already syncs; the phone app needs the list and
    two buttons.
 6. **Embeddings (phase 2b).** Three of the four misses on the golden set are Polish
    questions against English memories. It matters more as captured memories pile up.
 7. **Capture a God Mode run once, from its run report,** not per worker tab (decision
    49). One model call per run, and workers meet exactly the gotchas worth keeping.
-8. **Auto-accept low-risk types** once a type's approval rate has stayed above about
+8. **(Built 2026-11-13, opt-in, see below.) Auto-accept low-risk types** once a type's approval rate has stayed above about
    90% for a few weeks (question 4).
 
 Items 1 and 2 were built in phase 5 (decisions 62 to 64 below). Items 3 to 8 are separate
@@ -481,6 +481,66 @@ captured one by one.
   `Task` and foreign `mcp__*` calls. A worker that ran but whose transcript cannot be
   found counts as one, so its text is still flagged. The count goes into `source` and the
   inbox asks to check the text.
+
+### Built after phase 5, 2026-11-13: keyboard review in the memory window
+
+Item 4 of the improvements above. Unnumbered, like the two sections before it.
+
+- **Keys** (`src/renderer/modules/memoryinboxkeys.js`, pure): Up/Down or J/K move the
+  selected entry on both tabs. On "To approve": `A` approve, `R` reject, `E` edit, `G`
+  make global (a waiting project entry only). On "To check": `V` still true, `R` asks to
+  retire and a second `R` deletes (the two-step question stays). Enter saves an open edit
+  (Ctrl+Enter inside the text area), Escape cancels the edit or the retire question, else
+  clears the selection; with nothing selected Escape closes the window as before.
+- **Not while typing**, not with Ctrl/Alt/Meta, and a held letter does not repeat its
+  action (holding `A` must not approve the whole list). While an edit is open only save
+  and cancel work.
+- **The selection follows the decision:** after approve, reject, retire or still true it
+  moves to the entry that took the decided one's place. Tab or a click into an entry
+  selects it too. The selected entry has a visible outline; the footer has a one-line key
+  hint (pl and en). Existing IPC only.
+- The tall overlay (`talloverlay.js`) gained an optional `onKeydown` hook so Escape can be
+  used by the window before it closes it.
+
+### Built after phase 5, 2026-11-13: opt-in auto-accept per type
+
+Item 8 of the improvements above and question 4, answered as "(a), opt-in".
+
+- **Off by default for every type.** A type's switch is only offered (shown in the memory
+  window under "To approve") when this PC's memory log has at least 20 decisions for it in
+  the last 28 days with at least 90% approved: approved / (approved + rejected). An
+  approval after an edit counts as approved and is shown apart. Main refuses to switch a
+  type on that is not offered (`memory:auto-set`); off always works. Constants in
+  `src/memoryautoaccept.js`.
+- **Never auto-accepted, even with the switch on:** a candidate that proposes a supersede,
+  is global or was suggested global, comes from a session or run that read outside
+  content (decision 61), or is a near-duplicate of an entry waiting in the inbox. Those
+  wait as before.
+- **Landing:** session capture and run capture decide each candidate right before it is
+  written (`createLanding`). An auto-accepted one is written `confirmed`, verified today,
+  with `, auto-accepted` at the end of its source, and the log gets `auto-accepted` after
+  `proposed`. Any failure in that check leaves the candidate waiting.
+- **Undo:** the memory window lists the auto-accepts created in the last 7 days with an
+  Undo button (`memory:auto-undo`). Undo is a reject: the file is deleted on every PC, the
+  log gets `rejected` with the title (it goes back to the extractor as "not wanted").
+  Only a memory on that list can be undone.
+- **It keeps measuring itself.** Once a type is on, an auto-accept that was not undone
+  counts as approved, and an undo (or retiring it later from "To check") as rejected.
+  When the rate falls under 80% on at least 5 decisions the switch turns itself off
+  (checked at capture, on every inbox read, after an undo and on the hub tick), the log
+  gets `auto-off`, and the hub shows "Auto-accept for <type> switched itself off" for a
+  week (that PC only: the log is not synced).
+- **Synced like `memory-on:<project>`:** `memory-autoaccept.local.json` locally, unit
+  `memory-auto:<type>` = `{on: true}` in the `config` scope. A type turned off on one PC
+  is off on the other after the next sync. The log is not synced, so a PC auto-accepts
+  only while its own log holds 20 decisions for the type; a fresh PC, or a switch that
+  arrived from the cloud, lets candidates wait until it has them (security review,
+  2026-11-13).
+- **Known limits.** An auto-accept nobody undoes counts as approved for the whole 28-day
+  window, though Undo is offered for 7 days. Web access through the shell (`curl`,
+  `gh api`) is still not counted as outside content (decision 61), so such a session's
+  candidates are not excluded; with auto-accept on for their type they skip the human
+  review that used to catch that.
 
 ### Bonus, wanted by Mati on 2026-11-11: a live work map in LunaCore
 

@@ -46,6 +46,7 @@ const { buildPrompt, candidatesFrom, outsideNote, withNote, LOW_USEFULNESS } = r
 const { pendingCount } = require('./memoryinbox');
 const { rejectedTitles } = require('./memorylog');
 const { statusFrom, saveNote } = require('./memorynote');
+const { createLanding, autoEvent } = require('./memoryautoaccept');
 const { scrub } = require('./hostscrub');
 
 const LEDGER_FILE = 'memory-capture.local.json';
@@ -243,11 +244,15 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
       return { entry: next, reason: res.reason, saved: 0, called };
     }
     let saved = 0;
-    for (const record of res.records) {
+    // Opt-in per type: a candidate may land confirmed (src/memoryautoaccept.js).
+    const land = createLanding({ file: paths.autoAccept, dir: paths.dir, log, now: now() });
+    for (const candidate of res.records) {
       try {
+        const { record, auto } = land(candidate);
         writeRecord(paths.dir, record);
         saved++;
         if (log) log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type, usefulness: record.usefulness });
+        if (log && auto) log.add(autoEvent(record));
       } catch (err) {
         // One candidate that cannot be written must not make the piece be paid for again.
         console.error('[memory] candidate not written:', errText(err));
