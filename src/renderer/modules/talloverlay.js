@@ -27,10 +27,11 @@ function el(tag, cls, text) {
 export const anyTallOpen = () => stack.length > 0;
 
 /**
- * @param {{id:string, glyph:string, titleKey:string, onClose?:() => void}} spec
+ * @param {{id:string, glyph:string, titleKey:string, onClose?:() => void, onKeydown?:(e:KeyboardEvent) => boolean}} spec
+ *   onKeydown = the overlay's own keys while it is on top; true = handled (Esc then does not close it)
  * @returns {{body:HTMLElement, open:() => void, close:() => void, isOpen:() => boolean, setTitle:(text:string) => void}}
  */
-export function createTallOverlay({ id, glyph, titleKey, onClose }) {
+export function createTallOverlay({ id, glyph, titleKey, onClose, onKeydown }) {
   const root = el('div', 'termcustom tall-overlay');
   root.id = id;
   root.tabIndex = -1;
@@ -92,7 +93,7 @@ export function createTallOverlay({ id, glyph, titleKey, onClose }) {
     label();
   }
 
-  const api = { body, open, close, isOpen, setTitle };
+  const api = { body, open, close, isOpen, setTitle, onKeydown: typeof onKeydown === 'function' ? onKeydown : null };
   backdrop.addEventListener('click', close);
   closeBtn.addEventListener('click', close);
   onLangChange(label);
@@ -102,13 +103,22 @@ export function createTallOverlay({ id, glyph, titleKey, onClose }) {
 
 // Capture phase on window, registered before any panel that imports this
 // module - so the top overlay gets Esc first and nothing under it closes.
+// The top overlay's own key handler goes first: an Esc it used (cancel an
+// edit, clear a selection) does not close it.
 window.addEventListener(
   'keydown',
   (e) => {
-    if (e.key !== 'Escape' || !stack.length) return;
+    if (!stack.length) return;
+    const top = stack[stack.length - 1];
+    if (top.onKeydown && top.onKeydown(e)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (e.key !== 'Escape') return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    stack[stack.length - 1].close();
+    top.close();
   },
   true
 );

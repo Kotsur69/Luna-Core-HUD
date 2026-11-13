@@ -132,6 +132,8 @@ export async function refresh(opts = {}) {
 export const project = () => (boardProjectId === undefined ? activeProjectId : boardProjectId);
 /** The board's run view, or null (nothing planned for the board's project). */
 export const view = () => runs.get(project()) || null;
+/** Any project's run view, or null: the live map shows a run without moving the board. */
+export const viewOf = (projectId) => runs.get(runKey(projectId)) || null;
 /** The active tab's project (planning goes by it). */
 export const activeProject = () => activeProjectId;
 /** Whether the board shows the active tab's project. */

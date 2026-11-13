@@ -87,6 +87,7 @@ const {
   withPlainResume,
   withIntakeMcp,
   withMemoryCard,
+  memoryCardLoaded,
   intakeState,
   withAccountResume,
   findExecutable,
@@ -251,21 +252,26 @@ const { startMemory, memoryPaths } = require('./memorysync');
 const { createMemoryReader } = require('./memorytools');
 const { createEmbedder, createVectorStore, vectorsPath } = require('./memoryembed');
 const { scan: scanMemory } = require('./memorystore');
+const { createProposer: createMemoryProposer } = require('./memorypropose');
 const { cardFor, writeCard, removeCard } = require('./memorycard');
 const { readEnabled: readMemoryProjects } = require('./memoryprojects');
 const { projectFromRepoKey } = require('./memoryrecord');
 const { createRepoKeys, findRepo } = require('./missionrepokey');
 // Phase 4: capture from finished sessions (src/memorycapture.js) and the inbox.
 const { createCapture } = require('./memorycapture');
+// One capture per finished God Mode run, from its report (src/memoryruncapture.js).
+const { createRunCapture } = require('./memoryruncapture');
 const { listInbox: listMemoryInbox } = require('./memoryinbox');
 const { registerMemoryIpc, reviewCount: memoryReviewCount } = require('./memoryipc');
 const { runJob: runMemoryJob } = require('./missionrunner');
 // Phase 5: the capture and usage log, and the review list of confirmed memories.
-const { createLog: createMemoryLog, logPath: memoryLogPath } = require('./memorylog');
+const { createLog: createMemoryLog, logPath: memoryLogPath, forSession: forMemorySession } = require('./memorylog');
 const { toolVerdict: memoryToolVerdict } = require('./memoryreview');
+const { enforceAutoOff: enforceMemoryAutoOff, recentAutoOffs: recentMemoryAutoOffs } = require('./memoryautoaccept');
 const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
 let memorySync = null;
 let memoryCapture = null;
+let memoryRunCapture = null;
 // The notification hub (src/hubipc.js): set in registerIpc(), its done
 // provider joins the config sync.
 let hubApi = null;
@@ -594,6 +600,9 @@ function sessionSummary(s) {
     alive: s.alive || s.preparing === true,
     // 'ready' | 'off' | 'none' | null - drives the to-do widget's ✨ button.
     todoTools: s.todoTools || null,
+    // Whether this tab's `claude` started with the memory project card: the
+    // work map's Memory station mark. null = not a `claude` tab, or not started yet.
+    memoryCard: typeof s.memoryCard === 'boolean' ? s.memoryCard : null,
     // A phone-driven host session (src/hostchattabs.js): no input.
     readOnly: s.readOnly === true,
     // The tab's status light (src/sessionstatus.js); 'session:status' pushes changes.
@@ -1072,6 +1081,23 @@ function prepareCard(session, tools) {
 }
 
 /**
+ * Logs one `claude` tab start, with or without its card (src/memorylog.js
+ * `card`): the start of a session for `luna memory stats`. Never fails a launch.
+ * @param {Session} session
+ * @param {boolean} loaded
+ * @param {boolean} tools whether the tab got the memory tools at all
+ * @returns {boolean} `loaded`, for the tab summary
+ */
+function logCardStart(session, loaded, tools) {
+  try {
+    memoryLogOf().add({ ev: 'card', session: session.id, loaded, tools, project: memoryProjectOf(session) });
+  } catch (err) {
+    console.error('[memory] card start not logged:', (err && (err.code || err.message)) || 'error');
+  }
+  return loaded;
+}
+
+/**
  * What memory capture may read of one tab: its transcript and its project.
  * Null for a tab with no Claude transcript, for a project with memory switched
  * off, and for a God Mode worker: a run starts many short worker sessions, and
@@ -1138,13 +1164,41 @@ function memoryFor(session) {
     // memory_verify: a session may refresh a verification date or flag a
     // memory for review, nothing more (src/memoryreview.js toolVerdict).
     verify: (report) => {
-      const res = memoryToolVerdict(memoryPaths(userDir()).dir, { ...report, today: new Date().toISOString().slice(0, 10), log: memoryLogOf() });
+      const res = memoryToolVerdict(memoryPaths(userDir()).dir, { ...report, today: new Date().toISOString().slice(0, 10), log: memorySessionLog(session.id) });
       if (res.ok && res.changed && memorySync) memorySync.soon();
       if (res.ok && (res.changed || res.status === 'flagged')) send('memory:changed', {});
       return res;
     },
-    log: (event) => memoryLogOf().add(event),
+    // memory_propose: an `observed` inbox entry of this tab's project, never
+    // confirmed, never global; at most 5 per tab (src/memorypropose.js).
+    // Not for God Mode workers, as capture is not (captureSourceOf): a run
+    // starts many worker sessions, each with an allowance of its own.
+    // sessionId comes last so the tool's input can never choose whose allowance it uses.
+    propose: orchestraRuns.ownsSession(session.id) ? undefined : (proposal) => {
+      const res = memoryProposerOf().propose({
+        ...proposal,
+        session: (session.watcher && session.watcher.sessionUuid) || session.transcriptId || session.id,
+        sessionId: session.id,
+      });
+      if (res.ok && res.created) {
+        if (memorySync) memorySync.soon();
+        send('memory:changed', {});
+      }
+      return res;
+    },
+    // Tagged with the tab id: `luna memory stats` counts each session's calls.
+    log: (event) => memorySessionLog(session.id).add(event),
   };
+}
+
+/** The memory log, tagging what it adds with one tab's id (src/memorylog.js forSession). */
+const memorySessionLog = (sessionId) => forMemorySession(memoryLogOf(), sessionId);
+
+let memoryProposer = null;
+/** One proposer for the app: it holds every tab's memory_propose count. */
+function memoryProposerOf() {
+  if (!memoryProposer) memoryProposer = createMemoryProposer({ dir: memoryPaths(userDir()).dir, machine: machineName(os.hostname()) });
+  return memoryProposer;
 }
 
 let memoryLog = null;
@@ -1152,6 +1206,18 @@ let memoryLog = null;
 function memoryLogOf() {
   if (!memoryLog) memoryLog = createMemoryLog(memoryLogPath(userDir()));
   return memoryLog;
+}
+
+/** Turns off the auto-accept switches whose rate fell, and lists the recent ones for the hub. */
+function memoryAutoOffNotices() {
+  const file = memoryPaths(userDir()).autoAccept;
+  const log = memoryLogOf();
+  const now = Date.now();
+  const events = log.read();
+  const turnedOff = enforceMemoryAutoOff({ file, events, now, log }).length > 0;
+  if (turnedOff && configSync) configSync.soon();
+  // The log is read again only when this call added an `auto-off` line to it.
+  return recentMemoryAutoOffs(turnedOff ? log.read() : events, now);
 }
 
 /**
@@ -1368,6 +1434,7 @@ const orchestraCtx = {
   sessions,
   send,
   readUiPrefs,
+  writeUiPrefs,
   readTodos,
   writeTodos,
   createSession,
@@ -1381,6 +1448,8 @@ const orchestraCtx = {
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
   // A transient failure leaves the run email pending (src/godmodePending.js).
   onReport: (planId, text, summary) => reportMail.runMail.report(planId, text, summary),
+  // A finished run's lessons, once per run, for projects with memory on (src/memoryruncapture.js).
+  onRunReport: (run) => (memoryRunCapture ? memoryRunCapture.capture(run) : null),
   // The phone's live run views (godmodelivepub.js), one per project.
   onLive: (view, projectId) => {
     const key = typeof projectId === 'string' ? projectId : null;
@@ -1830,9 +1899,10 @@ function spawnInto(session, profile, launch = null) {
   // Crash resume (resumeLastTabs): the same conversation, nothing sent.
   const resumeWith = session.resumeQuiet ? withPlainResume : withAccountResume;
   const resumeCommand = session.resumeId
-    ? resumeWith(baseCommand, session.resumeId, session.launchTask || null)
+    ? resumeWith(baseCommand, session.resumeId, session.launchTask || null, session.resumeMessage || null)
     : null;
   session.resumeQuiet = false;
+  session.resumeMessage = null;
   // A plan-run worker never falls back to the unlocked profile command, not on
   // its first launch and not on a restart / failover (orchestraPlanRunLaunch.js).
   const taskCommand = session.task
@@ -1959,6 +2029,7 @@ function spawnInto(session, profile, launch = null) {
   // Whether the to-do widget's ✨ can work in this tab - see intakeState().
   // null while a start command is still on its way; a bare shell is 'none'.
   session.todoTools = startCommand ? null : 'none';
+  session.memoryCard = null;
   if (startCommand) {
     const intakeConfig = prepareIntake(session).catch(() => null);
     setTimeout(() => {
@@ -1969,9 +2040,11 @@ function spawnInto(session, profile, launch = null) {
         // The memory tools come with the intake server, so the card only names
         // them when that was attached.
         const hasTools = intakeState(startCommand, launched) === 'ready';
-        const carded = isOverride || !isClaudeCommand(startCommand) ? launched : withMemoryCard(launched, prepareCard(session, hasTools));
+        const claude = !isOverride && isClaudeCommand(startCommand);
+        const carded = claude ? withMemoryCard(launched, prepareCard(session, hasTools)) : launched;
         proc.write(`${carded}\r`);
         session.todoTools = intakeState(startCommand, launched);
+        session.memoryCard = claude ? logCardStart(session, memoryCardLoaded(launched, carded), hasTools) : null;
         broadcastSessions();
       });
     }, 600);
@@ -2091,6 +2164,9 @@ function createSession(opts = {}) {
     // resumeQuiet = send nothing (crash resume), main-only like cwd.
     resumeId: opts.resumeId || null,
     resumeQuiet: Boolean(opts.resumeQuiet),
+    // First message of that reopened conversation (God Mode's resume after a
+    // PC shutdown, orchestraResume.js); null = the account-failover one.
+    resumeMessage: typeof opts.resumeMessage === 'string' ? opts.resumeMessage : null,
     size: { ...lastSize },
     watcher: null,
     gitWatcher: null,
@@ -3352,6 +3428,9 @@ function registerIpc() {
     // Resolved per call: the user folder may not exist yet when this is registered.
     log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
     roots: memoryRoots,
+    // Auto-accept per type (src/memoryautoaccept.js): the switches sync in the config scope.
+    autoFile: () => memoryPaths(userDir()).autoAccept,
+    onSettingsChanged: () => configSync && configSync.soon(),
   });
   // Notification hub (face icon + right drawer): docs/tbc_docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
   // Other PCs' runs come from their `godmode` rows; done marks sync as config units.
@@ -3378,6 +3457,8 @@ function registerIpc() {
         const today = new Date().toISOString().slice(0, 10);
         return listMemoryInbox(dir).total + memoryReviewCount({ dir, today, events: memoryLogOf().read(), roots: memoryRoots() });
       },
+      // Auto-accept switches that turned themselves off lately (checked here too, src/memoryautoaccept.js).
+      memoryAutoOff: () => memoryAutoOffNotices(),
       hostOn: () => {
         const control = require('./hostmain').hostControl();
         return Boolean(control && control.status().on);
@@ -4051,6 +4132,8 @@ app.whenReady().then(() => {
       const parts = lifeParts(names);
       if (parts.length) send('life:changed', { parts });
       if (names.includes('hubprefs')) send('hub:prefsChanged', {});
+      // Another PC switched a memory type's auto-accept: the memory window repaints.
+      if (names.includes('memory-autoaccept')) send('memory:changed', {});
     },
     extraProviders: hubApi ? [hubApi.doneProvider, hubApi.seenProvider, hubApi.prefsProvider] : [],
   });
@@ -4074,27 +4157,37 @@ app.whenReady().then(() => {
   // single-run file older builds wrote moves to the per-project layout first.
   // Memory capture spends a small-model call per finished session: not in a probe.
   if (!probing) {
+    // Lean: no tools, no settings, no MCP servers. The digest goes in through stdin.
+    const runMemoryExtractor = ({ prompt }) =>
+      runMemoryJob({
+        prompt,
+        model: 'haiku',
+        lean: true,
+        stdin: true,
+        env: withClaudeOnPath(buildSessionEnv(process.env, {})),
+        timeoutMs: MEMORY_EXTRACT_TIMEOUT_MS,
+      });
+    const onMemorySaved = () => {
+      if (memorySync) memorySync.soon();
+      send('memory:changed', {});
+    };
     memoryCapture = createCapture({
       configDir: userDir(),
       machine: machineName(os.hostname()),
-      // Lean: no tools, no settings, no MCP servers. The digest goes in through stdin.
-      run: ({ prompt }) =>
-        runMemoryJob({
-          prompt,
-          model: 'haiku',
-          lean: true,
-          stdin: true,
-          env: withClaudeOnPath(buildSessionEnv(process.env, {})),
-          timeoutMs: MEMORY_EXTRACT_TIMEOUT_MS,
-        }),
+      run: runMemoryExtractor,
       live: () => [...sessions.values()].map(captureSourceOf).filter(Boolean),
       log: memoryLogOf(),
-      onSaved: () => {
-        if (memorySync) memorySync.soon();
-        send('memory:changed', {});
-      },
+      onSaved: onMemorySaved,
     });
     memoryCapture.start();
+    memoryRunCapture = createRunCapture({
+      configDir: userDir(),
+      machine: machineName(os.hostname()),
+      run: runMemoryExtractor,
+      projectOf: (repoPath) => memoryRepoKeys.resolve(repoPath).key,
+      log: memoryLogOf(),
+      onSaved: onMemorySaved,
+    });
   }
   if (!probing) {
     orchestraStore.migrateLegacy((raw) => legacyRunProject(orchestraCtx, raw));

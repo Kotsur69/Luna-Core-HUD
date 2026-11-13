@@ -123,3 +123,16 @@ test('withSessionId refuses without a uuid', () => {
   assert.equal(withSessionId('claude', ''), null);
   assert.equal(withSessionId('claude', undefined), null);
 });
+
+// ---- memoryCardLoaded --------------------------------------------------------------
+
+test('memoryCardLoaded is true only when withMemoryCard really attached the card', () => {
+  const { withMemoryCard: attach, memoryCardLoaded } = require('../src/launch.js');
+  const card = 'C:\cfg\memory-card-s1.local.md';
+
+  assert.equal(memoryCardLoaded('claude', attach('claude', card)), true);
+  assert.equal(memoryCardLoaded('claude', attach('claude', null)), false);
+  assert.equal(memoryCardLoaded('claude --bare', attach('claude --bare', card)), false);
+  assert.equal(memoryCardLoaded('  claude  ', attach('  claude  ', null)), false, 'trimming alone is not a card');
+  assert.equal(memoryCardLoaded('claude', undefined), false);
+});

@@ -103,6 +103,18 @@ test('every inbox decision is logged, and only a rejection keeps its title', (t)
   ]);
 });
 
+test('a decision carries the usefulness score of the entry to the log', (t) => {
+  const s = setup(t, [rec('busy', { usefulness: 72 }), rec('noise', { usefulness: 35 })]);
+
+  s.invoke('memory:approve', KEY);
+  s.invoke('memory:reject', `${PROJECT}/noise`);
+
+  assert.deepEqual(s.logged(), [
+    { ev: 'approved', key: KEY, type: 'gotcha', usefulness: 72 },
+    { ev: 'rejected', key: `${PROJECT}/noise`, type: 'gotcha', title: 'Title of noise', usefulness: 35 },
+  ]);
+});
+
 test('memory:inbox reports the last week of capture: proposed, decided and the approval rate', (t) => {
   // Distinct texts: near-duplicates would be folded into one inbox entry.
   const s = setup(t, [

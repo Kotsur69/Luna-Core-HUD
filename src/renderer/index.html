@@ -44,6 +44,12 @@
   <link rel="stylesheet" href="life.css" />
   <!-- Notification hub: face chip + right drawer (Ctrl+Shift+H), same reason. -->
   <link rel="stylesheet" href="hub.css" />
+  <!-- Live map (Ctrl+Shift+G): tabs + the God Mode package graph, same reason. -->
+  <link rel="stylesheet" href="livemap.css" />
+  <!-- Live map, Sessions tab: the work map (modules/workmap.js), same reason. -->
+  <link rel="stylesheet" href="workmap.css" />
+  <!-- Live map, Luna's Work tab: the iteration loop (modules/liveMapLunasWork.js), same reason. -->
+  <link rel="stylesheet" href="lunasworkmap.css" />
 </head>
 <body>
   <!-- ================= HUD =================
@@ -1282,6 +1288,42 @@
       </div>
       <div class="palette__foot">
         <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd> <span data-i18n="mc.panel.toggle">przelacz</span></span>
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Live map (Ctrl+Shift+G) ================= -->
+  <!-- modules/liveMap.js (the shell) + modules/liveMapGodMode.js (the God Mode
+       tab, built in JS on first show). Sessions and Luna's Work keep these
+       placeholders until a later package registers them (registerTab). -->
+  <div id="livemap" class="palette mission-overlay livemap-overlay" tabindex="-1" hidden>
+    <div class="palette__backdrop" data-livemap-close></div>
+    <div class="palette__modal" role="dialog" aria-modal="true" data-i18n-aria="lm.title" aria-label="Mapa na zywo">
+      <div class="palette__bar">
+        <span class="palette__glyph" aria-hidden="true">&#x2B21;</span>
+        <span class="mission-overlay__heading" data-i18n="lm.title">Mapa na zywo</span>
+        <div class="lm-tabs" role="tablist" data-i18n-aria="lm.tabs" aria-label="Widoki mapy na zywo">
+          <button type="button" class="lm-tabs__tab" role="tab" id="lm-tab-sessions" data-lm-tab="sessions" aria-controls="lm-panel-sessions" aria-selected="false" tabindex="-1" data-i18n="lm.tab.sessions">Sesje</button>
+          <button type="button" class="lm-tabs__tab" role="tab" id="lm-tab-godmode" data-lm-tab="godmode" aria-controls="lm-panel-godmode" aria-selected="true" tabindex="0" data-i18n="lm.tab.godmode">God Mode</button>
+          <button type="button" class="lm-tabs__tab" role="tab" id="lm-tab-lunaswork" data-lm-tab="lunaswork" aria-controls="lm-panel-lunaswork" aria-selected="false" tabindex="-1" data-i18n="lm.tab.lunaswork">Luna's Work</button>
+        </div>
+        <button type="button" class="libraries__closebtn" data-livemap-close data-i18n-title="lm.close" data-i18n-aria="lm.close" title="Zamknij mape na zywo" aria-label="Zamknij mape na zywo">×</button>
+      </div>
+      <div class="lm-body">
+        <section class="lm-panel" id="lm-panel-sessions" role="tabpanel" aria-labelledby="lm-tab-sessions" data-lm-panel="sessions" hidden>
+          <p class="lm-placeholder" data-i18n="lm.placeholder.sessions">Mapa sesji pojawi sie tutaj w kolejnej aktualizacji.</p>
+        </section>
+        <section class="lm-panel lm-gm" id="lm-panel-godmode" role="tabpanel" aria-labelledby="lm-tab-godmode" data-lm-panel="godmode"></section>
+        <section class="lm-panel" id="lm-panel-lunaswork" role="tabpanel" aria-labelledby="lm-tab-lunaswork" data-lm-panel="lunaswork" hidden>
+          <p class="lm-placeholder" data-i18n="lm.placeholder.lunaswork">Widok Luna's Work pojawi sie tutaj w kolejnej aktualizacji.</p>
+        </section>
+      </div>
+      <div class="palette__foot">
+        <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>G</kbd> <span data-i18n="lm.foot.toggle">przelacz</span></span>
+        <span><kbd>Tab</kbd> <span data-i18n="lm.foot.nav">nastepna paczka</span></span>
+        <span><kbd>Enter</kbd> <span data-i18n="lm.foot.select">wybierz</span></span>
+        <span><kbd>+</kbd><kbd>−</kbd> <span data-i18n="lm.foot.zoom">powieksz / pomniejsz</span></span>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">zamknij</span></span>
       </div>
     </div>
@@ -2585,6 +2627,9 @@
     <div class="stimeline-modal__panel" role="dialog" aria-modal="true" aria-label="Podglad diffa pliku">
       <div class="stimeline-modal__bar">
         <span id="filediff-modal-title" class="stimeline-modal__time"></span>
+        <!-- Maximize / restore. Glyph, aria-pressed and both i18n keys are
+             flipped by modules/activefiles.js (setDiffMax); F toggles it too. -->
+        <button type="button" id="filediff-modal-maxbtn" class="stimeline-modal__closebtn filediff-modal__maxbtn" data-i18n-title="activefiles.diff.maximize" data-i18n-aria="activefiles.diff.maximize" aria-label="Powieksz" aria-pressed="false">□</button>
         <button type="button" id="filediff-modal-closebtn" class="stimeline-modal__closebtn" data-filediff-close data-i18n-title="activefiles.diff.close" aria-label="Zamknij">×</button>
       </div>
       <pre id="filediff-modal-text" class="stimeline-modal__text filediff__text"></pre>

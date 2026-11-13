@@ -14,6 +14,9 @@
 //             wrong (src/memorylog.js keeps the report).
 //   decayed   a `digest` older than DIGEST_DAYS drops out of search. The file
 //             stays: archived, not deleted.
+//   unopened  low priority: a confirmed memory last checked more than
+//             UNOPENED_DAYS ago that no memory_get on this PC opened in that
+//             time. Only said when this PC's log reaches back that far.
 //
 // The review list is every confirmed memory with at least one flag. Per entry
 // the user says "still true" (last_verified -> today, the flags clear) or
@@ -33,6 +36,8 @@ const path = require('path');
 const { splitKey } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord, fileFor } = require('./memorystore');
 const { openDisputes, acceptedMissing, DAY_MS } = require('./memorylog');
+const { lastOpened, oldestRead } = require('./memoryuse');
+const { FULL_AREA_IDS } = require('./memorycard');
 
 /** A gotcha or how-to unverified for this long is flagged (tools and commands change). */
 const STALE_DAYS = 180;
@@ -43,7 +48,11 @@ const DIGEST_DAYS = 60;
 const REVERIFY_DAYS = 7;
 const MAX_ANCHORS = 20;
 const MAX_ITEMS = 100;
-const FLAG_ORDER = ['disputed', 'anchor', 'stale'];
+/** A confirmed memory checked longer ago than this and never opened since is flagged, at low priority. */
+const UNOPENED_DAYS = 60;
+/** Worst first. A flag listed in LOW_FLAGS alone does not count toward the hub's number. */
+const FLAG_ORDER = ['disputed', 'anchor', 'stale', 'unopened'];
+const LOW_FLAGS = ['unopened'];
 
 const daysBetween = (from, to) => Math.floor((Date.parse(to) - Date.parse(from)) / DAY_MS);
 /** The day a memory was last known to be true. */
@@ -118,16 +127,34 @@ function supersededKeys(records) {
 }
 
 /**
+ * A predicate for "no memory_get opened it in UNOPENED_DAYS", or null when the
+ * log cannot tell: it holds no read that old (a new PC, a trimmed log).
+ * The day it was last checked counts too, so "still true" clears the flag.
+ * A memory the project card prints in full is read from the card, never
+ * opened, so it is not flagged.
+ */
+function unopenedCheck(events, today) {
+  const cutoff = Date.parse(today) - UNOPENED_DAYS * DAY_MS;
+  const oldest = oldestRead(events);
+  if (!Number.isFinite(cutoff) || oldest === null || oldest > cutoff) return null;
+  const opened = lastOpened(events);
+  return (key, record) =>
+    !FULL_AREA_IDS.includes(record.area) && daysBetween(checkedOn(record), today) > UNOPENED_DAYS && (opened.get(key) || 0) < cutoff;
+}
+
+/**
  * The confirmed memories that need a look.
  * @param {{records: [string, object][], today: string, events?: object[], roots?: object}} ctx
  *   records = memorystore.scan().records; events = the memory log;
  *   roots = {<project>: its folder on this PC}, for the anchor check
- * @returns {{items: object[], total: number}} worst first: disputed, then anchors, then stale
+ * @returns {{items: object[], total: number, urgent: number}} worst first: disputed, anchors,
+ *   stale, then unopened; urgent = how many carry more than a low-priority flag
  */
 function reviewList({ records, today, events = [], roots = {} }) {
   const disputes = openDisputes(events);
   const accepted = acceptedMissing(events);
   const gone = supersededKeys(records);
+  const unopened = unopenedCheck(events, today);
   const items = [];
   for (const [key, record] of records) {
     if (record.confidence !== 'confirmed' || gone.has(key)) continue;
@@ -138,6 +165,7 @@ function reviewList({ records, today, events = [], roots = {} }) {
     const missing = missingAnchors(record, roots[record.project]).filter((p) => !seen.has(p));
     if (missing.length) flags.push({ kind: 'anchor', missing });
     if (isStale(record, today)) flags.push({ kind: 'stale', since: checkedOn(record) });
+    if (unopened && unopened(key, record)) flags.push({ kind: 'unopened', days: UNOPENED_DAYS });
     if (!flags.length) continue;
     items.push({
       key,
@@ -153,7 +181,8 @@ function reviewList({ records, today, events = [], roots = {} }) {
   }
   const rank = (item) => Math.min(...item.flags.map((f) => FLAG_ORDER.indexOf(f.kind)));
   items.sort((a, b) => rank(a) - rank(b) || a.key.localeCompare(b.key));
-  return { items: items.slice(0, MAX_ITEMS), total: items.length };
+  const urgent = items.filter((item) => item.flags.some((f) => !LOW_FLAGS.includes(f.kind))).length;
+  return { items: items.slice(0, MAX_ITEMS), total: items.length, urgent };
 }
 
 /** The confirmed memory with this key, or a reason. */
@@ -241,5 +270,6 @@ module.exports = {
   STALE_TYPES,
   DIGEST_DAYS,
   REVERIFY_DAYS,
+  UNOPENED_DAYS,
   MAX_ITEMS,
 };

@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createLog, readLog, logPath, cleanEvent, captureStats, usage, rejectedTitles, openDisputes, acceptedMissing, LOG_FILE, MAX_LOG_BYTES, DAY_MS } = require('../src/memorylog.js');
+const { createLog, readLog, logPath, cleanEvent, captureStats, usage, rejectedTitles, openDisputes, acceptedMissing, decisionEvent, LOG_FILE, MAX_LOG_BYTES, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog.js');
 
 const PROJECT = 'github.com/acme/hud';
 const OTHER = 'github.com/acme/quote';
@@ -213,4 +213,76 @@ test('the missing files the user accepted are remembered per memory, latest veri
   ];
 
   assert.deepEqual([...acceptedMissing(events).get(key('a'))], ['src/older.js']);
+});
+
+test('a dropped candidate is logged with its reason and score; the score of any event must be 0-100', (t) => {
+  const { log } = setup(t);
+
+  assert.equal(log.add({ ev: 'dropped', project: PROJECT, reason: 'low usefulness', type: 'gotcha', title: 'Weak\nthing', usefulness: 12 }), true);
+  assert.equal(log.add({ ev: 'dropped', project: 'not a project', reason: 'low usefulness' }), false);
+  assert.equal(log.add({ ev: 'dropped', project: PROJECT, reason: '' }), false);
+  log.add({ ev: 'proposed', key: key('a'), type: 'gotcha', usefulness: 140 });
+  log.add({ ev: 'approved', key: key('a'), type: 'gotcha', usefulness: 77 });
+  log.add({ ev: 'rejected', key: key('b'), type: 'gotcha', title: 'B', usefulness: '50' });
+
+  assert.deepEqual(
+    log.read().map(({ at, ...event }) => event),
+    [
+      { ev: 'dropped', project: PROJECT, reason: 'low usefulness', type: 'gotcha', title: 'Weak thing', usefulness: 12 },
+      { ev: 'proposed', key: key('a'), type: 'gotcha' },
+      { ev: 'approved', key: key('a'), type: 'gotcha', usefulness: 77 },
+      { ev: 'rejected', key: key('b'), type: 'gotcha', title: 'B' },
+    ],
+  );
+});
+
+test('a dropped title is never offered back to the extractor as not wanted', () => {
+  const events = [{ at: NOW, ev: 'dropped', project: PROJECT, reason: 'low usefulness', title: 'Weak thing', usefulness: 10 }];
+
+  assert.deepEqual(rejectedTitles(events, PROJECT), []);
+});
+
+test('decisionEvent builds the same line for the app and the CLI', () => {
+  const record = { project: PROJECT, id: 'a', type: 'how-to', title: 'A title', usefulness: 61 };
+
+  assert.deepEqual(decisionEvent('approved', record), { ev: 'approved', key: key('a'), type: 'how-to', usefulness: 61 });
+  assert.deepEqual(decisionEvent('rejected', record), { ev: 'rejected', key: key('a'), type: 'how-to', title: 'A title', usefulness: 61 });
+  assert.deepEqual(decisionEvent('edited', { ...record, usefulness: undefined }), { ev: 'edited', key: key('a'), type: 'how-to' });
+});
+
+test('decisions are counted per usefulness band; a score under the bands is under, none is unscored', () => {
+  const decision = (ev, id, usefulness) => ({ at: NOW, ev, key: key(id), type: 'gotcha', ...(usefulness === undefined ? {} : { usefulness }) });
+  const events = [
+    decision('approved', 'a', 30),
+    decision('rejected', 'b', 49),
+    decision('rejected', 'c', 50),
+    decision('approved', 'd', 69),
+    decision('approved', 'e', 70),
+    decision('approved', 'f', 84),
+    decision('approved', 'g', 85),
+    decision('rejected', 'h', 100),
+    decision('approved', 'i'),
+    decision('rejected', 'j', 10),
+    decision('approved', 'l', 0),
+    { at: NOW, ev: 'proposed', key: key('k'), type: 'gotcha', usefulness: 90 },
+  ];
+
+  const stats = captureStats(events);
+
+  assert.deepEqual(stats.bands, [
+    { label: '30-49', approved: 1, rejected: 1 },
+    { label: '50-69', approved: 1, rejected: 1 },
+    { label: '70-84', approved: 2, rejected: 0 },
+    { label: '85-100', approved: 1, rejected: 1 },
+  ]);
+  assert.deepEqual(stats.under, { approved: 1, rejected: 1 });
+  assert.deepEqual(stats.unscored, { approved: 1, rejected: 0 });
+  assert.deepEqual(
+    USEFULNESS_BANDS.map((b) => b.label),
+    ['30-49', '50-69', '70-84', '85-100'],
+  );
+  assert.deepEqual(
+    captureStats([]).bands.map((b) => b.approved + b.rejected),
+    [0, 0, 0, 0],
+  );
 });

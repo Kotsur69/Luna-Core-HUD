@@ -1,0 +1,87 @@
+/* ============================================================================
+   LunaCore - Live map, Sessions tab: the work map (modules/workmap.js)
+   ----------------------------------------------------------------------------
+   Its own sheet, like livemap.css, so neither grows past the size guideline.
+   Every colour is a theme token, so all themes restyle it. State is never
+   colour alone: a busy station also gets a halo and "n running", a station
+   with failed calls a dashed border and "n failed", and the Memory station is
+   a hexagon, not a circle.
+
+   Motion (productivity tool: restraint first). The only movement is the
+   call pulse - a dot that travels a spoke once per call start / end, run by
+   workmap.js with the Web Animations API on --dur-normal. It never loops.
+   Under prefers-reduced-motion and the in-app motion axis (off / reduced)
+   workmap.js sends no pulse and the rules below hide the dots as a
+   backstop; the busy spoke and station highlight carry the signal instead.
+   ============================================================================ */
+
+.wm-panel { gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-6); }
+
+.wm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-6);
+  min-height: 1.4em;
+  font-size: var(--fs-sm);
+}
+.wm-head__tab { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.wm-head__sum, .wm-head__turns { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); }
+
+.wm-stage { flex: 1; min-height: 260px; }
+.wm-map { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.wm-gap { margin: 0; font-size: var(--fs-2xs); color: var(--text-dim); }
+
+/* ---- Spokes and pulses -------------------------------------------------- */
+.wm-spoke { stroke: var(--lm-edge); stroke-width: 1.2; stroke-dasharray: 2 6; }
+.wm-spoke.is-busy { stroke: var(--neon-cyan); stroke-width: 2; stroke-dasharray: none; }
+
+.wm-packet { fill: var(--neon-cyan); opacity: 0; pointer-events: none; }
+.wm-packet.is-memory { fill: var(--neon-magenta); }
+.wm-packet.is-failed { fill: var(--bad); }
+
+/* ---- The model and its context ring ------------------------------------- */
+.wm-core__disc { fill: var(--surface-panel-2); stroke: var(--edge-glow); stroke-width: 1.4; }
+.wm-ring__track { fill: none; stroke: color-mix(in srgb, var(--text-dim) 18%, transparent); stroke-width: 8; }
+.wm-ring__fill { fill: none; stroke: var(--neon-cyan); stroke-width: 8; stroke-linecap: butt; }
+.wm-core.is-mid .wm-ring__fill { stroke: var(--warn); }
+.wm-core.is-high .wm-ring__fill { stroke: var(--bad); }
+.wm-core__model { fill: var(--text); font-family: var(--font-ui); font-size: 14px; font-weight: 600; text-anchor: middle; }
+.wm-core__pct { fill: var(--text); font-family: var(--font-mono); font-size: 22px; text-anchor: middle; }
+.wm-core.is-high .wm-core__pct { fill: var(--bad); }
+.wm-core__sub { fill: var(--text-dim); font-family: var(--font-mono); font-size: 10px; text-anchor: middle; }
+
+/* ---- Stations ----------------------------------------------------------- */
+.wm-station__disc { fill: var(--surface-panel-2); stroke: var(--edge); stroke-width: 1.4; }
+.wm-station__halo { fill: none; stroke: transparent; stroke-width: 2; }
+.wm-station__count { fill: var(--text); font-family: var(--font-mono); font-size: 17px; text-anchor: middle; }
+.wm-station__name { fill: var(--text); font-family: var(--font-ui); font-size: 12px; font-weight: 600; text-anchor: middle; }
+.wm-station__status { fill: var(--neon-cyan); font-family: var(--font-mono); font-size: 10px; text-anchor: middle; }
+.wm-station__status.is-bad { fill: var(--bad); }
+.wm-station.is-idle .wm-station__count { fill: var(--text-dim); }
+
+.wm-station.is-busy .wm-station__disc { stroke: var(--neon-cyan); stroke-width: 2; }
+.wm-station.is-busy .wm-station__halo { stroke: color-mix(in srgb, var(--neon-cyan) 55%, transparent); }
+.wm-station.has-errors .wm-station__disc {
+  stroke: var(--bad);
+  stroke-width: 2.2;
+  stroke-dasharray: 5 3;
+  fill: color-mix(in srgb, var(--bad) 10%, var(--surface-panel-2));
+}
+
+/* Memory: a hexagon in the magenta accent, plus the "card loaded" diamond. */
+.wm-station.is-memory .wm-station__disc { fill: color-mix(in srgb, var(--neon-magenta) 14%, var(--surface-panel-2)); stroke: var(--neon-magenta); }
+.wm-station.is-memory .wm-station__status { fill: var(--neon-magenta); }
+.wm-station.is-memory.is-busy .wm-station__halo { stroke: color-mix(in srgb, var(--neon-magenta) 60%, transparent); }
+.wm-station.is-memory.has-errors .wm-station__disc { stroke: var(--bad); }
+.wm-station.is-memory .wm-station__status.is-bad { fill: var(--bad); }
+.wm-card { fill: none; stroke: var(--neon-magenta); stroke-width: 1.4; }
+.wm-card.is-on { fill: var(--neon-magenta); }
+.wm-card.is-unknown { display: none; }
+.wm-card__label { fill: var(--neon-magenta); font-family: var(--font-mono); font-size: 10px; text-anchor: start; }
+
+/* Backstop for the JS gate: no travelling dots when less motion is asked for. */
+@media (prefers-reduced-motion: reduce) {
+  .wm-packet { display: none; }
+}
+:root[data-motion='off'] .wm-packet, :root[data-motion='reduced'] .wm-packet { display: none; }

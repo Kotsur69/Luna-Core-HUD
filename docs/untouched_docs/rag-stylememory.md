@@ -381,7 +381,7 @@ Not built in phase 4:
   auto-memory still does that job and its index stays loaded (see above).
 - **The "where we stopped" note.** Still proposed, not decided.
 - **Auto-accept for low-risk types** (question 4). Everything is approved by hand until
-  the approval rate is known.
+  the approval rate is known. (Built later as an opt-in switch per type, 2026-11-13.)
 
 To judge after a week (section 9, inbox quality): the share of candidates approved. Under
 about a third means the extractor prompt is wrong.
@@ -401,14 +401,14 @@ Recommended by Luna, in the order she would build them. None is decided yet.
 3. **The "where we stopped" note.** One short note per project, overwritten at each
    capture: what was being built, what is done, what is left. It is shown on the card
    and needs no approval, because it is a status that decays, not a fact.
-4. **Keyboard review in the inbox.** `A` approve, `R` reject, `E` edit, arrows to move.
+4. **(Built 2026-11-13, see below.) Keyboard review in the inbox.** `A` approve, `R` reject, `E` edit, arrows to move.
 5. **Approve from the phone.** The inbox already syncs; the phone app needs the list and
    two buttons.
 6. **Embeddings (phase 2b).** Three of the four misses on the golden set are Polish
    questions against English memories. It matters more as captured memories pile up.
 7. **Capture a God Mode run once, from its run report,** not per worker tab (decision
    49). One model call per run, and workers meet exactly the gotchas worth keeping.
-8. **Auto-accept low-risk types** once a type's approval rate has stayed above about
+8. **(Built 2026-11-13, opt-in, see below.) Auto-accept low-risk types** once a type's approval rate has stayed above about
    90% for a few weeks (question 4).
 
 Items 1 and 2 were built in phase 5 (decisions 62 to 64 below). Items 3 to 8 are separate
@@ -507,6 +507,130 @@ Done-when of section 10, checked on 2026-11-11: a confirmed memory that names
 (`test/memoryreview.test.js`, and `memory review` on the real store), and
 `memory stats` prints the approval rate of the chosen number of days.
 
+### Built after phase 5, 2026-11-13: the "where we stopped" note
+
+Item 3 of the improvements above. Unnumbered so it cannot collide with decisions other
+packages add in the same run.
+
+- **One note per project, written by session capture** (`src/memorynote.js`). The same
+  extractor call that proposes memories also returns `status`: what was being built, what
+  is done, what is left, at most 600 characters, English. The model writes the text only;
+  project, date and session id come from the capture. A capture with no meaningful status
+  (empty, "none", under 20 characters) leaves the previous note as it is.
+- **It is no memory.** The file is `projects/<host>/<owner>/<repo>/_where-we-stopped.md`
+  in the mirror; `memorystore.scan()` skips files whose name starts with `_`, so the note
+  never reaches search, `memory_get`, the inbox, the review list or the memory count. It
+  needs no approval: it is a status that decays, not a fact.
+- **Synced as its own unit**, `<project>/_where-we-stopped` in the `memory` scope, by a
+  third provider beside the mirror and the heartbeats. Newest wins, like every unit. Its
+  text is secret-scrubbed before it is written; a hand-edited note that trips the scanner
+  is held back from the cloud (`guardPublish`), and one from the cloud is refused.
+- **On the card** right under the header, as "Where we stopped (<date>, not verified)",
+  quoted on one line and labelled as unreviewed data. Hidden once it is more than
+  `NOTE_MAX_AGE_DAYS` (14) days old, and when it is dated more than a day ahead (a future
+  date would never expire). A fresh note alone is enough for a card.
+- **No note from a session that read outside content** (security review, 2026-11-13). The
+  note reaches every new session unreviewed, so a piece whose digest counted a web,
+  subagent or foreign MCP call (decision 61) gives no status, and the previous note stays.
+- **Newest session wins.** The note keeps `at`, when its transcript was last written; a
+  capture never replaces a note that came from a later session (pieces are not captured
+  in the order their sessions ran).
+- **CLI:** `memory capture <transcript>` prints the status; `--save` writes the note too.
+- **Known limit:** web access through the shell (`curl`, `gh api`) is not counted as
+  outside content, for sessions and runs alike (decision 61 counts tool names only).
+
+### Built after phase 5, 2026-11-13: one capture per God Mode run
+
+Item 7 of the improvements above; it revisits decision 49. Worker tabs are still not
+captured one by one.
+
+- **When:** the finalizer writes a run's report (`orchestraFinalize.js` `report`, which
+  calls `onReport`). `orchestraWiring.js` hands `{runId, repoPath, view}` to
+  `src/memoryruncapture.js`, fire and forget: nothing there can delay or break the report
+  or its email.
+- **What the model reads** (`src/memoryrundigest.js`): the facts of the same view the
+  report renders, one clean capped line each: every package with its state and error,
+  stalls, automatic retries, resumes, escalation, nudges, verify fix-up rounds, the verify
+  command and the last lines of its output, the stall history, the worker's last words,
+  the files a pushed package changed; the merges left out, the second pass, the red
+  self-check and its tail; a hold on the machine; the run-level automatic fixes. At most
+  30,000 characters, secret-scrubbed before the call. The prompt is the session prompt
+  with a run introduction and no status note.
+- **One call per run, never twice.** A ledger (`memory-runcapture.local.json`) gets the
+  run id before the model is called, so a second finish pass, a Retry, a failed call or a
+  crash never pays for the same run again. A run in which no worker started costs no call.
+- **Same filter as a session:** `checkRecord`, secret scan, near-duplicates, the
+  usefulness floor, at most five, the rejected titles as "not wanted". Candidates wait in
+  the inbox as `observed`, with the source `captured from God Mode run <runId> on
+  <machine>`.
+- **Skipped** for a project with memory switched off and while its inbox is full (40
+  waiting); a skipped run gets no ledger entry.
+- **Outside content (decision 61):** the run's worker transcripts (the Claude Code
+  folders of each package worktree) are scanned for `WebFetch`, `WebSearch`, `Agent`,
+  `Task` and foreign `mcp__*` calls. A worker that ran but whose transcript cannot be
+  found counts as one, so its text is still flagged. The count goes into `source` and the
+  inbox asks to check the text.
+
+### Built after phase 5, 2026-11-13: keyboard review in the memory window
+
+Item 4 of the improvements above. Unnumbered, like the two sections before it.
+
+- **Keys** (`src/renderer/modules/memoryinboxkeys.js`, pure): Up/Down or J/K move the
+  selected entry on both tabs. On "To approve": `A` approve, `R` reject, `E` edit, `G`
+  make global (a waiting project entry only). On "To check": `V` still true, `R` asks to
+  retire and a second `R` deletes (the two-step question stays). Enter saves an open edit
+  (Ctrl+Enter inside the text area), Escape cancels the edit or the retire question, else
+  clears the selection; with nothing selected Escape closes the window as before.
+- **Not while typing**, not with Ctrl/Alt/Meta, and a held letter does not repeat its
+  action (holding `A` must not approve the whole list). While an edit is open only save
+  and cancel work.
+- **The selection follows the decision:** after approve, reject, retire or still true it
+  moves to the entry that took the decided one's place. Tab or a click into an entry
+  selects it too. The selected entry has a visible outline; the footer has a one-line key
+  hint (pl and en). Existing IPC only.
+- The tall overlay (`talloverlay.js`) gained an optional `onKeydown` hook so Escape can be
+  used by the window before it closes it.
+
+### Built after phase 5, 2026-11-13: opt-in auto-accept per type
+
+Item 8 of the improvements above and question 4, answered as "(a), opt-in".
+
+- **Off by default for every type.** A type's switch is only offered (shown in the memory
+  window under "To approve") when this PC's memory log has at least 20 decisions for it in
+  the last 28 days with at least 90% approved: approved / (approved + rejected). An
+  approval after an edit counts as approved and is shown apart. Main refuses to switch a
+  type on that is not offered (`memory:auto-set`); off always works. Constants in
+  `src/memoryautoaccept.js`.
+- **Never auto-accepted, even with the switch on:** a candidate that proposes a supersede,
+  is global or was suggested global, comes from a session or run that read outside
+  content (decision 61), or is a near-duplicate of an entry waiting in the inbox. Those
+  wait as before.
+- **Landing:** session capture and run capture decide each candidate right before it is
+  written (`createLanding`). An auto-accepted one is written `confirmed`, verified today,
+  with `, auto-accepted` at the end of its source, and the log gets `auto-accepted` after
+  `proposed`. Any failure in that check leaves the candidate waiting.
+- **Undo:** the memory window lists the auto-accepts created in the last 7 days with an
+  Undo button (`memory:auto-undo`). Undo is a reject: the file is deleted on every PC, the
+  log gets `rejected` with the title (it goes back to the extractor as "not wanted").
+  Only a memory on that list can be undone.
+- **It keeps measuring itself.** Once a type is on, an auto-accept that was not undone
+  counts as approved, and an undo (or retiring it later from "To check") as rejected.
+  When the rate falls under 80% on at least 5 decisions the switch turns itself off
+  (checked at capture, on every inbox read, after an undo and on the hub tick), the log
+  gets `auto-off`, and the hub shows "Auto-accept for <type> switched itself off" for a
+  week (that PC only: the log is not synced).
+- **Synced like `memory-on:<project>`:** `memory-autoaccept.local.json` locally, unit
+  `memory-auto:<type>` = `{on: true}` in the `config` scope. A type turned off on one PC
+  is off on the other after the next sync. The log is not synced, so a PC auto-accepts
+  only while its own log holds 20 decisions for the type; a fresh PC, or a switch that
+  arrived from the cloud, lets candidates wait until it has them (security review,
+  2026-11-13).
+- **Known limits.** An auto-accept nobody undoes counts as approved for the whole 28-day
+  window, though Undo is offered for 7 days. Web access through the shell (`curl`,
+  `gh api`) is still not counted as outside content (decision 61), so such a session's
+  candidates are not excluded; with auto-accept on for their type they skip the human
+  review that used to catch that.
+
 ### Bonus, wanted by Mati on 2026-11-11: a live work map in LunaCore
 
 Mati wants a panel in the HUD that shows what the session in the active tab is doing,
@@ -521,8 +645,25 @@ context window.
 - **No new data source and no tokens.** It rides the feed the Skill Tracker already
   uses: `TranscriptWatcher` -> `metrics:tools` (start and end of each tool call) and
   `metrics:context`. Subagents, skills and the model come from the same transcript.
-- **Open: hook refusals.** Whether a hook's refusal is visible in the transcript has
-  not been checked. If it is not, the map has no Hooks station.
+- **Hook refusals: in the transcript, not in what the observer sends (checked
+  2026-11-12).** A PreToolUse refusal (the Fact-Forcing Gate, for example) is written
+  as an ordinary `tool_result` with `"is_error": true`, content starting
+  `PreToolUse:<Tool> hook error: ...`, and a top-level `toolDenialKind` on the entry.
+  Hooks that pass only leave `attachment` entries (`hook_success`,
+  `async_hook_response`, `hook_non_blocking_error`). `src/observer.js` drops all of
+  it for built-in tools: `toolEventsFromLines()` emits an `end` event with no
+  `is_error` and no content, so a refused Edit looks like a finished one on
+  `metrics:tools`. Only `metrics:mcp` carries `ok:false` plus the content, so a refused
+  MCP call shows up as an MCP error, not as a hook refusal. The work map model
+  (`src/renderer/modules/workmapmodel.js`) therefore has **no Hooks station**. Adding
+  one needs the observer to forward `is_error` and a short content prefix (or the
+  `toolDenialKind`) on tool `end` events: a main-process change for its own package.
+  The model already flags a tool end with `ok:false` / `isError:true` as an error,
+  so it is ready for that field.
+- **Skills station gap (found with the above).** `metrics:tools` carries a Skill
+  Tracker tile, not the tool name, and the `Skill` tool has no tile, so observer.js
+  never sends it. The model maps `Skill` by name, but the station stays dark until
+  the observer forwards tool names (the same observer change as above).
 - **The Memory station is the part that serves this plan.** It lights up and counts
   when a session calls `memory_search` or `memory_get`, and marks the card loaded at
   tab start. That count is the evidence for the with/without comparison of section 9.

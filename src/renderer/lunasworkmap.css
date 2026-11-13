@@ -1,0 +1,131 @@
+/* ============================================================================
+   LunaCore - Live map, Luna's Work tab: the iteration loop
+   (modules/liveMapLunasWork.js + lunasworkMapView.js)
+   ----------------------------------------------------------------------------
+   Its own sheet, like livemap.css and workmap.css. Every colour is a theme
+   token, so all themes restyle it. State is never colour alone: each station
+   has its state as text under the name, a retrying station also gets a
+   dashed border, and the second opinion a dotted one.
+
+   Motion (productivity tool: restraint first). The only loop is the active
+   station's breath - livemap.css's slow, low-amplitude lm-breathe on the
+   halo's stroke-opacity, the same signal a running God Mode package gives.
+   It stops under prefers-reduced-motion and the in-app motion axis
+   (off / reduced); the station then stays highlighted and still. Switching
+   between the loop and the package graph is instant.
+   ============================================================================ */
+
+.lwm-panel { gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-6); }
+
+.lwm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-6);
+  min-height: 1.4em;
+  font-size: var(--fs-sm);
+}
+.lwm-head__project { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.lwm-head__run { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); }
+.lwm-head__chip {
+  padding: 0 var(--space-4);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+.lwm-head__chip.is-live { color: var(--neon-cyan); border-color: color-mix(in srgb, var(--neon-cyan) 60%, transparent); }
+.lwm-head__chip[hidden] { display: none; }
+
+.lwm-body { flex: 1; min-height: 0; display: flex; gap: var(--space-4); }
+.lwm-body[hidden], .lwm-drill[hidden] { display: none; }
+.lwm-stage { min-height: 260px; }
+.lwm-stage__map { position: absolute; inset: 0; }
+.lwm-stage__map[hidden] { display: none; }
+.lwm-map { display: block; width: 100%; height: 100%; }
+
+/* ---- The loop ----------------------------------------------------------- */
+.lwm-ring { fill: none; stroke: color-mix(in srgb, var(--text-dim) 14%, transparent); stroke-width: 1; }
+.lwm-arc { fill: none; stroke: var(--lm-edge); stroke-width: 1.6; }
+.lwm-arc.is-current { stroke: var(--neon-cyan); stroke-width: 2.4; }
+.lwm-arrow { fill: var(--lm-edge); }
+
+.lwm-centre__iter { fill: var(--text); font-family: var(--font-ui); font-size: 22px; font-weight: 600; text-anchor: middle; }
+.lwm-centre__phase { fill: var(--neon-cyan); font-family: var(--font-mono); font-size: 13px; text-anchor: middle; }
+.lwm-centre__milestone { fill: var(--text-dim); font-family: var(--font-ui); font-size: 11px; text-anchor: middle; }
+
+/* ---- Stations ----------------------------------------------------------- */
+.lwm-station__disc { fill: var(--surface-panel-2); stroke: var(--edge); stroke-width: 1.4; }
+.lwm-station__halo { fill: none; stroke: transparent; stroke-width: 2; }
+.lwm-station__name { fill: var(--text); font-family: var(--font-ui); font-size: 13px; font-weight: 600; text-anchor: middle; }
+.lwm-station__state { fill: var(--text-dim); font-family: var(--font-mono); font-size: 11px; text-anchor: middle; }
+.lwm-station__result { font-family: var(--font-mono); font-size: 11px; }
+.lwm-station__result.is-good { fill: var(--good); }
+.lwm-station__result.is-bad { fill: var(--bad); }
+.lwm-station__result.is-warn { fill: var(--warn); }
+.lwm-station__result.is-dim { fill: var(--text-dim); }
+.lwm-station__link { fill: var(--neon-cyan); font-family: var(--font-mono); font-size: 10px; text-anchor: middle; }
+
+.lwm-station.is-active .lwm-station__disc { stroke: var(--neon-cyan); stroke-width: 2.4; }
+.lwm-station.is-active .lwm-station__halo { stroke: color-mix(in srgb, var(--neon-cyan) 60%, transparent); }
+.lwm-station.is-active .lwm-station__state { fill: var(--neon-cyan); }
+.lwm-station.is-waiting .lwm-station__disc { stroke: var(--warn); stroke-width: 2.2; }
+.lwm-station.is-waiting .lwm-station__halo { stroke: color-mix(in srgb, var(--warn) 50%, transparent); }
+.lwm-station.is-waiting .lwm-station__state { fill: var(--warn); }
+.lwm-station.is-retrying .lwm-station__disc {
+  stroke: var(--bad);
+  stroke-width: 2.2;
+  stroke-dasharray: 5 3;
+  fill: color-mix(in srgb, var(--bad) 10%, var(--surface-panel-2));
+}
+.lwm-station.is-retrying .lwm-station__state { fill: var(--bad); }
+.lwm-station.is-done .lwm-station__disc { stroke: color-mix(in srgb, var(--good) 55%, var(--edge)); }
+.lwm-station.is-pending .lwm-station__name, .lwm-station.is-idle .lwm-station__name { fill: var(--text-dim); }
+.lwm-station.is-secondOpinion .lwm-station__disc { stroke-dasharray: 2 4; }
+
+/* Build is the way into the package graph: a button with a visible focus ring. */
+.lwm-station.is-build { cursor: pointer; }
+.lwm-station.is-build:focus { outline: none; }
+.lwm-station.is-build:hover .lwm-station__disc { fill: color-mix(in srgb, var(--neon-cyan) 10%, var(--surface-panel-2)); }
+.lwm-station.is-build:focus-visible .lwm-station__halo { stroke: var(--text); stroke-dasharray: 4 3; }
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion='off']):not([data-motion='reduced']) .lwm-station.is-active .lwm-station__halo {
+    animation: lm-breathe 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  }
+}
+
+/* ---- Side panel: verdict, cards, wheel, notices, queue ------------------- */
+.lwm-side { flex-basis: 300px; }
+.lwm-kpis { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; }
+.lwm-kpi { display: flex; flex-direction: column; gap: var(--space-1); }
+.lwm-kpi dt {
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.lwm-kpi dd { margin: 0; font-size: var(--fs-sm); color: var(--text); overflow-wrap: anywhere; }
+.lwm-kpi.is-final dd { color: var(--neon-cyan); font-weight: 600; }
+.lwm-kpi.is-warn dd { color: var(--warn); }
+.lwm-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-5);
+  border-left: 2px solid var(--warn);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.lwm-queue { margin: 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: var(--space-2); }
+.lwm-queue__item { font-size: var(--fs-xs); color: var(--text); overflow-wrap: anywhere; }
+
+/* ---- Drill-down: the Build iteration's package graph --------------------- */
+.lwm-drill { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.lwm-drill__bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-5); }
+.lwm-drill__title { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.lwm-drill__note { font-size: var(--fs-2xs); color: var(--text-dim); }
+
+@media (max-width: 900px) {
+  .lwm-body { flex-direction: column; }
+  .lwm-side { flex: 0 0 auto; max-height: 45%; }
+}

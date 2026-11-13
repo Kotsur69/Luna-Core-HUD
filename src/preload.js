@@ -471,6 +471,12 @@ contextBridge.exposeInMainWorld('lunacore', {
   memoryReviewVerify: (key) => ipcRenderer.invoke('memory:verify', typeof key === 'string' ? key : ''),
   /** Deletes a confirmed memory on every PC. */
   memoryReviewRetire: (key) => ipcRenderer.invoke('memory:retire', typeof key === 'string' ? key : ''),
+  // Auto-accept per memory type (src/memoryautoaccept.js). Main refuses to switch
+  // a type on unless this PC's numbers offer it, and undoes only a recent auto-accept.
+  /** Switches one type on or off. Promise<{ok, type, on} | {ok:false, reason}>. */
+  memoryAutoSet: (type, on) => ipcRenderer.invoke('memory:auto-set', { type: typeof type === 'string' ? type : '', on: on === true }),
+  /** Undoes one auto-accept: the memory is deleted on every PC. Promise<{ok, key} | {ok:false, reason}>. */
+  memoryAutoUndo: (key) => ipcRenderer.invoke('memory:auto-undo', typeof key === 'string' ? key : ''),
   /** The memory files changed (capture, a sync, an approval). Returns an unsubscribe. */
   onMemoryChanged: (cb) => {
     if (typeof cb !== 'function') return () => {};
@@ -740,6 +746,17 @@ contextBridge.exposeInMainWorld('lunacore', {
   /** Resume a run held for an empty node_modules ('noNodeModules'); main re-checks. Only the plan id crosses. */
   resumeOrchestra: (planId, projectId) =>
     ipcRenderer.invoke('orchestra:resume', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
+  /**
+   * A run a PC shutdown cut (src/orchestraResume.js): "Resume now", the
+   * banner's Cancel and "Pause for shutdown". Only the plan id (and the
+   * optional project scope) crosses; main validates both and acts itself.
+   */
+  resumeInterruptedOrchestra: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:resumeInterrupted', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
+  cancelOrchestraResume: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:cancelResume', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
+  pauseOrchestraForShutdown: (planId, projectId) =>
+    ipcRenderer.invoke('orchestra:pauseForShutdown', withProject({ planId: typeof planId === 'string' ? planId : null }, projectId)),
   /** Slice 4 kill switch for one run: no new workers, Esc to the running ones. */
   killOrchestra: (projectId) => ipcRenderer.invoke('orchestra:kill', orchestraScope(projectId)),
   /**

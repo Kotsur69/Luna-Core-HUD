@@ -9,10 +9,19 @@
 //   buildPrompt()     what the model is asked
 //   candidatesFrom()  its answer -> valid records, filtered
 //
+// A session's answer also carries `status`, its "where we stopped" note
+// (src/memorynote.js statusFrom). A God Mode run is digested differently
+// (src/memoryruncapture.js) and asked for memories only.
+//
 // Nothing the model returns is trusted. Each candidate is rebuilt by
 // memoryrecord.checkRecord() and then dropped when it
 //   - trips the secret scanner (it would be held back from the sync anyway),
+//   - scores under USEFULNESS_FLOOR on the model's own keep rule,
 //   - repeats a memory that exists, or an earlier candidate of the same answer.
+//
+// `usefulness` (0-100) is the model's own judgement of the keep rule. It only
+// sorts the inbox and drops the weakest candidates: a high score never
+// approves anything. A candidate without a score is kept, as "unknown".
 //
 // What is kept is saved as `observed`: searchable, labelled "not verified",
 // never on the project card (decision 5). `supersedes` on an observed memory
@@ -29,10 +38,15 @@
 
 const { TYPES, GLOBAL, MAX_BODY, MAX_TITLE, MAX_SOURCE, checkRecord, keyOf, slug } = require('./memoryrecord');
 const { hasSecret } = require('./memorysync');
+const { MAX_NOTE_CHARS: MAX_STATUS_CHARS } = require('./memorynote');
 
 /** A `digest` decays and belongs to phase 5; the extractor does not write one. */
 const CANDIDATE_TYPES = TYPES.filter((t) => t !== 'digest');
 const MAX_CANDIDATES = 5;
+/** A candidate the model itself scores under this is dropped before the inbox. */
+const USEFULNESS_FLOOR = 30;
+/** The rejection reason of such a candidate, as the memory log records it. */
+const LOW_USEFULNESS = 'low usefulness';
 /** Candidates of one answer that are looked at at all. */
 const MAX_RAW_CANDIDATES = 12;
 /** Existing memories listed in the prompt so the model does not repeat them. */
@@ -51,6 +65,13 @@ const WHOLE_DUPLICATE = 0.6;
 const STOP_WORDS = new Set(['the', 'and', 'for', 'not', 'with', 'that', 'this', 'from', 'use', 'are', 'was', 'when', 'into', 'its', 'has', 'have', 'you']);
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * The model's usefulness value as checkRecord should see it. A fraction under
+ * 1 means the model answered on a 0-1 scale: rounded, it would fall under the
+ * floor and drop a candidate that may be good, so it counts as unknown.
+ */
+const modelScore = (v) => (typeof v === 'number' && v > 0 && v < 1 ? undefined : v);
 
 // ---- notes in a captured memory's `source` --------------------------------------
 // `source` is the one free line a record has (memoryrecord.checkRecord drops
@@ -116,12 +137,48 @@ function nearDuplicate(a, b) {
 }
 
 /**
- * @param {{digest: string, project: string, today: string, existing: object[], notWanted?: string[]}} ctx
+ * What the digest is a digest of. A session is also asked for its "where we
+ * stopped" status (src/memorynote.js); a God Mode run (src/memoryruncapture.js)
+ * is many sessions of one plan and has no single status to give.
+ */
+const SUBJECTS = {
+  session: {
+    intro: (project, today) => [
+      'You maintain the long-term memory of a coding assistant. Below is the digest of one finished working session in the project',
+      `${project} (today is ${today}). Propose the memories worth keeping from it.`,
+    ],
+    marker: 'SESSION DIGEST',
+    status: true,
+  },
+  run: {
+    intro: (project, today) => [
+      'You maintain the long-term memory of a coding assistant. Below is the digest of one finished God Mode run in the project',
+      `${project} (today is ${today}): headless worker sessions built the packages of one plan in parallel, then the app merged and`,
+      'checked them. Propose the memories worth keeping from it. The likeliest ones are the gotchas the workers hit: a failure and its',
+      'real cause, a stall, a retry, a verify problem, a hold on the machine. A package that simply went through teaches nothing.',
+    ],
+    marker: 'RUN DIGEST',
+    status: false,
+  },
+};
+
+/** The prompt lines that ask a session for its "where we stopped" status. */
+const STATUS_LINES = [
+  '',
+  `Also write "status": ONE short note for the next session in this project, in English, at most ${MAX_STATUS_CHARS} characters: what`,
+  'was being built, what is done, and what is left (the next step, an open question). Plain prose in one paragraph, no lists, no',
+  'secrets, no instructions to the assistant. It replaces the note of the session before. Use "" when the session left no work in progress.',
+];
+
+/**
+ * @param {{digest: string, project: string, today: string, existing: object[], notWanted?: string[], subject?: 'session'|'run'}} ctx
  *   existing = records of this project and of `global`;
- *   notWanted = titles the user rejected lately (src/memorylog.js rejectedTitles)
+ *   notWanted = titles the user rejected lately (src/memorylog.js rejectedTitles);
+ *   subject = what the digest is of (SUBJECTS); a session is also asked for its status
  * @returns {string}
  */
-function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
+function buildPrompt({ digest, project, today, existing, notWanted = [], subject = 'session' }) {
+  const about = SUBJECTS[subject] || SUBJECTS.session;
   // A rejected title was written by a model: one clean line, and never a section marker.
   const unwanted = notWanted
     .slice(0, MAX_NOT_WANTED)
@@ -133,8 +190,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
     .map((r) => `- ${r.project === GLOBAL ? `${GLOBAL}/` : ''}${r.id}: ${r.title}`)
     .join('\n');
   return [
-    'You maintain the long-term memory of a coding assistant. Below is the digest of one finished working session in the project',
-    `${project} (today is ${today}). Propose the memories worth keeping from it.`,
+    ...about.intro(project, today),
     '',
     'A memory is ONE fact that is both:',
     '- applicable: it would change what the assistant does in a later session;',
@@ -147,7 +203,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
     'otherwise not a memory: the code and the git history already say it.',
     '',
     'Not memories: what was done in this session (a changelog), anything obvious from the code or already in a CLAUDE.md, task status,',
-    'plans, praise, secrets, tokens, personal data, or a guess the session did not confirm.',
+    `plans, praise, secrets, tokens, personal data, or a guess the session did not confirm.${about.status ? ' (Task status goes in "status", below.)' : ''}`,
     '',
     `Most sessions produce NO memory. Return at most ${MAX_CANDIDATES}. Prefer none over a weak one.`,
     '',
@@ -166,7 +222,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
         ]
       : []),
     'Answer with JSON only, in this shape:',
-    '{"candidates":[{"type":"gotcha","scope":"project","title":"...","body":"...","area":"...","supersedes":[]}]}',
+    `{"candidates":[{"type":"gotcha","scope":"project","title":"...","body":"...","area":"...","supersedes":[],"usefulness":75}]${about.status ? ',"status":"..."' : ''}}`,
     `- type: one of ${CANDIDATE_TYPES.join(', ')}`,
     '- scope: "project", or "global" when the fact holds in every project (a tool, a language, the user)',
     `- title: one line, at most ${MAX_TITLE} characters, a full statement ("Do not junction node_modules into a worktree")`,
@@ -174,9 +230,12 @@ function buildPrompt({ digest, project, today, existing, notWanted = [] }) {
     '  command, file or error string. At most 1500 characters.',
     '- area: optional, one lower-case tag (worktrees, release, sync, feature, ...)',
     '- supersedes: ids from the list above that this memory replaces, usually empty',
-    'No candidates: {"candidates":[]}',
+    '- usefulness: a whole number 0-100, how well the memory meets BOTH rules above: applicable (would it change what the assistant',
+    `  does next time) and durable (does it matter beyond this task). Under ${USEFULNESS_FLOOR} is dropped unread; be honest, not generous.`,
+    `No candidates: {"candidates":[]${about.status ? ',"status":"..."' : ''}}`,
+    ...(about.status ? STATUS_LINES : []),
     '',
-    '=== SESSION DIGEST ===',
+    `=== ${about.marker} ===`,
     digest.replace(MARKER_RE, '--'),
     '=== END OF DIGEST ===',
   ].join('\n');
@@ -199,7 +258,8 @@ function idFor(title, project, taken) {
  * @param {unknown} answer the parsed JSON the model returned
  * @param {{project: string, today: string, source: string, existing: object[]}} ctx
  *   existing = every record of this project and of `global` in the mirror
- * @returns {{records: object[], rejected: {title: string, reason: string}[]}}
+ * @returns {{records: object[], rejected: {title: string, reason: string, type?: string, usefulness?: number}[]}}
+ *   type and usefulness are set on a LOW_USEFULNESS rejection only
  */
 function candidatesFrom(answer, { project, today, source, existing }) {
   const raw = isObject(answer) && Array.isArray(answer.candidates) ? answer.candidates.filter(isObject).slice(0, MAX_RAW_CANDIDATES) : [];
@@ -238,6 +298,8 @@ function candidatesFrom(answer, { project, today, source, existing }) {
       supersedes: Array.isArray(c.supersedes) ? c.supersedes.filter((x) => sameScope.has(x)) : [],
       links: [],
       body: typeof c.body === 'string' ? c.body.slice(0, MAX_BODY + 1) : '',
+      // checkRecord rounds and clamps it; anything else is left unknown.
+      usefulness: modelScore(c.usefulness),
     });
     if (!res.record) {
       reject(c, res.error);
@@ -246,6 +308,11 @@ function candidatesFrom(answer, { project, today, source, existing }) {
     const { record } = res;
     if (hasSecret(record)) {
       reject(c, 'secret');
+      continue;
+    }
+    // After the secret check: this rejection carries the title into the memory log.
+    if (record.usefulness !== undefined && record.usefulness < USEFULNESS_FLOOR) {
+      rejected.push({ title: record.title, reason: LOW_USEFULNESS, type: record.type, usefulness: record.usefulness });
       continue;
     }
     // A corrected version of a memory is meant to resemble the one it replaces.
@@ -264,6 +331,7 @@ function candidatesFrom(answer, { project, today, source, existing }) {
 module.exports = {
   buildPrompt,
   candidatesFrom,
+  idFor,
   nearDuplicate,
   outsideNote,
   withNote,
@@ -272,4 +340,6 @@ module.exports = {
   SUGGESTED_GLOBAL,
   CANDIDATE_TYPES,
   MAX_CANDIDATES,
+  USEFULNESS_FLOOR,
+  LOW_USEFULNESS,
 };

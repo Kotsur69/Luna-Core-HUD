@@ -161,7 +161,8 @@ function hubSources({ runsDir, orchestra, update, now, machine = null, peers = n
     weekly: () => ({ weekly: require('./weeklyreview').createWeeklyStore().load() }),
     approval: () => ({ views: typeof o.views === 'function' ? safeGet(o.views)() || [] : [] }),
     // Luna Core Memory phase 4 (file, slow): how many captured memories wait for approval.
-    memory: () => ({ count: safeGet(acc.memoryInbox)() || 0 }),
+    // Plus the auto-accept switches that turned themselves off lately (src/memoryautoaccept.js).
+    memory: () => ({ count: safeGet(acc.memoryInbox)() || 0, autoOff: safeGet(acc.memoryAutoOff)() || [] }),
     ...readers,
   };
   const collectors = { ...COLLECTORS, peers: collectPeers };

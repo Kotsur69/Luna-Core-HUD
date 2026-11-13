@@ -142,6 +142,14 @@ export const SHORTCUT_GROUPS = [
         },
       },
       {
+        chords: [['Ctrl', 'Shift', 'G']],
+        descKey: 'shortcuts.liveMap',
+        source: {
+          file: 'src/renderer/modules/liveMap.js',
+          marker: "e.code === 'KeyG'",
+        },
+      },
+      {
         // Not a key chord - a command typed into the Ctrl+B filter box. Fits
         // this table anyway (a single-token "chord" renders as one <kbd>,
         // same trick shortcuts.jumpProject uses for "Alt+1…9") because it is

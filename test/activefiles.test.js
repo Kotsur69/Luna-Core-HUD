@@ -328,3 +328,117 @@ test('rowsForScope "repo" adds every git row without mutating either map', () =>
   assert.equal(own.size, 1);
   assert.equal(own.get('/r/a.js').added, 1);
 });
+
+// ---- diff window maximize toggle (#filediff-modal) -----------------------------
+
+const fs = require('node:fs');
+const path = require('node:path');
+const {
+  diffMaxView,
+  toggleDiffMax,
+  isDiffMaxKey,
+  DIFF_MAX_GLYPH,
+  DIFF_RESTORE_GLYPH,
+} = require('../src/renderer/modules/activefiles.js');
+
+test('diffMaxView describes the normal state: maximize glyph, maximize label, not pressed', () => {
+  assert.deepEqual(diffMaxView(false), {
+    isMax: false,
+    glyph: DIFF_MAX_GLYPH,
+    labelKey: 'activefiles.diff.maximize',
+    ariaPressed: 'false',
+  });
+});
+
+test('diffMaxView describes the maximized state: restore glyph, restore label, pressed', () => {
+  assert.deepEqual(diffMaxView(true), {
+    isMax: true,
+    glyph: DIFF_RESTORE_GLYPH,
+    labelKey: 'activefiles.diff.restore',
+    ariaPressed: 'true',
+  });
+  assert.notEqual(DIFF_MAX_GLYPH, DIFF_RESTORE_GLYPH);
+});
+
+test('diffMaxView treats anything but true as normal size', () => {
+  for (const v of [undefined, null, 0, 1, 'true', {}]) assert.equal(diffMaxView(v).isMax, false);
+});
+
+test('toggleDiffMax flips the state and two toggles return to normal', () => {
+  assert.equal(toggleDiffMax(false).isMax, true);
+  assert.equal(toggleDiffMax(true).isMax, false);
+  assert.deepEqual(toggleDiffMax(toggleDiffMax(false).isMax), diffMaxView(false));
+});
+
+test('isDiffMaxKey accepts plain f / F only', () => {
+  assert.equal(isDiffMaxKey({ key: 'f' }), true);
+  assert.equal(isDiffMaxKey({ key: 'F', shiftKey: true }), true);
+  assert.equal(isDiffMaxKey({ key: 'f', ctrlKey: true }), false);
+  assert.equal(isDiffMaxKey({ key: 'f', altKey: true }), false);
+  assert.equal(isDiffMaxKey({ key: 'f', metaKey: true }), false);
+  assert.equal(isDiffMaxKey({ key: 'g' }), false);
+  assert.equal(isDiffMaxKey({ key: 'Escape' }), false);
+  assert.equal(isDiffMaxKey(null), false);
+  assert.equal(isDiffMaxKey(undefined), false);
+  assert.equal(isDiffMaxKey({ key: 'f', isComposing: true }), false);
+});
+
+test('isDiffMaxKey takes F from the terminal textarea but leaves it in real text fields', () => {
+  const el = (tagName, opts = {}) => ({
+    tagName,
+    isContentEditable: opts.editable === true,
+    closest: (sel) => (sel === '.xterm' && opts.inXterm ? {} : null),
+  });
+  // xterm's helper textarea: F must be intercepted so it never reaches the PTY.
+  assert.equal(isDiffMaxKey({ key: 'f', target: el('TEXTAREA', { inXterm: true }) }), true);
+  assert.equal(isDiffMaxKey({ key: 'f', target: el('BODY') }), true);
+  assert.equal(isDiffMaxKey({ key: 'f', target: el('BUTTON') }), true);
+  // A palette input or any other field opened above the diff keeps its letter.
+  assert.equal(isDiffMaxKey({ key: 'f', target: el('INPUT') }), false);
+  assert.equal(isDiffMaxKey({ key: 'f', target: el('input') }), false);
+  assert.equal(isDiffMaxKey({ key: 'f', target: el('SELECT') }), false);
+  assert.equal(isDiffMaxKey({ key: 'f', target: el('TEXTAREA') }), false);
+  assert.equal(isDiffMaxKey({ key: 'f', target: el('DIV', { editable: true }) }), false);
+});
+
+// Static checks on the markup, CSS and strings the toggle depends on.
+const RENDERER = path.join(__dirname, '..', 'src', 'renderer');
+const readRenderer = (name) => fs.readFileSync(path.join(RENDERER, name), 'utf8');
+
+test('the diff modal has a maximize button left of the close button', () => {
+  const html = readRenderer('index.html');
+  const start = html.indexOf('<div id="filediff-modal"');
+  assert.ok(start > 0);
+  const block = html.slice(start, html.indexOf('filediff-modal-text', start));
+  const max = block.indexOf('id="filediff-modal-maxbtn"');
+  const close = block.indexOf('id="filediff-modal-closebtn"');
+  assert.ok(max > 0, 'maximize button missing');
+  assert.ok(max < close, 'maximize button must come before the close button');
+  assert.match(block, /id="filediff-modal-maxbtn"[^>]*type="button"|type="button"[^>]*id="filediff-modal-maxbtn"/);
+  assert.match(block, /id="filediff-modal-maxbtn"[^>]*aria-pressed="false"/);
+});
+
+test('new diff-window CSS rules are scoped to #filediff-modal only', () => {
+  const css = readRenderer('styles.css');
+  // Rules that introduce resize / is-max must never sit on the shared shell selector alone.
+  for (const rule of css.split('}')) {
+    const selector = rule.split('{')[0];
+    if (/resize:\s*both|\.is-max|filediff-modal__maxbtn/.test(rule)) {
+      assert.match(selector, /#filediff-modal/, `unscoped rule: ${selector.trim()}`);
+    }
+  }
+  // The shared panel keeps its default size.
+  assert.match(css, /\.stimeline-modal__panel \{[^}]*width: min\(520px, 92vw\);[^}]*max-height: 76vh;/);
+});
+
+test('maximize / restore strings exist in pl and en', () => {
+  const src = readRenderer('i18n.js');
+  for (const [key, text] of [
+    ['activefiles.diff.maximize', 'Powieksz'],
+    ['activefiles.diff.restore', 'Przywroc'],
+    ['activefiles.diff.maximize', 'Maximize'],
+    ['activefiles.diff.restore', 'Restore'],
+  ]) {
+    assert.ok(src.includes(`'${key}': '${text}'`), `${key} -> ${text} missing`);
+  }
+});

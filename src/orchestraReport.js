@@ -30,6 +30,7 @@ const { sleepSummary } = require('./orchestraSleep');
 const { recoveryEntries } = require('./orchestraRecover');
 const { planRunResult, planRunReportLines } = require('./orchestraPlanRunView');
 const { hybridReportLines, hybridReportRows } = require('./orchestraHybrid');
+const { resumeReportLines } = require('./orchestraResume');
 
 const NOTE_TAG = '[LunaCore run';
 // A whole note line: the tag with a run id, as stallNote() writes it.
@@ -623,6 +624,8 @@ function buildReport(view, extra) {
     ...postMergeSection(view),
     ...selfCheckSection(integ),
     ...recoverySection(view),
+    // Packages a PC shutdown cut, and whether their chat or a fresh worker went on.
+    ...resumeReportLines(view),
     ...suggestionSection(extra.suggestions),
     ...timelineSection(view, extra.now),
   ];

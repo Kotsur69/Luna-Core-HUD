@@ -3889,6 +3889,54 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .filediff__del  { color: var(--bad); }
 .filediff__hunk { color: var(--text-dim); }
 
+/* Maximize + drag-resize, #filediff-modal ONLY. #stimeline-modal and the MCP
+   call modal share .stimeline-modal and must not change, so every rule below
+   is anchored on the id. activefiles.js toggles `is-max` on the panel and
+   clears any dragged inline size on every toggle and every open.
+
+   Normal mode: the panel resizes from its bottom-right corner (`resize` needs
+   a non-visible overflow; the shared panel already has overflow: hidden) and
+   the <pre> takes the remaining height and scrolls. Until the user drags, the
+   shared 76vh cap applies, so the default look is unchanged. A drag writes an
+   inline height, which is what lifts the cap: to 88vh, not 92vh, because the
+   overlay keeps its 10vh top padding in normal mode and a 92vh panel would
+   push the drag corner off the bottom of the window. */
+#filediff-modal .stimeline-modal__panel {
+  resize: both;
+  min-width: min(360px, 92vw);
+  min-height: 200px;
+  max-width: 96vw;
+}
+#filediff-modal .stimeline-modal__panel[style*="height"] {
+  max-height: 88vh;
+}
+#filediff-modal .stimeline-modal__text {
+  flex: 1 1 auto;
+}
+#filediff-modal .stimeline-modal__bar .stimeline-modal__time {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#filediff-modal .filediff-modal__maxbtn[aria-pressed="true"] {
+  color: var(--neon-cyan);
+  border-color: var(--edge-glow);
+}
+
+/* Maximized: near full window, no drag corner, overlay padding reduced so the
+   92vh panel fits. */
+#filediff-modal:has(.stimeline-modal__panel.is-max) {
+  padding-top: 4vh;
+}
+#filediff-modal .stimeline-modal__panel.is-max {
+  resize: none;
+  width: 96vw;
+  height: 92vh;
+  max-height: 92vh;
+}
+
 /* ---- Boot sequence ----------------------------------------------
    A decorative overlay above the ready UI. Doesn't block the session (PTY
    runs underneath) and doesn't cost a single token - it's pure CSS plus a
@@ -6020,6 +6068,7 @@ section.orchestra__planrun {
 .mem-inbox__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); font-size: var(--fs-xs); color: var(--text-dim); }
 .mem-inbox__type { padding: 0 var(--space-2); border: var(--border-w) solid var(--edge); border-radius: 999px; font-family: var(--font-mono); color: var(--neon-cyan); }
 .mem-inbox__date { margin-left: auto; font-family: var(--font-mono); }
+.mem-inbox__score { font-family: var(--font-mono); color: var(--text); cursor: help; }
 .mem-inbox__title { margin: 0; font-size: var(--fs-md, 14px); font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
 .mem-inbox__body { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .mem-inbox__more { align-self: flex-start; font-size: var(--fs-xs); }
@@ -6044,6 +6093,20 @@ section.orchestra__planrun {
 .mem-inbox__tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--edge-glow); }
 .mem-inbox__tab:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: -2px; }
 .mem-inbox__ask { margin: 0; font-size: var(--fs-sm); color: var(--warn); }
+/* Keyboard review (modules/memoryinboxkeys.js): the entry the keys act on, and the key hint. */
+.mem-inbox__item:focus { outline: none; }
+.mem-inbox__item.is-selected { border-color: var(--edge-glow); outline: 2px solid var(--edge-glow); outline-offset: 2px; }
+.mem-inbox__keys { margin-top: var(--space-3); font-family: var(--font-mono); font-size: var(--fs-xs); }
+/* Auto-accept (modules/memoryautopanel.js): per-type switches and the recent auto-accepts with Undo. */
+.mem-auto { margin-top: var(--space-7); padding-top: var(--space-5); border-top: var(--border-w) solid var(--edge); display: flex; flex-direction: column; gap: var(--space-3); }
+.mem-auto__heading { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.mem-auto__types { display: flex; flex-direction: column; gap: var(--space-2); }
+.mem-auto__row { display: flex; align-items: baseline; gap: var(--space-3); font-size: var(--fs-sm); color: var(--text); cursor: pointer; }
+.mem-auto__switch { accent-color: var(--good); }
+.mem-auto__switch:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 2px; }
+.mem-auto__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.mem-auto__item { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); font-size: var(--fs-xs); color: var(--text-dim); }
+.mem-auto__title { flex: 1 1 12em; color: var(--text); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .mem-inbox__tab { transition: none; } }
 
 /* The brief's buttons inside the notification hub drawer (hub.css, hubpanel.js). */

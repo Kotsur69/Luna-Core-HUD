@@ -261,3 +261,61 @@ test('a report with a bad key, an unknown memory or an unknown outcome is refuse
   assert.deepEqual(toolVerdict(s.dir, { key: key('nope'), outcome: 'holds', today: TODAY }), { ok: false, reason: 'not-found' });
   assert.deepEqual(toolVerdict(s.dir, { key: key('a'), outcome: 'delete', today: TODAY }), { ok: false, reason: 'bad-outcome' });
 });
+
+// ---- never opened (low priority) -----------------------------------------------
+
+const { UNOPENED_DAYS } = require('../src/memoryreview.js');
+const DAY = 24 * 60 * 60 * 1000;
+/** A log whose oldest read is `daysAgo` days before NOW, plus the extra events. */
+const readsFrom = (daysAgo, extra = []) => [{ at: NOW - daysAgo * DAY, ev: 'search', project: PROJECT, hits: [] }, ...extra];
+
+test('a confirmed memory checked over 60 days ago and never opened since is flagged, last of all', (t) => {
+  const { list } = setup(t, [
+    rec('quiet', { type: 'decision', created: '2026-08-01' }),
+    rec('opened', { type: 'decision', created: '2026-08-01' }),
+    rec('young', { type: 'decision', created: '2026-10-01' }),
+    rec('rechecked', { type: 'decision', created: '2026-01-01', last_verified: '2026-10-20' }),
+    rec('stale-too', { created: '2026-01-01' }),
+    rec('waiting', { type: 'decision', created: '2026-01-01', confidence: 'observed' }),
+  ]);
+  const events = readsFrom(90, [{ at: NOW - 10 * DAY, ev: 'get', key: key('opened') }]);
+
+  const { items, total, urgent } = list({ events });
+
+  assert.equal(UNOPENED_DAYS, 60);
+  assert.deepEqual(items.map((i) => i.key), [key('stale-too'), key('quiet')]);
+  assert.deepEqual(items[1].flags, [{ kind: 'unopened', days: 60 }]);
+  assert.deepEqual(items[0].flags.map((f) => f.kind), ['stale', 'unopened']);
+  assert.equal(total, 2);
+  assert.equal(urgent, 1, 'a memory flagged only as never opened does not count as urgent');
+});
+
+test('an open older than 60 days does not count; a log that does not reach back 60 days flags nothing', (t) => {
+  const { list } = setup(t, [rec('quiet', { type: 'decision', created: '2026-08-01' })]);
+
+  const longAgo = list({ events: readsFrom(90, [{ at: NOW - 70 * DAY, ev: 'get', key: key('quiet') }]) });
+  assert.deepEqual(longAgo.items.map((i) => i.key), [key('quiet')]);
+
+  assert.deepEqual(list({ events: readsFrom(30) }).items, []);
+  assert.deepEqual(list({ events: [] }).items, []);
+});
+
+test('"still true" clears the never-opened flag: the check date moves to today', (t) => {
+  const { dir, list, log } = setup(t, [rec('quiet', { type: 'decision', created: '2026-08-01' })]);
+  const events = readsFrom(90);
+  assert.equal(list({ events }).total, 1);
+
+  assert.equal(verify(dir, key('quiet'), TODAY, { log }).ok, true);
+
+  assert.equal(list({ events }).total, 0);
+});
+
+test('a memory the card prints in full is read from the card and never flagged as unopened', (t) => {
+  const { list } = setup(t, [
+    rec('map', { type: 'project-fact', area: 'architecture', created: '2026-08-01' }),
+    rec('cmds', { type: 'how-to', area: 'commands', created: '2026-08-01' }),
+    rec('line', { type: 'decision', area: 'domain', created: '2026-08-01' }),
+  ]);
+
+  assert.deepEqual(list({ events: readsFrom(90) }).items.map((i) => i.key), [key('line')]);
+});

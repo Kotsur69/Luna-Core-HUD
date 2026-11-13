@@ -53,6 +53,9 @@ function fakeController(projectId, view) {
     checkWake: rec('checkWake', { ok: true, reason: 'ok' }),
     setOptions: rec('setOptions', { ok: true }),
     abortFinalize: rec('abortFinalize', { ok: true }),
+    resumeInterrupted: rec('resumeInterrupted', async () => ({ ok: true })),
+    cancelResume: rec('cancelResume', { ok: true }),
+    pauseForShutdown: rec('pauseForShutdown', { ok: true }),
   };
 }
 
@@ -329,6 +332,7 @@ test('orchestra:list summarizes every run without prompts or folders', async (t)
       settled: false,
       running: false,
       pausedUntil: 99,
+      interrupted: false,
       scheduledAt: null,
       tally: { done: 1 },
       packages: 1,
@@ -337,6 +341,36 @@ test('orchestra:list summarizes every run without prompts or folders', async (t)
   ]);
   assert.doesNotMatch(JSON.stringify(list), /secret prompt|\/repo\//);
   assert.equal(runSummary({ projectId: null, view: { id: 'x' }, running: true }, []).label, null);
+});
+
+test('resume after shutdown: payloads are validated in main, the plan id cross-checked', async (t) => {
+  const s = setup({ runs: { alpha: view('pa', { interrupted: { by: 'shutdown' } }), beta: view('pb') } });
+  t.after(s.cleanup);
+  const channels = ['orchestra:resumeInterrupted', 'orchestra:cancelResume', 'orchestra:pauseForShutdown'];
+  for (const channel of channels) {
+    for (const junk of [null, 'pa', 42, ['pa'], {}, { planId: 7 }, { planId: '../x' }, { planId: 'pa', projectId: 3 }]) {
+      assert.deepEqual(await s.invoke(channel, junk), { ok: false, error: 'badPayload' }, `${channel} ${JSON.stringify(junk)}`);
+    }
+    assert.deepEqual(await s.invoke(channel, { planId: 'pb', projectId: 'alpha' }), { ok: false, error: 'noPlan' }, 'plan of another run');
+    assert.deepEqual(await s.invoke(channel, { planId: 'pa', projectId: 'ghost' }), { ok: false, error: 'unknownProject' });
+  }
+  assert.deepEqual(calledNames(s.controllers.alpha), [], 'nothing reached the controller');
+
+  assert.deepEqual(await s.invoke('orchestra:resumeInterrupted', { planId: 'pa', extra: 'x' }), { ok: true });
+  assert.deepEqual(s.controllers.alpha.calls.at(-1), ['resumeInterrupted', { planId: 'pa' }], 'only the plan id is passed on');
+  assert.deepEqual(await s.invoke('orchestra:cancelResume', { planId: 'pa', projectId: 'alpha' }), { ok: true });
+  assert.deepEqual(await s.invoke('orchestra:pauseForShutdown', { planId: 'pb' }), { ok: true });
+  assert.deepEqual(s.controllers.beta.calls.at(-1), ['pauseForShutdown', { planId: 'pb' }]);
+  assert.ok(s.out.sent.some(([channel, p]) => channel === 'orchestra:changed' && p.projectId === 'alpha'), 'board refreshed');
+});
+
+test("resume after shutdown: Luna's Work blocks Resume now, Cancel and Pause", async (t) => {
+  const s = setup({ runs: { alpha: view('pa') }, blocked: ['alpha'] });
+  t.after(s.cleanup);
+  for (const channel of ['orchestra:resumeInterrupted', 'orchestra:cancelResume', 'orchestra:pauseForShutdown']) {
+    assert.deepEqual(await s.invoke(channel, { planId: 'pa' }), { ok: false, error: 'lunasWorkActive' }, channel);
+  }
+  assert.deepEqual(calledNames(s.controllers.alpha), [], 'nothing reached the controller');
 });
 
 test("openPr opens only the resolved run's own, shape-checked PR URL", async (t) => {

@@ -24,6 +24,12 @@
 // memory:inbox also carries `stats`: what capture proposed in the last week
 // and what was approved (src/memorylog.js). Every decision is written to that log.
 //
+// Auto-accept per type (src/memoryautoaccept.js); memory:inbox carries `auto`
+// ({types, recent, bar} or null):
+//
+//   memory:auto-set  ({type, on})    -> {ok, type, on} | {ok:false, reason}   'not-offered' = the numbers do not allow it
+//   memory:auto-undo (key)           -> {ok, key} | {ok:false, reason}        'not-auto' = not a recent auto-accept
+//
 // The renderer names a memory only by its key. src/memoryinbox.js checks the
 // key (splitKey: never a path) and refuses anything that is not waiting, so
 // these channels cannot touch a confirmed memory. Edited text is rebuilt by
@@ -36,7 +42,9 @@ const { listInbox, approve, reject, update, makeGlobal } = require('./memoryinbo
 const { MAX_BODY, MAX_TITLE } = require('./memoryrecord');
 const { scan } = require('./memorystore');
 const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
-const { captureStats, DAY_MS } = require('./memorylog');
+const { captureStats, decisionEvent, DAY_MS } = require('./memorylog');
+const auto = require('./memoryautoaccept');
+const { CANDIDATE_TYPES } = require('./memoryextract');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -98,10 +106,12 @@ function registerMemoryIpc({
   log = null,
   roots = () => ({}),
   searchStatus = () => null,
+  autoFile = () => null,
+  onSettingsChanged = () => {},
 }) {
   /** Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor. */
   const decided = (ev, record) => {
-    if (log) log.add({ ev, key: `${record.project}/${record.id}`, type: record.type, ...(ev === 'rejected' ? { title: record.title } : {}) });
+    if (log) log.add(decisionEvent(ev, record));
   };
   const events = () => (log ? log.read() : []);
   /** The anchor check walks folders main named: a failure there must not hide the list. */
@@ -134,6 +144,28 @@ function registerMemoryIpc({
     }
   };
 
+  /** Turns off the auto-accept switches whose rate fell (memoryautoaccept.js); a change is synced. */
+  const enforceAuto = (file, evs) => {
+    if (auto.enforceAutoOff({ file, events: evs, now: now(), log }).length) onSettingsChanged();
+  };
+  /** The auto-accept part of the inbox, or null. Its failure must not hide the inbox. */
+  const autoState = () => {
+    try {
+      const file = autoFile();
+      if (!file) return null;
+      const evs = events();
+      enforceAuto(file, evs);
+      return {
+        types: auto.autoStatus(auto.readAuto(file), auto.typeStats(evs, now())),
+        recent: auto.recentAutoAccepted(scan(dir()).records, isoDate(now())),
+        bar: { min: auto.AUTO_MIN_DECISIONS, days: auto.AUTO_WINDOW_DAYS, on: auto.AUTO_ON_RATE, off: auto.AUTO_OFF_RATE, undoDays: auto.AUTO_UNDO_DAYS },
+      };
+    } catch (err) {
+      console.error('[memory] auto-accept status failed:', errText(err));
+      return null;
+    }
+  };
+
   ipcMain.handle('memory:inbox', () => {
     try {
       const { captures, proposed, approved, rejected, edited, rate } = captureStats(events(), { since: now() - STATS_DAYS * DAY_MS });
@@ -143,6 +175,7 @@ function registerMemoryIpc({
         capture: captureStatus(),
         search: searchMode(),
         stats: { days: STATS_DAYS, captures, proposed, approved, rejected, edited, rate },
+        auto: autoState(),
       };
     } catch (err) {
       console.error('[memory] inbox failed:', errText(err));
@@ -184,16 +217,50 @@ function registerMemoryIpc({
     }),
   );
   ipcMain.handle('memory:retire', (_event, key) => guarded('retire', () => refusal(keyOf(key), knownRoots()) || retire(dir(), keyOf(key), { log })));
+
+  // Auto-accept (src/memoryautoaccept.js). A switch can be turned on only while
+  // this PC's numbers offer it; off always works. Undo deletes only a memory on
+  // the recent auto-accept list, never another confirmed one.
+  ipcMain.handle('memory:auto-set', (_event, req) => {
+    const type = req && typeof req === 'object' && CANDIDATE_TYPES.includes(req.type) ? req.type : null;
+    if (!type || typeof req.on !== 'boolean') return { ok: false, reason: 'bad-request' };
+    try {
+      const file = autoFile();
+      if (!file) return { ok: false, reason: 'failed' };
+      if (req.on && !auto.isOffered(auto.typeStats(events(), now())[type])) return { ok: false, reason: 'not-offered' };
+      auto.setAuto(file, type, req.on);
+      onSettingsChanged();
+      return { ok: true, type, on: req.on };
+    } catch (err) {
+      console.error('[memory] auto-accept switch failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    }
+  });
+  ipcMain.handle('memory:auto-undo', (_event, key) => {
+    const res = guarded('auto-undo', () => auto.undoAutoAccept(dir(), keyOf(key), isoDate(now()), decided));
+    // An undo counts as a rejection: the type's rate may have fallen under the bar.
+    if (res.ok) {
+      try {
+        const file = autoFile();
+        if (file) enforceAuto(file, events());
+      } catch (err) {
+        console.error('[memory] auto-accept check after undo failed:', errText(err));
+      }
+    }
+    return res;
+  });
 }
 
 /**
- * How many confirmed memories are on the review list (the hub counts them
- * with the inbox). Never throws: a count is not worth a failed hub tick.
+ * How many confirmed memories on the review list need a look (the hub counts
+ * them with the inbox). A memory flagged only as "never opened" is on the
+ * list but not in this number: it is a low-priority hint, not a reason to nag.
+ * Never throws: a count is not worth a failed hub tick.
  * @param {{dir: string, today: string, events?: object[], roots?: object}} ctx
  */
 function reviewCount({ dir, today, events = [], roots = {} }) {
   try {
-    return reviewList({ records: scan(dir).records, today, events, roots }).total;
+    return reviewList({ records: scan(dir).records, today, events, roots }).urgent;
   } catch (err) {
     console.error('[memory] review count failed:', errText(err));
     return 0;
