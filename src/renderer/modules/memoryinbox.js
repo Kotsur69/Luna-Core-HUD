@@ -8,6 +8,9 @@
 // every PC). Capture never files a memory as global by itself: only the
 // 'Make global' button here does (security review of 2026-11-11).
 //
+// Entries come most useful first (the extractor's usefulness score, unknown
+// last; src/memoryinbox.js listInbox). The score is shown, never acted on.
+//
 // Opened from the notification hub item "N memories to review"
 // (hubpanel.js openMemoryInbox). A memory is named to main only by its key.
 // Memory text is free text from a model: textContent only, never markup.
@@ -134,6 +137,18 @@ export function noteLines(item) {
   return lines;
 }
 
+/** The usefulness label of an entry: "Usefulness 72%", or the unknown form. */
+export function scoreLabel(item) {
+  const pct = item && Number.isInteger(item.usefulness) ? item.usefulness : null;
+  return pct === null ? t('mem.inbox.usefulnessUnknown') : t('mem.inbox.usefulness', { pct });
+}
+
+function scoreChip(item) {
+  const chip = el('span', 'mem-inbox__score', scoreLabel(item));
+  chip.title = t('mem.inbox.usefulnessHint');
+  return chip;
+}
+
 function notes(item) {
   return noteLines(item).map(([line, mod]) => el('p', mod ? `mem-inbox__note mem-inbox__note--${mod}` : 'mem-inbox__note', line));
 }
@@ -142,7 +157,7 @@ function entry(item) {
   const card = el('li', 'mem-inbox__item');
   card.dataset.key = item.key;
   const head = el('div', 'mem-inbox__head');
-  head.append(el('span', 'mem-inbox__type', item.type), el('span', 'mem-inbox__project', projectLabel(item.project)), el('span', 'mem-inbox__date', item.created));
+  head.append(el('span', 'mem-inbox__type', item.type), el('span', 'mem-inbox__project', projectLabel(item.project)), scoreChip(item), el('span', 'mem-inbox__date', item.created));
   card.append(head);
 
   if (editing === item.key) {

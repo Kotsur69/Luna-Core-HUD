@@ -10,6 +10,7 @@
 //   title: Do not junction node_modules into a worktree
 //   created: 2026-10-21
 //   confidence: confirmed
+//   usefulness: 72                      (optional, 0-100: the extractor's guess)
 //   supersedes: []
 //   links: [gm-deps-asar-lock]
 //   ---
@@ -55,6 +56,10 @@ const MAX_REFS = 20;
 const MAX_BODY = 5000;
 /** configsync.js refuses to push a value over docsync.MAX_DOC_BYTES (7000). */
 const MAX_RECORD_BYTES = 6500;
+/** The extractor's usefulness score is a whole number in this range. */
+const USEFULNESS_MIN = 0;
+const USEFULNESS_MAX = 100;
+const NUMBER_TEXT_RE = /^\s*-?\d+(\.\d+)?\s*$/;
 
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 
@@ -68,6 +73,19 @@ const INVISIBLE_KEEP_LINES_RE = /(?![\n\t])[\p{Cc}\p{Cf}\u{E0000}-\u{E007F}]/gu;
 const cleanLine = (s) => s.toWellFormed().replace(INVISIBLE_RE, ' ').replace(/\s+/g, ' ').trim();
 /** Multi-line clean text: newlines and tabs stay. */
 const cleanText = (s) => s.replace(/\r\n?/g, '\n').toWellFormed().replace(INVISIBLE_KEEP_LINES_RE, '').trim();
+
+/**
+ * A usefulness score: a number (or its text, as a frontmatter value is read)
+ * rounded and clamped to 0-100. Anything else is unknown: undefined, never an
+ * error, so a model that gets the field wrong does not lose its candidate.
+ * @param {unknown} raw
+ * @returns {number|undefined}
+ */
+function usefulnessOf(raw) {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' && NUMBER_TEXT_RE.test(raw) ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return undefined;
+  return Math.min(USEFULNESS_MAX, Math.max(USEFULNESS_MIN, Math.round(n)));
+}
 
 /** `global` or a normalised remote; never a path segment like `..`. */
 function validProject(p) {
@@ -123,6 +141,7 @@ function checkRecord(raw) {
   if (raw.area != null && (typeof raw.area !== 'string' || !AREA_RE.test(raw.area))) return { error: 'bad-area' };
   if (raw.source != null && typeof raw.source !== 'string') return { error: 'bad-source' };
   const source = cleanLine((raw.source || '').slice(0, MAX_SOURCE));
+  const usefulness = usefulnessOf(raw.usefulness);
 
   const record = {
     id: raw.id,
@@ -134,6 +153,7 @@ function checkRecord(raw) {
     ...(raw.last_verified ? { last_verified: raw.last_verified } : {}),
     ...(source ? { source } : {}),
     confidence: raw.confidence,
+    ...(usefulness !== undefined ? { usefulness } : {}),
     supersedes: refs(raw.supersedes),
     links: refs(raw.links).filter((x) => x !== raw.id),
     body,
@@ -225,6 +245,7 @@ function serializeRecord(record) {
     ['last_verified', record.last_verified],
     ['source', record.source],
     ['confidence', record.confidence],
+    ['usefulness', record.usefulness === undefined ? undefined : String(record.usefulness)],
   ]
     .filter(([, v]) => v !== undefined)
     .map(([k, v]) => `${k}: ${emit(v)}`);
@@ -315,7 +336,11 @@ module.exports = {
   MAX_BODY,
   MAX_TITLE,
   MAX_SOURCE,
+  USEFULNESS_MAX,
+  DATE_RE,
+  cleanLine,
   slug,
+  usefulnessOf,
   validProject,
   projectFromRepoKey,
   keyOf,

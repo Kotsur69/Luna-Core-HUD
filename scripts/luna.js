@@ -18,8 +18,15 @@
 // <config>/memory). The app is what syncs them: a memory written here is
 // pushed by the next sync of a running LunaCore.
 //
-// Which config folder: --dir, then LUNA_CONFIG_DIR, then an installed
-// LunaCore's folder if there is one, then this clone's config/.
+// Which config folder: --dir, then LUNA_CONFIG_DIR, then the folder the app
+// itself uses. The app decides by app.isPackaged (src/paths.js resolveUserDir):
+// `npm start` from a clone keeps its memories in the clone's config/, an
+// installed LunaCore in %APPDATA%\LunaCore\config (or the platform's
+// equivalent). A plain node script cannot know which of the two Mati runs, so:
+// this clone's config/ when the script runs from a git clone whose mirror holds
+// memories, else the installed folder if it exists, else this clone's config/.
+// When both folders hold memories, one stderr line names the one used and the
+// other (--dir picks explicitly).
 // ============================================================================
 
 'use strict';
@@ -32,7 +39,7 @@ const { parseArgs } = require('node:util');
 const { projectFromRepoKey, splitKey, GLOBAL } = require('../src/memoryrecord');
 const { scan, writeRecord } = require('../src/memorystore');
 const { listInbox, approve, reject } = require('../src/memoryinbox');
-const { extractPiece } = require('../src/memorycapture');
+const { extractPiece, droppedEvents } = require('../src/memorycapture');
 const { sourceNotes } = require('../src/memoryextract');
 const { runJob } = require('../src/missionrunner');
 const { createIndex, DEFAULT_LIMIT } = require('../src/memoryindex');
@@ -40,8 +47,9 @@ const { importAutoMemory, autoMemoryDir } = require('../src/memoryimport');
 const { setEnabled, readEnabled } = require('../src/memoryprojects');
 const { localStatus, memoryPaths } = require('../src/memorysync');
 const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
+const { saveNote } = require('../src/memorynote');
 const { createRepoKeys, findRepo } = require('../src/missionrepokey');
-const { createLog, logPath, captureStats, usage, rejectedTitles, DAY_MS } = require('../src/memorylog');
+const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
 const { reviewList, verify, retire } = require('../src/memoryreview');
 const { machineName } = require('../src/missionledgersync');
 
@@ -54,39 +62,73 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
   import-auto           import Claude Code auto-memory   [--from <folder>] [--force]
   card                  the project card a new tab gets, and its size
   eval <golden.json>    recall@k of [{"q": "...", "expect": "<id>"}]   [--limit n]
-  inbox                 memories that wait for approval
+  inbox                 memories that wait for approval, most useful first
   approve | reject <id> approve or delete one of them
   capture <transcript>  run the extractor over a Claude Code transcript   [--save]
                         (one small-model call; without --save nothing is written)
   review                confirmed memories that are stale, name a missing file, or were reported wrong
   verify | retire <id>  say one of them is still true, or delete it on every PC
-  stats                 approval rate of captured memories and how often memories are read   [--days n]
+  stats                 approval rate of captured memories, per usefulness band, and how often memories are read   [--days n]
 
   --project <host/owner/repo>   default: the repository of the current folder
-  --dir <config folder>         default: LUNA_CONFIG_DIR, an installed LunaCore, this clone
+  --dir <config folder>         default: LUNA_CONFIG_DIR, else this clone's config/ when its memory
+                                folder has memories, else an installed LunaCore's, else this clone's
 `;
 
 const out = (text = '') => process.stdout.write(`${text}\n`);
 
 class UsageError extends Error {}
 
-/** The per-user data folder of an installed LunaCore (Electron's userData + /config). */
-function installedConfigDir() {
-  const home = os.homedir();
+/** The repository this script lies in, and its config/ (what `npm start` uses: src/paths.js BUNDLED_DIR). */
+const REPO_ROOT = path.join(__dirname, '..');
+const CLONE_CONFIG_DIR = path.join(REPO_ROOT, 'config');
+
+/**
+ * The per-user data folder of an installed LunaCore (Electron's userData + /config).
+ * @param {{env?: object, home?: string, platform?: string}} [where] injectable for tests
+ */
+function installedConfigDir({ env = process.env, home = os.homedir(), platform = process.platform } = {}) {
   const base =
-    process.platform === 'win32'
-      ? process.env.APPDATA || path.join(home, 'AppData', 'Roaming')
-      : process.platform === 'darwin'
+    platform === 'win32'
+      ? env.APPDATA || path.join(home, 'AppData', 'Roaming')
+      : platform === 'darwin'
         ? path.join(home, 'Library', 'Application Support')
-        : process.env.XDG_CONFIG_HOME || path.join(home, '.config');
+        : env.XDG_CONFIG_HOME || path.join(home, '.config');
   return path.join(base, 'LunaCore', 'config');
 }
 
-function resolveConfigDir(flag) {
+/** Whether a config folder's memory mirror holds at least one valid memory. */
+const hasMemories = (configDir) => scan(memoryPaths(configDir).dir).records.length > 0;
+
+/**
+ * The config folder the CLI works on (see the header comment for the order).
+ * @param {string|undefined} flag the --dir value
+ * @param {{env?: object, installed?: string, clone?: string, isClone?: boolean,
+ *   warn?: (line: string) => void}} [opts] injectable for tests:
+ *   installed = an installed LunaCore's folder; clone = this clone's config/;
+ *   isClone = whether the script runs from a git checkout; warn = one stderr line
+ * @returns {string} an absolute path
+ */
+function resolveConfigDir(flag, opts = {}) {
+  const {
+    env = process.env,
+    installed = installedConfigDir({ env }),
+    clone = CLONE_CONFIG_DIR,
+    isClone = fs.existsSync(path.join(REPO_ROOT, '.git')),
+    warn = (line) => process.stderr.write(`${line}\n`),
+  } = opts;
   if (flag) return path.resolve(flag);
-  if (process.env.LUNA_CONFIG_DIR) return path.resolve(process.env.LUNA_CONFIG_DIR);
-  const installed = installedConfigDir();
-  return fs.existsSync(installed) ? installed : path.join(__dirname, '..', 'config');
+  if (env.LUNA_CONFIG_DIR) return path.resolve(env.LUNA_CONFIG_DIR);
+  const cloneDir = path.resolve(clone);
+  const installedDir = path.resolve(installed);
+  const cloneHas = hasMemories(cloneDir);
+  const chosen = isClone && cloneHas ? cloneDir : fs.existsSync(installedDir) ? installedDir : cloneDir;
+  const other = chosen === cloneDir ? installedDir : cloneDir;
+  const has = (dir) => (dir === cloneDir ? cloneHas : hasMemories(dir));
+  if (other !== chosen && has(chosen) && has(other)) {
+    warn(`note: memories in ${chosen} (used) and in ${other} (not used); --dir picks one`);
+  }
+  return chosen;
 }
 
 function resolveProject(flag) {
@@ -188,10 +230,11 @@ function cmdCard({ configDir, project }) {
     return;
   }
   const card = cardFor(configDir, project, machineName(os.hostname()));
-  if (!card) return out(`No confirmed memory for ${project} yet: its tabs get no card.`);
+  if (!card) return out(`No confirmed memory and no recent "where we stopped" note for ${project} yet: its tabs get no card.`);
   out(card.text);
   out();
-  out(`-- ${card.shown} of ${card.total} confirmed memories, ${card.chars} characters, about ${card.tokens} tokens (budget ${MAX_CARD_CHARS} characters)`);
+  const note = card.note ? ' + the "where we stopped" note' : '';
+  out(`-- ${card.shown} of ${card.total} confirmed memories${note}, ${card.chars} characters, about ${card.tokens} tokens (budget ${MAX_CARD_CHARS} characters)`);
 }
 
 function cmdEval({ dir, project, values, positionals }) {
@@ -217,12 +260,15 @@ function cmdEval({ dir, project, values, positionals }) {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-/** Phase 4: the memories that wait for approval, newest first. */
+/** The extractor's usefulness score as shown: "72%", or "?" when unknown. */
+const scoreText = (usefulness) => (Number.isInteger(usefulness) ? `${usefulness}%` : '?');
+
+/** Phase 4: the memories that wait for approval, the most useful first (listInbox's order). */
 function cmdInbox({ dir }) {
   const { items, total } = listInbox(dir);
   if (!total) return out('The inbox is empty.');
   for (const item of items) {
-    out(`[${item.type}] ${item.title}`);
+    out(`[${item.type}] ${item.title}  (usefulness ${scoreText(item.usefulness)})`);
     out(`   ${item.key}`);
     out(`   created ${item.created}${item.source ? `, ${item.source}` : ''}${item.duplicates ? `, +${item.duplicates} duplicate(s)` : ''}`);
     if (item.project === GLOBAL) out("   GLOBAL: approving puts it on every project's card");
@@ -248,7 +294,7 @@ function cmdDecide({ configDir, dir, project, positionals }, accept) {
   const key = resolveKey(dir, project, positionals[0]);
   const log = createLog(logPath(configDir));
   // The same line the app writes: a rejected title goes back to the extractor.
-  const decided = (ev, record) => log.add({ ev, key, type: record.type, ...(ev === 'rejected' ? { title: record.title } : {}) });
+  const decided = (ev, record) => log.add(decisionEvent(ev, record));
   const res = accept ? approve(dir, key, today(), decided) : reject(dir, key, decided);
   if (!res.ok) throw new UsageError(`${key}: ${res.reason}`);
   out(`${accept ? 'Approved' : 'Rejected'} ${key}${res.removed.length ? ` (and ${res.removed.length} duplicate(s) removed)` : ''}`);
@@ -273,17 +319,28 @@ async function cmdCapture({ configDir, dir, project, values, positionals }) {
   });
   if (!res.ok) throw new Error(`the extractor failed: ${res.reason}`);
   for (const record of res.records) {
-    out(`[${record.type}] ${record.title}`);
+    out(`[${record.type}] ${record.title}  (usefulness ${scoreText(record.usefulness)})`);
     out(`   ${record.project}/${record.id}${record.supersedes.length ? `  replaces: ${record.supersedes.join(', ')}` : ''}`);
     if (sourceNotes(record.source).suggestedGlobal) out('   suggested as global (filed under this project; Make global in the HUD inbox)');
     out(record.body.replace(/^/gm, '   '));
     out();
     if (values.save) {
       writeRecord(dir, record);
-      log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type });
+      log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type, usefulness: record.usefulness });
     }
   }
-  for (const r of res.rejected) out(`dropped (${r.reason}): ${r.title}`);
+  if (values.save) for (const event of droppedEvents(res.rejected, project)) log.add(event);
+  for (const r of res.rejected) out(`dropped (${r.reason}${r.usefulness === undefined ? '' : `, usefulness ${r.usefulness}%`}): ${r.title}`);
+  if (res.status) {
+    out(`Where we stopped: ${res.status}`);
+    if (values.save) {
+      const at = Math.floor(fs.statSync(path.resolve(file)).mtimeMs);
+      const noted = saveNote(dir, { project, text: res.status, date: today(), session: path.basename(file, '.jsonl'), at });
+      out(noted ? '   saved as the project note' : '   not saved: the project note comes from a later session (or could not be written)');
+    }
+  } else if (res.outside) {
+    out('No "where we stopped" note: the session read outside content.');
+  }
   const wrote = values.save ? 'saved to the inbox' : 'nothing written (--save writes them)';
   if (res.outside) out(`The session read ${res.outside} outside source(s) (web or MCP): the inbox asks to check these before approving.`);
   out(`${res.records.length} candidate(s), ${res.rejected.length} dropped (${res.reason}) - ${wrote}`);
@@ -347,6 +404,11 @@ function cmdStats({ configDir, project, values }) {
   out(`  captures: ${stats.captures}, proposed: ${stats.proposed}, approved: ${stats.approved} (${stats.edited} after an edit), rejected: ${stats.rejected}`);
   out(`  approval rate: ${pct(stats.rate)} of ${stats.approved + stats.rejected} decided${stats.rate !== null && stats.rate < 1 / 3 ? '  <-- under a third: the extractor prompt needs work' : ''}`);
   for (const [type, c] of Object.entries(stats.byType)) out(`  ${type}: proposed ${c.proposed}, approved ${c.approved}, rejected ${c.rejected}, rate ${pct(c.rate)}`);
+  // Calibration: a score that predicts the decision shows a rising approval rate band by band.
+  out('  by usefulness score (decided):');
+  for (const b of stats.bands) out(`    ${b.label.padStart(6)}: approved ${b.approved}, rejected ${b.rejected}`);
+  if (stats.under.approved + stats.under.rejected) out(`    under ${USEFULNESS_BANDS[0].min}: approved ${stats.under.approved}, rejected ${stats.under.rejected}`);
+  if (stats.unscored.approved + stats.unscored.rejected) out(`    no score: approved ${stats.unscored.approved}, rejected ${stats.unscored.rejected}`);
   const dropped = Object.entries(stats.dropped);
   if (dropped.length) out(`  dropped by the filter: ${dropped.map(([reason, n]) => `${reason} ${n}`).join(', ')}`);
   const read = [...usage(events, { since })].sort(([, a], [, b]) => b.opened - a.opened || b.found - a.found);
@@ -414,4 +476,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, resolveConfigDir, installedConfigDir };
+module.exports = { main, resolveConfigDir, installedConfigDir, CLONE_CONFIG_DIR };

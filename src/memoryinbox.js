@@ -37,6 +37,8 @@ const MAX_ID_SUFFIX = 9;
 const isPending = (record) => record.confidence !== 'confirmed';
 /** Oldest first; the key settles a tie so every PC picks the same lead of a group. */
 const byAge = ([ka, a], [kb, b]) => a.created.localeCompare(b.created) || ka.localeCompare(kb);
+/** A score to sort by: an unknown one (-1) comes after every real score. */
+const scoreOf = (record) => (record.usefulness === undefined ? -1 : record.usefulness);
 
 /**
  * The waiting entries, near-duplicates folded into the oldest of them.
@@ -68,12 +70,16 @@ function similarConfirmed(records, record) {
 
 /**
  * @param {string} dir the mirror folder (memoryPaths().dir)
- * @returns {{items: object[], total: number}} newest first; total = entries waiting, duplicates folded
+ * @returns {{items: object[], total: number}} the extractor's usefulness score highest first, an
+ *   entry without one last, newest first within the same score; total = entries waiting, duplicates folded
  */
 function listInbox(dir) {
   const { records } = scan(dir);
   const byKey = new Map(records);
-  const groups = groupPending(records).reverse();
+  // Array.prototype.sort is stable: equal scores keep the newest-first order.
+  const groups = groupPending(records)
+    .reverse()
+    .sort((a, b) => scoreOf(b.record) - scoreOf(a.record));
   const items = groups.slice(0, MAX_ITEMS).map(({ key, record, duplicates }) => ({
     key,
     project: record.project,
@@ -84,6 +90,8 @@ function listInbox(dir) {
     body: record.body,
     created: record.created,
     source: record.source || null,
+    // The extractor's guess, 0-100; null = unknown (a hand-written or older entry).
+    usefulness: record.usefulness === undefined ? null : record.usefulness,
     // The capture notes in `source` (src/memoryextract.js): the model wanted it
     // global, and how many web or MCP results the session read.
     ...sourceNotes(record.source),

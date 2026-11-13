@@ -12,7 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createCapture, extractPiece, readPiece, readLedger, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING } = require('../src/memorycapture.js');
+const { createCapture, extractPiece, readPiece, readLedger, droppedEvents, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING } = require('../src/memorycapture.js');
 const { listInbox } = require('../src/memoryinbox.js');
 const { memoryPaths } = require('../src/memorysync.js');
 const { setEnabled } = require('../src/memoryprojects.js');
@@ -400,4 +400,36 @@ test('extractPiece reports the outside count it noted', async (t) => {
 
   assert.equal(res.outside, 2);
   assert.equal(res.records[0].source, 'captured from session eeeeeeee on PC1, read 2 outside source(s)');
+});
+
+test('a candidate under the usefulness floor never reaches the inbox and is logged with its score', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('ffffffff-6666', session('the release'));
+  const scored = (title, usefulness) => ({ type: 'gotcha', scope: 'project', title, body: `${title}. Unique body.`, usefulness });
+  s.state.reply = { ok: true, answer: { candidates: [scored('Name the installer asset with dashes', 82), scored('The window was resized once', 12)] } };
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  assert.deepEqual(
+    listInbox(memoryPaths(s.configDir).dir).items.map((i) => [i.title, i.usefulness]),
+    [['Name the installer asset with dashes', 82]],
+  );
+  assert.deepEqual(
+    s.log.read().map(({ at, ...event }) => event),
+    [
+      { ev: 'proposed', key: `${PROJECT}/name-the-installer-asset-with-dashes`, type: 'gotcha', usefulness: 82 },
+      { ev: 'dropped', project: PROJECT, reason: 'low usefulness', type: 'gotcha', title: 'The window was resized once', usefulness: 12 },
+      { ev: 'capture', project: PROJECT, reason: 'saved', kept: 1, dropped: { 'low usefulness': 1 } },
+    ],
+  );
+});
+
+test('droppedEvents logs only the low-usefulness drops', () => {
+  const rejected = [
+    { title: 'Dup', reason: 'duplicate' },
+    { title: 'Weak', reason: 'low usefulness', type: 'how-to', usefulness: 3 },
+  ];
+
+  assert.deepEqual(droppedEvents(rejected, PROJECT), [{ ev: 'dropped', project: PROJECT, reason: 'low usefulness', type: 'how-to', title: 'Weak', usefulness: 3 }]);
 });

@@ -27,6 +27,12 @@ const { GLOBAL, keyOf, splitKey, validProject, normalizeRecord, recordFromFile, 
 const { fingerprint } = require('./todosync');
 
 const EXT = '.md';
+/**
+ * A file whose name starts with this is LunaCore's own per-project file (the
+ * "where we stopped" note, src/memorynote.js), never a memory: no memory id
+ * can start with it, so scan() leaves it out instead of listing it as ignored.
+ */
+const RESERVED_PREFIX = '_';
 const MAX_FILE_BYTES = 64 * 1024;
 /** projects/<host>/<owner>/<...>/<repo>: deeper than a project can be is not walked. */
 const MAX_DEPTH = 9;
@@ -94,6 +100,7 @@ function scan(dir) {
   const ignored = [];
   const mtimes = {};
   for (const [file, project] of files) {
+    if (path.basename(file).startsWith(RESERVED_PREFIX)) continue;
     let res;
     try {
       res = readOne(file, project);
@@ -167,4 +174,4 @@ function createMemoryProvider(dir, { onInvalid = () => {} } = {}) {
   };
 }
 
-module.exports = { fileFor, scan, writeRecord, removeRecord, createMemoryProvider };
+module.exports = { fileFor, scan, walk, writeRecord, removeRecord, createMemoryProvider, RESERVED_PREFIX };
