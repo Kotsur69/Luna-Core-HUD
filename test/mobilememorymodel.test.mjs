@@ -3,7 +3,7 @@
 // field, the decision payload, and the refusal codes the page translates.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { memoryHosts, pickMemoryHost, inboxFrom, decisionPayload, withoutItem, isGone, refusalKey, MAX_ITEMS } from '../mobile/src/memorymodel.js';
+import { memoryHosts, pickMemoryHost, inboxFrom, decisionPayload, withoutItem, isGone, refusalKey, outcomeOf, MAX_ITEMS } from '../mobile/src/memorymodel.js';
 
 const host = (machine, extra = {}) => ({ machine, online: true, default: false, memory: true, ...extra });
 const entry = (id, extra = {}) => ({
@@ -98,6 +98,22 @@ test('withoutItem returns a new inbox without the entry, total down by one', () 
   assert.equal(after.total, 4);
   assert.equal(inbox.items.length, 2, 'the old inbox is untouched');
   assert.equal(withoutItem(after, 'nope').total, 4);
+});
+
+test('withoutItem after every listed entry is decided keeps the count the PC reported', () => {
+  const inbox = inboxFrom({ items: [entry('one')], total: 11 });
+  const after = withoutItem(inbox, 'github.com/acme/hud/one');
+  assert.deepEqual(after, { items: [], total: 10 });
+});
+
+test('outcomeOf: done rows pass, refusals and timeouts become a capped code', () => {
+  assert.deepEqual(outcomeOf('done', { status: 'listed', items: [] }), { ok: true, result: { status: 'listed', items: [] } });
+  assert.deepEqual(outcomeOf('done', { status: 'refused', error: 'notWaiting' }), { ok: false, code: 'notWaiting' });
+  assert.deepEqual(outcomeOf('refused', { error: 'bad-signature' }), { ok: false, code: 'bad-signature' });
+  assert.deepEqual(outcomeOf('failed', {}), { ok: false, code: 'failed' });
+  assert.deepEqual(outcomeOf('timeout', {}), { ok: false, code: 'timeout' });
+  assert.deepEqual(outcomeOf('done', null), { ok: true, result: {} });
+  assert.equal(outcomeOf('refused', { error: 'x'.repeat(500) }).code.length, 80);
 });
 
 test('refusal codes: known ones get their own text, gone ones leave the list', () => {

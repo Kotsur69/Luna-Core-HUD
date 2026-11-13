@@ -22,7 +22,7 @@ import { sendHostCommand } from '../hostsend.js';
 import { hostList } from '../hostmodel.js';
 import { when } from './snapshotview.js';
 import { confirmSheet } from './sheet.js';
-import { memoryHosts, pickMemoryHost, inboxFrom, decisionPayload, withoutItem, isGone, refusalKey } from '../memorymodel.js';
+import { memoryHosts, pickMemoryHost, inboxFrom, decisionPayload, withoutItem, isGone, refusalKey, outcomeOf } from '../memorymodel.js';
 
 const PICK_KEY = 'lunacore.memory.pick';
 
@@ -47,14 +47,11 @@ const reasonText = (code) => {
   return key ? t(key) : String(code || t('memErr_failed'));
 };
 
-/** One signed command -> {ok, result} or {ok: false, code}. Never throws. */
+/** One signed command -> {ok, result} or {ok: false, code} (memorymodel.outcomeOf). Never throws. */
 async function send(cloud, host, kind, payload) {
   try {
     const { status, result } = await sendHostCommand(cloud, host, kind, payload);
-    const verdict = typeof result.status === 'string' ? result.status : status;
-    if (status === 'timeout') return { ok: false, code: 'timeout' };
-    if (status !== 'done' || /^(refused|failed)/.test(verdict)) return { ok: false, code: typeof result.error === 'string' ? result.error : verdict };
-    return { ok: true, result };
+    return outcomeOf(status, result);
   } catch (err) {
     return { ok: false, code: err && err.name === 'NotAllowedError' ? 'cancelled' : 'notSent' };
   }
@@ -154,7 +151,9 @@ export function mountMemory(main, { cloud, toast }) {
       return;
     }
     if (!inbox.items.length) {
-      listBox.replaceChildren(h('p', { class: 'empty' }, t('memEmpty')));
+      // Every listed entry decided, but the PC said more wait than it sent.
+      const more = inbox.total > 0;
+      listBox.replaceChildren(h('p', { class: more ? 'hint' : 'empty' }, more ? tf('memMoreWaiting', { n: inbox.total }) : t('memEmpty')));
       return;
     }
     const more = inbox.total > inbox.items.length ? h('p', { class: 'hint' }, tf('memShown', { n: inbox.items.length, total: inbox.total })) : null;
@@ -202,6 +201,9 @@ export function mountMemory(main, { cloud, toast }) {
     if (action === 'reject') {
       const sure = await confirmSheet({ title: t('memRejectTitle'), text: tf('memRejectText', { title: item.title }), ok: t('memReject'), danger: true });
       if (!sure) return;
+      // The heartbeat may have gone stale, or the pick changed, while the sheet was open.
+      const still = currentHost();
+      if (!still || still.machine !== host.machine || !still.online) return;
     }
     const machine = host.machine.toLowerCase();
     await locked(async () => {

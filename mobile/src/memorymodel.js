@@ -104,6 +104,25 @@ export function withoutItem(inbox, key) {
   return { items, total: Math.max(items.length, inbox.total - removed) };
 }
 
+/** An unknown refusal code from the PC is shown as it came, but never longer than this. */
+const MAX_CODE = 80;
+
+/**
+ * A finished command (hostsend.js {status, result}) -> {ok: true, result} or
+ * {ok: false, code}. A host's own "refused"/"failed" verdict inside a done
+ * row counts as a refusal; a phone-side timeout is the code 'timeout'.
+ */
+export function outcomeOf(status, result) {
+  const res = isObject(result) ? result : {};
+  if (status === 'timeout') return { ok: false, code: 'timeout' };
+  const verdict = typeof res.status === 'string' ? res.status : String(status || '');
+  if (status !== 'done' || /^(refused|failed)/.test(verdict)) {
+    const code = typeof res.error === 'string' && res.error ? res.error : verdict || 'failed';
+    return { ok: false, code: code.slice(0, MAX_CODE) };
+  }
+  return { ok: true, result: res };
+}
+
 /** Refusals after which the entry is not in the PC's inbox any more: it leaves the list. */
 const GONE = new Set(['notWaiting', 'notFound']);
 export const isGone = (code) => GONE.has(code);
