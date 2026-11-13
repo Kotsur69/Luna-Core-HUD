@@ -34,10 +34,12 @@ import { pkgStateKey, recoverAsk } from './orchestraState.js';
 import { pkgErrorText, progressText, ladderLines } from './orchestraCardLines.js';
 import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetry.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
+import { loadWorkerModel, chosenWorkerModel, takesWorkerModel, runModelLabel, packageModelBadge, workerModelControls } from './orchestraWorkerModel.js';
 import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine, reportRow } from './orchestraFinish.js';
 import * as board from './orchestraBoard.js';
 import { switcherStrip } from './orchestraSwitcher.js';
 import { runTypeSwitch, planOnlyForm, resetPlanOnlyForm, planRunPanel } from './orchestraPlanRun.js';
+import { resumeBanner, pauseRow } from './orchestraResumeBanner.js';
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
 const q = (sel) => (overlay ? overlay.querySelector(sel) : null);
@@ -61,6 +63,8 @@ const FAIL_CODES = new Set([
   // "Approve plan" (orchestraPlanApprove.js, F4a).
   'notPlanRun', 'notReady', 'noPlanDoc', 'noBase', 'unsafeBranch', 'notOnBase', 'noBranch',
   'outsidePlanFolder', 'mergeConflict', 'mergeInProgress', 'gitFailed', 'noTasks', 'todoWriteFailed', 'badId', 'unavailable',
+  // Resume after a shutdown / Pause for shutdown (orchestraResumeBanner.js).
+  'notInterrupted', 'notRunning', 'alreadyPaused',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).
@@ -218,6 +222,8 @@ function startOptions() {
   if (plan.buildPlanner === 'free') workersSel.disabled = true;
   row.append(workersLabel, workersSel);
   if (chosenWorkers() !== 'free') {
+    // Which Claude model every worker runs on (saved pref, frozen at start).
+    if (takesWorkerModel(plan)) row.append(...workerModelControls(plan, phase !== 'idle', render));
     row.append(
       el('span', 'orchestra__optlabel', t('orch.integ')),
       selectEl(integrationOptions(), chosenIntegration(), (v) => {
@@ -353,7 +359,9 @@ function pkgCard(pkg) {
   if (pkg.dependsOn.length) meta.push(t('orch.after', { ids: pkg.dependsOn.join(', ') }));
   if (pkg.files.length) meta.push(t('orch.files', { n: pkg.files.length }));
   if (pkg.verify) meta.push(t('orch.verify', { cmd: pkg.verify }));
-  if (pkg.model) meta.push(pkg.model);
+  // The model it WILL run on (override, planner's pick or the run's choice).
+  const badge = packageModelBadge(pkg, plan, plan.started || plan.scheduledAt ? plan.workers : chosenWorkers());
+  if (badge) meta.push(badge);
   // The Claude account the worker is on (claude-accounts failover), when main says.
   if (typeof pkg.account === 'string' && pkg.account) meta.push(t('orch.account.on', { account: pkg.account }));
   if (pkg.branch) meta.push(pkg.branch);
@@ -477,6 +485,9 @@ function checkWakeOnce() {
 // A countdown that started opens the board once, so its Cancel is in reach.
 let shownCountdown = null;
 function countdownKey(next) {
+  // A resume countdown after a shutdown opens the board too: Cancel in reach.
+  const i = next && next.interrupted;
+  if (i && Number.isFinite(i.resumeAt)) return `resume:${next.id}:${i.at}`;
   const power = next && next.power;
   if (!power) return null;
   const s = power.shutdown && power.shutdown.phase === 'countdown' ? `shutdown:${power.shutdown.at}` : null;
@@ -486,6 +497,19 @@ function countdownKey(next) {
 function renderPlan() {
   const banner = powerBanner(plan, { onCancel: cancelPower });
   if (banner) body.append(banner);
+  // This run's own resume-after-shutdown banner (one per run / board).
+  const interrupted = resumeBanner(plan, {
+    disabled: phase !== 'idle',
+    onResume: () => act(() => window.lunacore.resumeInterruptedOrchestra(plan.id, board.project())),
+    onCancel: () => act(() => window.lunacore.cancelOrchestraResume(plan.id, board.project())),
+  });
+  if (interrupted) body.append(interrupted);
+  const pause = pauseRow(plan, {
+    running: plan.packages.some(isActive),
+    disabled: phase !== 'idle',
+    onPause: () => act(() => window.lunacore.pauseOrchestraForShutdown(plan.id, board.project())),
+  });
+  if (pause) body.append(pause);
   const onBattery = batteryBanner(plan);
   if (onBattery) body.append(onBattery);
   armAbortReveal();
@@ -508,7 +532,7 @@ function renderPlan() {
   if (plan.model && plan.model !== 'opus' && plan.buildPlanner !== 'free') line += ` · ${t('orch.plannerModel', { model: plan.model })}`;
   if (plan.buildPlanner === 'free') line += ` · ${t('orch.pick.planner.freeUsed')}`;
   body.append(el('div', 'orchestra__summary', line));
-  body.append(el('div', 'orchestra__meta', t('orch.workers', { model: plan.workerModel, perm: plan.permissionMode })));
+  body.append(el('div', 'orchestra__meta', t('orch.workers', { model: runModelLabel(plan), perm: plan.permissionMode })));
   const running = plan.packages.some(isActive);
   if (!plan.started && !plan.scheduledAt && !plan.errors.length) body.append(startOptions());
   if (plan.scheduledAt) body.append(scheduledRow());
@@ -838,6 +862,8 @@ async function launch(ids) {
   const free = workers === 'free';
   const integration = approve && !free ? chosenIntegration() : null;
   const releaseAfter = integration === 'merge' && releaseAfterChoice(plan.projectId);
+  // The Approve screen's "Workers model"; a Free-only run has none.
+  const workerModel = approve && !free && takesWorkerModel(plan) ? chosenWorkerModel(plan) : null;
   const scope = board.project();
   phase = 'launching';
   busyPkg = Array.isArray(ids) && ids.length === 1 ? ids[0] : null;
@@ -845,7 +871,9 @@ async function launch(ids) {
   render();
   let res;
   try {
-    res = await window.lunacore.launchOrchestra({ planId: plan.id, ids, prompts, schedule, integration, free, ...(workers ? { workers } : {}), releaseAfter, projectId: scope });
+    res = await window.lunacore.launchOrchestra({
+      planId: plan.id, ids, prompts, schedule, integration, free, ...(workers ? { workers } : {}), ...(workerModel ? { workerModel } : {}), releaseAfter, projectId: scope,
+    });
   } catch {
     res = { ok: false, error: 'failed' };
   }
@@ -947,7 +975,8 @@ export async function openOrchestra(projectId) {
   }
   if (phase === 'idle') {
     const target = typeof projectId === 'string' || projectId === null ? { project: projectId } : { reset: fromTab };
-    await refetch(target);
+    // Settings may have changed the worker model since the board was last open.
+    await Promise.all([refetch(target), loadWorkerModel()]);
     try {
       planWait = await window.lunacore.getOrchestraPlanWait(board.activeProject());
     } catch {
@@ -1014,6 +1043,18 @@ if (overlay) {
   onLangChange(() => {
     if (isOpen) render();
   });
+  // At start: a run a shutdown cut was restored before this page listened -
+  // its banner (and Cancel) opens once on its own.
+  if (window.lunacore.listOrchestra) {
+    window.lunacore
+      .listOrchestra()
+      .then((runs) => {
+        const cut = Array.isArray(runs) ? runs.find((r) => r && r.interrupted === true) : null;
+        if (cut && !isOpen) openOrchestra(cut.projectId);
+      })
+      // Only the auto-open is lost: the countdown runs in main regardless.
+      .catch((err) => console.warn('[orchestra] run list unavailable:', err && err.message));
+  }
 }
 
 /**

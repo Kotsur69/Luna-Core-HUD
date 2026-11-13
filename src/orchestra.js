@@ -69,12 +69,15 @@ const planBuild = require('./orchestraPlanBuild');
 const autoSplit = require('./orchestraAutoSplit');
 // Hybrid runs (F6): the "Workers" choice and the guard over "free" packages.
 const workersRules = require('./orchestraWorkers');
+// The run's worker model (Approve screen / phone) and the model each package runs on.
+const workerModelRules = require('./orchestraWorkerModel');
 const hybridGuard = require('./orchestraHybridGuard');
 // Hybrid runs, execution side (F6c/F6d) and the opt-in free-branch review (F5).
 const hybridRules = require('./orchestraHybrid');
 const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
+const resumeRules = require('./orchestraResume');
 
 /**
  * The runPlanner args. A Claude plan without plan docs gets exactly the args
@@ -379,6 +382,8 @@ function createOrchestra(deps) {
     deps.workerSettings ||
     (() => ({ model: 'opus', effort: 'plan', permissionMode: 'bypassPermissions', integration: 'pr', allowedTools: [] }));
   const closeSession = deps.closeSession || noop;
+  // Saves the ui pref orchestraWorkerModel (uiprefs.writeUiPrefs in the wiring).
+  const saveWorkerModel = deps.saveWorkerModel || noop;
   // Merging into the base branch pushes it: main asks Mati natively. No
   // dialog available = no merge. {release: true} - the same dialog also
   // names the release cut after the merge ("Create a new release after finish").
@@ -666,6 +671,42 @@ function createOrchestra(deps) {
     clearTimer,
     log,
   });
+  // A run a PC shutdown cut (or "Pause for shutdown"): banner, countdown and
+  // resume (orchestraResume.js). The deps below are this controller's own steps.
+  const shutdownResume = resumeRules.createShutdownResume({
+    getPlan: () => plan,
+    patch: (id, fields) => patch(id, fields),
+    commit: () => commit(),
+    pump: () => pump(),
+    now,
+    setTimer: (fn, ms) => setTimer(fn, ms),
+    clearTimer: (t) => clearTimer(t),
+    isBusy: () => isBusy(),
+    finalizing: () => finalizer.isRunning(),
+    batteryHeld: () => batteryHeld(),
+    // Luna's Work resumes its own build after a restart: no second driver.
+    autoBlocked: () => !!(deps.autoResumeBlocked && deps.autoResumeBlocked()),
+    sessionAlive: (id) => sessionAlive(id),
+    transcriptExists: (cwd, id) => !!(deps.transcriptExists && deps.transcriptExists(cwd, id)),
+    nudgeLive: (pkg, text) => {
+      patch(pkg.id, { ...freshRun(), state: 'launched' });
+      return writePty(pkg.sessionId, text, { paste: true }) ? { ok: true } : { ok: false, error: 'noTab' };
+    },
+    // Held for node_modules: the hold's Resume reopens it (as Retry does).
+    reopenChat: (pkg, text) => heldOnDeps(pkg, reopenChat(pkg, text)),
+    reopenFresh: (pkg) => heldOnDeps(pkg, reopenInWorktree(pkg, briefText(pkg, pkg.branch, { resume: true }))),
+    requeue: (pkg) => patch(pkg.id, { state: 'pending', error: null, detail: null }),
+    beforeResume: () => freezeSettings(),
+    stopForPause: () => stopForPause(),
+    escWorker: (sessionId) => writePty(sessionId, ESC),
+    afterPause: () => {
+      if (deps.flush) deps.flush();
+      background(powerFlow.refresh(), 'sleep');
+    },
+    onRunEvent: (...args) => onRunEvent(...args),
+    graceMs: RESUME_GRACE_MS,
+    log,
+  });
   // Set when a run settles on its own; only such a run may shut the PC down.
   let settledFinalize = false;
   // Luna's Work hook: makePlan's optional ctx.onRunSettled, bound to the plan
@@ -683,7 +724,10 @@ function createOrchestra(deps) {
     battery.subscribe(() => {
       if (!plan) return;
       onChange(view());
-      if (!batteryHeld()) kick();
+      if (!batteryHeld()) {
+        kick();
+        shutdownResume.poke();
+      }
     });
   }
 
@@ -694,7 +738,8 @@ function createOrchestra(deps) {
    * started) - nothing launches at boot until Mati presses Approve or Retry.
    */
   function restore() {
-    const normalized = deps.loadState ? sup.normalizeStoredPlan(deps.loadState()) : null;
+    const raw = deps.loadState ? deps.loadState() : null;
+    const normalized = deps.loadState ? sup.normalizeStoredPlan(raw) : null;
     // Folders saved on another PC / under another user name re-homed here.
     const stored = normalized && deps.resolvePath ? sup.rehomePlanPaths(normalized, deps.resolvePath, deps.resolveFile) : normalized;
     if (!stored || plan) return false;
@@ -707,6 +752,8 @@ function createOrchestra(deps) {
     // start the run late - the run stays held.
     if (plan.scheduledAt && plan.scheduledAt > now()) armSchedule(plan.scheduledAt);
     else plan.scheduledAt = null;
+    // A started run the shutdown cut: the banner's countdown resumes it.
+    shutdownResume.onRestore(resumeRules.interruptedOnRestore(raw, now()));
     commit();
     // Branches older builds left behind for this plan's packages.
     sweepBranches().catch(noop);
@@ -759,6 +806,8 @@ function createOrchestra(deps) {
       killed: plan.killed,
       settled: plan.settled,
       pausedUntil: plan.pausedUntil,
+      // Cut by a PC shutdown or "Pause for shutdown": the board's resume banner.
+      interrupted: shutdownResume.view(),
       // A machine problem holding the whole run ('noNodeModules'); Resume clears it.
       hold: plan.hold
         ? {
@@ -811,6 +860,8 @@ function createOrchestra(deps) {
         dependsOn: p.dependsOn,
         verify: p.verify,
         model: p.modelOverride || p.model,
+        // The board's model badge tells an override from the planner's pick.
+        modelOverride: p.modelOverride || null,
         // F6 guard: why a "free" package was upgraded to Sonnet (null = it was not).
         hybridGuard: p.hybridGuard || null,
         // F6c/F6d: free worker, review, hand-overs, free wait (null outside hybrid runs).
@@ -859,6 +910,8 @@ function createOrchestra(deps) {
   function commit() {
     // blockedBy follows terminal / state on every transition, never stale.
     if (plan) plan.packages = sup.withBlockedBy(plan.packages);
+    // Each live worker's conversation id rides along, for a resume after a shutdown.
+    if (plan && deps.transcriptIdOf) plan.packages = resumeRules.withTranscriptIds(plan.packages, deps.transcriptIdOf, log);
     saveState(plan ? sup.serializePlan(plan) : null);
     const v = view();
     onChange(v);
@@ -918,6 +971,7 @@ function createOrchestra(deps) {
     resumeTimer = null;
     holdWatch.cancel();
     clearSchedule();
+    shutdownResume.dispose();
   }
 
   /** Worker settings + integration mode, frozen when the run starts. */
@@ -930,9 +984,28 @@ function createOrchestra(deps) {
     if (!plan.allowedTools) plan.allowedTools = (s.allowedTools || []).filter(sup.isAllowRule);
   }
 
-  // A hybrid "free" package runs on Sonnet until free workers take them (F6).
-  const modelFor = (pkg) =>
-    pkg.modelOverride || (plan.workerModel === 'plan' ? workersRules.claudeModelOf(pkg.model) : plan.workerModel);
+  // A hybrid "free" package runs on Sonnet until free workers take them (F6);
+  // a 'plan' package the planner gave no model runs on Opus (the board's badge says the same).
+  const modelFor = (pkg) => workerModelRules.packageModelOf(pkg, plan.workerModel);
+
+  /**
+   * The Approve screen's / phone's worker model, before the run starts or is
+   * scheduled only: it becomes the run's choice (frozen by freezeSettings)
+   * and the saved pref. Anything not on the allow-list is ignored - the pref
+   * decides, as before. A Free-only run has no Claude workers, so it saves
+   * nothing either.
+   */
+  function applyWorkerModel(asked, workers) {
+    const model = workerModelRules.normalizeWorkerModel(asked);
+    // A plan run keeps its own worker pool (orchestraPlanRunStart.js).
+    if (!model || plan.started || plan.scheduledAt || plan.planRun || workers === 'free') return;
+    plan.workerModel = model;
+    try {
+      saveWorkerModel(model);
+    } catch (err) {
+      log(`[orchestra] worker model pref not saved: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   /** Escalation override, then a forced Settings level, then the planner's pick, then medium. */
   const effortFor = (pkg) =>
     normalizeEffort(pkg.effortOverride) || normalizeEffort(plan.workerEffort) || normalizeEffort(pkg.effort) || DEFAULT_EFFORT;
@@ -1290,8 +1363,10 @@ function createOrchestra(deps) {
     return false;
   }
 
-  function openTab(pkg, cwd, branch, briefPath) {
+  /** @param {{resumeId?:string, resumeMessage?:string}} [resume] reopen this conversation instead (main-only opts) */
+  function openTab(pkg, cwd, branch, briefPath, resume = {}) {
     return deps.createSession({
+      ...resume,
       // A hybrid free package runs on the coding profile (never auto:easy).
       profileId: hybridRun.profileFor(pkg, plan.profileId),
       projectId: plan.projectId,
@@ -1308,10 +1383,11 @@ function createOrchestra(deps) {
   }
 
   /** openTab from a sync path (timer, watcher callback): never throws. */
-  function safeOpenTab(pkg, cwd, branch, briefPath) {
+  function safeOpenTab(pkg, cwd, branch, briefPath, resume) {
     try {
-      return openTab(pkg, cwd, branch, briefPath);
-    } catch {
+      return openTab(pkg, cwd, branch, briefPath, resume);
+    } catch (err) {
+      log(`[orchestra] could not open a tab for ${pkg.id}: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
   }
@@ -1326,6 +1402,8 @@ function createOrchestra(deps) {
     detail: null,
     lastWords: null,
     verifyTail: null,
+    // A new tab is a new conversation; commit() reads its id from the session.
+    transcriptId: null,
   });
 
   /**
@@ -1508,7 +1586,7 @@ function createOrchestra(deps) {
     const stamp = now().toString(36).slice(-5);
     for (const pkg of chosen) {
       // Kill / pause / hold / low battery while an earlier launch was awaiting git: stop here.
-      if (plan.killed || plan.pausedUntil || plan.hold || batteryHeld()) break;
+      if (plan.killed || plan.pausedUntil || plan.hold || plan.interrupted || batteryHeld()) break;
       cancelAutoRetry(pkg.id);
       const before = findPkg(pkg.id) || pkg;
       const { retryable, held, ...result } = await launchOne(before, stamp);
@@ -1516,6 +1594,13 @@ function createOrchestra(deps) {
         // The kill landed during this very launch: the tab exists, stop it too.
         writePty(result.sessionId, ESC);
         patch(pkg.id, { ...result, state: 'killed' });
+      } else if (plan.interrupted && result.state === 'launched') {
+        // "Pause for shutdown" landed during this launch. An Esc this early
+        // would reach a CLI that has not started yet: the new tab closes, the
+        // resume opens a fresh worker in the same worktree.
+        patch(pkg.id, { ...result, sessionId: null });
+        plan.packages = resumeRules.markPausedForShutdown(plan.packages, { stop: new Set([pkg.id]), requeue: new Set(), nowMs: now() });
+        closeSession(result.sessionId);
       } else {
         patch(pkg.id, result);
         if (result.state === 'failed') onLaunchFailed(before, { ...result, retryable });
@@ -1614,7 +1699,7 @@ function createOrchestra(deps) {
 
   /** Ends the run once nothing more can happen on its own, then finalizes it. */
   function checkSettled() {
-    if (!plan.started || plan.killed || plan.settled || !sup.isSettled(plan.packages, maxParallelFor(plan, MAX_PARALLEL))) return;
+    if (!plan.started || plan.killed || plan.settled || plan.interrupted || !sup.isSettled(plan.packages, maxParallelFor(plan, MAX_PARALLEL))) return;
     // A scheduled automatic relaunch keeps the run open, and so does a split in flight.
     if (retryTimers.size || splitting.size) return;
     plan.settled = true;
@@ -1683,11 +1768,11 @@ function createOrchestra(deps) {
   async function pump() {
     // On battery while the run goes: one warning per battery period.
     if (battery && plan && plan.started && !plan.killed && !plan.settled) battery.onRunStart();
-    if (!plan || !plan.started || plan.killed || plan.pausedUntil || plan.hold || pumping || batteryHeld()) return;
+    if (!plan || !plan.started || plan.killed || plan.pausedUntil || plan.hold || plan.interrupted || pumping || batteryHeld()) return;
     pumping = true;
     try {
       let ready = sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL));
-      while (ready.length && !plan.killed && !plan.pausedUntil && !plan.hold && !batteryHeld()) {
+      while (ready.length && !plan.killed && !plan.pausedUntil && !plan.hold && !plan.interrupted && !batteryHeld()) {
         await launchPackages(ready);
         ready = sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL));
       }
@@ -1781,6 +1866,8 @@ function createOrchestra(deps) {
       const { releaseAfter: _previous, ...rest } = plan.options || {};
       plan.options = sup.normalizeOptions(release ? { ...rest, releaseAfter: true } : rest);
     }
+    // After every refusal above: a refused or declined launch saves nothing.
+    applyWorkerModel(o.workerModel, workers);
     if (startAt) {
       freezeSettings();
       plan.scheduledAt = startAt;
@@ -1793,6 +1880,8 @@ function createOrchestra(deps) {
     try {
       freezeSettings();
       clearSchedule();
+      // Approve by hand on a run the shutdown cut ends its banner.
+      shutdownResume.drop();
       plan.scheduledAt = null;
       plan.killed = false;
       plan.settled = false;
@@ -1924,6 +2013,74 @@ function createOrchestra(deps) {
     patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath });
     if (old && old !== session.id && sessionAlive(old)) closeSession(old);
     return { ok: true };
+  }
+
+  /**
+   * A resume after a shutdown: the worker's own conversation reopened in its
+   * worktree (`claude --resume`, main keeps the model / effort / permission
+   * flags via launch.js withAccountResume) with `text` as its first message.
+   * @returns {{ok:true} | {ok:false, error:'noNodeModules'|'noTranscript'|'briefFailed'|'noTab'}}
+   */
+  function reopenChat(pkg, text) {
+    const transcriptId = resumeRules.normalizeTranscriptId(pkg.transcriptId);
+    if (!transcriptId) return { ok: false, error: 'noTranscript' };
+    if (!depsReady(pkg)) return { ok: false, error: 'noNodeModules' };
+    // The brief stays readable (and current) should the worker look again.
+    const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
+    if (!deps.writeBrief(briefPath, briefText(pkg, pkg.branch, { resume: true }))) return { ok: false, error: 'briefFailed' };
+    const session = safeOpenTab(pkg, pkg.cwd || pkg.root, pkg.branch, briefPath, { resumeId: transcriptId, resumeMessage: text });
+    if (!session) return { ok: false, error: 'noTab' };
+    // Main could not build a --resume command (a profile that decides its own
+    // session): the tab started on its task, i.e. the resume brief just written.
+    const resumed = typeof session.transcriptId !== 'string' || session.transcriptId === transcriptId;
+    const old = pkg.sessionId;
+    patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath, transcriptId: resumed ? transcriptId : null });
+    if (old && old !== session.id && sessionAlive(old)) closeSession(old);
+    return { ok: true, ...(resumed ? {} : { how: 'fresh' }) };
+  }
+
+  /** A reopen refused for node_modules waits for the hold's Resume (heldRetry), like Retry. */
+  function heldOnDeps(pkg, res) {
+    if (!res.ok && res.error === 'noNodeModules') patch(pkg.id, { heldRetry: true });
+    return res;
+  }
+
+  /**
+   * "Pause for shutdown"'s stop of this controller's own machinery: every
+   * timer, the reviews waiting and the playbook backoffs. Returns the
+   * packages to stop with the workers and those an auto-retry was due for.
+   * @returns {{stop:Set<string>, requeue:Set<string>}}
+   */
+  function stopForPause() {
+    const requeue = new Set(retryTimers.keys());
+    const stop = new Set([...hybridRun.cancelAll()].filter((id) => (findPkg(id) || {}).state === 'finishing'));
+    for (const p of plan.packages) if (recover.pending(p.id)) stop.add(p.id);
+    for (const id of stop) recover.cancel(id);
+    clearAllTimers();
+    for (const p of plan.packages) if (p.sessionId && (stop.has(p.id) || p.state === 'launched')) forgetSession(p.sessionId);
+    settledFinalize = false;
+    return { stop, requeue };
+  }
+
+  /** IPC orchestra:pauseForShutdown - {planId}, cross-checked here too. */
+  function pauseForShutdown(payload) {
+    const o = payload && typeof payload === 'object' ? payload : {};
+    if (!plan || o.planId !== plan.id) return { ok: false, error: 'noPlan' };
+    return shutdownResume.pause();
+  }
+
+  /** IPC orchestra:resumeInterrupted - "Resume now" on the banner. */
+  function resumeInterrupted(payload) {
+    const o = payload && typeof payload === 'object' ? payload : {};
+    if (!plan || o.planId !== plan.id) return Promise.resolve({ ok: false, error: 'noPlan' });
+    return shutdownResume.resume({ manual: true }).then((res) => (res.ok ? { ...res, plan: view() } : res));
+  }
+
+  /** IPC orchestra:cancelResume - the banner's Cancel: held as after any restart. */
+  function cancelResume(payload) {
+    const o = payload && typeof payload === 'object' ? payload : {};
+    if (!plan || o.planId !== plan.id) return { ok: false, error: 'noPlan' };
+    return shutdownResume.cancel();
   }
 
   /**
@@ -2229,7 +2386,8 @@ function createOrchestra(deps) {
     const marker = sup.markerFrom(fragment, pkg.id);
     const background = trackBackground(sessionId, fragment);
     if (pkg.state === 'stalled') {
-      if (marker && marker.kind === 'done') finish(pkg.id);
+      // Paused for shutdown: no verify / push now; the resume asks again.
+      if (marker && marker.kind === 'done' && !plan.interrupted) finish(pkg.id);
       return;
     }
     if (pkg.state !== 'launched') return;
@@ -2347,6 +2505,8 @@ function createOrchestra(deps) {
     recover.onWake();
     interruptFinalize();
     resumeGate.onResume();
+    // The resume-after-shutdown countdown is wall-clock: a sleep may have eaten it.
+    shutdownResume.onWake();
     background(powerFlow.onSystemResume(), 'sleep');
     if (!plan || !plan.pausedUntil) return;
     if (resumeTimer) clearTimer(resumeTimer);
@@ -2596,6 +2756,8 @@ function createOrchestra(deps) {
     clearAllTimers();
     plan.scheduledAt = null;
     plan.killed = true;
+    // A run paused for shutdown and then killed is no longer resumable.
+    shutdownResume.drop();
     // A kill during a usage-limit pause still counts the pause so far.
     if (plan.pausedUntil && plan.pauseStartedAt) plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, now() - plan.pauseStartedAt);
     // A running fix-up worker stops with the run: its tab closes, the base stays unpushed.
@@ -2682,6 +2844,8 @@ function createOrchestra(deps) {
     // fix-up round and the rejected HEAD may be pushed again.
     patch(pkg.id, { terminal: false, autoRetries: 0, pushFixup: false, pushBlockedSha: null, pushBlockDetail: null });
     plan.packages = sup.withBlockedBy(plan.packages);
+    // A Retry by hand takes over from the shutdown banner (the others stay stalled).
+    shutdownResume.drop();
     // Only once the package is back in play does the run resume.
     plan.started = true;
     if (!plan.runStartedAt) plan.runStartedAt = now();
@@ -2750,6 +2914,8 @@ function createOrchestra(deps) {
       if (current && current.awaitingDeps) background(finish(p.id), 'finish');
     }
     await pump();
+    // A shutdown resume that waited on this hold goes on now.
+    shutdownResume.poke();
     return { ok: true, plan: view() };
   }
 
@@ -2921,6 +3087,9 @@ function createOrchestra(deps) {
     discard,
     retry,
     resumeRun,
+    resumeInterrupted,
+    cancelResume,
+    pauseForShutdown,
     kill,
     tick,
     onTurnEnd,

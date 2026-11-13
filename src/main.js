@@ -1384,6 +1384,7 @@ const orchestraCtx = {
   sessions,
   send,
   readUiPrefs,
+  writeUiPrefs,
   readTodos,
   writeTodos,
   createSession,
@@ -1848,9 +1849,10 @@ function spawnInto(session, profile, launch = null) {
   // Crash resume (resumeLastTabs): the same conversation, nothing sent.
   const resumeWith = session.resumeQuiet ? withPlainResume : withAccountResume;
   const resumeCommand = session.resumeId
-    ? resumeWith(baseCommand, session.resumeId, session.launchTask || null)
+    ? resumeWith(baseCommand, session.resumeId, session.launchTask || null, session.resumeMessage || null)
     : null;
   session.resumeQuiet = false;
+  session.resumeMessage = null;
   // A plan-run worker never falls back to the unlocked profile command, not on
   // its first launch and not on a restart / failover (orchestraPlanRunLaunch.js).
   const taskCommand = session.task
@@ -2109,6 +2111,9 @@ function createSession(opts = {}) {
     // resumeQuiet = send nothing (crash resume), main-only like cwd.
     resumeId: opts.resumeId || null,
     resumeQuiet: Boolean(opts.resumeQuiet),
+    // First message of that reopened conversation (God Mode's resume after a
+    // PC shutdown, orchestraResume.js); null = the account-failover one.
+    resumeMessage: typeof opts.resumeMessage === 'string' ? opts.resumeMessage : null,
     size: { ...lastSize },
     watcher: null,
     gitWatcher: null,

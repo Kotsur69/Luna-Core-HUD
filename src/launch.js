@@ -111,6 +111,11 @@ function isClaudeCommand(command) {
   return path.basename(first).replace(/\.(exe|cmd|bat|ps1)$/i, '').toLowerCase() === 'claude';
 }
 
+// Same quote rule as the brief path: a first message that would break the
+// single-quoted shell argument falls back to the default one. U+2018-U+201B:
+// PowerShell treats the typographic quotes as ' too.
+const UNSAFE_QUOTE_RE = /['`\r\n‘-‛]/;
+
 /**
  * Hands a God Mode worker tab its task (DONE_ORCHESTRATOR_PLAN.md slice 3): the
  * brief sits in a file, `--add-dir` lets the tab read it without a
@@ -132,9 +137,6 @@ function isClaudeCommand(command) {
  * @returns {string|null} the command, or null when it cannot carry the task
  */
 function withTaskBrief(command, task, firstMessage) {
-  // Same quote rule as the brief path: a message that would break the
-  // single-quoted shell argument falls back to the default one.
-  const UNSAFE_QUOTE_RE = /['`\r\n‘-‛]/;
   const cmd = String(command || '').trim();
   // A plan-run worker's task never starts without its lockdown
   // (orchestraPlanRunLaunch.js withPlanLockdown builds that command).
@@ -183,17 +185,21 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * @param {string} command the profile's start command
  * @param {string} uuid transcript id to resume
  * @param {object|null} [task] the worker task the tab was first started with
+ * @param {string|null} [message] first message instead of the account one (a
+ *   God Mode resume after a PC shutdown); one that would break the single
+ *   quotes falls back to the account message
  * @returns {string|null}
  */
-function withAccountResume(command, uuid, task = null) {
+function withAccountResume(command, uuid, task = null, message = null) {
   const cmd = String(command || '').trim();
   if (!isClaudeCommand(cmd) || !UUID_RE.test(String(uuid || '')) || SESSION_ID_DECIDED.test(cmd)) return null;
   // A plan-run worker is never resumed without its lockdown: the caller waits instead.
   if (task && task.lockdown) return null;
-  const withFlags = task ? withTaskBrief(cmd, task, ACCOUNT_RESUME_MESSAGE) : null;
+  const first = typeof message === 'string' && message && !UNSAFE_QUOTE_RE.test(message) ? message : ACCOUNT_RESUME_MESSAGE;
+  const withFlags = task ? withTaskBrief(cmd, task, first) : null;
   if (withFlags) return `${withFlags} --resume ${uuid}`;
   const [bin, ...rest] = cmd.split(/\s+/);
-  return [bin, `'${ACCOUNT_RESUME_MESSAGE}'`, ...rest, '--resume', uuid].join(' ');
+  return [bin, `'${first}'`, ...rest, '--resume', uuid].join(' ');
 }
 
 /**

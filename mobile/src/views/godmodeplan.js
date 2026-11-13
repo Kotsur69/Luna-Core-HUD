@@ -6,7 +6,8 @@
 //   planning  spinner 'Planning <repo> on <host>'
 //   failed    the errors + Discard
 //   ready     the packages as checkboxes (all ticked; titles read-only), the
-//             integration mode, Claude / free workers, 'Create a release
+//             integration mode, Claude / free workers, the Claude workers'
+//             model (hidden for free workers), 'Create a release
 //             after finish' (merge only), Launch + Discard. A merge asks
 //             'Merge into main?' first.
 // Launch / Discard go to the host that published the plan, signed
@@ -18,10 +19,13 @@ import { h } from '../dom.js';
 import { t, tf } from '../i18n.js';
 import { godmodePlansFrom } from '../snapmodel.js';
 import { hostForMachine } from '../godmodestart.js';
-import { INTEGRATION_MODES, planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload } from '../godmodeplanmodel.js';
+import { INTEGRATION_MODES, WORKER_MODELS, planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload } from '../godmodeplanmodel.js';
 import { confirmSheet } from './sheet.js';
 
 const INTEGRATION_KEY = { pr: 'gmIntegrationPr', merge: 'gmIntegrationMerge', branches: 'gmIntegrationBranches' };
+/** Product names; 'plan' = each package on the planner's pick. */
+const WORKER_MODEL_NAMES = { opus: 'Opus', sonnet: 'Sonnet', fable: 'Fable' };
+const workerModelName = (m) => (m === 'plan' ? t('gmWorkerModelPlan') : WORKER_MODEL_NAMES[m] || m);
 
 const planKey = (plan) => `${plan.machine.toLowerCase()}|${plan.projectId}`;
 /** A DOM id from free text. */
@@ -111,12 +115,16 @@ export function createPlanCards(deps, runnerFor, repaint) {
     sel.addEventListener('change', () => update(plan, (d) => ({ ...d, integration: sel.value })));
     const free = h('input', { type: 'checkbox', role: 'switch', id: `${base}-free`, checked: draft.free, disabled: busy });
     free.addEventListener('change', () => update(plan, (d) => ({ ...d, free: free.checked })));
+    const model = h('select', { class: 'field', id: `${base}-model`, disabled: busy }, WORKER_MODELS.map((m) => h('option', { value: m, selected: m === draft.workerModel }, workerModelName(m))));
+    model.addEventListener('change', () => update(plan, (d) => ({ ...d, workerModel: model.value })));
     const release = h('input', { type: 'checkbox', id: `${base}-release`, checked: draft.releaseAfter, disabled: busy });
     release.addEventListener('change', () => update(plan, (d) => ({ ...d, releaseAfter: release.checked })));
     return [
       h('label', { class: 'label', for: `${base}-integ` }, t('gmIntegration')),
       sel,
       h('label', { class: 'gm-check', for: `${base}-free` }, free, h('span', { class: 'gm-check-text' }, h('span', {}, t(draft.free ? 'gmWorkersFree' : 'gmWorkersClaude')), h('span', { class: 'hint' }, t('gmWorkersHint')))),
+      draft.free ? null : h('label', { class: 'label', for: `${base}-model` }, t('gmWorkerModel')),
+      draft.free ? null : model,
       draft.integration === 'merge' ? h('label', { class: 'gm-check', for: `${base}-release` }, release, h('span', { class: 'gm-check-text' }, t('gmReleaseAfter'))) : null,
     ];
   }

@@ -30,7 +30,10 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { encodeProjectDir } = require('./observer');
+const { normalizeTranscriptId } = require('./orchestraResume');
 const { BRIEF_DIR, RESUME_GRACE_MS } = require('./orchestra');
 const { runPlanner } = require('./orchestraPlan');
 const { loadProtected } = require('./orchestraHybridGuard');
@@ -258,6 +261,24 @@ function sessionDeps(ctx) {
     },
     // Second pass + slice 5.
     closeSession: (id) => ctx.closeSession(id),
+    // A resume after a PC shutdown (orchestraResume.js): the worker's
+    // conversation id (the watcher's follows /clear, like tabResume.tabRecord)
+    // and whether its transcript reached the disk.
+    transcriptIdOf: (id) => {
+      const s = ctx.sessions.get(id);
+      return s ? (s.watcher && s.watcher.sessionUuid) || s.transcriptId || null : null;
+    },
+    transcriptExists: (cwd, uuid) => {
+      // Defence in depth: only a UUID ever becomes part of the path.
+      if (typeof cwd !== 'string' || !normalizeTranscriptId(uuid)) return false;
+      const file = path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(cwd), `${uuid}.jsonl`);
+      try {
+        return fs.statSync(file).isFile();
+      } catch (err) {
+        if (err && err.code !== 'ENOENT') ctx.log(`[orchestra] transcript check failed: ${err.code || err.message}`);
+        return false;
+      }
+    },
   };
 }
 
@@ -749,6 +770,9 @@ function builderDeps(projectId, ctx, self) {
   const building = () => ctx.builder.isBuilding(projectId);
   const wrapped = ctx.builder.wrapPlanner(runPlanner);
   return {
+    // Luna's Work resumes its own build after a restart: God Mode's shutdown
+    // countdown does not drive the same run (Resume now by hand still works).
+    autoResumeBlocked: () => building(),
     runPlanner: (args) => (building() ? wrapped(args) : runPlanner(args)),
     workerSettings: () => {
       const prefs = ctx.readUiPrefs();
@@ -761,6 +785,12 @@ function builderDeps(projectId, ctx, self) {
         checkCommand: prefs.orchestraCheckCommand,
       };
       return building() ? ctx.builder.workerSettings(base) : base;
+    },
+    // The Approve screen's / phone's worker model becomes the saved pref
+    // (orchestra.js validates it first; writeUiPrefs allow-lists it again).
+    saveWorkerModel: (model) => {
+      if (typeof ctx.writeUiPrefs !== 'function') return;
+      if (!ctx.writeUiPrefs({ orchestraWorkerModel: model })) ctx.log('[orchestra] worker model pref write failed');
     },
     // Merge mode pushes the base branch with no PR review: Mati confirms it
     // here, natively - a renderer can ask for it, never grant it. A Luna's
@@ -793,7 +823,7 @@ function builderDeps(projectId, ctx, self) {
  *   secretGate: {wrapSelfCheck:Function, wrapPushBranch:Function},
  *   overnight: {suspendAwake:Function, restoreAwake:Function},
  *   sessions: Map<string, object>, send: (channel:string, payload:unknown) => void,
- *   readUiPrefs: () => object, readTodos: Function, writeTodos: Function,
+ *   readUiPrefs: () => object, writeUiPrefs?: (partial:object) => object|null, readTodos: Function, writeTodos: Function,
  *   createSession: Function, closeSession: Function, usageResetAt: () => number|null,
  *   toolEnv: () => object, userDir: () => string, ensureUserDir: () => boolean, runsDir: () => string,
  *   worktrees: {addWorktree:Function, dirtyCount:Function, removeWorktree:Function,
