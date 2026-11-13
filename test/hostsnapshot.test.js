@@ -39,6 +39,7 @@ test('hostSnapshot: the plan shape, no path', () => {
     os: 'darwin',
     default: true,
     godmode: false,
+    memory: false,
     repos: [{ id: 'lunacore', key: 'git:github.com/kotsur69/luna-core-hud', name: 'Luna-Core-HUD', cloned: true, status: 'cloned' }],
     skills: ['graphify', 'ecc:plan'],
     commands: ['review'],

@@ -18,7 +18,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerSaveBlocker,
 // headless src/hostmain.js instead of the HUD, before any HUD module loads.
 // A CommonJS module may return at the top level: nothing below runs then.
 // eslint-disable-next-line no-use-before-define
-if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud, chatTabs: phoneTabs, configSync, godmode: phoneGodmode }) }) !== 'hud') return;
+if (require('./hostmain').boot({ argv: process.argv, hud: () => ({ cloud, chatTabs: phoneTabs, configSync, godmode: phoneGodmode, memory: phoneMemory }) }) !== 'hud') return;
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -178,6 +178,7 @@ const { createPlaytestOnce, createConfirmDialog: createPlaytestPassConfirm, regi
 const { machineName } = require('./missionledgersync');
 const { createHostChatTabs, readOnlySession } = require('./hostchattabs');
 const { createHostGodmode } = require('./hostgodmode');
+const { createHostMemory } = require('./hostmemory');
 const { createHostPush } = require('./hostpush');
 let cloud = null;
 let weeklyReview = null;
@@ -1132,6 +1133,18 @@ function memoryLogOf() {
   if (!memoryLog) memoryLog = createMemoryLog(memoryLogPath(userDir()));
   return memoryLog;
 }
+
+// The phone's signed memory.* commands (src/hostmemory.js): the inbox's
+// Approve / Reject, live only when this HUD is switched into host mode. A
+// decision syncs and repaints exactly like one made in the inbox panel.
+const phoneMemory = createHostMemory({
+  dir: () => memoryPaths(userDir()).dir,
+  log: { add: (event) => memoryLogOf().add(event) },
+  onChanged: () => {
+    if (memorySync) memorySync.soon();
+    send('memory:changed', {});
+  },
+});
 
 /** Turns off the auto-accept switches whose rate fell, and lists the recent ones for the hub. */
 function memoryAutoOffNotices() {
