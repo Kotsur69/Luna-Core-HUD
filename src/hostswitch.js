@@ -18,7 +18,8 @@
 //
 // Only this path hands startHost() the HUD's God Mode (src/hostgodmode.js):
 // the phone's signed godmode.* commands run in HUD host mode only, a headless
-// `--host` refuses them with needsHud.
+// `--host` refuses them with needsHud. The same goes for the HUD's memory
+// inbox (src/hostmemory.js): only the HUD syncs the memory mirror.
 // ============================================================================
 
 'use strict';
@@ -28,7 +29,7 @@
  *   machine: string,
  *   startHost: (opts: object) => {stop: () => void, setDefault: () => void},
  *   hud: () => ({cloud: object|null, chatTabs?: object|null, configSync?: {soon: () => void}|null,
- *     godmode?: object|null}),
+ *     godmode?: object|null, memory?: object|null}),
  *   windows: () => Array<{hide: () => void, show: () => void, isDestroyed: () => boolean}>,
  *   isDefault: () => boolean,
  *   log?: (...args: unknown[]) => void,
@@ -51,7 +52,7 @@ function createHostSwitch({ machine, startHost, hud, windows, isDefault, log = c
       return status();
     }
     // Only once the HUD is up: its cloud must exist, or a second one would start.
-    const { cloud, chatTabs, godmode } = hud() || {};
+    const { cloud, chatTabs, godmode, memory } = hud() || {};
     if (!cloud) {
       log('[hostswitch] HUD cloud not ready, host mode not started');
       return { ok: false, reason: 'notReady' };
@@ -66,6 +67,7 @@ function createHostSwitch({ machine, startHost, hud, windows, isDefault, log = c
         cloud,
         chatTabs: chatTabs || null,
         godmode: godmode || null,
+        memory: memory || null,
         // Every default write (start flag, this switch, the host tray's item).
         onDefaultSet: pushDefaultSoon,
         onStop: () => {

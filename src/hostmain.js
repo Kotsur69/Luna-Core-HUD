@@ -209,15 +209,17 @@ function actionDeps({ cloud, repos, puts, configSync, after }) {
  * Starts host mode in this process.
  * @param {{electron: object, machine: string, makeDefault?: boolean,
  *   cloud?: object|null, onStop?: () => void, chatTabs?: object|null,
- *   godmode?: object|null}} opts
+ *   godmode?: object|null, memory?: object|null}} opts
  *   cloud = the HUD's running cloud (switch mode), else one is started here;
  *   onStop = what Stop does instead of quitting (switch mode: show the HUD);
  *   chatTabs = the HUD's read-only tabs for phone sessions (switch mode only);
  *   onDefaultSet = runs after a default write when there is no own configSync;
  *   godmode = the HUD's phone God Mode (src/hostgodmode.js, switch mode only):
- *   without it every godmode.* command is refused with needsHud
+ *   without it every godmode.* command is refused with needsHud;
+ *   memory = the HUD's phone memory inbox (src/hostmemory.js, switch mode only):
+ *   without it every memory.* command is refused with needsHud
  */
-function startHost({ electron, machine, makeDefault = false, cloud: given = null, onStop = null, chatTabs = null, onDefaultSet = null, godmode = null }) {
+function startHost({ electron, machine, makeDefault = false, cloud: given = null, onStop = null, chatTabs = null, onDefaultSet = null, godmode = null, memory = null }) {
   const { app, Tray, Menu, shell, dialog, powerSaveBlocker, nativeImage } = electron;
   const { execFile } = require('child_process');
   const paths = require('./paths');
@@ -240,6 +242,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
   const { createHostEvents } = require('./hostevents');
   const { createHostPush } = require('./hostpush');
   const { needsHudHandlers } = require('./hostgodmode');
+  const { needsHudMemoryHandlers } = require('./hostmemory');
   const { spawn } = require('child_process');
   const { randomUUID } = require('crypto');
 
@@ -330,6 +333,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
         os: process.platform,
         isDefault: readDefault(defaultFile) === machine,
         godmode: Boolean(godmode),
+        memory: Boolean(memory),
         repos: list,
         skills,
         commands: commandNames(),
@@ -372,9 +376,14 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     if (events && setupState() === 'ready') events.prune().catch((err) => console.error('[hostmain] event prune failed:', err.message));
   };
 
-  // ---- signed commands (src/hostactions.js, src/hostchat.js, src/hostgodmode.js) ----
+  // ---- signed commands (src/hostactions.js, src/hostchat.js, src/hostgodmode.js, src/hostmemory.js) ----
   const auth = createHostAuth({ host: machine, keysPath, noncesPath: paths.local('host-nonces.local.json'), log: console.error });
-  const handlers = { ...createHostActions(actionDeps({ cloud, repos, puts, configSync, after: heartbeat })), ...(chat ? chat.handlers : {}), ...(godmode ? godmode.handlers : needsHudHandlers()) };
+  const handlers = {
+    ...createHostActions(actionDeps({ cloud, repos, puts, configSync, after: heartbeat })),
+    ...(chat ? chat.handlers : {}),
+    ...(godmode ? godmode.handlers : needsHudHandlers()),
+    ...(memory ? memory.handlers : needsHudMemoryHandlers()),
+  };
   const commands = cloud.client ? createHostCommands({ client: cloud.client, host: machine, verify: commandVerifier(auth), handlers, log: console.error }) : null;
   let commandsOn = false;
 
