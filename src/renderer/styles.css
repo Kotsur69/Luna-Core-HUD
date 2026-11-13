@@ -6045,6 +6045,10 @@ section.orchestra__planrun {
 .mem-inbox__tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--edge-glow); }
 .mem-inbox__tab:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: -2px; }
 .mem-inbox__ask { margin: 0; font-size: var(--fs-sm); color: var(--warn); }
+/* Keyboard review (modules/memoryinboxkeys.js): the entry the keys act on, and the key hint. */
+.mem-inbox__item:focus { outline: none; }
+.mem-inbox__item.is-selected { border-color: var(--edge-glow); outline: 2px solid var(--edge-glow); outline-offset: 2px; }
+.mem-inbox__keys { margin-top: var(--space-3); font-family: var(--font-mono); font-size: var(--fs-xs); }
 @media (prefers-reduced-motion: reduce) { .mem-inbox__tab { transition: none; } }
 
 /* The brief's buttons inside the notification hub drawer (hub.css, hubpanel.js). */
