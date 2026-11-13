@@ -158,19 +158,29 @@ test('an edit keeps the current CCR port and passes any sent number through for 
 });
 
 test('resolveTemplateUpdate keeps a stored GEMINI_API_KEY when an edit does not resend it', () => {
-  const gemini = { id: 'gemini-cli', label: 'Gemini', templateId: 'gemini-cli', command: 'gemini', env: { GEMINI_API_KEY: 'AIza-stored' } };
-  const resolved = resolveTemplateUpdate([gemini], { id: 'gemini-cli', label: 'Renamed' }, providers);
+  const gemini = { id: 'fg', label: 'Gemini', templateId: 'freellm-gemini', command: 'gemini', env: { GEMINI_API_KEY: 'AIza-stored' } };
+  const resolved = resolveTemplateUpdate([gemini], { id: 'fg', label: 'Renamed' }, providers);
   assert.equal(resolved.ok, true);
   const built = buildProfileFromTemplate(resolved.template, resolved.input);
-  assert.deepEqual(built.profile.env, { GEMINI_API_KEY: 'AIza-stored' });
+  assert.equal(built.profile.env.GEMINI_API_KEY, 'AIza-stored');
   assert.equal(built.profile.command, 'gemini');
 });
 
+test('renaming an Antigravity profile keeps it launching agy', () => {
+  const agy = { id: 'antigravity-michal', label: 'Antigravity - Michał', templateId: 'antigravity', command: 'agy', env: {} };
+  const resolved = resolveTemplateUpdate([agy], { id: 'antigravity-michal', label: 'Antigravity - work' }, providers);
+  assert.equal(resolved.ok, true);
+  const built = buildProfileFromTemplate(resolved.template, resolved.input);
+  assert.equal(built.profile.label, 'Antigravity - work');
+  assert.equal(built.profile.command, 'agy');
+  assert.deepEqual(built.profile.env, {});
+});
+
 test('resolveTemplateUpdate keeps lunaSync unless the payload sends a boolean', () => {
-  const gemini = { id: 'gemini-cli', label: 'Gemini', templateId: 'gemini-cli', command: 'gemini', env: {}, lunaSync: true };
-  assert.equal(resolveTemplateUpdate([gemini], { id: 'gemini-cli' }, providers).input.lunaSync, true);
-  assert.equal(resolveTemplateUpdate([gemini], { id: 'gemini-cli', lunaSync: false }, providers).input.lunaSync, false);
-  assert.equal(resolveTemplateUpdate([gemini], { id: 'gemini-cli', lunaSync: 'on' }, providers).input.lunaSync, true);
+  const codex = { id: 'codex-cli', label: 'Codex', templateId: 'codex-cli', command: 'codex', env: {}, lunaSync: true };
+  assert.equal(resolveTemplateUpdate([codex], { id: 'codex-cli' }, providers).input.lunaSync, true);
+  assert.equal(resolveTemplateUpdate([codex], { id: 'codex-cli', lunaSync: false }, providers).input.lunaSync, false);
+  assert.equal(resolveTemplateUpdate([codex], { id: 'codex-cli', lunaSync: 'on' }, providers).input.lunaSync, true);
 });
 
 test('pickTemplateInput passes lunaSync through', () => {

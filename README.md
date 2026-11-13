@@ -1308,14 +1308,17 @@ and the model behind it change.
 |---|---|---|
 | **Direct** | Claude Cloud, LM Studio, GLM, Kimi, Kimi Code, OpenRouter, FreeLLMAPI (claude) | The provider speaks the Anthropic API itself; the profile sets `ANTHROPIC_BASE_URL` and the key. |
 | **Via CCR** | Ollama, Codex, Gemini, Grok, OpenAI-compatible | Routed through a local [`claude-code-router`](https://github.com/musistudio/claude-code-router) gateway that translates the API. |
-| **Native CLI** | Codex CLI, Gemini CLI, FreeLLMAPI (Codex / Gemini) | The tab runs the vendor's own agent CLI (`codex`, `gemini`) instead of `claude`. You sign in with your ChatGPT / Google account inside the tab, so no key is needed. |
+| **Native CLI** | Codex CLI, Antigravity, FreeLLMAPI (Codex / Gemini) | The tab runs the vendor's own agent CLI (`codex`, `agy`, `gemini`) instead of `claude`. You sign in with your ChatGPT / Google account inside the tab, so no key is needed. |
+
+**Antigravity** replaces the retired Gemini CLI template. The tab runs `agy`,
+Google's Antigravity CLI, signed in with your Google account (free or a Gemini
+plan). `agy` keeps one sign-in per Windows user, in Windows Credential Manager,
+and refreshes it itself, so you log in once. Name the profile whatever you
+like in Settings → AI providers. Several profiles all use that same sign-in:
+`agy` cannot keep two Google accounts apart. "Use my Luna setup" is not offered
+for it.
 
 **Free tiers.** You don't need a paid account to try these:
-
-- **Gemini CLI**: signing in with a Google account gives about 1,000 requests a
-  day. An unpaid API key gets only 250 a day, and only on Flash. Pick
-  *Login with Google* under `/auth`. The optional key field is for a paid key
-  later.
 - **Codex CLI**: uses whatever plan your ChatGPT login has, so the free plan's
   limits apply. Upgrading the same login later needs no change here.
 - **OpenRouter**: a free account key, with every model tier set to
