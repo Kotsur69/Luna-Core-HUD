@@ -42,8 +42,9 @@
 // `plans` (optional, Phone God Mode A): the current plan of each project
 // that has one not started yet (src/hostgodmode.js plans()): {planId,
 // projectId, repoName, state: planning|ready|failed, errors, packages:
-// [{id, title, deps, model}], todos: the picked to-do titles}. Text only,
-// paths scrubbed from errors. The phone launches a ready plan by its ids.
+// [{id, title, deps, model}], todos: the picked to-do titles, workerModel:
+// the run's worker model (opus|sonnet|fable|plan, null when unknown)}. Text
+// only, paths scrubbed from errors. The phone launches a ready plan by its ids.
 // ============================================================================
 
 'use strict';
@@ -56,6 +57,9 @@ const VERSION = 2;
 /** Row versions a reader accepts: v1 rows (no hub lines) still parse. */
 const READ_VERSIONS = new Set([1, 2]);
 const isKnownVersion = (v) => READ_VERSIONS.has(v);
+// src/uiprefs.js ORCHESTRA_WORKER_MODELS (this file also runs on the phone,
+// which cannot require uiprefs; test/orchestra-worker-model.test.js keeps them in line).
+const PLAN_WORKER_MODELS = ['opus', 'sonnet', 'fable', 'plan'];
 const HUB_MAX_LINES = 10;
 const HUB_MAX_LINE = 200;
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
@@ -395,6 +399,7 @@ function cleanPlan(p) {
     errors: (Array.isArray(p.errors) ? p.errors : []).slice(0, MAX_LINES).map((e) => clean(scrubPaths(e), MAX_LINE)).filter(Boolean),
     packages: (Array.isArray(p.packages) ? p.packages : []).slice(0, MAX_PACKAGES).map(cleanPlanPackage).filter(Boolean),
     todos: (Array.isArray(p.todos) ? p.todos : []).slice(0, MAX_LINES).map((t) => clean(scrubPaths(t), MAX_TITLE)).filter(Boolean),
+    workerModel: PLAN_WORKER_MODELS.includes(p.workerModel) ? p.workerModel : null,
   };
 }
 
@@ -774,6 +779,7 @@ module.exports = {
   queueFrom,
   cleanQueue,
   cleanPlans,
+  PLAN_WORKER_MODELS,
   plansFrom,
   liveCounts,
   scrubPaths,

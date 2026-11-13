@@ -762,6 +762,12 @@ function builderDeps(projectId, ctx, self) {
       };
       return building() ? ctx.builder.workerSettings(base) : base;
     },
+    // The Approve screen's / phone's worker model becomes the saved pref
+    // (orchestra.js validates it first; writeUiPrefs allow-lists it again).
+    saveWorkerModel: (model) => {
+      if (typeof ctx.writeUiPrefs !== 'function') return;
+      if (!ctx.writeUiPrefs({ orchestraWorkerModel: model })) ctx.log('[orchestra] worker model pref write failed');
+    },
     // Merge mode pushes the base branch with no PR review: Mati confirms it
     // here, natively - a renderer can ask for it, never grant it. A Luna's
     // Work build's own plan was confirmed the same way when Mati started that run.
@@ -793,7 +799,7 @@ function builderDeps(projectId, ctx, self) {
  *   secretGate: {wrapSelfCheck:Function, wrapPushBranch:Function},
  *   overnight: {suspendAwake:Function, restoreAwake:Function},
  *   sessions: Map<string, object>, send: (channel:string, payload:unknown) => void,
- *   readUiPrefs: () => object, readTodos: Function, writeTodos: Function,
+ *   readUiPrefs: () => object, writeUiPrefs?: (partial:object) => object|null, readTodos: Function, writeTodos: Function,
  *   createSession: Function, closeSession: Function, usageResetAt: () => number|null,
  *   toolEnv: () => object, userDir: () => string, ensureUserDir: () => boolean, runsDir: () => string,
  *   worktrees: {addWorktree:Function, dirtyCount:Function, removeWorktree:Function,

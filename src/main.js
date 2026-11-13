@@ -1359,6 +1359,7 @@ const orchestraCtx = {
   sessions,
   send,
   readUiPrefs,
+  writeUiPrefs,
   readTodos,
   writeTodos,
   createSession,

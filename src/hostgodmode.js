@@ -12,8 +12,9 @@
 //                    (src/orchestraPlanStart.js). Answers {status:'planning'}
 //                    at once; planReady / planFailed go out as a push and the
 //                    plan lands in the `godmode` snapshot (plans()).
-//   godmode.launch   {projectId, planId, ids?, integration?, free?, releaseAfter?}
-//                    controller.launch(). For a merge the signed command IS
+//   godmode.launch   {projectId, planId, ids?, integration?, free?, releaseAfter?,
+//                    workerModel?} controller.launch(). workerModel is one of
+//                    the ui pref's allow-list (opus/sonnet/fable/plan). For a merge the signed command IS
 //                    the confirmation: {mergeConfirmed: true} is passed on this
 //                    path only, never from a payload.
 //   godmode.kill     {projectId}  stop the run (always allowed, like the HUD)
@@ -35,6 +36,7 @@
 
 const { todoSelection, planTarget, runPlan } = require('./orchestraPlanStart');
 const { INTEGRATION_MODES } = require('./orchestraSupervisor');
+const { normalizeWorkerModel } = require('./orchestraWorkerModel');
 
 const KINDS = ['godmode.plan', 'godmode.launch', 'godmode.kill', 'godmode.retry', 'godmode.finish', 'godmode.discard'];
 const PROJECT_ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
@@ -220,6 +222,11 @@ function createHostGodmode(deps) {
       if (!INTEGRATION_MODES.includes(payload.integration)) return { error: 'badIntegration' };
       out.integration = payload.integration;
     }
+    if (payload.workerModel !== undefined && payload.workerModel !== null) {
+      const model = normalizeWorkerModel(payload.workerModel);
+      if (!model) return { error: 'badWorkerModel' };
+      out.workerModel = model;
+    }
     for (const flag of ['free', 'releaseAfter']) {
       if (payload[flag] === undefined) continue;
       if (typeof payload[flag] !== 'boolean') return { error: 'badPayload' };
@@ -347,6 +354,8 @@ function createHostGodmode(deps) {
       errors,
       packages: view.packages.map((p) => ({ id: p.id, title: p.title, deps: p.dependsOn, model: p.model })),
       todos,
+      // The run's worker model the phone's select opens on (the saved pref until Approve).
+      workerModel: normalizeWorkerModel(view.workerModel),
     };
   }
 
