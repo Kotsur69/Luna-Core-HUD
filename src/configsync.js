@@ -181,6 +181,7 @@ function startConfigSync({ cloud, onChanged, extraProviders = [] }) {
   const { createHostDefaultProvider } = require('./hostdefault');
   const { lifeProviders } = require('./lifedailysync');
   const { createMemoryProjectsProvider } = require('./memoryprojects');
+  const { createAutoAcceptProvider } = require('./memoryautoaccept');
   const { memoryPaths } = require('./memorysync');
   paths.ensureUserDir();
   const sync = createConfigSync({
@@ -193,6 +194,8 @@ function startConfigSync({ cloud, onChanged, extraProviders = [] }) {
       ...lifeProviders(),
       // Which projects have Luna Core Memory switched on (src/memoryprojects.js).
       createMemoryProjectsProvider(memoryPaths(paths.userDir()).projects),
+      // Which memory types are auto-accepted (src/memoryautoaccept.js), the same way.
+      createAutoAcceptProvider(memoryPaths(paths.userDir()).autoAccept),
       ...(Array.isArray(extraProviders) ? extraProviders : []),
     ],
     metaFile: paths.local('config-sync.local.json'),

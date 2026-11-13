@@ -263,6 +263,7 @@ const { runJob: runMemoryJob } = require('./missionrunner');
 // Phase 5: the capture and usage log, and the review list of confirmed memories.
 const { createLog: createMemoryLog, logPath: memoryLogPath } = require('./memorylog');
 const { toolVerdict: memoryToolVerdict } = require('./memoryreview');
+const { enforceAutoOff: enforceMemoryAutoOff, recentAutoOffs: recentMemoryAutoOffs } = require('./memoryautoaccept');
 const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
 let memorySync = null;
 let memoryCapture = null;
@@ -1130,6 +1131,18 @@ let memoryLog = null;
 function memoryLogOf() {
   if (!memoryLog) memoryLog = createMemoryLog(memoryLogPath(userDir()));
   return memoryLog;
+}
+
+/** Turns off the auto-accept switches whose rate fell, and lists the recent ones for the hub. */
+function memoryAutoOffNotices() {
+  const file = memoryPaths(userDir()).autoAccept;
+  const log = memoryLogOf();
+  const now = Date.now();
+  const events = log.read();
+  const turnedOff = enforceMemoryAutoOff({ file, events, now, log }).length > 0;
+  if (turnedOff && configSync) configSync.soon();
+  // The log is read again only when this call added an `auto-off` line to it.
+  return recentMemoryAutoOffs(turnedOff ? log.read() : events, now);
 }
 
 /**
@@ -3331,6 +3344,9 @@ function registerIpc() {
     // Resolved per call: the user folder may not exist yet when this is registered.
     log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
     roots: memoryRoots,
+    // Auto-accept per type (src/memoryautoaccept.js): the switches sync in the config scope.
+    autoFile: () => memoryPaths(userDir()).autoAccept,
+    onSettingsChanged: () => configSync && configSync.soon(),
   });
   // Notification hub (face icon + right drawer): docs/tbc_docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
   // Other PCs' runs come from their `godmode` rows; done marks sync as config units.
@@ -3357,6 +3373,8 @@ function registerIpc() {
         const today = new Date().toISOString().slice(0, 10);
         return listMemoryInbox(dir).total + memoryReviewCount({ dir, today, events: memoryLogOf().read(), roots: memoryRoots() });
       },
+      // Auto-accept switches that turned themselves off lately (checked here too, src/memoryautoaccept.js).
+      memoryAutoOff: () => memoryAutoOffNotices(),
       hostOn: () => {
         const control = require('./hostmain').hostControl();
         return Boolean(control && control.status().on);
@@ -4030,6 +4048,8 @@ app.whenReady().then(() => {
       const parts = lifeParts(names);
       if (parts.length) send('life:changed', { parts });
       if (names.includes('hubprefs')) send('hub:prefsChanged', {});
+      // Another PC switched a memory type's auto-accept: the memory window repaints.
+      if (names.includes('memory-autoaccept')) send('memory:changed', {});
     },
     extraProviders: hubApi ? [hubApi.doneProvider, hubApi.seenProvider, hubApi.prefsProvider] : [],
   });

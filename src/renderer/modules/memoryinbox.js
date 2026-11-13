@@ -20,6 +20,8 @@
 
 import { t } from './util.js';
 import { createTallOverlay } from './talloverlay.js';
+import { COMMANDS, keyCommand, typingIn, moveSelection, keepSelection } from './memoryinboxkeys.js';
+import { autoSection } from './memoryautopanel.js';
 
 /** Characters of a body shown before "show all". */
 export const PREVIEW_CHARS = 320;
@@ -37,6 +39,14 @@ const failed = new Map();
 let tab = null;
 /** The key whose "Retire" waits for a second click, or null. */
 let confirming = null;
+/** The entry the keyboard acts on (memoryinboxkeys.js), or null; and where it was listed. */
+let selected = null;
+let selectedIndex = 0;
+/** The entries of the list on screen, in order: what the keys move through and act on. */
+let shownItems = [];
+/** Auto-accept (memoryautopanel.js): a switch call in flight, and the last failure's i18n key. */
+let switching = false;
+let autoError = null;
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
 
@@ -153,9 +163,17 @@ function notes(item) {
   return noteLines(item).map(([line, mod]) => el('p', mod ? `mem-inbox__note mem-inbox__note--${mod}` : 'mem-inbox__note', line));
 }
 
-function entry(item) {
-  const card = el('li', 'mem-inbox__item');
+/** A list entry: focusable by the keyboard selection, marked when selected. */
+function cardFor(item) {
+  const card = el('li', item.key === selected ? 'mem-inbox__item is-selected' : 'mem-inbox__item');
   card.dataset.key = item.key;
+  card.tabIndex = -1;
+  if (item.key === selected) card.setAttribute('aria-current', 'true');
+  return card;
+}
+
+function entry(item) {
+  const card = cardFor(item);
   const head = el('div', 'mem-inbox__head');
   head.append(el('span', 'mem-inbox__type', item.type), el('span', 'mem-inbox__project', projectLabel(item.project)), scoreChip(item), el('span', 'mem-inbox__date', item.created));
   card.append(head);
@@ -208,8 +226,7 @@ export function flagLine(flag) {
 
 /** One confirmed memory that needs a look: still true, or retire (asked twice). */
 function reviewEntry(item) {
-  const card = el('li', 'mem-inbox__item');
-  card.dataset.key = item.key;
+  const card = cardFor(item);
   const head = el('div', 'mem-inbox__head');
   head.append(el('span', 'mem-inbox__type', item.type), el('span', 'mem-inbox__project', projectLabel(item.project)), el('span', 'mem-inbox__date', item.last_verified || item.created));
   const shown = expanded.has(item.key) ? { text: item.body, cut: false } : preview(item.body);
@@ -273,6 +290,7 @@ function switchTab(name) {
   if (name === tab || editing !== null) return;
   tab = name;
   confirming = null;
+  selected = null;
   load(undefined, undefined, true);
 }
 
@@ -329,6 +347,10 @@ function render(res, review, focusKey, focusIndex, focusTab) {
   const listed = new Set(shown.items.map((item) => item.key));
   if (editing !== null && !listed.has(editing)) editing = null;
   if (confirming !== null && !listed.has(confirming)) confirming = null;
+  // A decided entry hands the keyboard selection to the one that took its place.
+  shownItems = shown.items;
+  selected = keepSelection(shown.items.map((item) => item.key), selected, selectedIndex);
+  selectedIndex = Math.max(0, shown.items.findIndex((item) => item.key === selected));
   const panel = el('div');
   panel.id = PANEL_ID;
   panel.setAttribute('role', 'tabpanel');
@@ -338,6 +360,13 @@ function render(res, review, focusKey, focusIndex, focusTab) {
   if (shown.items.length) {
     list = el('ul', 'mem-inbox__list');
     for (const item of shown.items) list.append(reviewing ? reviewEntry(item) : entry(item));
+    // Keyboard focus moving into an entry (Tab, or the refocus after a keyboard decision)
+    // selects it. Mouse focus does not: a selection the user never made would take the
+    // first Esc, and Esc must still close the window for a mouse user.
+    list.addEventListener('focusin', (event) => {
+      const card = event.target.closest('.mem-inbox__item');
+      if (card && event.target.matches(':focus-visible')) markSelected(card.dataset.key);
+    });
     panel.append(list);
     if (shown.total > shown.items.length) panel.append(el('p', 'hint', t('mem.inbox.more', { count: shown.total - shown.items.length })));
   } else {
@@ -346,7 +375,10 @@ function render(res, review, focusKey, focusIndex, focusTab) {
   const bar = tabBar({ inbox: res.total, review: review.total });
   const foot = el('p', 'hint mem-inbox__foot', captureLine(res.capture));
   const stats = statsLine(res.stats);
-  overlay.body.replaceChildren(bar, panel, foot, ...(stats ? [el('p', 'hint', stats)] : []));
+  const keys = el('p', 'hint mem-inbox__keys', t(reviewing ? 'mem.inbox.keys.review' : 'mem.inbox.keys.inbox'));
+  // An open draft locks the section: its repaint would throw the typed text away.
+  const autoPart = reviewing ? null : autoSection(res.auto, { onToggle: toggleAuto, onUndo: undoAuto, busy, switching: switching || editing !== null, error: autoError });
+  overlay.body.replaceChildren(bar, panel, ...(autoPart ? [autoPart] : []), foot, ...(stats ? [el('p', 'hint', stats)] : []), keys);
   if (focusTab) bar.querySelector('[aria-selected="true"]').focus();
   else if (list && (focusKey !== undefined || focusIndex !== undefined)) refocus(list, focusKey, focusIndex || 0);
 }
@@ -386,14 +418,22 @@ async function act(key, fn, ...args) {
   return Boolean(await actResult(key, fn, ...args));
 }
 
+/** Decisions whose list has not been repainted yet: the keys wait for the new list. */
+let settling = 0;
+
 /** Approve or reject: the entry leaves the list and focus moves to its neighbour. */
 async function decide(key, fn) {
   const cards = overlay ? [...overlay.body.querySelectorAll('.mem-inbox__item')] : [];
   const index = Math.max(0, cards.findIndex((c) => c.dataset.key === key));
   for (const b of cards[index] ? cards[index].querySelectorAll('button') : []) b.disabled = true;
-  await act(key, fn, key);
-  confirming = null;
-  load(key, index);
+  settling++;
+  try {
+    await act(key, fn, key);
+    confirming = null;
+    await load(key, index);
+  } finally {
+    settling--;
+  }
 }
 
 /** Make global: the entry gets a new key, and focus follows it to that key. */
@@ -401,9 +441,140 @@ async function promote(key) {
   const cards = overlay ? [...overlay.body.querySelectorAll('.mem-inbox__item')] : [];
   const index = Math.max(0, cards.findIndex((c) => c.dataset.key === key));
   for (const b of cards[index] ? cards[index].querySelectorAll('button') : []) b.disabled = true;
-  const res = await actResult(key, 'memoryInboxMakeGlobal', key);
-  // A refused move keeps its old key, so its error shows on the same entry.
-  load(res && typeof res.key === 'string' ? res.key : key, index);
+  settling++;
+  try {
+    const res = await actResult(key, 'memoryInboxMakeGlobal', key);
+    const next = res && typeof res.key === 'string' ? res.key : key;
+    // The selection follows the entry to its new key; a refused move keeps the old one and shows its error there.
+    if (selected === key) selected = next;
+    await load(next, index);
+  } finally {
+    settling--;
+  }
+}
+
+/** The i18n key of a failed auto-accept call. */
+export function autoReasonKey(reason) {
+  if (reason === 'not-offered') return 'mem.auto.err.notOffered';
+  if (reason === 'not-found' || reason === 'not-auto') return 'mem.inbox.err.gone';
+  return 'mem.inbox.err.failed';
+}
+
+/** Switches auto-accept for one type; main re-checks that the numbers allow it. */
+async function toggleAuto(type, on) {
+  // Like switchTab: never while a draft is open, a repaint would throw it away.
+  if (switching || editing !== null) return;
+  switching = true;
+  const res = await call('memoryAutoSet', type, on);
+  switching = false;
+  autoError = res && res.ok ? null : autoReasonKey(res && res.reason);
+  load();
+}
+
+/** Undoes one auto-accept: the memory is rejected (deleted on every PC). */
+async function undoAuto(key) {
+  if (busy.has(key) || editing !== null) return;
+  busy.add(key);
+  const res = await call('memoryAutoUndo', key);
+  busy.delete(key);
+  autoError = res && res.ok ? null : autoReasonKey(res && res.reason);
+  load();
+}
+
+/** Selects an entry without a repaint (null clears the selection). */
+function markSelected(key) {
+  selected = key;
+  const at = shownItems.findIndex((item) => item.key === key);
+  if (at >= 0) selectedIndex = at;
+  if (!overlay) return;
+  for (const card of overlay.body.querySelectorAll('.mem-inbox__item')) {
+    const on = key !== null && card.dataset.key === key;
+    card.classList.toggle('is-selected', on);
+    if (on) card.setAttribute('aria-current', 'true');
+    else card.removeAttribute('aria-current');
+  }
+}
+
+function moveTo(step) {
+  const key = moveSelection(shownItems.map((item) => item.key), selected, step);
+  if (key === null) return;
+  markSelected(key);
+  const card = [...overlay.body.querySelectorAll('.mem-inbox__item')].find((c) => c.dataset.key === key);
+  if (!card) return;
+  card.focus({ preventScroll: true });
+  card.scrollIntoView({ block: 'nearest' });
+}
+
+function clearSelection() {
+  markSelected(null);
+  const active = document.activeElement;
+  if (active && overlay.body.contains(active) && active.closest('.mem-inbox__item')) active.blur();
+}
+
+/** Commands that change an entry: one at a time, never on a list that is about to change. */
+const ENTRY_ACTIONS = {
+  [COMMANDS.APPROVE]: (key) => decide(key, 'memoryInboxApprove'),
+  [COMMANDS.REJECT]: (key) => decide(key, 'memoryInboxReject'),
+  [COMMANDS.GLOBAL]: (key) => promote(key),
+  [COMMANDS.VERIFY]: (key) => decide(key, 'memoryReviewVerify'),
+  [COMMANDS.RETIRE_CONFIRM]: (key) => decide(key, 'memoryReviewRetire'),
+  [COMMANDS.EDIT]: (key) => {
+    editing = key;
+    load();
+  },
+  // The question must be on screen before a second R can answer it: a quick
+  // double press would otherwise delete without ever asking.
+  [COMMANDS.RETIRE_ASK]: async (key) => {
+    settling++;
+    try {
+      confirming = key;
+      await load(key);
+    } finally {
+      settling--;
+    }
+  },
+};
+
+/** Runs one keyboard command (memoryinboxkeys.js) on the selected entry. */
+function runCommand(cmd, item) {
+  if (cmd === COMMANDS.NEXT || cmd === COMMANDS.PREV) return moveTo(cmd === COMMANDS.NEXT ? 1 : -1);
+  if (cmd === COMMANDS.CLEAR) return clearSelection();
+  if (cmd === COMMANDS.SAVE) {
+    const form = overlay.body.querySelector('.mem-inbox__form');
+    if (form && !busy.has(editing)) form.requestSubmit();
+    return undefined;
+  }
+  if (cmd === COMMANDS.CANCEL_EDIT) {
+    const key = editing;
+    editing = null;
+    return load(key);
+  }
+  if (cmd === COMMANDS.CANCEL_CONFIRM) {
+    confirming = null;
+    return load(item.key);
+  }
+  const action = ENTRY_ACTIONS[cmd];
+  if (!action || !item || settling > 0 || busy.has(item.key)) return undefined;
+  return action(item.key);
+}
+
+/** The window's keys (talloverlay onKeydown). @returns {boolean} true = the key was ours */
+function onKey(event) {
+  if (!overlay || !overlay.isOpen()) return false;
+  const item = shownItems.find((i) => i.key === selected) || null;
+  const cmd = keyCommand(event, {
+    tab,
+    typing: typingIn(event.target),
+    editing: editing !== null,
+    confirming: item !== null && confirming === item.key,
+    selected: item !== null,
+    canGlobal: tab === 'inbox' && item !== null && !isGlobal(item),
+  });
+  if (!cmd) return false;
+  // An empty list has nothing to move through: the arrows keep scrolling the window.
+  if ((cmd === COMMANDS.NEXT || cmd === COMMANDS.PREV) && !shownItems.length) return false;
+  runCommand(cmd, item);
+  return true;
 }
 
 /** Opens the inbox. */
@@ -413,11 +584,15 @@ export async function openMemoryInbox() {
       id: 'memory-inbox',
       glyph: '◈',
       titleKey: 'mem.inbox.title',
+      onKeydown: onKey,
       onClose: () => {
         if (stopListening) stopListening();
         stopListening = null;
         editing = null;
         confirming = null;
+        selected = null;
+        shownItems = [];
+        autoError = null;
         failed.clear();
       },
     });

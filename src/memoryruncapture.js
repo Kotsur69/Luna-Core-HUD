@@ -40,6 +40,7 @@ const { rejectedTitles } = require('./memorylog');
 const { droppedEvents, MAX_PENDING } = require('./memorycapture');
 const { runDigest, countRunOutside } = require('./memoryrundigest');
 const { RUN_ID_RE } = require('./orchestraReport');
+const { createLanding, autoEvent } = require('./memoryautoaccept');
 const { scrub } = require('./hostscrub');
 
 const LEDGER_FILE = 'memory-runcapture.local.json';
@@ -135,11 +136,15 @@ function createRunCapture({
   /** Writes the kept candidates; one that cannot be written does not stop the others. */
   function saveRecords(records) {
     let saved = 0;
-    for (const record of records) {
+    // Opt-in per type: a candidate may land confirmed (src/memoryautoaccept.js).
+    const land = createLanding({ file: paths.autoAccept, dir: paths.dir, log, now: now() });
+    for (const candidate of records) {
       try {
+        const { record, auto } = land(candidate);
         writeRecord(paths.dir, record);
         saved++;
         if (log) log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type, usefulness: record.usefulness });
+        if (log && auto) log.add(autoEvent(record));
       } catch (err) {
         console.error('[memory] run candidate not written:', errText(err));
       }

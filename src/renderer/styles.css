@@ -6093,6 +6093,20 @@ section.orchestra__planrun {
 .mem-inbox__tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--edge-glow); }
 .mem-inbox__tab:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: -2px; }
 .mem-inbox__ask { margin: 0; font-size: var(--fs-sm); color: var(--warn); }
+/* Keyboard review (modules/memoryinboxkeys.js): the entry the keys act on, and the key hint. */
+.mem-inbox__item:focus { outline: none; }
+.mem-inbox__item.is-selected { border-color: var(--edge-glow); outline: 2px solid var(--edge-glow); outline-offset: 2px; }
+.mem-inbox__keys { margin-top: var(--space-3); font-family: var(--font-mono); font-size: var(--fs-xs); }
+/* Auto-accept (modules/memoryautopanel.js): per-type switches and the recent auto-accepts with Undo. */
+.mem-auto { margin-top: var(--space-7); padding-top: var(--space-5); border-top: var(--border-w) solid var(--edge); display: flex; flex-direction: column; gap: var(--space-3); }
+.mem-auto__heading { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.mem-auto__types { display: flex; flex-direction: column; gap: var(--space-2); }
+.mem-auto__row { display: flex; align-items: baseline; gap: var(--space-3); font-size: var(--fs-sm); color: var(--text); cursor: pointer; }
+.mem-auto__switch { accent-color: var(--good); }
+.mem-auto__switch:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 2px; }
+.mem-auto__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.mem-auto__item { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); font-size: var(--fs-xs); color: var(--text-dim); }
+.mem-auto__title { flex: 1 1 12em; color: var(--text); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .mem-inbox__tab { transition: none; } }
 
 /* The brief's buttons inside the notification hub drawer (hub.css, hubpanel.js). */
