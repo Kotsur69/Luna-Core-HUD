@@ -120,8 +120,9 @@ const ESC = '\x1b';
  * @param {{id:string, title:string, prompt:string, verify:string}} pkg
  * @param {string} branch
  * @param {{resume?:boolean, escalation?:{reason:string, detail:string|null},
- *   depMerge?:{branches:string[], files:string[]}|null}} [opts] depMerge
- *   defaults to the package's recorded one, so a resume brief keeps it
+ *   depMerge?:{branches:string[], files:string[]}|null, memory?:string|null}} [opts] depMerge
+ *   defaults to the package's recorded one, so a resume brief keeps it;
+ *   memory = the "## Project memory" section (src/memoryinject.js), or none
  * @returns {string}
  */
 function briefText(pkg, branch, opts = {}) {
@@ -148,6 +149,7 @@ function briefText(pkg, branch, opts = {}) {
     '',
     pkg.prompt,
     '',
+    ...(opts.memory ? [opts.memory, ''] : []),
     '## Verify',
     pkg.verify ? `Run \`${pkg.verify}\` and fix until it passes.` : "Check your work with the project's tests before you finish.",
     'Run the verify command in the foreground and wait for it to finish. Do not end your turn while a test run (or any other command) of yours is still running in the background: an ended turn tells LunaCore you stopped.',
@@ -1430,12 +1432,24 @@ function createOrchestra(deps) {
    * @param {{branch:string, root:string, cwd:string, briefPath:string, baseSha:string|null, depMerge:object|null}} where
    */
   function startWorker(pkg, where) {
-    if (!deps.writeBrief(where.briefPath, briefText(pkg, where.branch, { depMerge: where.depMerge }))) {
+    if (!deps.writeBrief(where.briefPath, briefText(pkg, where.branch, { depMerge: where.depMerge, memory: projectMemoryFor(pkg) }))) {
       return { ...where, state: 'failed', error: 'briefFailed' };
     }
     const session = openTab(pkg, where.cwd, where.branch, where.briefPath);
     if (!session) return { ...where, state: 'failed', error: 'noTab' };
     return { ...where, ...freshRun(), state: 'launched', sessionId: session.id, heldLaunch: false };
+  }
+
+  /** The brief's project memory section, or null. Memory never stops a worker from starting. */
+  function projectMemoryFor(pkg) {
+    if (typeof deps.projectMemory !== 'function') return null;
+    try {
+      const text = deps.projectMemory(plan.repoPath, pkg);
+      return typeof text === 'string' && text ? text : null;
+    } catch (err) {
+      log(`project memory unavailable for ${pkg.id}: ${(err && err.message) || err}`);
+      return null;
+    }
   }
 
   /** A failed dependency install: its own error, the last line and the output tail. */

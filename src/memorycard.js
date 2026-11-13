@@ -69,9 +69,10 @@ function cardRecords(records, project) {
   const mine = records
     .map(([, r]) => r)
     .filter((r) => r.confidence === 'confirmed' && r.type !== 'digest' && (r.project === project || r.project === GLOBAL));
-  // Only a memory that is itself on the card can take another one off it.
+  // Only a confirmed memory can take another one off the card. An archived one
+  // (src/memorydecay.js) is not on it, but what it replaced stays replaced.
   const superseded = new Set(mine.flatMap((r) => r.supersedes.map((old) => `${r.project}/${old}`)));
-  return mine.filter((r) => !superseded.has(`${r.project}/${r.id}`));
+  return mine.filter((r) => !superseded.has(`${r.project}/${r.id}`) && !r.archived);
 }
 
 function fullBlock(record, heading) {

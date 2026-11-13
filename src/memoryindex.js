@@ -97,7 +97,7 @@ function buildIndex(db, records) {
    * @returns {object[]} best first: {key, id, project, type, title, confidence,
    *   created, last_verified, source, links, snippet, stale, score}
    */
-  function search(query, { project = null, limit = DEFAULT_LIMIT, only = null, today = null } = {}) {
+  function search(query, { project = null, limit = DEFAULT_LIMIT, only = null, today = null, archived = false } = {}) {
     const match = toMatch(query);
     if (!match) return [];
     const max = Math.min(Math.max(Number.isInteger(limit) ? limit : DEFAULT_LIMIT, 1), MAX_LIMIT);
@@ -105,6 +105,8 @@ function buildIndex(db, records) {
     for (const row of find.all(match)) {
       const record = byKey.get(row.key);
       if (!record || superseded.has(row.key)) continue;
+      // An archived memory (src/memorydecay.js) is found only when asked for.
+      if (record.archived && !archived) continue;
       if (only && record.project !== only && record.project !== GLOBAL) continue;
       if (today && isDecayed(record, today)) continue;
       const stale = Boolean(today) && isStale(record, today);

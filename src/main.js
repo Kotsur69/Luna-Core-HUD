@@ -261,9 +261,17 @@ const { runJob: runMemoryJob } = require('./missionrunner');
 // Phase 5: the capture and usage log, and the review list of confirmed memories.
 const { createLog: createMemoryLog, logPath: memoryLogPath } = require('./memorylog');
 const { toolVerdict: memoryToolVerdict } = require('./memoryreview');
+// The usefulness scan, conflicts, decay to the archive, and memory in God Mode
+// briefs (src/memoryscan.js, memoryconflict.js, memorydecay.js, memoryinject.js).
+const { createScanner: createMemoryScanner, SCAN_MODEL: MEMORY_SCAN_MODEL, SCAN_TIMEOUT_MS: MEMORY_SCAN_TIMEOUT_MS } = require('./memoryscan');
+const { registerMemoryBrainIpc } = require('./memorybrainipc');
+const { conflictCount: memoryConflictCount } = require('./memoryconflict');
+const { createDecayTimer: createMemoryDecay, createReferenceRecorder: createMemoryReferences } = require('./memorydecay');
+const { createInjector: createMemoryInjector } = require('./memoryinject');
 const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
 let memorySync = null;
 let memoryCapture = null;
+let memoryDecay = null;
 // The notification hub (src/hubipc.js): set in registerIpc(), its done
 // provider joins the config sync.
 let hubApi = null;
@@ -1116,11 +1124,30 @@ function memoryFor(session) {
       const res = memoryToolVerdict(memoryPaths(userDir()).dir, { ...report, today: new Date().toISOString().slice(0, 10), log: memoryLogOf() });
       if (res.ok && res.changed && memorySync) memorySync.soon();
       if (res.ok && (res.changed || res.status === 'flagged')) send('memory:changed', {});
+      if (res.ok) memoryReferences.note([report.key]);
       return res;
     },
-    log: (event) => memoryLogOf().add(event),
+    // A search hit or a read is a reference: it holds off usefulness decay.
+    log: (event) => {
+      memoryReferences.fromEvent(event);
+      return memoryLogOf().add(event);
+    },
   };
 }
+
+/** Moves `last_used` of referenced memories (src/memorydecay.js); a write syncs soon. */
+const memoryReferences = createMemoryReferences({
+  dir: () => memoryPaths(userDir()).dir,
+  onWritten: () => {
+    if (memorySync) memorySync.soon();
+  },
+});
+/** A God Mode worker brief's "## Project memory" section (src/memoryinject.js). */
+const memoryInjector = createMemoryInjector({
+  configDir: () => userDir(),
+  projectOf: (folder) => projectFromRepoKey(memoryRepoKeys.resolve(folder).key),
+  onInjected: (keys) => memoryReferences.note(keys),
+});
 
 let memoryLog = null;
 /** This PC's memory log (src/memorylog.js): capture, decisions, searches and reports. */
@@ -1352,6 +1379,7 @@ const orchestraCtx = {
   userDir,
   ensureUserDir,
   runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+  projectMemory: (repoPath, pkg) => memoryInjector(repoPath, pkg),
   worktrees: { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, worktreeBranches },
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
   // A transient failure leaves the run email pending (src/godmodePending.js).
@@ -3327,6 +3355,36 @@ function registerIpc() {
     log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
     roots: memoryRoots,
   });
+  // The memory window's list of all memories, the usefulness scan (Sonnet,
+  // through the same headless runner as capture), conflicts and the archive.
+  registerMemoryBrainIpc({
+    ipcMain,
+    dir: () => memoryPaths(userDir()).dir,
+    scanner: createMemoryScanner({
+      dir: () => memoryPaths(userDir()).dir,
+      run: ({ prompt }) =>
+        runMemoryJob({
+          prompt,
+          model: MEMORY_SCAN_MODEL,
+          lean: true,
+          stdin: true,
+          env: withClaudeOnPath(buildSessionEnv(process.env, {})),
+          timeoutMs: MEMORY_SCAN_TIMEOUT_MS,
+        }),
+      log: { add: (event) => memoryLogOf().add(event) },
+      // Every finished batch repaints the window: that is the scan's progress.
+      onProgress: () => send('memory:changed', {}),
+      onWritten: () => {
+        if (memorySync) memorySync.soon();
+      },
+    }),
+    enabled: () => readMemoryProjects(memoryPaths(userDir()).projects),
+    onChanged: () => {
+      if (memorySync) memorySync.soon();
+      send('memory:changed', {});
+    },
+    log: { add: (event) => memoryLogOf().add(event) },
+  });
   // Notification hub (face icon + right drawer): docs/tbc_docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
   // Other PCs' runs come from their `godmode` rows; done marks sync as config units.
   hubApi = require('./hubipc').registerHubIpc({
@@ -3350,7 +3408,11 @@ function registerIpc() {
       memoryInbox: () => {
         const dir = memoryPaths(userDir()).dir;
         const today = new Date().toISOString().slice(0, 10);
-        return listMemoryInbox(dir).total + memoryReviewCount({ dir, today, events: memoryLogOf().read(), roots: memoryRoots() });
+        return (
+          listMemoryInbox(dir).total +
+          memoryConflictCount(dir) +
+          memoryReviewCount({ dir, today, events: memoryLogOf().read(), roots: memoryRoots() })
+        );
       },
       hostOn: () => {
         const control = require('./hostmain').hostControl();
@@ -4069,6 +4131,15 @@ app.whenReady().then(() => {
       },
     });
     memoryCapture.start();
+    // An unused memory loses usefulness and moves to the archive at zero (src/memorydecay.js).
+    memoryDecay = createMemoryDecay({
+      dir: () => memoryPaths(userDir()).dir,
+      onChanged: () => {
+        if (memorySync) memorySync.soon();
+        send('memory:changed', {});
+      },
+    });
+    memoryDecay.start();
   }
   if (!probing) {
     orchestraStore.migrateLegacy((raw) => legacyRunProject(orchestraCtx, raw));
@@ -4214,6 +4285,7 @@ app.on('window-all-closed', () => {
     removeCard(userDir(), session.id);
   }
   if (memoryCapture) memoryCapture.stop();
+  if (memoryDecay) memoryDecay.stop();
   intakeServer.stop().catch(() => {});
   if (memoryReader) memoryReader.close();
   sessions.clear();
