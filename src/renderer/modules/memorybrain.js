@@ -58,8 +58,9 @@ export function scanErrorKey(reason) {
 export function scanLine(status) {
   if (!status || !status.project) return '';
   if (status.running) return t('mem.brain.scanning', { done: status.done, total: status.total });
-  if (status.failed) return t('mem.brain.scanFailed', { failed: status.failed, total: status.total, reason: t(scanErrorKey(status.error)) });
-  return t('mem.brain.scanDone', { scored: status.scored, conflicts: status.conflicts });
+  const skipped = status.skipped ? ` ${t('mem.brain.scanSkipped', { skipped: status.skipped })}` : '';
+  if (status.failed) return t('mem.brain.scanFailed', { failed: status.failed, total: status.total, reason: t(scanErrorKey(status.error)) }) + skipped;
+  return t('mem.brain.scanDone', { scored: status.scored, conflicts: status.conflicts }) + skipped;
 }
 
 /** The i18n key of a refused scan start. */

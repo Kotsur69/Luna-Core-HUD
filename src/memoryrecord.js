@@ -280,7 +280,7 @@ function serializeRecord(record) {
     .map(([k, v]) => `${k}: ${emit(v)}`);
   front.push(`supersedes: [${record.supersedes.join(', ')}]`, `links: [${record.links.join(', ')}]`);
   // Written only when set, so a file without them stays byte for byte the same.
-  for (const field of ['conflicts', 'compatible']) if (record[field]) front.push(`${field}: [${record[field].join(', ')}]`);
+  for (const field of ['conflicts', 'compatible']) if (Array.isArray(record[field]) && record[field].length) front.push(`${field}: [${record[field].join(', ')}]`);
   return `---\n${front.join('\n')}\n---\n${record.body}\n`;
 }
 
@@ -367,6 +367,7 @@ module.exports = {
   MAX_BODY,
   MAX_TITLE,
   MAX_SOURCE,
+  MAX_RECORD_BYTES,
   MAX_USEFULNESS,
   MAX_USEFULNESS_NOTE,
   slug,

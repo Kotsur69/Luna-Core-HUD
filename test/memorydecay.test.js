@@ -94,11 +94,29 @@ test('at zero a memory moves to the archive, dated the day it reached zero', () 
   assert.equal(decayRecord(next, '2026-09-01'), next, 'an archived memory decays no further');
 });
 
-test('a scan score of zero archives an unused memory, but not a recently used one', () => {
-  const unused = decayRecord(rec('a', { usefulness: 0, usefulness_at: '2026-05-01' }), '2026-05-01');
-  assert.equal(unused.archived, '2026-05-01');
-  const used = rec('b', { usefulness: 0, usefulness_at: '2026-05-01', last_used: '2026-04-25' });
-  assert.equal(decayRecord(used, '2026-05-01'), used);
+test('a scan score of zero archives an unused memory one step later, never on the model alone', () => {
+  const scored = rec('a', { usefulness: 0, usefulness_at: '2026-05-01' });
+  assert.equal(decayRecord(scored, '2026-05-01'), scored, 'not on the day of the scan');
+  assert.equal(decayRecord(scored, addDays('2026-05-01', DECAY_STEP_DAYS - 1)), scored);
+  const unused = decayRecord(scored, '2026-06-01');
+  assert.equal(unused.archived, addDays('2026-05-01', DECAY_STEP_DAYS), 'dated like a daily timer would');
+  assert.equal(decayRecord(scored, addDays('2026-05-01', DECAY_STEP_DAYS)).archived, unused.archived);
+  // Used in the week after the scan: still within its grace period.
+  const used = rec('b', { usefulness: 0, usefulness_at: '2026-05-01', last_used: '2026-05-05' });
+  assert.equal(decayRecord(used, '2026-05-20'), used);
+});
+
+test('a date from the future (a bad sync) never holds decay off', () => {
+  const today = '2026-03-10';
+  const plain = decayRecord(rec('a'), today);
+  assert.equal(plain.usefulness, 10);
+  assert.equal(plain.archived, undefined);
+  for (const over of [{ last_used: '2099-01-01' }, { last_verified: '2099-01-01' }, { usefulness_at: '2099-01-01' }]) {
+    assert.deepEqual(decayRecord(rec('a', over), today), { ...rec('a', over), usefulness: plain.usefulness, usefulness_at: plain.usefulness_at }, JSON.stringify(over));
+  }
+  // A future creation date counts as today: grace starts now, and nothing throws.
+  const early = rec('a', { created: '2099-01-01', usefulness_at: undefined });
+  assert.equal(decayRecord(early, today), early);
 });
 
 test('a recent reference, verification or scan holds decay off', () => {
@@ -212,4 +230,18 @@ test('the timer tick decays with the injected clock and reports what changed', (
   assert.equal(seen.length, 1);
   assert.equal(timer.tick().lowered.length, 0);
   assert.equal(seen.length, 1, 'no change, no repaint');
+});
+
+test('the timer starts once however often start is called, and stops cleanly', (t) => {
+  const intervals = t.mock.method(globalThis, 'setInterval');
+  const timeouts = t.mock.method(globalThis, 'setTimeout');
+  const timer = createDecayTimer({ dir: () => os.tmpdir() });
+  timer.start();
+  timer.start();
+  assert.equal(intervals.mock.callCount(), 1);
+  assert.equal(timeouts.mock.callCount(), 1);
+  timer.stop();
+  timer.start();
+  assert.equal(intervals.mock.callCount(), 2, 'free to start again after a stop');
+  timer.stop();
 });

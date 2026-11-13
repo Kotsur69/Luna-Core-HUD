@@ -611,7 +611,8 @@ function createOrchestra(deps) {
     resumeText: sup.RESUME_TEXT,
     cancelNudge: (id) => cancelNudge(id),
     writePty: (sessionId, text, opts) => writePty(sessionId, text, opts),
-    briefText: (pkg, branch, opts) => briefText(pkg, branch, opts),
+    // A hand-over brief is a resume brief: same project memory as the first start.
+    briefText: (pkg, branch, opts = {}) => briefText(pkg, branch, opts.resume ? { ...opts, memory: projectMemoryFor(pkg) } : opts),
     reopen: (pkg, text) => reopenInWorktree(pkg, text),
     landPushed: (id) => landPushed(id),
     stall: (id, reason, detail) => stall(id, reason, detail),
@@ -1452,6 +1453,11 @@ function createOrchestra(deps) {
     }
   }
 
+  /** The brief of a reopened worker: RESUMING, with the same project memory section as a first start. */
+  function resumeBrief(pkg, extra = {}) {
+    return briefText(pkg, pkg.branch, { ...extra, resume: true, memory: projectMemoryFor(pkg) });
+  }
+
   /** A failed dependency install: its own error, the last line and the output tail. */
   function installFailedFields(output) {
     const lines = String(output || '')
@@ -1945,7 +1951,7 @@ function createOrchestra(deps) {
    * @returns {boolean} false when the tab could not be reopened (stays stalled)
    */
   function autoResume(pkg, reason, detail) {
-    const text = withStallNote(briefText(pkg, pkg.branch, { resume: true }), reason, detail);
+    const text = withStallNote(resumeBrief(pkg), reason, detail);
     if (!reopenInWorktree(pkg, text).ok) return false;
     patch(pkg.id, { autoResumed: true });
     onRunEvent('autoResumed', { id: pkg.id, reason });
@@ -1960,7 +1966,7 @@ function createOrchestra(deps) {
   function escalate(pkg, reason, detail) {
     if (!depsReady(pkg)) return false;
     const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
-    const text = briefText(pkg, pkg.branch, { resume: true, escalation: { reason, detail } });
+    const text = resumeBrief(pkg, { escalation: { reason, detail } });
     if (!deps.writeBrief(briefPath, text)) return false;
     const old = pkg.sessionId;
     // New tab first: closing the old one first could leave main opening an
@@ -2046,7 +2052,7 @@ function createOrchestra(deps) {
       return true;
     }
     if (!pkg.root || !pkg.branch) return false;
-    const brief = `${briefText(pkg, pkg.branch, { resume: true })}\n## LunaCore fix-up round\n\n${text}\n`;
+    const brief = `${resumeBrief(pkg)}\n## LunaCore fix-up round\n\n${text}\n`;
     if (!reopenInWorktree(pkg, brief).ok) return false;
     patch(pkg.id, fields);
     return true;
@@ -2677,7 +2683,7 @@ function createOrchestra(deps) {
         commit();
         return { ok: false, error: plan.killed ? 'notRetryable' : plan.pausedUntil ? 'paused' : plan.hold.reason };
       }
-      const reopened = reopenInWorktree(findPkg(pkg.id), briefText(pkg, pkg.branch, { resume: true }));
+      const reopened = reopenInWorktree(findPkg(pkg.id), resumeBrief(pkg));
       if (!reopened.ok) {
         // Held for node_modules: Resume reopens it, no second Retry needed.
         if (reopened.error === 'noNodeModules') patch(pkg.id, { heldRetry: true });
@@ -2784,7 +2790,7 @@ function createOrchestra(deps) {
     }
     if (p.heldRetry) {
       patch(id, { heldRetry: false });
-      const reopened = reopenInWorktree(findPkg(id), briefText(p, p.branch, { resume: true }));
+      const reopened = reopenInWorktree(findPkg(id), resumeBrief(p));
       if (reopened.ok) {
         patch(id, { terminal: false, autoRetries: 0 });
         plan.packages = sup.withBlockedBy(plan.packages);

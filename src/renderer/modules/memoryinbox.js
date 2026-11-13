@@ -297,13 +297,18 @@ function captureLine(capture) {
   return t('mem.inbox.captureLast', { when, saved: capture.last.saved });
 }
 
-/** Puts focus back on the list after a repaint: the wanted entry, or the one that took its place. */
-function refocus(list, key, index) {
+/**
+ * Puts focus back on the list after a repaint: the wanted entry, or the one
+ * that took its place; `fallback` when that entry has nothing to act on (a
+ * restored memory has no buttons left), so focus never drops to the page.
+ */
+function refocus(list, key, index, fallback) {
   const cards = [...list.children];
   const target = cards.find((c) => c.dataset.key === key) || cards[Math.min(index, cards.length - 1)];
   // The entry's own actions (or its edit form), not the "show all" link above them.
   const control = target && target.querySelector('.mem-inbox__actions button:not(:disabled), input');
   if (control) control.focus();
+  else if (fallback) fallback.focus();
 }
 
 /** Two memories that contradict each other, as an inbox entry (memorybrain.js). */
@@ -376,19 +381,22 @@ function render(res, review, all, focusKey, focusIndex, focusTab) {
   const conflicts = res.conflicts && Array.isArray(res.conflicts.items) ? res.conflicts : NO_CONFLICTS;
   // First paint: an empty inbox with something to check opens on the review list.
   if (tab === null) tab = !(res.total + conflicts.total) && review.total ? 'review' : 'inbox';
-  overlay.setTitle(res.total ? t('mem.inbox.titleCount', { count: res.total }) : '');
+  // Same count as the inbox tab: waiting memories plus conflicts.
+  const waiting = res.total + conflicts.total;
+  overlay.setTitle(waiting ? t('mem.inbox.titleCount', { count: waiting }) : '');
   const panel = el('div');
   panel.id = PANEL_ID;
   panel.setAttribute('role', 'tabpanel');
   panel.setAttribute('aria-labelledby', `mem-inbox-tab-${tab}`);
   const { nodes, list } = tab === 'all' ? allView(all) : listView(res, review, conflicts);
   panel.append(...nodes);
-  const bar = tabBar({ inbox: res.total + conflicts.total, review: review.total });
+  const bar = tabBar({ inbox: waiting, review: review.total });
   const foot = el('p', 'hint mem-inbox__foot', captureLine(res.capture));
   const stats = statsLine(res.stats);
   overlay.body.replaceChildren(bar, panel, foot, ...(stats ? [el('p', 'hint', stats)] : []));
-  if (focusTab) bar.querySelector('[aria-selected="true"]').focus();
-  else if (list && (focusKey !== undefined || focusIndex !== undefined)) refocus(list, focusKey, focusIndex || 0);
+  const selectedTab = bar.querySelector('[aria-selected="true"]');
+  if (focusTab) selectedTab.focus();
+  else if (list && (focusKey !== undefined || focusIndex !== undefined)) refocus(list, focusKey, focusIndex || 0, selectedTab);
 }
 
 const NO_REVIEW = { items: [], total: 0 };

@@ -26,6 +26,7 @@ const { scan } = require('./memorystore');
 const { createIndex } = require('./memoryindex');
 const { memoryPaths } = require('./memorysync');
 const { readEnabled } = require('./memoryprojects');
+const { scrub } = require('./hostscrub');
 
 const MAX_INJECTED = 3;
 /** Hits looked at before the shared-words filter cuts them down. */
@@ -33,6 +34,8 @@ const SEARCH_CANDIDATES = 12;
 /** A memory must share at least this many query words with the package. */
 const MIN_SHARED_TERMS = 2;
 const MAX_ITEM_CHARS = 500;
+/** An unreviewed title is all a worker sees of it: short enough to be a hint, not a script. */
+const MAX_TITLE_CHARS = 100;
 const MAX_SECTION_CHARS = 2200;
 /** memoryindex.toMatch() reads at most this many terms. */
 const MAX_QUERY_TERMS = 16;
@@ -56,9 +59,9 @@ const STOP_WORDS = new Set(
 const errText = (err) => (err && (err.code || err.message)) || 'error';
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
 const wordsOf = (text) => (String(text || '').toLowerCase().match(/[\p{L}\p{N}_]+/gu) || []).filter((w) => w.length > 2 && !STOP_WORDS.has(w));
-/** One line of brief text: no control characters, no line breaks, no LunaCore end markers. */
+/** One line of brief text: secrets masked, no control characters, no line breaks, no LunaCore end markers. */
 const flat = (s) =>
-  String(s || '')
+  scrub(String(s || ''))
     .replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/g, ' ')
     .replace(/LUNA_(DONE|BLOCKED)/g, 'LUNA-$1')
@@ -123,11 +126,12 @@ function selectMemories(records, { project, pkg, today, limit = MAX_INJECTED }) 
 
 function entryLine({ key, record, stale }) {
   const ref = record.project === GLOBAL ? key : record.id;
+  const title = cut(flat(record.title), MAX_TITLE_CHARS);
   if (record.confidence !== 'confirmed') {
-    return `- ${flat(record.title)} [${ref}] (${record.type}, not verified): captured automatically and never reviewed, so only its title is shown. Treat it as a hint and check it before relying on it.`;
+    return `- ${title} [${ref}] (${record.type}, not verified): captured automatically and never reviewed, so only its title is shown. Treat it as a hint and check it before relying on it.`;
   }
   const trust = stale ? `confirmed, not verified since ${record.last_verified || record.created}` : 'confirmed';
-  return `- ${flat(record.title)} [${ref}] (${record.type}, ${trust}): ${cut(flat(record.body), MAX_ITEM_CHARS)}`;
+  return `- ${title} [${ref}] (${record.type}, ${trust}): ${cut(flat(record.body), MAX_ITEM_CHARS)}`;
 }
 
 /**

@@ -52,9 +52,14 @@ const latest = (...dates) => dates.filter(Boolean).sort().pop();
 
 const isArchived = (record) => Boolean(record && record.archived);
 
-/** The last day a memory was known to matter: written, verified or referenced. */
-function lastReference(record) {
-  return latest(record.created, record.last_verified, record.last_used);
+/**
+ * The last day a memory was known to matter: written, verified or referenced.
+ * Synced fields are untrusted: a date after `today` is ignored (it would hold
+ * decay off forever), and a future `created` counts as today.
+ */
+function lastReference(record, today) {
+  const past = (date) => (date && date <= today ? date : null);
+  return latest(record.created && record.created <= today ? record.created : today, past(record.last_verified), past(record.last_used));
 }
 
 /**
@@ -66,17 +71,22 @@ function lastReference(record) {
  */
 function decayRecord(record, today) {
   if (record.confidence !== 'confirmed' || isArchived(record) || !Number.isInteger(record.usefulness)) return record;
-  const graceEnds = addDays(lastReference(record), DECAY_AFTER_DAYS);
+  const graceEnds = addDays(lastReference(record, today), DECAY_AFTER_DAYS);
   // Charged from the end of the grace period, or from where the last charge
-  // (or the scan) left it, whichever is later.
-  const from = latest(graceEnds, record.usefulness_at);
+  // (or the scan) left it, whichever is later. Every legitimate usefulness_at
+  // is today or earlier; a later one came from a bad sync and is ignored.
+  const from = latest(graceEnds, record.usefulness_at && record.usefulness_at <= today ? record.usefulness_at : null);
   // Never charged past zero: a PC that was off for a month must end where a
   // daily timer would have, archive date included.
   const steps = Math.min(Math.floor(daysBetween(from, today) / DECAY_STEP_DAYS), Math.ceil(record.usefulness / DECAY_PER_STEP));
   const chargedTo = addDays(from, steps * DECAY_STEP_DAYS);
   if (steps < 1) {
-    // A score of 0 from the scan: archived once the grace period is over.
-    return record.usefulness === 0 && daysBetween(from, today) >= 0 ? { ...record, usefulness_at: from, archived: from } : record;
+    // A score of 0 from the scan is never archived on the model's word alone:
+    // like any other score it waits one decay step after the grace period, so
+    // a search hit, a brief or a verify in that week keeps it.
+    if (record.usefulness !== 0 || daysBetween(from, today) < DECAY_STEP_DAYS) return record;
+    const archivedOn = addDays(from, DECAY_STEP_DAYS);
+    return { ...record, usefulness_at: archivedOn, archived: archivedOn };
   }
   const usefulness = Math.max(0, record.usefulness - steps * DECAY_PER_STEP);
   return { ...record, usefulness, usefulness_at: chargedTo, ...(usefulness === 0 ? { archived: chargedTo } : {}) };
@@ -202,13 +212,18 @@ function createDecayTimer({ dir, now = Date.now, onChanged = () => {} }) {
   return {
     tick,
     start() {
+      // A second start would leak the first pair of timers.
+      if (interval) return;
       timer = setTimeout(tick, FIRST_DECAY_MS);
+      timer.unref();
       interval = setInterval(tick, DECAY_TICK_MS);
       interval.unref();
     },
     stop() {
       clearTimeout(timer);
       clearInterval(interval);
+      timer = null;
+      interval = null;
     },
   };
 }

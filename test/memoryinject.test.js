@@ -122,6 +122,20 @@ test('the section is capped, one line per memory, and no memory can open a headi
   assert.doesNotMatch(text, /LUNA_DONE/);
 });
 
+test('an injected memory has its secrets masked and a long title cut', (t) => {
+  const token = 'gh' + 'p_' + 'A1b2'.repeat(9);
+  const longTitle = `Worktree install ${'step '.repeat(30)}end`;
+  const { dir, enabled } = configWith(t, [
+    rec('worktree-token', 'Worktree install token', `Push the worktree node_modules install with ${token}.`),
+    rec('worktree-long', longTitle, 'worktree node_modules install', { confidence: 'observed' }),
+  ]);
+  const { text } = injectionFor({ dir, project: PROJECT, enabled, pkg: PKG, today: TODAY });
+  assert.equal(text.includes(token), false);
+  assert.match(text, /\[redacted\]/);
+  const observed = entries(text).find((l) => l.includes('[worktree-long]'));
+  assert.ok(observed.indexOf(' [worktree-long]') <= 2 + 100 + 4, 'title cut to 100 characters');
+});
+
 test('skipped when memory is off for the project, for another project, or when nothing matches', (t) => {
   const off = configWith(t, RELEVANT, { off: true });
   assert.equal(injectionFor({ dir: off.dir, project: PROJECT, enabled: off.enabled, pkg: PKG, today: TODAY }), null);

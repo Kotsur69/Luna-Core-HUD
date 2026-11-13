@@ -50,7 +50,10 @@ const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
 const errText = (err) => (err && (err.code || err.message)) || 'error';
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
 const oneLine = (v, max) => (typeof v === 'string' ? v.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
-const safe = (text) => scrub(String(text)).replace(MARKER_RE, '--');
+// Every line break a model may read as one (U+2028, U+2029, NEL, VT, FF) becomes \n
+// first, so the line-start marker check sees it.
+const LINE_BREAKS_RE = /[\p{Zl}\p{Zp}\x85\v\f]/gu;
+const safe = (text) => scrub(String(text)).replace(LINE_BREAKS_RE, '\n').replace(MARKER_RE, '--');
 
 /** The memories a scan of `project` rates: its own, not superseded, not archived; related ones next to each other. */
 function scanTargets(records, project) {
@@ -62,8 +65,10 @@ function scanTargets(records, project) {
 }
 
 function memoryBlock(r) {
-  const body = r.body.length > MAX_BODY_IN_PROMPT ? `${r.body.slice(0, MAX_BODY_IN_PROMPT).trimEnd()} ...` : r.body;
-  return [`### ${r.id} (${r.type}, ${r.confidence})`, safe(r.title), safe(body)].join('\n');
+  // Scrubbed whole, then cut: a secret cut in half at the limit is too short for the scrubber to see.
+  const body = safe(r.body);
+  const shown = body.length > MAX_BODY_IN_PROMPT ? `${body.slice(0, MAX_BODY_IN_PROMPT).trimEnd()} ...` : body;
+  return [`### ${r.id} (${r.type}, ${r.confidence})`, safe(r.title), shown].join('\n');
 }
 
 /**
@@ -133,11 +138,12 @@ function parseScanAnswer(answer, { batchIds, knownIds }) {
 
 /**
  * Writes the scores of one batch.
- * @returns {number} memories written
+ * @returns {{written: number, skipped: number}} skipped = scores the mirror refused (e.g. a record at its size limit)
  */
 function applyScores(dir, project, scores, today) {
   const byKey = new Map(scan(dir).records);
   let written = 0;
+  let skipped = 0;
   for (const [id, { score, reason }] of scores) {
     const record = byKey.get(`${project}/${id}`);
     // Deleted or archived since the batch was sent: a score never brings it back.
@@ -146,14 +152,15 @@ function applyScores(dir, project, scores, today) {
       writeRecord(dir, { ...record, usefulness: score, usefulness_note: reason, usefulness_at: today });
       written++;
     } catch (err) {
-      console.error('[memory] score not written:', errText(err));
+      skipped++;
+      console.error(`[memory] score of ${project}/${id} not written:`, errText(err));
     }
   }
-  return written;
+  return { written, skipped };
 }
 
 const chunk = (list, size) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
-const IDLE = { running: false, project: null, total: 0, done: 0, scored: 0, conflicts: 0, failed: 0, error: null, startedAt: null, finishedAt: null };
+const IDLE = { running: false, project: null, total: 0, done: 0, scored: 0, skipped: 0, conflicts: 0, failed: 0, error: null, startedAt: null, finishedAt: null };
 
 /**
  * @param {{dir: () => string, run: (job: {prompt: string}) => Promise<object>, now?: () => number,
@@ -187,7 +194,8 @@ function createScanner({ dir, run, now = Date.now, log = null, onProgress = () =
     if (!res || !res.ok) return { ok: false, reason: `model-${(res && res.reason) || 'failed'}` };
     const parsed = parseScanAnswer(res.answer, { batchIds, knownIds: new Set(targets.map((r) => r.id)) });
     if (!parsed.ok) return parsed;
-    return { ok: true, scored: applyScores(dir(), project, parsed.scores, today), marked: markConflicts(dir(), project, parsed.conflicts, { log }) };
+    const { written, skipped } = applyScores(dir(), project, parsed.scores, today);
+    return { ok: true, scored: written, skipped, marked: markConflicts(dir(), project, parsed.conflicts, { log }) };
   }
 
   async function runAll(project, batches) {
@@ -202,7 +210,7 @@ function createScanner({ dir, run, now = Date.now, log = null, onProgress = () =
       }
       if (res.ok) {
         failuresInARow = 0;
-        update({ done: state.done + 1, scored: state.scored + res.scored, conflicts: state.conflicts + res.marked });
+        update({ done: state.done + 1, scored: state.scored + res.scored, skipped: state.skipped + res.skipped, conflicts: state.conflicts + res.marked });
         if (res.scored || res.marked) notify(onWritten);
         continue;
       }
