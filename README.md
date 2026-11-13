@@ -7,7 +7,25 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.27.0 — claude setup switcher widget (claude-code-setup profiles).**
+> **Current release: v0.28.0 — Live map and smarter memory.**
+> - Live map (Ctrl+Shift+G): the God Mode package graph, a Sessions work map
+>   for the active tab, and a Luna's Work tab with the iteration loop
+> - Memory search ranks by meaning with a local embedding model, falling
+>   back to keywords when no model answers
+> - memory_propose MCP tool for "remember this" mid-session, a "where we
+>   stopped" note per project, and capture of a finished God Mode run
+> - Memory window: keyboard review, opt-in auto-accept per memory type,
+>   usefulness scores, memory station evidence and usage counts
+> - Phone: a Memory page to approve or reject the PC's memory inbox
+> - God Mode: worker model select on the Approve screen and the phone,
+>   resume a run after a PC shutdown + Pause for shutdown
+> - Diff window: maximize and drag-resize
+> - Fix: the fallback proxy re-probes every model that is back, not just the
+>   first
+> - Fix: the Skills widget lists only skills the active Claude setup loads
+> - Fix: planner spend caps sit above the headless startup cost
+>
+> **v0.27.0 — claude setup switcher widget (claude-code-setup profiles).**
 > - Claude setup switcher widget (claude-code-setup profiles)
 > - memory review fixes - hide unreviewed snippets, Make global in the
 >   inbox, outside-content note
