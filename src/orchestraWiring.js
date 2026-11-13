@@ -215,6 +215,8 @@ function sessionDeps(ctx) {
     // tab closing ends it (overnight.forgetSession in the close path).
     createSession: guardedSessionFactory(ctx.createSession, ctx.overnight),
     briefDir: () => path.join(ctx.userDir(), BRIEF_DIR),
+    // A worker brief's "## Project memory" section (src/memoryinject.js), or null.
+    projectMemory: (repoPath, pkg) => (typeof ctx.projectMemory === 'function' ? ctx.projectMemory(repoPath, pkg) : null),
     writeBrief: (file, text) => {
       try {
         fs.mkdirSync(path.dirname(file), { recursive: true });

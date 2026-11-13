@@ -120,8 +120,9 @@ const ESC = '\x1b';
  * @param {{id:string, title:string, prompt:string, verify:string}} pkg
  * @param {string} branch
  * @param {{resume?:boolean, escalation?:{reason:string, detail:string|null},
- *   depMerge?:{branches:string[], files:string[]}|null}} [opts] depMerge
- *   defaults to the package's recorded one, so a resume brief keeps it
+ *   depMerge?:{branches:string[], files:string[]}|null, memory?:string|null}} [opts] depMerge
+ *   defaults to the package's recorded one, so a resume brief keeps it;
+ *   memory = the "## Project memory" section (src/memoryinject.js), or none
  * @returns {string}
  */
 function briefText(pkg, branch, opts = {}) {
@@ -148,6 +149,7 @@ function briefText(pkg, branch, opts = {}) {
     '',
     pkg.prompt,
     '',
+    ...(opts.memory ? [opts.memory, ''] : []),
     '## Verify',
     pkg.verify ? `Run \`${pkg.verify}\` and fix until it passes.` : "Check your work with the project's tests before you finish.",
     'Run the verify command in the foreground and wait for it to finish. Do not end your turn while a test run (or any other command) of yours is still running in the background: an ended turn tells LunaCore you stopped.',
@@ -609,7 +611,8 @@ function createOrchestra(deps) {
     resumeText: sup.RESUME_TEXT,
     cancelNudge: (id) => cancelNudge(id),
     writePty: (sessionId, text, opts) => writePty(sessionId, text, opts),
-    briefText: (pkg, branch, opts) => briefText(pkg, branch, opts),
+    // A hand-over brief is a resume brief: same project memory as the first start.
+    briefText: (pkg, branch, opts = {}) => briefText(pkg, branch, opts.resume ? { ...opts, memory: projectMemoryFor(pkg) } : opts),
     reopen: (pkg, text) => reopenInWorktree(pkg, text),
     landPushed: (id) => landPushed(id),
     stall: (id, reason, detail) => stall(id, reason, detail),
@@ -1430,12 +1433,29 @@ function createOrchestra(deps) {
    * @param {{branch:string, root:string, cwd:string, briefPath:string, baseSha:string|null, depMerge:object|null}} where
    */
   function startWorker(pkg, where) {
-    if (!deps.writeBrief(where.briefPath, briefText(pkg, where.branch, { depMerge: where.depMerge }))) {
+    if (!deps.writeBrief(where.briefPath, briefText(pkg, where.branch, { depMerge: where.depMerge, memory: projectMemoryFor(pkg) }))) {
       return { ...where, state: 'failed', error: 'briefFailed' };
     }
     const session = openTab(pkg, where.cwd, where.branch, where.briefPath);
     if (!session) return { ...where, state: 'failed', error: 'noTab' };
     return { ...where, ...freshRun(), state: 'launched', sessionId: session.id, heldLaunch: false };
+  }
+
+  /** The brief's project memory section, or null. Memory never stops a worker from starting. */
+  function projectMemoryFor(pkg) {
+    if (typeof deps.projectMemory !== 'function') return null;
+    try {
+      const text = deps.projectMemory(plan.repoPath, pkg);
+      return typeof text === 'string' && text ? text : null;
+    } catch (err) {
+      log(`project memory unavailable for ${pkg.id}: ${(err && err.message) || err}`);
+      return null;
+    }
+  }
+
+  /** The brief of a reopened worker: RESUMING, with the same project memory section as a first start. */
+  function resumeBrief(pkg, extra = {}) {
+    return briefText(pkg, pkg.branch, { ...extra, resume: true, memory: projectMemoryFor(pkg) });
   }
 
   /** A failed dependency install: its own error, the last line and the output tail. */
@@ -1931,7 +1951,7 @@ function createOrchestra(deps) {
    * @returns {boolean} false when the tab could not be reopened (stays stalled)
    */
   function autoResume(pkg, reason, detail) {
-    const text = withStallNote(briefText(pkg, pkg.branch, { resume: true }), reason, detail);
+    const text = withStallNote(resumeBrief(pkg), reason, detail);
     if (!reopenInWorktree(pkg, text).ok) return false;
     patch(pkg.id, { autoResumed: true });
     onRunEvent('autoResumed', { id: pkg.id, reason });
@@ -1946,7 +1966,7 @@ function createOrchestra(deps) {
   function escalate(pkg, reason, detail) {
     if (!depsReady(pkg)) return false;
     const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
-    const text = briefText(pkg, pkg.branch, { resume: true, escalation: { reason, detail } });
+    const text = resumeBrief(pkg, { escalation: { reason, detail } });
     if (!deps.writeBrief(briefPath, text)) return false;
     const old = pkg.sessionId;
     // New tab first: closing the old one first could leave main opening an
@@ -2032,7 +2052,7 @@ function createOrchestra(deps) {
       return true;
     }
     if (!pkg.root || !pkg.branch) return false;
-    const brief = `${briefText(pkg, pkg.branch, { resume: true })}\n## LunaCore fix-up round\n\n${text}\n`;
+    const brief = `${resumeBrief(pkg)}\n## LunaCore fix-up round\n\n${text}\n`;
     if (!reopenInWorktree(pkg, brief).ok) return false;
     patch(pkg.id, fields);
     return true;
@@ -2663,7 +2683,7 @@ function createOrchestra(deps) {
         commit();
         return { ok: false, error: plan.killed ? 'notRetryable' : plan.pausedUntil ? 'paused' : plan.hold.reason };
       }
-      const reopened = reopenInWorktree(findPkg(pkg.id), briefText(pkg, pkg.branch, { resume: true }));
+      const reopened = reopenInWorktree(findPkg(pkg.id), resumeBrief(pkg));
       if (!reopened.ok) {
         // Held for node_modules: Resume reopens it, no second Retry needed.
         if (reopened.error === 'noNodeModules') patch(pkg.id, { heldRetry: true });
@@ -2770,7 +2790,7 @@ function createOrchestra(deps) {
     }
     if (p.heldRetry) {
       patch(id, { heldRetry: false });
-      const reopened = reopenInWorktree(findPkg(id), briefText(p, p.branch, { resume: true }));
+      const reopened = reopenInWorktree(findPkg(id), resumeBrief(p));
       if (reopened.ok) {
         patch(id, { terminal: false, autoRetries: 0 });
         plan.packages = sup.withBlockedBy(plan.packages);

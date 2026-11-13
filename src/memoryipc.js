@@ -4,7 +4,7 @@
 // docs/untouched_docs/rag-stylememory.md, phase 4. The HUD's inbox panel
 // (renderer memoryinbox.js) reviews what capture proposed:
 //
-//   memory:inbox   ()             -> {ok, items, total, capture}
+//   memory:inbox   ()             -> {ok, items, total, conflicts: {items, total}, capture}
 //   memory:approve (key)          -> {ok, key, removed} | {ok:false, reason}
 //   memory:reject  (key)          -> same
 //   memory:update  ({key, edits}) -> {ok, key} | {ok:false, reason}
@@ -35,6 +35,7 @@ const { MAX_BODY, MAX_TITLE } = require('./memoryrecord');
 const { scan } = require('./memorystore');
 const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
 const { captureStats, DAY_MS } = require('./memorylog');
+const { listConflicts } = require('./memoryconflict');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -99,6 +100,8 @@ function registerMemoryIpc({ ipcMain, dir, onChanged = () => {}, captureStatus =
       return {
         ok: true,
         ...listInbox(dir()),
+        // Memories that contradict each other wait here too (src/memoryconflict.js).
+        conflicts: listConflicts(scan(dir()).records, { events: events() }),
         capture: captureStatus(),
         stats: { days: STATS_DAYS, captures, proposed, approved, rejected, edited, rate },
       };

@@ -7,7 +7,8 @@
 //   memory-log.local.jsonl
 //   {"at": <ms>, "ev": "capture",  "project", "reason", "kept", "dropped": {"duplicate": 2}}
 //   {"at": <ms>, "ev": "proposed", "key", "type"}
-//   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired", "key", "type", "title"?}
+//   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired" | "superseded", "key", "type", "title"?}
+//   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
 //   {"at": <ms>, "ev": "get",      "key"}
 //   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user", "note"?, "missing"?}
@@ -46,7 +47,7 @@ const MAX_REASON = 40;
 const MAX_REJECTED_TITLES = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const DECISIONS = ['approved', 'edited', 'rejected', 'retired'];
+const DECISIONS = ['approved', 'edited', 'rejected', 'retired', 'superseded'];
 const VERDICTS = ['verified', 'disputed'];
 const BY = ['tool', 'user'];
 
@@ -92,6 +93,11 @@ function cleanEvent(raw) {
     return { at, ev, project: projectOf(raw.project), hits };
   }
   if (ev === 'get') return key ? { at, ev, key } : null;
+  if (ev === 'conflict') {
+    const other = splitKey(raw.other) ? raw.other : null;
+    const note = line(raw.note, MAX_NOTE);
+    return key && other ? { at, ev, key, other, ...(note ? { note } : {}) } : null;
+  }
   if (VERDICTS.includes(ev)) {
     if (!key || !BY.includes(raw.by)) return null;
     const note = line(raw.note, MAX_NOTE);

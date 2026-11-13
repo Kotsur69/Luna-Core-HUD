@@ -25,9 +25,10 @@
 
 'use strict';
 
-const { GLOBAL, TYPES, checkRecord, splitKey, keyOf } = require('./memoryrecord');
+const { GLOBAL, TYPES, checkRecord, splitKey, keyOf, scoreOf } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord } = require('./memorystore');
 const { nearDuplicate, sourceNotes, withoutSuggestedGlobal } = require('./memoryextract');
+const { supersededKeys } = require('./memoryreview');
 
 /** Entries one listing returns; the count says how many wait in all. */
 const MAX_ITEMS = 100;
@@ -73,7 +74,7 @@ function similarConfirmed(records, record) {
 function listInbox(dir) {
   const { records } = scan(dir);
   const byKey = new Map(records);
-  const groups = groupPending(records).reverse();
+  const groups = groupPending(listable(records)).reverse();
   const items = groups.slice(0, MAX_ITEMS).map(({ key, record, duplicates }) => ({
     key,
     project: record.project,
@@ -94,13 +95,24 @@ function listInbox(dir) {
       .map((r) => ({ id: r.id, title: r.title })),
     duplicates: duplicates.length,
     similar: similarConfirmed(records, record),
+    ...scoreOf(record),
   }));
   return { items, total: groups.length };
 }
 
 /** How many entries wait for one project (its own, not the global ones). */
 function pendingCount(dir, project) {
-  return groupPending(scan(dir).records).filter((g) => g.record.project === project).length;
+  return groupPending(listable(scan(dir).records)).filter((g) => g.record.project === project).length;
+}
+
+/**
+ * The records the inbox lists: a waiting entry that a confirmed memory already
+ * supersedes (the losing side of a resolved conflict, src/memoryconflict.js)
+ * is history, not a decision still to make.
+ */
+function listable(records) {
+  const gone = supersededKeys(records);
+  return records.filter(([key]) => !gone.has(key));
 }
 
 /** The waiting entry with this key and the duplicates folded into it, or a reason. */
@@ -202,7 +214,8 @@ function makeGlobal(dir, key) {
   if (record.project === GLOBAL) return { ok: false, reason: 'already-global' };
   const id = freeGlobalId(scan(dir).records, record.id);
   if (!id) return { ok: false, reason: 'id-taken' };
-  const res = checkRecord({ ...record, id, project: GLOBAL, supersedes: [], source: withoutSuggestedGlobal(record.source) || null });
+  // Conflict marks name ids of the project, like `supersedes`: they stay behind too.
+  const res = checkRecord({ ...record, id, project: GLOBAL, supersedes: [], conflicts: [], compatible: [], source: withoutSuggestedGlobal(record.source) || null });
   if (!res.record) return { ok: false, reason: res.error };
   writeRecord(dir, res.record);
   removeRecord(dir, key);

@@ -17,6 +17,7 @@
 
 import { t } from './util.js';
 import { createTallOverlay } from './talloverlay.js';
+import { usefulnessLine, conflictEntry, memoriesPanel, scanStartKey } from './memorybrain.js';
 
 /** Characters of a body shown before "show all". */
 export const PREVIEW_CHARS = 320;
@@ -34,6 +35,10 @@ const failed = new Map();
 let tab = null;
 /** The key whose "Retire" waits for a second click, or null. */
 let confirming = null;
+/** The project the "All memories" list shows ('' = main picks one). */
+let brainProject = '';
+/** An i18n key when main refused to start a scan, or null. */
+let scanError = null;
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
 
@@ -62,7 +67,7 @@ export function preview(body, max = PREVIEW_CHARS) {
 
 /** The i18n key of a failed action's reason. */
 export function reasonKey(reason) {
-  if (reason === 'not-found' || reason === 'not-pending' || reason === 'not-confirmed' || reason === 'not-flagged') return 'mem.inbox.err.gone';
+  if (['not-found', 'not-pending', 'not-confirmed', 'not-flagged', 'not-conflict', 'not-archived'].includes(reason)) return 'mem.inbox.err.gone';
   if (reason === 'empty-body' || reason === 'bad-title' || reason === 'body-too-long' || reason === 'record-too-big') return 'mem.inbox.err.text';
   return 'mem.inbox.err.failed';
 }
@@ -158,7 +163,7 @@ function entry(item) {
         }),
       );
     }
-    card.append(...notes(item));
+    card.append(...notes(item), el('p', 'mem-inbox__note', usefulnessLine(item)));
     if (item.source) card.append(el('p', 'hint', item.source));
     const off = busy.has(item.key);
     const approve = button('port-btn mem-inbox__btn mem-inbox__btn--approve', t('mem.inbox.approve'), () => decide(item.key, 'memoryInboxApprove'));
@@ -207,7 +212,7 @@ function reviewEntry(item) {
       }),
     );
   }
-  card.append(...item.flags.map((flag) => el('p', 'mem-inbox__note', flagLine(flag))));
+  card.append(...item.flags.map((flag) => el('p', 'mem-inbox__note', flagLine(flag))), el('p', 'mem-inbox__note', usefulnessLine(item)));
   const off = busy.has(item.key);
   const actions = el('div', 'mem-inbox__actions');
   if (confirming === item.key) {
@@ -250,6 +255,7 @@ export function statsLine(stats) {
 const TABS = [
   ['inbox', 'mem.inbox.tab.inbox'],
   ['review', 'mem.inbox.tab.review'],
+  ['all', 'mem.inbox.tab.all'],
 ];
 const PANEL_ID = 'mem-inbox-panel';
 
@@ -278,7 +284,9 @@ function tabBar(counts) {
   bar.addEventListener('keydown', (event) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
-    switchTab(tab === 'inbox' ? 'review' : 'inbox');
+    const names = TABS.map(([name]) => name);
+    const step = event.key === 'ArrowRight' ? 1 : -1;
+    switchTab(names[(names.indexOf(tab) + step + names.length) % names.length]);
   });
   return bar;
 }
@@ -289,24 +297,31 @@ function captureLine(capture) {
   return t('mem.inbox.captureLast', { when, saved: capture.last.saved });
 }
 
-/** Puts focus back on the list after a repaint: the wanted entry, or the one that took its place. */
-function refocus(list, key, index) {
+/**
+ * Puts focus back on the list after a repaint: the wanted entry, or the one
+ * that took its place; `fallback` when that entry has nothing to act on (a
+ * restored memory has no buttons left), so focus never drops to the page.
+ */
+function refocus(list, key, index, fallback) {
   const cards = [...list.children];
   const target = cards.find((c) => c.dataset.key === key) || cards[Math.min(index, cards.length - 1)];
   // The entry's own actions (or its edit form), not the "show all" link above them.
   const control = target && target.querySelector('.mem-inbox__actions button:not(:disabled), input');
   if (control) control.focus();
+  else if (fallback) fallback.focus();
 }
 
-/**
- * @param {object} res the inbox (memory:inbox)
- * @param {{items: object[], total: number}} review the review list (memory:review)
- * @param {boolean} [focusTab] put the keyboard focus on the selected tab
- */
-function render(res, review, focusKey, focusIndex, focusTab) {
-  // First paint: an empty inbox with something to check opens on the review list.
-  if (tab === null) tab = !res.total && review.total ? 'review' : 'inbox';
-  overlay.setTitle(res.total ? t('mem.inbox.titleCount', { count: res.total }) : '');
+/** Two memories that contradict each other, as an inbox entry (memorybrain.js). */
+function conflictItem(pair) {
+  return conflictEntry(pair, {
+    off: busy.has(pair.id),
+    error: failed.has(pair.id) ? reasonKey(failed.get(pair.id)) : null,
+    onKeep: (keep) => decide(pair.id, 'memoryConflictResolve', pair.a.key, pair.b.key, keep),
+  });
+}
+
+/** The inbox (conflicts first) or the review list. @returns {{nodes: HTMLElement[], list: HTMLElement|null}} */
+function listView(res, review, conflicts) {
   const reviewing = tab === 'review';
   const shown = reviewing ? review : res;
   // An entry that left the list (decided on another PC) takes its open draft or question with it:
@@ -314,26 +329,74 @@ function render(res, review, focusKey, focusIndex, focusTab) {
   const listed = new Set(shown.items.map((item) => item.key));
   if (editing !== null && !listed.has(editing)) editing = null;
   if (confirming !== null && !listed.has(confirming)) confirming = null;
+  const nodes = [el('p', 'hint mem-inbox__intro', t(reviewing ? 'mem.inbox.review.intro' : 'mem.inbox.intro'))];
+  const pairs = reviewing ? [] : conflicts.items;
+  if (!shown.items.length && !pairs.length) {
+    nodes.push(el('p', 'mem-inbox__empty', t(reviewing ? 'mem.inbox.review.empty' : 'mem.inbox.empty')));
+    return { nodes, list: null };
+  }
+  const list = el('ul', 'mem-inbox__list');
+  for (const pair of pairs) list.append(conflictItem(pair));
+  for (const item of shown.items) list.append(reviewing ? reviewEntry(item) : entry(item));
+  nodes.push(list);
+  if (shown.total > shown.items.length) nodes.push(el('p', 'hint', t('mem.inbox.more', { count: shown.total - shown.items.length })));
+  return { nodes, list };
+}
+
+/** The "All memories" list of one project, with the usefulness scan (memorybrain.js). */
+function allView(all) {
+  if (all && all.ok && all.project) brainProject = all.project;
+  const { node, list } = memoriesPanel(all, {
+    scanError,
+    off: (key) => busy.has(key),
+    error: (key) => (failed.has(key) ? reasonKey(failed.get(key)) : null),
+    onProject: (project) => {
+      brainProject = project;
+      scanError = null;
+      load();
+    },
+    onScan: startScan,
+    onRestore: (key) => decide(key, 'memoryRestore', key),
+  });
+  return { nodes: [node], list };
+}
+
+/** Asks main to scan one project; a refusal (busy, nothing to scan) is shown above the list. */
+async function startScan(project) {
+  scanError = null;
+  const res = await call('memoryScan', project);
+  if (!res || !res.ok) scanError = scanStartKey(res && res.reason);
+  load();
+}
+
+const NO_CONFLICTS = { items: [], total: 0 };
+
+/**
+ * @param {object} res the inbox (memory:inbox), with its conflicts
+ * @param {{items: object[], total: number}} review the review list (memory:review)
+ * @param {object|null} all one project's memories (memory:list), read only for that tab
+ * @param {boolean} [focusTab] put the keyboard focus on the selected tab
+ */
+function render(res, review, all, focusKey, focusIndex, focusTab) {
+  const conflicts = res.conflicts && Array.isArray(res.conflicts.items) ? res.conflicts : NO_CONFLICTS;
+  // First paint: an empty inbox with something to check opens on the review list.
+  if (tab === null) tab = !(res.total + conflicts.total) && review.total ? 'review' : 'inbox';
+  // Same count as the inbox tab: waiting memories plus conflicts.
+  const waiting = res.total + conflicts.total;
+  overlay.setTitle(waiting ? t('mem.inbox.titleCount', { count: waiting }) : '');
   const panel = el('div');
   panel.id = PANEL_ID;
   panel.setAttribute('role', 'tabpanel');
   panel.setAttribute('aria-labelledby', `mem-inbox-tab-${tab}`);
-  panel.append(el('p', 'hint mem-inbox__intro', t(reviewing ? 'mem.inbox.review.intro' : 'mem.inbox.intro')));
-  let list = null;
-  if (shown.items.length) {
-    list = el('ul', 'mem-inbox__list');
-    for (const item of shown.items) list.append(reviewing ? reviewEntry(item) : entry(item));
-    panel.append(list);
-    if (shown.total > shown.items.length) panel.append(el('p', 'hint', t('mem.inbox.more', { count: shown.total - shown.items.length })));
-  } else {
-    panel.append(el('p', 'mem-inbox__empty', t(reviewing ? 'mem.inbox.review.empty' : 'mem.inbox.empty')));
-  }
-  const bar = tabBar({ inbox: res.total, review: review.total });
+  const { nodes, list } = tab === 'all' ? allView(all) : listView(res, review, conflicts);
+  panel.append(...nodes);
+  const bar = tabBar({ inbox: waiting, review: review.total });
   const foot = el('p', 'hint mem-inbox__foot', captureLine(res.capture));
   const stats = statsLine(res.stats);
   overlay.body.replaceChildren(bar, panel, foot, ...(stats ? [el('p', 'hint', stats)] : []));
-  if (focusTab) bar.querySelector('[aria-selected="true"]').focus();
-  else if (list && (focusKey !== undefined || focusIndex !== undefined)) refocus(list, focusKey, focusIndex || 0);
+  const selectedTab = bar.querySelector('[aria-selected="true"]');
+  if (focusTab) selectedTab.focus();
+  else if (list && (focusKey !== undefined || focusIndex !== undefined)) refocus(list, focusKey, focusIndex || 0, selectedTab);
 }
 
 const NO_REVIEW = { items: [], total: 0 };
@@ -343,7 +406,11 @@ let loadSeq = 0;
 /** Reads both lists and repaints. `focusKey` / `focusIndex` / `focusTab` say where the keyboard focus goes. */
 async function load(focusKey, focusIndex, focusTab) {
   const seq = ++loadSeq;
-  const [res, review] = await Promise.all([call('memoryInbox'), call('memoryReview')]);
+  const [res, review, all] = await Promise.all([
+    call('memoryInbox'),
+    call('memoryReview'),
+    tab === 'all' ? call('memoryList', brainProject) : Promise.resolve(null),
+  ]);
   // Only the newest read paints: an older answer arriving late must not undo its focus.
   if (seq !== loadSeq || !overlay || !overlay.isOpen()) return;
   if (!res || !res.ok || !Array.isArray(res.items)) {
@@ -351,7 +418,7 @@ async function load(focusKey, focusIndex, focusTab) {
     return;
   }
   // The review list failing must not take the inbox down with it.
-  render(res, review && review.ok && Array.isArray(review.items) ? review : NO_REVIEW, focusKey, focusIndex, focusTab);
+  render(res, review && review.ok && Array.isArray(review.items) ? review : NO_REVIEW, all, focusKey, focusIndex, focusTab);
 }
 
 /** One call for one entry. @returns {Promise<object|null>} main's answer, null when it failed */
@@ -371,12 +438,15 @@ async function act(key, fn, ...args) {
   return Boolean(await actResult(key, fn, ...args));
 }
 
-/** Approve or reject: the entry leaves the list and focus moves to its neighbour. */
-async function decide(key, fn) {
+/**
+ * Approve, reject, settle a conflict or restore: the entry leaves the list and
+ * focus moves to its neighbour. `args` default to the key itself.
+ */
+async function decide(key, fn, ...args) {
   const cards = overlay ? [...overlay.body.querySelectorAll('.mem-inbox__item')] : [];
   const index = Math.max(0, cards.findIndex((c) => c.dataset.key === key));
   for (const b of cards[index] ? cards[index].querySelectorAll('button') : []) b.disabled = true;
-  await act(key, fn, key);
+  await act(key, fn, ...(args.length ? args : [key]));
   confirming = null;
   load(key, index);
 }
@@ -403,6 +473,7 @@ export async function openMemoryInbox() {
         stopListening = null;
         editing = null;
         confirming = null;
+        scanError = null;
         failed.clear();
       },
     });
