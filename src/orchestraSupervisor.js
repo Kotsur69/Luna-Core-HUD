@@ -616,6 +616,11 @@ function allowSuggestions(log) {
 
 // ---- persistence shape ----------------------------------------------------
 
+// A stored package brief. A plan-run brief embeds the whole request (up to
+// orchestraPlanRun.MAX_GOAL_CHARS) plus its own scaffolding, so this cap
+// leaves room for both instead of cutting the brief's tail on a reload.
+const MAX_PACKAGE_PROMPT_CHARS = 32000;
+
 const str = (v, max = 4000) => (typeof v === 'string' ? v.slice(0, max) : '');
 const strOrNull = (v, max = 4000) => (typeof v === 'string' && v ? v.slice(0, max) : null);
 const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
@@ -719,7 +724,7 @@ function normalizePackage(raw) {
   return {
     id: raw.id,
     title: str(raw.title, 200),
-    prompt: str(raw.prompt, 20000),
+    prompt: str(raw.prompt, MAX_PACKAGE_PROMPT_CHARS),
     files: strList(raw.files),
     dependsOn: strList(raw.dependsOn),
     // One line only: it runs through a shell (orchestraFinish.runVerify).
@@ -1109,6 +1114,7 @@ module.exports = {
   tally,
   timedOut,
   normalizeStoredPlan,
+  MAX_PACKAGE_PROMPT_CHARS,
   rehomePlanPaths,
   serializePlan,
   restoreAfterRestart,
