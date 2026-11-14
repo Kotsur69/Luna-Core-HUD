@@ -129,7 +129,7 @@ function buildIndex(db, records, vectors) {
    * @returns {object[]} best first: {key, id, project, type, title, confidence,
    *   created, last_verified, source, links, snippet, stale, score}
    */
-  function search(query, { project = null, limit = DEFAULT_LIMIT, only = null, today = null, vector = null } = {}) {
+  function search(query, { project = null, limit = DEFAULT_LIMIT, only = null, today = null, vector = null, archived = false } = {}) {
     const terms = termsOf(query);
     const semantic = Boolean(vector && vectors && vectors.size);
     if (!terms.length && !semantic) return [];
@@ -142,6 +142,8 @@ function buildIndex(db, records, vectors) {
     for (const [key, relevance] of base) {
       const record = byKey.get(key);
       if (!record || superseded.has(key)) continue;
+      // An archived memory (src/memorydecay.js) is found only when asked for.
+      if (record.archived && !archived) continue;
       if (only && record.project !== only && record.project !== GLOBAL) continue;
       if (today && isDecayed(record, today)) continue;
       const stale = Boolean(today) && isStale(record, today);

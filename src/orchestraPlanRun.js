@@ -33,7 +33,8 @@ const MAX_TOPICS = 6;
 const MAX_TOPIC_SLUG_CHARS = 24;
 const MAX_RUN_SLUG_CHARS = 40;
 const MAX_QUESTION_CHARS = 300;
-const MAX_GOAL_CHARS = 4000;
+// The goal is Mati's plan-run request verbatim (orchestraPlanRunStart.js).
+const MAX_GOAL_CHARS = 20000;
 
 const ROLE_TOPIC = 'topic';
 const ROLE_CRITIQUE = 'critique';
@@ -565,6 +566,7 @@ module.exports = {
   MAX_TOPIC_SLUG_CHARS,
   MAX_RUN_SLUG_CHARS,
   MAX_QUESTION_CHARS,
+  MAX_GOAL_CHARS,
   ROLE_TOPIC,
   ROLE_CRITIQUE,
   ROLE_SYNTHESIS,

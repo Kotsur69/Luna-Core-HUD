@@ -17,6 +17,7 @@ const path = require('path');
 const D = require('../src/lunasworkDirector.js');
 const Pack = require('../src/lunasworkPack.js');
 const { MAX_CARDS_PER_ITERATION, orderCards } = require('../src/lunasworkRules.js');
+const { MAX_DETAILS_CHARS } = require('../src/todorows.js');
 
 const RUN_ID = 'amsteel-1';
 const RUN_TAG = 'run:amsteel-1';
@@ -263,8 +264,8 @@ test('every scheduled card carries the ARCHITECTURE / DECISIONS brief', async ()
 });
 
 test('the brief is added once and keeps the card within its details cap', () => {
-  const once = D.withBuilderBrief({ text: 't', details: 'x'.repeat(5000) });
-  assert.ok(once.details.length <= 4000);
+  const once = D.withBuilderBrief({ text: 't', details: 'x'.repeat(MAX_DETAILS_CHARS + 1000) });
+  assert.ok(once.details.length <= MAX_DETAILS_CHARS);
   assert.deepEqual(D.withBuilderBrief(once), once);
 });
 

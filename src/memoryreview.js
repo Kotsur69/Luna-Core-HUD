@@ -33,7 +33,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { splitKey } = require('./memoryrecord');
+const { splitKey, scoreOf } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord, fileFor } = require('./memorystore');
 const { openDisputes, acceptedMissing, DAY_MS } = require('./memorylog');
 const { lastOpened, oldestRead } = require('./memoryuse');
@@ -157,7 +157,8 @@ function reviewList({ records, today, events = [], roots = {} }) {
   const unopened = unopenedCheck(events, today);
   const items = [];
   for (const [key, record] of records) {
-    if (record.confidence !== 'confirmed' || gone.has(key)) continue;
+    // An archived memory (src/memorydecay.js) is out of the way until restored.
+    if (record.confidence !== 'confirmed' || gone.has(key) || record.archived) continue;
     const flags = [];
     const dispute = disputes.get(key);
     if (dispute) flags.push({ kind: 'disputed', at: dispute.at, note: dispute.note });
@@ -177,6 +178,7 @@ function reviewList({ records, today, events = [], roots = {} }) {
       created: record.created,
       last_verified: record.last_verified || null,
       flags,
+      ...scoreOf(record),
     });
   }
   const rank = (item) => Math.min(...item.flags.map((f) => FLAG_ORDER.indexOf(f.kind)));
@@ -263,6 +265,7 @@ module.exports = {
   anchorsOf,
   missingAnchors,
   reviewList,
+  supersededKeys,
   verify,
   retire,
   toolVerdict,

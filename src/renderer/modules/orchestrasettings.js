@@ -23,6 +23,43 @@ const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 const EFFORT_OPTIONS = ['plan', 'medium', 'high', 'xhigh', 'max'];
 // src/uiprefs.js SUPABASE_APPLY_MODES (main validates the value again).
 const SUPABASE_APPLY_MODES = ['off', 'ask', 'automatic'];
+// Opt-in God Mode evolutions: [switch id, ui pref key]. Main fixes them into
+// each NEW plan (src/orchestraSupervisor.js PLAN_OPT_IN_FLAGS), so a plan
+// that already exists keeps the value it was made with.
+const EVOLUTION_TOGGLES = [
+  ['orchestra-ab-toggle', 'orchestraAbBuild'],
+  ['orchestra-heal-toggle', 'orchestraSelfHeal'],
+  ['orchestra-context-toggle', 'orchestraContextGuard'],
+];
+
+/** The three opt-in switches: shown from prefs, saved on change, re-shown from what main stored. */
+function mountEvolutionToggles(root, prefs) {
+  for (const [id, key] of EVOLUTION_TOGGLES) {
+    const input = root.querySelector(`#${id}`);
+    if (!input) continue;
+    const status = root.querySelector(`#${id}-status`);
+    let stored = prefs[key] === true;
+    const show = (on) => {
+      input.checked = on;
+      if (!status) return;
+      status.dataset.i18n = on ? 'mailset.on' : 'mailset.off';
+      status.textContent = t(status.dataset.i18n);
+    };
+    show(stored);
+    input.addEventListener('change', async () => {
+      sfx.modeToggle();
+      let next = null;
+      try {
+        next = await window.lunacore.setUiPrefs({ [key]: input.checked });
+      } catch (err) {
+        console.warn(`[orchestrasettings] saving ${key} failed:`, err);
+      }
+      // Whatever main stored wins; a failed save shows the old value again.
+      if (next) stored = next[key] === true;
+      show(stored);
+    });
+  }
+}
 
 /**
  * @param {HTMLElement} root the Settings overlay
@@ -39,6 +76,8 @@ export function mountOrchestraSettings(root, prefs) {
   // "Email me when a run finishes" (src/godmodemail.js): ON by default once
   // Gmail is connected, disabled with a hint until then.
   mountRunEmailToggle(root);
+  // A/B builds, self-healing workers, context guard: off by default.
+  mountEvolutionToggles(root, prefs);
 
   model.addEventListener('change', () => {
     if (!MODELS.includes(model.value)) return;

@@ -20,7 +20,7 @@
 import { t } from './util.js';
 
 /** Same cap main enforces (orchestraPlanRunStart.MAX_REQUEST_CHARS). */
-export const MAX_REQUEST_CHARS = 4000;
+export const MAX_REQUEST_CHARS = 20000;
 export const PLANNERS = Object.freeze(['claude', 'free']);
 const MIN_REQUEST_CHARS = 3;
 const PHASE_STATES = new Set(['pending', 'running', 'done', 'stalled']);

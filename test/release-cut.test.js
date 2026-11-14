@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 
 const release = require('../src/releaseCut.js');
-const { createFinalizer, releaseGate, POST_MERGE_STEPS } = require('../src/orchestraFinalize.js');
+const { createFinalizer, releaseGate, postMergeContext, POST_MERGE_STEPS } = require('../src/orchestraFinalize.js');
 const { createPostMergeServices } = require('../src/orchestraPostMerge.js');
 const { buildReport } = require('../src/orchestraReport.js');
 const finishIpc = require('../src/orchestraFinishIpc.js');
@@ -362,7 +362,8 @@ test('unreleasedCount: commits since the last v* tag, read-only', async () => {
 // ---------------------------------------------------------------------------
 
 test('releaseGate: ticked only, once per run, never on a red self-check', () => {
-  const ctx = (over) => ({ options: { releaseAfter: true }, previous: {}, selfCheck: { tests: 'ok', syntax: 'ok', smoke: 'skipped' }, ...over });
+  const done = [{ id: 'core', state: 'pushed', merged: true, skipped: false }];
+  const ctx = (over) => ({ options: { releaseAfter: true }, previous: {}, selfCheck: { tests: 'ok', syntax: 'ok', smoke: 'skipped' }, packages: done, ...over });
   assert.equal(releaseGate(ctx()), true);
   assert.equal(releaseGate(ctx({ options: {} })), false);
   assert.equal(releaseGate(ctx({ previous: { release: { released: true } } })), false);
@@ -371,6 +372,38 @@ test('releaseGate: ticked only, once per run, never on a red self-check', () => 
   assert.equal(releaseGate(ctx({ selfCheck: null })), 'self-check did not run');
   assert.equal(releaseGate(ctx({ selfCheck: { tests: 'skipped', syntax: 'ok', smoke: 'ok' } })), 'self-check tests did not run');
   assert.deepEqual(POST_MERGE_STEPS.map((s) => s.name), ['localBase', 'cleanup', 'supabase', 'release']);
+});
+
+test('releaseGate: an unfinished run is skipped with a reason, never released', () => {
+  const ok = { selfCheck: { tests: 'ok', syntax: 'ok', smoke: 'ok' }, options: { releaseAfter: true }, previous: {} };
+  const pkg = (id, state, merged, skipped = false) => ({ id, state, merged, skipped });
+  const merged = pkg('core', 'pushed', true);
+  for (const other of [
+    pkg('ui', 'stalled', false),
+    pkg('ui', 'failed', false),
+    pkg('ui', 'pending', false),
+    pkg('ui', 'launched', false),
+    pkg('ui', 'finishing', false),
+    pkg('ui', 'killed', false),
+    pkg('ui', 'closed', false),
+    // Pushed, but skipped from this merge pass (conflict / red verify).
+    pkg('ui', 'pushed', false, true),
+    // Pushed, not merged yet (no pass took it).
+    pkg('ui', 'pushed', false),
+  ]) {
+    assert.equal(releaseGate({ ...ok, packages: [merged, other] }), 'run not finished: 1 package(s) not merged (ui)', `${other.state}`);
+  }
+  assert.equal(
+    releaseGate({ ...ok, packages: [pkg('a', 'stalled', false), pkg('b', 'pending', false), merged] }),
+    'run not finished: 2 package(s) not merged (a, b)',
+  );
+  assert.equal(releaseGate({ ...ok, packages: [] }), 'run not finished: no packages');
+  assert.equal(releaseGate({ ...ok, packages: undefined }), 'run not finished: no packages');
+  // The tick and the once-per-run guard still come first.
+  assert.equal(releaseGate({ ...ok, options: {}, packages: [pkg('ui', 'stalled', false)] }), false);
+  assert.equal(releaseGate({ ...ok, previous: { release: { released: true } }, packages: [pkg('ui', 'stalled', false)] }), false);
+  // Every package merged (in this or an earlier pass): released.
+  assert.equal(releaseGate({ ...ok, packages: [merged, pkg('ui', 'pushed', true)] }), true);
 });
 
 function finalizePlan(over = {}) {
@@ -439,11 +472,12 @@ test('ticked: after merge + local base update the release runs once and lands in
   assert.deepEqual(again.order, ['localBase', 'cleanup']);
 });
 
-test('a partial run releases what landed; a failed run or an unticked one does not', async () => {
-  const partial = runFinalize(finalizePlan(), landed([{ id: 'ui', stage: 'conflict', detail: 'x', files: [] }]), () => ({ skipped: 'tests failed' }));
+test('a partial run (a package skipped from the merge) does not release; a failed run or an unticked one does not either', async () => {
+  const partial = runFinalize(finalizePlan(), landed([{ id: 'ui', stage: 'conflict', detail: 'x', files: [] }]), () => assert.fail('released a partial run'));
   await partial.finalizer.finalize();
-  assert.deepEqual(partial.order, ['localBase', 'cleanup', 'release']);
-  assert.match(partial.reports[partial.reports.length - 1], /- Release skipped: tests failed/);
+  assert.deepEqual(partial.order, ['localBase', 'cleanup']);
+  assert.equal(partial.finalizer.isRunning(), false);
+  assert.match(partial.reports[partial.reports.length - 1], /- Release skipped: run not finished: 1 package\(s\) not merged \(ui\)/);
 
   const failed = runFinalize(finalizePlan(), async () => ({ ok: false, merged: [], skipped: [], stage: 'verify', detail: 'red' }), () => assert.fail('released a failed run'));
   await failed.finalizer.finalize();
@@ -452,6 +486,47 @@ test('a partial run releases what landed; a failed run or an unticked one does n
   const off = runFinalize(finalizePlan({ options: {} }), landed(), () => assert.fail('released without the tick'));
   await off.finalizer.finalize();
   assert.deepEqual(off.order, ['localBase', 'cleanup']);
+});
+
+test('a stalled run merges what is done but releases only once a later pass finishes the run', async () => {
+  // "Finish run" while one package is stalled: the pushed one merges, no release.
+  const plan = finalizePlan();
+  plan.packages[1] = { ...plan.packages[1], state: 'stalled', error: 'noMarker' };
+  const first = runFinalize(plan, async () => ({ ok: true, merged: ['core'], skipped: [], headSha: LANDED }), () => assert.fail('released a stalled run'));
+  await first.finalizer.finalize();
+  assert.deepEqual(first.order, ['localBase', 'cleanup']);
+  assert.equal(plan.packages[0].merged, true);
+  assert.deepEqual(plan.integration.postMerge.release.skipped, 'run not finished: 1 package(s) not merged (ui)');
+  assert.notEqual(plan.integration.postMerge.release.released, true);
+
+  // Retry -> the stalled one pushes; the next pass merges it and the run is complete.
+  plan.packages[1] = { ...plan.packages[1], state: 'pushed', error: null };
+  let releases = 0;
+  const second = runFinalize(plan, async () => ({ ok: true, merged: ['ui'], skipped: [], headSha: LANDED }), () => {
+    releases += 1;
+    return { released: true, version: '0.22.0', tag: 'v0.22.0', url: 'u' };
+  });
+  await second.finalizer.finalize();
+  assert.deepEqual(second.order, ['localBase', 'cleanup', 'release']);
+  assert.equal(releases, 1);
+  assert.equal(plan.integration.postMerge.release.released, true);
+
+  // A further pass never releases the same run again.
+  plan.packages.push({ id: 'late', title: 'Late', state: 'pushed', branch: 'luna/late-1', dependsOn: [], verify: 'npm test', merged: false });
+  const third = runFinalize(plan, async () => ({ ok: true, merged: ['late'], skipped: [], headSha: LANDED }), () => assert.fail('released twice'));
+  await third.finalizer.finalize();
+  assert.deepEqual(third.order, ['localBase', 'cleanup']);
+});
+
+test('postMergeContext carries each package state for the release gate', () => {
+  const plan = finalizePlan();
+  plan.packages[0] = { ...plan.packages[0], merged: true };
+  plan.packages[1] = { ...plan.packages[1], state: 'stalled' };
+  const ctx = postMergeContext(plan, { skipped: [{ id: 'ui' }], headSha: LANDED }, 'pabc123');
+  assert.deepEqual(ctx.packages.map((p) => [p.id, p.state, p.merged, p.skipped]), [
+    ['core', 'pushed', true, false],
+    ['ui', 'stalled', false, true],
+  ]);
 });
 
 test('createPostMergeServices releases only the landed head and maps the answer', async () => {

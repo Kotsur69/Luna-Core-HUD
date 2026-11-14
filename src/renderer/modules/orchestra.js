@@ -30,6 +30,7 @@ import { term, getActiveSessionId } from './terminals.js';
 import { closeWithExit, cancelExit } from './motion.js';
 import { failureBlock, runOptionsRow, powerBanner, batteryBanner } from './orchestraDetails.js';
 import { hybridLines } from './orchestraHybridView.js';
+import { evolutionLines, isUndecidedGroup } from './orchestraEvolutionView.js';
 import { pkgStateKey, recoverAsk } from './orchestraState.js';
 import { pkgErrorText, progressText, ladderLines } from './orchestraCardLines.js';
 import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetry.js';
@@ -65,6 +66,8 @@ const FAIL_CODES = new Set([
   'outsidePlanFolder', 'mergeConflict', 'mergeInProgress', 'gitFailed', 'noTasks', 'todoWriteFailed', 'badId', 'unavailable',
   // Resume after a shutdown / Pause for shutdown (orchestraResumeBanner.js).
   'notInterrupted', 'notRunning', 'alreadyPaused',
+  // A/B builds (src/orchestraVariants.js): a plan with variants runs on Claude workers only.
+  'abNeedsClaude',
 ]);
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 // Package phases that hold a worker slot (orchestraSupervisor's ACTIVE_STATES).
@@ -330,7 +333,8 @@ function suggestionRow(s) {
   return row;
 }
 
-const canLaunch = (pkg) => pkg.state === 'pending' || pkg.state === 'failed';
+// An undecided A/B group launches through its variants, never by itself.
+const canLaunch = (pkg) => (pkg.state === 'pending' || pkg.state === 'failed') && !isUndecidedGroup(pkg);
 
 /**
  * Why the hybrid guard (src/orchestraHybridGuard.js) moved a "free" package
@@ -375,6 +379,8 @@ function pkgCard(pkg) {
   if (guard) card.append(msg(guard, 'is-warn'));
   // F6c/F6d: runs free, the Claude review, limit waits, hand-overs to Sonnet.
   for (const line of hybridLines(pkg)) card.append(msg(line.text, line.cls));
+  // Opt-in evolutions: A/B builds, self-heal, context guard.
+  for (const line of evolutionLines(pkg)) card.append(msg(line.text, line.cls));
 
   if (pkg.todos.length) {
     const list = el('ul', 'orchestra__todos');
@@ -430,7 +436,7 @@ function pkgCard(pkg) {
     actions.append(btn);
   };
   if (canLaunch(pkg)) button(t('orch.launch'), () => launch([pkg.id]), phase !== 'idle' || plan.errors.length > 0, true);
-  if (RETRYABLE.has(pkg.state)) button(t('orch.retry'), () => retry(pkg.id), phase !== 'idle', true);
+  if (RETRYABLE.has(pkg.state) && !isUndecidedGroup(pkg)) button(t('orch.retry'), () => retry(pkg.id), phase !== 'idle', true);
   if (pkg.sessionId && (isActive(pkg) || pkg.state === 'stalled')) {
     button(
       t('orch.goto'),

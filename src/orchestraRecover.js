@@ -300,8 +300,9 @@ function askText(cause, vars = {}, texts = defaultTexts()) {
  */
 function recoveryEntries(view) {
   const v = view && typeof view === 'object' ? view : {};
+  // 'heal' (orchestraHeal.js) and 'compact' (orchestraContextGuard.js) are automatic steps too.
   const pick = (pkg) => (e) =>
-    e && (e.kind === 'recover' || e.kind === 'ask')
+    e && (e.kind === 'recover' || e.kind === 'ask' || e.kind === 'heal' || e.kind === 'compact')
       ? [{ pkg, at: Number.isFinite(e.at) ? e.at : null, kind: e.kind, cause: String(e.reason || ''), detail: e.detail || null }]
       : [];
   const pkgs = (Array.isArray(v.packages) ? v.packages : []).flatMap((p) =>

@@ -88,7 +88,7 @@ test('start: a bad payload never reaches a controller', async (t) => {
   const s = setup();
   t.after(s.cleanup);
   assert.deepEqual(await s.invoke('orchestra:planRun:start', null), { ok: false, error: 'badPayload' });
-  assert.equal((await s.invoke('orchestra:planRun:start', { request: 'x'.repeat(5000), planner: 'claude', sessionId: 'tab-a' })).error, 'requestTooLong');
+  assert.equal((await s.invoke('orchestra:planRun:start', { request: 'x'.repeat(20001), planner: 'claude', sessionId: 'tab-a' })).error, 'requestTooLong');
   assert.equal((await s.invoke('orchestra:planRun:start', { request: 'plan it', planner: 'gpt', sessionId: 'tab-a' })).error, 'badPlanner');
   assert.equal((await s.invoke('orchestra:planRun:start', { request: 'plan it', planner: 'claude', repoPath: os.tmpdir() })).error, 'unknownRepo');
   assert.equal((await s.invoke('orchestra:planRun:start', { request: 'plan it', planner: 'claude', sessionId: 'ghost' })).error, 'noTab');

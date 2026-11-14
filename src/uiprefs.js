@@ -243,6 +243,11 @@ const DEFAULTS = {
   orchestraAllowedTools: [],
   orchestraCheckCommand: 'npm test',
   orchestraSupabaseApply: 'ask',
+  // Opt-in God Mode evolutions (fixed into each new plan): A/B builds,
+  // self-healing workers, predictive context routing. Default OFF.
+  orchestraAbBuild: false,
+  orchestraSelfHeal: false,
+  orchestraContextGuard: false,
   // /ask (Ctrl+B's tool recommender, src/ask.js). Default OFF: without this,
   // ask:query always calls the cloud `claude` CLI with --model sonnet -
   // switching a profile's terminal tab to a local endpoint must never make
@@ -762,6 +767,10 @@ function readUiPrefs() {
       orchestraSupabaseApply: SUPABASE_APPLY_MODES.includes(obj.orchestraSupabaseApply)
         ? obj.orchestraSupabaseApply
         : DEFAULTS.orchestraSupabaseApply,
+      // Opt-in God Mode evolutions: only a stored true turns one on.
+      orchestraAbBuild: obj.orchestraAbBuild === true,
+      orchestraSelfHeal: obj.orchestraSelfHeal === true,
+      orchestraContextGuard: obj.orchestraContextGuard === true,
       // Missing key => disabled (prefs file written before this option existed).
       askUseLocalModel:
         typeof obj.askUseLocalModel === 'boolean' ? obj.askUseLocalModel : DEFAULTS.askUseLocalModel,
@@ -898,6 +907,10 @@ function writeUiPrefs(partial) {
     }
     if (partial && SUPABASE_APPLY_MODES.includes(partial.orchestraSupabaseApply)) {
       next.orchestraSupabaseApply = partial.orchestraSupabaseApply;
+    }
+    // God Mode opt-in evolutions: booleans only, anything else is ignored.
+    for (const key of ['orchestraAbBuild', 'orchestraSelfHeal', 'orchestraContextGuard']) {
+      if (partial && typeof partial[key] === 'boolean') next[key] = partial[key];
     }
     if (partial && typeof partial.autoProceedArmed === 'boolean') {
       next.autoProceedArmed = partial.autoProceedArmed;

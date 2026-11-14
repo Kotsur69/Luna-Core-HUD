@@ -16,14 +16,16 @@ const { normalizeEffort } = require('./efforts');
 // glanceable list, and the honest answer is that the work belongs somewhere
 // with a real tracker.
 const MAX_ITEMS = 100;
-const MAX_TEXT_CHARS = 1000;
+// A to-do is often a whole pasted prompt, so the title cap is generous; it
+// still bounds one write. The renderer mirrors it (todocards.js).
+const MAX_TEXT_CHARS = 20000;
 
 // Task-card fields (DONE_ORCHESTRATOR_PLAN.md "Task cards instead of one-line
 // to-dos"). All optional: an item without them is a plain pin-board line and
 // round-trips byte-identical to how it did before cards existed. Written
 // mostly by Claude through the intake MCP server (src/intake.js), so the caps
 // are what stops one runaway tool call from bloating the store.
-const MAX_DETAILS_CHARS = 4000;
+const MAX_DETAILS_CHARS = 20000;
 const MAX_LIST_ENTRIES = 20;
 const MAX_ENTRY_CHARS = 300;
 const MAX_FILES = 50;

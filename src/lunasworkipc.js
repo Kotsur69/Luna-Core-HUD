@@ -71,13 +71,17 @@ const { ROLES, MODEL_CHOICES } = require('./lunasworkRules');
 const { getProject, resolveProjectDir } = require('./projects');
 const { keyFor } = require('./todo');
 const { publicStatus, publicEvent, evidenceDirOf } = require('./lunasworkStatus');
-const { STEER_TAG, MAX_ITEMS: MAX_TODO_ITEMS, MAX_TEXT_CHARS: MAX_STEER_CHARS } = require('./todorows');
+const { STEER_TAG, MAX_ITEMS: MAX_TODO_ITEMS } = require('./todorows');
 const { RUN_ID_RE } = require('./lunasworkWheel');
 const { dashboardView, readScreenshot } = require('./lunasworkDashboardView');
 const { cleanQuestion } = require('./lunasworkAskModel');
 const queueStore = require('./lunasworkQueue');
 
 const MAX_ID_CHARS = 200;
+// A steer card is one line typed into the dashboard, so it keeps its own
+// small cap (index.html #lw-steer-text, i18n lw.err.bad-text) instead of the
+// to-do title cap.
+const MAX_STEER_CHARS = 1000;
 // Opening a tab is a side effect a double click must not repeat.
 const INTERVIEW_GAP_MS = 3000;
 // unityMcpUrl / scene: the unity adapter's fields (src/lunasworkAdapterProfiles.js).

@@ -168,7 +168,7 @@ test('stored plan-run block: validated, capped, unknown fields dropped', () => {
   assert.equal(view.normalizeStoredPlanRun({ runSlug: 'Bad Slug' }), null);
   const raw = {
     runSlug: SLUG,
-    request: 'r'.repeat(5000),
+    request: 'r'.repeat(25000),
     planner: 'evil',
     topics: [...TOPICS, { slug: 'plan', question: 'reserved' }],
     saved: ['auth-flow', '../x', 42],
@@ -176,7 +176,7 @@ test('stored plan-run block: validated, capped, unknown fields dropped', () => {
     hacked: true,
   };
   const res = view.normalizeStoredPlanRun(raw);
-  assert.equal(res.request.length, 4000);
+  assert.equal(res.request.length, 20000);
   assert.equal(res.planner, 'claude');
   assert.deepEqual(res.topics, TOPICS);
   assert.deepEqual(res.saved, ['auth-flow']);

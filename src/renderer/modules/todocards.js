@@ -10,7 +10,8 @@
 
 'use strict';
 
-export const MAX_TEXT_CHARS = 1000;
+// Mirrors src/todorows.js MAX_TEXT_CHARS.
+export const MAX_TEXT_CHARS = 20000;
 // Mirrors src/todorows.js (main normalizes every write; this only keeps the
 // form from sending what main would drop anyway).
 export const STEER_TAG = 'steer';

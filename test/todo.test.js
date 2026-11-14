@@ -15,6 +15,7 @@ const {
   keyFor,
   MAX_ITEMS,
   MAX_TEXT_CHARS,
+  MAX_DETAILS_CHARS,
   DEFAULT_KEY,
 } = require('../src/todo.js');
 const {
@@ -38,6 +39,32 @@ test('normalizeTodo fills in the defaults for a bare item', () => {
 test('normalizeTodo trims text and caps its length', () => {
   assert.equal(normalizeTodo({ text: '  padded  ' }).text, 'padded');
   assert.equal(normalizeTodo({ text: 'x'.repeat(MAX_TEXT_CHARS + 50) }).text.length, MAX_TEXT_CHARS);
+});
+
+test('normalizeTodo and normalizeTodos keep a 15000-character pasted prompt whole', () => {
+  assert.equal(MAX_TEXT_CHARS, 20000);
+  assert.equal(MAX_DETAILS_CHARS, 20000);
+  const text = `Prompt ${'t'.repeat(15000 - 12)} end.`;
+  const details = `Details ${'d'.repeat(15000 - 13)} end.`;
+  assert.equal(text.length, 15000);
+  assert.equal(details.length, 15000);
+  const one = normalizeTodo({ text, details, at: 1 });
+  assert.equal(one.text, text);
+  assert.equal(one.details, details);
+  const [listed] = normalizeTodos([{ text, details, at: 1 }]);
+  assert.equal(listed.text, text);
+  assert.equal(listed.details, details);
+  assert.equal(normalizeStore({ home: [{ text, details, at: 1 }] }).home[0].text, text);
+  // The caps still hold.
+  assert.equal(normalizeTodo({ text: 'x'.repeat(20001) }).text.length, 20000);
+  assert.equal(normalizeTodo({ text: 'T', details: 'x'.repeat(20001) }).details.length, 20000);
+});
+
+test('the renderer to-do cap mirrors main', async () => {
+  const cards = await import('../src/renderer/modules/todocards.js');
+  assert.equal(cards.MAX_TEXT_CHARS, MAX_TEXT_CHARS);
+  const html = require('fs').readFileSync(require('path').join(__dirname, '../src/renderer/index.html'), 'utf8');
+  assert.match(html, new RegExp(`id="todo-input"[^>]*maxlength="${MAX_TEXT_CHARS}"`));
 });
 
 test('normalizeTodo rejects empty text and non-objects', () => {

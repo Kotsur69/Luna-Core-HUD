@@ -31,6 +31,8 @@ const { recoveryEntries } = require('./orchestraRecover');
 const { planRunResult, planRunReportLines } = require('./orchestraPlanRunView');
 const { hybridReportLines, hybridReportRows } = require('./orchestraHybrid');
 const { resumeReportLines } = require('./orchestraResume');
+// A/B builds: per group the winner, how it was picked and the kept loser branch.
+const { abReportLines } = require('./orchestraVariantRun');
 
 const NOTE_TAG = '[LunaCore run';
 // A whole note line: the tag with a run id, as stallNote() writes it.
@@ -497,7 +499,8 @@ function recoverySection(view) {
   if (!items.length) return [...lines, 'None.'];
   for (const e of items) {
     const who = e.pkg ? `${code(e.pkg, 64)} ` : 'run ';
-    const what = e.kind === 'ask' ? 'asked you once' : 'fixed automatically';
+    // Self-heal (orchestraHeal.js) and context guard (orchestraContextGuard.js) entries say what they did.
+    const what = { ask: 'asked you once', heal: 'self-heal', compact: 'context guard' }[e.kind] || 'fixed automatically';
     lines.push(`- ${fmt(e.at)} UTC ${who}${code(e.cause, 32)}: ${what}${e.detail ? ` - ${code(e.detail, 160)}` : ''}`);
   }
   return lines;
@@ -617,6 +620,7 @@ function buildReport(view, extra) {
     ...(needs.length ? needs.map((l) => `- ${l}`) : ['Nothing - all done']),
     ...planRunReportLines(view),
     ...hybridReportLines(view),
+    ...abReportLines(view),
     ...tailLines(integ.selfCheck),
     ...wrongSection(view, facts),
     ...manualSection(integ),

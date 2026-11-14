@@ -31,9 +31,9 @@ test('payload: bad shapes and values are refused with a code', () => {
   assert.equal(start.validatePlanRunPayload([]).error, 'badPayload');
   assert.equal(start.validatePlanRunPayload({ planner: 'claude' }).error, 'emptyRequest');
   assert.equal(start.validatePlanRunPayload({ request: '  a ', planner: 'claude' }).error, 'emptyRequest');
-  assert.equal(start.validatePlanRunPayload({ request: 'x'.repeat(4001), planner: 'claude' }).error, 'requestTooLong');
-  assert.equal(start.validatePlanRunPayload({ request: 'x'.repeat(9000), planner: 'claude' }).error, 'requestTooLong');
-  assert.equal(start.validatePlanRunPayload({ request: 'x'.repeat(4000), planner: 'claude' }).ok, true);
+  assert.equal(start.validatePlanRunPayload({ request: 'x'.repeat(20001), planner: 'claude' }).error, 'requestTooLong');
+  assert.equal(start.validatePlanRunPayload({ request: 'x'.repeat(45000), planner: 'claude' }).error, 'requestTooLong');
+  assert.equal(start.validatePlanRunPayload({ request: 'x'.repeat(20000), planner: 'claude' }).ok, true);
   assert.equal(start.validatePlanRunPayload({ request: 'plan it', planner: 'opus' }).error, 'badPlanner');
   assert.equal(start.validatePlanRunPayload({ request: 'plan it', planner: 'claude', repoPath: 42 }).error, 'badRepo');
   assert.equal(start.validatePlanRunPayload({ request: 'plan it', planner: 'claude', repoPath: '' }).error, 'badRepo');
@@ -202,4 +202,29 @@ test('state: fixed to the plan profile, dontAsk, its allow-list, branches', () =
   assert.equal(state.costUsd, 0.2);
   assert.ok(state.todoText instanceof Map);
   assert.equal(start.planRunState({ ...args, costUsd: NaN }).costUsd, null);
+});
+
+test('payload: a 15000-character pasted request is kept whole, through to every brief', () => {
+  assert.equal(start.MAX_REQUEST_CHARS, 20000);
+  assert.equal(start.MAX_REQUEST_CHARS, core.MAX_GOAL_CHARS);
+  const long = `Plan ${'a'.repeat(14990)} end.`;
+  assert.equal(long.length, 15000);
+  const res = start.validatePlanRunPayload({ request: long, planner: 'claude' });
+  assert.equal(res.ok, true);
+  assert.equal(res.request, long);
+  const built = start.planRunSetup({
+    request: res.request,
+    raw: { topics: [{ slug: 'one', question: 'First?' }, { slug: 'two', question: 'Second?' }] },
+    runSlug: 'long-run',
+  });
+  assert.equal(built.ok, true);
+  assert.ok(built.packages.every((p) => p.prompt.includes(long)));
+  assert.equal(start.validatePlanRunPayload({ request: 'x'.repeat(20001), planner: 'claude' }).error, 'requestTooLong');
+});
+
+test('payload: a stored plan-run package keeps a max-length request brief whole', () => {
+  const sup = require('../src/orchestraSupervisor');
+  const goal = 'g'.repeat(core.MAX_GOAL_CHARS);
+  const pkgs = core.buildPlanRunPackages('long-run', [{ slug: 'one', question: 'First?' }, { slug: 'two', question: 'Second?' }], { goal });
+  for (const p of pkgs) assert.ok(p.prompt.length <= sup.MAX_PACKAGE_PROMPT_CHARS, `${p.id} brief fits the stored cap`);
 });

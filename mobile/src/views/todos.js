@@ -13,7 +13,7 @@
 
 import { h, icon, ICONS } from '../dom.js';
 import { t, tf } from '../i18n.js';
-import { lists, addUnit, toggleUnit, toggleManualUnit, toggleTagUnit, hasTag, deleteUnit, STEER_TAG } from '../todomodel.js';
+import { lists, addUnit, toggleUnit, toggleManualUnit, toggleTagUnit, hasTag, deleteUnit, STEER_TAG, MAX_TEXT_CHARS } from '../todomodel.js';
 import { PICK_KEY } from '../cloud.js';
 import { hostList } from '../hostmodel.js';
 import { godmodeHosts, pickGodmodeHost, projectIdFor, pickableCards, defaultSelection, toggleSelection, planPayload } from '../godmodestart.js';
@@ -141,7 +141,7 @@ export function mountTodos(main, { cloud, toast }) {
       type: 'text',
       enterkeyhint: 'done',
       autocomplete: 'off',
-      maxlength: 1000,
+      maxlength: MAX_TEXT_CHARS,
       'aria-label': t('newTodo'),
       placeholder: t('newTodo'),
     });
