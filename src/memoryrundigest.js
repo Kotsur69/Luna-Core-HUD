@@ -51,6 +51,14 @@ const MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 /** Transcript bytes read per run in all; past it each transcript counts as one outside source. */
 const MAX_RUN_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
 const TOOL_USE_MARK = '"tool_use"';
+/** A failure signature is at most this long: enough to tell failures apart, short enough to compare. */
+const MAX_SIGNATURE_CHARS = 160;
+/** Signatures taken from one run; a run that fails in more ways than this is not counted further. */
+const MAX_SIGNATURES_PER_RUN = 20;
+/** Repeated failures named in one digest. */
+const MAX_REPEATED = 5;
+/** A line of verify output that reports a failure (the first one is the signature). */
+const ERROR_LINE_RE = /\b(?:error|errors|fail|failed|failing|failure|not ok|assert\w*|exception|cannot|enoent|eperm|ebusy|eacces)\b/i;
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const list = (v) => (Array.isArray(v) ? v : []);
@@ -153,12 +161,102 @@ function recoveryBlock(view) {
   return lines.length ? ['Run-level automatic fixes:', ...lines].join('\n') : '';
 }
 
+// ---- failure signatures (repeat-failure detector, src/memoryfailures.js) ----------
+
+const WINDOWS_PATH_RE = /(?:\b[a-z]:[\\/]|\\\\)[^\s'"`<>|]*/gi;
+const POSIX_PATH_RE = /(?:^|(?<=[\s'"`(=:,[]))(?:~|\.{1,2})?\/[^\s'"`<>|),\]]*/g;
+/** A relative path (src/a.js, luna/pkg-b): any word with a slash between two parts. */
+const RELATIVE_PATH_RE = /[\w.@-]+(?:\/[\w.@-]+)+\/?/g;
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+/** A commit, object or run hash: seven or more hex digits with at least one digit in them. */
+const HEX_RE = /\b(?:0x[0-9a-f]+|(?=[a-f]*\d)[0-9a-f]{7,})\b/gi;
+const NUMBER_RE = /\d+(?:[.,:]\d+)*/g;
+const PATH_MARK = '<path>';
+
+/**
+ * One failure line as it repeats from run to run: lower case, without the
+ * paths, hashes and numbers that differ every time, whitespace collapsed, capped.
+ * @param {unknown} text untrusted worker, test or git output
+ * @returns {string} '' when nothing is left
+ */
+function normalizeFailure(text) {
+  return oneLine(text, MAX_LINE_CHARS * 2)
+    .toLowerCase()
+    .replace(UUID_RE, ' ')
+    .replace(WINDOWS_PATH_RE, PATH_MARK)
+    .replace(POSIX_PATH_RE, PATH_MARK)
+    .replace(RELATIVE_PATH_RE, PATH_MARK)
+    .replace(HEX_RE, ' ')
+    .replace(NUMBER_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_SIGNATURE_CHARS)
+    .trim();
+}
+
+/** `<kind>: <normalised text>`, or '' when the text normalises to nothing. */
+function signatureOf(kind, text) {
+  const normalized = normalizeFailure(text);
+  return normalized ? `${kind}: ${normalized}`.slice(0, MAX_SIGNATURE_CHARS) : '';
+}
+
+/** The first line of verify output that reports a failure, or ''. */
+const firstErrorLine = (text) =>
+  String(text || '')
+    .split(/\r?\n/)
+    .find((l) => ERROR_LINE_RE.test(l)) || '';
+
+/**
+ * The failures of one run, each once: per package the first error line of its
+ * verify output and its stall reasons, and the reason of every merge it skipped.
+ * @param {object} view orchestra view() of the run
+ * @returns {string[]} signatures (normalizeFailure), at most MAX_SIGNATURES_PER_RUN
+ */
+function runFailureSignatures(view) {
+  const v = isObject(view) ? view : {};
+  const found = [];
+  for (const p of list(v.packages).filter(isObject).slice(0, MAX_PACKAGES)) {
+    found.push(signatureOf('verify', firstErrorLine(p.verifyTail)));
+    for (const e of list(p.stallHistory).filter(isObject).slice(-MAX_HISTORY)) {
+      found.push(signatureOf(oneLine(e.kind, 24).toLowerCase() || 'stall', e.reason));
+    }
+  }
+  const integ = isObject(v.integration) ? v.integration : {};
+  for (const s of list(integ.skipped).filter(isObject)) {
+    const detail = firstErrorLine(s.detail) || String(s.detail || '').split(/\r?\n/)[0];
+    found.push(signatureOf('skipped merge', `at ${oneLine(s.stage, 32) || 'merge'}${detail ? `: ${detail}` : ''}`));
+  }
+  return [...new Set(found.filter(Boolean))].slice(0, MAX_SIGNATURES_PER_RUN);
+}
+
+/**
+ * The digest section that asks the extractor for a gotcha about failures that
+ * keep coming back (src/memoryfailures.js decides which ones).
+ * @param {{signature: string, count: number}[]} repeated
+ */
+function repeatedBlock(repeated) {
+  return list(repeated)
+    .filter((r) => isObject(r) && typeof r.signature === 'string' && Number.isSafeInteger(r.count))
+    .slice(0, MAX_REPEATED)
+    .map((r) =>
+      [
+        `REPEATED FAILURE (seen ${r.count} times): ${oneLine(r.signature, MAX_SIGNATURE_CHARS)}`,
+        `  The same failure hit ${r.count} God Mode runs of this project in the last 30 days, and no confirmed memory covers it.`,
+        '  Propose ONE gotcha for it: the failure, its real cause and how to avoid it, as far as the runs show them.',
+      ].join('\n'),
+    )
+    .join('\n\n');
+}
+
 /**
  * The digest of one finished run.
  * @param {object} view orchestra view() of the run (what buildReport renders)
+ * @param {{repeated?: {signature: string, count: number}[]}} [opts]
+ *   repeated = failures seen in many runs that no memory covers yet: they come
+ *   right after the head, so the length cap never cuts them
  * @returns {{text: string, packages: number, ran: number}} ran = packages a worker ran for
  */
-function runDigest(view) {
+function runDigest(view, { repeated = [] } = {}) {
   const v = isObject(view) ? view : {};
   const packages = list(v.packages).filter(isObject);
   const pushed = packages.filter((p) => p.state === 'pushed').length;
@@ -170,6 +268,7 @@ function runDigest(view) {
   ].join(' ');
   const blocks = [
     head,
+    repeatedBlock(repeated),
     holdLine(v),
     ...packages.slice(0, MAX_PACKAGES).map(packageBlock),
     packages.length > MAX_PACKAGES ? `(${packages.length - MAX_PACKAGES} more packages not listed)` : '',
@@ -276,4 +375,12 @@ async function countRunOutside({ repoPath, view, transcriptsDir }) {
   return total;
 }
 
-module.exports = { runDigest, countRunOutside, outsideCalls, MAX_RUN_DIGEST_CHARS };
+module.exports = {
+  runDigest,
+  countRunOutside,
+  outsideCalls,
+  normalizeFailure,
+  runFailureSignatures,
+  MAX_RUN_DIGEST_CHARS,
+  MAX_SIGNATURE_CHARS,
+};

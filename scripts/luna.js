@@ -13,6 +13,7 @@
 //   node scripts/luna.js memory capture <transcript.jsonl>   what capture would keep
 //   node scripts/luna.js memory review | verify <id> | retire <id>   confirmed memories that need a look
 //   node scripts/luna.js memory stats              what capture proposed, what was approved, what is read
+//   node scripts/luna.js memory notes [--since <tag|date>]   what the memory gained and lost since a release
 //
 // It reads and writes the same files as the app (the mirror under
 // <config>/memory). The app is what syncs them: a memory written here is
@@ -34,7 +35,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parseArgs } = require('node:util');
+const { parseArgs, promisify } = require('node:util');
+const { execFile } = require('node:child_process');
 
 const { projectFromRepoKey, splitKey, GLOBAL } = require('../src/memoryrecord');
 const { scan, writeRecord } = require('../src/memorystore');
@@ -50,7 +52,7 @@ const { localStatus, memoryPaths } = require('../src/memorysync');
 const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
 const { saveNote } = require('../src/memorynote');
 const { createRepoKeys, findRepo } = require('../src/missionrepokey');
-const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
+const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, memoryNotes, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
 const { cardSessions, cardSessionLines } = require('../src/memoryuse');
 const { reviewList, verify, retire } = require('../src/memoryreview');
 const { machineName } = require('../src/missionledgersync');
@@ -72,6 +74,8 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
   review                confirmed memories that are stale, name a missing file, or were reported wrong
   verify | retire <id>  say one of them is still true, or delete it on every PC
   stats                 approval rate of captured memories, per usefulness band, and how often memories are read   [--days n]
+  notes                 markdown list of memories confirmed, superseded, archived and retired, titles only
+                        [--since <tag|YYYY-MM-DD>] [--all]   default: the latest v* tag of the current repository
 
   --project <host/owner/repo>   default: the repository of the current folder
   --dir <config folder>         default: LUNA_CONFIG_DIR, else this clone's config/ when its memory
@@ -452,6 +456,60 @@ function cmdStats({ configDir, project, values }) {
   for (const text of cardSessionLines(cardSessions(events, { since, project: values.all ? null : project }))) out(`    ${text}`);
 }
 
+// ---- notes: what the memory gained and lost since a release ------------------------
+
+/** A tag name as typed: no path, glob, option or `..` (it is passed to git as a ref). */
+const TAG_RE = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+const GIT_TIMEOUT_MS = 15000;
+const execFileAsync = promisify(execFile);
+
+/**
+ * The --since value: an ISO date (or date-time with a zone), a tag name, or
+ * nothing (the latest v* tag). A date wins over a tag of the same spelling.
+ * @param {string|undefined} value
+ * @returns {{date: number, label: string}|{tag: string}|{latest: true}}
+ */
+function parseSince(value) {
+  if (value === undefined) return { latest: true };
+  if (ISO_DATE_RE.test(value)) {
+    const date = Date.parse(value.length === 10 ? `${value}T00:00:00Z` : value);
+    // Date.parse rolls 2026-02-31 over to March: the day must survive the round trip.
+    if (Number.isFinite(date) && new Date(date).toISOString().slice(0, 10) === value.slice(0, 10)) return { date, label: value };
+    throw new UsageError(`--since: not a valid date: ${value}`);
+  }
+  if (TAG_RE.test(value)) return { tag: value };
+  throw new UsageError('--since takes a tag name (v0.28.0) or an ISO date (2026-11-01)');
+}
+
+/** One git query in the current folder, without a shell; its first output line. */
+async function gitLine(args) {
+  const { stdout } = await execFileAsync('git', args, { cwd: process.cwd(), timeout: GIT_TIMEOUT_MS, windowsHide: true, encoding: 'utf8' });
+  return String(stdout).split(/\r?\n/)[0].trim();
+}
+
+/** The moment --since names: a date as given, or the date of a tag (its tagger date, else its commit's). */
+async function sinceMoment(value) {
+  const since = parseSince(value);
+  if (since.date !== undefined) return since;
+  const tag = since.tag || (await gitLine(['for-each-ref', '--sort=-creatordate', '--count=1', '--format=%(refname:short)', 'refs/tags/v*']));
+  if (!tag) throw new UsageError('no v* tag in this repository; pass --since <tag|YYYY-MM-DD>');
+  if (!TAG_RE.test(tag)) throw new UsageError(`unexpected tag name from git: ${tag}`);
+  const when = await gitLine(['for-each-ref', '--count=1', '--format=%(creatordate:iso-strict)', `refs/tags/${tag}`]);
+  const date = Date.parse(when);
+  if (!when || !Number.isFinite(date)) throw new UsageError(`no tag named ${tag} in this repository`);
+  return { date, label: tag };
+}
+
+/** Release notes of the memory: titles only, never a body. Writes nothing. */
+async function cmdNotes({ configDir, dir, project, values }) {
+  const { date, label } = await sinceMoment(values.since);
+  const { records, invalid } = scan(dir);
+  if (invalid.length) process.stderr.write(`warning: ${invalid.length} file(s) are not valid memories (see "memory status")\n`);
+  const events = createLog(logPath(configDir)).read();
+  process.stdout.write(memoryNotes({ records: records.map(([, r]) => r), events, since: date, project: values.all ? null : project, label }));
+}
+
 const COMMANDS = {
   search: cmdSearch,
   list: cmdList,
@@ -469,6 +527,7 @@ const COMMANDS = {
   verify: (ctx) => cmdSettle(ctx, true),
   retire: (ctx) => cmdSettle(ctx, false),
   stats: cmdStats,
+  notes: cmdNotes,
 };
 
 function main(argv) {
@@ -481,6 +540,7 @@ function main(argv) {
       from: { type: 'string' },
       limit: { type: 'string' },
       days: { type: 'string' },
+      since: { type: 'string' },
       only: { type: 'boolean' },
       keyword: { type: 'boolean' },
       all: { type: 'boolean' },
@@ -497,7 +557,7 @@ function main(argv) {
   }
   const configDir = resolveConfigDir(values.dir);
   const done = COMMANDS[command]({ configDir, dir: memoryPaths(configDir).dir, project: resolveProject(values.project), values, positionals: rest });
-  // `capture`, `search` and `eval` call a model and are asynchronous.
+  // `capture`, `search` and `eval` call a model, `notes` asks git: they are asynchronous.
   return done && typeof done.then === 'function' ? done.then(() => process.exitCode || 0) : process.exitCode || 0;
 }
 
@@ -513,4 +573,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, resolveConfigDir, installedConfigDir, CLONE_CONFIG_DIR };
+module.exports = { main, resolveConfigDir, installedConfigDir, parseSince, UsageError, CLONE_CONFIG_DIR };
