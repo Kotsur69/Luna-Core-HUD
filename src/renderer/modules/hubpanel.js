@@ -23,6 +23,7 @@
 import { t, machineLabel } from './util.js';
 import { onLangChange } from './bus.js';
 import { closeWithExit, cancelExit } from './motion.js';
+import { armGestureEnd } from './gestureend.js';
 import { onHubView, markHubDone, markHubSeen } from './hubstate.js';
 import { showBrief } from './missionbriefview.js';
 import { openLifeTab } from './lifepanel.js';
@@ -262,24 +263,43 @@ export function resetHubWidth() {
 function wireResize(handle) {
   let startX = 0;
   let startW = 0;
+  // pointerId of the drag in flight, or null. Ties the cleanup to THAT drag, so
+  // a late lostpointercapture from an older pointer cannot end a newer one.
+  let active = null;
   handle.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
     startX = e.clientX;
     startW = clampWidth(width);
-    handle.setPointerCapture(e.pointerId);
+    const pointerId = e.pointerId;
+    active = pointerId;
     drawer.classList.add('is-resizing');
+    // One cleanup for every ending: pointerup, cancel, the capture dropped
+    // because the drawer was hidden mid-drag, an alt-tab, Escape or a new press.
+    // Without the last three the capture would keep routing every later move to
+    // the handle long after the button was released.
+    const end = armGestureEnd({
+      win: window,
+      target: handle,
+      pointerId,
+      onEnd: () => {
+        if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+        if (active !== pointerId) return;
+        active = null;
+        drawer.classList.remove('is-resizing');
+        saveWidth();
+      },
+    });
+    try {
+      handle.setPointerCapture(pointerId);
+    } catch {
+      // The pointer is already gone: nothing more will arrive for this drag.
+      end('lost');
+    }
   });
   handle.addEventListener('pointermove', (e) => {
     if (!handle.hasPointerCapture(e.pointerId)) return;
     applyWidth(startW + (startX - e.clientX));
-  });
-  // lostpointercapture fires for pointerup, pointercancel AND a capture dropped
-  // because the drawer was hidden mid-drag - so a drag always ends and saves.
-  handle.addEventListener('lostpointercapture', () => {
-    if (!drawer.classList.contains('is-resizing')) return;
-    drawer.classList.remove('is-resizing');
-    saveWidth();
   });
   handle.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowLeft' ? WIDTH_STEP : e.key === 'ArrowRight' ? -WIDTH_STEP : 0;
