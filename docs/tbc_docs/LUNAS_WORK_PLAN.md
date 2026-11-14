@@ -259,12 +259,31 @@ without one still gets its allow rule and comes from the Claude setup.
 - The Director and Critic stay read-only (no context7 / web search).
 - No settings UI yet: the kit, caps and `toolServers` are edited in the
   local settings file.
-- **The spend cap is not metered yet.** Nothing calls `recordSpend`: workers
-  call the paid MCP servers directly and LunaCore cannot see those calls. Today
-  the cap reaches a worker only as its brief's budget line; it binds once the
-  asset work books its generations through `recordSpend` (or a hook / MCP
-  proxy meters them). The paid tools stay in the Unity default kit as the
-  brief asked - take them out of a project's kit to make them opt-in.
+- **The spend cap binds through the asset tools only.** `luna_asset_higgsfield`
+  (below) books every generation through `recordSpend` before it runs. A worker
+  that calls the `higgsfield` CLI or `higgsfield-bridge` MCP directly is still
+  not metered: its brief says to use them only to look up models. Meshy has no
+  metered path yet. The paid tools stay in the Unity default kit as the brief
+  asked - take them out of a project's kit to make them opt-in.
+
+### Asset pipeline (`src/lunasworkAssetPipeline.js`, tools `src/lunasworkAssetTools.js`)
+
+During a build on a Unity project, a God Mode worker tab of that project (in
+practice the scene worker, where asset cards land) gets three more tools on the
+lunacore MCP server: `luna_asset_blender` (save the open Blender scene to
+`art/blender/<slug>.blend`, export FBX for Unity, import, prefab),
+`luna_asset_comfy` (a draft from an API-format workflow in `art/comfyui/`,
+seeded; workflow + seed saved to `art/comfyui/runs/`) and
+`luna_asset_higgsfield` (a paid final: estimate -> `recordSpend` -> generate ->
+download -> save). Assets go to `<artRoot>/<Kind>/` (default
+`Assets/BladeBullet/Art`), are imported through the Unity Pipeline asset calls
+(`helpers/playtest-bridge/unity.js UNITY_PIPELINE_ASSETS`, not yet verified
+against a live editor) and are logged in `run.assets` -> the run report's
+`## Generated assets` (tool, prompt, seed, cost, path). Per-PC settings:
+`assetTools` {comfyuiPort 8188, blenderPort 9876, higgsfieldUsdPerCredit 0.1,
+artRoot}. A Unity asset card carries the brief: toon-on-2D art direction,
+AMD-only ComfyUI models, drafts in ComfyUI and finals in Higgsfield, the
+blender-game-assets / higgsfield-media skills.
 - A broken kit falls back to the adapter's default, which for Unity includes
   the paid tools (the brief's contract). A stricter fallback (git only) is a
   one-line change if preferred.
