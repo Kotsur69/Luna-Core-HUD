@@ -324,3 +324,53 @@ test('approving keeps the score on the confirmed memory and hands it to the deci
   assert.equal(stored(dir)[`${PROJECT}/keep`].usefulness, 77);
   assert.deepEqual(seen, [['approved', 77]]);
 });
+
+// Bug: "usefulness disappeared when I have memories to review". Near-duplicates
+// fold into the OLDEST entry, and only that entry's own score was shown. The
+// oldest is often the one without a score (captured by a PC on a release older
+// than the field, or proposed by a session, which never carries one), so the
+// group showed "?" and sorted last although a folded twin had a score, and
+// approving it confirmed the memory without one.
+test('a folded group shows the score of a scored twin when its oldest entry has none', (t) => {
+  const dir = mirror(t, [
+    rec('junction-a', 'Do not junction node_modules into a worktree', { created: '2026-11-09' }),
+    rec('junction-b', 'Never junction node_modules into a worktree', { created: '2026-11-10', usefulness: 80, usefulness_note: 'Saves a broken install.' }),
+    rec('battery', 'Packaging times out on battery', { created: '2026-11-11', usefulness: 60 }),
+  ]);
+
+  const { items } = listInbox(dir);
+
+  assert.deepEqual(
+    items.map((i) => [i.id, i.usefulness, i.usefulness_note, i.duplicates]),
+    [
+      ['junction-a', 80, 'Saves a broken install.', 1],
+      ['battery', 60, null, 0],
+    ],
+  );
+});
+
+test("a folded group's own score wins over its twins'", (t) => {
+  const dir = mirror(t, [
+    rec('junction-a', 'Do not junction node_modules into a worktree', { created: '2026-11-09', usefulness: 50 }),
+    rec('junction-b', 'Never junction node_modules into a worktree', { created: '2026-11-10', usefulness: 80 }),
+  ]);
+
+  assert.equal(listInbox(dir).items[0].usefulness, 50);
+});
+
+test('approving a folded group keeps the score the inbox showed for it', (t) => {
+  const dir = mirror(t, [
+    rec('junction-a', 'Do not junction node_modules into a worktree', { created: '2026-11-09' }),
+    rec('junction-b', 'Never junction node_modules into a worktree', { created: '2026-11-10', usefulness: 80, usefulness_note: 'Saves a broken install.' }),
+  ]);
+  const seen = [];
+
+  const res = approve(dir, `${PROJECT}/junction-a`, '2026-11-12', (ev, record) => seen.push([ev, record.usefulness]));
+
+  assert.deepEqual(res.removed, [`${PROJECT}/junction-b`]);
+  const kept = stored(dir)[`${PROJECT}/junction-a`];
+  assert.equal(kept.confidence, 'confirmed');
+  assert.equal(kept.usefulness, 80);
+  assert.equal(kept.usefulness_note, 'Saves a broken install.');
+  assert.deepEqual(seen, [['approved', 80]]);
+});

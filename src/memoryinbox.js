@@ -18,7 +18,8 @@
 //
 // Two PCs can propose the same memory from different sessions. Near-duplicates
 // among the waiting entries are shown as ONE entry; approving or rejecting it
-// removes the others.
+// removes the others. An entry without a usefulness score shows, and on
+// approval keeps, the best score of the twins folded into it.
 //
 // No Electron here: scripts/luna.js uses the same functions with the app closed.
 // ============================================================================
@@ -56,6 +57,25 @@ function groupPending(records) {
   return groups;
 }
 
+/**
+ * The entry a folded group shows, and what approving it writes: the entry with
+ * its own usefulness score, or else the best score among its twins.
+ * Near-duplicates say the same thing, and the entry kept is the oldest one,
+ * often the one without a score (captured by a PC on a release older than the
+ * field, or proposed by a session, which never carries one). Its own score,
+ * when it has one, always wins.
+ * @param {object} record the group's entry
+ * @param {(object|undefined)[]} twins the other records of its group
+ * @returns {object} the record, or a copy with the twin's score fields
+ */
+function withGroupScore(record, twins) {
+  if (record.usefulness !== undefined) return record;
+  const best = twins.filter((r) => r && r.usefulness !== undefined).sort((a, b) => b.usefulness - a.usefulness)[0];
+  if (!best) return record;
+  const { usefulness, usefulness_note: note, usefulness_at: at } = best;
+  return { ...record, usefulness, ...(note ? { usefulness_note: note } : {}), ...(at ? { usefulness_at: at } : {}) };
+}
+
 /** A confirmed memory of the same project (or a global one) that says nearly the same. */
 function similarConfirmed(records, record) {
   const replaced = new Set(record.supersedes);
@@ -80,6 +100,7 @@ function listInbox(dir) {
   // Array.prototype.sort is stable: equal scores keep the newest-first order.
   const groups = groupPending(listable(records))
     .reverse()
+    .map((g) => ({ ...g, record: withGroupScore(g.record, g.duplicates.map((k) => byKey.get(k))) }))
     .sort((a, b) => rankOf(b.record) - rankOf(a.record));
   const items = groups.slice(0, MAX_ITEMS).map(({ key, record, duplicates }) => ({
     key,
@@ -133,7 +154,8 @@ function findPending(dir, key) {
   // The entry may be a folded duplicate itself: act on the whole group it is in.
   const group = groupPending(records).find((g) => g.key === key || g.duplicates.includes(key));
   const others = [group.key, ...group.duplicates].filter((k) => k !== key);
-  return { record: found[1], others };
+  const byKey = new Map(records);
+  return { record: found[1], others, twins: others.map((k) => byKey.get(k)) };
 }
 
 /**
@@ -148,9 +170,11 @@ function findPending(dir, key) {
 function approve(dir, key, today, decided = () => {}) {
   const found = findPending(dir, key);
   if (!found.record) return { ok: false, reason: found.reason };
-  writeRecord(dir, { ...found.record, confidence: 'confirmed', last_verified: today });
+  // The score the inbox showed for the group stays with the memory: its twins are deleted next.
+  const entry = withGroupScore(found.record, found.twins);
+  writeRecord(dir, { ...entry, confidence: 'confirmed', last_verified: today });
   for (const other of found.others) removeRecord(dir, other);
-  decided('approved', found.record);
+  decided('approved', entry);
   return { ok: true, key, removed: found.others };
 }
 
