@@ -55,7 +55,7 @@ function switchRow(row, { onToggle, disabled }) {
 
 /** The score switch's rules and its own numbers, with what main sent. */
 export function scoreHint(score, bar) {
-  return t('mem.auto.scoreHint', { min: bar.min, off: pct(bar.off), auto: score.auto, undone: score.undone });
+  return t('mem.auto.scoreHint', { min: bar.min, on: pct(bar.on), off: pct(bar.off), auto: score.auto, undone: score.undone });
 }
 
 /** The 'Auto-save memories scored 90+' switch; main names it (score.id) and re-checks it. */

@@ -641,12 +641,15 @@ Mati has switched on "Auto-save memories scored 90+" in the memory window (off b
 default, synced as unit `memory-auto:score` next to the type switches, set through
 `memory:auto-set` with type `score`, which main validates). With that switch on, a 90+
 candidate is treated as if its type's switch were on and goes through the same
-`createLanding` / `decide` path: this PC still needs its 20 decisions for the type, a
-type whose rate fell under 80% still waits, the four exclusions still hold, and an
+`createLanding` / `decide` path: this PC still needs its 20 decisions for the type with
+at least 90% approved (the bar that offers the type's own switch, so a type at 80-89%
+cannot slip in by score), a type whose rate fell under 80% still waits, the four
+exclusions still hold, and an
 auto-save lands `confirmed` with `, auto-accepted` in its source, an `auto-accepted` log
 line and Undo for 7 days. The switch also measures itself: of the auto-accepts scored 90+
 in the last 28 days, an undo or a retire counts against it, and under 80% kept on at
-least 5 it turns itself off, logs `auto-off` with type `score` and the hub says so.
+least 5 it turns itself off, logs `auto-off` with type `score` and the hub says so; main
+refuses to switch it back on while that rate is still under 80%.
 Decision 5 holds: nothing is confirmed behind Mati's back unless he switched it on. A
 0-1 fraction from the model still counts as no score (never buried, never auto-saved).
 

@@ -37,7 +37,9 @@
 // by default. With it on, a candidate whose capture score reaches
 // AUTO_SAVE_FROM (src/memoryextract.js, where every score threshold lives) is
 // treated as if its type were switched on: everything else above still holds
-// (this PC's evidence for the type, its rate, the exclusions), and it lands
+// (this PC's evidence for the type, its rate, the exclusions), and its type
+// must also meet the bar that would offer its own switch (isOffered, so a
+// type approved 80-89% of the time does not slip in by score). It lands
 // the same way (confirmed, labelled, `auto-accepted` line, Undo). The switch
 // keeps its own numbers too (scoreStats: the auto-accepts scored 90+ and how
 // many were undone) and turns itself off under AUTO_OFF_RATE, like a type.
@@ -288,7 +290,8 @@ function exclusion(record, pending) {
  * @param {object} record
  * @param {{enabled: string[], stats: object, pending: object[], scoreOn?: boolean, scoreStat?: object|null}} ctx
  *   scoreOn = the score switch (readScoreAuto); scoreStat = scoreStats()
- * @returns {{accept: boolean, reason: string}} reason = 'auto', 'off', 'no-evidence', 'failing' or the exclusion
+ * @returns {{accept: boolean, reason: string}} reason = 'auto', 'off', 'no-evidence', 'failing',
+ *   'not-offered' (score path only) or the exclusion
  */
 function decide(record, { enabled, stats, pending, scoreOn = false, scoreStat = null }) {
   if (!record) return { accept: false, reason: 'off' };
@@ -299,6 +302,8 @@ function decide(record, { enabled, stats, pending, scoreOn = false, scoreStat = 
   if (!hasEvidence(stat)) return { accept: false, reason: 'no-evidence' };
   // A rate that fell under the bar stops auto-accept even before the switch is turned off.
   if (isFailing(stat) || (!byType && isFailing(scoreStat))) return { accept: false, reason: 'failing' };
+  // By score alone, the type must still earn what its own switch would need to be offered.
+  if (!byType && !isOffered(stat)) return { accept: false, reason: 'not-offered' };
   const why = exclusion(record, pending);
   return why ? { accept: false, reason: why } : { accept: true, reason: 'auto' };
 }
@@ -368,25 +373,40 @@ function createLanding({ file, dir, log, now }) {
  *   type = SCORE_SWITCH for the score switch
  */
 function enforceAutoOff({ file, events, now, log }) {
+  // Each kind in its own try: a failure on the score switch must not hide
+  // (and leave unsynced) the type switches already turned off.
+  return [...typeAutoOffs({ file, events, now, log }), ...scoreAutoOff({ file, events, now, log })];
+}
+
+/** The type half of enforceAutoOff. Never throws. */
+function typeAutoOffs({ file, events, now, log }) {
+  const done = [];
   try {
     const enabled = readAuto(file);
-    const scoreOn = readScoreAuto(file);
-    if (!enabled.length && !scoreOn) return [];
+    if (!enabled.length) return done;
     const stats = typeStats(events, now);
-    const off = enabled.filter((type) => isFailing(stats[type])).map((type) => ({ type, rate: stats[type].rate }));
-    for (const { type, rate } of off) {
+    for (const type of enabled.filter((t) => isFailing(stats[t]))) {
       setAuto(file, type, false);
-      if (log) log.add({ ev: 'auto-off', type, rate });
+      done.push({ type, rate: stats[type].rate });
+      if (log) log.add({ ev: 'auto-off', type, rate: stats[type].rate });
     }
-    const score = scoreOn ? scoreStats(events, now) : null;
-    if (score && isFailing(score)) {
-      setScoreAuto(file, false);
-      if (log) log.add({ ev: 'auto-off', type: SCORE_SWITCH, rate: score.rate });
-      off.push({ type: SCORE_SWITCH, rate: score.rate });
-    }
-    return off;
   } catch (err) {
     console.error('[memory] auto-accept check failed:', errText(err));
+  }
+  return done;
+}
+
+/** The score-switch half of enforceAutoOff. Never throws. */
+function scoreAutoOff({ file, events, now, log }) {
+  try {
+    if (!readScoreAuto(file)) return [];
+    const score = scoreStats(events, now);
+    if (!isFailing(score)) return [];
+    setScoreAuto(file, false);
+    if (log) log.add({ ev: 'auto-off', type: SCORE_SWITCH, rate: score.rate });
+    return [{ type: SCORE_SWITCH, rate: score.rate }];
+  } catch (err) {
+    console.error('[memory] auto-accept score check failed:', errText(err));
     return [];
   }
 }
@@ -447,6 +467,7 @@ module.exports = {
   scoreStats,
   isHighScore,
   isOffered,
+  isFailing,
   autoStatus,
   exclusion,
   decide,

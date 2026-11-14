@@ -32,7 +32,8 @@
 // ({types, score, recent, bar} or null). type 'score' (SCORE_SWITCH) is the
 // 'Auto-save memories scored 90+' switch: no numbers gate it, it is opt-in.
 //
-//   memory:auto-set  ({type, on})    -> {ok, type, on} | {ok:false, reason}   'not-offered' = the numbers do not allow it
+//   memory:auto-set  ({type, on})    -> {ok, type, on} | {ok:false, reason}   'not-offered' = the numbers do not allow it,
+//                                                                             'score-failing' = the score switch's own rate is under the bar
 //   memory:auto-undo (key)           -> {ok, key} | {ok:false, reason}        'not-auto' = not a recent auto-accept
 //
 // The graveyard (src/memorygraveyard.js): candidates scored under
@@ -285,7 +286,9 @@ function registerMemoryIpc({
       const file = autoFile();
       if (!file) return { ok: false, reason: 'failed' };
       if (type === auto.SCORE_SWITCH) {
-        // Opt-in, no numbers to earn: decide() still asks the type's evidence per candidate.
+        // Opt-in, no numbers to earn (decide() still asks the type's per candidate),
+        // but a switch whose own undo rate failed would only turn itself off again.
+        if (req.on && auto.isFailing(auto.scoreStats(events(), now()))) return { ok: false, reason: 'score-failing' };
         auto.setScoreAuto(file, req.on);
         onSettingsChanged();
         return { ok: true, type, on: req.on };

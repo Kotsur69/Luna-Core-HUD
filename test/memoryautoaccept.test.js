@@ -493,6 +493,10 @@ test('decide: a 95 with the score switch on is accepted under the per-type rules
   // The per-type rules still hold.
   assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, stats: auto.typeStats(decisions(10, 0), NOW) }).reason, 'no-evidence');
   assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, stats: auto.typeStats(decisions(15, 5), NOW) }).reason, 'failing');
+  // 85% approved: not failing, but not good enough to be offered its own switch, so not by score either.
+  assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, stats: auto.typeStats(decisions(17, 3), NOW) }).reason, 'not-offered');
+  // With the type's own switch on, 85% is enough, as before.
+  assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, enabled: ['gotcha'], stats: auto.typeStats(decisions(17, 3), NOW) }).accept, true);
   assert.equal(auto.decide(scoredRec('x', 95, { supersedes: ['old'] }), ctx).reason, 'supersedes');
   assert.equal(auto.decide(scoredRec('x', 95, { source: 'captured on PC1, suggested global' }), ctx).reason, 'global');
   assert.equal(auto.decide(scoredRec('x', 95, { source: 'captured on PC1, read 1 outside source(s)' }), ctx).reason, 'outside');
@@ -557,6 +561,29 @@ test('enforceAutoOff turns off only the score switch when only its rate fell', (
   assert.equal(auto.readScoreAuto(file), true);
 });
 
+test('a failure on the score switch does not hide the type switches already turned off', (t) => {
+  const base = tmp(t, 'luna-score-split-');
+  const file = memoryPaths(base).autoAccept;
+  auto.setAuto(file, 'gotcha', true);
+  auto.setScoreAuto(file, true);
+  const quiet = t.mock.method(console, 'error', () => {});
+  let adds = 0;
+  // The second log line (the score switch's) fails.
+  const log = {
+    add: () => {
+      adds++;
+      if (adds === 2) throw new Error('disk full');
+      return true;
+    },
+  };
+
+  const off = auto.enforceAutoOff({ file, events: [...decisions(6, 2), ...highAutos(8, 2)], now: NOW, log });
+
+  assert.deepEqual(off.map((o) => o.type), ['gotcha']);
+  assert.deepEqual(auto.readAuto(file), []);
+  assert.ok(quiet.mock.callCount() >= 1);
+});
+
 test('the score switch is set through memory:auto-set (validated in main) and synced as memory-auto:score', (t) => {
   const s = ipcSetup(t, [], []);
 
@@ -568,6 +595,12 @@ test('the score switch is set through memory:auto-set (validated in main) and sy
   assert.equal(s.invoke('memory:inbox').auto.score.on, true);
   assert.deepEqual(s.invoke('memory:auto-set', { type: 'score', on: false }), { ok: true, type: 'score', on: false });
   assert.equal(s.settings(), 2, 'each change is synced');
+
+  // A score switch whose own undo rate failed cannot be switched straight back on; off always works.
+  const failing = ipcSetup(t, [], highAutos(8, 2));
+  assert.deepEqual(failing.invoke('memory:auto-set', { type: 'score', on: true }), { ok: false, reason: 'score-failing' });
+  assert.equal(auto.readScoreAuto(failing.file), false);
+  assert.deepEqual(failing.invoke('memory:auto-set', { type: 'score', on: false }), { ok: true, type: 'score', on: false });
 
   const file = path.join(tmp(t, 'luna-score-sync-'), auto.SETTINGS_FILE);
   const provider = auto.createAutoAcceptProvider(file);
