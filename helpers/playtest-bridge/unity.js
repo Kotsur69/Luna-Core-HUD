@@ -1,23 +1,29 @@
 // ============================================================================
-// LunaCore - the Unity MCP calls Luna's Work makes (LW 3.36b)
+// LunaCore - the Unity calls Luna's Work makes (LW 3.36b, Unity Pipeline)
 // ----------------------------------------------------------------------------
-// Every call into the Unity editor goes through this table: the adapter
-// (enter / leave play mode, open the scene, dump the console as evidence) and
-// the Playtester's bridge (screenshot, game state, scripted input, console).
-// Each entry is a FIXED tool + action - the model never names a Unity MCP tool
-// or action itself, so the coarse editor tools (manage_scene can also create
-// and save, manage_editor can add tags...) are only ever used for the one
-// action listed here.
-//
-// Tool names follow MCP for Unity (manage_editor / manage_scene /
-// read_console / execute_custom_tool). The LW 3.36a live spike had not
-// reported when this was written: if the editor's server names them
+// Every call into the Unity editor goes through one of the two tables below:
+// the adapter (enter / leave play mode, open the scene, dump the console as
+// evidence) and the Playtester's bridge (screenshot, game state, scripted
+// input, console). Each entry is a FIXED command - the model never names a
+// Unity tool, command or action itself, so the coarse editor tools are only
+// ever used for the one action listed here. If the editor names a call
 // differently, fix it HERE and nowhere else.
 //
+// Two transports, same call names (UNITY_TRANSPORTS):
+//
+//   pipeline  the official Unity MCP (com.unity.pipeline) over its HTTP API,
+//             pipeline-http.js: '<group> <name>' commands, e.g.
+//             'editor.playmode start'. Used by a profile without unityMcpUrl.
+//   mcp       legacy: the community "MCP for Unity" server over MCP-over-HTTP,
+//             mcp-http.js: manage_editor / manage_scene / read_console /
+//             execute_custom_tool. Used by a profile with unityMcpUrl.
+//
 // PlaytestDriver protocol (the God Mode card in src/lunasworkUnity.js builds
-// the C# side): custom tool `playtest_driver`, parameters {action, ...}
+// the C# side). Pipeline: command group `playtest`; legacy: custom tool
+// `playtest_driver` with parameters {action, ...}.
 //   state       -> {scene, ...game-specific snapshot}
-//   input       {steps:[...]} (tools.js send_input) -> {done:n}
+//   input       {steps} (tools.js send_input) -> {done:n}
+//               Pipeline passes steps as a JSON string (--steps <json>).
 //   screenshot  -> {png:<base64>, width, height}   (Game view, play mode only)
 // ============================================================================
 
@@ -30,9 +36,11 @@ const UNITY_MCP_TOOLS = Object.freeze({
   custom: 'execute_custom_tool',
 });
 const DRIVER_TOOL = 'playtest_driver';
+const DRIVER_GROUP = 'playtest';
 const CONSOLE_COUNT = 100;
+const PIPELINE_CONSOLE_LEVEL = 'warning';
 
-/** call name -> [tool, args]; functions take the call's own parameters. */
+/** Legacy MCP for Unity: call name -> [tool, args]; functions take the call's own parameters. */
 const UNITY_MCP = Object.freeze({
   play: () => [UNITY_MCP_TOOLS.editor, { action: 'play' }],
   stop: () => [UNITY_MCP_TOOLS.editor, { action: 'stop' }],
@@ -40,6 +48,33 @@ const UNITY_MCP = Object.freeze({
   openScene: (scenePath) => [UNITY_MCP_TOOLS.scene, { action: 'load', path: scenePath }],
   console: () => [UNITY_MCP_TOOLS.console, { action: 'get', types: ['error', 'warning'], count: CONSOLE_COUNT }],
   driver: (action, params = {}) => [UNITY_MCP_TOOLS.custom, { tool_name: DRIVER_TOOL, parameters: { ...params, action } }],
+});
+
+/** The PlaytestDriver's Pipeline commands; an unknown action is refused, never guessed. */
+function pipelineDriver(action, params = {}) {
+  switch (action) {
+    case 'state':
+      return [`${DRIVER_GROUP} state`, {}];
+    case 'input':
+      if (!Array.isArray(params.steps)) throw new Error('PlaytestDriver input needs a steps array');
+      return [`${DRIVER_GROUP} input`, { steps: JSON.stringify(params.steps) }];
+    case 'screenshot':
+      return [`${DRIVER_GROUP} screenshot`, {}];
+    default:
+      throw new Error(`unknown PlaytestDriver action '${String(action)}'`);
+  }
+}
+
+/** Unity Pipeline: call name -> [command, parameters]. */
+const UNITY_PIPELINE = Object.freeze({
+  play: () => ['editor.playmode start', {}],
+  stop: () => ['editor.playmode stop', {}],
+  // result: {status, compiling, domainReloadInProgress, playMode 'stopped'|'playing', playerLoopTicking, runInBackground}
+  state: () => ['editor status', {}],
+  openScene: (scenePath) => ['scene open', { path: scenePath }],
+  // result: {entries:[{level, logType, message, stackTrace}], counts:{error, warn, log}, groundTruth:{compilationFailed, consoleErrors}}
+  console: () => ['console get', { tail: CONSOLE_COUNT, level: PIPELINE_CONSOLE_LEVEL }],
+  driver: pipelineDriver,
 });
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -78,11 +113,13 @@ function isPlaying(state) {
   for (const key of ['isPlaying', 'is_playing', 'playing']) {
     if (typeof state[key] === 'boolean') return state[key];
   }
+  // Unity Pipeline 'editor status'.
+  if (typeof state.playMode === 'string') return state.playMode === 'playing';
   return isObj(state.editor) ? isPlaying(state.editor) : false;
 }
 
 /**
- * One call of the table above through an MCP client.
+ * One call of the legacy table through an MCP client.
  * @param {{callTool:Function}} client mcp-http.js
  * @param {[string, object]} call e.g. UNITY_MCP.play()
  */
@@ -90,12 +127,39 @@ async function unityCall(client, [tool, args]) {
   return unwrap(await client.callTool(tool, args));
 }
 
+/**
+ * One call of the Pipeline table. A custom command may hand its object back
+ * as JSON text; that text is parsed, any other string is returned as it is.
+ * @param {{exec:Function}} client pipeline-http.js
+ * @param {[string, object]} call e.g. UNITY_PIPELINE.play()
+ */
+async function pipelineCall(client, [command, parameters]) {
+  const result = await client.exec(command, parameters);
+  if (typeof result !== 'string') return result;
+  try {
+    const parsed = JSON.parse(result);
+    return parsed && typeof parsed === 'object' ? parsed : result;
+  } catch {
+    return result;
+  }
+}
+
+/** transport -> {calls: its table, invoke(client, call)}. */
+const UNITY_TRANSPORTS = Object.freeze({
+  pipeline: Object.freeze({ calls: UNITY_PIPELINE, invoke: pipelineCall }),
+  mcp: Object.freeze({ calls: UNITY_MCP, invoke: unityCall }),
+});
+
 module.exports = {
   UNITY_MCP_TOOLS,
   UNITY_MCP,
+  UNITY_PIPELINE,
+  UNITY_TRANSPORTS,
   DRIVER_TOOL,
+  DRIVER_GROUP,
   resultText,
   unwrap,
   isPlaying,
   unityCall,
+  pipelineCall,
 };

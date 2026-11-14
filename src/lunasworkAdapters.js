@@ -42,6 +42,7 @@ const { createElectronAdapter } = require('./lunasworkElectron');
 const { createUnityAdapter } = require('./lunasworkUnity');
 const { newToken, callControl } = require('../helpers/playtest-bridge/control');
 const { createMcpHttpClient } = require('../helpers/playtest-bridge/mcp-http');
+const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-http');
 
 const RUNS_DIR = 'runs';
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
@@ -436,8 +437,11 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   spawn?:Function, fetch?:Function, now?:()=>number, sleep?:Function,
  *   platform?:string, execFile?:Function, kill?:Function, env?:object,
  *   newToken?:()=>string, nodeBinary?:string, callControl?:Function,
- *   connectUnity?:(url:string)=>{callTool:Function, close:Function}, log?:Function}} opts
- *   env..connectUnity: the electron / unity adapters' seams (tests inject fakes)
+ *   connectUnity?:(url:string)=>{callTool:Function, close:Function},
+ *   connectPipeline?:(unityProjectDir:string)=>{exec:Function, close:Function}, log?:Function}} opts
+ *   env..connectPipeline: the electron / unity adapters' seams (tests inject fakes);
+ *   connectUnity = legacy MCP for Unity, connectPipeline = the official Unity MCP
+ *   of the editor that has the project (projectDir or a folder inside it) open
  * @returns {{name:string, evidenceDir:string, iteration:number, start:Function, stop:Function,
  *   tools:Function, ensureBrowsers?:Function}} ensureBrowsers on `web` only
  * @throws for an unknown adapter, a bad projectDir, runId or iteration
@@ -467,6 +471,7 @@ function createAdapter(name, opts = {}) {
     nodeBinary: opts.nodeBinary || process.execPath,
     callControl: opts.callControl || callControl,
     connectUnity: opts.connectUnity || ((url) => createMcpHttpClient({ url, fetch: fetchFn })),
+    connectPipeline: opts.connectPipeline || ((unityProjectDir) => createPipelineClient({ projectDir: unityProjectDir, fetch: fetchFn })),
     log: opts.log,
   };
   ctx.killTree = (pid) => killTree(pid, ctx);
