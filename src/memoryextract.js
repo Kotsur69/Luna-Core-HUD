@@ -333,6 +333,7 @@ module.exports = {
   candidatesFrom,
   idFor,
   nearDuplicate,
+  wordsOf,
   outsideNote,
   withNote,
   sourceNotes,

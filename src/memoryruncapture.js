@@ -17,6 +17,11 @@
 // outside-content note when the workers read web, subagent or foreign MCP
 // output (decision 61).
 //
+// Each run's failures also go into the repeat-failure ledger
+// (src/memoryfailures.js). A failure seen in 3+ runs within 30 days that no
+// confirmed memory covers is named in the digest as REPEATED FAILURE, and the
+// candidate about it is saved with usefulness of at least 80.
+//
 // Only for a project with memory switched on, and not while its inbox is full
 // (MAX_PENDING waiting, as for sessions). A run is never captured twice: a
 // ledger entry per run id is written BEFORE the model call, so a second finish
@@ -38,7 +43,8 @@ const { buildPrompt, candidatesFrom, outsideNote, withNote } = require('./memory
 const { pendingCount } = require('./memoryinbox');
 const { rejectedTitles } = require('./memorylog');
 const { droppedEvents, MAX_PENDING } = require('./memorycapture');
-const { runDigest, countRunOutside } = require('./memoryrundigest');
+const { runDigest, countRunOutside, runFailureSignatures } = require('./memoryrundigest');
+const { recordFailures, repeatedFailures, uncoveredRepeats, floorRepeated, FAILURE_LEDGER_FILE } = require('./memoryfailures');
 const { RUN_ID_RE } = require('./orchestraReport');
 const { createLanding, autoEvent } = require('./memoryautoaccept');
 const { scrub } = require('./hostscrub');
@@ -112,8 +118,24 @@ function createRunCapture({
 }) {
   const paths = memoryPaths(configDir);
   const ledgerFile = path.join(configDir, LEDGER_FILE);
+  const failureFile = path.join(configDir, FAILURE_LEDGER_FILE);
   /** Runs being captured right now: a second report of the same run does not start another call. */
   const inflight = new Set();
+
+  /**
+   * Records the run's failures and returns the repeated ones no confirmed
+   * memory covers. A ledger that cannot be written costs the note, never the capture.
+   */
+  function repeatsOf(runId, project, view) {
+    try {
+      const ledger = recordFailures(failureFile, { project, runId, signatures: runFailureSignatures(view), now: now() });
+      const repeats = repeatedFailures(ledger, project);
+      return repeats.length ? uncoveredRepeats(repeats, scan(paths.dir).records.map(([, r]) => r), project) : [];
+    } catch (err) {
+      console.error('[memory] failure ledger not updated:', errText(err));
+      return [];
+    }
+  }
 
   function remember(runId, project, reason) {
     const { runs } = readRunLedger(ledgerFile);
@@ -163,7 +185,7 @@ function createRunCapture({
     }
   }
 
-  async function extract({ runId, repoPath, view, project, digest }) {
+  async function extract({ runId, repoPath, view, project, digest, repeated }) {
     const today = isoDate(now());
     const outside = await outsideOf(repoPath, view);
     const existing = scan(paths.dir)
@@ -174,7 +196,8 @@ function createRunCapture({
     const res = await run({ prompt: buildPrompt({ digest: scrub(digest.text), project, today, existing, notWanted, subject: 'run' }) });
     if (!res || !res.ok) return { reason: `model-${(res && res.reason) || 'failed'}`, saved: 0, rejected: [] };
     const source = withNote(`captured from God Mode run ${runId} on ${machine}`, outsideNote(outside));
-    const { records, rejected } = candidatesFrom(res.answer, { project, today, source, existing });
+    // The gotcha the REPEATED FAILURE section asked for is never scored under the floor.
+    const { records, rejected } = candidatesFrom(floorRepeated(res.answer, repeated), { project, today, source, existing });
     const saved = saveRecords(records);
     const reason = saved ? 'saved' : records.length ? 'write-failed' : 'nothing';
     return { reason, saved, rejected };
@@ -198,14 +221,16 @@ function createRunCapture({
       const project = projectFor(repoPath);
       if (!project || !readEnabled(paths.projects).includes(project)) return { handed: false, reason: 'disabled', saved: 0 };
       if (readRunLedger(ledgerFile).runs[runId]) return { handed: false, reason: 'already', saved: 0 };
+      // Counted even when the inbox is full: the failure still happened.
+      const repeated = repeatsOf(runId, project, view);
       if (pendingCount(paths.dir, project) >= MAX_PENDING) return { handed: false, reason: 'inbox-full', saved: 0 };
-      const digest = runDigest(view);
+      const digest = runDigest(view, { repeated });
       if (!digest.ran) return { handed: false, reason: 'nothing-ran', saved: 0 };
       // Before the call: from here on this run is never paid for again, whatever happens next.
       remember(runId, project, 'started');
       let res;
       try {
-        res = await extract({ runId, repoPath, view, project, digest });
+        res = await extract({ runId, repoPath, view, project, digest, repeated });
       } catch (err) {
         console.error('[memory] run capture failed:', errText(err));
         res = { reason: 'failed', saved: 0, rejected: [] };

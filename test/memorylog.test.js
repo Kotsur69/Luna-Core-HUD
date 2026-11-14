@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createLog, readLog, logPath, cleanEvent, captureStats, usage, rejectedTitles, openDisputes, acceptedMissing, decisionEvent, LOG_FILE, MAX_LOG_BYTES, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog.js');
+const { createLog, readLog, logPath, cleanEvent, captureStats, usage, rejectedTitles, openDisputes, acceptedMissing, decisionEvent, memoryNotes, LOG_FILE, MAX_LOG_BYTES, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog.js');
 
 const PROJECT = 'github.com/acme/hud';
 const OTHER = 'github.com/acme/quote';
@@ -285,4 +285,108 @@ test('decisions are counted per usefulness band; a score under the bands is unde
     captureStats([]).bands.map((b) => b.approved + b.rejected),
     [0, 0, 0, 0],
   );
+});
+
+// ---- memory notes (luna memory notes) ----------------------------------------------------
+
+const memo = (id, over = {}) => ({
+  id,
+  type: 'gotcha',
+  project: PROJECT,
+  title: `Title of ${id}`,
+  created: '2026-10-01',
+  confidence: 'confirmed',
+  supersedes: [],
+  links: [],
+  body: `SECRET BODY of ${id} that must never be printed`,
+  ...over,
+});
+
+test('memory notes list what was confirmed, superseded, archived and retired since a date, by type, titles only', () => {
+  const since = Date.parse('2026-11-01T00:00:00Z');
+  const records = [
+    memo('new-gotcha'),
+    memo('new-decision', { type: 'decision', title: 'Use one ledger per PC', supersedes: ['old-decision'] }),
+    memo('old-decision', { type: 'decision', title: 'Use one ledger for both PCs' }),
+    memo('auto-howto', { type: 'how-to', title: 'Run tests through PowerShell' }),
+    memo('before-tag', { title: 'Approved before the tag' }),
+    memo('dusty', { type: 'project-fact', title: 'An unused fact', archived: '2026-11-05' }),
+    memo('dusty-old', { type: 'project-fact', title: 'Archived long ago', archived: '2026-09-01' }),
+    memo('lost-pair', { title: 'Lost a conflict' }),
+    memo('elsewhere', { project: OTHER, title: 'Another project memory' }),
+  ];
+  const at = (day) => Date.parse(`2026-11-${day}T10:00:00Z`);
+  const events = [
+    { at: Date.parse('2026-10-20T10:00:00Z'), ev: 'approved', key: key('before-tag'), type: 'gotcha' },
+    { at: at('02'), ev: 'approved', key: key('new-gotcha'), type: 'gotcha' },
+    { at: at('03'), ev: 'approved', key: key('new-decision'), type: 'decision' },
+    { at: at('04'), ev: 'auto-accepted', key: key('auto-howto'), type: 'how-to' },
+    { at: at('05'), ev: 'superseded', key: key('lost-pair'), type: 'gotcha', title: 'Lost a conflict' },
+    // A retired memory is gone from the mirror: the title comes from the log.
+    { at: at('06'), ev: 'retired', key: key('gone'), type: 'reference', title: 'A link that died' },
+    { at: at('07'), ev: 'approved', key: key('elsewhere', OTHER), type: 'gotcha' },
+    { at: at('08'), ev: 'rejected', key: key('nope'), type: 'gotcha', title: 'Rejected, never in notes' },
+    { at: at('08'), ev: 'get', key: key('new-gotcha') },
+  ];
+
+  const text = memoryNotes({ records, events, since, project: PROJECT, label: 'v0.28.0' });
+
+  assert.equal(
+    text,
+    [
+      '# Memory notes since v0.28.0 (2026-11-01), github.com/acme/hud',
+      '',
+      '## Confirmed (3)',
+      '',
+      '### decision',
+      '- Use one ledger per PC',
+      '',
+      '### gotcha',
+      '- Title of new-gotcha',
+      '',
+      '### how-to',
+      '- Run tests through PowerShell',
+      '',
+      '## Superseded (2)',
+      '',
+      '### decision',
+      '- Use one ledger for both PCs',
+      '',
+      '### gotcha',
+      '- Lost a conflict',
+      '',
+      '## Archived (1)',
+      '',
+      '### project-fact',
+      '- An unused fact',
+      '',
+      '## Retired (1)',
+      '',
+      '### reference',
+      '- A link that died',
+      '',
+    ].join('\n'),
+  );
+  assert.doesNotMatch(text, /SECRET BODY/);
+});
+
+test('memory notes without a project cover every project; an empty window says none', () => {
+  const since = Date.parse('2026-11-01T00:00:00Z');
+  const events = [{ at: since + DAY_MS, ev: 'approved', key: key('elsewhere', OTHER), type: 'gotcha' }];
+  const all = memoryNotes({ records: [memo('elsewhere', { project: OTHER, title: 'Another project memory' })], events, since });
+  assert.match(all, /^# Memory notes since 2026-11-01\n/);
+  assert.match(all, /## Confirmed \(1\)\n\n### gotcha\n- Another project memory/);
+
+  const none = memoryNotes({ records: [], events: [], since, project: PROJECT });
+  for (const heading of ['Confirmed', 'Superseded', 'Archived', 'Retired']) assert.ok(none.includes(`## ${heading} (0)\n\n_None._`));
+});
+
+test('memory notes escape markdown in titles, so a title cannot become a link or HTML', () => {
+  const since = Date.parse('2026-11-01T00:00:00Z');
+  const records = [memo('linky', { title: 'Click [here](http://evil.example) <img src=x> *now*' })];
+  const events = [{ at: since + DAY_MS, ev: 'approved', key: key('linky'), type: 'gotcha' }];
+  const text = memoryNotes({ records, events, since, project: PROJECT });
+  assert.ok(text.includes('- Click \\[here\\](http:\\/\\/evil.example) \\<img src=x\\> \\*now\\*'), text);
+  const bare = memoryNotes({ records: [memo('bare', { title: 'See https://evil.example and www.evil.example' })], events: [{ at: since + DAY_MS, ev: 'approved', key: key('bare'), type: 'gotcha' }], since });
+  assert.ok(bare.includes('- See https:\\/\\/evil.example and www\\.evil.example'), bare);
 });
