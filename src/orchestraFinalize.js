@@ -34,10 +34,10 @@ const { runEntry } = require('./godmodesnapshot');
 const { selfCheckGate } = require('./orchestraSelfCheck');
 const { supabaseGate } = require('./orchestraApplyActions');
 const { branchFor } = require('./worktrees');
+const { MAX_DETAILS_CHARS } = require('./todorows');
 
 // Lets a closed tab's processes let go of the worktree folder (Windows).
 const TAB_CLOSE_SETTLE_MS = 2500;
-const MAX_TODO_DETAILS = 4000;
 const DEFAULT_CHECK_COMMAND = 'npm test';
 // Integration stages a second try can fix on its own: the network, a
 // leftover from an earlier pass (cleared or reused by the next one), a
@@ -505,7 +505,7 @@ function createFinalizer(deps) {
       p.state === 'stalled' && p.error === 'needsApproval' && p.sessionId && deps.sessionAlive && deps.sessionAlive(p.sessionId);
     const notable = plan.packages.filter((p) => !waiting(p));
     const facts = repoFacts(plan);
-    deps.updateTodos(plan.projectId, (list) => syncStallNotes(list, notable, plan.id, MAX_TODO_DETAILS, facts));
+    deps.updateTodos(plan.projectId, (list) => syncStallNotes(list, notable, plan.id, MAX_DETAILS_CHARS, facts));
   }
 
   // The phone's God Mode page (godmodesnapshot.js). main puts it only while

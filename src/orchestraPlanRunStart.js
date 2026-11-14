@@ -32,7 +32,7 @@ const { planAllowedTools } = require('./orchestraPlanRunLaunch');
 
 const PLANNERS = Object.freeze(['claude', 'free']);
 /** The request Mati types; the same cap the briefs put on the goal text. */
-const MAX_REQUEST_CHARS = 4000;
+const MAX_REQUEST_CHARS = core.MAX_GOAL_CHARS;
 const MIN_REQUEST_CHARS = 3;
 const MAX_REPO_PATH_CHARS = 1024;
 const MAX_SLUG_WORDS_CHARS = 30;
