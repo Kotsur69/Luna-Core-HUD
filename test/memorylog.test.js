@@ -451,3 +451,21 @@ test('weeklyCounts counts this week only: proposed, approved, rejected, auto-acc
   assert.deepEqual(weeklyCounts([], { now }), { week: '2026-46', start: monday, proposed: 0, approved: 0, rejected: 0, autoAccepted: 0, graveyard: 0, archived: 0 });
   assert.deepEqual(weeklyCounts(null, { now, records: 'x' }).proposed, 0, 'broken input counts nothing');
 });
+
+test('`merged` is a logged event with the new key, its type, title and the keys it was made from', (t) => {
+  const { log } = setup(t);
+  assert.equal(log.add({ ev: 'merged', key: key('both'), type: 'gotcha', title: 'One of two', from: [key('a'), '../x', key('b'), key('a'), key('both')] }), true);
+  assert.equal(log.add({ ev: 'merged', key: key('none'), type: 'gotcha', from: ['../x'] }), false, 'a merge from nothing valid is not logged');
+  assert.equal(log.add({ ev: 'merged', key: key('none'), type: 'gotcha' }), false);
+  assert.equal(log.add({ ev: 'merged', key: '../x', type: 'gotcha', from: [key('a')] }), false, 'a bad key is not logged');
+  assert.deepEqual(log.read(), [{ at: NOW, ev: 'merged', key: key('both'), type: 'gotcha', title: 'One of two', from: [key('a'), key('b')] }]);
+  assert.equal(cleanEvent({ at: 1, ev: 'merged', key: key('m'), type: 'nope', from: [key('a')] }), null, 'an unknown type is refused');
+});
+
+test('memoryNotes lists a merged memory as confirmed', () => {
+  const since = NOW - DAY_MS;
+  const records = [{ id: 'both', type: 'gotcha', project: PROJECT, title: 'One of two', supersedes: ['a', 'b'] }];
+  const text = memoryNotes({ records, events: [{ at: NOW, ev: 'merged', key: key('both'), type: 'gotcha', from: [key('a'), key('b')] }], since, project: PROJECT });
+  assert.match(text, /## Confirmed \(1\)[\s\S]*- One of two/);
+  assert.match(text, /## Superseded \(2\)/);
+});

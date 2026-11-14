@@ -498,6 +498,16 @@ contextBridge.exposeInMainWorld('lunacore', {
     }),
   /** Brings an archived memory back. Promise<{ok, key} | {ok:false, reason}>. */
   memoryRestore: (key) => ipcRenderer.invoke('memory:restore', typeof key === 'string' ? key : ''),
+  /** Merges a listed pair into one new memory with this {title, body}. Promise<{ok, key, superseded} | {ok:false, reason}>. */
+  memoryMerge: (a, b, edits) =>
+    ipcRenderer.invoke('memory:merge', {
+      a: typeof a === 'string' ? a : '',
+      b: typeof b === 'string' ? b : '',
+      title: edits && typeof edits.title === 'string' ? edits.title : '',
+      body: edits && typeof edits.body === 'string' ? edits.body : '',
+    }),
+  /** Read only: one memory's source, supersede chain, links and this PC's log about it. Promise<{ok, ...} | {ok:false, reason}>. */
+  memoryProvenance: (key) => ipcRenderer.invoke('memory:provenance', typeof key === 'string' ? key : ''),
   /** The memory files changed (capture, a sync, an approval). Returns an unsubscribe. */
   onMemoryChanged: (cb) => {
     if (typeof cb !== 'function') return () => {};

@@ -6116,6 +6116,15 @@ section.orchestra__planrun {
 .mem-brain__side { margin-top: var(--space-3); padding-left: var(--space-3); border-left: 2px solid var(--edge); }
 .mem-brain__conflict { border-color: var(--warn); }
 .mem-brain__item--archived { opacity: 0.72; }
+.mem-brain__duplicate { border-color: var(--edge-glow); }
+/* The History expander of one memory (memoryhistory.js): an indented list, no graph. */
+.mem-brain__history { margin-top: var(--space-2); }
+.mem-brain__history > summary { cursor: pointer; color: var(--text-dim, var(--text)); }
+.mem-brain__history > summary:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.mem-brain__history-body { margin-top: var(--space-2); padding-left: var(--space-3); border-left: 2px solid var(--edge); }
+.mem-brain__history-body h4 { margin: var(--space-3) 0 var(--space-1); font-size: inherit; }
+.mem-brain__history-body p { margin: var(--space-1) 0; }
+.mem-brain__chain, .mem-brain__chain ul, .mem-brain__timeline { margin: 0; padding-left: var(--space-4, 16px); }
 
 /* The brief's buttons inside the notification hub drawer (hub.css, hubpanel.js). */
 .mission-brief--hub .mc-btn {
