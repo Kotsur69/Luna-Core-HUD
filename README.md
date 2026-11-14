@@ -7,7 +7,17 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.28.0 — Live map and smarter memory.**
+> **Current release: v0.28.1 — fix(lunaswork): official Unity Pipeline transport.**
+> - Pipeline HTTP client for the official Unity MCP (`com.unity.pipeline`):
+>   reads `Library/Pipeline/.unity-pipeline-port` and talks to the editor on
+>   127.0.0.1
+> - Adapter and playtest bridge map play mode, scene, console, screenshot and
+>   PlaytestDriver commands onto Pipeline commands
+> - Pipeline is the default Unity transport in a Luna's Work profile; MCP for
+>   Unity stays as a legacy transport, used only when a URL is set
+> - PlaytestDriver card rewritten for Pipeline commands
+>
+> **v0.28.0 — Live map and smarter memory.**
 > - Live map (Ctrl+Shift+G): the God Mode package graph, a Sessions work map
 >   for the active tab, and a Luna's Work tab with the iteration loop
 > - Memory search ranks by meaning with a local embedding model, falling

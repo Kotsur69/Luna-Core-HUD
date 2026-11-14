@@ -13,7 +13,9 @@
 >    stop (slice 5, card "LW 1.5e").
 > 3. The Electron adapter on a real desktop app.
 > 4. The Unity adapter on the Unity PC, starting with its PlaytestDriver
->    spike (card "LW 3.36a").
+>    spike (card "LW 3.36a"). Since v0.28.1 it targets the official Unity
+>    MCP (`com.unity.pipeline`), not MCP for Unity: see the unity row of the
+>    adapter table.
 > 5. Then the end-to-end run (card "LW final") that moves this doc to
 >    `docs/done_docs/DONE_LUNAS_WORK_PLAN.md`.
 
@@ -45,7 +47,7 @@ memory and the stop rule explicit instead of trusting one context window.
 | First tester adapter | **Web app** (Playwright, this PC). Electron and Unity come after. |
 | Run output | **Merge to `main`** every iteration. The God Mode self-check gate still applies: a red merged result is not pushed to `main` (pushed as `luna/<slug>-integration`, the fix-up worker gets one try). |
 | Budget | **No spend cap.** On a usage limit the run waits for the reset and continues. It runs until SHIP, plateau, or Mati stops it. |
-| Unity | Lives on Mati's other PC, Unity MCP already connected there. Luna's Work runs in the LunaCore on that PC. |
+| Unity | Lives on Mati's other PC. Luna's Work runs in the LunaCore on that PC and drives the editor through the official Unity MCP, `com.unity.pipeline` (v0.28.1). The older MCP for Unity server is a legacy transport, used only when the profile sets `unityMcpUrl`. |
 | God Mode v2 | **Must not change behavior.** Luna's Work is its own button and panel. It reuses God Mode only through additive hooks; every God Mode test must stay green, and a new test pins God Mode's default behavior. Only one of the two may run on a project at a time. |
 
 ## The loop
@@ -163,7 +165,7 @@ Playtester is allowed), `stop()`, `evidenceDir`.
 |---|---|---|
 | **web** | Built (slice 3) | LunaCore runs the project's start command (from the project profile, not from model output), waits for the URL, Playtester drives it via Playwright MCP: clicks, forms, screenshots, console errors, mobile + desktop width |
 | electron | Built (LW 3.35, `src/lunasworkElectron.js`), not live-checked | The in-process Electron wrapper already used for smoke tests (memory: smoke-test without a CDP port) |
-| unity | Built (LW 3.36b, `src/lunasworkUnity.js`), not live-checked (other PC) | Unity MCP: play mode, screenshots, console. Needs a `PlaytestDriver` dev-only script in the game (scripted inputs + JSON state dump). Constraint: one editor = one Unity MCP connection, so code workers run in parallel worktrees but scene/prefab work goes through **one scene worker**; one owner per scene; UnityYAMLMerge as git merge driver. Starts with a live spike (install, play mode, screenshot, one scripted input) before any design work. |
+| unity | Built (LW 3.36b, `src/lunasworkUnity.js`), not live-checked (other PC). Transport switched to the official Unity Pipeline in v0.28.1 | Official Unity MCP (`com.unity.pipeline`, listed in the game's `Packages/manifest.json`): `helpers/playtest-bridge/pipeline-http.js` re-reads `Library/Pipeline/.unity-pipeline-port` on every request (the editor's HTTP API listens on 127.0.0.1, a port from 7800-7849 announced in that file, with a bearer token and a heartbeat no older than 60 s) and POSTs commands to `/api/exec`: play mode, scene open, screenshots, console. The project folder is the repo, or `unityProjectSubdir` inside it. **Legacy:** MCP for Unity is used only when the profile sets `unityMcpUrl` (loopback http); no URL is filled in by default any more. Needs a `PlaytestDriver` dev-only script in the game (scripted inputs + JSON state dump), built as Pipeline commands in the `playtest` group (`[CliGroupCommand]`, files under `Assets/LunaPlaytest/`). Constraint: one editor = one Unity MCP connection, so code workers run in parallel worktrees but scene/prefab work goes through **one scene worker**; one owner per scene; UnityYAMLMerge as git merge driver. Starts with a live spike (install, play mode, screenshot, one scripted input) before any design work. |
 
 ### Project profile (LunaCore local settings, not the repo)
 

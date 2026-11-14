@@ -841,8 +841,9 @@ const PIPE_TOKEN = Buffer.from(`lunacore-adapter-${'z'.repeat(20)}`).toString('b
 function fakePipelineEditor({
   reloadReads = 1, busyReplies = 1, driver = true, reloadForever = false, statusFails = false,
   busyBeforePlay = 0, lostPlayAnswer = false, playFails = false, driverAuthFails = false,
+  busyBeforeStop = 0, stopFails = 0,
 } = {}) {
-  const ed = { log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0, busyBeforePlay };
+  const ed = { log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0, busyBeforePlay, busyBeforeStop, stopFails };
   const readFile = async (file) => {
     ed.reads.push(file);
     if ((reloadForever && ed.playMode === 'playing') || ed.missing > 0) {
@@ -865,6 +866,10 @@ function fakePipelineEditor({
       return ok({});
     },
     'editor.playmode stop': () => {
+      if (ed.stopFails > 0) {
+        ed.stopFails -= 1;
+        return reply(400, { success: false, error: 'Play mode could not stop' });
+      }
       ed.playMode = 'stopped';
       return ok({});
     },
@@ -886,8 +891,10 @@ function fakePipelineEditor({
     const { command, parameters } = JSON.parse(init.body);
     ed.requests.push({ url, command, parameters, auth: init.headers.authorization });
     const playing = command === 'editor.playmode start';
-    if (ed.busy > 0 || (playing && ed.busyBeforePlay > 0)) {
+    const stopping = command === 'editor.playmode stop';
+    if (ed.busy > 0 || (playing && ed.busyBeforePlay > 0) || (stopping && ed.busyBeforeStop > 0)) {
       if (playing && ed.busyBeforePlay > 0) ed.busyBeforePlay -= 1;
+      else if (stopping && ed.busyBeforeStop > 0) ed.busyBeforeStop -= 1;
       else ed.busy -= 1;
       ed.log.push(`${command} (busy)`);
       return reply(503, { success: false, status: 'busy', busyReason: 'settling', retryable: true });
@@ -960,6 +967,32 @@ test('unity pipeline stop saves unity-console.json, unity-state.json and final.p
   assert.ok(isPng(path.join(adapter.evidenceDir, U.FINAL_SHOT)));
   assert.deepEqual(adapter.tools().allowedTools, []);
   assert.equal(world.editor.playMode, 'stopped');
+});
+
+test('unity pipeline stop: a busy editor (stop not run) gets editor.playmode stop again', async () => {
+  const world = pipelineWorld({ busyBeforeStop: 2 });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  world.editor.log.length = 0;
+
+  assert.equal(await adapter.stop(), true);
+  assert.deepEqual(world.editor.log.slice(-3), ['editor.playmode stop (busy)', 'editor.playmode stop (busy)', 'editor.playmode stop']);
+  assert.equal(world.editor.playMode, 'stopped');
+});
+
+test('unity pipeline stop: a failed stop is not cached - a later stop() tries again', async () => {
+  const world = pipelineWorld({ stopFails: 1 });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  world.editor.log.length = 0;
+
+  assert.equal(await adapter.stop(), false);
+  assert.ok(world.logs.some((l) => /could not leave Unity play mode: .*Play mode could not stop/.test(l)), world.logs.join('\n'));
+  assert.equal(world.editor.playMode, 'playing');
+  assert.equal(await adapter.stop(), true);
+  assert.equal(world.editor.playMode, 'stopped');
+  assert.equal(await adapter.stop(), true);
+  assert.deepEqual(world.editor.log.filter((l) => l.startsWith('editor.playmode stop')), ['editor.playmode stop', 'editor.playmode stop'], 'success is cached');
 });
 
 test('unity pipeline tools() hands the bridge --unity-project (repo dir + unityProjectSubdir), after start', async () => {

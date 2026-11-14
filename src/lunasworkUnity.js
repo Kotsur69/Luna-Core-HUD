@@ -319,13 +319,20 @@ function createUnityAdapter(ctx) {
     }
   }
 
+  /** Leaves play mode; sent again until the ready timeout only while the editor certainly did not run it. */
+  function leavePlayMode(call) {
+    const sec = profile.readyTimeoutSec;
+    return act(ctx.now() + sec * 1000, () => call(target.calls.stop()), `Unity could not leave play mode within ${sec}s`);
+  }
+
   async function shutdown() {
     if (!profile || !playing) return true;
     try {
       await session(async (call) => {
         if (started) await saveEvidence(call);
-        await call(target.calls.stop());
+        await leavePlayMode(call);
       });
+      playing = false;
       return true;
     } catch (err) {
       log(`[lunaswork] could not leave Unity play mode: ${errText(err)}`);
@@ -335,8 +342,14 @@ function createUnityAdapter(ctx) {
     }
   }
 
+  /** A successful stop is cached; a failed one is not, so a later stop() tries again. */
   function stop() {
-    if (!stopping) stopping = shutdown();
+    if (!stopping) {
+      stopping = shutdown().then((ok) => {
+        if (!ok) stopping = null;
+        return ok;
+      });
+    }
     return stopping;
   }
 
