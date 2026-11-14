@@ -9,8 +9,13 @@
 //   --backend electron --control <file>    the in-process wrapper's control
 //                                          channel (port + token in <file>,
 //                                          written by the electron adapter)
-//   --backend unity --unity-url <url>      the Unity editor's MCP server, one
-//                                          short session per call (unity.js)
+//   --backend unity --unity-project <dir>  the official Unity MCP (Unity
+//                                          Pipeline) of the editor that has
+//                                          <dir> open, over its HTTP API
+//                                          (pipeline-http.js)
+//   --backend unity --unity-url <url>      legacy: the MCP for Unity server,
+//                                          one short session per call
+//   Either way every call is a fixed entry of unity.js.
 //
 // Screenshots come back as an image the model sees AND a PNG written into
 // --evidence-dir under the sanitized name - the file validateReport() later
@@ -28,7 +33,8 @@ const readline = require('readline');
 const { BACKENDS, TOOL_DEFS, checkArgs } = require('./tools');
 const { callControl } = require('./control');
 const { createMcpHttpClient, isLoopbackHttpUrl } = require('./mcp-http');
-const { UNITY_MCP, unityCall } = require('./unity');
+const { createPipelineClient } = require('./pipeline-http');
+const { UNITY_TRANSPORTS } = require('./unity');
 
 const SERVER_NAME = 'lunacore-playtest';
 const SERVER_VERSION = '1.0.0';
@@ -75,21 +81,28 @@ function electronBackend({ controlFile, call = callControl }) {
   return async (tool, args) => call(readControl(controlFile), tool, args);
 }
 
-/** Unity: each tool is one fixed Unity MCP call, in its own short session. */
-function unityBackend({ connect, sleep = realSleep }) {
+/**
+ * Unity: each tool is one fixed call of unity.js, through its own short-lived
+ * client (one editor = one connection, never held between calls).
+ * @param {{connect:()=>{close:Function}, transport?:'pipeline'|'mcp', sleep?:Function}} opts
+ */
+function unityBackend({ connect, transport = 'mcp', sleep = realSleep }) {
+  const api = UNITY_TRANSPORTS[transport];
+  if (!api) throw new Error(`unknown Unity transport '${String(transport)}'`);
+  const { calls, invoke } = api;
   const once = async (call) => {
     const client = connect();
     try {
-      return await unityCall(client, call);
+      return await invoke(client, call);
     } finally {
       await client.close();
     }
   };
   const handlers = {
-    screenshot: () => once(UNITY_MCP.driver('screenshot')),
-    game_state: () => once(UNITY_MCP.driver('state')),
-    send_input: ({ steps }) => once(UNITY_MCP.driver('input', { steps })),
-    console_errors: () => once(UNITY_MCP.console()),
+    screenshot: () => once(calls.driver('screenshot')),
+    game_state: () => once(calls.driver('state')),
+    send_input: ({ steps }) => once(calls.driver('input', { steps })),
+    console_errors: () => once(calls.console()),
     wait: async ({ ms }) => {
       await sleep(ms);
       return { waited: ms };
@@ -192,11 +205,21 @@ function invokerFor(opts) {
     if (!opts.control || !path.isAbsolute(opts.control)) throw new Error('--control <absolute file> is required');
     return electronBackend({ controlFile: opts.control });
   }
-  if (opts.backend === 'unity') {
-    if (!isLoopbackHttpUrl(opts['unity-url'])) throw new Error('--unity-url must be http on 127.0.0.1 / localhost');
-    return unityBackend({ connect: () => createMcpHttpClient({ url: opts['unity-url'], clientName: 'lunacore-playtester' }) });
-  }
+  if (opts.backend === 'unity') return unityInvoker(opts);
   throw new Error('--backend must be electron or unity');
+}
+
+/** --unity-project <absolute dir> (Unity Pipeline) or legacy --unity-url <loopback url>, never both. */
+function unityInvoker(opts) {
+  const project = opts['unity-project'];
+  const url = opts['unity-url'];
+  if (project !== undefined && url !== undefined) throw new Error('give --unity-project or --unity-url, not both');
+  if (project !== undefined) {
+    if (!project || !path.isAbsolute(project)) throw new Error('--unity-project must be an absolute directory');
+    return unityBackend({ transport: 'pipeline', connect: () => createPipelineClient({ projectDir: project }) });
+  }
+  if (!isLoopbackHttpUrl(url)) throw new Error('--unity-url must be http on 127.0.0.1 / localhost');
+  return unityBackend({ transport: 'mcp', connect: () => createMcpHttpClient({ url, clientName: 'lunacore-playtester' }) });
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -239,4 +262,5 @@ module.exports = {
   unityBackend,
   saveScreenshot,
   parseArgv,
+  invokerFor,
 };

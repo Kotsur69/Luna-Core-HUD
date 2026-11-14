@@ -494,6 +494,7 @@ const Scene = require('../src/lunasworkScene.js');
 const { BRIDGE_PATH, WRAPPER_PATH, SERVER_NAMES } = require('../src/lunasworkBridge.js');
 const { toolNames } = require('../helpers/playtest-bridge/tools.js');
 const { createBridge, unityBackend } = require('../helpers/playtest-bridge/bridge.js');
+const UN = require('../helpers/playtest-bridge/unity.js');
 const { normalizeTodo, runTag } = require('../src/todorows.js');
 const { createGodModeBuilder } = require('../src/lunasworkBuild.js');
 
@@ -635,7 +636,9 @@ test('electron tools() is the bridge on this run only, after start', async () =>
 // unity adapter (LW 3.36b) - a fake Unity MCP (MCP for Unity's answer shape)
 // ============================================================================
 
-const unityProfile = { adapter: 'unity', scene: 'Assets/Scenes/Level1.unity', readyTimeoutSec: 5 };
+// Legacy MCP for Unity: the profile names the server's url. Without one the
+// adapter talks to the official Unity MCP (Unity Pipeline) - see below.
+const unityProfile = { adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp', scene: 'Assets/Scenes/Level1.unity', readyTimeoutSec: 5 };
 const unityReply = (data) => ({ content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'ok', data }) }] });
 
 function fakeUnity({ playingAfter = 2, driver = true } = {}) {
@@ -815,6 +818,202 @@ test('unity profile: the MCP url must be loopback and the scene a project path',
     await assert.rejects(adapter.start(bad), /invalid project profile/, JSON.stringify(bad));
     assert.equal(world.unity.sessions, 0);
   }
+});
+
+// ============================================================================
+// unity adapter over the official Unity MCP (Unity Pipeline)
+// ============================================================================
+
+const P = require('../helpers/playtest-bridge/pipeline-http.js');
+
+const pipelineProfile = { adapter: 'unity', scene: 'Assets/Scenes/Level1.unity', readyTimeoutSec: 5 };
+// A fake bearer token, built at runtime (never a secret-shaped literal).
+const PIPE_TOKEN = Buffer.from(`lunacore-adapter-${'z'.repeat(20)}`).toString('base64');
+
+/**
+ * The open editor behind the Unity Pipeline at the HTTP level: the REAL
+ * pipeline client runs on an injected fetch / readFile. Entering play mode
+ * reloads the domain: the port file is gone for `reloadReads` reads, then the
+ * editor answers 503 settling `busyReplies` times. `log` is what the editor saw.
+ */
+function fakePipelineEditor({ reloadReads = 1, busyReplies = 1, driver = true, reloadForever = false, statusFails = false } = {}) {
+  const ed = { log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0 };
+  const readFile = async (file) => {
+    ed.reads.push(file);
+    if ((reloadForever && ed.playMode === 'playing') || ed.missing > 0) {
+      ed.missing = Math.max(0, ed.missing - 1);
+      ed.log.push('(port file missing)');
+      throw Object.assign(new Error(`ENOENT: no such file or directory, open '${file}'`), { code: 'ENOENT' });
+    }
+    return JSON.stringify({ pid: 99, port: 7802, evalToken: PIPE_TOKEN, lastHeartbeat: new Date().toISOString(), projectPath: 'game', endpoints: {} });
+  };
+  const reply = (status, json) => ({ ok: status < 300, status, text: async () => JSON.stringify(json) });
+  const ok = (result) => reply(200, { success: true, result });
+  const notFound = (command) => reply(400, { success: false, error: 'Command Not Found', errorDetails: `No command '${command}'` });
+  const answers = {
+    'scene open': (p) => ok({ path: p.path }),
+    'editor.playmode start': () => {
+      ed.playMode = 'playing';
+      ed.missing = reloadReads;
+      ed.busy = busyReplies;
+      return ok({});
+    },
+    'editor.playmode stop': () => {
+      ed.playMode = 'stopped';
+      return ok({});
+    },
+    'editor status': (p, command) => (statusFails ? notFound(command) : ok({
+      status: 'ready', compiling: false, domainReloadInProgress: false, playMode: ed.playMode, playerLoopTicking: true, runInBackground: true,
+    })),
+    'console get': () => ok({
+      entries: [{ level: 'error', logType: 'Exception', message: 'NullReferenceException in Enemy.Update', stackTrace: 'Enemy.cs:12' }],
+      counts: { error: 1, warn: 0, log: 0 },
+      groundTruth: { compilationFailed: false, consoleErrors: 1 },
+    }),
+    'playtest state': (p, command) => (driver ? ok({ scene: 'Level1', score: 3 }) : notFound(command)),
+    'playtest screenshot': (p, command) => (driver ? ok({ png: PNG, width: 1920, height: 1080 }) : notFound(command)),
+  };
+  const fetch = async (url, init) => {
+    const { command, parameters } = JSON.parse(init.body);
+    ed.requests.push({ url, command, parameters, auth: init.headers.authorization });
+    if (ed.busy > 0) {
+      ed.busy -= 1;
+      ed.log.push(`${command} (busy)`);
+      return reply(503, { success: false, status: 'busy', busyReason: 'settling', retryable: true });
+    }
+    ed.log.push(command);
+    return answers[command] ? answers[command](parameters, command) : notFound(command);
+  };
+  ed.connect = (dir) => {
+    ed.sessions += 1;
+    ed.dirs.push(dir);
+    const client = P.createPipelineClient({ projectDir: dir, fetch, readFile });
+    return { exec: client.exec, close: async () => { ed.closed += 1; } };
+  };
+  return ed;
+}
+
+function pipelineWorld(editorOpts) {
+  const world = fakeWorld();
+  world.editor = fakePipelineEditor(editorOpts);
+  world.logs = [];
+  world.opts.connectPipeline = world.editor.connect;
+  world.opts.connectUnity = () => {
+    throw new Error('a profile without unityMcpUrl must not use MCP for Unity');
+  };
+  world.opts.nodeBinary = 'C:\\LunaCore\\LunaCore.exe';
+  world.opts.log = (line) => world.logs.push(line);
+  return world;
+}
+
+test('unity pipeline: scene open, play, a poll that survives the domain reload, then playtest state - one connection', async () => {
+  const world = pipelineWorld();
+  const adapter = A.createAdapter('unity', world.opts);
+  const res = await adapter.start(pipelineProfile);
+
+  assert.deepEqual(res, { handle: { kind: 'unity', scene: 'Assets/Scenes/Level1.unity' } });
+  assert.deepEqual(world.editor.log, [
+    'scene open',
+    'editor.playmode start',
+    '(port file missing)',
+    'editor status (busy)',
+    'editor status',
+    'playtest state',
+  ]);
+  assert.deepEqual(world.editor.requests[0].parameters, { path: 'Assets/Scenes/Level1.unity' });
+  assert.ok(world.editor.requests.every((r) => r.url === 'http://127.0.0.1:7802/api/exec' && r.auth === `Bearer ${PIPE_TOKEN}`));
+  assert.equal(world.t, 1000, 'two retries, one poll interval apart');
+  assert.deepEqual([world.editor.sessions, world.editor.closed], [1, 1], 'one editor = one connection, closed again');
+  assert.deepEqual(world.editor.dirs, [path.resolve(world.opts.projectDir)], 'the repo dir is the Unity project');
+  assert.equal(world.editor.reads[0], path.join(world.opts.projectDir, 'Library', 'Pipeline', '.unity-pipeline-port'));
+  assert.equal(world.spawns.length, 0, 'nothing is launched: the editor is already open');
+  await adapter.stop();
+});
+
+test('unity pipeline stop saves unity-console.json, unity-state.json and final.png, then runs editor.playmode stop once', async () => {
+  const world = pipelineWorld();
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  world.editor.log.length = 0;
+  world.editor.requests.length = 0;
+
+  assert.equal(await adapter.stop(), true);
+  assert.equal(await adapter.stop(), true);
+  assert.deepEqual(world.editor.log, ['console get', 'playtest state', 'playtest screenshot', 'editor.playmode stop']);
+  assert.deepEqual(world.editor.requests[0].parameters, { tail: 100, level: 'warning' });
+  const consoleDump = JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.CONSOLE_FILE), 'utf8'));
+  assert.equal(consoleDump.entries[0].message, 'NullReferenceException in Enemy.Update');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.STATE_FILE), 'utf8')), { scene: 'Level1', score: 3 });
+  assert.ok(isPng(path.join(adapter.evidenceDir, U.FINAL_SHOT)));
+  assert.deepEqual(adapter.tools().allowedTools, []);
+  assert.equal(world.editor.playMode, 'stopped');
+});
+
+test('unity pipeline tools() hands the bridge --unity-project (repo dir + unityProjectSubdir), after start', async () => {
+  const world = pipelineWorld();
+  const adapter = A.createAdapter('unity', world.opts);
+  assert.deepEqual(adapter.tools().allowedTools, [], 'nothing before play mode');
+  await adapter.start({ ...pipelineProfile, unityProjectSubdir: 'Game\\Unity' });
+
+  const unityDir = path.join(world.opts.projectDir, 'Game', 'Unity');
+  assert.deepEqual(world.editor.dirs, [unityDir]);
+  assert.equal(world.editor.reads[0], path.join(unityDir, 'Library', 'Pipeline', '.unity-pipeline-port'));
+  const { mcpConfig, allowedTools } = adapter.tools();
+  assert.deepEqual(mcpConfig.mcpServers[SERVER_NAMES.unity].args, [
+    BRIDGE_PATH,
+    '--backend', 'unity',
+    '--evidence-dir', adapter.evidenceDir,
+    '--unity-project', unityDir,
+  ]);
+  assert.deepEqual(allowedTools, toolNames('unity').map((t) => `mcp__${SERVER_NAMES.unity}__${t}`));
+  await adapter.stop();
+});
+
+test('unity pipeline start without the PlaytestDriver commands fails, names the card and leaves play mode', async () => {
+  const world = pipelineWorld({ driver: false });
+  const adapter = A.createAdapter('unity', world.opts);
+
+  await assert.rejects(adapter.start(pipelineProfile), (err) => {
+    assert.ok(err.message.startsWith(`${U.NO_DRIVER_ERROR} (Unity command 'playtest state' failed: Command Not Found`), err.message);
+    assert.ok(err.message.includes(U.PLAYTEST_DRIVER_CARD.text));
+    return true;
+  });
+  assert.deepEqual(world.editor.log.slice(-2), ['playtest state', 'editor.playmode stop'], 'a missing command is not retried');
+  assert.deepEqual(adapter.tools().allowedTools, []);
+  assert.equal(fs.existsSync(path.join(adapter.evidenceDir, U.FINAL_SHOT)), false, 'no evidence from a game that never ran');
+});
+
+test('unity pipeline: a reload that never ends times out with the last error', async () => {
+  const world = pipelineWorld({ reloadForever: true });
+  const adapter = A.createAdapter('unity', world.opts);
+
+  await assert.rejects(adapter.start(pipelineProfile), /did not enter play mode within 5s \(last error: Unity editor not open on .*, or com\.unity\.pipeline not installed\)/);
+  assert.ok(world.t >= 5000);
+  assert.ok(world.logs.some((l) => /could not leave Unity play mode/.test(l)), 'the failed stop is logged, not swallowed');
+});
+
+test('unity pipeline: a failure that is not a reload ends the wait at once', async () => {
+  const world = pipelineWorld({ reloadReads: 0, busyReplies: 0, statusFails: true });
+  const adapter = A.createAdapter('unity', world.opts);
+
+  await assert.rejects(adapter.start(pipelineProfile), /Unity command 'editor status' failed: Command Not Found/);
+  assert.equal(world.t, 0, 'no retry');
+  assert.equal(world.editor.log.at(-1), 'editor.playmode stop');
+});
+
+test('unity pipeline: unityProjectSubdir must stay inside the project; the transport follows unityMcpUrl', async () => {
+  for (const unityProjectSubdir of ['../outside', 'Game/../../x', 'C:\\Windows', '/etc', '\\\\server\\share', 7, 'a\u0000b', 'x'.repeat(300)]) {
+    const world = pipelineWorld();
+    const adapter = A.createAdapter('unity', world.opts);
+    await assert.rejects(adapter.start({ ...pipelineProfile, unityProjectSubdir }), /invalid project profile: unityProjectSubdir/, String(unityProjectSubdir));
+    assert.equal(world.editor.sessions, 0);
+  }
+  const root = path.resolve(tmpDir('lw-unity-root-'));
+  for (const sub of [undefined, null, '', '   ']) assert.deepEqual(U.unityProjectDir(root, { unityProjectSubdir: sub }), { dir: root, reason: null });
+  assert.equal(U.unityProjectDir(root, { unityProjectSubdir: 'Game/' }).dir, path.join(root, 'Game'));
+  assert.equal(U.unityTransport({ adapter: 'unity' }), 'pipeline');
+  assert.equal(U.unityTransport({ adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp' }), 'mcp');
+  assert.equal(U.unityTransport(null), 'pipeline');
 });
 
 // ============================================================================
@@ -1122,25 +1321,48 @@ test('without UnityYAMLMerge the attributes are still written; unsafe or missing
 // PlaytestDriver God Mode card
 // ============================================================================
 
-test('the PlaytestDriver card is defined: dev-only guard, scripted input, JSON state, Unity Test Framework tests', () => {
+test('the PlaytestDriver card builds Unity Pipeline commands: dev-only guard, scripted input, JSON state, screenshot, PlayMode tests', () => {
   const card = U.PLAYTEST_DRIVER_CARD;
   assert.ok(Object.isFrozen(card));
+  assert.match(card.text, /^PlaytestDriver as Unity Pipeline commands/);
   assert.equal(U.PLAYTEST_DRIVER_GUARD, '#if UNITY_EDITOR || DEVELOPMENT_BUILD');
   assert.ok(card.details.includes(U.PLAYTEST_DRIVER_GUARD) && card.details.includes('#endif'));
+  assert.match(card.details, /com\.unity\.pipeline/);
+  assert.match(card.details, /\[CliGroupCommand\(Group/);
+  assert.match(card.details, /Group = "playtest"/);
+  // Exactly the commands helpers/playtest-bridge/unity.js calls.
+  for (const [command] of [UN.UNITY_PIPELINE.driver('state'), UN.UNITY_PIPELINE.driver('input', { steps: [] }), UN.UNITY_PIPELINE.driver('screenshot')]) {
+    assert.ok(card.details.includes(`\`${command}`), command);
+  }
+  assert.match(card.details, /playtest input --steps <json>/);
   assert.match(card.details, /scripted inputs/);
   assert.match(card.details, /JSON/);
   assert.match(card.details, /Unity Test Framework/);
-  assert.match(card.details, /playtest_driver/);
-  assert.ok(card.files.includes('Assets/LunaPlaytest/PlaytestDriver.cs'));
+  assert.doesNotMatch(card.details, /execute_custom_tool|playtest_driver|PlaytestDriverTool/, 'no MCP for Unity custom tool left');
+  // The error start() shows while the driver is missing.
+  assert.ok(card.details.includes(`${U.NO_DRIVER_ERROR} (Unity command 'playtest state' failed: Command Not Found`));
+  assert.ok(card.details.includes(card.text));
+
+  assert.ok(card.files.every((f) => f.startsWith('Assets/LunaPlaytest/')), 'every file under Assets/LunaPlaytest/');
+  for (const f of ['Assets/LunaPlaytest/PlaytestDriver.cs', 'Assets/LunaPlaytest/PlaytestInput.cs', 'Assets/LunaPlaytest/Editor/PlaytestCommands.cs']) {
+    assert.ok(card.files.includes(f), f);
+  }
   assert.ok(card.files.some((f) => f.includes('/Tests/PlayMode/')));
-  assert.match(card.verify, /-runTests -testPlatform PlayMode/);
+
+  // Verify runs against the open editor: batch mode cannot open a project the editor holds.
+  assert.match(card.verify, /^unity test .*PlayMode/);
+  assert.match(card.verify, /`unity test --help`/);
+  assert.doesNotMatch(card.verify, /-batchmode|-projectPath/);
+  assert.match(card.details, /Do NOT use `Unity -batchmode -projectPath \.`/);
+
   assert.ok(card.acceptance.some((a) => a.includes(U.PLAYTEST_DRIVER_GUARD)));
+  assert.ok(card.acceptance.some((a) => a.includes('unity command playtest state')));
   // A scripts-only card: never routed to the scene worker.
   assert.equal(Scene.isSceneCard(card), false);
 
   // It survives the to-do store unchanged (no field is cut).
   const stored = normalizeTodo({ ...card, at: 1 });
-  for (const key of ['text', 'details', 'verify', 'size', 'model']) assert.equal(stored[key], card[key], key);
+  for (const key of ['text', 'details', 'verify', 'size', 'model', 'effort']) assert.equal(stored[key], card[key], key);
   assert.deepEqual(stored.acceptance, card.acceptance);
   assert.deepEqual(stored.files, card.files);
 });

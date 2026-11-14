@@ -20,6 +20,7 @@ const W = require('../helpers/playtest-bridge/electron-wrapper.js');
 const H = require('../helpers/playtest-bridge/mcp-http.js');
 const B = require('../helpers/playtest-bridge/bridge.js');
 const UN = require('../helpers/playtest-bridge/unity.js');
+const P = require('../helpers/playtest-bridge/pipeline-http.js');
 
 const tmpDir = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('fake image')]);
@@ -363,6 +364,299 @@ test('the Unity MCP client only talks to this machine and reports Unity errors',
   assert.deepEqual(H.parseSse('data: {"id":1}\n\n: keep-alive\n\ndata: {"id"'), [{ id: 1 }]);
   assert.equal(UN.isPlaying({ editor: { is_playing: true } }), true);
   assert.equal(UN.isPlaying({}), false);
+});
+
+// ---- Unity Pipeline over HTTP (official Unity MCP) ------------------------------------
+
+// A fake bearer token, built at runtime (never a secret-shaped literal).
+const PIPE_TOKEN = Buffer.from(`lunacore-test-${'q'.repeat(24)}`).toString('base64');
+const PIPE_DIR = path.join(os.tmpdir(), 'lw-unity-game');
+const PIPE_NOW = Date.UTC(2026, 10, 14, 12, 0, 0);
+const PIPE_DESCRIPTOR = path.join(PIPE_DIR, 'Library', 'Pipeline', '.unity-pipeline-port');
+const EDITOR_STATUS = { status: 'ready', compiling: false, domainReloadInProgress: false, playMode: 'playing', playerLoopTicking: true, runInBackground: true };
+
+const jsonReply = (status, json) => ({ status, text: JSON.stringify(json) });
+const okReply = (result) => jsonReply(200, { success: true, result });
+
+/**
+ * The editor's HTTP API on an injected fetch / readFile. `reply(body)` answers
+ * one /api/exec request; `descriptor` is the port file (object, raw string, or
+ * null = missing).
+ */
+function fakePipeline({ reply = () => okReply(EDITOR_STATUS), descriptor, heartbeatAgeMs = 1000, fetchError = null } = {}) {
+  const requests = [];
+  const reads = [];
+  const desc = descriptor !== undefined ? descriptor : {
+    pid: 4321, port: 7801, evalToken: PIPE_TOKEN, lastHeartbeat: new Date(PIPE_NOW - heartbeatAgeMs).toISOString(), projectPath: PIPE_DIR, endpoints: {},
+  };
+  const readFile = async (file) => {
+    reads.push(file);
+    if (desc === null) throw Object.assign(new Error(`ENOENT: no such file or directory, open '${file}'`), { code: 'ENOENT' });
+    return typeof desc === 'string' ? desc : JSON.stringify(desc);
+  };
+  const fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push({ url, init, body });
+    if (fetchError) throw fetchError;
+    const r = reply(body);
+    return { ok: r.status >= 200 && r.status < 300, status: r.status, text: async () => r.text };
+  };
+  const client = P.createPipelineClient({ projectDir: PIPE_DIR, fetch, readFile, now: () => PIPE_NOW });
+  return { client, requests, reads };
+}
+
+const leaksToken = (err) => String(err && err.message).includes(PIPE_TOKEN) || String(err && err.stack).includes(PIPE_TOKEN);
+
+test('the Pipeline client: exec reads the port file on every request and POSTs to 127.0.0.1 with the bearer token', async () => {
+  const { client, requests, reads } = fakePipeline();
+  assert.equal(reads.length, 0, 'nothing is read until the first call');
+
+  const status = await client.exec('editor status');
+  assert.deepEqual(status, EDITOR_STATUS);
+  assert.equal(UN.isPlaying(status), true);
+  assert.equal(requests.length, 1);
+  const [{ url, init, body }] = requests;
+  assert.equal(url, 'http://127.0.0.1:7801/api/exec');
+  assert.equal(init.method, 'POST');
+  assert.equal(init.headers.authorization, `Bearer ${PIPE_TOKEN}`);
+  assert.equal(init.headers['content-type'], 'application/json');
+  assert.ok(!Object.keys(init.headers).some((h) => h.toLowerCase() === 'origin'), 'never an Origin header');
+  assert.equal(init.redirect, 'error', 'a redirect never carries the token elsewhere');
+  assert.ok(init.signal, 'every request has a timeout');
+  assert.deepEqual(body, { command: 'editor status', parameters: {} });
+
+  await UN.pipelineCall(client, UN.UNITY_PIPELINE.openScene('Assets/Scenes/Main.unity'));
+  assert.deepEqual(requests[1].body, { command: 'scene open', parameters: { path: 'Assets/Scenes/Main.unity' } });
+  assert.deepEqual(reads, [PIPE_DESCRIPTOR, PIPE_DESCRIPTOR], 're-read on every request: a domain reload rewrites it');
+  await client.close();
+});
+
+test('the Pipeline client: a missing port file means the editor is not open (transient, nothing is sent)', async () => {
+  const { client, requests } = fakePipeline({ descriptor: null });
+  await assert.rejects(client.exec('editor status'), (err) => {
+    assert.match(err.message, /^Unity editor not open on .*lw-unity-game, or com\.unity\.pipeline not installed$/);
+    assert.equal(err.code, P.PIPELINE_ERROR.notOpen);
+    assert.equal(P.isTransientPipelineError(err), true);
+    return true;
+  });
+  assert.equal(requests.length, 0);
+});
+
+test('the Pipeline client: a heartbeat older than 60 s means the editor is gone', async () => {
+  const stale = fakePipeline({ heartbeatAgeMs: P.HEARTBEAT_MAX_AGE_MS + 1000 });
+  await assert.rejects(stale.client.exec('editor status'), (err) => {
+    assert.match(err.message, /stopped answering: its last heartbeat is 61 s old/);
+    assert.equal(err.code, P.PIPELINE_ERROR.stale);
+    return true;
+  });
+  assert.equal(stale.requests.length, 0);
+  const fresh = fakePipeline({ heartbeatAgeMs: P.HEARTBEAT_MAX_AGE_MS - 1000 });
+  assert.deepEqual(await fresh.client.exec('editor status'), EDITOR_STATUS);
+});
+
+test('the Pipeline client: a broken port file is refused before anything is sent', async () => {
+  const beat = new Date(PIPE_NOW).toISOString();
+  const base = { pid: 1, port: 7801, evalToken: PIPE_TOKEN, lastHeartbeat: beat };
+  for (const [descriptor, why] of [
+    [{ ...base, port: 0 }, /no valid port/],
+    [{ ...base, port: 65536 }, /no valid port/],
+    [{ ...base, port: '7801' }, /no valid port/],
+    [{ ...base, port: 7801.5 }, /no valid port/],
+    [{ ...base, evalToken: '' }, /no valid evalToken/],
+    [{ ...base, evalToken: 42 }, /no valid evalToken/],
+    [{ ...base, evalToken: `${PIPE_TOKEN}\r\nX-Evil: 1` }, /no valid evalToken/],
+    [{ ...base, lastHeartbeat: 'yesterday' }, /no valid lastHeartbeat/],
+    [{ ...base, lastHeartbeat: undefined }, /no valid lastHeartbeat/],
+    [[base], /not a JSON object/],
+    [`{"evalToken":"${PIPE_TOKEN}", "port": 78`, /not valid JSON/],
+  ]) {
+    const { client, requests } = fakePipeline({ descriptor });
+    await assert.rejects(client.exec('editor status'), (err) => {
+      assert.match(err.message, why, JSON.stringify(descriptor));
+      assert.equal(err.code, P.PIPELINE_ERROR.badDescriptor);
+      assert.equal(leaksToken(err), false, 'the token never appears in an error');
+      return true;
+    });
+    assert.equal(requests.length, 0);
+  }
+});
+
+test('the Pipeline client: 400 Command Not Found throws error + errorDetails, capped at 500 chars', async () => {
+  const notFound = fakePipeline({ reply: () => jsonReply(400, { success: false, error: 'Command Not Found', errorDetails: "No command 'playtest state'" }) });
+  await assert.rejects(notFound.client.exec('playtest state'), (err) => {
+    assert.equal(err.message, "Unity command 'playtest state' failed: Command Not Found - No command 'playtest state'");
+    assert.equal(err.code, P.PIPELINE_ERROR.failed);
+    assert.equal(err.status, 400);
+    assert.equal(err.retryable, undefined);
+    assert.equal(P.isTransientPipelineError(err), false, 'a missing command is not worth a retry');
+    return true;
+  });
+
+  const long = fakePipeline({ reply: () => jsonReply(200, { success: false, error: 'Boom', errorDetails: { trace: 'x'.repeat(2000) } }) });
+  await assert.rejects(long.client.exec('editor status'), (err) => {
+    const prefix = "Unity command 'editor status' failed: ";
+    assert.ok(err.message.startsWith(`${prefix}Boom - {"trace":"xxx`));
+    assert.equal(err.message.length, prefix.length + 500);
+    return true;
+  });
+});
+
+test('the Pipeline client: 503 busy is retryable', async () => {
+  const { client } = fakePipeline({ reply: () => jsonReply(503, { success: false, status: 'busy', busyReason: 'settling', retryable: true }) });
+  await assert.rejects(client.exec('editor.playmode start'), (err) => {
+    assert.match(err.message, /busy \(settling\); 'editor\.playmode start' did not run/);
+    assert.equal(err.retryable, true);
+    assert.equal(err.busyReason, 'settling');
+    assert.equal(err.code, P.PIPELINE_ERROR.busy);
+    assert.equal(P.isTransientPipelineError(err), true);
+    return true;
+  });
+  const dialog = fakePipeline({ reply: () => jsonReply(503, { success: false, status: 'busy', busyReason: 'blocked_by_dialog', retryable: false }) });
+  await assert.rejects(dialog.client.exec('editor status'), (err) => err.retryable === false && /blocked_by_dialog/.test(err.message));
+});
+
+test('the Pipeline client: a reply that is not JSON gets its own error', async () => {
+  for (const text of ['<html><body>502 Bad Gateway</body></html>', '', '"just a string"', 'null']) {
+    const { client } = fakePipeline({ reply: () => ({ status: 200, text }) });
+    await assert.rejects(client.exec('editor status'), (err) => {
+      assert.match(err.message, /^Unity Pipeline answered 'editor status' with HTTP 200 and a reply that is not a JSON object: /, text);
+      assert.equal(err.code, P.PIPELINE_ERROR.notJson);
+      assert.equal(P.isTransientPipelineError(err), false);
+      return true;
+    });
+  }
+});
+
+test('the Pipeline client: a refused port is transient and names the port', async () => {
+  const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+  const { client } = fakePipeline({ fetchError: refused });
+  await assert.rejects(client.exec('editor status'), (err) => {
+    assert.match(err.message, /not reachable on port 7801 \(fetch failed: ECONNREFUSED\)/);
+    assert.equal(err.code, P.PIPELINE_ERROR.unreachable);
+    assert.equal(P.isTransientPipelineError(err), true);
+    return true;
+  });
+  const timeout = fakePipeline({ fetchError: Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }) });
+  await assert.rejects(timeout.client.exec('editor status'), (err) => err.code === P.PIPELINE_ERROR.timeout && /did not answer 'editor status'/.test(err.message));
+});
+
+test('the Pipeline client: the token never appears in an error, whatever the editor echoes back', async () => {
+  const echoes = [
+    () => jsonReply(401, { success: false, error: `bad token ${PIPE_TOKEN}`, errorDetails: { got: `Bearer ${PIPE_TOKEN}` } }),
+    () => ({ status: 500, text: `<pre>Authorization: Bearer ${PIPE_TOKEN}</pre>` }),
+    () => jsonReply(503, { success: false, status: 'busy', busyReason: PIPE_TOKEN, retryable: true }),
+    // The token straddles the 500-char cap: no half of it may survive the cut.
+    () => jsonReply(400, { success: false, error: 'E', errorDetails: `${'x'.repeat(480)}${PIPE_TOKEN}` }),
+    () => ({ status: 502, text: `${'y'.repeat(100)}${PIPE_TOKEN}` }),
+  ];
+  const tokenHead = PIPE_TOKEN.slice(0, 12);
+  for (const reply of echoes) {
+    const { client } = fakePipeline({ reply });
+    await assert.rejects(client.exec('editor status'), (err) => {
+      assert.equal(leaksToken(err), false, err.message);
+      assert.equal(err.message.includes(tokenHead), false, `no part of the token: ${err.message}`);
+      return true;
+    });
+  }
+  const thrower = fakePipeline({ fetchError: new Error(`socket hang up (Bearer ${PIPE_TOKEN})`) });
+  await assert.rejects(thrower.client.exec('editor status'), (err) => {
+    assert.equal(leaksToken(err), false, err.message);
+    assert.match(err.message, /\[token\]/);
+    return true;
+  });
+});
+
+test('the Pipeline client: only fixed-shape commands and object parameters; an absolute project dir', async () => {
+  const { client, reads } = fakePipeline();
+  for (const command of ['status', 'rm -rf', '', 'editor  status', 'editor status\nx', 42]) {
+    await assert.rejects(client.exec(command), /bad Unity Pipeline command/, String(command));
+  }
+  await assert.rejects(client.exec('editor status', ['x']), /parameters must be an object/);
+  assert.equal(reads.length, 0);
+  assert.throws(() => P.createPipelineClient({ projectDir: 'relative/game', fetch: async () => {} }), /absolute/);
+  assert.throws(() => P.createPipelineClient({ projectDir: PIPE_DIR, fetch: async () => {}, timeoutMs: 0 }), /timeoutMs/);
+});
+
+test('the Pipeline table maps every Luna call to a fixed command', () => {
+  const PL = UN.UNITY_PIPELINE;
+  assert.deepEqual(PL.play(), ['editor.playmode start', {}]);
+  assert.deepEqual(PL.stop(), ['editor.playmode stop', {}]);
+  assert.deepEqual(PL.state(), ['editor status', {}]);
+  assert.deepEqual(PL.openScene('Assets/Scenes/Main.unity'), ['scene open', { path: 'Assets/Scenes/Main.unity' }]);
+  assert.deepEqual(PL.console(), ['console get', { tail: 100, level: 'warning' }]);
+  assert.deepEqual(PL.driver('state'), ['playtest state', {}]);
+  assert.deepEqual(PL.driver('screenshot'), ['playtest screenshot', {}]);
+  const steps = [{ type: 'key', key: 'Space', holdMs: 100 }];
+  assert.deepEqual(PL.driver('input', { steps }), ['playtest input', { steps: JSON.stringify(steps) }]);
+  assert.throws(() => PL.driver('exec'), /unknown PlaytestDriver action/);
+  assert.throws(() => PL.driver('input', {}), /steps array/);
+  assert.deepEqual(Object.keys(UN.UNITY_TRANSPORTS).sort(), ['mcp', 'pipeline']);
+
+  assert.equal(UN.isPlaying({ playMode: 'playing' }), true);
+  assert.equal(UN.isPlaying({ playMode: 'stopped' }), false);
+  assert.equal(UN.isPlaying({ isPlaying: true }), true, 'MCP for Unity still reads');
+});
+
+test('pipelineCall parses a result the editor sent back as JSON text', async () => {
+  const replies = [{ scene: 'Level1' }, JSON.stringify({ scene: 'Level1' }), 'plain text', '7'];
+  const client = { exec: async () => replies.shift() };
+  assert.deepEqual(await UN.pipelineCall(client, UN.UNITY_PIPELINE.driver('state')), { scene: 'Level1' });
+  assert.deepEqual(await UN.pipelineCall(client, UN.UNITY_PIPELINE.driver('state')), { scene: 'Level1' });
+  assert.equal(await UN.pipelineCall(client, UN.UNITY_PIPELINE.driver('state')), 'plain text');
+  assert.equal(await UN.pipelineCall(client, UN.UNITY_PIPELINE.driver('state')), '7');
+});
+
+test('the bridge with --unity-project: every Playtester tool is one mapped Pipeline command', async () => {
+  const shot = PNG.toString('base64');
+  const answers = {
+    'playtest screenshot': () => okReply({ png: shot, width: 1920, height: 1080 }),
+    'playtest state': () => okReply({ scene: 'Level1', score: 3 }),
+    'playtest input': (p) => okReply({ done: JSON.parse(p.steps).length }),
+    'console get': () => okReply({ entries: [{ level: 'error', logType: 'Exception', message: 'NullReferenceException in Enemy.Update', stackTrace: '' }], counts: { error: 1, warn: 0, log: 0 }, groundTruth: { compilationFailed: false, consoleErrors: 1 } }),
+  };
+  const { client, requests } = fakePipeline({ reply: (body) => answers[body.command](body.parameters) });
+  let closed = 0;
+  const evidenceDir = tmpDir('lw-bridge-pipe-');
+  const slept = [];
+  const invoke = B.unityBackend({
+    transport: 'pipeline',
+    connect: () => ({ exec: client.exec, close: async () => { closed += 1; } }),
+    sleep: async (ms) => slept.push(ms),
+  });
+  const bridge = B.createBridge({ backend: 'unity', evidenceDir, invoke });
+
+  const res = await bridge.callTool('screenshot', { name: 'f1-menu' });
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(res.content[1], { type: 'image', data: shot, mimeType: 'image/png' });
+  assert.deepEqual(fs.readdirSync(evidenceDir), ['f1-menu.png']);
+
+  assert.deepEqual(JSON.parse((await bridge.callTool('game_state', {})).content[0].text), { scene: 'Level1', score: 3 });
+  const steps = [{ type: 'key', key: 'Space', holdMs: 100 }, { type: 'ui', name: 'PlayButton' }];
+  assert.deepEqual(JSON.parse((await bridge.callTool('send_input', { steps })).content[0].text), { done: 2 });
+  assert.match((await bridge.callTool('console_errors', {})).content[0].text, /NullReferenceException/);
+  await bridge.callTool('wait', { ms: 250 });
+
+  assert.deepEqual(requests.map((r) => r.body.command), ['playtest screenshot', 'playtest state', 'playtest input', 'console get']);
+  assert.deepEqual(requests[2].body.parameters, { steps: JSON.stringify(steps) });
+  assert.deepEqual(requests[3].body.parameters, { tail: 100, level: 'warning' });
+  assert.deepEqual(slept, [250]);
+  assert.equal(closed, 4, 'one short-lived client per call');
+
+  const missing = B.createBridge({ backend: 'unity', evidenceDir, invoke: B.unityBackend({ transport: 'pipeline', connect: () => fakePipeline({ descriptor: null }).client }) });
+  const down = await missing.callTool('game_state', {});
+  assert.equal(down.isError, true);
+  assert.match(down.content[0].text, /Unity editor not open on/);
+});
+
+test('bridge flags: --unity-project must be absolute, --unity-url stays for legacy, never both', () => {
+  assert.equal(typeof B.invokerFor({ backend: 'unity', 'unity-project': PIPE_DIR }), 'function');
+  assert.equal(typeof B.invokerFor({ backend: 'unity', 'unity-url': 'http://127.0.0.1:8080/mcp' }), 'function');
+  assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-project': 'relative/game' }), /--unity-project must be an absolute directory/);
+  assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-project': '' }), /--unity-project must be an absolute directory/);
+  assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-project': PIPE_DIR, 'unity-url': 'http://127.0.0.1:8080/mcp' }), /not both/);
+  assert.throws(() => B.invokerFor({ backend: 'unity' }), /--unity-url must be http/);
+  assert.throws(() => B.unityBackend({ transport: 'carrier-pigeon', connect: () => ({}) }), /unknown Unity transport/);
+  assert.deepEqual(B.parseArgv(['--backend', 'unity', '--unity-project', PIPE_DIR]), { backend: 'unity', 'unity-project': PIPE_DIR });
 });
 
 // ---- stdio MCP bridge ---------------------------------------------------------------
