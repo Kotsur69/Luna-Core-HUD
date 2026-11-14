@@ -186,7 +186,8 @@ function createGodModeBuilder(deps) {
    * restored plan with pushed work is finished and merged instead.
    * @param {{projectId:string, repoPath:string, cards:object[], checkCommand:string, free?:boolean,
    *   resumePlanId?:string|null, ownPlanIds?:string[], onPlan?:(planId:string)=>void, plannerModel?:string,
-   *   cappedTools?:string[]}} opts cappedTools: paid tools past the run's spend cap
+   *   cappedTools?:string[]|(()=>string[])}} opts cappedTools: paid tools past the run's spend cap
+   *   (a function is read again for every worker tab)
    *   ownPlanIds: plans this run made (replaceable); onPlan: the plan id, once made;
    *   plannerModel: God Mode's planner model (default: the strongest model of the cards)
    * @returns {Promise<object>} the onRunSettled result {planId, killed, integration, plan} plus ok,
@@ -208,7 +209,7 @@ function createGodModeBuilder(deps) {
     active = {
       projectId: opts.projectId,
       repoPath: opts.repoPath,
-      capped: Array.isArray(opts.cappedTools) ? opts.cappedTools.filter((t) => typeof t === 'string') : [],
+      cappedTools: opts.cappedTools,
       checkCommand: typeof opts.checkCommand === 'string' ? opts.checkCommand : '',
       models: new Map(cards.map((c) => [c.at, c.model])),
       cards,
@@ -272,12 +273,19 @@ function createGodModeBuilder(deps) {
     if (view.killed && !merging) active.settle({ planId: view.id, killed: true, integration: view.integration, plan: view });
   }
 
+  /** The paid tools past their cap right now: opts.cappedTools is a list, or a function read on every tab. */
+  function cappedNow() {
+    const src = active.cappedTools;
+    const list = typeof src === 'function' ? src() : src;
+    return Array.isArray(list) ? list.filter((t) => typeof t === 'string') : [];
+  }
+
   /** The kit of one package's role during a build; null when idle, without toolsFor or on a failure. */
   function kitOf(pkg) {
     if (!active || typeof deps.toolsFor !== 'function') return null;
     const role = isObj(pkg) && pkg.id === scene.SCENE_WORKER_ID ? 'asset' : 'builder';
     try {
-      return deps.toolsFor({ projectId: active.projectId, repoPath: active.repoPath, role, capped: active.capped });
+      return deps.toolsFor({ projectId: active.projectId, repoPath: active.repoPath, role, capped: cappedNow() });
     } catch (err) {
       log(`[lunaswork-build] tool kit (${role}) not applied: ${err instanceof Error ? err.message : String(err)}`);
       return null;
@@ -312,13 +320,20 @@ function createGodModeBuilder(deps) {
     };
   }
 
-  /** The package prompt with its kit's note at the end, cut at the front to fit the planner's cap. */
+  /**
+   * The package prompt with its kit's note at the end. The prompt is never
+   * cut (its end holds the acceptance and commit steps): a note that does not
+   * fit the planner's cap is shortened instead - the deny rules it names are
+   * enforced by the launch flags either way.
+   */
   function withKitNote(pkg) {
     const kit = isObj(pkg) ? kitOf(pkg) : null;
     if (!kit || typeof kit.note !== 'string' || !kit.note) return pkg;
     const prompt = typeof pkg.prompt === 'string' ? pkg.prompt : '';
-    const room = Math.max(0, MAX_PROMPT_CHARS - kit.note.length - 2);
-    return { ...pkg, prompt: [prompt.slice(0, room), kit.note].filter(Boolean).join(KIT_NOTE_GAP) };
+    const room = MAX_PROMPT_CHARS - prompt.length - KIT_NOTE_GAP.length;
+    if (room <= 0) return pkg;
+    if (room < kit.note.length) log(`[lunaswork-build] ${pkg.id}: tool kit note shortened to fit the prompt cap`);
+    return { ...pkg, prompt: [prompt, kit.note.slice(0, room)].filter(Boolean).join(KIT_NOTE_GAP) };
   }
 
   /**

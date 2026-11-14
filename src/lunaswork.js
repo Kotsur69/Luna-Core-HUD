@@ -980,8 +980,9 @@ function createLunasWork(deps) {
       free,
       // Set after a restart mid-build: the builder finishes that plan first.
       resumePlanId: run.current.planId,
-      // Paid tools past the run's spend cap: denied to every worker of this build.
-      cappedTools: toolGuard.cappedTools(),
+      // Paid tools past the run's spend cap: read again for every worker tab, so a
+      // cap reached mid-build closes the tool for the tabs that start after it.
+      cappedTools: () => toolGuard.cappedTools(),
       // Plans this run made may be replaced; anyone else's open plan may not.
       ownPlanIds: run.planIds,
       onPlan: (planId) => {
@@ -1071,10 +1072,11 @@ function createLunasWork(deps) {
       logModel('playtester', res.model, `${res.modelReason || 'setting'} (prototype navigation)`);
       return prototype.afterPlaytest(res);
     }
-    // The app's tool (the Unity editor / its Pipeline) is down: pause, start it again after the wait.
-    if (res && toolGuard.toolDownOf(res)) {
-      transition('launching');
-      toolGuard.toolDown(res, 'playtester');
+    // The app's tool (the Unity editor / its Pipeline) is down: pause. The launch is
+    // cleared, so after the wait this phase starts the app again (no staging re-run).
+    // Past the pause ceiling toolDown() says no and the failed launch goes on as before.
+    if (res && toolGuard.toolDown(res, 'playtester')) {
+      update({ current: { ...run.current, launch: null } });
       return;
     }
     const built = cardBook.builtCards(run.projectId);

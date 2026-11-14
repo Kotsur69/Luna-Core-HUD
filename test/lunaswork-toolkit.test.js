@@ -12,7 +12,7 @@ const path = require('path');
 const K = require('../src/lunasworkToolkit');
 const S = require('../src/lunasworkSettings');
 const { createToolsFor, hasLiteralSecret } = require('../src/lunasworkToolkitLaunch');
-const { createToolGuard, cleanGuardFields, TOOL_DOWN_REASON, TOOL_DOWN_WAIT_MS } = require('../src/lunasworkToolGuard');
+const { createToolGuard, cleanGuardFields, TOOL_DOWN_REASON, TOOL_DOWN_WAIT_MS, MAX_TOOL_DOWN_PAUSES } = require('../src/lunasworkToolGuard');
 const { withTaskBrief } = require('../src/launch');
 const { buildPlaytestArgs } = require('../src/lunasworkPlaytest');
 const { createGodModeBuilder } = require('../src/lunasworkBuild');
@@ -94,6 +94,10 @@ test('tool servers keep secrets out of the file: env and headers take only ${VAR
   assert.match(K.validateToolServers({ meshy: { command: 'npx', env: { MESHY_API_KEY: literal } } }).reason, /reference, never a value/);
   assert.match(K.validateToolServers({ comfyui: { type: 'http', url: 'http://u:p@host/mcp' } }).reason, /credentials/);
   assert.match(K.validateToolServers({ git: { command: 'x' } }).reason, /not an MCP tool/);
+  assert.match(K.validateToolServers({ comfyui: { type: 'http', url: 'http://host/mcp?key=abc' } }).reason, /query string/);
+  assert.match(K.validateToolServers({ meshy: { command: 'npx', args: ['meshy-mcp', '--api-key=' + 'x'.repeat(8)] } }).reason, /looks like a key/);
+  assert.equal(K.validateToolServers({ meshy: { command: 'npx', args: ['--api-key', '${MESHY_API_KEY}'] } }).reason, null);
+  assert.equal(hasLiteralSecret({ mcpServers: { a: { type: 'http', url: 'http://h/mcp?token=1' } } }), true);
   // Lenient read: the bad entry is dropped, the good one kept.
   assert.deepEqual(Object.keys(S.normalizeSettings({ toolServers: { blender: PC_SERVERS.blender, meshy: { command: '' } } }).toolServers), ['blender']);
   assert.equal(hasLiteralSecret({ mcpServers: { a: { env: { K: literal } } } }), true);
@@ -207,9 +211,30 @@ test('force-push and history rewrites are denied, ordinary git is not', () => {
     'git rebase origin/main',
     'git filter-branch --tree-filter x',
     'git filter-repo --path x',
+    // Global options, the Windows binary, deletions, aliases, cleanups.
+    'git -C . push -f',
+    'git -c x=y push --force',
+    'git --no-pager push origin main --force',
+    'git.exe push origin +main',
+    'git.exe push --force',
+    'git push origin :main',
+    'git push origin --delete main',
+    'git push -d origin main',
+    'git push --force-with-lease=main origin',
+    'git push origin -uf',
+    'git -C . reset --hard HEAD~1',
+    'git clean -fdx',
+    'git stash clear',
+    'git config alias.p "push -f"',
+    'git -c alias.p=x p',
   ];
   for (const cmd of denied) assert.ok(K.isGuardedGitCommand(cmd), `denied: ${cmd}`);
-  for (const cmd of ['git push origin luna/x', 'git push -u origin luna/x', 'git commit -m "feat: x"', 'git status', 'git pull --ff-only']) {
+  const ordinary = [
+    'git push origin luna/x', 'git push -u origin luna/fix-x', 'git commit -m "feat: x"', 'git status', 'git pull --ff-only',
+    'git -C . status', 'git clean -n', 'git push --dry-run origin luna/x', 'git push origin HEAD:refs/heads/luna/x',
+    'git fetch --prune', 'git log --oneline',
+  ];
+  for (const cmd of ordinary) {
     assert.equal(K.isGuardedGitCommand(cmd), false, `allowed: ${cmd}`);
   }
   // On every kit role, whatever the kit.
@@ -231,13 +256,18 @@ test('the worker command carries the deny rules, the --mcp-config and the art fo
     mcpConfigPath: cfg,
     addDirs: [art, 'relative/dir'],
   });
-  assert.ok(cmd.includes("--disallowedTools 'Bash(git push --force:*)'"));
-  assert.ok(cmd.includes("'Bash(git push *+*)'"));
+  assert.ok(cmd.includes("--disallowedTools 'Bash(git push*--force*)'"));
+  assert.ok(cmd.includes("'Bash(git push* +*)'"));
   assert.ok(cmd.includes("'Edit(~/.claude/**)'"));
+  // No guard rule is lost to the shell-shape filter.
+  for (const rule of [...K.GIT_GUARD_RULES, ...K.HOME_GUARD_RULES]) assert.ok(cmd.includes(`'${rule}'`), `kept: ${rule}`);
   assert.ok(cmd.includes("'mcp__higgsfield-bridge'"));
   assert.ok(cmd.includes(`--mcp-config '${cfg}'`));
   assert.ok(cmd.includes(`--add-dir '${art}'`));
   assert.ok(!cmd.includes('relative/dir'));
+  // A control character (here a tab) in a path: the folder is not passed on.
+  const tabbed = path.resolve(`a${String.fromCharCode(9)}b`);
+  assert.ok(!withTaskBrief('claude', { briefPath: path.resolve('b.md'), addDirs: [tabbed] }).includes(tabbed));
   // A rule that would break the single quotes is dropped.
   assert.ok(!withTaskBrief('claude', { briefPath: path.resolve('b.md'), disallowedTools: ["Bash(x';rm)"] }).includes('rm'));
 });
@@ -309,6 +339,48 @@ test('a reached spend cap stops generation, files one card and denies the tool t
   assert.equal(launch.mcpConfig.mcpServers.meshy, undefined);
   assert.match(launch.note, /Spend cap reached, do not use: meshy/);
   assert.equal(h.guard.recordSpend('junk').ok, false);
+});
+
+test('a tool that stays down stops pausing after MAX_TOOL_DOWN_PAUSES and the usual failure path takes over', () => {
+  const h = guardHarness();
+  const res = { ok: false, error: 'toolDown', tool: 'unity' };
+  for (let i = 0; i < MAX_TOOL_DOWN_PAUSES; i += 1) assert.equal(h.guard.toolDown(res, 'builder'), true);
+  assert.equal(h.guard.toolDown(res, 'builder'), false);
+  assert.equal(h.waits.length, MAX_TOOL_DOWN_PAUSES);
+  assert.equal(h.run().toolDownPauses, MAX_TOOL_DOWN_PAUSES);
+});
+
+test('a finished run books no spend', () => {
+  const h = guardHarness({ phase: 'done' });
+  assert.deepEqual(h.guard.recordSpend({ tool: 'meshy', costUsd: 1 }), { ok: false, reason: 'noRun' });
+});
+
+test('the kit note names the paid tools budget and never cuts the package prompt', () => {
+  const launch = K.roleLaunch(K.defaultToolkit('unity'), 'builder', { spendCaps: { meshy: 4 } });
+  assert.ok(launch.note.includes('higgsfield $10.00, meshy $4.00'));
+  const prompt = 'p'.repeat(7990);
+  let planned = null;
+  const builder = createGodModeBuilder({
+    orchestra: {
+      makePlan: async () => {
+        planned = await wrapped({});
+        return new Promise(() => {});
+      },
+      launch: async () => ({ ok: true }),
+      cancelPlanWait: () => {},
+    },
+    profileId: () => null,
+    env: () => ({}),
+    isUnityProject: () => false,
+    toolsFor: () => ({ allowedTools: [], disallowedTools: [], mcpConfigPath: null, addDirs: [], note: 'N'.repeat(50) }),
+  });
+  const wrapped = builder.wrapPlanner(async () => ({ ok: true, raw: { packages: [{ id: 'p1', todoAts: [1], prompt }] } }));
+  builder.build({ projectId: 'x', repoPath: '/repo', cards: [{ at: 1, text: 'x' }], checkCommand: '' });
+  return new Promise((resolve) => setImmediate(resolve)).then(() => {
+    const out = planned.raw.packages[0].prompt;
+    assert.ok(out.startsWith(prompt), 'the prompt is whole');
+    assert.ok(out.length <= 8000);
+  });
 });
 
 test('a tool that is down pauses the run with a notification instead of retrying', () => {

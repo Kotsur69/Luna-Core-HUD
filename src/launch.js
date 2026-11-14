@@ -184,8 +184,12 @@ function withTaskBrief(command, task, firstMessage) {
   return parts.join(' ');
 }
 
-/** An absolute path that fits a single-quoted shell argument, or null. */
-const quotablePath = (p) => (typeof p === 'string' && p && path.isAbsolute(p) && !UNSAFE_QUOTE_RE.test(p) ? `'${p}'` : null);
+// eslint-disable-next-line no-control-regex
+const PATH_CONTROL_RE = /[\u0000-\u001f\u007f]/;
+
+/** An absolute path that fits a single-quoted shell argument (no quotes, no control characters), or null. */
+const quotablePath = (p) =>
+  (typeof p === 'string' && p && path.isAbsolute(p) && !UNSAFE_QUOTE_RE.test(p) && !PATH_CONTROL_RE.test(p) ? `'${p}'` : null);
 
 /**
  * The tool kit's flags of a Luna's Work worker task (src/lunasworkToolkitLaunch.js):

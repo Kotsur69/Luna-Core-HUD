@@ -14,7 +14,10 @@
 //                                 pauses the run (the usage-limit wait path:
 //                                 armWait, waitReason 'toolDown') for
 //                                 TOOL_DOWN_WAIT_MS with a notification, instead
-//                                 of retryLater's quick retries. true = handled
+//                                 of retryLater's quick retries. true = handled.
+//                                 At most MAX_TOOL_DOWN_PAUSES per run: past
+//                                 that it returns false and the caller's usual
+//                                 failure path (retryLater -> STOP) takes over
 //
 // Never throws: a failed hook or card write is a run-log line.
 // ============================================================================
@@ -25,6 +28,9 @@ const { checkSpend, spendCapCard, toolDownOf, normalizeSpend, normalizeSpendCaps
 
 const TOOL_DOWN_WAIT_MS = 30 * 60 * 1000;
 const TOOL_DOWN_REASON = 'toolDown';
+// 6 x 30 min: a tool still down after three hours is a setup problem, not a blip.
+const MAX_TOOL_DOWN_PAUSES = 6;
+const DONE_PHASE = 'done';
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err instanceof Error ? err.message : String(err));
@@ -36,6 +42,7 @@ function cleanGuardFields(raw) {
     spendCaps: normalizeSpendCaps(r.spendCaps),
     spend: normalizeSpend(r.spend),
     spendCapped: [...new Set((Array.isArray(r.spendCapped) ? r.spendCapped : []).filter((t) => PAID_TOOLS.includes(t)))],
+    toolDownPauses: Number.isInteger(r.toolDownPauses) && r.toolDownPauses > 0 ? Math.min(r.toolDownPauses, MAX_TOOL_DOWN_PAUSES) : 0,
   };
 }
 
@@ -54,7 +61,8 @@ function createToolGuard(ctx) {
    */
   function recordSpend(payload) {
     const run = ctx.run();
-    if (!run) return { ok: false, reason: 'noRun' };
+    // A finished run books nothing: its workers are gone.
+    if (!run || run.phase === DONE_PHASE) return { ok: false, reason: 'noRun' };
     const p = isObj(payload) ? payload : {};
     const fields = cleanGuardFields(run);
     if (fields.spendCapped.includes(p.tool)) return { ok: false, reason: 'capReached', tool: p.tool };
@@ -86,8 +94,14 @@ function createToolGuard(ctx) {
     const down = toolDownOf(result);
     const run = ctx.run();
     if (!down || !run) return false;
+    const pauses = cleanGuardFields(run).toolDownPauses;
+    if (pauses >= MAX_TOOL_DOWN_PAUSES) {
+      ctx.logEvent(`${role}: ${down.tool} still down after ${pauses} pauses - no more waiting, the usual failure path takes over`);
+      return false;
+    }
+    ctx.update({ toolDownPauses: pauses + 1 });
     const minutes = Math.round(TOOL_DOWN_WAIT_MS / 60000);
-    ctx.logEvent(`${role}: ${down.tool} is down (${down.detail.slice(0, 150)}) - the run pauses ${minutes} min instead of retrying`);
+    ctx.logEvent(`${role}: ${down.tool} is down (${down.detail.slice(0, 150)}) - the run pauses ${minutes} min instead of retrying (${pauses + 1} of ${MAX_TOOL_DOWN_PAUSES})`);
     for (const fn of hooks) {
       try {
         Promise.resolve(fn({ ...run }, { ...down, role })).catch((err) => log(`[lunaswork] onToolDown failed: ${errText(err)}`));
@@ -102,4 +116,4 @@ function createToolGuard(ctx) {
   return { recordSpend, cappedTools, toolDown, toolDownOf };
 }
 
-module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, cleanGuardFields, createToolGuard };
+module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, MAX_TOOL_DOWN_PAUSES, cleanGuardFields, createToolGuard };

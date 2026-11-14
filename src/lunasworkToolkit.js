@@ -28,7 +28,7 @@
 //   launch       roleLaunch(kit, role, opts) -> mcpConfig, allowedTools,
 //                disallowedTools, addDirs, note (the worker brief's lines)
 //   guardrails   GIT_GUARD_RULES (no force-push, no history rewrite),
-//                WRITE_GUARD_RULES, isWritablePath, matchesBashRule
+//                HOME_GUARD_RULES, isWritablePath, matchesBashRule
 //   spend        DEFAULT_SPEND_CAPS_USD, normalizeSpendCaps, validateSpendCaps,
 //                checkSpend(run, tool, cost), spendCapCard
 //   tool down    toolDownOf(result) - a step result that means a tool is down
@@ -82,34 +82,53 @@ const MAX_SKILLS = 20;
 const MAX_ART_DIRS = 5;
 const MAX_PATH_CHARS = 500;
 
-// No force-push and no history rewrite, whatever the kit allows. Deny rules
-// apply in every permission mode, bypassPermissions included. Both forms: the
-// prefix rule (`:*`) and the wildcard one for a flag after the remote.
-const GIT_GUARD_RULES = Object.freeze([
-  'Bash(git push --force:*)',
-  'Bash(git push -f:*)',
-  'Bash(git push --force-with-lease:*)',
-  'Bash(git push --force-if-includes:*)',
-  'Bash(git push --mirror:*)',
-  'Bash(git push * --force*)',
-  'Bash(git push * -f*)',
-  'Bash(git push *+*)',
-  'Bash(git reset --hard:*)',
-  'Bash(git rebase:*)',
-  'Bash(git filter-branch:*)',
-  'Bash(git filter-repo:*)',
-  'Bash(git update-ref:*)',
-  'Bash(git reflog expire:*)',
+// No force-push, no remote ref deletion and no history rewrite, whatever the
+// kit allows. Deny rules apply in every permission mode, bypassPermissions
+// included. Every subcommand pattern is denied after `git` / `git.exe` and
+// after global options (`git -C . push -f`, `git -c x=y push -f`); an alias
+// that could hide one is denied at its definition. What the CLI cannot see
+// through (a script, `bash -c`, another language) needs the remote's branch
+// protection - see docs/tbc_docs/LUNAS_WORK_PLAN.md "Tool kit per role".
+const GIT_BINS = Object.freeze(['git', 'git.exe']);
+const GUARDED_GIT = Object.freeze([
+  'push*--force*', 'push* -f*', 'push* -uf*', 'push* -fu*', 'push*--mirror*', 'push* +*',
+  // `:**`, not `:*`: a rule ending in `:*` is the CLI's prefix syntax.
+  'push*--delete*', 'push* -d*', 'push* :**', 'push*--prune*',
+  'reset*--hard*', 'reset*--merge*', 'reset*--keep*',
+  'rebase*', 'filter-branch*', 'filter-repo*', 'replace*', 'update-ref*',
+  'reflog expire*', 'reflog delete*', 'gc*--prune*', 'stash clear*', 'clean* -*f*',
+  'config*alias*',
 ]);
-// Writes outside the repo: the places a worker must never touch. The CLI has
-// no "deny all but", so the brief carries the positive rule (repo + art dirs).
-const WRITE_GUARD_RULES = Object.freeze([
+const GIT_GUARD_RULES = Object.freeze(GIT_BINS.flatMap((bin) => [
+  ...['', ' -*'].flatMap((globals) => GUARDED_GIT.map((sub) => `Bash(${bin}${globals} ${sub})`)),
+  // `git -c alias.p='push -f' p`: an alias defined for one command.
+  `Bash(${bin} -c*alias*)`,
+]));
+// Outside the repo: places a worker must never write (nor read, for the keys).
+// The CLI has no "deny all but", so the brief carries the positive rule (repo
+// + art dirs); a write through Bash is not covered by Edit rules.
+const HOME_GUARD_RULES = Object.freeze([
   'Edit(~/.claude/**)',
+  'Edit(~/.claude.json)',
   'Edit(~/.ssh/**)',
   'Edit(~/.aws/**)',
+  'Edit(~/.gnupg/**)',
+  'Edit(~/.docker/**)',
+  'Edit(~/.kube/**)',
   'Edit(~/.gitconfig)',
+  'Edit(~/.git-credentials)',
+  'Edit(~/.npmrc)',
+  'Edit(~/.bashrc)',
+  'Edit(~/.bash_profile)',
+  'Edit(~/.profile)',
   'Edit(~/.config/**)',
   'Edit(~/AppData/**)',
+  'Edit(~/Documents/PowerShell/**)',
+  'Edit(~/Documents/WindowsPowerShell/**)',
+  'Read(~/.ssh/**)',
+  'Read(~/.aws/**)',
+  'Read(~/.gnupg/**)',
+  'Read(~/.git-credentials)',
 ]);
 
 // ---- spend caps --------------------------------------------------------------------
@@ -217,6 +236,12 @@ function normalizeToolkit(raw, adapter, opts = {}) {
 
 const ENV_REF_RE = /^\$\{[A-Z_][A-Z0-9_]{0,63}\}$/;
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+// An arg that names a credential and carries no ${VAR} reference: refused, a
+// literal key would sit in the --mcp-config file and the process list.
+const SECRET_WORD_RE = /(api[-_]?key|token|secret|passw|bearer|authorization|credential)/i;
+// A bare flag name (`--api-key`, its value in the next arg) is fine; `--api-key=<value>` is not.
+const hasSecretShape = (arg) =>
+  typeof arg === 'string' && SECRET_WORD_RE.test(arg) && !arg.includes('${') && (!arg.startsWith('-') || /[=:]/.test(arg));
 const MAX_ARGS = 30;
 
 /** env / headers: only `${VAR}` references - a literal value would put a secret on disk. */
@@ -246,6 +271,8 @@ function validateServer(raw, id) {
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return fail('url must be http or https');
     if (url.username || url.password) return fail('url must not carry credentials');
+    // A key in the query string would sit in the --mcp-config file: env / headers only.
+    if (url.search || url.hash) return fail('url must not carry a query string or fragment (pass keys as ${VAR} headers)');
     if (String(raw.url).length > MAX_PATH_CHARS) return fail('url is too long');
     return { server: { type: raw.type, url: String(raw.url), ...extras(['headers']) }, reason: null };
   }
@@ -257,6 +284,7 @@ function validateServer(raw, id) {
   if (!Array.isArray(args) || args.length > MAX_ARGS || args.some((a) => typeof a !== 'string' || a.length > MAX_PATH_CHARS || CONTROL_CHARS.test(a))) {
     return fail(`args must be a list of at most ${MAX_ARGS} one-line strings`);
   }
+  if (args.some(hasSecretShape)) return fail('an arg looks like a key or token: pass it through env as a ${VAR} reference');
   return { server: { type: 'stdio', command: raw.command.trim(), args: [...args], ...extras(['env']) }, reason: null };
 }
 
@@ -298,7 +326,7 @@ const toolRules = (id) => {
  * Claude config loads is closed too. The guard rules are always denied.
  * @param {object} kit normalizeToolkit()
  * @param {string} role a KIT_ROLES entry
- * @param {{toolServers?:object, capped?:string[], repoPath?:string}} [opts]
+ * @param {{toolServers?:object, capped?:string[], repoPath?:string, spendCaps?:object}} [opts]
  * @returns {{role:string, tools:string[], skills:string[], mcpConfig:{mcpServers:object},
  *   allowedTools:string[], disallowedTools:string[], addDirs:string[], fromClaudeSetup:string[],
  *   note:string}|null} null for a role outside the kit (the fixed roles)
@@ -325,11 +353,11 @@ function roleLaunch(kit, role, opts = {}) {
     skills: [...kit[role].skills],
     mcpConfig: { mcpServers },
     allowedTools: tools.flatMap(toolRules),
-    disallowedTools: [...GIT_GUARD_RULES, ...WRITE_GUARD_RULES, ...denied.flatMap(toolRules)],
+    disallowedTools: [...GIT_GUARD_RULES, ...HOME_GUARD_RULES, ...denied.flatMap(toolRules)],
     addDirs: [...artDirs],
     fromClaudeSetup,
   };
-  return { ...result, note: kitNote(result, { capped: [...capped], repoPath: opts.repoPath }) };
+  return { ...result, note: kitNote({ ...result, spendCaps: normalizeSpendCaps(opts.spendCaps) }, { capped: [...capped], repoPath: opts.repoPath }) };
 }
 
 /** The lines a worker's brief gets about its kit and the guardrails. */
@@ -337,6 +365,10 @@ function kitNote(launch, { capped = [], repoPath } = {}) {
   const lines = ["## Tool kit (Luna's Work)", `Tools you may use: ${launch.tools.join(', ')}.`];
   if (launch.skills.length) lines.push(`Skills to load when they fit: ${launch.skills.join(', ')}.`);
   if (capped.length) lines.push(`Spend cap reached, do not use: ${capped.join(', ')}.`);
+  const paid = launch.tools.filter((t) => PAID_TOOLS.includes(t));
+  if (paid.length && isObj(launch.spendCaps)) {
+    lines.push(`Paid tools have a budget for this whole run: ${paid.map((t) => `${t} ${money(launch.spendCaps[t])}`).join(', ')}. Generate only what your cards need, and say in your final message how many generations you made.`);
+  }
   const roots = [repoPath ? 'this repository' : null, ...launch.addDirs].filter(Boolean);
   lines.push(`Write only inside ${roots.length ? roots.join(', ') : 'this repository'}.`);
   lines.push('Never force-push, reset --hard, rebase or rewrite history: those commands are blocked.');
@@ -377,10 +409,31 @@ const within = (root, target) => {
  * @param {string} target
  * @param {{repoPath:string, artDirs?:string[]}} roots
  */
-function isWritablePath(target, { repoPath, artDirs = [] } = {}) {
+function isWritablePath(target, { repoPath, artDirs = [] } = {}, fsImpl = require('fs')) {
   if (typeof target !== 'string' || !target || CONTROL_CHARS.test(target) || typeof repoPath !== 'string' || !repoPath) return false;
-  const abs = path.resolve(repoPath, target);
-  return [repoPath, ...(Array.isArray(artDirs) ? artDirs : [])].some((root) => typeof root === 'string' && root && within(path.resolve(root), abs));
+  const abs = realPathOf(path.resolve(repoPath, target), fsImpl);
+  return [repoPath, ...(Array.isArray(artDirs) ? artDirs : [])]
+    .some((root) => typeof root === 'string' && root && within(realPathOf(path.resolve(root), fsImpl), abs));
+}
+
+/**
+ * The real path of `p`: its deepest existing ancestor resolved through
+ * symlinks / junctions, the rest appended - so a junction inside the repo that
+ * points outside it is judged by where it really goes.
+ */
+function realPathOf(p, fsImpl) {
+  const rest = [];
+  let cur = p;
+  for (;;) {
+    try {
+      return path.join(fsImpl.realpathSync.native ? fsImpl.realpathSync.native(cur) : fsImpl.realpathSync(cur), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return p;
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
 }
 
 // ---- spend caps ------------------------------------------------------------------------------
@@ -452,7 +505,7 @@ function spendCapCard(tool, spent, cap) {
 // ---- tool down ---------------------------------------------------------------------------------
 
 const TOOL_DOWN_PATTERNS = Object.freeze([
-  { tool: 'unity', re: /Unity editor not open|Unity Pipeline port file|unity-pipeline|MCP for Unity/i },
+  { tool: 'unity', re: /Unity editor not open|Unity Pipeline port file/i },
   { tool: 'blender', re: /blender[^\n]{0,40}(not connected|refused|unreachable|failed to connect)/i },
   { tool: 'higgsfield', re: /higgsfield[^\n]{0,40}(not connected|refused|unreachable|failed to connect|503|502)/i },
   { tool: 'comfyui', re: /comfyui[^\n]{0,40}(not connected|refused|unreachable|failed to connect)/i },
@@ -482,7 +535,8 @@ module.exports = {
   REQUIRED_TOOLS,
   GAMEDEV_SKILLS,
   GIT_GUARD_RULES,
-  WRITE_GUARD_RULES,
+  HOME_GUARD_RULES,
+  hasSecretShape,
   DEFAULT_HIGGSFIELD_CAP_USD,
   DEFAULT_MESHY_CAP_USD,
   DEFAULT_SPEND_CAPS_USD,

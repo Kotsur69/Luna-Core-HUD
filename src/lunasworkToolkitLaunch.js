@@ -28,7 +28,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const settingsStore = require('./lunasworkSettings');
-const { roleLaunch } = require('./lunasworkToolkit');
+const { roleLaunch, hasSecretShape } = require('./lunasworkToolkit');
 
 const TOOLS_DIR = 'lunaswork-tools';
 const ENV_REF_RE = /^\$\{[A-Z_][A-Z0-9_]{0,63}\}$/;
@@ -36,10 +36,16 @@ const ENV_REF_RE = /^\$\{[A-Z_][A-Z0-9_]{0,63}\}$/;
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 
-/** True when any env / headers value is a literal instead of a ${VAR} reference. */
+/**
+ * True when a server could carry a key in the file: an env / headers value that
+ * is not a ${VAR} reference, a URL with a query string, or a key-shaped arg.
+ */
 function hasLiteralSecret(mcpConfig) {
   const servers = isObj(mcpConfig) && isObj(mcpConfig.mcpServers) ? Object.values(mcpConfig.mcpServers) : [];
-  return servers.some((s) => ['env', 'headers'].some((k) => isObj(s[k]) && Object.values(s[k]).some((v) => typeof v !== 'string' || !ENV_REF_RE.test(v))));
+  return servers.some((s) => !isObj(s)
+    || ['env', 'headers'].some((k) => isObj(s[k]) && Object.values(s[k]).some((v) => typeof v !== 'string' || !ENV_REF_RE.test(v)))
+    || (typeof s.url === 'string' && /[?#]/.test(s.url))
+    || (Array.isArray(s.args) && s.args.some(hasSecretShape)));
 }
 
 /** One file per project and role: the name never carries the project id itself. */
@@ -56,6 +62,14 @@ function createToolsFor(deps) {
   const fs = deps.fs || require('fs');
   const log = deps.log || (() => {});
 
+  const readOrNull = (file) => {
+    try {
+      return fs.readFileSync(file, 'utf8');
+    } catch {
+      return null; // missing: written below
+    }
+  };
+
   function writeConfig(projectId, role, mcpConfig) {
     if (hasLiteralSecret(mcpConfig)) {
       log(`[lunaswork-tools] ${role}: a server definition holds a literal env / header value - not written`);
@@ -63,8 +77,13 @@ function createToolsFor(deps) {
     }
     try {
       const file = path.join(deps.dir(), TOOLS_DIR, configFileName(projectId, role));
+      const body = JSON.stringify(mcpConfig, null, 2);
+      if (readOrNull(file) === body) return file;
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(mcpConfig, null, 2), { encoding: 'utf8', mode: 0o600 });
+      // A tab starting right now must never read a half-written file: tmp + rename.
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, body, { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(tmp, file);
       return file;
     } catch (err) {
       log(`[lunaswork-tools] ${role}: --mcp-config not written (${errText(err)})`);
@@ -82,7 +101,12 @@ function createToolsFor(deps) {
       const r = isObj(req) ? req : {};
       const settings = settingsStore.normalizeSettings(deps.readSettings());
       const kit = settingsStore.toolkitFor(settings, r.projectId);
-      const launch = roleLaunch(kit, r.role, { toolServers: settings.toolServers, capped: r.capped, repoPath: r.repoPath });
+      const launch = roleLaunch(kit, r.role, {
+        toolServers: settings.toolServers,
+        capped: r.capped,
+        repoPath: r.repoPath,
+        spendCaps: settingsStore.spendCapsFor(settings, r.projectId),
+      });
       if (!launch) return null;
       const servers = Object.keys(launch.mcpConfig.mcpServers);
       const mcpConfigPath = servers.length ? writeConfig(r.projectId, r.role, launch.mcpConfig) : null;
