@@ -445,13 +445,13 @@ test('the candidate about a repeated failure is saved with usefulness of at leas
   const gotcha = candidate('Ledger keeps order test fails in parallel verify', { usefulness: 20 });
   const other = candidate('Do not junction node_modules into a worktree', { usefulness: 70 });
   // Shares some words with the failure, but the gotcha above matches it better: only one is floored.
-  const near = candidate('Keep ledger writes atomic on Windows', { usefulness: 40 });
+  const near = candidate('Keep ledger writes atomic on Windows', { usefulness: 60 });
   s.state.reply = () => (s.state.prompts.length < 3 ? reply() : reply(near, gotcha, other));
   for (const id of ['prun1', 'prun2', 'prun3']) await s.capture.capture(runOf(id, ledgerFailure()));
 
   const byTitle = Object.fromEntries(scan(s.dir).records.map(([, r]) => [r.title, r]));
   assert.equal(byTitle[gotcha.title].usefulness, 80);
-  assert.equal(byTitle[near.title].usefulness, 40, 'only the best match is floored');
+  assert.equal(byTitle[near.title].usefulness, 60, 'only the best match is floored');
   assert.equal(byTitle[other.title].usefulness, 70, 'a candidate about something else keeps its score');
 });
 

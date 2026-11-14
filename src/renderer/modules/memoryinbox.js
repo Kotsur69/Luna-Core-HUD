@@ -606,6 +606,7 @@ async function promote(key) {
 /** The i18n key of a failed auto-accept call. */
 export function autoReasonKey(reason) {
   if (reason === 'not-offered') return 'mem.auto.err.notOffered';
+  if (reason === 'score-failing') return 'mem.auto.err.scoreFailing';
   if (reason === 'not-found' || reason === 'not-auto') return 'mem.inbox.err.gone';
   return 'mem.inbox.err.failed';
 }

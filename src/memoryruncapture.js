@@ -161,7 +161,7 @@ function createRunCapture({
   /** Writes the kept candidates; one that cannot be written does not stop the others. */
   function saveRecords(records) {
     let saved = 0;
-    // Opt-in per type: a candidate may land confirmed (src/memoryautoaccept.js).
+    // Opt-in per type or for a 90+ score: a candidate may land confirmed (src/memoryautoaccept.js).
     const land = createLanding({ file: paths.autoAccept, dir: paths.dir, log, now: now() });
     for (const candidate of records) {
       try {

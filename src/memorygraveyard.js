@@ -1,8 +1,8 @@
 // ============================================================================
-// LunaCore - the memory graveyard: candidates dropped under the usefulness floor
+// LunaCore - the memory graveyard: candidates auto-rejected for a low score
 // ----------------------------------------------------------------------------
-// A candidate the model scored under USEFULNESS_FLOOR (src/memoryextract.js,
-// LOW_USEFULNESS) never reaches the inbox. Session capture (memorycapture.js)
+// A candidate whose capture score is under AUTO_REJECT_BELOW
+// (src/memoryextract.js, LOW_USEFULNESS) never reaches the inbox. Session capture (memorycapture.js)
 // and God Mode run capture (memoryruncapture.js) keep it here instead, so the
 // floor can be checked by hand and a wrongly dropped memory brought back:
 //

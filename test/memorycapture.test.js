@@ -456,3 +456,68 @@ test('a candidate under the usefulness floor lands in the graveyard with its who
   // The kept candidate is not buried.
   assert.ok(!graves.some((g) => g.record.title === 'Name the installer asset with dashes'));
 });
+
+// ---- the score thresholds (src/memoryextract.js) through a real session capture ----------
+
+const auto = require('../src/memoryautoaccept.js');
+
+/** A capture whose model scores three candidates 40, 70 and 95. */
+function scoredCapture(t, name) {
+  const s = setup(t);
+  const file = s.transcript(name, session('the thresholds'));
+  const scored = (title, usefulness) => ({ type: 'gotcha', scope: 'project', title, body: `${title}. Unique body for ${title}.`, usefulness });
+  s.state.reply = {
+    ok: true,
+    answer: { candidates: [scored('The window was resized once', 40), scored('Name the installer asset with dashes', 70), scored('Retry says busy after a sleep', 95)] },
+  };
+  s.capture.track({ file, project: PROJECT });
+  return s;
+}
+
+test('acceptance: 40 goes to the graveyard; 70 and 95 wait in the inbox while the score switch is off (the default)', async (t) => {
+  const s = scoredCapture(t, 'cdcdcdcd-8888');
+  // Plenty of evidence for the type: only the switch keeps the 95 waiting.
+  for (let i = 0; i < auto.AUTO_MIN_DECISIONS; i++) s.log.add({ ev: 'approved', key: `${PROJECT}/a${i}`, type: 'gotcha' });
+
+  await s.capture.tick();
+
+  assert.equal(auto.readScoreAuto(memoryPaths(s.configDir).autoAccept), false, 'off by default');
+  assert.deepEqual(
+    readGraveyard(graveyardPath(s.configDir), s.clock.at).map((g) => [g.record.title, g.score]),
+    [['The window was resized once', 40]],
+  );
+  assert.deepEqual(
+    s.memories().map((r) => [r.title, r.usefulness, r.confidence, auto.isAutoAccepted(r)]).sort(),
+    [
+      ['Name the installer asset with dashes', 70, 'observed', false],
+      ['Retry says busy after a sleep', 95, 'observed', false],
+    ],
+  );
+  assert.equal(s.log.read().filter((e) => e.ev === 'auto-accepted').length, 0);
+});
+
+test('acceptance: with the score switch on, the 95 is auto-accepted with Undo; the 70 still waits', async (t) => {
+  const s = scoredCapture(t, 'efefefef-9999');
+  for (let i = 0; i < auto.AUTO_MIN_DECISIONS; i++) s.log.add({ ev: 'approved', key: `${PROJECT}/a${i}`, type: 'gotcha' });
+  auto.setScoreAuto(memoryPaths(s.configDir).autoAccept, true);
+
+  await s.capture.tick();
+
+  const byTitle = Object.fromEntries(s.memories().map((r) => [r.title, r]));
+  assert.equal(byTitle['Retry says busy after a sleep'].confidence, 'confirmed');
+  assert.equal(auto.isAutoAccepted(byTitle['Retry says busy after a sleep']), true);
+  assert.equal(byTitle['Name the installer asset with dashes'].confidence, 'observed');
+  assert.equal(byTitle['The window was resized once'], undefined, 'the 40 is in the graveyard');
+  const key = `${PROJECT}/retry-says-busy-after-a-sleep`;
+  assert.deepEqual(
+    s.log.read().filter((e) => e.key === key).map((e) => [e.ev, e.usefulness]),
+    [
+      ['proposed', 95],
+      ['auto-accepted', 95],
+    ],
+  );
+  // It is on the memory window's existing 'auto-accepted, Undo' list.
+  const today = new Date(s.clock.at).toISOString().slice(0, 10);
+  assert.deepEqual(auto.recentAutoAccepted(scan(memoryPaths(s.configDir).dir).records, today).map((r) => r.key), [key]);
+  assert.equal(auto.undoAutoAccept(memoryPaths(s.configDir).dir, key, today).ok, true);
+});

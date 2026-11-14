@@ -29,13 +29,15 @@
 // and what was approved (src/memorylog.js). Every decision is written to that log.
 //
 // Auto-accept per type (src/memoryautoaccept.js); memory:inbox carries `auto`
-// ({types, recent, bar} or null):
+// ({types, score, recent, bar} or null). type 'score' (SCORE_SWITCH) is the
+// 'Auto-save memories scored 90+' switch: no numbers gate it, it is opt-in.
 //
-//   memory:auto-set  ({type, on})    -> {ok, type, on} | {ok:false, reason}   'not-offered' = the numbers do not allow it
+//   memory:auto-set  ({type, on})    -> {ok, type, on} | {ok:false, reason}   'not-offered' = the numbers do not allow it,
+//                                                                             'score-failing' = the score switch's own rate is under the bar
 //   memory:auto-undo (key)           -> {ok, key} | {ok:false, reason}        'not-auto' = not a recent auto-accept
 //
-// The graveyard (src/memorygraveyard.js): candidates dropped under the
-// usefulness floor, kept in a LOCAL file. An entry is named by its entry id
+// The graveyard (src/memorygraveyard.js): candidates scored under
+// AUTO_REJECT_BELOW (src/memoryextract.js), kept in a LOCAL file. An entry is named by its entry id
 // (never a memory key, never a path); main checks its shape and that it is in
 // the file.
 //
@@ -194,8 +196,16 @@ function registerMemoryIpc({
       enforceAuto(file, evs);
       return {
         types: auto.autoStatus(auto.readAuto(file), auto.typeStats(evs, now())),
+        score: { id: auto.SCORE_SWITCH, on: auto.readScoreAuto(file), ...auto.scoreStats(evs, now()) },
         recent: auto.recentAutoAccepted(scan(dir()).records, isoDate(now())),
-        bar: { min: auto.AUTO_MIN_DECISIONS, days: auto.AUTO_WINDOW_DAYS, on: auto.AUTO_ON_RATE, off: auto.AUTO_OFF_RATE, undoDays: auto.AUTO_UNDO_DAYS },
+        bar: {
+          min: auto.AUTO_MIN_DECISIONS,
+          days: auto.AUTO_WINDOW_DAYS,
+          on: auto.AUTO_ON_RATE,
+          off: auto.AUTO_OFF_RATE,
+          undoDays: auto.AUTO_UNDO_DAYS,
+          saveFrom: auto.AUTO_SAVE_FROM,
+        },
       };
     } catch (err) {
       console.error('[memory] auto-accept status failed:', errText(err));
@@ -269,11 +279,20 @@ function registerMemoryIpc({
   // this PC's numbers offer it; off always works. Undo deletes only a memory on
   // the recent auto-accept list, never another confirmed one.
   ipcMain.handle('memory:auto-set', (_event, req) => {
-    const type = req && typeof req === 'object' && CANDIDATE_TYPES.includes(req.type) ? req.type : null;
+    const known = (t) => CANDIDATE_TYPES.includes(t) || t === auto.SCORE_SWITCH;
+    const type = req && typeof req === 'object' && known(req.type) ? req.type : null;
     if (!type || typeof req.on !== 'boolean') return { ok: false, reason: 'bad-request' };
     try {
       const file = autoFile();
       if (!file) return { ok: false, reason: 'failed' };
+      if (type === auto.SCORE_SWITCH) {
+        // Opt-in, no numbers to earn (decide() still asks the type's per candidate),
+        // but a switch whose own undo rate failed would only turn itself off again.
+        if (req.on && auto.isFailing(auto.scoreStats(events(), now()))) return { ok: false, reason: 'score-failing' };
+        auto.setScoreAuto(file, req.on);
+        onSettingsChanged();
+        return { ok: true, type, on: req.on };
+      }
       if (req.on && !auto.isOffered(auto.typeStats(events(), now())[type])) return { ok: false, reason: 'not-offered' };
       auto.setAuto(file, type, req.on);
       onSettingsChanged();

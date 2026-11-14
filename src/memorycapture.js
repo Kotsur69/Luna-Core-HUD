@@ -22,9 +22,11 @@
 // Processing one piece: digest (src/memorydigest.js) -> prompt -> small model
 // -> filter (src/memoryextract.js) -> the candidates are written to the mirror
 // as `observed` memories. They wait in the inbox (src/memoryinbox.js). A
-// candidate the model scored under the usefulness floor never gets there: it
-// is logged (src/memorylog.js, `dropped`) with its score, and kept whole in
-// the local graveyard (src/memorygraveyard.js), where it can be restored. The same model
+// candidate scored under AUTO_REJECT_BELOW (src/memoryextract.js) never gets
+// there: it is logged (src/memorylog.js, `dropped`) with its score, and kept
+// whole in the local graveyard (src/memorygraveyard.js), where it can be
+// restored. One scored AUTO_SAVE_FROM or more may land confirmed when Mati
+// switched the score switch on (src/memoryautoaccept.js). The same model
 // call gives the project's "where we stopped" status: it overwrites the
 // project's note (src/memorynote.js) without the inbox; no status, no change.
 //
@@ -247,7 +249,7 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
       return { entry: next, reason: res.reason, saved: 0, called };
     }
     let saved = 0;
-    // Opt-in per type: a candidate may land confirmed (src/memoryautoaccept.js).
+    // Opt-in per type or for a 90+ score: a candidate may land confirmed (src/memoryautoaccept.js).
     const land = createLanding({ file: paths.autoAccept, dir: paths.dir, log, now: now() });
     for (const candidate of res.records) {
       try {

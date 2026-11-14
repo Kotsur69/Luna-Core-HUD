@@ -16,12 +16,22 @@
 // Nothing the model returns is trusted. Each candidate is rebuilt by
 // memoryrecord.checkRecord() and then dropped when it
 //   - trips the secret scanner (it would be held back from the sync anyway),
-//   - scores under USEFULNESS_FLOOR on the model's own keep rule,
+//   - scores under AUTO_REJECT_BELOW on the model's own keep rule (it goes to
+//     the local graveyard instead, src/memorygraveyard.js),
 //   - repeats a memory that exists, or an earlier candidate of the same answer.
 //
-// `usefulness` (0-100) is the model's own judgement of the keep rule. It only
-// sorts the inbox and drops the weakest candidates: a high score never
-// approves anything. A candidate without a score is kept, as "unknown".
+// `usefulness` (0-100) is the model's own judgement of the keep rule. The
+// score thresholds all live here (captureScore, scoreLane):
+//
+//   under AUTO_REJECT_BELOW   graveyard: never in the inbox, restorable by hand
+//   AUTO_REJECT_BELOW to 89   inbox, as every candidate
+//   AUTO_SAVE_FROM and up     inbox too, unless Mati switched 'Auto-save
+//                             memories scored 90+' on: then it may be
+//                             auto-accepted under the per-type auto-accept
+//                             rules (src/memoryautoaccept.js)
+//
+// A high score alone never approves anything. A candidate without a score is
+// kept, as "unknown", and never auto-saved.
 //
 // What is kept is saved as `observed`: searchable, labelled "not verified",
 // never on the project card (decision 5). `supersedes` on an observed memory
@@ -36,16 +46,18 @@
 
 'use strict';
 
-const { TYPES, GLOBAL, MAX_BODY, MAX_TITLE, MAX_SOURCE, checkRecord, keyOf, slug } = require('./memoryrecord');
+const { TYPES, GLOBAL, MAX_BODY, MAX_TITLE, MAX_SOURCE, checkRecord, keyOf, slug, finalScore } = require('./memoryrecord');
 const { hasSecret } = require('./memorysync');
 const { MAX_NOTE_CHARS: MAX_STATUS_CHARS } = require('./memorynote');
 
 /** A `digest` decays and belongs to phase 5; the extractor does not write one. */
 const CANDIDATE_TYPES = TYPES.filter((t) => t !== 'digest');
 const MAX_CANDIDATES = 5;
-/** A candidate the model itself scores under this is dropped before the inbox. */
-const USEFULNESS_FLOOR = 30;
-/** The rejection reason of such a candidate, as the memory log records it. */
+/** A candidate whose capture score is under this goes to the graveyard, not the inbox. */
+const AUTO_REJECT_BELOW = 50;
+/** From this capture score on a candidate may be auto-saved, only with its switch on (src/memoryautoaccept.js). */
+const AUTO_SAVE_FROM = 90;
+/** The rejection reason of a graveyard candidate, as the memory log records it. */
 const LOW_USEFULNESS = 'low usefulness';
 /** Candidates of one answer that are looked at at all. */
 const MAX_RAW_CANDIDATES = 12;
@@ -68,10 +80,32 @@ const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
 
 /**
  * The model's usefulness value as checkRecord should see it. A fraction under
- * 1 means the model answered on a 0-1 scale: rounded, it would fall under the
- * floor and drop a candidate that may be good, so it counts as unknown.
+ * 1 means the model answered on a 0-1 scale: rounded, it would fall under
+ * AUTO_REJECT_BELOW and bury a candidate that may be good, so it counts as unknown.
  */
 const modelScore = (v) => (typeof v === 'number' && v > 0 && v < 1 ? undefined : v);
+
+/**
+ * A candidate's final score at capture time: the usefulness part of
+ * memoryrecord.finalScore. Its other parts are Mati's approval and later
+ * reads; a fresh candidate has neither, so they say nothing about it yet (and
+ * weighted in, they would cap every observed candidate under AUTO_SAVE_FROM).
+ * @param {object} record a checked record
+ * @returns {number|null} 0-100, or null when the model gave no score
+ */
+const captureScore = (record) => finalScore(record).parts.usefulness;
+
+/**
+ * Where a capture score sends a candidate.
+ * @param {number|null} score captureScore()
+ * @returns {'graveyard'|'inbox'|'auto-save'} 'auto-save' only makes it eligible:
+ *   the switch and the per-type rules still decide (src/memoryautoaccept.js)
+ */
+function scoreLane(score) {
+  if (!Number.isInteger(score)) return 'inbox';
+  if (score < AUTO_REJECT_BELOW) return 'graveyard';
+  return score >= AUTO_SAVE_FROM ? 'auto-save' : 'inbox';
+}
 
 // ---- notes in a captured memory's `source` --------------------------------------
 // `source` is the one free line a record has (memoryrecord.checkRecord drops
@@ -231,7 +265,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [], subject
     '- area: optional, one lower-case tag (worktrees, release, sync, feature, ...)',
     '- supersedes: ids from the list above that this memory replaces, usually empty',
     '- usefulness: a whole number 0-100, how well the memory meets BOTH rules above: applicable (would it change what the assistant',
-    `  does next time) and durable (does it matter beyond this task). Under ${USEFULNESS_FLOOR} is dropped unread; be honest, not generous.`,
+    `  does next time) and durable (does it matter beyond this task). Under ${AUTO_REJECT_BELOW} is set aside unread; be honest, not generous.`,
     `No candidates: {"candidates":[]${about.status ? ',"status":"..."' : ''}}`,
     ...(about.status ? STATUS_LINES : []),
     '',
@@ -312,7 +346,7 @@ function candidatesFrom(answer, { project, today, source, existing }) {
       continue;
     }
     // After the secret check: this rejection carries the title into the memory log.
-    if (record.usefulness !== undefined && record.usefulness < USEFULNESS_FLOOR) {
+    if (scoreLane(captureScore(record)) === 'graveyard') {
       rejected.push({ title: record.title, reason: LOW_USEFULNESS, type: record.type, usefulness: record.usefulness, record });
       continue;
     }
@@ -340,8 +374,11 @@ module.exports = {
   sourceNotes,
   withoutSuggestedGlobal,
   SUGGESTED_GLOBAL,
+  captureScore,
+  scoreLane,
   CANDIDATE_TYPES,
   MAX_CANDIDATES,
-  USEFULNESS_FLOOR,
+  AUTO_REJECT_BELOW,
+  AUTO_SAVE_FROM,
   LOW_USEFULNESS,
 };

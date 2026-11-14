@@ -21,6 +21,7 @@
 const crypto = require('crypto');
 const { reportLines } = require('./godmodesnapshot');
 const { SLEEP_COUNTDOWN_MS, SHUTDOWN_DELAY_S } = require('./orchestraPower');
+const { SCORE_SWITCH } = require('./memorylog');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Local run reports older than this give no items (plan Risks: stale items). */
@@ -510,23 +511,35 @@ function collectApproval(state) {
 const MEMORY_TYPE_RE = /^[a-z][a-z-]{0,19}$/;
 const MAX_AUTO_OFF_ITEMS = 8;
 
+/** The highest memory score; the score switch's notice carries its threshold as `from`. */
+const MAX_SCORE = 100;
+
+/** Title, i18n key and vars of one switch-off; null for a score notice without a valid threshold. */
+function autoOffText(e, rate) {
+  if (e.type !== SCORE_SWITCH) {
+    return { title: `Auto-accept for ${e.type} switched itself off (${rate}% approved)`, key: 'hub.item.memoryAutoOff', vars: { type: e.type, rate } };
+  }
+  if (!Number.isInteger(e.from) || e.from < 0 || e.from > MAX_SCORE) return null;
+  return { title: `Auto-save of memories scored ${e.from}+ switched itself off (${rate}% kept)`, key: 'hub.item.memoryScoreAutoOff', vars: { from: e.from, rate } };
+}
+
 /**
  * Auto-accept switches that turned themselves off (src/memoryautoaccept.js):
  * one item per switch-off, keyed by its time so a dismissed one stays gone.
- * @param {unknown} list [{type, rate, at}]
+ * @param {unknown} list [{type, rate, at, from?}] from = the score switch's threshold
  */
 function autoOffItems(list) {
   const items = [];
   for (const e of Array.isArray(list) ? list.slice(0, MAX_AUTO_OFF_ITEMS) : []) {
     if (!isObject(e) || typeof e.type !== 'string' || !MEMORY_TYPE_RE.test(e.type) || !isTime(e.at) || !Number.isFinite(e.rate)) continue;
     const rate = Math.round(Math.min(1, Math.max(0, e.rate)) * 100);
+    const text = autoOffText(e, rate);
+    if (!text) continue;
     items.push({
       id: `memory:autooff:${e.type}:${e.at}`,
       kind: 'info',
       source: 'memory',
-      title: `Auto-accept for ${e.type} switched itself off (${rate}% approved)`,
-      key: 'hub.item.memoryAutoOff',
-      vars: { type: e.type, rate },
+      ...text,
       at: e.at,
       primary: { action: 'openMemoryInbox' },
     });
