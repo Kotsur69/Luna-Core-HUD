@@ -35,6 +35,9 @@
 // dropped: it rides along in `extra` ([[key, rawValue], ...], file order) and
 // is written back after the known ones, so an older PC that rewrites the file
 // does not strip it. Carried only: never shown, searched or sent to a model.
+// Only a one-line `key: value` field is carried. A nested block (`meta:` with
+// indented lines), a key outside lowercase snake_case and a value over the cap
+// are still dropped on a rewrite.
 // ============================================================================
 
 'use strict';

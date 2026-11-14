@@ -283,5 +283,13 @@ test('a secret that only looks like one next to its field name is caught too', (
   // `db_password: hunter2` carried from a newer version: the bare value says nothing.
   const leaky = normalizeRecord({ ...base, extra: [['db_password', 'hunter2']] });
   assert.equal(hasSecret(leaky), true);
+  assert.equal(hasSecret(normalizeRecord({ ...base, extra: [['access_token', 'abc123']] })), true);
   assert.equal(hasSecret(normalizeRecord({ ...base, extra: [['review_state', 'hunter2']] })), false);
+});
+
+test('a harmless field whose name only mentions a secret word does not hold the memory back', () => {
+  // The scrubber alone flags token_count=5 and the like; one such field would stop the sync.
+  for (const [key, value] of [['token_count', '5'], ['key_count', '3'], ['password_hint', 'none'], ['monkey', 'hunter2']]) {
+    assert.equal(hasSecret(normalizeRecord({ ...base, extra: [[key, value]] })), false, key);
+  }
 });
