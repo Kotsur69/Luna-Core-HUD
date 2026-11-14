@@ -16,6 +16,9 @@
 //   ---
 //   <markdown body>
 //
+// Optional, only once something set them (brainFields()): usefulness (0-100),
+// usefulness_note, usefulness_at, last_used, archived, conflicts, compatible.
+//
 // The same record travels three ways: as that file in the local mirror
 // (src/memorystore.js), as the `value` of a sync unit in the cloud's `memory`
 // scope, and as a row of the search index (src/memoryindex.js). It is FLAT on
@@ -60,6 +63,9 @@ const MAX_RECORD_BYTES = 6500;
 const USEFULNESS_MIN = 0;
 const USEFULNESS_MAX = 100;
 const NUMBER_TEXT_RE = /^\s*-?\d+(\.\d+)?\s*$/;
+/** The usefulness scan's score runs 0-100 (the same field as the extractor's guess); its reason is one short line. */
+const MAX_USEFULNESS = USEFULNESS_MAX;
+const MAX_USEFULNESS_NOTE = 200;
 
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 
@@ -141,7 +147,6 @@ function checkRecord(raw) {
   if (raw.area != null && (typeof raw.area !== 'string' || !AREA_RE.test(raw.area))) return { error: 'bad-area' };
   if (raw.source != null && typeof raw.source !== 'string') return { error: 'bad-source' };
   const source = cleanLine((raw.source || '').slice(0, MAX_SOURCE));
-  const usefulness = usefulnessOf(raw.usefulness);
 
   const record = {
     id: raw.id,
@@ -153,7 +158,7 @@ function checkRecord(raw) {
     ...(raw.last_verified ? { last_verified: raw.last_verified } : {}),
     ...(source ? { source } : {}),
     confidence: raw.confidence,
-    ...(usefulness !== undefined ? { usefulness } : {}),
+    ...brainFields(raw),
     supersedes: refs(raw.supersedes),
     links: refs(raw.links).filter((x) => x !== raw.id),
     body,
@@ -161,6 +166,40 @@ function checkRecord(raw) {
   if (Buffer.byteLength(JSON.stringify(record), 'utf8') > MAX_RECORD_BYTES) return { error: 'record-too-big' };
   return { record };
 }
+
+const isDate = (v) => typeof v === 'string' && DATE_RE.test(v);
+
+/**
+ * The optional fields the usefulness scan, decay and the conflict resolver add
+ * (src/memoryscan.js, src/memorydecay.js, src/memoryconflict.js). A record
+ * without them gets none: an older file loads, and syncs, exactly as before.
+ * A bad value is dropped instead of failing the record: these fields are
+ * advisory, and a file that does not parse pauses the whole sync.
+ */
+function brainFields(raw) {
+  const out = {};
+  // One parser for the field, whether the extractor or the scan wrote it.
+  const score = usefulnessOf(raw.usefulness);
+  if (score !== undefined) {
+    out.usefulness = score;
+    const note = typeof raw.usefulness_note === 'string' ? cleanLine(raw.usefulness_note).slice(0, MAX_USEFULNESS_NOTE) : '';
+    if (note) out.usefulness_note = note;
+    if (isDate(raw.usefulness_at)) out.usefulness_at = raw.usefulness_at;
+  }
+  if (isDate(raw.last_used)) out.last_used = raw.last_used;
+  if (isDate(raw.archived)) out.archived = raw.archived;
+  for (const field of ['conflicts', 'compatible']) {
+    const ids = refs(raw[field]).filter((x) => x !== raw.id);
+    if (ids.length) out[field] = ids;
+  }
+  return out;
+}
+
+/** A record's score for the UI: {usefulness, usefulness_note} with null when it was never scanned. */
+const scoreOf = (record) => ({
+  usefulness: Number.isInteger(record.usefulness) ? record.usefulness : null,
+  usefulness_note: record.usefulness_note || null,
+});
 
 /** A clean record, or null. */
 function normalizeRecord(raw) {
@@ -246,10 +285,16 @@ function serializeRecord(record) {
     ['source', record.source],
     ['confidence', record.confidence],
     ['usefulness', record.usefulness === undefined ? undefined : String(record.usefulness)],
+    ['usefulness_note', record.usefulness_note],
+    ['usefulness_at', record.usefulness_at],
+    ['last_used', record.last_used],
+    ['archived', record.archived],
   ]
     .filter(([, v]) => v !== undefined)
     .map(([k, v]) => `${k}: ${emit(v)}`);
   front.push(`supersedes: [${record.supersedes.join(', ')}]`, `links: [${record.links.join(', ')}]`);
+  // Written only when set, so a file without them stays byte for byte the same.
+  for (const field of ['conflicts', 'compatible']) if (Array.isArray(record[field]) && record[field].length) front.push(`${field}: [${record[field].join(', ')}]`);
   return `---\n${front.join('\n')}\n---\n${record.body}\n`;
 }
 
@@ -336,10 +381,14 @@ module.exports = {
   MAX_BODY,
   MAX_TITLE,
   MAX_SOURCE,
+  MAX_RECORD_BYTES,
+  MAX_USEFULNESS,
+  MAX_USEFULNESS_NOTE,
   USEFULNESS_MAX,
   DATE_RE,
   cleanLine,
   slug,
+  scoreOf,
   usefulnessOf,
   validProject,
   projectFromRepoKey,

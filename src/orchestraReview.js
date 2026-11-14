@@ -63,14 +63,18 @@ const oneLine = (v, max) =>
     .trim()
     .slice(0, max);
 
-/** The CLI args of a review call: read-only tools, no MCP, a small cap. */
-function buildReviewArgs() {
+/**
+ * The CLI args of a review call: read-only tools, no MCP, a small cap.
+ * @param {object} [schema] the answer's JSON schema; the A/B critic
+ *   (orchestraVariants.js) asks for a choice instead of a verdict
+ */
+function buildReviewArgs(schema = REVIEW_SCHEMA) {
   return [
     '-p',
     '--output-format',
     'json',
     '--json-schema',
-    JSON.stringify(REVIEW_SCHEMA),
+    JSON.stringify(schema),
     '--model',
     REVIEW_MODEL,
     '--effort',
@@ -172,18 +176,24 @@ function buildBranchReviewPrompt({ branch, base, diff, stat, titles }) {
 /**
  * Runs one review. cwd = the folder the reviewer may read (the package
  * worktree, or the repo for F5); env = a Claude env (never a free profile).
- * @param {{cwd:string, env:object, prompt:string, execImpl?:Function, timeoutMs?:number}} args
+ * A caller with its own answer shape passes `schema` and `validate` (raw ->
+ * object or null); the result then carries the validated fields instead of
+ * a verdict. Without them the review is the pass / fail one.
+ * @param {{cwd:string, env:object, prompt:string, execImpl?:Function, timeoutMs?:number,
+ *   schema?:object, validate?:(raw:unknown) => object|null}} args
  * @returns {Promise<{ok:true, verdict:'pass'|'fail', reasons:string[], costUsd:number|null}
  *   | {ok:false, error:'noClaude'|'timeout'|'failed'|'limit'|'budget'|'badJson'|'badVerdict', detail?:string}>}
  */
-function runReview({ cwd, env, prompt, execImpl = execFile, timeoutMs }) {
+function runReview({ cwd, env, prompt, execImpl = execFile, timeoutMs, schema, validate }) {
+  const custom = !!schema && typeof validate === 'function';
+  const check = custom ? validate : validateVerdict;
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : REVIEW_TIMEOUT_MS;
   return new Promise((resolve) => {
     let child;
     try {
       child = execImpl(
         'claude',
-        buildReviewArgs(),
+        custom ? buildReviewArgs(schema) : buildReviewArgs(),
         { cwd, env, timeout, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
         (error, stdout) => {
           if (error && error.code === 'ENOENT') return resolve({ ok: false, error: 'noClaude' });
@@ -195,7 +205,7 @@ function runReview({ cwd, env, prompt, execImpl = execFile, timeoutMs }) {
           }
           const parsed = parsePlannerOutput(stdout, REVIEW_MODEL);
           if (!parsed.ok) return resolve(parsed);
-          const verdict = validateVerdict(parsed.raw);
+          const verdict = check(parsed.raw);
           // `usage` (tokens, when the CLI reported any) is bookkeeping only.
           const tokens = parsed.usage ? { usage: parsed.usage } : {};
           resolve(verdict ? { ok: true, ...verdict, costUsd: parsed.costUsd, ...tokens } : { ok: false, error: 'badVerdict' });

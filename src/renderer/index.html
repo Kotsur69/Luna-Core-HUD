@@ -2322,6 +2322,38 @@
                   <span class="switch__track"><span class="switch__thumb"></span></span>
                 </span>
               </label>
+              <!-- Opt-in God Mode evolutions (modules/orchestrasettings.js): off by
+                   default, fixed into each NEW plan when it is made. -->
+              <label class="switch-field" data-i18n-title="orchset.ab.hint" title="Planista moze dac paczce dwa warianty (np. biblioteka X / Y). Oba buduja sie rownolegle w osobnych worktree, krytyk wybiera lepszy, do integracji idzie tylko zwyciezca. Tylko workery Claude.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="orchset.ab">Budowy A/B (dwa warianty paczki)</span>
+                  <span id="orchestra-ab-toggle-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="orchestra-ab-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <label class="switch-field" data-i18n-title="orchset.heal.hint" title="Worker zatrzymany na bledzie srodowiska (brak modulu, EPERM/EACCES, EBUSY) dostaje jedna automatyczna naprawe: ponowna instalacje zaleznosci albo ponowienie po chwili, potem jedno wznowienie. Najwyzej raz na rodzaj bledu.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="orchset.heal">Samonaprawa workerow</span>
+                  <span id="orchestra-heal-toggle-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="orchestra-heal-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
+              <label class="switch-field" data-i18n-title="orchset.ctx.hint" title="Z tempa przyrostu kontekstu LunaCore przewiduje, kiedy worker go zapelni. Gdy za mniej niz 10 min, wysyla /compact (raz na okno kontekstu) - tylko workerom z bypassPermissions, u ktorych nie moze byc otwartego pytania o zgode; pozostali dostaja podsumowanie postepu w nastepnym wznowieniu.">
+                <span class="switch-field__text">
+                  <span class="switch-field__label" data-i18n="orchset.ctx">Przewidywanie kontekstu (/compact)</span>
+                  <span id="orchestra-context-toggle-status" class="switch-field__status" data-i18n="mailset.off">wylaczone</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="orchestra-context-toggle" class="switch__input" />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                </span>
+              </label>
             </div>
           </section>
           <!-- Luna's Work (docs/tbc_docs/LUNAS_WORK_PLAN.md slice 1.2c, modules/lunaswork.js).

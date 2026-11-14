@@ -218,6 +218,8 @@ function sessionDeps(ctx) {
     // tab closing ends it (overnight.forgetSession in the close path).
     createSession: guardedSessionFactory(ctx.createSession, ctx.overnight),
     briefDir: () => path.join(ctx.userDir(), BRIEF_DIR),
+    // A worker brief's "## Project memory" section (src/memoryinject.js), or null.
+    projectMemory: (repoPath, pkg) => (typeof ctx.projectMemory === 'function' ? ctx.projectMemory(repoPath, pkg) : null),
     writeBrief: (file, text) => {
       try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -783,6 +785,10 @@ function builderDeps(projectId, ctx, self) {
         integration: prefs.orchestraIntegration,
         allowedTools: prefs.orchestraAllowedTools,
         checkCommand: prefs.orchestraCheckCommand,
+        // Opt-in God Mode evolutions, fixed into each new plan (orchestraSupervisor PLAN_OPT_IN_FLAGS).
+        abBuild: prefs.orchestraAbBuild === true,
+        selfHeal: prefs.orchestraSelfHeal === true,
+        contextGuard: prefs.orchestraContextGuard === true,
       };
       return building() ? ctx.builder.workerSettings(base) : base;
     },

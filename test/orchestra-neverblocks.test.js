@@ -111,7 +111,7 @@ test('stored never-blocks fields are validated; a legacy plan loads with default
 
 // ---- controller ----------------------------------------------------------------
 
-function setup({ packages, settings, addWorktree } = {}) {
+function setup({ packages, settings, addWorktree, projectMemory } = {}) {
   let clock = 1_000_000;
   let seq = 0;
   const log = { sessions: [], writes: [], events: [], worktrees: [], briefs: new Map(), closed: [], finishes: [] };
@@ -166,6 +166,7 @@ function setup({ packages, settings, addWorktree } = {}) {
     clearTimer: (t) => {
       if (t) t.done = true;
     },
+    projectMemory,
   });
   const ctx = { projectId: 'p1', repoPath: '/repo', profileId: 'cloud', env: {} };
   const advance = (ms) => {
@@ -277,6 +278,26 @@ test('an Opus worker that stalls with noMarker is resumed once automatically, th
   a = s.view('a');
   assert.deepEqual([a.state, a.error, a.terminal], ['stalled', 'noMarker', true]);
   assert.equal(s.log.sessions.length, 2, 'no third tab');
+});
+
+test('a resumed worker gets the same project memory section as its first brief', async () => {
+  const asked = [];
+  const s = await started({
+    packages: [pkg('a', [1])],
+    projectMemory: (repo, p) => {
+      asked.push([repo, p.id]);
+      return `## Project memory\n- memo for ${p.id}`;
+    },
+  });
+  assert.match(s.log.briefs.get(s.log.sessions[0].task.briefPath), /## Project memory\n- memo for a/);
+  for (let i = 0; i <= sup.MAX_NUDGES; i += 1) {
+    s.orch.onTurnEnd('s1', turn('working'));
+    s.advance(10_000);
+  }
+  const resumed = s.log.briefs.get(s.log.sessions[1].task.briefPath);
+  assert.match(resumed, /RESUMING/);
+  assert.match(resumed, /## Project memory\n- memo for a/);
+  assert.deepEqual(asked, [['/repo', 'a'], ['/repo', 'a']]);
 });
 
 test('a blocked worker is resumed with the blocker in its brief', async () => {

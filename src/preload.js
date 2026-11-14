@@ -477,6 +477,21 @@ contextBridge.exposeInMainWorld('lunacore', {
   memoryAutoSet: (type, on) => ipcRenderer.invoke('memory:auto-set', { type: typeof type === 'string' ? type : '', on: on === true }),
   /** Undoes one auto-accept: the memory is deleted on every PC. Promise<{ok, key} | {ok:false, reason}>. */
   memoryAutoUndo: (key) => ipcRenderer.invoke('memory:auto-undo', typeof key === 'string' ? key : ''),
+  // All memories of one project, the usefulness scan, conflicts and the archive
+  // (src/memorybrainipc.js). Strings only; main checks every key and project.
+  /** One project's memories with their usefulness and the scan status. Promise<{ok, projects, project, items, total, scan}>. */
+  memoryList: (project) => ipcRenderer.invoke('memory:list', typeof project === 'string' ? project : ''),
+  /** Starts the usefulness scan of one project. Promise<{ok, total} | {ok:false, reason}>. */
+  memoryScan: (project) => ipcRenderer.invoke('memory:scan', typeof project === 'string' ? project : ''),
+  /** Settles a listed conflict: keep 'a', 'b' or 'both'. Promise<{ok, kept} | {ok:false, reason}>. */
+  memoryConflictResolve: (a, b, keep) =>
+    ipcRenderer.invoke('memory:conflict', {
+      a: typeof a === 'string' ? a : '',
+      b: typeof b === 'string' ? b : '',
+      keep: typeof keep === 'string' ? keep : '',
+    }),
+  /** Brings an archived memory back. Promise<{ok, key} | {ok:false, reason}>. */
+  memoryRestore: (key) => ipcRenderer.invoke('memory:restore', typeof key === 'string' ? key : ''),
   /** The memory files changed (capture, a sync, an approval). Returns an unsubscribe. */
   onMemoryChanged: (cb) => {
     if (typeof cb !== 'function') return () => {};

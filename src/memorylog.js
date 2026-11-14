@@ -8,8 +8,9 @@
 //   {"at": <ms>, "ev": "capture",  "project", "reason", "kept", "dropped": {"duplicate": 2}}
 //   {"at": <ms>, "ev": "proposed", "key", "type", "usefulness"?, "by"?: "session"}
 //   {"at": <ms>, "ev": "dropped",  "project", "reason", "type"?, "title"?, "usefulness"?}
-//   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired" | "auto-accepted", "key", "type", "title"?, "usefulness"?}
+//   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired" | "auto-accepted" | "superseded", "key", "type", "title"?, "usefulness"?}
 //   {"at": <ms>, "ev": "auto-off", "type", "rate"}   a type's auto-accept turned itself off (src/memoryautoaccept.js)
+//   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
 //   {"at": <ms>, "ev": "get",      "key"}
 //   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user", "note"?, "missing"?}
@@ -58,7 +59,7 @@ const MAX_REJECTED_TITLES = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // 'auto-accepted' = confirmed by the type's auto-accept switch (src/memoryautoaccept.js), not by hand.
-const DECISIONS = ['approved', 'edited', 'rejected', 'retired', 'auto-accepted'];
+const DECISIONS = ['approved', 'edited', 'rejected', 'retired', 'auto-accepted', 'superseded'];
 const VERDICTS = ['verified', 'disputed'];
 const BY = ['tool', 'user'];
 
@@ -141,6 +142,12 @@ function cleanEvent(raw) {
   if (ev === 'auto-off') {
     const rate = Number.isFinite(raw.rate) && raw.rate >= 0 && raw.rate <= 1 ? raw.rate : null;
     return type && rate !== null ? { at, ev, type, rate } : null;
+  }
+  if (ev === 'get') return key ? { at, ev, key } : null;
+  if (ev === 'conflict') {
+    const other = splitKey(raw.other) ? raw.other : null;
+    const note = line(raw.note, MAX_NOTE);
+    return key && other ? { at, ev, key, other, ...(note ? { note } : {}) } : null;
   }
   if (VERDICTS.includes(ev)) {
     if (!key || !BY.includes(raw.by)) return null;

@@ -78,13 +78,19 @@ const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
 const resumeRules = require('./orchestraResume');
+// Opt-in, fixed per plan (options abBuild / selfHeal / contextGuard): A/B
+// builds, self-healing workers, predictive context routing (logic lives there).
+const variantRules = require('./orchestraVariants');
+const { createVariantRunner } = require('./orchestraVariantRun');
+const { createHealer } = require('./orchestraHeal');
+const { createContextGuard, contextResumeSection } = require('./orchestraContextGuard');
 
 /**
  * The runPlanner args. A Claude plan without plan docs gets exactly the args
  * it always had; the free planner, plan docs, a follow-up request and a
  * hybrid run add keys - and so does a planner model other than the default.
  */
-function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, extraPrompt, hybrid }) {
+function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, extraPrompt, hybrid, abBuild }) {
   return {
     cwd,
     env,
@@ -95,6 +101,7 @@ function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, ex
     ...(planDocs && planDocs.length ? { planDocs } : {}),
     ...(extraPrompt ? { extraPrompt } : {}),
     ...(hybrid === true ? { hybrid: true } : {}),
+    ...(abBuild === true ? { abBuild: true } : {}),
   };
 }
 
@@ -123,8 +130,9 @@ const ESC = '\x1b';
  * @param {{id:string, title:string, prompt:string, verify:string}} pkg
  * @param {string} branch
  * @param {{resume?:boolean, escalation?:{reason:string, detail:string|null},
- *   depMerge?:{branches:string[], files:string[]}|null}} [opts] depMerge
- *   defaults to the package's recorded one, so a resume brief keeps it
+ *   depMerge?:{branches:string[], files:string[]}|null, memory?:string|null}} [opts] depMerge
+ *   defaults to the package's recorded one, so a resume brief keeps it;
+ *   memory = the "## Project memory" section (src/memoryinject.js), or none
  * @returns {string}
  */
 function briefText(pkg, branch, opts = {}) {
@@ -151,6 +159,7 @@ function briefText(pkg, branch, opts = {}) {
     '',
     pkg.prompt,
     '',
+    ...(opts.memory ? [opts.memory, ''] : []),
     '## Verify',
     pkg.verify ? `Run \`${pkg.verify}\` and fix until it passes.` : "Check your work with the project's tests before you finish.",
     'Run the verify command in the foreground and wait for it to finish. Do not end your turn while a test run (or any other command) of yours is still running in the background: an ended turn tells LunaCore you stopped.',
@@ -614,7 +623,8 @@ function createOrchestra(deps) {
     resumeText: sup.RESUME_TEXT,
     cancelNudge: (id) => cancelNudge(id),
     writePty: (sessionId, text, opts) => writePty(sessionId, text, opts),
-    briefText: (pkg, branch, opts) => briefText(pkg, branch, opts),
+    // A hand-over brief is a resume brief: same project memory as the first start.
+    briefText: (pkg, branch, opts = {}) => briefText(pkg, branch, opts.resume ? { ...opts, memory: projectMemoryFor(pkg) } : opts),
     reopen: (pkg, text) => reopenInWorktree(pkg, text),
     landPushed: (id) => landPushed(id),
     stall: (id, reason, detail) => stall(id, reason, detail),
@@ -641,6 +651,72 @@ function createOrchestra(deps) {
     setTimer: (fn, ms) => setTimer(fn, ms),
     clearTimer: (t) => clearTimer(t),
     onRunEvent: (...args) => onRunEvent(...args),
+    log,
+  });
+
+  // The three opt-in evolutions, each on only when its plan option is.
+  const planOption = (key) => !!plan && sup.normalizeOptions(plan.options)[key] === true;
+  const runLive = () => !!plan && !plan.killed && !plan.pausedUntil;
+  /** One more entry on a package's history (report evidence); the caller commits. */
+  const recordEntry = (id, entry) => {
+    const p = findPkg(id);
+    if (p) patch(id, { stallHistory: sup.withHistoryEntry(p.stallHistory, entry) });
+  };
+  // Self-heal (orchestraHeal.js): a known environment stall gets one fix, then one resume.
+  const healer = createHealer({
+    enabled: () => planOption('selfHeal'),
+    live: runLive,
+    getPkg: (id) => findPkg(id),
+    patch: (id, fields) => patch(id, fields),
+    record: recordEntry,
+    commit: () => commit(),
+    // The worktree's own install (orchestraDeps.js), never a link to another checkout.
+    installDeps: (root) => installDeps(root, { fresh: true }),
+    resume: (id, section) => healResume(id, section),
+    giveUp: (id, reason, detail) => afterStall(id, reason, detail),
+    onEvent: (kind, data) => onRunEvent(kind, data),
+    now,
+    setTimer: (fn, ms) => setTimer(fn, ms),
+    clearTimer: (t) => clearTimer(t),
+    log,
+  });
+  // Predictive context routing (orchestraContextGuard.js): /compact before the context fills.
+  const contextGuard = createContextGuard({
+    enabled: () => planOption('contextGuard'),
+    live: runLive,
+    pkgBySession: (sessionId) => bySession(sessionId),
+    // Keys only where no permission prompt can be open: Enter would answer one blindly.
+    canType: () => !!plan && plan.permissionMode === 'bypassPermissions',
+    writePty: (sessionId, text) => writePty(sessionId, text),
+    patch: (id, fields) => patch(id, fields),
+    record: recordEntry,
+    commit: () => commit(),
+    onEvent: (kind, data) => onRunEvent(kind, data),
+    now,
+    log,
+  });
+  // A/B builds (orchestraVariantRun.js): parked variants, the critic, the winner's adoption.
+  const variantRun = createVariantRunner({
+    getPlan: () => plan,
+    findPkg: (id) => findPkg(id),
+    patch: (id, fields) => patch(id, fields),
+    record: recordEntry,
+    commit: () => commit(),
+    removePackages: (ids) => {
+      plan.packages = plan.packages.filter((p) => !ids.includes(p.id));
+    },
+    finishGroup: (id) => background(finish(id), 'finish'),
+    stallGroup: (id, reason, detail) => stallGroup(id, reason, detail),
+    runReview: meteredReview,
+    reviewDiff: deps.reviewDiff || null,
+    reviewEnv: () => (deps.freshEnv ? deps.freshEnv() : null),
+    repoPath: () => plan.repoPath,
+    closeSession: (id) => closeSession(id),
+    sessionAlive: (id) => sessionAlive(id),
+    removeWorktree: deps.removeWorktree || null,
+    setTimer: (fn, ms) => setTimer(fn, ms),
+    now,
+    onEvent: (kind, data) => onRunEvent(kind, data),
     log,
   });
 
@@ -902,8 +978,17 @@ function createOrchestra(deps) {
         splitting: p.splitting === true,
         splitOf: p.splitOf || null,
         splitInto: Array.isArray(p.splitInto) ? [...p.splitInto] : null,
+        ...evolutionViews(p),
       })),
     };
+  }
+
+  /** A package's A/B, self-heal and context-guard views: keys only when there is something to show. */
+  function evolutionViews(p) {
+    const ab = variantRun.view(p);
+    const heal = healer.view(p);
+    const context = contextGuard.view(p);
+    return { ...(ab ? { ab } : {}), ...(heal ? { heal } : {}), ...(context ? { context } : {}) };
   }
 
   /** Writes the run to disk and tells the renderer. Every transition ends here. */
@@ -965,6 +1050,9 @@ function createOrchestra(deps) {
     recover.cancel('run');
     hybridRun.cancelAll();
     freeReviewer.cancel();
+    healer.cancelAll();
+    variantRun.cancelAll();
+    contextGuard.clear();
     backgroundOpen.clear();
     lastActivity.clear();
     if (resumeTimer) clearTimer(resumeTimer);
@@ -1047,6 +1135,10 @@ function createOrchestra(deps) {
     // F6 "Workers": a free planner is always free-only; hybrid plans with Claude.
     const workers = workersRules.planWorkers(ctx.workers, planner);
     const hybrid = workers === 'hybrid';
+    // The God Mode settings' opt-in switches, fixed for this plan. A/B builds
+    // need a Claude planner and Claude workers; a Luna's Work build (cards) never gets them.
+    const settings = workerSettings();
+    const abBuild = settings.abBuild === true && planner === 'claude' && workers === 'claude' && !Array.isArray(ctx.cards);
     const planDocs = readPlanDocs(ctx.repoPath, openTodos);
     // Every planner call of this plan that reported tokens (a free sizing
     // round calls it twice); booked once the plan exists.
@@ -1055,7 +1147,7 @@ function createOrchestra(deps) {
       // The picker's planner effort and model ride in ctx too, so a limit-wait
       // or account-failover replan plans at the same level on the same model.
       const res = await deps.runPlanner(
-        plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, model: plannerModel, planner, planDocs, extraPrompt, hybrid }),
+        plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, model: plannerModel, planner, planDocs, extraPrompt, hybrid, abBuild }),
       );
       if (res && res.ok && res.usage) plannerUsage.push(res.usage);
       return res;
@@ -1085,7 +1177,7 @@ function createOrchestra(deps) {
         planWaiter.arm(ctx, decision);
         return { ok: false, error: 'waiting', planWait: planWaiter.view() };
       }
-      const built = await plannedPackages({ res, openTodos, planner, callPlanner, repoPath: ctx.repoPath, hybrid });
+      const built = await plannedPackages({ res, openTodos, planner, callPlanner, repoPath: ctx.repoPath, hybrid, abBuild });
       const { checked } = built;
       const ownership = sup.normalizeOwnership(ctx.ownership);
       clearAllTimers();
@@ -1121,6 +1213,9 @@ function createOrchestra(deps) {
           unattendedApprovalMin: workerSettings().unattendedApprovalMin,
           sleepOnLimit: false,
           shutdownWhenDone: false,
+          abBuild,
+          selfHeal: settings.selfHeal === true,
+          contextGuard: settings.contextGuard === true,
         }),
         integration: { state: 'idle', error: null, detail: null, at: null },
         started: false,
@@ -1165,8 +1260,9 @@ function createOrchestra(deps) {
    * strict sizing with ONE resize round (flagged after that); every package
    * built from plan to-dos links the plan and its acceptance tests.
    */
-  async function plannedPackages({ res, openTodos, planner, callPlanner, repoPath, hybrid = false }) {
-    const validate = (raw) => validatePlan(raw, openTodos, hybrid ? { hybrid: true } : undefined);
+  async function plannedPackages({ res, openTodos, planner, callPlanner, repoPath, hybrid = false, abBuild = false }) {
+    const validate = (raw) =>
+      validatePlan(raw, openTodos, hybrid || abBuild ? { ...(hybrid ? { hybrid: true } : {}), ...(abBuild ? { abBuild: true } : {}) } : undefined);
     let checked = validate(res.raw);
     let costUsd = res.costUsd;
     if (planner === 'free') {
@@ -1177,6 +1273,11 @@ function createOrchestra(deps) {
     const linked = planBuild.withPlanLinks(checked.packages, openTodos);
     // F6 guard: after the plan links, so a plan's acceptance tests count as verify.
     const packages = hybrid ? hybridGuard.applyHybridGuard(linked, protectedRules(repoPath)) : linked;
+    // A/B builds: a package with two variants becomes its group plus one package per variant.
+    if (abBuild) {
+      const expanded = variantRules.expandVariants(packages);
+      return { checked: { ...checked, packages: expanded.packages, warnings: [...checked.warnings, ...expanded.warnings] }, costUsd };
+    }
     return { checked: { ...checked, packages }, costUsd };
   }
 
@@ -1405,6 +1506,10 @@ function createOrchestra(deps) {
     // A new tab is a new conversation; commit() reads its id from the session.
     transcriptId: null,
   });
+  // Context guard: the resume brief carried the progress summary, so the mark is spent.
+  const spentContextMark = (pkg) => (pkg && pkg.contextResume ? { contextResume: null } : {});
+  // A/B: a variant that works again is no longer built; its next finish parks it anew.
+  const spentAbBuild = (pkg) => (pkg && pkg.abBuilt ? { abBuilt: null } : {});
 
   /**
    * Worktree + brief + tab for one package. Never throws. A failure after
@@ -1508,12 +1613,40 @@ function createOrchestra(deps) {
    * @param {{branch:string, root:string, cwd:string, briefPath:string, baseSha:string|null, depMerge:object|null}} where
    */
   function startWorker(pkg, where) {
-    if (!deps.writeBrief(where.briefPath, briefText(pkg, where.branch, { depMerge: where.depMerge }))) {
+    if (!deps.writeBrief(where.briefPath, briefText(pkg, where.branch, { depMerge: where.depMerge, memory: projectMemoryFor(pkg) }))) {
       return { ...where, state: 'failed', error: 'briefFailed' };
     }
     const session = openTab(pkg, where.cwd, where.branch, where.briefPath);
     if (!session) return { ...where, state: 'failed', error: 'noTab' };
     return { ...where, ...freshRun(), state: 'launched', sessionId: session.id, heldLaunch: false };
+  }
+
+  /** The brief's project memory section, or null. Memory never stops a worker from starting. */
+  function projectMemoryFor(pkg) {
+    if (typeof deps.projectMemory !== 'function') return null;
+    try {
+      const text = deps.projectMemory(plan.repoPath, pkg);
+      return typeof text === 'string' && text ? text : null;
+    } catch (err) {
+      log(`project memory unavailable for ${pkg.id}: ${(err && err.message) || err}`);
+      return null;
+    }
+  }
+
+  /** The brief of a reopened worker: RESUMING, with the same project memory section as a first start. */
+  function resumeBrief(pkg, extra = {}) {
+    const text = briefText(pkg, pkg.branch, { ...extra, resume: true, memory: projectMemoryFor(pkg) });
+    // Context guard: a session that ran out of context without /compact resumes with its progress.
+    const context = contextResumeSection(pkg);
+    return context ? `${text}\n\n${context}\n` : text;
+  }
+
+  /** Self-heal: the stalled worker reopens once in its worktree, told what was fixed. */
+  function healResume(id, section) {
+    const pkg = findPkg(id);
+    if (!pkg) return false;
+    const text = `${withStallNote(resumeBrief(pkg), pkg.error, pkg.detail)}\n\n${section}\n`;
+    return reopenInWorktree(pkg, text).ok;
   }
 
   /** A failed dependency install: its own error, the last line and the output tail. */
@@ -1697,11 +1830,23 @@ function createOrchestra(deps) {
     recover.onTerminal(findPkg(id), reason);
   }
 
+  /** An A/B group neither of whose variants was built: stalled for good (it has no worker to resume). */
+  function stallGroup(id, reason, detail) {
+    const p = findPkg(id);
+    if (!p) return;
+    const stallHistory = sup.withHistoryEntry(p.stallHistory, { at: now(), kind: 'stall', reason, detail });
+    patch(id, { state: 'stalled', error: reason, detail, stalledAt: now(), stallHistory });
+    markTerminal(id, reason);
+    onRunEvent('stalled', { id, reason });
+    commit();
+  }
+
   /** Ends the run once nothing more can happen on its own, then finalizes it. */
   function checkSettled() {
     if (!plan.started || plan.killed || plan.settled || plan.interrupted || !sup.isSettled(plan.packages, maxParallelFor(plan, MAX_PARALLEL))) return;
-    // A scheduled automatic relaunch keeps the run open, and so does a split in flight.
-    if (retryTimers.size || splitting.size) return;
+    // A scheduled automatic relaunch keeps the run open, and so does a split
+    // in flight, a self-heal under way or an A/B critic still deciding.
+    if (retryTimers.size || splitting.size || healer.busy() || variantRun.busy()) return;
     plan.settled = true;
     settledFinalize = true;
     const allPushed = plan.packages.every((p) => p.state === 'pushed');
@@ -1771,11 +1916,15 @@ function createOrchestra(deps) {
     if (!plan || !plan.started || plan.killed || plan.pausedUntil || plan.hold || plan.interrupted || pumping || batteryHeld()) return;
     pumping = true;
     try {
+      // A/B groups whose variants are done get decided (a restart or a kill may have left one).
+      variantRun.evaluateAll();
       let ready = sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL));
       while (ready.length && !plan.killed && !plan.pausedUntil && !plan.hold && !plan.interrupted && !batteryHeld()) {
         await launchPackages(ready);
         ready = sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL));
       }
+      // Again before settling: a variant may have finished while the launches ran.
+      variantRun.evaluateAll();
       checkSettled();
       commit();
     } finally {
@@ -1821,11 +1970,15 @@ function createOrchestra(deps) {
     const edits = o.prompts && typeof o.prompts === 'object' ? o.prompts : {};
     plan.packages = plan.packages.map((p) => {
       const edited = typeof edits[p.id] === 'string' ? edits[p.id].trim().slice(0, MAX_PROMPT_CHARS) : '';
-      return p.state === 'pending' && edited ? { ...p, prompt: edited } : p;
+      // An undecided A/B group runs no worker: its variants carry the prompts.
+      return p.state === 'pending' && edited && !variantRules.isUndecidedGroup(p) ? { ...p, prompt: edited } : p;
     });
 
     const chosen = Array.isArray(o.ids)
-      ? plan.packages.filter((p) => (p.state === 'pending' || p.state === 'failed') && o.ids.includes(p.id))
+      ? plan.packages.filter(
+          // An undecided A/B group never launches itself: its variants do (orchestraVariants.js).
+          (p) => (p.state === 'pending' || p.state === 'failed') && o.ids.includes(p.id) && !variantRules.isUndecidedGroup(p),
+        )
       : null;
     if (chosen ? !chosen.length : !sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL)).length) {
       return { ok: false, error: 'nothingToLaunch' };
@@ -1834,6 +1987,9 @@ function createOrchestra(deps) {
     // "Workers" (F6; "Free only" = orchestraFree.js): chosen at Approve, fixed
     // for the run. A free-planned run is always a free run (D1: "Free only").
     const workers = plan.started ? workersRules.storedWorkers(plan) : workersRules.approveWorkers(plan, o);
+    // A/B variants (orchestraVariants.js) are built and judged on Claude only:
+    // a plan that has them is refused as a free run (replan without A/B for that).
+    if (!plan.started && workers === 'free' && variantRules.hasGroups(plan.packages)) return { ok: false, error: 'abNeedsClaude' };
     // In place, like freeMode below: the run's plan object stays the same one.
     if (!plan.started && !plan.planRun) {
       if (workers === 'claude') delete plan.workers;
@@ -1953,7 +2109,23 @@ function createOrchestra(deps) {
     // Each stall is kept (time, reason, short detail), not only the last error.
     const stallHistory = sup.withHistoryEntry(before.stallHistory, { at: now(), kind: 'stall', reason, detail });
     patch(id, { state: 'stalled', error: reason, detail, stalls, stallHistory, stalledAt: now() });
+    // Self-heal (opt-in): a known environment error gets one bounded fix and
+    // one resume first; the ladder below runs when that is not possible.
+    if (!plan.killed && !plan.pausedUntil && !plan.hold && !plan.planRun && healer.tryHeal(findPkg(id), reason, detail)) {
+      commit();
+      return;
+    }
+    afterStall(id, reason, detail);
+  }
+
+  /**
+   * What happens to a stalled package: auto-split, hand-over, escalation,
+   * one automatic resume, or (nothing left) terminal. Also the self-heal's
+   * way out when its fix did not get the worker going again.
+   */
+  function afterStall(id, reason, detail) {
     const pkg = findPkg(id);
+    if (!plan || !pkg) return;
     const live = !plan.killed && !plan.pausedUntil;
     // Q8: a free-planned run splits a package that stalled twice; Claude
     // runs never get here (shouldAutoSplit) and escalate as before.
@@ -2010,7 +2182,7 @@ function createOrchestra(deps) {
     const session = safeOpenTab(pkg, pkg.cwd || pkg.root, pkg.branch, briefPath);
     if (!session) return { ok: false, error: 'noTab' };
     const old = pkg.sessionId;
-    patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath });
+    patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath, ...spentContextMark(pkg), ...spentAbBuild(pkg) });
     if (old && old !== session.id && sessionAlive(old)) closeSession(old);
     return { ok: true };
   }
@@ -2088,7 +2260,7 @@ function createOrchestra(deps) {
    * @returns {boolean} false when the tab could not be reopened (stays stalled)
    */
   function autoResume(pkg, reason, detail) {
-    const text = withStallNote(briefText(pkg, pkg.branch, { resume: true }), reason, detail);
+    const text = withStallNote(resumeBrief(pkg), reason, detail);
     if (!reopenInWorktree(pkg, text).ok) return false;
     patch(pkg.id, { autoResumed: true });
     onRunEvent('autoResumed', { id: pkg.id, reason });
@@ -2103,7 +2275,7 @@ function createOrchestra(deps) {
   function escalate(pkg, reason, detail) {
     if (!depsReady(pkg)) return false;
     const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
-    const text = briefText(pkg, pkg.branch, { resume: true, escalation: { reason, detail } });
+    const text = resumeBrief(pkg, { escalation: { reason, detail } });
     if (!deps.writeBrief(briefPath, text)) return false;
     const old = pkg.sessionId;
     // New tab first: closing the old one first could leave main opening an
@@ -2113,7 +2285,17 @@ function createOrchestra(deps) {
     const session = safeOpenTab({ ...pkg, modelOverride: 'opus', effortOverride }, pkg.cwd || pkg.root, pkg.branch, briefPath);
     if (!session) return false;
     // Re-pointed before the close, so the old tab's close is not read as this package's.
-    patch(pkg.id, { ...freshRun(), state: 'launched', sessionId: session.id, briefPath, modelOverride: 'opus', effortOverride, escalated: true });
+    patch(pkg.id, {
+      ...freshRun(),
+      state: 'launched',
+      sessionId: session.id,
+      briefPath,
+      modelOverride: 'opus',
+      effortOverride,
+      escalated: true,
+      ...spentContextMark(pkg),
+      ...spentAbBuild(pkg),
+    });
     if (old && sessionAlive(old)) closeSession(old);
     onRunEvent('escalated', { id: pkg.id, reason });
     return true;
@@ -2189,7 +2371,7 @@ function createOrchestra(deps) {
       return true;
     }
     if (!pkg.root || !pkg.branch) return false;
-    const brief = `${briefText(pkg, pkg.branch, { resume: true })}\n## LunaCore fix-up round\n\n${text}\n`;
+    const brief = `${resumeBrief(pkg)}\n## LunaCore fix-up round\n\n${text}\n`;
     if (!reopenInWorktree(pkg, brief).ok) return false;
     patch(pkg.id, fields);
     return true;
@@ -2235,6 +2417,8 @@ function createOrchestra(deps) {
   async function finish(id) {
     cancelNudge(id);
     hybridRun.forget(id);
+    // The worker got going on its own: a self-heal still under way is not needed.
+    healer.cancel(id);
     // The post-DONE verify runs a plain `npm test` in the worktree: not
     // without its dependencies. The package waits for Resume, unstalled.
     if (!depsReady(findPkg(id))) {
@@ -2260,6 +2444,8 @@ function createOrchestra(deps) {
             pushOnVerifyFail: plan.freeMode === true,
             // Once per package: after its fix-up round, GitHub's own check decides.
             scanSecrets: !before.scanFixup && !before.pushFixup,
+            // An A/B variant is verified, never pushed: only the critic's pick is.
+            ...(before.abOf ? { skipPush: true } : {}),
           },
           { ...hooks, isCancelled: () => step.isAborted() || hooks.isCancelled() },
         );
@@ -2300,6 +2486,11 @@ function createOrchestra(deps) {
     if (res.ok) {
       const touched = sup.mergeTouched(pkg.touched, sup.relTouched(pkg.root, res.files || []));
       patch(id, { headSha: res.headSha || null, error: null, detail: null, touched, terminal: false });
+      // A/B variant: parked until its twin is done, then the critic decides (orchestraVariantRun.js).
+      if (variantRun.onBuilt(id, res)) {
+        commit();
+        return;
+      }
       // F6c gate: a hybrid free package is reviewed by Claude before it counts as pushed.
       if (hybridRun.gate(id)) {
         commit();
@@ -2468,6 +2659,7 @@ function createOrchestra(deps) {
     if (!sessionId) return;
     backgroundOpen.delete(sessionId);
     lastActivity.delete(sessionId);
+    contextGuard.forget(sessionId);
   }
 
   function resume() {
@@ -2620,9 +2812,14 @@ function createOrchestra(deps) {
    * @param {unknown} byModel {<model>: {input, output, cacheRead, cacheWrite}}
    * @returns {boolean} true when the tab was this run's
    */
-  function onSessionUsage(sessionId, byModel) {
+  /**
+   * A worker tab's transcript totals; `context` ({tokens, limit}: how full
+   * its context is now) feeds the context guard when the plan has it on.
+   */
+  function onSessionUsage(sessionId, byModel, context = null) {
     if (!plan || !(bySession(sessionId) || fixup.owns(sessionId))) return false;
-    usageBook.setSession(sessionId, byModel);
+    if (byModel) usageBook.setSession(sessionId, byModel);
+    if (context) contextGuard.onSample(sessionId, context);
     return true;
   }
 
@@ -2771,6 +2968,8 @@ function createOrchestra(deps) {
     for (const id of reviewsWaiting) {
       if ((findPkg(id) || {}).state === 'finishing') patch(id, { state: 'killed' });
     }
+    // Parked A/B variants stop with the run; their verified build is kept for the decision.
+    variantRun.onKill();
     // Waiting on a playbook backoff: stopped too, its timer dropped.
     for (const p of plan.packages.filter((x) => recover.pending(x.id))) {
       recover.cancel(p.id);
@@ -2801,16 +3000,25 @@ function createOrchestra(deps) {
     if (!pkg || !(sup.RETRYABLE_STATES.has(pkg.state) || pkg.state === 'failed')) return { ok: false, error: 'notRetryable' };
     // Replaced by (or being replaced by) an auto-split: its work lives on in the split packages.
     if (pkg.splitting === true || (Array.isArray(pkg.splitInto) && pkg.splitInto.length)) return { ok: false, error: 'notRetryable' };
+    // A/B (orchestraVariants.js): an undecided group has no worker of its own,
+    // and a built variant keeps its build - it parks again, no new worker.
+    const abAction = variantRules.retryAction(pkg, plan.packages);
+    if (abAction && abAction.refuse) return { ok: false, error: abAction.refuse };
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan.pausedUntil) return { ok: false, error: 'paused' };
     if (plan.hold) return { ok: false, error: plan.hold.reason };
     // Nudging a live tab is no new worker; anything else would launch one.
     const liveTab = !!(pkg.sessionId && sessionAlive(pkg.sessionId));
     if (!liveTab && batteryHeld()) return { ok: false, error: 'batteryLow' };
+    // A self-heal still under way is replaced by this Retry.
+    healer.cancel(pkg.id);
 
     freezeSettings();
-    if (liveTab) {
-      patch(pkg.id, { ...freshRun(), state: 'launched' });
+    if (abAction && abAction.keep) {
+      // Parked again with its verified build; the pump decides the group once its twin is done.
+      patch(pkg.id, { state: 'finishing', error: null, detail: null });
+    } else if (liveTab) {
+      patch(pkg.id, { ...freshRun(), state: 'launched', ...spentAbBuild(pkg) });
       // A tab stalled on a permission prompt: Mati answers it there. Pasting
       // a nudge + Enter now would land IN the prompt and answer it blindly.
       if (pkg.error !== 'needsApproval') writePty(pkg.sessionId, sup.nudgeText(pkg.id), { paste: true });
@@ -2825,7 +3033,7 @@ function createOrchestra(deps) {
         commit();
         return { ok: false, error: plan.killed ? 'notRetryable' : plan.pausedUntil ? 'paused' : plan.hold.reason };
       }
-      const reopened = reopenInWorktree(findPkg(pkg.id), briefText(pkg, pkg.branch, { resume: true }));
+      const reopened = reopenInWorktree(findPkg(pkg.id), resumeBrief(pkg));
       if (!reopened.ok) {
         // Held for node_modules: Resume reopens it, no second Retry needed.
         if (reopened.error === 'noNodeModules') patch(pkg.id, { heldRetry: true });
@@ -2936,7 +3144,7 @@ function createOrchestra(deps) {
     }
     if (p.heldRetry) {
       patch(id, { heldRetry: false });
-      const reopened = reopenInWorktree(findPkg(id), briefText(p, p.branch, { resume: true }));
+      const reopened = reopenInWorktree(findPkg(id), resumeBrief(p));
       if (reopened.ok) {
         patch(id, { terminal: false, autoRetries: 0 });
         plan.packages = sup.withBlockedBy(plan.packages);

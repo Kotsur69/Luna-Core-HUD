@@ -12,7 +12,8 @@
 'use strict';
 
 // Refusal codes of orchestra:retry with their own message (orch.retryRefused.<code>).
-export const RETRY_REFUSALS = Object.freeze(['busy', 'paused', 'notRetryable', 'noTab', 'briefFailed', 'batteryLow']);
+// abGroup / abBuilt: A/B builds (src/orchestraVariants.js retryAction).
+export const RETRY_REFUSALS = Object.freeze(['busy', 'paused', 'notRetryable', 'noTab', 'briefFailed', 'batteryLow', 'abGroup', 'abBuilt']);
 
 const integrationOf = (plan) => (plan && plan.integration && typeof plan.integration === 'object' ? plan.integration : {});
 
