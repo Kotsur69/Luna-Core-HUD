@@ -536,8 +536,33 @@ test('the Pipeline client: a refused port is transient and names the port', asyn
     assert.equal(P.isTransientPipelineError(err), true);
     return true;
   });
+  // redirect: 'error' - undici's cause has a message but no code.
+  const redirected = fakePipeline({ fetchError: new TypeError('fetch failed', { cause: new Error('unexpected redirect') }) });
+  await assert.rejects(redirected.client.exec('editor status'), /\(fetch failed: unexpected redirect\)/);
   const timeout = fakePipeline({ fetchError: Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }) });
   await assert.rejects(timeout.client.exec('editor status'), (err) => err.code === P.PIPELINE_ERROR.timeout && /did not answer 'editor status'/.test(err.message));
+});
+
+test('the Pipeline client: which failures certainly did not run the command (safe to send again)', async () => {
+  const errorOf = async (opts) => fakePipeline(opts).client.exec('editor.playmode start').then(() => null, (err) => err);
+  const refused = await errorOf({ fetchError: new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } }) });
+  const dropped = await errorOf({ fetchError: new TypeError('fetch failed', { cause: { code: 'UND_ERR_SOCKET' } }) });
+  const timedOut = await errorOf({ fetchError: Object.assign(new Error('aborted'), { name: 'TimeoutError' }) });
+  const busy = await errorOf({ reply: () => jsonReply(503, { success: false, status: 'busy', busyReason: 'settling', retryable: true }) });
+  const missing = await errorOf({ descriptor: null });
+  const failed = await errorOf({ reply: () => jsonReply(400, { success: false, error: 'Command Not Found' }) });
+
+  assert.deepEqual([refused, missing, busy].map(P.pipelineCommandDidNotRun), [true, true, true]);
+  assert.deepEqual([dropped, timedOut, failed].map(P.pipelineCommandDidNotRun), [false, false, false], 'may have run, or ran and failed');
+  assert.deepEqual([dropped, timedOut].map(P.isTransientPipelineError), [true, true], 'still worth waiting out in a poll');
+});
+
+test('the Pipeline client: a heartbeat far in the future is a forged port file', async () => {
+  const forged = fakePipeline({ heartbeatAgeMs: -(365 * 24 * 3600 * 1000) });
+  await assert.rejects(forged.client.exec('editor status'), (err) => err.code === P.PIPELINE_ERROR.badDescriptor && /lastHeartbeat in the future/.test(err.message));
+  assert.equal(forged.requests.length, 0, 'nothing is sent to a port a stale file names');
+  const skewed = fakePipeline({ heartbeatAgeMs: -30 * 1000 });
+  assert.deepEqual(await skewed.client.exec('editor status'), EDITOR_STATUS, 'a small clock skew is fine');
 });
 
 test('the Pipeline client: the token never appears in an error, whatever the editor echoes back', async () => {

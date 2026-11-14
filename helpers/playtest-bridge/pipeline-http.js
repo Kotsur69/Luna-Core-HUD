@@ -35,6 +35,8 @@ const EXEC_PATH = '/api/exec';
 const MIN_PORT = 1;
 const MAX_PORT = 65535;
 const HEARTBEAT_MAX_AGE_MS = 60 * 1000;
+// A heartbeat further ahead than this is not a clock skew but a forged file.
+const HEARTBEAT_MAX_SKEW_MS = 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 30 * 1000;
 const HTTP_BUSY = 503;
 const MAX_ERROR_CHARS = 500;
@@ -72,6 +74,9 @@ const TRANSIENT_CODES = new Set([
   PIPELINE_ERROR.timeout,
 ]);
 
+// Failures where the command certainly never reached the editor.
+const NOT_SENT_CODES = new Set([PIPELINE_ERROR.notOpen, PIPELINE_ERROR.badDescriptor, PIPELINE_ERROR.stale]);
+
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const readUtf8 = (file) => fs.promises.readFile(file, 'utf8');
 
@@ -86,6 +91,17 @@ const descriptorFile = (projectDir) => path.join(projectDir, ...DESCRIPTOR_PARTS
  */
 function isTransientPipelineError(err) {
   return !!err && (err.retryable === true || TRANSIENT_CODES.has(err.code));
+}
+
+/**
+ * True when the editor certainly did NOT run the command, so sending it again
+ * is safe: nothing was sent (port file missing, broken or stale, port
+ * refused) or the editor answered busy with retryable:true. A timeout or a
+ * dropped connection is NOT one of these: the command may have run.
+ * @param {unknown} err
+ */
+function pipelineCommandDidNotRun(err) {
+  return !!err && (err.retryable === true || err.refused === true || NOT_SENT_CODES.has(err.code));
 }
 
 function pipelineError(code, message, extra = {}) {
@@ -105,11 +121,15 @@ function snippet(text) {
   return s.length > MAX_SNIPPET_CHARS ? `${s.slice(0, MAX_SNIPPET_CHARS)}...` : s;
 }
 
-/** fetch's "fetch failed" plus the socket error code underneath, when there is one. */
+/**
+ * fetch's "fetch failed" plus what lies underneath: the socket error code
+ * (ECONNREFUSED), else the cause's message ("unexpected redirect").
+ */
 function causeText(err) {
   const base = err instanceof Error ? err.message : String(err);
-  const code = err && err.cause && typeof err.cause.code === 'string' ? err.cause.code : '';
-  return code ? `${base}: ${code}` : base;
+  const cause = err && err.cause;
+  const detail = cause && typeof cause.code === 'string' ? cause.code : cause instanceof Error ? cause.message : '';
+  return detail ? `${base}: ${detail}` : base;
 }
 
 /**
@@ -138,6 +158,7 @@ function checkDescriptor(raw, projectDir, nowMs) {
   const beat = typeof raw.lastHeartbeat === 'string' ? Date.parse(raw.lastHeartbeat) : NaN;
   if (!Number.isFinite(beat)) throw bad('has no valid lastHeartbeat');
   const ageMs = nowMs - beat;
+  if (ageMs < -HEARTBEAT_MAX_SKEW_MS) throw bad('has a lastHeartbeat in the future');
   if (ageMs > HEARTBEAT_MAX_AGE_MS) {
     throw pipelineError(
       PIPELINE_ERROR.stale,
@@ -196,7 +217,9 @@ function createPipelineClient({ projectDir, fetch: fetchFn = globalThis.fetch, r
       if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
         throw fail(PIPELINE_ERROR.timeout, `Unity did not answer '${command}' within ${timeoutMs} ms`);
       }
-      throw fail(PIPELINE_ERROR.unreachable, `Unity editor on ${projectDir} is not reachable on port ${port} (${causeText(err)})`);
+      // A refused connection never reached the editor; a dropped one may have.
+      const refused = !!(err && err.cause && err.cause.code === 'ECONNREFUSED');
+      throw fail(PIPELINE_ERROR.unreachable, `Unity editor on ${projectDir} is not reachable on port ${port} (${causeText(err)})`, refused ? { refused } : {});
     }
   }
 
@@ -258,5 +281,6 @@ module.exports = {
   PIPELINE_ERROR,
   descriptorFile,
   isTransientPipelineError,
+  pipelineCommandDidNotRun,
   createPipelineClient,
 };

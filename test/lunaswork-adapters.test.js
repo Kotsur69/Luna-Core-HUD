@@ -835,9 +835,14 @@ const PIPE_TOKEN = Buffer.from(`lunacore-adapter-${'z'.repeat(20)}`).toString('b
  * pipeline client runs on an injected fetch / readFile. Entering play mode
  * reloads the domain: the port file is gone for `reloadReads` reads, then the
  * editor answers 503 settling `busyReplies` times. `log` is what the editor saw.
+ * Failure knobs: busyBeforePlay (play refused busy n times, not run),
+ * lostPlayAnswer (play runs, its answer is lost), playFails, driverAuthFails.
  */
-function fakePipelineEditor({ reloadReads = 1, busyReplies = 1, driver = true, reloadForever = false, statusFails = false } = {}) {
-  const ed = { log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0 };
+function fakePipelineEditor({
+  reloadReads = 1, busyReplies = 1, driver = true, reloadForever = false, statusFails = false,
+  busyBeforePlay = 0, lostPlayAnswer = false, playFails = false, driverAuthFails = false,
+} = {}) {
+  const ed = { log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0, busyBeforePlay };
   const readFile = async (file) => {
     ed.reads.push(file);
     if ((reloadForever && ed.playMode === 'playing') || ed.missing > 0) {
@@ -853,6 +858,7 @@ function fakePipelineEditor({ reloadReads = 1, busyReplies = 1, driver = true, r
   const answers = {
     'scene open': (p) => ok({ path: p.path }),
     'editor.playmode start': () => {
+      if (playFails) return reply(400, { success: false, error: 'Play mode is disabled in this project' });
       ed.playMode = 'playing';
       ed.missing = reloadReads;
       ed.busy = busyReplies;
@@ -870,19 +876,26 @@ function fakePipelineEditor({ reloadReads = 1, busyReplies = 1, driver = true, r
       counts: { error: 1, warn: 0, log: 0 },
       groundTruth: { compilationFailed: false, consoleErrors: 1 },
     }),
-    'playtest state': (p, command) => (driver ? ok({ scene: 'Level1', score: 3 }) : notFound(command)),
+    'playtest state': (p, command) => {
+      if (driverAuthFails) return reply(401, { success: false, error: 'Unauthorized' });
+      return driver ? ok({ scene: 'Level1', score: 3 }) : notFound(command);
+    },
     'playtest screenshot': (p, command) => (driver ? ok({ png: PNG, width: 1920, height: 1080 }) : notFound(command)),
   };
   const fetch = async (url, init) => {
     const { command, parameters } = JSON.parse(init.body);
     ed.requests.push({ url, command, parameters, auth: init.headers.authorization });
-    if (ed.busy > 0) {
-      ed.busy -= 1;
+    const playing = command === 'editor.playmode start';
+    if (ed.busy > 0 || (playing && ed.busyBeforePlay > 0)) {
+      if (playing && ed.busyBeforePlay > 0) ed.busyBeforePlay -= 1;
+      else ed.busy -= 1;
       ed.log.push(`${command} (busy)`);
       return reply(503, { success: false, status: 'busy', busyReason: 'settling', retryable: true });
     }
     ed.log.push(command);
-    return answers[command] ? answers[command](parameters, command) : notFound(command);
+    const res = answers[command] ? answers[command](parameters, command) : notFound(command);
+    if (playing && lostPlayAnswer) throw new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) });
+    return res;
   };
   ed.connect = (dir) => {
     ed.sessions += 1;
@@ -1001,6 +1014,46 @@ test('unity pipeline: a failure that is not a reload ends the wait at once', asy
   assert.equal(world.editor.log.at(-1), 'editor.playmode stop');
 });
 
+test('unity pipeline: a busy editor is waited out before play; a play whose answer is lost still reaches play mode', async () => {
+  const world = pipelineWorld({ busyBeforePlay: 1, lostPlayAnswer: true });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+
+  assert.deepEqual(world.editor.log, [
+    'scene open',
+    'editor.playmode start (busy)', // not run: sent again
+    'editor.playmode start', // run, but the answer is lost: never sent twice
+    '(port file missing)',
+    'editor status (busy)',
+    'editor status',
+    'playtest state',
+  ]);
+  assert.equal(world.t, 1500);
+  assert.ok(world.logs.some((l) => /Unity play mode: no answer \(.*fetch failed: UND_ERR_SOCKET\)/.test(l)), world.logs.join('\n'));
+  assert.ok(adapter.tools().allowedTools.length > 0);
+  await adapter.stop();
+});
+
+test('unity pipeline: a play that fails outright still leaves play mode on the way out', async () => {
+  const world = pipelineWorld({ playFails: true });
+  const adapter = A.createAdapter('unity', world.opts);
+
+  await assert.rejects(adapter.start(pipelineProfile), /Unity command 'editor\.playmode start' failed: Play mode is disabled/);
+  assert.deepEqual(world.editor.log, ['scene open', 'editor.playmode start', 'editor.playmode stop']);
+});
+
+test('unity pipeline: an editor that refuses LunaCore is not reported as a missing PlaytestDriver', async () => {
+  const world = pipelineWorld({ driverAuthFails: true });
+  const adapter = A.createAdapter('unity', world.opts);
+
+  await assert.rejects(adapter.start(pipelineProfile), (err) => {
+    assert.match(err.message, /^Unity command 'playtest state' failed: Unauthorized$/);
+    assert.equal(err.message.includes(U.NO_DRIVER_ERROR), false);
+    return true;
+  });
+  assert.equal(world.editor.log.at(-1), 'editor.playmode stop');
+});
+
 test('unity pipeline: unityProjectSubdir must stay inside the project; the transport follows unityMcpUrl', async () => {
   for (const unityProjectSubdir of ['../outside', 'Game/../../x', 'C:\\Windows', '/etc', '\\\\server\\share', 7, 'a\u0000b', 'x'.repeat(300)]) {
     const world = pipelineWorld();
@@ -1011,6 +1064,7 @@ test('unity pipeline: unityProjectSubdir must stay inside the project; the trans
   const root = path.resolve(tmpDir('lw-unity-root-'));
   for (const sub of [undefined, null, '', '   ']) assert.deepEqual(U.unityProjectDir(root, { unityProjectSubdir: sub }), { dir: root, reason: null });
   assert.equal(U.unityProjectDir(root, { unityProjectSubdir: 'Game/' }).dir, path.join(root, 'Game'));
+  assert.equal(U.unityProjectDir(root, { unityProjectSubdir: '..game' }).dir, path.join(root, '..game'), 'a folder named ..game is inside');
   assert.equal(U.unityTransport({ adapter: 'unity' }), 'pipeline');
   assert.equal(U.unityTransport({ adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp' }), 'mcp');
   assert.equal(U.unityTransport(null), 'pipeline');

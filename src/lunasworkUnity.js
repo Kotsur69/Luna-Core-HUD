@@ -42,10 +42,14 @@ const { bridgeTools, noTools } = require('./lunasworkBridge');
 const { runTag } = require('./todorows');
 const { saveScreenshot } = require('../helpers/playtest-bridge/bridge');
 const { UNITY_TRANSPORTS, DRIVER_GROUP, isPlaying } = require('../helpers/playtest-bridge/unity');
-const { isTransientPipelineError } = require('../helpers/playtest-bridge/pipeline-http');
+const { PIPELINE_ERROR, isTransientPipelineError, pipelineCommandDidNotRun } = require('../helpers/playtest-bridge/pipeline-http');
 
 const PLAY_POLL_MS = 500;
 const MAX_SUBDIR_CHARS = 260;
+// err.code of a wait that ran out of readyTimeoutSec.
+const WAIT_TIMEOUT = 'LUNA_UNITY_WAIT_TIMEOUT';
+// HTTP statuses that mean the editor did not let LunaCore in: not the driver's fault.
+const AUTH_STATUSES = new Set([401, 403]);
 const CONSOLE_FILE = 'unity-console.json';
 const STATE_FILE = 'unity-state.json';
 const FINAL_SHOT = 'final.png';
@@ -161,8 +165,18 @@ function unityProjectDir(repoDir, raw) {
   if (rel.includes(':') || rel.startsWith('/') || rel.split('/').includes('..')) return bad;
   const dir = path.resolve(root, rel);
   const back = path.relative(root, dir);
-  if (back.startsWith('..') || path.isAbsolute(back)) return bad;
+  if (back === '..' || back.startsWith(`..${path.sep}`) || path.isAbsolute(back)) return bad;
   return { dir, reason: null };
+}
+
+/**
+ * True when the PlaytestDriver command itself failed (missing or broken), as
+ * opposed to the connection to the editor, its auth, or a wait that ran out.
+ */
+function isDriverFailure(err) {
+  // MCP for Unity reports a tool error as a plain Error without a code.
+  if (!err || typeof err.code !== 'string') return true;
+  return err.code === PIPELINE_ERROR.failed && !AUTH_STATUSES.has(err.status);
 }
 
 // ---- adapter --------------------------------------------------------------------------
@@ -209,33 +223,53 @@ function createUnityAdapter(ctx) {
   }
 
   /**
-   * Polls `probe` until it returns true. A transient Unity Pipeline failure
-   * (the domain reload of entering play mode) is retried until `deadline`;
-   * any other failure ends the wait at once.
+   * Polls `probe` until it returns true. A failure `retryable` accepts (by
+   * default a transient Unity Pipeline failure: the domain reload of entering
+   * play mode) is retried until `deadline`; any other ends the wait at once.
    */
-  async function pollUntil(deadline, probe, timeoutMessage) {
+  async function pollUntil(deadline, probe, timeoutMessage, retryable = isTransientPipelineError) {
     let last = null;
     for (;;) {
       try {
         if (await probe()) return;
         last = null;
       } catch (err) {
-        if (!isTransientPipelineError(err)) throw err;
+        if (!retryable(err)) throw err;
         last = err;
       }
-      if (ctx.now() >= deadline) throw new Error(last ? `${timeoutMessage} (last error: ${errText(last)})` : timeoutMessage);
+      if (ctx.now() >= deadline) {
+        throw Object.assign(new Error(last ? `${timeoutMessage} (last error: ${errText(last)})` : timeoutMessage), { code: WAIT_TIMEOUT });
+      }
       await ctx.sleep(PLAY_POLL_MS);
     }
+  }
+
+  /** One editor action, sent again until `deadline` only while the editor certainly did not run it. */
+  function act(deadline, send, timeoutMessage) {
+    const once = async () => {
+      await send();
+      return true;
+    };
+    return pollUntil(deadline, once, timeoutMessage, pipelineCommandDidNotRun);
   }
 
   /** @returns {Promise<number>} the start deadline, shared with the driver check */
   async function enterPlayMode(call) {
     const { calls } = target;
-    if (profile.scene) await call(calls.openScene(profile.scene));
-    await call(calls.play());
+    const sec = profile.readyTimeoutSec;
+    const deadline = ctx.now() + sec * 1000;
+    if (profile.scene) await act(deadline, () => call(calls.openScene(profile.scene)), `Unity could not open ${profile.scene} within ${sec}s`);
+    // From here on stop() leaves play mode, even when the answer to play is lost.
     playing = true;
-    const deadline = ctx.now() + profile.readyTimeoutSec * 1000;
-    await pollUntil(deadline, async () => isPlaying(await call(calls.state())), `Unity did not enter play mode within ${profile.readyTimeoutSec}s`);
+    try {
+      await act(deadline, () => call(calls.play()), `Unity could not start play mode within ${sec}s`);
+    } catch (err) {
+      if (!isTransientPipelineError(err)) throw err;
+      // Sent, but the answer was lost - most likely in the domain reload that
+      // play mode starts. The poll below shows whether play mode began.
+      log(`[lunaswork] Unity play mode: no answer (${errText(err)}), waiting for the editor`);
+    }
+    await pollUntil(deadline, async () => isPlaying(await call(calls.state())), `Unity did not enter play mode within ${sec}s`);
     return deadline;
   }
 
@@ -247,6 +281,7 @@ function createUnityAdapter(ctx) {
     try {
       await pollUntil(deadline, probe, `the PlaytestDriver did not answer within ${profile.readyTimeoutSec}s`);
     } catch (err) {
+      if (!isDriverFailure(err)) throw err;
       throw new Error(`${NO_DRIVER_ERROR} (${errText(err)}) - build the "${PLAYTEST_DRIVER_CARD.text}" card first`);
     }
   }
