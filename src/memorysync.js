@@ -51,10 +51,12 @@ function memoryPaths(configDir) {
 /**
  * Whether the secret scanner would change anything in the text of a memory or
  * of a "where we stopped" note. The fields a newer version wrote (record.extra)
- * leave the machine too, so their values are scanned as well.
+ * leave the machine too, so they are scanned as well, each as `key=value`: the
+ * scrubber knows a secret by its name only in that shape (db_password=...), and
+ * the joined text still holds the whole value for every other rule.
  */
 function hasSecret(record) {
-  const carried = extraFields(record.extra).map(([, value]) => value);
+  const carried = extraFields(record.extra).map(([key, value]) => `${key}=${value}`);
   return [record.title, record.body, record.source, record.text, ...carried].some((s) => typeof s === 'string' && scrub(s) !== s);
 }
 

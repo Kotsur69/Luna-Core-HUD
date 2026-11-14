@@ -41,7 +41,7 @@
 
 const { RECENT_READ_DAYS } = require('./memoryuse');
 
-const TYPES =['decision', 'gotcha', 'how-to', 'project-fact', 'preference', 'domain', 'digest', 'reference'];
+const TYPES = ['decision', 'gotcha', 'how-to', 'project-fact', 'preference', 'domain', 'digest', 'reference'];
 const CONFIDENCE = ['confirmed', 'observed', 'inferred'];
 const GLOBAL = 'global';
 

@@ -278,3 +278,10 @@ test('lists sort by final score, unscored last, a tie by usefulness, else as the
     ['c', 'b', 'd', 'a', 'none'],
   );
 });
+
+test('a secret that only looks like one next to its field name is caught too', () => {
+  // `db_password: hunter2` carried from a newer version: the bare value says nothing.
+  const leaky = normalizeRecord({ ...base, extra: [['db_password', 'hunter2']] });
+  assert.equal(hasSecret(leaky), true);
+  assert.equal(hasSecret(normalizeRecord({ ...base, extra: [['review_state', 'hunter2']] })), false);
+});
