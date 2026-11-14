@@ -145,13 +145,14 @@ function content(p) {
   return nodes;
 }
 
-/** Fills the expander: from the cache, or with a fresh read. */
-async function fill(body, key, fresh) {
-  if (!fresh && cache.has(key)) {
-    body.replaceChildren(...content(cache.get(key)));
-    return;
-  }
-  body.replaceChildren(el('p', 'hint', t('mem.inbox.loading')));
+/**
+ * Fills the expander with a fresh read. A repaint follows every change (a merge,
+ * an approval, a sync), so the last answer is shown at once and then replaced:
+ * an open History never stays stale and never flashes "loading".
+ */
+async function fill(body, key) {
+  if (cache.has(key)) body.replaceChildren(...content(cache.get(key)));
+  else body.replaceChildren(el('p', 'hint', t('mem.inbox.loading')));
   let res;
   try {
     res = await window.lunacore.memoryProvenance(key);
@@ -179,17 +180,17 @@ export function historyBlock(key) {
   details.append(el('summary', '', t('mem.brain.history.title')), body);
   if (open.has(key)) {
     details.open = true;
-    fill(body, key, false);
+    fill(body, key);
   }
   details.addEventListener('toggle', () => {
     if (!details.open) {
       open.delete(key);
       return;
     }
-    // A reopened expander (after a repaint) already has its content; one the user opens reads afresh.
+    // Setting `open` after a repaint fires this too: that expander is already being filled.
     if (open.has(key)) return;
     open.add(key);
-    fill(body, key, true);
+    fill(body, key);
   });
   return details;
 }

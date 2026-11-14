@@ -86,7 +86,7 @@ export function preview(body, max = PREVIEW_CHARS) {
 /** The i18n key of a failed action's reason. */
 export function reasonKey(reason) {
   if (['not-found', 'not-pending', 'not-confirmed', 'not-flagged', 'not-conflict', 'not-archived'].includes(reason)) return 'mem.inbox.err.gone';
-  if (reason === 'empty-body' || reason === 'bad-title' || reason === 'body-too-long' || reason === 'record-too-big') return 'mem.inbox.err.text';
+  if (['empty-body', 'bad-title', 'body-too-long', 'record-too-big', 'bad-edits'].includes(reason)) return 'mem.inbox.err.text';
   return 'mem.inbox.err.failed';
 }
 

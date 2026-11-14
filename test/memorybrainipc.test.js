@@ -457,6 +457,33 @@ test('provenance reads other sources apart: God Mode runs, merges, auto-memory',
   assert.deepEqual([sourceOf('typed in by hand').kind, sourceOf('typed in by hand').text], ['other', 'typed in by hand']);
 });
 
+test('a merge keeps the outside-content note, and History reads it back', (t) => {
+  const s = withLog(t, [
+    rec('ci-first', { title: 'Run npm ci in package worktrees before the tests', source: 'captured from session abcd1234 on WORKPC, read 3 outside source(s)' }),
+    rec('ci-before', { title: 'Run npm ci in package worktrees before tests' }),
+  ]);
+  const res = s.invoke('memory:merge', { a: keyIn('ci-before'), b: keyIn('ci-first'), title: 'Run npm ci first', body: 'Joined.' });
+  assert.equal(s.stored()[res.key].source, 'merged by hand from ci-before and ci-first, read 3 outside source(s)');
+  const p = s.invoke('memory:provenance', res.key);
+  assert.deepEqual([p.source.kind, p.source.ref, p.source.outside], ['merged', 'ci-before, ci-first', 3]);
+  // Both originals now name the merged memory as what superseded them.
+  assert.deepEqual(s.invoke('memory:provenance', keyIn('ci-first')).supersededBy.nodes.map((n) => n.id), ['run-npm-ci-first']);
+});
+
+test('a memory two branches share is shown in both, and the chain is not called cut', (t) => {
+  // top supersedes left and right; both supersede base (two merges of one old memory).
+  const s = withLog(t, [
+    rec('top', { supersedes: ['left', 'right'] }),
+    rec('left', { supersedes: ['base'] }),
+    rec('right', { supersedes: ['base'] }),
+    rec('base'),
+  ]);
+  const p = s.invoke('memory:provenance', keyIn('top'));
+  assert.deepEqual(p.supersedes.nodes.map((n) => [n.id, n.children.map((c) => c.id)]), [['left', ['base']], ['right', ['base']]]);
+  assert.equal(p.supersedes.cut, false);
+  assert.equal(s.invoke('memory:provenance', keyIn('base')).supersededBy.cut, false);
+});
+
 test('preload and the window wire merge and History through one narrow function each', () => {
   const preload = read('src/preload.js');
   for (const [fn, channel] of [

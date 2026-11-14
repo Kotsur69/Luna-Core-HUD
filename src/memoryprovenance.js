@@ -38,7 +38,7 @@ const SOURCE_FORMS = [
   { kind: 'session', re: /^captured from session ([A-Za-z0-9-]+) on (.+?)(?:, |$)/ },
   { kind: 'session', re: /^proposed in session ([A-Za-z0-9-]+) on (.+?)(?:, |$)/ },
   { kind: 'godmode', re: /^captured from God Mode run (\S+) on (.+?)(?:, |$)/ },
-  { kind: 'merged', re: /^merged by hand from (\S+) and (\S+)/ },
+  { kind: 'merged', re: /^merged by hand from ([a-z0-9-]+) and ([a-z0-9-]+)/ },
   { kind: 'auto-memory', re: /^claude auto-memory(?:, session ([A-Za-z0-9-]+))?/ },
 ];
 const AUTO_ACCEPTED_NOTE = ', auto-accepted';
@@ -79,30 +79,30 @@ function refOf(byKey, project, id) {
  * @param {(key: string) => string[]} next the keys one step further
  * @param {Map<string, object>} byKey
  * @returns {{nodes: object[], cut: boolean}} node = {key, id, title|null, confirmed|null, children};
- *   cut = something was left out (deeper than the cap, past the node cap, or a loop)
+ *   cut = something was left out (deeper than the cap, or past the node cap). A loop
+ *   (a hand-edited file) stops where it closes; a memory two branches share is shown in both.
  */
 function chainTree(key, next, byKey) {
-  const seen = new Set([key]);
   let count = 0;
   let cut = false;
-  const grow = (from, depth) => {
+  const grow = (from, depth, path) => {
     const nodes = [];
     for (const k of next(from)) {
-      if (seen.has(k) || count >= MAX_CHAIN_NODES) {
+      if (path.has(k)) continue;
+      if (count >= MAX_CHAIN_NODES) {
         cut = true;
-        continue;
+        break;
       }
-      seen.add(k);
       count++;
       const r = byKey.get(k);
       const node = { key: k, id: k.slice(k.lastIndexOf('/') + 1), title: r ? r.title : null, confirmed: r ? r.confidence === 'confirmed' : null, children: [] };
-      if (depth < MAX_CHAIN_DEPTH) node.children = grow(k, depth + 1);
-      else if (next(k).length) cut = true;
+      if (depth < MAX_CHAIN_DEPTH) node.children = grow(k, depth + 1, new Set([...path, k]));
+      else if (next(k).some((n) => !path.has(n) && n !== k)) cut = true;
       nodes.push(node);
     }
     return nodes;
   };
-  return { nodes: grow(key, 1), cut };
+  return { nodes: grow(key, 1, new Set([key])), cut };
 }
 
 /** One log event as the timeline shows it, or null when it is not about this memory. */

@@ -40,7 +40,7 @@
 const { splitKey, scoreOf, checkRecord, keyOf } = require('./memoryrecord');
 const { scan, writeRecord } = require('./memorystore');
 const { supersededKeys } = require('./memoryreview');
-const { duplicateWords, sameWords, idFor } = require('./memoryextract');
+const { duplicateWords, sameWords, idFor, sourceNotes, outsideNote, withNote } = require('./memoryextract');
 
 const KEEP = ['a', 'b', 'both'];
 /** Pairs one listing returns; the total says how many there are. */
@@ -189,7 +189,11 @@ function listConflicts(records, { events = [] } = {}) {
   return { items, total: pairs.length };
 }
 
-/** How many conflicts wait (the hub counts them with the inbox). Never throws. */
+/**
+ * How many conflicts wait (the hub counts them with the inbox). Never throws.
+ * Merge suggestions are left out on purpose: two memories that agree are
+ * tidying, not a decision the hub should call Mati back for.
+ */
 function conflictCount(dir) {
   try {
     return findConflicts(scan(dir).records).length;
@@ -307,7 +311,8 @@ function mergePair(dir, { a, b, title, body }, today, { log = null } = {}) {
     title,
     created: today,
     last_verified: today,
-    source: `merged by hand from ${ra.id} and ${rb.id}`,
+    // Text drawn from a session that read web or MCP content keeps saying so (auto-accept and review read it).
+    source: withNote(`merged by hand from ${ra.id} and ${rb.id}`, outsideNote(Math.max(sourceNotes(ra.source).outside, sourceNotes(rb.source).outside))),
     confidence: 'confirmed',
     ...bestScore([ra, rb]),
     supersedes: [ra.id, rb.id],
