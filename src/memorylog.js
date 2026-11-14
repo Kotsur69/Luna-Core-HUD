@@ -402,7 +402,83 @@ function acceptedMissing(events) {
   return accepted;
 }
 
+// ---- release notes: what changed in the memory since a date (luna memory notes) ----
+
+/** The sections of the notes, in order. */
+const NOTE_SECTIONS = [
+  ['confirmed', 'Confirmed'],
+  ['superseded', 'Superseded'],
+  ['archived', 'Archived'],
+  ['retired', 'Retired'],
+];
+const OTHER_TYPE = 'other';
+/**
+ * Markdown that would turn a title into a link, an image, emphasis, code or
+ * HTML. Parentheses are left: without brackets they make no link.
+ */
+const MARKDOWN_RE = /[\\`*_[\]<>|~]/g;
+/** What GitHub turns into a link on its own: `https://...` and `www.`. */
+const AUTOLINK_RE = /(:)(\/\/)|\b(www)(\.)/gi;
+const mdTitle = (title) =>
+  line(title, MAX_TITLE)
+    .replace(MARKDOWN_RE, (c) => `\\${c}`)
+    .replace(AUTOLINK_RE, (m, colon, slashes, www, dot) => (colon ? `${colon}\\/\\/` : `${www}\\${dot}`));
+const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/**
+ * What the memory gained and lost since a moment, as markdown: memories
+ * confirmed, superseded, archived and retired, each grouped by type. Titles
+ * only: a body is free model text and never goes into notes.
+ * @param {{records: object[], events: object[], since: number, project?: string|null, label?: string}} input
+ *   records = every record of the mirror (memorystore.scan); events = readLog();
+ *   since = ms; project = only this project's memories (null = all); label = what `since` is ("v0.28.0")
+ * @returns {string} markdown, ending in a newline
+ */
+function memoryNotes({ records, events, since, project = null, label = '' }) {
+  const byKey = new Map(records.map((r) => [`${r.project}/${r.id}`, r]));
+  const sections = Object.fromEntries(NOTE_SECTIONS.map(([name]) => [name, new Map()]));
+  const wanted = (key) => !project || projectOfKey(key) === project;
+  const add = (section, key, fallback = {}) => {
+    if (!splitKey(key) || !wanted(key) || sections[section].has(key)) return;
+    const record = byKey.get(key);
+    const type = (record && record.type) || fallback.type || OTHER_TYPE;
+    const title = (record && record.title) || fallback.title || splitKey(key).id;
+    sections[section].set(key, { type, title });
+  };
+  for (const e of events) {
+    if (e.at < since) continue;
+    if (e.ev === 'approved' || e.ev === 'auto-accepted') {
+      add('confirmed', e.key, e);
+      // Approving a memory that replaces others takes those off the card.
+      const record = byKey.get(e.key);
+      for (const old of record ? record.supersedes : []) add('superseded', `${record.project}/${old}`);
+    } else if (e.ev === 'superseded' || e.ev === 'retired') {
+      add(e.ev, e.key, e);
+    }
+  }
+  const fromDay = isoDay(since);
+  for (const [key, r] of byKey) if (r.archived && r.archived >= fromDay) add('archived', key);
+
+  const scope = project ? `, ${project}` : '';
+  const out = [`# Memory notes since ${line(label, MAX_TITLE) ? `${mdTitle(label)} (${fromDay})` : fromDay}${scope}`];
+  const typeOrder = [...TYPES, OTHER_TYPE];
+  for (const [name, heading] of NOTE_SECTIONS) {
+    const items = [...sections[name].values()];
+    out.push('', `## ${heading} (${items.length})`);
+    if (!items.length) out.push('', '_None._');
+    for (const type of typeOrder) {
+      const titles = items
+        .filter((i) => i.type === type)
+        .map((i) => mdTitle(i.title))
+        .sort((a, b) => a.localeCompare(b));
+      if (titles.length) out.push('', `### ${type}`, ...titles.map((t) => `- ${t}`));
+    }
+  }
+  return `${out.join('\n')}\n`;
+}
+
 module.exports = {
+  memoryNotes,
   createLog,
   readLog,
   logPath,
